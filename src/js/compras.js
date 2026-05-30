@@ -79,18 +79,23 @@ async function renderOrdenes(el) {
   const received = orders.filter(o => o.status === 'recibido').length;
   const totalAmt = orders.reduce((s, o) => s + (o.total || 0), 0);
 
-  const stats = h('div', { class: 'stat-grid', style: { marginBottom: '16px' } });
+  const stats = h('div', { class: 'metrics',
+    style: { gridTemplateColumns: 'repeat(4,1fr)', marginBottom: '18px' } });
   [
-    { icon: 'clock',   color: 'a', label: 'Pendientes',  val: pending },
-    { icon: 'half',    color: 'b', label: 'Parciales',   val: partial },
-    { icon: 'check',   color: 'g', label: 'Recibidas',   val: received },
+    { icon: 'clock',   color: 'a', label: 'Pendientes',     val: pending },
+    { icon: 'alert',   color: 'b', label: 'Parciales',      val: partial },
+    { icon: 'check',   color: 'g', label: 'Recibidas',      val: received },
     { icon: 'dollar',  color: 'p', label: 'Total comprado', val: fmt(totalAmt) },
   ].forEach(({ icon, color, label, val }) => {
-    stats.appendChild(h('div', { class: `stat-card ${color}` },
-      h('div', { class: 'stat-icon' }, svg(icon)),
-      h('div', { class: 'stat-val' }, String(val)),
-      h('div', { class: 'stat-lbl' }, label)
-    ));
+    stats.appendChild(
+      h('div', { class: 'metric' },
+        h('div', { class: 'met-top' },
+          h('div', { class: `met-icon ${color}`, html: svg(icon) })
+        ),
+        h('div', { class: 'met-label' }, label),
+        h('div', { class: 'met-val' }, String(val))
+      )
+    );
   });
   el.appendChild(stats);
 
@@ -122,7 +127,7 @@ async function renderOrdenes(el) {
     tr.innerHTML = `
       <td><b>OC-${String(o.id).padStart(4,'0')}</b></td>
       <td>${o.supplier_name || o.supplier_name_join || 'Sin proveedor'}</td>
-      <td>${fdate(o.created_at)}</td>
+      <td>${fdate(o.created_at?.split('T')[0] || o.created_at?.split(' ')[0])}</td>
       <td>${o.items_count || '—'}</td>
       <td><b>${fmt(o.total)}</b></td>
       <td><span class="badge ${statusColor}">${o.status}</span></td>
@@ -162,7 +167,7 @@ async function verOrden(id) {
     <div class="fxb mb8">
       <div>
         <div class="modal-title">OC-${String(po.id).padStart(4,'0')}</div>
-        <div class="modal-sub">${po.supplier_name || 'Sin proveedor'} · ${fdate(po.created_at)}</div>
+        <div class="modal-sub">${po.supplier_name || 'Sin proveedor'} · ${fdate(po.created_at?.split('T')[0] || po.created_at?.split(' ')[0])}</div>
       </div>
       <span class="badge ${statusColor}" style="font-size:13px">${po.status}</span>
     </div>
@@ -278,9 +283,28 @@ function seleccionarProductoPO(id) {
 
 function agregarItemPO() {
   const search = document.getElementById('po-prod-search');
-  const pid    = parseInt(search?.dataset?.pid);
+  let   pid    = parseInt(search?.dataset?.pid);
   const qty    = parseInt(document.getElementById('po-prod-qty')?.value) || 1;
   const cost   = parseFloat(document.getElementById('po-prod-cost')?.value) || 0;
+
+  // Si no hay pid pero hay texto, buscar por nombre o código exacto
+  if (!pid && search?.value?.trim()) {
+    const q    = search.value.trim().toLowerCase();
+    const prod = DB.products.find(p =>
+      p.active !== 0 && (
+        p.name?.toLowerCase() === q ||
+        p.code?.toLowerCase() === q ||
+        p.name?.toLowerCase().includes(q)
+      )
+    );
+    if (prod) {
+      pid = prod.id;
+      search.dataset.pid = prod.id;
+      if (!document.getElementById('po-prod-cost')?.value) {
+        document.getElementById('po-prod-cost').value = prod.cost || 0;
+      }
+    }
+  }
 
   if (!pid) { toast('Selecciona un producto de la lista', 'err'); return; }
   if (qty <= 0) { toast('La cantidad debe ser mayor a 0', 'err'); return; }
@@ -392,11 +416,21 @@ async function recibirOrden(id) {
                  value="${i.qty_ordered - i.qty_received}"
                  id="recv-${i.id}" style="width:70px;text-align:center"/>
         </td>
-        <td style="text-align:center">
-          <label style="font-size:12px;display:flex;align-items:center;gap:4px;justify-content:center">
-            <input type="checkbox" id="cost-${i.id}" checked/>
-            Actualizar costo (${fmt(i.unit_cost)})
-          </label>
+        <td style="text-align:center;font-size:11px;color:var(--muted2)" id="cost-preview-${i.id}">
+          ${(() => {
+            const prod      = DB.products.find(p => p.id === i.product_id);
+            const stockAct  = prod ? prod.stock : 0;
+            const costoAct  = prod ? prod.cost  : 0;
+            const qtyRecib  = i.qty_ordered - i.qty_received;
+            const total     = stockAct + qtyRecib;
+            const promedio  = total > 0 && i.unit_cost > 0
+              ? Math.round(((stockAct * costoAct) + (qtyRecib * i.unit_cost)) / total * 100) / 100
+              : i.unit_cost;
+            const color = promedio > costoAct ? '#d97706' : promedio < costoAct ? '#16a34a' : '#6b7280';
+            return '<div>Actual: ' + fmt(costoAct) + '</div>'
+              + '<div>Nuevo: ' + fmt(i.unit_cost) + '</div>'
+              + '<div style="font-weight:700;color:' + color + '">Prom: ' + fmt(promedio) + '</div>';
+          })()}
         </td>
       </tr>`).join('');
 
@@ -470,7 +504,7 @@ async function renderProveedores(el) {
 
   if (!suppliers.length) {
     el.appendChild(h('div', { class: 'empty-state' },
-      h('div', { style: { fontSize: '32px', marginBottom: '8px' } }, '🏭'),
+      h('div', { style: { fontSize: '32px', marginBottom: '8px' } }, '📦'),
       h('div', { class: 'empty-title' }, 'Sin proveedores'),
       h('div', { class: 'empty-sub' }, 'Registra tus proveedores para asociarlos a las órdenes de compra')
     ));

@@ -270,12 +270,13 @@ function buildSidebar() {
   sb.innerHTML = '';
 
   // Brand
-  const bizName = DB?.settings?.biz_name || CFG?.biz || 'Mi Negocio';
+  const bizName = DB?.settings?.biz_name || CFG?.biz || '';
   const brand = h('div', { class: 'sb-brand' },
     h('div', { class: 'sb-logo', html: svg('wrench') }),
-    h('div', null,
-      h('div', { class: 'sb-name' }, bizName),
-      h('div', { class: 'sb-tag' }, 'POS v1.0.0')
+    h('div', { style: { display: 'flex', flexDirection: 'column', gap: '1px', overflow: 'hidden' } },
+      h('div', { class: 'sb-name' }, 'Velo POS'),
+      h('div', { class: 'sb-tag', style: { opacity: '.7', fontSize: '10px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } },
+        bizName || 'v1.0.0')
     )
   );
   sb.appendChild(brand);
@@ -324,6 +325,7 @@ function buildSidebar() {
     }
     const ni = h('div', {
       class: `nav-item ${page === it.key ? 'on' : ''}`,
+      'data-key': it.key,
       onclick: () => routeTo(it.key)
     },
       S(it.icon),
@@ -428,7 +430,11 @@ function routeTo(p) {
     if (!allowed.includes(p)) { page = 'pos'; }
   }
 
-  buildSidebar();
+  // Actualizar solo el item activo sin reconstruir todo el sidebar
+  document.querySelectorAll('.nav-item').forEach(ni => {
+    ni.classList.remove('on');
+    if (ni.dataset.key === page) ni.classList.add('on');
+  });
   buildTopbar();
 
   const el = document.getElementById('page');
@@ -614,7 +620,7 @@ async function renderConfiguracion(el) {
       html: '✨ Importar productos o clientes'
     })
   );
-  rightCol.appendChild(importCard);
+  sysCard.appendChild(importCard);
 
   // Backups
   const backupCard = h('div', { class: 'card' });
@@ -1811,6 +1817,8 @@ async function renderSuperAdmin(el) {
   }
 
   el.innerHTML = '';
+  el.style.overflowY = 'auto';
+  el.style.paddingBottom = '60px';
 
   // Cargar datos primero
   const licResult  = await window.api.license.getStatus().catch(() => ({ ok: false }));

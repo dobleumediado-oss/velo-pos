@@ -197,6 +197,16 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.1.0] tablas suppliers y purchase_orders creadas');
     }
   },
+  {
+    version: '1.1.1',
+    description: 'Agregar campo condition a products para productos usados/especiales',
+    run(db) {
+      try {
+        db.exec(`ALTER TABLE products ADD COLUMN condition TEXT DEFAULT 'nuevo'`);
+        console.log('[MIGRATION 1.1.1] campo condition agregado a products');
+      } catch {}
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════
@@ -370,7 +380,27 @@ function getVersionInfo(db, dataDir) {
     ? fs.readdirSync(backupDir)
         .filter(f => f.startsWith('velo_') && f.endsWith('.db'))
         .sort().reverse()
-    : [];
+    : [  {
+    version: '1.1.1',
+    description: 'Agregar campo condition a products para productos usados/especiales',
+    run(db) {
+      try {
+        db.exec(`ALTER TABLE products ADD COLUMN condition TEXT DEFAULT 'nuevo'`);
+        console.log('[MIGRATION 1.1.1] campo condition agregado a products');
+      } catch {}
+    }
+  },
+  {
+    version: '1.1.1',
+    description: 'Agregar campo condition a products para productos usados/especiales',
+    run(db) {
+      try {
+        db.exec(`ALTER TABLE products ADD COLUMN condition TEXT DEFAULT 'nuevo'`);
+        console.log('[MIGRATION 1.1.1] campo condition agregado a products');
+      } catch {}
+    }
+  },
+];
 
   const appInfo = {};
   db.prepare('SELECT key, value FROM app_info').all()

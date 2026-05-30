@@ -209,7 +209,12 @@ function renderPOSGrid() {
            style="cursor:${isOut ? 'not-allowed' : 'pointer'};opacity:${isOut ? '.4' : '1'}">
         <div class="pc-icon">${svg('pkg')}</div>
         <div class="pc-name">${p.name}</div>
-        <div class="pc-code">${p.code}</div>
+        <div class="pc-code">${p.code}${p.condition && p.condition !== 'nuevo'
+          ? ` · <span style="color:var(--amber);font-weight:700;font-size:9px;text-transform:uppercase">${
+              p.condition === 'usado' ? 'USADO' :
+              p.condition === 'reacondicionado' ? 'REACOND.' :
+              p.condition === 'consignacion' ? 'CONSIG.' : 'ESPECIAL'
+            }</span>` : ''}</div>
         <div class="pc-price">${fmt(price)}</div>
         <div class="pc-stock" style="color:${isLow ? 'var(--red)' : 'var(--muted2)'}">
           ${isOut ? 'Sin stock' : `${p.stock} disponibles`}

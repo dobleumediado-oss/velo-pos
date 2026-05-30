@@ -411,19 +411,21 @@ const productsRepo = {
   },
   create(p) {
     const r = db.prepare(`
-      INSERT INTO products(code,barcode,name,brand,category,description,cost,price,wholesale,stock,stock_min,unit)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO products(code,barcode,name,brand,category,description,cost,price,wholesale,stock,stock_min,unit,condition)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(p.code,p.barcode||'',p.name,p.brand||'',p.category||'',p.description||'',
-           p.cost,p.price,p.wholesale||p.price,p.stock||0,p.stock_min||5,p.unit||'und');
+           p.cost,p.price,p.wholesale||p.price,p.stock||0,p.stock_min||5,p.unit||'und',
+           p.condition||'nuevo');
     return r.lastInsertRowid;
   },
   update(id, p) {
     db.prepare(`
       UPDATE products SET code=?,barcode=?,name=?,brand=?,category=?,description=?,
-      cost=?,price=?,wholesale=?,stock_min=?,unit=?,updated_at=datetime('now')
+      cost=?,price=?,wholesale=?,stock_min=?,unit=?,condition=?,updated_at=datetime('now')
       WHERE id=?
     `).run(p.code,p.barcode||'',p.name,p.brand||'',p.category||'',p.description||'',
-           p.cost,p.price,p.wholesale||p.price,p.stock_min||5,p.unit||'und',id);
+           p.cost,p.price,p.wholesale||p.price,p.stock_min||5,p.unit||'und',
+           p.condition||'nuevo',id);
   },
   adjustStock(id, qty, type, reason, saleId = null, userId = null) {
     const prod = db.prepare('SELECT stock FROM products WHERE id=?').get(id);
@@ -1139,17 +1141,48 @@ const purchasesRepo = {
           WHERE id=? AND purchase_order_id=?
         `).run(item.qty_received, item.id, id);
 
-        // Actualizar stock del producto
+        // Actualizar stock y costo promedio ponderado
         if (item.product_id) {
+          // 1. Leer stock y costo actuales ANTES de ajustar
+          const prodActual = db.prepare(
+            `SELECT stock, cost FROM products WHERE id=?`
+          ).get(item.product_id);
+
+          const stockActual   = prodActual?.stock  || 0;
+          const costoActual   = prodActual?.cost   || 0;
+          const stockNuevo    = item.qty_received;
+          const costoNuevo    = item.unit_cost;
+
+          // 2. Calcular costo — promedio ponderado para nuevos, fijo para especiales
+          const esEspecial = ['usado','reacondicionado','consignacion','especial']
+                              .includes(prodActual?.condition || 'nuevo');
+          let costoPromedio = costoActual;
+          if (costoNuevo > 0) {
+            if (esEspecial) {
+              // Producto usado/especial: costo fijo, no promedio
+              costoPromedio = costoNuevo;
+            } else if ((stockActual + stockNuevo) > 0) {
+              // Producto nuevo: costo promedio ponderado
+              costoPromedio = (
+                (stockActual * costoActual) + (stockNuevo * costoNuevo)
+              ) / (stockActual + stockNuevo);
+              costoPromedio = Math.round(costoPromedio * 100) / 100;
+            }
+          }
+
+          // 3. Ajustar stock
           productsRepo.adjustStock(
             item.product_id, item.qty_received, 'entrada',
-            `Recepción OC #${id}`, null, userId
+            `Recepción OC #${id} | Costo unit: ${costoNuevo} | Promedio: ${costoPromedio}`,
+            null, userId
           );
 
-          // Actualizar costo promedio del producto si se especifica
-          if (item.update_cost && item.unit_cost > 0) {
-            db.prepare(`UPDATE products SET cost=?, updated_at=datetime('now') WHERE id=?`)
-              .run(item.unit_cost, item.product_id);
+          // 4. Siempre actualizar al costo promedio ponderado
+          // Las ventas históricas NO se ven afectadas porque tienen su snapshot en sale_items
+          if (costoNuevo > 0) {
+            db.prepare(
+              `UPDATE products SET cost=?, updated_at=datetime('now') WHERE id=?`
+            ).run(costoPromedio, item.product_id);
           }
         }
       }

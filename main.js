@@ -112,6 +112,7 @@ function createWindow() {
       nodeIntegration:    false,  // NO exponer Node al renderer
       contextIsolation:   true,   // Aislar contextos
       sandbox:            false,  // false para poder usar preload con require
+      zoomFactor:         1.0,    // Zoom fijo para consistencia visual
       webSecurity:        true,
       allowRunningInsecureContent: false,
       // ── Preload seguro ──────────────────────

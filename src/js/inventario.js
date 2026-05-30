@@ -201,7 +201,15 @@ function renderInvTable() {
         h('div', { class: 'tb' }, p.name),
         h('div', { class: 'ts' }, p.brand || '—')
       ),
-      h('td', null, h('span', { class: 'badge n' }, p.category || '—')),
+      h('td', null,
+        h('span', { class: 'badge n' }, p.category || '—'),
+        p.condition && p.condition !== 'nuevo' ? h('span', {
+          class: 'badge a',
+          style: { marginLeft: '4px', fontSize: '10px' }
+        }, p.condition === 'usado' ? 'Usado' :
+           p.condition === 'reacondicionado' ? 'Reacond.' :
+           p.condition === 'consignacion' ? 'Consig.' : 'Especial') : null
+      ),
       h('td', null,
         h('div', { style: { fontWeight: 700, fontSize: '14px',
           color: isOut ? 'var(--red)' : isLow ? 'var(--amber)' : 'var(--green)' } },
@@ -384,9 +392,11 @@ function openEntradaMercanciaModal() {
         <div id="em-preview" style="font-size:12px;color:var(--muted);margin-top:4px"></div>
       </div>
       <div class="fg">
-        <label class="lbl">Nuevo costo unitario (opcional)</label>
+        <label class="lbl">Costo unitario nuevo (opcional)</label>
         <input class="inp" id="em-cost" type="number" min="0"
-               placeholder="Dejar vacío para mantener el actual"/>
+               placeholder="Dejar vacío para mantener el actual"
+               oninput="emCalcPreview()"/>
+        <div id="em-cost-preview" style="font-size:11px;color:var(--muted);margin-top:3px"></div>
       </div>
     </div>
 
@@ -435,17 +445,35 @@ function emUpdateInfo() {
 }
 
 function emCalcPreview() {
-  const id  = parseInt(document.getElementById('em-prod')?.value);
-  const qty = parseInt(document.getElementById('em-qty')?.value) || 0;
-  const el  = document.getElementById('em-preview');
-  if (!el || !id) return;
+  const id       = parseInt(document.getElementById('em-prod')?.value);
+  const qty      = parseInt(document.getElementById('em-qty')?.value) || 0;
+  const newCost  = parseFloat(document.getElementById('em-cost')?.value) || 0;
+  const elStock  = document.getElementById('em-preview');
+  const elCosto  = document.getElementById('em-cost-preview');
+  if (!id) return;
   const p = DB.products.find(x => x.id === id);
   if (!p) return;
-  const nuevo = p.stock + qty;
-  el.textContent = qty > 0
-    ? `Stock resultante: ${p.stock} + ${qty} = ${nuevo} ${p.unit||'und'}`
-    : '';
-  el.style.color = nuevo >= (p.stock_min||5) ? 'var(--green)' : 'var(--amber)';
+
+  // Preview de stock
+  if (elStock) {
+    const nuevo = p.stock + qty;
+    elStock.textContent = qty > 0
+      ? `Stock resultante: ${p.stock} + ${qty} = ${nuevo} ${p.unit||'und'}`
+      : '';
+    elStock.style.color = nuevo >= (p.stock_min||5) ? 'var(--green)' : 'var(--amber)';
+  }
+
+  // Preview de costo promedio ponderado
+  if (elCosto && newCost > 0 && qty > 0) {
+    const total    = p.stock + qty;
+    const promedio = total > 0
+      ? Math.round(((p.stock * p.cost) + (qty * newCost)) / total * 100) / 100
+      : newCost;
+    const color = promedio > p.cost ? 'var(--amber)' : promedio < p.cost ? 'var(--green)' : 'var(--muted)';
+    elCosto.innerHTML = `Costo actual: ${fmt(p.cost)} → <strong style="color:${color}">Promedio: ${fmt(promedio)}</strong>`;
+  } else if (elCosto) {
+    elCosto.textContent = '';
+  }
 }
 
 async function confirmarEntrada() {
@@ -470,12 +498,25 @@ async function confirmarEntrada() {
 
   if (!result.ok) { toast(result.error || 'Error al registrar', 'err'); return; }
 
-  // Si se actualizó el costo, también actualizar el producto
+  // Actualizar costo — promedio ponderado para nuevos, fijo para usados/especiales
   if (newCost > 0) {
     const p = DB.products.find(x => x.id === id);
     if (p) {
+      const esEspecial = ['usado','reacondicionado','consignacion','especial'].includes(p.condition);
+      let costoFinal;
+      if (esEspecial) {
+        // Productos usados/especiales: costo fijo, no promedio
+        costoFinal = newCost;
+      } else {
+        // Productos nuevos: costo promedio ponderado
+        const stockAntes = p.stock;
+        const total      = stockAntes + qty;
+        costoFinal = total > 0
+          ? Math.round(((stockAntes * p.cost) + (qty * newCost)) / total * 100) / 100
+          : newCost;
+      }
       await window.api.products.update({
-        id, data: { ...p, cost: newCost }, requestUserId: user.id,
+        id, data: { ...p, cost: costoFinal }, requestUserId: user.id,
       });
     }
   }
@@ -534,7 +575,27 @@ function openProductoModal(p = null) {
                         color:var(--muted2);font-size:14px">⊟</span>
         </div>
       </div>
+      <div class="fg">
+        <label class="lbl">Condición del producto</label>
+        <select class="inp" id="pf-condition" onchange="pfConditionChange()">
+          <option value="nuevo"         ${isEdit && p.condition==='nuevo'         ? 'selected' : ''}>Nuevo</option>
+          <option value="usado"         ${isEdit && p.condition==='usado'         ? 'selected' : ''}>Usado</option>
+          <option value="reacondicionado" ${isEdit && p.condition==='reacondicionado' ? 'selected' : ''}>Reacondicionado</option>
+          <option value="consignacion"  ${isEdit && p.condition==='consignacion'  ? 'selected' : ''}>Consignación</option>
+          <option value="especial"      ${isEdit && p.condition==='especial'      ? 'selected' : ''}>Especial / Único</option>
+        </select>
+      </div>
     </div>
+
+    <div id="pf-condition-alert" style="display:${isEdit && p.condition && p.condition !== 'nuevo' ? 'flex' : 'none'}"
+         class="alrt a" style="margin-bottom:12px">
+      <div class="alrt-dot a"></div>
+      <div class="alrt-sub">
+        Este producto tiene condición especial — el costo promedio ponderado
+        <strong>no aplica</strong>. El costo se mantiene fijo tal como lo ingresas.
+      </div>
+    </div>
+
     <div class="g2">
       <div class="fg">
         <label class="lbl">Marca</label>
@@ -668,6 +729,12 @@ document.addEventListener('input', e => {
   }
 });
 
+async function pfConditionChange() {
+  const val   = document.getElementById('pf-condition')?.value;
+  const alert = document.getElementById('pf-condition-alert');
+  if (alert) alert.style.display = val && val !== 'nuevo' ? 'flex' : 'none';
+}
+
 async function guardarProducto(id) {
   const name      = document.getElementById('pf-name')?.value?.trim();
   const code      = document.getElementById('pf-code')?.value?.trim();
@@ -675,7 +742,8 @@ async function guardarProducto(id) {
   const category  = document.getElementById('pf-cat')?.value               || '';
   const unit      = document.getElementById('pf-unit')?.value              || 'und';
   const desc      = document.getElementById('pf-desc')?.value?.trim()      || '';
-  const barcode   = document.getElementById('pf-barcode')?.value?.trim()   || '';
+  const barcode    = document.getElementById('pf-barcode')?.value?.trim()   || '';
+  const condition  = document.getElementById('pf-condition')?.value || 'nuevo';
   const cost      = parseFloat(document.getElementById('pf-cost')?.value)  || 0;
   const price     = parseFloat(document.getElementById('pf-price')?.value) || 0;
   const wholesale = parseFloat(document.getElementById('pf-wholesale')?.value) || price;
@@ -686,7 +754,7 @@ async function guardarProducto(id) {
   if (!code)      { toast('El código es requerido', 'err');  return; }
   if (price <= 0) { toast('El precio debe ser mayor a 0', 'err'); return; }
 
-  const data = { code, barcode, name, brand, category, description: desc, unit, cost, price, wholesale, stock, stock_min };
+  const data = { code, barcode, name, brand, category, description: desc, unit, cost, price, wholesale, stock, stock_min, condition };
 
   let result;
   if (id) {
