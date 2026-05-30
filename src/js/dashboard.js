@@ -1,0 +1,515 @@
+// ══════════════════════════════════════════════
+// dashboard.js — Dashboard principal
+//               Usa campos SQLite correctamente
+// ══════════════════════════════════════════════
+
+async function renderDash(el) {
+  el.innerHTML = '';
+
+  // Recargar datos frescos
+  const [,,,versionInfo] = await Promise.all([
+    reloadProducts(),
+    reloadCustomers(),
+    reloadSales({ range: 'today' }),
+    window.api.version.getInfo().then(r => r?.data || null).catch(() => null),
+  ]);
+
+  const sales  = DB.sales.filter(s =>
+    s.status !== 'cancelled' && s.type !== 'devolucion');
+  const rev    = sales.reduce((a, s) => a + (s.total || 0), 0);
+  const itbis  = sales.reduce((a, s) => a + (s.tax_amt || s.itbis || 0), 0);
+
+  // Calcular ganancia bruta del día (precio - costo desde sale_items en memoria)
+  const todaySalesIds = new Set(sales.map(s => s.id));
+  const cost = DB.sales
+    .filter(s => todaySalesIds.has(s.id))
+    .reduce((a, s) => a + (s.cost_total || 0), 0);
+  const profit    = rev - itbis - cost;
+  const margin    = rev > 0 ? ((profit / rev) * 100).toFixed(0) : 0;
+
+  // Ventas del mes
+  const today_ = today();
+  const monthPfx = today_.slice(0, 7);
+  const allSales = await window.api.sales.getAll({ range: 'month' });
+  const mSales = (allSales || []).filter(s =>
+    s.status !== 'cancelled' && s.type !== 'devolucion');
+  const mRev   = mSales.reduce((a, s) => a + (s.total || 0), 0);
+
+  const lowStock   = DB.products.filter(p => p.stock <= (p.stock_min || 5));
+  const creditAlerts = getCreditAlerts();
+  const pendCredit = DB.customers.reduce((a, c) =>
+    a + (c.id !== 1 ? (c.balance || 0) : 0), 0);
+  const totalClients = DB.customers.filter(c => c.id !== 1 && c.active !== 0).length;
+
+  // ── Header ──────────────────────────────────
+  el.appendChild(h('div', { class: 'sec-hdr' },
+    h('div', null,
+      h('div', { class: 'sec-title' },
+        `Buenos días, ${user?.name?.split(' ')[0]} 👋`),
+      h('div', { class: 'sec-sub' },
+        `${fdate(today_)} · ${cajaOpen ? '🟢 Caja abierta' : '🔴 Caja cerrada'}`)
+    ),
+    h('button', {
+      class: 'btn btn-out btn-sm',
+      onclick: () => routeTo('reportes'),
+      html: `${svg('chart')} Ver reportes`
+    })
+  ));
+
+  // ── Alertas de crédito ───────────────────────
+  if (creditAlerts.length) {
+    const alertBox = h('div', { class: 'card mb20',
+      style: { borderColor: 'var(--red-line)', background: 'var(--red-bg)' } });
+
+    alertBox.appendChild(h('div', { class: 'fxb mb8' },
+      h('div', { class: 'flex' },
+        h('div', { style: { color: 'var(--red)', marginRight: '6px' },
+          html: svg('alert') }),
+        h('span', { style: { fontWeight: 700, fontSize: '14px', color: 'var(--red)' } },
+          `${creditAlerts.length} alerta${creditAlerts.length > 1 ? 's' : ''} de crédito`)
+      ),
+      h('div', { class: 'flex', style: { gap: '6px' } },
+        h('button', {
+          class: 'btn btn-sm',
+          style: { background: 'var(--red)', color: '#fff' },
+          onclick: () => routeTo('clientes'),
+          html: `${svg('users')} Ver clientes`
+        }),
+        h('button', {
+          class: 'btn btn-out btn-sm',
+          onclick: () => exportCreditAlertsPDF(creditAlerts),
+          html: `${svg('pdf')} PDF`
+        })
+      )
+    ));
+
+    creditAlerts.forEach(a => {
+      const { client: c, daysLeft, status } = a;
+      const isOverdue = status === 'overdue';
+      const creditDue = c.credit_due || c.creditDueDate || null;
+      const label = isOverdue
+        ? `Vencido hace ${Math.abs(daysLeft)} día${Math.abs(daysLeft) !== 1 ? 's' : ''}`
+        : `Vence en ${daysLeft} día${daysLeft !== 1 ? 's' : ''}`;
+
+      alertBox.appendChild(h('div', {
+        class: `alrt ${isOverdue ? 'r' : 'a'}`,
+        style: { marginBottom: '5px' }
+      },
+        h('div', { class: `alrt-dot ${isOverdue ? 'r' : 'a'}` }),
+        h('div', { style: { flex: 1 } },
+          h('div', { class: 'alrt-title' }, c.name),
+          h('div', { class: 'alrt-sub' },
+            `${fmt(c.balance)} pendiente · ${label}` +
+            (creditDue ? ` · Límite: ${fdate(creditDue)}` : '')
+          )
+        ),
+        h('div', { class: 'flex', style: { gap: '5px' } },
+          h('button', {
+            class: 'btn btn-sm btn-out',
+            onclick: () => routeTo('clientes'),
+            html: `${svg('dollar')} Abonar`
+          }),
+          h('button', {
+            class: 'btn btn-sm btn-out',
+            onclick: () => exportClientCreditPDF(c),
+            html: svg('pdf')
+          })
+        )
+      ));
+    });
+    el.appendChild(alertBox);
+  }
+
+  // ── Selector de período ──────────────────────
+  const dashPeriod = window._dashPeriod || 'today';
+  const periodBar  = h('div', { class: 'flex', style: { gap: '6px', marginBottom: '14px' } });
+  [
+    { v: 'today', l: 'Hoy' },
+    { v: '3days', l: '3 días' },
+    { v: 'week',  l: '7 días' },
+    { v: 'month', l: 'Este mes' },
+  ].forEach(p => {
+    periodBar.appendChild(h('button', {
+      class: `btn btn-sm ${dashPeriod === p.v ? 'btn-dark' : 'btn-out'}`,
+      onclick: async () => { window._dashPeriod = p.v; await renderDash(el); }
+    }, p.l));
+  });
+  el.appendChild(periodBar);
+
+  // Calcular métricas del período
+  let periodSales = sales;
+  if (dashPeriod === '3days') {
+    const cutoff = new Date(Date.now() - 3*24*60*60*1000).toISOString().split('T')[0];
+    const all3   = await window.api.sales.getAll({ range: 'week' });
+    periodSales  = (all3||[]).filter(s => s.status !== 'cancelled' && s.type !== 'devolucion'
+      && (s.created_at||'').slice(0,10) >= cutoff);
+  } else if (dashPeriod === 'week') {
+    const allW  = await window.api.sales.getAll({ range: 'week' });
+    periodSales = (allW||[]).filter(s => s.status !== 'cancelled' && s.type !== 'devolucion');
+  } else if (dashPeriod === 'month') {
+    periodSales = mSales;
+  }
+
+  const periodRev    = periodSales.reduce((a,s) => a + (s.total||0), 0);
+  const periodITBIS  = periodSales.reduce((a,s) => a + (s.tax_amt||0), 0);
+  const periodCost   = periodSales.reduce((a,s) => a + (s.cost_total||0), 0);
+  const periodProfit = periodRev - periodITBIS - periodCost;
+  const periodMargin = periodRev > 0 ? ((periodProfit/periodRev)*100).toFixed(1) : 0;
+  const periodLabel  = { today:'Hoy', '3days':'3 días', week:'7 días', month:'Mes' }[dashPeriod];
+
+  // ── Métricas ─────────────────────────────────
+  const metWrap = h('div', { class: 'metrics' });
+  [
+    { icon: 'dollar', color: 'g', label: `Ventas (${periodLabel})`,
+      val: fmt(periodRev), badge: `${periodSales.length} transac.`, badgeType: 'nu' },
+    { icon: 'trend',  color: 'g', label: `Ganancia (${periodLabel})`,
+      val: fmt(periodProfit > 0 ? periodProfit : 0),
+      badge: `${periodMargin}% margen`,
+      badgeType: periodProfit > 0 ? 'nu' : 'dn' },
+    { icon: 'chart',  color: 'p', label: 'Ventas del Mes',
+      val: fmt(mRev), badge: `${mSales.length} ventas`, badgeType: 'nu' },
+    { icon: 'card',   color: 'a', label: 'Créditos Pendientes',
+      val: fmt(pendCredit), badge: `${totalClients} clientes`,
+      badgeType: pendCredit > 0 ? 'dn' : 'nu',
+      click: () => routeTo('clientes') },
+  ].forEach(m => {
+    const card = h('div', {
+      class: 'metric',
+      style: m.click ? { cursor: 'pointer' } : {},
+      ...(m.click ? { onclick: m.click } : {})
+    },
+      h('div', { class: 'met-top' },
+        h('div', { class: `met-icon ${m.color}`, html: svg(m.icon) })
+      ),
+      h('div', { class: 'met-label' }, m.label),
+      h('div', { class: 'met-val' }, m.val),
+      h('div', { class: 'met-foot' },
+        h('span', { class: `met-badge ${m.badgeType}` }, m.badge)
+      )
+    );
+    metWrap.appendChild(card);
+  });
+  el.appendChild(metWrap);
+
+  // ── Grid principal ────────────────────────────
+  const grid = h('div', { class: 'gg2', style: { alignItems: 'start' } });
+
+  // ── Gráfica 7 días ────────────────────────────
+  const allWeek = await window.api.sales.getAll({ range: 'week' });
+  const days7   = [];
+  for (let i = 6; i >= 0; i--) {
+    const d  = new Date();
+    d.setDate(d.getDate() - i);
+    const ds = d.toISOString().split('T')[0];
+    const daySales = (allWeek || []).filter(s => {
+      const sd = (s.created_at || '').split('T')[0].split(' ')[0];
+      return sd === ds && s.status !== 'cancelled' && s.type !== 'devolucion';
+    });
+    days7.push({
+      date:  ds,
+      label: d.toLocaleDateString('es-DO', { weekday: 'short' }),
+      rev:   daySales.reduce((a, s) => a + (s.total || 0), 0),
+    });
+  }
+
+  const chartCard = h('div', { class: 'card' });
+  chartCard.appendChild(h('div', { class: 'card-hdr' },
+    h('div', null,
+      h('div', { class: 'card-title' }, 'Ventas últimos 7 días'),
+      h('div', { class: 'card-sub' }, 'Ingresos diarios')
+    )
+  ));
+
+  const maxRev = Math.max(...days7.map(d => d.rev), 1);
+  const barChart = h('div', { class: 'bar-chart' });
+  days7.forEach(d => {
+    const pct     = Math.max((d.rev / maxRev) * 100, d.rev > 0 ? 5 : 0);
+    const isToday = d.date === today_;
+    barChart.appendChild(h('div', { class: 'bc' },
+      h('div', { class: 'bv' }, d.rev > 0 ? `${Math.round(d.rev/1000)}k` : ''),
+      h('div', { class: 'bb', style: {
+        height: `${pct}%`,
+        background: isToday ? 'var(--green)' : 'var(--line)'
+      }}),
+      h('div', { class: 'bl', style: {
+        color: isToday ? 'var(--ink)' : 'var(--muted2)',
+        fontWeight: isToday ? '700' : '400'
+      }}, d.label)
+    ));
+  });
+  chartCard.appendChild(barChart);
+  grid.appendChild(chartCard);
+
+  // ── Columna derecha ───────────────────────────
+  const rightCol = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px' } });
+
+  // Stock bajo
+  const stockCard = h('div', { class: 'card' });
+  stockCard.appendChild(h('div', { class: 'fxb mb8' },
+    h('div', { class: 'card-title' }, `Stock Bajo (${lowStock.length})`),
+    h('button', {
+      class: 'btn btn-ghost btn-sm',
+      onclick: () => routeTo('inventario'),
+      html: `${svg('box')} Ver todo`
+    })
+  ));
+
+  if (!lowStock.length) {
+    stockCard.appendChild(h('div', { class: 'alrt g' },
+      h('div', { class: 'alrt-dot g' }),
+      h('div', null,
+        h('div', { class: 'alrt-title' }, 'Todo en orden'),
+        h('div', { class: 'alrt-sub' }, 'No hay productos con stock bajo')
+      )
+    ));
+  } else {
+    lowStock.slice(0, 5).forEach(p => {
+      const stockMin = p.stock_min || p.min || 5;
+      const pct = Math.min((p.stock / stockMin) * 100, 100);
+      stockCard.appendChild(h('div', { style: { marginBottom: '10px' } },
+        h('div', { class: 'fxb mb8', style: { marginBottom: '4px' } },
+          h('span', { style: { fontSize: '12px', fontWeight: 600 } }, p.name),
+          h('span', { class: `badge ${p.stock === 0 ? 'r' : 'a'}` },
+            p.stock === 0 ? 'Sin stock' : `${p.stock} ${p.unit || 'und'}`)
+        ),
+        h('div', { class: 'prog' },
+          h('div', { class: 'prog-f', style: {
+            width: `${pct}%`,
+            background: p.stock === 0 ? 'var(--red)' : 'var(--amber)'
+          }})
+        ),
+        h('div', { style: { fontSize: '10px', color: 'var(--muted2)', marginTop: '2px' } },
+          `Mínimo: ${stockMin} · ${p.code}`)
+      ));
+    });
+  }
+  rightCol.appendChild(stockCard);
+
+  // ── Estado del backup ────────────────────────
+  const lastBackup   = versionInfo?.lastBackup || null;
+  const backupCount  = versionInfo?.backupsCount || 0;
+  const dbSize       = versionInfo?.dbSize || '—';
+  const appVer       = versionInfo?.appVersion || '1.0.0';
+
+  // Calcular si el backup está al dia
+  const hoy          = today();
+  const backupOk     = lastBackup === hoy;
+  const backupAyer   = lastBackup === (() => {
+    const d = new Date(); d.setDate(d.getDate() - 1);
+    return d.toISOString().split('T')[0];
+  })();
+  const backupColor  = backupOk ? 'g' : backupAyer ? 'a' : 'r';
+  const backupMsg    = backupOk
+    ? 'Backup realizado hoy'
+    : backupAyer
+      ? 'Último backup: ayer'
+      : lastBackup
+        ? `Último backup: ${fdate(lastBackup)}`
+        : 'Sin backup registrado';
+
+  const backupCard = h('div', { class: 'card' });
+  backupCard.appendChild(h('div', { class: 'fxb mb8' },
+    h('div', { class: 'card-title' }, 'Estado del sistema'),
+    h('span', { class: `badge ${backupColor}` }, backupOk ? '✓ Al día' : backupAyer ? 'Reciente' : '⚠ Revisar')
+  ));
+
+  // Fila backup
+  backupCard.appendChild(h('div', { class: 'alrt ' + backupColor, style: { marginBottom: '8px' } },
+    h('div', { class: 'alrt-dot ' + backupColor }),
+    h('div', null,
+      h('div', { class: 'alrt-title' }, backupMsg),
+      h('div', { class: 'alrt-sub' }, `${backupCount} backup${backupCount !== 1 ? 's' : ''} guardados`)
+    )
+  ));
+
+  // Info técnica
+  [
+    { label: 'Versión', val: `v${appVer}` },
+    { label: 'Tamaño BD', val: dbSize },
+  ].forEach(({ label, val }) => {
+    backupCard.appendChild(h('div', {
+      style: { display: 'flex', justifyContent: 'space-between',
+               fontSize: '12px', padding: '4px 0',
+               borderBottom: '1px solid var(--line2)' }
+    },
+      h('span', { style: { color: 'var(--muted)' } }, label),
+      h('span', { style: { fontWeight: 600 } }, val)
+    ));
+  });
+
+  rightCol.appendChild(backupCard);
+
+  // Últimas ventas
+  const lastCard = h('div', { class: 'card' });
+  lastCard.appendChild(h('div', { class: 'fxb mb8' },
+    h('div', { class: 'card-title' }, 'Últimas Ventas'),
+    h('button', {
+      class: 'btn btn-ghost btn-sm',
+      onclick: () => routeTo('ventas'),
+      html: `${svg('list')} Historial`
+    })
+  ));
+
+  const last5 = [...DB.sales]
+    .filter(s => s.status !== 'cancelled' && s.type !== 'devolucion')
+    .reverse().slice(0, 5);
+
+  if (!last5.length) {
+    lastCard.appendChild(h('div', { class: 'empty', style: { padding: '18px' } },
+      h('p', null, 'Sin ventas registradas')
+    ));
+  } else {
+    last5.forEach(s => {
+      const fecha   = (s.created_at || s.date || '').split('T')[0].split(' ')[0];
+      const cliName = s.customer_name || s.clientName || 'Consumidor Final';
+      lastCard.appendChild(h('div', { class: 'fxb', style: {
+        padding: '8px 0', borderBottom: '1px solid var(--line2)'
+      } },
+        h('div', null,
+          h('div', { style: { fontSize: '12px', fontWeight: 600 } }, cliName),
+          h('div', { style: { fontSize: '10px', color: 'var(--muted2)' } },
+            `${fdate(fecha)} · ${s.type || 'factura'}`)
+        ),
+        h('div', { style: { fontWeight: 700, fontSize: '13px' } }, fmt(s.total))
+      ));
+    });
+  }
+  rightCol.appendChild(lastCard);
+
+  grid.appendChild(rightCol);
+  el.appendChild(grid);
+}
+
+// ══════════════════════════════════════════════
+// EXPORT PDF — Alertas de crédito
+// ══════════════════════════════════════════════
+function exportCreditAlertsPDF(alerts) {
+  const rows = alerts.map(a => {
+    const { client: c, daysLeft, status } = a;
+    const balance   = Number(c.balance || 0);
+    const creditDue = c.credit_due || c.creditDueDate || null;
+    const label     = status === 'overdue'
+      ? `Vencido hace ${Math.abs(daysLeft)} días`
+      : `Vence en ${daysLeft} días`;
+    return `
+      <tr>
+        <td>${c.name}</td>
+        <td>${c.phone || '—'}</td>
+        <td style="text-align:right">RD$${balance.toLocaleString('es-DO')}</td>
+        <td>${creditDue ? fdate(creditDue) : '—'}</td>
+        <td style="color:${status==='overdue'?'#DC2626':'#D97706'};font-weight:600">
+          ${label}</td>
+      </tr>`;
+  }).join('');
+
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"/><title>Alertas Crédito</title>
+<style>
+  body{font-family:Arial,sans-serif;font-size:12px;padding:20px}
+  h2{margin-bottom:2px}.sub{color:#666;margin-bottom:14px;font-size:11px}
+  table{width:100%;border-collapse:collapse}
+  th{background:#f3f4f6;padding:7px 10px;text-align:left;font-size:11px;text-transform:uppercase}
+  td{padding:7px 10px;border-bottom:1px solid #e5e7eb}
+  .foot{margin-top:14px;font-size:10px;color:#9ca3af}
+  .no-print{margin-bottom:12px;text-align:right}
+  @media print{.no-print{display:none}}
+</style></head><body>
+  <div class="no-print">
+    <button onclick="window.print()"
+      style="background:#0D0F12;color:#fff;border:none;padding:8px 16px;
+             border-radius:6px;font-size:12px;cursor:pointer">Imprimir</button>
+  </div>
+  <h2>Alertas de Crédito — ${CFG.biz}</h2>
+  <div class="sub">
+    ${alerts.length} cliente(s) con crédito vencido o por vencer · ${fdate(today())}
+  </div>
+  <table>
+    <thead><tr>
+      <th>Cliente</th><th>Teléfono</th>
+      <th style="text-align:right">Balance</th>
+      <th>Fecha Límite</th><th>Estado</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+  <div class="foot">${CFG.biz} · ${CFG.phone} · ${CFG.addr}</div>
+</body></html>`;
+
+  const win = window.open('','_blank','width=860,height=600,scrollbars=yes');
+  if (!win) { toast('Activa ventanas emergentes', 'w'); return; }
+  win.document.open(); win.document.write(html); win.document.close(); win.focus();
+}
+
+// ══════════════════════════════════════════════
+// EXPORT PDF — Estado de cuenta cliente
+// ══════════════════════════════════════════════
+function exportClientCreditPDF(c) {
+  if (!c) return;
+  const balance     = Number(c.balance || 0);
+  const creditLimit = Number(c.credit_limit || c.creditLimit || 0);
+  const creditDays  = Number(c.credit_days  || c.creditDays  || 30);
+  const creditDue   = c.credit_due || c.creditDueDate || null;
+
+  const pagos  = DB.payments.filter(p =>
+    (p.customer_id || p.clientId) === c.id);
+  const ventas = DB.sales.filter(s =>
+    (s.customer_id || s.clientId) === c.id &&
+    (s.payment_method || s.pay) === 'credito');
+
+  const ventasRows = ventas.map(s => {
+    const fecha = (s.created_at || s.date || '').split('T')[0].split(' ')[0];
+    return `<tr>
+      <td>${fdate(fecha)}</td><td>Factura #${s.id}</td>
+      <td style="text-align:right">RD$${Number(s.total||0).toLocaleString('es-DO')}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="3" style="color:#9ca3af">Sin compras</td></tr>';
+
+  const pagosRows = pagos.map(p => {
+    const fecha = (p.created_at || '').split('T')[0].split(' ')[0];
+    return `<tr>
+      <td>${fdate(fecha)}</td><td>${p.note || 'Abono'}</td>
+      <td style="text-align:right;color:#16A34A">
+        +RD$${Number(p.amount||0).toLocaleString('es-DO')}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="3" style="color:#9ca3af">Sin abonos</td></tr>';
+
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"/><title>Estado de Cuenta</title>
+<style>
+  body{font-family:Arial,sans-serif;font-size:12px;padding:20px}
+  h2{margin-bottom:2px}h3{margin:14px 0 6px;font-size:13px}
+  .sub{color:#666;margin-bottom:14px}
+  table{width:100%;border-collapse:collapse;margin-bottom:10px}
+  th{background:#f3f4f6;padding:7px 10px;text-align:left;font-size:11px;text-transform:uppercase}
+  td{padding:7px 10px;border-bottom:1px solid #e5e7eb}
+  .total{font-weight:700;font-size:14px;margin-top:10px}
+  .foot{margin-top:16px;font-size:10px;color:#9ca3af}
+  .no-print{margin-bottom:12px;text-align:right}
+  @media print{.no-print{display:none}}
+</style></head><body>
+  <div class="no-print">
+    <button onclick="window.print()"
+      style="background:#0D0F12;color:#fff;border:none;padding:8px 16px;
+             border-radius:6px;font-size:12px;cursor:pointer">Imprimir</button>
+  </div>
+  <h2>Estado de Cuenta — ${c.name}</h2>
+  <div class="sub">
+    RNC: ${c.rnc || '—'} · Tel: ${c.phone || '—'}<br>
+    Límite: RD$${creditLimit.toLocaleString('es-DO')} · Plazo: ${creditDays} días
+    ${creditDue ? '<br>Fecha límite: ' + fdate(creditDue) : ''}
+  </div>
+  <h3>Compras a Crédito</h3>
+  <table><thead><tr><th>Fecha</th><th>Concepto</th>
+    <th style="text-align:right">Monto</th></tr></thead>
+    <tbody>${ventasRows}</tbody></table>
+  <h3>Abonos Realizados</h3>
+  <table><thead><tr><th>Fecha</th><th>Concepto</th>
+    <th style="text-align:right">Monto</th></tr></thead>
+    <tbody>${pagosRows}</tbody></table>
+  <div class="total">Balance pendiente: RD$${balance.toLocaleString('es-DO')}</div>
+  <div class="foot">${CFG.biz} · ${CFG.phone} · ${CFG.addr}</div>
+</body></html>`;
+
+  const win = window.open('','_blank','width=760,height=650,scrollbars=yes');
+  if (!win) { toast('Activa ventanas emergentes', 'w'); return; }
+  win.document.open(); win.document.write(html); win.document.close(); win.focus();
+}
