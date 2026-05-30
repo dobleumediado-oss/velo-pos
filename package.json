@@ -84,7 +84,7 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "TU_USUARIO_GITHUB",
+      "owner": "dobleumediado-oss",
       "repo": "velo-pos",
       "private": true
     }
