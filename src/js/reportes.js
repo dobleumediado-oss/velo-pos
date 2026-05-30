@@ -46,6 +46,9 @@ async function renderReportes(el) {
       class: `tab ${repRange === o.v ? 'on' : ''}`,
       onclick: async () => {
         repRange = o.v;
+        // Actualizar visual de tabs inmediatamente
+        tabs.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
+        event.currentTarget.classList.add('on');
         if (o.v !== 'custom') await cargarYRenderizar(el);
         else renderRangeInputs();
       }
