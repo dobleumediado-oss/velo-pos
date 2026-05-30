@@ -777,18 +777,24 @@ const salesRepo = {
 // ── Reportes ──────────────────────────────────
 const reportsRepo = {
   summary(range = 'today', dateFrom = null, dateTo = null) {
-    let dateFilter;
+    let dateFilter;   // con alias s (para queries con JOIN)
+    let dateFilterNoAlias; // sin alias (para queries directas sobre sales)
     if (range === 'custom' && dateFrom && dateTo) {
-      dateFilter = `date(s.created_at) BETWEEN '${dateFrom}' AND '${dateTo}'`;
+      dateFilter        = `date(s.created_at) BETWEEN '${dateFrom}' AND '${dateTo}'`;
+      dateFilterNoAlias = `date(created_at) BETWEEN '${dateFrom}' AND '${dateTo}'`;
     } else if (range === 'week') {
-      dateFilter = `date(s.created_at) >= date('now','-7 days','localtime')`;
+      dateFilter        = `date(s.created_at) >= date('now','-7 days','localtime')`;
+      dateFilterNoAlias = `date(created_at) >= date('now','-7 days','localtime')`;
     } else if (range === 'month') {
-      dateFilter = `strftime('%Y-%m',s.created_at) = strftime('%Y-%m','now','localtime')`;
+      dateFilter        = `strftime('%Y-%m',s.created_at) = strftime('%Y-%m','now','localtime')`;
+      dateFilterNoAlias = `strftime('%Y-%m',created_at) = strftime('%Y-%m','now','localtime')`;
     } else if (range === 'all') {
-      dateFilter = `1=1`;
+      dateFilter        = `1=1`;
+      dateFilterNoAlias = `1=1`;
     } else {
       // today
-      dateFilter = `date(s.created_at) = date('now','localtime')`;
+      dateFilter        = `date(s.created_at) = date('now','localtime')`;
+      dateFilterNoAlias = `date(created_at) = date('now','localtime')`;
     }
 
     // Ventas por método de pago
@@ -797,7 +803,7 @@ const reportsRepo = {
              SUM(total) as total, SUM(tax_amt) as tax,
              SUM(discount_amt) as discount
       FROM sales
-      WHERE status='completed' AND type != 'devolucion' AND ${dateFilter}
+      WHERE status='completed' AND type != 'devolucion' AND ${dateFilterNoAlias}
       GROUP BY payment_method
     `).all();
 
@@ -816,21 +822,21 @@ const reportsRepo = {
     const devData = db.prepare(`
       SELECT COUNT(*) as count, SUM(total) as total
       FROM sales
-      WHERE type='devolucion' AND ${dateFilter}
+      WHERE type='devolucion' AND ${dateFilterNoAlias}
     `).get();
 
     // Descuentos totales
     const discData = db.prepare(`
       SELECT SUM(discount_amt) as total_discount
       FROM sales
-      WHERE status='completed' AND type != 'devolucion' AND ${dateFilter}
+      WHERE status='completed' AND type != 'devolucion' AND ${dateFilterNoAlias}
     `).get();
 
     // ITBIS total
     const taxData = db.prepare(`
       SELECT SUM(tax_amt) as total_tax
       FROM sales
-      WHERE status='completed' AND type != 'devolucion' AND ${dateFilter}
+      WHERE status='completed' AND type != 'devolucion' AND ${dateFilterNoAlias}
     `).get();
 
     // Productos más vendidos (con ganancia real)
@@ -865,7 +871,7 @@ const reportsRepo = {
       SELECT COUNT(*) as count, SUM(amount) as total
       FROM payments
       WHERE date(created_at,'localtime') IN (
-        SELECT date(created_at,'localtime') FROM sales WHERE ${dateFilter}
+        SELECT date(created_at,'localtime') FROM sales WHERE ${dateFilterNoAlias}
       )
     `).get();
 
