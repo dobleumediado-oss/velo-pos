@@ -119,6 +119,12 @@ contextBridge.exposeInMainWorld('api', {
     onProgress: (cb) => ipcRenderer.on('update:progress', (_, data) => cb(data)),
   },
 
+  // ── Importación universal ────────────────
+  importar: {
+    readSQLite: (data) => ipcRenderer.invoke('importar:readSQLite', data),
+    readPDF:    (data) => ipcRenderer.invoke('importar:readPDF', data),
+  },
+
   // ── Proveedores ───────────────────────────
   suppliers: {
     getAll:  ()           => ipcRenderer.invoke('suppliers:getAll'),

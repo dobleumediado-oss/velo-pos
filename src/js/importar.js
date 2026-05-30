@@ -1,0 +1,602 @@
+// ══════════════════════════════════════════════
+// IMPORTACIÓN UNIVERSAL DE DATOS — Velo POS
+// Soporta: Excel (.xlsx), CSV, JSON, SQLite (.db), PDF, TXT
+// Usa Claude API para mapeo automático de columnas
+// ══════════════════════════════════════════════
+
+// ── Estado ────────────────────────────────────
+let importState = {
+  file:        null,
+  rawData:     [],    // filas crudas del archivo
+  headers:     [],    // columnas detectadas
+  mapping:     {},    // { veloField: sourceColumn }
+  tipo:        'productos', // 'productos' | 'clientes'
+  importando:  false,
+};
+
+// ── Campos de Velo POS ────────────────────────
+const VELO_FIELDS_PRODUCTS = [
+  { key: 'name',      label: 'Nombre',       required: true  },
+  { key: 'code',      label: 'Código',       required: false },
+  { key: 'barcode',   label: 'Código barras',required: false },
+  { key: 'price',     label: 'Precio venta', required: true  },
+  { key: 'cost',      label: 'Costo',        required: false },
+  { key: 'wholesale', label: 'Precio mayor', required: false },
+  { key: 'stock',     label: 'Stock',        required: false },
+  { key: 'stock_min', label: 'Stock mínimo', required: false },
+  { key: 'category',  label: 'Categoría',    required: false },
+  { key: 'brand',     label: 'Marca',        required: false },
+  { key: 'unit',      label: 'Unidad',       required: false },
+  { key: 'description',label: 'Descripción', required: false },
+];
+
+const VELO_FIELDS_CLIENTS = [
+  { key: 'name',         label: 'Nombre',         required: true  },
+  { key: 'phone',        label: 'Teléfono',        required: false },
+  { key: 'email',        label: 'Email',           required: false },
+  { key: 'rnc',          label: 'RNC/Cédula',      required: false },
+  { key: 'address',      label: 'Dirección',       required: false },
+  { key: 'credit_limit', label: 'Límite crédito',  required: false },
+];
+
+// ══════════════════════════════════════════════
+// PASO 3 DEL WIZARD — Pantalla de importación
+// ══════════════════════════════════════════════
+function wizardStepImportar() {
+  openModal(`
+    <div style="text-align:center;margin-bottom:20px">
+      <div style="font-size:36px;margin-bottom:8px">📂</div>
+      <div class="modal-title">¿Tienes datos de otro sistema?</div>
+      <div class="modal-sub">Importa tus productos y clientes automáticamente</div>
+    </div>
+
+    <div style="display:flex;gap:6px;margin-bottom:20px;justify-content:center">
+      ${[1,2,3,4].map((i,idx) => `
+        <div style="width:28px;height:5px;border-radius:3px;
+             background:${idx < 3 ? 'var(--green)' : 'var(--line)'}"></div>
+      `).join('')}
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+      <div class="card" style="text-align:center;cursor:pointer;border:2px solid var(--line);padding:16px"
+           id="imp-tipo-prod"
+           onclick="setImportTipo('productos')">
+        <div style="font-size:24px;margin-bottom:6px">📦</div>
+        <div style="font-weight:500;font-size:13px">Productos</div>
+        <div style="font-size:11px;color:var(--muted2)">Inventario y precios</div>
+      </div>
+      <div class="card" style="text-align:center;cursor:pointer;border:2px solid var(--line);padding:16px"
+           id="imp-tipo-cli"
+           onclick="setImportTipo('clientes')">
+        <div style="font-size:24px;margin-bottom:6px">👥</div>
+        <div style="font-weight:500;font-size:13px">Clientes</div>
+        <div style="font-size:11px;color:var(--muted2)">Contactos y crédito</div>
+      </div>
+    </div>
+
+    <div style="border:2px dashed var(--line);border-radius:var(--r-md);padding:20px;
+         text-align:center;cursor:pointer;margin-bottom:16px"
+         onclick="document.getElementById('imp-file-input').click()"
+         id="imp-drop-zone">
+      <div style="font-size:28px;margin-bottom:6px">⬆</div>
+      <div style="font-weight:500;font-size:13px;margin-bottom:4px">
+        Arrastra tu archivo aquí o haz clic para seleccionar
+      </div>
+      <div style="font-size:11px;color:var(--muted2)">
+        Excel (.xlsx), CSV, JSON, SQLite (.db), PDF, TXT — máximo 10MB
+      </div>
+      <input type="file" id="imp-file-input" style="display:none"
+             accept=".xlsx,.xls,.csv,.json,.db,.sqlite,.pdf,.txt"
+             onchange="onImportFileSelected(this)"/>
+    </div>
+
+    <div id="imp-file-info" style="display:none;margin-bottom:12px"></div>
+
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="wizardStep=4;renderWizardStep()">
+        Omitir — empezar desde cero
+      </button>
+      <button class="btn btn-dark" id="imp-btn-analizar"
+              onclick="analizarArchivoConIA()" disabled
+              style="opacity:.4">
+        ✨ Analizar con IA
+      </button>
+    </div>
+  `, 'modal-xl');
+
+  // Drag & drop
+  setTimeout(() => {
+    const zone = document.getElementById('imp-drop-zone');
+    if (!zone) return;
+    zone.addEventListener('dragover', e => { e.preventDefault(); zone.style.borderColor = 'var(--green)'; });
+    zone.addEventListener('dragleave', () => { zone.style.borderColor = 'var(--line)'; });
+    zone.addEventListener('drop', e => {
+      e.preventDefault();
+      zone.style.borderColor = 'var(--line)';
+      const file = e.dataTransfer.files[0];
+      if (file) procesarArchivoSeleccionado(file);
+    });
+    // Seleccionar productos por defecto
+    setImportTipo('productos');
+  }, 50);
+}
+
+function setImportTipo(tipo) {
+  importState.tipo = tipo;
+  document.getElementById('imp-tipo-prod')?.style.setProperty(
+    'border-color', tipo === 'productos' ? 'var(--green)' : 'var(--line)'
+  );
+  document.getElementById('imp-tipo-cli')?.style.setProperty(
+    'border-color', tipo === 'clientes' ? 'var(--green)' : 'var(--line)'
+  );
+}
+
+function onImportFileSelected(input) {
+  const file = input.files[0];
+  if (file) procesarArchivoSeleccionado(file);
+}
+
+function procesarArchivoSeleccionado(file) {
+  if (file.size > 10 * 1024 * 1024) {
+    toast('El archivo es mayor a 10MB', 'err'); return;
+  }
+  importState.file = file;
+  const info = document.getElementById('imp-file-info');
+  if (info) {
+    info.style.display = 'block';
+    info.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;
+           background:var(--surface2);border-radius:var(--r-sm)">
+        <span style="font-size:20px">${fileEmoji(file.name)}</span>
+        <div>
+          <div style="font-weight:500;font-size:13px">${file.name}</div>
+          <div style="font-size:11px;color:var(--muted2)">${(file.size/1024).toFixed(1)} KB</div>
+        </div>
+        <span style="margin-left:auto;color:var(--green);font-size:18px">✓</span>
+      </div>`;
+  }
+  const btn = document.getElementById('imp-btn-analizar');
+  if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+}
+
+function fileEmoji(name) {
+  const ext = name.split('.').pop().toLowerCase();
+  const map = { xlsx:'📊', xls:'📊', csv:'📄', json:'📋', db:'🗃️', sqlite:'🗃️', pdf:'📑', txt:'📝' };
+  return map[ext] || '📁';
+}
+
+// ══════════════════════════════════════════════
+// LECTURA DEL ARCHIVO
+// ══════════════════════════════════════════════
+async function leerArchivo(file) {
+  const ext = file.name.split('.').pop().toLowerCase();
+
+  if (ext === 'csv' || ext === 'txt') {
+    return leerCSV(file);
+  } else if (ext === 'json') {
+    return leerJSON(file);
+  } else if (ext === 'xlsx' || ext === 'xls') {
+    return leerExcel(file);
+  } else if (ext === 'db' || ext === 'sqlite') {
+    return leerSQLite(file);
+  } else if (ext === 'pdf') {
+    return leerPDF(file);
+  }
+  throw new Error(`Formato .${ext} no soportado`);
+}
+
+function leerCSV(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text  = e.target.result;
+        const lines = text.split(/\r?\n/).filter(l => l.trim());
+        if (lines.length < 2) throw new Error('El archivo está vacío o tiene solo encabezados');
+
+        // Detectar delimitador
+        const delimiters = [',', ';', '\t', '|'];
+        const counts     = delimiters.map(d => (lines[0].match(new RegExp(`\\${d}`, 'g')) || []).length);
+        const delim      = delimiters[counts.indexOf(Math.max(...counts))];
+
+        const headers = lines[0].split(delim).map(h => h.trim().replace(/^["']|["']$/g, ''));
+        const rows    = lines.slice(1).map(line => {
+          const vals = line.split(delim).map(v => v.trim().replace(/^["']|["']$/g, ''));
+          const row  = {};
+          headers.forEach((h, i) => { row[h] = vals[i] || ''; });
+          return row;
+        });
+        resolve({ headers, rows });
+      } catch(err) { reject(err); }
+    };
+    reader.onerror = reject;
+    reader.readAsText(file, 'UTF-8');
+  });
+}
+
+function leerJSON(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        let data = JSON.parse(e.target.result);
+        if (!Array.isArray(data)) {
+          // Buscar el primer array dentro del JSON
+          const key = Object.keys(data).find(k => Array.isArray(data[k]));
+          if (key) data = data[key];
+          else throw new Error('No se encontró un array de datos en el JSON');
+        }
+        if (!data.length) throw new Error('El JSON está vacío');
+        const headers = Object.keys(data[0]);
+        resolve({ headers, rows: data });
+      } catch(err) { reject(err); }
+    };
+    reader.onerror = reject;
+    reader.readAsText(file);
+  });
+}
+
+async function leerExcel(file) {
+  // SheetJS está disponible como XLSX global si se carga desde CDN
+  // Como estamos en Electron, lo cargamos dinámicamente
+  if (typeof XLSX === 'undefined') {
+    // Intentar cargarlo como módulo de node en el renderer
+    throw new Error('Para importar Excel instala: npm install xlsx en el proyecto');
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb    = XLSX.read(e.target.result, { type: 'array' });
+        const ws    = wb.Sheets[wb.SheetNames[0]];
+        const data  = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        if (!data.length) throw new Error('La hoja de Excel está vacía');
+        const headers = Object.keys(data[0]);
+        resolve({ headers, rows: data });
+      } catch(err) { reject(err); }
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+async function leerSQLite(file) {
+  // Leer SQLite vía IPC (el main process puede acceder a better-sqlite3)
+  const arrayBuffer = await file.arrayBuffer();
+  const uint8       = new Uint8Array(arrayBuffer);
+  const result      = await window.api.importar.readSQLite({ data: Array.from(uint8) });
+  if (!result.ok) throw new Error(result.error);
+  return result.data; // { headers, rows, tables }
+}
+
+async function leerPDF(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const uint8       = new Uint8Array(arrayBuffer);
+  const result      = await window.api.importar.readPDF({ data: Array.from(uint8) });
+  if (!result.ok) throw new Error(result.error);
+  return result.data;
+}
+
+// ══════════════════════════════════════════════
+// ANÁLISIS CON IA (Claude API)
+// ══════════════════════════════════════════════
+async function analizarArchivoConIA() {
+  const btn = document.getElementById('imp-btn-analizar');
+  if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Analizando...'; }
+
+  try {
+    // 1. Leer el archivo
+    const { headers, rows } = await leerArchivo(importState.file);
+    importState.headers = headers;
+    importState.rawData = rows;
+
+    // 2. Tomar muestra de las primeras 5 filas para enviar a Claude
+    const muestra = rows.slice(0, 5);
+    const tipo    = importState.tipo;
+    const campos  = (tipo === 'productos' ? VELO_FIELDS_PRODUCTS : VELO_FIELDS_CLIENTS)
+                    .map(f => `${f.key} (${f.label}${f.required ? ', requerido' : ''})`).join(', ');
+
+    const prompt = `Analiza estas columnas de un archivo de datos de un sistema de punto de venta:
+
+Columnas encontradas: ${headers.join(', ')}
+
+Muestra de datos (primeras 5 filas):
+${JSON.stringify(muestra, null, 2)}
+
+Necesito mapear estas columnas a los campos de Velo POS para importar ${tipo}.
+Los campos disponibles son: ${campos}
+
+Responde SOLO con un objeto JSON sin comentarios ni markdown, con este formato exacto:
+{
+  "mapping": {
+    "name": "NombreColumnaOrigen",
+    "code": "NombreColumnaOrigen o null",
+    "price": "NombreColumnaOrigen",
+    "cost": "NombreColumnaOrigen o null",
+    "stock": "NombreColumnaOrigen o null"
+  },
+  "confidence": 0.95,
+  "notas": "Explicación breve en español de lo que detectaste"
+}
+
+Si un campo no tiene columna correspondiente, usa null. Solo incluye los campos que tienen mapeo.`;
+
+    // 3. Llamar a Claude API
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model:      'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        messages:   [{ role: 'user', content: prompt }],
+      }),
+    });
+
+    const data    = await response.json();
+    const texto   = data.content?.[0]?.text || '';
+    const jsonStr = texto.replace(/```json|```/g, '').trim();
+    const parsed  = JSON.parse(jsonStr);
+
+    importState.mapping = parsed.mapping || {};
+
+    // 4. Mostrar pantalla de confirmación
+    mostrarConfirmacionMapeo(parsed.notas);
+
+  } catch (err) {
+    toast(`Error al analizar: ${err.message}`, 'err');
+    if (btn) { btn.disabled = false; btn.innerHTML = '✨ Analizar con IA'; }
+  }
+}
+
+// ══════════════════════════════════════════════
+// PANTALLA DE CONFIRMACIÓN DEL MAPEO
+// ══════════════════════════════════════════════
+function mostrarConfirmacionMapeo(notas) {
+  const tipo   = importState.tipo;
+  const fields = tipo === 'productos' ? VELO_FIELDS_PRODUCTS : VELO_FIELDS_CLIENTS;
+  const hdrs   = importState.headers;
+  const total  = importState.rawData.length;
+  const preview= importState.rawData.slice(0, 3);
+
+  const mappingRows = fields.map(f => {
+    const mapped = importState.mapping[f.key] || '';
+    const opts   = hdrs.map(h => `<option value="${h}" ${h === mapped ? 'selected' : ''}>${h}</option>`).join('');
+    return `
+      <tr>
+        <td style="font-size:12px">
+          <b>${f.label}</b>
+          ${f.required ? '<span style="color:var(--red)">*</span>' : ''}
+        </td>
+        <td>
+          <select class="inp" style="font-size:12px;padding:4px 8px"
+                  id="map-${f.key}" onchange="updateMapping('${f.key}',this.value)">
+            <option value="">— No importar —</option>
+            ${opts}
+          </select>
+        </td>
+        <td style="font-size:11px;color:var(--muted2)">
+          ${mapped && preview[0] ? (preview[0][mapped] || '—') : '—'}
+        </td>
+      </tr>`;
+  }).join('');
+
+  openModal(`
+    <div class="modal-title">✨ Mapeo detectado por IA</div>
+    <div class="modal-sub" style="margin-bottom:12px">${notas || 'Revisa y ajusta si es necesario'}</div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+      <div style="background:var(--surface2);border-radius:var(--r-sm);padding:10px;font-size:12px">
+        <div style="font-weight:600;margin-bottom:3px">📊 Archivo</div>
+        <div>${importState.file?.name}</div>
+        <div style="color:var(--muted2)">${total.toLocaleString()} registros · ${hdrs.length} columnas</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:var(--r-sm);padding:10px;font-size:12px">
+        <div style="font-weight:600;margin-bottom:3px">🎯 Importando</div>
+        <div>${tipo === 'productos' ? 'Productos' : 'Clientes'}</div>
+        <div style="color:var(--muted2)">Ajusta el mapeo si algo está incorrecto</div>
+      </div>
+    </div>
+
+    <table class="tbl" style="margin-bottom:12px">
+      <thead><tr><th>Campo Velo POS</th><th>Columna del archivo</th><th>Ejemplo</th></tr></thead>
+      <tbody>${mappingRows}</tbody>
+    </table>
+
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="wizardStepImportar()">← Volver</button>
+      <button class="btn btn-dark" onclick="ejecutarImportacion()">
+        ⬆ Importar ${total.toLocaleString()} registros
+      </button>
+    </div>
+  `, 'modal-xl');
+}
+
+function updateMapping(field, value) {
+  if (value) {
+    importState.mapping[field] = value;
+  } else {
+    delete importState.mapping[field];
+  }
+}
+
+// ══════════════════════════════════════════════
+// IMPORTACIÓN CON BARRA DE PROGRESO
+// ══════════════════════════════════════════════
+async function ejecutarImportacion() {
+  const tipo    = importState.tipo;
+  const mapping = importState.mapping;
+  const rows    = importState.rawData;
+
+  // Validar campos requeridos
+  const fields  = tipo === 'productos' ? VELO_FIELDS_PRODUCTS : VELO_FIELDS_CLIENTS;
+  const missing = fields.filter(f => f.required && !mapping[f.key]);
+  if (missing.length) {
+    toast(`Falta mapear: ${missing.map(f => f.label).join(', ')}`, 'err');
+    return;
+  }
+
+  // Pantalla de progreso
+  openModal(`
+    <div style="text-align:center;padding:20px">
+      <div style="font-size:32px;margin-bottom:12px">⏳</div>
+      <div class="modal-title">Importando datos...</div>
+      <div class="modal-sub" id="imp-prog-sub">Preparando...</div>
+      <div style="background:var(--line);border-radius:6px;height:8px;margin:16px 0">
+        <div id="imp-prog-bar" style="background:var(--green);height:8px;border-radius:6px;width:0%;transition:.2s"></div>
+      </div>
+      <div id="imp-prog-count" style="font-size:13px;color:var(--muted2)">0 / ${rows.length}</div>
+    </div>
+  `, 'modal-lg');
+
+  const errores  = [];
+  let importados = 0;
+
+  // Generar código único para productos sin código
+  let codeCounter = Date.now();
+  const genCode   = () => `IMP-${++codeCounter}`;
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+
+    // Actualizar progreso cada 10 registros
+    if (i % 10 === 0) {
+      const pct = Math.round((i / rows.length) * 100);
+      document.getElementById('imp-prog-bar') &&
+        (document.getElementById('imp-prog-bar').style.width = pct + '%');
+      document.getElementById('imp-prog-sub') &&
+        (document.getElementById('imp-prog-sub').textContent = `Procesando fila ${i + 1}...`);
+      document.getElementById('imp-prog-count') &&
+        (document.getElementById('imp-prog-count').textContent = `${i} / ${rows.length}`);
+      await new Promise(r => setTimeout(r, 0)); // ceder al render
+    }
+
+    try {
+      if (tipo === 'productos') {
+        const name  = String(row[mapping.name] || '').trim();
+        const price = parseFloat(String(row[mapping.price] || '0').replace(/[^0-9.,-]/g,'').replace(',','.')) || 0;
+
+        if (!name)    { errores.push({ fila: i+2, error: 'Nombre vacío' }); continue; }
+        if (price<=0) { errores.push({ fila: i+2, error: `"${name}" sin precio válido` }); continue; }
+
+        const data = {
+          name,
+          code:      mapping.code      ? String(row[mapping.code] || '').trim() || genCode() : genCode(),
+          barcode:   mapping.barcode   ? String(row[mapping.barcode] || '').trim()  : '',
+          price,
+          cost:      mapping.cost      ? parseFloat(String(row[mapping.cost]||'0').replace(/[^0-9.,-]/g,'').replace(',','.')) || 0 : 0,
+          wholesale: mapping.wholesale ? parseFloat(String(row[mapping.wholesale]||'0').replace(/[^0-9.,-]/g,'').replace(',','.')) || price : price,
+          stock:     mapping.stock     ? parseInt(String(row[mapping.stock]||'0').replace(/[^0-9]/g,''))    || 0 : 0,
+          stock_min: mapping.stock_min ? parseInt(String(row[mapping.stock_min]||'5').replace(/[^0-9]/g,'')) || 5 : 5,
+          category:  mapping.category  ? String(row[mapping.category] || '').trim() : '',
+          brand:     mapping.brand     ? String(row[mapping.brand]    || '').trim() : '',
+          unit:      mapping.unit      ? String(row[mapping.unit]     || '').trim() : 'und',
+          description: mapping.description ? String(row[mapping.description]||'').trim() : '',
+        };
+
+        const result = await window.api.products.create({ data, requestUserId: user.id });
+        if (result.ok) importados++;
+        else errores.push({ fila: i+2, error: result.error || 'Error al crear producto' });
+
+      } else {
+        // Clientes
+        const name = String(row[mapping.name] || '').trim();
+        if (!name) { errores.push({ fila: i+2, error: 'Nombre vacío' }); continue; }
+
+        const data = {
+          name,
+          phone:        mapping.phone        ? String(row[mapping.phone]||'').trim()        : '',
+          email:        mapping.email        ? String(row[mapping.email]||'').trim()        : '',
+          rnc:          mapping.rnc          ? String(row[mapping.rnc]||'').trim()          : '',
+          address:      mapping.address      ? String(row[mapping.address]||'').trim()      : '',
+          credit_limit: mapping.credit_limit ? parseFloat(String(row[mapping.credit_limit]||'0').replace(/[^0-9.]/g,'')) || 0 : 0,
+          credit_days:  30,
+        };
+
+        const result = await window.api.customers.create({ data, requestUserId: user.id });
+        if (result.ok) importados++;
+        else errores.push({ fila: i+2, error: result.error || 'Error al crear cliente' });
+      }
+    } catch(e) {
+      errores.push({ fila: i+2, error: e.message });
+    }
+  }
+
+  // Recargar datos
+  await reloadProducts();
+  await reloadCustomers();
+
+  // Pantalla de resultado
+  mostrarResultadoImportacion(importados, errores, rows.length);
+}
+
+// ══════════════════════════════════════════════
+// RESULTADO FINAL
+// ══════════════════════════════════════════════
+function mostrarResultadoImportacion(importados, errores, total) {
+  const exitosos = importados;
+  const fallidos = errores.length;
+  const color    = fallidos === 0 ? 'green' : fallidos < total * 0.1 ? 'var(--amber)' : 'var(--red)';
+
+  const errHtml = errores.slice(0, 10).map(e =>
+    `<tr><td style="color:var(--muted2)">Fila ${e.fila}</td><td style="color:var(--red);font-size:12px">${e.error}</td></tr>`
+  ).join('');
+
+  openModal(`
+    <div style="text-align:center;margin-bottom:16px">
+      <div style="font-size:40px;margin-bottom:8px">${fallidos === 0 ? '🎉' : '✅'}</div>
+      <div class="modal-title">Importación completada</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">
+      <div style="text-align:center;background:var(--surface2);border-radius:var(--r-md);padding:12px">
+        <div style="font-size:24px;font-weight:700;color:var(--green)">${exitosos.toLocaleString()}</div>
+        <div style="font-size:11px;color:var(--muted2)">Importados</div>
+      </div>
+      <div style="text-align:center;background:var(--surface2);border-radius:var(--r-md);padding:12px">
+        <div style="font-size:24px;font-weight:700;color:${color}">${fallidos.toLocaleString()}</div>
+        <div style="font-size:11px;color:var(--muted2)">Con errores</div>
+      </div>
+      <div style="text-align:center;background:var(--surface2);border-radius:var(--r-md);padding:12px">
+        <div style="font-size:24px;font-weight:700">${total.toLocaleString()}</div>
+        <div style="font-size:11px;color:var(--muted2)">Total filas</div>
+      </div>
+    </div>
+
+    ${errores.length ? `
+      <div style="margin-bottom:12px">
+        <div style="font-weight:500;font-size:12px;margin-bottom:6px">
+          Primeros ${Math.min(errores.length,10)} errores:
+        </div>
+        <table class="tbl" style="font-size:12px">
+          <thead><tr><th>Fila</th><th>Error</th></tr></thead>
+          <tbody>${errHtml}</tbody>
+        </table>
+        ${errores.length > 10 ? `<div style="font-size:11px;color:var(--muted2);margin-top:4px">
+          ...y ${errores.length-10} más</div>` : ''}
+      </div>` : ''}
+
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="wizardStepImportar()">
+        Importar otro archivo
+      </button>
+      <button class="btn btn-dark" onclick="wizardStep=4;renderWizardStep()">
+        ${svg('check')} Continuar
+      </button>
+    </div>
+  `, 'modal-xl');
+}
+
+// ══════════════════════════════════════════════
+// IMPORTACIÓN DESDE CONFIGURACIÓN (cualquier momento)
+// ══════════════════════════════════════════════
+function abrirImportarDesdeConfig() {
+  importState = { file: null, rawData: [], headers: [], mapping: {}, tipo: 'productos', importando: false };
+  wizardStepImportar();
+  // Quitar el botón de "Omitir" cuando se accede desde configuración
+  setTimeout(() => {
+    const omitirBtn = document.querySelector('.modal-foot .btn-out');
+    if (omitirBtn && omitirBtn.textContent.includes('Omitir')) {
+      omitirBtn.style.display = 'none';
+    }
+  }, 100);
+}

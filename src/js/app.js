@@ -593,6 +593,29 @@ async function renderConfiguracion(el) {
     </div>`;
   sysCard.appendChild(infoCard);
 
+  // ── Importar datos ──────────────────────────
+  const importCard = h('div', { class: 'card' });
+  importCard.appendChild(h('div', { class: 'fxb mb8' },
+    h('div', { class: 'card-title' }, '📂 Importar datos'),
+    h('span', { style: { fontSize: '11px', color: 'var(--muted2)' } }, 'Excel, CSV, JSON, SQLite')
+  ));
+  importCard.appendChild(h('div', { class: 'alrt b', style: { marginBottom: '12px' } },
+    h('div', { class: 'alrt-dot b' }),
+    h('div', null,
+      h('div', { class: 'alrt-title' }, 'Importación con IA'),
+      h('div', { class: 'alrt-sub' },
+        'La IA detecta automáticamente las columnas de tu archivo y las mapea a Velo POS.')
+    )
+  ));
+  importCard.appendChild(
+    h('button', {
+      class: 'btn btn-dark btn-fw',
+      onclick: abrirImportarDesdeConfig,
+      html: '✨ Importar productos o clientes'
+    })
+  );
+  rightCol.appendChild(importCard);
+
   // Backups
   const backupCard = h('div', { class: 'card' });
   backupCard.appendChild(h('div', { class: 'fxb mb8' },
@@ -1510,7 +1533,8 @@ function renderWizardStep() {
   const steps = {
     1: wizardStepNegocio,
     2: wizardStepContrasena,
-    3: wizardStepListo,
+    3: wizardStepImportar,
+    4: wizardStepListo,
   };
   steps[wizardStep]?.();
 }
@@ -1683,13 +1707,18 @@ function wizardStepListo() {
       </div>
 
       <div style="display:flex;gap:6px;margin-bottom:24px;justify-content:center">
-        ${[1,2,3].map(i => `
-          <div style="width:32px;height:6px;border-radius:3px;background:var(--green)"></div>
+        ${[1,2,3,4].map(i => `
+          <div style="width:28px;height:5px;border-radius:3px;background:var(--green)"></div>
         `).join('')}
       </div>
 
       <div class="card" style="text-align:left;margin-bottom:16px">
         <div style="font-weight:700;font-size:12px;margin-bottom:10px">Próximos pasos:</div>
+        <div class="tr" style="font-size:12px;margin-bottom:8px">
+          <span>📂 Importar datos de otro sistema</span>
+          <button class="btn btn-ghost btn-sm"
+                  onclick="abrirImportarDesdeConfig()">Importar</button>
+        </div>
         <div class="tr" style="font-size:12px;margin-bottom:8px">
           <span>${svg('box')} Agregar productos al inventario</span>
           <button class="btn btn-ghost btn-sm"

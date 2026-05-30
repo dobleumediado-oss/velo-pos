@@ -805,6 +805,75 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 
 // ══════════════════════════════════════════════
+// IPC — IMPORTACION UNIVERSAL
+// ══════════════════════════════════════════════
+ipcMain.handle('importar:readSQLite', async (_, { data }) => {
+  try {
+    const tmp  = require('os').tmpdir();
+    const path = require('path');
+    const fs   = require('fs');
+    const tmp_path = path.join(tmp, `velo_import_${Date.now()}.db`);
+
+    // Escribir el buffer al disco temporalmente
+    fs.writeFileSync(tmp_path, Buffer.from(data));
+
+    const Database = require('better-sqlite3');
+    const db2      = new Database(tmp_path, { readonly: true });
+
+    // Listar tablas
+    const tables = db2.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+    ).all().map(r => r.name).filter(t => !t.startsWith('sqlite_'));
+
+    // Leer la tabla con más registros
+    let bestTable = tables[0];
+    let bestCount = 0;
+    for (const t of tables) {
+      try {
+        const count = db2.prepare(`SELECT COUNT(*) as c FROM "${t}"`).get().c;
+        if (count > bestCount) { bestCount = count; bestTable = t; }
+      } catch {}
+    }
+
+    if (!bestTable) throw new Error('No se encontraron tablas con datos');
+
+    const rows    = db2.prepare(`SELECT * FROM "${bestTable}" LIMIT 500`).all();
+    const headers = rows.length ? Object.keys(rows[0]) : [];
+
+    db2.close();
+    fs.unlinkSync(tmp_path);
+
+    return { ok: true, data: { headers, rows, tables, bestTable } };
+  } catch(e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('importar:readPDF', async (_, { data }) => {
+  // Extracción básica de texto de PDF para encontrar tablas
+  try {
+    // Sin librería externa, extraemos texto básico
+    const buf  = Buffer.from(data);
+    const text = buf.toString('latin1');
+
+    // Buscar líneas que parezcan datos tabulares
+    const lines = text.split(/\n/).filter(l => l.trim().length > 5);
+    const rows  = lines.slice(0, 200).map((l, i) => ({ linea: i+1, contenido: l.trim() }));
+
+    return {
+      ok: true,
+      data: {
+        headers: ['linea', 'contenido'],
+        rows,
+        nota: 'PDF detectado — revisa el mapeo manualmente'
+      }
+    };
+  } catch(e) {
+    return { ok: false, error: 'No se pudo leer el PDF: ' + e.message };
+  }
+});
+
+// ══════════════════════════════════════════════
 // IPC — PROVEEDORES
 // ══════════════════════════════════════════════
 ipcMain.handle('suppliers:getAll', async () => {
