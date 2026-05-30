@@ -411,18 +411,18 @@ const productsRepo = {
   },
   create(p) {
     const r = db.prepare(`
-      INSERT INTO products(code,name,brand,category,description,cost,price,wholesale,stock,stock_min,unit)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?)
-    `).run(p.code,p.name,p.brand||'',p.category||'',p.description||'',
+      INSERT INTO products(code,barcode,name,brand,category,description,cost,price,wholesale,stock,stock_min,unit)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(p.code,p.barcode||'',p.name,p.brand||'',p.category||'',p.description||'',
            p.cost,p.price,p.wholesale||p.price,p.stock||0,p.stock_min||5,p.unit||'und');
     return r.lastInsertRowid;
   },
   update(id, p) {
     db.prepare(`
-      UPDATE products SET code=?,name=?,brand=?,category=?,description=?,
+      UPDATE products SET code=?,barcode=?,name=?,brand=?,category=?,description=?,
       cost=?,price=?,wholesale=?,stock_min=?,unit=?,updated_at=datetime('now')
       WHERE id=?
-    `).run(p.code,p.name,p.brand||'',p.category||'',p.description||'',
+    `).run(p.code,p.barcode||'',p.name,p.brand||'',p.category||'',p.description||'',
            p.cost,p.price,p.wholesale||p.price,p.stock_min||5,p.unit||'und',id);
   },
   adjustStock(id, qty, type, reason, saleId = null, userId = null) {

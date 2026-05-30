@@ -518,6 +518,22 @@ function openProductoModal(p = null) {
         <input class="inp" id="pf-code" type="text" placeholder="FLT-001"
                value="${isEdit ? p.code : ''}"/>
       </div>
+      <div class="fg">
+        <label class="lbl">
+          Código de barras
+          <span style="font-weight:400;color:var(--muted2);font-size:11px">
+            — escanea o escribe el EAN/UPC
+          </span>
+        </label>
+        <div style="position:relative">
+          <input class="inp" id="pf-barcode" type="text"
+                 placeholder="7501234567890"
+                 value="${isEdit ? (p.barcode||'') : ''}"
+                 style="padding-left:32px"/>
+          <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);
+                        color:var(--muted2);font-size:14px">⊟</span>
+        </div>
+      </div>
     </div>
     <div class="g2">
       <div class="fg">
@@ -659,6 +675,7 @@ async function guardarProducto(id) {
   const category  = document.getElementById('pf-cat')?.value               || '';
   const unit      = document.getElementById('pf-unit')?.value              || 'und';
   const desc      = document.getElementById('pf-desc')?.value?.trim()      || '';
+  const barcode   = document.getElementById('pf-barcode')?.value?.trim()   || '';
   const cost      = parseFloat(document.getElementById('pf-cost')?.value)  || 0;
   const price     = parseFloat(document.getElementById('pf-price')?.value) || 0;
   const wholesale = parseFloat(document.getElementById('pf-wholesale')?.value) || price;
@@ -669,7 +686,7 @@ async function guardarProducto(id) {
   if (!code)      { toast('El código es requerido', 'err');  return; }
   if (price <= 0) { toast('El precio debe ser mayor a 0', 'err'); return; }
 
-  const data = { code, name, brand, category, description: desc, unit, cost, price, wholesale, stock, stock_min };
+  const data = { code, barcode, name, brand, category, description: desc, unit, cost, price, wholesale, stock, stock_min };
 
   let result;
   if (id) {

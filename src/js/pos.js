@@ -85,11 +85,14 @@ function renderPOS(el) {
             e.preventDefault();
             const q = si.value.trim();
             if (!q) return;
-            // Buscar producto exacto por código
+            // Buscar producto exacto por código interno O código de barras
             const exacto = DB.products.find(p =>
-              p.active !== 0 &&
-              (p.code?.toLowerCase() === q.toLowerCase() ||
-               p.code?.toLowerCase() === q.toLowerCase().replace(/^0+/, ''))
+              p.active !== 0 && (
+                p.code?.toLowerCase()    === q.toLowerCase() ||
+                p.code?.toLowerCase()    === q.toLowerCase().replace(/^0+/, '') ||
+                p.barcode?.toLowerCase() === q.toLowerCase() ||
+                p.barcode?.toLowerCase() === q.toLowerCase().replace(/^0+/, '')
+              )
             );
             if (exacto) {
               addToCart(exacto);
@@ -105,7 +108,8 @@ function renderPOS(el) {
               const filtered = DB.products.filter(p =>
                 p.active !== 0 && (
                   p.name?.toLowerCase().includes(q.toLowerCase()) ||
-                  p.code?.toLowerCase().includes(q.toLowerCase())
+                  p.code?.toLowerCase().includes(q.toLowerCase()) ||
+                  p.barcode?.toLowerCase().includes(q.toLowerCase())
                 )
               );
               if (filtered.length === 1) {
@@ -121,6 +125,43 @@ function renderPOS(el) {
       }
       if (sc) sc.addEventListener('change', () => renderPOSGrid());
       document.getElementById('pos-search')?.focus();
+
+      // ── Focus global para lector de código de barras ──────────────────
+      // El escáner USB envía teclas como si fuera teclado — si el foco está
+      // en otro lado, redirigimos automáticamente al campo de búsqueda
+      // Solo aplica cuando el módulo POS está activo
+      if (!window._barcodeGlobalListener) {
+        window._barcodeGlobalListener = true;
+        let _barcodeBuffer = '';
+        let _barcodeTimer  = null;
+
+        document.addEventListener('keydown', (e) => {
+          // Solo si el POS está activo y el foco NO está en un input/textarea/select
+          const tag = document.activeElement?.tagName?.toLowerCase();
+          const isPOSActive = !!document.getElementById('pos-search');
+          if (!isPOSActive) return;
+          if (['input','textarea','select'].includes(tag)) return;
+          if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+          // Acumular caracteres del escáner
+          if (e.key.length === 1) {
+            _barcodeBuffer += e.key;
+            clearTimeout(_barcodeTimer);
+            _barcodeTimer = setTimeout(() => { _barcodeBuffer = ''; }, 100);
+          }
+
+          // Enter = fin de escaneo → redirigir al campo de búsqueda
+          if (e.key === 'Enter' && _barcodeBuffer) {
+            const si = document.getElementById('pos-search');
+            if (si) {
+              si.value  = _barcodeBuffer;
+              posSearch = _barcodeBuffer;
+              si.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+            }
+            _barcodeBuffer = '';
+          }
+        }, true);
+      }
     }, 0);
 
     renderPOSGrid();

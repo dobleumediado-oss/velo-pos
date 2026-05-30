@@ -137,6 +137,17 @@ const MIGRATIONS = [
       }
     }
   },
+  {
+    version: '1.0.9',
+    description: 'Agregar columna barcode a products para codigo de barras',
+    run(db) {
+      try {
+        db.exec(`ALTER TABLE products ADD COLUMN barcode TEXT DEFAULT ''`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)`);
+        console.log('[MIGRATION 1.0.9] columna barcode agregada a products');
+      } catch {}
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════
