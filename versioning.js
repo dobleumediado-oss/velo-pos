@@ -109,6 +109,34 @@ const MIGRATIONS = [
       } catch {}
     }
   },
+  {
+    version: '1.0.7',
+    description: 'Agregar columna created_at a sales si no existe',
+    run(db) {
+      try {
+        db.exec(`ALTER TABLE sales ADD COLUMN created_at TEXT DEFAULT (datetime('now'))`);
+        console.log('[MIGRATION 1.0.7] created_at agregado a sales');
+      } catch {}
+      try {
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(created_at)`);
+      } catch {}
+      try {
+        db.exec(`ALTER TABLE sales ADD COLUMN ncf TEXT DEFAULT ''`);
+      } catch {}
+    }
+  },
+  {
+    version: '1.0.8',
+    description: 'Agregar ncf_counter y password_changed a settings si no existen',
+    run(db) {
+      try {
+        db.prepare(`INSERT INTO settings(key,value) VALUES('ncf_counter','0') ON CONFLICT(key) DO NOTHING`).run();
+        db.prepare(`INSERT INTO settings(key,value) VALUES('password_changed','0') ON CONFLICT(key) DO NOTHING`).run();
+      } catch(e) {
+        console.log('[MIGRATION 1.0.8]', e.message);
+      }
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════
