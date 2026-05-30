@@ -1038,9 +1038,153 @@ const returnsRepo = {
 };
 
 // ══════════════════════════════════════════════
+// PROVEEDORES
+// ══════════════════════════════════════════════
+const suppliersRepo = {
+  getAll() {
+    return db.prepare(`SELECT * FROM suppliers WHERE status='activo' ORDER BY name`).all();
+  },
+  getById(id) {
+    return db.prepare(`SELECT * FROM suppliers WHERE id=?`).get(id);
+  },
+  create(s) {
+    const r = db.prepare(`
+      INSERT INTO suppliers(name,contact,phone,email,rnc,address,notes)
+      VALUES(?,?,?,?,?,?,?)
+    `).run(s.name, s.contact||'', s.phone||'', s.email||'',
+           s.rnc||'', s.address||'', s.notes||'');
+    return r.lastInsertRowid;
+  },
+  update(id, s) {
+    db.prepare(`
+      UPDATE suppliers SET name=?,contact=?,phone=?,email=?,rnc=?,address=?,notes=?
+      WHERE id=?
+    `).run(s.name, s.contact||'', s.phone||'', s.email||'',
+           s.rnc||'', s.address||'', s.notes||'', id);
+  },
+  delete(id) {
+    db.prepare(`UPDATE suppliers SET status='inactivo' WHERE id=?`).run(id);
+  },
+};
+
+// ══════════════════════════════════════════════
+// ORDENES DE COMPRA
+// ══════════════════════════════════════════════
+const purchasesRepo = {
+  getAll({ range = 'all', supplierId } = {}) {
+    let where = "WHERE 1=1";
+    const params = [];
+    if (supplierId) { where += ' AND po.supplier_id=?'; params.push(supplierId); }
+    if (range === 'today') {
+      where += ` AND date(po.created_at)=date('now','localtime')`;
+    } else if (range === 'month') {
+      where += ` AND strftime('%Y-%m',po.created_at)=strftime('%Y-%m','now','localtime')`;
+    }
+    return db.prepare(`
+      SELECT po.*, s.name as supplier_name_join
+      FROM purchase_orders po
+      LEFT JOIN suppliers s ON po.supplier_id = s.id
+      ${where}
+      ORDER BY po.created_at DESC LIMIT 200
+    `).all(...params);
+  },
+
+  getById(id) {
+    const po    = db.prepare(`SELECT * FROM purchase_orders WHERE id=?`).get(id);
+    if (!po) return null;
+    po.items    = db.prepare(`SELECT * FROM purchase_items WHERE purchase_order_id=?`).all(id);
+    return po;
+  },
+
+  create({ supplierId, supplierName, items, notes, userId, cajero }) {
+    return db.transaction(() => {
+      // Calcular totales
+      const subtotal = items.reduce((s, i) => s + (i.unit_cost * i.qty_ordered), 0);
+      const total    = subtotal;
+
+      const r = db.prepare(`
+        INSERT INTO purchase_orders(supplier_id, supplier_name, status, subtotal, total, notes, user_id, cajero)
+        VALUES(?,?,?,?,?,?,?,?)
+      `).run(supplierId || null, supplierName || '', 'pendiente',
+             subtotal, total, notes || '', userId, cajero || '');
+      const poId = r.lastInsertRowid;
+
+      for (const item of items) {
+        db.prepare(`
+          INSERT INTO purchase_items(purchase_order_id, product_id, product_code, product_name, unit_cost, qty_ordered, qty_received, subtotal)
+          VALUES(?,?,?,?,?,?,0,?)
+        `).run(poId, item.product_id || null, item.product_code || '',
+               item.product_name, item.unit_cost, item.qty_ordered,
+               item.unit_cost * item.qty_ordered);
+      }
+
+      return { poId, total };
+    })();
+  },
+
+  receive(id, { items, userId }) {
+    return db.transaction(() => {
+      const po = db.prepare(`SELECT * FROM purchase_orders WHERE id=?`).get(id);
+      if (!po) throw new Error('Orden no encontrada');
+      if (po.status === 'recibido') throw new Error('Esta orden ya fue recibida completamente');
+
+      let allReceived = true;
+
+      for (const item of items) {
+        if (!item.qty_received || item.qty_received <= 0) continue;
+
+        // Actualizar item de la orden
+        db.prepare(`
+          UPDATE purchase_items SET qty_received = qty_received + ?
+          WHERE id=? AND purchase_order_id=?
+        `).run(item.qty_received, item.id, id);
+
+        // Actualizar stock del producto
+        if (item.product_id) {
+          productsRepo.adjustStock(
+            item.product_id, item.qty_received, 'entrada',
+            `Recepción OC #${id}`, null, userId
+          );
+
+          // Actualizar costo promedio del producto si se especifica
+          if (item.update_cost && item.unit_cost > 0) {
+            db.prepare(`UPDATE products SET cost=?, updated_at=datetime('now') WHERE id=?`)
+              .run(item.unit_cost, item.product_id);
+          }
+        }
+      }
+
+      // Verificar si todos los items fueron recibidos completamente
+      const pendingItems = db.prepare(`
+        SELECT COUNT(*) as c FROM purchase_items
+        WHERE purchase_order_id=? AND qty_received < qty_ordered
+      `).get(id);
+
+      const newStatus = pendingItems.c === 0 ? 'recibido' : 'parcial';
+
+      db.prepare(`
+        UPDATE purchase_orders SET status=?, received_at=datetime('now') WHERE id=?
+      `).run(newStatus, id);
+
+      audit(userId, '', 'compra_recibida', 'purchase_orders', id,
+            `OC #${id} | Status: ${newStatus}`);
+
+      return { status: newStatus };
+    })();
+  },
+
+  cancel(id, userId) {
+    db.prepare(`UPDATE purchase_orders SET status='cancelado' WHERE id=?`).run(id);
+    audit(userId, '', 'compra_cancelada', 'purchase_orders', id, `OC #${id} cancelada`);
+  },
+};
+
+// ══════════════════════════════════════════════
 // EXPORTS
 // ══════════════════════════════════════════════
 module.exports = {
+  suppliersRepo,
+  purchasesRepo,
   initDB,
   authRepo,
   settingsRepo,

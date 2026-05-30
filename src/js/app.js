@@ -291,6 +291,7 @@ function buildSidebar() {
     { key: 'pos',       icon: 'monitor',  label: 'Punto de Venta' },
     { sep: 'Gestión' },
     { key: 'inventario',icon: 'box',      label: 'Inventario' },
+    { key: 'compras',   icon: 'truck',    label: 'Compras' },
     { key: 'clientes',  icon: 'users',    label: 'Clientes' },
     { key: 'ventas',    icon: 'list',     label: 'Ventas' },
     { key: 'devoluciones', icon: 'return', label: 'Devoluciones' },
@@ -366,6 +367,7 @@ function buildTopbar() {
     dash:         'Dashboard',
     pos:          'Punto de Venta',
     inventario:   'Inventario',
+    compras:      'Compras',
     clientes:     'Clientes',
     ventas:       'Ventas',
     devoluciones: 'Devoluciones',
@@ -437,6 +439,7 @@ function routeTo(p) {
     case 'dash':         renderDash(el);          break;
     case 'pos':          renderPOS(el);            break;
     case 'inventario':   renderInventario(el);     break;
+    case 'compras':      renderCompras(el);         break;
     case 'clientes':     renderClientes(el);       break;
     case 'ventas':       renderVentas(el);         break;
     case 'devoluciones': renderDevoluciones(el);   break;

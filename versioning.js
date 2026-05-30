@@ -148,6 +148,55 @@ const MIGRATIONS = [
       } catch {}
     }
   },
+  {
+    version: '1.1.0',
+    description: 'Crear tablas de proveedores y ordenes de compra',
+    run(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS suppliers (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          name        TEXT NOT NULL,
+          contact     TEXT DEFAULT '',
+          phone       TEXT DEFAULT '',
+          email       TEXT DEFAULT '',
+          rnc         TEXT DEFAULT '',
+          address     TEXT DEFAULT '',
+          notes       TEXT DEFAULT '',
+          status      TEXT DEFAULT 'activo',
+          created_at  TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS purchase_orders (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          supplier_id  INTEGER REFERENCES suppliers(id),
+          supplier_name TEXT DEFAULT '',
+          status       TEXT DEFAULT 'pendiente'
+                       CHECK(status IN ('pendiente','recibido','parcial','cancelado')),
+          subtotal     REAL DEFAULT 0,
+          tax_amt      REAL DEFAULT 0,
+          total        REAL DEFAULT 0,
+          notes        TEXT DEFAULT '',
+          user_id      INTEGER REFERENCES users(id),
+          cajero       TEXT DEFAULT '',
+          received_at  TEXT,
+          created_at   TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS purchase_items (
+          id                INTEGER PRIMARY KEY AUTOINCREMENT,
+          purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id),
+          product_id        INTEGER REFERENCES products(id),
+          product_code      TEXT DEFAULT '',
+          product_name      TEXT NOT NULL,
+          unit_cost         REAL NOT NULL DEFAULT 0,
+          qty_ordered       INTEGER NOT NULL DEFAULT 0,
+          qty_received      INTEGER NOT NULL DEFAULT 0,
+          subtotal          REAL DEFAULT 0
+        );
+      `);
+      console.log('[MIGRATION 1.1.0] tablas suppliers y purchase_orders creadas');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

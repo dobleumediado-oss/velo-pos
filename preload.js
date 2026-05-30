@@ -113,4 +113,26 @@ contextBridge.exposeInMainWorld('api', {
   db: {
     vacuum: (data) => ipcRenderer.invoke('db:vacuum', data),
   },
+
+  // ── Auto-updater ──────────────────────────
+  updater: {
+    onProgress: (cb) => ipcRenderer.on('update:progress', (_, data) => cb(data)),
+  },
+
+  // ── Proveedores ───────────────────────────
+  suppliers: {
+    getAll:  ()           => ipcRenderer.invoke('suppliers:getAll'),
+    create:  (data)       => ipcRenderer.invoke('suppliers:create', data),
+    update:  (data)       => ipcRenderer.invoke('suppliers:update', data),
+    delete:  (data)       => ipcRenderer.invoke('suppliers:delete', data),
+  },
+
+  // ── Órdenes de compra ─────────────────────
+  purchases: {
+    getAll:   (params)    => ipcRenderer.invoke('purchases:getAll', params),
+    getById:  (data)      => ipcRenderer.invoke('purchases:getById', data),
+    create:   (data)      => ipcRenderer.invoke('purchases:create', data),
+    receive:  (data)      => ipcRenderer.invoke('purchases:receive', data),
+    cancel:   (data)      => ipcRenderer.invoke('purchases:cancel', data),
+  },
 });

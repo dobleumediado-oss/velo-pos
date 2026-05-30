@@ -11,7 +11,7 @@ const fs   = require('fs');
 const {
   initDB, authRepo, settingsRepo, usersRepo,
   productsRepo, customersRepo, cashRepo,
-  salesRepo, returnsRepo, reportsRepo, audit
+  salesRepo, returnsRepo, reportsRepo, suppliersRepo, purchasesRepo, audit
 } = require('./database');
 
 const {
@@ -803,6 +803,50 @@ const DATA_DIR = app.isPackaged
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
+
+// ══════════════════════════════════════════════
+// IPC — PROVEEDORES
+// ══════════════════════════════════════════════
+ipcMain.handle('suppliers:getAll', async () => {
+  try { return { ok: true, data: suppliersRepo.getAll() }; }
+  catch(e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('suppliers:create', async (_, { data, requestUserId }) => {
+  try { const id = suppliersRepo.create(data); return { ok: true, id }; }
+  catch(e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('suppliers:update', async (_, { id, data }) => {
+  try { suppliersRepo.update(id, data); return { ok: true }; }
+  catch(e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('suppliers:delete', async (_, { id }) => {
+  try { suppliersRepo.delete(id); return { ok: true }; }
+  catch(e) { return { ok: false, error: e.message }; }
+});
+
+// ══════════════════════════════════════════════
+// IPC — ORDENES DE COMPRA
+// ══════════════════════════════════════════════
+ipcMain.handle('purchases:getAll', async (_, params) => {
+  try { return { ok: true, data: purchasesRepo.getAll(params || {}) }; }
+  catch(e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('purchases:getById', async (_, { id }) => {
+  try { return { ok: true, data: purchasesRepo.getById(id) }; }
+  catch(e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('purchases:create', async (_, data) => {
+  try { const result = purchasesRepo.create(data); return { ok: true, ...result }; }
+  catch(e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('purchases:receive', async (_, { id, items, userId }) => {
+  try { const result = purchasesRepo.receive(id, { items, userId }); return { ok: true, ...result }; }
+  catch(e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('purchases:cancel', async (_, { id, userId }) => {
+  try { purchasesRepo.cancel(id, userId); return { ok: true }; }
+  catch(e) { return { ok: false, error: e.message }; }
+});
 
 app.whenReady().then(() => {
   try {
