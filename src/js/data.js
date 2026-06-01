@@ -38,24 +38,38 @@ let CFG = {
 const DENS = [2000,1000,500,200,100,50,25,10,5,1];
 
 // ── Categorías ────────────────────────────────
-const CATS = [
+// Se cargan desde SQLite en loadAppData()
+// Fallback a categorías de auto parts si la DB aún no cargó
+let CATS = [
   'Filtros','Eléctrico','Frenos','Suspensión',
   'Motor','Lubricantes','Encendido','Enfriamiento','Otros'
 ];
 
+async function reloadCategories() {
+  try {
+    const r = await window.api.categories.getAll();
+    if (r?.ok && r.data?.length) {
+      CATS = r.data.map(c => c.name);
+    }
+  } catch {}
+}
+
 // ══════════════════════════════════════════════
 // CARGAR DATOS INICIALES (IPC)
+// Carga lo mínimo necesario al arrancar.
+// Cada módulo recarga lo que necesita bajo demanda.
 // ══════════════════════════════════════════════
 async function loadAppData() {
   try {
-    const [products, customers, settings, sessions, users, sales, payments] = await Promise.all([
+    const [products, customers, settings, sessions, users, payments] = await Promise.all([
       window.api.products.getAll(),
       window.api.customers.getAll(),
       window.api.settings.getAll(),
       window.api.cash.getSessions(),
       window.api.users.getAll(),
-      window.api.sales.getAll({ range: 'all' }),
-      window.api.customers.getAllPayments ? window.api.customers.getAllPayments().catch(() => []) : Promise.resolve([]),
+      window.api.customers.getAllPayments
+        ? window.api.customers.getAllPayments().catch(() => [])
+        : Promise.resolve([]),
     ]);
 
     // Cache de usuarios para dropdown de login
@@ -65,8 +79,10 @@ async function loadAppData() {
     DB.customers = customers || [];
     DB.settings  = settings  || {};
     DB.caja      = sessions  || [];
-    DB.sales     = sales     || [];
     DB.payments  = payments  || [];
+    // Ventas: cargar sólo hoy al inicio. Los módulos que necesitan más rango
+    // llaman reloadSales({ range: 'week'|'month'|'all' }) ellos mismos.
+    DB.sales     = [];
 
     // Cargar configuración del negocio
     if (settings) {
@@ -74,14 +90,22 @@ async function loadAppData() {
       CFG.rnc            = settings.biz_rnc       || CFG.rnc;
       CFG.addr           = settings.biz_addr      || CFG.addr;
       CFG.phone          = settings.biz_phone     || CFG.phone;
-      CFG.itbis          = (settings.tax_pct !== undefined && settings.tax_pct !== '') ? parseFloat(settings.tax_pct) : 18;
+      CFG.itbis          = (settings.tax_pct !== undefined && settings.tax_pct !== '')
+                           ? parseFloat(settings.tax_pct) : 18;
       CFG.biz_logo       = settings.biz_logo      || '';
       CFG.receipt_msg    = settings.receipt_msg   || '¡Gracias por su compra!';
       CFG.print_template = settings.print_template || '';
+      // Módulo de etiquetas — activado por superadmin
+      window._bcEnabled = settings.barcode_enabled === '1' || settings.barcode_enabled === true;
     }
 
     // Verificar caja
     await chkCaja();
+
+    // Cargar ventas de hoy en segundo plano (no bloquea el arranque)
+    reloadSales({ range: 'today' }).catch(() => {});
+    // Cargar categorías desde DB
+    reloadCategories().catch(() => {});
 
   } catch (e) {
     console.error('[loadAppData]', e);
@@ -277,4 +301,98 @@ function getSales(range = 'today') {
     if (range === 'month') return d?.startsWith(td.slice(0, 7));
     return true;
   });
+}
+// ══════════════════════════════════════════════
+// WHATSAPP — Modal universal
+// Usa shell.openExternal para abrir en el
+// navegador real del sistema (no Electron interno)
+// ══════════════════════════════════════════════
+function openWhatsAppModal(msg, defPhone = '', clientName = 'cliente') {
+  const escaped = msg.replace(/`/g, "'");
+
+  openModal(`
+    <div class="modal-title" style="display:flex;align-items:center;gap:10px">
+      <div style="width:36px;height:36px;background:#25D366;border-radius:9px;
+                  display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="#fff">
+          <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
+          <path d="M12 0C5.373 0 0 5.373 0 12c0 2.124.557 4.118 1.529 5.847L0 24l6.335-1.501A11.934 11.934 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.801 9.801 0 01-5.002-1.367l-.359-.214-3.72.881.896-3.614-.234-.371A9.818 9.818 0 012.182 12C2.182 6.575 6.575 2.182 12 2.182S21.818 6.575 21.818 12 17.425 21.818 12 21.818z"/>
+        </svg>
+      </div>
+      Enviar por WhatsApp
+    </div>
+    <div class="modal-sub">A: ${clientName}</div>
+
+    <div class="fg">
+      <label class="lbl">Número de WhatsApp</label>
+      <div class="inp-ic">
+        <div class="ic" style="font-size:11px;font-weight:700;color:var(--muted)">+</div>
+        <input class="inp" id="wa-phone-input" type="tel"
+               placeholder="18091234567  (con código de país)"
+               value="${defPhone}"
+               onkeydown="if(event.key==='Enter') _waEnviar()"
+               style="font-size:15px;font-weight:600;letter-spacing:.5px"/>
+      </div>
+      <div style="font-size:11px;color:var(--muted2);margin-top:4px">
+        República Dominicana: <strong>1809</strong>, <strong>1829</strong> o <strong>1849</strong> + 7 dígitos
+      </div>
+    </div>
+
+    <div style="margin-top:12px">
+      <label class="lbl">Vista previa del mensaje</label>
+      <div style="background:var(--surface2);border:1px solid var(--line);border-radius:8px;
+                  padding:12px;font-size:12px;line-height:1.7;color:var(--ink3);
+                  max-height:180px;overflow-y:auto;white-space:pre-wrap;font-family:var(--mono)">
+${escaped}
+      </div>
+    </div>
+
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn" style="background:#25D366;color:#fff;border-color:#25D366"
+              onclick="_waEnviar()">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="flex-shrink:0">
+          <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
+          <path d="M12 0C5.373 0 0 5.373 0 12c0 2.124.557 4.118 1.529 5.847L0 24l6.335-1.501A11.934 11.934 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.801 9.801 0 01-5.002-1.367l-.359-.214-3.72.881.896-3.614-.234-.371A9.818 9.818 0 012.182 12C2.182 6.575 6.575 2.182 12 2.182S21.818 6.575 21.818 12 17.425 21.818 12 21.818z"/>
+        </svg>
+        Abrir WhatsApp
+      </button>
+    </div>
+  `);
+
+  // Guardar msg para que _waEnviar lo use
+  window._waPendingMsg = msg;
+  setTimeout(() => {
+    const inp = document.getElementById('wa-phone-input');
+    if (inp) { inp.focus(); inp.select(); }
+  }, 100);
+}
+
+async function _waEnviar() {
+  const inp   = document.getElementById('wa-phone-input');
+  const phone = (inp?.value || '').replace(/\D/g, '').trim();
+  const msg   = window._waPendingMsg || '';
+
+  if (!phone) {
+    inp?.classList.add('inp-err');
+    toast('Ingresa el número de WhatsApp', 'w');
+    return;
+  }
+  if (phone.length < 10) {
+    toast('Número muy corto — incluye el código de país (ej: 18091234567)', 'w');
+    return;
+  }
+
+  const encoded = encodeURIComponent(msg);
+  const url     = 'https://wa.me/' + phone + '?text=' + encoded;
+
+  closeModal();
+
+  // Abrir en el NAVEGADOR DEL SISTEMA via shell.openExternal
+  const result = await window.api.shell.openExternal(url).catch(() => ({ ok: false }));
+  if (result?.ok === false) {
+    toast('No se pudo abrir WhatsApp — verifica que tengas un navegador instalado', 'e');
+  } else {
+    toast('✓ WhatsApp abierto en el navegador', 'ok');
+  }
 }

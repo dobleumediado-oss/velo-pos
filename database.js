@@ -77,6 +77,7 @@ function createTables() {
     CREATE TABLE IF NOT EXISTS products (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       code          TEXT UNIQUE NOT NULL,
+      barcode       TEXT DEFAULT '',
       name          TEXT NOT NULL,
       brand         TEXT DEFAULT '',
       category      TEXT DEFAULT '',
@@ -87,6 +88,7 @@ function createTables() {
       stock         INTEGER NOT NULL DEFAULT 0,
       stock_min     INTEGER NOT NULL DEFAULT 5,
       unit          TEXT DEFAULT 'und',
+      condition     TEXT DEFAULT 'nuevo',
       active        INTEGER DEFAULT 1,
       created_at    TEXT DEFAULT (datetime('now')),
       updated_at    TEXT DEFAULT (datetime('now'))
@@ -248,6 +250,7 @@ function createTables() {
     CREATE INDEX IF NOT EXISTS idx_audit_user        ON audit_logs(user_id);
     CREATE INDEX IF NOT EXISTS idx_audit_action      ON audit_logs(action);
     CREATE INDEX IF NOT EXISTS idx_inv_product       ON inventory_movements(product_id);
+    CREATE INDEX IF NOT EXISTS idx_products_barcode  ON products(barcode);
   `);
 }
 
@@ -276,6 +279,9 @@ function seedIfEmpty() {
     ['receipt_msg',      '¡Gracias por su compra!'],
     ['password_changed', '0'],
     ['ncf_counter',      '0'],
+    ['barcode_enabled',  '0'],
+    ['barcode_printer',  ''],
+    ['barcode_design',   ''],
   ].forEach(([k, v]) => insertSetting.run(k, v));
 
   const adminPass  = bcrypt.hashSync('admin123', 10);
@@ -306,19 +312,35 @@ function seedIfEmpty() {
 }
 
 // ── Super Admin (desarrollador) ───────────────
-// Siempre existe, no aparece en la UI del cliente
-// Email y contraseña solo conocidos por el desarrollador
+// La contraseña se genera dinámicamente basada en el machineId de la máquina.
+// Nunca es la misma en dos instalaciones diferentes.
+// El vendedor puede derivarla con: sha256(machineId + VENDOR_SALT).slice(0,16)
 function _ensureSuperAdmin() {
   const existing = db.prepare(`SELECT id FROM users WHERE email=?`)
     .get('dev@sistema.do');
   if (!existing) {
-    const hash = bcrypt.hashSync('Sp3r@Dev#2026!', 10);
+    const machinePass = _deriveSuperAdminPass();
+    const hash        = bcrypt.hashSync(machinePass, 10);
     db.prepare(`
       INSERT INTO users(name,email,password,role,avatar,active)
       VALUES(?,?,?,?,?,1)
     `).run('Super Admin', 'dev@sistema.do', hash, 'superadmin', 'SA');
-    console.log('[DB] Super Admin inicializado.');
+    console.log('[DB] Super Admin inicializado (contraseña derivada del hardware).');
   }
+}
+
+// Deriva la contraseña del superadmin a partir de identificadores de esta máquina.
+// El resultado es único por máquina y no está hardcodeado en el código.
+function _deriveSuperAdminPass() {
+  const os       = require('os');
+  const crypto   = require('crypto');
+  // VENDOR_SALT: cambiar antes de producción — es el único secreto que el vendedor
+  // debe guardar fuera del código (variable de entorno en CI, o en una herramienta CLI aparte)
+  const VENDOR_SALT = process.env.VELO_VENDOR_SALT || 'velo-pos-salt-change-me';
+  const cpuModel    = os.cpus()[0]?.model || 'cpu';
+  const hostname    = os.hostname();
+  const raw         = `${hostname}::${cpuModel}::${VENDOR_SALT}`;
+  return crypto.createHash('sha256').update(raw).digest('hex').slice(0, 20);
 }
 
 // ══════════════════════════════════════════════
@@ -779,25 +801,46 @@ const salesRepo = {
 // ── Reportes ──────────────────────────────────
 const reportsRepo = {
   summary(range = 'today', dateFrom = null, dateTo = null) {
-    let dateFilter;   // con alias s (para queries con JOIN)
-    let dateFilterNoAlias; // sin alias (para queries directas sobre sales)
-    if (range === 'custom' && dateFrom && dateTo) {
-      dateFilter        = `date(s.created_at) BETWEEN '${dateFrom}' AND '${dateTo}'`;
-      dateFilterNoAlias = `date(created_at) BETWEEN '${dateFrom}' AND '${dateTo}'`;
-    } else if (range === 'week') {
-      dateFilter        = `date(s.created_at) >= date('now','-7 days','localtime')`;
-      dateFilterNoAlias = `date(created_at) >= date('now','-7 days','localtime')`;
-    } else if (range === 'month') {
-      dateFilter        = `strftime('%Y-%m',s.created_at) = strftime('%Y-%m','now','localtime')`;
-      dateFilterNoAlias = `strftime('%Y-%m',created_at) = strftime('%Y-%m','now','localtime')`;
-    } else if (range === 'all') {
-      dateFilter        = `1=1`;
-      dateFilterNoAlias = `1=1`;
-    } else {
-      // today
-      dateFilter        = `date(s.created_at) = date('now','localtime')`;
-      dateFilterNoAlias = `date(created_at) = date('now','localtime')`;
-    }
+    // ── Validar inputs para prevenir inyección ──
+    // dateFrom y dateTo deben ser YYYY-MM-DD o null
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    const safeFrom = (range === 'custom' && dateFrom && DATE_RE.test(dateFrom)) ? dateFrom : null;
+    const safeTo   = (range === 'custom' && dateTo   && DATE_RE.test(dateTo))   ? dateTo   : null;
+
+    // ── Construir filtros con parámetros preparados ──
+    // Usamos funciones wrapper para evitar interpolación de strings
+    const _buildFilters = () => {
+      if (range === 'custom' && safeFrom && safeTo) {
+        return {
+          withAlias:    { sql: `date(s.created_at)   BETWEEN ? AND ?`,  params: [safeFrom, safeTo] },
+          withoutAlias: { sql: `date(created_at)     BETWEEN ? AND ?`,  params: [safeFrom, safeTo] },
+          payments:     { sql: `date(created_at,'localtime') BETWEEN ? AND ?`, params: [safeFrom, safeTo] },
+        };
+      }
+      if (range === 'week') return {
+        withAlias:    { sql: `date(s.created_at)  >= date('now','-7 days','localtime')`, params: [] },
+        withoutAlias: { sql: `date(created_at)    >= date('now','-7 days','localtime')`, params: [] },
+        payments:     { sql: `date(created_at,'localtime') >= date('now','-7 days','localtime')`, params: [] },
+      };
+      if (range === 'month') return {
+        withAlias:    { sql: `strftime('%Y-%m',s.created_at) = strftime('%Y-%m','now','localtime')`, params: [] },
+        withoutAlias: { sql: `strftime('%Y-%m',created_at)   = strftime('%Y-%m','now','localtime')`, params: [] },
+        payments:     { sql: `strftime('%Y-%m',created_at,'localtime') = strftime('%Y-%m','now','localtime')`, params: [] },
+      };
+      if (range === 'all') return {
+        withAlias:    { sql: `1=1`, params: [] },
+        withoutAlias: { sql: `1=1`, params: [] },
+        payments:     { sql: `1=1`, params: [] },
+      };
+      // today (default)
+      return {
+        withAlias:    { sql: `date(s.created_at)  = date('now','localtime')`, params: [] },
+        withoutAlias: { sql: `date(created_at)    = date('now','localtime')`, params: [] },
+        payments:     { sql: `date(created_at,'localtime') = date('now','localtime')`, params: [] },
+      };
+    };
+
+    const f = _buildFilters();
 
     // Ventas por método de pago
     const byMethod = db.prepare(`
@@ -805,9 +848,9 @@ const reportsRepo = {
              SUM(total) as total, SUM(tax_amt) as tax,
              SUM(discount_amt) as discount
       FROM sales
-      WHERE status='completed' AND type != 'devolucion' AND ${dateFilterNoAlias}
+      WHERE status='completed' AND type != 'devolucion' AND ${f.withoutAlias.sql}
       GROUP BY payment_method
-    `).all();
+    `).all(...f.withoutAlias.params);
 
     // Costo total de lo vendido (desde snapshot de sale_items)
     const costData = db.prepare(`
@@ -817,29 +860,29 @@ const reportsRepo = {
              SUM(si.qty) as total_units
       FROM sale_items si
       JOIN sales s ON si.sale_id = s.id
-      WHERE s.status='completed' AND s.type != 'devolucion' AND ${dateFilter}
-    `).get();
+      WHERE s.status='completed' AND s.type != 'devolucion' AND ${f.withAlias.sql}
+    `).get(...f.withAlias.params);
 
     // Devoluciones
     const devData = db.prepare(`
       SELECT COUNT(*) as count, SUM(total) as total
       FROM sales
-      WHERE type='devolucion' AND ${dateFilterNoAlias}
-    `).get();
+      WHERE type='devolucion' AND ${f.withoutAlias.sql}
+    `).get(...f.withoutAlias.params);
 
     // Descuentos totales
     const discData = db.prepare(`
       SELECT SUM(discount_amt) as total_discount
       FROM sales
-      WHERE status='completed' AND type != 'devolucion' AND ${dateFilterNoAlias}
-    `).get();
+      WHERE status='completed' AND type != 'devolucion' AND ${f.withoutAlias.sql}
+    `).get(...f.withoutAlias.params);
 
     // ITBIS total
     const taxData = db.prepare(`
       SELECT SUM(tax_amt) as total_tax
       FROM sales
-      WHERE status='completed' AND type != 'devolucion' AND ${dateFilterNoAlias}
-    `).get();
+      WHERE status='completed' AND type != 'devolucion' AND ${f.withoutAlias.sql}
+    `).get(...f.withoutAlias.params);
 
     // Productos más vendidos (con ganancia real)
     const topProducts = db.prepare(`
@@ -850,10 +893,10 @@ const reportsRepo = {
              SUM((si.unit_price - si.unit_cost) * si.qty) as total_profit
       FROM sale_items si
       JOIN sales s ON si.sale_id = s.id
-      WHERE s.status='completed' AND s.type != 'devolucion' AND ${dateFilter}
+      WHERE s.status='completed' AND s.type != 'devolucion' AND ${f.withAlias.sql}
       GROUP BY si.product_id
       ORDER BY total_rev DESC LIMIT 10
-    `).all();
+    `).all(...f.withAlias.params);
 
     // Ventas por día (últimos 30 o en rango)
     const dailySales = db.prepare(`
@@ -863,19 +906,17 @@ const reportsRepo = {
              SUM(si.unit_cost * si.qty) as cost
       FROM sales s
       LEFT JOIN sale_items si ON s.id = si.sale_id
-      WHERE s.status='completed' AND s.type != 'devolucion' AND ${dateFilter}
+      WHERE s.status='completed' AND s.type != 'devolucion' AND ${f.withAlias.sql}
       GROUP BY day
       ORDER BY day ASC
-    `).all();
+    `).all(...f.withAlias.params);
 
     // Abonos recibidos en el período
     const abonosData = db.prepare(`
       SELECT COUNT(*) as count, SUM(amount) as total
       FROM payments
-      WHERE date(created_at,'localtime') IN (
-        SELECT date(created_at,'localtime') FROM sales WHERE ${dateFilterNoAlias}
-      )
-    `).get();
+      WHERE ${f.payments.sql}
+    `).get(...f.payments.params);
 
     const totalRev    = byMethod.reduce((a, m) => a + (m.total || 0), 0);
     const totalCost   = costData?.total_cost   || 0;

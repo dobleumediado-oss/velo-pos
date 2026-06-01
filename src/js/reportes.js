@@ -14,6 +14,7 @@ let repRange   = 'month';
 let repDateFrom = '';
 let repDateTo   = '';
 let repData     = null;
+let repTab      = 'financiero'; // 'financiero' | 'inventario'
 
 async function renderReportes(el) {
   el.innerHTML = '';
@@ -30,6 +31,26 @@ async function renderReportes(el) {
       html: `${svg('pdf')} Exportar PDF`
     })
   ));
+
+  // ── Pestañas principales ─────────────────────
+  const mainTabs = h('div', { class: 'flex', style: 'gap:8px;margin-bottom:16px' });
+  [
+    { v: 'financiero', l: 'Financiero' },
+    { v: 'inventario', l: 'Inventario valorizado' },
+  ].forEach(t => {
+    mainTabs.appendChild(h('button', {
+      class: `btn ${repTab === t.v ? 'btn-dark' : 'btn-out'} btn-sm`,
+      html: t.l,
+      onclick: () => { repTab = t.v; renderReportes(el); }
+    }));
+  });
+  el.appendChild(mainTabs);
+
+  // Si pestaña inventario, renderizar y salir
+  if (repTab === 'inventario') {
+    await _renderReporteInventario(el);
+    return;
+  }
 
   // ── Selector de rango ────────────────────────
   const rangeBar = h('div', { class: 'flex', style: { gap: '8px', marginBottom: '16px', flexWrap: 'wrap' } });
@@ -652,6 +673,214 @@ function exportReporteCreditoPDF() {
   <div class="total">Total por cobrar: ${fmt(total)}</div>
   <div class="foot">${CFG.biz} · ${CFG.phone} · ${CFG.addr}</div>
 </body></html>`;
+
+  printHTML(html);
+}
+
+// ══════════════════════════════════════════════
+// REPORTE DE INVENTARIO VALORIZADO
+// ══════════════════════════════════════════════
+async function _renderReporteInventario(el) {
+  const prods    = DB.products.filter(p => p.active !== 0);
+  const total    = prods.reduce((a, p) => a + ((p.stock||0) * (p.cost||0)), 0);
+  const units    = prods.reduce((a, p) => a + (p.stock||0), 0);
+  const lowStock = prods.filter(p => (p.stock||0) <= (p.stock_min||5));
+  const noPrice  = prods.filter(p => !p.cost || p.cost === 0);
+
+  // ── Métricas resumen ─────────────────────────
+  const metWrap = h('div', { class: 'metrics' });
+  [
+    { icon: 'dollar', color: 'g', label: 'Valor total inventario',
+      val: fmt(total), badge: 'Al costo promedio' },
+    { icon: 'box',    color: 'b', label: 'Unidades en stock',
+      val: units.toLocaleString('es-DO'), badge: `${prods.length} productos activos` },
+    { icon: 'alert',  color: 'r', label: 'Bajo stock mínimo',
+      val: lowStock.length.toString(), badge: 'Requieren reorden',
+      badgeType: lowStock.length > 0 ? 'dn' : 'nu' },
+    { icon: 'xmark',  color: 'a', label: 'Sin costo definido',
+      val: noPrice.length.toString(), badge: 'No incluidos en valor',
+      badgeType: noPrice.length > 0 ? 'dn' : 'nu' },
+  ].forEach(m => {
+    metWrap.appendChild(h('div', { class: 'metric' },
+      h('div', { class: 'met-top' },
+        h('div', { class: `met-icon ${m.color}`, html: svg(m.icon) })
+      ),
+      h('div', { class: 'met-label' }, m.label),
+      h('div', { class: 'met-val' }, m.val),
+      h('div', { class: 'met-foot' },
+        h('span', { class: `met-badge ${m.badgeType||'nu'}` }, m.badge)
+      )
+    ));
+  });
+  el.appendChild(metWrap);
+
+  // ── Tabla de inventario ──────────────────────
+  const card = h('div', { class: 'card', style: 'margin-top:16px' });
+
+  // Filtros
+  const filterRow = h('div', { class: 'fxb mb8', style: 'flex-wrap:wrap;gap:8px' });
+  let invFilter = 'todos';
+  const filterBtns = h('div', { class: 'flex', style: 'gap:6px;flex-wrap:wrap' });
+  [
+    { v: 'todos',   l: 'Todos' },
+    { v: 'bajo',    l: `⚠ Bajo stock (${lowStock.length})` },
+    { v: 'sinCosto',l: `Sin costo (${noPrice.length})` },
+  ].forEach(f => {
+    filterBtns.appendChild(h('button', {
+      class: `btn btn-sm ${invFilter===f.v?'btn-dark':'btn-out'}`,
+      id: `inv-filter-${f.v}`,
+      html: f.l,
+      onclick: () => {
+        invFilter = f.v;
+        filterBtns.querySelectorAll('button').forEach(b => b.classList.replace('btn-dark','btn-out'));
+        document.getElementById(`inv-filter-${f.v}`)?.classList.replace('btn-out','btn-dark');
+        renderTable(f.v);
+      }
+    }));
+  });
+
+  filterRow.appendChild(filterBtns);
+  filterRow.appendChild(h('button', {
+    class: 'btn btn-out btn-sm',
+    html: `${svg('pdf')} Exportar PDF`,
+    onclick: () => exportInventarioPDF(prods)
+  }));
+  card.appendChild(filterRow);
+
+  const tableWrap = h('div', { id: 'inv-table-wrap' });
+  card.appendChild(tableWrap);
+  el.appendChild(card);
+
+  function renderTable(filter) {
+    let rows = [...prods].sort((a,b) =>
+      ((b.stock||0)*(b.cost||0)) - ((a.stock||0)*(a.cost||0)));
+
+    if (filter === 'bajo')     rows = rows.filter(p => (p.stock||0) <= (p.stock_min||5));
+    if (filter === 'sinCosto') rows = rows.filter(p => !p.cost || p.cost === 0);
+
+    const tw = document.getElementById('inv-table-wrap');
+    if (!tw) return;
+    tw.innerHTML = '';
+
+    if (!rows.length) {
+      tw.appendChild(h('div', { style: 'color:var(--muted2);font-size:13px;padding:16px 0;text-align:center' },
+        'No hay productos que coincidan con el filtro'));
+      return;
+    }
+
+    // Tabla scrollable
+    const tbl = document.createElement('table');
+    tbl.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
+    tbl.innerHTML = `
+      <thead>
+        <tr style="border-bottom:2px solid var(--line);color:var(--muted);font-weight:600;text-align:left">
+          <th style="padding:8px 6px">Código</th>
+          <th style="padding:8px 6px">Producto</th>
+          <th style="padding:8px 6px">Categoría</th>
+          <th style="padding:8px 6px;text-align:right">Costo unit.</th>
+          <th style="padding:8px 6px;text-align:right">Stock</th>
+          <th style="padding:8px 6px;text-align:right">Mín.</th>
+          <th style="padding:8px 6px;text-align:right;color:var(--green)">Valor total</th>
+          <th style="padding:8px 6px;text-align:center">Estado</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(p => {
+          const val    = (p.stock||0) * (p.cost||0);
+          const isBajo = (p.stock||0) <= (p.stock_min||5);
+          const isZero = (p.stock||0) === 0;
+          return `
+            <tr style="border-bottom:1px solid var(--line2);${isBajo?'background:var(--amber-bg)':''}"
+                onmouseover="this.style.background='var(--surface2)'"
+                onmouseout="this.style.background='${isBajo?'var(--amber-bg)':''}'">
+              <td style="padding:8px 6px;font-family:var(--mono);color:var(--muted)">${p.code||'—'}</td>
+              <td style="padding:8px 6px;font-weight:500">${p.name}</td>
+              <td style="padding:8px 6px;color:var(--muted)">${p.category||'—'}</td>
+              <td style="padding:8px 6px;text-align:right">${fmt(p.cost||0)}</td>
+              <td style="padding:8px 6px;text-align:right;font-weight:700;color:${isZero?'var(--red)':isBajo?'var(--amber)':'var(--ink)'}">${p.stock||0}</td>
+              <td style="padding:8px 6px;text-align:right;color:var(--muted)">${p.stock_min||5}</td>
+              <td style="padding:8px 6px;text-align:right;font-weight:700;color:var(--green)">${fmt(val)}</td>
+              <td style="padding:8px 6px;text-align:center">
+                ${isZero ? '<span class="badge r">Sin stock</span>' :
+                  isBajo ? '<span class="badge a">Bajo</span>' :
+                  '<span class="badge g">OK</span>'}
+              </td>
+            </tr>`;
+        }).join('')}
+      </tbody>
+      <tfoot>
+        <tr style="border-top:2px solid var(--line);font-weight:700;background:var(--surface2)">
+          <td colspan="4" style="padding:10px 6px;text-align:right;color:var(--muted)">
+            TOTAL (${rows.length} productos)
+          </td>
+          <td style="padding:10px 6px;text-align:right">${rows.reduce((a,p)=>a+(p.stock||0),0)}</td>
+          <td></td>
+          <td style="padding:10px 6px;text-align:right;color:var(--green);font-size:14px">
+            ${fmt(rows.reduce((a,p)=>a+((p.stock||0)*(p.cost||0)),0))}
+          </td>
+          <td></td>
+        </tr>
+      </tfoot>`;
+    tw.appendChild(tbl);
+  }
+
+  renderTable('todos');
+}
+
+// ── Exportar inventario a PDF ─────────────────
+function exportInventarioPDF(prods) {
+  const today_ = today();
+  const total   = prods.reduce((a,p) => a + ((p.stock||0)*(p.cost||0)), 0);
+  const sorted  = [...prods].sort((a,b) =>
+    ((b.stock||0)*(b.cost||0)) - ((a.stock||0)*(a.cost||0)));
+
+  const html = `<!DOCTYPE html><html><head>
+    <meta charset="UTF-8"/>
+    <style>
+      body{font-family:Arial,sans-serif;font-size:11px;color:#111;margin:20px}
+      h1{font-size:16px;margin-bottom:2px}
+      .sub{color:#888;font-size:11px;margin-bottom:16px}
+      table{width:100%;border-collapse:collapse}
+      th{background:#111;color:#fff;padding:7px 8px;text-align:left;font-size:10px;text-transform:uppercase}
+      td{padding:6px 8px;border-bottom:1px solid #eee}
+      tr:nth-child(even){background:#f9f9f9}
+      .r{text-align:right}
+      .total{font-weight:700;background:#f0f0f0!important;border-top:2px solid #111}
+      .badge-bajo{color:#b45309;font-weight:700}
+      .badge-ok{color:#16a34a}
+    </style>
+  </head><body>
+    <h1>${CFG.biz} — Inventario Valorizado</h1>
+    <div class="sub">Generado: ${fdate(today_)} · Total: ${fmt(total)} · ${sorted.length} productos</div>
+    <table>
+      <thead><tr>
+        <th>Código</th><th>Producto</th><th>Categoría</th>
+        <th class="r">Costo</th><th class="r">Stock</th><th class="r">Valor</th><th class="r">Estado</th>
+      </tr></thead>
+      <tbody>
+        ${sorted.map(p => `
+          <tr>
+            <td>${p.code||'—'}</td>
+            <td>${p.name}</td>
+            <td>${p.category||'—'}</td>
+            <td class="r">$${(p.cost||0).toFixed(2)}</td>
+            <td class="r">${p.stock||0}</td>
+            <td class="r">$${((p.stock||0)*(p.cost||0)).toFixed(2)}</td>
+            <td class="r ${(p.stock||0)<=(p.stock_min||5)?'badge-bajo':'badge-ok'}">
+              ${(p.stock||0)===0?'SIN STOCK':(p.stock||0)<=(p.stock_min||5)?'BAJO':'OK'}
+            </td>
+          </tr>`).join('')}
+      </tbody>
+      <tfoot>
+        <tr class="total">
+          <td colspan="4">TOTAL (${sorted.length} productos)</td>
+          <td class="r">${sorted.reduce((a,p)=>a+(p.stock||0),0)}</td>
+          <td class="r">$${total.toFixed(2)}</td>
+          <td></td>
+        </tr>
+      </tfoot>
+    </table>
+  </body></html>`;
 
   printHTML(html);
 }

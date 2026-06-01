@@ -9,8 +9,9 @@
 
 let posSearch = '';
 
-function renderPOS(el) {
-  chkCaja().then(() => {
+async function renderPOS(el) {
+  try {
+    await chkCaja();
     el.innerHTML = '';
     el.style.padding  = '0';
     el.style.overflow = 'hidden';
@@ -44,7 +45,8 @@ function renderPOS(el) {
       </div>
       <select class="inp" id="pos-cat" style="width:140px">
         <option value="">Todas</option>
-        ${CATS.map(c => `<option value="${c}">${c}</option>`).join('')}
+        ${[{ v:'', l:'Todas' }, ...CATS.map(c => ({ v:c, l:c }))].map(o =>
+            `<option value="${o.v}">${o.l}</option>`).join('')}
       </select>`;
     left.appendChild(topBar);
 
@@ -95,7 +97,7 @@ function renderPOS(el) {
               )
             );
             if (exacto) {
-              addToCart(exacto);
+              posAddItem(exacto.id);
               si.value  = '';
               posSearch = '';
               renderPOSGrid();
@@ -113,7 +115,7 @@ function renderPOS(el) {
                 )
               );
               if (filtered.length === 1) {
-                addToCart(filtered[0]);
+                posAddItem(filtered[0].id);
                 si.value  = '';
                 posSearch = '';
                 renderPOSGrid();
@@ -128,46 +130,58 @@ function renderPOS(el) {
 
       // ── Focus global para lector de código de barras ──────────────────
       // El escáner USB envía teclas como si fuera teclado — si el foco está
-      // en otro lado, redirigimos automáticamente al campo de búsqueda
-      // Solo aplica cuando el módulo POS está activo
-      if (!window._barcodeGlobalListener) {
-        window._barcodeGlobalListener = true;
-        let _barcodeBuffer = '';
-        let _barcodeTimer  = null;
-
-        document.addEventListener('keydown', (e) => {
-          // Solo si el POS está activo y el foco NO está en un input/textarea/select
-          const tag = document.activeElement?.tagName?.toLowerCase();
-          const isPOSActive = !!document.getElementById('pos-search');
-          if (!isPOSActive) return;
-          if (['input','textarea','select'].includes(tag)) return;
-          if (e.ctrlKey || e.metaKey || e.altKey) return;
-
-          // Acumular caracteres del escáner
-          if (e.key.length === 1) {
-            _barcodeBuffer += e.key;
-            clearTimeout(_barcodeTimer);
-            _barcodeTimer = setTimeout(() => { _barcodeBuffer = ''; }, 100);
-          }
-
-          // Enter = fin de escaneo → redirigir al campo de búsqueda
-          if (e.key === 'Enter' && _barcodeBuffer) {
-            const si = document.getElementById('pos-search');
-            if (si) {
-              si.value  = _barcodeBuffer;
-              posSearch = _barcodeBuffer;
-              si.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-            }
-            _barcodeBuffer = '';
-          }
-        }, true);
+      // en otro lado, redirigimos automáticamente al campo de búsqueda.
+      // Se instala una sola vez y se limpia cuando el POS se desmonta.
+      if (window._barcodeListenerAbort) {
+        window._barcodeListenerAbort.abort(); // limpiar listener anterior
       }
+      const barcodeAbort = new AbortController();
+      window._barcodeListenerAbort = barcodeAbort;
+
+      let _barcodeBuffer = '';
+      let _barcodeTimer  = null;
+
+      document.addEventListener('keydown', (e) => {
+        const tag = document.activeElement?.tagName?.toLowerCase();
+        const isPOSActive = !!document.getElementById('pos-search');
+        if (!isPOSActive) {
+          // El POS ya no está montado — el AbortController debería haberlo limpiado
+          // pero por si acaso, limpiar manualmente
+          barcodeAbort.abort();
+          return;
+        }
+        if (['input','textarea','select'].includes(tag)) return;
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+        if (e.key.length === 1) {
+          _barcodeBuffer += e.key;
+          clearTimeout(_barcodeTimer);
+          _barcodeTimer = setTimeout(() => { _barcodeBuffer = ''; }, 100);
+        }
+
+        if (e.key === 'Enter' && _barcodeBuffer) {
+          const si = document.getElementById('pos-search');
+          if (si) {
+            si.value  = _barcodeBuffer;
+            posSearch = _barcodeBuffer;
+            si.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+          }
+          _barcodeBuffer = '';
+        }
+      }, { signal: barcodeAbort.signal });
     }, 0);
 
     renderPOSGrid();
     renderInvTabs();
     renderCart();
-  });
+  } catch(e) {
+    console.error('[renderPOS]', e);
+    if (el) el.innerHTML = `<div style="padding:40px;text-align:center">
+      <div style="color:var(--red);font-weight:700;margin-bottom:8px">Error al cargar el POS</div>
+      <div style="font-size:12px;color:var(--muted2)">${e.message}</div>
+      <button class="btn btn-dark" style="margin-top:16px" onclick="routeTo('pos')">Reintentar</button>
+    </div>`;
+  }
 }
 
 // ── Grid de productos ─────────────────────────
@@ -206,6 +220,7 @@ function renderPOSGrid() {
     return `
       <div class="prod-card ${isOut ? 'out' : ''}"
            onclick="${isOut ? '' : `posAddItem(${p.id})`}"
+           id="pcard-${p.id}"
            style="cursor:${isOut ? 'not-allowed' : 'pointer'};opacity:${isOut ? '.4' : '1'}">
         <div class="pc-icon">${svg('pkg')}</div>
         <div class="pc-name">${p.name}</div>
@@ -271,6 +286,13 @@ function posAddItem(pid) {
   const inv  = currentInv();
   const prod = DB.products.find(p => p.id === pid);
   if (!prod || prod.stock <= 0) { toast('Sin stock', 'err'); return; }
+
+  // Animación en la tarjeta del producto
+  const card = document.getElementById(`pcard-${pid}`);
+  if (card) {
+    card.classList.add('pos-card-pulse');
+    setTimeout(() => card.classList.remove('pos-card-pulse'), 400);
+  }
 
   const pm    = inv.pmode || 'retail';
   const price = (pm === 'wholesale' && prod.wholesale > 0) ? prod.wholesale : prod.price;
@@ -364,7 +386,7 @@ function renderCart() {
               style="width:42px;text-align:center;font-size:12px;font-weight:700;
                      border:1px solid var(--line);border-radius:4px;padding:2px 4px;
                      font-family:inherit;background:var(--surface)"
-              onchange="posSetQty(${idx},this.value)"
+              oninput="posSetQty(${idx},this.value)"
               onclick="this.select()"/>
             <button class="qb" onclick="posQty(${idx},1)">+</button>
           </div>
@@ -593,8 +615,10 @@ function openCobroModal(inv) {
         <div class="inp-ic">
           <div class="ic">${svg('dollar')}</div>
           <input class="inp" id="cbr-received" type="number"
-                 placeholder="${total}"
-                 oninput="cbrCalcCambio(${total})"/>
+                 placeholder="${fmt(total)}"
+                 value="${total.toFixed(2)}"
+                 oninput="cbrCalcCambio(${total})"
+                 onfocus="this.select()"/>
         </div>
         <div id="cbr-cambio"
              style="font-size:13px;font-weight:700;margin-top:5px;color:var(--muted)"></div>
@@ -663,6 +687,12 @@ function openCobroModal(inv) {
       </button>
     </div>
   `, 'modal-lg');
+
+  // Inicializar cambio inmediatamente si método es efectivo
+  setTimeout(() => {
+    const pmeth = document.getElementById('cbr-pmeth')?.value;
+    if (!pmeth || pmeth === 'efectivo') cbrCalcCambio(total);
+  }, 50);
 }
 
 function cbrTogglePago(val) {
@@ -897,6 +927,10 @@ async function finalizarVenta() {
     removeInvoice(activeInvoice);
     renderPOS(document.getElementById('page'));
 
+    // Ofrecer WhatsApp después de la venta (opcional)
+    // Toast con botón — no bloquea el flujo
+    _posToastWhatsApp(saleForPrint);
+
   } catch (e) {
     console.error('[finalizarVenta]', e);
     toast('Error inesperado al procesar la venta', 'err');
@@ -906,6 +940,126 @@ async function finalizarVenta() {
     }
   }
 }
+
+// ══════════════════════════════════════════════
+// WHATSAPP POST-VENTA — Toast opcional
+// ══════════════════════════════════════════════
+
+// ── WhatsApp desde ventana de previsualización ───────────────────
+// El popup llama window.opener._waFromPreview(document)
+window._waFromPreview = function(doc) {
+  const docType  = ((doc.querySelector('.doc-type') || {}).textContent || 'DOCUMENTO').trim();
+  const bizName  = ((doc.querySelector('.biz') || {}).textContent || CFG.biz).trim();
+  const cliente  = ((doc.querySelector('.cv') || {}).textContent || 'Consumidor Final').trim();
+  const totalEl  = doc.querySelector('.tr-grand span:last-child');
+  const total    = totalEl ? totalEl.textContent.trim() : '';
+  const ncfEl    = doc.querySelector('[style*="BBF7D0"]');
+  const ncf      = ncfEl ? ncfEl.textContent.trim() : '';
+
+  const rows  = doc.querySelectorAll('tbody tr');
+  const lines = [];
+  rows.forEach(r => {
+    const cells = r.querySelectorAll('td');
+    if (cells.length >= 5) {
+      const nm = (cells[1].textContent || '').trim();
+      const qt = (cells[2].textContent || '').trim();
+      const sb = (cells[4].textContent || '').trim();
+      if (nm) lines.push('  - ' + nm + ' x' + qt + ' - ' + sb);
+    }
+  });
+
+  const fecha = new Date().toLocaleDateString('es-DO', {
+    day: '2-digit', month: '2-digit', year: 'numeric'
+  });
+
+  const msg = [
+    docType.trim() + ' - ' + bizName,
+    'Fecha: ' + fecha,
+    'Cliente: ' + cliente,
+    '',
+    'Detalle:',
+    lines.join('\n'),
+    '',
+    total ? 'TOTAL: ' + total : '',
+    ncf || '',
+    '',
+    'Gracias por su preferencia',
+  ].filter(l => l !== undefined && l !== null).join('\n');
+
+  // Buscar teléfono del cliente en la DB
+  const clientObj = DB.customers.find(c => c.name === cliente);
+  const defPhone  = clientObj?.phone
+    ? clientObj.phone.replace(/\D/g, '')
+    : (CFG.phone || '').replace(/\D/g, '');
+
+  openWhatsAppModal(msg, defPhone, cliente);
+};
+
+function _posToastWhatsApp(sale) {
+  // Solo mostrar si el cliente NO es consumidor final
+  if (!sale.clientName || sale.clientName === 'Consumidor Final') return;
+
+  // Toast especial con botón WhatsApp — aparece 800ms después del ticket
+  setTimeout(() => {
+    const t = document.createElement('div');
+    t.style.cssText = [
+      'position:fixed', 'bottom:80px', 'right:24px', 'z-index:9999',
+      'background:#25D366', 'color:#fff', 'border-radius:12px',
+      'padding:12px 16px', 'font-size:13px', 'font-weight:600',
+      'box-shadow:0 4px 20px rgba(0,0,0,.25)', 'cursor:pointer',
+      'display:flex', 'align-items:center', 'gap:10px',
+      'animation:fi .3s ease', 'max-width:320px',
+    ].join(';');
+    t.innerHTML = `
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" style="flex-shrink:0">
+        <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
+        <path d="M12 0C5.373 0 0 5.373 0 12c0 2.124.557 4.118 1.529 5.847L0 24l6.335-1.501A11.934 11.934 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.801 9.801 0 01-5.002-1.367l-.359-.214-3.72.881.896-3.614-.234-.371A9.818 9.818 0 012.182 12C2.182 6.575 6.575 2.182 12 2.182S21.818 6.575 21.818 12 17.425 21.818 12 21.818z"/>
+      </svg>
+      <div>
+        <div>Enviar a ${sale.clientName?.split(' ')[0]}</div>
+        <div style="font-size:11px;opacity:.85">Toca para enviar ${sale.type === 'cotizacion' ? 'cotización' : 'factura'} por WhatsApp</div>
+      </div>`;
+    t.onclick = () => {
+      t.remove();
+      _posSendWhatsApp(sale);
+    };
+    document.body.appendChild(t);
+    // Auto-ocultar en 6 segundos
+    setTimeout(() => { if (t.parentNode) t.remove(); }, 6000);
+  }, 800);
+}
+
+function _posSendWhatsApp(sale) {
+  const items = (sale.items || []).map(i =>
+    '  - ' + i.name + ' x' + i.qty + ' - ' + fmt(i.price * i.qty)
+  ).join('\n');
+
+  const tipo = sale.type === 'cotizacion' ? 'COTIZACION' : 'FACTURA';
+  const msg = [
+    tipo + ' #' + String(sale.id).padStart(5,'0') + ' - ' + CFG.biz,
+    'Fecha: ' + sale.date,
+    'Cliente: ' + (sale.clientName || 'Consumidor Final'),
+    '',
+    'Detalle:',
+    items,
+    '',
+    sale.itbis > 0 ? 'ITBIS (' + CFG.itbis + '%): ' + fmt(sale.itbis) : '',
+    'TOTAL: ' + fmt(sale.total),
+    sale.ncf ? 'NCF: ' + sale.ncf : '',
+    '',
+    CFG.biz,
+    CFG.phone ? 'Tel: ' + CFG.phone : '',
+    'Gracias por su preferencia',
+  ].filter(l => l !== null && l !== undefined).join('\n');
+
+  const client   = DB.customers.find(c => c.name === sale.clientName);
+  const defPhone = client?.phone
+    ? client.phone.replace(/\D/g,'')
+    : (CFG.phone || '').replace(/\D/g,'');
+
+  openWhatsAppModal(msg, defPhone, sale.clientName || 'cliente');
+}
+
 
 // ══════════════════════════════════════════════
 // PREVISUALIZACIÓN DE FACTURA
@@ -923,6 +1077,23 @@ function previsualizarFactura(sale) {
       <td style="text-align:right;font-weight:600">${fmt(it.price * it.qty)}</td>
     </tr>`).join('');
 
+  // Script embebido como string concatenado (evita conflicto con template literal)
+  const embeddedScript = [
+    '<scr' + 'ipt>',
+    'function savePDF(){',
+    '  var s=document.createElement("style");',
+    '  s.textContent=".no-print{display:none!important}";',
+    '  document.head.appendChild(s);',
+    '  setTimeout(function(){window.print();setTimeout(function(){s.remove();},1000);},100);',
+    '}',
+    'function sendWhatsApp(){',
+    '  if(window.opener&&window.opener._waFromPreview){',
+    '    window.opener._waFromPreview(document);',
+    '  }',
+    '}',
+    '</' + 'script>',
+  ].join('\n');
+
   const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8"/>
@@ -934,6 +1105,7 @@ function previsualizarFactura(sale) {
   .no-print{margin-bottom:16px;display:flex;gap:8px;justify-content:flex-end}
   .btn-p{background:#0D0F12;color:#fff;border:none;padding:9px 20px;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer}
   .btn-pdf{background:#2563EB;color:#fff;border:none;padding:9px 20px;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer}
+  .btn-wa{background:#25D366;color:#fff;border:none;padding:9px 20px;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
   .btn-c{background:#F3F4F6;color:#374151;border:none;padding:9px 20px;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer}
   .hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #E5E7EB;padding-bottom:18px;margin-bottom:20px}
   .biz{font-size:20px;font-weight:800;color:#16A34A}
@@ -958,6 +1130,13 @@ function previsualizarFactura(sale) {
 <div class="inv">
   <div class="no-print">
     <button class="btn-c" onclick="window.close()">Cerrar</button>
+    <button class="btn-wa" onclick="sendWhatsApp()">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+        <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
+        <path d="M12 0C5.373 0 0 5.373 0 12c0 2.124.557 4.118 1.529 5.847L0 24l6.335-1.501A11.934 11.934 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.801 9.801 0 01-5.002-1.367l-.359-.214-3.72.881.896-3.614-.234-.371A9.818 9.818 0 012.182 12C2.182 6.575 6.575 2.182 12 2.182S21.818 6.575 21.818 12 17.425 21.818 12 21.818z"/>
+      </svg>
+      WhatsApp
+    </button>
     <button class="btn-pdf" onclick="savePDF()">Guardar PDF</button>
     <button class="btn-p" onclick="window.print()">Imprimir</button>
   </div>
@@ -1026,14 +1205,7 @@ function previsualizarFactura(sale) {
     <strong>Gracias por su preferencia</strong>
   </div>
 </div>
-<script>
-function savePDF() {
-  const s = document.createElement('style');
-  s.textContent = '.no-print{display:none!important}';
-  document.head.appendChild(s);
-  setTimeout(() => { window.print(); setTimeout(() => s.remove(), 1000); }, 100);
-}
-<\/script>
+${embeddedScript}
 </body></html>`;
 
   const win = window.open('', '_blank',

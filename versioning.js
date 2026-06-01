@@ -7,7 +7,9 @@
 const fs   = require('fs');
 const path = require('path');
 
-const APP_VERSION = '1.0.0';
+// ── Versión centralizada — siempre desde package.json ──
+// Nunca hardcodeada aquí. Así package.json es la única fuente de verdad.
+const APP_VERSION = require('./package.json').version;
 
 // ── Migraciones por versión ───────────────────
 // Cada migración corre UNA SOLA VEZ por cliente
@@ -207,6 +209,46 @@ const MIGRATIONS = [
       } catch {}
     }
   },
+  {
+    version: '1.4.1',
+    description: 'Agregar password_changed a users y barcode a products',
+    run(db) {
+      try {
+        db.exec(`ALTER TABLE users ADD COLUMN password_changed TEXT DEFAULT '0'`);
+        console.log('[MIGRATION 1.4.1] password_changed agregado a users');
+      } catch {}
+      try {
+        db.exec(`ALTER TABLE products ADD COLUMN barcode TEXT DEFAULT ''`);
+        console.log('[MIGRATION 1.4.1] barcode agregado a products');
+      } catch {}
+    }
+  },
+  {
+    version: '1.4.2',
+    description: 'Agregar settings de módulo de etiquetas de código de barras',
+    run(db) {
+      const ins = db.prepare(`INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)`);
+      ins.run('barcode_enabled', '0');
+      ins.run('barcode_printer', '');
+      ins.run('barcode_design',  '');
+      console.log('[MIGRATION 1.4.2] settings de etiquetas agregados');
+    }
+  },
+  {
+    version: '1.4.3',
+    description: 'Sin cambios de schema — Dashboard Chart.js + WhatsApp integrado',
+    run(db) {
+      // No requiere cambios en la DB — solo mejoras de UI
+      console.log('[MIGRATION 1.4.3] Dashboard y WhatsApp activados');
+    }
+  },
+  {
+    version: '1.4.4',
+    description: 'Fix layout CSS + WhatsApp en clientes + botones armonizados',
+    run(db) {
+      console.log('[MIGRATION 1.4.4] Layout y UX mejorados');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════
@@ -357,18 +399,36 @@ function createManualBackup(dataDir, destPath) {
 
 // ══════════════════════════════════════════════
 // RESTAURAR BACKUP (llamado desde IPC)
+// ── IMPORTANTE: cierra la DB antes de copiar ──
+// El caller (main.js) debe reiniciar la app después de llamar esto.
 // ══════════════════════════════════════════════
 function restoreBackup(dataDir, sourcePath) {
-  const dbPath     = path.join(dataDir, 'velo.db');
-  const backupPath = path.join(dataDir, `velo_before_restore_${Date.now()}.db`);
+  const dbPath      = path.join(dataDir, 'velo.db');
+  const safetyPath  = path.join(dataDir, `velo_before_restore_${Date.now()}.db`);
 
-  // Hacer backup del actual antes de restaurar
-  fs.copyFileSync(dbPath, backupPath);
+  // Verificar que el archivo fuente existe y parece una DB SQLite
+  if (!fs.existsSync(sourcePath)) {
+    throw new Error(`Archivo de backup no encontrado: ${sourcePath}`);
+  }
+  const header = Buffer.alloc(16);
+  const fd     = fs.openSync(sourcePath, 'r');
+  fs.readSync(fd, header, 0, 16, 0);
+  fs.closeSync(fd);
+  if (!header.toString('ascii', 0, 16).startsWith('SQLite format 3')) {
+    throw new Error('El archivo seleccionado no es una base de datos SQLite válida');
+  }
 
-  // Restaurar
+  // Backup de seguridad del estado actual
+  if (fs.existsSync(dbPath)) {
+    fs.copyFileSync(dbPath, safetyPath);
+  }
+
+  // Copiar el backup sobre la DB activa
+  // NOTA: la conexión SQLite debe estar cerrada antes de llamar esto.
+  // main.js cierra la DB en el handler backup:restore antes de invocar esta función.
   fs.copyFileSync(sourcePath, dbPath);
 
-  return { ok: true, backupCreated: backupPath };
+  return { ok: true, backupCreated: safetyPath };
 }
 
 // ══════════════════════════════════════════════
@@ -376,31 +436,12 @@ function restoreBackup(dataDir, sourcePath) {
 // ══════════════════════════════════════════════
 function getVersionInfo(db, dataDir) {
   const backupDir = path.join(dataDir, 'backups');
-  const backups   = fs.existsSync(backupDir)
+  // Fix: fallback correcto a array vacío cuando no existe el directorio
+  const backups = fs.existsSync(backupDir)
     ? fs.readdirSync(backupDir)
         .filter(f => f.startsWith('velo_') && f.endsWith('.db'))
         .sort().reverse()
-    : [  {
-    version: '1.1.1',
-    description: 'Agregar campo condition a products para productos usados/especiales',
-    run(db) {
-      try {
-        db.exec(`ALTER TABLE products ADD COLUMN condition TEXT DEFAULT 'nuevo'`);
-        console.log('[MIGRATION 1.1.1] campo condition agregado a products');
-      } catch {}
-    }
-  },
-  {
-    version: '1.1.1',
-    description: 'Agregar campo condition a products para productos usados/especiales',
-    run(db) {
-      try {
-        db.exec(`ALTER TABLE products ADD COLUMN condition TEXT DEFAULT 'nuevo'`);
-        console.log('[MIGRATION 1.1.1] campo condition agregado a products');
-      } catch {}
-    }
-  },
-];
+    : [];
 
   const appInfo = {};
   db.prepare('SELECT key, value FROM app_info').all()

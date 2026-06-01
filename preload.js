@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('api', {
   // ── Usuarios ──────────────────────────────
   users: {
     getAll:         ()         => ipcRenderer.invoke('users:getAll'),
+    getById:        (id)       => ipcRenderer.invoke('users:getById', id),
     create:         (data)     => ipcRenderer.invoke('users:create', data),
     update:         (data)     => ipcRenderer.invoke('users:update', data),
     changePassword: (data)     => ipcRenderer.invoke('users:changePassword', data),
@@ -78,6 +79,11 @@ contextBridge.exposeInMainWorld('api', {
   // ── Auditoría ─────────────────────────────
   audit: {
     getLogs: (data)          => ipcRenderer.invoke('audit:getLogs', data),
+    log:     (data)          => ipcRenderer.invoke('audit:log', data),
+  },
+  // ── Shell — abrir links en navegador del sistema ──
+  shell: {
+    openExternal: (url)      => ipcRenderer.invoke('shell:openExternal', { url }),
   },
 
   // ── Impresión ─────────────────────────────
@@ -109,6 +115,13 @@ contextBridge.exposeInMainWorld('api', {
     revoke:      (data)      => ipcRenderer.invoke('license:revoke', data),
   },
 
+  // ── Categorías ────────────────────────────────
+  categories: {
+    getAll:  ()       => ipcRenderer.invoke('categories:getAll'),
+    create:  (data)   => ipcRenderer.invoke('categories:create', data),
+    delete:  (data)   => ipcRenderer.invoke('categories:delete', data),
+  },
+
   // ── DB Tools ──────────────────────────────
   db: {
     vacuum: (data) => ipcRenderer.invoke('db:vacuum', data),
@@ -117,6 +130,11 @@ contextBridge.exposeInMainWorld('api', {
   // ── Auto-updater ──────────────────────────
   updater: {
     onProgress: (cb) => ipcRenderer.on('update:progress', (_, data) => cb(data)),
+    onState:    (cb) => ipcRenderer.on('update:state',    (_, data) => cb(data)),
+    getState:   ()   => ipcRenderer.invoke('update:getState'),
+    check:      ()   => ipcRenderer.invoke('update:check'),
+    download:   ()   => ipcRenderer.invoke('update:download'),
+    install:    (data) => ipcRenderer.invoke('update:install', data),
   },
 
   // ── Importación universal ────────────────

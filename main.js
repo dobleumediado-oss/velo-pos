@@ -27,41 +27,107 @@ const {
 const { autoUpdater } = require('electron-updater');
 
 // En desarrollo no verificar updates
-autoUpdater.autoDownload    = false; // preguntar antes de descargar
-autoUpdater.autoInstallOnAppQuit = true; // instalar al cerrar
+autoUpdater.autoDownload         = false; // preguntar antes de descargar
+autoUpdater.autoInstallOnAppQuit = true;  // instalar al cerrar
+
+// ── Estado global del updater (para el panel de Configuración) ──
+const updaterState = {
+  status:        'idle',    // idle | checking | available | downloading | downloaded | error | up-to-date
+  availableVersion: null,
+  downloadedVersion: null,
+  lastChecked:   null,
+  error:         null,
+  progress:      null,
+};
+
+function _sendUpdaterState() {
+  if (mainWindow) {
+    mainWindow.webContents.send('update:state', { ...updaterState });
+  }
+}
 
 function setupAutoUpdater() {
-  if (!app.isPackaged) return; // Solo en produccion
+  if (!app.isPackaged) {
+    // En desarrollo marcar como dev-mode, no intentar verificar
+    updaterState.status = 'dev-mode';
+    return;
+  }
 
-  // Verificar silenciosamente cada vez que arranca
-  autoUpdater.checkForUpdates().catch(() => {}); // silencioso si no hay internet
+  // Verificar silenciosamente al arrancar
+  setTimeout(() => {
+    updaterState.status = 'checking';
+    updaterState.lastChecked = new Date().toISOString();
+    _sendUpdaterState();
+    autoUpdater.checkForUpdates().catch((err) => {
+      updaterState.status = 'error';
+      updaterState.error  = err?.message || 'Sin conexión';
+      _sendUpdaterState();
+    });
+  }, 0);
 
-  // Hay una nueva version disponible — preguntar al usuario
+  // Nueva versión disponible
   autoUpdater.on('update-available', (info) => {
+    updaterState.status           = 'available';
+    updaterState.availableVersion = info.version;
+    updaterState.lastChecked      = new Date().toISOString();
+    _sendUpdaterState();
+
+    // Diálogo nativo para el usuario
     dialog.showMessageBox(mainWindow, {
-      type:    'info',
-      title:   'Actualización disponible',
-      message: `Nueva version ${info.version} disponible`,
-      detail:  'Hay una nueva versión de Velo POS. ¿Deseas descargarla ahora? La instalación ocurrirá cuando cierres el programa.',
-      buttons: ['Descargar ahora', 'Más tarde'],
+      type:      'info',
+      title:     'Actualización disponible',
+      message:   `Nueva versión ${info.version} disponible`,
+      detail:    'Hay una nueva versión de Velo POS. ¿Deseas descargarla ahora?\nLa instalación ocurrirá cuando cierres el programa.',
+      buttons:   ['Descargar ahora', 'Más tarde'],
       defaultId: 0,
       cancelId:  1,
     }).then(({ response }) => {
       if (response === 0) {
+        updaterState.status = 'downloading';
+        _sendUpdaterState();
         autoUpdater.downloadUpdate();
       }
     });
   });
 
-  // Descarga completada — avisar que se instalará al cerrar
-  autoUpdater.on('update-downloaded', () => {
+  // Sin actualizaciones
+  autoUpdater.on('update-not-available', () => {
+    updaterState.status      = 'up-to-date';
+    updaterState.lastChecked = new Date().toISOString();
+    _sendUpdaterState();
+  });
+
+  // Progreso de descarga
+  autoUpdater.on('download-progress', (progress) => {
+    updaterState.status   = 'downloading';
+    updaterState.progress = {
+      percent:        Math.round(progress.percent),
+      transferred:    progress.transferred,
+      total:          progress.total,
+      bytesPerSecond: progress.bytesPerSecond,
+    };
+    _sendUpdaterState();
+    if (mainWindow) {
+      mainWindow.webContents.send('update:progress', updaterState.progress);
+      mainWindow.setProgressBar(progress.percent / 100);
+    }
+  });
+
+  // Descarga completada
+  autoUpdater.on('update-downloaded', (info) => {
+    updaterState.status            = 'downloaded';
+    updaterState.downloadedVersion = info.version;
+    updaterState.progress          = null;
+    mainWindow.setProgressBar(-1);
+    _sendUpdaterState();
+
     dialog.showMessageBox(mainWindow, {
-      type:    'info',
-      title:   '¡Actualización lista!',
-      message: 'La actualización fue descargada',
-      detail:  'Se instalará automáticamente cuando cierres Velo POS. Tus datos no se verán afectados.',
-      buttons: ['Instalar y reiniciar ahora', 'Instalar al cerrar'],
-      defaultId: 0,
+      type:      'info',
+      title:     '¡Actualización lista!',
+      message:   `Versión ${info.version} descargada`,
+      detail:    'Se instalará automáticamente cuando cierres Velo POS.\nSi tienes ventas pendientes, termínalas antes de reiniciar.\nTus datos no se verán afectados.',
+      buttons:   ['Instalar y reiniciar ahora', 'Instalar al cerrar'],
+      defaultId: 1,   // "Instalar al cerrar" como opción por defecto (más segura)
       cancelId:  1,
     }).then(({ response }) => {
       if (response === 0) {
@@ -70,28 +136,74 @@ function setupAutoUpdater() {
     });
   });
 
-  // Sin actualizaciones — no mostrar nada (silencioso)
-  autoUpdater.on('update-not-available', () => {});
-
-  // Error de red — silencioso, no molestar al usuario
+  // Error
   autoUpdater.on('error', (err) => {
+    updaterState.status = 'error';
+    updaterState.error  = err?.message || 'Error desconocido';
+    _sendUpdaterState();
     console.error('[AutoUpdater]', err?.message);
   });
-
-  // Progreso de descarga — enviar al renderer para mostrar barra
-  autoUpdater.on('download-progress', (progress) => {
-    if (mainWindow) {
-      mainWindow.webContents.send('update:progress', {
-        percent:        Math.round(progress.percent),
-        transferred:    progress.transferred,
-        total:          progress.total,
-        bytesPerSecond: progress.bytesPerSecond,
-      });
-      // Mostrar progreso en la barra de titulo de la ventana
-      mainWindow.setProgressBar(progress.percent / 100);
-    }
-  });
 }
+
+// ── IPC: verificar actualizaciones manualmente desde el panel ──
+ipcMain.handle('update:check', async () => {
+  if (!app.isPackaged) {
+    // En desarrollo informar silenciosamente al panel, sin error
+    updaterState.status      = 'dev-mode';
+    updaterState.lastChecked = new Date().toISOString();
+    _sendUpdaterState();
+    return { ok: false, devMode: true };
+  }
+  try {
+    updaterState.status      = 'checking';
+    updaterState.lastChecked = new Date().toISOString();
+    updaterState.error       = null;
+    _sendUpdaterState();
+    await autoUpdater.checkForUpdates();
+    return { ok: true };
+  } catch (e) {
+    updaterState.status = 'error';
+    updaterState.error  = e.message;
+    _sendUpdaterState();
+    return { ok: false, error: e.message };
+  }
+});
+
+// ── IPC: iniciar descarga manualmente desde el panel ──
+ipcMain.handle('update:download', async () => {
+  try {
+    updaterState.status = 'downloading';
+    _sendUpdaterState();
+    autoUpdater.downloadUpdate();
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// ── IPC: instalar y reiniciar desde el panel ──
+ipcMain.handle('update:install', async (_, { cartEmpty } = {}) => {
+  // Si el cajero tiene items en el carrito, advertir
+  if (!cartEmpty) {
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type:      'warning',
+      title:     'Ventas pendientes',
+      message:   '¿Reiniciar ahora?',
+      detail:    'Parece que tienes productos en el carrito sin confirmar.\nSi reinicias ahora, perderás esos items del carrito (las ventas ya cobradas están seguras).',
+      buttons:   ['Cancelar — terminar primero', 'Reiniciar de todas formas'],
+      defaultId: 0,
+      cancelId:  0,
+    });
+    if (response === 0) return { ok: false, cancelled: true };
+  }
+  autoUpdater.quitAndInstall(false, true);
+  return { ok: true };
+});
+
+// ── IPC: obtener estado actual del updater ──
+ipcMain.handle('update:getState', async () => {
+  return { ok: true, state: { ...updaterState } };
+});
 
 let db;
 let mainWindow;
@@ -111,11 +223,13 @@ function createWindow() {
       // ── Seguridad Electron ──────────────────
       nodeIntegration:    false,  // NO exponer Node al renderer
       contextIsolation:   true,   // Aislar contextos
-      sandbox:            false,  // false para poder usar preload con require
-      zoomFactor:         1.0,    // Zoom fijo para consistencia visual
+      // sandbox: true en producción (app compilada y firmada)
+      // sandbox: false en desarrollo (Mac requiere firma de código para sandbox)
+      // app.isPackaged es true solo cuando el .exe/.dmg está compilado
+      sandbox:            app.isPackaged,
+      zoomFactor:         1.0,
       webSecurity:        true,
       allowRunningInsecureContent: false,
-      // ── Preload seguro ──────────────────────
       preload: path.join(__dirname, 'preload.js'),
     },
     // icon: path.join(__dirname, 'src/assets/icon.png')
@@ -173,6 +287,15 @@ ipcMain.handle('settings:set', async (_, { key, value }) => {
 });
 
 // ── Usuarios ──────────────────────────────────
+ipcMain.handle('users:getById', async (_, id) => {
+  try {
+    const u = authRepo.findById(id);
+    if (!u) return { ok: false, error: 'Usuario no encontrado' };
+    const { password: _, ...safe } = u;
+    return { ok: true, data: safe };
+  } catch(e) { return { ok: false, error: e.message }; }
+});
+
 ipcMain.handle('users:getAll', async () => {
   return usersRepo.getAll();
 });
@@ -511,7 +634,49 @@ ipcMain.handle('audit:getLogs', async (_, { limit = 200, action, entity } = {}) 
   }
 });
 
-// ── DB Tools (Super Admin) ────────────────────
+ipcMain.handle('audit:log', async (_, { action, entity, entityId, detail, userId } = {}) => {
+  try {
+    if (!action) return { ok: false, error: 'action requerida' };
+    const reqUser = userId ? authRepo.findById(userId) : null;
+    audit(userId || 0, reqUser?.name || 'sistema', action, entity || '', entityId || null, detail || '');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// ── Categorías ────────────────────────────────
+ipcMain.handle('categories:getAll', async () => {
+  try {
+    const dbInst = require('./database').getDB();
+    return { ok: true, data: dbInst.prepare('SELECT * FROM categories ORDER BY name').all() };
+  } catch(e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('categories:create', async (_, { name, requestUserId }) => {
+  try {
+    if (!name?.trim()) return { ok: false, error: 'El nombre es requerido' };
+    const dbInst = require('./database').getDB();
+    const r = dbInst.prepare('INSERT INTO categories(name) VALUES(?)').run(name.trim());
+    audit(requestUserId || 0, '', 'categoria_creada', 'categories', r.lastInsertRowid, name);
+    return { ok: true, id: r.lastInsertRowid };
+  } catch(e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('categories:delete', async (_, { id, requestUserId }) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
+    const dbInst = require('./database').getDB();
+    dbInst.prepare('DELETE FROM categories WHERE id=?').run(id);
+    audit(requestUserId, reqUser.name, 'categoria_eliminada', 'categories', id, '');
+    return { ok: true };
+  } catch(e) { return { ok: false, error: e.message }; }
+});
+
+
 ipcMain.handle('db:vacuum', async (_, { requestUserId } = {}) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
@@ -567,20 +732,32 @@ ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, jobTyp
     });
 
     // Pausa para que el CSS renderice antes de imprimir
-    await new Promise(r => setTimeout(r, 250));
+    await new Promise(r => setTimeout(r, 350));
 
     const isThermal  = !!printerName;
-    // Usar el ancho enviado desde el frontend (58000 o 80000 micrones)
-    // Si no se envía, default 80000 (80mm)
-    const paperWidth = printerWidth || 80000;
+    // printerWidth puede llegar como "50mm" (string) o como número en micrones
+    // Convertir siempre a micrones (enteros) que es lo que espera Electron
+    let paperWidth = 80000; // default 80mm en micrones
+    if (printerWidth) {
+      if (typeof printerWidth === 'string' && printerWidth.endsWith('mm')) {
+        paperWidth = Math.round(parseFloat(printerWidth) * 1000); // mm → micrones
+      } else if (typeof printerWidth === 'number') {
+        paperWidth = printerWidth;
+      } else {
+        paperWidth = parseInt(printerWidth) || 80000;
+      }
+    }
     const printOptions = {
-      silent:          false,
+      // silent:true en térmica = sin diálogo del sistema (imprime directo)
+      // silent:false en A4 = muestra diálogo para que el usuario elija papel
+      silent:          isThermal,
       printBackground: true,
       margins:         isThermal
-        ? { marginType: 'custom', top: 0, bottom: 0, left: 2, right: 2 }
+        ? { marginType: 'custom', top: 2, bottom: 2, left: 2, right: 2 }
         : { marginType: 'default' },
       pageSize: isThermal
-        ? { width: paperWidth, height: 297000 }  // ancho dinámico, largo automático
+        // height muy grande para que el corte automático de la térmica lo maneje
+        ? { width: paperWidth, height: 999999 }
         : 'A4',
     };
 
@@ -723,15 +900,11 @@ ipcMain.handle('backup:restore', async (_, { requestUserId, fileName } = {}) => 
     let filePath = null;
 
     if (fileName) {
-      // Restaurar backup específico de la lista
-      const path = require('path');
-      const fs   = require('fs');
-      filePath   = path.join(DATA_DIR, 'backups', fileName);
+      filePath = path.join(DATA_DIR, 'backups', fileName);
       if (!fs.existsSync(filePath)) {
         return { ok: false, error: `Backup no encontrado: ${fileName}` };
       }
     } else {
-      // Abrir diálogo para seleccionar archivo
       const { filePaths } = await dialog.showOpenDialog(mainWindow, {
         title:       'Seleccionar backup',
         defaultPath: path.join(DATA_DIR, 'backups'),
@@ -742,11 +915,29 @@ ipcMain.handle('backup:restore', async (_, { requestUserId, fileName } = {}) => 
       filePath = filePaths[0];
     }
 
-    const result = restoreBackup(DATA_DIR, filePath);
+    // Registrar auditoría ANTES de cerrar la DB
     audit(requestUserId, reqUser.name, 'backup_restaurado', 'backup', null,
       fileName || filePath);
 
-    return { ok: true, message: 'Backup restaurado correctamente.' };
+    // Cerrar la conexión SQLite antes de copiar el archivo (crítico en Windows)
+    const dbInst = require('./database').getDB();
+    if (dbInst) dbInst.close();
+
+    const result = restoreBackup(DATA_DIR, filePath);
+
+    // Notificar al usuario y reiniciar la aplicación
+    await dialog.showMessageBox(mainWindow, {
+      type:    'info',
+      title:   'Backup restaurado',
+      message: 'Backup restaurado correctamente',
+      detail:  'La aplicación se reiniciará ahora para aplicar los cambios.',
+      buttons: ['Reiniciar ahora'],
+    });
+
+    app.relaunch();
+    app.exit(0);
+
+    return { ok: true, message: 'Reiniciando...' };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -851,22 +1042,72 @@ ipcMain.handle('importar:readSQLite', async (_, { data }) => {
 });
 
 ipcMain.handle('importar:readPDF', async (_, { data }) => {
-  // Extracción básica de texto de PDF para encontrar tablas
   try {
-    // Sin librería externa, extraemos texto básico
     const buf  = Buffer.from(data);
-    const text = buf.toString('latin1');
+    const text = buf.toString('binary');
 
-    // Buscar líneas que parezcan datos tabulares
-    const lines = text.split(/\n/).filter(l => l.trim().length > 5);
-    const rows  = lines.slice(0, 200).map((l, i) => ({ linea: i+1, contenido: l.trim() }));
+    // Extraer texto visible del PDF buscando streams de texto
+    // Patrón: bloques BT...ET que contienen texto real del PDF
+    const textChunks = [];
+
+    // Método 1: Extraer texto de operadores PDF Tj y TJ
+    const tjMatches = text.match(/\(([^)]{1,200})\)\s*Tj/g) || [];
+    tjMatches.forEach(m => {
+      const inner = m.match(/\(([^)]+)\)/)?.[1];
+      if (inner) textChunks.push(inner.replace(/\\[0-9]{3}|\\./g, ' ').trim());
+    });
+
+    // Método 2: Arrays TJ con strings individuales
+    const tjArrMatches = text.match(/\[([^\]]{1,500})\]\s*TJ/g) || [];
+    tjArrMatches.forEach(m => {
+      const inner = m.replace(/\]\s*TJ$/, '').replace(/^\[/, '');
+      const parts = inner.match(/\(([^)]+)\)/g) || [];
+      parts.forEach(p => {
+        const s = p.slice(1,-1).replace(/\\[0-9]{3}|\\./g, ' ').trim();
+        if (s.length > 1) textChunks.push(s);
+      });
+    });
+
+    // Limpiar y deduplicar
+    const cleaned = textChunks
+      .map(s => s.replace(/[^\x20-\x7E\xC0-\xFF]/g, ' ').replace(/\s+/g, ' ').trim())
+      .filter(s => s.length > 2 && !/^[\d\s.]+$/.test(s));
+
+    // Construir líneas agrupando chunks consecutivos
+    const lines = [];
+    let current = '';
+    cleaned.forEach(chunk => {
+      if (current.length + chunk.length < 120) {
+        current += (current ? ' ' : '') + chunk;
+      } else {
+        if (current) lines.push(current);
+        current = chunk;
+      }
+    });
+    if (current) lines.push(current);
+
+    // Si no se extrajo texto útil, indicarlo claramente
+    if (lines.length < 3) {
+      return {
+        ok: true,
+        data: {
+          headers: ['contenido'],
+          rows: [{ contenido: 'PDF escaneado o protegido — el texto no es extraíble automáticamente. Usa la IA para procesar la imagen del PDF.' }],
+          nota: 'PDF sin texto extraíble — puede ser un PDF escaneado (imagen). Usa la importación IA.',
+          isPDFScan: true,
+        }
+      };
+    }
+
+    const rows = lines.slice(0, 300).map((l, i) => ({ linea: i+1, contenido: l }));
 
     return {
       ok: true,
       data: {
         headers: ['linea', 'contenido'],
         rows,
-        nota: 'PDF detectado — revisa el mapeo manualmente'
+        nota: `PDF procesado — ${rows.length} líneas de texto extraídas. La IA mapeará los campos automáticamente.`,
+        rawText: lines.join('\n'), // texto completo para enviar a la IA
       }
     };
   } catch(e) {
@@ -882,12 +1123,18 @@ ipcMain.handle('suppliers:getAll', async () => {
   catch(e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('suppliers:create', async (_, { data, requestUserId }) => {
-  try { const id = suppliersRepo.create(data); return { ok: true, id }; }
-  catch(e) { return { ok: false, error: e.message }; }
+  try {
+    if (!data?.name?.trim()) return { ok: false, error: 'El nombre del proveedor es requerido' };
+    const id = suppliersRepo.create(data);
+    return { ok: true, id };
+  } catch(e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('suppliers:update', async (_, { id, data }) => {
-  try { suppliersRepo.update(id, data); return { ok: true }; }
-  catch(e) { return { ok: false, error: e.message }; }
+  try {
+    if (!id) return { ok: false, error: 'ID requerido' };
+    if (!data?.name?.trim()) return { ok: false, error: 'El nombre del proveedor es requerido' };
+    suppliersRepo.update(id, data); return { ok: true };
+  } catch(e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('suppliers:delete', async (_, { id }) => {
   try { suppliersRepo.delete(id); return { ok: true }; }
@@ -906,8 +1153,15 @@ ipcMain.handle('purchases:getById', async (_, { id }) => {
   catch(e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('purchases:create', async (_, data) => {
-  try { const result = purchasesRepo.create(data); return { ok: true, ...result }; }
-  catch(e) { return { ok: false, error: e.message }; }
+  try {
+    if (!data?.items?.length) return { ok: false, error: 'La orden debe tener al menos un producto' };
+    for (const item of data.items) {
+      if (!item.product_name?.trim()) return { ok: false, error: 'Todos los items deben tener nombre' };
+      if (!item.qty_ordered || item.qty_ordered <= 0) return { ok: false, error: 'La cantidad debe ser mayor a 0' };
+      if (item.unit_cost < 0) return { ok: false, error: 'El costo no puede ser negativo' };
+    }
+    const result = purchasesRepo.create(data); return { ok: true, ...result };
+  } catch(e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('purchases:receive', async (_, { id, items, userId }) => {
   try { const result = purchasesRepo.receive(id, { items, userId }); return { ok: true, ...result }; }
@@ -946,4 +1200,14 @@ app.on('activate', () => {
 app.on('before-quit', () => {
   const dbInst = require('./database').getDB();
   if (dbInst) dbInst.close();
+});
+// ── WhatsApp — abrir en navegador del sistema ──
+ipcMain.handle('shell:openExternal', async (_, { url }) => {
+  try {
+    if (!url || !url.startsWith('https://')) return { ok: false, error: 'URL inválida' };
+    await shell.openExternal(url);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 });

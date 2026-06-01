@@ -136,16 +136,16 @@ async function renderDash(el) {
   });
   el.appendChild(periodBar);
 
-  // Calcular métricas del período
+  // Calcular métricas del período — filtrando desde allSales ya cargado (sin llamadas extra)
   let periodSales = sales;
   if (dashPeriod === '3days') {
     const cutoff = new Date(Date.now() - 3*24*60*60*1000).toISOString().split('T')[0];
-    const all3   = await window.api.sales.getAll({ range: 'week' });
-    periodSales  = (all3||[]).filter(s => s.status !== 'cancelled' && s.type !== 'devolucion'
+    periodSales  = (allSales||[]).filter(s => s.status !== 'cancelled' && s.type !== 'devolucion'
       && (s.created_at||'').slice(0,10) >= cutoff);
   } else if (dashPeriod === 'week') {
-    const allW  = await window.api.sales.getAll({ range: 'week' });
-    periodSales = (allW||[]).filter(s => s.status !== 'cancelled' && s.type !== 'devolucion');
+    const cutoff7 = new Date(Date.now() - 7*24*60*60*1000).toISOString().split('T')[0];
+    periodSales   = (allSales||[]).filter(s => s.status !== 'cancelled' && s.type !== 'devolucion'
+      && (s.created_at||'').slice(0,10) >= cutoff7);
   } else if (dashPeriod === 'month') {
     periodSales = mSales;
   }
@@ -194,14 +194,13 @@ async function renderDash(el) {
   // ── Grid principal ────────────────────────────
   const grid = h('div', { class: 'gg2', style: { alignItems: 'start' } });
 
-  // ── Gráfica 7 días ────────────────────────────
-  const allWeek = await window.api.sales.getAll({ range: 'week' });
-  const days7   = [];
+  // ── Gráfica 7 días — usar allSales ya cargado ─
+  const days7 = [];
   for (let i = 6; i >= 0; i--) {
     const d  = new Date();
     d.setDate(d.getDate() - i);
     const ds = d.toISOString().split('T')[0];
-    const daySales = (allWeek || []).filter(s => {
+    const daySales = (allSales || []).filter(s => {
       const sd = (s.created_at || '').split('T')[0].split(' ')[0];
       return sd === ds && s.status !== 'cancelled' && s.type !== 'devolucion';
     });
@@ -212,33 +211,78 @@ async function renderDash(el) {
     });
   }
 
+  // ── Gráfica Chart.js ─────────────────────────
   const chartCard = h('div', { class: 'card' });
-  chartCard.appendChild(h('div', { class: 'card-hdr' },
-    h('div', null,
-      h('div', { class: 'card-title' }, 'Ventas últimos 7 días'),
-      h('div', { class: 'card-sub' }, 'Ingresos diarios')
-    )
-  ));
 
-  const maxRev = Math.max(...days7.map(d => d.rev), 1);
-  const barChart = h('div', { class: 'bar-chart' });
-  days7.forEach(d => {
-    const pct     = Math.max((d.rev / maxRev) * 100, d.rev > 0 ? 5 : 0);
-    const isToday = d.date === today_;
-    barChart.appendChild(h('div', { class: 'bc' },
-      h('div', { class: 'bv' }, d.rev > 0 ? `${Math.round(d.rev/1000)}k` : ''),
-      h('div', { class: 'bb', style: {
-        height: `${pct}%`,
-        background: isToday ? 'var(--green)' : 'var(--line)'
-      }}),
-      h('div', { class: 'bl', style: {
-        color: isToday ? 'var(--ink)' : 'var(--muted2)',
-        fontWeight: isToday ? '700' : '400'
-      }}, d.label)
-    ));
-  });
-  chartCard.appendChild(barChart);
+  // Tabs de período de la gráfica
+  const chartPeriod = window._chartPeriod || '7d';
+  const chartTabBar = h('div', { class: 'fxb mb8' },
+    h('div', null,
+      h('div', { class: 'card-title' },
+        chartPeriod === '7d' ? 'Ventas últimos 7 días' :
+        chartPeriod === '30d' ? 'Ventas últimos 30 días' : 'Ventas por mes'),
+      h('div', { class: 'card-sub' }, 'Ingresos · haz clic en la barra para detalles')
+    ),
+    h('div', { style: 'display:flex;gap:5px' },
+      ...['7d','30d','12m'].map(p =>
+        h('button', {
+          class: `btn btn-sm ${chartPeriod === p ? 'btn-dark' : 'btn-out'}`,
+          onclick: async () => { window._chartPeriod = p; await renderDash(el); }
+        }, p === '7d' ? '7 días' : p === '30d' ? '30 días' : '12 meses')
+      )
+    )
+  );
+  chartCard.appendChild(chartTabBar);
+
+  // Canvas para Chart.js
+  const canvasWrap = h('div', { style: 'position:relative;height:200px' });
+  const canvas = document.createElement('canvas');
+  canvas.id = 'dash-chart-' + Date.now();
+  canvas.style.cssText = 'width:100%;height:200px';
+  canvasWrap.appendChild(canvas);
+  chartCard.appendChild(canvasWrap);
+
+  // Tooltip de detalle al hacer clic en barra
+  const chartDetail = h('div', { id: 'chart-detail',
+    style: 'min-height:24px;margin-top:10px;font-size:12px;color:var(--muted2);text-align:center' },
+    'Haz clic en una barra para ver el detalle del día');
+  chartCard.appendChild(chartDetail);
   grid.appendChild(chartCard);
+
+  // Calcular datos según período
+  let chartLabels = [], chartData = [], chartDates = [];
+  if (chartPeriod === '7d') {
+    chartLabels = days7.map(d => d.label);
+    chartData   = days7.map(d => d.rev);
+    chartDates  = days7.map(d => d.date);
+  } else if (chartPeriod === '30d') {
+    for (let i = 29; i >= 0; i--) {
+      const d  = new Date(); d.setDate(d.getDate() - i);
+      const ds = d.toISOString().split('T')[0];
+      const daySales = (allSales||[]).filter(s => {
+        const sd = (s.created_at||'').split('T')[0].split(' ')[0];
+        return sd === ds && s.status !== 'cancelled' && s.type !== 'devolucion';
+      });
+      chartLabels.push(d.getDate() + '/' + (d.getMonth()+1));
+      chartData.push(daySales.reduce((a,s) => a+(s.total||0), 0));
+      chartDates.push(ds);
+    }
+  } else {
+    // 12 meses
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i);
+      const mp = d.toISOString().slice(0,7);
+      const mSalesF = (allSales||[]).filter(s =>
+        (s.created_at||'').slice(0,7) === mp &&
+        s.status !== 'cancelled' && s.type !== 'devolucion');
+      chartLabels.push(d.toLocaleDateString('es-DO',{month:'short'}));
+      chartData.push(mSalesF.reduce((a,s) => a+(s.total||0), 0));
+      chartDates.push(mp);
+    }
+  }
+
+  // Renderizar Chart.js después de que el DOM esté listo
+  _dashRenderChart(canvas.id, chartLabels, chartData, chartDates, chartPeriod, chartDetail, allSales);
 
   // ── Columna derecha ───────────────────────────
   const rightCol = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px' } });
@@ -512,4 +556,126 @@ function exportClientCreditPDF(c) {
   const win = window.open('','_blank','width=760,height=650,scrollbars=yes');
   if (!win) { toast('Activa ventanas emergentes', 'w'); return; }
   win.document.open(); win.document.write(html); win.document.close(); win.focus();
+}
+
+
+// ══════════════════════════════════════════════
+// CHART.JS — Renderizado del dashboard
+// ══════════════════════════════════════════════
+function _loadChartJs() {
+  return new Promise(res => {
+    if (window.Chart) { res(); return; }
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js';
+    s.onload = res; s.onerror = res;
+    document.head.appendChild(s);
+  });
+}
+
+async function _dashRenderChart(canvasId, labels, data, dates, period, detailEl, allSales) {
+  await _loadChartJs();
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || !window.Chart) return;
+
+  // Destruir instancia previa si existe
+  if (window._dashChartInstance) {
+    try { window._dashChartInstance.destroy(); } catch {}
+  }
+
+  const today_ = today();
+  const bgColors = dates.map(d =>
+    d === today_ || d === today_.slice(0,7)
+      ? 'rgba(22,163,74,0.85)'
+      : 'rgba(99,102,241,0.6)'
+  );
+  const borderColors = dates.map(d =>
+    d === today_ || d === today_.slice(0,7)
+      ? 'rgba(22,163,74,1)'
+      : 'rgba(99,102,241,1)'
+  );
+
+  const maxVal = Math.max(...data, 1);
+
+  window._dashChartInstance = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Ventas',
+        data,
+        backgroundColor: bgColors,
+        borderColor: borderColors,
+        borderWidth: 1.5,
+        borderRadius: 5,
+        borderSkipped: false,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 400, easing: 'easeOutQuart' },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => ' ' + fmt(ctx.parsed.y),
+            title: ctx => {
+              const i = ctx[0].dataIndex;
+              const d = dates[i];
+              if (period === '12m') return labels[i];
+              return fdate(d);
+            }
+          },
+          backgroundColor: 'rgba(13,15,18,0.92)',
+          titleColor: '#fff',
+          bodyColor: '#a1a1aa',
+          padding: 10,
+          cornerRadius: 8,
+        }
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: {
+            font: { size: 10 },
+            color: 'var(--muted2)',
+            maxRotation: period === '30d' ? 45 : 0,
+          }
+        },
+        y: {
+          grid: { color: 'rgba(0,0,0,0.05)', drawBorder: false },
+          ticks: {
+            font: { size: 10 },
+            color: 'var(--muted2)',
+            callback: v => v >= 1000 ? (v/1000).toFixed(0)+'k' : v,
+          },
+          beginAtZero: true,
+        }
+      },
+      onClick: (evt, elements) => {
+        if (!elements.length || !detailEl) return;
+        const i   = elements[0].index;
+        const d   = dates[i];
+        const rev = data[i];
+        if (!rev) {
+          detailEl.textContent = `${labels[i]} — Sin ventas`;
+          return;
+        }
+        // Filtrar ventas del día/mes seleccionado
+        const daySales = (allSales||[]).filter(s => {
+          const sd = (s.created_at||'').split('T')[0].split(' ')[0];
+          return (period === '12m' ? sd.slice(0,7) === d : sd === d) &&
+                 s.status !== 'cancelled' && s.type !== 'devolucion';
+        });
+        detailEl.innerHTML = `
+          <div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;
+                      padding:8px;background:var(--surface2);border-radius:8px">
+            <span><strong>${fdate(d)}</strong></span>
+            <span style="color:var(--green);font-weight:700">${fmt(rev)}</span>
+            <span style="color:var(--muted2)">${daySales.length} transacc.</span>
+            <span style="color:var(--muted2)">ITBIS: ${fmt(daySales.reduce((a,s)=>a+(s.tax_amt||0),0))}</span>
+          </div>`;
+      }
+    }
+  });
 }
