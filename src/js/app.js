@@ -9,7 +9,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     const vr = await window.api.version.getInfo();
     window._appVersion = vr?.ok ? vr.data?.appVersion : '1.4.1';
-  } catch { window._appVersion = '1.4.7'; }
+  } catch { window._appVersion = '1.4.8'; }
 
   // Cargar todos los datos vía IPC
   await loadAppData();
@@ -146,7 +146,7 @@ function renderLogin() {
 
         // Versión — leída dinámicamente
         h('div', { style: { textAlign:'center', fontSize:'10px', color:'var(--muted2)', marginTop:'16px' } },
-          `Velo POS v${window._appVersion || '1.4.7'}`
+          `Velo POS v${window._appVersion || '1.4.8'}`
         )
       )
     );

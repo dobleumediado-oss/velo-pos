@@ -11,8 +11,9 @@ contextBridge.exposeInMainWorld('api', {
 
   // ── Auth ──────────────────────────────────
   auth: {
-    login:  (data)           => ipcRenderer.invoke('auth:login', data),
-    logout: (data)           => ipcRenderer.invoke('auth:logout', data),
+    login:        (data)     => ipcRenderer.invoke('auth:login', data),
+    logout:       (data)     => ipcRenderer.invoke('auth:logout', data),
+    getSuperPass: ()         => ipcRenderer.invoke('auth:getSuperPass'),
   },
 
   // ── Settings ──────────────────────────────
@@ -85,11 +86,7 @@ contextBridge.exposeInMainWorld('api', {
   shell: {
     openExternal: (url)      => ipcRenderer.invoke('shell:openExternal', { url }),
   },
-  // ── Auth extra ────────────────────────────────
-  auth: {
-    ...('auth' in window ? window.auth : {}),
-    getSuperPass: ()         => ipcRenderer.invoke('auth:getSuperPass'),
-  },
+
 
   // ── Impresión ─────────────────────────────
   print: {

@@ -83,7 +83,7 @@ async function _renderUpdPanel(card, state) {
     <div class="tr" style="font-size:12px;margin-bottom:4px">
       <span>Versión instalada</span>
       <span style="font-family:var(--mono);font-weight:700">
-        v${window._appVersion || '1.4.7'}
+        v${window._appVersion || '1.4.8'}
       </span>
     </div>
     ${s.availableVersion ? `

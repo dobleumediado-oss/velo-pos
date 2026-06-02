@@ -266,6 +266,11 @@ const MIGRATIONS = [
     description: 'Fix auto-update 404 repo privado + fix importar Excel',
     run(db) { console.log('[MIGRATION 1.4.7] Sin cambios de schema'); }
   },
+  {
+    version: '1.4.8',
+    description: 'Fix login — auth duplicado en preload',
+    run(db) { console.log('[MIGRATION 1.4.8] Sin cambios de schema'); }
+  },
 ];
 
 // ══════════════════════════════════════════════
