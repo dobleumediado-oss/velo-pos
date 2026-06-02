@@ -17,7 +17,7 @@ async function renderConfiguracion(el) {
   el.appendChild(h('div', { class: 'sec-hdr' },
     h('div', null,
       h('div', { class: 'sec-title' }, 'Configuración'),
-      h('div', { class: 'sec-sub' }, `Velo POS v${info.appVersion || window._appVersion || '1.4.8'}`)
+      h('div', { class: 'sec-sub' }, `Velo POS v${info.appVersion || window._appVersion || '1.5.1'}`)
     ),
     h('button', {
       class: 'btn btn-green',

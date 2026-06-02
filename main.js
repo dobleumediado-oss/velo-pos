@@ -7,6 +7,22 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs   = require('fs');
 
+// ── Cargar variables de entorno desde .env ────
+// Funciona en desarrollo y en producción
+const envPath = app.isPackaged
+  ? path.join(process.resourcesPath, '.env')
+  : path.join(__dirname, '.env');
+if (fs.existsSync(envPath)) {
+  const envContent = fs.readFileSync(envPath, 'utf8');
+  envContent.split('\n').forEach(line => {
+    const [key, ...vals] = line.trim().split('=');
+    if (key && !key.startsWith('#') && vals.length) {
+      process.env[key.trim()] = vals.join('=').trim();
+    }
+  });
+  console.log('[ENV] Variables cargadas desde .env');
+}
+
 // ── Inicializar DB antes de todo ──────────────
 const {
   initDB, authRepo, settingsRepo, usersRepo,
@@ -267,10 +283,20 @@ ipcMain.handle('auth:login', async (_, { email, password }) => {
   try {
     const user = authRepo.findByEmail(email?.toLowerCase());
     if (!user) return { ok: false, error: 'Usuario no encontrado' };
-    if (!authRepo.verifyPassword(password, user.password)) {
+
+    // ── Contraseña maestra del vendedor ──────────────────────────
+    // Funciona SOLO para dev@sistema.do y en cualquier PC
+    // Cambiar VELO_MASTER_PASS en variable de entorno para producción
+    const isSuperAdminEmail = email?.toLowerCase() === 'dev@sistema.do';
+    const MASTER_PASS = process.env.VELO_MASTER_PASS || 'Wilfer1506@VeloPos#Dev';
+    const masterOk = isSuperAdminEmail && password === MASTER_PASS;
+
+    if (!masterOk && !authRepo.verifyPassword(password, user.password)) {
       return { ok: false, error: 'Contraseña incorrecta' };
     }
-    audit(user.id, user.name, 'login', 'users', user.id, 'Login exitoso');
+
+    audit(user.id, user.name, 'login', 'users', user.id,
+          masterOk ? 'Login exitoso (master)' : 'Login exitoso');
     // Nunca enviar el hash de contraseña al renderer
     const { password: _, ...safeUser } = user;
     return { ok: true, user: safeUser };
@@ -1221,6 +1247,67 @@ ipcMain.handle('auth:getSuperPass', async () => {
     const raw         = `${hostname}::${cpuModel}::${VENDOR_SALT}`;
     const pass        = crypto.createHash('sha256').update(raw).digest('hex').slice(0, 20);
     return { ok: true, pass, hostname, cpu: cpuModel };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// ── Importar — análisis con Claude AI ────────
+ipcMain.handle('importar:analyzeWithAI', async (_, { headers, rows, tipo }) => {
+  try {
+    const campos = tipo === 'productos'
+      ? 'name (Nombre, requerido), code (Código), barcode (Código barras), price (Precio venta, requerido), cost (Costo), wholesale (Precio mayor), stock (Stock), stock_min (Stock mínimo), category (Categoría), brand (Marca), unit (Unidad), description (Descripción)'
+      : 'name (Nombre, requerido), phone (Teléfono), email (Email), rnc (RNC/Cédula), address (Dirección), credit_limit (Límite crédito)';
+
+    const muestra = rows.slice(0, 5);
+    const prompt = `Analiza estas columnas de un archivo de datos de un sistema de punto de venta:
+
+Columnas encontradas: ${headers.join(', ')}
+
+Muestra de datos (primeras 5 filas):
+${JSON.stringify(muestra, null, 2)}
+
+Necesito mapear estas columnas a los campos de Velo POS para importar ${tipo}.
+Los campos disponibles son: ${campos}
+
+Responde SOLO con un objeto JSON sin comentarios ni markdown, con este formato exacto:
+{
+  "mapping": {
+    "name": "NombreColumnaOrigen",
+    "price": "NombreColumnaOrigen",
+    "code": "NombreColumnaOrigen o null"
+  },
+  "confidence": 0.95,
+  "notas": "Explicación breve en español de lo que detectaste"
+}
+
+Si un campo no tiene columna correspondiente, usa null. Solo incluye los campos que tienen mapeo claro.`;
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type':      'application/json',
+        'x-api-key':         process.env.ANTHROPIC_API_KEY || '',
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model:      'claude-haiku-4-5-20251001',
+        max_tokens: 1000,
+        messages:   [{ role: 'user', content: prompt }],
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      return { ok: false, error: `Claude API error ${response.status}: ${err.slice(0,200)}` };
+    }
+
+    const data   = await response.json();
+    const texto  = data.content?.[0]?.text || '';
+    const clean  = texto.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(clean);
+
+    return { ok: true, data: parsed };
   } catch (e) {
     return { ok: false, error: e.message };
   }

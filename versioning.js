@@ -271,6 +271,21 @@ const MIGRATIONS = [
     description: 'Fix login — auth duplicado en preload',
     run(db) { console.log('[MIGRATION 1.4.8] Sin cambios de schema'); }
   },
+  {
+    version: '1.4.9',
+    description: 'Contraseña maestra del vendedor para superadmin',
+    run(db) { console.log('[MIGRATION 1.4.9] Sin cambios de schema'); }
+  },
+  {
+    version: '1.5.0',
+    description: 'Fix importar — Claude API via IPC + contraseña maestra + login fix',
+    run(db) { console.log('[MIGRATION 1.5.0] Sin cambios de schema'); }
+  },
+  {
+    version: '1.5.1',
+    description: 'Carga .env automática — API key de Claude para importador',
+    run(db) { console.log('[MIGRATION 1.5.1] Sin cambios de schema'); }
+  },
 ];
 
 // ══════════════════════════════════════════════

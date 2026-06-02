@@ -300,47 +300,16 @@ async function analizarArchivoConIA() {
     const campos  = (tipo === 'productos' ? VELO_FIELDS_PRODUCTS : VELO_FIELDS_CLIENTS)
                     .map(f => `${f.key} (${f.label}${f.required ? ', requerido' : ''})`).join(', ');
 
-    const prompt = `Analiza estas columnas de un archivo de datos de un sistema de punto de venta:
-
-Columnas encontradas: ${headers.join(', ')}
-
-Muestra de datos (primeras 5 filas):
-${JSON.stringify(muestra, null, 2)}
-
-Necesito mapear estas columnas a los campos de Velo POS para importar ${tipo}.
-Los campos disponibles son: ${campos}
-
-Responde SOLO con un objeto JSON sin comentarios ni markdown, con este formato exacto:
-{
-  "mapping": {
-    "name": "NombreColumnaOrigen",
-    "code": "NombreColumnaOrigen o null",
-    "price": "NombreColumnaOrigen",
-    "cost": "NombreColumnaOrigen o null",
-    "stock": "NombreColumnaOrigen o null"
-  },
-  "confidence": 0.95,
-  "notas": "Explicación breve en español de lo que detectaste"
-}
-
-Si un campo no tiene columna correspondiente, usa null. Solo incluye los campos que tienen mapeo.`;
-
-    // 3. Llamar a Claude API
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model:      'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        messages:   [{ role: 'user', content: prompt }],
-      }),
+    // 3. Llamar a Claude API via IPC (main process tiene acceso a la red)
+    const aiResult = await window.api.importar.analyzeWithAI({
+      headers,
+      rows: muestra,
+      tipo,
     });
 
-    const data    = await response.json();
-    const texto   = data.content?.[0]?.text || '';
-    const jsonStr = texto.replace(/```json|```/g, '').trim();
-    const parsed  = JSON.parse(jsonStr);
+    if (!aiResult.ok) throw new Error(aiResult.error || 'Error al analizar con IA');
 
+    const parsed = aiResult.data;
     importState.mapping = parsed.mapping || {};
 
     // 4. Mostrar pantalla de confirmación
