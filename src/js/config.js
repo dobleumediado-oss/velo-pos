@@ -17,7 +17,7 @@ async function renderConfiguracion(el) {
   el.appendChild(h('div', { class: 'sec-hdr' },
     h('div', null,
       h('div', { class: 'sec-title' }, 'Configuración'),
-      h('div', { class: 'sec-sub' }, `Velo POS v${info.appVersion || window._appVersion || '1.5.1'}`)
+      h('div', { class: 'sec-sub' }, `Velo POS v${info.appVersion || window._appVersion || '1.5.2'}`)
     ),
     h('button', {
       class: 'btn btn-green',
@@ -91,16 +91,13 @@ async function renderConfiguracion(el) {
   colLeft.appendChild(plantCard);
 
   // ── Datos del negocio ────────────────────────
+  const fiscalActivo = settings.fiscal_enabled === '1';
   const bizCard = h('div', { class: 'card' });
   bizCard.innerHTML = `
     <div class="card-title mb8">Datos del Negocio</div>
     <div class="fg">
       <label class="lbl">Nombre comercial *</label>
       <input class="inp" id="cfg-biz-name" type="text" placeholder="Mi Negocio" value="${settings.biz_name||''}"/>
-    </div>
-    <div class="fg">
-      <label class="lbl">RNC</label>
-      <input class="inp" id="cfg-biz-rnc" type="text" placeholder="130-00000-0" value="${settings.biz_rnc||''}"/>
     </div>
     <div class="fg">
       <label class="lbl">Dirección</label>
@@ -110,17 +107,60 @@ async function renderConfiguracion(el) {
       <label class="lbl">Teléfono / WhatsApp</label>
       <input class="inp" id="cfg-biz-phone" type="tel" placeholder="18091234567" value="${settings.biz_phone||''}"/>
       <div style="font-size:10px;color:var(--muted2);margin-top:3px">
-        💡 Con código de país (ej: 18091234567). Se usa como destino por defecto al enviar por WhatsApp.
+        Con código de país (ej: 18091234567). Se usa como destino por defecto al enviar por WhatsApp.
       </div>
     </div>
     <div class="fg">
       <label class="lbl">Mensaje en recibos</label>
       <input class="inp" id="cfg-receipt-msg" type="text" placeholder="¡Gracias por su compra!" value="${settings.receipt_msg||''}"/>
     </div>
-    <div class="fg">
-      <label class="lbl">ITBIS (%)</label>
-      <input class="inp" id="cfg-tax" type="number" min="0" max="100" placeholder="18" value="${settings.tax_pct||'18'}"/>
-    </div>`;
+
+    ${isSA ? `
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div>
+          <div style="font-size:13px;font-weight:600;color:var(--fg)">Módulo Fiscal (RNC / NCF / ITBIS)</div>
+          <div style="font-size:11px;color:var(--muted2);margin-top:2px">
+            Solo para negocios registrados en la DGII. Activa el RNC, comprobantes fiscales y el cálculo de ITBIS.
+          </div>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;flex-shrink:0;margin-left:16px">
+          <div style="position:relative;width:40px;height:22px">
+            <input type="checkbox" id="cfg-fiscal-enabled" ${fiscalActivo ? 'checked' : ''}
+              style="opacity:0;width:0;height:0;position:absolute"
+              onchange="toggleFiscal(this.checked)"/>
+            <div id="fiscal-track" style="
+              position:absolute;inset:0;border-radius:11px;transition:background .2s;
+              background:${fiscalActivo ? 'var(--accent)' : 'var(--line)'};cursor:pointer"
+              onclick="document.getElementById('cfg-fiscal-enabled').click()">
+              <div style="
+                position:absolute;top:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .2s;
+                left:${fiscalActivo ? '21px' : '3px'};" id="fiscal-thumb"></div>
+            </div>
+          </div>
+          <span style="font-size:12px;color:var(--muted2)">${fiscalActivo ? 'Activo' : 'Inactivo'}</span>
+        </label>
+      </div>
+    </div>` : ''}
+
+    <div id="fiscal-fields" style="display:${fiscalActivo ? 'block' : 'none'}">
+      <div class="fg" style="margin-top:10px">
+        <label class="lbl">RNC del negocio</label>
+        <input class="inp" id="cfg-biz-rnc" type="text" placeholder="130-00000-0" value="${settings.biz_rnc||''}"/>
+      </div>
+      <div class="fg">
+        <label class="lbl">ITBIS (%)</label>
+        <input class="inp" id="cfg-tax" type="number" min="0" max="100" placeholder="18" value="${settings.tax_pct||'18'}"/>
+        <div style="font-size:10px;color:var(--muted2);margin-top:3px">
+          Se aplica solo a facturas. Las cotizaciones nunca llevan ITBIS.
+        </div>
+      </div>
+    </div>
+
+    ${!isSA && !fiscalActivo ? `
+    <div style="margin-top:12px;padding:8px 12px;background:var(--bg2);border-radius:6px;font-size:11px;color:var(--muted2)">
+      El módulo fiscal (RNC / NCF / ITBIS) está desactivado. Si este negocio está registrado en la DGII, contacta al administrador del sistema para activarlo.
+    </div>` : ''}`;
   colLeft.appendChild(bizCard);
 
   // ── Logo (solo superadmin) ───────────────────
@@ -392,6 +432,22 @@ async function renderConfiguracion(el) {
   }
   colRight.appendChild(usersCard);
 
+  // ── Diagnóstico del sistema (solo superadmin) ──
+  if (isSA) {
+    const diagCard = h('div', { class: 'card', id: 'diag-card' });
+    diagCard.innerHTML = `
+      <div class="fxb mb8">
+        <div class="card-title">Diagnóstico del sistema</div>
+        <button class="btn btn-dark btn-sm" id="diag-btn" onclick="runDiagnosis()">
+          ${svg('refresh')} Ejecutar
+        </button>
+      </div>
+      <div id="diag-body" style="font-size:12px;color:var(--muted2)">
+        Presiona "Ejecutar" para revisar el estado completo del sistema.
+      </div>`;
+    colRight.appendChild(diagCard);
+  }
+
   // ── Ensamblar ────────────────────────────────
   grid.appendChild(colLeft);
   grid.appendChild(colRight);
@@ -404,23 +460,107 @@ async function renderConfiguracion(el) {
 async function guardarConfiguracion() {
   const fields = [
     ['biz_name',    'cfg-biz-name'],
-    ['biz_rnc',     'cfg-biz-rnc'],
     ['biz_addr',    'cfg-biz-addr'],
     ['biz_phone',   'cfg-biz-phone'],
     ['receipt_msg', 'cfg-receipt-msg'],
-    ['tax_pct',     'cfg-tax'],
   ];
   for (const [key, id] of fields) {
     const val = document.getElementById(id)?.value?.trim() || '';
     await window.api.settings.set({ key, value: val });
   }
+
+  // Campos fiscales — solo si el módulo fiscal está activo
+  const fiscalCheck = document.getElementById('cfg-fiscal-enabled');
+  if (fiscalCheck) {
+    const fiscalOn = fiscalCheck.checked ? '1' : '0';
+    await window.api.settings.set({ key: 'fiscal_enabled', value: fiscalOn });
+  }
+  const rncEl = document.getElementById('cfg-biz-rnc');
+  if (rncEl) await window.api.settings.set({ key: 'biz_rnc', value: rncEl.value.trim() });
+  const taxEl = document.getElementById('cfg-tax');
+  if (taxEl) await window.api.settings.set({ key: 'tax_pct', value: taxEl.value.trim() });
+
   const s = await window.api.settings.getAll();
-  CFG.biz   = s.biz_name  || CFG.biz;
-  CFG.rnc   = s.biz_rnc   || CFG.rnc;
-  CFG.addr  = s.biz_addr  || CFG.addr;
-  CFG.phone = s.biz_phone || CFG.phone;
-  CFG.itbis = parseFloat(s.tax_pct) || 18;
+  CFG.biz          = s.biz_name      || CFG.biz;
+  CFG.rnc          = s.biz_rnc       || CFG.rnc;
+  CFG.addr         = s.biz_addr      || CFG.addr;
+  CFG.phone        = s.biz_phone     || CFG.phone;
+  CFG.fiscalEnabled = s.fiscal_enabled === '1';
+  CFG.itbis        = CFG.fiscalEnabled ? (parseFloat(s.tax_pct) || 18) : 0;
   toast('✓ Configuración guardada');
+}
+
+
+// ══════════════════════════════════════════════
+// DIAGNÓSTICO DEL SISTEMA
+// ══════════════════════════════════════════════
+async function runDiagnosis() {
+  const body = document.getElementById('diag-body');
+  const btn  = document.getElementById('diag-btn');
+  if (!body) return;
+
+  btn.disabled  = true;
+  body.innerHTML = `<div style="color:var(--muted2);font-size:12px;padding:8px 0">Analizando sistema...</div>`;
+
+  const res = await window.api.system.diagnose({ requestUserId: user?.id });
+  btn.disabled = false;
+
+  if (!res?.ok) {
+    body.innerHTML = `<div style="color:var(--red);font-size:12px">${res?.error || 'Error al ejecutar diagnóstico'}</div>`;
+    return;
+  }
+
+  const { results, score, errors, warns, timestamp } = res;
+
+  const scoreColor = score === 'healthy' ? 'var(--green)' : score === 'warn' ? 'var(--amber)' : 'var(--red)';
+  const scoreLabel = score === 'healthy' ? 'Sistema saludable' : score === 'warn' ? `${warns} advertencia${warns>1?'s':''}` : `${errors} error${errors>1?'es':''}`;
+  const scoreIcon  = score === 'healthy' ? '✓' : score === 'warn' ? '⚠' : '✗';
+
+  const statusColor = s => s === 'ok' ? 'var(--green)' : s === 'warn' ? 'var(--amber)' : 'var(--red)';
+  const statusIcon  = s => s === 'ok' ? '●' : s === 'warn' ? '●' : '●';
+
+  body.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:6px;
+                background:var(--bg2);margin-bottom:10px">
+      <span style="font-size:16px;color:${scoreColor};font-weight:700">${scoreIcon}</span>
+      <span style="font-size:13px;font-weight:600;color:${scoreColor}">${scoreLabel}</span>
+      <span style="font-size:10px;color:var(--muted2);margin-left:auto">
+        ${new Date(timestamp).toLocaleTimeString('es-DO')}
+      </span>
+    </div>
+    ${results.map(r => `
+      <div style="display:flex;align-items:flex-start;gap:8px;padding:7px 0;
+                  border-bottom:1px solid var(--line2)">
+        <span style="color:${statusColor(r.status)};font-size:10px;margin-top:2px;flex-shrink:0">${statusIcon(r.status)}</span>
+        <div style="min-width:0;flex:1">
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="font-size:12px;font-weight:600;color:var(--ink)">${r.label}</span>
+            <span style="font-size:10px;padding:1px 6px;border-radius:100px;
+                         background:${r.status==='ok'?'var(--green-bg, #f0fdf4)':r.status==='warn'?'var(--amber-bg, #fffbeb)':'var(--red-bg, #fef2f2)'};
+                         color:${statusColor(r.status)}">
+              ${r.status === 'ok' ? 'OK' : r.status === 'warn' ? 'Advertencia' : 'Error'}
+            </span>
+          </div>
+          <div style="font-size:11px;color:var(--muted2);margin-top:2px;line-height:1.4">${r.detail}</div>
+        </div>
+      </div>`).join('')}
+    <div style="margin-top:8px;text-align:right">
+      <button class="btn btn-ghost btn-sm" onclick="runDiagnosis()" style="font-size:11px">
+        Ejecutar de nuevo
+      </button>
+    </div>`;
+}
+
+// ── Toggle módulo fiscal (solo superadmin) ────
+function toggleFiscal(activo) {
+  const fields  = document.getElementById('fiscal-fields');
+  const track   = document.getElementById('fiscal-track');
+  const thumb   = document.getElementById('fiscal-thumb');
+  const label   = track?.nextElementSibling;
+  if (fields)  fields.style.display  = activo ? 'block' : 'none';
+  if (track)   track.style.background = activo ? 'var(--accent)' : 'var(--line)';
+  if (thumb)   thumb.style.left       = activo ? '21px' : '3px';
+  if (label)   label.textContent      = activo ? 'Activo' : 'Inactivo';
 }
 
 // ══════════════════════════════════════════════

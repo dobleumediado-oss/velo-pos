@@ -1,15 +1,15 @@
 {
   "name": "velo-pos",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "Sistema POS para micro negocios — República Dominicana",
   "main": "main.js",
   "scripts": {
-    "start": "npx @electron/rebuild -f -w better-sqlite3 --arch x64 --quiet 2>/dev/null; electron .",
+    "start": "electron .",
     "dev": "electron . --dev",
+    "rebuild": "npx @electron/rebuild -f -w better-sqlite3 --arch x64",
     "build": "electron-builder",
     "build:win": "electron-builder --win",
     "build:mac": "electron-builder --mac",
-    "rebuild": "npx @electron/rebuild -f -w better-sqlite3 --arch x64",
     "db:reset": "node scripts/resetDB.js",
     "release:win": "electron-builder --win --publish always",
     "release:mac": "electron-builder --mac --publish always",
@@ -42,6 +42,7 @@
       "database.js",
       "versioning.js",
       "license.js",
+      "!**/.DS_Store",
       "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
       "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
       "!**/node_modules/*.d.ts",
@@ -95,15 +96,6 @@
       "owner": "dobleumediado-oss",
       "repo": "velo-pos",
       "releaseType": "release"
-    },
-    "extraResources": [
-      {
-        "from": ".env",
-        "to": ".env",
-        "filter": [
-          "**/*"
-        ]
-      }
-    ]
+    }
   }
 }

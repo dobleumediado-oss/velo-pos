@@ -162,4 +162,9 @@ contextBridge.exposeInMainWorld('api', {
     receive:  (data)      => ipcRenderer.invoke('purchases:receive', data),
     cancel:   (data)      => ipcRenderer.invoke('purchases:cancel', data),
   },
+
+  // ── Diagnóstico del sistema ───────────────
+  system: {
+    diagnose: (data) => ipcRenderer.invoke('system:diagnose', data),
+  },
 });

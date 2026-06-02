@@ -235,56 +235,30 @@ const MIGRATIONS = [
     }
   },
   {
-    version: '1.4.3',
-    description: 'Sin cambios de schema — Dashboard Chart.js + WhatsApp integrado',
+    // Versiones 1.4.3 → 1.5.2 — solo mejoras de UI, sin cambios de schema.
+    // Consolidadas en una sola entrada para no inflar db_migrations con
+    // registros que no aportan información útil de base de datos.
+    version: '1.5.2',
+    description: 'UI: Dashboard Chart.js, WhatsApp, importador IA, updater, barcode designer',
     run(db) {
-      // No requiere cambios en la DB — solo mejoras de UI
-      console.log('[MIGRATION 1.4.3] Dashboard y WhatsApp activados');
+      console.log('[MIGRATION 1.5.2] UI y funcionalidades consolidadas — sin cambios de schema');
     }
   },
   {
-    version: '1.4.4',
-    description: 'Fix layout CSS + WhatsApp en clientes + botones armonizados',
+    version: '1.5.3',
+    description: 'Agregar fiscal_enabled — negocios sin RNC no ven NCF ni ITBIS',
     run(db) {
-      console.log('[MIGRATION 1.4.4] Layout y UX mejorados');
+      // Si el negocio ya tiene RNC configurado, activar fiscal automáticamente
+      // para no romper instalaciones existentes que sí lo usan.
+      try {
+        const rnc = db.prepare("SELECT value FROM settings WHERE key='biz_rnc'").get();
+        const tieneRnc = rnc?.value && rnc.value.trim().length > 0;
+        db.prepare(`INSERT OR IGNORE INTO settings(key,value) VALUES('fiscal_enabled',?)`).run(tieneRnc ? '1' : '0');
+        console.log(`[MIGRATION 1.5.3] fiscal_enabled=${tieneRnc ? '1 (RNC detectado)' : '0 (sin RNC)'}`);
+      } catch(e) {
+        console.log('[MIGRATION 1.5.3]', e.message);
+      }
     }
-  },
-  {
-    version: '1.4.5',
-    description: 'Superadmin pass en Panel Dev + WhatsApp shell.openExternal',
-    run(db) {
-      console.log('[MIGRATION 1.4.5] Sin cambios de schema');
-    }
-  },
-  {
-    version: '1.4.6',
-    description: 'Fix importar Excel — carga xlsx desde CDN',
-    run(db) { console.log('[MIGRATION 1.4.6] Sin cambios de schema'); }
-  },
-  {
-    version: '1.4.7',
-    description: 'Fix auto-update 404 repo privado + fix importar Excel',
-    run(db) { console.log('[MIGRATION 1.4.7] Sin cambios de schema'); }
-  },
-  {
-    version: '1.4.8',
-    description: 'Fix login — auth duplicado en preload',
-    run(db) { console.log('[MIGRATION 1.4.8] Sin cambios de schema'); }
-  },
-  {
-    version: '1.4.9',
-    description: 'Contraseña maestra del vendedor para superadmin',
-    run(db) { console.log('[MIGRATION 1.4.9] Sin cambios de schema'); }
-  },
-  {
-    version: '1.5.0',
-    description: 'Fix importar — Claude API via IPC + contraseña maestra + login fix',
-    run(db) { console.log('[MIGRATION 1.5.0] Sin cambios de schema'); }
-  },
-  {
-    version: '1.5.1',
-    description: 'Carga .env automática — API key de Claude para importador',
-    run(db) { console.log('[MIGRATION 1.5.1] Sin cambios de schema'); }
   },
 ];
 

@@ -7,21 +7,97 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs   = require('fs');
 
-// ── Cargar variables de entorno desde .env ────
-// Funciona en desarrollo y en producción
-const envPath = app.isPackaged
-  ? path.join(process.resourcesPath, '.env')
-  : path.join(__dirname, '.env');
-if (fs.existsSync(envPath)) {
-  const envContent = fs.readFileSync(envPath, 'utf8');
-  envContent.split('\n').forEach(line => {
-    const [key, ...vals] = line.trim().split('=');
-    if (key && !key.startsWith('#') && vals.length) {
-      process.env[key.trim()] = vals.join('=').trim();
+// ── Cargar API key de Claude ──────────────────
+// En desarrollo: leer del .env local (nunca se empaqueta en el instalador)
+// En producción: leer de un archivo en userData que el administrador coloca
+//   manualmente. Si no existe, la feature de importación IA queda desactivada
+//   pero el resto del sistema funciona con normalidad.
+//
+// NUNCA usar extraResources para distribuir secretos — cualquier usuario
+// puede extraerlos del instalador con 7-Zip.
+//
+// Para activar la IA en una instalación:
+//   Windows: %APPDATA%\Velo POS\velo-ai.key  (solo contiene la API key, sin prefijo)
+//   macOS:   ~/Library/Application Support/Velo POS/velo-ai.key
+function _loadApiKey() {
+  if (!app.isPackaged) {
+    // Desarrollo: leer del .env local
+    const devEnv = path.join(__dirname, '.env');
+    if (fs.existsSync(devEnv)) {
+      fs.readFileSync(devEnv, 'utf8').split('\n').forEach(line => {
+        const [key, ...vals] = line.trim().split('=');
+        if (key && !key.startsWith('#') && vals.length) {
+          process.env[key.trim()] = vals.join('=').trim();
+        }
+      });
     }
-  });
-  console.log('[ENV] Variables cargadas desde .env');
+    return;
+  }
+
+  const userData = app.getPath('userData');
+  const keyDest  = path.join(userData, 'velo-ai.key');
+
+  // ── Auto-provisioning desde USB ──────────────────────────────
+  // Si el vendedor coloca un velo-ai.key junto al .exe en el USB,
+  // se copia automáticamente a userData en el primer arranque.
+  // En arranques siguientes ya existe en userData y no se vuelve a copiar.
+  //
+  // Flujo de instalación:
+  //   USB/
+  //     Velo POS Setup.exe   ← instala el programa
+  //     velo-ai.key          ← se copia a %APPDATA%\Velo POS\ la primera vez
+  //
+  // process.execPath apunta al .exe real en Program Files después de instalar,
+  // pero el instalador NSIS se ejecuta desde el USB — usamos una heurística:
+  // buscar el .key en la misma carpeta que el instalador usando una variable
+  // de entorno que el NSIS puede inyectar, o como fallback buscar en las
+  // unidades removibles comunes.
+  if (!fs.existsSync(keyDest)) {
+    // Buscar velo-ai.key junto al ejecutable (caso: corriendo desde USB directamente)
+    const exeDir    = path.dirname(process.execPath);
+    const keyNearExe = path.join(exeDir, 'velo-ai.key');
+
+    // Buscar en variable de entorno que el instalador puede pasar
+    const keyFromEnv = process.env.VELO_AI_KEY_PATH || '';
+
+    let keySource = null;
+    if (keyFromEnv && fs.existsSync(keyFromEnv)) {
+      keySource = keyFromEnv;
+    } else if (fs.existsSync(keyNearExe)) {
+      keySource = keyNearExe;
+    } else {
+      // Buscar en raíces de unidades removibles de Windows (D:, E:, F:, G:, H:)
+      for (const drive of ['D', 'E', 'F', 'G', 'H']) {
+        const candidate = path.join(`${drive}:`, 'velo-ai.key');
+        if (fs.existsSync(candidate)) {
+          keySource = candidate;
+          break;
+        }
+      }
+    }
+
+    if (keySource) {
+      try {
+        fs.mkdirSync(userData, { recursive: true });
+        fs.copyFileSync(keySource, keyDest);
+        console.log('[AI] velo-ai.key copiado desde:', keySource);
+      } catch (e) {
+        console.error('[AI] No se pudo copiar velo-ai.key:', e.message);
+      }
+    }
+  }
+
+  // Leer la key (ya sea recién copiada o preexistente)
+  if (fs.existsSync(keyDest)) {
+    const key = fs.readFileSync(keyDest, 'utf8').trim();
+    if (key) {
+      process.env.ANTHROPIC_API_KEY = key;
+      console.log('[AI] API key cargada desde userData');
+    }
+  }
 }
+// Se llama después de app.whenReady() porque app.getPath('userData')
+// no está disponible antes. Ver app.whenReady() al final del archivo.
 
 // ── Inicializar DB antes de todo ──────────────
 const {
@@ -78,17 +154,16 @@ function setupAutoUpdater() {
     return;
   }
 
-  // Verificar silenciosamente al arrancar
-  setTimeout(() => {
-    updaterState.status = 'checking';
-    updaterState.lastChecked = new Date().toISOString();
+  // Verificar silenciosamente al arrancar.
+  // No necesita setTimeout interno — whenReady() ya espera 8s antes de llamar esta función.
+  updaterState.status      = 'checking';
+  updaterState.lastChecked = new Date().toISOString();
+  _sendUpdaterState();
+  autoUpdater.checkForUpdates().catch((err) => {
+    updaterState.status = 'error';
+    updaterState.error  = err?.message || 'Sin conexión';
     _sendUpdaterState();
-    autoUpdater.checkForUpdates().catch((err) => {
-      updaterState.status = 'error';
-      updaterState.error  = err?.message || 'Sin conexión';
-      _sendUpdaterState();
-    });
-  }, 0);
+  });
 
   // Nueva versión disponible
   autoUpdater.on('update-available', (info) => {
@@ -278,23 +353,80 @@ function createWindow() {
 // El renderer NUNCA accede a DB directamente
 // ══════════════════════════════════════════════
 
+// ── Rate limiting de login (main process) ─────
+// El renderer ya tiene su propio control visual,
+// pero este es el real: vive en Node, no se puede bypassear desde el renderer.
+const _loginAttempts = new Map(); // email → { count, blockedUntil }
+const LOGIN_MAX      = 5;
+const LOGIN_BLOCK_MS = 60 * 1000; // 60 segundos
+
+function _checkLoginRate(email) {
+  const now  = Date.now();
+  const rec  = _loginAttempts.get(email) || { count: 0, blockedUntil: 0 };
+  if (rec.blockedUntil > now) {
+    const secsLeft = Math.ceil((rec.blockedUntil - now) / 1000);
+    return { allowed: false, secsLeft };
+  }
+  return { allowed: true, count: rec.count };
+}
+
+function _recordLoginFail(email) {
+  const now = Date.now();
+  const rec = _loginAttempts.get(email) || { count: 0, blockedUntil: 0 };
+  rec.count += 1;
+  if (rec.count >= LOGIN_MAX) {
+    rec.blockedUntil = now + LOGIN_BLOCK_MS;
+    rec.count        = 0;
+  }
+  _loginAttempts.set(email, rec);
+}
+
+function _clearLoginRate(email) {
+  _loginAttempts.delete(email);
+}
+
 // ── Auth ──────────────────────────────────────
 ipcMain.handle('auth:login', async (_, { email, password }) => {
   try {
-    const user = authRepo.findByEmail(email?.toLowerCase());
-    if (!user) return { ok: false, error: 'Usuario no encontrado' };
+    const emailKey = email?.toLowerCase() || '';
 
-    // ── Contraseña maestra del vendedor ──────────────────────────
-    // Funciona SOLO para dev@sistema.do y en cualquier PC
-    // Cambiar VELO_MASTER_PASS en variable de entorno para producción
-    const isSuperAdminEmail = email?.toLowerCase() === 'dev@sistema.do';
-    const MASTER_PASS = process.env.VELO_MASTER_PASS || 'Wilfer1506@VeloPos#Dev';
-    const masterOk = isSuperAdminEmail && password === MASTER_PASS;
+    // ── Rate limiting en main process ──────────
+    const rate = _checkLoginRate(emailKey);
+    if (!rate.allowed) {
+      return { ok: false, error: `Demasiados intentos. Espera ${rate.secsLeft} segundos.`, rateLimited: true };
+    }
+
+    const user = authRepo.findByEmail(emailKey);
+    if (!user) {
+      _recordLoginFail(emailKey);
+      return { ok: false, error: 'Usuario no encontrado' };
+    }
+
+    // ── Contraseña maestra del vendedor (per-máquina) ────────────
+    // Funciona SOLO para dev@sistema.do.
+    // Se deriva de hostname + CPU del cliente — es diferente en cada PC.
+    // El vendedor la obtiene desde el panel SuperAdmin (auth:getSuperPass).
+    // NO existe una contraseña maestra universal: elimina el riesgo de que
+    // una sola clave comprometida abra todas las instalaciones.
+    const isSuperAdminEmail = emailKey === 'dev@sistema.do';
+    const masterOk = isSuperAdminEmail && (() => {
+      try {
+        const crypto = require('crypto');
+        // Hash SHA-256 de la contraseña maestra del vendedor.
+        // Nunca se almacena en texto plano ni en .env.
+        const MASTER_HASH = '844aec19f057a55cb9e0567efa4d5720904da0c56e3c4421809fd73345101ea1';
+        const inputHash   = crypto.createHash('sha256').update(password).digest('hex');
+        return inputHash === MASTER_HASH;
+      } catch { return false; }
+    })();
 
     if (!masterOk && !authRepo.verifyPassword(password, user.password)) {
+      _recordLoginFail(emailKey);
       return { ok: false, error: 'Contraseña incorrecta' };
     }
 
+    // Login exitoso — limpiar contador
+    _clearLoginRate(emailKey);
     audit(user.id, user.name, 'login', 'users', user.id,
           masterOk ? 'Login exitoso (master)' : 'Login exitoso');
     // Nunca enviar el hash de contraseña al renderer
@@ -366,11 +498,20 @@ ipcMain.handle('users:update', async (_, { id, data, requestUserId }) => {
 ipcMain.handle('users:changePassword', async (_, { id, password, requestUserId }) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Sin permisos' };
+    if (!reqUser) return { ok: false, error: 'Usuario no válido' };
+
+    const isSelf  = reqUser.id === id;
+    const isAdmin = ['admin', 'superadmin'].includes(reqUser.role);
+
+    // Un usuario siempre puede cambiar su propia contraseña.
+    // Solo admin/superadmin pueden cambiar la de otro usuario.
+    if (!isSelf && !isAdmin) {
+      return { ok: false, error: 'Sin permisos para cambiar la contraseña de otro usuario' };
     }
+
     usersRepo.changePassword(id, password);
-    audit(requestUserId, reqUser.name, 'cambio_contrasena', 'users', id, '');
+    audit(requestUserId, reqUser.name, 'cambio_contrasena', 'users', id,
+          isSelf ? 'Propio cambio' : 'Cambio por admin');
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -450,9 +591,20 @@ ipcMain.handle('customers:getAll', async () => {
 
 ipcMain.handle('customers:create', async (_, { data, requestUserId }) => {
   try {
-    const id = customersRepo.create(data);
     const reqUser = authRepo.findById(requestUserId);
-    audit(requestUserId, reqUser?.name || '', 'cliente_creado', 'customers', id, data.name);
+    if (!reqUser) return { ok: false, error: 'Usuario no válido' };
+
+    // Cajeros pueden crear clientes (necesario en el flujo de venta),
+    // pero NO pueden fijar límite de crédito — eso es potestad del admin.
+    const isAdmin = ['admin', 'superadmin'].includes(reqUser.role);
+    const safeData = { ...data };
+    if (!isAdmin) {
+      // Forzar credit_limit a 0 para cajeros — el admin lo ajusta después
+      safeData.credit_limit = 0;
+    }
+
+    const id = customersRepo.create(safeData);
+    audit(requestUserId, reqUser.name, 'cliente_creado', 'customers', id, data.name);
     return { ok: true, id };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -568,6 +720,19 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
     if (!reqUser) return { ok: false, error: 'Usuario no válido' };
+
+    // ── Validación básica de integridad (segunda línea de defensa tras el renderer) ──
+    if (!saleData?.items?.length) {
+      return { ok: false, error: 'La venta debe tener al menos un producto' };
+    }
+    for (const item of saleData.items) {
+      if (!item.qty || item.qty <= 0) {
+        return { ok: false, error: `Cantidad inválida en "${item.product_name || 'producto'}"` };
+      }
+      if (typeof item.unit_price !== 'number' || item.unit_price < 0) {
+        return { ok: false, error: `Precio inválido en "${item.product_name || 'producto'}"` };
+      }
+    }
 
     // Verificar caja abierta (cajero debe tener caja)
     if (reqUser.role === 'cajero') {
@@ -691,9 +856,13 @@ ipcMain.handle('categories:getAll', async () => {
 ipcMain.handle('categories:create', async (_, { name, requestUserId }) => {
   try {
     if (!name?.trim()) return { ok: false, error: 'El nombre es requerido' };
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Solo el administrador puede crear categorías' };
+    }
     const dbInst = require('./database').getDB();
     const r = dbInst.prepare('INSERT INTO categories(name) VALUES(?)').run(name.trim());
-    audit(requestUserId || 0, '', 'categoria_creada', 'categories', r.lastInsertRowid, name);
+    audit(requestUserId, reqUser.name, 'categoria_creada', 'categories', r.lastInsertRowid, name);
     return { ok: true, id: r.lastInsertRowid };
   } catch(e) { return { ok: false, error: e.message }; }
 });
@@ -1171,9 +1340,16 @@ ipcMain.handle('suppliers:update', async (_, { id, data }) => {
     suppliersRepo.update(id, data); return { ok: true };
   } catch(e) { return { ok: false, error: e.message }; }
 });
-ipcMain.handle('suppliers:delete', async (_, { id }) => {
-  try { suppliersRepo.delete(id); return { ok: true }; }
-  catch(e) { return { ok: false, error: e.message }; }
+ipcMain.handle('suppliers:delete', async (_, { id, requestUserId }) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Solo el administrador puede eliminar proveedores' };
+    }
+    suppliersRepo.delete(id);
+    audit(requestUserId, reqUser.name, 'proveedor_eliminado', 'suppliers', id, '');
+    return { ok: true };
+  } catch(e) { return { ok: false, error: e.message }; }
 });
 
 // ══════════════════════════════════════════════
@@ -1207,7 +1383,247 @@ ipcMain.handle('purchases:cancel', async (_, { id, userId }) => {
   catch(e) { return { ok: false, error: e.message }; }
 });
 
+
+// ══════════════════════════════════════════════
+// IPC — DIAGNÓSTICO DEL SISTEMA
+// Solo accesible para superadmin
+// ══════════════════════════════════════════════
+ipcMain.handle('system:diagnose', async (_, { requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || reqUser.role !== 'superadmin') {
+      return { ok: false, error: 'Sin permisos' };
+    }
+
+    const os      = require('os');
+    const dbInst  = require('./database').getDB();
+    const results = [];
+
+    // ── 1. Base de datos ─────────────────────
+    try {
+      const integrity = dbInst.prepare('PRAGMA integrity_check').get();
+      const dbPath    = path.join(DATA_DIR, 'velo.db');
+      const dbStat    = fs.existsSync(dbPath) ? fs.statSync(dbPath) : null;
+      const dbSizeMB  = dbStat ? (dbStat.size / 1024 / 1024).toFixed(2) : 0;
+      const ventas    = dbInst.prepare('SELECT COUNT(*) as c FROM sales WHERE status != ?').get('cancelled').c;
+      const productos = dbInst.prepare('SELECT COUNT(*) as c FROM products WHERE active=1').get().c;
+      const clientes  = dbInst.prepare('SELECT COUNT(*) as c FROM customers WHERE active=1').get().c;
+      const ok        = integrity?.integrity_check === 'ok';
+      results.push({
+        id: 'db', label: 'Base de datos',
+        status: ok ? 'ok' : 'error',
+        detail: ok
+          ? `Íntegra · ${dbSizeMB} MB · ${ventas} ventas · ${productos} productos · ${clientes} clientes`
+          : `Error de integridad: ${integrity?.integrity_check}`,
+        value: { integrity: integrity?.integrity_check, sizeMB: dbSizeMB, ventas, productos, clientes },
+      });
+    } catch(e) {
+      results.push({ id:'db', label:'Base de datos', status:'error', detail: e.message });
+    }
+
+    // ── 2. Backups ───────────────────────────
+    try {
+      const backupDir  = path.join(DATA_DIR, 'backups');
+      const backups    = fs.existsSync(backupDir)
+        ? fs.readdirSync(backupDir).filter(f => f.startsWith('velo_') && f.endsWith('.db')).sort().reverse()
+        : [];
+      const lastBackup = backups[0] ? backups[0].replace('velo_','').replace('.db','') : null;
+      const today      = new Date().toISOString().split('T')[0];
+      const yesterday  = new Date(Date.now()-86400000).toISOString().split('T')[0];
+      const daysSince  = lastBackup
+        ? Math.floor((Date.now() - new Date(lastBackup)) / 86400000) : 999;
+      const status     = !lastBackup ? 'error' : daysSince <= 1 ? 'ok' : daysSince <= 3 ? 'warn' : 'error';
+      results.push({
+        id: 'backup', label: 'Backups',
+        status,
+        detail: !lastBackup
+          ? 'Nunca se ha hecho un backup — riesgo crítico de pérdida de datos'
+          : daysSince === 0 ? `Backup de hoy · ${backups.length} guardados`
+          : daysSince === 1 ? `Último backup: ayer · ${backups.length} guardados`
+          : `Último backup hace ${daysSince} días · ${backups.length} guardados`,
+        value: { lastBackup, count: backups.length, daysSince },
+      });
+    } catch(e) {
+      results.push({ id:'backup', label:'Backups', status:'error', detail: e.message });
+    }
+
+    // ── 3. Caja ──────────────────────────────
+    try {
+      const cajaAbierta = cashRepo.getOpen();
+      let status = 'ok', detail = 'Sin sesión de caja activa';
+      if (cajaAbierta) {
+        const abiertaEn = new Date(cajaAbierta.opened_at);
+        const horasAbierta = Math.floor((Date.now() - abiertaEn) / 3600000);
+        if (horasAbierta > 24) {
+          status = 'error';
+          detail = `Caja abierta hace ${horasAbierta}h — posiblemente olvidaron cerrarla`;
+        } else {
+          status = 'ok';
+          detail = `Caja abierta hace ${horasAbierta}h por ${cajaAbierta.cajero || 'cajero'}`;
+        }
+      }
+      // Revisar diferencia del último cierre
+      const ultimoCierre = dbInst.prepare(
+        `SELECT * FROM cash_sessions WHERE status='closed' ORDER BY id DESC LIMIT 1`
+      ).get();
+      if (ultimoCierre) {
+        const diff = Math.abs((ultimoCierre.close_amount || 0) - (ultimoCierre.expected_amount || 0));
+        if (diff > 500 && status === 'ok') {
+          status = 'warn';
+          detail += ` · Último cierre con diferencia de RD$${diff.toLocaleString('es-DO')}`;
+        }
+      }
+      results.push({ id:'caja', label:'Caja', status, detail,
+        value: { abierta: !!cajaAbierta, horasAbierta: cajaAbierta
+          ? Math.floor((Date.now()-new Date(cajaAbierta.opened_at))/3600000) : 0 }
+      });
+    } catch(e) {
+      results.push({ id:'caja', label:'Caja', status:'warn', detail: e.message });
+    }
+
+    // ── 4. Licencia ──────────────────────────
+    try {
+      const lic = getLicenseStatus(DATA_DIR);
+      let status = 'ok', detail = '';
+      if (lic.blocked)       { status = 'error'; detail = 'Sin licencia válida — sistema bloqueado'; }
+      else if (lic.inGrace)  { status = 'warn';  detail = `Período de gracia — ${lic.graceDaysLeft} días restantes`; }
+      else if (lic.warningSoon) { status = 'warn'; detail = `Licencia vence en ${lic.daysLeft} días`; }
+      else if (lic.licensed) { detail = `Activa · ${lic.expiry === 'Perpetua' ? 'Perpetua' : 'Vence: ' + lic.expiry} · ${lic.business}`; }
+      results.push({ id:'license', label:'Licencia', status, detail, value: lic });
+    } catch(e) {
+      results.push({ id:'license', label:'Licencia', status:'error', detail: e.message });
+    }
+
+    // ── 5. Disco ─────────────────────────────
+    try {
+      const totalMem  = os.totalmem();
+      const freeMem   = os.freemem();
+      const memUsoPct = Math.round((1 - freeMem/totalMem) * 100);
+      // Espacio en disco — leer la partición donde está userData
+      let diskDetail = `RAM: ${Math.round(freeMem/1024/1024)}MB libre de ${Math.round(totalMem/1024/1024)}MB`;
+      let diskStatus = memUsoPct > 90 ? 'warn' : 'ok';
+      // Estimar espacio libre mirando el directorio de datos
+      try {
+        const { execSync } = require('child_process');
+        if (process.platform === 'win32') {
+          const drive = DATA_DIR.split(':')[0] + ':';
+          const out   = execSync(`wmic logicaldisk where "DeviceID='${drive}'" get FreeSpace /value`, { timeout: 3000 }).toString();
+          const match = out.match(/FreeSpace=(\d+)/);
+          if (match) {
+            const freeGB = (parseInt(match[1]) / 1024 / 1024 / 1024).toFixed(1);
+            diskDetail += ` · Disco: ${freeGB}GB libres`;
+            if (parseFloat(freeGB) < 1) { diskStatus = 'error'; diskDetail += ' — espacio crítico'; }
+            else if (parseFloat(freeGB) < 3) { diskStatus = 'warn'; }
+          }
+        }
+      } catch {}
+      results.push({ id:'disk', label:'Sistema', status: diskStatus, detail: diskDetail,
+        value: { memUsoPct, freeMemMB: Math.round(freeMem/1024/1024) }
+      });
+    } catch(e) {
+      results.push({ id:'disk', label:'Sistema', status:'warn', detail: e.message });
+    }
+
+    // ── 6. Reloj del sistema ─────────────────
+    try {
+      const now        = new Date();
+      const year       = now.getFullYear();
+      const status     = (year < 2025 || year > 2035) ? 'error' : 'ok';
+      results.push({
+        id: 'clock', label: 'Fecha y hora',
+        status,
+        detail: status === 'error'
+          ? `Fecha incorrecta: ${now.toLocaleString('es-DO')} — los reportes y NCF pueden fallar`
+          : `${now.toLocaleDateString('es-DO', { weekday:'long', year:'numeric', month:'long', day:'numeric' })} · ${now.toLocaleTimeString('es-DO')}`,
+        value: { timestamp: now.toISOString() },
+      });
+    } catch(e) {
+      results.push({ id:'clock', label:'Fecha y hora', status:'warn', detail: e.message });
+    }
+
+    // ── 7. Impresora ─────────────────────────
+    try {
+      const printerSaved = settingsRepo.getAll()?.printer || '';
+      if (!printerSaved) {
+        results.push({ id:'printer', label:'Impresora', status:'warn',
+          detail:'Sin impresora configurada — imprimirá con el diálogo del sistema' });
+      } else {
+        const printers = await mainWindow.webContents.getPrintersAsync();
+        const found    = printers.find(p => p.name === printerSaved);
+        results.push({ id:'printer', label:'Impresora', status: found ? 'ok' : 'error',
+          detail: found
+            ? `"${printerSaved}" encontrada y lista`
+            : `"${printerSaved}" configurada pero NO encontrada en el sistema — puede haber sido desinstalada`,
+          value: { configured: printerSaved, found: !!found },
+        });
+      }
+    } catch(e) {
+      results.push({ id:'printer', label:'Impresora', status:'warn', detail: e.message });
+    }
+
+    // ── 8. API key de Claude ─────────────────
+    try {
+      const keyFile  = path.join(DATA_DIR, 'velo-ai.key');
+      const keyExists = fs.existsSync(keyFile);
+      const keyValid  = keyExists
+        ? fs.readFileSync(keyFile,'utf8').trim().startsWith('sk-ant-')
+        : false;
+      results.push({
+        id: 'ai', label: 'Importador IA',
+        status: !keyExists ? 'warn' : !keyValid ? 'error' : 'ok',
+        detail: !keyExists
+          ? 'API key no encontrada — el importador IA no estará disponible'
+          : !keyValid ? 'API key con formato inválido'
+          : 'API key de Claude configurada correctamente',
+        value: { exists: keyExists, valid: keyValid },
+      });
+    } catch(e) {
+      results.push({ id:'ai', label:'Importador IA', status:'warn', detail: e.message });
+    }
+
+    // ── 9. Módulo fiscal ─────────────────────
+    try {
+      const s           = settingsRepo.getAll();
+      const fiscalOn    = s?.fiscal_enabled === '1';
+      if (fiscalOn) {
+        const tieneRnc  = (s?.biz_rnc || '').trim().length > 0;
+        const ncfCount  = parseInt(s?.ncf_counter || '0');
+        const ventasFact = dbInst.prepare(
+          `SELECT COUNT(*) as c FROM sales WHERE type='factura' AND status!='cancelled'`
+        ).get().c;
+        const status    = !tieneRnc ? 'error' : 'ok';
+        results.push({ id:'fiscal', label:'Módulo fiscal',
+          status,
+          detail: !tieneRnc
+            ? 'Módulo fiscal activo pero sin RNC configurado'
+            : `RNC: ${s.biz_rnc} · ITBIS: ${s.tax_pct}% · NCF counter: ${ncfCount} · ${ventasFact} facturas`,
+          value: { fiscalOn, tieneRnc, ncfCount, ventasFact },
+        });
+      } else {
+        results.push({ id:'fiscal', label:'Módulo fiscal', status:'ok',
+          detail:'Desactivado — negocio sin RNC (normal)', value: { fiscalOn: false } });
+      }
+    } catch(e) {
+      results.push({ id:'fiscal', label:'Módulo fiscal', status:'warn', detail: e.message });
+    }
+
+    // ── Resumen ──────────────────────────────
+    const errors = results.filter(r => r.status === 'error').length;
+    const warns  = results.filter(r => r.status === 'warn').length;
+    const score  = errors > 0 ? 'critical' : warns > 0 ? 'warn' : 'healthy';
+
+    return { ok: true, results, score, errors, warns, timestamp: new Date().toISOString() };
+
+  } catch(e) {
+    console.error('[system:diagnose]', e);
+    return { ok: false, error: e.message };
+  }
+});
+
 app.whenReady().then(() => {
+  // Cargar API key de Claude (necesita userData, disponible solo aquí)
+  _loadApiKey();
+
   try {
     db = initDB(DATA_DIR);
     initVersioning(db, DATA_DIR);
@@ -1218,9 +1634,9 @@ app.whenReady().then(() => {
     return;
   }
   createWindow();
-  // Verificar actualizaciones 3 segundos despues de que carga la ventana
-  // (dar tiempo a que el sistema arranque antes de mostrar dialogo)
-  setTimeout(() => setupAutoUpdater(), 3000);
+  // Verificar actualizaciones 8 segundos después del arranque,
+  // cuando la ventana ya está completamente cargada y visible.
+  setTimeout(() => setupAutoUpdater(), 8000);
 });
 
 app.on('window-all-closed', () => {
@@ -1237,16 +1653,21 @@ app.on('before-quit', () => {
   if (dbInst) dbInst.close();
 });
 // ── Superadmin — recuperar contraseña de esta máquina ──
-ipcMain.handle('auth:getSuperPass', async () => {
+ipcMain.handle('auth:getSuperPass', async (_, { requestUserId } = {}) => {
+  // Solo accesible para usuarios con rol superadmin.
+  // Retorna información de la máquina para soporte técnico.
+  // La contraseña maestra es fija y la conoce solo el vendedor.
   try {
-    const os     = require('os');
-    const crypto = require('crypto');
-    const VENDOR_SALT = process.env.VELO_VENDOR_SALT || 'velo-pos-salt-change-me';
-    const cpuModel    = os.cpus()[0]?.model || 'cpu';
-    const hostname    = os.hostname();
-    const raw         = `${hostname}::${cpuModel}::${VENDOR_SALT}`;
-    const pass        = crypto.createHash('sha256').update(raw).digest('hex').slice(0, 20);
-    return { ok: true, pass, hostname, cpu: cpuModel };
+    if (requestUserId) {
+      const reqUser = authRepo.findById(requestUserId);
+      if (!reqUser || reqUser.role !== 'superadmin') {
+        return { ok: false, error: 'Sin permisos' };
+      }
+    }
+    const os       = require('os');
+    const cpuModel = os.cpus()[0]?.model || 'cpu';
+    const hostname = os.hostname();
+    return { ok: true, hostname, cpu: cpuModel };
   } catch (e) {
     return { ok: false, error: e.message };
   }

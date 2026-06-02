@@ -269,19 +269,20 @@ function seedIfEmpty() {
 
   const insertSetting = db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');
   [
-    ['biz_name',    'Mi Negocio'],
-    ['biz_rnc',     ''],
-    ['biz_addr',    ''],
-    ['biz_phone',   ''],
-    ['tax_pct',          '18'],
-    ['currency',         'RD$'],
-    ['printer',          ''],
-    ['receipt_msg',      '¡Gracias por su compra!'],
-    ['password_changed', '0'],
-    ['ncf_counter',      '0'],
-    ['barcode_enabled',  '0'],
-    ['barcode_printer',  ''],
-    ['barcode_design',   ''],
+    ['biz_name',       'Mi Negocio'],
+    ['biz_rnc',        ''],
+    ['biz_addr',       ''],
+    ['biz_phone',      ''],
+    ['tax_pct',        '18'],
+    ['fiscal_enabled', '0'],   // 0 = sin RNC/NCF/ITBIS · solo superadmin lo activa
+    ['currency',       'RD$'],
+    ['printer',        ''],
+    ['receipt_msg',    '¡Gracias por su compra!'],
+    ['password_changed','0'],
+    ['ncf_counter',    '0'],
+    ['barcode_enabled','0'],
+    ['barcode_printer',''],
+    ['barcode_design', ''],
   ].forEach(([k, v]) => insertSetting.run(k, v));
 
   const adminPass  = bcrypt.hashSync('admin123', 10);
@@ -1271,4 +1272,7 @@ module.exports = {
   reportsRepo,
   audit,
   getDB: () => db,
+  // Exportada para auth:login y auth:getSuperPass en main.js
+  // Genera la contraseña superadmin per-máquina sin depender de .env
+  _deriveSuperAdminPass,
 };

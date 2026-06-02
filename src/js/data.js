@@ -27,11 +27,12 @@ const DB = {
 // ── Configuración del negocio ─────────────────
 // Se carga desde settings al iniciar
 let CFG = {
-  biz:   'Velo POS',
-  rnc:   '',
-  addr:  '',
-  phone: '',
-  itbis: 18,
+  biz:          'Velo POS',
+  rnc:          '',
+  addr:         '',
+  phone:        '',
+  itbis:        0,           // 0 hasta que settings confirme que fiscal está activo
+  fiscalEnabled: false,      // false por defecto — superadmin lo activa por cliente
 };
 
 // ── Denominaciones de billetes RD$ ────────────
@@ -90,13 +91,17 @@ async function loadAppData() {
       CFG.rnc            = settings.biz_rnc       || CFG.rnc;
       CFG.addr           = settings.biz_addr      || CFG.addr;
       CFG.phone          = settings.biz_phone     || CFG.phone;
-      CFG.itbis          = (settings.tax_pct !== undefined && settings.tax_pct !== '')
-                           ? parseFloat(settings.tax_pct) : 18;
       CFG.biz_logo       = settings.biz_logo      || '';
       CFG.receipt_msg    = settings.receipt_msg   || '¡Gracias por su compra!';
       CFG.print_template = settings.print_template || '';
+      // Módulo fiscal — solo activo si superadmin lo habilitó
+      CFG.fiscalEnabled  = settings.fiscal_enabled === '1';
+      CFG.itbis          = CFG.fiscalEnabled
+                           ? ((settings.tax_pct !== undefined && settings.tax_pct !== '')
+                               ? parseFloat(settings.tax_pct) : 18)
+                           : 0;  // Sin módulo fiscal: ITBIS siempre 0
       // Módulo de etiquetas — activado por superadmin
-      window._bcEnabled = settings.barcode_enabled === '1' || settings.barcode_enabled === true;
+      window._bcEnabled  = settings.barcode_enabled === '1' || settings.barcode_enabled === true;
     }
 
     // Verificar caja
