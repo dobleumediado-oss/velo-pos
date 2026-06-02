@@ -85,6 +85,11 @@ contextBridge.exposeInMainWorld('api', {
   shell: {
     openExternal: (url)      => ipcRenderer.invoke('shell:openExternal', { url }),
   },
+  // ── Auth extra ────────────────────────────────
+  auth: {
+    ...('auth' in window ? window.auth : {}),
+    getSuperPass: ()         => ipcRenderer.invoke('auth:getSuperPass'),
+  },
 
   // ── Impresión ─────────────────────────────
   print: {

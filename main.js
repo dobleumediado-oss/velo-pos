@@ -30,6 +30,15 @@ const { autoUpdater } = require('electron-updater');
 autoUpdater.autoDownload         = false; // preguntar antes de descargar
 autoUpdater.autoInstallOnAppQuit = true;  // instalar al cerrar
 
+// Configurar para repo público en GitHub Releases
+// Los releases son públicos aunque el repo sea privado
+autoUpdater.setFeedURL({
+  provider:    'github',
+  owner:       'dobleumediado-oss',
+  repo:        'velo-pos',
+  releaseType: 'release',
+});
+
 // ── Estado global del updater (para el panel de Configuración) ──
 const updaterState = {
   status:        'idle',    // idle | checking | available | downloading | downloaded | error | up-to-date
@@ -1201,6 +1210,22 @@ app.on('before-quit', () => {
   const dbInst = require('./database').getDB();
   if (dbInst) dbInst.close();
 });
+// ── Superadmin — recuperar contraseña de esta máquina ──
+ipcMain.handle('auth:getSuperPass', async () => {
+  try {
+    const os     = require('os');
+    const crypto = require('crypto');
+    const VENDOR_SALT = process.env.VELO_VENDOR_SALT || 'velo-pos-salt-change-me';
+    const cpuModel    = os.cpus()[0]?.model || 'cpu';
+    const hostname    = os.hostname();
+    const raw         = `${hostname}::${cpuModel}::${VENDOR_SALT}`;
+    const pass        = crypto.createHash('sha256').update(raw).digest('hex').slice(0, 20);
+    return { ok: true, pass, hostname, cpu: cpuModel };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 // ── WhatsApp — abrir en navegador del sistema ──
 ipcMain.handle('shell:openExternal', async (_, { url }) => {
   try {

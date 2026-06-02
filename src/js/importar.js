@@ -237,11 +237,15 @@ function leerJSON(file) {
 }
 
 async function leerExcel(file) {
-  // SheetJS está disponible como XLSX global si se carga desde CDN
-  // Como estamos en Electron, lo cargamos dinámicamente
+  // Cargar SheetJS desde CDN si no está disponible
   if (typeof XLSX === 'undefined') {
-    // Intentar cargarlo como módulo de node en el renderer
-    throw new Error('Para importar Excel instala: npm install xlsx en el proyecto');
+    await new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+      s.onload = res;
+      s.onerror = () => rej(new Error('No se pudo cargar el lector de Excel. Verifica tu conexión a internet.'));
+      document.head.appendChild(s);
+    });
   }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

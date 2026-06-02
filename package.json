@@ -1,6 +1,6 @@
 {
   "name": "velo-pos",
-  "version": "1.4.5",
+  "version": "1.4.7",
   "description": "Sistema POS para micro negocios — República Dominicana",
   "main": "main.js",
   "scripts": {
@@ -94,7 +94,7 @@
       "provider": "github",
       "owner": "dobleumediado-oss",
       "repo": "velo-pos",
-      "private": true
+      "releaseType": "release"
     }
   }
 }

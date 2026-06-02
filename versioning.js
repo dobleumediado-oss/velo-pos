@@ -249,6 +249,23 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.4.4] Layout y UX mejorados');
     }
   },
+  {
+    version: '1.4.5',
+    description: 'Superadmin pass en Panel Dev + WhatsApp shell.openExternal',
+    run(db) {
+      console.log('[MIGRATION 1.4.5] Sin cambios de schema');
+    }
+  },
+  {
+    version: '1.4.6',
+    description: 'Fix importar Excel — carga xlsx desde CDN',
+    run(db) { console.log('[MIGRATION 1.4.6] Sin cambios de schema'); }
+  },
+  {
+    version: '1.4.7',
+    description: 'Fix auto-update 404 repo privado + fix importar Excel',
+    run(db) { console.log('[MIGRATION 1.4.7] Sin cambios de schema'); }
+  },
 ];
 
 // ══════════════════════════════════════════════

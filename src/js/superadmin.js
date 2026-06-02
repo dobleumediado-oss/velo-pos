@@ -29,7 +29,58 @@ async function renderSuperAdmin(el) {
     )
   ));
 
-  // ── Generador de licencias ───────────────────
+  // ── Contraseña de esta instalación ─────────
+  const superPassResult = await window.api.auth.getSuperPass().catch(() => ({ ok: false }));
+  const spPass = superPassResult.ok ? superPassResult.pass : '—';
+  const spHost = superPassResult.ok ? superPassResult.hostname : '';
+  const spCpu  = superPassResult.ok ? (superPassResult.cpu || '').slice(0, 40) : '';
+
+  const superPassCard = h('div', { class: 'card', style: 'margin-bottom:16px' },
+    h('div', { class: 'card-title mb8' }, '🔑 Acceso Superadmin — Esta Instalación'),
+    h('div', { style: 'font-size:12px;color:var(--muted2);margin-bottom:12px' },
+      'Credenciales únicas derivadas del hardware de esta PC — solo tú debes ver esta pantalla'),
+    h('div', { style: 'display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px' },
+      h('div', { style: 'background:var(--surface2);border-radius:8px;padding:12px' },
+        h('div', { style: 'font-size:10px;font-weight:700;color:var(--muted2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px' }, 'Email'),
+        h('div', { style: 'display:flex;align-items:center;gap:8px;flex-wrap:wrap' },
+          h('span', { style: 'font-family:var(--mono);font-size:13px;font-weight:700;color:var(--ink)' }, 'dev@sistema.do'),
+          h('button', {
+            style: 'border:none;background:var(--surface);cursor:pointer;color:var(--muted2);font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--line)',
+            onclick: () => { navigator.clipboard.writeText('dev@sistema.do'); toast('Copiado', 'ok'); }
+          }, 'Copiar')
+        )
+      ),
+      h('div', { style: 'background:var(--surface2);border-radius:8px;padding:12px' },
+        h('div', { style: 'font-size:10px;font-weight:700;color:var(--muted2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px' }, 'Contraseña'),
+        h('div', { style: 'display:flex;align-items:center;gap:8px;flex-wrap:wrap' },
+          h('span', { style: 'font-family:var(--mono);font-size:15px;font-weight:800;color:var(--green);letter-spacing:.05em' }, spPass),
+          superPassResult.ok
+            ? h('button', {
+                style: 'border:none;background:var(--surface);cursor:pointer;color:var(--muted2);font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid var(--line)',
+                onclick: () => { navigator.clipboard.writeText(spPass); toast('Contraseña copiada', 'ok'); }
+              }, 'Copiar')
+            : null
+        )
+      )
+    ),
+    superPassResult.ok
+      ? h('div', { style: 'font-size:11px;color:var(--muted2);background:var(--surface2);border-radius:8px;padding:10px;display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px' },
+          h('div', null, h('strong', null, 'Host: '), spHost),
+          h('div', null, h('strong', null, 'CPU: '),  spCpu)
+        )
+      : null,
+    h('div', { class: 'alrt a', style: 'margin-bottom:0' },
+      h('div', { class: 'alrt-dot a' }),
+      h('div', { style: 'font-size:11px' },
+        'Contraseña ',
+        h('strong', null, 'única para esta PC'),
+        '. Cambia si el cliente cambia de equipo. No compartir esta pantalla.'
+      )
+    )
+  );
+  el.appendChild(superPassCard);
+
+    // ── Generador de licencias ───────────────────
   const licCard = h('div', { class: 'card', style: { marginBottom: '16px' } });
 
   licCard.innerHTML = `
