@@ -9,10 +9,23 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     const vr = await window.api.version.getInfo();
     window._appVersion = vr?.ok ? vr.data?.appVersion : '1.4.1';
-  } catch { window._appVersion = '1.5.2'; }
+  } catch { window._appVersion = '1.5.5'; }
 
   // Cargar todos los datos vía IPC
   await loadAppData();
+
+  // ── Multi-negocios: mostrar selector si hay negocios adicionales ──
+  if (CFG.module_multi_negocio === '1' && window.api?.business) {
+    try {
+      const bizRes = await window.api.business.getAll();
+      const businesses = bizRes?.data || [];
+      if (businesses.length > 0) {
+        // Hay negocios secundarios — mostrar selector antes del login
+        renderBusinessSelector(businesses);
+        return; // el selector se encarga del resto del flujo
+      }
+    } catch(e) { console.warn('[Business] Error cargando negocios:', e.message); }
+  }
 
   // Restaurar sesión de sessionStorage
   const saved = sessionStorage.getItem('vp_user');
@@ -44,34 +57,133 @@ document.addEventListener('DOMContentLoaded', async () => {
 // LOGIN
 // ══════════════════════════════════════════════
 // ── Selector de negocio (multi-negocios) ─────────────────────────────
-async function renderBusinessSelector(onSelect) {
-  if (!window.api?.business) { onSelect(null); return; }
-  const res = await window.api.business.getAll().catch(() => ({ ok:false }));
-  const businesses = res?.data || [];
-  
-  // Si no hay negocios secundarios, continuar con el negocio principal
-  if (!businesses.length) { onSelect(null); return; }
-  
+function renderBusinessSelector(businesses) {
   const root = document.getElementById('root');
   root.innerHTML = '';
-  
-  const wrap = document.createElement('div');
-  wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px;background:var(--bg)';
-  wrap.innerHTML = `
-    <div style="font-size:28px;font-weight:700;color:var(--ink);margin-bottom:8px">Velo POS</div>
-    <div style="font-size:14px;color:var(--muted2);margin-bottom:16px">Selecciona el negocio</div>
-    <div style="display:flex;flex-direction:column;gap:8px;width:320px">
-      <button onclick="window._selectedBiz=null;renderLogin()" 
-        style="padding:14px 20px;border:1.5px solid var(--accent);border-radius:10px;background:var(--accent);color:#fff;font-size:14px;font-weight:600;cursor:pointer">
-        🏪 Negocio Principal
-      </button>
-      ${businesses.map(b => `
-        <button onclick="window._selectedBiz='${b.id}';renderLogin()"
-          style="padding:14px 20px;border:1.5px solid var(--line2);border-radius:10px;background:var(--bg2);color:var(--ink);font-size:14px;font-weight:500;cursor:pointer">
-          🏢 ${b.name}
-        </button>`).join('')}
-    </div>`;
+  root.style.cssText = 'width:100%;height:100%;display:flex;';
+
+  // Usar exactamente las mismas clases CSS del login para consistencia visual
+  const wrap = h('div', {
+    class: 'login-wrap',
+    style: { width:'100%', height:'100%', display:'flex', flexDirection:'column',
+             alignItems:'center', justifyContent:'center', gap:'20px' }
+  },
+    // Reloj igual al del login
+    h('div', { class: 'login-clock-outer' },
+      h('div', { class: 'login-clock-time', id: 'biz-clock-time' }, '00:00:00'),
+      h('div', { class: 'login-clock-date', id: 'biz-clock-date' }, '')
+    ),
+
+    // Card con mismo estilo que login-card
+    h('div', { class: 'login-card', style: { width:'420px' } },
+
+      // Header igual al login
+      h('div', { class: 'login-header' },
+        h('div', { class: 'login-logo' },
+          h('img', { src: 'assets/icon.png',
+            style: { width:'100%', height:'100%', borderRadius:'13px', objectFit:'cover' } })
+        ),
+        h('div', null,
+          h('div', { class: 'login-title' }, 'Velo POS'),
+          h('div', { class: 'login-sub' }, 'Selecciona con qué negocio trabajar')
+        )
+      ),
+
+      // Lista de negocios como "role-row" estilo
+      h('div', { style: { display:'flex', flexDirection:'column', gap:'8px', marginBottom:'8px' } },
+
+        // Negocio principal — estilo role-btn on
+        h('div', {
+          id: 'biz-principal',
+          class: 'role-btn on',
+          style: { display:'flex', alignItems:'center', gap:'12px', padding:'12px 14px',
+                   textAlign:'left', cursor:'pointer' },
+          onclick: () => {
+            window._activeBizId = null;
+            sessionStorage.removeItem('vp_active_biz');
+            clearInterval(window._bizClock);
+            renderLogin();
+          }
+        },
+          h('div', { class: 'role-icon', style: { background:'var(--accent)', flexShrink:'0', width:'32px', height:'32px' },
+            html: svg('home') }),
+          h('div', { style: { flex:'1' } },
+            h('div', { class: 'role-lbl' }, 'Negocio Principal'),
+            h('div', { class: 'role-sub' }, 'Base de datos original')
+          ),
+          h('div', { style: { color:'rgba(255,255,255,.3)' },
+            html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg>` })
+        ),
+
+        // Separador
+        businesses.length ? h('div', {
+          style: { display:'flex', alignItems:'center', gap:'8px', padding:'2px 0' }
+        },
+          h('div', { style: { flex:'1', height:'1px', background:'rgba(255,255,255,.08)' } }),
+          h('div', { style: { fontSize:'10px', color:'rgba(255,255,255,.25)', fontWeight:'600',
+                               textTransform:'uppercase', letterSpacing:'.05em' } }, 'Otros negocios'),
+          h('div', { style: { flex:'1', height:'1px', background:'rgba(255,255,255,.08)' } })
+        ) : null,
+
+        // Negocios secundarios
+        ...businesses.map(b => h('div', {
+          class: 'role-btn',
+          dataset: { bizid: b.id },
+          style: { display:'flex', alignItems:'center', gap:'12px', padding:'12px 14px',
+                   textAlign:'left', cursor:'pointer' },
+          onclick: async function() {
+            root.querySelectorAll('.role-btn').forEach(el => {
+              el.style.pointerEvents = 'none'; el.style.opacity = '.5';
+            });
+            this.style.opacity = '1';
+            this.style.borderColor = 'rgba(22,163,74,.6)';
+            await window.api.settings.set({ key: '_active_biz', value: b.id });
+            window._activeBizId = b.id;
+            sessionStorage.setItem('vp_active_biz', b.id);
+            clearInterval(window._bizClock);
+            await loadAppData();
+            renderLogin();
+          }
+        },
+          h('div', { class: 'role-icon', style: { background:'rgba(255,255,255,.12)', flexShrink:'0', width:'32px', height:'32px' },
+            html: svg('building') }),
+          h('div', { style: { flex:'1', minWidth:'0' } },
+            h('div', { class: 'role-lbl',
+              style: { overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' } }, b.name),
+            h('div', { class: 'role-sub' }, b.description || 'Base de datos independiente')
+          ),
+          h('div', { style: { color:'rgba(255,255,255,.3)' },
+            html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg>` })
+        ))
+      ),
+
+      // Versión al pie
+      h('div', { style: { textAlign:'center', marginTop:'4px' } },
+        h('div', { style: { fontSize:'11px', color:'rgba(255,255,255,.2)' } },
+          `Velo POS v${window._appVersion||'1.5.5'}`)
+      )
+    )
+  );
+
   root.appendChild(wrap);
+
+  // Reloj — mismo código que el login
+  function tickBiz() {
+    const now = new Date();
+    const hh  = String(now.getHours()%12||12).padStart(2,'0');
+    const mm  = String(now.getMinutes()).padStart(2,'0');
+    const ss  = String(now.getSeconds()).padStart(2,'0');
+    const ampm = now.getHours() >= 12 ? 'PM' : 'AM';
+    const days = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+    const months = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto',
+                    'septiembre','octubre','noviembre','diciembre'];
+    const ct = document.getElementById('biz-clock-time');
+    const cd = document.getElementById('biz-clock-date');
+    if (ct) ct.innerHTML = `${hh}<span class="lc-sep">:</span>${mm}<span class="lc-sec">:${ss}</span><span class="lc-ampm">${ampm}</span>`;
+    if (cd) cd.textContent = `${days[now.getDay()]}, ${now.getDate()} de ${months[now.getMonth()]} ${now.getFullYear()}`;
+  }
+  tickBiz();
+  window._bizClock = setInterval(tickBiz, 1000);
 }
 
 function renderLogin() {
@@ -108,6 +220,39 @@ function renderLogin() {
             h('div', { class: 'login-sub' }, 'Gestión comercial · Inventario · Facturación · RD')
           )
         ),
+
+        // ← Botón retroceder al selector (solo si multi-negocios activo y hay negocios)
+        ...(CFG.module_multi_negocio === '1' ? [
+          h('div', {
+            style: { marginBottom:'8px', marginTop:'4px' }
+          },
+            h('button', {
+              style: `display:inline-flex;align-items:center;gap:6px;background:none;border:none;
+                      color:rgba(255,255,255,.4);font-size:12px;cursor:pointer;padding:4px 0;
+                      transition:color .15s`,
+              onmouseenter: function() { this.style.color='rgba(255,255,255,.75)'; },
+              onmouseleave: function() { this.style.color='rgba(255,255,255,.4)'; },
+              onclick: async () => {
+                try {
+                  const bizRes = await window.api.business.getAll();
+                  const businesses = bizRes?.data || [];
+                  if (businesses.length > 0) {
+                    window._activeBizId = null;
+                    sessionStorage.removeItem('vp_active_biz');
+                    await window.api.settings.set({ key: '_active_biz', value: '' });
+                    await loadAppData();
+                    renderBusinessSelector(businesses);
+                    return;
+                  }
+                } catch(e) {}
+                // Si no hay negocios secundarios, simplemente recargar login
+                renderLogin();
+              },
+              html: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                          stroke-width="2.5"><path d="M15 18l-6-6 6-6"/></svg> Cambiar negocio`
+            })
+          )
+        ] : []),
 
         // Selector de rol
         h('div', { class: 'role-row', style: { marginBottom: '16px', marginTop: '16px' } },
@@ -177,7 +322,7 @@ function renderLogin() {
 
         // Versión — leída dinámicamente
         h('div', { style: { textAlign:'center', fontSize:'10px', color:'var(--muted2)', marginTop:'16px' } },
-          `Velo POS v${window._appVersion || '1.5.2'}`
+          `Velo POS v${window._appVersion || '1.5.5'}`
         )
       )
     );
@@ -352,7 +497,7 @@ function buildSidebar() {
     { key: 'devoluciones', icon: 'return', label: 'Devoluciones' },
     { sep: 'Finanzas' },
     { key: 'caja',      icon: 'cash',     label: 'Caja' },
-    { key: 'gastos',    icon: 'dollar',   label: 'Gastos' },
+    ...(CFG.module_gastos === '1' ? [{ key: 'gastos', icon: 'dollar', label: 'Gastos' }] : []),
     ...(CFG.module_sucursales    === '1' ? [{ key: 'sucursales', icon: 'building', label: 'Sucursales'    }] : []),
     ...((CFG.module_vehiculos === '1' || CFG.module_mantenimiento === '1') ? [{ key: 'vehiculos', icon: 'car', label: 'Vehículos' }] : []),
     ...(CFG.module_envios        === '1' ? [{ key: 'envios',     icon: 'truck',    label: 'Envíos'        }] : []),
@@ -629,6 +774,23 @@ async function doLogout() {
   page = 'dash';
   resetInvoices();
   sessionStorage.removeItem('vp_user');
+
+  // Si multi-negocios está activo y hay negocios, volver al selector
+  if (CFG.module_multi_negocio === '1' && window.api?.business) {
+    try {
+      const bizRes = await window.api.business.getAll();
+      const businesses = bizRes?.data || [];
+      if (businesses.length > 0) {
+        // Limpiar negocio activo al cerrar sesión
+        window._activeBizId = null;
+        sessionStorage.removeItem('vp_active_biz');
+        await window.api.settings.set({ key: '_active_biz', value: '' });
+        await loadAppData();
+        renderBusinessSelector(businesses);
+        return;
+      }
+    } catch(e) { console.warn('[Logout] Error cargando negocios:', e.message); }
+  }
   renderLogin();
 }
 

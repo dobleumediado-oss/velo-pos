@@ -201,9 +201,10 @@ async function renderSuperAdmin(el) {
   modsCard.style.marginBottom = '16px';
 
   const modsDefs = [
-    { key: 'module_sucursales',    icon: '🏪', title: 'Sucursales',               desc: 'Gestión de múltiples puntos de venta o sedes del negocio', roles: 'admin' },
+    { key: 'module_gastos',        icon: '💰', title: 'Gastos y Egresos',         desc: 'Registro de gastos del negocio, categorías y reportes de egresos', roles: 'admin' },
+    { key: 'module_sucursales',    icon: '🏪', title: 'Sucursales',               desc: 'Registro de sucursales del negocio (vista local — sync en Cloud 2026)', roles: 'admin' },
     { key: 'module_vehiculos',     icon: '🚗', title: 'Vehículos',                desc: 'Registro de vehículos de la empresa (carros, motos, camiones)', roles: 'admin' },
-    { key: 'module_mantenimiento', icon: '🔧', title: 'Mantenimiento',            desc: 'Historial y alertas de mantenimiento de vehículos', roles: 'admin' },
+    { key: 'module_mantenimiento', icon: '🔧', title: 'Mantenimiento',            desc: 'Historial y alertas de mantenimiento de vehículos (requiere Vehículos)', roles: 'admin' },
     { key: 'module_envios',        icon: '📦', title: 'Envíos y Despachos',       desc: 'Control de entregas con cálculo de distancia y combustible', roles: 'admin+cajero' },
     { key: 'module_ncf_avanzado',  icon: '📋', title: 'NCF Avanzado',             desc: 'Gestión de rangos de comprobantes fiscales con alertas DGII', roles: 'admin' },
     { key: 'module_multi_negocio', icon: '🏢', title: 'Multi-negocios',           desc: 'Múltiples empresas con base de datos separada (requiere reinicio)', roles: 'superadmin' },
@@ -299,16 +300,47 @@ async function renderSuperAdmin(el) {
     });
 
     multiCard.querySelector('#btn-nuevo-negocio')?.addEventListener('click', () => {
-      const name = prompt('Nombre del nuevo negocio:');
-      if (!name?.trim()) return;
-      window.api.business.create({ name: name.trim(), requestUserId: user.id }).then(res => {
+      // Modal para crear negocio
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;background:#0008;z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+      overlay.innerHTML = `
+        <div style="background:var(--bg);border-radius:14px;width:100%;max-width:400px;padding:24px;box-shadow:0 8px 40px #0004">
+          <div style="font-size:16px;font-weight:600;margin-bottom:16px">🏢 Crear nuevo negocio</div>
+          <div class="fg" style="margin-bottom:12px">
+            <label class="lbl">Nombre del negocio *</label>
+            <input class="inp" id="new-biz-name" placeholder="Ej: Taller García Herramientas" autofocus>
+          </div>
+          <div class="fg" style="margin-bottom:16px">
+            <label class="lbl">Descripción (opcional)</label>
+            <input class="inp" id="new-biz-desc" placeholder="Ej: Venta de herramientas y equipos">
+          </div>
+          <div style="font-size:11px;color:var(--muted2);margin-bottom:16px;padding:8px 12px;background:var(--bg2);border-radius:8px">
+            ⚡ Este negocio tendrá su propia base de datos separada. Aparecerá como opción en el login al reiniciar Velo POS.
+          </div>
+          <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button class="btn btn-ghost" id="new-biz-cancel">Cancelar</button>
+            <button class="btn btn-dark" id="new-biz-confirm">Crear negocio</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      overlay.querySelector('#new-biz-cancel').onclick = () => overlay.remove();
+      overlay.querySelector('#new-biz-confirm').onclick = async () => {
+        const name = overlay.querySelector('#new-biz-name').value.trim();
+        const desc = overlay.querySelector('#new-biz-desc').value.trim();
+        if (!name) { overlay.querySelector('#new-biz-name').style.border='1px solid var(--red)'; return; }
+        const btn = overlay.querySelector('#new-biz-confirm');
+        btn.disabled = true; btn.textContent = 'Creando...';
+        const res = await window.api.business.create({ name, description: desc, requestUserId: user.id });
         if (res.ok) {
-          alert(`✓ Negocio "${name}" creado. Aparecerá en el login al reiniciar.`);
+          overlay.remove();
+          if (typeof toast === 'function') toast(`✓ Negocio "${name}" creado — reinicia Velo POS para verlo en el login`);
           renderSuperAdmin(el);
         } else {
+          btn.disabled = false; btn.textContent = 'Crear negocio';
           alert('Error: ' + res.error);
         }
-      });
+      };
+      setTimeout(() => overlay.querySelector('#new-biz-name')?.focus(), 100);
     });
   }
 
