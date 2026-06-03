@@ -163,6 +163,27 @@ async function renderConfiguracion(el) {
     </div>` : ''}`;
   colLeft.appendChild(bizCard);
 
+  // ── NCF Avanzado (cuando módulo activo) ──────
+  if (CFG.module_ncf_avanzado === '1' && isSA) {
+    const ncfCard = h('div', { class: 'card', style: 'margin-top:16px' });
+    ncfCard.innerHTML = `
+      <div class="fxb mb8">
+        <div>
+          <div class="card-title">📋 Comprobantes Fiscales NCF</div>
+          <div style="font-size:11px;color:var(--muted2);margin-top:2px">
+            Gestiona los rangos autorizados por la DGII, alertas de agotamiento y validación de RNC.
+          </div>
+        </div>
+      </div>
+      <div id="ncf-avanzado-container"></div>`;
+    colLeft.appendChild(ncfCard);
+    // Renderizar el módulo NCF dentro del contenedor
+    const ncfContainer = ncfCard.querySelector('#ncf-avanzado-container');
+    if (ncfContainer && typeof renderNCFAvanzado === 'function') {
+      renderNCFAvanzado(ncfContainer);
+    }
+  }
+
   // ── Logo (solo superadmin) ───────────────────
   if (isSA) {
     const logoActual = settings.biz_logo || '';

@@ -251,12 +251,80 @@ async function leerExcel(file) {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
-        const wb    = XLSX.read(e.target.result, { type: 'array' });
-        const ws    = wb.Sheets[wb.SheetNames[0]];
-        const data  = XLSX.utils.sheet_to_json(ws, { defval: '' });
-        if (!data.length) throw new Error('La hoja de Excel está vacía');
-        const headers = Object.keys(data[0]);
-        resolve({ headers, rows: data });
+        const wb = XLSX.read(e.target.result, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+
+        // ── Detección inteligente de encabezados ──────────────────
+        // Leer todas las filas como arrays para analizar la estructura
+        const rawRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+        if (!rawRows.length) throw new Error('La hoja de Excel está vacía');
+
+        // Palabras clave que indican una fila de encabezados real
+        const HEADER_KEYWORDS = [
+          'nombre','name','articulo','producto','cliente','descripcion','description',
+          'precio','price','costo','cost','codigo','code','barcode','stock','cantidad',
+          'existencia','telefono','phone','email','rnc','cedula','categoria','category',
+          'id','clasificacion','tipo','type','marca','brand','proveedor','supplier',
+          'unidad','unit','referencia','sku','pvp','importe','monto','valor',
+          'NOMBRE','ARTICULO','PRODUCTO','PRECIO','CODIGO','CLIENTE','DESCRIPCION',
+          'ID','CLASIFICACION','TIPO','EXISTENCIA','CANTIDAD',
+        ];
+
+        // Función para puntuar cuánto parece una fila de encabezados
+        const scoreRow = (row) => {
+          let score = 0;
+          for (const cell of row) {
+            const val = String(cell || '').trim().toLowerCase();
+            if (!val) continue;
+            if (HEADER_KEYWORDS.some(k => val.includes(k.toLowerCase()))) score += 3;
+            // Penalizar filas con números (datos, no encabezados)
+            if (/^\d+([.,]\d+)?$/.test(val)) score -= 2;
+            // Penalizar filas con direcciones o info de negocio
+            if (val.includes('tel') && val.includes(':')) score -= 5;
+            if (val.includes('rnc:') || val.includes('ruc:')) score -= 5;
+            // Bonificar celdas cortas (encabezados suelen ser cortos)
+            if (val.length < 25 && val.length > 1) score += 1;
+          }
+          return score;
+        };
+
+        // Buscar la fila con mayor puntaje en las primeras 10 filas
+        let bestRow = 0;
+        let bestScore = -99;
+        const searchLimit = Math.min(10, rawRows.length);
+        for (let i = 0; i < searchLimit; i++) {
+          const score = scoreRow(rawRows[i]);
+          if (score > bestScore) { bestScore = score; bestRow = i; }
+        }
+
+        // Si la primera fila ya es buena (score > 0), usarla directamente
+        // Si no, usar la fila detectada como encabezado
+        const headerRow = rawRows[bestRow];
+
+        // Limpiar encabezados: quitar vacíos, normalizar
+        const headers = headerRow.map((h, i) => {
+          const clean = String(h || '').trim().replace(/\s+/g, '_');
+          return clean || `COL_${i + 1}`;
+        });
+
+        // Construir filas de datos desde la fila siguiente al encabezado
+        const dataRows = rawRows.slice(bestRow + 1).filter(row =>
+          row.some(cell => String(cell || '').trim() !== '')
+        );
+
+        const rows = dataRows.map(row => {
+          const obj = {};
+          headers.forEach((h, i) => { obj[h] = row[i] !== undefined ? row[i] : ''; });
+          return obj;
+        });
+
+        if (!rows.length) throw new Error('No se encontraron datos después del encabezado');
+
+        // Filtrar encabezados vacíos del resultado
+        const validHeaders = headers.filter(h => !h.startsWith('COL_') || rows.some(r => r[h]));
+
+        console.log(`[Excel] Encabezado detectado en fila ${bestRow + 1} (score: ${bestScore}):`, validHeaders);
+        resolve({ headers: validHeaders, rows });
       } catch(err) { reject(err); }
     };
     reader.onerror = reject;
@@ -448,46 +516,118 @@ async function ejecutarImportacion() {
         const name  = String(row[mapping.name] || '').trim();
         const price = parseFloat(String(row[mapping.price] || '0').replace(/[^0-9.,-]/g,'').replace(',','.')) || 0;
 
-        if (!name)    { errores.push({ fila: i+2, error: 'Nombre vacío' }); continue; }
-        if (price<=0) { errores.push({ fila: i+2, error: `"${name}" sin precio válido` }); continue; }
+        // Si no hay nombre, generar uno provisional para no perder el registro
+        if (!name) {
+          name = `Producto sin nombre (fila ${i+2})`;
+          errores.push({ fila: i+2, nombre: name, campo: 'nombre', error: 'Sin nombre — importado con nombre provisional', tipo: 'ajuste' });
+        }
+
+        // Limpiar precio — acepta enteros, decimales, con comas o puntos
+        const cleanNum = (v) => {
+          if (!v && v !== 0) return 0;
+          const s = String(v).replace(/[^0-9.,]/g, '');
+          // Si tiene coma como separador decimal (ej: 1.500,75 → 1500.75)
+          if (s.includes(',') && s.includes('.')) {
+            return parseFloat(s.replace(/\./g,'').replace(',','.')) || 0;
+          }
+          // Si solo tiene coma (ej: 1500,75 → 1500.75)
+          if (s.includes(',')) return parseFloat(s.replace(',','.')) || 0;
+          return parseFloat(s) || 0;
+        };
+
+        const cleanInt = (v) => Math.round(Math.abs(cleanNum(v)));
+
+        const ajustes = []; // avisos de campos que se importaron con valor por defecto
+        if (price <= 0) ajustes.push('precio pendiente de ajuste');
 
         const data = {
           name,
-          code:      mapping.code      ? String(row[mapping.code] || '').trim() || genCode() : genCode(),
-          barcode:   mapping.barcode   ? String(row[mapping.barcode] || '').trim()  : '',
-          price,
-          cost:      mapping.cost      ? parseFloat(String(row[mapping.cost]||'0').replace(/[^0-9.,-]/g,'').replace(',','.')) || 0 : 0,
-          wholesale: mapping.wholesale ? parseFloat(String(row[mapping.wholesale]||'0').replace(/[^0-9.,-]/g,'').replace(',','.')) || price : price,
-          stock:     mapping.stock     ? parseInt(String(row[mapping.stock]||'0').replace(/[^0-9]/g,''))    || 0 : 0,
-          stock_min: mapping.stock_min ? parseInt(String(row[mapping.stock_min]||'5').replace(/[^0-9]/g,'')) || 5 : 5,
-          category:  mapping.category  ? String(row[mapping.category] || '').trim() : '',
-          brand:     mapping.brand     ? String(row[mapping.brand]    || '').trim() : '',
-          unit:      mapping.unit      ? String(row[mapping.unit]     || '').trim() : 'und',
+          code:      mapping.code      ? (String(row[mapping.code]||'').trim() || genCode()) : genCode(),
+          barcode:   mapping.barcode   ? String(row[mapping.barcode]||'').trim() : '',
+          price:     price > 0 ? price : 0,       // importar aunque sea 0
+          cost:      mapping.cost      ? cleanNum(row[mapping.cost])      : 0,
+          wholesale: mapping.wholesale ? cleanNum(row[mapping.wholesale])  : (price > 0 ? price : 0),
+          stock:     mapping.stock     ? cleanInt(row[mapping.stock])     : 0,
+          stock_min: mapping.stock_min ? cleanInt(row[mapping.stock_min]) : 0,
+          category:  mapping.category  ? String(row[mapping.category]||'').trim() : '',
+          brand:     mapping.brand     ? String(row[mapping.brand]||'').trim()    : '',
+          unit:      mapping.unit      ? String(row[mapping.unit]||'').trim()     : 'und',
           description: mapping.description ? String(row[mapping.description]||'').trim() : '',
         };
 
-        const result = await window.api.products.create({ data, requestUserId: user.id });
-        if (result.ok) importados++;
-        else errores.push({ fila: i+2, error: result.error || 'Error al crear producto' });
+        let result = await window.api.products.create({ data, requestUserId: user.id });
+        // Si falla, intentar con datos mínimos (solo nombre y precio 0)
+        if (!result.ok) {
+          const dataMinima = { name, code: genCode(), price: 0, cost: 0, wholesale: 0,
+            stock: 0, stock_min: 0, barcode: '', category: '', brand: '', unit: 'und', description: '' };
+          result = await window.api.products.create({ data: dataMinima, requestUserId: user.id });
+          if (result.ok) {
+            importados++;
+            errores.push({ fila: i+2, nombre: name, campo: 'datos', error: 'Importado con datos mínimos — revisar precio, código y categoría', tipo: 'ajuste' });
+          } else {
+            // Último recurso: registrar como ajuste de todas formas (no bloquear)
+            errores.push({ fila: i+2, nombre: name, campo: 'sistema', error: result.error + ' — revisar manualmente', tipo: 'ajuste' });
+          }
+        } else {
+          importados++;
+          if (ajustes.length) errores.push({ fila: i+2, nombre: name, campo: 'precio', error: `Importado con ${ajustes.join(', ')}`, tipo: 'ajuste' });
+        }
 
       } else {
         // Clientes
-        const name = String(row[mapping.name] || '').trim();
-        if (!name) { errores.push({ fila: i+2, error: 'Nombre vacío' }); continue; }
+        // Intentar extraer nombre de cualquier columna disponible
+        let name = mapping.name ? String(row[mapping.name] || '').trim() : '';
+        if (!name) {
+          // Buscar en todas las columnas alguna que parezca un nombre
+          for (const col of Object.keys(row)) {
+            const v = String(row[col] || '').trim();
+            if (v.length > 3 && v.length < 80 && /[A-Za-záéíóúñÑÁÉÍÓÚ]/.test(v) && !/^\d+$/.test(v)) {
+              name = v;
+              break;
+            }
+          }
+        }
+        // Si no hay nombre reconocible, generar nombre provisional
+        if (!name) {
+          name = `Cliente sin nombre (fila ${i+2})`;
+          errores.push({ fila: i+2, nombre: name, campo: 'nombre', error: 'Sin nombre reconocible — importado con nombre provisional', tipo: 'ajuste' });
+        }
+
+        // Limpiar nombre (quitar caracteres no imprimibles)
+        name = name.replace(/[^ -~áéíóúñÁÉÍÓÚÑüÜ]/g, ' ').replace(/\s+/g,' ').trim();
+
+        const ajustesC = [];
+        const phone = mapping.phone ? String(row[mapping.phone]||'').trim() : '';
+        const email = mapping.email ? String(row[mapping.email]||'').trim() : '';
+        const rnc   = mapping.rnc   ? String(row[mapping.rnc]||'').trim()   : '';
+
+        if (!phone && !email && !rnc) ajustesC.push('sin teléfono/email/RNC');
 
         const data = {
           name,
-          phone:        mapping.phone        ? String(row[mapping.phone]||'').trim()        : '',
-          email:        mapping.email        ? String(row[mapping.email]||'').trim()        : '',
-          rnc:          mapping.rnc          ? String(row[mapping.rnc]||'').trim()          : '',
+          phone,
+          email,
+          rnc,
           address:      mapping.address      ? String(row[mapping.address]||'').trim()      : '',
           credit_limit: mapping.credit_limit ? parseFloat(String(row[mapping.credit_limit]||'0').replace(/[^0-9.]/g,'')) || 0 : 0,
           credit_days:  30,
         };
 
-        const result = await window.api.customers.create({ data, requestUserId: user.id });
-        if (result.ok) importados++;
-        else errores.push({ fila: i+2, error: result.error || 'Error al crear cliente' });
+        let result = await window.api.customers.create({ data, requestUserId: user.id });
+        // Si falla, intentar solo con nombre
+        if (!result.ok) {
+          const dataMinima = { name, phone: '', email: '', rnc: '', address: '', credit_limit: 0, credit_days: 30 };
+          result = await window.api.customers.create({ data: dataMinima, requestUserId: user.id });
+          if (result.ok) {
+            importados++;
+            errores.push({ fila: i+2, nombre: name, campo: 'datos', error: 'Importado solo con nombre — completar teléfono, email y RNC', tipo: 'ajuste' });
+          } else {
+            errores.push({ fila: i+2, nombre: name, campo: 'sistema', error: result.error + ' — revisar manualmente', tipo: 'ajuste' });
+          }
+        } else {
+          importados++;
+          if (ajustesC.length) errores.push({ fila: i+2, nombre: name, campo: 'contacto', error: `Importado — ${ajustesC.join(', ')}`, tipo: 'ajuste' });
+        }
       }
     } catch(e) {
       errores.push({ fila: i+2, error: e.message });
@@ -507,24 +647,47 @@ async function ejecutarImportacion() {
 // ══════════════════════════════════════════════
 function mostrarResultadoImportacion(importados, errores, total) {
   const exitosos = importados;
-  const fallidos = errores.length;
+  // Separar errores reales de ajustes pendientes
+  const soloAjustes = errores.filter(e => e.tipo === 'ajuste');
+  const soloErrores = errores.filter(e => e.tipo !== 'ajuste');
+  const fallidos    = soloErrores.length;
   const color    = fallidos === 0 ? 'green' : fallidos < total * 0.1 ? 'var(--amber)' : 'var(--red)';
 
-  const errHtml = errores.slice(0, 10).map(e =>
-    `<tr><td style="color:var(--muted2)">Fila ${e.fila}</td><td style="color:var(--red);font-size:12px">${e.error}</td></tr>`
-  ).join('');
+  // Guardar en estado para el PDF
+  importState._lastResult = { importados, errores, total, tipo: importState.tipo,
+    archivo: importState.file?.name || 'archivo', fecha: new Date().toLocaleString('es-DO') };
+
+  const ajustesHtml = soloAjustes.slice(0,20).map(e =>
+    `<tr style="background:#fffbeb">
+      <td style="color:var(--muted2);font-size:11px;padding:4px 6px">Fila ${e.fila}</td>
+      <td style="font-size:11px;padding:4px 6px;font-weight:500">${e.nombre||''}</td>
+      <td style="color:#92400e;font-size:11px;padding:4px 6px">${e.error}</td>
+    </tr>`).join('');
+
+  const errHtml = soloErrores.slice(0,10).map(e =>
+    `<tr style="background:#fef2f2">
+      <td style="color:var(--muted2);font-size:11px;padding:4px 6px">Fila ${e.fila}</td>
+      <td style="font-size:11px;padding:4px 6px;font-weight:500">${e.nombre||''}</td>
+      <td style="color:var(--red);font-size:11px;padding:4px 6px">${e.error}</td>
+    </tr>`).join('');
 
   openModal(`
     <div style="text-align:center;margin-bottom:16px">
-      <div style="font-size:40px;margin-bottom:8px">${fallidos === 0 ? '🎉' : '✅'}</div>
+      <div style="font-size:40px;margin-bottom:8px">${fallidos === 0 ? '🎉' : soloAjustes.length > 0 ? '✅' : '⚠️'}</div>
       <div class="modal-title">Importación completada</div>
+      <div class="modal-sub">${importState.file?.name}</div>
     </div>
 
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">
+    <div style="display:grid;grid-template-columns:repeat(${soloAjustes.length>0?'4':'3'},1fr);gap:8px;margin-bottom:16px">
       <div style="text-align:center;background:var(--surface2);border-radius:var(--r-md);padding:12px">
         <div style="font-size:24px;font-weight:700;color:var(--green)">${exitosos.toLocaleString()}</div>
         <div style="font-size:11px;color:var(--muted2)">Importados</div>
       </div>
+      ${soloAjustes.length > 0 ? `
+      <div style="text-align:center;background:#fffbeb;border-radius:var(--r-md);padding:12px">
+        <div style="font-size:24px;font-weight:700;color:#92400e">${soloAjustes.length.toLocaleString()}</div>
+        <div style="font-size:11px;color:#92400e">Ajustar precio</div>
+      </div>` : ''}
       <div style="text-align:center;background:var(--surface2);border-radius:var(--r-md);padding:12px">
         <div style="font-size:24px;font-weight:700;color:${color}">${fallidos.toLocaleString()}</div>
         <div style="font-size:11px;color:var(--muted2)">Con errores</div>
@@ -535,28 +698,180 @@ function mostrarResultadoImportacion(importados, errores, total) {
       </div>
     </div>
 
-    ${errores.length ? `
-      <div style="margin-bottom:12px">
-        <div style="font-weight:500;font-size:12px;margin-bottom:6px">
-          Primeros ${Math.min(errores.length,10)} errores:
+    ${soloAjustes.length > 0 ? `
+      <div style="margin-bottom:10px">
+        <div style="font-weight:600;font-size:12px;color:#92400e;margin-bottom:6px">
+          ⚡ ${soloAjustes.length} importados — ajustar precio u otros datos:
         </div>
-        <table class="tbl" style="font-size:12px">
-          <thead><tr><th>Fila</th><th>Error</th></tr></thead>
+        <table class="tbl" style="font-size:11px">
+          <thead><tr><th>Fila</th><th>Nombre</th><th>Pendiente</th></tr></thead>
+          <tbody>${ajustesHtml}</tbody>
+        </table>
+        ${soloAjustes.length > 20 ? `<div style="font-size:11px;color:var(--muted2);margin-top:4px">
+          ...y ${soloAjustes.length-20} más — ver reporte PDF completo</div>` : ''}
+      </div>` : ''}
+
+    ${soloErrores.length > 0 ? `
+      <div style="margin-bottom:10px">
+        <div style="font-weight:600;font-size:12px;color:var(--red);margin-bottom:6px">
+          ⚠ ${soloErrores.length} registros que necesitan revisión manual:
+        </div>
+        <table class="tbl" style="font-size:11px">
+          <thead><tr><th>Fila</th><th>Nombre</th><th>Error</th></tr></thead>
           <tbody>${errHtml}</tbody>
         </table>
-        ${errores.length > 10 ? `<div style="font-size:11px;color:var(--muted2);margin-top:4px">
-          ...y ${errores.length-10} más</div>` : ''}
+        ${soloErrores.length > 10 ? `<div style="font-size:11px;color:var(--muted2);margin-top:4px">
+          ...y ${soloErrores.length-10} más — descarga el reporte PDF para verlos todos</div>` : ''}
       </div>` : ''}
 
     <div class="modal-foot">
       <button class="btn btn-out" onclick="wizardStepImportar()">
         Importar otro archivo
       </button>
+      <button class="btn btn-out" onclick="importarDescargarPDF()" style="color:var(--blue);border-color:var(--blue)">
+        ${svg('download')} Reporte PDF
+      </button>
       <button class="btn btn-dark" onclick="wizardStep=4;renderWizardStep()">
         ${svg('check')} Continuar
       </button>
     </div>
   `, 'modal-xl');
+}
+
+// ── Generar y descargar PDF del resultado ─────
+async function importarDescargarPDF() {
+  const r = importState._lastResult;
+  if (!r) { toast('Sin resultado de importación para exportar', 'err'); return; }
+
+  const fecha    = r.fecha;
+  const archivo  = r.archivo;
+  const tipo     = r.tipo === 'productos' ? 'Productos' : 'Clientes';
+  const ok       = r.importados;
+  const fail     = r.errores.length;
+  const total    = r.total;
+  const pct      = total > 0 ? Math.round((ok / total) * 100) : 0;
+
+  // Separar ajustes de errores reales para el PDF
+  const pdfAjustes = (r.errores||[]).filter(e => e.tipo === 'ajuste');
+  const pdfErrores = (r.errores||[]).filter(e => e.tipo !== 'ajuste');
+
+  const ajusteRows = pdfAjustes.map((e, i) => `
+    <tr style="background:${i%2===0?'#fffbeb':'#fef9c3'}">
+      <td style="padding:6px 10px;color:#6b7280;font-size:11px;border-bottom:1px solid #fde68a">Fila ${e.fila}</td>
+      <td style="padding:6px 10px;color:#374151;font-size:11px;border-bottom:1px solid #fde68a;font-weight:500">${e.nombre || ''}</td>
+      <td style="padding:6px 10px;color:#92400e;font-size:11px;border-bottom:1px solid #fde68a">${e.error || ''}</td>
+      <td style="padding:6px 10px;color:#6b7280;font-size:11px;border-bottom:1px solid #fde68a">${e.campo || ''}</td>
+    </tr>`).join('');
+
+  const errRows = pdfErrores.map((e, i) => `
+    <tr style="background:${i%2===0?'#fef2f2':'#fee2e2'}">
+      <td style="padding:6px 10px;color:#6b7280;font-size:11px;border-bottom:1px solid #fecaca">Fila ${e.fila}</td>
+      <td style="padding:6px 10px;color:#374151;font-size:11px;border-bottom:1px solid #fecaca;font-weight:500">${e.nombre || ''}</td>
+      <td style="padding:6px 10px;color:#dc2626;font-size:11px;border-bottom:1px solid #fecaca">${e.error || 'Error desconocido'}</td>
+      <td style="padding:6px 10px;color:#6b7280;font-size:11px;border-bottom:1px solid #fecaca">${e.campo || ''}</td>
+    </tr>`).join('');
+
+  const html = `<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8">
+<title>Reporte Importación — ${archivo}</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:Arial,sans-serif; font-size:13px; color:#111; padding:32px; }
+  .header { border-bottom:3px solid #16A34A; padding-bottom:16px; margin-bottom:20px; }
+  .logo { font-size:20px; font-weight:800; color:#16A34A; margin-bottom:4px; }
+  .doc-title { font-size:15px; font-weight:700; color:#111; }
+  .doc-sub { font-size:11px; color:#6b7280; margin-top:2px; }
+  .metrics { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:20px; }
+  .ajuste-box { background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:14px; margin-bottom:20px; }
+  .error-box  { background:#fef2f2; border:1px solid #fecaca; border-radius:8px; padding:14px; margin-bottom:20px; }
+  .box-title  { font-weight:700; font-size:13px; margin-bottom:8px; }
+  .metric { background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:12px; text-align:center; }
+  .metric-val { font-size:26px; font-weight:800; }
+  .metric-lbl { font-size:10px; color:#6b7280; margin-top:2px; text-transform:uppercase; letter-spacing:.05em; }
+  .section-title { font-size:13px; font-weight:700; margin-bottom:10px; color:#111; }
+  table { width:100%; border-collapse:collapse; }
+  th { background:#f3f4f6; padding:8px 10px; text-align:left; font-size:11px; font-weight:700;
+       text-transform:uppercase; letter-spacing:.05em; color:#6b7280; border-bottom:2px solid #e5e7eb; }
+  .success-box { background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px;
+                 padding:14px; margin-bottom:20px; color:#166534; font-size:12px; }
+  .footer { margin-top:28px; padding-top:12px; border-top:1px solid #e5e7eb;
+            font-size:10px; color:#9ca3af; text-align:center; }
+  @media print { body { padding:16px; } }
+</style>
+</head><body>
+
+<div class="header">
+  <div class="logo">Velo POS</div>
+  <div class="doc-title">Reporte de Importación — ${tipo}</div>
+  <div class="doc-sub">Archivo: ${archivo} &nbsp;·&nbsp; Fecha: ${fecha} &nbsp;·&nbsp; ${CFG.biz || 'Velo POS'}</div>
+</div>
+
+<div class="metrics">
+  <div class="metric">
+    <div class="metric-val" style="color:#16A34A">${ok.toLocaleString()}</div>
+    <div class="metric-lbl">Importados</div>
+  </div>
+  <div class="metric" style="${pdfAjustes.length>0?'background:#fffbeb;border-color:#fde68a':''}">
+    <div class="metric-val" style="color:${pdfAjustes.length>0?'#92400e':'#16A34A'}">${pdfAjustes.length.toLocaleString()}</div>
+    <div class="metric-lbl">Ajustar precio</div>
+  </div>
+  <div class="metric" style="${pdfErrores.length>0?'background:#fef2f2;border-color:#fecaca':''}">
+    <div class="metric-val" style="color:${pdfErrores.length>0?'#DC2626':'#16A34A'}">${pdfErrores.length.toLocaleString()}</div>
+    <div class="metric-lbl">No importados</div>
+  </div>
+  <div class="metric">
+    <div class="metric-val">${total.toLocaleString()}</div>
+    <div class="metric-lbl">Total filas</div>
+  </div>
+  <div class="metric">
+    <div class="metric-val" style="color:${pct===100?'#16A34A':pct>=90?'#D97706':'#DC2626'}">${pct}%</div>
+    <div class="metric-lbl">Éxito</div>
+  </div>
+</div>
+
+${pdfAjustes.length === 0 && pdfErrores.length === 0 ? `
+<div class="success-box">
+  ✓ Importación perfecta — todos los registros se importaron sin errores.
+</div>` : ''}
+
+${pdfAjustes.length > 0 ? `
+<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px;margin-bottom:20px">
+  <div style="font-weight:700;font-size:13px;color:#92400e;margin-bottom:6px">⚡ ${pdfAjustes.length} importados — Requieren completar datos</div>
+  <p style="font-size:11px;color:#78350f;margin-bottom:10px">
+    Estos registros se guardaron en el sistema. Ve a Inventario o Clientes en Velo POS para completar los campos faltantes.
+  </p>
+  <table>
+    <thead><tr><th style="width:60px">Fila</th><th>Nombre</th><th>Pendiente</th><th>Campo</th></tr></thead>
+    <tbody>${ajusteRows}</tbody>
+  </table>
+</div>` : ''}
+
+${pdfErrores.length > 0 ? `
+<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:14px;margin-bottom:20px">
+  <div style="font-weight:700;font-size:13px;color:#dc2626;margin-bottom:6px">⚠ ${pdfErrores.length} registros — revisar manualmente</div>
+  <p style="font-size:11px;color:#991b1b;margin-bottom:10px">
+    Estos registros se importaron con datos mínimos. Búscalos en el sistema y completa su información.
+  </p>
+  <table>
+    <thead><tr><th style="width:60px">Fila</th><th>Nombre</th><th>Error</th><th>Campo</th></tr></thead>
+    <tbody>${errRows}</tbody>
+  </table>
+</div>` : ''}
+
+<div class="footer">
+  ${CFG.biz || 'Velo POS'} · Generado el ${fecha} · velo-pos v${window._appVersion || ''}
+</div>
+
+<script>window.onload=()=>window.print()<\/script>
+</body></html>`;
+
+  // Abrir en ventana nueva para imprimir/guardar
+  const win = window.open('', '_blank', 'width=900,height=700,scrollbars=yes');
+  if (!win) { toast('Activa las ventanas emergentes para descargar el PDF', 'w'); return; }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+  toast('✓ Reporte abierto — usa Ctrl+P / Cmd+P para guardar como PDF', 'ok');
 }
 
 // ══════════════════════════════════════════════

@@ -103,7 +103,8 @@ function _loadApiKey() {
 const {
   initDB, authRepo, settingsRepo, usersRepo,
   productsRepo, customersRepo, cashRepo,
-  salesRepo, returnsRepo, reportsRepo, suppliersRepo, purchasesRepo, audit
+  salesRepo, returnsRepo, reportsRepo, suppliersRepo, purchasesRepo, audit,
+  expensesRepo, branchesRepo, vehiclesRepo, maintenanceRepo, deliveriesRepo, ncfRepo
 } = require('./database');
 
 const {
@@ -1384,6 +1385,552 @@ ipcMain.handle('purchases:cancel', async (_, { id, userId }) => {
 });
 
 
+
+
+// ══════════════════════════════════════════════
+// IPC — SUCURSALES
+// ══════════════════════════════════════════════
+ipcMain.handle('branches:getAll', async () => {
+  try { return { ok:true, data: branchesRepo.getAll() }; } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('branches:create', async (_, { data, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    const id = branchesRepo.create(data);
+    audit(requestUserId, u.name, 'sucursal_creada', 'branches', id, data.name);
+    return { ok:true, id };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('branches:update', async (_, { id, data, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    branchesRepo.update(id, data);
+    return { ok:true };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('branches:delete', async (_, { id, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || u.role !== 'superadmin') return { ok:false, error:'Solo superadmin' };
+    branchesRepo.delete(id);
+    return { ok:true };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+
+// ══════════════════════════════════════════════
+// IPC — VEHÍCULOS
+// ══════════════════════════════════════════════
+ipcMain.handle('vehicles:getAll', async () => {
+  try { return { ok:true, data: vehiclesRepo.getAll() }; } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('vehicles:create', async (_, { data, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    data.user_id = requestUserId;
+    const id = vehiclesRepo.create(data);
+    audit(requestUserId, u.name, 'vehiculo_creado', 'vehicles', id, `${data.brand} ${data.model}`);
+    return { ok:true, id };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('vehicles:update', async (_, { id, data, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    vehiclesRepo.update(id, data);
+    return { ok:true };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('vehicles:delete', async (_, { id, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    vehiclesRepo.delete(id);
+    return { ok:true };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('vehicles:calcFuel', async (_, { vehicleId, distanceKm, requestUserId }) => {
+  try {
+    const fuelPrices = {
+      premium: settingsRepo.get('fuel_price_premium') || '293',
+      regular: settingsRepo.get('fuel_price_regular') || '276',
+      diesel:  settingsRepo.get('fuel_price_diesel')  || '239',
+    };
+    const result = vehiclesRepo.calcFuelCost(vehicleId, distanceKm, fuelPrices);
+    return { ok:true, data: result };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+
+// ══════════════════════════════════════════════
+// IPC — MANTENIMIENTO
+// ══════════════════════════════════════════════
+ipcMain.handle('maintenance:getTypes', async () => {
+  try { return { ok:true, data: maintenanceRepo.getTypes() }; } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('maintenance:getByVehicle', async (_, { vehicleId }) => {
+  try { return { ok:true, data: maintenanceRepo.getByVehicle(vehicleId) }; } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('maintenance:getPending', async () => {
+  try { return { ok:true, data: maintenanceRepo.getPending() }; } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('maintenance:create', async (_, { data, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    data.user_id = requestUserId;
+    const id = maintenanceRepo.create(data);
+    // Actualizar odómetro del vehículo si viene
+    if (data.odometer_at) {
+      const v = vehiclesRepo.getById(data.vehicle_id);
+      if (v && data.odometer_at > v.odometer) {
+        vehiclesRepo.update(data.vehicle_id, { ...v, odometer: data.odometer_at });
+      }
+    }
+    return { ok:true, id };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('maintenance:delete', async (_, { id, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    maintenanceRepo.delete(id);
+    return { ok:true };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+
+// ══════════════════════════════════════════════
+// IPC — ENVÍOS
+// ══════════════════════════════════════════════
+ipcMain.handle('deliveries:getAll', async (_, filters) => {
+  try { return { ok:true, data: deliveriesRepo.getAll(filters||{}) }; } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('deliveries:getSummary', async () => {
+  try { return { ok:true, data: deliveriesRepo.getSummary() }; } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('deliveries:create', async (_, { data, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u) return { ok:false, error:'Sin sesión' };
+    data.user_id = requestUserId;
+    // Calcular combustible si tiene vehículo y distancia
+    if (data.vehicle_id && data.distance_km) {
+      const fuelPrices = {
+        premium: settingsRepo.get('fuel_price_premium') || '293',
+        regular: settingsRepo.get('fuel_price_regular') || '276',
+        diesel:  settingsRepo.get('fuel_price_diesel')  || '239',
+      };
+      const calc = vehiclesRepo.calcFuelCost(data.vehicle_id, data.distance_km, fuelPrices);
+      if (calc) { data.fuel_used = calc.gallons; data.fuel_cost = calc.cost; }
+    }
+    const id = deliveriesRepo.create(data);
+    audit(requestUserId, u.name, 'envio_creado', 'deliveries', id, data.dest_address);
+    return { ok:true, id, fuel_cost: data.fuel_cost };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('deliveries:updateStatus', async (_, { id, status, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u) return { ok:false, error:'Sin sesión' };
+    deliveriesRepo.updateStatus(id, status, requestUserId);
+    audit(requestUserId, u.name, `envio_${status}`, 'deliveries', id, '');
+    return { ok:true };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+
+// ══════════════════════════════════════════════
+// IPC — NCF AVANZADO
+// ══════════════════════════════════════════════
+ipcMain.handle('ncf:getSequences', async () => {
+  try { return { ok:true, data: ncfRepo.getSequences() }; } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('ncf:createSequence', async (_, { data, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    const id = ncfRepo.createSequence(data);
+    audit(requestUserId, u.name, 'ncf_secuencia_creada', 'ncf_sequences', id, `${data.type}: ${data.from_num}-${data.to_num}`);
+    return { ok:true, id };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('ncf:getAlerts', async () => {
+  try { return { ok:true, data: ncfRepo.getAlerts() }; } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('ncf:validateRnc', async (_, { rnc }) => {
+  try {
+    const clean = (rnc || '').replace(/[-\s]/g, '').trim();
+    if (clean.length < 9) return { ok:false, error:'RNC debe tener al menos 9 dígitos' };
+    if (clean.length > 11) return { ok:false, error:'RNC no puede tener más de 11 dígitos' };
+
+    const { net } = require('electron');
+
+    // ── API principal: rnc.megaplus.com.do ─────────────────────────────
+    // API JSON real que consulta directamente la DGII
+    // Devuelve 404 cuando el RNC no existe — no hay falsos positivos
+    try {
+      const url = 'https://rnc.megaplus.com.do/api/consulta?rnc=' + clean;
+      const r = await net.fetch(url, {
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'VeloPOS/1.5.5',
+        }
+      });
+
+      const data = await r.json();
+
+      // HTTP 200 — RNC encontrado y válido
+      if (r.ok && data && !data.error) {
+        return {
+          ok: true,
+          rnc:      data.cedula_rnc      || clean,
+          nombre:   data.nombre_razon_social || data.nombre_comercial || 'Sin nombre',
+          comercial: data.nombre_comercial || '',
+          estado:   data.estado          || 'ACTIVO',
+          categoria: data.actividad_economica || '',
+          regimen:  data.regimen_de_pagos || '',
+          electronico: data.facturador_electronico || 'NO',
+          fuente:   'DGII vía rnc.megaplus.com.do',
+        };
+      }
+
+      // HTTP 404 — RNC no inscrito en la DGII
+      if (r.status === 404) {
+        return { ok:false, error:'RNC ' + clean + ' no se encuentra inscrito como contribuyente en la DGII' };
+      }
+
+      // HTTP 400 — formato inválido
+      if (r.status === 400) {
+        return { ok:false, error:'Formato de RNC inválido. Debe tener 9 o 11 dígitos.' };
+      }
+
+      // Otro error de servidor
+      return { ok:false, error:'Error del servidor DGII (código ' + r.status + '). Intenta de nuevo.' };
+
+    } catch(e1) {
+      console.warn('[RNC] megaplus.com.do error:', e1.message);
+      // Fallback: api.rncrd.com si megaplus falla
+      try {
+        const r2 = await net.fetch('https://api.rncrd.com/api/rnc/' + clean, {
+          headers: { 'Accept': 'application/json', 'User-Agent': 'VeloPOS/1.5.5' }
+        });
+        if (r2.ok) {
+          const d2 = await r2.json();
+          if (d2 && d2.nombre) {
+            return { ok:true, rnc: clean, nombre: d2.nombre, estado: d2.estado||'ACTIVO', fuente: 'api.rncrd.com' };
+          }
+        }
+        return { ok:false, error:'RNC no encontrado en la DGII' };
+      } catch(e2) {
+        return { ok:false, error:'Sin conexión a internet. Verifica tu red e intenta de nuevo.' };
+      }
+    }
+  } catch(e) {
+    return { ok:false, error:'Error inesperado: ' + e.message };
+  }
+});
+
+// ══════════════════════════════════════════════
+// IPC — MÓDULO GASTOS Y CUENTAS POR PAGAR
+// ══════════════════════════════════════════════
+
+// ── Configuración ─────────────────────────────
+ipcMain.handle('expenses:getConfig', async (_, { requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    return { ok:true, config: expensesRepo.getConfig() };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('expenses:setConfig', async (_, { key, value, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    expensesRepo.setConfig(key, value);
+    return { ok:true };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+
+// ── Categorías ────────────────────────────────
+ipcMain.handle('expenses:getCategories', async () => {
+  try { return { ok:true, data: expensesRepo.getCategories() }; }
+  catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('expenses:createCategory', async (_, data) => {
+  try {
+    const u = authRepo.findById(data.requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    const id = expensesRepo.createCategory(data);
+    audit(data.requestUserId, u.name, 'categoria_gasto_creada', 'expense_categories', id, data.name);
+    return { ok:true, id };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('expenses:updateCategory', async (_, { id, requestUserId, ...data }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    expensesRepo.updateCategory(id, data);
+    return { ok:true };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+
+// ── Gastos ────────────────────────────────────
+ipcMain.handle('expenses:getAll', async (_, filters) => {
+  try { return { ok:true, data: expensesRepo.getAll(filters||{}) }; }
+  catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('expenses:getById', async (_, { id }) => {
+  try { return { ok:true, data: expensesRepo.getById(id) }; }
+  catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('expenses:getSummary', async (_, filters) => {
+  try { return { ok:true, data: expensesRepo.getSummary(filters||{}) }; }
+  catch(e) { return { ok:false, error:e.message }; }
+});
+
+ipcMain.handle('expenses:create', async (_, { data, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u) return { ok:false, error:'Usuario no válido' };
+
+    // Verificar límite de cajero
+    const cfg = expensesRepo.getConfig();
+    const cajeroLimit = parseFloat(cfg.cajero_limit || 1500);
+    let status = data.status || 'pendiente_pago';
+
+    if (u.role === 'cajero') {
+      // Cajero solo puede registrar desde caja abierta
+      const session = cashRepo.getOpen();
+      if (!session) return { ok:false, error:'Debes tener una caja abierta para registrar gastos' };
+      data.cash_session_id = session.id;
+      data.payment_source = 'caja';
+      if ((data.total || data.amount || 0) > cajeroLimit) {
+        status = 'pendiente_aprobacion';
+        data.payment_source = 'pendiente';
+      }
+    }
+
+    data.status = status;
+    data.user_id = requestUserId;
+    const id = expensesRepo.create(data);
+    audit(requestUserId, u.name, 'gasto_creado', 'expenses', id, data.description);
+
+    // Si es cajero, pago directo sin aprobación y caja disponible
+    if (u.role === 'cajero' && status === 'pendiente_pago' && data.payment_source === 'caja') {
+      const session = cashRepo.getOpen();
+      if (session) {
+        expensesRepo.pay({
+          expenseId: id, amount: data.total || data.amount,
+          payment_method: data.payment_method || 'efectivo',
+          payment_source: 'caja', cash_session_id: session.id,
+          userId: requestUserId, userName: u.name
+        });
+      }
+    }
+
+    return { ok:true, id, status };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+
+ipcMain.handle('expenses:pay', async (_, { expenseId, amount, payment_method, payment_source, reference, notes, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u) return { ok:false, error:'Usuario no válido' };
+    if (u.role === 'cajero' && !['admin','superadmin'].includes(u.role)) {
+      return { ok:false, error:'Solo el administrador puede registrar pagos' };
+    }
+    let cash_session_id = null;
+    if (payment_source === 'caja') {
+      const session = cashRepo.getOpen();
+      if (!session) return { ok:false, error:'No hay caja abierta' };
+      cash_session_id = session.id;
+    }
+    const result = expensesRepo.pay({ expenseId, amount, payment_method, payment_source,
+      cash_session_id, reference, notes, userId: requestUserId, userName: u.name });
+    return result;
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+
+ipcMain.handle('expenses:approve', async (_, { expenseId, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    return expensesRepo.approve(expenseId, requestUserId, u.name);
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+
+ipcMain.handle('expenses:reject', async (_, { expenseId, reason, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    if (!reason?.trim()) return { ok:false, error:'El motivo es obligatorio' };
+    return expensesRepo.reject(expenseId, requestUserId, u.name, reason);
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+
+ipcMain.handle('expenses:cancel', async (_, { expenseId, reason, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Solo el administrador puede anular gastos' };
+    if (!reason?.trim()) return { ok:false, error:'El motivo de anulación es obligatorio' };
+    return expensesRepo.cancel(expenseId, requestUserId, u.name, reason);
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+
+// ── Cuentas por pagar ─────────────────────────
+ipcMain.handle('expenses:getPayable', async (_, { requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    return { ok:true, data: expensesRepo.getAccountsPayable() };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+
+// ── Gastos recurrentes ────────────────────────
+ipcMain.handle('expenses:getRecurring', async (_, { requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    return { ok:true, data: expensesRepo.getRecurring() };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('expenses:createRecurring', async (_, { data, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    data.user_id = requestUserId;
+    const id = expensesRepo.createRecurring(data);
+    return { ok:true, id };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('expenses:toggleRecurring', async (_, { id, active, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    expensesRepo.toggleRecurring(id, active);
+    return { ok:true };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+
+// ── Presupuestos ──────────────────────────────
+ipcMain.handle('expenses:getBudgets', async (_, { month, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    return { ok:true, data: expensesRepo.getBudgets(month) };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('expenses:upsertBudget', async (_, { data, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    data.user_id = requestUserId;
+    expensesRepo.upsertBudget(data);
+    return { ok:true };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+
+
+// ══════════════════════════════════════════════
+// MULTI-NEGOCIOS
+// ══════════════════════════════════════════════
+
+function getBusinessesDir() {
+  return path.join(DATA_DIR, 'negocios');
+}
+
+function getBusinessDir(bizId) {
+  return path.join(getBusinessesDir(), String(bizId));
+}
+
+function loadBusinesses() {
+  const dir = getBusinessesDir();
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .filter(d => fs.existsSync(path.join(dir, d, 'meta.json')))
+    .map(d => {
+      try {
+        const meta = JSON.parse(fs.readFileSync(path.join(dir, d, 'meta.json'), 'utf8'));
+        return { ...meta, id: d };
+      } catch { return null; }
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function getActiveBusiness() {
+  const f = path.join(DATA_DIR, 'active_business.json');
+  if (fs.existsSync(f)) {
+    try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch {}
+  }
+  return null;
+}
+
+function setActiveBusiness(bizId) {
+  fs.writeFileSync(
+    path.join(DATA_DIR, 'active_business.json'),
+    JSON.stringify({ id: bizId, set_at: new Date().toISOString() })
+  );
+}
+
+// IPC — Multi-negocios
+ipcMain.handle('business:getAll', async () => {
+  try { return { ok: true, data: loadBusinesses() }; }
+  catch(e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('business:getActive', async () => {
+  try { return { ok: true, data: getActiveBusiness() }; }
+  catch(e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('business:create', async (_, { name, description, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || u.role !== 'superadmin') return { ok: false, error: 'Solo superadmin' };
+
+    const bizId = 'biz_' + Date.now();
+    const bizDir = getBusinessDir(bizId);
+    fs.mkdirSync(bizDir, { recursive: true });
+
+    // Guardar metadata del negocio
+    fs.writeFileSync(path.join(bizDir, 'meta.json'), JSON.stringify({
+      id: bizId, name, description: description || '',
+      created_at: new Date().toISOString(), active: true
+    }));
+
+    // Inicializar DB propia para este negocio
+    const { initDB: initBizDB } = require('./database');
+    initBizDB(bizDir);
+
+    audit(requestUserId, u.name, 'negocio_creado', 'businesses', bizId, name);
+    return { ok: true, id: bizId };
+  } catch(e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('business:switch', async (_, { bizId, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || u.role !== 'superadmin') return { ok: false, error: 'Solo superadmin' };
+    const bizDir = getBusinessDir(bizId);
+    if (!fs.existsSync(path.join(bizDir, 'meta.json'))) return { ok: false, error: 'Negocio no encontrado' };
+    setActiveBusiness(bizId);
+    return { ok: true, restart_required: true };
+  } catch(e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('business:delete', async (_, { bizId, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || u.role !== 'superadmin') return { ok: false, error: 'Solo superadmin' };
+    const bizDir = getBusinessDir(bizId);
+    if (fs.existsSync(bizDir)) fs.rmSync(bizDir, { recursive: true });
+    return { ok: true };
+  } catch(e) { return { ok: false, error: e.message }; }
+});
+
+
+
 // ══════════════════════════════════════════════
 // IPC — DIAGNÓSTICO DEL SISTEMA
 // Solo accesible para superadmin
@@ -1681,28 +2228,41 @@ ipcMain.handle('importar:analyzeWithAI', async (_, { headers, rows, tipo }) => {
       : 'name (Nombre, requerido), phone (Teléfono), email (Email), rnc (RNC/Cédula), address (Dirección), credit_limit (Límite crédito)';
 
     const muestra = rows.slice(0, 5);
-    const prompt = `Analiza estas columnas de un archivo de datos de un sistema de punto de venta:
+    const prompt = `Eres un experto en migración de datos para sistemas POS en República Dominicana.
+Analiza este archivo y mapea sus columnas a los campos de Velo POS.
 
 Columnas encontradas: ${headers.join(', ')}
 
 Muestra de datos (primeras 5 filas):
 ${JSON.stringify(muestra, null, 2)}
 
-Necesito mapear estas columnas a los campos de Velo POS para importar ${tipo}.
-Los campos disponibles son: ${campos}
+Tipo de importación: ${tipo}
+Campos disponibles en Velo POS: ${campos}
 
-Responde SOLO con un objeto JSON sin comentarios ni markdown, con este formato exacto:
+REGLAS IMPORTANTES:
+1. Sé flexible: busca la columna que MÁS se parezca a cada campo aunque el nombre sea diferente.
+2. Para "name/nombre": busca columnas como articulo, producto, descripcion, item, nombre, name, NOMBRE, ARTICULO, etc.
+3. Para "price/precio": busca precio_venta, precio, price, PRECIO, PVP, valor, importe, monto, costo (si no hay precio).
+4. Para "code/codigo": busca codigo, code, id, sku, referencia, barcode, codigo_barra.
+5. Para "stock": busca cantidad, existencia, stock, qty, inventario, cantidad_inventario.
+6. Para clientes "name": busca cliente, nombre, razon_social, company, CLIENTE, nombre_cliente.
+7. Para clientes "phone": busca telefono, tel, phone, celular, movil, contacto.
+8. Si el archivo tiene columnas vacías o con nombres raros (__EMPTY_1, etc.), analiza los DATOS para inferir qué contiene.
+9. Si hay precios con formato extraño (comas, puntos, etc.), igual mapéalos — el sistema los limpiará.
+10. SIEMPRE intenta hacer el mejor mapeo posible aunque la confianza sea baja.
+
+Responde SOLO con JSON sin comentarios ni markdown:
 {
   "mapping": {
-    "name": "NombreColumnaOrigen",
-    "price": "NombreColumnaOrigen",
-    "code": "NombreColumnaOrigen o null"
+    "name": "ColumnaExacta",
+    "price": "ColumnaExacta",
+    "code": "ColumnaExacta"
   },
-  "confidence": 0.95,
-  "notas": "Explicación breve en español de lo que detectaste"
+  "confidence": 0.85,
+  "notas": "Qué detectaste y qué ajustes puede necesitar el usuario"
 }
 
-Si un campo no tiene columna correspondiente, usa null. Solo incluye los campos que tienen mapeo claro.`;
+Usa null solo si definitivamente no existe esa información en el archivo. Prefiere mapear con baja confianza a no mapear.`;
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',

@@ -194,6 +194,124 @@ async function renderSuperAdmin(el) {
     </div>`;
   el.appendChild(toolsCard);
 
+
+  // ── Módulos activables ──────────────────────────────────────────────────
+  const modsCard = document.createElement('div');
+  modsCard.className = 'card';
+  modsCard.style.marginBottom = '16px';
+
+  const modsDefs = [
+    { key: 'module_sucursales',    icon: '🏪', title: 'Sucursales',               desc: 'Gestión de múltiples puntos de venta o sedes del negocio', roles: 'admin' },
+    { key: 'module_vehiculos',     icon: '🚗', title: 'Vehículos',                desc: 'Registro de vehículos de la empresa (carros, motos, camiones)', roles: 'admin' },
+    { key: 'module_mantenimiento', icon: '🔧', title: 'Mantenimiento',            desc: 'Historial y alertas de mantenimiento de vehículos', roles: 'admin' },
+    { key: 'module_envios',        icon: '📦', title: 'Envíos y Despachos',       desc: 'Control de entregas con cálculo de distancia y combustible', roles: 'admin+cajero' },
+    { key: 'module_ncf_avanzado',  icon: '📋', title: 'NCF Avanzado',             desc: 'Gestión de rangos de comprobantes fiscales con alertas DGII', roles: 'admin' },
+    { key: 'module_multi_negocio', icon: '🏢', title: 'Multi-negocios',           desc: 'Múltiples empresas con base de datos separada (requiere reinicio)', roles: 'superadmin' },
+  ];
+
+  modsCard.innerHTML = `<div class="card-title" style="margin-bottom:16px">⚙️ Módulos del sistema</div>`;
+
+  modsDefs.forEach(mod => {
+    const enabled = settings[mod.key] === '1' || settings[mod.key] === true || settings[mod.key] === 1;
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:0.5px solid var(--line2)';
+    // Construir toggle programáticamente para evitar problemas con template literals
+    const infoDiv = document.createElement('div');
+    infoDiv.innerHTML = `<div style="font-size:13px;font-weight:500">${mod.icon} ${mod.title}</div>
+      <div style="font-size:11px;color:var(--muted2);margin-top:2px">${mod.desc}</div>
+      <div style="font-size:10px;color:var(--muted2);margin-top:1px">Visible para: ${mod.roles}</div>`;
+
+    const accentColor = getComputedStyle(document.documentElement).getPropertyValue('--accent') || '#00d48a';
+    const trackBg  = enabled ? accentColor.trim() : '#9ca3af';
+    const thumbLeft = enabled ? '22px' : '2px';
+    const spanColor = enabled ? accentColor.trim() : '#9ca3af';
+    const spanText  = enabled ? 'Activo' : 'Inactivo';
+
+    const label = document.createElement('label');
+    label.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer';
+
+    const trackWrap = document.createElement('div');
+    trackWrap.style.cssText = 'position:relative;width:44px;height:24px;flex-shrink:0';
+
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = enabled;
+    input.dataset.mod = mod.key;
+    input.style.cssText = 'opacity:0;position:absolute;width:100%;height:100%;cursor:pointer;z-index:1;margin:0';
+    input.addEventListener('change', function() { saToggleModule(this.dataset.mod, this.checked); });
+
+    const track = document.createElement('div');
+    track.className = 'toggle-track';
+    track.style.cssText = `position:absolute;inset:0;border-radius:12px;background:${trackBg};transition:background .2s`;
+
+    const thumb = document.createElement('div');
+    thumb.className = 'toggle-thumb';
+    thumb.style.cssText = `position:absolute;top:2px;left:${thumbLeft};width:20px;height:20px;border-radius:50%;background:#fff;transition:left .2s;box-shadow:0 1px 3px #0003`;
+
+    const span = document.createElement('span');
+    span.style.cssText = `font-size:12px;font-weight:600;color:${spanColor}`;
+    span.textContent = spanText;
+
+    trackWrap.appendChild(input);
+    trackWrap.appendChild(track);
+    trackWrap.appendChild(thumb);
+    label.appendChild(trackWrap);
+    label.appendChild(span);
+
+    row.appendChild(infoDiv);
+    row.appendChild(label);
+    modsCard.appendChild(row);
+  });
+
+  el.appendChild(modsCard);
+
+  // ── Panel Multi-negocios ──────────────────────────────────────────────────
+  const multiEnabled = settings.module_multi_negocio === '1';
+  if (multiEnabled) {
+    const multiCard = document.createElement('div');
+    multiCard.className = 'card';
+    multiCard.style.marginBottom = '16px';
+    multiCard.innerHTML = `
+      <div class="card-title" style="margin-bottom:12px">🏢 Multi-negocios</div>
+      <div style="font-size:12px;color:var(--muted2);margin-bottom:14px">
+        Cada negocio tiene su propia base de datos. Al crear uno nuevo, 
+        aparecerá como opción al iniciar sesión.
+      </div>
+      <div id="sa-biz-list" style="margin-bottom:12px">
+        <div style="font-size:12px;color:var(--muted2)">Cargando negocios...</div>
+      </div>
+      <button class="btn btn-dark btn-sm" id="btn-nuevo-negocio">+ Crear nuevo negocio</button>`;
+    el.appendChild(multiCard);
+
+    // Cargar negocios existentes
+    window.api.business?.getAll().then(res => {
+      const list = multiCard.querySelector('#sa-biz-list');
+      const businesses = res?.data || [];
+      if (!businesses.length) {
+        list.innerHTML = '<div style="font-size:12px;color:var(--muted2)">Solo existe el negocio principal</div>';
+      } else {
+        list.innerHTML = businesses.map(b => `
+          <div style="padding:8px 12px;background:var(--bg2);border-radius:8px;margin-bottom:6px;font-size:13px;border:0.5px solid var(--line2)">
+            🏢 <strong>${b.name}</strong>
+            <span style="font-size:10px;color:var(--muted2);margin-left:8px">ID: ${b.id}</span>
+          </div>`).join('');
+      }
+    });
+
+    multiCard.querySelector('#btn-nuevo-negocio')?.addEventListener('click', () => {
+      const name = prompt('Nombre del nuevo negocio:');
+      if (!name?.trim()) return;
+      window.api.business.create({ name: name.trim(), requestUserId: user.id }).then(res => {
+        if (res.ok) {
+          alert(`✓ Negocio "${name}" creado. Aparecerá en el login al reiniciar.`);
+          renderSuperAdmin(el);
+        } else {
+          alert('Error: ' + res.error);
+        }
+      });
+    });
+  }
+
   // ── Módulo de Etiquetas de Código de Barras ──
   const bcModCard = h('div', { class: 'card', style: 'margin-bottom:16px' });
 
@@ -473,6 +591,67 @@ let _updState = null;
 // ══════════════════════════════════════════════
 // TOGGLE MÓDULO DE ETIQUETAS
 // ══════════════════════════════════════════════
+
+async function saToggleModule(key, enabled) {
+  const user = window._currentUser;
+  if (!user || user.role !== 'superadmin') { alert('Solo el superadmin puede cambiar módulos'); return; }
+
+  await window.api.settings.set({ key, value: enabled ? '1' : '0' });
+
+  // Actualizar CFG inmediatamente
+  if (typeof CFG !== 'undefined') CFG[key] = enabled ? '1' : '0';
+
+  // Actualizar visual del toggle
+  const input = document.querySelector(`input[data-mod="${key}"]`);
+  if (input) {
+    input.checked = enabled;
+    const wrap  = input.parentElement;
+    const track = wrap?.querySelector('.toggle-track');
+    const thumb = wrap?.querySelector('.toggle-thumb');
+    const span  = wrap?.parentElement?.querySelector('span');
+    const accentColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#00d48a';
+    if (track) track.style.background = enabled ? accentColor : '#9ca3af';
+    if (thumb) thumb.style.left = enabled ? '22px' : '2px';
+    if (span)  { span.textContent = enabled ? 'Activo' : 'Inactivo'; span.style.color = enabled ? accentColor : '#9ca3af'; }
+  }
+
+  // Reglas de dependencia entre módulos
+  if (key === 'module_mantenimiento' && enabled) {
+    // Mantenimiento requiere Vehículos — activar automáticamente
+    await window.api.settings.set({ key: 'module_vehiculos', value: '1' });
+    CFG.module_vehiculos = '1';
+    // Actualizar visual del toggle de vehículos también
+    const vInput = document.querySelector('input[data-mod="module_vehiculos"]');
+    if (vInput) {
+      vInput.checked = true;
+      const vWrap  = vInput.parentElement;
+      const vTrack = vWrap?.querySelector('.toggle-track');
+      const vThumb = vWrap?.querySelector('.toggle-thumb');
+      const vSpan  = vWrap?.parentElement?.querySelector('span');
+      const ac = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#00d48a';
+      if (vTrack) vTrack.style.background = ac;
+      if (vThumb) vThumb.style.left = '22px';
+      if (vSpan)  { vSpan.textContent = 'Activo'; vSpan.style.color = ac; }
+    }
+  }
+
+  // Recargar settings completos y reconstruir nav
+  // IMPORTANTE: esperar loadAppData antes de buildSidebar para que CFG esté actualizado
+  if (typeof loadAppData === 'function') {
+    await loadAppData();
+  }
+  // CFG ya fue actualizado por loadAppData — ahora sí reconstruir el nav
+  if (typeof buildSidebar === 'function') buildSidebar();
+  if (typeof buildTopbar  === 'function') buildTopbar();
+
+  if (typeof toast === 'function') toast(`${enabled ? '✓ Módulo activado' : '✗ Módulo desactivado'}: ${key.replace('module_','').replace(/_/g,' ')}`);
+
+  // Aviso especial para multi-negocio
+  if (key === 'module_multi_negocio' && enabled) {
+    setTimeout(() => alert('⚠️ El módulo Multi-negocios requiere reiniciar Velo POS para activarse completamente.'), 500);
+  }
+}
+
 async function saToggleBarcodeModule(enabled) {
   // Actualizar setting
   await window.api.settings.set({ key: 'barcode_enabled', value: enabled ? '1' : '0' });

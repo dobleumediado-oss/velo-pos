@@ -35,7 +35,15 @@ async function renderDash(el) {
     s.status !== 'cancelled' && s.type !== 'devolucion');
   const mRev   = mSales.reduce((a, s) => a + (s.total || 0), 0);
 
-  const lowStock   = DB.products.filter(p => p.stock <= (p.stock_min || 5));
+  // Filtrar stock bajo y deduplicar por nombre para evitar mostrar duplicados de importaciones
+  const _lowStockRaw = DB.products.filter(p => p.stock <= (p.stock_min || 5));
+  const _lowStockSeen = new Set();
+  const lowStock = _lowStockRaw.filter(p => {
+    const key = p.name?.trim().toLowerCase();
+    if (_lowStockSeen.has(key)) return false;
+    _lowStockSeen.add(key);
+    return true;
+  });
   const creditAlerts = getCreditAlerts();
   const pendCredit = DB.customers.reduce((a, c) =>
     a + (c.id !== 1 ? (c.balance || 0) : 0), 0);

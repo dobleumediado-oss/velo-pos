@@ -95,7 +95,15 @@ async function loadAppData() {
       CFG.receipt_msg    = settings.receipt_msg   || '¡Gracias por su compra!';
       CFG.print_template = settings.print_template || '';
       // Módulo fiscal — solo activo si superadmin lo habilitó
-      CFG.fiscalEnabled  = settings.fiscal_enabled === '1';
+      CFG.fiscalEnabled        = settings.fiscal_enabled === '1';
+      CFG.module_sucursales    = settings.module_sucursales    || '0';
+      CFG.module_vehiculos     = settings.module_vehiculos     || '0';
+      CFG.module_mantenimiento = settings.module_mantenimiento || '0';
+      // Si mantenimiento está activo, vehículos debe estarlo también
+      if (CFG.module_mantenimiento === '1') CFG.module_vehiculos = '1';
+      CFG.module_envios        = settings.module_envios        || '0';
+      CFG.module_ncf_avanzado  = settings.module_ncf_avanzado  || '0';
+      CFG.module_multi_negocio = settings.module_multi_negocio || '0';
       CFG.itbis          = CFG.fiscalEnabled
                            ? ((settings.tax_pct !== undefined && settings.tax_pct !== '')
                                ? parseFloat(settings.tax_pct) : 18)

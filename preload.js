@@ -167,4 +167,84 @@ contextBridge.exposeInMainWorld('api', {
   system: {
     diagnose: (data) => ipcRenderer.invoke('system:diagnose', data),
   },
+
+  // ── Multi-negocios ──────────────────────
+  business: {
+    getAll:    ()  => ipcRenderer.invoke('business:getAll'),
+    getActive: ()  => ipcRenderer.invoke('business:getActive'),
+    create:    (d) => ipcRenderer.invoke('business:create', d),
+    switch:    (d) => ipcRenderer.invoke('business:switch', d),
+    delete:    (d) => ipcRenderer.invoke('business:delete', d),
+  },
+
+  // ── Multi-negocios ──────────────────────────
+  business: {
+    getAll:  ()  => ipcRenderer.invoke('business:getAll'),
+    create:  (d) => ipcRenderer.invoke('business:create', d),
+  },
+
+  // ── Sucursales ───────────────────────────
+  branches: {
+    getAll:   ()  => ipcRenderer.invoke('branches:getAll'),
+    create:   (d) => ipcRenderer.invoke('branches:create', d),
+    update:   (d) => ipcRenderer.invoke('branches:update', d),
+    delete:   (d) => ipcRenderer.invoke('branches:delete', d),
+  },
+
+  // ── Vehículos ────────────────────────────
+  vehicles: {
+    getAll:   ()  => ipcRenderer.invoke('vehicles:getAll'),
+    create:   (d) => ipcRenderer.invoke('vehicles:create', d),
+    update:   (d) => ipcRenderer.invoke('vehicles:update', d),
+    delete:   (d) => ipcRenderer.invoke('vehicles:delete', d),
+    calcFuel: (d) => ipcRenderer.invoke('vehicles:calcFuel', d),
+  },
+
+  // ── Mantenimiento ────────────────────────
+  maintenance: {
+    getTypes:     ()  => ipcRenderer.invoke('maintenance:getTypes'),
+    getByVehicle: (d) => ipcRenderer.invoke('maintenance:getByVehicle', d),
+    getPending:   ()  => ipcRenderer.invoke('maintenance:getPending'),
+    create:       (d) => ipcRenderer.invoke('maintenance:create', d),
+    delete:       (d) => ipcRenderer.invoke('maintenance:delete', d),
+  },
+
+  // ── Envíos ───────────────────────────────
+  deliveries: {
+    getAll:        (d) => ipcRenderer.invoke('deliveries:getAll', d),
+    getSummary:    ()  => ipcRenderer.invoke('deliveries:getSummary'),
+    create:        (d) => ipcRenderer.invoke('deliveries:create', d),
+    updateStatus:  (d) => ipcRenderer.invoke('deliveries:updateStatus', d),
+  },
+
+  // ── NCF Avanzado ─────────────────────────
+  ncf: {
+    getSequences:    ()  => ipcRenderer.invoke('ncf:getSequences'),
+    createSequence:  (d) => ipcRenderer.invoke('ncf:createSequence', d),
+    getAlerts:       ()  => ipcRenderer.invoke('ncf:getAlerts'),
+    validateRnc:     (d) => ipcRenderer.invoke('ncf:validateRnc', d),
+  },
+
+  // ── Gastos y cuentas por pagar ───────────
+  expenses: {
+    getConfig:        (d) => ipcRenderer.invoke('expenses:getConfig', d),
+    setConfig:        (d) => ipcRenderer.invoke('expenses:setConfig', d),
+    getCategories:    ()  => ipcRenderer.invoke('expenses:getCategories'),
+    createCategory:   (d) => ipcRenderer.invoke('expenses:createCategory', d),
+    updateCategory:   (d) => ipcRenderer.invoke('expenses:updateCategory', d),
+    getAll:           (d) => ipcRenderer.invoke('expenses:getAll', d),
+    getById:          (d) => ipcRenderer.invoke('expenses:getById', d),
+    getSummary:       (d) => ipcRenderer.invoke('expenses:getSummary', d),
+    create:           (d) => ipcRenderer.invoke('expenses:create', d),
+    pay:              (d) => ipcRenderer.invoke('expenses:pay', d),
+    approve:          (d) => ipcRenderer.invoke('expenses:approve', d),
+    reject:           (d) => ipcRenderer.invoke('expenses:reject', d),
+    cancel:           (d) => ipcRenderer.invoke('expenses:cancel', d),
+    getPayable:       (d) => ipcRenderer.invoke('expenses:getPayable', d),
+    getRecurring:     (d) => ipcRenderer.invoke('expenses:getRecurring', d),
+    createRecurring:  (d) => ipcRenderer.invoke('expenses:createRecurring', d),
+    toggleRecurring:  (d) => ipcRenderer.invoke('expenses:toggleRecurring', d),
+    getBudgets:       (d) => ipcRenderer.invoke('expenses:getBudgets', d),
+    upsertBudget:     (d) => ipcRenderer.invoke('expenses:upsertBudget', d),
+  },
 });

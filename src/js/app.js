@@ -9,7 +9,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     const vr = await window.api.version.getInfo();
     window._appVersion = vr?.ok ? vr.data?.appVersion : '1.4.1';
-  } catch { window._appVersion = '1.5.1'; }
+  } catch { window._appVersion = '1.5.2'; }
 
   // Cargar todos los datos vía IPC
   await loadAppData();
@@ -17,7 +17,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Restaurar sesión de sessionStorage
   const saved = sessionStorage.getItem('vp_user');
   if (saved) {
-    try { user = JSON.parse(saved); } catch {}
+    try { user = JSON.parse(saved); window._currentUser = user; } catch {}
   }
   if (user) renderApp();
   else      renderLogin();
@@ -43,6 +43,37 @@ document.addEventListener('DOMContentLoaded', async () => {
 // ══════════════════════════════════════════════
 // LOGIN
 // ══════════════════════════════════════════════
+// ── Selector de negocio (multi-negocios) ─────────────────────────────
+async function renderBusinessSelector(onSelect) {
+  if (!window.api?.business) { onSelect(null); return; }
+  const res = await window.api.business.getAll().catch(() => ({ ok:false }));
+  const businesses = res?.data || [];
+  
+  // Si no hay negocios secundarios, continuar con el negocio principal
+  if (!businesses.length) { onSelect(null); return; }
+  
+  const root = document.getElementById('root');
+  root.innerHTML = '';
+  
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:16px;background:var(--bg)';
+  wrap.innerHTML = `
+    <div style="font-size:28px;font-weight:700;color:var(--ink);margin-bottom:8px">Velo POS</div>
+    <div style="font-size:14px;color:var(--muted2);margin-bottom:16px">Selecciona el negocio</div>
+    <div style="display:flex;flex-direction:column;gap:8px;width:320px">
+      <button onclick="window._selectedBiz=null;renderLogin()" 
+        style="padding:14px 20px;border:1.5px solid var(--accent);border-radius:10px;background:var(--accent);color:#fff;font-size:14px;font-weight:600;cursor:pointer">
+        🏪 Negocio Principal
+      </button>
+      ${businesses.map(b => `
+        <button onclick="window._selectedBiz='${b.id}';renderLogin()"
+          style="padding:14px 20px;border:1.5px solid var(--line2);border-radius:10px;background:var(--bg2);color:var(--ink);font-size:14px;font-weight:500;cursor:pointer">
+          🏢 ${b.name}
+        </button>`).join('')}
+    </div>`;
+  root.appendChild(wrap);
+}
+
 function renderLogin() {
   const root = document.getElementById('root');
   root.innerHTML = '';
@@ -146,7 +177,7 @@ function renderLogin() {
 
         // Versión — leída dinámicamente
         h('div', { style: { textAlign:'center', fontSize:'10px', color:'var(--muted2)', marginTop:'16px' } },
-          `Velo POS v${window._appVersion || '1.5.1'}`
+          `Velo POS v${window._appVersion || '1.5.2'}`
         )
       )
     );
@@ -220,6 +251,7 @@ function renderLogin() {
     loginBlocked  = false;
 
     user = result.user;
+    window._currentUser = user;  // accesible desde módulos externos
     sessionStorage.setItem('vp_user', JSON.stringify(user));
     await loadAppData();
     renderApp();
@@ -320,6 +352,10 @@ function buildSidebar() {
     { key: 'devoluciones', icon: 'return', label: 'Devoluciones' },
     { sep: 'Finanzas' },
     { key: 'caja',      icon: 'cash',     label: 'Caja' },
+    { key: 'gastos',    icon: 'dollar',   label: 'Gastos' },
+    ...(CFG.module_sucursales    === '1' ? [{ key: 'sucursales', icon: 'building', label: 'Sucursales'    }] : []),
+    ...((CFG.module_vehiculos === '1' || CFG.module_mantenimiento === '1') ? [{ key: 'vehiculos', icon: 'car', label: 'Vehículos' }] : []),
+    ...(CFG.module_envios        === '1' ? [{ key: 'envios',     icon: 'truck',    label: 'Envíos'        }] : []),
     { key: 'reportes',  icon: 'chart',    label: 'Reportes' },
     { sep: 'Sistema' },
     { key: 'etiquetas', icon: 'barcode',  label: 'Etiquetas',
@@ -399,6 +435,10 @@ function buildTopbar() {
     ventas:        'Ventas',
     devoluciones:  'Devoluciones',
     caja:          'Caja',
+    gastos:        'Gastos y Cuentas por Pagar',
+    vehiculos:     'Vehículos y Mantenimiento',
+    envios:        'Envíos y Despachos',
+    sucursales:    'Sucursales',
     reportes:      'Reportes',
     configuracion: 'Configuración',
     etiquetas:     'Etiquetas de Código de Barras',
@@ -564,6 +604,10 @@ function routeTo(p) {
     case 'auditoria':
       if (user?.role !== 'superadmin') { renderDash(el); break; }
       renderAuditoria(el); break;
+    case 'gastos':       renderGastos(el);         break;
+    case 'vehiculos':    renderVehiculos(el);      break;
+    case 'envios':       renderEnvios(el);         break;
+    case 'sucursales':   renderSucursales(el);     break;
     case 'configuracion':renderConfiguracion(el);  break;
     case 'etiquetas':
       if (!window._bcEnabled && user?.role !== 'superadmin') { renderDash(el); break; }
@@ -581,6 +625,7 @@ async function doLogout() {
     await window.api.auth.logout({ userId: user.id, userName: user.name });
   }
   user = null;
+  window._currentUser = null;
   page = 'dash';
   resetInvoices();
   sessionStorage.removeItem('vp_user');

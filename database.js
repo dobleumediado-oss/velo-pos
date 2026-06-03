@@ -241,6 +241,251 @@ function createTables() {
       created_at  TEXT DEFAULT (datetime('now'))
     );
 
+
+    -- ══════════════════════════════════════════════
+    -- MÓDULO: GASTOS Y CUENTAS POR PAGAR
+    -- ══════════════════════════════════════════════
+
+    -- ── Categorías de gastos ──
+    CREATE TABLE IF NOT EXISTS expense_categories (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      name          TEXT NOT NULL,
+      parent_id     INTEGER REFERENCES expense_categories(id),
+      affects_profit INTEGER DEFAULT 1,
+      requires_approval INTEGER DEFAULT 0,
+      approval_limit REAL DEFAULT 0,
+      requires_attachment INTEGER DEFAULT 0,
+      active        INTEGER DEFAULT 1,
+      created_at    TEXT DEFAULT (datetime('now'))
+    );
+
+    -- ── Gastos ──
+    CREATE TABLE IF NOT EXISTS expenses (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      type            TEXT NOT NULL DEFAULT 'gasto'
+                        CHECK(type IN ('gasto','retiro','traslado','activo','reembolso','aporte')),
+      category_id     INTEGER REFERENCES expense_categories(id),
+      description     TEXT NOT NULL,
+      supplier_id     INTEGER REFERENCES suppliers(id),
+      amount          REAL NOT NULL DEFAULT 0,
+      tax_amount      REAL DEFAULT 0,
+      discount        REAL DEFAULT 0,
+      total           REAL NOT NULL DEFAULT 0,
+      currency        TEXT DEFAULT 'DOP',
+      status          TEXT DEFAULT 'pendiente'
+                        CHECK(status IN ('borrador','pendiente_aprobacion','aprobado',
+                                         'pendiente_pago','parcialmente_pagado','pagado','anulado','rechazado')),
+      payment_method  TEXT DEFAULT 'efectivo'
+                        CHECK(payment_method IN ('efectivo','transferencia','tarjeta','cheque','credito','otro')),
+      payment_source  TEXT DEFAULT 'caja'
+                        CHECK(payment_source IN ('caja','caja_chica','banco','tarjeta_credito','pendiente')),
+      cash_session_id INTEGER REFERENCES cash_sessions(id),
+      cash_movement_id INTEGER REFERENCES cash_movements(id),
+      issue_date      TEXT NOT NULL DEFAULT (date('now')),
+      due_date        TEXT,
+      invoice_number  TEXT,
+      ncf             TEXT,
+      supplier_rnc    TEXT,
+      notes           TEXT,
+      user_id         INTEGER REFERENCES users(id),
+      approved_by     INTEGER REFERENCES users(id),
+      approved_at     TEXT,
+      cancelled_by    INTEGER REFERENCES users(id),
+      cancel_reason   TEXT,
+      cancelled_at    TEXT,
+      paid_amount     REAL DEFAULT 0,
+      created_at      TEXT DEFAULT (datetime('now')),
+      updated_at      TEXT DEFAULT (datetime('now'))
+    );
+
+    -- ── Pagos de gastos ──
+    CREATE TABLE IF NOT EXISTS expense_payments (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      expense_id      INTEGER NOT NULL REFERENCES expenses(id),
+      amount          REAL NOT NULL,
+      payment_method  TEXT DEFAULT 'efectivo',
+      payment_source  TEXT DEFAULT 'caja',
+      cash_session_id INTEGER REFERENCES cash_sessions(id),
+      cash_movement_id INTEGER REFERENCES cash_movements(id),
+      reference       TEXT,
+      notes           TEXT,
+      user_id         INTEGER REFERENCES users(id),
+      status          TEXT DEFAULT 'pagado' CHECK(status IN ('pagado','anulado')),
+      cancelled_by    INTEGER REFERENCES users(id),
+      cancel_reason   TEXT,
+      created_at      TEXT DEFAULT (datetime('now'))
+    );
+
+    -- ── Gastos recurrentes (plantillas) ──
+    CREATE TABLE IF NOT EXISTS recurring_expenses (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      name            TEXT NOT NULL,
+      supplier_id     INTEGER REFERENCES suppliers(id),
+      category_id     INTEGER REFERENCES expense_categories(id),
+      amount          REAL NOT NULL DEFAULT 0,
+      frequency       TEXT DEFAULT 'mensual'
+                        CHECK(frequency IN ('diario','semanal','quincenal','mensual','bimestral','trimestral','anual')),
+      day_of_period   INTEGER DEFAULT 1,
+      next_date       TEXT,
+      end_date        TEXT,
+      payment_method  TEXT DEFAULT 'efectivo',
+      payment_source  TEXT DEFAULT 'caja',
+      requires_approval INTEGER DEFAULT 0,
+      auto_draft      INTEGER DEFAULT 1,
+      active          INTEGER DEFAULT 1,
+      user_id         INTEGER REFERENCES users(id),
+      created_at      TEXT DEFAULT (datetime('now'))
+    );
+
+    -- ── Presupuestos ──
+    CREATE TABLE IF NOT EXISTS expense_budgets (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      category_id     INTEGER REFERENCES expense_categories(id),
+      month           TEXT NOT NULL,
+      amount          REAL NOT NULL DEFAULT 0,
+      user_id         INTEGER REFERENCES users(id),
+      created_at      TEXT DEFAULT (datetime('now')),
+      UNIQUE(category_id, month)
+    );
+
+    -- ── Configuración del módulo de gastos ──
+    CREATE TABLE IF NOT EXISTS expense_config (
+      key   TEXT PRIMARY KEY,
+      value TEXT
+    );
+
+
+    -- ══════════════════════════════════════════════
+    -- MÓDULO: SUCURSALES
+    -- ══════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS branches (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT NOT NULL,
+      address     TEXT,
+      phone       TEXT,
+      manager     TEXT,
+      active      INTEGER DEFAULT 1,
+      created_at  TEXT DEFAULT (datetime('now'))
+    );
+
+    -- ══════════════════════════════════════════════
+    -- MÓDULO: VEHÍCULOS
+    -- ══════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS vehicles (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      type            TEXT NOT NULL DEFAULT 'carro'
+                        CHECK(type IN ('carro','moto','camion','furgoneta','otro')),
+      brand           TEXT NOT NULL,
+      model           TEXT NOT NULL,
+      year            INTEGER,
+      plate           TEXT,
+      color           TEXT,
+      fuel_type       TEXT DEFAULT 'gasolina'
+                        CHECK(fuel_type IN ('gasolina','diesel','electrico','hibrido')),
+      fuel_grade      TEXT DEFAULT 'premium'
+                        CHECK(fuel_grade IN ('premium','regular','diesel')),
+      km_per_gallon   REAL DEFAULT 35,
+      odometer        REAL DEFAULT 0,
+      status          TEXT DEFAULT 'activo'
+                        CHECK(status IN ('activo','inactivo','taller')),
+      notes           TEXT,
+      user_id         INTEGER REFERENCES users(id),
+      created_at      TEXT DEFAULT (datetime('now')),
+      updated_at      TEXT DEFAULT (datetime('now'))
+    );
+
+    -- ══════════════════════════════════════════════
+    -- MÓDULO: MANTENIMIENTO DE VEHÍCULOS
+    -- ══════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS vehicle_maintenance (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      vehicle_id      INTEGER NOT NULL REFERENCES vehicles(id),
+      type            TEXT NOT NULL,
+      description     TEXT,
+      odometer_at     REAL,
+      next_odometer   REAL,
+      date_done       TEXT NOT NULL DEFAULT (date('now')),
+      next_date       TEXT,
+      cost            REAL DEFAULT 0,
+      workshop        TEXT,
+      notes           TEXT,
+      user_id         INTEGER REFERENCES users(id),
+      created_at      TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS vehicle_maintenance_types (
+      id    INTEGER PRIMARY KEY AUTOINCREMENT,
+      name  TEXT NOT NULL,
+      interval_km   INTEGER DEFAULT 0,
+      interval_days INTEGER DEFAULT 0,
+      active INTEGER DEFAULT 1
+    );
+
+    -- ══════════════════════════════════════════════
+    -- MÓDULO: ENVÍOS
+    -- ══════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS deliveries (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      sale_id         INTEGER REFERENCES sales(id),
+      customer_id     INTEGER REFERENCES customers(id),
+      vehicle_id      INTEGER REFERENCES vehicles(id),
+      driver_id       INTEGER REFERENCES users(id),
+      origin_address  TEXT,
+      dest_address    TEXT NOT NULL,
+      dest_lat        REAL,
+      dest_lng        REAL,
+      distance_km     REAL,
+      fuel_used       REAL,
+      fuel_cost       REAL,
+      delivery_fee    REAL DEFAULT 0,
+      status          TEXT DEFAULT 'pendiente'
+                        CHECK(status IN ('pendiente','en_camino','entregado','cancelado')),
+      scheduled_at    TEXT,
+      delivered_at    TEXT,
+      notes           TEXT,
+      user_id         INTEGER REFERENCES users(id),
+      created_at      TEXT DEFAULT (datetime('now')),
+      updated_at      TEXT DEFAULT (datetime('now'))
+    );
+
+    -- ══════════════════════════════════════════════
+    -- MÓDULO: NCF AVANZADO
+    -- ══════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS ncf_sequences (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      type        TEXT NOT NULL,
+      prefix      TEXT NOT NULL,
+      from_num    INTEGER NOT NULL,
+      to_num      INTEGER NOT NULL,
+      current     INTEGER NOT NULL DEFAULT 0,
+      expiry_date TEXT,
+      active      INTEGER DEFAULT 1,
+      alert_at    INTEGER DEFAULT 50,
+      created_at  TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS ncf_log (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      ncf         TEXT NOT NULL,
+      type        TEXT NOT NULL,
+      sale_id     INTEGER REFERENCES sales(id),
+      customer_rnc TEXT,
+      issued_at   TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Índices
+    CREATE INDEX IF NOT EXISTS idx_deliveries_status   ON deliveries(status);
+    CREATE INDEX IF NOT EXISTS idx_deliveries_sale     ON deliveries(sale_id);
+    CREATE INDEX IF NOT EXISTS idx_vm_vehicle          ON vehicle_maintenance(vehicle_id);
+    CREATE INDEX IF NOT EXISTS idx_ncf_type            ON ncf_sequences(type);
+
+    -- ── Índices del módulo ──
+    CREATE INDEX IF NOT EXISTS idx_expenses_status    ON expenses(status);
+    CREATE INDEX IF NOT EXISTS idx_expenses_date      ON expenses(issue_date);
+    CREATE INDEX IF NOT EXISTS idx_expenses_supplier  ON expenses(supplier_id);
+    CREATE INDEX IF NOT EXISTS idx_expenses_category  ON expenses(category_id);
+    CREATE INDEX IF NOT EXISTS idx_exp_pay_expense    ON expense_payments(expense_id);
+
     -- ── Índices ──
     CREATE INDEX IF NOT EXISTS idx_sales_date        ON sales(created_at);
     CREATE INDEX IF NOT EXISTS idx_sales_customer    ON sales(customer_id);
@@ -262,10 +507,14 @@ function seedIfEmpty() {
   if (userCount > 0) {
     // Siempre verificar que el superadmin existe aunque la DB no sea nueva
     _ensureSuperAdmin();
+    seedExpenseCategories();
+    seedMaintenanceTypes();
     return;
   }
 
   console.log('[DB] Insertando datos iniciales...');
+  seedExpenseCategories();
+  seedMaintenanceTypes();
 
   const insertSetting = db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');
   [
@@ -283,6 +532,24 @@ function seedIfEmpty() {
     ['barcode_enabled','0'],
     ['barcode_printer',''],
     ['barcode_design', ''],
+    // ── Módulos activables por superadmin ──────────
+    ['module_sucursales',      '0'],
+    ['module_vehiculos',       '0'],
+    ['module_mantenimiento',   '0'],
+    ['module_envios',          '0'],
+    ['module_ncf_avanzado',    '0'],
+    ['module_multi_negocio',   '0'],
+    // ── Visibilidad por rol ────────────────────────
+    ['mod_envios_cajero',      '0'],
+    ['mod_vehiculos_admin',    '1'],
+    ['mod_mantenimiento_admin','1'],
+    ['mod_sucursales_admin',   '1'],
+    // ── Config combustible ─────────────────────────
+    ['fuel_price_premium',    '293'],
+    ['fuel_price_regular',    '276'],
+    ['fuel_price_diesel',     '239'],
+    ['fuel_last_updated',      ''],
+    ['ors_api_key',            ''],
   ].forEach(([k, v]) => insertSetting.run(k, v));
 
   const adminPass  = bcrypt.hashSync('admin123', 10);
@@ -433,6 +700,21 @@ const productsRepo = {
     return db.prepare('SELECT * FROM products WHERE id=?').get(id);
   },
   create(p) {
+    // Verificar si ya existe un producto con el mismo nombre (case-insensitive) y código
+    // para evitar duplicados al importar varias veces
+    if (p.name) {
+      let existing;
+      if (p.code && p.code !== '') {
+        existing = db.prepare(
+          "SELECT id FROM products WHERE active=1 AND LOWER(TRIM(name))=LOWER(TRIM(?)) AND (code=? OR code='')"
+        ).get(p.name, p.code);
+      } else {
+        existing = db.prepare(
+          "SELECT id FROM products WHERE active=1 AND LOWER(TRIM(name))=LOWER(TRIM(?))"
+        ).get(p.name);
+      }
+      if (existing) return existing.id; // retornar el id existente sin duplicar
+    }
     const r = db.prepare(`
       INSERT INTO products(code,barcode,name,brand,category,description,cost,price,wholesale,stock,stock_min,unit,condition)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -649,15 +931,45 @@ const salesRepo = {
       );
       const saleId = saleR.lastInsertRowid;
 
-      // 4b. Generar NCF con contador independiente (solo facturas)
+      // 4b. Generar NCF (solo facturas con fiscal activo)
       let ncf = '';
       if (type === 'factura') {
-        const counterRow = db.prepare("SELECT value FROM settings WHERE key='ncf_counter'").get();
-        const nextNum = (parseInt(counterRow?.value || 0, 10)) + 1;
-        ncf = 'B01' + String(nextNum).padStart(9, '0');
-        db.prepare("UPDATE settings SET value=?, updated_at=datetime('now') WHERE key='ncf_counter'")
-          .run(String(nextNum));
-        db.prepare("UPDATE sales SET ncf=? WHERE id=?").run(ncf, saleId);
+        const fiscalOn = db.prepare("SELECT value FROM settings WHERE key='fiscal_enabled'").get()?.value === '1';
+        const ncfAdv   = db.prepare("SELECT value FROM settings WHERE key='module_ncf_avanzado'").get()?.value === '1';
+
+        if (fiscalOn) {
+          if (ncfAdv) {
+            // Modo avanzado: usar secuencias registradas por la DGII
+            const ncfType = (customer.rnc && customer.rnc.trim()) ? 'B01' : 'B02';
+            const seq = db.prepare(
+              "SELECT * FROM ncf_sequences WHERE type=? AND active=1 AND current < to_num ORDER BY id ASC LIMIT 1"
+            ).get(ncfType);
+
+            if (seq) {
+              const next = seq.current + 1;
+              db.prepare("UPDATE ncf_sequences SET current=? WHERE id=?").run(next, seq.id);
+              ncf = seq.prefix + String(next).padStart(8, '0');
+              db.prepare("INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc) VALUES(?,?,?,?)")
+                .run(ncf, ncfType, saleId, customer.rnc || '');
+              const remaining = seq.to_num - next;
+              if (remaining <= (seq.alert_at || 50)) {
+                console.log('[NCF] ALERTA: quedan ' + remaining + ' comprobantes tipo ' + ncfType);
+              }
+            } else {
+              // Fallback al contador simple si no hay secuencia disponible
+              const nextNum = (parseInt(db.prepare("SELECT value FROM settings WHERE key='ncf_counter'").get()?.value || 0, 10)) + 1;
+              ncf = 'B01' + String(nextNum).padStart(9, '0');
+              db.prepare("UPDATE settings SET value=? WHERE key='ncf_counter'").run(String(nextNum));
+              console.warn('[NCF] Sin secuencia — usando contador de respaldo. Configura secuencias en Panel NCF.');
+            }
+          } else {
+            // Modo simple: contador básico
+            const nextNum = (parseInt(db.prepare("SELECT value FROM settings WHERE key='ncf_counter'").get()?.value || 0, 10)) + 1;
+            ncf = 'B01' + String(nextNum).padStart(9, '0');
+            db.prepare("UPDATE settings SET value=? WHERE key='ncf_counter'").run(String(nextNum));
+          }
+          if (ncf) db.prepare("UPDATE sales SET ncf=? WHERE id=?").run(ncf, saleId);
+        }
       }
 
       // 5. Insertar items con snapshot
@@ -1254,6 +1566,485 @@ const purchasesRepo = {
   },
 };
 
+
+
+function seedMaintenanceTypes() {
+  const count = db.prepare('SELECT COUNT(*) as c FROM vehicle_maintenance_types').get().c;
+  if (count > 0) return;
+  const ins = db.prepare('INSERT OR IGNORE INTO vehicle_maintenance_types(name,interval_km,interval_days) VALUES(?,?,?)');
+  [
+    ['Cambio de aceite',         5000,   90],
+    ['Filtro de aceite',         5000,   90],
+    ['Filtro de aire',          15000,  365],
+    ['Filtro de combustible',   20000,  365],
+    ['Cambio de cauchos',       50000,    0],
+    ['Frenos (pastillas)',      30000,    0],
+    ['Frenos (discos)',         60000,    0],
+    ['Batería',                     0,  730],
+    ['Correa de distribución',  60000, 1460],
+    ['Alineación y balanceo',   10000,  180],
+    ['Revisión general',            0,  180],
+    ['Inspección de luces',         0,  365],
+    ['Líquido de frenos',           0,  730],
+    ['Líquido refrigerante',        0,  365],
+    ['Bujías',                  30000,    0],
+    ['Mantenimiento de moto',    3000,   90],
+    ['Cadena de moto',          10000,    0],
+    ['Neumático de moto',       20000,    0],
+  ].forEach(([n,km,d]) => ins.run(n, km, d));
+  console.log('[INIT] Tipos de mantenimiento inicializados');
+}
+
+function seedExpenseCategories() {
+  const count = db.prepare('SELECT COUNT(*) as c FROM expense_categories').get().c;
+  if (count > 0) return;
+  const ins = db.prepare(
+    'INSERT OR IGNORE INTO expense_categories(name,parent_id,affects_profit,requires_approval) VALUES(?,?,?,?)'
+  );
+  const grupos = [
+    ['Local', null, 1, 0],
+    ['Servicios básicos', null, 1, 0],
+    ['Operación', null, 1, 0],
+    ['Personal', null, 1, 1],
+    ['Marketing', null, 1, 0],
+    ['Tecnología', null, 1, 0],
+    ['Finanzas', null, 1, 0],
+    ['Impuestos y permisos', null, 1, 1],
+    ['Servicios profesionales', null, 1, 0],
+    ['Activos fijos', null, 0, 1],
+    ['Otros', null, 1, 0],
+  ];
+  const subs = {
+    'Local':                ['Alquiler','Mantenimiento','Limpieza','Seguridad'],
+    'Servicios básicos':    ['Electricidad','Agua','Internet','Teléfono'],
+    'Operación':            ['Combustible','Transporte','Mensajería','Viáticos'],
+    'Personal':             ['Nómina resumida','Incentivos','Uniformes','Capacitación'],
+    'Marketing':            ['Publicidad','Diseño','Redes sociales','Impresiones'],
+    'Tecnología':           ['Software','Licencias','Equipos','Reparaciones'],
+    'Finanzas':             ['Comisiones bancarias','Intereses','Cargos por tarjeta'],
+    'Impuestos y permisos': ['Impuestos','Licencias','Renovaciones'],
+    'Servicios profesionales': ['Contabilidad','Abogados','Consultorías'],
+    'Activos fijos':        ['Computadoras','Impresoras','Mobiliario','Equipos'],
+    'Otros':                ['Imprevistos','Gastos extraordinarios'],
+  };
+  grupos.forEach(([name, pid, ap, ra]) => {
+    const r = ins.run(name, pid, ap, ra);
+    const parentId = r.lastInsertRowid;
+    (subs[name] || []).forEach(sub => ins.run(sub, parentId, ap, ra));
+  });
+  // Config por defecto
+  const insConf = db.prepare('INSERT OR IGNORE INTO expense_config(key,value) VALUES(?,?)');
+  insConf.run('cajero_limit', '1500');      // límite sin aprobación para cajero
+  insConf.run('require_attachment_above', '5000'); // exige comprobante sobre este monto
+  console.log('[GASTOS] Categorías y config inicializadas');
+}
+
+
+// ══════════════════════════════════════════════
+// REPOSITORIO: GASTOS Y CUENTAS POR PAGAR
+// ══════════════════════════════════════════════
+const expensesRepo = {
+  // ── Configuración ────────────────────────
+  getConfig() {
+    const rows = db.prepare('SELECT key,value FROM expense_config').all();
+    return Object.fromEntries(rows.map(r => [r.key, r.value]));
+  },
+  setConfig(key, value) {
+    db.prepare('INSERT OR REPLACE INTO expense_config(key,value) VALUES(?,?)').run(key, String(value));
+  },
+
+  // ── Categorías ───────────────────────────
+  getCategories() {
+    return db.prepare(`
+      SELECT c.*, p.name as parent_name
+      FROM expense_categories c
+      LEFT JOIN expense_categories p ON c.parent_id = p.id
+      ORDER BY COALESCE(c.parent_id,c.id), c.id
+    `).all();
+  },
+  createCategory({ name, parent_id, affects_profit, requires_approval, requires_attachment, approval_limit }) {
+    const r = db.prepare(`INSERT INTO expense_categories(name,parent_id,affects_profit,requires_approval,requires_attachment,approval_limit)
+      VALUES(?,?,?,?,?,?)`).run(name, parent_id||null, affects_profit??1, requires_approval??0, requires_attachment??0, approval_limit||0);
+    return r.lastInsertRowid;
+  },
+  updateCategory(id, data) {
+    db.prepare(`UPDATE expense_categories SET name=?,affects_profit=?,requires_approval=?,requires_attachment=?,approval_limit=?,active=? WHERE id=?`)
+      .run(data.name, data.affects_profit??1, data.requires_approval??0, data.requires_attachment??0, data.approval_limit||0, data.active??1, id);
+  },
+
+  // ── CRUD Gastos ──────────────────────────
+  getAll({ status, from, to, supplier_id, category_id, user_id, limit } = {}) {
+    let q = `SELECT e.*,
+      ec.name as category_name, ec.parent_id as category_parent_id,
+      s.name as supplier_name,
+      u.name as user_name,
+      a.name as approved_by_name
+    FROM expenses e
+    LEFT JOIN expense_categories ec ON e.category_id = ec.id
+    LEFT JOIN suppliers s ON e.supplier_id = s.id
+    LEFT JOIN users u ON e.user_id = u.id
+    LEFT JOIN users a ON e.approved_by = a.id
+    WHERE 1=1`;
+    const params = [];
+    if (status)      { q += ' AND e.status=?';      params.push(status); }
+    if (from)        { q += ' AND e.issue_date>=?';  params.push(from); }
+    if (to)          { q += ' AND e.issue_date<=?';  params.push(to); }
+    if (supplier_id) { q += ' AND e.supplier_id=?';  params.push(supplier_id); }
+    if (category_id) { q += ' AND e.category_id=?';  params.push(category_id); }
+    if (user_id)     { q += ' AND e.user_id=?';      params.push(user_id); }
+    q += ' ORDER BY e.created_at DESC';
+    if (limit) q += ` LIMIT ${parseInt(limit)}`;
+    return db.prepare(q).all(...params);
+  },
+
+  getById(id) {
+    const e = db.prepare(`SELECT e.*,
+      ec.name as category_name, s.name as supplier_name,
+      u.name as user_name, a.name as approved_by_name
+    FROM expenses e
+    LEFT JOIN expense_categories ec ON e.category_id = ec.id
+    LEFT JOIN suppliers s ON e.supplier_id = s.id
+    LEFT JOIN users u ON e.user_id = u.id
+    LEFT JOIN users a ON e.approved_by = a.id
+    WHERE e.id=?`).get(id);
+    if (!e) return null;
+    e.payments = db.prepare(`SELECT ep.*, u.name as user_name FROM expense_payments ep
+      LEFT JOIN users u ON ep.user_id=u.id WHERE ep.expense_id=? ORDER BY ep.created_at`).all(id);
+    return e;
+  },
+
+  getSummary({ from, to } = {}) {
+    const dateFilter = from && to ? `AND e.issue_date BETWEEN '${from}' AND '${to}'` : '';
+    return {
+      total:       db.prepare(`SELECT COALESCE(SUM(total),0) as v FROM expenses e WHERE type='gasto' ${dateFilter}`).get().v,
+      paid:        db.prepare(`SELECT COALESCE(SUM(paid_amount),0) as v FROM expenses e WHERE type='gasto' ${dateFilter}`).get().v,
+      pending:     db.prepare(`SELECT COALESCE(SUM(total-paid_amount),0) as v FROM expenses e WHERE type='gasto' AND status NOT IN ('pagado','anulado') ${dateFilter}`).get().v,
+      overdue:     db.prepare(`SELECT COALESCE(SUM(total-paid_amount),0) as v FROM expenses e WHERE type='gasto' AND status NOT IN ('pagado','anulado') AND due_date < date('now') ${dateFilter}`).get().v,
+      from_cash:   db.prepare(`SELECT COALESCE(SUM(paid_amount),0) as v FROM expenses e WHERE type='gasto' AND payment_source='caja' ${dateFilter}`).get().v,
+      count:       db.prepare(`SELECT COUNT(*) as v FROM expenses e WHERE type='gasto' ${dateFilter}`).get().v,
+      by_category: db.prepare(`SELECT ec.name, COALESCE(SUM(e.total),0) as total FROM expenses e LEFT JOIN expense_categories ec ON e.category_id=ec.id WHERE e.type='gasto' ${dateFilter} GROUP BY e.category_id ORDER BY total DESC LIMIT 8`).all(),
+    };
+  },
+
+  // ── Crear gasto ──────────────────────────
+  create({ type, category_id, description, supplier_id, amount, tax_amount, discount, total,
+           currency, payment_method, payment_source, cash_session_id, issue_date, due_date,
+           invoice_number, ncf, supplier_rnc, notes, user_id, status }) {
+    const r = db.prepare(`
+      INSERT INTO expenses(type,category_id,description,supplier_id,amount,tax_amount,discount,total,
+        currency,payment_method,payment_source,cash_session_id,issue_date,due_date,
+        invoice_number,ncf,supplier_rnc,notes,user_id,status)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(type||'gasto', category_id||null, description, supplier_id||null,
+           amount||0, tax_amount||0, discount||0, total||amount||0,
+           currency||'DOP', payment_method||'efectivo', payment_source||'pendiente',
+           cash_session_id||null, issue_date||todayStr(), due_date||null,
+           invoice_number||null, ncf||null, supplier_rnc||null, notes||null,
+           user_id, status||'pendiente_pago');
+    return r.lastInsertRowid;
+  },
+
+  // ── Pagar gasto desde caja ───────────────
+  pay({ expenseId, amount, payment_method, payment_source, cash_session_id, reference, notes, userId, userName }) {
+    return db.transaction(() => {
+      const expense = db.prepare('SELECT * FROM expenses WHERE id=?').get(expenseId);
+      if (!expense) throw new Error('Gasto no encontrado');
+      if (expense.status === 'anulado') throw new Error('El gasto está anulado');
+      const saldo = expense.total - expense.paid_amount;
+      if (amount > saldo + 0.01) throw new Error(`Monto excede el saldo pendiente (RD$${saldo.toLocaleString('es-DO')})`);
+      if (amount <= 0) throw new Error('El monto debe ser mayor a cero');
+
+      // Crear movimiento de caja si paga desde caja
+      let cashMovementId = null;
+      if (payment_source === 'caja' && cash_session_id) {
+        const session = db.prepare("SELECT * FROM cash_sessions WHERE id=? AND status='open'").get(cash_session_id);
+        if (!session) throw new Error('La caja está cerrada');
+        const cm = db.prepare(`INSERT INTO cash_movements(cash_session_id,type,amount,method,reference_id,description,user_id)
+          VALUES(?,?,?,?,?,?,?)`).run(cash_session_id, 'salida', amount, payment_method||'efectivo',
+          expenseId, `Gasto: ${expense.description}`, userId);
+        cashMovementId = cm.lastInsertRowid;
+        // Actualizar expected de la caja
+        db.prepare('UPDATE cash_sessions SET expected=expected-? WHERE id=?').run(amount, cash_session_id);
+      }
+
+      // Registrar pago
+      db.prepare(`INSERT INTO expense_payments(expense_id,amount,payment_method,payment_source,
+        cash_session_id,cash_movement_id,reference,notes,user_id)
+        VALUES(?,?,?,?,?,?,?,?,?)`).run(expenseId, amount, payment_method||'efectivo',
+        payment_source||'caja', cash_session_id||null, cashMovementId, reference||null, notes||null, userId);
+
+      // Actualizar gasto
+      const newPaid = expense.paid_amount + amount;
+      const newStatus = newPaid >= expense.total - 0.01 ? 'pagado' : 'parcialmente_pagado';
+      db.prepare('UPDATE expenses SET paid_amount=?,status=?,updated_at=datetime("now"),cash_session_id=?,cash_movement_id=? WHERE id=?')
+        .run(newPaid, newStatus, cash_session_id||expense.cash_session_id, cashMovementId||expense.cash_movement_id, expenseId);
+
+      audit(userId, userName||'', 'gasto_pagado', 'expenses', expenseId,
+        `Pago: RD$${amount} | Método: ${payment_method} | Estado: ${newStatus}`);
+      return { ok: true, newStatus, newPaid, cashMovementId };
+    })();
+  },
+
+  // ── Aprobar gasto ────────────────────────
+  approve(expenseId, userId, userName) {
+    const e = db.prepare('SELECT * FROM expenses WHERE id=?').get(expenseId);
+    if (!e) throw new Error('Gasto no encontrado');
+    if (!['pendiente_aprobacion','borrador'].includes(e.status)) throw new Error('El gasto no está pendiente de aprobación');
+    db.prepare('UPDATE expenses SET status=?,approved_by=?,approved_at=datetime("now"),updated_at=datetime("now") WHERE id=?')
+      .run('aprobado', userId, expenseId);
+    audit(userId, userName, 'gasto_aprobado', 'expenses', expenseId, '');
+    return { ok: true };
+  },
+
+  // ── Rechazar gasto ───────────────────────
+  reject(expenseId, userId, userName, reason) {
+    db.prepare('UPDATE expenses SET status=?,cancel_reason=?,cancelled_by=?,cancelled_at=datetime("now"),updated_at=datetime("now") WHERE id=?')
+      .run('rechazado', reason, userId, expenseId);
+    audit(userId, userName, 'gasto_rechazado', 'expenses', expenseId, reason);
+    return { ok: true };
+  },
+
+  // ── Anular gasto ─────────────────────────
+  cancel(expenseId, userId, userName, reason) {
+    return db.transaction(() => {
+      const e = db.prepare('SELECT * FROM expenses WHERE id=?').get(expenseId);
+      if (!e) throw new Error('Gasto no encontrado');
+      if (e.status === 'anulado') throw new Error('Ya está anulado');
+      if (!reason?.trim()) throw new Error('El motivo de anulación es obligatorio');
+
+      // Contramovimiento en caja si afectó caja
+      if (e.cash_session_id && e.paid_amount > 0) {
+        const session = db.prepare("SELECT * FROM cash_sessions WHERE id=?").get(e.cash_session_id);
+        if (session?.status === 'open') {
+          db.prepare(`INSERT INTO cash_movements(cash_session_id,type,amount,method,reference_id,description,user_id)
+            VALUES(?,?,?,?,?,?,?)`).run(e.cash_session_id, 'entrada', e.paid_amount, e.payment_method,
+            expenseId, `Anulación gasto: ${e.description}`, userId);
+          db.prepare('UPDATE cash_sessions SET expected=expected+? WHERE id=?').run(e.paid_amount, e.cash_session_id);
+        }
+      }
+      // Anular pagos activos
+      db.prepare("UPDATE expense_payments SET status='anulado',cancel_reason=?,cancelled_by=? WHERE expense_id=? AND status='pagado'")
+        .run(reason, userId, expenseId);
+      db.prepare('UPDATE expenses SET status=?,cancel_reason=?,cancelled_by=?,cancelled_at=datetime("now"),updated_at=datetime("now") WHERE id=?')
+        .run('anulado', reason, userId, expenseId);
+      audit(userId, userName, 'gasto_anulado', 'expenses', expenseId, reason);
+      return { ok: true };
+    })();
+  },
+
+  // ── Cuentas por pagar ────────────────────
+  getAccountsPayable() {
+    return db.prepare(`
+      SELECT e.*, ec.name as category_name, s.name as supplier_name,
+        CASE WHEN e.due_date < date('now') AND e.status NOT IN ('pagado','anulado') THEN 1 ELSE 0 END as overdue,
+        julianday(e.due_date) - julianday('now') as days_remaining
+      FROM expenses e
+      LEFT JOIN expense_categories ec ON e.category_id = ec.id
+      LEFT JOIN suppliers s ON e.supplier_id = s.id
+      WHERE e.status NOT IN ('pagado','anulado','borrador','rechazado')
+      AND e.type = 'gasto'
+      ORDER BY e.due_date ASC, e.created_at DESC
+    `).all();
+  },
+
+  // ── Gastos recurrentes ───────────────────
+  getRecurring() {
+    return db.prepare(`SELECT r.*, s.name as supplier_name, ec.name as category_name
+      FROM recurring_expenses r
+      LEFT JOIN suppliers s ON r.supplier_id=s.id
+      LEFT JOIN expense_categories ec ON r.category_id=ec.id
+      ORDER BY r.next_date ASC`).all();
+  },
+  createRecurring(data) {
+    const r = db.prepare(`INSERT INTO recurring_expenses(name,supplier_id,category_id,amount,frequency,day_of_period,next_date,end_date,payment_method,payment_source,requires_approval,auto_draft,active,user_id)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,?)`).run(
+      data.name, data.supplier_id||null, data.category_id||null, data.amount||0,
+      data.frequency||'mensual', data.day_of_period||1, data.next_date||null, data.end_date||null,
+      data.payment_method||'efectivo', data.payment_source||'caja',
+      data.requires_approval||0, data.auto_draft??1, data.user_id);
+    return r.lastInsertRowid;
+  },
+  toggleRecurring(id, active) {
+    db.prepare('UPDATE recurring_expenses SET active=? WHERE id=?').run(active?1:0, id);
+  },
+
+  // ── Presupuestos ─────────────────────────
+  getBudgets(month) {
+    return db.prepare(`
+      SELECT b.*, ec.name as category_name,
+        COALESCE((SELECT SUM(e.total) FROM expenses e WHERE e.category_id=b.category_id
+          AND strftime('%Y-%m',e.issue_date)=b.month AND e.status NOT IN ('anulado','borrador')),0) as spent
+      FROM expense_budgets b
+      LEFT JOIN expense_categories ec ON b.category_id=ec.id
+      WHERE b.month=?
+    `).all(month);
+  },
+  upsertBudget({ category_id, month, amount, user_id }) {
+    db.prepare('INSERT OR REPLACE INTO expense_budgets(category_id,month,amount,user_id) VALUES(?,?,?,?)')
+      .run(category_id, month, amount, user_id);
+  },
+};
+
+
+// ══════════════════════════════════════════════
+// REPOSITORIO: SUCURSALES
+// ══════════════════════════════════════════════
+const branchesRepo = {
+  getAll() { return db.prepare('SELECT * FROM branches ORDER BY name').all(); },
+  getById(id) { return db.prepare('SELECT * FROM branches WHERE id=?').get(id); },
+  create({ name, address, phone, manager }) {
+    return db.prepare('INSERT INTO branches(name,address,phone,manager) VALUES(?,?,?,?)')
+      .run(name, address||'', phone||'', manager||'').lastInsertRowid;
+  },
+  update(id, { name, address, phone, manager, active }) {
+    db.prepare('UPDATE branches SET name=?,address=?,phone=?,manager=?,active=? WHERE id=?')
+      .run(name, address||'', phone||'', manager||'', active??1, id);
+  },
+  delete(id) { db.prepare('DELETE FROM branches WHERE id=?').run(id); },
+};
+
+// ══════════════════════════════════════════════
+// REPOSITORIO: VEHÍCULOS
+// ══════════════════════════════════════════════
+const vehiclesRepo = {
+  getAll() {
+    return db.prepare(`SELECT v.*, u.name as user_name FROM vehicles v
+      LEFT JOIN users u ON v.user_id=u.id ORDER BY v.brand, v.model`).all();
+  },
+  getById(id) { return db.prepare('SELECT * FROM vehicles WHERE id=?').get(id); },
+  create(data) {
+    const r = db.prepare(`INSERT INTO vehicles(type,brand,model,year,plate,color,fuel_type,fuel_grade,km_per_gallon,odometer,notes,user_id)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      data.type||'carro', data.brand, data.model, data.year||null,
+      data.plate||'', data.color||'', data.fuel_type||'gasolina',
+      data.fuel_grade||'premium', data.km_per_gallon||35,
+      data.odometer||0, data.notes||'', data.user_id||null);
+    return r.lastInsertRowid;
+  },
+  update(id, data) {
+    db.prepare(`UPDATE vehicles SET type=?,brand=?,model=?,year=?,plate=?,color=?,
+      fuel_type=?,fuel_grade=?,km_per_gallon=?,odometer=?,status=?,notes=?,updated_at=datetime('now') WHERE id=?`)
+      .run(data.type||'carro', data.brand, data.model, data.year||null,
+           data.plate||'', data.color||'', data.fuel_type||'gasolina',
+           data.fuel_grade||'premium', data.km_per_gallon||35,
+           data.odometer||0, data.status||'activo', data.notes||'', id);
+  },
+  delete(id) { db.prepare('DELETE FROM vehicles WHERE id=?').run(id); },
+
+  // Calcular costo estimado de combustible para una distancia
+  calcFuelCost(vehicleId, distanceKm, fuelPrices) {
+    const v = this.getById(vehicleId);
+    if (!v) return null;
+    const gallons = distanceKm / (v.km_per_gallon || 35);
+    const pricePerGallon = parseFloat(fuelPrices[v.fuel_grade] || fuelPrices.premium || 293);
+    const cost = gallons * pricePerGallon;
+    return { gallons: Math.round(gallons * 100) / 100, cost: Math.round(cost * 100) / 100,
+             fuel_grade: v.fuel_grade, km_per_gallon: v.km_per_gallon };
+  },
+};
+
+// ══════════════════════════════════════════════
+// REPOSITORIO: MANTENIMIENTO
+// ══════════════════════════════════════════════
+const maintenanceRepo = {
+  getTypes() { return db.prepare('SELECT * FROM vehicle_maintenance_types WHERE active=1 ORDER BY name').all(); },
+  getByVehicle(vehicleId) {
+    return db.prepare(`SELECT m.*, u.name as user_name FROM vehicle_maintenance m
+      LEFT JOIN users u ON m.user_id=u.id WHERE m.vehicle_id=? ORDER BY m.date_done DESC`).all(vehicleId);
+  },
+  getPending() {
+    return db.prepare(`SELECT m.*, v.brand, v.model, v.plate FROM vehicle_maintenance m
+      JOIN vehicles v ON m.vehicle_id=v.id
+      WHERE m.next_date IS NOT NULL AND m.next_date <= date('now','+30 days')
+      ORDER BY m.next_date ASC`).all();
+  },
+  create(data) {
+    return db.prepare(`INSERT INTO vehicle_maintenance(vehicle_id,type,description,odometer_at,next_odometer,date_done,next_date,cost,workshop,notes,user_id)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(
+      data.vehicle_id, data.type, data.description||'',
+      data.odometer_at||null, data.next_odometer||null,
+      data.date_done||todayStr(), data.next_date||null,
+      data.cost||0, data.workshop||'', data.notes||'', data.user_id||null).lastInsertRowid;
+  },
+  delete(id) { db.prepare('DELETE FROM vehicle_maintenance WHERE id=?').run(id); },
+};
+
+// ══════════════════════════════════════════════
+// REPOSITORIO: ENVÍOS
+// ══════════════════════════════════════════════
+const deliveriesRepo = {
+  getAll({ status, from, to } = {}) {
+    let q = `SELECT d.*, v.brand, v.model, v.plate, v.km_per_gallon, v.fuel_grade,
+      u.name as driver_name, c.name as customer_name
+      FROM deliveries d
+      LEFT JOIN vehicles v ON d.vehicle_id=v.id
+      LEFT JOIN users u ON d.driver_id=u.id
+      LEFT JOIN customers c ON d.customer_id=c.id WHERE 1=1`;
+    const p = [];
+    if (status) { q += ' AND d.status=?'; p.push(status); }
+    if (from)   { q += ' AND d.created_at>=?'; p.push(from); }
+    if (to)     { q += ' AND d.created_at<=?'; p.push(to); }
+    q += ' ORDER BY d.created_at DESC';
+    return db.prepare(q).all(...p);
+  },
+  getById(id) { return db.prepare('SELECT * FROM deliveries WHERE id=?').get(id); },
+  create(data) {
+    return db.prepare(`INSERT INTO deliveries(sale_id,customer_id,vehicle_id,driver_id,
+      origin_address,dest_address,dest_lat,dest_lng,distance_km,fuel_used,fuel_cost,
+      delivery_fee,status,scheduled_at,notes,user_id)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      data.sale_id||null, data.customer_id||null, data.vehicle_id||null, data.driver_id||null,
+      data.origin_address||'', data.dest_address, data.dest_lat||null, data.dest_lng||null,
+      data.distance_km||null, data.fuel_used||null, data.fuel_cost||null,
+      data.delivery_fee||0, data.status||'pendiente', data.scheduled_at||null,
+      data.notes||'', data.user_id||null).lastInsertRowid;
+  },
+  updateStatus(id, status, userId) {
+    db.prepare(`UPDATE deliveries SET status=?,${status==='entregado'?"delivered_at=datetime('now'),":""} updated_at=datetime('now') WHERE id=?`)
+      .run(status, id);
+  },
+  getSummary() {
+    return {
+      pendiente:   db.prepare("SELECT COUNT(*) as c FROM deliveries WHERE status='pendiente'").get().c,
+      en_camino:   db.prepare("SELECT COUNT(*) as c FROM deliveries WHERE status='en_camino'").get().c,
+      entregado:   db.prepare("SELECT COUNT(*) as c FROM deliveries WHERE status='entregado'").get().c,
+      fuel_cost:   db.prepare("SELECT COALESCE(SUM(fuel_cost),0) as c FROM deliveries WHERE status='entregado'").get().c,
+    };
+  },
+};
+
+// ══════════════════════════════════════════════
+// REPOSITORIO: NCF AVANZADO
+// ══════════════════════════════════════════════
+const ncfRepo = {
+  getSequences() { return db.prepare('SELECT * FROM ncf_sequences ORDER BY type, id').all(); },
+  getActive(type) { return db.prepare("SELECT * FROM ncf_sequences WHERE type=? AND active=1").get(type); },
+  createSequence({ type, prefix, from_num, to_num, expiry_date, alert_at }) {
+    return db.prepare('INSERT INTO ncf_sequences(type,prefix,from_num,to_num,current,expiry_date,alert_at) VALUES(?,?,?,?,?,?,?)')
+      .run(type, prefix, from_num, to_num, from_num - 1, expiry_date||null, alert_at||50).lastInsertRowid;
+  },
+  getNext(type) {
+    return db.transaction(() => {
+      const seq = db.prepare("SELECT * FROM ncf_sequences WHERE type=? AND active=1 AND current < to_num").get(type);
+      if (!seq) throw new Error(`Sin comprobantes disponibles tipo ${type}`);
+      const next = seq.current + 1;
+      db.prepare('UPDATE ncf_sequences SET current=? WHERE id=?').run(next, seq.id);
+      const ncf = seq.prefix + String(next).padStart(8, '0');
+      const remaining = seq.to_num - next;
+      // Alerta si quedan pocos
+      if (remaining <= seq.alert_at) console.log(`[NCF] ALERTA: quedan ${remaining} comprobantes tipo ${type}`);
+      return { ncf, remaining, sequence_id: seq.id };
+    })();
+  },
+  logNcf({ ncf, type, sale_id, customer_rnc }) {
+    db.prepare('INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc) VALUES(?,?,?,?)').run(ncf, type, sale_id||null, customer_rnc||'');
+  },
+  getAlerts() {
+    return db.prepare(`SELECT *, (to_num - current) as remaining FROM ncf_sequences
+      WHERE active=1 AND (to_num - current) <= alert_at ORDER BY remaining ASC`).all();
+  },
+};
+
 // ══════════════════════════════════════════════
 // EXPORTS
 // ══════════════════════════════════════════════
@@ -1275,4 +2066,10 @@ module.exports = {
   // Exportada para auth:login y auth:getSuperPass en main.js
   // Genera la contraseña superadmin per-máquina sin depender de .env
   _deriveSuperAdminPass,
+  expensesRepo,
+  branchesRepo,
+  vehiclesRepo,
+  maintenanceRepo,
+  deliveriesRepo,
+  ncfRepo,
 };
