@@ -178,11 +178,6 @@ contextBridge.exposeInMainWorld('api', {
   },
 
   // ── Multi-negocios ──────────────────────────
-  business: {
-    getAll:  ()  => ipcRenderer.invoke('business:getAll'),
-    create:  (d) => ipcRenderer.invoke('business:create', d),
-  },
-
   // ── Sucursales ───────────────────────────
   branches: {
     getAll:   ()  => ipcRenderer.invoke('branches:getAll'),
@@ -247,4 +242,10 @@ contextBridge.exposeInMainWorld('api', {
     getBudgets:       (d) => ipcRenderer.invoke('expenses:getBudgets', d),
     upsertBudget:     (d) => ipcRenderer.invoke('expenses:upsertBudget', d),
   },
+
+  // ── Precio combustible (scraping Presto + MICM) ──────────────
+  fuel: {
+    getPrices: () => ipcRenderer.invoke('fuel:getPrices'),
+  },
+
 });

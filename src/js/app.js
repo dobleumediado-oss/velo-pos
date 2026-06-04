@@ -519,6 +519,8 @@ function buildSidebar() {
       badge: alertBadge > 0 ? alertBadge : null },
     { key: 'ventas',    icon: 'list',     label: 'Ventas' },
     { key: 'caja',      icon: 'cash',     label: 'Caja' },
+    ...(CFG.module_envios === '1'
+      ? [{ key: 'envios', icon: 'truck', label: 'Envíos' }] : []),
   ];
 
   const items = ['admin','superadmin'].includes(user?.role) ? adminNavItems : cajeroNavItems;
@@ -708,6 +710,11 @@ function _startLoginClock() {
 // ROUTER
 // ══════════════════════════════════════════════
 function routeTo(p) {
+  // Limpiar auto-refresh si salimos del dashboard
+  if (p !== 'dash' && window._dashRefreshInterval) {
+    clearInterval(window._dashRefreshInterval);
+    window._dashRefreshInterval = null;
+  }
   // Bloquear navegación si hay cambio de contraseña obligatorio pendiente
   if (window._pwdChangeRequired && p !== 'configuracion') {
     toast('Debes cambiar tu contraseña antes de continuar', 'w');
@@ -766,6 +773,11 @@ function routeTo(p) {
 // LOGOUT
 // ══════════════════════════════════════════════
 async function doLogout() {
+  // Limpiar auto-refresh del dashboard
+  if (window._dashRefreshInterval) {
+    clearInterval(window._dashRefreshInterval);
+    window._dashRefreshInterval = null;
+  }
   if (user) {
     await window.api.auth.logout({ userId: user.id, userName: user.name });
   }

@@ -378,7 +378,8 @@ async function analizarArchivoConIA() {
     if (!aiResult.ok) throw new Error(aiResult.error || 'Error al analizar con IA');
 
     const parsed = aiResult.data;
-    importState.mapping = parsed.mapping || {};
+    importState.mapping     = parsed.mapping    || {};
+    importState._confidence = parsed.confidence || 1;
 
     // 4. Mostrar pantalla de confirmación
     mostrarConfirmacionMapeo(parsed.notas);
@@ -424,6 +425,11 @@ function mostrarConfirmacionMapeo(notas) {
   openModal(`
     <div class="modal-title">✨ Mapeo detectado por IA</div>
     <div class="modal-sub" style="margin-bottom:12px">${notas || 'Revisa y ajusta si es necesario'}</div>
+    ${importState._confidence < 0.7 ? `
+    <div style="background:rgba(245,158,11,.1);border:1px solid var(--amber,#f59e0b);border-radius:8px;
+                padding:10px 14px;font-size:12px;color:var(--amber,#f59e0b);margin-bottom:12px">
+      ⚠ Confianza del mapeo: ${Math.round((importState._confidence||0)*100)}% — Revisa cuidadosamente antes de importar
+    </div>` : ''}
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
       <div style="background:var(--surface2);border-radius:var(--r-sm);padding:10px;font-size:12px">
@@ -513,7 +519,7 @@ async function ejecutarImportacion() {
 
     try {
       if (tipo === 'productos') {
-        const name  = String(row[mapping.name] || '').trim();
+        let name    = String(row[mapping.name] || '').trim();
         const price = parseFloat(String(row[mapping.price] || '0').replace(/[^0-9.,-]/g,'').replace(',','.')) || 0;
 
         // Si no hay nombre, generar uno provisional para no perder el registro

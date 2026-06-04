@@ -463,12 +463,52 @@ async function renderPresupuestos(el, user) {
   const month = _gThisMonth();
   el.innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted2)">Cargando presupuestos...</div>';
   try {
-    const res = await window.api.expenses.getBudgets({ month, requestUserId: user.id });
-    if (!res.ok) throw new Error(res.error);
-    const data = res.data;
+    const [budgetRes, sumRes] = await Promise.all([
+      window.api.expenses.getBudgets({ month, requestUserId: user.id }),
+      window.api.expenses.getSummary({ month }),
+    ]);
+    if (!budgetRes.ok) throw new Error(budgetRes.error);
+    const data = budgetRes.data;
     const cats = _categorias.filter(c => !c.parent_id);
+    const s    = sumRes?.ok ? sumRes.data : null;
+
+    // Balance visual ingresos vs egresos del mes
+    const totalGastado  = s?.total    || 0;
+    const totalPagado   = s?.paid     || 0;
+    const totalPendiente= s?.pending  || 0;
+    const totalVencido  = s?.overdue  || 0;
+    const totalBudget   = data.reduce((a,b) => a + (b.amount||0), 0);
+    const pctBudget     = totalBudget > 0 ? Math.min(100, (totalGastado/totalBudget)*100) : 0;
+    const budgetColor   = pctBudget >= 100 ? 'var(--red,#ef4444)' : pctBudget >= 80 ? 'var(--amber,#f59e0b)' : 'var(--green,#00c07a)';
 
     el.innerHTML = `
+      <!-- Resumen del mes -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;margin-bottom:16px">
+        <div style="background:var(--bg2);border-radius:10px;padding:12px 14px;border:0.5px solid var(--line2)">
+          <div style="font-size:10px;color:var(--muted2);margin-bottom:3px">Total gastado</div>
+          <div style="font-size:18px;font-weight:700;color:var(--red,#ef4444)">${_gFmt(totalGastado)}</div>
+          <div style="font-size:10px;color:var(--muted2)">${s?.count||0} registros</div>
+        </div>
+        <div style="background:var(--bg2);border-radius:10px;padding:12px 14px;border:0.5px solid var(--line2)">
+          <div style="font-size:10px;color:var(--muted2);margin-bottom:3px">Pagado</div>
+          <div style="font-size:18px;font-weight:700;color:var(--green,#00c07a)">${_gFmt(totalPagado)}</div>
+        </div>
+        <div style="background:var(--bg2);border-radius:10px;padding:12px 14px;border:0.5px solid var(--line2)">
+          <div style="font-size:10px;color:var(--muted2);margin-bottom:3px">Por pagar</div>
+          <div style="font-size:18px;font-weight:700;color:var(--amber,#f59e0b)">${_gFmt(totalPendiente)}</div>
+          ${totalVencido > 0 ? `<div style="font-size:10px;color:var(--red,#ef4444);font-weight:600">${_gFmt(totalVencido)} vencido</div>` : ''}
+        </div>
+        ${totalBudget > 0 ? `
+        <div style="background:var(--bg2);border-radius:10px;padding:12px 14px;border:0.5px solid ${budgetColor}">
+          <div style="font-size:10px;color:var(--muted2);margin-bottom:3px">Presupuesto</div>
+          <div style="font-size:18px;font-weight:700;color:${budgetColor}">${Math.round(pctBudget)}%</div>
+          <div style="background:var(--line2);border-radius:3px;height:4px;margin-top:4px">
+            <div style="background:${budgetColor};border-radius:3px;height:4px;width:${pctBudget}%;transition:width .4s"></div>
+          </div>
+          <div style="font-size:10px;color:var(--muted2);margin-top:2px">${_gFmt(totalGastado)} / ${_gFmt(totalBudget)}</div>
+        </div>` : ''}
+      </div>
+
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
         <div style="font-size:13px;font-weight:600">Presupuesto — ${new Date(month+'-01').toLocaleString('es-DO',{month:'long',year:'numeric'})}</div>
         <button class="btn btn-dark btn-sm" id="btn-add-budget">${svg('plus')} Agregar presupuesto</button>

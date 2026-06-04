@@ -124,6 +124,46 @@ async function renderEnvios(el) {
   document.getElementById('btn-nuevo-envio')?.addEventListener('click', () => modalNuevoEnvio(el, vehiculos));
 }
 
+// ── Tarifa inteligente sugerida ───────────────
+function _sugerirTarifa(distKm, vehicleData) {
+  // Base: RD$50 por km para distancias cortas, decreciente para largas
+  const dist = parseFloat(distKm) || 0;
+
+  // Tarifa base por km según distancia (economía de escala)
+  let tarifaKm;
+  if (dist <= 5)        tarifaKm = 120;  // entrega local
+  else if (dist <= 15)  tarifaKm = 90;
+  else if (dist <= 30)  tarifaKm = 70;
+  else if (dist <= 60)  tarifaKm = 55;
+  else if (dist <= 120) tarifaKm = 45;
+  else                  tarifaKm = 35;   // larga distancia
+
+  // Ajuste por tipo de vehículo
+  const tipoMult = {
+    moto:      0.6,
+    carro:     1.0,
+    camioneta: 1.4,
+    furgoneta: 1.6,
+    camion:    2.2,
+    otro:      1.0,
+  };
+  const mult = tipoMult[vehicleData?.type] || 1.0;
+
+  // Costo combustible (ida y vuelta)
+  const fuelPrices = window._fuelPrices || { premium: 335.10, regular: 307.50, diesel: 287.10 };
+  const grade      = vehicleData?.fuel_grade || 'premium';
+  const kmg        = vehicleData?.km_per_gallon || 30;
+  const precioGal  = fuelPrices[grade] || fuelPrices.premium;
+  const costFuel   = (dist * 2 / kmg) * precioGal;
+
+  // Tarifa = combustible + mano de obra (tarifa por km × tipo)
+  const tarifaBase = dist * tarifaKm * mult;
+  const tarifa     = Math.max(costFuel + tarifaBase, 200); // mínimo RD$200
+
+  // Redondear a múltiplo de 50
+  return Math.round(tarifa / 50) * 50;
+}
+
 // ── Modal nuevo envío con geocoding y cálculo ─
 function modalNuevoEnvio(parentEl, vehiculos) {
   const user = _eUser();
@@ -231,15 +271,48 @@ function modalNuevoEnvio(parentEl, vehiculos) {
           ${distKm ? `📏 Distancia estimada: <strong>${distKm} km</strong>` : ''}
           <br><a href="https://www.google.com/maps?q=${lat},${lng}" target="_blank" style="color:var(--blue);font-size:11px">Ver en Google Maps ↗</a>`;
 
-        // Calcular combustible si hay vehículo seleccionado
-        const vehicleId = parseInt(vSelect?.value);
+        // Calcular combustible con precio en tiempo real + sugerir tarifa
+        const vehicleId  = parseInt(vSelect?.value);
+        const vehicleObj = vehiculos.find(v => v.id === vehicleId);
         if (vehicleId && distKm) {
           const fuelRes = await window.api.vehicles.calcFuel({ vehicleId, distanceKm: parseFloat(distKm), requestUserId: user.id });
           if (fuelRes?.ok && fuelRes.data) {
             const d = fuelRes.data;
+            const fuelPrices = window._fuelPrices || { premium: 335.10, regular: 307.50, diesel: 287.10 };
+            const precioReal = fuelPrices[d.fuel_grade] || fuelPrices.premium;
+            const costoReal  = (d.gallons * 2) * precioReal;
+
+            // Sugerir tarifa inteligente
+            const tarifaSugerida = _sugerirTarifa(distKm, vehicleObj);
+            const feeInput = document.getElementById('e-fee');
+            if (feeInput && (!feeInput.value || feeInput.value === '0')) {
+              feeInput.value = tarifaSugerida;
+            }
+
             fuelResult.style.display = 'block';
-            fuelResult.innerHTML = `⛽ Combustible estimado (ida y vuelta): <strong>${_eFmt(d.cost * 2)}</strong> 
-              (${(d.gallons*2).toFixed(2)} gal de ${d.fuel_grade} · ${d.km_per_gallon} km/gal)`;
+            fuelResult.innerHTML = `
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                <div>
+                  <div style="font-size:10px;color:var(--muted2);font-weight:600;margin-bottom:3px">⛽ COSTO COMBUSTIBLE (ida y vuelta)</div>
+                  <div style="font-size:16px;font-weight:700;color:var(--red,#ef4444)">${_eFmt(costoReal)}</div>
+                  <div style="font-size:11px;color:var(--muted2);margin-top:1px">
+                    ${(d.gallons*2).toFixed(2)} gal · ${d.fuel_grade} a ${_eFmt(precioReal)}/gal
+                    ${window._fuelPrices ? '<span style="color:var(--green,#00c07a)"> · tiempo real ✓</span>' : ''}
+                  </div>
+                </div>
+                <div>
+                  <div style="font-size:10px;color:var(--muted2);font-weight:600;margin-bottom:3px">💡 TARIFA SUGERIDA</div>
+                  <div style="font-size:16px;font-weight:700;color:var(--green,#00c07a)">${_eFmt(tarifaSugerida)}</div>
+                  <div style="font-size:11px;color:var(--muted2);margin-top:1px">combustible + mano de obra · editable</div>
+                </div>
+              </div>`;
+          }
+        } else if (distKm) {
+          // Sin vehículo — sugerir tarifa solo por distancia
+          const tarifaSugerida = _sugerirTarifa(distKm, null);
+          const feeInput = document.getElementById('e-fee');
+          if (feeInput && (!feeInput.value || feeInput.value === '0')) {
+            feeInput.value = tarifaSugerida;
           }
         }
       } catch(err) {
@@ -261,12 +334,32 @@ function modalNuevoEnvio(parentEl, vehiculos) {
       const distKm = parseFloat(document.getElementById('e-distance')?.value);
       const fuelResult = document.getElementById('e-fuel-result');
       if (!vehicleId || !distKm || !fuelResult) return;
+      const vehicleObj2 = vehiculos.find(v => v.id === vehicleId);
       const fuelRes = await window.api.vehicles.calcFuel({ vehicleId, distanceKm: distKm, requestUserId: user.id });
       if (fuelRes?.ok && fuelRes.data) {
         const d = fuelRes.data;
+        const fuelPrices = window._fuelPrices || { premium: 335.10, regular: 307.50, diesel: 287.10 };
+        const precioReal = fuelPrices[d.fuel_grade] || fuelPrices.premium;
+        const costoReal  = (d.gallons * 2) * precioReal;
+        const tarifaSugerida = _sugerirTarifa(distKm, vehicleObj2);
+        const feeInput = document.getElementById('e-fee');
+        if (feeInput) feeInput.value = tarifaSugerida;
         fuelResult.style.display = 'block';
-        fuelResult.innerHTML = `⛽ Combustible estimado (ida y vuelta): <strong>${_eFmt(d.cost * 2)}</strong>
-          (${(d.gallons*2).toFixed(2)} gal de ${d.fuel_grade} · ${d.km_per_gallon} km/gal)`;
+        fuelResult.innerHTML = `
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div>
+              <div style="font-size:10px;color:var(--muted2);font-weight:600;margin-bottom:3px">⛽ COSTO COMBUSTIBLE (ida y vuelta)</div>
+              <div style="font-size:16px;font-weight:700;color:var(--red,#ef4444)">${_eFmt(costoReal)}</div>
+              <div style="font-size:11px;color:var(--muted2);margin-top:1px">
+                ${(d.gallons*2).toFixed(2)} gal · ${d.fuel_grade} a ${_eFmt(precioReal)}/gal
+              </div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--muted2);font-weight:600;margin-bottom:3px">💡 TARIFA SUGERIDA</div>
+              <div style="font-size:16px;font-weight:700;color:var(--green,#00c07a)">${_eFmt(tarifaSugerida)}</div>
+              <div style="font-size:11px;color:var(--muted2);margin-top:1px">combustible + mano de obra · editable</div>
+            </div>
+          </div>`;
       }
     });
   }, 200);

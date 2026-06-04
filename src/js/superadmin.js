@@ -201,13 +201,18 @@ async function renderSuperAdmin(el) {
   modsCard.style.marginBottom = '16px';
 
   const modsDefs = [
-    { key: 'module_gastos',        icon: '💰', title: 'Gastos y Egresos',         desc: 'Registro de gastos del negocio, categorías y reportes de egresos', roles: 'admin' },
-    { key: 'module_sucursales',    icon: '🏪', title: 'Sucursales',               desc: 'Registro de sucursales del negocio (vista local — sync en Cloud 2026)', roles: 'admin' },
-    { key: 'module_vehiculos',     icon: '🚗', title: 'Vehículos',                desc: 'Registro de vehículos de la empresa (carros, motos, camiones)', roles: 'admin' },
-    { key: 'module_mantenimiento', icon: '🔧', title: 'Mantenimiento',            desc: 'Historial y alertas de mantenimiento de vehículos (requiere Vehículos)', roles: 'admin' },
-    { key: 'module_envios',        icon: '📦', title: 'Envíos y Despachos',       desc: 'Control de entregas con cálculo de distancia y combustible', roles: 'admin+cajero' },
-    { key: 'module_ncf_avanzado',  icon: '📋', title: 'NCF Avanzado',             desc: 'Gestión de rangos de comprobantes fiscales con alertas DGII', roles: 'admin' },
-    { key: 'module_multi_negocio', icon: '🏢', title: 'Multi-negocios',           desc: 'Múltiples empresas con base de datos separada (requiere reinicio)', roles: 'superadmin' },
+    // ── Módulos financieros ──────────────────────────────────────────────────
+    { key: 'fiscal_enabled',       icon: '📄', title: 'Módulo Fiscal NCF/DGII',   desc: 'Activa NCF, ITBIS 18% y comprobantes fiscales. Solo negocios con RNC.', roles: 'admin', special: 'fiscal' },
+    { key: 'module_gastos',        icon: '💰', title: 'Gastos y Egresos',          desc: 'Registro de gastos del negocio, categorías y reportes de egresos.', roles: 'admin' },
+    // ── Módulos operativos ───────────────────────────────────────────────────
+    { key: 'barcode_enabled',      icon: '🏷️', title: 'Etiquetas / Código de Barras', desc: 'Diseñador de etiquetas e impresión de códigos de barras.', roles: 'admin', special: 'barcode' },
+    { key: 'module_sucursales',    icon: '🏪', title: 'Sucursales',                desc: 'Registro de sucursales del negocio (vista local — sync en Cloud 2026).', roles: 'admin' },
+    { key: 'module_vehiculos',     icon: '🚗', title: 'Vehículos',                 desc: 'Registro de vehículos de la empresa (carros, motos, camiones).', roles: 'admin' },
+    { key: 'module_mantenimiento', icon: '🔧', title: 'Mantenimiento',             desc: 'Historial y alertas de mantenimiento de vehículos. Requiere Vehículos.', roles: 'admin' },
+    { key: 'module_envios',        icon: '📦', title: 'Envíos y Despachos',        desc: 'Control de entregas con cálculo de distancia y combustible.', roles: 'admin+cajero' },
+    { key: 'module_ncf_avanzado',  icon: '📋', title: 'NCF Avanzado',              desc: 'Gestión de rangos de comprobantes fiscales con alertas DGII.', roles: 'admin' },
+    // ── Módulos avanzados ────────────────────────────────────────────────────
+    { key: 'module_multi_negocio', icon: '🏢', title: 'Multi-negocios',            desc: 'Múltiples empresas con base de datos separada. Requiere reinicio.', roles: 'superadmin' },
   ];
 
   modsCard.innerHTML = `<div class="card-title" style="margin-bottom:16px">⚙️ Módulos del sistema</div>`;
@@ -678,7 +683,27 @@ async function saToggleModule(key, enabled) {
 
   if (typeof toast === 'function') toast(`${enabled ? '✓ Módulo activado' : '✗ Módulo desactivado'}: ${key.replace('module_','').replace(/_/g,' ')}`);
 
-  // Aviso especial para multi-negocio
+  // ── Lógica especial por módulo ──────────────────────────────────────────
+  // fiscal_enabled: actualizar CFG.fiscalEnabled e ITBIS
+  if (key === 'fiscal_enabled') {
+    CFG.fiscalEnabled = enabled;
+    CFG.itbis = enabled ? 18 : 0;
+  }
+
+  // barcode_enabled: actualizar flag global y sidebar
+  if (key === 'barcode_enabled') {
+    window._bcEnabled = enabled;
+    // Mostrar/ocultar diseñador si está visible en la misma página
+    const designer = document.getElementById('bc-designer-container');
+    if (designer) {
+      designer.style.display = enabled ? 'block' : 'none';
+      if (enabled && !designer.children.length && typeof renderBarcodeDesigner === 'function') {
+        renderBarcodeDesigner(designer);
+      }
+    }
+  }
+
+  // module_multi_negocio: requiere reinicio
   if (key === 'module_multi_negocio' && enabled) {
     setTimeout(() => alert('⚠️ El módulo Multi-negocios requiere reiniciar Velo POS para activarse completamente.'), 500);
   }

@@ -31,8 +31,15 @@ let CFG = {
   rnc:          '',
   addr:         '',
   phone:        '',
-  itbis:        0,           // 0 hasta que settings confirme que fiscal está activo
-  fiscalEnabled: false,      // false por defecto — superadmin lo activa por cliente
+  itbis:        0,
+  fiscalEnabled:           false,
+  module_gastos:           '0',
+  module_sucursales:       '0',
+  module_vehiculos:        '0',
+  module_mantenimiento:    '0',
+  module_envios:           '0',
+  module_ncf_avanzado:     '0',
+  module_multi_negocio:    '0',
 };
 
 // ── Denominaciones de billetes RD$ ────────────
@@ -103,6 +110,7 @@ async function loadAppData() {
       if (CFG.module_mantenimiento === '1') CFG.module_vehiculos = '1';
       CFG.module_envios        = settings.module_envios        || '0';
       CFG.module_ncf_avanzado  = settings.module_ncf_avanzado  || '0';
+      CFG.module_gastos        = settings.module_gastos        || '0';
       CFG.module_multi_negocio = settings.module_multi_negocio || '0';
       CFG.itbis          = CFG.fiscalEnabled
                            ? ((settings.tax_pct !== undefined && settings.tax_pct !== '')

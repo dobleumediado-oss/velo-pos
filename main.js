@@ -2167,6 +2167,102 @@ ipcMain.handle('system:diagnose', async (_, { requestUserId } = {}) => {
   }
 });
 
+
+// ── Precio de combustible — scraping Presto + MICM ──────────────
+ipcMain.handle('fuel:getPrices', async () => {
+  const FALLBACK = {
+    premium:        335.10,  // semana 30 mayo - 6 junio 2026
+    regular:        307.50,  // Fuente: prestocombustibles.com / micm.gob.do
+    diesel:         287.10,  // Gasoil Óptimo
+    gasoil_regular: 259.80,
+    glp:            137.20,
+    gnv:             43.97,
+  };
+
+  const clean = str => {
+    if (!str) return null;
+    const n = parseFloat(String(str).replace(/[^\d.]/g, ''));
+    return (n > 50 && n < 1000) ? n : null;
+  };
+
+  // ── FUENTE 1: prestocombustibles.com (tabla limpia) ───────────
+  try {
+    const res = await fetch('https://www.prestocombustibles.com/precios-combustibles/', {
+      signal: AbortSignal.timeout(8000),
+      headers: { 'User-Agent': 'VeloPOS/1.5.5' }
+    });
+    if (res.ok) {
+      const html = await res.text();
+      const get = (label) => {
+        const rx = new RegExp(label + '[^|\\n]*[|:]\\s*RD\\$?\\s*([\\d,.]+)', 'i');
+        return clean(html.match(rx)?.[1]);
+      };
+      const premium = get('Gasolina Premium') || get('Premium');
+      const regular = get('Gasolina Regular') || get('Regular');
+      const diesel  = get('Gasoil .ptimo');
+      const gasoilR = get('Gasoil Regular');
+      const glp     = get('Gas Licuado') || get('GLP');
+      const gnv     = get('Gas Natural') || get('GNV');
+      if (premium && premium > 200) {
+        return {
+          ok: true, source: 'prestocombustibles',
+          data: {
+            premium,
+            regular:        regular  || Math.round(premium * 0.917 * 10) / 10,
+            diesel:         diesel   || Math.round(premium * 0.857 * 10) / 10,
+            gasoil_regular: gasoilR  || Math.round(premium * 0.775 * 10) / 10,
+            glp:            glp      || FALLBACK.glp,
+            gnv:            gnv      || FALLBACK.gnv,
+          }
+        };
+      }
+    }
+  } catch(e) { console.warn('[Fuel] Presto error:', e.message); }
+
+  // ── FUENTE 2: micm.gob.do (artículo más reciente) ─────────────
+  try {
+    const listRes = await fetch('https://micm.gob.do/tag/precios-de-combustible/', {
+      signal: AbortSignal.timeout(8000),
+      headers: { 'User-Agent': 'VeloPOS/1.5.5' }
+    });
+    if (listRes.ok) {
+      const listHtml = await listRes.text();
+      const urlMatch = listHtml.match(/href="(https:\/\/micm\.gob\.do\/[^"]*(?:combustible|gasolina|reajusta|precio)[^"]*?)"/i);
+      if (urlMatch) {
+        const artRes = await fetch(urlMatch[1], {
+          signal: AbortSignal.timeout(8000),
+          headers: { 'User-Agent': 'VeloPOS/1.5.5' }
+        });
+        if (artRes.ok) {
+          const html    = await artRes.text();
+          const matchP  = html.match(/[Gg]asolina\s*[Pp]r[eé]mium[^<\d]{0,40}([\d,.]+)/i);
+          const matchR  = html.match(/[Gg]asolina\s*[Rr]egular[^<\d]{0,40}([\d,.]+)/i);
+          const matchDO = html.match(/[Gg]asoil\s*[ÓOo]ptimo[^<\d]{0,40}([\d,.]+)/i);
+          const matchDR = html.match(/[Gg]asoil\s*[Rr]egular[^<\d]{0,40}([\d,.]+)/i);
+          const matchG  = html.match(/[Gg][Ll][Pp][^<\d]{0,30}([\d,.]+)/i);
+          const premium = clean(matchP?.[1]);
+          if (premium && premium > 200) {
+            return {
+              ok: true, source: 'micm',
+              data: {
+                premium,
+                regular:        clean(matchR?.[1])  || Math.round(premium * 0.917 * 10) / 10,
+                diesel:         clean(matchDO?.[1]) || Math.round(premium * 0.857 * 10) / 10,
+                gasoil_regular: clean(matchDR?.[1]) || Math.round(premium * 0.775 * 10) / 10,
+                glp:            clean(matchG?.[1])  || FALLBACK.glp,
+                gnv:            FALLBACK.gnv,
+              }
+            };
+          }
+        }
+      }
+    }
+  } catch(e) { console.warn('[Fuel] MICM error:', e.message); }
+
+  // ── FALLBACK: precios verificados más recientes ────────────────
+  return { ok: true, source: 'fallback', data: FALLBACK };
+});
+
 app.whenReady().then(() => {
   // Cargar API key de Claude (necesita userData, disponible solo aquí)
   _loadApiKey();

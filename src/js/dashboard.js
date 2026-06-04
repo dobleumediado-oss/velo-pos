@@ -6,6 +6,23 @@
 async function renderDash(el) {
   el.innerHTML = '';
 
+  // ── Auto-refresh cada 60 segundos ──────────────────────────────────────────
+  // Limpiar intervalo anterior si existe (evitar múltiples timers)
+  if (window._dashRefreshInterval) {
+    clearInterval(window._dashRefreshInterval);
+    window._dashRefreshInterval = null;
+  }
+  // Solo activar si el dashboard está visible
+  window._dashRefreshInterval = setInterval(async () => {
+    const mainEl = document.getElementById('main-content');
+    if (mainEl && page === 'dash') {
+      await renderDash(mainEl);
+    } else {
+      clearInterval(window._dashRefreshInterval);
+      window._dashRefreshInterval = null;
+    }
+  }, 60000);
+
   // Recargar datos frescos
   const [,,,versionInfo] = await Promise.all([
     reloadProducts(),
@@ -13,6 +30,37 @@ async function renderDash(el) {
     reloadSales({ range: 'today' }),
     window.api.version.getInfo().then(r => r?.data || null).catch(() => null),
   ]);
+
+  // ── Datos de Gastos (si módulo activo) ──────────────────────────────────────
+  let gastosData = null;
+  if (CFG.module_gastos === '1' && window.api?.expenses) {
+    try {
+      const month = today().slice(0,7);
+      const [sumRes, payRes] = await Promise.all([
+        window.api.expenses.getSummary({ month }),
+        window.api.expenses.getPayable({ requestUserId: user?.id }),
+      ]);
+      gastosData = {
+        summary:  sumRes?.ok  ? sumRes.data  : null,
+        payable:  payRes?.ok  ? payRes.data  : [],
+      };
+    } catch(e) { console.warn('[Dash] gastos:', e.message); }
+  }
+
+  // ── Datos NCF (si fiscal activo) ────────────────────────────────────────────
+  let ncfData = null;
+  if (CFG.fiscalEnabled && window.api?.ncf) {
+    try {
+      const [seqRes, alertRes] = await Promise.all([
+        window.api.ncf.getSequences(),
+        window.api.ncf.getAlerts(),
+      ]);
+      ncfData = {
+        sequences: seqRes?.ok  ? seqRes.data  : [],
+        alerts:    alertRes?.ok ? alertRes.data : [],
+      };
+    } catch(e) { console.warn('[Dash] ncf:', e.message); }
+  }
 
   const sales  = DB.sales.filter(s =>
     s.status !== 'cancelled' && s.type !== 'devolucion');
@@ -50,18 +98,38 @@ async function renderDash(el) {
   const totalClients = DB.customers.filter(c => c.id !== 1 && c.active !== 0).length;
 
   // ── Header ──────────────────────────────────
+  const nowStr = new Date().toLocaleTimeString('es-DO', { hour:'2-digit', minute:'2-digit' });
+  const greeting = new Date().getHours() < 12 ? 'Buenos días' :
+                   new Date().getHours() < 19 ? 'Buenas tardes' : 'Buenas noches';
+
   el.appendChild(h('div', { class: 'sec-hdr' },
     h('div', null,
       h('div', { class: 'sec-title' },
-        `Buenos días, ${user?.name?.split(' ')[0]} 👋`),
-      h('div', { class: 'sec-sub' },
-        `${fdate(today_)} · ${cajaOpen ? '🟢 Caja abierta' : '🔴 Caja cerrada'}`)
+        `${greeting}, ${user?.name?.split(' ')[0]} 👋`),
+      h('div', { class: 'sec-sub', style: { display:'flex', alignItems:'center', gap:'10px' } },
+        h('span', null, `${fdate(today_)} · ${cajaOpen ? '🟢 Caja abierta' : '🔴 Caja cerrada'}`),
+        h('span', {
+          style: 'font-size:10px;background:rgba(0,192,122,.12);color:var(--green,#00c07a);' +
+                 'padding:2px 8px;border-radius:100px;font-weight:600'
+        }, `● EN VIVO · ${nowStr}`)
+      )
     ),
-    h('button', {
-      class: 'btn btn-out btn-sm',
-      onclick: () => routeTo('reportes'),
-      html: `${svg('chart')} Ver reportes`
-    })
+    h('div', { style: 'display:flex;gap:6px' },
+      h('button', {
+        class: 'btn btn-out btn-sm',
+        title: 'Actualizar ahora',
+        onclick: async () => {
+          const mainEl = document.getElementById('main-content');
+          if (mainEl) await renderDash(mainEl);
+        },
+        html: `↻ Actualizar`
+      }),
+      h('button', {
+        class: 'btn btn-out btn-sm',
+        onclick: () => routeTo('reportes'),
+        html: `${svg('chart')} Reportes`
+      })
+    )
   ));
 
   // ── Alertas de crédito ───────────────────────
@@ -198,6 +266,120 @@ async function renderDash(el) {
     metWrap.appendChild(card);
   });
   el.appendChild(metWrap);
+
+  // ── Cards de Gastos (si módulo activo) ───────────────────────────────────────
+  if (gastosData?.summary) {
+    const gs = gastosData.summary;
+    const gastosTotal   = gs.total_pagado    || 0;
+    const gastosPend    = gs.total_pendiente || 0;
+    const gastosCount   = gs.count           || 0;
+    const gastosOverdue = (gastosData.payable || []).filter(g => {
+      const due = g.due_date || g.fecha_vencimiento;
+      return due && due < today();
+    }).length;
+
+    const gasMetWrap = h('div', { class: 'metrics', style: { marginTop: '0' } });
+    [
+      { icon: 'dollar', color: 'r',
+        label: `Gastos (${periodLabel})`,
+        val: fmt(gastosTotal),
+        badge: `${gastosCount} registros`,
+        badgeType: 'nu',
+        click: () => routeTo('gastos') },
+      { icon: 'cash', color: gastosOverdue > 0 ? 'r' : 'a',
+        label: 'Por Pagar',
+        val: fmt(gastosPend),
+        badge: gastosOverdue > 0 ? `${gastosOverdue} vencidos` : 'Al día',
+        badgeType: gastosOverdue > 0 ? 'dn' : 'nu',
+        click: () => routeTo('gastos') },
+    ].forEach(m => {
+      const card = h('div', {
+        class: 'metric',
+        style: { cursor: 'pointer', borderTop: '3px solid var(--red,#ef4444)' },
+        onclick: m.click
+      },
+        h('div', { class: 'met-top' },
+          h('div', { class: `met-icon ${m.color}`, html: svg(m.icon) }),
+          h('span', { style: 'font-size:10px;color:var(--muted2);margin-left:auto' }, 'Gastos')
+        ),
+        h('div', { class: 'met-label' }, m.label),
+        h('div', { class: 'met-val' }, m.val),
+        h('div', { class: 'met-foot' },
+          h('span', { class: `met-badge ${m.badgeType}` }, m.badge)
+        )
+      );
+      gasMetWrap.appendChild(card);
+    });
+    el.appendChild(gasMetWrap);
+  }
+
+  // ── Cards de NCF (si fiscal activo) ──────────────────────────────────────────
+  if (ncfData) {
+    const seqs     = ncfData.sequences || [];
+    const alerts   = ncfData.alerts    || [];
+    const activeSeq = seqs.filter(s => s.active).length;
+    const ncfITBIS = periodSales.reduce((a,s) => a + (s.tax_amt||s.itbis||0), 0);
+    const ncfFacturas = periodSales.filter(s => s.type === 'factura').length;
+
+    const ncfMetWrap = h('div', { class: 'metrics', style: { marginTop: '0' } });
+    [
+      { icon: 'chart', color: 'p',
+        label: `ITBIS Generado (${periodLabel})`,
+        val: fmt(ncfITBIS),
+        badge: `${ncfFacturas} facturas fiscales`,
+        badgeType: 'nu' },
+      { icon: 'list', color: alerts.length > 0 ? 'r' : 'g',
+        label: 'Secuencias NCF',
+        val: `${activeSeq} activa${activeSeq !== 1 ? 's' : ''}`,
+        badge: alerts.length > 0 ? `${alerts.length} alerta${alerts.length > 1 ? 's' : ''}` : 'Sin alertas',
+        badgeType: alerts.length > 0 ? 'dn' : 'nu',
+        click: () => routeTo('configuracion') },
+    ].forEach(m => {
+      const card = h('div', {
+        class: 'metric',
+        style: { cursor: m.click ? 'pointer' : 'default',
+                 borderTop: '3px solid var(--purple,#8b5cf6)' },
+        ...(m.click ? { onclick: m.click } : {})
+      },
+        h('div', { class: 'met-top' },
+          h('div', { class: `met-icon ${m.color}`, html: svg(m.icon) }),
+          h('span', { style: 'font-size:10px;color:var(--muted2);margin-left:auto' }, 'NCF · DGII')
+        ),
+        h('div', { class: 'met-label' }, m.label),
+        h('div', { class: 'met-val' }, m.val),
+        h('div', { class: 'met-foot' },
+          h('span', { class: `met-badge ${m.badgeType}` }, m.badge)
+        )
+      );
+      ncfMetWrap.appendChild(card);
+    });
+    el.appendChild(ncfMetWrap);
+
+    // Alertas NCF si las hay
+    if (alerts.length > 0) {
+      const ncfAlertBox = h('div', { class: 'card mb20',
+        style: { borderColor: 'var(--purple,#8b5cf6)', background: 'rgba(139,92,246,.05)' } });
+      ncfAlertBox.appendChild(h('div', { class: 'fxb mb8' },
+        h('span', { style: 'font-weight:700;font-size:13px;color:var(--purple,#8b5cf6)' },
+          `⚠ ${alerts.length} alerta${alerts.length > 1 ? 's' : ''} NCF`),
+        h('button', {
+          class: 'btn btn-sm',
+          style: 'background:var(--purple,#8b5cf6);color:#fff',
+          onclick: () => routeTo('configuracion')
+        }, 'Gestionar NCF')
+      ));
+      alerts.slice(0,3).forEach(a => {
+        ncfAlertBox.appendChild(h('div', { class: 'alrt a', style: { marginBottom: '4px' } },
+          h('div', { class: 'alrt-dot a' }),
+          h('div', null,
+            h('div', { class: 'alrt-title' }, a.message || `Secuencia ${a.type}: quedan ${a.remaining} NCF`),
+            h('div', { class: 'alrt-sub' }, `Desde: ${a.from_num || ''} — Hasta: ${a.to_num || ''}`)
+          )
+        ));
+      });
+      el.appendChild(ncfAlertBox);
+    }
+  }
 
   // ── Grid principal ────────────────────────────
   const grid = h('div', { class: 'gg2', style: { alignItems: 'start' } });
