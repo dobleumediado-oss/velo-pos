@@ -47,6 +47,35 @@ async function renderDash(el) {
     } catch(e) { console.warn('[Dash] gastos:', e.message); }
   }
 
+  // ── Envíos como gasto (si módulo activo, independiente de module_gastos) ────
+  let enviosGasto = 0;
+  let enviosCount = 0;
+  if (CFG.module_envios === '1' && window.api?.deliveries) {
+    try {
+      const eRes = await window.api.deliveries.getSummary();
+      if (eRes?.ok && eRes.data) {
+        // Solo envíos completados del mes actual
+        enviosGasto = eRes.data.total_fee_month  || eRes.data.totalFeeMonth  || 0;
+        enviosCount = eRes.data.total_count_month || eRes.data.totalMonth    || 0;
+      }
+    } catch(e) { console.warn('[Dash] envíos gasto:', e.message); }
+  }
+
+  // Si hay envíos pero no hay módulo de gastos, crear gastosData virtual
+  if (enviosGasto > 0 && !gastosData) {
+    gastosData = {
+      summary: { total_pagado: enviosGasto, total_pendiente: 0, count: enviosCount },
+      payable: [],
+      soloEnvios: true,
+    };
+  } else if (enviosGasto > 0 && gastosData?.summary) {
+    // Sumar envíos a los gastos existentes
+    gastosData.summary.total_pagado = (gastosData.summary.total_pagado || 0) + enviosGasto;
+    gastosData.summary.count        = (gastosData.summary.count        || 0) + enviosCount;
+    gastosData._enviosGasto = enviosGasto;
+    gastosData._enviosCount = enviosCount;
+  }
+
   // ── Datos NCF (si fiscal activo) ────────────────────────────────────────────
   let ncfData = null;
   if (CFG.fiscalEnabled && window.api?.ncf) {
@@ -292,6 +321,15 @@ async function renderDash(el) {
         badge: gastosOverdue > 0 ? `${gastosOverdue} vencidos` : 'Al día',
         badgeType: gastosOverdue > 0 ? 'dn' : 'nu',
         click: () => routeTo('gastos') },
+      // Card de envíos como gasto si módulo activo y hay envíos
+      ...(gastosData._enviosGasto > 0 ? [{
+        icon: 'truck', color: 'a',
+        label: 'Gastos de Envíos (mes)',
+        val: fmt(gastosData._enviosGasto),
+        badge: `${gastosData._enviosCount} envíos completados`,
+        badgeType: 'nu',
+        click: () => routeTo('envios'),
+      }] : []),
     ].forEach(m => {
       const card = h('div', {
         class: 'metric',

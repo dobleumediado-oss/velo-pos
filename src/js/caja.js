@@ -404,7 +404,7 @@ function calcCloseTotal(expected) {
   }
 }
 
-function confirmarCierre(expected) {
+async function confirmarCierre(expected) {
   if (!cajaSession) return;
 
   let closeAmt = 0;
@@ -434,10 +434,12 @@ function confirmarCierre(expected) {
   cajaSession = null;
   closeModal();
 
-  // Imprimir reporte automáticamente al cerrar
-  printResumen(sesionCerrada.id);
+  toast('✓ Caja cerrada — Generando reporte...');
 
-  toast('✓ Caja cerrada — Reporte generado');
+  // Imprimir reporte con gastos del día (async)
+  await imprimirReporteDia();
+
+  toast('✓ Reporte generado');
   renderCaja(document.getElementById('page'));
   buildTopbar();
   buildSidebar();
@@ -446,7 +448,7 @@ function confirmarCierre(expected) {
 // ══════════════════════════════════════════════
 // REPORTE DEL DÍA (sesión activa)
 // ══════════════════════════════════════════════
-function imprimirReporteDia() {
+async function imprimirReporteDia() {
   const ses = cajaSession || DB.caja.filter(c => c.status === 'closed').slice(-1)[0];
   if (!ses) { toast('No hay sesión de caja', 'err'); return; }
 
@@ -471,6 +473,41 @@ function imprimirReporteDia() {
   const counted  = ses.close_amount || ses.close || 0;
   const diff     = counted > 0 ? counted - expected : 0;
 
+  // ── Cargar gastos del día si el módulo está activo ──────────────────────────
+  let gastosDelDia  = [];
+  let totalGastos   = 0;
+  let gastosEnvios  = 0;
+  const today_      = today();
+
+  if (CFG.module_gastos === '1' && window.api?.expenses) {
+    try {
+      const gRes = await window.api.expenses.getAll({ date: today_ });
+      gastosDelDia = gRes?.ok ? (gRes.data || []) : [];
+      totalGastos  = gastosDelDia.reduce((a, g) => a + (g.amount || 0), 0);
+    } catch(e) { console.warn('[Caja] gastos:', e.message); }
+  }
+
+  // ── Cargar envíos del día como gasto si el módulo está activo ───────────────
+  if (CFG.module_envios === '1' && window.api?.deliveries) {
+    try {
+      const eRes = await window.api.deliveries.getAll({ date: today_, limit: 100 });
+      const envios = eRes?.ok ? (eRes.data || []) : [];
+      gastosEnvios = envios
+        .filter(e => e.status === 'entregado')
+        .reduce((a, e) => a + (e.fee || e.tarifa || 0), 0);
+      // Agregar envíos a la lista de gastos del día
+      envios.filter(e => e.status === 'entregado').forEach(e => {
+        gastosDelDia.push({
+          category: 'Envíos y Despachos',
+          description: `Envío → ${e.address || e.destination || 'Destino'}`,
+          amount: e.fee || e.tarifa || 0,
+          paid: true,
+        });
+      });
+      totalGastos += gastosEnvios;
+    } catch(e) { console.warn('[Caja] envíos:', e.message); }
+  }
+
   printCierreCaja({
     cajero:          ses.cajero,
     openDate:        ses.open_date || ses.od || today(),
@@ -486,8 +523,13 @@ function imprimirReporteDia() {
     expected,
     counted,
     diff,
-    salesCount:  ventas.length,
-    salesTotal:  totalVentas,
+    salesCount:      ventas.length,
+    salesTotal:      totalVentas,
+    // Gastos del día
+    gastosDelDia,
+    totalGastos,
+    gastosEnvios,
+    gananciaReal:    totalVentas - totalGastos,
   });
 }
 
@@ -760,6 +802,21 @@ function printResumen(cajaId) {
     <div class="lbl">Efectivo esperado: ${fmt(expected)} · Contado: ${fmt(s.close || 0)}</div>
     ${s.obs ? `<div style="margin-top:6px;font-size:11px;color:#6B7280">Obs: ${s.obs}</div>` : ''}
   </div>
+
+  <!-- Gastos del día — solo si módulo activo -->
+  ${CFG.module_gastos === '1' || CFG.module_envios === '1' ? `
+  <h3 style="color:#DC2626">Gastos del Día</h3>
+  <table id="gastos-table-placeholder">
+    <thead><tr>
+      <th>Categoría</th><th>Descripción</th>
+      <th style="text-align:right">Monto</th>
+    </tr></thead>
+    <tbody>
+      <tr><td colspan="3" style="color:#9ca3af;text-align:center;font-style:italic">
+        Cargando gastos del día...
+      </td></tr>
+    </tbody>
+  </table>` : ''}
 
   <div class="foot">
     ${CFG.biz} · RNC: ${CFG.rnc} · ${CFG.phone} · ${CFG.addr}<br>

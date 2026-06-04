@@ -371,6 +371,30 @@ window.actualizarEnvio = async (id, status) => {
   if (!confirm(labels[status] || '¿Actualizar estado?')) return;
   const res = await window.api.deliveries.updateStatus({ id, status, requestUserId: user.id });
   if (!res.ok) return alert(res.error);
+
+  // ── Al entregar: registrar como gasto si módulo activo ─────────────────────
+  if (status === 'entregado' && CFG.module_gastos === '1' && window.api?.expenses) {
+    try {
+      // Obtener datos del envío para registrar el gasto
+      const allRes = await window.api.deliveries.getAll({ limit: 200 });
+      const envio  = (allRes?.data || []).find(e => e.id === id);
+      if (envio && (envio.fee || envio.tarifa) > 0) {
+        await window.api.expenses.create({
+          data: {
+            category:    'Envíos y Despachos',
+            description: `Envío #${id} → ${envio.address || envio.destination || 'Destino'}`,
+            amount:      envio.fee || envio.tarifa || 0,
+            date:        new Date().toISOString().split('T')[0],
+            status:      'pagado',
+            notes:       `Registrado automáticamente al completar envío`,
+          },
+          requestUserId: user.id,
+        });
+        _eToast('✓ Envío completado y registrado como gasto');
+      }
+    } catch(e) { console.warn('[Envíos] Gasto:', e.message); }
+  }
+
   _eToast(`✓ Envío marcado como: ${STATUS_ENV[status]?.label || status}`);
   const el = document.getElementById('main-content');
   if (el) renderEnvios(el);
