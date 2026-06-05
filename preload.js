@@ -248,4 +248,13 @@ contextBridge.exposeInMainWorld('api', {
     getPrices: () => ipcRenderer.invoke('fuel:getPrices'),
   },
 
+  // ── Facturación Electrónica e-CF (MSeller) ────────────────────
+  ecf: {
+    emit:       (d) => ipcRenderer.invoke('ecf:emit',       d),
+    getStatus:  (d) => ipcRenderer.invoke('ecf:getStatus',  d),
+    saveConfig: (d) => ipcRenderer.invoke('ecf:saveConfig', d),
+    getConfig:  ()  => ipcRenderer.invoke('ecf:getConfig'),
+    getLog:     (d) => ipcRenderer.invoke('ecf:getLog',     d),
+  },
+
 });

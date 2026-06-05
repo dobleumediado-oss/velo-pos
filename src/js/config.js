@@ -184,6 +184,16 @@ async function renderConfiguracion(el) {
     }
   }
 
+  // ── e-CF: configuración de facturación electrónica ──────────────────────
+  if (fiscalActivo) {
+    const ecfContainer = document.createElement('div');
+    ecfContainer.id = 'ecf-config-container';
+    colLeft.appendChild(ecfContainer);
+    if (typeof renderECFConfig === 'function') {
+      renderECFConfig(ecfContainer);
+    }
+  }
+
   // ── Logo (solo superadmin) ───────────────────
   if (isSA) {
     const logoActual = settings.biz_logo || '';
@@ -844,3 +854,96 @@ async function activarLicencia() {
 // AUDITORÍA
 // ══════════════════════════════════════════════
 let auditFilter = '';
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Sección de configuración e-CF para config.js
+// Agregar dentro de renderConfig() después de la sección de NCF existente
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function renderECFConfig(container) {
+  const cfgRes = await window.api.ecf?.getConfig();
+  const cfg    = cfgRes?.ok ? cfgRes.data : {};
+
+  container.innerHTML = `
+    <div style="background:var(--bg2);border-radius:12px;padding:18px;border:1px solid var(--line2);margin-top:16px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+        <span style="font-size:20px">📄</span>
+        <div>
+          <div style="font-weight:600;font-size:14px">Facturación Electrónica (e-CF)</div>
+          <div style="font-size:11px;color:var(--muted2)">Comprobantes Fiscales Electrónicos — DGII · MSeller ECF</div>
+        </div>
+        <span style="margin-left:auto;font-size:10px;padding:3px 10px;border-radius:100px;
+          background:${cfg.apiKey ? 'rgba(0,192,122,.1)' : 'rgba(239,68,68,.1)'};
+          color:${cfg.apiKey ? 'var(--green,#00c07a)' : 'var(--red,#ef4444)'}">
+          ${cfg.apiKey ? '● Configurado' : '● Sin configurar'}
+        </span>
+      </div>
+
+      <div style="display:grid;gap:10px">
+        <div class="fg">
+          <label class="lbl">Correo de cuenta MSeller</label>
+          <input class="inp" id="ecf-email" type="email"
+            value="${cfg.email || ''}"
+            placeholder="tu@correo.com">
+        </div>
+        <div class="fg">
+          <label class="lbl">Contraseña MSeller ${cfg.hasPassword ? '(guardada ●●●)' : ''}</label>
+          <input class="inp" id="ecf-pass" type="password"
+            placeholder="${cfg.hasPassword ? 'Dejar vacío para mantener la actual' : 'Contraseña de tu cuenta MSeller'}">
+        </div>
+        <div class="fg">
+          <label class="lbl">API Key</label>
+          <input class="inp" id="ecf-apikey" type="text"
+            value="${cfg.apiKey || ''}"
+            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+          <div style="font-size:10px;color:var(--muted2);margin-top:3px">
+            Obtén tu API Key en: ecf.mseller.app → Configuración → API Keys
+          </div>
+        </div>
+        <div class="fg">
+          <label class="lbl">Ambiente</label>
+          <select class="inp" id="ecf-env">
+            <option value="test"       ${(cfg.environment||'test')==='test'       ? 'selected' : ''}>🧪 Prueba (TesteCF)</option>
+            <option value="production" ${cfg.environment==='production' ? 'selected' : ''}>🚀 Producción</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="btn btn-dark btn-sm" id="btn-save-ecf">Guardar configuración</button>
+        <button class="btn btn-ghost btn-sm" id="btn-test-ecf">Probar conexión</button>
+      </div>
+      <div id="ecf-status-msg" style="font-size:12px;margin-top:8px;min-height:16px"></div>
+    </div>`;
+
+  // Guardar
+  container.querySelector('#btn-save-ecf')?.addEventListener('click', async () => {
+    const email  = container.querySelector('#ecf-email')?.value.trim();
+    const pass   = container.querySelector('#ecf-pass')?.value;
+    const apiKey = container.querySelector('#ecf-apikey')?.value.trim();
+    const env    = container.querySelector('#ecf-env')?.value;
+    const msg    = container.querySelector('#ecf-status-msg');
+    if (!email || !apiKey) { msg.style.color='var(--red,#ef4444)'; msg.textContent = '⚠ Correo y API Key son obligatorios'; return; }
+    const res = await window.api.ecf.saveConfig({ email, password: pass || undefined, apiKey, environment: env });
+    if (res.ok) { msg.style.color='var(--green,#00c07a)'; msg.textContent = '✓ Configuración guardada'; }
+    else { msg.style.color='var(--red,#ef4444)'; msg.textContent = `⚠ ${res.error}`; }
+  });
+
+  // Probar conexión
+  container.querySelector('#btn-test-ecf')?.addEventListener('click', async () => {
+    const msg = container.querySelector('#ecf-status-msg');
+    msg.style.color = 'var(--muted2)';
+    msg.textContent = '⏳ Probando conexión con MSeller...';
+    try {
+      const logRes = await window.api.ecf.getLog({ limit: 1 });
+      if (logRes.ok) {
+        msg.style.color = 'var(--green,#00c07a)';
+        msg.textContent = '✓ Conexión exitosa con MSeller ECF';
+      } else throw new Error(logRes.error);
+    } catch(e) {
+      msg.style.color = 'var(--red,#ef4444)';
+      msg.textContent = `⚠ Error: ${e.message}`;
+    }
+  });
+}
+

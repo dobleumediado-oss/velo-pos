@@ -36,6 +36,7 @@ function initDB(customDataDir) {
   db.pragma('synchronous = NORMAL');
 
   createTables();
+  migrateECFColumns();
   seedIfEmpty();
 
   console.log('[DB] Iniciada en:', DB_PATH);
@@ -473,6 +474,22 @@ function createTables() {
       issued_at   TEXT DEFAULT (datetime('now'))
     );
 
+    -- ── Tabla e-CF (Facturación Electrónica) ──────────────────────
+    CREATE TABLE IF NOT EXISTS ecf_log (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      sale_id      INTEGER REFERENCES sales(id),
+      encf         TEXT,
+      tipo         TEXT,
+      estado       TEXT DEFAULT 'Procesando',
+      qr_code      TEXT,
+      pdf_url      TEXT,
+      xml_firmado  TEXT,
+      emitido_at   TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ecf_log_sale ON ecf_log(sale_id);
+    CREATE INDEX IF NOT EXISTS idx_ecf_log_encf ON ecf_log(encf);
+
     -- Índices
     CREATE INDEX IF NOT EXISTS idx_deliveries_status   ON deliveries(status);
     CREATE INDEX IF NOT EXISTS idx_deliveries_sale     ON deliveries(sale_id);
@@ -497,6 +514,17 @@ function createTables() {
     CREATE INDEX IF NOT EXISTS idx_inv_product       ON inventory_movements(product_id);
     CREATE INDEX IF NOT EXISTS idx_products_barcode  ON products(barcode);
   `);
+}
+
+// ── Migración: columnas e-CF en sales (segura — ignora si ya existen) ─────────
+function migrateECFColumns() {
+  const cols = ['ecf_status', 'ecf_qr', 'ecf_pdf', 'ecf_sent_at'];
+  cols.forEach(col => {
+    try {
+      db.prepare(`ALTER TABLE sales ADD COLUMN ${col} TEXT`).run();
+      console.log(`[DB] Columna ${col} agregada a sales`);
+    } catch { /* ya existe */ }
+  });
 }
 
 // ══════════════════════════════════════════════
@@ -539,6 +567,11 @@ function seedIfEmpty() {
     ['module_envios',          '0'],
     ['module_ncf_avanzado',    '0'],
     ['module_multi_negocio',   '0'],
+    // ── e-CF MSeller ──────────────────────────────
+    ['ecf_email',        ''],
+    ['ecf_password',     ''],
+    ['ecf_api_key',      ''],
+    ['ecf_environment',  'test'],
     // ── Visibilidad por rol ────────────────────────
     ['mod_envios_cajero',      '0'],
     ['mod_vehiculos_admin',    '1'],

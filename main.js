@@ -2263,6 +2263,304 @@ ipcMain.handle('fuel:getPrices', async () => {
   return { ok: true, source: 'fallback', data: FALLBACK };
 });
 
+
+// ── e-CF MSeller — handlers IPC ──────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Cache de autenticación MSeller ────────────────────────────────────────────
+let _msellerToken     = null;
+let _msellerTokenExp  = 0;
+
+async function _msellerAuth(email, password) {
+  if (_msellerToken && Date.now() < _msellerTokenExp) return _msellerToken;
+  const env = db?.prepare("SELECT value FROM settings WHERE key='ecf_environment'").get()?.value || 'test';
+  const base = env === 'production'
+    ? 'https://ecf.api.mseller.app/eCF'
+    : 'https://ecf.api.mseller.app/TesteCF';
+  const res = await fetch(`${base}/customer/authentication`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) throw new Error(`MSeller auth error: ${res.status}`);
+  const data = await res.json();
+  _msellerToken    = data.idToken;
+  _msellerTokenExp = Date.now() + (55 * 60 * 1000); // 55 min
+  return _msellerToken;
+}
+
+// ── Emitir e-CF para una venta ────────────────────────────────────────────────
+ipcMain.handle('ecf:emit', async (_, { saleId }) => {
+  try {
+    // 1. Obtener datos de la venta
+    const sale = db.prepare(`
+      SELECT s.*, c.name as cust_name, c.rnc as cust_rnc, c.email as cust_email,
+             c.address as cust_addr
+      FROM sales s
+      LEFT JOIN customers c ON s.customer_id = c.id
+      WHERE s.id = ?
+    `).get(saleId);
+    if (!sale) return { ok: false, error: 'Venta no encontrada' };
+    if (sale.ecf_status === 'Aceptado') return { ok: false, error: 'Ya tiene e-CF emitido' };
+
+    // 2. Obtener items de la venta
+    const items = db.prepare(`
+      SELECT si.*, p.name as product_name
+      FROM sale_items si
+      LEFT JOIN products p ON si.product_id = p.id
+      WHERE si.sale_id = ?
+    `).all(saleId);
+
+    // 3. Obtener configuración del negocio
+    const getSet = k => db.prepare("SELECT value FROM settings WHERE key=?").get(k)?.value || '';
+    const rnc          = getSet('rnc').replace(/[-\s]/g, '');
+    const bizName      = getSet('biz_name') || getSet('biz') || 'NEGOCIO';
+    const apiKey       = getSet('ecf_api_key');
+    const msellerEmail = getSet('ecf_email');
+    const msellerPass  = getSet('ecf_password');
+    const env          = getSet('ecf_environment') || 'test';
+
+    if (!apiKey || !msellerEmail || !msellerPass) {
+      return { ok: false, error: 'Configura las credenciales de facturación electrónica en Configuración' };
+    }
+    if (!rnc) return { ok: false, error: 'El negocio no tiene RNC configurado' };
+
+    // 4. Autenticar con MSeller
+    const token = await _msellerAuth(msellerEmail, msellerPass);
+
+    // 5. Determinar tipo de e-CF
+    // E31 = Factura con valor fiscal (B01) — cliente con RNC
+    // E32 = Factura consumidor final (B02) — cliente sin RNC
+    const custRnc = (sale.cust_rnc || '').replace(/[-\s]/g, '');
+    const tipoECF = custRnc ? '31' : '32';
+
+    // 6. Construir el JSON según estructura DGII/MSeller
+    const itbis    = sale.tax_amt  || 0;
+    const subtotal = sale.subtotal || 0;
+    const total    = sale.total    || 0;
+    const discAmt  = sale.discount_amt || 0;
+
+    // Items con ITBIS
+    const detalles = items.map((item, idx) => {
+      const precioUnit = item.price || 0;
+      const cantidad   = item.quantity || 1;
+      const monto      = item.subtotal || (precioUnit * cantidad);
+      const itbisItem  = itbis > 0 ? parseFloat((monto * 0.18).toFixed(2)) : 0;
+      return {
+        NumeroLinea:          String(idx + 1),
+        IndicadorFacturacion: itbis > 0 ? '1' : '3', // 1=ITBIS, 3=exento
+        NombreItem:           item.product_name || item.name || `Producto ${idx+1}`,
+        CantidadItem:         String(cantidad),
+        UnidadMedida:         'UN',
+        PrecioUnitarioItem:   precioUnit.toFixed(2),
+        DescuentoMonto:       discAmt > 0 ? discAmt.toFixed(2) : undefined,
+        TablaSubDescuento:    undefined,
+        MontoItem:            monto.toFixed(2),
+        ITBIS:                itbisItem > 0 ? itbisItem.toFixed(2) : undefined,
+      };
+    }).map(item => {
+      // Limpiar campos undefined
+      Object.keys(item).forEach(k => item[k] === undefined && delete item[k]);
+      return item;
+    });
+
+    const fechaHoy = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+
+    const ecfDoc = {
+      ECF: {
+        Encabezado: {
+          Version: '1.0',
+          IdDoc: {
+            TipoeCF:                    tipoECF,
+            TipoPago:                   sale.payment_method === 'credito' ? '2' : '1', // 1=contado, 2=crédito
+            FechaVencimientoSecuencia:  '31-12-2027',
+            TotalPagado:                total.toFixed(2),
+            FechaDePago:                fechaHoy,
+          },
+          Emisor: {
+            RNCEmisor:         rnc,
+            RazonSocialEmisor: bizName,
+            NombreComercial:   bizName,
+            Sucursal:          '001',
+            DireccionEmisor:   getSet('addr') || 'República Dominicana',
+            Telefono:          (getSet('phone') || '').replace(/[^0-9]/g, '').slice(0, 10),
+            WebSite:           '',
+            ActividadEconomica: getSet('actividad') || '479900',
+            CodigoVendedor:    String(sale.user_id || 1),
+          },
+          Comprador: custRnc ? {
+            RNCComprador:           custRnc,
+            RazonSocialComprador:   sale.cust_name || '',
+            ContactoComprador:      sale.cust_name || '',
+            CorreoComprador:        sale.cust_email || '',
+          } : undefined,
+          Totales: {
+            MontoGravadoTotal:   itbis > 0 ? subtotal.toFixed(2) : undefined,
+            MontoGravadoI1:      itbis > 0 ? subtotal.toFixed(2) : undefined,
+            MontoExento:         itbis === 0 ? subtotal.toFixed(2) : undefined,
+            ITBIS1:              itbis > 0 ? '0.18' : undefined,
+            TotalITBIS:          itbis > 0 ? itbis.toFixed(2) : undefined,
+            TotalITBIS1:         itbis > 0 ? itbis.toFixed(2) : undefined,
+            MontoTotal:          total.toFixed(2),
+            MontoNoFacturable:   undefined,
+          },
+        },
+        DetallesItems: {
+          Item: detalles,
+        },
+      },
+    };
+
+    // Limpiar undefined del objeto
+    const cleanObj = obj => {
+      if (Array.isArray(obj)) return obj.map(cleanObj);
+      if (obj && typeof obj === 'object') {
+        const result = {};
+        for (const [k, v] of Object.entries(obj)) {
+          if (v !== undefined && v !== null) result[k] = cleanObj(v);
+        }
+        return result;
+      }
+      return obj;
+    };
+    const payload = cleanObj(ecfDoc);
+
+    // 7. Enviar a MSeller
+    const base = env === 'production'
+      ? 'https://ecf.api.mseller.app/eCF'
+      : 'https://ecf.api.mseller.app/TesteCF';
+
+    const mRes = await fetch(`${base}/documentos-ecf`, {
+      method: 'POST',
+      headers: {
+        'Authorization':  `Bearer ${token}`,
+        'X-API-KEY':      apiKey,
+        'Content-Type':   'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const mData = await mRes.json();
+
+    if (!mRes.ok) {
+      console.error('[eCF] MSeller error:', JSON.stringify(mData));
+      return { ok: false, error: mData?.message || `Error MSeller: ${mRes.status}`, detail: mData };
+    }
+
+    // 8. Guardar resultado en DB
+    const eNCF     = mData.eCF || mData.ecf || mData.ncf || '';
+    const qrCode   = mData.qr_link || mData.qrLink || mData.codigoSeguridad || '';
+    const pdfUrl   = mData.pdf_cloud_url || mData.pdfUrl || '';
+    const xmlFirm  = mData.xml || '';
+    const estado   = mData.estado || 'Procesando';
+
+    db.prepare(`
+      UPDATE sales SET
+        ncf        = ?,
+        ecf_status = ?,
+        ecf_qr     = ?,
+        ecf_pdf    = ?,
+        ecf_sent_at = datetime('now')
+      WHERE id = ?
+    `).run(eNCF || sale.ncf, estado, qrCode, pdfUrl, saleId);
+
+    // Log en tabla de eCF
+    db.prepare(`
+      INSERT OR IGNORE INTO ecf_log(sale_id, encf, tipo, estado, qr_code, pdf_url, xml_firmado, emitido_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `).run(saleId, eNCF, tipoECF, estado, qrCode, pdfUrl, xmlFirm.slice(0, 5000));
+
+    return {
+      ok:      true,
+      eNCF,
+      estado,
+      qrCode,
+      pdfUrl,
+      message: `e-CF emitido: ${eNCF} — ${estado}`,
+    };
+
+  } catch(e) {
+    console.error('[eCF] Error:', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
+// ── Consultar estado de un e-CF ───────────────────────────────────────────────
+ipcMain.handle('ecf:getStatus', async (_, { encf }) => {
+  try {
+    const getSet = k => db.prepare("SELECT value FROM settings WHERE key=?").get(k)?.value || '';
+    const apiKey = getSet('ecf_api_key');
+    const email  = getSet('ecf_email');
+    const pass   = getSet('ecf_password');
+    const env    = getSet('ecf_environment') || 'test';
+    const base   = env === 'production'
+      ? 'https://ecf.api.mseller.app/eCF'
+      : 'https://ecf.api.mseller.app/TesteCF';
+    const token  = await _msellerAuth(email, pass);
+    const res    = await fetch(`${base}/documentos-ecf?ecf=${encf}`, {
+      headers: { 'Authorization': `Bearer ${token}`, 'X-API-KEY': apiKey },
+    });
+    const data = await res.json();
+    return { ok: res.ok, data };
+  } catch(e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// ── Guardar configuración eCF ─────────────────────────────────────────────────
+ipcMain.handle('ecf:saveConfig', async (_, { email, password, apiKey, environment }) => {
+  try {
+    const sets = [
+      ['ecf_email',       email       || ''],
+      ['ecf_password',    password    || ''],
+      ['ecf_api_key',     apiKey      || ''],
+      ['ecf_environment', environment || 'test'],
+    ];
+    const stmt = db.prepare("INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)");
+    sets.forEach(([k, v]) => stmt.run(k, v));
+    _msellerToken = null; // Reset token cache
+    return { ok: true };
+  } catch(e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// ── Obtener configuración eCF ─────────────────────────────────────────────────
+ipcMain.handle('ecf:getConfig', async () => {
+  try {
+    const getSet = k => db.prepare("SELECT value FROM settings WHERE key=?").get(k)?.value || '';
+    return {
+      ok: true,
+      data: {
+        email:       getSet('ecf_email'),
+        hasPassword: !!getSet('ecf_password'),
+        apiKey:      getSet('ecf_api_key'),
+        environment: getSet('ecf_environment') || 'test',
+      }
+    };
+  } catch(e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// ── Historial de e-CF emitidos ────────────────────────────────────────────────
+ipcMain.handle('ecf:getLog', async (_, { limit = 50, offset = 0 } = {}) => {
+  try {
+    const rows = db.prepare(`
+      SELECT el.*, s.total, c.name as cust_name
+      FROM ecf_log el
+      LEFT JOIN sales s ON el.sale_id = s.id
+      LEFT JOIN customers c ON s.customer_id = c.id
+      ORDER BY el.emitido_at DESC
+      LIMIT ? OFFSET ?
+    `).all(limit, offset);
+    return { ok: true, data: rows };
+  } catch(e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+
 app.whenReady().then(() => {
   // Cargar API key de Claude (necesita userData, disponible solo aquí)
   _loadApiKey();

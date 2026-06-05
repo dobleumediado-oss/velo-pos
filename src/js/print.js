@@ -158,7 +158,13 @@ function printReceipt(sale, isReprint = false) {
   if (isFactura && !isDevolucion) {
     lines.push('');
     lines.push(tCenter('Documento con validez fiscal'));
-    lines.push(tCenter(`NCF: B0100000${String(sale.id).padStart(6,'0')}`));
+    // Usar el NCF real guardado en la venta — no el ID
+    if (sale.ncf && sale.ncf.trim()) {
+      lines.push(tCenter(`NCF: ${sale.ncf}`));
+    } else if (cfg?.fiscalEnabled || cfg?.fiscal_enabled === '1') {
+      // Fallback si por alguna razón no se guardó el NCF
+      lines.push(tCenter(`NCF: B01${String(sale.id).padStart(9,'0')}`));
+    }
   }
 
   if (isDevolucion && sale.original_sale_id) {
