@@ -470,8 +470,9 @@ function imprimirPruebaPlantilla() {
         </div>
         <div class="fg" style="margin-bottom:8px">
           <label class="lbl">Clave de licencia</label>
-          <input class="inp" id="lic-key" type="text" placeholder="2|ABCD...|Negocio|2027-01-01|FIRMA"
-                 style="font-family:var(--mono);font-size:11px"/>
+          <textarea class="inp" id="lic-key" rows="3" placeholder="2|ABCD...|Negocio|2027-01-01|FIRMA"
+                 style="font-family:var(--mono);font-size:11px;resize:none;white-space:nowrap;overflow-x:auto"
+                 onpaste="setTimeout(()=>{this.value=this.value.replace(/[\r\n\s]+/g,'')},0)"></textarea>
         </div>
         <button class="btn btn-green btn-fw" onclick="activarLicencia()">
           ${svg('check')} Activar licencia
