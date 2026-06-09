@@ -125,8 +125,8 @@ async function renderSuperAdmin(el) {
     <div id="lic-result" style="display:none">
       <label class="lbl">Clave generada — cópiala y entrégala al cliente</label>
       <div style="display:flex;gap:8px">
-        <input class="inp" id="lic-key-out" type="text" readonly
-               style="font-family:var(--mono);font-size:11px;flex:1"/>
+        <textarea class="inp" id="lic-key-out" readonly rows="3"
+               style="font-family:var(--mono);font-size:11px;flex:1;resize:none;word-break:break-all"></textarea>
         <button class="btn btn-out" onclick="navigator.clipboard.writeText(document.getElementById('lic-key-out').value);toast('✓ Copiada')">
           Copiar
         </button>
@@ -467,7 +467,6 @@ async function saGenerarLicencia() {
   const type      = document.getElementById('lic-type')?.value;
   let   expiry    = document.getElementById('lic-expiry')?.value?.trim();
 
-  // Validaciones
   if (!machineId) {
     document.getElementById('lic-machine')?.focus();
     toast('Ingresa o copia el ID de máquina del cliente', 'err'); return;
@@ -476,28 +475,32 @@ async function saGenerarLicencia() {
     document.getElementById('lic-biz')?.focus();
     toast('Ingresa el nombre del negocio', 'err'); return;
   }
-
-  // Para perpetua no necesita fecha
   if (type === 'perpetual') {
     expiry = 'PERPETUAL';
   } else if (!expiry) {
     toast('Selecciona la fecha de vencimiento', 'err'); return;
   }
 
-  // Generar hash con SubtleCrypto del browser
-  const secret  = 'velo-pos-2026-rd';
-  const data    = `1|${machineId}|${biz}|${expiry}|${secret}`;
-  const encoder = new TextEncoder();
-  const hashBuf = await crypto.subtle.digest('SHA-256', encoder.encode(data));
-  const hashHex = Array.from(new Uint8Array(hashBuf))
-    .map(b => b.toString(16).padStart(2,'0')).join('')
-    .slice(0,16).toUpperCase();
+  // Generar via IPC con ECDSA v2 (clave privada en main.js)
+  const btn = document.querySelector('button[onclick="saGenerarLicencia()"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Generando...'; }
 
-  const licKey = `1|${machineId}|${biz}|${expiry}|${hashHex}`;
+  const result = await window.api.license.generate({ machineId, business: biz, expiry });
 
+  if (btn) { btn.disabled = false; btn.innerHTML = `${svg('check')} Generar clave de licencia`; }
+
+  if (!result?.ok) {
+    toast(result?.error || 'Error al generar licencia', 'err');
+    if (result?.error?.includes('Clave privada')) {
+      toast('La clave privada vendor-private.pem no está en este equipo', 'err');
+    }
+    return;
+  }
+
+  const licKey = result.licenseKey;
   document.getElementById('lic-key-out').value = licKey;
   document.getElementById('lic-result').style.display = 'block';
-  toast(`✓ Licencia ${type === 'perpetual' ? 'Perpetua' : `hasta ${expiry}`} generada`);
+  toast(`✓ Licencia ${type === 'perpetual' ? 'Perpetua' : 'hasta ' + expiry} generada`);
 }
 
 async function saExportarDB() {

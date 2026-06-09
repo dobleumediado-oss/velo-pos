@@ -115,6 +115,7 @@ contextBridge.exposeInMainWorld('api', {
     activate:    (data)      => ipcRenderer.invoke('license:activate', data),
     getMachineId:()          => ipcRenderer.invoke('license:getMachineId'),
     revoke:      (data)      => ipcRenderer.invoke('license:revoke', data),
+    generate:    (data)      => ipcRenderer.invoke('license:generate', data),
   },
 
   // ── Categorías ────────────────────────────────
