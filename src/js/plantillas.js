@@ -160,6 +160,36 @@ function getSampleSale(cfg) {
 }
 
 // ══════════════════════════════════════════════
+// HELPER — NCF y tipo de documento
+// ══════════════════════════════════════════════
+
+// Devuelve el NCF real de la venta, o string vacío si no aplica
+function _getNcf(sale) {
+  if (sale.type !== 'factura') return '';
+  if (sale.ncf && sale.ncf.trim()) return sale.ncf.trim();
+  // Fallback: solo si no hay NCF guardado
+  return `B01${String(sale.id).padStart(9,'0')}`;
+}
+
+// Etiqueta del tipo de documento
+function _docLabel(sale) {
+  if (sale.type === 'cotizacion') return 'COTIZACIÓN';
+  if (sale.type === 'devolucion') return 'NOTA DE DEVOLUCIÓN';
+  if (sale.type === 'factura')    return 'FACTURA';
+  return 'RECIBO DE COMPRA';
+}
+
+// ¿Mostrar ITBIS? Solo en facturas con monto > 0
+function _showItbis(sale) {
+  return sale.type === 'factura' && (sale.tax_amt || 0) > 0;
+}
+
+// ¿Mostrar NCF? Solo en facturas con NCF disponible
+function _showNcf(sale, opts) {
+  return opts.ncf && sale.type === 'factura' && _getNcf(sale) !== '';
+}
+
+// ══════════════════════════════════════════════
 // RENDERIZADORES DE PLANTILLAS
 // ══════════════════════════════════════════════
 
@@ -205,8 +235,10 @@ function renderTermica(sale, cfg, opts, widthMm = 76) {
   const cols    = widthMm <= 52 ? 32 : 42;
   const sep     = '─'.repeat(cols);
   const sepD    = '═'.repeat(cols);
-  const isFactura = sale.type === 'factura';
-  const ncf     = isFactura ? `B0100000${String(sale.id).padStart(8,'0')}` : '';
+  const isFactura    = sale.type === 'factura';
+  const isCotizacion = sale.type === 'cotizacion';
+  const isDevolucion = sale.type === 'devolucion';
+  const ncf     = _getNcf(sale);
   const fs      = widthMm <= 52 ? '10.5px' : '11.5px';
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
@@ -218,8 +250,9 @@ function renderTermica(sale, cfg, opts, widthMm = 76) {
   img { display:block; margin:0 auto; }
 </style></head><body>
   ${_termicaHeader(cfg, opts, widthMm)}
-  <div style="text-align:center;font-weight:700">*** ${isFactura?'FACTURA':'COTIZACIÓN'} ***</div>
+  <div style="text-align:center;font-weight:700">*** ${_docLabel(sale)} ***</div>
   ${sale.isReprint ? '<div style="text-align:center">--- REIMPRESIÓN ---</div>' : ''}
+  ${isDevolucion && sale.original_sale_id ? `<div style="text-align:center">Ref. venta #${String(sale.original_sale_id).padStart(5,'0')}</div>` : ''}
   <div style="text-align:center">${sep}</div>
   <div style="display:flex;justify-content:space-between">
     <span>No.: ${String(sale.id).padStart(5,'0')}</span>
@@ -245,19 +278,18 @@ function renderTermica(sale, cfg, opts, widthMm = 76) {
     <span>Subtotal:</span><span>RD$${Number(sale.subtotal||0).toLocaleString('es-DO')}</span>
   </div>
   ${sale.discount_amt > 0 ? `<div style="display:flex;justify-content:space-between"><span>Descuento (${sale.discount_pct}%):</span><span>-RD$${Number(sale.discount_amt).toLocaleString('es-DO')}</span></div>` : ''}
-  <div style="display:flex;justify-content:space-between">
-    ${sale.tax_amt > 0 ? `<span>ITBIS (${sale.tax_pct||18}%):</span><span>RD$${Number(sale.tax_amt||0).toLocaleString('es-DO')}</span>` : ''}
-  </div>
+  ${_showItbis(sale) ? `<div style="display:flex;justify-content:space-between"><span>ITBIS (${sale.tax_pct||18}%):</span><span>RD$${Number(sale.tax_amt||0).toLocaleString('es-DO')}</span></div>` : ''}
   <div style="text-align:center">${sepD}</div>
   <div style="display:flex;justify-content:space-between;font-weight:700;font-size:${widthMm<=52?'12px':'13px'}">
     <span>TOTAL:</span><span>RD$${Number(sale.total||0).toLocaleString('es-DO')}</span>
   </div>
   <div style="text-align:center">${sepD}</div>
-  <div style="display:flex;justify-content:space-between">
-    <span>Método de pago:</span>
-    <span>${(sale.payment_method||'efectivo').toUpperCase()}</span>
-  </div>
-  ${opts.ncf && isFactura ? `
+  ${sale.payment_method === 'mixto' ? `
+  <div style="display:flex;justify-content:space-between"><span>Método:</span><span>MIXTO</span></div>
+  ${sale.mix_efec > 0 ? `<div style="display:flex;justify-content:space-between"><span>  Efectivo:</span><span>RD$${Number(sale.mix_efec).toLocaleString('es-DO')}</span></div>` : ''}
+  ${sale.mix_card > 0 ? `<div style="display:flex;justify-content:space-between"><span>  Tarjeta/Trans.:</span><span>RD$${Number(sale.mix_card).toLocaleString('es-DO')}</span></div>` : ''}
+  ` : `<div style="display:flex;justify-content:space-between"><span>Método de pago:</span><span>${(sale.payment_method||'efectivo').toUpperCase()}</span></div>`}
+  ${_showNcf(sale, opts) ? `
   <div style="text-align:center">${sep}</div>
   <div style="text-align:center">Documento con validez fiscal</div>
   <div style="text-align:center;font-weight:700">NCF: ${ncf}</div>` : ''}
@@ -271,8 +303,10 @@ function renderTermica(sale, cfg, opts, widthMm = 76) {
 
 // Plantilla 2 — Térmica Moderna
 function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
-  const isFactura = sale.type === 'factura';
-  const ncf = `B0100000${String(sale.id).padStart(8,'0')}`;
+  const isFactura    = sale.type === 'factura';
+  const isCotizacion = sale.type === 'cotizacion';
+  const isDevolucion = sale.type === 'devolucion';
+  const ncf = _getNcf(sale);
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
 <style>
@@ -296,7 +330,8 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
   ${cfg.biz_addr ? `<div class="center" style="font-size:10px">${cfg.biz_addr} · Tel: ${cfg.biz_phone||''}</div>` : ''}
   <hr class="sep-d"/>
   <div class="center" style="font-size:13px;font-weight:700;letter-spacing:1px">
-    ${isFactura ? '◆ FACTURA ◆' : '◆ COTIZACIÓN ◆'}
+    ◆ ${_docLabel(sale)} ◆
+    ${isDevolucion && sale.original_sale_id ? `<div style="font-size:10px;text-align:center">Ref. venta #${String(sale.original_sale_id).padStart(5,'0')}</div>` : ''}
   </div>
   <hr class="sep"/>
   <div class="row"><span>No.:</span><span style="font-weight:700">${String(sale.id).padStart(5,'0')}</span></div>
@@ -313,23 +348,29 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
   <hr class="sep"/>
   <div class="row"><span>Subtotal</span><span>RD$${Number(sale.subtotal||0).toLocaleString('es-DO')}</span></div>
   ${sale.discount_amt > 0 ? `<div class="row"><span>Descuento ${sale.discount_pct}%</span><span style="color:#e00">-RD$${Number(sale.discount_amt).toLocaleString('es-DO')}</span></div>` : ''}
-  ${sale.tax_amt > 0 ? `<div class="row"><span>ITBIS (${sale.tax_pct||18}%)</span><span>RD$${Number(sale.tax_amt||0).toLocaleString('es-DO')}</span></div>` : ''}
+  ${_showItbis(sale) ? `<div class="row"><span>ITBIS (${sale.tax_pct||18}%)</span><span>RD$${Number(sale.tax_amt||0).toLocaleString('es-DO')}</span></div>` : ''}
   <hr class="sep-d"/>
   <div class="total-row">
     <span>▶ TOTAL</span>
     <span>RD$${Number(sale.total||0).toLocaleString('es-DO')}</span>
   </div>
   <hr class="sep-d"/>
-  <div class="row"><span>Forma de pago:</span><span>${(sale.payment_method||'efectivo').toUpperCase()}</span></div>
-  ${opts.ncf && isFactura ? `<hr class="sep"/><div class="center" style="font-size:10px">NCF: B0100000${String(sale.id).padStart(8,'0')}</div>` : ''}
-  ${opts.mensaje && cfg.receipt_msg ? `<hr class="sep"/><div class="center">${cfg.receipt_msg}</div>` : ''}
+  ${sale.payment_method === 'mixto' ? `
+  <div class="row"><span>Método:</span><span>MIXTO</span></div>
+  ${sale.mix_efec > 0 ? `<div class="row"><span style="padding-left:8px">Efectivo:</span><span>RD$${Number(sale.mix_efec).toLocaleString('es-DO')}</span></div>` : ''}
+  ${sale.mix_card > 0 ? `<div class="row"><span style="padding-left:8px">Tarjeta/Trans.:</span><span>RD$${Number(sale.mix_card).toLocaleString('es-DO')}</span></div>` : ''}
+  ` : `<div class="row"><span>Forma de pago:</span><span>${(sale.payment_method||'efectivo').toUpperCase()}</span></div>`}
+  ${_showNcf(sale, opts) ? `<hr class="sep"/><div class="center" style="font-size:10px">Documento con validez fiscal</div><div class="center" style="font-size:10px;font-weight:700">NCF: ${ncf}</div>` : ''}
+  ${opts.mensaje && cfg.receipt_msg && !isCotizacion ? `<hr class="sep"/><div class="center">${cfg.receipt_msg}</div>` : ''}
   <hr class="sep"/>
 </body></html>`;
 }
 
 // Plantilla 3 — Térmica Minimalista
 function renderTermicaMinimal(sale, cfg, opts, widthMm = 76) {
-  const isFactura = sale.type === 'factura';
+  const isFactura    = sale.type === 'factura';
+  const isCotizacion = sale.type === 'cotizacion';
+  const ncf = _getNcf(sale);
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
 <style>
   @page { size: ${widthMm}mm auto; margin: 1mm 2mm 3mm 2mm; }
@@ -350,14 +391,17 @@ function renderTermicaMinimal(sale, cfg, opts, widthMm = 76) {
     <span>TOTAL</span>
     <span>RD$${Number(sale.total||0).toLocaleString('es-DO')}</span>
   </div>
-  <div style="text-align:center;font-size:9px;margin-top:3px">${sale.payment_method||'EFECTIVO'} · Gracias</div>
+  ${_showNcf(sale, opts) ? `<div style="border-top:1px dashed #000;margin:3px 0"></div><div style="text-align:center;font-size:9px">NCF: ${ncf}</div>` : ''}
+  <div style="text-align:center;font-size:9px;margin-top:3px">${sale.payment_method||'EFECTIVO'} · ${isCotizacion ? 'Cotización sin valor fiscal' : 'Gracias'}</div>
 </body></html>`;
 }
 
 // Plantilla 4 — Carta Recibo Simple
 function renderCartaRecibo(sale, cfg, opts) {
-  const isFactura = sale.type === 'factura';
-  const ncf = `B0100000${String(sale.id).padStart(8,'0')}`;
+  const isFactura    = sale.type === 'factura';
+  const isCotizacion = sale.type === 'cotizacion';
+  const isDevolucion = sale.type === 'devolucion';
+  const ncf = _getNcf(sale);
   const rows = (sale.items||[]).map(i => `
     <tr>
       <td>${i.product_name||i.name}</td>
@@ -394,7 +438,7 @@ function renderCartaRecibo(sale, cfg, opts) {
       Tel: ${cfg.biz_phone||''}
     </div>
     <div class="doc">
-      <div style="font-size:13px;color:#666">${isFactura?'FACTURA':'COTIZACIÓN'}</div>
+      <div style="font-size:13px;color:#666">${_docLabel(sale)}</div>
       <div class="num">#${String(sale.id).padStart(5,'0')}</div>
       <div>${sale.date}</div>
       <div>Cajero: ${sale.cajero||''}</div>
@@ -412,21 +456,29 @@ function renderCartaRecibo(sale, cfg, opts) {
   <table class="totals">
     <tr><td>Subtotal</td><td style="text-align:right">RD$${Number(sale.subtotal||0).toLocaleString('es-DO')}</td></tr>
     ${sale.discount_amt > 0 ? `<tr><td>Descuento (${sale.discount_pct}%)</td><td style="text-align:right;color:red">-RD$${Number(sale.discount_amt).toLocaleString('es-DO')}</td></tr>` : ''}
-    ${sale.tax_amt > 0 ? `<tr><td>ITBIS (${sale.tax_pct||18}%)</td><td style="text-align:right">RD$${Number(sale.tax_amt||0).toLocaleString('es-DO')}</td></tr>` : ''}
+    ${_showItbis(sale) ? `<tr><td>ITBIS (${sale.tax_pct||18}%)</td><td style="text-align:right">RD$${Number(sale.tax_amt||0).toLocaleString('es-DO')}</td></tr>` : ''}
     <tr><td>TOTAL</td><td style="text-align:right">RD$${Number(sale.total||0).toLocaleString('es-DO')}</td></tr>
   </table>
   <div style="margin-top:10px;font-size:12px">
-    <strong>Método de pago:</strong> ${(sale.payment_method||'efectivo').toUpperCase()}
+    ${sale.payment_method === 'mixto'
+      ? `<strong>Método de pago:</strong> MIXTO
+         ${sale.mix_efec > 0 ? `&nbsp;· Efectivo: RD$${Number(sale.mix_efec).toLocaleString('es-DO')}` : ''}
+         ${sale.mix_card > 0 ? `&nbsp;· Tarjeta/Trans.: RD$${Number(sale.mix_card).toLocaleString('es-DO')}` : ''}`
+      : `<strong>Método de pago:</strong> ${(sale.payment_method||'efectivo').toUpperCase()}`}
   </div>
-  ${opts.ncf && isFactura ? `<div style="margin-top:8px;font-size:11px;color:#555">NCF: ${ncf}</div>` : ''}
-  ${opts.mensaje && cfg.receipt_msg ? `<div class="footer">${cfg.receipt_msg}</div>` : ''}
+  ${isDevolucion && sale.original_sale_id ? `<div style="margin-top:6px;font-size:11px;color:#555">Ref. venta original: #${String(sale.original_sale_id).padStart(5,'0')}</div>` : ''}
+  ${_showNcf(sale, opts) ? `<div style="margin-top:8px;font-size:11px;color:#555">NCF: <strong>${ncf}</strong> · Documento con validez fiscal</div>` : ''}
+  ${isCotizacion ? `<div style="margin-top:8px;font-size:11px;color:#888;font-style:italic">Esta cotización no tiene valor fiscal.</div>` : ''}
+  ${opts.mensaje && cfg.receipt_msg && !isCotizacion ? `<div class="footer">${cfg.receipt_msg}</div>` : ''}
 </body></html>`;
 }
 
 // Plantilla 5 — Carta Formal
 function renderCartaFormal(sale, cfg, opts) {
-  const isFactura = sale.type === 'factura';
-  const ncf = `B0100000${String(sale.id).padStart(8,'0')}`;
+  const isFactura    = sale.type === 'factura';
+  const isCotizacion = sale.type === 'cotizacion';
+  const isDevolucion = sale.type === 'devolucion';
+  const ncf = _getNcf(sale);
   const rows = (sale.items||[]).map((i,idx) => `
     <tr style="${idx%2===0?'background:#f9fafb':''}">
       <td style="padding:8px 12px">${i.product_name||i.name}</td>
@@ -469,7 +521,7 @@ function renderCartaFormal(sale, cfg, opts) {
       </div>
     </div>
     <div style="text-align:right">
-      <div class="doc-label">${isFactura?'Factura':'Cotización'}</div>
+      <div class="doc-label">${_docLabel(sale)}</div>
       <div class="doc-num">#${String(sale.id).padStart(5,'0')}</div>
     </div>
   </div>
@@ -501,19 +553,23 @@ function renderCartaFormal(sale, cfg, opts) {
   <div class="totals-box">
     <div class="total-row"><span>Subtotal</span><span>RD$${Number(sale.subtotal||0).toLocaleString('es-DO')}</span></div>
     ${sale.discount_amt > 0 ? `<div class="total-row"><span>Descuento ${sale.discount_pct}%</span><span style="color:#dc2626">-RD$${Number(sale.discount_amt).toLocaleString('es-DO')}</span></div>` : ''}
-    ${sale.tax_amt > 0 ? `<div class="total-row"><span>ITBIS (${sale.tax_pct||18}%)</span><span>RD$${Number(sale.tax_amt||0).toLocaleString('es-DO')}</span></div>` : ''}
+    ${_showItbis(sale) ? `<div class="total-row"><span>ITBIS (${sale.tax_pct||18}%)</span><span>RD$${Number(sale.tax_amt||0).toLocaleString('es-DO')}</span></div>` : ''}
     <div class="total-row grand-total"><span>TOTAL</span><span>RD$${Number(sale.total||0).toLocaleString('es-DO')}</span></div>
   </div>
 
-  ${opts.ncf && isFactura ? `<div style="margin-top:10px;font-size:11px;background:#fef9c3;padding:6px 10px;border-radius:4px">NCF: <strong>${ncf}</strong> · Documento con validez fiscal</div>` : ''}
-  ${opts.mensaje && cfg.receipt_msg ? `<div style="margin-top:12px;text-align:center;font-size:11px;color:#666">${cfg.receipt_msg}</div>` : ''}
+  ${isDevolucion && sale.original_sale_id ? `<div style="margin-top:8px;font-size:11px;color:#555">Ref. venta original: #${String(sale.original_sale_id).padStart(5,'0')}</div>` : ''}
+  ${_showNcf(sale, opts) ? `<div style="margin-top:10px;font-size:11px;background:#fef9c3;padding:6px 10px;border-radius:4px">NCF: <strong>${ncf}</strong> · Documento con validez fiscal</div>` : ''}
+  ${isCotizacion ? `<div style="margin-top:8px;font-size:11px;color:#888;font-style:italic;padding:6px 10px;background:#f9fafb;border-radius:4px">Esta cotización no tiene valor fiscal.</div>` : ''}
+  ${opts.mensaje && cfg.receipt_msg && !isCotizacion ? `<div style="margin-top:12px;text-align:center;font-size:11px;color:#666">${cfg.receipt_msg}</div>` : ''}
 </body></html>`;
 }
 
 // Plantilla 6 — NCF Dominicana
 function renderCartaNCF(sale, cfg, opts) {
-  const isFactura = sale.type === 'factura';
-  const ncf = `B0100000${String(sale.id).padStart(8,'0')}`;
+  const isFactura    = sale.type === 'factura';
+  const isCotizacion = sale.type === 'cotizacion';
+  const isDevolucion = sale.type === 'devolucion';
+  const ncf = _getNcf(sale);
   const rows = (sale.items||[]).map(i => `
     <tr>
       <td style="padding:7px 10px">${i.product_name||i.name}</td>
@@ -541,11 +597,17 @@ function renderCartaNCF(sale, cfg, opts) {
   .grand { font-size:15px; font-weight:700; border-top:2px solid #000; padding-top:5px; }
   img { max-height:45px; }
 </style></head><body>
-  <div class="ncf-box">
-    <div class="ncf-label">Número de Comprobante Fiscal</div>
-    <div class="ncf-num">${ncf}</div>
-    <div class="ncf-label">${isFactura ? 'Factura con Valor Fiscal' : 'Cotización'} · ${sale.date}</div>
-  </div>
+  ${isCotizacion
+    ? `<div style="border:2px dashed #aaa;border-radius:6px;padding:8px 14px;text-align:center;margin-bottom:10px">
+         <div style="font-size:13px;font-weight:700">COTIZACIÓN</div>
+         <div style="font-size:9px;color:#888;text-transform:uppercase">Sin valor fiscal · ${sale.date}</div>
+       </div>`
+    : `<div class="ncf-box">
+         <div class="ncf-label">${isDevolucion ? 'Nota de Devolución' : 'Número de Comprobante Fiscal'}</div>
+         <div class="ncf-num">${ncf || '—'}</div>
+         <div class="ncf-label">Factura con Valor Fiscal · ${sale.date}</div>
+       </div>`
+  }
 
   <div class="header">
     <div>
@@ -579,13 +641,16 @@ function renderCartaNCF(sale, cfg, opts) {
     <table class="total-table">
       <tr><td>Subtotal</td><td style="text-align:right">RD$${Number(sale.subtotal||0).toLocaleString('es-DO')}</td></tr>
       ${sale.discount_amt > 0 ? `<tr><td>Descuento (${sale.discount_pct}%)</td><td style="text-align:right;color:red">-RD$${Number(sale.discount_amt).toLocaleString('es-DO')}</td></tr>` : ''}
-      ${sale.tax_amt > 0 ? `<tr><td>ITBIS (${sale.tax_pct||18}%)</td><td style="text-align:right">RD$${Number(sale.tax_amt||0).toLocaleString('es-DO')}</td></tr>` : ''}
+      ${_showItbis(sale) ? `<tr><td>ITBIS (${sale.tax_pct||18}%)</td><td style="text-align:right">RD$${Number(sale.tax_amt||0).toLocaleString('es-DO')}</td></tr>` : ''}
       <tr class="grand"><td>TOTAL</td><td style="text-align:right">RD$${Number(sale.total||0).toLocaleString('es-DO')}</td></tr>
     </table>
   </div>
 
+  ${isDevolucion && sale.original_sale_id ? `<div style="margin-top:6px;font-size:11px;color:#555">Ref. venta original: #${String(sale.original_sale_id).padStart(5,'0')}</div>` : ''}
   <div style="margin-top:10px;font-size:10px;color:#666;text-align:center;border-top:1px solid #ddd;padding-top:8px">
-    Este documento es un Comprobante Fiscal válido ante la DGII · ${cfg.receipt_msg||''}
+    ${isCotizacion
+      ? 'Esta cotización no tiene valor fiscal.'
+      : `Este documento es un Comprobante Fiscal válido ante la DGII · ${cfg.receipt_msg||''}`}
   </div>
 </body></html>`;
 }
@@ -593,7 +658,9 @@ function renderCartaNCF(sale, cfg, opts) {
 // Plantilla 7 — Media Carta
 function renderMediaCarta(sale, cfg, opts) {
   // Media carta = mitad de hoja carta, diseño compacto
-  const isFactura = sale.type === 'factura';
+  const isFactura    = sale.type === 'factura';
+  const isCotizacion = sale.type === 'cotizacion';
+  const ncf = _getNcf(sale);
   const rows = (sale.items||[]).map(i => `
     <tr>
       <td style="padding:5px 8px;font-size:10px">${i.product_name||i.name}</td>
@@ -623,7 +690,7 @@ function renderMediaCarta(sale, cfg, opts) {
     <div style="text-align:right">
       <strong style="font-size:14px">#${String(sale.id).padStart(5,'0')}</strong><br/>
       ${sale.date}<br/>
-      ${isFactura?'FACTURA':'COTIZACIÓN'}
+      ${_docLabel(sale)}
     </div>
   </div>
   <div style="background:#f3f4f6;padding:4px 8px;margin-bottom:6px;border-radius:3px;font-size:10px">
@@ -635,14 +702,16 @@ function renderMediaCarta(sale, cfg, opts) {
   </table>
   <table class="totals">
     <tr><td style="padding:3px">Subtotal</td><td style="text-align:right;padding:3px">RD$${Number(sale.subtotal||0).toLocaleString('es-DO')}</td></tr>
-    ${sale.tax_amt > 0 ? `<tr><td style="padding:3px">ITBIS (${sale.tax_pct||18}%)</td><td style="text-align:right;padding:3px">RD$${Number(sale.tax_amt||0).toLocaleString('es-DO')}</td></tr>` : ''}
+    ${_showItbis(sale) ? `<tr><td style="padding:3px">ITBIS (${sale.tax_pct||18}%)</td><td style="text-align:right;padding:3px">RD$${Number(sale.tax_amt||0).toLocaleString('es-DO')}</td></tr>` : ''}
     <tr style="font-size:13px;font-weight:700;border-top:2px solid #000">
       <td style="padding:4px">TOTAL</td>
       <td style="text-align:right;padding:4px">RD$${Number(sale.total||0).toLocaleString('es-DO')}</td>
     </tr>
   </table>
+  ${_showNcf(sale, opts) ? `<div style="font-size:9px;color:#555;margin-top:4px">NCF: ${ncf}</div>` : ''}
+  ${isCotizacion ? `<div style="font-size:9px;color:#888;font-style:italic;margin-top:2px">Sin valor fiscal</div>` : ''}
   <div style="text-align:center;font-size:9px;color:#666;margin-top:6px">
-    ${sale.payment_method||'EFECTIVO'} · ${opts.mensaje && cfg.receipt_msg ? cfg.receipt_msg : 'Gracias por su compra'}
+    ${sale.payment_method||'EFECTIVO'} · ${opts.mensaje && cfg.receipt_msg && !isCotizacion ? cfg.receipt_msg : 'Gracias por su compra'}
   </div>
 </body></html>`;
 }

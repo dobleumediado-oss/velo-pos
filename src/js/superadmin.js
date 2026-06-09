@@ -435,6 +435,13 @@ async function renderSuperAdmin(el) {
                     printerTypeNow === '58mm'    ? '🧾 Térmica 58mm' :
                     printerTypeNow === '80mm'    ? '🧾 Térmica 80mm' : '⚠ No reconocida (80mm default)';
 
+  // Tipo de la plantilla actualmente activa
+  const plantActivaObj   = todasPlantillas.find(p => p.id === plantActualId);
+  const tipoPlantActiva  = plantActivaObj?.tipo || '80mm';
+  // ¿La plantilla activa coincide con el tipo de impresora detectado?
+  const hayConflicto = plantActualId && plantActivaObj && tipoPlantActiva !== tipoActual
+                       && printerTypeNow !== 'unknown';
+
   plantDiagCard.innerHTML = `
     <div class="fxb mb8">
       <div class="card-title">🖨 Diagnóstico de Plantillas</div>
@@ -443,22 +450,34 @@ async function renderSuperAdmin(el) {
         ${tipoLabel}
       </span>
     </div>
+
+    ${hayConflicto ? `
+    <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;
+                padding:8px 12px;margin-bottom:10px;font-size:12px">
+      ⚠ La plantilla activa (<strong>${plantActivaObj?.nombre}</strong>) es de tipo
+      <strong>${tipoPlantActiva}</strong> pero la impresora detectada es
+      <strong>${tipoActual}</strong>. El cliente verá las plantillas ${tipoActual}
+      en Configuración pero se imprimirá con la activa actual.
+    </div>` : ''}
+
     <div style="font-size:12px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--line2)">
         <span style="color:var(--muted)">Impresora guardada</span>
-        <span style="font-weight:600">${printerNow || 'Sin configurar'}</span>
+        <span style="font-weight:600;color:${printerNow ? 'var(--ink)' : 'var(--red)'}">${printerNow || 'Sin configurar'}</span>
       </div>
       <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--line2)">
         <span style="color:var(--muted)">Tipo detectado</span>
         <span style="font-weight:600;color:${tipoColor}">${tipoLabel}</span>
       </div>
       <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--line2)">
-        <span style="color:var(--muted)">Plantillas mostradas al cliente</span>
-        <span style="font-weight:600">${tipoActual === 'carta' ? 'Carta / A4' : 'Térmicas 80mm'}</span>
+        <span style="color:var(--muted)">Plantillas visibles al cliente</span>
+        <span style="font-weight:600">${tipoActual === 'carta' ? '📄 Carta / A4' : '🧾 Térmicas 80mm'}</span>
       </div>
       <div style="display:flex;justify-content:space-between;padding:5px 0">
         <span style="color:var(--muted)">Plantilla activa (ID)</span>
-        <span style="font-family:var(--mono);font-size:11px;color:var(--green)">${plantActualId || 'termica_80_clasica (default)'}</span>
+        <span id="sa-plant-active-id" style="font-family:var(--mono);font-size:11px;color:var(--green)">
+          ${plantActualId || 'termica_80_clasica (default)'}
+        </span>
       </div>
     </div>
 
@@ -466,22 +485,27 @@ async function renderSuperAdmin(el) {
                 letter-spacing:.05em;margin-bottom:8px">Todas las plantillas disponibles</div>
     <div style="display:flex;flex-direction:column;gap:6px">
       ${todasPlantillas.map(p => {
-        const esActiva  = p.id === plantActualId || (!plantActualId && p.id === 'termica_80_clasica');
-        const esTipo    = p.tipo === printerTypeNow || (printerTypeNow === 'unknown' && p.tipo === '80mm');
-        return `<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;
-                           background:${esActiva ? 'var(--green-bg, #f0fdf4)' : 'var(--bg2)'};
-                           border:1px solid ${esActiva ? 'var(--green)' : 'var(--line2)'}">
+        const esActiva = p.id === plantActualId || (!plantActualId && p.id === 'termica_80_clasica');
+        // Etiquetar tipo solo de forma informativa, sin confundir
+        const tipoTag = p.tipo === '58mm' ? '58mm' : p.tipo === 'carta' ? 'carta' : '80mm';
+        return `<div id="sa-plant-row-${p.id}"
+                     style="display:flex;align-items:center;gap:10px;padding:8px 10px;
+                            border-radius:8px;transition:.15s;
+                            background:${esActiva ? 'var(--green-bg, #f0fdf4)' : 'var(--bg2)'};
+                            border:1px solid ${esActiva ? 'var(--green)' : 'var(--line2)'}">
           <span style="font-size:16px">${p.icono}</span>
           <div style="flex:1;min-width:0">
-            <div style="font-size:12px;font-weight:700;display:flex;align-items:center;gap:6px">
+            <div style="font-size:12px;font-weight:700;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
               ${p.nombre}
-              ${esActiva ? '<span style="font-size:10px;color:var(--green);font-weight:700">✓ ACTIVA</span>' : ''}
-              ${!esTipo ? '<span style="font-size:10px;color:var(--muted);font-weight:400">(otro tipo)</span>' : ''}
+              <span class="sa-plant-badge" style="font-size:10px;color:var(--green);font-weight:700;
+                    display:${esActiva ? 'inline' : 'none'}">✓ ACTIVA</span>
+              <span style="font-size:10px;color:var(--muted);font-weight:400;
+                    background:var(--bg2);padding:1px 6px;border-radius:100px">${tipoTag}</span>
             </div>
-            <div style="font-size:10px;color:var(--muted2)">${p.id} · ${p.tipo}</div>
+            <div style="font-size:10px;color:var(--muted2);margin-top:2px">${p.id}</div>
           </div>
-          <button onclick="saActivarPlantilla('${p.id}')"
-            style="font-size:11px;padding:4px 10px;border-radius:6px;cursor:pointer;
+          <button class="sa-plant-btn" onclick="saActivarPlantilla('${p.id}')"
+            style="font-size:11px;padding:4px 12px;border-radius:6px;cursor:pointer;white-space:nowrap;
                    border:1px solid ${esActiva ? 'var(--green)' : 'var(--line)'};
                    background:${esActiva ? 'var(--green)' : 'transparent'};
                    color:${esActiva ? '#fff' : 'var(--ink)'}">
@@ -831,7 +855,29 @@ async function saActivarPlantilla(id) {
   if (!id) return;
   await window.api.settings.set({ key: 'print_template', value: id });
   if (DB?.settings) DB.settings.print_template = id;
-  toast(`✓ Plantilla "${id}" activada`);
-  // Re-renderizar solo la tarjeta de diagnóstico
-  renderSuperAdmin(document.getElementById('page'));
+
+  // Actualizar UI in-place sin recargar la página (evita scroll al tope)
+  document.querySelectorAll('[id^="sa-plant-row-"]').forEach(row => {
+    const rowId   = row.id.replace('sa-plant-row-', '');
+    const esActiva = rowId === id;
+    row.style.background = esActiva ? 'var(--green-bg, #f0fdf4)' : 'var(--bg2)';
+    row.style.border      = `1px solid ${esActiva ? 'var(--green)' : 'var(--line2)'}`;
+    const badge = row.querySelector('.sa-plant-badge');
+    const btn   = row.querySelector('.sa-plant-btn');
+    if (badge) badge.style.display = esActiva ? 'inline' : 'none';
+    if (btn) {
+      btn.textContent  = esActiva ? '✓ Activa' : 'Activar';
+      btn.style.background = esActiva ? 'var(--green)' : 'transparent';
+      btn.style.color      = esActiva ? '#fff' : 'var(--ink)';
+      btn.style.border     = `1px solid ${esActiva ? 'var(--green)' : 'var(--line)'}`;
+    }
+    // Actualizar ID activa en el label
+    const labelId = document.getElementById('sa-plant-active-id');
+    if (labelId) {
+      labelId.textContent = id;
+      labelId.style.color = 'var(--green)';
+    }
+  });
+
+  toast(`✓ Plantilla activada`);
 }

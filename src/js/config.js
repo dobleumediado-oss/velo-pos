@@ -44,10 +44,19 @@ async function renderConfiguracion(el) {
   const tipoPlantilla = printerType === 'carta' ? 'carta' : '80mm';
   const plantillas    = getPlantillasByTipo(tipoPlantilla);
   const _savedTemplate = settings?.print_template || '';
-  const plantActual    = plantillas.find(p => p.id === _savedTemplate)?.id
-                         || plantillas[0]?.id
-                         || 'termica_80_clasica';
+  // Si la plantilla guardada existe (aunque sea de otro tipo), respetarla
+  // Solo hacer fallback a la primera del tipo si no existe en absoluto
+  const _savedExists = typeof PLANTILLAS !== 'undefined'
+    ? PLANTILLAS.find(p => p.id === _savedTemplate) : null;
+  const plantActual  = _savedExists?.id
+                       || plantillas[0]?.id
+                       || 'termica_80_clasica';
   window._lastPlantActual = plantActual;
+
+  // Si la plantilla activa es de otro tipo, mostrarla igual en el grid
+  const plantillasMostrar = (_savedExists && !plantillas.find(p => p.id === plantActual))
+    ? [...plantillas, _savedExists]  // agregar la activa al grid aunque sea de otro tipo
+    : plantillas;
 
   const plantCard = h('div', { class: 'card' });
   plantCard.innerHTML = `
@@ -71,7 +80,7 @@ async function renderConfiguracion(el) {
       </div>
     </div>
     <div id="plantillas-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:12px">
-      ${plantillas.map(p => `
+      ${plantillasMostrar.map(p => `
         <div onclick="seleccionarPlantilla('${p.id}')" id="plant-card-${p.id}"
              style="border:2px solid ${plantActual===p.id?'var(--green)':'var(--line)'};
                     border-radius:10px;padding:10px;cursor:pointer;transition:.15s;

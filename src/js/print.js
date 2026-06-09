@@ -66,21 +66,32 @@ function printReceipt(sale, isReprint = false) {
     const saleForPlant = {
       ...sale,
       isReprint,
-      date: sale.date || today(),
-      time: sale.time || nowt(),
+      // Tipo de documento — crítico para comportamiento de plantilla
+      type:          sale.type || 'recibo',
+      date:          sale.date || today(),
+      time:          sale.time || nowt(),
       customer_name: sale.customer_name || sale.clientName || 'Consumidor Final',
       customer_rnc:  sale.customer_rnc  || sale.clientCedula || '',
+      cajero:        sale.cajero || user?.name || '',
       items: (sale.items || []).map(i => ({
         product_name: i.product_name || i.name || '',
         qty:          i.qty  || 1,
         unit_price:   i.unit_price || i.price || 0,
       })),
-      subtotal:      sale.subtotal    || 0,
-      discount_pct:  sale.discount_pct || sale.disc   || 0,
+      subtotal:      sale.subtotal     || 0,
+      discount_pct:  sale.discount_pct || sale.disc    || 0,
       discount_amt:  sale.discount_amt || sale.discAmt || 0,
-      tax_amt:       sale.tax_amt     || sale.itbis   || 0,
-      total:         sale.total       || 0,
+      tax_pct:       sale.tax_pct      || DB?.settings?.tax_pct || CFG?.itbis || 18,
+      tax_amt:       sale.tax_amt      || sale.itbis   || 0,
+      total:         sale.total        || 0,
       payment_method: sale.payment_method || sale.pay || 'efectivo',
+      // NCF real de la venta — nunca inventar uno
+      ncf:           sale.ncf || '',
+      // Pago mixto
+      mix_efec:      sale.mix_efec || 0,
+      mix_card:      sale.mix_card || 0,
+      // Devolución
+      original_sale_id: sale.original_sale_id || null,
     };
 
     const html = plantilla.render(saleForPlant, cfg, plantilla.opciones);
