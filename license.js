@@ -22,7 +22,7 @@ const WARN_DAYS       = 7;
 // REEMPLAZAR con tu clave pública real antes de producción.
 const PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
 MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEYi32UkSnHgjHcDvulKyc0thmkFqB
-EGTRTJDMlSfzk/sRF9FF10YK40Ndw8drzAW8QNvUT+1+T1b+PPK4HGX1nw==
+EGTRTJDMlSfzk/sRF9FFl0YK40Ndw8drzAW8QNvUT+1+T1b+PPK4HGX1nw==
 -----END PUBLIC KEY-----`;
 
 // ── Generar ID único de máquina ───────────────
