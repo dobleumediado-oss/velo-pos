@@ -303,16 +303,27 @@ function _sendToPrinter(lines, jobType = '', referenceId = null, isReprint = fal
     .map(l => `<div class="ln">${_escHtml(l)}</div>`)
     .join('');
 
+  const printerType = typeof detectPrinterType === 'function'
+    ? detectPrinterType(_getSavedPrinter()) : 'unknown';
+  const isThermal = printerType !== 'unknown' && printerType !== 'carta';
+  const pageCSS = isThermal
+    ? '@page { size: 80mm auto; margin: 2mm 3mm 4mm 3mm; }'
+    : '@page { size: letter; margin: 15mm 15mm 15mm 15mm; }';
+  const bodyCSS = isThermal
+    ? 'width: 76mm; max-width: 76mm; font-family: \'Courier New\', Courier, monospace; font-size: 11.5px; line-height: 1.4;'
+    : 'width: 100%; max-width: 180mm; font-family: Arial, sans-serif; font-size: 12px; line-height: 1.5;';
+  const mediaCSS = isThermal
+    ? 'html, body { width: 80mm; }'
+    : 'html, body { width: 100%; }';
+
   const html = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"/>
 <title>Ticket</title>
 <style>
-  @page { size: 80mm auto; margin: 2mm 3mm 4mm 3mm; }
+  ${pageCSS}
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
-    width: 76mm; max-width: 76mm;
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 11.5px; line-height: 1.4;
+    ${bodyCSS}
     color: #000; background: #fff;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
@@ -320,7 +331,7 @@ function _sendToPrinter(lines, jobType = '', referenceId = null, isReprint = fal
   .ln { white-space: pre; word-break: break-all; display: block; width: 100%; }
   img { display: block; margin: 0 auto; }
   @media print {
-    html, body { width: 80mm; }
+    ${mediaCSS}
     * { -webkit-print-color-adjust: exact !important; }
   }
 </style>

@@ -839,9 +839,15 @@ async function eliminarLogo() {
 // LICENCIA
 // ══════════════════════════════════════════════
 async function activarLicencia() {
-  const key = document.getElementById('lic-key')?.value?.trim();
-  if (!key) { toast('Ingresa la clave de licencia', 'err'); return; }
-  const result = await window.api.license.activate(key);
+  const licInput = document.getElementById('lic-key')
+    || document.querySelector('input[placeholder*="ABCD"]')
+    || document.querySelector('input[style*="mono"]');
+  const key = licInput ? licInput.value.trim() : '';
+  if (!key) {
+    toast('Ingresa la clave de licencia', 'err');
+    return;
+  }
+  const result = await window.api.license.activate({ licenseKey: key, requestUserId: user?.id });
   if (result.ok) {
     toast('✓ Licencia activada correctamente');
     renderConfiguracion(document.getElementById('page'));
