@@ -49,12 +49,22 @@ function parseLicense(content) {
   }
 }
 
-// ── Verificar firma ECDSA ─────────────────────
+// ── Verificar firma ECDSA o hash v1 ──────────
 function verifySignature(license) {
   try {
+    // v1: hash SHA-256 simple (generado desde el Panel Dev)
+    if (license.version === '1') {
+      const secret  = 'velo-pos-2026-rd';
+      const data    = `1|${license.machineId}|${license.business}|${license.expiry}|${secret}`;
+      const hash    = crypto.createHash('sha256').update(data).digest('hex')
+                      .slice(0, 16).toUpperCase();
+      return license.signature === hash;
+    }
+    // v2: firma ECDSA P-256
     const payload = `${license.version}|${license.machineId}|${license.business}|${license.expiry}`;
     const sigBuf  = Buffer.from(license.signature, 'base64');
-    return crypto.verify('SHA256', Buffer.from(payload), PUBLIC_KEY_PEM, sigBuf);
+    const pubKey  = crypto.createPublicKey(PUBLIC_KEY_PEM);
+    return crypto.verify('SHA256', Buffer.from(payload), pubKey, sigBuf);
   } catch {
     return false;
   }
@@ -64,7 +74,8 @@ function verifySignature(license) {
 function verifyLicense(license, machineId) {
   if (!license) return { valid: false, reason: 'Sin licencia' };
 
-  if (license.version !== LICENSE_VERSION) {
+  // Aceptar v1 (hash simple) y v2 (ECDSA)
+  if (license.version !== LICENSE_VERSION && license.version !== '1') {
     return { valid: false, reason: 'Formato de licencia obsoleto — solicita una nueva licencia' };
   }
 

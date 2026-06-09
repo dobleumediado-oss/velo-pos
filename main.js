@@ -1165,11 +1165,13 @@ ipcMain.handle('license:generate', async (_, { machineId, business, expiry }) =>
     const fs         = require('fs');
     const path       = require('path');
     const keyPath    = process.env.VELO_PRIVATE_KEY_PATH
+                       || path.join(app.getPath('userData'), 'vendor-private.pem')
                        || path.join(__dirname, 'tools', 'vendor-private.pem');
     if (!fs.existsSync(keyPath)) {
       return { ok: false, error: 'Clave privada no encontrada en este equipo' };
     }
-    const privateKey = fs.readFileSync(keyPath, 'utf8');
+    const keyPem     = fs.readFileSync(keyPath, 'utf8');
+    const privateKey = crypto.createPrivateKey(keyPem);
     const payload    = `2|${machineId}|${business}|${expiry}`;
     const signature  = crypto.sign('SHA256', Buffer.from(payload), privateKey);
     const licKey     = `${payload}|${signature.toString('base64')}`;

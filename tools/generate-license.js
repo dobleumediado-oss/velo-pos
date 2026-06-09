@@ -50,7 +50,8 @@ function generateKeyPair() {
 
 // ── Generar licencia ──────────────────────────
 function generateLicense(machineId, business, expiryDate) {
-  const privateKey = loadPrivateKey();
+  const keyPem     = loadPrivateKey();
+  const privateKey = crypto.createPrivateKey(keyPem);
   const payload    = `${LICENSE_VERSION}|${machineId}|${business}|${expiryDate}`;
   const signature  = crypto.sign('SHA256', Buffer.from(payload), privateKey);
   const sigB64     = signature.toString('base64');
