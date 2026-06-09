@@ -913,9 +913,10 @@ async function eliminarLogo() {
 // ══════════════════════════════════════════════
 async function activarLicencia() {
   const licInput = document.getElementById('lic-key')
+    || document.querySelector('textarea#lic-key')
     || document.querySelector('input[placeholder*="ABCD"]')
     || document.querySelector('input[style*="mono"]');
-  const key = licInput ? licInput.value.trim() : '';
+  const key = licInput ? (licInput.value || licInput.textContent || '').trim().replace(/[\r\n\s]+/g, '') : '';
   if (!key) {
     toast('Ingresa la clave de licencia', 'err');
     return;
