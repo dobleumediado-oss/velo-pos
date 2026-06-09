@@ -38,8 +38,16 @@ async function renderConfiguracion(el) {
   // ── Plantillas de impresión ──────────────────
   const printerSaved = settings?.printer || '';
   const printerType  = detectPrinterType(printerSaved);
-  const plantillas   = getPlantillasByTipo(printerType === 'unknown' ? '80mm' : printerType);
-  const plantActual  = settings?.print_template || plantillas[0]?.id || 'termica_80_clasica';
+  // Mostrar plantillas según tipo detectado
+  // Si no hay impresora o es unknown, mostrar 80mm por defecto
+  // Si es carta, mostrar plantillas carta
+  const tipoPlantilla = printerType === 'carta' ? 'carta' : '80mm';
+  const plantillas    = getPlantillasByTipo(tipoPlantilla);
+  const _savedTemplate = settings?.print_template || '';
+  const plantActual    = plantillas.find(p => p.id === _savedTemplate)?.id
+                         || plantillas[0]?.id
+                         || 'termica_80_clasica';
+  window._lastPlantActual = plantActual;
 
   const plantCard = h('div', { class: 'card' });
   plantCard.innerHTML = `
@@ -89,6 +97,70 @@ async function renderConfiguracion(el) {
       <iframe id="plant-iframe" style="width:100%;height:400px;border:1px solid var(--line);border-radius:6px;background:#fff"></iframe>
     </div>`;
   colLeft.appendChild(plantCard);
+
+  // ── Selección y vista previa de plantilla ────
+function seleccionarPlantilla(id) {
+  window.api.settings.set({ key: 'print_template', value: id });
+  document.querySelectorAll('[id^="plant-card-"]').forEach(el => {
+    el.style.border     = '2px solid var(--line)';
+    el.style.background = 'var(--surface)';
+    const tick = el.querySelector('.plant-tick');
+    if (tick) tick.remove();
+  });
+  const card = document.getElementById(`plant-card-${id}`);
+  if (card) {
+    card.style.border     = '2px solid var(--green)';
+    card.style.background = 'var(--green-bg)';
+    if (!card.querySelector('.plant-tick')) {
+      const tick = document.createElement('div');
+      tick.className   = 'plant-tick';
+      tick.style.cssText = 'font-size:10px;color:var(--green);font-weight:700;margin-top:4px';
+      tick.textContent   = '✓ Activa';
+      card.appendChild(tick);
+    }
+  }
+  const label = document.querySelector('#plant-preview div');
+  if (label) {
+    const p = getPlantilla(id);
+    label.textContent = `VISTA PREVIA — ${p?.nombre || ''}`;
+  }
+  const preview = document.getElementById('plant-preview');
+  if (preview && preview.style.display !== 'none') previsualizarPlantilla(id);
+}
+
+function previsualizarPlantilla(idOverride) {
+  const preview = document.getElementById('plant-preview');
+  const iframe  = document.getElementById('plant-iframe');
+  if (!preview || !iframe) return;
+  const activeCard = document.querySelector('[id^="plant-card-"][style*="var(--green-bg)"]');
+  const id = idOverride
+    || activeCard?.id?.replace('plant-card-', '')
+    || window._lastPlantActual
+    || 'termica_80_clasica';
+  const plantilla = getPlantilla(id);
+  if (!plantilla) return;
+  const cfg  = {
+    biz_name: CFG.biz || 'Mi Negocio', biz_rnc: CFG.rnc || '',
+    biz_addr: CFG.addr || '', biz_phone: CFG.phone || '',
+    receipt_msg: CFG.receiptMsg || '¡Gracias por su compra!', biz_logo: CFG.biz_logo || '',
+  };
+  preview.style.display = 'block';
+  iframe.srcdoc = plantilla.render(getSampleSale(cfg), cfg, plantilla.opciones);
+}
+
+function imprimirPruebaPlantilla() {
+  const activeCard = document.querySelector('[id^="plant-card-"][style*="var(--green-bg)"]');
+  const id = activeCard?.id?.replace('plant-card-', '') || 'termica_80_clasica';
+  const plantilla = getPlantilla(id);
+  if (!plantilla) { toast('Selecciona una plantilla primero', 'w'); return; }
+  const cfg = {
+    biz_name: CFG.biz || 'Mi Negocio', biz_rnc: CFG.rnc || '',
+    biz_addr: CFG.addr || '', biz_phone: CFG.phone || '',
+    receipt_msg: CFG.receiptMsg || '¡Gracias por su compra!', biz_logo: CFG.biz_logo || '',
+  };
+  window.api.print.preview({ html: plantilla.render(getSampleSale(cfg), cfg, plantilla.opciones), printerName: CFG.printer || '' })
+    .catch(() => toast('Error al imprimir prueba', 'err'));
+}
 
   // ── Datos del negocio ────────────────────────
   const fiscalActivo = settings.fiscal_enabled === '1';
