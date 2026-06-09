@@ -288,6 +288,19 @@ function printCierreCaja(data) {
 // MOTOR INTERNO — ENVIAR A IMPRESORA
 // ══════════════════════════════════════════════
 function _sendToPrinter(lines, jobType = '', referenceId = null, isReprint = false) {
+  // Si la impresora es de cartuchos/carta y no se llegó acá desde una plantilla,
+  // usar plantilla carta_recibo automáticamente (el contenido de líneas no se adapta bien a carta)
+  const _printerTypeCheck = typeof detectPrinterType === 'function'
+    ? detectPrinterType(_getSavedPrinter()) : 'unknown';
+  if (_printerTypeCheck === 'carta' && typeof getPlantilla === 'function') {
+    const _cartaPlant = getPlantilla(DB?.settings?.print_template || 'carta_recibo');
+    if (_cartaPlant && _cartaPlant.tipo === 'carta') {
+      // Ya hay una plantilla carta activa — no hacer nada, dejar flujo normal
+      // (esta función solo se llama desde fallback clásico sin plantilla)
+    }
+    // No interrumpir — continuar con el HTML adaptado abajo
+  }
+
   const logoB64 = DB?.settings?.biz_logo || CFG?.biz_logo || '';
 
   const logoHtml = logoB64
@@ -348,14 +361,16 @@ function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = fa
   const printerType  = typeof detectPrinterType === 'function'
     ? detectPrinterType(printerName)
     : 'unknown';
-  // Ancho en micrones: 58mm=58000, 80mm=80000, carta=no se usa (se pasa 'A4')
-  const printerWidth = printerType === '58mm' ? 58000 : 80000;
+  // Ancho en micrones: 58mm=58000, 80mm=80000, carta=sin ancho fijo
+  const printerWidth = printerType === '58mm' ? 58000
+                     : printerType === 'carta' ? undefined
+                     : 80000;
 
   if (window.api?.print?.html) {
     window.api.print.html({
       html,
       printerName:  printerName || undefined,
-      printerWidth: printerName ? printerWidth : undefined,
+      printerWidth: (printerName && printerWidth) ? printerWidth : undefined,
       jobType,
       referenceId,
       userId: user?.id || null,

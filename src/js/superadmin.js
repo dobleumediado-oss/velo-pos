@@ -419,6 +419,79 @@ async function renderSuperAdmin(el) {
     renderBarcodeDesigner(bcDesignerContainer);
   }
 
+  // ── Plantillas de impresión (diagnóstico) ────
+  const plantDiagCard = h('div', { class: 'card' });
+  const printerNow    = DB?.settings?.printer || CFG?.printer || '';
+  const printerTypeNow = typeof detectPrinterType === 'function'
+    ? detectPrinterType(printerNow) : 'unknown';
+  const tipoActual    = printerTypeNow === 'carta' ? 'carta' : '80mm';
+  const plantActualId = DB?.settings?.print_template || '';
+  const todasPlantillas = typeof PLANTILLAS !== 'undefined' ? PLANTILLAS : [];
+
+  const tipoColor = printerTypeNow === 'carta'  ? 'var(--amber)' :
+                    printerTypeNow === '58mm'    ? 'var(--green)'  :
+                    printerTypeNow === '80mm'    ? 'var(--green)'  : 'var(--muted)';
+  const tipoLabel = printerTypeNow === 'carta'  ? '📄 Carta / A4' :
+                    printerTypeNow === '58mm'    ? '🧾 Térmica 58mm' :
+                    printerTypeNow === '80mm'    ? '🧾 Térmica 80mm' : '⚠ No reconocida (80mm default)';
+
+  plantDiagCard.innerHTML = `
+    <div class="fxb mb8">
+      <div class="card-title">🖨 Diagnóstico de Plantillas</div>
+      <span style="font-size:11px;padding:3px 8px;border-radius:100px;
+                   background:var(--bg2);color:${tipoColor};font-weight:700">
+        ${tipoLabel}
+      </span>
+    </div>
+    <div style="font-size:12px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--line2)">
+        <span style="color:var(--muted)">Impresora guardada</span>
+        <span style="font-weight:600">${printerNow || 'Sin configurar'}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--line2)">
+        <span style="color:var(--muted)">Tipo detectado</span>
+        <span style="font-weight:600;color:${tipoColor}">${tipoLabel}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--line2)">
+        <span style="color:var(--muted)">Plantillas mostradas al cliente</span>
+        <span style="font-weight:600">${tipoActual === 'carta' ? 'Carta / A4' : 'Térmicas 80mm'}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:5px 0">
+        <span style="color:var(--muted)">Plantilla activa (ID)</span>
+        <span style="font-family:var(--mono);font-size:11px;color:var(--green)">${plantActualId || 'termica_80_clasica (default)'}</span>
+      </div>
+    </div>
+
+    <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;
+                letter-spacing:.05em;margin-bottom:8px">Todas las plantillas disponibles</div>
+    <div style="display:flex;flex-direction:column;gap:6px">
+      ${todasPlantillas.map(p => {
+        const esActiva  = p.id === plantActualId || (!plantActualId && p.id === 'termica_80_clasica');
+        const esTipo    = p.tipo === printerTypeNow || (printerTypeNow === 'unknown' && p.tipo === '80mm');
+        return `<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;
+                           background:${esActiva ? 'var(--green-bg, #f0fdf4)' : 'var(--bg2)'};
+                           border:1px solid ${esActiva ? 'var(--green)' : 'var(--line2)'}">
+          <span style="font-size:16px">${p.icono}</span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:12px;font-weight:700;display:flex;align-items:center;gap:6px">
+              ${p.nombre}
+              ${esActiva ? '<span style="font-size:10px;color:var(--green);font-weight:700">✓ ACTIVA</span>' : ''}
+              ${!esTipo ? '<span style="font-size:10px;color:var(--muted);font-weight:400">(otro tipo)</span>' : ''}
+            </div>
+            <div style="font-size:10px;color:var(--muted2)">${p.id} · ${p.tipo}</div>
+          </div>
+          <button onclick="saActivarPlantilla('${p.id}')"
+            style="font-size:11px;padding:4px 10px;border-radius:6px;cursor:pointer;
+                   border:1px solid ${esActiva ? 'var(--green)' : 'var(--line)'};
+                   background:${esActiva ? 'var(--green)' : 'transparent'};
+                   color:${esActiva ? '#fff' : 'var(--ink)'}">
+            ${esActiva ? '✓ Activa' : 'Activar'}
+          </button>
+        </div>`;
+      }).join('')}
+    </div>`;
+  el.appendChild(plantDiagCard);
+
   // ── Herramientas peligrosas ──────────────────
   const dangerCard = h('div', { class: 'card' });
   dangerCard.innerHTML = `
@@ -751,4 +824,14 @@ async function saToggleBarcodeModule(enabled) {
     detail: enabled ? 'Módulo de etiquetas activado' : 'Módulo de etiquetas desactivado',
     userId: user?.id
   }).catch(() => {});
+}
+
+// ── Activar plantilla desde Panel Dev ────────
+async function saActivarPlantilla(id) {
+  if (!id) return;
+  await window.api.settings.set({ key: 'print_template', value: id });
+  if (DB?.settings) DB.settings.print_template = id;
+  toast(`✓ Plantilla "${id}" activada`);
+  // Re-renderizar solo la tarjeta de diagnóstico
+  renderSuperAdmin(document.getElementById('page'));
 }
