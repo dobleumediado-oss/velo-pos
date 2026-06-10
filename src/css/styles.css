@@ -56,6 +56,28 @@ body {
 .login-logo {
   text-align: center;
   margin-bottom: 24px;
+  width: 64px;
+  height: 64px;
+  flex-shrink: 0;
+  border-radius: 14px;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 13px;
+}
+
+.login-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 20px;
 }
 
 .login-logo-mark {
@@ -67,7 +89,8 @@ body {
   align-items: center;
   justify-content: center;
   font-size: 24px;
-  margin-bottom: 12px;
+  margin-bottom: 0;
+  flex-shrink: 0;
 }
 
 .login-title {
@@ -543,3 +566,134 @@ body {
 /* ── Modal ────────────────────────────────── */
 #modal-overlay { animation: fadeIn .15s ease; }
 @keyframes fadeIn { from { opacity:0 } to { opacity:1 } }
+
+/* ══════════════════════════════════════════════
+   LOGIN — Estilos completos
+   ══════════════════════════════════════════════ */
+
+.login-wrap {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  background: var(--dark, #0D1A0D);
+}
+
+.login-clock-outer {
+  text-align: center;
+}
+
+.login-clock-time {
+  font-size: 42px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: 2px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.login-clock-date {
+  font-size: 13px;
+  color: rgba(255,255,255,.45);
+  margin-top: 4px;
+  text-transform: capitalize;
+}
+
+.login-card {
+  background: #fff;
+  border-radius: 16px;
+  padding: 28px 28px 24px;
+  width: 100%;
+  max-width: 400px;
+  box-shadow: 0 12px 50px rgba(0,0,0,.35);
+}
+
+.login-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.login-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #111;
+  line-height: 1.2;
+}
+
+.login-sub {
+  font-size: 11px;
+  color: #888;
+  margin-top: 3px;
+}
+
+/* Selector de rol */
+.role-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.role-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  border: 1.5px solid var(--line, #E0E0E0);
+  background: var(--bg, #F4F4F4);
+  transition: all .15s;
+  user-select: none;
+}
+
+.role-btn:hover {
+  border-color: #aaa;
+  background: #efefef;
+}
+
+.role-btn.on {
+  border-color: var(--accent, #3B82F6);
+  background: rgba(59,130,246,.06);
+}
+
+.role-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #fff;
+}
+
+.role-lbl {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111;
+  line-height: 1.2;
+}
+
+.role-sub {
+  font-size: 10px;
+  color: #888;
+  margin-top: 1px;
+}
+
+/* Campo de usuario cajero */
+.user-select-wrap {
+  margin-bottom: 14px;
+}
+
+/* Versión en el login */
+.login-version {
+  font-size: 11px;
+  color: rgba(255,255,255,.25);
+  text-align: center;
+}
