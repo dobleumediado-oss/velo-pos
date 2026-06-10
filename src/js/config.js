@@ -110,9 +110,11 @@ async function renderConfiguracion(el) {
   // ── Selección y vista previa de plantilla ────
 function seleccionarPlantilla(id) {
   window.api.settings.set({ key: 'print_template', value: id });
+  window._lastPlantActual = id;
   document.querySelectorAll('[id^="plant-card-"]').forEach(el => {
     el.style.border     = '2px solid var(--line)';
     el.style.background = 'var(--surface)';
+    el.removeAttribute('data-active');
     const tick = el.querySelector('.plant-tick');
     if (tick) tick.remove();
   });
@@ -120,6 +122,7 @@ function seleccionarPlantilla(id) {
   if (card) {
     card.style.border     = '2px solid var(--green)';
     card.style.background = 'var(--green-bg)';
+    card.setAttribute('data-active', '1');
     if (!card.querySelector('.plant-tick')) {
       const tick = document.createElement('div');
       tick.className   = 'plant-tick';
@@ -141,7 +144,7 @@ function previsualizarPlantilla(idOverride) {
   const preview = document.getElementById('plant-preview');
   const iframe  = document.getElementById('plant-iframe');
   if (!preview || !iframe) return;
-  const activeCard = document.querySelector('[id^="plant-card-"][style*="var(--green-bg)"]');
+  const activeCard = document.querySelector('[id^="plant-card-"][data-active="1"]');
   const id = idOverride
     || activeCard?.id?.replace('plant-card-', '')
     || window._lastPlantActual
@@ -158,8 +161,8 @@ function previsualizarPlantilla(idOverride) {
 }
 
 function imprimirPruebaPlantilla() {
-  const activeCard = document.querySelector('[id^="plant-card-"][style*="var(--green-bg)"]');
-  const id = activeCard?.id?.replace('plant-card-', '') || 'termica_80_clasica';
+  const activeCard = document.querySelector('[id^="plant-card-"][data-active="1"]');
+  const id = activeCard?.id?.replace('plant-card-', '') || window._lastPlantActual || 'termica_80_clasica';
   const plantilla = getPlantilla(id);
   if (!plantilla) { toast('Selecciona una plantilla primero', 'w'); return; }
   const cfg = {

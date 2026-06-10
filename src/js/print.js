@@ -372,26 +372,31 @@ function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = fa
   const printerType  = typeof detectPrinterType === 'function'
     ? detectPrinterType(printerName)
     : 'unknown';
-  // Ancho en micrones: 58mm=58000, 80mm=80000, carta=sin ancho fijo
-  const printerWidth = printerType === '58mm' ? 58000
-                     : printerType === 'carta' ? undefined
-                     : 80000;
+
+  // Impresoras carta/cartuchos: siempre abrir ventana del navegador
+  // El usuario imprime con Ctrl+P — así @page CSS funciona correctamente
+  // Electron no respeta @page size en su motor interno para carta
+  if (printerType === 'carta' || printerType === 'unknown') {
+    _openPrintWindowFallback(html);
+    return;
+  }
+
+  // Impresoras térmicas: usar API nativa de Electron
+  const printerWidth = printerType === '58mm' ? 58000 : 80000;
 
   if (window.api?.print?.html) {
     window.api.print.html({
       html,
       printerName:  printerName || undefined,
-      printerWidth: (printerName && printerWidth) ? printerWidth : undefined,
+      printerWidth: printerName ? printerWidth : undefined,
       jobType,
       referenceId,
       userId: user?.id || null,
     }).then(result => {
       if (!result?.ok) {
-        // Si fue cancelado no mostrar error, si falló mostrar aviso
         if (result?.error && result.error !== 'Impresión cancelada o fallida') {
           toast(`Error de impresión: ${result.error}`, 'err');
         }
-        // Ofrecer vista previa como alternativa
         _openPrintWindowFallback(html);
       }
     }).catch(() => _openPrintWindowFallback(html));
