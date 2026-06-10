@@ -407,31 +407,71 @@ function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = fa
 }
 
 function _openPrintWindowFallback(html) {
-  const win = window.open('', '_blank',
-    'width=500,height=700,scrollbars=yes,resizable=yes');
-  if (!win) {
-    toast('Activa las ventanas emergentes para imprimir', 'w');
-    return;
-  }
-  // Inyectar botón de imprimir en el fallback
+  // Inyectar botones de control en el HTML
   const htmlConBoton = html.replace('</body>', `
-    <div style="position:fixed;top:8px;right:8px;z-index:999">
+    <div style="position:fixed;top:8px;right:8px;z-index:9999;display:flex;gap:6px">
       <button onclick="window.print()"
         style="background:#16a34a;color:#fff;border:none;padding:8px 16px;
-               border-radius:6px;font-size:13px;font-weight:700;cursor:pointer">
-        Imprimir
+               border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;
+               box-shadow:0 2px 8px rgba(0,0,0,.2)">
+        🖨️ Imprimir
       </button>
       <button onclick="window.close()"
         style="background:#6b7280;color:#fff;border:none;padding:8px 16px;
-               border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;margin-left:4px">
+               border-radius:6px;font-size:13px;font-weight:700;cursor:pointer">
         Cerrar
       </button>
     </div>
   </body>`);
-  win.document.open('text/html', 'replace');
-  win.document.write(htmlConBoton);
-  win.document.close();
-  win.focus();
+
+  // Intentar primero con la API de Electron (más confiable en Windows)
+  if (window.api?.print?.preview) {
+    window.api.print.preview({ html: htmlConBoton });
+    return;
+  }
+
+  // Fallback: window.open estándar
+  try {
+    const win = window.open('', '_blank',
+      'width=794,height=900,scrollbars=yes,resizable=yes');
+    if (win) {
+      win.document.open('text/html', 'replace');
+      win.document.write(htmlConBoton);
+      win.document.close();
+      win.focus();
+      return;
+    }
+  } catch(e) {}
+
+  // Último recurso: crear iframe oculto y imprimir
+  _printViaIframe(htmlConBoton);
+}
+
+function _printViaIframe(html) {
+  // Eliminar iframe previo si existe
+  const prev = document.getElementById('_velo_print_frame');
+  if (prev) prev.remove();
+
+  const iframe = document.createElement('iframe');
+  iframe.id = '_velo_print_frame';
+  iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:794px;height:900px;border:none;';
+  document.body.appendChild(iframe);
+
+  iframe.onload = () => {
+    setTimeout(() => {
+      try {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      } catch(e) {
+        toast('Error al imprimir. Intenta de nuevo.', 'err');
+      }
+    }, 300);
+  };
+
+  const doc = iframe.contentDocument || iframe.contentWindow.document;
+  doc.open();
+  doc.write(html);
+  doc.close();
 }
 
 // ══════════════════════════════════════════════
