@@ -427,11 +427,11 @@ function renderCartaRecibo(sale, cfg, opts) {
   .totals tr td { padding:4px 8px; }
   .totals tr:last-child td { font-weight:700; font-size:14px; border-top:2px solid #000; }
   .footer { margin-top:20px; text-align:center; font-size:11px; color:#666; }
-  img { max-height:50px; }
+  img { display:block; max-height:55px; max-width:180px; }
 </style></head><body>
   <div class="header">
     <div class="biz">
-      ${opts.logo && cfg.biz_logo ? `<img src="${cfg.biz_logo}" style="filter:grayscale(100%) contrast(150%);margin-bottom:6px"/><br/>` : ''}
+      ${opts.logo && cfg.biz_logo ? `<img src="${cfg.biz_logo}" style="display:block;max-height:55px;max-width:180px;margin:0 auto 8px auto;filter:grayscale(100%) contrast(150%)"/><br/>` : ''}
       <strong style="font-size:16px">${cfg.biz_name||'Mi Negocio'}</strong><br/>
       ${opts.rnc && cfg.biz_rnc ? `RNC: ${cfg.biz_rnc}<br/>` : ''}
       ${cfg.biz_addr||''}<br/>
@@ -510,11 +510,11 @@ function renderCartaFormal(sale, cfg, opts) {
   .total-row { display:flex; justify-content:space-between; padding:3px 0; }
   .grand-total { font-size:16px; font-weight:700; border-top:2px solid #000;
                  padding-top:6px; margin-top:4px; }
-  img { max-height:45px; filter:brightness(10); }
+  img { display:block; max-height:45px; max-width:160px; }
 </style></head><body>
   <div class="header-bar">
     <div>
-      ${opts.logo && cfg.biz_logo ? `<img src="${cfg.biz_logo}" style="margin-bottom:4px"/><br/>` : ''}
+      ${opts.logo && cfg.biz_logo ? `<img src="${cfg.biz_logo}" style="display:block;max-height:45px;max-width:160px;margin:0 0 4px 0;filter:brightness(10)"/><br/>` : ''}
       <div class="biz-name">${cfg.biz_name||'Mi Negocio'}</div>
       <div style="font-size:11px;opacity:.8">
         ${opts.rnc && cfg.biz_rnc ? `RNC: ${cfg.biz_rnc} · ` : ''}${cfg.biz_addr||''} · ${cfg.biz_phone||''}
@@ -595,7 +595,7 @@ function renderCartaNCF(sale, cfg, opts) {
   .total-table { width:220px; font-size:11px; }
   .total-table td { padding:3px 8px; }
   .grand { font-size:15px; font-weight:700; border-top:2px solid #000; padding-top:5px; }
-  img { max-height:45px; }
+  img { display:block; max-height:50px; max-width:180px; }
 </style></head><body>
   ${isCotizacion
     ? `<div style="border:2px dashed #aaa;border-radius:6px;padding:8px 14px;text-align:center;margin-bottom:10px">
@@ -611,7 +611,7 @@ function renderCartaNCF(sale, cfg, opts) {
 
   <div class="header">
     <div>
-      ${opts.logo && cfg.biz_logo ? `<img src="${cfg.biz_logo}" style="filter:grayscale(100%) contrast(150%);margin-bottom:4px"/><br/>` : ''}
+      ${opts.logo && cfg.biz_logo ? `<img src="${cfg.biz_logo}" style="display:block;max-height:50px;max-width:180px;margin:0 0 4px 0;filter:grayscale(100%) contrast(150%)"/><br/>` : ''}
       <strong style="font-size:14px">${cfg.biz_name||'Mi Negocio'}</strong><br/>
       RNC: <strong>${cfg.biz_rnc||'---'}</strong><br/>
       ${cfg.biz_addr||''}<br/>Tel: ${cfg.biz_phone||''}
@@ -678,11 +678,11 @@ function renderMediaCarta(sale, cfg, opts) {
   th { background:#111; color:#fff; padding:5px 8px; font-size:9px; text-align:left; }
   td { border-bottom:1px solid #eee; }
   .totals { margin-left:auto; width:180px; margin-top:5px; }
-  img { max-height:30px; }
+  img { display:block; max-height:35px; max-width:140px; }
 </style></head><body>
   <div class="header">
     <div>
-      ${opts.logo && cfg.biz_logo ? `<img src="${cfg.biz_logo}" style="filter:grayscale(100%) contrast(150%);margin-bottom:2px"/><br/>` : ''}
+      ${opts.logo && cfg.biz_logo ? `<img src="${cfg.biz_logo}" style="display:block;max-height:35px;max-width:140px;margin:0 0 3px 0;filter:grayscale(100%) contrast(150%)"/><br/>` : ''}
       <strong style="font-size:12px">${cfg.biz_name||'Mi Negocio'}</strong><br/>
       ${opts.rnc && cfg.biz_rnc ? `RNC: ${cfg.biz_rnc}<br/>` : ''}
       ${cfg.biz_addr||''} · Tel: ${cfg.biz_phone||''}

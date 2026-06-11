@@ -368,21 +368,24 @@ function _sendToPrinter(lines, jobType = '', referenceId = null, isReprint = fal
 
 // ── Abrir ventana de impresión ────────────────
 function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = false) {
-  const printerName  = _getSavedPrinter();
-  const printerType  = typeof detectPrinterType === 'function'
+  const printerName = _getSavedPrinter();
+  const printerType = typeof detectPrinterType === 'function'
     ? detectPrinterType(printerName)
     : 'unknown';
 
-  // Impresoras carta/cartuchos: usar api.print.html con silent:false
-  // Esto abre el diálogo de impresión de Electron (con vista previa)
-  // window.open/_blank en Electron secundaria llama window.print() nativo
-  // de Windows que NO tiene vista previa — por eso se veía el diálogo feo
-  if (printerType === 'carta' || printerType === 'unknown') {
+  // ── Impresoras carta/cartuchos ────────────────────────────────────────────
+  // silent:false → Electron abre diálogo con vista previa
+  // Pasar printerName para usar la impresora guardada (no la predeterminada)
+  // NO pasar printerWidth → main.js detecta isThermal=false → pageSize:Letter
+  if (printerType === 'carta') {
+    const _activeTemplateId = DB?.settings?.print_template || '';
+    const _pageHint = _activeTemplateId === 'media_carta' ? 'half-letter' : undefined;
     if (window.api?.print?.html) {
       window.api.print.html({
         html,
-        // Sin printerName ni printerWidth → main.js usará isThermal=false
-        // → silent:false, pageSize:'A4' → diálogo Electron con vista previa
+        printerName:  printerName || undefined,
+        // sin printerWidth → isThermal=false en main.js
+        pageHint:     _pageHint,
         jobType,
         referenceId,
         userId: user?.id || null,
@@ -400,7 +403,32 @@ function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = fa
     return;
   }
 
-  // Impresoras térmicas: usar API nativa de Electron
+  // ── Impresora no reconocida (unknown) ─────────────────────────────────────
+  // Si la plantilla activa es tipo carta → flujo carta
+  // Si no → fallback (window.open con botón Imprimir)
+  if (printerType === 'unknown') {
+    const _activePlant = (typeof getPlantilla === 'function' && DB?.settings?.print_template)
+      ? getPlantilla(DB.settings.print_template) : null;
+    if (_activePlant && _activePlant.tipo === 'carta') {
+      const _pageHint = DB.settings.print_template === 'media_carta' ? 'half-letter' : undefined;
+      if (window.api?.print?.html) {
+        window.api.print.html({
+          html,
+          printerName:  printerName || undefined,
+          pageHint:     _pageHint,
+          jobType, referenceId,
+          userId: user?.id || null,
+        }).then(result => {
+          if (!result?.ok) _openPrintWindowFallback(html);
+        }).catch(() => _openPrintWindowFallback(html));
+        return;
+      }
+    }
+    _openPrintWindowFallback(html);
+    return;
+  }
+
+  // ── Impresoras térmicas (58mm / 80mm): API nativa Electron, silent:true ──
   const printerWidth = printerType === '58mm' ? 58000 : 80000;
 
   if (window.api?.print?.html) {

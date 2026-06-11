@@ -921,11 +921,13 @@ ipcMain.handle('license:revoke', async (_, { requestUserId } = {}) => {
  * - Si se pasa printerName, la preselecciona en el diálogo
  * - Registra el trabajo en print_jobs para auditoría y reimpresión
  */
-ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, jobType, referenceId, userId }) => {
+ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, jobType, referenceId, userId, pageHint }) => {
   try {
+    // isThermal: solo cuando hay printerName Y printerWidth
+    // carta: printerName sin printerWidth (o sin printerName)
     // Para carta usamos 816px (≈ 8.5" a 96dpi) para que el layout renderice correcto
     // Para térmica 480px es suficiente — papel angosto
-    const isThermal  = !!printerName;
+    const isThermal  = !!(printerName && printerWidth);
     const printWin = new BrowserWindow({
       width:  isThermal ? 480 : 816,
       height: isThermal ? 700 : 1056,
@@ -965,7 +967,10 @@ ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, jobTyp
       pageSize: isThermal
         // height muy grande para que el corte automático de la térmica lo maneje
         ? { width: paperWidth, height: 999999 }
-        : 'Letter',
+        // pageHint 'half-letter' → media carta (5.5"×4.25" = 139700×107950 micrones)
+        : pageHint === 'half-letter'
+          ? { width: 139700, height: 107950 }
+          : 'Letter',
     };
 
     if (printerName) {
