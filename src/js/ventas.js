@@ -9,9 +9,16 @@
 let ventasSearch = '';
 let ventasRange  = 'today';
 let ventasPay    = '';
+let ventasTab    = 'facturas'; // 'facturas' | 'cotizaciones'
 
 function renderVentas(el) {
   el.innerHTML = '';
+
+  // Respetar tab inicial desde dashboard
+  if (window._ventasTabInicial) {
+    ventasTab = window._ventasTabInicial;
+    delete window._ventasTabInicial;
+  }
 
   el.appendChild(h('div', { class: 'sec-hdr' },
     h('div', null,
@@ -25,14 +32,26 @@ function renderVentas(el) {
     })
   ));
 
-  // Filtros
+  // ── Tabs ──────────────────────────────────────
+  el.appendChild(h('div', { class: 'tabs', style: { marginBottom: '12px' } },
+    h('button', {
+      class: `tab ${ventasTab === 'facturas' ? 'on' : ''}`,
+      onclick: () => { ventasTab = 'facturas'; renderVentas(el); }
+    }, 'Facturas / Recibos'),
+    h('button', {
+      class: `tab ${ventasTab === 'cotizaciones' ? 'on' : ''}`,
+      onclick: () => { ventasTab = 'cotizaciones'; renderVentas(el); }
+    }, 'Cotizaciones')
+  ));
+
+  // ── Filtros ───────────────────────────────────
   el.appendChild(
     h('div', { class: 'flex', style: { marginBottom: '14px', gap: '8px', flexWrap: 'wrap' } },
       h('div', { class: 'inp-ic', style: { flex: 1, minWidth: '200px' } },
         h('div', { class: 'ic', html: svg('search') }),
         h('input', {
           class: 'inp', type: 'text',
-          placeholder: 'Buscar por cliente, # factura...',
+          placeholder: 'Buscar por cliente, # factura, RNC, teléfono, producto...',
           value: ventasSearch,
           oninput: e => { ventasSearch = e.target.value; refreshVentas(el); }
         })
@@ -55,7 +74,7 @@ function renderVentas(el) {
         });
         return sel;
       })(),
-      (() => {
+      ventasTab === 'facturas' ? (() => {
         const sel = h('select', {
           class: 'inp', style: { width: '130px' },
           onchange: e => { ventasPay = e.target.value; refreshVentas(el); }
@@ -73,7 +92,7 @@ function renderVentas(el) {
           sel.appendChild(op);
         });
         return sel;
-      })()
+      })() : null
     )
   );
 
@@ -96,38 +115,65 @@ function renderVentasTable() {
   if (!tableWrap) return;
 
   const q = ventasSearch.toLowerCase().trim();
+  const esCotizTab = ventasTab === 'cotizaciones';
 
   let sales = DB.sales.filter(s => {
     const method = s.payment_method || s.pay || '';
     const name   = s.customer_name  || s.clientName || '';
-    const matchPay = !ventasPay || method === ventasPay;
-    const matchQ   = !q ||
+    const rnc    = s.customer_rnc   || s.clientCedula || '';
+
+    // Filtrar por tab
+    if (esCotizTab) {
+      if (s.type !== 'cotizacion') return false;
+      if (s.status === 'cancelled') return false;
+    } else {
+      if (s.type === 'cotizacion') return false;
+      if (s.type === 'devolucion') return false;
+      if (s.status === 'cancelled') return false;
+    }
+
+    // Filtro de método (solo facturas)
+    const matchPay = esCotizTab || !ventasPay || method === ventasPay;
+
+    // Búsqueda extendida: cliente, #, RNC, teléfono, producto
+    const matchQ = !q ||
       String(s.id).includes(q) ||
       name.toLowerCase().includes(q) ||
-      (s.customer_rnc || s.clientCedula || '').includes(q);
-    return matchPay && matchQ && s.status !== 'cancelled' && s.type !== 'devolucion';
+      rnc.includes(q) ||
+      // Buscar por teléfono del cliente
+      (() => {
+        const cli = DB.customers.find(c => c.id === (s.customer_id || s.clientId));
+        return cli && (cli.phone || '').replace(/[^0-9]/g,'').includes(q.replace(/[^0-9]/g,''));
+      })() ||
+      // Buscar por nombre de producto en los items
+      (s.items || []).some(i =>
+        (i.product_name || i.name || '').toLowerCase().includes(q)
+      );
+
+    return matchPay && matchQ;
   });
 
   // Resumen
   if (resWrap) {
     resWrap.innerHTML = '';
     const total = sales.reduce((a, s) => a + (s.total || 0), 0);
-    const byPay = {};
-    sales.forEach(s => {
-      const m = s.payment_method || s.pay || 'efectivo';
-      byPay[m] = (byPay[m] || 0) + (s.total || 0);
-    });
 
     const resGrid = h('div', { class: 'metrics',
       style: { gridTemplateColumns: 'repeat(4,1fr)', marginBottom: '16px' } });
 
-    [
+    const metItems = esCotizTab ? [
+      { icon: 'list',   color: 'p', label: 'Cotizaciones',   val: sales.length },
+      { icon: 'dollar', color: 'g', label: 'Valor Total',    val: fmt(total) },
+      { icon: 'clock',  color: 'a', label: 'Pendientes hoy', val: sales.filter(s => (s.created_at||'').slice(0,10) === today()).length },
+      { icon: 'check',  color: 'b', label: 'Convertibles',   val: sales.filter(s => s.status !== 'cancelled').length },
+    ] : [
       { icon: 'list',  color: 'b', label: 'Transacciones', val: sales.length },
       { icon: 'dollar',color: 'g', label: 'Total',         val: fmt(total) },
-      { icon: 'cash',  color: 'g', label: 'Efectivo',      val: fmt(byPay['efectivo'] || 0) },
-      { icon: 'card',  color: 'p', label: 'Tarj/Trans',
-        val: fmt((byPay['tarjeta']||0) + (byPay['transferencia']||0)) },
-    ].forEach(m => {
+      { icon: 'cash',  color: 'g', label: 'Efectivo',      val: fmt(sales.filter(s => (s.payment_method||s.pay) === 'efectivo').reduce((a,s)=>a+(s.total||0),0)) },
+      { icon: 'card',  color: 'p', label: 'Tarj/Trans',    val: fmt(sales.filter(s => ['tarjeta','transferencia'].includes(s.payment_method||s.pay||'')).reduce((a,s)=>a+(s.total||0),0)) },
+    ];
+
+    metItems.forEach(m => {
       resGrid.appendChild(
         h('div', { class: 'metric' },
           h('div', { class: 'met-top' },
@@ -146,7 +192,7 @@ function renderVentasTable() {
   if (!sales.length) {
     tableWrap.appendChild(h('div', { class: 'empty' },
       h('div', { html: svg('list'), style: { color: 'var(--muted2)' } }),
-      h('p', null, 'Sin ventas en este período')
+      h('p', null, esCotizTab ? 'Sin cotizaciones en este período' : 'Sin ventas en este período')
     ));
     return;
   }
@@ -354,74 +400,262 @@ async function convertirCotizacionAVenta(s) {
   const sale = await window.api.sales.getById({ id: s.id });
   if (!sale) { toast('Cotización no encontrada', 'err'); return; }
 
-  confirmModal(
-    `¿Convertir la cotización <strong>#${String(s.id).padStart(5,'0')}</strong> en una venta real?
-     <br><span style="font-size:11px;color:var(--muted)">
-       Se descontará el inventario y se registrará el movimiento de caja.
-     </span>`,
-    async () => {
-      const customer = DB.customers.find(c => c.id === sale.customer_id) ||
-        { id: 1, name: sale.customer_name || 'Consumidor Final', rnc: '' };
+  // Estado editable de la conversión
+  const estadoPrev = window._convEstado;
+  const estado = estadoPrev && window._convSale?.id === s.id ? estadoPrev : {
+    items: (sale.items || []).map(i => ({
+      product_id:   i.product_id,
+      product_code: i.product_code || '',
+      product_name: i.product_name || i.name || '',
+      unit_cost:    i.unit_cost  || 0,
+      unit_price:   i.unit_price || i.price || 0,
+      qty:          i.qty || 1,
+      _stock:       DB.products.find(p => p.id === i.product_id)?.stock ?? null,
+    })),
+    pay:      'efectivo',
+    discount: sale.discount_pct || 0,
+  };
+  window._convEstado = estado;
+  window._convSale   = sale;
+  window._convOrigId = s.id;
 
-      const items = (sale.items || []).map(i => ({
+  // Calcular totales
+  const subtotal = estado.items.reduce((a, i) => a + i.unit_price * i.qty, 0);
+  const discAmt  = subtotal * (estado.discount / 100);
+  const base     = subtotal - discAmt;
+  const taxAmt   = 0; // cotización no tiene ITBIS — la factura lo calculará
+  const total    = base;
+
+  const itemsHTML = estado.items.map((it, idx) => {
+    const stockOk = it._stock === null || it._stock >= it.qty;
+    const stockLabel = it._stock === null
+      ? '<span style="color:var(--muted2);font-size:10px">—</span>'
+      : it._stock === 0
+        ? '<span style="color:var(--red);font-size:10px;font-weight:600">Sin stock</span>'
+        : it._stock < it.qty
+          ? `<span style="color:var(--amber);font-size:10px">Stock: ${it._stock} ⚠</span>`
+          : `<span style="color:var(--green);font-size:10px">Stock: ${it._stock} ✓</span>`;
+
+    return `
+      <tr style="background:${!stockOk && it._stock !== null && it._stock >= 0 ? 'rgba(245,158,11,.06)' : ''}">
+        <td style="padding:6px 8px">
+          <div style="font-weight:500;font-size:13px">${it.product_name}</div>
+          ${stockLabel}
+        </td>
+        <td style="padding:6px;text-align:center">
+          <div style="display:flex;align-items:center;gap:4px;justify-content:center">
+            <button onclick="convCotizQty(${idx},-1)"
+              style="width:24px;height:24px;border:1px solid var(--line);border-radius:4px;
+                     background:var(--surface2);cursor:pointer;font-size:14px;line-height:1">−</button>
+            <input id="conv-qty-${idx}" type="number" min="0" value="${it.qty}"
+              style="width:50px;text-align:center;border:1px solid var(--line);
+                     border-radius:4px;padding:3px;font-size:13px"
+              oninput="if(window._convEstado)window._convEstado.items[${idx}].qty=Math.max(0,parseInt(this.value)||0)"/>
+            <button onclick="convCotizQty(${idx},1)"
+              style="width:24px;height:24px;border:1px solid var(--line);border-radius:4px;
+                     background:var(--surface2);cursor:pointer;font-size:14px;line-height:1">+</button>
+          </div>
+        </td>
+        <td style="padding:6px 8px;text-align:right;font-size:13px">${fmt(it.unit_price)}</td>
+        <td style="padding:6px 8px;text-align:right;font-weight:600;font-size:13px">${fmt(it.unit_price * it.qty)}</td>
+        <td style="padding:6px;text-align:center">
+          <button onclick="convCotizRemove(${idx})"
+            style="background:none;border:none;color:var(--red);cursor:pointer;font-size:18px;line-height:1"
+            title="Eliminar">×</button>
+        </td>
+      </tr>`;
+  }).join('');
+
+  const hayStockBajo = estado.items.some(it =>
+    it._stock !== null && it._stock >= 0 && it._stock < it.qty && it.qty > 0);
+
+  openModal(`
+    <div class="modal-title">Convertir Cotización #${String(s.id).padStart(5,'0')} en Venta</div>
+    <div class="modal-sub">
+      Cliente: <strong>${sale.customer_name || 'Consumidor Final'}</strong> ·
+      ${(sale.created_at||'').split('T')[0]}
+    </div>
+
+    ${hayStockBajo ? `
+      <div class="alrt a" style="margin-bottom:10px">
+        <div class="alrt-dot a"></div>
+        <div>
+          <div class="alrt-title">Stock insuficiente en algunos productos</div>
+          <div class="alrt-sub">Ajusta las cantidades o elimina los que no puedas despachar ahora.</div>
+        </div>
+      </div>` : ''}
+
+    <div style="border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:12px">
+      <div style="overflow-y:auto;max-height:280px">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr style="background:var(--surface2)">
+              <th style="padding:8px;text-align:left;font-size:11px;border-bottom:1px solid var(--line)">Producto</th>
+              <th style="padding:8px;text-align:center;font-size:11px;border-bottom:1px solid var(--line)">Cant.</th>
+              <th style="padding:8px;text-align:right;font-size:11px;border-bottom:1px solid var(--line)">Precio</th>
+              <th style="padding:8px;text-align:right;font-size:11px;border-bottom:1px solid var(--line)">Total</th>
+              <th style="padding:8px;border-bottom:1px solid var(--line)"></th>
+            </tr>
+          </thead>
+          <tbody id="conv-items">${itemsHTML}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="g2" style="margin-bottom:10px">
+      <div class="fg" style="margin-bottom:0">
+        <label class="lbl">Método de pago</label>
+        <select class="inp" id="conv-pay"
+                onchange="if(window._convEstado)window._convEstado.pay=this.value">
+          ${['efectivo','tarjeta','transferencia','credito'].map(m =>
+            `<option value="${m}" ${estado.pay===m?'selected':''}>${m.charAt(0).toUpperCase()+m.slice(1)}</option>`
+          ).join('')}
+        </select>
+      </div>
+      <div class="fg" style="margin-bottom:0">
+        <label class="lbl">Descuento (%)</label>
+        <input class="inp" type="number" min="0" max="100"
+               value="${estado.discount}" id="conv-disc"
+               oninput="if(window._convEstado)window._convEstado.discount=Math.min(100,Math.max(0,parseFloat(this.value)||0))"/>
+      </div>
+    </div>
+
+    <div class="card" style="background:var(--surface2);margin-bottom:12px">
+      <div class="tr"><span>Subtotal</span><span>${fmt(subtotal)}</span></div>
+      ${estado.discount > 0 ? `<div class="tr"><span>Descuento (${estado.discount}%)</span><span>−${fmt(discAmt)}</span></div>` : ''}
+      <div class="tr grand"><span>TOTAL ESTIMADO</span><span>${fmt(total)}</span></div>
+      <div style="font-size:10px;color:var(--muted2);margin-top:4px">El ITBIS se calculará al confirmar según tipo de factura.</div>
+    </div>
+
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="closeModal();delete window._convEstado;delete window._convSale">Cancelar</button>
+      <button class="btn btn-green" onclick="confirmarConversionCotizacion()">
+        ✓ Confirmar venta
+      </button>
+    </div>
+  `, 'modal-lg');
+}
+
+// Handlers inline del modal de conversión
+function convCotizQty(idx, delta) {
+  const est = window._convEstado;
+  if (!est || !est.items[idx]) return;
+  // Guardar valores actuales de inputs antes de re-abrir
+  est.items.forEach((it, i) => {
+    const el = document.getElementById('conv-qty-' + i);
+    if (el) it.qty = Math.max(0, parseInt(el.value)||0);
+  });
+  est.items[idx].qty = Math.max(0, est.items[idx].qty + delta);
+  const origSale = { id: window._convOrigId };
+  convertirCotizacionAVenta(origSale);
+}
+
+function convCotizRemove(idx) {
+  const est = window._convEstado;
+  if (!est) return;
+  est.items.forEach((it, i) => {
+    const el = document.getElementById('conv-qty-' + i);
+    if (el) it.qty = Math.max(0, parseInt(el.value)||0);
+  });
+  est.items.splice(idx, 1);
+  convertirCotizacionAVenta({ id: window._convOrigId });
+}
+
+async function confirmarConversionCotizacion() {
+  const est  = window._convEstado;
+  const sale = window._convSale;
+  const cotizId = window._convOrigId;
+  if (!est || !sale) return;
+
+  // Leer valores finales de inputs
+  est.items.forEach((it, idx) => {
+    const input = document.getElementById('conv-qty-' + idx);
+    if (input) it.qty = Math.max(0, parseInt(input.value)||0);
+  });
+  const payEl  = document.getElementById('conv-pay');
+  const discEl = document.getElementById('conv-disc');
+  if (payEl)  est.pay      = payEl.value;
+  if (discEl) est.discount = Math.min(100, Math.max(0, parseFloat(discEl.value)||0));
+
+  const itemsValidos = est.items.filter(i => i.qty > 0 && i.product_id);
+  if (!itemsValidos.length) { toast('Agrega al menos un producto con cantidad mayor a 0', 'err'); return; }
+
+  // Verificar stock en tiempo real contra DB actual
+  await reloadProducts();
+  const sinStock = itemsValidos.filter(i => {
+    const prod = DB.products.find(p => p.id === i.product_id);
+    return prod && prod.stock < i.qty;
+  });
+  if (sinStock.length) {
+    const nombres = sinStock.map(i => {
+      const prod = DB.products.find(p => p.id === i.product_id);
+      return `${i.product_name} (disponible: ${prod?.stock ?? 0})`;
+    }).join(', ');
+    toast(`Stock insuficiente: ${nombres}`, 'err');
+    return;
+  }
+
+  const customer = DB.customers.find(c => c.id === sale.customer_id) ||
+    { id: 1, name: sale.customer_name || 'Consumidor Final', rnc: '' };
+
+  const result = await window.api.sales.create({
+    saleData: {
+      customer,
+      items: itemsValidos.map(i => ({
         product_id:   i.product_id,
         product_code: i.product_code || '',
         product_name: i.product_name,
-        unit_cost:    i.unit_cost  || 0,
+        unit_cost:    i.unit_cost || 0,
         unit_price:   i.unit_price,
         qty:          i.qty,
-      }));
-
-      const result = await window.api.sales.create({
-        saleData: {
-          customer,
-          items,
-          payment: {
-            method:    'efectivo',
-            disc:      sale.discount_pct || 0,
-            priceMode: sale.price_mode   || 'retail',
-          },
-          type:    'factura',
-          session: cajaSession,
-        },
-        requestUserId: user.id,
-      });
-
-      if (!result.ok) { toast(result.error || 'Error al convertir', 'err'); return; }
-
-      await window.api.sales.cancel({
-        id: s.id, reason: `Convertida en factura #${result.saleId}`,
-        requestUserId: user.id,
-      });
-
-      await reloadSales({ range: 'all' });
-      await reloadProducts();
-      closeModal();
-      toast(`✓ Cotización convertida — Factura #${String(result.saleId).padStart(5,'0')}`);
-
-      printReceipt({
-        id:             result.saleId,
-        type:           'factura',
-        customer_name:  sale.customer_name || 'Consumidor Final',
-        customer_rnc:   sale.customer_rnc  || '',
-        items,
-        subtotal:       sale.subtotal,
-        discount_pct:   sale.discount_pct || 0,
-        discount_amt:   sale.discount_amt || 0,
-        tax_amt:        sale.tax_amt      || 0,
-        total:          sale.total,
-        payment_method: 'efectivo',
-        cajero:         user.name,
-        date:           today(),
-        time:           nowt(),
-      });
-
-      renderVentas(document.getElementById('page'));
+      })),
+      payment: {
+        method:    est.pay,
+        disc:      est.discount,
+        priceMode: sale.price_mode || 'retail',
+      },
+      type:    'factura',
+      session: cajaSession,
     },
-    'Convertir en venta',
-    'btn-green'
-  );
+    requestUserId: user.id,
+  });
+
+  if (!result.ok) { toast(result.error || 'Error al convertir', 'err'); return; }
+
+  await window.api.sales.cancel({
+    id: cotizId,
+    reason: `Convertida en factura #${result.saleId}`,
+    requestUserId: user.id,
+  });
+
+  await reloadSales({ range: 'all' });
+  await reloadProducts();
+  closeModal();
+  delete window._convEstado;
+  delete window._convSale;
+  delete window._convOrigId;
+
+  toast(`✓ Cotización convertida → Factura #${String(result.saleId).padStart(5,'0')}`);
+  printReceipt({
+    id:             result.saleId,
+    type:           'factura',
+    customer_name:  sale.customer_name || 'Consumidor Final',
+    customer_rnc:   sale.customer_rnc  || '',
+    items:          itemsValidos,
+    subtotal:       itemsValidos.reduce((a,i)=>a+i.unit_price*i.qty,0),
+    discount_pct:   est.discount,
+    discount_amt:   itemsValidos.reduce((a,i)=>a+i.unit_price*i.qty,0)*(est.discount/100),
+    tax_amt:        result.taxAmt || 0,
+    total:          result.total  || 0,
+    payment_method: est.pay,
+    cajero:         user.name,
+    date:           today(),
+    time:           nowt(),
+  });
+
+  renderVentas(document.getElementById('page'));
 }
+
 
 async function openDetalleVentaModal(s) {
   const sale  = await window.api.sales.getById({ id: s.id });

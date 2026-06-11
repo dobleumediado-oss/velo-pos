@@ -263,6 +263,22 @@ async function renderDash(el) {
   const periodLabel  = { today:'Hoy', '3days':'3 días', week:'7 días', month:'Mes' }[dashPeriod];
 
   // ── Métricas ─────────────────────────────────
+  const cotizaciones = (allSales || []).filter(s =>
+    s.type === 'cotizacion' && s.status !== 'cancelled');
+  const cotizPeriod = (() => {
+    if (dashPeriod === 'today') {
+      return cotizaciones.filter(s => (s.created_at||'').slice(0,10) === today_);
+    } else if (dashPeriod === '3days') {
+      const c3 = new Date(Date.now()-3*24*60*60*1000).toISOString().split('T')[0];
+      return cotizaciones.filter(s => (s.created_at||'').slice(0,10) >= c3);
+    } else if (dashPeriod === 'week') {
+      const c7 = new Date(Date.now()-7*24*60*60*1000).toISOString().split('T')[0];
+      return cotizaciones.filter(s => (s.created_at||'').slice(0,10) >= c7);
+    }
+    return cotizaciones.filter(s => (s.created_at||'').slice(0,7) === monthPfx);
+  })();
+  const cotizTotal = cotizPeriod.reduce((a,s) => a+(s.total||0), 0);
+
   const metWrap = h('div', { class: 'metrics' });
   [
     { icon: 'dollar', color: 'g', label: `Ventas (${periodLabel})`,
@@ -277,6 +293,11 @@ async function renderDash(el) {
       val: fmt(pendCredit), badge: `${totalClients} clientes`,
       badgeType: pendCredit > 0 ? 'dn' : 'nu',
       click: () => routeTo('clientes') },
+    { icon: 'list',   color: 'p', label: `Cotizaciones (${periodLabel})`,
+      val: fmt(cotizTotal),
+      badge: `${cotizPeriod.length} pendiente${cotizPeriod.length !== 1 ? 's' : ''}`,
+      badgeType: cotizPeriod.length > 0 ? 'nu' : 'nu',
+      click: () => { window._ventasTabInicial = 'cotizaciones'; routeTo('ventas'); } },
   ].forEach(m => {
     const card = h('div', {
       class: 'metric',
