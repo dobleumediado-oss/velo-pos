@@ -923,8 +923,12 @@ ipcMain.handle('license:revoke', async (_, { requestUserId } = {}) => {
  */
 ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, jobType, referenceId, userId }) => {
   try {
+    // Para carta usamos 816px (≈ 8.5" a 96dpi) para que el layout renderice correcto
+    // Para térmica 480px es suficiente — papel angosto
+    const isThermal  = !!printerName;
     const printWin = new BrowserWindow({
-      width: 480, height: 700,
+      width:  isThermal ? 480 : 816,
+      height: isThermal ? 700 : 1056,
       show: false,
       webPreferences: { nodeIntegration: false, contextIsolation: true },
     });
@@ -936,10 +940,8 @@ ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, jobTyp
         reject(new Error(errDesc || 'No se pudo cargar el documento')));
     });
 
-    // Pausa para que el CSS renderice antes de imprimir
-    await new Promise(r => setTimeout(r, 350));
-
-    const isThermal  = !!printerName;
+    // Carta necesita más tiempo para renderizar CSS/tablas/logo que una térmica simple
+    await new Promise(r => setTimeout(r, isThermal ? 350 : 600));
     // printerWidth puede llegar como "50mm" (string) o como número en micrones
     // Convertir siempre a micrones (enteros) que es lo que espera Electron
     let paperWidth = 80000; // default 80mm en micrones
@@ -963,7 +965,7 @@ ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, jobTyp
       pageSize: isThermal
         // height muy grande para que el corte automático de la térmica lo maneje
         ? { width: paperWidth, height: 999999 }
-        : 'A4',
+        : 'Letter',
     };
 
     if (printerName) {

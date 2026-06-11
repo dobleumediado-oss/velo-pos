@@ -373,10 +373,29 @@ function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = fa
     ? detectPrinterType(printerName)
     : 'unknown';
 
-  // Impresoras carta/cartuchos: siempre abrir ventana del navegador
-  // El usuario imprime con Ctrl+P — así @page CSS funciona correctamente
-  // Electron no respeta @page size en su motor interno para carta
+  // Impresoras carta/cartuchos: usar api.print.html con silent:false
+  // Esto abre el diálogo de impresión de Electron (con vista previa)
+  // window.open/_blank en Electron secundaria llama window.print() nativo
+  // de Windows que NO tiene vista previa — por eso se veía el diálogo feo
   if (printerType === 'carta' || printerType === 'unknown') {
+    if (window.api?.print?.html) {
+      window.api.print.html({
+        html,
+        // Sin printerName ni printerWidth → main.js usará isThermal=false
+        // → silent:false, pageSize:'A4' → diálogo Electron con vista previa
+        jobType,
+        referenceId,
+        userId: user?.id || null,
+      }).then(result => {
+        if (!result?.ok) {
+          if (result?.error && result.error !== 'Impresión cancelada o fallida') {
+            toast(`Error de impresión: ${result.error}`, 'err');
+          }
+          _openPrintWindowFallback(html);
+        }
+      }).catch(() => _openPrintWindowFallback(html));
+      return;
+    }
     _openPrintWindowFallback(html);
     return;
   }
