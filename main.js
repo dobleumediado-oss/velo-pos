@@ -1351,6 +1351,168 @@ ipcMain.handle('importar:readPDF', async (_, { data }) => {
 });
 
 // ══════════════════════════════════════════════
+// IPC — IMPORTAR VENTA HISTÓRICA
+// Inserta directamente en la DB sin validar caja,
+// sin descontar stock, sin requerir usuario cajero.
+// Solo para migraciones históricas.
+// ══════════════════════════════════════════════
+// ══════════════════════════════════════════════
+// IPC — IMPORTAR CRÉDITO / CUENTA POR COBRAR
+// Busca el cliente por nombre exacto.
+// Si existe → actualiza balance, credit_limit, status.
+// Si no existe → lo crea con todos los datos de crédito.
+// Registra en payments como "Saldo inicial importado".
+// ══════════════════════════════════════════════
+ipcMain.handle('importar:importarCredito', async (_, {
+  customerName, balance, creditLimit, creditDays,
+  creditDue, phone, rnc, status, requestUserId
+}) => {
+  try {
+    const db = require('./database').getDB();
+
+    if (!customerName) return { ok: false, error: 'Nombre de cliente requerido' };
+    if (balance < 0)   return { ok: false, error: 'El balance no puede ser negativo' };
+
+    const safeBalance     = Math.round(balance * 100) / 100;
+    const safeCreditLimit = Math.max(safeBalance, Math.round((creditLimit || 0) * 100) / 100);
+    const safeStatus      = ['activo','bloqueado','moroso'].includes(status) ? status : 'activo';
+    const safeCreditDays  = creditDays > 0 ? creditDays : 30;
+
+    // Calcular fecha de vencimiento si no viene y hay balance
+    let safeDue = creditDue || null;
+    if (!safeDue && safeBalance > 0) {
+      const d = new Date();
+      d.setDate(d.getDate() + safeCreditDays);
+      safeDue = d.toISOString().split('T')[0];
+    }
+
+    const tx = db.transaction(() => {
+      // Buscar cliente existente por nombre (case-insensitive)
+      const existing = db.prepare(
+        "SELECT id, balance FROM customers WHERE lower(trim(name)) = lower(trim(?)) AND active=1 LIMIT 1"
+      ).get(customerName);
+
+      let customerId;
+      let created = false;
+
+      if (existing) {
+        // Cliente existe → actualizar balance y datos de crédito
+        customerId = existing.id;
+        db.prepare(`
+          UPDATE customers
+          SET balance=?, credit_limit=?, credit_days=?, credit_due=?,
+              status=?, phone=CASE WHEN phone='' THEN ? ELSE phone END,
+              rnc=CASE WHEN rnc='' THEN ? ELSE rnc END,
+              updated_at=datetime('now')
+          WHERE id=?
+        `).run(safeBalance, safeCreditLimit, safeCreditDays, safeDue,
+               safeStatus, phone || '', rnc || '', customerId);
+      } else {
+        // Cliente no existe → crear con todos los datos
+        const r = db.prepare(`
+          INSERT INTO customers(name, rnc, phone, address, email,
+            credit_limit, credit_days, balance, credit_due, status)
+          VALUES (?, ?, ?, '', '', ?, ?, ?, ?, ?)
+        `).run(customerName, rnc || '', phone || '',
+               safeCreditLimit, safeCreditDays, safeBalance, safeDue, safeStatus);
+        customerId = r.lastInsertRowid;
+        created = true;
+      }
+
+      // Registrar el saldo como un "payment" de saldo inicial para que
+      // aparezca en el historial de cuentas por cobrar
+      if (safeBalance > 0) {
+        db.prepare(`
+          INSERT INTO payments(
+            customer_id, sale_id, amount, method, note,
+            balance_before, balance_after, cajero, user_id
+          ) VALUES (?, NULL, ?, 'credito', 'Saldo inicial importado', 0, ?, 'Importación', ?)
+        `).run(customerId, safeBalance, safeBalance, requestUserId || null);
+      }
+
+      return { customerId, created };
+    });
+
+    const result = tx();
+    return { ok: true, ...result };
+
+  } catch(e) {
+    console.error('[importar:importarCredito]', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('importar:importarVenta', async (_, { venta, requestUserId }) => {
+  try {
+    const db = require('./database').getDB();
+
+    // Validar datos mínimos
+    if (!venta?.total || venta.total <= 0) {
+      return { ok: false, error: 'Total inválido' };
+    }
+    if (!venta?.date) {
+      return { ok: false, error: 'Fecha requerida' };
+    }
+
+    const db_tx = db.transaction(() => {
+      // Insertar la venta directamente — sin sesión de caja, sin stock
+      const saleR = db.prepare(`
+        INSERT INTO sales(
+          cash_session_id, customer_id, customer_name, customer_rnc,
+          type, status, subtotal, discount_pct, discount_amt,
+          tax_pct, tax_amt, total, payment_method, price_mode,
+          cajero, user_id, ncf, created_at
+        ) VALUES (?, 1, ?, '', ?, 'completed', ?, ?, 0, ?, ?, ?, ?, 'retail', ?, ?, ?, ?)
+      `).run(
+        null,                                         // sin sesión de caja
+        venta.customer_name || 'Consumidor Final',
+        venta.type || 'factura',
+        venta.subtotal || venta.total,
+        venta.discount_pct || 0,
+        venta.type === 'factura' ? 18 : 0,           // tax_pct
+        venta.tax_amt || 0,
+        venta.total,
+        venta.payment_method || 'efectivo',
+        venta.cajero || '',
+        requestUserId || null,
+        venta.ncf || '',
+        // Usar la fecha del archivo, no NOW()
+        venta.date + ' 00:00:00'
+      );
+      const saleId = saleR.lastInsertRowid;
+
+      // Insertar items — producto genérico de importación (product_id=null)
+      if (venta.items && venta.items.length) {
+        for (const item of venta.items) {
+          db.prepare(`
+            INSERT INTO sale_items(
+              sale_id, product_id, product_code, product_name,
+              unit_cost, unit_price, qty, subtotal
+            ) VALUES (?, NULL, ?, ?, 0, ?, ?, ?)
+          `).run(
+            saleId,
+            item.product_code || 'IMP',
+            item.product_name || 'Producto importado',
+            item.unit_price   || venta.total,
+            item.qty          || 1,
+            (item.unit_price || venta.total) * (item.qty || 1)
+          );
+        }
+      }
+
+      return { saleId };
+    });
+
+    const result = db_tx();
+    return { ok: true, saleId: result.saleId };
+
+  } catch(e) {
+    console.error('[importar:importarVenta]', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
+// ══════════════════════════════════════════════
 // IPC — PROVEEDORES
 // ══════════════════════════════════════════════
 ipcMain.handle('suppliers:getAll', async () => {

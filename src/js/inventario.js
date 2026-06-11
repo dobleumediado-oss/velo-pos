@@ -42,6 +42,11 @@ function renderInventario(el) {
         html: `${svg('download')} Entrada`
       }),
       h('button', {
+        class: 'btn btn-out btn-sm',
+        onclick: openMoverCategoriaModal,
+        html: `${svg('edit')} Mover Categoría`
+      }),
+      h('button', {
         class: 'btn btn-dark',
         onclick: () => openProductoModal(),
         html: `${svg('plus')} Nuevo Producto`
@@ -864,6 +869,202 @@ async function confirmarAjuste(id, currentStock) {
   await reloadProducts();
   closeModal();
   toast(`✓ Stock ajustado: ${result.before} → ${result.after}`);
+  renderInventario(document.getElementById('page'));
+}
+
+// ══════════════════════════════════════════════
+// MOVER PRODUCTOS A CATEGORÍA EN MASA
+// ══════════════════════════════════════════════
+let _moverSeleccion = new Set(); // IDs de productos seleccionados
+
+function openMoverCategoriaModal() {
+  const prods = DB.products.slice().sort((a, b) => a.name.localeCompare(b.name));
+  if (!prods.length) { toast('No hay productos en inventario', 'w'); return; }
+
+  _moverSeleccion = new Set();
+
+  const catOpts = CATS.map(c => `<option value="${c}">${c}</option>`).join('');
+
+  openModal(`
+    <div class="modal-title">Mover a Categoría</div>
+    <div class="modal-sub">Selecciona productos y asígnalos a una categoría</div>
+
+    <div style="display:flex;gap:8px;margin-bottom:10px;align-items:flex-end;flex-wrap:wrap">
+      <div class="fg" style="flex:1;min-width:160px;margin-bottom:0">
+        <label class="lbl">Categoría destino *</label>
+        <select class="inp" id="mcat-dest">${catOpts}</select>
+      </div>
+      <div class="inp-ic" style="flex:1;min-width:160px">
+        <div class="ic" style="color:var(--muted2)">🔍</div>
+        <input class="inp" id="mcat-buscar" type="text"
+               placeholder="Buscar por nombre o código..."
+               oninput="moverFiltrarTabla()"/>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center;flex-wrap:wrap">
+      <button class="btn btn-out btn-sm" onclick="moverSeleccionarTodos()">Todos</button>
+      <button class="btn btn-out btn-sm" onclick="moverDeseleccionarTodos()">Ninguno</button>
+      <button class="btn btn-out btn-sm" onclick="moverSeleccionarSinCategoria()">Sin categoría</button>
+      <span id="mcat-contador"
+            style="margin-left:auto;font-size:12px;color:var(--muted2)">
+        Ningún producto seleccionado
+      </span>
+    </div>
+
+    <div style="border:1px solid var(--line);border-radius:8px;overflow:hidden">
+      <div style="overflow-y:auto;max-height:320px">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr style="background:var(--surface2)">
+              <th style="width:36px;padding:8px;border-bottom:1px solid var(--line)"></th>
+              <th style="padding:8px 6px;border-bottom:1px solid var(--line);text-align:left;font-size:11px;font-weight:600;white-space:nowrap">Código</th>
+              <th style="padding:8px 6px;border-bottom:1px solid var(--line);text-align:left;font-size:11px;font-weight:600">Producto</th>
+              <th style="padding:8px 6px;border-bottom:1px solid var(--line);text-align:left;font-size:11px;font-weight:600;white-space:nowrap">Categoría actual</th>
+            </tr>
+          </thead>
+          <tbody id="mcat-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-dark" onclick="confirmarMoverCategoria()">
+        ✓ Aplicar cambio
+      </button>
+    </div>
+  `, 'modal-xl');
+
+  // Renderizar filas después de que el DOM exista
+  setTimeout(() => moverFiltrarTabla(), 10);
+}
+
+function moverToggleRow(id) {
+  if (_moverSeleccion.has(id)) {
+    _moverSeleccion.delete(id);
+  } else {
+    _moverSeleccion.add(id);
+  }
+  // Re-renderizar solo la fila afectada
+  const row = document.getElementById(`mcat-row-${id}`);
+  const chk = document.getElementById(`mcat-chk-${id}`);
+  const sel = _moverSeleccion.has(id);
+  if (row) row.style.background = sel ? 'var(--green-bg)' : '';
+  if (chk) chk.checked = sel;
+  _moverActualizarContador();
+}
+
+function moverSeleccionarTodos() {
+  // Seleccionar todos los que están visibles en la tabla filtrada
+  const tbody = document.getElementById('mcat-tbody');
+  if (tbody) {
+    tbody.querySelectorAll('tr[id^="mcat-row-"]').forEach(tr => {
+      const id = parseInt(tr.id.replace('mcat-row-', ''));
+      if (id) _moverSeleccion.add(id);
+    });
+  }
+  moverFiltrarTabla();
+  _moverActualizarContador();
+}
+
+function moverDeseleccionarTodos() {
+  _moverSeleccion.clear();
+  moverFiltrarTabla();
+  _moverActualizarContador();
+}
+
+function moverFiltrarTabla() {
+  const q = (document.getElementById('mcat-buscar')?.value || '').toLowerCase().trim();
+  const tbody = document.getElementById('mcat-tbody');
+  if (!tbody) return;
+
+  const prods = DB.products.slice().sort((a, b) => a.name.localeCompare(b.name));
+  const filtrados = q
+    ? prods.filter(p =>
+        p.name.toLowerCase().includes(q) ||
+        p.code.toLowerCase().includes(q) ||
+        (p.brand || '').toLowerCase().includes(q)
+      )
+    : prods;
+
+  tbody.innerHTML = filtrados.map(p => {
+    const sel = _moverSeleccion.has(p.id);
+    return `<tr id="mcat-row-${p.id}" style="cursor:pointer;background:${sel ? 'var(--green-bg)' : ''}"
+                onclick="moverToggleRow(${p.id})">
+      <td style="width:36px;text-align:center;padding:6px">
+        <input type="checkbox" id="mcat-chk-${p.id}"
+               style="width:15px;height:15px;cursor:pointer"
+               ${sel ? 'checked' : ''}
+               onclick="event.stopPropagation();moverToggleRow(${p.id})"/>
+      </td>
+      <td style="padding:6px;font-size:11px;color:var(--muted);font-family:monospace;white-space:nowrap">${p.code}</td>
+      <td style="padding:6px">
+        <div style="font-weight:500;font-size:13px">${p.name}</div>
+        ${p.brand ? `<div style="font-size:11px;color:var(--muted2)">${p.brand}</div>` : ''}
+      </td>
+      <td style="padding:6px">
+        <span class="badge n" style="font-size:11px">${p.category || '—'}</span>
+      </td>
+    </tr>`;
+  }).join('');
+
+  if (!filtrados.length) {
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;padding:20px;color:var(--muted2)">
+      Sin resultados para "${q}"</td></tr>`;
+  }
+}
+
+function moverSeleccionarSinCategoria() {
+  DB.products.forEach(p => {
+    if (!p.category || !p.category.trim()) {
+      _moverSeleccion.add(p.id);
+    }
+  });
+  moverFiltrarTabla();
+  _moverActualizarContador();
+}
+
+function _moverActualizarContador() {
+  const el = document.getElementById('mcat-contador');
+  if (el) {
+    const n = _moverSeleccion.size;
+    el.textContent = n === 0
+      ? 'Ningún producto seleccionado'
+      : `${n} producto${n !== 1 ? 's' : ''} seleccionado${n !== 1 ? 's' : ''}`;
+    el.style.color = n > 0 ? 'var(--green)' : 'var(--muted2)';
+  }
+}
+
+async function confirmarMoverCategoria() {
+  const destCat = document.getElementById('mcat-dest')?.value?.trim();
+  if (!destCat)               { toast('Selecciona una categoría destino', 'err'); return; }
+  if (_moverSeleccion.size === 0) { toast('Selecciona al menos un producto', 'err'); return; }
+
+  const ids    = Array.from(_moverSeleccion);
+  let ok = 0;
+  let fail = 0;
+
+  for (const id of ids) {
+    const p = DB.products.find(x => x.id === id);
+    if (!p) continue;
+    const result = await window.api.products.update({
+      id,
+      data: { ...p, category: destCat },
+      requestUserId: user.id,
+    });
+    if (result.ok) ok++;
+    else fail++;
+  }
+
+  await reloadProducts();
+  closeModal();
+
+  if (fail === 0) {
+    toast(`✓ ${ok} producto${ok !== 1 ? 's' : ''} movido${ok !== 1 ? 's' : ''} a "${destCat}"`);
+  } else {
+    toast(`${ok} movidos, ${fail} con error`, 'w');
+  }
   renderInventario(document.getElementById('page'));
 }
 

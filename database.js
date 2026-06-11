@@ -37,6 +37,7 @@ function initDB(customDataDir) {
 
   createTables();
   migrateECFColumns();
+  migrateExpensesColumns();
   seedIfEmpty();
 
   console.log('[DB] Iniciada en:', DB_PATH);
@@ -524,6 +525,51 @@ function migrateECFColumns() {
       db.prepare(`ALTER TABLE sales ADD COLUMN ${col} TEXT`).run();
       console.log(`[DB] Columna ${col} agregada a sales`);
     } catch { /* ya existe */ }
+  });
+}
+
+// Migración segura de columnas en expenses y expense_payments
+// Necesaria para DBs creadas antes de v1.5.x que no tenían estas columnas
+function migrateExpensesColumns() {
+  const expensesCols = [
+    { col: 'cash_movement_id', def: 'INTEGER' },
+    { col: 'approved_by',      def: 'INTEGER' },
+    { col: 'approved_at',      def: 'TEXT' },
+    { col: 'cancelled_by',     def: 'INTEGER' },
+    { col: 'cancel_reason',    def: 'TEXT' },
+    { col: 'cancelled_at',     def: 'TEXT' },
+    { col: 'paid_amount',      def: 'REAL DEFAULT 0' },
+    { col: 'supplier_rnc',     def: 'TEXT' },
+    { col: 'ncf',              def: 'TEXT' },
+    { col: 'invoice_number',   def: 'TEXT' },
+    { col: 'tax_amount',       def: 'REAL DEFAULT 0' },
+    { col: 'discount',         def: 'REAL DEFAULT 0' },
+    { col: 'currency',         def: "TEXT DEFAULT 'DOP'" },
+    { col: 'due_date',         def: 'TEXT' },
+    { col: 'notes',            def: 'TEXT' },
+    { col: 'updated_at',       def: "TEXT DEFAULT (datetime('now'))" },
+  ];
+  expensesCols.forEach(({ col, def }) => {
+    try {
+      db.prepare(`ALTER TABLE expenses ADD COLUMN ${col} ${def}`).run();
+      console.log(`[MIGRATE] expenses.${col} agregada`);
+    } catch { /* ya existe — ignorar */ }
+  });
+
+  const payCols = [
+    { col: 'cash_movement_id', def: 'INTEGER' },
+    { col: 'reference',        def: 'TEXT' },
+    { col: 'notes',            def: 'TEXT' },
+    { col: 'cancelled_by',     def: 'INTEGER' },
+    { col: 'cancel_reason',    def: 'TEXT' },
+    { col: 'status',           def: "TEXT DEFAULT 'pagado'" },
+    { col: 'payment_source',   def: "TEXT DEFAULT 'caja'" },
+  ];
+  payCols.forEach(({ col, def }) => {
+    try {
+      db.prepare(`ALTER TABLE expense_payments ADD COLUMN ${col} ${def}`).run();
+      console.log(`[MIGRATE] expense_payments.${col} agregada`);
+    } catch { /* ya existe — ignorar */ }
   });
 }
 

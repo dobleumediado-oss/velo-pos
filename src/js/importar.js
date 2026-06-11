@@ -10,7 +10,7 @@ let importState = {
   rawData:     [],    // filas crudas del archivo
   headers:     [],    // columnas detectadas
   mapping:     {},    // { veloField: sourceColumn }
-  tipo:        'productos', // 'productos' | 'clientes'
+  tipo:        'productos', // 'productos' | 'clientes' | 'ventas' | 'cuentas_cobrar'
   importando:  false,
 };
 
@@ -31,12 +31,45 @@ const VELO_FIELDS_PRODUCTS = [
 ];
 
 const VELO_FIELDS_CLIENTS = [
-  { key: 'name',         label: 'Nombre',         required: true  },
-  { key: 'phone',        label: 'Teléfono',        required: false },
-  { key: 'email',        label: 'Email',           required: false },
-  { key: 'rnc',          label: 'RNC/Cédula',      required: false },
-  { key: 'address',      label: 'Dirección',       required: false },
-  { key: 'credit_limit', label: 'Límite crédito',  required: false },
+  { key: 'name',         label: 'Nombre',              required: true  },
+  { key: 'phone',        label: 'Teléfono',             required: false },
+  { key: 'email',        label: 'Email',                required: false },
+  { key: 'rnc',          label: 'RNC/Cédula',           required: false },
+  { key: 'address',      label: 'Dirección',            required: false },
+  { key: 'credit_limit', label: 'Límite crédito',       required: false },
+  { key: 'balance',      label: 'Deuda actual (balance)',required: false },
+  { key: 'credit_days',  label: 'Días de crédito',      required: false },
+  { key: 'credit_due',   label: 'Fecha vencimiento',    required: false },
+  { key: 'status',       label: 'Estado (activo/bloqueado/moroso)', required: false },
+];
+
+// Campos para importar cuentas por cobrar / abonos históricos
+const VELO_FIELDS_CREDITOS = [
+  { key: 'customer_name', label: 'Nombre del cliente',  required: true  },
+  { key: 'balance',       label: 'Deuda pendiente',     required: true  },
+  { key: 'credit_limit',  label: 'Límite de crédito',   required: false },
+  { key: 'credit_due',    label: 'Fecha vencimiento',   required: false },
+  { key: 'credit_days',   label: 'Días de crédito',     required: false },
+  { key: 'status',        label: 'Estado (activo/bloqueado/moroso)', required: false },
+  { key: 'phone',         label: 'Teléfono',            required: false },
+  { key: 'rnc',           label: 'RNC/Cédula',          required: false },
+];
+
+// Campos para importar historial de ventas
+const VELO_FIELDS_VENTAS = [
+  { key: 'date',           label: 'Fecha',           required: true  },
+  { key: 'customer_name',  label: 'Cliente',         required: false },
+  { key: 'total',          label: 'Total',           required: true  },
+  { key: 'payment_method', label: 'Método de pago',  required: false },
+  { key: 'product_name',   label: 'Producto',        required: false },
+  { key: 'qty',            label: 'Cantidad',        required: false },
+  { key: 'unit_price',     label: 'Precio unitario', required: false },
+  { key: 'subtotal',       label: 'Subtotal',        required: false },
+  { key: 'tax_amt',        label: 'ITBIS',           required: false },
+  { key: 'discount_pct',   label: 'Descuento %',     required: false },
+  { key: 'ncf',            label: 'NCF',             required: false },
+  { key: 'cajero',         label: 'Cajero',          required: false },
+  { key: 'type',           label: 'Tipo doc.',       required: false },
 ];
 
 // ══════════════════════════════════════════════
@@ -57,7 +90,7 @@ function wizardStepImportar() {
       `).join('')}
     </div>
 
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:16px">
       <div class="card" style="text-align:center;cursor:pointer;border:2px solid var(--line);padding:16px"
            id="imp-tipo-prod"
            onclick="setImportTipo('productos')">
@@ -71,6 +104,20 @@ function wizardStepImportar() {
         <div style="font-size:24px;margin-bottom:6px">👥</div>
         <div style="font-weight:500;font-size:13px">Clientes</div>
         <div style="font-size:11px;color:var(--muted2)">Contactos y crédito</div>
+      </div>
+      <div class="card" style="text-align:center;cursor:pointer;border:2px solid var(--line);padding:16px"
+           id="imp-tipo-ven"
+           onclick="setImportTipo('ventas')">
+        <div style="font-size:24px;margin-bottom:6px">📊</div>
+        <div style="font-weight:500;font-size:13px">Historial de Ventas</div>
+        <div style="font-size:11px;color:var(--muted2)">Migrar ventas anteriores</div>
+      </div>
+      <div class="card" style="text-align:center;cursor:pointer;border:2px solid var(--line);padding:16px"
+           id="imp-tipo-cxc"
+           onclick="setImportTipo('cuentas_cobrar')">
+        <div style="font-size:24px;margin-bottom:6px">💳</div>
+        <div style="font-weight:500;font-size:13px">Cuentas por Cobrar</div>
+        <div style="font-size:11px;color:var(--muted2)">Deudas y créditos activos</div>
       </div>
     </div>
 
@@ -128,6 +175,12 @@ function setImportTipo(tipo) {
   );
   document.getElementById('imp-tipo-cli')?.style.setProperty(
     'border-color', tipo === 'clientes' ? 'var(--green)' : 'var(--line)'
+  );
+  document.getElementById('imp-tipo-ven')?.style.setProperty(
+    'border-color', tipo === 'ventas' ? 'var(--green)' : 'var(--line)'
+  );
+  document.getElementById('imp-tipo-cxc')?.style.setProperty(
+    'border-color', tipo === 'cuentas_cobrar' ? 'var(--green)' : 'var(--line)'
   );
 }
 
@@ -365,8 +418,14 @@ async function analizarArchivoConIA() {
     // 2. Tomar muestra de las primeras 5 filas para enviar a Claude
     const muestra = rows.slice(0, 5);
     const tipo    = importState.tipo;
-    const campos  = (tipo === 'productos' ? VELO_FIELDS_PRODUCTS : VELO_FIELDS_CLIENTS)
-                    .map(f => `${f.key} (${f.label}${f.required ? ', requerido' : ''})`).join(', ');
+    const campos  = (tipo === 'productos'
+      ? VELO_FIELDS_PRODUCTS
+      : tipo === 'clientes'
+      ? VELO_FIELDS_CLIENTS
+      : tipo === 'cuentas_cobrar'
+      ? VELO_FIELDS_CREDITOS
+      : VELO_FIELDS_VENTAS)
+      .map(f => `${f.key} (${f.label}${f.required ? ', requerido' : ''})`).join(', ');
 
     // 3. Llamar a Claude API via IPC (main process tiene acceso a la red)
     const aiResult = await window.api.importar.analyzeWithAI({
@@ -395,7 +454,13 @@ async function analizarArchivoConIA() {
 // ══════════════════════════════════════════════
 function mostrarConfirmacionMapeo(notas) {
   const tipo   = importState.tipo;
-  const fields = tipo === 'productos' ? VELO_FIELDS_PRODUCTS : VELO_FIELDS_CLIENTS;
+  const fields = tipo === 'productos'
+    ? VELO_FIELDS_PRODUCTS
+    : tipo === 'clientes'
+    ? VELO_FIELDS_CLIENTS
+    : tipo === 'cuentas_cobrar'
+    ? VELO_FIELDS_CREDITOS
+    : VELO_FIELDS_VENTAS;
   const hdrs   = importState.headers;
   const total  = importState.rawData.length;
   const preview= importState.rawData.slice(0, 3);
@@ -439,7 +504,7 @@ function mostrarConfirmacionMapeo(notas) {
       </div>
       <div style="background:var(--surface2);border-radius:var(--r-sm);padding:10px;font-size:12px">
         <div style="font-weight:600;margin-bottom:3px">🎯 Importando</div>
-        <div>${tipo === 'productos' ? 'Productos' : 'Clientes'}</div>
+        <div>${tipo === 'productos' ? 'Productos' : tipo === 'clientes' ? 'Clientes' : tipo === 'ventas' ? 'Historial de Ventas' : 'Cuentas por Cobrar'}</div>
         <div style="color:var(--muted2)">Ajusta el mapeo si algo está incorrecto</div>
       </div>
     </div>
@@ -475,7 +540,13 @@ async function ejecutarImportacion() {
   const rows    = importState.rawData;
 
   // Validar campos requeridos
-  const fields  = tipo === 'productos' ? VELO_FIELDS_PRODUCTS : VELO_FIELDS_CLIENTS;
+  const fields  = tipo === 'productos'
+    ? VELO_FIELDS_PRODUCTS
+    : tipo === 'clientes'
+    ? VELO_FIELDS_CLIENTS
+    : tipo === 'cuentas_cobrar'
+    ? VELO_FIELDS_CREDITOS
+    : VELO_FIELDS_VENTAS;
   const missing = fields.filter(f => f.required && !mapping[f.key]);
   if (missing.length) {
     toast(`Falta mapear: ${missing.map(f => f.label).join(', ')}`, 'err');
@@ -579,7 +650,7 @@ async function ejecutarImportacion() {
           if (ajustes.length) errores.push({ fila: i+2, nombre: name, campo: 'precio', error: `Importado con ${ajustes.join(', ')}`, tipo: 'ajuste' });
         }
 
-      } else {
+      } else if (tipo === 'clientes') {
         // Clientes
         // Intentar extraer nombre de cualquier columna disponible
         let name = mapping.name ? String(row[mapping.name] || '').trim() : '';
@@ -634,15 +705,166 @@ async function ejecutarImportacion() {
           importados++;
           if (ajustesC.length) errores.push({ fila: i+2, nombre: name, campo: 'contacto', error: `Importado — ${ajustesC.join(', ')}`, tipo: 'ajuste' });
         }
+      } else if (tipo === 'cuentas_cobrar') {
+        // ── Importar cuenta por cobrar / deuda activa de cliente ─────
+        // Busca el cliente por nombre, si no existe lo crea.
+        // Actualiza balance y credit_limit directamente.
+        const cleanNum = (v) => {
+          if (!v && v !== 0) return 0;
+          const s = String(v).replace(/[^0-9.,]/g, '');
+          if (s.includes(',') && s.includes('.')) return parseFloat(s.replace(/\./g,'').replace(',','.')) || 0;
+          if (s.includes(',')) return parseFloat(s.replace(',','.')) || 0;
+          return parseFloat(s) || 0;
+        };
+
+        const customerName = mapping.customer_name
+          ? String(row[mapping.customer_name] || '').trim() : '';
+        if (!customerName) {
+          errores.push({ fila: i+2, campo: 'cliente', error: 'Nombre de cliente vacío — fila omitida', tipo: 'error' });
+          continue;
+        }
+
+        const balance      = cleanNum(mapping.balance     ? row[mapping.balance]     : 0);
+        const creditLimit  = cleanNum(mapping.credit_limit? row[mapping.credit_limit]: balance);
+        const creditDays   = mapping.credit_days ? Math.round(cleanNum(row[mapping.credit_days])) : 30;
+        const phone        = mapping.phone ? String(row[mapping.phone]||'').trim() : '';
+        const rnc          = mapping.rnc   ? String(row[mapping.rnc]||'').trim()   : '';
+
+        // Fecha vencimiento — normalizar
+        let creditDue = mapping.credit_due ? String(row[mapping.credit_due]||'').trim() : '';
+        if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(creditDue)) {
+          const [d, m, y] = creditDue.split('/');
+          creditDue = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+        }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(creditDue)) creditDue = null;
+
+        // Estado: normalizar texto libre → valor válido
+        let status = 'activo';
+        if (mapping.status) {
+          const rawStatus = String(row[mapping.status]||'').toLowerCase().trim();
+          if (rawStatus.includes('bloq') || rawStatus.includes('block')) status = 'bloqueado';
+          else if (rawStatus.includes('mor') || rawStatus.includes('late')) status = 'moroso';
+          else status = 'activo';
+        }
+
+        const result = await window.api.importar.importarCredito({
+          customerName, balance, creditLimit,
+          creditDays, creditDue, phone, rnc, status,
+          requestUserId: user.id,
+        });
+
+        if (result.ok) {
+          importados++;
+          if (result.created) {
+            errores.push({ fila: i+2, nombre: customerName, campo: 'info',
+              error: `Cliente creado nuevo con deuda de RD$${balance.toLocaleString('es-DO')}`, tipo: 'ajuste' });
+          }
+        } else {
+          errores.push({ fila: i+2, nombre: customerName, campo: 'credito',
+            error: result.error || 'Error al importar crédito', tipo: 'error' });
+        }
+      } else if (tipo === 'ventas') {
+        // ── Importar venta histórica ──────────────────────────────────
+        // Usar IPC especial que inserta directamente sin validar caja ni stock
+        const cleanNum = (v) => {
+          if (!v && v !== 0) return 0;
+          const s = String(v).replace(/[^0-9.,]/g, '');
+          if (s.includes(',') && s.includes('.')) return parseFloat(s.replace(/\./g,'').replace(',','.')) || 0;
+          if (s.includes(',')) return parseFloat(s.replace(',','.')) || 0;
+          return parseFloat(s) || 0;
+        };
+
+        // Fecha — aceptar múltiples formatos
+        let rawDate = mapping.date ? String(row[mapping.date] || '').trim() : '';
+        // Normalizar: dd/mm/yyyy → yyyy-mm-dd
+        if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(rawDate)) {
+          const [d, m, y] = rawDate.split('/');
+          rawDate = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+        } else if (/^\d{1,2}-\d{1,2}-\d{4}$/.test(rawDate)) {
+          const [d, m, y] = rawDate.split('-');
+          rawDate = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+        }
+        // Validar formato final yyyy-mm-dd
+        if (!rawDate || !/^\d{4}-\d{2}-\d{2}/.test(rawDate)) {
+          rawDate = new Date().toISOString().split('T')[0];
+          errores.push({ fila: i+2, campo: 'fecha', error: 'Fecha inválida — se usó la fecha de hoy', tipo: 'ajuste' });
+        }
+
+        const total         = cleanNum(row[mapping.total]);
+        const subtotal      = mapping.subtotal    ? cleanNum(row[mapping.subtotal])    : total;
+        const taxAmt        = mapping.tax_amt     ? cleanNum(row[mapping.tax_amt])     : 0;
+        const discPct       = mapping.discount_pct? cleanNum(row[mapping.discount_pct]): 0;
+        const customerName  = mapping.customer_name ? String(row[mapping.customer_name]||'').trim() : 'Consumidor Final';
+        const payMethod     = mapping.payment_method
+          ? String(row[mapping.payment_method]||'efectivo').trim().toLowerCase()
+          : 'efectivo';
+        const cajero        = mapping.cajero      ? String(row[mapping.cajero]||'').trim()    : (user?.name || '');
+        const ncf           = mapping.ncf         ? String(row[mapping.ncf]||'').trim()       : '';
+        const docType       = mapping.type        ? String(row[mapping.type]||'factura').trim(): 'factura';
+
+        // Producto opcional — si viene en el archivo
+        const productName   = mapping.product_name ? String(row[mapping.product_name]||'').trim() : '';
+        const qty           = mapping.qty          ? Math.max(1, Math.round(cleanNum(row[mapping.qty]))) : 1;
+        const unitPrice     = mapping.unit_price   ? cleanNum(row[mapping.unit_price]) : (total > 0 ? total : 0);
+
+        if (total <= 0) {
+          errores.push({ fila: i+2, campo: 'total', error: 'Total inválido o cero — fila omitida', tipo: 'error' });
+          continue;
+        }
+
+        const ventaData = {
+          date:           rawDate,
+          customer_name:  customerName || 'Consumidor Final',
+          total,
+          subtotal:       subtotal || total,
+          tax_amt:        taxAmt,
+          discount_pct:   discPct,
+          payment_method: payMethod,
+          cajero,
+          ncf,
+          type:           docType,
+          // Item genérico o con nombre del producto
+          items: [{
+            product_name: productName || (customerName !== 'Consumidor Final' ? `Venta a ${customerName}` : 'Producto importado'),
+            qty,
+            unit_price:   unitPrice,
+            product_code: 'IMP',
+            unit_cost:    0,
+          }],
+        };
+
+        const result = await window.api.importar.importarVenta({ venta: ventaData, requestUserId: user.id });
+        if (result.ok) {
+          importados++;
+        } else {
+          errores.push({ fila: i+2, nombre: customerName, campo: 'venta', error: result.error || 'Error al importar venta', tipo: 'error' });
+        }
       }
     } catch(e) {
       errores.push({ fila: i+2, error: e.message });
     }
   }
 
-  // Recargar datos
+  // Recargar todos los datos relevantes para que dashboard y reportes
+  // reflejen inmediatamente lo que se acaba de migrar
   await reloadProducts();
   await reloadCustomers();
+  if (tipo === 'ventas') {
+    // Recargar ventas del día y del mes para que aparezcan en dashboard/reportes
+    await reloadSales({ range: 'today' }).catch(() => {});
+    await reloadSales({ range: 'month' }).catch(() => {});
+    await reloadSales({ range: 'all'   }).catch(() => {});
+  }
+  if (tipo === 'cuentas_cobrar' || tipo === 'clientes') {
+    // Recargar pagos para que aparezcan en cuentas por cobrar
+    if (window.api?.customers?.getAllPayments) {
+      try { DB.payments = await window.api.customers.getAllPayments(); } catch {}
+    }
+  }
+  // Recargar categorías si se importaron productos con categorías nuevas
+  if (tipo === 'productos') {
+    await reloadCategories().catch(() => {});
+  }
 
   // Pantalla de resultado
   mostrarResultadoImportacion(importados, errores, rows.length);
@@ -751,7 +973,10 @@ async function importarDescargarPDF() {
 
   const fecha    = r.fecha;
   const archivo  = r.archivo;
-  const tipo     = r.tipo === 'productos' ? 'Productos' : 'Clientes';
+  const tipo     = r.tipo === 'productos' ? 'Productos'
+    : r.tipo === 'clientes'       ? 'Clientes'
+    : r.tipo === 'ventas'         ? 'Historial de Ventas'
+    : 'Cuentas por Cobrar';
   const ok       = r.importados;
   const fail     = r.errores.length;
   const total    = r.total;

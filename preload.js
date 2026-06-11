@@ -142,9 +142,11 @@ contextBridge.exposeInMainWorld('api', {
 
   // ── Importación universal ────────────────
   importar: {
-    readSQLite:    (data)    => ipcRenderer.invoke('importar:readSQLite',    data),
-    readPDF:       (data)    => ipcRenderer.invoke('importar:readPDF',       data),
-    analyzeWithAI: (data)    => ipcRenderer.invoke('importar:analyzeWithAI', data),
+    readSQLite:      (data) => ipcRenderer.invoke('importar:readSQLite',      data),
+    readPDF:         (data) => ipcRenderer.invoke('importar:readPDF',         data),
+    analyzeWithAI:   (data) => ipcRenderer.invoke('importar:analyzeWithAI',   data),
+    importarVenta:   (data) => ipcRenderer.invoke('importar:importarVenta',   data),
+    importarCredito: (data) => ipcRenderer.invoke('importar:importarCredito', data),
   },
 
   // ── Proveedores ───────────────────────────
