@@ -147,6 +147,10 @@ contextBridge.exposeInMainWorld('api', {
     analyzeWithAI:   (data) => ipcRenderer.invoke('importar:analyzeWithAI',   data),
     importarVenta:   (data) => ipcRenderer.invoke('importar:importarVenta',   data),
     importarCredito: (data) => ipcRenderer.invoke('importar:importarCredito', data),
+    importarCompra:  (data) => ipcRenderer.invoke('importar:importarCompra',  data),
+    importarGasto:   (data) => ipcRenderer.invoke('importar:importarGasto',   data),
+    readZIP:         (data) => ipcRenderer.invoke('importar:readZIP',         data),
+    rollback:        (data) => ipcRenderer.invoke('importar:rollback',        data),
   },
 
   // ── Proveedores ───────────────────────────

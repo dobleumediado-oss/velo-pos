@@ -1513,6 +1513,286 @@ ipcMain.handle('importar:importarVenta', async (_, { venta, requestUserId }) => 
 });
 
 // ══════════════════════════════════════════════
+// IPC — IMPORTAR COMPRA HISTÓRICA
+// ══════════════════════════════════════════════
+ipcMain.handle('importar:importarCompra', async (_, {
+  supplierName, productName, productId, productCode,
+  unitCost, qty, date, notes, requestUserId
+}) => {
+  try {
+    const db = require('./database').getDB();
+    const tx = db.transaction(() => {
+      // Crear o encontrar proveedor
+      let supplierId = null;
+      const existing = db.prepare(
+        "SELECT id FROM suppliers WHERE lower(trim(name))=lower(trim(?)) AND status='activo' LIMIT 1"
+      ).get(supplierName || 'Proveedor Importado');
+      if (existing) {
+        supplierId = existing.id;
+      } else if (supplierName) {
+        const r = db.prepare(
+          "INSERT INTO suppliers(name,contact,phone,email,rnc,address,notes) VALUES(?,?,?,?,?,?,?)"
+        ).run(supplierName,'','','','','','Creado por importación');
+        supplierId = r.lastInsertRowid;
+      }
+
+      const subtotal = unitCost * qty;
+      const poR = db.prepare(`
+        INSERT INTO purchase_orders(supplier_id,supplier_name,status,subtotal,total,notes,user_id,cajero,created_at)
+        VALUES(?,?,?,?,?,?,?,?,?)
+      `).run(supplierId, supplierName||'', 'recibido',
+             subtotal, subtotal, notes||'Importado', requestUserId||null, '',
+             (date||new Date().toISOString().split('T')[0]) + ' 00:00:00');
+      const poId = poR.lastInsertRowid;
+
+      db.prepare(`
+        INSERT INTO purchase_items(purchase_order_id,product_id,product_code,product_name,unit_cost,qty_ordered,qty_received,subtotal)
+        VALUES(?,?,?,?,?,?,?,?)
+      `).run(poId, productId||null, productCode||'IMP', productName, unitCost, qty, qty, subtotal);
+
+      // Actualizar stock del producto si existe
+      if (productId) {
+        db.prepare('UPDATE products SET stock=stock+?,updated_at=datetime(\'now\') WHERE id=?')
+          .run(qty, productId);
+        db.prepare(`
+          INSERT INTO inventory_movements(product_id,type,qty,qty_before,qty_after,reason,user_id)
+          SELECT id,?,?,stock-?,stock,'Compra importada #${poId}',?
+          FROM products WHERE id=?
+        `).run('entrada', qty, qty, requestUserId||null, productId);
+      }
+
+      return { poId };
+    });
+    const result = tx();
+    return { ok: true, poId: result.poId };
+  } catch(e) {
+    console.error('[importar:importarCompra]', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
+// ══════════════════════════════════════════════
+// IPC — IMPORTAR GASTO HISTÓRICO
+// ══════════════════════════════════════════════
+ipcMain.handle('importar:importarGasto', async (_, {
+  description, total, date, category, payment_method,
+  supplier_name, notes, status, requestUserId
+}) => {
+  try {
+    const db = require('./database').getDB();
+
+    // Buscar o crear categoría de gasto
+    let categoryId = null;
+    if (category && category.trim()) {
+      const cat = db.prepare(
+        "SELECT id FROM expense_categories WHERE lower(trim(name))=lower(trim(?)) AND active=1 LIMIT 1"
+      ).get(category.trim());
+      if (cat) categoryId = cat.id;
+      else {
+        const r = db.prepare(
+          "INSERT INTO expense_categories(name,affects_profit,requires_approval,requires_attachment,approval_limit) VALUES(?,1,0,0,0)"
+        ).run(category.trim());
+        categoryId = r.lastInsertRowid;
+      }
+    }
+
+    const safeStatus = ['pagado','pendiente_pago','anulado'].includes(status) ? status : 'pagado';
+    const safeMethod = ['efectivo','transferencia','tarjeta','cheque','credito','otro'].includes(payment_method)
+      ? payment_method : 'efectivo';
+
+    const r = db.prepare(`
+      INSERT INTO expenses(type,category_id,description,amount,total,currency,
+        payment_method,payment_source,issue_date,status,notes,user_id,paid_amount,updated_at)
+      VALUES('gasto',?,?,?,?,'DOP',?,'pendiente',?,?,?,?,?,datetime('now'))
+    `).run(
+      categoryId, description, total, total,
+      safeMethod,
+      date || new Date().toISOString().split('T')[0],
+      safeStatus,
+      notes || 'Importado',
+      requestUserId || null,
+      safeStatus === 'pagado' ? total : 0
+    );
+
+    return { ok: true, id: r.lastInsertRowid };
+  } catch(e) {
+    console.error('[importar:importarGasto]', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
+// ══════════════════════════════════════════════
+// IPC — LEER ZIP (buscar el archivo más útil)
+// ══════════════════════════════════════════════
+ipcMain.handle('importar:readZIP', async (_, { data, name }) => {
+  try {
+    const fs   = require('fs');
+    const path = require('path');
+    const os   = require('os');
+    const buf  = Buffer.from(data);
+    const tmp  = path.join(os.tmpdir(), `velo_zip_${Date.now()}`);
+    fs.mkdirSync(tmp, { recursive: true });
+
+    // Descomprimir usando node (sin librería extra — leer entradas del ZIP manualmente)
+    // ZIP central directory está al final — buscar End of Central Directory
+    const EOCD_SIG = 0x06054b50;
+    let eocdOffset = -1;
+    for (let i = buf.length - 22; i >= 0; i--) {
+      if (buf.readUInt32LE(i) === EOCD_SIG) { eocdOffset = i; break; }
+    }
+    if (eocdOffset < 0) throw new Error('No es un archivo ZIP válido');
+
+    const cdOffset = buf.readUInt32LE(eocdOffset + 16);
+    const cdSize   = buf.readUInt32LE(eocdOffset + 12);
+    const entries  = [];
+    let pos = cdOffset;
+
+    while (pos < cdOffset + cdSize) {
+      if (buf.readUInt32LE(pos) !== 0x02014b50) break;
+      const compMethod   = buf.readUInt16LE(pos + 10);
+      const compSize     = buf.readUInt32LE(pos + 20);
+      const uncompSize   = buf.readUInt32LE(pos + 24);
+      const fnLen        = buf.readUInt16LE(pos + 28);
+      const extraLen     = buf.readUInt16LE(pos + 30);
+      const commentLen   = buf.readUInt16LE(pos + 32);
+      const localOffset  = buf.readUInt32LE(pos + 42);
+      const fileName     = buf.slice(pos + 46, pos + 46 + fnLen).toString('utf8');
+      entries.push({ fileName, compMethod, compSize, uncompSize, localOffset });
+      pos += 46 + fnLen + extraLen + commentLen;
+    }
+
+    // Preferir: xlsx > csv > db/sqlite > json > txt/sql
+    const priority = ['xlsx','xls','ods','csv','tsv','db','sqlite','json','txt','sql','xml'];
+    const sorted   = entries
+      .filter(e => !e.fileName.startsWith('__MACOSX') && !e.fileName.endsWith('/'))
+      .sort((a, b) => {
+        const extA = a.fileName.split('.').pop().toLowerCase();
+        const extB = b.fileName.split('.').pop().toLowerCase();
+        return (priority.indexOf(extA) === -1 ? 99 : priority.indexOf(extA)) -
+               (priority.indexOf(extB) === -1 ? 99 : priority.indexOf(extB));
+      });
+
+    if (!sorted.length) throw new Error('El ZIP no contiene archivos procesables');
+
+    const best = sorted[0];
+    // Leer el archivo local del ZIP
+    const localPos   = best.localOffset;
+    const localFnLen = buf.readUInt16LE(localPos + 26);
+    const localExLen = buf.readUInt16LE(localPos + 28);
+    const dataStart  = localPos + 30 + localFnLen + localExLen;
+    const fileData   = buf.slice(dataStart, dataStart + best.compSize);
+
+    // Solo método 0 (store) soportado directamente — método 8 requiere zlib
+    let fileBuffer;
+    if (best.compMethod === 0) {
+      fileBuffer = fileData;
+    } else if (best.compMethod === 8) {
+      // Deflate
+      const zlib = require('zlib');
+      fileBuffer = zlib.inflateRawSync(fileData);
+    } else {
+      throw new Error(`Método de compresión ${best.compMethod} no soportado. Extrae el ZIP manualmente.`);
+    }
+
+    const ext      = best.fileName.split('.').pop().toLowerCase();
+    const tmpFile  = path.join(tmp, best.fileName.replace(/[/\\]/g, '_'));
+    fs.writeFileSync(tmpFile, fileBuffer);
+
+    // Si es SQLite, leer con better-sqlite3
+    if (['db','sqlite'].includes(ext)) {
+      const Database = require('better-sqlite3');
+      const db2      = new Database(tmpFile, { readonly: true });
+      const tables   = db2.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()
+        .map(r => r.name).filter(t => !t.startsWith('sqlite_'));
+      let bestTable = tables[0], bestCount = 0;
+      for (const t of tables) {
+        try {
+          const c = db2.prepare(`SELECT COUNT(*) as c FROM "${t}"`).get().c;
+          if (c > bestCount) { bestCount = c; bestTable = t; }
+        } catch {}
+      }
+      const rows    = db2.prepare(`SELECT * FROM "${bestTable}" LIMIT 1000`).all();
+      const headers = rows.length ? Object.keys(rows[0]) : [];
+      db2.close();
+      fs.unlinkSync(tmpFile);
+      fs.rmdirSync(tmp, { recursive: true });
+      return { ok: true, data: { headers, rows, tables, bestTable, nota: `ZIP → ${best.fileName}` } };
+    }
+
+    // Para otros formatos leer como texto
+    const text = fs.readFileSync(tmpFile, 'utf8');
+    fs.unlinkSync(tmpFile);
+    fs.rmdirSync(tmp, { recursive: true });
+
+    // Devolver como CSV/texto para que el renderer lo procese
+    return { ok: true, data: {
+      headers: ['contenido'], rows: [{ contenido: text.slice(0, 50000) }],
+      rawText: text, ext, fileName: best.fileName,
+      nota: `ZIP extraído: ${best.fileName} (${(fileBuffer.length/1024).toFixed(1)} KB)`,
+    }};
+
+  } catch(e) {
+    console.error('[importar:readZIP]', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
+// ══════════════════════════════════════════════
+// IPC — ROLLBACK DE IMPORTACIÓN
+// Elimina los registros insertados en la sesión
+// ══════════════════════════════════════════════
+ipcMain.handle('importar:rollback', async (_, { ids, requestUserId }) => {
+  try {
+    const db = require('./database').getDB();
+    let deleted = 0;
+
+    const tx = db.transaction(() => {
+      // Procesar en orden inverso para respetar FK
+      const reversed = [...(ids || [])].reverse();
+      for (const entry of reversed) {
+        try {
+          const { tabla, id } = entry;
+          if (tabla === 'products') {
+            // Eliminar movimientos de inventario primero
+            db.prepare('DELETE FROM inventory_movements WHERE product_id=?').run(id);
+            db.prepare('DELETE FROM sale_items WHERE product_id=?').run(id);
+            db.prepare('DELETE FROM products WHERE id=?').run(id);
+            deleted++;
+          } else if (tabla === 'customers') {
+            db.prepare('DELETE FROM payments WHERE customer_id=?').run(id);
+            db.prepare('DELETE FROM customers WHERE id=?').run(id);
+            deleted++;
+          } else if (tabla === 'sales') {
+            db.prepare('DELETE FROM sale_items WHERE sale_id=?').run(id);
+            db.prepare('DELETE FROM sales WHERE id=?').run(id);
+            deleted++;
+          } else if (tabla === 'suppliers') {
+            db.prepare('DELETE FROM suppliers WHERE id=?').run(id);
+            deleted++;
+          } else if (tabla === 'purchase_orders') {
+            db.prepare('DELETE FROM purchase_items WHERE purchase_order_id=?').run(id);
+            db.prepare('DELETE FROM purchase_orders WHERE id=?').run(id);
+            deleted++;
+          } else if (tabla === 'expenses') {
+            db.prepare('DELETE FROM expense_payments WHERE expense_id=?').run(id);
+            db.prepare('DELETE FROM expenses WHERE id=?').run(id);
+            deleted++;
+          }
+        } catch(e) {
+          console.warn('[rollback] Error en entrada:', entry, e.message);
+        }
+      }
+    });
+
+    tx();
+    return { ok: true, deleted };
+  } catch(e) {
+    console.error('[importar:rollback]', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
+// ══════════════════════════════════════════════
 // IPC — PROVEEDORES
 // ══════════════════════════════════════════════
 ipcMain.handle('suppliers:getAll', async () => {
@@ -2807,11 +3087,24 @@ ipcMain.handle('auth:getSuperPass', async (_, { requestUserId } = {}) => {
 });
 
 // ── Importar — análisis con Claude AI ────────
-ipcMain.handle('importar:analyzeWithAI', async (_, { headers, rows, tipo }) => {
+ipcMain.handle('importar:analyzeWithAI', async (_, { headers, rows, tipo, campos }) => {
   try {
-    const campos = tipo === 'productos'
+    // Usar los campos enviados desde el cliente o calcularlos
+    const camposStr = campos || (tipo === 'productos'
       ? 'name (Nombre, requerido), code (Código), barcode (Código barras), price (Precio venta, requerido), cost (Costo), wholesale (Precio mayor), stock (Stock), stock_min (Stock mínimo), category (Categoría), brand (Marca), unit (Unidad), description (Descripción)'
-      : 'name (Nombre, requerido), phone (Teléfono), email (Email), rnc (RNC/Cédula), address (Dirección), credit_limit (Límite crédito)';
+      : tipo === 'clientes'
+      ? 'name (Nombre, requerido), phone (Teléfono), email (Email), rnc (RNC/Cédula), address (Dirección), credit_limit (Límite crédito), balance (Deuda actual), credit_days (Días crédito), credit_due (Fecha vencimiento), status (Estado)'
+      : tipo === 'ventas'
+      ? 'date (Fecha, requerido), customer_name (Cliente), total (Total, requerido), payment_method (Método pago), product_name (Producto), qty (Cantidad), unit_price (Precio unitario), subtotal (Subtotal), tax_amt (ITBIS), discount_pct (Descuento %), ncf (NCF), cajero (Cajero), type (Tipo doc)'
+      : tipo === 'cuentas_cobrar'
+      ? 'customer_name (Cliente, requerido), balance (Deuda, requerido), credit_limit (Límite crédito), credit_due (Fecha vencimiento), credit_days (Días crédito), status (Estado), phone (Teléfono), rnc (RNC)'
+      : tipo === 'proveedores'
+      ? 'name (Nombre, requerido), contact (Contacto), phone (Teléfono), email (Email), rnc (RNC), address (Dirección), notes (Notas)'
+      : tipo === 'compras'
+      ? 'supplier_name (Proveedor, requerido), product_name (Producto, requerido), unit_cost (Costo unitario, requerido), qty (Cantidad, requerido), date (Fecha), notes (Notas)'
+      : tipo === 'gastos'
+      ? 'description (Descripción, requerido), total (Monto, requerido), date (Fecha), category (Categoría), payment_method (Método pago), supplier_name (Proveedor), notes (Notas), status (Estado)'
+      : 'name (Nombre, requerido)');
 
     const muestra = rows.slice(0, 5);
     const prompt = `Eres un experto en migración de datos para sistemas POS en República Dominicana.
@@ -2819,36 +3112,35 @@ Analiza este archivo y mapea sus columnas a los campos de Velo POS.
 
 Columnas encontradas: ${headers.join(', ')}
 
-Muestra de datos (primeras 5 filas):
+Muestra de datos (primeras ${muestra.length} filas):
 ${JSON.stringify(muestra, null, 2)}
 
 Tipo de importación: ${tipo}
-Campos disponibles en Velo POS: ${campos}
+Campos disponibles en Velo POS: ${camposStr}
 
 REGLAS IMPORTANTES:
 1. Sé flexible: busca la columna que MÁS se parezca a cada campo aunque el nombre sea diferente.
-2. Para "name/nombre": busca columnas como articulo, producto, descripcion, item, nombre, name, NOMBRE, ARTICULO, etc.
-3. Para "price/precio": busca precio_venta, precio, price, PRECIO, PVP, valor, importe, monto, costo (si no hay precio).
-4. Para "code/codigo": busca codigo, code, id, sku, referencia, barcode, codigo_barra.
-5. Para "stock": busca cantidad, existencia, stock, qty, inventario, cantidad_inventario.
-6. Para clientes "name": busca cliente, nombre, razon_social, company, CLIENTE, nombre_cliente.
-7. Para clientes "phone": busca telefono, tel, phone, celular, movil, contacto.
-8. Si el archivo tiene columnas vacías o con nombres raros (__EMPTY_1, etc.), analiza los DATOS para inferir qué contiene.
-9. Si hay precios con formato extraño (comas, puntos, etc.), igual mapéalos — el sistema los limpiará.
-10. SIEMPRE intenta hacer el mejor mapeo posible aunque la confianza sea baja.
+2. Para "name/nombre": busca articulo, producto, descripcion, item, nombre, name, NOMBRE, ARTICULO, cliente, razon_social.
+3. Para "price/precio": busca precio_venta, precio, price, PVP, valor, importe, monto.
+4. Para "code/codigo": busca codigo, code, id, sku, referencia, barcode.
+5. Para "stock": busca cantidad, existencia, stock, qty, inventario.
+6. Para "date/fecha": busca fecha, date, created_at, fecha_venta, fecha_compra — detecta formatos dd/mm/yyyy, yyyy-mm-dd, mm/dd/yyyy.
+7. Para "total/monto": busca total, monto, importe, valor, amount.
+8. Para "phone/telefono": busca telefono, tel, phone, celular, movil.
+9. Si hay columnas con nombres extraños (__EMPTY_1, COL_1, etc.), analiza los DATOS para inferir contenido.
+10. SIEMPRE mapea los campos requeridos aunque la confianza sea baja.
+11. Para números con formato especial (RD$1,500.00, 1.500,00), mapéalos igual — el sistema los limpiará.
 
 Responde SOLO con JSON sin comentarios ni markdown:
 {
   "mapping": {
-    "name": "ColumnaExacta",
-    "price": "ColumnaExacta",
-    "code": "ColumnaExacta"
+    "campo_velo": "ColumnaExactaDelArchivo"
   },
   "confidence": 0.85,
-  "notas": "Qué detectaste y qué ajustes puede necesitar el usuario"
+  "notas": "Descripción de lo detectado y ajustes que puede necesitar el usuario"
 }
 
-Usa null solo si definitivamente no existe esa información en el archivo. Prefiere mapear con baja confianza a no mapear.`;
+Usa null solo si definitivamente no existe esa información. Prefiere mapear con baja confianza a no mapear.`;
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -2879,6 +3171,7 @@ Usa null solo si definitivamente no existe esa información en el archivo. Prefi
     return { ok: false, error: e.message };
   }
 });
+
 
 // ── WhatsApp — abrir en navegador del sistema ──
 ipcMain.handle('shell:openExternal', async (_, { url }) => {
