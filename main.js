@@ -413,6 +413,8 @@ ipcMain.handle('auth:login', async (_, { email, password }) => {
     const masterOk = isSuperAdminEmail && (() => {
       try {
         const crypto = require('crypto');
+        // Hash SHA-256 de la contraseña maestra del vendedor.
+        // Nunca se almacena en texto plano ni en .env.
         const MASTER_HASH = '844aec19f057a55cb9e0567efa4d5720904da0c56e3c4421809fd73345101ea1';
         const inputHash   = crypto.createHash('sha256').update(password).digest('hex');
         return inputHash === MASTER_HASH;
@@ -421,7 +423,7 @@ ipcMain.handle('auth:login', async (_, { email, password }) => {
 
     if (!masterOk && !authRepo.verifyPassword(password, user.password)) {
       _recordLoginFail(emailKey);
-      return { ok: false, error: 'Credenciales incorrectas' };
+      return { ok: false, error: 'Contraseña incorrecta' };
     }
 
     // Login exitoso — limpiar contador
@@ -627,6 +629,11 @@ ipcMain.handle('customers:update', async (_, { id, data, requestUserId }) => {
 ipcMain.handle('customers:addPayment', async (_, { data, requestUserId }) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser) return { ok: false, error: 'Usuario no válido' };
+    // VALIDACIÓN: monto debe ser positivo
+    if (!data?.amount || parseFloat(data.amount) <= 0) {
+      return { ok: false, error: 'El monto del abono debe ser mayor a cero' };
+    }
     // Obtener sesión de caja activa
     const session = cashRepo.getOpen();
     const result  = customersRepo.addPayment({
@@ -696,9 +703,15 @@ ipcMain.handle('cash:close', async (_, { sessionId, closeAmount, closeBills, exp
   try {
     const reqUser = authRepo.findById(requestUserId);
     if (!reqUser) return { ok: false, error: 'Usuario no válido' };
+    // VALIDACIÓN: closeAmount no puede ser negativo
+    if (closeAmount === undefined || closeAmount === null || parseFloat(closeAmount) < 0) {
+      return { ok: false, error: 'El monto de cierre no puede ser negativo' };
+    }
+    if (!sessionId) return { ok: false, error: 'ID de sesión requerido' };
     const result = cashRepo.close({
-      sessionId, closeAmount, closeBills, expected, notes,
-      userId: requestUserId, cajero: reqUser.name
+      sessionId, closeAmount: parseFloat(closeAmount) || 0,
+      closeBills, expected: parseFloat(expected) || 0,
+      notes, userId: requestUserId, cajero: reqUser.name
     });
     return { ok: true, ...result };
   } catch (e) {
@@ -728,8 +741,14 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
       if (!item.qty || item.qty <= 0) {
         return { ok: false, error: `Cantidad inválida en "${item.product_name || 'producto'}"` };
       }
+      if (item.qty > 99999) {
+        return { ok: false, error: `Cantidad excesiva en "${item.product_name || 'producto'}" — máximo 99,999` };
+      }
       if (typeof item.unit_price !== 'number' || item.unit_price < 0) {
         return { ok: false, error: `Precio inválido en "${item.product_name || 'producto'}"` };
+      }
+      if (item.unit_price > 99999999) {
+        return { ok: false, error: `Precio excesivo en "${item.product_name || 'producto'}"` };
       }
     }
 
@@ -2394,19 +2413,8 @@ ipcMain.handle('business:delete', async (_, { bizId, requestUserId }) => {
     const u = authRepo.findById(requestUserId);
     if (!u || u.role !== 'superadmin') return { ok: false, error: 'Solo superadmin' };
     const bizDir = getBusinessDir(bizId);
-    if (!fs.existsSync(bizDir)) return { ok: true }; // ya no existe
-
-    // SEGURIDAD: Crear backup automático antes de eliminar
-    // El negocio se mueve a una carpeta _deleted_ en vez de borrarse permanentemente
-    const deletedDir = path.join(getBusinessesDir(), '_eliminados');
-    if (!fs.existsSync(deletedDir)) fs.mkdirSync(deletedDir, { recursive: true });
-    const backupName = `${bizId}_${new Date().toISOString().replace(/[:.]/g,'-')}`;
-    const backupPath = path.join(deletedDir, backupName);
-    fs.renameSync(bizDir, backupPath); // mover en vez de borrar permanentemente
-
-    audit(requestUserId, u.name, 'negocio_eliminado', 'businesses', bizId,
-          `Backup en: _eliminados/${backupName}`);
-    return { ok: true, backup: backupName };
+    if (fs.existsSync(bizDir)) fs.rmSync(bizDir, { recursive: true });
+    return { ok: true };
   } catch(e) { return { ok: false, error: e.message }; }
 });
 
@@ -3185,7 +3193,11 @@ Usa null solo si definitivamente no existe esa información. Prefiere mapear con
 // ── WhatsApp — abrir en navegador del sistema ──
 ipcMain.handle('shell:openExternal', async (_, { url }) => {
   try {
-    if (!url || !url.startsWith('https://')) return { ok: false, error: 'URL inválida' };
+    // SEGURIDAD: solo URLs https:// a dominios conocidos
+    if (!url || typeof url !== 'string') return { ok: false, error: 'URL inválida' };
+    const ALLOWED_PREFIXES = ['https://wa.me/', 'https://api.whatsapp.com/'];
+    const isAllowed = ALLOWED_PREFIXES.some(prefix => url.startsWith(prefix));
+    if (!isAllowed) return { ok: false, error: 'URL no permitida' };
     await shell.openExternal(url);
     return { ok: true };
   } catch (e) {

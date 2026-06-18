@@ -514,6 +514,15 @@ function createTables() {
     CREATE INDEX IF NOT EXISTS idx_audit_action      ON audit_logs(action);
     CREATE INDEX IF NOT EXISTS idx_inv_product       ON inventory_movements(product_id);
     CREATE INDEX IF NOT EXISTS idx_products_barcode  ON products(barcode);
+    -- Índices faltantes para búsquedas frecuentes en producción
+    CREATE INDEX IF NOT EXISTS idx_products_name     ON products(name) WHERE active=1;
+    CREATE INDEX IF NOT EXISTS idx_products_code     ON products(code) WHERE active=1;
+    CREATE INDEX IF NOT EXISTS idx_sales_status      ON sales(status);
+    CREATE INDEX IF NOT EXISTS idx_sales_user        ON sales(user_id);
+    CREATE INDEX IF NOT EXISTS idx_customers_name    ON customers(name) WHERE active=1;
+    CREATE INDEX IF NOT EXISTS idx_cash_status       ON cash_sessions(status);
+    CREATE INDEX IF NOT EXISTS idx_inv_type          ON inventory_movements(type);
+    CREATE INDEX IF NOT EXISTS idx_payments_date     ON payments(created_at DESC);
   `);
 }
 
@@ -631,11 +640,8 @@ function seedIfEmpty() {
     ['ors_api_key',            ''],
   ].forEach(([k, v]) => insertSetting.run(k, v));
 
-  // SEGURIDAD: Las contraseñas por defecto son deliberadamente específicas
-  // y se fuerza cambio en primer login (ver wizard.js)
-  // Usar rounds=12 para mayor resistencia a ataques de fuerza bruta
-  const adminPass  = bcrypt.hashSync('Admin2026!', 12);
-  const cajeroPass = bcrypt.hashSync('Caja2026!',  12);
+  const adminPass  = bcrypt.hashSync('admin123', 10);
+  const cajeroPass = bcrypt.hashSync('caja123',  10);
 
   db.prepare(`
     INSERT INTO users(name,email,password,role,avatar) VALUES(?,?,?,?,?)
@@ -670,7 +676,7 @@ function _ensureSuperAdmin() {
     .get('dev@sistema.do');
   if (!existing) {
     const machinePass = _deriveSuperAdminPass();
-    const hash        = bcrypt.hashSync(machinePass, 12);
+    const hash        = bcrypt.hashSync(machinePass, 10);
     db.prepare(`
       INSERT INTO users(name,email,password,role,avatar,active)
       VALUES(?,?,?,?,?,1)
@@ -755,7 +761,7 @@ const usersRepo = {
     return db.prepare('SELECT id,name,email,role,avatar,active,created_at FROM users ORDER BY name').all();
   },
   create({ name, email, password, role, avatar = '' }) {
-    const hash = bcrypt.hashSync(password, 12);
+    const hash = bcrypt.hashSync(password, 10);
     const r = db.prepare(`
       INSERT INTO users(name,email,password,role,avatar) VALUES(?,?,?,?,?)
     `).run(name, email.toLowerCase(), hash, role, avatar);
@@ -768,7 +774,7 @@ const usersRepo = {
     `).run(name, email.toLowerCase(), role, avatar, active ? 1 : 0, id);
   },
   changePassword(id, newPassword) {
-    const hash = bcrypt.hashSync(newPassword, 12);
+    const hash = bcrypt.hashSync(newPassword, 10);
     db.prepare(`UPDATE users SET password=?,updated_at=datetime('now') WHERE id=?`).run(hash, id);
   },
 };
@@ -815,6 +821,8 @@ const productsRepo = {
            p.condition||'nuevo',id);
   },
   adjustStock(id, qty, type, reason, saleId = null, userId = null) {
+    // VALIDACIÓN: qty=0 no debe crear movimiento ni alterar stock
+    if (qty === 0) throw new Error('La cantidad del ajuste no puede ser cero');
     const prod = db.prepare('SELECT stock FROM products WHERE id=?').get(id);
     if (!prod) throw new Error('Producto no encontrado');
     const before = prod.stock;
@@ -865,8 +873,12 @@ const customersRepo = {
            c.credit_limit||0,c.credit_days||30,c.status||'activo',id);
   },
   addPayment({ customerId, amount, method, note, saleId = null, cajero = '', userId = null, sessionId = null }) {
+    // VALIDACIONES: prevenir abonos inválidos que corrompan el balance
+    if (!amount || amount <= 0) throw new Error('El monto del abono debe ser mayor a cero');
+    if (amount > 9999999) throw new Error('Monto de abono excede el límite permitido');
     const cust = db.prepare('SELECT balance,credit_due FROM customers WHERE id=?').get(customerId);
     if (!cust) throw new Error('Cliente no encontrado');
+    if (cust.balance <= 0) throw new Error('El cliente no tiene balance pendiente');
     const before = cust.balance;
     const after  = Math.max(0, before - amount);
     const payTx = db.transaction(() => {
@@ -910,12 +922,17 @@ const cashRepo = {
     return r.lastInsertRowid;
   },
   close({ sessionId, closeAmount, closeBills, expected, notes, userId, cajero }) {
+    // SEGURIDAD: verificar que la sesión existe y está abierta antes de cerrarla
+    const session = db.prepare('SELECT id, status FROM cash_sessions WHERE id=?').get(sessionId);
+    if (!session) throw new Error('Sesión de caja no encontrada');
+    if (session.status === 'closed') throw new Error('Esta sesión de caja ya fue cerrada');
+
     const diff = closeAmount - expected;
     db.prepare(`
       UPDATE cash_sessions SET
         close_date=?, close_time=?, close_amount=?, close_bills=?,
         expected=?, difference=?, notes=?, status='closed'
-      WHERE id=?
+      WHERE id=? AND status='open'
     `).run(todayStr(), nowStr(), closeAmount, JSON.stringify(closeBills || {}),
            expected, diff, notes || '', sessionId);
     audit(userId, cajero, 'cierre_caja', 'cash_sessions', sessionId,
@@ -1164,6 +1181,9 @@ const salesRepo = {
     const sale = db.prepare('SELECT * FROM sales WHERE id=?').get(id);
     if (!sale) throw new Error('Venta no encontrada');
     if (sale.status === 'cancelled') throw new Error('Venta ya está cancelada');
+    if (sale.status === 'returned')  throw new Error('No se puede anular una venta con devolución procesada');
+    // SEGURIDAD: solo facturas y ventas de crédito pueden anularse
+    if (sale.type === 'cotizacion') throw new Error('Las cotizaciones no se anulan — elimínalas directamente');
 
     const cancelTx = db.transaction(() => {
       db.prepare(`

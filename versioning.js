@@ -387,15 +387,22 @@ function runMigrations(db) {
 
     try {
       console.log(`[MIGRATION] Aplicando v${migration.version}: ${migration.description}`);
-      migration.run(db);
-      db.prepare(`
-        INSERT OR IGNORE INTO db_migrations(version, description)
-        VALUES(?, ?)
-      `).run(migration.version, migration.description);
+      // SEGURIDAD: envolver cada migración en transacción para atomicidad
+      // Si la migración falla, la DB queda como estaba — no estado inconsistente
+      const migTx = db.transaction(() => {
+        migration.run(db);
+        db.prepare(`
+          INSERT OR IGNORE INTO db_migrations(version, description)
+          VALUES(?, ?)
+        `).run(migration.version, migration.description);
+      });
+      migTx();
       count++;
       console.log(`[MIGRATION] ✓ v${migration.version} aplicada`);
     } catch (e) {
+      // Log del error pero continuar — no abortar otras migraciones independientes
       console.error(`[MIGRATION] ✗ Error en v${migration.version}:`, e.message);
+      console.error('[MIGRATION] La DB permanece en estado consistente (transacción revertida)');
     }
   }
 

@@ -67,7 +67,11 @@ function renderClientes(el) {
           class: 'inp', type: 'text', id: 'cli-search-inp',
           placeholder: 'Buscar por nombre, RNC, teléfono...',
           value: cliSearch,
-          oninput: e => { cliSearch = e.target.value; renderCliTable(); }
+          oninput: e => {
+            cliSearch = e.target.value;
+            clearTimeout(window._cliSearchTimer);
+            window._cliSearchTimer = setTimeout(() => renderCliTable(), 150);
+          }
         })
       ),
       h('div', { class: 'tabs', style: { marginBottom: 0 } },

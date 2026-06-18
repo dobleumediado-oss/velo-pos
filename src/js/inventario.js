@@ -180,97 +180,85 @@ function renderInvTable() {
     return;
   }
 
-  const card  = h('div', { class: 'card' });
-  const tw    = h('div', { class: 'tw' });
-  const tbl   = h('table', null,
-    h('thead', null,
-      h('tr', null,
-        ...['Código','Producto','Categoría','Stock','Mín','Precio','Mayorista','Costo',''].map(t =>
-          h('th', null, t)
-        )
-      )
-    )
-  );
-  const tbody = h('tbody', null);
+  // ── OPTIMIZACIÓN: innerHTML en vez de nodos individuales ──────────
+  // Antes: ~900 nodos DOM con h() para 100 productos → lento
+  // Ahora: 1 innerHTML con template string → instantáneo
+  const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
-  prods.forEach(p => {
+  const rowsHTML = prods.map((p, idx) => {
     const stockMin = p.stock_min || 5;
     const isLow    = p.stock > 0 && p.stock <= stockMin;
     const isOut    = p.stock === 0;
-    const margin   = p.price > 0
-      ? Math.round(((p.price - p.cost) / p.price) * 100) : 0;
+    const margin   = p.price > 0 ? Math.round(((p.price - p.cost) / p.price) * 100) : 0;
+    const stockColor = isOut ? 'var(--red)' : isLow ? 'var(--amber)' : 'var(--green)';
+    const condBadge = p.condition && p.condition !== 'nuevo'
+      ? `<span class="badge a" style="margin-left:4px;font-size:10px">${
+          p.condition === 'usado' ? 'Usado' :
+          p.condition === 'reacondicionado' ? 'Reacond.' :
+          p.condition === 'consignacion' ? 'Consig.' : 'Especial'
+        }</span>` : '';
+    return `<tr data-idx="${idx}">
+      <td class="tm" style="font-size:11px">${esc(p.code)}</td>
+      <td>
+        <div class="tb">${esc(p.name)}</div>
+        <div class="ts">${esc(p.brand||'—')}</div>
+      </td>
+      <td>
+        <span class="badge n">${esc(p.category||'—')}</span>${condBadge}
+      </td>
+      <td>
+        <div style="font-weight:700;font-size:14px;color:${stockColor}">${p.stock}</div>
+        <div style="font-size:10px;color:var(--muted2)">${esc(p.unit||'und')}</div>
+      </td>
+      <td style="color:var(--muted);font-size:12px">${stockMin}</td>
+      <td>
+        <div style="font-weight:700;font-size:13px">${fmt(p.price)}</div>
+        <div style="font-size:10px;color:var(--muted2)">${margin}% margen</div>
+      </td>
+      <td style="font-size:12px;color:var(--muted)">${fmt(p.wholesale)}</td>
+      <td style="font-size:12px;color:var(--muted)">${fmt(p.cost)}</td>
+      <td>
+        <div class="flex" style="gap:3px">
+          <button class="btn btn-ghost btn-sm" title="Ver kardex" data-action="kardex" data-idx="${idx}">${svg('chart')}</button>
+          <button class="btn btn-ghost btn-sm" title="Editar producto" data-action="edit" data-idx="${idx}">${svg('edit')}</button>
+          <button class="btn btn-ghost btn-sm" title="Ajustar stock" data-action="ajuste" data-idx="${idx}">${svg('pkg')} Ajuste</button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--red)" title="Eliminar" data-action="delete" data-idx="${idx}">${svg('trash')}</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
 
-    const tr = h('tr', null,
-      h('td', { class: 'tm', style: { fontSize: '11px' } }, p.code),
-      h('td', null,
-        h('div', { class: 'tb' }, p.name),
-        h('div', { class: 'ts' }, p.brand || '—')
-      ),
-      h('td', null,
-        h('span', { class: 'badge n' }, p.category || '—'),
-        p.condition && p.condition !== 'nuevo' ? h('span', {
-          class: 'badge a',
-          style: { marginLeft: '4px', fontSize: '10px' }
-        }, p.condition === 'usado' ? 'Usado' :
-           p.condition === 'reacondicionado' ? 'Reacond.' :
-           p.condition === 'consignacion' ? 'Consig.' : 'Especial') : null
-      ),
-      h('td', null,
-        h('div', { style: { fontWeight: 700, fontSize: '14px',
-          color: isOut ? 'var(--red)' : isLow ? 'var(--amber)' : 'var(--green)' } },
-          String(p.stock)),
-        h('div', { style: { fontSize: '10px', color: 'var(--muted2)' } }, p.unit || 'und')
-      ),
-      h('td', { style: { color: 'var(--muted)', fontSize: '12px' } }, String(stockMin)),
-      h('td', null,
-        h('div', { style: { fontWeight: 700, fontSize: '13px' } }, fmt(p.price)),
-        h('div', { style: { fontSize: '10px', color: 'var(--muted2)' } }, `${margin}% margen`)
-      ),
-      h('td', { style: { fontSize: '12px', color: 'var(--muted)' } }, fmt(p.wholesale)),
-      h('td', { style: { fontSize: '12px', color: 'var(--muted)' } }, fmt(p.cost)),
-      h('td', null,
-        h('div', { class: 'flex', style: { gap: '3px' } },
-          h('button', {
-            class: 'btn btn-ghost btn-sm',
-            title: 'Ver kardex',
-            onclick: () => openKardexModal(p),
-            html: svg('chart')
-          }),
-          h('button', {
-            class: 'btn btn-ghost btn-sm',
-            title: 'Editar producto',
-            onclick: () => openProductoModal(p),
-            html: svg('edit')
-          }),
-          h('button', {
-            class: 'btn btn-ghost btn-sm',
-            title: 'Ajustar stock',
-            onclick: () => openAjusteModal(p),
-            html: `${svg('pkg')} Ajuste`
-          }),
-          h('button', {
-            class: 'btn btn-ghost btn-sm',
-            style: { color: 'var(--red)' },
-            title: 'Eliminar producto',
-            onclick: () => confirmModal(
-              `¿Eliminar <strong>${p.name}</strong>? El producto quedará inactivo.`,
-              () => eliminarProducto(p.id),
-              'Eliminar'
-            ),
-            html: svg('trash')
-          })
-        )
-      )
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `
+    <div class="tw">
+      <table>
+        <thead><tr>
+          <th>Código</th><th>Producto</th><th>Categoría</th>
+          <th>Stock</th><th>Mín</th><th>Precio</th>
+          <th>Mayorista</th><th>Costo</th><th></th>
+        </tr></thead>
+        <tbody>${rowsHTML}</tbody>
+      </table>
+    </div>`;
+
+  // Delegación de eventos: 1 listener en la tabla en vez de N botones
+  card.addEventListener('click', e => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const idx = parseInt(btn.dataset.idx);
+    const p   = prods[idx];
+    if (!p) return;
+    const action = btn.dataset.action;
+    if (action === 'kardex') openKardexModal(p);
+    else if (action === 'edit')   openProductoModal(p);
+    else if (action === 'ajuste') openAjusteModal(p);
+    else if (action === 'delete') confirmModal(
+      `¿Eliminar <strong>${p.name}</strong>? El producto quedará inactivo.`,
+      () => eliminarProducto(p.id), 'Eliminar'
     );
-
-    if (isOut)      tr.style.background = 'var(--red-bg)';
-    else if (isLow) tr.style.background = 'var(--amber-bg)';
-    tbody.appendChild(tr);
   });
 
-  tbl.appendChild(tbody);
-  tw.appendChild(tbl);
-  card.appendChild(tw);
   wrap.appendChild(card);
 }
 

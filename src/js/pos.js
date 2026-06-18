@@ -33,9 +33,10 @@ async function renderPOS(el) {
     const wrap = h('div', { class: 'pos-wrap' });
 
     // ── Panel izquierdo ─────────────────────────
+    // pos-cat ahora es flex column — la barra queda fija y solo el grid scrollea
     const left = h('div', { class: 'pos-cat' });
 
-    const topBar = h('div', { style: 'display:flex;gap:8px;margin-bottom:14px' });
+    const topBar = h('div', { style: 'display:flex;gap:8px;margin-bottom:14px;flex-shrink:0' });
     topBar.innerHTML = `
       <div class="inp-ic" style="flex:1">
         <div class="ic">${svg('search')}</div>
@@ -50,7 +51,7 @@ async function renderPOS(el) {
       </select>`;
     left.appendChild(topBar);
 
-    const modeBar = h('div', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:12px' });
+    const modeBar = h('div', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-shrink:0' });
     modeBar.innerHTML = `
       <span style="font-size:11px;color:var(--muted);font-weight:600">Precio:</span>
       <div class="tabs" style="margin-bottom:0">
@@ -62,7 +63,10 @@ async function renderPOS(el) {
     left.appendChild(modeBar);
 
     const grid = h('div', { id: 'pos-grid', class: 'prod-grid' });
-    left.appendChild(grid);
+    // Envolver el grid en un contenedor que haga el scroll
+    const gridWrap = h('div', { style: 'flex:1;overflow-y:auto;min-height:0' });
+    gridWrap.appendChild(grid);
+    left.appendChild(gridWrap);
 
     // ── Panel derecho ───────────────────────────
     const right = h('div', { class: 'pos-side', id: 'pos-side' });

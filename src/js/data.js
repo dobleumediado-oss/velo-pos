@@ -69,30 +69,18 @@ async function reloadCategories() {
 // ══════════════════════════════════════════════
 async function loadAppData() {
   try {
-    const [products, customers, settings, sessions, users, payments] = await Promise.all([
+    // ── OPTIMIZACIÓN: Carga en 2 fases ────────────────────────────
+    // Fase 1: crítico — lo que el usuario ve primero (productos + settings)
+    // Fase 2: secundario — en background sin bloquear la UI
+    const [products, settings] = await Promise.all([
       window.api.products.getAll(),
-      window.api.customers.getAll(),
       window.api.settings.getAll(),
-      window.api.cash.getSessions(),
-      window.api.users.getAll(),
-      window.api.customers.getAllPayments
-        ? window.api.customers.getAllPayments().catch(() => [])
-        : Promise.resolve([]),
     ]);
 
-    // Cache de usuarios para dropdown de login
-    window._cachedUsers = users || [];
+    DB.products = products || [];
+    DB.settings = settings || {};
 
-    DB.products  = products  || [];
-    DB.customers = customers || [];
-    DB.settings  = settings  || {};
-    DB.caja      = sessions  || [];
-    DB.payments  = payments  || [];
-    // Ventas: cargar sólo hoy al inicio. Los módulos que necesitan más rango
-    // llaman reloadSales({ range: 'week'|'month'|'all' }) ellos mismos.
-    DB.sales     = [];
-
-    // Cargar configuración del negocio
+    // Aplicar configuración inmediatamente — la UI ya puede renderizar
     if (settings) {
       CFG.biz            = settings.biz_name      || CFG.biz;
       CFG.rnc            = settings.biz_rnc       || CFG.rnc;
@@ -101,32 +89,60 @@ async function loadAppData() {
       CFG.biz_logo       = settings.biz_logo      || '';
       CFG.receipt_msg    = settings.receipt_msg   || '¡Gracias por su compra!';
       CFG.print_template = settings.print_template || '';
-      // Módulo fiscal — solo activo si superadmin lo habilitó
       CFG.fiscalEnabled        = settings.fiscal_enabled === '1';
       CFG.module_sucursales    = settings.module_sucursales    || '0';
       CFG.module_vehiculos     = settings.module_vehiculos     || '0';
       CFG.module_mantenimiento = settings.module_mantenimiento || '0';
-      // Si mantenimiento está activo, vehículos debe estarlo también
       if (CFG.module_mantenimiento === '1') CFG.module_vehiculos = '1';
       CFG.module_envios        = settings.module_envios        || '0';
       CFG.module_ncf_avanzado  = settings.module_ncf_avanzado  || '0';
       CFG.module_gastos        = settings.module_gastos        || '0';
       CFG.module_multi_negocio = settings.module_multi_negocio || '0';
-      CFG.itbis          = CFG.fiscalEnabled
-                           ? ((settings.tax_pct !== undefined && settings.tax_pct !== '')
-                               ? parseFloat(settings.tax_pct) : 18)
-                           : 0;  // Sin módulo fiscal: ITBIS siempre 0
-      // Módulo de etiquetas — activado por superadmin
-      window._bcEnabled  = settings.barcode_enabled === '1' || settings.barcode_enabled === true;
+      CFG.itbis = CFG.fiscalEnabled
+        ? ((settings.tax_pct !== undefined && settings.tax_pct !== '')
+            ? parseFloat(settings.tax_pct) : 18) : 0;
+      window._bcEnabled = settings.barcode_enabled === '1' || settings.barcode_enabled === true;
     }
 
-    // Verificar caja
+    // Verificar caja — necesario antes de mostrar POS
     await chkCaja();
 
-    // Cargar ventas de hoy en segundo plano (no bloquea el arranque)
+    // Fase 2: cargar el resto en background sin bloquear
+    Promise.all([
+      window.api.customers.getAll(),
+      window.api.cash.getSessions(),
+      window.api.users.getAll(),
+      window.api.customers.getAllPayments
+        ? window.api.customers.getAllPayments().catch(() => [])
+        : Promise.resolve([]),
+    ]).then(([customers, sessions, users, payments]) => {
+      window._cachedUsers = users || [];
+      DB.customers = customers || [];
+      DB.caja      = sessions  || [];
+      DB.payments  = payments  || [];
+    }).catch(e => console.warn('[loadAppData phase2]', e));
+
+    // Fase 2 también: ventas de hoy y categorías
     reloadSales({ range: 'today' }).catch(() => {});
-    // Cargar categorías desde DB
     reloadCategories().catch(() => {});
+
+    // Datos que SÍ esperamos al inicio (ya los tenemos de Fase 1)
+    const customers = [];
+    const sessions  = [];
+    const users     = [];
+    const payments  = [];
+
+    // Cache de usuarios para dropdown de login
+    window._cachedUsers = users || [];
+
+    DB.customers = customers || [];
+    DB.caja      = sessions  || [];
+    DB.payments  = payments  || [];
+    // Ventas: cargar sólo hoy al inicio. Los módulos que necesitan más rango
+    // llaman reloadSales({ range: 'week'|'month'|'all' }) ellos mismos.
+    DB.sales     = [];
+
+    // (CFG ya aplicado en Fase 1 — ver arriba)
 
   } catch (e) {
     console.error('[loadAppData]', e);

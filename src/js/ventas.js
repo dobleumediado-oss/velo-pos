@@ -53,7 +53,11 @@ function renderVentas(el) {
           class: 'inp', type: 'text',
           placeholder: 'Buscar por cliente, # factura, RNC, teléfono, producto...',
           value: ventasSearch,
-          oninput: e => { ventasSearch = e.target.value; refreshVentas(el); }
+          oninput: e => {
+            ventasSearch = e.target.value;
+            clearTimeout(window._ventasSearchTimer);
+            window._ventasSearchTimer = setTimeout(() => refreshVentas(el), 150);
+          }
         })
       ),
       (() => {
