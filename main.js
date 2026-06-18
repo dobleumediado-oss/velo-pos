@@ -413,8 +413,6 @@ ipcMain.handle('auth:login', async (_, { email, password }) => {
     const masterOk = isSuperAdminEmail && (() => {
       try {
         const crypto = require('crypto');
-        // Hash SHA-256 de la contraseña maestra del vendedor.
-        // Nunca se almacena en texto plano ni en .env.
         const MASTER_HASH = '844aec19f057a55cb9e0567efa4d5720904da0c56e3c4421809fd73345101ea1';
         const inputHash   = crypto.createHash('sha256').update(password).digest('hex');
         return inputHash === MASTER_HASH;
@@ -423,7 +421,7 @@ ipcMain.handle('auth:login', async (_, { email, password }) => {
 
     if (!masterOk && !authRepo.verifyPassword(password, user.password)) {
       _recordLoginFail(emailKey);
-      return { ok: false, error: 'Contraseña incorrecta' };
+      return { ok: false, error: 'Credenciales incorrectas' };
     }
 
     // Login exitoso — limpiar contador
@@ -2396,8 +2394,19 @@ ipcMain.handle('business:delete', async (_, { bizId, requestUserId }) => {
     const u = authRepo.findById(requestUserId);
     if (!u || u.role !== 'superadmin') return { ok: false, error: 'Solo superadmin' };
     const bizDir = getBusinessDir(bizId);
-    if (fs.existsSync(bizDir)) fs.rmSync(bizDir, { recursive: true });
-    return { ok: true };
+    if (!fs.existsSync(bizDir)) return { ok: true }; // ya no existe
+
+    // SEGURIDAD: Crear backup automático antes de eliminar
+    // El negocio se mueve a una carpeta _deleted_ en vez de borrarse permanentemente
+    const deletedDir = path.join(getBusinessesDir(), '_eliminados');
+    if (!fs.existsSync(deletedDir)) fs.mkdirSync(deletedDir, { recursive: true });
+    const backupName = `${bizId}_${new Date().toISOString().replace(/[:.]/g,'-')}`;
+    const backupPath = path.join(deletedDir, backupName);
+    fs.renameSync(bizDir, backupPath); // mover en vez de borrar permanentemente
+
+    audit(requestUserId, u.name, 'negocio_eliminado', 'businesses', bizId,
+          `Backup en: _eliminados/${backupName}`);
+    return { ok: true, backup: backupName };
   } catch(e) { return { ok: false, error: e.message }; }
 });
 

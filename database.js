@@ -631,8 +631,11 @@ function seedIfEmpty() {
     ['ors_api_key',            ''],
   ].forEach(([k, v]) => insertSetting.run(k, v));
 
-  const adminPass  = bcrypt.hashSync('admin123', 10);
-  const cajeroPass = bcrypt.hashSync('caja123',  10);
+  // SEGURIDAD: Las contraseñas por defecto son deliberadamente específicas
+  // y se fuerza cambio en primer login (ver wizard.js)
+  // Usar rounds=12 para mayor resistencia a ataques de fuerza bruta
+  const adminPass  = bcrypt.hashSync('Admin2026!', 12);
+  const cajeroPass = bcrypt.hashSync('Caja2026!',  12);
 
   db.prepare(`
     INSERT INTO users(name,email,password,role,avatar) VALUES(?,?,?,?,?)
@@ -667,7 +670,7 @@ function _ensureSuperAdmin() {
     .get('dev@sistema.do');
   if (!existing) {
     const machinePass = _deriveSuperAdminPass();
-    const hash        = bcrypt.hashSync(machinePass, 10);
+    const hash        = bcrypt.hashSync(machinePass, 12);
     db.prepare(`
       INSERT INTO users(name,email,password,role,avatar,active)
       VALUES(?,?,?,?,?,1)
@@ -752,7 +755,7 @@ const usersRepo = {
     return db.prepare('SELECT id,name,email,role,avatar,active,created_at FROM users ORDER BY name').all();
   },
   create({ name, email, password, role, avatar = '' }) {
-    const hash = bcrypt.hashSync(password, 10);
+    const hash = bcrypt.hashSync(password, 12);
     const r = db.prepare(`
       INSERT INTO users(name,email,password,role,avatar) VALUES(?,?,?,?,?)
     `).run(name, email.toLowerCase(), hash, role, avatar);
@@ -765,7 +768,7 @@ const usersRepo = {
     `).run(name, email.toLowerCase(), role, avatar, active ? 1 : 0, id);
   },
   changePassword(id, newPassword) {
-    const hash = bcrypt.hashSync(newPassword, 10);
+    const hash = bcrypt.hashSync(newPassword, 12);
     db.prepare(`UPDATE users SET password=?,updated_at=datetime('now') WHERE id=?`).run(hash, id);
   },
 };
