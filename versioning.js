@@ -332,6 +332,388 @@ const MIGRATIONS = [
       }
     }
   },
+
+  // ── MÓDULO CONTABILIDAD Y BANCOS ─────────────────────────────────────────
+  {
+    version: '1.6.0',
+    description: 'Módulo Bancos/Cuentas Financieras — tablas y cuenta Caja General inicial',
+    run(db) {
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS financial_accounts (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            name            TEXT NOT NULL,
+            type            TEXT NOT NULL DEFAULT 'caja'
+                              CHECK(type IN ('caja','caja_chica','banco','tarjeta','transferencia','otro')),
+            bank_name       TEXT DEFAULT '',
+            account_number  TEXT DEFAULT '',
+            currency        TEXT DEFAULT 'DOP',
+            initial_balance REAL DEFAULT 0,
+            current_balance REAL DEFAULT 0,
+            description     TEXT DEFAULT '',
+            active          INTEGER DEFAULT 1,
+            user_id         INTEGER REFERENCES users(id),
+            notes           TEXT DEFAULT '',
+            created_at      TEXT DEFAULT (datetime('now')),
+            updated_at      TEXT DEFAULT (datetime('now'))
+          );
+
+          CREATE TABLE IF NOT EXISTS financial_movements (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            financial_account_id INTEGER NOT NULL REFERENCES financial_accounts(id),
+            type                TEXT NOT NULL
+                                  CHECK(type IN ('deposito','retiro','transferencia_in',
+                                    'transferencia_out','venta','gasto','abono_recibido',
+                                    'pago_proveedor','apertura','ajuste')),
+            amount              REAL NOT NULL,
+            balance_before      REAL NOT NULL DEFAULT 0,
+            balance_after       REAL NOT NULL DEFAULT 0,
+            description         TEXT NOT NULL DEFAULT '',
+            reference_type      TEXT DEFAULT '',
+            reference_id        INTEGER,
+            related_account_id  INTEGER REFERENCES financial_accounts(id),
+            method              TEXT DEFAULT 'efectivo',
+            notes               TEXT DEFAULT '',
+            user_id             INTEGER REFERENCES users(id),
+            status              TEXT DEFAULT 'activo' CHECK(status IN ('activo','anulado')),
+            cancelled_by        INTEGER REFERENCES users(id),
+            cancel_reason       TEXT,
+            cancelled_at        TEXT,
+            created_at          TEXT DEFAULT (datetime('now'))
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_fin_mov_account ON financial_movements(financial_account_id);
+          CREATE INDEX IF NOT EXISTS idx_fin_mov_type    ON financial_movements(type);
+          CREATE INDEX IF NOT EXISTS idx_fin_mov_date    ON financial_movements(created_at);
+          CREATE INDEX IF NOT EXISTS idx_fin_mov_ref     ON financial_movements(reference_type, reference_id);
+        `);
+
+        // Crear cuenta Caja General inicial si no existe
+        const existing = db.prepare("SELECT COUNT(*) as c FROM financial_accounts").get().c;
+        if (existing === 0) {
+          const openSession = db.prepare("SELECT * FROM cash_sessions WHERE status='open' LIMIT 1").get();
+          const currentCash = openSession ? (openSession.open_amount || 0) : 0;
+          const r = db.prepare(`
+            INSERT INTO financial_accounts(name, type, currency, initial_balance, current_balance, description, active)
+            VALUES('Caja General', 'caja', 'DOP', 0, ?, 'Caja principal del negocio', 1)
+          `).run(currentCash);
+          if (currentCash > 0) {
+            db.prepare(`
+              INSERT INTO financial_movements(financial_account_id, type, amount, balance_before, balance_after, description)
+              VALUES(?, 'apertura', ?, 0, ?, 'Balance inicial de caja')
+            `).run(r.lastInsertRowid, currentCash, currentCash);
+          }
+          db.prepare(`
+            INSERT INTO financial_accounts(name, type, currency, initial_balance, current_balance, description, active)
+            VALUES('Banco Principal', 'banco', 'DOP', 0, 0, 'Cuenta bancaria principal', 1)
+          `).run();
+        }
+
+        console.log('[MIGRATION 1.6.0] Módulo Bancos/Cuentas Financieras creado');
+      } catch(e) {
+        console.error('[MIGRATION 1.6.0]', e.message);
+      }
+    }
+  },
+
+  {
+    version: '1.6.1',
+    description: 'Módulo Contabilidad — catálogo de cuentas, asientos y configuración',
+    run(db) {
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS accounting_accounts (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            code        TEXT UNIQUE NOT NULL,
+            name        TEXT NOT NULL,
+            type        TEXT NOT NULL
+                          CHECK(type IN ('activo','pasivo','capital','ingreso','costo','gasto','impuesto')),
+            subtype     TEXT DEFAULT '',
+            parent_id   INTEGER REFERENCES accounting_accounts(id),
+            description TEXT DEFAULT '',
+            is_summary  INTEGER DEFAULT 0,
+            balance     REAL DEFAULT 0,
+            active      INTEGER DEFAULT 1,
+            created_at  TEXT DEFAULT (datetime('now')),
+            updated_at  TEXT DEFAULT (datetime('now'))
+          );
+
+          CREATE TABLE IF NOT EXISTS accounting_entries (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            number        TEXT UNIQUE NOT NULL,
+            date          TEXT NOT NULL,
+            concept       TEXT NOT NULL,
+            reference     TEXT DEFAULT '',
+            source_module TEXT DEFAULT '',
+            source_id     INTEGER,
+            total_debit   REAL NOT NULL DEFAULT 0,
+            total_credit  REAL NOT NULL DEFAULT 0,
+            status        TEXT DEFAULT 'confirmado'
+                            CHECK(status IN ('borrador','confirmado','anulado')),
+            notes         TEXT DEFAULT '',
+            user_id       INTEGER REFERENCES users(id),
+            reversed_by   INTEGER REFERENCES accounting_entries(id),
+            reversal_of   INTEGER REFERENCES accounting_entries(id),
+            created_at    TEXT DEFAULT (datetime('now')),
+            updated_at    TEXT DEFAULT (datetime('now'))
+          );
+
+          CREATE TABLE IF NOT EXISTS accounting_entry_lines (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            entry_id    INTEGER NOT NULL REFERENCES accounting_entries(id),
+            account_id  INTEGER NOT NULL REFERENCES accounting_accounts(id),
+            description TEXT DEFAULT '',
+            debit       REAL NOT NULL DEFAULT 0,
+            credit      REAL NOT NULL DEFAULT 0,
+            reference   TEXT DEFAULT '',
+            created_at  TEXT DEFAULT (datetime('now'))
+          );
+
+          CREATE TABLE IF NOT EXISTS accounting_config (
+            key        TEXT PRIMARY KEY,
+            account_id INTEGER REFERENCES accounting_accounts(id),
+            value      TEXT DEFAULT '',
+            description TEXT DEFAULT '',
+            updated_at  TEXT DEFAULT (datetime('now'))
+          );
+
+          CREATE TABLE IF NOT EXISTS accounting_periods (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT NOT NULL,
+            date_from  TEXT NOT NULL,
+            date_to    TEXT NOT NULL,
+            status     TEXT DEFAULT 'abierto' CHECK(status IN ('abierto','cerrado')),
+            notes      TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now'))
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_acc_entries_date   ON accounting_entries(date);
+          CREATE INDEX IF NOT EXISTS idx_acc_entries_module ON accounting_entries(source_module, source_id);
+          CREATE INDEX IF NOT EXISTS idx_acc_lines_entry    ON accounting_entry_lines(entry_id);
+          CREATE INDEX IF NOT EXISTS idx_acc_lines_account  ON accounting_entry_lines(account_id);
+          CREATE INDEX IF NOT EXISTS idx_acc_accounts_code  ON accounting_accounts(code);
+          CREATE INDEX IF NOT EXISTS idx_acc_accounts_type  ON accounting_accounts(type);
+        `);
+
+        console.log('[MIGRATION 1.6.1] Módulo Contabilidad — tablas creadas');
+      } catch(e) {
+        console.error('[MIGRATION 1.6.1]', e.message);
+      }
+    }
+  },
+
+  {
+    version: '1.6.2',
+    description: 'Catálogo de cuentas inicial y mapeo contable para RD',
+    run(db) {
+      try {
+        const ins = db.prepare(
+          `INSERT OR IGNORE INTO accounting_accounts(code, name, type, subtype, parent_id, description, is_summary, active)
+           VALUES(?, ?, ?, ?, ?, ?, ?, 1)`
+        );
+
+        // ── ACTIVOS ──────────────────────────────────
+        const a1 = ins.run('1', 'ACTIVOS', 'activo', '', null, 'Grupo activos', 1).lastInsertRowid;
+        const a11 = ins.run('11', 'Activo Corriente', 'activo', 'corriente', a1, '', 1).lastInsertRowid;
+        ins.run('1101', 'Caja General',               'activo', 'efectivo',   a11, 'Efectivo en caja', 0);
+        ins.run('1102', 'Caja Chica',                 'activo', 'efectivo',   a11, 'Fondo de caja chica', 0);
+        ins.run('1103', 'Bancos',                     'activo', 'banco',      a11, 'Saldos en cuentas bancarias', 0);
+        ins.run('1104', 'Cuentas por Cobrar',         'activo', 'cobrar',     a11, 'Ventas a crédito pendientes', 0);
+        ins.run('1105', 'Inventario de Mercancías',   'activo', 'inventario', a11, 'Mercancía disponible para venta', 0);
+        ins.run('1106', 'ITBIS Acreditable',          'activo', 'impuesto',   a11, 'ITBIS pagado en compras recuperable', 0);
+        ins.run('1107', 'Otros Activos Corrientes',   'activo', '',           a11, '', 0);
+        const a12 = ins.run('12', 'Activo No Corriente', 'activo', 'fijo', a1, '', 1).lastInsertRowid;
+        ins.run('1201', 'Mobiliario y Equipo',        'activo', 'fijo', a12, '', 0);
+        ins.run('1202', 'Equipos de Cómputo',         'activo', 'fijo', a12, '', 0);
+        ins.run('1203', 'Dep. Acumulada Mobiliario',  'activo', 'fijo', a12, 'Cuenta contranatura (saldo acreedor)', 0);
+
+        // ── PASIVOS ──────────────────────────────────
+        const p2 = ins.run('2', 'PASIVOS', 'pasivo', '', null, 'Grupo pasivos', 1).lastInsertRowid;
+        const p21 = ins.run('21', 'Pasivo Corriente', 'pasivo', 'corriente', p2, '', 1).lastInsertRowid;
+        ins.run('2101', 'Cuentas por Pagar',          'pasivo', 'pagar',     p21, 'Deudas con proveedores', 0);
+        ins.run('2102', 'ITBIS por Pagar',            'pasivo', 'impuesto',  p21, 'ITBIS cobrado en ventas a remitir a DGII', 0);
+        ins.run('2103', 'Retenciones por Pagar',      'pasivo', 'impuesto',  p21, 'Retenciones ISR a pagar', 0);
+        ins.run('2104', 'Sueldos por Pagar',          'pasivo', '',          p21, '', 0);
+        ins.run('2105', 'Otros Pasivos Corrientes',   'pasivo', '',          p21, '', 0);
+        const p22 = ins.run('22', 'Pasivo a Largo Plazo', 'pasivo', 'largo', p2, '', 1).lastInsertRowid;
+        ins.run('2201', 'Préstamos Bancarios',        'pasivo', 'prestamo',  p22, '', 0);
+
+        // ── CAPITAL ──────────────────────────────────
+        const c3 = ins.run('3', 'CAPITAL', 'capital', '', null, 'Patrimonio del propietario', 1).lastInsertRowid;
+        ins.run('3101', 'Capital Social',             'capital', '', c3, 'Capital inicial del negocio', 0);
+        ins.run('3102', 'Aportes del Propietario',    'capital', '', c3, '', 0);
+        ins.run('3103', 'Retiros del Propietario',    'capital', '', c3, 'Cuenta contranatura', 0);
+        ins.run('3104', 'Utilidades Acumuladas',      'capital', '', c3, 'Utilidades de períodos anteriores', 0);
+        ins.run('3105', 'Utilidad/Pérdida del Período','capital','', c3, 'Resultado del período actual', 0);
+
+        // ── INGRESOS ─────────────────────────────────
+        const i4 = ins.run('4', 'INGRESOS', 'ingreso', '', null, 'Grupo ingresos', 1).lastInsertRowid;
+        const i41 = ins.run('41', 'Ingresos Operacionales', 'ingreso', '', i4, '', 1).lastInsertRowid;
+        ins.run('4101', 'Ventas de Mercancía',        'ingreso', 'ventas',   i41, '', 0);
+        ins.run('4102', 'Descuentos en Ventas',       'ingreso', 'descuento',i41, 'Cuenta contranatura (reduce ingresos)', 0);
+        ins.run('4103', 'Devoluciones en Ventas',     'ingreso', 'devolucion',i41,'Cuenta contranatura', 0);
+        ins.run('4104', 'Otros Ingresos',             'ingreso', '',         i41, '', 0);
+
+        // ── COSTOS ───────────────────────────────────
+        const c5 = ins.run('5', 'COSTOS', 'costo', '', null, 'Grupo costos', 1).lastInsertRowid;
+        const c51 = ins.run('51', 'Costo de Ventas', 'costo', '', c5, '', 1).lastInsertRowid;
+        ins.run('5101', 'Costo de Mercancía Vendida', 'costo', 'cogs', c51, 'Costo directo de productos vendidos', 0);
+        ins.run('5102', 'Compras de Mercancía',       'costo', '',     c51, '', 0);
+        ins.run('5103', 'Devoluciones en Compras',    'costo', '',     c51, 'Cuenta contranatura', 0);
+
+        // ── GASTOS ───────────────────────────────────
+        const g6 = ins.run('6', 'GASTOS', 'gasto', '', null, 'Grupo gastos', 1).lastInsertRowid;
+        const g61 = ins.run('61', 'Gastos Operacionales', 'gasto', '', g6, '', 1).lastInsertRowid;
+        ins.run('6101', 'Alquiler de Local',          'gasto', '', g61, '', 0);
+        ins.run('6102', 'Electricidad',               'gasto', '', g61, '', 0);
+        ins.run('6103', 'Agua y Saneamiento',         'gasto', '', g61, '', 0);
+        ins.run('6104', 'Internet',                   'gasto', '', g61, '', 0);
+        ins.run('6105', 'Teléfono',                   'gasto', '', g61, '', 0);
+        ins.run('6106', 'Sueldos y Salarios',         'gasto', '', g61, '', 0);
+        ins.run('6107', 'Combustible',                'gasto', '', g61, '', 0);
+        ins.run('6108', 'Transporte y Mensajería',    'gasto', '', g61, '', 0);
+        ins.run('6109', 'Publicidad y Marketing',     'gasto', '', g61, '', 0);
+        ins.run('6110', 'Mantenimiento y Reparaciones','gasto','', g61, '', 0);
+        ins.run('6111', 'Limpieza y Aseo',            'gasto', '', g61, '', 0);
+        ins.run('6112', 'Comisiones Bancarias',       'gasto', '', g61, '', 0);
+        ins.run('6113', 'Gastos de Tecnología',       'gasto', '', g61, '', 0);
+        ins.run('6114', 'Impuestos y Licencias',      'gasto', '', g61, '', 0);
+        ins.run('6115', 'Servicios Profesionales',    'gasto', '', g61, '', 0);
+        ins.run('6116', 'Incentivos y Bonificaciones','gasto', '', g61, '', 0);
+        ins.run('6117', 'Útiles y Materiales de Ofic.','gasto','', g61, '', 0);
+        ins.run('6118', 'Seguros',                    'gasto', '', g61, '', 0);
+        ins.run('6119', 'Depreciación',               'gasto', '', g61, '', 0);
+        ins.run('6120', 'Otros Gastos Operacionales', 'gasto', '', g61, '', 0);
+
+        // ── IMPUESTOS ────────────────────────────────
+        const t7 = ins.run('7', 'IMPUESTOS', 'impuesto', '', null, 'Grupo impuestos', 1).lastInsertRowid;
+        ins.run('7101', 'ITBIS Cobrado (Ventas)',      'impuesto', '', t7, 'ITBIS facturado en ventas', 0);
+        ins.run('7102', 'ITBIS Pagado (Compras)',      'impuesto', '', t7, 'ITBIS en compras acreditable', 0);
+        ins.run('7103', 'Retenciones ISR',             'impuesto', '', t7, '', 0);
+
+        // ── CONFIGURACIÓN CONTABLE POR DEFECTO ───────
+        const getAccId = (code) => {
+          const r = db.prepare("SELECT id FROM accounting_accounts WHERE code=?").get(code);
+          return r ? r.id : null;
+        };
+
+        const insConf = db.prepare(
+          `INSERT OR IGNORE INTO accounting_config(key, account_id, description) VALUES(?, ?, ?)`
+        );
+        insConf.run('account_cash',       getAccId('1101'), 'Caja General → efectivo ventas y caja');
+        insConf.run('account_petty_cash', getAccId('1102'), 'Caja Chica → pagos menores');
+        insConf.run('account_bank',       getAccId('1103'), 'Bancos → transferencias y depósitos');
+        insConf.run('account_ar',         getAccId('1104'), 'Cuentas por Cobrar → ventas a crédito');
+        insConf.run('account_inventory',  getAccId('1105'), 'Inventario → stock de mercancía');
+        insConf.run('account_tax_credit', getAccId('1106'), 'ITBIS pagado en compras');
+        insConf.run('account_ap',         getAccId('2101'), 'Cuentas por Pagar → compras a crédito');
+        insConf.run('account_tax_payable',getAccId('2102'), 'ITBIS cobrado en ventas → DGII');
+        insConf.run('account_capital',    getAccId('3101'), 'Capital Social');
+        insConf.run('account_revenue',    getAccId('4101'), 'Ventas de mercancía');
+        insConf.run('account_discount',   getAccId('4102'), 'Descuentos en ventas');
+        insConf.run('account_returns',    getAccId('4103'), 'Devoluciones en ventas');
+        insConf.run('account_other_rev',  getAccId('4104'), 'Otros ingresos');
+        insConf.run('account_cogs',       getAccId('5101'), 'Costo de mercancía vendida');
+        insConf.run('account_rent',       getAccId('6101'), 'Alquiler');
+        insConf.run('account_elec',       getAccId('6102'), 'Electricidad');
+        insConf.run('account_internet',   getAccId('6104'), 'Internet');
+        insConf.run('account_salary',     getAccId('6106'), 'Sueldos');
+        insConf.run('account_fuel',       getAccId('6107'), 'Combustible');
+        insConf.run('account_other_exp',  getAccId('6120'), 'Otros gastos');
+
+        console.log('[MIGRATION 1.6.2] Catálogo de cuentas y configuración contable creados');
+      } catch(e) {
+        console.error('[MIGRATION 1.6.2]', e.message);
+      }
+    }
+  },
+
+  {
+    version: '1.6.3',
+    description: 'Agregar module_contabilidad a settings',
+    run(db) {
+      try {
+        const ins = db.prepare(`INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)`);
+        ins.run('module_contabilidad', '0');
+        console.log('[MIGRATION 1.6.3] module_contabilidad agregado a settings');
+      } catch(e) {
+        console.error('[MIGRATION 1.6.3]', e.message);
+      }
+    }
+  },
+
+  {
+    version: '1.6.4',
+    description: 'Permisos por rol para cada módulo',
+    run(db) {
+      try {
+        const ins = db.prepare(`INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)`);
+        // Por defecto todos los módulos son solo admin.
+        // module_envios mantiene acceso cajero para compatibilidad con versiones anteriores.
+        ins.run('module_gastos_roles',        'admin');
+        ins.run('module_contabilidad_roles',  'admin');
+        ins.run('barcode_enabled_roles',      'admin');
+        ins.run('module_sucursales_roles',    'admin');
+        ins.run('module_vehiculos_roles',     'admin');
+        ins.run('module_mantenimiento_roles', 'admin');
+        ins.run('module_envios_roles',        'admin,cajero');
+        ins.run('module_ncf_avanzado_roles',  'admin');
+        ins.run('fiscal_enabled_roles',       'admin');
+        console.log('[MIGRATION 1.6.4] Permisos por rol creados');
+      } catch(e) {
+        console.error('[MIGRATION 1.6.4]', e.message);
+      }
+    }
+  },
+  {
+    version: '1.6.5',
+    description: 'Índices de rendimiento y seguridad adicionales',
+    run(db) {
+      try {
+        // Índices para consultas de crédito y búsqueda de clientes
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_customers_status
+            ON customers(status) WHERE active=1;
+
+          CREATE INDEX IF NOT EXISTS idx_customers_balance
+            ON customers(balance) WHERE active=1 AND balance > 0;
+
+          CREATE INDEX IF NOT EXISTS idx_sales_customer_status
+            ON sales(customer_id, status);
+
+          CREATE INDEX IF NOT EXISTS idx_cash_user_status
+            ON cash_sessions(user_id, status);
+
+          CREATE INDEX IF NOT EXISTS idx_payments_date
+            ON payments(created_at);
+
+          CREATE INDEX IF NOT EXISTS idx_inv_movements_date
+            ON inventory_movements(created_at);
+
+          CREATE INDEX IF NOT EXISTS idx_audit_entity_ref
+            ON audit_logs(entity, entity_id);
+        `);
+        console.log('[MIGRATION 1.6.5] Índices adicionales creados');
+      } catch(e) {
+        console.error('[MIGRATION 1.6.5]', e.message);
+      }
+    }
+  },
+  {
+    version: '1.6.6',
+    description: 'Índice de auditoría por entidad y referencia',
+    run(db) {
+      try {
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_audit_entity_ref
+            ON audit_logs(entity, entity_id);
+        `);
+        console.log('[MIGRATION 1.6.6] Índice audit_entity_ref creado');
+      } catch(e) {
+        console.error('[MIGRATION 1.6.6]', e.message);
+      }
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

@@ -94,7 +94,14 @@ function printReceipt(sale, isReprint = false) {
       original_sale_id: sale.original_sale_id || null,
     };
 
-    const html = plantilla.render(saleForPlant, cfg, plantilla.opciones);
+    // Cargar estilos personalizados del superadmin para esta plantilla
+    let _estilosReal = {};
+    try {
+      const _rawEstilos = DB?.settings?.[`template_opts_${templateId}`];
+      if (_rawEstilos) _estilosReal = JSON.parse(_rawEstilos);
+    } catch {}
+    const _optsConEstilos = { ...plantilla.opciones, _estilos: _estilosReal };
+    const html = plantilla.render(saleForPlant, cfg, _optsConEstilos);
     _openPrintWindow(html, 'ticket', sale.id, isReprint);
     return;
   }

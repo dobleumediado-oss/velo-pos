@@ -4,6 +4,16 @@
 // Solo accesible por Super Admin
 // ══════════════════════════════════════════════
 
+// ── Escape HTML para evitar XSS en recibos ───
+function _esc(str) {
+  return String(str == null ? '' : str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 // ── Detección de tipo de impresora ────────────
 function detectPrinterType(printerName) {
   if (!printerName) return 'unknown';
@@ -205,10 +215,10 @@ function _termicaHeader(cfg, opts, widthMm) {
     </div>`);
   }
 
-  lines.push(`<div style="text-align:center;font-weight:700;font-size:${widthMm<=52?'11px':'13px'}">${cfg.biz_name||'Mi Negocio'}</div>`);
-  if (opts.rnc && cfg.biz_rnc) lines.push(`<div style="text-align:center">RNC: ${cfg.biz_rnc}</div>`);
-  if (cfg.biz_addr) lines.push(`<div style="text-align:center">${cfg.biz_addr}</div>`);
-  if (cfg.biz_phone) lines.push(`<div style="text-align:center">Tel: ${cfg.biz_phone}</div>`);
+  lines.push(`<div style="text-align:center;font-weight:700;font-size:${widthMm<=52?'11px':'13px'}">${_esc(cfg.biz_name||'Mi Negocio')}</div>`);
+  if (opts.rnc && cfg.biz_rnc) lines.push(`<div style="text-align:center">RNC: ${_esc(cfg.biz_rnc)}</div>`);
+  if (cfg.biz_addr) lines.push(`<div style="text-align:center">${_esc(cfg.biz_addr)}</div>`);
+  if (cfg.biz_phone) lines.push(`<div style="text-align:center">Tel: ${_esc(cfg.biz_phone)}</div>`);
   lines.push(`<div style="text-align:center">${sep}</div>`);
   return lines.join('');
 }
@@ -219,7 +229,7 @@ function _termicaItems(items, widthMm) {
   const nameW  = cols - priceW - 2;
   let html = '';
   items.forEach(i => {
-    const name  = (i.product_name || i.name || '').slice(0, nameW);
+    const name  = _esc((i.product_name || i.name || '').slice(0, nameW));
     const price = `RD$${Number(i.unit_price||0).toLocaleString('es-DO')}`;
     const total = `RD$${(Number(i.unit_price||0)*Number(i.qty||1)).toLocaleString('es-DO')}`;
     html += `<div>${name}</div>`;
@@ -239,14 +249,21 @@ function renderTermica(sale, cfg, opts, widthMm = 76) {
   const isCotizacion = sale.type === 'cotizacion';
   const isDevolucion = sale.type === 'devolucion';
   const ncf     = _getNcf(sale);
-  const fs      = widthMm <= 52 ? '10.5px' : '11.5px';
+  // Opciones de estilo personalizables (sobrescriben defaults)
+  const estilos = opts._estilos || {};
+  const fs      = estilos.fontSize    || (widthMm <= 52 ? '10.5px' : '11.5px');
+  const mt      = estilos.marginTop   || '2mm';
+  const mb      = estilos.marginBottom|| '4mm';
+  const ml      = estilos.marginLeft  || '2mm';
+  const mr      = estilos.marginRight || '2mm';
+  const lh      = estilos.lineHeight  || '1.45';
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
 <style>
-  @page { size: ${widthMm}mm auto; margin: 2mm 2mm 4mm 2mm; }
+  @page { size: ${widthMm}mm auto; margin: ${mt} ${mr} ${mb} ${ml}; }
   * { margin:0; padding:0; box-sizing:border-box; }
   body { width:${widthMm-4}mm; font-family:'Courier New',monospace;
-         font-size:${fs}; line-height:1.45; color:#000; }
+         font-size:${fs}; line-height:${lh}; color:#000; }
   img { display:block; margin:0 auto; }
 </style></head><body>
   ${_termicaHeader(cfg, opts, widthMm)}
@@ -260,13 +277,13 @@ function renderTermica(sale, cfg, opts, widthMm = 76) {
   </div>
   <div style="display:flex;justify-content:space-between">
     <span>Hora: ${sale.time}</span>
-    <span>Cajero: ${(sale.cajero||'').split(' ')[0]}</span>
+    <span>Cajero: ${_esc((sale.cajero||'').split(' ')[0])}</span>
   </div>
   <div style="display:flex;justify-content:space-between">
     <span>Cliente:</span>
-    <span>${sale.customer_name||'Consumidor Final'}</span>
+    <span>${_esc(sale.customer_name||'Consumidor Final')}</span>
   </div>
-  ${opts.cedula && sale.customer_rnc ? `<div style="display:flex;justify-content:space-between"><span>Cédula/RNC:</span><span>${sale.customer_rnc}</span></div>` : ''}
+  ${opts.cedula && sale.customer_rnc ? `<div style="display:flex;justify-content:space-between"><span>Cédula/RNC:</span><span>${_esc(sale.customer_rnc)}</span></div>` : ''}
   <div style="text-align:center">${sep}</div>
   <div style="display:flex;justify-content:space-between;font-weight:700">
     <span>DESCRIPCIÓN</span><span>TOTAL</span>
@@ -308,12 +325,19 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
   const isDevolucion = sale.type === 'devolucion';
   const ncf = _getNcf(sale);
 
+  const _es2 = opts._estilos || {};
+  const _fs2 = _es2.fontSize    || '11.5px';
+  const _mt2 = _es2.marginTop   || '2mm';
+  const _mb2 = _es2.marginBottom|| '4mm';
+  const _ml2 = _es2.marginLeft  || '2mm';
+  const _mr2 = _es2.marginRight || '2mm';
+  const _lh2 = _es2.lineHeight  || '1.5';
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
 <style>
-  @page { size: ${widthMm}mm auto; margin: 2mm 2mm 4mm 2mm; }
+  @page { size: ${widthMm}mm auto; margin: ${_mt2} ${_mr2} ${_mb2} ${_ml2}; }
   * { margin:0; padding:0; box-sizing:border-box; }
   body { width:${widthMm-4}mm; font-family:'Courier New',monospace;
-         font-size:11.5px; line-height:1.5; color:#000; }
+         font-size:${_fs2}; line-height:${_lh2}; color:#000; }
   .title { text-align:center; font-size:15px; font-weight:900;
            letter-spacing:2px; margin:4px 0; }
   .sep { border:none; border-top:1px solid #000; margin:4px 0; }
@@ -325,9 +349,9 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
   img { display:block; margin:0 auto; }
 </style></head><body>
   ${opts.logo && cfg.biz_logo ? `<img src="${cfg.biz_logo}" style="max-width:${widthMm-4}mm;max-height:14mm;filter:grayscale(100%) contrast(150%);margin-bottom:4px"/>` : ''}
-  <div class="title">${cfg.biz_name||'Mi Negocio'}</div>
-  ${opts.rnc && cfg.biz_rnc ? `<div class="center" style="font-size:10px">RNC: ${cfg.biz_rnc}</div>` : ''}
-  ${cfg.biz_addr ? `<div class="center" style="font-size:10px">${cfg.biz_addr} · Tel: ${cfg.biz_phone||''}</div>` : ''}
+  <div class="title">${_esc(cfg.biz_name||'Mi Negocio')}</div>
+  ${opts.rnc && cfg.biz_rnc ? `<div class="center" style="font-size:10px">RNC: ${_esc(cfg.biz_rnc)}</div>` : ''}
+  ${cfg.biz_addr ? `<div class="center" style="font-size:10px">${_esc(cfg.biz_addr)} · Tel: ${_esc(cfg.biz_phone||'')}</div>` : ''}
   <hr class="sep-d"/>
   <div class="center" style="font-size:13px;font-weight:700;letter-spacing:1px">
     ◆ ${_docLabel(sale)} ◆
@@ -336,11 +360,11 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
   <hr class="sep"/>
   <div class="row"><span>No.:</span><span style="font-weight:700">${String(sale.id).padStart(5,'0')}</span></div>
   <div class="row"><span>Fecha:</span><span>${sale.date} ${sale.time}</span></div>
-  <div class="row"><span>Cliente:</span><span>${sale.customer_name||'Consumidor Final'}</span></div>
-  <div class="row"><span>Cajero:</span><span>${sale.cajero||''}</span></div>
+  <div class="row"><span>Cliente:</span><span>${_esc(sale.customer_name||'Consumidor Final')}</span></div>
+  <div class="row"><span>Cajero:</span><span>${_esc(sale.cajero||'')}</span></div>
   <hr class="sep-d"/>
   ${(sale.items||[]).map(i => `
-    <div style="font-weight:600">${i.product_name||i.name}</div>
+    <div style="font-weight:600">${_esc(i.product_name||i.name)}</div>
     <div class="row" style="padding-left:6px;color:#333;font-size:10.5px">
       <span>${i.qty} × RD$${Number(i.unit_price||0).toLocaleString('es-DO')}</span>
       <span>RD$${(Number(i.unit_price||0)*Number(i.qty||1)).toLocaleString('es-DO')}</span>
@@ -378,12 +402,12 @@ function renderTermicaMinimal(sale, cfg, opts, widthMm = 76) {
   body { width:${widthMm-4}mm; font-family:'Courier New',monospace;
          font-size:10.5px; line-height:1.4; color:#000; }
 </style></head><body>
-  <div style="text-align:center;font-size:12px;font-weight:700;margin-bottom:2px">${cfg.biz_name||'Mi Negocio'}</div>
+  <div style="text-align:center;font-size:12px;font-weight:700;margin-bottom:2px">${_esc(cfg.biz_name||'Mi Negocio')}</div>
   <div style="text-align:center;font-size:9px;margin-bottom:4px">${sale.date} ${sale.time} · #${String(sale.id).padStart(5,'0')}</div>
   <div style="border-top:1px dashed #000;margin:3px 0"></div>
   ${(sale.items||[]).map(i => `
     <div style="display:flex;justify-content:space-between">
-      <span>${i.product_name||i.name} x${i.qty}</span>
+      <span>${_esc(i.product_name||i.name)} x${i.qty}</span>
       <span>RD$${(Number(i.unit_price||0)*Number(i.qty||1)).toLocaleString('es-DO')}</span>
     </div>`).join('')}
   <div style="border-top:1px dashed #000;margin:3px 0"></div>
@@ -398,13 +422,19 @@ function renderTermicaMinimal(sale, cfg, opts, widthMm = 76) {
 
 // Plantilla 4 — Carta Recibo Simple
 function renderCartaRecibo(sale, cfg, opts) {
+  const _ec = opts._estilos || {};
+  const _fsc = _ec.fontSize    || '11pt';
+  const _mtc = _ec.marginTop   || '15mm';
+  const _mbc = _ec.marginBottom|| '15mm';
+  const _mlc = _ec.marginLeft  || '20mm';
+  const _mrc = _ec.marginRight || '20mm';
   const isFactura    = sale.type === 'factura';
   const isCotizacion = sale.type === 'cotizacion';
   const isDevolucion = sale.type === 'devolucion';
   const ncf = _getNcf(sale);
   const rows = (sale.items||[]).map(i => `
     <tr>
-      <td>${i.product_name||i.name}</td>
+      <td>${_esc(i.product_name||i.name)}</td>
       <td style="text-align:center">${i.qty}</td>
       <td style="text-align:right">RD$${Number(i.unit_price||0).toLocaleString('es-DO')}</td>
       <td style="text-align:right">RD$${(Number(i.unit_price||0)*Number(i.qty||1)).toLocaleString('es-DO')}</td>
@@ -412,7 +442,7 @@ function renderCartaRecibo(sale, cfg, opts) {
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
 <style>
-  @page { size: letter; margin: 15mm 20mm; }
+  @page { size: letter; margin: ${_mtc} ${_mrc} ${_mbc} ${_mlc}; }
   * { margin:0; padding:0; box-sizing:border-box; }
   body { font-family:Arial,sans-serif; font-size:12px; color:#000; }
   h1 { font-size:20px; margin-bottom:2px; }
@@ -432,21 +462,21 @@ function renderCartaRecibo(sale, cfg, opts) {
   <div class="header">
     <div class="biz">
       ${opts.logo && cfg.biz_logo ? `<img src="${cfg.biz_logo}" style="display:block;max-height:55px;max-width:180px;margin:0 auto 8px auto;filter:grayscale(100%) contrast(150%)"/><br/>` : ''}
-      <strong style="font-size:16px">${cfg.biz_name||'Mi Negocio'}</strong><br/>
-      ${opts.rnc && cfg.biz_rnc ? `RNC: ${cfg.biz_rnc}<br/>` : ''}
-      ${cfg.biz_addr||''}<br/>
-      Tel: ${cfg.biz_phone||''}
+      <strong style="font-size:16px">${_esc(cfg.biz_name||'Mi Negocio')}</strong><br/>
+      ${opts.rnc && cfg.biz_rnc ? `RNC: ${_esc(cfg.biz_rnc)}<br/>` : ''}
+      ${_esc(cfg.biz_addr||'')}<br/>
+      Tel: ${_esc(cfg.biz_phone||'')}
     </div>
     <div class="doc">
       <div style="font-size:13px;color:#666">${_docLabel(sale)}</div>
       <div class="num">#${String(sale.id).padStart(5,'0')}</div>
       <div>${sale.date}</div>
-      <div>Cajero: ${sale.cajero||''}</div>
+      <div>Cajero: ${_esc(sale.cajero||'')}</div>
     </div>
   </div>
   <div style="background:#f9fafb;padding:8px 12px;border-radius:4px;margin-bottom:10px">
-    <strong>Cliente:</strong> ${sale.customer_name||'Consumidor Final'}
-    ${opts.cedula && sale.customer_rnc ? ` · Cédula/RNC: ${sale.customer_rnc}` : ''}
+    <strong>Cliente:</strong> ${_esc(sale.customer_name||'Consumidor Final')}
+    ${opts.cedula && sale.customer_rnc ? ` · Cédula/RNC: ${_esc(sale.customer_rnc)}` : ''}
   </div>
   <table>
     <thead><tr><th>Descripción</th><th style="text-align:center">Cant.</th>
@@ -475,13 +505,19 @@ function renderCartaRecibo(sale, cfg, opts) {
 
 // Plantilla 5 — Carta Formal
 function renderCartaFormal(sale, cfg, opts) {
+  const _ef = opts._estilos || {};
+  const _fsf = _ef.fontSize    || '11pt';
+  const _mtf = _ef.marginTop   || '15mm';
+  const _mbf = _ef.marginBottom|| '15mm';
+  const _mlf = _ef.marginLeft  || '20mm';
+  const _mrf = _ef.marginRight || '20mm';
   const isFactura    = sale.type === 'factura';
   const isCotizacion = sale.type === 'cotizacion';
   const isDevolucion = sale.type === 'devolucion';
   const ncf = _getNcf(sale);
   const rows = (sale.items||[]).map((i,idx) => `
     <tr style="${idx%2===0?'background:#f9fafb':''}">
-      <td style="padding:8px 12px">${i.product_name||i.name}</td>
+      <td style="padding:8px 12px">${_esc(i.product_name||i.name)}</td>
       <td style="text-align:center;padding:8px">${i.qty}</td>
       <td style="text-align:right;padding:8px 12px">RD$${Number(i.unit_price||0).toLocaleString('es-DO')}</td>
       <td style="text-align:right;padding:8px 12px;font-weight:600">RD$${(Number(i.unit_price||0)*Number(i.qty||1)).toLocaleString('es-DO')}</td>
@@ -515,9 +551,9 @@ function renderCartaFormal(sale, cfg, opts) {
   <div class="header-bar">
     <div>
       ${opts.logo && cfg.biz_logo ? `<img src="${cfg.biz_logo}" style="display:block;max-height:45px;max-width:160px;margin:0 0 4px 0;filter:brightness(10)"/><br/>` : ''}
-      <div class="biz-name">${cfg.biz_name||'Mi Negocio'}</div>
+      <div class="biz-name">${_esc(cfg.biz_name||'Mi Negocio')}</div>
       <div style="font-size:11px;opacity:.8">
-        ${opts.rnc && cfg.biz_rnc ? `RNC: ${cfg.biz_rnc} · ` : ''}${cfg.biz_addr||''} · ${cfg.biz_phone||''}
+        ${opts.rnc && cfg.biz_rnc ? `RNC: ${_esc(cfg.biz_rnc)} · ` : ''}${_esc(cfg.biz_addr||'')} · ${_esc(cfg.biz_phone||'')}
       </div>
     </div>
     <div style="text-align:right">
@@ -529,13 +565,13 @@ function renderCartaFormal(sale, cfg, opts) {
   <div class="info-grid">
     <div class="info-box">
       <label>Cliente</label>
-      <strong>${sale.customer_name||'Consumidor Final'}</strong>
-      ${opts.cedula && sale.customer_rnc ? `<br/><span style="font-size:11px;color:#666">RNC/Cédula: ${sale.customer_rnc}</span>` : ''}
+      <strong>${_esc(sale.customer_name||'Consumidor Final')}</strong>
+      ${opts.cedula && sale.customer_rnc ? `<br/><span style="font-size:11px;color:#666">RNC/Cédula: ${_esc(sale.customer_rnc)}</span>` : ''}
     </div>
     <div class="info-box">
       <label>Detalles</label>
       <div>Fecha: <strong>${sale.date}</strong></div>
-      <div>Cajero: ${sale.cajero||''}</div>
+      <div>Cajero: ${_esc(sale.cajero||'')}</div>
       <div>Pago: ${(sale.payment_method||'efectivo').toUpperCase()}</div>
     </div>
   </div>
@@ -566,13 +602,19 @@ function renderCartaFormal(sale, cfg, opts) {
 
 // Plantilla 6 — NCF Dominicana
 function renderCartaNCF(sale, cfg, opts) {
+  const _en = opts._estilos || {};
+  const _fsn = _en.fontSize    || '10pt';
+  const _mtn = _en.marginTop   || '10mm';
+  const _mbn = _en.marginBottom|| '10mm';
+  const _mln = _en.marginLeft  || '15mm';
+  const _mrn = _en.marginRight || '15mm';
   const isFactura    = sale.type === 'factura';
   const isCotizacion = sale.type === 'cotizacion';
   const isDevolucion = sale.type === 'devolucion';
   const ncf = _getNcf(sale);
   const rows = (sale.items||[]).map(i => `
     <tr>
-      <td style="padding:7px 10px">${i.product_name||i.name}</td>
+      <td style="padding:7px 10px">${_esc(i.product_name||i.name)}</td>
       <td style="text-align:center;padding:7px">${i.qty}</td>
       <td style="text-align:right;padding:7px 10px">RD$${Number(i.unit_price||0).toLocaleString('es-DO')}</td>
       <td style="text-align:right;padding:7px 10px">RD$${(Number(i.unit_price||0)*Number(i.qty||1)).toLocaleString('es-DO')}</td>
@@ -580,7 +622,7 @@ function renderCartaNCF(sale, cfg, opts) {
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
 <style>
-  @page { size: letter; margin: 10mm 15mm; }
+  @page { size: letter; margin: ${_mtn} ${_mrn} ${_mbn} ${_mln}; }
   * { margin:0; padding:0; box-sizing:border-box; }
   body { font-family:Arial,sans-serif; font-size:11px; color:#111; }
   .ncf-box { border:3px solid #1a1a1a; border-radius:6px; padding:8px 14px;
@@ -612,21 +654,21 @@ function renderCartaNCF(sale, cfg, opts) {
   <div class="header">
     <div>
       ${opts.logo && cfg.biz_logo ? `<img src="${cfg.biz_logo}" style="display:block;max-height:50px;max-width:180px;margin:0 0 4px 0;filter:grayscale(100%) contrast(150%)"/><br/>` : ''}
-      <strong style="font-size:14px">${cfg.biz_name||'Mi Negocio'}</strong><br/>
-      RNC: <strong>${cfg.biz_rnc||'---'}</strong><br/>
-      ${cfg.biz_addr||''}<br/>Tel: ${cfg.biz_phone||''}
+      <strong style="font-size:14px">${_esc(cfg.biz_name||'Mi Negocio')}</strong><br/>
+      RNC: <strong>${_esc(cfg.biz_rnc||'---')}</strong><br/>
+      ${_esc(cfg.biz_addr||'')}<br/>Tel: ${_esc(cfg.biz_phone||'')}
     </div>
     <div style="text-align:right">
       <div style="font-size:11px;color:#666">Factura No.</div>
       <div style="font-size:20px;font-weight:700">#${String(sale.id).padStart(5,'0')}</div>
-      <div>Cajero: ${sale.cajero||''}</div>
+      <div>Cajero: ${_esc(sale.cajero||'')}</div>
       <div>Método: ${(sale.payment_method||'efectivo').toUpperCase()}</div>
     </div>
   </div>
 
   <div style="background:#f3f4f6;padding:7px 12px;border-radius:4px;margin-bottom:8px">
-    <strong>Cliente:</strong> ${sale.customer_name||'Consumidor Final'}
-    ${opts.cedula && sale.customer_rnc ? ` &nbsp;|&nbsp; <strong>RNC/Cédula:</strong> ${sale.customer_rnc}` : ''}
+    <strong>Cliente:</strong> ${_esc(sale.customer_name||'Consumidor Final')}
+    ${opts.cedula && sale.customer_rnc ? ` &nbsp;|&nbsp; <strong>RNC/Cédula:</strong> ${_esc(sale.customer_rnc)}` : ''}
   </div>
 
   <table>
@@ -663,7 +705,7 @@ function renderMediaCarta(sale, cfg, opts) {
   const ncf = _getNcf(sale);
   const rows = (sale.items||[]).map(i => `
     <tr>
-      <td style="padding:5px 8px;font-size:10px">${i.product_name||i.name}</td>
+      <td style="padding:5px 8px;font-size:10px">${_esc(i.product_name||i.name)}</td>
       <td style="text-align:center;padding:5px;font-size:10px">${i.qty}</td>
       <td style="text-align:right;padding:5px 8px;font-size:10px">RD$${(Number(i.unit_price||0)*Number(i.qty||1)).toLocaleString('es-DO')}</td>
     </tr>`).join('');
@@ -683,9 +725,9 @@ function renderMediaCarta(sale, cfg, opts) {
   <div class="header">
     <div>
       ${opts.logo && cfg.biz_logo ? `<img src="${cfg.biz_logo}" style="display:block;max-height:35px;max-width:140px;margin:0 0 3px 0;filter:grayscale(100%) contrast(150%)"/><br/>` : ''}
-      <strong style="font-size:12px">${cfg.biz_name||'Mi Negocio'}</strong><br/>
-      ${opts.rnc && cfg.biz_rnc ? `RNC: ${cfg.biz_rnc}<br/>` : ''}
-      ${cfg.biz_addr||''} · Tel: ${cfg.biz_phone||''}
+      <strong style="font-size:12px">${_esc(cfg.biz_name||'Mi Negocio')}</strong><br/>
+      ${opts.rnc && cfg.biz_rnc ? `RNC: ${_esc(cfg.biz_rnc)}<br/>` : ''}
+      ${_esc(cfg.biz_addr||'')} · Tel: ${_esc(cfg.biz_phone||'')}
     </div>
     <div style="text-align:right">
       <strong style="font-size:14px">#${String(sale.id).padStart(5,'0')}</strong><br/>
@@ -694,7 +736,7 @@ function renderMediaCarta(sale, cfg, opts) {
     </div>
   </div>
   <div style="background:#f3f4f6;padding:4px 8px;margin-bottom:6px;border-radius:3px;font-size:10px">
-    Cliente: <strong>${sale.customer_name||'Consumidor Final'}</strong>
+    Cliente: <strong>${_esc(sale.customer_name||'Consumidor Final')}</strong>
   </div>
   <table>
     <thead><tr><th>Producto</th><th style="text-align:center">Q</th><th style="text-align:right">Total</th></tr></thead>

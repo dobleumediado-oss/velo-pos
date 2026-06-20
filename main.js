@@ -104,7 +104,8 @@ const {
   initDB, authRepo, settingsRepo, usersRepo,
   productsRepo, customersRepo, cashRepo,
   salesRepo, returnsRepo, reportsRepo, suppliersRepo, purchasesRepo, audit,
-  expensesRepo, branchesRepo, vehiclesRepo, maintenanceRepo, deliveriesRepo, ncfRepo
+  expensesRepo, branchesRepo, vehiclesRepo, maintenanceRepo, deliveriesRepo, ncfRepo,
+  financialAccountsRepo, accountingRepo
 } = require('./database');
 
 const {
@@ -449,7 +450,27 @@ ipcMain.handle('settings:getAll', async () => {
   return settingsRepo.getAll();
 });
 
-ipcMain.handle('settings:set', async (_, { key, value }) => {
+ipcMain.handle('settings:set', async (_, { key, value, requestUserId }) => {
+  // Claves que solo puede cambiar el superadmin
+  const SUPERADMIN_KEYS = /^(module_|barcode_enabled$|fiscal_enabled$|.*_roles$|license_|master_|multi_negocio)/;
+  // Claves que requieren al menos rol admin
+  const ADMIN_KEYS = /^(biz_|tax_pct$|receipt_msg$|pos_|print_template$|printer|biz_logo$)/;
+
+  const needsSA    = SUPERADMIN_KEYS.test(key);
+  const needsAdmin = !needsSA && ADMIN_KEYS.test(key);
+
+  if (needsSA || needsAdmin) {
+    if (!requestUserId) return { ok: false, error: 'Se requiere autenticación para cambiar esta configuración' };
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !reqUser.active) return { ok: false, error: 'Usuario no encontrado o inactivo' };
+    if (needsSA && reqUser.role !== 'superadmin') {
+      return { ok: false, error: 'Solo el superadmin puede modificar este parámetro' };
+    }
+    if (needsAdmin && !['admin', 'superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Solo administradores pueden modificar esta configuración' };
+    }
+  }
+
   settingsRepo.set(key, value);
   return { ok: true };
 });
@@ -953,10 +974,17 @@ ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, jobTyp
     });
 
     await new Promise((resolve, reject) => {
+      const loadTimeout = setTimeout(() => {
+        printWin.destroy();
+        reject(new Error('Tiempo agotado cargando el documento de impresión'));
+      }, 12000);
+      printWin.webContents.once('did-finish-load', () => { clearTimeout(loadTimeout); resolve(); });
+      printWin.webContents.once('did-fail-load', (_, __, errDesc) => {
+        clearTimeout(loadTimeout);
+        printWin.destroy();
+        reject(new Error(errDesc || 'No se pudo cargar el documento'));
+      });
       printWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
-      printWin.webContents.once('did-finish-load', resolve);
-      printWin.webContents.once('did-fail-load', (_, __, errDesc) =>
-        reject(new Error(errDesc || 'No se pudo cargar el documento')));
     });
 
     // Carta necesita más tiempo para renderizar CSS/tablas/logo que una térmica simple
@@ -3203,4 +3231,354 @@ ipcMain.handle('shell:openExternal', async (_, { url }) => {
   } catch (e) {
     return { ok: false, error: e.message };
   }
+});
+
+// ══════════════════════════════════════════════
+// IPC — CUENTAS FINANCIERAS (BANCOS)
+// ══════════════════════════════════════════════
+
+function _normalizeFinAcct(a) {
+  if (!a) return null;
+  return { ...a, balance: a.current_balance || 0, is_active: a.active === 1 || a.active === true };
+}
+
+function _normalizeFinMov(m) {
+  if (!m) return null;
+  // Normalize DB types back to UI-friendly names for display
+  const typeDisplayMap = {
+    deposito: 'ingreso', retiro: 'egreso', transferencia_in: 'transferencia',
+    transferencia_out: 'transferencia', venta: 'ingreso', gasto: 'egreso',
+    abono_recibido: 'ingreso', pago_proveedor: 'egreso', apertura: 'ingreso', ajuste: 'ajuste',
+  };
+  const outflows = ['retiro','transferencia_out','gasto','pago_proveedor'];
+  return {
+    ...m,
+    type:         typeDisplayMap[m.type] || m.type,
+    db_type:      m.type,
+    reference:    m.notes || m.cancel_reason || '',
+    is_outflow:   outflows.includes(m.type),
+  };
+}
+
+ipcMain.handle('financial:getAll', async () => {
+  try {
+    return { ok: true, data: financialAccountsRepo.getAll().map(_normalizeFinAcct) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('financial:getById', async (_, { id }) => {
+  try {
+    return { ok: true, data: _normalizeFinAcct(financialAccountsRepo.getById(id)) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('financial:create', async (_, { data, requestUserId }) => {
+  try {
+    const id = financialAccountsRepo.create({ ...data, userId: requestUserId });
+    audit.log(requestUserId, 'financial_account_create', `Cuenta creada: ${data.name}`);
+    return { ok: true, data: { id } };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('financial:update', async (_, { id, data, requestUserId }) => {
+  try {
+    financialAccountsRepo.update(id, data);
+    audit.log(requestUserId, 'financial_account_update', `Cuenta actualizada: ${id}`);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('financial:toggleActive', async (_, { id, active, requestUserId }) => {
+  try {
+    financialAccountsRepo.toggleActive(id, active);
+    audit.log(requestUserId, 'financial_account_toggle', `Cuenta ${active ? 'activada' : 'desactivada'}: ${id}`);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('financial:getMovements', async (_, { accountId, from, to, limit }) => {
+  try {
+    const rows = financialAccountsRepo.getMovements(accountId, { from, to, limit });
+    return { ok: true, data: rows.map(_normalizeFinMov) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('financial:addMovement', async (_, { data, requestUserId }) => {
+  try {
+    // Map UI-friendly type names to DB enum values
+    const typeMap = { ingreso: 'deposito', egreso: 'retiro' };
+    const mov = financialAccountsRepo.addMovement({
+      accountId:        data.account_id,
+      type:             typeMap[data.type] || data.type,
+      amount:           data.type === 'egreso' ? -Math.abs(data.amount) : Math.abs(data.amount),
+      description:      data.description,
+      referenceType:    data.reference_type || '',
+      referenceId:      data.reference_id   || null,
+      relatedAccountId: data.related_account_id || null,
+      method:           data.method || 'efectivo',
+      notes:            data.notes  || '',
+      userId:           requestUserId,
+    });
+    audit.log(requestUserId, 'financial_movement', `Movimiento: ${data.type} ${data.amount} en cuenta ${data.account_id}`);
+    return { ok: true, data: mov };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('financial:transfer', async (_, { data, requestUserId }) => {
+  try {
+    const result = financialAccountsRepo.transfer({
+      fromId:      data.from_account_id,
+      toId:        data.to_account_id,
+      amount:      data.amount,
+      description: data.description,
+      notes:       data.reference || data.notes || '',
+      userId:      requestUserId,
+    });
+    audit.log(requestUserId, 'financial_transfer', `Transferencia ${data.amount} de cuenta ${data.from_account_id} a ${data.to_account_id}`);
+    return { ok: true, data: result };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('financial:cancelMovement', async (_, { id, reason, requestUserId }) => {
+  try {
+    financialAccountsRepo.cancelMovement(id, requestUserId, reason);
+    audit.log(requestUserId, 'financial_movement_cancel', `Movimiento anulado: ${id}. Razón: ${reason}`);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('financial:getSummary', async () => {
+  try {
+    const s   = financialAccountsRepo.getSummary();
+    const db  = require('./database').getDB();
+    const now = new Date();
+    const mo  = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+    const incomeMonth  = db.prepare(`SELECT COALESCE(SUM(amount),0) as v FROM financial_movements WHERE type IN ('deposito','transferencia_in','venta','abono_recibido') AND strftime('%Y-%m',created_at)=? AND status='activo'`).get(mo)?.v || 0;
+    const expenseMonth = db.prepare(`SELECT COALESCE(SUM(amount),0) as v FROM financial_movements WHERE type IN ('retiro','transferencia_out','gasto','pago_proveedor') AND strftime('%Y-%m',created_at)=? AND status='activo'`).get(mo)?.v || 0;
+    return { ok: true, data: {
+      total_active:         s.total  || 0,
+      total_caja:           s.byCaja || 0,
+      total_banco:          s.byBank || 0,
+      total_income_month:   incomeMonth,
+      total_expenses_month: expenseMonth,
+    }};
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// ══════════════════════════════════════════════
+// IPC — CONTABILIDAD
+// ══════════════════════════════════════════════
+
+ipcMain.handle('accounting:getAccounts', async () => {
+  try {
+    return { ok: true, data: accountingRepo.getAccounts() };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('accounting:getAccountByCode', async (_, { code }) => {
+  try {
+    return { ok: true, data: accountingRepo.getAccountByCode(code) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('accounting:createAccount', async (_, { data, requestUserId }) => {
+  try {
+    const account = accountingRepo.createAccount(data);
+    audit.log(requestUserId, 'accounting_account_create', `Cuenta contable creada: ${data.code} - ${data.name}`);
+    return { ok: true, data: account };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('accounting:updateAccount', async (_, { id, data, requestUserId }) => {
+  try {
+    accountingRepo.updateAccount(id, data);
+    audit.log(requestUserId, 'accounting_account_update', `Cuenta contable actualizada: ${id}`);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('accounting:deleteAccount', async (_, { id, requestUserId }) => {
+  try {
+    accountingRepo.deleteAccount(id);
+    audit.log(requestUserId, 'accounting_account_delete', `Cuenta contable eliminada: ${id}`);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('accounting:getConfig', async () => {
+  try {
+    return { ok: true, data: accountingRepo.getConfig() };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('accounting:setConfig', async (_, { key, value, requestUserId }) => {
+  try {
+    accountingRepo.setConfig(key, value);
+    audit.log(requestUserId, 'accounting_config_set', `Config contable: ${key}=${value}`);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('accounting:createEntry', async (_, { data, requestUserId }) => {
+  try {
+    // Translate UI field names → repo field names
+    const repoData = {
+      date:          data.date,
+      concept:       data.description || data.concept,
+      reference:     data.reference   || '',
+      source_module: data.type        || data.source_module || 'manual',
+      source_id:     data.source_id   || null,
+      lines:         data.lines,
+      notes:         data.notes       || '',
+      userId:        data.created_by  || requestUserId,
+      status:        data.status      || 'confirmado',
+    };
+    const entry = accountingRepo.createEntry(repoData);
+    audit.log(requestUserId, 'accounting_entry_create', `Asiento creado: ${entry.number}`);
+    return { ok: true, data: entry };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('accounting:getEntries', async (_, { from, to, type, source_module, status, limit } = {}) => {
+  try {
+    return { ok: true, data: accountingRepo.getEntries({ from, to, source_module: source_module || type, status, limit }) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('accounting:getEntryById', async (_, { id }) => {
+  try {
+    return { ok: true, data: accountingRepo.getEntryById(id) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('accounting:reverseEntry', async (_, { id, reason, requestUserId }) => {
+  try {
+    const reversed = accountingRepo.reverseEntry(id, requestUserId, reason);
+    audit.log(requestUserId, 'accounting_entry_reverse', `Asiento anulado: ${id}. Razón: ${reason}`);
+    return { ok: true, data: reversed };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('accounting:getLedger', async (_, { accountId, from, to } = {}) => {
+  try {
+    const rows = accountingRepo.getLedger({ accountId, from, to });
+    // Build enriched ledger with running balance
+    let running = 0;
+    const lines = rows.map(r => {
+      running += (r.debit || 0) - (r.credit || 0);
+      return {
+        date:            r.date,
+        entry_number:    r.number,
+        description:     r.concept || r.description || '',
+        debit:           r.debit   || 0,
+        credit:          r.credit  || 0,
+        running_balance: running,
+      };
+    });
+    const totalDebit  = rows.reduce((s, r) => s + (r.debit  || 0), 0);
+    const totalCredit = rows.reduce((s, r) => s + (r.credit || 0), 0);
+    const first       = rows[0];
+    return { ok: true, data: {
+      account:         { id: accountId, code: first?.code, name: first?.account_name },
+      lines,
+      total_debit:     totalDebit,
+      total_credit:    totalCredit,
+      closing_balance: running,
+    }};
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('accounting:getTrialBalance', async (_, { asOf, from, to } = {}) => {
+  try {
+    const rows = accountingRepo.getTrialBalance({ from, to: asOf || to });
+    const data = rows.map(r => ({
+      code:   r.code,
+      name:   r.name,
+      type:   r.type,
+      debit:  r.net_debit  || 0,
+      credit: r.net_credit || 0,
+    }));
+    return { ok: true, data };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('accounting:getIncomeStatement', async (_, { from, to } = {}) => {
+  try {
+    const rpt = accountingRepo.getIncomeStatement({ from, to });
+    return { ok: true, data: {
+      revenue_items:   (rpt.revenues || []).map(r => ({ name: r.name, amount: r.net })),
+      cogs_items:      (rpt.costs    || []).map(r => ({ name: r.name, amount: r.net })),
+      expense_items:   (rpt.expenses || []).map(r => ({ name: r.name, amount: r.net })),
+      total_revenue:   rpt.totalRev   || 0,
+      total_cogs:      rpt.totalCost  || 0,
+      total_expenses:  rpt.totalExp   || 0,
+      gross_profit:    rpt.grossProfit|| 0,
+      net_income:      rpt.netIncome  || 0,
+    }};
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('accounting:getBalanceSheet', async (_, { asOf, to } = {}) => {
+  try {
+    const rpt = accountingRepo.getBalanceSheet({ to: asOf || to });
+    return { ok: true, data: {
+      asset_items:       (rpt.assets      || []).map(r => ({ code: r.code, name: r.name, balance: r.net })),
+      liability_items:   (rpt.liabilities || []).map(r => ({ code: r.code, name: r.name, balance: r.net })),
+      equity_items:      (rpt.equity      || []).map(r => ({ code: r.code, name: r.name, balance: r.net })),
+      total_assets:      rpt.totalAssets || 0,
+      total_liabilities: rpt.totalLiab   || 0,
+      total_equity:      rpt.totalEquity || 0,
+    }};
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('accounting:getDashboardStats', async () => {
+  try {
+    return { ok: true, data: accountingRepo.getDashboardStats() };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) => {
+  try {
+    // Obtener ventas no vinculadas a asientos contables y generar asientos retroactivos
+    const db = require('./database').getDB();
+    const sales = db.prepare(`
+      SELECT s.* FROM sales s
+      WHERE s.status = 'completed'
+      AND NOT EXISTS (
+        SELECT 1 FROM accounting_entries ae WHERE ae.ref_type = 'sale' AND ae.ref_id = s.id
+      )
+      ORDER BY s.created_at ASC
+      LIMIT 500
+    `).all();
+
+    let created = 0;
+    for (const sale of sales) {
+      try {
+        accountingRepo.generateSaleEntry(sale.id);
+        created++;
+      } catch (_) {}
+    }
+
+    // Gastos pagados no vinculados
+    const expenses = db.prepare(`
+      SELECT e.* FROM expenses e
+      WHERE e.status = 'pagado'
+      AND NOT EXISTS (
+        SELECT 1 FROM accounting_entries ae WHERE ae.ref_type = 'expense' AND ae.ref_id = e.id
+      )
+      ORDER BY e.created_at ASC
+      LIMIT 500
+    `).all();
+
+    for (const exp of expenses) {
+      try {
+        accountingRepo.generateExpenseEntry(exp.id);
+        created++;
+      } catch (_) {}
+    }
+
+    audit.log(requestUserId || 0, 'accounting_sync_historical', `Sincronización histórica: ${created} asientos generados`);
+    return { ok: true, data: { created } };
+  } catch (e) { return { ok: false, error: e.message }; }
 });

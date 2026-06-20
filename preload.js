@@ -264,4 +264,39 @@ contextBridge.exposeInMainWorld('api', {
     getLog:     (d) => ipcRenderer.invoke('ecf:getLog',     d),
   },
 
+  // ── Cuentas Financieras (Bancos) ─────────────
+  financial: {
+    getAll:          ()  => ipcRenderer.invoke('financial:getAll'),
+    getById:         (d) => ipcRenderer.invoke('financial:getById',        d),
+    create:          (d) => ipcRenderer.invoke('financial:create',         d),
+    update:          (d) => ipcRenderer.invoke('financial:update',         d),
+    toggleActive:    (d) => ipcRenderer.invoke('financial:toggleActive',   d),
+    getMovements:    (d) => ipcRenderer.invoke('financial:getMovements',   d),
+    addMovement:     (d) => ipcRenderer.invoke('financial:addMovement',    d),
+    transfer:        (d) => ipcRenderer.invoke('financial:transfer',       d),
+    cancelMovement:  (d) => ipcRenderer.invoke('financial:cancelMovement', d),
+    getSummary:      ()  => ipcRenderer.invoke('financial:getSummary'),
+  },
+
+  // ── Contabilidad ──────────────────────────────
+  accounting: {
+    getAccounts:        ()  => ipcRenderer.invoke('accounting:getAccounts'),
+    getAccountByCode:   (d) => ipcRenderer.invoke('accounting:getAccountByCode',   d),
+    createAccount:      (d) => ipcRenderer.invoke('accounting:createAccount',      d),
+    updateAccount:      (d) => ipcRenderer.invoke('accounting:updateAccount',      d),
+    deleteAccount:      (d) => ipcRenderer.invoke('accounting:deleteAccount',      d),
+    getConfig:          ()  => ipcRenderer.invoke('accounting:getConfig'),
+    setConfig:          (d) => ipcRenderer.invoke('accounting:setConfig',          d),
+    createEntry:        (d) => ipcRenderer.invoke('accounting:createEntry',        d),
+    getEntries:         (d) => ipcRenderer.invoke('accounting:getEntries',         d),
+    getEntryById:       (d) => ipcRenderer.invoke('accounting:getEntryById',       d),
+    reverseEntry:       (d) => ipcRenderer.invoke('accounting:reverseEntry',       d),
+    getLedger:          (d) => ipcRenderer.invoke('accounting:getLedger',          d),
+    getTrialBalance:    (d) => ipcRenderer.invoke('accounting:getTrialBalance',    d),
+    getIncomeStatement: (d) => ipcRenderer.invoke('accounting:getIncomeStatement', d),
+    getBalanceSheet:    (d) => ipcRenderer.invoke('accounting:getBalanceSheet',    d),
+    getDashboardStats:  ()  => ipcRenderer.invoke('accounting:getDashboardStats'),
+    syncHistorical:     (d) => ipcRenderer.invoke('accounting:syncHistorical',     d),
+  },
+
 });

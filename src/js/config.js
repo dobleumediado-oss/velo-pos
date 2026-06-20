@@ -35,144 +35,344 @@ async function renderConfiguracion(el) {
   // COLUMNA IZQUIERDA
   // ══════════════════════
 
-  // ── Plantillas de impresión ──────────────────
-  const printerSaved = settings?.printer || '';
-  const printerType  = detectPrinterType(printerSaved);
-  // Mostrar plantillas según tipo detectado
-  // Si no hay impresora o es unknown, mostrar 80mm por defecto
-  // Si es carta, mostrar plantillas carta
-  const tipoPlantilla = printerType === 'carta' ? 'carta' : '80mm';
-  const plantillas    = getPlantillasByTipo(tipoPlantilla);
-  const _savedTemplate = settings?.print_template || '';
-  // Si la plantilla guardada existe (aunque sea de otro tipo), respetarla
-  // Solo hacer fallback a la primera del tipo si no existe en absoluto
-  const _savedExists = typeof PLANTILLAS !== 'undefined'
-    ? PLANTILLAS.find(p => p.id === _savedTemplate) : null;
-  const plantActual  = _savedExists?.id
-                       || plantillas[0]?.id
-                       || 'termica_80_clasica';
-  window._lastPlantActual = plantActual;
+  // ══════════════════════════════════════════════
+  // PLANTILLAS DE IMPRESIÓN
+  // Un solo estado: window._PA (plantilla activa)
+  // Fuente de verdad: DB.settings.print_template
+  // ══════════════════════════════════════════════
 
-  // Si la plantilla activa es de otro tipo, mostrarla igual en el grid
-  const plantillasMostrar = (_savedExists && !plantillas.find(p => p.id === plantActual))
-    ? [...plantillas, _savedExists]  // agregar la activa al grid aunque sea de otro tipo
-    : plantillas;
+  // Variables de impresora — necesarias en todo el bloque
+  const printerSaved  = settings?.printer || '';
+  const printerType   = detectPrinterType(printerSaved);
 
+  // Estado global de plantillas — siempre desde DB
+  window._PA = settings?.print_template || 'termica_80_clasica';
+  window._PT = window._PA.startsWith('carta') || window._PA === 'media_carta'
+    ? 'carta' : 'termica';
+
+  // ── Helpers ──────────────────────────────────
+  function _getEstilos(id) {
+    try { return JSON.parse(DB?.settings?.[`template_opts_${id}`] || '{}'); }
+    catch { return {}; }
+  }
+
+  function _buildCard(p) {
+    const isActive = window._PA === p.id;
+    const card = document.createElement('div');
+    card.id = `plc-${p.id}`;
+    card.style.cssText = `
+      border: 2px solid ${isActive ? 'var(--green)' : 'var(--line)'};
+      border-radius: 10px; padding: 10px 12px; cursor: pointer;
+      background: ${isActive ? 'var(--green-bg)' : 'var(--surface)'};
+      display: flex; align-items: center; gap: 10px;
+      transition: border-color .12s, background .12s;
+    `;
+    card.innerHTML = `
+      <div style="font-size:20px;flex-shrink:0">${p.icono}</div>
+      <div style="min-width:0;flex:1">
+        <div style="font-weight:700;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${p.nombre}
+        </div>
+        <div style="font-size:10px;color:var(--muted2);margin-top:1px">${p.tipo==='carta'?'Carta/A4':p.tipo}</div>
+        <div class="plc-tick" style="font-size:10px;font-weight:700;color:var(--green);margin-top:2px;display:${isActive?'block':'none'}">✓ Activa</div>
+      </div>
+    `;
+    card.addEventListener('click', () => _selectPlantilla(p.id));
+    return card;
+  }
+
+  function _renderGrid() {
+    const grid = document.getElementById('plt-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+    const tab     = window._PT;
+    const plantas = (typeof PLANTILLAS !== 'undefined' ? PLANTILLAS : [])
+      .filter(p => tab === 'carta' ? p.tipo === 'carta' : p.tipo !== 'carta');
+    plantas.forEach(p => grid.appendChild(_buildCard(p)));
+    // Actualizar estado de tabs
+    const tT = document.getElementById('plt-tab-t');
+    const tC = document.getElementById('plt-tab-c');
+    if (tT) { tT.style.background = tab==='termica'?'var(--ink)':'transparent'; tT.style.color = tab==='termica'?'#fff':'var(--muted)'; }
+    if (tC) { tC.style.background = tab==='carta'?'var(--ink)':'transparent'; tC.style.color = tab==='carta'?'#fff':'var(--muted)'; }
+  }
+
+  function _selectPlantilla(id) {
+    window._PA = id;
+    // Guardar en DB
+    window.api.settings.set({ key: 'print_template', value: id, requestUserId: user?.id });
+    if (typeof DB !== 'undefined' && DB.settings) DB.settings.print_template = id;
+    // Actualizar visualmente todas las cards
+    document.querySelectorAll('[id^="plc-"]').forEach(el => {
+      const pid = el.id.replace('plc-','');
+      const on  = pid === id;
+      el.style.border     = `2px solid ${on?'var(--green)':'var(--line)'}`;
+      el.style.background = on ? 'var(--green-bg)' : 'var(--surface)';
+      const tick = el.querySelector('.plc-tick');
+      if (tick) tick.style.display = on ? 'block' : 'none';
+    });
+    // Toast y preview automático
+    const nombre = (typeof PLANTILLAS !== 'undefined'
+      ? PLANTILLAS.find(p=>p.id===id)?.nombre : null) || id;
+    toast(`✓ Plantilla "${nombre}" seleccionada`);
+    _renderPreview(id);
+    // Si el modal está abierto actualizar su preview también
+    window._modalPreviewFn?.();
+  }
+
+  function _renderPreview(id) {
+    const wrap   = document.getElementById('plt-preview-wrap');
+    const iframe = document.getElementById('plt-iframe');
+    const label  = document.getElementById('plt-preview-label');
+    if (!wrap || !iframe) return;
+    const plantilla = typeof PLANTILLAS !== 'undefined'
+      ? PLANTILLAS.find(p=>p.id===id) : null;
+    if (!plantilla) return;
+    const cfg2 = {
+      biz_name: CFG.biz||'Mi Negocio', biz_rnc: CFG.rnc||'',
+      biz_addr: CFG.addr||'', biz_phone: CFG.phone||'',
+      receipt_msg: CFG.receiptMsg||'¡Gracias por su compra!', biz_logo: CFG.biz_logo||'',
+    };
+    const opts = { ...plantilla.opciones, _estilos: _getEstilos(id) };
+    if (label) label.textContent = `VISTA PREVIA — ${plantilla.nombre}`;
+    iframe.srcdoc = plantilla.render(getSampleSale(cfg2), cfg2, opts);
+    wrap.style.display = 'block';
+  }
+
+  // ── Construir la card de plantillas ──────────
   const plantCard = h('div', { class: 'card' });
-  plantCard.innerHTML = `
-    <div class="fxb mb8">
-      <div class="card-title">Plantillas de Impresión</div>
-      <span class="badge b" style="font-size:11px">${
-        printerType === '58mm' ? 'Térmica 58mm' :
-        printerType === '80mm' ? 'Térmica 80mm' :
-        printerType === 'carta' ? 'Carta / A4' : 'Auto'
-      }</span>
-    </div>
-    <div class="alrt b" style="margin-bottom:12px">
-      <div class="alrt-dot b"></div>
-      <div>
-        <div class="alrt-title">Impresora: ${printerSaved || 'No configurada'}</div>
-        <div class="alrt-sub">Tipo detectado: ${
-          printerType === '58mm' ? 'Térmica 58mm' :
-          printerType === '80mm' ? 'Térmica 80mm' :
-          printerType === 'carta' ? 'Carta / A4' : 'No reconocida — usando 80mm por defecto'
-        }</div>
-      </div>
-    </div>
-    <div id="plantillas-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:12px">
-      ${plantillasMostrar.map(p => `
-        <div onclick="seleccionarPlantilla('${p.id}')" id="plant-card-${p.id}"
-             style="border:2px solid ${plantActual===p.id?'var(--green)':'var(--line)'};
-                    border-radius:10px;padding:10px;cursor:pointer;transition:.15s;
-                    background:${plantActual===p.id?'var(--green-bg)':'var(--surface)'}">
-          <div style="font-size:20px;margin-bottom:4px">${p.icono}</div>
-          <div style="font-weight:700;font-size:12px;margin-bottom:2px">${p.nombre}</div>
-          <div style="font-size:10px;color:var(--muted2);line-height:1.3">${p.desc}</div>
-          ${plantActual===p.id?'<div style="font-size:10px;color:var(--green);font-weight:700;margin-top:4px">✓ Activa</div>':''}
-        </div>`).join('')}
-    </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-dark" onclick="previsualizarPlantilla()">
-        ${svg('eye')} Vista previa
-      </button>
-      <button class="btn btn-out" onclick="imprimirPruebaPlantilla()">
-        ${svg('print')} Imprimir prueba
-      </button>
-    </div>
-    <div id="plant-preview" style="display:none;margin-top:12px">
-      <div style="font-size:11px;font-weight:700;margin-bottom:6px;color:var(--muted)">
-        VISTA PREVIA — ${plantillas.find(p=>p.id===plantActual)?.nombre||''}
-      </div>
-      <iframe id="plant-iframe" style="width:100%;height:400px;border:1px solid var(--line);border-radius:6px;background:#fff"></iframe>
+
+  // Header
+  const pHdr = h('div', { class: 'fxb mb8' });
+  pHdr.appendChild(h('div', { class: 'card-title' }, 'Plantillas de Impresión'));
+  const pBadge = h('span', { class: 'badge b', style: 'font-size:11px' },
+    printerType==='58mm'?'Térmica 58mm':printerType==='80mm'?'Térmica 80mm':printerType==='carta'?'Carta/A4':'Auto');
+  pHdr.appendChild(pBadge);
+  plantCard.appendChild(pHdr);
+
+  // Alerta impresora
+  const pAlert = h('div', { class: 'alrt b', style: 'margin-bottom:12px' });
+  pAlert.innerHTML = `
+    <div class="alrt-dot b"></div>
+    <div>
+      <div class="alrt-title">Impresora: ${printerSaved||'No configurada'}</div>
+      <div class="alrt-sub">Tipo detectado: ${
+        printerType==='58mm'?'Térmica 58mm':
+        printerType==='80mm'?'Térmica 80mm':
+        printerType==='carta'?'Carta / A4':'No reconocida — usando 80mm por defecto'
+      }</div>
     </div>`;
+  plantCard.appendChild(pAlert);
+
+  // Tabs
+  const pTabs = h('div', {
+    style: 'display:flex;gap:4px;margin-bottom:10px;background:var(--surface2);border:1px solid var(--line);border-radius:6px;padding:3px;width:fit-content'
+  });
+  const mkTab = (id, label, tipo) => {
+    const isOn = window._PT === tipo;
+    const btn = h('button', {
+      id,
+      style: `padding:5px 14px;border-radius:4px;border:none;cursor:pointer;font-size:12px;font-weight:600;font-family:inherit;transition:.12s;background:${isOn?'var(--ink)':'transparent'};color:${isOn?'#fff':'var(--muted)'}`,
+      onclick: () => { window._PT = tipo; _renderGrid(); }
+    }, label);
+    return btn;
+  };
+  pTabs.appendChild(mkTab('plt-tab-t', '🖨️ Térmicas', 'termica'));
+  pTabs.appendChild(mkTab('plt-tab-c', '📄 Carta / A4', 'carta'));
+  plantCard.appendChild(pTabs);
+
+  // Grid de plantillas
+  const pGrid = h('div', { id: 'plt-grid', style: 'display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;margin-bottom:14px' });
+  plantCard.appendChild(pGrid);
+
+  // Botones de acción
+  const pBtns = h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:0' });
+
+  const btnPrev = h('button', { class: 'btn btn-dark', onclick: () => _renderPreview(window._PA) });
+  btnPrev.innerHTML = `${svg('eye')} Vista previa`;
+  pBtns.appendChild(btnPrev);
+
+  const btnPrint = h('button', { class: 'btn btn-out', onclick: () => {
+    const plantilla = typeof PLANTILLAS!=='undefined'?PLANTILLAS.find(p=>p.id===window._PA):null;
+    if (!plantilla) { toast('Selecciona una plantilla primero','w'); return; }
+    const cfg2 = { biz_name:CFG.biz||'Mi Negocio', biz_rnc:CFG.rnc||'', biz_addr:CFG.addr||'', biz_phone:CFG.phone||'', receipt_msg:CFG.receiptMsg||'¡Gracias por su compra!', biz_logo:CFG.biz_logo||'' };
+    window.api.print.preview({ html: plantilla.render(getSampleSale(cfg2), cfg2, {...plantilla.opciones,_estilos:_getEstilos(window._PA)}), printerName: CFG.printer||'' })
+      .catch(()=>toast('Error al imprimir prueba','err'));
+  }});
+  btnPrint.innerHTML = `${svg('print')} Imprimir prueba`;
+  pBtns.appendChild(btnPrint);
+
+  if (isSA) {
+    const btnEdit = h('button', {
+      class: 'btn btn-out',
+      style: 'color:var(--purple);border-color:var(--purple-line)',
+      onclick: () => _abrirModalEstilos()
+    });
+    btnEdit.innerHTML = '✏️ Personalizar plantilla';
+    pBtns.appendChild(btnEdit);
+  }
+  plantCard.appendChild(pBtns);
+
+  // Zona de preview
+  const pPrevWrap = h('div', { id: 'plt-preview-wrap', style: 'display:none;margin-top:14px' });
+  const pPrevLbl  = h('div', { id: 'plt-preview-label', style: 'font-size:11px;font-weight:700;margin-bottom:6px;color:var(--muted);letter-spacing:.04em' }, '');
+  const pIframe   = h('iframe', { id: 'plt-iframe', style: 'width:100%;height:420px;border:1px solid var(--line);border-radius:8px;background:#fff' });
+  pPrevWrap.appendChild(pPrevLbl);
+  pPrevWrap.appendChild(pIframe);
+  plantCard.appendChild(pPrevWrap);
+
   colLeft.appendChild(plantCard);
 
-  // ── Selección y vista previa de plantilla ────
-function seleccionarPlantilla(id) {
-  window.api.settings.set({ key: 'print_template', value: id });
-  window._lastPlantActual = id;
-  document.querySelectorAll('[id^="plant-card-"]').forEach(el => {
-    el.style.border     = '2px solid var(--line)';
-    el.style.background = 'var(--surface)';
-    el.removeAttribute('data-active');
-    const tick = el.querySelector('.plant-tick');
-    if (tick) tick.remove();
-  });
-  const card = document.getElementById(`plant-card-${id}`);
-  if (card) {
-    card.style.border     = '2px solid var(--green)';
-    card.style.background = 'var(--green-bg)';
-    card.setAttribute('data-active', '1');
-    if (!card.querySelector('.plant-tick')) {
-      const tick = document.createElement('div');
-      tick.className   = 'plant-tick';
-      tick.style.cssText = 'font-size:10px;color:var(--green);font-weight:700;margin-top:4px';
-      tick.textContent   = '✓ Activa';
-      card.appendChild(tick);
-    }
-  }
-  const label = document.querySelector('#plant-preview div');
-  if (label) {
-    const p = getPlantilla(id);
-    label.textContent = `VISTA PREVIA — ${p?.nombre || ''}`;
-  }
-  const preview = document.getElementById('plant-preview');
-  if (preview && preview.style.display !== 'none') previsualizarPlantilla(id);
-}
+  // Inicializar grid y preview automático
+  setTimeout(() => {
+    _renderGrid();
+    _renderPreview(window._PA);
+  }, 60);
 
-function previsualizarPlantilla(idOverride) {
-  const preview = document.getElementById('plant-preview');
-  const iframe  = document.getElementById('plant-iframe');
-  if (!preview || !iframe) return;
-  const activeCard = document.querySelector('[id^="plant-card-"][data-active="1"]');
-  const id = idOverride
-    || activeCard?.id?.replace('plant-card-', '')
-    || window._lastPlantActual
-    || 'termica_80_clasica';
-  const plantilla = getPlantilla(id);
-  if (!plantilla) return;
-  const cfg  = {
-    biz_name: CFG.biz || 'Mi Negocio', biz_rnc: CFG.rnc || '',
-    biz_addr: CFG.addr || '', biz_phone: CFG.phone || '',
-    receipt_msg: CFG.receiptMsg || '¡Gracias por su compra!', biz_logo: CFG.biz_logo || '',
-  };
-  preview.style.display = 'block';
-  iframe.srcdoc = plantilla.render(getSampleSale(cfg), cfg, plantilla.opciones);
-}
+  // ══════════════════════════════════════════════
+  // MODAL PERSONALIZAR (solo superadmin)
+  // ══════════════════════════════════════════════
 
-function imprimirPruebaPlantilla() {
-  const activeCard = document.querySelector('[id^="plant-card-"][data-active="1"]');
-  const id = activeCard?.id?.replace('plant-card-', '') || window._lastPlantActual || 'termica_80_clasica';
-  const plantilla = getPlantilla(id);
-  if (!plantilla) { toast('Selecciona una plantilla primero', 'w'); return; }
-  const cfg = {
-    biz_name: CFG.biz || 'Mi Negocio', biz_rnc: CFG.rnc || '',
-    biz_addr: CFG.addr || '', biz_phone: CFG.phone || '',
-    receipt_msg: CFG.receiptMsg || '¡Gracias por su compra!', biz_logo: CFG.biz_logo || '',
+  function _abrirModalEstilos() {
+    const id       = window._PA;
+    const plantilla = typeof PLANTILLAS !== 'undefined' ? PLANTILLAS.find(p=>p.id===id) : null;
+    if (!plantilla) { toast('Selecciona primero una plantilla', 'w'); return; }
+
+    const isTermica = plantilla.tipo !== 'carta';
+    const saved     = _getEstilos(id);
+    const def       = isTermica
+      ? { fontSize:'11.5px', lineHeight:'1.45', marginTop:'2mm', marginBottom:'4mm', marginLeft:'2mm', marginRight:'2mm' }
+      : { fontSize:'11pt',   lineHeight:'1.5',  marginTop:'15mm', marginBottom:'15mm', marginLeft:'20mm', marginRight:'20mm' };
+    const cur = { ...def, ...saved };
+
+    const ov = document.createElement('div');
+    ov.id = 'modal-estilos-ov';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(13,15,18,.5);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(3px)';
+    ov.innerHTML = `
+      <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:24px;width:100%;max-width:560px;max-height:90vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.15)">
+        <div style="font-weight:800;font-size:16px;margin-bottom:3px">✏️ Personalizar — ${plantilla.nombre}</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:20px">Los cambios se aplican al imprimir. Solo superadmin puede modificar esto.</div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:13px;margin-bottom:14px">
+          <div class="fg">
+            <label class="lbl">Tamaño de letra</label>
+            <select class="inp" id="est-fontSize">
+              ${(isTermica
+                ? ['9px','9.5px','10px','10.5px','11px','11.5px','12px','12.5px','13px']
+                : ['8pt','9pt','9.5pt','10pt','10.5pt','11pt','11.5pt','12pt','13pt'])
+                .map(v=>`<option value="${v}" ${cur.fontSize===v?'selected':''}>${v}</option>`).join('')}
+            </select>
+          </div>
+          <div class="fg">
+            <label class="lbl">Altura de línea</label>
+            <select class="inp" id="est-lineHeight">
+              ${['1.2','1.25','1.3','1.35','1.4','1.45','1.5','1.6','1.7','1.8']
+                .map(v=>`<option value="${v}" ${cur.lineHeight===v?'selected':''}>${v}</option>`).join('')}
+            </select>
+          </div>
+          <div class="fg">
+            <label class="lbl">Margen superior</label>
+            <input class="inp" id="est-marginTop" value="${cur.marginTop}" placeholder="${isTermica?'ej: 2mm':'ej: 15mm'}"/>
+          </div>
+          <div class="fg">
+            <label class="lbl">Margen inferior</label>
+            <input class="inp" id="est-marginBottom" value="${cur.marginBottom}" placeholder="${isTermica?'ej: 4mm':'ej: 15mm'}"/>
+          </div>
+          <div class="fg">
+            <label class="lbl">Margen izquierdo</label>
+            <input class="inp" id="est-marginLeft" value="${cur.marginLeft}" placeholder="${isTermica?'ej: 2mm':'ej: 20mm'}"/>
+          </div>
+          <div class="fg">
+            <label class="lbl">Margen derecho</label>
+            <input class="inp" id="est-marginRight" value="${cur.marginRight}" placeholder="${isTermica?'ej: 2mm':'ej: 20mm'}"/>
+          </div>
+        </div>
+
+        <div style="font-size:11px;color:var(--muted);background:var(--surface2);border:1px solid var(--line);border-radius:6px;padding:9px 12px;margin-bottom:14px">
+          Usa <strong>mm</strong> para térmicas y <strong>mm o pt</strong> para carta.
+          Los cambios se reflejan en el preview en tiempo real ↓
+        </div>
+
+        <!-- Preview en tiempo real -->
+        <div style="margin-bottom:16px">
+          <div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted2);margin-bottom:6px">Vista previa en tiempo real</div>
+          <iframe id="modal-iframe" style="width:100%;height:${isTermica?'320px':'280px'};border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
+        </div>
+
+        <div style="display:flex;gap:8px;justify-content:space-between;align-items:center;padding-top:14px;border-top:1px solid var(--line)">
+          <button onclick="_resetEstilos('${id}')" style="background:none;border:none;cursor:pointer;font-size:12px;color:var(--muted);font-family:inherit;padding:6px 8px;border-radius:6px" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background='none'">
+            ↺ Restablecer defaults
+          </button>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-out" onclick="document.getElementById('modal-estilos-ov').remove();window._modalPreviewFn=null">Cancelar</button>
+            <button class="btn btn-dark" onclick="_guardarEstilos('${id}')">✓ Guardar y aplicar</button>
+          </div>
+        </div>
+      </div>`;
+
+    document.body.appendChild(ov);
+    ov.addEventListener('click', e => { if (e.target===ov) { ov.remove(); window._modalPreviewFn=null; }});
+
+    // Preview en tiempo real
+    const _mRender = () => {
+      const mIframe = document.getElementById('modal-iframe');
+      if (!mIframe || !plantilla) return;
+      const cfg2 = { biz_name:CFG.biz||'Mi Negocio', biz_rnc:CFG.rnc||'', biz_addr:CFG.addr||'Calle Principal #1', biz_phone:CFG.phone||'809-000-0000', receipt_msg:CFG.receiptMsg||'¡Gracias por su compra!', biz_logo:CFG.biz_logo||'' };
+      const estilos = {
+        fontSize:     document.getElementById('est-fontSize')?.value,
+        lineHeight:   document.getElementById('est-lineHeight')?.value,
+        marginTop:    document.getElementById('est-marginTop')?.value?.trim(),
+        marginBottom: document.getElementById('est-marginBottom')?.value?.trim(),
+        marginLeft:   document.getElementById('est-marginLeft')?.value?.trim(),
+        marginRight:  document.getElementById('est-marginRight')?.value?.trim(),
+      };
+      mIframe.srcdoc = plantilla.render(getSampleSale(cfg2), cfg2, {...plantilla.opciones, _estilos: estilos});
+    };
+
+    window._modalPreviewFn = _mRender;
+    setTimeout(_mRender, 100);
+
+    // Actualizar preview al cambiar cualquier control
+    ['est-fontSize','est-lineHeight','est-marginTop','est-marginBottom','est-marginLeft','est-marginRight']
+      .forEach(id2 => {
+        const el = document.getElementById(id2);
+        if (!el) return;
+        el.addEventListener('change', () => setTimeout(_mRender, 60));
+        el.addEventListener('input',  () => { clearTimeout(el._t); el._t = setTimeout(_mRender, 350); });
+      });
+  }
+
+  window._guardarEstilos = async function(id) {
+    const estilos = {
+      fontSize:     document.getElementById('est-fontSize')?.value,
+      lineHeight:   document.getElementById('est-lineHeight')?.value,
+      marginTop:    document.getElementById('est-marginTop')?.value?.trim(),
+      marginBottom: document.getElementById('est-marginBottom')?.value?.trim(),
+      marginLeft:   document.getElementById('est-marginLeft')?.value?.trim(),
+      marginRight:  document.getElementById('est-marginRight')?.value?.trim(),
+    };
+    const key = `template_opts_${id}`;
+    await window.api.settings.set({ key, value: JSON.stringify(estilos), requestUserId: user?.id });
+    if (typeof DB !== 'undefined' && DB.settings) DB.settings[key] = JSON.stringify(estilos);
+    document.getElementById('modal-estilos-ov')?.remove();
+    window._modalPreviewFn = null;
+    toast('✓ Estilos guardados');
+    // Refrescar preview principal
+    _renderPreview(id);
   };
-  window.api.print.preview({ html: plantilla.render(getSampleSale(cfg), cfg, plantilla.opciones), printerName: CFG.printer || '' })
-    .catch(() => toast('Error al imprimir prueba', 'err'));
-}
+
+  window._resetEstilos = async function(id) {
+    const key = `template_opts_${id}`;
+    await window.api.settings.set({ key, value: '{}', requestUserId: user?.id });
+    if (typeof DB !== 'undefined' && DB.settings) DB.settings[key] = '{}';
+    document.getElementById('modal-estilos-ov')?.remove();
+    window._modalPreviewFn = null;
+    toast('✓ Estilos restablecidos a defaults');
+    _renderPreview(id);
+  };
+
+
+
+// imprimirPruebaPlantilla movida a inline en el bloque de plantillas
 
   // ── Datos del negocio ────────────────────────
   const fiscalActivo = settings.fiscal_enabled === '1';
@@ -574,6 +774,7 @@ function imprimirPruebaPlantilla() {
 // GUARDAR CONFIGURACIÓN
 // ══════════════════════════════════════════════
 async function guardarConfiguracion() {
+  const uid = user?.id;
   const fields = [
     ['biz_name',    'cfg-biz-name'],
     ['biz_addr',    'cfg-biz-addr'],
@@ -582,19 +783,21 @@ async function guardarConfiguracion() {
   ];
   for (const [key, id] of fields) {
     const val = document.getElementById(id)?.value?.trim() || '';
-    await window.api.settings.set({ key, value: val });
+    const r = await window.api.settings.set({ key, value: val, requestUserId: uid });
+    if (r && !r.ok) { toast(r.error || 'Sin permisos para guardar configuración', 'e'); return; }
   }
 
   // Campos fiscales — solo si el módulo fiscal está activo
   const fiscalCheck = document.getElementById('cfg-fiscal-enabled');
   if (fiscalCheck) {
     const fiscalOn = fiscalCheck.checked ? '1' : '0';
-    await window.api.settings.set({ key: 'fiscal_enabled', value: fiscalOn });
+    const r = await window.api.settings.set({ key: 'fiscal_enabled', value: fiscalOn, requestUserId: uid });
+    if (r && !r.ok) { toast(r.error || 'Sin permisos', 'e'); return; }
   }
   const rncEl = document.getElementById('cfg-biz-rnc');
-  if (rncEl) await window.api.settings.set({ key: 'biz_rnc', value: rncEl.value.trim() });
+  if (rncEl) await window.api.settings.set({ key: 'biz_rnc', value: rncEl.value.trim(), requestUserId: uid });
   const taxEl = document.getElementById('cfg-tax');
-  if (taxEl) await window.api.settings.set({ key: 'tax_pct', value: taxEl.value.trim() });
+  if (taxEl) await window.api.settings.set({ key: 'tax_pct', value: taxEl.value.trim(), requestUserId: uid });
 
   const s = await window.api.settings.getAll();
   CFG.biz          = s.biz_name      || CFG.biz;
@@ -904,7 +1107,7 @@ function previewLogo(input) {
 
 async function guardarLogo() {
   if (!window._logoDataUrl) { toast('Selecciona una imagen primero', 'w'); return; }
-  await window.api.settings.set({ key: 'biz_logo', value: window._logoDataUrl });
+  await window.api.settings.set({ key: 'biz_logo', value: window._logoDataUrl, requestUserId: user?.id });
   CFG.biz_logo = window._logoDataUrl;
   toast('✓ Logo guardado');
   renderConfiguracion(document.getElementById('page'));
@@ -913,7 +1116,7 @@ async function guardarLogo() {
 async function eliminarLogo() {
   confirmModal('¿Eliminar el logo del negocio?',
     async () => {
-      await window.api.settings.set({ key: 'biz_logo', value: '' });
+      await window.api.settings.set({ key: 'biz_logo', value: '', requestUserId: user?.id });
       CFG.biz_logo = '';
       toast('✓ Logo eliminado');
       renderConfiguracion(document.getElementById('page'));

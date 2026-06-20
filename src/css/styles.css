@@ -458,3 +458,134 @@ td .flex{flex-wrap:nowrap;gap:3px}
 
 /* ── Toast mejorado ── */
 
+/* ══════════════════════════════════════════════
+   MÓDULO BANCOS Y CONTABILIDAD
+   ══════════════════════════════════════════════ */
+
+/* Tabs genéricos de módulo */
+.mod-tabs{display:flex;gap:4px;margin-bottom:18px;background:var(--surface2);
+          border-radius:10px;padding:4px;flex-wrap:wrap}
+.mod-tab{padding:7px 16px;border-radius:7px;font-size:12px;font-weight:500;
+         cursor:pointer;color:var(--muted2);transition:all .15s;border:none;background:transparent;white-space:nowrap}
+.mod-tab.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 4px rgba(0,0,0,.18)}
+.mod-tab:hover:not(.on){color:var(--ink2)}
+
+/* Cards financieras */
+.fin-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:18px}
+.fin-card{background:var(--surface);border:1px solid var(--line2);border-radius:12px;
+          padding:16px;display:flex;flex-direction:column;gap:6px}
+.fin-card-icon{width:36px;height:36px;border-radius:9px;display:flex;align-items:center;
+               justify-content:center;font-size:16px;margin-bottom:4px}
+.fin-card-label{font-size:11px;color:var(--muted2);font-weight:500;text-transform:uppercase;letter-spacing:.5px}
+.fin-card-amount{font-size:20px;font-weight:700;color:var(--ink)}
+.fin-card-sub{font-size:11px;color:var(--muted2)}
+.fin-card.positive .fin-card-amount{color:#10b981}
+.fin-card.negative .fin-card-amount{color:#ef4444}
+
+/* Badge de tipo de cuenta */
+.acct-type-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;
+                 border-radius:20px;font-size:11px;font-weight:500}
+.acct-type-caja{background:rgba(16,185,129,.12);color:#10b981}
+.acct-type-banco{background:rgba(59,130,246,.12);color:#3b82f6}
+.acct-type-tarjeta{background:rgba(168,85,247,.12);color:#a855f7}
+.acct-type-otro{background:rgba(107,114,128,.12);color:#6b7280}
+
+/* Tabla Mayor Contable */
+.ledger-tbl{width:100%;border-collapse:collapse;font-size:12px}
+.ledger-tbl th{padding:8px 10px;text-align:left;background:var(--surface2);
+               font-size:11px;font-weight:600;color:var(--muted2);text-transform:uppercase;
+               letter-spacing:.4px;border-bottom:1px solid var(--line2);white-space:nowrap}
+.ledger-tbl td{padding:8px 10px;border-bottom:1px solid var(--line2);color:var(--ink2);vertical-align:middle}
+.ledger-tbl tr:hover td{background:var(--surface2)}
+.ledger-tbl .num{text-align:right;font-variant-numeric:tabular-nums;font-family:'DM Mono',monospace;font-size:11px}
+.ledger-tbl .debit{color:#ef4444}
+.ledger-tbl .credit{color:#10b981}
+.ledger-tbl tfoot td{font-weight:700;background:var(--surface2);padding:10px}
+
+/* Balance de comprobación */
+.trial-tbl{width:100%;border-collapse:collapse;font-size:12px}
+.trial-tbl th{padding:8px 10px;background:var(--surface2);font-size:11px;
+              font-weight:600;color:var(--muted2);border-bottom:1px solid var(--line2)}
+.trial-tbl td{padding:7px 10px;border-bottom:1px solid var(--line2);color:var(--ink2)}
+.trial-tbl .acct-code{font-family:'DM Mono',monospace;font-size:11px;color:var(--muted2)}
+.trial-tbl .acct-name{font-weight:500}
+.trial-tbl .num{text-align:right;font-variant-numeric:tabular-nums;font-family:'DM Mono',monospace}
+.trial-tbl tfoot td{font-weight:700;font-size:12px;background:var(--surface2)}
+.trial-tbl .group-row td{background:var(--surface2);font-weight:600;color:var(--ink);font-size:11px}
+
+/* Estado de Resultados y Balance General */
+.fin-report{max-width:720px;margin:0 auto}
+.fin-report-section{margin-bottom:20px}
+.fin-report-title{font-size:13px;font-weight:700;color:var(--ink);padding:8px 12px;
+                  background:var(--surface2);border-radius:8px;margin-bottom:8px}
+.fin-report-row{display:flex;justify-content:space-between;padding:6px 12px;
+                font-size:12px;color:var(--ink2);border-bottom:1px solid var(--line2)}
+.fin-report-row.group{font-weight:600;color:var(--ink);background:var(--surface2);
+                       border-radius:4px;margin-bottom:2px}
+.fin-report-row.total{font-weight:700;font-size:13px;color:var(--accent);padding:10px 12px;
+                       border-top:2px solid var(--accent);margin-top:4px}
+.fin-report-row .amount{font-family:'DM Mono',monospace;font-size:12px;font-variant-numeric:tabular-nums}
+
+/* Catálogo de cuentas */
+.chart-row{display:flex;align-items:center;gap:8px;padding:7px 10px;
+           border-bottom:1px solid var(--line2);font-size:12px;color:var(--ink2)}
+.chart-row:hover{background:var(--surface2)}
+.chart-row.lvl-1{font-weight:700;color:var(--ink);background:var(--surface2);font-size:13px}
+.chart-row.lvl-2{padding-left:24px;font-weight:600;color:var(--ink)}
+.chart-row.lvl-3{padding-left:40px}
+.chart-row.lvl-4{padding-left:56px;color:var(--muted2)}
+.chart-code{font-family:'DM Mono',monospace;font-size:11px;color:var(--muted2);min-width:50px}
+.chart-bal{font-family:'DM Mono',monospace;font-size:11px;margin-left:auto;color:var(--ink2)}
+
+/* Panel de asiento contable */
+.entry-lines{border:1px solid var(--line2);border-radius:10px;overflow:hidden;margin:12px 0}
+.entry-line-hdr{display:grid;grid-template-columns:1fr 2fr 120px 120px 80px;gap:8px;
+                padding:8px 12px;background:var(--surface2);font-size:11px;
+                font-weight:600;color:var(--muted2);text-transform:uppercase}
+.entry-line-row{display:grid;grid-template-columns:1fr 2fr 120px 120px 80px;gap:8px;
+                padding:8px 12px;border-top:1px solid var(--line2);align-items:center}
+.entry-line-row input,
+.entry-line-row select{padding:5px 8px;border:1px solid var(--line2);border-radius:6px;
+                        background:var(--surface);color:var(--ink);font-size:12px;width:100%}
+.entry-total-row{display:grid;grid-template-columns:1fr 2fr 120px 120px 80px;gap:8px;
+                 padding:8px 12px;background:var(--surface2);font-size:12px;font-weight:700;
+                 border-top:2px solid var(--line2)}
+
+/* Dashboard contable */
+.cont-dash{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:20px}
+.cont-stat{background:var(--surface);border:1px solid var(--line2);border-radius:12px;
+           padding:16px;text-align:center}
+.cont-stat-val{font-size:22px;font-weight:800;color:var(--accent);margin-bottom:4px;
+               font-variant-numeric:tabular-nums}
+.cont-stat-lbl{font-size:11px;color:var(--muted2);font-weight:500}
+
+/* Movimientos financieros */
+.mov-type-ingreso{color:#10b981;font-weight:600}
+.mov-type-egreso{color:#ef4444;font-weight:600}
+.mov-type-transferencia{color:#3b82f6;font-weight:600}
+.mov-status-activo{color:var(--ink2)}
+.mov-status-anulado{color:var(--muted2);text-decoration:line-through}
+
+/* Pill de estado de asiento */
+.entry-status{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;text-transform:uppercase}
+.entry-status-activo{background:rgba(16,185,129,.12);color:#10b981}
+.entry-status-anulado{background:rgba(239,68,68,.1);color:#ef4444}
+.entry-status-borrador{background:rgba(245,158,11,.12);color:#f59e0b}
+
+/* Barra de balance (debe = haber) */
+.balance-bar{display:flex;align-items:center;gap:12px;padding:10px 14px;
+             border-radius:8px;font-size:12px;font-weight:600}
+.balance-bar.ok{background:rgba(16,185,129,.1);color:#10b981;border:1px solid rgba(16,185,129,.2)}
+.balance-bar.err{background:rgba(239,68,68,.08);color:#ef4444;border:1px solid rgba(239,68,68,.15)}
+
+/* Print button contextual */
+.print-btn{display:flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;
+           background:var(--surface2);border:1px solid var(--line2);font-size:12px;
+           font-weight:500;cursor:pointer;color:var(--ink2);white-space:nowrap}
+.print-btn:hover{background:var(--surface);color:var(--ink)}
+
+/* Selector de periodo */
+.period-sel{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.period-sel input[type=date]{padding:6px 10px;border:1px solid var(--line2);border-radius:8px;
+                              background:var(--surface);color:var(--ink);font-size:12px}
+

@@ -2148,6 +2148,621 @@ const ncfRepo = {
 };
 
 // ══════════════════════════════════════════════
+// REPOSITORIO: CUENTAS FINANCIERAS (BANCOS)
+// ══════════════════════════════════════════════
+const financialAccountsRepo = {
+  getAll() {
+    return db.prepare('SELECT * FROM financial_accounts ORDER BY type, name').all();
+  },
+  getById(id) {
+    return db.prepare('SELECT * FROM financial_accounts WHERE id=?').get(id);
+  },
+  create({ name, type, bank_name, account_number, currency, initial_balance, description, notes, userId }) {
+    const bal = parseFloat(initial_balance) || 0;
+    const r = db.prepare(`
+      INSERT INTO financial_accounts(name,type,bank_name,account_number,currency,
+        initial_balance,current_balance,description,notes,user_id,active)
+      VALUES(?,?,?,?,?,?,?,?,?,?,1)
+    `).run(name, type||'caja', bank_name||'', account_number||'',
+           currency||'DOP', bal, bal, description||'', notes||'', userId||null);
+    const accId = r.lastInsertRowid;
+    if (bal > 0) {
+      db.prepare(`
+        INSERT INTO financial_movements(financial_account_id,type,amount,balance_before,
+          balance_after,description,user_id)
+        VALUES(?,?,?,0,?,?,?)
+      `).run(accId, 'apertura', bal, bal, 'Balance inicial', userId||null);
+    }
+    return accId;
+  },
+  update(id, { name, type, bank_name, account_number, currency, description, notes, active }) {
+    db.prepare(`
+      UPDATE financial_accounts SET name=?,type=?,bank_name=?,account_number=?,
+        currency=?,description=?,notes=?,active=?,updated_at=datetime('now')
+      WHERE id=?
+    `).run(name, type||'caja', bank_name||'', account_number||'',
+           currency||'DOP', description||'', notes||'', active??1, id);
+  },
+  toggleActive(id, active) {
+    db.prepare(`UPDATE financial_accounts SET active=?,updated_at=datetime('now') WHERE id=?`)
+      .run(active?1:0, id);
+  },
+  getMovements(accountId, { from, to, limit = 200 } = {}) {
+    let q = `SELECT m.*, u.name as user_name,
+      fa2.name as related_account_name
+      FROM financial_movements m
+      LEFT JOIN users u ON m.user_id=u.id
+      LEFT JOIN financial_accounts fa2 ON m.related_account_id=fa2.id
+      WHERE m.financial_account_id=? AND m.status='activo'`;
+    const params = [accountId];
+    if (from) { q += ' AND date(m.created_at)>=?'; params.push(from); }
+    if (to)   { q += ' AND date(m.created_at)<=?'; params.push(to); }
+    q += ' ORDER BY m.created_at DESC, m.id DESC LIMIT ?';
+    params.push(limit);
+    return db.prepare(q).all(...params);
+  },
+  addMovement({ accountId, type, amount, description, referenceType, referenceId, relatedAccountId, method, notes, userId }) {
+    return db.transaction(() => {
+      const acc = db.prepare('SELECT * FROM financial_accounts WHERE id=?').get(accountId);
+      if (!acc) throw new Error('Cuenta no encontrada');
+      if (!acc.active) throw new Error('La cuenta está inactiva');
+      const amt = parseFloat(amount);
+      if (!amt || amt === 0) throw new Error('El monto no puede ser cero');
+      const before = acc.current_balance;
+      const after  = before + amt; // amount can be negative for outflows
+      db.prepare(`UPDATE financial_accounts SET current_balance=?,updated_at=datetime('now') WHERE id=?`)
+        .run(after, accountId);
+      const r = db.prepare(`
+        INSERT INTO financial_movements(financial_account_id,type,amount,balance_before,balance_after,
+          description,reference_type,reference_id,related_account_id,method,notes,user_id)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+      `).run(accountId, type, Math.abs(amt), before, after, description||'',
+             referenceType||'', referenceId||null, relatedAccountId||null,
+             method||'efectivo', notes||'', userId||null);
+      return { movementId: r.lastInsertRowid, balance_before: before, balance_after: after };
+    })();
+  },
+  transfer({ fromId, toId, amount, description, notes, userId }) {
+    return db.transaction(() => {
+      const fromAcc = db.prepare('SELECT * FROM financial_accounts WHERE id=?').get(fromId);
+      const toAcc   = db.prepare('SELECT * FROM financial_accounts WHERE id=?').get(toId);
+      if (!fromAcc || !toAcc) throw new Error('Cuenta no encontrada');
+      if (!fromAcc.active || !toAcc.active) throw new Error('Una de las cuentas está inactiva');
+      const amt = parseFloat(amount);
+      if (amt <= 0) throw new Error('El monto debe ser mayor a cero');
+
+      const fromBefore = fromAcc.current_balance;
+      const fromAfter  = fromBefore - amt;
+      const toBefore   = toAcc.current_balance;
+      const toAfter    = toBefore + amt;
+
+      db.prepare(`UPDATE financial_accounts SET current_balance=?,updated_at=datetime('now') WHERE id=?`)
+        .run(fromAfter, fromId);
+      db.prepare(`UPDATE financial_accounts SET current_balance=?,updated_at=datetime('now') WHERE id=?`)
+        .run(toAfter, toId);
+
+      const desc = description || `Transferencia a ${toAcc.name}`;
+      const descTo = description ? `${description} (de ${fromAcc.name})` : `Transferencia de ${fromAcc.name}`;
+
+      db.prepare(`INSERT INTO financial_movements(financial_account_id,type,amount,balance_before,
+        balance_after,description,related_account_id,notes,user_id)
+        VALUES(?,?,?,?,?,?,?,?,?)`).run(fromId, 'transferencia_out', amt, fromBefore, fromAfter, desc, toId, notes||'', userId||null);
+      db.prepare(`INSERT INTO financial_movements(financial_account_id,type,amount,balance_before,
+        balance_after,description,related_account_id,notes,user_id)
+        VALUES(?,?,?,?,?,?,?,?,?)`).run(toId, 'transferencia_in', amt, toBefore, toAfter, descTo, fromId, notes||'', userId||null);
+
+      return { ok: true, fromBalance: fromAfter, toBalance: toAfter };
+    })();
+  },
+  cancelMovement(movementId, cancelledBy, reason) {
+    return db.transaction(() => {
+      const mov = db.prepare('SELECT * FROM financial_movements WHERE id=?').get(movementId);
+      if (!mov) throw new Error('Movimiento no encontrado');
+      if (mov.status === 'anulado') throw new Error('Ya está anulado');
+      // Revertir el movimiento en la cuenta
+      const acc = db.prepare('SELECT * FROM financial_accounts WHERE id=?').get(mov.financial_account_id);
+      const outflow = ['transferencia_out','retiro','gasto','pago_proveedor'].includes(mov.type);
+      const newBal = outflow ? acc.current_balance + mov.amount : acc.current_balance - mov.amount;
+      db.prepare(`UPDATE financial_accounts SET current_balance=?,updated_at=datetime('now') WHERE id=?`)
+        .run(newBal, mov.financial_account_id);
+      db.prepare(`UPDATE financial_movements SET status='anulado',cancelled_by=?,cancel_reason=?,
+        cancelled_at=datetime('now') WHERE id=?`).run(cancelledBy, reason||'', movementId);
+      return { ok: true };
+    })();
+  },
+  getSummary() {
+    const accs = db.prepare('SELECT * FROM financial_accounts WHERE active=1').all();
+    const total = accs.reduce((s, a) => s + (a.current_balance||0), 0);
+    const byCaja = accs.filter(a=>a.type==='caja'||a.type==='caja_chica').reduce((s,a)=>s+(a.current_balance||0),0);
+    const byBank = accs.filter(a=>a.type==='banco').reduce((s,a)=>s+(a.current_balance||0),0);
+    return { total, byCaja, byBank, accounts: accs };
+  },
+};
+
+// ══════════════════════════════════════════════
+// REPOSITORIO: CONTABILIDAD
+// ══════════════════════════════════════════════
+const accountingRepo = {
+  // ── Catálogo de cuentas ──────────────────
+  getAccounts({ type, active } = {}) {
+    let q = `SELECT a.*, p.name as parent_name, p.code as parent_code
+      FROM accounting_accounts a
+      LEFT JOIN accounting_accounts p ON a.parent_id=p.id
+      WHERE 1=1`;
+    const params = [];
+    if (type)           { q += ' AND a.type=?';   params.push(type); }
+    if (active != null) { q += ' AND a.active=?'; params.push(active?1:0); }
+    q += ' ORDER BY a.code';
+    return db.prepare(q).all(...params);
+  },
+  getAccountByCode(code) {
+    return db.prepare('SELECT * FROM accounting_accounts WHERE code=?').get(code);
+  },
+  getAccountById(id) {
+    return db.prepare('SELECT * FROM accounting_accounts WHERE id=?').get(id);
+  },
+  createAccount({ code, name, type, subtype, parent_id, description, is_summary }) {
+    if (db.prepare('SELECT id FROM accounting_accounts WHERE code=?').get(code)) {
+      throw new Error(`El código ${code} ya existe`);
+    }
+    const r = db.prepare(`
+      INSERT INTO accounting_accounts(code,name,type,subtype,parent_id,description,is_summary,active)
+      VALUES(?,?,?,?,?,?,?,1)
+    `).run(code, name, type, subtype||'', parent_id||null, description||'', is_summary?1:0);
+    return r.lastInsertRowid;
+  },
+  updateAccount(id, { code, name, type, subtype, parent_id, description, is_summary, active }) {
+    const existing = db.prepare('SELECT id FROM accounting_accounts WHERE code=? AND id!=?').get(code, id);
+    if (existing) throw new Error(`El código ${code} ya existe en otra cuenta`);
+    db.prepare(`UPDATE accounting_accounts SET code=?,name=?,type=?,subtype=?,parent_id=?,
+      description=?,is_summary=?,active=?,updated_at=datetime('now') WHERE id=?`)
+      .run(code, name, type, subtype||'', parent_id||null, description||'', is_summary?1:0, active??1, id);
+  },
+  deleteAccount(id) {
+    const hasLines = db.prepare('SELECT COUNT(*) as c FROM accounting_entry_lines WHERE account_id=?').get(id).c;
+    if (hasLines > 0) throw new Error('No se puede eliminar: tiene asientos registrados. Desactívela en su lugar.');
+    db.prepare('UPDATE accounting_accounts SET active=0,updated_at=datetime(\'now\') WHERE id=?').run(id);
+  },
+
+  // ── Configuración contable ────────────────
+  getConfig() {
+    const rows = db.prepare(`SELECT c.*, a.code as account_code, a.name as account_name
+      FROM accounting_config c
+      LEFT JOIN accounting_accounts a ON c.account_id=a.id`).all();
+    const obj = {};
+    rows.forEach(r => { obj[r.key] = r; });
+    return obj;
+  },
+  setConfig(key, accountId, description) {
+    db.prepare(`INSERT INTO accounting_config(key,account_id,description,updated_at)
+      VALUES(?,?,?,datetime('now'))
+      ON CONFLICT(key) DO UPDATE SET account_id=excluded.account_id,
+        description=COALESCE(excluded.description,description),
+        updated_at=excluded.updated_at`).run(key, accountId||null, description||'');
+  },
+
+  // ── Asientos contables ───────────────────
+  _nextNumber() {
+    const last = db.prepare("SELECT number FROM accounting_entries ORDER BY id DESC LIMIT 1").get();
+    if (!last) return 'AS-000001';
+    const num = parseInt(last.number.replace('AS-','')) + 1;
+    return 'AS-' + String(num).padStart(6, '0');
+  },
+
+  createEntry({ date, concept, reference, source_module, source_id, lines, notes, userId, status }) {
+    return db.transaction(() => {
+      if (!lines || lines.length < 2) throw new Error('El asiento debe tener al menos 2 líneas');
+      const totalDebit  = lines.reduce((s, l) => s + (parseFloat(l.debit)  || 0), 0);
+      const totalCredit = lines.reduce((s, l) => s + (parseFloat(l.credit) || 0), 0);
+      if (Math.abs(totalDebit - totalCredit) > 0.01) {
+        throw new Error(`Asiento descuadrado: Débito=${totalDebit.toFixed(2)} ≠ Crédito=${totalCredit.toFixed(2)}`);
+      }
+      const number = this._nextNumber();
+      const entryStatus = status || 'confirmado';
+      const r = db.prepare(`
+        INSERT INTO accounting_entries(number,date,concept,reference,source_module,source_id,
+          total_debit,total_credit,status,notes,user_id)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)
+      `).run(number, date||new Date().toISOString().split('T')[0], concept, reference||'',
+             source_module||'', source_id||null, totalDebit, totalCredit,
+             entryStatus, notes||'', userId||null);
+      const entryId = r.lastInsertRowid;
+      for (const line of lines) {
+        const acc = db.prepare('SELECT id,active FROM accounting_accounts WHERE id=?').get(line.account_id);
+        if (!acc) throw new Error(`Cuenta ID ${line.account_id} no existe`);
+        if (!acc.active) throw new Error(`La cuenta ${line.account_id} está inactiva`);
+        db.prepare(`INSERT INTO accounting_entry_lines(entry_id,account_id,description,debit,credit,reference)
+          VALUES(?,?,?,?,?,?)`).run(entryId, line.account_id, line.description||'',
+          parseFloat(line.debit)||0, parseFloat(line.credit)||0, line.reference||'');
+        // Actualizar saldo de cuenta
+        const netChange = (parseFloat(line.debit)||0) - (parseFloat(line.credit)||0);
+        db.prepare(`UPDATE accounting_accounts SET balance=balance+?,updated_at=datetime('now') WHERE id=?`)
+          .run(netChange, line.account_id);
+      }
+      return { entryId, number, totalDebit, totalCredit };
+    })();
+  },
+
+  getEntries({ from, to, source_module, status, limit = 200 } = {}) {
+    let q = `SELECT e.*, u.name as user_name FROM accounting_entries e
+      LEFT JOIN users u ON e.user_id=u.id WHERE 1=1`;
+    const params = [];
+    if (from)          { q += ' AND e.date>=?'; params.push(from); }
+    if (to)            { q += ' AND e.date<=?'; params.push(to); }
+    if (source_module) { q += ' AND e.source_module=?'; params.push(source_module); }
+    if (status)        { q += ' AND e.status=?'; params.push(status); }
+    q += ' ORDER BY e.date DESC, e.id DESC LIMIT ?';
+    params.push(limit);
+    return db.prepare(q).all(...params);
+  },
+
+  getEntryById(id) {
+    const entry = db.prepare('SELECT e.*, u.name as user_name FROM accounting_entries e LEFT JOIN users u ON e.user_id=u.id WHERE e.id=?').get(id);
+    if (!entry) return null;
+    entry.lines = db.prepare(`SELECT l.*, a.code as account_code, a.name as account_name
+      FROM accounting_entry_lines l
+      LEFT JOIN accounting_accounts a ON l.account_id=a.id
+      WHERE l.entry_id=? ORDER BY l.id`).all(id);
+    return entry;
+  },
+
+  reverseEntry(entryId, userId, reason) {
+    return db.transaction(() => {
+      const original = this.getEntryById(entryId);
+      if (!original) throw new Error('Asiento no encontrado');
+      if (original.status === 'anulado') throw new Error('El asiento ya está anulado');
+      if (!reason?.trim()) throw new Error('El motivo de anulación es obligatorio');
+
+      // Crear asiento de reverso
+      const reversalLines = original.lines.map(l => ({
+        account_id:  l.account_id,
+        description: `Reverso: ${l.description}`,
+        debit:       l.credit,
+        credit:      l.debit,
+        reference:   original.number,
+      }));
+
+      const reversal = this.createEntry({
+        date:          new Date().toISOString().split('T')[0],
+        concept:       `REVERSO: ${original.concept}`,
+        reference:     original.number,
+        source_module: 'reverso',
+        source_id:     original.id,
+        lines:         reversalLines,
+        notes:         reason,
+        userId,
+        status:        'confirmado',
+      });
+
+      // Marcar original como anulado
+      db.prepare(`UPDATE accounting_entries SET status='anulado',reversed_by=?,
+        updated_at=datetime('now') WHERE id=?`).run(reversal.entryId, entryId);
+      db.prepare(`UPDATE accounting_entries SET reversal_of=? WHERE id=?`)
+        .run(entryId, reversal.entryId);
+
+      // Revertir cambios de saldo del asiento original
+      for (const line of original.lines) {
+        const netChange = (parseFloat(line.debit)||0) - (parseFloat(line.credit)||0);
+        db.prepare(`UPDATE accounting_accounts SET balance=balance-?,updated_at=datetime('now') WHERE id=?`)
+          .run(netChange, line.account_id);
+      }
+
+      audit(userId, '', 'asiento_anulado', 'accounting_entries', entryId, reason);
+      return { ok: true, reversalId: reversal.entryId, reversalNumber: reversal.number };
+    })();
+  },
+
+  // ── Mayor general (movimientos por cuenta) ─
+  getLedger({ accountId, from, to } = {}) {
+    let q = `SELECT l.*, e.date, e.number, e.concept, e.source_module, e.status,
+      a.code, a.name as account_name
+      FROM accounting_entry_lines l
+      JOIN accounting_entries e ON l.entry_id=e.id
+      JOIN accounting_accounts a ON l.account_id=a.id
+      WHERE e.status='confirmado'`;
+    const params = [];
+    if (accountId) { q += ' AND l.account_id=?'; params.push(accountId); }
+    if (from)      { q += ' AND e.date>=?'; params.push(from); }
+    if (to)        { q += ' AND e.date<=?'; params.push(to); }
+    q += ' ORDER BY e.date ASC, e.id ASC, l.id ASC';
+    return db.prepare(q).all(...params);
+  },
+
+  // ── Balance de comprobación ───────────────
+  getTrialBalance({ from, to } = {}) {
+    const accounts = db.prepare(`SELECT a.*,
+      COALESCE((SELECT SUM(l.debit)  FROM accounting_entry_lines l
+        JOIN accounting_entries e ON l.entry_id=e.id
+        WHERE l.account_id=a.id AND e.status='confirmado'
+        ${from ? "AND e.date>='"+from+"'" : ''}
+        ${to   ? "AND e.date<='"+to+"'"   : ''}),0) as period_debit,
+      COALESCE((SELECT SUM(l.credit) FROM accounting_entry_lines l
+        JOIN accounting_entries e ON l.entry_id=e.id
+        WHERE l.account_id=a.id AND e.status='confirmado'
+        ${from ? "AND e.date>='"+from+"'" : ''}
+        ${to   ? "AND e.date<='"+to+"'"   : ''}),0) as period_credit
+      FROM accounting_accounts a
+      WHERE a.active=1 AND a.is_summary=0
+      ORDER BY a.code`).all();
+
+    return accounts.map(a => ({
+      ...a,
+      net_debit:  Math.max(0, a.period_debit  - a.period_credit),
+      net_credit: Math.max(0, a.period_credit - a.period_debit),
+    }));
+  },
+
+  // ── Estado de resultados ──────────────────
+  getIncomeStatement({ from, to } = {}) {
+    const getTotal = (types, sign = 1) => {
+      const rows = db.prepare(`
+        SELECT a.code, a.name, a.type,
+          COALESCE(SUM(l.debit),0) as total_debit,
+          COALESCE(SUM(l.credit),0) as total_credit
+        FROM accounting_entry_lines l
+        JOIN accounting_entries e ON l.entry_id=e.id
+        JOIN accounting_accounts a ON l.account_id=a.id
+        WHERE e.status='confirmado' AND a.active=1 AND a.is_summary=0
+          AND a.type IN (${types.map(()=>'?').join(',')})
+          ${from ? `AND e.date>=?` : ''}
+          ${to   ? `AND e.date<=?` : ''}
+        GROUP BY a.id ORDER BY a.code
+      `).all(...types, ...(from?[from]:[]), ...(to?[to]:[]));
+      return rows.map(r => ({
+        ...r,
+        net: (r.total_debit - r.total_credit) * sign,
+      }));
+    };
+
+    const revenues = getTotal(['ingreso'], -1);
+    const costs    = getTotal(['costo'],    1);
+    const expenses = getTotal(['gasto'],    1);
+
+    const totalRev  = revenues.reduce((s,r) => s + r.net, 0);
+    const totalCost = costs.reduce((s,r) => s + r.net, 0);
+    const totalExp  = expenses.reduce((s,r) => s + r.net, 0);
+    const grossProfit = totalRev - totalCost;
+    const netIncome   = grossProfit - totalExp;
+
+    return { revenues, costs, expenses, totalRev, totalCost, totalExp, grossProfit, netIncome };
+  },
+
+  // ── Balance general ───────────────────────
+  getBalanceSheet({ to } = {}) {
+    const getGroup = (types) => {
+      return db.prepare(`
+        SELECT a.code, a.name, a.type, a.subtype,
+          COALESCE(SUM(l.debit),0) as total_debit,
+          COALESCE(SUM(l.credit),0) as total_credit
+        FROM accounting_entry_lines l
+        JOIN accounting_entries e ON l.entry_id=e.id
+        JOIN accounting_accounts a ON l.account_id=a.id
+        WHERE e.status='confirmado' AND a.active=1 AND a.is_summary=0
+          AND a.type IN (${types.map(()=>'?').join(',')})
+          ${to ? 'AND e.date<=?' : ''}
+        GROUP BY a.id ORDER BY a.code
+      `).all(...types, ...(to?[to]:[]));
+    };
+
+    const assets   = getGroup(['activo']).map(r => ({ ...r, net: r.total_debit - r.total_credit }));
+    const liabilities = getGroup(['pasivo']).map(r => ({ ...r, net: r.total_credit - r.total_debit }));
+    const equity   = getGroup(['capital']).map(r => ({ ...r, net: r.total_credit - r.total_debit }));
+
+    const totalAssets = assets.reduce((s,r) => s+r.net, 0);
+    const totalLiab   = liabilities.reduce((s,r) => s+r.net, 0);
+    const totalEquity = equity.reduce((s,r) => s+r.net, 0);
+
+    return { assets, liabilities, equity, totalAssets, totalLiab, totalEquity };
+  },
+
+  // ── Generar asiento automático para venta ─
+  generateSaleEntry({ saleId, userId, configOverride } = {}) {
+    try {
+      const modEnabled = db.prepare("SELECT value FROM settings WHERE key='module_contabilidad'").get()?.value;
+      if (modEnabled !== '1') return null;
+
+      const sale  = db.prepare('SELECT * FROM sales WHERE id=?').get(saleId);
+      if (!sale) return null;
+      if (db.prepare("SELECT id FROM accounting_entries WHERE source_module='venta' AND source_id=?").get(saleId)) return null;
+
+      const cfg = this.getConfig();
+      const getAccId = (key, fallback) => cfg[key]?.account_id || (fallback ? db.prepare("SELECT id FROM accounting_accounts WHERE code=?").get(fallback)?.id : null);
+
+      const cashAccId  = getAccId('account_cash',       '1101');
+      const bankAccId  = getAccId('account_bank',       '1103');
+      const arAccId    = getAccId('account_ar',         '1104');
+      const revAccId   = getAccId('account_revenue',    '4101');
+      const taxAccId   = getAccId('account_tax_payable','2102');
+      const cogsAccId  = getAccId('account_cogs',       '5101');
+      const invAccId   = getAccId('account_inventory',  '1105');
+
+      const lines = [];
+      const method = sale.payment_method || 'efectivo';
+
+      // Débito: qué recibimos
+      let debitAccId = cashAccId;
+      if (method === 'transferencia') debitAccId = bankAccId;
+      else if (method === 'tarjeta')  debitAccId = bankAccId;
+      else if (method === 'credito')  debitAccId = arAccId;
+
+      if (debitAccId) {
+        lines.push({ account_id: debitAccId, debit: sale.total, credit: 0, description: `Venta #${saleId}` });
+      }
+
+      // Crédito: ingresos (neto sin ITBIS)
+      const netSale = sale.total - (sale.tax_amt || 0);
+      if (revAccId && netSale > 0) {
+        lines.push({ account_id: revAccId, debit: 0, credit: netSale, description: `Venta #${saleId}` });
+      }
+      // Crédito: ITBIS por pagar
+      if (taxAccId && (sale.tax_amt || 0) > 0) {
+        lines.push({ account_id: taxAccId, debit: 0, credit: sale.tax_amt, description: `ITBIS venta #${saleId}` });
+      }
+
+      // COGS (costo de venta)
+      const items = db.prepare('SELECT * FROM sale_items WHERE sale_id=?').all(saleId);
+      const totalCost = items.reduce((s, i) => s + ((i.unit_cost||0) * (i.qty||1)), 0);
+      if (cogsAccId && invAccId && totalCost > 0) {
+        lines.push({ account_id: cogsAccId, debit: totalCost, credit: 0, description: `Costo venta #${saleId}` });
+        lines.push({ account_id: invAccId, debit: 0, credit: totalCost, description: `Inventario venta #${saleId}` });
+      }
+
+      if (lines.length < 2) return null;
+
+      return this.createEntry({
+        date:          (sale.created_at || new Date().toISOString()).split('T')[0],
+        concept:       `Venta #${saleId} — ${sale.customer_name || 'Consumidor Final'}`,
+        reference:     `V-${saleId}`,
+        source_module: 'venta',
+        source_id:     saleId,
+        lines,
+        userId,
+        status:        'confirmado',
+      });
+    } catch(e) {
+      console.error('[accounting] Error generando asiento de venta:', e.message);
+      return null;
+    }
+  },
+
+  // ── Asiento para gasto ────────────────────
+  generateExpenseEntry({ expenseId, userId } = {}) {
+    try {
+      const modEnabled = db.prepare("SELECT value FROM settings WHERE key='module_contabilidad'").get()?.value;
+      if (modEnabled !== '1') return null;
+
+      const expense = db.prepare('SELECT e.*, ec.name as cat_name FROM expenses e LEFT JOIN expense_categories ec ON e.category_id=ec.id WHERE e.id=?').get(expenseId);
+      if (!expense || expense.status !== 'pagado') return null;
+      if (db.prepare("SELECT id FROM accounting_entries WHERE source_module='gasto' AND source_id=?").get(expenseId)) return null;
+
+      const cfg = this.getConfig();
+      const getAccId = (key, fallback) => cfg[key]?.account_id || db.prepare("SELECT id FROM accounting_accounts WHERE code=?").get(fallback)?.id;
+
+      const cashAccId = expense.payment_source === 'banco'
+        ? getAccId('account_bank', '1103')
+        : getAccId('account_cash', '1101');
+
+      // Cuenta de gasto según categoría
+      let expAccId = getAccId('account_other_exp', '6120');
+      const catName = (expense.cat_name || '').toLowerCase();
+      if (catName.includes('alquiler'))    expAccId = getAccId('account_rent',   '6101');
+      else if (catName.includes('electric')) expAccId = getAccId('account_elec', '6102');
+      else if (catName.includes('internet')) expAccId = getAccId('account_internet','6104');
+      else if (catName.includes('sueldo') || catName.includes('nómina') || catName.includes('personal'))
+                                             expAccId = getAccId('account_salary','6106');
+      else if (catName.includes('combustible')) expAccId = getAccId('account_fuel','6107');
+
+      const lines = [
+        { account_id: expAccId, debit: expense.total, credit: 0,             description: expense.description },
+        { account_id: cashAccId, debit: 0,             credit: expense.total, description: expense.description },
+      ];
+
+      return this.createEntry({
+        date:          expense.issue_date || new Date().toISOString().split('T')[0],
+        concept:       `Gasto: ${expense.description}`,
+        reference:     `G-${expenseId}`,
+        source_module: 'gasto',
+        source_id:     expenseId,
+        lines,
+        userId,
+        status:        'confirmado',
+      });
+    } catch(e) {
+      console.error('[accounting] Error generando asiento de gasto:', e.message);
+      return null;
+    }
+  },
+
+  // ── Asiento para abono de cliente ─────────
+  generatePaymentEntry({ paymentId, userId } = {}) {
+    try {
+      const modEnabled = db.prepare("SELECT value FROM settings WHERE key='module_contabilidad'").get()?.value;
+      if (modEnabled !== '1') return null;
+
+      const payment = db.prepare('SELECT * FROM payments WHERE id=?').get(paymentId);
+      if (!payment) return null;
+      if (db.prepare("SELECT id FROM accounting_entries WHERE source_module='abono' AND source_id=?").get(paymentId)) return null;
+
+      const cfg = this.getConfig();
+      const getAccId = (key, fallback) => cfg[key]?.account_id || db.prepare("SELECT id FROM accounting_accounts WHERE code=?").get(fallback)?.id;
+
+      const cashAccId = payment.method === 'transferencia'
+        ? getAccId('account_bank', '1103')
+        : getAccId('account_cash', '1101');
+      const arAccId = getAccId('account_ar', '1104');
+
+      const lines = [
+        { account_id: cashAccId, debit: payment.amount, credit: 0, description: `Abono cliente #${payment.customer_id}` },
+        { account_id: arAccId,   debit: 0, credit: payment.amount, description: `Abono cliente #${payment.customer_id}` },
+      ];
+
+      return this.createEntry({
+        date:          (payment.created_at || new Date().toISOString()).split('T')[0],
+        concept:       `Abono de cliente — ${payment.cajero || ''}`,
+        reference:     `AB-${paymentId}`,
+        source_module: 'abono',
+        source_id:     paymentId,
+        lines,
+        userId,
+        status:        'confirmado',
+      });
+    } catch(e) {
+      console.error('[accounting] Error generando asiento de abono:', e.message);
+      return null;
+    }
+  },
+
+  // ── Dashboard contable ────────────────────
+  getDashboardStats({ from, to } = {}) {
+    const curMonth = new Date().toISOString().slice(0,7);
+    const f = from || (curMonth + '-01');
+    const t = to   || new Date().toISOString().split('T')[0];
+
+    const getSum = (type, field) => {
+      const r = db.prepare(`
+        SELECT COALESCE(SUM(l.${field}),0) as v
+        FROM accounting_entry_lines l
+        JOIN accounting_entries e ON l.entry_id=e.id
+        JOIN accounting_accounts a ON l.account_id=a.id
+        WHERE e.status='confirmado' AND a.type=? AND e.date BETWEEN ? AND ?
+      `).get(type, f, t);
+      return r.v || 0;
+    };
+
+    const totalEntries = db.prepare("SELECT COUNT(*) as c FROM accounting_entries WHERE status='confirmado' AND date BETWEEN ? AND ?").get(f, t).c || 0;
+    const pendingEntries = db.prepare("SELECT COUNT(*) as c FROM accounting_entries WHERE status='borrador'").get().c || 0;
+    const totalRevenue  = getSum('ingreso', 'credit') - getSum('ingreso', 'debit');
+    const totalExpenses = getSum('gasto', 'debit')   - getSum('gasto', 'credit');
+    const totalCost     = getSum('costo', 'debit')   - getSum('costo', 'credit');
+    const grossProfit   = totalRevenue - totalCost;
+    const netIncome     = grossProfit - totalExpenses;
+
+    // Saldos contables clave
+    const getAccountBalance = (code) => {
+      const acc = db.prepare('SELECT id FROM accounting_accounts WHERE code=?').get(code);
+      if (!acc) return 0;
+      const r = db.prepare(`SELECT COALESCE(SUM(l.debit-l.credit),0) as v
+        FROM accounting_entry_lines l JOIN accounting_entries e ON l.entry_id=e.id
+        WHERE l.account_id=? AND e.status='confirmado'`).get(acc.id);
+      return r.v || 0;
+    };
+
+    const cashBalance = getAccountBalance('1101');
+    const bankBalance = getAccountBalance('1103');
+    const arBalance   = getAccountBalance('1104');
+    const apBalance   = Math.abs(getAccountBalance('2101'));
+
+    return {
+      totalEntries, pendingEntries,
+      totalRevenue, totalExpenses, totalCost,
+      grossProfit, netIncome,
+      cashBalance, bankBalance, arBalance, apBalance,
+      period: { from: f, to: t },
+    };
+  },
+};
+
+// ══════════════════════════════════════════════
 // EXPORTS
 // ══════════════════════════════════════════════
 module.exports = {
@@ -2174,4 +2789,6 @@ module.exports = {
   maintenanceRepo,
   deliveriesRepo,
   ncfRepo,
+  financialAccountsRepo,
+  accountingRepo,
 };

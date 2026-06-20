@@ -497,14 +497,18 @@ function buildSidebar() {
     { key: 'devoluciones', icon: 'return', label: 'Devoluciones' },
     { sep: 'Finanzas' },
     { key: 'caja',      icon: 'cash',     label: 'Caja' },
-    ...(CFG.module_gastos === '1' ? [{ key: 'gastos', icon: 'dollar', label: 'Gastos' }] : []),
-    ...(CFG.module_sucursales    === '1' ? [{ key: 'sucursales', icon: 'building', label: 'Sucursales'    }] : []),
-    ...((CFG.module_vehiculos === '1' || CFG.module_mantenimiento === '1') ? [{ key: 'vehiculos', icon: 'car', label: 'Vehículos' }] : []),
-    ...(CFG.module_envios        === '1' ? [{ key: 'envios',     icon: 'truck',    label: 'Envíos'        }] : []),
+    ...(_adminPuede('module_gastos') ? [{ key: 'gastos', icon: 'dollar', label: 'Gastos' }] : []),
+    ...(_adminPuede('module_contabilidad') ? [
+      { key: 'bancos',       icon: 'bank',    label: 'Bancos y Cuentas' },
+      { key: 'contabilidad', icon: 'ledger',  label: 'Contabilidad' },
+    ] : []),
+    ...(_adminPuede('module_sucursales')    ? [{ key: 'sucursales', icon: 'building', label: 'Sucursales'    }] : []),
+    ...((_adminPuede('module_vehiculos') || _adminPuede('module_mantenimiento')) ? [{ key: 'vehiculos', icon: 'car', label: 'Vehículos' }] : []),
+    ...(_adminPuede('module_envios')        ? [{ key: 'envios',     icon: 'truck',    label: 'Envíos'        }] : []),
     { key: 'reportes',  icon: 'chart',    label: 'Reportes' },
     { sep: 'Sistema' },
     { key: 'etiquetas', icon: 'barcode',  label: 'Etiquetas',
-      ...(window._bcEnabled ? {} : { hidden: true }) },
+      ...(window._bcEnabled && (CFG.barcode_enabled_roles || 'admin').includes('admin') ? {} : { hidden: true }) },
     { key: 'configuracion', icon: 'settings', label: 'Configuración' },
     ...(user?.role === 'superadmin'
       ? [{ key: 'auditoria', icon: 'alert',  label: 'Auditoría' },
@@ -513,14 +517,27 @@ function buildSidebar() {
       : []),
   ];
 
+  // Verifica si un módulo está activo Y el rol tiene permiso
+  function _adminPuede(modKey) {
+    return CFG[modKey] === '1' && (CFG[modKey + '_roles'] || 'admin').includes('admin');
+  }
+  function _cajeroPuede(modKey) {
+    return CFG[modKey] === '1' && (CFG[modKey + '_roles'] || 'admin').includes('cajero');
+  }
+
   const cajeroNavItems = [
     { key: 'pos',       icon: 'monitor',  label: 'Punto de Venta' },
     { key: 'clientes',  icon: 'users',    label: 'Clientes',
       badge: alertBadge > 0 ? alertBadge : null },
     { key: 'ventas',    icon: 'list',     label: 'Ventas' },
     { key: 'caja',      icon: 'cash',     label: 'Caja' },
-    ...(CFG.module_envios === '1'
-      ? [{ key: 'envios', icon: 'truck', label: 'Envíos' }] : []),
+    ...(_cajeroPuede('module_gastos')     ? [{ key: 'gastos',     icon: 'dollar',  label: 'Gastos' }]      : []),
+    ...(_cajeroPuede('module_envios')     ? [{ key: 'envios',     icon: 'truck',   label: 'Envíos' }]      : []),
+    ...(_cajeroPuede('module_sucursales') ? [{ key: 'sucursales', icon: 'building',label: 'Sucursales' }]  : []),
+    ...((_cajeroPuede('module_vehiculos') || _cajeroPuede('module_mantenimiento'))
+                                          ? [{ key: 'vehiculos',  icon: 'car',     label: 'Vehículos' }]  : []),
+    ...(window._bcEnabled && (CFG.barcode_enabled_roles || 'admin').includes('cajero')
+                                          ? [{ key: 'etiquetas',  icon: 'barcode', label: 'Etiquetas' }]  : []),
   ];
 
   const items = ['admin','superadmin'].includes(user?.role) ? adminNavItems : cajeroNavItems;
@@ -589,6 +606,8 @@ function buildTopbar() {
     reportes:      'Reportes',
     configuracion: 'Configuración',
     etiquetas:     'Etiquetas de Código de Barras',
+    bancos:        'Bancos y Cuentas Financieras',
+    contabilidad:  'Contabilidad',
   };
 
   // ── Izquierda: toggle + título ───────────────
@@ -723,9 +742,42 @@ function routeTo(p) {
   }
   page = p;
 
-  // Cajero no puede acceder a rutas admin
+  // Admin: rutas base + módulos opcionales con permiso admin
+  if (user?.role === 'admin') {
+    const baseAdmin = ['dash','pos','inventario','compras','clientes','ventas','devoluciones','caja','reportes','configuracion'];
+    const modRoutesAdmin = {
+      gastos:       ['module_gastos'],
+      bancos:       ['module_contabilidad'],
+      contabilidad: ['module_contabilidad'],
+      sucursales:   ['module_sucursales'],
+      vehiculos:    ['module_vehiculos', 'module_mantenimiento'],
+      envios:       ['module_envios'],
+      etiquetas:    ['barcode_enabled'],
+    };
+    const allowedAdmin = [...baseAdmin];
+    Object.entries(modRoutesAdmin).forEach(([route, keys]) => {
+      const active  = keys.some(k => CFG[k] === '1' || (k === 'barcode_enabled' && window._bcEnabled));
+      const permit  = keys.some(k => (CFG[k + '_roles'] || 'admin').includes('admin'));
+      if (active && permit) allowedAdmin.push(route);
+    });
+    if (!allowedAdmin.includes(p)) { page = 'dash'; }
+  }
+
+  // Cajero: rutas base + módulos con permiso cajero
   if (user?.role === 'cajero') {
     const allowed = ['pos', 'clientes', 'ventas', 'caja'];
+    const modRoutes = {
+      gastos:     ['module_gastos'],
+      envios:     ['module_envios'],
+      sucursales: ['module_sucursales'],
+      vehiculos:  ['module_vehiculos', 'module_mantenimiento'],
+      etiquetas:  ['barcode_enabled'],
+    };
+    Object.entries(modRoutes).forEach(([route, keys]) => {
+      const active  = keys.some(k => CFG[k] === '1' || (k === 'barcode_enabled' && window._bcEnabled));
+      const permit  = keys.some(k => (CFG[k + '_roles'] || 'admin').includes('cajero'));
+      if (active && permit) allowed.push(route);
+    });
     if (!allowed.includes(p)) { page = 'pos'; }
   }
 
@@ -757,6 +809,8 @@ function routeTo(p) {
       if (user?.role !== 'superadmin') { renderDash(el); break; }
       renderAuditoria(el); break;
     case 'gastos':       renderGastos(el);         break;
+    case 'bancos':       renderBancos(el);         break;
+    case 'contabilidad': renderContabilidad(el);   break;
     case 'vehiculos':    renderVehiculos(el);      break;
     case 'envios':       renderEnvios(el);         break;
     case 'sucursales':   renderSucursales(el);     break;

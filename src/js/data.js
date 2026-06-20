@@ -40,6 +40,7 @@ let CFG = {
   module_envios:           '0',
   module_ncf_avanzado:     '0',
   module_multi_negocio:    '0',
+  module_contabilidad:     '0',
 };
 
 // ── Denominaciones de billetes RD$ ────────────
@@ -98,6 +99,18 @@ async function loadAppData() {
       CFG.module_ncf_avanzado  = settings.module_ncf_avanzado  || '0';
       CFG.module_gastos        = settings.module_gastos        || '0';
       CFG.module_multi_negocio = settings.module_multi_negocio || '0';
+      CFG.module_contabilidad  = settings.module_contabilidad  || '0';
+
+      // Permisos por rol — qué roles pueden acceder a cada módulo
+      CFG.module_gastos_roles        = settings.module_gastos_roles        || 'admin';
+      CFG.module_contabilidad_roles  = settings.module_contabilidad_roles  || 'admin';
+      CFG.barcode_enabled_roles      = settings.barcode_enabled_roles      || 'admin';
+      CFG.module_sucursales_roles    = settings.module_sucursales_roles    || 'admin';
+      CFG.module_vehiculos_roles     = settings.module_vehiculos_roles     || 'admin';
+      CFG.module_mantenimiento_roles = settings.module_mantenimiento_roles || 'admin';
+      CFG.module_envios_roles        = settings.module_envios_roles        || 'admin,cajero';
+      CFG.module_ncf_avanzado_roles  = settings.module_ncf_avanzado_roles  || 'admin';
+      CFG.fiscal_enabled_roles       = settings.fiscal_enabled_roles       || 'admin';
       CFG.itbis = CFG.fiscalEnabled
         ? ((settings.tax_pct !== undefined && settings.tax_pct !== '')
             ? parseFloat(settings.tax_pct) : 18) : 0;

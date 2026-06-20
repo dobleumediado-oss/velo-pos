@@ -195,49 +195,79 @@ async function renderSuperAdmin(el) {
   el.appendChild(toolsCard);
 
 
-  // ── Módulos activables ──────────────────────────────────────────────────
+  // ── Módulos activables + permisos por rol ──────────────────────────────
   const modsCard = document.createElement('div');
   modsCard.className = 'card';
   modsCard.style.marginBottom = '16px';
 
   const modsDefs = [
-    // ── Módulos financieros ──────────────────────────────────────────────────
-    { key: 'fiscal_enabled',       icon: '📄', title: 'Módulo Fiscal NCF/DGII',   desc: 'Activa NCF, ITBIS 18% y comprobantes fiscales. Solo negocios con RNC.', roles: 'admin', special: 'fiscal' },
-    { key: 'module_gastos',        icon: '💰', title: 'Gastos y Egresos',          desc: 'Registro de gastos del negocio, categorías y reportes de egresos.', roles: 'admin' },
-    // ── Módulos operativos ───────────────────────────────────────────────────
-    { key: 'barcode_enabled',      icon: '🏷️', title: 'Etiquetas / Código de Barras', desc: 'Diseñador de etiquetas e impresión de códigos de barras.', roles: 'admin', special: 'barcode' },
-    { key: 'module_sucursales',    icon: '🏪', title: 'Sucursales',                desc: 'Registro de sucursales del negocio (vista local — sync en Cloud 2026).', roles: 'admin' },
-    { key: 'module_vehiculos',     icon: '🚗', title: 'Vehículos',                 desc: 'Registro de vehículos de la empresa (carros, motos, camiones).', roles: 'admin' },
-    { key: 'module_mantenimiento', icon: '🔧', title: 'Mantenimiento',             desc: 'Historial y alertas de mantenimiento de vehículos. Requiere Vehículos.', roles: 'admin' },
-    { key: 'module_envios',        icon: '📦', title: 'Envíos y Despachos',        desc: 'Control de entregas con cálculo de distancia y combustible.', roles: 'admin+cajero' },
-    { key: 'module_ncf_avanzado',  icon: '📋', title: 'NCF Avanzado',              desc: 'Gestión de rangos de comprobantes fiscales con alertas DGII.', roles: 'admin' },
-    // ── Módulos avanzados ────────────────────────────────────────────────────
-    { key: 'module_multi_negocio', icon: '🏢', title: 'Multi-negocios',            desc: 'Múltiples empresas con base de datos separada. Requiere reinicio.', roles: 'superadmin' },
+    // Módulos financieros
+    { key: 'fiscal_enabled',       icon: '📄', title: 'Módulo Fiscal NCF/DGII',       desc: 'Activa NCF, ITBIS 18% y comprobantes fiscales.',          cajeroCan: false, special: 'fiscal' },
+    { key: 'module_gastos',        icon: '💰', title: 'Gastos y Egresos',               desc: 'Registro de gastos, categorías y reportes de egresos.',  cajeroCan: true  },
+    { key: 'module_contabilidad',  icon: '📒', title: 'Contabilidad y Bancos',          desc: 'Bancos, catálogo de cuentas, asientos y reportes.',       cajeroCan: false },
+    // Módulos operativos
+    { key: 'barcode_enabled',      icon: '🏷️', title: 'Etiquetas / Código de Barras',  desc: 'Diseñador e impresión de etiquetas con códigos de barras.', cajeroCan: true, special: 'barcode' },
+    { key: 'module_sucursales',    icon: '🏪', title: 'Sucursales',                     desc: 'Registro de sucursales (sync en Cloud 2026).',            cajeroCan: true  },
+    { key: 'module_vehiculos',     icon: '🚗', title: 'Vehículos',                      desc: 'Registro de vehículos de la empresa.',                    cajeroCan: true  },
+    { key: 'module_mantenimiento', icon: '🔧', title: 'Mantenimiento',                  desc: 'Historial de mantenimiento de vehículos.',                cajeroCan: true  },
+    { key: 'module_envios',        icon: '📦', title: 'Envíos y Despachos',             desc: 'Control de entregas con cálculo de distancia.',           cajeroCan: true  },
+    { key: 'module_ncf_avanzado',  icon: '📋', title: 'NCF Avanzado',                   desc: 'Gestión de rangos de comprobantes fiscales DGII.',        cajeroCan: false },
+    // Módulos avanzados
+    { key: 'module_multi_negocio', icon: '🏢', title: 'Multi-negocios',                 desc: 'Múltiples empresas con base de datos separada.',          cajeroCan: false },
   ];
 
-  modsCard.innerHTML = `<div class="card-title" style="margin-bottom:16px">⚙️ Módulos del sistema</div>`;
+  // Encabezado de la card
+  const modsHdr = document.createElement('div');
+  modsHdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:6px';
+  modsHdr.innerHTML = `
+    <div class="card-title" style="margin-bottom:0">⚙️ Módulos del sistema</div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--muted2)">
+        <span style="width:8px;height:8px;border-radius:50%;background:var(--accent);display:inline-block"></span>Admin
+      </span>
+      <span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--muted2)">
+        <span style="width:8px;height:8px;border-radius:50%;background:#818cf8;display:inline-block"></span>Superadmin <em style="font-style:normal;font-size:10px">(fijo)</em>
+      </span>
+      <span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--muted2)">
+        <span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;display:inline-block"></span>Cajero
+      </span>
+    </div>`;
+  modsCard.appendChild(modsHdr);
+
+  const subHdr = document.createElement('div');
+  subHdr.style.cssText = 'font-size:11px;color:var(--muted2);margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--line2)';
+  subHdr.textContent = 'Activa cada módulo y configura qué roles pueden acceder. Superadmin siempre tiene acceso total.';
+  modsCard.appendChild(subHdr);
+
+  const accentColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#00d48a';
 
   modsDefs.forEach(mod => {
-    const enabled = settings[mod.key] === '1' || settings[mod.key] === true || settings[mod.key] === 1;
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:0.5px solid var(--line2)';
-    // Construir toggle programáticamente para evitar problemas con template literals
+    const enabled     = settings[mod.key] === '1' || settings[mod.key] === true || settings[mod.key] === 1;
+    const rolesVal    = settings[mod.key + '_roles'] || (mod.key === 'module_envios' ? 'admin,cajero' : 'admin');
+    const adminOn     = rolesVal.includes('admin');
+    const cajeroOn    = rolesVal.includes('cajero');
+
+    const wrapper = document.createElement('div');
+    wrapper.dataset.modKey = mod.key;
+    wrapper.style.cssText = 'border-bottom:0.5px solid var(--line2);padding:14px 0';
+
+    // ── Fila principal: info + toggle ──
+    const mainRow = document.createElement('div');
+    mainRow.style.cssText = 'display:flex;align-items:flex-start;justify-content:space-between;gap:12px';
+
+    // Info izquierda
     const infoDiv = document.createElement('div');
-    infoDiv.innerHTML = `<div style="font-size:13px;font-weight:500">${mod.icon} ${mod.title}</div>
-      <div style="font-size:11px;color:var(--muted2);margin-top:2px">${mod.desc}</div>
-      <div style="font-size:10px;color:var(--muted2);margin-top:1px">Visible para: ${mod.roles}</div>`;
+    infoDiv.style.cssText = 'flex:1;min-width:0';
+    infoDiv.innerHTML = `
+      <div style="font-size:13px;font-weight:600;color:var(--ink);margin-bottom:2px">${mod.icon} ${mod.title}</div>
+      <div style="font-size:11px;color:var(--muted2);line-height:1.4">${mod.desc}</div>`;
 
-    const accentColor = getComputedStyle(document.documentElement).getPropertyValue('--accent') || '#00d48a';
-    const trackBg  = enabled ? accentColor.trim() : '#9ca3af';
-    const thumbLeft = enabled ? '22px' : '2px';
-    const spanColor = enabled ? accentColor.trim() : '#9ca3af';
-    const spanText  = enabled ? 'Activo' : 'Inactivo';
-
+    // Toggle derecha
     const label = document.createElement('label');
-    label.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer';
+    label.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer;flex-shrink:0;margin-top:2px';
 
     const trackWrap = document.createElement('div');
-    trackWrap.style.cssText = 'position:relative;width:44px;height:24px;flex-shrink:0';
+    trackWrap.style.cssText = 'position:relative;width:44px;height:24px';
 
     const input = document.createElement('input');
     input.type = 'checkbox';
@@ -248,15 +278,15 @@ async function renderSuperAdmin(el) {
 
     const track = document.createElement('div');
     track.className = 'toggle-track';
-    track.style.cssText = `position:absolute;inset:0;border-radius:12px;background:${trackBg};transition:background .2s`;
+    track.style.cssText = `position:absolute;inset:0;border-radius:12px;background:${enabled ? accentColor : '#9ca3af'};transition:background .2s`;
 
     const thumb = document.createElement('div');
     thumb.className = 'toggle-thumb';
-    thumb.style.cssText = `position:absolute;top:2px;left:${thumbLeft};width:20px;height:20px;border-radius:50%;background:#fff;transition:left .2s;box-shadow:0 1px 3px #0003`;
+    thumb.style.cssText = `position:absolute;top:2px;left:${enabled ? '22px' : '2px'};width:20px;height:20px;border-radius:50%;background:#fff;transition:left .2s;box-shadow:0 1px 3px #0003`;
 
     const span = document.createElement('span');
-    span.style.cssText = `font-size:12px;font-weight:600;color:${spanColor}`;
-    span.textContent = spanText;
+    span.style.cssText = `font-size:11px;font-weight:600;min-width:40px;color:${enabled ? accentColor : '#9ca3af'}`;
+    span.textContent = enabled ? 'Activo' : 'Inactivo';
 
     trackWrap.appendChild(input);
     trackWrap.appendChild(track);
@@ -264,9 +294,70 @@ async function renderSuperAdmin(el) {
     label.appendChild(trackWrap);
     label.appendChild(span);
 
-    row.appendChild(infoDiv);
-    row.appendChild(label);
-    modsCard.appendChild(row);
+    mainRow.appendChild(infoDiv);
+    mainRow.appendChild(label);
+    wrapper.appendChild(mainRow);
+
+    // ── Fila de roles (siempre visible) ──
+    const rolesRow = document.createElement('div');
+    rolesRow.className = `mod-roles-${mod.key}`;
+    rolesRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap';
+
+    rolesRow.innerHTML = `<span style="font-size:10px;font-weight:600;color:var(--muted2);text-transform:uppercase;letter-spacing:.05em">Acceso:</span>`;
+
+    // ── Chip Admin — clickeable ──
+    const adminChip = document.createElement('button');
+    adminChip.dataset.modRoleKey = mod.key;
+    adminChip.dataset.role = 'admin';
+    adminChip.dataset.roleActive = adminOn ? '1' : '0';
+    _saStyleAdminChip(adminChip, adminOn);
+    adminChip.addEventListener('click', async function() {
+      const nowOn  = this.dataset.roleActive === '1';
+      const newOn  = !nowOn;
+      const modKey = this.dataset.modRoleKey;
+      const cur    = (typeof CFG !== 'undefined' && CFG[modKey + '_roles']) || rolesVal;
+      const newRoles = _saToggleRole(cur, 'admin', newOn);
+      await window.api.settings.set({ key: modKey + '_roles', value: newRoles, requestUserId: window._currentUser?.id });
+      if (typeof CFG !== 'undefined') CFG[modKey + '_roles'] = newRoles;
+      this.dataset.roleActive = newOn ? '1' : '0';
+      _saStyleAdminChip(this, newOn);
+      if (typeof buildSidebar === 'function') buildSidebar();
+      toast(`Admin ${newOn ? 'puede' : 'ya no puede'} ver ${modKey.replace('module_','').replace(/_/g,' ')}`, newOn ? 's' : 'w');
+    });
+    rolesRow.appendChild(adminChip);
+
+    // ── Superadmin chip — fijo, no editable ──
+    const saChip = document.createElement('span');
+    saChip.style.cssText = `display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;
+      font-size:11px;font-weight:600;background:rgba(99,102,241,.1);color:#818cf8;
+      border:1px solid rgba(99,102,241,.2);cursor:default;user-select:none`;
+    saChip.innerHTML = `<svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><circle cx="4" cy="4" r="4"/></svg> Superadmin ✓`;
+    saChip.title = 'El superadmin siempre tiene acceso total';
+    rolesRow.appendChild(saChip);
+
+    // ── Chip Cajero — siempre editable ──
+    const cajeroChip = document.createElement('button');
+    cajeroChip.dataset.modRoleKey = mod.key;
+    cajeroChip.dataset.role = 'cajero';
+    cajeroChip.dataset.roleActive = cajeroOn ? '1' : '0';
+    _saStyleCajeroChip(cajeroChip, cajeroOn);
+    cajeroChip.addEventListener('click', async function() {
+      const nowOn  = this.dataset.roleActive === '1';
+      const newOn  = !nowOn;
+      const modKey = this.dataset.modRoleKey;
+      const cur    = (typeof CFG !== 'undefined' && CFG[modKey + '_roles']) || rolesVal;
+      const newRoles = _saToggleRole(cur, 'cajero', newOn);
+      await window.api.settings.set({ key: modKey + '_roles', value: newRoles, requestUserId: window._currentUser?.id });
+      if (typeof CFG !== 'undefined') CFG[modKey + '_roles'] = newRoles;
+      this.dataset.roleActive = newOn ? '1' : '0';
+      _saStyleCajeroChip(this, newOn);
+      if (typeof buildSidebar === 'function') buildSidebar();
+      toast(`Cajero ${newOn ? 'puede' : 'ya no puede'} ver ${modKey.replace('module_','').replace(/_/g,' ')}`, newOn ? 's' : 'w');
+    });
+    rolesRow.appendChild(cajeroChip);
+
+    wrapper.appendChild(rolesRow);
+    modsCard.appendChild(wrapper);
   });
 
   el.appendChild(modsCard);
@@ -726,6 +817,39 @@ let _updState = null;
 // Cargar estado inicial al abrir Configuración
 
 // ══════════════════════════════════════════════
+// ROLE CHIP HELPER
+// ══════════════════════════════════════════════
+
+function _saToggleRole(rolesStr, role, enable) {
+  const parts = (rolesStr || '').split(',').map(r => r.trim()).filter(Boolean);
+  if (enable && !parts.includes(role)) parts.push(role);
+  if (!enable) { const i = parts.indexOf(role); if (i > -1) parts.splice(i, 1); }
+  return parts.join(',');
+}
+
+function _saStyleAdminChip(btn, active) {
+  btn.style.cssText = `display:inline-flex;align-items:center;gap:5px;padding:3px 10px;
+    border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:none;
+    background:${active ? 'rgba(0,212,138,.12)' : 'var(--surface2)'};
+    color:${active ? 'var(--accent)' : 'var(--muted2)'};
+    border:1px solid ${active ? 'rgba(0,212,138,.25)' : 'var(--line2)'};
+    transition:all .15s`;
+  btn.innerHTML = `<svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" style="opacity:${active?1:.4}"><circle cx="4" cy="4" r="4"/></svg> Admin ${active ? '✓' : '+ agregar'}`;
+  btn.title = active ? 'Admin tiene acceso — clic para quitar' : 'Admin sin acceso — clic para dar acceso';
+}
+
+function _saStyleCajeroChip(btn, active) {
+  btn.style.cssText = `display:inline-flex;align-items:center;gap:5px;padding:3px 10px;
+    border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:none;
+    background:${active ? 'rgba(245,158,11,.15)' : 'var(--surface2)'};
+    color:${active ? '#f59e0b' : 'var(--muted2)'};
+    border:1px solid ${active ? 'rgba(245,158,11,.3)' : 'var(--line2)'};
+    transition:all .15s`;
+  btn.innerHTML = `<svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" style="opacity:${active?1:.4}"><circle cx="4" cy="4" r="4"/></svg> Cajero ${active ? '✓' : '+ agregar'}`;
+  btn.title = active ? 'Cajero tiene acceso — clic para quitar' : 'Cajero sin acceso — clic para dar acceso';
+}
+
+// ══════════════════════════════════════════════
 // TOGGLE MÓDULO DE ETIQUETAS
 // ══════════════════════════════════════════════
 
@@ -733,7 +857,7 @@ async function saToggleModule(key, enabled) {
   const user = window._currentUser;
   if (!user || user.role !== 'superadmin') { alert('Solo el superadmin puede cambiar módulos'); return; }
 
-  await window.api.settings.set({ key, value: enabled ? '1' : '0' });
+  await window.api.settings.set({ key, value: enabled ? '1' : '0', requestUserId: user.id });
 
   // Actualizar CFG inmediatamente
   if (typeof CFG !== 'undefined') CFG[key] = enabled ? '1' : '0';
@@ -755,7 +879,7 @@ async function saToggleModule(key, enabled) {
   // Reglas de dependencia entre módulos
   if (key === 'module_mantenimiento' && enabled) {
     // Mantenimiento requiere Vehículos — activar automáticamente
-    await window.api.settings.set({ key: 'module_vehiculos', value: '1' });
+    await window.api.settings.set({ key: 'module_vehiculos', value: '1', requestUserId: window._currentUser?.id });
     CFG.module_vehiculos = '1';
     // Actualizar visual del toggle de vehículos también
     const vInput = document.querySelector('input[data-mod="module_vehiculos"]');
@@ -811,7 +935,7 @@ async function saToggleModule(key, enabled) {
 
 async function saToggleBarcodeModule(enabled) {
   // Actualizar setting
-  await window.api.settings.set({ key: 'barcode_enabled', value: enabled ? '1' : '0' });
+  await window.api.settings.set({ key: 'barcode_enabled', value: enabled ? '1' : '0', requestUserId: window._currentUser?.id });
 
   // Actualizar flag global
   window._bcEnabled = enabled;
@@ -853,7 +977,7 @@ async function saToggleBarcodeModule(enabled) {
 // ── Activar plantilla desde Panel Dev ────────
 async function saActivarPlantilla(id) {
   if (!id) return;
-  await window.api.settings.set({ key: 'print_template', value: id });
+  await window.api.settings.set({ key: 'print_template', value: id, requestUserId: window._currentUser?.id });
   if (DB?.settings) DB.settings.print_template = id;
 
   // Actualizar UI in-place sin recargar la página (evita scroll al tope)
