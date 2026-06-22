@@ -21,6 +21,7 @@ function renderClientes(el) {
   const totalDeuda= conDeuda.reduce((a, c) => a + c.balance, 0);
 
   // ── Header ──────────────────────────────────
+  const isAdmin = ['admin','superadmin'].includes(user?.role);
   el.appendChild(h('div', { class: 'sec-hdr' },
     h('div', null,
       h('div', { class: 'sec-title' }, 'Clientes'),
@@ -30,11 +31,22 @@ function renderClientes(el) {
         `${alerts.length} alerta${alerts.length !== 1 ? 's' : ''}`
       )
     ),
-    h('button', {
-          class: 'btn btn-dark',
-          onclick: openClienteModal,
-          html: `${svg('plus')} Nuevo Cliente`
-        })
+    h('div', { class: 'flex', style: { gap: '8px' } },
+      isAdmin && clientes.length > 0
+        ? h('button', {
+            class: 'btn btn-out',
+            title: 'Eliminar todos los clientes',
+            style: { color: 'var(--red)' },
+            onclick: confirmEliminarTodosClientes,
+            html: `${svg('trash')} Eliminar todos`
+          })
+        : null,
+      h('button', {
+            class: 'btn btn-dark',
+            onclick: openClienteModal,
+            html: `${svg('plus')} Nuevo Cliente`
+          })
+    )
   ));
 
   // ── Métricas rápidas ────────────────────────
@@ -246,6 +258,15 @@ function renderCliTable() {
                 onclick: () => toggleEstadoCliente(c),
                 html: c.status === 'bloqueado' ? svg('check') : svg('lock')
               })
+            : null,
+          ['admin','superadmin'].includes(user?.role)
+            ? h('button', {
+                class: 'btn btn-ghost btn-sm',
+                title: 'Eliminar cliente',
+                style: { color: 'var(--red)' },
+                onclick: () => confirmEliminarCliente(c),
+                html: svg('trash')
+              })
             : null
         )
       )
@@ -379,13 +400,59 @@ async function guardarCliente(id) {
   buildSidebar();
 }
 
+function confirmEliminarCliente(c) {
+  const balance = Number(c.balance || 0);
+  confirmModal(
+    `¿Eliminar a <strong>${c.name}</strong>?
+     <br><span style="font-size:12px;color:var(--muted)">El cliente quedará inactivo y desaparecerá de la lista y los reportes.</span>
+     ${balance > 0 ? `
+       <br><br><span style="font-size:12px;color:var(--red)">
+         ⚠ Este cliente tiene un balance pendiente de <strong>${fmt(balance)}</strong>.
+         Al eliminarlo, ese monto dejará de contarse en Cuentas por Cobrar y en los reportes.
+       </span>` : ''}`,
+    () => eliminarCliente(c.id),
+    'Eliminar', 'btn-red'
+  );
+}
+
 async function eliminarCliente(id) {
-  const result = await window.api.customers.update({
-    id, data: { active: 0 }, requestUserId: user.id
-  });
+  const result = await window.api.customers.delete({ id, requestUserId: user.id });
   if (!result.ok) { toast(result.error || 'Error', 'err'); return; }
   await reloadCustomers();
-  toast('Cliente eliminado');
+  toast(result.balance > 0
+    ? `✓ Cliente eliminado · ${fmt(result.balance)} removido de Cuentas por Cobrar`
+    : '✓ Cliente eliminado');
+  renderClientes(document.getElementById('page'));
+  buildSidebar();
+}
+
+function confirmEliminarTodosClientes() {
+  const clientes  = DB.customers.filter(c => c.id !== 1 && c.active !== 0);
+  const totalDeuda = clientes.reduce((a, c) => a + Number(c.balance || 0), 0);
+  const plural = clientes.length === 1 ? '1 cliente registrado' : `los ${clientes.length} clientes registrados`;
+  confirmModal(
+    `¿Eliminar <strong>${plural}</strong>?
+     <br><span style="font-size:12px;color:var(--muted)">
+       Quedarán inactivos: desaparecerán de la lista, del dashboard y de todos los reportes.
+       Esta acción no se puede deshacer desde aquí.</span>
+     ${totalDeuda > 0 ? `
+       <br><br><span style="font-size:12px;color:var(--red)">
+         ⚠ Hay <strong>${fmt(totalDeuda)}</strong> en balances pendientes entre estos clientes.
+         Ese monto dejará de contarse en Cuentas por Cobrar y en los reportes.
+       </span>` : ''}`,
+    eliminarTodosClientes,
+    'Eliminar todos', 'btn-red'
+  );
+}
+
+async function eliminarTodosClientes() {
+  const result = await window.api.customers.deleteAll({ requestUserId: user.id });
+  if (!result.ok) { toast(result.error || 'Error', 'err'); return; }
+  await reloadCustomers();
+  const plural = result.count === 1 ? '1 cliente eliminado' : `${result.count} clientes eliminados`;
+  toast(result.totalBalance > 0
+    ? `✓ ${plural} · ${fmt(result.totalBalance)} removido de Cuentas por Cobrar`
+    : `✓ ${plural}`);
   renderClientes(document.getElementById('page'));
   buildSidebar();
 }

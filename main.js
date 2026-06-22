@@ -671,6 +671,36 @@ ipcMain.handle('customers:addPayment', async (_, { data, requestUserId }) => {
   }
 });
 
+ipcMain.handle('customers:delete', async (_, { id, requestUserId }) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
+    const result = customersRepo.delete(id);
+    audit(requestUserId, reqUser.name, 'cliente_eliminado', 'customers', id,
+          `${result.name} | Balance liberado de CxC: ${result.balance}`);
+    return { ok: true, ...result };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('customers:deleteAll', async (_, { requestUserId }) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
+    const result = customersRepo.deleteAll();
+    audit(requestUserId, reqUser.name, 'clientes_eliminados_todos', 'customers', null,
+          `${result.count} clientes | Balance liberado de CxC: ${result.totalBalance}`);
+    return { ok: true, ...result };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle('customers:getPayments', async (_, { customerId }) => {
   if (!customerId || customerId === 0) return [];
   return customersRepo.getPayments(customerId);

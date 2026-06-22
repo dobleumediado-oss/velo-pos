@@ -46,6 +46,8 @@ contextBridge.exposeInMainWorld('api', {
     getAll:        ()          => ipcRenderer.invoke('customers:getAll'),
     create:        (data)      => ipcRenderer.invoke('customers:create', data),
     update:        (data)      => ipcRenderer.invoke('customers:update', data),
+    delete:        (data)      => ipcRenderer.invoke('customers:delete', data),
+    deleteAll:     (data)      => ipcRenderer.invoke('customers:deleteAll', data),
     addPayment:    (data)      => ipcRenderer.invoke('customers:addPayment', data),
     getPayments:   (data)      => ipcRenderer.invoke('customers:getPayments', data),
     getAllPayments: ()          => ipcRenderer.invoke('customers:getAllPayments'),

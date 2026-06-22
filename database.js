@@ -905,6 +905,19 @@ const customersRepo = {
       SELECT * FROM payments WHERE customer_id=? ORDER BY created_at DESC
     `).all(customerId);
   },
+  delete(id) {
+    if (Number(id) === 1) throw new Error('No se puede eliminar el cliente "Consumidor Final"');
+    const cust = db.prepare('SELECT id,name,balance FROM customers WHERE id=?').get(id);
+    if (!cust) throw new Error('Cliente no encontrado');
+    db.prepare(`UPDATE customers SET active=0,updated_at=datetime('now') WHERE id=?`).run(id);
+    return { id, name: cust.name, balance: cust.balance || 0 };
+  },
+  deleteAll() {
+    const rows = db.prepare(`SELECT id,balance FROM customers WHERE active=1 AND id != 1`).all();
+    const totalBalance = rows.reduce((s, r) => s + (r.balance || 0), 0);
+    db.prepare(`UPDATE customers SET active=0,updated_at=datetime('now') WHERE active=1 AND id != 1`).run();
+    return { count: rows.length, totalBalance };
+  },
 };
 
 // ── Caja ──────────────────────────────────────
