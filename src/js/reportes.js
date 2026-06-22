@@ -189,12 +189,13 @@ function renderReporteContenido(el, d) {
     { label: 'Costo de ventas',   val: fmt(totalCost),    color: 'var(--red)' },
     { label: 'Ingresos netos',    val: fmt(netRev),       color: 'var(--green)' },
     { label: 'Descuentos dados',  val: fmt(totalDisc),    color: 'var(--amber)' },
-    { label: 'Abonos recibidos',  val: fmt(abonos.total), color: 'var(--blue)' },
+    { label: 'Abonos recibidos',  val: fmt(abonos.total), color: 'var(--blue)', sub: abonos.count > 0 ? `${abonos.count} abono${abonos.count !== 1 ? 's' : ''}` : 'Sin abonos en el período' },
   ].forEach(m => {
     sec.appendChild(
       h('div', { class: 'metric', style: { padding: '10px 14px' } },
         h('div', { class: 'met-label' }, m.label),
-        h('div', { style: { fontSize: '18px', fontWeight: 800, color: m.color } }, m.val)
+        h('div', { style: { fontSize: '18px', fontWeight: 800, color: m.color } }, m.val),
+        m.sub ? h('div', { style: { fontSize: '10px', color: 'var(--muted2)', marginTop: '2px' } }, m.sub) : null
       )
     );
   });

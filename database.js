@@ -1339,11 +1339,12 @@ const reportsRepo = {
       ORDER BY day ASC
     `).all(...f.withAlias.params);
 
-    // Abonos recibidos en el período
+    // Abonos recibidos en el período (excluir saldos iniciales importados)
     const abonosData = db.prepare(`
       SELECT COUNT(*) as count, SUM(amount) as total
       FROM payments
       WHERE ${f.payments.sql}
+        AND note != 'Saldo inicial importado'
     `).get(...f.payments.params);
 
     const totalRev    = byMethod.reduce((a, m) => a + (m.total || 0), 0);
