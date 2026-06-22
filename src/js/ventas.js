@@ -919,8 +919,8 @@ function exportVentasPDF() {
       <tr>
         <td>#${s.id}</td>
         <td>${fdate(fecha)}</td>
-        <td>${name}</td>
-        <td style="text-transform:capitalize">${method}</td>
+        <td>${_esc(name)}</td>
+        <td style="text-transform:capitalize">${_esc(method)}</td>
         <td style="text-align:right">${fmt(s.total)}</td>
       </tr>`;
   }).join('');
@@ -935,15 +935,8 @@ function exportVentasPDF() {
   td{padding:7px 10px;border-bottom:1px solid #e5e7eb}
   .total{font-weight:700;font-size:14px;margin-top:10px;text-align:right}
   .foot{margin-top:14px;font-size:10px;color:#9ca3af}
-  .no-print{margin-bottom:12px;text-align:right}
-  @media print{.no-print{display:none}}
 </style></head><body>
-  <div class="no-print">
-    <button onclick="window.print()"
-      style="background:#0D0F12;color:#fff;border:none;padding:8px 16px;
-             border-radius:6px;font-size:12px;cursor:pointer">Imprimir</button>
-  </div>
-  <h2>Historial de Ventas — ${CFG.biz}</h2>
+  <h2>Historial de Ventas — ${_esc(CFG.biz)}</h2>
   <div class="sub">
     Período: ${rangeLabels[ventasRange]||ventasRange} ·
     ${sales.length} transacciones · ${fdate(today())}
@@ -956,15 +949,10 @@ function exportVentasPDF() {
     <tbody>${rows}</tbody>
   </table>
   <div class="total">Total: ${fmt(total)}</div>
-  <div class="foot">${CFG.biz} · ${CFG.phone} · ${CFG.addr}</div>
+  <div class="foot">${_esc(CFG.biz)} · ${_esc(CFG.phone)} · ${_esc(CFG.addr)}</div>
 </body></html>`;
 
-  const win = window.open('','_blank','width=860,height=650,scrollbars=yes');
-  if (!win) { toast('Activa ventanas emergentes', 'w'); return; }
-  win.document.open();
-  win.document.write(html);
-  win.document.close();
-  win.focus();
+  printHTML(html, 'reporte');
 }
 
 // ══════════════════════════════════════════════

@@ -173,12 +173,13 @@ function getSampleSale(cfg) {
 // HELPER — NCF y tipo de documento
 // ══════════════════════════════════════════════
 
-// Devuelve el NCF real de la venta, o string vacío si no aplica
+// Devuelve el NCF real de la venta, o string vacío si no aplica.
+// NUNCA fabricar uno: el NCF real ya se asigna y registra en ncf_log
+// al crear la venta (database.js). Inventar uno aquí imprimiría un
+// comprobante fiscal que no existe en el sistema.
 function _getNcf(sale) {
   if (sale.type !== 'factura') return '';
-  if (sale.ncf && sale.ncf.trim()) return sale.ncf.trim();
-  // Fallback: solo si no hay NCF guardado
-  return `B01${String(sale.id).padStart(9,'0')}`;
+  return (sale.ncf && sale.ncf.trim()) ? sale.ncf.trim() : '';
 }
 
 // Etiqueta del tipo de documento

@@ -1067,9 +1067,9 @@ function exportInventarioPDF() {
     const isOut    = p.stock === 0;
     return `
       <tr style="${isOut ? 'background:#fef2f2' : isLow ? 'background:#fffbeb' : ''}">
-        <td style="font-family:monospace;font-size:11px">${p.code}</td>
-        <td>${p.name}<br><span style="font-size:10px;color:#9ca3af">${p.brand||''}</span></td>
-        <td>${p.category || '&#8212;'}</td>
+        <td style="font-family:monospace;font-size:11px">${_esc(p.code)}</td>
+        <td>${_esc(p.name)}<br><span style="font-size:10px;color:#9ca3af">${_esc(p.brand)}</span></td>
+        <td>${_esc(p.category) || '&#8212;'}</td>
         <td style="text-align:center;font-weight:700;
             color:${isOut ? '#DC2626' : isLow ? '#D97706' : '#16A34A'}">
           ${p.stock} ${p.unit||'und'}
@@ -1115,7 +1115,7 @@ function exportInventarioPDF() {
       Imprimir / Guardar PDF
     </button>
   </div>
-  <h2>Inventario &#8212; ${CFG.biz}</h2>
+  <h2>Inventario &#8212; ${_esc(CFG.biz)}</h2>
   <div class="sub">Generado el ${fdate(today())} a las ${nowt()}</div>
   <div class="stats">
     <div class="stat"><strong>${DB.products.length}</strong>Productos</div>
@@ -1134,7 +1134,7 @@ function exportInventarioPDF() {
     <tbody>${rows}</tbody>
   </table>
   ${isAdmin ? `<div class="total">Valor total de inventario: RD$${totalVal.toLocaleString('es-DO')}</div>` : ''}
-  <div class="foot">${CFG.biz} &#183; ${CFG.phone} &#183; ${CFG.addr}</div>
+  <div class="foot">${_esc(CFG.biz)} &#183; ${_esc(CFG.phone)} &#183; ${_esc(CFG.addr)}</div>
 </body></html>`;
 
   printHTML(html);

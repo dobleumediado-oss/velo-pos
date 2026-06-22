@@ -686,8 +686,8 @@ function exportCreditAlertsPDF(alerts) {
       : `Vence en ${daysLeft} días`;
     return `
       <tr>
-        <td>${c.name}</td>
-        <td>${c.phone || '—'}</td>
+        <td>${_esc(c.name)}</td>
+        <td>${_esc(c.phone)||'—'}</td>
         <td style="text-align:right">RD$${balance.toLocaleString('es-DO')}</td>
         <td>${creditDue ? fdate(creditDue) : '—'}</td>
         <td style="color:${status==='overdue'?'#DC2626':'#D97706'};font-weight:600">
@@ -704,15 +704,8 @@ function exportCreditAlertsPDF(alerts) {
   th{background:#f3f4f6;padding:7px 10px;text-align:left;font-size:11px;text-transform:uppercase}
   td{padding:7px 10px;border-bottom:1px solid #e5e7eb}
   .foot{margin-top:14px;font-size:10px;color:#9ca3af}
-  .no-print{margin-bottom:12px;text-align:right}
-  @media print{.no-print{display:none}}
 </style></head><body>
-  <div class="no-print">
-    <button onclick="window.print()"
-      style="background:#0D0F12;color:#fff;border:none;padding:8px 16px;
-             border-radius:6px;font-size:12px;cursor:pointer">Imprimir</button>
-  </div>
-  <h2>Alertas de Crédito — ${CFG.biz}</h2>
+  <h2>Alertas de Crédito — ${_esc(CFG.biz)}</h2>
   <div class="sub">
     ${alerts.length} cliente(s) con crédito vencido o por vencer · ${fdate(today())}
   </div>
@@ -724,12 +717,10 @@ function exportCreditAlertsPDF(alerts) {
     </tr></thead>
     <tbody>${rows}</tbody>
   </table>
-  <div class="foot">${CFG.biz} · ${CFG.phone} · ${CFG.addr}</div>
+  <div class="foot">${_esc(CFG.biz)} · ${_esc(CFG.phone)} · ${_esc(CFG.addr)}</div>
 </body></html>`;
 
-  const win = window.open('','_blank','width=860,height=600,scrollbars=yes');
-  if (!win) { toast('Activa ventanas emergentes', 'w'); return; }
-  win.document.open(); win.document.write(html); win.document.close(); win.focus();
+  printHTML(html, 'reporte');
 }
 
 // ══════════════════════════════════════════════
@@ -759,7 +750,7 @@ function exportClientCreditPDF(c) {
   const pagosRows = pagos.map(p => {
     const fecha = (p.created_at || '').split('T')[0].split(' ')[0];
     return `<tr>
-      <td>${fdate(fecha)}</td><td>${p.note || 'Abono'}</td>
+      <td>${fdate(fecha)}</td><td>${_esc(p.note)||'Abono'}</td>
       <td style="text-align:right;color:#16A34A">
         +RD$${Number(p.amount||0).toLocaleString('es-DO')}</td>
     </tr>`;
@@ -776,17 +767,10 @@ function exportClientCreditPDF(c) {
   td{padding:7px 10px;border-bottom:1px solid #e5e7eb}
   .total{font-weight:700;font-size:14px;margin-top:10px}
   .foot{margin-top:16px;font-size:10px;color:#9ca3af}
-  .no-print{margin-bottom:12px;text-align:right}
-  @media print{.no-print{display:none}}
 </style></head><body>
-  <div class="no-print">
-    <button onclick="window.print()"
-      style="background:#0D0F12;color:#fff;border:none;padding:8px 16px;
-             border-radius:6px;font-size:12px;cursor:pointer">Imprimir</button>
-  </div>
-  <h2>Estado de Cuenta — ${c.name}</h2>
+  <h2>Estado de Cuenta — ${_esc(c.name)}</h2>
   <div class="sub">
-    RNC: ${c.rnc || '—'} · Tel: ${c.phone || '—'}<br>
+    RNC: ${_esc(c.rnc)||'—'} · Tel: ${_esc(c.phone)||'—'}<br>
     Límite: RD$${creditLimit.toLocaleString('es-DO')} · Plazo: ${creditDays} días
     ${creditDue ? '<br>Fecha límite: ' + fdate(creditDue) : ''}
   </div>
@@ -799,12 +783,10 @@ function exportClientCreditPDF(c) {
     <th style="text-align:right">Monto</th></tr></thead>
     <tbody>${pagosRows}</tbody></table>
   <div class="total">Balance pendiente: RD$${balance.toLocaleString('es-DO')}</div>
-  <div class="foot">${CFG.biz} · ${CFG.phone} · ${CFG.addr}</div>
+  <div class="foot">${_esc(CFG.biz)} · ${_esc(CFG.phone)} · ${_esc(CFG.addr)}</div>
 </body></html>`;
 
-  const win = window.open('','_blank','width=760,height=650,scrollbars=yes');
-  if (!win) { toast('Activa ventanas emergentes', 'w'); return; }
-  win.document.open(); win.document.write(html); win.document.close(); win.focus();
+  printHTML(html, 'pago');
 }
 
 

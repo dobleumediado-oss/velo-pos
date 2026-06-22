@@ -93,6 +93,7 @@ contextBridge.exposeInMainWorld('api', {
     html:         (data)      => ipcRenderer.invoke('print:html', data),
     getPrinters:  ()          => ipcRenderer.invoke('print:getPrinters'),
     savePrinter:  (data)      => ipcRenderer.invoke('print:savePrinter', data),
+    saveConfig:   (data)      => ipcRenderer.invoke('print:saveConfig', data),
     getJobs:      (data)      => ipcRenderer.invoke('print:getJobs', data),
   },
 

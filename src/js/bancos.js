@@ -472,9 +472,9 @@ async function _printBancosResumen() {
 
   const rows = cuentas.map(c => `
     <tr>
-      <td>${c.name}</td>
-      <td>${c.type}</td>
-      <td>${c.bank_name || '—'}</td>
+      <td>${_esc(c.name)}</td>
+      <td>${_esc(c.type)}</td>
+      <td>${_esc(c.bank_name)||'—'}</td>
       <td style="text-align:right">${fmt(c.balance)}</td>
       <td>${c.is_active ? 'Activa' : 'Inactiva'}</td>
     </tr>
@@ -492,7 +492,7 @@ async function _printBancosResumen() {
       .muted{color:#6b7280;font-size:11px}
     </style></head><body>
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">
-      <div><h1>${biz}</h1><div class="muted">Resumen de Cuentas Financieras · ${today}</div></div>
+      <div><h1>${_esc(biz)}</h1><div class="muted">Resumen de Cuentas Financieras · ${today}</div></div>
     </div>
     <h2>Cuentas Registradas</h2>
     <table>
@@ -503,5 +503,5 @@ async function _printBancosResumen() {
     </body></html>
   `;
 
-  await window.api.print.html({ html, copies: 1, silent: true });
+  printHTML(html, 'bancos');
 }

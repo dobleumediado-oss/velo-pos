@@ -195,8 +195,8 @@ async function renderConfiguracion(el) {
     const plantilla = typeof PLANTILLAS!=='undefined'?PLANTILLAS.find(p=>p.id===window._PA):null;
     if (!plantilla) { toast('Selecciona una plantilla primero','w'); return; }
     const cfg2 = { biz_name:CFG.biz||'Mi Negocio', biz_rnc:CFG.rnc||'', biz_addr:CFG.addr||'', biz_phone:CFG.phone||'', receipt_msg:CFG.receiptMsg||'¡Gracias por su compra!', biz_logo:CFG.biz_logo||'' };
-    window.api.print.preview({ html: plantilla.render(getSampleSale(cfg2), cfg2, {...plantilla.opciones,_estilos:_getEstilos(window._PA)}), printerName: CFG.printer||'' })
-      .catch(()=>toast('Error al imprimir prueba','err'));
+    const html = plantilla.render(getSampleSale(cfg2), cfg2, {...plantilla.opciones,_estilos:_getEstilos(window._PA)});
+    _openPrintWindow(html, 'prueba_plantilla', 0, false);
   }});
   btnPrint.innerHTML = `${svg('print')} Imprimir prueba`;
   pBtns.appendChild(btnPrint);
@@ -538,6 +538,81 @@ async function renderConfiguracion(el) {
     colLeft.appendChild(printerCard);
   }
 
+  // ── Impresión por módulo/documento (solo superadmin) ──
+  if (isSA) {
+    const printers = await window.api.print.getPrinters().catch(() => []);
+    let printCfg = {};
+    try { printCfg = JSON.parse(settings.print_config || '{}'); } catch {}
+
+    const printerOpts = (current) => `
+      <option value="">Impresora global (la de arriba)</option>
+      ${printers.map(p => `<option value="${_escHtml(p.name)}" ${p.name===current?'selected':''}>${_escHtml(p.name)}${p.isDefault?' (predeterminada)':''}</option>`).join('')}
+    `;
+
+    const catCard = h('div', { class: 'card', style: 'margin-top:16px' });
+    const rows = Object.keys(PRINT_CATEGORIES).map(cat => {
+      const c   = printCfg[cat] || {};
+      const def = PRINT_CATEGORIES[cat];
+      const autoPrintChecked = c.autoPrint !== undefined ? c.autoPrint : def.autoPrintDefault;
+      return `
+        <tr data-cat="${cat}">
+          <td style="padding:8px 6px;font-size:12px;font-weight:600">${def.label}</td>
+          <td style="padding:8px 6px">
+            <select class="inp pc-printer" style="font-size:12px;padding:5px 8px;width:100%">${printerOpts(c.printer||'')}</select>
+          </td>
+          <td style="padding:8px 6px;text-align:center">
+            <input type="checkbox" class="pc-preview" ${c.preview?'checked':''}>
+          </td>
+          <td style="padding:8px 6px;text-align:center">
+            ${cat === 'ticket'
+              ? `<input type="checkbox" class="pc-autoprint" ${autoPrintChecked?'checked':''}>`
+              : '<span style="color:var(--muted2);font-size:11px">—</span>'}
+          </td>
+        </tr>`;
+    }).join('');
+
+    catCard.innerHTML = `
+      <div class="fxb mb8"><div class="card-title">Impresión por módulo</div></div>
+      <div style="font-size:11px;color:var(--muted2);margin-bottom:10px">
+        Asigna una impresora distinta por tipo de documento y decide si quieres ver una vista
+        previa antes de imprimir. "Auto-imprimir" solo aplica a tickets de venta — si lo
+        desactivas, cada venta abrirá una vista previa en vez de imprimir directo.
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="text-align:left;font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:.04em">
+          <th style="padding:4px 6px">Módulo</th><th style="padding:4px 6px">Impresora</th>
+          <th style="padding:4px 6px;text-align:center">Vista previa</th>
+          <th style="padding:4px 6px;text-align:center">Auto-imprimir</th>
+        </tr></thead>
+        <tbody id="pc-rows">${rows}</tbody>
+      </table>
+      <div style="margin-top:12px">
+        <button class="btn btn-dark btn-fw" id="btn-save-print-config">${svg('check')} Guardar configuración</button>
+      </div>`;
+    colLeft.appendChild(catCard);
+
+    catCard.querySelector('#btn-save-print-config')?.addEventListener('click', async () => {
+      const newCfg = {};
+      catCard.querySelectorAll('#pc-rows tr[data-cat]').forEach(row => {
+        const cat     = row.dataset.cat;
+        const printer = row.querySelector('.pc-printer')?.value || '';
+        const preview = row.querySelector('.pc-preview')?.checked || false;
+        const autoEl  = row.querySelector('.pc-autoprint');
+        const entry   = { printer, preview };
+        if (autoEl) entry.autoPrint = autoEl.checked;
+        newCfg[cat] = entry;
+      });
+      const res = await window.api.print.saveConfig({ config: newCfg, requestUserId: user?.id });
+      if (res?.ok) {
+        settings.print_config = JSON.stringify(newCfg);
+        if (DB.settings) DB.settings.print_config = JSON.stringify(newCfg);
+        toast('✓ Configuración de impresión guardada');
+      } else {
+        toast(res?.error || 'Error al guardar', 'err');
+      }
+    });
+  }
+
   // ══════════════════════
   // COLUMNA DERECHA
   // ══════════════════════
@@ -762,6 +837,45 @@ async function renderConfiguracion(el) {
         Presiona "Ejecutar" para revisar el estado completo del sistema.
       </div>`;
     colRight.appendChild(diagCard);
+  }
+
+  // ── Impresiones fallidas (solo superadmin) ──
+  if (isSA) {
+    const failedJobs = await window.api.print.getJobs({})
+      .then(jobs => (jobs || []).filter(j => j.status === 'failed'))
+      .catch(() => []);
+
+    const failCard = h('div', { class: 'card' });
+    const rowsHtml = failedJobs.length ? failedJobs.slice(0, 15).map(j => `
+      <tr data-ref-id="${j.reference_id||''}">
+        <td style="padding:6px 6px;font-size:11px">${_escHtml(j.type)} #${j.reference_id||'—'}</td>
+        <td style="padding:6px 6px;font-size:11px;color:var(--muted2)">${_escHtml((j.created_at||'').slice(0,16))}</td>
+        <td style="padding:6px 6px;font-size:11px;color:#ef4444" title="${_escHtml(j.error)}">${_escHtml((j.error||'').slice(0,40))}</td>
+        <td style="padding:6px 6px;text-align:right">
+          ${j.type === 'ticket' && j.reference_id
+            ? `<button class="btn btn-out btn-sm pj-retry">${svg('refresh')} Reintentar</button>`
+            : `<span style="font-size:10px;color:var(--muted2)">Reimprime desde su módulo</span>`}
+        </td>
+      </tr>`).join('') : `<tr><td colspan="4" style="padding:14px;text-align:center;color:var(--muted2);font-size:12px">Sin impresiones fallidas recientes</td></tr>`;
+
+    failCard.innerHTML = `
+      <div class="fxb mb8"><div class="card-title">Impresiones fallidas</div></div>
+      <div style="font-size:11px;color:var(--muted2);margin-bottom:10px">
+        Últimos intentos de impresión que fallaron (impresora ocupada, desconectada, etc.).
+        Los tickets de venta se pueden reintentar aquí mismo; el resto debe reimprimirse
+        desde su módulo de origen.
+      </div>
+      <table style="width:100%;border-collapse:collapse">
+        <tbody>${rowsHtml}</tbody>
+      </table>`;
+    colRight.appendChild(failCard);
+
+    failCard.querySelectorAll('.pj-retry').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const refId = parseInt(btn.closest('tr')?.dataset.refId, 10);
+        if (refId && typeof reimprimirVenta === 'function') reimprimirVenta(refId);
+      });
+    });
   }
 
   // ── Ensamblar ────────────────────────────────

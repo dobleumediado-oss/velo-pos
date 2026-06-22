@@ -501,7 +501,7 @@ function exportReportePDF() {
   const prodRows = (d.topProducts || []).map((p, i) => `
     <tr>
       <td>${i+1}</td>
-      <td>${p.product_name}</td>
+      <td>${_esc(p.product_name)}</td>
       <td style="text-align:center">${p.total_qty}</td>
       <td style="text-align:right">${fmt(p.total_rev)}</td>
       <td style="text-align:right">${fmt(p.total_cost)}</td>
@@ -511,7 +511,7 @@ function exportReportePDF() {
 
   const html = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"/>
-<title>Reporte — ${CFG.biz}</title>
+<title>Reporte — ${_esc(CFG.biz)}</title>
 <style>
   body{font-family:Arial,sans-serif;font-size:11px;color:#111;padding:20px}
   h2{margin-bottom:2px;font-size:16px}
@@ -541,11 +541,11 @@ function exportReportePDF() {
     </button>
   </div>
 
-  <h2>Reporte Financiero — ${CFG.biz}</h2>
+  <h2>Reporte Financiero — ${_esc(CFG.biz)}</h2>
   <div class="sub">
     Período: <strong>${rangeLabel}</strong> ·
     Generado: ${fdate(today())} a las ${nowt()} ·
-    RNC: ${CFG.rnc}
+    RNC: ${_esc(CFG.rnc)}
   </div>
 
   <div class="metrics">
@@ -602,7 +602,7 @@ function exportReportePDF() {
   </table>
 
   <div class="foot">
-    ${CFG.biz} · RNC: ${CFG.rnc} · Tel: ${CFG.phone} · ${CFG.addr}
+    ${_esc(CFG.biz)} · RNC: ${_esc(CFG.rnc)} · Tel: ${_esc(CFG.phone)} · ${_esc(CFG.addr)}
   </div>
 </body></html>`;
 
@@ -626,9 +626,9 @@ function exportReporteCreditoPDF() {
                    alert?.status === 'soon'    ? '#d97706' : '#16a34a';
     return `
       <tr>
-        <td><strong>${c.name}</strong></td>
-        <td>${c.rnc || '—'}</td>
-        <td>${c.phone || '—'}</td>
+        <td><strong>${_esc(c.name)}</strong></td>
+        <td>${_esc(c.rnc)||'—'}</td>
+        <td>${_esc(c.phone)||'—'}</td>
         <td style="text-align:right;font-weight:700;color:#dc2626">${fmt(c.balance)}</td>
         <td style="text-align:right">${fmt(c.credit_limit || 0)}</td>
         <td>${c.credit_due ? fdate(c.credit_due) : '—'}</td>
@@ -638,7 +638,7 @@ function exportReporteCreditoPDF() {
 
   const html = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"/>
-<title>Créditos — ${CFG.biz}</title>
+<title>Créditos — ${_esc(CFG.biz)}</title>
 <style>
   body{font-family:Arial,sans-serif;font-size:11px;padding:20px}
   h2{margin-bottom:2px}
@@ -659,7 +659,7 @@ function exportReporteCreditoPDF() {
       Imprimir / PDF
     </button>
   </div>
-  <h2>Cuentas por Cobrar — ${CFG.biz}</h2>
+  <h2>Cuentas por Cobrar — ${_esc(CFG.biz)}</h2>
   <div class="sub">${clients.length} clientes con deuda · ${fdate(today())}</div>
   <table>
     <thead><tr>
@@ -671,7 +671,7 @@ function exportReporteCreditoPDF() {
     <tbody>${rows || '<tr><td colspan="7" style="text-align:center;color:#9ca3af;padding:14px">Sin deudas pendientes</td></tr>'}</tbody>
   </table>
   <div class="total">Total por cobrar: ${fmt(total)}</div>
-  <div class="foot">${CFG.biz} · ${CFG.phone} · ${CFG.addr}</div>
+  <div class="foot">${_esc(CFG.biz)} · ${_esc(CFG.phone)} · ${_esc(CFG.addr)}</div>
 </body></html>`;
 
   printHTML(html);
@@ -743,7 +743,7 @@ async function _renderReporteInventario(el) {
   filterRow.appendChild(h('button', {
     class: 'btn btn-out btn-sm',
     html: `${svg('pdf')} Exportar PDF`,
-    onclick: () => exportInventarioPDF(prods)
+    onclick: () => exportInventarioValorizadoPDF(prods)
   }));
   card.appendChild(filterRow);
 
@@ -828,7 +828,7 @@ async function _renderReporteInventario(el) {
 }
 
 // ── Exportar inventario a PDF ─────────────────
-function exportInventarioPDF(prods) {
+function exportInventarioValorizadoPDF(prods) {
   const today_ = today();
   const total   = prods.reduce((a,p) => a + ((p.stock||0)*(p.cost||0)), 0);
   const sorted  = [...prods].sort((a,b) =>
@@ -850,7 +850,7 @@ function exportInventarioPDF(prods) {
       .badge-ok{color:#16a34a}
     </style>
   </head><body>
-    <h1>${CFG.biz} — Inventario Valorizado</h1>
+    <h1>${_esc(CFG.biz)} — Inventario Valorizado</h1>
     <div class="sub">Generado: ${fdate(today_)} · Total: ${fmt(total)} · ${sorted.length} productos</div>
     <table>
       <thead><tr>
@@ -860,9 +860,9 @@ function exportInventarioPDF(prods) {
       <tbody>
         ${sorted.map(p => `
           <tr>
-            <td>${p.code||'—'}</td>
-            <td>${p.name}</td>
-            <td>${p.category||'—'}</td>
+            <td>${_esc(p.code)||'—'}</td>
+            <td>${_esc(p.name)}</td>
+            <td>${_esc(p.category)||'—'}</td>
             <td class="r">$${(p.cost||0).toFixed(2)}</td>
             <td class="r">${p.stock||0}</td>
             <td class="r">$${((p.stock||0)*(p.cost||0)).toFixed(2)}</td>

@@ -651,8 +651,8 @@ function printResumen(cajaId) {
     `<tr>
       <td>#${v.id}</td>
       <td>${v.time || '—'}</td>
-      <td>${v.clientName || 'Consumidor Final'}</td>
-      <td style="text-transform:capitalize">${v.pay}</td>
+      <td>${_esc(v.clientName)||'Consumidor Final'}</td>
+      <td style="text-transform:capitalize">${_esc(v.pay)}</td>
       <td style="text-align:right">${fmt(v.total)}</td>
     </tr>`
   ).join('');
@@ -721,14 +721,14 @@ function printResumen(cajaId) {
 
   <div class="hdr">
     <div>
-      <div class="biz">${CFG.biz}</div>
-      <div class="biz-sub">RNC: ${CFG.rnc}<br>${CFG.addr}<br>Tel: ${CFG.phone}</div>
+      <div class="biz">${_esc(CFG.biz)}</div>
+      <div class="biz-sub">RNC: ${_esc(CFG.rnc)}<br>${_esc(CFG.addr)}<br>Tel: ${_esc(CFG.phone)}</div>
     </div>
     <div>
       <div class="rep-title">REPORTE DE CAJA</div>
       <div class="rep-sub">
         Sesión #${s.id}<br>
-        Cajero: ${s.cajero}<br>
+        Cajero: ${_esc(s.cajero)}<br>
         ${fdate(s.od)} ${s.ot} → ${fdate(s.cd || today())} ${s.ct || '—'}
       </div>
     </div>
@@ -800,7 +800,7 @@ function printResumen(cajaId) {
   <div class="cuadre">
     <div class="val">${diffLabel}</div>
     <div class="lbl">Efectivo esperado: ${fmt(expected)} · Contado: ${fmt(s.close || 0)}</div>
-    ${s.obs ? `<div style="margin-top:6px;font-size:11px;color:#6B7280">Obs: ${s.obs}</div>` : ''}
+    ${s.obs ? `<div style="margin-top:6px;font-size:11px;color:#6B7280">Obs: ${_esc(s.obs)}</div>` : ''}
   </div>
 
   <!-- Gastos del día — solo si módulo activo -->
@@ -819,10 +819,10 @@ function printResumen(cajaId) {
   </table>` : ''}
 
   <div class="foot">
-    ${CFG.biz} · RNC: ${CFG.rnc} · ${CFG.phone} · ${CFG.addr}<br>
+    ${_esc(CFG.biz)} · RNC: ${_esc(CFG.rnc)} · ${_esc(CFG.phone)} · ${_esc(CFG.addr)}<br>
     Documento generado el ${fdate(today())} ${nowt()}
   </div>
 </body></html>`;
 
-  printHTML(html);
+  printHTML(html, 'caja');
 }

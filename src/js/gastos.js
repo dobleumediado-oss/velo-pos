@@ -436,7 +436,7 @@ async function renderProveedoresGastos(el, user) {
   el.innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted2)">Cargando proveedores...</div>';
   try {
     const res = await window.api.suppliers.getAll();
-    const data = res || [];
+    const data = res?.ok ? (res.data || []) : [];
     el.innerHTML = `
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px">
         ${!data.length ? `<div style="color:var(--muted2);font-size:13px;padding:20px">Sin proveedores registrados.</div>` :
@@ -446,8 +446,9 @@ async function renderProveedoresGastos(el, user) {
             ${s.rnc ? `<div style="font-size:11px;color:var(--muted2)">RNC: ${s.rnc}</div>` : ''}
             ${s.phone ? `<div style="font-size:11px;color:var(--muted2)">${svg('phone')} ${s.phone}</div>` : ''}
             ${s.email ? `<div style="font-size:11px;color:var(--muted2)">${svg('mail')} ${s.email}</div>` : ''}
-            <div style="margin-top:8px;display:flex;gap:6px">
+            <div style="margin-top:8px;display:flex;gap:6px;align-items:center">
               <span style="font-size:10px;padding:2px 8px;border-radius:100px;background:${s.status==='activo'?'var(--green,#00c07a)':'var(--red,#ef4444)'}22;color:${s.status==='activo'?'var(--green,#00c07a)':'var(--red,#ef4444)'};font-weight:600">${s.status||'activo'}</span>
+              <button class="btn btn-ghost btn-sm" style="margin-left:auto;font-size:11px;padding:3px 8px" onclick="imprimirEstadoCuentaProveedor(${s.id})" title="Imprimir estado de cuenta">${svg('print')} Estado de cuenta</button>
             </div>
           </div>`).join('')}
       </div>`;
@@ -455,6 +456,77 @@ async function renderProveedoresGastos(el, user) {
     el.innerHTML = `<div style="color:var(--red,#ef4444);padding:16px">Error: ${err.message}</div>`;
   }
 }
+
+// ── Estado de cuenta / historial de pagos de un proveedor ──
+window.imprimirEstadoCuentaProveedor = async function(supplierId) {
+  try {
+    const [suppRes, expRes] = await Promise.all([
+      window.api.suppliers.getAll(),
+      window.api.expenses.getAll({ supplier_id: supplierId }),
+    ]);
+    const suppliers = suppRes?.ok ? (suppRes.data || []) : [];
+    const expenses  = expRes?.ok  ? (expRes.data  || []) : [];
+    const supplier  = suppliers.find(s => s.id === supplierId);
+    if (!supplier) { toast('Proveedor no encontrado', 'err'); return; }
+
+    const biz          = DB?.settings?.biz_name || CFG.biz || 'Mi Negocio';
+    const totalGeneral = expenses.reduce((a,e) => a + (e.total||0), 0);
+    const totalPagado  = expenses.reduce((a,e) => a + (e.paid_amount||0), 0);
+    const totalDeuda   = expenses.reduce((a,e) => a + Math.max(0, (e.total||0) - (e.paid_amount||0)), 0);
+
+    const rows = expenses.map(e => {
+      const pendiente = Math.max(0, (e.total||0) - (e.paid_amount||0));
+      return `<tr>
+        <td>${_gFmtDate(e.issue_date)}</td>
+        <td>${_esc(e.description)}</td>
+        <td>${_esc(e.category_name)||'—'}</td>
+        <td style="text-align:right">${_gFmt(e.total)}</td>
+        <td style="text-align:right">${_gFmt(e.paid_amount||0)}</td>
+        <td style="text-align:right;font-weight:600;color:${pendiente>0?'#dc2626':'#16a34a'}">${_gFmt(pendiente)}</td>
+        <td>${badge(e.status)}</td>
+      </tr>`;
+    }).join('');
+
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
+<title>Estado de cuenta — ${_esc(supplier.name)}</title>
+<style>
+  body{font-family:Arial,sans-serif;font-size:12px;color:#111;padding:20px}
+  h1{font-size:16px;margin-bottom:2px}
+  .sub{color:#666;margin-bottom:14px;font-size:11px}
+  table{width:100%;border-collapse:collapse;margin-bottom:12px}
+  th{background:#f3f4f6;padding:7px 10px;text-align:left;font-size:10px;text-transform:uppercase}
+  td{padding:6px 10px;border-bottom:1px solid #e5e7eb;font-size:11px}
+  .totals{margin-left:auto;width:260px}
+  .totals td{padding:4px 8px}
+  .totals tr:last-child td{font-weight:700;font-size:13px;border-top:2px solid #000}
+  .foot{margin-top:14px;font-size:10px;color:#9ca3af}
+</style></head><body>
+  <h1>${_esc(biz)}</h1>
+  <div class="sub">Estado de Cuenta — Proveedor · Generado el ${_gFmtDate(_gToday())}</div>
+  <div style="background:#f9fafb;padding:8px 12px;border-radius:4px;margin-bottom:10px">
+    <strong>Proveedor:</strong> ${_esc(supplier.name)}
+    ${supplier.rnc   ? ` &nbsp;·&nbsp; RNC: ${_esc(supplier.rnc)}`     : ''}
+    ${supplier.phone ? ` &nbsp;·&nbsp; Tel: ${_esc(supplier.phone)}` : ''}
+  </div>
+  <table>
+    <thead><tr><th>Fecha</th><th>Descripción</th><th>Categoría</th>
+    <th style="text-align:right">Total</th><th style="text-align:right">Pagado</th>
+    <th style="text-align:right">Pendiente</th><th>Estado</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="7" style="text-align:center;color:#9ca3af">Sin gastos registrados</td></tr>'}</tbody>
+  </table>
+  <table class="totals">
+    <tr><td>Total facturado</td><td style="text-align:right">${_gFmt(totalGeneral)}</td></tr>
+    <tr><td>Total pagado</td><td style="text-align:right">${_gFmt(totalPagado)}</td></tr>
+    <tr><td>Balance pendiente</td><td style="text-align:right">${_gFmt(totalDeuda)}</td></tr>
+  </table>
+  <div class="foot">${_esc(biz)} · Documento generado por Velo POS</div>
+</body></html>`;
+
+    printHTML(html, 'pago');
+  } catch(err) {
+    toast('Error al generar estado de cuenta: ' + err.message, 'err');
+  }
+};
 
 // ══════════════════════════════════════════════
 // TAB: PRESUPUESTOS
@@ -621,9 +693,10 @@ function abrirModal(titulo, contenidoHTML, onConfirm, confirmLabel='Guardar') {
 function modalNuevoGasto(parentEl, user) {
   const padres = _categorias.filter(c => !c.parent_id);
   const proveedores = [];
-  window.api.suppliers.getAll().then(p => {
-    const sel = document.getElementById('gasto-supplier');
-    if (sel && p) p.forEach(s => sel.insertAdjacentHTML('beforeend', `<option value="${s.id}">${s.name}</option>`));
+  window.api.suppliers.getAll().then(res => {
+    const sel  = document.getElementById('gasto-supplier');
+    const list = res?.ok ? (res.data || []) : [];
+    if (sel) list.forEach(s => sel.insertAdjacentHTML('beforeend', `<option value="${s.id}">${_esc(s.name)}</option>`));
   }).catch(()=>{});
 
   const html = `
@@ -903,17 +976,41 @@ window.pagarGasto = (id, saldo) => {
     const amount = parseFloat(overlay.querySelector('#pago-amount')?.value);
     if (!amount || amount <= 0) throw new Error('El monto debe ser mayor a cero');
     if (amount > saldo + 0.01) throw new Error(`No puedes pagar más del saldo pendiente (${_gFmt(saldo)})`);
-    const method = overlay.querySelector('#pago-method')?.value;
+    const method    = overlay.querySelector('#pago-method')?.value;
+    const reference = overlay.querySelector('#pago-ref')?.value || null;
+    const notes     = overlay.querySelector('#pago-notes')?.value || null;
     const res = await window.api.expenses.pay({
       expenseId: id, amount,
       payment_method: method,
       payment_source: method === 'efectivo' ? 'caja' : 'banco',
-      reference: overlay.querySelector('#pago-ref')?.value || null,
-      notes: overlay.querySelector('#pago-notes')?.value || null,
+      reference, notes,
       requestUserId: user.id,
     });
     if (!res.ok) throw new Error(res.error);
     toast('✓ Pago registrado correctamente');
+
+    // Imprimir recibo de pago a proveedor (no bloquea el flujo si falla)
+    try {
+      const expRes  = await window.api.expenses.getById({ id });
+      const expense = expRes?.ok ? expRes.data : null;
+      if (expense && typeof printPagoProveedor === 'function') {
+        printPagoProveedor({
+          payment: {
+            id:             res.paymentId || id,
+            amount,
+            method,
+            reference,
+            notes,
+            balance_before: saldo,
+            balance_after:  saldo - amount,
+            created_at:     new Date().toISOString(),
+          },
+          expense,
+          cajero: user.name,
+        });
+      }
+    } catch(e) { console.error('[gastos] error al imprimir recibo de pago', e); }
+
     const el = document.getElementById('main-content');
     if (el) renderGastos(el);
   }, 'Registrar pago');

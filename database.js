@@ -1870,7 +1870,7 @@ const expensesRepo = {
       }
 
       // Registrar pago
-      db.prepare(`INSERT INTO expense_payments(expense_id,amount,payment_method,payment_source,
+      const payRow = db.prepare(`INSERT INTO expense_payments(expense_id,amount,payment_method,payment_source,
         cash_session_id,cash_movement_id,reference,notes,user_id)
         VALUES(?,?,?,?,?,?,?,?,?)`).run(expenseId, amount, payment_method||'efectivo',
         payment_source||'caja', cash_session_id||null, cashMovementId, reference||null, notes||null, userId);
@@ -1883,7 +1883,7 @@ const expensesRepo = {
 
       audit(userId, userName||'', 'gasto_pagado', 'expenses', expenseId,
         `Pago: RD$${amount} | Método: ${payment_method} | Estado: ${newStatus}`);
-      return { ok: true, newStatus, newPaid, cashMovementId };
+      return { ok: true, newStatus, newPaid, cashMovementId, paymentId: payRow.lastInsertRowid };
     })();
   },
 

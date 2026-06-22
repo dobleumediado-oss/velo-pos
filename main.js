@@ -959,76 +959,92 @@ ipcMain.handle('license:revoke', async (_, { requestUserId } = {}) => {
  * - Si se pasa printerName, la preselecciona en el diálogo
  * - Registra el trabajo en print_jobs para auditoría y reimpresión
  */
+async function _attemptPrintHTML({ html, printerName, printerWidth, pageHint }) {
+  // isThermal: solo cuando hay printerName Y printerWidth
+  // carta: printerName sin printerWidth (o sin printerName)
+  // Para carta usamos 816px (≈ 8.5" a 96dpi) para que el layout renderice correcto
+  // Para térmica 480px es suficiente — papel angosto
+  const isThermal  = !!(printerName && printerWidth);
+  const printWin = new BrowserWindow({
+    width:  isThermal ? 480 : 816,
+    height: isThermal ? 700 : 1056,
+    show: false,
+    webPreferences: { nodeIntegration: false, contextIsolation: true },
+  });
+
+  await new Promise((resolve, reject) => {
+    const loadTimeout = setTimeout(() => {
+      printWin.destroy();
+      reject(new Error('Tiempo agotado cargando el documento de impresión'));
+    }, 12000);
+    printWin.webContents.once('did-finish-load', () => { clearTimeout(loadTimeout); resolve(); });
+    printWin.webContents.once('did-fail-load', (_, __, errDesc) => {
+      clearTimeout(loadTimeout);
+      printWin.destroy();
+      reject(new Error(errDesc || 'No se pudo cargar el documento'));
+    });
+    printWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+  });
+
+  // Carta necesita más tiempo para renderizar CSS/tablas/logo que una térmica simple
+  await new Promise(r => setTimeout(r, isThermal ? 350 : 600));
+  // printerWidth puede llegar como "50mm" (string) o como número en micrones
+  // Convertir siempre a micrones (enteros) que es lo que espera Electron
+  let paperWidth = 80000; // default 80mm en micrones
+  if (printerWidth) {
+    if (typeof printerWidth === 'string' && printerWidth.endsWith('mm')) {
+      paperWidth = Math.round(parseFloat(printerWidth) * 1000); // mm → micrones
+    } else if (typeof printerWidth === 'number') {
+      paperWidth = printerWidth;
+    } else {
+      paperWidth = parseInt(printerWidth) || 80000;
+    }
+  }
+  const printOptions = {
+    // silent:true en térmica = sin diálogo del sistema (imprime directo)
+    // silent:false en A4 = muestra diálogo para que el usuario elija papel
+    silent:          isThermal,
+    printBackground: true,
+    margins:         isThermal
+      ? { marginType: 'custom', top: 2, bottom: 2, left: 2, right: 2 }
+      : { marginType: 'default' },
+    pageSize: isThermal
+      // height muy grande para que el corte automático de la térmica lo maneje
+      ? { width: paperWidth, height: 999999 }
+      // pageHint 'half-letter' → media carta (5.5"×4.25" = 139700×107950 micrones)
+      : pageHint === 'half-letter'
+        ? { width: 139700, height: 107950 }
+        : 'Letter',
+  };
+
+  if (printerName) {
+    printOptions.deviceName = printerName;
+  }
+
+  await new Promise((resolve, reject) => {
+    printWin.webContents.print(printOptions, (success, errType) => {
+      printWin.destroy();
+      if (success) resolve();
+      else reject(new Error(errType || 'Impresión cancelada o fallida'));
+    });
+  });
+
+}
+
 ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, jobType, referenceId, userId, pageHint }) => {
   try {
-    // isThermal: solo cuando hay printerName Y printerWidth
-    // carta: printerName sin printerWidth (o sin printerName)
-    // Para carta usamos 816px (≈ 8.5" a 96dpi) para que el layout renderice correcto
-    // Para térmica 480px es suficiente — papel angosto
-    const isThermal  = !!(printerName && printerWidth);
-    const printWin = new BrowserWindow({
-      width:  isThermal ? 480 : 816,
-      height: isThermal ? 700 : 1056,
-      show: false,
-      webPreferences: { nodeIntegration: false, contextIsolation: true },
-    });
-
-    await new Promise((resolve, reject) => {
-      const loadTimeout = setTimeout(() => {
-        printWin.destroy();
-        reject(new Error('Tiempo agotado cargando el documento de impresión'));
-      }, 12000);
-      printWin.webContents.once('did-finish-load', () => { clearTimeout(loadTimeout); resolve(); });
-      printWin.webContents.once('did-fail-load', (_, __, errDesc) => {
-        clearTimeout(loadTimeout);
-        printWin.destroy();
-        reject(new Error(errDesc || 'No se pudo cargar el documento'));
-      });
-      printWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
-    });
-
-    // Carta necesita más tiempo para renderizar CSS/tablas/logo que una térmica simple
-    await new Promise(r => setTimeout(r, isThermal ? 350 : 600));
-    // printerWidth puede llegar como "50mm" (string) o como número en micrones
-    // Convertir siempre a micrones (enteros) que es lo que espera Electron
-    let paperWidth = 80000; // default 80mm en micrones
-    if (printerWidth) {
-      if (typeof printerWidth === 'string' && printerWidth.endsWith('mm')) {
-        paperWidth = Math.round(parseFloat(printerWidth) * 1000); // mm → micrones
-      } else if (typeof printerWidth === 'number') {
-        paperWidth = printerWidth;
-      } else {
-        paperWidth = parseInt(printerWidth) || 80000;
-      }
+    try {
+      await _attemptPrintHTML({ html, printerName, printerWidth, pageHint });
+    } catch (firstErr) {
+      // Reintento automático único — solo para impresión silenciosa (térmica),
+      // donde un fallo normalmente es un problema transitorio (impresora ocupada
+      // o temporalmente no disponible), no una cancelación explícita del usuario.
+      // En modo diálogo (carta) un fallo suele ser el usuario cancelando — no reintentar.
+      const wasThermalAttempt = !!(printerName && printerWidth);
+      if (!wasThermalAttempt) throw firstErr;
+      await new Promise(r => setTimeout(r, 1200));
+      await _attemptPrintHTML({ html, printerName, printerWidth, pageHint });
     }
-    const printOptions = {
-      // silent:true en térmica = sin diálogo del sistema (imprime directo)
-      // silent:false en A4 = muestra diálogo para que el usuario elija papel
-      silent:          isThermal,
-      printBackground: true,
-      margins:         isThermal
-        ? { marginType: 'custom', top: 2, bottom: 2, left: 2, right: 2 }
-        : { marginType: 'default' },
-      pageSize: isThermal
-        // height muy grande para que el corte automático de la térmica lo maneje
-        ? { width: paperWidth, height: 999999 }
-        // pageHint 'half-letter' → media carta (5.5"×4.25" = 139700×107950 micrones)
-        : pageHint === 'half-letter'
-          ? { width: 139700, height: 107950 }
-          : 'Letter',
-    };
-
-    if (printerName) {
-      printOptions.deviceName = printerName;
-    }
-
-    await new Promise((resolve, reject) => {
-      printWin.webContents.print(printOptions, (success, errType) => {
-        printWin.destroy();
-        if (success) resolve();
-        else reject(new Error(errType || 'Impresión cancelada o fallida'));
-      });
-    });
 
     // Registrar trabajo exitoso en print_jobs
     if (jobType && referenceId) {
@@ -1084,6 +1100,25 @@ ipcMain.handle('print:savePrinter', async (_, { printerName, requestUserId }) =>
     const reqUser = requestUserId ? authRepo.findById(requestUserId) : null;
     audit(requestUserId || 0, reqUser?.name || 'sistema',
       'impresora_configurada', 'settings', null, printerName);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+/**
+ * Guarda la configuración de impresión por categoría de documento
+ * (impresora/vista previa/auto-impresión por módulo: ticket, pago,
+ * caja, contabilidad, bancos, reporte).
+ */
+ipcMain.handle('print:saveConfig', async (_, { config, requestUserId }) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Solo administradores pueden modificar la configuración de impresión' };
+    }
+    settingsRepo.set('print_config', JSON.stringify(config || {}));
+    audit(requestUserId, reqUser.name, 'config_impresion_actualizada', 'settings', null, '');
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };

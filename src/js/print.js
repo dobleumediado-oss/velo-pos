@@ -43,6 +43,65 @@ function _getSavedPrinter() {
 }
 
 // ══════════════════════════════════════════════
+// CONFIGURACIÓN DE IMPRESIÓN POR MÓDULO/DOCUMENTO
+// ══════════════════════════════════════════════
+// Categorías de documento — cada una puede tener su propia impresora,
+// vista previa forzada, y (solo "ticket") impresión automática tras venta.
+// Si una categoría no tiene override, cae a la impresora global guardada.
+const PRINT_CATEGORIES = {
+  ticket:       { label: 'Ventas / Tickets',          autoPrintDefault: true  },
+  pago:         { label: 'Pagos / Abonos / CxC / CxP',autoPrintDefault: true  },
+  caja:         { label: 'Caja / Arqueos / Cierres',  autoPrintDefault: false },
+  contabilidad: { label: 'Contabilidad',              autoPrintDefault: false },
+  bancos:       { label: 'Bancos',                    autoPrintDefault: false },
+  reporte:      { label: 'Reportes (ventas/inventario)', autoPrintDefault: false },
+};
+
+// jobType (el identificador interno de cada función de impresión) → categoría
+const _JOB_TYPE_CATEGORY = {
+  ticket: 'ticket', test: 'ticket', prueba_plantilla: 'ticket',
+  abono: 'pago', pago_proveedor: 'pago',
+  cierre: 'caja',
+};
+function _categoryForJobType(jobType) {
+  return _JOB_TYPE_CATEGORY[jobType] || jobType || 'reporte';
+}
+
+function _getPrintConfig() {
+  try { return JSON.parse(DB?.settings?.print_config || '{}'); } catch { return {}; }
+}
+
+function _getCategoryConfig(category) {
+  const all = _getPrintConfig();
+  const cat = all[category] || {};
+  return {
+    printer:   (cat.printer || '').trim(),
+    preview:   cat.preview === true,
+    autoPrint: cat.autoPrint !== undefined
+      ? cat.autoPrint !== false
+      : (PRINT_CATEGORIES[category]?.autoPrintDefault ?? true),
+  };
+}
+
+// ── Guard contra impresión duplicada ──────────
+// Evita reenviar el mismo documento si el usuario presiona "Imprimir"
+// varias veces muy rápido mientras el trabajo anterior sigue en curso.
+const _inFlightPrintKeys = new Set();
+
+function _printDispatch(payload) {
+  const key = (payload.jobType && payload.referenceId != null)
+    ? `${payload.jobType}:${payload.referenceId}` : null;
+  if (key) {
+    if (_inFlightPrintKeys.has(key)) {
+      return Promise.resolve({ ok: false, duplicate: true, error: 'Ya hay una impresión en curso para este documento' });
+    }
+    _inFlightPrintKeys.add(key);
+  }
+  const release = () => { if (key) _inFlightPrintKeys.delete(key); };
+  return window.api.print.html(payload).then(r => { release(); return r; }, e => { release(); throw e; });
+}
+
+// ══════════════════════════════════════════════
 // TICKET DE VENTA 80MM
 // ══════════════════════════════════════════════
 function printReceipt(sale, isReprint = false) {
@@ -173,16 +232,13 @@ function printReceipt(sale, isReprint = false) {
     lines.push(tRow('Método de pago:', metodo));
   }
 
-  if (isFactura && !isDevolucion) {
+  if (isFactura && !isDevolucion && sale.ncf && sale.ncf.trim()) {
+    // Usar el NCF real guardado en la venta — nunca fabricar uno.
+    // El NCF real se asigna y registra en ncf_log al crear la venta;
+    // si no está guardado, no se imprime ninguno.
     lines.push('');
     lines.push(tCenter('Documento con validez fiscal'));
-    // Usar el NCF real guardado en la venta — no el ID
-    if (sale.ncf && sale.ncf.trim()) {
-      lines.push(tCenter(`NCF: ${sale.ncf}`));
-    } else if (cfg?.fiscalEnabled || cfg?.fiscal_enabled === '1') {
-      // Fallback si por alguna razón no se guardó el NCF
-      lines.push(tCenter(`NCF: B01${String(sale.id).padStart(9,'0')}`));
-    }
+    lines.push(tCenter(`NCF: ${sale.ncf}`));
   }
 
   if (isDevolucion && sale.original_sale_id) {
@@ -237,6 +293,47 @@ function printAbono({ payment, customer, cajero }) {
   lines.push('');
 
   _sendToPrinter(lines, 'abono', payment.id);
+}
+
+// ══════════════════════════════════════════════
+// RECIBO DE PAGO A PROVEEDOR 80MM
+// ══════════════════════════════════════════════
+function printPagoProveedor({ payment, expense, cajero }) {
+  if (!payment || !expense) return;
+
+  const lines = [];
+  lines.push(tCenter(CFG.biz));
+  if (CFG.rnc)   lines.push(tCenter(`RNC: ${CFG.rnc}`));
+  if (CFG.phone) lines.push(tCenter(`Tel: ${CFG.phone}`));
+  lines.push(tline());
+  lines.push(tCenter('*** PAGO A PROVEEDOR ***'));
+  lines.push(tline());
+  lines.push(tRow(`No.: ${String(payment.id).padStart(5,'0')}`,
+    `Fecha: ${(payment.created_at || today()).split('T')[0].split(' ')[0]}`));
+  lines.push(tRow('Cajero:', (cajero || '').split(' ')[0]));
+  lines.push(tline());
+  lines.push(tRow('Proveedor:', (expense.supplier_name || 'N/A').slice(0, 28)));
+  if (expense.supplier_rnc) lines.push(tRow('RNC:', expense.supplier_rnc));
+  lines.push(tRow('Concepto:', (expense.description || '').slice(0, 28)));
+  if (expense.invoice_number) lines.push(tRow('Factura No.:', expense.invoice_number));
+  lines.push(tline());
+  lines.push(tRow('Total del gasto:', fmt(expense.total || 0)));
+  lines.push(tRow('Balance anterior:', fmt(payment.balance_before || 0)));
+  lines.push(tRow('Monto pagado:', fmt(payment.amount || 0)));
+  lines.push(tlineD());
+  lines.push(tRow('BALANCE PENDIENTE:', fmt(payment.balance_after || 0)));
+  lines.push(tlineD());
+  lines.push('');
+  lines.push(tRow('Método:', (payment.method || 'efectivo').toUpperCase()));
+  if (payment.reference) lines.push(tRow('Referencia:', payment.reference.slice(0, 28)));
+  if (payment.notes)     lines.push(tRow('Nota:', payment.notes.slice(0, 30)));
+  lines.push('');
+  lines.push(tCenter('Comprobante interno de pago'));
+  lines.push(tline());
+  lines.push('');
+  lines.push('');
+
+  _sendToPrinter(lines, 'pago_proveedor', payment.id);
 }
 
 // ══════════════════════════════════════════════
@@ -375,7 +472,17 @@ function _sendToPrinter(lines, jobType = '', referenceId = null, isReprint = fal
 
 // ── Abrir ventana de impresión ────────────────
 function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = false) {
-  const printerName = _getSavedPrinter();
+  const category = _categoryForJobType(jobType);
+  const catCfg    = _getCategoryConfig(category);
+
+  // Vista previa: forzada por configuración de la categoría, o porque
+  // "imprimir automático" está desactivado para tickets. No aplica a
+  // reimpresiones explícitas — el usuario ya pidió imprimir a propósito.
+  const showPreview = catCfg.preview ||
+    (category === 'ticket' && !isReprint && !catCfg.autoPrint);
+  if (showPreview) { _openPrintWindowFallback(html); return; }
+
+  const printerName = catCfg.printer || _getSavedPrinter();
   const printerType = typeof detectPrinterType === 'function'
     ? detectPrinterType(printerName)
     : 'unknown';
@@ -388,7 +495,7 @@ function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = fa
     const _activeTemplateId = DB?.settings?.print_template || '';
     const _pageHint = _activeTemplateId === 'media_carta' ? 'half-letter' : undefined;
     if (window.api?.print?.html) {
-      window.api.print.html({
+      _printDispatch({
         html,
         printerName:  printerName || undefined,
         // sin printerWidth → isThermal=false en main.js
@@ -397,7 +504,7 @@ function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = fa
         referenceId,
         userId: user?.id || null,
       }).then(result => {
-        if (!result?.ok) {
+        if (!result?.ok && !result?.duplicate) {
           if (result?.error && result.error !== 'Impresión cancelada o fallida') {
             toast(`Error de impresión: ${result.error}`, 'err');
           }
@@ -419,14 +526,14 @@ function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = fa
     if (_activePlant && _activePlant.tipo === 'carta') {
       const _pageHint = DB.settings.print_template === 'media_carta' ? 'half-letter' : undefined;
       if (window.api?.print?.html) {
-        window.api.print.html({
+        _printDispatch({
           html,
           printerName:  printerName || undefined,
           pageHint:     _pageHint,
           jobType, referenceId,
           userId: user?.id || null,
         }).then(result => {
-          if (!result?.ok) _openPrintWindowFallback(html);
+          if (!result?.ok && !result?.duplicate) _openPrintWindowFallback(html);
         }).catch(() => _openPrintWindowFallback(html));
         return;
       }
@@ -439,7 +546,7 @@ function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = fa
   const printerWidth = printerType === '58mm' ? 58000 : 80000;
 
   if (window.api?.print?.html) {
-    window.api.print.html({
+    _printDispatch({
       html,
       printerName:  printerName || undefined,
       printerWidth: printerName ? printerWidth : undefined,
@@ -447,7 +554,7 @@ function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = fa
       referenceId,
       userId: user?.id || null,
     }).then(result => {
-      if (!result?.ok) {
+      if (!result?.ok && !result?.duplicate) {
         if (result?.error && result.error !== 'Impresión cancelada o fallida') {
           toast(`Error de impresión: ${result.error}`, 'err');
         }
@@ -478,13 +585,7 @@ function _openPrintWindowFallback(html) {
     </div>
   </body>`);
 
-  // Intentar primero con la API de Electron (más confiable en Windows)
-  if (window.api?.print?.preview) {
-    window.api.print.preview({ html: htmlConBoton });
-    return;
-  }
-
-  // Fallback: window.open estándar
+  // window.open estándar — abre ventana visible con botón Imprimir/Cerrar
   try {
     const win = window.open('', '_blank',
       'width=794,height=900,scrollbars=yes,resizable=yes');
@@ -531,14 +632,17 @@ function _printViaIframe(html) {
 // ══════════════════════════════════════════════
 // printHTML — Para reportes A4 (se mantiene igual)
 // ══════════════════════════════════════════════
-function printHTML(html) {
+function printHTML(html, category = 'reporte') {
   if (!html.includes('<meta charset')) {
     html = html.replace('<head>', '<head><meta charset="UTF-8"/>');
   }
+  const catCfg = _getCategoryConfig(category);
+  if (catCfg.preview) { _openPrintWindowFallback(html); return; }
+
   if (window.api?.print?.html) {
-    window.api.print.html({ html, jobType: 'reporte', referenceId: null, userId: user?.id })
+    _printDispatch({ html, printerName: catCfg.printer || undefined, jobType: category, referenceId: null, userId: user?.id })
       .then(result => {
-        if (!result?.ok) _openPrintWindowFallback(html);
+        if (!result?.ok && !result?.duplicate) _openPrintWindowFallback(html);
       })
       .catch(() => _openPrintWindowFallback(html));
     return;

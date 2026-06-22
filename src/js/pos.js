@@ -1075,7 +1075,7 @@ function previsualizarFactura(sale) {
   const itemsRows = sale.items.map((it, i) => `
     <tr>
       <td style="color:#9CA3AF">${i + 1}</td>
-      <td style="font-weight:500">${it.name}</td>
+      <td style="font-weight:500">${_esc(it.name)}</td>
       <td style="text-align:center">${it.qty}</td>
       <td style="text-align:right">${fmt(it.price)}</td>
       <td style="text-align:right;font-weight:600">${fmt(it.price * it.qty)}</td>
@@ -1146,9 +1146,9 @@ function previsualizarFactura(sale) {
   </div>
   <div class="hdr">
     <div>
-      <div class="biz">${CFG.biz}</div>
+      <div class="biz">${_esc(CFG.biz)}</div>
       <div class="biz-info">
-        RNC: ${CFG.rnc}<br>${CFG.addr}<br>Tel: ${CFG.phone}
+        RNC: ${_esc(CFG.rnc)}<br>${_esc(CFG.addr)}<br>Tel: ${_esc(CFG.phone)}
       </div>
     </div>
     <div>
@@ -1156,7 +1156,7 @@ function previsualizarFactura(sale) {
       <div class="doc-meta">
         #${String(sale.id).padStart(5, '0')}<br>
         ${sale.date} ${sale.time}<br>
-        Cajero: ${sale.cajero}
+        Cajero: ${_esc(sale.cajero)}
       </div>
     </div>
   </div>
@@ -1164,14 +1164,14 @@ function previsualizarFactura(sale) {
     <div class="cg">
       <div>
         <div class="cl">Cliente</div>
-        <div class="cv">${sale.clientName || 'Consumidor Final'}</div>
+        <div class="cv">${_esc(sale.clientName)||'Consumidor Final'}</div>
       </div>
       ${sale.clientCedula
         ? `<div><div class="cl">RNC / Cédula</div>
-           <div class="cv">${sale.clientCedula}</div></div>` : ''}
+           <div class="cv">${_esc(sale.clientCedula)}</div></div>` : ''}
       <div>
         <div class="cl">Método de pago</div>
-        <div class="cv" style="text-transform:capitalize">${sale.pay}</div>
+        <div class="cv" style="text-transform:capitalize">${_esc(sale.pay)}</div>
       </div>
     </div>
   </div>
@@ -1198,14 +1198,14 @@ function previsualizarFactura(sale) {
       <span>TOTAL</span><span>${fmt(sale.total)}</span>
     </div>
   </div>
-  ${isFactura && (sale.ncf || sale.id)
+  ${isFactura && sale.ncf
     ? `<div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:6px;
                    padding:8px 12px;font-size:11px;color:#16A34A;font-weight:600;margin-top:12px">
-         NCF: ${sale.ncf || 'B01' + String(sale.id).padStart(9, '0')}
+         NCF: ${_esc(sale.ncf)}
        </div>` : ''}
   <div class="footer">
-    ${CFG.biz} · RNC: ${CFG.rnc} · Tel: ${CFG.phone}<br>
-    ${CFG.addr}<br>
+    ${_esc(CFG.biz)} · RNC: ${_esc(CFG.rnc)} · Tel: ${_esc(CFG.phone)}<br>
+    ${_esc(CFG.addr)}<br>
     <strong>Gracias por su preferencia</strong>
   </div>
 </div>

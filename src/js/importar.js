@@ -1322,15 +1322,15 @@ async function importarDescargarPDF() {
 
   const rowsHtml = (arr, colColor) => arr.map((e,i) => `
     <tr style="background:${i%2===0?'#f9fafb':'#fff'}">
-      <td style="padding:5px 8px;font-size:11px;color:#6b7280">Fila ${e.fila||'—'}</td>
-      <td style="padding:5px 8px;font-size:11px;font-weight:500">${e.nombre||''}</td>
-      <td style="padding:5px 8px;font-size:11px;color:${colColor}">${e.error||''}</td>
-      <td style="padding:5px 8px;font-size:11px;color:#6b7280">${e.campo||''}</td>
+      <td style="padding:5px 8px;font-size:11px;color:#6b7280">Fila ${_esc(e.fila)||'—'}</td>
+      <td style="padding:5px 8px;font-size:11px;font-weight:500">${_esc(e.nombre)}</td>
+      <td style="padding:5px 8px;font-size:11px;color:${colColor}">${_esc(e.error)}</td>
+      <td style="padding:5px 8px;font-size:11px;color:#6b7280">${_esc(e.campo)}</td>
     </tr>`).join('');
 
   const html = `<!DOCTYPE html>
 <html lang="es"><head><meta charset="UTF-8">
-<title>Reporte Importación — ${r.archivo}</title>
+<title>Reporte Importación — ${_esc(r.archivo)}</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
   body{font-family:Arial,sans-serif;font-size:12px;color:#111;padding:28px}
@@ -1352,8 +1352,8 @@ async function importarDescargarPDF() {
 </head><body>
 <div class="header">
   <div class="logo">Velo POS — Reporte de Migración</div>
-  <div style="font-size:13px;font-weight:600">${tipoLabel} · ${r.archivo}</div>
-  <div style="font-size:11px;color:#6b7280">${r.fecha} · ${CFG.biz||'Velo POS'}</div>
+  <div style="font-size:13px;font-weight:600">${_esc(tipoLabel)} · ${_esc(r.archivo)}</div>
+  <div style="font-size:11px;color:#6b7280">${_esc(r.fecha)} · ${_esc(CFG.biz)||'Velo POS'}</div>
 </div>
 <div class="metrics">
   <div class="metric">
@@ -1395,14 +1395,10 @@ ${soloDups.length > 0 ? `
   <table><thead><tr><th>Fila</th><th>Nombre</th><th>Razón</th><th>Campo</th></tr></thead>
   <tbody>${rowsHtml(soloDups,'#D97706')}</tbody></table>
 </div>` : ''}
-<div class="footer">${CFG.biz||'Velo POS'} · v${window._appVersion||''} · ${r.fecha}</div>
-<script>window.onload=()=>window.print()<\/script>
+<div class="footer">${_esc(CFG.biz)||'Velo POS'} · v${_esc(window._appVersion)} · ${_esc(r.fecha)}</div>
 </body></html>`;
 
-  const win = window.open('', '_blank', 'width=900,height=700,scrollbars=yes');
-  if (!win) { toast('Activa las ventanas emergentes', 'w'); return; }
-  win.document.open(); win.document.write(html); win.document.close();
-  toast('✓ Reporte listo — usa Ctrl+P para guardar como PDF');
+  printHTML(html, 'reporte');
 }
 
 // ══════════════════════════════════════════════

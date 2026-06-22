@@ -251,7 +251,7 @@ async function _printCatalogo(cuentas) {
   const biz   = DB?.settings?.biz_name || CFG.biz || 'Velo POS';
   const today = new Date().toLocaleDateString('es-DO');
   const rows  = cuentas.map(c =>
-    `<tr><td style="padding-left:${(c.level||1)*12}px">${c.code}</td><td>${c.name}</td><td>${c.type}</td><td style="text-align:right">${c.balance ? fmt(c.balance) : '—'}</td></tr>`
+    `<tr><td style="padding-left:${(c.level||1)*12}px">${_esc(c.code)}</td><td>${_esc(c.name)}</td><td>${_esc(c.type)}</td><td style="text-align:right">${c.balance ? fmt(c.balance) : '—'}</td></tr>`
   ).join('');
   const html = `<html><head><meta charset="UTF-8">
   <style>body{font-family:Arial;font-size:11px;margin:20px}h1{font-size:15px}table{width:100%;border-collapse:collapse}
@@ -260,7 +260,7 @@ async function _printCatalogo(cuentas) {
   <h1>${biz} — Catálogo de Cuentas</h1><p style="color:#6b7280;font-size:10px">${today}</p>
   <table><thead><tr><th>Código</th><th>Nombre</th><th>Tipo</th><th style="text-align:right">Saldo</th></tr></thead>
   <tbody>${rows}</tbody></table></body></html>`;
-  await window.api.print.html({ html, copies: 1, silent: true });
+  printHTML(html, 'contabilidad');
 }
 
 // ══════════════════════════════════════════════
@@ -383,24 +383,24 @@ window._printAsiento = async function(id) {
   if (!entry) return;
   const biz   = DB?.settings?.biz_name || CFG.biz || 'Velo POS';
   const rows  = (entry.lines || []).map(l => `
-    <tr><td>${l.account_code||''}</td><td>${l.account_name||''}</td>
+    <tr><td>${_esc(l.account_code)}</td><td>${_esc(l.account_name)}</td>
     <td style="text-align:right">${l.debit>0?fmt(l.debit):'—'}</td>
     <td style="text-align:right">${l.credit>0?fmt(l.credit):'—'}</td>
-    <td>${l.description||''}</td></tr>
+    <td>${_esc(l.description)}</td></tr>
   `).join('');
   const html = `<html><head><meta charset="UTF-8">
   <style>body{font-family:Arial;font-size:11px;margin:20px}h1{font-size:14px}table{width:100%;border-collapse:collapse}
   th{background:#f3f4f6;padding:6px 8px;text-align:left}td{padding:5px 8px;border-bottom:1px solid #e5e7eb}
   .tot{font-weight:700;background:#f3f4f6}</style></head><body>
-  <h1>${biz} — Asiento Contable ${entry.number}</h1>
-  <p style="color:#6b7280;font-size:10px">Fecha: ${entry.date} · ${entry.concept||''} · Estado: ${entry.status}</p>
+  <h1>${_esc(biz)} — Asiento Contable ${_esc(entry.number)}</h1>
+  <p style="color:#6b7280;font-size:10px">Fecha: ${entry.date} · ${_esc(entry.concept)} · Estado: ${_esc(entry.status)}</p>
   <table><thead><tr><th>Código</th><th>Cuenta</th><th style="text-align:right">Debe</th><th style="text-align:right">Haber</th><th>Detalle</th></tr></thead>
   <tbody>${rows}</tbody>
   <tfoot><tr class="tot"><td colspan="2">TOTALES</td>
   <td style="text-align:right">${fmt(entry.total_debit)}</td>
   <td style="text-align:right">${fmt(entry.total_credit)}</td><td></td></tr></tfoot>
   </table></body></html>`;
-  await window.api.print.html({ html, copies: 1, silent: true });
+  printHTML(html, 'contabilidad');
 };
 
 window._reverseAsiento = async function(id) {
@@ -646,7 +646,7 @@ async function _printMayor(acctId) {
   const ledger = res?.data || {};
   const biz    = DB?.settings?.biz_name || CFG.biz || 'Velo POS';
   const rows   = (ledger.lines || []).map(l => `
-    <tr><td>${l.date}</td><td>${l.entry_number||''}</td><td>${l.description||''}</td>
+    <tr><td>${l.date}</td><td>${_esc(l.entry_number)}</td><td>${_esc(l.description)}</td>
     <td style="text-align:right">${l.debit>0?fmt(l.debit):'—'}</td>
     <td style="text-align:right">${l.credit>0?fmt(l.credit):'—'}</td>
     <td style="text-align:right">${fmt(l.running_balance)}</td></tr>
@@ -655,7 +655,7 @@ async function _printMayor(acctId) {
   <style>body{font-family:Arial;font-size:11px;margin:20px}h1{font-size:14px}table{width:100%;border-collapse:collapse}
   th{background:#f3f4f6;padding:6px 8px;text-align:left}td{padding:5px 8px;border-bottom:1px solid #e5e7eb}
   tfoot td{font-weight:700;background:#f3f4f6}</style></head><body>
-  <h1>${biz} — Mayor: ${ledger.account?.code} - ${ledger.account?.name}</h1>
+  <h1>${_esc(biz)} — Mayor: ${_esc(ledger.account?.code)} - ${_esc(ledger.account?.name)}</h1>
   <p style="color:#6b7280;font-size:10px">${_contFrom} al ${_contTo}</p>
   <table><thead><tr><th>Fecha</th><th>Asiento</th><th>Descripción</th>
   <th style="text-align:right">Debe</th><th style="text-align:right">Haber</th><th style="text-align:right">Saldo</th></tr></thead>
@@ -665,7 +665,7 @@ async function _printMayor(acctId) {
   <td style="text-align:right">${fmt(ledger.total_credit||0)}</td>
   <td style="text-align:right">${fmt(ledger.closing_balance||0)}</td></tr></tfoot>
   </table></body></html>`;
-  await window.api.print.html({ html, copies: 1, silent: true });
+  printHTML(html, 'contabilidad');
 }
 
 // ══════════════════════════════════════════════
@@ -740,7 +740,7 @@ async function _printTrialBalance() {
   let totalD = 0, totalC = 0;
   const rows = data.map(row => {
     totalD += row.debit || 0; totalC += row.credit || 0;
-    return `<tr><td>${row.code||''}</td><td>${row.name}</td>
+    return `<tr><td>${_esc(row.code)}</td><td>${_esc(row.name)}</td>
     <td style="text-align:right">${(row.debit||0)>0?fmt(row.debit):'—'}</td>
     <td style="text-align:right">${(row.credit||0)>0?fmt(row.credit):'—'}</td></tr>`;
   }).join('');
@@ -755,7 +755,7 @@ async function _printTrialBalance() {
   <tfoot><tr><td colspan="2">TOTALES</td>
   <td style="text-align:right">${fmt(totalD)}</td><td style="text-align:right">${fmt(totalC)}</td></tr></tfoot>
   </table></body></html>`;
-  await window.api.print.html({ html, copies: 1, silent: true });
+  printHTML(html, 'contabilidad');
 }
 
 // ══════════════════════════════════════════════
@@ -839,7 +839,7 @@ async function _printResultados() {
   const biz = DB?.settings?.biz_name || CFG.biz || 'Velo POS';
 
   function rows(items) {
-    return (items||[]).map(it => `<tr><td style="padding-left:20px">${it.name}</td><td style="text-align:right">${fmt(it.amount)}</td></tr>`).join('');
+    return (items||[]).map(it => `<tr><td style="padding-left:20px">${_esc(it.name)}</td><td style="text-align:right">${fmt(it.amount)}</td></tr>`).join('');
   }
 
   const html = `<html><head><meta charset="UTF-8">
@@ -848,7 +848,7 @@ async function _printResultados() {
   table{width:100%;border-collapse:collapse}td{padding:5px 8px;border-bottom:1px solid #e5e7eb}
   .ttl{font-weight:700;background:#f3f4f6}.net{font-weight:800;font-size:13px;background:#dcfce7}</style>
   </head><body>
-  <h1>${biz}</h1><p class="sub">Estado de Resultados · ${_contFrom} al ${_contTo}</p>
+  <h1>${_esc(biz)}</h1><p class="sub">Estado de Resultados · ${_contFrom} al ${_contTo}</p>
   <table>
     <tr style="background:#f3f4f6"><td colspan="2"><strong>INGRESOS</strong></td></tr>
     ${rows(rpt.revenue_items)}
@@ -862,7 +862,7 @@ async function _printResultados() {
     <tr class="ttl"><td>Total Gastos</td><td style="text-align:right">${fmt(rpt.total_expenses||0)}</td></tr>
     <tr class="net"><td>UTILIDAD NETA</td><td style="text-align:right">${fmt(rpt.net_income||0)}</td></tr>
   </table></body></html>`;
-  await window.api.print.html({ html, copies: 1, silent: true });
+  printHTML(html, 'contabilidad');
 }
 
 // ══════════════════════════════════════════════
@@ -932,7 +932,7 @@ async function _printGeneral() {
   const biz = DB?.settings?.biz_name || CFG.biz || 'Velo POS';
 
   function rows(items) {
-    return (items||[]).map(it => `<tr><td style="padding-left:20px">${it.code||''} ${it.name}</td><td style="text-align:right">${fmt(it.balance)}</td></tr>`).join('');
+    return (items||[]).map(it => `<tr><td style="padding-left:20px">${_esc(it.code)} ${_esc(it.name)}</td><td style="text-align:right">${fmt(it.balance)}</td></tr>`).join('');
   }
 
   const html = `<html><head><meta charset="UTF-8">
@@ -940,7 +940,7 @@ async function _printGeneral() {
   .sub{text-align:center;color:#6b7280;font-size:10px;margin-bottom:16px}
   table{width:100%;border-collapse:collapse}td{padding:5px 8px;border-bottom:1px solid #e5e7eb}
   .ttl{font-weight:700;background:#f3f4f6}</style></head><body>
-  <h1>${biz}</h1><p class="sub">Balance General · Al ${_contTo}</p>
+  <h1>${_esc(biz)}</h1><p class="sub">Balance General · Al ${_contTo}</p>
   <table>
     <tr style="background:#f3f4f6"><td colspan="2"><strong>ACTIVOS</strong></td></tr>
     ${rows(rpt.asset_items)}
@@ -954,7 +954,7 @@ async function _printGeneral() {
     <tr class="ttl" style="font-size:12px"><td>TOTAL PASIVOS + CAPITAL</td>
     <td style="text-align:right">${fmt((rpt.total_liabilities||0)+(rpt.total_equity||0))}</td></tr>
   </table></body></html>`;
-  await window.api.print.html({ html, copies: 1, silent: true });
+  printHTML(html, 'contabilidad');
 }
 
 // ══════════════════════════════════════════════
@@ -1016,18 +1016,18 @@ async function _printCxC(customers) {
   const today = new Date().toLocaleDateString('es-DO');
   const total = customers.reduce((s, c) => s + (c.balance||0), 0);
   const rows  = customers.map(c =>
-    `<tr><td>${c.name}</td><td>${c.phone||'—'}</td><td>${c.credit_limit>0?fmt(c.credit_limit):'—'}</td><td style="text-align:right">${fmt(c.balance)}</td></tr>`
+    `<tr><td>${_esc(c.name)}</td><td>${_esc(c.phone)||'—'}</td><td>${c.credit_limit>0?fmt(c.credit_limit):'—'}</td><td style="text-align:right">${fmt(c.balance)}</td></tr>`
   ).join('');
   const html = `<html><head><meta charset="UTF-8">
   <style>body{font-family:Arial;font-size:11px;margin:20px}h1{font-size:14px}table{width:100%;border-collapse:collapse}
   th{background:#f3f4f6;padding:6px 8px;text-align:left}td{padding:5px 8px;border-bottom:1px solid #e5e7eb}
   tfoot td{font-weight:700;background:#f3f4f6}</style></head><body>
-  <h1>${biz} — Cuentas por Cobrar</h1><p style="color:#6b7280;font-size:10px">${today}</p>
+  <h1>${_esc(biz)} — Cuentas por Cobrar</h1><p style="color:#6b7280;font-size:10px">${today}</p>
   <table><thead><tr><th>Cliente</th><th>Teléfono</th><th>Límite</th><th style="text-align:right">Saldo</th></tr></thead>
   <tbody>${rows}</tbody>
   <tfoot><tr><td colspan="3">TOTAL</td><td style="text-align:right">${fmt(total)}</td></tr></tfoot>
   </table></body></html>`;
-  await window.api.print.html({ html, copies: 1, silent: true });
+  printHTML(html, 'contabilidad');
 }
 
 // ══════════════════════════════════════════════
@@ -1093,18 +1093,18 @@ async function _printCxP(payable) {
   const today = new Date().toLocaleDateString('es-DO');
   const total = payable.reduce((s, e) => s + (e.amount||0), 0);
   const rows  = payable.map(e =>
-    `<tr><td>${e.description||e.title||'—'}</td><td>${e.supplier_name||'—'}</td><td>${e.category||'—'}</td><td>${e.due_date||'—'}</td><td style="text-align:right">${fmt(e.amount)}</td><td>${e.status}</td></tr>`
+    `<tr><td>${_esc(e.description||e.title)||'—'}</td><td>${_esc(e.supplier_name)||'—'}</td><td>${_esc(e.category)||'—'}</td><td>${e.due_date||'—'}</td><td style="text-align:right">${fmt(e.amount)}</td><td>${_esc(e.status)}</td></tr>`
   ).join('');
   const html = `<html><head><meta charset="UTF-8">
   <style>body{font-family:Arial;font-size:11px;margin:20px}h1{font-size:14px}table{width:100%;border-collapse:collapse}
   th{background:#f3f4f6;padding:6px 8px;text-align:left}td{padding:5px 8px;border-bottom:1px solid #e5e7eb}
   tfoot td{font-weight:700;background:#f3f4f6}</style></head><body>
-  <h1>${biz} — Cuentas por Pagar</h1><p style="color:#6b7280;font-size:10px">${today}</p>
+  <h1>${_esc(biz)} — Cuentas por Pagar</h1><p style="color:#6b7280;font-size:10px">${today}</p>
   <table><thead><tr><th>Gasto</th><th>Proveedor</th><th>Categoría</th><th>Vencimiento</th><th style="text-align:right">Monto</th><th>Estado</th></tr></thead>
   <tbody>${rows}</tbody>
   <tfoot><tr><td colspan="4">TOTAL</td><td style="text-align:right">${fmt(total)}</td><td></td></tr></tfoot>
   </table></body></html>`;
-  await window.api.print.html({ html, copies: 1, silent: true });
+  printHTML(html, 'contabilidad');
 }
 
 // ══════════════════════════════════════════════
