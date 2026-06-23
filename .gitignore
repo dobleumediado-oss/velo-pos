@@ -3,6 +3,7 @@ dist/
 data/
 *.db
 *.key
+.env
 .DS_Store
 out/
 releases/
