@@ -723,72 +723,9 @@ function exportCreditAlertsPDF(alerts) {
   printHTML(html, 'reporte');
 }
 
-// ══════════════════════════════════════════════
-// EXPORT PDF — Estado de cuenta cliente
-// ══════════════════════════════════════════════
-function exportClientCreditPDF(c) {
-  if (!c) return;
-  const balance     = Number(c.balance || 0);
-  const creditLimit = Number(c.credit_limit || c.creditLimit || 0);
-  const creditDays  = Number(c.credit_days  || c.creditDays  || 30);
-  const creditDue   = c.credit_due || c.creditDueDate || null;
-
-  const pagos  = DB.payments.filter(p =>
-    (p.customer_id || p.clientId) === c.id);
-  const ventas = DB.sales.filter(s =>
-    (s.customer_id || s.clientId) === c.id &&
-    (s.payment_method || s.pay) === 'credito');
-
-  const ventasRows = ventas.map(s => {
-    const fecha = (s.created_at || s.date || '').split('T')[0].split(' ')[0];
-    return `<tr>
-      <td>${fdate(fecha)}</td><td>Factura #${s.id}</td>
-      <td style="text-align:right">RD$${Number(s.total||0).toLocaleString('es-DO')}</td>
-    </tr>`;
-  }).join('') || '<tr><td colspan="3" style="color:#9ca3af">Sin compras</td></tr>';
-
-  const pagosRows = pagos.map(p => {
-    const fecha = (p.created_at || '').split('T')[0].split(' ')[0];
-    return `<tr>
-      <td>${fdate(fecha)}</td><td>${_esc(p.note)||'Abono'}</td>
-      <td style="text-align:right;color:#16A34A">
-        +RD$${Number(p.amount||0).toLocaleString('es-DO')}</td>
-    </tr>`;
-  }).join('') || '<tr><td colspan="3" style="color:#9ca3af">Sin abonos</td></tr>';
-
-  const html = `<!DOCTYPE html>
-<html><head><meta charset="UTF-8"/><title>Estado de Cuenta</title>
-<style>
-  body{font-family:Arial,sans-serif;font-size:12px;padding:20px}
-  h2{margin-bottom:2px}h3{margin:14px 0 6px;font-size:13px}
-  .sub{color:#666;margin-bottom:14px}
-  table{width:100%;border-collapse:collapse;margin-bottom:10px}
-  th{background:#f3f4f6;padding:7px 10px;text-align:left;font-size:11px;text-transform:uppercase}
-  td{padding:7px 10px;border-bottom:1px solid #e5e7eb}
-  .total{font-weight:700;font-size:14px;margin-top:10px}
-  .foot{margin-top:16px;font-size:10px;color:#9ca3af}
-</style></head><body>
-  <h2>Estado de Cuenta — ${_esc(c.name)}</h2>
-  <div class="sub">
-    RNC: ${_esc(c.rnc)||'—'} · Tel: ${_esc(c.phone)||'—'}<br>
-    Límite: RD$${creditLimit.toLocaleString('es-DO')} · Plazo: ${creditDays} días
-    ${creditDue ? '<br>Fecha límite: ' + fdate(creditDue) : ''}
-  </div>
-  <h3>Compras a Crédito</h3>
-  <table><thead><tr><th>Fecha</th><th>Concepto</th>
-    <th style="text-align:right">Monto</th></tr></thead>
-    <tbody>${ventasRows}</tbody></table>
-  <h3>Abonos Realizados</h3>
-  <table><thead><tr><th>Fecha</th><th>Concepto</th>
-    <th style="text-align:right">Monto</th></tr></thead>
-    <tbody>${pagosRows}</tbody></table>
-  <div class="total">Balance pendiente: RD$${balance.toLocaleString('es-DO')}</div>
-  <div class="foot">${_esc(CFG.biz)} · ${_esc(CFG.phone)} · ${_esc(CFG.addr)}</div>
-</body></html>`;
-
-  printHTML(html, 'pago');
-}
-
+// Nota: exportClientCreditPDF() vive en clientes.js (versión completa,
+// con historial en vivo vía IPC) — ese archivo carga después y es la
+// única definición global.
 
 // ══════════════════════════════════════════════
 // CHART.JS — Renderizado del dashboard
