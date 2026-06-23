@@ -1,6 +1,6 @@
 {
   "name": "velo-pos",
-  "version": "1.7.4",
+  "version": "1.7.5",
   "description": "Sistema POS para micro negocios — República Dominicana",
   "main": "main.js",
   "scripts": {
