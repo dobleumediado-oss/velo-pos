@@ -358,7 +358,11 @@ function getSales(range = 'today') {
 // navegador real del sistema (no Electron interno)
 // ══════════════════════════════════════════════
 function openWhatsAppModal(msg, defPhone = '', clientName = 'cliente') {
-  const escaped = msg.replace(/`/g, "'");
+  // Escapar todo lo dinámico antes de interpolarlo en el HTML del modal —
+  // msg/clientName pueden venir de datos del cliente (nombre, notas, etc.)
+  const escapedMsg   = _escHtml(msg);
+  const escapedName  = _escHtml(clientName);
+  const escapedPhone = _escHtml((defPhone || '').replace(/\D/g, ''));
 
   openModal(`
     <div class="modal-title" style="display:flex;align-items:center;gap:10px">
@@ -371,7 +375,7 @@ function openWhatsAppModal(msg, defPhone = '', clientName = 'cliente') {
       </div>
       Enviar por WhatsApp
     </div>
-    <div class="modal-sub">A: ${clientName}</div>
+    <div class="modal-sub">A: ${escapedName}</div>
 
     <div class="fg">
       <label class="lbl">Número de WhatsApp</label>
@@ -379,7 +383,7 @@ function openWhatsAppModal(msg, defPhone = '', clientName = 'cliente') {
         <div class="ic" style="font-size:11px;font-weight:700;color:var(--muted)">+</div>
         <input class="inp" id="wa-phone-input" type="tel"
                placeholder="18091234567  (con código de país)"
-               value="${defPhone}"
+               value="${escapedPhone}"
                onkeydown="if(event.key==='Enter') _waEnviar()"
                style="font-size:15px;font-weight:600;letter-spacing:.5px"/>
       </div>
@@ -393,7 +397,7 @@ function openWhatsAppModal(msg, defPhone = '', clientName = 'cliente') {
       <div style="background:var(--surface2);border:1px solid var(--line);border-radius:8px;
                   padding:12px;font-size:12px;line-height:1.7;color:var(--ink3);
                   max-height:180px;overflow-y:auto;white-space:pre-wrap;font-family:var(--mono)">
-${escaped}
+${escapedMsg}
       </div>
     </div>
 
@@ -430,6 +434,10 @@ async function _waEnviar() {
   }
   if (phone.length < 10) {
     toast('Número muy corto — incluye el código de país (ej: 18091234567)', 'w');
+    return;
+  }
+  if (phone.length > 15) {
+    toast('Número muy largo — verifica el número de WhatsApp', 'w');
     return;
   }
 

@@ -493,6 +493,27 @@ async function toggleEstadoCliente(c) {
   );
 }
 
+// ── Enviar mensaje por WhatsApp ───────────────
+function clienteWhatsApp(c) {
+  if (!c) { toast('Cliente no encontrado', 'err'); return; }
+  if (!c.phone) { toast('Este cliente no tiene teléfono registrado', 'w'); return; }
+
+  const phone   = c.phone.replace(/\D/g, '');
+  const balance = Number(c.balance || 0);
+
+  const msg = [
+    `Hola ${c.name},`,
+    '',
+    balance > 0
+      ? `Le recordamos que tiene un saldo pendiente de ${fmt(balance)} con ${CFG.biz}.\nPor favor comuníquese con nosotros para coordinar el pago.`
+      : `Gracias por ser cliente de ${CFG.biz}.`,
+    '',
+    CFG.phone ? `Tel: ${CFG.phone}` : '',
+  ].filter(l => l !== null && l !== undefined).join('\n');
+
+  openWhatsAppModal(msg, phone, c.name);
+}
+
 // ══════════════════════════════════════════════
 // MODAL ABONO
 // ══════════════════════════════════════════════
