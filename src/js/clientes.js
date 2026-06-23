@@ -764,3 +764,155 @@ async function openEstadoCuentaModal(c) {
     </div>
   `, 'modal-xl');
 }
+
+// ══════════════════════════════════════════════
+// EXPORTAR ESTADO DE CUENTA — PDF
+// ══════════════════════════════════════════════
+async function exportClientCreditPDF(c) {
+  if (!c) { toast('Cliente no encontrado', 'err'); return; }
+
+  const balance     = Number(c.balance || 0);
+  const creditLimit = Number(c.credit_limit || 0);
+  const creditDays  = Number(c.credit_days || 30);
+  const creditDue   = c.credit_due || null;
+  const disponible  = Math.max(0, creditLimit - balance);
+  const usedPct     = creditLimit > 0 ? Math.min((balance / creditLimit) * 100, 100) : 0;
+
+  const pagos  = await window.api.customers.getPayments({ customerId: c.id }) || [];
+  const ventas = DB.sales.filter(s =>
+    (s.customer_id || s.clientId) === c.id && s.status !== 'cancelled'
+  ).reverse();
+
+  const totalCompras = ventas.reduce((a, s) => a + s.total, 0);
+  const totalAbonado = pagos.reduce((a, p) => a + p.amount, 0);
+
+  const _e = t => String(t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+  const ventasRows = ventas.length === 0
+    ? `<tr><td colspan="5" style="text-align:center;color:#9ca3af;padding:12px">Sin compras registradas</td></tr>`
+    : ventas.map(s => {
+        const fecha = (s.created_at || s.date || '').split('T')[0].split(' ')[0];
+        const tipo  = s.type === 'devolucion' ? 'Devolución' :
+                      s.type === 'cotizacion' ? 'Cotización' : 'Factura';
+        const estado = s.status === 'returned' ? 'Devuelta' :
+                       s.status === 'cancelled' ? 'Anulada' : 'OK';
+        const metodoBadge = (s.payment_method || s.pay || '—');
+        return `<tr>
+          <td>${fdate(fecha)}</td>
+          <td>#${String(s.id).padStart(5,'0')} <span style="color:#9ca3af;font-size:10px">${tipo}</span></td>
+          <td style="text-align:right;font-weight:700">${fmt(s.total)}</td>
+          <td>${_e(metodoBadge)}</td>
+          <td><span style="color:${s.status==='returned'||s.status==='cancelled'?'#dc2626':'#16a34a'};font-weight:600">${estado}</span></td>
+        </tr>`;
+      }).join('');
+
+  const pagosRows = pagos.length === 0
+    ? `<tr><td colspan="4" style="text-align:center;color:#9ca3af;padding:12px">Sin abonos registrados</td></tr>`
+    : [...pagos].reverse().map(p => {
+        const fecha = (p.created_at || '').split('T')[0].split(' ')[0];
+        return `<tr>
+          <td>${fdate(fecha)}</td>
+          <td>${_e(p.note || 'Abono')}</td>
+          <td style="text-align:right;color:#16a34a;font-weight:700">+${fmt(p.amount)}</td>
+          <td>${_e(p.method || 'efectivo')} <span style="color:#9ca3af;font-size:10px">${fmt(p.balance_before)} → ${fmt(p.balance_after)}</span></td>
+        </tr>`;
+      }).join('');
+
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"/>
+<title>Estado de Cuenta — ${_e(c.name)}</title>
+<style>
+  body{font-family:Arial,sans-serif;font-size:11px;color:#111;padding:24px;max-width:800px;margin:0 auto}
+  h2{font-size:17px;margin-bottom:2px}
+  .sub{color:#6b7280;font-size:11px;margin-bottom:18px}
+  .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
+  .met{background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px}
+  .met-l{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#9ca3af;margin-bottom:4px}
+  .met-v{font-size:16px;font-weight:800}
+  .met-s{font-size:10px;color:#9ca3af;margin-top:2px}
+  .prog{background:#e5e7eb;border-radius:4px;height:6px;margin-top:6px}
+  .prog-f{height:6px;border-radius:4px}
+  h3{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
+     color:#6b7280;border-bottom:1px solid #e5e7eb;padding-bottom:4px;margin:16px 0 8px}
+  table{width:100%;border-collapse:collapse}
+  th{background:#f3f4f6;padding:6px 8px;text-align:left;font-size:10px;
+     text-transform:uppercase;letter-spacing:.04em;color:#6b7280}
+  td{padding:6px 8px;border-bottom:1px solid #f3f4f6;font-size:11px}
+  .foot{margin-top:24px;border-top:1px solid #e5e7eb;padding-top:10px;
+        font-size:10px;color:#9ca3af;display:flex;justify-content:space-between}
+  .no-print{text-align:right;margin-bottom:16px}
+  @media print{.no-print{display:none}}
+</style>
+</head><body>
+  <div class="no-print">
+    <button onclick="window.print()"
+      style="background:#0D0F12;color:#fff;border:none;padding:8px 18px;
+             border-radius:6px;font-size:12px;cursor:pointer;font-weight:700">
+      Imprimir / Guardar PDF
+    </button>
+  </div>
+
+  <h2>Estado de Cuenta — ${_e(c.name)}</h2>
+  <div class="sub">
+    RNC: ${_e(c.rnc || 'Sin RNC')} ·
+    Tel: ${_e(c.phone || 'Sin teléfono')} ·
+    Generado: ${fdate(today())} a las ${nowt()} ·
+    ${_e(CFG.biz || '')}
+  </div>
+
+  <div class="metrics">
+    <div class="met" style="border-color:${balance>0?'#fecaca':'#bbf7d0'};background:${balance>0?'#fef2f2':'#f0fdf4'}">
+      <div class="met-l">Balance Pendiente</div>
+      <div class="met-v" style="color:${balance>0?'#dc2626':'#16a34a'}">${fmt(balance)}</div>
+    </div>
+    <div class="met">
+      <div class="met-l">Límite / Disponible</div>
+      <div class="met-v">${fmt(creditLimit)}</div>
+      <div class="met-s" style="color:${disponible<creditLimit*0.1?'#dc2626':'#16a34a'}">Disp: ${fmt(disponible)}</div>
+      ${creditLimit>0?`<div class="prog"><div class="prog-f" style="width:${usedPct}%;background:${usedPct>90?'#dc2626':usedPct>60?'#f59e0b':'#16a34a'}"></div></div>`:''}
+    </div>
+    <div class="met">
+      <div class="met-l">Total Comprado</div>
+      <div class="met-v">${fmt(totalCompras)}</div>
+      <div class="met-s">${ventas.length} factura${ventas.length!==1?'s':''}</div>
+    </div>
+    <div class="met">
+      <div class="met-l">Total Abonado</div>
+      <div class="met-v" style="color:#16a34a">${fmt(totalAbonado)}</div>
+      <div class="met-s">${pagos.length} abono${pagos.length!==1?'s':''}</div>
+    </div>
+  </div>
+
+  ${creditLimit>0?`<div style="font-size:10px;color:#6b7280;margin-bottom:16px">
+    Crédito utilizado: ${usedPct.toFixed(0)}% ·
+    Plazo: ${creditDays}d ·
+    Vence: ${creditDue ? fdate(creditDue) : '—'}
+  </div>`:''}
+
+  <h3>Historial de Compras (${ventas.length})</h3>
+  <table>
+    <thead><tr>
+      <th>Fecha</th><th>Factura</th>
+      <th style="text-align:right">Total</th>
+      <th>Método</th><th>Estado</th>
+    </tr></thead>
+    <tbody>${ventasRows}</tbody>
+  </table>
+
+  <h3>Historial de Abonos (${pagos.length})</h3>
+  <table>
+    <thead><tr>
+      <th>Fecha</th><th>Concepto</th>
+      <th style="text-align:right">Monto</th><th>Método / Balance</th>
+    </tr></thead>
+    <tbody>${pagosRows}</tbody>
+  </table>
+
+  <div class="foot">
+    <span>${_e(CFG.biz || '')} · ${_e(CFG.rnc || '')}</span>
+    <span>Generado: ${fdate(today())} ${nowt()}</span>
+  </div>
+</body></html>`;
+
+  printHTML(html, 'reporte');
+}
