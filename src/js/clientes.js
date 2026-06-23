@@ -237,6 +237,15 @@ function renderCliTable() {
           }),
           balance > 0
             ? h('button', {
+                class: 'btn btn-ghost btn-sm',
+                title: 'Ver facturas pendientes con detalle de artículos',
+                style: { color: 'var(--amber)' },
+                onclick: () => openFacturasPendientesModal(c),
+                html: `🧾 Facturas`
+              })
+            : null,
+          balance > 0
+            ? h('button', {
                 class: 'btn btn-green btn-sm',
                 title: 'Registrar abono',
                 onclick: () => openAbonoModal(c),
@@ -946,4 +955,201 @@ async function exportClientCreditPDF(c) {
 </body></html>`;
 
   printHTML(html, 'reporte');
+}
+
+// ══════════════════════════════════════════════
+// MODAL — FACTURAS PENDIENTES CON DETALLE
+// Lista facturas a crédito pendientes de cobro.
+// Cada fila es expandible: muestra sale_items
+// con artículo, cantidad, precio y subtotal.
+// ══════════════════════════════════════════════
+async function openFacturasPendientesModal(c) {
+  openModal(`
+    <div class="modal-title">🧾 Facturas Pendientes</div>
+    <div class="modal-sub">${c.name}</div>
+    <div style="text-align:center;padding:32px;color:var(--muted2);font-size:13px">
+      Cargando facturas...
+    </div>
+  `, 'modal-xl');
+
+  const facturasRes = await window.api.customers.getFacturasPendientes({ customerId: c.id });
+  const facturas    = facturasRes?.facturas || [];
+  const totalPendiente = facturas.reduce((s, f) => s + f.pendiente, 0);
+
+  if (!facturas.length) {
+    openModal(`
+      <div class="modal-title">🧾 Facturas Pendientes</div>
+      <div class="modal-sub">${c.name}</div>
+      <div style="text-align:center;padding:32px;color:var(--muted2)">
+        <div style="font-size:28px;margin-bottom:8px">✅</div>
+        <div>No hay facturas a crédito pendientes de cobro.</div>
+        <div style="font-size:12px;margin-top:8px">
+          Puede que el balance venga de un saldo inicial importado sin factura asociada.
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
+        <button class="btn btn-ghost" onclick="closeModal();openEstadoCuentaModal(DB.customers.find(x=>x.id===${c.id}))">
+          ${svg('eye')} Estado de Cuenta
+        </button>
+      </div>
+    `, 'modal-xl');
+    return;
+  }
+
+  const filas = facturas.map((f, idx) => {
+    const fecha    = (f.created_at || '').split('T')[0].split(' ')[0];
+    const diasDiff = Math.floor((Date.now() - new Date(fecha).getTime()) / 86400000);
+    const vencido  = diasDiff > (c.credit_days || 30);
+    const refLabel = f.notes?.match(/import_ref:([^\s|]+)/)?.[1]
+                   || `#${String(f.id).padStart(5,'0')}`;
+    return `
+      <tr style="cursor:pointer;${vencido ? 'background:var(--red-bg)' : ''}"
+          onclick="toggleFacturaDetalle(${idx}, ${f.id}, this)">
+        <td style="font-size:11px;color:var(--muted2);white-space:nowrap">${fdate(fecha)}</td>
+        <td style="font-size:12px;font-weight:600">${refLabel}</td>
+        <td style="font-size:12px;color:var(--muted2)" id="fac-items-summary-${idx}">
+          <span style="font-size:11px;color:var(--blue)">▶ Ver artículos</span>
+        </td>
+        <td style="text-align:right;font-size:13px;font-weight:700">${fmt(f.total)}</td>
+        <td style="text-align:right;font-size:13px;font-weight:800;color:var(--red)">${fmt(f.pendiente)}</td>
+        <td>
+          <span class="badge ${vencido ? 'r' : 'a'}">
+            ${vencido ? `Vencido ${diasDiff}d` : `${diasDiff}d`}
+          </span>
+        </td>
+        <td onclick="event.stopPropagation()">
+          <button class="btn btn-green btn-sm"
+                  onclick="closeModal();openAbonoModal(DB.customers.find(x=>x.id===${c.id}))">
+            ${svg('dollar')} Abonar
+          </button>
+        </td>
+      </tr>
+      <tr id="fac-detail-${idx}" style="display:none">
+        <td colspan="7" style="padding:0">
+          <div id="fac-detail-body-${idx}"
+               style="background:var(--surface2);padding:12px 16px;border-top:1px solid var(--line)">
+            <div style="color:var(--muted2);font-size:12px">Cargando artículos...</div>
+          </div>
+        </td>
+      </tr>`;
+  }).join('');
+
+  openModal(`
+    <div class="modal-title">🧾 Facturas Pendientes</div>
+    <div class="modal-sub">
+      ${c.name} · ${c.phone || ''} ·
+      <strong style="color:var(--red)">${fmt(totalPendiente)} pendiente</strong> ·
+      ${facturas.length} factura${facturas.length !== 1 ? 's' : ''}
+    </div>
+
+    <div class="tw" style="max-height:460px;overflow-y:auto;margin-bottom:12px">
+      <table>
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            <th>Referencia</th>
+            <th>Artículos</th>
+            <th style="text-align:right">Total</th>
+            <th style="text-align:right">Pendiente</th>
+            <th>Días</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>${filas}</tbody>
+      </table>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;
+                font-size:12px;color:var(--muted);margin-bottom:8px;padding:0 2px">
+      <span>Clic en una fila para ver los artículos de esa factura</span>
+      <span style="font-weight:700;color:var(--red)">
+        Total pendiente: ${fmt(totalPendiente)}
+      </span>
+    </div>
+
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
+      <button class="btn btn-ghost"
+              onclick="closeModal();openEstadoCuentaModal(DB.customers.find(x=>x.id===${c.id}))">
+        ${svg('eye')} Estado de Cuenta
+      </button>
+      <button class="btn btn-out"
+              onclick="exportClientCreditPDF(DB.customers.find(x=>x.id===${c.id}))"
+              style="color:var(--blue);border-color:var(--blue)">
+        ${svg('pdf')} PDF
+      </button>
+      <button class="btn btn-green"
+              onclick="closeModal();openAbonoModal(DB.customers.find(x=>x.id===${c.id}))">
+        ${svg('dollar')} Registrar Abono
+      </button>
+    </div>
+  `, 'modal-xl');
+}
+
+// Expande / colapsa el detalle de artículos de una factura
+async function toggleFacturaDetalle(idx, saleId, rowEl) {
+  const detailRow  = document.getElementById(`fac-detail-${idx}`);
+  const detailBody = document.getElementById(`fac-detail-body-${idx}`);
+  const summary    = document.getElementById(`fac-items-summary-${idx}`);
+  if (!detailRow) return;
+
+  const isOpen = detailRow.style.display !== 'none';
+  if (isOpen) {
+    detailRow.style.display = 'none';
+    if (summary) summary.innerHTML =
+      `<span style="font-size:11px;color:var(--blue)">▶ Ver artículos</span>`;
+    return;
+  }
+
+  detailRow.style.display = '';
+  if (summary) summary.innerHTML =
+    `<span style="font-size:11px;color:var(--muted2)">▼ Artículos</span>`;
+
+  if (detailBody.dataset.loaded === 'true') return;
+
+  const res   = await window.api.customers.getSaleItems({ saleId });
+  const items = res?.items || [];
+
+  if (!items.length) {
+    detailBody.innerHTML = `
+      <div style="color:var(--muted2);font-size:12px;padding:4px 0">
+        Sin detalle de artículos registrado.
+      </div>`;
+  } else {
+    const totalItems = items.reduce((s, i) => s + i.subtotal, 0);
+    detailBody.innerHTML = `
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead>
+          <tr style="border-bottom:1px solid var(--line)">
+            <th style="text-align:left;padding:4px 8px;font-weight:600;color:var(--muted)">Artículo</th>
+            <th style="text-align:center;padding:4px 8px;font-weight:600;color:var(--muted)">Cant.</th>
+            <th style="text-align:right;padding:4px 8px;font-weight:600;color:var(--muted)">Precio Unit.</th>
+            <th style="text-align:right;padding:4px 8px;font-weight:600;color:var(--muted)">Subtotal</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${items.map((it, i) => `
+            <tr style="background:${i % 2 === 0 ? 'transparent' : 'var(--surface)'}">
+              <td style="padding:5px 8px;font-weight:500">${it.product_name}</td>
+              <td style="padding:5px 8px;text-align:center;color:var(--muted2)">${it.qty}</td>
+              <td style="padding:5px 8px;text-align:right">${fmt(it.unit_price)}</td>
+              <td style="padding:5px 8px;text-align:right;font-weight:700">${fmt(it.subtotal)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+        <tfoot>
+          <tr style="border-top:1px solid var(--line)">
+            <td colspan="3"
+                style="padding:5px 8px;text-align:right;font-size:11px;color:var(--muted)">
+              Total artículos:
+            </td>
+            <td style="padding:5px 8px;text-align:right;font-weight:800;color:var(--red)">
+              ${fmt(totalItems)}
+            </td>
+          </tr>
+        </tfoot>
+      </table>`;
+  }
+  detailBody.dataset.loaded = 'true';
 }

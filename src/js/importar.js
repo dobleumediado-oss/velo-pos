@@ -131,17 +131,33 @@ const VELO_FIELDS = {
     { key: 'notes',          label: 'Notas',            required: false },
     { key: 'status',         label: 'Estado',           required: false },
   ],
+  // ── Facturas a crédito con detalle de artículos ──
+  // Una fila por artículo. Varias filas con el mismo
+  // cliente + referencia de factura = una sola venta.
+  facturas_credito: [
+    { key: 'customer_name',  label: 'Cliente',               required: true  },
+    { key: 'invoice_ref',    label: 'N° / Referencia factura',required: false },
+    { key: 'date',           label: 'Fecha factura',          required: false },
+    { key: 'product_name',   label: 'Artículo / Producto',    required: true  },
+    { key: 'qty',            label: 'Cantidad',               required: false },
+    { key: 'unit_price',     label: 'Precio unitario',        required: true  },
+    { key: 'total',          label: 'Total / Balance factura (total_factura)', required: false },
+    { key: 'phone',          label: 'Teléfono cliente',       required: false },
+    { key: 'rnc',            label: 'RNC / Cédula cliente',   required: false },
+    { key: 'credit_days',    label: 'Días de crédito',        required: false },
+  ],
 };
 
 // ── Etiquetas legibles por tipo ────────────────
 const TIPO_LABELS = {
-  productos:      'Productos',
-  clientes:       'Clientes',
-  ventas:         'Historial de Ventas',
-  cuentas_cobrar: 'Cuentas por Cobrar',
-  proveedores:    'Proveedores',
-  compras:        'Compras / Entradas',
-  gastos:         'Gastos',
+  productos:        'Productos',
+  clientes:         'Clientes',
+  ventas:           'Historial de Ventas',
+  cuentas_cobrar:   'Cuentas por Cobrar',
+  proveedores:      'Proveedores',
+  compras:          'Compras / Entradas',
+  gastos:           'Gastos',
+  facturas_credito: 'Facturas a Crédito (con detalle)',
 };
 
 // ══════════════════════════════════════════════
@@ -178,11 +194,12 @@ function wizardStepImportar() {
             <div style="font-size:10px;color:var(--muted2)">${t.sub}</div>
           </div>`).join('')}
       </div>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
         ${[
-          { id:'proveedores', icon:'🏭', label:'Proveedores',      sub:'Catálogo de suplidores' },
-          { id:'compras',     icon:'📥', label:'Compras',          sub:'Historial de compras' },
-          { id:'gastos',      icon:'💸', label:'Gastos',           sub:'Egresos históricos' },
+          { id:'proveedores',       icon:'🏭', label:'Proveedores',          sub:'Catálogo de suplidores' },
+          { id:'compras',           icon:'📥', label:'Compras',              sub:'Historial de compras' },
+          { id:'gastos',            icon:'💸', label:'Gastos',               sub:'Egresos históricos' },
+          { id:'facturas_credito',  icon:'🧾', label:'Facturas a Crédito',   sub:'Con artículos y fechas' },
         ].map(t => `
           <div class="card" style="text-align:center;cursor:pointer;border:2px solid var(--line);padding:12px"
                id="imp-tipo-${t.id}" onclick="setImportTipo('${t.id}')">
@@ -229,6 +246,10 @@ function wizardStepImportar() {
     <div class="modal-foot">
       <button class="btn btn-out" onclick="wizardStep=4;renderWizardStep()">
         Omitir — empezar desde cero
+      </button>
+      <button class="btn btn-out" id="imp-btn-manual"
+              onclick="abrirMapeoManual()" disabled style="opacity:.4">
+        🗂 Mapeo Manual
       </button>
       <button class="btn btn-dark" id="imp-btn-analizar"
               onclick="analizarArchivoConIA()" disabled style="opacity:.4">
@@ -288,6 +309,8 @@ function procesarArchivoSeleccionado(file) {
   }
   const btn = document.getElementById('imp-btn-analizar');
   if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+  const btnM = document.getElementById('imp-btn-manual');
+  if (btnM) { btnM.disabled = false; btnM.style.opacity = '1'; }
 }
 
 function fileEmoji(name) {
@@ -628,6 +651,51 @@ async function leerZIP(file) {
 // ══════════════════════════════════════════════
 // ANÁLISIS CON IA
 // ══════════════════════════════════════════════
+// ══════════════════════════════════════════════
+// DIÁLOGO — IA no disponible, continuar sin ella
+// Devuelve Promise<boolean>: true = continuar,
+// false = el usuario canceló.
+// ══════════════════════════════════════════════
+function _confirmarFallbackMapeo() {
+  return new Promise(resolve => {
+    openModal(`
+      <div style="text-align:center;padding:8px 0 4px">
+        <div style="font-size:36px;margin-bottom:10px">⚠️</div>
+        <div class="modal-title">IA no disponible</div>
+        <div class="modal-sub" style="margin-bottom:16px">
+          La API key de Claude no está configurada o no es válida.
+        </div>
+      </div>
+
+      <div class="alrt a" style="margin-bottom:16px">
+        <div class="alrt-dot a"></div>
+        <div>
+          <div class="alrt-title">Se usará mapeo automático por nombre de columna</div>
+          <div class="alrt-sub">
+            El sistema detectará las columnas por su nombre y las asignará automáticamente.
+            Podrás revisar y corregir el mapeo antes de importar.
+          </div>
+        </div>
+      </div>
+
+      <div style="font-size:12px;color:var(--muted);margin-bottom:16px;line-height:1.6">
+        Para restaurar el análisis con IA, actualiza la clave <code>ANTHROPIC_API_KEY</code>
+        en el archivo <code>.env</code> del proyecto y reinicia la aplicación.
+      </div>
+
+      <div class="modal-foot">
+        <button class="btn btn-out" onclick="closeModal();window._fallbackResolve(false)">
+          Cancelar
+        </button>
+        <button class="btn btn-dark" onclick="closeModal();window._fallbackResolve(true)">
+          Continuar sin IA
+        </button>
+      </div>
+    `);
+    window._fallbackResolve = resolve;
+  });
+}
+
 async function analizarArchivoConIA() {
   const btn = document.getElementById('imp-btn-analizar');
   if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Analizando...'; }
@@ -636,23 +704,50 @@ async function analizarArchivoConIA() {
     const { headers, rows, nota } = await leerArchivo(importState.file);
     importState.headers = headers;
     importState.rawData = rows;
-
     if (nota) toast(nota, 'ok');
 
     const tipo   = importState.tipo;
     const campos = (VELO_FIELDS[tipo] || VELO_FIELDS.productos)
       .map(f => `${f.key} (${f.label}${f.required ? ', requerido' : ''})`).join(', ');
 
-    const aiResult = await window.api.importar.analyzeWithAI({
-      headers, rows: rows.slice(0, 5), tipo, campos,
-    });
+    let mapping    = {};
+    let confidence = 1;
+    let notas      = '';
+    let usedAI     = false;
 
-    if (!aiResult.ok) throw new Error(aiResult.error || 'Error al analizar con IA');
+    // ── Intentar con IA ───────────────────────
+    try {
+      const aiResult = await window.api.importar.analyzeWithAI({
+        headers, rows: rows.slice(0, 5), tipo, campos,
+      });
+      if (aiResult.ok) {
+        mapping    = aiResult.data.mapping    || {};
+        confidence = aiResult.data.confidence || 1;
+        notas      = aiResult.data.notas      || '';
+        usedAI     = true;
+      } else if (aiResult.authError) {
+        // API key inválida o ausente — preguntar al usuario qué desea hacer
+        if (btn) { btn.disabled = false; btn.innerHTML = '✨ Analizar con IA'; }
+        const continuar = await _confirmarFallbackMapeo();
+        if (!continuar) return; // usuario canceló
+        if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Mapeando...'; }
+      }
+    } catch (_) { /* IA no disponible — continuar con mapeo automático */ }
 
-    importState.mapping     = aiResult.data.mapping    || {};
-    importState._confidence = aiResult.data.confidence || 1;
+    // ── Mapeo automático por nombre de columna ─
+    // Se usa cuando la IA no está disponible o el usuario confirma continuar sin ella.
+    if (!usedAI || Object.keys(mapping).length === 0) {
+      const fields = VELO_FIELDS[tipo] || VELO_FIELDS.productos;
+      _aplicarMapeoAutomatico(fields, headers, mapping);
+      confidence = 0.85;
+      notas = '✓ Mapeo automático por nombre de columna — revisa y ajusta si es necesario.';
+      toast('IA no disponible — mapeo automático aplicado', 'w');
+    }
 
-    mostrarVistaPrevia(aiResult.data.notas);
+    importState.mapping     = mapping;
+    importState._confidence = confidence;
+    mostrarVistaPrevia(notas);
+
   } catch (err) {
     toast(`Error al analizar: ${err.message}`, 'err');
     if (btn) { btn.disabled = false; btn.innerHTML = '✨ Analizar con IA'; }
@@ -767,6 +862,9 @@ function mostrarVistaPrevia(notas) {
 
     <div class="modal-foot">
       <button class="btn btn-out" onclick="wizardStepImportar()">← Volver</button>
+      <button class="btn btn-out" onclick="abrirMapeoManual()" style="color:var(--muted)">
+        🗂 Manual
+      </button>
       <button class="btn btn-out" onclick="mostrarVistaPrevia('')" style="color:var(--blue)">
         🔄 Re-analizar
       </button>
@@ -804,6 +902,130 @@ async function ejecutarImportacion() {
 
   importState._sessionIds = [];
   const sessionIds = importState._sessionIds;
+
+  // ── Procesamiento especial para facturas_credito ──
+  // Agrupa filas por (cliente + referencia_factura) ANTES del loop
+  // para crear una sola venta con todos sus artículos.
+  if (tipo === 'facturas_credito') {
+    const grouped = new Map(); // key: "cliente||ref"
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const customerName = (mapping.customer_name ? String(row[mapping.customer_name]||'') : '').trim();
+      if (!customerName) {
+        errores.push({ fila:i+2, campo:'cliente', error:'Cliente vacío — fila omitida', tipo:'error' });
+        continue;
+      }
+      const invoiceRef = mapping.invoice_ref
+        ? String(row[mapping.invoice_ref]||'').trim()
+        : '';
+      // Clave de agrupación: cliente + ref (o cliente + precio total si no hay ref)
+      const groupKey  = `${customerName.toLowerCase()}||${invoiceRef || _impCleanNum(mapping.total ? row[mapping.total] : 0)}`;
+
+      if (!grouped.has(groupKey)) {
+        // Tomar total de la primera fila del grupo (es el balance de la factura,
+        // igual en todas las filas de la misma factura — no acumular).
+        const totalFila = _impCleanNum(mapping.total ? row[mapping.total] : 0);
+        grouped.set(groupKey, {
+          customerName,
+          phone:       mapping.phone       ? String(row[mapping.phone]||'').trim()       : '',
+          rnc:         mapping.rnc         ? String(row[mapping.rnc]||'').trim()         : '',
+          invoiceRef,
+          date:        _impNormDate(mapping.date ? row[mapping.date] : '') || new Date().toISOString().split('T')[0],
+          total:       totalFila,   // fijo desde primera fila — no se sobreescribe
+          creditDays:  mapping.credit_days ? _impCleanInt(row[mapping.credit_days]) : 30,
+          items:       [],
+          filas:       [],
+        });
+      }
+
+      const g = grouped.get(groupKey);
+      const productName = (mapping.product_name ? String(row[mapping.product_name]||'').trim() : '').trim();
+      const qty         = mapping.qty       ? Math.max(1, _impCleanInt(row[mapping.qty]))   : 1;
+      const unitPrice   = _impCleanNum(mapping.unit_price ? row[mapping.unit_price] : 0);
+
+      if (productName && unitPrice >= 0) {
+        g.items.push({ name: productName, qty, price: unitPrice });
+      }
+      g.filas.push(i + 2);
+    }
+
+    // Si no vino total explícito, calcularlo desde la suma de items
+    for (const g of grouped.values()) {
+      if (g.total <= 0 && g.items.length) {
+        g.total = Math.round(g.items.reduce((s, it) => s + it.price * it.qty, 0) * 100) / 100;
+      }
+    }
+
+    // Procesar cada grupo como una venta
+    const grupos = Array.from(grouped.values());
+    let gi = 0;
+    for (const g of grupos) {
+      gi++;
+      const pct = Math.round((gi / grupos.length) * 100);
+      const bar = document.getElementById('imp-prog-bar');
+      const sub = document.getElementById('imp-prog-sub');
+      const cnt = document.getElementById('imp-prog-count');
+      if (bar) bar.style.width = pct + '%';
+      if (sub) sub.textContent = `Factura ${gi} de ${grupos.length} — ${g.customerName}`;
+      if (cnt) cnt.textContent = `${importados} importadas · ${errores.filter(e=>e.tipo==='error').length} errores`;
+      await new Promise(r => setTimeout(r, 0));
+
+      if (!g.items.length) {
+        errores.push({ fila: g.filas[0], nombre: g.customerName,
+          campo: 'artículos', error: 'Sin artículos válidos — factura omitida', tipo:'error' });
+        continue;
+      }
+      if (g.total <= 0) {
+        errores.push({ fila: g.filas[0], nombre: g.customerName,
+          campo: 'total', error: 'Total inválido — factura omitida', tipo:'error' });
+        continue;
+      }
+
+      try {
+        const result = await window.api.importar.importarFacturaCredito({
+          customerName: g.customerName,
+          phone:        g.phone,
+          rnc:          g.rnc,
+          invoiceRef:   g.invoiceRef,
+          date:         g.date,
+          items:        g.items,
+          total:        g.total,
+          creditDays:   g.creditDays,
+          requestUserId: user.id,
+        });
+
+        if (result.ok) {
+          if (result.skipped) {
+            duplicados++;
+            errores.push({ fila: g.filas[0], nombre: g.customerName,
+              campo:'duplicado', error:`Factura ${g.invoiceRef||'sin ref'} ya importada — omitida`, tipo:'dup' });
+          } else {
+            importados++;
+            sessionIds.push({ tabla:'sales',     id: result.saleId    });
+            if (result.customerCreated) {
+              sessionIds.push({ tabla:'customers', id: result.customerId });
+            }
+          }
+        } else {
+          errores.push({ fila: g.filas[0], nombre: g.customerName,
+            campo:'factura', error: result.error || 'Error', tipo:'error' });
+        }
+      } catch(e) {
+        errores.push({ fila: g.filas[0], nombre: g.customerName,
+          campo:'excepción', error: e.message, tipo:'error' });
+      }
+    }
+
+    // Recargar y mostrar resultado — saltamos el loop principal
+    await reloadCustomers().catch(()=>{});
+    if (window.api?.customers?.getAllPayments) {
+      try { DB.payments = await window.api.customers.getAllPayments(); } catch {}
+    }
+    await reloadSales({ range: 'all' }).catch(()=>{});
+    mostrarResultadoImportacion(importados, errores, grupos.length, duplicados, allowRollback);
+    return; // ← salir de ejecutarImportacion, no entrar al loop
+  }
 
   openModal(`
     <div style="text-align:center;padding:20px">
@@ -1117,6 +1339,13 @@ async function ejecutarImportacion() {
             error:result.error||'Error', tipo:'error' });
         }
 
+      // ── FACTURAS A CRÉDITO ─────────────────────
+      // Las filas ya vienen agrupadas en _facturasAgrupadas,
+      // este bloque procesa cada grupo (una venta por grupo).
+      } else if (tipo === 'facturas_credito') {
+        // (procesado por lote antes del loop — ver más abajo)
+        continue;
+
       // ── GASTOS ─────────────────────────────────
       } else if (tipo === 'gastos') {
         const description = mapping.description
@@ -1414,4 +1643,253 @@ function abrirImportarDesdeConfig() {
       omitirBtn.style.display = 'none';
     }
   }, 100);
+}
+
+// ══════════════════════════════════════════════
+// MAPEO MANUAL — sin IA, sin archivo previo
+// Permite al usuario asignar columnas a mano
+// para cualquier tipo de datos del migrador.
+// Si ya hay un archivo cargado, usa sus headers.
+// Si no, el usuario pega sus columnas como texto.
+// ══════════════════════════════════════════════
+function abrirMapeoManual() {
+  const tipo    = importState.tipo || 'productos';
+  const fields  = VELO_FIELDS[tipo] || VELO_FIELDS.productos;
+  const hdrs    = importState.headers || [];
+  const tieneArchivo = hdrs.length > 0;
+
+  // Si no hay archivo cargado, pedir columnas manualmente
+  if (!tieneArchivo) {
+    openModal(`
+      <div class="modal-title">🗂 Mapeo Manual</div>
+      <div class="modal-sub">Pega las columnas de tu archivo para comenzar el mapeo</div>
+
+      <div class="fg" style="margin-bottom:12px">
+        <label class="lbl">
+          Columnas de tu archivo (separadas por coma o punto y coma)
+        </label>
+        <textarea class="inp" id="man-cols-input" rows="3"
+                  placeholder="Ej: nombre, precio, codigo, stock, categoria"
+                  style="resize:vertical;font-family:monospace;font-size:12px"></textarea>
+        <div style="font-size:11px;color:var(--muted2);margin-top:4px">
+          Copia el encabezado de tu Excel o CSV y pégalo aquí.
+        </div>
+      </div>
+
+      <div class="modal-foot">
+        <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-dark" onclick="
+          const raw = document.getElementById('man-cols-input')?.value || '';
+          const cols = raw.split(/[,;\\t]+/).map(c => c.trim()).filter(Boolean);
+          if (!cols.length) { toast('Ingresa al menos una columna', 'err'); return; }
+          importState.headers = cols;
+          importState.rawData = importState.rawData.length ? importState.rawData : [];
+          importState.mapping = {};
+          _mostrarMapeoManual();
+        ">
+          Continuar →
+        </button>
+      </div>
+    `);
+    return;
+  }
+
+  // Tiene archivo — ir directo al mapeo
+  importState.mapping = importState.mapping || {};
+  _mostrarMapeoManual();
+}
+
+function _mostrarMapeoManual() {
+  const tipo   = importState.tipo || 'productos';
+  const fields = VELO_FIELDS[tipo] || VELO_FIELDS.productos;
+  const hdrs   = importState.headers || [];
+  const rows   = importState.rawData || [];
+  const mapping = importState.mapping || {};
+
+  // Aplicar mapeo automático como punto de partida si no hay ninguno
+  if (Object.keys(mapping).length === 0) {
+    _aplicarMapeoAutomatico(fields, hdrs, mapping);
+  }
+
+  const preview = rows.slice(0, 2);
+
+  const mappingRows = fields.map(f => {
+    const mapped  = mapping[f.key] || '';
+    const opts    = hdrs.map(h =>
+      `<option value="${h}" ${h === mapped ? 'selected' : ''}>${h}</option>`
+    ).join('');
+    const ejemplo = mapped && preview[0]
+      ? String(preview[0][mapped] || '—').slice(0, 35)
+      : '—';
+
+    return `
+      <tr>
+        <td style="font-size:12px;white-space:nowrap;padding:6px 8px">
+          <b>${f.label}</b>
+          ${f.required ? '<span style="color:var(--red)">*</span>' : ''}
+          <div style="font-size:10px;color:var(--muted2);font-weight:400">${f.key}</div>
+        </td>
+        <td style="padding:4px 8px">
+          <select class="inp" style="font-size:12px;padding:4px 8px"
+                  id="map-${f.key}"
+                  onchange="updateMapping('${f.key}',this.value)">
+            <option value="">— No importar —</option>
+            ${opts}
+          </select>
+        </td>
+        <td style="font-size:11px;color:var(--muted2);padding:6px 8px;
+                   max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${ejemplo}
+        </td>
+      </tr>`;
+  }).join('');
+
+  const reqs    = fields.filter(f => f.required);
+  const mapped  = reqs.filter(f => mapping[f.key]);
+  const pctReq  = reqs.length ? Math.round((mapped.length / reqs.length) * 100) : 100;
+  const color   = pctReq === 100 ? 'var(--green)' : pctReq >= 50 ? 'var(--amber)' : 'var(--red)';
+
+  openModal(`
+    <div class="modal-title">🗂 Mapeo Manual — ${TIPO_LABELS[tipo] || tipo}</div>
+    <div class="modal-sub">
+      Asigna cada campo de Velo POS a la columna correcta de tu archivo.
+      Los campos con <span style="color:var(--red)">*</span> son requeridos.
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px">
+      <div style="background:var(--surface2);border-radius:var(--r-sm);padding:10px;font-size:12px">
+        <div style="font-weight:600;margin-bottom:3px">📋 Columnas</div>
+        <div style="font-size:20px;font-weight:800">${hdrs.length}</div>
+        <div style="font-size:10px;color:var(--muted2)">en el archivo</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:var(--r-sm);padding:10px;font-size:12px">
+        <div style="font-weight:600;margin-bottom:3px">📊 Registros</div>
+        <div style="font-size:20px;font-weight:800">${(importState.rawData||[]).length.toLocaleString()}</div>
+        <div style="font-size:10px;color:var(--muted2)">a importar</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:var(--r-sm);padding:10px;font-size:12px">
+        <div style="font-weight:600;margin-bottom:3px">✅ Requeridos</div>
+        <div style="font-size:20px;font-weight:800;color:${color}">${pctReq}%</div>
+        <div style="font-size:10px;color:var(--muted2)">${mapped.length} de ${reqs.length} mapeados</div>
+      </div>
+    </div>
+
+    <div style="border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:12px">
+      <div style="overflow-y:auto;max-height:320px">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr style="background:var(--surface2)">
+              <th style="padding:8px;text-align:left;font-size:11px;
+                         border-bottom:1px solid var(--line)">Campo Velo POS</th>
+              <th style="padding:8px;text-align:left;font-size:11px;
+                         border-bottom:1px solid var(--line)">Columna del archivo</th>
+              <th style="padding:8px;text-align:left;font-size:11px;
+                         border-bottom:1px solid var(--line)">Ejemplo</th>
+            </tr>
+          </thead>
+          <tbody>${mappingRows}</tbody>
+        </table>
+      </div>
+    </div>
+
+    ${hdrs.length > 0 ? `
+    <div style="margin-bottom:10px">
+      <div style="font-size:11px;font-weight:600;color:var(--muted);margin-bottom:6px">
+        Columnas disponibles en tu archivo:
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px">
+        ${hdrs.map(h => `
+          <span style="background:var(--surface2);border:1px solid var(--line);
+                       border-radius:4px;padding:2px 8px;font-size:11px;
+                       font-family:monospace">${h}</span>
+        `).join('')}
+      </div>
+    </div>` : ''}
+
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="wizardStepImportar()">← Volver</button>
+      <button class="btn btn-out"
+              onclick="importState.mapping={};_mostrarMapeoManual()"
+              style="color:var(--muted)">
+        ↺ Reiniciar mapeo
+      </button>
+      <button class="btn btn-dark"
+              onclick="_validarYEjecutarDesdeManual()">
+        ⬆ Importar ${(importState.rawData||[]).length.toLocaleString()} registros
+      </button>
+    </div>
+  `, 'modal-xl');
+}
+
+// Aplicar mapeo automático por sinónimos — reutilizado por manual y fallback IA
+function _aplicarMapeoAutomatico(fields, hdrs, mappingObj) {
+  const SYNONYMS = {
+    name:           ['name','nombre','cliente','customer_name'],
+    phone:          ['phone','telefono','teléfono','celular','tel','movil'],
+    email:          ['email','correo','mail'],
+    rnc:            ['rnc','cedula','cédula','rnc_cedula'],
+    address:        ['address','direccion','dirección'],
+    credit_limit:   ['credit_limit','limite','limite_credito'],
+    credit_days:    ['credit_days','dias_credito','dias','plazo'],
+    balance:        ['balance','deuda','saldo','balance_pendiente'],
+    status:         ['status','estado'],
+    credit_due:     ['credit_due','vencimiento','fecha_vencimiento'],
+    code:           ['code','codigo','sku','referencia'],
+    barcode:        ['barcode','codigo_barras','barras'],
+    price:          ['price','precio','precio_venta','pvp'],
+    cost:           ['cost','costo','costo_compra'],
+    wholesale:      ['wholesale','precio_mayor','mayoreo'],
+    stock:          ['stock','existencia','cantidad','inventario'],
+    stock_min:      ['stock_min','minimo','stock_minimo'],
+    category:       ['category','categoria','clasificacion'],
+    brand:          ['brand','marca'],
+    unit:           ['unit','unidad'],
+    description:    ['description','descripcion','observaciones'],
+    customer_name:  ['customer_name','cliente','nombre','name'],
+    invoice_ref:    ['invoice_ref','factura','codigo_factura','referencia','invoice','numero'],
+    date:           ['date','fecha','fecha_factura','fecha_insercion'],
+    product_name:   ['product_name','articulo','producto','item','descripcion'],
+    qty:            ['qty','cantidad','cant','quantity'],
+    unit_price:     ['unit_price','precio','precio_unitario','price','valor'],
+    total:          ['total','total_factura','balance_pendiente','balance','monto','importe'],
+    payment_method: ['payment_method','forma_pago','metodo','pago'],
+    ncf:            ['ncf','comprobante'],
+    cajero:         ['cajero','vendedor','usuario'],
+    supplier_name:  ['supplier_name','proveedor','suplidor'],
+    unit_cost:      ['unit_cost','costo','costo_unitario'],
+    notes:          ['notes','notas','nota','observaciones'],
+    contact:        ['contact','contacto'],
+    tax_amt:        ['tax_amt','itbis','impuesto','tax'],
+    discount_pct:   ['discount_pct','descuento','discount'],
+    subtotal:       ['subtotal','sub_total'],
+    type:           ['type','tipo','tipo_doc'],
+  };
+
+  const hdrsLow = hdrs.map(h => h.toLowerCase().trim().replace(/\s+/g,'_'));
+  fields.forEach(f => {
+    if (mappingObj[f.key]) return; // ya mapeado
+    const syns = SYNONYMS[f.key] || [f.key];
+    const idx  = hdrsLow.findIndex(h =>
+      syns.some(s => h === s || h.includes(s) || s.includes(h))
+    );
+    if (idx !== -1) mappingObj[f.key] = hdrs[idx];
+  });
+}
+
+// Validar requeridos y ejecutar desde mapeo manual
+function _validarYEjecutarDesdeManual() {
+  const tipo    = importState.tipo;
+  const fields  = VELO_FIELDS[tipo] || VELO_FIELDS.productos;
+  const mapping = importState.mapping;
+  const missing = fields.filter(f => f.required && !mapping[f.key]);
+
+  if (missing.length) {
+    toast(`Falta mapear: ${missing.map(f => f.label).join(', ')}`, 'err');
+    return;
+  }
+  if (!importState.rawData || !importState.rawData.length) {
+    toast('No hay datos para importar. Carga un archivo primero.', 'err');
+    return;
+  }
+  ejecutarImportacion();
 }

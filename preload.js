@@ -51,7 +51,9 @@ contextBridge.exposeInMainWorld('api', {
     addPayment:    (data)      => ipcRenderer.invoke('customers:addPayment', data),
     getPayments:   (data)      => ipcRenderer.invoke('customers:getPayments', data),
     getAllPayments: ()          => ipcRenderer.invoke('customers:getAllPayments'),
-    getHistory:    (data)      => ipcRenderer.invoke('customers:getHistory', data),
+    getHistory:             (data) => ipcRenderer.invoke('customers:getHistory',             data),
+    getSaleItems:           (data) => ipcRenderer.invoke('customers:getSaleItems',           data),
+    getFacturasPendientes:  (data) => ipcRenderer.invoke('customers:getFacturasPendientes',  data),
   },
 
   // ── Caja ──────────────────────────────────
@@ -153,7 +155,8 @@ contextBridge.exposeInMainWorld('api', {
     importarCompra:  (data) => ipcRenderer.invoke('importar:importarCompra',  data),
     importarGasto:   (data) => ipcRenderer.invoke('importar:importarGasto',   data),
     readZIP:         (data) => ipcRenderer.invoke('importar:readZIP',         data),
-    rollback:        (data) => ipcRenderer.invoke('importar:rollback',        data),
+    rollback:               (data) => ipcRenderer.invoke('importar:rollback',               data),
+    importarFacturaCredito: (data) => ipcRenderer.invoke('importar:importarFacturaCredito', data),
   },
 
   // ── Proveedores ───────────────────────────
