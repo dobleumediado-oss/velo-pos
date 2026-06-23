@@ -113,7 +113,11 @@ function renderCliTable() {
   const alertMap = {};
   alerts.forEach(a => { alertMap[a.client.id] = a; });
 
-  const q = cliSearch.toLowerCase().trim();
+  const q       = cliSearch.toLowerCase().trim();
+  // Versión solo-dígitos de la búsqueda: permite encontrar un teléfono o
+  // RNC sin importar si el usuario escribe o no los guiones/espacios
+  // (ej. "8095551234" debe encontrar un cliente guardado como "809-555-1234")
+  const qDigits = q.replace(/\D/g, '');
 
   let clients = DB.customers.filter(c => {
     if (c.id === 1 || c.active === 0) return false;
@@ -122,10 +126,16 @@ function renderCliTable() {
     return true;
   }).filter(c =>
     !q ||
-    c.name.toLowerCase().includes(q)        ||
-    (c.rnc   && c.rnc.includes(q))          ||
-    (c.phone  && c.phone.includes(q))       ||
-    (c.address && c.address.toLowerCase().includes(q))
+    c.name.toLowerCase().includes(q) ||
+    (c.address && c.address.toLowerCase().includes(q)) ||
+    (c.rnc && (
+      c.rnc.toLowerCase().includes(q) ||
+      (qDigits && c.rnc.replace(/\D/g, '').includes(qDigits))
+    )) ||
+    (c.phone && (
+      c.phone.includes(q) ||
+      (qDigits && c.phone.replace(/\D/g, '').includes(qDigits))
+    ))
   );
 
   if (!clients.length) {
