@@ -115,7 +115,8 @@ async function renderPOS(el) {
                 p.active !== 0 && (
                   p.name?.toLowerCase().includes(q.toLowerCase()) ||
                   p.code?.toLowerCase().includes(q.toLowerCase()) ||
-                  p.barcode?.toLowerCase().includes(q.toLowerCase())
+                  p.barcode?.toLowerCase().includes(q.toLowerCase()) ||
+                  p.model?.toLowerCase().includes(q.toLowerCase())
                 )
               );
               if (filtered.length === 1) {
@@ -203,7 +204,8 @@ function renderPOSGrid() {
     const mQ   = !q ||
       p.name.toLowerCase().includes(q) ||
       p.code.toLowerCase().includes(q) ||
-      (p.brand && p.brand.toLowerCase().includes(q));
+      (p.brand && p.brand.toLowerCase().includes(q)) ||
+      (p.model && p.model.toLowerCase().includes(q));
     return mCat && mQ && p.active !== 0;
   });
 
@@ -235,6 +237,7 @@ function renderPOSGrid() {
               p.condition === 'consignacion' ? 'CONSIG.' : 'ESPECIAL'
             }</span>` : ''}</div>
         <div class="pc-price">${fmt(price)}</div>
+        ${p.model ? `<div style="font-size:10px;font-weight:600;color:var(--blue);margin-top:2px">${p.model}</div>` : ''}
         <div class="pc-stock" style="color:${isLow ? 'var(--red)' : 'var(--muted2)'}">
           ${isOut ? 'Sin stock' : `${p.stock} disponibles`}
         </div>

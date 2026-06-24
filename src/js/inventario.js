@@ -10,6 +10,7 @@
 
 let invSearch = '';
 let invCat    = '';
+let invModel  = '';
 let invSort   = 'name';
 let invTab    = 'todos'; // todos | bajo | sin_stock
 
@@ -89,7 +90,8 @@ function renderInventario(el) {
         ...[
           { k: 'todos',     l: 'Todos' },
           { k: 'bajo',      l: `Stock bajo (${lowStock.length})` },
-          { k: 'sin_stock', l: `Sin stock (${outStock.length})` },
+          { k: 'sin_stock',  l: `Sin stock (${outStock.length})` },
+          { k: 'por_modelo', l: 'Por Modelo' },
         ].map(t => h('button', {
           class: `tab ${invTab === t.k ? 'on' : ''}`,
           onclick: () => { invTab = t.k; renderInvTable(); }
@@ -157,6 +159,7 @@ function renderInvTable() {
     const stockMin = p.stock_min || 5;
     if (invTab === 'bajo'      && !(p.stock > 0 && p.stock <= stockMin)) return false;
     if (invTab === 'sin_stock' && p.stock !== 0) return false;
+    if (invTab === 'por_modelo' && !p.model) return false;
     const mCat = !invCat || p.category === invCat;
     const mQ   = !q ||
       p.name.toLowerCase().includes(q)  ||
@@ -202,6 +205,9 @@ function renderInvTable() {
       <td>
         <div class="tb">${esc(p.name)}</div>
         <div class="ts">${esc(p.brand||'—')}</div>
+      </td>
+      <td>
+        ${p.model ? `<span class="badge n" style="background:var(--blue-bg,#eff6ff);color:var(--blue)">${esc(p.model)}</span>` : '<span style="color:var(--muted2);font-size:11px">—</span>'}
       </td>
       <td>
         <span class="badge n">${esc(p.category||'—')}</span>${condBadge}
@@ -525,6 +531,16 @@ async function confirmarEntrada() {
 // MODAL PRODUCTO (crear / editar)
 // ══════════════════════════════════════════════
 function openProductoModal(p = null) {
+  // Precargar modelos para autocompletado (async, no bloquea render)
+  if (window.api?.products?.getModels) {
+    window.api.products.getModels().then(res => {
+      const dl = document.getElementById('pf-model-list');
+      if (dl && res?.models) {
+        dl.innerHTML = res.models.map(m => `<option value="${m}">`).join('');
+      }
+    }).catch(() => {});
+  }
+
   const isEdit   = !!p?.id;
   const stockMin = p?.stock_min || 5;
 
@@ -594,6 +610,19 @@ function openProductoModal(p = null) {
         <label class="lbl">Marca</label>
         <input class="inp" id="pf-brand" type="text" placeholder="Denso, NGK..."
                value="${isEdit ? (p.brand || '') : ''}"/>
+      </div>
+      <div class="fg">
+        <label class="lbl">
+          Modelo
+          <span style="font-weight:400;color:var(--muted2);font-size:11px">
+            — equipo compatible (ej: T40, DJI-T40, L3408)
+          </span>
+        </label>
+        <input class="inp" id="pf-model" type="text"
+               placeholder="T40, DJI-T40, L4508..."
+               list="pf-model-list"
+               value="${isEdit ? (p.model || '') : ''}"/>
+        <datalist id="pf-model-list" id="pf-model-list"></datalist>
       </div>
       <div class="fg">
         <label class="lbl">Categoría</label>
@@ -732,6 +761,7 @@ async function guardarProducto(id) {
   const name      = document.getElementById('pf-name')?.value?.trim();
   const code      = document.getElementById('pf-code')?.value?.trim();
   const brand     = document.getElementById('pf-brand')?.value?.trim()     || '';
+  const model     = document.getElementById('pf-model')?.value?.trim()     || '';
   const category  = document.getElementById('pf-cat')?.value               || '';
   const unit      = document.getElementById('pf-unit')?.value              || 'und';
   const desc      = document.getElementById('pf-desc')?.value?.trim()      || '';
@@ -747,7 +777,7 @@ async function guardarProducto(id) {
   if (!code)      { toast('El código es requerido', 'err');  return; }
   if (price <= 0) { toast('El precio debe ser mayor a 0', 'err'); return; }
 
-  const data = { code, barcode, name, brand, category, description: desc, unit, cost, price, wholesale, stock, stock_min, condition };
+  const data = { code, barcode, name, brand, model, category, description: desc, unit, cost, price, wholesale, stock, stock_min, condition };
 
   let result;
   if (id) {

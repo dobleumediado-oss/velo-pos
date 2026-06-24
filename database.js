@@ -35,6 +35,7 @@ function initDB(customDataDir) {
   db.pragma('foreign_keys = ON');
   db.pragma('synchronous = NORMAL');
 
+  migrateProductsModel();
   createTables();
   migrateECFColumns();
   migrateExpensesColumns();
@@ -90,6 +91,7 @@ function createTables() {
       stock         INTEGER NOT NULL DEFAULT 0,
       stock_min     INTEGER NOT NULL DEFAULT 5,
       unit          TEXT DEFAULT 'und',
+      model         TEXT DEFAULT '',
       condition     TEXT DEFAULT 'nuevo',
       active        INTEGER DEFAULT 1,
       created_at    TEXT DEFAULT (datetime('now')),
@@ -516,6 +518,8 @@ function createTables() {
     CREATE INDEX IF NOT EXISTS idx_products_barcode  ON products(barcode);
     -- Índices faltantes para búsquedas frecuentes en producción
     CREATE INDEX IF NOT EXISTS idx_products_name     ON products(name) WHERE active=1;
+    CREATE INDEX IF NOT EXISTS idx_products_model    ON products(model) WHERE active=1 AND model!='';
+    CREATE INDEX IF NOT EXISTS idx_products_category ON products(category) WHERE active=1;
     CREATE INDEX IF NOT EXISTS idx_products_code     ON products(code) WHERE active=1;
     CREATE INDEX IF NOT EXISTS idx_sales_status      ON sales(status);
     CREATE INDEX IF NOT EXISTS idx_sales_user        ON sales(user_id);
@@ -527,6 +531,13 @@ function createTables() {
 }
 
 // ── Migración: columnas e-CF en sales (segura — ignora si ya existen) ─────────
+function migrateProductsModel() {
+  try {
+    db.prepare("ALTER TABLE products ADD COLUMN model TEXT DEFAULT ''").run();
+    console.log('[MIGRATE] products.model agregada');
+  } catch { /* ya existe */ }
+}
+
 function migrateECFColumns() {
   const cols = ['ecf_status', 'ecf_qr', 'ecf_pdf', 'ecf_sent_at'];
   cols.forEach(col => {
@@ -804,20 +815,20 @@ const productsRepo = {
       if (existing) return existing.id; // retornar el id existente sin duplicar
     }
     const r = db.prepare(`
-      INSERT INTO products(code,barcode,name,brand,category,description,cost,price,wholesale,stock,stock_min,unit,condition)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO products(code,barcode,name,brand,category,description,model,cost,price,wholesale,stock,stock_min,unit,condition)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(p.code,p.barcode||'',p.name,p.brand||'',p.category||'',p.description||'',
-           p.cost,p.price,p.wholesale||p.price,p.stock||0,p.stock_min||5,p.unit||'und',
+           p.model||'',p.cost,p.price,p.wholesale||p.price,p.stock||0,p.stock_min||5,p.unit||'und',
            p.condition||'nuevo');
     return r.lastInsertRowid;
   },
   update(id, p) {
     db.prepare(`
-      UPDATE products SET code=?,barcode=?,name=?,brand=?,category=?,description=?,
+      UPDATE products SET code=?,barcode=?,name=?,brand=?,category=?,description=?,model=?,
       cost=?,price=?,wholesale=?,stock_min=?,unit=?,condition=?,updated_at=datetime('now')
       WHERE id=?
     `).run(p.code,p.barcode||'',p.name,p.brand||'',p.category||'',p.description||'',
-           p.cost,p.price,p.wholesale||p.price,p.stock_min||5,p.unit||'und',
+           p.model||'',p.cost,p.price,p.wholesale||p.price,p.stock_min||5,p.unit||'und',
            p.condition||'nuevo',id);
   },
   adjustStock(id, qty, type, reason, saleId = null, userId = null) {

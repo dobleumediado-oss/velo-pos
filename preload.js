@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('api', {
   // ── Productos ─────────────────────────────
   products: {
     getAll:       ()         => ipcRenderer.invoke('products:getAll'),
+    getModels:    ()         => ipcRenderer.invoke('products:getModels'),
     create:       (data)     => ipcRenderer.invoke('products:create', data),
     update:       (data)     => ipcRenderer.invoke('products:update', data),
     adjustStock:  (data)     => ipcRenderer.invoke('products:adjustStock', data),

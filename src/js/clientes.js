@@ -237,15 +237,6 @@ function renderCliTable() {
           }),
           balance > 0
             ? h('button', {
-                class: 'btn btn-ghost btn-sm',
-                title: 'Ver facturas pendientes con detalle de artículos',
-                style: { color: 'var(--amber)' },
-                onclick: () => openFacturasPendientesModal(c),
-                html: `🧾 Facturas`
-              })
-            : null,
-          balance > 0
-            ? h('button', {
                 class: 'btn btn-green btn-sm',
                 title: 'Registrar abono',
                 onclick: () => openAbonoModal(c),
@@ -658,7 +649,9 @@ async function registrarAbono(clientId, balanceActual) {
 // ══════════════════════════════════════════════
 // ESTADO DE CUENTA COMPLETO
 // ══════════════════════════════════════════════
-async function openEstadoCuentaModal(c) {
+async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
+  // Guardar tab activa para re-render al cambiar
+  window._cliModalTab = activeTab;
   const balance     = Number(c.balance || 0);
   const creditLimit = Number(c.credit_limit || 0);
   const creditDue   = c.credit_due || null;
@@ -718,8 +711,27 @@ async function openEstadoCuentaModal(c) {
       }).join('');
 
   openModal(`
-    <div class="modal-title">Estado de Cuenta</div>
-    <div class="modal-sub">${c.name} · ${c.rnc || 'Sin RNC'} · ${c.phone || 'Sin teléfono'}</div>
+    <div class="modal-title">
+      ${c.name}
+      <span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:8px">${c.rnc||''} ${c.phone ? '· '+c.phone : ''}</span>
+    </div>
+
+    <!-- Pestañas del cliente -->
+    <div class="tabs" style="margin-bottom:14px">
+      <button class="tab ${activeTab==='cuenta'?'on':''}"
+              onclick="openEstadoCuentaModal(DB.customers.find(x=>x.id===${c.id}),'cuenta')">
+        📊 Estado de Cuenta
+      </button>
+      <button class="tab ${activeTab==='facturas'?'on':''}"
+              onclick="openEstadoCuentaModal(DB.customers.find(x=>x.id===${c.id}),'facturas')">
+        🧾 Facturas Pendientes
+      </button>
+      <button class="tab ${activeTab==='historial'?'on':''}"
+              onclick="openEstadoCuentaModal(DB.customers.find(x=>x.id===${c.id}),'historial')">
+        🔍 Buscar por Artículo
+      </button>
+    </div>
+    <div id="cli-modal-body">
 
     <!-- Métricas -->
     <div class="metrics" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px">
@@ -758,32 +770,51 @@ async function openEstadoCuentaModal(c) {
         </div>
       </div>` : ''}
 
-    <!-- Historial ventas -->
-    <div style="font-weight:700;font-size:12px;margin-bottom:6px">
-      Historial de Compras (${ventas.length})</div>
-    <div class="tw" style="max-height:160px;overflow-y:auto;margin-bottom:12px">
-      <table>
-        <thead><tr>
-          <th>Fecha</th><th>Factura</th>
-          <th style="text-align:right">Total</th>
-          <th>Método</th><th>Estado</th>
-        </tr></thead>
-        <tbody>${ventasRows}</tbody>
-      </table>
-    </div>
-
-    <!-- Historial abonos -->
-    <div style="font-weight:700;font-size:12px;margin-bottom:6px">
-      Historial de Abonos (${pagos.length})</div>
-    <div class="tw" style="max-height:140px;overflow-y:auto;margin-bottom:12px">
-      <table>
-        <thead><tr>
-          <th>Fecha</th><th>Concepto</th>
-          <th style="text-align:right">Monto</th><th>Método / Balance</th>
-        </tr></thead>
-        <tbody>${pagosRows}</tbody>
-      </table>
-    </div>
+    <!-- Contenido por tab -->
+    ${activeTab === 'cuenta' ? `
+      <!-- Historial ventas -->
+      <div style="font-weight:700;font-size:12px;margin-bottom:6px">
+        Historial de Compras (${ventas.length})</div>
+      <div class="tw" style="max-height:160px;overflow-y:auto;margin-bottom:12px">
+        <table>
+          <thead><tr>
+            <th>Fecha</th><th>Factura</th>
+            <th style="text-align:right">Total</th>
+            <th>Método</th><th>Estado</th>
+          </tr></thead>
+          <tbody>${ventasRows}</tbody>
+        </table>
+      </div>
+      <div style="font-weight:700;font-size:12px;margin-bottom:6px">
+        Historial de Abonos (${pagos.length})</div>
+      <div class="tw" style="max-height:140px;overflow-y:auto;margin-bottom:12px">
+        <table>
+          <thead><tr>
+            <th>Fecha</th><th>Concepto</th>
+            <th style="text-align:right">Monto</th><th>Método / Balance</th>
+          </tr></thead>
+          <tbody>${pagosRows}</tbody>
+        </table>
+      </div>
+    ` : activeTab === 'facturas' ? `
+      <div id="cli-facturas-body">
+        <div style="text-align:center;padding:20px;color:var(--muted2)">Cargando facturas...</div>
+      </div>
+    ` : `
+      <!-- Búsqueda por artículo / modelo -->
+      <div class="inp-ic" style="margin-bottom:12px">
+        <div class="ic">${svg('search')}</div>
+        <input class="inp" id="cli-art-search" type="text"
+               placeholder="Buscar artículo o modelo en el historial de este cliente..."
+               oninput="filtrarHistorialCliente(${c.id}, this.value)"/>
+      </div>
+      <div id="cli-art-results">
+        <div style="text-align:center;padding:20px;color:var(--muted2);font-size:12px">
+          Escribe para buscar artículos comprados por este cliente
+        </div>
+      </div>
+    `}
+    </div><!-- /cli-modal-body -->
 
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
@@ -803,6 +834,45 @@ async function openEstadoCuentaModal(c) {
         </button>` : ''}
     </div>
   `, 'modal-xl');
+
+  // Si tab es facturas → cargar facturas pendientes async
+  if (activeTab === 'facturas') {
+    window.api.customers.getFacturasPendientes({ customerId: c.id }).then(res => {
+      const body = document.getElementById('cli-facturas-body');
+      if (!body) return;
+      const facturas = res?.facturas || [];
+      if (!facturas.length) {
+        body.innerHTML = `<div style="text-align:center;padding:24px;color:var(--muted2)">
+          <div style="font-size:24px;margin-bottom:8px">✅</div>
+          <div>Sin facturas a crédito pendientes</div></div>`;
+        return;
+      }
+      body.innerHTML = facturas.map((f, idx) => {
+        const fecha = (f.created_at||'').split('T')[0].split(' ')[0];
+        const diasD = Math.floor((Date.now()-new Date(fecha).getTime())/86400000);
+        const ref   = f.notes?.match(/import_ref:([^\s|]+)/)?.[1] || '#'+String(f.id).padStart(5,'0');
+        return `<div style="border:1px solid var(--line);border-radius:8px;margin-bottom:8px;overflow:hidden">
+          <div style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;
+                      cursor:pointer;background:var(--surface2)" onclick="toggleFacturaDetalle(${idx},${f.id},this)">
+            <div>
+              <span style="font-weight:700">${ref}</span>
+              <span style="font-size:11px;color:var(--muted);margin-left:8px">${fdate(fecha)}</span>
+              <span class="badge ${diasD>30?'r':'a'}" style="margin-left:6px">${diasD}d</span>
+            </div>
+            <div style="text-align:right">
+              <div style="font-weight:800;color:var(--red)">${fmt(f.pendiente)}</div>
+              <div style="font-size:10px;color:var(--muted2)">de ${fmt(f.total)}</div>
+            </div>
+          </div>
+          <div id="fac-detail-${idx}" style="display:none">
+            <div id="fac-detail-body-${idx}" style="padding:12px 14px;background:var(--surface)">
+              <div style="color:var(--muted2);font-size:12px">Cargando artículos...</div>
+            </div>
+          </div>
+        </div>`;
+      }).join('');
+    });
+  }
 }
 
 // ══════════════════════════════════════════════
@@ -958,197 +1028,133 @@ async function exportClientCreditPDF(c) {
 }
 
 // ══════════════════════════════════════════════
-// MODAL — FACTURAS PENDIENTES CON DETALLE
-// Lista facturas a crédito pendientes de cobro.
-// Cada fila es expandible: muestra sale_items
-// con artículo, cantidad, precio y subtotal.
+// BUSCAR ARTÍCULO/MODELO EN HISTORIAL DE CLIENTE
 // ══════════════════════════════════════════════
-async function openFacturasPendientesModal(c) {
-  openModal(`
-    <div class="modal-title">🧾 Facturas Pendientes</div>
-    <div class="modal-sub">${c.name}</div>
-    <div style="text-align:center;padding:32px;color:var(--muted2);font-size:13px">
-      Cargando facturas...
-    </div>
-  `, 'modal-xl');
+function filtrarHistorialCliente(customerId, q) {
+  const results = document.getElementById('cli-art-results');
+  if (!results) return;
+  q = (q || '').toLowerCase().trim();
 
-  const facturasRes = await window.api.customers.getFacturasPendientes({ customerId: c.id });
-  const facturas    = facturasRes?.facturas || [];
-  const totalPendiente = facturas.reduce((s, f) => s + f.pendiente, 0);
-
-  if (!facturas.length) {
-    openModal(`
-      <div class="modal-title">🧾 Facturas Pendientes</div>
-      <div class="modal-sub">${c.name}</div>
-      <div style="text-align:center;padding:32px;color:var(--muted2)">
-        <div style="font-size:28px;margin-bottom:8px">✅</div>
-        <div>No hay facturas a crédito pendientes de cobro.</div>
-        <div style="font-size:12px;margin-top:8px">
-          Puede que el balance venga de un saldo inicial importado sin factura asociada.
-        </div>
-      </div>
-      <div class="modal-foot">
-        <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
-        <button class="btn btn-ghost" onclick="closeModal();openEstadoCuentaModal(DB.customers.find(x=>x.id===${c.id}))">
-          ${svg('eye')} Estado de Cuenta
-        </button>
-      </div>
-    `, 'modal-xl');
+  if (!q) {
+    results.innerHTML = `<div style="text-align:center;padding:20px;color:var(--muted2);font-size:12px">
+      Escribe para buscar artículos comprados por este cliente</div>`;
     return;
   }
 
-  const filas = facturas.map((f, idx) => {
-    const fecha    = (f.created_at || '').split('T')[0].split(' ')[0];
-    const diasDiff = Math.floor((Date.now() - new Date(fecha).getTime()) / 86400000);
-    const vencido  = diasDiff > (c.credit_days || 30);
-    const refLabel = f.notes?.match(/import_ref:([^\s|]+)/)?.[1]
-                   || `#${String(f.id).padStart(5,'0')}`;
-    return `
-      <tr style="cursor:pointer;${vencido ? 'background:var(--red-bg)' : ''}"
-          onclick="toggleFacturaDetalle(${idx}, ${f.id}, this)">
-        <td style="font-size:11px;color:var(--muted2);white-space:nowrap">${fdate(fecha)}</td>
-        <td style="font-size:12px;font-weight:600">${refLabel}</td>
-        <td style="font-size:12px;color:var(--muted2)" id="fac-items-summary-${idx}">
-          <span style="font-size:11px;color:var(--blue)">▶ Ver artículos</span>
-        </td>
-        <td style="text-align:right;font-size:13px;font-weight:700">${fmt(f.total)}</td>
-        <td style="text-align:right;font-size:13px;font-weight:800;color:var(--red)">${fmt(f.pendiente)}</td>
-        <td>
-          <span class="badge ${vencido ? 'r' : 'a'}">
-            ${vencido ? `Vencido ${diasDiff}d` : `${diasDiff}d`}
-          </span>
-        </td>
-        <td onclick="event.stopPropagation()">
-          <button class="btn btn-green btn-sm"
-                  onclick="closeModal();openAbonoModal(DB.customers.find(x=>x.id===${c.id}))">
-            ${svg('dollar')} Abonar
-          </button>
-        </td>
-      </tr>
-      <tr id="fac-detail-${idx}" style="display:none">
-        <td colspan="7" style="padding:0">
-          <div id="fac-detail-body-${idx}"
-               style="background:var(--surface2);padding:12px 16px;border-top:1px solid var(--line)">
-            <div style="color:var(--muted2);font-size:12px">Cargando artículos...</div>
-          </div>
-        </td>
-      </tr>`;
-  }).join('');
+  // Facturas del cliente
+  const ventas = DB.sales.filter(s =>
+    (s.customer_id || s.clientId) === customerId && s.status !== 'cancelled'
+  );
 
-  openModal(`
-    <div class="modal-title">🧾 Facturas Pendientes</div>
-    <div class="modal-sub">
-      ${c.name} · ${c.phone || ''} ·
-      <strong style="color:var(--red)">${fmt(totalPendiente)} pendiente</strong> ·
-      ${facturas.length} factura${facturas.length !== 1 ? 's' : ''}
+  // Buscar en items de cada venta
+  const matches = [];
+  ventas.forEach(s => {
+    (s.items || []).forEach(i => {
+      const prod    = DB.products.find(p => p.id === i.product_id);
+      const nombre  = (i.product_name || i.name || '').toLowerCase();
+      const codigo  = (i.product_code || i.code || prod?.code || '').toLowerCase();
+      const modelo  = (prod?.model || '').toLowerCase();
+
+      if (nombre.includes(q) || codigo.includes(q) || modelo.includes(q)) {
+        const fecha = (s.created_at || '').split('T')[0].split(' ')[0];
+        matches.push({
+          saleId:   s.id,
+          fecha,
+          item:     i,
+          prod,
+          total:    s.total,
+          method:   s.payment_method || s.pay || '—',
+        });
+      }
+    });
+  });
+
+  if (!matches.length) {
+    results.innerHTML = `<div style="text-align:center;padding:20px;color:var(--muted2)">
+      No se encontraron artículos con "${q}"</div>`;
+    return;
+  }
+
+  results.innerHTML = `
+    <div style="font-size:11px;color:var(--muted);margin-bottom:8px">
+      ${matches.length} resultado${matches.length!==1?'s':''} para "${q}"
     </div>
-
-    <div class="tw" style="max-height:460px;overflow-y:auto;margin-bottom:12px">
+    <div class="tw" style="max-height:320px;overflow-y:auto">
       <table>
-        <thead>
-          <tr>
-            <th>Fecha</th>
-            <th>Referencia</th>
-            <th>Artículos</th>
-            <th style="text-align:right">Total</th>
-            <th style="text-align:right">Pendiente</th>
-            <th>Días</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>${filas}</tbody>
+        <thead><tr>
+          <th>Fecha</th><th>Artículo</th><th>Modelo</th>
+          <th style="text-align:center">Cant.</th>
+          <th style="text-align:right">Precio</th>
+          <th># Factura</th>
+        </tr></thead>
+        <tbody>
+          ${matches.map(m => `
+            <tr style="cursor:pointer" onclick="closeModal();setTimeout(()=>openDetalleVentaModal(DB.sales.find(s=>s.id===${m.saleId})),100)">
+              <td style="font-size:11px;white-space:nowrap">${fdate(m.fecha)}</td>
+              <td>
+                <div style="font-weight:500;font-size:12px">${m.item.product_name||m.item.name||'—'}</div>
+                <div style="font-size:10px;color:var(--muted2)">${m.item.product_code||m.prod?.code||''}</div>
+              </td>
+              <td>
+                ${m.prod?.model
+                  ? `<span style="font-size:11px;font-weight:600;color:var(--blue);
+                                 background:var(--blue-bg,#eff6ff);padding:2px 8px;
+                                 border-radius:20px">${m.prod.model}</span>`
+                  : '<span style="color:var(--muted2);font-size:11px">—</span>'}
+              </td>
+              <td style="text-align:center;font-size:12px">${m.item.qty||1}</td>
+              <td style="text-align:right;font-size:12px">${fmt(m.item.unit_price||m.item.price||0)}</td>
+              <td style="font-size:11px;color:var(--muted)">#${String(m.saleId).padStart(5,'0')}</td>
+            </tr>`).join('')}
+        </tbody>
       </table>
-    </div>
-
-    <div style="display:flex;justify-content:space-between;align-items:center;
-                font-size:12px;color:var(--muted);margin-bottom:8px;padding:0 2px">
-      <span>Clic en una fila para ver los artículos de esa factura</span>
-      <span style="font-weight:700;color:var(--red)">
-        Total pendiente: ${fmt(totalPendiente)}
-      </span>
-    </div>
-
-    <div class="modal-foot">
-      <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
-      <button class="btn btn-ghost"
-              onclick="closeModal();openEstadoCuentaModal(DB.customers.find(x=>x.id===${c.id}))">
-        ${svg('eye')} Estado de Cuenta
-      </button>
-      <button class="btn btn-out"
-              onclick="exportClientCreditPDF(DB.customers.find(x=>x.id===${c.id}))"
-              style="color:var(--blue);border-color:var(--blue)">
-        ${svg('pdf')} PDF
-      </button>
-      <button class="btn btn-green"
-              onclick="closeModal();openAbonoModal(DB.customers.find(x=>x.id===${c.id}))">
-        ${svg('dollar')} Registrar Abono
-      </button>
-    </div>
-  `, 'modal-xl');
+    </div>`;
 }
 
-// Expande / colapsa el detalle de artículos de una factura
+// ══════════════════════════════════════════════
+// TOGGLE DETALLE DE FACTURA (expandir artículos)
+// Llamado desde la pestaña Facturas del modal
+// ══════════════════════════════════════════════
 async function toggleFacturaDetalle(idx, saleId, rowEl) {
   const detailRow  = document.getElementById(`fac-detail-${idx}`);
   const detailBody = document.getElementById(`fac-detail-body-${idx}`);
-  const summary    = document.getElementById(`fac-items-summary-${idx}`);
   if (!detailRow) return;
 
   const isOpen = detailRow.style.display !== 'none';
-  if (isOpen) {
-    detailRow.style.display = 'none';
-    if (summary) summary.innerHTML =
-      `<span style="font-size:11px;color:var(--blue)">▶ Ver artículos</span>`;
-    return;
-  }
+  if (isOpen) { detailRow.style.display = 'none'; return; }
 
   detailRow.style.display = '';
-  if (summary) summary.innerHTML =
-    `<span style="font-size:11px;color:var(--muted2)">▼ Artículos</span>`;
-
   if (detailBody.dataset.loaded === 'true') return;
 
   const res   = await window.api.customers.getSaleItems({ saleId });
   const items = res?.items || [];
 
   if (!items.length) {
-    detailBody.innerHTML = `
-      <div style="color:var(--muted2);font-size:12px;padding:4px 0">
-        Sin detalle de artículos registrado.
-      </div>`;
+    detailBody.innerHTML = `<div style="color:var(--muted2);font-size:12px;padding:8px">
+      Sin detalle de artículos registrado.</div>`;
   } else {
-    const totalItems = items.reduce((s, i) => s + i.subtotal, 0);
+    const total = items.reduce((s, i) => s + i.subtotal, 0);
     detailBody.innerHTML = `
       <table style="width:100%;border-collapse:collapse;font-size:12px">
-        <thead>
-          <tr style="border-bottom:1px solid var(--line)">
-            <th style="text-align:left;padding:4px 8px;font-weight:600;color:var(--muted)">Artículo</th>
-            <th style="text-align:center;padding:4px 8px;font-weight:600;color:var(--muted)">Cant.</th>
-            <th style="text-align:right;padding:4px 8px;font-weight:600;color:var(--muted)">Precio Unit.</th>
-            <th style="text-align:right;padding:4px 8px;font-weight:600;color:var(--muted)">Subtotal</th>
-          </tr>
-        </thead>
+        <thead><tr style="border-bottom:1px solid var(--line)">
+          <th style="padding:5px 8px;text-align:left;color:var(--muted)">Artículo</th>
+          <th style="padding:5px 8px;text-align:center;color:var(--muted)">Cant.</th>
+          <th style="padding:5px 8px;text-align:right;color:var(--muted)">Precio Unit.</th>
+          <th style="padding:5px 8px;text-align:right;color:var(--muted)">Subtotal</th>
+        </tr></thead>
         <tbody>
           ${items.map((it, i) => `
-            <tr style="background:${i % 2 === 0 ? 'transparent' : 'var(--surface)'}">
+            <tr style="background:${i%2===0?'transparent':'var(--surface)'}">
               <td style="padding:5px 8px;font-weight:500">${it.product_name}</td>
               <td style="padding:5px 8px;text-align:center;color:var(--muted2)">${it.qty}</td>
               <td style="padding:5px 8px;text-align:right">${fmt(it.unit_price)}</td>
               <td style="padding:5px 8px;text-align:right;font-weight:700">${fmt(it.subtotal)}</td>
-            </tr>
-          `).join('')}
+            </tr>`).join('')}
         </tbody>
-        <tfoot>
-          <tr style="border-top:1px solid var(--line)">
-            <td colspan="3"
-                style="padding:5px 8px;text-align:right;font-size:11px;color:var(--muted)">
-              Total artículos:
-            </td>
-            <td style="padding:5px 8px;text-align:right;font-weight:800;color:var(--red)">
-              ${fmt(totalItems)}
-            </td>
-          </tr>
-        </tfoot>
+        <tfoot><tr style="border-top:1px solid var(--line)">
+          <td colspan="3" style="padding:5px 8px;text-align:right;font-size:11px;color:var(--muted)">Total artículos:</td>
+          <td style="padding:5px 8px;text-align:right;font-weight:800;color:var(--red)">${fmt(total)}</td>
+        </tr></tfoot>
       </table>`;
   }
   detailBody.dataset.loaded = 'true';

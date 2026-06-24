@@ -545,6 +545,19 @@ ipcMain.handle('products:getAll', async () => {
   return productsRepo.getAll();
 });
 
+// Retorna lista de modelos únicos registrados (para autocompletado)
+ipcMain.handle('products:getModels', async () => {
+  try {
+    const db = require('./database').getDB();
+    const rows = db.prepare(
+      "SELECT DISTINCT model FROM products WHERE active=1 AND model!='' ORDER BY model ASC"
+    ).all();
+    return { ok: true, models: rows.map(r => r.model) };
+  } catch(e) {
+    return { ok: false, models: [] };
+  }
+});
+
 ipcMain.handle('products:create', async (_, { data, requestUserId }) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
@@ -1903,10 +1916,8 @@ ipcMain.handle('importar:rollback', async (_, { ids, requestUserId }) => {
 });
 
 // ══════════════════════════════════════════════
+// ══════════════════════════════════════════════
 // IPC — IMPORTAR FACTURA A CRÉDITO CON DETALLE
-// Crea venta real a crédito con sale_items reales
-// vinculada al customer_id correcto del cliente.
-// Idempotente: omite si ya existe por import_ref.
 // ══════════════════════════════════════════════
 ipcMain.handle('importar:importarFacturaCredito', async (_, {
   customerName, phone, rnc,
@@ -1915,50 +1926,37 @@ ipcMain.handle('importar:importarFacturaCredito', async (_, {
 }) => {
   try {
     const db = require('./database').getDB();
-
     if (!customerName) return { ok: false, error: 'Nombre de cliente requerido' };
     if (!items || !items.length) return { ok: false, error: 'Sin artículos' };
     if (total <= 0) return { ok: false, error: 'Total inválido' };
 
-    const safeDate     = date || new Date().toISOString().split('T')[0];
-    const safeDays     = creditDays > 0 ? creditDays : 30;
-    const safeRef      = (invoiceRef || '').toString().trim();
-    const safeTotal    = Math.round(total * 100) / 100;
+    const safeDate  = date || new Date().toISOString().split('T')[0];
+    const safeDays  = creditDays > 0 ? creditDays : 30;
+    const safeRef   = (invoiceRef || '').toString().trim();
+    const safeTotal = Math.round(total * 100) / 100;
 
     const result = db.transaction(() => {
-
-      // ── 1. Buscar o crear cliente ─────────────
       let cust = db.prepare(
-        `SELECT id, balance, credit_limit, credit_days
-         FROM customers
-         WHERE lower(trim(name)) = lower(trim(?)) AND active=1
-         LIMIT 1`
+        `SELECT id, balance, credit_limit, credit_days, credit_due
+         FROM customers WHERE lower(trim(name))=lower(trim(?)) AND active=1 LIMIT 1`
       ).get(customerName);
 
-      let customerId;
-      let customerCreated = false;
-
+      let customerId; let customerCreated = false;
       if (cust) {
         customerId = cust.id;
-        // Completar datos faltantes si el cliente ya existía vacío
-        db.prepare(`
-          UPDATE customers
-          SET phone = CASE WHEN phone='' AND ? != '' THEN ? ELSE phone END,
-              rnc   = CASE WHEN rnc=''   AND ? != '' THEN ? ELSE rnc   END,
-              updated_at = datetime('now')
-          WHERE id = ?
-        `).run(phone||'', phone||'', rnc||'', rnc||'', customerId);
+        db.prepare(`UPDATE customers SET
+          phone = CASE WHEN phone='' AND ? != '' THEN ? ELSE phone END,
+          rnc   = CASE WHEN rnc=''   AND ? != '' THEN ? ELSE rnc   END,
+          updated_at = datetime('now') WHERE id=?`
+        ).run(phone||'', phone||'', rnc||'', rnc||'', customerId);
       } else {
-        const r = db.prepare(`
-          INSERT INTO customers(name, rnc, phone, address, email,
-            credit_limit, credit_days, balance, status, active)
-          VALUES (?, ?, ?, '', '', 0, ?, 0, 'activo', 1)
-        `).run(customerName, rnc||'', phone||'', safeDays);
-        customerId    = r.lastInsertRowid;
-        customerCreated = true;
+        const r = db.prepare(`INSERT INTO customers(name,rnc,phone,address,email,
+          credit_limit,credit_days,balance,status,active)
+          VALUES(?,?,?,?,?,0,?,0,'activo',1)`
+        ).run(customerName, rnc||'', phone||'', '', '', safeDays);
+        customerId = r.lastInsertRowid; customerCreated = true;
       }
 
-      // ── 2. Idempotencia: no duplicar misma factura ─
       if (safeRef) {
         const exists = db.prepare(
           `SELECT id FROM sales WHERE customer_id=? AND notes LIKE ? LIMIT 1`
@@ -1966,71 +1964,45 @@ ipcMain.handle('importar:importarFacturaCredito', async (_, {
         if (exists) return { ok: true, skipped: true, saleId: exists.id, customerId };
       }
 
-      // ── 3. Calcular subtotal real desde items ────
       const subtotal = items.reduce((s, i) => s + (i.price * i.qty), 0);
-
-      // ── 4. Crear venta a crédito ─────────────────
-      const saleR = db.prepare(`
-        INSERT INTO sales(
-          cash_session_id, customer_id, customer_name, customer_rnc,
-          type, status, subtotal, discount_pct, discount_amt,
-          tax_pct, tax_amt, total, payment_method,
-          price_mode, cajero, user_id, notes, created_at
-        ) VALUES (NULL, ?, ?, ?, 'factura', 'completed',
-          ?, 0, 0, 0, 0, ?, 'credito',
-          'retail', 'Importación', ?, ?, ?)
-      `).run(
-        customerId,
-        customerName,
-        rnc || '',
-        subtotal,
-        safeTotal,
-        requestUserId || null,
-        safeRef ? `Factura importada | import_ref:${safeRef}` : 'Factura importada',
-        safeDate + ' 00:00:00'
-      );
+      const saleR = db.prepare(`INSERT INTO sales(
+        cash_session_id,customer_id,customer_name,customer_rnc,type,status,
+        subtotal,discount_pct,discount_amt,tax_pct,tax_amt,total,payment_method,
+        price_mode,cajero,user_id,notes,created_at)
+        VALUES(NULL,?,?,?,'factura','completed',?,0,0,0,0,?,'credito','retail',
+        'Importación',?,?,?)`
+      ).run(customerId, customerName, rnc||'', subtotal, safeTotal,
+            requestUserId||null,
+            safeRef ? `Factura importada | import_ref:${safeRef}` : 'Factura importada',
+            safeDate + ' 00:00:00');
       const saleId = saleR.lastInsertRowid;
 
-      // ── 5. Insertar sale_items reales ────────────
       for (const item of items) {
-        const itemName = (item.name || 'Artículo importado').trim();
-        const itemQty  = Math.max(1, Math.round(item.qty || 1));
-        const itemPrice= Math.round((item.price || 0) * 100) / 100;
-        const itemSub  = Math.round(itemPrice * itemQty * 100) / 100;
-        db.prepare(`
-          INSERT INTO sale_items(
-            sale_id, product_id, product_code,
-            product_name, unit_cost, unit_price, qty, subtotal
-          ) VALUES (?, NULL, 'IMP', ?, 0, ?, ?, ?)
-        `).run(saleId, itemName, itemPrice, itemQty, itemSub);
+        const n = (item.name||'Artículo importado').trim();
+        const q = Math.max(1, Math.round(item.qty||1));
+        const p = Math.round((item.price||0)*100)/100;
+        db.prepare(`INSERT INTO sale_items(sale_id,product_id,product_code,
+          product_name,unit_cost,unit_price,qty,subtotal)
+          VALUES(?,NULL,'IMP',?,0,?,?,?)`
+        ).run(saleId, n, p, q, Math.round(p*q*100)/100);
       }
 
-      // ── 6. Acumular balance del cliente ──────────
-      const cur     = db.prepare('SELECT balance, credit_due FROM customers WHERE id=?').get(customerId);
-      const newBal  = Math.round(((cur?.balance || 0) + safeTotal) * 100) / 100;
-
-      // Fecha de vencimiento: calcular desde la factura MÁS RECIENTE del cliente.
-      // Si ya existe una credit_due calculada desde una factura más nueva, respetarla.
-      const existingDue = cur?.credit_due || null;
-      const d = new Date(safeDate);
-      d.setDate(d.getDate() + safeDays);
+      const cur = db.prepare('SELECT balance,credit_due FROM customers WHERE id=?').get(customerId);
+      const newBal = Math.round(((cur?.balance||0) + safeTotal)*100)/100;
+      const d = new Date(safeDate); d.setDate(d.getDate()+safeDays);
       const thisDue = d.toISOString().split('T')[0];
-      // Usar la fecha de vencimiento más lejana (factura más reciente + días)
+      const existingDue = cur?.credit_due || null;
       const dueDate = (!existingDue || thisDue > existingDue) ? thisDue : existingDue;
       const newLimit = Math.max(newBal,
-        db.prepare('SELECT credit_limit FROM customers WHERE id=?').get(customerId)?.credit_limit || 0
-      );
-      db.prepare(`
-        UPDATE customers
-        SET balance=?, credit_due=?, credit_limit=?, updated_at=datetime('now')
-        WHERE id=?
-      `).run(newBal, dueDate, newLimit, customerId);
+        db.prepare('SELECT credit_limit FROM customers WHERE id=?').get(customerId)?.credit_limit||0);
+      db.prepare(`UPDATE customers SET balance=?,credit_due=?,credit_limit=?,
+        updated_at=datetime('now') WHERE id=?`
+      ).run(newBal, dueDate, newLimit, customerId);
 
       return { saleId, customerId, customerCreated, skipped: false };
     })();
 
     return { ok: true, ...result };
-
   } catch(e) {
     console.error('[importar:importarFacturaCredito]', e.message);
     return { ok: false, error: e.message };
@@ -2038,54 +2010,37 @@ ipcMain.handle('importar:importarFacturaCredito', async (_, {
 });
 
 // ══════════════════════════════════════════════
-// IPC — OBTENER ITEMS DE UNA VENTA
-// Usado por modal de Facturas Pendientes en clientes
+// IPC — ITEMS DE UNA VENTA (para modal cliente)
 // ══════════════════════════════════════════════
 ipcMain.handle('customers:getSaleItems', async (_, { saleId }) => {
   try {
     const db = require('./database').getDB();
-    const items = db.prepare(
+    return { ok: true, items: db.prepare(
       'SELECT * FROM sale_items WHERE sale_id=? ORDER BY id ASC'
-    ).all(saleId);
-    return { ok: true, items };
-  } catch(e) {
-    return { ok: false, items: [], error: e.message };
-  }
+    ).all(saleId) };
+  } catch(e) { return { ok: false, items: [], error: e.message }; }
 });
 
 // ══════════════════════════════════════════════
-// IPC — FACTURAS A CRÉDITO PENDIENTES DE UN CLIENTE
-// Devuelve ventas a crédito con balance pendiente
+// IPC — FACTURAS A CRÉDITO PENDIENTES DE CLIENTE
 // ══════════════════════════════════════════════
 ipcMain.handle('customers:getFacturasPendientes', async (_, { customerId }) => {
   try {
     const db = require('./database').getDB();
-
-    // Traer todas las ventas a crédito del cliente no canceladas
     const sales = db.prepare(`
       SELECT s.id, s.total, s.subtotal, s.tax_amt, s.discount_amt,
              s.created_at, s.notes, s.ncf, s.status,
-             COALESCE(SUM(p.amount), 0) AS pagado
+             COALESCE(SUM(p.amount),0) AS pagado
       FROM sales s
       LEFT JOIN payments p ON p.sale_id = s.id
-      WHERE s.customer_id = ?
-        AND s.payment_method = 'credito'
-        AND s.status != 'cancelled'
-        AND s.type = 'factura'
-      GROUP BY s.id
-      ORDER BY s.created_at DESC
+      WHERE s.customer_id=? AND s.payment_method='credito'
+        AND s.status!='cancelled' AND s.type='factura'
+      GROUP BY s.id ORDER BY s.created_at DESC
     `).all(customerId);
-
-    // Calcular balance pendiente por factura
-    const result = sales.map(s => ({
-      ...s,
-      pendiente: Math.max(0, Math.round((s.total - s.pagado) * 100) / 100),
-    })).filter(s => s.pendiente > 0);
-
-    return { ok: true, facturas: result };
-  } catch(e) {
-    return { ok: false, facturas: [], error: e.message };
-  }
+    return { ok: true, facturas: sales.map(s => ({
+      ...s, pendiente: Math.max(0, Math.round((s.total - s.pagado)*100)/100)
+    })).filter(s => s.pendiente > 0) };
+  } catch(e) { return { ok: false, facturas: [], error: e.message }; }
 });
 
 // ══════════════════════════════════════════════
@@ -3400,8 +3355,6 @@ ipcMain.handle('importar:analyzeWithAI', async (_, { headers, rows, tipo, campos
       ? 'supplier_name (Proveedor, requerido), product_name (Producto, requerido), unit_cost (Costo unitario, requerido), qty (Cantidad, requerido), date (Fecha), notes (Notas)'
       : tipo === 'gastos'
       ? 'description (Descripción, requerido), total (Monto, requerido), date (Fecha), category (Categoría), payment_method (Método pago), supplier_name (Proveedor), notes (Notas), status (Estado)'
-      : tipo === 'facturas_credito'
-      ? 'customer_name (Cliente, requerido), invoice_ref (N° factura), date (Fecha), product_name (Artículo, requerido), qty (Cantidad), unit_price (Precio unitario, requerido), total (Total factura), phone (Teléfono), rnc (RNC), credit_days (Días crédito)'
       : 'name (Nombre, requerido)');
 
     const muestra = rows.slice(0, 5);
@@ -3440,12 +3393,6 @@ Responde SOLO con JSON sin comentarios ni markdown:
 
 Usa null solo si definitivamente no existe esa información. Prefiere mapear con baja confianza a no mapear.`;
 
-    // Validar que la API key existe y tiene formato correcto antes de llamar
-    const apiKey = process.env.ANTHROPIC_API_KEY || '';
-    if (!apiKey || !apiKey.startsWith('sk-ant-')) {
-      return { ok: false, error: 'API_KEY_INVALID', authError: true };
-    }
-
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -3460,10 +3407,6 @@ Usa null solo si definitivamente no existe esa información. Prefiere mapear con
       }),
     });
 
-    // Detectar error de autenticación específicamente para dar mensaje claro
-    if (response.status === 401 || response.status === 403) {
-      return { ok: false, error: 'API_KEY_INVALID', authError: true };
-    }
     if (!response.ok) {
       const err = await response.text();
       return { ok: false, error: `Claude API error ${response.status}: ${err.slice(0,200)}` };

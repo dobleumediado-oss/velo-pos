@@ -903,6 +903,23 @@ async function ejecutarImportacion() {
   importState._sessionIds = [];
   const sessionIds = importState._sessionIds;
 
+  openModal(`
+    <div style="text-align:center;padding:20px">
+      <div style="font-size:32px;margin-bottom:12px">⏳</div>
+      <div class="modal-title">Importando ${TIPO_LABELS[tipo] || tipo}...</div>
+      <div class="modal-sub" id="imp-prog-sub">Preparando...</div>
+      <div style="background:var(--line);border-radius:6px;height:8px;margin:16px 0">
+        <div id="imp-prog-bar" style="background:var(--green);height:8px;border-radius:6px;width:0%;transition:.3s"></div>
+      </div>
+      <div id="imp-prog-count" style="font-size:13px;color:var(--muted2)">0 / ${rows.length}</div>
+      <div id="imp-prog-dup" style="font-size:11px;color:var(--amber);margin-top:4px"></div>
+    </div>
+  `, 'modal-lg');
+
+  const errores   = [];
+  let importados  = 0;
+  let duplicados  = 0;
+
   // ── Procesamiento especial para facturas_credito ──
   // Agrupa filas por (cliente + referencia_factura) ANTES del loop
   // para crear una sola venta con todos sus artículos.
@@ -1027,22 +1044,6 @@ async function ejecutarImportacion() {
     return; // ← salir de ejecutarImportacion, no entrar al loop
   }
 
-  openModal(`
-    <div style="text-align:center;padding:20px">
-      <div style="font-size:32px;margin-bottom:12px">⏳</div>
-      <div class="modal-title">Importando ${TIPO_LABELS[tipo] || tipo}...</div>
-      <div class="modal-sub" id="imp-prog-sub">Preparando...</div>
-      <div style="background:var(--line);border-radius:6px;height:8px;margin:16px 0">
-        <div id="imp-prog-bar" style="background:var(--green);height:8px;border-radius:6px;width:0%;transition:.3s"></div>
-      </div>
-      <div id="imp-prog-count" style="font-size:13px;color:var(--muted2)">0 / ${rows.length}</div>
-      <div id="imp-prog-dup" style="font-size:11px;color:var(--amber);margin-top:4px"></div>
-    </div>
-  `, 'modal-lg');
-
-  const errores   = [];
-  let importados  = 0;
-  let duplicados  = 0;
   let codeCounter = Date.now();
   const genCode   = () => `IMP-${++codeCounter}`;
 

@@ -636,6 +636,16 @@ function buildTopbar() {
       : `${svg('xmark')} Caja Cerrada`
   }));
 
+  // ── Buscador global ⌘K ─────────────────────
+  right.appendChild(h('button', {
+    class: 'btn btn-ghost',
+    title: 'Búsqueda global (⌘K / Ctrl+K)',
+    style: { fontSize: '12px', padding: '5px 10px', gap: '5px',
+             border: '1px solid var(--line)', borderRadius: '8px' },
+    onclick: _openGSearch,
+    html: `${svg('search')} <span style="font-size:11px;color:var(--muted)">⌘K</span>`
+  }));
+
   const alerts = getCreditAlerts();
   const bell = h('div', { class: 'ib', onclick: () => routeTo('clientes') },
     h('div', { html: svg('bell') })
@@ -905,3 +915,221 @@ function confirmModal(msg, onOk, okLabel = 'Confirmar', okClass = 'btn-red') {
 //   superadmin.js  — panel del super administrador
 //   updater-ui.js  — panel de actualizaciones y plantillas de impresión
 // ══════════════════════════════════════════════
+
+// ══════════════════════════════════════════════
+// BUSCADOR GLOBAL ⌘K / Ctrl+K
+// Busca simultáneamente en productos, facturas
+// y clientes. Resultados navegables con clic.
+// ══════════════════════════════════════════════
+let _gSearchOpen = false;
+
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+    e.preventDefault();
+    _gSearchOpen ? _closeGSearch() : _openGSearch();
+  }
+  if (e.key === 'Escape' && _gSearchOpen) _closeGSearch();
+});
+
+function _openGSearch() {
+  if (_gSearchOpen) return;
+  _gSearchOpen = true;
+
+  const ov = h('div', {
+    id: 'gsearch-ov',
+    style: {
+      position: 'fixed', inset: 0, zIndex: 9999,
+      background: 'rgba(0,0,0,.55)', backdropFilter: 'blur(4px)',
+      display: 'flex', alignItems: 'flex-start',
+      justifyContent: 'center', paddingTop: '80px',
+    },
+    onclick: e => { if (e.target === ov) _closeGSearch(); }
+  });
+
+  const box = h('div', {
+    style: {
+      width: '600px', maxWidth: '95vw',
+      background: 'var(--surface)', borderRadius: '14px',
+      boxShadow: '0 24px 64px rgba(0,0,0,.4)',
+      overflow: 'hidden',
+      border: '1px solid var(--line)',
+    }
+  });
+
+  // Input
+  const inp = h('input', {
+    class: 'inp',
+    type: 'text',
+    placeholder: '🔍  Buscar producto, modelo, código, cliente o factura...',
+    style: {
+      width: '100%', fontSize: '16px', padding: '16px 20px',
+      border: 'none', borderBottom: '1px solid var(--line)',
+      borderRadius: 0, background: 'transparent',
+    },
+    oninput: e => _runGSearch(e.target.value, results),
+  });
+
+  const results = h('div', {
+    id: 'gsearch-results',
+    style: { maxHeight: '420px', overflowY: 'auto', padding: '8px 0' }
+  });
+
+  const footer = h('div', {
+    style: {
+      padding: '8px 16px', fontSize: '11px', color: 'var(--muted2)',
+      borderTop: '1px solid var(--line)',
+      display: 'flex', gap: '16px',
+    },
+    html: '<span>↵ Abrir</span><span>Esc Cerrar</span><span>⌘K Alternar</span>'
+  });
+
+  results.innerHTML = `<div style="text-align:center;padding:32px;color:var(--muted2);font-size:13px">
+    Empieza a escribir para buscar en todo el sistema</div>`;
+
+  box.appendChild(inp);
+  box.appendChild(results);
+  box.appendChild(footer);
+  ov.appendChild(box);
+  document.body.appendChild(ov);
+  setTimeout(() => inp.focus(), 50);
+}
+
+function _closeGSearch() {
+  document.getElementById('gsearch-ov')?.remove();
+  _gSearchOpen = false;
+}
+
+function _runGSearch(q, resultsEl) {
+  if (!q || q.trim().length < 2) {
+    resultsEl.innerHTML = `<div style="text-align:center;padding:32px;color:var(--muted2);font-size:13px">
+      Empieza a escribir para buscar en todo el sistema</div>`;
+    return;
+  }
+  const ql = q.toLowerCase().trim();
+
+  // ── Productos ──
+  const prods = (DB.products || []).filter(p => p.active !== 0 && (
+    p.name?.toLowerCase().includes(ql) ||
+    p.code?.toLowerCase().includes(ql) ||
+    p.barcode?.toLowerCase().includes(ql) ||
+    p.model?.toLowerCase().includes(ql) ||
+    p.brand?.toLowerCase().includes(ql) ||
+    p.category?.toLowerCase().includes(ql)
+  )).slice(0, 5);
+
+  // ── Facturas ──
+  const facturas = (DB.sales || []).filter(s =>
+    s.status !== 'cancelled' && s.type !== 'devolucion' && (
+      String(s.id).includes(ql) ||
+      (s.customer_name || '').toLowerCase().includes(ql) ||
+      (s.ncf || '').toLowerCase().includes(ql) ||
+      (s.items || []).some(i => {
+        const prod = DB.products?.find(p => p.id === i.product_id);
+        return (i.product_name || i.name || '').toLowerCase().includes(ql) ||
+               (i.product_code || '').toLowerCase().includes(ql) ||
+               prod?.model?.toLowerCase().includes(ql);
+      })
+    )
+  ).slice(0, 4);
+
+  // ── Clientes ──
+  const clientes = (DB.customers || []).filter(c => c.id !== 1 && c.active !== 0 && (
+    c.name?.toLowerCase().includes(ql) ||
+    (c.phone || '').includes(ql) ||
+    (c.rnc || '').includes(ql)
+  )).slice(0, 3);
+
+  const total = prods.length + facturas.length + clientes.length;
+
+  if (!total) {
+    resultsEl.innerHTML = `<div style="text-align:center;padding:32px;color:var(--muted2)">
+      Sin resultados para "<strong>${_escHtml(q)}</strong>"</div>`;
+    return;
+  }
+
+  const sections = [];
+
+  if (prods.length) {
+    sections.push(`<div style="padding:6px 16px 2px;font-size:10px;font-weight:700;
+                               color:var(--muted);text-transform:uppercase;letter-spacing:.06em">
+      Productos (${prods.length})</div>`);
+    prods.forEach(p => {
+      sections.push(`
+        <div onclick="closeModal&&closeModal();_closeGSearch();routeTo('inventario');setTimeout(()=>openProductoModal(DB.products.find(x=>x.id===${p.id})),300)"
+             style="padding:10px 16px;cursor:pointer;display:flex;justify-content:space-between;
+                    align-items:center;transition:background .1s"
+             onmouseenter="this.style.background='var(--surface2)'"
+             onmouseleave="this.style.background=''">
+          <div>
+            <div style="font-weight:600;font-size:13px">${_escHtml(p.name)}</div>
+            <div style="font-size:11px;color:var(--muted)">
+              ${_escHtml(p.code)}${p.model?` · <span style="color:var(--blue);font-weight:600">${_escHtml(p.model)}</span>`:''}
+              ${p.brand?` · ${_escHtml(p.brand)}`:''}
+            </div>
+          </div>
+          <div style="text-align:right;flex-shrink:0;margin-left:12px">
+            <div style="font-weight:700">${typeof fmt==='function'?fmt(p.price):p.price}</div>
+            <div style="font-size:11px;color:${p.stock===0?'var(--red)':'var(--muted2)'}">
+              Stock: ${p.stock} ${p.unit||'und'}
+            </div>
+          </div>
+        </div>`);
+    });
+  }
+
+  if (facturas.length) {
+    sections.push(`<div style="padding:6px 16px 2px;font-size:10px;font-weight:700;
+                               color:var(--muted);text-transform:uppercase;letter-spacing:.06em;
+                               border-top:1px solid var(--line);margin-top:4px">
+      Facturas (${facturas.length})</div>`);
+    facturas.forEach(s => {
+      const fecha = (s.created_at||'').split('T')[0].split(' ')[0];
+      const models = [...new Set((s.items||[])
+        .map(i => DB.products?.find(p=>p.id===i.product_id)?.model)
+        .filter(Boolean))];
+      sections.push(`
+        <div onclick="_closeGSearch();routeTo('ventas');setTimeout(()=>openDetalleVentaModal&&openDetalleVentaModal(DB.sales.find(x=>x.id===${s.id})),300)"
+             style="padding:10px 16px;cursor:pointer;display:flex;justify-content:space-between;
+                    align-items:center"
+             onmouseenter="this.style.background='var(--surface2)'"
+             onmouseleave="this.style.background=''">
+          <div>
+            <div style="font-weight:600;font-size:13px">
+              #${String(s.id).padStart(5,'0')} · ${_escHtml(s.customer_name||'Consumidor Final')}
+            </div>
+            <div style="font-size:11px;color:var(--muted)">
+              ${typeof fdate==='function'?fdate(fecha):fecha}
+              ${models.map(m=>`<span style="color:var(--blue);font-weight:600;margin-left:4px">${_escHtml(m)}</span>`).join('')}
+            </div>
+          </div>
+          <div style="font-weight:700;flex-shrink:0;margin-left:12px">
+            ${typeof fmt==='function'?fmt(s.total):s.total}
+          </div>
+        </div>`);
+    });
+  }
+
+  if (clientes.length) {
+    sections.push(`<div style="padding:6px 16px 2px;font-size:10px;font-weight:700;
+                               color:var(--muted);text-transform:uppercase;letter-spacing:.06em;
+                               border-top:1px solid var(--line);margin-top:4px">
+      Clientes (${clientes.length})</div>`);
+    clientes.forEach(c => {
+      sections.push(`
+        <div onclick="_closeGSearch();routeTo('clientes');setTimeout(()=>openEstadoCuentaModal&&openEstadoCuentaModal(DB.customers.find(x=>x.id===${c.id})),300)"
+             style="padding:10px 16px;cursor:pointer;display:flex;justify-content:space-between;
+                    align-items:center"
+             onmouseenter="this.style.background='var(--surface2)'"
+             onmouseleave="this.style.background=''">
+          <div>
+            <div style="font-weight:600;font-size:13px">${_escHtml(c.name)}</div>
+            <div style="font-size:11px;color:var(--muted)">${_escHtml(c.phone||'')} ${c.rnc?'· '+_escHtml(c.rnc):''}</div>
+          </div>
+          ${c.balance>0?`<div style="font-weight:700;color:var(--red);flex-shrink:0;margin-left:12px">
+            ${typeof fmt==='function'?fmt(c.balance):c.balance}</div>`:''}
+        </div>`);
+    });
+  }
+
+  resultsEl.innerHTML = sections.join('');
+}

@@ -51,7 +51,7 @@ function renderVentas(el) {
         h('div', { class: 'ic', html: svg('search') }),
         h('input', {
           class: 'inp', type: 'text',
-          placeholder: 'Buscar por cliente, # factura, RNC, teléfono, producto...',
+          placeholder: 'Buscar por cliente, # factura, RNC, teléfono, producto, modelo...',
           value: ventasSearch,
           oninput: e => {
             ventasSearch = e.target.value;
@@ -149,9 +149,14 @@ function renderVentasTable() {
         const cli = DB.customers.find(c => c.id === (s.customer_id || s.clientId));
         return cli && (cli.phone || '').replace(/[^0-9]/g,'').includes(q.replace(/[^0-9]/g,''));
       })() ||
-      // Buscar por nombre de producto en los items
+      // Buscar por nombre, código o modelo del producto en los items
       (s.items || []).some(i =>
-        (i.product_name || i.name || '').toLowerCase().includes(q)
+        (i.product_name || i.name || '').toLowerCase().includes(q) ||
+        (i.product_code || i.code || '').toLowerCase().includes(q) ||
+        (() => {
+          const prod = DB.products.find(p => p.id === i.product_id);
+          return prod?.model?.toLowerCase().includes(q) || false;
+        })()
       );
 
     return matchPay && matchQ;
@@ -249,7 +254,29 @@ function renderVentasTable() {
         ),
         h('td', null,
           h('div', { class: 'tb' }, cliName),
-          h('div', { class: 'ts' }, s.cajero || '')
+          h('div', { class: 'ts' }, s.cajero || ''),
+          // Badges de modelos únicos en esta venta
+          (() => {
+            const models = [...new Set(
+              (s.items||[]).map(i => {
+                const p = DB.products.find(x => x.id === i.product_id);
+                return p?.model || '';
+              }).filter(Boolean)
+            )];
+            if (!models.length) return null;
+            const wrap = h('div', { style: { display:'flex',flexWrap:'wrap',gap:'3px',marginTop:'4px' } });
+            models.slice(0,3).forEach(m => {
+              wrap.appendChild(h('span', {
+                style: { fontSize:'10px',fontWeight:'600',color:'var(--blue)',
+                         background:'var(--blue-bg,#eff6ff)',padding:'1px 6px',
+                         borderRadius:'20px',display:'inline-block' }
+              }, m));
+            });
+            if (models.length > 3) wrap.appendChild(h('span',{
+              style:{fontSize:'10px',color:'var(--muted2)'}
+            }, `+${models.length-3}`));
+            return wrap;
+          })()
         ),
         h('td', null,
           h('span', { class: `badge ${
