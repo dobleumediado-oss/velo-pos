@@ -15,7 +15,7 @@ function renderCaja(el) {
       h('div', { class: 'sec-title' }, 'Caja'),
       h('div', { class: 'sec-sub' },
         cajaOpen
-          ? `Abierta por ${cajaSession?.cajero} desde ${fdate(cajaSession?.od)} ${cajaSession?.ot}`
+          ? `Abierta por ${cajaSession?.cajero} desde ${fdate(cajaSession?.open_date)} ${cajaSession?.open_time}`
           : 'No hay caja abierta'
       )
     ),
@@ -121,7 +121,8 @@ function renderCaja(el) {
       ))
     );
     const tbody = h('tbody', null);
-    closed.forEach(s => {
+    closed.forEach(raw => {
+      const s    = _normCaja(raw);
       const diff = s.diff || 0;
       tbody.appendChild(h('tr', null,
         h('td', null, h('div', { class: 'tb' }, s.cajero)),
@@ -175,7 +176,7 @@ function openAperturaCajaModal() {
       </div>
       <div class="modal-foot">
         <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
-        <button class="btn btn-red" onclick="cerrarSesionHuerfana(${sesionAnterior.id})">
+        <button class="btn btn-red" id="btn-cerrar-huerfana" onclick="cerrarSesionHuerfana(${sesionAnterior.id})">
           ${svg('lock')} Cerrar sesión anterior y continuar
         </button>
       </div>
@@ -202,7 +203,7 @@ function openAperturaCajaModal() {
     </div>
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-green" onclick="confirmarApertura()">
+      <button class="btn btn-green" id="btn-confirmar-apertura" onclick="confirmarApertura()">
         ${svg('unlock')} Abrir Caja
       </button>
     </div>
@@ -224,6 +225,10 @@ function calcOpenTotal() {
 }
 
 async function confirmarApertura() {
+  const btn = document.getElementById('btn-confirmar-apertura');
+  if (btn?.disabled) return; // evita doble clic
+  if (btn) btn.disabled = true;
+
   let fondo = 0;
   const bills = {};
   DENS.forEach(d => {
@@ -232,13 +237,21 @@ async function confirmarApertura() {
     fondo += qty * d;
   });
 
-  const result = await window.api.cash.open({
-    openAmount: fondo,
-    openBills:  bills,
-    requestUserId: user.id,
-  });
+  let result;
+  try {
+    result = await window.api.cash.open({
+      openAmount: fondo,
+      openBills:  bills,
+      requestUserId: user.id,
+    });
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    toast('Error al abrir caja', 'err');
+    return;
+  }
 
   if (!result.ok) {
+    if (btn) btn.disabled = false;
     toast(result.error || 'Error al abrir caja', 'err');
     return;
   }
@@ -256,16 +269,28 @@ async function confirmarApertura() {
 // Se llama cuando hay una caja abierta de un día anterior
 // ══════════════════════════════════════════════
 async function cerrarSesionHuerfana(sessionId) {
-  const result = await window.api.cash.close({
-    sessionId,
-    closeAmount: 0,
-    closeBills:  {},
-    expected:    0,
-    notes:       'Cierre automático — sesión sin cerrar del día anterior',
-    requestUserId: user.id,
-  });
+  const btn = document.getElementById('btn-cerrar-huerfana');
+  if (btn?.disabled) return; // evita doble clic
+  if (btn) btn.disabled = true;
+
+  let result;
+  try {
+    result = await window.api.cash.close({
+      sessionId,
+      closeAmount: 0,
+      closeBills:  {},
+      expected:    0,
+      notes:       'Cierre automático — sesión sin cerrar del día anterior',
+      requestUserId: user.id,
+    });
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    toast('Error al cerrar sesión anterior', 'err');
+    return;
+  }
 
   if (!result.ok) {
+    if (btn) btn.disabled = false;
     toast(result.error || 'Error al cerrar sesión anterior', 'err');
     return;
   }
@@ -278,6 +303,27 @@ async function cerrarSesionHuerfana(sessionId) {
   closeModal();
   toast('Sesión anterior cerrada — ahora puedes abrir caja', 'ok');
   setTimeout(() => openAperturaCajaModal(), 300);
+}
+
+// Normaliza una fila cruda de cash_sessions (columnas reales de SQLite)
+// a los nombres cortos legacy que usa la UI de esta pantalla.
+function _normCaja(s) {
+  return {
+    ...s,
+    cajero:     s.cajero      || s.user_name || '',
+    od:         s.open_date   || s.od  || '',
+    ot:         s.open_time   || s.ot  || '',
+    cd:         s.close_date  || s.cd  || '',
+    ct:         s.close_time  || s.ct  || '',
+    open:       s.open_amount || s.open || 0,
+    close:      s.close_amount|| s.close || 0,
+    expected:   s.expected    || 0,
+    diff:       s.difference  || s.diff || 0,
+    total:      s.sales_total || s.total || 0,
+    openBills:  typeof s.open_bills  === 'string' ? JSON.parse(s.open_bills  || '{}') : (s.openBills  || {}),
+    closeBills: typeof s.close_bills === 'string' ? JSON.parse(s.close_bills || '{}') : (s.closeBills || {}),
+    obs:        s.notes || s.obs || '',
+  };
 }
 
 // ══════════════════════════════════════════════
@@ -371,7 +417,7 @@ function openCierreCajaModal() {
       <button class="btn btn-out" onclick="imprimirReporteDia()">
         ${svg('print')} Vista previa reporte
       </button>
-      <button class="btn btn-red" onclick="confirmarCierre(${expected})">
+      <button class="btn btn-red" id="btn-confirmar-cierre" onclick="confirmarCierre(${expected})">
         ${svg('lock')} Confirmar Cierre
       </button>
     </div>
@@ -406,6 +452,9 @@ function calcCloseTotal(expected) {
 
 async function confirmarCierre(expected) {
   if (!cajaSession) return;
+  const btn = document.getElementById('btn-confirmar-cierre');
+  if (btn?.disabled) return; // evita doble clic
+  if (btn) btn.disabled = true;
 
   let closeAmt = 0;
   const closeBills = {};
@@ -415,21 +464,35 @@ async function confirmarCierre(expected) {
     closeAmt += qty * d;
   });
 
-  const obs  = document.getElementById('close-obs')?.value || '';
-  const diff = closeAmt - expected;
+  const obs = document.getElementById('close-obs')?.value || '';
 
-  const idx = DB.caja.findIndex(c => c.id === cajaSession.id);
-  if (idx !== -1) {
-    DB.caja[idx] = {
-      ...DB.caja[idx],
-      cd: today(), ct: nowt(),
-      close: closeAmt, expected, diff,
-      status: 'closed', obs, closeBills,
-    };
+  let result;
+  try {
+    result = await window.api.cash.close({
+      sessionId:     cajaSession.id,
+      closeAmount:   closeAmt,
+      closeBills,
+      expected,
+      notes:         obs,
+      requestUserId: user.id,
+    });
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    toast('Error al cerrar caja', 'err');
+    return;
   }
 
-  const sesionCerrada = DB.caja[idx];
-  save();
+  if (!result.ok) {
+    if (btn) btn.disabled = false;
+    toast(result.error || 'Error al cerrar caja', 'err');
+    return;
+  }
+
+  // Recargar sesiones reales desde SQLite (incluye la que se acaba de cerrar)
+  await window.api.cash.getSessions().then(sessions => {
+    DB.caja = sessions || [];
+  });
+
   cajaOpen    = false;
   cajaSession = null;
   closeModal();
@@ -536,7 +599,8 @@ async function imprimirReporteDia() {
 // ══════════════════════════════════════════════
 // MODAL RESUMEN
 // ══════════════════════════════════════════════
-function openResumenModal(s) {
+function openResumenModal(raw) {
+  const s = _normCaja(raw);
   const sesVentas = DB.sales.filter(v => v.cajaId === s.id && v.type !== 'devolucion');
   const sesDevs   = DB.sales.filter(v => v.cajaId === s.id && v.type === 'devolucion');
   const byMethod  = {};
@@ -616,24 +680,7 @@ function printResumen(cajaId) {
   let s = DB.caja.find(c => c.id === cajaId);
   if (!s) { toast('No se encontró la sesión', 'err'); return; }
 
-  // Normalizar campos SQLite vs legacy
-  s = {
-    ...s,
-    cajero:     s.cajero      || s.user_name || '',
-    od:         s.open_date   || s.od  || '',
-    ot:         s.open_time   || s.ot  || '',
-    cd:         s.close_date  || s.cd  || '',
-    ct:         s.close_time  || s.ct  || '',
-    open:       s.open_amount || s.open || 0,
-    close:      s.close_amount|| s.close || 0,
-    expected:   s.expected    || 0,
-    diff:       s.difference  || s.diff || 0,
-    total:      s.sales_total || s.total || 0,
-    openBills:  typeof s.open_bills  === 'string' ? JSON.parse(s.open_bills  || '{}') : (s.openBills  || {}),
-    closeBills: typeof s.close_bills === 'string' ? JSON.parse(s.close_bills || '{}') : (s.closeBills || {}),
-    obs:        s.notes || s.obs || '',
-  };
-  if (!s) return;
+  s = _normCaja(s);
 
   const sesVentas = DB.sales.filter(v => v.cajaId === s.id && v.type !== 'devolucion');
   const sesDevs   = DB.sales.filter(v => v.cajaId === s.id && v.type === 'devolucion');

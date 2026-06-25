@@ -107,10 +107,22 @@ async function renderDash(el) {
   // Ventas del mes
   const today_ = today();
   const monthPfx = today_.slice(0, 7);
-  const allSales = await window.api.sales.getAll({ range: 'month' });
+  const allSales  = await window.api.sales.getAll({ range: 'month' });
+  // Filas reales de los últimos 7 días — independiente del mes en curso,
+  // usadas por el selector de período (3 días/7 días) más abajo.
+  const weekSales = await window.api.sales.getAll({ range: 'week' });
   const mSales = (allSales || []).filter(s =>
     s.status !== 'cancelled' && s.type !== 'devolucion');
-  const mRev   = mSales.reduce((a, s) => a + (s.total || 0), 0);
+  // Ventas del mes vía agregado SQL — exacto sin importar el límite de filas
+  // de sales:getAll (antes 200, insuficiente para negocios de alto volumen).
+  const monthSummaryRes = await window.api.reports.summary({ range: 'month', requestUserId: user.id }).catch(() => null);
+  const mRev = monthSummaryRes?.ok ? monthSummaryRes.data.totalRev : mSales.reduce((a, s) => a + (s.total || 0), 0);
+
+  // Agregado diario real vía SQL — usado por los gráficos de 7 y 30 días.
+  // allSales (range:'month') no alcanza esos rangos cerca del inicio del mes.
+  const dailyTrendRes = await window.api.reports.dailyTrend({ days: 30, requestUserId: user.id }).catch(() => null);
+  const dailyByDate = {};
+  (dailyTrendRes?.data || []).forEach(r => { dailyByDate[r.day] = r; });
 
   // Filtrar stock bajo y deduplicar por nombre para evitar mostrar duplicados de importaciones
   const _lowStockRaw = DB.products.filter(p => p.stock <= (p.stock_min || 5));
@@ -161,24 +173,34 @@ async function renderDash(el) {
     )
   ));
 
-  // ── Alertas de crédito ───────────────────────
+  // ── Card CxC: Cuentas por Cobrar ─────────────
   if (creditAlerts.length) {
-    const alertBox = h('div', { class: 'card mb20',
-      style: { borderColor: 'var(--red-line)', background: 'var(--red-bg)' } });
+    const cxcClients = DB.customers
+      .filter(c => c.id !== 1 && c.active !== 0 && c.balance > 0)
+      .sort((a, b) => b.balance - a.balance);
+    const totalCxC = cxcClients.reduce((s, c) => s + c.balance, 0);
+    const vencidos = creditAlerts.filter(a => a.status === 'overdue').length;
 
-    alertBox.appendChild(h('div', { class: 'fxb mb8' },
-      h('div', { class: 'flex' },
-        h('div', { style: { color: 'var(--red)', marginRight: '6px' },
-          html: svg('alert') }),
-        h('span', { style: { fontWeight: 700, fontSize: '14px', color: 'var(--red)' } },
-          `${creditAlerts.length} alerta${creditAlerts.length > 1 ? 's' : ''} de crédito`)
+    const cxcBox = h('div', { class: 'card mb20' });
+
+    // Encabezado del card
+    cxcBox.appendChild(h('div', { class: 'fxb mb8' },
+      h('div', { class: 'flex', style: { gap: '8px', alignItems: 'center' } },
+        h('div', { html: svg('dollar'), style: { color: 'var(--red)' } }),
+        h('div', null,
+          h('div', { style: { fontWeight: 700, fontSize: '14px' } }, 'Cuentas por Cobrar'),
+          h('div', { style: { fontSize: '11px', color: 'var(--muted2)' } },
+            `${cxcClients.length} clientes · ${vencidos} vencidos`)
+        )
       ),
-      h('div', { class: 'flex', style: { gap: '6px' } },
+      h('div', { class: 'flex', style: { gap: '6px', alignItems: 'center' } },
+        h('div', { style: { fontWeight: 800, fontSize: '15px', color: 'var(--red)' } },
+          fmt(totalCxC)
+        ),
         h('button', {
-          class: 'btn btn-sm',
-          style: { background: 'var(--red)', color: '#fff' },
-          onclick: () => routeTo('clientes'),
-          html: `${svg('users')} Ver clientes`
+          class: 'btn btn-sm btn-out',
+          onclick: () => { window._cliTabInicial = 'credito'; routeTo('clientes'); },
+          html: `${svg('users')} Ver todos`
         }),
         h('button', {
           class: 'btn btn-out btn-sm',
@@ -188,41 +210,57 @@ async function renderDash(el) {
       )
     ));
 
-    creditAlerts.forEach(a => {
-      const { client: c, daysLeft, status } = a;
-      const isOverdue = status === 'overdue';
-      const creditDue = c.credit_due || c.creditDueDate || null;
-      const label = isOverdue
-        ? `Vencido hace ${Math.abs(daysLeft)} día${Math.abs(daysLeft) !== 1 ? 's' : ''}`
-        : `Vence en ${daysLeft} día${daysLeft !== 1 ? 's' : ''}`;
+    // Lista scrolleable (máx ~5 filas visibles)
+    const listWrap = h('div', { style: {
+      maxHeight: '220px', overflowY: 'auto',
+      borderTop: '1px solid var(--line)', marginTop: '4px'
+    }});
 
-      alertBox.appendChild(h('div', {
-        class: `alrt ${isOverdue ? 'r' : 'a'}`,
-        style: { marginBottom: '5px' }
+    cxcClients.forEach(c => {
+      const alert     = creditAlerts.find(a => a.client.id === c.id);
+      const isOverdue = alert?.status === 'overdue';
+      const daysLeft  = alert?.daysLeft ?? null;
+      const label     = daysLeft === null ? '' :
+        isOverdue
+          ? `Vencido ${Math.abs(daysLeft)}d`
+          : `Vence en ${daysLeft}d`;
+
+      listWrap.appendChild(h('div', {
+        class: 'fxb',
+        style: {
+          padding: '7px 4px',
+          borderBottom: '1px solid var(--line)',
+          fontSize: '12px'
+        }
       },
-        h('div', { class: `alrt-dot ${isOverdue ? 'r' : 'a'}` }),
-        h('div', { style: { flex: 1 } },
-          h('div', { class: 'alrt-title' }, c.name),
-          h('div', { class: 'alrt-sub' },
-            `${fmt(c.balance)} pendiente · ${label}` +
-            (creditDue ? ` · Límite: ${fdate(creditDue)}` : '')
-          )
+        h('div', { style: { flex: 1, minWidth: 0 } },
+          h('div', { style: { fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } },
+            c.name),
+          daysLeft !== null
+            ? h('div', { style: { fontSize: '10px', color: isOverdue ? 'var(--red)' : 'var(--amber)' } }, label)
+            : null
         ),
-        h('div', { class: 'flex', style: { gap: '5px' } },
+        h('div', { class: 'flex', style: { gap: '5px', alignItems: 'center' } },
+          h('span', { style: { fontWeight: 700, color: 'var(--red)', fontSize: '12px' } },
+            fmt(c.balance)),
           h('button', {
             class: 'btn btn-sm btn-out',
-            onclick: () => routeTo('clientes'),
+            style: { fontSize: '11px', padding: '2px 8px' },
+            onclick: () => { closeModal?.(); openAbonoModal(c); },
             html: `${svg('dollar')} Abonar`
           }),
           h('button', {
             class: 'btn btn-sm btn-out',
-            onclick: () => exportClientCreditPDF(c),
+            style: { fontSize: '11px', padding: '2px 6px' },
+            onclick: () => openEstadoCuentaModal(c, 'facturas'),
             html: svg('pdf')
           })
         )
       ));
     });
-    el.appendChild(alertBox);
+
+    cxcBox.appendChild(listWrap);
+    el.appendChild(cxcBox);
   }
 
   // ── Selector de período ──────────────────────
@@ -241,16 +279,19 @@ async function renderDash(el) {
   });
   el.appendChild(periodBar);
 
-  // Calcular métricas del período — filtrando desde allSales ya cargado (sin llamadas extra)
+  // Calcular métricas del período — usando filas reales en todos los casos
+  // (no solo agregados) porque más abajo se necesita el conteo de
+  // transacciones y el detalle de facturas para el panel NCF.
+  // '3days'/'week' usan weekSales (rango real de 7 días por SQL) en vez de
+  // allSales, que solo cubre el mes en curso y no alcanza estos rangos
+  // cerca del inicio del mes.
   let periodSales = sales;
   if (dashPeriod === '3days') {
     const cutoff = new Date(Date.now() - 3*24*60*60*1000).toISOString().split('T')[0];
-    periodSales  = (allSales||[]).filter(s => s.status !== 'cancelled' && s.type !== 'devolucion'
+    periodSales  = (weekSales||[]).filter(s => s.status !== 'cancelled' && s.type !== 'devolucion'
       && (s.created_at||'').slice(0,10) >= cutoff);
   } else if (dashPeriod === 'week') {
-    const cutoff7 = new Date(Date.now() - 7*24*60*60*1000).toISOString().split('T')[0];
-    periodSales   = (allSales||[]).filter(s => s.status !== 'cancelled' && s.type !== 'devolucion'
-      && (s.created_at||'').slice(0,10) >= cutoff7);
+    periodSales = (weekSales||[]).filter(s => s.status !== 'cancelled' && s.type !== 'devolucion');
   } else if (dashPeriod === 'month') {
     periodSales = mSales;
   }
@@ -263,7 +304,10 @@ async function renderDash(el) {
   const periodLabel  = { today:'Hoy', '3days':'3 días', week:'7 días', month:'Mes' }[dashPeriod];
 
   // ── Métricas ─────────────────────────────────
-  const cotizaciones = (allSales || []).filter(s =>
+  // '3days'/'week' usan weekSales (rango real de 7 días) — allSales solo
+  // cubre el mes en curso y no alcanza estos rangos cerca del inicio del mes.
+  const cotizSource = (dashPeriod === '3days' || dashPeriod === 'week') ? weekSales : allSales;
+  const cotizaciones = (cotizSource || []).filter(s =>
     s.type === 'cotizacion' && s.status !== 'cancelled');
   const cotizPeriod = (() => {
     if (dashPeriod === 'today') {
@@ -272,8 +316,7 @@ async function renderDash(el) {
       const c3 = new Date(Date.now()-3*24*60*60*1000).toISOString().split('T')[0];
       return cotizaciones.filter(s => (s.created_at||'').slice(0,10) >= c3);
     } else if (dashPeriod === 'week') {
-      const c7 = new Date(Date.now()-7*24*60*60*1000).toISOString().split('T')[0];
-      return cotizaciones.filter(s => (s.created_at||'').slice(0,10) >= c7);
+      return cotizaciones;
     }
     return cotizaciones.filter(s => (s.created_at||'').slice(0,7) === monthPfx);
   })();
@@ -292,7 +335,7 @@ async function renderDash(el) {
     { icon: 'card',   color: 'a', label: 'Créditos Pendientes',
       val: fmt(pendCredit), badge: `${totalClients} clientes`,
       badgeType: pendCredit > 0 ? 'dn' : 'nu',
-      click: () => routeTo('clientes') },
+      click: () => { window._cliTabInicial = 'credito'; routeTo('clientes'); } },
     { icon: 'list',   color: 'p', label: `Cotizaciones (${periodLabel})`,
       val: fmt(cotizTotal),
       badge: `${cotizPeriod.length} pendiente${cotizPeriod.length !== 1 ? 's' : ''}`,
@@ -443,20 +486,16 @@ async function renderDash(el) {
   // ── Grid principal ────────────────────────────
   const grid = h('div', { class: 'gg2', style: { alignItems: 'start' } });
 
-  // ── Gráfica 7 días — usar allSales ya cargado ─
+  // ── Gráfica 7 días — agregado real vía SQL (dailyByDate) ─
   const days7 = [];
   for (let i = 6; i >= 0; i--) {
     const d  = new Date();
     d.setDate(d.getDate() - i);
     const ds = d.toISOString().split('T')[0];
-    const daySales = (allSales || []).filter(s => {
-      const sd = (s.created_at || '').split('T')[0].split(' ')[0];
-      return sd === ds && s.status !== 'cancelled' && s.type !== 'devolucion';
-    });
     days7.push({
       date:  ds,
       label: d.toLocaleDateString('es-DO', { weekday: 'short' }),
-      rev:   daySales.reduce((a, s) => a + (s.total || 0), 0),
+      rev:   dailyByDate[ds]?.total || 0,
     });
   }
 
@@ -508,24 +547,21 @@ async function renderDash(el) {
     for (let i = 29; i >= 0; i--) {
       const d  = new Date(); d.setDate(d.getDate() - i);
       const ds = d.toISOString().split('T')[0];
-      const daySales = (allSales||[]).filter(s => {
-        const sd = (s.created_at||'').split('T')[0].split(' ')[0];
-        return sd === ds && s.status !== 'cancelled' && s.type !== 'devolucion';
-      });
       chartLabels.push(d.getDate() + '/' + (d.getMonth()+1));
-      chartData.push(daySales.reduce((a,s) => a+(s.total||0), 0));
+      chartData.push(dailyByDate[ds]?.total || 0);
       chartDates.push(ds);
     }
   } else {
-    // 12 meses
+    // 12 meses — agregado real vía SQL (no depende de allSales, que solo
+    // trae el mes en curso, ni del límite de filas de sales:getAll).
+    const trendRes = await window.api.reports.monthlyTrend({ requestUserId: user.id }).catch(() => null);
+    const trendByMonth = {};
+    (trendRes?.data || []).forEach(r => { trendByMonth[r.month] = r.total; });
     for (let i = 11; i >= 0; i--) {
       const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i);
       const mp = d.toISOString().slice(0,7);
-      const mSalesF = (allSales||[]).filter(s =>
-        (s.created_at||'').slice(0,7) === mp &&
-        s.status !== 'cancelled' && s.type !== 'devolucion');
       chartLabels.push(d.toLocaleDateString('es-DO',{month:'short'}));
-      chartData.push(mSalesF.reduce((a,s) => a+(s.total||0), 0));
+      chartData.push(trendByMonth[mp] || 0);
       chartDates.push(mp);
     }
   }

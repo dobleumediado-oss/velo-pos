@@ -381,22 +381,22 @@ async function renderConfiguracion(el) {
     <div class="card-title mb8">Datos del Negocio</div>
     <div class="fg">
       <label class="lbl">Nombre comercial *</label>
-      <input class="inp" id="cfg-biz-name" type="text" placeholder="Mi Negocio" value="${settings.biz_name||''}"/>
+      <input class="inp" id="cfg-biz-name" type="text" placeholder="Mi Negocio" value="${_esc(settings.biz_name||'')}"/>
     </div>
     <div class="fg">
       <label class="lbl">Dirección</label>
-      <input class="inp" id="cfg-biz-addr" type="text" placeholder="Calle Principal #1" value="${settings.biz_addr||''}"/>
+      <input class="inp" id="cfg-biz-addr" type="text" placeholder="Calle Principal #1" value="${_esc(settings.biz_addr||'')}"/>
     </div>
     <div class="fg">
       <label class="lbl">Teléfono / WhatsApp</label>
-      <input class="inp" id="cfg-biz-phone" type="tel" placeholder="18091234567" value="${settings.biz_phone||''}"/>
+      <input class="inp" id="cfg-biz-phone" type="tel" placeholder="18091234567" value="${_esc(settings.biz_phone||'')}"/>
       <div style="font-size:10px;color:var(--muted2);margin-top:3px">
         Con código de país (ej: 18091234567). Se usa como destino por defecto al enviar por WhatsApp.
       </div>
     </div>
     <div class="fg">
       <label class="lbl">Mensaje en recibos</label>
-      <input class="inp" id="cfg-receipt-msg" type="text" placeholder="¡Gracias por su compra!" value="${settings.receipt_msg||''}"/>
+      <input class="inp" id="cfg-receipt-msg" type="text" placeholder="¡Gracias por su compra!" value="${_esc(settings.receipt_msg||'')}"/>
     </div>
 
     ${isSA ? `
@@ -430,7 +430,7 @@ async function renderConfiguracion(el) {
     <div id="fiscal-fields" style="display:${fiscalActivo ? 'block' : 'none'}">
       <div class="fg" style="margin-top:10px">
         <label class="lbl">RNC del negocio</label>
-        <input class="inp" id="cfg-biz-rnc" type="text" placeholder="130-00000-0" value="${settings.biz_rnc||''}"/>
+        <input class="inp" id="cfg-biz-rnc" type="text" placeholder="130-00000-0" value="${_esc(settings.biz_rnc||'')}"/>
       </div>
       <div class="fg">
         <label class="lbl">ITBIS (%)</label>
@@ -741,11 +741,11 @@ async function renderConfiguracion(el) {
         <span style="font-weight:600;color:${licColor}">${licLabel}</span>
       </div>
       ${lic?.business ? `<div class="tr" style="font-size:12px;margin-bottom:6px">
-        <span>Negocio</span><span style="font-weight:600">${lic.business}</span>
+        <span>Negocio</span><span style="font-weight:600">${_esc(lic.business)}</span>
       </div>` : ''}
       <div class="tr" style="font-size:11px;color:var(--muted);margin-bottom:12px">
         <span>ID de máquina</span>
-        <span style="font-family:var(--mono);font-size:10px">${lic?.machineId||'—'}</span>
+        <span style="font-family:var(--mono);font-size:10px">${_esc(lic?.machineId||'—')}</span>
       </div>
       ${lic?.inGrace||lic?.blocked||!lic?.licensed ? `
         <div class="alrt a" style="margin-bottom:12px">
@@ -764,7 +764,7 @@ async function renderConfiguracion(el) {
         <button class="btn btn-green btn-fw" onclick="activarLicencia()">
           ${svg('check')} Activar licencia
         </button>` : `
-        <button class="btn btn-out btn-sm" onclick="openModal('<div class=\\'modal-title\\'>ID de Máquina</div><div style=\\'font-family:monospace;font-size:12px;padding:14px;background:var(--surface2);border-radius:8px;word-break:break-all\\'>${lic?.machineId}</div><div class=\\'modal-foot\\'><button class=\\'btn btn-out\\' onclick=\\'closeModal()\\'>Cerrar</button></div>')">
+        <button class="btn btn-out btn-sm" onclick="openModal('<div class=\\'modal-title\\'>ID de Máquina</div><div style=\\'font-family:monospace;font-size:12px;padding:14px;background:var(--surface2);border-radius:8px;word-break:break-all\\'>${_esc(lic?.machineId||'')}</div><div class=\\'modal-foot\\'><button class=\\'btn btn-out\\' onclick=\\'closeModal()\\'>Cerrar</button></div>')">
           Ver ID de máquina
         </button>`}`;
     colRight.appendChild(licCard);
@@ -1002,18 +1002,18 @@ function toggleFiscal(activo) {
 function openEditarUsuarioModal(u) {
   openModal(`
     <div class="modal-title">Editar Usuario</div>
-    <div class="modal-sub">${u.name} · ${u.role}</div>
+    <div class="modal-sub">${_esc(u.name)} · ${_esc(u.role)}</div>
     <div class="g2">
       <div class="fg"><label class="lbl">Nombre completo *</label>
-        <input class="inp" id="eu-name" type="text" value="${u.name||''}"/></div>
+        <input class="inp" id="eu-name" type="text" value="${_esc(u.name||'')}"/></div>
       <div class="fg"><label class="lbl">Email *</label>
-        <input class="inp" id="eu-email" type="email" value="${u.email||''}"/></div>
+        <input class="inp" id="eu-email" type="email" value="${_esc(u.email||'')}"/></div>
     </div>
     <div class="g2">
       <div class="fg"><label class="lbl">Nueva contraseña</label>
         <input class="inp" id="eu-pass" type="password" placeholder="Dejar vacío para no cambiar"/></div>
       <div class="fg"><label class="lbl">Iniciales (avatar)</label>
-        <input class="inp" id="eu-avatar" type="text" value="${u.avatar||''}" maxlength="2"/></div>
+        <input class="inp" id="eu-avatar" type="text" value="${_esc(u.avatar||'')}" maxlength="2"/></div>
     </div>
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
@@ -1043,7 +1043,7 @@ async function guardarEdicionUsuario(id) {
 }
 
 async function toggleUsuario(u) {
-  confirmModal(`¿Deseas ${u.active?'desactivar':'activar'} a <strong>${u.name}</strong>?`,
+  confirmModal(`¿Deseas ${u.active?'desactivar':'activar'} a <strong>${_esc(u.name)}</strong>?`,
     async () => {
       const result = await window.api.users.update({ id: u.id, data: {...u, active: u.active?0:1}, requestUserId: user.id });
       if (!result.ok) { toast(result.error||'Error', 'err'); return; }

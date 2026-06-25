@@ -80,6 +80,8 @@ contextBridge.exposeInMainWorld('api', {
     summary:      (data)     => ipcRenderer.invoke('reports:summary', data),
     lowStock:     ()         => ipcRenderer.invoke('reports:lowStock'),
     creditAlerts: ()         => ipcRenderer.invoke('reports:creditAlerts'),
+    monthlyTrend: (data)     => ipcRenderer.invoke('reports:monthlyTrend', data),
+    dailyTrend:   (data)     => ipcRenderer.invoke('reports:dailyTrend', data),
   },
 
   // ── Auditoría ─────────────────────────────
@@ -184,6 +186,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // ── Multi-negocios ──────────────────────
   business: {
+    resetData: (data) => ipcRenderer.invoke('business:resetData', data),
     getAll:    ()  => ipcRenderer.invoke('business:getAll'),
     getActive: ()  => ipcRenderer.invoke('business:getActive'),
     create:    (d) => ipcRenderer.invoke('business:create', d),

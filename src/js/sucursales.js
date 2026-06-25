@@ -380,8 +380,8 @@ function modalValidarRNC() {
           btn.textContent = '⏳ Aplicando...';
 
           // Guardar RNC en settings
-          await window.api.settings.set({ key: 'biz_rnc', value: res.rnc });
-          if (typeof CFG !== 'undefined') CFG.rnc = res.rnc;
+          const rncRes = await window.api.settings.set({ key: 'biz_rnc', value: res.rnc, requestUserId: user.id });
+          if (rncRes.ok && typeof CFG !== 'undefined') CFG.rnc = res.rnc;
 
           // Actualizar el campo RNC en el formulario de configuración (ID real: cfg-biz-rnc)
           const rncInput = document.getElementById('cfg-biz-rnc');
@@ -391,13 +391,16 @@ function modalValidarRNC() {
           const bizInput = document.getElementById('cfg-biz-name');
           if (bizInput && !bizInput.value.trim() && res.nombre) {
             bizInput.value = res.nombre;
-            await window.api.settings.set({ key: 'biz_name', value: res.nombre });
-            if (typeof CFG !== 'undefined') CFG.biz = res.nombre;
+            const nameRes = await window.api.settings.set({ key: 'biz_name', value: res.nombre, requestUserId: user.id });
+            if (nameRes.ok && typeof CFG !== 'undefined') CFG.biz = res.nombre;
           }
 
-          // Activar módulo fiscal automáticamente al aplicar RNC
-          await window.api.settings.set({ key: 'fiscal_enabled', value: '1' });
-          if (typeof CFG !== 'undefined') CFG.fiscalEnabled = true;
+          // Activar módulo fiscal automáticamente al aplicar RNC (solo superadmin)
+          const fiscalRes = await window.api.settings.set({ key: 'fiscal_enabled', value: '1', requestUserId: user.id });
+          if (fiscalRes.ok && typeof CFG !== 'undefined') CFG.fiscalEnabled = true;
+          if (!fiscalRes.ok) {
+            toast('RNC aplicado. Pide a un superadmin que active el módulo fiscal desde Configuración.', 'w');
+          }
 
           // Activar visualmente el switch fiscal si está en pantalla
           const fiscalCheck = document.getElementById('cfg-fiscal-enabled');

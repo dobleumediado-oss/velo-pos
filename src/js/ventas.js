@@ -833,6 +833,9 @@ async function confirmarAnulacion(saleId) {
   await reloadProducts();
   closeModal();
   toast(`✓ Venta #${saleId} anulada`);
+  if (result.overpayment > 0) {
+    toast(`⚠ El cliente ya había pagado de más por esta factura — excedente de ${fmt(result.overpayment)} a revisar manualmente (reembolso o crédito)`, 'w');
+  }
   renderVentas(document.getElementById('page'));
 }
 
@@ -1202,6 +1205,9 @@ async function procesarDevolucion(originalSale, items) {
       await reloadProducts();
       await reloadCustomers();
       toast(`✓ Devolución #${result.returnId} registrada — ${fmt(result.total)} devueltos`);
+      if (result.overpayment > 0) {
+        toast(`⚠ El cliente ya había pagado de más por esta factura — excedente de ${fmt(result.overpayment)} a revisar manualmente (reembolso o crédito)`, 'w');
+      }
       closeModal();
       renderDevoluciones(document.getElementById('page'));
     },

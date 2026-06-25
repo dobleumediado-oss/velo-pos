@@ -30,7 +30,7 @@ async function renderSuperAdmin(el) {
   ));
 
   // ── Contraseña de esta instalación ─────────
-  const superPassResult = await window.api.auth.getSuperPass().catch(() => ({ ok: false }));
+  const superPassResult = await window.api.auth.getSuperPass({ requestUserId: user.id }).catch(() => ({ ok: false }));
   const spPass = superPassResult.ok ? superPassResult.pass : '—';
   const spHost = superPassResult.ok ? superPassResult.hostname : '';
   const spCpu  = superPassResult.ok ? (superPassResult.cpu || '').slice(0, 40) : '';
@@ -673,7 +673,7 @@ async function saGenerarLicencia() {
   const btn = document.querySelector('button[onclick="saGenerarLicencia()"]');
   if (btn) { btn.disabled = true; btn.textContent = 'Generando...'; }
 
-  const result = await window.api.license.generate({ machineId, business: biz, expiry });
+  const result = await window.api.license.generate({ machineId, business: biz, expiry, requestUserId: user?.id });
 
   if (btn) { btn.disabled = false; btn.innerHTML = `${svg('check')} Generar clave de licencia`; }
 
@@ -732,10 +732,33 @@ async function saConfirmarReset() {
   if (val !== 'RESETEAR') {
     toast('Escribe RESETEAR exactamente', 'err'); return;
   }
-  // Por ahora solo hacer backup antes del reset
-  await window.api.backup.create({ requestUserId: user.id });
-  toast('Función en desarrollo — se hizo un backup primero', 'w');
-  closeModal();
+
+  const btn = document.querySelector('.btn-red');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Reseteando...'; }
+
+  try {
+    // 1. Backup automático antes del reset
+    toast('Creando backup de seguridad...', 'w');
+    await window.api.backup.create({ requestUserId: user.id }).catch(() => {});
+
+    // 2. Ejecutar el reset real
+    const result = await window.api.business.resetData({ requestUserId: user.id });
+
+    if (!result.ok) {
+      toast(result.error || 'Error al resetear', 'err');
+      if (btn) { btn.disabled = false; btn.textContent = 'Resetear todo'; }
+      return;
+    }
+
+    // 3. Recargar la app desde cero
+    toast('✓ Datos eliminados — recargando...', 'ok');
+    closeModal();
+    setTimeout(() => { location.reload(); }, 1500);
+
+  } catch(e) {
+    toast('Error inesperado: ' + e.message, 'err');
+    if (btn) { btn.disabled = false; btn.textContent = 'Resetear todo'; }
+  }
 }
 
 // ── Funciones adicionales Super Admin ─────────
@@ -751,7 +774,7 @@ async function saVacuum() {
 }
 
 async function saVerLogs() {
-  const logs = await window.api.audit.getLogs({ limit: 50, action: 'error' }) || [];
+  const logs = await window.api.audit.getLogs({ limit: 50, action: 'error', requestUserId: user?.id }) || [];
   const rows = logs.length === 0
     ? '<tr><td colspan="4" style="text-align:center;color:var(--muted2);padding:14px">Sin errores registrados</td></tr>'
     : logs.map(l => `
@@ -801,11 +824,6 @@ function saRevocarLicencia() {
     'Revocar licencia', 'btn-red'
   );
 }
-
-// ══════════════════════════════════════════════
-// SELECTOR DE PLANTILLAS DE IMPRESIÓN
-// ══════════════════════════════════════════════
-let _plantSeleccionada = null;
 
 // ══════════════════════════════════════════════
 // PANEL DE ACTUALIZACIONES

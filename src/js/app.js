@@ -410,10 +410,11 @@ function renderLogin() {
 
     // Verificar si ESTE usuario ya cambió su contraseña
     // Leemos el flag del usuario actual, no el global del sistema
-    const userInfo   = await window.api.users.getById
+    const userInfoRes = await window.api.users.getById
       ? await window.api.users.getById(user.id).catch(() => null)
       : null;
-    const pwdChanged = userInfo
+    const userInfo    = userInfoRes?.ok ? userInfoRes.data : null;
+    const pwdChanged  = userInfo
       ? (userInfo.password_changed === '1' || userInfo.password_changed === 1)
       : (settings.password_changed === '1'); // fallback al setting global
 

@@ -136,11 +136,6 @@ const PLANTILLAS = [
   },
 ];
 
-// ── Obtener plantillas por tipo ───────────────
-function getPlantillasByTipo(tipo) {
-  return PLANTILLAS.filter(p => p.tipo === tipo);
-}
-
 function getPlantilla(id) {
   return PLANTILLAS.find(p => p.id === id) || PLANTILLAS[1]; // default: clásica 80mm
 }

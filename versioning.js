@@ -714,6 +714,30 @@ const MIGRATIONS = [
       }
     }
   },
+  {
+    version: '1.9.0',
+    description: 'Corrige aviso de cambio de contraseña obligatorio que se disparaba siempre por un bug de lectura — marcar usuarios existentes como ya cambiada para no interrumpirlos de golpe',
+    run(db) {
+      try {
+        // users.password_changed ya existe desde la migración 1.4.1, pero un bug
+        // en el frontend nunca lo leía correctamente, así que en la práctica
+        // nunca se actualizaba. Al corregir esa lectura, todo usuario existente
+        // se vería forzado a cambiar contraseña en su próximo login.
+        // Solo aplicar el backfill si el negocio ya tiene actividad real
+        // (ventas registradas) — así no afecta una instalación recién
+        // sembrada, donde admin/cajero SÍ deben cambiar su clave por defecto.
+        const tieneVentas = db.prepare('SELECT COUNT(*) as c FROM sales').get().c > 0;
+        if (tieneVentas) {
+          db.prepare(`UPDATE users SET password_changed='1' WHERE password_changed IS NULL OR password_changed='0'`).run();
+          console.log('[MIGRATION 1.9.0] Usuarios existentes marcados como password_changed=1');
+        } else {
+          console.log('[MIGRATION 1.9.0] Instalación nueva sin ventas — no se aplica backfill');
+        }
+      } catch(e) {
+        console.error('[MIGRATION 1.9.0]', e.message);
+      }
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

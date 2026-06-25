@@ -11,8 +11,14 @@
 
 let cliSearch = '';
 let cliTab    = 'todos';
+let cliSort   = 'name-asc';
 
 function renderClientes(el) {
+  // Si viene desde dashboard con filtro predefinido
+  if (window._cliTabInicial) {
+    cliTab = window._cliTabInicial;
+    delete window._cliTabInicial;
+  }
   el.innerHTML = '';
 
   const alerts    = getCreditAlerts();
@@ -95,7 +101,25 @@ function renderClientes(el) {
           class: `tab ${cliTab === t.k ? 'on' : ''}`,
           onclick: () => { cliTab = t.k; renderCliTable(); }
         }, t.l))
-      )
+      ),
+      (() => {
+        const sel = h('select', {
+          class: 'inp', style: { width: '160px' },
+          onchange: e => { cliSort = e.target.value; renderCliTable(); }
+        });
+        [
+          { v: 'name-asc',     l: 'Nombre A-Z'   },
+          { v: 'name-desc',    l: 'Nombre Z-A'   },
+          { v: 'balance-desc', l: 'Mayor deuda'  },
+          { v: 'balance-asc',  l: 'Menor deuda'  },
+          { v: 'credit-desc',  l: 'Mayor límite' },
+        ].forEach(o => {
+          const op = document.createElement('option');
+          op.value = o.v; op.textContent = o.l; op.selected = o.v === cliSort;
+          sel.appendChild(op);
+        });
+        return sel;
+      })()
     )
   );
 
@@ -136,7 +160,14 @@ function renderCliTable() {
       c.phone.includes(q) ||
       (qDigits && c.phone.replace(/\D/g, '').includes(qDigits))
     ))
-  );
+  ).sort((a, b) => {
+    if (cliSort === 'name-asc')     return a.name.localeCompare(b.name);
+    if (cliSort === 'name-desc')    return b.name.localeCompare(a.name);
+    if (cliSort === 'balance-desc') return (b.balance||0) - (a.balance||0);
+    if (cliSort === 'balance-asc')  return (a.balance||0) - (b.balance||0);
+    if (cliSort === 'credit-desc')  return (b.credit_limit||0) - (a.credit_limit||0);
+    return a.name.localeCompare(b.name);
+  });
 
   if (!clients.length) {
     wrap.appendChild(h('div', { class: 'empty' },
@@ -772,18 +803,43 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
 
     <!-- Contenido por tab -->
     ${activeTab === 'cuenta' ? `
-      <!-- Historial ventas -->
+      <!-- Historial ventas expandible -->
       <div style="font-weight:700;font-size:12px;margin-bottom:6px">
-        Historial de Compras (${ventas.length})</div>
-      <div class="tw" style="max-height:160px;overflow-y:auto;margin-bottom:12px">
-        <table>
-          <thead><tr>
-            <th>Fecha</th><th>Factura</th>
-            <th style="text-align:right">Total</th>
-            <th>Método</th><th>Estado</th>
-          </tr></thead>
-          <tbody>${ventasRows}</tbody>
-        </table>
+        Facturas (${ventas.length})</div>
+      <div style="max-height:200px;overflow-y:auto;margin-bottom:12px;border:1px solid var(--line);border-radius:6px">
+        ${ventas.length === 0
+          ? `<div style="text-align:center;padding:16px;color:var(--muted2);font-size:12px">Sin facturas registradas</div>`
+          : ventas.map((s, idx) => {
+              const fecha = (s.created_at||s.date||'').split('T')[0].split(' ')[0];
+              const tipo  = s.type==='devolucion'?'Devolución':s.type==='cotizacion'?'Cotización':'Factura';
+              const metColor = (s.payment_method||s.pay)==='credito'?'var(--amber)':s.type==='devolucion'?'var(--red)':'var(--green)';
+              return `
+                <div style="border-bottom:1px solid var(--line)">
+                  <div onclick="toggleVentaDetalle(${idx},${s.id},this)"
+                       style="display:flex;justify-content:space-between;align-items:center;
+                              padding:8px 12px;cursor:pointer;background:var(--surface2)">
+                    <div>
+                      <span style="font-weight:700;font-size:12px">#${String(s.id).padStart(5,'0')}</span>
+                      <span style="font-size:10px;color:var(--muted);margin-left:6px">${tipo}</span>
+                      <span style="font-size:10px;color:var(--muted2);margin-left:6px">${fdate(fecha)}</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px">
+                      <span style="font-size:10px;font-weight:600;color:${metColor};
+                                   background:${metColor}18;padding:2px 6px;border-radius:4px">
+                        ${s.payment_method||s.pay||'—'}
+                      </span>
+                      <span style="font-weight:800;font-size:12px">${fmt(s.total)}</span>
+                      <span style="color:var(--muted2);font-size:10px">▼</span>
+                    </div>
+                  </div>
+                  <div id="vta-det-${idx}" style="display:none;padding:8px 12px;background:var(--surface)">
+                    <div id="vta-det-body-${idx}" style="font-size:11px;color:var(--muted2)">
+                      Cargando artículos...
+                    </div>
+                  </div>
+                </div>`;
+            }).join('')
+        }
       </div>
       <div style="font-weight:700;font-size:12px;margin-bottom:6px">
         Historial de Abonos (${pagos.length})</div>
@@ -954,11 +1010,16 @@ async function exportClientCreditPDF(c) {
   @media print{.no-print{display:none}}
 </style>
 </head><body>
-  <div class="no-print">
+  <div class="no-print" style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:16px">
     <button onclick="window.print()"
       style="background:#0D0F12;color:#fff;border:none;padding:8px 18px;
              border-radius:6px;font-size:12px;cursor:pointer;font-weight:700">
-      Imprimir / Guardar PDF
+      🖨️ Imprimir / Guardar PDF
+    </button>
+    <button onclick="window.close()"
+      style="background:transparent;color:#6b7280;border:1px solid #e5e7eb;padding:8px 18px;
+             border-radius:6px;font-size:12px;cursor:pointer">
+      Cerrar
     </button>
   </div>
 
@@ -1115,6 +1176,58 @@ function filtrarHistorialCliente(customerId, q) {
 // TOGGLE DETALLE DE FACTURA (expandir artículos)
 // Llamado desde la pestaña Facturas del modal
 // ══════════════════════════════════════════════
+async function toggleVentaDetalle(idx, saleId, rowEl) {
+  const detailDiv  = document.getElementById(`vta-det-${idx}`);
+  const detailBody = document.getElementById(`vta-det-body-${idx}`);
+  if (!detailDiv) return;
+
+  const isOpen = detailDiv.style.display !== 'none';
+  // Rotar indicador ▼/▲
+  const arrow = rowEl.querySelector('span:last-child');
+  if (isOpen) {
+    detailDiv.style.display = 'none';
+    if (arrow) arrow.textContent = '▼';
+    return;
+  }
+
+  detailDiv.style.display = '';
+  if (arrow) arrow.textContent = '▲';
+  if (detailBody.dataset.loaded === 'true') return;
+
+  const res   = await window.api.customers.getSaleItems({ saleId });
+  const items = res?.items || [];
+
+  if (!items.length) {
+    detailBody.innerHTML = `<div style="color:var(--muted2);font-size:11px;padding:6px">
+      Sin detalle de artículos registrado.</div>`;
+  } else {
+    const total = items.reduce((s, i) => s + i.subtotal, 0);
+    detailBody.innerHTML = `
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead><tr style="border-bottom:1px solid var(--line)">
+          <th style="padding:4px 8px;text-align:left;color:var(--muted)">Artículo</th>
+          <th style="padding:4px 8px;text-align:center;color:var(--muted)">Cant.</th>
+          <th style="padding:4px 8px;text-align:right;color:var(--muted)">P. Unit.</th>
+          <th style="padding:4px 8px;text-align:right;color:var(--muted)">Subtotal</th>
+        </tr></thead>
+        <tbody>
+          ${items.map((it, i) => `
+            <tr style="background:${i%2===0?'transparent':'var(--surface)'}">
+              <td style="padding:4px 8px;font-weight:500">${it.product_name}</td>
+              <td style="padding:4px 8px;text-align:center;color:var(--muted2)">${it.qty}</td>
+              <td style="padding:4px 8px;text-align:right">${fmt(it.unit_price)}</td>
+              <td style="padding:4px 8px;text-align:right;font-weight:700">${fmt(it.subtotal)}</td>
+            </tr>`).join('')}
+        </tbody>
+        <tfoot><tr style="border-top:1px solid var(--line)">
+          <td colspan="3" style="padding:4px 8px;text-align:right;font-size:10px;color:var(--muted)">Total:</td>
+          <td style="padding:4px 8px;text-align:right;font-weight:800">${fmt(total)}</td>
+        </tr></tfoot>
+      </table>`;
+  }
+  detailBody.dataset.loaded = 'true';
+}
+
 async function toggleFacturaDetalle(idx, saleId, rowEl) {
   const detailRow  = document.getElementById(`fac-detail-${idx}`);
   const detailBody = document.getElementById(`fac-detail-body-${idx}`);

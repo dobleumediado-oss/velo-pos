@@ -3,7 +3,7 @@
 // Seguridad: contextIsolation:true, nodeIntegration:false
 // ══════════════════════════════════════════════
 
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
 const path = require('path');
 const fs   = require('fs');
 
@@ -105,7 +105,7 @@ const {
   productsRepo, customersRepo, cashRepo,
   salesRepo, returnsRepo, reportsRepo, suppliersRepo, purchasesRepo, audit,
   expensesRepo, branchesRepo, vehiclesRepo, maintenanceRepo, deliveriesRepo, ncfRepo,
-  financialAccountsRepo, accountingRepo
+  financialAccountsRepo, accountingRepo, _deriveSuperAdminPass
 } = require('./database');
 
 const {
@@ -347,7 +347,43 @@ function createWindow() {
   // En producción no abrir DevTools
   if (!app.isPackaged) {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
+  } else {
+    // Bloquear atajos de DevTools/recarga para que un cajero no pueda
+    // abrir la consola y llamar window.api.* directamente sin pasar por la UI.
+    mainWindow.webContents.on('before-input-event', (event, input) => {
+      const k = (input.key || '').toLowerCase();
+      const blockedFKey = k === 'f12';
+      const blockedDevTools =
+        (input.control || input.meta) && input.shift && ['i', 'j', 'c'].includes(k);
+      const blockedReload = (input.control || input.meta) && (k === 'r');
+      if (blockedFKey || blockedDevTools || blockedReload) {
+        event.preventDefault();
+      }
+    });
+    mainWindow.webContents.on('devtools-opened', () => {
+      mainWindow.webContents.closeDevTools();
+    });
   }
+}
+
+// ── Menú de aplicación: en producción se quita Recargar/DevTools del
+// menú, conservando Edit (copiar/pegar) y los roles estándar de macOS. ──
+function buildAppMenu() {
+  if (!app.isPackaged) return; // en dev se deja el menú default con DevTools
+  const isMac = process.platform === 'darwin';
+  const template = [
+    ...(isMac ? [{ role: 'appMenu' }] : []),
+    {
+      label: 'Editar',
+      submenu: [
+        { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
+        { role: 'cut' }, { role: 'copy' }, { role: 'paste' },
+        { role: 'selectAll' },
+      ],
+    },
+    { role: 'windowMenu' },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 // ══════════════════════════════════════════════
@@ -495,6 +531,9 @@ ipcMain.handle('users:create', async (_, { data, requestUserId }) => {
     if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
       return { ok: false, error: 'Sin permisos' };
     }
+    if (data.role === 'superadmin' && reqUser.role !== 'superadmin') {
+      return { ok: false, error: 'Solo un superadmin puede asignar el rol superadmin' };
+    }
     const id = usersRepo.create(data);
     audit(requestUserId, reqUser.name, 'usuario_creado', 'users', id, data.name);
     return { ok: true, id };
@@ -508,6 +547,13 @@ ipcMain.handle('users:update', async (_, { id, data, requestUserId }) => {
     const reqUser = authRepo.findById(requestUserId);
     if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
       return { ok: false, error: 'Sin permisos' };
+    }
+    if (data.role === 'superadmin' && reqUser.role !== 'superadmin') {
+      return { ok: false, error: 'Solo un superadmin puede asignar el rol superadmin' };
+    }
+    const targetUser = authRepo.findById(id);
+    if (targetUser && targetUser.role === 'superadmin' && reqUser.role !== 'superadmin' && data.role && data.role !== 'superadmin') {
+      return { ok: false, error: 'Solo un superadmin puede modificar el rol de otro superadmin' };
     }
     usersRepo.update(id, data);
     audit(requestUserId, reqUser.name, 'usuario_editado', 'users', id, data.name);
@@ -564,6 +610,11 @@ ipcMain.handle('products:create', async (_, { data, requestUserId }) => {
     if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
       return { ok: false, error: 'Sin permisos' };
     }
+    // Segunda línea de defensa — repetir validación del renderer en el backend
+    if (!data?.name?.trim())  return { ok: false, error: 'El nombre del producto es requerido' };
+    if (!data?.code?.trim())  return { ok: false, error: 'El código del producto es requerido' };
+    if (!(data?.price > 0))   return { ok: false, error: 'El precio debe ser mayor a 0' };
+    if (data?.cost < 0)       return { ok: false, error: 'El costo no puede ser negativo' };
     const id = productsRepo.create(data);
     audit(requestUserId, reqUser.name, 'producto_creado', 'products', id, data.name);
     return { ok: true, id };
@@ -578,6 +629,10 @@ ipcMain.handle('products:update', async (_, { id, data, requestUserId }) => {
     if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
       return { ok: false, error: 'Sin permisos' };
     }
+    if (!data?.name?.trim())  return { ok: false, error: 'El nombre del producto es requerido' };
+    if (!data?.code?.trim())  return { ok: false, error: 'El código del producto es requerido' };
+    if (!(data?.price > 0))   return { ok: false, error: 'El precio debe ser mayor a 0' };
+    if (data?.cost < 0)       return { ok: false, error: 'El costo no puede ser negativo' };
     productsRepo.update(id, data);
     audit(requestUserId, reqUser.name, 'producto_editado', 'products', id, data.name);
     return { ok: true };
@@ -652,6 +707,10 @@ ipcMain.handle('customers:update', async (_, { id, data, requestUserId }) => {
     if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
       return { ok: false, error: 'Sin permisos' };
     }
+    const current = customersRepo.getById(id);
+    if (current && data.credit_limit != null && data.credit_limit < (current.balance || 0)) {
+      return { ok: false, error: `El límite de crédito no puede ser menor al balance pendiente actual (${current.balance})` };
+    }
     customersRepo.update(id, data);
     audit(requestUserId, reqUser.name, 'cliente_editado', 'customers', id, data.name);
     return { ok: true };
@@ -678,6 +737,9 @@ ipcMain.handle('customers:addPayment', async (_, { data, requestUserId }) => {
     });
     audit(requestUserId, reqUser?.name || '', 'abono_registrado', 'customers',
           data.customerId, `Monto: ${data.amount}`);
+    // Asiento contable automático — no debe bloquear el abono si falla
+    try { accountingRepo.generatePaymentEntry({ paymentId: result.paymentId, userId: requestUserId }); }
+    catch (e) { console.error('[accounting] generatePaymentEntry', e.message); }
     return { ok: true, ...result };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -816,6 +878,16 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
       }
     }
 
+    // ── Tope de descuento: >10% requiere autorización de un admin real ──
+    const DISC_LIMIT = 10;
+    const discPct = parseFloat(saleData?.payment?.disc) || 0;
+    if (discPct > DISC_LIMIT && !['admin','superadmin'].includes(reqUser.role)) {
+      const approver = authRepo.findById(saleData?.payment?.discApprovedBy);
+      if (!approver || !['admin','superadmin'].includes(approver.role)) {
+        return { ok: false, error: `Descuento de ${discPct}% requiere autorización de un administrador` };
+      }
+    }
+
     // Verificar caja abierta (cajero debe tener caja)
     if (reqUser.role === 'cajero') {
       const session = cashRepo.getOpen();
@@ -824,6 +896,9 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
     }
 
     const result = salesRepo.create({ ...saleData, user: reqUser });
+    // Asiento contable automático — no debe bloquear la venta si falla
+    try { accountingRepo.generateSaleEntry({ saleId: result.saleId, userId: requestUserId }); }
+    catch (e) { console.error('[accounting] generateSaleEntry', e.message); }
     return { ok: true, ...result };
   } catch (e) {
     console.error('[sales:create]', e);
@@ -845,8 +920,8 @@ ipcMain.handle('sales:cancel', async (_, { id, reason, requestUserId }) => {
     if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
       return { ok: false, error: 'Solo el administrador puede anular ventas' };
     }
-    salesRepo.cancel(id, reason, requestUserId, reqUser.name);
-    return { ok: true };
+    const result = salesRepo.cancel(id, reason, requestUserId, reqUser.name);
+    return { ok: true, ...result };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -856,7 +931,9 @@ ipcMain.handle('sales:cancel', async (_, { id, reason, requestUserId }) => {
 ipcMain.handle('sales:return', async (_, { originalSaleId, items, reason, requestUserId }) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser) return { ok: false, error: 'Usuario no válido' };
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Solo el administrador puede procesar devoluciones' };
+    }
 
     // Verificar caja abierta
     const session = cashRepo.getOpen();
@@ -898,9 +975,38 @@ ipcMain.handle('reports:creditAlerts', async () => {
   return reportsRepo.creditAlerts();
 });
 
-// ── Auditoría ─────────────────────────────────
-ipcMain.handle('audit:getLogs', async (_, { limit = 200, action, entity } = {}) => {
+ipcMain.handle('reports:monthlyTrend', async (_, { requestUserId } = {}) => {
   try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
+    return { ok: true, data: reportsRepo.monthlyTrend() };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('reports:dailyTrend', async (_, { days, requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
+    const safeDays = Math.min(90, Math.max(1, parseInt(days) || 30));
+    return { ok: true, data: reportsRepo.dailyTrend(safeDays) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// ── Auditoría ─────────────────────────────────
+ipcMain.handle('audit:getLogs', async (_, { limit = 200, action, entity, requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || reqUser.role !== 'superadmin') {
+      return [];
+    }
     const dbInst = require('./database').getDB();
     let query  = 'SELECT * FROM audit_logs';
     const params = [];
@@ -916,11 +1022,15 @@ ipcMain.handle('audit:getLogs', async (_, { limit = 200, action, entity } = {}) 
   }
 });
 
-ipcMain.handle('audit:log', async (_, { action, entity, entityId, detail, userId } = {}) => {
+ipcMain.handle('audit:log', async (_, { action, entity, entityId, detail, requestUserId } = {}) => {
   try {
     if (!action) return { ok: false, error: 'action requerida' };
-    const reqUser = userId ? authRepo.findById(userId) : null;
-    audit(userId || 0, reqUser?.name || 'sistema', action, entity || '', entityId || null, detail || '');
+    // La identidad se toma SIEMPRE del llamante verificado, nunca de un
+    // userId/nombre arbitrario enviado en el payload — evita inyectar
+    // entradas de auditoría falsas atribuidas a otro usuario.
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser) return { ok: false, error: 'Usuario no válido' };
+    audit(reqUser.id, reqUser.name, action, entity || '', entityId || null, detail || '');
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -1002,7 +1112,7 @@ ipcMain.handle('license:revoke', async (_, { requestUserId } = {}) => {
  * - Si se pasa printerName, la preselecciona en el diálogo
  * - Registra el trabajo en print_jobs para auditoría y reimpresión
  */
-async function _attemptPrintHTML({ html, printerName, printerWidth, pageHint }) {
+async function _attemptPrintHTML({ html, printerName, printerWidth, pageHint, silent }) {
   // isThermal: solo cuando hay printerName Y printerWidth
   // carta: printerName sin printerWidth (o sin printerName)
   // Para carta usamos 816px (≈ 8.5" a 96dpi) para que el layout renderice correcto
@@ -1046,7 +1156,9 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, pageHint }) 
   const printOptions = {
     // silent:true en térmica = sin diálogo del sistema (imprime directo)
     // silent:false en A4 = muestra diálogo para que el usuario elija papel
-    silent:          isThermal,
+    // El llamante puede forzar silent explícitamente (ej. etiquetas sin
+    // impresora térmica configurada, usando la impresora predeterminada).
+    silent:          silent !== undefined ? silent : isThermal,
     printBackground: true,
     margins:         isThermal
       ? { marginType: 'custom', top: 2, bottom: 2, left: 2, right: 2 }
@@ -1074,19 +1186,19 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, pageHint }) 
 
 }
 
-ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, jobType, referenceId, userId, pageHint }) => {
+ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, jobType, referenceId, userId, pageHint, silent }) => {
   try {
     try {
-      await _attemptPrintHTML({ html, printerName, printerWidth, pageHint });
+      await _attemptPrintHTML({ html, printerName, printerWidth, pageHint, silent });
     } catch (firstErr) {
       // Reintento automático único — solo para impresión silenciosa (térmica),
       // donde un fallo normalmente es un problema transitorio (impresora ocupada
       // o temporalmente no disponible), no una cancelación explícita del usuario.
       // En modo diálogo (carta) un fallo suele ser el usuario cancelando — no reintentar.
-      const wasThermalAttempt = !!(printerName && printerWidth);
+      const wasThermalAttempt = !!(printerName && printerWidth) || silent === true;
       if (!wasThermalAttempt) throw firstErr;
       await new Promise(r => setTimeout(r, 1200));
-      await _attemptPrintHTML({ html, printerName, printerWidth, pageHint });
+      await _attemptPrintHTML({ html, printerName, printerWidth, pageHint, silent });
     }
 
     // Registrar trabajo exitoso en print_jobs
@@ -1204,6 +1316,98 @@ ipcMain.handle('version:getAppVersion', async () => {
 });
 
 // ── Backup ────────────────────────────────────
+// ══════════════════════════════════════════════
+// IPC — RESET COMPLETO DEL NEGOCIO
+// Borra todos los datos EXCEPTO:
+//   · Usuarios y licencia
+//   · API key (velo-ai.key en %APPDATA%)
+//   · Configuración del updater
+// ══════════════════════════════════════════════
+ipcMain.handle('business:resetData', async (_, { requestUserId }) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || reqUser.role !== 'superadmin') {
+      return { ok: false, error: 'Solo el Super Admin puede resetear los datos' };
+    }
+
+    const db = require('./database').getDB();
+
+    // Tablas a limpiar — en orden para respetar FK
+    const TABLAS = [
+      'ecf_log',
+      'ncf_log',
+      'ncf_sequences',
+      'deliveries',
+      'vehicle_maintenance',
+      'vehicles',
+      'branches',
+      'expense_budgets',
+      'expense_config',
+      'recurring_expenses',
+      'expense_payments',
+      'expenses',
+      'expense_categories',
+      'print_jobs',
+      'audit_logs',
+      'payments',
+      'sale_items',
+      'sales',
+      'cash_movements',
+      'cash_sessions',
+      'customers',
+      'inventory_movements',
+      'products',
+      'categories',
+      // Compras
+      'purchase_items',
+      'purchase_orders',
+      'suppliers',
+      // Bancos y cuentas
+      'financial_movements',
+      'financial_accounts',
+      // Contabilidad
+      'accounting_entry_lines',
+      'accounting_entries',
+      'accounting_periods',
+      'accounting_accounts',
+      'accounting_config',
+    ];
+
+    db.transaction(() => {
+      for (const tabla of TABLAS) {
+        try {
+          const r = db.prepare(`DELETE FROM ${tabla}`).run();
+          db.prepare(`DELETE FROM sqlite_sequence WHERE name=?`).run(tabla);
+          console.log(`[reset] ✓ ${tabla}: ${r.changes} filas eliminadas`);
+        } catch(e) {
+          console.error(`[reset] ✗ ${tabla}:`, e.message);
+        }
+      }
+
+      // Limpiar settings — solo borrar NCF counters
+      // Conservar: datos del negocio (biz, rnc, phone, address, email, logo)
+      //            configuración del sistema (module_*, license_*, master_*)
+      //            updater, barcode_enabled, fiscal_enabled
+      const settingsToDelete = [
+        'next_ncf_b01','next_ncf_b02','next_ncf_b14','next_ncf_b15',
+        'next_ncf_b16','next_ncf_b17',
+      ];
+      for (const key of settingsToDelete) {
+        try { db.prepare(`DELETE FROM settings WHERE key=?`).run(key); } catch {}
+      }
+    })();
+
+    // Compactar la DB después del reset
+    try { db.exec('VACUUM'); } catch {}
+
+    console.log('[reset] Datos del negocio eliminados por:', reqUser.name);
+    return { ok: true };
+  } catch(e) {
+    console.error('[business:resetData]', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle('backup:create', async (_, { requestUserId }) => {
   try {
     const { filePath } = await dialog.showSaveDialog(mainWindow, {
@@ -1235,9 +1439,15 @@ ipcMain.handle('backup:restore', async (_, { requestUserId, fileName } = {}) => 
     let filePath = null;
 
     if (fileName) {
-      filePath = path.join(DATA_DIR, 'backups', fileName);
+      // Sanear contra path traversal — solo permitir nombres de archivo
+      // dentro de la carpeta de backups, nunca rutas con ../ ni absolutas.
+      const safeName = path.basename(fileName);
+      filePath = path.join(DATA_DIR, 'backups', safeName);
+      if (!filePath.startsWith(path.join(DATA_DIR, 'backups'))) {
+        return { ok: false, error: 'Ruta de backup inválida' };
+      }
       if (!fs.existsSync(filePath)) {
-        return { ok: false, error: `Backup no encontrado: ${fileName}` };
+        return { ok: false, error: `Backup no encontrado: ${safeName}` };
       }
     } else {
       const { filePaths } = await dialog.showOpenDialog(mainWindow, {
@@ -1289,8 +1499,12 @@ ipcMain.handle('backup:getList', async () => {
 
 // ── Licencia ──────────────────────────────────
 
-ipcMain.handle('license:generate', async (_, { machineId, business, expiry }) => {
+ipcMain.handle('license:generate', async (_, { machineId, business, expiry, requestUserId }) => {
   try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || reqUser.role !== 'superadmin') {
+      return { ok: false, error: 'Sin permisos' };
+    }
     const crypto     = require('crypto');
     const fs         = require('fs');
     const path       = require('path');
@@ -1866,6 +2080,10 @@ ipcMain.handle('importar:readZIP', async (_, { data, name }) => {
 // ══════════════════════════════════════════════
 ipcMain.handle('importar:rollback', async (_, { ids, requestUserId }) => {
   try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
     const db = require('./database').getDB();
     let deleted = 0;
 
@@ -2052,13 +2270,21 @@ ipcMain.handle('suppliers:getAll', async () => {
 });
 ipcMain.handle('suppliers:create', async (_, { data, requestUserId }) => {
   try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
     if (!data?.name?.trim()) return { ok: false, error: 'El nombre del proveedor es requerido' };
     const id = suppliersRepo.create(data);
     return { ok: true, id };
   } catch(e) { return { ok: false, error: e.message }; }
 });
-ipcMain.handle('suppliers:update', async (_, { id, data }) => {
+ipcMain.handle('suppliers:update', async (_, { id, data, requestUserId }) => {
   try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
     if (!id) return { ok: false, error: 'ID requerido' };
     if (!data?.name?.trim()) return { ok: false, error: 'El nombre del proveedor es requerido' };
     suppliersRepo.update(id, data); return { ok: true };
@@ -2089,6 +2315,10 @@ ipcMain.handle('purchases:getById', async (_, { id }) => {
 });
 ipcMain.handle('purchases:create', async (_, data) => {
   try {
+    const reqUser = authRepo.findById(data?.userId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
     if (!data?.items?.length) return { ok: false, error: 'La orden debe tener al menos un producto' };
     for (const item of data.items) {
       if (!item.product_name?.trim()) return { ok: false, error: 'Todos los items deben tener nombre' };
@@ -2099,11 +2329,23 @@ ipcMain.handle('purchases:create', async (_, data) => {
   } catch(e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('purchases:receive', async (_, { id, items, userId }) => {
-  try { const result = purchasesRepo.receive(id, { items, userId }); return { ok: true, ...result }; }
+  try {
+    const reqUser = authRepo.findById(userId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
+    const result = purchasesRepo.receive(id, { items, userId }); return { ok: true, ...result };
+  }
   catch(e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('purchases:cancel', async (_, { id, userId }) => {
-  try { purchasesRepo.cancel(id, userId); return { ok: true }; }
+  try {
+    const reqUser = authRepo.findById(userId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
+    purchasesRepo.cancel(id, userId); return { ok: true };
+  }
   catch(e) { return { ok: false, error: e.message }; }
 });
 
@@ -2459,7 +2701,7 @@ ipcMain.handle('expenses:pay', async (_, { expenseId, amount, payment_method, pa
   try {
     const u = authRepo.findById(requestUserId);
     if (!u) return { ok:false, error:'Usuario no válido' };
-    if (u.role === 'cajero' && !['admin','superadmin'].includes(u.role)) {
+    if (!['admin','superadmin'].includes(u.role)) {
       return { ok:false, error:'Solo el administrador puede registrar pagos' };
     }
     let cash_session_id = null;
@@ -2470,6 +2712,9 @@ ipcMain.handle('expenses:pay', async (_, { expenseId, amount, payment_method, pa
     }
     const result = expensesRepo.pay({ expenseId, amount, payment_method, payment_source,
       cash_session_id, reference, notes, userId: requestUserId, userName: u.name });
+    // Asiento contable automático (solo si el gasto quedó completamente pagado) — no debe bloquear el pago si falla
+    try { accountingRepo.generateExpenseEntry({ expenseId, userId: requestUserId }); }
+    catch (e) { console.error('[accounting] generateExpenseEntry', e.message); }
     return result;
   } catch(e) { return { ok:false, error:e.message }; }
 });
@@ -3297,6 +3542,7 @@ app.whenReady().then(() => {
     app.quit();
     return;
   }
+  buildAppMenu();
   createWindow();
   // Verificar actualizaciones 8 segundos después del arranque,
   // cuando la ventana ya está completamente cargada y visible.
@@ -3322,16 +3568,15 @@ ipcMain.handle('auth:getSuperPass', async (_, { requestUserId } = {}) => {
   // Retorna información de la máquina para soporte técnico.
   // La contraseña maestra es fija y la conoce solo el vendedor.
   try {
-    if (requestUserId) {
-      const reqUser = authRepo.findById(requestUserId);
-      if (!reqUser || reqUser.role !== 'superadmin') {
-        return { ok: false, error: 'Sin permisos' };
-      }
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || reqUser.role !== 'superadmin') {
+      return { ok: false, error: 'Sin permisos' };
     }
     const os       = require('os');
     const cpuModel = os.cpus()[0]?.model || 'cpu';
     const hostname = os.hostname();
-    return { ok: true, hostname, cpu: cpuModel };
+    const pass     = _deriveSuperAdminPass();
+    return { ok: true, hostname, cpu: cpuModel, pass };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -3480,24 +3725,36 @@ ipcMain.handle('financial:getById', async (_, { id }) => {
 
 ipcMain.handle('financial:create', async (_, { data, requestUserId }) => {
   try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
     const id = financialAccountsRepo.create({ ...data, userId: requestUserId });
-    audit.log(requestUserId, 'financial_account_create', `Cuenta creada: ${data.name}`);
+    audit(requestUserId, reqUser.name, 'financial_account_create', 'financial_accounts', id, `Cuenta creada: ${data.name}`);
     return { ok: true, data: { id } };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('financial:update', async (_, { id, data, requestUserId }) => {
   try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
     financialAccountsRepo.update(id, data);
-    audit.log(requestUserId, 'financial_account_update', `Cuenta actualizada: ${id}`);
+    audit(requestUserId, reqUser.name, 'financial_account_update', 'financial_accounts', id, `Cuenta actualizada: ${id}`);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('financial:toggleActive', async (_, { id, active, requestUserId }) => {
   try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
     financialAccountsRepo.toggleActive(id, active);
-    audit.log(requestUserId, 'financial_account_toggle', `Cuenta ${active ? 'activada' : 'desactivada'}: ${id}`);
+    audit(requestUserId, reqUser.name, 'financial_account_toggle', 'financial_accounts', id, `Cuenta ${active ? 'activada' : 'desactivada'}: ${id}`);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -3511,6 +3768,10 @@ ipcMain.handle('financial:getMovements', async (_, { accountId, from, to, limit 
 
 ipcMain.handle('financial:addMovement', async (_, { data, requestUserId }) => {
   try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
     // Map UI-friendly type names to DB enum values
     const typeMap = { ingreso: 'deposito', egreso: 'retiro' };
     const mov = financialAccountsRepo.addMovement({
@@ -3525,13 +3786,17 @@ ipcMain.handle('financial:addMovement', async (_, { data, requestUserId }) => {
       notes:            data.notes  || '',
       userId:           requestUserId,
     });
-    audit.log(requestUserId, 'financial_movement', `Movimiento: ${data.type} ${data.amount} en cuenta ${data.account_id}`);
+    audit(requestUserId, reqUser.name, 'financial_movement', 'financial_movements', mov?.id, `Movimiento: ${data.type} ${data.amount} en cuenta ${data.account_id}`);
     return { ok: true, data: mov };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('financial:transfer', async (_, { data, requestUserId }) => {
   try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
     const result = financialAccountsRepo.transfer({
       fromId:      data.from_account_id,
       toId:        data.to_account_id,
@@ -3540,15 +3805,19 @@ ipcMain.handle('financial:transfer', async (_, { data, requestUserId }) => {
       notes:       data.reference || data.notes || '',
       userId:      requestUserId,
     });
-    audit.log(requestUserId, 'financial_transfer', `Transferencia ${data.amount} de cuenta ${data.from_account_id} a ${data.to_account_id}`);
+    audit(requestUserId, reqUser.name, 'financial_transfer', 'financial_movements', null, `Transferencia ${data.amount} de cuenta ${data.from_account_id} a ${data.to_account_id}`);
     return { ok: true, data: result };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('financial:cancelMovement', async (_, { id, reason, requestUserId }) => {
   try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
     financialAccountsRepo.cancelMovement(id, requestUserId, reason);
-    audit.log(requestUserId, 'financial_movement_cancel', `Movimiento anulado: ${id}. Razón: ${reason}`);
+    audit(requestUserId, reqUser.name, 'financial_movement_cancel', 'financial_movements', id, `Movimiento anulado: ${id}. Razón: ${reason}`);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -3589,24 +3858,36 @@ ipcMain.handle('accounting:getAccountByCode', async (_, { code }) => {
 
 ipcMain.handle('accounting:createAccount', async (_, { data, requestUserId }) => {
   try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
     const account = accountingRepo.createAccount(data);
-    audit.log(requestUserId, 'accounting_account_create', `Cuenta contable creada: ${data.code} - ${data.name}`);
+    audit(requestUserId, reqUser.name, 'accounting_account_create', 'accounting_accounts', account?.id, `Cuenta contable creada: ${data.code} - ${data.name}`);
     return { ok: true, data: account };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('accounting:updateAccount', async (_, { id, data, requestUserId }) => {
   try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
     accountingRepo.updateAccount(id, data);
-    audit.log(requestUserId, 'accounting_account_update', `Cuenta contable actualizada: ${id}`);
+    audit(requestUserId, reqUser.name, 'accounting_account_update', 'accounting_accounts', id, `Cuenta contable actualizada: ${id}`);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('accounting:deleteAccount', async (_, { id, requestUserId }) => {
   try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
     accountingRepo.deleteAccount(id);
-    audit.log(requestUserId, 'accounting_account_delete', `Cuenta contable eliminada: ${id}`);
+    audit(requestUserId, reqUser.name, 'accounting_account_delete', 'accounting_accounts', id, `Cuenta contable eliminada: ${id}`);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -3619,14 +3900,25 @@ ipcMain.handle('accounting:getConfig', async () => {
 
 ipcMain.handle('accounting:setConfig', async (_, { key, value, requestUserId }) => {
   try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
     accountingRepo.setConfig(key, value);
-    audit.log(requestUserId, 'accounting_config_set', `Config contable: ${key}=${value}`);
+    audit(requestUserId, reqUser.name, 'accounting_config_set', 'accounting_config', null, `Config contable: ${key}=${value}`);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('accounting:createEntry', async (_, { data, requestUserId }) => {
   try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
+    if (data.date && data.date > new Date().toISOString().split('T')[0]) {
+      return { ok: false, error: 'La fecha del asiento no puede ser futura' };
+    }
     // Translate UI field names → repo field names
     const repoData = {
       date:          data.date,
@@ -3640,7 +3932,7 @@ ipcMain.handle('accounting:createEntry', async (_, { data, requestUserId }) => {
       status:        data.status      || 'confirmado',
     };
     const entry = accountingRepo.createEntry(repoData);
-    audit.log(requestUserId, 'accounting_entry_create', `Asiento creado: ${entry.number}`);
+    audit(requestUserId, reqUser.name, 'accounting_entry_create', 'accounting_entries', entry?.id, `Asiento creado: ${entry.number}`);
     return { ok: true, data: entry };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -3659,8 +3951,12 @@ ipcMain.handle('accounting:getEntryById', async (_, { id }) => {
 
 ipcMain.handle('accounting:reverseEntry', async (_, { id, reason, requestUserId }) => {
   try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
     const reversed = accountingRepo.reverseEntry(id, requestUserId, reason);
-    audit.log(requestUserId, 'accounting_entry_reverse', `Asiento anulado: ${id}. Razón: ${reason}`);
+    audit(requestUserId, reqUser.name, 'accounting_entry_reverse', 'accounting_entries', id, `Asiento anulado: ${id}. Razón: ${reason}`);
     return { ok: true, data: reversed };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -3746,13 +4042,17 @@ ipcMain.handle('accounting:getDashboardStats', async () => {
 
 ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) => {
   try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
     // Obtener ventas no vinculadas a asientos contables y generar asientos retroactivos
     const db = require('./database').getDB();
     const sales = db.prepare(`
       SELECT s.* FROM sales s
       WHERE s.status = 'completed'
       AND NOT EXISTS (
-        SELECT 1 FROM accounting_entries ae WHERE ae.ref_type = 'sale' AND ae.ref_id = s.id
+        SELECT 1 FROM accounting_entries ae WHERE ae.source_module = 'venta' AND ae.source_id = s.id
       )
       ORDER BY s.created_at ASC
       LIMIT 500
@@ -3761,8 +4061,7 @@ ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) =>
     let created = 0;
     for (const sale of sales) {
       try {
-        accountingRepo.generateSaleEntry(sale.id);
-        created++;
+        if (accountingRepo.generateSaleEntry({ saleId: sale.id, userId: requestUserId })) created++;
       } catch (_) {}
     }
 
@@ -3771,7 +4070,7 @@ ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) =>
       SELECT e.* FROM expenses e
       WHERE e.status = 'pagado'
       AND NOT EXISTS (
-        SELECT 1 FROM accounting_entries ae WHERE ae.ref_type = 'expense' AND ae.ref_id = e.id
+        SELECT 1 FROM accounting_entries ae WHERE ae.source_module = 'gasto' AND ae.source_id = e.id
       )
       ORDER BY e.created_at ASC
       LIMIT 500
@@ -3779,12 +4078,27 @@ ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) =>
 
     for (const exp of expenses) {
       try {
-        accountingRepo.generateExpenseEntry(exp.id);
-        created++;
+        if (accountingRepo.generateExpenseEntry({ expenseId: exp.id, userId: requestUserId })) created++;
       } catch (_) {}
     }
 
-    audit.log(requestUserId || 0, 'accounting_sync_historical', `Sincronización histórica: ${created} asientos generados`);
+    // Abonos de clientes no vinculados
+    const payments = db.prepare(`
+      SELECT p.* FROM payments p
+      WHERE NOT EXISTS (
+        SELECT 1 FROM accounting_entries ae WHERE ae.source_module = 'abono' AND ae.source_id = p.id
+      )
+      ORDER BY p.created_at ASC
+      LIMIT 500
+    `).all();
+
+    for (const pay of payments) {
+      try {
+        if (accountingRepo.generatePaymentEntry({ paymentId: pay.id, userId: requestUserId })) created++;
+      } catch (_) {}
+    }
+
+    audit(requestUserId, reqUser.name, 'accounting_sync_historical', 'accounting_entries', null, `Sincronización histórica: ${created} asientos generados`);
     return { ok: true, data: { created } };
   } catch (e) { return { ok: false, error: e.message }; }
 });

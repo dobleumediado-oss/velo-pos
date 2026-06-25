@@ -471,7 +471,6 @@ async function confirmarRecepcion(poId) {
       product_id:   i.product_id,
       qty_received: parseInt(document.getElementById(`recv-${i.id}`)?.value) || 0,
       unit_cost:    i.unit_cost,
-      update_cost:  document.getElementById(`cost-${i.id}`)?.checked || false,
     }))
     .filter(i => i.qty_received > 0);
 
@@ -608,7 +607,7 @@ async function guardarProveedor(id) {
 
   let result;
   if (id) {
-    result = await window.api.suppliers.update({ id, data });
+    result = await window.api.suppliers.update({ id, data, requestUserId: user.id });
   } else {
     result = await window.api.suppliers.create({ data, requestUserId: user.id });
   }

@@ -483,6 +483,10 @@ const DISC_LIMIT = 10; // % máximo sin autorización del admin
 function posDiscConPin(input, val) {
   const pct = Math.min(100, Math.max(0, parseFloat(val) || 0));
 
+  // Cualquier cambio invalida una autorización previa — debe re-autorizarse
+  // si el nuevo valor también supera el límite.
+  currentInv().discApprovedBy = null;
+
   // Admin no necesita PIN
   if (user?.role === 'admin') { posDisc(pct); return; }
 
@@ -534,10 +538,11 @@ async function autorizarDescuento(pct) {
     admins = allUsers.filter(u => u.role === 'admin' && u.active);
   }
 
-  let autorizado = false;
+  let autorizado    = false;
+  let approvedAdmin = null;
   for (const admin of admins) {
     const res = await window.api.auth.login({ email: admin.email, password: pass });
-    if (res.ok && res.user?.role === 'admin') { autorizado = true; break; }
+    if (res.ok && res.user?.role === 'admin') { autorizado = true; approvedAdmin = admin; break; }
   }
 
   if (!autorizado) {
@@ -547,6 +552,7 @@ async function autorizarDescuento(pct) {
   }
 
   closeModal();
+  currentInv().discApprovedBy = approvedAdmin.id;
   posDisc(pct);
   toast(`✓ Descuento de ${pct}% autorizado`);
 }
@@ -858,9 +864,10 @@ async function finalizarVenta() {
     customer,
     items,
     payment: {
-      method:    pmeth,
-      disc:      inv.disc || 0,
-      priceMode: inv.pmode || 'retail',
+      method:         pmeth,
+      disc:           inv.disc || 0,
+      discApprovedBy: inv.discApprovedBy || null,
+      priceMode:      inv.pmode || 'retail',
       mixEfec,
       mixCard,
     },

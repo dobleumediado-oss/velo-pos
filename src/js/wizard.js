@@ -42,7 +42,7 @@ async function renderAuditoria(el) {
 
   // Cargar logs
   tableWrap.innerHTML = `<div style="text-align:center;padding:40px;color:var(--muted2)">Cargando...</div>`;
-  const logs = await window.api.audit.getLogs({ limit: 300 });
+  const logs = await window.api.audit.getLogs({ limit: 300, requestUserId: user?.id });
   window.auditAllLogs = logs || [];
   renderAuditTable(window.auditAllLogs);
 }
@@ -402,10 +402,10 @@ async function wizardGuardarNegocio() {
 
   if (!biz) { toast('El nombre del negocio es requerido', 'err'); return; }
 
-  await window.api.settings.set({ key: 'biz_name',  value: biz });
-  await window.api.settings.set({ key: 'biz_rnc',   value: rnc });
-  await window.api.settings.set({ key: 'biz_phone', value: phone });
-  await window.api.settings.set({ key: 'biz_addr',  value: addr });
+  await window.api.settings.set({ key: 'biz_name',  value: biz,   requestUserId: user.id });
+  await window.api.settings.set({ key: 'biz_rnc',   value: rnc,   requestUserId: user.id });
+  await window.api.settings.set({ key: 'biz_phone', value: phone, requestUserId: user.id });
+  await window.api.settings.set({ key: 'biz_addr',  value: addr,  requestUserId: user.id });
 
   // Actualizar CFG y DB en memoria
   CFG.biz   = biz;
@@ -585,7 +585,7 @@ async function guardarLogo() {
     toast('La imagen es muy grande. Usa una imagen menor a 500KB', 'err'); return;
   }
 
-  await window.api.settings.set({ key: 'biz_logo', value: b64 });
+  await window.api.settings.set({ key: 'biz_logo', value: b64, requestUserId: user.id });
   if (typeof CFG !== 'undefined') CFG.biz_logo = b64;
   if (DB?.settings) DB.settings.biz_logo = b64;
 
@@ -598,7 +598,7 @@ async function eliminarLogo() {
   confirmModal(
     '¿Eliminar el logo del negocio? Los tickets quedarán sin logo.',
     async () => {
-      await window.api.settings.set({ key: 'biz_logo', value: '' });
+      await window.api.settings.set({ key: 'biz_logo', value: '', requestUserId: user.id });
       if (typeof CFG !== 'undefined') CFG.biz_logo = '';
       if (DB?.settings) DB.settings.biz_logo = '';
       toast('Logo eliminado');

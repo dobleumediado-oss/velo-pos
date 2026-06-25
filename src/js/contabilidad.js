@@ -918,7 +918,7 @@ async function _reloadGeneral() {
   wrap.appendChild(section('Pasivos', rpt.liability_items, rpt.total_liabilities));
   wrap.appendChild(section('Capital', rpt.equity_items, rpt.total_equity));
 
-  const balanced = Math.abs((rpt.total_assets||0) - ((rpt.total_liabilities||0) + (rpt.total_equity||0))) <= 1;
+  const balanced = Math.abs((rpt.total_assets||0) - ((rpt.total_liabilities||0) + (rpt.total_equity||0))) <= 0.01;
   wrap.appendChild(h('div', { class: `balance-bar ${balanced ? 'ok' : 'err'}`, style: { marginTop: '12px' } },
     balanced ? '✓ Activos = Pasivos + Capital' : `✗ No cuadra: Activos ${fmt(rpt.total_assets||0)} ≠ Pasivos+Capital ${fmt((rpt.total_liabilities||0)+(rpt.total_equity||0))}`
   ));

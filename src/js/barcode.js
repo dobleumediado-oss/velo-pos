@@ -212,8 +212,8 @@ function _bcRenderProductList(filter = '') {
         ${isOn ? `<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="#fff" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>` : ''}
       </div>
       <div style="flex:1;min-width:0">
-        <div style="font-size:13px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.name}</div>
-        <div style="font-size:11px;color:var(--muted2)">${p.code||'—'} ${p.barcode?'· '+p.barcode:''}</div>
+        <div style="font-size:13px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${_bcEsc(p.name)}</div>
+        <div style="font-size:11px;color:var(--muted2)">${_bcEsc(p.code)||'—'} ${p.barcode?'· '+_bcEsc(p.barcode):''}</div>
       </div>
       <div style="font-size:12px;font-weight:700;color:var(--ink3);flex-shrink:0">${fmt(p.price)}</div>
       ${isOn ? `
@@ -297,7 +297,7 @@ function _bcUpdateSummary() {
     if (!p) return;
     html += `
       <div style="display:flex;justify-content:space-between;padding:7px 10px;border-bottom:1px solid var(--line);font-size:12px">
-        <div style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.name}</div>
+        <div style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_bcEsc(p.name)}</div>
         <div style="font-weight:700;color:var(--blue);margin-left:8px;flex-shrink:0">×${_bcState.selected[id]}</div>
       </div>`;
   });
@@ -403,15 +403,15 @@ function _bcBuildLabelsHTML(items) {
               var el = document.getElementById('${uid}');
               if(!el||!window.JsBarcode) return;
               try {
-                JsBarcode(el,'${barcodeVal}',{
-                  format:'${d.format||'CODE128'}',
+                JsBarcode(el,'${_bcJsStr(barcodeVal)}',{
+                  format:'${_bcJsStr(d.format||'CODE128')}',
                   width:${d.barWidth||1.5},
                   height:${d.barHeight||20},
                   fontSize:${d.barFontSize||8},
                   margin:0,
                   displayValue:${d.showBarcodeText!==false},
                   background:'transparent',
-                  lineColor:'${d.barColor||'#000000'}'
+                  lineColor:'${_bcJsStr(d.barColor||'#000000')}'
                 });
               } catch(e){ el.style.display='none'; }
             })();
@@ -470,6 +470,18 @@ function _bcBuildLabelsHTML(items) {
 
 function _bcEsc(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Escapa un valor para insertarlo de forma segura dentro de un literal
+// de cadena JS con comillas simples (ej. dentro de un <script> generado
+// dinámicamente). Sin esto, un código de barras/código de producto con
+// comillas o "</script>" puede inyectar JS arbitrario — ver auditoría.
+function _bcJsStr(s) {
+  return String(s||'')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/<\/script/gi, '<\\/script')
+    .replace(/[\r\n]/g, '');
 }
 
 // ══════════════════════════════════════════════

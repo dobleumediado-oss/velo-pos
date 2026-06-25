@@ -129,10 +129,13 @@ function renderInventario(el) {
           onchange: e => { invSort = e.target.value; renderInvTable(); }
         });
         [
-          { v:'name',  l:'Nombre A-Z'   },
-          { v:'stock', l:'Menor stock'  },
-          { v:'price', l:'Mayor precio' },
-          { v:'cat',   l:'Categoría'    },
+          { v:'name',       l:'Nombre A-Z'    },
+          { v:'name-desc',  l:'Nombre Z-A'    },
+          { v:'stock',      l:'Menor stock'   },
+          { v:'stock-desc', l:'Mayor stock'   },
+          { v:'price',      l:'Mayor precio'  },
+          { v:'price-asc',  l:'Menor precio'  },
+          { v:'cat',        l:'Categoría'     },
         ].forEach(o => {
           const op = document.createElement('option');
           op.value = o.v; op.textContent = o.l; op.selected = o.v === invSort;
@@ -167,10 +170,13 @@ function renderInvTable() {
       (p.brand && p.brand.toLowerCase().includes(q));
     return mCat && mQ;
   }).sort((a, b) => {
-    if (invSort === 'name')  return a.name.localeCompare(b.name);
-    if (invSort === 'stock') return a.stock - b.stock;
-    if (invSort === 'price') return b.price - a.price;
-    if (invSort === 'cat')   return (a.category||'').localeCompare(b.category||'');
+    if (invSort === 'name')       return a.name.localeCompare(b.name);
+    if (invSort === 'name-desc')  return b.name.localeCompare(a.name);
+    if (invSort === 'stock')      return a.stock - b.stock;
+    if (invSort === 'stock-desc') return b.stock - a.stock;
+    if (invSort === 'price')      return b.price - a.price;
+    if (invSort === 'price-asc')  return a.price - b.price;
+    if (invSort === 'cat')        return (a.category||'').localeCompare(b.category||'');
     return 0;
   });
 
@@ -413,7 +419,7 @@ function openEntradaMercanciaModal() {
 
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-green" onclick="confirmarEntrada()">
+      <button class="btn btn-green" id="btn-confirmar-entrada" onclick="confirmarEntrada()">
         ${svg('download')} Registrar Entrada
       </button>
     </div>
@@ -476,6 +482,9 @@ function emCalcPreview() {
 }
 
 async function confirmarEntrada() {
+  const btn = document.getElementById('btn-confirmar-entrada');
+  if (btn?.disabled) return; // evita doble clic
+
   const id       = parseInt(document.getElementById('em-prod')?.value);
   const qty      = parseInt(document.getElementById('em-qty')?.value) || 0;
   const newCost  = parseFloat(document.getElementById('em-cost')?.value) || 0;
@@ -484,6 +493,8 @@ async function confirmarEntrada() {
 
   if (!id)      { toast('Selecciona un producto', 'err'); return; }
   if (qty <= 0) { toast('Ingresa una cantidad válida', 'err'); return; }
+
+  if (btn) btn.disabled = true;
 
   const reason = [
     'Entrada de mercancía',
@@ -495,7 +506,10 @@ async function confirmarEntrada() {
     id, qty, type: 'entrada', reason, requestUserId: user.id,
   });
 
-  if (!result.ok) { toast(result.error || 'Error al registrar', 'err'); return; }
+  if (!result.ok) {
+    if (btn) btn.disabled = false;
+    toast(result.error || 'Error al registrar', 'err'); return;
+  }
 
   // Actualizar costo — promedio ponderado para nuevos, fijo para usados/especiales
   if (newCost > 0) {
@@ -836,7 +850,7 @@ function openAjusteModal(p) {
 
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-dark" onclick="confirmarAjuste(${p.id}, ${p.stock})">
+      <button class="btn btn-dark" id="btn-confirmar-ajuste" onclick="confirmarAjuste(${p.id}, ${p.stock})">
         ${svg('check')} Aplicar Ajuste
       </button>
     </div>
@@ -865,6 +879,9 @@ function calcAdjPreview(current) {
 }
 
 async function confirmarAjuste(id, currentStock) {
+  const btn = document.getElementById('btn-confirmar-ajuste');
+  if (btn?.disabled) return; // evita doble clic
+
   const qty  = parseInt(document.getElementById('adj-qty')?.value) || 0;
   const note = document.getElementById('adj-note')?.value?.trim()  || '';
 
@@ -872,6 +889,8 @@ async function confirmarAjuste(id, currentStock) {
     toast('Ingresa una cantidad válida', 'err'); return;
   }
   if (!note) { toast('El motivo es requerido — queda registrado en auditoría', 'err'); return; }
+
+  if (btn) btn.disabled = true;
 
   let delta, type;
   if (adjType === 'add') { delta = qty;                          type = 'entrada'; }
@@ -882,7 +901,10 @@ async function confirmarAjuste(id, currentStock) {
     id, qty: delta, type, reason: note, requestUserId: user.id,
   });
 
-  if (!result.ok) { toast(result.error || 'Error al ajustar', 'err'); return; }
+  if (!result.ok) {
+    if (btn) btn.disabled = false;
+    toast(result.error || 'Error al ajustar', 'err'); return;
+  }
 
   await reloadProducts();
   closeModal();
