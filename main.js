@@ -1732,7 +1732,7 @@ ipcMain.handle('importar:importarVenta', async (_, { venta, requestUserId }) => 
 // ══════════════════════════════════════════════
 ipcMain.handle('importar:importarCompra', async (_, {
   supplierName, productName, productId, productCode,
-  unitCost, qty, date, notes, requestUserId
+  unitCost, qty, date, notes, requestUserId, skipStock
 }) => {
   try {
     const db = require('./database').getDB();
@@ -1765,8 +1765,9 @@ ipcMain.handle('importar:importarCompra', async (_, {
         VALUES(?,?,?,?,?,?,?,?)
       `).run(poId, productId||null, productCode||'IMP', productName, unitCost, qty, qty, subtotal);
 
-      // Actualizar stock del producto si existe
-      if (productId) {
+      // Actualizar stock solo si NO es importación histórica
+      // (skipStock=true cuando el stock ya viene correcto del CSV de productos)
+      if (productId && !skipStock) {
         db.prepare('UPDATE products SET stock=stock+?,updated_at=datetime(\'now\') WHERE id=?')
           .run(qty, productId);
         db.prepare(`
@@ -2057,19 +2058,16 @@ ipcMain.handle('importar:importarFacturaCredito', async (_, {
       }
 
       const subtotal = items.reduce((s, i) => s + (i.price * i.qty), 0);
-      // Usar fecha histórica de la factura — NUNCA datetime('now')
-      // Esto asegura que las ventas importadas no aparezcan como ventas de hoy
-      const importDatetime = safeDate + ' 00:00:00';
       const saleR = db.prepare(`INSERT INTO sales(
         cash_session_id,customer_id,customer_name,customer_rnc,type,status,
         subtotal,discount_pct,discount_amt,tax_pct,tax_amt,total,payment_method,
-        price_mode,cajero,user_id,notes,created_at,updated_at)
+        price_mode,cajero,user_id,notes,created_at)
         VALUES(NULL,?,?,?,'factura','completed',?,0,0,0,0,?,'credito','retail',
-        'Importación histórica',?,?,?,?)`
+        'Importación',?,?,?)`
       ).run(customerId, customerName, rnc||'', subtotal, safeTotal,
             requestUserId||null,
             safeRef ? `Factura importada | import_ref:${safeRef}` : 'Factura importada',
-            importDatetime, importDatetime);
+            safeDate + ' 00:00:00');
       const saleId = saleR.lastInsertRowid;
 
       for (const item of items) {
@@ -3576,7 +3574,7 @@ ipcMain.handle('financial:getById', async (_, { id }) => {
 ipcMain.handle('financial:create', async (_, { data, requestUserId }) => {
   try {
     const id = financialAccountsRepo.create({ ...data, userId: requestUserId });
-    audit(requestUserId, '', 'financial_account_create', 'financial_accounts', id, `Cuenta creada: ${data.name}`);
+    audit.log(requestUserId, 'financial_account_create', `Cuenta creada: ${data.name}`);
     return { ok: true, data: { id } };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -3584,7 +3582,7 @@ ipcMain.handle('financial:create', async (_, { data, requestUserId }) => {
 ipcMain.handle('financial:update', async (_, { id, data, requestUserId }) => {
   try {
     financialAccountsRepo.update(id, data);
-    audit(requestUserId, '', 'financial_account_update', 'financial_accounts', id, `Cuenta actualizada: ${id}`);
+    audit.log(requestUserId, 'financial_account_update', `Cuenta actualizada: ${id}`);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -3592,7 +3590,7 @@ ipcMain.handle('financial:update', async (_, { id, data, requestUserId }) => {
 ipcMain.handle('financial:toggleActive', async (_, { id, active, requestUserId }) => {
   try {
     financialAccountsRepo.toggleActive(id, active);
-    audit(requestUserId, '', 'financial_account_toggle', 'financial_accounts', id, `Cuenta ${active ? 'activada' : 'desactivada'}: ${id}`);
+    audit.log(requestUserId, 'financial_account_toggle', `Cuenta ${active ? 'activada' : 'desactivada'}: ${id}`);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -3620,7 +3618,7 @@ ipcMain.handle('financial:addMovement', async (_, { data, requestUserId }) => {
       notes:            data.notes  || '',
       userId:           requestUserId,
     });
-    audit(requestUserId, '', 'financial_movement', 'financial_movements', mov?.id, `Movimiento: ${data.type} ${data.amount} en cuenta ${data.account_id}`);
+    audit.log(requestUserId, 'financial_movement', `Movimiento: ${data.type} ${data.amount} en cuenta ${data.account_id}`);
     return { ok: true, data: mov };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -3635,7 +3633,7 @@ ipcMain.handle('financial:transfer', async (_, { data, requestUserId }) => {
       notes:       data.reference || data.notes || '',
       userId:      requestUserId,
     });
-    audit(requestUserId, '', 'financial_transfer', 'financial_movements', null, `Transferencia ${data.amount} de cuenta ${data.from_account_id} a ${data.to_account_id}`);
+    audit.log(requestUserId, 'financial_transfer', `Transferencia ${data.amount} de cuenta ${data.from_account_id} a ${data.to_account_id}`);
     return { ok: true, data: result };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -3643,7 +3641,7 @@ ipcMain.handle('financial:transfer', async (_, { data, requestUserId }) => {
 ipcMain.handle('financial:cancelMovement', async (_, { id, reason, requestUserId }) => {
   try {
     financialAccountsRepo.cancelMovement(id, requestUserId, reason);
-    audit(requestUserId, '', 'financial_movement_cancel', 'financial_movements', id, `Movimiento anulado: ${id}. Razón: ${reason}`);
+    audit.log(requestUserId, 'financial_movement_cancel', `Movimiento anulado: ${id}. Razón: ${reason}`);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -3685,7 +3683,7 @@ ipcMain.handle('accounting:getAccountByCode', async (_, { code }) => {
 ipcMain.handle('accounting:createAccount', async (_, { data, requestUserId }) => {
   try {
     const account = accountingRepo.createAccount(data);
-    audit(requestUserId, '', 'accounting_account_create', 'accounting_accounts', account?.id, `Cuenta contable creada: ${data.code} - ${data.name}`);
+    audit.log(requestUserId, 'accounting_account_create', `Cuenta contable creada: ${data.code} - ${data.name}`);
     return { ok: true, data: account };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -3693,7 +3691,7 @@ ipcMain.handle('accounting:createAccount', async (_, { data, requestUserId }) =>
 ipcMain.handle('accounting:updateAccount', async (_, { id, data, requestUserId }) => {
   try {
     accountingRepo.updateAccount(id, data);
-    audit(requestUserId, '', 'accounting_account_update', 'accounting_accounts', id, `Cuenta contable actualizada: ${id}`);
+    audit.log(requestUserId, 'accounting_account_update', `Cuenta contable actualizada: ${id}`);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -3701,7 +3699,7 @@ ipcMain.handle('accounting:updateAccount', async (_, { id, data, requestUserId }
 ipcMain.handle('accounting:deleteAccount', async (_, { id, requestUserId }) => {
   try {
     accountingRepo.deleteAccount(id);
-    audit(requestUserId, '', 'accounting_account_delete', 'accounting_accounts', id, `Cuenta contable eliminada: ${id}`);
+    audit.log(requestUserId, 'accounting_account_delete', `Cuenta contable eliminada: ${id}`);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -3715,7 +3713,7 @@ ipcMain.handle('accounting:getConfig', async () => {
 ipcMain.handle('accounting:setConfig', async (_, { key, value, requestUserId }) => {
   try {
     accountingRepo.setConfig(key, value);
-    audit(requestUserId, '', 'accounting_config_set', 'accounting_config', null, `Config contable: ${key}=${value}`);
+    audit.log(requestUserId, 'accounting_config_set', `Config contable: ${key}=${value}`);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -3735,7 +3733,7 @@ ipcMain.handle('accounting:createEntry', async (_, { data, requestUserId }) => {
       status:        data.status      || 'confirmado',
     };
     const entry = accountingRepo.createEntry(repoData);
-    audit(requestUserId, '', 'accounting_entry_create', 'accounting_entries', entry?.id, `Asiento creado: ${entry.number}`);
+    audit.log(requestUserId, 'accounting_entry_create', `Asiento creado: ${entry.number}`);
     return { ok: true, data: entry };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -3755,7 +3753,7 @@ ipcMain.handle('accounting:getEntryById', async (_, { id }) => {
 ipcMain.handle('accounting:reverseEntry', async (_, { id, reason, requestUserId }) => {
   try {
     const reversed = accountingRepo.reverseEntry(id, requestUserId, reason);
-    audit(requestUserId, '', 'accounting_entry_reverse', 'accounting_entries', id, `Asiento anulado: ${id}. Razón: ${reason}`);
+    audit.log(requestUserId, 'accounting_entry_reverse', `Asiento anulado: ${id}. Razón: ${reason}`);
     return { ok: true, data: reversed };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -3879,7 +3877,7 @@ ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) =>
       } catch (_) {}
     }
 
-    audit(requestUserId || 0, '', 'accounting_sync_historical', 'accounting_entries', null, `Sincronización histórica: ${created} asientos generados`);
+    audit.log(requestUserId || 0, 'accounting_sync_historical', `Sincronización histórica: ${created} asientos generados`);
     return { ok: true, data: { created } };
   } catch (e) { return { ok: false, error: e.message }; }
 });

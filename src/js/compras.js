@@ -127,7 +127,7 @@ async function renderOrdenes(el) {
     tr.innerHTML = `
       <td><b>OC-${String(o.id).padStart(4,'0')}</b></td>
       <td>${o.supplier_name || o.supplier_name_join || 'Sin proveedor'}</td>
-      <td>${fdate(o.created_at?.split('T')[0] || o.created_at?.split(' ')[0])}</td>
+      <td>${fdate((o.created_at||'').slice(0,10))}</td>
       <td>${o.items_count || '—'}</td>
       <td><b>${fmt(o.total)}</b></td>
       <td><span class="badge ${statusColor}">${o.status}</span></td>
@@ -167,7 +167,7 @@ async function verOrden(id) {
     <div class="fxb mb8">
       <div>
         <div class="modal-title">OC-${String(po.id).padStart(4,'0')}</div>
-        <div class="modal-sub">${po.supplier_name || 'Sin proveedor'} · ${fdate(po.created_at?.split('T')[0] || po.created_at?.split(' ')[0])}</div>
+        <div class="modal-sub">${po.supplier_name || 'Sin proveedor'} · ${fdate((po.created_at||'').slice(0,10))}</div>
       </div>
       <span class="badge ${statusColor}" style="font-size:13px">${po.status}</span>
     </div>
@@ -471,6 +471,7 @@ async function confirmarRecepcion(poId) {
       product_id:   i.product_id,
       qty_received: parseInt(document.getElementById(`recv-${i.id}`)?.value) || 0,
       unit_cost:    i.unit_cost,
+      update_cost:  document.getElementById(`cost-${i.id}`)?.checked || false,
     }))
     .filter(i => i.qty_received > 0);
 
@@ -607,7 +608,7 @@ async function guardarProveedor(id) {
 
   let result;
   if (id) {
-    result = await window.api.suppliers.update({ id, data, requestUserId: user.id });
+    result = await window.api.suppliers.update({ id, data });
   } else {
     result = await window.api.suppliers.create({ data, requestUserId: user.id });
   }

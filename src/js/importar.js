@@ -1331,6 +1331,7 @@ async function ejecutarImportacion() {
           unitCost, qty, date,
           notes: mapping.notes ? String(row[mapping.notes]||'').trim() : '',
           requestUserId: user.id,
+          skipStock: true, // Importación histórica — stock ya viene correcto del CSV de productos
         });
         if (result.ok) {
           importados++;

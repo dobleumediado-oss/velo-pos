@@ -719,6 +719,7 @@ function audit(userId, userName, action, entity = '', entityId = null, detail = 
     VALUES(?,?,?,?,?,?)
   `).run(userId, userName, action, entity, entityId, detail);
 }
+audit.log = (userId, action, detail = '') => audit(userId, '', action, '', null, detail);
 
 function todayStr() {
   return new Date().toISOString().split('T')[0];
