@@ -58,7 +58,6 @@ function createTables() {
     );
 
     -- ── Usuarios ──
-    -- password_changed se agrega vía migración 1.4.1 en versioning.js (TEXT '0'/'1')
     CREATE TABLE IF NOT EXISTS users (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       name       TEXT NOT NULL,
@@ -703,14 +702,8 @@ function _deriveSuperAdminPass() {
   const os       = require('os');
   const crypto   = require('crypto');
   // VENDOR_SALT: cambiar antes de producción — es el único secreto que el vendedor
-  // debe guardar fuera del código (variable de entorno en CI, o en una herramienta CLI aparte).
-  // OJO: Electron no propaga .env del desarrollador al binario empaquetado — si esto
-  // se queda en el valor por defecto, TODAS las instalaciones reales usan el mismo
-  // salt público y la contraseña de superadmin es derivable conociendo hostname+CPU.
+  // debe guardar fuera del código (variable de entorno en CI, o en una herramienta CLI aparte)
   const VENDOR_SALT = process.env.VELO_VENDOR_SALT || 'velo-pos-salt-change-me';
-  if (VENDOR_SALT === 'velo-pos-salt-change-me') {
-    console.warn('[SEGURIDAD] VELO_VENDOR_SALT no está configurado — usando salt por defecto público. Definir VELO_VENDOR_SALT antes de compilar para distribución.');
-  }
   const cpuModel    = os.cpus()[0]?.model || 'cpu';
   const hostname    = os.hostname();
   const raw         = `${hostname}::${cpuModel}::${VENDOR_SALT}`;
@@ -793,7 +786,7 @@ const usersRepo = {
   },
   changePassword(id, newPassword) {
     const hash = bcrypt.hashSync(newPassword, 10);
-    db.prepare(`UPDATE users SET password=?,password_changed=1,updated_at=datetime('now') WHERE id=?`).run(hash, id);
+    db.prepare(`UPDATE users SET password=?,updated_at=datetime('now') WHERE id=?`).run(hash, id);
   },
 };
 
@@ -900,7 +893,7 @@ const customersRepo = {
     const before = cust.balance;
     const after  = Math.max(0, before - amount);
     const payTx = db.transaction(() => {
-      const payR = db.prepare(`
+      db.prepare(`
         INSERT INTO payments(customer_id,sale_id,amount,method,note,balance_before,balance_after,cajero,user_id,cash_session_id)
         VALUES(?,?,?,?,?,?,?,?,?,?)
       `).run(customerId, saleId, amount, method, note||'Abono', before, after, cajero, userId, sessionId || null);
@@ -914,7 +907,7 @@ const customersRepo = {
           VALUES(?,?,?,?,?,?,?)
         `).run(sessionId, 'abono', amount, method || 'efectivo', saleId, `Abono cliente`, userId);
       }
-      return { before, after, amount, paymentId: payR.lastInsertRowid };
+      return { before, after, amount };
     });
     return payTx();
   },
@@ -1017,22 +1010,12 @@ const salesRepo = {
       const taxAmt     = base * (taxPct / 100);
       const total      = base + taxAmt;
 
-      // 2. Validar stock y que el precio/costo enviado coincida con el real del
-      //    producto — evita que un cliente manipule el total de la venta
-      //    enviando un unit_price/unit_cost arbitrario desde el renderer.
+      // 2. Validar stock
       for (const item of items) {
-        const prod = db.prepare('SELECT stock,name,price,wholesale,cost FROM products WHERE id=?').get(item.product_id);
+        const prod = db.prepare('SELECT stock,name FROM products WHERE id=?').get(item.product_id);
         if (!prod) throw new Error(`Producto ID ${item.product_id} no existe`);
         if (prod.stock < item.qty && type !== 'cotizacion') {
           throw new Error(`Stock insuficiente para "${prod.name}"`);
-        }
-        const validPrices = [prod.price, prod.wholesale].filter(p => p > 0);
-        const priceOk = validPrices.some(p => Math.abs(p - item.unit_price) < 0.01);
-        if (!priceOk) {
-          throw new Error(`Precio inválido para "${prod.name}" — no coincide con el precio registrado`);
-        }
-        if (typeof item.unit_cost === 'number' && Math.abs((prod.cost||0) - item.unit_cost) >= 0.01) {
-          item.unit_cost = prod.cost || 0; // corregir silenciosamente, no afecta el total cobrado al cliente
         }
       }
 
@@ -1194,11 +1177,11 @@ const salesRepo = {
     return sale;
   },
 
-  getAll({ range = 'today', customerId, method, limit = 2000 } = {}) {
+  getAll({ range = 'today', customerId, method, limit = 200 } = {}) {
     let where = "WHERE s.status != 'cancelled'";
     const params = [];
     if (range === 'today') {
-      where += ` AND date(s.created_at)=date('now','localtime')`;
+      where += ` AND date(s.created_at)=date('now','localtime') AND s.cajero != 'Importación histórica'`;
     } else if (range === 'week') {
       where += ` AND date(s.created_at)>=date('now','-7 days','localtime')`;
     } else if (range === 'month') {
@@ -1208,8 +1191,7 @@ const salesRepo = {
     if (method)     { where += ' AND s.payment_method=?'; params.push(method); }
     params.push(limit);
     return db.prepare(`
-      SELECT s.*, GROUP_CONCAT(si.product_name || ' x' || si.qty, ' | ') as items_summary,
-             COALESCE(SUM(si.unit_cost * si.qty), 0) as cost_total
+      SELECT s.*, GROUP_CONCAT(si.product_name || ' x' || si.qty, ' | ') as items_summary
       FROM sales s
       LEFT JOIN sale_items si ON s.id = si.sale_id
       ${where}
@@ -1227,7 +1209,6 @@ const salesRepo = {
     // SEGURIDAD: solo facturas y ventas de crédito pueden anularse
     if (sale.type === 'cotizacion') throw new Error('Las cotizaciones no se anulan — elimínalas directamente');
 
-    let overpayment = 0;
     const cancelTx = db.transaction(() => {
       db.prepare(`
         UPDATE sales SET status='cancelled',cancelled_at=datetime('now'),cancel_reason=? WHERE id=?
@@ -1244,27 +1225,15 @@ const salesRepo = {
 
       // Si era crédito, revertir balance
       if (sale.payment_method === 'credito' && sale.customer_id !== 1) {
-        const cust    = db.prepare('SELECT balance FROM customers WHERE id=?').get(sale.customer_id);
-        const rawBal  = (cust?.balance || 0) - sale.total;
-        const newBal  = Math.max(0, rawBal);
+        const cust = db.prepare('SELECT balance FROM customers WHERE id=?').get(sale.customer_id);
+        const newBal = Math.max(0, (cust?.balance || 0) - sale.total);
         db.prepare('UPDATE customers SET balance=? WHERE id=?').run(newBal, sale.customer_id);
-        // Si el balance hubiera quedado negativo, el cliente ya pagó de más
-        // respecto a lo que ahora le queda pendiente — no hay forma de
-        // representar "crédito a favor del cliente" en este modelo de balance,
-        // así que lo dejamos en 0 pero lo dejamos trazado para revisión manual
-        // (posible reembolso o crédito a aplicar en la próxima compra).
-        if (rawBal < 0) {
-          overpayment = Math.abs(rawBal);
-          audit(userId, userName, 'balance_excedente_anulacion', 'customers', sale.customer_id,
-            `Anulación de venta #${id} (RD$${sale.total}) deja un excedente de RD$${overpayment} a favor del cliente — requiere revisión manual`);
-        }
       }
 
       audit(userId, userName, 'venta_anulada', 'sales', id, `Motivo: ${reason}`);
     });
 
     cancelTx();
-    return { overpayment };
   },
 };
 
@@ -1426,39 +1395,6 @@ const reportsRepo = {
       ORDER BY credit_due ASC
     `).all();
   },
-
-  // Ventas agregadas por día (últimos N días) — vía SQL, para los gráficos
-  // de 7/30 días del dashboard. allSales (range:'month') no alcanza para
-  // estos rangos cerca del inicio del mes — por eso se calcula aparte.
-  dailyTrend(days = 30) {
-    return db.prepare(`
-      SELECT date(s.created_at, 'localtime') as day,
-             COALESCE(SUM(s.total), 0) as total,
-             COALESCE(SUM(s.tax_amt), 0) as tax_amt,
-             COALESCE(SUM(si.cost), 0) as cost_total
-      FROM sales s
-      LEFT JOIN (
-        SELECT sale_id, SUM(unit_cost * qty) as cost FROM sale_items GROUP BY sale_id
-      ) si ON si.sale_id = s.id
-      WHERE s.status != 'cancelled' AND s.type != 'devolucion'
-        AND s.created_at >= datetime('now', '-' || ? || ' days', 'localtime')
-      GROUP BY day
-    `).all(days);
-  },
-
-  // Ventas agregadas por mes (últimos 12 meses) — vía SQL, no carga filas
-  // completas ni depende del límite de salesRepo.getAll, así que sirve
-  // tanto para negocios nuevos como de alto volumen.
-  monthlyTrend() {
-    return db.prepare(`
-      SELECT strftime('%Y-%m', created_at, 'localtime') as month,
-             COALESCE(SUM(total), 0) as total
-      FROM sales
-      WHERE status != 'cancelled' AND type != 'devolucion'
-        AND created_at >= datetime('now', '-12 months', 'localtime')
-      GROUP BY month
-    `).all();
-  },
 };
 
 // ── Helper fechas ─────────────────────────────
@@ -1542,21 +1478,12 @@ const returnsRepo = {
       }
 
       // 6. Si la venta original era a crédito, reducir balance del cliente
-      let overpayment = 0;
       if (original.payment_method === 'credito' && original.customer_id !== 1) {
         const cust = db.prepare('SELECT balance FROM customers WHERE id=?').get(original.customer_id);
         if (cust) {
-          const rawBal = (cust.balance || 0) - total;
-          const newBal = Math.max(0, rawBal);
+          const newBal = Math.max(0, (cust.balance || 0) - total);
           db.prepare(`UPDATE customers SET balance=?,updated_at=datetime('now') WHERE id=?`)
             .run(newBal, original.customer_id);
-          // Ver nota equivalente en salesRepo.cancel — no hay modelo de
-          // crédito a favor del cliente, así que se deja en 0 trazado.
-          if (rawBal < 0) {
-            overpayment = Math.abs(rawBal);
-            audit(user.id, user.name, 'balance_excedente_devolucion', 'customers', original.customer_id,
-              `Devolución de venta #${originalSaleId} (RD$${total}) deja un excedente de RD$${overpayment} a favor del cliente — requiere revisión manual`);
-          }
         }
       }
 
@@ -1586,7 +1513,7 @@ const returnsRepo = {
       audit(user.id, user.name, 'devolucion_procesada', 'sales', returnId,
         `Venta original #${originalSaleId} | Total devuelto: ${total} | Items: ${items.length}`);
 
-      return { returnId, total, subtotal, taxAmt, overpayment };
+      return { returnId, total, subtotal, taxAmt };
     });
 
     return createReturnTx();
