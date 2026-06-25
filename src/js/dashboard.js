@@ -116,7 +116,9 @@ async function renderDash(el) {
   // Ventas del mes vía agregado SQL — exacto sin importar el límite de filas
   // de sales:getAll (antes 200, insuficiente para negocios de alto volumen).
   const monthSummaryRes = await window.api.reports.summary({ range: 'month', requestUserId: user.id }).catch(() => null);
-  const mRev = monthSummaryRes?.ok ? monthSummaryRes.data.totalRev : mSales.reduce((a, s) => a + (s.total || 0), 0);
+  const mRev    = monthSummaryRes?.ok ? monthSummaryRes.data.totalRev : mSales.reduce((a, s) => a + (s.total || 0), 0);
+  const mAbonos = monthSummaryRes?.ok ? (monthSummaryRes.data.abonos?.total || 0) : 0;
+
 
   // Agregado diario real vía SQL — usado por los gráficos de 7 y 30 días.
   // allSales (range:'month') no alcanza esos rangos cerca del inicio del mes.
@@ -332,6 +334,8 @@ async function renderDash(el) {
       badgeType: periodProfit > 0 ? 'nu' : 'dn' },
     { icon: 'chart',  color: 'p', label: 'Ventas del Mes',
       val: fmt(mRev), badge: `${mSales.length} ventas`, badgeType: 'nu' },
+    { icon: 'dollar', color: 'g', label: 'Cobrado este Mes',
+      val: fmt(mAbonos), badge: `pagos recibidos`, badgeType: 'nu' },
     { icon: 'card',   color: 'a', label: 'Créditos Pendientes',
       val: fmt(pendCredit), badge: `${totalClients} clientes`,
       badgeType: pendCredit > 0 ? 'dn' : 'nu',

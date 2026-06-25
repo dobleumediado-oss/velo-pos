@@ -157,6 +157,7 @@ contextBridge.exposeInMainWorld('api', {
     importarCredito: (data) => ipcRenderer.invoke('importar:importarCredito', data),
     importarCompra:  (data) => ipcRenderer.invoke('importar:importarCompra',  data),
     importarGasto:   (data) => ipcRenderer.invoke('importar:importarGasto',   data),
+    importarAbono:   (data) => ipcRenderer.invoke('importar:importarAbono',   data),
     readZIP:         (data) => ipcRenderer.invoke('importar:readZIP',         data),
     rollback:               (data) => ipcRenderer.invoke('importar:rollback',               data),
     importarFacturaCredito: (data) => ipcRenderer.invoke('importar:importarFacturaCredito', data),

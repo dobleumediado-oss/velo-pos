@@ -1671,6 +1671,8 @@ ipcMain.handle('importar:importarVenta', async (_, { venta, requestUserId }) => 
 
     const db_tx = db.transaction(() => {
       // Insertar la venta directamente — sin sesión de caja, sin stock
+      // Usar fecha histórica real — NUNCA datetime('now')
+      const ventaDatetime = (venta.date || new Date().toISOString().split('T')[0]) + ' 00:00:00';
       const saleR = db.prepare(`
         INSERT INTO sales(
           cash_session_id, customer_id, customer_name, customer_rnc,
@@ -1679,20 +1681,19 @@ ipcMain.handle('importar:importarVenta', async (_, { venta, requestUserId }) => 
           cajero, user_id, ncf, created_at
         ) VALUES (?, 1, ?, '', ?, 'completed', ?, ?, 0, ?, ?, ?, ?, 'retail', ?, ?, ?, ?)
       `).run(
-        null,                                         // sin sesión de caja
+        null,
         venta.customer_name || 'Consumidor Final',
         venta.type || 'factura',
         venta.subtotal || venta.total,
         venta.discount_pct || 0,
-        venta.type === 'factura' ? 18 : 0,           // tax_pct
+        venta.type === 'factura' ? 18 : 0,
         venta.tax_amt || 0,
         venta.total,
         venta.payment_method || 'efectivo',
-        venta.cajero || '',
+        'Importación histórica',  // cajero — excluye de métricas de hoy
         requestUserId || null,
         venta.ncf || '',
-        // Usar la fecha del archivo, no NOW()
-        venta.date + ' 00:00:00'
+        ventaDatetime
       );
       const saleId = saleR.lastInsertRowid;
 
@@ -1790,6 +1791,64 @@ ipcMain.handle('importar:importarCompra', async (_, {
 // ══════════════════════════════════════════════
 // IPC — IMPORTAR GASTO HISTÓRICO
 // ══════════════════════════════════════════════
+ipcMain.handle('importar:importarAbono', async (_, {
+  customerName, amount, date, invoiceRef, paymentMethod, notes, requestUserId,
+}) => {
+  try {
+    const db = require('./database').getDB();
+    if (!customerName) return { ok: false, error: 'Cliente requerido' };
+    if (!amount || amount <= 0) return { ok: false, error: 'Monto inválido' };
+
+    const result = db.transaction(() => {
+      // Find customer by name
+      const cust = db.prepare(
+        `SELECT id, balance FROM customers WHERE lower(trim(name))=lower(trim(?)) AND active=1 LIMIT 1`
+      ).get(customerName);
+      if (!cust) return { ok: false, error: `Cliente no encontrado: ${customerName}` };
+      if (cust.balance <= 0) return { ok: false, error: `${customerName} no tiene balance pendiente` };
+
+      // Find sale by invoice ref if provided
+      let saleId = null;
+      if (invoiceRef) {
+        const sale = db.prepare(
+          `SELECT id FROM sales WHERE customer_id=? AND notes LIKE ? AND status!='cancelled' LIMIT 1`
+        ).get(cust.id, `%${invoiceRef}%`);
+        saleId = sale?.id || null;
+      }
+
+      const safeAmount = Math.min(amount, cust.balance);
+      const before = cust.balance;
+      const after  = Math.round((before - safeAmount) * 100) / 100;
+      const safeDate = (date || new Date().toISOString().split('T')[0]) + ' 00:00:00';
+
+      // Insert payment
+      const r = db.prepare(`
+        INSERT INTO payments(customer_id, sale_id, amount, method, note,
+          balance_before, balance_after, cajero, user_id, created_at)
+        VALUES(?, ?, ?, ?, ?, ?, ?, 'Importación histórica', ?, ?)
+      `).run(
+        cust.id, saleId, safeAmount,
+        paymentMethod || 'efectivo',
+        notes || 'Abono importado',
+        before, after,
+        requestUserId || null,
+        safeDate
+      );
+
+      // Update customer balance
+      db.prepare(`UPDATE customers SET balance=?, updated_at=datetime('now') WHERE id=?`)
+        .run(after, cust.id);
+
+      return { ok: true, id: r.lastInsertRowid };
+    })();
+
+    return result;
+  } catch(e) {
+    console.error('[importar:importarAbono]', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle('importar:importarGasto', async (_, {
   description, total, date, category, payment_method,
   supplier_name, notes, status, requestUserId
@@ -2027,12 +2086,14 @@ ipcMain.handle('importar:importarFacturaCredito', async (_, {
     const safeDays  = creditDays > 0 ? creditDays : 30;
     const safeRef   = (invoiceRef || '').toString().trim();
     const safeTotal = Math.round(total * 100) / 100;
+    // Normalizar espacios dobles en nombre de cliente
+    const safeCustomerName = customerName.replace(/\s+/g, ' ').trim();
 
     const result = db.transaction(() => {
       let cust = db.prepare(
         `SELECT id, balance, credit_limit, credit_days, credit_due
-         FROM customers WHERE lower(trim(name))=lower(trim(?)) AND active=1 LIMIT 1`
-      ).get(customerName);
+         FROM customers WHERE lower(trim(replace(name,'  ',' ')))=lower(trim(?)) AND active=1 LIMIT 1`
+      ).get(safeCustomerName);
 
       let customerId; let customerCreated = false;
       if (cust) {
@@ -2046,7 +2107,7 @@ ipcMain.handle('importar:importarFacturaCredito', async (_, {
         const r = db.prepare(`INSERT INTO customers(name,rnc,phone,address,email,
           credit_limit,credit_days,balance,status,active)
           VALUES(?,?,?,?,?,0,?,0,'activo',1)`
-        ).run(customerName, rnc||'', phone||'', '', '', safeDays);
+        ).run(safeCustomerName, rnc||'', phone||'', '', '', safeDays);
         customerId = r.lastInsertRowid; customerCreated = true;
       }
 
@@ -2058,16 +2119,18 @@ ipcMain.handle('importar:importarFacturaCredito', async (_, {
       }
 
       const subtotal = items.reduce((s, i) => s + (i.price * i.qty), 0);
+      // Usar fecha histórica — NUNCA datetime('now')
+      const importDatetime = safeDate + ' 00:00:00';
       const saleR = db.prepare(`INSERT INTO sales(
         cash_session_id,customer_id,customer_name,customer_rnc,type,status,
         subtotal,discount_pct,discount_amt,tax_pct,tax_amt,total,payment_method,
         price_mode,cajero,user_id,notes,created_at)
         VALUES(NULL,?,?,?,'factura','completed',?,0,0,0,0,?,'credito','retail',
-        'Importación',?,?,?)`
-      ).run(customerId, customerName, rnc||'', subtotal, safeTotal,
+        'Importación histórica',?,?,?)`
+      ).run(customerId, safeCustomerName, rnc||'', subtotal, safeTotal,
             requestUserId||null,
             safeRef ? `Factura importada | import_ref:${safeRef}` : 'Factura importada',
-            safeDate + ' 00:00:00');
+            importDatetime);
       const saleId = saleR.lastInsertRowid;
 
       for (const item of items) {

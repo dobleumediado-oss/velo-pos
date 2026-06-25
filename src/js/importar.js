@@ -131,6 +131,14 @@ const VELO_FIELDS = {
     { key: 'notes',          label: 'Notas',            required: false },
     { key: 'status',         label: 'Estado',           required: false },
   ],
+  abonos: [
+    { key: 'customer_name',  label: 'Cliente',          required: true  },
+    { key: 'amount',         label: 'Monto del abono',  required: true  },
+    { key: 'date',           label: 'Fecha',            required: true  },
+    { key: 'invoice_ref',    label: 'N° Factura',       required: false },
+    { key: 'payment_method', label: 'Método de pago',   required: false },
+    { key: 'notes',          label: 'Nota / Concepto',  required: false },
+  ],
   // ── Facturas a crédito con detalle de artículos ──
   // Una fila por artículo. Varias filas con el mismo
   // cliente + referencia de factura = una sola venta.
@@ -158,6 +166,7 @@ const TIPO_LABELS = {
   compras:          'Compras / Entradas',
   gastos:           'Gastos',
   facturas_credito: 'Facturas a Crédito (con detalle)',
+  abonos:           'Abonos a Clientes',
 };
 
 // ══════════════════════════════════════════════
@@ -200,6 +209,7 @@ function wizardStepImportar() {
           { id:'compras',           icon:'📥', label:'Compras',              sub:'Historial de compras' },
           { id:'gastos',            icon:'💸', label:'Gastos',               sub:'Egresos históricos' },
           { id:'facturas_credito',  icon:'🧾', label:'Facturas a Crédito',   sub:'Con artículos y fechas' },
+          { id:'abonos',            icon:'💰', label:'Abonos a Clientes',    sub:'Pagos a cuentas por cobrar' },
         ].map(t => `
           <div class="card" style="text-align:center;cursor:pointer;border:2px solid var(--line);padding:12px"
                id="imp-tipo-${t.id}" onclick="setImportTipo('${t.id}')">
@@ -1253,9 +1263,9 @@ async function ejecutarImportacion() {
           discount_pct:   mapping.discount_pct ? _impCleanNum(row[mapping.discount_pct]) : 0,
           payment_method: mapping.payment_method
             ? String(row[mapping.payment_method]||'efectivo').trim().toLowerCase() : 'efectivo',
-          cajero:         mapping.cajero ? String(row[mapping.cajero]||'').trim() : (user?.name||''),
+          cajero:         'Importación histórica',
           ncf:            mapping.ncf    ? String(row[mapping.ncf]||'').trim()    : '',
-          type:           mapping.type   ? String(row[mapping.type]||'factura').trim() : 'factura',
+          type:           (() => { const t = (mapping.type ? String(row[mapping.type]||'') : '').trim().toLowerCase(); return ['factura','cotizacion','devolucion'].includes(t) ? t : 'factura'; })(),
           items: [{
             product_name: mapping.product_name ? String(row[mapping.product_name]||'').trim() : 'Venta importada',
             qty:          mapping.qty ? Math.max(1, _impCleanInt(row[mapping.qty])) : 1,
@@ -1349,6 +1359,40 @@ async function ejecutarImportacion() {
         continue;
 
       // ── GASTOS ─────────────────────────────────
+      } else if (tipo === 'abonos') {
+        const customerName = mapping.customer_name
+          ? String(row[mapping.customer_name]||'').trim() : '';
+        if (!customerName) {
+          errores.push({ fila:i+2, campo:'cliente', error:'Cliente vacío — omitido', tipo:'error' }); continue;
+        }
+        const amount = _impCleanNum(mapping.amount ? row[mapping.amount] : 0);
+        if (amount <= 0) {
+          errores.push({ fila:i+2, nombre:customerName, campo:'monto',
+            error:'Monto inválido — omitido', tipo:'error' }); continue;
+        }
+        const date = _impNormDate(mapping.date ? row[mapping.date] : '') ||
+                     new Date().toISOString().split('T')[0];
+        const invoiceRef = mapping.invoice_ref
+          ? String(row[mapping.invoice_ref]||'').trim() : '';
+        const payMethod = mapping.payment_method
+          ? String(row[mapping.payment_method]||'efectivo').trim().toLowerCase() : 'efectivo';
+        const notes = mapping.notes
+          ? String(row[mapping.notes]||'').trim() : 'Abono importado';
+
+        const result = await window.api.importar.importarAbono({
+          customerName, amount, date, invoiceRef,
+          paymentMethod: payMethod,
+          notes: notes || 'Abono importado',
+          requestUserId: user.id,
+        });
+        if (result.ok) {
+          importados++;
+          sessionIds.push({ tabla:'payments', id: result.id });
+        } else {
+          errores.push({ fila:i+2, nombre:customerName, campo:'abono',
+            error:result.error||'Error', tipo:'error' });
+        }
+
       } else if (tipo === 'gastos') {
         const description = mapping.description
           ? String(row[mapping.description]||'').trim() : '';
@@ -1855,6 +1899,7 @@ function _aplicarMapeoAutomatico(fields, hdrs, mappingObj) {
     unit_price:     ['unit_price','precio','precio_unitario','price','valor'],
     total:          ['total','total_factura','balance_pendiente','balance','monto','importe'],
     payment_method: ['payment_method','forma_pago','metodo','pago'],
+    amount:         ['amount','monto','abono','pago','valor'],
     ncf:            ['ncf','comprobante'],
     cajero:         ['cajero','vendedor','usuario'],
     supplier_name:  ['supplier_name','proveedor','suplidor'],

@@ -719,7 +719,6 @@ function audit(userId, userName, action, entity = '', entityId = null, detail = 
     VALUES(?,?,?,?,?,?)
   `).run(userId, userName, action, entity, entityId, detail);
 }
-audit.log = (userId, action, detail = '') => audit(userId, '', action, '', null, detail);
 
 function todayStr() {
   return new Date().toISOString().split('T')[0];
@@ -1257,11 +1256,6 @@ const reportsRepo = {
           payments:     { sql: `date(created_at,'localtime') BETWEEN ? AND ?`, params: [safeFrom, safeTo] },
         };
       }
-      if (range === 'week') return {
-        withAlias:    { sql: `date(s.created_at)  >= date('now','-7 days','localtime')`, params: [] },
-        withoutAlias: { sql: `date(created_at)    >= date('now','-7 days','localtime')`, params: [] },
-        payments:     { sql: `date(created_at,'localtime') >= date('now','-7 days','localtime')`, params: [] },
-      };
       if (range === 'month') return {
         withAlias:    { sql: `strftime('%Y-%m',s.created_at) = strftime('%Y-%m','now','localtime')`, params: [] },
         withoutAlias: { sql: `strftime('%Y-%m',created_at)   = strftime('%Y-%m','now','localtime')`, params: [] },
