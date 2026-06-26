@@ -1276,13 +1276,14 @@ const reportsRepo = {
 
     const f = _buildFilters();
 
-    // Ventas por método de pago
+    // Ventas por método de pago (excluye datos migrados)
     const byMethod = db.prepare(`
       SELECT payment_method, COUNT(*) as count,
              SUM(total) as total, SUM(tax_amt) as tax,
              SUM(discount_amt) as discount
       FROM sales
-      WHERE status='completed' AND type != 'devolucion' AND ${f.withoutAlias.sql}
+      WHERE status='completed' AND type != 'devolucion'
+        AND cajero != 'Importación histórica' AND ${f.withoutAlias.sql}
       GROUP BY payment_method
     `).all(...f.withoutAlias.params);
 
@@ -1294,28 +1295,32 @@ const reportsRepo = {
              SUM(si.qty) as total_units
       FROM sale_items si
       JOIN sales s ON si.sale_id = s.id
-      WHERE s.status='completed' AND s.type != 'devolucion' AND ${f.withAlias.sql}
+      WHERE s.status='completed' AND s.type != 'devolucion'
+        AND s.cajero != 'Importación histórica' AND ${f.withAlias.sql}
     `).get(...f.withAlias.params);
 
     // Devoluciones
     const devData = db.prepare(`
       SELECT COUNT(*) as count, SUM(total) as total
       FROM sales
-      WHERE type='devolucion' AND ${f.withoutAlias.sql}
+      WHERE type='devolucion' AND cajero != 'Importación histórica'
+        AND ${f.withoutAlias.sql}
     `).get(...f.withoutAlias.params);
 
     // Descuentos totales
     const discData = db.prepare(`
       SELECT SUM(discount_amt) as total_discount
       FROM sales
-      WHERE status='completed' AND type != 'devolucion' AND ${f.withoutAlias.sql}
+      WHERE status='completed' AND type != 'devolucion'
+        AND cajero != 'Importación histórica' AND ${f.withoutAlias.sql}
     `).get(...f.withoutAlias.params);
 
     // ITBIS total
     const taxData = db.prepare(`
       SELECT SUM(tax_amt) as total_tax
       FROM sales
-      WHERE status='completed' AND type != 'devolucion' AND ${f.withoutAlias.sql}
+      WHERE status='completed' AND type != 'devolucion'
+        AND cajero != 'Importación histórica' AND ${f.withoutAlias.sql}
     `).get(...f.withoutAlias.params);
 
     // Productos más vendidos (con ganancia real)
@@ -1327,7 +1332,8 @@ const reportsRepo = {
              SUM((si.unit_price - si.unit_cost) * si.qty) as total_profit
       FROM sale_items si
       JOIN sales s ON si.sale_id = s.id
-      WHERE s.status='completed' AND s.type != 'devolucion' AND ${f.withAlias.sql}
+      WHERE s.status='completed' AND s.type != 'devolucion'
+        AND s.cajero != 'Importación histórica' AND ${f.withAlias.sql}
       GROUP BY si.product_id
       ORDER BY total_rev DESC LIMIT 10
     `).all(...f.withAlias.params);
@@ -1340,7 +1346,8 @@ const reportsRepo = {
              SUM(si.unit_cost * si.qty) as cost
       FROM sales s
       LEFT JOIN sale_items si ON s.id = si.sale_id
-      WHERE s.status='completed' AND s.type != 'devolucion' AND ${f.withAlias.sql}
+      WHERE s.status='completed' AND s.type != 'devolucion'
+        AND s.cajero != 'Importación histórica' AND ${f.withAlias.sql}
       GROUP BY day
       ORDER BY day ASC
     `).all(...f.withAlias.params);
@@ -1353,15 +1360,29 @@ const reportsRepo = {
         AND note != 'Saldo inicial importado'
     `).get(...f.payments.params);
 
-    const totalRev    = byMethod.reduce((a, m) => a + (m.total || 0), 0);
-    const totalCost   = costData?.total_cost   || 0;
-    const totalTax    = taxData?.total_tax      || 0;
-    const totalDisc   = discData?.total_discount || 0;
-    const totalUnits  = costData?.total_units    || 0;
-    const totalSales  = costData?.total_sales    || 0;
-    const grossProfit = totalRev - totalCost;
-    const netRev      = totalRev - totalTax;
-    const margin      = totalRev > 0 ? (grossProfit / totalRev) * 100 : 0;
+    // Desglose contado vs crédito (para cobradoMes)
+    const contadoCreditoData = db.prepare(`
+      SELECT
+        SUM(CASE WHEN payment_method != 'credito' THEN total ELSE 0 END) as ventas_contado,
+        SUM(CASE WHEN payment_method  = 'credito' THEN total ELSE 0 END) as ventas_credito
+      FROM sales
+      WHERE status='completed' AND type != 'devolucion'
+        AND cajero != 'Importación histórica' AND ${f.withoutAlias.sql}
+    `).get(...f.withoutAlias.params);
+
+    const totalRev      = byMethod.reduce((a, m) => a + (m.total || 0), 0);
+    const totalCost     = costData?.total_cost   || 0;
+    const totalTax      = taxData?.total_tax      || 0;
+    const totalDisc     = discData?.total_discount || 0;
+    const totalUnits    = costData?.total_units    || 0;
+    const totalSales    = costData?.total_sales    || 0;
+    const grossProfit   = totalRev - totalCost;
+    const netRev        = totalRev - totalTax;
+    const margin        = totalRev > 0 ? (grossProfit / totalRev) * 100 : 0;
+    const ventasContado = contadoCreditoData?.ventas_contado || 0;
+    const ventasCredito = contadoCreditoData?.ventas_credito || 0;
+    // cobradoMes = dinero real recibido: ventas al contado + abonos de CxC
+    const cobradoMes    = ventasContado + (abonosData?.total || 0);
 
     return {
       byMethod,
@@ -1370,8 +1391,9 @@ const reportsRepo = {
       grossProfit, netRev, margin,
       topProducts,
       dailySales,
-      devolucion: { count: devData?.count || 0, total: devData?.total || 0 },
-      abonos:     { count: abonosData?.count || 0, total: abonosData?.total || 0 },
+      devolucion:   { count: devData?.count || 0, total: devData?.total || 0 },
+      abonos:       { count: abonosData?.count || 0, total: abonosData?.total || 0 },
+      ventasContado, ventasCredito, cobradoMes,
     };
   },
 
@@ -1389,6 +1411,22 @@ const reportsRepo = {
         AND (credit_due IS NULL OR credit_due <= date('now','+5 days'))
       ORDER BY credit_due ASC
     `).all();
+  },
+
+  dailyTrend({ days = 30 } = {}) {
+    return db.prepare(`
+      SELECT date(s.created_at,'localtime') as day,
+             COUNT(DISTINCT s.id) as count,
+             SUM(s.total) as total,
+             SUM(si.unit_cost * si.qty) as cost
+      FROM sales s
+      LEFT JOIN sale_items si ON s.id = si.sale_id
+      WHERE s.status='completed' AND s.type != 'devolucion'
+        AND s.cajero != 'Importación histórica'
+        AND date(s.created_at,'localtime') >= date('now','-'||?||' days','localtime')
+      GROUP BY day
+      ORDER BY day ASC
+    `).all(days);
   },
 };
 

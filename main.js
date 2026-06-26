@@ -1449,6 +1449,18 @@ if (!fs.existsSync(DATA_DIR)) {
 // ══════════════════════════════════════════════
 // IPC — IMPORTACION UNIVERSAL
 // ══════════════════════════════════════════════
+ipcMain.handle('reports:dailyTrend', async (_, { days = 30, requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser) return { ok: false, error: 'Usuario no válido' };
+    const data = reportsRepo.dailyTrend({ days });
+    return { ok: true, data };
+  } catch(e) {
+    console.error('[reports:dailyTrend]', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle('importar:readSQLite', async (_, { data }) => {
   try {
     const tmp  = require('os').tmpdir();
@@ -1673,15 +1685,38 @@ ipcMain.handle('importar:importarVenta', async (_, { venta, requestUserId }) => 
       // Insertar la venta directamente — sin sesión de caja, sin stock
       // Usar fecha histórica real — NUNCA datetime('now')
       const ventaDatetime = (venta.date || new Date().toISOString().split('T')[0]) + ' 00:00:00';
+      const ventaNotes = venta.invoice_ref
+        ? `Factura importada | import_ref:${venta.invoice_ref}`
+        : 'Factura importada';
+
+      // ── Control de duplicados ──────────────────────────────────────────────
+      // Si ya existe una venta histórica con el mismo import_ref, saltar
+      if (venta.invoice_ref) {
+        const existing = db.prepare(`
+          SELECT id FROM sales
+          WHERE cajero = 'Importación histórica'
+            AND notes LIKE ?
+          LIMIT 1
+        `).get(`%import_ref:${venta.invoice_ref}%`);
+        if (existing) return { ok: true, saleId: existing.id, skipped: true };
+      }
+
+      // Buscar customer_id por nombre para poder cruzar abonos después
+      const custRow = db.prepare(
+        `SELECT id FROM customers WHERE lower(trim(name))=lower(trim(?)) AND active=1 LIMIT 1`
+      ).get(venta.customer_name || 'Consumidor Final');
+      const custId = custRow?.id || 1;
+
       const saleR = db.prepare(`
         INSERT INTO sales(
           cash_session_id, customer_id, customer_name, customer_rnc,
           type, status, subtotal, discount_pct, discount_amt,
           tax_pct, tax_amt, total, payment_method, price_mode,
-          cajero, user_id, ncf, created_at
-        ) VALUES (?, 1, ?, '', ?, 'completed', ?, ?, 0, ?, ?, ?, ?, 'retail', ?, ?, ?, ?)
+          cajero, user_id, ncf, notes, created_at
+        ) VALUES (?, ?, ?, '', ?, 'completed', ?, ?, 0, ?, ?, ?, ?, 'retail', ?, ?, ?, ?, ?)
       `).run(
         null,
+        custId,
         venta.customer_name || 'Consumidor Final',
         venta.type || 'factura',
         venta.subtotal || venta.total,
@@ -1690,9 +1725,10 @@ ipcMain.handle('importar:importarVenta', async (_, { venta, requestUserId }) => 
         venta.tax_amt || 0,
         venta.total,
         venta.payment_method || 'efectivo',
-        'Importación histórica',  // cajero — excluye de métricas de hoy
+        'Importación histórica',
         requestUserId || null,
         venta.ncf || '',
+        ventaNotes,
         ventaDatetime
       );
       const saleId = saleR.lastInsertRowid;
@@ -1800,46 +1836,70 @@ ipcMain.handle('importar:importarAbono', async (_, {
     if (!amount || amount <= 0) return { ok: false, error: 'Monto inválido' };
 
     const result = db.transaction(() => {
-      // Find customer by name
+      const safeDate = (date || new Date().toISOString().split('T')[0]) + ' 00:00:00';
+
+      // Buscar la venta histórica por invoice_ref primero (VH-XXXX o número)
+      // Estas ventas tienen cajero='Importación histórica' y notes con el ref
+      let saleId   = null;
+      let custId   = null;
+      let custBal  = 0;
+
+      if (invoiceRef) {
+        const saleByRef = db.prepare(`
+          SELECT s.id, s.customer_id, c.balance, c.id as cid
+          FROM sales s
+          JOIN customers c ON c.id = s.customer_id
+          WHERE s.cajero = 'Importación histórica'
+            AND (s.notes LIKE ? OR s.notes LIKE ?)
+            AND s.status != 'cancelled'
+          LIMIT 1
+        `).get(`%VH-${invoiceRef}%`, `%${invoiceRef}%`);
+
+        if (saleByRef) {
+          // Es un abono de venta histórica — NO tocar balance CxC del cliente
+          saleId  = saleByRef.id;
+          custId  = saleByRef.customer_id;
+          custBal = saleByRef.balance || 0;
+
+          const r = db.prepare(`
+            INSERT INTO payments(customer_id, sale_id, amount, method, note,
+              balance_before, balance_after, cajero, user_id, created_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?, 'Importación histórica', ?, ?)
+          `).run(
+            custId, saleId, amount,
+            paymentMethod || 'efectivo',
+            notes || 'Abono importado',
+            custBal, custBal,           // balance no cambia — ya descontado en CSV
+            requestUserId || null,
+            safeDate
+          );
+          return { ok: true, id: r.lastInsertRowid, tipo: 'historico' };
+        }
+      }
+
+      // Sin venta histórica que referenciar — registrar como histórico sin tocar CxC.
+      // El balance del cliente ya viene correcto del CSV de clientes; no debe reducirse.
       const cust = db.prepare(
         `SELECT id, balance FROM customers WHERE lower(trim(name))=lower(trim(?)) AND active=1 LIMIT 1`
       ).get(customerName);
       if (!cust) return { ok: false, error: `Cliente no encontrado: ${customerName}` };
-      if (cust.balance <= 0) return { ok: false, error: `${customerName} no tiene balance pendiente` };
 
-      // Find sale by invoice ref if provided
-      let saleId = null;
-      if (invoiceRef) {
-        const sale = db.prepare(
-          `SELECT id FROM sales WHERE customer_id=? AND notes LIKE ? AND status!='cancelled' LIMIT 1`
-        ).get(cust.id, `%${invoiceRef}%`);
-        saleId = sale?.id || null;
-      }
-
-      const safeAmount = Math.min(amount, cust.balance);
       const before = cust.balance;
-      const after  = Math.round((before - safeAmount) * 100) / 100;
-      const safeDate = (date || new Date().toISOString().split('T')[0]) + ' 00:00:00';
 
-      // Insert payment
       const r = db.prepare(`
         INSERT INTO payments(customer_id, sale_id, amount, method, note,
           balance_before, balance_after, cajero, user_id, created_at)
         VALUES(?, ?, ?, ?, ?, ?, ?, 'Importación histórica', ?, ?)
       `).run(
-        cust.id, saleId, safeAmount,
+        cust.id, null, amount,
         paymentMethod || 'efectivo',
         notes || 'Abono importado',
-        before, after,
+        before, before,
         requestUserId || null,
         safeDate
       );
 
-      // Update customer balance
-      db.prepare(`UPDATE customers SET balance=?, updated_at=datetime('now') WHERE id=?`)
-        .run(after, cust.id);
-
-      return { ok: true, id: r.lastInsertRowid };
+      return { ok: true, id: r.lastInsertRowid, tipo: 'historico_sin_ref' };
     })();
 
     return result;

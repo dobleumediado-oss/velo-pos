@@ -1264,6 +1264,7 @@ async function ejecutarImportacion() {
           payment_method: mapping.payment_method
             ? String(row[mapping.payment_method]||'efectivo').trim().toLowerCase() : 'efectivo',
           cajero:         'Importación histórica',
+          invoice_ref:    mapping.invoice_ref ? String(row[mapping.invoice_ref]||'').trim() : '',
           ncf:            mapping.ncf    ? String(row[mapping.ncf]||'').trim()    : '',
           type:           (() => { const t = (mapping.type ? String(row[mapping.type]||'') : '').trim().toLowerCase(); return ['factura','cotizacion','devolucion'].includes(t) ? t : 'factura'; })(),
           items: [{
@@ -1276,8 +1277,12 @@ async function ejecutarImportacion() {
 
         const result = await window.api.importar.importarVenta({ venta: ventaData, requestUserId: user.id });
         if (result.ok) {
-          importados++;
-          sessionIds.push({ tabla: 'sales', id: result.saleId });
+          if (result.skipped) {
+            duplicados++;
+          } else {
+            importados++;
+            sessionIds.push({ tabla: 'sales', id: result.saleId });
+          }
         } else {
           errores.push({ fila:i+2, nombre:ventaData.customer_name, campo:'venta',
             error:result.error||'Error', tipo:'error' });

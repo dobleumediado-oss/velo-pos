@@ -78,6 +78,7 @@ contextBridge.exposeInMainWorld('api', {
   // ── Reportes ──────────────────────────────
   reports: {
     summary:      (data)     => ipcRenderer.invoke('reports:summary', data),
+    dailyTrend:   (data)     => ipcRenderer.invoke('reports:dailyTrend', data),
     lowStock:     ()         => ipcRenderer.invoke('reports:lowStock'),
     creditAlerts: ()         => ipcRenderer.invoke('reports:creditAlerts'),
     monthlyTrend: (data)     => ipcRenderer.invoke('reports:monthlyTrend', data),

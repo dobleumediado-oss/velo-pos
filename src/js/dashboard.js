@@ -112,12 +112,16 @@ async function renderDash(el) {
   // usadas por el selector de período (3 días/7 días) más abajo.
   const weekSales = await window.api.sales.getAll({ range: 'week' });
   const mSales = (allSales || []).filter(s =>
-    s.status !== 'cancelled' && s.type !== 'devolucion');
+    s.status !== 'cancelled' && s.type !== 'devolucion' && s.cajero !== 'Importación histórica');
   // Ventas del mes vía agregado SQL — exacto sin importar el límite de filas
   // de sales:getAll (antes 200, insuficiente para negocios de alto volumen).
   const monthSummaryRes = await window.api.reports.summary({ range: 'month', requestUserId: user.id }).catch(() => null);
-  const mRev    = monthSummaryRes?.ok ? monthSummaryRes.data.totalRev : mSales.reduce((a, s) => a + (s.total || 0), 0);
-  const mAbonos = monthSummaryRes?.ok ? (monthSummaryRes.data.abonos?.total || 0) : 0;
+  const mRev          = monthSummaryRes?.ok ? monthSummaryRes.data.totalRev          : mSales.reduce((a, s) => a + (s.total || 0), 0);
+  const mAbonos       = monthSummaryRes?.ok ? (monthSummaryRes.data.abonos?.total    || 0) : 0;
+  const mVentasContado = monthSummaryRes?.ok ? (monthSummaryRes.data.ventasContado   || 0) : 0;
+  const mVentasCredito = monthSummaryRes?.ok ? (monthSummaryRes.data.ventasCredito   || 0) : 0;
+  // cobradoMes = ventas al contado + abonos de CxC (dinero real recibido en el mes)
+  const mCobrado      = monthSummaryRes?.ok ? (monthSummaryRes.data.cobradoMes       || 0) : 0;
 
 
   // Agregado diario real vía SQL — usado por los gráficos de 7 y 30 días.
@@ -333,9 +337,13 @@ async function renderDash(el) {
       badge: `${periodMargin}% margen`,
       badgeType: periodProfit > 0 ? 'nu' : 'dn' },
     { icon: 'chart',  color: 'p', label: 'Ventas del Mes',
-      val: fmt(mRev), badge: `${mSales.length} ventas`, badgeType: 'nu' },
-    { icon: 'dollar', color: 'g', label: 'Cobrado este Mes',
-      val: fmt(mAbonos), badge: `pagos recibidos`, badgeType: 'nu' },
+      val: fmt(mRev),
+      badge: mVentasContado > 0 || mVentasCredito > 0
+        ? `${fmt(mVentasContado)} contado · ${fmt(mVentasCredito)} crédito`
+        : `${mSales.length} ventas`,
+      badgeType: 'nu' },
+    { icon: 'dollar', color: 'g', label: 'Ventas / Abonos a Facturas',
+      val: fmt(mCobrado), badge: `contado + abonos CxC`, badgeType: 'nu' },
     { icon: 'card',   color: 'a', label: 'Créditos Pendientes',
       val: fmt(pendCredit), badge: `${totalClients} clientes`,
       badgeType: pendCredit > 0 ? 'dn' : 'nu',
@@ -363,6 +371,50 @@ async function renderDash(el) {
     metWrap.appendChild(card);
   });
   el.appendChild(metWrap);
+
+  // ── Barra resumen mensual: desglose de cobradoMes ────────────────────────────
+  // cobradoMes = ventas al contado + abonos de CxC (dinero real recibido)
+  // La barra descompone el cobrado en sus dos fuentes; el total es cobradoMes.
+  const mCobradoBase  = Math.max(mCobrado, 1);
+  const mContadoPct   = (mVentasContado / mCobradoBase) * 100;
+  const mAbonosPct    = (mAbonos        / mCobradoBase) * 100;
+  const monthLabel    = new Date().toLocaleString('es-DO', { month: 'long', year: 'numeric' });
+
+  const resumenBar = h('div', {
+    style: {
+      background: 'var(--surface)', border: '1px solid var(--line)',
+      borderRadius: 'var(--r-lg)', padding: '16px 20px',
+      boxShadow: 'var(--sh)', marginBottom: '20px',
+    }
+  },
+    h('div', { style: { display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:'4px' } },
+      h('span', { style: { fontSize:'12px', fontWeight:600, color:'var(--muted)', textTransform:'uppercase', letterSpacing:'.5px' } },
+        `Ventas / Abonos a Facturas — ${monthLabel}`),
+      h('span', { style: { fontSize:'18px', fontWeight:800, color:'var(--ink)', letterSpacing:'-.5px' } },
+        fmt(mCobrado))
+    ),
+    h('div', { style: { fontSize:'11px', color:'var(--muted2)', marginBottom:'10px' } },
+      `Facturado: ${fmt(mRev)}`),
+    // Barra segmentada: contado (purple) + abonos CxC (green) = cobradoMes
+    h('div', { style: { display:'flex', height:'10px', borderRadius:'99px', overflow:'hidden', gap:'2px', marginBottom:'12px', background:'var(--line)' } },
+      h('div', { style: { width: `${mContadoPct}%`, background:'var(--purple)', borderRadius:'99px 0 0 99px', transition:'width .4s' } }),
+      h('div', { style: { width: `${mAbonosPct}%`, background:'var(--green)',  borderRadius:'0 99px 99px 0', transition:'width .4s' } })
+    ),
+    // Leyenda
+    h('div', { style: { display:'flex', gap:'20px' } },
+      h('div', { style: { display:'flex', alignItems:'center', gap:'6px' } },
+        h('div', { style: { width:'10px', height:'10px', borderRadius:'3px', background:'var(--purple)', flexShrink:0 } }),
+        h('span', { style: { fontSize:'11px', color:'var(--muted)' } }, 'Ventas al contado'),
+        h('span', { style: { fontSize:'12px', fontWeight:700, color:'var(--ink)' } }, fmt(mVentasContado))
+      ),
+      h('div', { style: { display:'flex', alignItems:'center', gap:'6px' } },
+        h('div', { style: { width:'10px', height:'10px', borderRadius:'3px', background:'var(--green)', flexShrink:0 } }),
+        h('span', { style: { fontSize:'11px', color:'var(--muted)' } }, 'Abonos CxC'),
+        h('span', { style: { fontSize:'12px', fontWeight:700, color:'var(--ink)' } }, fmt(mAbonos))
+      )
+    )
+  );
+  el.appendChild(resumenBar);
 
   // ── Cards de Gastos (si módulo activo) ───────────────────────────────────────
   if (gastosData?.summary) {
