@@ -738,6 +738,27 @@ const MIGRATIONS = [
       }
     }
   },
+  {
+    version: '1.9.6',
+    description: 'Corrige nombre del cliente FRANCISCO ORTIZ → FRANCISCO YSAC ORTIZ ROSARIO',
+    run(db) {
+      try {
+        const result = db.prepare(`
+          UPDATE customers
+          SET name = 'FRANCISCO YSAC ORTIZ ROSARIO'
+          WHERE name = 'FRANCISCO ORTIZ'
+            AND phone = '809-912-1199'
+        `).run();
+        if (result.changes > 0) {
+          console.log('[MIGRATION 1.9.6] Cliente FRANCISCO ORTIZ renombrado a FRANCISCO YSAC ORTIZ ROSARIO');
+        } else {
+          console.log('[MIGRATION 1.9.6] Cliente ya tiene el nombre correcto o no existe — sin cambios');
+        }
+      } catch(e) {
+        console.error('[MIGRATION 1.9.6]', e.message);
+      }
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════
