@@ -89,6 +89,7 @@ const VELO_FIELDS = {
   ventas: [
     { key: 'date',           label: 'Fecha',           required: true  },
     { key: 'customer_name',  label: 'Cliente',         required: false },
+    { key: 'invoice_ref',    label: 'N° / Referencia factura', required: false },
     { key: 'total',          label: 'Total',           required: true  },
     { key: 'payment_method', label: 'Método de pago',  required: false },
     { key: 'product_name',   label: 'Producto',        required: false },
@@ -361,24 +362,63 @@ async function leerArchivo(file) {
   throw new Error(`Formato .${ext} no soportado. Convierte a Excel o CSV primero.`);
 }
 
+// Parser de una línea CSV que respeta comillas (RFC 4180).
+// Maneja campos entrecomillados con el delimitador adentro (ej. "CLIP,INTERNO")
+// y comillas escapadas como "".
+function _parseCSVLine(line, delim) {
+  const out = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; }  // comilla escapada
+        else inQuotes = false;
+      } else {
+        cur += ch;
+      }
+    } else {
+      if (ch === '"') inQuotes = true;
+      else if (ch === delim) { out.push(cur); cur = ''; }
+      else cur += ch;
+    }
+  }
+  out.push(cur);
+  return out.map(v => v.trim());
+}
+
 function leerCSV(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
         const text  = e.target.result.replace(/^﻿/, ''); // strip UTF-8 BOM
-        const lines = text.split(/\r?\n/).filter(l => l.trim());
-        if (lines.length < 2) throw new Error('El archivo está vacío o tiene solo encabezados');
+        // Separar líneas respetando saltos de línea dentro de campos entrecomillados
+        const rawLines = [];
+        let buf = '';
+        let q = false;
+        for (let i = 0; i < text.length; i++) {
+          const ch = text[i];
+          if (ch === '"') { q = !q; buf += ch; }
+          else if ((ch === '\n' || ch === '\r') && !q) {
+            if (ch === '\r' && text[i + 1] === '\n') i++;
+            if (buf.trim()) rawLines.push(buf);
+            buf = '';
+          } else buf += ch;
+        }
+        if (buf.trim()) rawLines.push(buf);
+        if (rawLines.length < 2) throw new Error('El archivo está vacío o tiene solo encabezados');
 
         const delimiters = [',', ';', '\t', '|'];
-        const counts     = delimiters.map(d => (lines[0].match(new RegExp(`\\${d}`, 'g')) || []).length);
+        const counts     = delimiters.map(d => (rawLines[0].match(new RegExp(`\\${d}`, 'g')) || []).length);
         const delim      = delimiters[counts.indexOf(Math.max(...counts))];
 
-        const headers = lines[0].split(delim).map(h => h.trim().replace(/^["']|["']$/g, ''));
-        const rows    = lines.slice(1).map(line => {
-          const vals = line.split(delim).map(v => v.trim().replace(/^["']|["']$/g, ''));
+        const headers = _parseCSVLine(rawLines[0], delim).map(h => h.replace(/^["']|["']$/g, ''));
+        const rows    = rawLines.slice(1).map(line => {
+          const vals = _parseCSVLine(line, delim);
           const row  = {};
-          headers.forEach((h, i) => { row[h] = vals[i] || ''; });
+          headers.forEach((h, i) => { row[h] = (vals[i] || ''); });
           return row;
         });
         resolve({ headers, rows });
@@ -1061,6 +1101,102 @@ async function ejecutarImportacion() {
     return; // ← salir de ejecutarImportacion, no entrar al loop
   }
 
+  // ── Procesamiento especial para ventas históricas ──
+  // Agrupa filas por (cliente + ref + fecha) ANTES del loop para crear una
+  // sola venta con todos sus artículos. El ref del sistema viejo se reutiliza
+  // entre clientes/fechas, por eso la clave incluye fecha y cliente.
+  if (tipo === 'ventas') {
+    const grouped = new Map(); // key: "cliente||ref||fecha"
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const customerName = (mapping.customer_name ? String(row[mapping.customer_name]||'') : '').trim() || 'Consumidor Final';
+      const invoiceRef = mapping.invoice_ref ? String(row[mapping.invoice_ref]||'').trim() : '';
+      const fecha = _impNormDate(mapping.date ? row[mapping.date] : '') || new Date().toISOString().split('T')[0];
+      const totalFila = _impCleanNum(mapping.total ? row[mapping.total] : 0);
+      // Clave: cliente + ref + fecha. Si no hay ref, usar total para no fusionar ventas distintas.
+      const groupKey = `${customerName.toLowerCase()}||${invoiceRef || ('NOREF-'+i)}||${fecha}`;
+
+      if (!grouped.has(groupKey)) {
+        grouped.set(groupKey, {
+          customerName, invoiceRef, date: fecha,
+          total:          totalFila,
+          subtotal:       mapping.subtotal ? _impCleanNum(row[mapping.subtotal]) : 0,
+          tax_amt:        mapping.tax_amt  ? _impCleanNum(row[mapping.tax_amt])  : 0,
+          discount_pct:   mapping.discount_pct ? _impCleanNum(row[mapping.discount_pct]) : 0,
+          payment_method: mapping.payment_method ? String(row[mapping.payment_method]||'efectivo').trim().toLowerCase() : 'efectivo',
+          ncf:            mapping.ncf ? String(row[mapping.ncf]||'').trim() : '',
+          type:           (() => { const t = (mapping.type ? String(row[mapping.type]||'') : '').trim().toLowerCase(); return ['factura','cotizacion','devolucion'].includes(t) ? t : 'factura'; })(),
+          items: [], filas: [],
+        });
+      }
+
+      const g = grouped.get(groupKey);
+      const productName = (mapping.product_name ? String(row[mapping.product_name]||'').trim() : '').trim();
+      const qty         = mapping.qty ? Math.max(1, _impCleanInt(row[mapping.qty])) : 1;
+      const unitPrice   = _impCleanNum(mapping.unit_price ? row[mapping.unit_price] : 0);
+      if (productName) g.items.push({ product_name: productName, qty, unit_price: unitPrice, product_code: 'IMP', unit_cost: 0 });
+      g.filas.push(i + 2);
+    }
+
+    const grupos = Array.from(grouped.values());
+    let gi = 0;
+    for (const g of grupos) {
+      gi++;
+      if (gi % 5 === 0) {
+        const pct = Math.round((gi / grupos.length) * 100);
+        const bar = document.getElementById('imp-prog-bar');
+        const sub = document.getElementById('imp-prog-sub');
+        const cnt = document.getElementById('imp-prog-count');
+        if (bar) bar.style.width = pct + '%';
+        if (sub) sub.textContent = `Venta ${gi} de ${grupos.length} — ${g.customerName}`;
+        if (cnt) cnt.textContent = `${importados} importadas · ${errores.filter(e=>e.tipo==='error').length} errores`;
+        await new Promise(r => setTimeout(r, 0));
+      }
+
+      if (g.total <= 0) {
+        errores.push({ fila: g.filas[0], nombre: g.customerName, campo:'total',
+          error:'Total inválido — venta omitida', tipo:'error' });
+        continue;
+      }
+      if (!g.items.length) {
+        g.items.push({ product_name: 'Venta importada', qty: 1, unit_price: g.total, product_code: 'IMP', unit_cost: 0 });
+      }
+
+      try {
+        const result = await window.api.importar.importarVenta({
+          venta: {
+            date: g.date, customer_name: g.customerName, total: g.total,
+            subtotal: g.subtotal || g.total, tax_amt: g.tax_amt, discount_pct: g.discount_pct,
+            payment_method: g.payment_method, cajero: 'Importación histórica',
+            invoice_ref: g.invoiceRef, ncf: g.ncf, type: g.type, items: g.items,
+          },
+          requestUserId: user.id,
+        });
+        if (result.ok) {
+          if (result.skipped) {
+            duplicados++;
+          } else {
+            importados++;
+            sessionIds.push({ tabla: 'sales', id: result.saleId });
+          }
+        } else {
+          errores.push({ fila: g.filas[0], nombre: g.customerName, campo:'venta',
+            error: result.error || 'Error', tipo:'error' });
+        }
+      } catch(e) {
+        errores.push({ fila: g.filas[0], nombre: g.customerName, campo:'excepción', error: e.message, tipo:'error' });
+      }
+    }
+
+    if (window.api?.customers?.getAllPayments) {
+      try { DB.payments = await window.api.customers.getAllPayments(); } catch {}
+    }
+    await reloadSales({ range: 'all' }).catch(()=>{});
+    mostrarResultadoImportacion(importados, errores, grupos.length, duplicados, allowRollback);
+    return; // ← salir de ejecutarImportacion, no entrar al loop
+  }
+
   let codeCounter = Date.now();
   const genCode   = () => `IMP-${++codeCounter}`;
 
@@ -1103,14 +1239,15 @@ async function ejecutarImportacion() {
           errores.push({ fila:i+2, nombre:name, campo:'nombre', error:'Sin nombre — provisional', tipo:'ajuste' });
         }
 
-        // Detección de duplicados
+        // Detección de duplicados — SOLO por código (identificador real de la pieza)
+        // No dedupar por nombre: repuestos distintos comparten nombres genéricos
+        // (ej. "BOMBA DE AGUA" para distintos modelos) pero tienen códigos únicos.
         if (dedup) {
-          const nameLow = name.toLowerCase();
           const codeLow = code.toLowerCase();
-          if (existingProductNames.has(nameLow) || (code && existingProductCodes.has(codeLow))) {
+          if (code && existingProductCodes.has(codeLow)) {
             duplicados++;
             errores.push({ fila:i+2, nombre:name, campo:'duplicado',
-              error:'Ya existe en Velo — omitido', tipo:'dup' });
+              error:'Código ya existe en Velo — omitido', tipo:'dup' });
             continue;
           }
         }

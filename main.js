@@ -1288,6 +1288,13 @@ ipcMain.handle('business:resetData', async (_, { requestUserId }) => {
     // Compactar la DB después del reset
     try { db.exec('VACUUM'); } catch {}
 
+    // Recrear Consumidor Final con id=1 — el POS lo necesita para ventas rápidas
+    // y el sistema asigna custId=1 cuando no encuentra el cliente por nombre
+    try {
+      db.prepare(`INSERT INTO customers(name,rnc,credit_limit,balance,active) VALUES('Consumidor Final','',0,0,1)`).run();
+      console.log('[reset] Consumidor Final recreado con id=1');
+    } catch(e) { console.error('[reset] Error recreando Consumidor Final:', e.message); }
+
     console.log('[reset] Datos del negocio eliminados por:', reqUser.name);
     return { ok: true };
   } catch(e) {
@@ -1626,10 +1633,14 @@ ipcMain.handle('importar:importarCredito', async (_, {
     }
 
     const tx = db.transaction(() => {
-      // Buscar cliente existente por nombre (case-insensitive)
-      const existing = db.prepare(
-        "SELECT id, balance FROM customers WHERE lower(trim(name)) = ? AND active=1 LIMIT 1"
-      ).get(customerName.toLowerCase().trim());
+      // Buscar cliente existente por nombre (Unicode-safe: SQLite lower() no maneja Ñ/tildes)
+      const _allForImport = db.prepare(
+        `SELECT id, balance, name FROM customers WHERE active=1`
+      ).all();
+      const _searchForImport = customerName.trim().toLowerCase().normalize('NFC');
+      const existing = _allForImport.find(c =>
+        c.name.trim().toLowerCase().normalize('NFC') === _searchForImport
+      ) || null;
 
       let customerId;
       let created = false;
@@ -1658,16 +1669,9 @@ ipcMain.handle('importar:importarCredito', async (_, {
         created = true;
       }
 
-      // Registrar el saldo como un "payment" de saldo inicial para que
-      // aparezca en el historial de cuentas por cobrar
-      if (safeBalance > 0) {
-        db.prepare(`
-          INSERT INTO payments(
-            customer_id, sale_id, amount, method, note,
-            balance_before, balance_after, cajero, user_id
-          ) VALUES (?, NULL, ?, 'credito', 'Saldo inicial importado', 0, ?, 'Importación', ?)
-        `).run(customerId, safeBalance, safeBalance, requestUserId || null);
-      }
+      // NOTA: No creamos payment de "Saldo inicial importado" por factura
+      // porque eso inflaría la card de Ventas/Abonos a Facturas del dashboard.
+      // El balance del cliente ya se establece directamente en el campo balance.
 
       return { customerId, created };
     });
@@ -1701,23 +1705,32 @@ ipcMain.handle('importar:importarVenta', async (_, { venta, requestUserId }) => 
         ? `Factura importada | import_ref:${venta.invoice_ref}`
         : 'Factura importada';
 
+      // Buscar customer_id por nombre (Unicode-safe)
+      const _ventaSearchName = (venta.customer_name || 'Consumidor Final').trim().toLowerCase().normalize('NFC');
+      const _allForVenta = db.prepare(`SELECT id, name FROM customers WHERE active=1`).all();
+      const _custMatch = _allForVenta.find(c =>
+        c.name.trim().toLowerCase().normalize('NFC') === _ventaSearchName
+      );
+      const custId = _custMatch?.id || 1;
+
       // ── Control de duplicados ──────────────────────────────────────────────
-      // Si ya existe una venta histórica con el mismo import_ref, saltar
+      // El import_ref del sistema viejo NO es único (se reutiliza entre clientes
+      // y fechas). Dedup por la combinación completa: ref + fecha + cliente + total.
+      // Esto permite importar facturas distintas que comparten el mismo VH-ref.
       if (venta.invoice_ref) {
+        const ventaDate = (venta.date || '').slice(0, 10);
         const existing = db.prepare(`
           SELECT id FROM sales
           WHERE cajero = 'Importación histórica'
             AND notes LIKE ?
+            AND customer_id = ?
+            AND date(created_at) = date(?)
+            AND total = ?
           LIMIT 1
-        `).get(`%import_ref:${venta.invoice_ref}%`);
+        `).get(`%import_ref:${venta.invoice_ref}%`, custId,
+               ventaDate + ' 00:00:00', venta.total);
         if (existing) return { ok: true, saleId: existing.id, skipped: true };
       }
-
-      // Buscar customer_id por nombre para poder cruzar abonos después
-      const custRow = db.prepare(
-        `SELECT id FROM customers WHERE lower(trim(name))=? AND active=1 LIMIT 1`
-      ).get((venta.customer_name || 'Consumidor Final').toLowerCase().trim());
-      const custId = custRow?.id || 1;
 
       const saleR = db.prepare(`
         INSERT INTO sales(
@@ -1857,15 +1870,21 @@ ipcMain.handle('importar:importarAbono', async (_, {
       let custBal  = 0;
 
       if (invoiceRef) {
-        const saleByRef = db.prepare(`
-          SELECT s.id, s.customer_id, c.balance, c.id as cid
+        // Buscar primero la venta del MISMO cliente (Unicode-safe), porque el
+        // import_ref del sistema viejo se reutiliza entre clientes distintos.
+        // Si no hay match por cliente, caer al primero que coincida por ref.
+        const _abonoSearchName = (customerName || '').trim().toLowerCase().normalize('NFC');
+        const _candidatos = db.prepare(`
+          SELECT s.id, s.customer_id, c.balance, c.id as cid, c.name as cname
           FROM sales s
           JOIN customers c ON c.id = s.customer_id
           WHERE s.cajero = 'Importación histórica'
             AND (s.notes LIKE ? OR s.notes LIKE ?)
             AND s.status != 'cancelled'
-          LIMIT 1
-        `).get(`%VH-${invoiceRef}%`, `%${invoiceRef}%`);
+        `).all(`%import_ref:VH-${invoiceRef}%`, `%import_ref:${invoiceRef}%`);
+        const saleByRef = _candidatos.find(c =>
+          (c.cname || '').trim().toLowerCase().normalize('NFC') === _abonoSearchName
+        ) || _candidatos[0] || null;
 
         if (saleByRef) {
           // Dedup: mismo abono ya importado para esta venta en la misma fecha
@@ -1898,20 +1917,34 @@ ipcMain.handle('importar:importarAbono', async (_, {
 
       // Sin venta histórica que referenciar — registrar como histórico sin tocar CxC.
       // El balance del cliente ya viene correcto del CSV de clientes; no debe reducirse.
-      const cust = db.prepare(
-        `SELECT id, balance FROM customers WHERE lower(trim(name))=? AND active=1 LIMIT 1`
-      ).get(customerName.toLowerCase().trim());
+      // Búsqueda Unicode-safe: SQLite lower() no maneja Ñ/tildes — comparamos en JS
+      const _allCusts = db.prepare(
+        `SELECT id, balance, name FROM customers WHERE active=1`
+      ).all();
+      const _searchName = customerName.trim().toLowerCase().normalize('NFC');
+      const _custMatch = _allCusts.find(c =>
+        c.name.trim().toLowerCase().normalize('NFC') === _searchName
+      );
+      const cust = _custMatch ? { id: _custMatch.id, balance: _custMatch.balance } : null;
       if (!cust) return { ok: false, error: `Cliente no encontrado: ${customerName}` };
 
-      // Dedup: misma combinación cliente + monto + fecha ya importada
-      const existingNoRef = db.prepare(
-        `SELECT id FROM payments WHERE customer_id=? AND amount=? AND cajero='Importación histórica' AND date(created_at)=date(?) LIMIT 1`
-      ).get(cust.id, amount, safeDate);
+      // Dedup: misma combinación cliente + monto + fecha + ref ya importada
+      // Incluir invoiceRef en el dedup para permitir dos abonos legítimamente
+      // iguales en monto/fecha pero con distinta referencia de factura
+      const _dedupNote = invoiceRef ? `%ref:${invoiceRef}%` : null;
+      const existingNoRef = _dedupNote
+        ? db.prepare(
+            `SELECT id FROM payments WHERE customer_id=? AND amount=? AND cajero='Importación histórica' AND date(created_at)=date(?) AND note LIKE ? LIMIT 1`
+          ).get(cust.id, amount, safeDate, _dedupNote)
+        : db.prepare(
+            `SELECT id FROM payments WHERE customer_id=? AND amount=? AND cajero='Importación histórica' AND date(created_at)=date(?) LIMIT 1`
+          ).get(cust.id, amount, safeDate);
       if (existingNoRef) return { ok: true, id: existingNoRef.id, tipo: 'historico_sin_ref_dup', skipped: true };
 
       const before = cust.balance;
 
-      const sinRefNote = notes || (invoiceRef ? `Abono importado | ref:${invoiceRef}` : 'Abono importado');
+      // Siempre incluir invoiceRef en el note para permitir dedup correcto por ref
+      const sinRefNote = invoiceRef ? `${notes || 'Abono importado'} | ref:${invoiceRef}` : (notes || 'Abono importado');
       const r = db.prepare(`
         INSERT INTO payments(customer_id, sale_id, amount, method, note,
           balance_before, balance_after, cajero, user_id, created_at)
@@ -2176,10 +2209,16 @@ ipcMain.handle('importar:importarFacturaCredito', async (_, {
     const safeCustomerName = customerName.replace(/\s+/g, ' ').trim();
 
     const result = db.transaction(() => {
-      let cust = db.prepare(
-        `SELECT id, balance, credit_limit, credit_days, credit_due
-         FROM customers WHERE lower(trim(replace(name,'  ',' ')))=? AND active=1 LIMIT 1`
-      ).get(safeCustomerName.toLowerCase().trim());
+      // Búsqueda Unicode-safe: SQLite lower() no convierte Ñ/tildes.
+      // Comparar en JS con normalize('NFC') para evitar duplicados (EDUARD PEÑA, etc.)
+      const _facSearchName = safeCustomerName.toLowerCase().normalize('NFC');
+      const _allFacCusts = db.prepare(
+        `SELECT id, balance, credit_limit, credit_days, credit_due, name
+         FROM customers WHERE active=1`
+      ).all();
+      let cust = _allFacCusts.find(c =>
+        (c.name || '').trim().replace(/\s+/g, ' ').toLowerCase().normalize('NFC') === _facSearchName
+      ) || null;
 
       let customerId; let customerCreated = false;
       if (cust) {

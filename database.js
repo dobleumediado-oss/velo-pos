@@ -1199,7 +1199,7 @@ const salesRepo = {
     } else if (range === 'week') {
       where += ` AND date(s.created_at)>=date('now','-7 days','localtime')`;
     } else if (range === 'month') {
-      where += ` AND strftime('%Y-%m',s.created_at)=strftime('%Y-%m','now','localtime')`;
+      where += ` AND strftime('%Y-%m',s.created_at,'localtime')=strftime('%Y-%m','now','localtime') AND s.cajero != 'Importación histórica'`;
     }
     if (customerId) { where += ' AND s.customer_id=?'; params.push(customerId); }
     if (method)     { where += ' AND s.payment_method=?'; params.push(method); }
@@ -1300,10 +1300,16 @@ const reportsRepo = {
 
     const f = _buildFilters();
 
-    // Excluir importaciones históricas solo del rango 'today' —
-    // en semana/mes/histórico/custom deben aparecer en reportes financieros.
-    const hf  = range === 'today' ? `AND cajero   != 'Importación histórica'` : '';
-    const hfs = range === 'today' ? `AND s.cajero != 'Importación histórica'` : '';
+    // Excluir ventas históricas de 'today' y 'month' —
+    // en semana/histórico/custom sí deben aparecer en reportes financieros.
+    // NOTA: los abonos históricos (pagos) SÍ se incluyen en month porque son
+    // cobros reales del mes — solo las ventas se excluyen.
+    const _excludeHist = (range === 'today' || range === 'month');
+    const hf  = _excludeHist ? `AND cajero   != 'Importación histórica'` : '';
+    const hfs = _excludeHist ? `AND s.cajero != 'Importación histórica'` : '';
+    // Para payments: solo excluir históricos en 'today', no en 'month'
+    // Los abonos importados de junio son cobros reales que deben sumarse
+    const hfp = range === 'today' ? `AND cajero != 'Importación histórica'` : '';
 
     // Ventas por método de pago
     const byMethod = db.prepare(`
@@ -1382,11 +1388,12 @@ const reportsRepo = {
     `).all(...f.withAlias.params);
 
     // Abonos recibidos en el período (excluir saldos iniciales importados)
+    // Usa hfp: excluye históricos solo en 'today', no en 'month'
     const abonosData = db.prepare(`
       SELECT COUNT(*) as count, SUM(amount) as total
       FROM payments
       WHERE ${f.payments.sql}
-        AND note != 'Saldo inicial importado' ${hf}
+        AND note != 'Saldo inicial importado' ${hfp}
     `).get(...f.payments.params);
 
     // Desglose contado vs crédito (para cobradoMes)
