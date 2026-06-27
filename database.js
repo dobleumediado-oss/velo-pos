@@ -1300,14 +1300,19 @@ const reportsRepo = {
 
     const f = _buildFilters();
 
-    // Ventas por método de pago (excluye datos migrados)
+    // Excluir importaciones históricas solo del rango 'today' —
+    // en semana/mes/histórico/custom deben aparecer en reportes financieros.
+    const hf  = range === 'today' ? `AND cajero   != 'Importación histórica'` : '';
+    const hfs = range === 'today' ? `AND s.cajero != 'Importación histórica'` : '';
+
+    // Ventas por método de pago
     const byMethod = db.prepare(`
       SELECT payment_method, COUNT(*) as count,
              SUM(total) as total, SUM(tax_amt) as tax,
              SUM(discount_amt) as discount
       FROM sales
       WHERE status='completed' AND type != 'devolucion'
-        AND cajero != 'Importación histórica' AND ${f.withoutAlias.sql}
+        ${hf} AND ${f.withoutAlias.sql}
       GROUP BY payment_method
     `).all(...f.withoutAlias.params);
 
@@ -1320,14 +1325,14 @@ const reportsRepo = {
       FROM sale_items si
       JOIN sales s ON si.sale_id = s.id
       WHERE s.status='completed' AND s.type != 'devolucion'
-        AND s.cajero != 'Importación histórica' AND ${f.withAlias.sql}
+        ${hfs} AND ${f.withAlias.sql}
     `).get(...f.withAlias.params);
 
     // Devoluciones
     const devData = db.prepare(`
       SELECT COUNT(*) as count, SUM(total) as total
       FROM sales
-      WHERE type='devolucion' AND cajero != 'Importación histórica'
+      WHERE type='devolucion' ${hf}
         AND ${f.withoutAlias.sql}
     `).get(...f.withoutAlias.params);
 
@@ -1336,7 +1341,7 @@ const reportsRepo = {
       SELECT SUM(discount_amt) as total_discount
       FROM sales
       WHERE status='completed' AND type != 'devolucion'
-        AND cajero != 'Importación histórica' AND ${f.withoutAlias.sql}
+        ${hf} AND ${f.withoutAlias.sql}
     `).get(...f.withoutAlias.params);
 
     // ITBIS total
@@ -1344,7 +1349,7 @@ const reportsRepo = {
       SELECT SUM(tax_amt) as total_tax
       FROM sales
       WHERE status='completed' AND type != 'devolucion'
-        AND cajero != 'Importación histórica' AND ${f.withoutAlias.sql}
+        ${hf} AND ${f.withoutAlias.sql}
     `).get(...f.withoutAlias.params);
 
     // Productos más vendidos (con ganancia real)
@@ -1357,7 +1362,7 @@ const reportsRepo = {
       FROM sale_items si
       JOIN sales s ON si.sale_id = s.id
       WHERE s.status='completed' AND s.type != 'devolucion'
-        AND s.cajero != 'Importación histórica' AND ${f.withAlias.sql}
+        ${hfs} AND ${f.withAlias.sql}
       GROUP BY si.product_id
       ORDER BY total_rev DESC LIMIT 10
     `).all(...f.withAlias.params);
@@ -1371,7 +1376,7 @@ const reportsRepo = {
       FROM sales s
       LEFT JOIN sale_items si ON s.id = si.sale_id
       WHERE s.status='completed' AND s.type != 'devolucion'
-        AND s.cajero != 'Importación histórica' AND ${f.withAlias.sql}
+        ${hfs} AND ${f.withAlias.sql}
       GROUP BY day
       ORDER BY day ASC
     `).all(...f.withAlias.params);
@@ -1381,7 +1386,7 @@ const reportsRepo = {
       SELECT COUNT(*) as count, SUM(amount) as total
       FROM payments
       WHERE ${f.payments.sql}
-        AND note != 'Saldo inicial importado'
+        AND note != 'Saldo inicial importado' ${hf}
     `).get(...f.payments.params);
 
     // Desglose contado vs crédito (para cobradoMes)
@@ -1391,7 +1396,7 @@ const reportsRepo = {
         SUM(CASE WHEN payment_method  = 'credito' THEN total ELSE 0 END) as ventas_credito
       FROM sales
       WHERE status='completed' AND type != 'devolucion'
-        AND cajero != 'Importación histórica' AND ${f.withoutAlias.sql}
+        ${hf} AND ${f.withoutAlias.sql}
     `).get(...f.withoutAlias.params);
 
     const totalRev      = byMethod.reduce((a, m) => a + (m.total || 0), 0);
@@ -1446,7 +1451,6 @@ const reportsRepo = {
       FROM sales s
       LEFT JOIN sale_items si ON s.id = si.sale_id
       WHERE s.status='completed' AND s.type != 'devolucion'
-        AND s.cajero != 'Importación histórica'
         AND date(s.created_at,'localtime') >= date('now','-'||?||' days','localtime')
       GROUP BY day
       ORDER BY day ASC

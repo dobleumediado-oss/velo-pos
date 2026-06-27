@@ -160,12 +160,17 @@ function renderReporteContenido(el, d) {
     topProducts, dailySales, devolucion, abonos
   } = d;
 
+  // Si todas las ventas fueron importadas sin precio de costo, no calcular margen
+  const noCostData = totalCost === 0 && totalRev > 0;
+
   // ── Métricas principales ─────────────────────
   const metWrap = h('div', { class: 'metrics',
     style: { gridTemplateColumns: 'repeat(4,1fr)', marginBottom: '20px' } });
   [
     { icon: 'dollar',  color: 'g', label: 'Ingresos Totales',  val: fmt(totalRev),      sub: `${totalSales} facturas` },
-    { icon: 'trend',   color: 'b', label: 'Utilidad Bruta',    val: fmt(grossProfit),   sub: `Margen: ${margin.toFixed(1)}%` },
+    { icon: 'trend',   color: 'b', label: 'Utilidad Bruta',
+      val: noCostData ? '—' : fmt(grossProfit),
+      sub: noCostData ? 'Sin datos de costo' : `Margen: ${margin.toFixed(1)}%` },
     { icon: 'receipt', color: 'p', label: 'ITBIS Generado',    val: fmt(totalTax),      sub: `Impuesto ${CFG?.itbis ?? 18}%` },
     { icon: 'box',     color: 'a', label: 'Unidades Vendidas', val: String(totalUnits), sub: `${devolucion.count} devueltas` },
   ].forEach(m => {
@@ -186,7 +191,7 @@ function renderReporteContenido(el, d) {
   const sec = h('div', { class: 'metrics',
     style: { gridTemplateColumns: 'repeat(4,1fr)', marginBottom: '20px' } });
   [
-    { label: 'Costo de ventas',   val: fmt(totalCost),    color: 'var(--red)' },
+    { label: 'Costo de ventas',   val: noCostData ? '—' : fmt(totalCost),    color: 'var(--red)' },
     { label: 'Ingresos netos',    val: fmt(netRev),       color: 'var(--green)' },
     { label: 'Descuentos dados',  val: fmt(totalDisc),    color: 'var(--amber)' },
     { label: 'Abonos recibidos',  val: fmt(abonos.total), color: 'var(--blue)', sub: abonos.count > 0 ? `${abonos.count} abono${abonos.count !== 1 ? 's' : ''}` : 'Sin abonos en el período' },
@@ -257,9 +262,10 @@ function renderReporteContenido(el, d) {
   } else {
     const maxQty = topProducts[0]?.total_qty || 1;
     topProducts.forEach((p, i) => {
-      const pct    = (p.total_qty / maxQty) * 100;
-      const margin = p.total_rev > 0
-        ? ((p.total_profit / p.total_rev) * 100).toFixed(0) : 0;
+      const pct       = (p.total_qty / maxQty) * 100;
+      const hasCost   = p.total_cost > 0;
+      const margin    = hasCost && p.total_rev > 0
+        ? ((p.total_profit / p.total_rev) * 100).toFixed(0) : null;
       prodCard.appendChild(
         h('div', { style: { marginBottom: '11px' } },
           h('div', { class: 'fxb', style: { marginBottom: '3px' } },
@@ -279,8 +285,9 @@ function renderReporteContenido(el, d) {
               h('span', { style: { fontSize: '11px', color: 'var(--muted2)' } },
                 `${p.total_qty} und`),
               h('span', { style: { fontSize: '11px', fontWeight: 700, color: 'var(--green)' } },
-                fmt(p.total_profit)),
-              h('span', { class: 'badge g', style: { fontSize: '9px' } }, `${margin}%`)
+                hasCost ? fmt(p.total_profit) : '—'),
+              h('span', { class: 'badge g', style: { fontSize: '9px' } },
+                margin !== null ? `${margin}%` : 'N/A')
             )
           ),
           h('div', { class: 'prog' },

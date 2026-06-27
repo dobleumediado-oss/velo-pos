@@ -112,7 +112,7 @@ async function renderDash(el) {
   // usadas por el selector de período (3 días/7 días) más abajo.
   const weekSales = await window.api.sales.getAll({ range: 'week' });
   const mSales = (allSales || []).filter(s =>
-    s.status !== 'cancelled' && s.type !== 'devolucion' && s.cajero !== 'Importación histórica');
+    s.status !== 'cancelled' && s.type !== 'devolucion');
   // Ventas del mes vía agregado SQL — exacto sin importar el límite de filas
   // de sales:getAll (antes 200, insuficiente para negocios de alto volumen).
   const monthSummaryRes = await window.api.reports.summary({ range: 'month', requestUserId: user.id }).catch(() => null);
