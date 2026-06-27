@@ -1456,6 +1456,19 @@ const reportsRepo = {
       ORDER BY day ASC
     `).all(days);
   },
+
+  monthlyTrend({ months = 12 } = {}) {
+    return db.prepare(`
+      SELECT strftime('%Y-%m', s.created_at, 'localtime') as month,
+             COUNT(DISTINCT s.id) as count,
+             SUM(s.total) as total
+      FROM sales s
+      WHERE s.status='completed' AND s.type != 'devolucion'
+        AND date(s.created_at,'localtime') >= date('now','-'||?||' months','localtime')
+      GROUP BY month
+      ORDER BY month ASC
+    `).all(months);
+  },
 };
 
 // ── Helper fechas ─────────────────────────────

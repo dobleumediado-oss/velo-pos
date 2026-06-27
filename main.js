@@ -1461,6 +1461,18 @@ ipcMain.handle('reports:dailyTrend', async (_, { days = 30, requestUserId } = {}
   }
 });
 
+ipcMain.handle('reports:monthlyTrend', async (_, { months = 12, requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser) return { ok: false, error: 'Usuario no válido' };
+    const data = reportsRepo.monthlyTrend({ months });
+    return { ok: true, data };
+  } catch(e) {
+    console.error('[reports:monthlyTrend]', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle('importar:readSQLite', async (_, { data }) => {
   try {
     const tmp  = require('os').tmpdir();
