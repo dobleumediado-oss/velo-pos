@@ -21,7 +21,14 @@ let importState = {
 function _impCleanNum(v) {
   if (!v && v !== 0) return 0;
   const s = String(v).replace(/[^0-9.,]/g, '');
-  if (s.includes(',') && s.includes('.')) return parseFloat(s.replace(/\./g,'').replace(',','.')) || 0;
+  if (s.includes(',') && s.includes('.')) {
+    // Use last separator to determine format:
+    //   "1,234.56" → last sep is '.' → US thousands+decimal → remove commas
+    //   "1.234,56" → last sep is ',' → European thousands+decimal → remove dots, comma→dot
+    return s.lastIndexOf('.') > s.lastIndexOf(',')
+      ? parseFloat(s.replace(/,/g, ''))                       || 0
+      : parseFloat(s.replace(/\./g,'').replace(',','.'))      || 0;
+  }
   if (s.includes(',')) return parseFloat(s.replace(',','.')) || 0;
   return parseFloat(s) || 0;
 }
@@ -359,7 +366,7 @@ function leerCSV(file) {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
-        const text  = e.target.result;
+        const text  = e.target.result.replace(/^﻿/, ''); // strip UTF-8 BOM
         const lines = text.split(/\r?\n/).filter(l => l.trim());
         if (lines.length < 2) throw new Error('El archivo está vacío o tiene solo encabezados');
 
@@ -1236,8 +1243,11 @@ async function ejecutarImportacion() {
         });
         if (result.ok) {
           importados++;
-          if (result.created) errores.push({ fila:i+2, nombre:customerName, campo:'info',
-            error:`Cliente nuevo creado con deuda RD$${balance.toLocaleString('es-DO')}`, tipo:'ajuste' });
+          if (result.created) {
+            sessionIds.push({ tabla:'customers', id: result.customerId });
+            errores.push({ fila:i+2, nombre:customerName, campo:'info',
+              error:`Cliente nuevo creado con deuda RD$${balance.toLocaleString('es-DO')}`, tipo:'ajuste' });
+          }
         } else {
           errores.push({ fila:i+2, nombre:customerName, campo:'credito',
             error:result.error||'Error', tipo:'error' });
@@ -1391,8 +1401,12 @@ async function ejecutarImportacion() {
           requestUserId: user.id,
         });
         if (result.ok) {
-          importados++;
-          sessionIds.push({ tabla:'payments', id: result.id });
+          if (result.skipped) {
+            duplicados++;
+          } else {
+            importados++;
+            sessionIds.push({ tabla:'payments', id: result.id });
+          }
         } else {
           errores.push({ fila:i+2, nombre:customerName, campo:'abono',
             error:result.error||'Error', tipo:'error' });

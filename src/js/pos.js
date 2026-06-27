@@ -560,11 +560,13 @@ async function autorizarDescuento(pct) {
 // ── Calcular totales ──────────────────────────
 function calcTotals(inv) {
   const disc     = inv.disc || 0;
-  const subtotal = inv.cart.reduce((a, i) => a + i.price * i.qty, 0);
-  const discAmt  = subtotal * (disc / 100);
-  const base     = subtotal - discAmt;
-  const itbis    = inv.itype === 'factura' ? base * (CFG.itbis / 100) : 0;
-  const total    = base + itbis;
+  const subtotal = Math.round(inv.cart.reduce((a, i) => a + i.price * i.qty, 0) * 100) / 100;
+  const discAmt  = Math.round(subtotal * (disc / 100) * 100) / 100;
+  const base     = Math.round((subtotal - discAmt) * 100) / 100;
+  const itbis    = inv.itype === 'factura'
+    ? Math.round(base * (CFG.itbis / 100) * 100) / 100
+    : 0;
+  const total    = Math.round((base + itbis) * 100) / 100;
   return { subtotal, discAmt, itbis, total, disc };
 }
 
@@ -825,6 +827,16 @@ async function finalizarVenta() {
     const suma = efec + card;
     if (suma < total - 0.01) {
       toast(`Los montos no cubren el total. Faltan ${fmt(total - suma)}`, 'err');
+      return;
+    }
+  }
+
+  // Validar que el efectivo recibido cubra el total
+  if (pmeth === 'efectivo') {
+    const { total } = calcTotals(inv);
+    const received = parseFloat(document.getElementById('cbr-received')?.value) || 0;
+    if (received < total - 0.01) {
+      toast(`El monto recibido (${fmt(received)}) no cubre el total (${fmt(total)})`, 'err');
       return;
     }
   }

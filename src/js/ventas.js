@@ -1185,9 +1185,12 @@ async function procesarDevolucion(originalSale, items) {
     toast('Selecciona al menos un artículo', 'err'); return;
   }
 
-  const subtotal = returnItems.reduce((a, i) => a + i.unit_price * i.qty, 0);
-  const taxAmt   = originalSale.type === 'factura' ? subtotal * 0.18 : 0;
-  const total    = subtotal + taxAmt;
+  const taxPct   = originalSale.type === 'factura'
+    ? (originalSale.tax_pct != null ? originalSale.tax_pct : (CFG.itbis ?? 18))
+    : 0;
+  const subtotal = Math.round(returnItems.reduce((a, i) => a + i.unit_price * i.qty, 0) * 100) / 100;
+  const taxAmt   = Math.round(subtotal * (taxPct / 100) * 100) / 100;
+  const total    = Math.round((subtotal + taxAmt) * 100) / 100;
 
   confirmModal(
     `¿Procesar devolución de ${returnItems.length} artículo(s) por <strong>${fmt(total)}</strong>?`,

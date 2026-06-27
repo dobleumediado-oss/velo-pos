@@ -217,7 +217,7 @@ function printReceipt(sale, isReprint = false) {
 
   lines.push(tRow('Subtotal:', fmt(subtotal)));
   if (discPct > 0) lines.push(tRow(`Descuento (${discPct}%):`, `-${fmt(discAmt)}`));
-  if (isFactura && itbis > 0) lines.push(tRow(`ITBIS (${sale.tax_pct ?? cfg?.itbis ?? 18}%):`, fmt(itbis)));
+  if (isFactura && itbis > 0) lines.push(tRow(`ITBIS (${sale.tax_pct ?? CFG?.itbis ?? 18}%):`, fmt(itbis)));
   lines.push(tlineD());
   lines.push(tRow('TOTAL:', fmt(total)));
   lines.push(tlineD());

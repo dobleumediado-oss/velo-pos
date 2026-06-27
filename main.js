@@ -845,8 +845,8 @@ ipcMain.handle('sales:cancel', async (_, { id, reason, requestUserId }) => {
     if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
       return { ok: false, error: 'Solo el administrador puede anular ventas' };
     }
-    salesRepo.cancel(id, reason, requestUserId, reqUser.name);
-    return { ok: true };
+    const cancelResult = salesRepo.cancel(id, reason, requestUserId, reqUser.name);
+    return { ok: true, overpayment: cancelResult?.overpayment || 0 };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -1616,8 +1616,8 @@ ipcMain.handle('importar:importarCredito', async (_, {
     const tx = db.transaction(() => {
       // Buscar cliente existente por nombre (case-insensitive)
       const existing = db.prepare(
-        "SELECT id, balance FROM customers WHERE lower(trim(name)) = lower(trim(?)) AND active=1 LIMIT 1"
-      ).get(customerName);
+        "SELECT id, balance FROM customers WHERE lower(trim(name)) = ? AND active=1 LIMIT 1"
+      ).get(customerName.toLowerCase().trim());
 
       let customerId;
       let created = false;
@@ -1703,8 +1703,8 @@ ipcMain.handle('importar:importarVenta', async (_, { venta, requestUserId }) => 
 
       // Buscar customer_id por nombre para poder cruzar abonos después
       const custRow = db.prepare(
-        `SELECT id FROM customers WHERE lower(trim(name))=lower(trim(?)) AND active=1 LIMIT 1`
-      ).get(venta.customer_name || 'Consumidor Final');
+        `SELECT id FROM customers WHERE lower(trim(name))=? AND active=1 LIMIT 1`
+      ).get((venta.customer_name || 'Consumidor Final').toLowerCase().trim());
       const custId = custRow?.id || 1;
 
       const saleR = db.prepare(`
@@ -1856,11 +1856,18 @@ ipcMain.handle('importar:importarAbono', async (_, {
         `).get(`%VH-${invoiceRef}%`, `%${invoiceRef}%`);
 
         if (saleByRef) {
+          // Dedup: mismo abono ya importado para esta venta en la misma fecha
+          const existingForSale = db.prepare(
+            `SELECT id FROM payments WHERE customer_id=? AND sale_id=? AND cajero='Importación histórica' AND date(created_at)=date(?) LIMIT 1`
+          ).get(saleByRef.customer_id, saleByRef.id, safeDate);
+          if (existingForSale) return { ok: true, id: existingForSale.id, tipo: 'historico_dup', skipped: true };
+
           // Es un abono de venta histórica — NO tocar balance CxC del cliente
           saleId  = saleByRef.id;
           custId  = saleByRef.customer_id;
           custBal = saleByRef.balance || 0;
 
+          const histNote = notes || (invoiceRef ? `Abono importado | ref:${invoiceRef}` : 'Abono importado');
           const r = db.prepare(`
             INSERT INTO payments(customer_id, sale_id, amount, method, note,
               balance_before, balance_after, cajero, user_id, created_at)
@@ -1868,7 +1875,7 @@ ipcMain.handle('importar:importarAbono', async (_, {
           `).run(
             custId, saleId, amount,
             paymentMethod || 'efectivo',
-            notes || 'Abono importado',
+            histNote,
             custBal, custBal,           // balance no cambia — ya descontado en CSV
             requestUserId || null,
             safeDate
@@ -1880,12 +1887,19 @@ ipcMain.handle('importar:importarAbono', async (_, {
       // Sin venta histórica que referenciar — registrar como histórico sin tocar CxC.
       // El balance del cliente ya viene correcto del CSV de clientes; no debe reducirse.
       const cust = db.prepare(
-        `SELECT id, balance FROM customers WHERE lower(trim(name))=lower(trim(?)) AND active=1 LIMIT 1`
-      ).get(customerName);
+        `SELECT id, balance FROM customers WHERE lower(trim(name))=? AND active=1 LIMIT 1`
+      ).get(customerName.toLowerCase().trim());
       if (!cust) return { ok: false, error: `Cliente no encontrado: ${customerName}` };
+
+      // Dedup: misma combinación cliente + monto + fecha ya importada
+      const existingNoRef = db.prepare(
+        `SELECT id FROM payments WHERE customer_id=? AND amount=? AND cajero='Importación histórica' AND date(created_at)=date(?) LIMIT 1`
+      ).get(cust.id, amount, safeDate);
+      if (existingNoRef) return { ok: true, id: existingNoRef.id, tipo: 'historico_sin_ref_dup', skipped: true };
 
       const before = cust.balance;
 
+      const sinRefNote = notes || (invoiceRef ? `Abono importado | ref:${invoiceRef}` : 'Abono importado');
       const r = db.prepare(`
         INSERT INTO payments(customer_id, sale_id, amount, method, note,
           balance_before, balance_after, cajero, user_id, created_at)
@@ -1893,7 +1907,7 @@ ipcMain.handle('importar:importarAbono', async (_, {
       `).run(
         cust.id, null, amount,
         paymentMethod || 'efectivo',
-        notes || 'Abono importado',
+        sinRefNote,
         before, before,
         requestUserId || null,
         safeDate
@@ -2152,8 +2166,8 @@ ipcMain.handle('importar:importarFacturaCredito', async (_, {
     const result = db.transaction(() => {
       let cust = db.prepare(
         `SELECT id, balance, credit_limit, credit_days, credit_due
-         FROM customers WHERE lower(trim(replace(name,'  ',' ')))=lower(trim(?)) AND active=1 LIMIT 1`
-      ).get(safeCustomerName);
+         FROM customers WHERE lower(trim(replace(name,'  ',' ')))=? AND active=1 LIMIT 1`
+      ).get(safeCustomerName.toLowerCase().trim());
 
       let customerId; let customerCreated = false;
       if (cust) {
@@ -2243,19 +2257,34 @@ ipcMain.handle('customers:getSaleItems', async (_, { saleId }) => {
 ipcMain.handle('customers:getFacturasPendientes', async (_, { customerId }) => {
   try {
     const db = require('./database').getDB();
+    // Obtener facturas a crédito en orden cronológico (ASC = FIFO)
     const sales = db.prepare(`
       SELECT s.id, s.total, s.subtotal, s.tax_amt, s.discount_amt,
-             s.created_at, s.notes, s.ncf, s.status,
-             COALESCE(SUM(p.amount),0) AS pagado
+             s.created_at, s.notes, s.ncf, s.status
       FROM sales s
-      LEFT JOIN payments p ON p.sale_id = s.id
       WHERE s.customer_id=? AND s.payment_method='credito'
         AND s.status!='cancelled' AND s.type='factura'
-      GROUP BY s.id ORDER BY s.created_at DESC
+      ORDER BY s.created_at ASC
     `).all(customerId);
-    return { ok: true, facturas: sales.map(s => ({
-      ...s, pendiente: Math.max(0, Math.round((s.total - s.pagado)*100)/100)
-    })).filter(s => s.pendiente > 0) };
+
+    // Total de pagos reales del cliente — excluir "Saldo inicial importado" porque ese
+    // registro es un marcador contable que no corresponde a ninguna factura específica;
+    // sumarlo aquí haría que el FIFO consuma facturas que siguen pendientes.
+    const { totalPaid } = db.prepare(
+      "SELECT COALESCE(SUM(amount),0) AS totalPaid FROM payments WHERE customer_id=? AND note != 'Saldo inicial importado'"
+    ).get(customerId);
+
+    // Distribuir pagos FIFO: las facturas más antiguas se pagan primero
+    let remaining = totalPaid;
+    const facturas = sales.map(s => {
+      const paid     = Math.min(remaining, s.total);
+      remaining      = Math.max(0, remaining - paid);
+      const pendiente = Math.max(0, Math.round((s.total - paid) * 100) / 100);
+      return { ...s, pendiente };
+    }).filter(s => s.pendiente > 0.005)
+      .reverse(); // volver a DESC para mostrar las más recientes primero
+
+    return { ok: true, facturas };
   } catch(e) { return { ok: false, facturas: [], error: e.message }; }
 });
 

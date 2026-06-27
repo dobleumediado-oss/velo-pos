@@ -39,6 +39,7 @@ function initDB(customDataDir) {
   createTables();
   migrateECFColumns();
   migrateExpensesColumns();
+  migratePaymentsColumns();
   seedIfEmpty();
 
   console.log('[DB] Iniciada en:', DB_PATH);
@@ -207,17 +208,18 @@ function createTables() {
 
     -- ── Pagos / Abonos ──
     CREATE TABLE IF NOT EXISTS payments (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      customer_id INTEGER NOT NULL REFERENCES customers(id),
-      sale_id     INTEGER REFERENCES sales(id),
-      amount      REAL NOT NULL,
-      method      TEXT DEFAULT 'efectivo',
-      note        TEXT DEFAULT '',
-      balance_before REAL DEFAULT 0,
-      balance_after  REAL DEFAULT 0,
-      cajero      TEXT DEFAULT '',
-      user_id     INTEGER REFERENCES users(id),
-      created_at  TEXT DEFAULT (datetime('now'))
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      customer_id     INTEGER NOT NULL REFERENCES customers(id),
+      sale_id         INTEGER REFERENCES sales(id),
+      amount          REAL NOT NULL,
+      method          TEXT DEFAULT 'efectivo',
+      note            TEXT DEFAULT '',
+      balance_before  REAL DEFAULT 0,
+      balance_after   REAL DEFAULT 0,
+      cajero          TEXT DEFAULT '',
+      user_id         INTEGER REFERENCES users(id),
+      cash_session_id INTEGER REFERENCES cash_sessions(id),
+      created_at      TEXT DEFAULT (datetime('now'))
     );
 
     -- ── Auditoría ──
@@ -535,6 +537,13 @@ function migrateProductsModel() {
   try {
     db.prepare("ALTER TABLE products ADD COLUMN model TEXT DEFAULT ''").run();
     console.log('[MIGRATE] products.model agregada');
+  } catch { /* ya existe */ }
+}
+
+function migratePaymentsColumns() {
+  try {
+    db.prepare('ALTER TABLE payments ADD COLUMN cash_session_id INTEGER REFERENCES cash_sessions(id)').run();
+    console.log('[MIGRATE] payments.cash_session_id agregada');
   } catch { /* ya existe */ }
 }
 
@@ -890,13 +899,15 @@ const customersRepo = {
     const cust = db.prepare('SELECT balance,credit_due FROM customers WHERE id=?').get(customerId);
     if (!cust) throw new Error('Cliente no encontrado');
     if (cust.balance <= 0) throw new Error('El cliente no tiene balance pendiente');
-    const before = cust.balance;
-    const after  = Math.max(0, before - amount);
+    const before = Math.round(cust.balance * 100) / 100;
+    if (amount > before + 0.01) throw new Error(`El abono (${amount.toFixed(2)}) supera el balance actual (${before.toFixed(2)})`);
+    const after  = Math.max(0, Math.round((before - amount) * 100) / 100);
     const payTx = db.transaction(() => {
-      db.prepare(`
+      const payInsert = db.prepare(`
         INSERT INTO payments(customer_id,sale_id,amount,method,note,balance_before,balance_after,cajero,user_id,cash_session_id)
         VALUES(?,?,?,?,?,?,?,?,?,?)
       `).run(customerId, saleId, amount, method, note||'Abono', before, after, cajero, userId, sessionId || null);
+      const paymentId = payInsert.lastInsertRowid;
       db.prepare(`
         UPDATE customers SET balance=?,credit_due=?,updated_at=datetime('now') WHERE id=?
       `).run(after, after <= 0 ? null : cust.credit_due, customerId);
@@ -907,7 +918,7 @@ const customersRepo = {
           VALUES(?,?,?,?,?,?,?)
         `).run(sessionId, 'abono', amount, method || 'efectivo', saleId, `Abono cliente`, userId);
       }
-      return { before, after, amount };
+      return { before, after, amount, paymentId };
     });
     return payTx();
   },
@@ -1001,14 +1012,14 @@ const salesRepo = {
   create({ session, customer, items, payment, user, type = 'factura' }) {
     const createSaleTx = db.transaction(() => {
       // 1. Calcular totales
-      const subtotal   = items.reduce((a, i) => a + i.unit_price * i.qty, 0);
+      const subtotal   = Math.round(items.reduce((a, i) => a + i.unit_price * i.qty, 0) * 100) / 100;
       const discPct    = payment.disc || 0;
-      const discAmt    = subtotal * (discPct / 100);
-      const base       = subtotal - discAmt;
+      const discAmt    = Math.round(subtotal * (discPct / 100) * 100) / 100;
+      const base       = Math.round((subtotal - discAmt) * 100) / 100;
       const taxPctSetting = db.prepare("SELECT value FROM settings WHERE key='tax_pct'").get();
       const taxPct     = type === 'factura' ? parseFloat(taxPctSetting?.value ?? 18) : 0;
-      const taxAmt     = base * (taxPct / 100);
-      const total      = base + taxAmt;
+      const taxAmt     = Math.round(base * (taxPct / 100) * 100) / 100;
+      const total      = Math.round((base + taxAmt) * 100) / 100;
 
       // 2. Validar stock
       for (const item of items) {
@@ -1029,8 +1040,11 @@ const salesRepo = {
         if (cust.status === 'moroso') {
           throw new Error('Cliente marcado como moroso — no puede comprar a crédito');
         }
+        if (cust.credit_limit <= 0) {
+          throw new Error('Este cliente no tiene límite de crédito configurado — contacte al administrador');
+        }
         if (cust.balance + total > cust.credit_limit) {
-          throw new Error(`Límite de crédito excedido. Disponible: ${cust.credit_limit - cust.balance}`);
+          throw new Error(`Límite de crédito excedido. Disponible: ${(cust.credit_limit - cust.balance).toFixed(2)}`);
         }
       }
 
@@ -1223,17 +1237,21 @@ const salesRepo = {
         }
       }
 
-      // Si era crédito, revertir balance
+      // Si era crédito, revertir balance y calcular overpayment
+      let overpayment = 0;
       if (sale.payment_method === 'credito' && sale.customer_id !== 1) {
         const cust = db.prepare('SELECT balance FROM customers WHERE id=?').get(sale.customer_id);
-        const newBal = Math.max(0, (cust?.balance || 0) - sale.total);
+        const theoretical = (cust?.balance || 0) - sale.total;
+        overpayment = Math.max(0, Math.round(-theoretical * 100) / 100);
+        const newBal = Math.max(0, Math.round(theoretical * 100) / 100);
         db.prepare('UPDATE customers SET balance=? WHERE id=?').run(newBal, sale.customer_id);
       }
 
       audit(userId, userName, 'venta_anulada', 'sales', id, `Motivo: ${reason}`);
+      return { overpayment };
     });
 
-    cancelTx();
+    return cancelTx();
   },
 };
 
@@ -1251,15 +1269,21 @@ const reportsRepo = {
     const _buildFilters = () => {
       if (range === 'custom' && safeFrom && safeTo) {
         return {
-          withAlias:    { sql: `date(s.created_at)   BETWEEN ? AND ?`,  params: [safeFrom, safeTo] },
-          withoutAlias: { sql: `date(created_at)     BETWEEN ? AND ?`,  params: [safeFrom, safeTo] },
-          payments:     { sql: `date(created_at,'localtime') BETWEEN ? AND ?`, params: [safeFrom, safeTo] },
+          // 'localtime' en created_at para comparar fechas UTC almacenadas con fechas locales del usuario
+          withAlias:    { sql: `date(s.created_at,'localtime') BETWEEN ? AND ?`,  params: [safeFrom, safeTo] },
+          withoutAlias: { sql: `date(created_at,'localtime')   BETWEEN ? AND ?`,  params: [safeFrom, safeTo] },
+          payments:     { sql: `date(created_at,'localtime')   BETWEEN ? AND ?`,  params: [safeFrom, safeTo] },
         };
       }
       if (range === 'month') return {
-        withAlias:    { sql: `strftime('%Y-%m',s.created_at) = strftime('%Y-%m','now','localtime')`, params: [] },
-        withoutAlias: { sql: `strftime('%Y-%m',created_at)   = strftime('%Y-%m','now','localtime')`, params: [] },
-        payments:     { sql: `strftime('%Y-%m',created_at,'localtime') = strftime('%Y-%m','now','localtime')`, params: [] },
+        withAlias:    { sql: `strftime('%Y-%m',s.created_at,'localtime') = strftime('%Y-%m','now','localtime')`, params: [] },
+        withoutAlias: { sql: `strftime('%Y-%m',created_at,'localtime')   = strftime('%Y-%m','now','localtime')`, params: [] },
+        payments:     { sql: `strftime('%Y-%m',created_at,'localtime')   = strftime('%Y-%m','now','localtime')`, params: [] },
+      };
+      if (range === 'week') return {
+        withAlias:    { sql: `date(s.created_at,'localtime') >= date('now','-6 days','localtime')`, params: [] },
+        withoutAlias: { sql: `date(created_at,'localtime')   >= date('now','-6 days','localtime')`, params: [] },
+        payments:     { sql: `date(created_at,'localtime')   >= date('now','-6 days','localtime')`, params: [] },
       };
       if (range === 'all') return {
         withAlias:    { sql: `1=1`, params: [] },
@@ -1268,9 +1292,9 @@ const reportsRepo = {
       };
       // today (default)
       return {
-        withAlias:    { sql: `date(s.created_at)  = date('now','localtime')`, params: [] },
-        withoutAlias: { sql: `date(created_at)    = date('now','localtime')`, params: [] },
-        payments:     { sql: `date(created_at,'localtime') = date('now','localtime')`, params: [] },
+        withAlias:    { sql: `date(s.created_at,'localtime') = date('now','localtime')`, params: [] },
+        withoutAlias: { sql: `date(created_at,'localtime')   = date('now','localtime')`, params: [] },
+        payments:     { sql: `date(created_at,'localtime')   = date('now','localtime')`, params: [] },
       };
     };
 
@@ -1465,10 +1489,10 @@ const returnsRepo = {
       }
 
       // 3. Calcular totales de la devolución (usando precios históricos del snapshot)
-      const subtotal = items.reduce((a, i) => a + i.unit_price * i.qty, 0);
+      const subtotal = Math.round(items.reduce((a, i) => a + i.unit_price * i.qty, 0) * 100) / 100;
       const taxPct   = original.tax_pct || 0;
-      const taxAmt   = subtotal * (taxPct / 100);
-      const total    = subtotal + taxAmt;
+      const taxAmt   = Math.round(subtotal * (taxPct / 100) * 100) / 100;
+      const total    = Math.round((subtotal + taxAmt) * 100) / 100;
 
       // 4. Crear venta de tipo 'devolucion'
       const retR = db.prepare(`
@@ -1511,10 +1535,13 @@ const returnsRepo = {
       }
 
       // 6. Si la venta original era a crédito, reducir balance del cliente
+      let overpayment = 0;
       if (original.payment_method === 'credito' && original.customer_id !== 1) {
         const cust = db.prepare('SELECT balance FROM customers WHERE id=?').get(original.customer_id);
         if (cust) {
-          const newBal = Math.max(0, (cust.balance || 0) - total);
+          const theoretical = (cust.balance || 0) - total;
+          overpayment = Math.max(0, Math.round(-theoretical * 100) / 100);
+          const newBal = Math.max(0, Math.round(theoretical * 100) / 100);
           db.prepare(`UPDATE customers SET balance=?,updated_at=datetime('now') WHERE id=?`)
             .run(newBal, original.customer_id);
         }
@@ -1546,7 +1573,7 @@ const returnsRepo = {
       audit(user.id, user.name, 'devolucion_procesada', 'sales', returnId,
         `Venta original #${originalSaleId} | Total devuelto: ${total} | Items: ${items.length}`);
 
-      return { returnId, total, subtotal, taxAmt };
+      return { returnId, total, subtotal, taxAmt, overpayment };
     });
 
     return createReturnTx();

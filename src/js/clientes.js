@@ -14,10 +14,15 @@ let cliTab    = 'todos';
 let cliSort   = 'name-asc';
 
 function renderClientes(el) {
+  // Resetear estado de búsqueda al entrar al módulo
+  cliSearch = '';
+  cliSort   = 'name-asc';
   // Si viene desde dashboard con filtro predefinido
   if (window._cliTabInicial) {
     cliTab = window._cliTabInicial;
     delete window._cliTabInicial;
+  } else {
+    cliTab = 'todos';
   }
   el.innerHTML = '';
 
@@ -691,11 +696,12 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
   const usedPct     = creditLimit > 0
     ? Math.min((balance / creditLimit) * 100, 100) : 0;
 
-  // Cargar pagos e historial desde SQLite
+  // Cargar pagos e historial desde backend (range='all' para incluir histórico)
   const pagos  = await window.api.customers.getPayments({ customerId: c.id }) || [];
-  const ventas = DB.sales.filter(s =>
-    (s.customer_id || s.clientId) === c.id && s.status !== 'cancelled'
-  ).reverse();
+  const ventasRaw = await window.api.sales.getAll({ customerId: c.id, range: 'all', limit: 9999 }) || [];
+  const ventas = ventasRaw.filter(s => s.status !== 'cancelled').reverse();
+  // Guardar ventas del cliente en window para que filtrarHistorialCliente las use
+  window._cliModalVentas = ventas;
 
   const totalCompras = ventas.reduce((a, s) => a + s.total, 0);
   const totalAbonado = pagos.reduce((a, p) => a + p.amount, 0);
@@ -727,10 +733,19 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
          Sin abonos registrados</td></tr>`
     : [...pagos].reverse().map(p => {
         const fecha = (p.created_at || '').split('T')[0].split(' ')[0];
+        // Vincular al sale_id si existe
+        const facturaRef = p.sale_id
+          ? `<span style="font-size:10px;color:var(--blue);cursor:pointer;margin-left:4px"
+               onclick="closeModal();setTimeout(()=>{
+                 const s=DB.sales.find(x=>x.id===${p.sale_id})||window._cliModalVentas?.find(x=>x.id===${p.sale_id});
+                 if(s)openDetalleVentaModal(s);
+               },100)">#${String(p.sale_id).padStart(5,'0')} ↗</span>`
+          : '';
+        const concepto = p.note || 'Abono';
         return `
           <tr>
             <td style="font-size:11px;color:var(--muted)">${fdate(fecha)}</td>
-            <td style="font-size:12px">${p.note || 'Abono'}</td>
+            <td style="font-size:12px">${concepto}${facturaRef}</td>
             <td style="text-align:right;color:var(--green);font-weight:700">+${fmt(p.amount)}</td>
             <td>
               <span class="badge g">${p.method || 'efectivo'}</span>
@@ -1102,10 +1117,8 @@ function filtrarHistorialCliente(customerId, q) {
     return;
   }
 
-  // Facturas del cliente
-  const ventas = DB.sales.filter(s =>
-    (s.customer_id || s.clientId) === customerId && s.status !== 'cancelled'
-  );
+  // Usar ventas ya cargadas del modal (incluye historial completo)
+  const ventas = window._cliModalVentas || [];
 
   // Buscar en items de cada venta
   const matches = [];
