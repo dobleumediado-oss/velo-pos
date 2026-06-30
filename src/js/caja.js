@@ -43,7 +43,7 @@ function renderCaja(el) {
   if (cajaOpen && cajaSession) {
     const sesId  = cajaSession.id;
     const tdS    = DB.sales.filter(s =>
-      (s.cash_session_id || s.cajaId) === sesId && s.type !== 'devolucion');
+      (s.cash_session_id || s.cajaId) === sesId && s.type !== 'devolucion' && s.status !== 'returned' && s.status !== 'cancelled');
     const tdDevs = DB.sales.filter(s => (s.cash_session_id || s.cajaId) === cajaSession.id && s.type === 'devolucion');
     const tdRev  = tdS.reduce((a, s) => a + s.total, 0);
     const tdDev  = tdDevs.reduce((a, s) => a + s.total, 0);
@@ -101,6 +101,33 @@ function renderCaja(el) {
       sesCard.appendChild(tw);
     }
     el.appendChild(sesCard);
+
+    // Devoluciones de esta sesión (visibilidad para el cajero) ─────────
+    if (tdDevs.length) {
+      const devCard = h('div', { class: 'card mb20' });
+      devCard.appendChild(
+        h('div', { class: 'fxb mb8' },
+          h('div', { class: 'card-title' }, `Devoluciones de esta sesión (${tdDevs.length})`)
+        )
+      );
+      const dtw = h('div', { class: 'tw' });
+      const dtbl = h('table', null,
+        h('thead', null, h('tr', null, ...['#','Cliente','Factura orig.','Total'].map(t => h('th', null, t))))
+      );
+      const dtbody = h('tbody', null);
+      [...tdDevs].reverse().forEach(s => {
+        dtbody.appendChild(h('tr', null,
+          h('td', { class: 'tm' }, `#${s.id}`),
+          h('td', null, h('div', { class: 'tb' }, s.customer_name || s.clientName || 'Consumidor Final')),
+          h('td', { class: 'tm' }, s.original_sale_id ? `#${s.original_sale_id}` : '—'),
+          h('td', { style: { fontWeight: 700, color: 'var(--red)' } }, `−${fmt(s.total)}`)
+        ));
+      });
+      dtbl.appendChild(dtbody);
+      dtw.appendChild(dtbl);
+      devCard.appendChild(dtw);
+      el.appendChild(devCard);
+    }
   }
 
   // ── Historial ─────────────────────────────────

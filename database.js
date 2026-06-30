@@ -733,6 +733,17 @@ function todayStr() {
   return new Date().toISOString().split('T')[0];
 }
 
+// Helpers de búsqueda (espejo de los del frontend en data.js) para que el
+// buscador global del backend normalice tildes/Ñ igual que el resto del sistema.
+function _searchNorm(s) {
+  return String(s == null ? '' : s)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().trim();
+}
+function _digitsOf(s) {
+  return String(s == null ? '' : s).replace(/\D/g, '');
+}
+
 function nowStr() {
   return new Date().toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' });
 }
@@ -1297,6 +1308,68 @@ const salesRepo = {
       ORDER BY s.id DESC
       LIMIT ?
     `).all(...params);
+  },
+
+  /**
+   * Búsqueda global de ventas sobre TODO el historial (incluidas las
+   * ventas de importación histórica y de cualquier fecha). Pensado para el
+   * buscador global (Cmd+K), que antes solo veía las ventas de hoy en memoria.
+   *
+   * Trae un conjunto amplio de candidatos por SQL (rápido, con índices) y
+   * luego filtra con normalización de tildes/Ñ en JS, igual que el resto
+   * del sistema. Limita el resultado para no saturar la UI.
+   */
+  search(q, limit = 8) {
+    const term = String(q || '').trim();
+    if (term.length < 2) return [];
+
+    const qNorm   = _searchNorm(term);
+    const qDigits = _digitsOf(term);
+    const idNum   = parseInt(term, 10);
+
+    // Candidatos por SQL: por id exacto, o LIKE amplio en los campos de texto
+    // y en los nombres de producto de los items. El LIKE usa el término crudo
+    // en minúsculas; el filtro fino con tildes se hace después en JS.
+    const like = `%${term.toLowerCase()}%`;
+    const rows = db.prepare(`
+      SELECT s.*,
+             GROUP_CONCAT(si.product_name || ' x' || si.qty, ' | ') as items_summary,
+             c.phone AS _cust_phone
+      FROM sales s
+      LEFT JOIN sale_items si ON s.id = si.sale_id
+      LEFT JOIN customers c   ON c.id = s.customer_id
+      WHERE s.status != 'cancelled'
+        AND (
+          s.id = ?
+          OR lower(s.customer_name) LIKE ?
+          OR lower(s.customer_rnc)  LIKE ?
+          OR lower(s.notes)         LIKE ?
+          OR lower(si.product_name) LIKE ?
+          OR lower(si.product_code) LIKE ?
+          OR lower(c.phone)         LIKE ?
+        )
+      GROUP BY s.id
+      ORDER BY s.id DESC
+      LIMIT 300
+    `).all(Number.isFinite(idNum) ? idNum : -1, like, like, like, like, like, like);
+
+    // Filtro fino con normalización de tildes/Ñ y dígitos con guarda.
+    const matchText   = (hay) => !qNorm   || _searchNorm(hay).includes(qNorm);
+    const matchDigits = (hay) => !!qDigits && _digitsOf(hay).includes(qDigits);
+
+    const filtered = rows.filter(s =>
+      String(s.id) === term ||
+      String(s.id).includes(term) ||
+      matchText(s.customer_name) ||
+      matchText(s.customer_rnc) ||
+      matchDigits(s.customer_rnc) ||
+      matchDigits(s._cust_phone) ||
+      matchText(s.notes) ||
+      matchText(s.items_summary)
+    );
+
+    // Limpiar el campo auxiliar antes de devolver
+    return filtered.slice(0, limit).map(({ _cust_phone, ...rest }) => rest);
   },
 
   cancel(id, reason, userId, userName) {

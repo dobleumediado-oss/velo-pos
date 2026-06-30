@@ -92,7 +92,7 @@ async function renderDash(el) {
   }
 
   const sales  = DB.sales.filter(s =>
-    s.status !== 'cancelled' && s.type !== 'devolucion');
+    s.status !== 'cancelled' && s.status !== 'returned' && s.type !== 'devolucion');
   const rev    = sales.reduce((a, s) => a + (s.total || 0), 0);
   const itbis  = sales.reduce((a, s) => a + (s.tax_amt || s.itbis || 0), 0);
 
@@ -114,7 +114,7 @@ async function renderDash(el) {
   // usadas por el selector de período (3 días/7 días) más abajo.
   const weekSales = await window.api.sales.getAll({ range: 'week' });
   const mSales = (allSales || []).filter(s =>
-    s.status !== 'cancelled' && s.type !== 'devolucion');
+    s.status !== 'cancelled' && s.status !== 'returned' && s.type !== 'devolucion');
   // Ventas del mes vía agregado SQL — exacto sin importar el límite de filas
   // de sales:getAll (antes 200, insuficiente para negocios de alto volumen).
   const monthSummaryRes = await window.api.reports.summary({ range: 'month', requestUserId: user.id }).catch(() => null);
@@ -296,10 +296,10 @@ async function renderDash(el) {
   let periodSales = sales;
   if (dashPeriod === '3days') {
     const cutoff = new Date(Date.now() - 3*24*60*60*1000).toISOString().split('T')[0];
-    periodSales  = (weekSales||[]).filter(s => s.status !== 'cancelled' && s.type !== 'devolucion'
+    periodSales  = (weekSales||[]).filter(s => s.status !== 'cancelled' && s.status !== 'returned' && s.type !== 'devolucion'
       && (s.created_at||'').slice(0,10) >= cutoff);
   } else if (dashPeriod === 'week') {
-    periodSales = (weekSales||[]).filter(s => s.status !== 'cancelled' && s.type !== 'devolucion');
+    periodSales = (weekSales||[]).filter(s => s.status !== 'cancelled' && s.status !== 'returned' && s.type !== 'devolucion');
   } else if (dashPeriod === 'month') {
     periodSales = mSales;
   }
@@ -740,7 +740,7 @@ async function renderDash(el) {
   ));
 
   const last5 = [...DB.sales]
-    .filter(s => s.status !== 'cancelled' && s.type !== 'devolucion')
+    .filter(s => s.status !== 'cancelled' && s.status !== 'returned' && s.type !== 'devolucion')
     .reverse().slice(0, 5);
 
   if (!last5.length) {
@@ -929,7 +929,7 @@ async function _dashRenderChart(canvasId, labels, data, dates, period, detailEl,
         const daySales = (allSales||[]).filter(s => {
           const sd = (s.created_at||'').split('T')[0].split(' ')[0];
           return (period === '12m' ? sd.slice(0,7) === d : sd === d) &&
-                 s.status !== 'cancelled' && s.type !== 'devolucion';
+                 s.status !== 'cancelled' && s.status !== 'returned' && s.type !== 'devolucion';
         });
         detailEl.innerHTML = `
           <div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;

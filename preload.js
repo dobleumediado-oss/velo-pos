@@ -72,6 +72,7 @@ contextBridge.exposeInMainWorld('api', {
     create:  (data)          => ipcRenderer.invoke('sales:create', data),
     getById: (data)          => ipcRenderer.invoke('sales:getById', data),
     getAll:  (data)          => ipcRenderer.invoke('sales:getAll', data),
+    search:  (data)          => ipcRenderer.invoke('sales:search', data),
     cancel:  (data)          => ipcRenderer.invoke('sales:cancel', data),
     return:  (data)          => ipcRenderer.invoke('sales:return', data),
   },

@@ -1000,7 +1000,8 @@ function _closeGSearch() {
   _gSearchOpen = false;
 }
 
-function _runGSearch(q, resultsEl) {
+let _gSearchSeq = 0;
+async function _runGSearch(q, resultsEl) {
   if (!q || q.trim().length < 2) {
     resultsEl.innerHTML = `<div style="text-align:center;padding:32px;color:var(--muted2);font-size:13px">
       Empieza a escribir para buscar en todo el sistema</div>`;
@@ -1009,8 +1010,9 @@ function _runGSearch(q, resultsEl) {
   const ql = q.trim();
   const qNorm   = searchNorm(ql);
   const qDigits = digitsOf(ql);
+  const seq = ++_gSearchSeq;  // token anti-condición de carrera
 
-  // ── Productos ──
+  // ── Productos (en memoria, catálogo completo) ──
   const prods = (DB.products || []).filter(p => p.active !== 0 && (
     matchText(p.name, qNorm) ||
     matchText(p.code, qNorm) ||
@@ -1020,24 +1022,7 @@ function _runGSearch(q, resultsEl) {
     matchText(p.category, qNorm)
   )).slice(0, 5);
 
-  // ── Facturas ──
-  const facturas = (DB.sales || []).filter(s =>
-    s.status !== 'cancelled' && s.type !== 'devolucion' && (
-      String(s.id).includes(ql) ||
-      matchText(s.customer_name, qNorm) ||
-      matchText(s.ncf, qNorm) ||
-      (s.items && s.items.length
-        ? s.items.some(i => {
-            const prod = DB.products?.find(p => p.id === i.product_id);
-            return matchText(i.product_name || i.name, qNorm) ||
-                   matchText(i.product_code, qNorm) ||
-                   matchText(prod?.model, qNorm);
-          })
-        : matchText(s.items_summary, qNorm))
-    )
-  ).slice(0, 4);
-
-  // ── Clientes ──
+  // ── Clientes (en memoria, lista completa) ──
   const clientes = (DB.customers || []).filter(c => c.id !== 1 && c.active !== 0 && (
     matchText(c.name, qNorm) ||
     matchText(c.phone, qNorm) ||
@@ -1045,6 +1030,25 @@ function _runGSearch(q, resultsEl) {
     matchText(c.rnc, qNorm) ||
     matchDigits(c.rnc, qDigits)
   )).slice(0, 3);
+
+  // ── Facturas: búsqueda en TODO el historial vía backend ──
+  // Incluye ventas históricas y de importación, no solo las de hoy en memoria.
+  let facturas = [];
+  try {
+    facturas = await window.api.sales.search({ q: ql, limit: 4 }) || [];
+  } catch (e) {
+    // Respaldo: si el backend no responde, busca en lo que haya en memoria.
+    facturas = (DB.sales || []).filter(s =>
+      s.status !== 'cancelled' && s.type !== 'devolucion' && (
+        String(s.id).includes(ql) ||
+        matchText(s.customer_name, qNorm) ||
+        matchText(s.items_summary, qNorm)
+      )
+    ).slice(0, 4);
+  }
+
+  // Si el usuario siguió escribiendo, descartar este resultado (llegó tarde).
+  if (seq !== _gSearchSeq) return;
 
   const total = prods.length + facturas.length + clientes.length;
 
@@ -1091,11 +1095,12 @@ function _runGSearch(q, resultsEl) {
       Facturas (${facturas.length})</div>`);
     facturas.forEach(s => {
       const fecha = (s.created_at||'').split('T')[0].split(' ')[0];
+      // Modelos: si la venta trae items los usa; si no, intenta del summary.
       const models = [...new Set((s.items||[])
         .map(i => DB.products?.find(p=>p.id===i.product_id)?.model)
         .filter(Boolean))];
       sections.push(`
-        <div onclick="_closeGSearch();routeTo('ventas');setTimeout(()=>openDetalleVentaModal&&openDetalleVentaModal(DB.sales.find(x=>x.id===${s.id})),300)"
+        <div onclick="_closeGSearch();_openVentaGlobal(${s.id})"
              style="padding:10px 16px;cursor:pointer;display:flex;justify-content:space-between;
                     align-items:center"
              onmouseenter="this.style.background='var(--surface2)'"
@@ -1139,4 +1144,25 @@ function _runGSearch(q, resultsEl) {
   }
 
   resultsEl.innerHTML = sections.join('');
+}
+
+// Abre el detalle de una venta desde el buscador global. Si la venta no está
+// en memoria (es histórica o de otra fecha), la carga del backend por id.
+async function _openVentaGlobal(id) {
+  let sale = (DB.sales || []).find(x => x.id === id);
+  if (!sale) {
+    try {
+      sale = await window.api.sales.getById({ id });
+    } catch (e) {
+      sale = null;
+    }
+  }
+  if (!sale) {
+    if (typeof toast === 'function') toast('No se pudo cargar la venta', 'err');
+    return;
+  }
+  routeTo('ventas');
+  setTimeout(() => {
+    if (typeof openDetalleVentaModal === 'function') openDetalleVentaModal(sale);
+  }, 300);
 }

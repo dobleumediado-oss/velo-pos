@@ -848,6 +848,15 @@ ipcMain.handle('sales:getAll', async (_, filters) => {
   return salesRepo.getAll(filters);
 });
 
+ipcMain.handle('sales:search', async (_, { q, limit } = {}) => {
+  try {
+    return salesRepo.search(q, limit || 8);
+  } catch (e) {
+    console.error('[sales:search]', e);
+    return [];
+  }
+});
+
 ipcMain.handle('sales:cancel', async (_, { id, reason, requestUserId }) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
