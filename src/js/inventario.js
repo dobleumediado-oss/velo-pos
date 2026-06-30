@@ -156,7 +156,7 @@ function renderInvTable() {
   if (!wrap) return;
   wrap.innerHTML = '';
 
-  const q = invSearch.toLowerCase().trim();
+  const qNorm = searchNorm(invSearch);
 
   let prods = DB.products.filter(p => {
     const stockMin = p.stock_min || 5;
@@ -164,10 +164,12 @@ function renderInvTable() {
     if (invTab === 'sin_stock' && p.stock !== 0) return false;
     if (invTab === 'por_modelo' && !p.model) return false;
     const mCat = !invCat || p.category === invCat;
-    const mQ   = !q ||
-      p.name.toLowerCase().includes(q)  ||
-      p.code.toLowerCase().includes(q)  ||
-      (p.brand && p.brand.toLowerCase().includes(q));
+    const mQ   = !qNorm ||
+      matchText(p.name, qNorm)    ||
+      matchText(p.code, qNorm)    ||
+      matchText(p.brand, qNorm)   ||
+      matchText(p.model, qNorm)   ||
+      matchText(p.barcode, qNorm);
     return mCat && mQ;
   }).sort((a, b) => {
     if (invSort === 'name')       return a.name.localeCompare(b.name);
@@ -1015,16 +1017,16 @@ function moverDeseleccionarTodos() {
 }
 
 function moverFiltrarTabla() {
-  const q = (document.getElementById('mcat-buscar')?.value || '').toLowerCase().trim();
+  const qNorm = searchNorm(document.getElementById('mcat-buscar')?.value || '');
   const tbody = document.getElementById('mcat-tbody');
   if (!tbody) return;
 
   const prods = DB.products.slice().sort((a, b) => a.name.localeCompare(b.name));
-  const filtrados = q
+  const filtrados = qNorm
     ? prods.filter(p =>
-        p.name.toLowerCase().includes(q) ||
-        p.code.toLowerCase().includes(q) ||
-        (p.brand || '').toLowerCase().includes(q)
+        matchText(p.name, qNorm) ||
+        matchText(p.code, qNorm) ||
+        matchText(p.brand, qNorm)
       )
     : prods;
 

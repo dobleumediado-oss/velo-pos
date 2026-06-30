@@ -1006,38 +1006,44 @@ function _runGSearch(q, resultsEl) {
       Empieza a escribir para buscar en todo el sistema</div>`;
     return;
   }
-  const ql = q.toLowerCase().trim();
+  const ql = q.trim();
+  const qNorm   = searchNorm(ql);
+  const qDigits = digitsOf(ql);
 
   // ── Productos ──
   const prods = (DB.products || []).filter(p => p.active !== 0 && (
-    p.name?.toLowerCase().includes(ql) ||
-    p.code?.toLowerCase().includes(ql) ||
-    p.barcode?.toLowerCase().includes(ql) ||
-    p.model?.toLowerCase().includes(ql) ||
-    p.brand?.toLowerCase().includes(ql) ||
-    p.category?.toLowerCase().includes(ql)
+    matchText(p.name, qNorm) ||
+    matchText(p.code, qNorm) ||
+    matchText(p.barcode, qNorm) ||
+    matchText(p.model, qNorm) ||
+    matchText(p.brand, qNorm) ||
+    matchText(p.category, qNorm)
   )).slice(0, 5);
 
   // ── Facturas ──
   const facturas = (DB.sales || []).filter(s =>
     s.status !== 'cancelled' && s.type !== 'devolucion' && (
       String(s.id).includes(ql) ||
-      (s.customer_name || '').toLowerCase().includes(ql) ||
-      (s.ncf || '').toLowerCase().includes(ql) ||
-      (s.items || []).some(i => {
-        const prod = DB.products?.find(p => p.id === i.product_id);
-        return (i.product_name || i.name || '').toLowerCase().includes(ql) ||
-               (i.product_code || '').toLowerCase().includes(ql) ||
-               prod?.model?.toLowerCase().includes(ql);
-      })
+      matchText(s.customer_name, qNorm) ||
+      matchText(s.ncf, qNorm) ||
+      (s.items && s.items.length
+        ? s.items.some(i => {
+            const prod = DB.products?.find(p => p.id === i.product_id);
+            return matchText(i.product_name || i.name, qNorm) ||
+                   matchText(i.product_code, qNorm) ||
+                   matchText(prod?.model, qNorm);
+          })
+        : matchText(s.items_summary, qNorm))
     )
   ).slice(0, 4);
 
   // ── Clientes ──
   const clientes = (DB.customers || []).filter(c => c.id !== 1 && c.active !== 0 && (
-    c.name?.toLowerCase().includes(ql) ||
-    (c.phone || '').includes(ql) ||
-    (c.rnc || '').includes(ql)
+    matchText(c.name, qNorm) ||
+    matchText(c.phone, qNorm) ||
+    matchDigits(c.phone, qDigits) ||
+    matchText(c.rnc, qNorm) ||
+    matchDigits(c.rnc, qDigits)
   )).slice(0, 3);
 
   const total = prods.length + facturas.length + clientes.length;

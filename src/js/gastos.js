@@ -239,7 +239,7 @@ async function renderListaGastos(el, user) {
     </div>`;
 
   const loadTable = async () => {
-    const search   = document.getElementById('gf-search')?.value.toLowerCase();
+    const search   = searchNorm(document.getElementById('gf-search')?.value || '');
     const from     = document.getElementById('gf-from')?.value;
     const to       = document.getElementById('gf-to')?.value;
     const status   = document.getElementById('gf-status')?.value;
@@ -254,8 +254,8 @@ async function renderListaGastos(el, user) {
       const res = await window.api.expenses.getAll(filters);
       if (!res.ok) throw new Error(res.error);
       let data = res.data;
-      if (search) data = data.filter(e => e.description?.toLowerCase().includes(search) ||
-        e.supplier_name?.toLowerCase().includes(search));
+      if (search) data = data.filter(e => matchText(e.description, search) ||
+        matchText(e.supplier_name, search));
 
       if (!data.length) {
         wrap.innerHTML = `<div style="text-align:center;padding:40px;color:var(--muted2)">

@@ -111,12 +111,13 @@ async function renderPOS(el) {
               posSearch = q;
               renderPOSGrid();
               // Si hay un solo resultado, agregarlo automáticamente
+              const qN = searchNorm(q);
               const filtered = DB.products.filter(p =>
                 p.active !== 0 && (
-                  p.name?.toLowerCase().includes(q.toLowerCase()) ||
-                  p.code?.toLowerCase().includes(q.toLowerCase()) ||
-                  p.barcode?.toLowerCase().includes(q.toLowerCase()) ||
-                  p.model?.toLowerCase().includes(q.toLowerCase())
+                  matchText(p.name, qN) ||
+                  matchText(p.code, qN) ||
+                  matchText(p.barcode, qN) ||
+                  matchText(p.model, qN)
                 )
               );
               if (filtered.length === 1) {
@@ -194,18 +195,19 @@ function renderPOSGrid() {
   const grid = document.getElementById('pos-grid');
   if (!grid) return;
 
-  const q   = posSearch.toLowerCase().trim();
+  const qNorm = searchNorm(posSearch);
   const cat = document.getElementById('pos-cat')?.value || '';
   const inv = currentInv();
   const pm  = inv.pmode || 'retail';
 
   const prods = DB.products.filter(p => {
     const mCat = !cat || p.category === cat;
-    const mQ   = !q ||
-      p.name.toLowerCase().includes(q) ||
-      p.code.toLowerCase().includes(q) ||
-      (p.brand && p.brand.toLowerCase().includes(q)) ||
-      (p.model && p.model.toLowerCase().includes(q));
+    const mQ   = !qNorm ||
+      matchText(p.name, qNorm) ||
+      matchText(p.code, qNorm) ||
+      matchText(p.brand, qNorm) ||
+      matchText(p.model, qNorm) ||
+      matchText(p.barcode, qNorm);
     return mCat && mQ && p.active !== 0;
   });
 

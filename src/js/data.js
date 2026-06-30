@@ -258,6 +258,33 @@ const fmt = n =>
     minimumFractionDigits: 2, maximumFractionDigits: 2
   });
 
+// ── Helpers de búsqueda (motor único de todos los buscadores) ──
+// Normaliza para comparar texto: minúsculas + quita tildes/acentos.
+// "FAÑA" → "fana", "José" → "jose", "ESCAÑO" → "escano".
+// Así "faña", "fana", "FAÑA" se encuentran entre sí. Maneja Ñ/Ç/tildes
+// que SQLite lower() y un toLowerCase() crudo no equiparan.
+const searchNorm = (s) =>
+  String(s == null ? '' : s)
+    .normalize('NFD')              // separa letra + acento
+    .replace(/[\u0300-\u036f]/g, '') // elimina los acentos
+    .toLowerCase()
+    .trim();
+
+// Extrae solo dígitos de una cadena (para teléfonos/RNC con guiones).
+// "809-555-1234" → "8095551234". Devuelve '' si no hay dígitos.
+const digitsOf = (s) => String(s == null ? '' : s).replace(/\D/g, '');
+
+// ¿El texto `hay` (haystack) contiene la búsqueda `q` ya normalizada?
+// Acepta q crudo y lo normaliza. Vacío → no filtra (true).
+const matchText = (hay, qNorm) =>
+  !qNorm || searchNorm(hay).includes(qNorm);
+
+// ¿Coincide por dígitos? GUARDA anti-falso-positivo: si la búsqueda no
+// tiene dígitos, devuelve false (no aporta match) en vez de includes('')
+// que siempre da true. Este era el bug de "abanico" en Ventas.
+const matchDigits = (hay, qDigits) =>
+  !!qDigits && digitsOf(hay).includes(qDigits);
+
 // Fecha de hoy YYYY-MM-DD
 const today = () => new Date().toISOString().split('T')[0];
 

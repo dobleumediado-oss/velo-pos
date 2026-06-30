@@ -254,11 +254,13 @@ function buscarProductoPO(q) {
   const dd = document.getElementById('po-prod-dd');
   if (!q || q.length < 2) { dd.style.display = 'none'; return; }
 
+  const qNorm = searchNorm(q);
   const matches = DB.products.filter(p =>
     p.active !== 0 && (
-      p.name?.toLowerCase().includes(q.toLowerCase()) ||
-      p.code?.toLowerCase().includes(q.toLowerCase()) ||
-      p.barcode?.toLowerCase().includes(q.toLowerCase())
+      matchText(p.name, qNorm) ||
+      matchText(p.code, qNorm) ||
+      matchText(p.barcode, qNorm) ||
+      matchText(p.model, qNorm)
     )
   ).slice(0, 8);
 

@@ -118,7 +118,9 @@ function renderVentasTable() {
   const tableWrap = document.getElementById('ventas-table-wrap');
   if (!tableWrap) return;
 
-  const q = ventasSearch.toLowerCase().trim();
+  const q = ventasSearch.trim();
+  const qNorm   = searchNorm(q);
+  const qDigits = digitsOf(q);
   const esCotizTab = ventasTab === 'cotizaciones';
 
   let sales = DB.sales.filter(s => {
@@ -139,25 +141,30 @@ function renderVentasTable() {
     // Filtro de método (solo facturas)
     const matchPay = esCotizTab || !ventasPay || method === ventasPay;
 
-    // Búsqueda extendida: cliente, #, RNC, teléfono, producto
-    const matchQ = !q ||
+    // Búsqueda extendida: #, cliente, RNC, teléfono, producto (código/nombre/modelo)
+    const matchQ = !qNorm ||
       String(s.id).includes(q) ||
-      name.toLowerCase().includes(q) ||
-      rnc.includes(q) ||
-      // Buscar por teléfono del cliente
+      matchText(name, qNorm) ||
+      matchText(rnc, qNorm) ||
+      matchDigits(rnc, qDigits) ||
+      // Teléfono del cliente — solo si la búsqueda trae dígitos (anti falso positivo)
       (() => {
         const cli = DB.customers.find(c => c.id === (s.customer_id || s.clientId));
-        return cli && (cli.phone || '').replace(/[^0-9]/g,'').includes(q.replace(/[^0-9]/g,''));
+        return cli && matchDigits(cli.phone, qDigits);
       })() ||
-      // Buscar por nombre, código o modelo del producto en los items
-      (s.items || []).some(i =>
-        (i.product_name || i.name || '').toLowerCase().includes(q) ||
-        (i.product_code || i.code || '').toLowerCase().includes(q) ||
-        (() => {
-          const prod = DB.products.find(p => p.id === i.product_id);
-          return prod?.model?.toLowerCase().includes(q) || false;
-        })()
-      );
+      // Nombre, código o modelo del producto en los items.
+      // getAll() entrega items_summary (string "Prod x2 | Otro x1") cuando
+      // items[] no está cargado; lo usamos como respaldo para no perder el match.
+      (s.items && s.items.length
+        ? s.items.some(i =>
+            matchText(i.product_name || i.name, qNorm) ||
+            matchText(i.product_code || i.code, qNorm) ||
+            (() => {
+              const prod = DB.products.find(p => p.id === i.product_id);
+              return matchText(prod?.model, qNorm);
+            })()
+          )
+        : matchText(s.items_summary, qNorm));
 
     return matchPay && matchQ;
   });
@@ -1091,16 +1098,32 @@ async function buscarFacturaDevolucion() {
 
   await reloadSales({ range: 'all' });
 
-  const qNum = parseInt(q) || null;
-  const matches = DB.sales.filter(s =>
-    s.type !== 'devolucion' && s.status !== 'cancelled' && s.status !== 'returned' && (
-      !q ||
+  const qNum    = parseInt(q) || null;
+  const qNorm   = searchNorm(q);
+  const qDigits = digitsOf(q);
+  const matches = DB.sales.filter(s => {
+    if (s.type === 'devolucion' || s.status === 'cancelled' || s.status === 'returned') return false;
+    if (!q) return true;
+    // Cliente de la venta (para teléfono)
+    const cli = DB.customers.find(c => c.id === (s.customer_id || s.clientId));
+    return (
       (qNum && s.id === qNum) ||
-      String(s.id).padStart(5,'0').includes(q) ||
-      (s.customer_name || '').toLowerCase().includes(q.toLowerCase()) ||
-      (s.customer_rnc || '').replace(/[-\s]/g,'').includes(q.replace(/[-\s]/g,''))
-    )
-  );
+      String(s.id).padStart(5, '0').includes(q) ||
+      String(s.id).includes(q) ||
+      matchText(s.customer_name, qNorm) ||
+      matchText(s.customer_rnc, qNorm) ||
+      matchDigits(s.customer_rnc, qDigits) ||
+      matchDigits(cli?.phone, qDigits) ||
+      // Producto dentro de la factura: items[] si está cargado, si no items_summary
+      (s.items && s.items.length
+        ? s.items.some(i =>
+            matchText(i.product_name || i.name, qNorm) ||
+            matchText(i.product_code || i.code, qNorm) ||
+            matchText(DB.products.find(p => p.id === i.product_id)?.model, qNorm)
+          )
+        : matchText(s.items_summary, qNorm))
+    );
+  });
 
   result.innerHTML = '';
 
