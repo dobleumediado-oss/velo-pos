@@ -189,7 +189,7 @@ function createTables() {
       cancelled_at    TEXT,
       cancel_reason   TEXT DEFAULT '',
       original_sale_id INTEGER,
-      created_at      TEXT DEFAULT (datetime('now'))
+      created_at      TEXT DEFAULT (datetime('now','localtime'))
     );
 
     -- ── Detalle de ventas (snapshot histórico) ──
@@ -219,7 +219,7 @@ function createTables() {
       cajero          TEXT DEFAULT '',
       user_id         INTEGER REFERENCES users(id),
       cash_session_id INTEGER REFERENCES cash_sessions(id),
-      created_at      TEXT DEFAULT (datetime('now'))
+      created_at      TEXT DEFAULT (datetime('now','localtime'))
     );
 
     -- ── Auditoría ──
@@ -904,8 +904,8 @@ const customersRepo = {
     const after  = Math.max(0, Math.round((before - amount) * 100) / 100);
     const payTx = db.transaction(() => {
       const payInsert = db.prepare(`
-        INSERT INTO payments(customer_id,sale_id,amount,method,note,balance_before,balance_after,cajero,user_id,cash_session_id)
-        VALUES(?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO payments(customer_id,sale_id,amount,method,note,balance_before,balance_after,cajero,user_id,cash_session_id,created_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
       `).run(customerId, saleId, amount, method, note||'Abono', before, after, cajero, userId, sessionId || null);
       const paymentId = payInsert.lastInsertRowid;
       db.prepare(`
@@ -1052,8 +1052,8 @@ const salesRepo = {
       const saleR = db.prepare(`
         INSERT INTO sales(cash_session_id,customer_id,customer_name,customer_rnc,
           type,status,subtotal,discount_pct,discount_amt,tax_pct,tax_amt,total,
-          payment_method,price_mode,cajero,user_id)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          payment_method,price_mode,cajero,user_id,created_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
       `).run(
         session?.id || null,
         customer.id,
