@@ -109,15 +109,19 @@ async function renderDash(el) {
   // Ventas del mes
   const today_ = today();
   const monthPfx = today_.slice(0, 7);
-  const allSales  = await window.api.sales.getAll({ range: 'month' });
-  // Filas reales de los últimos 7 días — independiente del mes en curso,
-  // usadas por el selector de período (3 días/7 días) más abajo.
-  const weekSales = await window.api.sales.getAll({ range: 'week' });
+
+  // Estas 4 consultas son independientes entre sí: se piden en paralelo para
+  // no encadenar la espera (antes eran 4 await en serie ≈ suma de latencias).
+  const [allSales, weekSales, monthSummaryRes, dailyTrendRes] = await Promise.all([
+    window.api.sales.getAll({ range: 'month' }),
+    window.api.sales.getAll({ range: 'week' }),
+    window.api.reports.summary({ range: 'month', requestUserId: user.id }).catch(() => null),
+    window.api.reports.dailyTrend({ days: 30, requestUserId: user.id }).catch(() => null),
+  ]);
+
   const mSales = (allSales || []).filter(s =>
     s.status !== 'cancelled' && s.status !== 'returned' && s.type !== 'devolucion');
-  // Ventas del mes vía agregado SQL — exacto sin importar el límite de filas
-  // de sales:getAll (antes 200, insuficiente para negocios de alto volumen).
-  const monthSummaryRes = await window.api.reports.summary({ range: 'month', requestUserId: user.id }).catch(() => null);
+  // Ventas del mes vía agregado SQL — exacto sin importar el límite de filas.
   const mRev          = monthSummaryRes?.ok ? monthSummaryRes.data.totalRev          : mSales.reduce((a, s) => a + (s.total || 0), 0);
   const mAbonos       = monthSummaryRes?.ok ? (monthSummaryRes.data.abonos?.total    || 0) : 0;
   const mVentasContado = monthSummaryRes?.ok ? (monthSummaryRes.data.ventasContado   || 0) : 0;
@@ -125,10 +129,7 @@ async function renderDash(el) {
   // cobradoMes = ventas al contado + abonos de CxC (dinero real recibido en el mes)
   const mCobrado      = monthSummaryRes?.ok ? (monthSummaryRes.data.cobradoMes       || 0) : 0;
 
-
-  // Agregado diario real vía SQL — usado por los gráficos de 7 y 30 días.
-  // allSales (range:'month') no alcanza esos rangos cerca del inicio del mes.
-  const dailyTrendRes = await window.api.reports.dailyTrend({ days: 30, requestUserId: user.id }).catch(() => null);
+  // Agregado diario para los gráficos de 7 y 30 días.
   const dailyByDate = {};
   (dailyTrendRes?.data || []).forEach(r => { dailyByDate[r.day] = r; });
 

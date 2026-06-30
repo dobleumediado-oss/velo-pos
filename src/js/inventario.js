@@ -86,7 +86,7 @@ function renderInventario(el) {
   // ── Filtros y tabs ───────────────────────────
   el.appendChild(
     h('div', { class: 'flex', style: { marginBottom: '10px', gap: '8px', flexWrap: 'wrap' } },
-      h('div', { class: 'tabs', style: { marginBottom: 0 } },
+      h('div', { class: 'tabs', id: 'inv-tabs', style: { marginBottom: 0 } },
         ...[
           { k: 'todos',     l: 'Todos' },
           { k: 'bajo',      l: `Stock bajo (${lowStock.length})` },
@@ -94,7 +94,15 @@ function renderInventario(el) {
           { k: 'por_modelo', l: 'Por Modelo' },
         ].map(t => h('button', {
           class: `tab ${invTab === t.k ? 'on' : ''}`,
-          onclick: () => { invTab = t.k; renderInvTable(); }
+          'data-tab': t.k,
+          onclick: () => {
+            invTab = t.k;
+            // Mover el resaltado 'on' al tab activo sin redibujar todo
+            const tabsEl = document.getElementById('inv-tabs');
+            if (tabsEl) tabsEl.querySelectorAll('button[data-tab]').forEach(b =>
+              b.classList.toggle('on', b.getAttribute('data-tab') === t.k));
+            renderInvTable();
+          }
         }, t.l))
       )
     )
@@ -196,7 +204,8 @@ function renderInvTable() {
   // Ahora: 1 innerHTML con template string → instantáneo
   const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
-  const rowsHTML = prods.map((p, idx) => {
+  // Función que genera el HTML de una fila (índice = posición en prods)
+  const rowHTML = (p, idx) => {
     const stockMin = p.stock_min || 5;
     const isLow    = p.stock > 0 && p.stock <= stockMin;
     const isOut    = p.stock === 0;
@@ -240,7 +249,16 @@ function renderInvTable() {
         </div>
       </td>
     </tr>`;
-  }).join('');
+  };
+
+  // ── Renderizado incremental ──────────────────────────────────────
+  // Con 1200+ productos, pintar todas las filas de golpe congela la UI un
+  // par de segundos. Pintamos un lote inicial al instante y cargamos el
+  // resto a medida que el usuario hace scroll. Los índices se mantienen
+  // contra el array `prods` completo, así la delegación de eventos no cambia.
+  const BATCH = 80;
+  let rendered = Math.min(BATCH, prods.length);
+  const firstRows = prods.slice(0, rendered).map((p, i) => rowHTML(p, i)).join('');
 
   const card = document.createElement('div');
   card.className = 'card';
@@ -252,9 +270,33 @@ function renderInvTable() {
           <th>Stock</th><th>Mín</th><th>Precio</th>
           <th>Mayorista</th><th>Costo</th><th></th>
         </tr></thead>
-        <tbody>${rowsHTML}</tbody>
+        <tbody>${firstRows}</tbody>
       </table>
     </div>`;
+
+  // Cargar más filas al acercarse al final del scroll
+  if (rendered < prods.length) {
+    const scroller = card.querySelector('.tw');
+    const tbody    = card.querySelector('tbody');
+    const loadMore = () => {
+      if (rendered >= prods.length) return;
+      const next = prods.slice(rendered, rendered + BATCH)
+        .map((p, i) => rowHTML(p, rendered + i)).join('');
+      tbody.insertAdjacentHTML('beforeend', next);
+      rendered += BATCH;
+    };
+    // Scroll dentro del contenedor de la tabla y de la ventana (por si el
+    // contenedor no tiene scroll propio y scrollea la página).
+    scroller.addEventListener('scroll', () => {
+      if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 300) loadMore();
+    });
+    window.addEventListener('scroll', function _wsc() {
+      // Si el card ya no está en el DOM, quitar el listener para no acumular.
+      if (!document.body.contains(card)) { window.removeEventListener('scroll', _wsc); return; }
+      const rect = card.getBoundingClientRect();
+      if (rect.bottom <= window.innerHeight + 400) loadMore();
+    });
+  }
 
   // Delegación de eventos: 1 listener en la tabla en vez de N botones
   card.addEventListener('click', e => {

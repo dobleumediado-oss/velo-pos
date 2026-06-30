@@ -54,11 +54,11 @@ async function renderPOS(el) {
     const modeBar = h('div', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-shrink:0' });
     modeBar.innerHTML = `
       <span style="font-size:11px;color:var(--muted);font-weight:600">Precio:</span>
-      <div class="tabs" style="margin-bottom:0">
-        <button class="tab ${currentInv().pmode !== 'wholesale' ? 'on' : ''}"
-                onclick="currentInv().pmode='retail';renderPOSGrid()">Detalle</button>
-        <button class="tab ${currentInv().pmode === 'wholesale' ? 'on' : ''}"
-                onclick="currentInv().pmode='wholesale';renderPOSGrid()">Mayorista</button>
+      <div class="tabs" id="pos-pmode-tabs" style="margin-bottom:0">
+        <button class="tab ${currentInv().pmode !== 'wholesale' ? 'on' : ''}" data-pmode="retail"
+                onclick="_setPosPmode('retail')">Detalle</button>
+        <button class="tab ${currentInv().pmode === 'wholesale' ? 'on' : ''}" data-pmode="wholesale"
+                onclick="_setPosPmode('wholesale')">Mayorista</button>
       </div>`;
     left.appendChild(modeBar);
 
@@ -190,6 +190,20 @@ async function renderPOS(el) {
   }
 }
 
+// ── Cambiar modo de precio (Detalle/Mayorista) ──
+// Actualiza el modo, mueve el resaltado 'on' al botón activo y redibuja la
+// grilla. Antes solo se redibujaba la grilla y el resaltado quedaba pegado.
+function _setPosPmode(mode) {
+  currentInv().pmode = mode;
+  const tabs = document.getElementById('pos-pmode-tabs');
+  if (tabs) {
+    tabs.querySelectorAll('button[data-pmode]').forEach(btn => {
+      btn.classList.toggle('on', btn.getAttribute('data-pmode') === mode);
+    });
+  }
+  renderPOSGrid();
+}
+
 // ── Grid de productos ─────────────────────────
 function renderPOSGrid() {
   const grid = document.getElementById('pos-grid');
@@ -220,7 +234,8 @@ function renderPOSGrid() {
     return;
   }
 
-  grid.innerHTML = prods.map(p => {
+  // HTML de una tarjeta de producto
+  const cardHTML = (p) => {
     const price  = (pm === 'wholesale' && p.wholesale > 0) ? p.wholesale : p.price;
     const isOut  = p.stock <= 0;
     const isLow  = p.stock > 0 && p.stock <= p.stock_min;
@@ -247,7 +262,32 @@ function renderPOSGrid() {
           color:var(--green);background:var(--green-bg);padding:2px 6px;
           border-radius:20px;display:inline-block">En carrito: ${inCart.qty}</div>` : ''}
       </div>`;
-  }).join('');
+  };
+
+  // ── Renderizado incremental ──────────────────────────────────────
+  // Pintar 1200+ tarjetas de golpe congela la UI. Pintamos un lote inicial
+  // y cargamos el resto al hacer scroll en el contenedor de la grilla.
+  const BATCH = 60;
+  let rendered = Math.min(BATCH, prods.length);
+  grid.innerHTML = prods.slice(0, rendered).map(cardHTML).join('');
+
+  if (rendered < prods.length) {
+    const scroller = grid.closest('[style*="overflow"]') || grid.parentElement;
+    const loadMore = () => {
+      if (rendered >= prods.length) return;
+      grid.insertAdjacentHTML('beforeend',
+        prods.slice(rendered, rendered + BATCH).map(cardHTML).join(''));
+      rendered += BATCH;
+    };
+    if (scroller) {
+      // Listener nombrado para poder limpiarlo al re-renderizar la grilla.
+      if (scroller._posScrollHandler) scroller.removeEventListener('scroll', scroller._posScrollHandler);
+      scroller._posScrollHandler = () => {
+        if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 400) loadMore();
+      };
+      scroller.addEventListener('scroll', scroller._posScrollHandler);
+    }
+  }
 }
 
 // ── Tabs de facturas ──────────────────────────
