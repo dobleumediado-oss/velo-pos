@@ -791,6 +791,15 @@ ipcMain.handle('cash:getSessionSales', async (_, { sessionId }) => {
   return cashRepo.getSessionSales(sessionId);
 });
 
+ipcMain.handle('cash:getSessionCashSummary', async (_, { sessionId }) => {
+  try {
+    return cashRepo.getSessionCashSummary(sessionId);
+  } catch (e) {
+    console.error('[cash:getSessionCashSummary]', e);
+    return null;
+  }
+});
+
 // ── Ventas ────────────────────────────────────
 ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
   try {

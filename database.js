@@ -1004,6 +1004,83 @@ const cashRepo = {
       WHERE id=?
     `).run(total, sessionId);
   },
+
+  /**
+   * Calcula el cuadre real de una sesión de caja desde cash_movements,
+   * que es la única fuente fiel de lo que entró/salió físicamente.
+   * Captura automáticamente: ventas efectivo, la PORCIÓN efectivo de ventas
+   * mixtas (registrada como movimiento 'venta'/efectivo aparte), abonos en
+   * efectivo de ESTA sesión, devoluciones efectivo (negativas), gastos
+   * (salida) y anulaciones de gasto (entrada).
+   *
+   * Excluye de raíz los abonos históricos de migración: nunca tienen
+   * cash_session_id ni generan cash_movement, así que no aparecen aquí.
+   *
+   * Las ventas anuladas: su movimiento original queda, por eso restamos
+   * explícitamente los movimientos cuya venta de referencia esté cancelada.
+   *
+   * Signos por tipo de movimiento (efecto sobre el efectivo en caja):
+   *   venta      → +  (entra)
+   *   abono      → +  (entra)
+   *   entrada    → +  (reingreso, ej. anulación de gasto)
+   *   devolucion → su amount ya viene negativo en la BD → se suma tal cual
+   *   salida     → -  (sale, ej. gasto pagado de caja)
+   */
+  getSessionCashSummary(sessionId) {
+    const session = db.prepare('SELECT * FROM cash_sessions WHERE id=?').get(sessionId);
+    if (!session) return null;
+
+    // IDs de ventas anuladas de esta sesión (para descontar su movimiento)
+    const cancelledSaleIds = db.prepare(
+      `SELECT id FROM sales WHERE cash_session_id=? AND status='cancelled'`
+    ).all(sessionId).map(r => r.id);
+    const cancelledSet = new Set(cancelledSaleIds);
+
+    const movements = db.prepare(
+      `SELECT type, amount, method, reference_id FROM cash_movements WHERE cash_session_id=?`
+    ).all(sessionId);
+
+    let efectivoNeto = 0;          // solo efectivo físico
+    const byMethodIn = {};         // entradas por método (informativo)
+
+    for (const m of movements) {
+      const method = (m.method || 'efectivo').toLowerCase();
+      const amt = m.amount || 0;
+
+      // Una venta anulada deja su movimiento original: no debe contar.
+      if (m.type === 'venta' && m.reference_id && cancelledSet.has(m.reference_id)) {
+        continue;
+      }
+
+      // Acumular informativo por método (entradas de venta/abono)
+      if (m.type === 'venta' || m.type === 'abono') {
+        byMethodIn[method] = (byMethodIn[method] || 0) + amt;
+      }
+
+      // Efectivo físico: solo movimientos en efectivo afectan el conteo.
+      if (method !== 'efectivo') continue;
+
+      if (m.type === 'venta' || m.type === 'abono' || m.type === 'entrada') {
+        efectivoNeto += amt;        // entra
+      } else if (m.type === 'salida') {
+        efectivoNeto -= amt;        // sale (amount positivo)
+      } else if (m.type === 'devolucion') {
+        efectivoNeto += amt;        // amount ya es negativo en la BD
+      }
+    }
+
+    const openAmount = session.open_amount || 0;
+    const expected   = Math.round((openAmount + efectivoNeto) * 100) / 100;
+
+    return {
+      sessionId,
+      openAmount,
+      efectivoNeto: Math.round(efectivoNeto * 100) / 100,
+      expected,
+      byMethodIn,
+      movementCount: movements.length,
+    };
+  },
 };
 
 // ── Ventas ────────────────────────────────────
@@ -1021,11 +1098,16 @@ const salesRepo = {
       const taxAmt     = Math.round(base * (taxPct / 100) * 100) / 100;
       const total      = Math.round((base + taxAmt) * 100) / 100;
 
-      // 2. Validar stock
+      // ¿Esta venta afecta inventario? (descuenta stock). Una sola fuente de
+      // verdad para validación Y descuento, así nunca quedan asimétricas.
+      // Factura y venta a crédito mueven inventario; la cotización no.
+      const afectaStock = (type === 'factura' || payment.method === 'credito');
+
+      // 2. Validar stock (solo si la venta afecta inventario)
       for (const item of items) {
         const prod = db.prepare('SELECT stock,name FROM products WHERE id=?').get(item.product_id);
         if (!prod) throw new Error(`Producto ID ${item.product_id} no existe`);
-        if (prod.stock < item.qty && type !== 'cotizacion') {
+        if (prod.stock < item.qty && afectaStock) {
           throw new Error(`Stock insuficiente para "${prod.name}"`);
         }
       }
@@ -1117,8 +1199,8 @@ const salesRepo = {
         `).run(saleId, item.product_id, item.product_code, item.product_name,
                item.unit_cost, item.unit_price, item.qty, item.unit_price * item.qty);
 
-        // 6. Descontar stock (solo factura o crédito)
-        if (type === 'factura' || payment.method === 'credito') {
+        // 6. Descontar stock (misma condición que la validación: afectaStock)
+        if (afectaStock) {
           productsRepo.adjustStock(item.product_id, -item.qty, 'salida',
             `Venta #${saleId}`, saleId, user.id);
         }
@@ -1205,7 +1287,9 @@ const salesRepo = {
     if (method)     { where += ' AND s.payment_method=?'; params.push(method); }
     params.push(limit);
     return db.prepare(`
-      SELECT s.*, GROUP_CONCAT(si.product_name || ' x' || si.qty, ' | ') as items_summary
+      SELECT s.*,
+             GROUP_CONCAT(si.product_name || ' x' || si.qty, ' | ') as items_summary,
+             COALESCE(SUM(si.unit_cost * si.qty), 0) as cost_total
       FROM sales s
       LEFT JOIN sale_items si ON s.id = si.sale_id
       ${where}
@@ -1412,22 +1496,35 @@ const reportsRepo = {
     const totalDisc     = discData?.total_discount || 0;
     const totalUnits    = costData?.total_units    || 0;
     const totalSales    = costData?.total_sales    || 0;
-    const grossProfit   = totalRev - totalCost;
     const netRev        = totalRev - totalTax;
-    const margin        = totalRev > 0 ? (grossProfit / totalRev) * 100 : 0;
+    // Utilidad bruta REAL = ingreso sin ITBIS − costo. El ITBIS no es ganancia
+    // del negocio (se le debe a la DGII), por eso se excluye del cálculo.
+    const grossProfit   = Math.round((netRev - totalCost) * 100) / 100;
+    // Margen sobre el ingreso neto (sin impuesto), criterio contable correcto.
+    const margin        = netRev > 0 ? (grossProfit / netRev) * 100 : 0;
     const ventasContado = contadoCreditoData?.ventas_contado || 0;
     const ventasCredito = contadoCreditoData?.ventas_credito || 0;
     // cobradoMes = dinero real recibido: ventas al contado + abonos de CxC
     const cobradoMes    = ventasContado + (abonosData?.total || 0);
+
+    // ── Métricas NETAS de devoluciones (adicionales) ──
+    // grossProfit ya excluye ITBIS (utilidad real). Estos campos además
+    // descuentan las devoluciones del período para quien quiera el neto final.
+    const totalDevol      = devData?.total || 0;
+    const totalRevNeto    = Math.round((totalRev - totalDevol) * 100) / 100;
+    const grossProfitNeto = Math.round((grossProfit - totalDevol) * 100) / 100;
+    const marginNeto      = totalRevNeto > 0 ? (grossProfitNeto / totalRevNeto) * 100 : 0;
 
     return {
       byMethod,
       totalRev, totalCost, totalTax, totalDisc,
       totalUnits, totalSales,
       grossProfit, netRev, margin,
+      // Netos de devoluciones (opcionales para reportes)
+      totalRevNeto, grossProfitNeto, marginNeto,
       topProducts,
       dailySales,
-      devolucion:   { count: devData?.count || 0, total: devData?.total || 0 },
+      devolucion:   { count: devData?.count || 0, total: totalDevol },
       abonos:       { count: abonosData?.count || 0, total: abonosData?.total || 0 },
       ventasContado, ventasCredito, cobradoMes,
     };
@@ -1444,7 +1541,7 @@ const reportsRepo = {
     return db.prepare(`
       SELECT * FROM customers
       WHERE active=1 AND balance > 0 AND id != 1
-        AND (credit_due IS NULL OR credit_due <= date('now','+5 days'))
+        AND (credit_due IS NULL OR credit_due <= date('now','+5 days','localtime'))
       ORDER BY credit_due ASC
     `).all();
   },
@@ -1503,13 +1600,42 @@ const returnsRepo = {
       const original = db.prepare('SELECT * FROM sales WHERE id=?').get(originalSaleId);
       if (!original) throw new Error('Venta original no encontrada');
       if (original.status === 'cancelled') throw new Error('La venta ya está anulada');
+      // Blindaje: solo se devuelven facturas/ventas a crédito (las que descontaron
+      // stock). Las cotizaciones nunca movieron inventario ni dinero.
+      if (original.type === 'cotizacion') {
+        throw new Error('No se puede devolver una cotización');
+      }
+      if (original.type === 'devolucion') {
+        throw new Error('No se puede devolver una devolución');
+      }
 
       // 2. Verificar que los items a devolver existen en la venta original
       const originalItems = db.prepare('SELECT * FROM sale_items WHERE sale_id=?').all(originalSaleId);
+
+      // 2b. Calcular cuánto ya se devolvió antes de esta venta, por producto.
+      // Suma las cantidades de TODAS las devoluciones previas de esta factura
+      // para impedir devolver más de lo realmente vendido en varias tandas.
+      const prevReturns = db.prepare(`
+        SELECT si.product_id, COALESCE(SUM(si.qty),0) AS devuelto
+        FROM sales s
+        JOIN sale_items si ON si.sale_id = s.id
+        WHERE s.type='devolucion' AND s.original_sale_id=? AND s.status != 'cancelled'
+        GROUP BY si.product_id
+      `).all(originalSaleId);
+      const yaDevuelto = {};
+      prevReturns.forEach(r => { yaDevuelto[r.product_id] = r.devuelto || 0; });
+
       for (const item of items) {
         const orig = originalItems.find(oi => oi.product_id === item.product_id);
         if (!orig) throw new Error(`Producto ID ${item.product_id} no pertenece a esta venta`);
-        if (item.qty > orig.qty) throw new Error(`Cantidad a devolver (${item.qty}) supera lo vendido (${orig.qty})`);
+        const yaDev = yaDevuelto[item.product_id] || 0;
+        const disponible = orig.qty - yaDev;
+        if (item.qty > disponible) {
+          throw new Error(
+            `Cantidad a devolver (${item.qty}) supera lo disponible para "${orig.product_name}". ` +
+            `Vendido: ${orig.qty}, ya devuelto: ${yaDev}, disponible: ${disponible}.`
+          );
+        }
       }
 
       // 3. Calcular totales de la devolución (usando precios históricos del snapshot)

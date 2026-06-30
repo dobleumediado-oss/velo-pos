@@ -140,7 +140,9 @@ function printReceipt(sale, isReprint = false) {
       subtotal:      sale.subtotal     || 0,
       discount_pct:  sale.discount_pct || sale.disc    || 0,
       discount_amt:  sale.discount_amt || sale.discAmt || 0,
-      tax_pct:       sale.tax_pct      || DB?.settings?.tax_pct || CFG?.itbis || 18,
+      // Usar ?? para no pisar un tax_pct = 0 legítimo (recibos sin ITBIS).
+      // Solo cae al valor por defecto cuando viene null/undefined.
+      tax_pct:       sale.tax_pct ?? DB?.settings?.tax_pct ?? CFG?.itbis ?? 18,
       tax_amt:       sale.tax_amt      || sale.itbis   || 0,
       total:         sale.total        || 0,
       payment_method: sale.payment_method || sale.pay || 'efectivo',

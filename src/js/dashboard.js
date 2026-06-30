@@ -102,7 +102,9 @@ async function renderDash(el) {
     .filter(s => todaySalesIds.has(s.id))
     .reduce((a, s) => a + (s.cost_total || 0), 0);
   const profit    = rev - itbis - cost;
-  const margin    = rev > 0 ? ((profit / rev) * 100).toFixed(0) : 0;
+  // Margen sobre ingreso neto (sin ITBIS), criterio contable correcto
+  const netRevToday = rev - itbis;
+  const margin    = netRevToday > 0 ? ((profit / netRevToday) * 100).toFixed(0) : 0;
 
   // Ventas del mes
   const today_ = today();
@@ -306,7 +308,9 @@ async function renderDash(el) {
   const periodITBIS  = periodSales.reduce((a,s) => a + (s.tax_amt||0), 0);
   const periodCost   = periodSales.reduce((a,s) => a + (s.cost_total||0), 0);
   const periodProfit = periodRev - periodITBIS - periodCost;
-  const periodMargin = periodRev > 0 ? ((periodProfit/periodRev)*100).toFixed(1) : 0;
+  // Margen sobre ingreso neto (sin ITBIS), igual criterio que Reportes
+  const periodNetRev = periodRev - periodITBIS;
+  const periodMargin = periodNetRev > 0 ? ((periodProfit/periodNetRev)*100).toFixed(1) : 0;
   const periodLabel  = { today:'Hoy', '3days':'3 días', week:'7 días', month:'Mes' }[dashPeriod];
 
   // ── Métricas ─────────────────────────────────

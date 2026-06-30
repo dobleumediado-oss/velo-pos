@@ -329,7 +329,7 @@ function _normCaja(s) {
 // ══════════════════════════════════════════════
 // CIERRE CON CUADRE
 // ══════════════════════════════════════════════
-function openCierreCajaModal() {
+async function openCierreCajaModal() {
   if (!cajaSession) return;
 
   const tdS    = DB.sales.filter(s => (s.cash_session_id || s.cajaId) === cajaSession.id && s.type !== 'devolucion' && s.status !== 'cancelled');
@@ -340,9 +340,16 @@ function openCierreCajaModal() {
   const tdCred = tdS.filter(s => (s.payment_method || s.pay) === 'credito').reduce((a, s) => a + s.total, 0);
   const tdRev  = tdS.reduce((a, s) => a + s.total, 0);
 
-  // Abonos en efectivo recibidos durante esta sesión
+  // ── Abonos en efectivo de ESTA sesión (excluye históricos sin sesión) ──
+  // Solo cuenta abonos en efectivo vinculados a esta caja y que no sean
+  // de la importación histórica. Los abonos importados de la migración
+  // nunca tienen cash_session_id ni method que aplique a caja física.
   const tdAbonos = DB.payments
-    .filter(p => p.cash_session_id === cajaSession.id || !p.cash_session_id)
+    .filter(p =>
+      p.cash_session_id === cajaSession.id &&
+      (p.method || 'efectivo') === 'efectivo' &&
+      p.cajero !== 'Importación histórica'
+    )
     .reduce((a, p) => a + (p.amount || 0), 0);
 
   // Devoluciones que salieron de caja en efectivo
@@ -350,12 +357,40 @@ function openCierreCajaModal() {
     .filter(s => (s.payment_method || s.pay) === 'efectivo')
     .reduce((a, s) => a + s.total, 0);
 
-  // Fórmula correcta:
-  // Fondo inicial + ventas efectivo + abonos efectivo - devoluciones efectivo
-  const expected = (cajaSession.open_amount || cajaSession.open || 0)
-    + tdEfec
-    + tdAbonos
-    - tdDevEfec;
+  // ── Efectivo esperado: fuente real = cash_movements (backend) ──
+  // Captura ventas efectivo, la porción efectivo de ventas mixtas, abonos
+  // efectivo de la sesión, devoluciones, gastos y anulaciones — todo con
+  // su signo correcto. Si el backend no responde (versión vieja o error),
+  // se usa el cálculo local como respaldo para no quedar peor que antes.
+  let expected;
+  let usandoFuenteReal = false;
+  let efectivoReal = null;   // total efectivo entrante según cash_movements
+  try {
+    const cashSummary = await window.api.cash.getSessionCashSummary
+      ? await window.api.cash.getSessionCashSummary({ sessionId: cajaSession.id })
+      : null;
+    if (cashSummary && typeof cashSummary.expected === 'number') {
+      expected = cashSummary.expected;
+      usandoFuenteReal = true;
+      efectivoReal = (cashSummary.byMethodIn && cashSummary.byMethodIn.efectivo) || 0;
+    }
+  } catch (e) {
+    console.warn('[cierre] getSessionCashSummary falló, usando cálculo local:', e);
+  }
+  if (!usandoFuenteReal) {
+    // Respaldo: fondo + ventas efectivo + abonos efectivo - devoluciones efectivo
+    expected = (cajaSession.open_amount || cajaSession.open || 0)
+      + tdEfec
+      + tdAbonos
+      - tdDevEfec;
+  }
+
+  // Para el desglose visual: si tenemos la fuente real, el "efectivo entrante"
+  // mostrado incluye la porción efectivo de ventas mixtas y abonos. Si no,
+  // usamos el cálculo local (ventas efectivo simples + abonos).
+  const efectivoEntranteMostrado = usandoFuenteReal && efectivoReal !== null
+    ? efectivoReal
+    : (tdEfec + tdAbonos);
 
   const billRows = DENS.map(d => `
     <div class="bill-row">
@@ -373,8 +408,10 @@ function openCierreCajaModal() {
       <div class="card" style="background:var(--surface2)">
         <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--muted2);margin-bottom:8px">Resumen del día</div>
         <div class="tr" style="font-size:12px"><span>Fondo inicial</span><span>${fmt(cajaSession.open_amount || cajaSession.open || 0)}</span></div>
-        <div class="tr" style="font-size:12px"><span>Ventas efectivo</span><span style="color:var(--green)">+${fmt(tdEfec)}</span></div>
-        ${tdAbonos > 0 ? `<div class="tr" style="font-size:12px"><span>Abonos en efectivo</span><span style="color:var(--green)">+${fmt(tdAbonos)}</span></div>` : ''}
+        ${usandoFuenteReal
+          ? `<div class="tr" style="font-size:12px"><span>Efectivo recibido <span style="font-size:10px;color:var(--muted2)">(ventas + abonos)</span></span><span style="color:var(--green)">+${fmt(efectivoEntranteMostrado)}</span></div>`
+          : `<div class="tr" style="font-size:12px"><span>Ventas efectivo</span><span style="color:var(--green)">+${fmt(tdEfec)}</span></div>
+        ${tdAbonos > 0 ? `<div class="tr" style="font-size:12px"><span>Abonos en efectivo</span><span style="color:var(--green)">+${fmt(tdAbonos)}</span></div>` : ''}`}
         ${tdDevEfec > 0 ? `<div class="tr" style="font-size:12px"><span>Devoluciones efectivo</span><span style="color:var(--red)">−${fmt(tdDevEfec)}</span></div>` : ''}
         <div class="tr" style="font-size:12px;border-top:1px solid var(--line);padding-top:6px"><span>Ventas tarjeta/trans.</span><span>${fmt(tdCard + tdTrans)}</span></div>
         ${tdCred > 0 ? `
@@ -392,7 +429,9 @@ function openCierreCajaModal() {
         <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--blue);margin-bottom:8px">Efectivo esperado</div>
         <div style="font-size:24px;font-weight:800;color:var(--blue)">${fmt(expected)}</div>
         <div style="font-size:10px;color:var(--muted);margin-top:4px;line-height:1.6">
-          Fondo + ventas efectivo${tdAbonos > 0 ? ' + abonos' : ''}${tdDevEfec > 0 ? ' − devoluciones' : ''}
+          ${usandoFuenteReal
+            ? 'Fondo + efectivo recibido (incluye parte efectivo de pagos mixtos) − salidas'
+            : `Fondo + ventas efectivo${tdAbonos > 0 ? ' + abonos' : ''}${tdDevEfec > 0 ? ' − devoluciones' : ''}`}
         </div>
       </div>
     </div>
