@@ -495,7 +495,12 @@ async function renderVehiculos(el) {
     el.appendChild(grid);
   }
 
-  document.getElementById('btn-nuevo-vehiculo')?.addEventListener('click', () => modalNuevoVehiculo(el));
+  if (!el._vehDelegated) {
+    el._vehDelegated = true;
+    el.addEventListener('click', (ev) => {
+      if (ev.target.closest('#btn-nuevo-vehiculo')) { ev.preventDefault(); modalNuevoVehiculo(el); }
+    });
+  }
 }
 
 // ── Modal nuevo/editar vehículo con validación inteligente ────────────────────

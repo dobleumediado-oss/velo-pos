@@ -116,11 +116,16 @@ async function renderDash(el) {
     window.api.sales.getAll({ range: 'month' }),
     window.api.sales.getAll({ range: 'week' }),
     window.api.reports.summary({ range: 'month', requestUserId: user.id }).catch(() => null),
-    window.api.reports.dailyTrend({ days: 30, requestUserId: user.id }).catch(() => null),
+    window.api.reports.dailyTrend({ days: 30, includeHistorical: false, requestUserId: user.id }).catch(() => null),
   ]);
 
-  const mSales = (allSales || []).filter(s =>
-    s.status !== 'cancelled' && s.status !== 'returned' && s.type !== 'devolucion');
+  const isOperationalSale = s =>
+    s.status !== 'cancelled' &&
+    s.status !== 'returned' &&
+    s.type !== 'devolucion' &&
+    s.cajero !== 'Importación histórica';
+
+  const mSales = (allSales || []).filter(isOperationalSale);
   // Ventas del mes vía agregado SQL — exacto sin importar el límite de filas.
   const mRev          = monthSummaryRes?.ok ? monthSummaryRes.data.totalRev          : mSales.reduce((a, s) => a + (s.total || 0), 0);
   const mAbonos       = monthSummaryRes?.ok ? (monthSummaryRes.data.abonos?.total    || 0) : 0;
@@ -297,10 +302,10 @@ async function renderDash(el) {
   let periodSales = sales;
   if (dashPeriod === '3days') {
     const cutoff = new Date(Date.now() - 3*24*60*60*1000).toISOString().split('T')[0];
-    periodSales  = (weekSales||[]).filter(s => s.status !== 'cancelled' && s.status !== 'returned' && s.type !== 'devolucion'
+    periodSales  = (weekSales||[]).filter(s => isOperationalSale(s)
       && (s.created_at||'').slice(0,10) >= cutoff);
   } else if (dashPeriod === 'week') {
-    periodSales = (weekSales||[]).filter(s => s.status !== 'cancelled' && s.status !== 'returned' && s.type !== 'devolucion');
+    periodSales = (weekSales||[]).filter(isOperationalSale);
   } else if (dashPeriod === 'month') {
     periodSales = mSales;
   }
@@ -348,7 +353,12 @@ async function renderDash(el) {
         : `${mSales.length} ventas`,
       badgeType: 'nu' },
     { icon: 'dollar', color: 'g', label: 'Ventas / Abonos a Facturas',
-      val: fmt(mCobrado), badge: `contado + abonos CxC`, badgeType: 'nu' },
+      val: fmt(mCobrado), badge: `contado + abonos CxC`, badgeType: 'nu',
+      click: () => {
+        window._reportesTabInicial = 'abonos';
+        window._reportesRangeInicial = 'month';
+        routeTo('reportes');
+      } },
     { icon: 'card',   color: 'a', label: 'Créditos Pendientes',
       val: fmt(pendCredit), badge: `${totalClients} clientes`,
       badgeType: pendCredit > 0 ? 'dn' : 'nu',
@@ -389,7 +399,13 @@ async function renderDash(el) {
     style: {
       background: 'var(--surface)', border: '1px solid var(--line)',
       borderRadius: 'var(--r-lg)', padding: '16px 20px',
-      boxShadow: 'var(--sh)', marginBottom: '20px',
+      boxShadow: 'var(--sh)', marginBottom: '20px', cursor: 'pointer',
+    },
+    title: 'Ver detalle de abonos en Reportes',
+    onclick: () => {
+      window._reportesTabInicial = 'abonos';
+      window._reportesRangeInicial = 'month';
+      routeTo('reportes');
     }
   },
     h('div', { style: { display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:'4px' } },
@@ -599,11 +615,17 @@ async function renderDash(el) {
   grid.appendChild(chartCard);
 
   // Calcular datos según período
-  let chartLabels = [], chartData = [], chartDates = [];
+  let chartLabels = [], chartData = [], chartDates = [], chartMeta = {};
   if (chartPeriod === '7d') {
     chartLabels = days7.map(d => d.label);
     chartData   = days7.map(d => d.rev);
     chartDates  = days7.map(d => d.date);
+    days7.forEach(d => {
+      chartMeta[d.date] = {
+        count: dailyByDate[d.date]?.count || 0,
+        tax: dailyByDate[d.date]?.tax || 0,
+      };
+    });
   } else if (chartPeriod === '30d') {
     for (let i = 29; i >= 0; i--) {
       const d  = new Date(); d.setDate(d.getDate() - i);
@@ -611,13 +633,23 @@ async function renderDash(el) {
       chartLabels.push(d.getDate() + '/' + (d.getMonth()+1));
       chartData.push(dailyByDate[ds]?.total || 0);
       chartDates.push(ds);
+      chartMeta[ds] = {
+        count: dailyByDate[ds]?.count || 0,
+        tax: dailyByDate[ds]?.tax || 0,
+      };
     }
   } else {
     // 12 meses — agregado real vía SQL (no depende de allSales, que solo
     // trae el mes en curso, ni del límite de filas de sales:getAll).
-    const trendRes = await window.api.reports.monthlyTrend({ requestUserId: user.id }).catch(() => null);
+    const trendRes = await window.api.reports.monthlyTrend({
+      includeHistorical: false,
+      requestUserId: user.id
+    }).catch(() => null);
     const trendByMonth = {};
-    (trendRes?.data || []).forEach(r => { trendByMonth[r.month] = r.total; });
+    (trendRes?.data || []).forEach(r => {
+      trendByMonth[r.month] = r.total;
+      chartMeta[r.month] = { count: r.count || 0, tax: r.tax || 0 };
+    });
     for (let i = 11; i >= 0; i--) {
       const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i);
       const mp = d.toISOString().slice(0,7);
@@ -628,7 +660,7 @@ async function renderDash(el) {
   }
 
   // Renderizar Chart.js después de que el DOM esté listo
-  _dashRenderChart(canvas.id, chartLabels, chartData, chartDates, chartPeriod, chartDetail, allSales);
+  _dashRenderChart(canvas.id, chartLabels, chartData, chartDates, chartPeriod, chartDetail, allSales, chartMeta);
 
   // ── Columna derecha ───────────────────────────
   const rightCol = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px' } });
@@ -828,23 +860,22 @@ function exportCreditAlertsPDF(alerts) {
 // CHART.JS — Renderizado del dashboard
 // ══════════════════════════════════════════════
 function _loadChartJs() {
-  return new Promise(res => {
-    if (window.Chart) { res(); return; }
-    const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js';
-    s.onload = res; s.onerror = res;
-    document.head.appendChild(s);
-  });
+  return Promise.resolve();
 }
 
-async function _dashRenderChart(canvasId, labels, data, dates, period, detailEl, allSales) {
+async function _dashRenderChart(canvasId, labels, data, dates, period, detailEl, allSales, meta = {}) {
   await _loadChartJs();
   const canvas = document.getElementById(canvasId);
-  if (!canvas || !window.Chart) return;
+  if (!canvas) return;
 
   // Destruir instancia previa si existe
   if (window._dashChartInstance) {
     try { window._dashChartInstance.destroy(); } catch {}
+  }
+
+  if (!window.Chart) {
+    _dashRenderNativeChart(canvas, labels, data, dates, period, detailEl, allSales, meta);
+    return;
   }
 
   const today_ = today();
@@ -930,17 +961,121 @@ async function _dashRenderChart(canvasId, labels, data, dates, period, detailEl,
         const daySales = (allSales||[]).filter(s => {
           const sd = (s.created_at||'').split('T')[0].split(' ')[0];
           return (period === '12m' ? sd.slice(0,7) === d : sd === d) &&
-                 s.status !== 'cancelled' && s.status !== 'returned' && s.type !== 'devolucion';
+                 s.status !== 'cancelled' && s.status !== 'returned' &&
+                 s.type !== 'devolucion' && s.cajero !== 'Importación histórica';
         });
+        const m = meta[d] || {};
         detailEl.innerHTML = `
           <div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;
                       padding:8px;background:var(--surface2);border-radius:8px">
-            <span><strong>${fdate(d)}</strong></span>
+            <span><strong>${period === '12m' ? d : fdate(d)}</strong></span>
             <span style="color:var(--green);font-weight:700">${fmt(rev)}</span>
-            <span style="color:var(--muted2)">${daySales.length} transacc.</span>
-            <span style="color:var(--muted2)">ITBIS: ${fmt(daySales.reduce((a,s)=>a+(s.tax_amt||0),0))}</span>
+            <span style="color:var(--muted2)">${m.count ?? daySales.length} transacc.</span>
+            <span style="color:var(--muted2)">ITBIS: ${fmt(m.tax ?? daySales.reduce((a,s)=>a+(s.tax_amt||0),0))}</span>
           </div>`;
       }
     }
   });
+}
+
+function _dashRenderNativeChart(canvas, labels, data, dates, period, detailEl, allSales, meta = {}) {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(320, rect.width || canvas.parentElement?.clientWidth || 640);
+  const height = Math.max(180, rect.height || 200);
+  canvas.width = Math.floor(width * dpr);
+  canvas.height = Math.floor(height * dpr);
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  const pad = { left: 44, right: 12, top: 12, bottom: 30 };
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+  const maxVal = Math.max(...data, 1);
+  const today_ = today();
+  const bars = [];
+
+  ctx.font = '10px "DM Sans", Arial, sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.strokeStyle = 'rgba(0,0,0,0.06)';
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--muted2') || '#9ca3af';
+  ctx.lineWidth = 1;
+
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (plotH / 4) * i;
+    const value = maxVal - (maxVal / 4) * i;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(width - pad.right, y);
+    ctx.stroke();
+    ctx.fillText(value >= 1000 ? `${Math.round(value / 1000)}k` : String(Math.round(value)), 4, y);
+  }
+
+  const gap = Math.max(5, Math.min(12, plotW / Math.max(labels.length, 1) * 0.25));
+  const barW = Math.max(5, (plotW - gap * (labels.length - 1)) / Math.max(labels.length, 1));
+
+  labels.forEach((label, i) => {
+    const value = data[i] || 0;
+    const x = pad.left + i * (barW + gap);
+    const hgt = value > 0 ? Math.max(4, (value / maxVal) * plotH) : 2;
+    const y = pad.top + plotH - hgt;
+    const active = dates[i] === today_ || dates[i] === today_.slice(0, 7);
+    ctx.fillStyle = active ? 'rgba(22,163,74,0.85)' : 'rgba(99,102,241,0.65)';
+    const r = Math.min(5, barW / 2, hgt / 2);
+    _dashRoundRect(ctx, x, y, barW, hgt, r);
+    ctx.fill();
+
+    ctx.fillStyle = active ? '#111827' : '#9ca3af';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, x + barW / 2, height - 13);
+    bars.push({ x, y, w: barW, h: hgt, index: i });
+  });
+
+  canvas.style.cursor = 'pointer';
+  canvas.onclick = (evt) => {
+    const box = canvas.getBoundingClientRect();
+    const x = evt.clientX - box.left;
+    const y = evt.clientY - box.top;
+    const hit = bars.find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h + 8);
+    if (!hit || !detailEl) return;
+    const i = hit.index;
+    const d = dates[i];
+    const rev = data[i] || 0;
+    const m = meta[d] || {};
+    if (!rev) {
+      detailEl.textContent = `${labels[i]} - Sin ventas`;
+      return;
+    }
+    const daySales = (allSales || []).filter(s => {
+      const sd = (s.created_at || '').split('T')[0].split(' ')[0];
+      return (period === '12m' ? sd.slice(0, 7) === d : sd === d) &&
+             s.status !== 'cancelled' && s.status !== 'returned' &&
+             s.type !== 'devolucion' && s.cajero !== 'Importación histórica';
+    });
+    detailEl.innerHTML = `
+      <div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;
+                  padding:8px;background:var(--surface2);border-radius:8px">
+        <span><strong>${period === '12m' ? d : fdate(d)}</strong></span>
+        <span style="color:var(--green);font-weight:700">${fmt(rev)}</span>
+        <span style="color:var(--muted2)">${m.count ?? daySales.length} transacc.</span>
+        <span style="color:var(--muted2)">ITBIS: ${fmt(m.tax ?? daySales.reduce((a,s)=>a+(s.tax_amt||0),0))}</span>
+      </div>`;
+  };
+}
+
+function _dashRoundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h);
+  ctx.lineTo(x, y + h);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
 }

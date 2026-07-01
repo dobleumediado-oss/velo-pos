@@ -65,7 +65,12 @@ async function renderSucursales(el) {
     el.appendChild(grid);
   }
 
-  document.getElementById('btn-nueva-suc')?.addEventListener('click', () => modalSucursal(el));
+  if (!el._sucDelegated) {
+    el._sucDelegated = true;
+    el.addEventListener('click', (ev) => {
+      if (ev.target.closest('#btn-nueva-suc')) { ev.preventDefault(); modalSucursal(el); }
+    });
+  }
 }
 
 function modalSucursal(parentEl, suc = null) {
@@ -215,8 +220,20 @@ async function renderNCFAvanzado(el) {
     el.appendChild(wrap);
   }
 
-  document.getElementById('btn-nueva-seq')?.addEventListener('click', () => modalNuevaSecuencia(el));
-  document.getElementById('btn-validar-rnc')?.addEventListener('click', () => modalValidarRNC());
+  // Delegación de eventos: enganchamos el listener al contenedor `el` (que
+  // persiste), no a los botones concretos. Como renderNCFAvanzado es async y
+  // renderConfiguracion puede re-renderizar durante el await, enganchar
+  // directamente a #btn-nueva-seq dejaba el listener en un nodo ya reemplazado
+  // y el botón "no hacía nada". La delegación es inmune a ese timing.
+  if (!el._ncfDelegated) {
+    el._ncfDelegated = true;
+    el.addEventListener('click', (ev) => {
+      const nueva   = ev.target.closest('#btn-nueva-seq');
+      const validar = ev.target.closest('#btn-validar-rnc');
+      if (nueva)   { ev.preventDefault(); modalNuevaSecuencia(el); }
+      if (validar) { ev.preventDefault(); modalValidarRNC(); }
+    });
+  }
 }
 
 function modalNuevaSecuencia(parentEl) {

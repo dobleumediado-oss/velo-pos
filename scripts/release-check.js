@@ -35,6 +35,9 @@ for (const rel of requiredFiles) {
 
 const filesToCheck = [
   'main.js', 'preload.js', 'database.js', 'versioning.js', 'license.js',
+  ...(fs.existsSync(path.join(root, 'src/main'))
+    ? fs.readdirSync(path.join(root, 'src/main')).filter(f => f.endsWith('.js')).map(f => `src/main/${f}`)
+    : []),
   ...fs.readdirSync(path.join(root, 'src/js')).filter(f => f.endsWith('.js')).map(f => `src/js/${f}`),
   ...fs.readdirSync(path.join(root, 'scripts')).filter(f => f.endsWith('.js')).map(f => `scripts/${f}`),
 ];

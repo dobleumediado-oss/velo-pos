@@ -14,10 +14,27 @@ let repRange   = 'month';
 let repDateFrom = '';
 let repDateTo   = '';
 let repData     = null;
-let repTab      = 'financiero'; // 'financiero' | 'inventario'
+let repTab      = 'financiero'; // 'financiero' | 'abonos' | 'inventario'
+
+function _repEsc(v) {
+  return String(v == null ? '' : v)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
 async function renderReportes(el) {
   el.innerHTML = '';
+
+  if (window._reportesTabInicial) {
+    repTab = window._reportesTabInicial;
+    delete window._reportesTabInicial;
+  }
+  if (window._reportesRangeInicial) {
+    repRange = window._reportesRangeInicial;
+    delete window._reportesRangeInicial;
+  }
 
   // ── Header ──────────────────────────────────
   el.appendChild(h('div', { class: 'sec-hdr' },
@@ -36,6 +53,7 @@ async function renderReportes(el) {
   const mainTabs = h('div', { class: 'flex', style: 'gap:8px;margin-bottom:16px' });
   [
     { v: 'financiero', l: 'Financiero' },
+    { v: 'abonos',     l: 'Abonos CxC' },
     { v: 'inventario', l: 'Inventario valorizado' },
   ].forEach(t => {
     mainTabs.appendChild(h('button', {
@@ -65,11 +83,11 @@ async function renderReportes(el) {
   ].forEach(o => {
     tabs.appendChild(h('button', {
       class: `tab ${repRange === o.v ? 'on' : ''}`,
-      onclick: async () => {
+      onclick: async (ev) => {
         repRange = o.v;
         // Actualizar visual de tabs inmediatamente
         tabs.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
-        event.currentTarget.classList.add('on');
+        ev.currentTarget.classList.add('on');
         if (o.v !== 'custom') await cargarYRenderizar(el);
         else renderRangeInputs();
       }
@@ -86,9 +104,10 @@ async function renderReportes(el) {
     <span style="color:var(--muted)">—</span>
     <input class="inp" id="rep-to" type="date" value="${repDateTo}"
            style="width:140px" placeholder="Hasta"/>
-    <button class="btn btn-dark btn-sm" onclick="aplicarRangoCustom(this.closest('.sec-hdr')?.nextSibling)">
+    <button class="btn btn-dark btn-sm" id="rep-custom-btn">
       Buscar
     </button>`;
+  customDiv.querySelector('#rep-custom-btn')?.addEventListener('click', aplicarRangoCustom);
   rangeBar.appendChild(customDiv);
   el.appendChild(rangeBar);
 
@@ -116,7 +135,7 @@ async function aplicarRangoCustom() {
 async function cargarYRenderizar(el) {
   // Limpiar contenido previo (excepto header y rangeBar)
   const children = Array.from(el.children);
-  children.slice(2).forEach(c => c.remove());
+  children.slice(3).forEach(c => c.remove());
 
   // Loading
   const loading = h('div', { style: { textAlign: 'center', padding: '40px', color: 'var(--muted2)' } },
@@ -124,12 +143,15 @@ async function cargarYRenderizar(el) {
   el.appendChild(loading);
 
   try {
-    const result = await window.api.reports.summary({
+    const payload = {
       range:         repRange,
       dateFrom:      repDateFrom || null,
       dateTo:        repDateTo   || null,
       requestUserId: user.id,
-    });
+    };
+    const result = repTab === 'abonos'
+      ? await window.api.reports.paymentsHistory(payload)
+      : await window.api.reports.summary(payload);
 
     loading.remove();
 
@@ -142,7 +164,8 @@ async function cargarYRenderizar(el) {
     }
 
     repData = result.data;
-    renderReporteContenido(el, repData);
+    if (repTab === 'abonos') renderAbonosContenido(el, repData);
+    else renderReporteContenido(el, repData);
 
   } catch (e) {
     loading.remove();
@@ -485,11 +508,248 @@ function renderReporteContenido(el, d) {
   }
 }
 
+function renderAbonosContenido(el, d) {
+  const summary = d?.summary || {};
+  const byMonth = d?.byMonth || [];
+  const byDay = d?.byDay || [];
+  const byMethod = d?.byMethod || [];
+  const rows = d?.rows || [];
+  const rangeLabel = {
+    today: 'Hoy',
+    week: 'Esta semana',
+    month: 'Este mes',
+    all: 'Histórico completo',
+    custom: `${repDateFrom || '...'} → ${repDateTo || '...'}`,
+  }[repRange] || repRange;
+
+  const metWrap = h('div', {
+    class: 'metrics',
+    style: { gridTemplateColumns: 'repeat(4,1fr)', marginBottom: '20px' }
+  });
+  [
+    { label: 'Abonos recibidos', val: fmt(summary.total || 0), sub: `${summary.count || 0} registros`, color: 'var(--green)' },
+    { label: 'Clientes con abono', val: String(summary.customers || 0), sub: rangeLabel, color: 'var(--blue)' },
+    { label: 'Importación histórica', val: fmt(summary.importedTotal || 0), sub: 'registrado sin tocar caja actual', color: 'var(--amber)' },
+    { label: 'Abonos operativos', val: fmt(summary.currentTotal || 0), sub: 'hechos desde el POS', color: 'var(--purple)' },
+  ].forEach(m => {
+    metWrap.appendChild(h('div', { class: 'metric' },
+      h('div', { class: 'met-label' }, m.label),
+      h('div', { style: { fontSize: '20px', fontWeight: 800, color: m.color } }, m.val),
+      h('div', { style: { fontSize: '10px', color: 'var(--muted2)', marginTop: '2px' } }, m.sub)
+    ));
+  });
+  el.appendChild(metWrap);
+
+  const grid = h('div', { class: 'gg2', style: { gap: '16px', alignItems: 'start' } });
+
+  const methodCard = h('div', { class: 'card' });
+  methodCard.appendChild(h('div', { class: 'card-title mb8' }, 'Abonos por método'));
+  if (!byMethod.length) {
+    methodCard.appendChild(h('div', { style: 'font-size:12px;color:var(--muted2);padding:12px 0' }, 'Sin abonos en este período'));
+  } else {
+    const maxMethod = Math.max(...byMethod.map(m => m.total || 0), 1);
+    byMethod.forEach(m => {
+      const pct = ((m.total || 0) / maxMethod) * 100;
+      methodCard.appendChild(h('div', { style: { marginBottom: '12px' } },
+        h('div', { class: 'fxb', style: { marginBottom: '4px' } },
+          h('span', { style: { fontSize: '12px', fontWeight: 700, textTransform: 'capitalize' } }, m.method || 'efectivo'),
+          h('span', { style: { fontSize: '12px', fontWeight: 800 } }, fmt(m.total || 0))
+        ),
+        h('div', { class: 'prog' },
+          h('div', { class: 'prog-f', style: { width: `${pct}%`, background: 'var(--green)' } })
+        ),
+        h('div', { style: { fontSize: '10px', color: 'var(--muted2)', marginTop: '2px' } },
+          `${m.count || 0} abono${m.count === 1 ? '' : 's'}`)
+      ));
+    });
+  }
+  grid.appendChild(methodCard);
+
+  const monthCard = h('div', { class: 'card' });
+  monthCard.appendChild(h('div', { class: 'card-title mb8' }, 'Mes por mes'));
+  if (!byMonth.length) {
+    monthCard.appendChild(h('div', { style: 'font-size:12px;color:var(--muted2);padding:12px 0' }, 'Sin meses con abonos'));
+  } else {
+    const maxMonth = Math.max(...byMonth.map(m => m.total || 0), 1);
+    byMonth.slice(0, 18).forEach(m => {
+      const pct = ((m.total || 0) / maxMonth) * 100;
+      const label = new Date(`${m.month}-02T12:00:00`).toLocaleDateString('es-DO', { month: 'long', year: 'numeric' });
+      monthCard.appendChild(h('div', {
+        style: { marginBottom: '12px', cursor: 'pointer' },
+        title: 'Ver este mes',
+        onclick: async () => {
+          repRange = 'custom';
+          repDateFrom = `${m.month}-01`;
+          const last = new Date(`${m.month}-01T12:00:00`);
+          last.setMonth(last.getMonth() + 1);
+          last.setDate(0);
+          repDateTo = last.toISOString().split('T')[0];
+          await renderReportes(document.getElementById('page'));
+        }
+      },
+        h('div', { class: 'fxb', style: { marginBottom: '4px' } },
+          h('span', { style: { fontSize: '12px', fontWeight: 700, textTransform: 'capitalize' } }, label),
+          h('span', { style: { fontSize: '12px', fontWeight: 800 } }, fmt(m.total || 0))
+        ),
+        h('div', { class: 'prog' },
+          h('div', { class: 'prog-f', style: { width: `${pct}%`, background: 'var(--blue)' } })
+        ),
+        h('div', { style: { fontSize: '10px', color: 'var(--muted2)', marginTop: '2px' } },
+          `${m.count || 0} abonos · histórico ${fmt(m.imported_total || 0)} · POS ${fmt(m.current_total || 0)}`)
+      ));
+    });
+  }
+  grid.appendChild(monthCard);
+  el.appendChild(grid);
+
+  const dayCard = h('div', { class: 'card', style: { marginTop: '16px' } });
+  dayCard.appendChild(h('div', { class: 'fxb mb8' },
+    h('div', null,
+      h('div', { class: 'card-title' }, 'Día por día'),
+      h('div', { style: { fontSize: '11px', color: 'var(--muted2)' } },
+        `${byDay.length} día${byDay.length === 1 ? '' : 's'} con abonos`)
+    ),
+    h('span', { style: { fontSize: '12px', fontWeight: 800, color: 'var(--green)' } },
+      fmt(summary.total || 0))
+  ));
+  if (!byDay.length) {
+    dayCard.appendChild(h('div', { style: 'font-size:12px;color:var(--muted2);padding:12px 0' }, 'Sin abonos en este período'));
+  } else {
+    const maxDay = Math.max(...byDay.map(dy => dy.total || 0), 1);
+    byDay.slice(0, 45).forEach(dy => {
+      const pct = ((dy.total || 0) / maxDay) * 100;
+      dayCard.appendChild(h('div', { style: { marginBottom: '10px' } },
+        h('div', { class: 'fxb', style: { marginBottom: '4px' } },
+          h('div', null,
+            h('span', { style: { fontSize: '12px', fontWeight: 700 } }, fdate(dy.day)),
+            h('span', { style: { fontSize: '10px', color: 'var(--muted2)', marginLeft: '8px' } },
+              `${dy.count || 0} abono${dy.count === 1 ? '' : 's'}`)
+          ),
+          h('span', { style: { fontSize: '12px', fontWeight: 800 } }, fmt(dy.total || 0))
+        ),
+        h('div', { class: 'prog' },
+          h('div', { class: 'prog-f', style: { width: `${pct}%`, background: 'var(--green)' } })
+        )
+      ));
+    });
+  }
+  el.appendChild(dayCard);
+
+  const tableCard = h('div', { class: 'card', style: { marginTop: '16px' } });
+  tableCard.appendChild(h('div', { class: 'fxb mb8' },
+    h('div', null,
+      h('div', { class: 'card-title' }, 'Detalle de abonos'),
+      h('div', { style: { fontSize: '11px', color: 'var(--muted2)' } },
+        rows.length >= 5000 ? 'Mostrando los primeros 5,000 registros' : `${rows.length} registros`)
+    )
+  ));
+
+  const rowsHtml = rows.length ? rows.map(p => {
+    const fecha = (p.created_at || '').split('T')[0].split(' ')[0];
+    const factura = p.sale_id ? `#${String(p.sale_id).padStart(5, '0')}` : 'Sin factura';
+    const source = p.imported ? 'Histórico' : 'POS';
+    return `<tr>
+      <td>${fdate(fecha)}</td>
+      <td>
+        <div style="font-weight:700">${_repEsc(p.customer_name || 'Cliente eliminado')}</div>
+        <div style="font-size:10px;color:var(--muted2)">${_repEsc(p.customer_rnc || '')}</div>
+      </td>
+      <td>
+        <div>${factura}</div>
+        <div style="font-size:10px;color:var(--muted2)">${_repEsc(p.note || 'Abono')}</div>
+      </td>
+      <td><span class="badge g">${_repEsc(p.method || 'efectivo')}</span></td>
+      <td><span class="badge ${p.imported ? 'a' : 'b'}">${source}</span></td>
+      <td style="text-align:right;font-weight:800;color:var(--green)">${fmt(p.amount || 0)}</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="6" style="text-align:center;color:var(--muted2);padding:18px">Sin abonos en este período</td></tr>`;
+
+  tableCard.appendChild(h('div', { class: 'tw', style: { maxHeight: '420px', overflow: 'auto' },
+    html: `<table>
+      <thead><tr>
+        <th>Fecha</th><th>Cliente</th><th>Factura / Nota</th><th>Método</th><th>Origen</th><th style="text-align:right">Monto</th>
+      </tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>`
+  }));
+  el.appendChild(tableCard);
+}
+
+function exportAbonosPDF() {
+  if (!repData) { toast('Carga los datos primero', 'w'); return; }
+  const d = repData;
+  const summary = d.summary || {};
+  const rangeLabel = {
+    today: 'Hoy',
+    week: 'Esta semana',
+    month: 'Este mes',
+    all: 'Histórico',
+    custom: `${repDateFrom ? fdate(repDateFrom) : ''} — ${repDateTo ? fdate(repDateTo) : ''}`,
+  }[repRange] || repRange;
+
+  const rows = (d.rows || []).slice(0, 1000).map(p => {
+    const fecha = (p.created_at || '').split('T')[0].split(' ')[0];
+    return `<tr>
+      <td>${fdate(fecha)}</td>
+      <td>${_repEsc(p.customer_name || 'Cliente eliminado')}</td>
+      <td>${p.sale_id ? '#' + String(p.sale_id).padStart(5, '0') : 'Sin factura'}</td>
+      <td>${_repEsc(p.method || 'efectivo')}</td>
+      <td>${p.imported ? 'Histórico' : 'POS'}</td>
+      <td style="text-align:right;font-weight:700">${fmt(p.amount || 0)}</td>
+    </tr>`;
+  }).join('');
+
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"/>
+<title>Reporte de abonos — ${_repEsc(CFG.biz)}</title>
+<style>
+  body{font-family:Arial,sans-serif;font-size:11px;color:#111;padding:20px}
+  h2{margin-bottom:2px;font-size:16px}
+  .sub{color:#666;margin-bottom:14px;font-size:11px}
+  .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
+  .met{background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px}
+  .met-l{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#9ca3af;margin-bottom:4px}
+  .met-v{font-size:16px;font-weight:800}
+  table{width:100%;border-collapse:collapse}
+  th{background:#f3f4f6;padding:6px 8px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.04em}
+  td{padding:6px 8px;border-bottom:1px solid #f3f4f6;vertical-align:top}
+  .no-print{margin-bottom:14px;text-align:right}
+  @media print{.no-print{display:none}}
+</style>
+</head><body>
+  <div class="no-print">
+    <button onclick="window.print()" style="background:#0D0F12;color:#fff;border:none;padding:8px 16px;border-radius:6px;font-size:12px;cursor:pointer;font-weight:700">
+      Imprimir / Guardar PDF
+    </button>
+  </div>
+  <h2>Reporte de Abonos CxC — ${_repEsc(CFG.biz)}</h2>
+  <div class="sub">Período: <strong>${rangeLabel}</strong> · Generado: ${fdate(today())} a las ${nowt()}</div>
+  <div class="metrics">
+    <div class="met"><div class="met-l">Total abonado</div><div class="met-v">${fmt(summary.total || 0)}</div></div>
+    <div class="met"><div class="met-l">Registros</div><div class="met-v">${summary.count || 0}</div></div>
+    <div class="met"><div class="met-l">Histórico</div><div class="met-v">${fmt(summary.importedTotal || 0)}</div></div>
+    <div class="met"><div class="met-l">POS</div><div class="met-v">${fmt(summary.currentTotal || 0)}</div></div>
+  </div>
+  <table>
+    <thead><tr><th>Fecha</th><th>Cliente</th><th>Factura</th><th>Método</th><th>Origen</th><th style="text-align:right">Monto</th></tr></thead>
+    <tbody>${rows || `<tr><td colspan="6" style="text-align:center;color:#9ca3af;padding:18px">Sin abonos</td></tr>`}</tbody>
+  </table>
+</body></html>`;
+
+  const w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
+}
+
 // ══════════════════════════════════════════════
 // EXPORTAR PDF REPORTE COMPLETO
 // ══════════════════════════════════════════════
 function exportReportePDF() {
   if (!repData) { toast('Carga los datos primero', 'w'); return; }
+  if (repTab === 'abonos') {
+    exportAbonosPDF();
+    return;
+  }
 
   const d = repData;
   const rangeLabel = {

@@ -1299,7 +1299,7 @@ const salesRepo = {
     } else if (range === 'week') {
       where += ` AND date(s.created_at)>=date('now','-7 days','localtime')`;
     } else if (range === 'month') {
-      where += ` AND strftime('%Y-%m',s.created_at,'localtime')=strftime('%Y-%m','now','localtime') AND s.cajero != 'Importación histórica'`;
+      where += ` AND strftime('%Y-%m',s.created_at)=strftime('%Y-%m','now','localtime') AND s.cajero != 'Importación histórica'`;
     }
     if (customerId) { where += ' AND s.customer_id=?'; params.push(customerId); }
     if (method)     { where += ' AND s.payment_method=?'; params.push(method); }
@@ -1331,7 +1331,7 @@ const salesRepo = {
     } else if (range === 'week') {
       where += ` AND date(created_at)>=date('now','-7 days','localtime')`;
     } else if (range === 'month') {
-      where += ` AND strftime('%Y-%m',created_at,'localtime')=strftime('%Y-%m','now','localtime') AND cajero != 'Importación histórica'`;
+      where += ` AND strftime('%Y-%m',created_at)=strftime('%Y-%m','now','localtime') AND cajero != 'Importación histórica'`;
     }
     if (customerId) { where += ' AND customer_id=?'; params.push(customerId); }
     if (method)     { where += ' AND payment_method=?'; params.push(method); }
@@ -1455,21 +1455,20 @@ const reportsRepo = {
     const _buildFilters = () => {
       if (range === 'custom' && safeFrom && safeTo) {
         return {
-          // 'localtime' en created_at para comparar fechas UTC almacenadas con fechas locales del usuario
-          withAlias:    { sql: `date(s.created_at,'localtime') BETWEEN ? AND ?`,  params: [safeFrom, safeTo] },
-          withoutAlias: { sql: `date(created_at,'localtime')   BETWEEN ? AND ?`,  params: [safeFrom, safeTo] },
-          payments:     { sql: `date(created_at,'localtime')   BETWEEN ? AND ?`,  params: [safeFrom, safeTo] },
+          withAlias:    { sql: `date(s.created_at) BETWEEN ? AND ?`,  params: [safeFrom, safeTo] },
+          withoutAlias: { sql: `date(created_at)   BETWEEN ? AND ?`,  params: [safeFrom, safeTo] },
+          payments:     { sql: `date(created_at)   BETWEEN ? AND ?`,  params: [safeFrom, safeTo] },
         };
       }
       if (range === 'month') return {
-        withAlias:    { sql: `strftime('%Y-%m',s.created_at,'localtime') = strftime('%Y-%m','now','localtime')`, params: [] },
-        withoutAlias: { sql: `strftime('%Y-%m',created_at,'localtime')   = strftime('%Y-%m','now','localtime')`, params: [] },
-        payments:     { sql: `strftime('%Y-%m',created_at,'localtime')   = strftime('%Y-%m','now','localtime')`, params: [] },
+        withAlias:    { sql: `strftime('%Y-%m',s.created_at) = strftime('%Y-%m','now','localtime')`, params: [] },
+        withoutAlias: { sql: `strftime('%Y-%m',created_at)   = strftime('%Y-%m','now','localtime')`, params: [] },
+        payments:     { sql: `strftime('%Y-%m',created_at)   = strftime('%Y-%m','now','localtime')`, params: [] },
       };
       if (range === 'week') return {
-        withAlias:    { sql: `date(s.created_at,'localtime') >= date('now','-6 days','localtime')`, params: [] },
-        withoutAlias: { sql: `date(created_at,'localtime')   >= date('now','-6 days','localtime')`, params: [] },
-        payments:     { sql: `date(created_at,'localtime')   >= date('now','-6 days','localtime')`, params: [] },
+        withAlias:    { sql: `date(s.created_at) >= date('now','-6 days','localtime')`, params: [] },
+        withoutAlias: { sql: `date(created_at)   >= date('now','-6 days','localtime')`, params: [] },
+        payments:     { sql: `date(created_at)   >= date('now','-6 days','localtime')`, params: [] },
       };
       if (range === 'all') return {
         withAlias:    { sql: `1=1`, params: [] },
@@ -1478,9 +1477,9 @@ const reportsRepo = {
       };
       // today (default)
       return {
-        withAlias:    { sql: `date(s.created_at,'localtime') = date('now','localtime')`, params: [] },
-        withoutAlias: { sql: `date(created_at,'localtime')   = date('now','localtime')`, params: [] },
-        payments:     { sql: `date(created_at,'localtime')   = date('now','localtime')`, params: [] },
+        withAlias:    { sql: `date(s.created_at) = date('now','localtime')`, params: [] },
+        withoutAlias: { sql: `date(created_at)   = date('now','localtime')`, params: [] },
+        payments:     { sql: `date(created_at)   = date('now','localtime')`, params: [] },
       };
     };
 
@@ -1561,7 +1560,7 @@ const reportsRepo = {
 
     // Ventas por día (últimos 30 o en rango)
     const dailySales = db.prepare(`
-      SELECT date(s.created_at,'localtime') as day,
+      SELECT date(s.created_at) as day,
              COUNT(*) as count,
              SUM(s.total) as total,
              SUM(si.unit_cost * si.qty) as cost
@@ -1632,6 +1631,109 @@ const reportsRepo = {
     };
   },
 
+  paymentsHistory({ range = 'month', dateFrom = null, dateTo = null } = {}) {
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    const safeFrom = (range === 'custom' && dateFrom && DATE_RE.test(dateFrom)) ? dateFrom : null;
+    const safeTo   = (range === 'custom' && dateTo   && DATE_RE.test(dateTo))   ? dateTo   : null;
+
+    const buildFilter = () => {
+      if (range === 'custom' && safeFrom && safeTo) {
+        return { sql: `date(p.created_at) BETWEEN ? AND ?`, params: [safeFrom, safeTo] };
+      }
+      if (range === 'today') {
+        return { sql: `date(p.created_at) = date('now','localtime')`, params: [] };
+      }
+      if (range === 'week') {
+        return { sql: `date(p.created_at) >= date('now','-6 days','localtime')`, params: [] };
+      }
+      if (range === 'all') {
+        return { sql: `1=1`, params: [] };
+      }
+      return {
+        sql: `strftime('%Y-%m',p.created_at) = strftime('%Y-%m','now','localtime')`,
+        params: [],
+      };
+    };
+
+    const f = buildFilter();
+    const baseWhere = `${f.sql} AND COALESCE(p.note,'') != 'Saldo inicial importado'`;
+
+    const rows = db.prepare(`
+      SELECT p.*,
+             c.name AS customer_name,
+             c.rnc  AS customer_rnc,
+             s.total AS sale_total,
+             s.created_at AS sale_created_at,
+             CASE WHEN p.cajero='Importación histórica' THEN 1 ELSE 0 END AS imported
+      FROM payments p
+      LEFT JOIN customers c ON c.id = p.customer_id
+      LEFT JOIN sales s ON s.id = p.sale_id
+      WHERE ${baseWhere}
+      ORDER BY p.created_at DESC, p.id DESC
+      LIMIT 5000
+    `).all(...f.params);
+
+    const byDay = db.prepare(`
+      SELECT date(p.created_at) AS day,
+             COUNT(*) AS count,
+             COALESCE(SUM(p.amount),0) AS total,
+             SUM(CASE WHEN p.cajero='Importación histórica' THEN p.amount ELSE 0 END) AS imported_total,
+             SUM(CASE WHEN p.cajero!='Importación histórica' THEN p.amount ELSE 0 END) AS current_total
+      FROM payments p
+      WHERE ${baseWhere}
+      GROUP BY day
+      ORDER BY day DESC
+      LIMIT 370
+    `).all(...f.params);
+
+    const byMonth = db.prepare(`
+      SELECT strftime('%Y-%m',p.created_at) AS month,
+             COUNT(*) AS count,
+             COALESCE(SUM(p.amount),0) AS total,
+             SUM(CASE WHEN p.cajero='Importación histórica' THEN p.amount ELSE 0 END) AS imported_total,
+             SUM(CASE WHEN p.cajero!='Importación histórica' THEN p.amount ELSE 0 END) AS current_total
+      FROM payments p
+      WHERE ${baseWhere}
+      GROUP BY month
+      ORDER BY month DESC
+      LIMIT 120
+    `).all(...f.params);
+
+    const byMethod = db.prepare(`
+      SELECT COALESCE(p.method,'efectivo') AS method,
+             COUNT(*) AS count,
+             COALESCE(SUM(p.amount),0) AS total
+      FROM payments p
+      WHERE ${baseWhere}
+      GROUP BY method
+      ORDER BY total DESC
+    `).all(...f.params);
+
+    const summary = db.prepare(`
+      SELECT COUNT(*) AS count,
+             COALESCE(SUM(p.amount),0) AS total,
+             SUM(CASE WHEN p.cajero='Importación histórica' THEN p.amount ELSE 0 END) AS imported_total,
+             SUM(CASE WHEN p.cajero!='Importación histórica' THEN p.amount ELSE 0 END) AS current_total,
+             COUNT(DISTINCT p.customer_id) AS customers
+      FROM payments p
+      WHERE ${baseWhere}
+    `).get(...f.params);
+
+    return {
+      summary: {
+        count: summary?.count || 0,
+        total: summary?.total || 0,
+        importedTotal: summary?.imported_total || 0,
+        currentTotal: summary?.current_total || 0,
+        customers: summary?.customers || 0,
+      },
+      byDay,
+      byMonth,
+      byMethod,
+      rows,
+    };
+  },
+
   lowStock() {
     return db.prepare(`
       SELECT * FROM products WHERE active=1 AND stock <= stock_min ORDER BY stock ASC
@@ -1648,32 +1750,36 @@ const reportsRepo = {
     `).all();
   },
 
-  dailyTrend({ days = 30 } = {}) {
+  dailyTrend({ days = 30, includeHistorical = true } = {}) {
     return db.prepare(`
-      SELECT date(s.created_at,'localtime') as day,
+      SELECT date(s.created_at) as day,
              COUNT(DISTINCT s.id) as count,
              SUM(s.total) as total,
+             SUM(s.tax_amt) as tax,
              SUM(si.unit_cost * si.qty) as cost
       FROM sales s
       LEFT JOIN sale_items si ON s.id = si.sale_id
       WHERE s.status='completed' AND s.type != 'devolucion'
-        AND date(s.created_at,'localtime') >= date('now','-'||?||' days','localtime')
+        AND date(s.created_at) >= date('now','-'||?||' days','localtime')
+        AND (? = 1 OR s.cajero != 'Importación histórica')
       GROUP BY day
       ORDER BY day ASC
-    `).all(days);
+    `).all(days, includeHistorical ? 1 : 0);
   },
 
-  monthlyTrend({ months = 12 } = {}) {
+  monthlyTrend({ months = 12, includeHistorical = true } = {}) {
     return db.prepare(`
-      SELECT strftime('%Y-%m', s.created_at, 'localtime') as month,
+      SELECT strftime('%Y-%m', s.created_at) as month,
              COUNT(DISTINCT s.id) as count,
-             SUM(s.total) as total
+             SUM(s.total) as total,
+             SUM(s.tax_amt) as tax
       FROM sales s
       WHERE s.status='completed' AND s.type != 'devolucion'
-        AND date(s.created_at,'localtime') >= date('now','-'||?||' months','localtime')
+        AND date(s.created_at) >= date('now','-'||?||' months','localtime')
+        AND (? = 1 OR s.cajero != 'Importación histórica')
       GROUP BY month
       ORDER BY month ASC
-    `).all(months);
+    `).all(months, includeHistorical ? 1 : 0);
   },
 };
 

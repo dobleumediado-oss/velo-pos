@@ -128,6 +128,8 @@ const {
   getMachineId, getLicenseStatus, activateLicense
 } = require('./license');
 
+const { runSystemDoctor } = require('./src/main/system-doctor');
+
 // ── Auto-updater (GitHub Releases) ───────────
 const { autoUpdater } = require('electron-updater');
 
@@ -964,6 +966,18 @@ ipcMain.handle('reports:summary', async (_, { range, dateFrom, dateTo, requestUs
   }
 });
 
+ipcMain.handle('reports:paymentsHistory', async (_, { range, dateFrom, dateTo, requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
+    return { ok: true, data: reportsRepo.paymentsHistory({ range, dateFrom, dateTo }) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle('reports:lowStock', async () => {
   return reportsRepo.lowStock();
 });
@@ -1547,11 +1561,11 @@ if (!fs.existsSync(DATA_DIR)) {
 // ══════════════════════════════════════════════
 // IPC — IMPORTACION UNIVERSAL
 // ══════════════════════════════════════════════
-ipcMain.handle('reports:dailyTrend', async (_, { days = 30, requestUserId } = {}) => {
+ipcMain.handle('reports:dailyTrend', async (_, { days = 30, includeHistorical = true, requestUserId } = {}) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
     if (!reqUser) return { ok: false, error: 'Usuario no válido' };
-    const data = reportsRepo.dailyTrend({ days });
+    const data = reportsRepo.dailyTrend({ days, includeHistorical });
     return { ok: true, data };
   } catch(e) {
     console.error('[reports:dailyTrend]', e.message);
@@ -1559,11 +1573,11 @@ ipcMain.handle('reports:dailyTrend', async (_, { days = 30, requestUserId } = {}
   }
 });
 
-ipcMain.handle('reports:monthlyTrend', async (_, { months = 12, requestUserId } = {}) => {
+ipcMain.handle('reports:monthlyTrend', async (_, { months = 12, includeHistorical = true, requestUserId } = {}) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
     if (!reqUser) return { ok: false, error: 'Usuario no válido' };
-    const data = reportsRepo.monthlyTrend({ months });
+    const data = reportsRepo.monthlyTrend({ months, includeHistorical });
     return { ok: true, data };
   } catch(e) {
     console.error('[reports:monthlyTrend]', e.message);
@@ -3052,224 +3066,16 @@ ipcMain.handle('system:diagnose', async (_, { requestUserId } = {}) => {
       return { ok: false, error: 'Sin permisos' };
     }
 
-    const os      = require('os');
-    const dbInst  = require('./database').getDB();
-    const results = [];
-
-    // ── 1. Base de datos ─────────────────────
-    try {
-      const integrity = dbInst.prepare('PRAGMA integrity_check').get();
-      const dbPath    = path.join(DATA_DIR, 'velo.db');
-      const dbStat    = fs.existsSync(dbPath) ? fs.statSync(dbPath) : null;
-      const dbSizeMB  = dbStat ? (dbStat.size / 1024 / 1024).toFixed(2) : 0;
-      const ventas    = dbInst.prepare('SELECT COUNT(*) as c FROM sales WHERE status != ?').get('cancelled').c;
-      const productos = dbInst.prepare('SELECT COUNT(*) as c FROM products WHERE active=1').get().c;
-      const clientes  = dbInst.prepare('SELECT COUNT(*) as c FROM customers WHERE active=1').get().c;
-      const ok        = integrity?.integrity_check === 'ok';
-      results.push({
-        id: 'db', label: 'Base de datos',
-        status: ok ? 'ok' : 'error',
-        detail: ok
-          ? `Íntegra · ${dbSizeMB} MB · ${ventas} ventas · ${productos} productos · ${clientes} clientes`
-          : `Error de integridad: ${integrity?.integrity_check}`,
-        value: { integrity: integrity?.integrity_check, sizeMB: dbSizeMB, ventas, productos, clientes },
-      });
-    } catch(e) {
-      results.push({ id:'db', label:'Base de datos', status:'error', detail: e.message });
-    }
-
-    // ── 2. Backups ───────────────────────────
-    try {
-      const backupDir  = path.join(DATA_DIR, 'backups');
-      const backups    = fs.existsSync(backupDir)
-        ? fs.readdirSync(backupDir).filter(f => f.startsWith('velo_') && f.endsWith('.db')).sort().reverse()
-        : [];
-      const lastBackup = backups[0] ? backups[0].replace('velo_','').replace('.db','') : null;
-      const today      = new Date().toISOString().split('T')[0];
-      const yesterday  = new Date(Date.now()-86400000).toISOString().split('T')[0];
-      const daysSince  = lastBackup
-        ? Math.floor((Date.now() - new Date(lastBackup)) / 86400000) : 999;
-      const status     = !lastBackup ? 'error' : daysSince <= 1 ? 'ok' : daysSince <= 3 ? 'warn' : 'error';
-      results.push({
-        id: 'backup', label: 'Backups',
-        status,
-        detail: !lastBackup
-          ? 'Nunca se ha hecho un backup — riesgo crítico de pérdida de datos'
-          : daysSince === 0 ? `Backup de hoy · ${backups.length} guardados`
-          : daysSince === 1 ? `Último backup: ayer · ${backups.length} guardados`
-          : `Último backup hace ${daysSince} días · ${backups.length} guardados`,
-        value: { lastBackup, count: backups.length, daysSince },
-      });
-    } catch(e) {
-      results.push({ id:'backup', label:'Backups', status:'error', detail: e.message });
-    }
-
-    // ── 3. Caja ──────────────────────────────
-    try {
-      const cajaAbierta = cashRepo.getOpen();
-      let status = 'ok', detail = 'Sin sesión de caja activa';
-      if (cajaAbierta) {
-        const abiertaEn = new Date(cajaAbierta.opened_at);
-        const horasAbierta = Math.floor((Date.now() - abiertaEn) / 3600000);
-        if (horasAbierta > 24) {
-          status = 'error';
-          detail = `Caja abierta hace ${horasAbierta}h — posiblemente olvidaron cerrarla`;
-        } else {
-          status = 'ok';
-          detail = `Caja abierta hace ${horasAbierta}h por ${cajaAbierta.cajero || 'cajero'}`;
-        }
-      }
-      // Revisar diferencia del último cierre
-      const ultimoCierre = dbInst.prepare(
-        `SELECT * FROM cash_sessions WHERE status='closed' ORDER BY id DESC LIMIT 1`
-      ).get();
-      if (ultimoCierre) {
-        const diff = Math.abs((ultimoCierre.close_amount || 0) - (ultimoCierre.expected_amount || 0));
-        if (diff > 500 && status === 'ok') {
-          status = 'warn';
-          detail += ` · Último cierre con diferencia de RD$${diff.toLocaleString('es-DO')}`;
-        }
-      }
-      results.push({ id:'caja', label:'Caja', status, detail,
-        value: { abierta: !!cajaAbierta, horasAbierta: cajaAbierta
-          ? Math.floor((Date.now()-new Date(cajaAbierta.opened_at))/3600000) : 0 }
-      });
-    } catch(e) {
-      results.push({ id:'caja', label:'Caja', status:'warn', detail: e.message });
-    }
-
-    // ── 4. Licencia ──────────────────────────
-    try {
-      const lic = getLicenseStatus(DATA_DIR);
-      let status = 'ok', detail = '';
-      if (lic.blocked)       { status = 'error'; detail = 'Sin licencia válida — sistema bloqueado'; }
-      else if (lic.inGrace)  { status = 'warn';  detail = `Período de gracia — ${lic.graceDaysLeft} días restantes`; }
-      else if (lic.warningSoon) { status = 'warn'; detail = `Licencia vence en ${lic.daysLeft} días`; }
-      else if (lic.licensed) { detail = `Activa · ${lic.expiry === 'Perpetua' ? 'Perpetua' : 'Vence: ' + lic.expiry} · ${lic.business}`; }
-      results.push({ id:'license', label:'Licencia', status, detail, value: lic });
-    } catch(e) {
-      results.push({ id:'license', label:'Licencia', status:'error', detail: e.message });
-    }
-
-    // ── 5. Disco ─────────────────────────────
-    try {
-      const totalMem  = os.totalmem();
-      const freeMem   = os.freemem();
-      const memUsoPct = Math.round((1 - freeMem/totalMem) * 100);
-      // Espacio en disco — leer la partición donde está userData
-      let diskDetail = `RAM: ${Math.round(freeMem/1024/1024)}MB libre de ${Math.round(totalMem/1024/1024)}MB`;
-      let diskStatus = memUsoPct > 90 ? 'warn' : 'ok';
-      // Estimar espacio libre mirando el directorio de datos
-      try {
-        const { execSync } = require('child_process');
-        if (process.platform === 'win32') {
-          const drive = DATA_DIR.split(':')[0] + ':';
-          const out   = execSync(`wmic logicaldisk where "DeviceID='${drive}'" get FreeSpace /value`, { timeout: 3000 }).toString();
-          const match = out.match(/FreeSpace=(\d+)/);
-          if (match) {
-            const freeGB = (parseInt(match[1]) / 1024 / 1024 / 1024).toFixed(1);
-            diskDetail += ` · Disco: ${freeGB}GB libres`;
-            if (parseFloat(freeGB) < 1) { diskStatus = 'error'; diskDetail += ' — espacio crítico'; }
-            else if (parseFloat(freeGB) < 3) { diskStatus = 'warn'; }
-          }
-        }
-      } catch {}
-      results.push({ id:'disk', label:'Sistema', status: diskStatus, detail: diskDetail,
-        value: { memUsoPct, freeMemMB: Math.round(freeMem/1024/1024) }
-      });
-    } catch(e) {
-      results.push({ id:'disk', label:'Sistema', status:'warn', detail: e.message });
-    }
-
-    // ── 6. Reloj del sistema ─────────────────
-    try {
-      const now        = new Date();
-      const year       = now.getFullYear();
-      const status     = (year < 2025 || year > 2035) ? 'error' : 'ok';
-      results.push({
-        id: 'clock', label: 'Fecha y hora',
-        status,
-        detail: status === 'error'
-          ? `Fecha incorrecta: ${now.toLocaleString('es-DO')} — los reportes y NCF pueden fallar`
-          : `${now.toLocaleDateString('es-DO', { weekday:'long', year:'numeric', month:'long', day:'numeric' })} · ${now.toLocaleTimeString('es-DO')}`,
-        value: { timestamp: now.toISOString() },
-      });
-    } catch(e) {
-      results.push({ id:'clock', label:'Fecha y hora', status:'warn', detail: e.message });
-    }
-
-    // ── 7. Impresora ─────────────────────────
-    try {
-      const printerSaved = settingsRepo.getAll()?.printer || '';
-      if (!printerSaved) {
-        results.push({ id:'printer', label:'Impresora', status:'warn',
-          detail:'Sin impresora configurada — imprimirá con el diálogo del sistema' });
-      } else {
-        const printers = await mainWindow.webContents.getPrintersAsync();
-        const found    = printers.find(p => p.name === printerSaved);
-        results.push({ id:'printer', label:'Impresora', status: found ? 'ok' : 'error',
-          detail: found
-            ? `"${printerSaved}" encontrada y lista`
-            : `"${printerSaved}" configurada pero NO encontrada en el sistema — puede haber sido desinstalada`,
-          value: { configured: printerSaved, found: !!found },
-        });
-      }
-    } catch(e) {
-      results.push({ id:'printer', label:'Impresora', status:'warn', detail: e.message });
-    }
-
-    // ── 8. API key de Claude ─────────────────
-    try {
-      const keyFile  = path.join(DATA_DIR, 'velo-ai.key');
-      const keyExists = fs.existsSync(keyFile);
-      const keyValid  = keyExists
-        ? fs.readFileSync(keyFile,'utf8').trim().startsWith('sk-ant-')
-        : false;
-      results.push({
-        id: 'ai', label: 'Importador IA',
-        status: !keyExists ? 'warn' : !keyValid ? 'error' : 'ok',
-        detail: !keyExists
-          ? 'API key no encontrada — el importador IA no estará disponible'
-          : !keyValid ? 'API key con formato inválido'
-          : 'API key de Claude configurada correctamente',
-        value: { exists: keyExists, valid: keyValid },
-      });
-    } catch(e) {
-      results.push({ id:'ai', label:'Importador IA', status:'warn', detail: e.message });
-    }
-
-    // ── 9. Módulo fiscal ─────────────────────
-    try {
-      const s           = settingsRepo.getAll();
-      const fiscalOn    = s?.fiscal_enabled === '1';
-      if (fiscalOn) {
-        const tieneRnc  = (s?.biz_rnc || '').trim().length > 0;
-        const ncfCount  = parseInt(s?.ncf_counter || '0');
-        const ventasFact = dbInst.prepare(
-          `SELECT COUNT(*) as c FROM sales WHERE type='factura' AND status!='cancelled'`
-        ).get().c;
-        const status    = !tieneRnc ? 'error' : 'ok';
-        results.push({ id:'fiscal', label:'Módulo fiscal',
-          status,
-          detail: !tieneRnc
-            ? 'Módulo fiscal activo pero sin RNC configurado'
-            : `RNC: ${s.biz_rnc} · ITBIS: ${s.tax_pct}% · NCF counter: ${ncfCount} · ${ventasFact} facturas`,
-          value: { fiscalOn, tieneRnc, ncfCount, ventasFact },
-        });
-      } else {
-        results.push({ id:'fiscal', label:'Módulo fiscal', status:'ok',
-          detail:'Desactivado — negocio sin RNC (normal)', value: { fiscalOn: false } });
-      }
-    } catch(e) {
-      results.push({ id:'fiscal', label:'Módulo fiscal', status:'warn', detail: e.message });
-    }
-
-    // ── Resumen ──────────────────────────────
-    const errors = results.filter(r => r.status === 'error').length;
-    const warns  = results.filter(r => r.status === 'warn').length;
-    const score  = errors > 0 ? 'critical' : warns > 0 ? 'warn' : 'healthy';
-
-    return { ok: true, results, score, errors, warns, timestamp: new Date().toISOString() };
+    const dbInst = require('./database').getDB();
+    return await runSystemDoctor({
+      db: dbInst,
+      dataDir: DATA_DIR,
+      appRoot: __dirname,
+      cashRepo,
+      settingsRepo,
+      getLicenseStatus,
+      mainWindow,
+    });
 
   } catch(e) {
     console.error('[system:diagnose]', e);
@@ -3423,7 +3229,7 @@ ipcMain.handle('ecf:emit', async (_, { saleId }) => {
 
     // 3. Obtener configuración del negocio
     const getSet = k => db.prepare("SELECT value FROM settings WHERE key=?").get(k)?.value || '';
-    const rnc          = getSet('rnc').replace(/[-\s]/g, '');
+    const rnc          = (getSet('biz_rnc') || getSet('rnc')).replace(/[-\s]/g, '');
     const bizName      = getSet('biz_name') || getSet('biz') || 'NEGOCIO';
     const apiKey       = getSet('ecf_api_key');
     const msellerEmail = getSet('ecf_email');
@@ -3452,10 +3258,11 @@ ipcMain.handle('ecf:emit', async (_, { saleId }) => {
 
     // Items con ITBIS
     const detalles = items.map((item, idx) => {
-      const precioUnit = item.price || 0;
-      const cantidad   = item.quantity || 1;
+      const precioUnit = Number(item.unit_price ?? item.price ?? 0);
+      const cantidad   = Number(item.qty ?? item.quantity ?? 1);
       const monto      = item.subtotal || (precioUnit * cantidad);
-      const itbisItem  = itbis > 0 ? parseFloat((monto * 0.18).toFixed(2)) : 0;
+      const taxRate    = (Number(sale.tax_pct) || 0) / 100;
+      const itbisItem  = itbis > 0 ? parseFloat((monto * taxRate).toFixed(2)) : 0;
       return {
         NumeroLinea:          String(idx + 1),
         IndicadorFacturacion: itbis > 0 ? '1' : '3', // 1=ITBIS, 3=exento
@@ -3492,8 +3299,8 @@ ipcMain.handle('ecf:emit', async (_, { saleId }) => {
             RazonSocialEmisor: bizName,
             NombreComercial:   bizName,
             Sucursal:          '001',
-            DireccionEmisor:   getSet('addr') || 'República Dominicana',
-            Telefono:          (getSet('phone') || '').replace(/[^0-9]/g, '').slice(0, 10),
+            DireccionEmisor:   getSet('biz_addr') || getSet('addr') || 'República Dominicana',
+            Telefono:          (getSet('biz_phone') || getSet('phone') || '').replace(/[^0-9]/g, '').slice(0, 10),
             WebSite:           '',
             ActividadEconomica: getSet('actividad') || '479900',
             CodigoVendedor:    String(sale.user_id || 1),

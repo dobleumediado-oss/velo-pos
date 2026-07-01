@@ -149,9 +149,16 @@ async function renderGastos(el) {
     default:            await renderResumen(content, user);
   }
 
-  // ── Eventos de botones ─────────────────────
-  document.getElementById('btn-gasto-nuevo')?.addEventListener('click', () => modalNuevoGasto(el, user));
-  document.getElementById('btn-gasto-retiro')?.addEventListener('click', () => modalRetiro(el, user));
+  // ── Eventos de botones (delegación en el contenedor persistente) ──
+  // Antes se enganchaban por getElementById tras los await de los tabs, lo que
+  // dejaba los botones muertos si el render se repetía. La delegación es inmune.
+  if (!el._gastosDelegated) {
+    el._gastosDelegated = true;
+    el.addEventListener('click', (ev) => {
+      if (ev.target.closest('#btn-gasto-nuevo'))  { ev.preventDefault(); modalNuevoGasto(el, _getUser()); }
+      if (ev.target.closest('#btn-gasto-retiro')) { ev.preventDefault(); modalRetiro(el, _getUser()); }
+    });
+  }
 }
 
 // ══════════════════════════════════════════════
@@ -423,7 +430,7 @@ async function renderRecurrentes(el, user) {
         </table>
       </div>`}`;
 
-    document.getElementById('btn-new-recurrent')?.addEventListener('click', () => modalNuevoRecurrente(el, user));
+    el.querySelector('#btn-new-recurrent')?.addEventListener('click', () => modalNuevoRecurrente(el, user));
   } catch(err) {
     el.innerHTML = `<div style="color:var(--red,#ef4444);padding:16px">Error: ${err.message}</div>`;
   }
@@ -619,7 +626,7 @@ async function renderPresupuestos(el, user) {
         </table>
       </div>`}`;
 
-    document.getElementById('btn-add-budget')?.addEventListener('click', () => modalPresupuesto(el, user, cats, month));
+    el.querySelector('#btn-add-budget')?.addEventListener('click', () => modalPresupuesto(el, user, cats, month));
   } catch(err) {
     el.innerHTML = `<div style="color:var(--red,#ef4444);padding:16px">Error: ${err.message}</div>`;
   }
@@ -651,7 +658,7 @@ async function renderCategorias(el, user) {
       }).join('')}
     </div>`;
 
-  document.getElementById('btn-new-cat')?.addEventListener('click', () => modalNuevaCat(el, user, padres));
+  el.querySelector('#btn-new-cat')?.addEventListener('click', () => modalNuevaCat(el, user, padres));
 }
 
 // ══════════════════════════════════════════════

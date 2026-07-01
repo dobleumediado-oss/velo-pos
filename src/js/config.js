@@ -829,13 +829,14 @@ async function renderConfiguracion(el) {
     diagCard.innerHTML = `
       <div class="fxb mb8">
         <div class="card-title">Diagnóstico del sistema</div>
-        <button class="btn btn-dark btn-sm" id="diag-btn" onclick="runDiagnosis()">
+        <button class="btn btn-dark btn-sm" id="diag-btn">
           ${svg('refresh')} Ejecutar
         </button>
       </div>
       <div id="diag-body" style="font-size:12px;color:var(--muted2)">
         Presiona "Ejecutar" para revisar el estado completo del sistema.
       </div>`;
+    diagCard.querySelector('#diag-btn')?.addEventListener('click', runDiagnosis);
     colRight.appendChild(diagCard);
   }
 
@@ -932,11 +933,21 @@ async function runDiagnosis() {
   const btn  = document.getElementById('diag-btn');
   if (!body) return;
 
-  btn.disabled  = true;
+  if (btn) btn.disabled = true;
   body.innerHTML = `<div style="color:var(--muted2);font-size:12px;padding:8px 0">Analizando sistema...</div>`;
 
-  const res = await window.api.system.diagnose({ requestUserId: user?.id });
-  btn.disabled = false;
+  let res;
+  try {
+    if (!window.api?.system?.diagnose) {
+      throw new Error('El puente de diagnóstico no está disponible. Reinicia la app en modo desarrollo.');
+    }
+    res = await window.api.system.diagnose({ requestUserId: user?.id });
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    body.innerHTML = `<div style="color:var(--red);font-size:12px">${e.message || 'Error al ejecutar diagnóstico'}</div>`;
+    return;
+  }
+  if (btn) btn.disabled = false;
 
   if (!res?.ok) {
     body.innerHTML = `<div style="color:var(--red);font-size:12px">${res?.error || 'Error al ejecutar diagnóstico'}</div>`;
@@ -951,6 +962,22 @@ async function runDiagnosis() {
 
   const statusColor = s => s === 'ok' ? 'var(--green)' : s === 'warn' ? 'var(--amber)' : 'var(--red)';
   const statusIcon  = s => s === 'ok' ? '●' : s === 'warn' ? '●' : '●';
+  const escDiag = v => String(v == null ? '' : v)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+  const catLabel = c => ({
+    nucleo: 'Núcleo',
+    seguridad: 'Seguridad',
+    operacion: 'Operación',
+    negocio: 'Negocio',
+    fiscal: 'Fiscal',
+    contabilidad: 'Contabilidad',
+    codigo: 'Código',
+    sistema: 'Sistema',
+    hardware: 'Hardware',
+  }[c] || 'Sistema');
 
   body.innerHTML = `
     <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:6px;
@@ -966,23 +993,35 @@ async function runDiagnosis() {
                   border-bottom:1px solid var(--line2)">
         <span style="color:${statusColor(r.status)};font-size:10px;margin-top:2px;flex-shrink:0">${statusIcon(r.status)}</span>
         <div style="min-width:0;flex:1">
-          <div style="display:flex;align-items:center;gap:6px">
-            <span style="font-size:12px;font-weight:600;color:var(--ink)">${r.label}</span>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <span style="font-size:12px;font-weight:600;color:var(--ink)">${escDiag(r.label)}</span>
+            <span style="font-size:9px;padding:1px 6px;border-radius:100px;background:var(--surface2);color:var(--muted2)">
+              ${catLabel(r.category)}
+            </span>
             <span style="font-size:10px;padding:1px 6px;border-radius:100px;
                          background:${r.status==='ok'?'var(--green-bg, #f0fdf4)':r.status==='warn'?'var(--amber-bg, #fffbeb)':'var(--red-bg, #fef2f2)'};
                          color:${statusColor(r.status)}">
               ${r.status === 'ok' ? 'OK' : r.status === 'warn' ? 'Advertencia' : 'Error'}
             </span>
           </div>
-          <div style="font-size:11px;color:var(--muted2);margin-top:2px;line-height:1.4">${r.detail}</div>
+          <div style="font-size:11px;color:var(--muted2);margin-top:3px;line-height:1.4">${escDiag(r.detail)}</div>
+          ${r.impact ? `<div style="font-size:10.5px;color:var(--muted);margin-top:5px;line-height:1.35">
+            <strong style="color:var(--ink)">Impacto:</strong> ${escDiag(r.impact)}
+          </div>` : ''}
+          ${r.fix ? `<div style="font-size:10.5px;color:var(--muted);margin-top:3px;line-height:1.35">
+            <strong style="color:var(--ink)">Acción:</strong> ${escDiag(r.fix)}
+          </div>` : ''}
         </div>
-      </div>`).join('')}
+    </div>`).join('')}
     <div style="margin-top:8px;text-align:right">
-      <button class="btn btn-ghost btn-sm" onclick="runDiagnosis()" style="font-size:11px">
+      <button class="btn btn-ghost btn-sm" id="diag-rerun-btn" style="font-size:11px">
         Ejecutar de nuevo
       </button>
     </div>`;
+  document.getElementById('diag-rerun-btn')?.addEventListener('click', runDiagnosis);
 }
+
+window.runDiagnosis = runDiagnosis;
 
 // ── Toggle módulo fiscal (solo superadmin) ────
 function toggleFiscal(activo) {
@@ -1355,4 +1394,3 @@ async function renderECFConfig(container) {
     }
   });
 }
-

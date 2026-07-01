@@ -4,6 +4,8 @@
 // Soporta: Vehículo propio + Expreso/Parada
 // ══════════════════════════════════════════════
 
+let _enviosVehiculos = [];  // caché de vehículos para el handler delegado del botón
+
 function _eUser() {
   if (window._currentUser) return window._currentUser;
   try { return JSON.parse(sessionStorage.getItem('vp_user')); } catch { return null; }
@@ -130,6 +132,7 @@ async function renderEnvios(el) {
   const summary   = sumRes?.data  || {};
   const envios    = envRes?.data  || [];
   const vehiculos = vehRes?.data  || [];
+  _enviosVehiculos = vehiculos;  // disponible para el handler delegado
 
   el.innerHTML = '';
 
@@ -216,7 +219,17 @@ async function renderEnvios(el) {
     el.appendChild(wrap);
   }
 
-  document.getElementById('btn-nuevo-envio')?.addEventListener('click', () => modalNuevoEnvio(el, vehiculos));
+  // Delegación en el contenedor persistente (antes: getElementById tras await,
+  // botón quedaba muerto si la vista se re-renderizaba).
+  if (!el._enviosDelegated) {
+    el._enviosDelegated = true;
+    el.addEventListener('click', (ev) => {
+      if (ev.target.closest('#btn-nuevo-envio')) {
+        ev.preventDefault();
+        modalNuevoEnvio(el, _enviosVehiculos || []);
+      }
+    });
+  }
 }
 
 // ── Modal nuevo envío ─────────────────────────
