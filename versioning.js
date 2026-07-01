@@ -1063,10 +1063,45 @@ function getVersionInfo(db, dataDir) {
   };
 }
 
+// ══════════════════════════════════════════════
+// BACKUP AUTOMÁTICO ASÍNCRONO (Fase 1)
+// Usa la API db.backup() de better-sqlite3, que es asíncrona y consistente
+// con WAL (hace checkpoint interno), por lo que NO bloquea las ventas ni
+// deja transacciones fuera del respaldo. Guarda en backups/ con rotación.
+// ══════════════════════════════════════════════
+async function createAutoBackup(dataDir, db, keepLast = 10) {
+  if (!db || typeof db.backup !== 'function') {
+    throw new Error('Conexión de base de datos no disponible para backup');
+  }
+  const backupsDir = path.join(dataDir, 'backups');
+  if (!fs.existsSync(backupsDir)) fs.mkdirSync(backupsDir, { recursive: true });
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').split('T');
+  const fileName = `velo_auto_${stamp[0]}_${stamp[1].slice(0, 6)}.db`;
+  const destPath = path.join(backupsDir, fileName);
+
+  // db.backup() devuelve una Promise; corre en background sin bloquear.
+  await db.backup(destPath);
+
+  // Rotación: conservar solo los últimos `keepLast` backups automáticos.
+  try {
+    const autos = fs.readdirSync(backupsDir)
+      .filter(f => f.startsWith('velo_auto_') && f.endsWith('.db'))
+      .map(f => ({ f, t: fs.statSync(path.join(backupsDir, f)).mtimeMs }))
+      .sort((a, b) => b.t - a.t);
+    autos.slice(keepLast).forEach(({ f }) => {
+      try { fs.unlinkSync(path.join(backupsDir, f)); } catch {}
+    });
+  } catch {}
+
+  return destPath;
+}
+
 module.exports = {
   APP_VERSION,
   initVersioning,
   createManualBackup,
+  createAutoBackup,
   restoreBackup,
   getVersionInfo,
 };

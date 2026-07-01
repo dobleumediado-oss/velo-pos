@@ -110,8 +110,10 @@ const {
 
 const {
   APP_VERSION, initVersioning,
-  createManualBackup, restoreBackup, getVersionInfo
+  createManualBackup, createAutoBackup, restoreBackup, getVersionInfo
 } = require('./versioning');
+
+const { initLogger, logError, logWarn, logInfo } = require('./logger');
 
 const {
   getMachineId, getLicenseStatus, activateLicense
@@ -846,6 +848,21 @@ ipcMain.handle('sales:getById', async (_, { id }) => {
 
 ipcMain.handle('sales:getAll', async (_, filters) => {
   return salesRepo.getAll(filters);
+});
+
+ipcMain.handle('sales:count', async (_, filters) => {
+  try {
+    return salesRepo.countAll(filters || {});
+  } catch (e) {
+    console.error('[sales:count]', e);
+    return 0;
+  }
+});
+
+// Canal para que el renderer registre errores en el log persistente (Fase 2)
+ipcMain.handle('log:error', async (_, { tag, message, extra } = {}) => {
+  try { logError(tag || 'renderer', message || '', extra); } catch {}
+  return true;
 });
 
 ipcMain.handle('sales:search', async (_, { q, limit } = {}) => {
@@ -3602,10 +3619,23 @@ app.whenReady().then(() => {
   // Cargar API key de Claude (necesita userData, disponible solo aquí)
   _loadApiKey();
 
+  // Logger persistente + manejadores globales de error (Fase 2)
+  initLogger(DATA_DIR);
+  logInfo('app', `Velo POS iniciando — v${APP_VERSION}`);
+  process.on('uncaughtException', (err) => {
+    logError('uncaughtException', err?.message || String(err), { stack: err?.stack });
+    console.error('[uncaughtException]', err);
+  });
+  process.on('unhandledRejection', (reason) => {
+    logError('unhandledRejection', reason?.message || String(reason), { stack: reason?.stack });
+    console.error('[unhandledRejection]', reason);
+  });
+
   try {
     db = initDB(DATA_DIR);
     initVersioning(db, DATA_DIR);
   } catch (e) {
+    logError('DB', 'Error al inicializar: ' + e.message);
     console.error('[DB] Error al inicializar:', e);
     dialog.showErrorBox('Error de base de datos', e.message);
     app.quit();
@@ -3615,6 +3645,23 @@ app.whenReady().then(() => {
   // Verificar actualizaciones 8 segundos después del arranque,
   // cuando la ventana ya está completamente cargada y visible.
   setTimeout(() => setupAutoUpdater(), 8000);
+
+  // ── Backup automático asíncrono (Fase 1) ──────────────────────
+  // Corre en background con db.backup() (no bloquea ventas). Uno al arrancar
+  // (tras 30s para no competir con la carga inicial) y luego cada 6 horas.
+  // Cualquier fallo se registra pero nunca interrumpe la operación del POS.
+  const runAutoBackup = async () => {
+    try {
+      const dbInst = require('./database').getDB();
+      if (!dbInst) return;
+      const p = await createAutoBackup(DATA_DIR, dbInst, 10);
+      console.log('[Backup] Automático creado:', p);
+    } catch (e) {
+      console.error('[Backup] Automático falló:', e.message);
+    }
+  };
+  setTimeout(runAutoBackup, 30000);
+  setInterval(runAutoBackup, 6 * 60 * 60 * 1000);
 });
 
 app.on('window-all-closed', () => {

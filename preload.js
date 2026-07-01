@@ -72,6 +72,7 @@ contextBridge.exposeInMainWorld('api', {
     create:  (data)          => ipcRenderer.invoke('sales:create', data),
     getById: (data)          => ipcRenderer.invoke('sales:getById', data),
     getAll:  (data)          => ipcRenderer.invoke('sales:getAll', data),
+    count:   (data)          => ipcRenderer.invoke('sales:count', data),
     search:  (data)          => ipcRenderer.invoke('sales:search', data),
     cancel:  (data)          => ipcRenderer.invoke('sales:cancel', data),
     return:  (data)          => ipcRenderer.invoke('sales:return', data),
@@ -311,6 +312,10 @@ contextBridge.exposeInMainWorld('api', {
     getBalanceSheet:    (d) => ipcRenderer.invoke('accounting:getBalanceSheet',    d),
     getDashboardStats:  ()  => ipcRenderer.invoke('accounting:getDashboardStats'),
     syncHistorical:     (d) => ipcRenderer.invoke('accounting:syncHistorical',     d),
+  },
+
+  log: {
+    error: (tag, message, extra) => ipcRenderer.invoke('log:error', { tag, message, extra }),
   },
 
 });

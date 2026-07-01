@@ -34,6 +34,9 @@ function initDB(customDataDir) {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   db.pragma('synchronous = NORMAL');
+  // Si una escritura encuentra la base ocupada, reintenta hasta 5s en vez de
+  // fallar de inmediato. Protege operaciones concurrentes (venta + backup, etc).
+  db.pragma('busy_timeout = 5000');
 
   migrateProductsModel();
   createTables();
@@ -529,6 +532,10 @@ function createTables() {
     CREATE INDEX IF NOT EXISTS idx_cash_status       ON cash_sessions(status);
     CREATE INDEX IF NOT EXISTS idx_inv_type          ON inventory_movements(type);
     CREATE INDEX IF NOT EXISTS idx_payments_date     ON payments(created_at DESC);
+    -- Fase 1: búsqueda de cliente por teléfono (ventas, buscador global)
+    CREATE INDEX IF NOT EXISTS idx_customers_phone   ON customers(phone) WHERE active=1;
+    -- Fase 1: reportes filtran por estado + fecha juntos; compuesto evita escaneo
+    CREATE INDEX IF NOT EXISTS idx_sales_status_date ON sales(status, created_at);
   `);
 }
 
@@ -1284,7 +1291,7 @@ const salesRepo = {
     return sale;
   },
 
-  getAll({ range = 'today', customerId, method, limit = 200 } = {}) {
+  getAll({ range = 'today', customerId, method, limit = 200, offset = 0 } = {}) {
     let where = "WHERE s.status != 'cancelled'";
     const params = [];
     if (range === 'today') {
@@ -1296,7 +1303,9 @@ const salesRepo = {
     }
     if (customerId) { where += ' AND s.customer_id=?'; params.push(customerId); }
     if (method)     { where += ' AND s.payment_method=?'; params.push(method); }
-    params.push(limit);
+    // Paginación real: LIMIT + OFFSET. offset=0 por defecto mantiene el
+    // comportamiento anterior (primera página) sin romper llamadas existentes.
+    params.push(limit, offset);
     return db.prepare(`
       SELECT s.*,
              GROUP_CONCAT(si.product_name || ' x' || si.qty, ' | ') as items_summary,
@@ -1306,8 +1315,28 @@ const salesRepo = {
       ${where}
       GROUP BY s.id
       ORDER BY s.id DESC
-      LIMIT ?
+      LIMIT ? OFFSET ?
     `).all(...params);
+  },
+
+  /**
+   * Cuenta el total de ventas que coinciden con un filtro (sin traer filas).
+   * Permite al frontend saber cuántas páginas hay para la paginación real.
+   */
+  countAll({ range = 'today', customerId, method } = {}) {
+    let where = "WHERE status != 'cancelled'";
+    const params = [];
+    if (range === 'today') {
+      where += ` AND date(created_at)=date('now','localtime') AND cajero != 'Importación histórica'`;
+    } else if (range === 'week') {
+      where += ` AND date(created_at)>=date('now','-7 days','localtime')`;
+    } else if (range === 'month') {
+      where += ` AND strftime('%Y-%m',created_at,'localtime')=strftime('%Y-%m','now','localtime') AND cajero != 'Importación histórica'`;
+    }
+    if (customerId) { where += ' AND customer_id=?'; params.push(customerId); }
+    if (method)     { where += ' AND payment_method=?'; params.push(method); }
+    const row = db.prepare(`SELECT COUNT(*) AS n FROM sales ${where}`).get(...params);
+    return row ? row.n : 0;
   },
 
   /**

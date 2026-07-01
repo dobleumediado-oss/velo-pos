@@ -3,6 +3,22 @@
 //           Topbar y Router de páginas
 // ══════════════════════════════════════════════
 
+// Manejadores globales de error del renderer (Fase 2): registran en el log
+// persistente sin interrumpir la app. Ayudan a diagnosticar pantallas rotas.
+window.addEventListener('error', (e) => {
+  try {
+    window.api?.log?.error('renderer',
+      e.message || 'error', { src: e.filename, line: e.lineno, col: e.colno });
+  } catch {}
+});
+window.addEventListener('unhandledrejection', (e) => {
+  try {
+    const r = e.reason;
+    window.api?.log?.error('renderer-promise',
+      r?.message || String(r), { stack: r?.stack });
+  } catch {}
+});
+
 // ── Bootstrap ────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   // Cargar versión de la app para mostrar en login y config

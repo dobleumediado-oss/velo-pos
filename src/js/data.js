@@ -171,7 +171,13 @@ async function reloadCustomers() {
 }
 
 async function reloadSales(filters = {}) {
-  const sales = await window.api.sales.getAll(filters) || [];
+  // Para el historial completo (range:'all') subimos el límite por defecto:
+  // antes se cortaba en 200 y el usuario no veía todas sus ventas. El render
+  // incremental del frontend evita que traer más filas congele la UI.
+  // El backend soporta offset para paginar más allá de este tope si hiciera falta.
+  const f = { ...filters };
+  if ((f.range === 'all' || !f.range) && f.limit == null) f.limit = 1000;
+  const sales = await window.api.sales.getAll(f) || [];
   // Normalizar campos SQLite → compatibilidad con módulos
   DB.sales = sales.map(s => ({
     ...s,
