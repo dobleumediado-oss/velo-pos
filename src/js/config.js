@@ -299,18 +299,27 @@ async function renderConfiguracion(el) {
         </div>
 
         <div style="display:flex;gap:8px;justify-content:space-between;align-items:center;padding-top:14px;border-top:1px solid var(--line)">
-          <button onclick="_resetEstilos('${id}')" style="background:none;border:none;cursor:pointer;font-size:12px;color:var(--muted);font-family:inherit;padding:6px 8px;border-radius:6px" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background='none'">
+          <button id="btn-reset-estilos" style="background:none;border:none;cursor:pointer;font-size:12px;color:var(--muted);font-family:inherit;padding:6px 8px;border-radius:6px">
             ↺ Restablecer defaults
           </button>
           <div style="display:flex;gap:8px">
-            <button class="btn btn-out" onclick="document.getElementById('modal-estilos-ov').remove();window._modalPreviewFn=null">Cancelar</button>
-            <button class="btn btn-dark" onclick="_guardarEstilos('${id}')">✓ Guardar y aplicar</button>
+            <button class="btn btn-out" id="btn-cancel-estilos">Cancelar</button>
+            <button class="btn btn-dark" id="btn-save-estilos">✓ Guardar y aplicar</button>
           </div>
         </div>
       </div>`;
 
     document.body.appendChild(ov);
-    ov.addEventListener('click', e => { if (e.target===ov) { ov.remove(); window._modalPreviewFn=null; }});
+    const cerrarEstilos = () => {
+      document.getElementById('modal-estilos-ov')?.remove();
+      window._modalPreviewFn = null;
+    };
+    ov.addEventListener('click', e => { if (e.target===ov) cerrarEstilos(); });
+    ov.querySelector('#btn-cancel-estilos')?.addEventListener('click', cerrarEstilos);
+    ov.querySelector('#btn-reset-estilos')?.addEventListener('click', () => _resetEstilos(id));
+    ov.querySelector('#btn-reset-estilos')?.addEventListener('mouseenter', e => { e.currentTarget.style.background = 'var(--surface2)'; });
+    ov.querySelector('#btn-reset-estilos')?.addEventListener('mouseleave', e => { e.currentTarget.style.background = 'none'; });
+    ov.querySelector('#btn-save-estilos')?.addEventListener('click', () => _guardarEstilos(id));
 
     // Preview en tiempo real
     const _mRender = () => {

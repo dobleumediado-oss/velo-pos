@@ -206,9 +206,9 @@ async function renderEnvios(el) {
               <td style="padding:10px 12px">${_eBadge(e.status)}</td>
               <td style="padding:10px 12px">
                 <div style="display:flex;gap:4px">
-                  ${e.status === 'pendiente' ? `<button class="btn btn-ghost btn-sm" style="color:var(--blue)" title="Marcar en camino" onclick="actualizarEnvio(${e.id},'en_camino')">🚚</button>` : ''}
-                  ${e.status === 'en_camino' ? `<button class="btn btn-ghost btn-sm" style="color:var(--green)" title="Confirmar entrega" onclick="actualizarEnvio(${e.id},'entregado')">✅</button>` : ''}
-                  ${e.status === 'pendiente' ? `<button class="btn btn-ghost btn-sm" style="color:var(--red)" title="Cancelar" onclick="actualizarEnvio(${e.id},'cancelado')">✗</button>` : ''}
+                  ${e.status === 'pendiente' ? `<button class="btn btn-ghost btn-sm" style="color:var(--blue)" title="Marcar en camino" data-envio-id="${e.id}" data-envio-status="en_camino">🚚</button>` : ''}
+                  ${e.status === 'en_camino' ? `<button class="btn btn-ghost btn-sm" style="color:var(--green)" title="Confirmar entrega" data-envio-id="${e.id}" data-envio-status="entregado">✅</button>` : ''}
+                  ${e.status === 'pendiente' ? `<button class="btn btn-ghost btn-sm" style="color:var(--red)" title="Cancelar" data-envio-id="${e.id}" data-envio-status="cancelado">✗</button>` : ''}
                   ${e.dest_lat && e.dest_lng ? `<button class="btn btn-ghost btn-sm" title="Ver en mapa" onclick="abrirMapa(${e.dest_lat},${e.dest_lng},'${(e.dest_address||'').replace(/'/g,'')}')">🗺</button>` : ''}
                 </div>
               </td>
@@ -227,6 +227,14 @@ async function renderEnvios(el) {
       if (ev.target.closest('#btn-nuevo-envio')) {
         ev.preventDefault();
         modalNuevoEnvio(el, _enviosVehiculos || []);
+        return;
+      }
+      const statusBtn = ev.target.closest('[data-envio-status]');
+      if (statusBtn) {
+        ev.preventDefault();
+        const id = Number(statusBtn.dataset.envioId);
+        const status = statusBtn.dataset.envioStatus;
+        if (id && status) window.actualizarEnvio(id, status);
       }
     });
   }

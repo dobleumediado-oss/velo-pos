@@ -902,10 +902,72 @@ function openModal(html, cls = '') {
   });
   ov.appendChild(m);
   document.body.appendChild(ov);
+  _bindModalSafeActions(m);
 }
 
 function closeModal() {
   document.getElementById('modal-ov')?.remove();
+}
+
+function _bindModalSafeActions(root) {
+  if (!root) return;
+
+  const bind = (el, handler) => {
+    el.removeAttribute('onclick');
+    el.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      try { await handler(ev); }
+      catch (e) { toast(e?.message || 'No se pudo completar la acción', 'err'); }
+    });
+  };
+
+  root.querySelectorAll('[onclick]').forEach(el => {
+    const raw = (el.getAttribute('onclick') || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/;+$/, '');
+
+    if (raw === 'closeModal()') {
+      bind(el, () => closeModal());
+      return;
+    }
+
+    if (raw === 'closeModal();delete window._convEstado;delete window._convSale') {
+      bind(el, () => {
+        closeModal();
+        delete window._convEstado;
+        delete window._convSale;
+      });
+      return;
+    }
+
+    const fallback = raw.match(/^closeModal\(\);window\._fallbackResolve\((true|false)\)$/);
+    if (fallback) {
+      bind(el, () => {
+        closeModal();
+        if (typeof window._fallbackResolve === 'function') {
+          window._fallbackResolve(fallback[1] === 'true');
+          delete window._fallbackResolve;
+        }
+      });
+      return;
+    }
+
+    const cancelarOrdenMatch = raw.match(/^cancelarOrden\((\d+)\)$/);
+    if (cancelarOrdenMatch && typeof window.cancelarOrden === 'function') {
+      bind(el, () => window.cancelarOrden(Number(cancelarOrdenMatch[1])));
+      return;
+    }
+
+    const recibirOrdenMatch = raw.match(/^closeModal\(\);recibirOrden\((\d+)\)$/);
+    if (recibirOrdenMatch && typeof window.recibirOrden === 'function') {
+      bind(el, () => {
+        closeModal();
+        return window.recibirOrden(Number(recibirOrdenMatch[1]));
+      });
+    }
+  });
 }
 
 // ── Render un modal de confirmación genérico ──
@@ -914,11 +976,12 @@ function confirmModal(msg, onOk, okLabel = 'Confirmar', okClass = 'btn-red') {
     <div class="modal-title">Confirmar acción</div>
     <div class="modal-sub">${msg}</div>
     <div class="modal-foot">
-      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-out" id="cm-cancel">Cancelar</button>
       <button class="btn ${okClass}" id="cm-ok">${okLabel}</button>
     </div>
   `);
-  document.getElementById('cm-ok').onclick = () => { closeModal(); onOk(); };
+  document.getElementById('cm-cancel')?.addEventListener('click', closeModal);
+  document.getElementById('cm-ok')?.addEventListener('click', () => { closeModal(); onOk(); });
 }
 
 // ══════════════════════════════════════════════
