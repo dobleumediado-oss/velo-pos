@@ -826,15 +826,6 @@ function saRevocarLicencia() {
 }
 
 // ══════════════════════════════════════════════
-// PANEL DE ACTUALIZACIONES
-// ══════════════════════════════════════════════
-
-// Cache del estado del updater en el renderer
-let _updState = null;
-
-// Cargar estado inicial al abrir Configuración
-
-// ══════════════════════════════════════════════
 // ROLE CHIP HELPER
 // ══════════════════════════════════════════════
 

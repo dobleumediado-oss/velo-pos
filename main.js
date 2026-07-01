@@ -156,29 +156,17 @@ const updaterState = {
   progress:      null,
 };
 
+let updaterEventsBound = false;
+
 function _sendUpdaterState() {
   if (mainWindow) {
     mainWindow.webContents.send('update:state', { ...updaterState });
   }
 }
 
-function setupAutoUpdater() {
-  if (!app.isPackaged) {
-    // En desarrollo marcar como dev-mode, no intentar verificar
-    updaterState.status = 'dev-mode';
-    return;
-  }
-
-  // Verificar silenciosamente al arrancar.
-  // No necesita setTimeout interno — whenReady() ya espera 8s antes de llamar esta función.
-  updaterState.status      = 'checking';
-  updaterState.lastChecked = new Date().toISOString();
-  _sendUpdaterState();
-  autoUpdater.checkForUpdates().catch((err) => {
-    updaterState.status = 'error';
-    updaterState.error  = err?.message || 'Sin conexión';
-    _sendUpdaterState();
-  });
+function bindAutoUpdaterEvents() {
+  if (updaterEventsBound) return;
+  updaterEventsBound = true;
 
   // Nueva versión disponible
   autoUpdater.on('update-available', (info) => {
@@ -260,6 +248,30 @@ function setupAutoUpdater() {
   });
 }
 
+function setupAutoUpdater() {
+  if (!app.isPackaged) {
+    // En desarrollo marcar como dev-mode, no intentar verificar
+    updaterState.status      = 'dev-mode';
+    updaterState.lastChecked = new Date().toISOString();
+    _sendUpdaterState();
+    return;
+  }
+
+  bindAutoUpdaterEvents();
+
+  // Verificar silenciosamente al arrancar.
+  // No necesita setTimeout interno — whenReady() ya espera 8s antes de llamar esta función.
+  updaterState.status      = 'checking';
+  updaterState.lastChecked = new Date().toISOString();
+  updaterState.error       = null;
+  _sendUpdaterState();
+  autoUpdater.checkForUpdates().catch((err) => {
+    updaterState.status = 'error';
+    updaterState.error  = err?.message || 'Sin conexión';
+    _sendUpdaterState();
+  });
+}
+
 // ── IPC: verificar actualizaciones manualmente desde el panel ──
 ipcMain.handle('update:check', async () => {
   if (!app.isPackaged) {
@@ -267,20 +279,21 @@ ipcMain.handle('update:check', async () => {
     updaterState.status      = 'dev-mode';
     updaterState.lastChecked = new Date().toISOString();
     _sendUpdaterState();
-    return { ok: false, devMode: true };
+    return { ok: false, devMode: true, state: { ...updaterState } };
   }
   try {
+    bindAutoUpdaterEvents();
     updaterState.status      = 'checking';
     updaterState.lastChecked = new Date().toISOString();
     updaterState.error       = null;
     _sendUpdaterState();
     await autoUpdater.checkForUpdates();
-    return { ok: true };
+    return { ok: true, state: { ...updaterState } };
   } catch (e) {
     updaterState.status = 'error';
     updaterState.error  = e.message;
     _sendUpdaterState();
-    return { ok: false, error: e.message };
+    return { ok: false, error: e.message, state: { ...updaterState } };
   }
 });
 

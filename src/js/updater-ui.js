@@ -6,6 +6,9 @@
 // Separado de app.js para mantenibilidad
 // ══════════════════════════════════════════════
 
+// Cache del estado del updater en el renderer.
+let _updState = null;
+
 async function _loadUpdState() {
   try {
     const r = await window.api.updater.getState();
@@ -115,7 +118,7 @@ async function _renderUpdPanel(card, state) {
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
       ${s.status !== 'downloading' && s.status !== 'downloaded' ? `
         <button class="btn btn-out btn-fw" style="font-size:12px"
-                onclick="_buscarActualizacion()"
+                id="upd-check-btn"
                 ${s.status === 'checking' ? 'disabled' : ''}>
           ${s.status === 'checking'
             ? `${svg('refresh')} Verificando...`
@@ -124,34 +127,77 @@ async function _renderUpdPanel(card, state) {
 
       ${s.status === 'available' ? `
         <button class="btn btn-dark btn-fw" style="font-size:12px"
-                onclick="_descargarActualizacion()">
+                id="upd-download-btn">
           ${svg('download')} Descargar v${s.availableVersion}
         </button>` : ''}
 
       ${s.status === 'downloaded' ? `
         <button class="btn btn-green btn-fw" style="font-size:12px"
-                onclick="_instalarActualizacion()">
+                id="upd-install-btn">
           ${svg('check')} Instalar v${s.downloadedVersion} y reiniciar
         </button>` : ''}
     </div>`;
+
+  card.querySelector('#upd-check-btn')?.addEventListener('click', _buscarActualizacion);
+  card.querySelector('#upd-download-btn')?.addEventListener('click', _descargarActualizacion);
+  card.querySelector('#upd-install-btn')?.addEventListener('click', _instalarActualizacion);
 }
 
 // Botón "Buscar actualización"
 async function _buscarActualizacion() {
   const card = document.getElementById('upd-card');
   if (!card) return;
-  _updState = { ..._updState, status: 'checking', lastChecked: new Date().toISOString() };
-  _renderUpdPanel(card, _updState);
-  const r = await window.api.updater.check();
-  if (!r.ok && !r.devMode) {
-    // Solo mostrar toast si es un error real, no en modo desarrollo
-    toast(r.error || 'No se pudo verificar', 'err');
+
+  if (!window.api?.updater?.check) {
+    toast('El módulo de actualizaciones no está disponible', 'err');
+    return;
+  }
+
+  _updState = {
+    ...(_updState || {}),
+    status: 'checking',
+    error: null,
+    lastChecked: new Date().toISOString(),
+  };
+  await _renderUpdPanel(card, _updState);
+
+  try {
+    const r = await window.api.updater.check();
+    if (r?.state) {
+      _updState = r.state;
+      await _renderUpdPanel(card, _updState);
+      _updFloatingBar(_updState);
+    } else {
+      await _renderUpdPanel(card, await _loadUpdState());
+    }
+
+    if (!r?.ok && !r?.devMode) {
+      toast(r?.error || 'No se pudo verificar la actualización', 'err');
+      return;
+    }
+    if (r?.devMode) {
+      toast('Las actualizaciones se verifican en la app instalada, no en desarrollo', 'w');
+      return;
+    }
+    if (_updState?.status === 'up-to-date') {
+      toast('✓ Ya estás al día');
+    }
+  } catch (e) {
+    _updState = {
+      ...(_updState || {}),
+      status: 'error',
+      error: e.message || 'No se pudo verificar',
+      lastChecked: new Date().toISOString(),
+    };
+    await _renderUpdPanel(card, _updState);
+    toast(_updState.error, 'err');
   }
 }
 
 // Botón "Descargar"
 async function _descargarActualizacion() {
-  await window.api.updater.download();
+  const r = await window.api.updater.download();
+  if (!r?.ok) toast(r?.error || 'No se pudo iniciar la descarga', 'err');
 }
 
 // Botón "Instalar y reiniciar"
@@ -213,13 +259,13 @@ function _updFloatingBar(state) {
       <div style="color:var(--muted);font-size:11px;margin-bottom:8px">
         v${state.downloadedVersion} — se instala al cerrar
       </div>
-      <button onclick="routeTo('configuracion')"
+      <button id="upd-open-config-btn"
               style="font-size:11px;padding:4px 10px;border-radius:6px;
                      background:var(--green);color:#fff;border:none;cursor:pointer;width:100%">
         Ver panel de actualizaciones
       </button>`;
+    bar.querySelector('#upd-open-config-btn')?.addEventListener('click', () => routeTo('configuracion'));
   } else {
     bar?.remove();
   }
 }
-
