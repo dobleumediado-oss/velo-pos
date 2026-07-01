@@ -113,7 +113,16 @@ const {
   createManualBackup, createAutoBackup, restoreBackup, getVersionInfo
 } = require('./versioning');
 
-const { initLogger, logError, logWarn, logInfo } = require('./logger');
+// El logger es opcional: si por cualquier razón el módulo no está disponible
+// en el empaquetado, la app debe arrancar igual (sin logging) en vez de morir.
+let { initLogger, logError, logWarn, logInfo } = (() => {
+  try {
+    return require('./logger');
+  } catch (e) {
+    const noop = () => {};
+    return { initLogger: noop, logError: noop, logWarn: noop, logInfo: noop };
+  }
+})();
 
 const {
   getMachineId, getLicenseStatus, activateLicense
