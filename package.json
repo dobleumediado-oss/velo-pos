@@ -1,7 +1,7 @@
 {
   "name": "velo-pos",
   "version": "1.10.1",
-  "description": "Sistema POS para micro negocios — República Dominicana",
+  "description": "Sistema POS desktop profesional para comercios, repuestos, sucursales y operaciones empresariales",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -14,8 +14,9 @@
     "release:win": "electron-builder --win --publish always",
     "release:mac": "electron-builder --mac --publish always",
     "verify-version": "node -e \"const v=require('./package.json').version; console.log('Version:',v); if(!v) process.exit(1)\"",
-    "release": "npm run verify-version && git add package.json && git diff --cached --quiet || git commit -m \"chore: bump version to v$(node -p \\\"require('./package.json').version\\\")\"",
-    "tag": "node -e \"const v=require('./package.json').version; const {execSync}=require('child_process'); execSync('git tag v'+v); execSync('git push origin v'+v); console.log('✓ Tag v'+v+' publicado — GitHub Actions compilará el instalador')\""
+    "release": "npm run release:check && npm run build:win",
+    "tag": "node scripts/createReleaseTag.js",
+    "release:check": "node scripts/release-check.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

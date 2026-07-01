@@ -333,6 +333,84 @@ const MIGRATIONS = [
     }
   },
 
+
+  {
+    version: '1.5.5',
+    description: 'Módulos: Sucursales, Vehículos, Mantenimiento, Envíos, NCF Avanzado + switches',
+    run(db) {
+      try {
+        db.prepare(`CREATE TABLE IF NOT EXISTS branches (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+          address TEXT, phone TEXT, manager TEXT, active INTEGER DEFAULT 1,
+          created_at TEXT DEFAULT (datetime('now')))`).run();
+
+        db.prepare(`CREATE TABLE IF NOT EXISTS vehicles (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          type TEXT NOT NULL DEFAULT 'carro', brand TEXT NOT NULL, model TEXT NOT NULL,
+          year INTEGER, plate TEXT, color TEXT,
+          fuel_type TEXT DEFAULT 'gasolina', fuel_grade TEXT DEFAULT 'premium',
+          km_per_gallon REAL DEFAULT 35, odometer REAL DEFAULT 0,
+          status TEXT DEFAULT 'activo', notes TEXT,
+          user_id INTEGER REFERENCES users(id),
+          created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')))`).run();
+
+        db.prepare(`CREATE TABLE IF NOT EXISTS vehicle_maintenance (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          vehicle_id INTEGER NOT NULL REFERENCES vehicles(id),
+          type TEXT NOT NULL, description TEXT, odometer_at REAL, next_odometer REAL,
+          date_done TEXT NOT NULL DEFAULT (date('now')), next_date TEXT,
+          cost REAL DEFAULT 0, workshop TEXT, notes TEXT,
+          user_id INTEGER REFERENCES users(id),
+          created_at TEXT DEFAULT (datetime('now')))`).run();
+
+        db.prepare(`CREATE TABLE IF NOT EXISTS vehicle_maintenance_types (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+          interval_km INTEGER DEFAULT 0, interval_days INTEGER DEFAULT 0,
+          active INTEGER DEFAULT 1)`).run();
+
+        db.prepare(`CREATE TABLE IF NOT EXISTS deliveries (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          sale_id INTEGER REFERENCES sales(id), customer_id INTEGER REFERENCES customers(id),
+          vehicle_id INTEGER REFERENCES vehicles(id), driver_id INTEGER REFERENCES users(id),
+          origin_address TEXT, dest_address TEXT NOT NULL,
+          dest_lat REAL, dest_lng REAL, distance_km REAL,
+          fuel_used REAL, fuel_cost REAL, delivery_fee REAL DEFAULT 0,
+          status TEXT DEFAULT 'pendiente', scheduled_at TEXT, delivered_at TEXT,
+          notes TEXT, user_id INTEGER REFERENCES users(id),
+          created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')))`).run();
+
+        db.prepare(`CREATE TABLE IF NOT EXISTS ncf_sequences (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, prefix TEXT NOT NULL,
+          from_num INTEGER NOT NULL, to_num INTEGER NOT NULL,
+          current INTEGER NOT NULL DEFAULT 0, expiry_date TEXT,
+          active INTEGER DEFAULT 1, alert_at INTEGER DEFAULT 50,
+          created_at TEXT DEFAULT (datetime('now')))`).run();
+
+        db.prepare(`CREATE TABLE IF NOT EXISTS ncf_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, ncf TEXT NOT NULL, type TEXT NOT NULL,
+          sale_id INTEGER REFERENCES sales(id), customer_rnc TEXT,
+          issued_at TEXT DEFAULT (datetime('now')))`).run();
+
+        // Switches de módulos — INSERT OR IGNORE para no sobreescribir si ya existen.
+        // Si el valor es inválido (no '0' ni '1'), resetear a '0' para evitar UI corrupta.
+        const insS = db.prepare("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)");
+        const fixS = db.prepare("UPDATE settings SET value='0' WHERE key=? AND value NOT IN ('0','1')");
+        [
+          ['module_sucursales','0'], ['module_vehiculos','0'],
+          ['module_mantenimiento','0'], ['module_envios','0'],
+          ['module_ncf_avanzado','0'], ['module_multi_negocio','0'],
+          ['mod_envios_cajero','0'], ['mod_vehiculos_admin','1'],
+          ['fuel_price_premium','293'], ['fuel_price_regular','276'],
+          ['fuel_price_diesel','239'], ['fuel_last_updated',''], ['ors_api_key',''],
+        ].forEach(([k,v]) => { insS.run(k,v); fixS.run(k); });
+
+        console.log('[MIGRATION 1.5.5] Módulos Sucursales/Vehículos/Envíos/NCF creados');
+      } catch(e) {
+        console.log('[MIGRATION 1.5.5]', e.message);
+      }
+    }
+  },
+
   // ── MÓDULO CONTABILIDAD Y BANCOS ─────────────────────────────────────────
   {
     version: '1.6.0',
@@ -958,90 +1036,24 @@ function getVersionInfo(db, dataDir) {
     ? fs.readdirSync(backupDir)
         .filter(f => f.startsWith('velo_') && f.endsWith('.db'))
         .sort().reverse()
-    : [
-  {
-    version: '1.5.5',
-    description: 'Módulos: Sucursales, Vehículos, Mantenimiento, Envíos, NCF Avanzado + switches',
-    run(db) {
-      try {
-        db.prepare(`CREATE TABLE IF NOT EXISTS branches (
-          id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
-          address TEXT, phone TEXT, manager TEXT, active INTEGER DEFAULT 1,
-          created_at TEXT DEFAULT (datetime('now')))`).run();
-
-        db.prepare(`CREATE TABLE IF NOT EXISTS vehicles (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          type TEXT NOT NULL DEFAULT 'carro', brand TEXT NOT NULL, model TEXT NOT NULL,
-          year INTEGER, plate TEXT, color TEXT,
-          fuel_type TEXT DEFAULT 'gasolina', fuel_grade TEXT DEFAULT 'premium',
-          km_per_gallon REAL DEFAULT 35, odometer REAL DEFAULT 0,
-          status TEXT DEFAULT 'activo', notes TEXT,
-          user_id INTEGER REFERENCES users(id),
-          created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')))`).run();
-
-        db.prepare(`CREATE TABLE IF NOT EXISTS vehicle_maintenance (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          vehicle_id INTEGER NOT NULL REFERENCES vehicles(id),
-          type TEXT NOT NULL, description TEXT, odometer_at REAL, next_odometer REAL,
-          date_done TEXT NOT NULL DEFAULT (date('now')), next_date TEXT,
-          cost REAL DEFAULT 0, workshop TEXT, notes TEXT,
-          user_id INTEGER REFERENCES users(id),
-          created_at TEXT DEFAULT (datetime('now')))`).run();
-
-        db.prepare(`CREATE TABLE IF NOT EXISTS vehicle_maintenance_types (
-          id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
-          interval_km INTEGER DEFAULT 0, interval_days INTEGER DEFAULT 0,
-          active INTEGER DEFAULT 1)`).run();
-
-        db.prepare(`CREATE TABLE IF NOT EXISTS deliveries (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          sale_id INTEGER REFERENCES sales(id), customer_id INTEGER REFERENCES customers(id),
-          vehicle_id INTEGER REFERENCES vehicles(id), driver_id INTEGER REFERENCES users(id),
-          origin_address TEXT, dest_address TEXT NOT NULL,
-          dest_lat REAL, dest_lng REAL, distance_km REAL,
-          fuel_used REAL, fuel_cost REAL, delivery_fee REAL DEFAULT 0,
-          status TEXT DEFAULT 'pendiente', scheduled_at TEXT, delivered_at TEXT,
-          notes TEXT, user_id INTEGER REFERENCES users(id),
-          created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')))`).run();
-
-        db.prepare(`CREATE TABLE IF NOT EXISTS ncf_sequences (
-          id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, prefix TEXT NOT NULL,
-          from_num INTEGER NOT NULL, to_num INTEGER NOT NULL,
-          current INTEGER NOT NULL DEFAULT 0, expiry_date TEXT,
-          active INTEGER DEFAULT 1, alert_at INTEGER DEFAULT 50,
-          created_at TEXT DEFAULT (datetime('now')))`).run();
-
-        db.prepare(`CREATE TABLE IF NOT EXISTS ncf_log (
-          id INTEGER PRIMARY KEY AUTOINCREMENT, ncf TEXT NOT NULL, type TEXT NOT NULL,
-          sale_id INTEGER REFERENCES sales(id), customer_rnc TEXT,
-          issued_at TEXT DEFAULT (datetime('now')))`).run();
-
-        // Switches de módulos — INSERT OR IGNORE para no sobreescribir si ya existen
-        // PERO si el valor es inválido (no '0' ni '1'), resetear a '0'
-        const insS = db.prepare("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)");
-        const fixS = db.prepare("UPDATE settings SET value='0' WHERE key=? AND value NOT IN ('0','1')");
-        [
-          ['module_sucursales','0'], ['module_vehiculos','0'],
-          ['module_mantenimiento','0'], ['module_envios','0'],
-          ['module_ncf_avanzado','0'], ['module_multi_negocio','0'],
-          ['mod_envios_cajero','0'], ['mod_vehiculos_admin','1'],
-          ['fuel_price_premium','293'], ['fuel_price_regular','276'],
-          ['fuel_price_diesel','239'], ['fuel_last_updated',''], ['ors_api_key',''],
-        ].forEach(([k,v]) => { insS.run(k,v); fixS.run(k); });
-
-        console.log('[MIGRATION 1.5.5] Módulos Sucursales/Vehículos/Envíos/NCF creados');
-      } catch(e) { console.log('[MIGRATION 1.5.5]', e.message); }
-    }
-  },
-];
+    : [];
 
   const appInfo = {};
-  db.prepare('SELECT key, value FROM app_info').all()
-    .forEach(r => { appInfo[r.key] = r.value; });
+  try {
+    db.prepare('SELECT key, value FROM app_info').all()
+      .forEach(r => { appInfo[r.key] = r.value; });
+  } catch (e) {
+    console.log('[version:getInfo] app_info no disponible:', e.message);
+  }
 
-  const migrations = db.prepare(
-    'SELECT * FROM db_migrations ORDER BY applied_at DESC'
-  ).all();
+  let migrations = [];
+  try {
+    migrations = db.prepare(
+      'SELECT * FROM db_migrations ORDER BY applied_at DESC'
+    ).all();
+  } catch (e) {
+    console.log('[version:getInfo] db_migrations no disponible:', e.message);
+  }
 
   const dbPath = path.join(dataDir, 'velo.db');
   const dbSizeBytes = fs.existsSync(dbPath)

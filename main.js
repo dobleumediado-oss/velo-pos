@@ -321,6 +321,20 @@ ipcMain.handle('update:getState', async () => {
 let db;
 let mainWindow;
 
+// ── Seguridad de navegación externa ─────────────────────────────
+// El renderer solo debe cargar archivos locales de la app. Cualquier link externo
+// permitido se abre en el navegador del sistema y nunca dentro de Electron.
+function isAllowedExternalUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  try {
+    const parsed = new URL(url);
+    const allowedHosts = new Set(['wa.me', 'api.whatsapp.com']);
+    return parsed.protocol === 'https:' && allowedHosts.has(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 // ══════════════════════════════════════════════
 // VENTANA PRINCIPAL
 // ══════════════════════════════════════════════
@@ -349,6 +363,22 @@ function createWindow() {
   });
 
   mainWindow.loadFile('src/index.html');
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isAllowedExternalUrl(url)) {
+      shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const currentUrl = mainWindow.webContents.getURL();
+    const isSameDocument = url === currentUrl;
+    const isLocalAppFile = url.startsWith('file://');
+    if (!isSameDocument && !isLocalAppFile) {
+      event.preventDefault();
+    }
+  });
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
@@ -1432,8 +1462,23 @@ ipcMain.handle('backup:getList', async () => {
 
 // ── Licencia ──────────────────────────────────
 
-ipcMain.handle('license:generate', async (_, { machineId, business, expiry }) => {
+ipcMain.handle('license:generate', async (_, { machineId, business, expiry, requestUserId } = {}) => {
   try {
+    // Producción: el POS instalado en el cliente NUNCA debe generar licencias.
+    // Las licencias se generan desde una herramienta separada del vendedor/empresa.
+    if (app.isPackaged) {
+      return { ok: false, error: 'La generación de licencias no está disponible en instalaciones de cliente' };
+    }
+
+    const reqUser = requestUserId ? authRepo.findById(requestUserId) : null;
+    if (!reqUser || reqUser.role !== 'superadmin') {
+      return { ok: false, error: 'Solo el Super Admin puede generar licencias en modo desarrollo/soporte' };
+    }
+
+    if (!machineId || !business || !expiry) {
+      return { ok: false, error: 'machineId, business y expiry son requeridos' };
+    }
+
     const crypto     = require('crypto');
     const fs         = require('fs');
     const path       = require('path');
@@ -1448,6 +1493,8 @@ ipcMain.handle('license:generate', async (_, { machineId, business, expiry }) =>
     const payload    = `2|${machineId}|${business}|${expiry}`;
     const signature  = crypto.sign('SHA256', Buffer.from(payload), privateKey);
     const licKey     = `${payload}|${signature.toString('base64')}`;
+
+    audit(requestUserId, reqUser.name, 'licencia_generada', 'license', null, `Negocio: ${business} | Máquina: ${machineId}`);
     return { ok: true, licenseKey: licKey };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -3797,11 +3844,9 @@ Usa null solo si definitivamente no existe esa información. Prefiere mapear con
 // ── WhatsApp — abrir en navegador del sistema ──
 ipcMain.handle('shell:openExternal', async (_, { url }) => {
   try {
-    // SEGURIDAD: solo URLs https:// a dominios conocidos
-    if (!url || typeof url !== 'string') return { ok: false, error: 'URL inválida' };
-    const ALLOWED_PREFIXES = ['https://wa.me/', 'https://api.whatsapp.com/'];
-    const isAllowed = ALLOWED_PREFIXES.some(prefix => url.startsWith(prefix));
-    if (!isAllowed) return { ok: false, error: 'URL no permitida' };
+    // SEGURIDAD: solo URLs https:// a dominios conocidos.
+    // No usar startsWith: valida protocolo y hostname real para evitar bypass.
+    if (!isAllowedExternalUrl(url)) return { ok: false, error: 'URL no permitida' };
     await shell.openExternal(url);
     return { ok: true };
   } catch (e) {
