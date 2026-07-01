@@ -966,6 +966,19 @@ function _bindModalSafeActions(root) {
         closeModal();
         return window.recibirOrden(Number(recibirOrdenMatch[1]));
       });
+      return;
+    }
+
+    // Caso genérico seguro: onclick que llama a UNA función global sin argumentos
+    // (ej. "confirmarApertura()", "confirmarCierre()"). Estos botones antes
+    // quedaban muertos porque no estaban en la lista blanca y se les quitaba el
+    // onclick sin re-enganchar nada. Solo se permite el patrón `nombreFn()` puro
+    // — nada con argumentos, punto y coma, ni expresiones — para no ejecutar
+    // código arbitrario.
+    const simpleCall = raw.match(/^([a-zA-Z_$][\w$]*)\(\)$/);
+    if (simpleCall && typeof window[simpleCall[1]] === 'function') {
+      bind(el, () => window[simpleCall[1]]());
+      return;
     }
   });
 }

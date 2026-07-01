@@ -2,6 +2,13 @@
 // config.js — Módulo de Configuración
 // ══════════════════════════════════════════════
 
+// Usuario actual. Antes varias acciones (guardar usuario, backup, categorías)
+// usaban `user` sin definirlo → ReferenceError que dejaba los botones sin efecto.
+function _cfgUser() {
+  if (window._currentUser) return window._currentUser;
+  try { return JSON.parse(sessionStorage.getItem('vp_user')); } catch { return null; }
+}
+
 async function renderConfiguracion(el) {
   el.innerHTML = '';
 
@@ -1064,9 +1071,13 @@ function openEditarUsuarioModal(u) {
         <input class="inp" id="eu-avatar" type="text" value="${_esc(u.avatar||'')}" maxlength="2"/></div>
     </div>
     <div class="modal-foot">
-      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-green" onclick="guardarEdicionUsuario(${u.id})">${svg('check')} Guardar</button>
+      <button class="btn btn-out" id="eu-cancel">Cancelar</button>
+      <button class="btn btn-green" id="eu-save">${svg('check')} Guardar</button>
     </div>`);
+  // Eventos propios: el botón con argumento no lo reconoce la lista blanca de
+  // _bindModalSafeActions, así que lo enganchamos aquí directamente.
+  document.getElementById('eu-cancel')?.addEventListener('click', () => closeModal());
+  document.getElementById('eu-save')?.addEventListener('click', () => guardarEdicionUsuario(u.id));
 }
 
 async function guardarEdicionUsuario(id) {
@@ -1079,10 +1090,10 @@ async function guardarEdicionUsuario(id) {
   if (pass && pass.length < 6) { toast('Mínimo 6 caracteres', 'err'); return; }
   const existing = (window._cachedUsers||[]).find(u=>u.id===id);
   const data = { name, email, role: existing?.role||'cajero', avatar: avatar||name[0].toUpperCase(), active: existing?.active??1 };
-  const result = await window.api.users.update({ id, data, requestUserId: user.id });
+  const result = await window.api.users.update({ id, data, requestUserId: _cfgUser().id });
   if (!result.ok) { toast(result.error||'Error', 'err'); return; }
   if (pass) {
-    await window.api.users.changePassword({ id, password: pass, requestUserId: user.id });
+    await window.api.users.changePassword({ id, password: pass, requestUserId: _cfgUser().id });
   }
   window._cachedUsers = await window.api.users.getAll() || [];
   closeModal();
@@ -1093,7 +1104,7 @@ async function guardarEdicionUsuario(id) {
 async function toggleUsuario(u) {
   confirmModal(`¿Deseas ${u.active?'desactivar':'activar'} a <strong>${_esc(u.name)}</strong>?`,
     async () => {
-      const result = await window.api.users.update({ id: u.id, data: {...u, active: u.active?0:1}, requestUserId: user.id });
+      const result = await window.api.users.update({ id: u.id, data: {...u, active: u.active?0:1}, requestUserId: _cfgUser().id });
       if (!result.ok) { toast(result.error||'Error', 'err'); return; }
       window._cachedUsers = await window.api.users.getAll() || [];
       toast(`✓ Usuario ${u.active?'desactivado':'activado'}`);
@@ -1108,7 +1119,7 @@ async function toggleUsuario(u) {
 // BACKUPS
 // ══════════════════════════════════════════════
 async function hacerBackupManual() {
-  const result = await window.api.backup.create({ requestUserId: user.id });
+  const result = await window.api.backup.create({ requestUserId: _cfgUser().id });
   if (result.ok) {
     toast(`✓ Backup creado`);
     renderConfiguracion(document.getElementById('page'));
@@ -1120,7 +1131,7 @@ async function hacerBackupManual() {
 async function restaurarBackup() {
   confirmModal('Al restaurar el último backup, los datos actuales serán reemplazados. ¿Continuar?',
     async () => {
-      const result = await window.api.backup.restore({ requestUserId: user.id });
+      const result = await window.api.backup.restore({ requestUserId: _cfgUser().id });
       if (result.ok) { toast('✓ Restaurando...'); setTimeout(() => location.reload(), 1500); }
       else toast(result.error||'Error al restaurar', 'err');
     }, 'Restaurar', 'btn-red');
@@ -1129,7 +1140,7 @@ async function restaurarBackup() {
 async function restaurarBackupEspecifico(nombre) {
   confirmModal(`¿Restaurar <strong>${nombre}</strong>?<br><span style="font-size:11px;color:var(--muted)">Los datos actuales serán reemplazados.</span>`,
     async () => {
-      const result = await window.api.backup.restore({ fileName: nombre, requestUserId: user.id });
+      const result = await window.api.backup.restore({ fileName: nombre, requestUserId: _cfgUser().id });
       if (result.ok) { toast('✓ Restaurando...'); setTimeout(() => location.reload(), 1500); }
       else toast(result.error||'Error al restaurar', 'err');
     }, 'Restaurar este backup', 'btn-red');
@@ -1177,7 +1188,7 @@ async function crearCajero() {
   if (!name)  { toast('El nombre es requerido', 'err'); return; }
   if (!email) { toast('El email es requerido', 'err');  return; }
   if (!pass||pass.length<6) { toast('Mínimo 6 caracteres', 'err'); return; }
-  const result = await window.api.users.create({ data: { name, email, password: pass, role, avatar }, requestUserId: user.id });
+  const result = await window.api.users.create({ data: { name, email, password: pass, role, avatar }, requestUserId: _cfgUser().id });
   if (!result.ok) { toast(result.error||'Error al crear', 'err'); return; }
   window._cachedUsers = await window.api.users.getAll() || [];
   closeModal();
@@ -1228,7 +1239,7 @@ function openNuevaCategoriaModal() {
 async function crearCategoria() {
   const name = document.getElementById('cat-name')?.value?.trim();
   if (!name) { toast('El nombre es requerido', 'err'); return; }
-  const r = await window.api.categories.create({ name, requestUserId: user.id });
+  const r = await window.api.categories.create({ name, requestUserId: _cfgUser().id });
   if (!r.ok) { toast(r.error||'Error al crear', 'err'); return; }
   await reloadCategories();
   closeModal();
@@ -1241,7 +1252,7 @@ function eliminarCategoria(id, name) {
   confirmModal(`¿Eliminar la categoría <strong>${name}</strong>?<br>
     <span style="font-size:11px;color:var(--muted)">Los productos quedarán sin categoría.</span>`,
     async () => {
-      const r = await window.api.categories.delete({ id, requestUserId: user.id });
+      const r = await window.api.categories.delete({ id, requestUserId: _cfgUser().id });
       if (!r.ok) { toast(r.error||'Error', 'err'); return; }
       await reloadCategories();
       toast('✓ Categoría eliminada');

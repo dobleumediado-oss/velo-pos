@@ -6,6 +6,14 @@
 //           · Historial de sesiones
 // ══════════════════════════════════════════════
 
+// Usuario actual (mismo patrón que el resto de módulos). Antes las funciones
+// de caja usaban `user` sin definirlo → ReferenceError que rompía el botón
+// "Abrir Caja", el cierre y el reporte.
+function _cajaUser() {
+  if (window._currentUser) return window._currentUser;
+  try { return JSON.parse(sessionStorage.getItem('vp_user')); } catch { return null; }
+}
+
 function renderCaja(el) {
   el.innerHTML = '';
 
@@ -212,36 +220,44 @@ function openAperturaCajaModal() {
   }
 
   const billRows = DENS.map(d => `
-    <div class="bill-row">
-      <span class="bill-den">RD$ ${d.toLocaleString()}</span>
-      <input class="bill-inp" type="number" min="0" value="0"
-             id="open-bill-${d}" oninput="calcOpenTotal()"/>
-      <span class="bill-sub" id="open-sub-${d}">RD$ 0</span>
+    <div class="bill-row2">
+      <span class="bill-den2">RD$ ${d.toLocaleString()}</span>
+      <input class="bill-inp2" type="number" min="0" value="0"
+             id="open-bill-${d}" data-den="${d}" data-sub="open"/>
+      <span class="bill-sub2" id="open-sub-${d}">RD$ 0</span>
     </div>`).join('');
 
   openModal(`
     <div class="modal-title">Abrir Caja</div>
     <div class="modal-sub">Ingresa el fondo inicial por denominación</div>
-    <div class="bill-grid">${billRows}</div>
-    <div style="display:flex;justify-content:space-between;align-items:center;
-                padding:10px 0;border-top:1px solid var(--line);margin-top:4px">
-      <span style="font-weight:700;font-size:13px">Total Fondo</span>
-      <span id="open-total" style="font-weight:800;font-size:18px;color:var(--green)">RD$ 0.00</span>
+    <div class="bill-grid2" id="open-bill-grid">${billRows}</div>
+    <div class="bill-total-row">
+      <span class="bill-total-lbl">Total Fondo</span>
+      <span id="open-total" class="bill-total-val">RD$ 0.00</span>
     </div>
     <div class="modal-foot">
-      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-green" id="btn-confirmar-apertura" onclick="confirmarApertura()">
+      <button class="btn btn-out" id="btn-cancelar-apertura">Cancelar</button>
+      <button class="btn btn-green" id="btn-confirmar-apertura">
         ${svg('unlock')} Abrir Caja
       </button>
     </div>
-  `);
+  `, 'modal-caja');
+
+  // Eventos propios (no dependen de la lista blanca de _bindModalSafeActions
+  // ni de oninput inline). Delegación en la grilla para los subtotales.
+  const grid = document.getElementById('open-bill-grid');
+  if (grid) grid.addEventListener('input', (ev) => {
+    if (ev.target.classList.contains('bill-inp2')) calcOpenTotal();
+  });
+  document.getElementById('btn-cancelar-apertura')?.addEventListener('click', () => closeModal());
+  document.getElementById('btn-confirmar-apertura')?.addEventListener('click', () => confirmarApertura());
   calcOpenTotal();
 }
 
 function calcOpenTotal() {
   let total = 0;
   DENS.forEach(d => {
-    const qty = parseInt(document.getElementById(`open-bill-${d}`)?.value || 0);
+    const qty = parseInt(document.getElementById(`open-bill-${d}`)?.value || 0) || 0;
     const sub = qty * d;
     total += sub;
     const subEl = document.getElementById(`open-sub-${d}`);
@@ -255,6 +271,9 @@ async function confirmarApertura() {
   const btn = document.getElementById('btn-confirmar-apertura');
   if (btn?.disabled) return; // evita doble clic
   if (btn) btn.disabled = true;
+
+  const user = _cajaUser();
+  if (!user) { if (btn) btn.disabled = false; toast('Sesión no disponible', 'err'); return; }
 
   let fondo = 0;
   const bills = {};
@@ -299,6 +318,9 @@ async function cerrarSesionHuerfana(sessionId) {
   const btn = document.getElementById('btn-cerrar-huerfana');
   if (btn?.disabled) return; // evita doble clic
   if (btn) btn.disabled = true;
+
+  const user = _cajaUser();
+  if (!user) { if (btn) btn.disabled = false; toast('Sesión no disponible', 'err'); return; }
 
   let result;
   try {
@@ -420,11 +442,11 @@ async function openCierreCajaModal() {
     : (tdEfec + tdAbonos);
 
   const billRows = DENS.map(d => `
-    <div class="bill-row">
-      <span class="bill-den">RD$ ${d.toLocaleString()}</span>
-      <input class="bill-inp" type="number" min="0" value="0"
-             id="close-bill-${d}" oninput="calcCloseTotal(${expected})"/>
-      <span class="bill-sub" id="close-sub-${d}">RD$ 0</span>
+    <div class="bill-row2">
+      <span class="bill-den2">RD$ ${d.toLocaleString()}</span>
+      <input class="bill-inp2" type="number" min="0" value="0"
+             id="close-bill-${d}" data-den="${d}"/>
+      <span class="bill-sub2" id="close-sub-${d}">RD$ 0</span>
     </div>`).join('');
 
   openModal(`
@@ -464,12 +486,11 @@ async function openCierreCajaModal() {
     </div>
 
     <div style="font-weight:700;font-size:13px;margin-bottom:10px">Arqueo de billetes en caja</div>
-    <div class="bill-grid">${billRows}</div>
+    <div class="bill-grid2" id="close-bill-grid">${billRows}</div>
 
-    <div style="display:flex;justify-content:space-between;align-items:center;
-                padding:10px 0;border-top:1px solid var(--line);margin-top:4px">
-      <span style="font-weight:700;font-size:13px">Total contado</span>
-      <span id="close-total" style="font-weight:800;font-size:18px">RD$ 0.00</span>
+    <div class="bill-total-row">
+      <span class="bill-total-lbl">Total contado</span>
+      <span id="close-total" class="bill-total-val" style="color:var(--ink)">RD$ 0.00</span>
     </div>
     <div id="close-diff" style="text-align:right;font-size:13px;font-weight:700;margin-top:3px"></div>
 
@@ -479,15 +500,23 @@ async function openCierreCajaModal() {
     </div>
 
     <div class="modal-foot">
-      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-out" onclick="imprimirReporteDia()">
+      <button class="btn btn-out" id="btn-cancelar-cierre">Cancelar</button>
+      <button class="btn btn-out" id="btn-preview-reporte">
         ${svg('print')} Vista previa reporte
       </button>
-      <button class="btn btn-red" id="btn-confirmar-cierre" onclick="confirmarCierre(${expected})">
+      <button class="btn btn-red" id="btn-confirmar-cierre">
         ${svg('lock')} Confirmar Cierre
       </button>
     </div>
-  `, 'modal-lg');
+  `, 'modal-caja modal-lg');
+
+  const cgrid = document.getElementById('close-bill-grid');
+  if (cgrid) cgrid.addEventListener('input', (ev) => {
+    if (ev.target.classList.contains('bill-inp2')) calcCloseTotal(expected);
+  });
+  document.getElementById('btn-cancelar-cierre')?.addEventListener('click', () => closeModal());
+  document.getElementById('btn-preview-reporte')?.addEventListener('click', () => imprimirReporteDia());
+  document.getElementById('btn-confirmar-cierre')?.addEventListener('click', () => confirmarCierre(expected));
   calcCloseTotal(expected);
 }
 
@@ -521,6 +550,9 @@ async function confirmarCierre(expected) {
   const btn = document.getElementById('btn-confirmar-cierre');
   if (btn?.disabled) return; // evita doble clic
   if (btn) btn.disabled = true;
+
+  const user = _cajaUser();
+  if (!user) { if (btn) btn.disabled = false; toast('Sesión no disponible', 'err'); return; }
 
   let closeAmt = 0;
   const closeBills = {};
