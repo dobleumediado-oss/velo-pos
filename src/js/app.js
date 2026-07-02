@@ -424,24 +424,17 @@ function renderLogin() {
     // Superadmin nunca se bloquea
     if (user.role === 'superadmin') return;
 
-    // Verificar si ESTE usuario ya cambió su contraseña
-    // Leemos el flag del usuario actual, no el global del sistema
-    const userInfoRes = await window.api.users.getById
-      ? await window.api.users.getById(user.id).catch(() => null)
-      : null;
-    const userInfo    = userInfoRes?.ok ? userInfoRes.data : null;
-    const pwdChanged  = userInfo
-      ? (userInfo.password_changed === '1' || userInfo.password_changed === 1)
-      : (settings.password_changed === '1'); // fallback al setting global
-
-    if (!pwdChanged) {
+    // El backend indica si esta cuenta sigue usando la contraseña demo
+    // predeterminada (admin123 / caja123). Solo en ese caso se obliga el
+    // cambio. Usuarios creados por el negocio nunca se bloquean.
+    if (result.mustChangePassword) {
       window._pwdChangeRequired = true;
 
       if (sinConfig && user.role === 'admin') {
         // Primera vez: wizard completo de configuración
         setTimeout(() => renderAsistentePrimerLogin(), 400);
       } else {
-        // Contraseña sin cambiar — aplica a admin Y cajero
+        // Contraseña por defecto sin cambiar — aplica a admin Y cajero
         setTimeout(() => renderCambioContrasenaObligatorio(), 400);
       }
     } else {

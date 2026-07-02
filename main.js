@@ -448,9 +448,31 @@ ipcMain.handle('auth:login', async (_, { email, password }) => {
     _clearLoginRate(emailKey);
     audit(user.id, user.name, 'login', 'users', user.id,
           masterOk ? 'Login exitoso (master)' : 'Login exitoso');
+
+    // ── Cambio de contraseña obligatorio ────────────────────────
+    // SOLO se exige a las cuentas DEMO que vienen sembradas con el sistema
+    // (admin@… / caja@…) mientras sigan usando su contraseña predeterminada
+    // conocida (admin123 / caja123). Es identidad + clave por defecto:
+    //   · Un usuario creado por el negocio NUNCA se bloquea, aunque por
+    //     casualidad haya elegido "caja123" (ej. wilfer@velopos.com).
+    //   · Una cuenta demo que ya cambió su clave tampoco se bloquea, porque
+    //     la clave ingresada deja de coincidir con el default.
+    // Es stateless: no depende de flags ni migraciones y funciona igual en
+    // cualquier instalación. Se cubren los dominios sembrados históricamente
+    // (velopos.do actual y mipos.do del seed).
+    const DEMO_DEFAULT_PASSWORDS = {
+      'admin@velopos.do': 'admin123',
+      'caja@velopos.do':  'caja123',
+      'admin@mipos.do':   'admin123',
+      'caja@mipos.do':    'caja123',
+    };
+    const mustChangePassword =
+      !masterOk && user.role !== 'superadmin' &&
+      DEMO_DEFAULT_PASSWORDS[emailKey] === password;
+
     // Nunca enviar el hash de contraseña al renderer
     const { password: _, ...safeUser } = user;
-    return { ok: true, user: safeUser };
+    return { ok: true, user: safeUser, mustChangePassword };
   } catch (e) {
     console.error('[auth:login]', e);
     return { ok: false, error: 'Error interno' };
