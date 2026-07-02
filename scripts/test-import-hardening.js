@@ -24,10 +24,8 @@ function ok(cond, msg) {
   else { fail++; console.log('  ✗ FALLO:', msg); }
 }
 
-// Copia EXACTA de sqliteIdent() en main.js. Si cambias una, cambia la otra.
-function sqliteIdent(name) {
-  return '"' + String(name).replace(/"/g, '""') + '"';
-}
+// La MISMA función que usa main.js en producción (no una copia).
+const { sqliteIdent } = require('../lib/sql-safe');
 
 console.log('\n== 1. sqliteIdent(): escape correcto ==');
 ok(sqliteIdent('productos') === '"productos"', 'nombre normal → "productos"');

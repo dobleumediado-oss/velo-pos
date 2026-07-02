@@ -6,6 +6,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs   = require('fs');
+const { sqliteIdent } = require('./lib/sql-safe');
 
 // ── Cargar API key de Claude ──────────────────
 // En desarrollo: leer del .env local (nunca se empaqueta en el instalador)
@@ -1597,14 +1598,6 @@ ipcMain.handle('reports:monthlyTrend', async (_, { months = 12, includeHistorica
     return { ok: false, error: e.message };
   }
 });
-
-// Escapa un identificador SQLite (nombre de tabla/columna) para interpolarlo
-// de forma segura: duplica comillas dobles según el estándar de SQLite. Se usa
-// al leer bases de datos EXTERNAS durante la importación, donde el nombre de la
-// tabla proviene del sqlite_master del archivo del cliente y no es de confianza.
-function sqliteIdent(name) {
-  return '"' + String(name).replace(/"/g, '""') + '"';
-}
 
 ipcMain.handle('importar:readSQLite', async (_, { data }) => {
   try {

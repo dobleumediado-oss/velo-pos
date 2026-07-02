@@ -44,6 +44,7 @@
     },
     "files": [
       "src/**/*",
+      "lib/**/*",
       "main.js",
       "preload.js",
       "database.js",
