@@ -8,6 +8,7 @@ const path = require('path');
 const fs   = require('fs');
 const { sqliteIdent } = require('./lib/sql-safe');
 const { normalizeFinAcct: _normalizeFinAcct, normalizeFinMov: _normalizeFinMov } = require('./lib/normalize-financial');
+const { isAllowedExternalUrl } = require('./lib/url-safe');
 
 // ── Cargar API key de Claude ──────────────────
 // En desarrollo: leer del .env local (nunca se empaqueta en el instalador)
@@ -341,17 +342,6 @@ let mainWindow;
 // ── Seguridad de navegación externa ─────────────────────────────
 // El renderer solo debe cargar archivos locales de la app. Cualquier link externo
 // permitido se abre en el navegador del sistema y nunca dentro de Electron.
-function isAllowedExternalUrl(url) {
-  if (!url || typeof url !== 'string') return false;
-  try {
-    const parsed = new URL(url);
-    const allowedHosts = new Set(['wa.me', 'api.whatsapp.com']);
-    return parsed.protocol === 'https:' && allowedHosts.has(parsed.hostname);
-  } catch {
-    return false;
-  }
-}
-
 // ══════════════════════════════════════════════
 // VENTANA PRINCIPAL
 // ══════════════════════════════════════════════
