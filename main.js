@@ -7,6 +7,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs   = require('fs');
 const { sqliteIdent } = require('./lib/sql-safe');
+const { normalizeFinAcct: _normalizeFinAcct, normalizeFinMov: _normalizeFinMov } = require('./lib/normalize-financial');
 
 // ── Cargar API key de Claude ──────────────────
 // En desarrollo: leer del .env local (nunca se empaqueta en el instalador)
@@ -3678,29 +3679,6 @@ ipcMain.handle('shell:openExternal', async (_, { url }) => {
 // ══════════════════════════════════════════════
 // IPC — CUENTAS FINANCIERAS (BANCOS)
 // ══════════════════════════════════════════════
-
-function _normalizeFinAcct(a) {
-  if (!a) return null;
-  return { ...a, balance: a.current_balance || 0, is_active: a.active === 1 || a.active === true };
-}
-
-function _normalizeFinMov(m) {
-  if (!m) return null;
-  // Normalize DB types back to UI-friendly names for display
-  const typeDisplayMap = {
-    deposito: 'ingreso', retiro: 'egreso', transferencia_in: 'transferencia',
-    transferencia_out: 'transferencia', venta: 'ingreso', gasto: 'egreso',
-    abono_recibido: 'ingreso', pago_proveedor: 'egreso', apertura: 'ingreso', ajuste: 'ajuste',
-  };
-  const outflows = ['retiro','transferencia_out','gasto','pago_proveedor'];
-  return {
-    ...m,
-    type:         typeDisplayMap[m.type] || m.type,
-    db_type:      m.type,
-    reference:    m.notes || m.cancel_reason || '',
-    is_outflow:   outflows.includes(m.type),
-  };
-}
 
 ipcMain.handle('financial:getAll', async () => {
   try {

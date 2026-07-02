@@ -95,6 +95,16 @@ const hist  = db.prepare("SELECT COUNT(*) c FROM sales WHERE cajero='Importació
 ok(hist === 1, `1 venta histórica insertada (obtuvo ${hist})`);
 ok(vivas >= 3 && vivas < 100, `las ventas vivas de hoy EXCLUYEN la histórica (obtuvo ${vivas})`);
 
+console.log('\n== G. Normalizadores financieros (lib/normalize-financial) ==');
+const { normalizeFinAcct, normalizeFinMov } = require('../lib/normalize-financial');
+const na = normalizeFinAcct({ id: 1, current_balance: 250.5, active: 1 });
+ok(na.balance === 250.5 && na.is_active === true, 'cuenta: current_balance→balance, active=1→is_active true');
+ok(normalizeFinAcct({ current_balance: 0, active: 0 }).is_active === false, 'cuenta: active=0→is_active false');
+ok(normalizeFinAcct(null) === null, 'cuenta: null → null');
+ok(normalizeFinMov({ type: 'deposito' }).type === 'ingreso', "movimiento: deposito→ingreso");
+ok(normalizeFinMov({ type: 'retiro' }).type === 'egreso' && normalizeFinMov({ type: 'retiro' }).is_outflow === true, 'movimiento: retiro→egreso, is_outflow true');
+ok(normalizeFinMov({ type: 'deposito' }).db_type === 'deposito', 'movimiento: conserva db_type original');
+
 // ── Limpieza ──
 db.close();
 try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
