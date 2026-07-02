@@ -16,7 +16,8 @@
     "verify-version": "node -e \"const v=require('./package.json').version; console.log('Version:',v); if(!v) process.exit(1)\"",
     "release": "npm run release:check && npm run build:win",
     "tag": "node scripts/createReleaseTag.js",
-    "release:check": "node scripts/release-check.js"
+    "release:check": "node scripts/release-check.js",
+    "verify:integrity": "ELECTRON_RUN_AS_NODE=1 electron scripts/verify-historical-integrity.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
