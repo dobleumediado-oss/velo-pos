@@ -18,7 +18,8 @@
     "tag": "node scripts/createReleaseTag.js",
     "release:check": "node scripts/release-check.js",
     "verify:integrity": "ELECTRON_RUN_AS_NODE=1 electron scripts/verify-historical-integrity.js",
-    "verify:marker": "node scripts/check-historical-marker.js"
+    "verify:marker": "node scripts/check-historical-marker.js",
+    "test:import": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-import-hardening.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
