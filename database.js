@@ -11,6 +11,7 @@ const bcrypt   = require('bcryptjs');
 const { app }  = require('electron');
 const { todayStr, nowStr, addDaysStr } = require('./lib/dates');
 const { searchNorm: _searchNorm, digitsOf: _digitsOf } = require('./lib/text-normalize');
+const { round2 } = require('./lib/money');
 
 let dataDir;
 let DB_PATH;
@@ -903,9 +904,9 @@ const customersRepo = {
     const cust = db.prepare('SELECT balance,credit_due FROM customers WHERE id=?').get(customerId);
     if (!cust) throw new Error('Cliente no encontrado');
     if (cust.balance <= 0) throw new Error('El cliente no tiene balance pendiente');
-    const before = Math.round(cust.balance * 100) / 100;
+    const before = round2(cust.balance);
     if (amount > before + 0.01) throw new Error(`El abono (${amount.toFixed(2)}) supera el balance actual (${before.toFixed(2)})`);
-    const after  = Math.max(0, Math.round((before - amount) * 100) / 100);
+    const after  = Math.max(0, round2((before - amount)));
     const payTx = db.transaction(() => {
       const payInsert = db.prepare(`
         INSERT INTO payments(customer_id,sale_id,amount,method,note,balance_before,balance_after,cajero,user_id,cash_session_id,created_at)
@@ -1074,12 +1075,12 @@ const cashRepo = {
     }
 
     const openAmount = session.open_amount || 0;
-    const expected   = Math.round((openAmount + efectivoNeto) * 100) / 100;
+    const expected   = round2((openAmount + efectivoNeto));
 
     return {
       sessionId,
       openAmount,
-      efectivoNeto: Math.round(efectivoNeto * 100) / 100,
+      efectivoNeto: round2(efectivoNeto),
       expected,
       byMethodIn,
       movementCount: movements.length,
@@ -1093,14 +1094,14 @@ const salesRepo = {
   create({ session, customer, items, payment, user, type = 'factura' }) {
     const createSaleTx = db.transaction(() => {
       // 1. Calcular totales
-      const subtotal   = Math.round(items.reduce((a, i) => a + i.unit_price * i.qty, 0) * 100) / 100;
+      const subtotal   = round2(items.reduce((a, i) => a + i.unit_price * i.qty, 0));
       const discPct    = payment.disc || 0;
-      const discAmt    = Math.round(subtotal * (discPct / 100) * 100) / 100;
-      const base       = Math.round((subtotal - discAmt) * 100) / 100;
+      const discAmt    = round2(subtotal * (discPct / 100));
+      const base       = round2((subtotal - discAmt));
       const taxPctSetting = db.prepare("SELECT value FROM settings WHERE key='tax_pct'").get();
       const taxPct     = type === 'factura' ? parseFloat(taxPctSetting?.value ?? 18) : 0;
-      const taxAmt     = Math.round(base * (taxPct / 100) * 100) / 100;
-      const total      = Math.round((base + taxAmt) * 100) / 100;
+      const taxAmt     = round2(base * (taxPct / 100));
+      const total      = round2((base + taxAmt));
 
       // ¿Esta venta afecta inventario? (descuenta stock). Una sola fuente de
       // verdad para validación Y descuento, así nunca quedan asimétricas.
@@ -1414,8 +1415,8 @@ const salesRepo = {
       if (sale.payment_method === 'credito' && sale.customer_id !== 1) {
         const cust = db.prepare('SELECT balance FROM customers WHERE id=?').get(sale.customer_id);
         const theoretical = (cust?.balance || 0) - sale.total;
-        overpayment = Math.max(0, Math.round(-theoretical * 100) / 100);
-        const newBal = Math.max(0, Math.round(theoretical * 100) / 100);
+        overpayment = Math.max(0, round2(-theoretical));
+        const newBal = Math.max(0, round2(theoretical));
         db.prepare('UPDATE customers SET balance=? WHERE id=?').run(newBal, sale.customer_id);
       }
 
@@ -1586,7 +1587,7 @@ const reportsRepo = {
     const netRev        = totalRev - totalTax;
     // Utilidad bruta REAL = ingreso sin ITBIS − costo. El ITBIS no es ganancia
     // del negocio (se le debe a la DGII), por eso se excluye del cálculo.
-    const grossProfit   = Math.round((netRev - totalCost) * 100) / 100;
+    const grossProfit   = round2((netRev - totalCost));
     // Margen sobre el ingreso neto (sin impuesto), criterio contable correcto.
     const margin        = netRev > 0 ? (grossProfit / netRev) * 100 : 0;
     const ventasContado = contadoCreditoData?.ventas_contado || 0;
@@ -1598,8 +1599,8 @@ const reportsRepo = {
     // grossProfit ya excluye ITBIS (utilidad real). Estos campos además
     // descuentan las devoluciones del período para quien quiera el neto final.
     const totalDevol      = devData?.total || 0;
-    const totalRevNeto    = Math.round((totalRev - totalDevol) * 100) / 100;
-    const grossProfitNeto = Math.round((grossProfit - totalDevol) * 100) / 100;
+    const totalRevNeto    = round2((totalRev - totalDevol));
+    const grossProfitNeto = round2((grossProfit - totalDevol));
     const marginNeto      = totalRevNeto > 0 ? (grossProfitNeto / totalRevNeto) * 100 : 0;
 
     return {
@@ -1827,10 +1828,10 @@ const returnsRepo = {
       }
 
       // 3. Calcular totales de la devolución (usando precios históricos del snapshot)
-      const subtotal = Math.round(items.reduce((a, i) => a + i.unit_price * i.qty, 0) * 100) / 100;
+      const subtotal = round2(items.reduce((a, i) => a + i.unit_price * i.qty, 0));
       const taxPct   = original.tax_pct || 0;
-      const taxAmt   = Math.round(subtotal * (taxPct / 100) * 100) / 100;
-      const total    = Math.round((subtotal + taxAmt) * 100) / 100;
+      const taxAmt   = round2(subtotal * (taxPct / 100));
+      const total    = round2((subtotal + taxAmt));
 
       // 4. Crear venta de tipo 'devolucion'
       const retR = db.prepare(`
@@ -1878,8 +1879,8 @@ const returnsRepo = {
         const cust = db.prepare('SELECT balance FROM customers WHERE id=?').get(original.customer_id);
         if (cust) {
           const theoretical = (cust.balance || 0) - total;
-          overpayment = Math.max(0, Math.round(-theoretical * 100) / 100);
-          const newBal = Math.max(0, Math.round(theoretical * 100) / 100);
+          overpayment = Math.max(0, round2(-theoretical));
+          const newBal = Math.max(0, round2(theoretical));
           db.prepare(`UPDATE customers SET balance=?,updated_at=datetime('now') WHERE id=?`)
             .run(newBal, original.customer_id);
         }
@@ -2045,7 +2046,7 @@ const purchasesRepo = {
               costoPromedio = (
                 (stockActual * costoActual) + (stockNuevo * costoNuevo)
               ) / (stockActual + stockNuevo);
-              costoPromedio = Math.round(costoPromedio * 100) / 100;
+              costoPromedio = round2(costoPromedio);
             }
           }
 
@@ -2463,7 +2464,7 @@ const vehiclesRepo = {
     const gallons = distanceKm / (v.km_per_gallon || 35);
     const pricePerGallon = parseFloat(fuelPrices[v.fuel_grade] || fuelPrices.premium || 293);
     const cost = gallons * pricePerGallon;
-    return { gallons: Math.round(gallons * 100) / 100, cost: Math.round(cost * 100) / 100,
+    return { gallons: round2(gallons), cost: round2(cost),
              fuel_grade: v.fuel_grade, km_per_gallon: v.km_per_gallon };
   },
 };

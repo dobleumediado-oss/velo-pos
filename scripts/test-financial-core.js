@@ -113,6 +113,13 @@ ok(addDaysStr('2026-12-31', 1) === '2027-01-01', 'addDaysStr cruza fin de año: 
 ok(addDaysStr('2024-02-28', 1) === '2024-02-29', 'addDaysStr respeta año bisiesto: 2024-02-28 +1 = 2024-02-29');
 ok(addDaysStr('2026-01-01', 30) === '2026-01-31', 'addDaysStr +30 días (crédito): 2026-01-01 → 2026-01-31');
 
+console.log('\n== J. Redondeo monetario (lib/money) ==');
+const { round2 } = require('../lib/money');
+ok(round2(0.1 + 0.2) === 0.3, 'round2 corrige 0.1+0.2 → 0.3');
+ok(round2(1.005 * 100) === 100.5 && round2(236.004) === 236, 'round2 a 2 decimales');
+ok(round2(200 * 0.18) === 36, 'round2(200*0.18) = 36 (ITBIS)');
+ok(round2(100 / 3) === 33.33, 'round2(100/3) = 33.33');
+
 console.log('\n== I. Normalización de búsqueda (lib/text-normalize) ==');
 const { searchNorm, digitsOf } = require('../lib/text-normalize');
 ok(searchNorm('Ñoño') === 'nono', "searchNorm quita tildes/Ñ: 'Ñoño'→'nono'");
