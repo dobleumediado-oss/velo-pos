@@ -113,6 +113,14 @@ ok(addDaysStr('2026-12-31', 1) === '2027-01-01', 'addDaysStr cruza fin de año: 
 ok(addDaysStr('2024-02-28', 1) === '2024-02-29', 'addDaysStr respeta año bisiesto: 2024-02-28 +1 = 2024-02-29');
 ok(addDaysStr('2026-01-01', 30) === '2026-01-31', 'addDaysStr +30 días (crédito): 2026-01-01 → 2026-01-31');
 
+console.log('\n== I. Normalización de búsqueda (lib/text-normalize) ==');
+const { searchNorm, digitsOf } = require('../lib/text-normalize');
+ok(searchNorm('Ñoño') === 'nono', "searchNorm quita tildes/Ñ: 'Ñoño'→'nono'");
+ok(searchNorm('  José García  ') === 'jose garcia', 'searchNorm minúsculas + trim');
+ok(searchNorm(null) === '' && searchNorm(undefined) === '', 'searchNorm tolera null/undefined');
+ok(digitsOf('809-555-1234') === '8095551234', 'digitsOf deja solo dígitos');
+ok(digitsOf('RNC: 1-30-12345-6') === '130123456', 'digitsOf sobre RNC con guiones');
+
 // ── Limpieza ──
 db.close();
 try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}

@@ -10,6 +10,7 @@ const fs       = require('fs');
 const bcrypt   = require('bcryptjs');
 const { app }  = require('electron');
 const { todayStr, nowStr, addDaysStr } = require('./lib/dates');
+const { searchNorm: _searchNorm, digitsOf: _digitsOf } = require('./lib/text-normalize');
 
 let dataDir;
 let DB_PATH;
@@ -738,16 +739,6 @@ function audit(userId, userName, action, entity = '', entityId = null, detail = 
 }
 
 
-// Helpers de búsqueda (espejo de los del frontend en data.js) para que el
-// buscador global del backend normalice tildes/Ñ igual que el resto del sistema.
-function _searchNorm(s) {
-  return String(s == null ? '' : s)
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase().trim();
-}
-function _digitsOf(s) {
-  return String(s == null ? '' : s).replace(/\D/g, '');
-}
 
 
 // ══════════════════════════════════════════════
