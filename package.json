@@ -19,6 +19,7 @@
     "release:check": "node scripts/release-check.js",
     "verify:integrity": "ELECTRON_RUN_AS_NODE=1 electron scripts/verify-historical-integrity.js",
     "verify:marker": "node scripts/check-historical-marker.js",
+    "verify:packaging": "node scripts/check-packaging.js",
     "test:import": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-import-hardening.js",
     "test:financial": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-financial-core.js",
     "test": "npm run test:import && npm run test:financial"

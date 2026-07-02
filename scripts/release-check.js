@@ -46,6 +46,10 @@ for (const rel of filesToCheck) {
   child_process.execFileSync(process.execPath, ['--check', path.join(root, rel)], { stdio: 'inherit' });
 }
 
+// Verificar que todo módulo local que requiere el proceso main esté incluido
+// en build.files (evita "funciona en dev, truena empaquetado" al modularizar).
+child_process.execFileSync(process.execPath, [path.join(root, 'scripts/check-packaging.js')], { stdio: 'inherit' });
+
 // Si estamos dentro de un repo Git, evitar publicar secretos o data local por accidente.
 try {
   child_process.execFileSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: root, stdio: 'ignore' });
