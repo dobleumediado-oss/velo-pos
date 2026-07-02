@@ -9,6 +9,7 @@ const path     = require('path');
 const fs       = require('fs');
 const bcrypt   = require('bcryptjs');
 const { app }  = require('electron');
+const { todayStr, nowStr, addDaysStr } = require('./lib/dates');
 
 let dataDir;
 let DB_PATH;
@@ -736,9 +737,6 @@ function audit(userId, userName, action, entity = '', entityId = null, detail = 
   `).run(userId, userName, action, entity, entityId, detail);
 }
 
-function todayStr() {
-  return new Date().toISOString().split('T')[0];
-}
 
 // Helpers de búsqueda (espejo de los del frontend en data.js) para que el
 // buscador global del backend normalice tildes/Ñ igual que el resto del sistema.
@@ -751,9 +749,6 @@ function _digitsOf(s) {
   return String(s == null ? '' : s).replace(/\D/g, '');
 }
 
-function nowStr() {
-  return new Date().toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' });
-}
 
 // ══════════════════════════════════════════════
 // REPOSITORIOS
@@ -1783,12 +1778,6 @@ const reportsRepo = {
   },
 };
 
-// ── Helper fechas ─────────────────────────────
-function addDaysStr(dateStr, n) {
-  const d = new Date(dateStr + 'T12:00');
-  d.setDate(d.getDate() + n);
-  return d.toISOString().split('T')[0];
-}
 
 // ══════════════════════════════════════════════
 // DEVOLUCIONES

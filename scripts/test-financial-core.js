@@ -105,6 +105,14 @@ ok(normalizeFinMov({ type: 'deposito' }).type === 'ingreso', "movimiento: deposi
 ok(normalizeFinMov({ type: 'retiro' }).type === 'egreso' && normalizeFinMov({ type: 'retiro' }).is_outflow === true, 'movimiento: retiro→egreso, is_outflow true');
 ok(normalizeFinMov({ type: 'deposito' }).db_type === 'deposito', 'movimiento: conserva db_type original');
 
+console.log('\n== H. Helpers de fecha (lib/dates) ==');
+const { todayStr, addDaysStr } = require('../lib/dates');
+ok(/^\d{4}-\d{2}-\d{2}$/.test(todayStr()), `todayStr formato YYYY-MM-DD (${todayStr()})`);
+ok(addDaysStr('2026-01-31', 1) === '2026-02-01', 'addDaysStr cruza fin de mes: 2026-01-31 +1 = 2026-02-01');
+ok(addDaysStr('2026-12-31', 1) === '2027-01-01', 'addDaysStr cruza fin de año: 2026-12-31 +1 = 2027-01-01');
+ok(addDaysStr('2024-02-28', 1) === '2024-02-29', 'addDaysStr respeta año bisiesto: 2024-02-28 +1 = 2024-02-29');
+ok(addDaysStr('2026-01-01', 30) === '2026-01-31', 'addDaysStr +30 días (crédito): 2026-01-01 → 2026-01-31');
+
 // ── Limpieza ──
 db.close();
 try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
