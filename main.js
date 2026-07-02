@@ -9,6 +9,7 @@ const fs   = require('fs');
 const { sqliteIdent } = require('./lib/sql-safe');
 const { normalizeFinAcct: _normalizeFinAcct, normalizeFinMov: _normalizeFinMov } = require('./lib/normalize-financial');
 const { isAllowedExternalUrl } = require('./lib/url-safe');
+const { checkLoginRate: _checkLoginRate, recordLoginFail: _recordLoginFail, clearLoginRate: _clearLoginRate } = require('./lib/login-rate-limit');
 
 // ── Cargar API key de Claude ──────────────────
 // En desarrollo: leer del .env local (nunca se empaqueta en el instalador)
@@ -402,38 +403,6 @@ function createWindow() {
 // IPC HANDLERS — Cada handler valida y procesa
 // El renderer NUNCA accede a DB directamente
 // ══════════════════════════════════════════════
-
-// ── Rate limiting de login (main process) ─────
-// El renderer ya tiene su propio control visual,
-// pero este es el real: vive en Node, no se puede bypassear desde el renderer.
-const _loginAttempts = new Map(); // email → { count, blockedUntil }
-const LOGIN_MAX      = 5;
-const LOGIN_BLOCK_MS = 60 * 1000; // 60 segundos
-
-function _checkLoginRate(email) {
-  const now  = Date.now();
-  const rec  = _loginAttempts.get(email) || { count: 0, blockedUntil: 0 };
-  if (rec.blockedUntil > now) {
-    const secsLeft = Math.ceil((rec.blockedUntil - now) / 1000);
-    return { allowed: false, secsLeft };
-  }
-  return { allowed: true, count: rec.count };
-}
-
-function _recordLoginFail(email) {
-  const now = Date.now();
-  const rec = _loginAttempts.get(email) || { count: 0, blockedUntil: 0 };
-  rec.count += 1;
-  if (rec.count >= LOGIN_MAX) {
-    rec.blockedUntil = now + LOGIN_BLOCK_MS;
-    rec.count        = 0;
-  }
-  _loginAttempts.set(email, rec);
-}
-
-function _clearLoginRate(email) {
-  _loginAttempts.delete(email);
-}
 
 // ── Auth ──────────────────────────────────────
 ipcMain.handle('auth:login', async (_, { email, password }) => {
