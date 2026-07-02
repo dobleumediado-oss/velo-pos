@@ -598,7 +598,7 @@ function _openPrintWindowFallback(html) {
       win.focus();
       return;
     }
-  } catch(e) {}
+  } catch(e) { console.warn('[print] window.open falló, usando iframe:', e.message); }
 
   // Último recurso: crear iframe oculto y imprimir
   _printViaIframe(htmlConBoton);

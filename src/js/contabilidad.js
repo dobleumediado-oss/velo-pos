@@ -104,7 +104,10 @@ async function _contRenderDash(el) {
     h('button', { class: 'btn-ghost',
       onclick: async () => {
         const r = await window.api.accounting.syncHistorical({ requestUserId: user.id });
-        toast(r?.ok ? `${r.data?.created || 0} asientos generados` : (r?.error || 'Error'), r?.ok ? 's' : 'e');
+        const f = r?.data?.failed || 0;
+        toast(r?.ok
+          ? `${r.data?.created || 0} asientos generados${f ? ` · ${f} fallidos` : ''}`
+          : (r?.error || 'Error'), r?.ok ? (f ? 'w' : 's') : 'e');
       }
     }, '🔄 Sincronizar histórico')
   ));
@@ -1158,7 +1161,10 @@ async function _contRenderConfig(el) {
         'Genera asientos contables automáticos para ventas y gastos históricos que aún no tienen asiento.'),
       h('button', { class: 'btn-ghost', onclick: async () => {
         const r = await window.api.accounting.syncHistorical({ requestUserId: user.id });
-        toast(r?.ok ? `${r.data?.created || 0} asientos generados` : (r?.error || 'Error'), r?.ok ? 's' : 'e');
+        const f = r?.data?.failed || 0;
+        toast(r?.ok
+          ? `${r.data?.created || 0} asientos generados${f ? ` · ${f} fallidos` : ''}`
+          : (r?.error || 'Error'), r?.ok ? (f ? 'w' : 's') : 'e');
       }}, '🔄 Sincronizar histórico')
     )
   ));

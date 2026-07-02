@@ -260,7 +260,7 @@ function renderLogin() {
                     renderBusinessSelector(businesses);
                     return;
                   }
-                } catch(e) {}
+                } catch(e) { console.warn('[Business] Error cargando negocios secundarios:', e.message); }
                 // Si no hay negocios secundarios, simplemente recargar login
                 renderLogin();
               },

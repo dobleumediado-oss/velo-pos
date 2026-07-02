@@ -1598,6 +1598,14 @@ ipcMain.handle('reports:monthlyTrend', async (_, { months = 12, includeHistorica
   }
 });
 
+// Escapa un identificador SQLite (nombre de tabla/columna) para interpolarlo
+// de forma segura: duplica comillas dobles según el estándar de SQLite. Se usa
+// al leer bases de datos EXTERNAS durante la importación, donde el nombre de la
+// tabla proviene del sqlite_master del archivo del cliente y no es de confianza.
+function sqliteIdent(name) {
+  return '"' + String(name).replace(/"/g, '""') + '"';
+}
+
 ipcMain.handle('importar:readSQLite', async (_, { data }) => {
   try {
     const tmp  = require('os').tmpdir();
@@ -1621,14 +1629,14 @@ ipcMain.handle('importar:readSQLite', async (_, { data }) => {
     let bestCount = 0;
     for (const t of tables) {
       try {
-        const count = db2.prepare(`SELECT COUNT(*) as c FROM "${t}"`).get().c;
+        const count = db2.prepare(`SELECT COUNT(*) as c FROM ${sqliteIdent(t)}`).get().c;
         if (count > bestCount) { bestCount = count; bestTable = t; }
       } catch {}
     }
 
     if (!bestTable) throw new Error('No se encontraron tablas con datos');
 
-    const rows    = db2.prepare(`SELECT * FROM "${bestTable}" LIMIT 500`).all();
+    const rows    = db2.prepare(`SELECT * FROM ${sqliteIdent(bestTable)} LIMIT 500`).all();
     const headers = rows.length ? Object.keys(rows[0]) : [];
 
     db2.close();
@@ -2219,11 +2227,11 @@ ipcMain.handle('importar:readZIP', async (_, { data, name }) => {
       let bestTable = tables[0], bestCount = 0;
       for (const t of tables) {
         try {
-          const c = db2.prepare(`SELECT COUNT(*) as c FROM "${t}"`).get().c;
+          const c = db2.prepare(`SELECT COUNT(*) as c FROM ${sqliteIdent(t)}`).get().c;
           if (c > bestCount) { bestCount = c; bestTable = t; }
         } catch {}
       }
-      const rows    = db2.prepare(`SELECT * FROM "${bestTable}" LIMIT 1000`).all();
+      const rows    = db2.prepare(`SELECT * FROM ${sqliteIdent(bestTable)} LIMIT 1000`).all();
       const headers = rows.length ? Object.keys(rows[0]) : [];
       db2.close();
       fs.unlinkSync(tmpFile);
@@ -3993,12 +4001,12 @@ ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) =>
       LIMIT 500
     `).all();
 
-    let created = 0;
+    let created = 0, failed = 0;
     for (const sale of sales) {
       try {
         accountingRepo.generateSaleEntry(sale.id);
         created++;
-      } catch (_) {}
+      } catch (e) { failed++; console.error(`[accounting:syncHistorical] venta ${sale.id}: ${e.message}`); }
     }
 
     // Gastos pagados no vinculados
@@ -4016,10 +4024,10 @@ ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) =>
       try {
         accountingRepo.generateExpenseEntry(exp.id);
         created++;
-      } catch (_) {}
+      } catch (e) { failed++; console.error(`[accounting:syncHistorical] gasto ${exp.id}: ${e.message}`); }
     }
 
-    audit.log(requestUserId || 0, 'accounting_sync_historical', `Sincronización histórica: ${created} asientos generados`);
-    return { ok: true, data: { created } };
+    audit.log(requestUserId || 0, 'accounting_sync_historical', `Sincronización histórica: ${created} asientos generados, ${failed} fallidos`);
+    return { ok: true, data: { created, failed } };
   } catch (e) { return { ok: false, error: e.message }; }
 });
