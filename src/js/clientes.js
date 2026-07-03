@@ -679,6 +679,25 @@ async function registrarAbono(clientId, balanceActual) {
   buildSidebar();
 }
 
+// Guardar un recibo de abono como PDF (bajo demanda, desde el historial).
+function guardarAbonoPDF(paymentId) {
+  const ctx = window._cliAbonoData;
+  const p = ctx && (ctx.pagos || []).find(x => x.id === paymentId);
+  if (!p) { toast('Abono no encontrado', 'err'); return; }
+  const c = (ctx && ctx.customer) || {};
+  const build = () => printAbono({
+    payment: {
+      id: p.id, amount: p.amount, method: p.method, note: p.note || 'Abono',
+      balance_before: p.balance_before, balance_after: p.balance_after, created_at: p.created_at,
+    },
+    customer: { name: c.name || '', rnc: c.rnc || '' },
+    cajero: (window._currentUser && window._currentUser.name) || '',
+  });
+  if (typeof guardarDocumentoPDF === 'function') {
+    guardarDocumentoPDF(build, `Abono-${String(p.id).padStart(5, '0')}`);
+  } else { build(); }
+}
+
 // ══════════════════════════════════════════════
 // ESTADO DE CUENTA COMPLETO
 // ══════════════════════════════════════════════
@@ -749,9 +768,14 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
               <span style="font-size:10px;color:var(--muted2);margin-left:4px">
                 ${fmt(p.balance_before)} → ${fmt(p.balance_after)}
               </span>
+              <button class="btn btn-ghost btn-sm" style="margin-left:4px" title="Guardar recibo en PDF"
+                      onclick="guardarAbonoPDF(${p.id})">${svg('pdf')}</button>
             </td>
           </tr>`;
       }).join('');
+
+  // Contexto para "Guardar PDF" de recibos de abono de este cliente.
+  window._cliAbonoData = { customer: c, pagos };
 
   openModal(`
     <div class="modal-title">

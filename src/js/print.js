@@ -729,6 +729,13 @@ function printHTML(html, category = 'reporte') {
   if (!html.includes('<meta charset')) {
     html = html.replace('<head>', '<head><meta charset="UTF-8"/>');
   }
+  // Intercepción para "Guardar PDF" (mismo mecanismo que _openPrintWindow).
+  if (window._pdfSaveRequest) {
+    const name = window._pdfSaveRequest.name;
+    window._pdfSaveRequest = null;
+    _guardarPDF(html, name);
+    return;
+  }
   const catCfg = _getCategoryConfig(category);
   if (catCfg.preview) { _openPrintWindowFallback(html); return; }
 

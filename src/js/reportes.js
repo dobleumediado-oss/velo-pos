@@ -44,8 +44,10 @@ async function renderReportes(el) {
     ),
     h('button', {
       class: 'btn btn-out btn-sm',
-      onclick: exportReportePDF,
-      html: `${svg('pdf')} Exportar PDF`
+      onclick: () => (typeof guardarDocumentoPDF === 'function')
+        ? guardarDocumentoPDF(exportReportePDF, 'Reporte-General')
+        : exportReportePDF(),
+      html: `${svg('pdf')} Guardar PDF`
     })
   ));
 
@@ -337,8 +339,10 @@ function renderReporteContenido(el, d) {
     h('div', { class: 'card-title' }, 'Cuentas por Cobrar'),
     h('button', {
       class: 'btn btn-ghost btn-sm',
-      onclick: exportReporteCreditoPDF,
-      html: `${svg('pdf')} PDF`
+      onclick: () => (typeof guardarDocumentoPDF === 'function')
+        ? guardarDocumentoPDF(exportReporteCreditoPDF, 'Reporte-Creditos-CxC')
+        : exportReporteCreditoPDF(),
+      html: `${svg('pdf')} Guardar PDF`
     })
   ));
 
@@ -1010,8 +1014,10 @@ async function _renderReporteInventario(el) {
   filterRow.appendChild(filterBtns);
   filterRow.appendChild(h('button', {
     class: 'btn btn-out btn-sm',
-    html: `${svg('pdf')} Exportar PDF`,
-    onclick: () => exportInventarioValorizadoPDF(prods)
+    html: `${svg('pdf')} Guardar PDF`,
+    onclick: () => (typeof guardarDocumentoPDF === 'function')
+      ? guardarDocumentoPDF(() => exportInventarioValorizadoPDF(prods), 'Reporte-Inventario')
+      : exportInventarioValorizadoPDF(prods)
   }));
   card.appendChild(filterRow);
 
