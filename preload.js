@@ -102,6 +102,7 @@ contextBridge.exposeInMainWorld('api', {
   // ── Impresión ─────────────────────────────
   print: {
     html:         (data)      => ipcRenderer.invoke('print:html', data),
+    toPDF:        (data)      => ipcRenderer.invoke('print:toPDF', data),
     getPrinters:  ()          => ipcRenderer.invoke('print:getPrinters'),
     savePrinter:  (data)      => ipcRenderer.invoke('print:savePrinter', data),
     saveConfig:   (data)      => ipcRenderer.invoke('print:saveConfig', data),
@@ -232,6 +233,21 @@ contextBridge.exposeInMainWorld('api', {
     getSummary:    ()  => ipcRenderer.invoke('deliveries:getSummary'),
     create:        (d) => ipcRenderer.invoke('deliveries:create', d),
     updateStatus:  (d) => ipcRenderer.invoke('deliveries:updateStatus', d),
+    geocode:       (d) => ipcRenderer.invoke('deliveries:geocode', d),
+  },
+
+  // ── Conduce / Nota de Entrega ────────────
+  conduce: {
+    getAll:         (d) => ipcRenderer.invoke('conduce:getAll', d),
+    getById:        (d) => ipcRenderer.invoke('conduce:getById', d),
+    generateNumber: ()  => ipcRenderer.invoke('conduce:generateNumber'),
+    create:         (d) => ipcRenderer.invoke('conduce:create', d),
+    update:         (d) => ipcRenderer.invoke('conduce:update', d),
+    setStatus:      (d) => ipcRenderer.invoke('conduce:setStatus', d),
+    cancel:         (d) => ipcRenderer.invoke('conduce:cancel', d),
+    invoiceable:    (d) => ipcRenderer.invoke('conduce:invoiceable', d),
+    invoice:        (d) => ipcRenderer.invoke('conduce:invoice', d),
+    fromSale:       (d) => ipcRenderer.invoke('conduce:fromSale', d),
   },
 
   // ── NCF Avanzado ─────────────────────────

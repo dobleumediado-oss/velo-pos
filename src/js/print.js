@@ -59,7 +59,7 @@ const PRINT_CATEGORIES = {
 
 // jobType (el identificador interno de cada función de impresión) → categoría
 const _JOB_TYPE_CATEGORY = {
-  ticket: 'ticket', test: 'ticket', prueba_plantilla: 'ticket',
+  ticket: 'ticket', test: 'ticket', prueba_plantilla: 'ticket', conduce: 'ticket',
   abono: 'pago', pago_proveedor: 'pago',
   cierre: 'caja',
 };
@@ -256,6 +256,68 @@ function printReceipt(sale, isReprint = false) {
   lines.push('');
 
   _sendToPrinter(lines, 'ticket', sale.id, isReprint);
+}
+
+// ══════════════════════════════════════════════
+// CONDUCE 80MM (nota de entrega, SIN precios)
+// ──────────────────────────────────────────────
+// Misma información que la factura pero solo descripción y cantidades —
+// nunca precios ni totales. Se imprime opcionalmente después de la factura
+// cuando el usuario marca la casilla en el modal de cobro. Documento sin
+// valor fiscal; referencia el NCF de la factura si existe.
+// ══════════════════════════════════════════════
+function printConduce(sale) {
+  if (!sale) return;
+
+  const lines = [];
+  lines.push(tCenter(CFG.biz));
+  if (CFG.rnc)   lines.push(tCenter(`RNC: ${CFG.rnc}`));
+  if (CFG.addr)  lines.push(tCenter(CFG.addr));
+  if (CFG.phone) lines.push(tCenter(`Tel: ${CFG.phone}`));
+  lines.push(tline());
+
+  lines.push(tCenter('*** CONDUCE ***'));
+  lines.push(tCenter('(Documento sin valor fiscal)'));
+  lines.push(tline());
+
+  lines.push(tRow(`No.: ${String(sale.id).padStart(5, '0')}`, `Fecha: ${sale.date || today()}`));
+  lines.push(tRow(`Hora: ${sale.time || nowt()}`, `Cajero: ${(sale.cajero || '').split(' ')[0]}`));
+
+  const cliName = sale.customer_name || sale.clientName || 'Consumidor Final';
+  const cliRnc  = sale.customer_rnc  || sale.clientCedula || '';
+  lines.push(tRow('Cliente:', cliName.slice(0, 28)));
+  if (cliRnc) lines.push(tRow('RNC/Céd:', cliRnc));
+  // Enlaza el conduce con la factura fiscal, si tiene NCF.
+  if (sale.ncf && String(sale.ncf).trim()) lines.push(tRow('Ref. NCF:', String(sale.ncf).trim()));
+
+  lines.push(tline());
+  lines.push(tRow('CANT', 'DESCRIPCIÓN'));
+  lines.push(tline('-'));
+
+  const items = sale.items || [];
+  items.forEach(item => {
+    const name = item.product_name || item.name || '';
+    const qty  = item.qty || 1;
+    const qtyStr  = String(qty);
+    const maxName = THERMAL.cols - qtyStr.length - 4;   // "N x  " prefijo
+    const nm = name.length > maxName ? name.slice(0, maxName - 1) + '…' : name;
+    lines.push(`${qtyStr} x  ${nm}`);   // SIN precios — solo cantidad y descripción
+  });
+
+  lines.push(tline());
+  const totalUnid = items.reduce((a, i) => a + (i.qty || 1), 0);
+  lines.push(tRow('Total de artículos:', String(totalUnid)));
+  lines.push('');
+  lines.push('');
+  lines.push(tCenter('___________________________'));
+  lines.push(tCenter('Recibí conforme'));
+  lines.push('');
+  lines.push(tCenter('Entregado por / Firma'));
+  lines.push(tline());
+  lines.push('');
+  lines.push('');
+
+  _sendToPrinter(lines, 'conduce', sale.id, false);
 }
 
 // ══════════════════════════════════════════════
@@ -473,7 +535,36 @@ function _sendToPrinter(lines, jobType = '', referenceId = null, isReprint = fal
 }
 
 // ── Abrir ventana de impresión ────────────────
+// Cuando está activo, el próximo documento que pase por _openPrintWindow se
+// GUARDA como PDF en vez de imprimirse. Es un punto único: cubre factura,
+// cotización, conduce, abono, reportes, etc. sin duplicar lógica.
+// Se guarda en window.* para compartir un binding único entre todos los scripts.
+window._pdfSaveRequest = null;
+
+// Envuelve la llamada de impresión de cualquier documento para guardarlo en PDF.
+// Uso: guardarDocumentoPDF(() => printReceipt(sale, true), 'Factura-00123')
+function guardarDocumentoPDF(buildAndPrintFn, suggestedName) {
+  window._pdfSaveRequest = { name: suggestedName || 'documento' };
+  try { buildAndPrintFn(); }
+  finally { window._pdfSaveRequest = null; }   // se limpia tras la llamada síncrona
+}
+
+async function _guardarPDF(html, suggestedName) {
+  if (!window.api?.print?.toPDF) { toast('Guardar PDF no disponible', 'err'); return; }
+  const r = await window.api.print.toPDF({ html, suggestedName });
+  if (r?.ok) toast('✓ PDF guardado');
+  else if (!r?.canceled) toast(r?.error || 'No se pudo guardar el PDF', 'err');
+}
+
 function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = false) {
+  // Intercepción: si se pidió guardar en PDF, guardar y no imprimir.
+  if (window._pdfSaveRequest) {
+    const name = window._pdfSaveRequest.name;
+    window._pdfSaveRequest = null;
+    _guardarPDF(html, name);
+    return;
+  }
+
   const category = _categoryForJobType(jobType);
   const catCfg    = _getCategoryConfig(category);
 
@@ -683,6 +774,20 @@ async function openPrinterConfig() {
       </div>
     </div>
 
+    <div class="fg">
+      <label class="lbl">Tipo de impresora</label>
+      <select class="inp" id="sel-printer-type">
+        <option value="">Detectar automáticamente</option>
+        <option value="80mm" ${(DB?.settings?.printer_type)==='80mm'?'selected':''}>Térmica 80mm (rollo de tickets)</option>
+        <option value="58mm" ${(DB?.settings?.printer_type)==='58mm'?'selected':''}>Térmica 58mm (portátil)</option>
+        <option value="carta" ${(DB?.settings?.printer_type)==='carta'?'selected':''}>Carta / Láser / Inkjet (hojas)</option>
+      </select>
+      <div style="font-size:11px;color:var(--muted);margin-top:5px">
+        Si tu impresora es de <strong>hojas (láser/inkjet)</strong> y salía en blanco,
+        elige <strong>"Carta / Láser"</strong>. La detección automática a veces asume térmica.
+      </div>
+    </div>
+
     ${!printers.length ? `
       <div class="alrt w" style="margin-top:8px">
         <div class="alrt-dot w"></div>
@@ -708,13 +813,16 @@ async function savePrinterConfig() {
   const sel = document.getElementById('sel-printer');
   if (!sel) return;
   const name = sel.value.trim();
+  const ptype = document.getElementById('sel-printer-type')?.value || '';
   const result = await window.api.print.savePrinter({
     printerName: name,
     requestUserId: user?.id,
   });
   if (result?.ok) {
-    if (DB.settings) DB.settings.printer = name;
-    if (CFG) CFG.printer = name;
+    // Guardar también el tipo forzado (override de detectPrinterType)
+    try { await window.api.settings.set({ key: 'printer_type', value: ptype, requestUserId: user?.id }); } catch {}
+    if (DB.settings) { DB.settings.printer = name; DB.settings.printer_type = ptype; }
+    if (CFG) { CFG.printer = name; CFG.printer_type = ptype; }
     toast(name ? `Impresora guardada: ${name}` : 'Impresora limpiada');
     closeModal();
   } else {

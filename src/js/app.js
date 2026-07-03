@@ -515,6 +515,7 @@ function buildSidebar() {
     ...(_adminPuede('module_sucursales')    ? [{ key: 'sucursales', icon: 'building', label: 'Sucursales'    }] : []),
     ...((_adminPuede('module_vehiculos') || _adminPuede('module_mantenimiento')) ? [{ key: 'vehiculos', icon: 'car', label: 'Vehículos' }] : []),
     ...(_adminPuede('module_envios')        ? [{ key: 'envios',     icon: 'truck',    label: 'Envíos'        }] : []),
+    ...(_adminPuede('module_conduce')       ? [{ key: 'conduce',    icon: 'pkg',      label: 'Conduces'      }] : []),
     { key: 'reportes',  icon: 'chart',    label: 'Reportes' },
     { sep: 'Sistema' },
     { key: 'etiquetas', icon: 'barcode',  label: 'Etiquetas',
@@ -543,6 +544,7 @@ function buildSidebar() {
     { key: 'caja',      icon: 'cash',     label: 'Caja' },
     ...(_cajeroPuede('module_gastos')     ? [{ key: 'gastos',     icon: 'dollar',  label: 'Gastos' }]      : []),
     ...(_cajeroPuede('module_envios')     ? [{ key: 'envios',     icon: 'truck',   label: 'Envíos' }]      : []),
+    ...(_cajeroPuede('module_conduce')    ? [{ key: 'conduce',    icon: 'pkg',     label: 'Conduces' }]    : []),
     ...(_cajeroPuede('module_sucursales') ? [{ key: 'sucursales', icon: 'building',label: 'Sucursales' }]  : []),
     ...((_cajeroPuede('module_vehiculos') || _cajeroPuede('module_mantenimiento'))
                                           ? [{ key: 'vehiculos',  icon: 'car',     label: 'Vehículos' }]  : []),
@@ -772,6 +774,7 @@ function routeTo(p) {
       sucursales:   ['module_sucursales'],
       vehiculos:    ['module_vehiculos', 'module_mantenimiento'],
       envios:       ['module_envios'],
+      conduce:      ['module_conduce'],
       etiquetas:    ['barcode_enabled'],
     };
     const allowedAdmin = [...baseAdmin];
@@ -789,6 +792,7 @@ function routeTo(p) {
     const modRoutes = {
       gastos:     ['module_gastos'],
       envios:     ['module_envios'],
+      conduce:    ['module_conduce'],
       sucursales: ['module_sucursales'],
       vehiculos:  ['module_vehiculos', 'module_mantenimiento'],
       etiquetas:  ['barcode_enabled'],
@@ -833,6 +837,7 @@ function routeTo(p) {
     case 'contabilidad': renderContabilidad(el);   break;
     case 'vehiculos':    renderVehiculos(el);      break;
     case 'envios':       renderEnvios(el);         break;
+    case 'conduce':      renderConduce(el);        break;
     case 'sucursales':   renderSucursales(el);     break;
     case 'configuracion':renderConfiguracion(el);  break;
     case 'etiquetas':
@@ -886,7 +891,13 @@ async function doLogout() {
 function openModal(html, cls = '') {
   closeModal();
   const ov = h('div', { class: 'ov', id: 'modal-ov',
-    onclick: e => { if (e.target === ov) closeModal(); }
+    // Click en el backdrop: solo cierra si el modal está LIMPIO. Si el usuario
+    // ya escribió/cambió algo, NO se cierra (protege su trabajo) y hace un shake.
+    onclick: e => {
+      if (e.target !== ov) return;
+      if (_formIsDirty(ov._snap)) { _shakeEl(m); return; }
+      closeModal();
+    }
   });
   const m = h('div', {
     class: `modal ${cls}`,
@@ -896,10 +907,82 @@ function openModal(html, cls = '') {
   ov.appendChild(m);
   document.body.appendChild(ov);
   _bindModalSafeActions(m);
+  // Snapshot del estado inicial de los campos para detectar cambios ("sucio").
+  ov._snap = _snapshotForm(m);
 }
 
 function closeModal() {
   document.getElementById('modal-ov')?.remove();
+}
+
+// ══════════════════════════════════════════════
+// LÓGICA DE MODALES "SUCIOS" (protección de datos sin guardar)
+// Genérico: sirve tanto para openModal como para overlays propios (envíos).
+// ══════════════════════════════════════════════
+function _fieldSig(el) {
+  return (el.type === 'checkbox' || el.type === 'radio') ? (el.checked ? '1' : '0') : (el.value ?? '');
+}
+
+// Captura el valor inicial de todos los campos editables del modal.
+function _snapshotForm(root) {
+  const map = new Map();
+  if (!root) return map;
+  root.querySelectorAll('input, textarea, select').forEach(el => {
+    if (el.type === 'hidden' || el.disabled || el.readOnly) return;
+    map.set(el, _fieldSig(el));
+  });
+  return map;
+}
+
+// ¿Algún campo cambió respecto al snapshot inicial? ("algo escrito, aunque sea una letra")
+function _formIsDirty(snapshot) {
+  if (!snapshot || !snapshot.size) return false;
+  for (const [el, sig] of snapshot) {
+    if (!document.body.contains(el)) continue;  // campo removido dinámicamente
+    if (_fieldSig(el) !== sig) return true;
+  }
+  return false;
+}
+
+// Sacudida sutil para dar feedback cuando se ignora un click fuera con datos.
+function _shakeEl(el) {
+  try {
+    el.animate(
+      [{ transform:'translateX(0)' }, { transform:'translateX(-6px)' }, { transform:'translateX(6px)' },
+       { transform:'translateX(-4px)' }, { transform:'translateX(4px)' }, { transform:'translateX(0)' }],
+      { duration: 250, easing: 'ease-in-out' }
+    );
+  } catch {}
+}
+
+// Confirmación "¿Descartar cambios?" que se dibuja ENCIMA sin destruir el modal
+// actual (openModal sí destruiría el modal, perdiendo lo escrito). Devuelve Promise<bool>.
+function _confirmDiscard() {
+  return new Promise(resolve => {
+    const ov = h('div', { class: 'ov', style: { zIndex: '10001' },
+      onclick: e => { if (e.target === ov) { ov.remove(); resolve(false); } } });
+    const box = h('div', { class: 'modal', style: { maxWidth: '380px' }, html: `
+      <div class="modal-title">¿Descartar cambios?</div>
+      <div class="modal-sub">Tienes información sin guardar en este formulario. Si cierras, se perderá.</div>
+      <div class="modal-foot">
+        <button class="btn btn-out" id="_dc-no">Seguir editando</button>
+        <button class="btn btn-red" id="_dc-yes">Descartar y cerrar</button>
+      </div>` });
+    ov.appendChild(box);
+    document.body.appendChild(ov);
+    box.querySelector('#_dc-no') .addEventListener('click', () => { ov.remove(); resolve(false); });
+    box.querySelector('#_dc-yes').addEventListener('click', () => { ov.remove(); resolve(true);  });
+  });
+}
+
+// Cierre solicitado por el usuario (botón Cancelar): si hay cambios, pregunta.
+async function _requestCloseModal() {
+  const ov = document.getElementById('modal-ov');
+  if (ov && _formIsDirty(ov._snap)) {
+    const ok = await _confirmDiscard();
+    if (!ok) return;   // "Seguir editando" → no cerrar
+  }
+  closeModal();
 }
 
 function _bindModalSafeActions(root) {
@@ -922,7 +1005,8 @@ function _bindModalSafeActions(root) {
       .replace(/;+$/, '');
 
     if (raw === 'closeModal()') {
-      bind(el, () => closeModal());
+      // Botón Cancelar: pasa por el cierre inteligente (pregunta si hay cambios).
+      bind(el, () => _requestCloseModal());
       return;
     }
 

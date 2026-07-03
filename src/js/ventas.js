@@ -782,6 +782,9 @@ async function openDetalleVentaModal(s) {
       <button class="btn btn-out" onclick="reimprimirVenta(${s.id})">
         ${svg('print')} Reimprimir
       </button>
+      <button class="btn btn-out" onclick="guardarVentaPDF(${s.id})">
+        ${svg('pdf')} Guardar PDF
+      </button>
       <button class="btn btn-out" style="background:#25D366;color:#fff;border-color:#25D366"
               onclick="ventaWhatsApp(${s.id})"
               title="Enviar resumen por WhatsApp">
@@ -894,6 +897,31 @@ async function reimprimirVenta(saleId) {
     'Reimprimir',
     'btn-dark'
   );
+}
+
+// ── Guardar venta como PDF (bajo demanda) ─────
+async function guardarVentaPDF(saleId) {
+  const sale = await window.api.sales.getById({ id: saleId });
+  if (!sale) { toast('Venta no encontrada', 'err'); return; }
+  const fecha = (sale.created_at || '').split('T')[0];
+  const hora  = sale.created_at
+    ? new Date(sale.created_at).toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' }) : '';
+  const payload = {
+    id: sale.id, date: fecha, time: hora, type: sale.type,
+    customer_name: sale.customer_name || 'Consumidor Final', customer_rnc: sale.customer_rnc || '',
+    items: (sale.items || []).map(i => ({
+      product_name: i.product_name, qty: i.qty, unit_price: i.unit_price, unit_cost: i.unit_cost || 0,
+    })),
+    subtotal: sale.subtotal, discount_pct: sale.discount_pct || 0, discount_amt: sale.discount_amt || 0,
+    tax_amt: sale.tax_amt || 0, total: sale.total, payment_method: sale.payment_method,
+    cajero: sale.cajero, ncf: sale.ncf || '',
+  };
+  const label = sale.type === 'cotizacion' ? 'Cotizacion' : sale.type === 'devolucion' ? 'Devolucion' : 'Factura';
+  if (typeof guardarDocumentoPDF === 'function') {
+    guardarDocumentoPDF(() => printReceipt(payload, true), `${label}-${String(sale.id).padStart(5, '0')}`);
+  } else {
+    toast('Guardar PDF no disponible', 'err');
+  }
 }
 
 // ── WhatsApp ──────────────────────────────────

@@ -158,10 +158,11 @@ const _VDB = {
 // No existe API pública — se scrapea el artículo más reciente
 // ──────────────────────────────────────────────
 const _FUEL_FALLBACK = {
-  premium:        335.10,  // RD$/galón — semana 30 mayo - 6 junio 2026
-  regular:        307.50,  // Fuente: prestocombustibles.com / micm.gob.do
-  diesel:         287.10,  // Gasoil Óptimo
-  gasoil_regular: 259.80,
+  premium:        341.10,  // RD$/galón — semana 27 jun - 3 jul 2026
+  regular:        310.50,  // Fuente: prestocombustibles.com / micm.gob.do
+  diesel:         293.10,  // Gasoil Óptimo
+  gasoil_regular: 262.80,
+  kerosene:       279.80,
   glp:            137.20,
   gnv:             43.97,
 };
@@ -209,6 +210,7 @@ async function _getFuelPrices() {
           regular:        get('Gasolina Regular') || Math.round(premium*0.917*10)/10,
           diesel:         get('Gasoil .ptimo')    || Math.round(premium*0.857*10)/10,
           gasoil_regular: get('Gasoil Regular')   || Math.round(premium*0.775*10)/10,
+          kerosene:       get('Kerosene')          || _FUEL_FALLBACK.kerosene,
           glp:            get('Gas Licuado')       || _FUEL_FALLBACK.glp,
           gnv:            get('Gas Natural')       || _FUEL_FALLBACK.gnv,
         };
@@ -234,6 +236,7 @@ function _parseMICMPrices(html) {
     const matchR = html.match(/[Gg]asolina\s*[Rr]egular[^<\d]*?([\d,]+\.?\d*)\s*(?:por\s*gal[oó]n)?/i);
     const matchDO= html.match(/[Gg]asoil\s*[ÓOo]ptimo[^<\d]*?([\d,]+\.?\d*)\s*(?:por\s*gal[oó]n)?/i);
     const matchDR= html.match(/[Gg]asoil\s*[Rr]egular[^<\d]*?([\d,]+\.?\d*)\s*(?:por\s*gal[oó]n)?/i);
+    const matchK = html.match(/[Kk]erosene[^<\d]*?([\d,]+\.?\d*)\s*(?:por\s*gal[oó]n)?/i);
     const matchG = html.match(/[Gg][Ll][Pp][^<\d]*?([\d,]+\.?\d*)\s*(?:por\s*gal[oó]n)?/i);
 
     const p = clean(matchP?.[1]);
@@ -248,6 +251,7 @@ function _parseMICMPrices(html) {
       regular:        r  || p * 0.917,
       diesel:         d  || p * 0.856,
       gasoil_regular: clean(matchDR?.[1]) || p * 0.774,
+      kerosene:       clean(matchK?.[1])  || _FUEL_FALLBACK.kerosene,
       glp:            clean(matchG?.[1])  || _FUEL_FALLBACK.glp,
     };
   } catch { return null; }
@@ -427,7 +431,11 @@ async function renderVehiculos(el) {
     <span style="font-size:11px;color:var(--muted2);font-weight:600">⛽ PRECIO COMBUSTIBLE HOY (RD$/galón):</span>
     <span style="font-size:12px;font-weight:700;color:var(--green,#00c07a)">Premium: ${_vFmt(fuelPrices.premium)}</span>
     <span style="font-size:12px;font-weight:700;color:var(--blue,#3b82f6)">Regular: ${_vFmt(fuelPrices.regular)}</span>
-    <span style="font-size:12px;font-weight:700;color:var(--amber,#f59e0b)">Gasoil: ${_vFmt(fuelPrices.diesel)}</span>
+    <span style="font-size:12px;font-weight:700;color:var(--amber,#f59e0b)">Gasoil Óptimo: ${_vFmt(fuelPrices.diesel)}</span>
+    <span style="font-size:12px;font-weight:700;color:var(--amber,#f59e0b)">Gasoil Regular: ${_vFmt(fuelPrices.gasoil_regular)}</span>
+    ${fuelPrices.kerosene ? `<span style="font-size:12px;font-weight:700;color:var(--muted,#6b7280)">Kerosene: ${_vFmt(fuelPrices.kerosene)}</span>` : ''}
+    <span style="font-size:12px;font-weight:700;color:var(--purple,#8b5cf6)">GLP: ${_vFmt(fuelPrices.glp)}</span>
+    <span style="font-size:12px;font-weight:700;color:var(--teal,#14b8a6)">GNV: ${_vFmt(fuelPrices.gnv)}</span>
     <span style="font-size:10px;color:var(--muted2);margin-left:auto">
       Fuente: MIC RD · ${_fuelPricesSource === 'micm' || _fuelPricesSource === 'micm-directo' ? 
         '<span style=\'color:var(--green,#00c07a)\'>✓ tiempo real</span>' : 

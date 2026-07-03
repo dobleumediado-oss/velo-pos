@@ -736,6 +736,18 @@ function openCobroModal(inv) {
       <div class="tr grand"><span>TOTAL</span><span>${fmt(total)}</span></div>
     </div>
 
+    ${inv.itype === 'factura' ? `
+    <label style="display:flex;align-items:center;gap:9px;margin-top:12px;padding:10px 12px;
+                  background:var(--surface2);border-radius:8px;cursor:pointer;font-size:13px">
+      <input type="checkbox" id="cbr-conduce" style="width:16px;height:16px;cursor:pointer;flex-shrink:0"/>
+      <span>
+        <strong>Generar también un conduce</strong>
+        <span style="color:var(--muted);font-size:11px;display:block">
+          Se imprime después de la factura, con las mismas líneas pero <strong>sin precios</strong>.
+        </span>
+      </span>
+    </label>` : ''}
+
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-green" id="btn-confirmar-venta"
@@ -858,6 +870,8 @@ async function finalizarVenta() {
   const pmeth     = document.getElementById('cbr-pmeth')?.value    || 'efectivo';
   const cliName   = document.getElementById('cbr-name')?.value?.trim()   || 'Consumidor Final';
   const cliCedula = document.getElementById('cbr-cedula')?.value?.trim() || '';
+  // Capturar AQUÍ (antes de closeModal): el DOM del modal se elimina al cerrar.
+  const wantConduce = !!document.getElementById('cbr-conduce')?.checked;
 
   if (!inv.cart.length) return;
 
@@ -990,6 +1004,17 @@ async function finalizarVenta() {
       mix_efec:        mixEfec,
       mix_card:        mixCard,
     });
+
+    // Conduce opcional: solo si el usuario marcó la casilla. Se imprime DESPUÉS
+    // de la factura, con las mismas líneas pero sin precios (nota de entrega).
+    if (wantConduce && typeof printConduce === 'function') {
+      printConduce({
+        ...saleForPrint,
+        id:            result.saleId,
+        customer_name: cliName,
+        customer_rnc:  cliCedula,
+      });
+    }
 
     // Limpiar factura y refrescar POS
     removeInvoice(activeInvoice);

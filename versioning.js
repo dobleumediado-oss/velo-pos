@@ -585,127 +585,13 @@ const MIGRATIONS = [
     description: 'Catálogo de cuentas inicial y mapeo contable para RD',
     run(db) {
       try {
-        const ins = db.prepare(
-          `INSERT OR IGNORE INTO accounting_accounts(code, name, type, subtype, parent_id, description, is_summary, active)
-           VALUES(?, ?, ?, ?, ?, ?, ?, 1)`
-        );
-
-        // ── ACTIVOS ──────────────────────────────────
-        const a1 = ins.run('1', 'ACTIVOS', 'activo', '', null, 'Grupo activos', 1).lastInsertRowid;
-        const a11 = ins.run('11', 'Activo Corriente', 'activo', 'corriente', a1, '', 1).lastInsertRowid;
-        ins.run('1101', 'Caja General',               'activo', 'efectivo',   a11, 'Efectivo en caja', 0);
-        ins.run('1102', 'Caja Chica',                 'activo', 'efectivo',   a11, 'Fondo de caja chica', 0);
-        ins.run('1103', 'Bancos',                     'activo', 'banco',      a11, 'Saldos en cuentas bancarias', 0);
-        ins.run('1104', 'Cuentas por Cobrar',         'activo', 'cobrar',     a11, 'Ventas a crédito pendientes', 0);
-        ins.run('1105', 'Inventario de Mercancías',   'activo', 'inventario', a11, 'Mercancía disponible para venta', 0);
-        ins.run('1106', 'ITBIS Acreditable',          'activo', 'impuesto',   a11, 'ITBIS pagado en compras recuperable', 0);
-        ins.run('1107', 'Otros Activos Corrientes',   'activo', '',           a11, '', 0);
-        const a12 = ins.run('12', 'Activo No Corriente', 'activo', 'fijo', a1, '', 1).lastInsertRowid;
-        ins.run('1201', 'Mobiliario y Equipo',        'activo', 'fijo', a12, '', 0);
-        ins.run('1202', 'Equipos de Cómputo',         'activo', 'fijo', a12, '', 0);
-        ins.run('1203', 'Dep. Acumulada Mobiliario',  'activo', 'fijo', a12, 'Cuenta contranatura (saldo acreedor)', 0);
-
-        // ── PASIVOS ──────────────────────────────────
-        const p2 = ins.run('2', 'PASIVOS', 'pasivo', '', null, 'Grupo pasivos', 1).lastInsertRowid;
-        const p21 = ins.run('21', 'Pasivo Corriente', 'pasivo', 'corriente', p2, '', 1).lastInsertRowid;
-        ins.run('2101', 'Cuentas por Pagar',          'pasivo', 'pagar',     p21, 'Deudas con proveedores', 0);
-        ins.run('2102', 'ITBIS por Pagar',            'pasivo', 'impuesto',  p21, 'ITBIS cobrado en ventas a remitir a DGII', 0);
-        ins.run('2103', 'Retenciones por Pagar',      'pasivo', 'impuesto',  p21, 'Retenciones ISR a pagar', 0);
-        ins.run('2104', 'Sueldos por Pagar',          'pasivo', '',          p21, '', 0);
-        ins.run('2105', 'Otros Pasivos Corrientes',   'pasivo', '',          p21, '', 0);
-        const p22 = ins.run('22', 'Pasivo a Largo Plazo', 'pasivo', 'largo', p2, '', 1).lastInsertRowid;
-        ins.run('2201', 'Préstamos Bancarios',        'pasivo', 'prestamo',  p22, '', 0);
-
-        // ── CAPITAL ──────────────────────────────────
-        const c3 = ins.run('3', 'CAPITAL', 'capital', '', null, 'Patrimonio del propietario', 1).lastInsertRowid;
-        ins.run('3101', 'Capital Social',             'capital', '', c3, 'Capital inicial del negocio', 0);
-        ins.run('3102', 'Aportes del Propietario',    'capital', '', c3, '', 0);
-        ins.run('3103', 'Retiros del Propietario',    'capital', '', c3, 'Cuenta contranatura', 0);
-        ins.run('3104', 'Utilidades Acumuladas',      'capital', '', c3, 'Utilidades de períodos anteriores', 0);
-        ins.run('3105', 'Utilidad/Pérdida del Período','capital','', c3, 'Resultado del período actual', 0);
-
-        // ── INGRESOS ─────────────────────────────────
-        const i4 = ins.run('4', 'INGRESOS', 'ingreso', '', null, 'Grupo ingresos', 1).lastInsertRowid;
-        const i41 = ins.run('41', 'Ingresos Operacionales', 'ingreso', '', i4, '', 1).lastInsertRowid;
-        ins.run('4101', 'Ventas de Mercancía',        'ingreso', 'ventas',   i41, '', 0);
-        ins.run('4102', 'Descuentos en Ventas',       'ingreso', 'descuento',i41, 'Cuenta contranatura (reduce ingresos)', 0);
-        ins.run('4103', 'Devoluciones en Ventas',     'ingreso', 'devolucion',i41,'Cuenta contranatura', 0);
-        ins.run('4104', 'Otros Ingresos',             'ingreso', '',         i41, '', 0);
-
-        // ── COSTOS ───────────────────────────────────
-        const c5 = ins.run('5', 'COSTOS', 'costo', '', null, 'Grupo costos', 1).lastInsertRowid;
-        const c51 = ins.run('51', 'Costo de Ventas', 'costo', '', c5, '', 1).lastInsertRowid;
-        ins.run('5101', 'Costo de Mercancía Vendida', 'costo', 'cogs', c51, 'Costo directo de productos vendidos', 0);
-        ins.run('5102', 'Compras de Mercancía',       'costo', '',     c51, '', 0);
-        ins.run('5103', 'Devoluciones en Compras',    'costo', '',     c51, 'Cuenta contranatura', 0);
-
-        // ── GASTOS ───────────────────────────────────
-        const g6 = ins.run('6', 'GASTOS', 'gasto', '', null, 'Grupo gastos', 1).lastInsertRowid;
-        const g61 = ins.run('61', 'Gastos Operacionales', 'gasto', '', g6, '', 1).lastInsertRowid;
-        ins.run('6101', 'Alquiler de Local',          'gasto', '', g61, '', 0);
-        ins.run('6102', 'Electricidad',               'gasto', '', g61, '', 0);
-        ins.run('6103', 'Agua y Saneamiento',         'gasto', '', g61, '', 0);
-        ins.run('6104', 'Internet',                   'gasto', '', g61, '', 0);
-        ins.run('6105', 'Teléfono',                   'gasto', '', g61, '', 0);
-        ins.run('6106', 'Sueldos y Salarios',         'gasto', '', g61, '', 0);
-        ins.run('6107', 'Combustible',                'gasto', '', g61, '', 0);
-        ins.run('6108', 'Transporte y Mensajería',    'gasto', '', g61, '', 0);
-        ins.run('6109', 'Publicidad y Marketing',     'gasto', '', g61, '', 0);
-        ins.run('6110', 'Mantenimiento y Reparaciones','gasto','', g61, '', 0);
-        ins.run('6111', 'Limpieza y Aseo',            'gasto', '', g61, '', 0);
-        ins.run('6112', 'Comisiones Bancarias',       'gasto', '', g61, '', 0);
-        ins.run('6113', 'Gastos de Tecnología',       'gasto', '', g61, '', 0);
-        ins.run('6114', 'Impuestos y Licencias',      'gasto', '', g61, '', 0);
-        ins.run('6115', 'Servicios Profesionales',    'gasto', '', g61, '', 0);
-        ins.run('6116', 'Incentivos y Bonificaciones','gasto', '', g61, '', 0);
-        ins.run('6117', 'Útiles y Materiales de Ofic.','gasto','', g61, '', 0);
-        ins.run('6118', 'Seguros',                    'gasto', '', g61, '', 0);
-        ins.run('6119', 'Depreciación',               'gasto', '', g61, '', 0);
-        ins.run('6120', 'Otros Gastos Operacionales', 'gasto', '', g61, '', 0);
-
-        // ── IMPUESTOS ────────────────────────────────
-        const t7 = ins.run('7', 'IMPUESTOS', 'impuesto', '', null, 'Grupo impuestos', 1).lastInsertRowid;
-        ins.run('7101', 'ITBIS Cobrado (Ventas)',      'impuesto', '', t7, 'ITBIS facturado en ventas', 0);
-        ins.run('7102', 'ITBIS Pagado (Compras)',      'impuesto', '', t7, 'ITBIS en compras acreditable', 0);
-        ins.run('7103', 'Retenciones ISR',             'impuesto', '', t7, '', 0);
-
-        // ── CONFIGURACIÓN CONTABLE POR DEFECTO ───────
-        const getAccId = (code) => {
-          const r = db.prepare("SELECT id FROM accounting_accounts WHERE code=?").get(code);
-          return r ? r.id : null;
-        };
-
-        const insConf = db.prepare(
-          `INSERT OR IGNORE INTO accounting_config(key, account_id, description) VALUES(?, ?, ?)`
-        );
-        insConf.run('account_cash',       getAccId('1101'), 'Caja General → efectivo ventas y caja');
-        insConf.run('account_petty_cash', getAccId('1102'), 'Caja Chica → pagos menores');
-        insConf.run('account_bank',       getAccId('1103'), 'Bancos → transferencias y depósitos');
-        insConf.run('account_ar',         getAccId('1104'), 'Cuentas por Cobrar → ventas a crédito');
-        insConf.run('account_inventory',  getAccId('1105'), 'Inventario → stock de mercancía');
-        insConf.run('account_tax_credit', getAccId('1106'), 'ITBIS pagado en compras');
-        insConf.run('account_ap',         getAccId('2101'), 'Cuentas por Pagar → compras a crédito');
-        insConf.run('account_tax_payable',getAccId('2102'), 'ITBIS cobrado en ventas → DGII');
-        insConf.run('account_capital',    getAccId('3101'), 'Capital Social');
-        insConf.run('account_revenue',    getAccId('4101'), 'Ventas de mercancía');
-        insConf.run('account_discount',   getAccId('4102'), 'Descuentos en ventas');
-        insConf.run('account_returns',    getAccId('4103'), 'Devoluciones en ventas');
-        insConf.run('account_other_rev',  getAccId('4104'), 'Otros ingresos');
-        insConf.run('account_cogs',       getAccId('5101'), 'Costo de mercancía vendida');
-        insConf.run('account_rent',       getAccId('6101'), 'Alquiler');
-        insConf.run('account_elec',       getAccId('6102'), 'Electricidad');
-        insConf.run('account_internet',   getAccId('6104'), 'Internet');
-        insConf.run('account_salary',     getAccId('6106'), 'Sueldos');
-        insConf.run('account_fuel',       getAccId('6107'), 'Combustible');
-        insConf.run('account_other_exp',  getAccId('6120'), 'Otros gastos');
-
+        seedAccountingCatalog(db);
         console.log('[MIGRATION 1.6.2] Catálogo de cuentas y configuración contable creados');
       } catch(e) {
         console.error('[MIGRATION 1.6.2]', e.message);
       }
     }
   },
-
   {
     version: '1.6.3',
     description: 'Agregar module_contabilidad a settings',
@@ -837,7 +723,244 @@ const MIGRATIONS = [
       }
     }
   },
+  {
+    version: '1.10.9',
+    description: 'Repara catálogo contable vacío (re-siembra idempotente del plan de cuentas)',
+    run(db) {
+      try {
+        // Algunas instalaciones quedaron con el catálogo contable vacío
+        // (p.ej. tras "Resetear Datos", que borraba accounting_accounts sin
+        // volver a sembrarlo, y como 1.6.2 ya figuraba aplicada no se regeneraba).
+        // Esto lo reconstruye de forma idempotente: INSERT OR IGNORE, no duplica
+        // ni borra, y NO toca datos importados (productos/ventas/clientes están
+        // en otras tablas). En una instalación sana es un no-op.
+        const before = db.prepare('SELECT COUNT(*) c FROM accounting_accounts').get().c;
+        seedAccountingCatalog(db);
+        const after = db.prepare('SELECT COUNT(*) c FROM accounting_accounts').get().c;
+        console.log(`[MIGRATION 1.10.9] Catálogo contable: ${before} → ${after} cuentas`);
+      } catch(e) {
+        console.error('[MIGRATION 1.10.9]', e.message);
+      }
+    }
+  },
+  {
+    version: '1.10.10',
+    description: 'Módulo de Conduce / Nota de Entrega (delivery_notes) — documento de entrega, NO fiscal',
+    run(db) {
+      try {
+        // Conduce = nota de entrega/despacho. NO es factura, NO genera NCF ni ITBIS,
+        // NO crea cuenta por cobrar y (por decisión de arquitectura) NO mueve inventario
+        // por sí mismo: el stock sale en la FACTURA, como en todo el sistema. El conduce
+        // documenta la entrega y puede enlazarse a una factura para trazabilidad.
+        // Arquitectura single-almacén (el inventario es global): sin warehouse_id.
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS delivery_notes (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            number              TEXT UNIQUE NOT NULL,
+            customer_id         INTEGER REFERENCES customers(id),
+            customer_name       TEXT DEFAULT 'Consumidor Final',
+            customer_rnc        TEXT DEFAULT '',
+            branch_id           INTEGER REFERENCES branches(id),
+            source_type         TEXT DEFAULT 'manual'
+                                  CHECK(source_type IN ('manual','cotizacion','factura')),
+            source_id           INTEGER,
+            status              TEXT DEFAULT 'borrador'
+                                  CHECK(status IN ('borrador','preparado','despachado','entregado','parcial','facturado','anulado','devuelto')),
+            issue_date          TEXT DEFAULT (date('now','localtime')),
+            dispatch_date       TEXT,
+            received_date       TEXT,
+            delivery_address    TEXT DEFAULT '',
+            driver_name         TEXT DEFAULT '',
+            vehicle_plate       TEXT DEFAULT '',
+            received_by_name    TEXT DEFAULT '',
+            received_by_document TEXT DEFAULT '',
+            notes               TEXT DEFAULT '',
+            invoice_id          INTEGER REFERENCES sales(id),
+            created_by          INTEGER REFERENCES users(id),
+            dispatched_by       INTEGER REFERENCES users(id),
+            received_by_user_id INTEGER REFERENCES users(id),
+            cancelled_by        INTEGER REFERENCES users(id),
+            cancellation_reason TEXT DEFAULT '',
+            created_at          TEXT DEFAULT (datetime('now','localtime')),
+            updated_at          TEXT DEFAULT (datetime('now','localtime'))
+          );
+
+          CREATE TABLE IF NOT EXISTS delivery_note_items (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            delivery_note_id INTEGER NOT NULL REFERENCES delivery_notes(id),
+            product_id       INTEGER REFERENCES products(id),
+            sku              TEXT DEFAULT '',
+            description      TEXT NOT NULL,
+            unit             TEXT DEFAULT 'und',
+            requested_qty    REAL NOT NULL DEFAULT 0,
+            delivered_qty    REAL NOT NULL DEFAULT 0,
+            pending_qty      REAL NOT NULL DEFAULT 0,
+            lot_number       TEXT DEFAULT '',
+            serial_number    TEXT DEFAULT '',
+            notes            TEXT DEFAULT '',
+            created_at       TEXT DEFAULT (datetime('now','localtime')),
+            updated_at       TEXT DEFAULT (datetime('now','localtime'))
+          );
+
+          CREATE TABLE IF NOT EXISTS delivery_note_invoice_links (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            delivery_note_id      INTEGER NOT NULL REFERENCES delivery_notes(id),
+            delivery_note_item_id INTEGER REFERENCES delivery_note_items(id),
+            invoice_id            INTEGER NOT NULL REFERENCES sales(id),
+            product_id            INTEGER REFERENCES products(id),
+            qty_linked            REAL NOT NULL DEFAULT 0,
+            created_at            TEXT DEFAULT (datetime('now','localtime'))
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_dn_status    ON delivery_notes(status);
+          CREATE INDEX IF NOT EXISTS idx_dn_customer  ON delivery_notes(customer_id);
+          CREATE INDEX IF NOT EXISTS idx_dn_source    ON delivery_notes(source_type, source_id);
+          CREATE INDEX IF NOT EXISTS idx_dn_invoice   ON delivery_notes(invoice_id);
+          CREATE INDEX IF NOT EXISTS idx_dni_note     ON delivery_note_items(delivery_note_id);
+          CREATE INDEX IF NOT EXISTS idx_dnl_note     ON delivery_note_invoice_links(delivery_note_id);
+          CREATE INDEX IF NOT EXISTS idx_dnl_invoice  ON delivery_note_invoice_links(invoice_id);
+        `);
+
+        // Módulo desactivado por defecto + permisos por rol (patrón del sistema).
+        const ins = db.prepare(`INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)`);
+        ins.run('module_conduce',        '0');
+        ins.run('module_conduce_roles',  'admin');
+        // Mostrar precios de referencia en la impresión del conduce: apagado por defecto.
+        ins.run('conduce_show_prices',   '0');
+
+        console.log('[MIGRATION 1.10.10] Módulo de Conduce creado (tablas + settings)');
+      } catch(e) {
+        console.error('[MIGRATION 1.10.10]', e.message);
+      }
+    }
+  },
 ];
+
+// ══════════════════════════════════════════════
+// CATÁLOGO CONTABLE (reutilizable e idempotente)
+// ──────────────────────────────────────────────
+// Siembra el plan de cuentas RD y su mapeo por defecto. Usa INSERT OR IGNORE
+// y resuelve el parent por CÓDIGO (no por lastInsertRowid), así que es seguro
+// llamarlo múltiples veces: nunca duplica ni borra, y no toca datos importados
+// (productos, ventas, clientes, etc. viven en otras tablas). Se usa en:
+//   · la migración inicial 1.6.2 (instalación nueva),
+//   · la migración de reparación 1.10.9 (catálogo quedó vacío), y
+//   · business:resetData (para no dejar el catálogo vacío tras un reset).
+// Devuelve el total de cuentas resultante.
+function seedAccountingCatalog(db) {
+  const ins = db.prepare(
+    `INSERT OR IGNORE INTO accounting_accounts(code, name, type, subtype, parent_id, description, is_summary, active)
+     VALUES(?, ?, ?, ?, ?, ?, ?, 1)`
+  );
+  const idOf = (code) => {
+    if (code == null) return null;
+    const r = db.prepare('SELECT id FROM accounting_accounts WHERE code=?').get(String(code));
+    return r ? r.id : null;
+  };
+
+  // [code, name, type, subtype, parentCode, description, is_summary]
+  // Los padres van antes que los hijos → idOf(parentCode) siempre resuelve.
+  const ACCOUNTS = [
+    ['1','ACTIVOS','activo','',null,'Grupo activos',1],
+    ['11','Activo Corriente','activo','corriente','1','',1],
+    ['1101','Caja General','activo','efectivo','11','Efectivo en caja',0],
+    ['1102','Caja Chica','activo','efectivo','11','Fondo de caja chica',0],
+    ['1103','Bancos','activo','banco','11','Saldos en cuentas bancarias',0],
+    ['1104','Cuentas por Cobrar','activo','cobrar','11','Ventas a crédito pendientes',0],
+    ['1105','Inventario de Mercancías','activo','inventario','11','Mercancía disponible para venta',0],
+    ['1106','ITBIS Acreditable','activo','impuesto','11','ITBIS pagado en compras recuperable',0],
+    ['1107','Otros Activos Corrientes','activo','','11','',0],
+    ['12','Activo No Corriente','activo','fijo','1','',1],
+    ['1201','Mobiliario y Equipo','activo','fijo','12','',0],
+    ['1202','Equipos de Cómputo','activo','fijo','12','',0],
+    ['1203','Dep. Acumulada Mobiliario','activo','fijo','12','Cuenta contranatura (saldo acreedor)',0],
+    ['2','PASIVOS','pasivo','',null,'Grupo pasivos',1],
+    ['21','Pasivo Corriente','pasivo','corriente','2','',1],
+    ['2101','Cuentas por Pagar','pasivo','pagar','21','Deudas con proveedores',0],
+    ['2102','ITBIS por Pagar','pasivo','impuesto','21','ITBIS cobrado en ventas a remitir a DGII',0],
+    ['2103','Retenciones por Pagar','pasivo','impuesto','21','Retenciones ISR a pagar',0],
+    ['2104','Sueldos por Pagar','pasivo','','21','',0],
+    ['2105','Otros Pasivos Corrientes','pasivo','','21','',0],
+    ['22','Pasivo a Largo Plazo','pasivo','largo','2','',1],
+    ['2201','Préstamos Bancarios','pasivo','prestamo','22','',0],
+    ['3','CAPITAL','capital','',null,'Patrimonio del propietario',1],
+    ['3101','Capital Social','capital','','3','Capital inicial del negocio',0],
+    ['3102','Aportes del Propietario','capital','','3','',0],
+    ['3103','Retiros del Propietario','capital','','3','Cuenta contranatura',0],
+    ['3104','Utilidades Acumuladas','capital','','3','Utilidades de períodos anteriores',0],
+    ['3105','Utilidad/Pérdida del Período','capital','','3','Resultado del período actual',0],
+    ['4','INGRESOS','ingreso','',null,'Grupo ingresos',1],
+    ['41','Ingresos Operacionales','ingreso','','4','',1],
+    ['4101','Ventas de Mercancía','ingreso','ventas','41','',0],
+    ['4102','Descuentos en Ventas','ingreso','descuento','41','Cuenta contranatura (reduce ingresos)',0],
+    ['4103','Devoluciones en Ventas','ingreso','devolucion','41','Cuenta contranatura',0],
+    ['4104','Otros Ingresos','ingreso','','41','',0],
+    ['5','COSTOS','costo','',null,'Grupo costos',1],
+    ['51','Costo de Ventas','costo','','5','',1],
+    ['5101','Costo de Mercancía Vendida','costo','cogs','51','Costo directo de productos vendidos',0],
+    ['5102','Compras de Mercancía','costo','','51','',0],
+    ['5103','Devoluciones en Compras','costo','','51','Cuenta contranatura',0],
+    ['6','GASTOS','gasto','',null,'Grupo gastos',1],
+    ['61','Gastos Operacionales','gasto','','6','',1],
+    ['6101','Alquiler de Local','gasto','','61','',0],
+    ['6102','Electricidad','gasto','','61','',0],
+    ['6103','Agua y Saneamiento','gasto','','61','',0],
+    ['6104','Internet','gasto','','61','',0],
+    ['6105','Teléfono','gasto','','61','',0],
+    ['6106','Sueldos y Salarios','gasto','','61','',0],
+    ['6107','Combustible','gasto','','61','',0],
+    ['6108','Transporte y Mensajería','gasto','','61','',0],
+    ['6109','Publicidad y Marketing','gasto','','61','',0],
+    ['6110','Mantenimiento y Reparaciones','gasto','','61','',0],
+    ['6111','Limpieza y Aseo','gasto','','61','',0],
+    ['6112','Comisiones Bancarias','gasto','','61','',0],
+    ['6113','Gastos de Tecnología','gasto','','61','',0],
+    ['6114','Impuestos y Licencias','gasto','','61','',0],
+    ['6115','Servicios Profesionales','gasto','','61','',0],
+    ['6116','Incentivos y Bonificaciones','gasto','','61','',0],
+    ['6117','Útiles y Materiales de Ofic.','gasto','','61','',0],
+    ['6118','Seguros','gasto','','61','',0],
+    ['6119','Depreciación','gasto','','61','',0],
+    ['6120','Otros Gastos Operacionales','gasto','','61','',0],
+    ['7','IMPUESTOS','impuesto','',null,'Grupo impuestos',1],
+    ['7101','ITBIS Cobrado (Ventas)','impuesto','','7','ITBIS facturado en ventas',0],
+    ['7102','ITBIS Pagado (Compras)','impuesto','','7','ITBIS en compras acreditable',0],
+    ['7103','Retenciones ISR','impuesto','','7','',0],
+  ];
+  for (const [code, name, type, subtype, parentCode, desc, summary] of ACCOUNTS) {
+    ins.run(code, name, type, subtype, idOf(parentCode), desc, summary);
+  }
+
+  const insConf = db.prepare(
+    `INSERT OR IGNORE INTO accounting_config(key, account_id, description) VALUES(?, ?, ?)`
+  );
+  // [configKey, accountCode, description]
+  const CONFIG = [
+    ['account_cash','1101','Caja General → efectivo ventas y caja'],
+    ['account_petty_cash','1102','Caja Chica → pagos menores'],
+    ['account_bank','1103','Bancos → transferencias y depósitos'],
+    ['account_ar','1104','Cuentas por Cobrar → ventas a crédito'],
+    ['account_inventory','1105','Inventario → stock de mercancía'],
+    ['account_tax_credit','1106','ITBIS pagado en compras'],
+    ['account_ap','2101','Cuentas por Pagar → compras a crédito'],
+    ['account_tax_payable','2102','ITBIS cobrado en ventas → DGII'],
+    ['account_capital','3101','Capital Social'],
+    ['account_revenue','4101','Ventas de mercancía'],
+    ['account_discount','4102','Descuentos en ventas'],
+    ['account_returns','4103','Devoluciones en ventas'],
+    ['account_other_rev','4104','Otros ingresos'],
+    ['account_cogs','5101','Costo de mercancía vendida'],
+    ['account_rent','6101','Alquiler'],
+    ['account_elec','6102','Electricidad'],
+    ['account_internet','6104','Internet'],
+    ['account_salary','6106','Sueldos'],
+    ['account_fuel','6107','Combustible'],
+    ['account_other_exp','6120','Otros gastos'],
+  ];
+  for (const [key, code, desc] of CONFIG) insConf.run(key, idOf(code), desc);
+
+  return db.prepare('SELECT COUNT(*) c FROM accounting_accounts').get().c;
+}
 
 // ══════════════════════════════════════════════
 // INICIALIZAR SISTEMA DE VERSIONES
@@ -1112,6 +1235,7 @@ async function createAutoBackup(dataDir, db, keepLast = 10) {
 module.exports = {
   APP_VERSION,
   initVersioning,
+  seedAccountingCatalog,
   createManualBackup,
   createAutoBackup,
   restoreBackup,

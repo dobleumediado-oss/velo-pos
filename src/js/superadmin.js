@@ -211,6 +211,7 @@ async function renderSuperAdmin(el) {
     { key: 'module_vehiculos',     icon: '🚗', title: 'Vehículos',                      desc: 'Registro de vehículos de la empresa.',                    cajeroCan: true  },
     { key: 'module_mantenimiento', icon: '🔧', title: 'Mantenimiento',                  desc: 'Historial de mantenimiento de vehículos.',                cajeroCan: true  },
     { key: 'module_envios',        icon: '📦', title: 'Envíos y Despachos',             desc: 'Control de entregas con cálculo de distancia.',           cajeroCan: true  },
+    { key: 'module_conduce',       icon: '🚚', title: 'Conduces / Notas de Entrega',    desc: 'Documento de entrega de mercancía. No fiscal (sin NCF/ITBIS).', cajeroCan: true  },
     { key: 'module_ncf_avanzado',  icon: '📋', title: 'NCF Avanzado',                   desc: 'Gestión de rangos de comprobantes fiscales DGII.',        cajeroCan: false },
     // Módulos avanzados
     { key: 'module_multi_negocio', icon: '🏢', title: 'Multi-negocios',                 desc: 'Múltiples empresas con base de datos separada.',          cajeroCan: false },

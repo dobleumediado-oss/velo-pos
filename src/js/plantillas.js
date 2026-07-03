@@ -16,6 +16,16 @@ function _esc(str) {
 
 // ── Detección de tipo de impresora ────────────
 function detectPrinterType(printerName) {
+  // Override explícito del usuario (Configuración → Impresora → Tipo).
+  // Tiene prioridad sobre la auto-detección: evita que una impresora láser/carta
+  // con nombre no reconocido caiga al default '80mm' (térmica) y reciba trabajos
+  // de 80mm en silencio → hojas en blanco.
+  try {
+    const forced = (typeof DB !== 'undefined' && DB?.settings?.printer_type) ||
+                   (typeof CFG !== 'undefined' && CFG?.printer_type) || '';
+    if (['58mm', '80mm', 'carta'].includes(forced)) return forced;
+  } catch {}
+
   if (!printerName) return 'unknown';
   const n = printerName.toLowerCase();
 

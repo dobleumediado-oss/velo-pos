@@ -266,7 +266,7 @@ function renderInvTable() {
     <div class="tw">
       <table>
         <thead><tr>
-          <th>Código</th><th>Producto</th><th>Categoría</th>
+          <th>Código</th><th>Producto</th><th>Modelo</th><th>Categoría</th>
           <th>Stock</th><th>Mín</th><th>Precio</th>
           <th>Mayorista</th><th>Costo</th><th></th>
         </tr></thead>
@@ -663,24 +663,19 @@ function openProductoModal(p = null) {
       </div>
     </div>
 
-    <div class="g2">
+    <div class="g3">
       <div class="fg">
         <label class="lbl">Marca</label>
         <input class="inp" id="pf-brand" type="text" placeholder="Denso, NGK..."
                value="${isEdit ? (p.brand || '') : ''}"/>
       </div>
       <div class="fg">
-        <label class="lbl">
-          Modelo
-          <span style="font-weight:400;color:var(--muted2);font-size:11px">
-            — equipo compatible (ej: T40, DJI-T40, L3408)
-          </span>
-        </label>
+        <label class="lbl">Modelo <span style="font-weight:400;color:var(--muted2);font-size:11px">(compatible)</span></label>
         <input class="inp" id="pf-model" type="text"
                placeholder="T40, DJI-T40, L4508..."
                list="pf-model-list"
                value="${isEdit ? (p.model || '') : ''}"/>
-        <datalist id="pf-model-list" id="pf-model-list"></datalist>
+        <datalist id="pf-model-list"></datalist>
       </div>
       <div class="fg">
         <label class="lbl">Categoría</label>

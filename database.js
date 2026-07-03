@@ -739,6 +739,22 @@ function audit(userId, userName, action, entity = '', entityId = null, detail = 
   `).run(userId, userName, action, entity, entityId, detail);
 }
 
+// Forma corta usada por los handlers de bancos/contabilidad:
+//   audit.log(userId, action, detail)
+// Resuelve el nombre del usuario y delega en audit(). Sin esto, `audit.log`
+// era undefined y cada llamada lanzaba TypeError (13 sitios en main.js).
+// user_id tiene FK a users(id): si no hay usuario, se guarda NULL (no 0).
+audit.log = function(userId, action, detail = '') {
+  let userName = 'sistema';
+  try {
+    if (userId) {
+      const u = db.prepare('SELECT name FROM users WHERE id=?').get(userId);
+      if (u && u.name) userName = u.name;
+    }
+  } catch {}
+  audit(userId || null, userName, action, '', null, detail);
+};
+
 
 
 
@@ -3187,6 +3203,323 @@ const accountingRepo = {
 };
 
 // ══════════════════════════════════════════════
+// REPOSITORIO: CONDUCE / NOTA DE ENTREGA
+// ──────────────────────────────────────────────
+// Documento de entrega/despacho. NO fiscal: sin NCF, sin ITBIS, sin CxC, y NO
+// mueve inventario por sí mismo (el stock sale en la factura, como en todo el
+// sistema). Toda mutación valida el estado; permisos y auditoría se aplican en
+// los handlers (main.js). Arquitectura single-almacén: inventario global.
+// ══════════════════════════════════════════════
+const conduceRepo = {
+  // Próximo número correlativo: CD-00001, CD-00002, ...
+  generateNumber() {
+    const row = db.prepare(
+      "SELECT number FROM delivery_notes WHERE number LIKE 'CD-%' ORDER BY id DESC LIMIT 1"
+    ).get();
+    let next = 1;
+    if (row && row.number) {
+      const n = parseInt(String(row.number).replace(/[^\d]/g, ''), 10);
+      if (Number.isFinite(n)) next = n + 1;
+    }
+    return 'CD-' + String(next).padStart(5, '0');
+  },
+
+  // Transiciones de estado permitidas (documentales — el conduce no mueve stock).
+  _transitions: {
+    borrador:   ['preparado', 'despachado', 'anulado'],
+    preparado:  ['despachado', 'borrador', 'anulado'],
+    despachado: ['entregado', 'parcial', 'devuelto', 'anulado'],
+    parcial:    ['entregado', 'devuelto', 'facturado'],
+    entregado:  ['facturado', 'devuelto'],
+    facturado:  ['devuelto'],
+    anulado:    [],
+    devuelto:   [],
+  },
+  canTransition(from, to) {
+    if (from === to) return true;
+    return (this._transitions[from] || []).includes(to);
+  },
+
+  _insertItems(noteId, items) {
+    const ins = db.prepare(`
+      INSERT INTO delivery_note_items
+        (delivery_note_id, product_id, sku, description, unit,
+         requested_qty, delivered_qty, pending_qty, lot_number, serial_number, notes)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?)
+    `);
+    for (const it of (items || [])) {
+      const req = Number(it.requested_qty ?? it.qty ?? 0) || 0;
+      const del = Number(it.delivered_qty ?? 0) || 0;
+      ins.run(
+        noteId, it.product_id || null, it.sku || it.product_code || '',
+        it.description || it.product_name || it.name || '', it.unit || 'und',
+        req, del, Math.max(0, req - del),
+        it.lot_number || '', it.serial_number || '', it.notes || ''
+      );
+    }
+  },
+
+  create({ header = {}, items = [], userId = null }) {
+    const number = header.number || this.generateNumber();
+    const tx = db.transaction(() => {
+      const r = db.prepare(`
+        INSERT INTO delivery_notes
+          (number, customer_id, customer_name, customer_rnc, branch_id,
+           source_type, source_id, status, issue_date, delivery_address,
+           driver_name, vehicle_plate, notes, invoice_id, created_by)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      `).run(
+        number, header.customer_id || null, header.customer_name || 'Consumidor Final',
+        header.customer_rnc || '', header.branch_id || null,
+        header.source_type || 'manual', header.source_id || null,
+        header.status || 'borrador', header.issue_date || todayStr(),
+        header.delivery_address || '', header.driver_name || '',
+        header.vehicle_plate || '', header.notes || '', header.invoice_id || null, userId
+      );
+      const id = r.lastInsertRowid;
+      this._insertItems(id, items);
+      return id;
+    });
+    return tx();
+  },
+
+  getAll(filters = {}) {
+    const where = [], params = [];
+    if (filters.status)      { where.push('dn.status = ?');      params.push(filters.status); }
+    if (filters.customer_id) { where.push('dn.customer_id = ?'); params.push(filters.customer_id); }
+    if (filters.source_type) { where.push('dn.source_type = ?'); params.push(filters.source_type); }
+    if (filters.from)        { where.push('dn.issue_date >= ?'); params.push(filters.from); }
+    if (filters.to)          { where.push('dn.issue_date <= ?'); params.push(filters.to); }
+    const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
+    return db.prepare(`
+      SELECT dn.*, u.name AS created_by_name,
+             (SELECT COUNT(*) FROM delivery_note_items di WHERE di.delivery_note_id = dn.id) AS item_count
+      FROM delivery_notes dn
+      LEFT JOIN users u ON dn.created_by = u.id
+      ${w}
+      ORDER BY dn.id DESC
+      LIMIT ${Number(filters.limit) || 500}
+    `).all(...params);
+  },
+
+  getById(id) {
+    const dn = db.prepare('SELECT * FROM delivery_notes WHERE id=?').get(id);
+    if (!dn) return null;
+    dn.items         = db.prepare('SELECT * FROM delivery_note_items WHERE delivery_note_id=? ORDER BY id').all(id);
+    dn.invoice_links = db.prepare('SELECT * FROM delivery_note_invoice_links WHERE delivery_note_id=? ORDER BY id').all(id);
+    return dn;
+  },
+
+  update(id, { header = {}, items = null }) {
+    const dn = db.prepare('SELECT status FROM delivery_notes WHERE id=?').get(id);
+    if (!dn) throw new Error('Conduce no encontrado');
+    if (dn.status !== 'borrador') throw new Error('Solo se puede editar un conduce en BORRADOR');
+    const tx = db.transaction(() => {
+      db.prepare(`
+        UPDATE delivery_notes SET
+          customer_id=?, customer_name=?, customer_rnc=?, branch_id=?,
+          delivery_address=?, driver_name=?, vehicle_plate=?, notes=?,
+          updated_at=datetime('now','localtime')
+        WHERE id=?
+      `).run(
+        header.customer_id || null, header.customer_name || 'Consumidor Final',
+        header.customer_rnc || '', header.branch_id || null,
+        header.delivery_address || '', header.driver_name || '',
+        header.vehicle_plate || '', header.notes || '', id
+      );
+      if (Array.isArray(items)) {
+        db.prepare('DELETE FROM delivery_note_items WHERE delivery_note_id=?').run(id);
+        this._insertItems(id, items);
+      }
+    });
+    tx();
+    return this.getById(id);
+  },
+
+  // Cambio de estado validado. `data` transporta campos según el destino.
+  setStatus(id, newStatus, data = {}) {
+    const dn = db.prepare('SELECT * FROM delivery_notes WHERE id=?').get(id);
+    if (!dn) throw new Error('Conduce no encontrado');
+    if (!this.canTransition(dn.status, newStatus)) {
+      throw new Error(`Transición no permitida: ${dn.status} → ${newStatus}`);
+    }
+    const sets = ['status=?', "updated_at=datetime('now','localtime')"];
+    const vals = [newStatus];
+    if (newStatus === 'despachado') {
+      sets.push('dispatch_date=?', 'dispatched_by=?');
+      vals.push(data.dispatch_date || nowStr(), data.userId || null);
+      if (data.driver_name != null)      { sets.push('driver_name=?');      vals.push(data.driver_name); }
+      if (data.vehicle_plate != null)    { sets.push('vehicle_plate=?');    vals.push(data.vehicle_plate); }
+      if (data.delivery_address != null) { sets.push('delivery_address=?'); vals.push(data.delivery_address); }
+    }
+    if (newStatus === 'entregado' || newStatus === 'parcial') {
+      sets.push('received_date=?', 'received_by_user_id=?');
+      vals.push(data.received_date || nowStr(), data.userId || null);
+      if (data.received_by_name != null)     { sets.push('received_by_name=?');     vals.push(data.received_by_name); }
+      if (data.received_by_document != null) { sets.push('received_by_document=?'); vals.push(data.received_by_document); }
+    }
+    const tx = db.transaction(() => {
+      if (Array.isArray(data.deliveredItems)) {
+        const upd = db.prepare("UPDATE delivery_note_items SET delivered_qty=?, pending_qty=?, updated_at=datetime('now','localtime') WHERE id=? AND delivery_note_id=?");
+        for (const d of data.deliveredItems) {
+          const row = db.prepare('SELECT requested_qty FROM delivery_note_items WHERE id=? AND delivery_note_id=?').get(d.itemId, id);
+          if (!row) continue;
+          const del = Math.max(0, Number(d.delivered_qty) || 0);
+          upd.run(del, Math.max(0, (row.requested_qty || 0) - del), d.itemId, id);
+        }
+      }
+      db.prepare(`UPDATE delivery_notes SET ${sets.join(', ')} WHERE id=?`).run(...vals, id);
+    });
+    tx();
+    return this.getById(id);
+  },
+
+  cancel(id, { userId = null, reason = '' } = {}) {
+    const dn = db.prepare('SELECT status FROM delivery_notes WHERE id=?').get(id);
+    if (!dn) throw new Error('Conduce no encontrado');
+    if (dn.status === 'anulado')   throw new Error('El conduce ya está anulado');
+    if (dn.status === 'facturado') throw new Error('No se puede anular un conduce ya facturado — maneja primero la factura');
+    if (!reason || !reason.trim()) throw new Error('Debes indicar un motivo de anulación');
+    db.prepare(`
+      UPDATE delivery_notes SET status='anulado', cancelled_by=?, cancellation_reason=?,
+        updated_at=datetime('now','localtime') WHERE id=?
+    `).run(userId, reason.trim(), id);
+    return this.getById(id);
+  },
+
+  // ── Facturación desde conduce ────────────────────────────────
+  // Cantidad ya facturada por línea (suma de enlaces).
+  _invoicedByItem(conduceId) {
+    const rows = db.prepare(`
+      SELECT delivery_note_item_id AS iid, COALESCE(SUM(qty_linked),0) AS q
+      FROM delivery_note_invoice_links WHERE delivery_note_id=? GROUP BY delivery_note_item_id
+    `).all(conduceId);
+    const map = {};
+    rows.forEach(r => { map[r.iid] = r.q; });
+    return map;
+  },
+
+  // Por cada línea: base facturable (lo entregado si se registró, si no lo solicitado),
+  // lo ya facturado, y lo que resta por facturar.
+  invoiceableLines(conduceId) {
+    const dn = this.getById(conduceId);
+    if (!dn) throw new Error('Conduce no encontrado');
+    const inv = this._invoicedByItem(conduceId);
+    return dn.items.map(it => {
+      const base    = (it.delivered_qty && it.delivered_qty > 0) ? it.delivered_qty : it.requested_qty;
+      const already = inv[it.id] || 0;
+      return { ...it, base, already, invoiceable: Math.max(0, round2(base - already)) };
+    });
+  },
+
+  // Crea una FACTURA desde el conduce reusando salesRepo (que descuenta stock
+  // UNA sola vez). El conduce nunca descontó → cero doble descuento. Registra
+  // los enlaces para impedir doble facturación y permitir facturación parcial.
+  invoiceFromConduce({ conduceId, lines = null, payment = {}, session = null, user, priceMode = 'retail' }) {
+    const dn = db.prepare('SELECT * FROM delivery_notes WHERE id=?').get(conduceId);
+    if (!dn) throw new Error('Conduce no encontrado');
+    if (!['despachado', 'entregado', 'parcial', 'facturado'].includes(dn.status)) {
+      throw new Error('El conduce debe estar despachado o entregado para poder facturarse');
+    }
+    const avail = this.invoiceableLines(conduceId);
+    const toInvoice = [];
+    for (const a of avail) {
+      let qty = a.invoiceable;
+      if (Array.isArray(lines)) {
+        const req = lines.find(l => Number(l.itemId) === a.id);
+        if (!req) continue;
+        qty = Number(req.qty) || 0;
+      }
+      if (qty <= 0) continue;
+      if (qty > a.invoiceable + 1e-9) {
+        throw new Error(`No puedes facturar ${qty} de "${a.description}" — disponible por facturar: ${a.invoiceable}`);
+      }
+      if (!a.product_id) throw new Error(`La línea "${a.description}" no tiene producto vinculado; no se puede facturar`);
+      const prod = productsRepo.getById(a.product_id);
+      if (!prod) throw new Error(`El producto de "${a.description}" ya no existe`);
+      const price = priceMode === 'wholesale' ? (prod.wholesale || prod.price) : prod.price;
+      toInvoice.push({ item: a, qty, prod, price });
+    }
+    if (!toInvoice.length) throw new Error('No hay cantidades pendientes por facturar en este conduce');
+
+    // 1) Crear la factura (descuenta stock una sola vez — afectaStock=true)
+    const saleRes = salesRepo.create({
+      session,
+      customer: { id: dn.customer_id || 1, name: dn.customer_name, rnc: dn.customer_rnc || '' },
+      items: toInvoice.map(t => ({
+        product_id: t.prod.id, product_code: t.prod.code, product_name: t.prod.name,
+        unit_cost: t.prod.cost, unit_price: t.price, qty: t.qty,
+      })),
+      payment: { method: payment.method || 'efectivo', disc: payment.disc || 0, priceMode },
+      user,
+      type: 'factura',
+    });
+    const saleId = saleRes.saleId;
+
+    // 2) Registrar enlaces + actualizar estado del conduce
+    const linkTx = db.transaction(() => {
+      const insLink = db.prepare(`
+        INSERT INTO delivery_note_invoice_links
+          (delivery_note_id, delivery_note_item_id, invoice_id, product_id, qty_linked)
+        VALUES(?,?,?,?,?)
+      `);
+      for (const t of toInvoice) insLink.run(conduceId, t.item.id, saleId, t.prod.id, t.qty);
+      const after = this.invoiceableLines(conduceId);
+      const fully = after.every(a => a.invoiceable <= 1e-9);
+      db.prepare(`
+        UPDATE delivery_notes SET invoice_id=?, status=?, updated_at=datetime('now','localtime') WHERE id=?
+      `).run(saleId, fully ? 'facturado' : dn.status, conduceId);
+    });
+    linkTx();
+
+    return { saleId, ncf: saleRes.ncf, total: saleRes.total, conduce: this.getById(conduceId) };
+  },
+
+  // Genera un conduce A PARTIR de una venta existente (cotización o factura).
+  // cotización → conduce: para despachar lo cotizado (se factura después).
+  // factura → conduce: la factura ya descontó stock; el conduce nace vinculado
+  // y en estado 'facturado' (no se vuelve a facturar ni a descontar).
+  createFromSale(saleId, { userId = null } = {}) {
+    const sale = db.prepare('SELECT * FROM sales WHERE id=?').get(saleId);
+    if (!sale) throw new Error('Venta/cotización no encontrada');
+    if (sale.type === 'devolucion') throw new Error('No se puede generar un conduce de una devolución');
+    const items = db.prepare('SELECT * FROM sale_items WHERE sale_id=?').all(saleId);
+    if (!items.length) throw new Error('La venta no tiene líneas');
+
+    const id = this.create({
+      header: {
+        customer_id: sale.customer_id, customer_name: sale.customer_name,
+        customer_rnc: sale.customer_rnc,
+        source_type: sale.type === 'cotizacion' ? 'cotizacion' : 'factura',
+        source_id: saleId,
+        invoice_id: sale.type === 'factura' ? saleId : null,
+      },
+      items: items.map(it => ({
+        product_id: it.product_id, product_code: it.product_code,
+        description: it.product_name, unit: 'und', qty: it.qty,
+      })),
+      userId,
+    });
+
+    // Si viene de una factura, ya está facturado: enlazar y marcar (no re-factura).
+    if (sale.type === 'factura') {
+      const linkTx = db.transaction(() => {
+        const dn = this.getById(id);
+        const insLink = db.prepare(`
+          INSERT INTO delivery_note_invoice_links
+            (delivery_note_id, delivery_note_item_id, invoice_id, product_id, qty_linked)
+          VALUES(?,?,?,?,?)
+        `);
+        dn.items.forEach(di => insLink.run(id, di.id, saleId, di.product_id, di.requested_qty));
+        db.prepare("UPDATE delivery_notes SET status='facturado' WHERE id=?").run(id);
+      });
+      linkTx();
+    }
+    return this.getById(id);
+  },
+};
+
+// ══════════════════════════════════════════════
 // EXPORTS
 // ══════════════════════════════════════════════
 module.exports = {
@@ -3215,4 +3548,5 @@ module.exports = {
   ncfRepo,
   financialAccountsRepo,
   accountingRepo,
+  conduceRepo,
 };

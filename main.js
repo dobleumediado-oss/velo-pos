@@ -109,11 +109,11 @@ const {
   productsRepo, customersRepo, cashRepo,
   salesRepo, returnsRepo, reportsRepo, suppliersRepo, purchasesRepo, audit,
   expensesRepo, branchesRepo, vehiclesRepo, maintenanceRepo, deliveriesRepo, ncfRepo,
-  financialAccountsRepo, accountingRepo
+  financialAccountsRepo, accountingRepo, conduceRepo
 } = require('./database');
 
 const {
-  APP_VERSION, initVersioning,
+  APP_VERSION, initVersioning, seedAccountingCatalog,
   createManualBackup, createAutoBackup, restoreBackup, getVersionInfo
 } = require('./versioning');
 
@@ -1099,63 +1099,82 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, pageHint }) 
     webPreferences: { nodeIntegration: false, contextIsolation: true },
   });
 
-  await new Promise((resolve, reject) => {
-    const loadTimeout = setTimeout(() => {
-      printWin.destroy();
-      reject(new Error('Tiempo agotado cargando el documento de impresión'));
-    }, 12000);
-    printWin.webContents.once('did-finish-load', () => { clearTimeout(loadTimeout); resolve(); });
-    printWin.webContents.once('did-fail-load', (_, __, errDesc) => {
-      clearTimeout(loadTimeout);
-      printWin.destroy();
-      reject(new Error(errDesc || 'No se pudo cargar el documento'));
-    });
-    printWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
-  });
+  // Cargar desde ARCHIVO TEMPORAL, no desde data: URL. Los data: URLs son una
+  // causa conocida de impresión en blanco en Electron/Chromium: el documento de
+  // impresión no siempre recibe el frame renderizado. Un archivo local se imprime
+  // de forma fiable en todas las plataformas.
+  const os = require('os');
+  const tmpFile = path.join(os.tmpdir(), `velo_print_${Date.now()}_${Math.random().toString(36).slice(2)}.html`);
+  const cleanupTmp = () => { try { fs.unlinkSync(tmpFile); } catch {} };
+  fs.writeFileSync(tmpFile, html, 'utf8');
 
-  // Carta necesita más tiempo para renderizar CSS/tablas/logo que una térmica simple
-  await new Promise(r => setTimeout(r, isThermal ? 350 : 600));
-  // printerWidth puede llegar como "50mm" (string) o como número en micrones
-  // Convertir siempre a micrones (enteros) que es lo que espera Electron
-  let paperWidth = 80000; // default 80mm en micrones
-  if (printerWidth) {
-    if (typeof printerWidth === 'string' && printerWidth.endsWith('mm')) {
-      paperWidth = Math.round(parseFloat(printerWidth) * 1000); // mm → micrones
-    } else if (typeof printerWidth === 'number') {
-      paperWidth = printerWidth;
-    } else {
-      paperWidth = parseInt(printerWidth) || 80000;
+  try {
+    await new Promise((resolve, reject) => {
+      const loadTimeout = setTimeout(() => reject(new Error('Tiempo agotado cargando el documento de impresión')), 12000);
+      printWin.webContents.once('did-finish-load', () => { clearTimeout(loadTimeout); resolve(); });
+      printWin.webContents.once('did-fail-load', (_, __, errDesc) => {
+        clearTimeout(loadTimeout);
+        reject(new Error(errDesc || 'No se pudo cargar el documento'));
+      });
+      printWin.loadFile(tmpFile);
+    });
+
+    // Esperar a que la página realmente PINTE (dos frames), no solo un delay fijo.
+    try {
+      await printWin.webContents.executeJavaScript(
+        'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))'
+      );
+    } catch {}
+    await new Promise(r => setTimeout(r, isThermal ? 250 : 500));
+
+    // Ancho del papel en micrones (printerWidth puede venir "50mm" o número)
+    let paperWidth = 80000;
+    if (printerWidth) {
+      if (typeof printerWidth === 'string' && printerWidth.endsWith('mm')) paperWidth = Math.round(parseFloat(printerWidth) * 1000);
+      else if (typeof printerWidth === 'number') paperWidth = printerWidth;
+      else paperWidth = parseInt(printerWidth) || 80000;
     }
-  }
-  const printOptions = {
-    // silent:true en térmica = sin diálogo del sistema (imprime directo)
-    // silent:false en A4 = muestra diálogo para que el usuario elija papel
-    silent:          isThermal,
-    printBackground: true,
-    margins:         isThermal
-      ? { marginType: 'custom', top: 2, bottom: 2, left: 2, right: 2 }
-      : { marginType: 'default' },
-    pageSize: isThermal
-      // height muy grande para que el corte automático de la térmica lo maneje
-      ? { width: paperWidth, height: 999999 }
-      // pageHint 'half-letter' → media carta (5.5"×4.25" = 139700×107950 micrones)
-      : pageHint === 'half-letter'
-        ? { width: 139700, height: 107950 }
-        : 'Letter',
-  };
 
-  if (printerName) {
-    printOptions.deviceName = printerName;
-  }
+    // Térmica: altura del papel = altura REAL del contenido. Antes se usaba
+    // height:999999 (~1 metro), que en muchos drivers térmicos deja salir hojas
+    // en blanco o rechaza el trabajo. Medir el contenido lo hace exacto.
+    // 1px ≈ 264.58 micrones a 96dpi.
+    let thermalHeight = 200000;
+    try {
+      const px = await printWin.webContents.executeJavaScript('document.body.scrollHeight');
+      if (px && px > 0) thermalHeight = Math.round(px * 264.583) + 8000;  // +~3mm de margen
+    } catch {}
 
-  await new Promise((resolve, reject) => {
-    printWin.webContents.print(printOptions, (success, errType) => {
-      printWin.destroy();
-      if (success) resolve();
-      else reject(new Error(errType || 'Impresión cancelada o fallida'));
+    const printOptions = {
+      // Imprime DIRECTO (sin diálogo) siempre que haya una impresora elegida —
+      // aplica tanto a térmica como a carta/láser. El diálogo solo aparece si no
+      // se configuró ninguna impresora (deviceName vacío).
+      silent:          !!printerName,
+      printBackground: true,
+      margins:         isThermal
+        ? { marginType: 'custom', top: 2, bottom: 2, left: 2, right: 2 }
+        : { marginType: 'default' },
+      pageSize: isThermal
+        ? { width: paperWidth, height: thermalHeight }
+        : pageHint === 'half-letter'
+          ? { width: 139700, height: 107950 }
+          : 'Letter',
+    };
+    if (printerName) printOptions.deviceName = printerName;
+
+    logInfo('print', `Imprimiendo`, { printer: printerName || '(dialogo)', thermal: isThermal, paperWidth, height: isThermal ? thermalHeight : 'letter' });
+
+    await new Promise((resolve, reject) => {
+      printWin.webContents.print(printOptions, (success, errType) => {
+        if (success) resolve();
+        else reject(new Error(errType || 'Impresión cancelada o fallida'));
+      });
     });
-  });
-
+    logInfo('print', `Enviado a impresora`, { printer: printerName || 'dialogo' });
+  } finally {
+    try { printWin.destroy(); } catch {}
+    cleanupTmp();
+  }
 }
 
 ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, jobType, referenceId, userId, pageHint }) => {
@@ -1196,6 +1215,57 @@ ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, jobTyp
       } catch {}
     }
     console.error('[print:html]', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
+// Guardar un documento como PDF (mismo HTML que se imprime) con diálogo "Guardar como".
+// Universal: sirve para factura, cotización, conduce, abono, reportes, etc.
+ipcMain.handle('print:toPDF', async (_, { html, suggestedName, open } = {}) => {
+  try {
+    if (!html) return { ok: false, error: 'Sin contenido para el PDF' };
+    const os = require('os');
+    const tmpFile = path.join(os.tmpdir(), `velo_pdf_${Date.now()}_${Math.random().toString(36).slice(2)}.html`);
+    fs.writeFileSync(tmpFile, html, 'utf8');
+    const win = new BrowserWindow({ show: false, width: 816, height: 1056,
+      webPreferences: { nodeIntegration: false, contextIsolation: true } });
+
+    let pdfBuf;
+    try {
+      await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('Tiempo agotado generando el PDF')), 12000);
+        win.webContents.once('did-finish-load', () => { clearTimeout(t); resolve(); });
+        win.webContents.once('did-fail-load', (_, __, e) => { clearTimeout(t); reject(new Error(e || 'No se pudo cargar')); });
+        win.loadFile(tmpFile);
+      });
+      await win.webContents.executeJavaScript(
+        'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => {});
+      // Página a la medida del contenido (documento compacto, sin hojas en blanco).
+      let dims = { w: 302, h: 800 };
+      try { dims = await win.webContents.executeJavaScript('({w:document.body.scrollWidth,h:document.body.scrollHeight})'); } catch {}
+      const micron = px => Math.max(20000, Math.round((px || 0) * 264.583));
+      pdfBuf = await win.webContents.printToPDF({
+        printBackground: true,
+        pageSize: { width: micron(dims.w) + 4000, height: micron(dims.h) + 4000 },
+        margins: { top: 0, bottom: 0, left: 0, right: 0 },
+      });
+    } finally {
+      try { win.destroy(); } catch {}
+      try { fs.unlinkSync(tmpFile); } catch {}
+    }
+
+    const safeName = String(suggestedName || 'documento').replace(/[^\w\-. ]/g, '_');
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+      title: 'Guardar PDF',
+      defaultPath: safeName.endsWith('.pdf') ? safeName : safeName + '.pdf',
+      filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    });
+    if (canceled || !filePath) return { ok: false, canceled: true };
+    fs.writeFileSync(filePath, pdfBuf);
+    if (open) { try { shell.openPath(filePath); } catch {} }
+    return { ok: true, path: filePath };
+  } catch (e) {
+    console.error('[print:toPDF]', e.message);
     return { ok: false, error: e.message };
   }
 });
@@ -1378,6 +1448,14 @@ ipcMain.handle('business:resetData', async (_, { requestUserId }) => {
       db.prepare(`INSERT INTO customers(name,rnc,credit_limit,balance,active) VALUES('Consumidor Final','',0,0,1)`).run();
       console.log('[reset] Consumidor Final recreado con id=1');
     } catch(e) { console.error('[reset] Error recreando Consumidor Final:', e.message); }
+
+    // Re-sembrar el catálogo contable — el reset borró accounting_accounts/config.
+    // El plan de cuentas es estructura, no datos del negocio, así que debe
+    // persistir. Idempotente: no duplica si ya existiera.
+    try {
+      const n = seedAccountingCatalog(db);
+      console.log(`[reset] Catálogo contable re-sembrado (${n} cuentas)`);
+    } catch(e) { console.error('[reset] Error re-sembrando catálogo contable:', e.message); }
 
     console.log('[reset] Datos del negocio eliminados por:', reqUser.name);
     return { ok: true };
@@ -2573,11 +2651,8 @@ ipcMain.handle('vehicles:delete', async (_, { id, requestUserId }) => {
 });
 ipcMain.handle('vehicles:calcFuel', async (_, { vehicleId, distanceKm, requestUserId }) => {
   try {
-    const fuelPrices = {
-      premium: settingsRepo.get('fuel_price_premium') || '293',
-      regular: settingsRepo.get('fuel_price_regular') || '276',
-      diesel:  settingsRepo.get('fuel_price_diesel')  || '239',
-    };
+    // Fuente única: precio real de Presto (caché 6h). Antes usaba settings viejos.
+    const fuelPrices = (await getFuelPricesCached()).data;
     const result = vehiclesRepo.calcFuelCost(vehicleId, distanceKm, fuelPrices);
     return { ok:true, data: result };
   } catch(e) { return { ok:false, error:e.message }; }
@@ -2634,13 +2709,11 @@ ipcMain.handle('deliveries:create', async (_, { data, requestUserId }) => {
     const u = authRepo.findById(requestUserId);
     if (!u) return { ok:false, error:'Sin sesión' };
     data.user_id = requestUserId;
-    // Calcular combustible si tiene vehículo y distancia
+    // Calcular combustible si tiene vehículo y distancia.
+    // Fuente única: precio real de Presto (caché 6h). Así lo que se GUARDA en el
+    // envío coincide con lo que el usuario vio en el modal (que ya usa precio live).
     if (data.vehicle_id && data.distance_km) {
-      const fuelPrices = {
-        premium: settingsRepo.get('fuel_price_premium') || '293',
-        regular: settingsRepo.get('fuel_price_regular') || '276',
-        diesel:  settingsRepo.get('fuel_price_diesel')  || '239',
-      };
+      const fuelPrices = (await getFuelPricesCached()).data;
       const calc = vehiclesRepo.calcFuelCost(data.vehicle_id, data.distance_km, fuelPrices);
       if (calc) { data.fuel_used = calc.gallons; data.fuel_cost = calc.cost; }
     }
@@ -2657,6 +2730,151 @@ ipcMain.handle('deliveries:updateStatus', async (_, { id, status, requestUserId 
     audit(requestUserId, u.name, `envio_${status}`, 'deliveries', id, '');
     return { ok:true };
   } catch(e) { return { ok:false, error:e.message }; }
+});
+
+// Geocoding + distancia por carretera.
+// DEBE correr en el proceso main: el CSP del renderer (connect-src 'self')
+// bloquea todo fetch externo, por eso desde envios.js daba "Failed to fetch".
+// Aquí usamos net.fetch (Electron), que no está sujeto al CSP.
+ipcMain.handle('deliveries:geocode', async (_, { address, originLat, originLng } = {}) => {
+  try {
+    if (!address || !String(address).trim()) return { ok: false, error: 'Ingresa una dirección primero' };
+    const { net } = require('electron');
+    const q = encodeURIComponent(String(address).trim() + ', República Dominicana');
+
+    // 1) Geocoding con Nominatim (OpenStreetMap). Requiere User-Agent identificable.
+    const geoRes = await net.fetch(
+      `https://nominatim.openstreetmap.org/search?q=${q}&format=json&limit=1`,
+      { headers: { 'User-Agent': 'VeloPOS/1.10 (soporte@velopos.do)' }, signal: AbortSignal.timeout(10000) }
+    );
+    if (!geoRes.ok) return { ok: false, error: `Servicio de mapas no disponible (${geoRes.status})` };
+    const geo = await geoRes.json();
+    if (!Array.isArray(geo) || geo.length === 0) {
+      return { ok: false, error: 'Dirección no encontrada. Intenta ser más específico.' };
+    }
+    const lat = parseFloat(geo[0].lat), lng = parseFloat(geo[0].lon);
+    const display_name = geo[0].display_name || String(address);
+
+    // 2) Distancia por carretera con OSRM. Origen configurable (default: Santiago).
+    const oLat = Number.isFinite(originLat) ? originLat : 19.2207;
+    const oLng = Number.isFinite(originLng) ? originLng : -70.5291;
+    let distance_km = null;
+    try {
+      const osrmRes = await net.fetch(
+        `https://router.project-osrm.org/route/v1/driving/${oLng},${oLat};${lng},${lat}?overview=false`,
+        { signal: AbortSignal.timeout(10000) }
+      );
+      if (osrmRes.ok) {
+        const osrm = await osrmRes.json();
+        if (osrm && osrm.routes && osrm.routes[0]) {
+          distance_km = Math.round((osrm.routes[0].distance / 1000) * 10) / 10;
+        }
+      }
+    } catch {}
+
+    return { ok: true, lat, lng, display_name, distance_km };
+  } catch (e) {
+    return { ok: false, error: 'No se pudo conectar al servicio de mapas: ' + e.message };
+  }
+});
+
+// ══════════════════════════════════════════════
+// IPC — CONDUCE / NOTA DE ENTREGA
+// ──────────────────────────────────────────────
+// Documento de entrega. NO fiscal (sin NCF/ITBIS/CxC) y NO mueve inventario.
+// Permisos: crear/ver por cualquier sesión; anular solo admin/superadmin.
+// Toda acción sensible se audita con estado anterior → nuevo.
+// ══════════════════════════════════════════════
+ipcMain.handle('conduce:getAll', async (_, filters = {}) => {
+  try { return { ok: true, data: conduceRepo.getAll(filters || {}) }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('conduce:getById', async (_, { id }) => {
+  try { return { ok: true, data: conduceRepo.getById(id) }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('conduce:generateNumber', async () => {
+  try { return { ok: true, number: conduceRepo.generateNumber() }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('conduce:create', async (_, { header = {}, items = [], requestUserId } = {}) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u) return { ok: false, error: 'Sin sesión' };
+    if (!Array.isArray(items) || items.length === 0) return { ok: false, error: 'El conduce debe tener al menos un producto' };
+    const id = conduceRepo.create({ header, items, userId: requestUserId });
+    const dn = conduceRepo.getById(id);
+    audit(requestUserId, u.name, 'conduce_creado', 'delivery_notes', id,
+      `${dn.number} · ${dn.customer_name} · ${items.length} líneas`);
+    return { ok: true, id, data: dn };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('conduce:update', async (_, { id, header = {}, items = null, requestUserId } = {}) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u) return { ok: false, error: 'Sin sesión' };
+    const dn = conduceRepo.update(id, { header, items });
+    audit(requestUserId, u.name, 'conduce_editado', 'delivery_notes', id, dn.number);
+    return { ok: true, data: dn };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('conduce:setStatus', async (_, { id, status, data = {}, requestUserId } = {}) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u) return { ok: false, error: 'Sin sesión' };
+    const prev = conduceRepo.getById(id);
+    if (!prev) return { ok: false, error: 'Conduce no encontrado' };
+    const dn = conduceRepo.setStatus(id, status, { ...data, userId: requestUserId });
+    audit(requestUserId, u.name, `conduce_${status}`, 'delivery_notes', id,
+      `${dn.number}: ${prev.status} → ${status}`);
+    return { ok: true, data: dn };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('conduce:cancel', async (_, { id, reason, requestUserId } = {}) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin', 'superadmin'].includes(u.role)) {
+      return { ok: false, error: 'Solo admin puede anular un conduce' };
+    }
+    const prev = conduceRepo.getById(id);
+    if (!prev) return { ok: false, error: 'Conduce no encontrado' };
+    const dn = conduceRepo.cancel(id, { userId: requestUserId, reason });
+    audit(requestUserId, u.name, 'conduce_anulado', 'delivery_notes', id,
+      `${dn.number}: ${prev.status} → anulado · Motivo: ${(reason || '').trim()}`);
+    return { ok: true, data: dn };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+// Vista previa de lo facturable (por línea) — para la UI de facturación parcial.
+ipcMain.handle('conduce:invoiceable', async (_, { id } = {}) => {
+  try { return { ok: true, data: conduceRepo.invoiceableLines(id) }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+// Facturar desde conduce: crea la factura (descuenta stock 1 vez) + enlaza.
+ipcMain.handle('conduce:invoice', async (_, { id, lines = null, payment = {}, priceMode = 'retail', sessionId = null, requestUserId } = {}) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u) return { ok: false, error: 'Sin sesión' };
+    // Caja abierta para la factura (igual que una venta normal)
+    const session = cashRepo.getOpen ? cashRepo.getOpen() : (sessionId ? { id: sessionId } : null);
+    const res = conduceRepo.invoiceFromConduce({
+      conduceId: id, lines, payment, priceMode,
+      session, user: { id: u.id, name: u.name },
+    });
+    audit(requestUserId, u.name, 'conduce_facturado', 'delivery_notes', id,
+      `${res.conduce.number} → factura #${res.saleId} · Total: ${res.total}`);
+    return { ok: true, ...res };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+// Generar un conduce a partir de una cotización o factura existente.
+ipcMain.handle('conduce:fromSale', async (_, { saleId, requestUserId } = {}) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u) return { ok: false, error: 'Sin sesión' };
+    const dn = conduceRepo.createFromSale(saleId, { userId: requestUserId });
+    audit(requestUserId, u.name, 'conduce_desde_venta', 'delivery_notes', dn.id,
+      `${dn.number} desde ${dn.source_type} #${saleId}`);
+    return { ok: true, data: dn };
+  } catch (e) { return { ok: false, error: e.message }; }
 });
 
 // ══════════════════════════════════════════════
@@ -3081,61 +3299,77 @@ ipcMain.handle('system:diagnose', async (_, { requestUserId } = {}) => {
 
 
 // ── Precio de combustible — scraping Presto + MICM ──────────────
-ipcMain.handle('fuel:getPrices', async () => {
-  const FALLBACK = {
-    premium:        335.10,  // semana 30 mayo - 6 junio 2026
-    regular:        307.50,  // Fuente: prestocombustibles.com / micm.gob.do
-    diesel:         287.10,  // Gasoil Óptimo
-    gasoil_regular: 259.80,
-    glp:            137.20,
-    gnv:             43.97,
-  };
+// ══════════════════════════════════════════════
+// PRECIOS DE COMBUSTIBLE — FUENTE ÚNICA: Presto (scraping) con caché en main
+// ──────────────────────────────────────────────
+// Una sola fuente para TODO el sistema (banner, costo/km, costo de envíos):
+// se scrapea prestocombustibles.com (respaldo: MICM). El resultado se cachea
+// 6h en el proceso main — los precios cambian una vez por semana (viernes),
+// así que 6h es "tiempo real" para este dato y evita golpear la web en cada
+// cálculo. getFuelPricesCached() es el ÚNICO punto de lectura de precios.
+// Red de seguridad si el scraping falla. Valores vigentes semana 27 jun - 3 jul 2026.
+const FUEL_FALLBACK = {
+  premium:        341.10,
+  regular:        310.50,
+  diesel:         293.10,  // Gasoil Óptimo
+  gasoil_regular: 262.80,
+  kerosene:       279.80,
+  glp:            137.20,
+  gnv:             43.97,
+};
 
-  const clean = str => {
-    if (!str) return null;
-    const n = parseFloat(String(str).replace(/[^\d.]/g, ''));
-    return (n > 50 && n < 1000) ? n : null;
-  };
+function _cleanFuelNum(str) {
+  if (!str) return null;
+  const n = parseFloat(String(str).replace(/[^\d.]/g, ''));
+  // GNV ronda los RD$44, así que el piso debe ser bajo; techo amplio por seguridad.
+  return (n > 10 && n < 2000) ? n : null;
+}
 
+// Baja los precios de la web. Devuelve { source, data } o null si nada sirve.
+async function _scrapeFuelPrices() {
   // ── FUENTE 1: prestocombustibles.com (tabla limpia) ───────────
   try {
     const res = await fetch('https://www.prestocombustibles.com/precios-combustibles/', {
       signal: AbortSignal.timeout(8000),
-      headers: { 'User-Agent': 'VeloPOS/1.5.5' }
+      headers: { 'User-Agent': 'VeloPOS/1.10' }
     });
     if (res.ok) {
       const html = await res.text();
+      // Estructura real de la tabla: <td>Gasolina Premium</td><td>RD$ 341.10</td>
+      // etiqueta → hasta 40 chars (cubre </td><td>) → 'RD$' número.
       const get = (label) => {
-        const rx = new RegExp(label + '[^|\\n]*[|:]\\s*RD\\$?\\s*([\\d,.]+)', 'i');
-        return clean(html.match(rx)?.[1]);
+        const rx = new RegExp(label + '[\\s\\S]{0,40}?RD\\$?\\s*([\\d.,]+)', 'i');
+        return _cleanFuelNum(html.match(rx)?.[1]);
       };
-      const premium = get('Gasolina Premium') || get('Premium');
-      const regular = get('Gasolina Regular') || get('Regular');
-      const diesel  = get('Gasoil .ptimo');
-      const gasoilR = get('Gasoil Regular');
-      const glp     = get('Gas Licuado') || get('GLP');
-      const gnv     = get('Gas Natural') || get('GNV');
+      const premium  = get('Gasolina Premium') || get('Premium');
+      const regular  = get('Gasolina Regular') || get('Regular');
+      const diesel   = get('Gasoil .ptimo');
+      const gasoilR  = get('Gasoil Regular');
+      const kerosene = get('Kerosene');
+      const glp      = get('Gas Licuado') || get('GLP');
+      const gnv      = get('Gas Natural') || get('GNV');
       if (premium && premium > 200) {
         return {
-          ok: true, source: 'prestocombustibles',
+          source: 'prestocombustibles',
           data: {
             premium,
             regular:        regular  || Math.round(premium * 0.917 * 10) / 10,
             diesel:         diesel   || Math.round(premium * 0.857 * 10) / 10,
             gasoil_regular: gasoilR  || Math.round(premium * 0.775 * 10) / 10,
-            glp:            glp      || FALLBACK.glp,
-            gnv:            gnv      || FALLBACK.gnv,
+            kerosene:       kerosene || FUEL_FALLBACK.kerosene,
+            glp:            glp      || FUEL_FALLBACK.glp,
+            gnv:            gnv      || FUEL_FALLBACK.gnv,
           }
         };
       }
     }
   } catch(e) { console.warn('[Fuel] Presto error:', e.message); }
 
-  // ── FUENTE 2: micm.gob.do (artículo más reciente) ─────────────
+  // ── FUENTE 2 (respaldo): micm.gob.do (artículo más reciente) ──
   try {
     const listRes = await fetch('https://micm.gob.do/tag/precios-de-combustible/', {
       signal: AbortSignal.timeout(8000),
-      headers: { 'User-Agent': 'VeloPOS/1.5.5' }
+      headers: { 'User-Agent': 'VeloPOS/1.10' }
     });
     if (listRes.ok) {
       const listHtml = await listRes.text();
@@ -3143,7 +3377,7 @@ ipcMain.handle('fuel:getPrices', async () => {
       if (urlMatch) {
         const artRes = await fetch(urlMatch[1], {
           signal: AbortSignal.timeout(8000),
-          headers: { 'User-Agent': 'VeloPOS/1.5.5' }
+          headers: { 'User-Agent': 'VeloPOS/1.10' }
         });
         if (artRes.ok) {
           const html    = await artRes.text();
@@ -3151,18 +3385,20 @@ ipcMain.handle('fuel:getPrices', async () => {
           const matchR  = html.match(/[Gg]asolina\s*[Rr]egular[^<\d]{0,40}([\d,.]+)/i);
           const matchDO = html.match(/[Gg]asoil\s*[ÓOo]ptimo[^<\d]{0,40}([\d,.]+)/i);
           const matchDR = html.match(/[Gg]asoil\s*[Rr]egular[^<\d]{0,40}([\d,.]+)/i);
+          const matchK  = html.match(/[Kk]erosene[^<\d]{0,40}([\d,.]+)/i);
           const matchG  = html.match(/[Gg][Ll][Pp][^<\d]{0,30}([\d,.]+)/i);
-          const premium = clean(matchP?.[1]);
+          const premium = _cleanFuelNum(matchP?.[1]);
           if (premium && premium > 200) {
             return {
-              ok: true, source: 'micm',
+              source: 'micm',
               data: {
                 premium,
-                regular:        clean(matchR?.[1])  || Math.round(premium * 0.917 * 10) / 10,
-                diesel:         clean(matchDO?.[1]) || Math.round(premium * 0.857 * 10) / 10,
-                gasoil_regular: clean(matchDR?.[1]) || Math.round(premium * 0.775 * 10) / 10,
-                glp:            clean(matchG?.[1])  || FALLBACK.glp,
-                gnv:            FALLBACK.gnv,
+                regular:        _cleanFuelNum(matchR?.[1])  || Math.round(premium * 0.917 * 10) / 10,
+                diesel:         _cleanFuelNum(matchDO?.[1]) || Math.round(premium * 0.857 * 10) / 10,
+                gasoil_regular: _cleanFuelNum(matchDR?.[1]) || Math.round(premium * 0.775 * 10) / 10,
+                kerosene:       _cleanFuelNum(matchK?.[1])  || FUEL_FALLBACK.kerosene,
+                glp:            _cleanFuelNum(matchG?.[1])  || FUEL_FALLBACK.glp,
+                gnv:            FUEL_FALLBACK.gnv,
               }
             };
           }
@@ -3171,8 +3407,31 @@ ipcMain.handle('fuel:getPrices', async () => {
     }
   } catch(e) { console.warn('[Fuel] MICM error:', e.message); }
 
-  // ── FALLBACK: precios verificados más recientes ────────────────
-  return { ok: true, source: 'fallback', data: FALLBACK };
+  return null;
+}
+
+// Caché de 6h en el proceso main. ÚNICO punto de lectura de precios de combustible.
+let _fuelCache   = null;   // { source, data }
+let _fuelCacheTs = 0;
+const FUEL_CACHE_MS = 6 * 60 * 60 * 1000;
+
+async function getFuelPricesCached(force = false) {
+  if (!force && _fuelCache && (Date.now() - _fuelCacheTs) < FUEL_CACHE_MS) {
+    return _fuelCache;
+  }
+  const fresh = await _scrapeFuelPrices();
+  if (fresh && fresh.data && fresh.data.premium > 100) {
+    _fuelCache   = fresh;
+    _fuelCacheTs = Date.now();
+    return _fuelCache;
+  }
+  // Falló el scraping: usar el último valor bueno si existe; si no, el fallback.
+  return _fuelCache || { source: 'fallback', data: FUEL_FALLBACK };
+}
+
+ipcMain.handle('fuel:getPrices', async () => {
+  const r = await getFuelPricesCached();
+  return { ok: true, source: r.source, data: r.data };
 });
 
 
@@ -3947,7 +4206,7 @@ ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) =>
       SELECT s.* FROM sales s
       WHERE s.status = 'completed'
       AND NOT EXISTS (
-        SELECT 1 FROM accounting_entries ae WHERE ae.ref_type = 'sale' AND ae.ref_id = s.id
+        SELECT 1 FROM accounting_entries ae WHERE ae.source_module = 'venta' AND ae.source_id = s.id
       )
       ORDER BY s.created_at ASC
       LIMIT 500
@@ -3966,7 +4225,7 @@ ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) =>
       SELECT e.* FROM expenses e
       WHERE e.status = 'pagado'
       AND NOT EXISTS (
-        SELECT 1 FROM accounting_entries ae WHERE ae.ref_type = 'expense' AND ae.ref_id = e.id
+        SELECT 1 FROM accounting_entries ae WHERE ae.source_module = 'gasto' AND ae.source_id = e.id
       )
       ORDER BY e.created_at ASC
       LIMIT 500

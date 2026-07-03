@@ -455,27 +455,21 @@ function modalNuevoEnvio(parentEl, vehiculos) {
       btnGeo.textContent = '⏳ Buscando...';
       const mapResult = document.getElementById('e-map-result');
       try {
-        const geoUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(addr + ', República Dominicana')}&format=json&limit=1`;
-        const geoRes = await fetch(geoUrl, { headers: { 'User-Agent': 'VeloPOS/1.5' } });
-        const geo    = await geoRes.json();
-        if (!geo.length) throw new Error('Dirección no encontrada. Intenta ser más específico.');
-        const lat = parseFloat(geo[0].lat), lng = parseFloat(geo[0].lon);
+        // El geocoding corre en el proceso main (vía IPC): el CSP del renderer
+        // bloquea los fetch externos, por eso antes daba "Failed to fetch".
+        const res = await window.api.deliveries.geocode({ address: addr });
+        if (!res?.ok) throw new Error(res?.error || 'No se pudo buscar la dirección');
+        const { lat, lng, display_name } = res;
+        const distKm = res.distance_km != null ? String(res.distance_km) : null;
         document.getElementById('e-lat').value = lat;
         document.getElementById('e-lng').value = lng;
-        const originLat = 19.2207, originLng = -70.5291;
-        const osrmRes  = await fetch(`https://router.project-osrm.org/route/v1/driving/${originLng},${originLat};${lng},${lat}?overview=false`);
-        const osrmData = await osrmRes.json();
-        let distKm = null;
-        if (osrmData?.routes?.[0]) {
-          distKm = (osrmData.routes[0].distance / 1000).toFixed(1);
-          document.getElementById('e-distance').value = distKm;
-        }
+        if (distKm != null) document.getElementById('e-distance').value = distKm;
         mapResult.style.display = 'block';
         mapResult.style.background = 'var(--bg2)';
         mapResult.style.borderColor = 'var(--line2)';
         mapResult.innerHTML = `
-          📍 <strong>${geo[0].display_name.split(',').slice(0,3).join(', ')}</strong><br>
-          ${distKm ? `📏 Distancia estimada: <strong>${distKm} km</strong>` : ''}
+          📍 <strong>${(display_name || '').split(',').slice(0,3).join(', ')}</strong><br>
+          ${distKm != null ? `📏 Distancia estimada: <strong>${distKm} km</strong>` : ''}
           <br><a href="https://www.google.com/maps?q=${lat},${lng}" target="_blank"
             style="color:var(--blue);font-size:11px">Ver en Google Maps ↗</a>`;
         // Si es vehículo propio, calcular combustible
@@ -608,8 +602,28 @@ function _eModal(titulo, html, onConfirm, confirmLabel = 'Guardar') {
       </div>
     </div>`;
   document.body.appendChild(overlay);
-  overlay.querySelector('#em-close')?.addEventListener('click',  () => overlay.remove());
-  overlay.querySelector('#em-cancel')?.addEventListener('click', () => overlay.remove());
+  // Protección de datos sin guardar (misma lógica global que openModal):
+  // snapshot inicial + cierre inteligente. _snapshotForm/_formIsDirty/etc. son
+  // globales (definidos en app.js) y se invocan en tiempo de click.
+  const _snap = (typeof _snapshotForm === 'function') ? _snapshotForm(overlay) : null;
+  const box   = overlay.firstElementChild;
+  const tryClose = async () => {
+    if (_snap && typeof _formIsDirty === 'function' && _formIsDirty(_snap)) {
+      if (typeof _confirmDiscard === 'function' && !(await _confirmDiscard())) return;
+    }
+    overlay.remove();
+  };
+  // Click en el backdrop: cierra solo si está limpio; si hay datos, shake y no cierra.
+  overlay.addEventListener('click', e => {
+    if (e.target !== overlay) return;
+    if (_snap && typeof _formIsDirty === 'function' && _formIsDirty(_snap)) {
+      if (typeof _shakeEl === 'function') _shakeEl(box);
+      return;
+    }
+    overlay.remove();
+  });
+  overlay.querySelector('#em-close')?.addEventListener('click',  tryClose);
+  overlay.querySelector('#em-cancel')?.addEventListener('click', tryClose);
   overlay.querySelector('#em-confirm')?.addEventListener('click', async () => {
     const btn = overlay.querySelector('#em-confirm');
     btn.disabled = true; btn.textContent = 'Guardando...';
