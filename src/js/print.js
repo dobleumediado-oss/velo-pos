@@ -321,6 +321,125 @@ function printConduce(sale) {
 }
 
 // ══════════════════════════════════════════════
+// CONDUCE FORMAL — documento de entrega (del módulo de Conduces)
+// ──────────────────────────────────────────────
+// Documento profesional para firmar en la entrega. NO fiscal: sin NCF, sin
+// ITBIS, sin total a pagar, sin forma de pago, sin balance. Lleva la leyenda
+// obligatoria "NO VÁLIDO COMO FACTURA". Precios de referencia: solo si
+// conduce_show_prices='1' (apagado por defecto). Pasa por _openPrintWindow,
+// así respeta la impresora configurada y la intercepción de "Guardar PDF".
+// ══════════════════════════════════════════════
+function printConduceDoc(dn) {
+  if (!dn) return;
+  const s = (typeof DB !== 'undefined' && DB.settings) || {};
+  const biz   = s.biz_name || (typeof CFG !== 'undefined' && CFG.biz)   || 'Mi Negocio';
+  const rnc   = s.biz_rnc  || (typeof CFG !== 'undefined' && CFG.rnc)   || '';
+  const addr  = s.biz_addr || (typeof CFG !== 'undefined' && CFG.addr)  || '';
+  const phone = s.biz_phone|| (typeof CFG !== 'undefined' && CFG.phone) || '';
+  const logo  = s.biz_logo || '';
+  const showPrices = s.conduce_show_prices === '1';
+  const esc = _escHtml;
+
+  const STL = {
+    borrador:'Borrador', preparado:'Preparado', despachado:'Despachado', parcial:'Parcial',
+    entregado:'Entregado', facturado:'Facturado', anulado:'Anulado', devuelto:'Devuelto',
+  };
+  const origen = { manual:'Manual', cotizacion:'Cotización', factura:'Factura' };
+
+  const itemsRows = (dn.items || []).map((it, i) => `
+    <tr>
+      <td style="text-align:center">${i + 1}</td>
+      <td class="mono">${esc(it.sku || '')}</td>
+      <td>${esc(it.description || '')}${it.notes ? `<div class="obs">${esc(it.notes)}</div>` : ''}</td>
+      <td style="text-align:center">${it.requested_qty}${(it.delivered_qty && it.delivered_qty !== it.requested_qty) ? ` <span class="obs">(entreg. ${it.delivered_qty})</span>` : ''}</td>
+      <td style="text-align:center">${esc(it.unit || 'und')}</td>
+      ${showPrices ? `<td style="text-align:right">—</td>` : ''}
+    </tr>`).join('');
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
+<title>Conduce ${esc(dn.number || '')}</title>
+<style>
+  @page { size: letter; margin: 12mm; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; color:#111; font-size:12px; }
+  .head { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #111; padding-bottom:8px; margin-bottom:10px; }
+  .biz { font-size:17px; font-weight:800; }
+  .muted { color:#555; font-size:11px; }
+  .mono { font-family:'Courier New',monospace; font-size:11px; }
+  .doc-title { text-align:right; }
+  .doc-title .t { font-size:16px; font-weight:800; letter-spacing:.5px; }
+  .doc-title .n { font-size:14px; font-weight:700; }
+  .legend { background:#fff7ed; border:1.5px solid #f59e0b; color:#92400e; text-align:center;
+            font-weight:800; font-size:12px; padding:7px; border-radius:6px; margin-bottom:12px; letter-spacing:.3px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:4px 18px; margin-bottom:12px; font-size:12px; }
+  .grid .k { color:#555; }
+  .grid .row { display:flex; gap:6px; }
+  .grid .row b { min-width:auto; }
+  table.items { width:100%; border-collapse:collapse; margin-bottom:16px; }
+  table.items th { background:#f3f4f6; text-align:left; padding:6px 8px; font-size:11px; border-bottom:1px solid #d1d5db; }
+  table.items td { padding:6px 8px; border-bottom:1px solid #eee; vertical-align:top; }
+  .obs { color:#777; font-size:10px; }
+  .signs { display:flex; gap:40px; margin-top:34px; }
+  .sign { flex:1; text-align:center; }
+  .sign .line { border-top:1px solid #111; margin-top:26px; padding-top:5px; font-size:11px; color:#333; }
+  .foot { margin-top:18px; text-align:center; color:#888; font-size:10px; }
+</style></head>
+<body>
+  <div class="head">
+    <div style="display:flex; gap:10px; align-items:flex-start">
+      ${logo ? `<img src="${logo}" style="max-width:70px;max-height:60px;object-fit:contain"/>` : ''}
+      <div>
+        <div class="biz">${esc(biz)}</div>
+        ${rnc ? `<div class="muted">RNC: ${esc(rnc)}</div>` : ''}
+        ${addr ? `<div class="muted">${esc(addr)}</div>` : ''}
+        ${phone ? `<div class="muted">Tel: ${esc(phone)}</div>` : ''}
+      </div>
+    </div>
+    <div class="doc-title">
+      <div class="t">CONDUCE</div>
+      <div class="muted">NOTA DE ENTREGA</div>
+      <div class="n">${esc(dn.number || '')}</div>
+      <div class="muted">${esc(dn.issue_date || '')}</div>
+    </div>
+  </div>
+
+  <div class="legend">CONDUCE / NOTA DE ENTREGA — NO VÁLIDO COMO FACTURA. ESTE DOCUMENTO NO TIENE VALOR FISCAL.</div>
+
+  <div class="grid">
+    <div class="row"><span class="k">Cliente:</span> <b>${esc(dn.customer_name || 'Consumidor Final')}</b></div>
+    <div class="row"><span class="k">Estado:</span> <b>${STL[dn.status] || dn.status}</b></div>
+    ${dn.customer_rnc ? `<div class="row"><span class="k">RNC/Céd.:</span> <b>${esc(dn.customer_rnc)}</b></div>` : '<div></div>'}
+    <div class="row"><span class="k">Origen:</span> <b>${origen[dn.source_type] || dn.source_type}${dn.source_id ? ' #' + dn.source_id : ''}</b></div>
+    ${dn.delivery_address ? `<div class="row" style="grid-column:1/3"><span class="k">Dirección de entrega:</span> <b>${esc(dn.delivery_address)}</b></div>` : ''}
+    ${dn.driver_name ? `<div class="row"><span class="k">Chofer:</span> <b>${esc(dn.driver_name)}</b></div>` : ''}
+    ${dn.vehicle_plate ? `<div class="row"><span class="k">Vehículo:</span> <b>${esc(dn.vehicle_plate)}</b></div>` : ''}
+    ${dn.notes ? `<div class="row" style="grid-column:1/3"><span class="k">Observaciones:</span> <b>${esc(dn.notes)}</b></div>` : ''}
+  </div>
+
+  <table class="items">
+    <thead><tr>
+      <th style="width:28px">#</th><th style="width:90px">Código</th><th>Descripción</th>
+      <th style="width:70px;text-align:center">Cantidad</th><th style="width:56px;text-align:center">Unidad</th>
+      ${showPrices ? '<th style="width:80px;text-align:right">Ref.</th>' : ''}
+    </tr></thead>
+    <tbody>${itemsRows || `<tr><td colspan="${showPrices ? 6 : 5}" style="text-align:center;color:#888;padding:16px">Sin artículos</td></tr>`}</tbody>
+  </table>
+
+  <div class="signs">
+    <div class="sign"><div class="line">Entregado por</div></div>
+    <div class="sign">
+      <div class="line">Recibido por${dn.received_by_name ? ': ' + esc(dn.received_by_name) : ''}</div>
+      <div class="obs" style="margin-top:3px">Cédula: ${esc(dn.received_by_document || '____________________')}</div>
+    </div>
+  </div>
+
+  <div class="foot">Documento de entrega — sin valor fiscal · Generado por ${esc(biz)}</div>
+</body></html>`;
+
+  _openPrintWindow(html, 'conduce', dn.id, false);
+}
+
+// ══════════════════════════════════════════════
 // RECIBO DE ABONO 80MM
 // ══════════════════════════════════════════════
 function printAbono({ payment, customer, cajero }) {
