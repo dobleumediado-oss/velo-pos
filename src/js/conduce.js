@@ -54,7 +54,10 @@ function _cndRenderList(el, list) {
       h('div', { class: 'sec-title' }, 'Conduces / Notas de Entrega'),
       h('div', { class: 'sec-sub' }, `${list.length} conduce${list.length !== 1 ? 's' : ''} · documento no fiscal`)
     ),
-    h('button', { class: 'btn btn-dark', onclick: () => _cndOpenForm(), html: `${svg('plus')} Nuevo conduce` })
+    h('div', { class: 'flex', style: { gap: '8px' } },
+      h('button', { class: 'btn btn-out', onclick: () => _cndReports(), html: `${svg('chart')} Reportes` }),
+      h('button', { class: 'btn btn-dark', onclick: () => _cndOpenForm(), html: `${svg('plus')} Nuevo conduce` })
+    )
   ));
 
   // Métricas por estado
@@ -494,6 +497,55 @@ async function _cndSave(id) {
   toast(id ? '✓ Conduce actualizado' : `✓ Conduce ${r.data?.number || ''} creado`);
   closeModal();
   renderConduce(document.getElementById('page'));
+}
+
+// ── Reportes de conduce ───────────────────────
+async function _cndReports() {
+  const res = await window.api.conduce.reports({});
+  const r = res?.data;
+  if (!r) { toast('No se pudieron cargar los reportes', 'err'); return; }
+
+  const miniTable = (rows, cols) => rows.length
+    ? `<div class="tw" style="max-height:150px;overflow:auto"><table><thead><tr>${cols.map(c => `<th>${c.h}</th>`).join('')}</tr></thead>
+        <tbody>${rows.map(row => `<tr>${cols.map(c => `<td style="${c.style || ''}">${c.f(row)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`
+    : `<div style="color:var(--muted2);font-size:12px;padding:8px">Sin registros</div>`;
+
+  const docCols = [
+    { h: 'Número', f: x => `<strong>${_cndEsc(x.number)}</strong>`, style: 'font-family:var(--mono);font-size:11px' },
+    { h: 'Cliente', f: x => _cndEsc(x.customer_name || '') },
+    { h: 'Fecha', f: x => fdate(x.issue_date), style: 'font-size:11px;color:var(--muted)' },
+    { h: 'Estado', f: x => _cndBadge(x.status) },
+  ];
+
+  const section = (title, count, body) => `
+    <div style="font-weight:700;font-size:12px;margin:12px 0 6px">${title} ${count != null ? `<span style="color:var(--muted2)">(${count})</span>` : ''}</div>${body}`;
+
+  openModal(`
+    <div class="modal-title">${svg('chart')} Reportes de Conduce</div>
+    <div class="modal-sub">Estados, pendientes, por vendedor/cliente y más despachados</div>
+
+    <div class="metrics" style="grid-template-columns:repeat(4,1fr);margin:10px 0 4px">
+      ${['despachado','entregado','facturado','anulado'].map(st => {
+        const c = (r.byStatus.find(b => b.status === st) || {}).c || 0;
+        return `<div class="metric"><div class="met-label">${_cndStLabel(st)}</div><div class="met-val">${c}</div></div>`;
+      }).join('')}
+    </div>
+
+    ${section('Pendientes de facturar', r.pendientesFacturar.length, miniTable(r.pendientesFacturar, docCols))}
+    ${section('Despachados no entregados', r.despachadosNoEntregados.length, miniTable(r.despachadosNoEntregados, docCols))}
+    ${section('Entregados no facturados', r.entregadosNoFacturados.length, miniTable(r.entregadosNoFacturados, docCols))}
+    ${section('Anulados', r.anulados.length, miniTable(r.anulados, docCols))}
+    ${section('Por vendedor', null, miniTable(r.porVendedor, [
+      { h: 'Vendedor', f: x => _cndEsc(x.vendedor) }, { h: 'Conduces', f: x => x.c, style: 'text-align:center' }]))}
+    ${section('Por cliente', null, miniTable(r.porCliente, [
+      { h: 'Cliente', f: x => _cndEsc(x.customer_name) }, { h: 'Conduces', f: x => x.c, style: 'text-align:center' }]))}
+    ${section('Productos más despachados', null, miniTable(r.topProductos, [
+      { h: 'Producto', f: x => _cndEsc(x.description) },
+      { h: 'Cantidad', f: x => x.qty, style: 'text-align:center' },
+      { h: 'Conduces', f: x => x.conduces, style: 'text-align:center' }]))}
+
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
+  `, 'modal-lg');
 }
 
 // ── Impresión / Guardar PDF (usa el servicio central print.js) ──

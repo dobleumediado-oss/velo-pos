@@ -2865,6 +2865,11 @@ ipcMain.handle('conduce:invoice', async (_, { id, lines = null, payment = {}, pr
     return { ok: true, ...res };
   } catch (e) { return { ok: false, error: e.message }; }
 });
+// Reportes de conduce (agregaciones de solo lectura).
+ipcMain.handle('conduce:reports', async (_, filters = {}) => {
+  try { return { ok: true, data: conduceRepo.reports(filters || {}) }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
 // Generar un conduce a partir de una cotización o factura existente.
 ipcMain.handle('conduce:fromSale', async (_, { saleId, requestUserId } = {}) => {
   try {

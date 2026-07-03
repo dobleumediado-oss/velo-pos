@@ -3517,6 +3517,45 @@ const conduceRepo = {
     }
     return this.getById(id);
   },
+
+  // ── Reportes ─────────────────────────────────────────────────
+  // Agregaciones de solo lectura. Filtros opcionales: { from, to } por issue_date.
+  reports(filters = {}) {
+    const cond = [], p = [];
+    if (filters.from) { cond.push('issue_date >= ?'); p.push(filters.from); }
+    if (filters.to)   { cond.push('issue_date <= ?'); p.push(filters.to); }
+    const w = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
+    const list = (extra) => db.prepare(`
+      SELECT dn.id, dn.number, dn.customer_name, dn.issue_date, dn.status, dn.source_type, dn.source_id,
+             (SELECT COUNT(*) FROM delivery_note_items di WHERE di.delivery_note_id=dn.id) AS item_count
+      FROM delivery_notes dn ${w ? w + ' AND' : 'WHERE'} ${extra} ORDER BY dn.id DESC LIMIT 500
+    `).all(...p);
+
+    return {
+      byStatus: db.prepare(`SELECT status, COUNT(*) c FROM delivery_notes ${w} GROUP BY status`).all(...p),
+      // Pendientes de facturar: despachados/entregados/parciales aún no facturados.
+      pendientesFacturar:    list(`dn.status IN ('despachado','entregado','parcial')`),
+      despachadosNoEntregados: list(`dn.status='despachado'`),
+      entregadosNoFacturados:  list(`dn.status='entregado'`),
+      anulados:                list(`dn.status='anulado'`),
+      porVendedor: db.prepare(`
+        SELECT COALESCE(u.name,'—') AS vendedor, COUNT(*) c
+        FROM delivery_notes dn LEFT JOIN users u ON dn.created_by=u.id
+        ${w ? w + " AND" : "WHERE"} dn.status!='anulado' GROUP BY dn.created_by ORDER BY c DESC LIMIT 30
+      `).all(...p),
+      porCliente: db.prepare(`
+        SELECT customer_name, COUNT(*) c
+        FROM delivery_notes dn ${w ? w + " AND" : "WHERE"} status!='anulado'
+        GROUP BY customer_id, customer_name ORDER BY c DESC LIMIT 30
+      `).all(...p),
+      topProductos: db.prepare(`
+        SELECT di.description, SUM(di.requested_qty) qty, COUNT(DISTINCT di.delivery_note_id) conduces
+        FROM delivery_note_items di JOIN delivery_notes dn ON di.delivery_note_id=dn.id
+        ${w ? w + " AND" : "WHERE"} dn.status IN ('despachado','entregado','parcial','facturado')
+        GROUP BY di.product_id, di.description ORDER BY qty DESC LIMIT 30
+      `).all(...p),
+    };
+  },
 };
 
 // ══════════════════════════════════════════════

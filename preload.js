@@ -248,6 +248,7 @@ contextBridge.exposeInMainWorld('api', {
     invoiceable:    (d) => ipcRenderer.invoke('conduce:invoiceable', d),
     invoice:        (d) => ipcRenderer.invoke('conduce:invoice', d),
     fromSale:       (d) => ipcRenderer.invoke('conduce:fromSale', d),
+    reports:        (d) => ipcRenderer.invoke('conduce:reports', d),
   },
 
   // ── NCF Avanzado ─────────────────────────
