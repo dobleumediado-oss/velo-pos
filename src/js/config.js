@@ -594,6 +594,11 @@ async function renderConfiguracion(el) {
         previa antes de imprimir. "Auto-imprimir" solo aplica a tickets de venta — si lo
         desactivas, cada venta abrirá una vista previa en vez de imprimir directo.
       </div>
+      <div style="font-size:11px;color:#92400e;background:#fff7ed;border:1px solid #fcd9a5;border-radius:6px;padding:7px 9px;margin-bottom:10px">
+        ⚠ <strong>Reportes, Contabilidad y Bancos</strong> se imprimen en hoja tamaño carta.
+        No les asignes una impresora <strong>térmica (80/58&nbsp;mm)</strong> o saldrán mal
+        formateados — usa una impresora de hojas (láser/inkjet) para esas categorías.
+      </div>
       <table style="width:100%;border-collapse:collapse;font-size:12px">
         <thead><tr style="text-align:left;font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:.04em">
           <th style="padding:4px 6px">Módulo</th><th style="padding:4px 6px">Impresora</th>

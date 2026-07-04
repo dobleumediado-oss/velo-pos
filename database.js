@@ -2022,12 +2022,17 @@ const returnsRepo = {
         });
       }
 
-      // 8. Marcar venta original como 'returned' si todos los items fueron devueltos
-      const allReturned = items.every(i => {
-        const orig = originalItems.find(oi => oi.product_id === i.product_id);
-        return orig && i.qty >= orig.qty;
+      // 8. Marcar venta original como 'returned' solo si TODOS sus productos quedaron
+      // completamente devueltos, sumando ESTA devolución con las anteriores (yaDevuelto).
+      // Antes solo miraba los items de la tanda actual, así que devoluciones parciales
+      // en varias tandas nunca marcaban la venta como devuelta.
+      const currentReturn = {};
+      for (const i of items) currentReturn[i.product_id] = (currentReturn[i.product_id] || 0) + i.qty;
+      const allReturned = originalItems.every(oi => {
+        const totalDevuelto = (yaDevuelto[oi.product_id] || 0) + (currentReturn[oi.product_id] || 0);
+        return totalDevuelto >= oi.qty;
       });
-      if (allReturned && items.length >= originalItems.length) {
+      if (allReturned) {
         db.prepare(`UPDATE sales SET status='returned' WHERE id=?`).run(originalSaleId);
       }
 
@@ -2132,8 +2137,6 @@ const purchasesRepo = {
       const po = db.prepare(`SELECT * FROM purchase_orders WHERE id=?`).get(id);
       if (!po) throw new Error('Orden no encontrada');
       if (po.status === 'recibido') throw new Error('Esta orden ya fue recibida completamente');
-
-      let allReceived = true;
 
       for (const item of items) {
         if (!item.qty_received || item.qty_received <= 0) continue;
