@@ -866,6 +866,23 @@ const MIGRATIONS = [
       }
     }
   },
+  {
+    version: '1.11.4',
+    description: 'Fiscal: ncf_log.status/voided_at — marca NCF de factura anulada para el reporte 608',
+    run(db) {
+      // Idempotente (PRAGMA guard). status por defecto 'emitido' aplica también a
+      // las filas existentes. Sin try/catch que trague: si falla, el runner revierte.
+      const cols = db.prepare("PRAGMA table_info(ncf_log)").all().map(c => c.name);
+      if (!cols.includes('status')) {
+        db.exec("ALTER TABLE ncf_log ADD COLUMN status TEXT DEFAULT 'emitido'");
+        console.log('[MIGRATION 1.11.4] Columna status añadida a ncf_log');
+      }
+      if (!cols.includes('voided_at')) {
+        db.exec("ALTER TABLE ncf_log ADD COLUMN voided_at TEXT");
+        console.log('[MIGRATION 1.11.4] Columna voided_at añadida a ncf_log');
+      }
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

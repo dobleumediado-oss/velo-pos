@@ -1526,6 +1526,14 @@ const salesRepo = {
         UPDATE sales SET status='cancelled',cancelled_at=datetime('now'),cancel_reason=? WHERE id=?
       `).run(reason, id);
 
+      // Fiscal: si la venta tenía un NCF, marcarlo como anulado en ncf_log para que
+      // aparezca en el reporte 608 (comprobantes anulados). Aplica a facturas (B01/B02…)
+      // y también a notas de crédito B04 si alguna vez se anula una devolución.
+      if (sale.ncf && String(sale.ncf).trim()) {
+        db.prepare(`UPDATE ncf_log SET status='anulado', voided_at=datetime('now')
+                    WHERE sale_id=? AND ncf=? AND status!='anulado'`).run(id, String(sale.ncf).trim());
+      }
+
       // Reponer stock
       const items = db.prepare('SELECT * FROM sale_items WHERE sale_id=?').all(id);
       for (const item of items) {
@@ -2741,6 +2749,22 @@ const ncfRepo = {
     return db.prepare(`SELECT *, (to_num - current) as remaining FROM ncf_sequences
       WHERE active=1 AND (to_num - current) <= alert_at ORDER BY remaining ASC`).all();
   },
+  // ── Log de comprobantes (base para reportes 607/608) ──────────────────────
+  // status: 'emitido' (default) | 'anulado'. Filtros de fecha sobre issued_at.
+  getLog({ from, to, status, type } = {}) {
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    let q = `SELECT l.*, s.total, s.customer_name FROM ncf_log l
+             LEFT JOIN sales s ON l.sale_id = s.id WHERE 1=1`;
+    const p = [];
+    if (from && DATE_RE.test(from)) { q += ` AND date(l.issued_at) >= ?`; p.push(from); }
+    if (to   && DATE_RE.test(to))   { q += ` AND date(l.issued_at) <= ?`; p.push(to); }
+    if (status)                     { q += ` AND COALESCE(l.status,'emitido') = ?`; p.push(status); }
+    if (type)                       { q += ` AND l.type = ?`; p.push(type); }
+    q += ` ORDER BY l.issued_at DESC, l.id DESC`;
+    return db.prepare(q).all(...p);
+  },
+  // 608: comprobantes anulados en el período.
+  getVoided({ from, to } = {}) { return this.getLog({ from, to, status: 'anulado' }); },
 };
 
 // ══════════════════════════════════════════════

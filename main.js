@@ -3236,6 +3236,13 @@ ipcMain.handle('ncf:createSequence', async (_, { data, requestUserId }) => {
 ipcMain.handle('ncf:getAlerts', async () => {
   try { return { ok:true, data: ncfRepo.getAlerts() }; } catch(e) { return { ok:false, error:e.message }; }
 });
+// Log de comprobantes — base de los reportes 607 (emitidos) y 608 (anulados).
+ipcMain.handle('ncf:getLog', async (_, { from, to, status, type } = {}) => {
+  try { return { ok:true, data: ncfRepo.getLog({ from, to, status, type }) }; } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('ncf:getVoided', async (_, { from, to } = {}) => {
+  try { return { ok:true, data: ncfRepo.getVoided({ from, to }) }; } catch(e) { return { ok:false, error:e.message }; }
+});
 ipcMain.handle('ncf:validateRnc', async (_, { rnc }) => {
   try {
     const clean = (rnc || '').replace(/[-\s]/g, '').trim();

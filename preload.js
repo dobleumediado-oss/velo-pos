@@ -259,6 +259,8 @@ contextBridge.exposeInMainWorld('api', {
     createSequence:  (d) => ipcRenderer.invoke('ncf:createSequence', d),
     getAlerts:       ()  => ipcRenderer.invoke('ncf:getAlerts'),
     validateRnc:     (d) => ipcRenderer.invoke('ncf:validateRnc', d),
+    getLog:          (d) => ipcRenderer.invoke('ncf:getLog', d),
+    getVoided:       (d) => ipcRenderer.invoke('ncf:getVoided', d),
   },
 
   // ── Gastos y cuentas por pagar ───────────
