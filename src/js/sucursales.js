@@ -241,6 +241,7 @@ function modalNuevaSecuencia(parentEl) {
   const tipos = [
     { code:'B01', label:'B01 — Crédito Fiscal' },
     { code:'B02', label:'B02 — Consumidor Final' },
+    { code:'B04', label:'B04 — Nota de Crédito (devoluciones)' },
     { code:'B14', label:'B14 — Régimen Especial' },
     { code:'B15', label:'B15 — Gubernamental' },
     { code:'B16', label:'B16 — Exportaciones' },

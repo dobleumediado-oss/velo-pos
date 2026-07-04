@@ -851,6 +851,21 @@ const MIGRATIONS = [
       db.exec("CREATE INDEX IF NOT EXISTS idx_fin_mov_transfer_group ON financial_movements(transfer_group)");
     }
   },
+  {
+    version: '1.11.3',
+    description: 'Fiscal: ncf_log.modifies_ncf — nota de crédito B04 referencia el NCF de la factura devuelta',
+    run(db) {
+      // Idempotente (PRAGMA guard). Sin try/catch que trague: si falla, el runner
+      // revierte y no marca la migración → reintenta al próximo arranque.
+      const cols = db.prepare("PRAGMA table_info(ncf_log)").all().map(c => c.name);
+      if (!cols.includes('modifies_ncf')) {
+        db.exec("ALTER TABLE ncf_log ADD COLUMN modifies_ncf TEXT");
+        console.log('[MIGRATION 1.11.3] Columna modifies_ncf añadida a ncf_log');
+      } else {
+        console.log('[MIGRATION 1.11.3] modifies_ncf ya existía — sin cambios');
+      }
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

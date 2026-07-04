@@ -1372,6 +1372,12 @@ const salesRepo = {
     const sale  = db.prepare('SELECT * FROM sales WHERE id=?').get(id);
     if (!sale) return null;
     sale.items  = db.prepare('SELECT * FROM sale_items WHERE sale_id=?').all(id);
+    // Para notas de crédito (devoluciones con B04): adjuntar el NCF de la factura
+    // original que esta nota modifica, para poder mostrarlo en la impresión.
+    if (sale.type === 'devolucion' && sale.original_sale_id) {
+      const orig = db.prepare('SELECT ncf FROM sales WHERE id=?').get(sale.original_sale_id);
+      sale.modifies_ncf = (orig && orig.ncf) ? orig.ncf : '';
+    }
     return sale;
   },
 
@@ -2036,11 +2042,51 @@ const returnsRepo = {
         db.prepare(`UPDATE sales SET status='returned' WHERE id=?`).run(originalSaleId);
       }
 
+      // 8b. Nota de crédito B04 — SOLO si la factura original tenía NCF y el modo
+      // fiscal está activo. La DGII exige un B04 que referencie el NCF modificado.
+      // Espeja los 3 modos de la emisión de ventas: secuencia B04 registrada →
+      // contador de respaldo → contador simple. Numeración B04 independiente
+      // (ncf_b04_counter) para no chocar con el contador de ventas (ncf_counter).
+      let ncfNota = '';
+      if (original.ncf && String(original.ncf).trim()) {
+        const fiscalOn = db.prepare("SELECT value FROM settings WHERE key='fiscal_enabled'").get()?.value === '1';
+        if (fiscalOn) {
+          const ncfAdv = db.prepare("SELECT value FROM settings WHERE key='module_ncf_avanzado'").get()?.value === '1';
+          const nextB04Counter = () => {
+            const n = (parseInt(db.prepare("SELECT value FROM settings WHERE key='ncf_b04_counter'").get()?.value || 0, 10)) + 1;
+            db.prepare("INSERT INTO settings(key,value) VALUES('ncf_b04_counter',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(n));
+            return 'B04' + String(n).padStart(8, '0');
+          };
+          if (ncfAdv) {
+            const seq = db.prepare(
+              "SELECT * FROM ncf_sequences WHERE type='B04' AND active=1 AND current < to_num ORDER BY id ASC LIMIT 1"
+            ).get();
+            if (seq) {
+              const next = seq.current + 1;
+              db.prepare("UPDATE ncf_sequences SET current=? WHERE id=?").run(next, seq.id);
+              ncfNota = seq.prefix + String(next).padStart(8, '0');
+              const remaining = seq.to_num - next;
+              if (remaining <= (seq.alert_at || 50)) console.log('[NCF] ALERTA: quedan ' + remaining + ' notas de crédito B04');
+            } else {
+              ncfNota = nextB04Counter();
+              console.warn('[NCF] Sin secuencia B04 — usando contador de respaldo. Registra un rango B04 en el Panel NCF.');
+            }
+          } else {
+            ncfNota = nextB04Counter();
+          }
+          if (ncfNota) {
+            db.prepare("UPDATE sales SET ncf=? WHERE id=?").run(ncfNota, returnId);
+            db.prepare("INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc,modifies_ncf) VALUES(?,?,?,?,?)")
+              .run(ncfNota, 'B04', returnId, original.customer_rnc || '', String(original.ncf).trim());
+          }
+        }
+      }
+
       // 9. Auditoría
       audit(user.id, user.name, 'devolucion_procesada', 'sales', returnId,
-        `Venta original #${originalSaleId} | Total devuelto: ${total} | Items: ${items.length}`);
+        `Venta original #${originalSaleId} | Total devuelto: ${total} | Items: ${items.length}${ncfNota ? ' | NC B04: ' + ncfNota : ''}`);
 
-      return { returnId, total, subtotal, taxAmt, overpayment };
+      return { returnId, total, subtotal, taxAmt, overpayment, ncf: ncfNota, modifies_ncf: ncfNota ? String(original.ncf).trim() : '' };
     });
 
     return createReturnTx();
