@@ -1268,17 +1268,26 @@ const salesRepo = {
                 console.log('[NCF] ALERTA: quedan ' + remaining + ' comprobantes tipo ' + ncfType);
               }
             } else {
-              // Fallback al contador simple si no hay secuencia disponible
+              // Fallback al contador simple si no hay secuencia disponible.
+              // Formato DGII: prefijo (3) + 8 dígitos = 11 caracteres, igual que las
+              // secuencias avanzadas. Antes usaba padStart(9) → 12 caracteres inválidos.
               const nextNum = (parseInt(db.prepare("SELECT value FROM settings WHERE key='ncf_counter'").get()?.value || 0, 10)) + 1;
-              ncf = 'B01' + String(nextNum).padStart(9, '0');
+              ncf = 'B01' + String(nextNum).padStart(8, '0');
               db.prepare("UPDATE settings SET value=? WHERE key='ncf_counter'").run(String(nextNum));
+              // Registrar en ncf_log para que aparezca en el reporte 607 (antes se omitía).
+              db.prepare("INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc) VALUES(?,?,?,?)")
+                .run(ncf, 'B01', saleId, customer.rnc || '');
               console.warn('[NCF] Sin secuencia — usando contador de respaldo. Configura secuencias en Panel NCF.');
             }
           } else {
-            // Modo simple: contador básico
+            // Modo simple: contador básico. Formato DGII de 11 caracteres (prefijo + 8
+            // dígitos). Antes usaba padStart(9) → 12 caracteres, formato inválido.
             const nextNum = (parseInt(db.prepare("SELECT value FROM settings WHERE key='ncf_counter'").get()?.value || 0, 10)) + 1;
-            ncf = 'B01' + String(nextNum).padStart(9, '0');
+            ncf = 'B01' + String(nextNum).padStart(8, '0');
             db.prepare("UPDATE settings SET value=? WHERE key='ncf_counter'").run(String(nextNum));
+            // Registrar en ncf_log para el reporte 607 (antes el modo simple no lo hacía).
+            db.prepare("INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc) VALUES(?,?,?,?)")
+              .run(ncf, 'B01', saleId, customer.rnc || '');
           }
           if (ncf) db.prepare("UPDATE sales SET ncf=? WHERE id=?").run(ncf, saleId);
         }
@@ -2782,12 +2791,16 @@ const financialAccountsRepo = {
       const desc = description || `Transferencia a ${toAcc.name}`;
       const descTo = description ? `${description} (de ${fromAcc.name})` : `Transferencia de ${fromAcc.name}`;
 
+      // Enlaza las dos patas (out/in) para poder anularlas SIEMPRE juntas y no
+      // descuadrar los saldos si se anula una transferencia. Ver cancelMovement.
+      const group = `TR-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
       db.prepare(`INSERT INTO financial_movements(financial_account_id,type,amount,balance_before,
-        balance_after,description,related_account_id,notes,user_id)
-        VALUES(?,?,?,?,?,?,?,?,?)`).run(fromId, 'transferencia_out', amt, fromBefore, fromAfter, desc, toId, notes||'', userId||null);
+        balance_after,description,related_account_id,notes,user_id,transfer_group)
+        VALUES(?,?,?,?,?,?,?,?,?,?)`).run(fromId, 'transferencia_out', amt, fromBefore, fromAfter, desc, toId, notes||'', userId||null, group);
       db.prepare(`INSERT INTO financial_movements(financial_account_id,type,amount,balance_before,
-        balance_after,description,related_account_id,notes,user_id)
-        VALUES(?,?,?,?,?,?,?,?,?)`).run(toId, 'transferencia_in', amt, toBefore, toAfter, descTo, fromId, notes||'', userId||null);
+        balance_after,description,related_account_id,notes,user_id,transfer_group)
+        VALUES(?,?,?,?,?,?,?,?,?,?)`).run(toId, 'transferencia_in', amt, toBefore, toAfter, descTo, fromId, notes||'', userId||null, group);
 
       return { ok: true, fromBalance: fromAfter, toBalance: toAfter };
     })();
@@ -2797,14 +2810,36 @@ const financialAccountsRepo = {
       const mov = db.prepare('SELECT * FROM financial_movements WHERE id=?').get(movementId);
       if (!mov) throw new Error('Movimiento no encontrado');
       if (mov.status === 'anulado') throw new Error('Ya está anulado');
-      // Revertir el movimiento en la cuenta
-      const acc = db.prepare('SELECT * FROM financial_accounts WHERE id=?').get(mov.financial_account_id);
-      const outflow = ['transferencia_out','retiro','gasto','pago_proveedor'].includes(mov.type);
-      const newBal = outflow ? acc.current_balance + mov.amount : acc.current_balance - mov.amount;
-      db.prepare(`UPDATE financial_accounts SET current_balance=?,updated_at=datetime('now') WHERE id=?`)
-        .run(newBal, mov.financial_account_id);
-      db.prepare(`UPDATE financial_movements SET status='anulado',cancelled_by=?,cancel_reason=?,
-        cancelled_at=datetime('now') WHERE id=?`).run(cancelledBy, reason||'', movementId);
+
+      const revertLeg = (m) => {
+        const acc = db.prepare('SELECT * FROM financial_accounts WHERE id=?').get(m.financial_account_id);
+        const outflow = ['transferencia_out', 'retiro', 'gasto', 'pago_proveedor'].includes(m.type);
+        const newBal = outflow ? acc.current_balance + m.amount : acc.current_balance - m.amount;
+        db.prepare(`UPDATE financial_accounts SET current_balance=?,updated_at=datetime('now') WHERE id=?`)
+          .run(newBal, m.financial_account_id);
+        db.prepare(`UPDATE financial_movements SET status='anulado',cancelled_by=?,cancel_reason=?,
+          cancelled_at=datetime('now') WHERE id=?`).run(cancelledBy, reason || '', m.id);
+      };
+
+      // Una transferencia son DOS movimientos (out/in). Anular uno solo dejaría el
+      // otro vivo y descuadraría el total → se anulan SIEMPRE juntos por transfer_group.
+      const isTransferLeg = mov.type === 'transferencia_out' || mov.type === 'transferencia_in';
+      if (isTransferLeg) {
+        if (!mov.transfer_group) {
+          // Transferencia anterior a v1.11.2: sus patas no están enlazadas, así que no
+          // se puede anular con seguridad por una sola. Para revertirla, hacer una
+          // transferencia inversa por el mismo monto. Bloquear evita corromper saldos.
+          throw new Error('Esta transferencia es anterior a la actualización y no puede anularse por una sola pata. Para revertirla, realiza una transferencia inversa por el mismo monto.');
+        }
+        const legs = db.prepare(
+          "SELECT * FROM financial_movements WHERE transfer_group=? AND status!='anulado'"
+        ).all(mov.transfer_group);
+        for (const leg of legs) revertLeg(leg);
+        return { ok: true, transferReversed: true, legs: legs.length };
+      }
+
+      // Movimiento simple: revertir su saldo según el tipo.
+      revertLeg(mov);
       return { ok: true };
     })();
   },
@@ -2978,12 +3013,12 @@ const accountingRepo = {
       db.prepare(`UPDATE accounting_entries SET reversal_of=? WHERE id=?`)
         .run(entryId, reversal.entryId);
 
-      // Revertir cambios de saldo del asiento original
-      for (const line of original.lines) {
-        const netChange = (parseFloat(line.debit)||0) - (parseFloat(line.credit)||0);
-        db.prepare(`UPDATE accounting_accounts SET balance=balance-?,updated_at=datetime('now') WHERE id=?`)
-          .run(netChange, line.account_id);
-      }
+      // NOTA: no revertir aquí los saldos manualmente. El asiento de reverso creado
+      // arriba con createEntry() ya invierte débito/crédito y ajusta
+      // accounting_accounts.balance por cada línea. Un segundo ajuste manual duplicaba
+      // la reversión y descuadraba la columna de saldo cacheada (los estados —balanza y
+      // balance general— recalculan desde las líneas, por eso no se veía en esos reportes,
+      // pero la lista de cuentas sí mostraba saldos erróneos tras cada anulación).
 
       audit(userId, '', 'asiento_anulado', 'accounting_entries', entryId, reason);
       return { ok: true, reversalId: reversal.entryId, reversalNumber: reversal.number };

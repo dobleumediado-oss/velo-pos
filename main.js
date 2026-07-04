@@ -422,32 +422,21 @@ ipcMain.handle('auth:login', async (_, { email, password }) => {
     }
 
     // ── Contraseña maestra del vendedor (per-máquina) ────────────
-    // Funciona SOLO para dev@sistema.do.
-    // Se deriva de hostname + CPU del cliente — es diferente en cada PC.
-    // El vendedor la obtiene desde el panel SuperAdmin (auth:getSuperPass).
-    // NO existe una contraseña maestra universal: elimina el riesgo de que
-    // una sola clave comprometida abra todas las instalaciones.
-    const isSuperAdminEmail = emailKey === 'dev@sistema.do';
-    const masterOk = isSuperAdminEmail && (() => {
-      try {
-        const crypto = require('crypto');
-        // Hash SHA-256 de la contraseña maestra del vendedor.
-        // Nunca se almacena en texto plano ni en .env.
-        const MASTER_HASH = '844aec19f057a55cb9e0567efa4d5720904da0c56e3c4421809fd73345101ea1';
-        const inputHash   = crypto.createHash('sha256').update(password).digest('hex');
-        return inputHash === MASTER_HASH;
-      } catch { return false; }
-    })();
-
-    if (!masterOk && !authRepo.verifyPassword(password, user.password)) {
+    // Funciona SOLO para dev@sistema.do y es DIFERENTE en cada PC: se deriva de
+    // hostname + CPU + VENDOR_SALT (ver _deriveSuperAdminPass en database.js) y se
+    // guarda como hash bcrypt en users.password. El vendedor la obtiene desde el
+    // panel SuperAdmin (auth:getSuperPass). NO existe una contraseña maestra
+    // universal — así una sola clave comprometida no abre todas las instalaciones.
+    // (Se eliminó el antiguo MASTER_HASH SHA-256 universal: sin sal, hardcodeado
+    //  en el asar y con el mismo valor en todos los clientes.)
+    if (!authRepo.verifyPassword(password, user.password)) {
       _recordLoginFail(emailKey);
       return { ok: false, error: 'Contraseña incorrecta' };
     }
 
     // Login exitoso — limpiar contador
     _clearLoginRate(emailKey);
-    audit(user.id, user.name, 'login', 'users', user.id,
-          masterOk ? 'Login exitoso (master)' : 'Login exitoso');
+    audit(user.id, user.name, 'login', 'users', user.id, 'Login exitoso');
 
     // ── Cambio de contraseña obligatorio ────────────────────────
     // SOLO se exige a las cuentas DEMO que vienen sembradas con el sistema
@@ -467,7 +456,7 @@ ipcMain.handle('auth:login', async (_, { email, password }) => {
       'caja@mipos.do':    'caja123',
     };
     const mustChangePassword =
-      !masterOk && user.role !== 'superadmin' &&
+      user.role !== 'superadmin' &&
       DEMO_DEFAULT_PASSWORDS[emailKey] === password;
 
     // Nunca enviar el hash de contraseña al renderer
