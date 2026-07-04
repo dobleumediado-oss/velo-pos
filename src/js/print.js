@@ -219,7 +219,7 @@ function printReceipt(sale, isReprint = false) {
 
   lines.push(tRow('Subtotal:', fmt(subtotal)));
   if (discPct > 0) lines.push(tRow(`Descuento (${discPct}%):`, `-${fmt(discAmt)}`));
-  if (isFactura && itbis > 0) lines.push(tRow(`ITBIS (${sale.tax_pct ?? CFG?.itbis ?? 18}%):`, fmt(itbis)));
+  if ((isFactura || isDevolucion) && itbis > 0) lines.push(tRow(`ITBIS (${sale.tax_pct ?? CFG?.itbis ?? 18}%):`, fmt(itbis)));
   lines.push(tlineD());
   lines.push(tRow('TOTAL:', fmt(total)));
   lines.push(tlineD());
@@ -243,9 +243,21 @@ function printReceipt(sale, isReprint = false) {
     lines.push(tCenter(`NCF: ${sale.ncf}`));
   }
 
-  if (isDevolucion && sale.original_sale_id) {
-    lines.push('');
-    lines.push(tCenter(`Ref. venta original: #${String(sale.original_sale_id).padStart(5,'0')}`));
+  if (isDevolucion) {
+    // Nota de crédito fiscal: si la devolución tiene un B04 asignado, imprimirlo
+    // junto con el NCF de la factura que modifica (requisito DGII). Nunca fabricar
+    // uno: solo se imprime el B04 realmente guardado en la devolución.
+    if (sale.ncf && String(sale.ncf).trim()) {
+      lines.push('');
+      lines.push(tCenter('NOTA DE CRÉDITO — validez fiscal'));
+      lines.push(tCenter(`NCF: ${sale.ncf}`));
+      const modNcf = sale.modifies_ncf || sale.original_ncf || '';
+      if (modNcf) lines.push(tCenter(`Modifica NCF: ${modNcf}`));
+    }
+    if (sale.original_sale_id) {
+      lines.push('');
+      lines.push(tCenter(`Ref. venta original: #${String(sale.original_sale_id).padStart(5,'0')}`));
+    }
   }
 
   lines.push('');

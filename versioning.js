@@ -834,6 +834,55 @@ const MIGRATIONS = [
       }
     }
   },
+  {
+    version: '1.11.2',
+    description: 'Bancos: columna transfer_group para enlazar y anular juntas las dos patas de una transferencia',
+    run(db) {
+      // Idempotente: PRAGMA para no re-ALTERar si la columna ya existe. Sin try/catch
+      // que trague errores — si algo falla, el runner revierte y NO marca la migración
+      // como aplicada (reintenta en el próximo arranque, sin dejar estado a medias).
+      const cols = db.prepare("PRAGMA table_info(financial_movements)").all().map(c => c.name);
+      if (!cols.includes('transfer_group')) {
+        db.exec("ALTER TABLE financial_movements ADD COLUMN transfer_group TEXT");
+        console.log('[MIGRATION 1.11.2] Columna transfer_group añadida a financial_movements');
+      } else {
+        console.log('[MIGRATION 1.11.2] transfer_group ya existía — sin cambios');
+      }
+      db.exec("CREATE INDEX IF NOT EXISTS idx_fin_mov_transfer_group ON financial_movements(transfer_group)");
+    }
+  },
+  {
+    version: '1.11.3',
+    description: 'Fiscal: ncf_log.modifies_ncf — nota de crédito B04 referencia el NCF de la factura devuelta',
+    run(db) {
+      // Idempotente (PRAGMA guard). Sin try/catch que trague: si falla, el runner
+      // revierte y no marca la migración → reintenta al próximo arranque.
+      const cols = db.prepare("PRAGMA table_info(ncf_log)").all().map(c => c.name);
+      if (!cols.includes('modifies_ncf')) {
+        db.exec("ALTER TABLE ncf_log ADD COLUMN modifies_ncf TEXT");
+        console.log('[MIGRATION 1.11.3] Columna modifies_ncf añadida a ncf_log');
+      } else {
+        console.log('[MIGRATION 1.11.3] modifies_ncf ya existía — sin cambios');
+      }
+    }
+  },
+  {
+    version: '1.11.4',
+    description: 'Fiscal: ncf_log.status/voided_at — marca NCF de factura anulada para el reporte 608',
+    run(db) {
+      // Idempotente (PRAGMA guard). status por defecto 'emitido' aplica también a
+      // las filas existentes. Sin try/catch que trague: si falla, el runner revierte.
+      const cols = db.prepare("PRAGMA table_info(ncf_log)").all().map(c => c.name);
+      if (!cols.includes('status')) {
+        db.exec("ALTER TABLE ncf_log ADD COLUMN status TEXT DEFAULT 'emitido'");
+        console.log('[MIGRATION 1.11.4] Columna status añadida a ncf_log');
+      }
+      if (!cols.includes('voided_at')) {
+        db.exec("ALTER TABLE ncf_log ADD COLUMN voided_at TEXT");
+        console.log('[MIGRATION 1.11.4] Columna voided_at añadida a ncf_log');
+      }
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

@@ -244,7 +244,10 @@ async function _renderBancosMovList(el, accountId) {
       h('th', null, '')
     )),
     h('tbody', null, ...movs.map(m => {
-      const isEgreso = m.type === 'egreso';
+      // Salidas de dinero (misma clasificación que los reportes en main.js):
+      // el monto se guarda en positivo, el signo lo determina el tipo.
+      const OUTFLOW_TYPES = ['retiro', 'transferencia_out', 'gasto', 'pago_proveedor', 'egreso'];
+      const isEgreso = OUTFLOW_TYPES.includes(m.type);
       return h('tr', null,
         h('td', null, m.created_at?.slice(0,10) || ''),
         h('td', null, h('span', { class: `mov-type-${m.type}` }, m.type)),

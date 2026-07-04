@@ -892,6 +892,11 @@ async function reimprimirVenta(saleId) {
         total:           sale.total,
         payment_method:  sale.payment_method,
         cajero:          sale.cajero,
+        // NCF real de la venta (factura) o nota de crédito B04 (devolución),
+        // y el NCF que la nota modifica — antes la reimpresión no los pasaba.
+        ncf:             sale.ncf || '',
+        tax_pct:         sale.tax_pct,
+        modifies_ncf:    sale.modifies_ncf || '',
       }, true); // true = isReprint
     },
     'Reimprimir',
@@ -914,7 +919,7 @@ async function guardarVentaPDF(saleId) {
     })),
     subtotal: sale.subtotal, discount_pct: sale.discount_pct || 0, discount_amt: sale.discount_amt || 0,
     tax_amt: sale.tax_amt || 0, total: sale.total, payment_method: sale.payment_method,
-    cajero: sale.cajero, ncf: sale.ncf || '',
+    cajero: sale.cajero, ncf: sale.ncf || '', tax_pct: sale.tax_pct, modifies_ncf: sale.modifies_ncf || '',
   };
   const label = sale.type === 'cotizacion' ? 'Cotizacion' : sale.type === 'devolucion' ? 'Devolucion' : 'Factura';
   if (typeof guardarDocumentoPDF === 'function') {

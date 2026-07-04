@@ -1268,17 +1268,26 @@ const salesRepo = {
                 console.log('[NCF] ALERTA: quedan ' + remaining + ' comprobantes tipo ' + ncfType);
               }
             } else {
-              // Fallback al contador simple si no hay secuencia disponible
+              // Fallback al contador simple si no hay secuencia disponible.
+              // Formato DGII: prefijo (3) + 8 dígitos = 11 caracteres, igual que las
+              // secuencias avanzadas. Antes usaba padStart(9) → 12 caracteres inválidos.
               const nextNum = (parseInt(db.prepare("SELECT value FROM settings WHERE key='ncf_counter'").get()?.value || 0, 10)) + 1;
-              ncf = 'B01' + String(nextNum).padStart(9, '0');
+              ncf = 'B01' + String(nextNum).padStart(8, '0');
               db.prepare("UPDATE settings SET value=? WHERE key='ncf_counter'").run(String(nextNum));
+              // Registrar en ncf_log para que aparezca en el reporte 607 (antes se omitía).
+              db.prepare("INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc) VALUES(?,?,?,?)")
+                .run(ncf, 'B01', saleId, customer.rnc || '');
               console.warn('[NCF] Sin secuencia — usando contador de respaldo. Configura secuencias en Panel NCF.');
             }
           } else {
-            // Modo simple: contador básico
+            // Modo simple: contador básico. Formato DGII de 11 caracteres (prefijo + 8
+            // dígitos). Antes usaba padStart(9) → 12 caracteres, formato inválido.
             const nextNum = (parseInt(db.prepare("SELECT value FROM settings WHERE key='ncf_counter'").get()?.value || 0, 10)) + 1;
-            ncf = 'B01' + String(nextNum).padStart(9, '0');
+            ncf = 'B01' + String(nextNum).padStart(8, '0');
             db.prepare("UPDATE settings SET value=? WHERE key='ncf_counter'").run(String(nextNum));
+            // Registrar en ncf_log para el reporte 607 (antes el modo simple no lo hacía).
+            db.prepare("INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc) VALUES(?,?,?,?)")
+              .run(ncf, 'B01', saleId, customer.rnc || '');
           }
           if (ncf) db.prepare("UPDATE sales SET ncf=? WHERE id=?").run(ncf, saleId);
         }
@@ -1363,6 +1372,12 @@ const salesRepo = {
     const sale  = db.prepare('SELECT * FROM sales WHERE id=?').get(id);
     if (!sale) return null;
     sale.items  = db.prepare('SELECT * FROM sale_items WHERE sale_id=?').all(id);
+    // Para notas de crédito (devoluciones con B04): adjuntar el NCF de la factura
+    // original que esta nota modifica, para poder mostrarlo en la impresión.
+    if (sale.type === 'devolucion' && sale.original_sale_id) {
+      const orig = db.prepare('SELECT ncf FROM sales WHERE id=?').get(sale.original_sale_id);
+      sale.modifies_ncf = (orig && orig.ncf) ? orig.ncf : '';
+    }
     return sale;
   },
 
@@ -1510,6 +1525,14 @@ const salesRepo = {
       db.prepare(`
         UPDATE sales SET status='cancelled',cancelled_at=datetime('now'),cancel_reason=? WHERE id=?
       `).run(reason, id);
+
+      // Fiscal: si la venta tenía un NCF, marcarlo como anulado en ncf_log para que
+      // aparezca en el reporte 608 (comprobantes anulados). Aplica a facturas (B01/B02…)
+      // y también a notas de crédito B04 si alguna vez se anula una devolución.
+      if (sale.ncf && String(sale.ncf).trim()) {
+        db.prepare(`UPDATE ncf_log SET status='anulado', voided_at=datetime('now')
+                    WHERE sale_id=? AND ncf=? AND status!='anulado'`).run(id, String(sale.ncf).trim());
+      }
 
       // Reponer stock
       const items = db.prepare('SELECT * FROM sale_items WHERE sale_id=?').all(id);
@@ -2013,20 +2036,65 @@ const returnsRepo = {
         });
       }
 
-      // 8. Marcar venta original como 'returned' si todos los items fueron devueltos
-      const allReturned = items.every(i => {
-        const orig = originalItems.find(oi => oi.product_id === i.product_id);
-        return orig && i.qty >= orig.qty;
+      // 8. Marcar venta original como 'returned' solo si TODOS sus productos quedaron
+      // completamente devueltos, sumando ESTA devolución con las anteriores (yaDevuelto).
+      // Antes solo miraba los items de la tanda actual, así que devoluciones parciales
+      // en varias tandas nunca marcaban la venta como devuelta.
+      const currentReturn = {};
+      for (const i of items) currentReturn[i.product_id] = (currentReturn[i.product_id] || 0) + i.qty;
+      const allReturned = originalItems.every(oi => {
+        const totalDevuelto = (yaDevuelto[oi.product_id] || 0) + (currentReturn[oi.product_id] || 0);
+        return totalDevuelto >= oi.qty;
       });
-      if (allReturned && items.length >= originalItems.length) {
+      if (allReturned) {
         db.prepare(`UPDATE sales SET status='returned' WHERE id=?`).run(originalSaleId);
+      }
+
+      // 8b. Nota de crédito B04 — SOLO si la factura original tenía NCF y el modo
+      // fiscal está activo. La DGII exige un B04 que referencie el NCF modificado.
+      // Espeja los 3 modos de la emisión de ventas: secuencia B04 registrada →
+      // contador de respaldo → contador simple. Numeración B04 independiente
+      // (ncf_b04_counter) para no chocar con el contador de ventas (ncf_counter).
+      let ncfNota = '';
+      if (original.ncf && String(original.ncf).trim()) {
+        const fiscalOn = db.prepare("SELECT value FROM settings WHERE key='fiscal_enabled'").get()?.value === '1';
+        if (fiscalOn) {
+          const ncfAdv = db.prepare("SELECT value FROM settings WHERE key='module_ncf_avanzado'").get()?.value === '1';
+          const nextB04Counter = () => {
+            const n = (parseInt(db.prepare("SELECT value FROM settings WHERE key='ncf_b04_counter'").get()?.value || 0, 10)) + 1;
+            db.prepare("INSERT INTO settings(key,value) VALUES('ncf_b04_counter',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(n));
+            return 'B04' + String(n).padStart(8, '0');
+          };
+          if (ncfAdv) {
+            const seq = db.prepare(
+              "SELECT * FROM ncf_sequences WHERE type='B04' AND active=1 AND current < to_num ORDER BY id ASC LIMIT 1"
+            ).get();
+            if (seq) {
+              const next = seq.current + 1;
+              db.prepare("UPDATE ncf_sequences SET current=? WHERE id=?").run(next, seq.id);
+              ncfNota = seq.prefix + String(next).padStart(8, '0');
+              const remaining = seq.to_num - next;
+              if (remaining <= (seq.alert_at || 50)) console.log('[NCF] ALERTA: quedan ' + remaining + ' notas de crédito B04');
+            } else {
+              ncfNota = nextB04Counter();
+              console.warn('[NCF] Sin secuencia B04 — usando contador de respaldo. Registra un rango B04 en el Panel NCF.');
+            }
+          } else {
+            ncfNota = nextB04Counter();
+          }
+          if (ncfNota) {
+            db.prepare("UPDATE sales SET ncf=? WHERE id=?").run(ncfNota, returnId);
+            db.prepare("INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc,modifies_ncf) VALUES(?,?,?,?,?)")
+              .run(ncfNota, 'B04', returnId, original.customer_rnc || '', String(original.ncf).trim());
+          }
+        }
       }
 
       // 9. Auditoría
       audit(user.id, user.name, 'devolucion_procesada', 'sales', returnId,
-        `Venta original #${originalSaleId} | Total devuelto: ${total} | Items: ${items.length}`);
+        `Venta original #${originalSaleId} | Total devuelto: ${total} | Items: ${items.length}${ncfNota ? ' | NC B04: ' + ncfNota : ''}`);
 
-      return { returnId, total, subtotal, taxAmt, overpayment };
+      return { returnId, total, subtotal, taxAmt, overpayment, ncf: ncfNota, modifies_ncf: ncfNota ? String(original.ncf).trim() : '' };
     });
 
     return createReturnTx();
@@ -2123,8 +2191,6 @@ const purchasesRepo = {
       const po = db.prepare(`SELECT * FROM purchase_orders WHERE id=?`).get(id);
       if (!po) throw new Error('Orden no encontrada');
       if (po.status === 'recibido') throw new Error('Esta orden ya fue recibida completamente');
-
-      let allReceived = true;
 
       for (const item of items) {
         if (!item.qty_received || item.qty_received <= 0) continue;
@@ -2683,6 +2749,22 @@ const ncfRepo = {
     return db.prepare(`SELECT *, (to_num - current) as remaining FROM ncf_sequences
       WHERE active=1 AND (to_num - current) <= alert_at ORDER BY remaining ASC`).all();
   },
+  // ── Log de comprobantes (base para reportes 607/608) ──────────────────────
+  // status: 'emitido' (default) | 'anulado'. Filtros de fecha sobre issued_at.
+  getLog({ from, to, status, type } = {}) {
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    let q = `SELECT l.*, s.total, s.customer_name FROM ncf_log l
+             LEFT JOIN sales s ON l.sale_id = s.id WHERE 1=1`;
+    const p = [];
+    if (from && DATE_RE.test(from)) { q += ` AND date(l.issued_at) >= ?`; p.push(from); }
+    if (to   && DATE_RE.test(to))   { q += ` AND date(l.issued_at) <= ?`; p.push(to); }
+    if (status)                     { q += ` AND COALESCE(l.status,'emitido') = ?`; p.push(status); }
+    if (type)                       { q += ` AND l.type = ?`; p.push(type); }
+    q += ` ORDER BY l.issued_at DESC, l.id DESC`;
+    return db.prepare(q).all(...p);
+  },
+  // 608: comprobantes anulados en el período.
+  getVoided({ from, to } = {}) { return this.getLog({ from, to, status: 'anulado' }); },
 };
 
 // ══════════════════════════════════════════════
@@ -2782,12 +2864,16 @@ const financialAccountsRepo = {
       const desc = description || `Transferencia a ${toAcc.name}`;
       const descTo = description ? `${description} (de ${fromAcc.name})` : `Transferencia de ${fromAcc.name}`;
 
+      // Enlaza las dos patas (out/in) para poder anularlas SIEMPRE juntas y no
+      // descuadrar los saldos si se anula una transferencia. Ver cancelMovement.
+      const group = `TR-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
       db.prepare(`INSERT INTO financial_movements(financial_account_id,type,amount,balance_before,
-        balance_after,description,related_account_id,notes,user_id)
-        VALUES(?,?,?,?,?,?,?,?,?)`).run(fromId, 'transferencia_out', amt, fromBefore, fromAfter, desc, toId, notes||'', userId||null);
+        balance_after,description,related_account_id,notes,user_id,transfer_group)
+        VALUES(?,?,?,?,?,?,?,?,?,?)`).run(fromId, 'transferencia_out', amt, fromBefore, fromAfter, desc, toId, notes||'', userId||null, group);
       db.prepare(`INSERT INTO financial_movements(financial_account_id,type,amount,balance_before,
-        balance_after,description,related_account_id,notes,user_id)
-        VALUES(?,?,?,?,?,?,?,?,?)`).run(toId, 'transferencia_in', amt, toBefore, toAfter, descTo, fromId, notes||'', userId||null);
+        balance_after,description,related_account_id,notes,user_id,transfer_group)
+        VALUES(?,?,?,?,?,?,?,?,?,?)`).run(toId, 'transferencia_in', amt, toBefore, toAfter, descTo, fromId, notes||'', userId||null, group);
 
       return { ok: true, fromBalance: fromAfter, toBalance: toAfter };
     })();
@@ -2797,14 +2883,36 @@ const financialAccountsRepo = {
       const mov = db.prepare('SELECT * FROM financial_movements WHERE id=?').get(movementId);
       if (!mov) throw new Error('Movimiento no encontrado');
       if (mov.status === 'anulado') throw new Error('Ya está anulado');
-      // Revertir el movimiento en la cuenta
-      const acc = db.prepare('SELECT * FROM financial_accounts WHERE id=?').get(mov.financial_account_id);
-      const outflow = ['transferencia_out','retiro','gasto','pago_proveedor'].includes(mov.type);
-      const newBal = outflow ? acc.current_balance + mov.amount : acc.current_balance - mov.amount;
-      db.prepare(`UPDATE financial_accounts SET current_balance=?,updated_at=datetime('now') WHERE id=?`)
-        .run(newBal, mov.financial_account_id);
-      db.prepare(`UPDATE financial_movements SET status='anulado',cancelled_by=?,cancel_reason=?,
-        cancelled_at=datetime('now') WHERE id=?`).run(cancelledBy, reason||'', movementId);
+
+      const revertLeg = (m) => {
+        const acc = db.prepare('SELECT * FROM financial_accounts WHERE id=?').get(m.financial_account_id);
+        const outflow = ['transferencia_out', 'retiro', 'gasto', 'pago_proveedor'].includes(m.type);
+        const newBal = outflow ? acc.current_balance + m.amount : acc.current_balance - m.amount;
+        db.prepare(`UPDATE financial_accounts SET current_balance=?,updated_at=datetime('now') WHERE id=?`)
+          .run(newBal, m.financial_account_id);
+        db.prepare(`UPDATE financial_movements SET status='anulado',cancelled_by=?,cancel_reason=?,
+          cancelled_at=datetime('now') WHERE id=?`).run(cancelledBy, reason || '', m.id);
+      };
+
+      // Una transferencia son DOS movimientos (out/in). Anular uno solo dejaría el
+      // otro vivo y descuadraría el total → se anulan SIEMPRE juntos por transfer_group.
+      const isTransferLeg = mov.type === 'transferencia_out' || mov.type === 'transferencia_in';
+      if (isTransferLeg) {
+        if (!mov.transfer_group) {
+          // Transferencia anterior a v1.11.2: sus patas no están enlazadas, así que no
+          // se puede anular con seguridad por una sola. Para revertirla, hacer una
+          // transferencia inversa por el mismo monto. Bloquear evita corromper saldos.
+          throw new Error('Esta transferencia es anterior a la actualización y no puede anularse por una sola pata. Para revertirla, realiza una transferencia inversa por el mismo monto.');
+        }
+        const legs = db.prepare(
+          "SELECT * FROM financial_movements WHERE transfer_group=? AND status!='anulado'"
+        ).all(mov.transfer_group);
+        for (const leg of legs) revertLeg(leg);
+        return { ok: true, transferReversed: true, legs: legs.length };
+      }
+
+      // Movimiento simple: revertir su saldo según el tipo.
+      revertLeg(mov);
       return { ok: true };
     })();
   },
@@ -2978,12 +3086,12 @@ const accountingRepo = {
       db.prepare(`UPDATE accounting_entries SET reversal_of=? WHERE id=?`)
         .run(entryId, reversal.entryId);
 
-      // Revertir cambios de saldo del asiento original
-      for (const line of original.lines) {
-        const netChange = (parseFloat(line.debit)||0) - (parseFloat(line.credit)||0);
-        db.prepare(`UPDATE accounting_accounts SET balance=balance-?,updated_at=datetime('now') WHERE id=?`)
-          .run(netChange, line.account_id);
-      }
+      // NOTA: no revertir aquí los saldos manualmente. El asiento de reverso creado
+      // arriba con createEntry() ya invierte débito/crédito y ajusta
+      // accounting_accounts.balance por cada línea. Un segundo ajuste manual duplicaba
+      // la reversión y descuadraba la columna de saldo cacheada (los estados —balanza y
+      // balance general— recalculan desde las líneas, por eso no se veía en esos reportes,
+      // pero la lista de cuentas sí mostraba saldos erróneos tras cada anulación).
 
       audit(userId, '', 'asiento_anulado', 'accounting_entries', entryId, reason);
       return { ok: true, reversalId: reversal.entryId, reversalNumber: reversal.number };

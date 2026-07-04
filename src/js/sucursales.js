@@ -167,6 +167,7 @@ async function renderNCFAvanzado(el) {
   hdr.innerHTML = `
     <div style="font-size:14px;font-weight:600;color:var(--ink)">Secuencias de comprobantes NCF</div>
     <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost btn-sm" id="btn-rep-ncf">📄 Reportes 607/608</button>
       <button class="btn btn-ghost btn-sm" id="btn-validar-rnc">🔍 Validar RNC</button>
       <button class="btn btn-dark btn-sm" id="btn-nueva-seq">+ Nueva secuencia</button>
     </div>`;
@@ -230,8 +231,10 @@ async function renderNCFAvanzado(el) {
     el.addEventListener('click', (ev) => {
       const nueva   = ev.target.closest('#btn-nueva-seq');
       const validar = ev.target.closest('#btn-validar-rnc');
+      const repNcf  = ev.target.closest('#btn-rep-ncf');
       if (nueva)   { ev.preventDefault(); modalNuevaSecuencia(el); }
       if (validar) { ev.preventDefault(); modalValidarRNC(); }
+      if (repNcf)  { ev.preventDefault(); modalReporteNCF(); }
     });
   }
 }
@@ -241,6 +244,7 @@ function modalNuevaSecuencia(parentEl) {
   const tipos = [
     { code:'B01', label:'B01 — Crédito Fiscal' },
     { code:'B02', label:'B02 — Consumidor Final' },
+    { code:'B04', label:'B04 — Nota de Crédito (devoluciones)' },
     { code:'B14', label:'B14 — Régimen Especial' },
     { code:'B15', label:'B15 — Gubernamental' },
     { code:'B16', label:'B16 — Exportaciones' },
@@ -469,6 +473,125 @@ function modalValidarRNC() {
 
   // Focus automático en el input
   setTimeout(() => overlay.querySelector('#rnc-val')?.focus(), 100);
+}
+
+// ── Reportes 607 (emitidos) / 608 (anulados) ──────────────────────────────
+// Consume ncf.getLog / getVoided (ncf_log). Muestra en pantalla y arma un HTML
+// imprimible en tamaño carta (vía printHTML, que ya maneja el formato de reporte).
+function modalReporteNCF() {
+  const esc = (v) => String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const TIPO_LBL = { B01:'Crédito Fiscal', B02:'Consumidor Final', B04:'Nota de Crédito',
+                     B14:'Régimen Especial', B15:'Gubernamental', B16:'Exportación' };
+  const now = new Date(), y = now.getFullYear(), mo = now.getMonth();
+  const pad = n => String(n).padStart(2,'0');
+  const first = `${y}-${pad(mo+1)}-01`;
+  const last  = `${y}-${pad(mo+1)}-${pad(new Date(y, mo+1, 0).getDate())}`;
+  const biz = (typeof CFG!=='undefined' && CFG.biz) || 'Mi Negocio';
+  const rnc = (typeof CFG!=='undefined' && CFG.rnc) || '';
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:#0008;z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  overlay.innerHTML = `
+    <div style="background:var(--bg);border-radius:14px;width:100%;max-width:840px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 8px 40px #0004">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line2)">
+        <div style="font-size:15px;font-weight:600">📄 Reportes de comprobantes · 607 / 608</div>
+        <button id="rep-close" style="background:none;border:none;cursor:pointer;color:var(--muted2);font-size:18px">✕</button>
+      </div>
+      <div style="padding:14px 20px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;border-bottom:1px solid var(--line2)">
+        <div class="fg" style="margin:0;min-width:210px"><label class="lbl">Reporte</label>
+          <select class="inp" id="rep-tipo">
+            <option value="607">607 — Comprobantes emitidos</option>
+            <option value="608">608 — Comprobantes anulados</option>
+          </select></div>
+        <div class="fg" style="margin:0"><label class="lbl">Desde</label><input class="inp" type="date" id="rep-from" value="${first}"></div>
+        <div class="fg" style="margin:0"><label class="lbl">Hasta</label><input class="inp" type="date" id="rep-to" value="${last}"></div>
+        <button class="btn btn-dark" id="rep-gen">Generar</button>
+        <button class="btn btn-ghost" id="rep-print" disabled>🖨️ Imprimir</button>
+      </div>
+      <div id="rep-body" style="padding:16px 20px;overflow:auto;flex:1">
+        <div style="text-align:center;color:var(--muted2);padding:24px;font-size:13px">Elige el reporte y el período, luego pulsa <strong>Generar</strong>.</div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('#rep-close').onclick = close;
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+  let printableHtml = '';
+  const printBtn = overlay.querySelector('#rep-print');
+  printBtn.onclick = () => { if (printableHtml && typeof printHTML==='function') printHTML(printableHtml, 'reporte'); };
+
+  overlay.querySelector('#rep-gen').onclick = async () => {
+    const tipo = overlay.querySelector('#rep-tipo').value;
+    const from = overlay.querySelector('#rep-from').value;
+    const to   = overlay.querySelector('#rep-to').value;
+    const body = overlay.querySelector('#rep-body');
+    const is608 = tipo === '608';
+    body.innerHTML = '<div style="text-align:center;color:var(--muted2);padding:24px">Cargando…</div>';
+    printBtn.disabled = true; printableHtml = '';
+
+    const res = is608
+      ? await window.api.ncf.getVoided({ from, to })
+      : await window.api.ncf.getLog({ from, to, status: 'emitido' });
+    if (!res?.ok) { body.innerHTML = `<div style="color:#ef4444;padding:16px">${esc(res?.error||'Error al generar')}</div>`; return; }
+
+    const rows = res.data || [];
+    const totalSum = rows.reduce((a,r)=>a+(r.total||0),0);
+    const title = is608 ? '608 — Comprobantes Anulados' : '607 — Comprobantes Emitidos';
+    const fdt = (v) => (v||'').split('T')[0].split(' ')[0];
+
+    const headCols = is608
+      ? ['NCF','Tipo','Emitido','Anulado','RNC/Céd.','Cliente','Monto']
+      : ['NCF','Tipo','Fecha','RNC/Céd.','Cliente','Modifica NCF','Monto'];
+    const rowCells = (r) => is608
+      ? [r.ncf, (TIPO_LBL[r.type]||r.type), fdt(r.issued_at), fdt(r.voided_at), r.customer_rnc||'—', r.customer_name||'—', fmt(r.total||0)]
+      : [r.ncf, (TIPO_LBL[r.type]||r.type), fdt(r.issued_at), r.customer_rnc||'—', r.customer_name||'—', r.modifies_ncf||'—', fmt(r.total||0)];
+
+    if (!rows.length) {
+      body.innerHTML = `<div style="text-align:center;color:var(--muted2);padding:24px;font-size:13px">Sin comprobantes ${is608?'anulados':'emitidos'} en el período.</div>`;
+      return;
+    }
+
+    body.innerHTML = `
+      <div style="display:flex;justify-content:space-between;margin-bottom:10px;font-size:12px">
+        <div><strong>${rows.length}</strong> comprobante(s)</div>
+        <div>Total: <strong>${fmt(totalSum)}</strong></div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:11.5px">
+        <thead><tr style="border-bottom:1px solid var(--line2);color:var(--muted2)">
+          ${headCols.map((c,i)=>`<th style="padding:6px 8px;text-align:${i===headCols.length-1?'right':'left'}">${c}</th>`).join('')}
+        </tr></thead>
+        <tbody>
+          ${rows.map(r=>`<tr style="border-bottom:0.5px solid var(--line2)">
+            ${rowCells(r).map((c,i)=>`<td style="padding:6px 8px;${i===0?'font-family:monospace;':''}text-align:${i===headCols.length-1?'right':'left'}">${esc(c)}</td>`).join('')}
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+
+    printableHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
+      <style>
+        body{font-family:Arial,sans-serif;font-size:11px;color:#111;padding:20px}
+        h2{margin:0 0 2px;font-size:16px} .sub{color:#666;font-size:11px;margin-bottom:12px}
+        table{width:100%;border-collapse:collapse}
+        th{background:#f3f4f6;padding:6px 8px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid #d1d5db}
+        td{padding:5px 8px;border-bottom:1px solid #eee;font-size:11px} .r{text-align:right} .mono{font-family:'Courier New',monospace}
+        .tot{font-weight:700;background:#f0f0f0;border-top:2px solid #111}
+        .no-print{margin-bottom:12px;text-align:right} @media print{.no-print{display:none}}
+      </style></head><body>
+      <div class="no-print"><button onclick="window.print()" style="background:#0D0F12;color:#fff;border:none;padding:8px 16px;border-radius:6px;font-size:12px;cursor:pointer;font-weight:700">🖨️ Imprimir</button></div>
+      <h2>${esc(biz)} — ${title}</h2>
+      <div class="sub">${rnc?`RNC: ${esc(rnc)} · `:''}Período: ${esc(from)} a ${esc(to)} · ${rows.length} comprobante(s)</div>
+      <table>
+        <thead><tr>${headCols.map((c,i)=>`<th class="${i===headCols.length-1?'r':''}">${c}</th>`).join('')}</tr></thead>
+        <tbody>
+          ${rows.map(r=>`<tr>${rowCells(r).map((c,i)=>`<td class="${i===0?'mono':''} ${i===headCols.length-1?'r':''}">${esc(c)}</td>`).join('')}</tr>`).join('')}
+          <tr class="tot"><td colspan="${headCols.length-1}">TOTAL</td><td class="r">${fmt(totalSum)}</td></tr>
+        </tbody>
+      </table>
+      <div style="margin-top:16px;font-size:9px;color:#9ca3af">Generado ${new Date().toLocaleString('es-DO')} · Reporte interno de apoyo — no sustituye el envío del formato 607/608 a la DGII.</div>
+      </body></html>`;
+    printBtn.disabled = false;
+  };
 }
 
 // ── Utilidades ────────────────────────────────
