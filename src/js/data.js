@@ -356,10 +356,12 @@ function toast(msg, t = 'ok') {
 // ── Alertas de crédito ────────────────────────
 function getCreditAlerts() {
   const td = today();
+  // Valida que credit_due sea una fecha YYYY-MM-DD real (evita NaN por datos corruptos)
+  const validDue = (d) => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d);
   return DB.customers
     .filter(c => c.balance > 0 && c.id !== 1)
     .map(c => {
-      const daysLeft = c.credit_due ? daysDiff(td, c.credit_due) : -999;
+      const daysLeft = validDue(c.credit_due) ? daysDiff(td, c.credit_due) : -999;
       const status   = daysLeft < 0 ? 'overdue' : daysLeft <= 5 ? 'soon' : 'ok';
       return { client: c, daysLeft, status };
     })

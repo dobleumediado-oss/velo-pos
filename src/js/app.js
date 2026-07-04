@@ -1276,10 +1276,11 @@ async function _runGSearch(q, resultsEl) {
              onmouseleave="this.style.background=''">
           <div>
             <div style="font-weight:600;font-size:13px">
-              #${String(s.id).padStart(5,'0')} · ${_escHtml(s.customer_name||'Consumidor Final')}
+              ${s.numero_factura_fmt ? '#'+_escHtml(s.numero_factura_fmt) : '#'+String(s.id).padStart(5,'0')} · ${_escHtml(s.customer_name||'Consumidor Final')}
             </div>
             <div style="font-size:11px;color:var(--muted)">
               ${typeof fdate==='function'?fdate(fecha):fecha}
+              ${s.ncf?`<span style="color:var(--muted2);margin-left:4px">NCF: ${_escHtml(s.ncf)}</span>`:''}
               ${models.map(m=>`<span style="color:var(--blue);font-weight:600;margin-left:4px">${_escHtml(m)}</span>`).join('')}
             </div>
           </div>

@@ -55,6 +55,7 @@ contextBridge.exposeInMainWorld('api', {
     getHistory:             (data) => ipcRenderer.invoke('customers:getHistory',             data),
     getSaleItems:           (data) => ipcRenderer.invoke('customers:getSaleItems',           data),
     getFacturasPendientes:  (data) => ipcRenderer.invoke('customers:getFacturasPendientes',  data),
+    getItemsForCustomer:    (data) => ipcRenderer.invoke('customers:getItemsForCustomer',    data),
   },
 
   // ── Caja ──────────────────────────────────
@@ -164,6 +165,7 @@ contextBridge.exposeInMainWorld('api', {
     importarGasto:   (data) => ipcRenderer.invoke('importar:importarGasto',   data),
     importarAbono:   (data) => ipcRenderer.invoke('importar:importarAbono',   data),
     readZIP:         (data) => ipcRenderer.invoke('importar:readZIP',         data),
+    allInOneEquiparts: (data) => ipcRenderer.invoke('importar:allInOneEquiparts', data),
     rollback:               (data) => ipcRenderer.invoke('importar:rollback',               data),
     importarFacturaCredito: (data) => ipcRenderer.invoke('importar:importarFacturaCredito', data),
   },

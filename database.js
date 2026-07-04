@@ -46,6 +46,7 @@ function initDB(customDataDir) {
   migrateECFColumns();
   migrateExpensesColumns();
   migratePaymentsColumns();
+  migrateV2IdentityColumns();   // Fase 1 migración v2 (identidad real Equiparts)
   seedIfEmpty();
 
   console.log('[DB] Iniciada en:', DB_PATH);
@@ -555,6 +556,77 @@ function migratePaymentsColumns() {
     db.prepare('ALTER TABLE payments ADD COLUMN cash_session_id INTEGER REFERENCES cash_sessions(id)').run();
     console.log('[MIGRATE] payments.cash_session_id agregada');
   } catch { /* ya existe */ }
+}
+
+// ── Migración v2: campos de identidad real desde el BAK de Equiparts ──
+// Fase 1 del plan de migración v2. Idempotente: try/catch por columna.
+// Agrega los números reales (factura, recibo, NCF) para búsqueda nativa,
+// más trazabilidad al origen (old_id_*) para deduplicación infalible.
+function migrateV2IdentityColumns() {
+  // sales: número de factura real + trazabilidad al origen
+  const salesCols = [
+    { col: 'numero_factura',     def: 'INTEGER' },
+    { col: 'numero_factura_fmt', def: 'TEXT' },
+    { col: 'old_id_factura',     def: 'INTEGER' },
+    { col: 'import_source',      def: 'TEXT' },
+  ];
+  salesCols.forEach(({ col, def }) => {
+    try {
+      db.prepare(`ALTER TABLE sales ADD COLUMN ${col} ${def}`).run();
+      console.log(`[MIGRATE v2] sales.${col} agregada`);
+    } catch { /* ya existe — ignorar */ }
+  });
+
+  // payments: número de recibo visible + trazabilidad al abono origen
+  const payCols = [
+    { col: 'numero_recibo',       def: 'INTEGER' },
+    { col: 'old_id_pago_detalle', def: 'INTEGER' },
+    { col: 'import_source',       def: 'TEXT' },
+  ];
+  payCols.forEach(({ col, def }) => {
+    try {
+      db.prepare(`ALTER TABLE payments ADD COLUMN ${col} ${def}`).run();
+      console.log(`[MIGRATE v2] payments.${col} agregada`);
+    } catch { /* ya existe — ignorar */ }
+  });
+
+  // customers: mapa al id_cliente del BAK (conecta ventas y recibos al cliente)
+  const custCols = [
+    { col: 'old_id_cliente', def: 'INTEGER' },
+    { col: 'import_source',  def: 'TEXT' },
+  ];
+  custCols.forEach(({ col, def }) => {
+    try {
+      db.prepare(`ALTER TABLE customers ADD COLUMN ${col} ${def}`).run();
+      console.log(`[MIGRATE v2] customers.${col} agregada`);
+    } catch { /* ya existe — ignorar */ }
+  });
+
+  // Índices para búsqueda rápida por número real (buscador Cmd+K / historial)
+  const idx = [
+    `CREATE INDEX IF NOT EXISTS idx_sales_numero_factura   ON sales(numero_factura)`,
+    `CREATE INDEX IF NOT EXISTS idx_sales_old_id_factura   ON sales(old_id_factura)`,
+    `CREATE INDEX IF NOT EXISTS idx_payments_numero_recibo ON payments(numero_recibo)`,
+    `CREATE INDEX IF NOT EXISTS idx_payments_old_pd        ON payments(old_id_pago_detalle)`,
+    `CREATE INDEX IF NOT EXISTS idx_customers_old_id       ON customers(old_id_cliente)`,
+  ];
+  idx.forEach(sql => {
+    try { db.prepare(sql).run(); }
+    catch (e) { console.log('[MIGRATE v2] idx:', e.message); }
+  });
+
+  // Índice de NCF: solo si la columna existe (en algunas DBs ncf se agrega
+  // por otra migración; verificamos en runtime para no fallar).
+  try {
+    const salesHasNcf = db.prepare('PRAGMA table_info(sales)').all().some(c => c.name === 'ncf');
+    if (salesHasNcf) {
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_sales_ncf ON sales(ncf)`).run();
+    } else {
+      // Asegurar que ncf exista, luego crear el índice
+      try { db.prepare(`ALTER TABLE sales ADD COLUMN ncf TEXT`).run(); } catch { /* ya existe */ }
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_sales_ncf ON sales(ncf)`).run();
+    }
+  } catch (e) { console.log('[MIGRATE v2] idx ncf:', e.message); }
 }
 
 function migrateECFColumns() {
@@ -1297,12 +1369,14 @@ const salesRepo = {
   getAll({ range = 'today', customerId, method, limit = 200, offset = 0 } = {}) {
     let where = "WHERE s.status != 'cancelled'";
     const params = [];
+    // Filtrar SOLO por fecha real, nunca por origen (cajero): una venta
+    // importada con fecha del mes cuenta como venta del mes.
     if (range === 'today') {
-      where += ` AND date(s.created_at)=date('now','localtime') AND s.cajero != 'Importación histórica'`;
+      where += ` AND date(s.created_at)=date('now','localtime')`;
     } else if (range === 'week') {
       where += ` AND date(s.created_at)>=date('now','-7 days','localtime')`;
     } else if (range === 'month') {
-      where += ` AND strftime('%Y-%m',s.created_at)=strftime('%Y-%m','now','localtime') AND s.cajero != 'Importación histórica'`;
+      where += ` AND strftime('%Y-%m',s.created_at)=strftime('%Y-%m','now','localtime')`;
     }
     if (customerId) { where += ' AND s.customer_id=?'; params.push(customerId); }
     if (method)     { where += ' AND s.payment_method=?'; params.push(method); }
@@ -1329,12 +1403,13 @@ const salesRepo = {
   countAll({ range = 'today', customerId, method } = {}) {
     let where = "WHERE status != 'cancelled'";
     const params = [];
+    // Filtrar SOLO por fecha real, nunca por origen (coherente con getAll).
     if (range === 'today') {
-      where += ` AND date(created_at)=date('now','localtime') AND cajero != 'Importación histórica'`;
+      where += ` AND date(created_at)=date('now','localtime')`;
     } else if (range === 'week') {
       where += ` AND date(created_at)>=date('now','-7 days','localtime')`;
     } else if (range === 'month') {
-      where += ` AND strftime('%Y-%m',created_at)=strftime('%Y-%m','now','localtime') AND cajero != 'Importación histórica'`;
+      where += ` AND strftime('%Y-%m',created_at)=strftime('%Y-%m','now','localtime')`;
     }
     if (customerId) { where += ' AND customer_id=?'; params.push(customerId); }
     if (method)     { where += ' AND payment_method=?'; params.push(method); }
@@ -1358,32 +1433,46 @@ const salesRepo = {
     const qNorm   = _searchNorm(term);
     const qDigits = _digitsOf(term);
     const idNum   = parseInt(term, 10);
+    // Término solo-dígitos sin '#' ni ceros a la izquierda, para casar
+    // numero_factura (ej. "#02449", "02449" y "2449" → 2449).
+    const termNoHash = term.replace(/^#/, '').trim();
+    const facNum = parseInt(termNoHash, 10);
 
     // Candidatos por SQL: por id exacto, o LIKE amplio en los campos de texto
     // y en los nombres de producto de los items. El LIKE usa el término crudo
     // en minúsculas; el filtro fino con tildes se hace después en JS.
     const like = `%${term.toLowerCase()}%`;
+    const likeNoHash = `%${termNoHash.toLowerCase()}%`;
     const rows = db.prepare(`
       SELECT s.*,
              GROUP_CONCAT(si.product_name || ' x' || si.qty, ' | ') as items_summary,
-             c.phone AS _cust_phone
+             c.phone AS _cust_phone,
+             (SELECT GROUP_CONCAT(p.numero_recibo, ',') FROM payments p WHERE p.sale_id = s.id) AS _recibos
       FROM sales s
       LEFT JOIN sale_items si ON s.id = si.sale_id
       LEFT JOIN customers c   ON c.id = s.customer_id
       WHERE s.status != 'cancelled'
         AND (
           s.id = ?
+          OR s.numero_factura = ?
+          OR lower(s.numero_factura_fmt) LIKE ?
+          OR lower(s.ncf)           LIKE ?
           OR lower(s.customer_name) LIKE ?
           OR lower(s.customer_rnc)  LIKE ?
           OR lower(s.notes)         LIKE ?
           OR lower(si.product_name) LIKE ?
           OR lower(si.product_code) LIKE ?
           OR lower(c.phone)         LIKE ?
+          OR EXISTS (SELECT 1 FROM payments p WHERE p.sale_id = s.id AND CAST(p.numero_recibo AS TEXT) LIKE ?)
         )
       GROUP BY s.id
       ORDER BY s.id DESC
       LIMIT 300
-    `).all(Number.isFinite(idNum) ? idNum : -1, like, like, like, like, like, like);
+    `).all(
+      Number.isFinite(idNum) ? idNum : -1,
+      Number.isFinite(facNum) ? facNum : -1,
+      likeNoHash, like, like, like, like, like, like, like, likeNoHash
+    );
 
     // Filtro fino con normalización de tildes/Ñ y dígitos con guarda.
     const matchText   = (hay) => !qNorm   || _searchNorm(hay).includes(qNorm);
@@ -1392,16 +1481,21 @@ const salesRepo = {
     const filtered = rows.filter(s =>
       String(s.id) === term ||
       String(s.id).includes(term) ||
+      (Number.isFinite(facNum) && s.numero_factura === facNum) ||
+      matchText(s.numero_factura_fmt) ||
+      matchDigits(s.numero_factura_fmt) ||
+      matchText(s.ncf) ||
       matchText(s.customer_name) ||
       matchText(s.customer_rnc) ||
       matchDigits(s.customer_rnc) ||
       matchDigits(s._cust_phone) ||
+      matchDigits(s._recibos) ||
       matchText(s.notes) ||
       matchText(s.items_summary)
     );
 
-    // Limpiar el campo auxiliar antes de devolver
-    return filtered.slice(0, limit).map(({ _cust_phone, ...rest }) => rest);
+    // Limpiar los campos auxiliares antes de devolver
+    return filtered.slice(0, limit).map(({ _cust_phone, _recibos, ...rest }) => rest);
   },
 
   cancel(id, reason, userId, userName) {
@@ -1488,16 +1582,17 @@ const reportsRepo = {
 
     const f = _buildFilters();
 
-    // Excluir ventas históricas de 'today' y 'month' —
-    // en semana/histórico/custom sí deben aparecer en reportes financieros.
-    // NOTA: los abonos históricos (pagos) SÍ se incluyen en month porque son
-    // cobros reales del mes — solo las ventas se excluyen.
-    const _excludeHist = (range === 'today' || range === 'month');
-    const hf  = _excludeHist ? `AND cajero   != 'Importación histórica'` : '';
-    const hfs = _excludeHist ? `AND s.cajero != 'Importación histórica'` : '';
-    // Para payments: solo excluir históricos en 'today', no en 'month'
-    // Los abonos importados de junio son cobros reales que deben sumarse
-    const hfp = range === 'today' ? `AND cajero != 'Importación histórica'` : '';
+    // Regla contable: filtrar SOLO por fecha real, NUNCA por origen.
+    // Una venta cuenta una vez, en su fecha, por su total — sin importar si
+    // vino del POS o de una importación histórica. El filtro de fecha (f) ya
+    // restringe a la ventana correcta (today/month/week/custom/all), así que
+    // una factura importada con fecha del mes actual SÍ debe contar en el mes,
+    // y una de 2020 NO aparece en 'month' simplemente porque su fecha no cae.
+    // Esto evita ocultar ventas reales recientes y evita doble conteo:
+    //   ventas = devengado (por total) · abonos = caja · CxC = saldo acumulado.
+    const hf  = '';
+    const hfs = '';
+    const hfp = '';
 
     // Ventas por método de pago
     const byMethod = db.prepare(`
@@ -1667,6 +1762,9 @@ const reportsRepo = {
              c.rnc  AS customer_rnc,
              s.total AS sale_total,
              s.created_at AS sale_created_at,
+             s.numero_factura     AS sale_numero_factura,
+             s.numero_factura_fmt AS sale_numero_factura_fmt,
+             s.ncf                AS sale_ncf,
              CASE WHEN p.cajero='Importación histórica' THEN 1 ELSE 0 END AS imported
       FROM payments p
       LEFT JOIN customers c ON c.id = p.customer_id

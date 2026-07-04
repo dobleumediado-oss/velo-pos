@@ -206,12 +206,13 @@ function renderCliTable() {
 
     // Badge vencimiento
     let dueBadge = null;
-    if (balance > 0 && creditDue) {
+    const validDue = typeof creditDue === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(creditDue);
+    if (balance > 0 && validDue) {
       const dl = daysDiff(today(), creditDue);
       if (dl < 0)      dueBadge = h('span', { class: 'credit-due-badge overdue' }, `Vencido ${Math.abs(dl)}d`);
       else if (dl <= 5) dueBadge = h('span', { class: 'credit-due-badge soon' },    `Vence en ${dl}d`);
       else             dueBadge = h('span', { class: 'credit-due-badge ok' },       fdate(creditDue));
-    } else if (balance === 0 && creditDue) {
+    } else if (balance === 0 && validDue) {
       dueBadge = h('span', { class: 'credit-due-badge ok' }, '✓ Saldado');
     }
 
@@ -718,6 +719,12 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
   const ventas = ventasRaw.filter(s => s.status !== 'cancelled').reverse();
   // Guardar ventas del cliente en window para que filtrarHistorialCliente las use
   window._cliModalVentas = ventas;
+  // Cargar items reales de todas las ventas del cliente (para Buscar por Artículo).
+  // Se hace una sola vez al abrir el modal; la búsqueda filtra en memoria.
+  try {
+    const itemsRes = await window.api.customers.getItemsForCustomer({ customerId: c.id });
+    window._cliModalItems = (itemsRes && itemsRes.items) ? itemsRes.items : [];
+  } catch { window._cliModalItems = []; }
 
   const totalCompras = ventas.reduce((a, s) => a + s.total, 0);
   const totalAbonado = pagos.reduce((a, p) => a + p.amount, 0);
@@ -1138,30 +1145,32 @@ function filtrarHistorialCliente(customerId, q) {
     return;
   }
 
-  // Usar ventas ya cargadas del modal (incluye historial completo)
-  const ventas = window._cliModalVentas || [];
+  // Usar los items reales cargados del backend (una fila por artículo vendido).
+  const items = window._cliModalItems || [];
 
-  // Buscar en items de cada venta
+  // Buscar en cada item por nombre, código o modelo (Unicode-safe)
+  const qn = q.normalize('NFC');
   const matches = [];
-  ventas.forEach(s => {
-    (s.items || []).forEach(i => {
-      const prod    = DB.products.find(p => p.id === i.product_id);
-      const nombre  = (i.product_name || i.name || '').toLowerCase();
-      const codigo  = (i.product_code || i.code || prod?.code || '').toLowerCase();
-      const modelo  = (prod?.model || '').toLowerCase();
+  items.forEach(it => {
+    const prod   = DB.products.find(p => p.id === it.product_id);
+    const nombre = (it.product_name || '').toLowerCase().normalize('NFC');
+    const codigo = (it.product_code || prod?.code || '').toLowerCase().normalize('NFC');
+    const modelo = (prod?.model || '').toLowerCase().normalize('NFC');
 
-      if (nombre.includes(q) || codigo.includes(q) || modelo.includes(q)) {
-        const fecha = (s.created_at || '').split('T')[0].split(' ')[0];
-        matches.push({
-          saleId:   s.id,
-          fecha,
-          item:     i,
-          prod,
-          total:    s.total,
-          method:   s.payment_method || s.pay || '—',
-        });
-      }
-    });
+    if (nombre.includes(qn) || codigo.includes(qn) || modelo.includes(qn)) {
+      const fecha = (it.created_at || '').split('T')[0].split(' ')[0];
+      matches.push({
+        saleId:   it.sale_id,
+        fecha,
+        item:     { product_name: it.product_name, product_code: it.product_code,
+                    qty: it.qty, unit_price: it.unit_price },
+        prod,
+        total:    it.sale_total,
+        method:   it.payment_method || '—',
+        numFact:  it.numero_factura_fmt || (it.numero_factura != null ? String(it.numero_factura).padStart(8,'0') : ''),
+        ncf:      it.ncf || '',
+      });
+    }
   });
 
   if (!matches.length) {
@@ -1239,6 +1248,7 @@ async function toggleVentaDetalle(idx, saleId, rowEl) {
     detailBody.innerHTML = `
       <table style="width:100%;border-collapse:collapse;font-size:11px">
         <thead><tr style="border-bottom:1px solid var(--line)">
+          <th style="padding:4px 8px;text-align:left;color:var(--muted)">Código</th>
           <th style="padding:4px 8px;text-align:left;color:var(--muted)">Artículo</th>
           <th style="padding:4px 8px;text-align:center;color:var(--muted)">Cant.</th>
           <th style="padding:4px 8px;text-align:right;color:var(--muted)">P. Unit.</th>
@@ -1247,6 +1257,7 @@ async function toggleVentaDetalle(idx, saleId, rowEl) {
         <tbody>
           ${items.map((it, i) => `
             <tr style="background:${i%2===0?'transparent':'var(--surface)'}">
+              <td style="padding:4px 8px;font-family:monospace;font-size:10px;color:var(--muted)">${it.product_code || '—'}</td>
               <td style="padding:4px 8px;font-weight:500">${it.product_name}</td>
               <td style="padding:4px 8px;text-align:center;color:var(--muted2)">${it.qty}</td>
               <td style="padding:4px 8px;text-align:right">${fmt(it.unit_price)}</td>
@@ -1254,7 +1265,7 @@ async function toggleVentaDetalle(idx, saleId, rowEl) {
             </tr>`).join('')}
         </tbody>
         <tfoot><tr style="border-top:1px solid var(--line)">
-          <td colspan="3" style="padding:4px 8px;text-align:right;font-size:10px;color:var(--muted)">Total:</td>
+          <td colspan="4" style="padding:4px 8px;text-align:right;font-size:10px;color:var(--muted)">Total:</td>
           <td style="padding:4px 8px;text-align:right;font-weight:800">${fmt(total)}</td>
         </tr></tfoot>
       </table>`;
@@ -1284,6 +1295,7 @@ async function toggleFacturaDetalle(idx, saleId, rowEl) {
     detailBody.innerHTML = `
       <table style="width:100%;border-collapse:collapse;font-size:12px">
         <thead><tr style="border-bottom:1px solid var(--line)">
+          <th style="padding:5px 8px;text-align:left;color:var(--muted)">Código</th>
           <th style="padding:5px 8px;text-align:left;color:var(--muted)">Artículo</th>
           <th style="padding:5px 8px;text-align:center;color:var(--muted)">Cant.</th>
           <th style="padding:5px 8px;text-align:right;color:var(--muted)">Precio Unit.</th>
@@ -1292,6 +1304,7 @@ async function toggleFacturaDetalle(idx, saleId, rowEl) {
         <tbody>
           ${items.map((it, i) => `
             <tr style="background:${i%2===0?'transparent':'var(--surface)'}">
+              <td style="padding:5px 8px;font-family:monospace;font-size:11px;color:var(--muted)">${it.product_code || '—'}</td>
               <td style="padding:5px 8px;font-weight:500">${it.product_name}</td>
               <td style="padding:5px 8px;text-align:center;color:var(--muted2)">${it.qty}</td>
               <td style="padding:5px 8px;text-align:right">${fmt(it.unit_price)}</td>
@@ -1299,7 +1312,7 @@ async function toggleFacturaDetalle(idx, saleId, rowEl) {
             </tr>`).join('')}
         </tbody>
         <tfoot><tr style="border-top:1px solid var(--line)">
-          <td colspan="3" style="padding:5px 8px;text-align:right;font-size:11px;color:var(--muted)">Total artículos:</td>
+          <td colspan="4" style="padding:5px 8px;text-align:right;font-size:11px;color:var(--muted)">Total artículos:</td>
           <td style="padding:5px 8px;text-align:right;font-weight:800;color:var(--red)">${fmt(total)}</td>
         </tr></tfoot>
       </table>`;

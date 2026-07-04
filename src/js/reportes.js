@@ -650,7 +650,10 @@ function renderAbonosContenido(el, d) {
 
   const rowsHtml = rows.length ? rows.map(p => {
     const fecha = (p.created_at || '').split('T')[0].split(' ')[0];
-    const factura = p.sale_id ? `#${String(p.sale_id).padStart(5, '0')}` : 'Sin factura';
+    // Mostrar el número de factura REAL (numero_factura_fmt), no el sale_id interno.
+    const factura = p.sale_numero_factura_fmt
+      ? `#${p.sale_numero_factura_fmt}`
+      : (p.sale_id ? `#${String(p.sale_id).padStart(5, '0')}` : 'Sin factura');
     const source = p.imported ? 'Histórico' : 'POS';
     return `<tr>
       <td>${fdate(fecha)}</td>
@@ -659,7 +662,7 @@ function renderAbonosContenido(el, d) {
         <div style="font-size:10px;color:var(--muted2)">${_repEsc(p.customer_rnc || '')}</div>
       </td>
       <td>
-        <div>${factura}</div>
+        <div>${factura}${p.sale_ncf ? ` <span style="font-size:10px;color:var(--muted2)">${_repEsc(p.sale_ncf)}</span>` : ''}</div>
         <div style="font-size:10px;color:var(--muted2)">${_repEsc(p.note || 'Abono')}</div>
       </td>
       <td><span class="badge g">${_repEsc(p.method || 'efectivo')}</span></td>
@@ -696,7 +699,7 @@ function exportAbonosPDF() {
     return `<tr>
       <td>${fdate(fecha)}</td>
       <td>${_repEsc(p.customer_name || 'Cliente eliminado')}</td>
-      <td>${p.sale_id ? '#' + String(p.sale_id).padStart(5, '0') : 'Sin factura'}</td>
+      <td>${p.sale_numero_factura_fmt ? '#' + _repEsc(p.sale_numero_factura_fmt) : (p.sale_id ? '#' + String(p.sale_id).padStart(5, '0') : 'Sin factura')}</td>
       <td>${_repEsc(p.method || 'efectivo')}</td>
       <td>${p.imported ? 'Histórico' : 'POS'}</td>
       <td style="text-align:right;font-weight:700">${fmt(p.amount || 0)}</td>

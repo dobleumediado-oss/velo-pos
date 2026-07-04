@@ -261,6 +261,17 @@ function wizardStepImportar() {
 
     <div id="imp-file-info" style="display:none;margin-bottom:10px"></div>
 
+    <div style="border:2px solid var(--green);border-radius:var(--r-md);padding:14px;margin-bottom:10px;background:color-mix(in srgb, var(--green) 6%, transparent)">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="font-size:26px">⚡</div>
+        <div style="flex:1">
+          <div style="font-weight:700;font-size:13px">ALL IN ONE — Migración Equiparts v2</div>
+          <div style="font-size:11px;color:var(--muted2)">Carga los 4 CSV (Productos · Clientes · Ventas · Recibos) de una sola vez. Backup automático + reset limpio + validación de CxC.</div>
+        </div>
+        <button class="btn btn-dark" onclick="abrirAllInOne()">⚡ Ejecutar</button>
+      </div>
+    </div>
+
     <div class="modal-foot">
       <button class="btn btn-out" onclick="wizardStep=4;renderWizardStep()">
         Omitir — empezar desde cero
@@ -290,6 +301,105 @@ function wizardStepImportar() {
     }
     setImportTipo('productos');
   }, 50);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// ALL IN ONE — migración Equiparts v2 (backup + reset + import + CxC)
+// ══════════════════════════════════════════════════════════════════════
+function abrirAllInOne() {
+  openModal(`
+    <div style="text-align:center;margin-bottom:14px">
+      <div style="font-size:32px;margin-bottom:6px">⚡</div>
+      <div class="modal-title">ALL IN ONE — Migración Equiparts v2</div>
+    </div>
+    <div class="alrt r" style="margin-bottom:14px">
+      <div class="alrt-dot r"></div>
+      <div>
+        <div class="alrt-title">Esto BORRA todos los datos actuales</div>
+        <div class="alrt-sub">
+          Se crea un backup automático del <code>velo.db</code> antes de borrar.
+          Luego se importan los 4 CSV desde la carpeta que elijas y se valida el CxC
+          contra el checkpoint (RD$12,214,797.62 / 53 clientes / 170 pendientes).
+        </div>
+      </div>
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:14px">
+      La carpeta debe contener exactamente:
+      <code>1_inventario_v2.csv</code>, <code>2_clientes_v2.csv</code>,
+      <code>3_ventas_v2.csv</code>, <code>4_recibos_v2.csv</code>.
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-dark" id="aio-run" onclick="ejecutarAllInOne()">
+        ⚡ Elegir carpeta y ejecutar
+      </button>
+    </div>
+  `);
+}
+
+async function ejecutarAllInOne() {
+  const btn = document.getElementById('aio-run');
+  if (btn) { btn.disabled = true; btn.style.opacity = '.5'; btn.textContent = '⏳ Procesando…'; }
+  let res;
+  try {
+    res = await window.api.importar.allInOneEquiparts({ requestUserId: window._currentUser?.id });
+  } catch (e) {
+    res = { ok: false, error: e.message };
+  }
+
+  if (!res || !res.ok) {
+    if (res && res.error === 'Cancelado') { toast('Migración cancelada', 'w'); closeModal(); return; }
+    openModal(`
+      <div style="text-align:center;margin-bottom:12px">
+        <div style="font-size:32px">❌</div>
+        <div class="modal-title">La migración falló</div>
+      </div>
+      <div class="alrt r" style="margin-bottom:14px">
+        <div class="alrt-dot r"></div>
+        <div><div class="alrt-title">Nada se importó (transacción revertida)</div>
+        <div class="alrt-sub">${(res && res.error) || 'Error desconocido'}</div></div>
+      </div>
+      ${res && res.backup ? `<div style="font-size:11px;color:var(--muted)">Backup previo: <code>${res.backup}</code></div>` : ''}
+      <div class="modal-foot"><button class="btn btn-dark" onclick="closeModal()">Cerrar</button></div>
+    `);
+    return;
+  }
+
+  const s = res.stats || {};
+  const cxcFmt = (res.cxc || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const targetFmt = (res.target || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const cuadra = res.cuadra;
+
+  openModal(`
+    <div style="text-align:center;margin-bottom:12px">
+      <div style="font-size:32px">${cuadra ? '✅' : '⚠️'}</div>
+      <div class="modal-title">Migración completada</div>
+    </div>
+    <div class="alrt ${cuadra ? 'b' : 'a'}" style="margin-bottom:14px">
+      <div class="alrt-dot ${cuadra ? 'b' : 'a'}"></div>
+      <div>
+        <div class="alrt-title">CxC en Velo: RD$${cxcFmt}</div>
+        <div class="alrt-sub">
+          Target: RD$${targetFmt} — ${cuadra ? 'CUADRA exacto ✔' : 'DIFIERE, revisar antes de dar por buena la carga'}
+          · ${res.clientes_con_saldo} clientes con saldo · ${res.facturas} facturas
+        </div>
+      </div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:14px">
+      <tbody>
+        <tr><td style="padding:4px 8px;color:var(--muted)">Productos</td><td style="padding:4px 8px;text-align:right;font-weight:600">${s.prod_new||0} nuevos · ${s.prod_skip||0} ya existían</td></tr>
+        <tr style="background:var(--surface)"><td style="padding:4px 8px;color:var(--muted)">Clientes</td><td style="padding:4px 8px;text-align:right;font-weight:600">${s.cli_new||0} nuevos · ${s.cli_skip||0} ya existían</td></tr>
+        <tr><td style="padding:4px 8px;color:var(--muted)">Facturas</td><td style="padding:4px 8px;text-align:right;font-weight:600">${s.fac_new||0} importadas</td></tr>
+        <tr style="background:var(--surface)"><td style="padding:4px 8px;color:var(--muted)">Ítems</td><td style="padding:4px 8px;text-align:right;font-weight:600">${s.items||0} líneas</td></tr>
+        <tr><td style="padding:4px 8px;color:var(--muted)">Recibos</td><td style="padding:4px 8px;text-align:right;font-weight:600">${s.rec_new||0} nuevos</td></tr>
+      </tbody>
+    </table>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:12px">Backup previo: <code>${res.backup||''}</code></div>
+    <div class="modal-foot">
+      <button class="btn btn-dark" onclick="closeModal();location.reload()">Cerrar y recargar</button>
+    </div>
+  `);
+  toast(cuadra ? 'Migración OK — CxC cuadra' : 'Migración hecha — CxC difiere', cuadra ? 'ok' : 'w');
 }
 
 function setImportTipo(tipo) {

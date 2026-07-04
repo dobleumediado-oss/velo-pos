@@ -116,14 +116,13 @@ async function renderDash(el) {
     window.api.sales.getAll({ range: 'month' }),
     window.api.sales.getAll({ range: 'week' }),
     window.api.reports.summary({ range: 'month', requestUserId: user.id }).catch(() => null),
-    window.api.reports.dailyTrend({ days: 30, includeHistorical: false, requestUserId: user.id }).catch(() => null),
+    window.api.reports.dailyTrend({ days: 30, includeHistorical: true, requestUserId: user.id }).catch(() => null),
   ]);
 
   const isOperationalSale = s =>
     s.status !== 'cancelled' &&
     s.status !== 'returned' &&
-    s.type !== 'devolucion' &&
-    s.cajero !== 'Importación histórica';
+    s.type !== 'devolucion';
 
   const mSales = (allSales || []).filter(isOperationalSale);
   // Ventas del mes vía agregado SQL — exacto sin importar el límite de filas.
@@ -642,7 +641,7 @@ async function renderDash(el) {
     // 12 meses — agregado real vía SQL (no depende de allSales, que solo
     // trae el mes en curso, ni del límite de filas de sales:getAll).
     const trendRes = await window.api.reports.monthlyTrend({
-      includeHistorical: false,
+      includeHistorical: true,
       requestUserId: user.id
     }).catch(() => null);
     const trendByMonth = {};
@@ -962,7 +961,7 @@ async function _dashRenderChart(canvasId, labels, data, dates, period, detailEl,
           const sd = (s.created_at||'').split('T')[0].split(' ')[0];
           return (period === '12m' ? sd.slice(0,7) === d : sd === d) &&
                  s.status !== 'cancelled' && s.status !== 'returned' &&
-                 s.type !== 'devolucion' && s.cajero !== 'Importación histórica';
+                 s.type !== 'devolucion';
         });
         const m = meta[d] || {};
         detailEl.innerHTML = `
@@ -1055,7 +1054,7 @@ function _dashRenderNativeChart(canvas, labels, data, dates, period, detailEl, a
       const sd = (s.created_at || '').split('T')[0].split(' ')[0];
       return (period === '12m' ? sd.slice(0, 7) === d : sd === d) &&
              s.status !== 'cancelled' && s.status !== 'returned' &&
-             s.type !== 'devolucion' && s.cajero !== 'Importación histórica';
+             s.type !== 'devolucion';
     });
     detailEl.innerHTML = `
       <div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;

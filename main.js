@@ -2469,6 +2469,331 @@ ipcMain.handle('importar:importarFacturaCredito', async (_, {
   }
 });
 
+// ══════════════════════════════════════════════════════════════════════
+// IPC — ALL IN ONE (migración Equiparts v2 desde carpeta de CSV)
+// ══════════════════════════════════════════════════════════════════════
+// Backup automático → RESET total (FK-safe) → import limpio → valida CxC.
+// Porta la lógica probada de scripts/importar-equiparts-v2.js a runtime,
+// sin proceso externo ni reinicio de Electron. Todo-o-nada.
+const ALLINONE_FILES = {
+  clientes:   '2_clientes_v2.csv',
+  inventario: '1_inventario_v2.csv',
+  ventas:     '3_ventas_v2.csv',
+  recibos:    '4_recibos_v2.csv',
+};
+const ALLINONE_TARGET_CXC = 12214797.62;
+
+// Parser CSV real (comillas + comas internas) — idéntico al script v2.
+function _aioParseCSV(text) {
+  const rows = []; let field = '', row = [], inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i], n = text[i + 1];
+    if (inQuotes) {
+      if (c === '"' && n === '"') { field += '"'; i++; }
+      else if (c === '"') { inQuotes = false; }
+      else { field += c; }
+    } else {
+      if (c === '"') { inQuotes = true; }
+      else if (c === ',') { row.push(field); field = ''; }
+      else if (c === '\r') { /* ignorar */ }
+      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+      else { field += c; }
+    }
+  }
+  if (field !== '' || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+function _aioLoadCSV(dir, fname) {
+  const p = path.join(dir, fname);
+  if (!fs.existsSync(p)) throw new Error(`No se encontró el CSV: ${fname}`);
+  let text = fs.readFileSync(p, 'utf8');
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  const rows = _aioParseCSV(text).filter(r => r.length && !(r.length === 1 && r[0] === ''));
+  const header = rows.shift();
+  return rows.map(r => {
+    const o = {};
+    header.forEach((h, i) => { o[h.trim()] = (r[i] !== undefined ? r[i] : '').trim(); });
+    return o;
+  });
+}
+const _aioNum = v => {
+  if (v === '' || v == null) return 0;
+  const n = Number(String(v).replace(/,/g, ''));
+  return Number.isFinite(n) ? n : 0;
+};
+const _aioIntOrNull = v => (v === '' || v == null) ? null : parseInt(v, 10);
+const _aioNorm = s => (s || '').trim().toLowerCase().normalize('NFC');
+
+ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, requestUserId } = {}) => {
+  try {
+    const db = require('./database').getDB();
+    if (!db) return { ok: false, error: 'DB no inicializada' };
+
+    // ── 0) Elegir carpeta si no vino ────────────────────────────────────
+    let csvDir = dir;
+    if (!csvDir) {
+      const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
+        title: 'Seleccionar carpeta con los 4 CSV de la migración v2',
+        properties: ['openDirectory'],
+      });
+      if (canceled || !filePaths?.length) return { ok: false, error: 'Cancelado' };
+      csvDir = filePaths[0];
+    }
+
+    // ── 1) Verificar Fase 1 (columnas v2) ──────────────────────────────
+    const salesCols = db.prepare('PRAGMA table_info(sales)').all().map(c => c.name);
+    const custCols  = db.prepare('PRAGMA table_info(customers)').all().map(c => c.name);
+    const payCols   = db.prepare('PRAGMA table_info(payments)').all().map(c => c.name);
+    const need = [
+      ['sales','old_id_factura', salesCols], ['sales','numero_factura', salesCols],
+      ['customers','old_id_cliente', custCols],
+      ['payments','old_id_pago_detalle', payCols], ['payments','numero_recibo', payCols],
+    ];
+    const missing = need.filter(([t,c,cols]) => !cols.includes(c)).map(([t,c]) => `${t}.${c}`);
+    if (missing.length) return { ok: false, error: 'Faltan columnas v2 (Fase 1): ' + missing.join(', ') };
+
+    // ── 2) Cargar los 4 CSV (valida existencia y nombres) ──────────────
+    let clientes, inventario, ventas, recibos;
+    try {
+      clientes   = _aioLoadCSV(csvDir, ALLINONE_FILES.clientes);
+      inventario = _aioLoadCSV(csvDir, ALLINONE_FILES.inventario);
+      ventas     = _aioLoadCSV(csvDir, ALLINONE_FILES.ventas);
+      recibos    = _aioLoadCSV(csvDir, ALLINONE_FILES.recibos);
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+
+    // ── 3) BACKUP automático del .db actual ────────────────────────────
+    const backupsDir = path.join(DATA_DIR, 'backups');
+    fs.mkdirSync(backupsDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupPath = path.join(backupsDir, `velo_before_allinone_${stamp}.db`);
+    try {
+      // better-sqlite3: backup en caliente, consistente con WAL activo.
+      await db.backup(backupPath);
+    } catch (e) {
+      return { ok: false, error: 'No se pudo crear el backup, se aborta: ' + e.message };
+    }
+
+    const stats = {
+      prod_new: 0, prod_skip: 0, cli_new: 0, cli_skip: 0,
+      fac_new: 0, fac_skip: 0, items: 0, rec_new: 0, rec_skip: 0,
+    };
+
+    // ── 4) RESET + IMPORT en UNA transacción todo-o-nada ───────────────
+    // FK off dentro de la transacción para limpieza masiva segura.
+    db.pragma('foreign_keys = OFF');
+    const runAll = db.transaction(() => {
+      // 4a) RESET: vaciar tablas que la migración toca (orden no crítico con FK off)
+      const wipe = [
+        'inventory_movements', 'ecf_log', 'ncf_log', 'deliveries',
+        'sale_items', 'payments', 'sales', 'customers', 'products',
+      ];
+      for (const t of wipe) {
+        try { db.prepare(`DELETE FROM ${t}`).run(); } catch (_) { /* tabla ausente: ignorar */ }
+      }
+      // Reset de autoincrement para IDs limpios
+      try { db.prepare(`DELETE FROM sqlite_sequence WHERE name IN ('sales','sale_items','payments','customers','products')`).run(); } catch (_) {}
+      // Recrear Consumidor Final (id=1) — resolveCust cae aquí por defecto
+      db.prepare(`INSERT INTO customers(id, name, active, balance) VALUES (1, 'Consumidor Final', 1, 0)`).run();
+
+      // 4b) INVENTARIO
+      const findProdByCode = db.prepare(`SELECT id FROM products WHERE code = ? LIMIT 1`);
+      const insProd = db.prepare(`
+        INSERT INTO products(code, barcode, name, brand, category, cost, price, wholesale, stock, stock_min, unit, active)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`);
+      for (const p of inventario) {
+        const code = (p.code || '').trim();
+        if (!code) continue;
+        if (findProdByCode.get(code)) { stats.prod_skip++; continue; }
+        insProd.run(code, (p.barcode || code).trim(), (p.name || 'Producto').trim(),
+          (p.brand || 'GENERICA').trim(), (p.category || 'GENERICO').trim(),
+          _aioNum(p.cost), _aioNum(p.price), _aioNum(p.wholesale),
+          parseInt(p.stock, 10) || 0, parseInt(p.stock_min, 10) || 5, (p.unit || 'UNIDAD').trim());
+        stats.prod_new++;
+      }
+      const prodByCode = new Map(db.prepare(`SELECT id, code FROM products WHERE active=1`).all().map(x => [x.code, x.id]));
+
+      // 4c) CLIENTES
+      const mapCli = new Map();
+      const insCli = db.prepare(`
+        INSERT INTO customers(name, rnc, phone, address, email, credit_days, balance, active, old_id_cliente, import_source)
+        VALUES(?, ?, ?, ?, ?, ?, 0, 1, ?, 'equiparts_bak')`);
+      const findCliByOld = db.prepare(`SELECT id FROM customers WHERE old_id_cliente = ? LIMIT 1`);
+      let allCustomers = db.prepare(`SELECT id, name FROM customers WHERE active=1`).all();
+      for (const c of clientes) {
+        const oldId = _aioIntOrNull(c.old_id_cliente);
+        if (oldId == null) continue;
+        const exist = findCliByOld.get(oldId);
+        if (exist) { mapCli.set(oldId, exist.id); stats.cli_skip++; continue; }
+        const byName = allCustomers.find(x => _aioNorm(x.name) === _aioNorm(c.name));
+        if (byName) {
+          db.prepare(`UPDATE customers SET old_id_cliente=?, import_source='equiparts_bak' WHERE id=?`).run(oldId, byName.id);
+          mapCli.set(oldId, byName.id); stats.cli_skip++; continue;
+        }
+        const r = insCli.run(c.name || 'Cliente', c.rnc || '', c.phone || '', c.address || '',
+          c.email || '', _aioIntOrNull(c.credit_days) || 30, oldId);
+        mapCli.set(oldId, r.lastInsertRowid); stats.cli_new++;
+      }
+      const custByName = new Map(db.prepare(`SELECT id, name FROM customers WHERE active=1`).all().map(x => [_aioNorm(x.name), x.id]));
+      const resolveCust = (oldId, name) => {
+        if (oldId != null && mapCli.has(oldId)) return mapCli.get(oldId);
+        const byOld = oldId != null ? findCliByOld.get(oldId) : null;
+        if (byOld) return byOld.id;
+        const byName = custByName.get(_aioNorm(name));
+        if (byName) return byName.id;
+        return 1;
+      };
+
+      // 4d) VENTAS + items
+      const findSaleByOld = db.prepare(`SELECT id FROM sales WHERE old_id_factura = ? LIMIT 1`);
+      const insSale = db.prepare(`
+        INSERT INTO sales(cash_session_id, customer_id, customer_name, customer_rnc, type, status,
+          subtotal, discount_pct, discount_amt, tax_pct, tax_amt, total, payment_method, price_mode,
+          cajero, user_id, ncf, notes, created_at, numero_factura, numero_factura_fmt, old_id_factura, import_source)
+        VALUES (?, ?, ?, '', ?, ?, ?, 0, 0, ?, ?, ?, ?, 'retail', 'Importación histórica', NULL, ?, ?, ?, ?, ?, ?, 'equiparts_bak')`);
+      const insItem = db.prepare(`
+        INSERT INTO sale_items(sale_id, product_id, product_code, product_name, unit_cost, unit_price, qty, subtotal)
+        VALUES (?, ?, ?, ?, 0, ?, ?, ?)`);
+      const facturas = new Map();
+      for (const v of ventas) {
+        const oid = _aioIntOrNull(v.old_id_factura);
+        if (oid == null) continue;
+        if (!facturas.has(oid)) {
+          facturas.set(oid, {
+            old_id_factura: oid, numero_factura: _aioIntOrNull(v.numero_factura),
+            numero_factura_fmt: v.numero_factura_fmt || '',
+            ncf: (v.ncf || '').startsWith('B') ? v.ncf : '',
+            customer_name: v.customer_name || 'Consumidor Final',
+            old_id_cliente: _aioIntOrNull(v.old_id_cliente),
+            date: (v.date || '').slice(0, 10), total: _aioNum(v.total), balance: _aioNum(v.balance),
+            payment_method: v.payment_method || 'efectivo',
+            status: v.status === 'cancelled' ? 'cancelled' : 'completed',
+            type: 'factura', items: [],
+          });
+        }
+        const f = facturas.get(oid);
+        const pname = (v.product_name || '').trim();
+        if (pname) f.items.push({
+          product_code: v.product_code || 'IMP', product_name: pname,
+          qty: Math.max(1, parseInt(v.qty, 10) || 1), unit_price: _aioNum(v.unit_price),
+          line_total: _aioNum(v.line_total),
+        });
+      }
+      const balByCust = new Map();
+      const dueByCust = new Map();   // fecha de vencimiento más antigua por cliente (crédito con saldo)
+      const custCreditDays = new Map(
+        db.prepare(`SELECT id, COALESCE(credit_days,30) cd FROM customers`).all().map(x => [x.id, x.cd])
+      );
+      // Suma días a una fecha YYYY-MM-DD y devuelve YYYY-MM-DD
+      const addDays = (ymd, days) => {
+        const d = new Date(ymd + 'T12:00');
+        if (isNaN(d)) return null;
+        d.setDate(d.getDate() + (parseInt(days, 10) || 30));
+        return d.toISOString().slice(0, 10);
+      };
+      for (const f of facturas.values()) {
+        if (findSaleByOld.get(f.old_id_factura)) { stats.fac_skip++; continue; }
+        const custId = resolveCust(f.old_id_cliente, f.customer_name);
+        const dt = (f.date || new Date().toISOString().split('T')[0]) + ' 00:00:00';
+        const fmt = f.numero_factura_fmt || (f.numero_factura != null ? String(f.numero_factura).padStart(8,'0') : '');
+        const notes = f.numero_factura != null ? `Factura #${fmt}${f.ncf ? ' | NCF:' + f.ncf : ''}` : 'Factura importada';
+        const taxPct = 18;
+        const r = insSale.run(null, custId, f.customer_name, f.type, f.status,
+          f.total, taxPct, 0, f.total, f.payment_method, f.ncf, notes, dt,
+          f.numero_factura, fmt, f.old_id_factura);
+        const saleId = r.lastInsertRowid;
+        const items = f.items.length ? f.items
+          : [{ product_code: 'IMP', product_name: 'Factura importada', qty: 1, unit_price: f.total, line_total: f.total }];
+        for (const it of items) {
+          const pid = prodByCode.get((it.product_code || '').trim()) || null;
+          insItem.run(saleId, pid, it.product_code, it.product_name, it.unit_price, it.qty,
+            it.line_total || (it.unit_price * it.qty));
+          stats.items++;
+        }
+        stats.fac_new++;
+        if (f.balance > 0) {
+          balByCust.set(custId, (balByCust.get(custId) || 0) + f.balance);
+          // Vencimiento = fecha de la factura + días de crédito del cliente.
+          // Guardamos la MÁS ANTIGUA (la más vencida) por cliente.
+          const facDate = (f.date || '').slice(0, 10);
+          const due = facDate ? addDays(facDate, custCreditDays.get(custId) || 30) : null;
+          if (due) {
+            const prev = dueByCust.get(custId);
+            if (!prev || due < prev) dueByCust.set(custId, due);
+          }
+        }
+      }
+
+      // 4e) RECIBOS → payments
+      const findPayByOld = db.prepare(`SELECT id FROM payments WHERE old_id_pago_detalle = ? LIMIT 1`);
+      const findSaleForRec = db.prepare(`SELECT id, customer_id FROM sales WHERE old_id_factura = ? LIMIT 1`);
+      const insPay = db.prepare(`
+        INSERT INTO payments(customer_id, sale_id, amount, method, note, balance_before, balance_after,
+          cajero, user_id, created_at, numero_recibo, old_id_pago_detalle, import_source)
+        VALUES(?, ?, ?, ?, ?, 0, 0, 'Importación histórica', NULL, ?, ?, ?, 'equiparts_bak')`);
+      for (const rc of recibos) {
+        const oldPd = _aioIntOrNull(rc.old_id_pago_detalle);
+        if (oldPd == null) continue;
+        if (findPayByOld.get(oldPd)) { stats.rec_skip++; continue; }
+        const sale = findSaleForRec.get(_aioIntOrNull(rc.old_id_factura));
+        const custId = sale ? sale.customer_id : resolveCust(_aioIntOrNull(rc.old_id_cliente), rc.customer_name);
+        const saleId = sale ? sale.id : null;
+        const dt = ((rc.date || '').slice(0,10) || new Date().toISOString().split('T')[0]) + ' 00:00:00';
+        const note = `Recibo #${rc.numero_recibo || ''}${rc.notes ? ' | ' + rc.notes : ''}`.trim();
+        insPay.run(custId, saleId, _aioNum(rc.amount), (rc.method || 'efectivo').toLowerCase(),
+          note, dt, _aioIntOrNull(rc.numero_recibo), oldPd);
+        stats.rec_new++;
+      }
+
+      // 4f) BALANCE del cliente = suma balance_factura pendiente (BAK manda)
+      // credit_due = fecha de vencimiento más antigua (fecha factura + credit_days).
+      const setBal = db.prepare(`UPDATE customers SET balance = ?, credit_due = ? WHERE id = ?`);
+      for (const [custId, bal] of balByCust.entries()) {
+        const b = Math.round(bal * 100) / 100;
+        const due = b > 0 ? (dueByCust.get(custId) || null) : null;
+        setBal.run(b, due, custId);
+      }
+    });
+
+    let importError = null;
+    try { runAll(); }
+    catch (e) { importError = e.message; }
+    finally { db.pragma('foreign_keys = ON'); }
+
+    if (importError) {
+      return { ok: false, error: 'Import falló (transacción revertida): ' + importError, backup: backupPath };
+    }
+
+    // ── 5) Validación de integridad (CxC) ──────────────────────────────
+    const cxc = db.prepare(`
+      SELECT COALESCE(SUM(balance),0) AS cxc_total,
+             COUNT(*) AS clientes_con_saldo
+      FROM customers WHERE balance > 0`).get();
+    const facturasImp = db.prepare(`SELECT COUNT(*) AS n FROM sales WHERE import_source='equiparts_bak'`).get().n;
+    const cxcTotal = Math.round((cxc.cxc_total || 0) * 100) / 100;
+    const cuadra = Math.abs(cxcTotal - ALLINONE_TARGET_CXC) < 0.01;
+
+    try {
+      audit(requestUserId || null, 'ALL IN ONE', 'migracion_allinone', 'sistema', null,
+        `CxC ${cxcTotal} / ${cxc.clientes_con_saldo} clientes / ${facturasImp} facturas`);
+    } catch (_) { /* auditoría no debe tumbar el resultado */ }
+
+    return {
+      ok: true,
+      backup: backupPath,
+      stats,
+      cxc: cxcTotal,
+      clientes_con_saldo: cxc.clientes_con_saldo,
+      facturas: facturasImp,
+      target: ALLINONE_TARGET_CXC,
+      cuadra,
+    };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 // ══════════════════════════════════════════════
 // IPC — ITEMS DE UNA VENTA (para modal cliente)
 // ══════════════════════════════════════════════
@@ -2484,6 +2809,28 @@ ipcMain.handle('customers:getSaleItems', async (_, { saleId }) => {
 // ══════════════════════════════════════════════
 // IPC — FACTURAS A CRÉDITO PENDIENTES DE CLIENTE
 // ══════════════════════════════════════════════
+// Trae TODOS los items de las ventas de un cliente en una sola query.
+// Usado por "Buscar por Artículo" en el modal de cliente. Rápido: un solo
+// JOIN indexado por customer_id. Devuelve items con su venta asociada.
+ipcMain.handle('customers:getItemsForCustomer', async (_, { customerId }) => {
+  try {
+    const db = require('./database').getDB();
+    const rows = db.prepare(`
+      SELECT si.sale_id, si.product_id, si.product_code, si.product_name,
+             si.qty, si.unit_price, si.subtotal,
+             s.created_at, s.total AS sale_total, s.payment_method,
+             s.numero_factura, s.numero_factura_fmt, s.ncf, s.notes
+      FROM sale_items si
+      JOIN sales s ON s.id = si.sale_id
+      WHERE s.customer_id = ? AND s.status != 'cancelled'
+      ORDER BY s.id DESC
+    `).all(customerId);
+    return { ok: true, items: rows };
+  } catch (e) {
+    return { ok: false, items: [], error: e.message };
+  }
+});
+
 ipcMain.handle('customers:getFacturasPendientes', async (_, { customerId }) => {
   try {
     const db = require('./database').getDB();
