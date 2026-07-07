@@ -88,6 +88,7 @@ async function loadAppData() {
       CFG.addr           = settings.biz_addr      || CFG.addr;
       CFG.phone          = settings.biz_phone     || CFG.phone;
       CFG.biz_logo       = settings.biz_logo      || '';
+      CFG.biz_logo_2     = settings.biz_logo_2    || '';
       CFG.receipt_msg    = settings.receipt_msg   || '¡Gracias por su compra!';
       CFG.print_template = settings.print_template || '';
       CFG.fiscalEnabled        = settings.fiscal_enabled === '1';

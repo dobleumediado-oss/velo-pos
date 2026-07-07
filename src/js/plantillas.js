@@ -214,11 +214,12 @@ function _termicaHeader(cfg, opts, widthMm) {
   const sep  = '─'.repeat(cols);
   const lines = [];
 
-  if (opts.logo && cfg.biz_logo) {
-    lines.push(`<div style="text-align:center;margin-bottom:4px">
-      <img src="${cfg.biz_logo}" style="max-width:${widthMm-4}mm;max-height:14mm;
-           filter:grayscale(100%) contrast(150%)"/>
-    </div>`);
+  if (opts.logo) {
+    const logoHdr = buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, {
+      unit: 'mm', maxW: widthMm - 4, maxH: 14, align: 'center', marginBottom: 4,
+      filter: 'grayscale(100%) contrast(150%)',
+    });
+    if (logoHdr) lines.push(logoHdr);
   }
 
   lines.push(`<div style="text-align:center;font-weight:700;font-size:${widthMm<=52?'11px':'13px'}">${_esc(cfg.biz_name||'Mi Negocio')}</div>`);
@@ -354,7 +355,7 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
   .center { text-align:center; }
   img { display:block; margin:0 auto; }
 </style></head><body>
-  ${opts.logo && cfg.biz_logo ? `<img src="${cfg.biz_logo}" style="max-width:${widthMm-4}mm;max-height:14mm;filter:grayscale(100%) contrast(150%);margin-bottom:4px"/>` : ''}
+  ${opts.logo ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'mm', maxW:widthMm-4, maxH:14, align:'center', marginBottom:4, filter:'grayscale(100%) contrast(150%)' }) : ''}
   <div class="title">${_esc(cfg.biz_name||'Mi Negocio')}</div>
   ${opts.rnc && cfg.biz_rnc ? `<div class="center" style="font-size:10px">RNC: ${_esc(cfg.biz_rnc)}</div>` : ''}
   ${cfg.biz_addr ? `<div class="center" style="font-size:10px">${_esc(cfg.biz_addr)} · Tel: ${_esc(cfg.biz_phone||'')}</div>` : ''}
@@ -467,7 +468,7 @@ function renderCartaRecibo(sale, cfg, opts) {
 </style></head><body>
   <div class="header">
     <div class="biz">
-      ${opts.logo && cfg.biz_logo ? `<img src="${cfg.biz_logo}" style="display:block;max-height:55px;max-width:180px;margin:0 auto 8px auto;filter:grayscale(100%) contrast(150%)"/><br/>` : ''}
+      ${opts.logo ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:180, maxH:55, align:'center', marginBottom:8, filter:'grayscale(100%) contrast(150%)', br:true }) : ''}
       <strong style="font-size:16px">${_esc(cfg.biz_name||'Mi Negocio')}</strong><br/>
       ${opts.rnc && cfg.biz_rnc ? `RNC: ${_esc(cfg.biz_rnc)}<br/>` : ''}
       ${_esc(cfg.biz_addr||'')}<br/>
@@ -556,7 +557,7 @@ function renderCartaFormal(sale, cfg, opts) {
 </style></head><body>
   <div class="header-bar">
     <div>
-      ${opts.logo && cfg.biz_logo ? `<img src="${cfg.biz_logo}" style="display:block;max-height:45px;max-width:160px;margin:0 0 4px 0;filter:brightness(10)"/><br/>` : ''}
+      ${opts.logo ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:160, maxH:45, align:'left', marginBottom:4, filter:'brightness(10)', br:true }) : ''}
       <div class="biz-name">${_esc(cfg.biz_name||'Mi Negocio')}</div>
       <div style="font-size:11px;opacity:.8">
         ${opts.rnc && cfg.biz_rnc ? `RNC: ${_esc(cfg.biz_rnc)} · ` : ''}${_esc(cfg.biz_addr||'')} · ${_esc(cfg.biz_phone||'')}
@@ -659,7 +660,7 @@ function renderCartaNCF(sale, cfg, opts) {
 
   <div class="header">
     <div>
-      ${opts.logo && cfg.biz_logo ? `<img src="${cfg.biz_logo}" style="display:block;max-height:50px;max-width:180px;margin:0 0 4px 0;filter:grayscale(100%) contrast(150%)"/><br/>` : ''}
+      ${opts.logo ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:180, maxH:50, align:'left', marginBottom:4, filter:'grayscale(100%) contrast(150%)', br:true }) : ''}
       <strong style="font-size:14px">${_esc(cfg.biz_name||'Mi Negocio')}</strong><br/>
       RNC: <strong>${_esc(cfg.biz_rnc||'---')}</strong><br/>
       ${_esc(cfg.biz_addr||'')}<br/>Tel: ${_esc(cfg.biz_phone||'')}
@@ -730,7 +731,7 @@ function renderMediaCarta(sale, cfg, opts) {
 </style></head><body>
   <div class="header">
     <div>
-      ${opts.logo && cfg.biz_logo ? `<img src="${cfg.biz_logo}" style="display:block;max-height:35px;max-width:140px;margin:0 0 3px 0;filter:grayscale(100%) contrast(150%)"/><br/>` : ''}
+      ${opts.logo ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:140, maxH:35, align:'left', marginBottom:3, filter:'grayscale(100%) contrast(150%)', br:true }) : ''}
       <strong style="font-size:12px">${_esc(cfg.biz_name||'Mi Negocio')}</strong><br/>
       ${opts.rnc && cfg.biz_rnc ? `RNC: ${_esc(cfg.biz_rnc)}<br/>` : ''}
       ${_esc(cfg.biz_addr||'')} · Tel: ${_esc(cfg.biz_phone||'')}

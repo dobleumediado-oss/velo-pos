@@ -508,6 +508,22 @@ ipcMain.handle('settings:set', async (_, { key, value, requestUserId }) => {
     }
   }
 
+  // Validación de logos (defensa en profundidad): el logo se guarda como
+  // data URL base64. Solo se aceptan imágenes rasterizadas seguras (PNG/JPG/WEBP),
+  // nunca SVG (evita XSS vía <script> embebido), y con un tamaño acotado.
+  if (key === 'biz_logo' || key === 'biz_logo_2') {
+    const v = value == null ? '' : String(value);
+    if (v !== '') {
+      if (!/^data:image\/(png|jpe?g|webp);base64,[A-Za-z0-9+/=\s]+$/i.test(v)) {
+        return { ok: false, error: 'Formato de logo no permitido. Usa PNG, JPG o WEBP.' };
+      }
+      // ~2MB de data URL ≈ 1.5MB de imagen real.
+      if (v.length > 2_000_000) {
+        return { ok: false, error: 'La imagen es muy grande. Usa un logo menor a 1.5 MB.' };
+      }
+    }
+  }
+
   settingsRepo.set(key, value);
   return { ok: true };
 });

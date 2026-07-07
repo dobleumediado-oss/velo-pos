@@ -19,6 +19,9 @@ async function renderConfiguracion(el) {
   const licResult   = await window.api.license.getStatus().catch(() => ({ ok: false }));
   const lic         = licResult.ok ? licResult.data : null;
   const isSA        = user?.role === 'superadmin';
+  // El logo puede gestionarlo el Administrador además del "Dev" (superadmin).
+  // El backend ya lo permite (ADMIN_KEYS en main.js); aquí abrimos la UI.
+  const isAdmin     = ['admin', 'superadmin'].includes(user?.role);
 
   // ── Header ──────────────────────────────────
   el.appendChild(h('div', { class: 'sec-hdr' },
@@ -137,7 +140,7 @@ async function renderConfiguracion(el) {
     const cfg2 = {
       biz_name: CFG.biz||'Mi Negocio', biz_rnc: CFG.rnc||'',
       biz_addr: CFG.addr||'', biz_phone: CFG.phone||'',
-      receipt_msg: CFG.receiptMsg||'¡Gracias por su compra!', biz_logo: CFG.biz_logo||'',
+      receipt_msg: CFG.receiptMsg||'¡Gracias por su compra!', biz_logo: CFG.biz_logo||'', biz_logo_2: CFG.biz_logo_2||'',
     };
     const opts = { ...plantilla.opciones, _estilos: _getEstilos(id) };
     if (label) label.textContent = `VISTA PREVIA — ${plantilla.nombre}`;
@@ -201,7 +204,7 @@ async function renderConfiguracion(el) {
   const btnPrint = h('button', { class: 'btn btn-out', onclick: () => {
     const plantilla = typeof PLANTILLAS!=='undefined'?PLANTILLAS.find(p=>p.id===window._PA):null;
     if (!plantilla) { toast('Selecciona una plantilla primero','w'); return; }
-    const cfg2 = { biz_name:CFG.biz||'Mi Negocio', biz_rnc:CFG.rnc||'', biz_addr:CFG.addr||'', biz_phone:CFG.phone||'', receipt_msg:CFG.receiptMsg||'¡Gracias por su compra!', biz_logo:CFG.biz_logo||'' };
+    const cfg2 = { biz_name:CFG.biz||'Mi Negocio', biz_rnc:CFG.rnc||'', biz_addr:CFG.addr||'', biz_phone:CFG.phone||'', receipt_msg:CFG.receiptMsg||'¡Gracias por su compra!', biz_logo:CFG.biz_logo||'', biz_logo_2:CFG.biz_logo_2||'' };
     const html = plantilla.render(getSampleSale(cfg2), cfg2, {...plantilla.opciones,_estilos:_getEstilos(window._PA)});
     _openPrintWindow(html, 'prueba_plantilla', 0, false);
   }});
@@ -332,7 +335,7 @@ async function renderConfiguracion(el) {
     const _mRender = () => {
       const mIframe = document.getElementById('modal-iframe');
       if (!mIframe || !plantilla) return;
-      const cfg2 = { biz_name:CFG.biz||'Mi Negocio', biz_rnc:CFG.rnc||'', biz_addr:CFG.addr||'Calle Principal #1', biz_phone:CFG.phone||'809-000-0000', receipt_msg:CFG.receiptMsg||'¡Gracias por su compra!', biz_logo:CFG.biz_logo||'' };
+      const cfg2 = { biz_name:CFG.biz||'Mi Negocio', biz_rnc:CFG.rnc||'', biz_addr:CFG.addr||'Calle Principal #1', biz_phone:CFG.phone||'809-000-0000', receipt_msg:CFG.receiptMsg||'¡Gracias por su compra!', biz_logo:CFG.biz_logo||'', biz_logo_2:CFG.biz_logo_2||'' };
       const estilos = {
         fontSize:     document.getElementById('est-fontSize')?.value,
         lineHeight:   document.getElementById('est-lineHeight')?.value,
@@ -494,39 +497,20 @@ async function renderConfiguracion(el) {
     }
   }
 
-  // ── Logo (solo superadmin) ───────────────────
-  if (isSA) {
-    const logoActual = settings.biz_logo || '';
-    const logoCard   = h('div', { class: 'card' });
-    logoCard.innerHTML = `
-      <div class="fxb mb8">
-        <div class="card-title">Logo en Tickets</div>
-        ${logoActual ? `<button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="eliminarLogo()">Eliminar</button>` : ''}
-      </div>
-      ${logoActual
-        ? `<div style="text-align:center;margin-bottom:12px">
-             <img src="${logoActual}" style="max-width:160px;max-height:60px;filter:grayscale(100%) contrast(150%);border:1px solid var(--line);border-radius:6px;padding:8px"/>
-             <div style="font-size:11px;color:var(--muted);margin-top:4px">Así aparecerá en B&N en el ticket</div>
-           </div>`
-        : `<div class="alrt b" style="margin-bottom:12px">
-             <div class="alrt-dot b"></div>
-             <div>
-               <div class="alrt-title">Sin logo configurado</div>
-               <div class="alrt-sub">PNG o JPG, 300×100px recomendado.</div>
-             </div>
-           </div>`}
-      <input type="file" id="logo-input" accept="image/png,image/jpeg,image/jpg" style="display:none" onchange="previewLogo(this)"/>
-      <button class="btn btn-out btn-fw" onclick="document.getElementById('logo-input').click()">
-        ${svg('download')} ${logoActual ? 'Cambiar logo' : 'Seleccionar imagen'}
-      </button>
-      <div id="logo-preview" style="margin-top:10px;display:none;text-align:center">
-        <img id="logo-preview-img" style="max-width:160px;max-height:60px;filter:grayscale(100%) contrast(150%);border:1px solid var(--line);border-radius:6px;padding:8px"/>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px">Vista previa</div>
-        <button class="btn btn-green btn-sm" style="margin-top:8px" onclick="guardarLogo()">
-          ${svg('check')} Guardar logo
-        </button>
-      </div>`;
-    colLeft.appendChild(logoCard);
+  // ── Logo principal y secundario (admin + superadmin) ──
+  if (isAdmin) {
+    colLeft.appendChild(_buildLogoCard({
+      slot:     '',
+      title:    'Logo Principal',
+      current:  settings.biz_logo || '',
+      emptyMsg: 'PNG, JPG o WEBP · 300×100px recomendado.',
+    }));
+    colLeft.appendChild(_buildLogoCard({
+      slot:     '2',
+      title:    'Logo Secundario (opcional)',
+      current:  settings.biz_logo_2 || '',
+      emptyMsg: 'Se mostrará junto al principal en los documentos.',
+    }));
   }
 
   // ── Impresora (solo superadmin) ──────────────
@@ -1269,33 +1253,102 @@ function eliminarCategoria(id, name) {
 // ══════════════════════════════════════════════
 // LOGO
 // ══════════════════════════════════════════════
-function previewLogo(input) {
+// Formatos permitidos y tamaño máximo (defensa en profundidad; el backend
+// vuelve a validar en main.js). Sin SVG: evita XSS por <script> embebido.
+const _LOGO_MIME = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+const _LOGO_MAX_BYTES = 1_500_000; // 1.5 MB de archivo real
+
+// Valida el File seleccionado. Devuelve string de error o null si es válido.
+function _validarArchivoLogo(file) {
+  if (!file) return 'No se seleccionó ningún archivo.';
+  const type = (file.type || '').toLowerCase();
+  const name = (file.name || '').toLowerCase();
+  const extOk = /\.(png|jpe?g|webp)$/.test(name);
+  if (!_LOGO_MIME.includes(type) || !extOk) {
+    return 'Formato no permitido. Usa PNG, JPG o WEBP.';
+  }
+  if (file.size > _LOGO_MAX_BYTES) {
+    return 'La imagen es muy grande. Usa un logo menor a 1.5 MB.';
+  }
+  return null;
+}
+
+// slot '' = principal (clave biz_logo), '2' = secundario (biz_logo_2).
+function _logoKey(slot)     { return slot === '2' ? 'biz_logo_2' : 'biz_logo'; }
+function _logoTempVar(slot) { return slot === '2' ? '_logoDataUrl2' : '_logoDataUrl'; }
+
+// Construye una card de logo reutilizable (principal o secundario).
+function _buildLogoCard({ slot, title, current, emptyMsg }) {
+  const suf     = slot; // '' | '2'
+  const card    = h('div', { class: 'card' });
+  const inputId = `logo-input${suf}`;
+  card.innerHTML = `
+    <div class="fxb mb8">
+      <div class="card-title">${title}</div>
+      ${current ? `<button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="eliminarLogo('${suf}')">Eliminar</button>` : ''}
+    </div>
+    ${current
+      ? `<div style="text-align:center;margin-bottom:12px">
+           <img src="${current}" style="max-width:160px;max-height:60px;filter:grayscale(100%) contrast(150%);border:1px solid var(--line);border-radius:6px;padding:8px"/>
+           <div style="font-size:11px;color:var(--muted);margin-top:4px">Así aparecerá en B&N en los documentos</div>
+         </div>`
+      : `<div class="alrt b" style="margin-bottom:12px">
+           <div class="alrt-dot b"></div>
+           <div>
+             <div class="alrt-title">Sin logo configurado</div>
+             <div class="alrt-sub">${emptyMsg}</div>
+           </div>
+         </div>`}
+    <input type="file" id="${inputId}" accept="image/png,image/jpeg,image/jpg,image/webp" style="display:none" onchange="previewLogo(this,'${suf}')"/>
+    <button class="btn btn-out btn-fw" onclick="document.getElementById('${inputId}').click()">
+      ${svg('download')} ${current ? 'Cambiar logo' : 'Seleccionar imagen'}
+    </button>
+    <div id="logo-preview${suf}" style="margin-top:10px;display:none;text-align:center">
+      <img id="logo-preview-img${suf}" style="max-width:160px;max-height:60px;filter:grayscale(100%) contrast(150%);border:1px solid var(--line);border-radius:6px;padding:8px"/>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px">Vista previa</div>
+      <button class="btn btn-green btn-sm" style="margin-top:8px" onclick="guardarLogo('${suf}')">
+        ${svg('check')} Guardar logo
+      </button>
+    </div>`;
+  return card;
+}
+
+function previewLogo(input, slot = '') {
   const file = input?.files?.[0];
   if (!file) return;
+  const err = _validarArchivoLogo(file);
+  if (err) { input.value = ''; toast(err, 'err'); return; }
   const reader = new FileReader();
   reader.onload = (e) => {
-    const prev = document.getElementById('logo-preview');
-    const img  = document.getElementById('logo-preview-img');
+    const prev = document.getElementById(`logo-preview${slot}`);
+    const img  = document.getElementById(`logo-preview-img${slot}`);
     if (prev) prev.style.display = 'block';
     if (img)  img.src = e.target.result;
-    window._logoDataUrl = e.target.result;
+    window[_logoTempVar(slot)] = e.target.result;
   };
+  reader.onerror = () => toast('No se pudo leer la imagen.', 'err');
   reader.readAsDataURL(file);
 }
 
-async function guardarLogo() {
-  if (!window._logoDataUrl) { toast('Selecciona una imagen primero', 'w'); return; }
-  await window.api.settings.set({ key: 'biz_logo', value: window._logoDataUrl, requestUserId: user?.id });
-  CFG.biz_logo = window._logoDataUrl;
+async function guardarLogo(slot = '') {
+  const dataUrl = window[_logoTempVar(slot)];
+  if (!dataUrl) { toast('Selecciona una imagen primero', 'w'); return; }
+  const res = await window.api.settings.set({ key: _logoKey(slot), value: dataUrl, requestUserId: user?.id });
+  if (res && res.ok === false) { toast(res.error || 'No se pudo guardar el logo', 'err'); return; }
+  CFG[_logoKey(slot)] = dataUrl;
+  if (DB?.settings) DB.settings[_logoKey(slot)] = dataUrl;
+  window[_logoTempVar(slot)] = null;
   toast('✓ Logo guardado');
   renderConfiguracion(document.getElementById('page'));
 }
 
-async function eliminarLogo() {
-  confirmModal('¿Eliminar el logo del negocio?',
+async function eliminarLogo(slot = '') {
+  confirmModal('¿Eliminar este logo del negocio?',
     async () => {
-      await window.api.settings.set({ key: 'biz_logo', value: '', requestUserId: user?.id });
-      CFG.biz_logo = '';
+      const res = await window.api.settings.set({ key: _logoKey(slot), value: '', requestUserId: user?.id });
+      if (res && res.ok === false) { toast(res.error || 'No se pudo eliminar el logo', 'err'); return; }
+      CFG[_logoKey(slot)] = '';
+      if (DB?.settings) DB.settings[_logoKey(slot)] = '';
       toast('✓ Logo eliminado');
       renderConfiguracion(document.getElementById('page'));
     }, 'Eliminar', 'btn-red');

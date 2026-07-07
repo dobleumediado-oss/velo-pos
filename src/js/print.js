@@ -37,6 +37,56 @@ function _escHtml(str) {
     .replace(/>/g, '&gt;');
 }
 
+// ── Encabezado de logo(s) para documentos ─────
+// Renderiza 1 o 2 logos con un layout seguro y compartido por TODOS los
+// documentos imprimibles (tickets térmicos, facturas carta, conduces, etc.).
+//
+//  · 1 logo  → mismo tamaño/posición que antes (perW = maxW).
+//  · 2 logos → fila con gap, object-fit:contain, sin deformar, sin montarse.
+//              En térmica (o split:true) cada logo se limita a la mitad del
+//              ancho para no salirse del área imprimible. En documentos carta
+//              cada logo conserva su tamaño natural (hay ancho de sobra).
+//
+// opts: { unit:'px'|'mm', maxH, maxW, filter, align:'center'|'left'|'right',
+//         marginBottom, split, br }
+// Devuelve '' si no hay ningún logo.
+function buildLogoHeader(logo1, logo2, opts = {}) {
+  const unit         = opts.unit || 'px';
+  const maxH         = opts.maxH != null ? opts.maxH : 60;
+  const maxW         = opts.maxW != null ? opts.maxW : 180;
+  const filter       = opts.filter || '';
+  const align        = opts.align  || 'center';
+  const marginBottom = opts.marginBottom || 0;
+  const br           = !!opts.br;
+
+  const l1   = (typeof logo1 === 'string' ? logo1 : '').trim();
+  const l2   = (typeof logo2 === 'string' ? logo2 : '').trim();
+  const list = [l1, l2].filter(Boolean);
+  if (!list.length) return '';
+
+  const two   = list.length === 2;
+  // Por defecto se reparte el ancho solo en térmica (mm); en px (carta) los
+  // logos conservan su tamaño natural salvo que se pida split explícito.
+  const split = opts.split != null ? opts.split : (unit === 'mm');
+  const gapN  = unit === 'mm' ? 2 : 10;
+  const gap   = `${gapN}${unit}`;
+  const perWn = (two && split) ? Math.max(1, (maxW - gapN) / 2) : maxW;
+  const perW  = unit === 'mm' ? `${Number(perWn.toFixed(1))}mm` : `${Math.floor(perWn)}px`;
+  const maxHs = `${maxH}${unit}`;
+  const just  = align === 'left' ? 'flex-start' : align === 'right' ? 'flex-end' : 'center';
+  const filt  = filter ? `filter:${filter};` : '';
+  const mb    = marginBottom ? `margin-bottom:${marginBottom}px;` : '';
+  const auto  = align === 'center' ? 'margin-left:auto;margin-right:auto;' : '';
+
+  const imgs = list.map(src =>
+    `<img src="${src}" style="max-height:${maxHs};max-width:${perW};width:auto;height:auto;object-fit:contain;${filt}"/>`
+  ).join('');
+
+  const html = `<div style="display:flex;align-items:center;justify-content:${just};` +
+               `gap:${gap};max-width:100%;${auto}${mb}">${imgs}</div>`;
+  return br ? html + '<br/>' : html;
+}
+
 // ── Obtener impresora guardada ────────────────
 function _getSavedPrinter() {
   return (DB?.settings?.printer || CFG?.printer || '').trim();
@@ -119,6 +169,7 @@ function printReceipt(sale, isReprint = false) {
       biz_addr:    DB?.settings?.biz_addr    || CFG?.addr   || '',
       biz_phone:   DB?.settings?.biz_phone   || CFG?.phone  || '',
       biz_logo:    DB?.settings?.biz_logo    || CFG?.biz_logo || '',
+      biz_logo_2:  DB?.settings?.biz_logo_2  || CFG?.biz_logo_2 || '',
       receipt_msg: DB?.settings?.receipt_msg || '¡Gracias por su compra!',
     };
 
@@ -349,6 +400,7 @@ function printConduceDoc(dn) {
   const addr  = s.biz_addr || (typeof CFG !== 'undefined' && CFG.addr)  || '';
   const phone = s.biz_phone|| (typeof CFG !== 'undefined' && CFG.phone) || '';
   const logo  = s.biz_logo || '';
+  const logo2 = s.biz_logo_2 || '';
   const showPrices = s.conduce_show_prices === '1';
   const esc = _escHtml;
 
@@ -399,7 +451,7 @@ function printConduceDoc(dn) {
 <body>
   <div class="head">
     <div style="display:flex; gap:10px; align-items:flex-start">
-      ${logo ? `<img src="${logo}" style="max-width:70px;max-height:60px;object-fit:contain"/>` : ''}
+      ${buildLogoHeader(logo, logo2, { unit:'px', maxW:70, maxH:60, align:'left' })}
       <div>
         <div class="biz">${esc(biz)}</div>
         ${rnc ? `<div class="muted">RNC: ${esc(rnc)}</div>` : ''}
@@ -611,15 +663,15 @@ function _sendToPrinter(lines, jobType = '', referenceId = null, isReprint = fal
     // No interrumpir — continuar con el HTML adaptado abajo
   }
 
-  const logoB64 = DB?.settings?.biz_logo || CFG?.biz_logo || '';
+  const logoB64  = DB?.settings?.biz_logo   || CFG?.biz_logo   || '';
+  const logoB64b = DB?.settings?.biz_logo_2 || CFG?.biz_logo_2 || '';
 
-  const logoHtml = logoB64
-    ? `<div style="text-align:center;margin-bottom:6px">
-         <img src="${logoB64}"
-              style="max-width:160px;max-height:60px;
-                     filter:grayscale(100%) contrast(150%);
-                     -webkit-print-color-adjust:exact"/>
-       </div>`
+  const logoInner = buildLogoHeader(logoB64, logoB64b, {
+    unit: 'px', maxW: 160, maxH: 60, align: 'center', split: true,
+    filter: 'grayscale(100%) contrast(150%)',
+  });
+  const logoHtml = logoInner
+    ? `<div style="margin-bottom:6px">${logoInner}</div>`
     : '';
 
   const content = lines
@@ -980,6 +1032,7 @@ function testPrint() {
       biz_addr:    DB?.settings?.biz_addr    || CFG?.addr   || 'Calle Principal #1',
       biz_phone:   DB?.settings?.biz_phone   || CFG?.phone  || '809-555-0000',
       biz_logo:    DB?.settings?.biz_logo    || '',
+      biz_logo_2:  DB?.settings?.biz_logo_2  || '',
       receipt_msg: DB?.settings?.receipt_msg || '¡Gracias por su compra!',
     };
     const sale = getSampleSale(cfg);
