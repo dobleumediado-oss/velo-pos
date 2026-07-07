@@ -2851,7 +2851,8 @@ ipcMain.handle('customers:getFacturasPendientes', async (_, { customerId }) => {
     // Obtener facturas a crédito en orden cronológico (ASC = FIFO)
     const sales = db.prepare(`
       SELECT s.id, s.total, s.subtotal, s.tax_amt, s.discount_amt,
-             s.created_at, s.notes, s.ncf, s.status
+             s.created_at, s.notes, s.ncf, s.status,
+             s.numero_factura, s.numero_factura_fmt
       FROM sales s
       WHERE s.customer_id=? AND s.payment_method='credito'
         AND s.status!='cancelled' AND s.type='factura'

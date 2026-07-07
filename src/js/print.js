@@ -202,8 +202,10 @@ function printReceipt(sale, isReprint = false) {
       // Pago mixto
       mix_efec:      sale.mix_efec || 0,
       mix_card:      sale.mix_card || 0,
-      // Devolución
+      // Devolución — referencia a la factura original (número real)
       original_sale_id: sale.original_sale_id || null,
+      original_numero_factura:     sale.original_numero_factura,
+      original_numero_factura_fmt: sale.original_numero_factura_fmt,
     };
 
     // Cargar estilos personalizados del superadmin para esta plantilla
@@ -238,7 +240,7 @@ function printReceipt(sale, isReprint = false) {
   if (isReprint)    lines.push(tCenter('--- REIMPRESIÓN ---'));
 
   lines.push(tline());
-  lines.push(tRow(`No.: ${String(sale.id).padStart(5,'0')}`, `Fecha: ${sale.date || today()}`));
+  lines.push(tRow(`No.: ${facturaLabel(sale)}`, `Fecha: ${sale.date || today()}`));
   lines.push(tRow(`Hora: ${sale.time || nowt()}`, `Cajero: ${(sale.cajero||'').split(' ')[0]}`));
 
   const cliName = sale.customer_name || sale.clientName || 'Consumidor Final';
@@ -307,7 +309,7 @@ function printReceipt(sale, isReprint = false) {
     }
     if (sale.original_sale_id) {
       lines.push('');
-      lines.push(tCenter(`Ref. venta original: #${String(sale.original_sale_id).padStart(5,'0')}`));
+      lines.push(tCenter(`Ref. venta original: ${facturaLabelOriginal(sale)}`));
     }
   }
 
@@ -343,7 +345,7 @@ function printConduce(sale) {
   lines.push(tCenter('(Documento sin valor fiscal)'));
   lines.push(tline());
 
-  lines.push(tRow(`No.: ${String(sale.id).padStart(5, '0')}`, `Fecha: ${sale.date || today()}`));
+  lines.push(tRow(`No.: ${facturaLabel(sale)}`, `Fecha: ${sale.date || today()}`));
   lines.push(tRow(`Hora: ${sale.time || nowt()}`, `Cajero: ${(sale.cajero || '').split(' ')[0]}`));
 
   const cliName = sale.customer_name || sale.clientName || 'Consumidor Final';

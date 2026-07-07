@@ -13,6 +13,8 @@ let cliSearch = '';
 let cliTab    = 'todos';
 let cliSort   = 'name-asc';
 
+// facturaLabel() ahora es global (definido en data.js) — reutilizado aquí.
+
 function renderClientes(el) {
   // Resetear estado de búsqueda al entrar al módulo
   cliSearch = '';
@@ -739,7 +741,7 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
         return `
           <tr>
             <td style="font-size:11px;color:var(--muted)">${fdate(fecha)}</td>
-            <td style="font-size:12px">#${String(s.id).padStart(5,'0')} <span style="font-size:10px;color:var(--muted)">${tipo}</span></td>
+            <td style="font-size:12px">${facturaLabel(s)} <span style="font-size:10px;color:var(--muted)">${tipo}</span></td>
             <td style="text-align:right;font-weight:600">${fmt(s.total)}</td>
             <td><span class="badge ${
               (s.payment_method||s.pay)==='credito' ? 'a' :
@@ -762,7 +764,7 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
                onclick="closeModal();setTimeout(()=>{
                  const s=DB.sales.find(x=>x.id===${p.sale_id})||window._cliModalVentas?.find(x=>x.id===${p.sale_id});
                  if(s)openDetalleVentaModal(s);
-               },100)">#${String(p.sale_id).padStart(5,'0')} ↗</span>`
+               },100)">${facturaLabel(p)} ↗</span>`
           : '';
         const concepto = p.note || 'Abono';
         return `
@@ -862,7 +864,7 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
                        style="display:flex;justify-content:space-between;align-items:center;
                               padding:8px 12px;cursor:pointer;background:var(--surface2)">
                     <div>
-                      <span style="font-weight:700;font-size:12px">#${String(s.id).padStart(5,'0')}</span>
+                      <span style="font-weight:700;font-size:12px">${facturaLabel(s)}</span>
                       <span style="font-size:10px;color:var(--muted);margin-left:6px">${tipo}</span>
                       <span style="font-size:10px;color:var(--muted2);margin-left:6px">${fdate(fecha)}</span>
                     </div>
@@ -949,7 +951,7 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
       body.innerHTML = facturas.map((f, idx) => {
         const fecha = (f.created_at||'').split('T')[0].split(' ')[0];
         const diasD = Math.floor((Date.now()-new Date(fecha).getTime())/86400000);
-        const ref   = f.notes?.match(/import_ref:([^\s|]+)/)?.[1] || '#'+String(f.id).padStart(5,'0');
+        const ref   = facturaLabel(f, f.notes?.match(/import_ref:([^\s|]+)/)?.[1]);
         return `<div style="border:1px solid var(--line);border-radius:8px;margin-bottom:8px;overflow:hidden">
           <div style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;
                       cursor:pointer;background:var(--surface2)" onclick="toggleFacturaDetalle(${idx},${f.id},this)">
@@ -1008,7 +1010,7 @@ async function exportClientCreditPDF(c) {
         const metodoBadge = (s.payment_method || s.pay || '—');
         return `<tr>
           <td>${fdate(fecha)}</td>
-          <td>#${String(s.id).padStart(5,'0')} <span style="color:#9ca3af;font-size:10px">${tipo}</span></td>
+          <td>${facturaLabel(s)} <span style="color:#9ca3af;font-size:10px">${tipo}</span></td>
           <td style="text-align:right;font-weight:700">${fmt(s.total)}</td>
           <td>${_e(metodoBadge)}</td>
           <td><span style="color:${s.status==='returned'||s.status==='cancelled'?'#dc2626':'#16a34a'};font-weight:600">${estado}</span></td>
@@ -1208,7 +1210,7 @@ function filtrarHistorialCliente(customerId, q) {
               </td>
               <td style="text-align:center;font-size:12px">${m.item.qty||1}</td>
               <td style="text-align:right;font-size:12px">${fmt(m.item.unit_price||m.item.price||0)}</td>
-              <td style="font-size:11px;color:var(--muted)">#${String(m.saleId).padStart(5,'0')}</td>
+              <td style="font-size:11px;color:var(--muted)">${facturaLabel(m)}</td>
             </tr>`).join('')}
         </tbody>
       </table>

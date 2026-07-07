@@ -226,7 +226,9 @@ function renderVentasTable() {
   );
   const tbody = h('tbody', null);
 
-  [...sales].reverse().forEach(s => {
+  // Orden del historial: la venta más reciente arriba (descendente por id,
+  // que es el orden de creación), y de ahí bajando a las más antiguas.
+  [...sales].sort((a, b) => (b.id || 0) - (a.id || 0)).forEach(s => {
     const method    = s.payment_method || s.pay || '';
     const cliName   = s.customer_name  || s.clientName || 'Consumidor Final';
     const fecha     = (s.created_at || s.date || '').split('T')[0].split(' ')[0];
@@ -358,7 +360,7 @@ async function enviarEcf(saleId) {
   if (sale.ecf_status === 'Aceptado') { toast('Ya tiene e-CF emitido', 'w'); return; }
 
   confirmModal(
-    `¿Enviar e-CF para la factura <strong>#${String(saleId).padStart(5,'0')}</strong>?
+    `¿Enviar e-CF para la factura <strong>${facturaLabel(sale)}</strong>?
      <br><span style="font-size:11px;color:var(--muted)">
        NCF: <strong>${sale.ncf}</strong> · Total: <strong>${fmt(sale.total)}</strong>
        <br>Se enviará a la DGII vía MSeller ECF.
@@ -421,7 +423,7 @@ function openEcfResultModal(result, sale) {
     <div class="modal-sub">Comprobante fiscal electrónico aceptado por la DGII</div>
     <div class="card" style="background:var(--surface2);margin:14px 0">
       <div class="tr"><span>e-NCF</span><span style="font-family:monospace;font-weight:700">${result.encf || sale.ncf}</span></div>
-      <div class="tr"><span>Factura</span><span>#${String(sale.id).padStart(5,'0')}</span></div>
+      <div class="tr"><span>Factura</span><span>${facturaLabel(sale)}</span></div>
       <div class="tr"><span>Cliente</span><span>${sale.customer_name || 'Consumidor Final'}</span></div>
       <div class="tr grand"><span>Total</span><span>${fmt(sale.total)}</span></div>
     </div>
@@ -740,7 +742,7 @@ async function openDetalleVentaModal(s) {
     </div>` : '';
 
   openModal(`
-    <div class="modal-title">Venta #${s.id}</div>
+    <div class="modal-title">Venta ${typeof facturaLabel === 'function' ? facturaLabel(sale || s) : '#'+String(s.id).padStart(5,'0')}</div>
     <div class="modal-sub">
       ${fdate(fecha)} · Cajero: ${s.cajero || '—'}
     </div>
@@ -867,13 +869,16 @@ async function reimprimirVenta(saleId) {
     : '';
 
   confirmModal(
-    `¿Reimprimir la factura <strong>#${String(saleId).padStart(5,'0')}</strong>?
+    `¿Reimprimir la factura <strong>${facturaLabel(sale)}</strong>?
      <br><span style="font-size:11px;color:var(--muted)">
        Quedará registrado en el log de auditoría como reimpresión.
      </span>`,
     () => {
       printReceipt({
         id:              sale.id,
+        // Número real de factura para que la reimpresión muestre #00002311, no el id interno.
+        numero_factura:     sale.numero_factura,
+        numero_factura_fmt: sale.numero_factura_fmt,
         date:            fecha,
         time:            hora,
         type:            sale.type,
@@ -897,6 +902,10 @@ async function reimprimirVenta(saleId) {
         ncf:             sale.ncf || '',
         tax_pct:         sale.tax_pct,
         modifies_ncf:    sale.modifies_ncf || '',
+        // Devolución: referencia a la factura original (número real).
+        original_sale_id:            sale.original_sale_id || null,
+        original_numero_factura:     sale.original_numero_factura,
+        original_numero_factura_fmt: sale.original_numero_factura_fmt,
       }, true); // true = isReprint
     },
     'Reimprimir',
@@ -913,6 +922,7 @@ async function guardarVentaPDF(saleId) {
     ? new Date(sale.created_at).toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' }) : '';
   const payload = {
     id: sale.id, date: fecha, time: hora, type: sale.type,
+    numero_factura: sale.numero_factura, numero_factura_fmt: sale.numero_factura_fmt,
     customer_name: sale.customer_name || 'Consumidor Final', customer_rnc: sale.customer_rnc || '',
     items: (sale.items || []).map(i => ({
       product_name: i.product_name, qty: i.qty, unit_price: i.unit_price, unit_cost: i.unit_cost || 0,
@@ -920,6 +930,9 @@ async function guardarVentaPDF(saleId) {
     subtotal: sale.subtotal, discount_pct: sale.discount_pct || 0, discount_amt: sale.discount_amt || 0,
     tax_amt: sale.tax_amt || 0, total: sale.total, payment_method: sale.payment_method,
     cajero: sale.cajero, ncf: sale.ncf || '', tax_pct: sale.tax_pct, modifies_ncf: sale.modifies_ncf || '',
+    original_sale_id: sale.original_sale_id || null,
+    original_numero_factura: sale.original_numero_factura,
+    original_numero_factura_fmt: sale.original_numero_factura_fmt,
   };
   const label = sale.type === 'cotizacion' ? 'Cotizacion' : sale.type === 'devolucion' ? 'Devolucion' : 'Factura';
   if (typeof guardarDocumentoPDF === 'function') {
@@ -947,7 +960,7 @@ async function ventaWhatsApp(saleId) {
   }).join('\n');
 
   const parts = [
-    tipo + ' #' + String(saleId).padStart(5,'0') + ' - ' + CFG.biz,
+    tipo + ' ' + facturaLabel(sale) + ' - ' + CFG.biz,
     'Fecha: ' + fdate(fecha),
     'Cliente: ' + cliente,
     '',
@@ -981,13 +994,13 @@ function exportVentasPDF() {
   const sales = DB.sales.filter(s => s.status !== 'cancelled');
   const total = sales.reduce((a, s) => a + (s.total || 0), 0);
 
-  const rows = [...sales].reverse().map(s => {
+  const rows = [...sales].sort((a, b) => (b.id || 0) - (a.id || 0)).map(s => {
     const fecha  = (s.created_at || s.date || '').split('T')[0].split(' ')[0];
     const method = s.payment_method || s.pay || '';
     const name   = s.customer_name  || 'Consumidor Final';
     return `
       <tr>
-        <td>#${s.id}</td>
+        <td>${facturaLabel(s)}</td>
         <td>${fdate(fecha)}</td>
         <td>${_esc(name)}</td>
         <td style="text-transform:capitalize">${_esc(method)}</td>
@@ -1101,10 +1114,10 @@ function renderDevoluciones(el) {
     [...devs].reverse().forEach(d => {
       const fecha = (d.created_at || d.date || '').split('T')[0].split(' ')[0];
       tbody.appendChild(h('tr', { style: { background: 'var(--red-bg)' } },
-        h('td', { class: 'tm' }, `#${d.id}`),
+        h('td', { class: 'tm' }, facturaLabel(d)),
         h('td', { class: 'ts' }, fdate(fecha)),
         h('td', null, h('div', { class: 'tb' }, d.customer_name || d.clientName || '—')),
-        h('td', { class: 'tm' }, d.original_sale_id ? `#${d.original_sale_id}` : '—'),
+        h('td', { class: 'tm' }, d.original_sale_id ? facturaLabelOriginal(d) : '—'),
         h('td', null, h('span', { style: { fontWeight: 700, color: 'var(--red)' } },
           `-${fmt(d.total)}`)),
         h('td', null,
@@ -1183,7 +1196,7 @@ async function buscarFacturaDevolucion() {
     const card = h('div', { class: 'card', style: { marginBottom: '8px' } });
     card.appendChild(h('div', { class: 'fxb', style: { marginBottom: '8px' } },
       h('div', null,
-        h('span', { style: { fontWeight: 700 } }, `Factura #${s.id}`),
+        h('span', { style: { fontWeight: 700 } }, `Factura ${facturaLabel(s)}`),
         h('span', { class: 'ts', style: { marginLeft: '10px' } },
           `${fdate(fecha)} · ${s.customer_name || 'Consumidor Final'}`)
       ),

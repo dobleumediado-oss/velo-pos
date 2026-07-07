@@ -125,9 +125,9 @@ function renderCaja(el) {
       const dtbody = h('tbody', null);
       [...tdDevs].reverse().forEach(s => {
         dtbody.appendChild(h('tr', null,
-          h('td', { class: 'tm' }, `#${s.id}`),
+          h('td', { class: 'tm' }, facturaLabel(s)),
           h('td', null, h('div', { class: 'tb' }, s.customer_name || s.clientName || 'Consumidor Final')),
-          h('td', { class: 'tm' }, s.original_sale_id ? `#${s.original_sale_id}` : '—'),
+          h('td', { class: 'tm' }, s.original_sale_id ? facturaLabelOriginal(s) : '—'),
           h('td', { style: { fontWeight: 700, color: 'var(--red)' } }, `−${fmt(s.total)}`)
         ));
       });

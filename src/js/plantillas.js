@@ -276,10 +276,10 @@ function renderTermica(sale, cfg, opts, widthMm = 76) {
   ${_termicaHeader(cfg, opts, widthMm)}
   <div style="text-align:center;font-weight:700">*** ${_docLabel(sale)} ***</div>
   ${sale.isReprint ? '<div style="text-align:center">--- REIMPRESIÓN ---</div>' : ''}
-  ${isDevolucion && sale.original_sale_id ? `<div style="text-align:center">Ref. venta #${String(sale.original_sale_id).padStart(5,'0')}</div>` : ''}
+  ${isDevolucion && sale.original_sale_id ? `<div style="text-align:center">Ref. venta ${facturaLabelOriginal(sale)}</div>` : ''}
   <div style="text-align:center">${sep}</div>
   <div style="display:flex;justify-content:space-between">
-    <span>No.: ${String(sale.id).padStart(5,'0')}</span>
+    <span>No.: ${facturaLabel(sale)}</span>
     <span>Fecha: ${sale.date}</span>
   </div>
   <div style="display:flex;justify-content:space-between">
@@ -362,10 +362,10 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
   <hr class="sep-d"/>
   <div class="center" style="font-size:13px;font-weight:700;letter-spacing:1px">
     ◆ ${_docLabel(sale)} ◆
-    ${isDevolucion && sale.original_sale_id ? `<div style="font-size:10px;text-align:center">Ref. venta #${String(sale.original_sale_id).padStart(5,'0')}</div>` : ''}
+    ${isDevolucion && sale.original_sale_id ? `<div style="font-size:10px;text-align:center">Ref. venta ${facturaLabelOriginal(sale)}</div>` : ''}
   </div>
   <hr class="sep"/>
-  <div class="row"><span>No.:</span><span style="font-weight:700">${String(sale.id).padStart(5,'0')}</span></div>
+  <div class="row"><span>No.:</span><span style="font-weight:700">${facturaLabel(sale)}</span></div>
   <div class="row"><span>Fecha:</span><span>${sale.date} ${sale.time}</span></div>
   <div class="row"><span>Cliente:</span><span>${_esc(sale.customer_name||'Consumidor Final')}</span></div>
   <div class="row"><span>Cajero:</span><span>${_esc(sale.cajero||'')}</span></div>
@@ -410,7 +410,7 @@ function renderTermicaMinimal(sale, cfg, opts, widthMm = 76) {
          font-size:10.5px; line-height:1.4; color:#000; }
 </style></head><body>
   <div style="text-align:center;font-size:12px;font-weight:700;margin-bottom:2px">${_esc(cfg.biz_name||'Mi Negocio')}</div>
-  <div style="text-align:center;font-size:9px;margin-bottom:4px">${sale.date} ${sale.time} · #${String(sale.id).padStart(5,'0')}</div>
+  <div style="text-align:center;font-size:9px;margin-bottom:4px">${sale.date} ${sale.time} · ${facturaLabel(sale)}</div>
   <div style="border-top:1px dashed #000;margin:3px 0"></div>
   ${(sale.items||[]).map(i => `
     <div style="display:flex;justify-content:space-between">
@@ -476,7 +476,7 @@ function renderCartaRecibo(sale, cfg, opts) {
     </div>
     <div class="doc">
       <div style="font-size:13px;color:#666">${_docLabel(sale)}</div>
-      <div class="num">#${String(sale.id).padStart(5,'0')}</div>
+      <div class="num">${facturaLabel(sale)}</div>
       <div>${sale.date}</div>
       <div>Cajero: ${_esc(sale.cajero||'')}</div>
     </div>
@@ -503,7 +503,7 @@ function renderCartaRecibo(sale, cfg, opts) {
          ${sale.mix_card > 0 ? `&nbsp;· Tarjeta/Trans.: RD$${Number(sale.mix_card).toLocaleString('es-DO')}` : ''}`
       : `<strong>Método de pago:</strong> ${(sale.payment_method||'efectivo').toUpperCase()}`}
   </div>
-  ${isDevolucion && sale.original_sale_id ? `<div style="margin-top:6px;font-size:11px;color:#555">Ref. venta original: #${String(sale.original_sale_id).padStart(5,'0')}</div>` : ''}
+  ${isDevolucion && sale.original_sale_id ? `<div style="margin-top:6px;font-size:11px;color:#555">Ref. venta original: ${facturaLabelOriginal(sale)}</div>` : ''}
   ${_showNcf(sale, opts) ? `<div style="margin-top:8px;font-size:11px;color:#555">NCF: <strong>${ncf}</strong> · Documento con validez fiscal</div>` : ''}
   ${isCotizacion ? `<div style="margin-top:8px;font-size:11px;color:#888;font-style:italic">Esta cotización no tiene valor fiscal.</div>` : ''}
   ${opts.mensaje && cfg.receipt_msg && !isCotizacion ? `<div class="footer">${cfg.receipt_msg}</div>` : ''}
@@ -565,7 +565,7 @@ function renderCartaFormal(sale, cfg, opts) {
     </div>
     <div style="text-align:right">
       <div class="doc-label">${_docLabel(sale)}</div>
-      <div class="doc-num">#${String(sale.id).padStart(5,'0')}</div>
+      <div class="doc-num">${facturaLabel(sale)}</div>
     </div>
   </div>
 
@@ -600,7 +600,7 @@ function renderCartaFormal(sale, cfg, opts) {
     <div class="total-row grand-total"><span>TOTAL</span><span>RD$${Number(sale.total||0).toLocaleString('es-DO')}</span></div>
   </div>
 
-  ${isDevolucion && sale.original_sale_id ? `<div style="margin-top:8px;font-size:11px;color:#555">Ref. venta original: #${String(sale.original_sale_id).padStart(5,'0')}</div>` : ''}
+  ${isDevolucion && sale.original_sale_id ? `<div style="margin-top:8px;font-size:11px;color:#555">Ref. venta original: ${facturaLabelOriginal(sale)}</div>` : ''}
   ${_showNcf(sale, opts) ? `<div style="margin-top:10px;font-size:11px;background:#fef9c3;padding:6px 10px;border-radius:4px">NCF: <strong>${ncf}</strong> · Documento con validez fiscal</div>` : ''}
   ${isCotizacion ? `<div style="margin-top:8px;font-size:11px;color:#888;font-style:italic;padding:6px 10px;background:#f9fafb;border-radius:4px">Esta cotización no tiene valor fiscal.</div>` : ''}
   ${opts.mensaje && cfg.receipt_msg && !isCotizacion ? `<div style="margin-top:12px;text-align:center;font-size:11px;color:#666">${cfg.receipt_msg}</div>` : ''}
@@ -667,7 +667,7 @@ function renderCartaNCF(sale, cfg, opts) {
     </div>
     <div style="text-align:right">
       <div style="font-size:11px;color:#666">Factura No.</div>
-      <div style="font-size:20px;font-weight:700">#${String(sale.id).padStart(5,'0')}</div>
+      <div style="font-size:20px;font-weight:700">${facturaLabel(sale)}</div>
       <div>Cajero: ${_esc(sale.cajero||'')}</div>
       <div>Método: ${(sale.payment_method||'efectivo').toUpperCase()}</div>
     </div>
@@ -695,7 +695,7 @@ function renderCartaNCF(sale, cfg, opts) {
     </table>
   </div>
 
-  ${isDevolucion && sale.original_sale_id ? `<div style="margin-top:6px;font-size:11px;color:#555">Ref. venta original: #${String(sale.original_sale_id).padStart(5,'0')}</div>` : ''}
+  ${isDevolucion && sale.original_sale_id ? `<div style="margin-top:6px;font-size:11px;color:#555">Ref. venta original: ${facturaLabelOriginal(sale)}</div>` : ''}
   <div style="margin-top:10px;font-size:10px;color:#666;text-align:center;border-top:1px solid #ddd;padding-top:8px">
     ${isCotizacion
       ? 'Esta cotización no tiene valor fiscal.'
@@ -737,7 +737,7 @@ function renderMediaCarta(sale, cfg, opts) {
       ${_esc(cfg.biz_addr||'')} · Tel: ${_esc(cfg.biz_phone||'')}
     </div>
     <div style="text-align:right">
-      <strong style="font-size:14px">#${String(sale.id).padStart(5,'0')}</strong><br/>
+      <strong style="font-size:14px">${facturaLabel(sale)}</strong><br/>
       ${sale.date}<br/>
       ${_docLabel(sale)}
     </div>

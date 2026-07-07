@@ -1129,7 +1129,7 @@ function _posSendWhatsApp(sale) {
 
   const tipo = sale.type === 'cotizacion' ? 'COTIZACION' : 'FACTURA';
   const msg = [
-    tipo + ' #' + String(sale.id).padStart(5,'0') + ' - ' + CFG.biz,
+    tipo + ' ' + facturaLabel(sale) + ' - ' + CFG.biz,
     'Fecha: ' + sale.date,
     'Cliente: ' + (sale.clientName || 'Consumidor Final'),
     '',
@@ -1243,7 +1243,7 @@ function previsualizarFactura(sale) {
     <div>
       <div class="doc-type">${isFactura ? 'FACTURA' : 'COTIZACIÓN'}</div>
       <div class="doc-meta">
-        #${String(sale.id).padStart(5, '0')}<br>
+        ${facturaLabel(sale)}<br>
         ${sale.date} ${sale.time}<br>
         Cajero: ${_esc(sale.cajero)}
       </div>

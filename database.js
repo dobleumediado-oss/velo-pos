@@ -1016,8 +1016,18 @@ const customersRepo = {
     return payTx();
   },
   getPayments(customerId) {
+    // LEFT JOIN a sales para que la referencia de factura en el historial de
+    // abonos muestre el número real (numero_factura_fmt), no el id interno.
+    // Alias con prefijo sale_ para no colisionar con columnas de payments.
     return db.prepare(`
-      SELECT * FROM payments WHERE customer_id=? ORDER BY created_at DESC
+      SELECT p.*,
+             s.numero_factura     AS sale_numero_factura,
+             s.numero_factura_fmt AS sale_numero_factura_fmt,
+             s.ncf                AS sale_ncf
+      FROM payments p
+      LEFT JOIN sales s ON s.id = p.sale_id
+      WHERE p.customer_id=?
+      ORDER BY p.created_at DESC
     `).all(customerId);
   },
   delete(id) {
@@ -1372,11 +1382,15 @@ const salesRepo = {
     const sale  = db.prepare('SELECT * FROM sales WHERE id=?').get(id);
     if (!sale) return null;
     sale.items  = db.prepare('SELECT * FROM sale_items WHERE sale_id=?').all(id);
-    // Para notas de crédito (devoluciones con B04): adjuntar el NCF de la factura
-    // original que esta nota modifica, para poder mostrarlo en la impresión.
+    // Para notas de crédito (devoluciones con B04): adjuntar el NCF y el número
+    // real de la factura original que esta nota modifica, para poder mostrarlos
+    // en la impresión (la referencia "Ref. venta original" usa el número real,
+    // no el id interno).
     if (sale.type === 'devolucion' && sale.original_sale_id) {
-      const orig = db.prepare('SELECT ncf FROM sales WHERE id=?').get(sale.original_sale_id);
+      const orig = db.prepare('SELECT ncf, numero_factura, numero_factura_fmt FROM sales WHERE id=?').get(sale.original_sale_id);
       sale.modifies_ncf = (orig && orig.ncf) ? orig.ncf : '';
+      sale.original_numero_factura     = orig ? orig.numero_factura     : null;
+      sale.original_numero_factura_fmt = orig ? orig.numero_factura_fmt : null;
     }
     return sale;
   },
@@ -1401,9 +1415,12 @@ const salesRepo = {
     return db.prepare(`
       SELECT s.*,
              GROUP_CONCAT(si.product_name || ' x' || si.qty, ' | ') as items_summary,
-             COALESCE(SUM(si.unit_cost * si.qty), 0) as cost_total
+             COALESCE(SUM(si.unit_cost * si.qty), 0) as cost_total,
+             orig.numero_factura     AS original_numero_factura,
+             orig.numero_factura_fmt AS original_numero_factura_fmt
       FROM sales s
       LEFT JOIN sale_items si ON s.id = si.sale_id
+      LEFT JOIN sales orig    ON orig.id = s.original_sale_id
       ${where}
       GROUP BY s.id
       ORDER BY s.id DESC

@@ -24,6 +24,37 @@ const DB = {
   get users()   { return window._cachedUsers || []; },
 };
 
+// ── Número de factura mostrable (helper global) ───────────────
+// Prioridad: numero_factura_fmt → numero_factura (padStart 8) → id interno (padStart 5).
+// Acepta objetos de venta (s), factura pendiente (f), pago con JOIN (p) o
+// match de búsqueda por artículo (m); reconoce los alias equivalentes de cada campo.
+// `fallbackRef` (opcional) se usa antes del id interno — p.ej. la referencia de
+// importación de una factura sin número real todavía. Devuelve con '#' incluido.
+// NOTA: se define en data.js (carga primero) para estar disponible en TODOS los
+// módulos (clientes, ventas, pos, reportes, plantillas, print).
+function facturaLabel(o, fallbackRef) {
+  if (!o) return fallbackRef || '';
+  const fmt = o.numero_factura_fmt || o.sale_numero_factura_fmt || o.numFact;
+  if (fmt) return '#' + fmt;
+  const num = o.numero_factura != null ? o.numero_factura : o.sale_numero_factura;
+  if (num != null && num !== '') return '#' + String(num).padStart(8, '0');
+  if (fallbackRef) return fallbackRef;
+  const id = o.id != null ? o.id : (o.sale_id != null ? o.sale_id : o.saleId);
+  return '#' + String(id != null ? id : '').padStart(5, '0');
+}
+
+// Etiqueta de la factura ORIGINAL de una devolución/nota de crédito.
+// Usa el número real de la venta original (original_numero_factura_fmt, provisto
+// por getById/getAll) y cae al id interno (original_sale_id) solo si no existe.
+function facturaLabelOriginal(sale) {
+  if (!sale) return '';
+  return facturaLabel({
+    numero_factura_fmt: sale.original_numero_factura_fmt,
+    numero_factura:     sale.original_numero_factura,
+    id:                 sale.original_sale_id,
+  });
+}
+
 // ── Configuración del negocio ─────────────────
 // Se carga desde settings al iniciar
 let CFG = {
