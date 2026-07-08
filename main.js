@@ -488,8 +488,10 @@ ipcMain.handle('settings:getAll', async () => {
 });
 
 ipcMain.handle('settings:set', async (_, { key, value, requestUserId }) => {
-  // Claves que solo puede cambiar el superadmin
-  const SUPERADMIN_KEYS = /^(module_|barcode_enabled$|fiscal_enabled$|.*_roles$|license_|master_|multi_negocio)/;
+  // Claves que solo puede cambiar el superadmin. `connection_*` es topología
+  // de red (multi-terminal): modo servidor/cliente, IP, puerto, clave — decisión
+  // de nivel superadmin.
+  const SUPERADMIN_KEYS = /^(module_|barcode_enabled$|fiscal_enabled$|.*_roles$|license_|master_|multi_negocio|connection_)/;
   // Claves que requieren al menos rol admin
   const ADMIN_KEYS = /^(biz_|tax_pct$|receipt_msg$|pos_|print_template$|printer|biz_logo$)/;
 
@@ -524,8 +526,42 @@ ipcMain.handle('settings:set', async (_, { key, value, requestUserId }) => {
     }
   }
 
+  // `terminal_id` es la identidad estable de esta terminal, gestionada por el
+  // sistema (ver app:getTerminalInfo). No se permite sobrescribir desde la UI.
+  if (key === 'terminal_id') {
+    return { ok: false, error: 'El identificador de terminal es gestionado por el sistema.' };
+  }
+
   settingsRepo.set(key, value);
   return { ok: true };
+});
+
+// ── Terminal / conexión (Fase 1 — fundación multi-terminal) ──────────────────
+// Identidad estable de esta terminal para el modelo multi-terminal:
+//   · machineId  — hash de hardware+hostname (license.js). Cambia si se renombra
+//                  la PC o cambia el CPU.
+//   · terminalId — UUID persistente generado la 1ª vez y guardado en settings.
+//                  NO cambia aunque se renombre la PC → identidad estable.
+// Base para: cajas por terminal, allowlist del servidor, auditoría.
+// En esta fase NO hay red: `connection_mode` es 'local' por defecto (comportamiento
+// actual intacto). La capa de red llega en la Fase 2. Ver docs/multi-terminal-sync.md.
+ipcMain.handle('app:getTerminalInfo', async () => {
+  try {
+    let terminalId = settingsRepo.get('terminal_id');
+    if (!terminalId) {
+      terminalId = require('crypto').randomUUID();
+      settingsRepo.set('terminal_id', terminalId);
+      logInfo('terminal', 'terminal_id generado', { terminalId });
+    }
+    return {
+      ok: true,
+      terminalId,
+      machineId: getMachineId(),
+      mode: settingsRepo.get('connection_mode') || 'local',
+    };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 });
 
 // ── Usuarios ──────────────────────────────────

@@ -132,6 +132,11 @@ contextBridge.exposeInMainWorld('api', {
     generate:    (data)      => ipcRenderer.invoke('license:generate', data),
   },
 
+  // ── Terminal / conexión (multi-terminal) ──
+  app: {
+    getTerminalInfo: () => ipcRenderer.invoke('app:getTerminalInfo'),
+  },
+
   // ── Categorías ────────────────────────────────
   categories: {
     getAll:  ()       => ipcRenderer.invoke('categories:getAll'),
