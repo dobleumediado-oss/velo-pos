@@ -4144,6 +4144,44 @@ ipcMain.handle('ecf:getLog', async (_, { limit = 50, offset = 0 } = {}) => {
 });
 
 
+// ── Multi-terminal (opt-in) — puente mode-aware + servidor RPC ───────────────
+// Por defecto connection_mode='local' → NO arranca ningún servidor ni cambia
+// nada. Solo se activa si un superadmin configura modo servidor/cliente.
+// El puente aún no tiene handlers migrados; esta es la infraestructura de red.
+// Ver docs/multi-terminal-sync.md
+let _rpcServer = null;
+function setupMultiTerminal() {
+  const bridge = require('./src/main/ipc-bridge');
+  const conn   = require('./src/main/connection');
+  const getMode = () => settingsRepo.get('connection_mode') || 'local';
+
+  bridge.configureBridge({
+    mode: getMode,
+    client: () => ({
+      host:       settingsRepo.get('connection_server_ip')   || '127.0.0.1',
+      port:       Number(settingsRepo.get('connection_server_port')) || 8443,
+      accessKey:  settingsRepo.get('connection_access_key')  || '',
+      terminalId: settingsRepo.get('terminal_id')            || '',
+    }),
+  });
+
+  const mode = getMode();
+  if (mode === 'server') {
+    const { startRpcServer } = require('./src/main/net-server');
+    _rpcServer = startRpcServer({
+      port: Number(settingsRepo.get('connection_server_port')) || 8443,
+      host: '0.0.0.0',
+      getAccessKey: () => settingsRepo.get('connection_access_key') || '',
+      getAllowlist: () => conn.parseAllowlist(settingsRepo.get('connection_allowlist')),
+      dispatch: bridge.dispatch,
+      onLog: (lvl, msg, extra) => { try { (lvl === 'error' ? logError : lvl === 'warn' ? logWarn : logInfo)('rpc', msg, extra); } catch {} },
+    });
+    logInfo('multiterminal', 'Servidor RPC iniciado', { port: _rpcServer.port, canales: bridge.channelCount() });
+  } else {
+    logInfo('multiterminal', 'Modo de conexión', { mode });
+  }
+}
+
 app.whenReady().then(() => {
   // Cargar API key de Claude (necesita userData, disponible solo aquí)
   _loadApiKey();
@@ -4163,6 +4201,10 @@ app.whenReady().then(() => {
   try {
     db = initDB(DATA_DIR);
     initVersioning(db, DATA_DIR);
+    // Multi-terminal: configura el puente y (solo en modo servidor) arranca el RPC.
+    // Aislado en try propio para que jamás impida el arranque del POS.
+    try { setupMultiTerminal(); }
+    catch (e) { logError('multiterminal', 'Setup falló: ' + e.message); }
   } catch (e) {
     logError('DB', 'Error al inicializar: ' + e.message);
     console.error('[DB] Error al inicializar:', e);
@@ -4203,6 +4245,7 @@ app.on('activate', () => {
 
 // Cierre limpio
 app.on('before-quit', () => {
+  if (_rpcServer) { try { _rpcServer.close(); } catch {} _rpcServer = null; }
   const dbInst = require('./database').getDB();
   if (dbInst) dbInst.close();
 });
