@@ -136,6 +136,12 @@ contextBridge.exposeInMainWorld('api', {
   app: {
     getTerminalInfo: () => ipcRenderer.invoke('app:getTerminalInfo'),
   },
+  connection: {
+    getInfo:            (data) => ipcRenderer.invoke('connection:getInfo', data),
+    generateKey:        (data) => ipcRenderer.invoke('connection:generateKey', data),
+    test:               (data) => ipcRenderer.invoke('connection:test', data),
+    setAllowedTerminal: (data) => ipcRenderer.invoke('connection:setAllowedTerminal', data),
+  },
 
   // ── Categorías ────────────────────────────────
   categories: {

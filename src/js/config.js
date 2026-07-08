@@ -560,6 +560,13 @@ async function renderConfiguracion(el) {
     }));
   }
 
+  // ── Modo de conexión / multi-terminal (solo superadmin) ──
+  if (isSA) {
+    const connContainer = h('div', { id: 'conn-card-container' });
+    colLeft.appendChild(connContainer);
+    if (typeof renderConexionCard === 'function') renderConexionCard(connContainer);
+  }
+
   // ── Impresora (solo superadmin) ──────────────
   if (isSA) {
     const printerCard = h('div', { class: 'card' });
@@ -1405,6 +1412,141 @@ async function eliminarLogo(slot = '') {
       toast('✓ Logo eliminado');
       renderConfiguracion(document.getElementById('page'));
     }, 'Eliminar', 'btn-red');
+}
+
+// ══════════════════════════════════════════════
+// MODO DE CONEXIÓN (multi-terminal) — solo superadmin
+// Ver docs/multi-terminal-sync.md. Cambiar el modo requiere reiniciar la app
+// (el servidor/cliente se configura en el arranque).
+// ══════════════════════════════════════════════
+async function renderConexionCard(container) {
+  if (!container) return;
+  const res = await window.api.connection.getInfo({ requestUserId: _cfgUser()?.id }).catch(() => null);
+  if (!res || !res.ok) { container.innerHTML = ''; return; }
+
+  const mode  = res.mode || 'local';
+  const badge = mode === 'local' ? 'g' : mode === 'server' ? 'b' : 'a';
+  const btn   = (v, t) => `<button class="btn ${mode===v?'btn-dark':'btn-out'} btn-sm" style="flex:1"
+      onclick="cambiarModoConexion('${v}')">${t}</button>`;
+
+  let body = '';
+  if (mode === 'local') {
+    body = `<div class="alrt b" style="margin-bottom:0"><div class="alrt-dot b"></div>
+      <div><div class="alrt-title">Trabajando en modo local</div>
+      <div class="alrt-sub">Esta máquina usa su propia base de datos (como hasta ahora).</div></div></div>`;
+  } else if (mode === 'server') {
+    const rows = (res.allowlist || []).map(t => `
+      <div class="tr" style="font-size:11px;padding:4px 0">
+        <span class="mono">${_esc((t.name ? t.name + ' · ' : '') + t.terminalId.slice(0, 8))}…</span>
+        <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="quitarTerminalAllow('${_esc(t.terminalId)}')">Quitar</button>
+      </div>`).join('') || `<div style="font-size:11px;color:var(--muted2)">Ninguna terminal autorizada aún.</div>`;
+    body = `
+      <div style="font-size:12px;margin-bottom:8px">Esta PC es el <b>servidor</b>. Las demás se conectan con estos datos:</div>
+      <div class="tr" style="font-size:12px"><span>Puerto</span><span class="mono">${_esc(res.serverPort)}</span></div>
+      <div class="tr" style="font-size:12px;align-items:center"><span>Clave de acceso</span>
+        <span class="mono" style="font-weight:700">${res.accessKey ? _esc(res.accessKey) : '— sin generar —'}</span></div>
+      <button class="btn btn-out btn-sm btn-fw" style="margin:8px 0" onclick="generarClaveConexion()">
+        ${svg('refresh')||''} ${res.accessKey ? 'Regenerar clave' : 'Generar clave'}</button>
+      <div style="font-weight:700;font-size:12px;margin:10px 0 4px">Terminales autorizadas (${(res.allowlist||[]).length})</div>
+      ${rows}
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <input class="inp" id="conn-add-id" placeholder="ID de terminal a autorizar" style="flex:2;font-size:11px"/>
+        <input class="inp" id="conn-add-name" placeholder="Nombre" style="flex:1;font-size:11px"/>
+        <button class="btn btn-green btn-sm" onclick="agregarTerminalAllow()">Añadir</button>
+      </div>`;
+  } else { // client
+    body = `
+      <div style="font-size:12px;margin-bottom:8px">Conéctate al servidor con los datos que te dio la PC principal:</div>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <div style="flex:2"><label class="lbl" style="font-size:11px">IP del servidor</label>
+          <input class="inp" id="conn-ip" value="${_esc(res.serverIp)}" placeholder="100.101.102.103"/></div>
+        <div style="flex:1"><label class="lbl" style="font-size:11px">Puerto</label>
+          <input class="inp" id="conn-port" value="${_esc(res.serverPort)}" placeholder="8443"/></div>
+      </div>
+      <label class="lbl" style="font-size:11px">Clave de acceso</label>
+      <input class="inp" id="conn-key" placeholder="XXXX-XXXX-XXXX" style="margin-bottom:8px"/>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-out btn-sm" style="flex:1" onclick="probarConexionCliente()">Probar conexión</button>
+        <button class="btn btn-green btn-sm" style="flex:1" onclick="guardarClienteConexion()">Guardar</button>
+      </div>
+      <div id="conn-test-result" style="font-size:11px;margin-top:6px"></div>`;
+  }
+
+  const card = h('div', { class: 'card' });
+  card.innerHTML = `
+    <div class="fxb mb8"><div class="card-title">Modo de Conexión</div>
+      <span class="badge ${badge}">${_esc(mode)}</span></div>
+    <div style="display:flex;gap:6px;margin-bottom:12px">
+      ${btn('local','Local')}${btn('server','Servidor')}${btn('client','Cliente')}
+    </div>
+    ${body}
+    <div style="font-size:10px;color:var(--muted2);margin-top:10px">
+      ID de esta terminal: <span class="mono">${_esc((res.terminalId||'').slice(0,8))}…</span>
+      · Cambiar el modo requiere reiniciar la app.</div>`;
+  container.innerHTML = '';
+  container.appendChild(card);
+}
+
+function _connReRender() {
+  const c = document.getElementById('conn-card-container');
+  if (c) renderConexionCard(c);
+}
+
+async function cambiarModoConexion(mode) {
+  const res = await window.api.settings.set({ key: 'connection_mode', value: mode, requestUserId: _cfgUser()?.id });
+  if (res && res.ok === false) { toast(res.error || 'No se pudo cambiar el modo', 'err'); return; }
+  toast(`Modo: ${mode} · reinicia la app para aplicar`);
+  _connReRender();
+}
+
+async function generarClaveConexion() {
+  const res = await window.api.connection.generateKey({ requestUserId: _cfgUser()?.id });
+  if (!res || res.ok === false) { toast(res?.error || 'No se pudo generar la clave', 'err'); return; }
+  toast('✓ Clave de acceso generada');
+  _connReRender();
+}
+
+async function guardarClienteConexion() {
+  const ip   = document.getElementById('conn-ip')?.value?.trim();
+  const port = document.getElementById('conn-port')?.value?.trim() || '8443';
+  const key  = document.getElementById('conn-key')?.value?.trim();
+  if (!ip)  { toast('Escribe la IP del servidor', 'w'); return; }
+  const uid = _cfgUser()?.id;
+  await window.api.settings.set({ key: 'connection_server_ip',   value: ip,   requestUserId: uid });
+  await window.api.settings.set({ key: 'connection_server_port', value: port, requestUserId: uid });
+  if (key) await window.api.settings.set({ key: 'connection_access_key', value: key, requestUserId: uid });
+  toast('✓ Datos guardados · reinicia la app para conectar');
+}
+
+async function probarConexionCliente() {
+  const ip   = document.getElementById('conn-ip')?.value?.trim();
+  const port = document.getElementById('conn-port')?.value?.trim() || '8443';
+  const out  = document.getElementById('conn-test-result');
+  if (!ip) { toast('Escribe la IP primero', 'w'); return; }
+  if (out) out.innerHTML = 'Probando…';
+  const res = await window.api.connection.test({ requestUserId: _cfgUser()?.id, host: ip, port });
+  if (res && res.ok && res.reachable) {
+    if (out) out.innerHTML = `<span style="color:var(--green)">✓ Conectado · ${res.ms} ms</span>`;
+  } else {
+    if (out) out.innerHTML = `<span style="color:var(--red)">✗ No se pudo conectar (${_esc(res?.error||'sin respuesta')})</span>`;
+  }
+}
+
+async function agregarTerminalAllow() {
+  const id   = document.getElementById('conn-add-id')?.value?.trim();
+  const name = document.getElementById('conn-add-name')?.value?.trim();
+  if (!id) { toast('Escribe el ID de la terminal', 'w'); return; }
+  const res = await window.api.connection.setAllowedTerminal({ requestUserId: _cfgUser()?.id, terminalId: id, name });
+  if (!res || res.ok === false) { toast(res?.error || 'No se pudo autorizar', 'err'); return; }
+  toast('✓ Terminal autorizada');
+  _connReRender();
+}
+
+async function quitarTerminalAllow(id) {
+  const res = await window.api.connection.setAllowedTerminal({ requestUserId: _cfgUser()?.id, terminalId: id, remove: true });
+  if (!res || res.ok === false) { toast(res?.error || 'No se pudo quitar', 'err'); return; }
+  toast('✓ Terminal quitada');
+  _connReRender();
 }
 
 // ══════════════════════════════════════════════

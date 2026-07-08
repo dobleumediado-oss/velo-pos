@@ -564,6 +564,72 @@ ipcMain.handle('app:getTerminalInfo', async () => {
   }
 });
 
+// ── Conexión multi-terminal — gestión (Fase 3, solo superadmin) ──────────────
+// Handlers ADITIVOS (no tocan los existentes) que alimentan la pantalla
+// "Modo de conexión". La topología es decisión de nivel superadmin.
+function _connRequireSA(requestUserId) {
+  const u = requestUserId ? authRepo.findById(requestUserId) : null;
+  return (u && u.role === 'superadmin') ? u : null;
+}
+function _connTerminalNames() {
+  try { return JSON.parse(settingsRepo.get('connection_terminal_names') || '{}'); } catch { return {}; }
+}
+
+ipcMain.handle('connection:getInfo', async (_, { requestUserId } = {}) => {
+  try {
+    if (!_connRequireSA(requestUserId)) return { ok: false, error: 'Solo el superadmin puede ver la configuración de conexión' };
+    const conn = require('./src/main/connection');
+    let terminalId = settingsRepo.get('terminal_id');
+    if (!terminalId) { terminalId = require('crypto').randomUUID(); settingsRepo.set('terminal_id', terminalId); }
+    const names = _connTerminalNames();
+    const mode  = settingsRepo.get('connection_mode') || 'local';
+    return {
+      ok: true, mode, terminalId, machineId: getMachineId(),
+      serverIp:   settingsRepo.get('connection_server_ip')   || '',
+      serverPort: settingsRepo.get('connection_server_port') || '8443',
+      accessKey:  mode === 'server' ? (settingsRepo.get('connection_access_key') || '') : '',
+      hasKey:     !!settingsRepo.get('connection_access_key'),
+      allowlist:  conn.parseAllowlist(settingsRepo.get('connection_allowlist')).map(id => ({ terminalId: id, name: names[id] || '' })),
+    };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('connection:generateKey', async (_, { requestUserId } = {}) => {
+  try {
+    if (!_connRequireSA(requestUserId)) return { ok: false, error: 'Solo el superadmin' };
+    const key = require('./src/main/connection').generateAccessKey();
+    settingsRepo.set('connection_access_key', key);
+    return { ok: true, accessKey: key };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('connection:test', async (_, { requestUserId, host, port } = {}) => {
+  try {
+    if (!_connRequireSA(requestUserId)) return { ok: false, error: 'Solo el superadmin' };
+    const { healthCheck } = require('./src/main/net-client');
+    const r = await healthCheck({
+      host: host || settingsRepo.get('connection_server_ip') || '127.0.0.1',
+      port: Number(port || settingsRepo.get('connection_server_port')) || 8443,
+      timeoutMs: 5000,
+    });
+    return { ok: true, reachable: !!r.ok, ms: r.ms ?? null, error: r.error || null };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('connection:setAllowedTerminal', async (_, { requestUserId, terminalId, name, remove } = {}) => {
+  try {
+    if (!_connRequireSA(requestUserId)) return { ok: false, error: 'Solo el superadmin' };
+    const conn = require('./src/main/connection');
+    let list  = conn.parseAllowlist(settingsRepo.get('connection_allowlist'));
+    const names = _connTerminalNames();
+    if (remove) { list = list.filter(id => id !== terminalId); delete names[terminalId]; }
+    else if (terminalId && !list.includes(terminalId)) { list.push(terminalId); if (name) names[terminalId] = name; }
+    settingsRepo.set('connection_allowlist', JSON.stringify(list));
+    settingsRepo.set('connection_terminal_names', JSON.stringify(names));
+    return { ok: true, count: list.length };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
 // ── Usuarios ──────────────────────────────────
 ipcMain.handle('users:getById', async (_, id) => {
   try {
