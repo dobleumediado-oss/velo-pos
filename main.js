@@ -498,11 +498,42 @@ ipcMain.handle('auth:logout', async (_, { userId, userName }) => {
 });
 
 // ── Settings ──────────────────────────────────
+// Claves PROPIAS de la máquina (no se sincronizan con el servidor): conexión,
+// identidad de terminal e impresora. El resto son del negocio (viven en el servidor).
+function _isDeviceSetting(key) {
+  return /^connection_/.test(key) || key === 'terminal_id' || key === 'printer' || key === 'printer_type';
+}
+
 ipcMain.handle('settings:getAll', async () => {
-  return settingsRepo.getAll();
+  const local = settingsRepo.getAll();
+  // Multi-terminal: en modo cliente, base = settings del negocio (servidor),
+  // overlay = claves de dispositivo locales. Si el servidor no responde, devuelve
+  // lo local para no dejar la UI en blanco.
+  try {
+    const bridge = require('./src/main/ipc-bridge');
+    if (bridge.getMode() === 'client') {
+      const server = await bridge.forwardToServer('settings:getAll', undefined);
+      const merged = { ...(server || {}) };
+      for (const k of Object.keys(local)) if (_isDeviceSetting(k)) merged[k] = local[k];
+      return merged;
+    }
+  } catch (e) { /* servidor no disponible → cae a local */ }
+  return local;
 });
 
 ipcMain.handle('settings:set', async (_, { key, value, requestUserId }) => {
+  // Multi-terminal: en modo cliente, las claves del NEGOCIO se escriben en el
+  // servidor (que valida permisos con SUS usuarios). Las de DISPOSITIVO (conexión,
+  // impresora, terminal) quedan locales y siguen el flujo normal de abajo.
+  try {
+    const bridge = require('./src/main/ipc-bridge');
+    if (bridge.getMode() === 'client' && !_isDeviceSetting(key)) {
+      return await bridge.forwardToServer('settings:set', { key, value, requestUserId });
+    }
+  } catch (e) {
+    return { ok: false, error: e.offline ? 'Sin conexión al servidor' : (e.message || 'Error al guardar en el servidor') };
+  }
+
   // Claves que solo puede cambiar el superadmin. `connection_*` es topología
   // de red (multi-terminal): modo servidor/cliente, IP, puerto, clave — decisión
   // de nivel superadmin.

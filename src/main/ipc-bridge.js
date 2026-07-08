@@ -97,7 +97,20 @@ function installIpcInterceptor(ipcMainRef, { localOnly } = {}) {
   return true;
 }
 
+// Modo actual y reenvío puntual al servidor (lo usan handlers que hacen split
+// por clave, p.ej. settings). Devuelve la data real o LANZA con offline.
+function getMode() { return _ctx.mode(); }
+async function forwardToServer(channel, args) {
+  const cfg = _ctx.client() || {};
+  const res = await rpcCall({ ...cfg, channel, args });
+  if (res && res.ok === true) return res.data;
+  const err = new Error(res && res.offline ? 'SERVER_OFFLINE' : ((res && res.error) || 'RPC_ERROR'));
+  err.offline = !!(res && res.offline);
+  err.rpc = res && res.error;
+  throw err;
+}
+
 function hasChannel(channel) { return _handlers.has(channel); }
 function channelCount() { return _handlers.size; }
 
-module.exports = { configureBridge, registerHandler, routeCall, dispatch, installIpcInterceptor, hasChannel, channelCount };
+module.exports = { configureBridge, registerHandler, routeCall, dispatch, installIpcInterceptor, getMode, forwardToServer, hasChannel, channelCount };
