@@ -4,6 +4,21 @@
 // ══════════════════════════════════════════════
 
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+
+// ── Interceptor de IPC (multi-terminal) — DEBE ir ANTES de cualquier handler ──
+// Envuelve ipcMain.handle: cada handler queda disponible para dispatch de red y
+// mode-aware. En modo 'local' (por defecto) es passthrough → cero cambio.
+// localOnly = canales propios de la máquina que NUNCA se reenvían al servidor.
+// Ver docs/multi-terminal-sync.md
+require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
+  localOnly: new Set([
+    'app:getTerminalInfo',
+    'connection:getInfo', 'connection:generateKey', 'connection:test', 'connection:setAllowedTerminal',
+    'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke', 'license:generate',
+    'update:check', 'update:download', 'update:install',
+    'settings:set', 'settings:getAll',
+  ]),
+});
 const path = require('path');
 const fs   = require('fs');
 const { sqliteIdent } = require('./lib/sql-safe');

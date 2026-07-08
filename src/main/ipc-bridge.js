@@ -64,7 +64,40 @@ async function dispatch(channel, args) {
   return await fn(args);
 }
 
+// ── Interceptor de ipcMain.handle (migración centralizada) ────────────────────
+// Envuelve ipcMain.handle UNA vez: cada handler que se registre después queda
+//   (1) disponible para dispatch de red (el servidor puede servirlo), y
+//   (2) mode-aware en el lado renderer: en modo 'client' (y si no es local-only)
+//       reenvía al servidor; en 'local'/'server' ejecuta el handler local.
+// En modo 'local' (por defecto) es un PASSTHROUGH → cero cambio de comportamiento.
+// Los handlers de este proyecto usan la firma (event, arg) e ignoran event, así
+// que el dispatch de red pasa event=null sin problema.
+// `localOnly`: canales que NUNCA se reenvían (identidad, conexión, licencia,
+// updater, settings) porque son propios de la máquina.
+function installIpcInterceptor(ipcMainRef, { localOnly } = {}) {
+  if (!ipcMainRef || typeof ipcMainRef.handle !== 'function' || ipcMainRef.__veloBridgeWrapped) return false;
+  const localSet = localOnly instanceof Set ? localOnly : new Set(localOnly || []);
+  const orig = ipcMainRef.handle.bind(ipcMainRef);
+  ipcMainRef.handle = (channel, fn) => {
+    _handlers.set(channel, (arg) => fn(null, arg));
+    orig(channel, async (event, arg) => {
+      if (_ctx.mode() === 'client' && !localSet.has(channel)) {
+        const cfg = _ctx.client() || {};
+        const res = await rpcCall({ ...cfg, channel, args: arg });
+        if (res && res.ok === true) return res.data;
+        const err = new Error(res && res.offline ? 'SERVER_OFFLINE' : ((res && res.error) || 'RPC_ERROR'));
+        err.offline = !!(res && res.offline);
+        err.rpc = res && res.error;
+        throw err;
+      }
+      return fn(event, arg);
+    });
+  };
+  ipcMainRef.__veloBridgeWrapped = true;
+  return true;
+}
+
 function hasChannel(channel) { return _handlers.has(channel); }
 function channelCount() { return _handlers.size; }
 
-module.exports = { configureBridge, registerHandler, routeCall, dispatch, hasChannel, channelCount };
+module.exports = { configureBridge, registerHandler, routeCall, dispatch, installIpcInterceptor, hasChannel, channelCount };
