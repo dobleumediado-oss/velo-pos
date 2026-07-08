@@ -69,22 +69,28 @@ Multi-terminal exige que **cada terminal abra/cierre y cuadre su propia caja**:
 - Agregar `terminal_id` a `cash_sessions`.
 - `getOpen()` pasa a ser `getOpen(terminalId)`.
 - Reportes de caja: por terminal y consolidado.
-- Decisión pendiente: ¿toda terminal maneja efectivo, o solo el mostrador cobra y
-  las laptops solo generan ventas/créditos?
+- **DECIDIDO:** cada terminal maneja **su propia caja** (abre, cierra y cuadra la suya).
 
 ## 7. Usuarios y permisos
 - Los usuarios y roles son **centrales** (viven en el servidor).
 - Cada máquina tiene su **propia sesión/login** independiente. La laptop entra con
   OTRO usuario, no hereda el del mostrador.
 - Cualquier admin/cajero (según permiso) entra en cualquier terminal y vende.
-- Decisión pendiente: ¿un mismo usuario puede estar logueado en 2 máquinas a la vez?
+- **DECIDIDO:** un mismo usuario **NO** puede estar logueado en 2 máquinas a la vez.
+  El servidor lleva el registro de sesiones activas por usuario; el 2º login se
+  **rechaza con una alerta** ("Este usuario ya tiene una sesión activa en otra terminal").
 
-## 8. Impresión
-- Servicio ya centralizado en [print.js](../src/js/print.js).
-- Config por terminal: imprimir **local** (impresora propia) o **enviar al servidor**
-  (impresora del mostrador). Requisito del negocio: la impresión sale del mostrador,
-  así que en cliente el job viaja al servidor y **el servidor imprime**.
-- Configurable por categoría (factura, ticket, conduce, abono…).
+## 8. Impresión (DECIDIDO — modelo flexible por terminal)
+Servicio ya centralizado en [print.js](../src/js/print.js). Comportamiento por terminal:
+- **Si la terminal tiene impresora física** → imprime en **su propia** impresora, en el sitio.
+- **Si NO tiene impresora física** → el documento **se guarda en el servidor (local)** y
+  se le ofrece al usuario, **en el momento**, la opción de:
+  - imprimirlo **en la impresora del servidor (mostrador)**, o
+  - imprimirlo **desde la misma terminal** (si conecta una impresora ahí).
+- Todo documento generado queda registrado en el servidor aunque no se imprima.
+- **Aplica a TODOS los módulos que imprimen o generan reportes** (factura, ticket,
+  cotización, conduce, abono, cierre de caja, reportes contables, 607/608, etc.),
+  no solo a la venta. El ruteo pasa por el único servicio de impresión.
 
 ## 9. Fiscal — lo más crítico (NCF / correlativo / inventario)
 El **servidor** es el único que asigna, en orden y de forma serializada:
@@ -130,10 +136,13 @@ Todo el negocio depende del servidor:
 - **Fase futura (opcional) — Offline-first:** copia local + replicación para vender
   sin servidor.
 
-## 13. Decisiones pendientes (bloquean Fase 2+)
-1. ¿Cada terminal maneja su propia caja/efectivo, o solo el mostrador cobra?
-2. ¿Impresora central (mostrador) o una por terminal?
-3. ¿Un mismo usuario puede estar logueado en 2 máquinas a la vez?
+## 13. Decisiones (RESUELTAS)
+1. **Cajas:** cada terminal maneja su propia caja. (§6)
+2. **Impresión:** flexible por terminal — impresora física local si la hay; si no,
+   se guarda en el servidor y se ofrece imprimir por el servidor o desde la terminal
+   en el momento. Aplica a todos los módulos de impresión/reportes. (§8)
+3. **Sesión de usuario:** un usuario no puede estar en 2 máquinas a la vez → alerta
+   y rechazo del 2º login. (§7)
 
 ## 14. Regla de release
 Nada de esto se hace tag/release a clientes hasta estar **completo y probado en QA**.
