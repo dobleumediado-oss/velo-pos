@@ -352,8 +352,13 @@ function openClienteModal(c = null) {
       </div>
       <div class="fg">
         <label class="lbl">RNC / Cédula</label>
-        <input class="inp" id="cf-rnc" type="text" placeholder="101-00000-0"
-               value="${isEdit ? (c.rnc || '') : ''}"/>
+        <div style="display:flex;gap:6px">
+          <input class="inp" id="cf-rnc" type="text" placeholder="RNC 9 díg. · Cédula 11 díg."
+                 value="${isEdit ? (c.rnc || '') : ''}" oninput="onRncInput()" style="flex:1;min-width:0"/>
+          <button class="btn btn-out" type="button" onclick="verificarRncDGII()"
+                  title="Verificar en la DGII (requiere internet)" style="flex-shrink:0">DGII</button>
+        </div>
+        <div id="cf-rnc-hint" style="font-size:10.5px;margin-top:4px;color:var(--muted2)"></div>
       </div>
     </div>
     <div class="g2">
@@ -413,6 +418,103 @@ function openClienteModal(c = null) {
       </button>
     </div>
   `);
+  // Inicializa el detector de tipo de documento (muestra RNC/Cédula al editar)
+  setTimeout(onRncInput, 30);
+}
+
+// ── Validación de documento RD (offline) ──────────────────────────────────
+// RNC = 9 dígitos (persona jurídica) · Cédula = 11 dígitos (persona física),
+// cada uno con su dígito verificador. Es informativo, nunca bloquea el guardado
+// (la verificación autoritativa es el botón "DGII" en línea).
+function _rncChecksum(d) {
+  if (d.length !== 9) return false;
+  const w = [7, 9, 8, 6, 5, 4, 3, 2];
+  let sum = 0;
+  for (let i = 0; i < 8; i++) sum += parseInt(d[i], 10) * w[i];
+  const r = sum % 11;
+  const chk = r === 0 ? 2 : r === 1 ? 1 : 11 - r;
+  return chk === parseInt(d[8], 10);
+}
+function _cedulaChecksum(d) {
+  if (d.length !== 11) return false;
+  let sum = 0;
+  for (let i = 0; i < 10; i++) {
+    let p = parseInt(d[i], 10) * ((i % 2 === 0) ? 1 : 2);
+    if (p > 9) p -= 9;
+    sum += p;
+  }
+  const chk = (10 - (sum % 10)) % 10;
+  return chk === parseInt(d[10], 10);
+}
+function onRncInput() {
+  const el   = document.getElementById('cf-rnc');
+  const hint = document.getElementById('cf-rnc-hint');
+  if (!el || !hint) return;
+  const d = (el.value || '').replace(/\D/g, '');
+  if (!d) {
+    hint.textContent = 'RNC = 9 dígitos · Cédula = 11 dígitos';
+    hint.style.color = 'var(--muted2)';
+    return;
+  }
+  if (d.length === 9) {
+    const ok = _rncChecksum(d);
+    hint.textContent = ok ? '✓ RNC válido — Persona jurídica'
+                          : '⚠ RNC de 9 dígitos — revisa el dígito verificador';
+    hint.style.color = ok ? 'var(--green)' : 'var(--amber)';
+  } else if (d.length === 11) {
+    const ok = _cedulaChecksum(d);
+    hint.textContent = ok ? '✓ Cédula válida — Persona física'
+                          : '⚠ Cédula de 11 dígitos — revisa el dígito verificador';
+    hint.style.color = ok ? 'var(--green)' : 'var(--amber)';
+  } else {
+    hint.textContent = `${d.length} dígitos — RNC usa 9, Cédula usa 11`;
+    hint.style.color = 'var(--amber)';
+  }
+}
+async function verificarRncDGII() {
+  const el   = document.getElementById('cf-rnc');
+  const hint = document.getElementById('cf-rnc-hint');
+  if (!el) return;
+  const d = (el.value || '').replace(/\D/g, '');
+  if (d.length !== 9 && d.length !== 11) {
+    toast('Ingresa un RNC (9 díg.) o Cédula (11 díg.)', 'err');
+    return;
+  }
+  // Cédula (11) y RNC (9) se interpretan distinto: para una persona física
+  // NO figurar como contribuyente en la DGII es lo normal (no es un error).
+  const esCedula = d.length === 11;
+  if (hint) { hint.textContent = 'Consultando DGII…'; hint.style.color = 'var(--muted2)'; }
+  try {
+    const res = await window.api.ncf.validateRnc({ rnc: d });
+    if (res?.ok) {
+      if (hint) {
+        hint.textContent = `✓ Inscrito en DGII: ${res.nombre || 'Contribuyente'} — ${res.estado || 'ACTIVO'}`;
+        hint.style.color = 'var(--green)';
+      }
+      const nameEl = document.getElementById('cf-name');
+      if (nameEl && !nameEl.value.trim() && res.nombre) nameEl.value = res.nombre;
+      toast('Verificado en la DGII');
+    } else if (hint) {
+      if (esCedula) {
+        // Mantiene coherencia con la validación offline: la cédula sigue siendo
+        // un documento válido de persona física; solo no está registrada como
+        // contribuyente (lo habitual). No se muestra como error.
+        const okFmt = _cedulaChecksum(d);
+        hint.textContent = okFmt
+          ? 'Cédula válida — Persona física · No figura como contribuyente en DGII (normal)'
+          : 'Cédula persona física · No inscrita en DGII y con dígito verificador dudoso';
+        hint.style.color = 'var(--muted2)';
+      } else {
+        hint.textContent = '⚠ RNC no inscrito en la DGII como contribuyente — verifica el número';
+        hint.style.color = 'var(--amber)';
+      }
+    }
+  } catch (e) {
+    if (hint) {
+      hint.textContent = 'Sin conexión para verificar en la DGII (puedes guardar igual)';
+      hint.style.color = 'var(--muted2)';
+    }
+  }
 }
 
 async function guardarCliente(id) {

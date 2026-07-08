@@ -1253,53 +1253,39 @@ const salesRepo = {
       );
       const saleId = saleR.lastInsertRowid;
 
-      // 4b. Generar NCF (solo facturas con fiscal activo)
+      // 4b. Generar NCF — SOLO facturas, con fiscal activo Y una secuencia registrada.
+      // El comprobante NUNCA se fabrica con un contador interno: proviene
+      // exclusivamente de un rango autorizado por la DGII (tabla ncf_sequences).
+      // Si no existe una secuencia activa del tipo que corresponde, la factura
+      // sale como documento interno SIN NCF (no aparenta un comprobante inexistente).
+      // Tipo determinado automáticamente por el documento del cliente:
+      //   · RNC de 9 dígitos             → B01 (Crédito Fiscal)
+      //   · Cédula de 11 díg. o sin doc  → B02 (Consumo)
       let ncf = '';
       if (type === 'factura') {
         const fiscalOn = db.prepare("SELECT value FROM settings WHERE key='fiscal_enabled'").get()?.value === '1';
-        const ncfAdv   = db.prepare("SELECT value FROM settings WHERE key='module_ncf_avanzado'").get()?.value === '1';
-
         if (fiscalOn) {
-          if (ncfAdv) {
-            // Modo avanzado: usar secuencias registradas por la DGII
-            const ncfType = (customer.rnc && customer.rnc.trim()) ? 'B01' : 'B02';
-            const seq = db.prepare(
-              "SELECT * FROM ncf_sequences WHERE type=? AND active=1 AND current < to_num ORDER BY id ASC LIMIT 1"
-            ).get(ncfType);
-
-            if (seq) {
-              const next = seq.current + 1;
-              db.prepare("UPDATE ncf_sequences SET current=? WHERE id=?").run(next, seq.id);
-              ncf = seq.prefix + String(next).padStart(8, '0');
-              db.prepare("INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc) VALUES(?,?,?,?)")
-                .run(ncf, ncfType, saleId, customer.rnc || '');
-              const remaining = seq.to_num - next;
-              if (remaining <= (seq.alert_at || 50)) {
-                console.log('[NCF] ALERTA: quedan ' + remaining + ' comprobantes tipo ' + ncfType);
-              }
-            } else {
-              // Fallback al contador simple si no hay secuencia disponible.
-              // Formato DGII: prefijo (3) + 8 dígitos = 11 caracteres, igual que las
-              // secuencias avanzadas. Antes usaba padStart(9) → 12 caracteres inválidos.
-              const nextNum = (parseInt(db.prepare("SELECT value FROM settings WHERE key='ncf_counter'").get()?.value || 0, 10)) + 1;
-              ncf = 'B01' + String(nextNum).padStart(8, '0');
-              db.prepare("UPDATE settings SET value=? WHERE key='ncf_counter'").run(String(nextNum));
-              // Registrar en ncf_log para que aparezca en el reporte 607 (antes se omitía).
-              db.prepare("INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc) VALUES(?,?,?,?)")
-                .run(ncf, 'B01', saleId, customer.rnc || '');
-              console.warn('[NCF] Sin secuencia — usando contador de respaldo. Configura secuencias en Panel NCF.');
-            }
-          } else {
-            // Modo simple: contador básico. Formato DGII de 11 caracteres (prefijo + 8
-            // dígitos). Antes usaba padStart(9) → 12 caracteres, formato inválido.
-            const nextNum = (parseInt(db.prepare("SELECT value FROM settings WHERE key='ncf_counter'").get()?.value || 0, 10)) + 1;
-            ncf = 'B01' + String(nextNum).padStart(8, '0');
-            db.prepare("UPDATE settings SET value=? WHERE key='ncf_counter'").run(String(nextNum));
-            // Registrar en ncf_log para el reporte 607 (antes el modo simple no lo hacía).
+          const docDigits = String(customer.rnc || '').replace(/\D/g, '');
+          const ncfType   = docDigits.length === 9 ? 'B01' : 'B02';
+          const seq = db.prepare(
+            "SELECT * FROM ncf_sequences WHERE type=? AND active=1 AND current < to_num ORDER BY id ASC LIMIT 1"
+          ).get(ncfType);
+          if (seq) {
+            const next = seq.current + 1;
+            db.prepare("UPDATE ncf_sequences SET current=? WHERE id=?").run(next, seq.id);
+            ncf = seq.prefix + String(next).padStart(8, '0');
             db.prepare("INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc) VALUES(?,?,?,?)")
-              .run(ncf, 'B01', saleId, customer.rnc || '');
+              .run(ncf, ncfType, saleId, customer.rnc || '');
+            const remaining = seq.to_num - next;
+            if (remaining <= (seq.alert_at || 50)) {
+              console.log('[NCF] ALERTA: quedan ' + remaining + ' comprobantes tipo ' + ncfType);
+            }
+            db.prepare("UPDATE sales SET ncf=? WHERE id=?").run(ncf, saleId);
+          } else {
+            // Sin secuencia registrada para este tipo → factura sin comprobante fiscal.
+            console.warn('[NCF] Sin secuencia registrada para ' + ncfType +
+              ' — factura #' + saleId + ' sale sin NCF. Registra el rango en el Panel NCF.');
           }
-          if (ncf) db.prepare("UPDATE sales SET ncf=? WHERE id=?").run(ncf, saleId);
         }
       }
 
@@ -2069,35 +2055,25 @@ const returnsRepo = {
 
       // 8b. Nota de crédito B04 — SOLO si la factura original tenía NCF y el modo
       // fiscal está activo. La DGII exige un B04 que referencie el NCF modificado.
-      // Espeja los 3 modos de la emisión de ventas: secuencia B04 registrada →
-      // contador de respaldo → contador simple. Numeración B04 independiente
-      // (ncf_b04_counter) para no chocar con el contador de ventas (ncf_counter).
+      // Igual que en la emisión de ventas, el B04 proviene EXCLUSIVAMENTE de una
+      // secuencia registrada; nunca se fabrica con contador interno. Sin secuencia
+      // B04 registrada, la nota de crédito sale sin NCF (documento interno).
       let ncfNota = '';
       if (original.ncf && String(original.ncf).trim()) {
         const fiscalOn = db.prepare("SELECT value FROM settings WHERE key='fiscal_enabled'").get()?.value === '1';
         if (fiscalOn) {
-          const ncfAdv = db.prepare("SELECT value FROM settings WHERE key='module_ncf_avanzado'").get()?.value === '1';
-          const nextB04Counter = () => {
-            const n = (parseInt(db.prepare("SELECT value FROM settings WHERE key='ncf_b04_counter'").get()?.value || 0, 10)) + 1;
-            db.prepare("INSERT INTO settings(key,value) VALUES('ncf_b04_counter',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(n));
-            return 'B04' + String(n).padStart(8, '0');
-          };
-          if (ncfAdv) {
-            const seq = db.prepare(
-              "SELECT * FROM ncf_sequences WHERE type='B04' AND active=1 AND current < to_num ORDER BY id ASC LIMIT 1"
-            ).get();
-            if (seq) {
-              const next = seq.current + 1;
-              db.prepare("UPDATE ncf_sequences SET current=? WHERE id=?").run(next, seq.id);
-              ncfNota = seq.prefix + String(next).padStart(8, '0');
-              const remaining = seq.to_num - next;
-              if (remaining <= (seq.alert_at || 50)) console.log('[NCF] ALERTA: quedan ' + remaining + ' notas de crédito B04');
-            } else {
-              ncfNota = nextB04Counter();
-              console.warn('[NCF] Sin secuencia B04 — usando contador de respaldo. Registra un rango B04 en el Panel NCF.');
-            }
+          const seq = db.prepare(
+            "SELECT * FROM ncf_sequences WHERE type='B04' AND active=1 AND current < to_num ORDER BY id ASC LIMIT 1"
+          ).get();
+          if (seq) {
+            const next = seq.current + 1;
+            db.prepare("UPDATE ncf_sequences SET current=? WHERE id=?").run(next, seq.id);
+            ncfNota = seq.prefix + String(next).padStart(8, '0');
+            const remaining = seq.to_num - next;
+            if (remaining <= (seq.alert_at || 50)) console.log('[NCF] ALERTA: quedan ' + remaining + ' notas de crédito B04');
           } else {
-            ncfNota = nextB04Counter();
+            console.warn('[NCF] Sin secuencia B04 registrada — nota de crédito #' + returnId +
+              ' sin NCF. Registra un rango B04 en el Panel NCF.');
           }
           if (ncfNota) {
             db.prepare("UPDATE sales SET ncf=? WHERE id=?").run(ncfNota, returnId);

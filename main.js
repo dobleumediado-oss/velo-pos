@@ -3873,11 +3873,12 @@ ipcMain.handle('ecf:emit', async (_, { saleId }) => {
     // 4. Autenticar con MSeller
     const token = await _msellerAuth(msellerEmail, msellerPass);
 
-    // 5. Determinar tipo de e-CF
-    // E31 = Factura con valor fiscal (B01) — cliente con RNC
-    // E32 = Factura consumidor final (B02) — cliente sin RNC
-    const custRnc = (sale.cust_rnc || '').replace(/[-\s]/g, '');
-    const tipoECF = custRnc ? '31' : '32';
+    // 5. Determinar tipo de e-CF por el documento del cliente (mismo criterio
+    //    que la emisión de NCF impresos):
+    //    · RNC de 9 dígitos            → E31 (Crédito Fiscal, equiv. B01)
+    //    · Cédula de 11 díg. o sin doc → E32 (Consumo, equiv. B02)
+    const custRnc = (sale.cust_rnc || '').replace(/\D/g, '');
+    const tipoECF = custRnc.length === 9 ? '31' : '32';
 
     // 6. Construir el JSON según estructura DGII/MSeller
     const itbis    = sale.tax_amt  || 0;

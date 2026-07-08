@@ -648,9 +648,15 @@ function openCobroModal(inv) {
       </div>
       <div class="fg" style="margin-bottom:0">
         <label class="lbl">Cédula / RNC</label>
-        <input class="inp" id="cbr-cedula" type="text"
-               placeholder="000-0000000-0"
-               value="${inv.cliCedula || ''}"/>
+        <div style="display:flex;gap:6px">
+          <input class="inp" id="cbr-cedula" type="text"
+                 placeholder="RNC 9 díg. · Cédula 11 díg."
+                 value="${inv.cliCedula || ''}"
+                 oninput="cbrDocHint()" style="flex:1;min-width:0"/>
+          <button class="btn btn-out" type="button" onclick="cbrValidarDGII()"
+                  title="Verificar en la DGII (requiere internet)" style="flex-shrink:0">DGII</button>
+        </div>
+        <div id="cbr-cedula-hint" style="font-size:10.5px;margin-top:4px;color:var(--muted2)"></div>
       </div>
     </div>
 
@@ -762,6 +768,20 @@ function openCobroModal(inv) {
     const pmeth = document.getElementById('cbr-pmeth')?.value;
     if (!pmeth || pmeth === 'efectivo') cbrCalcCambio(total);
   }, 50);
+
+  // Cargar los tipos de comprobante con secuencia disponible (para el preview
+  // del NCF que se emitirá). Se cachea en window._ncfAvail; si falla, se asume
+  // "desconocido" y el preview no advierte de secuencias faltantes.
+  window._ncfAvail = null;
+  if (inv.itype === 'factura' && CFG.fiscalEnabled && window.api?.ncf?.getSequences) {
+    window.api.ncf.getSequences().then(seqs => {
+      const avail = new Set();
+      (seqs || []).forEach(s => { if (s.active && s.current < s.to_num) avail.add(s.type); });
+      window._ncfAvail = avail;
+      cbrDocHint();
+    }).catch(() => { window._ncfAvail = new Set(); cbrDocHint(); });
+  }
+  setTimeout(cbrDocHint, 40);
 }
 
 function cbrTogglePago(val) {
@@ -860,6 +880,90 @@ function cbrSelectCli(id) {
   if (sn) sn.value = c.name;
   if (sc) sc.value = c.rnc || '';
   document.getElementById('cbr-cli-dd')?.classList.remove('show');
+  cbrDocHint();
+}
+
+// ── Detector de documento + preview de comprobante en el POS ──────────────
+// Muestra si el documento es RNC/Cédula y QUÉ comprobante se emitirá (B01/B02),
+// avisando si no hay secuencia registrada para ese tipo (saldrá sin NCF).
+// Reutiliza los helpers globales _docKind, _rncChecksum y _cedulaChecksum.
+function cbrDocHint() {
+  const el   = document.getElementById('cbr-cedula');
+  const hint = document.getElementById('cbr-cedula-hint');
+  if (!el || !hint) return;
+  const inv = currentInv();
+  const d   = (el.value || '').replace(/\D/g, '');
+
+  // Línea 1 — tipo/validez del documento
+  let docLine = '';
+  if (d) {
+    if (d.length === 9) {
+      docLine = (typeof _rncChecksum === 'function' && _rncChecksum(d))
+        ? 'RNC válido — Persona jurídica' : 'RNC (9 díg.) — revisa el dígito verificador';
+    } else if (d.length === 11) {
+      docLine = (typeof _cedulaChecksum === 'function' && _cedulaChecksum(d))
+        ? 'Cédula válida — Persona física' : 'Cédula (11 díg.) — revisa el dígito verificador';
+    } else {
+      docLine = `${d.length} dígitos — RNC usa 9, Cédula usa 11`;
+    }
+  }
+
+  // Línea 2 — comprobante fiscal que se emitirá (solo factura con fiscal activo)
+  let compLine = '';
+  if (inv.itype === 'factura' && CFG.fiscalEnabled) {
+    const tipo  = d.length === 9 ? 'B01' : 'B02';
+    const label = tipo === 'B01' ? 'B01 Crédito Fiscal' : 'B02 Consumo';
+    if (window._ncfAvail instanceof Set && !window._ncfAvail.has(tipo)) {
+      compLine = `Comprobante ${label}: ⚠ sin secuencia ${tipo} registrada → saldrá SIN NCF`;
+    } else {
+      compLine = `Comprobante a emitir: ${label}`;
+    }
+  }
+
+  hint.textContent = [docLine, compLine].filter(Boolean).join('  ·  ');
+  hint.style.color = compLine.includes('SIN NCF') ? 'var(--amber)' : 'var(--muted2)';
+}
+
+// Verificación en línea del RNC/Cédula del cliente contra la DGII (best-effort).
+async function cbrValidarDGII() {
+  const el   = document.getElementById('cbr-cedula');
+  const hint = document.getElementById('cbr-cedula-hint');
+  if (!el) return;
+  const d = (el.value || '').replace(/\D/g, '');
+  if (d.length !== 9 && d.length !== 11) {
+    toast('Ingresa un RNC (9 díg.) o Cédula (11 díg.)', 'err');
+    return;
+  }
+  const esCedula = d.length === 11;
+  if (hint) { hint.textContent = 'Consultando DGII…'; hint.style.color = 'var(--muted2)'; }
+  try {
+    const res = await window.api.ncf.validateRnc({ rnc: d });
+    if (res?.ok) {
+      if (hint) {
+        hint.textContent = `✓ Inscrito en DGII: ${res.nombre || 'Contribuyente'} — ${res.estado || 'ACTIVO'}`;
+        hint.style.color = 'var(--green)';
+      }
+      const nm = document.getElementById('cbr-name');
+      if (nm && (!nm.value.trim() || nm.value.trim().toLowerCase() === 'consumidor final') && res.nombre) {
+        nm.value = res.nombre;
+        currentInv().cliName = res.nombre;
+      }
+      toast('Verificado en la DGII');
+    } else if (hint) {
+      if (esCedula) {
+        hint.textContent = 'Cédula persona física · No figura como contribuyente en DGII (normal)';
+        hint.style.color = 'var(--muted2)';
+      } else {
+        hint.textContent = '⚠ RNC no inscrito en la DGII — verifica el número';
+        hint.style.color = 'var(--amber)';
+      }
+    }
+  } catch (e) {
+    if (hint) {
+      hint.textContent = 'Sin conexión para verificar en la DGII (puedes continuar)';
+      hint.style.color = 'var(--muted2)';
+    }
+  }
 }
 
 // ══════════════════════════════════════════════
@@ -908,7 +1012,8 @@ async function finalizarVenta() {
   let customer = { id: 1, name: cliName, rnc: cliCedula };
   if (inv.cliId && inv.cliId !== 1) {
     const c = DB.customers.find(c => c.id === inv.cliId);
-    if (c) customer = { id: c.id, name: cliName || c.name, rnc: cliCedula || c.rnc || '' };
+    if (c) customer = { id: c.id, name: cliName || c.name, rnc: cliCedula || c.rnc || '',
+                        address: c.address || '', phone: c.phone || '', email: c.email || '' };
   }
 
   // Preparar items con snapshot de precios
@@ -998,8 +1103,12 @@ async function finalizarVenta() {
       ...saleForPrint,
       id:              result.saleId,
       type:            inv.itype,
+      customer_id:      customer.id,
       customer_name:   cliName,
       customer_rnc:    cliCedula,
+      customer_address: customer.address || '',
+      customer_phone:   customer.phone   || '',
+      customer_email:   customer.email   || '',
       payment_method:  pmeth,
       mix_efec:        mixEfec,
       mix_card:        mixCard,

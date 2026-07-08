@@ -1,6 +1,6 @@
 {
   "name": "velo-pos",
-  "version": "1.13.1",
+  "version": "1.14.0",
   "description": "Sistema POS desktop profesional para comercios, repuestos, sucursales y operaciones empresariales",
   "main": "main.js",
   "scripts": {

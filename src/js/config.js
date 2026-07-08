@@ -66,6 +66,21 @@ async function renderConfiguracion(el) {
     catch { return {}; }
   }
 
+  // Datos extra del negocio para la vista previa (email/web + banco).
+  // Toma lo real de settings; si falta, usa demo para que la plantilla A4
+  // moderna muestre el bloque de datos bancarios en la previsualización.
+  function _previewBiz() {
+    const s = DB?.settings || {};
+    return {
+      biz_email: s.biz_email || 'info@velopos.do',
+      biz_web:   s.biz_web   || 'www.velopos.do',
+      biz_bank_name:    s.biz_bank_name    || 'BANCO DEMO, S.A.',
+      biz_bank_account: s.biz_bank_account || '010-000000-0-0',
+      biz_bank_holder:  s.biz_bank_holder  || '',
+      biz_bank_iban:    s.biz_bank_iban    || 'DO00 0000 0000 0000 0000 0000',
+    };
+  }
+
   function _buildCard(p) {
     const isActive = window._PA === p.id;
     const card = document.createElement('div');
@@ -141,6 +156,7 @@ async function renderConfiguracion(el) {
       biz_name: CFG.biz||'Mi Negocio', biz_rnc: CFG.rnc||'',
       biz_addr: CFG.addr||'', biz_phone: CFG.phone||'',
       receipt_msg: CFG.receiptMsg||'¡Gracias por su compra!', biz_logo: CFG.biz_logo||'', biz_logo_2: CFG.biz_logo_2||'',
+      ..._previewBiz(),
     };
     const opts = { ...plantilla.opciones, _estilos: _getEstilos(id) };
     if (label) label.textContent = `VISTA PREVIA — ${plantilla.nombre}`;
@@ -204,7 +220,7 @@ async function renderConfiguracion(el) {
   const btnPrint = h('button', { class: 'btn btn-out', onclick: () => {
     const plantilla = typeof PLANTILLAS!=='undefined'?PLANTILLAS.find(p=>p.id===window._PA):null;
     if (!plantilla) { toast('Selecciona una plantilla primero','w'); return; }
-    const cfg2 = { biz_name:CFG.biz||'Mi Negocio', biz_rnc:CFG.rnc||'', biz_addr:CFG.addr||'', biz_phone:CFG.phone||'', receipt_msg:CFG.receiptMsg||'¡Gracias por su compra!', biz_logo:CFG.biz_logo||'', biz_logo_2:CFG.biz_logo_2||'' };
+    const cfg2 = { biz_name:CFG.biz||'Mi Negocio', biz_rnc:CFG.rnc||'', biz_addr:CFG.addr||'', biz_phone:CFG.phone||'', receipt_msg:CFG.receiptMsg||'¡Gracias por su compra!', biz_logo:CFG.biz_logo||'', biz_logo_2:CFG.biz_logo_2||'', ..._previewBiz() };
     const html = plantilla.render(getSampleSale(cfg2), cfg2, {...plantilla.opciones,_estilos:_getEstilos(window._PA)});
     _openPrintWindow(html, 'prueba_plantilla', 0, false);
   }});
@@ -335,7 +351,7 @@ async function renderConfiguracion(el) {
     const _mRender = () => {
       const mIframe = document.getElementById('modal-iframe');
       if (!mIframe || !plantilla) return;
-      const cfg2 = { biz_name:CFG.biz||'Mi Negocio', biz_rnc:CFG.rnc||'', biz_addr:CFG.addr||'Calle Principal #1', biz_phone:CFG.phone||'809-000-0000', receipt_msg:CFG.receiptMsg||'¡Gracias por su compra!', biz_logo:CFG.biz_logo||'', biz_logo_2:CFG.biz_logo_2||'' };
+      const cfg2 = { biz_name:CFG.biz||'Mi Negocio', biz_rnc:CFG.rnc||'', biz_addr:CFG.addr||'Calle Principal #1', biz_phone:CFG.phone||'809-000-0000', receipt_msg:CFG.receiptMsg||'¡Gracias por su compra!', biz_logo:CFG.biz_logo||'', biz_logo_2:CFG.biz_logo_2||'', ..._previewBiz() };
       const estilos = {
         fontSize:     document.getElementById('est-fontSize')?.value,
         lineHeight:   document.getElementById('est-lineHeight')?.value,
@@ -414,8 +430,39 @@ async function renderConfiguracion(el) {
       </div>
     </div>
     <div class="fg">
+      <label class="lbl">Correo electrónico</label>
+      <input class="inp" id="cfg-biz-email" type="email" placeholder="info@minegocio.do" value="${_esc(settings.biz_email||'')}"/>
+    </div>
+    <div class="fg">
+      <label class="lbl">Sitio web</label>
+      <input class="inp" id="cfg-biz-web" type="text" placeholder="www.minegocio.do" value="${_esc(settings.biz_web||'')}"/>
+    </div>
+    <div class="fg">
       <label class="lbl">Mensaje en recibos</label>
       <input class="inp" id="cfg-receipt-msg" type="text" placeholder="¡Gracias por su compra!" value="${_esc(settings.receipt_msg||'')}"/>
+    </div>
+
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+      <div style="font-size:13px;font-weight:600;color:var(--fg);margin-bottom:2px">Datos bancarios (opcional)</div>
+      <div style="font-size:11px;color:var(--muted2);margin-bottom:8px">
+        Se muestran en la factura A4 solo cuando el pago es por transferencia, depósito o cheque.
+      </div>
+      <div class="fg">
+        <label class="lbl">Banco</label>
+        <input class="inp" id="cfg-bank-name" type="text" placeholder="Banco Popular Dominicano" value="${_esc(settings.biz_bank_name||'')}"/>
+      </div>
+      <div class="fg">
+        <label class="lbl">Número de cuenta</label>
+        <input class="inp" id="cfg-bank-account" type="text" placeholder="000-0000000-0" value="${_esc(settings.biz_bank_account||'')}"/>
+      </div>
+      <div class="fg">
+        <label class="lbl">Titular de la cuenta</label>
+        <input class="inp" id="cfg-bank-holder" type="text" placeholder="Razón social" value="${_esc(settings.biz_bank_holder||'')}"/>
+      </div>
+      <div class="fg">
+        <label class="lbl">IBAN (opcional)</label>
+        <input class="inp" id="cfg-bank-iban" type="text" placeholder="DO00 0000 0000 0000 0000 0000" value="${_esc(settings.biz_bank_iban||'')}"/>
+      </div>
     </div>
 
     ${isSA ? `
@@ -899,7 +946,13 @@ async function guardarConfiguracion() {
     ['biz_name',    'cfg-biz-name'],
     ['biz_addr',    'cfg-biz-addr'],
     ['biz_phone',   'cfg-biz-phone'],
+    ['biz_email',   'cfg-biz-email'],
+    ['biz_web',     'cfg-biz-web'],
     ['receipt_msg', 'cfg-receipt-msg'],
+    ['biz_bank_name',    'cfg-bank-name'],
+    ['biz_bank_account', 'cfg-bank-account'],
+    ['biz_bank_holder',  'cfg-bank-holder'],
+    ['biz_bank_iban',    'cfg-bank-iban'],
   ];
   for (const [key, id] of fields) {
     const val = document.getElementById(id)?.value?.trim() || '';

@@ -168,9 +168,16 @@ function printReceipt(sale, isReprint = false) {
       biz_rnc:     DB?.settings?.biz_rnc     || CFG?.rnc    || '',
       biz_addr:    DB?.settings?.biz_addr    || CFG?.addr   || '',
       biz_phone:   DB?.settings?.biz_phone   || CFG?.phone  || '',
+      biz_email:   DB?.settings?.biz_email   || '',
+      biz_web:     DB?.settings?.biz_web     || '',
       biz_logo:    DB?.settings?.biz_logo    || CFG?.biz_logo || '',
       biz_logo_2:  DB?.settings?.biz_logo_2  || CFG?.biz_logo_2 || '',
       receipt_msg: DB?.settings?.receipt_msg || '¡Gracias por su compra!',
+      // Datos bancarios del negocio (para facturas por transferencia/depósito)
+      biz_bank_name:    DB?.settings?.biz_bank_name    || '',
+      biz_bank_account: DB?.settings?.biz_bank_account || '',
+      biz_bank_holder:  DB?.settings?.biz_bank_holder  || '',
+      biz_bank_iban:    DB?.settings?.biz_bank_iban    || '',
     };
 
     const saleForPlant = {
@@ -182,6 +189,12 @@ function printReceipt(sale, isReprint = false) {
       time:          sale.time || nowt(),
       customer_name: sale.customer_name || sale.clientName || 'Consumidor Final',
       customer_rnc:  sale.customer_rnc  || sale.clientCedula || '',
+      customer_id:      sale.customer_id      || sale.clientId || null,
+      customer_address: sale.customer_address || sale.cust_addr || '',
+      customer_phone:   sale.customer_phone   || '',
+      customer_email:   sale.customer_email   || '',
+      due_date:         sale.due_date || null,
+      applied_invoice:  sale.applied_invoice || null,
       cajero:        sale.cajero || user?.name || '',
       items: (sale.items || []).map(i => ({
         product_name: i.product_name || i.name || '',
@@ -846,22 +859,27 @@ function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = fa
 }
 
 function _openPrintWindowFallback(html) {
-  // Inyectar botones de control en el HTML
-  const htmlConBoton = html.replace('</body>', `
-    <div style="position:fixed;top:8px;right:8px;z-index:9999;display:flex;gap:6px">
-      <button onclick="window.print()"
-        style="background:#16a34a;color:#fff;border:none;padding:8px 16px;
-               border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;
-               box-shadow:0 2px 8px rgba(0,0,0,.2)">
-        🖨️ Imprimir
-      </button>
-      <button onclick="window.close()"
-        style="background:#6b7280;color:#fff;border:none;padding:8px 16px;
-               border-radius:6px;font-size:13px;font-weight:700;cursor:pointer">
-        Cerrar
-      </button>
-    </div>
-  </body>`);
+  // Inyectar botones de control en el HTML.
+  //  · Barra fija ABAJO-derecha para no tapar el encabezado del documento
+  //    (la caja "FACTURA N." / número vive arriba-derecha).
+  //  · @media print → la barra NUNCA se imprime ni se hornea al "Guardar PDF"
+  //    desde el diálogo de impresión del sistema.
+  const toolbar = `
+    <style>
+      #_velo_toolbar { position:fixed; bottom:14px; left:14px; z-index:2147483647;
+        display:flex; gap:8px; }
+      #_velo_toolbar button { border:none; padding:9px 18px; border-radius:8px;
+        font-size:13px; font-weight:700; cursor:pointer; font-family:Arial,sans-serif;
+        box-shadow:0 4px 14px rgba(0,0,0,.22); }
+      @media print { #_velo_toolbar { display:none !important; } }
+    </style>
+    <div id="_velo_toolbar">
+      <button onclick="window.print()" style="background:#16a34a;color:#fff">🖨️ Imprimir</button>
+      <button onclick="window.close()" style="background:#6b7280;color:#fff">Cerrar</button>
+    </div>`;
+  const htmlConBoton = html.includes('</body>')
+    ? html.replace('</body>', `${toolbar}</body>`)
+    : html + toolbar;
 
   // window.open estándar — abre ventana visible con botón Imprimir/Cerrar
   try {
@@ -1033,9 +1051,15 @@ function testPrint() {
       biz_rnc:     DB?.settings?.biz_rnc     || CFG?.rnc    || '101-00000-0',
       biz_addr:    DB?.settings?.biz_addr    || CFG?.addr   || 'Calle Principal #1',
       biz_phone:   DB?.settings?.biz_phone   || CFG?.phone  || '809-555-0000',
+      biz_email:   DB?.settings?.biz_email   || '',
+      biz_web:     DB?.settings?.biz_web     || '',
       biz_logo:    DB?.settings?.biz_logo    || '',
       biz_logo_2:  DB?.settings?.biz_logo_2  || '',
       receipt_msg: DB?.settings?.receipt_msg || '¡Gracias por su compra!',
+      biz_bank_name:    DB?.settings?.biz_bank_name    || 'BANCO DEMO, S.A.',
+      biz_bank_account: DB?.settings?.biz_bank_account || '010-000000-0-0',
+      biz_bank_holder:  DB?.settings?.biz_bank_holder  || '',
+      biz_bank_iban:    DB?.settings?.biz_bank_iban    || 'DO00 0000 0000 0000 0000 0000',
     };
     const sale = getSampleSale(cfg);
     const html = plantilla.render(sale, cfg, plantilla.opciones);

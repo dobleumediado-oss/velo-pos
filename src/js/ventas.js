@@ -874,6 +874,9 @@ async function reimprimirVenta(saleId) {
        Quedará registrado en el log de auditoría como reimpresión.
      </span>`,
     () => {
+      // Datos de contacto del cliente para la plantilla A4 (dirección/tel/email
+      // no viven en la fila de la venta; se toman del cache de clientes).
+      const _cust = (DB.customers || []).find(c => c.id === sale.customer_id);
       printReceipt({
         id:              sale.id,
         // Número real de factura para que la reimpresión muestre #00002311, no el id interno.
@@ -882,8 +885,13 @@ async function reimprimirVenta(saleId) {
         date:            fecha,
         time:            hora,
         type:            sale.type,
+        due_date:        sale.due_date || null,
+        customer_id:     sale.customer_id || null,
         customer_name:   sale.customer_name  || 'Consumidor Final',
         customer_rnc:    sale.customer_rnc   || '',
+        customer_address: _cust?.address || '',
+        customer_phone:   _cust?.phone   || '',
+        customer_email:   _cust?.email   || '',
         items:           (sale.items || []).map(i => ({
           product_name: i.product_name,
           qty:          i.qty,
@@ -920,10 +928,13 @@ async function guardarVentaPDF(saleId) {
   const fecha = (sale.created_at || '').split('T')[0];
   const hora  = sale.created_at
     ? new Date(sale.created_at).toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' }) : '';
+  const _custPdf = (DB.customers || []).find(c => c.id === sale.customer_id);
   const payload = {
     id: sale.id, date: fecha, time: hora, type: sale.type,
     numero_factura: sale.numero_factura, numero_factura_fmt: sale.numero_factura_fmt,
+    due_date: sale.due_date || null, customer_id: sale.customer_id || null,
     customer_name: sale.customer_name || 'Consumidor Final', customer_rnc: sale.customer_rnc || '',
+    customer_address: _custPdf?.address || '', customer_phone: _custPdf?.phone || '', customer_email: _custPdf?.email || '',
     items: (sale.items || []).map(i => ({
       product_name: i.product_name, qty: i.qty, unit_price: i.unit_price, unit_cost: i.unit_cost || 0,
     })),

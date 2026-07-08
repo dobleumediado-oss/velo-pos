@@ -98,10 +98,10 @@ const PLANTILLAS = [
   // ═══════════════ Carta/A4 ═══════════════
   {
     id:        'carta_recibo',
-    nombre:    'Recibo Simple',
+    nombre:    'Factura A4 Moderna',
     tipo:      'carta',
     icono:     '📄',
-    desc:      'Recibo en hoja carta. Similar al ticket térmico pero en papel normal.',
+    desc:      'Factura A4/Carta moderna, compacta y modular. Soporta muchos artículos, dos logos, contado/crédito/abono y datos bancarios. Ideal para PDF e impresión física.',
     opciones: {
       logo: true, rnc: true, ncf: true, mensaje: true,
       cedula: true, codigoBarra: false,
@@ -152,25 +152,34 @@ function getPlantilla(id) {
 
 // ── Datos de muestra para vista previa ────────
 function getSampleSale(cfg) {
+  const _tp = 18;
   return {
     id:             1,
+    customer_id:    191,
     type:           'factura',
     date:           new Date().toISOString().split('T')[0],
     time:           new Date().toLocaleTimeString('es-DO', { hour:'2-digit', minute:'2-digit' }),
-    customer_name:  'Cliente Ejemplo',
-    customer_rnc:   '001-0000000-0',
+    due_date:       new Date(Date.now() + 30*86400000).toISOString().split('T')[0],
+    customer_name:  'Cliente Ejemplo S.R.L.',
+    customer_rnc:   '130-12345-6',
+    customer_address:'Calle Duarte #45, Local 1, Santiago',
+    customer_phone: '(809) 000-0000',
+    customer_email: 'ventas@cliente.com',
     cajero:         'Cajero Demo',
+    // NCF de muestra (solo para la vista previa) — deriva "B01 Crédito Fiscal"
+    ncf:            'B0100000237',
     items: [
-      { product_name: 'Producto A',    qty: 2, unit_price: 850  },
-      { product_name: 'Producto B',    qty: 1, unit_price: 1200 },
-      { product_name: 'Servicio XYZ', qty: 1, unit_price: 500  },
+      { product_name: 'Servicio de instalación y configuración del sistema', qty: 1, unit_price: 400 },
+      { product_name: 'Migración y validación de datos iniciales',           qty: 2, unit_price: 150 },
+      { product_name: 'Soporte técnico y ajustes de plantilla A4',           qty: 1, unit_price: 40  },
     ],
-    subtotal:        3400,
+    subtotal:        740,
     discount_pct:    0,
     discount_amt:    0,
-    tax_amt:         612,
-    total:           4012,
-    payment_method:  'efectivo',
+    tax_pct:         _tp,
+    tax_amt:         133.20,
+    total:           873.20,
+    payment_method:  'transferencia',
   };
 }
 
@@ -203,6 +212,110 @@ function _showItbis(sale) {
 // ¿Mostrar NCF? Solo en facturas con NCF disponible
 function _showNcf(sale, opts) {
   return opts.ncf && sale.type === 'factura' && _getNcf(sale) !== '';
+}
+
+// ══════════════════════════════════════════════
+// HELPERS MODULARES — Plantilla A4 moderna
+// ══════════════════════════════════════════════
+
+// Número de dos decimales estilo es-DO ("1,234.50")
+function _n2(x) {
+  return Number(x || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Tipo de comprobante fiscal derivado del NCF / e-CF (prefijo).
+// NUNCA inventa: si no hay NCF real, devuelve ''.
+function _tipoComprobante(ncf) {
+  const n = (ncf || '').trim().toUpperCase();
+  if (!n) return '';
+  const p = n.slice(0, 3);
+  const MAP = {
+    B01: 'B01 Crédito Fiscal', B02: 'B02 Consumo', B03: 'B03 Nota de Débito',
+    B04: 'B04 Nota de Crédito', B11: 'B11 Comprobante de Compras',
+    B12: 'B12 Registro Único de Ingresos', B13: 'B13 Gastos Menores',
+    B14: 'B14 Régimen Especial', B15: 'B15 Gubernamental',
+    B16: 'B16 Exportaciones', B17: 'B17 Pagos al Exterior',
+    E31: 'E31 e-CF Crédito Fiscal', E32: 'E32 e-CF Consumo',
+    E34: 'E34 e-CF Nota de Crédito', E44: 'E44 e-CF Régimen Especial',
+    E45: 'E45 e-CF Gubernamental',
+  };
+  return MAP[p] || (n.startsWith('E') ? `${p} e-CF` : p);
+}
+
+// Etiqueta legible del método de pago
+function _metodoPagoLabel(m) {
+  const map = {
+    efectivo: 'Efectivo', transferencia: 'Transferencia', tarjeta: 'Tarjeta',
+    cheque: 'Cheque', credito: 'Crédito', deposito: 'Depósito', mixto: 'Mixto', otro: 'Otro',
+  };
+  const k = (m || '').toLowerCase();
+  return map[k] || (m ? m.charAt(0).toUpperCase() + m.slice(1) : 'Efectivo');
+}
+
+// ¿El método de pago implica datos bancarios?
+function _esPagoBancario(m) {
+  return ['transferencia', 'deposito', 'cheque'].includes((m || '').toLowerCase());
+}
+
+// Distingue el documento del cliente por longitud (formato RD):
+//   · 9 dígitos  → RNC    (persona jurídica / empresa)
+//   · 11 dígitos → Cédula (persona física)
+//   · otro       → genérico "RNC/Céd." (dato incompleto o extranjero)
+function _docKind(doc) {
+  const d = String(doc || '').replace(/\D/g, '');
+  if (d.length === 9)  return { label: 'RNC',      digits: d, kind: 'rnc' };
+  if (d.length === 11) return { label: 'Cédula',   digits: d, kind: 'cedula' };
+  return { label: 'RNC/Céd.', digits: d, kind: 'unknown' };
+}
+
+// Tipo de facturación: Contado / Crédito / Abono
+function _tipoFacturacion(sale) {
+  if (sale.type === 'abono') return 'Abono';
+  if ((sale.payment_method || '').toLowerCase() === 'credito') return 'Crédito';
+  return 'Contado';
+}
+
+// Título dinámico del documento A4
+function _a4DocTitle(sale) {
+  switch (sale.type) {
+    case 'cotizacion': return 'COTIZACIÓN';
+    case 'devolucion': return 'NOTA DE DEVOLUCIÓN';
+    case 'abono':      return 'RECIBO DE ABONO';
+    case 'conduce':    return 'CONDUCE';
+    case 'reporte':    return 'REPORTE';
+    case 'factura':    return 'FACTURA';
+    default:           return 'RECIBO';
+  }
+}
+
+// Fecha larga legible: "miércoles, 08 julio 2026". Cae a la fecha cruda si falla.
+function _fechaLarga(d) {
+  try {
+    const dt = new Date(`${String(d).slice(0, 10)}T12:00:00`);
+    if (isNaN(dt)) return _esc(d || '');
+    return dt.toLocaleDateString('es-DO', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+  } catch { return _esc(d || ''); }
+}
+function _fechaCorta(d) {
+  try {
+    const dt = new Date(`${String(d).slice(0, 10)}T12:00:00`);
+    if (isNaN(dt)) return _esc(d || '');
+    return dt.toLocaleDateString('es-DO', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  } catch { return _esc(d || ''); }
+}
+
+// Íconos SVG monocromos en línea (imprimen bien, sin recursos externos)
+function _a4ic(type) {
+  const s = 'width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"';
+  const P = {
+    doc:  '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h6"/>',
+    card: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/>',
+    cal:  '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+    pay:  '<path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
+    bank: '<path d="M3 21h18"/><path d="M5 21V10M9 21V10M15 21V10M19 21V10"/><path d="M12 3l9 5H3z"/>',
+    ref:  '<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>',
+  };
+  return `<svg ${s}>${P[type] || P.doc}</svg>`;
 }
 
 // ══════════════════════════════════════════════
@@ -427,86 +540,253 @@ function renderTermicaMinimal(sale, cfg, opts, widthMm = 76) {
 </body></html>`;
 }
 
-// Plantilla 4 — Carta Recibo Simple
+// Plantilla 4 — Factura A4 Moderna (modular, compacta, paginable)
+// Reemplaza la antigua "Recibo Simple". Título dinámico por tipo de documento,
+// franja modular de campos condicionales, tabla protagonista, totales compactos.
 function renderCartaRecibo(sale, cfg, opts) {
-  const _ec = opts._estilos || {};
-  const _fsc = _ec.fontSize    || '11pt';
-  const _mtc = _ec.marginTop   || '15mm';
-  const _mbc = _ec.marginBottom|| '15mm';
-  const _mlc = _ec.marginLeft  || '20mm';
-  const _mrc = _ec.marginRight || '20mm';
+  const _ec  = opts._estilos || {};
+  const _mtc = _ec.marginTop    || '12mm';
+  const _mbc = _ec.marginBottom || '10mm';
+  const _mlc = _ec.marginLeft   || '12mm';
+  const _mrc = _ec.marginRight  || '12mm';
+
   const isFactura    = sale.type === 'factura';
   const isCotizacion = sale.type === 'cotizacion';
   const isDevolucion = sale.type === 'devolucion';
-  const ncf = _getNcf(sale);
-  const rows = (sale.items||[]).map(i => `
+  const isAbono      = sale.type === 'abono';
+  const isConduce    = sale.type === 'conduce';
+  const isReporte    = sale.type === 'reporte';
+
+  const ncf       = _getNcf(sale);
+  const method    = (sale.payment_method || 'efectivo').toLowerCase();
+  const showTax   = _showItbis(sale);
+  const taxPct    = Number(sale.tax_pct != null ? sale.tax_pct : 18);
+  // Documentos monetarios (todos menos conduce/reporte sin importe)
+  const showMoney = !isConduce && !isReporte;
+
+  const docWord   = _a4DocTitle(sale);
+  const docNum    = facturaLabel(sale).replace(/^#/, '');
+  const showNum   = !isReporte;
+
+  // ── Filas de artículos ──────────────────────────────
+  const rows = (sale.items || []).map((i, idx) => {
+    const qty   = Number(i.qty || 1);
+    const price = Number(i.unit_price || 0);
+    const line  = qty * price;
+    return `
     <tr>
-      <td>${_esc(i.product_name||i.name)}</td>
-      <td style="text-align:center">${i.qty}</td>
-      <td style="text-align:right">RD$${Number(i.unit_price||0).toLocaleString('es-DO')}</td>
-      <td style="text-align:right">RD$${(Number(i.unit_price||0)*Number(i.qty||1)).toLocaleString('es-DO')}</td>
-    </tr>`).join('');
+      <td class="c-idx">${idx + 1}</td>
+      <td class="c-desc">${_esc(i.product_name || i.name || '')}</td>
+      <td class="c-num">${qty.toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+      ${showMoney ? `<td class="c-num">${_n2(price)}</td>
+      <td class="c-num it-total">${_n2(line)}</td>` : ''}
+    </tr>`;
+  }).join('');
+
+  // ── Franja modular de campos condicionales ──────────
+  const cells = [];
+  if (_showNcf(sale, opts)) {
+    cells.push(`<div class="cell"><span class="ic">${_a4ic('doc')}</span><div><div class="k">Comprobante fiscal</div><div class="v">${_esc(_tipoComprobante(ncf))}</div><div class="v" style="margin-top:2px"><small>NCF: ${_esc(ncf)}</small></div></div></div>`);
+  }
+  if (showMoney && !isCotizacion) {
+    cells.push(`<div class="cell"><span class="ic">${_a4ic('card')}</span><div><div class="k">Tipo de facturación</div><div class="v">${_tipoFacturacion(sale)}</div></div></div>`);
+  }
+  if (method === 'credito' && sale.due_date) {
+    cells.push(`<div class="cell"><span class="ic">${_a4ic('cal')}</span><div><div class="k">Vencimiento</div><div class="v">${_fechaCorta(sale.due_date)}</div></div></div>`);
+  }
+  if (showMoney) {
+    cells.push(`<div class="cell"><span class="ic">${_a4ic('pay')}</span><div><div class="k">Método de pago</div><div class="v">${_metodoPagoLabel(method)}</div></div></div>`);
+  }
+  if (isAbono && (sale.original_sale_id || sale.applied_invoice)) {
+    const ap = sale.applied_invoice || facturaLabelOriginal(sale);
+    cells.push(`<div class="cell"><span class="ic">${_a4ic('ref')}</span><div><div class="k">Factura aplicada</div><div class="v">${_esc(ap)}</div></div></div>`);
+  }
+  // Datos bancarios — solo una vez, si el pago es bancario y hay datos del negocio
+  const hasBank = cfg.biz_bank_name || cfg.biz_bank_account || cfg.biz_bank_iban;
+  if (_esPagoBancario(method) && hasBank) {
+    const parts = [];
+    if (cfg.biz_bank_name)    parts.push(`Banco: <small>${_esc(cfg.biz_bank_name)}</small>`);
+    if (cfg.biz_bank_account) parts.push(`Cuenta: <small>${_esc(cfg.biz_bank_account)}</small>`);
+    if (cfg.biz_bank_holder)  parts.push(`Titular: <small>${_esc(cfg.biz_bank_holder)}</small>`);
+    const line1 = parts.join(' &nbsp;·&nbsp; ');
+    const line2 = cfg.biz_bank_iban ? `<div class="v" style="margin-top:2px">IBAN: <small>${_esc(cfg.biz_bank_iban)}</small></div>` : '';
+    cells.push(`<div class="cell cell-wide"><span class="ic">${_a4ic('bank')}</span><div><div class="k">Datos bancarios</div><div class="v">${line1}</div>${line2}</div></div>`);
+  }
+  const strip = cells.length
+    ? `<div class="strip">${cells.join('')}</div>` : '';
+
+  // ── Fila resumen compacta ───────────────────────────
+  const sumItems = [
+    ['Moneda', 'DOP'],
+    ['Líneas', String((sale.items || []).length)],
+    ['Fecha', _fechaCorta(sale.date)],
+    ['Cliente', sale.customer_id ? String(sale.customer_id) : '—'],
+    [sale.customer_rnc ? _docKind(sale.customer_rnc).label : 'RNC/Céd.', _esc(sale.customer_rnc || '—')],
+    showMoney ? ['Pago', _metodoPagoLabel(method)] : ['Tipo', docWord],
+    ['Página', '<span class="a4-cur">1</span>/<span class="a4-tot">1</span>'],
+  ];
+  const summary = `<div class="summary">${sumItems.map(([k, v]) =>
+    `<div class="s"><div class="sk">${k}</div><div class="sv">${v}</div></div>`).join('')}</div>`;
+
+  // ── Bloque de cliente (campos ocultos si faltan) ────
+  const cliLines = [];
+  if (opts.cedula && sale.customer_rnc) {
+    const _dk = _docKind(sale.customer_rnc);
+    cliLines.push(`${_dk.label}: ${_esc(sale.customer_rnc)}`);
+  }
+  if (sale.customer_address) cliLines.push(_esc(sale.customer_address));
+  if (sale.customer_phone)   cliLines.push(_esc(sale.customer_phone));
+  if (sale.customer_email)   cliLines.push(_esc(sale.customer_email));
+
+  // ── Contacto del negocio ────────────────────────────
+  const bizContact = [];
+  if (cfg.biz_phone) bizContact.push(`Tel: ${_esc(cfg.biz_phone)}`);
+  if (cfg.biz_email) bizContact.push(_esc(cfg.biz_email));
+
+  // ── Cuadro de totales (compacto) ────────────────────
+  const totalsBox = showMoney ? `
+    <div class="foot-wrap">
+      <div class="totals">
+        <div class="tr"><span>Subtotal</span><span>${_n2(sale.subtotal)}</span></div>
+        <div class="tr"><span>Descuento global</span><span>${sale.discount_amt > 0 ? '-' : ''}${_n2(sale.discount_amt)}</span></div>
+        ${showTax ? `<div class="tr"><span>Impuestos (${taxPct.toFixed(1)} %)</span><span>${_n2(sale.tax_amt)}</span></div>` : ''}
+        <div class="tr grand"><span>TOTAL</span><span>${_n2(sale.total)}</span></div>
+      </div>
+    </div>` : '';
+
+  // ── Firma para conduce ──────────────────────────────
+  const firma = isConduce ? `
+    <div class="sign-row">
+      <div class="sign"><div class="sign-line"></div>Entregado por</div>
+      <div class="sign"><div class="sign-line"></div>Recibido por</div>
+    </div>` : '';
+
+  const footMsg = (opts.mensaje && cfg.receipt_msg && !isCotizacion) ? _esc(cfg.receipt_msg) : '';
+  const footWeb = cfg.biz_web ? _esc(cfg.biz_web) : (bizContact.length ? bizContact.join(' · ') : '');
+  const noteFiscal = isCotizacion
+    ? 'Esta cotización no tiene valor fiscal.'
+    : (isDevolucion && sale.original_sale_id ? `Ref. factura original: ${facturaLabelOriginal(sale)}` : '');
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
 <style>
   @page { size: letter; margin: ${_mtc} ${_mrc} ${_mbc} ${_mlc}; }
   * { margin:0; padding:0; box-sizing:border-box; }
-  body { font-family:Arial,sans-serif; font-size:12px; color:#000; }
-  h1 { font-size:20px; margin-bottom:2px; }
-  .header { display:flex; justify-content:space-between; margin-bottom:14px; }
-  .biz { flex:1; }
-  .doc { text-align:right; }
-  .doc .num { font-size:22px; font-weight:700; color:#1a1a1a; }
-  table { width:100%; border-collapse:collapse; margin:14px 0; }
-  th { background:#f3f4f6; padding:7px 10px; text-align:left; font-size:11px; text-transform:uppercase; }
-  td { padding:7px 10px; border-bottom:1px solid #e5e7eb; }
-  .totals { margin-left:auto; width:220px; }
-  .totals tr td { padding:4px 8px; }
-  .totals tr:last-child td { font-weight:700; font-size:14px; border-top:2px solid #000; }
-  .footer { margin-top:20px; text-align:center; font-size:11px; color:#666; }
-  img { display:block; max-height:55px; max-width:180px; }
+  html,body { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  body { font-family:'Helvetica Neue',Arial,sans-serif; font-size:11px; color:#1f2430; line-height:1.42; }
+  .hdr { display:flex; justify-content:space-between; gap:24px; align-items:flex-start; }
+  .hdr-l { flex:1; min-width:0; }
+  .hdr-r { width:46%; max-width:330px; }
+  .logos { margin-bottom:10px; }
+  .biz-name { font-size:16px; font-weight:700; letter-spacing:.2px; }
+  .biz-line { font-size:11px; color:#4b5263; margin-top:2px; }
+  .biz-contact { font-size:11px; color:#4b5263; margin-top:7px; }
+  .biz-contact span { margin-right:16px; }
+  .titlebox { border:1px solid #d8dbe3; border-radius:8px; padding:12px 16px; display:flex; justify-content:space-between; align-items:center; }
+  .titlebox .t { font-size:15px; font-weight:800; letter-spacing:.5px; }
+  .titlebox .n { font-size:16px; font-weight:800; }
+  .datebox { border:1px solid #eceef3; border-radius:8px; padding:8px 16px; display:flex; justify-content:space-between; align-items:center; margin-top:8px; font-size:11px; }
+  .datebox b { font-weight:700; }
+  .client { margin-top:14px; }
+  .client .cl-lbl { font-size:10px; font-weight:700; letter-spacing:1px; color:#8a90a0; }
+  .client .cl-name { font-size:13px; font-weight:700; margin-top:3px; }
+  .client .cl-line { font-size:11px; color:#4b5263; margin-top:2px; }
+  .strip { display:flex; border:1px solid #eceef3; border-radius:8px; overflow:hidden; margin-top:18px; }
+  .strip .cell { flex:1; padding:9px 12px; border-left:1px solid #f0f1f5; display:flex; gap:8px; align-items:flex-start; }
+  .strip .cell:first-child { border-left:none; }
+  .strip .cell-wide { flex:1.7; }
+  .strip .ic { color:#9aa0b0; flex-shrink:0; margin-top:1px; }
+  .strip .k { font-size:9px; font-weight:700; letter-spacing:.4px; color:#8a90a0; text-transform:uppercase; }
+  .strip .v { font-size:11px; font-weight:600; margin-top:3px; }
+  .strip .v small { font-weight:400; color:#5b6273; }
+  .summary { display:flex; border:1px solid #eceef3; border-radius:8px; overflow:hidden; margin-top:10px; }
+  .summary .s { flex:1; padding:7px 6px; text-align:center; border-left:1px solid #f0f1f5; }
+  .summary .s:first-child { border-left:none; }
+  .summary .sk { font-size:8.5px; font-weight:700; color:#9aa0b0; text-transform:uppercase; letter-spacing:.3px; }
+  .summary .sv { font-size:11px; font-weight:600; margin-top:3px; }
+  table.items { width:100%; border-collapse:collapse; margin-top:16px; }
+  table.items thead { display:table-header-group; }
+  table.items th { background:#f4f5f8; font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:#5b6273; padding:9px 10px; text-align:left; border-bottom:1px solid #e4e6ed; }
+  table.items td { padding:10px; border-bottom:1px solid #eef0f4; vertical-align:top; }
+  table.items tr { break-inside:avoid; page-break-inside:avoid; }
+  /* Encabezado y valores numéricos alineados a la derecha (quedan uno bajo el otro) */
+  table.items th.c-num, table.items td.c-num { text-align:right; white-space:nowrap; }
+  .c-idx { width:30px; color:#9aa0b0; font-size:10px; text-align:left; }
+  .c-desc { word-break:break-word; }
+  /* Anchos fijos para espaciado parejo con pocos o muchos artículos.
+     nth-child(3)=Cant, (4)=Precio, (5)=Total. En conduce solo existe (3). */
+  table.items th:nth-child(3), table.items td:nth-child(3) { width:78px; }
+  table.items th:nth-child(4), table.items td:nth-child(4) { width:120px; }
+  table.items th:nth-child(5), table.items td:nth-child(5) { width:130px; }
+  .it-total { font-weight:700; }
+  .foot-wrap { display:flex; justify-content:flex-end; margin-top:16px; break-inside:avoid; page-break-inside:avoid; }
+  .totals { width:250px; border:1px solid #eceef3; border-radius:8px; padding:10px 14px; }
+  .totals .tr { display:flex; justify-content:space-between; padding:4px 0; font-size:11px; }
+  .totals .tr span:first-child { color:#5b6273; }
+  .totals .tr.grand { border-top:1.5px solid #cfd3dd; margin-top:5px; padding-top:8px; font-size:14px; font-weight:800; }
+  .totals .tr.grand span:first-child { color:#1f2430; }
+  .sign-row { display:flex; justify-content:space-around; gap:40px; margin-top:44px; break-inside:avoid; }
+  .sign { flex:1; text-align:center; font-size:10px; color:#5b6273; }
+  .sign-line { border-top:1px solid #b8bcc8; margin-bottom:6px; }
+  .note { margin-top:12px; font-size:10.5px; color:#8a90a0; font-style:italic; }
+  .docfoot { margin-top:26px; padding-top:12px; border-top:1px solid #eceef3; text-align:center; color:#8a90a0; font-size:10.5px; break-inside:avoid; }
+  .docfoot .sep { margin:0 10px; color:#cfd3dd; }
+  img { max-width:100%; height:auto; }
 </style></head><body>
-  <div class="header">
-    <div class="biz">
-      ${opts.logo ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:180, maxH:55, align:'center', marginBottom:8, filter:'grayscale(100%) contrast(150%)', br:true }) : ''}
-      <strong style="font-size:16px">${_esc(cfg.biz_name||'Mi Negocio')}</strong><br/>
-      ${opts.rnc && cfg.biz_rnc ? `RNC: ${_esc(cfg.biz_rnc)}<br/>` : ''}
-      ${_esc(cfg.biz_addr||'')}<br/>
-      Tel: ${_esc(cfg.biz_phone||'')}
+  <div class="hdr">
+    <div class="hdr-l">
+      ${opts.logo ? `<div class="logos">${buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:150, maxH:56, align:'left', marginBottom:0 })}</div>` : ''}
+      <div class="biz-name">${_esc(cfg.biz_name || 'Mi Negocio')}</div>
+      ${opts.rnc && cfg.biz_rnc ? `<div class="biz-line">RNC: ${_esc(cfg.biz_rnc)}</div>` : ''}
+      ${cfg.biz_addr ? `<div class="biz-line">${_esc(cfg.biz_addr)}</div>` : ''}
+      ${bizContact.length ? `<div class="biz-contact">${bizContact.map(c => `<span>${c}</span>`).join('')}</div>` : ''}
     </div>
-    <div class="doc">
-      <div style="font-size:13px;color:#666">${_docLabel(sale)}</div>
-      <div class="num">${facturaLabel(sale)}</div>
-      <div>${sale.date}</div>
-      <div>Cajero: ${_esc(sale.cajero||'')}</div>
+    <div class="hdr-r">
+      <div class="titlebox">
+        <div class="t">${docWord}${showNum ? ' N.' : ''}</div>
+        ${showNum ? `<div class="n">${_esc(docNum)}</div>` : ''}
+      </div>
+      <div class="datebox"><b>Fecha:</b> <span>${_fechaLarga(sale.date)}</span></div>
+      ${!isReporte ? `
+      <div class="client">
+        <div class="cl-lbl">CLIENTE</div>
+        <div class="cl-name">${_esc(sale.customer_name || 'Consumidor Final')}</div>
+        ${cliLines.map(l => `<div class="cl-line">${l}</div>`).join('')}
+      </div>` : ''}
     </div>
   </div>
-  <div style="background:#f9fafb;padding:8px 12px;border-radius:4px;margin-bottom:10px">
-    <strong>Cliente:</strong> ${_esc(sale.customer_name||'Consumidor Final')}
-    ${opts.cedula && sale.customer_rnc ? ` · Cédula/RNC: ${_esc(sale.customer_rnc)}` : ''}
-  </div>
-  <table>
-    <thead><tr><th>Descripción</th><th style="text-align:center">Cant.</th>
-    <th style="text-align:right">Precio</th><th style="text-align:right">Total</th></tr></thead>
-    <tbody>${rows}</tbody>
+
+  ${strip}
+  ${summary}
+
+  <table class="items">
+    <thead><tr>
+      <th class="c-idx">#</th>
+      <th>Descripción</th>
+      <th class="c-num">Cant</th>
+      ${showMoney ? `<th class="c-num">Precio</th><th class="c-num">Total</th>` : ''}
+    </tr></thead>
+    <tbody>${rows || `<tr><td class="c-idx"></td><td colspan="4" style="color:#9aa0b0">Sin artículos</td></tr>`}</tbody>
   </table>
-  <table class="totals">
-    <tr><td>Subtotal</td><td style="text-align:right">RD$${Number(sale.subtotal||0).toLocaleString('es-DO')}</td></tr>
-    ${sale.discount_amt > 0 ? `<tr><td>Descuento (${sale.discount_pct}%)</td><td style="text-align:right;color:red">-RD$${Number(sale.discount_amt).toLocaleString('es-DO')}</td></tr>` : ''}
-    ${_showItbis(sale) ? `<tr><td>ITBIS (${sale.tax_pct||18}%)</td><td style="text-align:right">RD$${Number(sale.tax_amt||0).toLocaleString('es-DO')}</td></tr>` : ''}
-    <tr><td>TOTAL</td><td style="text-align:right">RD$${Number(sale.total||0).toLocaleString('es-DO')}</td></tr>
-  </table>
-  <div style="margin-top:10px;font-size:12px">
-    ${sale.payment_method === 'mixto'
-      ? `<strong>Método de pago:</strong> MIXTO
-         ${sale.mix_efec > 0 ? `&nbsp;· Efectivo: RD$${Number(sale.mix_efec).toLocaleString('es-DO')}` : ''}
-         ${sale.mix_card > 0 ? `&nbsp;· Tarjeta/Trans.: RD$${Number(sale.mix_card).toLocaleString('es-DO')}` : ''}`
-      : `<strong>Método de pago:</strong> ${(sale.payment_method||'efectivo').toUpperCase()}`}
-  </div>
-  ${isDevolucion && sale.original_sale_id ? `<div style="margin-top:6px;font-size:11px;color:#555">Ref. venta original: ${facturaLabelOriginal(sale)}</div>` : ''}
-  ${_showNcf(sale, opts) ? `<div style="margin-top:8px;font-size:11px;color:#555">NCF: <strong>${ncf}</strong> · Documento con validez fiscal</div>` : ''}
-  ${isCotizacion ? `<div style="margin-top:8px;font-size:11px;color:#888;font-style:italic">Esta cotización no tiene valor fiscal.</div>` : ''}
-  ${opts.mensaje && cfg.receipt_msg && !isCotizacion ? `<div class="footer">${cfg.receipt_msg}</div>` : ''}
+
+  ${totalsBox}
+  ${firma}
+  ${noteFiscal ? `<div class="note">${noteFiscal}</div>` : ''}
+
+  ${(footMsg || footWeb) ? `<div class="docfoot">${footMsg}${footMsg && footWeb ? '<span class="sep">|</span>' : ''}${footWeb}</div>` : ''}
+
+  <script>
+    (function () {
+      try {
+        // Estima el total de páginas (alto del contenido / alto útil de la hoja Carta).
+        var dpi = 96;
+        var pageH = dpi * 11;                       // Carta = 11in
+        var margTop = ${parseFloat(_mtc) || 12}, margBot = ${parseFloat(_mbc) || 10};
+        var usable = pageH - ((margTop + margBot) / 25.4) * dpi;
+        var total = Math.max(1, Math.ceil(document.body.scrollHeight / usable));
+        document.querySelectorAll('.a4-tot').forEach(function (e) { e.textContent = String(total); });
+      } catch (e) {}
+    })();
+  </script>
 </body></html>`;
 }
 
