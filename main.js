@@ -944,19 +944,21 @@ ipcMain.handle('customers:getHistory', async (_, { customerId }) => {
 });
 
 // ── Caja ──────────────────────────────────────
-ipcMain.handle('cash:getOpen', async () => {
-  return cashRepo.getOpen();
+ipcMain.handle('cash:getOpen', async (_, arg) => {
+  // terminalId opcional: sin él = caja abierta global (histórico); con él = la de
+  // esta terminal (multi-terminal). El renderer lo pasa cuando lo conoce.
+  return cashRepo.getOpen(arg && arg.terminalId);
 });
 
-ipcMain.handle('cash:open', async (_, { openAmount, openBills, requestUserId }) => {
+ipcMain.handle('cash:open', async (_, { openAmount, openBills, requestUserId, terminalId }) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
     if (!reqUser) return { ok: false, error: 'Usuario no válido' };
-    const existing = cashRepo.getOpen();
+    const existing = cashRepo.getOpen(terminalId);
     if (existing) return { ok: false, error: 'Ya hay una caja abierta' };
     const id = cashRepo.open({
       userId: requestUserId, cajero: reqUser.name,
-      openAmount, openBills
+      openAmount, openBills, terminalId
     });
     return { ok: true, id };
   } catch (e) {

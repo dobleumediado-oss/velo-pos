@@ -60,7 +60,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // ── Caja ──────────────────────────────────
   cash: {
-    getOpen:         ()      => ipcRenderer.invoke('cash:getOpen'),
+    getOpen:         (data)  => ipcRenderer.invoke('cash:getOpen', data),
     open:            (data)  => ipcRenderer.invoke('cash:open', data),
     close:           (data)  => ipcRenderer.invoke('cash:close', data),
     getSessions:     ()      => ipcRenderer.invoke('cash:getSessions'),
