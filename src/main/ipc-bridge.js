@@ -10,6 +10,14 @@
 //   Ver docs/multi-terminal-sync.md
 // ══════════════════════════════════════════════
 const { rpcCall } = require('./net-client');
+const { AsyncLocalStorage } = require('async_hooks');
+
+// Contexto por-petición: cuando el servidor despacha una petición de un cliente,
+// guarda el terminalId del cliente (del sobre auth) para que los handlers de
+// dinero (venta, abono, gasto…) aten a la caja de ESA terminal. Seguro ante
+// concurrencia (cada dispatch corre en su propio contexto async).
+const _als = new AsyncLocalStorage();
+function currentTerminalId() { const s = _als.getStore(); return s && s.terminalId; }
 
 // ipcMain solo existe dentro de Electron; en pruebas con node puro no está.
 let _ipcMain = null;
@@ -58,10 +66,12 @@ function registerHandler(channel, fn) {
 }
 
 // Despacho del lado SERVIDOR (red): siempre local. { __unknown:true } si no existe.
-async function dispatch(channel, args) {
+// `ctx.terminalId` (del sobre auth) queda disponible para los handlers vía
+// currentTerminalId() durante toda la ejecución del handler.
+function dispatch(channel, args, ctx) {
   const fn = _handlers.get(channel);
-  if (!fn) return { __unknown: true };
-  return await fn(args);
+  if (!fn) return Promise.resolve({ __unknown: true });
+  return _als.run({ terminalId: ctx && ctx.terminalId }, () => fn(args));
 }
 
 // ── Interceptor de ipcMain.handle (migración centralizada) ────────────────────
@@ -113,4 +123,4 @@ async function forwardToServer(channel, args) {
 function hasChannel(channel) { return _handlers.has(channel); }
 function channelCount() { return _handlers.size; }
 
-module.exports = { configureBridge, registerHandler, routeCall, dispatch, installIpcInterceptor, getMode, forwardToServer, hasChannel, channelCount };
+module.exports = { configureBridge, registerHandler, routeCall, dispatch, installIpcInterceptor, getMode, forwardToServer, currentTerminalId, hasChannel, channelCount };

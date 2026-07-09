@@ -62,7 +62,7 @@ function startRpcServer({ port = 8443, host = '0.0.0.0', getAccessKey, getAllowl
       }
 
       try {
-        const result = await dispatch(parsed.channel, parsed.args);
+        const result = await dispatch(parsed.channel, parsed.args, { terminalId: parsed.auth && parsed.auth.terminalId });
         if (result && result.__unknown === true) {
           return _sendJson(res, 404, conn.makeResponse(false, null, conn.RPC_ERRORS.UNKNOWN_CHANNEL));
         }

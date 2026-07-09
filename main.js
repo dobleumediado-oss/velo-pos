@@ -538,6 +538,18 @@ function _isDeviceSetting(key) {
   return /^connection_/.test(key) || key === 'terminal_id' || key === 'printer' || key === 'printer_type';
 }
 
+// terminalId de la terminal que originó la petición (para atar a SU caja):
+//   · cliente → el auth.terminalId del RPC (vía el puente / AsyncLocalStorage).
+//   · local/servidor → el terminal_id de esta máquina.
+// Si no hay ninguno → undefined → getOpen() cae al comportamiento global histórico.
+function _reqTerminalId() {
+  try {
+    const t = require('./src/main/ipc-bridge').currentTerminalId();
+    if (t) return t;
+  } catch {}
+  return settingsRepo.get('terminal_id') || undefined;
+}
+
 ipcMain.handle('settings:getAll', async () => {
   const local = settingsRepo.getAll();
   // Multi-terminal: en modo cliente, base = settings del negocio (servidor),
@@ -904,7 +916,7 @@ ipcMain.handle('customers:addPayment', async (_, { data, requestUserId }) => {
       return { ok: false, error: 'El monto del abono debe ser mayor a cero' };
     }
     // Obtener sesión de caja activa
-    const session = cashRepo.getOpen();
+    const session = cashRepo.getOpen(_reqTerminalId());
     const result  = customersRepo.addPayment({
       ...data,
       cajero:    reqUser?.name,
@@ -1064,7 +1076,7 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
 
     // Verificar caja abierta (cajero debe tener caja)
     if (reqUser.role === 'cajero') {
-      const session = cashRepo.getOpen();
+      const session = cashRepo.getOpen(_reqTerminalId());
       if (!session) return { ok: false, error: 'Debes abrir la caja antes de vender' };
       saleData.session = session;
     }
@@ -1129,7 +1141,7 @@ ipcMain.handle('sales:return', async (_, { originalSaleId, items, reason, reques
     if (!reqUser) return { ok: false, error: 'Usuario no válido' };
 
     // Verificar caja abierta
-    const session = cashRepo.getOpen();
+    const session = cashRepo.getOpen(_reqTerminalId());
     if (!session) return { ok: false, error: 'Debes tener la caja abierta para procesar devoluciones' };
 
     const result = returnsRepo.create({
@@ -3401,7 +3413,7 @@ ipcMain.handle('conduce:invoice', async (_, { id, lines = null, payment = {}, pr
     const u = authRepo.findById(requestUserId);
     if (!u) return { ok: false, error: 'Sin sesión' };
     // Caja abierta para la factura (igual que una venta normal)
-    const session = cashRepo.getOpen ? cashRepo.getOpen() : (sessionId ? { id: sessionId } : null);
+    const session = cashRepo.getOpen ? cashRepo.getOpen(_reqTerminalId()) : (sessionId ? { id: sessionId } : null);
     const res = conduceRepo.invoiceFromConduce({
       conduceId: id, lines, payment, priceMode,
       session, user: { id: u.id, name: u.name },
@@ -3596,7 +3608,7 @@ ipcMain.handle('expenses:create', async (_, { data, requestUserId }) => {
 
     if (u.role === 'cajero') {
       // Cajero solo puede registrar desde caja abierta
-      const session = cashRepo.getOpen();
+      const session = cashRepo.getOpen(_reqTerminalId());
       if (!session) return { ok:false, error:'Debes tener una caja abierta para registrar gastos' };
       data.cash_session_id = session.id;
       data.payment_source = 'caja';
@@ -3613,7 +3625,7 @@ ipcMain.handle('expenses:create', async (_, { data, requestUserId }) => {
 
     // Si es cajero, pago directo sin aprobación y caja disponible
     if (u.role === 'cajero' && status === 'pendiente_pago' && data.payment_source === 'caja') {
-      const session = cashRepo.getOpen();
+      const session = cashRepo.getOpen(_reqTerminalId());
       if (session) {
         expensesRepo.pay({
           expenseId: id, amount: data.total || data.amount,
@@ -3637,7 +3649,7 @@ ipcMain.handle('expenses:pay', async (_, { expenseId, amount, payment_method, pa
     }
     let cash_session_id = null;
     if (payment_source === 'caja') {
-      const session = cashRepo.getOpen();
+      const session = cashRepo.getOpen(_reqTerminalId());
       if (!session) return { ok:false, error:'No hay caja abierta' };
       cash_session_id = session.id;
     }
