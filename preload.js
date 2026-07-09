@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('api', {
   auth: {
     login:        (data)     => ipcRenderer.invoke('auth:login', data),
     logout:       (data)     => ipcRenderer.invoke('auth:logout', data),
+    heartbeat:    (data)     => ipcRenderer.invoke('auth:heartbeat', data),
     getSuperPass: ()         => ipcRenderer.invoke('auth:getSuperPass'),
   },
 

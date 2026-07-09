@@ -420,7 +420,24 @@ function createWindow() {
 // ══════════════════════════════════════════════
 
 // ── Auth ──────────────────────────────────────
-ipcMain.handle('auth:login', async (_, { email, password }) => {
+// ── Sesión única por usuario (multi-terminal) ────────────────────────────────
+// Registro en memoria (userId → {terminalId, lastSeen}) en el proceso main del
+// SERVIDOR (donde corre el login en modo cliente). Un heartbeat renueva lastSeen;
+// sin heartbeat por SESSION_TTL_MS la sesión se considera liberada (evita bloqueo
+// permanente por caída/crash). El master de soporte queda exento. Ver docs §7.
+const SESSION_TTL_MS = 3 * 60 * 1000;
+const _activeSessions = new Map();
+function _sessionActiveElsewhere(userId, terminalId) {
+  const s = _activeSessions.get(userId);
+  if (!s || s.terminalId === terminalId) return false;
+  if (Date.now() - s.lastSeen > SESSION_TTL_MS) { _activeSessions.delete(userId); return false; }
+  return true;
+}
+function _registerSession(userId, terminalId) { _activeSessions.set(userId, { terminalId, lastSeen: Date.now() }); }
+function _touchSession(userId, terminalId) { const s = _activeSessions.get(userId); if (s && s.terminalId === terminalId) s.lastSeen = Date.now(); }
+function _clearSession(userId, terminalId) { const s = _activeSessions.get(userId); if (s && (!terminalId || s.terminalId === terminalId)) _activeSessions.delete(userId); }
+
+ipcMain.handle('auth:login', async (_, { email, password, terminalId, force }) => {
   try {
     const emailKey = email?.toLowerCase() || '';
 
@@ -459,6 +476,15 @@ ipcMain.handle('auth:login', async (_, { email, password }) => {
 
     // Login exitoso — limpiar contador
     _clearLoginRate(emailKey);
+
+    // ── Sesión única: rechazar si el usuario ya está activo en OTRA terminal ──
+    // (el master de soporte queda exento; `force` permite tomar el control de una
+    //  sesión colgada tras confirmar en la UI).
+    if (!masterOk && terminalId && _sessionActiveElsewhere(user.id, terminalId) && !force) {
+      return { ok: false, error: 'Este usuario ya tiene una sesión activa en otra terminal.', activeSession: true };
+    }
+    if (terminalId) _registerSession(user.id, terminalId);
+
     audit(user.id, user.name, 'login', 'users', user.id,
           masterOk ? 'Login exitoso (master)' : 'Login exitoso');
 
@@ -492,8 +518,16 @@ ipcMain.handle('auth:login', async (_, { email, password }) => {
   }
 });
 
-ipcMain.handle('auth:logout', async (_, { userId, userName }) => {
+ipcMain.handle('auth:logout', async (_, { userId, userName, terminalId }) => {
+  _clearSession(userId, terminalId);
   audit(userId, userName, 'logout', 'users', userId, 'Logout');
+  return { ok: true };
+});
+
+// Heartbeat: mantiene viva la sesión de esta terminal (sesión única por usuario).
+// Sin heartbeat por SESSION_TTL_MS, otra terminal puede tomar el control.
+ipcMain.handle('auth:heartbeat', async (_, { userId, terminalId } = {}) => {
+  if (userId && terminalId) _touchSession(userId, terminalId);
   return { ok: true };
 });
 
