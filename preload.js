@@ -104,6 +104,7 @@ contextBridge.exposeInMainWorld('api', {
   // ── Impresión ─────────────────────────────
   print: {
     html:         (data)      => ipcRenderer.invoke('print:html', data),
+    onServer:     (data)      => ipcRenderer.invoke('print:onServer', data),
     toPDF:        (data)      => ipcRenderer.invoke('print:toPDF', data),
     getPrinters:  ()          => ipcRenderer.invoke('print:getPrinters'),
     savePrinter:  (data)      => ipcRenderer.invoke('print:savePrinter', data),

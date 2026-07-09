@@ -17,6 +17,9 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
     'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke', 'license:generate',
     'update:check', 'update:download', 'update:install',
     'settings:set', 'settings:getAll',
+    // Impresión = operación de dispositivo: cada terminal imprime en SU impresora.
+    // (print:onServer NO va aquí: es la opción explícita de imprimir en el servidor.)
+    'print:html', 'print:toPDF', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
   ]),
 });
 const path = require('path');
@@ -1425,6 +1428,30 @@ ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, jobTyp
       } catch {}
     }
     console.error('[print:html]', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
+// Imprimir en la impresora del SERVIDOR (mostrador). NO es local-only: en modo
+// cliente el interceptor reenvía esta llamada al servidor, que la ejecuta con SU
+// impresora configurada. Es la opción "imprimir por el servidor" cuando la terminal
+// no tiene impresora física. Ver docs/multi-terminal-sync.md §8.
+ipcMain.handle('print:onServer', async (_, { html, jobType, referenceId, userId } = {}) => {
+  try {
+    const printerName  = settingsRepo.get('printer') || undefined;
+    const ptype        = settingsRepo.get('printer_type') || '';
+    const printerWidth = ptype === '58mm' ? 58000 : ptype === '80mm' ? 80000 : undefined;
+    await _attemptPrintHTML({ html, printerName, printerWidth });
+    if (jobType && referenceId) {
+      try {
+        require('./database').getDB().prepare(
+          "INSERT INTO print_jobs(type, reference_id, status, printer, user_id) VALUES(?,?,'success',?,?)"
+        ).run(jobType, referenceId, (printerName || '') + ' (servidor)', userId || null);
+      } catch {}
+    }
+    return { ok: true, printedOn: 'server' };
+  } catch (e) {
+    console.error('[print:onServer]', e.message);
     return { ok: false, error: e.message };
   }
 });

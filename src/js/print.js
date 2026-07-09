@@ -754,12 +754,57 @@ async function _guardarPDF(html, suggestedName) {
   else if (!r?.canceled) toast(r?.error || 'No se pudo guardar el PDF', 'err');
 }
 
+// ── Multi-terminal: elección de destino de impresión ─────────────────────────
+// Solo aplica a una terminal CLIENTE sin impresora local. En local/servidor o con
+// impresora configurada devuelve false → flujo de impresión normal (sin cambios).
+function _shouldOfferServerPrint() {
+  const mode = (typeof CFG !== 'undefined' && CFG.connectionMode) || 'local';
+  return mode === 'client' && !_getSavedPrinter();
+}
+
+function _offerPrintTarget(html, jobType, referenceId) {
+  window._pendingPrint = { html, jobType, referenceId };
+  if (typeof openModal !== 'function') { _openPrintWindowFallback(html); return; }
+  openModal(`
+    <div class="modal-title">¿Dónde imprimir?</div>
+    <div class="modal-sub">Esta terminal no tiene impresora configurada.</div>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:14px">
+      <button class="btn btn-dark"  onclick="_printTargetServer()">🖨️ Imprimir en el mostrador (servidor)</button>
+      <button class="btn btn-out"   onclick="_printTargetHere()">Imprimir aquí (elegir impresora)</button>
+      <button class="btn btn-ghost" onclick="window._pendingPrint=null;closeModal()">Cancelar</button>
+    </div>
+  `);
+}
+
+function _printTargetServer() {
+  const pj = window._pendingPrint; window._pendingPrint = null;
+  if (typeof closeModal === 'function') closeModal();
+  if (!pj) return;
+  window.api.print.onServer({ html: pj.html, jobType: pj.jobType, referenceId: pj.referenceId, userId: (typeof user !== 'undefined' && user?.id) || null })
+    .then(r => toast(r && r.ok ? '✓ Enviado a la impresora del mostrador' : (r && r.error) || 'No se pudo imprimir en el servidor', r && r.ok ? 's' : 'err'))
+    .catch(() => toast('Sin conexión al servidor', 'err'));
+}
+
+function _printTargetHere() {
+  const pj = window._pendingPrint; window._pendingPrint = null;
+  if (typeof closeModal === 'function') closeModal();
+  if (pj) _openPrintWindowFallback(pj.html);   // flujo normal: ventana con diálogo/impresora
+}
+
 function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = false) {
   // Intercepción: si se pidió guardar en PDF, guardar y no imprimir.
   if (window._pdfSaveRequest) {
     const name = window._pdfSaveRequest.name;
     window._pdfSaveRequest = null;
     _guardarPDF(html, name);
+    return;
+  }
+
+  // Multi-terminal: terminal cliente SIN impresora física → ofrecer imprimir en
+  // el servidor (mostrador) o aquí eligiendo impresora. En local/servidor o con
+  // impresora configurada, no aplica (flujo normal).
+  if (_shouldOfferServerPrint()) {
+    _offerPrintTarget(html, jobType, referenceId);
     return;
   }
 
@@ -939,6 +984,9 @@ function printHTML(html, category = 'reporte') {
     _guardarPDF(html, name);
     return;
   }
+  // Multi-terminal: reportes también respetan la elección de destino (cliente sin
+  // impresora → servidor / aquí).
+  if (_shouldOfferServerPrint()) { _offerPrintTarget(html, category, null); return; }
   const catCfg = _getCategoryConfig(category);
   if (catCfg.preview) { _openPrintWindowFallback(html); return; }
 
