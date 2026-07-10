@@ -669,6 +669,23 @@ function _connRequireSA(requestUserId) {
 function _connTerminalNames() {
   try { return JSON.parse(settingsRepo.get('connection_terminal_names') || '{}'); } catch { return {}; }
 }
+// Direcciones IPv4 reales de esta PC (para mostrar a qué IP conectan los clientes).
+// Detecta Tailscale (rango CGNAT 100.64.0.0/10 o interfaz "tailscale"/"utun").
+function _localAddresses() {
+  const os = require('os');
+  const out = [];
+  const ifaces = os.networkInterfaces();
+  for (const name of Object.keys(ifaces)) {
+    for (const ni of (ifaces[name] || [])) {
+      if (ni.family !== 'IPv4' || ni.internal) continue;
+      const m = /^100\.(\d+)\./.exec(ni.address);
+      const isTs = (/tailscale|utun/i.test(name)) || (m && +m[1] >= 64 && +m[1] <= 127);
+      out.push({ ip: ni.address, label: isTs ? 'Tailscale' : 'Red local', tailscale: !!isTs });
+    }
+  }
+  out.sort((a, b) => (b.tailscale ? 1 : 0) - (a.tailscale ? 1 : 0)); // Tailscale primero
+  return out;
+}
 
 ipcMain.handle('connection:getInfo', async (_, { requestUserId } = {}) => {
   try {
@@ -685,6 +702,7 @@ ipcMain.handle('connection:getInfo', async (_, { requestUserId } = {}) => {
       accessKey:  mode === 'server' ? (settingsRepo.get('connection_access_key') || '') : '',
       hasKey:     !!settingsRepo.get('connection_access_key'),
       allowlist:  conn.parseAllowlist(settingsRepo.get('connection_allowlist')).map(id => ({ terminalId: id, name: names[id] || '' })),
+      addresses:  _localAddresses(),
     };
   } catch (e) { return { ok: false, error: e.message }; }
 });

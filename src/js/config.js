@@ -1440,8 +1440,18 @@ async function renderConexionCard(container) {
         <span class="mono">${_esc((t.name ? t.name + ' · ' : '') + t.terminalId.slice(0, 8))}…</span>
         <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="quitarTerminalAllow('${_esc(t.terminalId)}')">Quitar</button>
       </div>`).join('') || `<div style="font-size:11px;color:var(--muted2)">Ninguna terminal autorizada aún.</div>`;
+    const addrRows = (res.addresses || []).length
+      ? (res.addresses || []).map(a => `
+          <div class="tr" style="font-size:12px;align-items:center">
+            <span>${a.tailscale ? '🌐 Tailscale' : '🏠 Red local'}</span>
+            <span class="mono" style="font-weight:700">${_esc(a.ip)}:${_esc(res.serverPort)}</span>
+          </div>`).join('')
+      : `<div style="font-size:11px;color:var(--muted2)">No se detectaron direcciones de red.</div>`;
     body = `
-      <div style="font-size:12px;margin-bottom:8px">Esta PC es el <b>servidor</b>. Las demás se conectan con estos datos:</div>
+      <div style="font-size:12px;margin-bottom:8px">Esta PC es el <b>servidor</b>. Las demás se conectan a esta dirección:</div>
+      <div style="font-weight:700;font-size:11px;margin-bottom:2px">IP de este servidor</div>
+      ${addrRows}
+      <div style="font-size:10px;color:var(--muted2);margin:4px 0 8px">La IP de red local puede cambiar al reiniciar el router; fíjala en el router si es posible.</div>
       <div class="tr" style="font-size:12px"><span>Puerto</span><span class="mono">${_esc(res.serverPort)}</span></div>
       <div class="tr" style="font-size:12px;align-items:center"><span>Clave de acceso</span>
         <span class="mono" style="font-weight:700">${res.accessKey ? _esc(res.accessKey) : '— sin generar —'}</span></div>
