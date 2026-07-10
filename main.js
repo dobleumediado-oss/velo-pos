@@ -4708,6 +4708,13 @@ ipcMain.handle('accounting:get606', async (_, { from, to } = {}) => {
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
+// Estado de flujo de efectivo (método directo).
+ipcMain.handle('accounting:getCashFlow', async (_, { from, to } = {}) => {
+  try {
+    return { ok: true, data: accountingRepo.getCashFlow({ from, to }) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
 ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) => {
   try {
     // Obtener ventas no vinculadas a asientos contables y generar asientos retroactivos

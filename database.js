@@ -3371,6 +3371,67 @@ const accountingRepo = {
     return { assets, liabilities, equity, totalAssets, totalLiab, totalEquity };
   },
 
+  // ── Estado de flujo de efectivo (método directo) ──────────────────────────
+  // Toma cada asiento que mueve efectivo/banco y clasifica el delta de caja por
+  // origen (source_module) o, si es manual, por la contrapartida: operación /
+  // inversión (activos fijos 12xx) / financiamiento (capital 3xxx, préstamos 2201).
+  getCashFlow({ from, to } = {}) {
+    const cfg = this.getConfig();
+    const idBy = (key, code) => cfg[key]?.account_id || db.prepare("SELECT id FROM accounting_accounts WHERE code=?").get(code)?.id;
+    const cashIds = [...new Set([
+      idBy('account_cash', '1101'),
+      db.prepare("SELECT id FROM accounting_accounts WHERE code='1102'").get()?.id,
+      idBy('account_bank', '1103'),
+    ].filter(Boolean))];
+    const empty = { operacion: [], inversion: [], financiamiento: [], totalOperacion: 0, totalInversion: 0, totalFinanciamiento: 0, netChange: 0, beginningCash: 0, endingCash: 0 };
+    if (!cashIds.length) return empty;
+    const ph = cashIds.map(() => '?').join(',');
+    const r2 = (n) => Math.round((n || 0) * 100) / 100;
+
+    const beginningCash = from ? r2(db.prepare(`
+      SELECT COALESCE(SUM(l.debit-l.credit),0) v FROM accounting_entry_lines l
+      JOIN accounting_entries e ON l.entry_id=e.id
+      WHERE e.status IN ('confirmado','anulado') AND l.account_id IN (${ph}) AND e.date < ?`).get(...cashIds, from).v) : 0;
+
+    const rows = db.prepare(`
+      SELECT e.id, e.date, e.concept, e.source_module,
+        COALESCE(SUM(CASE WHEN l.account_id IN (${ph}) THEN l.debit-l.credit ELSE 0 END),0) as cash_delta
+      FROM accounting_entries e
+      JOIN accounting_entry_lines l ON l.entry_id=e.id
+      WHERE e.status IN ('confirmado','anulado')
+        ${from ? 'AND e.date>=?' : ''} ${to ? 'AND e.date<=?' : ''}
+      GROUP BY e.id HAVING cash_delta != 0
+      ORDER BY e.date ASC, e.id ASC`).all(...cashIds, ...(from ? [from] : []), ...(to ? [to] : []));
+
+    const labelFor = (sm) => ({
+      venta: 'Cobros de ventas', abono: 'Cobros a clientes (CxC)', devolucion: 'Devoluciones a clientes',
+      gasto: 'Pagos de gastos', gasto_pago: 'Pagos de gastos', compra: 'Pagos de compras',
+    })[sm] || 'Otros movimientos';
+
+    const bucketOf = (e) => {
+      const sm = e.source_module || '';
+      if (['venta', 'abono', 'devolucion', 'gasto', 'gasto_pago', 'compra'].includes(sm)) return 'operacion';
+      const counter = db.prepare(`SELECT a.code FROM accounting_entry_lines l JOIN accounting_accounts a ON l.account_id=a.id WHERE l.entry_id=? AND l.account_id NOT IN (${ph})`).all(e.id, ...cashIds);
+      if (counter.some(c => /^12/.test(c.code))) return 'inversion';
+      if (counter.some(c => /^3/.test(c.code) || c.code === '2201')) return 'financiamiento';
+      return 'operacion';
+    };
+
+    // Agrupa por etiqueta dentro de cada categoría.
+    const groups = { operacion: new Map(), inversion: new Map(), financiamiento: new Map() };
+    for (const r of rows) {
+      const b = bucketOf(r);
+      const label = b === 'operacion' ? labelFor(r.source_module) : (r.concept || 'Movimiento');
+      groups[b].set(label, r2((groups[b].get(label) || 0) + r.cash_delta));
+    }
+    const toArr = (m) => [...m.entries()].map(([label, amount]) => ({ label, amount })).filter(x => x.amount !== 0);
+    const operacion = toArr(groups.operacion), inversion = toArr(groups.inversion), financiamiento = toArr(groups.financiamiento);
+    const sum = (a) => r2(a.reduce((s, x) => s + x.amount, 0));
+    const totalOperacion = sum(operacion), totalInversion = sum(inversion), totalFinanciamiento = sum(financiamiento);
+    const netChange = r2(totalOperacion + totalInversion + totalFinanciamiento);
+    return { operacion, inversion, financiamiento, totalOperacion, totalInversion, totalFinanciamiento, netChange, beginningCash, endingCash: r2(beginningCash + netChange) };
+  },
+
   // ── Generar asiento automático para venta ─
   generateSaleEntry({ saleId, userId, configOverride } = {}) {
     try {

@@ -33,6 +33,7 @@ async function renderContabilidad(el) {
     { key: 'balance',      label: 'Bal. Comprobación' },
     { key: 'resultados',   label: 'Resultados' },
     { key: 'general',      label: 'Bal. General' },
+    { key: 'flujo',        label: 'Flujo Efectivo' },
     { key: 'cxc',          label: 'CxC' },
     { key: 'cxp',          label: 'CxP' },
     { key: 'cuadres',      label: 'Cuadres' },
@@ -59,6 +60,7 @@ async function renderContabilidad(el) {
     case 'balance':       await _contRenderBalance(body);      break;
     case 'resultados':    await _contRenderResultados(body);   break;
     case 'general':       await _contRenderGeneral(body);      break;
+    case 'flujo':         await _contRenderFlujo(body);        break;
     case 'cxc':           await _contRenderCxC(body);          break;
     case 'cxp':           await _contRenderCxP(body);          break;
     case 'cuadres':       await _contRenderCuadres(body);      break;
@@ -962,6 +964,102 @@ async function _printGeneral() {
     <tr class="ttl"><td>Total Capital</td><td style="text-align:right">${fmt(rpt.total_equity||0)}</td></tr>
     <tr class="ttl" style="font-size:12px"><td>TOTAL PASIVOS + CAPITAL</td>
     <td style="text-align:right">${fmt((rpt.total_liabilities||0)+(rpt.total_equity||0))}</td></tr>
+  </table></body></html>`;
+  printHTML(html, 'contabilidad');
+}
+
+// ══════════════════════════════════════════════
+// FLUJO DE EFECTIVO
+// ══════════════════════════════════════════════
+async function _contRenderFlujo(el) {
+  const controls = h('div', { class: 'period-sel', style: { marginBottom: '16px', justifyContent: 'space-between', flexWrap: 'wrap' } },
+    h('div', { class: 'period-sel' },
+      h('label', { class: 'lbl', style: { alignSelf: 'center', marginBottom: 0 } }, 'Desde:'),
+      h('input', { type: 'date', id: 'fl-from', value: _contFrom, class: 'inp', style: { maxWidth: '150px' },
+        onchange: async e => { _contFrom = e.target.value; await _reloadFlujo(); } }),
+      h('label', { class: 'lbl', style: { alignSelf: 'center', marginBottom: 0 } }, 'Hasta:'),
+      h('input', { type: 'date', id: 'fl-to', value: _contTo, class: 'inp', style: { maxWidth: '150px' },
+        onchange: async e => { _contTo = e.target.value; await _reloadFlujo(); } })
+    ),
+    h('button', { class: 'print-btn', onclick: _printFlujo }, '🖨 Imprimir')
+  );
+  el.appendChild(controls);
+  const body = h('div', { id: 'fl-body' });
+  el.appendChild(body);
+  await _reloadFlujo();
+}
+
+function _flujoSection(title, items, subtotal) {
+  const sec = h('div', { class: 'fin-report-section' }, h('div', { class: 'fin-report-title' }, title));
+  if (!items || !items.length) {
+    sec.appendChild(h('div', { class: 'fin-report-row' }, h('span', { style: { color: 'var(--muted2)' } }, 'Sin movimientos'), h('span', { class: 'amount' }, fmt(0))));
+  } else {
+    items.forEach(it => sec.appendChild(h('div', { class: 'fin-report-row' },
+      h('span', null, it.label),
+      h('span', { class: 'amount', style: { color: it.amount < 0 ? '#ef4444' : 'inherit' } }, fmt(it.amount))
+    )));
+  }
+  sec.appendChild(h('div', { class: 'fin-report-row total' },
+    h('span', null, 'Total ' + title),
+    h('span', { class: 'amount', style: { color: (subtotal || 0) < 0 ? '#ef4444' : '#10b981' } }, fmt(subtotal || 0))
+  ));
+  return sec;
+}
+
+async function _reloadFlujo() {
+  const body = document.getElementById('fl-body');
+  if (!body) return;
+  body.innerHTML = '';
+  const res = await window.api.accounting.getCashFlow({ from: _contFrom, to: _contTo });
+  const rpt = res?.data || {};
+  const wrap = h('div', { class: 'fin-report' });
+
+  wrap.appendChild(h('div', { style: { textAlign: 'center', marginBottom: '16px' } },
+    h('div', { style: { fontWeight: '700', fontSize: '15px' } }, DB?.settings?.biz_name || CFG.biz || 'Velo POS'),
+    h('div', { style: { fontSize: '13px', fontWeight: '600', margin: '4px 0 2px' } }, 'Estado de Flujo de Efectivo'),
+    h('div', { style: { fontSize: '12px', color: 'var(--muted2)' } }, `${_contFrom} al ${_contTo}`)
+  ));
+
+  wrap.appendChild(_flujoSection('Actividades de operación', rpt.operacion, rpt.totalOperacion));
+  wrap.appendChild(_flujoSection('Actividades de inversión', rpt.inversion, rpt.totalInversion));
+  wrap.appendChild(_flujoSection('Actividades de financiamiento', rpt.financiamiento, rpt.totalFinanciamiento));
+
+  const netColor = (rpt.netChange || 0) >= 0 ? '#10b981' : '#ef4444';
+  wrap.appendChild(h('div', { class: 'fin-report-row group' },
+    h('span', null, 'AUMENTO/(DISMINUCIÓN) DE EFECTIVO'),
+    h('span', { class: 'amount', style: { color: netColor } }, fmt(rpt.netChange || 0))
+  ));
+  wrap.appendChild(h('div', { class: 'fin-report-row' },
+    h('span', null, 'Efectivo al inicio'), h('span', { class: 'amount' }, fmt(rpt.beginningCash || 0))));
+  wrap.appendChild(h('div', { class: 'fin-report-row total' },
+    h('span', null, 'Efectivo al final'), h('span', { class: 'amount' }, fmt(rpt.endingCash || 0))));
+
+  body.appendChild(wrap);
+}
+
+async function _printFlujo() {
+  const res = await window.api.accounting.getCashFlow({ from: _contFrom, to: _contTo });
+  const rpt = res?.data || {};
+  const biz = DB?.settings?.biz_name || CFG.biz || 'Velo POS';
+  const sec = (title, items, subtotal) => {
+    const rows = (items && items.length ? items : []).map(it =>
+      `<tr><td>${_esc(it.label)}</td><td style="text-align:right">${fmt(it.amount)}</td></tr>`).join('')
+      || '<tr><td style="color:#888">Sin movimientos</td><td style="text-align:right">0.00</td></tr>';
+    return `<tr><td colspan="2" style="font-weight:700;background:#f3f4f6;padding-top:6px">${title}</td></tr>
+      ${rows}<tr><td style="font-weight:600">Total ${title}</td><td style="text-align:right;font-weight:600">${fmt(subtotal||0)}</td></tr>`;
+  };
+  const html = `<html><head><meta charset="UTF-8">
+  <style>body{font-family:Arial;font-size:11px;margin:20px}h1{font-size:14px;margin:0}table{width:100%;border-collapse:collapse;margin-top:10px}
+  td{padding:5px 8px;border-bottom:1px solid #eee}</style></head><body>
+  <div style="text-align:center"><h1>${_esc(biz)}</h1><div style="font-weight:600">Estado de Flujo de Efectivo</div>
+  <div style="color:#6b7280;font-size:10px">${_contFrom} al ${_contTo}</div></div>
+  <table>
+    ${sec('Actividades de operación', rpt.operacion, rpt.totalOperacion)}
+    ${sec('Actividades de inversión', rpt.inversion, rpt.totalInversion)}
+    ${sec('Actividades de financiamiento', rpt.financiamiento, rpt.totalFinanciamiento)}
+    <tr><td style="font-weight:700">Aumento/(disminución) de efectivo</td><td style="text-align:right;font-weight:700">${fmt(rpt.netChange||0)}</td></tr>
+    <tr><td>Efectivo al inicio</td><td style="text-align:right">${fmt(rpt.beginningCash||0)}</td></tr>
+    <tr><td style="font-weight:700">Efectivo al final</td><td style="text-align:right;font-weight:700">${fmt(rpt.endingCash||0)}</td></tr>
   </table></body></html>`;
   printHTML(html, 'contabilidad');
 }

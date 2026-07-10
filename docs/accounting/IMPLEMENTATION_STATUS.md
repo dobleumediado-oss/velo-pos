@@ -18,7 +18,7 @@
 | Cuentas por pagar (7.8) | 🟡 | **Contable devengado en vivo** (gasto/compra → Créd CxP 2101; pago → Déb CxP). Falta antigüedad de CxP, conciliación auxiliar↔control 2101, pago formal a proveedor por OC |
 | Caja/Bancos/Tesorería (7.9) | 🟡 | Bancos (cuentas+movimientos+transfer) sano + **conciliación bancaria** (import CSV, auto/manual match, ignorar). Falta conciliación de caja (sesiones) e importación Excel directa |
 | Impuestos/fiscal RD (7.10) | 🟡 | NCF + e-CF + 607/608 + **606 (compras con RNC)**. Falta libros venta/compra formales, cuadre ventas↔607 automático, IT-1/IR-17, retenciones |
-| Centros de costo (7.11) | ⛔ | No implementado |
+| Centros de costo (7.11) | ⛔ | Diferido: no hay dato operativo que capturar (0 sucursales, ninguna tabla lleva branch_id, sin "sucursal activa"). Segmentar asientos sería infraestructura muerta hasta que exista el concepto en operaciones |
 | Multiempresa/sucursal (7.12) | 🟡 | Multiempresa por **BD separada**. **Falta segmentación por sucursal en asientos + consolidación** |
 | Presupuestos (7.13) | 🟡 | Presupuestos de **gastos** existen; no ligados a contabilidad ni real-vs-presupuesto contable |
 | Activos fijos (7.14) | ⛔ | No implementado |
@@ -27,7 +27,7 @@
 | Monedas (7.17) | ⛔ | Solo DOP; sin tasa/dif. cambiaria |
 | Cierres (7.18) | 🟡 | **Cierre/reapertura de período + bloqueo de posteo** (F2). UI en pestaña "Períodos". Falta asiento de cierre de resultados a patrimonio |
 | Estados financieros (7.19) | 🟡 | Resultados + balance general + balanza (correctos tras fix). Falta flujo de efectivo, cambios en patrimonio, comparativos, indicadores |
-| Flujo de efectivo (7.20) | ⛔ | No implementado |
+| Flujo de efectivo (7.20) | 🟡 | **Estado de flujo de efectivo (método directo)** `getCashFlow` + pestaña "Flujo Efectivo": operación/inversión/financiamiento, efectivo inicial→final. Falta comparativo entre períodos |
 | Préstamos (7.21) | ⛔ | No implementado |
 | Documentos/soportes (7.22) | ⛔ | Sin adjuntos en asientos |
 | Flujos de aprobación (7.23) | 🟡 | Gastos tienen aprobación; asientos no |
@@ -69,9 +69,13 @@ Caja operativa = cuenta contable caja      ⛔ pendiente (sesiones de caja — F
   bancos.js con import CSV (mapeo de columnas, monto con signo o débito/crédito), auto/manual.
   *Nota:* versión de migración con sufijo para no colisionar con el `1.14.1` de feat/multi-terminal.
   *Pendiente:* import Excel directo, conciliación de sesiones de caja.
-- **F6 — Centros de costo + sucursal (G3, G10):** `cost_center` y `branch_id` en líneas/
-  asientos; resultados por sucursal + consolidación (dentro de la BD del negocio).
-- **F7 — Activos fijos + presupuestos↔contab + flujo de efectivo (G9).**
+- **F6 — DIFERIDO (centros de costo/sucursal, G3/G10) + Flujo de efectivo ✅:** la parte de
+  sucursal/centro de costo se difiere con justificación (no hay dato operativo: 0 sucursales,
+  ninguna tabla operativa lleva `branch_id`, sin "sucursal activa"; sería infraestructura
+  muerta). En su lugar se entregó el **Estado de Flujo de Efectivo** (`getCashFlow`, método
+  directo; pestaña "Flujo Efectivo"), el 3er estado financiero básico que faltaba — read-only,
+  sin migración ni riesgo.
+- **F7 — Activos fijos + depreciación + presupuestos↔contab (G9).**
 - **F8 — Precisión decimal (G6)** (migración a enteros de centavos o decimal seguro) +
   índices/tablas de resumen (rendimiento) + suite E2E + documentación fiscal.
 
