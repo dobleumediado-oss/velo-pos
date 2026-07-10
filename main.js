@@ -21,6 +21,8 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
     'connection:clientPreflight', 'connection:setMode',
     'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke', 'license:generate',
     'update:check', 'update:download', 'update:install',
+    // Versión = propia de cada máquina (no la del servidor).
+    'version:getInfo', 'version:getAppVersion',
     'settings:set', 'settings:getAll',
     // Impresión = operación de dispositivo: cada terminal imprime en SU impresora.
     // (print:onServer NO va aquí: es la opción explícita de imprimir en el servidor.)
@@ -766,14 +768,26 @@ ipcMain.handle('connection:test', async (_, { requestUserId, host, port } = {}) 
 ipcMain.handle('connection:clientPreflight', async () => {
   try {
     const mode = settingsRepo.get('connection_mode') || 'local';
-    if (mode !== 'client') return { ok: true, mode, reachable: true };
+    const terminalId = settingsRepo.get('terminal_id') || '';
+    if (mode !== 'client') return { ok: true, mode, reachable: true, authorized: true, terminalId };
     const host = settingsRepo.get('connection_server_ip') || '';
     const port = Number(settingsRepo.get('connection_server_port')) || 8443;
-    if (!host) return { ok: true, mode, reachable: false, host: '', port, reason: 'sin IP configurada' };
-    const { healthCheck } = require('./src/main/net-client');
-    const r = await healthCheck({ host, port, timeoutMs: 4000 });
-    return { ok: true, mode, reachable: !!r.ok, host, port, ms: r.ms ?? null };
-  } catch (e) { return { ok: true, mode: 'client', reachable: false, error: e.message }; }
+    if (!host) return { ok: true, mode, reachable: false, authorized: false, host: '', port, terminalId, reason: 'no-ip' };
+
+    const { healthCheck, rpcCall } = require('./src/main/net-client');
+    // 1) ¿El servidor está encendido/alcanzable? (/health, sin auth)
+    const h = await healthCheck({ host, port, timeoutMs: 4000 });
+    if (!h.ok) return { ok: true, mode, reachable: false, authorized: false, host, port, terminalId, reason: 'offline' };
+
+    // 2) ¿Este terminal está AUTORIZADO? Ping RPC autenticado (llave + allowlist).
+    //    Sin esto, un servidor encendido pero que rechaza al terminal dejaba pasar
+    //    a un login que no podía funcionar.
+    const accessKey = settingsRepo.get('connection_access_key') || '';
+    const ping = await rpcCall({ host, port, accessKey, terminalId, channel: 'version:getInfo', args: {}, timeoutMs: 4000 });
+    const authorized = !!(ping && ping.ok === true);
+    const reason = authorized ? 'ok' : ((ping && ping.error) || 'unauthorized');
+    return { ok: true, mode, reachable: true, authorized, host, port, terminalId, reason };
+  } catch (e) { return { ok: true, mode: 'client', reachable: false, authorized: false, error: e.message }; }
 });
 
 // Cambia el modo de conexión (usado por la pantalla de recuperación offline para

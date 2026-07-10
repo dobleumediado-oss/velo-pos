@@ -58,7 +58,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // servidor y colgaría/rompería la app). En modo local esto no hace nada.
   try {
     const pf = await window.api.connection?.clientPreflight?.();
-    if (pf && pf.mode === 'client' && !pf.reachable) {
+    if (pf && pf.mode === 'client' && (!pf.reachable || !pf.authorized)) {
       renderClientOffline(pf);
       return;
     }
@@ -248,15 +248,28 @@ function renderClientOffline(pf) {
   root.innerHTML = '';
   root.style.cssText = 'width:100%;height:100%;display:flex;';
   const dest = `${(pf && pf.host) || 'servidor'}${pf && pf.port ? ':' + pf.port : ''}`;
+  // Dos causas distintas: servidor inalcanzable vs servidor OK pero terminal no autorizado.
+  const unauth = pf && pf.reachable && !pf.authorized;
+  const titulo = unauth ? 'Este terminal no está autorizado' : 'No se pudo conectar al servidor';
+  const icono  = unauth ? '🔒' : '📡';
+  const detalle = unauth
+    ? `El servidor ${dest} respondió, pero rechazó este terminal. Falta autorizarlo (o la llave de acceso no coincide).`
+    : `Esta PC está en modo Cliente y no logró comunicarse con ${dest}.`;
+  const ayuda = unauth
+    ? 'En la PC servidor: Config → Conexión → agrega el ID de este terminal a los autorizados, y verifica que la llave sea la misma.'
+    : 'Verifica que la PC servidor esté encendida, con Velo POS abierto en modo Servidor y el puerto permitido en el firewall.';
 
-  const card = h('div', { style: { maxWidth: '460px', margin: 'auto', textAlign: 'center', padding: '32px',
+  const card = h('div', { style: { maxWidth: '480px', margin: 'auto', textAlign: 'center', padding: '32px',
     background: 'var(--surface, #fff)', border: '1px solid var(--line2, #e5e7eb)', borderRadius: '16px' } },
-    h('div', { style: { fontSize: '40px', marginBottom: '10px' } }, '📡'),
-    h('div', { style: { fontSize: '17px', fontWeight: '700', marginBottom: '8px' } }, 'No se pudo conectar al servidor'),
-    h('div', { style: { fontSize: '13px', color: 'var(--muted2, #6b7280)', marginBottom: '4px' } },
-      `Esta PC está en modo Cliente y no logró comunicarse con ${dest}.`),
-    h('div', { style: { fontSize: '12px', color: 'var(--muted2, #6b7280)', marginBottom: '20px' } },
-      'Verifica que la PC servidor esté encendida, con Velo POS abierto en modo Servidor y el puerto permitido en el firewall.'),
+    h('div', { style: { fontSize: '40px', marginBottom: '10px' } }, icono),
+    h('div', { style: { fontSize: '17px', fontWeight: '700', marginBottom: '8px' } }, titulo),
+    h('div', { style: { fontSize: '13px', color: 'var(--muted2, #6b7280)', marginBottom: '4px' } }, detalle),
+    h('div', { style: { fontSize: '12px', color: 'var(--muted2, #6b7280)', marginBottom: '14px' } }, ayuda),
+    (pf && pf.terminalId)
+      ? h('div', { style: { fontSize: '11px', color: 'var(--ink,#111)', background: 'var(--line,#f3f4f6)', borderRadius: '8px', padding: '8px 10px', marginBottom: '16px', wordBreak: 'break-all' } },
+          h('div', { style: { color: 'var(--muted2,#6b7280)', marginBottom: '2px' } }, 'ID de este terminal (dáselo al servidor):'),
+          h('div', { style: { fontWeight: '700', fontFamily: 'monospace' } }, pf.terminalId))
+      : null,
     h('div', { id: 'co-msg', style: { fontSize: '12px', minHeight: '16px', marginBottom: '12px', color: 'var(--muted2,#6b7280)' } }, ''),
     h('div', { style: { display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' } },
       h('button', { class: 'btn', id: 'co-retry' }, '🔄 Reintentar'),
