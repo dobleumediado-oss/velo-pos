@@ -3098,7 +3098,7 @@ const accountingRepo = {
       FROM accounting_entry_lines l
       JOIN accounting_entries e ON l.entry_id=e.id
       JOIN accounting_accounts a ON l.account_id=a.id
-      WHERE e.status='confirmado'`;
+      WHERE e.status IN ('confirmado','anulado')`;
     const params = [];
     if (accountId) { q += ' AND l.account_id=?'; params.push(accountId); }
     if (from)      { q += ' AND e.date>=?'; params.push(from); }
@@ -3112,12 +3112,12 @@ const accountingRepo = {
     const accounts = db.prepare(`SELECT a.*,
       COALESCE((SELECT SUM(l.debit)  FROM accounting_entry_lines l
         JOIN accounting_entries e ON l.entry_id=e.id
-        WHERE l.account_id=a.id AND e.status='confirmado'
+        WHERE l.account_id=a.id AND e.status IN ('confirmado','anulado')
         ${from ? "AND e.date>='"+from+"'" : ''}
         ${to   ? "AND e.date<='"+to+"'"   : ''}),0) as period_debit,
       COALESCE((SELECT SUM(l.credit) FROM accounting_entry_lines l
         JOIN accounting_entries e ON l.entry_id=e.id
-        WHERE l.account_id=a.id AND e.status='confirmado'
+        WHERE l.account_id=a.id AND e.status IN ('confirmado','anulado')
         ${from ? "AND e.date>='"+from+"'" : ''}
         ${to   ? "AND e.date<='"+to+"'"   : ''}),0) as period_credit
       FROM accounting_accounts a
@@ -3141,7 +3141,7 @@ const accountingRepo = {
         FROM accounting_entry_lines l
         JOIN accounting_entries e ON l.entry_id=e.id
         JOIN accounting_accounts a ON l.account_id=a.id
-        WHERE e.status='confirmado' AND a.active=1 AND a.is_summary=0
+        WHERE e.status IN ('confirmado','anulado') AND a.active=1 AND a.is_summary=0
           AND a.type IN (${types.map(()=>'?').join(',')})
           ${from ? `AND e.date>=?` : ''}
           ${to   ? `AND e.date<=?` : ''}
@@ -3176,7 +3176,7 @@ const accountingRepo = {
         FROM accounting_entry_lines l
         JOIN accounting_entries e ON l.entry_id=e.id
         JOIN accounting_accounts a ON l.account_id=a.id
-        WHERE e.status='confirmado' AND a.active=1 AND a.is_summary=0
+        WHERE e.status IN ('confirmado','anulado') AND a.active=1 AND a.is_summary=0
           AND a.type IN (${types.map(()=>'?').join(',')})
           ${to ? 'AND e.date<=?' : ''}
         GROUP BY a.id ORDER BY a.code
@@ -3363,7 +3363,7 @@ const accountingRepo = {
         FROM accounting_entry_lines l
         JOIN accounting_entries e ON l.entry_id=e.id
         JOIN accounting_accounts a ON l.account_id=a.id
-        WHERE e.status='confirmado' AND a.type=? AND e.date BETWEEN ? AND ?
+        WHERE e.status IN ('confirmado','anulado') AND a.type=? AND e.date BETWEEN ? AND ?
       `).get(type, f, t);
       return r.v || 0;
     };
@@ -3382,7 +3382,7 @@ const accountingRepo = {
       if (!acc) return 0;
       const r = db.prepare(`SELECT COALESCE(SUM(l.debit-l.credit),0) as v
         FROM accounting_entry_lines l JOIN accounting_entries e ON l.entry_id=e.id
-        WHERE l.account_id=? AND e.status='confirmado'`).get(acc.id);
+        WHERE l.account_id=? AND e.status IN ('confirmado','anulado')`).get(acc.id);
       return r.v || 0;
     };
 
