@@ -4613,7 +4613,25 @@ ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) =>
       } catch (e) { failed++; console.error(`[accounting:syncHistorical] gasto ${exp.id}: ${e.message}`); }
     }
 
-    audit.log(requestUserId || 0, 'accounting_sync_historical', `Sincronización histórica: ${created} asientos generados, ${failed} fallidos`);
-    return { ok: true, data: { created, failed } };
+    // Reconciliar anulaciones: reversar asientos cuyo origen (venta/gasto) fue
+    // anulado DESPUÉS de sincronizarse. Sin esto, los estados financieros
+    // sobreestiman ingresos/gastos de operaciones ya anuladas.
+    let reversed = 0;
+    const staleEntries = db.prepare(`
+      SELECT ae.id FROM accounting_entries ae
+      WHERE ae.status='confirmado' AND ae.source_module IN ('venta','gasto') AND ae.source_id IS NOT NULL
+        AND (
+          (ae.source_module='venta' AND EXISTS(SELECT 1 FROM sales s    WHERE s.id=ae.source_id AND s.status='cancelled'))
+          OR
+          (ae.source_module='gasto' AND EXISTS(SELECT 1 FROM expenses e WHERE e.id=ae.source_id AND e.status='anulado'))
+        )
+    `).all();
+    for (const ae of staleEntries) {
+      try { accountingRepo.reverseEntry(ae.id, requestUserId || 0, 'Origen anulado (reconciliación de sincronización)'); reversed++; }
+      catch (e) { failed++; console.error(`[accounting:syncHistorical] reversar asiento ${ae.id}: ${e.message}`); }
+    }
+
+    audit.log(requestUserId || 0, 'accounting_sync_historical', `Sincronización: ${created} generados, ${reversed} reversados, ${failed} fallidos`);
+    return { ok: true, data: { created, reversed, failed } };
   } catch (e) { return { ok: false, error: e.message }; }
 });
