@@ -20,6 +20,9 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
     // Impresión = operación de dispositivo: cada terminal imprime en SU impresora.
     // (print:onServer NO va aquí: es la opción explícita de imprimir en el servidor.)
     'print:html', 'print:toPDF', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
+    // Diagnóstico local: NUNCA reenviar (si se reenvía y el servidor cae, el propio
+    // logger de errores falla → cascada). El log de cada terminal es local.
+    'log:error',
   ]),
 });
 const path = require('path');

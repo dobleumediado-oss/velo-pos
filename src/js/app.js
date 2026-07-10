@@ -8,14 +8,16 @@
 window.addEventListener('error', (e) => {
   try {
     window.api?.log?.error('renderer',
-      e.message || 'error', { src: e.filename, line: e.lineno, col: e.colno });
+      e.message || 'error', { src: e.filename, line: e.lineno, col: e.colno })?.catch?.(() => {});
   } catch {}
 });
 window.addEventListener('unhandledrejection', (e) => {
   try {
     const r = e.reason;
+    // No re-loguear nuestros propios errores de red (evita cualquier cascada).
+    if (r && (r.message === 'SERVER_OFFLINE' || r.offline)) return;
     window.api?.log?.error('renderer-promise',
-      r?.message || String(r), { stack: r?.stack });
+      r?.message || String(r), { stack: r?.stack })?.catch?.(() => {});
   } catch {}
 });
 
