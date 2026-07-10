@@ -2953,8 +2953,21 @@ ipcMain.handle('purchases:create', async (_, data) => {
   } catch(e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('purchases:receive', async (_, { id, items, userId }) => {
-  try { const result = purchasesRepo.receive(id, { items, userId }); return { ok: true, ...result }; }
-  catch(e) { return { ok: false, error: e.message }; }
+  try {
+    const result = purchasesRepo.receive(id, { items, userId });
+    // Contabilidad devengada: valor recibido en ESTA recepción → Déb Inventario
+    // (+ITBIS Acreditable proporcional) · Créd Cuentas por Pagar.
+    const deltaValue = (items || []).reduce((s, it) =>
+      s + ((it.qty_received > 0 ? it.qty_received : 0) * (it.unit_cost || 0)), 0);
+    _acctHook(() => {
+      const po = purchasesRepo.getById(id);
+      const deltaTax = (po && po.tax_amt > 0 && po.subtotal > 0)
+        ? (deltaValue / po.subtotal) * po.tax_amt : 0;
+      const seq = (db.prepare("SELECT COUNT(*) c FROM accounting_entries WHERE source_module='compra' AND source_id=?").get(id)?.c || 0) + 1;
+      accountingRepo.generatePurchaseEntry({ poId: id, deltaValue, deltaTax, receiveSeq: seq, userId });
+    });
+    return { ok: true, ...result };
+  } catch(e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('purchases:cancel', async (_, { id, userId }) => {
   try { purchasesRepo.cancel(id, userId); return { ok: true }; }
@@ -3445,10 +3458,11 @@ ipcMain.handle('expenses:create', async (_, { data, requestUserId }) => {
     audit(requestUserId, u.name, 'gasto_creado', 'expenses', id, data.description);
 
     // Si es cajero, pago directo sin aprobación y caja disponible
+    let autoPay = null;
     if (u.role === 'cajero' && status === 'pendiente_pago' && data.payment_source === 'caja') {
       const session = cashRepo.getOpen();
       if (session) {
-        expensesRepo.pay({
+        autoPay = expensesRepo.pay({
           expenseId: id, amount: data.total || data.amount,
           payment_method: data.payment_method || 'efectivo',
           payment_source: 'caja', cash_session_id: session.id,
@@ -3457,9 +3471,12 @@ ipcMain.handle('expenses:create', async (_, { data, requestUserId }) => {
       }
     }
 
-    // Contabilidad en vivo: si quedó pagado, Débito Gasto · Crédito Caja/Banco.
-    // Se auto-guarda (solo genera si status='pagado').
-    _acctHook(() => accountingRepo.generateExpenseEntry({ expenseId: id, userId: requestUserId }));
+    // Contabilidad en vivo (devengado): reconoce el gasto y la CxP; si hubo pago
+    // inmediato, además salda la CxP contra Caja/Banco.
+    _acctHook(() => {
+      accountingRepo.generateExpenseAccrualEntry({ expenseId: id, userId: requestUserId });
+      if (autoPay?.paymentId) accountingRepo.generateExpensePaymentEntry({ paymentId: autoPay.paymentId, userId: requestUserId });
+    });
     return { ok:true, id, status };
   } catch(e) { return { ok:false, error:e.message }; }
 });
@@ -3479,8 +3496,12 @@ ipcMain.handle('expenses:pay', async (_, { expenseId, amount, payment_method, pa
     }
     const result = expensesRepo.pay({ expenseId, amount, payment_method, payment_source,
       cash_session_id, reference, notes, userId: requestUserId, userName: u.name });
-    // Contabilidad en vivo: al quedar pagado, Débito Gasto · Crédito Caja/Banco.
-    _acctHook(() => accountingRepo.generateExpenseEntry({ expenseId, userId: requestUserId }));
+    // Contabilidad en vivo (devengado): asegura el devengo (idempotente) y salda
+    // la CxP con este pago (Déb CxP · Créd Caja/Banco).
+    _acctHook(() => {
+      accountingRepo.generateExpenseAccrualEntry({ expenseId, userId: requestUserId });
+      if (result?.paymentId) accountingRepo.generateExpensePaymentEntry({ paymentId: result.paymentId, userId: requestUserId });
+    });
     return result;
   } catch(e) { return { ok:false, error:e.message }; }
 });
@@ -3508,8 +3529,14 @@ ipcMain.handle('expenses:cancel', async (_, { expenseId, reason, requestUserId }
     if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Solo el administrador puede anular gastos' };
     if (!reason?.trim()) return { ok:false, error:'El motivo de anulación es obligatorio' };
     const r = expensesRepo.cancel(expenseId, requestUserId, u.name, reason);
-    // Contabilidad en vivo: reversar el asiento del gasto anulado.
-    _acctHook(() => accountingRepo.reverseSourceEntry('gasto', expenseId, requestUserId, 'Gasto anulado: ' + (reason || '')));
+    // Contabilidad en vivo: reversar TODOS los asientos del gasto anulado
+    // (legacy caja + devengo + pagos).
+    _acctHook(() => {
+      const motivo = 'Gasto anulado: ' + (reason || '');
+      accountingRepo.reverseSourceEntries('gasto',      expenseId, requestUserId, motivo);
+      accountingRepo.reverseSourceEntries('gasto_dev',  expenseId, requestUserId, motivo);
+      accountingRepo.reverseSourceEntries('gasto_pago', expenseId, requestUserId, motivo);
+    });
     return r;
   } catch(e) { return { ok:false, error:e.message }; }
 });
@@ -4643,21 +4670,44 @@ ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) =>
       } catch (e) { failed++; console.error(`[accounting:syncHistorical] venta ${sale.id}: ${e.message}`); }
     }
 
-    // Gastos pagados no vinculados
+    // Gastos (criterio devengado): reconoce gasto + CxP (devengo) y salda con
+    // cada pago. El devengo omite gastos con asiento legacy 'gasto' (no duplica).
     const expenses = db.prepare(`
-      SELECT e.* FROM expenses e
-      WHERE e.status = 'pagado'
-      AND NOT EXISTS (
-        SELECT 1 FROM accounting_entries ae WHERE ae.source_module = 'gasto' AND ae.source_id = e.id
-      )
-      ORDER BY e.created_at ASC
-      LIMIT 500
+      SELECT id FROM expenses
+      WHERE type IN ('gasto','activo','reembolso')
+        AND status NOT IN ('borrador','rechazado','anulado')
+      ORDER BY created_at ASC LIMIT 1000
     `).all();
-
     for (const exp of expenses) {
       try {
-        if (accountingRepo.generateExpenseEntry({ expenseId: exp.id, userId: requestUserId })) created++;
-      } catch (e) { failed++; console.error(`[accounting:syncHistorical] gasto ${exp.id}: ${e.message}`); }
+        if (accountingRepo.generateExpenseAccrualEntry({ expenseId: exp.id, userId: requestUserId })) created++;
+      } catch (e) { failed++; console.error(`[accounting:syncHistorical] gasto devengo ${exp.id}: ${e.message}`); }
+    }
+    const expPayments = db.prepare(`
+      SELECT id FROM expense_payments WHERE status='pagado' AND amount>0
+      ORDER BY created_at ASC LIMIT 1000
+    `).all();
+    for (const p of expPayments) {
+      try {
+        if (accountingRepo.generateExpensePaymentEntry({ paymentId: p.id, userId: requestUserId })) created++;
+      } catch (e) { failed++; console.error(`[accounting:syncHistorical] gasto pago ${p.id}: ${e.message}`); }
+    }
+
+    // Compras recibidas (devengado): Déb Inventario (+ITBIS Acreditable) · Créd
+    // CxP. Backfill del valor ya recibido, un asiento por OC.
+    const pos = db.prepare(`
+      SELECT id, subtotal, tax_amt FROM purchase_orders po
+      WHERE status IN ('recibido','parcial')
+        AND NOT EXISTS (SELECT 1 FROM accounting_entries ae WHERE ae.source_module='compra' AND ae.source_id=po.id)
+      ORDER BY created_at ASC LIMIT 1000
+    `).all();
+    for (const po of pos) {
+      try {
+        const items = db.prepare('SELECT qty_received, unit_cost FROM purchase_items WHERE purchase_order_id=?').all(po.id);
+        const val = items.reduce((s, it) => s + ((it.qty_received || 0) * (it.unit_cost || 0)), 0);
+        const tax = (po.tax_amt > 0 && po.subtotal > 0) ? (val / po.subtotal) * po.tax_amt : 0;
+        if (accountingRepo.generatePurchaseEntry({ poId: po.id, deltaValue: val, deltaTax: tax, receiveSeq: 1, userId: requestUserId })) created++;
+      } catch (e) { failed++; console.error(`[accounting:syncHistorical] compra ${po.id}: ${e.message}`); }
     }
 
     // Abonos (pagos de clientes) no vinculados → Débito Caja/Banco · Crédito CxC.
@@ -4680,11 +4730,11 @@ ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) =>
     let reversed = 0;
     const staleEntries = db.prepare(`
       SELECT ae.id FROM accounting_entries ae
-      WHERE ae.status='confirmado' AND ae.source_module IN ('venta','gasto') AND ae.source_id IS NOT NULL
+      WHERE ae.status='confirmado' AND ae.source_module IN ('venta','gasto','gasto_dev','gasto_pago') AND ae.source_id IS NOT NULL
         AND (
           (ae.source_module='venta' AND EXISTS(SELECT 1 FROM sales s    WHERE s.id=ae.source_id AND s.status='cancelled'))
           OR
-          (ae.source_module='gasto' AND EXISTS(SELECT 1 FROM expenses e WHERE e.id=ae.source_id AND e.status='anulado'))
+          (ae.source_module IN ('gasto','gasto_dev','gasto_pago') AND EXISTS(SELECT 1 FROM expenses e WHERE e.id=ae.source_id AND e.status='anulado'))
         )
     `).all();
     for (const ae of staleEntries) {

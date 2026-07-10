@@ -3409,6 +3409,25 @@ const accountingRepo = {
     }
   },
 
+  // ── Reversar TODOS los asientos confirmados de un origen ───────────────────
+  // Un origen puede tener varios asientos (ej. un gasto: devengo + N pagos).
+  // No lanza. Devuelve cuántos reversó.
+  reverseSourceEntries(sourceModule, sourceId, userId, reason) {
+    try {
+      const modEnabled = db.prepare("SELECT value FROM settings WHERE key='module_contabilidad'").get()?.value;
+      if (modEnabled !== '1') return 0;
+      const entries = db.prepare(
+        "SELECT id FROM accounting_entries WHERE source_module=? AND source_id=? AND status='confirmado'"
+      ).all(sourceModule, sourceId);
+      let n = 0;
+      for (const e of entries) {
+        try { this.reverseEntry(e.id, userId || null, reason || 'Origen anulado'); n++; }
+        catch (err) { console.error('[accounting] reverseSourceEntries:', err.message); }
+      }
+      return n;
+    } catch (e) { console.error('[accounting] reverseSourceEntries:', e.message); return 0; }
+  },
+
   // ── Asiento de devolución (nota de crédito) ───────────────────────────────
   // Inverso de la venta: débito Ingresos + ITBIS, crédito Caja/Banco/CxC; y
   // reingresa inventario a costo. Usa los montos de la venta de devolución.
@@ -3466,6 +3485,139 @@ const accountingRepo = {
       console.error('[accounting] generateReturnEntry:', e.message);
       return null;
     }
+  },
+
+  // ══ CRITERIO DEVENGADO (Fase 3) — gastos por pagar y compras ══════════════
+  // El gasto/compra se reconoce al incurrirse (Créd Cuentas por Pagar), y el
+  // pago posterior salda la CxP contra Caja/Banco. Así CxP contable ↔ operativo.
+
+  // Cuenta de gasto según la categoría (mismo mapeo que el modelo de caja legacy).
+  _expenseAccountId(expense, getAccId) {
+    if (expense.type === 'activo') return getAccId('account_fixed_asset', '1201');
+    let id = getAccId('account_other_exp', '6120');
+    const cat = (expense.cat_name || '').toLowerCase();
+    if (cat.includes('alquiler'))        id = getAccId('account_rent',     '6101');
+    else if (cat.includes('electric'))   id = getAccId('account_elec',     '6102');
+    else if (cat.includes('internet'))   id = getAccId('account_internet', '6104');
+    else if (cat.includes('sueldo') || cat.includes('nómina') || cat.includes('nomina') || cat.includes('personal'))
+                                         id = getAccId('account_salary',   '6106');
+    else if (cat.includes('combustible')) id = getAccId('account_fuel',    '6107');
+    return id;
+  },
+
+  // ── Devengo de gasto: Déb Gasto/Activo + Déb ITBIS Acreditable · Créd CxP ──
+  // Solo tipos con obligación real (gasto/activo/reembolso). Idempotente. No
+  // duplica si ya existe el asiento legacy de caja ('gasto').
+  generateExpenseAccrualEntry({ expenseId, userId } = {}) {
+    try {
+      const modEnabled = db.prepare("SELECT value FROM settings WHERE key='module_contabilidad'").get()?.value;
+      if (modEnabled !== '1') return null;
+      const expense = db.prepare('SELECT e.*, ec.name as cat_name FROM expenses e LEFT JOIN expense_categories ec ON e.category_id=ec.id WHERE e.id=?').get(expenseId);
+      if (!expense) return null;
+      if (!['gasto', 'activo', 'reembolso'].includes(expense.type || 'gasto')) return null;
+      if (['borrador', 'rechazado', 'anulado'].includes(expense.status)) return null;
+      // Compatibilidad: no duplicar si ya hay asiento legacy de caja o devengo previo.
+      if (db.prepare("SELECT id FROM accounting_entries WHERE source_module='gasto'     AND source_id=?").get(expenseId)) return null;
+      if (db.prepare("SELECT id FROM accounting_entries WHERE source_module='gasto_dev' AND source_id=?").get(expenseId)) return null;
+
+      const cfg = this.getConfig();
+      const getAccId = (key, fallback) => cfg[key]?.account_id || db.prepare("SELECT id FROM accounting_accounts WHERE code=?").get(fallback)?.id;
+
+      const total = expense.total || 0;
+      if (total <= 0) return null;
+      const tax = expense.tax_amount || 0;
+      const net = round2(total - tax);
+      const expAccId = this._expenseAccountId(expense, getAccId);
+      const vatAccId = getAccId('account_vat_credit', '1106'); // ITBIS Acreditable
+      const apAccId  = getAccId('account_ap',         '2101'); // Cuentas por Pagar
+
+      const lines = [];
+      if (expAccId && net > 0) lines.push({ account_id: expAccId, debit: net, credit: 0, description: expense.description });
+      if (vatAccId && tax > 0) lines.push({ account_id: vatAccId, debit: tax, credit: 0, description: `ITBIS acreditable — ${expense.description}` });
+      if (apAccId)             lines.push({ account_id: apAccId,  debit: 0,   credit: total, description: `Por pagar — ${expense.description}` });
+      if (lines.length < 2) return null;
+
+      return this.createEntry({
+        date:          expense.issue_date || new Date().toISOString().split('T')[0],
+        concept:       `Gasto (devengo): ${expense.description}`,
+        reference:     `GD-${expenseId}`,
+        source_module: 'gasto_dev',
+        source_id:     expenseId,
+        lines, userId, status: 'confirmado',
+      });
+    } catch (e) { console.error('[accounting] generateExpenseAccrualEntry:', e.message); return null; }
+  },
+
+  // ── Pago de gasto: Déb CxP · Créd Caja/Banco. Un asiento por pago (parcial ──
+  // o total). Idempotente por referencia. Solo salda si el gasto fue devengado.
+  generateExpensePaymentEntry({ paymentId, userId } = {}) {
+    try {
+      const modEnabled = db.prepare("SELECT value FROM settings WHERE key='module_contabilidad'").get()?.value;
+      if (modEnabled !== '1') return null;
+      const pay = db.prepare('SELECT * FROM expense_payments WHERE id=?').get(paymentId);
+      if (!pay || pay.status !== 'pagado' || !pay.amount || pay.amount <= 0) return null;
+      const ref = `GP-${paymentId}`;
+      if (db.prepare("SELECT id FROM accounting_entries WHERE source_module='gasto_pago' AND reference=?").get(ref)) return null;
+      // Solo salda CxP si el gasto tiene asiento de devengo (excluye retiro/aporte/traslado y legacy caja).
+      if (!db.prepare("SELECT id FROM accounting_entries WHERE source_module='gasto_dev' AND source_id=? AND status='confirmado'").get(pay.expense_id)) return null;
+
+      const cfg = this.getConfig();
+      const getAccId = (key, fallback) => cfg[key]?.account_id || db.prepare("SELECT id FROM accounting_accounts WHERE code=?").get(fallback)?.id;
+      const apAccId = getAccId('account_ap', '2101');
+      const viaBank = pay.payment_source === 'banco' || ['transferencia', 'tarjeta', 'cheque'].includes(pay.payment_method);
+      const cashAccId = viaBank ? getAccId('account_bank', '1103') : getAccId('account_cash', '1101');
+
+      const lines = [
+        { account_id: apAccId,   debit: pay.amount, credit: 0,          description: `Pago gasto #${pay.expense_id}` },
+        { account_id: cashAccId, debit: 0,          credit: pay.amount, description: `Pago gasto #${pay.expense_id}` },
+      ];
+      return this.createEntry({
+        date:          (pay.created_at || new Date().toISOString()).split('T')[0],
+        concept:       `Pago de gasto #${pay.expense_id}`,
+        reference:     ref,
+        source_module: 'gasto_pago',
+        source_id:     pay.expense_id,
+        lines, userId, status: 'confirmado',
+      });
+    } catch (e) { console.error('[accounting] generateExpensePaymentEntry:', e.message); return null; }
+  },
+
+  // ── Compra recibida (devengado): Déb Inventario + ITBIS Acreditable · Créd ──
+  // CxP. Se llama en cada recepción (parcial/total) con el valor recibido en
+  // ESA recepción. Idempotente por referencia (secuencia de recepción).
+  generatePurchaseEntry({ poId, deltaValue, deltaTax, receiveSeq, userId } = {}) {
+    try {
+      const modEnabled = db.prepare("SELECT value FROM settings WHERE key='module_contabilidad'").get()?.value;
+      if (modEnabled !== '1') return null;
+      const po = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(poId);
+      if (!po) return null;
+      const value = round2(deltaValue || 0);
+      const tax   = round2(deltaTax || 0);
+      if (value <= 0 && tax <= 0) return null;
+      const ref = `C-${poId}-r${receiveSeq || 1}`;
+      if (db.prepare("SELECT id FROM accounting_entries WHERE source_module='compra' AND reference=?").get(ref)) return null;
+
+      const cfg = this.getConfig();
+      const getAccId = (key, fallback) => cfg[key]?.account_id || db.prepare("SELECT id FROM accounting_accounts WHERE code=?").get(fallback)?.id;
+      const invAccId = getAccId('account_inventory',  '1105');
+      const vatAccId = getAccId('account_vat_credit', '1106');
+      const apAccId  = getAccId('account_ap',         '2101');
+
+      const lines = [];
+      if (invAccId && value > 0) lines.push({ account_id: invAccId, debit: value, credit: 0, description: `Compra OC #${poId}` });
+      if (vatAccId && tax > 0)   lines.push({ account_id: vatAccId, debit: tax,   credit: 0, description: `ITBIS compra OC #${poId}` });
+      if (apAccId)               lines.push({ account_id: apAccId,  debit: 0, credit: round2(value + tax), description: `Por pagar OC #${poId} — ${po.supplier_name || ''}` });
+      if (lines.length < 2) return null;
+
+      return this.createEntry({
+        date:          new Date().toISOString().split('T')[0],
+        concept:       `Compra OC #${poId} — ${po.supplier_name || 'Proveedor'}`,
+        reference:     ref,
+        source_module: 'compra',
+        source_id:     poId,
+        lines, userId, status: 'confirmado',
+      });
+    } catch (e) { console.error('[accounting] generatePurchaseEntry:', e.message); return null; }
   },
 
   // ── Dashboard contable ────────────────────

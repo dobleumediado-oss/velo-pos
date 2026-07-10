@@ -35,6 +35,7 @@ async function renderContabilidad(el) {
     { key: 'general',      label: 'Bal. General' },
     { key: 'cxc',          label: 'CxC' },
     { key: 'cxp',          label: 'CxP' },
+    { key: 'periodos',     label: 'Períodos' },
     { key: 'configuracion',label: 'Configuración' },
   ].forEach(t => {
     const btn = h('button', {
@@ -58,6 +59,7 @@ async function renderContabilidad(el) {
     case 'general':       await _contRenderGeneral(body);      break;
     case 'cxc':           await _contRenderCxC(body);          break;
     case 'cxp':           await _contRenderCxP(body);          break;
+    case 'periodos':      await _contRenderPeriodos(body);     break;
     case 'configuracion': await _contRenderConfig(body);       break;
   }
 }
@@ -1111,6 +1113,111 @@ async function _printCxP(payable) {
 }
 
 // ══════════════════════════════════════════════
+// PERÍODOS CONTABLES (cierre / bloqueo)
+// ══════════════════════════════════════════════
+async function _contRenderPeriodos(el) {
+  const res     = await window.api.accounting.getPeriods({ requestUserId: user.id });
+  const periods = res?.data || [];
+  const isSA    = user?.role === 'superadmin';
+
+  const hdr = h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' } },
+    h('div', { style: { fontSize: '13px', fontWeight: '600', color: 'var(--ink)' } }, `Períodos contables (${periods.length})`),
+    h('button', { class: 'btn', onclick: () => _openCerrarPeriodoModal(el) }, '🔒 Cerrar período')
+  );
+  el.appendChild(hdr);
+
+  el.appendChild(h('div', { style: { fontSize: '12px', color: 'var(--muted2)', marginBottom: '14px' } },
+    'Al cerrar un período no se podrán registrar ni modificar asientos con fecha dentro de ese rango. ' +
+    (isSA ? 'Como superadmin puedes reabrirlo con un motivo.' : 'Solo un superadmin puede reabrir un período cerrado.')));
+
+  if (!periods.length) {
+    el.appendChild(h('div', { class: 'empty' },
+      h('p', null, 'No hay períodos cerrados'),
+      h('span', null, 'Cierra un mes cuando termines de conciliarlo')
+    ));
+    return;
+  }
+
+  const tbl = h('table', { class: 'ledger-tbl', style: { width: '100%' } },
+    h('thead', null, h('tr', null,
+      h('th', null, 'Período'),
+      h('th', null, 'Desde'),
+      h('th', null, 'Hasta'),
+      h('th', null, 'Estado'),
+      h('th', null, 'Notas'),
+      h('th', null, '')
+    )),
+    h('tbody', null, ...periods.map(p => {
+      const cerrado = p.status === 'cerrado';
+      return h('tr', null,
+        h('td', null, p.name || '—'),
+        h('td', null, p.date_from),
+        h('td', null, p.date_to),
+        h('td', null, h('span', { class: `entry-status entry-status-${cerrado ? 'anulado' : 'activo'}` }, cerrado ? '🔒 Cerrado' : 'Abierto')),
+        h('td', { style: { fontSize: '11px', color: 'var(--muted2)' } }, p.notes || '—'),
+        h('td', null, (cerrado && isSA)
+          ? h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '3px 8px' },
+              onclick: () => _reabrirPeriodo(p, el) }, 'Reabrir')
+          : h('span', null, ''))
+      );
+    }))
+  );
+  el.appendChild(h('div', { class: 'tw' }, tbl));
+}
+
+function _openCerrarPeriodoModal(el) {
+  // Por defecto: mes anterior completo.
+  const now  = new Date();
+  const y    = now.getFullYear(), m = now.getMonth(); // mes actual 0-based
+  const prev = new Date(y, m - 1, 1);
+  const from = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}-01`;
+  const last = new Date(prev.getFullYear(), prev.getMonth() + 1, 0).getDate();
+  const to   = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}-${String(last).padStart(2, '0')}`;
+  const mesNombre = prev.toLocaleDateString('es-DO', { month: 'long', year: 'numeric' });
+
+  openModal(`
+    <div class="modal-head"><div class="modal-title">Cerrar período contable</div></div>
+    <div class="modal-body">
+      <p style="font-size:12px;color:var(--muted2);margin-bottom:14px">
+        Bloquea el registro y la modificación de asientos con fecha dentro del rango.
+        Ciérralo solo cuando el período esté conciliado.</p>
+      <label class="lbl">Nombre</label>
+      <input class="inp" id="per-name" value="${mesNombre.charAt(0).toUpperCase() + mesNombre.slice(1)}">
+      <div style="display:flex;gap:10px;margin-top:10px">
+        <div style="flex:1"><label class="lbl">Desde</label><input class="inp" type="date" id="per-from" value="${from}"></div>
+        <div style="flex:1"><label class="lbl">Hasta</label><input class="inp" type="date" id="per-to" value="${to}"></div>
+      </div>
+      <label class="lbl" style="margin-top:10px">Notas (opcional)</label>
+      <input class="inp" id="per-notes" placeholder="Ej. Conciliado con bancos">
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn" id="per-save">🔒 Cerrar período</button>
+    </div>
+  `);
+  document.getElementById('per-save').onclick = async () => {
+    const name     = document.getElementById('per-name').value.trim();
+    const dateFrom = document.getElementById('per-from').value;
+    const dateTo   = document.getElementById('per-to').value;
+    const notes    = document.getElementById('per-notes').value.trim();
+    if (!name || !dateFrom || !dateTo) { toast('Completa nombre y fechas', 'e'); return; }
+    if (dateFrom > dateTo) { toast('La fecha "desde" no puede ser mayor que "hasta"', 'e'); return; }
+    const r = await window.api.accounting.closePeriod({ name, dateFrom, dateTo, notes, requestUserId: user.id });
+    if (r?.ok) { toast('Período cerrado', 's'); closeModal(); _contRenderPeriodos((el.innerHTML = '', el)); }
+    else toast(r?.error || 'Error', 'e');
+  };
+}
+
+async function _reabrirPeriodo(p, el) {
+  const reason = prompt(`Reabrir "${p.name}" (${p.date_from} a ${p.date_to}).\nMotivo (obligatorio):`);
+  if (reason === null) return;
+  if (!reason.trim()) { toast('El motivo es obligatorio', 'e'); return; }
+  const r = await window.api.accounting.reopenPeriod({ id: p.id, reason, requestUserId: user.id });
+  if (r?.ok) { toast('Período reabierto', 's'); _contRenderPeriodos((el.innerHTML = '', el)); }
+  else toast(r?.error || 'Error', 'e');
+}
+
+// ══════════════════════════════════════════════
 // CONFIGURACIÓN CONTABLE
 // ══════════════════════════════════════════════
 async function _contRenderConfig(el) {
@@ -1131,7 +1238,8 @@ async function _contRenderConfig(el) {
     { key: 'account_inventory',  label: 'Inventario' },
     { key: 'account_revenue',    label: 'Ingresos por Ventas' },
     { key: 'account_cogs',       label: 'Costo de Mercancía Vendida' },
-    { key: 'account_tax_payable',label: 'ITBIS por Pagar' },
+    { key: 'account_tax_payable',label: 'ITBIS por Pagar (ventas)' },
+    { key: 'account_vat_credit', label: 'ITBIS Acreditable (compras)' },
     { key: 'account_expense',    label: 'Cuenta Gastos General' },
     { key: 'account_discount',   label: 'Descuentos en Ventas' },
   ];
@@ -1172,7 +1280,7 @@ async function _contRenderConfig(el) {
 
 async function _saveContConfig() {
   const keys = ['account_cash','account_bank','account_ar','account_ap','account_inventory',
-    'account_revenue','account_cogs','account_tax_payable','account_expense','account_discount'];
+    'account_revenue','account_cogs','account_tax_payable','account_vat_credit','account_expense','account_discount'];
 
   let ok = true;
   for (const key of keys) {
