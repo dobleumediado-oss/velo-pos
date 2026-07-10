@@ -81,8 +81,35 @@ Caja operativa = cuenta contable caja      ⛔ pendiente (sesiones de caja — F
   respetando bloqueo de período, dispose con pérdida a 6120); handlers `assets:*`; pestaña
   "Activos" (registro, resumen, depreciar mes, baja). *Pendiente:* presupuestos↔contabilidad
   (real vs presupuesto), métodos de depreciación acelerada.
-- **F8 — Precisión decimal (G6)** (migración a enteros de centavos o decimal seguro) +
-  índices/tablas de resumen (rendimiento) + suite E2E + documentación fiscal.
+- **F8 — Precisión decimal (G6) — NO INICIADA (proyecto aparte):** migración de ~48 columnas
+  `REAL`/float de dinero a enteros de centavos + reescritura de la aritmética monetaria +
+  índices/rendimiento + E2E. **Única fase NO aditiva (toca datos existentes)** → alto riesgo en
+  producción; requiere respaldo, rama dedicada y QA. Mitigado hoy por redondeo. Se recomienda
+  tratarla fuera de este hilo de fases.
 
 **Regla:** no avanzar de fase con errores críticos abiertos. Cada fase: inspeccionar →
 implementar aditivo → migración idempotente → pruebas (incl. integridad) → commit.
+
+## Cierre — resumen de entrega (parada en F7)
+
+**7 fases cerradas y commiteadas en `main` (sin tag/release, pendientes de QA visual).**
+
+| Fase | Commit | Entregable |
+|---|---|---|
+| F1 | `732b39b` | Auditoría + 4 correcciones críticas (sync no-op, descuadre por anulación, abonos muertos, `datetime('now')`) |
+| F2 | `54f2059` | Roles en handlers contables/bancos (G2) + cierre/bloqueo de período (G4) |
+| F3 | `f9f748b` | Devengado: gastos y compras → CxP contable + ITBIS acreditable (G1, G7) |
+| F4 | `b609033` | Cuadres auxiliar↔mayor con alerta + reporte 606 (G5) |
+| F5 | `5453e47` | Conciliación bancaria: import CSV, auto/manual match (G8) |
+| F6 | `97b02eb` | Estado de flujo de efectivo (centros de costo diferidos con justificación) |
+| F7 | `fcbc68f` | Activos fijos + depreciación lineal (7.14, G9 parcial) |
+
+**Gaps cerrados:** G1, G2, G4, G5, G7, G8, G9(parcial). **Verificaciones de integridad**
+(§14/§19): CxC/Inventario/CxP automatizadas (falta caja↔1101).
+**Diferido con justificación:** G3/G10 (centros de costo/sucursal — sin dato operativo).
+**Pendiente mayor:** G6 (F8, precisión decimal — proyecto aparte).
+
+**Método por fase:** repo real (better-sqlite3, BD sembrada) + contrato IPC 3 capas +
+`node --check` + boot. **Pendiente antes de release:** QA visual en GUI de las pestañas nuevas
+(Períodos, Cuadres, 606, Flujo Efectivo, Activos) y del flujo devengado de gastos/compras y la
+conciliación bancaria. ⚠️ `git tag v*` = despliegue en vivo a clientes (ver docs/release-process.md).
