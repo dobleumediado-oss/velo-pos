@@ -104,9 +104,12 @@ async function loadAppData() {
     // ── OPTIMIZACIÓN: Carga en 2 fases ────────────────────────────
     // Fase 1: crítico — lo que el usuario ve primero (productos + settings)
     // Fase 2: secundario — en background sin bloquear la UI
+    // Resiliencia multi-terminal: en modo cliente estas llamadas se reenvían al
+    // servidor; con .catch evitamos que un fallo de red rompa el arranque (el
+    // preflight ya bloquea el caso servidor-caído, esto es defensa en profundidad).
     const [products, settings] = await Promise.all([
-      window.api.products.getAll(),
-      window.api.settings.getAll(),
+      window.api.products.getAll().catch(() => null),
+      window.api.settings.getAll().catch(() => null),
     ]);
 
     DB.products = products || [];

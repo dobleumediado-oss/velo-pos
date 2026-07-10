@@ -18,6 +18,7 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
     // normales se reenvían al servidor DENTRO del handler, con el error capturado).
     'auth:login',
     'connection:getInfo', 'connection:generateKey', 'connection:test', 'connection:setAllowedTerminal',
+    'connection:clientPreflight', 'connection:setMode',
     'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke', 'license:generate',
     'update:check', 'update:download', 'update:install',
     'settings:set', 'settings:getAll',
@@ -756,6 +757,32 @@ ipcMain.handle('connection:test', async (_, { requestUserId, host, port } = {}) 
       timeoutMs: 5000,
     });
     return { ok: true, reachable: !!r.ok, ms: r.ms ?? null, error: r.error || null };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// Preflight al arrancar (SIN auth, se llama antes del login). En modo cliente
+// comprueba si el servidor responde; el renderer muestra pantalla de recuperación
+// en vez de intentar cargar datos (que colgaría la app). No expone la llave.
+ipcMain.handle('connection:clientPreflight', async () => {
+  try {
+    const mode = settingsRepo.get('connection_mode') || 'local';
+    if (mode !== 'client') return { ok: true, mode, reachable: true };
+    const host = settingsRepo.get('connection_server_ip') || '';
+    const port = Number(settingsRepo.get('connection_server_port')) || 8443;
+    if (!host) return { ok: true, mode, reachable: false, host: '', port, reason: 'sin IP configurada' };
+    const { healthCheck } = require('./src/main/net-client');
+    const r = await healthCheck({ host, port, timeoutMs: 4000 });
+    return { ok: true, mode, reachable: !!r.ok, host, port, ms: r.ms ?? null };
+  } catch (e) { return { ok: true, mode: 'client', reachable: false, error: e.message }; }
+});
+
+// Cambia el modo de conexión (usado por la pantalla de recuperación offline para
+// volver a 'local' sin login). connection_mode es device-setting → se guarda local.
+ipcMain.handle('connection:setMode', async (_, { mode } = {}) => {
+  try {
+    if (!['local', 'server', 'client'].includes(mode)) return { ok: false, error: 'Modo inválido' };
+    settingsRepo.set('connection_mode', mode);
+    return { ok: true, mode };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 

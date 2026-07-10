@@ -52,6 +52,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     window._appVersion = vr?.ok ? vr.data?.appVersion : '1.4.1';
   } catch { window._appVersion = '1.5.5'; }
 
+  // ── Multi-terminal: preflight de servidor en modo CLIENTE ──────────────────
+  // Si estamos en modo cliente y el servidor NO responde, mostrar la pantalla de
+  // recuperación en vez de intentar cargar datos (cada llamada se reenvía al
+  // servidor y colgaría/rompería la app). En modo local esto no hace nada.
+  try {
+    const pf = await window.api.connection?.clientPreflight?.();
+    if (pf && pf.mode === 'client' && !pf.reachable) {
+      renderClientOffline(pf);
+      return;
+    }
+  } catch (e) { /* si el preflight falla, seguir normal (nunca bloquear modo local) */ }
+
   // Cargar todos los datos vía IPC
   await loadAppData();
 
@@ -225,6 +237,54 @@ function renderBusinessSelector(businesses) {
   }
   tickBiz();
   window._bizClock = setInterval(tickBiz, 1000);
+}
+
+// ── Pantalla de recuperación: modo cliente sin servidor ──────────────────────
+// Se muestra al arrancar si connection_mode='client' y el servidor no responde.
+// Evita el cuelgue/brick: no se intenta cargar datos; se ofrece reintentar o
+// volver a modo local (sin necesidad de login ni herramientas externas).
+function renderClientOffline(pf) {
+  const root = document.getElementById('root');
+  root.innerHTML = '';
+  root.style.cssText = 'width:100%;height:100%;display:flex;';
+  const dest = `${(pf && pf.host) || 'servidor'}${pf && pf.port ? ':' + pf.port : ''}`;
+
+  const card = h('div', { style: { maxWidth: '460px', margin: 'auto', textAlign: 'center', padding: '32px',
+    background: 'var(--surface, #fff)', border: '1px solid var(--line2, #e5e7eb)', borderRadius: '16px' } },
+    h('div', { style: { fontSize: '40px', marginBottom: '10px' } }, '📡'),
+    h('div', { style: { fontSize: '17px', fontWeight: '700', marginBottom: '8px' } }, 'No se pudo conectar al servidor'),
+    h('div', { style: { fontSize: '13px', color: 'var(--muted2, #6b7280)', marginBottom: '4px' } },
+      `Esta PC está en modo Cliente y no logró comunicarse con ${dest}.`),
+    h('div', { style: { fontSize: '12px', color: 'var(--muted2, #6b7280)', marginBottom: '20px' } },
+      'Verifica que la PC servidor esté encendida, con Velo POS abierto en modo Servidor y el puerto permitido en el firewall.'),
+    h('div', { id: 'co-msg', style: { fontSize: '12px', minHeight: '16px', marginBottom: '12px', color: 'var(--muted2,#6b7280)' } }, ''),
+    h('div', { style: { display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' } },
+      h('button', { class: 'btn', id: 'co-retry' }, '🔄 Reintentar'),
+      h('button', { class: 'btn-ghost', id: 'co-local' }, '🏠 Volver a modo local')
+    ),
+    h('div', { style: { fontSize: '11px', color: 'var(--muted2,#9ca3af)', marginTop: '16px' } },
+      'En modo local esta PC funciona de forma independiente con sus propios datos.')
+  );
+  root.appendChild(h('div', { style: { width: '100%', height: '100%', display: 'flex' } }, card));
+
+  document.getElementById('co-retry').onclick = async () => {
+    const msg = document.getElementById('co-msg');
+    msg.textContent = 'Reintentando…';
+    try {
+      const r = await window.api.connection.clientPreflight();
+      if (r && r.reachable) { location.reload(); return; }
+      msg.textContent = 'El servidor sigue sin responder. Revisa la conexión e intenta de nuevo.';
+    } catch { msg.textContent = 'El servidor sigue sin responder.'; }
+  };
+  document.getElementById('co-local').onclick = async () => {
+    const msg = document.getElementById('co-msg');
+    msg.textContent = 'Cambiando a modo local…';
+    try {
+      const r = await window.api.connection.setMode({ mode: 'local' });
+      if (r && r.ok) { location.reload(); return; }
+      msg.textContent = (r && r.error) || 'No se pudo cambiar el modo.';
+    } catch (e) { msg.textContent = e.message || 'Error al cambiar el modo.'; }
+  };
 }
 
 function renderLogin() {

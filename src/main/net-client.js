@@ -13,7 +13,7 @@ const conn = require('./connection');
 // Llama a un canal en el servidor. Resuelve SIEMPRE (no rechaza) con:
 //   { ok:true, data } | { ok:false, error, offline? }
 // offline:true → no se pudo llegar al servidor (red/timeout) → la UI debe avisar.
-function rpcCall({ host, port, accessKey, terminalId, channel, args, timeoutMs = 15000 }) {
+function rpcCall({ host, port, accessKey, terminalId, channel, args, timeoutMs = 8000 }) {
   return new Promise((resolve) => {
     let payload;
     try { payload = Buffer.from(JSON.stringify(conn.makeRequest(channel, args, { accessKey, terminalId }))); }

@@ -143,6 +143,8 @@ contextBridge.exposeInMainWorld('api', {
     generateKey:        (data) => ipcRenderer.invoke('connection:generateKey', data),
     test:               (data) => ipcRenderer.invoke('connection:test', data),
     setAllowedTerminal: (data) => ipcRenderer.invoke('connection:setAllowedTerminal', data),
+    clientPreflight:    ()     => ipcRenderer.invoke('connection:clientPreflight'),
+    setMode:            (data) => ipcRenderer.invoke('connection:setMode', data),
   },
 
   // ── Categorías ────────────────────────────────
