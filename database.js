@@ -2475,7 +2475,7 @@ const expensesRepo = {
       // Actualizar gasto
       const newPaid = expense.paid_amount + amount;
       const newStatus = newPaid >= expense.total - 0.01 ? 'pagado' : 'parcialmente_pagado';
-      db.prepare('UPDATE expenses SET paid_amount=?,status=?,updated_at=datetime("now"),cash_session_id=?,cash_movement_id=? WHERE id=?')
+      db.prepare("UPDATE expenses SET paid_amount=?,status=?,updated_at=datetime('now'),cash_session_id=?,cash_movement_id=? WHERE id=?")
         .run(newPaid, newStatus, cash_session_id||expense.cash_session_id, cashMovementId||expense.cash_movement_id, expenseId);
 
       audit(userId, userName||'', 'gasto_pagado', 'expenses', expenseId,
@@ -2489,7 +2489,7 @@ const expensesRepo = {
     const e = db.prepare('SELECT * FROM expenses WHERE id=?').get(expenseId);
     if (!e) throw new Error('Gasto no encontrado');
     if (!['pendiente_aprobacion','borrador'].includes(e.status)) throw new Error('El gasto no está pendiente de aprobación');
-    db.prepare('UPDATE expenses SET status=?,approved_by=?,approved_at=datetime("now"),updated_at=datetime("now") WHERE id=?')
+    db.prepare("UPDATE expenses SET status=?,approved_by=?,approved_at=datetime('now'),updated_at=datetime('now') WHERE id=?")
       .run('aprobado', userId, expenseId);
     audit(userId, userName, 'gasto_aprobado', 'expenses', expenseId, '');
     return { ok: true };
@@ -2497,7 +2497,7 @@ const expensesRepo = {
 
   // ── Rechazar gasto ───────────────────────
   reject(expenseId, userId, userName, reason) {
-    db.prepare('UPDATE expenses SET status=?,cancel_reason=?,cancelled_by=?,cancelled_at=datetime("now"),updated_at=datetime("now") WHERE id=?')
+    db.prepare("UPDATE expenses SET status=?,cancel_reason=?,cancelled_by=?,cancelled_at=datetime('now'),updated_at=datetime('now') WHERE id=?")
       .run('rechazado', reason, userId, expenseId);
     audit(userId, userName, 'gasto_rechazado', 'expenses', expenseId, reason);
     return { ok: true };
@@ -2524,7 +2524,7 @@ const expensesRepo = {
       // Anular pagos activos
       db.prepare("UPDATE expense_payments SET status='anulado',cancel_reason=?,cancelled_by=? WHERE expense_id=? AND status='pagado'")
         .run(reason, userId, expenseId);
-      db.prepare('UPDATE expenses SET status=?,cancel_reason=?,cancelled_by=?,cancelled_at=datetime("now"),updated_at=datetime("now") WHERE id=?')
+      db.prepare("UPDATE expenses SET status=?,cancel_reason=?,cancelled_by=?,cancelled_at=datetime('now'),updated_at=datetime('now') WHERE id=?")
         .run('anulado', reason, userId, expenseId);
       audit(userId, userName, 'gasto_anulado', 'expenses', expenseId, reason);
       return { ok: true };
