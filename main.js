@@ -713,6 +713,14 @@ ipcMain.handle('customers:update', async (_, { id, data, requestUserId }) => {
   }
 });
 
+// ── Contabilidad en vivo ──────────────────────────────────────────────────
+// Ejecuta un hook contable DESPUÉS de que la operación commiteó (better-sqlite3
+// no permite transacciones anidadas) y NUNCA rompe la operación si falla. Las
+// funciones generate*/reverse* ya se auto-guardan por módulo e idempotencia.
+function _acctHook(fn) {
+  try { fn(); } catch (e) { try { logError('accounting', 'hook falló', { error: e.message }); } catch {} }
+}
+
 ipcMain.handle('customers:addPayment', async (_, { data, requestUserId }) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
@@ -731,6 +739,8 @@ ipcMain.handle('customers:addPayment', async (_, { data, requestUserId }) => {
     });
     audit(requestUserId, reqUser?.name || '', 'abono_registrado', 'customers',
           data.customerId, `Monto: ${data.amount}`);
+    // Contabilidad en vivo: Débito Caja/Banco · Crédito Cuentas por Cobrar.
+    _acctHook(() => accountingRepo.generatePaymentEntry({ paymentId: result.paymentId, userId: requestUserId }));
     return { ok: true, ...result };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -886,6 +896,9 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
     }
 
     const result = salesRepo.create({ ...saleData, user: reqUser });
+    // Contabilidad en vivo: asiento de venta (Débito Caja/Banco/CxC · Crédito
+    // Ingresos + ITBIS · Costo/Inventario). Se auto-guarda por tipo/idempotencia.
+    _acctHook(() => accountingRepo.generateSaleEntry({ saleId: result.saleId, userId: requestUserId }));
     return { ok: true, ...result };
   } catch (e) {
     console.error('[sales:create]', e);
@@ -932,6 +945,8 @@ ipcMain.handle('sales:cancel', async (_, { id, reason, requestUserId }) => {
       return { ok: false, error: 'Solo el administrador puede anular ventas' };
     }
     const cancelResult = salesRepo.cancel(id, reason, requestUserId, reqUser.name);
+    // Contabilidad en vivo: reversar el asiento de la venta anulada.
+    _acctHook(() => accountingRepo.reverseSourceEntry('venta', id, requestUserId, 'Venta anulada: ' + (reason || '')));
     return { ok: true, overpayment: cancelResult?.overpayment || 0 };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -956,6 +971,8 @@ ipcMain.handle('sales:return', async (_, { originalSaleId, items, reason, reques
       reason,
     });
 
+    // Contabilidad en vivo: asiento de devolución (nota de crédito).
+    _acctHook(() => accountingRepo.generateReturnEntry({ returnSaleId: result.returnId, userId: requestUserId }));
     return { ok: true, ...result };
   } catch (e) {
     console.error('[sales:return]', e);
@@ -3440,6 +3457,9 @@ ipcMain.handle('expenses:create', async (_, { data, requestUserId }) => {
       }
     }
 
+    // Contabilidad en vivo: si quedó pagado, Débito Gasto · Crédito Caja/Banco.
+    // Se auto-guarda (solo genera si status='pagado').
+    _acctHook(() => accountingRepo.generateExpenseEntry({ expenseId: id, userId: requestUserId }));
     return { ok:true, id, status };
   } catch(e) { return { ok:false, error:e.message }; }
 });
@@ -3459,6 +3479,8 @@ ipcMain.handle('expenses:pay', async (_, { expenseId, amount, payment_method, pa
     }
     const result = expensesRepo.pay({ expenseId, amount, payment_method, payment_source,
       cash_session_id, reference, notes, userId: requestUserId, userName: u.name });
+    // Contabilidad en vivo: al quedar pagado, Débito Gasto · Crédito Caja/Banco.
+    _acctHook(() => accountingRepo.generateExpenseEntry({ expenseId, userId: requestUserId }));
     return result;
   } catch(e) { return { ok:false, error:e.message }; }
 });
@@ -3485,7 +3507,10 @@ ipcMain.handle('expenses:cancel', async (_, { expenseId, reason, requestUserId }
     const u = authRepo.findById(requestUserId);
     if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Solo el administrador puede anular gastos' };
     if (!reason?.trim()) return { ok:false, error:'El motivo de anulación es obligatorio' };
-    return expensesRepo.cancel(expenseId, requestUserId, u.name, reason);
+    const r = expensesRepo.cancel(expenseId, requestUserId, u.name, reason);
+    // Contabilidad en vivo: reversar el asiento del gasto anulado.
+    _acctHook(() => accountingRepo.reverseSourceEntry('gasto', expenseId, requestUserId, 'Gasto anulado: ' + (reason || '')));
+    return r;
   } catch(e) { return { ok:false, error:e.message }; }
 });
 
@@ -4590,8 +4615,9 @@ ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) =>
     let created = 0, failed = 0;
     for (const sale of sales) {
       try {
-        accountingRepo.generateSaleEntry(sale.id);
-        created++;
+        // BUGFIX: antes se pasaba sale.id (número) a un método que espera { saleId }
+        // → saleId=undefined → el sync NUNCA generaba asientos (no-op silencioso).
+        if (accountingRepo.generateSaleEntry({ saleId: sale.id, userId: requestUserId })) created++;
       } catch (e) { failed++; console.error(`[accounting:syncHistorical] venta ${sale.id}: ${e.message}`); }
     }
 
@@ -4608,9 +4634,22 @@ ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) =>
 
     for (const exp of expenses) {
       try {
-        accountingRepo.generateExpenseEntry(exp.id);
-        created++;
+        if (accountingRepo.generateExpenseEntry({ expenseId: exp.id, userId: requestUserId })) created++;
       } catch (e) { failed++; console.error(`[accounting:syncHistorical] gasto ${exp.id}: ${e.message}`); }
+    }
+
+    // Abonos (pagos de clientes) no vinculados → Débito Caja/Banco · Crédito CxC.
+    // generatePaymentEntry ignora monto 0 y el marcador "Saldo inicial importado".
+    const payments = db.prepare(`
+      SELECT p.id FROM payments p
+      WHERE p.amount > 0 AND (p.note IS NULL OR p.note != 'Saldo inicial importado')
+      AND NOT EXISTS (SELECT 1 FROM accounting_entries ae WHERE ae.source_module='abono' AND ae.source_id=p.id)
+      ORDER BY p.created_at ASC LIMIT 500
+    `).all();
+    for (const pay of payments) {
+      try {
+        if (accountingRepo.generatePaymentEntry({ paymentId: pay.id, userId: requestUserId })) created++;
+      } catch (e) { failed++; console.error(`[accounting:syncHistorical] abono ${pay.id}: ${e.message}`); }
     }
 
     // Reconciliar anulaciones: reversar asientos cuyo origen (venta/gasto) fue

@@ -3202,6 +3202,10 @@ const accountingRepo = {
 
       const sale  = db.prepare('SELECT * FROM sales WHERE id=?').get(saleId);
       if (!sale) return null;
+      // Solo ventas reales generan ingreso: excluir cotizaciones (no son venta),
+      // devoluciones (van por generateReturnEntry) y ventas anuladas.
+      if (['cotizacion', 'devolucion'].includes(sale.type)) return null;
+      if (sale.status === 'cancelled') return null;
       if (db.prepare("SELECT id FROM accounting_entries WHERE source_module='venta' AND source_id=?").get(saleId)) return null;
 
       const cfg = this.getConfig();
@@ -3320,6 +3324,10 @@ const accountingRepo = {
 
       const payment = db.prepare('SELECT * FROM payments WHERE id=?').get(paymentId);
       if (!payment) return null;
+      // Solo abonos REALES reducen la CxC: ignorar monto 0 y el marcador contable
+      // "Saldo inicial importado" (no es un cobro, es el saldo de apertura de la deuda).
+      if (!payment.amount || payment.amount <= 0) return null;
+      if (payment.note === 'Saldo inicial importado') return null;
       if (db.prepare("SELECT id FROM accounting_entries WHERE source_module='abono' AND source_id=?").get(paymentId)) return null;
 
       const cfg = this.getConfig();
@@ -3347,6 +3355,83 @@ const accountingRepo = {
       });
     } catch(e) {
       console.error('[accounting] Error generando asiento de abono:', e.message);
+      return null;
+    }
+  },
+
+  // ── Reversar el asiento de un origen (venta/gasto anulado) ────────────────
+  // En vivo al anular. Idempotente (si no hay asiento confirmado, no hace nada).
+  // No lanza → nunca rompe la operación que lo dispara.
+  reverseSourceEntry(sourceModule, sourceId, userId, reason) {
+    try {
+      const modEnabled = db.prepare("SELECT value FROM settings WHERE key='module_contabilidad'").get()?.value;
+      if (modEnabled !== '1') return null;
+      const entry = db.prepare(
+        "SELECT id FROM accounting_entries WHERE source_module=? AND source_id=? AND status='confirmado'"
+      ).get(sourceModule, sourceId);
+      if (!entry) return null;
+      return this.reverseEntry(entry.id, userId || null, reason || 'Origen anulado');
+    } catch (e) {
+      console.error('[accounting] reverseSourceEntry:', e.message);
+      return null;
+    }
+  },
+
+  // ── Asiento de devolución (nota de crédito) ───────────────────────────────
+  // Inverso de la venta: débito Ingresos + ITBIS, crédito Caja/Banco/CxC; y
+  // reingresa inventario a costo. Usa los montos de la venta de devolución.
+  generateReturnEntry({ returnSaleId, userId } = {}) {
+    try {
+      const modEnabled = db.prepare("SELECT value FROM settings WHERE key='module_contabilidad'").get()?.value;
+      if (modEnabled !== '1') return null;
+      const ret = db.prepare('SELECT * FROM sales WHERE id=?').get(returnSaleId);
+      if (!ret || ret.type !== 'devolucion') return null;
+      if (db.prepare("SELECT id FROM accounting_entries WHERE source_module='devolucion' AND source_id=?").get(returnSaleId)) return null;
+
+      const cfg = this.getConfig();
+      const getAccId = (key, fallback) => cfg[key]?.account_id || db.prepare("SELECT id FROM accounting_accounts WHERE code=?").get(fallback)?.id;
+      const cashAccId = getAccId('account_cash','1101');
+      const bankAccId = getAccId('account_bank','1103');
+      const arAccId   = getAccId('account_ar','1104');
+      const revAccId  = getAccId('account_revenue','4101');
+      const taxAccId  = getAccId('account_tax_payable','2102');
+      const cogsAccId = getAccId('account_cogs','5101');
+      const invAccId  = getAccId('account_inventory','1105');
+
+      const total = Math.abs(ret.total || 0);
+      const tax   = Math.abs(ret.tax_amt || 0);
+      const net   = total - tax;
+      const method = ret.payment_method || 'efectivo';
+      let creditAccId = cashAccId;
+      if (method === 'transferencia' || method === 'tarjeta') creditAccId = bankAccId;
+      else if (method === 'credito') creditAccId = arAccId;
+      const ref = ret.original_sale_id || returnSaleId;
+
+      const lines = [];
+      if (revAccId && net > 0) lines.push({ account_id: revAccId, debit: net,   credit: 0, description: `Devolución venta #${ref}` });
+      if (taxAccId && tax > 0) lines.push({ account_id: taxAccId, debit: tax,   credit: 0, description: `ITBIS devolución #${ref}` });
+      if (creditAccId)         lines.push({ account_id: creditAccId, debit: 0, credit: total, description: `Devolución venta #${ref}` });
+
+      const items = db.prepare('SELECT * FROM sale_items WHERE sale_id=?').all(returnSaleId);
+      const cost = items.reduce((s,i)=> s + (Math.abs(i.unit_cost||0) * Math.abs(i.qty||1)), 0);
+      if (cogsAccId && invAccId && cost > 0) {
+        lines.push({ account_id: invAccId,  debit: cost, credit: 0, description: `Inventario devolución #${ref}` });
+        lines.push({ account_id: cogsAccId, debit: 0, credit: cost, description: `Costo devolución #${ref}` });
+      }
+      if (lines.length < 2) return null;
+
+      return this.createEntry({
+        date:          (ret.created_at || new Date().toISOString()).split('T')[0],
+        concept:       `Devolución venta #${ref} — ${ret.customer_name||'Consumidor Final'}`,
+        reference:     `DV-${returnSaleId}`,
+        source_module: 'devolucion',
+        source_id:     returnSaleId,
+        lines,
+        userId,
+        status:        'confirmado',
+      });
+    } catch (e) {
+      console.error('[accounting] generateReturnEntry:', e.message);
       return null;
     }
   },
