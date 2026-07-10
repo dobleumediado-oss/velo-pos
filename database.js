@@ -2980,6 +2980,33 @@ const accountingRepo = {
         updated_at=excluded.updated_at`).run(key, accountId||null, description||'');
   },
 
+  // ── Períodos contables (cierre / bloqueo) ─────────────────────────────────
+  // Un período 'cerrado' bloquea el posteo de asientos con fecha dentro del rango.
+  getPeriods() {
+    return db.prepare("SELECT * FROM accounting_periods ORDER BY date_from DESC").all();
+  },
+  isDateLocked(date) {
+    if (!date) return false;
+    const d = String(date).slice(0, 10);
+    return !!db.prepare(
+      "SELECT id FROM accounting_periods WHERE status='cerrado' AND date_from<=? AND date_to>=? LIMIT 1"
+    ).get(d, d);
+  },
+  closePeriod({ name, dateFrom, dateTo, notes, userId }) {
+    const r = db.prepare(
+      "INSERT INTO accounting_periods(name,date_from,date_to,status,notes) VALUES(?,?,?,'cerrado',?)"
+    ).run(name, dateFrom, dateTo, notes || '');
+    audit(userId, '', 'periodo_cerrado', 'accounting_periods', r.lastInsertRowid, `${dateFrom}..${dateTo}`);
+    return { ok: true, id: r.lastInsertRowid };
+  },
+  reopenPeriod(id, userId, reason) {
+    const p = db.prepare("SELECT * FROM accounting_periods WHERE id=?").get(id);
+    if (!p) throw new Error('Período no encontrado');
+    db.prepare("UPDATE accounting_periods SET status='abierto' WHERE id=?").run(id);
+    audit(userId, '', 'periodo_reabierto', 'accounting_periods', id, reason || '');
+    return { ok: true };
+  },
+
   // ── Asientos contables ───────────────────
   _nextNumber() {
     const last = db.prepare("SELECT number FROM accounting_entries ORDER BY id DESC LIMIT 1").get();
@@ -2995,6 +3022,11 @@ const accountingRepo = {
       const totalCredit = lines.reduce((s, l) => s + (parseFloat(l.credit) || 0), 0);
       if (Math.abs(totalDebit - totalCredit) > 0.01) {
         throw new Error(`Asiento descuadrado: Débito=${totalDebit.toFixed(2)} ≠ Crédito=${totalCredit.toFixed(2)}`);
+      }
+      // Bloqueo de período: no se postea en un período contable cerrado.
+      const entryDate = date || new Date().toISOString().split('T')[0];
+      if (this.isDateLocked(entryDate)) {
+        throw new Error(`El período contable de ${entryDate} está cerrado — no se pueden postear asientos en esa fecha.`);
       }
       const number = this._nextNumber();
       const entryStatus = status || 'confirmado';

@@ -333,6 +333,9 @@ contextBridge.exposeInMainWorld('api', {
     getBalanceSheet:    (d) => ipcRenderer.invoke('accounting:getBalanceSheet',    d),
     getDashboardStats:  ()  => ipcRenderer.invoke('accounting:getDashboardStats'),
     syncHistorical:     (d) => ipcRenderer.invoke('accounting:syncHistorical',     d),
+    getPeriods:         (d) => ipcRenderer.invoke('accounting:getPeriods',         d),
+    closePeriod:        (d) => ipcRenderer.invoke('accounting:closePeriod',        d),
+    reopenPeriod:       (d) => ipcRenderer.invoke('accounting:reopenPeriod',       d),
   },
 
   log: {

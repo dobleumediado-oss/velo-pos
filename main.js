@@ -4319,6 +4319,16 @@ ipcMain.handle('shell:openExternal', async (_, { url }) => {
 // ══════════════════════════════════════════════
 // IPC — CUENTAS FINANCIERAS (BANCOS)
 // ══════════════════════════════════════════════
+// Gobierno contable (Fase 2): las mutaciones de contabilidad/bancos solo las hacen
+// admin/superadmin. El módulo ya está oculto para cajeros en la UI; esto es defensa
+// en profundidad en el backend. NOTA: los asientos AUTOMÁTICOS (venta/abono/gasto)
+// pasan por accountingRepo.* directamente (hooks), no por estos handlers, así que
+// no se ven afectados por esta guarda.
+function _requireAccountingRole(requestUserId) {
+  const u = requestUserId ? authRepo.findById(requestUserId) : null;
+  return (u && u.active && ['admin', 'superadmin'].includes(u.role)) ? u : null;
+}
+const _NO_ACCT_ROLE = { ok: false, error: 'Solo administradores pueden modificar contabilidad y bancos' };
 
 ipcMain.handle('financial:getAll', async () => {
   try {
@@ -4334,6 +4344,7 @@ ipcMain.handle('financial:getById', async (_, { id }) => {
 
 ipcMain.handle('financial:create', async (_, { data, requestUserId }) => {
   try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
     const id = financialAccountsRepo.create({ ...data, userId: requestUserId });
     audit.log(requestUserId, 'financial_account_create', `Cuenta creada: ${data.name}`);
     return { ok: true, data: { id } };
@@ -4342,6 +4353,7 @@ ipcMain.handle('financial:create', async (_, { data, requestUserId }) => {
 
 ipcMain.handle('financial:update', async (_, { id, data, requestUserId }) => {
   try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
     financialAccountsRepo.update(id, data);
     audit.log(requestUserId, 'financial_account_update', `Cuenta actualizada: ${id}`);
     return { ok: true };
@@ -4350,6 +4362,7 @@ ipcMain.handle('financial:update', async (_, { id, data, requestUserId }) => {
 
 ipcMain.handle('financial:toggleActive', async (_, { id, active, requestUserId }) => {
   try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
     financialAccountsRepo.toggleActive(id, active);
     audit.log(requestUserId, 'financial_account_toggle', `Cuenta ${active ? 'activada' : 'desactivada'}: ${id}`);
     return { ok: true };
@@ -4365,6 +4378,7 @@ ipcMain.handle('financial:getMovements', async (_, { accountId, from, to, limit 
 
 ipcMain.handle('financial:addMovement', async (_, { data, requestUserId }) => {
   try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
     // Map UI-friendly type names to DB enum values
     const typeMap = { ingreso: 'deposito', egreso: 'retiro' };
     const mov = financialAccountsRepo.addMovement({
@@ -4386,6 +4400,7 @@ ipcMain.handle('financial:addMovement', async (_, { data, requestUserId }) => {
 
 ipcMain.handle('financial:transfer', async (_, { data, requestUserId }) => {
   try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
     const result = financialAccountsRepo.transfer({
       fromId:      data.from_account_id,
       toId:        data.to_account_id,
@@ -4401,6 +4416,7 @@ ipcMain.handle('financial:transfer', async (_, { data, requestUserId }) => {
 
 ipcMain.handle('financial:cancelMovement', async (_, { id, reason, requestUserId }) => {
   try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
     financialAccountsRepo.cancelMovement(id, requestUserId, reason);
     audit.log(requestUserId, 'financial_movement_cancel', `Movimiento anulado: ${id}. Razón: ${reason}`);
     return { ok: true };
@@ -4443,6 +4459,7 @@ ipcMain.handle('accounting:getAccountByCode', async (_, { code }) => {
 
 ipcMain.handle('accounting:createAccount', async (_, { data, requestUserId }) => {
   try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
     const account = accountingRepo.createAccount(data);
     audit.log(requestUserId, 'accounting_account_create', `Cuenta contable creada: ${data.code} - ${data.name}`);
     return { ok: true, data: account };
@@ -4451,6 +4468,7 @@ ipcMain.handle('accounting:createAccount', async (_, { data, requestUserId }) =>
 
 ipcMain.handle('accounting:updateAccount', async (_, { id, data, requestUserId }) => {
   try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
     accountingRepo.updateAccount(id, data);
     audit.log(requestUserId, 'accounting_account_update', `Cuenta contable actualizada: ${id}`);
     return { ok: true };
@@ -4459,6 +4477,7 @@ ipcMain.handle('accounting:updateAccount', async (_, { id, data, requestUserId }
 
 ipcMain.handle('accounting:deleteAccount', async (_, { id, requestUserId }) => {
   try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
     accountingRepo.deleteAccount(id);
     audit.log(requestUserId, 'accounting_account_delete', `Cuenta contable eliminada: ${id}`);
     return { ok: true };
@@ -4473,6 +4492,7 @@ ipcMain.handle('accounting:getConfig', async () => {
 
 ipcMain.handle('accounting:setConfig', async (_, { key, value, requestUserId }) => {
   try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
     accountingRepo.setConfig(key, value);
     audit.log(requestUserId, 'accounting_config_set', `Config contable: ${key}=${value}`);
     return { ok: true };
@@ -4481,6 +4501,7 @@ ipcMain.handle('accounting:setConfig', async (_, { key, value, requestUserId }) 
 
 ipcMain.handle('accounting:createEntry', async (_, { data, requestUserId }) => {
   try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
     // Translate UI field names → repo field names
     const repoData = {
       date:          data.date,
@@ -4513,6 +4534,7 @@ ipcMain.handle('accounting:getEntryById', async (_, { id }) => {
 
 ipcMain.handle('accounting:reverseEntry', async (_, { id, reason, requestUserId }) => {
   try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
     const reversed = accountingRepo.reverseEntry(id, requestUserId, reason);
     audit.log(requestUserId, 'accounting_entry_reverse', `Asiento anulado: ${id}. Razón: ${reason}`);
     return { ok: true, data: reversed };
@@ -4672,5 +4694,35 @@ ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) =>
 
     audit.log(requestUserId || 0, 'accounting_sync_historical', `Sincronización: ${created} generados, ${reversed} reversados, ${failed} fallidos`);
     return { ok: true, data: { created, reversed, failed } };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// ── Períodos contables (cierre/bloqueo) ──────────────────────────────────────
+ipcMain.handle('accounting:getPeriods', async (_, { requestUserId } = {}) => {
+  try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
+    return { ok: true, data: accountingRepo.getPeriods() };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('accounting:closePeriod', async (_, { name, dateFrom, dateTo, notes, requestUserId } = {}) => {
+  try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
+    if (!dateFrom || !dateTo) return { ok: false, error: 'Rango de fechas requerido' };
+    const r = accountingRepo.closePeriod({ name: name || `${dateFrom} a ${dateTo}`, dateFrom, dateTo, notes, userId: requestUserId });
+    audit.log(requestUserId, 'accounting_period_close', `Período cerrado: ${dateFrom}..${dateTo}`);
+    return r;
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('accounting:reopenPeriod', async (_, { id, reason, requestUserId } = {}) => {
+  try {
+    // Reabrir es sensible → solo superadmin + motivo.
+    const u = requestUserId ? authRepo.findById(requestUserId) : null;
+    if (!u || u.role !== 'superadmin') return { ok: false, error: 'Solo el superadmin puede reabrir un período' };
+    if (!reason?.trim()) return { ok: false, error: 'El motivo es obligatorio' };
+    const r = accountingRepo.reopenPeriod(id, requestUserId, reason);
+    audit.log(requestUserId, 'accounting_period_reopen', `Período reabierto: ${id}. Razón: ${reason}`);
+    return r;
   } catch (e) { return { ok: false, error: e.message }; }
 });
