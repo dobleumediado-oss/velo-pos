@@ -21,7 +21,7 @@
 | Centros de costo (7.11) | ⛔ | Diferido: no hay dato operativo que capturar (0 sucursales, ninguna tabla lleva branch_id, sin "sucursal activa"). Segmentar asientos sería infraestructura muerta hasta que exista el concepto en operaciones |
 | Multiempresa/sucursal (7.12) | 🟡 | Multiempresa por **BD separada**. **Falta segmentación por sucursal en asientos + consolidación** |
 | Presupuestos (7.13) | 🟡 | Presupuestos de **gastos** existen; no ligados a contabilidad ni real-vs-presupuesto contable |
-| Activos fijos (7.14) | ⛔ | No implementado |
+| Activos fijos (7.14) | 🟡 | **Registro de activos + depreciación lineal** (`fixedAssetsRepo`, tablas fixed_assets/depreciation_entries): corrida mensual idempotente Déb 6119/Créd 1203, baja con pérdida, pestaña "Activos". Falta métodos acelerados y revaluación |
 | Inventario contable (7.15) | 🟡 | Costo en venta (COGS/Inv) + **entrada por compra (Déb Inventario 1105)**. **Falta cuadre valor inventario operativo↔cuenta contable**, kardex valorizado contable |
 | Nómina contable (7.16) | ⛔ | No existe nómina |
 | Monedas (7.17) | ⛔ | Solo DOP; sin tasa/dif. cambiaria |
@@ -75,7 +75,12 @@ Caja operativa = cuenta contable caja      ⛔ pendiente (sesiones de caja — F
   muerta). En su lugar se entregó el **Estado de Flujo de Efectivo** (`getCashFlow`, método
   directo; pestaña "Flujo Efectivo"), el 3er estado financiero básico que faltaba — read-only,
   sin migración ni riesgo.
-- **F7 — Activos fijos + depreciación + presupuestos↔contab (G9).**
+- **F7 — Activos fijos + depreciación ✅ (G9 parcial):** migración `1.14.2-activos`
+  (fixed_assets + depreciation_entries); `fixedAssetsRepo` (create/update, monthlyAmount
+  línea recta con tope, runDepreciation idempotente por (activo,período) → Déb 6119/Créd 1203
+  respetando bloqueo de período, dispose con pérdida a 6120); handlers `assets:*`; pestaña
+  "Activos" (registro, resumen, depreciar mes, baja). *Pendiente:* presupuestos↔contabilidad
+  (real vs presupuesto), métodos de depreciación acelerada.
 - **F8 — Precisión decimal (G6)** (migración a enteros de centavos o decimal seguro) +
   índices/tablas de resumen (rendimiento) + suite E2E + documentación fiscal.
 

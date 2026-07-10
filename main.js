@@ -109,7 +109,7 @@ const {
   productsRepo, customersRepo, cashRepo,
   salesRepo, returnsRepo, reportsRepo, suppliersRepo, purchasesRepo, audit,
   expensesRepo, branchesRepo, vehiclesRepo, maintenanceRepo, deliveriesRepo, ncfRepo,
-  financialAccountsRepo, bankReconRepo, accountingRepo, conduceRepo
+  financialAccountsRepo, bankReconRepo, accountingRepo, fixedAssetsRepo, conduceRepo
 } = require('./database');
 
 const {
@@ -4712,6 +4712,49 @@ ipcMain.handle('accounting:get606', async (_, { from, to } = {}) => {
 ipcMain.handle('accounting:getCashFlow', async (_, { from, to } = {}) => {
   try {
     return { ok: true, data: accountingRepo.getCashFlow({ from, to }) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// ── Activos fijos + depreciación ──────────────
+ipcMain.handle('assets:getAll', async (_, { status } = {}) => {
+  try { return { ok: true, data: fixedAssetsRepo.getAll({ status }) }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('assets:getById', async (_, { id } = {}) => {
+  try { return { ok: true, data: fixedAssetsRepo.getById(id) }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('assets:getSummary', async () => {
+  try { return { ok: true, data: fixedAssetsRepo.summary() }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('assets:create', async (_, { data, requestUserId } = {}) => {
+  try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
+    if (!data?.name?.trim()) return { ok: false, error: 'El nombre es obligatorio' };
+    if (!(data.cost > 0)) return { ok: false, error: 'El costo debe ser mayor a cero' };
+    const r = fixedAssetsRepo.create(data);
+    audit(requestUserId, '', 'activo_creado', 'fixed_assets', r.id, data.name);
+    return { ok: true, ...r };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('assets:update', async (_, { id, data, requestUserId } = {}) => {
+  try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
+    return fixedAssetsRepo.update(id, data || {});
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('assets:dispose', async (_, { id, reason, requestUserId } = {}) => {
+  try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
+    if (!reason?.trim()) return { ok: false, error: 'El motivo de la baja es obligatorio' };
+    return fixedAssetsRepo.dispose({ id, reason, userId: requestUserId });
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('assets:runDepreciation', async (_, { period, requestUserId } = {}) => {
+  try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
+    return { ok: true, ...fixedAssetsRepo.runDepreciation({ period, userId: requestUserId }) };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 

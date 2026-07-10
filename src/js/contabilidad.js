@@ -36,6 +36,7 @@ async function renderContabilidad(el) {
     { key: 'flujo',        label: 'Flujo Efectivo' },
     { key: 'cxc',          label: 'CxC' },
     { key: 'cxp',          label: 'CxP' },
+    { key: 'activos',      label: 'Activos' },
     { key: 'cuadres',      label: 'Cuadres' },
     { key: 'fiscal606',    label: '606' },
     { key: 'periodos',     label: 'Períodos' },
@@ -63,6 +64,7 @@ async function renderContabilidad(el) {
     case 'flujo':         await _contRenderFlujo(body);        break;
     case 'cxc':           await _contRenderCxC(body);          break;
     case 'cxp':           await _contRenderCxP(body);          break;
+    case 'activos':       await _contRenderActivos(body);      break;
     case 'cuadres':       await _contRenderCuadres(body);      break;
     case 'fiscal606':     await _contRender606(body);          break;
     case 'periodos':      await _contRenderPeriodos(body);     break;
@@ -1212,6 +1214,153 @@ async function _printCxP(payable) {
   <tfoot><tr><td colspan="4">TOTAL</td><td style="text-align:right">${fmt(total)}</td><td></td></tr></tfoot>
   </table></body></html>`;
   printHTML(html, 'contabilidad');
+}
+
+// ══════════════════════════════════════════════
+// ACTIVOS FIJOS + DEPRECIACIÓN
+// ══════════════════════════════════════════════
+async function _contRenderActivos(el) {
+  const [listRes, sumRes] = await Promise.all([
+    window.api.assets.getAll({}),
+    window.api.assets.getSummary(),
+  ]);
+  const assets = listRes?.data || [];
+  const s = sumRes?.data || { count: 0, totalCost: 0, totalAccum: 0, totalBook: 0 };
+
+  const hdr = h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' } },
+    h('div', { style: { fontSize: '13px', fontWeight: '600', color: 'var(--ink)' } }, `Activos fijos (${assets.length})`),
+    h('div', { style: { display: 'flex', gap: '8px' } },
+      h('button', { class: 'btn', onclick: () => _openActivoModal() }, '+ Activo'),
+      h('button', { class: 'btn-ghost', onclick: () => _openDepreciarModal() }, '📉 Depreciar mes')
+    )
+  );
+  el.appendChild(hdr);
+
+  el.appendChild(h('div', { style: { display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '16px' } },
+    _concilCard('Activos', String(s.count), ''),
+    _concilCard('Costo total', fmt(s.totalCost), ''),
+    _concilCard('Dep. acumulada', fmt(s.totalAccum), 'negative'),
+    _concilCard('Valor en libros', fmt(s.totalBook), 'positive')
+  ));
+
+  if (!assets.length) {
+    el.appendChild(h('div', { class: 'empty' },
+      h('p', null, 'No hay activos registrados'),
+      h('span', null, 'Registra mobiliario, equipos o vehículos para depreciarlos')));
+    return;
+  }
+
+  const tbl = h('table', { class: 'ledger-tbl', style: { width: '100%' } },
+    h('thead', null, h('tr', null,
+      h('th', null, 'Activo'), h('th', null, 'Adquirido'),
+      h('th', { class: 'num' }, 'Costo'), h('th', { class: 'num' }, 'Dep./mes'),
+      h('th', { class: 'num' }, 'Acumulada'), h('th', { class: 'num' }, 'Valor libro'),
+      h('th', null, 'Estado'), h('th', null, '')
+    )),
+    h('tbody', null, ...assets.map(a => {
+      const badge = a.status === 'activo' ? 'activo' : (a.status === 'depreciado' ? 'borrador' : 'anulado');
+      return h('tr', null,
+        h('td', null, h('div', null, a.name), a.category ? h('div', { style: { fontSize: '10px', color: 'var(--muted2)' } }, a.category) : null),
+        h('td', null, a.acquisition_date || '—'),
+        h('td', { class: 'num' }, fmt(a.cost)),
+        h('td', { class: 'num' }, fmt(a.monthly)),
+        h('td', { class: 'num' }, fmt(a.accumulated)),
+        h('td', { class: 'num', style: { fontWeight: '600' } }, fmt(a.book_value)),
+        h('td', null, h('span', { class: `entry-status entry-status-${badge}` }, a.status)),
+        h('td', null, a.status !== 'dado_de_baja'
+          ? h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '3px 8px', color: '#ef4444' },
+              onclick: () => _bajaActivo(a) }, 'Dar de baja')
+          : h('span', null, ''))
+      );
+    }))
+  );
+  el.appendChild(h('div', { class: 'tw' }, tbl));
+}
+
+function _openActivoModal() {
+  openModal(`
+    <div class="modal-head"><div class="modal-title">Nuevo activo fijo</div></div>
+    <div class="modal-body">
+      <label class="lbl">Nombre</label>
+      <input class="inp" id="fa-name" placeholder="Ej. Camioneta de reparto">
+      <div style="display:flex;gap:10px;margin-top:10px">
+        <div style="flex:1"><label class="lbl">Categoría</label>
+          <select class="inp" id="fa-cat">
+            <option value="Mobiliario y equipo">Mobiliario y equipo</option>
+            <option value="Equipos de cómputo">Equipos de cómputo</option>
+            <option value="Vehículos">Vehículos</option>
+            <option value="Maquinaria">Maquinaria</option>
+            <option value="Otros">Otros</option>
+          </select></div>
+        <div style="flex:1"><label class="lbl">Fecha de adquisición</label>
+          <input class="inp" type="date" id="fa-date" value="${_isoDate(0)}"></div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:10px">
+        <div style="flex:1"><label class="lbl">Costo (RD$)</label><input class="inp" type="number" id="fa-cost" min="0" step="0.01"></div>
+        <div style="flex:1"><label class="lbl">Valor residual</label><input class="inp" type="number" id="fa-salvage" min="0" step="0.01" value="0"></div>
+        <div style="flex:1"><label class="lbl">Vida útil (meses)</label><input class="inp" type="number" id="fa-life" min="1" value="60"></div>
+      </div>
+      <div style="font-size:11px;color:var(--muted2);margin-top:8px">Depreciación lineal: (costo − residual) ÷ meses. Vida útil típica: cómputo 24-36m, mobiliario 60m, vehículos 60-84m.</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn" id="fa-save">Guardar</button>
+    </div>
+  `);
+  document.getElementById('fa-save').onclick = async () => {
+    const data = {
+      name: document.getElementById('fa-name').value.trim(),
+      category: document.getElementById('fa-cat').value,
+      acquisition_date: document.getElementById('fa-date').value,
+      cost: parseFloat(document.getElementById('fa-cost').value) || 0,
+      salvage_value: parseFloat(document.getElementById('fa-salvage').value) || 0,
+      useful_life_months: parseInt(document.getElementById('fa-life').value) || 60,
+    };
+    if (!data.name) { toast('El nombre es obligatorio', 'e'); return; }
+    if (!(data.cost > 0)) { toast('El costo debe ser mayor a cero', 'e'); return; }
+    if (data.salvage_value >= data.cost) { toast('El valor residual debe ser menor al costo', 'e'); return; }
+    const r = await window.api.assets.create({ data, requestUserId: user.id });
+    if (r?.ok) { toast('Activo registrado', 's'); closeModal(); renderContabilidad(document.getElementById('page')); }
+    else toast(r?.error || 'Error', 'e');
+  };
+}
+
+function _openDepreciarModal() {
+  const now = new Date();
+  const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  openModal(`
+    <div class="modal-head"><div class="modal-title">Depreciar período</div></div>
+    <div class="modal-body">
+      <p style="font-size:12px;color:var(--muted2);margin-bottom:10px">
+        Genera el asiento de depreciación del mes para todos los activos elegibles
+        (Déb Depreciación · Créd Depreciación acumulada). Es idempotente: si ya se
+        corrió ese mes, no duplica.</p>
+      <label class="lbl">Período (YYYY-MM)</label>
+      <input class="inp" id="dep-period" value="${period}" placeholder="2026-07">
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn" id="dep-run">Depreciar</button>
+    </div>
+  `);
+  document.getElementById('dep-run').onclick = async () => {
+    const period = document.getElementById('dep-period').value.trim();
+    if (!/^\d{4}-\d{2}$/.test(period)) { toast('Formato inválido (YYYY-MM)', 'e'); return; }
+    const r = await window.api.assets.runDepreciation({ period, requestUserId: user.id });
+    if (r?.ok) {
+      toast(`${r.posted} activos depreciados (RD$${fmt(r.total)})${r.failed ? ` · ${r.failed} fallidos` : ''}`, r.failed ? 'w' : 's');
+      closeModal(); renderContabilidad(document.getElementById('page'));
+    } else toast(r?.error || 'Error', 'e');
+  };
+}
+
+async function _bajaActivo(a) {
+  const reason = prompt(`Dar de baja "${a.name}" (valor en libros ${fmt(a.book_value)}).\nSe retirará el activo y su depreciación acumulada; el valor en libros restante se registra como pérdida.\n\nMotivo (obligatorio):`);
+  if (reason === null) return;
+  if (!reason.trim()) { toast('El motivo es obligatorio', 'e'); return; }
+  const r = await window.api.assets.dispose({ id: a.id, reason, requestUserId: user.id });
+  if (r?.ok) { toast('Activo dado de baja', 's'); renderContabilidad(document.getElementById('page')); }
+  else toast(r?.error || 'Error', 'e');
 }
 
 // ══════════════════════════════════════════════

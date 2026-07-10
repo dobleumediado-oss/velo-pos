@@ -3947,6 +3947,152 @@ const accountingRepo = {
 };
 
 // ══════════════════════════════════════════════
+// REPOSITORIO: ACTIVOS FIJOS + DEPRECIACIÓN (Fase 7)
+// ══════════════════════════════════════════════
+// Depreciación en línea recta: (costo − valor residual) / vida útil (meses).
+// La corrida mensual postea Déb Depreciación (6119) · Créd Dep. Acumulada (1203),
+// idempotente por (activo, período). Respeta el bloqueo de período contable.
+const fixedAssetsRepo = {
+  _acctId(code) { return db.prepare("SELECT id FROM accounting_accounts WHERE code=?").get(code)?.id; },
+  _lastDayOfMonth(period) {
+    const [y, m] = String(period).split('-').map(Number);
+    return `${period}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
+  },
+  monthlyAmount(a) {
+    const base = (a.cost || 0) - (a.salvage_value || 0);
+    const life = a.useful_life_months || 0;
+    if (base <= 0 || life <= 0) return 0;
+    return round2(base / life);
+  },
+  remaining(a) { return round2(((a.cost || 0) - (a.salvage_value || 0)) - (a.accumulated || 0)); },
+  bookValue(a) { return round2((a.cost || 0) - (a.accumulated || 0)); },
+
+  getAll({ status } = {}) {
+    let q = "SELECT * FROM fixed_assets";
+    const p = [];
+    if (status) { q += " WHERE status=?"; p.push(status); }
+    q += " ORDER BY acquisition_date DESC, id DESC";
+    return db.prepare(q).all(...p).map(a => ({
+      ...a,
+      monthly: this.monthlyAmount(a),
+      remaining: this.remaining(a),
+      book_value: this.bookValue(a),
+    }));
+  },
+  getById(id) {
+    const a = db.prepare("SELECT * FROM fixed_assets WHERE id=?").get(id);
+    if (!a) return null;
+    a.monthly = this.monthlyAmount(a);
+    a.remaining = this.remaining(a);
+    a.book_value = this.bookValue(a);
+    a.schedule = db.prepare("SELECT * FROM depreciation_entries WHERE fixed_asset_id=? ORDER BY period ASC").all(id);
+    return a;
+  },
+  create(d) {
+    const r = db.prepare(`INSERT INTO fixed_assets
+      (name,category,acquisition_date,cost,salvage_value,useful_life_months,method,
+       asset_code,depreciation_code,accumulated_code,expense_id,notes)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      d.name, d.category || '', d.acquisition_date || todayStr(),
+      d.cost || 0, d.salvage_value || 0, d.useful_life_months || 60, d.method || 'linea_recta',
+      d.asset_code || '1201', d.depreciation_code || '6119', d.accumulated_code || '1203',
+      d.expense_id || null, d.notes || '');
+    return { id: r.lastInsertRowid };
+  },
+  update(id, d) {
+    const a = db.prepare("SELECT * FROM fixed_assets WHERE id=?").get(id);
+    if (!a) throw new Error('Activo no encontrado');
+    db.prepare(`UPDATE fixed_assets SET name=?,category=?,acquisition_date=?,cost=?,salvage_value=?,
+      useful_life_months=?,depreciation_code=?,accumulated_code=?,notes=?,updated_at=datetime('now') WHERE id=?`).run(
+      d.name ?? a.name, d.category ?? a.category, d.acquisition_date ?? a.acquisition_date,
+      d.cost ?? a.cost, d.salvage_value ?? a.salvage_value, d.useful_life_months ?? a.useful_life_months,
+      d.depreciation_code ?? a.depreciation_code, d.accumulated_code ?? a.accumulated_code,
+      d.notes ?? a.notes, id);
+    return { ok: true };
+  },
+
+  // Corrida de depreciación de un período 'YYYY-MM' para todos los activos elegibles.
+  runDepreciation({ period, userId } = {}) {
+    if (!/^\d{4}-\d{2}$/.test(period || '')) throw new Error('Período inválido (use YYYY-MM)');
+    const endDate = this._lastDayOfMonth(period);
+    const assets = db.prepare("SELECT * FROM fixed_assets WHERE status='activo' AND acquisition_date<=?").all(endDate);
+    let posted = 0, skipped = 0, failed = 0, total = 0;
+    for (const a of assets) {
+      try {
+        // Idempotencia por (activo, período).
+        if (db.prepare("SELECT id FROM depreciation_entries WHERE fixed_asset_id=? AND period=?").get(a.id, period)) { skipped++; continue; }
+        const amount = Math.min(this.monthlyAmount(a), this.remaining(a));
+        if (amount <= 0) { skipped++; continue; }
+        const depId = this._acctId(a.depreciation_code || '6119');
+        const accId = this._acctId(a.accumulated_code || '1203');
+        if (!depId || !accId) { failed++; continue; }
+        const entry = accountingRepo.createEntry({
+          date: endDate,
+          concept: `Depreciación ${period} — ${a.name}`,
+          reference: `DEP-${a.id}-${period}`,
+          source_module: 'depreciacion',
+          source_id: a.id,
+          lines: [
+            { account_id: depId, debit: amount, credit: 0, description: `Depreciación ${a.name}` },
+            { account_id: accId, debit: 0, credit: amount, description: `Dep. acumulada ${a.name}` },
+          ],
+          userId, status: 'confirmado',
+        });
+        db.prepare("INSERT INTO depreciation_entries(fixed_asset_id,period,amount,accounting_entry_id) VALUES(?,?,?,?)")
+          .run(a.id, period, amount, entry?.entryId || null);
+        const newAcc = round2((a.accumulated || 0) + amount);
+        const fully = newAcc >= ((a.cost || 0) - (a.salvage_value || 0)) - 0.01;
+        db.prepare("UPDATE fixed_assets SET accumulated=?,status=?,updated_at=datetime('now') WHERE id=?")
+          .run(newAcc, fully ? 'depreciado' : 'activo', a.id);
+        posted++; total = round2(total + amount);
+      } catch (e) { failed++; console.error('[activos] depreciación', a.id, e.message); }
+    }
+    audit(userId, '', 'depreciacion_corrida', 'fixed_assets', null, `${period}: ${posted} posteados, RD$${total}`);
+    return { posted, skipped, failed, total };
+  },
+
+  // Baja del activo: retira costo y depreciación acumulada; el valor en libros
+  // restante va a pérdida (6120). Marca el activo como dado_de_baja.
+  dispose({ id, reason, userId } = {}) {
+    const a = db.prepare("SELECT * FROM fixed_assets WHERE id=?").get(id);
+    if (!a) throw new Error('Activo no encontrado');
+    if (a.status === 'dado_de_baja') throw new Error('El activo ya fue dado de baja');
+    const assetId = this._acctId(a.asset_code || '1201');
+    const accId = this._acctId(a.accumulated_code || '1203');
+    const lossId = this._acctId('6120');
+    const book = this.bookValue(a);
+    const lines = [];
+    if (accId && a.accumulated > 0) lines.push({ account_id: accId, debit: round2(a.accumulated), credit: 0, description: `Retiro dep. acum. ${a.name}` });
+    if (lossId && book > 0)         lines.push({ account_id: lossId, debit: book, credit: 0, description: `Pérdida en baja ${a.name}` });
+    if (assetId && a.cost > 0)      lines.push({ account_id: assetId, debit: 0, credit: round2(a.cost), description: `Baja activo ${a.name}` });
+    if (lines.length >= 2) {
+      try {
+        accountingRepo.createEntry({
+          date: todayStr(), concept: `Baja de activo — ${a.name}`, reference: `BAJA-${a.id}`,
+          source_module: 'baja_activo', source_id: a.id, lines, userId, status: 'confirmado',
+        });
+      } catch (e) { console.error('[activos] baja asiento', e.message); }
+    }
+    db.prepare("UPDATE fixed_assets SET status='dado_de_baja',disposed_at=datetime('now'),dispose_reason=?,updated_at=datetime('now') WHERE id=?")
+      .run(reason || '', id);
+    audit(userId, '', 'activo_baja', 'fixed_assets', id, reason || '');
+    return { ok: true };
+  },
+
+  summary() {
+    const rows = db.prepare("SELECT * FROM fixed_assets").all();
+    const active = rows.filter(a => a.status !== 'dado_de_baja');
+    const r2 = (n) => Math.round((n || 0) * 100) / 100;
+    return {
+      count: active.length,
+      totalCost:   r2(active.reduce((s, a) => s + (a.cost || 0), 0)),
+      totalAccum:  r2(active.reduce((s, a) => s + (a.accumulated || 0), 0)),
+      totalBook:   r2(active.reduce((s, a) => s + this.bookValue(a), 0)),
+    };
+  },
+};
+
+// ══════════════════════════════════════════════
 // REPOSITORIO: CONDUCE / NOTA DE ENTREGA
 // ──────────────────────────────────────────────
 // Documento de entrega/despacho. NO fiscal: sin NCF, sin ITBIS, sin CxC, y NO
@@ -4331,6 +4477,7 @@ module.exports = {
   ncfRepo,
   financialAccountsRepo,
   bankReconRepo,
+  fixedAssetsRepo,
   accountingRepo,
   conduceRepo,
 };

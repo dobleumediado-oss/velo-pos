@@ -352,6 +352,17 @@ contextBridge.exposeInMainWorld('api', {
     getCashFlow:        (d) => ipcRenderer.invoke('accounting:getCashFlow',        d),
   },
 
+  // ── Activos fijos ─────────────────────────────
+  assets: {
+    getAll:          (d) => ipcRenderer.invoke('assets:getAll',          d),
+    getById:         (d) => ipcRenderer.invoke('assets:getById',         d),
+    getSummary:      ()  => ipcRenderer.invoke('assets:getSummary'),
+    create:          (d) => ipcRenderer.invoke('assets:create',          d),
+    update:          (d) => ipcRenderer.invoke('assets:update',          d),
+    dispose:         (d) => ipcRenderer.invoke('assets:dispose',         d),
+    runDepreciation: (d) => ipcRenderer.invoke('assets:runDepreciation', d),
+  },
+
   log: {
     error: (tag, message, extra) => ipcRenderer.invoke('log:error', { tag, message, extra }),
   },

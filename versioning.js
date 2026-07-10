@@ -926,6 +926,50 @@ const MIGRATIONS = [
       console.log('[MIGRATION conciliacion] Tabla bank_statement_lines creada');
     }
   },
+  {
+    // Sufijo a propósito para no colisionar con la serie 1.14.x de feat/multi-terminal
+    // (el runner compara la versión por igualdad exacta). Ver nota en 1.14.1-conciliacion.
+    version: '1.14.2-activos',
+    description: 'Activos fijos: registro de activos + depreciación (línea recta)',
+    run(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS fixed_assets (
+          id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+          name                  TEXT NOT NULL,
+          category              TEXT DEFAULT '',
+          acquisition_date      TEXT NOT NULL DEFAULT (date('now')),
+          cost                  REAL NOT NULL DEFAULT 0,
+          salvage_value         REAL NOT NULL DEFAULT 0,
+          useful_life_months    INTEGER NOT NULL DEFAULT 60,
+          method                TEXT DEFAULT 'linea_recta',
+          asset_code            TEXT DEFAULT '1201',
+          depreciation_code     TEXT DEFAULT '6119',
+          accumulated_code      TEXT DEFAULT '1203',
+          accumulated           REAL NOT NULL DEFAULT 0,
+          status                TEXT DEFAULT 'activo'
+                                  CHECK(status IN ('activo','depreciado','dado_de_baja')),
+          expense_id            INTEGER REFERENCES expenses(id),
+          notes                 TEXT DEFAULT '',
+          disposed_at           TEXT,
+          dispose_reason        TEXT,
+          created_at            TEXT DEFAULT (datetime('now')),
+          updated_at            TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS depreciation_entries (
+          id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+          fixed_asset_id      INTEGER NOT NULL REFERENCES fixed_assets(id),
+          period              TEXT NOT NULL,
+          amount              REAL NOT NULL DEFAULT 0,
+          accounting_entry_id INTEGER,
+          created_at          TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_fa_status ON fixed_assets(status);
+        CREATE INDEX IF NOT EXISTS idx_dep_asset ON depreciation_entries(fixed_asset_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_dep_asset_period ON depreciation_entries(fixed_asset_id, period);
+      `);
+      console.log('[MIGRATION activos] Tablas fixed_assets y depreciation_entries creadas');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════
