@@ -13,6 +13,10 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
   localOnly: new Set([
     'app:getTerminalInfo',
+    // Login NO se reenvía en automático: el handler decide (superadmin/DEV validan
+    // SIEMPRE en local = puerta de soporte/config a prueba de bloqueos; los usuarios
+    // normales se reenvían al servidor DENTRO del handler, con el error capturado).
+    'auth:login',
     'connection:getInfo', 'connection:generateKey', 'connection:test', 'connection:setAllowedTerminal',
     'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke', 'license:generate',
     'update:check', 'update:download', 'update:install',
@@ -446,6 +450,27 @@ function _clearSession(userId, terminalId) { const s = _activeSessions.get(userI
 ipcMain.handle('auth:login', async (_, { email, password, terminalId, force }) => {
   try {
     const emailKey = email?.toLowerCase() || '';
+
+    // ── Multi-terminal: routing del login por modo ─────────────────────────
+    // En modo CLIENTE, los usuarios normales (cajero/admin) se validan contra el
+    // servidor. El superadmin y el DEV maestro SIEMPRE se validan en LOCAL → así
+    // siempre hay una puerta para entrar a configurar/revertir aunque el servidor
+    // no responda o esta terminal no esté autorizada (evita el bloqueo total).
+    const _bridge = require('./src/main/ipc-bridge');
+    if (_bridge.getMode() === 'client') {
+      const _lu = authRepo.findByEmail(emailKey);
+      const _isAdminLocal = emailKey === 'dev@sistema.do' || (_lu && _lu.role === 'superadmin');
+      if (!_isAdminLocal) {
+        try {
+          return await _bridge.forwardToServer('auth:login', { email, password, terminalId, force });
+        } catch (e) {
+          return { ok: false, error: e.offline
+            ? 'No hay conexión con el servidor. Verifica que la PC servidor esté encendida y con Velo POS abierto.'
+            : 'El servidor rechazó el acceso: esta terminal no está autorizada o la llave es incorrecta. Pide al administrador que autorice esta terminal en el servidor.' };
+        }
+      }
+      // superadmin / DEV maestro → continúa con la validación LOCAL de abajo.
+    }
 
     // ── Rate limiting en main process ──────────
     const rate = _checkLoginRate(emailKey);

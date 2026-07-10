@@ -406,8 +406,20 @@ function renderLogin() {
 
     lerr.innerHTML = `<div style="color:var(--muted);font-size:12px;padding:8px 0">Verificando...</div>`;
 
-    const terminalId = (typeof ensureTerminalId === 'function') ? await ensureTerminalId() : '';
-    const result = await window.api.auth.login({ email, password: pass, terminalId });
+    // El login puede RECHAZAR (modo cliente: el servidor no responde o rechaza). Sin
+    // este try/catch la pantalla se quedaba colgada en "Verificando..." sin avisar.
+    let result;
+    try {
+      const terminalId = (typeof ensureTerminalId === 'function') ? await ensureTerminalId() : '';
+      result = await window.api.auth.login({ email, password: pass, terminalId });
+    } catch (e) {
+      lerr.innerHTML = `<div class="err">No se pudo verificar el acceso.
+        <br><span style="font-size:10px">${(e && e.message) === 'SERVER_OFFLINE'
+          ? 'El servidor no responde. Revisa la conexión o entra como administrador para volver a modo local.'
+          : ((e && e.message) || 'Error de conexión con el servidor')}</span></div>`;
+      passEl.value = ''; passEl.focus();
+      return;
+    }
 
     // Sesión única: el usuario ya está activo en otra terminal.
     if (!result.ok && result.activeSession) {
