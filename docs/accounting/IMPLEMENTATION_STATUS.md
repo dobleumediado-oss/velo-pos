@@ -2,7 +2,7 @@
 
 > Estado por módulo (prompt maestro §7) y plan por fases. Fuente: auditoría Fase 1
 > (`AUDIT_REPORT.md`). ✅ hecho · 🟡 parcial · ⛔ ausente. App `v1.14.0`, rama `main`.
-> Progreso: **F1 ✅ · F2 ✅ (roles + cierre de período) · F3 ✅ (compras/gastos devengados)**.
+> Progreso: **F1 ✅ · F2 ✅ (roles + cierre) · F3 ✅ (devengado) · F4 ✅ (cuadres + 606)**.
 
 ## Matriz de estado
 
@@ -17,7 +17,7 @@
 | Cuentas por cobrar (7.7) | 🟡 | Auxiliar operativo (clientes) + abonos→contab. Falta antigüedad contable, conciliación auxiliar↔control, provisión incobrables |
 | Cuentas por pagar (7.8) | 🟡 | **Contable devengado en vivo** (gasto/compra → Créd CxP 2101; pago → Déb CxP). Falta antigüedad de CxP, conciliación auxiliar↔control 2101, pago formal a proveedor por OC |
 | Caja/Bancos/Tesorería (7.9) | 🟡 | Bancos (cuentas+movimientos+transfer) sano. **Falta conciliación bancaria (CSV/match)** |
-| Impuestos/fiscal RD (7.10) | 🟡 | NCF + e-CF + 607/608. **Falta 606**, libros venta/compra, cuadres, IT-1/IR-17, retenciones |
+| Impuestos/fiscal RD (7.10) | 🟡 | NCF + e-CF + 607/608 + **606 (compras con RNC)**. Falta libros venta/compra formales, cuadre ventas↔607 automático, IT-1/IR-17, retenciones |
 | Centros de costo (7.11) | ⛔ | No implementado |
 | Multiempresa/sucursal (7.12) | 🟡 | Multiempresa por **BD separada**. **Falta segmentación por sucursal en asientos + consolidación** |
 | Presupuestos (7.13) | 🟡 | Presupuestos de **gastos** existen; no ligados a contabilidad ni real-vs-presupuesto contable |
@@ -33,7 +33,7 @@
 | Flujos de aprobación (7.23) | 🟡 | Gastos tienen aprobación; asientos no |
 | Roles y permisos (7.24) | 🟡 | **Handlers `accounting:*`/`financial:*` exigen admin** (F2); reabrir período solo superadmin. Falta granularidad por operación |
 | Auditoría (7.25) | 🟡 | `audit()` registra acciones clave; falta valor anterior/nuevo en asientos y auditoría inmutable dedicada |
-| Alertas (7.26) | ⛔ | No hay alertas contables (descuadre/venta sin asiento/etc.) |
+| Alertas (7.26) | 🟡 | **Cuadres auxiliar↔mayor con alerta de descuadre** (pestaña Cuadres, F4). Falta alerta de venta sin asiento y notificación proactiva |
 | Importaciones/exportaciones (7.27) | 🟡 | Importador universal (ventas/clientes/gastos…). Falta import de catálogo/saldos/asientos contables |
 | Apertura y migración (7.28) | ⛔ | Sin asistente de saldos iniciales contables |
 
@@ -41,10 +41,10 @@
 ```
 Débitos = Créditos                         ✅ garantizado por createEntry
 accounts.balance = recálculo desde líneas  ✅ (tras fix reversión)
-Inventario operativo = cuenta contable     ⛔ sin verificación
-CxC auxiliar = cuenta control CxC          ⛔ sin verificación
-CxP auxiliar = cuenta control CxP          ⛔ sin verificación
-Caja operativa = cuenta contable caja      ⛔ sin verificación
+Inventario operativo = cuenta contable     ✅ getReconciliation (pestaña Cuadres)
+CxC auxiliar = cuenta control CxC          ✅ getReconciliation (pestaña Cuadres)
+CxP auxiliar = cuenta control CxP          ✅ getReconciliation (pestaña Cuadres)
+Caja operativa = cuenta contable caja      ⛔ pendiente (sesiones de caja — F5/F7)
 ```
 
 ## Plan por fases (adaptado — sin refactor masivo, aditivo, con pruebas)
@@ -58,8 +58,10 @@ Caja operativa = cuenta contable caja      ⛔ sin verificación
   Acreditable 1106 · Créd CxP, por recepción con delta idempotente). Enganchado en
   `expenses:create/pay/cancel` y `purchases:receive`; backfill + reconciliación en sync.
   Compatibilidad: no duplica sobre asientos legacy `gasto`. Excluye tipos retiro/aporte/traslado.
-- **F4 — Cuadres + fiscal:** verificaciones automáticas auxiliar↔mayor (CxC/CxP/inventario/
-  caja) con alertas; reporte **606** + libros de ventas/compras + cuadre ventas↔607.
+- **F4 — Cuadres + fiscal ✅:** `getReconciliation` (CxC↔1104, Inventario↔1105, CxP↔2101)
+  con alerta de descuadre + pestaña "Cuadres"; reporte **606** (`get606`, compras con RNC)
+  + pestaña "606" con rango e impresión. *Pendiente:* cuadre caja↔1101 (sesiones), libros
+  formales de ventas/compras, cuadre ventas↔607 automático.
 - **F5 — Conciliación bancaria (G8):** import CSV/Excel, mapeo, match por monto/fecha/ref,
   manual, diferencias, cierre.
 - **F6 — Centros de costo + sucursal (G3, G10):** `cost_center` y `branch_id` en líneas/

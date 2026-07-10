@@ -3620,6 +3620,76 @@ const accountingRepo = {
     } catch (e) { console.error('[accounting] generatePurchaseEntry:', e.message); return null; }
   },
 
+  // ══ CUADRES auxiliar ↔ mayor (Fase 4) ════════════════════════════════════
+  // Compara el saldo contable (cuenta control) con el auxiliar operativo. Si no
+  // cuadran, `ok=false` → alerta. El saldo contable es autoridad; el auxiliar es
+  // la fuente operativa (clientes, stock, gastos/compras pendientes).
+  getReconciliation() {
+    const cfg = this.getConfig();
+    const r2 = (n) => Math.round((n || 0) * 100) / 100;
+    const apId = cfg.account_ap?.account_id || db.prepare("SELECT id FROM accounting_accounts WHERE code='2101'").get()?.id;
+    const ctrlBal = (key, code) => {
+      const id = cfg[key]?.account_id;
+      const row = id
+        ? db.prepare("SELECT balance FROM accounting_accounts WHERE id=?").get(id)
+        : db.prepare("SELECT balance FROM accounting_accounts WHERE code=?").get(code);
+      return row?.balance || 0;
+    };
+
+    // CxC (1104, deudor): saldo contable vs suma de saldos de clientes.
+    const cxcCtrl = r2(ctrlBal('account_ar', '1104'));
+    const cxcAux  = r2(db.prepare("SELECT COALESCE(SUM(balance),0) t FROM customers WHERE balance>0").get().t);
+
+    // Inventario (1105, deudor): saldo contable vs valor de stock a costo.
+    const invCtrl = r2(ctrlBal('account_inventory', '1105'));
+    const invAux  = r2(db.prepare("SELECT COALESCE(SUM(stock*cost),0) t FROM products WHERE active=1").get().t);
+
+    // CxP (2101, acreedor → saldo negativo): gastos devengados pendientes + compras
+    // recibidas contabilizadas (sin flujo de pago a proveedor, siguen como CxP).
+    const cxpCtrl = r2(-ctrlBal('account_ap', '2101'));
+    const cxpGastos = db.prepare(`
+      SELECT COALESCE(SUM(total-paid_amount),0) t FROM expenses
+      WHERE type IN ('gasto','activo','reembolso') AND status NOT IN ('anulado','rechazado','borrador')
+        AND EXISTS(SELECT 1 FROM accounting_entries ae WHERE ae.source_module='gasto_dev' AND ae.source_id=expenses.id AND ae.status='confirmado')`).get().t;
+    const cxpCompras = apId ? db.prepare(`
+      SELECT COALESCE(SUM(l.credit),0) t FROM accounting_entry_lines l
+      JOIN accounting_entries e ON l.entry_id=e.id
+      WHERE e.source_module='compra' AND e.status='confirmado' AND l.account_id=?`).get(apId).t : 0;
+    const cxpAux = r2(cxpGastos + cxpCompras);
+
+    const mk = (name, control, auxiliar, note) => {
+      const diff = r2(control - auxiliar);
+      return { name, control: r2(control), auxiliar: r2(auxiliar), diff, ok: Math.abs(diff) < 0.01, note };
+    };
+    return [
+      mk('Cuentas por cobrar (1104)', cxcCtrl, cxcAux, 'Contable vs suma de saldos de clientes'),
+      mk('Inventario (1105)',         invCtrl, invAux, 'Contable vs valor de stock a costo'),
+      mk('Cuentas por pagar (2101)',  cxpCtrl, cxpAux, 'Contable vs gastos pendientes + compras recibidas'),
+    ];
+  },
+
+  // ── Reporte 606 (compras/gastos con NCF — formato DGII preliminar) ─────────
+  // Fuente: gastos con RNC de proveedor. Devuelve filas + totales (base, ITBIS).
+  get606({ from, to } = {}) {
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    let q = `SELECT e.id, e.issue_date, e.supplier_rnc, e.ncf, e.invoice_number, e.description,
+               e.type, e.amount, e.tax_amount, e.total, s.name as supplier_name
+             FROM expenses e LEFT JOIN suppliers s ON e.supplier_id=s.id
+             WHERE e.status NOT IN ('anulado','rechazado','borrador')
+               AND e.supplier_rnc IS NOT NULL AND TRIM(e.supplier_rnc)<>''`;
+    const p = [];
+    if (from && DATE_RE.test(from)) { q += ` AND date(e.issue_date)>=?`; p.push(from); }
+    if (to   && DATE_RE.test(to))   { q += ` AND date(e.issue_date)<=?`; p.push(to); }
+    q += ` ORDER BY e.issue_date ASC, e.id ASC`;
+    const rows = db.prepare(q).all(...p);
+    const totals = rows.reduce((a, r) => {
+      const itbis = r.tax_amount || 0;
+      const base  = (r.total || 0) - itbis;
+      a.base += base; a.itbis += itbis; a.total += (r.total || 0); return a;
+    }, { base: 0, itbis: 0, total: 0, count: rows.length });
+    return { rows, totals };
+  },
+
   // ── Dashboard contable ────────────────────
   getDashboardStats({ from, to } = {}) {
     const curMonth = new Date().toISOString().slice(0,7);

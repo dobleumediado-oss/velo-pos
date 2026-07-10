@@ -336,6 +336,8 @@ contextBridge.exposeInMainWorld('api', {
     getPeriods:         (d) => ipcRenderer.invoke('accounting:getPeriods',         d),
     closePeriod:        (d) => ipcRenderer.invoke('accounting:closePeriod',        d),
     reopenPeriod:       (d) => ipcRenderer.invoke('accounting:reopenPeriod',       d),
+    getReconciliation:  ()  => ipcRenderer.invoke('accounting:getReconciliation'),
+    get606:             (d) => ipcRenderer.invoke('accounting:get606',             d),
   },
 
   log: {

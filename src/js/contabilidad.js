@@ -35,6 +35,8 @@ async function renderContabilidad(el) {
     { key: 'general',      label: 'Bal. General' },
     { key: 'cxc',          label: 'CxC' },
     { key: 'cxp',          label: 'CxP' },
+    { key: 'cuadres',      label: 'Cuadres' },
+    { key: 'fiscal606',    label: '606' },
     { key: 'periodos',     label: 'Períodos' },
     { key: 'configuracion',label: 'Configuración' },
   ].forEach(t => {
@@ -59,6 +61,8 @@ async function renderContabilidad(el) {
     case 'general':       await _contRenderGeneral(body);      break;
     case 'cxc':           await _contRenderCxC(body);          break;
     case 'cxp':           await _contRenderCxP(body);          break;
+    case 'cuadres':       await _contRenderCuadres(body);      break;
+    case 'fiscal606':     await _contRender606(body);          break;
     case 'periodos':      await _contRenderPeriodos(body);     break;
     case 'configuracion': await _contRenderConfig(body);       break;
   }
@@ -1108,6 +1112,131 @@ async function _printCxP(payable) {
   <table><thead><tr><th>Gasto</th><th>Proveedor</th><th>Categoría</th><th>Vencimiento</th><th style="text-align:right">Monto</th><th>Estado</th></tr></thead>
   <tbody>${rows}</tbody>
   <tfoot><tr><td colspan="4">TOTAL</td><td style="text-align:right">${fmt(total)}</td><td></td></tr></tfoot>
+  </table></body></html>`;
+  printHTML(html, 'contabilidad');
+}
+
+// ══════════════════════════════════════════════
+// CUADRES (auxiliar ↔ mayor)
+// ══════════════════════════════════════════════
+async function _contRenderCuadres(el) {
+  const res    = await window.api.accounting.getReconciliation();
+  const checks = res?.data || [];
+  const allOk  = checks.length && checks.every(c => c.ok);
+
+  el.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' } },
+    h('div', { style: { fontSize: '13px', fontWeight: '600', color: 'var(--ink)' } }, 'Verificación auxiliar ↔ mayor'),
+    h('span', { class: `entry-status entry-status-${allOk ? 'activo' : 'anulado'}`, style: { fontSize: '12px' } },
+      allOk ? '✓ Todo cuadra' : '⚠ Hay descuadres')
+  ));
+
+  el.appendChild(h('div', { style: { fontSize: '12px', color: 'var(--muted2)', marginBottom: '14px' } },
+    'Compara el saldo contable (cuenta control del mayor) con el auxiliar operativo. ' +
+    'Una diferencia indica operaciones sin asiento, importaciones o ajustes manuales; sincroniza el histórico o revisa el origen.'));
+
+  const tbl = h('table', { class: 'ledger-tbl', style: { width: '100%' } },
+    h('thead', null, h('tr', null,
+      h('th', null, 'Cuenta control'),
+      h('th', { class: 'num' }, 'Contable (mayor)'),
+      h('th', { class: 'num' }, 'Auxiliar'),
+      h('th', { class: 'num' }, 'Diferencia'),
+      h('th', null, 'Estado')
+    )),
+    h('tbody', null, ...checks.map(c => h('tr', null,
+      h('td', null, h('div', null, c.name), h('div', { style: { fontSize: '10px', color: 'var(--muted2)' } }, c.note)),
+      h('td', { class: 'num' }, fmt(c.control)),
+      h('td', { class: 'num' }, fmt(c.auxiliar)),
+      h('td', { class: 'num', style: { color: c.ok ? 'var(--muted2)' : '#ef4444', fontWeight: '700' } }, fmt(c.diff)),
+      h('td', null, h('span', { class: `entry-status entry-status-${c.ok ? 'activo' : 'anulado'}` }, c.ok ? '✓ Cuadra' : '⚠ Descuadre'))
+    )))
+  );
+  el.appendChild(h('div', { class: 'tw' }, tbl));
+}
+
+// ══════════════════════════════════════════════
+// REPORTE 606 (compras/gastos con NCF — DGII)
+// ══════════════════════════════════════════════
+async function _contRender606(el) {
+  const from = _contFrom || _isoDate(-30);
+  const to   = _contTo   || _isoDate(0);
+
+  const ctrl = h('div', { style: { display: 'flex', gap: '8px', alignItems: 'flex-end', marginBottom: '14px', flexWrap: 'wrap' } },
+    h('div', null, h('label', { class: 'lbl' }, 'Desde'), h('input', { class: 'inp', type: 'date', id: 'r606-from', value: from })),
+    h('div', null, h('label', { class: 'lbl' }, 'Hasta'), h('input', { class: 'inp', type: 'date', id: 'r606-to', value: to })),
+    h('button', { class: 'btn', onclick: () => {
+      _contFrom = document.getElementById('r606-from').value;
+      _contTo   = document.getElementById('r606-to').value;
+      _contRender606((el.innerHTML = '', el));
+    } }, 'Aplicar')
+  );
+  el.appendChild(ctrl);
+
+  const res    = await window.api.accounting.get606({ from, to });
+  const data   = res?.data || { rows: [], totals: { base: 0, itbis: 0, total: 0, count: 0 } };
+  const rows   = data.rows || [];
+  const totals = data.totals || { base: 0, itbis: 0, total: 0 };
+
+  el.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' } },
+    h('div', { style: { fontSize: '13px', fontWeight: '600' } }, `Compras con comprobante (${rows.length})`),
+    h('button', { class: 'print-btn', onclick: () => _print606(rows, totals, from, to) }, '🖨 Imprimir')
+  ));
+
+  if (!rows.length) {
+    el.appendChild(h('div', { class: 'empty' },
+      h('p', null, 'Sin compras con RNC de proveedor en el rango'),
+      h('span', null, 'El 606 lista gastos/compras que tengan RNC del proveedor registrado')
+    ));
+    return;
+  }
+
+  const tbl = h('table', { class: 'ledger-tbl', style: { width: '100%' } },
+    h('thead', null, h('tr', null,
+      h('th', null, 'Fecha'), h('th', null, 'RNC'), h('th', null, 'NCF'),
+      h('th', null, 'Proveedor'), h('th', null, 'Concepto'),
+      h('th', { class: 'num' }, 'Base'), h('th', { class: 'num' }, 'ITBIS'), h('th', { class: 'num' }, 'Total')
+    )),
+    h('tbody', null, ...rows.map(r => {
+      const itbis = r.tax_amount || 0, base = (r.total || 0) - itbis;
+      return h('tr', null,
+        h('td', null, r.issue_date || '—'),
+        h('td', null, r.supplier_rnc || '—'),
+        h('td', null, r.ncf || '—'),
+        h('td', null, r.supplier_name || '—'),
+        h('td', null, r.description || '—'),
+        h('td', { class: 'num' }, fmt(base)),
+        h('td', { class: 'num' }, fmt(itbis)),
+        h('td', { class: 'num' }, fmt(r.total || 0))
+      );
+    })),
+    h('tfoot', null, h('tr', null,
+      h('td', { colspan: '5' }, 'TOTALES'),
+      h('td', { class: 'num', style: { fontWeight: '700' } }, fmt(totals.base)),
+      h('td', { class: 'num', style: { fontWeight: '700' } }, fmt(totals.itbis)),
+      h('td', { class: 'num', style: { fontWeight: '700' } }, fmt(totals.total))
+    ))
+  );
+  el.appendChild(h('div', { class: 'tw' }, tbl));
+}
+
+function _print606(rows, totals, from, to) {
+  const biz = DB?.settings?.biz_name || CFG.biz || 'Velo POS';
+  const body = rows.map(r => {
+    const itbis = r.tax_amount || 0, base = (r.total || 0) - itbis;
+    return `<tr><td>${r.issue_date||'—'}</td><td>${_esc(r.supplier_rnc)||'—'}</td><td>${_esc(r.ncf)||'—'}</td>
+      <td>${_esc(r.supplier_name)||'—'}</td><td>${_esc(r.description)||'—'}</td>
+      <td style="text-align:right">${fmt(base)}</td><td style="text-align:right">${fmt(itbis)}</td><td style="text-align:right">${fmt(r.total||0)}</td></tr>`;
+  }).join('');
+  const html = `<html><head><meta charset="UTF-8">
+  <style>body{font-family:Arial;font-size:11px;margin:20px}h1{font-size:14px}table{width:100%;border-collapse:collapse}
+  th{background:#f3f4f6;padding:6px 8px;text-align:left}td{padding:5px 8px;border-bottom:1px solid #e5e7eb}
+  tfoot td{font-weight:700;background:#f3f4f6}</style></head><body>
+  <h1>${_esc(biz)} — Formato 606 (Compras)</h1>
+  <p style="color:#6b7280;font-size:10px">Período: ${from} a ${to} · Registros: ${rows.length}</p>
+  <table><thead><tr><th>Fecha</th><th>RNC</th><th>NCF</th><th>Proveedor</th><th>Concepto</th>
+  <th style="text-align:right">Base</th><th style="text-align:right">ITBIS</th><th style="text-align:right">Total</th></tr></thead>
+  <tbody>${body}</tbody>
+  <tfoot><tr><td colspan="5">TOTALES</td><td style="text-align:right">${fmt(totals.base)}</td>
+  <td style="text-align:right">${fmt(totals.itbis)}</td><td style="text-align:right">${fmt(totals.total)}</td></tr></tfoot>
   </table></body></html>`;
   printHTML(html, 'contabilidad');
 }

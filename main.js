@@ -4647,6 +4647,20 @@ ipcMain.handle('accounting:getDashboardStats', async () => {
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
+// Cuadres auxiliar ↔ mayor (CxC/Inventario/CxP): alerta de descuadre.
+ipcMain.handle('accounting:getReconciliation', async () => {
+  try {
+    return { ok: true, data: accountingRepo.getReconciliation() };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// Reporte 606 (compras/gastos con NCF — formato DGII preliminar).
+ipcMain.handle('accounting:get606', async (_, { from, to } = {}) => {
+  try {
+    return { ok: true, data: accountingRepo.get606({ from, to }) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
 ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) => {
   try {
     // Obtener ventas no vinculadas a asientos contables y generar asientos retroactivos
