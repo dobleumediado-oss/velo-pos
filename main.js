@@ -4355,12 +4355,23 @@ function setupMultiTerminal() {
   const mode = getMode();
   if (mode === 'server') {
     const { startRpcServer } = require('./src/main/net-server');
+    // Canales que el servidor NUNCA sirve a clientes remotos (propios de la máquina).
+    // OJO: settings:* NO va aquí (el cliente reenvía claves de negocio); print:onServer
+    // tampoco (es la opción explícita de imprimir en el servidor).
+    const SERVER_DENY = new Set([
+      'app:getTerminalInfo',
+      'connection:getInfo', 'connection:generateKey', 'connection:test', 'connection:setAllowedTerminal',
+      'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke', 'license:generate',
+      'update:check', 'update:download', 'update:install',
+      'print:html', 'print:toPDF', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
+    ]);
     _rpcServer = startRpcServer({
       port: Number(settingsRepo.get('connection_server_port')) || 8443,
       host: '0.0.0.0',
       getAccessKey: () => settingsRepo.get('connection_access_key') || '',
       getAllowlist: () => conn.parseAllowlist(settingsRepo.get('connection_allowlist')),
       dispatch: bridge.dispatch,
+      denyChannel: (ch) => SERVER_DENY.has(ch),
       onLog: (lvl, msg, extra) => { try { (lvl === 'error' ? logError : lvl === 'warn' ? logWarn : logInfo)('rpc', msg, extra); } catch {} },
     });
     logInfo('multiterminal', 'Servidor RPC iniciado', { port: _rpcServer.port, canales: bridge.channelCount() });

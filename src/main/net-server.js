@@ -26,7 +26,7 @@ function _sendJson(res, status, obj) {
 // Arranca el servidor. Retorna { server, port, close() }.
 // Config por funciones para leer siempre el valor vigente (clave/allowlist pueden
 // cambiar en caliente sin reiniciar).
-function startRpcServer({ port = 8443, host = '0.0.0.0', getAccessKey, getAllowlist, dispatch, onLog } = {}) {
+function startRpcServer({ port = 8443, host = '0.0.0.0', getAccessKey, getAllowlist, dispatch, denyChannel, onLog } = {}) {
   const log = (level, msg, extra) => { try { onLog && onLog(level, msg, extra); } catch {} };
 
   const server = http.createServer((req, res) => {
@@ -59,6 +59,13 @@ function startRpcServer({ port = 8443, host = '0.0.0.0', getAccessKey, getAllowl
           : authErr === conn.RPC_ERRORS.UNAUTHORIZED ? 401 : 400;
         log('warn', 'rpc rechazado', { channel: parsed && parsed.channel, reason: authErr });
         return _sendJson(res, status, conn.makeResponse(false, null, authErr));
+      }
+
+      // Hardening: no servir canales propios de la máquina (config de conexión,
+      // identidad, licencia, impresión local) a clientes remotos.
+      if (typeof denyChannel === 'function' && denyChannel(parsed.channel)) {
+        log('warn', 'rpc canal denegado', { channel: parsed.channel });
+        return _sendJson(res, 403, conn.makeResponse(false, null, conn.RPC_ERRORS.FORBIDDEN));
       }
 
       try {
