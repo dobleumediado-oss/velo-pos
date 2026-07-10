@@ -2,9 +2,13 @@
 
 [← Volver a CLAUDE.md](../CLAUDE.md)
 
-> Estado: **en construcción** (rama `feat/multi-terminal`). NO liberar a clientes
-> hasta completar y probar. El modo por defecto es **Local** — el comportamiento
-> actual queda intacto. Todo lo nuevo es **aditivo y opt-in**.
+> Estado: **fases funcionales completas y validadas** (rama `feat/multi-terminal`,
+> 15 commits). Falta **QA visual en GUI** (impresión real, modal de destino, aspecto
+> de la UI) y la decisión de merge/release. NO liberar a clientes hasta ese QA.
+> El modo por defecto es **Local** — el comportamiento actual queda intacto. Todo lo
+> nuevo es **aditivo y opt-in**. Validado en Electron real: arranque local sin cambios,
+> modo servidor sirviendo RPC, y E2E cliente→servidor 7/7 (login, sesión única, datos,
+> settings, seguridad).
 
 ## 1. Objetivo
 Permitir que varias PC (mostrador + laptops/desktops) de un mismo negocio compartan
@@ -120,21 +124,23 @@ Todo el negocio depende del servidor:
   whitelisted, ahora sobre la red.
 
 ## 12. Fases de implementación
-- **Fase 1 — Fundación (esta rama):** identidad de terminal (`terminal_id` + `machineId`),
-  bandera `connection_mode` (default `local`), sin tocar comportamiento. ✅ en curso.
-- **Fase 2 — Capa de red:** servidor HTTP/WebSocket en el proceso main que expone
-  los handlers IPC; transporte cliente que reenvía `window.api.*` al servidor;
-  auth + TLS + allowlist.
-- **Fase 3 — UI de conexión:** pantalla "Modo de conexión" (Local/Servidor/Cliente),
-  IP+puerto+clave, "Probar conexión", estados.
-- **Fase 4 — Cajas por terminal:** `terminal_id` en `cash_sessions`, `getOpen(terminalId)`,
-  reportes por terminal/consolidado (migración).
-- **Fase 5 — Ruteo de impresión** al servidor (impresora del mostrador).
-- **Fase 6 — Robustez:** reconexión, "servidor no disponible", latencia, respaldo
-  automático, UPS/always-on, endurecimiento de seguridad.
-- **Fase 7 — Tailscale:** manual por máquina, o empaquetado en el instalador con auth key.
-- **Fase futura (opcional) — Offline-first:** copia local + replicación para vender
-  sin servidor.
+- **Fase 1 — Fundación:** identidad de terminal (`terminal_id` + `machineId`), bandera
+  `connection_mode` (default `local`). ✅
+- **Fase 2 — Capa de red:** `src/main/connection.js` (clave/allowlist/autorización),
+  `net-server.js` (RPC HTTP), `net-client.js` (transporte + offline), `ipc-bridge.js`
+  (interceptor mode-aware que migra los 197 handlers en un punto; AsyncLocalStorage
+  para el terminalId por petición). Cableado en `main.js` (solo arranca en modo servidor). ✅
+- **Fase 3 — UI de conexión:** card "Modo de Conexión" (config.js) + handlers
+  `connection:*`. Split de settings (negocio→servidor / dispositivo→local). ✅
+- **Fase 4 — Cajas por terminal:** migración `1.14.1` (`terminal_id` en cash_sessions),
+  `getOpen(terminalId)` con fallback legacy, venta→caja en todos los flujos de dinero. ✅
+- **Fase 5 — Ruteo de impresión:** `print:*` local por terminal, `print:onServer` para
+  imprimir en el mostrador, modal de destino (cliente sin impresora). ✅
+- **Sesión única por usuario:** registro en memoria + heartbeat + alerta. ✅
+- **Hardening:** el servidor no sirve canales de dispositivo a clientes (deny list). ✅
+- **Pendiente:** QA visual GUI (impresión real, modal, aspecto UI); Tailscale (manual o
+  empaquetado); respaldo automático fuera de la máquina + UPS (operativo).
+- **Fase futura (opcional) — Offline-first:** copia local + replicación para vender sin servidor.
 
 ## 13. Decisiones (RESUELTAS)
 1. **Cajas:** cada terminal maneja su propia caja. (§6)
