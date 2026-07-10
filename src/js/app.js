@@ -8,16 +8,41 @@
 window.addEventListener('error', (e) => {
   try {
     window.api?.log?.error('renderer',
-      e.message || 'error', { src: e.filename, line: e.lineno, col: e.colno });
+      e.message || 'error', { src: e.filename, line: e.lineno, col: e.colno })?.catch?.(() => {});
   } catch {}
 });
 window.addEventListener('unhandledrejection', (e) => {
   try {
     const r = e.reason;
+    // No re-loguear nuestros propios errores de red (evita cualquier cascada).
+    if (r && (r.message === 'SERVER_OFFLINE' || r.offline)) return;
     window.api?.log?.error('renderer-promise',
-      r?.message || String(r), { stack: r?.stack });
+      r?.message || String(r), { stack: r?.stack })?.catch?.(() => {});
   } catch {}
 });
+
+// ── Sesión única por usuario (multi-terminal) — heartbeat ──
+// Mantiene viva la sesión de esta terminal en el servidor. Sin heartbeat por
+// unos minutos, otra terminal puede tomar el control (evita bloqueo por caída).
+let _sessionHbInterval = null;
+function _sessionTerminalId() {
+  return (typeof CFG !== 'undefined' && CFG.terminalId)
+      || (typeof TERMINAL_ID !== 'undefined' && TERMINAL_ID) || '';
+}
+function _startSessionHeartbeat() {
+  _stopSessionHeartbeat();
+  _sessionHbInterval = setInterval(() => {
+    try {
+      const tid = _sessionTerminalId();
+      if (user && tid && window.api?.auth?.heartbeat) {
+        window.api.auth.heartbeat({ userId: user.id, terminalId: tid });
+      }
+    } catch {}
+  }, 60000);
+}
+function _stopSessionHeartbeat() {
+  if (_sessionHbInterval) { clearInterval(_sessionHbInterval); _sessionHbInterval = null; }
+}
 
 // ── Bootstrap ────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -381,7 +406,16 @@ function renderLogin() {
 
     lerr.innerHTML = `<div style="color:var(--muted);font-size:12px;padding:8px 0">Verificando...</div>`;
 
-    const result = await window.api.auth.login({ email, password: pass });
+    const terminalId = (typeof ensureTerminalId === 'function') ? await ensureTerminalId() : '';
+    const result = await window.api.auth.login({ email, password: pass, terminalId });
+
+    // Sesión única: el usuario ya está activo en otra terminal.
+    if (!result.ok && result.activeSession) {
+      lerr.innerHTML = `<div class="err">Este usuario ya tiene una sesión activa en otra terminal.
+        <br><span style="font-size:10px">Cierra sesión en la otra máquina o espera unos minutos.</span></div>`;
+      passEl.value = ''; passEl.focus();
+      return;
+    }
 
     if (!result.ok) {
       loginAttempts++;
@@ -414,6 +448,7 @@ function renderLogin() {
     user = result.user;
     window._currentUser = user;  // accesible desde módulos externos
     sessionStorage.setItem('vp_user', JSON.stringify(user));
+    _startSessionHeartbeat();    // mantiene viva la sesión única de esta terminal
     await loadAppData();
     renderApp();
 
@@ -857,8 +892,9 @@ async function doLogout() {
     clearInterval(window._dashRefreshInterval);
     window._dashRefreshInterval = null;
   }
+  _stopSessionHeartbeat();
   if (user) {
-    await window.api.auth.logout({ userId: user.id, userName: user.name });
+    await window.api.auth.logout({ userId: user.id, userName: user.name, terminalId: _sessionTerminalId() });
   }
   user = null;
   window._currentUser = null;

@@ -4,6 +4,27 @@
 // ══════════════════════════════════════════════
 
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+
+// ── Interceptor de IPC (multi-terminal) — DEBE ir ANTES de cualquier handler ──
+// Envuelve ipcMain.handle: cada handler queda disponible para dispatch de red y
+// mode-aware. En modo 'local' (por defecto) es passthrough → cero cambio.
+// localOnly = canales propios de la máquina que NUNCA se reenvían al servidor.
+// Ver docs/multi-terminal-sync.md
+require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
+  localOnly: new Set([
+    'app:getTerminalInfo',
+    'connection:getInfo', 'connection:generateKey', 'connection:test', 'connection:setAllowedTerminal',
+    'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke', 'license:generate',
+    'update:check', 'update:download', 'update:install',
+    'settings:set', 'settings:getAll',
+    // Impresión = operación de dispositivo: cada terminal imprime en SU impresora.
+    // (print:onServer NO va aquí: es la opción explícita de imprimir en el servidor.)
+    'print:html', 'print:toPDF', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
+    // Diagnóstico local: NUNCA reenviar (si se reenvía y el servidor cae, el propio
+    // logger de errores falla → cascada). El log de cada terminal es local.
+    'log:error',
+  ]),
+});
 const path = require('path');
 const fs   = require('fs');
 const { sqliteIdent } = require('./lib/sql-safe');
@@ -405,7 +426,24 @@ function createWindow() {
 // ══════════════════════════════════════════════
 
 // ── Auth ──────────────────────────────────────
-ipcMain.handle('auth:login', async (_, { email, password }) => {
+// ── Sesión única por usuario (multi-terminal) ────────────────────────────────
+// Registro en memoria (userId → {terminalId, lastSeen}) en el proceso main del
+// SERVIDOR (donde corre el login en modo cliente). Un heartbeat renueva lastSeen;
+// sin heartbeat por SESSION_TTL_MS la sesión se considera liberada (evita bloqueo
+// permanente por caída/crash). El master de soporte queda exento. Ver docs §7.
+const SESSION_TTL_MS = 3 * 60 * 1000;
+const _activeSessions = new Map();
+function _sessionActiveElsewhere(userId, terminalId) {
+  const s = _activeSessions.get(userId);
+  if (!s || s.terminalId === terminalId) return false;
+  if (Date.now() - s.lastSeen > SESSION_TTL_MS) { _activeSessions.delete(userId); return false; }
+  return true;
+}
+function _registerSession(userId, terminalId) { _activeSessions.set(userId, { terminalId, lastSeen: Date.now() }); }
+function _touchSession(userId, terminalId) { const s = _activeSessions.get(userId); if (s && s.terminalId === terminalId) s.lastSeen = Date.now(); }
+function _clearSession(userId, terminalId) { const s = _activeSessions.get(userId); if (s && (!terminalId || s.terminalId === terminalId)) _activeSessions.delete(userId); }
+
+ipcMain.handle('auth:login', async (_, { email, password, terminalId, force }) => {
   try {
     const emailKey = email?.toLowerCase() || '';
 
@@ -444,6 +482,15 @@ ipcMain.handle('auth:login', async (_, { email, password }) => {
 
     // Login exitoso — limpiar contador
     _clearLoginRate(emailKey);
+
+    // ── Sesión única: rechazar si el usuario ya está activo en OTRA terminal ──
+    // (el master de soporte queda exento; `force` permite tomar el control de una
+    //  sesión colgada tras confirmar en la UI).
+    if (!masterOk && terminalId && _sessionActiveElsewhere(user.id, terminalId) && !force) {
+      return { ok: false, error: 'Este usuario ya tiene una sesión activa en otra terminal.', activeSession: true };
+    }
+    if (terminalId) _registerSession(user.id, terminalId);
+
     audit(user.id, user.name, 'login', 'users', user.id,
           masterOk ? 'Login exitoso (master)' : 'Login exitoso');
 
@@ -477,19 +524,72 @@ ipcMain.handle('auth:login', async (_, { email, password }) => {
   }
 });
 
-ipcMain.handle('auth:logout', async (_, { userId, userName }) => {
+ipcMain.handle('auth:logout', async (_, { userId, userName, terminalId }) => {
+  _clearSession(userId, terminalId);
   audit(userId, userName, 'logout', 'users', userId, 'Logout');
   return { ok: true };
 });
 
+// Heartbeat: mantiene viva la sesión de esta terminal (sesión única por usuario).
+// Sin heartbeat por SESSION_TTL_MS, otra terminal puede tomar el control.
+ipcMain.handle('auth:heartbeat', async (_, { userId, terminalId } = {}) => {
+  if (userId && terminalId) _touchSession(userId, terminalId);
+  return { ok: true };
+});
+
 // ── Settings ──────────────────────────────────
+// Claves PROPIAS de la máquina (no se sincronizan con el servidor): conexión,
+// identidad de terminal e impresora. El resto son del negocio (viven en el servidor).
+function _isDeviceSetting(key) {
+  return /^connection_/.test(key) || key === 'terminal_id' || key === 'printer' || key === 'printer_type';
+}
+
+// terminalId de la terminal que originó la petición (para atar a SU caja):
+//   · cliente → el auth.terminalId del RPC (vía el puente / AsyncLocalStorage).
+//   · local/servidor → el terminal_id de esta máquina.
+// Si no hay ninguno → undefined → getOpen() cae al comportamiento global histórico.
+function _reqTerminalId() {
+  try {
+    const t = require('./src/main/ipc-bridge').currentTerminalId();
+    if (t) return t;
+  } catch {}
+  return settingsRepo.get('terminal_id') || undefined;
+}
+
 ipcMain.handle('settings:getAll', async () => {
-  return settingsRepo.getAll();
+  const local = settingsRepo.getAll();
+  // Multi-terminal: en modo cliente, base = settings del negocio (servidor),
+  // overlay = claves de dispositivo locales. Si el servidor no responde, devuelve
+  // lo local para no dejar la UI en blanco.
+  try {
+    const bridge = require('./src/main/ipc-bridge');
+    if (bridge.getMode() === 'client') {
+      const server = await bridge.forwardToServer('settings:getAll', undefined);
+      const merged = { ...(server || {}) };
+      for (const k of Object.keys(local)) if (_isDeviceSetting(k)) merged[k] = local[k];
+      return merged;
+    }
+  } catch (e) { /* servidor no disponible → cae a local */ }
+  return local;
 });
 
 ipcMain.handle('settings:set', async (_, { key, value, requestUserId }) => {
-  // Claves que solo puede cambiar el superadmin
-  const SUPERADMIN_KEYS = /^(module_|barcode_enabled$|fiscal_enabled$|.*_roles$|license_|master_|multi_negocio)/;
+  // Multi-terminal: en modo cliente, las claves del NEGOCIO se escriben en el
+  // servidor (que valida permisos con SUS usuarios). Las de DISPOSITIVO (conexión,
+  // impresora, terminal) quedan locales y siguen el flujo normal de abajo.
+  try {
+    const bridge = require('./src/main/ipc-bridge');
+    if (bridge.getMode() === 'client' && !_isDeviceSetting(key)) {
+      return await bridge.forwardToServer('settings:set', { key, value, requestUserId });
+    }
+  } catch (e) {
+    return { ok: false, error: e.offline ? 'Sin conexión al servidor' : (e.message || 'Error al guardar en el servidor') };
+  }
+
+  // Claves que solo puede cambiar el superadmin. `connection_*` es topología
+  // de red (multi-terminal): modo servidor/cliente, IP, puerto, clave — decisión
+  // de nivel superadmin.
+  const SUPERADMIN_KEYS = /^(module_|barcode_enabled$|fiscal_enabled$|.*_roles$|license_|master_|multi_negocio|connection_)/;
   // Claves que requieren al menos rol admin
   const ADMIN_KEYS = /^(biz_|tax_pct$|receipt_msg$|pos_|print_template$|printer|biz_logo$)/;
 
@@ -524,8 +624,128 @@ ipcMain.handle('settings:set', async (_, { key, value, requestUserId }) => {
     }
   }
 
+  // `terminal_id` es la identidad estable de esta terminal, gestionada por el
+  // sistema (ver app:getTerminalInfo). No se permite sobrescribir desde la UI.
+  if (key === 'terminal_id') {
+    return { ok: false, error: 'El identificador de terminal es gestionado por el sistema.' };
+  }
+
   settingsRepo.set(key, value);
   return { ok: true };
+});
+
+// ── Terminal / conexión (Fase 1 — fundación multi-terminal) ──────────────────
+// Identidad estable de esta terminal para el modelo multi-terminal:
+//   · machineId  — hash de hardware+hostname (license.js). Cambia si se renombra
+//                  la PC o cambia el CPU.
+//   · terminalId — UUID persistente generado la 1ª vez y guardado en settings.
+//                  NO cambia aunque se renombre la PC → identidad estable.
+// Base para: cajas por terminal, allowlist del servidor, auditoría.
+// En esta fase NO hay red: `connection_mode` es 'local' por defecto (comportamiento
+// actual intacto). La capa de red llega en la Fase 2. Ver docs/multi-terminal-sync.md.
+ipcMain.handle('app:getTerminalInfo', async () => {
+  try {
+    let terminalId = settingsRepo.get('terminal_id');
+    if (!terminalId) {
+      terminalId = require('crypto').randomUUID();
+      settingsRepo.set('terminal_id', terminalId);
+      logInfo('terminal', 'terminal_id generado', { terminalId });
+    }
+    return {
+      ok: true,
+      terminalId,
+      machineId: getMachineId(),
+      mode: settingsRepo.get('connection_mode') || 'local',
+    };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// ── Conexión multi-terminal — gestión (Fase 3, solo superadmin) ──────────────
+// Handlers ADITIVOS (no tocan los existentes) que alimentan la pantalla
+// "Modo de conexión". La topología es decisión de nivel superadmin.
+function _connRequireSA(requestUserId) {
+  const u = requestUserId ? authRepo.findById(requestUserId) : null;
+  return (u && u.role === 'superadmin') ? u : null;
+}
+function _connTerminalNames() {
+  try { return JSON.parse(settingsRepo.get('connection_terminal_names') || '{}'); } catch { return {}; }
+}
+// Direcciones IPv4 reales de esta PC (para mostrar a qué IP conectan los clientes).
+// Detecta Tailscale (rango CGNAT 100.64.0.0/10 o interfaz "tailscale"/"utun").
+function _localAddresses() {
+  const os = require('os');
+  const out = [];
+  const ifaces = os.networkInterfaces();
+  for (const name of Object.keys(ifaces)) {
+    for (const ni of (ifaces[name] || [])) {
+      if (ni.family !== 'IPv4' || ni.internal) continue;
+      // Señal principal: rango CGNAT oficial de Tailscale 100.64.0.0/10
+      // (100.64.x – 100.127.x). Secundaria: nombre de interfaz "tailscale".
+      const m = /^100\.(\d+)\./.exec(ni.address);
+      const isTs = (m && +m[1] >= 64 && +m[1] <= 127) || /tailscale/i.test(name);
+      out.push({ ip: ni.address, label: isTs ? 'Tailscale' : 'Red local', tailscale: !!isTs });
+    }
+  }
+  out.sort((a, b) => (b.tailscale ? 1 : 0) - (a.tailscale ? 1 : 0)); // Tailscale primero
+  return out;
+}
+
+ipcMain.handle('connection:getInfo', async (_, { requestUserId } = {}) => {
+  try {
+    if (!_connRequireSA(requestUserId)) return { ok: false, error: 'Solo el superadmin puede ver la configuración de conexión' };
+    const conn = require('./src/main/connection');
+    let terminalId = settingsRepo.get('terminal_id');
+    if (!terminalId) { terminalId = require('crypto').randomUUID(); settingsRepo.set('terminal_id', terminalId); }
+    const names = _connTerminalNames();
+    const mode  = settingsRepo.get('connection_mode') || 'local';
+    return {
+      ok: true, mode, terminalId, machineId: getMachineId(),
+      serverIp:   settingsRepo.get('connection_server_ip')   || '',
+      serverPort: settingsRepo.get('connection_server_port') || '8443',
+      accessKey:  mode === 'server' ? (settingsRepo.get('connection_access_key') || '') : '',
+      hasKey:     !!settingsRepo.get('connection_access_key'),
+      allowlist:  conn.parseAllowlist(settingsRepo.get('connection_allowlist')).map(id => ({ terminalId: id, name: names[id] || '' })),
+      addresses:  _localAddresses(),
+    };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('connection:generateKey', async (_, { requestUserId } = {}) => {
+  try {
+    if (!_connRequireSA(requestUserId)) return { ok: false, error: 'Solo el superadmin' };
+    const key = require('./src/main/connection').generateAccessKey();
+    settingsRepo.set('connection_access_key', key);
+    return { ok: true, accessKey: key };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('connection:test', async (_, { requestUserId, host, port } = {}) => {
+  try {
+    if (!_connRequireSA(requestUserId)) return { ok: false, error: 'Solo el superadmin' };
+    const { healthCheck } = require('./src/main/net-client');
+    const r = await healthCheck({
+      host: host || settingsRepo.get('connection_server_ip') || '127.0.0.1',
+      port: Number(port || settingsRepo.get('connection_server_port')) || 8443,
+      timeoutMs: 5000,
+    });
+    return { ok: true, reachable: !!r.ok, ms: r.ms ?? null, error: r.error || null };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('connection:setAllowedTerminal', async (_, { requestUserId, terminalId, name, remove } = {}) => {
+  try {
+    if (!_connRequireSA(requestUserId)) return { ok: false, error: 'Solo el superadmin' };
+    const conn = require('./src/main/connection');
+    let list  = conn.parseAllowlist(settingsRepo.get('connection_allowlist'));
+    const names = _connTerminalNames();
+    if (remove) { list = list.filter(id => id !== terminalId); delete names[terminalId]; }
+    else if (terminalId && !list.includes(terminalId)) { list.push(terminalId); if (name) names[terminalId] = name; }
+    settingsRepo.set('connection_allowlist', JSON.stringify(list));
+    settingsRepo.set('connection_terminal_names', JSON.stringify(names));
+    return { ok: true, count: list.length };
+  } catch (e) { return { ok: false, error: e.message }; }
 });
 
 // ── Usuarios ──────────────────────────────────
@@ -730,7 +950,7 @@ ipcMain.handle('customers:addPayment', async (_, { data, requestUserId }) => {
       return { ok: false, error: 'El monto del abono debe ser mayor a cero' };
     }
     // Obtener sesión de caja activa
-    const session = cashRepo.getOpen();
+    const session = cashRepo.getOpen(_reqTerminalId());
     const result  = customersRepo.addPayment({
       ...data,
       cajero:    reqUser?.name,
@@ -806,19 +1026,21 @@ ipcMain.handle('customers:getHistory', async (_, { customerId }) => {
 });
 
 // ── Caja ──────────────────────────────────────
-ipcMain.handle('cash:getOpen', async () => {
-  return cashRepo.getOpen();
+ipcMain.handle('cash:getOpen', async (_, arg) => {
+  // terminalId opcional: sin él = caja abierta global (histórico); con él = la de
+  // esta terminal (multi-terminal). El renderer lo pasa cuando lo conoce.
+  return cashRepo.getOpen(arg && arg.terminalId);
 });
 
-ipcMain.handle('cash:open', async (_, { openAmount, openBills, requestUserId }) => {
+ipcMain.handle('cash:open', async (_, { openAmount, openBills, requestUserId, terminalId }) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
     if (!reqUser) return { ok: false, error: 'Usuario no válido' };
-    const existing = cashRepo.getOpen();
+    const existing = cashRepo.getOpen(terminalId);
     if (existing) return { ok: false, error: 'Ya hay una caja abierta' };
     const id = cashRepo.open({
       userId: requestUserId, cajero: reqUser.name,
-      openAmount, openBills
+      openAmount, openBills, terminalId
     });
     return { ok: true, id };
   } catch (e) {
@@ -890,7 +1112,7 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
 
     // Verificar caja abierta (cajero debe tener caja)
     if (reqUser.role === 'cajero') {
-      const session = cashRepo.getOpen();
+      const session = cashRepo.getOpen(_reqTerminalId());
       if (!session) return { ok: false, error: 'Debes abrir la caja antes de vender' };
       saleData.session = session;
     }
@@ -960,7 +1182,7 @@ ipcMain.handle('sales:return', async (_, { originalSaleId, items, reason, reques
     if (!reqUser) return { ok: false, error: 'Usuario no válido' };
 
     // Verificar caja abierta
-    const session = cashRepo.getOpen();
+    const session = cashRepo.getOpen(_reqTerminalId());
     if (!session) return { ok: false, error: 'Debes tener la caja abierta para procesar devoluciones' };
 
     const result = returnsRepo.create({
@@ -1246,6 +1468,30 @@ ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, jobTyp
       } catch {}
     }
     console.error('[print:html]', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
+// Imprimir en la impresora del SERVIDOR (mostrador). NO es local-only: en modo
+// cliente el interceptor reenvía esta llamada al servidor, que la ejecuta con SU
+// impresora configurada. Es la opción "imprimir por el servidor" cuando la terminal
+// no tiene impresora física. Ver docs/multi-terminal-sync.md §8.
+ipcMain.handle('print:onServer', async (_, { html, jobType, referenceId, userId } = {}) => {
+  try {
+    const printerName  = settingsRepo.get('printer') || undefined;
+    const ptype        = settingsRepo.get('printer_type') || '';
+    const printerWidth = ptype === '58mm' ? 58000 : ptype === '80mm' ? 80000 : undefined;
+    await _attemptPrintHTML({ html, printerName, printerWidth });
+    if (jobType && referenceId) {
+      try {
+        require('./database').getDB().prepare(
+          "INSERT INTO print_jobs(type, reference_id, status, printer, user_id) VALUES(?,?,'success',?,?)"
+        ).run(jobType, referenceId, (printerName || '') + ' (servidor)', userId || null);
+      } catch {}
+    }
+    return { ok: true, printedOn: 'server' };
+  } catch (e) {
+    console.error('[print:onServer]', e.message);
     return { ok: false, error: e.message };
   }
 });
@@ -3247,7 +3493,7 @@ ipcMain.handle('conduce:invoice', async (_, { id, lines = null, payment = {}, pr
     const u = authRepo.findById(requestUserId);
     if (!u) return { ok: false, error: 'Sin sesión' };
     // Caja abierta para la factura (igual que una venta normal)
-    const session = cashRepo.getOpen ? cashRepo.getOpen() : (sessionId ? { id: sessionId } : null);
+    const session = cashRepo.getOpen ? cashRepo.getOpen(_reqTerminalId()) : (sessionId ? { id: sessionId } : null);
     const res = conduceRepo.invoiceFromConduce({
       conduceId: id, lines, payment, priceMode,
       session, user: { id: u.id, name: u.name },
@@ -3442,7 +3688,7 @@ ipcMain.handle('expenses:create', async (_, { data, requestUserId }) => {
 
     if (u.role === 'cajero') {
       // Cajero solo puede registrar desde caja abierta
-      const session = cashRepo.getOpen();
+      const session = cashRepo.getOpen(_reqTerminalId());
       if (!session) return { ok:false, error:'Debes tener una caja abierta para registrar gastos' };
       data.cash_session_id = session.id;
       data.payment_source = 'caja';
@@ -3460,7 +3706,7 @@ ipcMain.handle('expenses:create', async (_, { data, requestUserId }) => {
     // Si es cajero, pago directo sin aprobación y caja disponible
     let autoPay = null;
     if (u.role === 'cajero' && status === 'pendiente_pago' && data.payment_source === 'caja') {
-      const session = cashRepo.getOpen();
+      const session = cashRepo.getOpen(_reqTerminalId());
       if (session) {
         autoPay = expensesRepo.pay({
           expenseId: id, amount: data.total || data.amount,
@@ -3490,7 +3736,7 @@ ipcMain.handle('expenses:pay', async (_, { expenseId, amount, payment_method, pa
     }
     let cash_session_id = null;
     if (payment_source === 'caja') {
-      const session = cashRepo.getOpen();
+      const session = cashRepo.getOpen(_reqTerminalId());
       if (!session) return { ok:false, error:'No hay caja abierta' };
       cash_session_id = session.id;
     }
@@ -4160,6 +4406,55 @@ ipcMain.handle('ecf:getLog', async (_, { limit = 50, offset = 0 } = {}) => {
 });
 
 
+// ── Multi-terminal (opt-in) — puente mode-aware + servidor RPC ───────────────
+// Por defecto connection_mode='local' → NO arranca ningún servidor ni cambia
+// nada. Solo se activa si un superadmin configura modo servidor/cliente.
+// El puente aún no tiene handlers migrados; esta es la infraestructura de red.
+// Ver docs/multi-terminal-sync.md
+let _rpcServer = null;
+function setupMultiTerminal() {
+  const bridge = require('./src/main/ipc-bridge');
+  const conn   = require('./src/main/connection');
+  const getMode = () => settingsRepo.get('connection_mode') || 'local';
+
+  bridge.configureBridge({
+    mode: getMode,
+    client: () => ({
+      host:       settingsRepo.get('connection_server_ip')   || '127.0.0.1',
+      port:       Number(settingsRepo.get('connection_server_port')) || 8443,
+      accessKey:  settingsRepo.get('connection_access_key')  || '',
+      terminalId: settingsRepo.get('terminal_id')            || '',
+    }),
+  });
+
+  const mode = getMode();
+  if (mode === 'server') {
+    const { startRpcServer } = require('./src/main/net-server');
+    // Canales que el servidor NUNCA sirve a clientes remotos (propios de la máquina).
+    // OJO: settings:* NO va aquí (el cliente reenvía claves de negocio); print:onServer
+    // tampoco (es la opción explícita de imprimir en el servidor).
+    const SERVER_DENY = new Set([
+      'app:getTerminalInfo',
+      'connection:getInfo', 'connection:generateKey', 'connection:test', 'connection:setAllowedTerminal',
+      'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke', 'license:generate',
+      'update:check', 'update:download', 'update:install',
+      'print:html', 'print:toPDF', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
+    ]);
+    _rpcServer = startRpcServer({
+      port: Number(settingsRepo.get('connection_server_port')) || 8443,
+      host: '0.0.0.0',
+      getAccessKey: () => settingsRepo.get('connection_access_key') || '',
+      getAllowlist: () => conn.parseAllowlist(settingsRepo.get('connection_allowlist')),
+      dispatch: bridge.dispatch,
+      denyChannel: (ch) => SERVER_DENY.has(ch),
+      onLog: (lvl, msg, extra) => { try { (lvl === 'error' ? logError : lvl === 'warn' ? logWarn : logInfo)('rpc', msg, extra); } catch {} },
+    });
+    logInfo('multiterminal', 'Servidor RPC iniciado', { port: _rpcServer.port, canales: bridge.channelCount() });
+  } else {
+    logInfo('multiterminal', 'Modo de conexión', { mode });
+  }
+}
+
 app.whenReady().then(() => {
   // Cargar API key de Claude (necesita userData, disponible solo aquí)
   _loadApiKey();
@@ -4179,6 +4474,10 @@ app.whenReady().then(() => {
   try {
     db = initDB(DATA_DIR);
     initVersioning(db, DATA_DIR);
+    // Multi-terminal: configura el puente y (solo en modo servidor) arranca el RPC.
+    // Aislado en try propio para que jamás impida el arranque del POS.
+    try { setupMultiTerminal(); }
+    catch (e) { logError('multiterminal', 'Setup falló: ' + e.message); }
   } catch (e) {
     logError('DB', 'Error al inicializar: ' + e.message);
     console.error('[DB] Error al inicializar:', e);
@@ -4219,6 +4518,7 @@ app.on('activate', () => {
 
 // Cierre limpio
 app.on('before-quit', () => {
+  if (_rpcServer) { try { _rpcServer.close(); } catch {} _rpcServer = null; }
   const dbInst = require('./database').getDB();
   if (dbInst) dbInst.close();
 });

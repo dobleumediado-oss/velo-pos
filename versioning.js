@@ -970,6 +970,20 @@ const MIGRATIONS = [
       console.log('[MIGRATION activos] Tablas fixed_assets y depreciation_entries creadas');
     }
   },
+  {
+    version: '1.14.1',
+    description: 'Multi-terminal: terminal_id en cash_sessions (caja por terminal)',
+    run(db) {
+      // Aditiva e idempotente (PRAGMA guard). NULL en filas existentes = compatible:
+      // getOpen(terminalId) trata las sesiones legacy sin terminal_id como propias,
+      // así NO se pierde ninguna caja abierta al actualizar. No toca montos ni cuadre.
+      const cols = db.prepare("PRAGMA table_info(cash_sessions)").all().map(c => c.name);
+      if (!cols.includes('terminal_id')) {
+        db.exec("ALTER TABLE cash_sessions ADD COLUMN terminal_id TEXT");
+        console.log('[MIGRATION 1.14.1] Columna terminal_id añadida a cash_sessions');
+      }
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

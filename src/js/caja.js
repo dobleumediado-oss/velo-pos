@@ -289,6 +289,7 @@ async function confirmarApertura() {
       openAmount: fondo,
       openBills:  bills,
       requestUserId: user.id,
+      terminalId: (typeof TERMINAL_ID !== 'undefined' && TERMINAL_ID) || (typeof CFG !== 'undefined' && CFG.terminalId) || undefined,
     });
   } catch (e) {
     if (btn) btn.disabled = false;

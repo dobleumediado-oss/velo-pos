@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('api', {
   auth: {
     login:        (data)     => ipcRenderer.invoke('auth:login', data),
     logout:       (data)     => ipcRenderer.invoke('auth:logout', data),
+    heartbeat:    (data)     => ipcRenderer.invoke('auth:heartbeat', data),
     getSuperPass: ()         => ipcRenderer.invoke('auth:getSuperPass'),
   },
 
@@ -60,7 +61,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // ── Caja ──────────────────────────────────
   cash: {
-    getOpen:         ()      => ipcRenderer.invoke('cash:getOpen'),
+    getOpen:         (data)  => ipcRenderer.invoke('cash:getOpen', data),
     open:            (data)  => ipcRenderer.invoke('cash:open', data),
     close:           (data)  => ipcRenderer.invoke('cash:close', data),
     getSessions:     ()      => ipcRenderer.invoke('cash:getSessions'),
@@ -103,6 +104,7 @@ contextBridge.exposeInMainWorld('api', {
   // ── Impresión ─────────────────────────────
   print: {
     html:         (data)      => ipcRenderer.invoke('print:html', data),
+    onServer:     (data)      => ipcRenderer.invoke('print:onServer', data),
     toPDF:        (data)      => ipcRenderer.invoke('print:toPDF', data),
     getPrinters:  ()          => ipcRenderer.invoke('print:getPrinters'),
     savePrinter:  (data)      => ipcRenderer.invoke('print:savePrinter', data),
@@ -130,6 +132,17 @@ contextBridge.exposeInMainWorld('api', {
     getMachineId:()          => ipcRenderer.invoke('license:getMachineId'),
     revoke:      (data)      => ipcRenderer.invoke('license:revoke', data),
     generate:    (data)      => ipcRenderer.invoke('license:generate', data),
+  },
+
+  // ── Terminal / conexión (multi-terminal) ──
+  app: {
+    getTerminalInfo: () => ipcRenderer.invoke('app:getTerminalInfo'),
+  },
+  connection: {
+    getInfo:            (data) => ipcRenderer.invoke('connection:getInfo', data),
+    generateKey:        (data) => ipcRenderer.invoke('connection:generateKey', data),
+    test:               (data) => ipcRenderer.invoke('connection:test', data),
+    setAllowedTerminal: (data) => ipcRenderer.invoke('connection:setAllowedTerminal', data),
   },
 
   // ── Categorías ────────────────────────────────

@@ -237,10 +237,29 @@ async function reloadSales(filters = {}) {
 }
 
 // ══════════════════════════════════════════════
+// TERMINAL (multi-terminal) — identidad estable de esta máquina
+// ══════════════════════════════════════════════
+let TERMINAL_ID = '';
+async function ensureTerminalId() {
+  if (TERMINAL_ID) return TERMINAL_ID;
+  try {
+    const info = await window.api.app.getTerminalInfo();
+    if (info && info.ok) {
+      TERMINAL_ID = info.terminalId || '';
+      if (typeof CFG !== 'undefined') { CFG.terminalId = TERMINAL_ID; CFG.connectionMode = info.mode || 'local'; }
+    }
+  } catch { /* si falla, TERMINAL_ID queda '' → comportamiento local histórico */ }
+  return TERMINAL_ID;
+}
+
+// ══════════════════════════════════════════════
 // CAJA
 // ══════════════════════════════════════════════
 async function chkCaja() {
-  const session = await window.api.cash.getOpen();
+  // Caja por terminal: cada máquina consulta SU caja abierta. Sin terminalId
+  // (no cargado aún) degrada al comportamiento histórico (caja global).
+  const terminalId = await ensureTerminalId();
+  const session = await window.api.cash.getOpen({ terminalId });
   cajaOpen    = !!session;
   cajaSession = session || null;
 }

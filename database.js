@@ -1047,14 +1047,24 @@ const customersRepo = {
 
 // ── Caja ──────────────────────────────────────
 const cashRepo = {
-  getOpen() {
-    return db.prepare("SELECT * FROM cash_sessions WHERE status='open' LIMIT 1").get();
+  // getOpen(terminalId?) — SIN terminalId: comportamiento histórico (la única caja
+  // abierta). CON terminalId (multi-terminal): la caja abierta de ESA terminal, con
+  // fallback a sesiones legacy sin terminal_id (abiertas antes de actualizar), para
+  // no perder ninguna caja abierta. Prefiere la propia sobre la legacy.
+  getOpen(terminalId) {
+    if (!terminalId) {
+      return db.prepare("SELECT * FROM cash_sessions WHERE status='open' LIMIT 1").get();
+    }
+    return db.prepare(
+      "SELECT * FROM cash_sessions WHERE status='open' AND (terminal_id=? OR terminal_id IS NULL) " +
+      "ORDER BY (terminal_id IS NULL) ASC, id DESC LIMIT 1"
+    ).get(terminalId);
   },
-  open({ userId, cajero, openAmount, openBills }) {
+  open({ userId, cajero, openAmount, openBills, terminalId }) {
     const r = db.prepare(`
-      INSERT INTO cash_sessions(user_id,cajero,open_date,open_time,open_amount,open_bills,status)
-      VALUES(?,?,?,?,?,?,'open')
-    `).run(userId, cajero, todayStr(), nowStr(), openAmount, JSON.stringify(openBills || {}));
+      INSERT INTO cash_sessions(user_id,cajero,open_date,open_time,open_amount,open_bills,status,terminal_id)
+      VALUES(?,?,?,?,?,?,'open',?)
+    `).run(userId, cajero, todayStr(), nowStr(), openAmount, JSON.stringify(openBills || {}), terminalId || null);
     audit(userId, cajero, 'apertura_caja', 'cash_sessions', r.lastInsertRowid,
           `Fondo: ${openAmount}`);
     return r.lastInsertRowid;
