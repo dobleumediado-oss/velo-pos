@@ -23,6 +23,7 @@ async function renderBancos(el) {
     { key: 'cuentas',         label: 'Cuentas' },
     { key: 'movimientos',     label: 'Movimientos' },
     { key: 'transferencias',  label: 'Transferencias' },
+    { key: 'conciliacion',    label: 'Conciliación' },
     { key: 'resumen',         label: 'Resumen' },
   ].forEach(t => {
     const btn = h('button', {
@@ -39,6 +40,7 @@ async function renderBancos(el) {
   if (_bancosTab === 'cuentas')        await _renderBancosCtAs(body);
   else if (_bancosTab === 'movimientos')   await _renderBancosMov(body);
   else if (_bancosTab === 'transferencias') await _renderBancosTransfer(body);
+  else if (_bancosTab === 'conciliacion')  await _renderBancosConcil(body);
   else if (_bancosTab === 'resumen')    await _renderBancosResumen(body);
 }
 
@@ -401,6 +403,276 @@ async function _doTransfer() {
   } else {
     toast(res?.error || 'Error en transferencia', 'e');
   }
+}
+
+// ══════════════════════════════════════════════
+// CONCILIACIÓN BANCARIA
+// ══════════════════════════════════════════════
+async function _renderBancosConcil(el) {
+  const allRes  = await window.api.financial.getAll();
+  const cuentas = (allRes?.data || []).filter(c => c.is_active && (c.type === 'banco' || c.type === 'tarjeta'));
+
+  const selRow = h('div', { style: { display: 'flex', gap: '10px', marginBottom: '14px', flexWrap: 'wrap', alignItems: 'flex-end' } });
+  const sel = h('select', { class: 'inp', style: { maxWidth: '260px' },
+    onchange: (e) => { _bancosAcct = parseInt(e.target.value) || null; renderBancos(document.getElementById('page')); }
+  }, h('option', { value: '' }, '— Selecciona cuenta bancaria —'),
+  ...cuentas.map(c => h('option', { value: c.id, ...(c.id === _bancosAcct ? { selected: true } : {}) }, c.name)));
+  selRow.appendChild(h('div', null, h('label', { class: 'lbl', style: { marginBottom: '4px', display: 'block' } }, 'Cuenta'), sel));
+
+  if (_bancosAcct) {
+    selRow.appendChild(h('button', { class: 'btn', onclick: () => _openImportExtractoModal(_bancosAcct) }, '📥 Importar extracto'));
+    selRow.appendChild(h('button', { class: 'btn-ghost', onclick: async () => {
+      const r = await window.api.bank.autoMatch({ accountId: _bancosAcct, requestUserId: user.id });
+      toast(r?.ok ? `${r.matched} conciliados automáticamente` : (r?.error || 'Error'), r?.ok ? 's' : 'e');
+      renderBancos(document.getElementById('page'));
+    } }, '🔗 Auto-conciliar'));
+  }
+  el.appendChild(selRow);
+
+  if (!cuentas.length) {
+    el.appendChild(h('div', { class: 'empty' }, h('p', null, 'No hay cuentas bancarias'), h('span', null, 'Crea una cuenta tipo Banco o Tarjeta')));
+    return;
+  }
+  if (!_bancosAcct) {
+    el.appendChild(h('div', { class: 'empty' }, h('p', null, 'Selecciona una cuenta'), h('span', null, 'Importa el extracto del banco y concílialo con tus movimientos')));
+    return;
+  }
+
+  const res = await window.api.bank.getReconciliation({ accountId: _bancosAcct });
+  const data = res?.data;
+  if (!data) { el.appendChild(h('div', { class: 'empty' }, h('p', null, res?.error || 'Error'))); return; }
+  const s = data.summary;
+
+  // Resumen
+  const cards = h('div', { style: { display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '16px' } },
+    _concilCard('Saldo en libros', fmt(s.bookBalance), ''),
+    _concilCard('Conciliadas', String(s.conciliado), 'positive'),
+    _concilCard('Líneas pendientes', String(s.pendientes), s.pendientes ? 'negative' : ''),
+    _concilCard('Movim. sin conciliar', String(s.unmatchedMovements), s.unmatchedMovements ? 'negative' : '')
+  );
+  el.appendChild(cards);
+
+  // Líneas del extracto
+  el.appendChild(h('div', { style: { fontSize: '13px', fontWeight: '600', margin: '4px 0 8px' } }, `Extracto bancario (${data.statementLines.length})`));
+  if (!data.statementLines.length) {
+    el.appendChild(h('div', { class: 'empty' }, h('p', null, 'Sin líneas importadas'), h('span', null, 'Usa "Importar extracto" para cargar el CSV del banco')));
+  } else {
+    el.appendChild(h('div', { class: 'tw' }, h('table', { class: 'ledger-tbl', style: { width: '100%' } },
+      h('thead', null, h('tr', null,
+        h('th', null, 'Fecha'), h('th', null, 'Descripción'), h('th', null, 'Ref'),
+        h('th', { class: 'num' }, 'Monto'), h('th', null, 'Estado'), h('th', null, 'Movimiento'), h('th', null, '')
+      )),
+      h('tbody', null, ...data.statementLines.map(l => {
+        const st = l.status;
+        const badge = st === 'conciliado' ? 'activo' : (st === 'ignorado' ? 'borrador' : 'anulado');
+        return h('tr', null,
+          h('td', null, l.date || '—'),
+          h('td', null, l.description || '—'),
+          h('td', null, l.bank_ref || '—'),
+          h('td', { class: `num ${l.amount < 0 ? 'debit' : 'credit'}` }, fmt(l.amount)),
+          h('td', null, h('span', { class: `entry-status entry-status-${badge}` }, st + (l.match_type ? ` (${l.match_type})` : ''))),
+          h('td', { style: { fontSize: '11px', color: 'var(--muted2)' } }, l.mov_desc ? `${l.mov_desc} · ${fmt(l.movSigned)}` : '—'),
+          h('td', null, _concilLineActions(l))
+        );
+      }))
+    )));
+  }
+
+  // Movimientos sin conciliar
+  el.appendChild(h('div', { style: { fontSize: '13px', fontWeight: '600', margin: '20px 0 8px' } }, `Movimientos sin conciliar (${data.unmatchedMovements.length})`));
+  if (!data.unmatchedMovements.length) {
+    el.appendChild(h('div', { class: 'empty' }, h('p', null, 'Todos los movimientos están conciliados')));
+  } else {
+    el.appendChild(h('div', { class: 'tw' }, h('table', { class: 'ledger-tbl', style: { width: '100%' } },
+      h('thead', null, h('tr', null, h('th', null, 'Fecha'), h('th', null, 'Tipo'), h('th', null, 'Descripción'), h('th', { class: 'num' }, 'Monto (con signo)'))),
+      h('tbody', null, ...data.unmatchedMovements.map(m => h('tr', null,
+        h('td', null, (m.created_at || '').slice(0, 10)),
+        h('td', null, m.type),
+        h('td', null, m.description || '—'),
+        h('td', { class: `num ${m.signed < 0 ? 'debit' : 'credit'}` }, fmt(m.signed))
+      )))
+    )));
+  }
+}
+
+function _concilCard(label, val, cls) {
+  return h('div', { style: { flex: '1', minWidth: '150px', background: 'var(--surface)', border: '1px solid var(--line2)', borderRadius: '12px', padding: '14px' } },
+    h('div', { style: { fontSize: '11px', color: 'var(--muted2)', marginBottom: '4px' } }, label),
+    h('div', { class: cls, style: { fontSize: '18px', fontWeight: '700' } }, val)
+  );
+}
+
+function _concilLineActions(l) {
+  const box = h('div', { style: { display: 'flex', gap: '4px' } });
+  if (l.status === 'conciliado') {
+    box.appendChild(h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '3px 8px' },
+      onclick: async () => { const r = await window.api.bank.unmatch({ lineId: l.id, requestUserId: user.id }); r?.ok ? renderBancos(document.getElementById('page')) : toast(r?.error || 'Error', 'e'); } }, 'Desvincular'));
+  } else if (l.status === 'pendiente') {
+    box.appendChild(h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '3px 8px' },
+      onclick: () => _openManualMatchModal(l) }, 'Conciliar'));
+    box.appendChild(h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '3px 8px', color: 'var(--muted2)' },
+      onclick: async () => { const r = await window.api.bank.ignoreLine({ lineId: l.id, ignore: true, requestUserId: user.id }); r?.ok ? renderBancos(document.getElementById('page')) : toast(r?.error || 'Error', 'e'); } }, 'Ignorar'));
+  } else if (l.status === 'ignorado') {
+    box.appendChild(h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '3px 8px' },
+      onclick: async () => { const r = await window.api.bank.ignoreLine({ lineId: l.id, ignore: false, requestUserId: user.id }); r?.ok ? renderBancos(document.getElementById('page')) : toast(r?.error || 'Error', 'e'); } }, 'Restaurar'));
+  }
+  return box;
+}
+
+async function _openManualMatchModal(line) {
+  const res = await window.api.bank.getReconciliation({ accountId: line.financial_account_id });
+  const movs = (res?.data?.unmatchedMovements || []);
+  // Sugerir por monto igual primero
+  movs.sort((a, b) => Math.abs(Math.abs(a.signed) - Math.abs(line.amount)) - Math.abs(Math.abs(b.signed) - Math.abs(line.amount)));
+  openModal(`
+    <div class="modal-head"><div class="modal-title">Conciliar línea del extracto</div></div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:var(--muted2);margin-bottom:10px">
+        ${_esc(line.date)} · ${_esc(line.description) || '—'} · <b>${fmt(line.amount)}</b></div>
+      <label class="lbl">Vincular con el movimiento</label>
+      <select class="inp" id="mm-mov">
+        <option value="">— Selecciona movimiento —</option>
+        ${movs.map(m => `<option value="${m.id}">${(m.created_at||'').slice(0,10)} · ${_esc(m.description)||m.type} · ${fmt(m.signed)}</option>`).join('')}
+      </select>
+      ${movs.length ? '' : '<p style="font-size:11px;color:#ef4444;margin-top:8px">No hay movimientos sin conciliar. Registra primero el movimiento en la pestaña Movimientos.</p>'}
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn" id="mm-save">Conciliar</button>
+    </div>
+  `);
+  document.getElementById('mm-save').onclick = async () => {
+    const movementId = parseInt(document.getElementById('mm-mov').value) || null;
+    if (!movementId) { toast('Selecciona un movimiento', 'e'); return; }
+    const r = await window.api.bank.manualMatch({ lineId: line.id, movementId, requestUserId: user.id });
+    if (r?.ok) { toast('Conciliado', 's'); closeModal(); renderBancos(document.getElementById('page')); }
+    else toast(r?.error || 'Error', 'e');
+  };
+}
+
+// Parser CSV mínimo (coma/;/tab, con comillas). Devuelve { headers, rows }.
+function _bankParseCSV(text) {
+  const clean = text.replace(/^﻿/, '').replace(/\r/g, '');
+  const linesRaw = clean.split('\n').filter(l => l.trim() !== '');
+  if (!linesRaw.length) return { headers: [], rows: [] };
+  const delim = (linesRaw[0].match(/;/g) || []).length > (linesRaw[0].match(/,/g) || []).length ? ';'
+              : (linesRaw[0].includes('\t') ? '\t' : ',');
+  const parseLine = (line) => {
+    const out = []; let cur = '', q = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') { if (q && line[i + 1] === '"') { cur += '"'; i++; } else q = !q; }
+      else if (c === delim && !q) { out.push(cur); cur = ''; }
+      else cur += c;
+    }
+    out.push(cur);
+    return out.map(s => s.trim().replace(/^["']|["']$/g, ''));
+  };
+  const headers = parseLine(linesRaw[0]);
+  const rows = linesRaw.slice(1).map(parseLine);
+  return { headers, rows };
+}
+
+function _bankNum(s) {
+  if (s == null) return 0;
+  let t = String(s).trim().replace(/[^0-9.,\-]/g, '');
+  const lc = t.lastIndexOf(','), ld = t.lastIndexOf('.');
+  if (lc > -1 && ld > -1) {
+    // Ambos presentes: el separador decimal es el que aparece más a la derecha.
+    if (lc > ld) t = t.replace(/\./g, '').replace(',', '.'); // 1.234,56 (EU)
+    else         t = t.replace(/,/g, '');                    // 1,234.56 (US)
+  } else if (lc > -1) {
+    // Solo coma: 3 dígitos después → miles (1,200); si no → decimal (25,00).
+    t = (t.length - lc - 1 === 3) ? t.replace(/,/g, '') : t.replace(',', '.');
+  }
+  return parseFloat(t) || 0;
+}
+
+async function _openImportExtractoModal(accountId) {
+  openModal(`
+    <div class="modal-head"><div class="modal-title">Importar extracto bancario</div></div>
+    <div class="modal-body">
+      <p style="font-size:12px;color:var(--muted2);margin-bottom:10px">
+        Carga el CSV del banco. Luego indica qué columna es cada campo. El monto puede venir
+        en una sola columna con signo, o en columnas separadas de Débito y Crédito.</p>
+      <input type="file" id="ext-file" accept=".csv,.tsv,.txt" class="inp">
+      <div id="ext-map" style="margin-top:12px"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn" id="ext-import" style="display:none">Importar</button>
+    </div>
+  `);
+
+  let parsed = null;
+  document.getElementById('ext-file').onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      parsed = _bankParseCSV(String(reader.result || ''));
+      _renderExtractoMapeo(parsed, accountId, () => parsed);
+    };
+    reader.readAsText(file, 'UTF-8');
+  };
+}
+
+function _renderExtractoMapeo(parsed, accountId, getParsed) {
+  const box = document.getElementById('ext-map');
+  if (!parsed || !parsed.headers.length) { box.innerHTML = '<p style="color:#ef4444;font-size:12px">No se pudo leer el archivo.</p>'; return; }
+  const opts = ['<option value="">—</option>', ...parsed.headers.map((hd, i) => `<option value="${i}">${_esc(hd) || ('Columna ' + (i + 1))}</option>`)].join('');
+  // Heurística de auto-selección por nombre de encabezado
+  const guess = (re) => { const i = parsed.headers.findIndex(hd => re.test((hd || '').toLowerCase())); return i >= 0 ? i : ''; };
+  box.innerHTML = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <div style="flex:1;min-width:120px"><label class="lbl">Fecha</label><select class="inp" id="map-date">${opts}</select></div>
+      <div style="flex:1;min-width:120px"><label class="lbl">Descripción</label><select class="inp" id="map-desc">${opts}</select></div>
+      <div style="flex:1;min-width:120px"><label class="lbl">Referencia (opc.)</label><select class="inp" id="map-ref">${opts}</select></div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      <div style="flex:1;min-width:120px"><label class="lbl">Monto (con signo)</label><select class="inp" id="map-amount">${opts}</select></div>
+      <div style="flex:1;min-width:120px"><label class="lbl">Débito (egreso)</label><select class="inp" id="map-debit">${opts}</select></div>
+      <div style="flex:1;min-width:120px"><label class="lbl">Crédito (ingreso)</label><select class="inp" id="map-credit">${opts}</select></div>
+    </div>
+    <div style="font-size:11px;color:var(--muted2);margin-top:6px">${parsed.rows.length} filas detectadas. Usa Monto con signo <b>o</b> el par Débito/Crédito.</div>`;
+  document.getElementById('map-date').value   = guess(/fecha|date/);
+  document.getElementById('map-desc').value   = guess(/desc|concepto|detalle|referencia banc/);
+  document.getElementById('map-amount').value = guess(/monto|importe|amount|valor/);
+  document.getElementById('map-debit').value  = guess(/d[ée]bito|debe|cargo|retiro/);
+  document.getElementById('map-credit').value = guess(/cr[ée]dito|haber|abono|dep[óo]sito/);
+
+  const btn = document.getElementById('ext-import');
+  btn.style.display = '';
+  btn.onclick = async () => {
+    const p = getParsed();
+    const gi = (id) => { const v = document.getElementById(id).value; return v === '' ? null : parseInt(v); };
+    const iDate = gi('map-date'), iDesc = gi('map-desc'), iRef = gi('map-ref');
+    const iAmt = gi('map-amount'), iDeb = gi('map-debit'), iCred = gi('map-credit');
+    if (iDate == null) { toast('Indica la columna de Fecha', 'e'); return; }
+    if (iAmt == null && iDeb == null && iCred == null) { toast('Indica Monto, o Débito/Crédito', 'e'); return; }
+    const lines = p.rows.map(r => {
+      let amount = 0;
+      if (iAmt != null) amount = _bankNum(r[iAmt]);
+      else {
+        const deb = iDeb != null ? Math.abs(_bankNum(r[iDeb])) : 0;
+        const cred = iCred != null ? Math.abs(_bankNum(r[iCred])) : 0;
+        amount = cred - deb;
+      }
+      return {
+        date: _impNormDate ? _impNormDate(r[iDate]) : String(r[iDate] || '').slice(0, 10),
+        description: iDesc != null ? r[iDesc] : '',
+        bank_ref: iRef != null ? r[iRef] : '',
+        amount,
+      };
+    }).filter(l => l.amount);
+    if (!lines.length) { toast('No se detectaron montos válidos', 'e'); return; }
+    const res = await window.api.bank.importStatement({ accountId, lines, requestUserId: user.id });
+    if (res?.ok) {
+      toast(`${res.inserted} líneas importadas${res.skipped ? ` · ${res.skipped} duplicadas/omitidas` : ''}`, 's');
+      closeModal();
+      renderBancos(document.getElementById('page'));
+    } else toast(res?.error || 'Error al importar', 'e');
+  };
 }
 
 // ── Resumen ───────────────────────────────────

@@ -314,6 +314,17 @@ contextBridge.exposeInMainWorld('api', {
     getSummary:      ()  => ipcRenderer.invoke('financial:getSummary'),
   },
 
+  // ── Conciliación bancaria ─────────────────────
+  bank: {
+    getReconciliation: (d) => ipcRenderer.invoke('bank:getReconciliation', d),
+    importStatement:   (d) => ipcRenderer.invoke('bank:importStatement',   d),
+    autoMatch:         (d) => ipcRenderer.invoke('bank:autoMatch',         d),
+    manualMatch:       (d) => ipcRenderer.invoke('bank:manualMatch',       d),
+    unmatch:           (d) => ipcRenderer.invoke('bank:unmatch',           d),
+    ignoreLine:        (d) => ipcRenderer.invoke('bank:ignoreLine',        d),
+    clearBatch:        (d) => ipcRenderer.invoke('bank:clearBatch',        d),
+  },
+
   // ── Contabilidad ──────────────────────────────
   accounting: {
     getAccounts:        ()  => ipcRenderer.invoke('accounting:getAccounts'),

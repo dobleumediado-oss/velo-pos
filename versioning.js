@@ -883,6 +883,49 @@ const MIGRATIONS = [
       }
     }
   },
+  {
+    // NOTA: versión con sufijo a propósito. La rama feat/multi-terminal ya usa el
+    // string '1.14.1' para otra migración (terminal_id); el runner compara la
+    // versión por igualdad exacta, así que un '1.14.1' pelado se saltearía en las
+    // BD que corrieron esa rama. El sufijo garantiza unicidad y que AMBAS apliquen
+    // si las ramas se fusionan.
+    version: '1.14.1-conciliacion',
+    description: 'Bancos: conciliación bancaria — estado de conciliado en movimientos + tabla de líneas de extracto',
+    run(db) {
+      // Idempotente (PRAGMA guard). Sin try/catch que trague: si falla, el runner
+      // revierte y no marca la migración → reintenta al próximo arranque.
+      const cols = db.prepare("PRAGMA table_info(financial_movements)").all().map(c => c.name);
+      if (!cols.includes('reconciled')) {
+        db.exec("ALTER TABLE financial_movements ADD COLUMN reconciled INTEGER DEFAULT 0");
+        console.log('[MIGRATION conciliacion] Columna reconciled añadida a financial_movements');
+      }
+      if (!cols.includes('reconciled_at')) {
+        db.exec("ALTER TABLE financial_movements ADD COLUMN reconciled_at TEXT");
+        console.log('[MIGRATION conciliacion] Columna reconciled_at añadida a financial_movements');
+      }
+      // Líneas del extracto bancario importado. amount con signo (+ ingreso, − egreso).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS bank_statement_lines (
+          id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+          financial_account_id INTEGER NOT NULL REFERENCES financial_accounts(id),
+          date                 TEXT NOT NULL DEFAULT '',
+          description          TEXT NOT NULL DEFAULT '',
+          amount               REAL NOT NULL DEFAULT 0,
+          bank_ref             TEXT DEFAULT '',
+          matched_movement_id  INTEGER REFERENCES financial_movements(id),
+          status               TEXT DEFAULT 'pendiente'
+                                 CHECK(status IN ('pendiente','conciliado','ignorado')),
+          match_type           TEXT DEFAULT '',
+          import_batch         TEXT DEFAULT '',
+          created_at           TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_bsl_account ON bank_statement_lines(financial_account_id);
+        CREATE INDEX IF NOT EXISTS idx_bsl_status  ON bank_statement_lines(status);
+        CREATE INDEX IF NOT EXISTS idx_bsl_ref     ON bank_statement_lines(bank_ref);
+      `);
+      console.log('[MIGRATION conciliacion] Tabla bank_statement_lines creada');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

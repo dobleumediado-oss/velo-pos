@@ -2919,6 +2919,151 @@ const financialAccountsRepo = {
 };
 
 // ══════════════════════════════════════════════
+// REPOSITORIO: CONCILIACIÓN BANCARIA (Fase 5)
+// ══════════════════════════════════════════════
+// Coteja las líneas de un extracto bancario importado contra los movimientos
+// registrados en la cuenta. El monto de un movimiento se guarda positivo; el
+// signo lo da el `type`. El extracto trae monto con signo (+ ingreso, − egreso).
+const bankReconRepo = {
+  _sign(type) {
+    if (['deposito','transferencia_in','venta','abono_recibido','apertura'].includes(type)) return 1;
+    if (['retiro','transferencia_out','gasto','pago_proveedor'].includes(type)) return -1;
+    return 1; // ajuste u otros: asumir ingreso (caso raro)
+  },
+  signedAmount(m) { return this._sign(m.type) * Math.abs(m.amount || 0); },
+  _daysBetween(a, b) {
+    const da = new Date(a), db2 = new Date(b);
+    if (isNaN(da) || isNaN(db2)) return 9999;
+    return Math.round((da - db2) / 86400000);
+  },
+
+  // Importa líneas del extracto. Dedup por (cuenta, bank_ref+monto) o, sin ref,
+  // por (cuenta, fecha+monto+descripción) → re-importar el mismo archivo no duplica.
+  importStatement({ accountId, lines, batch }) {
+    return db.transaction(() => {
+      const acc = db.prepare('SELECT id FROM financial_accounts WHERE id=?').get(accountId);
+      if (!acc) throw new Error('Cuenta no encontrada');
+      const b = batch || ('IMP-' + Date.now());
+      const ins = db.prepare(`INSERT INTO bank_statement_lines
+        (financial_account_id,date,description,amount,bank_ref,import_batch) VALUES(?,?,?,?,?,?)`);
+      let inserted = 0, skipped = 0;
+      for (const l of (lines || [])) {
+        const date   = String(l.date || '').slice(0, 10);
+        const amount = Math.round((parseFloat(l.amount) || 0) * 100) / 100;
+        const desc   = String(l.description || '').trim();
+        const ref    = String(l.bank_ref || '').trim();
+        if (!amount) { skipped++; continue; }
+        const dup = ref
+          ? db.prepare("SELECT id FROM bank_statement_lines WHERE financial_account_id=? AND bank_ref=? AND ABS(amount-?)<0.01").get(accountId, ref, amount)
+          : db.prepare("SELECT id FROM bank_statement_lines WHERE financial_account_id=? AND date=? AND ABS(amount-?)<0.01 AND description=?").get(accountId, date, amount, desc);
+        if (dup) { skipped++; continue; }
+        ins.run(accountId, date, desc, amount, ref, b);
+        inserted++;
+      }
+      return { inserted, skipped, batch: b };
+    })();
+  },
+
+  // Auto-conciliación: monto con signo exacto y fecha dentro de ±windowDays.
+  autoMatch({ accountId, windowDays = 4 } = {}) {
+    return db.transaction(() => {
+      const lines = db.prepare("SELECT * FROM bank_statement_lines WHERE financial_account_id=? AND status='pendiente' ORDER BY date ASC, id ASC").all(accountId);
+      const movs  = db.prepare("SELECT * FROM financial_movements WHERE financial_account_id=? AND status='activo' AND COALESCE(reconciled,0)=0").all(accountId);
+      const used = new Set();
+      let matched = 0;
+      for (const line of lines) {
+        const cand = movs.find(m => !used.has(m.id)
+          && Math.abs(this.signedAmount(m) - line.amount) < 0.01
+          && Math.abs(this._daysBetween(String(m.created_at).slice(0, 10), line.date)) <= windowDays);
+        if (cand) {
+          used.add(cand.id);
+          db.prepare("UPDATE bank_statement_lines SET status='conciliado',matched_movement_id=?,match_type='auto' WHERE id=?").run(cand.id, line.id);
+          db.prepare("UPDATE financial_movements SET reconciled=1,reconciled_at=datetime('now') WHERE id=?").run(cand.id);
+          matched++;
+        }
+      }
+      return { matched, remaining: lines.length - matched };
+    })();
+  },
+
+  manualMatch(lineId, movementId) {
+    return db.transaction(() => {
+      const line = db.prepare("SELECT * FROM bank_statement_lines WHERE id=?").get(lineId);
+      const mov  = db.prepare("SELECT * FROM financial_movements WHERE id=?").get(movementId);
+      if (!line || !mov) throw new Error('Línea o movimiento no encontrado');
+      if (mov.financial_account_id !== line.financial_account_id) throw new Error('El movimiento es de otra cuenta');
+      if (mov.status !== 'activo') throw new Error('El movimiento está anulado');
+      if (line.matched_movement_id && line.matched_movement_id !== movementId) throw new Error('La línea ya está conciliada');
+      db.prepare("UPDATE bank_statement_lines SET status='conciliado',matched_movement_id=?,match_type='manual' WHERE id=?").run(movementId, lineId);
+      db.prepare("UPDATE financial_movements SET reconciled=1,reconciled_at=datetime('now') WHERE id=?").run(movementId);
+      return { ok: true };
+    })();
+  },
+
+  unmatch(lineId) {
+    return db.transaction(() => {
+      const line = db.prepare("SELECT * FROM bank_statement_lines WHERE id=?").get(lineId);
+      if (!line) throw new Error('Línea no encontrada');
+      if (line.matched_movement_id) db.prepare("UPDATE financial_movements SET reconciled=0,reconciled_at=NULL WHERE id=?").run(line.matched_movement_id);
+      db.prepare("UPDATE bank_statement_lines SET status='pendiente',matched_movement_id=NULL,match_type='' WHERE id=?").run(lineId);
+      return { ok: true };
+    })();
+  },
+
+  ignoreLine(lineId, ignore = true) {
+    const line = db.prepare("SELECT * FROM bank_statement_lines WHERE id=?").get(lineId);
+    if (!line) throw new Error('Línea no encontrada');
+    if (ignore && line.matched_movement_id) throw new Error('Desvincula primero la línea conciliada');
+    db.prepare("UPDATE bank_statement_lines SET status=? WHERE id=?").run(ignore ? 'ignorado' : 'pendiente', lineId);
+    return { ok: true };
+  },
+
+  // Borra las líneas importadas de un lote (desvincula sus conciliaciones).
+  clearBatch(accountId, batch) {
+    return db.transaction(() => {
+      const lines = db.prepare("SELECT * FROM bank_statement_lines WHERE financial_account_id=? AND import_batch=?").all(accountId, batch);
+      for (const l of lines) {
+        if (l.matched_movement_id) db.prepare("UPDATE financial_movements SET reconciled=0,reconciled_at=NULL WHERE id=?").run(l.matched_movement_id);
+      }
+      const r = db.prepare("DELETE FROM bank_statement_lines WHERE financial_account_id=? AND import_batch=?").run(accountId, batch);
+      return { deleted: r.changes };
+    })();
+  },
+
+  getReconciliation(accountId) {
+    const acc = db.prepare("SELECT * FROM financial_accounts WHERE id=?").get(accountId);
+    const stmtLines = db.prepare(`
+      SELECT b.*, m.description as mov_desc, m.created_at as mov_date, m.type as mov_type, m.amount as mov_amount
+      FROM bank_statement_lines b
+      LEFT JOIN financial_movements m ON b.matched_movement_id=m.id
+      WHERE b.financial_account_id=? ORDER BY b.date DESC, b.id DESC`).all(accountId);
+    const unmatchedMovs = db.prepare(`
+      SELECT * FROM financial_movements
+      WHERE financial_account_id=? AND status='activo' AND COALESCE(reconciled,0)=0
+      ORDER BY created_at DESC, id DESC`).all(accountId);
+
+    const r2 = (n) => Math.round((n || 0) * 100) / 100;
+    const active = stmtLines.filter(l => l.status !== 'ignorado');
+    return {
+      account: acc,
+      statementLines: stmtLines.map(l => ({ ...l, movSigned: l.mov_type ? this.signedAmount({ type: l.mov_type, amount: l.mov_amount }) : null })),
+      unmatchedMovements: unmatchedMovs.map(m => ({ ...m, signed: this.signedAmount(m) })),
+      batches: [...new Set(stmtLines.map(l => l.import_batch))].filter(Boolean),
+      summary: {
+        totalLines:  stmtLines.length,
+        conciliado:  stmtLines.filter(l => l.status === 'conciliado').length,
+        pendientes:  stmtLines.filter(l => l.status === 'pendiente').length,
+        ignorado:    stmtLines.filter(l => l.status === 'ignorado').length,
+        unmatchedMovements: unmatchedMovs.length,
+        statementBalance:   r2(active.reduce((s, l) => s + l.amount, 0)),
+        bookBalance:        r2(acc?.current_balance || 0),
+        unmatchedMovDelta:  r2(unmatchedMovs.reduce((s, m) => s + this.signedAmount(m), 0)),
+      },
+    };
+  },
+};
+
+// ══════════════════════════════════════════════
 // REPOSITORIO: CONTABILIDAD
 // ══════════════════════════════════════════════
 const accountingRepo = {
@@ -4124,6 +4269,7 @@ module.exports = {
   deliveriesRepo,
   ncfRepo,
   financialAccountsRepo,
+  bankReconRepo,
   accountingRepo,
   conduceRepo,
 };

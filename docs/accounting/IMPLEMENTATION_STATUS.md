@@ -2,7 +2,7 @@
 
 > Estado por módulo (prompt maestro §7) y plan por fases. Fuente: auditoría Fase 1
 > (`AUDIT_REPORT.md`). ✅ hecho · 🟡 parcial · ⛔ ausente. App `v1.14.0`, rama `main`.
-> Progreso: **F1 ✅ · F2 ✅ (roles + cierre) · F3 ✅ (devengado) · F4 ✅ (cuadres + 606)**.
+> Progreso: **F1 ✅ · F2 ✅ · F3 ✅ · F4 ✅ (cuadres + 606) · F5 ✅ (conciliación bancaria)**.
 
 ## Matriz de estado
 
@@ -16,7 +16,7 @@
 | Diario/Mayor/Auxiliares (7.6) | 🟡 | Mayor + balanza + drill-down. Falta diarios por tipo (ventas/compras/caja) formales |
 | Cuentas por cobrar (7.7) | 🟡 | Auxiliar operativo (clientes) + abonos→contab. Falta antigüedad contable, conciliación auxiliar↔control, provisión incobrables |
 | Cuentas por pagar (7.8) | 🟡 | **Contable devengado en vivo** (gasto/compra → Créd CxP 2101; pago → Déb CxP). Falta antigüedad de CxP, conciliación auxiliar↔control 2101, pago formal a proveedor por OC |
-| Caja/Bancos/Tesorería (7.9) | 🟡 | Bancos (cuentas+movimientos+transfer) sano. **Falta conciliación bancaria (CSV/match)** |
+| Caja/Bancos/Tesorería (7.9) | 🟡 | Bancos (cuentas+movimientos+transfer) sano + **conciliación bancaria** (import CSV, auto/manual match, ignorar). Falta conciliación de caja (sesiones) e importación Excel directa |
 | Impuestos/fiscal RD (7.10) | 🟡 | NCF + e-CF + 607/608 + **606 (compras con RNC)**. Falta libros venta/compra formales, cuadre ventas↔607 automático, IT-1/IR-17, retenciones |
 | Centros de costo (7.11) | ⛔ | No implementado |
 | Multiempresa/sucursal (7.12) | 🟡 | Multiempresa por **BD separada**. **Falta segmentación por sucursal en asientos + consolidación** |
@@ -62,8 +62,13 @@ Caja operativa = cuenta contable caja      ⛔ pendiente (sesiones de caja — F
   con alerta de descuadre + pestaña "Cuadres"; reporte **606** (`get606`, compras con RNC)
   + pestaña "606" con rango e impresión. *Pendiente:* cuadre caja↔1101 (sesiones), libros
   formales de ventas/compras, cuadre ventas↔607 automático.
-- **F5 — Conciliación bancaria (G8):** import CSV/Excel, mapeo, match por monto/fecha/ref,
-  manual, diferencias, cierre.
+- **F5 — Conciliación bancaria ✅ (G8):** migración `1.14.1-conciliacion` (columnas
+  `reconciled`/`reconciled_at` + tabla `bank_statement_lines`); `bankReconRepo`
+  (importStatement con dedup, autoMatch por monto-con-signo±ventana, manualMatch, unmatch,
+  ignoreLine, clearBatch, getReconciliation); handlers `bank:*`; pestaña "Conciliación" en
+  bancos.js con import CSV (mapeo de columnas, monto con signo o débito/crédito), auto/manual.
+  *Nota:* versión de migración con sufijo para no colisionar con el `1.14.1` de feat/multi-terminal.
+  *Pendiente:* import Excel directo, conciliación de sesiones de caja.
 - **F6 — Centros de costo + sucursal (G3, G10):** `cost_center` y `branch_id` en líneas/
   asientos; resultados por sucursal + consolidación (dentro de la BD del negocio).
 - **F7 — Activos fijos + presupuestos↔contab + flujo de efectivo (G9).**

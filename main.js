@@ -109,7 +109,7 @@ const {
   productsRepo, customersRepo, cashRepo,
   salesRepo, returnsRepo, reportsRepo, suppliersRepo, purchasesRepo, audit,
   expensesRepo, branchesRepo, vehiclesRepo, maintenanceRepo, deliveriesRepo, ncfRepo,
-  financialAccountsRepo, accountingRepo, conduceRepo
+  financialAccountsRepo, bankReconRepo, accountingRepo, conduceRepo
 } = require('./database');
 
 const {
@@ -4465,6 +4465,53 @@ ipcMain.handle('financial:getSummary', async () => {
       total_income_month:   incomeMonth,
       total_expenses_month: expenseMonth,
     }};
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// ══════════════════════════════════════════════
+// IPC — CONCILIACIÓN BANCARIA (Fase 5)
+// ══════════════════════════════════════════════
+// Lecturas abiertas al módulo; mutaciones exigen admin (defensa en profundidad).
+ipcMain.handle('bank:getReconciliation', async (_, { accountId } = {}) => {
+  try { return { ok: true, data: bankReconRepo.getReconciliation(accountId) }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('bank:importStatement', async (_, { accountId, lines, batch, requestUserId } = {}) => {
+  try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
+    const r = bankReconRepo.importStatement({ accountId, lines, batch });
+    audit(requestUserId, '', 'bank_statement_import', 'financial_accounts', accountId, `${r.inserted} líneas (${r.skipped} omitidas)`);
+    return { ok: true, ...r };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('bank:autoMatch', async (_, { accountId, windowDays, requestUserId } = {}) => {
+  try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
+    return { ok: true, ...bankReconRepo.autoMatch({ accountId, windowDays }) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('bank:manualMatch', async (_, { lineId, movementId, requestUserId } = {}) => {
+  try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
+    return bankReconRepo.manualMatch(lineId, movementId);
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('bank:unmatch', async (_, { lineId, requestUserId } = {}) => {
+  try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
+    return bankReconRepo.unmatch(lineId);
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('bank:ignoreLine', async (_, { lineId, ignore, requestUserId } = {}) => {
+  try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
+    return bankReconRepo.ignoreLine(lineId, ignore !== false);
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('bank:clearBatch', async (_, { accountId, batch, requestUserId } = {}) => {
+  try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
+    return { ok: true, ...bankReconRepo.clearBatch(accountId, batch) };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
