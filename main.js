@@ -681,8 +681,10 @@ function _localAddresses() {
   for (const name of Object.keys(ifaces)) {
     for (const ni of (ifaces[name] || [])) {
       if (ni.family !== 'IPv4' || ni.internal) continue;
+      // Señal principal: rango CGNAT oficial de Tailscale 100.64.0.0/10
+      // (100.64.x – 100.127.x). Secundaria: nombre de interfaz "tailscale".
       const m = /^100\.(\d+)\./.exec(ni.address);
-      const isTs = (/tailscale|utun/i.test(name)) || (m && +m[1] >= 64 && +m[1] <= 127);
+      const isTs = (m && +m[1] >= 64 && +m[1] <= 127) || /tailscale/i.test(name);
       out.push({ ip: ni.address, label: isTs ? 'Tailscale' : 'Red local', tailscale: !!isTs });
     }
   }
