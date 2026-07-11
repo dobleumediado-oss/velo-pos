@@ -277,8 +277,12 @@ function modalNuevoEnvio(parentEl, vehiculos) {
       <!-- Mapa (solo vehículo propio): buscar arriba mueve el pin; clic en el mapa lo fija -->
       <div id="e-map-wrap" style="margin-top:8px">
         <div id="e-map" style="height:280px;border-radius:12px;overflow:hidden;border:1px solid var(--line2);background:var(--bg2)"></div>
-        <div id="e-map-hint" style="font-size:11px;color:var(--muted2);margin-top:5px">
-          🏪 Tu negocio · 📍 Destino — busca arriba o <b>haz clic en el mapa</b> (arrastra el pin para ajustar).
+        <div id="e-map-hint" style="font-size:11px;color:var(--muted2);margin-top:6px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between">
+          <span>🏪 <b id="e-origin-label">Tu negocio</b> · 📍 clic en el mapa = destino</span>
+          <span style="display:flex;gap:6px">
+            <button type="button" class="btn btn-ghost btn-sm" id="btn-origin-detect" style="font-size:10px;padding:2px 8px">📡 Detectar mi ubicación</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="btn-origin-set" style="font-size:10px;padding:2px 8px">✏️ Fijar mi negocio</button>
+          </span>
         </div>
       </div>
       <div id="e-map-result" style="display:none;background:var(--bg2);border-radius:8px;padding:9px 12px;font-size:12px;margin-top:8px;border:0.5px solid var(--line2)"></div>
@@ -536,11 +540,44 @@ function modalNuevoEnvio(parentEl, vehiculos) {
     });
 
     // ── Mapa interactivo (Leaflet) para vehículo propio ──────────────────────
-    let _map = null, _destMarker = null, _origin = { lat: 19.2207, lng: -70.5291, label: 'RD' };
+    let _map = null, _destMarker = null, _originMarker = null, _setOriginMode = false;
+    let _origin = { lat: 19.2207, lng: -70.5291, label: 'RD' };
     const _pinIcon = (emoji) => window.L.divIcon({
       html: `<div style="font-size:26px;line-height:26px;filter:drop-shadow(0 2px 2px rgba(0,0,0,.35))">${emoji}</div>`,
       className: '', iconSize: [26, 26], iconAnchor: [13, 24],
     });
+    const _setOriginLabel = (txt) => { const el = document.getElementById('e-origin-label'); if (el) el.textContent = txt; };
+
+    // Fija el ORIGEN (tu negocio): mueve el marcador 🏪, lo guarda de forma
+    // persistente y recalcula la distancia si ya hay un destino puesto.
+    const applyOrigin = (lat, lng, { save = true, reverseLabel = true } = {}) => {
+      _origin = { lat, lng, label: _origin.label, fallback: false };
+      if (_originMarker) _originMarker.setLatLng([lat, lng]);
+      if (_map) _map.setView([lat, lng], Math.max(_map.getZoom ? _map.getZoom() : 14, 14));
+      if (save) window.api.deliveries.setOrigin({ lat, lng }).catch(() => {});
+      if (reverseLabel) {
+        window.api.deliveries.reverseGeocode({ lat, lng }).then(r => {
+          if (r?.ok) _setOriginLabel((r.address || '').split(',').slice(0, 2).join(', ') || 'Mi negocio');
+        }).catch(() => {});
+      }
+      if (_destMarker) { const p = _destMarker.getLatLng(); setDestPin(p.lat, p.lng); } // recalcular
+    };
+
+    // Detectar ubicación actual (geolocalización). En PC de escritorio no hay GPS →
+    // suele ser aproximada o fallar; si falla, se guía a fijarla manualmente (exacto).
+    const detectLocation = () => {
+      const btn = document.getElementById('btn-origin-detect');
+      if (!navigator.geolocation) { alert('Este equipo no soporta geolocalización. Usa "✏️ Fijar mi negocio".'); return; }
+      if (btn) { btn.disabled = true; btn.textContent = '📡 Detectando…'; }
+      const restore = () => { if (btn) { btn.disabled = false; btn.textContent = '📡 Detectar mi ubicación'; } };
+      navigator.geolocation.getCurrentPosition(
+        (pos) => { applyOrigin(pos.coords.latitude, pos.coords.longitude); restore();
+          alert('Ubicación detectada. Si el pin 🏪 no cayó exacto sobre tu local, arrástralo o usa "✏️ Fijar mi negocio".'); },
+        () => { restore();
+          alert('No se pudo detectar automáticamente (en escritorio no hay GPS).\n\nUsa "✏️ Fijar mi negocio" y haz clic en tu local en el mapa — así el origen queda EXACTO y se guarda.'); },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      );
+    };
 
     const setDestPin = async (lat, lng) => {
       if (!_map) return;
@@ -582,13 +619,30 @@ function modalNuevoEnvio(parentEl, vehiculos) {
         const oRes = await window.api.deliveries.getOrigin();
         if (oRes?.ok) _origin = oRes;
       } catch {}
+      _setOriginLabel(_origin.fallback ? '⚠ ajusta tu negocio →' : (_origin.label || 'Tu negocio'));
       _map = window.L.map(el, { zoomControl: true, attributionControl: true }).setView([_origin.lat, _origin.lng], 13);
       window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '© OpenStreetMap', maxZoom: 19,
       }).addTo(_map);
-      window.L.marker([_origin.lat, _origin.lng], { icon: _pinIcon('🏪') }).addTo(_map)
-        .bindTooltip('Tu negocio' + (_origin.fallback ? ' (ajusta la dirección en Config)' : ''));
-      _map.on('click', (e) => setDestPin(e.latlng.lat, e.latlng.lng));
+      // Marcador de ORIGEN (negocio) — arrastrable: soltar = fijar/guardar origen.
+      _originMarker = window.L.marker([_origin.lat, _origin.lng], { icon: _pinIcon('🏪'), draggable: true }).addTo(_map)
+        .bindTooltip('Tu negocio — arrástrame para ajustar la ubicación');
+      _originMarker.on('dragend', (ev) => { const p = ev.target.getLatLng(); applyOrigin(p.lat, p.lng); });
+      // Clic en el mapa: en modo "fijar negocio" mueve el origen; si no, pone destino.
+      _map.on('click', (e) => {
+        if (_setOriginMode) {
+          _setOriginMode = false;
+          applyOrigin(e.latlng.lat, e.latlng.lng);
+        } else {
+          setDestPin(e.latlng.lat, e.latlng.lng);
+        }
+      });
+      // Botones de origen.
+      document.getElementById('btn-origin-detect')?.addEventListener('click', detectLocation);
+      document.getElementById('btn-origin-set')?.addEventListener('click', () => {
+        _setOriginMode = true;
+        alert('Haz clic en el mapa sobre la ubicación EXACTA de tu negocio. Quedará guardada.');
+      });
       // El contenedor pudo renderizarse oculto → recalcular tamaño de tiles.
       setTimeout(() => _map.invalidateSize(), 250);
     };
