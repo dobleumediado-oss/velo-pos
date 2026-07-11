@@ -255,6 +255,7 @@ contextBridge.exposeInMainWorld('api', {
     route:         (d) => ipcRenderer.invoke('deliveries:route', d),
     getOrigin:     ()  => ipcRenderer.invoke('deliveries:getOrigin'),
     setOrigin:     (d) => ipcRenderer.invoke('deliveries:setOrigin', d),
+    ipLocate:      ()  => ipcRenderer.invoke('deliveries:ipLocate'),
   },
 
   // ── Conduce / Nota de Entrega ────────────

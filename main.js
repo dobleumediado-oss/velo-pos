@@ -3552,6 +3552,24 @@ ipcMain.handle('deliveries:getOrigin', async () => {
   }
 });
 
+// Geolocalización por IP (aproximada, nivel ciudad/zona). Sin GPS ni API key: sirve
+// para CENTRAR el mapa cerca del negocio cuando la geolocalización del navegador
+// falla; el usuario ajusta el pin al punto exacto. Corre en main (el CSP bloquea
+// fetch externo en el renderer).
+ipcMain.handle('deliveries:ipLocate', async () => {
+  try {
+    const { net } = require('electron');
+    const res = await net.fetch('https://ipapi.co/json/', {
+      headers: { 'User-Agent': 'VeloPOS/1.16' }, signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return { ok: false, error: `Servicio no disponible (${res.status})` };
+    const j = await res.json();
+    const lat = parseFloat(j.latitude), lng = parseFloat(j.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return { ok: false, error: 'No se pudo ubicar por IP' };
+    return { ok: true, lat, lng, city: j.city || '', region: j.region || '', approximate: true };
+  } catch (e) { return { ok: false, error: 'No se pudo detectar por internet: ' + e.message }; }
+});
+
 // Guardar el origen del negocio (pin manual desde el mapa).
 ipcMain.handle('deliveries:setOrigin', async (_, { lat, lng, label } = {}) => {
   try {

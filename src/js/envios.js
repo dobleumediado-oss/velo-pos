@@ -567,15 +567,33 @@ function modalNuevoEnvio(parentEl, vehiculos) {
     // suele ser aproximada o fallar; si falla, se guía a fijarla manualmente (exacto).
     const detectLocation = () => {
       const btn = document.getElementById('btn-origin-detect');
-      if (!navigator.geolocation) { alert('Este equipo no soporta geolocalización. Usa "✏️ Fijar mi negocio".'); return; }
-      if (btn) { btn.disabled = true; btn.textContent = '📡 Detectando…'; }
       const restore = () => { if (btn) { btn.disabled = false; btn.textContent = '📡 Detectar mi ubicación'; } };
+      if (btn) { btn.disabled = true; btn.textContent = '📡 Detectando…'; }
+
+      // Fallback: geolocalización por IP (aproximada) → centra el mapa en tu zona.
+      const tryIP = async () => {
+        if (btn) btn.textContent = '📡 Buscando por internet…';
+        try {
+          const r = await window.api.deliveries.ipLocate();
+          restore();
+          if (r?.ok) {
+            applyOrigin(r.lat, r.lng);
+            if (_map) _map.setView([r.lat, r.lng], 15);
+            alert(`📍 Ubicación aproximada por internet${r.city ? ` (${r.city})` : ''}.\n\n⚠ Es solo la ZONA. ARRASTRA el pin 🏪 al punto EXACTO de tu local para que la distancia sea precisa (queda guardado).`);
+          } else {
+            alert('No se pudo detectar la ubicación.\n\nUsa "✏️ Fijar mi negocio" y haz clic en tu local en el mapa — así queda exacto.');
+          }
+        } catch { restore(); alert('No se pudo detectar. Usa "✏️ Fijar mi negocio".'); }
+      };
+
+      // 1) Intentar la geolocalización del navegador (más precisa si el equipo la tiene).
+      if (!navigator.geolocation) { tryIP(); return; }
       navigator.geolocation.getCurrentPosition(
         (pos) => { applyOrigin(pos.coords.latitude, pos.coords.longitude); restore();
-          alert('Ubicación detectada. Si el pin 🏪 no cayó exacto sobre tu local, arrástralo o usa "✏️ Fijar mi negocio".'); },
-        () => { restore();
-          alert('No se pudo detectar automáticamente (en escritorio no hay GPS).\n\nUsa "✏️ Fijar mi negocio" y haz clic en tu local en el mapa — así el origen queda EXACTO y se guarda.'); },
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+          if (_map) _map.setView([pos.coords.latitude, pos.coords.longitude], 16);
+          alert('📍 Ubicación detectada. Verifica el pin 🏪 y arrástralo si no cayó exacto sobre tu local.'); },
+        () => { tryIP(); },   // navegador falló (sin GPS) → IP
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
       );
     };
 
