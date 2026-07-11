@@ -304,8 +304,8 @@ async function renderListaGastos(el, user) {
                         <button class="btn btn-ghost btn-sm" style="color:var(--green)" onclick="aprobarGasto(${e.id})" title="Aprobar">${svg('check')}</button>
                         <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="rechazarGasto(${e.id})" title="Rechazar">${svg('xmark')}</button>
                       ` : ''}
-                      ${['admin','superadmin'].includes(user.role) && ['pendiente_pago','parcialmente_pagado','aprobado'].includes(e.status) ? `
-                        <button class="btn btn-ghost btn-sm" style="color:var(--blue)" onclick="pagarGasto(${e.id},${e.total-e.paid_amount})" title="Pagar">${svg('dollar')}</button>
+                      ${['admin','superadmin'].includes(user.role) && ['pendiente_pago','parcialmente_pagado','aprobado','pendiente_aprobacion'].includes(e.status) ? `
+                        <button class="btn btn-ghost btn-sm" style="color:var(--blue)" onclick="pagarGasto(${e.id},${e.total-e.paid_amount})" title="Pagar (aprueba automáticamente)">${svg('dollar')}</button>
                       ` : ''}
                       ${['admin','superadmin'].includes(user.role) && !['anulado','rechazado'].includes(e.status) ? `
                         <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="anularGasto(${e.id})" title="Anular">${svg('xmark')}</button>

@@ -2485,11 +2485,16 @@ const expensesRepo = {
       // Actualizar gasto
       const newPaid = expense.paid_amount + amount;
       const newStatus = newPaid >= expense.total - 0.01 ? 'pagado' : 'parcialmente_pagado';
-      db.prepare("UPDATE expenses SET paid_amount=?,status=?,updated_at=datetime('now'),cash_session_id=?,cash_movement_id=? WHERE id=?")
-        .run(newPaid, newStatus, cash_session_id||expense.cash_session_id, cashMovementId||expense.cash_movement_id, expenseId);
+      // Pagar = aprobado automático: si el gasto aún no estaba aprobado, el pago lo
+      // aprueba (lo hace un admin, que tiene la autoridad). No sobreescribe si ya
+      // tenía aprobador. Elimina el paso previo de "Aprobar" para poder pagar.
+      db.prepare(`UPDATE expenses SET paid_amount=?,status=?,
+        approved_by=COALESCE(approved_by,?), approved_at=COALESCE(approved_at,datetime('now')),
+        updated_at=datetime('now'),cash_session_id=?,cash_movement_id=? WHERE id=?`)
+        .run(newPaid, newStatus, userId||null, cash_session_id||expense.cash_session_id, cashMovementId||expense.cash_movement_id, expenseId);
 
       audit(userId, userName||'', 'gasto_pagado', 'expenses', expenseId,
-        `Pago: RD$${amount} | Método: ${payment_method} | Estado: ${newStatus}`);
+        `Pago: RD$${amount} | Método: ${payment_method} | Estado: ${newStatus}${expense.approved_by ? '' : ' | Aprobado al pagar'}`);
       return { ok: true, newStatus, newPaid, cashMovementId, paymentId: payRow.lastInsertRowid };
     })();
   },
