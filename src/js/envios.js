@@ -272,10 +272,17 @@ function modalNuevoEnvio(parentEl, vehiculos) {
       <label class="lbl">Dirección de destino *</label>
       <input class="inp" id="e-dest" placeholder="Ej: Av. Independencia 123, Santiago, RD" autocomplete="off">
       <button class="btn btn-ghost btn-sm" id="btn-geocode" style="margin-top:6px;width:100%">
-        📍 Buscar dirección y calcular distancia
+        🔍 Buscar dirección y marcarla en el mapa
       </button>
+      <!-- Mapa (solo vehículo propio): buscar arriba mueve el pin; clic en el mapa lo fija -->
+      <div id="e-map-wrap" style="margin-top:8px">
+        <div id="e-map" style="height:280px;border-radius:12px;overflow:hidden;border:1px solid var(--line2);background:var(--bg2)"></div>
+        <div id="e-map-hint" style="font-size:11px;color:var(--muted2);margin-top:5px">
+          🏪 Tu negocio · 📍 Destino — busca arriba o <b>haz clic en el mapa</b> (arrastra el pin para ajustar).
+        </div>
+      </div>
+      <div id="e-map-result" style="display:none;background:var(--bg2);border-radius:8px;padding:9px 12px;font-size:12px;margin-top:8px;border:0.5px solid var(--line2)"></div>
     </div>
-    <div id="e-map-result" style="display:none;background:var(--bg2);border-radius:8px;padding:10px 12px;font-size:12px;margin-bottom:10px;border:0.5px solid var(--line2)"></div>
 
     <!-- Cliente -->
     <div class="fg">
@@ -285,13 +292,6 @@ function modalNuevoEnvio(parentEl, vehiculos) {
 
     <!-- SECCIÓN VEHÍCULO PROPIO -->
     <div id="sec-propio">
-      <div class="fg" id="e-map-wrap">
-        <label class="lbl">📍 Ubicación exacta del destino</label>
-        <div id="e-map" style="height:300px;border-radius:12px;overflow:hidden;border:1px solid var(--line2);background:var(--bg2)"></div>
-        <div id="e-map-hint" style="font-size:11px;color:var(--muted2);margin-top:5px">
-          🏪 Tu negocio · 📍 Destino — <b>haz clic en el mapa</b> para fijar a dónde va el envío (o arrastra el pin). Calcula la distancia real por carretera.
-        </div>
-      </div>
       <div class="fg">
         <label class="lbl">Vehículo de entrega</label>
         <select class="inp" id="e-vehicle">
@@ -405,6 +405,7 @@ function modalNuevoEnvio(parentEl, vehiculos) {
       const secExpreso = document.getElementById('sec-expreso');
       const btnGeo = document.getElementById('btn-geocode');
       const mapRes = document.getElementById('e-map-result');
+      const mapWrap = document.getElementById('e-map-wrap');
       if (tipo === 'propio') {
         propioEl.style.cssText  += ';border-color:var(--green,#00c07a);background:rgba(0,192,122,.07)';
         expresoEl.style.cssText += ';border-color:var(--line2);background:';
@@ -412,7 +413,8 @@ function modalNuevoEnvio(parentEl, vehiculos) {
         secExpreso.style.display = 'none';
         document.getElementById('e-fee-hint').textContent = 'Lo que cobras al cliente por el envío';
         // Vehículo propio: la búsqueda por mapa SÍ aplica (destino exacto + distancia).
-        if (btnGeo) btnGeo.style.display = '';
+        if (btnGeo)  btnGeo.style.display  = '';
+        if (mapWrap) mapWrap.style.display = '';
         // Reactivar el mapa (recalcula tamaño; lo monta si aún no existe).
         if (window._enviosInitMap) window._enviosInitMap();
       } else {
@@ -422,8 +424,9 @@ function modalNuevoEnvio(parentEl, vehiculos) {
         secExpreso.style.display = 'block';
         document.getElementById('e-fee-hint').textContent = 'Tarifa que cobra el expreso (manual)';
         // Expreso/Parada: no aplica mapa — el destino es la parada, tarifa manual.
-        if (btnGeo) btnGeo.style.display = 'none';
-        if (mapRes) mapRes.style.display = 'none';
+        if (btnGeo)  btnGeo.style.display  = 'none';
+        if (mapWrap) mapWrap.style.display = 'none';
+        if (mapRes)  mapRes.style.display  = 'none';
         onCarrierChange();
       }
     };
@@ -470,22 +473,22 @@ function modalNuevoEnvio(parentEl, vehiculos) {
         const res = await window.api.deliveries.geocode({ address: addr });
         if (!res?.ok) throw new Error(res?.error || 'No se pudo buscar la dirección');
         const { lat, lng, display_name } = res;
-        const distKm = res.distance_km != null ? String(res.distance_km) : null;
-        document.getElementById('e-lat').value = lat;
-        document.getElementById('e-lng').value = lng;
-        if (distKm != null) document.getElementById('e-distance').value = distKm;
-        mapResult.style.display = 'block';
-        mapResult.style.background = 'var(--bg2)';
-        mapResult.style.borderColor = 'var(--line2)';
-        mapResult.innerHTML = `
-          📍 <strong>${(display_name || '').split(',').slice(0,3).join(', ')}</strong><br>
-          ${distKm != null ? `📏 Distancia estimada: <strong>${distKm} km</strong>` : ''}
-          <br><a href="https://www.google.com/maps?q=${lat},${lng}" target="_blank"
-            style="color:var(--blue);font-size:11px">Ver en Google Maps ↗</a>`;
-        // Si es vehículo propio, calcular combustible
-        const tipo = document.getElementById('e-tipo')?.value;
-        if (tipo === 'propio') {
-          await calcularCombustible(distKm, vSelect?.value);
+        // UNIFICADO con el mapa: centrar y soltar el pin. setDestPin se encarga de la
+        // dirección, la distancia real por carretera y el combustible — mismo camino
+        // que hacer clic en el mapa (una sola fuente de verdad, sin cajita aparte).
+        if (_map) {
+          _map.setView([lat, lng], 15);
+          await setDestPin(lat, lng);
+        } else {
+          // Fallback sin mapa (offline): resultado de texto.
+          document.getElementById('e-lat').value = lat;
+          document.getElementById('e-lng').value = lng;
+          const distKm = res.distance_km != null ? String(res.distance_km) : null;
+          if (distKm != null) document.getElementById('e-distance').value = distKm;
+          mapResult.style.display = 'block';
+          mapResult.style.background = 'var(--bg2)'; mapResult.style.borderColor = 'var(--line2)';
+          mapResult.innerHTML = `📍 <strong>${(display_name || '').split(',').slice(0,3).join(', ')}</strong>${distKm != null ? ` · 📏 <strong>${distKm} km</strong>` : ''}`;
+          if ((document.getElementById('e-tipo')?.value) === 'propio' && distKm != null) await calcularCombustible(distKm, vSelect?.value);
         }
       } catch(err) {
         mapResult.style.display = 'block';
@@ -494,7 +497,7 @@ function modalNuevoEnvio(parentEl, vehiculos) {
         mapResult.innerHTML = `⚠ ${err.message}`;
       } finally {
         btnGeo.disabled = false;
-        btnGeo.textContent = '📍 Buscar dirección y calcular distancia';
+        btnGeo.textContent = '🔍 Buscar dirección y marcarla en el mapa';
       }
     };
 
