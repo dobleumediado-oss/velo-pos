@@ -251,6 +251,10 @@ contextBridge.exposeInMainWorld('api', {
     create:        (d) => ipcRenderer.invoke('deliveries:create', d),
     updateStatus:  (d) => ipcRenderer.invoke('deliveries:updateStatus', d),
     geocode:       (d) => ipcRenderer.invoke('deliveries:geocode', d),
+    reverseGeocode:(d) => ipcRenderer.invoke('deliveries:reverseGeocode', d),
+    route:         (d) => ipcRenderer.invoke('deliveries:route', d),
+    getOrigin:     ()  => ipcRenderer.invoke('deliveries:getOrigin'),
+    setOrigin:     (d) => ipcRenderer.invoke('deliveries:setOrigin', d),
   },
 
   // ── Conduce / Nota de Entrega ────────────

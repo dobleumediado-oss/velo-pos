@@ -3482,6 +3482,88 @@ ipcMain.handle('deliveries:geocode', async (_, { address, originLat, originLng }
   }
 });
 
+// Geocodificación inversa: coordenadas del pin → dirección legible.
+ipcMain.handle('deliveries:reverseGeocode', async (_, { lat, lng } = {}) => {
+  try {
+    const la = Number(lat), ln = Number(lng);
+    if (!Number.isFinite(la) || !Number.isFinite(ln)) return { ok: false, error: 'Coordenadas inválidas' };
+    const { net } = require('electron');
+    const res = await net.fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${la}&lon=${ln}&format=json&zoom=18`,
+      { headers: { 'User-Agent': 'VeloPOS/1.16 (soporte@velopos.do)' }, signal: AbortSignal.timeout(10000) }
+    );
+    if (!res.ok) return { ok: false, error: `Servicio de mapas no disponible (${res.status})` };
+    const j = await res.json();
+    return { ok: true, address: j.display_name || `${la.toFixed(5)}, ${ln.toFixed(5)}`, lat: la, lng: ln };
+  } catch (e) { return { ok: false, error: 'No se pudo obtener la dirección: ' + e.message }; }
+});
+
+// Ruta por carretera entre dos coordenadas (origen negocio → pin). OSRM.
+ipcMain.handle('deliveries:route', async (_, { originLat, originLng, destLat, destLng } = {}) => {
+  try {
+    const oLat = Number.isFinite(Number(originLat)) ? Number(originLat) : 19.2207;
+    const oLng = Number.isFinite(Number(originLng)) ? Number(originLng) : -70.5291;
+    const dLat = Number(destLat), dLng = Number(destLng);
+    if (!Number.isFinite(dLat) || !Number.isFinite(dLng)) return { ok: false, error: 'Destino inválido' };
+    const { net } = require('electron');
+    const res = await net.fetch(
+      `https://router.project-osrm.org/route/v1/driving/${oLng},${oLat};${dLng},${dLat}?overview=false`,
+      { signal: AbortSignal.timeout(10000) }
+    );
+    if (!res.ok) return { ok: false, error: `Ruteo no disponible (${res.status})` };
+    const j = await res.json();
+    const r = j && j.routes && j.routes[0];
+    return { ok: true,
+      distance_km:  r ? Math.round((r.distance / 1000) * 10) / 10 : null,
+      duration_min: r ? Math.round(r.duration / 60) : null };
+  } catch (e) { return { ok: false, error: 'No se pudo calcular la ruta: ' + e.message }; }
+});
+
+// Origen del negocio para medir distancias. Usa coords guardadas; si no, geocodifica
+// la dirección del negocio (y la cachea); último recurso: centro de RD.
+ipcMain.handle('deliveries:getOrigin', async () => {
+  try {
+    const latS = settingsRepo.get('delivery_origin_lat');
+    const lngS = settingsRepo.get('delivery_origin_lng');
+    if (latS && lngS) {
+      return { ok: true, lat: parseFloat(latS), lng: parseFloat(lngS),
+        label: settingsRepo.get('delivery_origin_label') || settingsRepo.get('biz_addr') || 'Negocio' };
+    }
+    const addr = settingsRepo.get('biz_addr');
+    if (addr && String(addr).trim()) {
+      const { net } = require('electron');
+      const q = encodeURIComponent(String(addr).trim() + ', República Dominicana');
+      const res = await net.fetch(`https://nominatim.openstreetmap.org/search?q=${q}&format=json&limit=1`,
+        { headers: { 'User-Agent': 'VeloPOS/1.16 (soporte@velopos.do)' }, signal: AbortSignal.timeout(10000) });
+      if (res.ok) {
+        const g = await res.json();
+        if (Array.isArray(g) && g[0]) {
+          const lat = parseFloat(g[0].lat), lng = parseFloat(g[0].lon);
+          settingsRepo.set('delivery_origin_lat', String(lat));
+          settingsRepo.set('delivery_origin_lng', String(lng));
+          settingsRepo.set('delivery_origin_label', String(addr));
+          return { ok: true, lat, lng, label: addr };
+        }
+      }
+    }
+    return { ok: true, lat: 19.2207, lng: -70.5291, label: 'Centro de RD (ajusta la dirección del negocio)', fallback: true };
+  } catch (e) {
+    return { ok: true, lat: 19.2207, lng: -70.5291, label: 'Centro de RD', fallback: true };
+  }
+});
+
+// Guardar el origen del negocio (pin manual desde el mapa).
+ipcMain.handle('deliveries:setOrigin', async (_, { lat, lng, label } = {}) => {
+  try {
+    const la = Number(lat), ln = Number(lng);
+    if (!Number.isFinite(la) || !Number.isFinite(ln)) return { ok: false, error: 'Coordenadas inválidas' };
+    settingsRepo.set('delivery_origin_lat', String(la));
+    settingsRepo.set('delivery_origin_lng', String(ln));
+    if (label) settingsRepo.set('delivery_origin_label', String(label));
+    return { ok: true, lat: la, lng: ln };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
 // ══════════════════════════════════════════════
 // IPC — CONDUCE / NOTA DE ENTREGA
 // ──────────────────────────────────────────────

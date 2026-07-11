@@ -285,6 +285,13 @@ function modalNuevoEnvio(parentEl, vehiculos) {
 
     <!-- SECCIÓN VEHÍCULO PROPIO -->
     <div id="sec-propio">
+      <div class="fg" id="e-map-wrap">
+        <label class="lbl">📍 Ubicación exacta del destino</label>
+        <div id="e-map" style="height:300px;border-radius:12px;overflow:hidden;border:1px solid var(--line2);background:var(--bg2)"></div>
+        <div id="e-map-hint" style="font-size:11px;color:var(--muted2);margin-top:5px">
+          🏪 Tu negocio · 📍 Destino — <b>haz clic en el mapa</b> para fijar a dónde va el envío (o arrastra el pin). Calcula la distancia real por carretera.
+        </div>
+      </div>
       <div class="fg">
         <label class="lbl">Vehículo de entrega</label>
         <select class="inp" id="e-vehicle">
@@ -396,18 +403,27 @@ function modalNuevoEnvio(parentEl, vehiculos) {
       const expresoEl  = document.getElementById('tipo-expreso');
       const secPropio  = document.getElementById('sec-propio');
       const secExpreso = document.getElementById('sec-expreso');
+      const btnGeo = document.getElementById('btn-geocode');
+      const mapRes = document.getElementById('e-map-result');
       if (tipo === 'propio') {
         propioEl.style.cssText  += ';border-color:var(--green,#00c07a);background:rgba(0,192,122,.07)';
         expresoEl.style.cssText += ';border-color:var(--line2);background:';
         secPropio.style.display  = 'block';
         secExpreso.style.display = 'none';
         document.getElementById('e-fee-hint').textContent = 'Lo que cobras al cliente por el envío';
+        // Vehículo propio: la búsqueda por mapa SÍ aplica (destino exacto + distancia).
+        if (btnGeo) btnGeo.style.display = '';
+        // Reactivar el mapa (recalcula tamaño; lo monta si aún no existe).
+        if (window._enviosInitMap) window._enviosInitMap();
       } else {
         expresoEl.style.cssText += ';border-color:var(--blue,#3b82f6);background:rgba(59,130,246,.07)';
         propioEl.style.cssText  += ';border-color:var(--line2);background:';
         secPropio.style.display  = 'none';
         secExpreso.style.display = 'block';
-        document.getElementById('e-fee-hint').textContent = 'Tarifa que cobra el expreso (editable)';
+        document.getElementById('e-fee-hint').textContent = 'Tarifa que cobra el expreso (manual)';
+        // Expreso/Parada: no aplica mapa — el destino es la parada, tarifa manual.
+        if (btnGeo) btnGeo.style.display = 'none';
+        if (mapRes) mapRes.style.display = 'none';
         onCarrierChange();
       }
     };
@@ -418,30 +434,24 @@ function modalNuevoEnvio(parentEl, vehiculos) {
       const destSel = document.getElementById('e-carrier-dest');
       if (!destSel) return;
       const rutas = EXPRESOS_RD[carrier]?.rutas || {};
+      // Solo el nombre del destino — la tarifa de expreso/parada se ingresa MANUAL.
       destSel.innerHTML = '<option value="">— Selecciona destino —</option>' +
-        Object.keys(rutas).map(d =>
-          `<option value="${d}">${d} — ${_eFmt(rutas[d].tarifa)} · ${rutas[d].tiempo}</option>`
-        ).join('');
+        Object.keys(rutas).map(d => `<option value="${d}">${d}</option>`).join('');
       document.getElementById('e-carrier-info').style.display = 'none';
     };
 
-    // Cambio de destino — llenar tarifa automática
+    // Cambio de destino — la tarifa es MANUAL para expresos/paradas (no se rellena).
     window.onCarrierDestChange = () => {
       const carrier = document.getElementById('e-carrier')?.value;
       const dest    = document.getElementById('e-carrier-dest')?.value;
-      const feeInp  = document.getElementById('e-fee');
       const infoBox = document.getElementById('e-carrier-info');
-      if (!carrier || !dest) return;
-      const ruta = EXPRESOS_RD[carrier]?.rutas[dest];
-      if (!ruta) return;
-      if (feeInp) feeInp.value = ruta.tarifa;
-      // Mostrar info del expreso
+      if (!carrier || !dest) { if (infoBox) infoBox.style.display = 'none'; return; }
       infoBox.style.display = 'block';
-      document.getElementById('e-carrier-info-title').textContent =
-        `${carrier} → ${dest}`;
+      document.getElementById('e-carrier-info-title').textContent = `${carrier} → ${dest}`;
       document.getElementById('e-carrier-info-body').innerHTML =
-        `Tiempo estimado: ${ruta.tiempo} · Tarifa estándar: ${_eFmt(ruta.tarifa)}<br>
-         <span style="font-size:10px">Puedes modificar la tarifa si el expreso cobró diferente</span>`;
+        'Ingresa manualmente la tarifa que cobró el expreso por esta encomienda.';
+      const feeInp = document.getElementById('e-fee');
+      if (feeInp) feeInp.focus();
     };
 
     // Geocoding
@@ -522,8 +532,70 @@ function modalNuevoEnvio(parentEl, vehiculos) {
       if (distKm) calcularCombustible(distKm, vSelect.value);
     });
 
+    // ── Mapa interactivo (Leaflet) para vehículo propio ──────────────────────
+    let _map = null, _destMarker = null, _origin = { lat: 19.2207, lng: -70.5291, label: 'RD' };
+    const _pinIcon = (emoji) => window.L.divIcon({
+      html: `<div style="font-size:26px;line-height:26px;filter:drop-shadow(0 2px 2px rgba(0,0,0,.35))">${emoji}</div>`,
+      className: '', iconSize: [26, 26], iconAnchor: [13, 24],
+    });
+
+    const setDestPin = async (lat, lng) => {
+      if (!_map) return;
+      if (_destMarker) _destMarker.setLatLng([lat, lng]);
+      else {
+        _destMarker = window.L.marker([lat, lng], { icon: _pinIcon('📍'), draggable: true }).addTo(_map);
+        _destMarker.on('dragend', (ev) => { const p = ev.target.getLatLng(); setDestPin(p.lat, p.lng); });
+      }
+      document.getElementById('e-lat').value = lat;
+      document.getElementById('e-lng').value = lng;
+      const mr = document.getElementById('e-map-result');
+      mr.style.display = 'block'; mr.style.background = 'var(--bg2)'; mr.style.borderColor = 'var(--line2)';
+      mr.innerHTML = '⏳ Calculando dirección y distancia…';
+      // Dirección (geocodificación inversa) — rellena el campo si está vacío.
+      window.api.deliveries.reverseGeocode({ lat, lng }).then(r => {
+        if (r?.ok) {
+          const di = document.getElementById('e-dest');
+          if (di && !di.value.trim()) di.value = (r.address || '').split(',').slice(0, 3).join(', ');
+        }
+      }).catch(() => {});
+      // Distancia real por carretera desde el negocio.
+      try {
+        const rt = await window.api.deliveries.route({ originLat: _origin.lat, originLng: _origin.lng, destLat: lat, destLng: lng });
+        const distKm = (rt?.ok && rt.distance_km != null) ? rt.distance_km : null;
+        if (distKm != null) document.getElementById('e-distance').value = distKm;
+        mr.innerHTML = distKm != null
+          ? `📍 Destino fijado · 📏 <strong>${distKm} km</strong> por carretera${rt.duration_min ? ` · ⏱ ~${rt.duration_min} min` : ''}`
+          : '📍 Destino fijado (no se pudo calcular la distancia — revisa la conexión)';
+        if (distKm != null) await calcularCombustible(String(distKm), document.getElementById('e-vehicle')?.value);
+      } catch { mr.innerHTML = '📍 Destino fijado (sin distancia — sin conexión)'; }
+    };
+
+    const initMap = async () => {
+      const el = document.getElementById('e-map');
+      // Sin Leaflet (offline/no cargó) → ocultar el mapa; queda el buscador por texto.
+      if (!window.L || !el) { const w = document.getElementById('e-map-wrap'); if (w) w.style.display = 'none'; return; }
+      if (_map) { setTimeout(() => _map.invalidateSize(), 60); return; }
+      try {
+        const oRes = await window.api.deliveries.getOrigin();
+        if (oRes?.ok) _origin = oRes;
+      } catch {}
+      _map = window.L.map(el, { zoomControl: true, attributionControl: true }).setView([_origin.lat, _origin.lng], 13);
+      window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap', maxZoom: 19,
+      }).addTo(_map);
+      window.L.marker([_origin.lat, _origin.lng], { icon: _pinIcon('🏪') }).addTo(_map)
+        .bindTooltip('Tu negocio' + (_origin.fallback ? ' (ajusta la dirección en Config)' : ''));
+      _map.on('click', (e) => setDestPin(e.latlng.lat, e.latlng.lng));
+      // El contenedor pudo renderizarse oculto → recalcular tamaño de tiles.
+      setTimeout(() => _map.invalidateSize(), 250);
+    };
+    // Exponer para que selTipoEnvio reactive el mapa al volver a "propio".
+    window._enviosInitMap = initMap;
+
     // Inicializar destinos del primer expreso
     onCarrierChange();
+    // El tipo por defecto es "propio" → montar el mapa.
+    initMap();
 
   }, 150);
 }
