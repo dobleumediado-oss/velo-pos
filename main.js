@@ -3751,6 +3751,9 @@ ipcMain.handle('expenses:create', async (_, { data, requestUserId }) => {
     const cfg = expensesRepo.getConfig();
     const cajeroLimit = parseFloat(cfg.cajero_limit || 1500);
     let status = data.status || 'pendiente_pago';
+    const _method = data.payment_method || 'efectivo';
+    // "Pagar ahora": paga el total al registrar. No aplica a crédito (crédito = CxP).
+    const wantPayNow = data.pay_now === true && _method !== 'credito';
 
     if (u.role === 'cajero') {
       // Cajero solo puede registrar desde caja abierta
@@ -3770,7 +3773,7 @@ ipcMain.handle('expenses:create', async (_, { data, requestUserId }) => {
     audit(requestUserId, u.name, 'gasto_creado', 'expenses', id, data.description);
 
     // Si es cajero, pago directo sin aprobación y caja disponible
-    let autoPay = null;
+    let autoPay = null, payWarning = null;
     if (u.role === 'cajero' && status === 'pendiente_pago' && data.payment_source === 'caja') {
       const session = cashRepo.getOpen(_reqTerminalId());
       if (session) {
@@ -3782,6 +3785,21 @@ ipcMain.handle('expenses:create', async (_, { data, requestUserId }) => {
         });
       }
     }
+    // Admin/superadmin con "Pagar ahora": paga el total de inmediato. Efectivo usa la
+    // caja si está abierta, si no caja chica (para no fallar con caja cerrada); los
+    // demás métodos van por banco. Si el pago falla, el gasto queda como "por pagar".
+    else if (['admin', 'superadmin'].includes(u.role) && wantPayNow) {
+      const session = _method === 'efectivo' ? cashRepo.getOpen(_reqTerminalId()) : null;
+      const paySource = _method === 'efectivo' ? (session ? 'caja' : 'caja_chica') : 'banco';
+      try {
+        autoPay = expensesRepo.pay({
+          expenseId: id, amount: data.total || data.amount,
+          payment_method: _method, payment_source: paySource,
+          cash_session_id: session ? session.id : null,
+          userId: requestUserId, userName: u.name,
+        });
+      } catch (e) { payWarning = e.message; }
+    }
 
     // Contabilidad en vivo (devengado): reconoce el gasto y la CxP; si hubo pago
     // inmediato, además salda la CxP contra Caja/Banco.
@@ -3789,7 +3807,7 @@ ipcMain.handle('expenses:create', async (_, { data, requestUserId }) => {
       accountingRepo.generateExpenseAccrualEntry({ expenseId: id, userId: requestUserId });
       if (autoPay?.paymentId) accountingRepo.generateExpensePaymentEntry({ paymentId: autoPay.paymentId, userId: requestUserId });
     });
-    return { ok:true, id, status };
+    return { ok:true, id, status: autoPay?.newStatus || status, paid: !!autoPay, payWarning };
   } catch(e) { return { ok:false, error:e.message }; }
 });
 

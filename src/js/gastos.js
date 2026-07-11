@@ -740,13 +740,19 @@ function modalNuevoGasto(parentEl, user) {
         <input class="inp" id="gasto-due" type="date"></div>
     </div>
     <div class="fg"><label class="lbl">Método de pago</label>
-      <select class="inp" id="gasto-method">
+      <select class="inp" id="gasto-method" onchange="(function(v){var c=document.getElementById('gasto-paynow');if(!c)return;if(v==='credito'){c.checked=false;c.disabled=true;}else{c.disabled=false;c.checked=true;}})(this.value)">
         <option value="efectivo">Efectivo</option>
         <option value="transferencia">Transferencia bancaria</option>
         <option value="tarjeta">Tarjeta</option>
         <option value="cheque">Cheque</option>
         <option value="credito">Crédito (cuentas por pagar)</option>
       </select></div>
+    <div class="fg" id="gasto-paynow-wrap" style="display:flex;align-items:center;gap:8px;background:var(--surface,#f8fafc);border:1px solid var(--line2,#e5e7eb);border-radius:10px;padding:10px 12px">
+      <input type="checkbox" id="gasto-paynow" checked style="width:16px;height:16px;cursor:pointer">
+      <label for="gasto-paynow" style="cursor:pointer;margin:0;font-size:13px">
+        <b>Pagar ahora</b> — se registra como <b>pagado</b> (si no lo marcas, queda como cuenta por pagar)
+      </label>
+    </div>
     <div class="fg"><label class="lbl">No. Factura del proveedor</label>
       <input class="inp" id="gasto-invoice" placeholder="Ej: FAC-00123"></div>
     <div class="fg"><label class="lbl">NCF</label>
@@ -762,6 +768,7 @@ function modalNuevoGasto(parentEl, user) {
     if (!amount || amount <= 0) throw new Error('El monto debe ser mayor a cero');
 
     const method = overlay.querySelector('#gasto-method')?.value;
+    const payNow = method !== 'credito' && !!overlay.querySelector('#gasto-paynow')?.checked;
     const res = await window.api.expenses.create({
       data: {
         type:           overlay.querySelector('#gasto-type')?.value,
@@ -773,6 +780,7 @@ function modalNuevoGasto(parentEl, user) {
         total:          amount,
         payment_method: method,
         payment_source: method === 'credito' ? 'pendiente' : 'caja',
+        pay_now:        payNow,
         issue_date:     overlay.querySelector('#gasto-date')?.value,
         due_date:       overlay.querySelector('#gasto-due')?.value || null,
         invoice_number: overlay.querySelector('#gasto-invoice')?.value || null,
@@ -782,7 +790,10 @@ function modalNuevoGasto(parentEl, user) {
       requestUserId: user.id,
     });
     if (!res.ok) throw new Error(res.error);
-    toast(`✓ Gasto registrado${res.status==='pendiente_aprobacion'?' — pendiente de aprobación':''}`);
+    toast(res.paid
+      ? '✓ Gasto registrado y pagado'
+      : `✓ Gasto registrado${res.status==='pendiente_aprobacion'?' — pendiente de aprobación':' — como cuenta por pagar'}${res.payWarning ? ' (no se pudo pagar: '+res.payWarning+')' : ''}`,
+      res.payWarning ? 'w' : 's');
     renderGastos(parentEl.closest('#main-content') || parentEl);
   }, 'Registrar gasto');
 }
