@@ -1655,7 +1655,7 @@ async function renderECFConfig(container) {
     const env    = container.querySelector('#ecf-env')?.value;
     const msg    = container.querySelector('#ecf-status-msg');
     if (!email || !apiKey) { msg.style.color='var(--red,#ef4444)'; msg.textContent = '⚠ Correo y API Key son obligatorios'; return; }
-    const res = await window.api.ecf.saveConfig({ email, password: pass || undefined, apiKey, environment: env });
+    const res = await window.api.ecf.saveConfig({ email, password: pass || undefined, apiKey, environment: env, requestUserId: _cfgUser()?.id });
     if (res.ok) { msg.style.color='var(--green,#00c07a)'; msg.textContent = '✓ Configuración guardada'; }
     else { msg.style.color='var(--red,#ef4444)'; msg.textContent = `⚠ ${res.error}`; }
   });
@@ -1666,7 +1666,7 @@ async function renderECFConfig(container) {
     msg.style.color = 'var(--muted2)';
     msg.textContent = '⏳ Probando conexión con MSeller...';
     try {
-      const logRes = await window.api.ecf.getLog({ limit: 1 });
+      const logRes = await window.api.ecf.getLog({ limit: 1, requestUserId: _cfgUser()?.id });
       if (logRes.ok) {
         msg.style.color = 'var(--green,#00c07a)';
         msg.textContent = '✓ Conexión exitosa con MSeller ECF';

@@ -4317,8 +4317,10 @@ async function _msellerAuth(email, password) {
 }
 
 // ── Emitir e-CF para una venta ────────────────────────────────────────────────
-ipcMain.handle('ecf:emit', async (_, { saleId }) => {
+ipcMain.handle('ecf:emit', async (_, { saleId, requestUserId } = {}) => {
   try {
+    // Emisión fiscal → requiere sesión válida (cualquier rol operativo puede emitir).
+    if (!requestUserId || !authRepo.findById(requestUserId)?.active) return { ok: false, error: 'Sesión no válida para emitir e-CF.' };
     // 1. Obtener datos de la venta
     const sale = db.prepare(`
       SELECT s.*, c.name as cust_name, c.rnc as cust_rnc, c.email as cust_email,
@@ -4515,8 +4517,9 @@ ipcMain.handle('ecf:emit', async (_, { saleId }) => {
 });
 
 // ── Consultar estado de un e-CF ───────────────────────────────────────────────
-ipcMain.handle('ecf:getStatus', async (_, { encf }) => {
+ipcMain.handle('ecf:getStatus', async (_, { encf, requestUserId } = {}) => {
   try {
+    if (!requestUserId || !authRepo.findById(requestUserId)?.active) return { ok: false, error: 'Sesión no válida.' };
     const getSet = k => db.prepare("SELECT value FROM settings WHERE key=?").get(k)?.value || '';
     const apiKey = getSet('ecf_api_key');
     const email  = getSet('ecf_email');
@@ -4537,8 +4540,10 @@ ipcMain.handle('ecf:getStatus', async (_, { encf }) => {
 });
 
 // ── Guardar configuración eCF ─────────────────────────────────────────────────
-ipcMain.handle('ecf:saveConfig', async (_, { email, password, apiKey, environment }) => {
+ipcMain.handle('ecf:saveConfig', async (_, { email, password, apiKey, environment, requestUserId } = {}) => {
   try {
+    // Config fiscal (credenciales MSeller) → solo admin/superadmin.
+    if (!_requireAccountingRole(requestUserId)) return { ok: false, error: 'Solo un administrador puede cambiar la configuración fiscal (e-CF).' };
     const sets = [
       ['ecf_email',       email       || ''],
       ['ecf_password',    password    || ''],
@@ -4555,8 +4560,10 @@ ipcMain.handle('ecf:saveConfig', async (_, { email, password, apiKey, environmen
 });
 
 // ── Obtener configuración eCF ─────────────────────────────────────────────────
-ipcMain.handle('ecf:getConfig', async () => {
+ipcMain.handle('ecf:getConfig', async (_, { requestUserId } = {}) => {
   try {
+    // Expone credenciales fiscales (apiKey) → solo admin/superadmin.
+    if (!_requireAccountingRole(requestUserId)) return { ok: false, error: 'Solo un administrador puede ver la configuración fiscal (e-CF).' };
     const getSet = k => db.prepare("SELECT value FROM settings WHERE key=?").get(k)?.value || '';
     return {
       ok: true,
@@ -4573,8 +4580,10 @@ ipcMain.handle('ecf:getConfig', async () => {
 });
 
 // ── Historial de e-CF emitidos ────────────────────────────────────────────────
-ipcMain.handle('ecf:getLog', async (_, { limit = 50, offset = 0 } = {}) => {
+ipcMain.handle('ecf:getLog', async (_, { limit = 50, offset = 0, requestUserId } = {}) => {
   try {
+    // Historial fiscal → solo admin/superadmin.
+    if (!_requireAccountingRole(requestUserId)) return { ok: false, error: 'Solo un administrador puede ver el historial fiscal (e-CF).' };
     const rows = db.prepare(`
       SELECT el.*, s.total, c.name as cust_name
       FROM ecf_log el

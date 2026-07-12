@@ -376,7 +376,7 @@ async function enviarEcf(saleId) {
           </div>`;
       }
 
-      const result = await window.api.ecf.emit({ saleId });
+      const result = await window.api.ecf.emit({ saleId, requestUserId: user.id });
 
       if (!result.ok) {
         closeModal();
