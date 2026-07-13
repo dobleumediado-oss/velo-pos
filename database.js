@@ -48,9 +48,36 @@ function initDB(customDataDir) {
   migratePaymentsColumns();
   migrateV2IdentityColumns();   // Fase 1 migración v2 (identidad real Equiparts)
   seedIfEmpty();
+  ensureNcfIntegrity();         // C2: índice UNIQUE parcial contra NCF duplicados
 
   console.log('[DB] Iniciada en:', DB_PATH);
   return db;
+}
+
+// ── Integridad de NCF (C2): red de seguridad contra duplicados a nivel BD ─────
+// `getNext` ya es atómico (transacción), pero sin restricción UNIQUE un import,
+// una secuencia mal configurada o el path legacy podían colar un NCF duplicado.
+// Esta función corre en CADA arranque (idempotente, auto-sanadora): crea un índice
+// UNIQUE PARCIAL sobre los NCF NO vacíos (las ventas no fiscales con ncf='' no se
+// afectan) SOLO si no hay duplicados existentes. Si los hay, avisa con la lista y
+// NO crea el índice (para no romper) — al reconciliarlos, el próximo arranque lo crea.
+function ensureNcfIntegrity() {
+  try {
+    const dups = (table) => db.prepare(
+      `SELECT ncf, COUNT(*) c FROM ${table === 'sales' ? 'sales' : 'ncf_log'} ` +
+      `WHERE ncf IS NOT NULL AND TRIM(ncf)<>'' GROUP BY ncf HAVING c>1`
+    ).all();
+    const apply = (table, idx) => {
+      const d = dups(table);
+      if (d.length === 0) {
+        db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ${idx} ON ${table === 'sales' ? 'sales' : 'ncf_log'}(ncf) WHERE ncf IS NOT NULL AND ncf<>''`);
+      } else {
+        console.warn(`[NCF] ⚠ ${d.length} NCF duplicado(s) en ${table} — índice único NO aplicado. Reconciliar: ${d.slice(0, 10).map(x => x.ncf).join(', ')}`);
+      }
+    };
+    apply('sales',   'uidx_sales_ncf');
+    apply('ncf_log', 'uidx_ncflog_ncf');
+  } catch (e) { console.error('[NCF] ensureNcfIntegrity:', e.message); }
 }
 
 // ══════════════════════════════════════════════
@@ -2752,6 +2779,14 @@ const ncfRepo = {
   },
   logNcf({ ncf, type, sale_id, customer_rnc }) {
     db.prepare('INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc) VALUES(?,?,?,?)').run(ncf, type, sale_id||null, customer_rnc||'');
+  },
+  // Diagnóstico C2: NCF duplicados a reconciliar (ventas con el mismo NCF no vacío).
+  // Mientras existan, el índice único no se aplica (ver ensureNcfIntegrity).
+  getDuplicates() {
+    return db.prepare(`
+      SELECT ncf, COUNT(*) as veces, GROUP_CONCAT(id) as sale_ids
+      FROM sales WHERE ncf IS NOT NULL AND TRIM(ncf)<>''
+      GROUP BY ncf HAVING veces>1 ORDER BY ncf`).all();
   },
   getAlerts() {
     return db.prepare(`SELECT *, (to_num - current) as remaining FROM ncf_sequences
