@@ -10,7 +10,11 @@ function _cfgUser() {
 }
 
 async function renderConfiguracion(el) {
-  el.innerHTML = '';
+  // Fluidez: doble-buffer. Se construye todo en un buffer desprendido mientras
+  // corren los fetches (settings, versión, licencia, impresoras) y se hace un
+  // swap atómico al final. El contenido viejo permanece visible → sin el blanco
+  // "limpiar → esperar datos → contenido".
+  const root = document.createElement('div');
 
   // ── Cargar datos necesarios ─────────────────
   const settings    = await window.api.settings.getAll();
@@ -24,7 +28,7 @@ async function renderConfiguracion(el) {
   const isAdmin     = ['admin', 'superadmin'].includes(user?.role);
 
   // ── Header ──────────────────────────────────
-  el.appendChild(h('div', { class: 'sec-hdr' },
+  root.appendChild(h('div', { class: 'sec-hdr' },
     h('div', null,
       h('div', { class: 'sec-title' }, 'Configuración'),
       h('div', { class: 'sec-sub' }, `Velo POS v${info.appVersion || window._appVersion || '1.5.5'}`)
@@ -941,7 +945,10 @@ async function renderConfiguracion(el) {
   // ── Ensamblar ────────────────────────────────
   grid.appendChild(colLeft);
   grid.appendChild(colRight);
-  el.appendChild(grid);
+  root.appendChild(grid);
+
+  // Swap atómico: reemplazar todo el contenido de una sola vez (sin destello).
+  el.replaceChildren(...Array.from(root.childNodes));
 }
 
 // ══════════════════════════════════════════════
