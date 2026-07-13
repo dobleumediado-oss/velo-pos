@@ -4,7 +4,13 @@
 // ══════════════════════════════════════════════
 
 async function renderDash(el) {
-  el.innerHTML = '';
+  // Fluidez: doble-buffer. En vez de `el.innerHTML=''` (destello en blanco),
+  // construimos todo en un buffer fuera de pantalla (pero dentro del documento,
+  // para que el canvas del chart tenga dimensiones) y hacemos un swap atómico
+  // al final. El contenido viejo permanece visible mientras corre el build.
+  const root = document.createElement('div');
+  root.style.cssText = 'position:absolute;left:-99999px;top:0;width:' + (el.clientWidth || 900) + 'px';
+  document.body.appendChild(root);
 
   // ── Auto-refresh cada 60 segundos ──────────────────────────────────────────
   // Limpiar intervalo anterior si existe (evitar múltiples timers)
@@ -156,7 +162,7 @@ async function renderDash(el) {
   const greeting = new Date().getHours() < 12 ? 'Buenos días' :
                    new Date().getHours() < 19 ? 'Buenas tardes' : 'Buenas noches';
 
-  el.appendChild(h('div', { class: 'sec-hdr' },
+  root.appendChild(h('div', { class: 'sec-hdr' },
     h('div', null,
       h('div', { class: 'sec-title' },
         `${greeting}, ${user?.name?.split(' ')[0]} 👋`),
@@ -273,7 +279,7 @@ async function renderDash(el) {
     });
 
     cxcBox.appendChild(listWrap);
-    el.appendChild(cxcBox);
+    root.appendChild(cxcBox);
   }
 
   // ── Selector de período ──────────────────────
@@ -290,7 +296,7 @@ async function renderDash(el) {
       onclick: async () => { window._dashPeriod = p.v; await renderDash(el); }
     }, p.l));
   });
-  el.appendChild(periodBar);
+  root.appendChild(periodBar);
 
   // Calcular métricas del período — usando filas reales en todos los casos
   // (no solo agregados) porque más abajo se necesita el conteo de
@@ -384,7 +390,7 @@ async function renderDash(el) {
     );
     metWrap.appendChild(card);
   });
-  el.appendChild(metWrap);
+  root.appendChild(metWrap);
 
   // ── Barra resumen mensual: desglose de cobradoMes ────────────────────────────
   // cobradoMes = ventas al contado + abonos de CxC (dinero real recibido)
@@ -434,7 +440,7 @@ async function renderDash(el) {
       )
     )
   );
-  el.appendChild(resumenBar);
+  root.appendChild(resumenBar);
 
   // ── Cards de Gastos (si módulo activo) ───────────────────────────────────────
   if (gastosData?.summary) {
@@ -488,7 +494,7 @@ async function renderDash(el) {
       );
       gasMetWrap.appendChild(card);
     });
-    el.appendChild(gasMetWrap);
+    root.appendChild(gasMetWrap);
   }
 
   // ── Cards de NCF (si fiscal activo) ──────────────────────────────────────────
@@ -531,7 +537,7 @@ async function renderDash(el) {
       );
       ncfMetWrap.appendChild(card);
     });
-    el.appendChild(ncfMetWrap);
+    root.appendChild(ncfMetWrap);
 
     // Alertas NCF si las hay
     if (alerts.length > 0) {
@@ -555,7 +561,7 @@ async function renderDash(el) {
           )
         ));
       });
-      el.appendChild(ncfAlertBox);
+      root.appendChild(ncfAlertBox);
     }
   }
 
@@ -798,7 +804,15 @@ async function renderDash(el) {
   rightCol.appendChild(lastCard);
 
   grid.appendChild(rightCol);
-  el.appendChild(grid);
+  root.appendChild(grid);
+
+  // ── Swap atómico ────────────────────────────
+  // Mover todo lo construido al contenedor real de una sola vez (sin destello).
+  // El canvas del chart queda ahora en el DOM vivo; _dashRenderChart (disparado
+  // arriba sin await) resuelve su getElementById DESPUÉS de este swap, así que
+  // encuentra el canvas ya montado y con dimensiones.
+  el.replaceChildren(...Array.from(root.childNodes));
+  root.remove();
 }
 
 // ══════════════════════════════════════════════

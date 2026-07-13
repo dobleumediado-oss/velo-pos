@@ -53,15 +53,29 @@ async function renderReportes(el) {
 
   // ── Pestañas principales ─────────────────────
   const mainTabs = h('div', { class: 'flex', style: 'gap:8px;margin-bottom:16px' });
-  [
+  const mainDefs = [
     { v: 'financiero', l: 'Financiero' },
     { v: 'abonos',     l: 'Abonos CxC' },
     { v: 'inventario', l: 'Inventario valorizado' },
-  ].forEach(t => {
+  ];
+  mainDefs.forEach(t => {
     mainTabs.appendChild(h('button', {
       class: `btn ${repTab === t.v ? 'btn-dark' : 'btn-out'} btn-sm`,
       html: t.l,
-      onclick: () => { repTab = t.v; renderReportes(el); }
+      onclick: () => {
+        if (repTab === t.v) return;
+        const prev = repTab;
+        repTab = t.v;
+        // Actualizar estado visual de las pestañas sin reconstruir
+        mainTabs.querySelectorAll('button').forEach((b, i) => {
+          b.classList.toggle('btn-dark', mainDefs[i].v === t.v);
+          b.classList.toggle('btn-out',  mainDefs[i].v !== t.v);
+        });
+        // Inventario tiene layout distinto (sin barra de rango) → re-render completo.
+        // Financiero↔Abonos comparten layout → solo swap de datos (fluido).
+        if (t.v === 'inventario' || prev === 'inventario') renderReportes(el);
+        else cargarYRenderizar(el);
+      }
     }));
   });
   el.appendChild(mainTabs);
@@ -135,14 +149,17 @@ async function aplicarRangoCustom() {
 }
 
 async function cargarYRenderizar(el) {
-  // Limpiar contenido previo (excepto header y rangeBar)
-  const children = Array.from(el.children);
-  children.slice(3).forEach(c => c.remove());
-
-  // Loading
-  const loading = h('div', { style: { textAlign: 'center', padding: '40px', color: 'var(--muted2)' } },
-    'Cargando datos...');
-  el.appendChild(loading);
+  // Fluidez: NO borrar los datos viejos todavía. Se construye la vista nueva
+  // off-screen mientras el fetch (local, rápido) corre, y se hace un swap
+  // atómico al final → sin el destello "blanco → Cargando… → contenido".
+  const swap = (nodeOrFrag) => {
+    Array.from(el.children).slice(3).forEach(c => c.remove());
+    if (nodeOrFrag) el.appendChild(nodeOrFrag);
+  };
+  const errBox = (msg) => h('div', { class: 'alrt r' },
+    h('div', { class: 'alrt-dot r' }),
+    h('div', null, h('div', { class: 'alrt-title' }, msg))
+  );
 
   try {
     const payload = {
@@ -155,26 +172,21 @@ async function cargarYRenderizar(el) {
       ? await window.api.reports.paymentsHistory(payload)
       : await window.api.reports.summary(payload);
 
-    loading.remove();
-
-    if (!result.ok) {
-      el.appendChild(h('div', { class: 'alrt r' },
-        h('div', { class: 'alrt-dot r' }),
-        h('div', null, h('div', { class: 'alrt-title' }, result.error || 'Error al cargar'))
-      ));
-      return;
-    }
+    if (!result.ok) { swap(errBox(result.error || 'Error al cargar')); return; }
 
     repData = result.data;
-    if (repTab === 'abonos') renderAbonosContenido(el, repData);
-    else renderReporteContenido(el, repData);
+    // Construir contenido nuevo en un contenedor temporal (fuera de pantalla)
+    const tmp = h('div');
+    if (repTab === 'abonos') renderAbonosContenido(tmp, repData);
+    else renderReporteContenido(tmp, repData);
+
+    // Swap atómico: quitar datos viejos + insertar nuevos, sin frame intermedio
+    const frag = document.createDocumentFragment();
+    while (tmp.firstChild) frag.appendChild(tmp.firstChild);
+    swap(frag);
 
   } catch (e) {
-    loading.remove();
-    el.appendChild(h('div', { class: 'alrt r' },
-      h('div', { class: 'alrt-dot r' }),
-      h('div', null, h('div', { class: 'alrt-title' }, 'Error: ' + e.message))
-    ));
+    swap(errBox('Error: ' + e.message));
   }
 }
 
