@@ -868,6 +868,32 @@ function _startLoginClock() {
 }
 
 // ══════════════════════════════════════════════
+// FLUIDEZ: swap de vista sin pestañeo (Q1)
+// ══════════════════════════════════════════════
+// Renderiza el contenido nuevo en un contenedor TEMPORAL fuera de pantalla (pero
+// dentro del documento, para que getElementById de los sub-renders siga funcionando),
+// y hace un SWAP ATÓMICO al final. El usuario ve el contenido anterior hasta que el
+// nuevo está listo → sin destello en blanco durante la carga async.
+// `buildFn(tmp)` debe rellenar `tmp` (async). Los listeners y nodos se preservan.
+async function _swapView(body, buildFn) {
+  if (!body) return;
+  const tmp = document.createElement('div');
+  tmp.style.cssText = `position:absolute;left:-99999px;top:0;width:${body.clientWidth || body.offsetWidth || 900}px`;
+  document.body.appendChild(tmp);
+  try {
+    await buildFn(tmp);
+    body.replaceChildren(...Array.from(tmp.childNodes));
+  } catch (e) {
+    console.error('[swapView]', e);
+    // Fallback: si algo falla, renderizar directo (comportamiento anterior).
+    body.innerHTML = '';
+    try { await buildFn(body); } catch (_) {}
+  } finally {
+    tmp.remove();
+  }
+}
+
+// ══════════════════════════════════════════════
 // ROUTER
 // ══════════════════════════════════════════════
 function routeTo(p) {

@@ -164,17 +164,18 @@ async function renderGastos(el) {
 // Re-renderiza solo el contenido del tab activo (usado por el cambio de pestaña) —
 // sin reconstruir el módulo ni re-consultar config/categorías.
 async function _renderGastosContent(content, user) {
-  content.innerHTML = '';
-  switch (_gastosTab) {
-    case 'resumen':      await renderResumen(content, user); break;
-    case 'gastos':       await renderListaGastos(content, user); break;
-    case 'por_pagar':    await renderPorPagar(content, user); break;
-    case 'recurrentes':  await renderRecurrentes(content, user); break;
-    case 'proveedores':  await renderProveedoresGastos(content, user); break;
-    case 'presupuestos': await renderPresupuestos(content, user); break;
-    case 'categorias':   await renderCategorias(content, user); break;
-    default:             await renderResumen(content, user);
-  }
+  await _swapView(content, async (c) => {
+    switch (_gastosTab) {
+      case 'resumen':      await renderResumen(c, user); break;
+      case 'gastos':       await renderListaGastos(c, user); break;
+      case 'por_pagar':    await renderPorPagar(c, user); break;
+      case 'recurrentes':  await renderRecurrentes(c, user); break;
+      case 'proveedores':  await renderProveedoresGastos(c, user); break;
+      case 'presupuestos': await renderPresupuestos(c, user); break;
+      case 'categorias':   await renderCategorias(c, user); break;
+      default:             await renderResumen(c, user);
+    }
+  });
 }
 
 // ══════════════════════════════════════════════

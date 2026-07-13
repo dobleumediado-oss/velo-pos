@@ -46,14 +46,15 @@ async function renderBancos(el) {
   await _renderBancosBody(body);
 }
 
-// Re-renderiza solo el cuerpo del módulo (usado por el cambio de pestaña).
+// Re-renderiza solo el cuerpo del módulo (cambio de pestaña) con swap atómico sin flash.
 async function _renderBancosBody(body) {
-  body.innerHTML = '';
-  if (_bancosTab === 'cuentas')             await _renderBancosCtAs(body);
-  else if (_bancosTab === 'movimientos')    await _renderBancosMov(body);
-  else if (_bancosTab === 'transferencias') await _renderBancosTransfer(body);
-  else if (_bancosTab === 'conciliacion')   await _renderBancosConcil(body);
-  else if (_bancosTab === 'resumen')        await _renderBancosResumen(body);
+  await _swapView(body, async (c) => {
+    if (_bancosTab === 'cuentas')             await _renderBancosCtAs(c);
+    else if (_bancosTab === 'movimientos')    await _renderBancosMov(c);
+    else if (_bancosTab === 'transferencias') await _renderBancosTransfer(c);
+    else if (_bancosTab === 'conciliacion')   await _renderBancosConcil(c);
+    else if (_bancosTab === 'resumen')        await _renderBancosResumen(c);
+  });
 }
 
 // ── Cuentas ───────────────────────────────────

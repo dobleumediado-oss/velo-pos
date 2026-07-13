@@ -62,26 +62,28 @@ async function renderContabilidad(el) {
   await _contRenderBody(body);
 }
 
-// Re-renderiza solo el cuerpo del módulo (usado por el cambio de pestaña).
+// Re-renderiza solo el cuerpo del módulo (usado por el cambio de pestaña), con swap
+// atómico sin pestañeo (ver _swapView en app.js).
 async function _contRenderBody(body) {
-  body.innerHTML = '';
-  switch (_contTab) {
-    case 'dashboard':     await _contRenderDash(body);         break;
-    case 'cuentas':       await _contRenderCuentas(body);      break;
-    case 'asientos':      await _contRenderAsientos(body);     break;
-    case 'mayor':         await _contRenderMayor(body);        break;
-    case 'balance':       await _contRenderBalance(body);      break;
-    case 'resultados':    await _contRenderResultados(body);   break;
-    case 'general':       await _contRenderGeneral(body);      break;
-    case 'flujo':         await _contRenderFlujo(body);        break;
-    case 'cxc':           await _contRenderCxC(body);          break;
-    case 'cxp':           await _contRenderCxP(body);          break;
-    case 'activos':       await _contRenderActivos(body);      break;
-    case 'cuadres':       await _contRenderCuadres(body);      break;
-    case 'fiscal606':     await _contRender606(body);          break;
-    case 'periodos':      await _contRenderPeriodos(body);     break;
-    case 'configuracion': await _contRenderConfig(body);       break;
-  }
+  await _swapView(body, async (c) => {
+    switch (_contTab) {
+      case 'dashboard':     await _contRenderDash(c);         break;
+      case 'cuentas':       await _contRenderCuentas(c);      break;
+      case 'asientos':      await _contRenderAsientos(c);     break;
+      case 'mayor':         await _contRenderMayor(c);        break;
+      case 'balance':       await _contRenderBalance(c);      break;
+      case 'resultados':    await _contRenderResultados(c);   break;
+      case 'general':       await _contRenderGeneral(c);      break;
+      case 'flujo':         await _contRenderFlujo(c);        break;
+      case 'cxc':           await _contRenderCxC(c);          break;
+      case 'cxp':           await _contRenderCxP(c);          break;
+      case 'activos':       await _contRenderActivos(c);      break;
+      case 'cuadres':       await _contRenderCuadres(c);      break;
+      case 'fiscal606':     await _contRender606(c);          break;
+      case 'periodos':      await _contRenderPeriodos(c);     break;
+      case 'configuracion': await _contRenderConfig(c);       break;
+    }
+  });
 }
 
 // ══════════════════════════════════════════════
