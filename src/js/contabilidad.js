@@ -24,7 +24,9 @@ async function renderContabilidad(el) {
   const wrap = h('div', { style: { padding: '20px', maxWidth: '1200px', margin: '0 auto' } });
   el.appendChild(wrap);
 
+  // Barra de pestañas FIJA; el clic re-renderiza SOLO el cuerpo (sin pestañeo del módulo).
   const tabs = h('div', { class: 'mod-tabs' });
+  const body = h('div', { id: 'cont-body' });
   [
     { key: 'dashboard',    label: 'Dashboard' },
     { key: 'cuentas',      label: 'Catálogo' },
@@ -44,15 +46,25 @@ async function renderContabilidad(el) {
   ].forEach(t => {
     const btn = h('button', {
       class: `mod-tab ${_contTab === t.key ? 'on' : ''}`,
-      onclick: () => { _contTab = t.key; renderContabilidad(el); }
+      'data-tab': t.key,
+      onclick: () => {
+        if (_contTab === t.key) return;
+        _contTab = t.key;
+        tabs.querySelectorAll('.mod-tab').forEach(b => b.classList.toggle('on', b.dataset.tab === t.key));
+        _contRenderBody(body);
+      }
     }, t.label);
     tabs.appendChild(btn);
   });
   wrap.appendChild(tabs);
-
-  const body = h('div', { id: 'cont-body' });
   wrap.appendChild(body);
 
+  await _contRenderBody(body);
+}
+
+// Re-renderiza solo el cuerpo del módulo (usado por el cambio de pestaña).
+async function _contRenderBody(body) {
+  body.innerHTML = '';
   switch (_contTab) {
     case 'dashboard':     await _contRenderDash(body);         break;
     case 'cuentas':       await _contRenderCuentas(body);      break;

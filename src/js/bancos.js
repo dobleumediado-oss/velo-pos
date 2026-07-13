@@ -17,8 +17,10 @@ async function renderBancos(el) {
   const wrap = h('div', { style: { padding: '20px', maxWidth: '1100px', margin: '0 auto' } });
   el.appendChild(wrap);
 
-  // Tabs
+  // Tabs — la barra queda FIJA; el clic re-renderiza SOLO el cuerpo (sin pestañeo
+  // del módulo completo).
   const tabs = h('div', { class: 'mod-tabs' });
+  const body = h('div', { id: 'bancos-body' });
   [
     { key: 'cuentas',         label: 'Cuentas' },
     { key: 'movimientos',     label: 'Movimientos' },
@@ -28,20 +30,30 @@ async function renderBancos(el) {
   ].forEach(t => {
     const btn = h('button', {
       class: `mod-tab ${_bancosTab === t.key ? 'on' : ''}`,
-      onclick: () => { _bancosTab = t.key; renderBancos(el); }
+      'data-tab': t.key,
+      onclick: () => {
+        if (_bancosTab === t.key) return;
+        _bancosTab = t.key;
+        tabs.querySelectorAll('.mod-tab').forEach(b => b.classList.toggle('on', b.dataset.tab === t.key));
+        _renderBancosBody(body);
+      }
     }, t.label);
     tabs.appendChild(btn);
   });
   wrap.appendChild(tabs);
-
-  const body = h('div', { id: 'bancos-body' });
   wrap.appendChild(body);
 
-  if (_bancosTab === 'cuentas')        await _renderBancosCtAs(body);
-  else if (_bancosTab === 'movimientos')   await _renderBancosMov(body);
+  await _renderBancosBody(body);
+}
+
+// Re-renderiza solo el cuerpo del módulo (usado por el cambio de pestaña).
+async function _renderBancosBody(body) {
+  body.innerHTML = '';
+  if (_bancosTab === 'cuentas')             await _renderBancosCtAs(body);
+  else if (_bancosTab === 'movimientos')    await _renderBancosMov(body);
   else if (_bancosTab === 'transferencias') await _renderBancosTransfer(body);
-  else if (_bancosTab === 'conciliacion')  await _renderBancosConcil(body);
-  else if (_bancosTab === 'resumen')    await _renderBancosResumen(body);
+  else if (_bancosTab === 'conciliacion')   await _renderBancosConcil(body);
+  else if (_bancosTab === 'resumen')        await _renderBancosResumen(body);
 }
 
 // ── Cuentas ───────────────────────────────────

@@ -126,9 +126,18 @@ async function renderGastos(el) {
     btn.dataset.tab = t.key;
     btn.style.cssText = `padding:8px 16px;border:none;background:none;font-size:13px;cursor:pointer;border-bottom:2px solid ${_gastosTab===t.key?'var(--accent)':'transparent'};color:${_gastosTab===t.key?'var(--accent)':'var(--muted2)'};font-weight:${_gastosTab===t.key?'600':'400'};white-space:nowrap`;
     btn.textContent = t.label;
+    // Pestaña FIJA: el clic re-renderiza SOLO el contenido (sin reconstruir el
+    // módulo ni re-consultar config/categorías) → sin pestañeo.
     btn.addEventListener('click', () => {
+      if (_gastosTab === t.key) return;
       _gastosTab = t.key;
-      renderGastos(el);
+      tabBar.querySelectorAll('button').forEach(b => {
+        const on = b.dataset.tab === t.key;
+        b.style.borderBottom = `2px solid ${on ? 'var(--accent)' : 'transparent'}`;
+        b.style.color = on ? 'var(--accent)' : 'var(--muted2)';
+        b.style.fontWeight = on ? '600' : '400';
+      });
+      _renderGastosContent(content, user);
     });
     tabBar.appendChild(btn);
   });
@@ -138,16 +147,7 @@ async function renderGastos(el) {
   const content = document.createElement('div');
   el.appendChild(content);
 
-  switch(_gastosTab) {
-    case 'resumen':     await renderResumen(content, user); break;
-    case 'gastos':      await renderListaGastos(content, user); break;
-    case 'por_pagar':   await renderPorPagar(content, user); break;
-    case 'recurrentes': await renderRecurrentes(content, user); break;
-    case 'proveedores': await renderProveedoresGastos(content, user); break;
-    case 'presupuestos':await renderPresupuestos(content, user); break;
-    case 'categorias':  await renderCategorias(content, user); break;
-    default:            await renderResumen(content, user);
-  }
+  await _renderGastosContent(content, user);
 
   // ── Eventos de botones (delegación en el contenedor persistente) ──
   // Antes se enganchaban por getElementById tras los await de los tabs, lo que
@@ -158,6 +158,22 @@ async function renderGastos(el) {
       if (ev.target.closest('#btn-gasto-nuevo'))  { ev.preventDefault(); modalNuevoGasto(el, _getUser()); }
       if (ev.target.closest('#btn-gasto-retiro')) { ev.preventDefault(); modalRetiro(el, _getUser()); }
     });
+  }
+}
+
+// Re-renderiza solo el contenido del tab activo (usado por el cambio de pestaña) —
+// sin reconstruir el módulo ni re-consultar config/categorías.
+async function _renderGastosContent(content, user) {
+  content.innerHTML = '';
+  switch (_gastosTab) {
+    case 'resumen':      await renderResumen(content, user); break;
+    case 'gastos':       await renderListaGastos(content, user); break;
+    case 'por_pagar':    await renderPorPagar(content, user); break;
+    case 'recurrentes':  await renderRecurrentes(content, user); break;
+    case 'proveedores':  await renderProveedoresGastos(content, user); break;
+    case 'presupuestos': await renderPresupuestos(content, user); break;
+    case 'categorias':   await renderCategorias(content, user); break;
+    default:             await renderResumen(content, user);
   }
 }
 
