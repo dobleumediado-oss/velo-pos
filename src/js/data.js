@@ -240,6 +240,48 @@ async function reloadSales(filters = {}) {
 }
 
 // ══════════════════════════════════════════════
+// SYNC EN TIEMPO REAL (Fase C, multi-terminal)
+// ══════════════════════════════════════════════
+// El main avisa "cambió el scope X" cuando otra terminal muta datos compartidos.
+// Aquí SOLO re-consultamos al servidor (fuente de verdad) y refrescamos de forma
+// DIRIGIDA: nunca re-renderizamos el POS entero ni tocamos el carrito del cajero;
+// como mucho se repinta la grilla de productos o la tabla del listado abierto.
+// Debounce: una ráfaga de avisos colapsa en un solo refresco.
+let _syncPending = new Set();
+let _syncTimer = null;
+async function _applyRemoteSync() {
+  const s = _syncPending; _syncPending = new Set(); _syncTimer = null;
+  const at = (typeof page !== 'undefined') ? page : null;
+  try {
+    if (s.has('products')) {
+      await reloadProducts();
+      if (at === 'pos'        && typeof renderPOSGrid   === 'function') renderPOSGrid();
+      else if (at === 'inventario' && typeof renderInvTable === 'function') renderInvTable();
+    }
+    if (s.has('customers')) {
+      await reloadCustomers();
+      if (at === 'clientes' && typeof renderCliTable === 'function') renderCliTable();
+    }
+    if (s.has('sales')) {
+      await reloadSales({ range: (typeof ventasRange !== 'undefined' ? ventasRange : 'today') });
+      if (at === 'ventas' && typeof renderVentasTable === 'function') renderVentasTable();
+    }
+  } catch (e) { console.error('[sync]', e); }
+}
+function _onRemoteSync(data) {
+  const scopes = data && Array.isArray(data.scopes) ? data.scopes : null;
+  if (!scopes || !scopes.length) return;
+  scopes.forEach(sc => _syncPending.add(sc));
+  if (_syncTimer) return;
+  _syncTimer = setTimeout(_applyRemoteSync, 250);
+}
+try {
+  if (window.api && window.api.sync && typeof window.api.sync.onChanged === 'function') {
+    window.api.sync.onChanged(_onRemoteSync);
+  }
+} catch { /* sin multi-terminal → nunca llega ningún evento */ }
+
+// ══════════════════════════════════════════════
 // TERMINAL (multi-terminal) — identidad estable de esta máquina
 // ══════════════════════════════════════════════
 let TERMINAL_ID = '';

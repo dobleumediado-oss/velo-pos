@@ -4619,6 +4619,7 @@ ipcMain.handle('ecf:getLog', async (_, { limit = 50, offset = 0, requestUserId }
 // El puente aún no tiene handlers migrados; esta es la infraestructura de red.
 // Ver docs/multi-terminal-sync.md
 let _rpcServer = null;
+let _syncStream = null;
 function setupMultiTerminal() {
   const bridge = require('./src/main/ipc-bridge');
   const conn   = require('./src/main/connection');
@@ -4656,7 +4657,38 @@ function setupMultiTerminal() {
       denyChannel: (ch) => SERVER_DENY.has(ch),
       onLog: (lvl, msg, extra) => { try { (lvl === 'error' ? logError : lvl === 'warn' ? logWarn : logInfo)('rpc', msg, extra); } catch {} },
     });
+
+    // Push tiempo real (Fase C): tras una mutación de datos compartidos (venta,
+    // ajuste de stock, cobro…) avisa a las terminales cliente por SSE y también
+    // al renderer del propio servidor (para ver en vivo lo que hacen los clientes).
+    // Solo AVISO (scopes), sin datos: cada terminal re-consulta al servidor.
+    const { scopesForChannel } = require('./src/main/sync-events');
+    bridge.setAfterMutation((channel) => {
+      const scopes = scopesForChannel(channel);
+      if (!scopes) return;
+      try { _rpcServer && _rpcServer.broadcast({ scopes }); } catch {}
+      try { mainWindow && mainWindow.webContents.send('sync:changed', { scopes }); } catch {}
+    });
+
     logInfo('multiterminal', 'Servidor RPC iniciado', { port: _rpcServer.port, canales: bridge.channelCount() });
+  } else if (mode === 'client') {
+    // Cliente: abre el stream SSE del servidor y reenvía cada aviso al renderer.
+    // Robusto ante servidor caído (reintenta solo); nunca bloquea el arranque.
+    try {
+      const { openEventStream } = require('./src/main/net-client');
+      const cfg = {
+        host:       settingsRepo.get('connection_server_ip')   || '127.0.0.1',
+        port:       Number(settingsRepo.get('connection_server_port')) || 8443,
+        accessKey:  settingsRepo.get('connection_access_key')  || '',
+        terminalId: settingsRepo.get('terminal_id')            || '',
+      };
+      _syncStream = openEventStream({
+        ...cfg,
+        onEvent:  (ev) => { try { mainWindow && mainWindow.webContents.send('sync:changed', ev); } catch {} },
+        onStatus: (st) => { try { logInfo('multiterminal', 'sse estado', st); } catch {} },
+      });
+      logInfo('multiterminal', 'Cliente SSE iniciado', cfg);
+    } catch (e) { logError('multiterminal', 'SSE cliente falló: ' + e.message); }
   } else {
     logInfo('multiterminal', 'Modo de conexión', { mode });
   }
@@ -4725,6 +4757,7 @@ app.on('activate', () => {
 
 // Cierre limpio
 app.on('before-quit', () => {
+  if (_syncStream) { try { _syncStream.close(); } catch {} _syncStream = null; }
   if (_rpcServer) { try { _rpcServer.close(); } catch {} _rpcServer = null; }
   const dbInst = require('./database').getDB();
   if (dbInst) dbInst.close();

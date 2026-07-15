@@ -29,10 +29,43 @@ function _sendJson(res, status, obj) {
 function startRpcServer({ port = 8443, host = '0.0.0.0', getAccessKey, getAllowlist, dispatch, denyChannel, onLog } = {}) {
   const log = (level, msg, extra) => { try { onLog && onLog(level, msg, extra); } catch {} };
 
+  // ── Push tiempo real (Fase C): clientes SSE conectados ──────────────────────
+  // Cada entrada es un `res` de una respuesta /events abierta. broadcast() les
+  // escribe un aviso "algo cambió en scope X" (sin datos). El heartbeat mantiene
+  // vivo el socket a través de NAT/Tailscale.
+  const sseClients = new Set();
+  const heartbeat = setInterval(() => {
+    for (const r of sseClients) { try { r.write(':hb\n\n'); } catch {} }
+  }, 20000);
+  if (heartbeat.unref) heartbeat.unref();
+
   const server = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/health') {
       return _sendJson(res, 200, { ok: true, service: 'velo-pos', v: 1 });
     }
+
+    // ── SSE: stream de eventos de cambio (solo aviso, sin datos) ──────────────
+    if (req.method === 'GET' && req.url === '/events') {
+      const key = req.headers['x-access-key'];
+      const tid = req.headers['x-terminal-id'];
+      const okKey = conn.verifyAccessKey(key, getAccessKey ? getAccessKey() : null);
+      const okTid = conn.isTerminalAuthorized(tid, getAllowlist ? getAllowlist() : []);
+      if (!okKey || !okTid) {
+        log('warn', 'sse rechazado', { reason: !okKey ? 'UNAUTHORIZED' : 'FORBIDDEN' });
+        return _sendJson(res, okKey ? 403 : 401, conn.makeResponse(false, null, okKey ? conn.RPC_ERRORS.FORBIDDEN : conn.RPC_ERRORS.UNAUTHORIZED));
+      }
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      });
+      res.write(':ok\n\n');
+      sseClients.add(res);
+      log('info', 'sse conectado', { terminalId: tid, total: sseClients.size });
+      req.on('close', () => { sseClients.delete(res); });
+      return;
+    }
+
     if (req.method !== 'POST' || req.url !== '/rpc') {
       return _sendJson(res, 404, conn.makeResponse(false, null, conn.RPC_ERRORS.BAD_REQUEST));
     }
@@ -84,10 +117,25 @@ function startRpcServer({ port = 8443, host = '0.0.0.0', getAccessKey, getAllowl
   server.on('error', (e) => log('error', 'servidor RPC error', { error: e.message }));
   server.listen(port, host, () => log('info', 'servidor RPC escuchando', { host, port }));
 
+  // Difunde un aviso a todos los clientes SSE. `obj` p.ej. { scopes:['products'] }.
+  // Nunca lanza; un cliente muerto se limpia solo en su 'close'.
+  const broadcast = (obj) => {
+    if (!sseClients.size) return;
+    let line;
+    try { line = `data: ${JSON.stringify(obj)}\n\n`; } catch { return; }
+    for (const r of sseClients) { try { r.write(line); } catch {} }
+  };
+
   return {
     server,
     port,
-    close: () => new Promise((resolve) => server.close(resolve)),
+    broadcast,
+    close: () => new Promise((resolve) => {
+      clearInterval(heartbeat);
+      for (const r of sseClients) { try { r.end(); } catch {} }
+      sseClients.clear();
+      server.close(resolve);
+    }),
   };
 }
 

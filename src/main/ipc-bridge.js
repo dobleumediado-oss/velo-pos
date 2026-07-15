@@ -36,6 +36,18 @@ function configureBridge({ mode, client } = {}) {
   if (typeof client === 'function') _ctx.client = client;
 }
 
+// ── Hook de mutación (Fase C — push tiempo real) ──────────────────────────────
+// Se invoca tras ejecutar un handler LOCAL con éxito (tanto los que despacha el
+// servidor para un cliente como los del operador del servidor). Solo el servidor
+// registra un sink; en modo local/client queda null → cero efecto. El sink decide
+// (por el mapa de scopes) si el canal difunde algo. Nunca debe lanzar.
+let _afterMutation = null;
+function setAfterMutation(fn) { _afterMutation = (typeof fn === 'function') ? fn : null; }
+function _notifyMutation(channel) {
+  if (!_afterMutation) return;
+  try { _afterMutation(channel); } catch { /* jamás tumba el handler */ }
+}
+
 // Enrutado mode-aware de una llamada (lo usa el wrapper de ipcMain).
 // - client: reenvía al servidor; devuelve el resultado real o LANZA en error/offline
 //   (el reject llega al renderer, que puede avisar y bloquear la venta).
@@ -71,7 +83,9 @@ function registerHandler(channel, fn) {
 function dispatch(channel, args, ctx) {
   const fn = _handlers.get(channel);
   if (!fn) return Promise.resolve({ __unknown: true });
-  return _als.run({ terminalId: ctx && ctx.terminalId }, () => fn(args));
+  return _als.run({ terminalId: ctx && ctx.terminalId }, () =>
+    Promise.resolve(fn(args)).then((r) => { _notifyMutation(channel); return r; })
+  );
 }
 
 // ── Interceptor de ipcMain.handle (migración centralizada) ────────────────────
@@ -100,7 +114,9 @@ function installIpcInterceptor(ipcMainRef, { localOnly } = {}) {
         err.rpc = res && res.error;
         throw err;
       }
-      return fn(event, arg);
+      const out = await fn(event, arg);
+      _notifyMutation(channel); // server/local: avisa a otras terminales si el canal muta datos compartidos
+      return out;
     });
   };
   ipcMainRef.__veloBridgeWrapped = true;
@@ -123,4 +139,4 @@ async function forwardToServer(channel, args) {
 function hasChannel(channel) { return _handlers.has(channel); }
 function channelCount() { return _handlers.size; }
 
-module.exports = { configureBridge, registerHandler, routeCall, dispatch, installIpcInterceptor, getMode, forwardToServer, currentTerminalId, hasChannel, channelCount };
+module.exports = { configureBridge, setAfterMutation, registerHandler, routeCall, dispatch, installIpcInterceptor, getMode, forwardToServer, currentTerminalId, hasChannel, channelCount };

@@ -159,6 +159,12 @@ contextBridge.exposeInMainWorld('api', {
     vacuum: (data) => ipcRenderer.invoke('db:vacuum', data),
   },
 
+  // ── Sync tiempo real (Fase C, multi-terminal) ──────────────
+  // El main avisa "cambió el scope X" en otra terminal; el renderer re-consulta.
+  sync: {
+    onChanged: (cb) => ipcRenderer.on('sync:changed', (_, data) => cb(data)),
+  },
+
   // ── Auto-updater ──────────────────────────
   updater: {
     onProgress: (cb) => ipcRenderer.on('update:progress', (_, data) => cb(data)),
