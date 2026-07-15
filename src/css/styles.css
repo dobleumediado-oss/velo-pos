@@ -410,7 +410,10 @@ select.inp{cursor:pointer}
 .toast{position:fixed;bottom:24px;right:24px;background:var(--ink);color:#fff;padding:11px 18px;border-radius:10px;font-size:13px;font-weight:600;z-index:9999;box-shadow:var(--sh-lg);max-width:340px;animation:fi .2s ease;display:flex;align-items:center;gap:8px}
 @keyframes tup{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 @keyframes fi{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
-.fi{animation:fi .2s ease}
+/* Navegación de página: micro-slide SIN caída de opacidad → nunca destella en
+   blanco durante el cambio de módulo. El fade con opacidad queda para toasts. */
+@keyframes pagein{from{transform:translateY(3px)}to{transform:translateY(0)}}
+.fi{animation:pagein .16s ease}
 
 /* ── Bar Chart ── */
 .bar-chart{display:flex;align-items:flex-end;gap:5px;height:130px;padding:0 2px}
