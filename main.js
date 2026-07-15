@@ -2824,7 +2824,6 @@ const ALLINONE_FILES = {
   ventas:     '3_ventas_v2.csv',
   recibos:    '4_recibos_v2.csv',
 };
-const ALLINONE_TARGET_CXC = 12214797.62;
 
 // Parser CSV real (comillas + comas internas) — idéntico al script v2.
 function _aioParseCSV(text) {
@@ -3109,13 +3108,28 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, requestUserId } = 
     }
 
     // ── 5) Validación de integridad (CxC) ──────────────────────────────
+    // Target dinámico: se deriva de los propios CSV, no de una constante.
+    // El campo `balance` se repite en cada ítem de una misma factura
+    // (identificada por old_id_factura); se toma UNA sola vez por factura
+    // y se suman solo las que tienen balance > 0.
+    const balancePorFactura = new Map();
+    for (const row of ventas) {
+      const oid = row.old_id_factura;
+      if (!balancePorFactura.has(oid)) balancePorFactura.set(oid, _aioNum(row.balance));
+    }
+    let targetCxc = 0;
+    for (const bal of balancePorFactura.values()) {
+      if (bal > 0) targetCxc += bal;
+    }
+    targetCxc = Math.round(targetCxc * 100) / 100;
+
     const cxc = db.prepare(`
       SELECT COALESCE(SUM(balance),0) AS cxc_total,
              COUNT(*) AS clientes_con_saldo
       FROM customers WHERE balance > 0`).get();
     const facturasImp = db.prepare(`SELECT COUNT(*) AS n FROM sales WHERE import_source='equiparts_bak'`).get().n;
     const cxcTotal = Math.round((cxc.cxc_total || 0) * 100) / 100;
-    const cuadra = Math.abs(cxcTotal - ALLINONE_TARGET_CXC) < 0.01;
+    const cuadra = Math.abs(cxcTotal - targetCxc) < 0.01;
 
     try {
       audit(requestUserId || null, 'ALL IN ONE', 'migracion_allinone', 'sistema', null,
@@ -3129,7 +3143,7 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, requestUserId } = 
       cxc: cxcTotal,
       clientes_con_saldo: cxc.clientes_con_saldo,
       facturas: facturasImp,
-      target: ALLINONE_TARGET_CXC,
+      target: targetCxc,
       cuadra,
     };
   } catch (e) {
