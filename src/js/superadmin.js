@@ -21,6 +21,9 @@ async function renderSuperAdmin(el) {
   const info       = vInfo.ok ? vInfo.data : {};
   const machineId  = lic?.machineId || '';
   const settings   = await window.api.settings.getAll().catch(() => ({}));
+  const _saEsc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
 
   el.appendChild(h('div', { class: 'sec-hdr' },
     h('div', null,
@@ -366,14 +369,17 @@ async function renderSuperAdmin(el) {
   // ── Panel Multi-negocios ──────────────────────────────────────────────────
   const multiEnabled = settings.module_multi_negocio === '1';
   if (multiEnabled) {
+    const connectionMode = settings.connection_mode || 'local';
+    const isClientMode = connectionMode === 'client';
+    const restartTarget = isClientMode ? 'la PC servidor' : 'Velo POS';
     const multiCard = document.createElement('div');
     multiCard.className = 'card';
     multiCard.style.marginBottom = '16px';
     multiCard.innerHTML = `
       <div class="card-title" style="margin-bottom:12px">🏢 Multi-negocios</div>
       <div style="font-size:12px;color:var(--muted2);margin-bottom:14px">
-        Cada negocio tiene su propia base de datos. Al crear uno nuevo, 
-        aparecerá como opción al iniciar sesión.
+        Cada negocio tiene su propia base de datos. Activa cuál usar desde aquí;
+        el cambio aplica al reiniciar ${restartTarget}.
       </div>
       <div id="sa-biz-list" style="margin-bottom:12px">
         <div style="font-size:12px;color:var(--muted2)">Cargando negocios...</div>
@@ -382,18 +388,57 @@ async function renderSuperAdmin(el) {
     el.appendChild(multiCard);
 
     // Cargar negocios existentes
-    window.api.business?.getAll().then(res => {
+    Promise.all([
+      window.api.business?.getAll?.().catch(() => null),
+      window.api.business?.getActive?.().catch(() => null),
+    ]).then(([res, activeRes]) => {
       const list = multiCard.querySelector('#sa-biz-list');
       const businesses = res?.data || [];
-      if (!businesses.length) {
-        list.innerHTML = '<div style="font-size:12px;color:var(--muted2)">Solo existe el negocio principal</div>';
-      } else {
-        list.innerHTML = businesses.map(b => `
-          <div style="padding:8px 12px;background:var(--bg2);border-radius:8px;margin-bottom:6px;font-size:13px;border:0.5px solid var(--line2)">
-            🏢 <strong>${b.name}</strong>
-            <span style="font-size:10px;color:var(--muted2);margin-left:8px">ID: ${b.id}</span>
-          </div>`).join('');
-      }
+      const activeId = activeRes?.data?.id || '';
+      const row = (b) => {
+        const isPrincipal = !b.id;
+        const isActive = isPrincipal ? !activeId : activeId === b.id;
+        const label = isPrincipal ? 'Negocio Principal' : _saEsc(b.name || b.id);
+        const sub = isPrincipal ? 'Base de datos original' : `ID: ${_saEsc(b.id)}`;
+        const btn = isActive
+          ? `<span style="font-size:11px;color:var(--green);font-weight:700">Activo</span>`
+          : `<button class="btn btn-ghost btn-sm" data-biz-switch="${_saEsc(b.id || '')}">Activar al reiniciar</button>`;
+        return `
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;background:var(--bg2);border-radius:8px;margin-bottom:6px;font-size:13px;border:0.5px solid var(--line2)">
+            <div style="min-width:0">
+              🏢 <strong>${label}</strong>
+              <div style="font-size:10px;color:var(--muted2);margin-top:2px">${sub}</div>
+            </div>
+            ${btn}
+          </div>`;
+      };
+
+      list.innerHTML = [
+        row({ id: '', name: 'Negocio Principal' }),
+        ...businesses.map(row),
+        !businesses.length
+          ? '<div style="font-size:12px;color:var(--muted2);margin-top:6px">No hay negocios secundarios creados.</div>'
+          : ''
+      ].join('');
+
+      list.querySelectorAll('[data-biz-switch]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const bizId = btn.getAttribute('data-biz-switch') || '';
+          const msg = bizId
+            ? `¿Activar este negocio al próximo reinicio de ${restartTarget}?`
+            : `¿Volver al negocio principal al próximo reinicio de ${restartTarget}?`;
+          if (!confirm(msg)) return;
+          btn.disabled = true;
+          const r = await window.api.business.switch({ bizId: bizId || null, requestUserId: user.id });
+          if (r?.ok) {
+            toast(`✓ Cambio guardado. Reinicia ${restartTarget} para usar ese negocio.`);
+            renderSuperAdmin(el);
+          } else {
+            btn.disabled = false;
+            alert('Error: ' + (r?.error || 'No se pudo cambiar el negocio activo'));
+          }
+        });
+      });
     });
 
     multiCard.querySelector('#btn-nuevo-negocio')?.addEventListener('click', () => {

@@ -38,6 +38,7 @@ const { sqliteIdent } = require('./lib/sql-safe');
 const { normalizeFinAcct: _normalizeFinAcct, normalizeFinMov: _normalizeFinMov } = require('./lib/normalize-financial');
 const { isAllowedExternalUrl } = require('./lib/url-safe');
 const { checkLoginRate: _checkLoginRate, recordLoginFail: _recordLoginFail, clearLoginRate: _clearLoginRate } = require('./lib/login-rate-limit');
+const businessCtx = require('./src/main/business-context');
 
 // ── Cargar API key de Claude ──────────────────
 // En desarrollo: leer del .env local (nunca se empaqueta en el instalador)
@@ -569,7 +570,7 @@ ipcMain.handle('auth:heartbeat', async (_, { userId, terminalId } = {}) => {
 // Claves PROPIAS de la máquina (no se sincronizan con el servidor): conexión,
 // identidad de terminal e impresora. El resto son del negocio (viven en el servidor).
 function _isDeviceSetting(key) {
-  return /^connection_/.test(key) || key === 'terminal_id' || key === 'printer' || key === 'printer_type';
+  return businessCtx.isDeviceSettingKey(key);
 }
 
 // terminalId de la terminal que originó la petición (para atar a SU caja):
@@ -1690,7 +1691,7 @@ ipcMain.handle('print:getJobs', async (_, { referenceId, jobType } = {}) => {
 // ── Versioning ────────────────────────────────
 ipcMain.handle('version:getInfo', async () => {
   try {
-    return { ok: true, data: getVersionInfo(db, DATA_DIR) };
+    return { ok: true, data: getVersionInfo(db, currentDataDir()) };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -1818,7 +1819,7 @@ ipcMain.handle('backup:create', async (_, { requestUserId }) => {
 
     if (!filePath) return { ok: false, error: 'Cancelado' };
 
-    createManualBackup(DATA_DIR, filePath);
+    createManualBackup(currentDataDir(), filePath);
 
     const reqUser = authRepo.findById(requestUserId);
     audit(requestUserId, reqUser?.name || '', 'backup_creado', '', null, filePath);
@@ -1839,14 +1840,14 @@ ipcMain.handle('backup:restore', async (_, { requestUserId, fileName } = {}) => 
     let filePath = null;
 
     if (fileName) {
-      filePath = path.join(DATA_DIR, 'backups', fileName);
+      filePath = path.join(currentDataDir(), 'backups', fileName);
       if (!fs.existsSync(filePath)) {
         return { ok: false, error: `Backup no encontrado: ${fileName}` };
       }
     } else {
       const { filePaths } = await dialog.showOpenDialog(mainWindow, {
         title:       'Seleccionar backup',
-        defaultPath: path.join(DATA_DIR, 'backups'),
+        defaultPath: path.join(currentDataDir(), 'backups'),
         filters:     [{ name: 'Database', extensions: ['db'] }],
         properties:  ['openFile'],
       });
@@ -1862,7 +1863,7 @@ ipcMain.handle('backup:restore', async (_, { requestUserId, fileName } = {}) => 
     const dbInst = require('./database').getDB();
     if (dbInst) dbInst.close();
 
-    const result = restoreBackup(DATA_DIR, filePath);
+    const result = restoreBackup(currentDataDir(), filePath);
 
     // Notificar al usuario y reiniciar la aplicación
     await dialog.showMessageBox(mainWindow, {
@@ -1884,7 +1885,7 @@ ipcMain.handle('backup:restore', async (_, { requestUserId, fileName } = {}) => 
 
 ipcMain.handle('backup:getList', async () => {
   try {
-    const info = getVersionInfo(db, DATA_DIR);
+    const info = getVersionInfo(db, currentDataDir());
     return { ok: true, backups: info.backups, backupDir: info.backupDir };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -1969,6 +1970,11 @@ ipcMain.handle('license:getMachineId', async () => {
 const DATA_DIR = app.isPackaged
   ? path.join(app.getPath('userData'), 'data')
   : path.join(__dirname, 'data');
+
+let ACTIVE_DATA_DIR = DATA_DIR;
+let ACTIVE_BUSINESS_ID = null;
+function currentDataDir() { return ACTIVE_DATA_DIR || DATA_DIR; }
+function currentBusinessId() { return ACTIVE_BUSINESS_ID || null; }
 
 // Asegurar que el directorio de datos existe
 if (!fs.existsSync(DATA_DIR)) {
@@ -2906,7 +2912,7 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, requestUserId } = 
     }
 
     // ── 3) BACKUP automático del .db actual ────────────────────────────
-    const backupsDir = path.join(DATA_DIR, 'backups');
+    const backupsDir = path.join(currentDataDir(), 'backups');
     fs.mkdirSync(backupsDir, { recursive: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const backupPath = path.join(backupsDir, `velo_before_allinone_${stamp}.db`);
@@ -4044,41 +4050,56 @@ ipcMain.handle('expenses:upsertBudget', async (_, { data, requestUserId }) => {
 // ══════════════════════════════════════════════
 
 function getBusinessesDir() {
-  return path.join(DATA_DIR, 'negocios');
+  return businessCtx.getBusinessesDir(DATA_DIR);
 }
 
 function getBusinessDir(bizId) {
-  return path.join(getBusinessesDir(), String(bizId));
+  return businessCtx.getBusinessDir(DATA_DIR, String(bizId));
 }
 
 function loadBusinesses() {
-  const dir = getBusinessesDir();
-  if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir)
-    .filter(d => fs.existsSync(path.join(dir, d, 'meta.json')))
-    .map(d => {
-      try {
-        const meta = JSON.parse(fs.readFileSync(path.join(dir, d, 'meta.json'), 'utf8'));
-        return { ...meta, id: d };
-      } catch { return null; }
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.name.localeCompare(b.name));
+  return businessCtx.loadBusinesses(DATA_DIR);
 }
 
 function getActiveBusiness() {
-  const f = path.join(DATA_DIR, 'active_business.json');
-  if (fs.existsSync(f)) {
-    try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch {}
-  }
-  return null;
+  const active = businessCtx.getActiveBusiness(DATA_DIR);
+  if (active) return active;
+  return currentBusinessId()
+    ? { id: currentBusinessId(), dataDir: currentDataDir() }
+    : null;
 }
 
 function setActiveBusiness(bizId) {
-  fs.writeFileSync(
-    path.join(DATA_DIR, 'active_business.json'),
-    JSON.stringify({ id: bizId, set_at: new Date().toISOString() })
-  );
+  return businessCtx.setActiveBusiness(DATA_DIR, bizId);
+}
+
+function prepareBusinessDb(bizDir, name) {
+  const { initDetachedDB } = require('./database');
+  let deviceSettings = {};
+  try {
+    deviceSettings = businessCtx.pickDeviceSettings(settingsRepo.getAll());
+  } catch {}
+
+  initDetachedDB(bizDir, (bizDb) => {
+    initVersioning(bizDb, bizDir);
+    const setSetting = bizDb.prepare(`
+      INSERT INTO settings(key,value) VALUES(?,?)
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value
+    `);
+    for (const [key, value] of Object.entries(deviceSettings)) {
+      setSetting.run(key, value);
+    }
+    bizDb.prepare(`
+      INSERT INTO settings(key,value) VALUES('module_multi_negocio','1')
+      ON CONFLICT(key) DO UPDATE SET value='1'
+    `).run();
+    if (name) {
+      bizDb.prepare(`
+        INSERT INTO settings(key,value) VALUES('biz_name',?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value
+      `).run(name);
+    }
+  });
 }
 
 // IPC — Multi-negocios
@@ -4096,22 +4117,25 @@ ipcMain.handle('business:create', async (_, { name, description, requestUserId }
   try {
     const u = authRepo.findById(requestUserId);
     if (!u || u.role !== 'superadmin') return { ok: false, error: 'Solo superadmin' };
+    const clean = businessCtx.normalizeBusinessInput({ name, description });
 
-    const bizId = 'biz_' + Date.now();
+    const bizId = 'biz_' + require('crypto').randomUUID();
     const bizDir = getBusinessDir(bizId);
     fs.mkdirSync(bizDir, { recursive: true });
 
-    // Guardar metadata del negocio
+    // Inicializar DB propia para este negocio SIN cambiar la DB activa del POS.
+    // business:create corre en el servidor/main; si dejara la conexión global
+    // apuntando al negocio nuevo, el negocio principal podría seguir operando
+    // contra la base equivocada hasta reiniciar.
+    prepareBusinessDb(bizDir, clean.name);
+
+    // Guardar metadata solo después de que la DB separada existe correctamente.
     fs.writeFileSync(path.join(bizDir, 'meta.json'), JSON.stringify({
-      id: bizId, name, description: description || '',
+      id: bizId, name: clean.name, description: clean.description,
       created_at: new Date().toISOString(), active: true
     }));
 
-    // Inicializar DB propia para este negocio
-    const { initDB: initBizDB } = require('./database');
-    initBizDB(bizDir);
-
-    audit(requestUserId, u.name, 'negocio_creado', 'businesses', bizId, name);
+    audit(requestUserId, u.name, 'negocio_creado', 'businesses', bizId, clean.name);
     return { ok: true, id: bizId };
   } catch(e) { return { ok: false, error: e.message }; }
 });
@@ -4120,10 +4144,18 @@ ipcMain.handle('business:switch', async (_, { bizId, requestUserId }) => {
   try {
     const u = authRepo.findById(requestUserId);
     if (!u || u.role !== 'superadmin') return { ok: false, error: 'Solo superadmin' };
+    if (!bizId) {
+      setActiveBusiness(null);
+      return { ok: true, restart_required: true, id: null };
+    }
     const bizDir = getBusinessDir(bizId);
-    if (!fs.existsSync(path.join(bizDir, 'meta.json'))) return { ok: false, error: 'Negocio no encontrado' };
+    const metaPath = path.join(bizDir, 'meta.json');
+    if (!fs.existsSync(metaPath)) return { ok: false, error: 'Negocio no encontrado' };
+    let meta = {};
+    try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')); } catch {}
+    prepareBusinessDb(bizDir, meta.name || bizId);
     setActiveBusiness(bizId);
-    return { ok: true, restart_required: true };
+    return { ok: true, restart_required: true, id: bizId };
   } catch(e) { return { ok: false, error: e.message }; }
 });
 
@@ -4131,9 +4163,14 @@ ipcMain.handle('business:delete', async (_, { bizId, requestUserId }) => {
   try {
     const u = authRepo.findById(requestUserId);
     if (!u || u.role !== 'superadmin') return { ok: false, error: 'Solo superadmin' };
-    const bizDir = getBusinessDir(bizId);
-    if (fs.existsSync(bizDir)) fs.rmSync(bizDir, { recursive: true });
-    return { ok: true };
+    if (currentBusinessId() === bizId) {
+      return { ok: false, error: 'No puedes eliminar el negocio activo. Cambia al negocio principal y reinicia primero.' };
+    }
+    const archived = businessCtx.archiveBusiness(DATA_DIR, bizId);
+    const active = businessCtx.getActiveBusiness(DATA_DIR);
+    if (active && active.id === bizId) setActiveBusiness(null);
+    audit(requestUserId, u.name, 'negocio_archivado', 'businesses', bizId, archived.dest || '');
+    return { ok: true, archived: !!archived.archived, archivedPath: archived.dest || '' };
   } catch(e) { return { ok: false, error: e.message }; }
 });
 
@@ -4153,7 +4190,7 @@ ipcMain.handle('system:diagnose', async (_, { requestUserId } = {}) => {
     const dbInst = require('./database').getDB();
     return await runSystemDoctor({
       db: dbInst,
-      dataDir: DATA_DIR,
+      dataDir: currentDataDir(),
       appRoot: __dirname,
       cashRepo,
       settingsRepo,
@@ -4711,8 +4748,17 @@ app.whenReady().then(() => {
   });
 
   try {
-    db = initDB(DATA_DIR);
-    initVersioning(db, DATA_DIR);
+    const active = businessCtx.resolveActiveBusiness(DATA_DIR);
+    ACTIVE_DATA_DIR = active.dataDir || DATA_DIR;
+    ACTIVE_BUSINESS_ID = active.businessId || null;
+    db = initDB(currentDataDir());
+    initVersioning(db, currentDataDir());
+    if (ACTIVE_BUSINESS_ID) {
+      logInfo('business', 'Negocio activo al iniciar', {
+        businessId: ACTIVE_BUSINESS_ID,
+        dataDir: ACTIVE_DATA_DIR,
+      });
+    }
     // Multi-terminal: configura el puente y (solo en modo servidor) arranca el RPC.
     // Aislado en try propio para que jamás impida el arranque del POS.
     try { setupMultiTerminal(); }
@@ -4737,7 +4783,7 @@ app.whenReady().then(() => {
     try {
       const dbInst = require('./database').getDB();
       if (!dbInst) return;
-      const p = await createAutoBackup(DATA_DIR, dbInst, 10);
+      const p = await createAutoBackup(currentDataDir(), dbInst, 10);
       console.log('[Backup] Automático creado:', p);
     } catch (e) {
       console.error('[Backup] Automático falló:', e.message);

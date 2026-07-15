@@ -54,6 +54,30 @@ function initDB(customDataDir) {
   return db;
 }
 
+// Inicializa una base secundaria sin dejar el proceso apuntando a ella.
+// Se usa para crear negocios separados: la DB nueva se prepara y se cierra,
+// mientras la conexión activa del POS queda exactamente como estaba.
+function initDetachedDB(customDataDir, afterInit) {
+  if (!customDataDir) throw new Error('customDataDir requerido');
+
+  const previous = { dataDir, DB_PATH, db };
+  let detachedDb = null;
+
+  try {
+    detachedDb = initDB(customDataDir);
+    if (typeof afterInit === 'function') afterInit(detachedDb, customDataDir);
+    return { ok: true, dbPath: path.join(customDataDir, 'velo.db') };
+  } finally {
+    const dbToClose = detachedDb || (db !== previous.db ? db : null);
+    dataDir = previous.dataDir;
+    DB_PATH = previous.DB_PATH;
+    db = previous.db;
+    if (dbToClose && dbToClose !== previous.db) {
+      try { dbToClose.close(); } catch {}
+    }
+  }
+}
+
 // ── Integridad de NCF (C2): red de seguridad contra duplicados a nivel BD ─────
 // `getNext` ya es atómico (transacción), pero sin restricción UNIQUE un import,
 // una secuencia mal configurada o el path legacy podían colar un NCF duplicado.
@@ -4505,6 +4529,7 @@ module.exports = {
   suppliersRepo,
   purchasesRepo,
   initDB,
+  initDetachedDB,
   authRepo,
   settingsRepo,
   usersRepo,

@@ -67,18 +67,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Cargar todos los datos vía IPC
   await loadAppData();
 
-  // ── Multi-negocios: mostrar selector si hay negocios adicionales ──
-  if (CFG.module_multi_negocio === '1' && window.api?.business) {
-    try {
-      const bizRes = await window.api.business.getAll();
-      const businesses = bizRes?.data || [];
-      if (businesses.length > 0) {
-        // Hay negocios secundarios — mostrar selector antes del login
-        renderBusinessSelector(businesses);
-        return; // el selector se encarga del resto del flujo
-      }
-    } catch(e) { console.warn('[Business] Error cargando negocios:', e.message); }
-  }
+  // Multi-negocio se cambia desde Super Admin y aplica al reiniciar.
+  // El selector pre-login antiguo no cambia la DB real de forma segura.
 
   // Restaurar sesión de sessionStorage
   const saved = sessionStorage.getItem('vp_user');
@@ -152,8 +142,6 @@ function renderBusinessSelector(businesses) {
           style: { display:'flex', alignItems:'center', gap:'12px', padding:'12px 14px',
                    textAlign:'left', cursor:'pointer' },
           onclick: () => {
-            window._activeBizId = null;
-            sessionStorage.removeItem('vp_active_biz');
             clearInterval(window._bizClock);
             renderLogin();
           }
@@ -185,16 +173,8 @@ function renderBusinessSelector(businesses) {
           style: { display:'flex', alignItems:'center', gap:'12px', padding:'12px 14px',
                    textAlign:'left', cursor:'pointer' },
           onclick: async function() {
-            root.querySelectorAll('.role-btn').forEach(el => {
-              el.style.pointerEvents = 'none'; el.style.opacity = '.5';
-            });
-            this.style.opacity = '1';
-            this.style.borderColor = 'rgba(22,163,74,.6)';
-            await window.api.settings.set({ key: '_active_biz', value: b.id });
-            window._activeBizId = b.id;
-            sessionStorage.setItem('vp_active_biz', b.id);
+            alert('El cambio de negocio se realiza desde Super Admin y aplica al reiniciar Velo POS.');
             clearInterval(window._bizClock);
-            await loadAppData();
             renderLogin();
           }
         },
@@ -331,42 +311,17 @@ function renderLogin() {
           ),
           h('div', null,
             h('div', { class: 'login-title' }, 'Velo POS'),
-            h('div', { class: 'login-sub' }, 'Gestión comercial · Inventario · Facturación · RD')
+            h('div', { class: 'login-sub' }, 'Gestión comercial · Inventario · Facturación · RD'),
+            CFG.activeBusinessId
+              ? h('div', {
+                  style: {
+                    marginTop: '5px', fontSize: '11px', color: 'rgba(255,255,255,.55)',
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '250px'
+                  }
+                }, `Negocio activo: ${CFG.activeBusinessName || CFG.biz}`)
+              : null
           )
         ),
-
-        // ← Botón retroceder al selector (solo si multi-negocios activo y hay negocios)
-        ...(CFG.module_multi_negocio === '1' ? [
-          h('div', {
-            style: { marginBottom:'8px', marginTop:'4px' }
-          },
-            h('button', {
-              style: `display:inline-flex;align-items:center;gap:6px;background:none;border:none;
-                      color:rgba(255,255,255,.4);font-size:12px;cursor:pointer;padding:4px 0;
-                      transition:color .15s`,
-              onmouseenter: function() { this.style.color='rgba(255,255,255,.75)'; },
-              onmouseleave: function() { this.style.color='rgba(255,255,255,.4)'; },
-              onclick: async () => {
-                try {
-                  const bizRes = await window.api.business.getAll();
-                  const businesses = bizRes?.data || [];
-                  if (businesses.length > 0) {
-                    window._activeBizId = null;
-                    sessionStorage.removeItem('vp_active_biz');
-                    await window.api.settings.set({ key: '_active_biz', value: '' });
-                    await loadAppData();
-                    renderBusinessSelector(businesses);
-                    return;
-                  }
-                } catch(e) { console.warn('[Business] Error cargando negocios secundarios:', e.message); }
-                // Si no hay negocios secundarios, simplemente recargar login
-                renderLogin();
-              },
-              html: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                          stroke-width="2.5"><path d="M15 18l-6-6 6-6"/></svg> Cambiar negocio`
-            })
-          )
-        ] : []),
 
         // Selector de rol
         h('div', { class: 'role-row', style: { marginBottom: '16px', marginTop: '16px' } },
@@ -761,6 +716,14 @@ function buildTopbar() {
   // ── Derecha: pills + bell ────────────────────
   const right = h('div', { class: 'tb-right' });
 
+  if (CFG.activeBusinessId) {
+    right.appendChild(h('div', {
+      class: 'pill',
+      title: `Negocio activo: ${CFG.activeBusinessName || CFG.biz}`,
+      style: { maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
+    }, `Negocio: ${CFG.activeBusinessName || CFG.biz}`));
+  }
+
   right.appendChild(h('div', {
     class: `pill ${cajaOpen ? 'open' : 'closed'}`,
     html: cajaOpen
@@ -1013,22 +976,6 @@ async function doLogout() {
   resetInvoices();
   sessionStorage.removeItem('vp_user');
 
-  // Si multi-negocios está activo y hay negocios, volver al selector
-  if (CFG.module_multi_negocio === '1' && window.api?.business) {
-    try {
-      const bizRes = await window.api.business.getAll();
-      const businesses = bizRes?.data || [];
-      if (businesses.length > 0) {
-        // Limpiar negocio activo al cerrar sesión
-        window._activeBizId = null;
-        sessionStorage.removeItem('vp_active_biz');
-        await window.api.settings.set({ key: '_active_biz', value: '' });
-        await loadAppData();
-        renderBusinessSelector(businesses);
-        return;
-      }
-    } catch(e) { console.warn('[Logout] Error cargando negocios:', e.message); }
-  }
   renderLogin();
 }
 

@@ -19,6 +19,7 @@ const DB = {
   caja:      [],
   payments:  [],
   settings:  {},
+  activeBusiness: null,
   // Alias para compatibilidad con módulos viejos
   get clients() { return this.customers; },
   get users()   { return window._cachedUsers || []; },
@@ -72,6 +73,8 @@ let CFG = {
   module_ncf_avanzado:     '0',
   module_multi_negocio:    '0',
   module_contabilidad:     '0',
+  activeBusinessId:        '',
+  activeBusinessName:      '',
 };
 
 // ── Denominaciones de billetes RD$ ────────────
@@ -107,13 +110,17 @@ async function loadAppData() {
     // Resiliencia multi-terminal: en modo cliente estas llamadas se reenvían al
     // servidor; con .catch evitamos que un fallo de red rompa el arranque (el
     // preflight ya bloquea el caso servidor-caído, esto es defensa en profundidad).
-    const [products, settings] = await Promise.all([
+    const [products, settings, activeBusinessRes] = await Promise.all([
       window.api.products.getAll().catch(() => null),
       window.api.settings.getAll().catch(() => null),
+      window.api.business?.getActive
+        ? window.api.business.getActive().catch(() => null)
+        : Promise.resolve(null),
     ]);
 
     DB.products = products || [];
     DB.settings = settings || {};
+    DB.activeBusiness = activeBusinessRes?.data || null;
 
     // Aplicar configuración inmediatamente — la UI ya puede renderizar
     if (settings) {
@@ -135,6 +142,8 @@ async function loadAppData() {
       CFG.module_gastos        = settings.module_gastos        || '0';
       CFG.module_multi_negocio = settings.module_multi_negocio || '0';
       CFG.module_contabilidad  = settings.module_contabilidad  || '0';
+      CFG.activeBusinessId     = DB.activeBusiness?.id || '';
+      CFG.activeBusinessName   = DB.activeBusiness?.name || (CFG.activeBusinessId ? CFG.biz : '');
 
       // Permisos por rol — qué roles pueden acceder a cada módulo
       CFG.module_gastos_roles        = settings.module_gastos_roles        || 'admin';

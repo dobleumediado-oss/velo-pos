@@ -1,6 +1,6 @@
 {
   "name": "velo-pos",
-  "version": "1.17.4",
+  "version": "1.17.5",
   "description": "Sistema POS desktop profesional para comercios, repuestos, sucursales y operaciones empresariales",
   "main": "main.js",
   "scripts": {
@@ -22,9 +22,10 @@
     "verify:packaging": "node scripts/check-packaging.js",
     "test:import": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-import-hardening.js",
     "test:financial": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-financial-core.js",
+    "test:business": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-multi-business-detached-db.js",
     "test:url": "node scripts/test-url-safe.js",
     "test:login": "node scripts/test-login-rate.js",
-    "test": "npm run test:url && npm run test:login && npm run test:import && npm run test:financial"
+    "test": "npm run test:url && npm run test:login && npm run test:business && npm run test:import && npm run test:financial"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
