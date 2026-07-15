@@ -369,17 +369,17 @@ async function renderSuperAdmin(el) {
   // ── Panel Multi-negocios ──────────────────────────────────────────────────
   const multiEnabled = settings.module_multi_negocio === '1';
   if (multiEnabled) {
-    const connectionMode = settings.connection_mode || 'local';
-    const isClientMode = connectionMode === 'client';
-    const restartTarget = isClientMode ? 'la PC servidor' : 'Velo POS';
+    const isClientMode = settings.connection_mode === 'client';
     const multiCard = document.createElement('div');
     multiCard.className = 'card';
     multiCard.style.marginBottom = '16px';
     multiCard.innerHTML = `
       <div class="card-title" style="margin-bottom:12px">🏢 Multi-negocios</div>
       <div style="font-size:12px;color:var(--muted2);margin-bottom:14px">
-        Cada negocio tiene su propia base de datos. Activa cuál usar desde aquí;
-        el cambio aplica al reiniciar ${restartTarget}.
+        Cada negocio tiene su propia base de datos. Crea y administra los negocios aquí;
+        ${isClientMode
+          ? 'desde el login puedes pedir al servidor que abra otro negocio.'
+          : 'para entrar a otro negocio, selecciónalo desde el login.'}
       </div>
       <div id="sa-biz-list" style="margin-bottom:12px">
         <div style="font-size:12px;color:var(--muted2)">Cargando negocios...</div>
@@ -402,7 +402,7 @@ async function renderSuperAdmin(el) {
         const sub = isPrincipal ? 'Base de datos original' : `ID: ${_saEsc(b.id)}`;
         const btn = isActive
           ? `<span style="font-size:11px;color:var(--green);font-weight:700">Activo</span>`
-          : `<button class="btn btn-ghost btn-sm" data-biz-switch="${_saEsc(b.id || '')}">Activar al reiniciar</button>`;
+          : `<span style="font-size:11px;color:var(--muted2);font-weight:700">Disponible en login</span>`;
         return `
           <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;background:var(--bg2);border-radius:8px;margin-bottom:6px;font-size:13px;border:0.5px solid var(--line2)">
             <div style="min-width:0">
@@ -420,25 +420,6 @@ async function renderSuperAdmin(el) {
           ? '<div style="font-size:12px;color:var(--muted2);margin-top:6px">No hay negocios secundarios creados.</div>'
           : ''
       ].join('');
-
-      list.querySelectorAll('[data-biz-switch]').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          const bizId = btn.getAttribute('data-biz-switch') || '';
-          const msg = bizId
-            ? `¿Activar este negocio al próximo reinicio de ${restartTarget}?`
-            : `¿Volver al negocio principal al próximo reinicio de ${restartTarget}?`;
-          if (!confirm(msg)) return;
-          btn.disabled = true;
-          const r = await window.api.business.switch({ bizId: bizId || null, requestUserId: user.id });
-          if (r?.ok) {
-            toast(`✓ Cambio guardado. Reinicia ${restartTarget} para usar ese negocio.`);
-            renderSuperAdmin(el);
-          } else {
-            btn.disabled = false;
-            alert('Error: ' + (r?.error || 'No se pudo cambiar el negocio activo'));
-          }
-        });
-      });
     });
 
     multiCard.querySelector('#btn-nuevo-negocio')?.addEventListener('click', () => {
@@ -457,7 +438,7 @@ async function renderSuperAdmin(el) {
             <input class="inp" id="new-biz-desc" placeholder="Ej: Venta de herramientas y equipos">
           </div>
           <div style="font-size:11px;color:var(--muted2);margin-bottom:16px;padding:8px 12px;background:var(--bg2);border-radius:8px">
-            ⚡ Este negocio tendrá su propia base de datos separada. Aparecerá como opción en el login al reiniciar Velo POS.
+            ⚡ Este negocio tendrá su propia base de datos separada. Aparecerá como opción en el selector del login.
           </div>
           <div style="display:flex;gap:8px;justify-content:flex-end">
             <button class="btn btn-ghost" id="new-biz-cancel">Cancelar</button>
@@ -475,7 +456,7 @@ async function renderSuperAdmin(el) {
         const res = await window.api.business.create({ name, description: desc, requestUserId: user.id });
         if (res.ok) {
           overlay.remove();
-          if (typeof toast === 'function') toast(`✓ Negocio "${name}" creado — reinicia Velo POS para verlo en el login`);
+          if (typeof toast === 'function') toast(`✓ Negocio "${name}" creado — disponible en el login`);
           renderSuperAdmin(el);
         } else {
           btn.disabled = false; btn.textContent = 'Crear negocio';

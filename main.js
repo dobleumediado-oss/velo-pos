@@ -4113,6 +4113,46 @@ ipcMain.handle('business:getActive', async () => {
   catch(e) { return { ok: false, error: e.message }; }
 });
 
+ipcMain.handle('business:selectForLogin', async (_, { bizId } = {}) => {
+  try {
+    const remoteTerminal = require('./src/main/ipc-bridge').currentTerminalId();
+
+    const nextId = bizId ? String(bizId).trim() : null;
+    const currentId = currentBusinessId() || null;
+    if ((nextId || null) === currentId) {
+      return { ok: true, changed: false, relaunching: false, id: currentId, target: remoteTerminal ? 'server' : 'local' };
+    }
+
+    if (!nextId) {
+      setActiveBusiness(null);
+    } else {
+      const bizDir = getBusinessDir(nextId);
+      const metaPath = path.join(bizDir, 'meta.json');
+      if (!fs.existsSync(metaPath)) return { ok: false, error: 'Negocio no encontrado' };
+      let meta = {};
+      try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')); } catch {}
+      prepareBusinessDb(bizDir, meta.name || nextId);
+      setActiveBusiness(nextId);
+    }
+
+    logInfo('business', 'Negocio seleccionado desde login', {
+      businessId: nextId || null,
+      requestedBy: remoteTerminal ? 'client' : 'local',
+      terminalId: remoteTerminal || '',
+    });
+    setTimeout(() => {
+      try {
+        app.relaunch();
+        app.exit(0);
+      } catch (e) {
+        logError('business', 'No se pudo reiniciar tras seleccionar negocio: ' + e.message);
+      }
+    }, 250);
+
+    return { ok: true, changed: true, relaunching: true, id: nextId, target: remoteTerminal ? 'server' : 'local' };
+  } catch(e) { return { ok: false, error: e.message }; }
+});
+
 ipcMain.handle('business:create', async (_, { name, description, requestUserId }) => {
   try {
     const u = authRepo.findById(requestUserId);

@@ -67,8 +67,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Cargar todos los datos vía IPC
   await loadAppData();
 
-  // Multi-negocio se cambia desde Super Admin y aplica al reiniciar.
-  // El selector pre-login antiguo no cambia la DB real de forma segura.
+  // Multi-negocio se elige desde el login. Si cambia el negocio activo,
+  // main reinicia Velo POS para montar la base de datos correcta.
 
   // Restaurar sesión de sessionStorage
   const saved = sessionStorage.getItem('vp_user');
@@ -99,124 +99,67 @@ document.addEventListener('DOMContentLoaded', async () => {
 // ══════════════════════════════════════════════
 // LOGIN
 // ══════════════════════════════════════════════
-// ── Selector de negocio (multi-negocios) ─────────────────────────────
-function renderBusinessSelector(businesses) {
-  const root = document.getElementById('root');
-  root.innerHTML = '';
-  root.style.cssText = 'width:100%;height:100%;display:flex;';
+async function selectBusinessFromLogin(bizId, label, opts = {}) {
+  const nextId = bizId || '';
+  const currentId = CFG.activeBusinessId || '';
+  if (nextId === currentId) return { ok: true, changed: false };
 
-  // Usar exactamente las mismas clases CSS del login para consistencia visual
-  const wrap = h('div', {
-    class: 'login-wrap',
-    style: { width:'100%', height:'100%', display:'flex', flexDirection:'column',
-             alignItems:'center', justifyContent:'center', gap:'20px' }
-  },
-    // Reloj igual al del login
-    h('div', { class: 'login-clock-outer' },
-      h('div', { class: 'login-clock-time', id: 'biz-clock-time' }, '00:00:00'),
-      h('div', { class: 'login-clock-date', id: 'biz-clock-date' }, '')
-    ),
-
-    // Card con mismo estilo que login-card
-    h('div', { class: 'login-card', style: { width:'420px' } },
-
-      // Header igual al login
-      h('div', { class: 'login-header' },
-        h('div', { class: 'login-logo' },
-          h('img', { src: 'assets/icon.png',
-            style: { width:'100%', height:'100%', borderRadius:'13px', objectFit:'cover' } })
-        ),
-        h('div', null,
-          h('div', { class: 'login-title' }, 'Velo POS'),
-          h('div', { class: 'login-sub' }, 'Selecciona con qué negocio trabajar')
-        )
-      ),
-
-      // Lista de negocios como "role-row" estilo
-      h('div', { style: { display:'flex', flexDirection:'column', gap:'8px', marginBottom:'8px' } },
-
-        // Negocio principal — estilo role-btn on
-        h('div', {
-          id: 'biz-principal',
-          class: 'role-btn on',
-          style: { display:'flex', alignItems:'center', gap:'12px', padding:'12px 14px',
-                   textAlign:'left', cursor:'pointer' },
-          onclick: () => {
-            clearInterval(window._bizClock);
-            renderLogin();
-          }
-        },
-          h('div', { class: 'role-icon', style: { background:'var(--accent)', flexShrink:'0', width:'32px', height:'32px' },
-            html: svg('home') }),
-          h('div', { style: { flex:'1' } },
-            h('div', { class: 'role-lbl' }, 'Negocio Principal'),
-            h('div', { class: 'role-sub' }, 'Base de datos original')
-          ),
-          h('div', { style: { color:'rgba(255,255,255,.3)' },
-            html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg>` })
-        ),
-
-        // Separador
-        businesses.length ? h('div', {
-          style: { display:'flex', alignItems:'center', gap:'8px', padding:'2px 0' }
-        },
-          h('div', { style: { flex:'1', height:'1px', background:'rgba(255,255,255,.08)' } }),
-          h('div', { style: { fontSize:'10px', color:'rgba(255,255,255,.25)', fontWeight:'600',
-                               textTransform:'uppercase', letterSpacing:'.05em' } }, 'Otros negocios'),
-          h('div', { style: { flex:'1', height:'1px', background:'rgba(255,255,255,.08)' } })
-        ) : null,
-
-        // Negocios secundarios
-        ...businesses.map(b => h('div', {
-          class: 'role-btn',
-          dataset: { bizid: b.id },
-          style: { display:'flex', alignItems:'center', gap:'12px', padding:'12px 14px',
-                   textAlign:'left', cursor:'pointer' },
-          onclick: async function() {
-            alert('El cambio de negocio se realiza desde Super Admin y aplica al reiniciar Velo POS.');
-            clearInterval(window._bizClock);
-            renderLogin();
-          }
-        },
-          h('div', { class: 'role-icon', style: { background:'rgba(255,255,255,.12)', flexShrink:'0', width:'32px', height:'32px' },
-            html: svg('building') }),
-          h('div', { style: { flex:'1', minWidth:'0' } },
-            h('div', { class: 'role-lbl',
-              style: { overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' } }, b.name),
-            h('div', { class: 'role-sub' }, b.description || 'Base de datos independiente')
-          ),
-          h('div', { style: { color:'rgba(255,255,255,.3)' },
-            html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg>` })
-        ))
-      ),
-
-      // Versión al pie
-      h('div', { style: { textAlign:'center', marginTop:'4px' } },
-        h('div', { style: { fontSize:'11px', color:'rgba(255,255,255,.2)' } },
-          `Velo POS v${window._appVersion||'1.5.5'}`)
-      )
-    )
-  );
-
-  root.appendChild(wrap);
-
-  // Reloj — mismo código que el login
-  function tickBiz() {
-    const now = new Date();
-    const hh  = String(now.getHours()%12||12).padStart(2,'0');
-    const mm  = String(now.getMinutes()).padStart(2,'0');
-    const ss  = String(now.getSeconds()).padStart(2,'0');
-    const ampm = now.getHours() >= 12 ? 'PM' : 'AM';
-    const days = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
-    const months = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto',
-                    'septiembre','octubre','noviembre','diciembre'];
-    const ct = document.getElementById('biz-clock-time');
-    const cd = document.getElementById('biz-clock-date');
-    if (ct) ct.innerHTML = `${hh}<span class="lc-sep">:</span>${mm}<span class="lc-sec">:${ss}</span><span class="lc-ampm">${ampm}</span>`;
-    if (cd) cd.textContent = `${days[now.getDay()]}, ${now.getDate()} de ${months[now.getMonth()]} ${now.getFullYear()}`;
+  const name = label || (nextId ? 'este negocio' : 'Negocio Principal');
+  const isClientMode = CFG.connectionMode === 'client';
+  const restartText = isClientMode ? 'el servidor se reiniciará automáticamente' : 'Velo POS se reiniciará automáticamente';
+  if (!confirm(`Abrir "${name}" ahora? ${restartText}.`)) {
+    return { ok: false, cancelled: true };
   }
-  tickBiz();
-  window._bizClock = setInterval(tickBiz, 1000);
+
+  const msg = opts.messageEl || document.getElementById('login-biz-msg') || document.getElementById('lerr');
+  const control = opts.controlEl || null;
+  const setMsg = (text, type = 'info') => {
+    if (!msg) return;
+    const color = type === 'err' ? 'var(--red)' : 'rgba(255,255,255,.55)';
+    if (msg.id === 'lerr') {
+      msg.innerHTML = '';
+      const line = document.createElement('div');
+      if (type === 'err') line.className = 'err';
+      else line.style.cssText = 'color:var(--muted);font-size:12px;padding:8px 0';
+      line.textContent = text;
+      msg.appendChild(line);
+    } else {
+      msg.textContent = text;
+      msg.style.color = color;
+    }
+  };
+
+  try {
+    if (control) control.disabled = true;
+    setMsg('Abriendo negocio...');
+    sessionStorage.removeItem('vp_user');
+    user = null;
+    window._currentUser = null;
+
+    const r = await window.api.business.selectForLogin({ bizId: nextId || null });
+    if (r?.ok) {
+      if (r.relaunching) {
+        if (r.target === 'server' || isClientMode) {
+          setMsg('Servidor reiniciando. Consultando de nuevo...');
+          setTimeout(() => location.reload(), 5000);
+        } else {
+          setMsg('Reiniciando Velo POS...');
+        }
+      } else {
+        setMsg('Negocio activo.');
+        location.reload();
+      }
+      return r;
+    }
+
+    setMsg(r?.error || 'No se pudo abrir el negocio.', 'err');
+    if (control) control.disabled = false;
+    return r || { ok: false };
+  } catch (e) {
+    setMsg(e?.message || 'No se pudo abrir el negocio.', 'err');
+    if (control) control.disabled = false;
+    return { ok: false, error: e?.message || 'Error' };
+  }
 }
 
 // ── Pantalla de recuperación: modo cliente sin servidor ──────────────────────
@@ -287,6 +230,80 @@ function renderLogin() {
 
   // Estado local del login
   let selRole = 'cajero';
+  let loginBiz = { loaded: false, loading: false, businesses: [], error: '' };
+
+  async function loadLoginBusinesses() {
+    if (loginBiz.loading || loginBiz.loaded) return;
+    loginBiz = { ...loginBiz, loading: true, error: '' };
+    try {
+      const res = await window.api.business?.getAll?.();
+      loginBiz = {
+        loaded: true,
+        loading: false,
+        businesses: res?.data || [],
+        error: res?.ok === false ? (res.error || '') : '',
+      };
+    } catch (e) {
+      loginBiz = { loaded: true, loading: false, businesses: [], error: e?.message || 'Error' };
+    }
+    build();
+  }
+
+  function businessLoginControl() {
+    if (CFG.module_multi_negocio !== '1') return null;
+    const isClientMode = CFG.connectionMode === 'client';
+
+    if (!loginBiz.loaded && !loginBiz.loading) loadLoginBusinesses();
+
+    if (loginBiz.loading) {
+      return h('div', { class: 'fg', style: { marginTop: '14px', marginBottom: '4px' } },
+        h('label', { class: 'lbl' }, isClientMode ? 'Negocio del servidor' : 'Negocio'),
+        h('div', { class: 'inp', style: { display: 'flex', alignItems: 'center', color: 'var(--muted2)' } }, 'Cargando negocios...')
+      );
+    }
+
+    const options = [
+      { id: '', name: 'Negocio Principal', description: 'Base de datos original' },
+      ...loginBiz.businesses,
+    ];
+    if (options.length <= 1 && !CFG.activeBusinessId) return null;
+
+    const activeId = CFG.activeBusinessId || '';
+    const select = h('select', {
+      class: 'inp',
+      id: 'login-business-select',
+      onchange: async (e) => {
+        const nextId = e.target.value || '';
+        const chosen = options.find(o => (o.id || '') === nextId);
+        const result = await selectBusinessFromLogin(nextId, chosen?.name || 'Negocio', {
+          controlEl: e.target,
+          messageEl: document.getElementById('login-biz-msg'),
+        });
+        if (!result?.ok || result.cancelled) e.target.value = activeId;
+      }
+    });
+    options.forEach((b) => {
+      const op = document.createElement('option');
+      op.value = b.id || '';
+      op.textContent = b.name || b.id || 'Negocio';
+      if ((b.id || '') === activeId) op.selected = true;
+      select.appendChild(op);
+    });
+
+    return h('div', { class: 'fg', style: { marginTop: '14px', marginBottom: '4px' } },
+      h('label', { class: 'lbl' }, isClientMode ? 'Negocio del servidor' : 'Negocio'),
+      h('div', { class: 'inp-ic' },
+        h('div', { class: 'ic', html: svg('building') }),
+        select
+      ),
+      h('div', {
+        id: 'login-biz-msg',
+        style: { minHeight: '14px', marginTop: '5px', fontSize: '10px', color: 'rgba(255,255,255,.38)' }
+      }, loginBiz.error
+        ? `No se pudo cargar la lista: ${loginBiz.error}`
+        : (isClientMode ? 'Al cambiar, se actualiza el negocio del servidor y esta PC vuelve a consultar.' : ''))
+    );
+  }
 
   function build() {
     root.innerHTML = '';
@@ -322,6 +339,8 @@ function renderLogin() {
               : null
           )
         ),
+
+        businessLoginControl(),
 
         // Selector de rol
         h('div', { class: 'role-row', style: { marginBottom: '16px', marginTop: '16px' } },
@@ -968,7 +987,9 @@ async function doLogout() {
   }
   _stopSessionHeartbeat();
   if (user) {
-    await window.api.auth.logout({ userId: user.id, userName: user.name, terminalId: _sessionTerminalId() });
+    try {
+      await window.api.auth.logout({ userId: user.id, userName: user.name, terminalId: _sessionTerminalId() });
+    } catch {}
   }
   user = null;
   window._currentUser = null;
@@ -976,6 +997,7 @@ async function doLogout() {
   resetInvoices();
   sessionStorage.removeItem('vp_user');
 
+  await loadAppData();
   renderLogin();
 }
 

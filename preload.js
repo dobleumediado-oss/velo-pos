@@ -218,6 +218,7 @@ contextBridge.exposeInMainWorld('api', {
     resetData: (data) => ipcRenderer.invoke('business:resetData', data),
     getAll:    ()  => ipcRenderer.invoke('business:getAll'),
     getActive: ()  => ipcRenderer.invoke('business:getActive'),
+    selectForLogin: (d) => ipcRenderer.invoke('business:selectForLogin', d),
     create:    (d) => ipcRenderer.invoke('business:create', d),
     switch:    (d) => ipcRenderer.invoke('business:switch', d),
     delete:    (d) => ipcRenderer.invoke('business:delete', d),

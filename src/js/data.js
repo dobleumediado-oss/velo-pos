@@ -75,6 +75,7 @@ let CFG = {
   module_contabilidad:     '0',
   activeBusinessId:        '',
   activeBusinessName:      '',
+  connectionMode:          'local',
 };
 
 // ── Denominaciones de billetes RD$ ────────────
@@ -144,6 +145,7 @@ async function loadAppData() {
       CFG.module_contabilidad  = settings.module_contabilidad  || '0';
       CFG.activeBusinessId     = DB.activeBusiness?.id || '';
       CFG.activeBusinessName   = DB.activeBusiness?.name || (CFG.activeBusinessId ? CFG.biz : '');
+      CFG.connectionMode       = settings.connection_mode || CFG.connectionMode || 'local';
 
       // Permisos por rol — qué roles pueden acceder a cada módulo
       CFG.module_gastos_roles        = settings.module_gastos_roles        || 'admin';
