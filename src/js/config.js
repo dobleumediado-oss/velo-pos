@@ -992,7 +992,7 @@ async function guardarConfiguracion() {
   CFG.addr         = s.biz_addr      || CFG.addr;
   CFG.phone        = s.biz_phone     || CFG.phone;
   CFG.fiscalEnabled = s.fiscal_enabled === '1';
-  CFG.itbis        = CFG.fiscalEnabled ? (parseFloat(s.tax_pct) || 18) : 0;
+  CFG.itbis        = parseFloat(s.tax_pct) || 18;
   toast('✓ Configuración guardada');
 }
 

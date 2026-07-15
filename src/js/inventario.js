@@ -699,25 +699,38 @@ function openProductoModal(p = null) {
     </div>
 
     <hr style="margin:12px 0;border:none;border-top:1px solid var(--line)"/>
-    <div style="font-weight:700;font-size:12px;margin-bottom:10px">Precios</div>
-    <div class="g3">
-      <div class="fg">
-        <label class="lbl">Costo (RD$) *</label>
-        <input class="inp" id="pf-cost" type="number" min="0" placeholder="0"
-               value="${isEdit ? p.cost : ''}"/>
+      <div style="font-weight:700;font-size:12px;margin-bottom:10px">Precios</div>
+      <div class="g3">
+        <div class="fg">
+          <label class="lbl">Costo (RD$) *</label>
+          <input class="inp" id="pf-cost" type="number" min="0" placeholder="0"
+                 value="${isEdit ? p.cost : ''}" oninput="pfCalcMargen()"/>
+        </div>
+        <div class="fg">
+          <label class="lbl">Precio Detalle Final *</label>
+          <input class="inp" id="pf-price" type="number" min="0" placeholder="0"
+                 value="${isEdit ? p.price : ''}" oninput="pfCalcMargen()"/>
+        </div>
+        <div class="fg">
+          <label class="lbl">Precio Mayorista Final</label>
+          <input class="inp" id="pf-wholesale" type="number" min="0" placeholder="0"
+                 value="${isEdit ? p.wholesale : ''}"/>
+        </div>
       </div>
-      <div class="fg">
-        <label class="lbl">Precio Detalle *</label>
-        <input class="inp" id="pf-price" type="number" min="0" placeholder="0"
-               value="${isEdit ? p.price : ''}" oninput="pfCalcMargen()"/>
+      <div style="display:flex;align-items:center;gap:10px;margin:0 0 10px;
+                  padding:10px 12px;background:var(--surface2);border:1px solid var(--line);
+                  border-radius:8px">
+        <input type="checkbox" id="pf-taxable" style="width:16px;height:16px"
+               ${(isEdit ? p.taxable !== 0 : true) ? 'checked' : ''}
+               onchange="pfToggleTax();pfCalcMargen()"/>
+        <span style="font-size:12px;font-weight:700">ITBIS</span>
+        <input class="inp" id="pf-tax-pct" type="number" min="0" max="100" step="0.01"
+               value="${isEdit ? (p.tax_pct ?? 18) : 18}"
+               style="width:86px;padding:4px 7px;font-size:12px;text-align:right"
+               oninput="pfCalcMargen()"/>
+        <span style="font-size:11px;color:var(--muted2)">incluido en el precio final</span>
       </div>
-      <div class="fg">
-        <label class="lbl">Precio Mayorista</label>
-        <input class="inp" id="pf-wholesale" type="number" min="0" placeholder="0"
-               value="${isEdit ? p.wholesale : ''}"/>
-      </div>
-    </div>
-    <div id="pf-margen" style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px"></div>
+      <div id="pf-margen" style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px"></div>
 
     <hr style="margin:12px 0;border:none;border-top:1px solid var(--line)"/>
     <div style="font-weight:700;font-size:12px;margin-bottom:10px">Stock</div>
@@ -742,18 +755,30 @@ function openProductoModal(p = null) {
     </div>
   `, 'modal-lg');
 
-  if (isEdit) pfCalcMargen();
+    setTimeout(() => { pfToggleTax(); pfCalcMargen(); }, 0);
+  }
+
+function pfToggleTax() {
+  const checked = !!document.getElementById('pf-taxable')?.checked;
+  const pctEl = document.getElementById('pf-tax-pct');
+  if (!pctEl) return;
+  pctEl.disabled = !checked;
+  pctEl.style.opacity = checked ? '1' : '.55';
 }
 
 function pfCalcMargen() {
   const cost  = parseFloat(document.getElementById('pf-cost')?.value)  || 0;
   const price = parseFloat(document.getElementById('pf-price')?.value) || 0;
+  const taxable = !!document.getElementById('pf-taxable')?.checked;
+  const taxPct = taxable ? (parseFloat(document.getElementById('pf-tax-pct')?.value) || 18) : 0;
+  const netPrice = taxable && taxPct > 0 ? price / (1 + (taxPct / 100)) : price;
   const el    = document.getElementById('pf-margen');
   if (!el) return;
-  if (price > 0 && cost > 0) {
-    const margen = ((price - cost) / price * 100).toFixed(1);
-    const ganancia = price - cost;
-    el.textContent = `Margen: ${margen}% · Ganancia por unidad: ${fmt(ganancia)}`;
+  if (netPrice > 0 && cost > 0) {
+    const margen = ((netPrice - cost) / netPrice * 100).toFixed(1);
+    const ganancia = netPrice - cost;
+    const taxText = taxable && taxPct > 0 ? ` · Neto sin ITBIS: ${fmt(netPrice)}` : '';
+    el.textContent = `Margen: ${margen}% · Ganancia por unidad: ${fmt(ganancia)}${taxText}`;
     el.style.color = margen >= 20 ? 'var(--green)' : 'var(--amber)';
   } else {
     el.textContent = '';
@@ -823,14 +848,19 @@ async function guardarProducto(id) {
   const cost      = parseFloat(document.getElementById('pf-cost')?.value)  || 0;
   const price     = parseFloat(document.getElementById('pf-price')?.value) || 0;
   const wholesale = parseFloat(document.getElementById('pf-wholesale')?.value) || price;
+  const taxable   = document.getElementById('pf-taxable')?.checked ? 1 : 0;
+  const tax_pct   = taxable ? (parseFloat(document.getElementById('pf-tax-pct')?.value) || 18) : 0;
   const stock     = parseInt(document.getElementById('pf-stock')?.value)   || 0;
   const stock_min = parseInt(document.getElementById('pf-min')?.value)     || 5;
 
   if (!name)      { toast('El nombre es requerido', 'err');  return; }
   if (!code)      { toast('El código es requerido', 'err');  return; }
   if (price <= 0) { toast('El precio debe ser mayor a 0', 'err'); return; }
+  if (taxable && (tax_pct < 0 || tax_pct > 100)) {
+    toast('El ITBIS debe estar entre 0% y 100%', 'err'); return;
+  }
 
-  const data = { code, barcode, name, brand, model, category, description: desc, unit, cost, price, wholesale, stock, stock_min, condition };
+  const data = { code, barcode, name, brand, model, category, description: desc, unit, cost, price, wholesale, taxable, tax_pct, stock, stock_min, condition };
 
   let result;
   if (id) {

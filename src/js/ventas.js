@@ -11,6 +11,38 @@ let ventasRange  = 'today';
 let ventasPay    = '';
 let ventasTab    = 'facturas'; // 'facturas' | 'cotizaciones'
 
+function ventasRound2(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+function ventasTaxPct(item, fallback = CFG?.itbis ?? 18) {
+  const n = parseFloat(item?.tax_pct ?? fallback ?? 18);
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 18;
+}
+
+function ventasTaxable(item) {
+  return item?.taxable !== 0 && item?.taxable !== false && item?.taxable !== '0';
+}
+
+function ventasCalcIncludedTotals(items, { type = 'factura', discPct = 0 } = {}) {
+  const disc = Math.min(100, Math.max(0, parseFloat(discPct) || 0));
+  const grossSubtotal = ventasRound2((items || []).reduce((a, i) => a + ((Number(i.unit_price || i.price) || 0) * (Number(i.qty) || 0)), 0));
+  const discAmt = ventasRound2(grossSubtotal * (disc / 100));
+  const total = ventasRound2(grossSubtotal - discAmt);
+  const factor = 1 - (disc / 100);
+  let taxAcc = 0;
+  (items || []).forEach(item => {
+    if (type !== 'factura' || !ventasTaxable(item)) return;
+    const pct = ventasTaxPct(item);
+    if (pct <= 0) return;
+    const line = ((Number(item.unit_price || item.price) || 0) * (Number(item.qty) || 0)) * factor;
+    taxAcc += line - (line / (1 + (pct / 100)));
+  });
+  const taxAmt = type === 'factura' ? ventasRound2(taxAcc) : 0;
+  const subtotal = ventasRound2(total - taxAmt);
+  return { subtotal, grossSubtotal, discAmt, taxAmt, total };
+}
+
 function renderVentas(el) {
   el.innerHTML = '';
 
@@ -447,11 +479,13 @@ async function convertirCotizacionAVenta(s) {
       product_id:   i.product_id,
       product_code: i.product_code || '',
       product_name: i.product_name || i.name || '',
-      unit_cost:    i.unit_cost  || 0,
-      unit_price:   i.unit_price || i.price || 0,
-      qty:          i.qty || 1,
-      _stock:       DB.products.find(p => p.id === i.product_id)?.stock ?? null,
-    })),
+        unit_cost:    i.unit_cost  || 0,
+        unit_price:   i.unit_price || i.price || 0,
+        taxable:      i.taxable ?? 1,
+        tax_pct:      i.tax_pct ?? CFG.itbis ?? 18,
+        qty:          i.qty || 1,
+        _stock:       DB.products.find(p => p.id === i.product_id)?.stock ?? null,
+      })),
     pay:      'efectivo',
     discount: sale.discount_pct || 0,
   };
@@ -460,11 +494,10 @@ async function convertirCotizacionAVenta(s) {
   window._convOrigId = s.id;
 
   // Calcular totales
-  const subtotal = estado.items.reduce((a, i) => a + i.unit_price * i.qty, 0);
-  const discAmt  = subtotal * (estado.discount / 100);
-  const base     = subtotal - discAmt;
-  const taxAmt   = 0; // cotización no tiene ITBIS — la factura lo calculará
-  const total    = base;
+    const { subtotal, discAmt, taxAmt, total } = ventasCalcIncludedTotals(
+      estado.items,
+      { type: 'factura', discPct: estado.discount }
+    );
 
   const itemsHTML = estado.items.map((it, idx) => {
     const stockOk = it._stock === null || it._stock >= it.qty;
@@ -561,10 +594,11 @@ async function convertirCotizacionAVenta(s) {
     </div>
 
     <div class="card" style="background:var(--surface2);margin-bottom:12px">
-      <div class="tr"><span>Subtotal</span><span>${fmt(subtotal)}</span></div>
-      ${estado.discount > 0 ? `<div class="tr"><span>Descuento (${estado.discount}%)</span><span>−${fmt(discAmt)}</span></div>` : ''}
-      <div class="tr grand"><span>TOTAL ESTIMADO</span><span>${fmt(total)}</span></div>
-      <div style="font-size:10px;color:var(--muted2);margin-top:4px">El ITBIS se calculará al confirmar según tipo de factura.</div>
+        <div class="tr"><span>Subtotal sin ITBIS</span><span>${fmt(subtotal)}</span></div>
+        ${estado.discount > 0 ? `<div class="tr"><span>Descuento (${estado.discount}%)</span><span>−${fmt(discAmt)}</span></div>` : ''}
+        ${taxAmt > 0 ? `<div class="tr"><span>ITBIS (${CFG.itbis || 18}%)</span><span>${fmt(taxAmt)}</span></div>` : ''}
+        <div class="tr grand"><span>TOTAL ESTIMADO</span><span>${fmt(total)}</span></div>
+        <div style="font-size:10px;color:var(--muted2);margin-top:4px">El total usa precio final; el ITBIS se extrae de los artículos gravados.</div>
     </div>
 
     <div class="modal-foot">
@@ -644,11 +678,13 @@ async function confirmarConversionCotizacion() {
       items: itemsValidos.map(i => ({
         product_id:   i.product_id,
         product_code: i.product_code || '',
-        product_name: i.product_name,
-        unit_cost:    i.unit_cost || 0,
-        unit_price:   i.unit_price,
-        qty:          i.qty,
-      })),
+          product_name: i.product_name,
+          unit_cost:    i.unit_cost || 0,
+          unit_price:   i.unit_price,
+          taxable:      ventasTaxable(i) ? 1 : 0,
+          tax_pct:      ventasTaxable(i) ? ventasTaxPct(i) : 0,
+          qty:          i.qty,
+        })),
       payment: {
         method:    est.pay,
         disc:      est.discount,
@@ -668,9 +704,23 @@ async function confirmarConversionCotizacion() {
     requestUserId: user.id,
   });
 
-  await reloadSales({ range: 'all' });
-  await reloadProducts();
-  closeModal();
+	  await reloadSales({ range: 'all' });
+	  await reloadProducts();
+	  const convertedSale = await window.api.sales.getById({ id: result.saleId }).catch(() => null);
+	  const convertedItems = convertedSale?.items?.length
+	    ? convertedSale.items.map(i => ({
+	        product_name: i.product_name,
+	        qty: i.qty,
+	        unit_price: i.unit_price,
+	        unit_cost: i.unit_cost || 0,
+	        subtotal: i.subtotal,
+	        taxable: i.taxable,
+	        tax_pct: i.tax_pct,
+	        tax_amt: i.tax_amt,
+	        net_subtotal: i.net_subtotal,
+	      }))
+	    : itemsValidos;
+	  closeModal();
   delete window._convEstado;
   delete window._convSale;
   delete window._convOrigId;
@@ -681,12 +731,13 @@ async function confirmarConversionCotizacion() {
     type:           'factura',
     customer_name:  sale.customer_name || 'Consumidor Final',
     customer_rnc:   sale.customer_rnc  || '',
-    items:          itemsValidos,
-    subtotal:       itemsValidos.reduce((a,i)=>a+i.unit_price*i.qty,0),
-    discount_pct:   est.discount,
-    discount_amt:   itemsValidos.reduce((a,i)=>a+i.unit_price*i.qty,0)*(est.discount/100),
-    tax_amt:        result.taxAmt || 0,
-    total:          result.total  || 0,
+	    items:          convertedItems,
+      subtotal:       result.subtotal || ventasCalcIncludedTotals(itemsValidos, { type:'factura', discPct: est.discount }).subtotal,
+      discount_pct:   est.discount,
+      discount_amt:   result.discAmt || ventasCalcIncludedTotals(itemsValidos, { type:'factura', discPct: est.discount }).discAmt,
+      tax_amt:        result.taxAmt || 0,
+      tax_pct:        result.taxPct ?? CFG.itbis,
+      total:          result.total  || 0,
     payment_method: est.pay,
     cajero:         user.name,
     date:           today(),
@@ -771,12 +822,12 @@ async function openDetalleVentaModal(s) {
       </table>
     </div>
     <div class="card" style="background:var(--surface2)">
-      <div class="tr"><span>Subtotal</span><span>${fmt(s.subtotal)}</span></div>
+        <div class="tr"><span>Subtotal sin ITBIS</span><span>${fmt(s.subtotal)}</span></div>
       ${discPct > 0
         ? `<div class="tr"><span>Descuento (${discPct}%)</span>
            <span>-${fmt(discAmt)}</span></div>` : ''}
-      ${taxAmt > 0
-        ? `<div class="tr"><span>ITBIS 18%</span><span>${fmt(taxAmt)}</span></div>` : ''}
+        ${taxAmt > 0
+          ? `<div class="tr"><span>ITBIS (${s.tax_pct || CFG.itbis || 18}%)</span><span>${fmt(taxAmt)}</span></div>` : ''}
       <div class="tr grand"><span>TOTAL</span><span>${fmt(s.total)}</span></div>
     </div>
     <div class="modal-foot">
@@ -892,12 +943,17 @@ async function reimprimirVenta(saleId) {
         customer_address: _cust?.address || '',
         customer_phone:   _cust?.phone   || '',
         customer_email:   _cust?.email   || '',
-        items:           (sale.items || []).map(i => ({
-          product_name: i.product_name,
-          qty:          i.qty,
-          unit_price:   i.unit_price,
-          unit_cost:    i.unit_cost || 0,
-        })),
+	        items:           (sale.items || []).map(i => ({
+	          product_name: i.product_name,
+	          qty:          i.qty,
+	          unit_price:   i.unit_price,
+	          unit_cost:    i.unit_cost || 0,
+	          subtotal:     i.subtotal,
+	          taxable:      i.taxable,
+	          tax_pct:      i.tax_pct,
+	          tax_amt:      i.tax_amt,
+	          net_subtotal: i.net_subtotal,
+	        })),
         subtotal:        sale.subtotal,
         discount_pct:    sale.discount_pct || 0,
         discount_amt:    sale.discount_amt || 0,
@@ -935,9 +991,11 @@ async function guardarVentaPDF(saleId) {
     due_date: sale.due_date || null, customer_id: sale.customer_id || null,
     customer_name: sale.customer_name || 'Consumidor Final', customer_rnc: sale.customer_rnc || '',
     customer_address: _custPdf?.address || '', customer_phone: _custPdf?.phone || '', customer_email: _custPdf?.email || '',
-    items: (sale.items || []).map(i => ({
-      product_name: i.product_name, qty: i.qty, unit_price: i.unit_price, unit_cost: i.unit_cost || 0,
-    })),
+	    items: (sale.items || []).map(i => ({
+	      product_name: i.product_name, qty: i.qty, unit_price: i.unit_price, unit_cost: i.unit_cost || 0,
+	      subtotal: i.subtotal, taxable: i.taxable, tax_pct: i.tax_pct,
+	      tax_amt: i.tax_amt, net_subtotal: i.net_subtotal,
+	    })),
     subtotal: sale.subtotal, discount_pct: sale.discount_pct || 0, discount_amt: sale.discount_amt || 0,
     tax_amt: sale.tax_amt || 0, total: sale.total, payment_method: sale.payment_method,
     cajero: sale.cajero, ncf: sale.ncf || '', tax_pct: sale.tax_pct, modifies_ncf: sale.modifies_ncf || '',
@@ -1250,15 +1308,19 @@ async function procesarDevolucion(originalSale, items) {
     const chk   = document.getElementById(`dev-chk-${originalSale.id}-${idx}`);
     const qtyEl = document.getElementById(`dev-qty-${originalSale.id}-${idx}`);
     if (chk?.checked) {
-      returnItems.push({
-        product_id:   item.product_id,
-        product_code: item.product_code || '',
-        product_name: item.product_name || item.name,
-        unit_cost:    item.unit_cost  || 0,
-        unit_price:   item.unit_price || item.price,
-        qty: Math.min(parseInt(qtyEl?.value) || item.qty, item.qty),
-      });
-    }
+        returnItems.push({
+          product_id:   item.product_id,
+          product_code: item.product_code || '',
+          product_name: item.product_name || item.name,
+          unit_cost:    item.unit_cost  || 0,
+          unit_price:   item.unit_price || item.price,
+          taxable:      item.taxable,
+          tax_pct:      item.tax_pct,
+          tax_amt:      item.tax_amt,
+          net_subtotal: item.net_subtotal,
+          qty: Math.min(parseInt(qtyEl?.value) || item.qty, item.qty),
+        });
+      }
   });
 
   if (!returnItems.length) {
@@ -1268,9 +1330,20 @@ async function procesarDevolucion(originalSale, items) {
   const taxPct   = originalSale.type === 'factura'
     ? (originalSale.tax_pct != null ? originalSale.tax_pct : (CFG.itbis ?? 18))
     : 0;
-  const subtotal = Math.round(returnItems.reduce((a, i) => a + i.unit_price * i.qty, 0) * 100) / 100;
-  const taxAmt   = Math.round(subtotal * (taxPct / 100) * 100) / 100;
-  const total    = Math.round((subtotal + taxAmt) * 100) / 100;
+    const hasIncludedTaxSnapshot = returnItems.some(i =>
+      i.taxable !== null && i.taxable !== undefined ||
+      i.tax_pct !== null && i.tax_pct !== undefined ||
+      i.tax_amt !== null && i.tax_amt !== undefined ||
+      i.net_subtotal !== null && i.net_subtotal !== undefined
+    );
+    const totals = hasIncludedTaxSnapshot
+      ? ventasCalcIncludedTotals(returnItems, { type: originalSale.type, discPct: 0 })
+      : (() => {
+          const subtotalOld = Math.round(returnItems.reduce((a, i) => a + i.unit_price * i.qty, 0) * 100) / 100;
+          const taxOld = Math.round(subtotalOld * (taxPct / 100) * 100) / 100;
+          return { subtotal: subtotalOld, taxAmt: taxOld, total: Math.round((subtotalOld + taxOld) * 100) / 100 };
+        })();
+    const total = totals.total;
 
   confirmModal(
     `¿Procesar devolución de ${returnItems.length} artículo(s) por <strong>${fmt(total)}</strong>?`,

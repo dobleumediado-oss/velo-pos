@@ -43,6 +43,7 @@ function initDB(customDataDir) {
 
   migrateProductsModel();
   createTables();
+  migrateTaxColumns();
   migrateECFColumns();
   migrateExpensesColumns();
   migratePaymentsColumns();
@@ -147,6 +148,8 @@ function createTables() {
       cost          REAL NOT NULL DEFAULT 0,
       price         REAL NOT NULL DEFAULT 0,
       wholesale     REAL NOT NULL DEFAULT 0,
+      taxable       INTEGER NOT NULL DEFAULT 1,
+      tax_pct       REAL NOT NULL DEFAULT 18,
       stock         INTEGER NOT NULL DEFAULT 0,
       stock_min     INTEGER NOT NULL DEFAULT 5,
       unit          TEXT DEFAULT 'und',
@@ -261,7 +264,11 @@ function createTables() {
       unit_cost   REAL NOT NULL DEFAULT 0,
       unit_price  REAL NOT NULL DEFAULT 0,
       qty         INTEGER NOT NULL DEFAULT 1,
-      subtotal    REAL NOT NULL DEFAULT 0
+      subtotal    REAL NOT NULL DEFAULT 0,
+      taxable     INTEGER DEFAULT NULL,
+      tax_pct     REAL DEFAULT NULL,
+      tax_amt     REAL DEFAULT NULL,
+      net_subtotal REAL DEFAULT NULL
     );
 
     -- ── Pagos / Abonos ──
@@ -600,6 +607,32 @@ function migrateProductsModel() {
     db.prepare("ALTER TABLE products ADD COLUMN model TEXT DEFAULT ''").run();
     console.log('[MIGRATE] products.model agregada');
   } catch { /* ya existe */ }
+}
+
+function migrateTaxColumns() {
+  const productCols = [
+    { col: 'taxable', def: 'INTEGER NOT NULL DEFAULT 1' },
+    { col: 'tax_pct', def: 'REAL NOT NULL DEFAULT 18' },
+  ];
+  productCols.forEach(({ col, def }) => {
+    try {
+      db.prepare(`ALTER TABLE products ADD COLUMN ${col} ${def}`).run();
+      console.log(`[MIGRATE] products.${col} agregada`);
+    } catch { /* ya existe */ }
+  });
+
+  const saleItemCols = [
+    { col: 'taxable',      def: 'INTEGER DEFAULT NULL' },
+    { col: 'tax_pct',      def: 'REAL DEFAULT NULL' },
+    { col: 'tax_amt',      def: 'REAL DEFAULT NULL' },
+    { col: 'net_subtotal', def: 'REAL DEFAULT NULL' },
+  ];
+  saleItemCols.forEach(({ col, def }) => {
+    try {
+      db.prepare(`ALTER TABLE sale_items ADD COLUMN ${col} ${def}`).run();
+      console.log(`[MIGRATE] sale_items.${col} agregada`);
+    } catch { /* ya existe */ }
+  });
 }
 
 function migratePaymentsColumns() {
@@ -943,6 +976,62 @@ const usersRepo = {
   },
 };
 
+function normalizeTaxable(value, fallback = 1) {
+  const v = value === undefined || value === null || value === ''
+    ? fallback
+    : value;
+  return (v === 0 || v === false || v === '0' || v === 'false') ? 0 : 1;
+}
+
+function normalizeTaxPct(value, fallback = 18) {
+  const f = Number.parseFloat(fallback);
+  const n = Number.parseFloat(value);
+  const picked = Number.isFinite(n) ? n : (Number.isFinite(f) ? f : 18);
+  return Math.max(0, Math.min(100, picked));
+}
+
+function configuredTaxPct() {
+  const row = db.prepare("SELECT value FROM settings WHERE key='tax_pct'").get();
+  return normalizeTaxPct(row?.value, 18);
+}
+
+function calcIncludedTaxTotals(items, { type = 'factura', discPct = 0 } = {}) {
+  const discountPct = Math.max(0, Math.min(100, Number.parseFloat(discPct) || 0));
+  const grossSubtotal = round2(items.reduce((a, i) => {
+    const qty = Number.parseFloat(i.qty) || 0;
+    const price = Number.parseFloat(i.unit_price) || 0;
+    return a + (price * qty);
+  }, 0));
+  const discountFactor = 1 - (discountPct / 100);
+  const discAmt = round2(grossSubtotal * (discountPct / 100));
+  const total = round2(grossSubtotal - discAmt);
+
+  let netAcc = 0;
+  let taxAcc = 0;
+  for (const item of items) {
+    const qty = Number.parseFloat(item.qty) || 0;
+    const price = Number.parseFloat(item.unit_price) || 0;
+    const lineGross = price * qty;
+    const lineAfterDiscount = lineGross * discountFactor;
+    const taxable = type === 'factura' && normalizeTaxable(item.taxable, 1) === 1;
+    const taxPct = taxable ? normalizeTaxPct(item.tax_pct, 18) : 0;
+    const lineNet = taxable && taxPct > 0
+      ? lineAfterDiscount / (1 + (taxPct / 100))
+      : lineAfterDiscount;
+    const lineTax = lineAfterDiscount - lineNet;
+    item.net_subtotal = round2(lineNet);
+    item.tax_amt = round2(lineTax);
+    item.taxable = taxable ? 1 : 0;
+    item.tax_pct = taxPct;
+    netAcc += lineNet;
+    taxAcc += lineTax;
+  }
+
+  const taxAmt = type === 'factura' ? round2(taxAcc) : 0;
+  const subtotal = round2(total - taxAmt);
+  return { subtotal, grossSubtotal, discAmt, taxAmt, total, discPct: discountPct };
+}
+
 // ── Productos ─────────────────────────────────
 const productsRepo = {
   getAll() {
@@ -968,21 +1057,23 @@ const productsRepo = {
       if (existing) return existing.id; // retornar el id existente sin duplicar
     }
     const r = db.prepare(`
-      INSERT INTO products(code,barcode,name,brand,category,description,model,cost,price,wholesale,stock,stock_min,unit,condition)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO products(code,barcode,name,brand,category,description,model,cost,price,wholesale,taxable,tax_pct,stock,stock_min,unit,condition)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(p.code,p.barcode||'',p.name,p.brand||'',p.category||'',p.description||'',
-           p.model||'',p.cost,p.price,p.wholesale||p.price,p.stock||0,p.stock_min||5,p.unit||'und',
-           p.condition||'nuevo');
+           p.model||'',p.cost,p.price,p.wholesale||p.price,
+           normalizeTaxable(p.taxable, 1), normalizeTaxPct(p.tax_pct, 18),
+           p.stock||0,p.stock_min||5,p.unit||'und', p.condition||'nuevo');
     return r.lastInsertRowid;
   },
   update(id, p) {
     db.prepare(`
       UPDATE products SET code=?,barcode=?,name=?,brand=?,category=?,description=?,model=?,
-      cost=?,price=?,wholesale=?,stock_min=?,unit=?,condition=?,updated_at=datetime('now')
+      cost=?,price=?,wholesale=?,taxable=?,tax_pct=?,stock_min=?,unit=?,condition=?,updated_at=datetime('now')
       WHERE id=?
     `).run(p.code,p.barcode||'',p.name,p.brand||'',p.category||'',p.description||'',
-           p.model||'',p.cost,p.price,p.wholesale||p.price,p.stock_min||5,p.unit||'und',
-           p.condition||'nuevo',id);
+           p.model||'',p.cost,p.price,p.wholesale||p.price,
+           normalizeTaxable(p.taxable, 1), normalizeTaxPct(p.tax_pct, 18),
+           p.stock_min||5,p.unit||'und', p.condition||'nuevo',id);
   },
   adjustStock(id, qty, type, reason, saleId = null, userId = null) {
     // VALIDACIÓN: qty=0 no debe crear movimiento ni alterar stock
@@ -1252,29 +1343,41 @@ const salesRepo = {
   // Transacción completa de venta
   create({ session, customer, items, payment, user, type = 'factura' }) {
     const createSaleTx = db.transaction(() => {
-      // 1. Calcular totales
-      const subtotal   = round2(items.reduce((a, i) => a + i.unit_price * i.qty, 0));
-      const discPct    = payment.disc || 0;
-      const discAmt    = round2(subtotal * (discPct / 100));
-      const base       = round2((subtotal - discAmt));
-      const taxPctSetting = db.prepare("SELECT value FROM settings WHERE key='tax_pct'").get();
-      const taxPct     = type === 'factura' ? parseFloat(taxPctSetting?.value ?? 18) : 0;
-      const taxAmt     = round2(base * (taxPct / 100));
-      const total      = round2((base + taxAmt));
-
       // ¿Esta venta afecta inventario? (descuenta stock). Una sola fuente de
       // verdad para validación Y descuento, así nunca quedan asimétricas.
       // Factura y venta a crédito mueven inventario; la cotización no.
       const afectaStock = (type === 'factura' || payment.method === 'credito');
+      const headerTaxPct = type === 'factura' ? configuredTaxPct() : 0;
+      const saleItems = [];
 
-      // 2. Validar stock (solo si la venta afecta inventario)
+      // 1. Validar stock y normalizar snapshot de línea. unit_price es precio final.
       for (const item of items) {
-        const prod = db.prepare('SELECT stock,name FROM products WHERE id=?').get(item.product_id);
+        const prod = db.prepare('SELECT stock,name,taxable,tax_pct FROM products WHERE id=?').get(item.product_id);
         if (!prod) throw new Error(`Producto ID ${item.product_id} no existe`);
         if (prod.stock < item.qty && afectaStock) {
           throw new Error(`Stock insuficiente para "${prod.name}"`);
         }
+        const unitPrice = round2(Number.parseFloat(item.unit_price) || 0);
+        const taxable = type === 'factura'
+          ? normalizeTaxable(item.taxable ?? prod.taxable, 1)
+          : 0;
+        const itemTaxPct = taxable
+          ? normalizeTaxPct(item.tax_pct ?? prod.tax_pct, headerTaxPct)
+          : 0;
+        saleItems.push({
+          ...item,
+          product_name: item.product_name || prod.name,
+          unit_price: unitPrice,
+          unit_cost: round2(Number.parseFloat(item.unit_cost) || 0),
+          taxable,
+          tax_pct: itemTaxPct,
+        });
       }
+
+      // 2. Calcular totales con precio final: neto + ITBIS incluido = total.
+      const discPct = payment.disc || 0;
+      const { subtotal, discAmt, taxAmt, total } = calcIncludedTaxTotals(saleItems, { type, discPct });
+      const taxPct = headerTaxPct;
 
       // 3. Validar crédito
       if (payment.method === 'credito' && customer.id !== 1) {
@@ -1351,12 +1454,16 @@ const salesRepo = {
       }
 
       // 5. Insertar items con snapshot
-      for (const item of items) {
+      for (const item of saleItems) {
         db.prepare(`
-          INSERT INTO sale_items(sale_id,product_id,product_code,product_name,unit_cost,unit_price,qty,subtotal)
-          VALUES(?,?,?,?,?,?,?,?)
+          INSERT INTO sale_items(
+            sale_id,product_id,product_code,product_name,unit_cost,unit_price,qty,subtotal,
+            taxable,tax_pct,tax_amt,net_subtotal
+          )
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
         `).run(saleId, item.product_id, item.product_code, item.product_name,
-               item.unit_cost, item.unit_price, item.qty, item.unit_price * item.qty);
+               item.unit_cost, item.unit_price, item.qty, round2(item.unit_price * item.qty),
+               item.taxable, item.tax_pct, item.tax_amt, item.net_subtotal);
 
         // 6. Descontar stock (misma condición que la validación: afectaStock)
         if (afectaStock) {
@@ -1419,7 +1526,7 @@ const salesRepo = {
       audit(user.id, user.name, 'venta_creada', 'sales', saleId,
             `Total: ${total} | Método: ${payment.method} | Items: ${items.length}`);
 
-      return { saleId, total, subtotal, taxAmt, discAmt, ncf };
+      return { saleId, total, subtotal, taxAmt, discAmt, taxPct, ncf };
     });
 
     return createSaleTx(); // Si algo falla, revierte TODO
@@ -1695,7 +1802,7 @@ const reportsRepo = {
     // Costo total de lo vendido (desde snapshot de sale_items)
     const costData = db.prepare(`
       SELECT SUM(si.unit_cost * si.qty) as total_cost,
-             SUM(si.unit_price * si.qty) as total_rev_items,
+             SUM(COALESCE(si.net_subtotal, si.unit_price * si.qty)) as total_rev_items,
              COUNT(DISTINCT s.id) as total_sales,
              SUM(si.qty) as total_units
       FROM sale_items si
@@ -1732,9 +1839,9 @@ const reportsRepo = {
     const topProducts = db.prepare(`
       SELECT si.product_name, si.product_code,
              SUM(si.qty) as total_qty,
-             SUM(si.unit_price * si.qty) as total_rev,
+             SUM(COALESCE(si.net_subtotal, si.unit_price * si.qty)) as total_rev,
              SUM(si.unit_cost  * si.qty) as total_cost,
-             SUM((si.unit_price - si.unit_cost) * si.qty) as total_profit
+             SUM(COALESCE(si.net_subtotal, si.unit_price * si.qty) - (si.unit_cost * si.qty)) as total_profit
       FROM sale_items si
       JOIN sales s ON si.sale_id = s.id
       WHERE s.status='completed' AND s.type != 'devolucion'
@@ -2015,6 +2122,7 @@ const returnsRepo = {
       const yaDevuelto = {};
       prevReturns.forEach(r => { yaDevuelto[r.product_id] = r.devuelto || 0; });
 
+      const preparedReturnItems = [];
       for (const item of items) {
         const orig = originalItems.find(oi => oi.product_id === item.product_id);
         if (!orig) throw new Error(`Producto ID ${item.product_id} no pertenece a esta venta`);
@@ -2026,13 +2134,34 @@ const returnsRepo = {
             `Vendido: ${orig.qty}, ya devuelto: ${yaDev}, disponible: ${disponible}.`
           );
         }
+        preparedReturnItems.push({
+          product_id:   orig.product_id,
+          product_code: orig.product_code || '',
+          product_name: orig.product_name,
+          unit_cost:    orig.unit_cost || 0,
+          unit_price:   orig.unit_price || 0,
+          qty:          item.qty,
+          taxable:      orig.taxable,
+          tax_pct:      orig.tax_pct,
+        });
       }
 
       // 3. Calcular totales de la devolución (usando precios históricos del snapshot)
-      const subtotal = round2(items.reduce((a, i) => a + i.unit_price * i.qty, 0));
-      const taxPct   = original.tax_pct || 0;
-      const taxAmt   = round2(subtotal * (taxPct / 100));
-      const total    = round2((subtotal + taxAmt));
+      const hasIncludedTaxSnapshot = originalItems.some(oi =>
+        oi.taxable !== null || oi.tax_pct !== null || oi.tax_amt !== null || oi.net_subtotal !== null
+      );
+      const taxPct = original.tax_pct || 0;
+      let subtotal, taxAmt, total;
+      if (hasIncludedTaxSnapshot) {
+        const totals = calcIncludedTaxTotals(preparedReturnItems, { type: original.type, discPct: 0 });
+        subtotal = totals.subtotal;
+        taxAmt   = totals.taxAmt;
+        total    = totals.total;
+      } else {
+        subtotal = round2(preparedReturnItems.reduce((a, i) => a + i.unit_price * i.qty, 0));
+        taxAmt   = round2(subtotal * (taxPct / 100));
+        total    = round2((subtotal + taxAmt));
+      }
 
       // 4. Crear venta de tipo 'devolucion'
       const retR = db.prepare(`
@@ -2060,12 +2189,16 @@ const returnsRepo = {
       const returnId = retR.lastInsertRowid;
 
       // 5. Insertar items de la devolución y reponer stock
-      for (const item of items) {
+      for (const item of preparedReturnItems) {
         db.prepare(`
-          INSERT INTO sale_items(sale_id, product_id, product_code, product_name, unit_cost, unit_price, qty, subtotal)
-          VALUES(?,?,?,?,?,?,?,?)
+          INSERT INTO sale_items(
+            sale_id, product_id, product_code, product_name, unit_cost, unit_price, qty, subtotal,
+            taxable, tax_pct, tax_amt, net_subtotal
+          )
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
         `).run(returnId, item.product_id, item.product_code, item.product_name,
-               item.unit_cost || 0, item.unit_price, item.qty, item.unit_price * item.qty);
+               item.unit_cost || 0, item.unit_price, item.qty, round2(item.unit_price * item.qty),
+               item.taxable, item.tax_pct, item.tax_amt, item.net_subtotal);
 
         // Reponer stock con registro de movimiento
         productsRepo.adjustStock(
@@ -2105,7 +2238,7 @@ const returnsRepo = {
       // Antes solo miraba los items de la tanda actual, así que devoluciones parciales
       // en varias tandas nunca marcaban la venta como devuelta.
       const currentReturn = {};
-      for (const i of items) currentReturn[i.product_id] = (currentReturn[i.product_id] || 0) + i.qty;
+      for (const i of preparedReturnItems) currentReturn[i.product_id] = (currentReturn[i.product_id] || 0) + i.qty;
       const allReturned = originalItems.every(oi => {
         const totalDevuelto = (yaDevuelto[oi.product_id] || 0) + (currentReturn[oi.product_id] || 0);
         return totalDevuelto >= oi.qty;
@@ -2146,7 +2279,7 @@ const returnsRepo = {
 
       // 9. Auditoría
       audit(user.id, user.name, 'devolucion_procesada', 'sales', returnId,
-        `Venta original #${originalSaleId} | Total devuelto: ${total} | Items: ${items.length}${ncfNota ? ' | NC B04: ' + ncfNota : ''}`);
+        `Venta original #${originalSaleId} | Total devuelto: ${total} | Items: ${preparedReturnItems.length}${ncfNota ? ' | NC B04: ' + ncfNota : ''}`);
 
       return { returnId, total, subtotal, taxAmt, overpayment, ncf: ncfNota, modifies_ncf: ncfNota ? String(original.ncf).trim() : '' };
     });

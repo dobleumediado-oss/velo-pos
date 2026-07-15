@@ -947,7 +947,7 @@ async function saToggleModule(key, enabled) {
   // fiscal_enabled: actualizar CFG.fiscalEnabled e ITBIS
   if (key === 'fiscal_enabled') {
     CFG.fiscalEnabled = enabled;
-    CFG.itbis = enabled ? 18 : 0;
+    CFG.itbis = parseFloat(DB?.settings?.tax_pct) || 18;
   }
 
   // barcode_enabled: actualizar flag global y sidebar

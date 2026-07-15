@@ -7,7 +7,7 @@
  * NUNCA toca la BD real: llama initDB(tempDir) con un directorio desechable.
  *
  * Cubre las invariantes que una refactorización JAMÁS debe romper:
- *  - subtotal / ITBIS 18% / total de una factura
+ *  - precio final con ITBIS incluido: subtotal neto / ITBIS 18% / total
  *  - descuento porcentual
  *  - descuento de stock al facturar
  *  - la cotización NO lleva ITBIS ni mueve inventario
@@ -51,29 +51,52 @@ let userId = (db.prepare("SELECT id FROM users ORDER BY id LIMIT 1").get() || {}
 if (!userId) userId = DB.usersRepo.create({ name: 'Test', email: 't@t.co', password: 'x', role: 'admin' });
 const user = { id: userId, name: 'Test' };
 
-const prodId = DB.productsRepo.create({ code: 'P1', name: 'Filtro Aceite', cost: 50, price: 100, stock: 10 });
+const prodId = DB.productsRepo.create({ code: 'P1', name: 'Filtro Aceite', cost: 50, price: 118, stock: 10, taxable: 1, tax_pct: 18 });
+const prodNoTaxId = DB.productsRepo.create({ code: 'P2', name: 'Servicio Exento', cost: 20, price: 100, stock: 10, taxable: 0, tax_pct: 0 });
 const custId = DB.customersRepo.create({ name: 'Taller Pérez', credit_limit: 100000 });
-const item = (qty) => ({ product_id: prodId, product_code: 'P1', product_name: 'Filtro Aceite', unit_cost: 50, unit_price: 100, qty });
+const item = (qty, price = 118) => ({ product_id: prodId, product_code: 'P1', product_name: 'Filtro Aceite', unit_cost: 50, unit_price: price, taxable: 1, tax_pct: 18, qty });
+const itemNoTax = (qty) => ({ product_id: prodNoTaxId, product_code: 'P2', product_name: 'Servicio Exento', unit_cost: 20, unit_price: 100, taxable: 0, tax_pct: 0, qty });
 
-console.log('\n== A. Factura: subtotal / ITBIS 18% / total + stock ==');
+console.log('\n== A. Factura: precio final incluye ITBIS 18% + stock ==');
 const a = DB.salesRepo.create({ customer: { id: custId, name: 'Taller Pérez' }, items: [item(2)], payment: { method: 'efectivo' }, user, type: 'factura' });
 ok(near(a.subtotal, 200), `subtotal 200 (obtuvo ${a.subtotal})`);
-ok(near(a.taxAmt, 36), `ITBIS 36 = 18% de 200 (obtuvo ${a.taxAmt})`);
+ok(near(a.taxAmt, 36), `ITBIS 36 incluido en total 236 (obtuvo ${a.taxAmt})`);
 ok(near(a.total, 236), `total 236 (obtuvo ${a.total})`);
 ok(DB.productsRepo.getById(prodId).stock === 8, `stock 10→8 tras vender 2 (obtuvo ${DB.productsRepo.getById(prodId).stock})`);
 
 console.log('\n== B. Descuento porcentual ==');
 const b = DB.salesRepo.create({ customer: { id: custId, name: 'x' }, items: [item(1)], payment: { method: 'efectivo', disc: 10 }, user, type: 'factura' });
-ok(near(b.discAmt, 10), `descuento 10 = 10% de 100 (obtuvo ${b.discAmt})`);
-ok(near(b.taxAmt, 16.2), `ITBIS 16.2 = 18% de (100-10) (obtuvo ${b.taxAmt})`);
+ok(near(b.discAmt, 11.8), `descuento 11.8 = 10% de 118 final (obtuvo ${b.discAmt})`);
+ok(near(b.subtotal, 90), `subtotal neto 90 después de descuento (obtuvo ${b.subtotal})`);
+ok(near(b.taxAmt, 16.2), `ITBIS 16.2 incluido después de descuento (obtuvo ${b.taxAmt})`);
 ok(near(b.total, 106.2), `total 106.2 (obtuvo ${b.total})`);
 
 console.log('\n== C. Cotización: sin ITBIS, sin mover stock ==');
 const stockBefore = DB.productsRepo.getById(prodId).stock;
 const c = DB.salesRepo.create({ customer: { id: custId, name: 'x' }, items: [item(1)], payment: { method: 'efectivo' }, user, type: 'cotizacion' });
 ok(near(c.taxAmt, 0), `cotización sin ITBIS (obtuvo ${c.taxAmt})`);
-ok(near(c.total, 100), `cotización total = subtotal 100 (obtuvo ${c.total})`);
+ok(near(c.total, 118), `cotización total = precio final 118 (obtuvo ${c.total})`);
 ok(DB.productsRepo.getById(prodId).stock === stockBefore, `stock intacto en cotización (${stockBefore})`);
+
+console.log('\n== C2. Precio final modificado y producto exento ==');
+const c2 = DB.salesRepo.create({ customer: { id: custId, name: 'x' }, items: [item(1, 150)], payment: { method: 'efectivo' }, user, type: 'factura' });
+ok(near(c2.total, 150), `precio final modificado total 150 (obtuvo ${c2.total})`);
+ok(near(c2.subtotal, 127.12), `precio final 150 => neto 127.12 (obtuvo ${c2.subtotal})`);
+ok(near(c2.taxAmt, 22.88), `precio final 150 => ITBIS 22.88 (obtuvo ${c2.taxAmt})`);
+const stockBeforeReturn = DB.productsRepo.getById(prodId).stock;
+const ret = DB.returnsRepo.create({
+  originalSaleId: c2.saleId,
+  items: [{ ...item(1, 999), qty: 1 }],
+  session: null,
+  user,
+  reason: 'devolución test',
+});
+ok(near(ret.total, 150), `devolución respeta precio histórico final 150 (obtuvo ${ret.total})`);
+ok(near(ret.taxAmt, 22.88), `devolución respeta ITBIS histórico 22.88 (obtuvo ${ret.taxAmt})`);
+ok(DB.productsRepo.getById(prodId).stock === stockBeforeReturn + 1, `devolución repone stock ${stockBeforeReturn}→${stockBeforeReturn + 1}`);
+const c3 = DB.salesRepo.create({ customer: { id: custId, name: 'x' }, items: [itemNoTax(1)], payment: { method: 'efectivo' }, user, type: 'factura' });
+ok(near(c3.total, 100), `producto exento total 100 (obtuvo ${c3.total})`);
+ok(near(c3.taxAmt, 0), `producto exento sin ITBIS (obtuvo ${c3.taxAmt})`);
 
 console.log('\n== D. Venta a crédito sube el balance del cliente ==');
 const balBefore = DB.customersRepo.getById(custId).balance;

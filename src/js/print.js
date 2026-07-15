@@ -196,11 +196,16 @@ function printReceipt(sale, isReprint = false) {
       due_date:         sale.due_date || null,
       applied_invoice:  sale.applied_invoice || null,
       cajero:        sale.cajero || user?.name || '',
-      items: (sale.items || []).map(i => ({
-        product_name: i.product_name || i.name || '',
-        qty:          i.qty  || 1,
-        unit_price:   i.unit_price || i.price || 0,
-      })),
+	      items: (sale.items || []).map(i => ({
+	        product_name: i.product_name || i.name || '',
+	        qty:          i.qty  || 1,
+	        unit_price:   i.unit_price || i.price || 0,
+	        subtotal:     i.subtotal,
+	        taxable:      i.taxable,
+	        tax_pct:      i.tax_pct,
+	        tax_amt:      i.tax_amt,
+	        net_subtotal: i.net_subtotal,
+	      })),
       subtotal:      sale.subtotal     || 0,
       discount_pct:  sale.discount_pct || sale.disc    || 0,
       discount_amt:  sale.discount_amt || sale.discAmt || 0,
@@ -283,7 +288,7 @@ function printReceipt(sale, isReprint = false) {
   const itbis    = sale.tax_amt    || sale.itbis     || 0;
   const total    = sale.total      || 0;
 
-  lines.push(tRow('Subtotal:', fmt(subtotal)));
+    lines.push(tRow('Subtotal sin ITBIS:', fmt(subtotal)));
   if (discPct > 0) lines.push(tRow(`Descuento (${discPct}%):`, `-${fmt(discAmt)}`));
   if ((isFactura || isDevolucion) && itbis > 0) lines.push(tRow(`ITBIS (${sale.tax_pct ?? CFG?.itbis ?? 18}%):`, fmt(itbis)));
   lines.push(tlineD());

@@ -254,6 +254,7 @@ function renderPOSGrid() {
               p.condition === 'consignacion' ? 'CONSIG.' : 'ESPECIAL'
             }</span>` : ''}</div>
         <div class="pc-price">${fmt(price)}</div>
+        ${p.taxable === 0 ? '' : `<div style="font-size:9.5px;font-weight:700;color:var(--blue);margin-top:1px">ITBIS incl.</div>`}
         ${p.model ? `<div style="font-size:10px;font-weight:600;color:var(--blue);margin-top:2px">${p.model}</div>` : ''}
         <div class="pc-stock" style="color:${isLow ? 'var(--red)' : 'var(--muted2)'}">
           ${isOut ? 'Sin stock' : `${p.stock} disponibles`}
@@ -373,6 +374,8 @@ function posAddItem(pid) {
       unit_price:   price,
       unit_cost:    prod.cost,
       cost:         prod.cost,
+      taxable:      prod.taxable === 0 ? 0 : 1,
+      tax_pct:      parseFloat(prod.tax_pct ?? CFG.itbis ?? 18) || 18,
       qty: 1
     });
   }
@@ -427,7 +430,17 @@ function renderCart() {
         <div class="cart-item">
           <div class="ci-info">
             <div class="ci-name">${item.name}</div>
-            <div class="ci-price">${fmt(item.price)} c/u</div>
+            <div class="ci-price" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <span style="font-size:10px;color:var(--muted2);font-weight:600">Precio final</span>
+              <input type="number" min="0" step="0.01" value="${Number(item.price || 0).toFixed(2)}"
+                style="width:92px;text-align:right;font-size:12px;font-weight:700;
+                       border:1px solid var(--line);border-radius:4px;padding:2px 5px;
+                       font-family:inherit;background:var(--surface)"
+                onchange="posSetPrice(${idx},this.value)"
+                onkeydown="if(event.key==='Enter')this.blur()"
+                onclick="this.select()"/>
+              ${item.taxable === 0 ? '' : `<span style="font-size:10px;color:var(--blue);font-weight:700">ITBIS incl.</span>`}
+            </div>
           </div>
           <div class="qc">
             <button class="qb" onclick="posQty(${idx},-1)">−</button>
@@ -455,7 +468,7 @@ function renderCart() {
                class="inp" style="width:64px;padding:4px 7px;font-size:12px;text-align:right"
                oninput="posDiscConPin(this, this.value)"/>
       </div>
-      <div class="tr"><span>Subtotal</span><span>${fmt(subtotal)}</span></div>
+      <div class="tr"><span>Subtotal sin ITBIS</span><span>${fmt(subtotal)}</span></div>
       ${inv.itype === 'factura' && itbis > 0
         ? `<div class="tr"><span>ITBIS (${CFG.itbis}%)</span><span>${fmt(itbis)}</span></div>` : ''}
       ${disc > 0
@@ -505,6 +518,22 @@ function posSetQty(idx, val) {
   if (!item) return;
   const prod = DB.products.find(p => p.id === item.pid);
   item.qty   = Math.max(1, Math.min(parseInt(val) || 1, prod?.stock || 999));
+  renderInvTabs();
+  renderCart();
+}
+
+function posSetPrice(idx, val) {
+  const inv  = currentInv();
+  const item = inv.cart[idx];
+  if (!item) return;
+  const price = Math.round(Math.max(0, parseFloat(val) || 0) * 100) / 100;
+  if (price <= 0) {
+    toast('El precio final debe ser mayor a 0', 'err');
+    renderCart();
+    return;
+  }
+  item.price = price;
+  item.unit_price = price;
   renderInvTabs();
   renderCart();
 }
@@ -600,16 +629,39 @@ async function autorizarDescuento(pct) {
 }
 
 // ── Calcular totales ──────────────────────────
+function _posRound2(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+function _posTaxPct(item) {
+  const pct = parseFloat(item?.tax_pct ?? CFG.itbis ?? 18);
+  return Number.isFinite(pct) ? Math.max(0, Math.min(100, pct)) : 18;
+}
+
+function _posTaxable(item) {
+  return item?.taxable !== 0 && item?.taxable !== false && item?.taxable !== '0';
+}
+
 function calcTotals(inv) {
-  const disc     = inv.disc || 0;
-  const subtotal = Math.round(inv.cart.reduce((a, i) => a + i.price * i.qty, 0) * 100) / 100;
-  const discAmt  = Math.round(subtotal * (disc / 100) * 100) / 100;
-  const base     = Math.round((subtotal - discAmt) * 100) / 100;
-  const itbis    = inv.itype === 'factura'
-    ? Math.round(base * (CFG.itbis / 100) * 100) / 100
-    : 0;
-  const total    = Math.round((base + itbis) * 100) / 100;
-  return { subtotal, discAmt, itbis, total, disc };
+  const disc = Math.min(100, Math.max(0, parseFloat(inv.disc) || 0));
+  const grossSubtotal = _posRound2(inv.cart.reduce((a, i) => a + ((Number(i.price) || 0) * (Number(i.qty) || 0)), 0));
+  const discAmt = _posRound2(grossSubtotal * (disc / 100));
+  const total = _posRound2(grossSubtotal - discAmt);
+  const factor = 1 - (disc / 100);
+
+  let taxAcc = 0;
+  inv.cart.forEach(item => {
+    const lineAfterDiscount = ((Number(item.price) || 0) * (Number(item.qty) || 0)) * factor;
+    if (inv.itype !== 'factura' || !_posTaxable(item)) return;
+    const pct = _posTaxPct(item);
+    if (pct <= 0) return;
+    const net = lineAfterDiscount / (1 + (pct / 100));
+    taxAcc += (lineAfterDiscount - net);
+  });
+
+  const itbis = inv.itype === 'factura' ? _posRound2(taxAcc) : 0;
+  const subtotal = _posRound2(total - itbis);
+  return { subtotal, grossSubtotal, discAmt, itbis, total, disc };
 }
 
 function invTotal(inv) { return calcTotals(inv).total; }
@@ -733,7 +785,7 @@ function openCobroModal(inv) {
     </div>
 
     <div class="card" style="background:var(--surface2);margin-top:10px">
-      <div class="tr"><span>Subtotal</span><span>${fmt(subtotal)}</span></div>
+        <div class="tr"><span>Subtotal sin ITBIS</span><span>${fmt(subtotal)}</span></div>
       ${disc > 0
         ? `<div class="tr"><span>Descuento (${disc}%)</span>
            <span>−${fmt(discAmt)}</span></div>` : ''}
@@ -1023,6 +1075,8 @@ async function finalizarVenta() {
     product_name: i.product_name || i.name,
     unit_cost:    i.unit_cost || i.cost || 0,
     unit_price:   i.unit_price || i.price,
+    taxable:      _posTaxable(i) ? 1 : 0,
+    tax_pct:      _posTaxable(i) ? _posTaxPct(i) : 0,
     qty:          i.qty,
   }));
 
@@ -1067,12 +1121,37 @@ async function finalizarVenta() {
     closeModal();
     toast(`✓ Venta #${result.saleId} registrada — ${fmt(result.total)}`);
 
-    // Recargar datos actualizados desde SQLite
-    await Promise.all([reloadProducts(), reloadCustomers()]);
-    await reloadSales({ range: 'today' });
+	    // Recargar datos actualizados desde SQLite
+	    await Promise.all([reloadProducts(), reloadCustomers()]);
+	    await reloadSales({ range: 'today' });
+	    const savedSale = await window.api.sales.getById({ id: result.saleId }).catch(() => null);
+	    const printItems = savedSale?.items?.length
+	      ? savedSale.items.map(i => ({
+	          product_name:  i.product_name,
+	          name:          i.product_name,
+	          qty:           i.qty,
+	          unit_price:    i.unit_price,
+	          price:         i.unit_price,
+	          unit_cost:     i.unit_cost || 0,
+	          cost:          i.unit_cost || 0,
+	          subtotal:      i.subtotal,
+	          taxable:       i.taxable,
+	          tax_pct:       i.tax_pct,
+	          tax_amt:       i.tax_amt,
+	          net_subtotal:  i.net_subtotal,
+	        }))
+	      : inv.cart.map(i => ({
+	          name:  i.name,
+	          product_name: i.name,
+	          qty:   i.qty,
+	          price: i.price,
+	          unit_price: i.price,
+	          cost:  i.cost || 0,
+	          unit_cost: i.cost || 0,
+	        }));
 
-    // Reconstruir sale para previsualización
-    const saleForPrint = {
+	    // Reconstruir sale para previsualización
+	    const saleForPrint = {
       id:           result.saleId,
       date:         new Date().toISOString().split('T')[0],
       time:         new Date().toLocaleTimeString('es-DO',
@@ -1081,12 +1160,7 @@ async function finalizarVenta() {
       clientId:     customer.id,
       clientName:   cliName,
       clientCedula: cliCedula,
-      items:        inv.cart.map(i => ({
-        name:  i.name,
-        qty:   i.qty,
-        price: i.price,
-        cost:  i.cost || 0,
-      })),
+	      items:        printItems,
       subtotal:  result.subtotal,
       disc:      inv.disc || 0,
       discAmt:   result.discAmt || 0,
@@ -1095,7 +1169,7 @@ async function finalizarVenta() {
       pay:       pmeth,
       cajero:    user.name,
       ncf:       result.ncf || '',
-      tax_pct:   CFG.itbis,
+      tax_pct:   result.taxPct ?? CFG.itbis,
     };
 
     // Imprimir ticket 80mm en impresora térmica
@@ -1385,7 +1459,7 @@ function previsualizarFactura(sale) {
     <tbody>${itemsRows}</tbody>
   </table>
   <div class="tots">
-    <div class="tr-tot"><span>Subtotal</span><span>${fmt(sale.subtotal)}</span></div>
+    <div class="tr-tot"><span>Subtotal sin ITBIS</span><span>${fmt(sale.subtotal)}</span></div>
     ${(sale.disc || 0) > 0
       ? `<div class="tr-tot"><span>Descuento (${sale.disc}%)</span>
          <span style="color:#DC2626">-${fmt(sale.discAmt || 0)}</span></div>` : ''}

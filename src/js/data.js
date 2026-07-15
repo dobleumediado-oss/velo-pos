@@ -157,9 +157,7 @@ async function loadAppData() {
       CFG.module_envios_roles        = settings.module_envios_roles        || 'admin,cajero';
       CFG.module_ncf_avanzado_roles  = settings.module_ncf_avanzado_roles  || 'admin';
       CFG.fiscal_enabled_roles       = settings.fiscal_enabled_roles       || 'admin';
-      CFG.itbis = CFG.fiscalEnabled
-        ? ((settings.tax_pct !== undefined && settings.tax_pct !== '')
-            ? parseFloat(settings.tax_pct) : 18) : 0;
+        CFG.itbis = parseFloat(settings.tax_pct) || 18;
       window._bcEnabled = settings.barcode_enabled === '1' || settings.barcode_enabled === true;
     }
 

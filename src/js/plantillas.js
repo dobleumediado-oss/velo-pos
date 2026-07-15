@@ -167,13 +167,13 @@ function getSampleSale(cfg) {
     customer_email: 'ventas@cliente.com',
     cajero:         'Cajero Demo',
     // NCF de muestra (solo para la vista previa) — deriva "B01 Crédito Fiscal"
-    ncf:            'B0100000237',
-    items: [
-      { product_name: 'Servicio de instalación y configuración del sistema', qty: 1, unit_price: 400 },
-      { product_name: 'Migración y validación de datos iniciales',           qty: 2, unit_price: 150 },
-      { product_name: 'Soporte técnico y ajustes de plantilla A4',           qty: 1, unit_price: 40  },
-    ],
-    subtotal:        740,
+	    ncf:            'B0100000237',
+	    items: [
+	      { product_name: 'Servicio de instalación y configuración del sistema', qty: 1, unit_price: 472, subtotal: 472, tax_pct: 18, tax_amt: 72, net_subtotal: 400, taxable: 1 },
+	      { product_name: 'Migración y validación de datos iniciales',           qty: 2, unit_price: 177, subtotal: 354, tax_pct: 18, tax_amt: 54, net_subtotal: 300, taxable: 1 },
+	      { product_name: 'Soporte técnico y ajustes de plantilla A4',           qty: 1, unit_price: 47.20, subtotal: 47.20, tax_pct: 18, tax_amt: 7.20, net_subtotal: 40, taxable: 1 },
+	    ],
+	    subtotal:        740,
     discount_pct:    0,
     discount_amt:    0,
     tax_pct:         _tp,
@@ -207,6 +207,35 @@ function _docLabel(sale) {
 // ¿Mostrar ITBIS? Solo en facturas con monto > 0
 function _showItbis(sale) {
   return sale.type === 'factura' && (sale.tax_amt || 0) > 0;
+}
+
+function _lineGross(i) {
+  const qty = Number(i.qty || 1);
+  if (i.subtotal !== undefined && i.subtotal !== null) return Number(i.subtotal || 0);
+  return Number(i.unit_price || i.price || 0) * qty;
+}
+
+function _lineTax(i, sale) {
+  if (i.tax_amt !== undefined && i.tax_amt !== null) return Number(i.tax_amt || 0);
+  if (i.taxable === 0 || i.taxable === false || i.taxable === '0') return 0;
+  const taxPct = Number(i.tax_pct != null ? i.tax_pct : (sale?.tax_pct != null ? sale.tax_pct : 0));
+  if (!taxPct || taxPct <= 0) return 0;
+  const gross = _lineGross(i);
+  return gross - (gross / (1 + (taxPct / 100)));
+}
+
+function _lineNet(i, sale) {
+  if (i.net_subtotal !== undefined && i.net_subtotal !== null) return Number(i.net_subtotal || 0);
+  return _lineGross(i) - _lineTax(i, sale);
+}
+
+function _lineNetUnit(i, sale) {
+  const qty = Number(i.qty || 1) || 1;
+  return _lineNet(i, sale) / qty;
+}
+
+function _lineImporte(i, sale) {
+  return _lineNet(i, sale) + _lineTax(i, sale);
 }
 
 // ¿Mostrar NCF? Solo en facturas con NCF disponible
@@ -571,15 +600,17 @@ function renderCartaRecibo(sale, cfg, opts) {
   // ── Filas de artículos ──────────────────────────────
   const rows = (sale.items || []).map((i, idx) => {
     const qty   = Number(i.qty || 1);
-    const price = Number(i.unit_price || 0);
-    const line  = qty * price;
+    const unitNet = showTax ? _lineNetUnit(i, sale) : Number(i.unit_price || i.price || 0);
+    const lineTax = showTax ? _lineTax(i, sale) : 0;
+    const importe = showTax ? _lineImporte(i, sale) : (qty * unitNet);
     return `
     <tr>
       <td class="c-idx">${idx + 1}</td>
       <td class="c-desc">${_esc(i.product_name || i.name || '')}</td>
       <td class="c-num">${qty.toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-      ${showMoney ? `<td class="c-num">${_n2(price)}</td>
-      <td class="c-num it-total">${_n2(line)}</td>` : ''}
+      ${showMoney ? `<td class="c-num">${_n2(unitNet)}</td>
+      ${showTax ? `<td class="c-num">${_n2(lineTax)}</td>` : ''}
+      <td class="c-num it-total">${_n2(importe)}</td>` : ''}
     </tr>`;
   }).join('');
 
@@ -647,10 +678,10 @@ function renderCartaRecibo(sale, cfg, opts) {
   const totalsBox = showMoney ? `
     <div class="foot-wrap">
       <div class="totals">
-        <div class="tr"><span>Subtotal</span><span>${_n2(sale.subtotal)}</span></div>
+        <div class="tr"><span>Sub Total sin impuestos</span><span>${_n2(sale.subtotal)}</span></div>
         <div class="tr"><span>Descuento global</span><span>${sale.discount_amt > 0 ? '-' : ''}${_n2(sale.discount_amt)}</span></div>
-        ${showTax ? `<div class="tr"><span>Impuestos (${taxPct.toFixed(1)} %)</span><span>${_n2(sale.tax_amt)}</span></div>` : ''}
-        <div class="tr grand"><span>TOTAL</span><span>${_n2(sale.total)}</span></div>
+        ${showTax ? `<div class="tr"><span>Total ITBIS</span><span>${_n2(sale.tax_amt)}</span></div>` : ''}
+        <div class="tr grand"><span>Total con impuestos</span><span>${_n2(sale.total)}</span></div>
       </div>
     </div>` : '';
 
@@ -713,10 +744,11 @@ function renderCartaRecibo(sale, cfg, opts) {
   .c-idx { width:30px; color:#9aa0b0; font-size:10px; text-align:left; }
   .c-desc { word-break:break-word; }
   /* Anchos fijos para espaciado parejo con pocos o muchos artículos.
-     nth-child(3)=Cant, (4)=Precio, (5)=Total. En conduce solo existe (3). */
-  table.items th:nth-child(3), table.items td:nth-child(3) { width:78px; }
-  table.items th:nth-child(4), table.items td:nth-child(4) { width:120px; }
-  table.items th:nth-child(5), table.items td:nth-child(5) { width:130px; }
+	     nth-child(3)=Cant, (4)=Precio, (5)=ITBIS o Total, (6)=Total. En conduce solo existe (3). */
+	  table.items th:nth-child(3), table.items td:nth-child(3) { width:78px; }
+	  table.items th:nth-child(4), table.items td:nth-child(4) { width:120px; }
+	  table.items th:nth-child(5), table.items td:nth-child(5) { width:${showTax ? '110px' : '130px'}; }
+	  table.items th:nth-child(6), table.items td:nth-child(6) { width:130px; }
   .it-total { font-weight:700; }
   .foot-wrap { display:flex; justify-content:flex-end; margin-top:16px; break-inside:avoid; page-break-inside:avoid; }
   .totals { width:250px; border:1px solid #eceef3; border-radius:8px; padding:10px 14px; }
@@ -763,7 +795,7 @@ function renderCartaRecibo(sale, cfg, opts) {
       <th class="c-idx">#</th>
       <th>Descripción</th>
       <th class="c-num">Cant</th>
-      ${showMoney ? `<th class="c-num">Precio</th><th class="c-num">Total</th>` : ''}
+	      ${showMoney ? `<th class="c-num">Precio unit.</th>${showTax ? '<th class="c-num">ITBIS</th>' : ''}<th class="c-num">Importe</th>` : ''}
     </tr></thead>
     <tbody>${rows || `<tr><td class="c-idx"></td><td colspan="4" style="color:#9aa0b0">Sin artículos</td></tr>`}</tbody>
   </table>
