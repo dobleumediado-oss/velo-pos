@@ -984,6 +984,22 @@ const MIGRATIONS = [
       }
     }
   },
+  {
+    version: '1.17.9',
+    description: 'Contabilidad: enlazar historial de costo/precio con ajuste de inventario',
+    run(db) {
+      const cols = db.prepare('PRAGMA table_info(product_price_history)').all().map(c => c.name);
+      if (!cols.includes('accounting_entry_id')) {
+        db.exec('ALTER TABLE product_price_history ADD COLUMN accounting_entry_id INTEGER DEFAULT NULL');
+      }
+      if (!cols.includes('accounting_error')) {
+        db.exec("ALTER TABLE product_price_history ADD COLUMN accounting_error TEXT DEFAULT ''");
+      }
+      db.exec('CREATE INDEX IF NOT EXISTS idx_price_hist_accounting ON product_price_history(accounting_entry_id)');
+      seedAccountingCatalog(db);
+      console.log('[MIGRATION 1.17.9] Historial de precios enlazado a contabilidad');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════
@@ -1092,6 +1108,7 @@ function seedAccountingCatalog(db) {
     ['account_ar','1104','Cuentas por Cobrar → ventas a crédito'],
     ['account_inventory','1105','Inventario → stock de mercancía'],
     ['account_tax_credit','1106','ITBIS pagado en compras'],
+    ['account_vat_credit','1106','ITBIS acreditable en compras'],
     ['account_ap','2101','Cuentas por Pagar → compras a crédito'],
     ['account_tax_payable','2102','ITBIS cobrado en ventas → DGII'],
     ['account_capital','3101','Capital Social'],
@@ -1099,6 +1116,7 @@ function seedAccountingCatalog(db) {
     ['account_discount','4102','Descuentos en ventas'],
     ['account_returns','4103','Devoluciones en ventas'],
     ['account_other_rev','4104','Otros ingresos'],
+    ['account_inventory_gain','4104','Ganancia por ajuste de inventario'],
     ['account_cogs','5101','Costo de mercancía vendida'],
     ['account_rent','6101','Alquiler'],
     ['account_elec','6102','Electricidad'],
@@ -1106,6 +1124,8 @@ function seedAccountingCatalog(db) {
     ['account_salary','6106','Sueldos'],
     ['account_fuel','6107','Combustible'],
     ['account_other_exp','6120','Otros gastos'],
+    ['account_expense','6120','Cuenta de gastos general'],
+    ['account_inventory_loss','6120','Pérdida por ajuste de inventario'],
   ];
   for (const [key, code, desc] of CONFIG) insConf.run(key, idOf(code), desc);
 

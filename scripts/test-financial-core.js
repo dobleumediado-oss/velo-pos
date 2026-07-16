@@ -41,6 +41,75 @@ const tmpDir = path.join(os.tmpdir(), `velo_fintest_${Date.now()}`);
 const DB = require('../database');
 DB.initDB(tmpDir);
 const db = DB.getDB();
+const { seedAccountingCatalog } = require('../versioning');
+
+function setupAccountingCore() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS accounting_accounts (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      code        TEXT UNIQUE NOT NULL,
+      name        TEXT NOT NULL,
+      type        TEXT NOT NULL CHECK(type IN ('activo','pasivo','capital','ingreso','costo','gasto','impuesto')),
+      subtype     TEXT DEFAULT '',
+      parent_id   INTEGER REFERENCES accounting_accounts(id),
+      description TEXT DEFAULT '',
+      balance     REAL NOT NULL DEFAULT 0,
+      is_summary  INTEGER DEFAULT 0,
+      active      INTEGER DEFAULT 1,
+      created_at  TEXT DEFAULT (datetime('now')),
+      updated_at  TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS accounting_entries (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      number        TEXT UNIQUE NOT NULL,
+      date          TEXT NOT NULL,
+      concept       TEXT NOT NULL,
+      reference     TEXT DEFAULT '',
+      source_module TEXT DEFAULT '',
+      source_id     INTEGER,
+      total_debit   REAL NOT NULL DEFAULT 0,
+      total_credit  REAL NOT NULL DEFAULT 0,
+      status        TEXT DEFAULT 'confirmado' CHECK(status IN ('borrador','confirmado','anulado')),
+      notes         TEXT DEFAULT '',
+      user_id       INTEGER REFERENCES users(id),
+      reversed_by   INTEGER REFERENCES accounting_entries(id),
+      reversal_of   INTEGER REFERENCES accounting_entries(id),
+      created_at    TEXT DEFAULT (datetime('now')),
+      updated_at    TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS accounting_entry_lines (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      entry_id    INTEGER NOT NULL REFERENCES accounting_entries(id),
+      account_id  INTEGER NOT NULL REFERENCES accounting_accounts(id),
+      description TEXT DEFAULT '',
+      debit       REAL NOT NULL DEFAULT 0,
+      credit      REAL NOT NULL DEFAULT 0,
+      reference   TEXT DEFAULT '',
+      created_at  TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS accounting_config (
+      key         TEXT PRIMARY KEY,
+      account_id  INTEGER REFERENCES accounting_accounts(id),
+      value       TEXT DEFAULT '',
+      description TEXT DEFAULT '',
+      updated_at  TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS accounting_periods (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      name       TEXT NOT NULL,
+      date_from  TEXT NOT NULL,
+      date_to    TEXT NOT NULL,
+      status     TEXT DEFAULT 'abierto' CHECK(status IN ('abierto','cerrado')),
+      notes      TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_acc_entries_module ON accounting_entries(source_module, source_id);
+    CREATE INDEX IF NOT EXISTS idx_acc_lines_entry ON accounting_entry_lines(entry_id);
+    CREATE INDEX IF NOT EXISTS idx_acc_lines_account ON accounting_entry_lines(account_id);
+  `);
+  seedAccountingCatalog(db);
+}
+setupAccountingCore();
 
 // Ajustes deterministas: ITBIS 18%, sin fiscal (evita NCF)
 db.prepare("INSERT INTO settings(key,value) VALUES('tax_pct','18') ON CONFLICT(key) DO UPDATE SET value='18'").run();
@@ -118,6 +187,31 @@ ok(histRows[0].stock_at_change === 5, `historial guarda stock afectado 5 (obtuvo
 ok(near(histRows[0].stock_value_delta, 100), `historial valoriza variación costo 5*20=100 (obtuvo ${histRows[0].stock_value_delta})`);
 const histListed = DB.productsRepo.getAll().find(p => p.id === histProdId);
 ok(near(histListed.last_cost_delta, 20), `getAll expone último cambio de costo +20 (obtuvo ${histListed.last_cost_delta})`);
+
+console.log('\n== C4. Contabilidad de ajuste de costo en inventario ==');
+db.prepare("INSERT INTO settings(key,value) VALUES('module_contabilidad','1') ON CONFLICT(key) DO UPDATE SET value='1'").run();
+const acctProdId = DB.productsRepo.create({
+  code: 'AC1', name: 'Producto Ajuste Contable', cost: 100, price: 150,
+  wholesale: 140, stock: 4, taxable: 1, tax_pct: 18,
+});
+const acctBefore = DB.productsRepo.getById(acctProdId);
+const acctUpdate = DB.productsRepo.update(acctProdId, {
+  ...acctBefore,
+  cost: 125,
+}, { userId, source: 'manual', reason: 'revalorización contable test' });
+ok(!!acctUpdate?.historyId, 'edición de costo devuelve historyId para contabilidad');
+const acctEntry = DB.accountingRepo.generateInventoryRevaluationEntry({ historyId: acctUpdate.historyId, userId });
+ok(!!acctEntry?.entryId, 'cambio manual de costo genera asiento contable');
+const acctHist = DB.productsRepo.getPriceHistory(acctProdId)[0];
+ok(acctHist.accounting_entry_number === acctEntry.number, `historial queda enlazado al asiento ${acctEntry.number}`);
+const invAccount = DB.accountingRepo.getAccountByCode('1105');
+const gainAccount = DB.accountingRepo.getAccountByCode('4104');
+ok(near(invAccount.balance, 100), `aumento de costo debita inventario por 4*25=100 (obtuvo ${invAccount.balance})`);
+ok(near(gainAccount.balance, -100), `aumento de costo acredita ingreso por ajuste -100 (obtuvo ${gainAccount.balance})`);
+const acctDup = DB.accountingRepo.generateInventoryRevaluationEntry({ historyId: acctUpdate.historyId, userId });
+const adjCount = db.prepare("SELECT COUNT(*) c FROM accounting_entries WHERE source_module='inventario_valor' AND source_id=?").get(acctUpdate.historyId).c;
+ok(acctDup?.entryId === acctEntry.entryId && adjCount === 1, 'ajuste contable es idempotente y no duplica asientos');
+db.prepare("INSERT INTO settings(key,value) VALUES('module_contabilidad','0') ON CONFLICT(key) DO UPDATE SET value='0'").run();
 
 const buyProdId = DB.productsRepo.create({
   code: 'PH2', name: 'Producto Compra Historial', cost: 50, price: 100,

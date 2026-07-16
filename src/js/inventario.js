@@ -12,7 +12,22 @@ let invSearch = '';
 let invCat    = '';
 let invModel  = '';
 let invSort   = 'name';
-let invTab    = 'todos'; // todos | bajo | sin_stock
+let invTab    = 'todos'; // todos | bajo | sin_stock | por_modelo | historial
+let invHistSearch = '';
+let invHistRange = 'month';
+let invHistFrom = '';
+let invHistTo = '';
+let invHistSource = '';
+let invHistAccounting = '';
+let invHistRows = [];
+let invHistLoadedKey = '';
+let invHistToken = 0;
+
+const invEsc = s => String(s || '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;');
 
 function renderInventario(el) {
   el.innerHTML = '';
@@ -20,6 +35,7 @@ function renderInventario(el) {
   const prods    = DB.products;
   const lowStock = prods.filter(p => p.stock > 0 && p.stock <= (p.stock_min || 5));
   const outStock = prods.filter(p => p.stock === 0);
+  const changedProducts = prods.filter(p => p.last_price_change_id);
   const totalVal = prods.reduce((a, p) => a + p.stock * p.cost, 0);
 
   // ── Header ──────────────────────────────────
@@ -92,6 +108,7 @@ function renderInventario(el) {
           { k: 'bajo',      l: `Stock bajo (${lowStock.length})` },
           { k: 'sin_stock',  l: `Sin stock (${outStock.length})` },
           { k: 'por_modelo', l: 'Por Modelo' },
+          { k: 'historial',  l: `Historial (${changedProducts.length})` },
         ].map(t => h('button', {
           class: `tab ${invTab === t.k ? 'on' : ''}`,
           'data-tab': t.k,
@@ -109,7 +126,7 @@ function renderInventario(el) {
   );
 
   el.appendChild(
-    h('div', { class: 'flex', style: { marginBottom: '14px', gap: '8px', flexWrap: 'wrap' } },
+    h('div', { id: 'inv-product-filters', class: 'flex', style: { marginBottom: '14px', gap: '8px', flexWrap: 'wrap' } },
       h('div', { class: 'inp-ic', style: { flex: 1, minWidth: '200px' } },
         h('div', { class: 'ic', html: svg('search') }),
         h('input', {
@@ -163,6 +180,13 @@ function renderInvTable() {
   const wrap = document.getElementById('inv-table-wrap');
   if (!wrap) return;
   wrap.innerHTML = '';
+  const productFilters = document.getElementById('inv-product-filters');
+  if (productFilters) productFilters.style.display = invTab === 'historial' ? 'none' : 'flex';
+
+  if (invTab === 'historial') {
+    renderInvPriceHistory(wrap);
+    return;
+  }
 
   const qNorm = searchNorm(invSearch);
 
@@ -338,6 +362,302 @@ function renderInvTable() {
   wrap.appendChild(card);
 }
 
+function invHistDateKey() {
+  return `${invHistRange}|${invHistFrom || ''}|${invHistTo || ''}`;
+}
+
+function invHistNeedsAccounting(h) {
+  return Math.abs(Number(h.stock_value_delta || 0)) >= 0.005
+    && Math.abs(Number(h.cost_delta || 0)) >= 0.005
+    && Number(h.stock_at_change || 0) > 0
+    && (h.source || '') !== 'compra';
+}
+
+function invHistAccountingInfo(h) {
+  const needsAccounting = invHistNeedsAccounting(h);
+  if (h.accounting_entry_number) {
+    return {
+      key: 'asiento',
+      html: `<span class="badge g">${invEsc(h.accounting_entry_number)}</span>
+        <div style="font-size:10px;color:var(--muted2)">${invEsc(h.accounting_entry_status || 'confirmado')}</div>`,
+    };
+  }
+  if (h.accounting_error) {
+    return {
+      key: 'error',
+      html: `<span class="badge r">Error</span>
+        <div style="font-size:10px;color:var(--muted2);max-width:140px">${invEsc(h.accounting_error)}</div>`,
+    };
+  }
+  if ((h.source || '') === 'compra') return { key: 'compra', html: '<span class="badge n">Compra</span>' };
+  if (needsAccounting) return { key: 'pendiente', html: '<span class="badge a">Pendiente</span>' };
+  return { key: 'no_aplica', html: '<span class="badge n">N/A</span>' };
+}
+
+async function renderInvPriceHistory(wrap) {
+  const esc = s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const signedFmt = n => {
+    const v = Number(n) || 0;
+    if (Math.abs(v) < 0.005) return fmt(0);
+    return `${v > 0 ? '+' : '-'}${fmt(Math.abs(v))}`;
+  };
+  const sourceLabel = {
+    manual: 'Manual',
+    compra: 'Compra',
+    entrada_rapida: 'Entrada',
+  };
+
+  const key = invHistDateKey();
+  const token = ++invHistToken;
+
+  const shell = h('div', { class: 'card' });
+  shell.appendChild(h('div', { class: 'fxb mb8', style: { gap: '10px', flexWrap: 'wrap' } },
+    h('div', null,
+      h('div', { class: 'card-title' }, 'Historial de costo/precio'),
+      h('div', { style: { fontSize: '11px', color: 'var(--muted2)' } },
+        'Cambios globales de mercancía con impacto de inventario y enlace contable')
+    ),
+    h('button', { class: 'btn btn-out btn-sm', onclick: () => {
+      invHistLoadedKey = '';
+      renderInvTable();
+    }, html: `${svg('return')} Actualizar` })
+  ));
+
+  const controls = h('div', { class: 'flex', style: { gap: '8px', flexWrap: 'wrap', marginBottom: '12px' } },
+    h('div', { class: 'inp-ic', style: { flex: 1, minWidth: '220px' } },
+      h('div', { class: 'ic', html: svg('search') }),
+      h('input', {
+        class: 'inp',
+        type: 'text',
+        placeholder: 'Buscar producto, código, motivo, usuario...',
+        value: invHistSearch,
+        oninput: e => { invHistSearch = e.target.value; renderInvTable(); }
+      })
+    ),
+    (() => {
+      const sel = h('select', {
+        class: 'inp',
+        style: { width: '145px' },
+        onchange: e => { invHistRange = e.target.value; invHistLoadedKey = ''; renderInvTable(); }
+      });
+      [
+        { v: 'today', l: 'Hoy' },
+        { v: 'week', l: '7 días' },
+        { v: 'month', l: 'Este mes' },
+        { v: 'all', l: 'Todo' },
+        { v: 'custom', l: 'Personalizado' },
+      ].forEach(o => {
+        const op = document.createElement('option');
+        op.value = o.v; op.textContent = o.l; op.selected = o.v === invHistRange;
+        sel.appendChild(op);
+      });
+      return sel;
+    })(),
+    h('input', {
+      class: 'inp',
+      type: 'date',
+      value: invHistFrom,
+      disabled: invHistRange !== 'custom',
+      style: { width: '142px' },
+      onchange: e => { invHistFrom = e.target.value; invHistLoadedKey = ''; renderInvTable(); }
+    }),
+    h('input', {
+      class: 'inp',
+      type: 'date',
+      value: invHistTo,
+      disabled: invHistRange !== 'custom',
+      style: { width: '142px' },
+      onchange: e => { invHistTo = e.target.value; invHistLoadedKey = ''; renderInvTable(); }
+    }),
+    (() => {
+      const sel = h('select', {
+        class: 'inp',
+        style: { width: '145px' },
+        onchange: e => { invHistSource = e.target.value; renderInvTable(); }
+      });
+      [
+        { v: '', l: 'Todo origen' },
+        { v: 'manual', l: 'Manual' },
+        { v: 'entrada_rapida', l: 'Entrada' },
+        { v: 'compra', l: 'Compra' },
+      ].forEach(o => {
+        const op = document.createElement('option');
+        op.value = o.v; op.textContent = o.l; op.selected = o.v === invHistSource;
+        sel.appendChild(op);
+      });
+      return sel;
+    })(),
+    (() => {
+      const sel = h('select', {
+        class: 'inp',
+        style: { width: '160px' },
+        onchange: e => { invHistAccounting = e.target.value; renderInvTable(); }
+      });
+      [
+        { v: '', l: 'Toda contabilidad' },
+        { v: 'asiento', l: 'Con asiento' },
+        { v: 'pendiente', l: 'Pendiente' },
+        { v: 'compra', l: 'Compra' },
+        { v: 'error', l: 'Error' },
+        { v: 'no_aplica', l: 'No aplica' },
+      ].forEach(o => {
+        const op = document.createElement('option');
+        op.value = o.v; op.textContent = o.l; op.selected = o.v === invHistAccounting;
+        sel.appendChild(op);
+      });
+      return sel;
+    })()
+  );
+  shell.appendChild(controls);
+
+  const body = h('div', { id: 'inv-price-history-body' },
+    h('div', { style: { color: 'var(--muted2)', fontSize: '12px', padding: '18px 0', textAlign: 'center' } },
+      invHistLoadedKey === key ? 'Preparando historial...' : 'Cargando historial...')
+  );
+  shell.appendChild(body);
+  wrap.appendChild(shell);
+
+  if (invHistLoadedKey !== key) {
+    const payload = {
+      range: invHistRange,
+      limit: 500,
+      requestUserId: user?.id,
+    };
+    if (invHistRange === 'custom') {
+      payload.dateFrom = invHistFrom;
+      payload.dateTo = invHistTo;
+    }
+    const res = await window.api.reports.priceChanges(payload);
+    if (token !== invHistToken) return;
+    if (!res?.ok) {
+      body.innerHTML = `<div class="empty"><p>${esc(res?.error || 'No se pudo cargar el historial')}</p></div>`;
+      return;
+    }
+    invHistRows = res.data?.rows || [];
+    invHistLoadedKey = key;
+  }
+
+  const qNorm = searchNorm(invHistSearch);
+  let rows = [...invHistRows].filter(h => {
+    const acct = invHistAccountingInfo(h);
+    if (invHistSource && (h.source || 'manual') !== invHistSource) return false;
+    if (invHistAccounting && acct.key !== invHistAccounting) return false;
+    if (!qNorm) return true;
+    return matchText(h.product_code, qNorm)
+      || matchText(h.product_name, qNorm)
+      || matchText(h.reason, qNorm)
+      || matchText(h.user_name, qNorm)
+      || matchText(h.accounting_entry_number, qNorm);
+  });
+
+  const summary = rows.reduce((a, h) => {
+    a.costImpact += Number(h.stock_value_delta || 0);
+    a.retailImpact += Number(h.retail_value_delta || 0);
+    a.units += Number(h.stock_at_change || 0);
+    if (Number(h.cost_delta || 0) > 0) a.costUp++;
+    if (Number(h.cost_delta || 0) < 0) a.costDown++;
+    if (invHistAccountingInfo(h).key === 'asiento') a.accounted++;
+    return a;
+  }, { costImpact: 0, retailImpact: 0, units: 0, costUp: 0, costDown: 0, accounted: 0 });
+
+  const metrics = `
+    <div class="metrics" style="grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:12px">
+      <div class="metric">
+        <div class="met-label">Cambios</div>
+        <div class="met-val">${rows.length}</div>
+        <div class="met-foot"><span class="met-badge nu">${summary.costUp} suben · ${summary.costDown} bajan</span></div>
+      </div>
+      <div class="metric">
+        <div class="met-label">Impacto costo</div>
+        <div class="met-val" style="color:${summary.costImpact >= 0 ? 'var(--amber)' : 'var(--green)'}">${signedFmt(summary.costImpact)}</div>
+        <div class="met-foot"><span class="met-badge nu">stock anterior</span></div>
+      </div>
+      <div class="metric">
+        <div class="met-label">Impacto venta</div>
+        <div class="met-val">${signedFmt(summary.retailImpact)}</div>
+        <div class="met-foot"><span class="met-badge nu">valor potencial</span></div>
+      </div>
+      <div class="metric">
+        <div class="met-label">Asientos</div>
+        <div class="met-val">${summary.accounted}</div>
+        <div class="met-foot"><span class="met-badge nu">${summary.units} unidades afectadas</span></div>
+      </div>
+    </div>`;
+
+  const tableRows = rows.length
+    ? rows.map(h => {
+        const date = String(h.created_at || '').split(' ')[0].split('T')[0];
+        const impact = Number(h.stock_value_delta || 0);
+        const impactColor = impact > 0 ? 'var(--amber)' : impact < 0 ? 'var(--green)' : 'var(--muted)';
+        const acct = invHistAccountingInfo(h);
+        const productId = Number(h.product_id || 0);
+        return `
+          <tr>
+            <td style="font-size:11px;color:var(--muted)">${fdate(date)}</td>
+            <td class="tm" style="font-size:11px">${esc(h.product_code || '')}</td>
+            <td>
+              <div class="tb">${esc(h.product_name || 'Producto')}</div>
+              <div class="ts">${esc(h.category || '')}</div>
+            </td>
+            <td><span class="badge n">${sourceLabel[h.source] || esc(h.source || 'Manual')}</span></td>
+            <td style="text-align:right">
+              <div style="font-weight:700">${fmt(h.cost_before || 0)} → ${fmt(h.cost_after || 0)}</div>
+              <div style="font-size:10px;color:var(--muted2)">${signedFmt(h.cost_delta)}</div>
+            </td>
+            <td style="text-align:right">
+              <div style="font-weight:700">${fmt(h.price_before || 0)} → ${fmt(h.price_after || 0)}</div>
+              <div style="font-size:10px;color:var(--muted2)">${signedFmt(h.price_delta)}</div>
+            </td>
+            <td style="text-align:center;font-weight:700">${h.stock_at_change || 0}</td>
+            <td style="text-align:right;font-weight:700;color:${impactColor}">${signedFmt(impact)}</td>
+            <td style="text-align:center">${acct.html}</td>
+            <td style="font-size:11px;color:var(--muted2);max-width:240px">
+              ${esc(h.reason || '—')}<br>
+              <span style="font-size:10px">${esc(h.user_name || 'Sistema')}</span>
+            </td>
+            <td style="text-align:right">
+              <button class="btn btn-ghost btn-sm" data-action="kardex" data-product-id="${productId}">
+                ${svg('chart')} Kardex
+              </button>
+            </td>
+          </tr>`;
+      }).join('')
+    : `<tr><td colspan="11" style="text-align:center;color:var(--muted2);padding:22px">
+         Sin cambios que coincidan con los filtros</td></tr>`;
+
+  body.innerHTML = `
+    ${metrics}
+    <div class="tw" style="max-height:520px;overflow:auto">
+      <table>
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            <th>Código</th>
+            <th>Producto</th>
+            <th>Origen</th>
+            <th style="text-align:right">Costo</th>
+            <th style="text-align:right">Precio final</th>
+            <th style="text-align:center">Stock ant.</th>
+            <th style="text-align:right">Impacto costo</th>
+            <th style="text-align:center">Contabilidad</th>
+            <th>Motivo / Usuario</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>`;
+
+  body.addEventListener('click', e => {
+    const btn = e.target.closest('[data-action="kardex"]');
+    if (!btn) return;
+    const productId = Number(btn.dataset.productId || 0);
+    const prod = DB.products.find(p => Number(p.id) === productId);
+    if (!prod) { toast('Producto no encontrado en inventario activo', 'w'); return; }
+    openKardexModal(prod);
+  });
+}
+
 // ══════════════════════════════════════════════
 // KARDEX — Historial de movimientos por producto
 // ══════════════════════════════════════════════
@@ -395,12 +715,25 @@ async function openKardexModal(p) {
   };
 
   const priceRows = !priceHist?.length
-    ? `<tr><td colspan="7" style="text-align:center;color:var(--muted2);padding:18px">
+    ? `<tr><td colspan="8" style="text-align:center;color:var(--muted2);padding:18px">
          Sin cambios de costo/precio registrados</td></tr>`
     : priceHist.map(h => {
         const fecha = (h.created_at || '').split('T')[0].split(' ')[0];
         const impact = Number(h.stock_value_delta || 0);
         const impactColor = impact > 0 ? 'var(--amber)' : impact < 0 ? 'var(--green)' : 'var(--muted)';
+        const needsAccounting = Math.abs(impact) >= 0.005 && Math.abs(Number(h.cost_delta || 0)) >= 0.005 && (h.source || '') !== 'compra';
+        let accountingCell = '<span class="badge n">N/A</span>';
+        if (h.accounting_entry_number) {
+          accountingCell = `<span class="badge g">${esc(h.accounting_entry_number)}</span>
+            <div style="font-size:10px;color:var(--muted2)">${esc(h.accounting_entry_status || 'confirmado')}</div>`;
+        } else if (h.accounting_error) {
+          accountingCell = `<span class="badge r">Error</span>
+            <div style="font-size:10px;color:var(--muted2);max-width:120px">${esc(h.accounting_error)}</div>`;
+        } else if (needsAccounting) {
+          accountingCell = '<span class="badge a">Pendiente</span>';
+        } else if ((h.source || '') === 'compra') {
+          accountingCell = '<span class="badge n">Compra</span>';
+        }
         return `
           <tr>
             <td style="font-size:11px;color:var(--muted)">${fdate(fecha)}</td>
@@ -415,6 +748,7 @@ async function openKardexModal(p) {
             </td>
             <td style="text-align:center;font-weight:700">${h.stock_at_change || 0}</td>
             <td style="text-align:right;font-weight:700;color:${impactColor}">${signedFmt(impact)}</td>
+            <td style="font-size:11px;text-align:center">${accountingCell}</td>
             <td style="font-size:11px;color:var(--muted2);max-width:180px">
               ${esc(h.reason || '—')}<br>
               <span style="font-size:10px">${esc(h.user_name || '')}</span>
@@ -474,6 +808,7 @@ async function openKardexModal(p) {
             <th style="text-align:right">Precio final</th>
             <th style="text-align:center">Stock ant.</th>
             <th style="text-align:right">Variación</th>
+            <th style="text-align:center">Contab.</th>
             <th>Motivo / Usuario</th>
           </tr>
         </thead>

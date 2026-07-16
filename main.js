@@ -919,7 +919,7 @@ ipcMain.handle('products:update', async (_, { id, data, requestUserId, source, r
       return { ok: false, error: 'Sin permisos' };
     }
     const before = productsRepo.getById(id);
-    productsRepo.update(id, data, {
+    const updateResult = productsRepo.update(id, data, {
       userId: requestUserId,
       source: source || 'manual',
       reason: reason || 'Edición de producto',
@@ -946,7 +946,11 @@ ipcMain.handle('products:update', async (_, { id, data, requestUserId, source, r
       `Motivo: ${reason || 'Edición de producto'}`,
     ].filter(Boolean).join(' | ');
     audit(requestUserId, reqUser.name, 'producto_editado', 'products', id, detail);
-    return { ok: true };
+    const historyId = updateResult?.historyId || null;
+    if (historyId) {
+      _acctHook(() => accountingRepo.generateInventoryRevaluationEntry({ historyId, userId: requestUserId }));
+    }
+    return { ok: true, historyId };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -5615,6 +5619,28 @@ ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) =>
         const tax = (po.tax_amt > 0 && po.subtotal > 0) ? (base / po.subtotal) * po.tax_amt : 0;
         if (accountingRepo.generatePurchaseEntry({ poId: po.id, deltaValue: val, deltaTax: tax, receiveSeq: 1, userId: requestUserId })) created++;
       } catch (e) { failed++; console.error(`[accounting:syncHistorical] compra ${po.id}: ${e.message}`); }
+    }
+
+    // Revalorizaciones de inventario por cambios manuales de costo. Excluye
+    // compras porque esas ya se contabilizan por generatePurchaseEntry().
+    const priceAdjustments = db.prepare(`
+      SELECT h.id FROM product_price_history h
+      WHERE COALESCE(h.source,'manual') != 'compra'
+        AND ABS(COALESCE(h.cost_delta,0)) >= 0.005
+        AND ABS(COALESCE(h.stock_value_delta,0)) >= 0.005
+        AND COALESCE(h.stock_at_change,0) > 0
+        AND h.accounting_entry_id IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM accounting_entries ae
+          WHERE ae.source_module='inventario_valor' AND ae.source_id=h.id
+        )
+      ORDER BY h.created_at ASC, h.id ASC
+      LIMIT 1000
+    `).all();
+    for (const h of priceAdjustments) {
+      try {
+        if (accountingRepo.generateInventoryRevaluationEntry({ historyId: h.id, userId: requestUserId })) created++;
+      } catch (e) { failed++; console.error(`[accounting:syncHistorical] ajuste inventario ${h.id}: ${e.message}`); }
     }
 
     // Abonos (pagos de clientes) no vinculados → Débito Caja/Banco · Crédito CxC.

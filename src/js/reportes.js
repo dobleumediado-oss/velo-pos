@@ -385,6 +385,11 @@ function renderReporteContenido(el, d) {
       const impact = Number(ch.stock_value_delta || 0);
       const retailImpact = Number(ch.retail_value_delta || 0);
       const date = String(ch.created_at || '').split(' ')[0].split('T')[0];
+      const acctText = ch.accounting_entry_number
+        ? ` · Asiento ${ch.accounting_entry_number}`
+        : ch.accounting_error
+          ? ' · Contabilidad: error'
+          : '';
       priceCard.appendChild(h('div', { style: {
         padding: '9px 0',
         borderTop: '1px solid var(--line2)',
@@ -396,7 +401,7 @@ function renderReporteContenido(el, d) {
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
             } }, ch.product_name || 'Producto'),
             h('div', { style: { fontSize: '10px', color: 'var(--muted2)' } },
-              `${ch.product_code || '—'} · ${fdate(date)} · ${ch.source || 'manual'} · ${ch.user_name || 'Sistema'}`),
+              `${ch.product_code || '—'} · ${fdate(date)} · ${ch.source || 'manual'} · ${ch.user_name || 'Sistema'}${acctText}`),
             h('div', { style: {
               fontSize: '10px',
               color: 'var(--muted2)',
@@ -902,6 +907,7 @@ function exportReportePDF() {
         <td style="text-align:right">${ch.stock_at_change || 0}</td>
         <td style="text-align:right;font-weight:700">${impact > 0 ? '+' : ''}${fmt(impact)}</td>
         <td style="text-align:right">${retailImpact > 0 ? '+' : ''}${fmt(retailImpact)}</td>
+        <td>${_esc(ch.accounting_entry_number || (ch.accounting_error ? 'Error' : ''))}</td>
         <td>${_esc(ch.reason || '')}</td>
       </tr>`;
   }).join('');
@@ -1008,9 +1014,10 @@ function exportReportePDF() {
       <th style="text-align:right">Stock ant.</th>
       <th style="text-align:right">Impacto costo</th>
       <th style="text-align:right">Impacto venta</th>
+      <th>Asiento</th>
       <th>Motivo</th>
     </tr></thead>
-    <tbody>${priceRows || '<tr><td colspan="12" style="text-align:center;color:#9ca3af">Sin cambios de costo/precio en el período</td></tr>'}</tbody>
+    <tbody>${priceRows || '<tr><td colspan="13" style="text-align:center;color:#9ca3af">Sin cambios de costo/precio en el período</td></tr>'}</tbody>
   </table>
 
   <div class="foot">

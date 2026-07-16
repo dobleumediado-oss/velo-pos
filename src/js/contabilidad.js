@@ -90,12 +90,14 @@ async function _contRenderBody(body) {
 // DASHBOARD
 // ══════════════════════════════════════════════
 async function _contRenderDash(el) {
-  const [statsRes, finRes] = await Promise.all([
+  const [statsRes, finRes, invAdjRes] = await Promise.all([
     window.api.accounting.getDashboardStats(),
     window.api.financial.getSummary(),
+    window.api.accounting.getEntries({ source_module: 'inventario_valor', limit: 5 }),
   ]);
-  const s   = statsRes?.data  || {};
-  const fin = finRes?.data    || {};
+  const s              = statsRes?.data  || {};
+  const fin            = finRes?.data    || {};
+  const invAdjustments = invAdjRes?.data || [];
 
   const cards = [
     { label: 'Ingresos del período', val: s.totalRevenue  || 0, icon: '📈', cls: 'positive' },
@@ -135,6 +137,38 @@ async function _contRenderDash(el) {
       }
     }, '🔄 Sincronizar histórico')
   ));
+
+  const invAdjCard = h('div', { class: 'card', style: { marginTop: '16px' } });
+  const adjTotal = invAdjustments.reduce((sum, e) => sum + (Number(e.total_debit) || 0), 0);
+  invAdjCard.appendChild(h('div', { class: 'fxb mb8' },
+    h('div', { class: 'card-title' }, 'Ajustes de valor de inventario'),
+    h('span', { style: { fontSize: '11px', color: 'var(--muted2)' } },
+      `${invAdjustments.length} reciente${invAdjustments.length === 1 ? '' : 's'} · ${fmt(adjTotal)}`)
+  ));
+  if (!invAdjustments.length) {
+    invAdjCard.appendChild(h('div', { style: { color: 'var(--muted2)', fontSize: '12px', padding: '10px 0' } },
+      'Sin ajustes automáticos de valorización todavía'));
+  } else {
+    invAdjustments.forEach(e => {
+      invAdjCard.appendChild(h('div', { class: 'fxb', style: {
+        padding: '9px 0',
+        borderTop: '1px solid var(--line2)',
+        gap: '12px'
+      } },
+        h('div', { style: { minWidth: 0 } },
+          h('div', { style: { fontSize: '12px', fontWeight: 700 } }, e.concept || 'Ajuste de inventario'),
+          h('div', { style: { fontSize: '10px', color: 'var(--muted2)' } },
+            `${e.number || '—'} · ${e.date ? fdate(e.date) : '—'} · ${e.status || 'confirmado'}`)
+        ),
+        h('div', { style: { textAlign: 'right', flexShrink: 0 } },
+          h('div', { style: { fontSize: '12px', fontWeight: 800, color: 'var(--accent)' } }, fmt(e.total_debit || 0)),
+          h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '3px 8px', marginTop: '4px' },
+            onclick: () => { _contTab = 'asientos'; renderContabilidad(document.getElementById('page')); } }, 'Ver asiento')
+        )
+      ));
+    });
+  }
+  el.appendChild(invAdjCard);
 }
 
 // ══════════════════════════════════════════════
@@ -1632,6 +1666,8 @@ async function _contRenderConfig(el) {
     { key: 'account_vat_credit', label: 'ITBIS Acreditable (compras)' },
     { key: 'account_expense',    label: 'Cuenta Gastos General' },
     { key: 'account_discount',   label: 'Descuentos en Ventas' },
+    { key: 'account_inventory_gain', label: 'Ajuste inventario - aumento' },
+    { key: 'account_inventory_loss', label: 'Ajuste inventario - disminución' },
   ];
 
   el.appendChild(h('div', { style: { maxWidth: '560px' } },
@@ -1639,12 +1675,14 @@ async function _contRenderConfig(el) {
     h('div', { style: { background: 'var(--surface)', border: '1px solid var(--line2)', borderRadius: '12px', padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' } },
       ...cfgKeys.map(item => {
         const cur = cfg[item.key];
+        const curId = cur?.account_id ?? cur;
+        const curCode = cur?.account_code ?? cur;
         return h('div', null,
           h('label', { class: 'lbl' }, item.label),
           h('select', { class: 'inp', id: `cfg-${item.key}`, 'data-key': item.key },
             h('option', { value: '' }, '— Selecciona cuenta —'),
             ...accts.map(a => {
-              const sel = (cur && (parseInt(cur) === a.id || cur === a.code)) ? { selected: true } : {};
+              const sel = (cur && (parseInt(curId, 10) === a.id || curCode === a.code)) ? { selected: true } : {};
               return h('option', { value: a.id, ...sel }, `${a.code} - ${a.name}`);
             })
           )
@@ -1670,7 +1708,8 @@ async function _contRenderConfig(el) {
 
 async function _saveContConfig() {
   const keys = ['account_cash','account_bank','account_ar','account_ap','account_inventory',
-    'account_revenue','account_cogs','account_tax_payable','account_vat_credit','account_expense','account_discount'];
+    'account_revenue','account_cogs','account_tax_payable','account_vat_credit','account_expense','account_discount',
+    'account_inventory_gain','account_inventory_loss'];
 
   let ok = true;
   for (const key of keys) {

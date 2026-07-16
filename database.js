@@ -43,6 +43,7 @@ function initDB(customDataDir) {
 
   migrateProductsModel();
   createTables();
+  migratePriceHistoryAccountingColumns();
   migratePurchaseColumns();
   migrateTaxColumns();
   migrateECFColumns();
@@ -197,6 +198,8 @@ function createTables() {
       source                TEXT DEFAULT 'manual',
       reason                TEXT DEFAULT '',
       user_id               INTEGER REFERENCES users(id),
+      accounting_entry_id   INTEGER DEFAULT NULL,
+      accounting_error      TEXT DEFAULT '',
       created_at            TEXT DEFAULT (datetime('now','localtime'))
     );
 
@@ -658,6 +661,7 @@ function createTables() {
     CREATE INDEX IF NOT EXISTS idx_inv_product       ON inventory_movements(product_id);
     CREATE INDEX IF NOT EXISTS idx_price_hist_product ON product_price_history(product_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_price_hist_date    ON product_price_history(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_price_hist_accounting ON product_price_history(accounting_entry_id);
     CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);
     CREATE INDEX IF NOT EXISTS idx_purchase_items_po ON purchase_items(purchase_order_id);
     CREATE INDEX IF NOT EXISTS idx_products_barcode  ON products(barcode);
@@ -685,6 +689,28 @@ function migrateProductsModel() {
     db.prepare("ALTER TABLE products ADD COLUMN model TEXT DEFAULT ''").run();
     console.log('[MIGRATE] products.model agregada');
   } catch { /* ya existe */ }
+}
+
+function tableExists(name) {
+  return !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name);
+}
+
+function migratePriceHistoryAccountingColumns() {
+  try {
+    if (!tableExists('product_price_history')) return;
+    const cols = db.prepare('PRAGMA table_info(product_price_history)').all().map(c => c.name);
+    if (!cols.includes('accounting_entry_id')) {
+      db.prepare('ALTER TABLE product_price_history ADD COLUMN accounting_entry_id INTEGER DEFAULT NULL').run();
+      console.log('[MIGRATE] product_price_history.accounting_entry_id agregada');
+    }
+    if (!cols.includes('accounting_error')) {
+      db.prepare("ALTER TABLE product_price_history ADD COLUMN accounting_error TEXT DEFAULT ''").run();
+      console.log('[MIGRATE] product_price_history.accounting_error agregada');
+    }
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_price_hist_accounting ON product_price_history(accounting_entry_id)').run();
+  } catch (e) {
+    console.error('[MIGRATE] product_price_history contabilidad:', e.message);
+  }
 }
 
 function migrateTaxColumns() {
@@ -1274,6 +1300,17 @@ function buildDateFilter(column, { range = 'month', dateFrom = null, dateTo = nu
 // ── Productos ─────────────────────────────────
 const productsRepo = {
   getAll() {
+    const hasAccountingEntries = tableExists('accounting_entries');
+    const accountingSelect = hasAccountingEntries
+      ? `h.accounting_entry_id   AS last_price_change_accounting_entry_id,
+             ae.number               AS last_price_change_accounting_number,
+             ae.status               AS last_price_change_accounting_status,`
+      : `h.accounting_entry_id   AS last_price_change_accounting_entry_id,
+             NULL                    AS last_price_change_accounting_number,
+             NULL                    AS last_price_change_accounting_status,`;
+    const accountingJoin = hasAccountingEntries
+      ? 'LEFT JOIN accounting_entries ae ON ae.id = h.accounting_entry_id'
+      : '';
     return db.prepare(`
       SELECT p.*,
              h.id                    AS last_price_change_id,
@@ -1292,6 +1329,7 @@ const productsRepo = {
              h.wholesale_value_delta AS last_wholesale_value_delta,
              h.source                AS last_price_change_source,
              h.reason                AS last_price_change_reason,
+             ${accountingSelect}
              h.created_at            AS last_price_changed_at
       FROM products p
       LEFT JOIN product_price_history h ON h.id = (
@@ -1300,6 +1338,7 @@ const productsRepo = {
         ORDER BY created_at DESC, id DESC
         LIMIT 1
       )
+      ${accountingJoin}
       WHERE p.active=1
       ORDER BY p.name
     `).all();
@@ -1347,12 +1386,13 @@ const productsRepo = {
              p.stock_min||5,p.unit||'und', p.condition||'nuevo',id);
 
       const after = db.prepare('SELECT * FROM products WHERE id=?').get(id);
-      recordProductPriceHistory(id, before, after, {
+      const historyId = recordProductPriceHistory(id, before, after, {
         userId: opts.userId,
         source: opts.source || 'manual',
         reason: opts.reason || 'Edición de producto',
         stockAtChange: opts.stockAtChange,
       });
+      return { historyId };
     })();
   },
   adjustStock(id, qty, type, reason, saleId = null, userId = null) {
@@ -1384,10 +1424,18 @@ const productsRepo = {
   },
   getPriceHistory(productId, limit = 100) {
     const safeLimit = Math.max(1, Math.min(500, Number.parseInt(limit, 10) || 100));
+    const hasAccountingEntries = tableExists('accounting_entries');
+    const accountingSelect = hasAccountingEntries
+      ? ', ae.number as accounting_entry_number, ae.status as accounting_entry_status'
+      : ', NULL as accounting_entry_number, NULL as accounting_entry_status';
+    const accountingJoin = hasAccountingEntries
+      ? 'LEFT JOIN accounting_entries ae ON ae.id = h.accounting_entry_id'
+      : '';
     return db.prepare(`
-      SELECT h.*, u.name as user_name
+      SELECT h.*, u.name as user_name${accountingSelect}
       FROM product_price_history h
       LEFT JOIN users u ON u.id = h.user_id
+      ${accountingJoin}
       WHERE h.product_id=?
       ORDER BY h.created_at DESC, h.id DESC
       LIMIT ?
@@ -2241,6 +2289,17 @@ const reportsRepo = {
   priceChanges({ range = 'month', dateFrom = null, dateTo = null, limit = 100 } = {}) {
     const safeLimit = Math.max(1, Math.min(500, Number.parseInt(limit, 10) || 100));
     const f = buildDateFilter('h.created_at', { range, dateFrom, dateTo });
+    const hasAccountingEntries = tableExists('accounting_entries');
+    const accountingSelect = hasAccountingEntries
+      ? `,
+             ae.number as accounting_entry_number,
+             ae.status as accounting_entry_status`
+      : `,
+             NULL as accounting_entry_number,
+             NULL as accounting_entry_status`;
+    const accountingJoin = hasAccountingEntries
+      ? 'LEFT JOIN accounting_entries ae ON ae.id = h.accounting_entry_id'
+      : '';
 
     const rows = db.prepare(`
       SELECT h.*,
@@ -2249,10 +2308,11 @@ const reportsRepo = {
              p.cost as current_cost,
              p.price as current_price,
              p.wholesale as current_wholesale,
-             u.name as user_name
+             u.name as user_name${accountingSelect}
       FROM product_price_history h
       LEFT JOIN products p ON p.id = h.product_id
       LEFT JOIN users u ON u.id = h.user_id
+      ${accountingJoin}
       WHERE ${f.sql}
       ORDER BY h.created_at DESC, h.id DESC
       LIMIT ?
@@ -4459,6 +4519,88 @@ const accountingRepo = {
         lines, userId, status: 'confirmado',
       });
     } catch (e) { console.error('[accounting] generatePurchaseEntry:', e.message); return null; }
+  },
+
+  // ── Ajuste de valorización de inventario por cambio manual de costo ───────
+  // Las compras ya debitan Inventario con el valor recibido. Este asiento cubre
+  // solamente cambios de costo que revalorizan stock existente (edición manual,
+  // entrada rápida con costo nuevo, etc.) para mantener 1105 = stock * costo.
+  generateInventoryRevaluationEntry({ historyId, userId } = {}) {
+    try {
+      const modEnabled = db.prepare("SELECT value FROM settings WHERE key='module_contabilidad'").get()?.value;
+      if (modEnabled !== '1') return null;
+      if (!historyId) return null;
+      if (!tableExists('accounting_entries') || !tableExists('accounting_accounts')) return null;
+
+      const hist = db.prepare('SELECT * FROM product_price_history WHERE id=?').get(historyId);
+      if (!hist) return null;
+      if ((hist.source || '') === 'compra') return null;
+
+      const amount = round2(hist.stock_value_delta || 0);
+      const stockAtChange = Number.parseInt(hist.stock_at_change, 10) || 0;
+      if (Math.abs(amount) < 0.005 || Math.abs(hist.cost_delta || 0) < 0.005 || stockAtChange <= 0) return null;
+
+      if (hist.accounting_entry_id) {
+        const linked = db.prepare('SELECT id, number, total_debit, total_credit FROM accounting_entries WHERE id=?').get(hist.accounting_entry_id);
+        if (linked) {
+          return { entryId: linked.id, number: linked.number, totalDebit: linked.total_debit, totalCredit: linked.total_credit };
+        }
+      }
+
+      const existing = db.prepare(
+        "SELECT id, number, total_debit, total_credit FROM accounting_entries WHERE source_module='inventario_valor' AND source_id=?"
+      ).get(historyId);
+      if (existing) {
+        db.prepare("UPDATE product_price_history SET accounting_entry_id=?, accounting_error='' WHERE id=?").run(existing.id, historyId);
+        return { entryId: existing.id, number: existing.number, totalDebit: existing.total_debit, totalCredit: existing.total_credit };
+      }
+
+      const cfg = this.getConfig();
+      const getAccId = (key, fallback) => cfg[key]?.account_id || (fallback ? db.prepare("SELECT id FROM accounting_accounts WHERE code=?").get(fallback)?.id : null);
+      const invAccId  = getAccId('account_inventory', '1105');
+      const gainAccId = getAccId('account_inventory_gain', '4104') || getAccId('account_other_rev', '4104');
+      const lossAccId = getAccId('account_inventory_loss', '6120') || getAccId('account_other_exp', '6120') || getAccId('account_expense', '6120');
+      const product = hist.product_name || hist.product_code || `Producto #${hist.product_id}`;
+      const absAmount = round2(Math.abs(amount));
+
+      if (!invAccId || (amount > 0 && !gainAccId) || (amount < 0 && !lossAccId)) {
+        throw new Error('Faltan cuentas contables para ajuste de inventario');
+      }
+
+      const lines = amount > 0
+        ? [
+            { account_id: invAccId,  debit: absAmount, credit: 0,         description: `Revalorización inventario ${product}` },
+            { account_id: gainAccId, debit: 0,         credit: absAmount, description: `Aumento de costo ${product}` },
+          ]
+        : [
+            { account_id: lossAccId, debit: absAmount, credit: 0,         description: `Disminución de costo ${product}` },
+            { account_id: invAccId,  debit: 0,         credit: absAmount, description: `Revalorización inventario ${product}` },
+          ];
+
+      const date = String(hist.created_at || new Date().toISOString()).split(' ')[0].split('T')[0];
+      const entry = this.createEntry({
+        date,
+        concept:       `Ajuste valor inventario #${historyId} - ${product}`,
+        reference:     `INV-VAL-${historyId}`,
+        source_module: 'inventario_valor',
+        source_id:     historyId,
+        lines,
+        notes:         hist.reason || '',
+        userId:        userId || hist.user_id || null,
+        status:        'confirmado',
+      });
+
+      db.prepare("UPDATE product_price_history SET accounting_entry_id=?, accounting_error='' WHERE id=?").run(entry.entryId, historyId);
+      return entry;
+    } catch (e) {
+      console.error('[accounting] generateInventoryRevaluationEntry:', e.message);
+      try {
+        if (historyId && tableExists('product_price_history')) {
+          db.prepare('UPDATE product_price_history SET accounting_error=? WHERE id=?').run(e.message || 'Error contable', historyId);
+        }
+      } catch {}
+      return null;
+    }
   },
 
   // ══ CUADRES auxiliar ↔ mayor (Fase 4) ════════════════════════════════════
