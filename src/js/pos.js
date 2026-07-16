@@ -1127,6 +1127,7 @@ async function finalizarVenta() {
 	    const savedSale = await window.api.sales.getById({ id: result.saleId }).catch(() => null);
 	    const printItems = savedSale?.items?.length
 	      ? savedSale.items.map(i => ({
+	          product_code:  i.product_code || '',
 	          product_name:  i.product_name,
 	          name:          i.product_name,
 	          qty:           i.qty,
@@ -1141,6 +1142,7 @@ async function finalizarVenta() {
 	          net_subtotal:  i.net_subtotal,
 	        }))
 	      : inv.cart.map(i => ({
+	          product_code: i.product_code || i.code || '',
 	          name:  i.name,
 	          product_name: i.name,
 	          qty:   i.qty,
@@ -1184,6 +1186,9 @@ async function finalizarVenta() {
       customer_phone:   customer.phone   || '',
       customer_email:   customer.email   || '',
       payment_method:  pmeth,
+      payment_amount:  pmeth === 'credito' ? 0 : result.total,
+      balance_after_payment: pmeth === 'credito' ? result.total : 0,
+      transaction_number: result.saleId,
       mix_efec:        mixEfec,
       mix_card:        mixCard,
     });
@@ -1353,10 +1358,22 @@ function previsualizarFactura(sale) {
       <td style="text-align:right;font-weight:600">${fmt(it.price * it.qty)}</td>
     </tr>`).join('');
 
+  const pdfName = `${isFactura ? 'Factura' : 'Cotizacion'}-${String(sale.id).padStart(5, '0')}`;
+
   // Script embebido como string concatenado (evita conflicto con template literal)
   const embeddedScript = [
     '<scr' + 'ipt>',
     'function savePDF(){',
+    `  var suggestedName=${JSON.stringify(pdfName)};`,
+    '  var clone=document.documentElement.cloneNode(true);',
+    '  Array.prototype.slice.call(clone.querySelectorAll(".no-print,script")).forEach(function(el){el.remove();});',
+    '  var html="<!DOCTYPE html>"+clone.outerHTML;',
+    '  if(window.opener&&window.opener.api&&window.opener.api.print&&window.opener.api.print.toPDF){',
+    '    window.opener.api.print.toPDF({html:html,suggestedName:suggestedName}).then(function(r){',
+    '      if(!r||(!r.ok&&!r.canceled)) alert((r&&r.error)||"No se pudo guardar el PDF");',
+    '    });',
+    '    return;',
+    '  }',
     '  var s=document.createElement("style");',
     '  s.textContent=".no-print{display:none!important}";',
     '  document.head.appendChild(s);',

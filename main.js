@@ -912,14 +912,40 @@ ipcMain.handle('products:create', async (_, { data, requestUserId }) => {
   }
 });
 
-ipcMain.handle('products:update', async (_, { id, data, requestUserId }) => {
+ipcMain.handle('products:update', async (_, { id, data, requestUserId, source, reason, stockAtChange }) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
     if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
       return { ok: false, error: 'Sin permisos' };
     }
-    productsRepo.update(id, data);
-    audit(requestUserId, reqUser.name, 'producto_editado', 'products', id, data.name);
+    const before = productsRepo.getById(id);
+    productsRepo.update(id, data, {
+      userId: requestUserId,
+      source: source || 'manual',
+      reason: reason || 'Edición de producto',
+      stockAtChange,
+    });
+    const after = productsRepo.getById(id);
+    const money = v => (Number.parseFloat(v) || 0).toFixed(2);
+    const changes = [];
+    if (before && after) {
+      if (Math.abs((before.cost || 0) - (after.cost || 0)) >= 0.005) {
+        changes.push(`Costo: ${money(before.cost)} -> ${money(after.cost)}`);
+      }
+      if (Math.abs((before.price || 0) - (after.price || 0)) >= 0.005) {
+        changes.push(`Venta: ${money(before.price)} -> ${money(after.price)}`);
+      }
+      if (Math.abs((before.wholesale || 0) - (after.wholesale || 0)) >= 0.005) {
+        changes.push(`Mayorista: ${money(before.wholesale)} -> ${money(after.wholesale)}`);
+      }
+    }
+    const detail = [
+      after?.name || data.name || '',
+      changes.length ? changes.join(' | ') : 'Sin cambio de costo/precio',
+      `Origen: ${source || 'manual'}`,
+      `Motivo: ${reason || 'Edición de producto'}`,
+    ].filter(Boolean).join(' | ');
+    audit(requestUserId, reqUser.name, 'producto_editado', 'products', id, detail);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -957,6 +983,10 @@ ipcMain.handle('products:delete', async (_, { id, requestUserId }) => {
 
 ipcMain.handle('products:getMovements', async (_, { productId }) => {
   return productsRepo.getMovements(productId);
+});
+
+ipcMain.handle('products:getPriceHistory', async (_, { productId, limit } = {}) => {
+  return productsRepo.getPriceHistory(productId, limit);
 });
 
 // ── Clientes ──────────────────────────────────
@@ -1294,6 +1324,18 @@ ipcMain.handle('reports:paymentsHistory', async (_, { range, dateFrom, dateTo, r
   }
 });
 
+ipcMain.handle('reports:priceChanges', async (_, { range, dateFrom, dateTo, limit, requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
+    return { ok: true, data: reportsRepo.priceChanges({ range, dateFrom, dateTo, limit }) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle('reports:lowStock', async () => {
   return reportsRepo.lowStock();
 });
@@ -1567,11 +1609,12 @@ ipcMain.handle('print:onServer', async (_, { html, jobType, referenceId, userId 
 // Universal: sirve para factura, cotización, conduce, abono, reportes, etc.
 ipcMain.handle('print:toPDF', async (_, { html, suggestedName, open } = {}) => {
   try {
-    if (!html) return { ok: false, error: 'Sin contenido para el PDF' };
+    if (!html || !String(html).trim()) return { ok: false, error: 'Sin contenido para el PDF' };
     const os = require('os');
     const tmpFile = path.join(os.tmpdir(), `velo_pdf_${Date.now()}_${Math.random().toString(36).slice(2)}.html`);
     fs.writeFileSync(tmpFile, html, 'utf8');
-    const win = new BrowserWindow({ show: false, width: 816, height: 1056,
+    const win = new BrowserWindow({ show: false, paintWhenInitiallyHidden: true, width: 816, height: 1056,
+      backgroundColor: '#ffffff',
       webPreferences: { nodeIntegration: false, contextIsolation: true } });
 
     let pdfBuf;
@@ -1582,17 +1625,84 @@ ipcMain.handle('print:toPDF', async (_, { html, suggestedName, open } = {}) => {
         win.webContents.once('did-fail-load', (_, __, e) => { clearTimeout(t); reject(new Error(e || 'No se pudo cargar')); });
         win.loadFile(tmpFile);
       });
-      await win.webContents.executeJavaScript(
-        'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))').catch(() => {});
+      const renderInfo = await win.webContents.executeJavaScript(`
+        (async () => {
+          const waitFrame = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+          await waitFrame();
+          try {
+            if (document.fonts && document.fonts.ready) await document.fonts.ready;
+          } catch (_) {}
+          const imgs = Array.from(document.images || []);
+          await Promise.all(imgs.map(img => img.complete
+            ? Promise.resolve()
+            : new Promise(resolve => {
+                const done = () => resolve();
+                img.addEventListener('load', done, { once: true });
+                img.addEventListener('error', done, { once: true });
+                setTimeout(done, 3000);
+              })));
+          await waitFrame();
+          const body = document.body;
+          const de = document.documentElement;
+          const rect = body ? body.getBoundingClientRect() : { width: 0, height: 0 };
+          const text = body ? String(body.innerText || '').trim() : '';
+          return {
+            textLen: text.length,
+            imgCount: imgs.length,
+            w: Math.ceil(Math.max(
+              de ? de.scrollWidth : 0,
+              body ? body.scrollWidth : 0,
+              rect.width || 0,
+              302
+            )),
+            h: Math.ceil(Math.max(
+              de ? de.scrollHeight : 0,
+              body ? body.scrollHeight : 0,
+              rect.height || 0,
+              800
+            )),
+          };
+        })()
+      `);
+      if (!renderInfo?.textLen && !renderInfo?.imgCount) {
+        throw new Error('El documento no generó contenido visible para el PDF');
+      }
+      let visualInfo = { sampled: 0, nonWhite: 0 };
+      try {
+        const shot = await win.webContents.capturePage();
+        const bitmap = shot.resize({ width: 120, height: 160 }).toBitmap();
+        for (let i = 0; i + 3 < bitmap.length; i += 16) {
+          const a = bitmap[i + 3];
+          const c1 = bitmap[i];
+          const c2 = bitmap[i + 1];
+          const c3 = bitmap[i + 2];
+          visualInfo.sampled++;
+          if (a > 8 && (c1 < 245 || c2 < 245 || c3 < 245)) visualInfo.nonWhite++;
+        }
+      } catch {}
+      if (visualInfo.sampled > 0 && visualInfo.nonWhite < 3) {
+        throw new Error('La vista del PDF quedó en blanco. Intenta guardar de nuevo.');
+      }
       // Página a la medida del contenido (documento compacto, sin hojas en blanco).
-      let dims = { w: 302, h: 800 };
-      try { dims = await win.webContents.executeJavaScript('({w:document.body.scrollWidth,h:document.body.scrollHeight})'); } catch {}
+      const dims = {
+        w: Math.max(302, renderInfo?.w || 302),
+        h: Math.max(800, renderInfo?.h || 800),
+      };
       const micron = px => Math.max(20000, Math.round((px || 0) * 264.583));
-      pdfBuf = await win.webContents.printToPDF({
-        printBackground: true,
-        pageSize: { width: micron(dims.w) + 4000, height: micron(dims.h) + 4000 },
-        margins: { top: 0, bottom: 0, left: 0, right: 0 },
-      });
+      const pageRule = String(html).match(/@page[\s\S]{0,240}?size\s*:\s*([^;}{]+)/i);
+      const cssSize = (pageRule?.[1] || '').trim().toLowerCase();
+      const useCssPage = /\bletter\b|\ba4\b|\blegal\b|5\.5in|half-letter/.test(cssSize);
+      const pdfOptions = useCssPage
+        ? { printBackground: true, preferCSSPageSize: true }
+        : {
+            printBackground: true,
+            pageSize: { width: micron(dims.w) + 4000, height: micron(dims.h) + 4000 },
+            margins: { top: 0, bottom: 0, left: 0, right: 0 },
+          };
+      pdfBuf = await win.webContents.printToPDF(pdfOptions);
+      if (!pdfBuf || pdfBuf.length < 1500) {
+        throw new Error('El PDF generado no contiene datos suficientes');
+      }
     } finally {
       try { win.destroy(); } catch {}
       try { fs.unlinkSync(tmpFile); } catch {}
@@ -1742,6 +1852,7 @@ ipcMain.handle('business:resetData', async (_, { requestUserId }) => {
       'cash_sessions',
       'customers',
       'inventory_movements',
+      'product_price_history',
       'products',
       'categories',
       // Compras
@@ -1811,9 +1922,11 @@ ipcMain.handle('business:resetData', async (_, { requestUserId }) => {
 
 ipcMain.handle('backup:create', async (_, { requestUserId }) => {
   try {
+    const biz = currentBusinessLabel();
+    const stamp = new Date().toISOString().split('T')[0];
     const { filePath } = await dialog.showSaveDialog(mainWindow, {
       title: 'Guardar backup',
-      defaultPath: `velo_backup_${new Date().toISOString().split('T')[0]}.db`,
+      defaultPath: `velo_backup_${safeFileSlug(biz.name)}_${stamp}.db`,
       filters: [{ name: 'Database', extensions: ['db'] }]
     });
 
@@ -1822,7 +1935,8 @@ ipcMain.handle('backup:create', async (_, { requestUserId }) => {
     createManualBackup(currentDataDir(), filePath);
 
     const reqUser = authRepo.findById(requestUserId);
-    audit(requestUserId, reqUser?.name || '', 'backup_creado', '', null, filePath);
+    audit(requestUserId, reqUser?.name || '', 'backup_creado', 'backup', null,
+      `Negocio: ${biz.name} (${biz.id}) | Archivo: ${filePath}`);
 
     return { ok: true, path: filePath };
   } catch (e) {
@@ -1855,9 +1969,10 @@ ipcMain.handle('backup:restore', async (_, { requestUserId, fileName } = {}) => 
       filePath = filePaths[0];
     }
 
+    const biz = currentBusinessLabel();
     // Registrar auditoría ANTES de cerrar la DB
     audit(requestUserId, reqUser.name, 'backup_restaurado', 'backup', null,
-      fileName || filePath);
+      `Negocio: ${biz.name} (${biz.id}) | Archivo: ${fileName || filePath}`);
 
     // Cerrar la conexión SQLite antes de copiar el archivo (crítico en Windows)
     const dbInst = require('./database').getDB();
@@ -1975,6 +2090,31 @@ let ACTIVE_DATA_DIR = DATA_DIR;
 let ACTIVE_BUSINESS_ID = null;
 function currentDataDir() { return ACTIVE_DATA_DIR || DATA_DIR; }
 function currentBusinessId() { return ACTIVE_BUSINESS_ID || null; }
+function safeFileSlug(value) {
+  return String(value || 'principal')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 48) || 'principal';
+}
+function currentBusinessLabel() {
+  const activeId = currentBusinessId();
+  if (activeId) {
+    try {
+      const list = businessCtx.loadBusinesses(DATA_DIR) || [];
+      const meta = list.find(b => String(b.id) === String(activeId));
+      return { id: activeId, name: meta?.name || activeId };
+    } catch {
+      return { id: activeId, name: activeId };
+    }
+  }
+  try {
+    const s = settingsRepo.getAll();
+    return { id: 'principal', name: s.biz_name || s.business_name || s.biz || 'Principal' };
+  } catch {
+    return { id: 'principal', name: 'Principal' };
+  }
+}
 
 // Asegurar que el directorio de datos existe
 if (!fs.existsSync(DATA_DIR)) {
@@ -2677,6 +2817,7 @@ ipcMain.handle('importar:rollback', async (_, { ids, requestUserId }) => {
           if (tabla === 'products') {
             // Eliminar movimientos de inventario primero
             db.prepare('DELETE FROM inventory_movements WHERE product_id=?').run(id);
+            db.prepare('DELETE FROM product_price_history WHERE product_id=?').run(id);
             db.prepare('DELETE FROM sale_items WHERE product_id=?').run(id);
             db.prepare('DELETE FROM products WHERE id=?').run(id);
             deleted++;
@@ -2934,14 +3075,14 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, requestUserId } = 
     const runAll = db.transaction(() => {
       // 4a) RESET: vaciar tablas que la migración toca (orden no crítico con FK off)
       const wipe = [
-        'inventory_movements', 'ecf_log', 'ncf_log', 'deliveries',
+        'inventory_movements', 'product_price_history', 'ecf_log', 'ncf_log', 'deliveries',
         'sale_items', 'payments', 'sales', 'customers', 'products',
       ];
       for (const t of wipe) {
         try { db.prepare(`DELETE FROM ${t}`).run(); } catch (_) { /* tabla ausente: ignorar */ }
       }
       // Reset de autoincrement para IDs limpios
-      try { db.prepare(`DELETE FROM sqlite_sequence WHERE name IN ('sales','sale_items','payments','customers','products')`).run(); } catch (_) {}
+      try { db.prepare(`DELETE FROM sqlite_sequence WHERE name IN ('sales','sale_items','payments','customers','products','product_price_history')`).run(); } catch (_) {}
       // Recrear Consumidor Final (id=1) — resolveCust cae aquí por defecto
       db.prepare(`INSERT INTO customers(id, name, active, balance) VALUES (1, 'Consumidor Final', 1, 0)`).run();
 
@@ -3238,16 +3379,27 @@ ipcMain.handle('suppliers:getAll', async () => {
 });
 ipcMain.handle('suppliers:create', async (_, { data, requestUserId }) => {
   try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Solo el administrador puede crear proveedores' };
+    }
     if (!data?.name?.trim()) return { ok: false, error: 'El nombre del proveedor es requerido' };
     const id = suppliersRepo.create(data);
+    audit(requestUserId, reqUser.name, 'proveedor_creado', 'suppliers', id, data.name);
     return { ok: true, id };
   } catch(e) { return { ok: false, error: e.message }; }
 });
-ipcMain.handle('suppliers:update', async (_, { id, data }) => {
+ipcMain.handle('suppliers:update', async (_, { id, data, requestUserId }) => {
   try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Solo el administrador puede editar proveedores' };
+    }
     if (!id) return { ok: false, error: 'ID requerido' };
     if (!data?.name?.trim()) return { ok: false, error: 'El nombre del proveedor es requerido' };
-    suppliersRepo.update(id, data); return { ok: true };
+    suppliersRepo.update(id, data);
+    audit(requestUserId, reqUser.name, 'proveedor_editado', 'suppliers', id, data.name);
+    return { ok: true };
   } catch(e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('suppliers:delete', async (_, { id, requestUserId }) => {
@@ -3275,26 +3427,35 @@ ipcMain.handle('purchases:getById', async (_, { id }) => {
 });
 ipcMain.handle('purchases:create', async (_, data) => {
   try {
+    const reqUser = authRepo.findById(data?.userId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Solo el administrador puede crear órdenes de compra' };
+    }
     if (!data?.items?.length) return { ok: false, error: 'La orden debe tener al menos un producto' };
     for (const item of data.items) {
       if (!item.product_name?.trim()) return { ok: false, error: 'Todos los items deben tener nombre' };
       if (!item.qty_ordered || item.qty_ordered <= 0) return { ok: false, error: 'La cantidad debe ser mayor a 0' };
       if (item.unit_cost < 0) return { ok: false, error: 'El costo no puede ser negativo' };
     }
-    const result = purchasesRepo.create(data); return { ok: true, ...result };
+    const result = purchasesRepo.create({ ...data, cajero: reqUser.name }); return { ok: true, ...result };
   } catch(e) { return { ok: false, error: e.message }; }
 });
-ipcMain.handle('purchases:receive', async (_, { id, items, userId }) => {
+ipcMain.handle('purchases:receive', async (_, { id, items, userId, costs }) => {
   try {
-    const result = purchasesRepo.receive(id, { items, userId });
+    const reqUser = authRepo.findById(userId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Solo el administrador puede recibir compras' };
+    }
+    const result = purchasesRepo.receive(id, { items, userId, userName: reqUser.name, costs });
     // Contabilidad devengada: valor recibido en ESTA recepción → Déb Inventario
     // (+ITBIS Acreditable proporcional) · Créd Cuentas por Pagar.
-    const deltaValue = (items || []).reduce((s, it) =>
+    const deltaValue = result.receivedValue || (items || []).reduce((s, it) =>
       s + ((it.qty_received > 0 ? it.qty_received : 0) * (it.unit_cost || 0)), 0);
+    const taxableBase = result.baseValue || deltaValue;
     _acctHook(() => {
       const po = purchasesRepo.getById(id);
       const deltaTax = (po && po.tax_amt > 0 && po.subtotal > 0)
-        ? (deltaValue / po.subtotal) * po.tax_amt : 0;
+        ? (taxableBase / po.subtotal) * po.tax_amt : 0;
       const seq = (db.prepare("SELECT COUNT(*) c FROM accounting_entries WHERE source_module='compra' AND source_id=?").get(id)?.c || 0) + 1;
       accountingRepo.generatePurchaseEntry({ poId: id, deltaValue, deltaTax, receiveSeq: seq, userId });
     });
@@ -3302,7 +3463,14 @@ ipcMain.handle('purchases:receive', async (_, { id, items, userId }) => {
   } catch(e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('purchases:cancel', async (_, { id, userId }) => {
-  try { purchasesRepo.cancel(id, userId); return { ok: true }; }
+  try {
+    const reqUser = authRepo.findById(userId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Solo el administrador puede cancelar compras' };
+    }
+    purchasesRepo.cancel(id, userId, reqUser.name);
+    return { ok: true };
+  }
   catch(e) { return { ok: false, error: e.message }; }
 });
 
@@ -5440,9 +5608,11 @@ ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) =>
     `).all();
     for (const po of pos) {
       try {
-        const items = db.prepare('SELECT qty_received, unit_cost FROM purchase_items WHERE purchase_order_id=?').all(po.id);
-        const val = items.reduce((s, it) => s + ((it.qty_received || 0) * (it.unit_cost || 0)), 0);
-        const tax = (po.tax_amt > 0 && po.subtotal > 0) ? (val / po.subtotal) * po.tax_amt : 0;
+        const items = db.prepare('SELECT qty_received, unit_cost, allocated_extra_cost FROM purchase_items WHERE purchase_order_id=?').all(po.id);
+        const base = items.reduce((s, it) => s + ((it.qty_received || 0) * (it.unit_cost || 0)), 0);
+        const extra = items.reduce((s, it) => s + (it.allocated_extra_cost || 0), 0);
+        const val = base + extra;
+        const tax = (po.tax_amt > 0 && po.subtotal > 0) ? (base / po.subtotal) * po.tax_amt : 0;
         if (accountingRepo.generatePurchaseEntry({ poId: po.id, deltaValue: val, deltaTax: tax, receiveSeq: 1, userId: requestUserId })) created++;
       } catch (e) { failed++; console.error(`[accounting:syncHistorical] compra ${po.id}: ${e.message}`); }
     }

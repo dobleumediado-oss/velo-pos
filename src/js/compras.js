@@ -153,11 +153,15 @@ async function verOrden(id) {
 
   const statusColor = { pendiente: 'a', recibido: 'g', parcial: 'b', cancelado: 'r' }[po.status] || 'a';
 
+  const totalExtra = (po.freight_cost || 0) + (po.customs_cost || 0)
+    + (po.transport_cost || 0) + (po.other_cost || 0);
   const itemsHtml = (po.items || []).map(i => `
     <tr>
       <td>${i.product_code || '—'}</td>
       <td>${i.product_name}</td>
       <td>${fmt(i.unit_cost)}</td>
+      <td>${i.landed_unit_cost ? fmt(i.landed_unit_cost) : '—'}</td>
+      <td>${i.allocated_extra_cost ? fmt(i.allocated_extra_cost) : '—'}</td>
       <td>${i.qty_ordered}</td>
       <td>${i.qty_received}</td>
       <td>${fmt(i.subtotal)}</td>
@@ -173,10 +177,13 @@ async function verOrden(id) {
     </div>
 
     <table class="tbl" style="margin-bottom:12px">
-      <thead><tr><th>Código</th><th>Producto</th><th>Costo</th><th>Ordenado</th><th>Recibido</th><th>Subtotal</th></tr></thead>
+      <thead><tr><th>Código</th><th>Producto</th><th>Costo base</th><th>Costo real</th><th>Gastos</th><th>Ordenado</th><th>Recibido</th><th>Subtotal</th></tr></thead>
       <tbody>${itemsHtml}</tbody>
     </table>
 
+    ${totalExtra > 0 ? `
+      <div class="tr"><span>Gastos aplicados a mercancía</span><span>${fmt(totalExtra)}</span></div>
+    ` : ''}
     <div class="tr grand"><span>Total</span><span>${fmt(po.total)}</span></div>
     ${po.notes ? `<div style="font-size:12px;color:var(--muted2);margin-top:8px">Nota: ${po.notes}</div>` : ''}
 
@@ -403,6 +410,7 @@ async function recibirOrden(id) {
   const result = await window.api.purchases.getById({ id });
   if (!result.ok || !result.data) { toast('Error al cargar orden', 'err'); return; }
   const po = result.data;
+  window._recepcionPO = po;
 
   const itemsHtml = (po.items || [])
     .filter(i => i.qty_received < i.qty_ordered)
@@ -413,10 +421,12 @@ async function recibirOrden(id) {
         <td style="text-align:center">${i.qty_ordered}</td>
         <td style="text-align:center">${i.qty_received}</td>
         <td style="text-align:center">
-          <input class="inp" type="number" min="0"
+          <input class="inp recv-qty" type="number" min="0"
                  max="${i.qty_ordered - i.qty_received}"
                  value="${i.qty_ordered - i.qty_received}"
-                 id="recv-${i.id}" style="width:70px;text-align:center"/>
+                 id="recv-${i.id}" data-item-id="${i.id}"
+                 oninput="actualizarCostosRecepcion()"
+                 style="width:70px;text-align:center"/>
         </td>
         <td style="text-align:center;font-size:11px;color:var(--muted2)" id="cost-preview-${i.id}">
           ${(() => {
@@ -440,9 +450,33 @@ async function recibirOrden(id) {
     <div class="modal-title">Recibir mercancía</div>
     <div class="modal-sub">OC-${String(id).padStart(4,'0')} · ${po.supplier_name || 'Sin proveedor'}</div>
 
+    <div style="display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px;margin:12px 0">
+      <div class="fg">
+        <label class="lbl">Flete</label>
+        <input class="inp recv-extra-cost" id="recv-freight" type="number" min="0" step="0.01" value="0"
+               oninput="actualizarCostosRecepcion()"/>
+      </div>
+      <div class="fg">
+        <label class="lbl">Aduana</label>
+        <input class="inp recv-extra-cost" id="recv-customs" type="number" min="0" step="0.01" value="0"
+               oninput="actualizarCostosRecepcion()"/>
+      </div>
+      <div class="fg">
+        <label class="lbl">Transporte</label>
+        <input class="inp recv-extra-cost" id="recv-transport" type="number" min="0" step="0.01" value="0"
+               oninput="actualizarCostosRecepcion()"/>
+      </div>
+      <div class="fg">
+        <label class="lbl">Otros gastos</label>
+        <input class="inp recv-extra-cost" id="recv-other" type="number" min="0" step="0.01" value="0"
+               oninput="actualizarCostosRecepcion()"/>
+      </div>
+    </div>
+    <div id="recv-cost-summary" class="alrt b" style="margin-bottom:12px"></div>
+
     <table class="tbl" style="margin:12px 0">
       <thead>
-        <tr><th>Producto</th><th>Ordenado</th><th>Ya recibido</th><th>Recibir ahora</th><th>Costo</th></tr>
+        <tr><th>Producto</th><th>Ordenado</th><th>Ya recibido</th><th>Recibir ahora</th><th>Costo real estimado</th></tr>
       </thead>
       <tbody>${itemsHtml}</tbody>
     </table>
@@ -459,6 +493,80 @@ async function recibirOrden(id) {
       </button>
     </div>
   `, 'modal-xl');
+  actualizarCostosRecepcion();
+}
+
+function _recvNum(id) {
+  return Math.max(0, parseFloat(document.getElementById(id)?.value || '0') || 0);
+}
+
+function calcularCostosRecepcion(po) {
+  const pending = (po?.items || []).filter(i => i.qty_received < i.qty_ordered);
+  const rows = pending.map(i => {
+    const qty = Math.max(0, parseInt(document.getElementById(`recv-${i.id}`)?.value || '0', 10) || 0);
+    const baseLine = Math.round(((i.unit_cost || 0) * qty) * 100) / 100;
+    return { item: i, qty, baseLine };
+  }).filter(r => r.qty > 0);
+
+  const costs = {
+    freight: _recvNum('recv-freight'),
+    customs: _recvNum('recv-customs'),
+    transport: _recvNum('recv-transport'),
+    other: _recvNum('recv-other'),
+  };
+  const extraTotal = Math.round((costs.freight + costs.customs + costs.transport + costs.other) * 100) / 100;
+  const baseTotal = Math.round(rows.reduce((s, r) => s + r.baseLine, 0) * 100) / 100;
+  let assigned = 0;
+  rows.forEach((r, idx) => {
+    let extra = 0;
+    if (extraTotal > 0 && baseTotal > 0) {
+      extra = idx === rows.length - 1
+        ? Math.round((extraTotal - assigned) * 100) / 100
+        : Math.round((extraTotal * (r.baseLine / baseTotal)) * 100) / 100;
+      assigned = Math.round((assigned + extra) * 100) / 100;
+    }
+    r.allocatedExtra = extra;
+    r.landedLine = Math.round((r.baseLine + extra) * 100) / 100;
+    r.landedUnit = r.qty > 0 ? Math.round((r.landedLine / r.qty) * 100) / 100 : (r.item.unit_cost || 0);
+  });
+  return { rows, costs, extraTotal, baseTotal, landedTotal: Math.round((baseTotal + extraTotal) * 100) / 100 };
+}
+
+function actualizarCostosRecepcion() {
+  const po = window._recepcionPO;
+  if (!po) return;
+  const calc = calcularCostosRecepcion(po);
+  const byId = new Map(calc.rows.map(r => [String(r.item.id), r]));
+  (po.items || []).forEach(i => {
+    const el = document.getElementById(`cost-preview-${i.id}`);
+    if (!el) return;
+    const row = byId.get(String(i.id));
+    const prod = DB.products.find(p => p.id === i.product_id);
+    const stockAct = prod ? prod.stock : 0;
+    const costoAct = prod ? prod.cost : 0;
+    const qtyRecib = row?.qty || 0;
+    const unitReal = row?.landedUnit || i.unit_cost || 0;
+    const total = stockAct + qtyRecib;
+    const promedio = total > 0 && unitReal > 0
+      ? Math.round(((stockAct * costoAct) + (qtyRecib * unitReal)) / total * 100) / 100
+      : unitReal;
+    const color = promedio > costoAct ? '#d97706' : promedio < costoAct ? '#16a34a' : '#6b7280';
+    el.innerHTML = '<div>Actual: ' + fmt(costoAct) + '</div>'
+      + '<div>Base: ' + fmt(i.unit_cost || 0) + '</div>'
+      + '<div>Gastos línea: ' + fmt(row?.allocatedExtra || 0) + '</div>'
+      + '<div>Real unit.: ' + fmt(unitReal) + '</div>'
+      + '<div style="font-weight:700;color:' + color + '">Prom: ' + fmt(promedio) + '</div>';
+  });
+
+  const summary = document.getElementById('recv-cost-summary');
+  if (summary) {
+    summary.innerHTML = `
+      <div class="alrt-dot b"></div>
+      <div>
+        <div style="font-weight:700;font-size:12px">Costo real de la recepción: ${fmt(calc.landedTotal)}</div>
+        <div class="alrt-sub">Mercancía: ${fmt(calc.baseTotal)} · Gastos distribuidos: ${fmt(calc.extraTotal)} · Se reparte proporcional al valor de cada línea.</div>
+      </div>`;
+  }
 }
 
 async function confirmarRecepcion(poId) {
@@ -473,18 +581,24 @@ async function confirmarRecepcion(poId) {
       product_id:   i.product_id,
       qty_received: parseInt(document.getElementById(`recv-${i.id}`)?.value) || 0,
       unit_cost:    i.unit_cost,
-      update_cost:  document.getElementById(`cost-${i.id}`)?.checked || false,
     }))
     .filter(i => i.qty_received > 0);
 
   if (!items.length) { toast('Ingresa al menos una cantidad', 'err'); return; }
 
-  const recvResult = await window.api.purchases.receive({ id: poId, items, userId: user.id });
+  const costs = {
+    freight: _recvNum('recv-freight'),
+    customs: _recvNum('recv-customs'),
+    transport: _recvNum('recv-transport'),
+    other: _recvNum('recv-other'),
+  };
+  const recvResult = await window.api.purchases.receive({ id: poId, items, userId: user.id, costs });
   if (!recvResult.ok) { toast(recvResult.error || 'Error al recibir', 'err'); return; }
 
   await reloadProducts();
   closeModal();
-  toast(`✓ Mercancía recibida — OC ${recvResult.status === 'recibido' ? 'completada' : 'parcial'}`, 'ok');
+  const extraMsg = recvResult.landedCost ? ` · Gastos: ${fmt(recvResult.landedCost)}` : '';
+  toast(`✓ Mercancía recibida${extraMsg} — OC ${recvResult.status === 'recibido' ? 'completada' : 'parcial'}`, 'ok');
   renderCompras(document.getElementById('page'));
 }
 
@@ -610,7 +724,7 @@ async function guardarProveedor(id) {
 
   let result;
   if (id) {
-    result = await window.api.suppliers.update({ id, data });
+    result = await window.api.suppliers.update({ id, data, requestUserId: user.id });
   } else {
     result = await window.api.suppliers.create({ data, requestUserId: user.id });
   }
@@ -623,7 +737,7 @@ async function guardarProveedor(id) {
 }
 
 async function eliminarProveedor(id) {
-  const result = await window.api.suppliers.delete({ id });
+  const result = await window.api.suppliers.delete({ id, requestUserId: user.id });
   if (!result.ok) { toast(result.error || 'Error', 'err'); return; }
   closeModal();
   toast('Proveedor eliminado');

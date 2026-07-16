@@ -133,6 +133,13 @@ function _getCategoryConfig(category) {
   };
 }
 
+function _printProductCode(item) {
+  const direct = item?.product_code || item?.code || item?.sku;
+  if (direct) return direct;
+  const prod = (DB?.products || []).find(p => p.id === item?.product_id);
+  return prod?.code || '';
+}
+
 // ── Guard contra impresión duplicada ──────────
 // Evita reenviar el mismo documento si el usuario presiona "Imprimir"
 // varias veces muy rápido mientras el trabajo anterior sigue en curso.
@@ -197,6 +204,7 @@ function printReceipt(sale, isReprint = false) {
       applied_invoice:  sale.applied_invoice || null,
       cajero:        sale.cajero || user?.name || '',
 	      items: (sale.items || []).map(i => ({
+	        product_code: _printProductCode(i),
 	        product_name: i.product_name || i.name || '',
 	        qty:          i.qty  || 1,
 	        unit_price:   i.unit_price || i.price || 0,
@@ -215,6 +223,13 @@ function printReceipt(sale, isReprint = false) {
       tax_amt:       sale.tax_amt      || sale.itbis   || 0,
       total:         sale.total        || 0,
       payment_method: sale.payment_method || sale.pay || 'efectivo',
+      payment_amount: sale.payment_amount ?? sale.paid_amount ?? null,
+      paid_amount:    sale.paid_amount ?? sale.payment_amount ?? null,
+      balance_after_payment: sale.balance_after_payment ?? sale.balance_after ?? null,
+      receipt_number: sale.receipt_number || sale.last_receipt_number || sale.numero_recibo || '',
+      receipt_numbers: sale.receipt_numbers || sale._recibos || '',
+      transaction_number: sale.transaction_number || sale.transaction_id || sale.id || '',
+      notes: sale.notes || '',
       // NCF real de la venta — nunca inventar uno
       ncf:           sale.ncf || '',
       // Pago mixto
@@ -235,7 +250,7 @@ function printReceipt(sale, isReprint = false) {
     const _optsConEstilos = { ...plantilla.opciones, _estilos: _estilosReal };
     const html = plantilla.render(saleForPlant, cfg, _optsConEstilos);
     _openPrintWindow(html, 'ticket', sale.id, isReprint);
-    return;
+    return html;
   }
 
   // ── Fallback: sistema clásico de líneas ──────
@@ -338,7 +353,7 @@ function printReceipt(sale, isReprint = false) {
   lines.push('');
   lines.push('');
 
-  _sendToPrinter(lines, 'ticket', sale.id, isReprint);
+  return _sendToPrinter(lines, 'ticket', sale.id, isReprint);
 }
 
 // ══════════════════════════════════════════════
@@ -735,6 +750,7 @@ function _sendToPrinter(lines, jobType = '', referenceId = null, isReprint = fal
 </body></html>`;
 
   _openPrintWindow(html, jobType, referenceId, isReprint);
+  return html;
 }
 
 // ── Abrir ventana de impresión ────────────────
@@ -743,20 +759,160 @@ function _sendToPrinter(lines, jobType = '', referenceId = null, isReprint = fal
 // cotización, conduce, abono, reportes, etc. sin duplicar lógica.
 // Se guarda en window.* para compartir un binding único entre todos los scripts.
 window._pdfSaveRequest = null;
+window._printPreviewJob = null;
+window._printPreviewBypass = false;
 
 // Envuelve la llamada de impresión de cualquier documento para guardarlo en PDF.
 // Uso: guardarDocumentoPDF(() => printReceipt(sale, true), 'Factura-00123')
 function guardarDocumentoPDF(buildAndPrintFn, suggestedName) {
-  window._pdfSaveRequest = { name: suggestedName || 'documento' };
-  try { buildAndPrintFn(); }
-  finally { window._pdfSaveRequest = null; }   // se limpia tras la llamada síncrona
+  const request = { name: suggestedName || 'documento' };
+  window._pdfSaveRequest = request;
+
+  const finishWithHTML = (html) => {
+    // Normalmente _openPrintWindow consume esta solicitud y abre el preview.
+    // Si una ruta solo retorna HTML, lo usamos como respaldo para que PDF e
+    // impresión siempre partan del mismo documento.
+    if (typeof html === 'string' && html.trim() && window._pdfSaveRequest === request) {
+      window._pdfSaveRequest = null;
+      _openPrintPreview(html, {
+        jobType: 'documento',
+        mode: 'pdf',
+        suggestedName: request.name,
+        source: 'html',
+      });
+      return;
+    }
+    if (window._pdfSaveRequest === request) window._pdfSaveRequest = null;
+  };
+
+  try {
+    const result = (typeof buildAndPrintFn === 'function') ? buildAndPrintFn() : buildAndPrintFn;
+    if (result && typeof result.then === 'function') {
+      result.then(finishWithHTML).catch(e => {
+        if (window._pdfSaveRequest === request) window._pdfSaveRequest = null;
+        toast(e?.message || 'No se pudo preparar el PDF', 'err');
+      });
+      return;
+    }
+    finishWithHTML(result);
+  } catch (e) {
+    if (window._pdfSaveRequest === request) window._pdfSaveRequest = null;
+    toast(e?.message || 'No se pudo preparar el PDF', 'err');
+  }
 }
 
 async function _guardarPDF(html, suggestedName) {
   if (!window.api?.print?.toPDF) { toast('Guardar PDF no disponible', 'err'); return; }
+  const raw = String(html || '');
+  const visibleText = raw
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .trim();
+  if (!visibleText && !/<img\b/i.test(raw)) {
+    toast('El documento no tiene contenido para guardar', 'err');
+    return { ok: false, error: 'Documento vacío' };
+  }
   const r = await window.api.print.toPDF({ html, suggestedName });
   if (r?.ok) toast('✓ PDF guardado');
   else if (!r?.canceled) toast(r?.error || 'No se pudo guardar el PDF', 'err');
+  return r;
+}
+
+function _printPreviewLabel(jobType, mode) {
+  const category = _categoryForJobType(jobType);
+  const label = PRINT_CATEGORIES[category]?.label || 'Documento';
+  return mode === 'pdf' ? `Guardar PDF · ${label}` : `Vista previa · ${label}`;
+}
+
+function _suggestedPrintName(jobType, referenceId) {
+  const base = String(jobType || _categoryForJobType(jobType) || 'documento')
+    .replace(/[^\w\-. ]/g, '_') || 'documento';
+  return referenceId ? `${base}-${String(referenceId).padStart(5, '0')}` : base;
+}
+
+function _htmlForPreview(html) {
+  const previewStyle = `
+    <style>
+      @media screen {
+        .no-print, #_velo_toolbar { display:none !important; }
+        html { background:#f3f4f6 !important; }
+        body { margin-left:auto !important; margin-right:auto !important; }
+      }
+    </style>`;
+  return html.includes('</head>')
+    ? html.replace('</head>', `${previewStyle}</head>`)
+    : previewStyle + html;
+}
+
+function _openPrintPreview(html, opts = {}) {
+  if (!html) { toast('No hay contenido para mostrar', 'err'); return; }
+  if (typeof openModal !== 'function') {
+    if (opts.mode === 'pdf') _guardarPDF(html, opts.suggestedName);
+    else _dispatchPrintWindow(html, opts.jobType, opts.referenceId, opts.isReprint);
+    return;
+  }
+
+  const job = {
+    html,
+    jobType: opts.jobType || '',
+    referenceId: opts.referenceId ?? null,
+    isReprint: !!opts.isReprint,
+    suggestedName: opts.suggestedName || _suggestedPrintName(opts.jobType, opts.referenceId),
+    mode: opts.mode || 'print',
+    source: opts.source || 'document',
+  };
+  window._printPreviewJob = job;
+
+  const primaryLabel = job.mode === 'pdf' ? 'Guardar PDF' : 'Imprimir';
+  const primaryAction = job.mode === 'pdf' ? '_printPreviewSavePDF()' : '_printPreviewPrint()';
+  openModal(`
+    <div class="modal-title">${_escHtml(_printPreviewLabel(job.jobType, job.mode))}</div>
+    <div class="modal-sub">Revisa el documento antes de imprimir o guardar.</div>
+    <div style="border:1px solid var(--line);border-radius:10px;background:#fff;overflow:hidden">
+      <iframe id="_print_preview_frame"
+        title="Vista previa de impresión"
+        style="width:100%;height:min(68vh,720px);border:0;background:#fff;display:block"></iframe>
+    </div>
+    <div class="modal-foot" style="flex-wrap:wrap">
+      <button class="btn btn-out" onclick="_printPreviewClose()">Cerrar</button>
+      ${job.mode === 'pdf'
+        ? `<button class="btn btn-out" onclick="_printPreviewPrint()">${svg('print')} Imprimir</button>`
+        : `<button class="btn btn-out" onclick="_printPreviewSavePDF()">${svg('pdf')} Guardar PDF</button>`}
+      <button class="btn btn-dark" onclick="${primaryAction}">
+        ${job.mode === 'pdf' ? svg('pdf') : svg('print')} ${primaryLabel}
+      </button>
+    </div>
+  `, 'modal-xl');
+
+  const frame = document.getElementById('_print_preview_frame');
+  if (frame) frame.srcdoc = _htmlForPreview(html);
+}
+
+function _printPreviewClose() {
+  window._printPreviewJob = null;
+  if (typeof closeModal === 'function') closeModal();
+}
+
+async function _printPreviewSavePDF() {
+  const job = window._printPreviewJob;
+  if (!job) return;
+  await _guardarPDF(job.html, job.suggestedName);
+}
+
+function _printPreviewPrint() {
+  const job = window._printPreviewJob;
+  window._printPreviewJob = null;
+  if (!job) return;
+  if (typeof closeModal === 'function') closeModal();
+  window._printPreviewBypass = true;
+  try {
+    if (job.source === 'html') _dispatchPrintHTML(job.html, job.jobType || 'reporte');
+    else _openPrintWindow(job.html, job.jobType, job.referenceId, job.isReprint);
+  } finally {
+    window._printPreviewBypass = false;
+  }
 }
 
 // ── Multi-terminal: elección de destino de impresión ─────────────────────────
@@ -797,14 +953,22 @@ function _printTargetHere() {
 }
 
 function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = false) {
-  // Intercepción: si se pidió guardar en PDF, guardar y no imprimir.
+  // Intercepción: si se pidió guardar en PDF, mostrar preview y guardar desde ahí.
   if (window._pdfSaveRequest) {
     const name = window._pdfSaveRequest.name;
     window._pdfSaveRequest = null;
-    _guardarPDF(html, name);
+    _openPrintPreview(html, { jobType, referenceId, isReprint, mode: 'pdf', suggestedName: name });
+    return;
+  }
+  if (!window._printPreviewBypass) {
+    _openPrintPreview(html, { jobType, referenceId, isReprint, mode: 'print' });
     return;
   }
 
+  _dispatchPrintWindow(html, jobType, referenceId, isReprint);
+}
+
+function _dispatchPrintWindow(html, jobType = '', referenceId = null, isReprint = false) {
   // Multi-terminal: terminal cliente SIN impresora física → ofrecer imprimir en
   // el servidor (mostrador) o aquí eligiendo impresora. En local/servidor o con
   // impresora configurada, no aplica (flujo normal).
@@ -815,13 +979,6 @@ function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = fa
 
   const category = _categoryForJobType(jobType);
   const catCfg    = _getCategoryConfig(category);
-
-  // Vista previa: forzada por configuración de la categoría, o porque
-  // "imprimir automático" está desactivado para tickets. No aplica a
-  // reimpresiones explícitas — el usuario ya pidió imprimir a propósito.
-  const showPreview = catCfg.preview ||
-    (category === 'ticket' && !isReprint && !catCfg.autoPrint);
-  if (showPreview) { _openPrintWindowFallback(html); return; }
 
   const printerName = catCfg.printer || _getSavedPrinter();
   const printerType = typeof detectPrinterType === 'function'
@@ -986,14 +1143,22 @@ function printHTML(html, category = 'reporte') {
   if (window._pdfSaveRequest) {
     const name = window._pdfSaveRequest.name;
     window._pdfSaveRequest = null;
-    _guardarPDF(html, name);
+    _openPrintPreview(html, { jobType: category, mode: 'pdf', suggestedName: name, source: 'html' });
     return;
   }
+  if (!window._printPreviewBypass) {
+    _openPrintPreview(html, { jobType: category, mode: 'print', source: 'html' });
+    return;
+  }
+
+  _dispatchPrintHTML(html, category);
+}
+
+function _dispatchPrintHTML(html, category = 'reporte') {
   // Multi-terminal: reportes también respetan la elección de destino (cliente sin
   // impresora → servidor / aquí).
   if (_shouldOfferServerPrint()) { _offerPrintTarget(html, category, null); return; }
   const catCfg = _getCategoryConfig(category);
-  if (catCfg.preview) { _openPrintWindowFallback(html); return; }
 
   if (window.api?.print?.html) {
     _printDispatch({ html, printerName: catCfg.printer || undefined, jobType: category, referenceId: null, userId: user?.id })

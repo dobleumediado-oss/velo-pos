@@ -43,6 +43,59 @@ function ventasCalcIncludedTotals(items, { type = 'factura', discPct = 0 } = {})
   return { subtotal, grossSubtotal, discAmt, taxAmt, total };
 }
 
+function ventasEsc(v) {
+  return String(v == null ? '' : v)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function ventasItemCode(item) {
+  const direct = item?.product_code || item?.code || item?.sku;
+  if (direct) return direct;
+  const prod = (DB?.products || []).find(p => p.id === item?.product_id);
+  return prod?.code || '';
+}
+
+function ventasLineFiscal(item, sale) {
+  const qty = Number(item?.qty) || 0;
+  const unit = Number(item?.unit_price ?? item?.price) || 0;
+  const storedSubtotal = Number(item?.subtotal);
+  const hasSnapshot =
+    (item?.net_subtotal !== null && item?.net_subtotal !== undefined) ||
+    (item?.tax_amt !== null && item?.tax_amt !== undefined);
+
+  if (hasSnapshot) {
+    const gross = Number.isFinite(storedSubtotal) ? storedSubtotal : ventasRound2(unit * qty);
+    const tax = ventasRound2(Number(item?.tax_amt) || 0);
+    const net = item?.net_subtotal !== null && item?.net_subtotal !== undefined
+      ? ventasRound2(Number(item.net_subtotal) || 0)
+      : ventasRound2(gross - tax);
+    return {
+      qty,
+      unitNet: qty ? ventasRound2(net / qty) : 0,
+      net,
+      tax,
+      gross: ventasRound2(net + tax),
+    };
+  }
+
+  const disc = Math.min(100, Math.max(0, parseFloat(sale?.discount_pct || sale?.disc || 0) || 0));
+  const factor = 1 - (disc / 100);
+  const net = ventasRound2((Number.isFinite(storedSubtotal) ? storedSubtotal : unit * qty) * factor);
+  const shouldTax = (sale?.type || 'factura') === 'factura' && (Number(sale?.tax_amt || sale?.itbis || 0) > 0);
+  const pct = shouldTax ? ventasTaxPct(item, sale?.tax_pct || CFG?.itbis || 18) : 0;
+  const tax = pct > 0 ? ventasRound2(net * (pct / 100)) : 0;
+  return {
+    qty,
+    unitNet: qty ? ventasRound2(net / qty) : unit,
+    net,
+    tax,
+    gross: ventasRound2(net + tax),
+  };
+}
+
 function renderVentas(el) {
   el.innerHTML = '';
 
@@ -709,6 +762,7 @@ async function confirmarConversionCotizacion() {
 	  const convertedSale = await window.api.sales.getById({ id: result.saleId }).catch(() => null);
 	  const convertedItems = convertedSale?.items?.length
 	    ? convertedSale.items.map(i => ({
+	        product_code: ventasItemCode(i),
 	        product_name: i.product_name,
 	        qty: i.qty,
 	        unit_price: i.unit_price,
@@ -750,24 +804,32 @@ async function confirmarConversionCotizacion() {
 
 async function openDetalleVentaModal(s) {
   const sale  = await window.api.sales.getById({ id: s.id });
+  const detail = sale || s || {};
   const items = sale?.items || [];
 
-  const itemsRows = items.map(i => `
-    <tr>
-      <td>${i.product_name || i.name}</td>
-      <td style="text-align:center">${i.qty}</td>
-      <td style="text-align:right">${fmt(i.unit_price || i.price)}</td>
-      <td style="text-align:right;font-weight:600">
-        ${fmt((i.unit_price || i.price) * i.qty)}</td>
-    </tr>`).join('');
+  const itemsRows = items.map(i => {
+    const f = ventasLineFiscal(i, detail);
+    return `
+      <tr>
+        <td style="font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap">
+          ${ventasEsc(ventasItemCode(i) || '—')}
+        </td>
+        <td style="min-width:190px">${ventasEsc(i.product_name || i.name || 'Producto')}</td>
+        <td style="text-align:right">${fmt(f.unitNet)}</td>
+        <td style="text-align:center;font-weight:700">${f.qty}</td>
+        <td style="text-align:right;color:var(--muted)">${fmt(f.net)}</td>
+        <td style="text-align:right;color:${f.tax > 0 ? 'var(--amber)' : 'var(--muted2)'}">${fmt(f.tax)}</td>
+        <td style="text-align:right;font-weight:700">${fmt(f.gross)}</td>
+      </tr>`;
+  }).join('');
 
-  const method  = s.payment_method || s.pay || '';
-  const fecha   = (s.created_at || s.date || '').split('T')[0].split(' ')[0];
-  const taxAmt  = s.tax_amt  || s.itbis    || 0;
-  const discAmt = s.discount_amt || s.discAmt || 0;
-  const discPct = s.discount_pct || s.disc   || 0;
-  const tieneNcf = !!(s.ncf);
-  const ecfOk    = s.ecf_status === 'Aceptado';
+  const method  = detail.payment_method || detail.pay || '';
+  const fecha   = (detail.created_at || detail.date || '').split('T')[0].split(' ')[0];
+  const taxAmt  = detail.tax_amt  || detail.itbis    || 0;
+  const discAmt = detail.discount_amt || detail.discAmt || 0;
+  const discPct = detail.discount_pct || detail.disc   || 0;
+  const tieneNcf = !!(detail.ncf);
+  const ecfOk    = detail.ecf_status === 'Aceptado';
 
   // Sección e-CF en el detalle
   const ecfSection = tieneNcf ? `
@@ -775,7 +837,7 @@ async function openDetalleVentaModal(s) {
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div>
           <div style="font-size:11px;color:var(--muted);margin-bottom:2px">Comprobante Fiscal Electrónico</div>
-          <div style="font-family:monospace;font-weight:700;font-size:13px">${s.ncf}</div>
+          <div style="font-family:monospace;font-weight:700;font-size:13px">${detail.ncf}</div>
           ${ecfOk
             ? `<div style="font-size:10px;color:var(--green);margin-top:2px">✓ Aceptado por DGII</div>`
             : `<div style="font-size:10px;color:var(--muted2);margin-top:2px">Pendiente de envío</div>`}
@@ -786,8 +848,8 @@ async function openDetalleVentaModal(s) {
                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 2L11 13"/><path d="M22 2L15 22 11 13 2 9l20-7z"/></svg>
                Enviar e-CF
              </button>`
-          : `${s.ecf_qr
-              ? `<img src="${s.ecf_qr}" style="width:56px;height:56px;border-radius:4px" title="QR e-CF"/>`
+          : `${detail.ecf_qr
+              ? `<img src="${detail.ecf_qr}" style="width:56px;height:56px;border-radius:4px" title="QR e-CF"/>`
               : ''}`}
       </div>
     </div>` : '';
@@ -795,17 +857,17 @@ async function openDetalleVentaModal(s) {
   openModal(`
     <div class="modal-title">Venta ${typeof facturaLabel === 'function' ? facturaLabel(sale || s) : '#'+String(s.id).padStart(5,'0')}</div>
     <div class="modal-sub">
-      ${fdate(fecha)} · Cajero: ${s.cajero || '—'}
+      ${fdate(fecha)} · Cajero: ${detail.cajero || '—'}
     </div>
     <div class="g2" style="margin-bottom:14px">
       <div>
         <div class="lbl">Cliente</div>
-        <div style="font-weight:600">${s.customer_name || s.clientName || 'Consumidor Final'}</div>
-        <div class="ts">${s.customer_rnc || s.clientCedula || 'Sin RNC'}</div>
+        <div style="font-weight:600">${detail.customer_name || detail.clientName || 'Consumidor Final'}</div>
+        <div class="ts">${detail.customer_rnc || detail.clientCedula || 'Sin RNC'}</div>
       </div>
       <div>
         <div class="lbl">Comprobante</div>
-        <div style="font-weight:600;text-transform:capitalize">${s.type || 'factura'}</div>
+        <div style="font-weight:600;text-transform:capitalize">${detail.type || 'factura'}</div>
         <div class="ts">Pago: ${method}</div>
       </div>
     </div>
@@ -813,22 +875,25 @@ async function openDetalleVentaModal(s) {
     <div class="tw" style="margin-bottom:12px">
       <table>
         <thead><tr>
-          <th>Producto</th>
-          <th style="text-align:center">Cant.</th>
-          <th style="text-align:right">Precio</th>
-          <th style="text-align:right">Subtotal</th>
+          <th>Código</th>
+          <th>Nombre artículo</th>
+          <th style="text-align:right">Precio venta</th>
+          <th style="text-align:center">Cantidad</th>
+          <th style="text-align:right">Monto bruto</th>
+          <th style="text-align:right">ITBIS</th>
+          <th style="text-align:right">Importe</th>
         </tr></thead>
-        <tbody>${itemsRows || '<tr><td colspan="4" style="color:var(--muted2);text-align:center">Sin detalle</td></tr>'}</tbody>
+        <tbody>${itemsRows || '<tr><td colspan="7" style="color:var(--muted2);text-align:center">Sin detalle</td></tr>'}</tbody>
       </table>
     </div>
     <div class="card" style="background:var(--surface2)">
-        <div class="tr"><span>Subtotal sin ITBIS</span><span>${fmt(s.subtotal)}</span></div>
+        <div class="tr"><span>Monto bruto</span><span>${fmt(detail.subtotal)}</span></div>
       ${discPct > 0
         ? `<div class="tr"><span>Descuento (${discPct}%)</span>
            <span>-${fmt(discAmt)}</span></div>` : ''}
         ${taxAmt > 0
-          ? `<div class="tr"><span>ITBIS (${s.tax_pct || CFG.itbis || 18}%)</span><span>${fmt(taxAmt)}</span></div>` : ''}
-      <div class="tr grand"><span>TOTAL</span><span>${fmt(s.total)}</span></div>
+          ? `<div class="tr"><span>ITBIS (${detail.tax_pct || CFG.itbis || 18}%)</span><span>${fmt(taxAmt)}</span></div>` : ''}
+      <div class="tr grand"><span>Importe / Total</span><span>${fmt(detail.total)}</span></div>
     </div>
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
@@ -858,7 +923,7 @@ async function openDetalleVentaModal(s) {
            </button>`
         : ''}
     </div>
-  `, 'modal-lg');
+  `, 'modal-xl');
 }
 
 // ── Anulación (solo admin) ────────────────────
@@ -942,8 +1007,9 @@ async function reimprimirVenta(saleId) {
         customer_rnc:    sale.customer_rnc   || '',
         customer_address: _cust?.address || '',
         customer_phone:   _cust?.phone   || '',
-        customer_email:   _cust?.email   || '',
+	        customer_email:   _cust?.email   || '',
 	        items:           (sale.items || []).map(i => ({
+	          product_code:  ventasItemCode(i),
 	          product_name: i.product_name,
 	          qty:          i.qty,
 	          unit_price:   i.unit_price,
@@ -960,6 +1026,12 @@ async function reimprimirVenta(saleId) {
         tax_amt:         sale.tax_amt      || 0,
         total:           sale.total,
         payment_method:  sale.payment_method,
+        payment_amount:  sale.payment_amount,
+        balance_after_payment: sale.balance_after_payment,
+        receipt_number:  sale.last_receipt_number,
+        receipt_numbers: sale.receipt_numbers,
+        transaction_number: sale.id,
+        notes:           sale.notes || '',
         cajero:          sale.cajero,
         // NCF real de la venta (factura) o nota de crédito B04 (devolución),
         // y el NCF que la nota modifica — antes la reimpresión no los pasaba.
@@ -992,12 +1064,16 @@ async function guardarVentaPDF(saleId) {
     customer_name: sale.customer_name || 'Consumidor Final', customer_rnc: sale.customer_rnc || '',
     customer_address: _custPdf?.address || '', customer_phone: _custPdf?.phone || '', customer_email: _custPdf?.email || '',
 	    items: (sale.items || []).map(i => ({
+	      product_code: ventasItemCode(i),
 	      product_name: i.product_name, qty: i.qty, unit_price: i.unit_price, unit_cost: i.unit_cost || 0,
 	      subtotal: i.subtotal, taxable: i.taxable, tax_pct: i.tax_pct,
 	      tax_amt: i.tax_amt, net_subtotal: i.net_subtotal,
 	    })),
     subtotal: sale.subtotal, discount_pct: sale.discount_pct || 0, discount_amt: sale.discount_amt || 0,
     tax_amt: sale.tax_amt || 0, total: sale.total, payment_method: sale.payment_method,
+    payment_amount: sale.payment_amount, balance_after_payment: sale.balance_after_payment,
+    receipt_number: sale.last_receipt_number, receipt_numbers: sale.receipt_numbers,
+    transaction_number: sale.id, notes: sale.notes || '',
     cajero: sale.cajero, ncf: sale.ncf || '', tax_pct: sale.tax_pct, modifies_ncf: sale.modifies_ncf || '',
     original_sale_id: sale.original_sale_id || null,
     original_numero_factura: sale.original_numero_factura,

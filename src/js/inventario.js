@@ -203,6 +203,11 @@ function renderInvTable() {
   // Antes: ~900 nodos DOM con h() para 100 productos → lento
   // Ahora: 1 innerHTML con template string → instantáneo
   const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const signedFmt = n => {
+    const v = Number(n) || 0;
+    if (Math.abs(v) < 0.005) return fmt(0);
+    return `${v > 0 ? '+' : '-'}${fmt(Math.abs(v))}`;
+  };
 
   // Función que genera el HTML de una fila (índice = posición en prods)
   const rowHTML = (p, idx) => {
@@ -217,6 +222,20 @@ function renderInvTable() {
           p.condition === 'reacondicionado' ? 'Reacond.' :
           p.condition === 'consignacion' ? 'Consig.' : 'Especial'
         }</span>` : '';
+    const hasChange = !!p.last_price_change_id;
+    const costDelta = Number(p.last_cost_delta || 0);
+    const priceDelta = Number(p.last_price_delta || 0);
+    const changeTone = costDelta > 0 ? 'var(--amber)' : costDelta < 0 ? 'var(--green)' : 'var(--muted)';
+    const changeDate = p.last_price_changed_at
+      ? fdate(String(p.last_price_changed_at).split(' ')[0].split('T')[0])
+      : '';
+    const changeCell = hasChange
+      ? `<div style="font-size:11px;line-height:1.35">
+           <div style="font-weight:700;color:${changeTone}">Costo ${signedFmt(costDelta)}</div>
+           <div style="color:var(--muted2)">Venta ${signedFmt(priceDelta)}</div>
+           <div style="color:var(--muted2);font-size:10px">${changeDate}</div>
+         </div>`
+      : `<span style="font-size:11px;color:var(--muted2)">—</span>`;
     return `<tr data-idx="${idx}">
       <td class="tm" style="font-size:11px">${esc(p.code)}</td>
       <td>
@@ -240,6 +259,7 @@ function renderInvTable() {
       </td>
       <td style="font-size:12px;color:var(--muted)">${fmt(p.wholesale)}</td>
       <td style="font-size:12px;color:var(--muted)">${fmt(p.cost)}</td>
+      <td>${changeCell}</td>
       <td>
         <div class="flex" style="gap:3px">
           <button class="btn btn-ghost btn-sm" title="Ver kardex" data-action="kardex" data-idx="${idx}">${svg('chart')}</button>
@@ -268,7 +288,7 @@ function renderInvTable() {
         <thead><tr>
           <th>Código</th><th>Producto</th><th>Modelo</th><th>Categoría</th>
           <th>Stock</th><th>Mín</th><th>Precio</th>
-          <th>Mayorista</th><th>Costo</th><th></th>
+          <th>Mayorista</th><th>Costo</th><th>Último cambio</th><th></th>
         </tr></thead>
         <tbody>${firstRows}</tbody>
       </table>
@@ -323,7 +343,18 @@ function renderInvTable() {
 // ══════════════════════════════════════════════
 async function openKardexModal(p) {
   // Cargar movimientos desde SQLite
-  const movs = await window.api.products.getMovements({ productId: p.id });
+  const [movs, priceHist] = await Promise.all([
+    window.api.products.getMovements({ productId: p.id }),
+    window.api.products.getPriceHistory
+      ? window.api.products.getPriceHistory({ productId: p.id, limit: 100 })
+      : Promise.resolve([]),
+  ]);
+  const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const signedFmt = n => {
+    const v = Number(n) || 0;
+    if (Math.abs(v) < 0.005) return fmt(0);
+    return `${v > 0 ? '+' : '-'}${fmt(Math.abs(v))}`;
+  };
 
   const typeLabel = {
     entrada:    { l: 'Entrada',    c: 'var(--green)' },
@@ -353,6 +384,40 @@ async function openKardexModal(p) {
             <td style="font-size:11px;color:var(--muted2);max-width:180px">
               ${m.reason || '—'}<br>
               <span style="font-size:10px">${m.user_name || ''}</span>
+            </td>
+          </tr>`;
+      }).join('');
+
+  const sourceLabel = {
+    manual: 'Manual',
+    compra: 'Compra',
+    entrada_rapida: 'Entrada',
+  };
+
+  const priceRows = !priceHist?.length
+    ? `<tr><td colspan="7" style="text-align:center;color:var(--muted2);padding:18px">
+         Sin cambios de costo/precio registrados</td></tr>`
+    : priceHist.map(h => {
+        const fecha = (h.created_at || '').split('T')[0].split(' ')[0];
+        const impact = Number(h.stock_value_delta || 0);
+        const impactColor = impact > 0 ? 'var(--amber)' : impact < 0 ? 'var(--green)' : 'var(--muted)';
+        return `
+          <tr>
+            <td style="font-size:11px;color:var(--muted)">${fdate(fecha)}</td>
+            <td><span class="badge n">${sourceLabel[h.source] || esc(h.source || 'Manual')}</span></td>
+            <td style="text-align:right">
+              <div style="font-weight:700">${fmt(h.cost_before)} → ${fmt(h.cost_after)}</div>
+              <div style="font-size:10px;color:var(--muted2)">${signedFmt(h.cost_delta)}</div>
+            </td>
+            <td style="text-align:right">
+              <div style="font-weight:700">${fmt(h.price_before)} → ${fmt(h.price_after)}</div>
+              <div style="font-size:10px;color:var(--muted2)">${signedFmt(h.price_delta)}</div>
+            </td>
+            <td style="text-align:center;font-weight:700">${h.stock_at_change || 0}</td>
+            <td style="text-align:right;font-weight:700;color:${impactColor}">${signedFmt(impact)}</td>
+            <td style="font-size:11px;color:var(--muted2);max-width:180px">
+              ${esc(h.reason || '—')}<br>
+              <span style="font-size:10px">${esc(h.user_name || '')}</span>
             </td>
           </tr>`;
       }).join('');
@@ -393,6 +458,26 @@ async function openKardexModal(p) {
           </tr>
         </thead>
         <tbody>${rows}</tbody>
+      </table>
+    </div>
+
+    <div style="font-weight:700;font-size:12px;margin:16px 0 8px">
+      Historial de costo/precio
+    </div>
+    <div class="tw" style="max-height:300px;overflow-y:auto">
+      <table>
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            <th>Origen</th>
+            <th style="text-align:right">Costo</th>
+            <th style="text-align:right">Precio final</th>
+            <th style="text-align:center">Stock ant.</th>
+            <th style="text-align:right">Variación</th>
+            <th>Motivo / Usuario</th>
+          </tr>
+        </thead>
+        <tbody>${priceRows}</tbody>
       </table>
     </div>
 
@@ -573,7 +658,12 @@ async function confirmarEntrada() {
           : newCost;
       }
       await window.api.products.update({
-        id, data: { ...p, cost: costoFinal }, requestUserId: user.id,
+        id,
+        data: { ...p, cost: costoFinal },
+        requestUserId: user.id,
+        source: 'entrada_rapida',
+        reason,
+        stockAtChange: p.stock,
       });
     }
   }
@@ -704,17 +794,20 @@ function openProductoModal(p = null) {
         <div class="fg">
           <label class="lbl">Costo (RD$) *</label>
           <input class="inp" id="pf-cost" type="number" min="0" placeholder="0"
-                 value="${isEdit ? p.cost : ''}" oninput="pfCalcMargen()"/>
+                 value="${isEdit ? p.cost : ''}" data-original="${isEdit ? p.cost : ''}"
+                 oninput="pfCalcMargen()"/>
         </div>
         <div class="fg">
           <label class="lbl">Precio Detalle Final *</label>
           <input class="inp" id="pf-price" type="number" min="0" placeholder="0"
-                 value="${isEdit ? p.price : ''}" oninput="pfCalcMargen()"/>
+                 value="${isEdit ? p.price : ''}" data-original="${isEdit ? p.price : ''}"
+                 oninput="pfCalcMargen()"/>
         </div>
         <div class="fg">
           <label class="lbl">Precio Mayorista Final</label>
           <input class="inp" id="pf-wholesale" type="number" min="0" placeholder="0"
-                 value="${isEdit ? p.wholesale : ''}"/>
+                 value="${isEdit ? p.wholesale : ''}" data-original="${isEdit ? p.wholesale : ''}"
+                 oninput="pfCalcMargen()"/>
         </div>
       </div>
       <div style="display:flex;align-items:center;gap:10px;margin:0 0 10px;
@@ -731,6 +824,7 @@ function openProductoModal(p = null) {
         <span style="font-size:11px;color:var(--muted2)">incluido en el precio final</span>
       </div>
       <div id="pf-margen" style="font-size:11px;color:var(--muted);margin-top:-6px;margin-bottom:10px"></div>
+      <div id="pf-price-change-preview" style="font-size:11px;color:var(--muted);margin-top:-4px;margin-bottom:10px"></div>
 
     <hr style="margin:12px 0;border:none;border-top:1px solid var(--line)"/>
     <div style="font-weight:700;font-size:12px;margin-bottom:10px">Stock</div>
@@ -767,8 +861,11 @@ function pfToggleTax() {
 }
 
 function pfCalcMargen() {
-  const cost  = parseFloat(document.getElementById('pf-cost')?.value)  || 0;
-  const price = parseFloat(document.getElementById('pf-price')?.value) || 0;
+  const costEl = document.getElementById('pf-cost');
+  const priceEl = document.getElementById('pf-price');
+  const wholesaleEl = document.getElementById('pf-wholesale');
+  const cost  = parseFloat(costEl?.value)  || 0;
+  const price = parseFloat(priceEl?.value) || 0;
   const taxable = !!document.getElementById('pf-taxable')?.checked;
   const taxPct = taxable ? (parseFloat(document.getElementById('pf-tax-pct')?.value) || 18) : 0;
   const netPrice = taxable && taxPct > 0 ? price / (1 + (taxPct / 100)) : price;
@@ -783,6 +880,26 @@ function pfCalcMargen() {
   } else {
     el.textContent = '';
   }
+
+  const prev = document.getElementById('pf-price-change-preview');
+  if (!prev) return;
+  const originalCost = parseFloat(costEl?.dataset?.original);
+  const originalPrice = parseFloat(priceEl?.dataset?.original);
+  const originalWholesale = parseFloat(wholesaleEl?.dataset?.original);
+  const wholesale = parseFloat(wholesaleEl?.value) || price;
+  const changes = [];
+  const addChange = (label, oldVal, newVal) => {
+    if (!Number.isFinite(oldVal)) return;
+    const delta = Math.round((newVal - oldVal) * 100) / 100;
+    if (Math.abs(delta) < 0.005) return;
+    changes.push(`${label}: ${fmt(oldVal)} → ${fmt(newVal)} (${delta > 0 ? '+' : '-'}${fmt(Math.abs(delta))})`);
+  };
+  addChange('Costo', originalCost, cost);
+  addChange('Detalle', originalPrice, price);
+  addChange('Mayorista', originalWholesale, wholesale);
+  prev.textContent = changes.length
+    ? `Se registrará historial: ${changes.join(' · ')}`
+    : '';
 }
 
 // Generar código automático a partir del nombre

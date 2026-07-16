@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('api', {
     adjustStock:  (data)     => ipcRenderer.invoke('products:adjustStock', data),
     delete:       (data)     => ipcRenderer.invoke('products:delete', data),
     getMovements: (data)     => ipcRenderer.invoke('products:getMovements', data),
+    getPriceHistory: (data)  => ipcRenderer.invoke('products:getPriceHistory', data),
   },
 
   // ── Clientes ──────────────────────────────
@@ -88,6 +89,7 @@ contextBridge.exposeInMainWorld('api', {
     lowStock:     ()         => ipcRenderer.invoke('reports:lowStock'),
     creditAlerts: ()         => ipcRenderer.invoke('reports:creditAlerts'),
     monthlyTrend: (data)     => ipcRenderer.invoke('reports:monthlyTrend', data),
+    priceChanges: (data)     => ipcRenderer.invoke('reports:priceChanges', data),
   },
 
   // ── Auditoría ─────────────────────────────

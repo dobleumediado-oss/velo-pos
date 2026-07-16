@@ -98,6 +98,126 @@ const c3 = DB.salesRepo.create({ customer: { id: custId, name: 'x' }, items: [it
 ok(near(c3.total, 100), `producto exento total 100 (obtuvo ${c3.total})`);
 ok(near(c3.taxAmt, 0), `producto exento sin ITBIS (obtuvo ${c3.taxAmt})`);
 
+console.log('\n== C3. Historial de cambios de costo/precio ==');
+const histProdId = DB.productsRepo.create({
+  code: 'PH1', name: 'Producto con Historial', cost: 100, price: 150,
+  wholesale: 140, stock: 5, taxable: 1, tax_pct: 18,
+});
+const histBefore = DB.productsRepo.getById(histProdId);
+DB.productsRepo.update(histProdId, {
+  ...histBefore,
+  cost: 120,
+  price: 180,
+  wholesale: 160,
+}, { userId, source: 'manual', reason: 'cambio test' });
+const histRows = DB.productsRepo.getPriceHistory(histProdId);
+ok(histRows.length === 1, `edición manual registra 1 cambio (obtuvo ${histRows.length})`);
+ok(near(histRows[0].cost_before, 100) && near(histRows[0].cost_after, 120), 'historial guarda costo antes/después');
+ok(near(histRows[0].price_delta, 30), `historial guarda variación precio +30 (obtuvo ${histRows[0].price_delta})`);
+ok(histRows[0].stock_at_change === 5, `historial guarda stock afectado 5 (obtuvo ${histRows[0].stock_at_change})`);
+ok(near(histRows[0].stock_value_delta, 100), `historial valoriza variación costo 5*20=100 (obtuvo ${histRows[0].stock_value_delta})`);
+const histListed = DB.productsRepo.getAll().find(p => p.id === histProdId);
+ok(near(histListed.last_cost_delta, 20), `getAll expone último cambio de costo +20 (obtuvo ${histListed.last_cost_delta})`);
+
+const buyProdId = DB.productsRepo.create({
+  code: 'PH2', name: 'Producto Compra Historial', cost: 50, price: 100,
+  wholesale: 90, stock: 10, taxable: 1, tax_pct: 18,
+});
+db.exec(`
+  CREATE TABLE IF NOT EXISTS suppliers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    contact TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    email TEXT DEFAULT '',
+    rnc TEXT DEFAULT '',
+    address TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    status TEXT DEFAULT 'activo',
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS purchase_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_id INTEGER REFERENCES suppliers(id),
+    supplier_name TEXT DEFAULT '',
+    status TEXT DEFAULT 'pendiente' CHECK(status IN ('pendiente','recibido','parcial','cancelado')),
+    subtotal REAL DEFAULT 0,
+    tax_amt REAL DEFAULT 0,
+    total REAL DEFAULT 0,
+    notes TEXT DEFAULT '',
+    user_id INTEGER REFERENCES users(id),
+    cajero TEXT DEFAULT '',
+    received_at TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS purchase_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id),
+    product_id INTEGER REFERENCES products(id),
+    product_code TEXT DEFAULT '',
+    product_name TEXT NOT NULL,
+    unit_cost REAL NOT NULL DEFAULT 0,
+    qty_ordered INTEGER NOT NULL DEFAULT 0,
+    qty_received INTEGER NOT NULL DEFAULT 0,
+    subtotal REAL DEFAULT 0
+  );
+`);
+const po = DB.purchasesRepo.create({
+  supplierName: 'Proveedor Historial',
+  items: [{
+    product_id: buyProdId,
+    product_code: 'PH2',
+    product_name: 'Producto Compra Historial',
+    unit_cost: 70,
+    qty_ordered: 10,
+  }],
+  userId,
+  cajero: 'Test',
+});
+const poItem = DB.purchasesRepo.getById(po.poId).items[0];
+DB.purchasesRepo.receive(po.poId, { items: [{ ...poItem, qty_received: 10 }], userId });
+const buyHist = DB.productsRepo.getPriceHistory(buyProdId);
+ok(buyHist.length === 1 && buyHist[0].source === 'compra', 'recepción de compra registra historial con origen compra');
+ok(near(buyHist[0].cost_before, 50) && near(buyHist[0].cost_after, 60), `compra pondera costo 50→60 (obtuvo ${buyHist[0].cost_after})`);
+ok(buyHist[0].stock_at_change === 10, `compra afecta stock previo 10 (obtuvo ${buyHist[0].stock_at_change})`);
+ok(near(buyHist[0].stock_value_delta, 100), `compra valoriza variación previa 10*10=100 (obtuvo ${buyHist[0].stock_value_delta})`);
+
+const landedProdId = DB.productsRepo.create({
+  code: 'PH3', name: 'Producto Costo Real', cost: 50, price: 100,
+  wholesale: 90, stock: 10, taxable: 1, tax_pct: 18,
+});
+const poLanded = DB.purchasesRepo.create({
+  supplierName: 'Proveedor Flete',
+  items: [{
+    product_id: landedProdId,
+    product_code: 'PH3',
+    product_name: 'Producto Costo Real',
+    unit_cost: 60,
+    qty_ordered: 10,
+  }],
+  userId,
+  cajero: 'Test',
+});
+const landedItem = DB.purchasesRepo.getById(poLanded.poId).items[0];
+const recvLanded = DB.purchasesRepo.receive(poLanded.poId, {
+  items: [{ ...landedItem, qty_received: 10 }],
+  userId,
+  userName: 'Test',
+  costs: { freight: 100 },
+});
+const landedAfter = DB.productsRepo.getById(landedProdId);
+const landedPoAfter = DB.purchasesRepo.getById(poLanded.poId);
+const landedHist = DB.productsRepo.getPriceHistory(landedProdId);
+ok(near(recvLanded.receivedValue, 700), `recepción con flete reconoce costo real 700 (obtuvo ${recvLanded.receivedValue})`);
+ok(near(landedPoAfter.freight_cost, 100) && near(landedPoAfter.landed_cost, 100), 'orden acumula flete/costo real');
+ok(near(landedPoAfter.items[0].landed_unit_cost, 70), `línea guarda costo real unitario 70 (obtuvo ${landedPoAfter.items[0].landed_unit_cost})`);
+ok(near(landedAfter.cost, 60), `costo promedio ponderado usa costo real 70 y queda 60 (obtuvo ${landedAfter.cost})`);
+ok(landedHist[0].reason.includes('Costo real: 70'), 'historial explica costo real usado en la compra');
+const priceReport = DB.reportsRepo.priceChanges({ range: 'all', limit: 20 });
+ok(priceReport.summary.count >= 2, `reporte general incluye cambios de precio (${priceReport.summary.count})`);
+ok(priceReport.rows.some(r => r.product_id === buyProdId), 'reporte lista cambio generado por compra');
+ok(priceReport.rows.some(r => r.product_id === landedProdId && r.reason.includes('Costo real: 70')), 'reporte muestra cambio por costo real de recepción');
+
 console.log('\n== D. Venta a crédito sube el balance del cliente ==');
 const balBefore = DB.customersRepo.getById(custId).balance;
 const d = DB.salesRepo.create({ customer: { id: custId, name: 'Taller Pérez' }, items: [item(1)], payment: { method: 'credito' }, user, type: 'factura' });
@@ -142,6 +262,37 @@ ok(round2(0.1 + 0.2) === 0.3, 'round2 corrige 0.1+0.2 → 0.3');
 ok(round2(1.005 * 100) === 100.5 && round2(236.004) === 236, 'round2 a 2 decimales');
 ok(round2(200 * 0.18) === 36, 'round2(200*0.18) = 36 (ITBIS)');
 ok(round2(100 / 3) === 33.33, 'round2(100/3) = 33.33');
+
+console.log('\n== K. Plantilla A4: factura histórica con ITBIS calculable ==');
+const vm = require('vm');
+global.buildLogoHeader = () => '';
+global.facturaLabel = s => s.numero_factura_fmt || String(s.id || '');
+global.facturaLabelOriginal = () => '';
+vm.runInThisContext(fs.readFileSync(path.join(__dirname, '../src/js/plantillas.js'), 'utf8'));
+const legacyHtml = renderCartaRecibo({
+  id: 2335,
+  numero_factura_fmt: '00002335',
+  type: 'factura',
+  status: 'completed',
+  date: '2026-06-27',
+  customer_name: 'MARCIAL NUÑEZ ROSARIO',
+  payment_method: 'efectivo',
+  tax_pct: 18,
+  tax_amt: 0,
+  subtotal: 16152.54,
+  total: 16152.54,
+  cajero: 'Test',
+  items: [
+    { product_code: '57054-16100', product_name: 'EJE COMPLETO TRANSMISION', qty: 1, unit_price: 10593.22, subtotal: 10593.22 },
+    { product_code: '5H491-16250', product_name: 'ENGRANAJE DOBLE DE LA TRANSMISION', qty: 2, unit_price: 2779.66, subtotal: 5559.32 },
+  ],
+}, { biz_name: 'EQUIPARTS', biz_rnc: '131-96863-5', biz_addr: 'La Vega', biz_phone: '809', receipt_msg: 'Gracias' }, {
+  logo: false, rnc: true, ncf: true, mensaje: true, cedula: true,
+});
+ok(legacyHtml.includes('RECIBO DE PAGO'), 'A4 pagada se titula RECIBO DE PAGO');
+ok(legacyHtml.includes('Código') && legacyHtml.includes('ITBIS') && legacyHtml.includes('Importe'), 'A4 muestra Código, ITBIS e Importe');
+ok(legacyHtml.includes('2,907.46'), 'A4 calcula ITBIS desde líneas legacy sin tax_amt');
+ok(legacyHtml.includes('19,060.00'), 'A4 calcula total con impuestos desde líneas legacy');
 
 console.log('\n== I. Normalización de búsqueda (lib/text-normalize) ==');
 const { searchNorm, digitsOf } = require('../lib/text-normalize');

@@ -169,9 +169,9 @@ function getSampleSale(cfg) {
     // NCF de muestra (solo para la vista previa) — deriva "B01 Crédito Fiscal"
 	    ncf:            'B0100000237',
 	    items: [
-	      { product_name: 'Servicio de instalación y configuración del sistema', qty: 1, unit_price: 472, subtotal: 472, tax_pct: 18, tax_amt: 72, net_subtotal: 400, taxable: 1 },
-	      { product_name: 'Migración y validación de datos iniciales',           qty: 2, unit_price: 177, subtotal: 354, tax_pct: 18, tax_amt: 54, net_subtotal: 300, taxable: 1 },
-	      { product_name: 'Soporte técnico y ajustes de plantilla A4',           qty: 1, unit_price: 47.20, subtotal: 47.20, tax_pct: 18, tax_amt: 7.20, net_subtotal: 40, taxable: 1 },
+	      { product_code: 'SRV-001', product_name: 'Servicio de instalación y configuración del sistema', qty: 1, unit_price: 472, subtotal: 472, tax_pct: 18, tax_amt: 72, net_subtotal: 400, taxable: 1 },
+	      { product_code: 'SRV-002', product_name: 'Migración y validación de datos iniciales',           qty: 2, unit_price: 177, subtotal: 354, tax_pct: 18, tax_amt: 54, net_subtotal: 300, taxable: 1 },
+	      { product_code: 'SRV-003', product_name: 'Soporte técnico y ajustes de plantilla A4',           qty: 1, unit_price: 47.20, subtotal: 47.20, tax_pct: 18, tax_amt: 7.20, net_subtotal: 40, taxable: 1 },
 	    ],
 	    subtotal:        740,
     discount_pct:    0,
@@ -204,11 +204,6 @@ function _docLabel(sale) {
   return 'RECIBO DE COMPRA';
 }
 
-// ¿Mostrar ITBIS? Solo en facturas con monto > 0
-function _showItbis(sale) {
-  return sale.type === 'factura' && (sale.tax_amt || 0) > 0;
-}
-
 function _lineGross(i) {
   const qty = Number(i.qty || 1);
   if (i.subtotal !== undefined && i.subtotal !== null) return Number(i.subtotal || 0);
@@ -220,13 +215,13 @@ function _lineTax(i, sale) {
   if (i.taxable === 0 || i.taxable === false || i.taxable === '0') return 0;
   const taxPct = Number(i.tax_pct != null ? i.tax_pct : (sale?.tax_pct != null ? sale.tax_pct : 0));
   if (!taxPct || taxPct <= 0) return 0;
-  const gross = _lineGross(i);
-  return gross - (gross / (1 + (taxPct / 100)));
+  return _lineGross(i) * (taxPct / 100);
 }
 
 function _lineNet(i, sale) {
   if (i.net_subtotal !== undefined && i.net_subtotal !== null) return Number(i.net_subtotal || 0);
-  return _lineGross(i) - _lineTax(i, sale);
+  if (i.tax_amt !== undefined && i.tax_amt !== null) return _lineGross(i) - _lineTax(i, sale);
+  return _lineGross(i);
 }
 
 function _lineNetUnit(i, sale) {
@@ -236,6 +231,71 @@ function _lineNetUnit(i, sale) {
 
 function _lineImporte(i, sale) {
   return _lineNet(i, sale) + _lineTax(i, sale);
+}
+
+function _sumLines(sale, fn) {
+  return (sale.items || []).reduce((sum, item) => sum + Number(fn(item, sale) || 0), 0);
+}
+
+function _displayTaxAmt(sale) {
+  const headerTax = Number(sale.tax_amt || sale.itbis || 0);
+  if (headerTax > 0) return headerTax;
+  if (sale.type !== 'factura') return 0;
+  return _sumLines(sale, _lineTax);
+}
+
+function _displaySubtotal(sale) {
+  const headerSubtotal = Number(sale.subtotal || 0);
+  if (headerSubtotal > 0) return headerSubtotal;
+  return _sumLines(sale, _lineNet);
+}
+
+function _displayDiscount(sale) {
+  return Number(sale.discount_amt || sale.discAmt || 0);
+}
+
+function _displayTotal(sale) {
+  const headerTax = Number(sale.tax_amt || sale.itbis || 0);
+  const headerTotal = Number(sale.total || 0);
+  if (headerTax > 0 || sale.type !== 'factura') return headerTotal;
+  const tax = _displayTaxAmt(sale);
+  if (tax <= 0) return headerTotal;
+  return _displaySubtotal(sale) - _displayDiscount(sale) + tax;
+}
+
+// ¿Mostrar ITBIS? En facturas con ITBIS guardado o calculable desde líneas legacy.
+function _showItbis(sale) {
+  return sale.type === 'factura' && _displayTaxAmt(sale) > 0;
+}
+
+function _receiptNumber(sale) {
+  return sale.receipt_number || sale.last_receipt_number || sale.numero_recibo
+    || sale.receipt_numbers || sale._recibos || '';
+}
+
+function _paidAmount(sale) {
+  if (sale.payment_amount != null) return Number(sale.payment_amount || 0);
+  if (sale.paid_amount != null) return Number(sale.paid_amount || 0);
+  if ((sale.payment_method || '').toLowerCase() !== 'credito' && sale.type === 'factura') {
+    return _displayTotal(sale);
+  }
+  return 0;
+}
+
+function _balanceAfterPayment(sale) {
+  if (sale.balance_after_payment != null) return Number(sale.balance_after_payment || 0);
+  if (sale.balance_after != null) return Number(sale.balance_after || 0);
+  if ((sale.payment_method || '').toLowerCase() !== 'credito' && sale.type === 'factura') return 0;
+  return Math.max(0, _displayTotal(sale) - _paidAmount(sale));
+}
+
+function _paymentStatusLabel(sale) {
+  if (sale.status === 'cancelled') return 'Anulada';
+  if (sale.type === 'cotizacion') return 'Pendiente';
+  if (sale.type === 'devolucion') return 'Aplicada';
+  if (_balanceAfterPayment(sale) <= 0.005 && _paidAmount(sale) > 0) return 'Pagada';
+  if ((sale.payment_method || '').toLowerCase() !== 'credito' && sale.type === 'factura') return 'Pagada';
+  return 'Pendiente';
 }
 
 // ¿Mostrar NCF? Solo en facturas con NCF disponible
@@ -590,25 +650,37 @@ function renderCartaRecibo(sale, cfg, opts) {
   const method    = (sale.payment_method || 'efectivo').toLowerCase();
   const showTax   = _showItbis(sale);
   const taxPct    = Number(sale.tax_pct != null ? sale.tax_pct : 18);
+  const displaySubtotal = _displaySubtotal(sale);
+  const displayTax      = _displayTaxAmt(sale);
+  const displayDiscount = _displayDiscount(sale);
+  const displayTotal    = _displayTotal(sale);
+  const paidAmount      = _paidAmount(sale);
+  const balanceAfter    = _balanceAfterPayment(sale);
+  const receiptNo       = _receiptNumber(sale);
+  const statusLabel     = _paymentStatusLabel(sale);
   // Documentos monetarios (todos menos conduce/reporte sin importe)
   const showMoney = !isConduce && !isReporte;
 
-  const docWord   = _a4DocTitle(sale);
+  const paidReceipt = isFactura && statusLabel === 'Pagada';
+  const docWord   = paidReceipt ? 'RECIBO DE PAGO' : _a4DocTitle(sale);
   const docNum    = facturaLabel(sale).replace(/^#/, '');
   const showNum   = !isReporte;
 
   // ── Filas de artículos ──────────────────────────────
   const rows = (sale.items || []).map((i, idx) => {
     const qty   = Number(i.qty || 1);
+    const code  = i.product_code || i.code || i.sku || '—';
     const unitNet = showTax ? _lineNetUnit(i, sale) : Number(i.unit_price || i.price || 0);
+    const lineNet = showTax ? _lineNet(i, sale) : (qty * unitNet);
     const lineTax = showTax ? _lineTax(i, sale) : 0;
     const importe = showTax ? _lineImporte(i, sale) : (qty * unitNet);
     return `
     <tr>
-      <td class="c-idx">${idx + 1}</td>
+      <td class="c-code">${_esc(code)}</td>
       <td class="c-desc">${_esc(i.product_name || i.name || '')}</td>
+      ${showMoney ? `<td class="c-num">${_n2(unitNet)}</td>` : ''}
       <td class="c-num">${qty.toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-      ${showMoney ? `<td class="c-num">${_n2(unitNet)}</td>
+      ${showMoney ? `<td class="c-num">${_n2(lineNet)}</td>
       ${showTax ? `<td class="c-num">${_n2(lineTax)}</td>` : ''}
       <td class="c-num it-total">${_n2(importe)}</td>` : ''}
     </tr>`;
@@ -659,6 +731,15 @@ function renderCartaRecibo(sale, cfg, opts) {
   const summary = `<div class="summary">${sumItems.map(([k, v]) =>
     `<div class="s"><div class="sk">${k}</div><div class="sv">${v}</div></div>`).join('')}</div>`;
 
+  const paySummary = showMoney && !isCotizacion ? `
+    <div class="legacy-pay">
+      <div><b>Representante</b><span>${_esc(sale.cajero || '')}</span></div>
+      <div><b>Forma de pago</b><span>${_esc(_metodoPagoLabel(method))}</span></div>
+      <div><b>Tipo de factura</b><span>${_esc(_tipoFacturacion(sale))}</span></div>
+      <div class="lp-wide"><b>Observaciones</b><span>${_esc(sale.notes || 'No aceptamos devoluciones. Cambios solamente antes de 24 horas.')}</span></div>
+      <div><b>Número transacción</b><span>${_esc(sale.transaction_number || sale.id || '—')}</span></div>
+    </div>` : '';
+
   // ── Bloque de cliente (campos ocultos si faltan) ────
   const cliLines = [];
   if (opts.cedula && sale.customer_rnc) {
@@ -678,10 +759,12 @@ function renderCartaRecibo(sale, cfg, opts) {
   const totalsBox = showMoney ? `
     <div class="foot-wrap">
       <div class="totals">
-        <div class="tr"><span>Sub Total sin impuestos</span><span>${_n2(sale.subtotal)}</span></div>
-        <div class="tr"><span>Descuento global</span><span>${sale.discount_amt > 0 ? '-' : ''}${_n2(sale.discount_amt)}</span></div>
-        ${showTax ? `<div class="tr"><span>Total ITBIS</span><span>${_n2(sale.tax_amt)}</span></div>` : ''}
-        <div class="tr grand"><span>Total con impuestos</span><span>${_n2(sale.total)}</span></div>
+        <div class="tr"><span>Sub Total sin impuestos</span><span>${_n2(displaySubtotal)}</span></div>
+        ${showTax ? `<div class="tr"><span>Total ITBIS</span><span>${_n2(displayTax)}</span></div>` : ''}
+        <div class="tr"><span>Descuento</span><span>${displayDiscount > 0 ? '-' : ''}${_n2(displayDiscount)}</span></div>
+        <div class="tr grand"><span>Total con impuestos</span><span>${_n2(displayTotal)}</span></div>
+        ${!isCotizacion ? `<div class="tr"><span>Su pago</span><span>${_n2(paidAmount)}</span></div>` : ''}
+        ${!isCotizacion ? `<div class="tr"><span>Balance después del pago</span><span>${_n2(balanceAfter)}</span></div>` : ''}
       </div>
     </div>` : '';
 
@@ -715,6 +798,8 @@ function renderCartaRecibo(sale, cfg, opts) {
   .titlebox { border:1px solid #d8dbe3; border-radius:8px; padding:12px 16px; display:flex; justify-content:space-between; align-items:center; }
   .titlebox .t { font-size:15px; font-weight:800; letter-spacing:.5px; }
   .titlebox .n { font-size:16px; font-weight:800; }
+  .paid-state { text-align:right; font-size:14px; font-weight:800; margin-top:7px; }
+  .receipt-line { text-align:right; font-size:11px; color:#4b5263; margin-top:2px; }
   .datebox { border:1px solid #eceef3; border-radius:8px; padding:8px 16px; display:flex; justify-content:space-between; align-items:center; margin-top:8px; font-size:11px; }
   .datebox b { font-weight:700; }
   .client { margin-top:14px; }
@@ -736,26 +821,33 @@ function renderCartaRecibo(sale, cfg, opts) {
   .summary .sv { font-size:11px; font-weight:600; margin-top:3px; }
   table.items { width:100%; border-collapse:collapse; margin-top:16px; }
   table.items thead { display:table-header-group; }
-  table.items th { background:#f4f5f8; font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:#5b6273; padding:9px 10px; text-align:left; border-bottom:1px solid #e4e6ed; }
-  table.items td { padding:10px; border-bottom:1px solid #eef0f4; vertical-align:top; }
+  table.items th { background:#f4f5f8; font-size:8.8px; font-weight:700; text-transform:uppercase; letter-spacing:.25px; color:#5b6273; padding:8px 7px; text-align:left; border-bottom:1px solid #e4e6ed; }
+  table.items td { padding:8px 7px; border-bottom:1px solid #eef0f4; vertical-align:top; font-size:10.5px; }
   table.items tr { break-inside:avoid; page-break-inside:avoid; }
   /* Encabezado y valores numéricos alineados a la derecha (quedan uno bajo el otro) */
   table.items th.c-num, table.items td.c-num { text-align:right; white-space:nowrap; }
-  .c-idx { width:30px; color:#9aa0b0; font-size:10px; text-align:left; }
+  .c-code { width:70px; color:#5b6273; font-family:'Courier New',monospace; font-size:9.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .c-desc { word-break:break-word; }
-  /* Anchos fijos para espaciado parejo con pocos o muchos artículos.
-	     nth-child(3)=Cant, (4)=Precio, (5)=ITBIS o Total, (6)=Total. En conduce solo existe (3). */
-	  table.items th:nth-child(3), table.items td:nth-child(3) { width:78px; }
-	  table.items th:nth-child(4), table.items td:nth-child(4) { width:120px; }
-	  table.items th:nth-child(5), table.items td:nth-child(5) { width:${showTax ? '110px' : '130px'}; }
-	  table.items th:nth-child(6), table.items td:nth-child(6) { width:130px; }
+  /* Anchos fijos para espaciado parejo: Código, Artículo, Precio, Cantidad,
+     Monto bruto, ITBIS, Importe. En conduce solo existen Código/Artículo/Cant. */
+  table.items th:nth-child(3), table.items td:nth-child(3) { width:${showMoney ? '84px' : '70px'}; }
+  table.items th:nth-child(4), table.items td:nth-child(4) { width:${showMoney ? '58px' : '78px'}; }
+  table.items th:nth-child(5), table.items td:nth-child(5) { width:92px; }
+  table.items th:nth-child(6), table.items td:nth-child(6) { width:78px; }
+  table.items th:nth-child(7), table.items td:nth-child(7) { width:96px; }
   .it-total { font-weight:700; }
   .foot-wrap { display:flex; justify-content:flex-end; margin-top:16px; break-inside:avoid; page-break-inside:avoid; }
-  .totals { width:250px; border:1px solid #eceef3; border-radius:8px; padding:10px 14px; }
+  .totals { width:300px; border:1px solid #eceef3; border-radius:8px; padding:10px 14px; }
   .totals .tr { display:flex; justify-content:space-between; padding:4px 0; font-size:11px; }
   .totals .tr span:first-child { color:#5b6273; }
   .totals .tr.grand { border-top:1.5px solid #cfd3dd; margin-top:5px; padding-top:8px; font-size:14px; font-weight:800; }
   .totals .tr.grand span:first-child { color:#1f2430; }
+  .legacy-pay { margin-top:16px; border-top:2px solid #2f3440; border-bottom:2px solid #2f3440; display:grid; grid-template-columns:1fr 1fr 1fr 2fr 1fr; break-inside:avoid; page-break-inside:avoid; }
+  .legacy-pay div { padding:7px 8px; text-align:center; border-left:1px solid #d7dae3; }
+  .legacy-pay div:first-child { border-left:none; }
+  .legacy-pay b { display:block; text-transform:uppercase; font-size:9px; color:#5b6273; margin-bottom:4px; }
+  .legacy-pay span { font-size:10.5px; font-weight:600; }
+  .legacy-pay .lp-wide span { font-weight:500; }
   .sign-row { display:flex; justify-content:space-around; gap:40px; margin-top:44px; break-inside:avoid; }
   .sign { flex:1; text-align:center; font-size:10px; color:#5b6273; }
   .sign-line { border-top:1px solid #b8bcc8; margin-bottom:6px; }
@@ -774,9 +866,11 @@ function renderCartaRecibo(sale, cfg, opts) {
     </div>
     <div class="hdr-r">
       <div class="titlebox">
-        <div class="t">${docWord}${showNum ? ' N.' : ''}</div>
-        ${showNum ? `<div class="n">${_esc(docNum)}</div>` : ''}
+        <div class="t">${docWord}${showNum && !paidReceipt ? ' N.' : ''}</div>
+        ${showNum ? `<div class="n">${paidReceipt ? 'Factura # ' : ''}${_esc(docNum)}</div>` : ''}
       </div>
+      <div class="paid-state">${_esc(statusLabel)}</div>
+      ${receiptNo ? `<div class="receipt-line">Recibo #: <b>${_esc(receiptNo)}</b></div>` : ''}
       <div class="datebox"><b>Fecha:</b> <span>${_fechaLarga(sale.date)}</span></div>
       ${!isReporte ? `
       <div class="client">
@@ -792,15 +886,17 @@ function renderCartaRecibo(sale, cfg, opts) {
 
   <table class="items">
     <thead><tr>
-      <th class="c-idx">#</th>
-      <th>Descripción</th>
-      <th class="c-num">Cant</th>
-	      ${showMoney ? `<th class="c-num">Precio unit.</th>${showTax ? '<th class="c-num">ITBIS</th>' : ''}<th class="c-num">Importe</th>` : ''}
+      <th class="c-code">Código</th>
+      <th>Nombre artículo</th>
+      ${showMoney ? '<th class="c-num">Precio venta</th>' : ''}
+      <th class="c-num">Cantidad</th>
+	      ${showMoney ? `<th class="c-num">Monto bruto</th>${showTax ? '<th class="c-num">ITBIS</th>' : ''}<th class="c-num">Importe</th>` : ''}
     </tr></thead>
-    <tbody>${rows || `<tr><td class="c-idx"></td><td colspan="4" style="color:#9aa0b0">Sin artículos</td></tr>`}</tbody>
+    <tbody>${rows || `<tr><td class="c-code"></td><td colspan="${showMoney ? (showTax ? 6 : 5) : 2}" style="color:#9aa0b0">Sin artículos</td></tr>`}</tbody>
   </table>
 
   ${totalsBox}
+  ${paySummary}
   ${firma}
   ${noteFiscal ? `<div class="note">${noteFiscal}</div>` : ''}
 
@@ -834,13 +930,28 @@ function renderCartaFormal(sale, cfg, opts) {
   const isCotizacion = sale.type === 'cotizacion';
   const isDevolucion = sale.type === 'devolucion';
   const ncf = _getNcf(sale);
-  const rows = (sale.items||[]).map((i,idx) => `
+  const showTax = _showItbis(sale);
+  const displaySubtotal = _displaySubtotal(sale);
+  const displayTax = _displayTaxAmt(sale);
+  const displayTotal = _displayTotal(sale);
+  const displayDiscount = _displayDiscount(sale);
+  const rows = (sale.items||[]).map((i,idx) => {
+    const qty = Number(i.qty || 1);
+    const unitNet = showTax ? _lineNetUnit(i, sale) : Number(i.unit_price || i.price || 0);
+    const lineNet = showTax ? _lineNet(i, sale) : (qty * unitNet);
+    const lineTax = showTax ? _lineTax(i, sale) : 0;
+    const importe = showTax ? _lineImporte(i, sale) : (qty * unitNet);
+    return `
     <tr style="${idx%2===0?'background:#f9fafb':''}">
-      <td style="padding:8px 12px">${_esc(i.product_name||i.name)}</td>
+      <td style="padding:8px 8px;font-family:'Courier New',monospace;font-size:10px;color:#555">${_esc(i.product_code || i.code || '—')}</td>
+      <td style="padding:8px 8px">${_esc(i.product_name||i.name)}</td>
       <td style="text-align:center;padding:8px">${i.qty}</td>
-      <td style="text-align:right;padding:8px 12px">RD$${Number(i.unit_price||0).toLocaleString('es-DO')}</td>
-      <td style="text-align:right;padding:8px 12px;font-weight:600">RD$${(Number(i.unit_price||0)*Number(i.qty||1)).toLocaleString('es-DO')}</td>
-    </tr>`).join('');
+      <td style="text-align:right;padding:8px">RD$${_n2(unitNet)}</td>
+      <td style="text-align:right;padding:8px">RD$${_n2(lineNet)}</td>
+      ${showTax ? `<td style="text-align:right;padding:8px">RD$${_n2(lineTax)}</td>` : ''}
+      <td style="text-align:right;padding:8px;font-weight:600">RD$${_n2(importe)}</td>
+    </tr>`;
+  }).join('');
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
 <style>
@@ -897,19 +1008,22 @@ function renderCartaFormal(sale, cfg, opts) {
 
   <table>
     <thead><tr>
-      <th>Descripción</th>
+      <th>Código</th>
+      <th>Nombre artículo</th>
       <th style="text-align:center">Cant.</th>
       <th style="text-align:right">Precio Unit.</th>
-      <th style="text-align:right">Total</th>
+      <th style="text-align:right">Monto bruto</th>
+      ${showTax ? '<th style="text-align:right">ITBIS</th>' : ''}
+      <th style="text-align:right">Importe</th>
     </tr></thead>
     <tbody>${rows}</tbody>
   </table>
 
   <div class="totals-box">
-    <div class="total-row"><span>Subtotal</span><span>RD$${Number(sale.subtotal||0).toLocaleString('es-DO')}</span></div>
-    ${sale.discount_amt > 0 ? `<div class="total-row"><span>Descuento ${sale.discount_pct}%</span><span style="color:#dc2626">-RD$${Number(sale.discount_amt).toLocaleString('es-DO')}</span></div>` : ''}
-    ${_showItbis(sale) ? `<div class="total-row"><span>ITBIS (${sale.tax_pct||18}%)</span><span>RD$${Number(sale.tax_amt||0).toLocaleString('es-DO')}</span></div>` : ''}
-    <div class="total-row grand-total"><span>TOTAL</span><span>RD$${Number(sale.total||0).toLocaleString('es-DO')}</span></div>
+    <div class="total-row"><span>Sub Total sin impuestos</span><span>RD$${_n2(displaySubtotal)}</span></div>
+    ${showTax ? `<div class="total-row"><span>Total ITBIS</span><span>RD$${_n2(displayTax)}</span></div>` : ''}
+    ${displayDiscount > 0 ? `<div class="total-row"><span>Descuento</span><span style="color:#dc2626">-RD$${_n2(displayDiscount)}</span></div>` : ''}
+    <div class="total-row grand-total"><span>Total con impuestos</span><span>RD$${_n2(displayTotal)}</span></div>
   </div>
 
   ${isDevolucion && sale.original_sale_id ? `<div style="margin-top:8px;font-size:11px;color:#555">Ref. venta original: ${facturaLabelOriginal(sale)}</div>` : ''}
@@ -931,13 +1045,28 @@ function renderCartaNCF(sale, cfg, opts) {
   const isCotizacion = sale.type === 'cotizacion';
   const isDevolucion = sale.type === 'devolucion';
   const ncf = _getNcf(sale);
-  const rows = (sale.items||[]).map(i => `
+  const showTax = _showItbis(sale);
+  const displaySubtotal = _displaySubtotal(sale);
+  const displayTax = _displayTaxAmt(sale);
+  const displayTotal = _displayTotal(sale);
+  const displayDiscount = _displayDiscount(sale);
+  const rows = (sale.items||[]).map(i => {
+    const qty = Number(i.qty || 1);
+    const unitNet = showTax ? _lineNetUnit(i, sale) : Number(i.unit_price || i.price || 0);
+    const lineNet = showTax ? _lineNet(i, sale) : (qty * unitNet);
+    const lineTax = showTax ? _lineTax(i, sale) : 0;
+    const importe = showTax ? _lineImporte(i, sale) : (qty * unitNet);
+    return `
     <tr>
-      <td style="padding:7px 10px">${_esc(i.product_name||i.name)}</td>
+      <td style="padding:7px 6px;font-family:'Courier New',monospace;font-size:10px">${_esc(i.product_code || i.code || '—')}</td>
+      <td style="padding:7px 6px">${_esc(i.product_name||i.name)}</td>
       <td style="text-align:center;padding:7px">${i.qty}</td>
-      <td style="text-align:right;padding:7px 10px">RD$${Number(i.unit_price||0).toLocaleString('es-DO')}</td>
-      <td style="text-align:right;padding:7px 10px">RD$${(Number(i.unit_price||0)*Number(i.qty||1)).toLocaleString('es-DO')}</td>
-    </tr>`).join('');
+      <td style="text-align:right;padding:7px 6px">RD$${_n2(unitNet)}</td>
+      <td style="text-align:right;padding:7px 6px">RD$${_n2(lineNet)}</td>
+      ${showTax ? `<td style="text-align:right;padding:7px 6px">RD$${_n2(lineTax)}</td>` : ''}
+      <td style="text-align:right;padding:7px 6px;font-weight:700">RD$${_n2(importe)}</td>
+    </tr>`;
+  }).join('');
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
 <style>
@@ -992,18 +1121,20 @@ function renderCartaNCF(sale, cfg, opts) {
 
   <table>
     <thead><tr>
-      <th>Descripción</th><th style="text-align:center">Cant.</th>
-      <th style="text-align:right">Precio</th><th style="text-align:right">Total</th>
+      <th>Código</th><th>Nombre artículo</th><th style="text-align:center">Cant.</th>
+      <th style="text-align:right">Precio</th><th style="text-align:right">Monto bruto</th>
+      ${showTax ? '<th style="text-align:right">ITBIS</th>' : ''}
+      <th style="text-align:right">Importe</th>
     </tr></thead>
     <tbody>${rows}</tbody>
   </table>
 
   <div class="total-section">
     <table class="total-table">
-      <tr><td>Subtotal</td><td style="text-align:right">RD$${Number(sale.subtotal||0).toLocaleString('es-DO')}</td></tr>
-      ${sale.discount_amt > 0 ? `<tr><td>Descuento (${sale.discount_pct}%)</td><td style="text-align:right;color:red">-RD$${Number(sale.discount_amt).toLocaleString('es-DO')}</td></tr>` : ''}
-      ${_showItbis(sale) ? `<tr><td>ITBIS (${sale.tax_pct||18}%)</td><td style="text-align:right">RD$${Number(sale.tax_amt||0).toLocaleString('es-DO')}</td></tr>` : ''}
-      <tr class="grand"><td>TOTAL</td><td style="text-align:right">RD$${Number(sale.total||0).toLocaleString('es-DO')}</td></tr>
+      <tr><td>Sub Total sin impuestos</td><td style="text-align:right">RD$${_n2(displaySubtotal)}</td></tr>
+      ${showTax ? `<tr><td>Total ITBIS</td><td style="text-align:right">RD$${_n2(displayTax)}</td></tr>` : ''}
+      ${displayDiscount > 0 ? `<tr><td>Descuento</td><td style="text-align:right;color:red">-RD$${_n2(displayDiscount)}</td></tr>` : ''}
+      <tr class="grand"><td>Total con impuestos</td><td style="text-align:right">RD$${_n2(displayTotal)}</td></tr>
     </table>
   </div>
 

@@ -43,6 +43,7 @@ function initDB(customDataDir) {
 
   migrateProductsModel();
   createTables();
+  migratePurchaseColumns();
   migrateTaxColumns();
   migrateECFColumns();
   migrateExpensesColumns();
@@ -174,6 +175,31 @@ function createTables() {
       created_at TEXT DEFAULT (datetime('now'))
     );
 
+    -- ── Historial de cambios de costo/precio ──
+    CREATE TABLE IF NOT EXISTS product_price_history (
+      id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id            INTEGER NOT NULL REFERENCES products(id),
+      product_code          TEXT DEFAULT '',
+      product_name          TEXT DEFAULT '',
+      cost_before           REAL NOT NULL DEFAULT 0,
+      cost_after            REAL NOT NULL DEFAULT 0,
+      price_before          REAL NOT NULL DEFAULT 0,
+      price_after           REAL NOT NULL DEFAULT 0,
+      wholesale_before      REAL NOT NULL DEFAULT 0,
+      wholesale_after       REAL NOT NULL DEFAULT 0,
+      stock_at_change       INTEGER NOT NULL DEFAULT 0,
+      cost_delta            REAL NOT NULL DEFAULT 0,
+      price_delta           REAL NOT NULL DEFAULT 0,
+      wholesale_delta       REAL NOT NULL DEFAULT 0,
+      stock_value_delta     REAL NOT NULL DEFAULT 0,
+      retail_value_delta    REAL NOT NULL DEFAULT 0,
+      wholesale_value_delta REAL NOT NULL DEFAULT 0,
+      source                TEXT DEFAULT 'manual',
+      reason                TEXT DEFAULT '',
+      user_id               INTEGER REFERENCES users(id),
+      created_at            TEXT DEFAULT (datetime('now','localtime'))
+    );
+
     -- ── Clientes ──
     CREATE TABLE IF NOT EXISTS customers (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -285,6 +311,54 @@ function createTables() {
       user_id         INTEGER REFERENCES users(id),
       cash_session_id INTEGER REFERENCES cash_sessions(id),
       created_at      TEXT DEFAULT (datetime('now','localtime'))
+    );
+
+    -- ── Proveedores / compras ──
+    CREATE TABLE IF NOT EXISTS suppliers (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      name       TEXT NOT NULL,
+      contact    TEXT DEFAULT '',
+      phone      TEXT DEFAULT '',
+      email      TEXT DEFAULT '',
+      rnc        TEXT DEFAULT '',
+      address    TEXT DEFAULT '',
+      notes      TEXT DEFAULT '',
+      status     TEXT DEFAULT 'activo',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS purchase_orders (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      supplier_id    INTEGER REFERENCES suppliers(id),
+      supplier_name  TEXT DEFAULT '',
+      status         TEXT DEFAULT 'pendiente' CHECK(status IN ('pendiente','recibido','parcial','cancelado')),
+      subtotal       REAL DEFAULT 0,
+      tax_amt        REAL DEFAULT 0,
+      freight_cost   REAL DEFAULT 0,
+      customs_cost   REAL DEFAULT 0,
+      transport_cost REAL DEFAULT 0,
+      other_cost     REAL DEFAULT 0,
+      landed_cost    REAL DEFAULT 0,
+      total          REAL DEFAULT 0,
+      notes          TEXT DEFAULT '',
+      user_id        INTEGER REFERENCES users(id),
+      cajero         TEXT DEFAULT '',
+      received_at    TEXT,
+      created_at     TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS purchase_items (
+      id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+      purchase_order_id    INTEGER NOT NULL REFERENCES purchase_orders(id),
+      product_id           INTEGER REFERENCES products(id),
+      product_code         TEXT DEFAULT '',
+      product_name         TEXT NOT NULL,
+      unit_cost            REAL NOT NULL DEFAULT 0,
+      landed_unit_cost     REAL DEFAULT 0,
+      allocated_extra_cost REAL DEFAULT 0,
+      qty_ordered          INTEGER NOT NULL DEFAULT 0,
+      qty_received         INTEGER NOT NULL DEFAULT 0,
+      subtotal             REAL DEFAULT 0
     );
 
     -- ── Auditoría ──
@@ -582,6 +656,10 @@ function createTables() {
     CREATE INDEX IF NOT EXISTS idx_audit_user        ON audit_logs(user_id);
     CREATE INDEX IF NOT EXISTS idx_audit_action      ON audit_logs(action);
     CREATE INDEX IF NOT EXISTS idx_inv_product       ON inventory_movements(product_id);
+    CREATE INDEX IF NOT EXISTS idx_price_hist_product ON product_price_history(product_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_price_hist_date    ON product_price_history(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);
+    CREATE INDEX IF NOT EXISTS idx_purchase_items_po ON purchase_items(purchase_order_id);
     CREATE INDEX IF NOT EXISTS idx_products_barcode  ON products(barcode);
     -- Índices faltantes para búsquedas frecuentes en producción
     CREATE INDEX IF NOT EXISTS idx_products_name     ON products(name) WHERE active=1;
@@ -631,6 +709,34 @@ function migrateTaxColumns() {
     try {
       db.prepare(`ALTER TABLE sale_items ADD COLUMN ${col} ${def}`).run();
       console.log(`[MIGRATE] sale_items.${col} agregada`);
+    } catch { /* ya existe */ }
+  });
+}
+
+function migratePurchaseColumns() {
+  const orderCols = [
+    { col: 'tax_amt',        def: 'REAL DEFAULT 0' },
+    { col: 'freight_cost',   def: 'REAL DEFAULT 0' },
+    { col: 'customs_cost',   def: 'REAL DEFAULT 0' },
+    { col: 'transport_cost', def: 'REAL DEFAULT 0' },
+    { col: 'other_cost',     def: 'REAL DEFAULT 0' },
+    { col: 'landed_cost',    def: 'REAL DEFAULT 0' },
+  ];
+  orderCols.forEach(({ col, def }) => {
+    try {
+      db.prepare(`ALTER TABLE purchase_orders ADD COLUMN ${col} ${def}`).run();
+      console.log(`[MIGRATE] purchase_orders.${col} agregada`);
+    } catch { /* ya existe */ }
+  });
+
+  const itemCols = [
+    { col: 'landed_unit_cost',     def: 'REAL DEFAULT 0' },
+    { col: 'allocated_extra_cost', def: 'REAL DEFAULT 0' },
+  ];
+  itemCols.forEach(({ col, def }) => {
+    try {
+      db.prepare(`ALTER TABLE purchase_items ADD COLUMN ${col} ${def}`).run();
+      console.log(`[MIGRATE] purchase_items.${col} agregada`);
     } catch { /* ya existe */ }
   });
 }
@@ -1032,10 +1138,171 @@ function calcIncludedTaxTotals(items, { type = 'factura', discPct = 0 } = {}) {
   return { subtotal, grossSubtotal, discAmt, taxAmt, total, discPct: discountPct };
 }
 
+function moneyVal(value) {
+  return round2(Number.parseFloat(value) || 0);
+}
+
+function normalizePurchaseCosts(costs = {}) {
+  const pick = (...keys) => {
+    for (const key of keys) {
+      if (costs[key] !== undefined && costs[key] !== null) return moneyVal(costs[key]);
+    }
+    return 0;
+  };
+  const freight = Math.max(0, pick('freight', 'freight_cost', 'flete'));
+  const customs = Math.max(0, pick('customs', 'customs_cost', 'aduana'));
+  const transport = Math.max(0, pick('transport', 'transport_cost', 'transporte'));
+  const other = Math.max(0, pick('other', 'other_cost', 'otros'));
+  return {
+    freight,
+    customs,
+    transport,
+    other,
+    totalExtra: round2(freight + customs + transport + other),
+  };
+}
+
+function allocatePurchaseCosts(rows, costs = {}) {
+  const normalized = normalizePurchaseCosts(costs);
+  const positiveRows = (rows || [])
+    .map(row => ({
+      ...row,
+      qty_received: Math.max(0, Number.parseInt(row.qty_received, 10) || 0),
+      unit_cost: moneyVal(row.unit_cost),
+    }))
+    .filter(row => row.qty_received > 0);
+  const baseTotal = round2(positiveRows.reduce((sum, row) => (
+    sum + round2(row.unit_cost * row.qty_received)
+  ), 0));
+
+  let assignedExtra = 0;
+  const lastIndex = positiveRows.length - 1;
+  const items = positiveRows.map((row, idx) => {
+    const baseLine = round2(row.unit_cost * row.qty_received);
+    let allocatedExtra = 0;
+    if (normalized.totalExtra > 0 && baseTotal > 0) {
+      allocatedExtra = idx === lastIndex
+        ? round2(normalized.totalExtra - assignedExtra)
+        : round2(normalized.totalExtra * (baseLine / baseTotal));
+      assignedExtra = round2(assignedExtra + allocatedExtra);
+    }
+    const landedLine = round2(baseLine + allocatedExtra);
+    const landedUnitCost = row.qty_received > 0
+      ? round2(landedLine / row.qty_received)
+      : row.unit_cost;
+    return { ...row, baseLine, allocatedExtra, landedLine, landedUnitCost };
+  });
+
+  return {
+    ...normalized,
+    baseTotal,
+    landedTotal: round2(baseTotal + normalized.totalExtra),
+    items,
+  };
+}
+
+function priceFieldChanged(before, after) {
+  return Math.abs(moneyVal(after) - moneyVal(before)) >= 0.005;
+}
+
+function recordProductPriceHistory(productId, before, after, opts = {}) {
+  if (!before || !after) return null;
+
+  const costBefore = moneyVal(before.cost);
+  const costAfter = moneyVal(after.cost);
+  const priceBefore = moneyVal(before.price);
+  const priceAfter = moneyVal(after.price);
+  const wholesaleBefore = moneyVal(before.wholesale);
+  const wholesaleAfter = moneyVal(after.wholesale);
+
+  const changed = priceFieldChanged(costBefore, costAfter)
+    || priceFieldChanged(priceBefore, priceAfter)
+    || priceFieldChanged(wholesaleBefore, wholesaleAfter);
+  if (!changed) return null;
+
+  const stockRaw = opts.stockAtChange ?? before.stock ?? after.stock ?? 0;
+  const stockAtChange = Math.max(0, Number.parseInt(stockRaw, 10) || 0);
+  const costDelta = round2(costAfter - costBefore);
+  const priceDelta = round2(priceAfter - priceBefore);
+  const wholesaleDelta = round2(wholesaleAfter - wholesaleBefore);
+
+  const r = db.prepare(`
+    INSERT INTO product_price_history(
+      product_id, product_code, product_name,
+      cost_before, cost_after, price_before, price_after,
+      wholesale_before, wholesale_after, stock_at_change,
+      cost_delta, price_delta, wholesale_delta,
+      stock_value_delta, retail_value_delta, wholesale_value_delta,
+      source, reason, user_id
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    productId,
+    after.code || before.code || '',
+    after.name || before.name || '',
+    costBefore, costAfter,
+    priceBefore, priceAfter,
+    wholesaleBefore, wholesaleAfter,
+    stockAtChange,
+    costDelta, priceDelta, wholesaleDelta,
+    round2(costDelta * stockAtChange),
+    round2(priceDelta * stockAtChange),
+    round2(wholesaleDelta * stockAtChange),
+    opts.source || 'manual',
+    opts.reason || '',
+    opts.userId || null
+  );
+  return r.lastInsertRowid;
+}
+
+function buildDateFilter(column, { range = 'month', dateFrom = null, dateTo = null } = {}) {
+  const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+  const safeFrom = (range === 'custom' && dateFrom && DATE_RE.test(dateFrom)) ? dateFrom : null;
+  const safeTo = (range === 'custom' && dateTo && DATE_RE.test(dateTo)) ? dateTo : null;
+
+  if (range === 'custom' && safeFrom && safeTo) {
+    return { sql: `date(${column}) BETWEEN ? AND ?`, params: [safeFrom, safeTo] };
+  }
+  if (range === 'today') return { sql: `date(${column}) = date('now','localtime')`, params: [] };
+  if (range === 'week') return { sql: `date(${column}) >= date('now','-6 days','localtime')`, params: [] };
+  if (range === 'all') return { sql: '1=1', params: [] };
+  return {
+    sql: `strftime('%Y-%m',${column}) = strftime('%Y-%m','now','localtime')`,
+    params: [],
+  };
+}
+
 // ── Productos ─────────────────────────────────
 const productsRepo = {
   getAll() {
-    return db.prepare('SELECT * FROM products WHERE active=1 ORDER BY name').all();
+    return db.prepare(`
+      SELECT p.*,
+             h.id                    AS last_price_change_id,
+             h.cost_before           AS last_cost_before,
+             h.cost_after            AS last_cost_after,
+             h.price_before          AS last_price_before,
+             h.price_after           AS last_price_after,
+             h.wholesale_before      AS last_wholesale_before,
+             h.wholesale_after       AS last_wholesale_after,
+             h.stock_at_change       AS last_stock_at_change,
+             h.cost_delta            AS last_cost_delta,
+             h.price_delta           AS last_price_delta,
+             h.wholesale_delta       AS last_wholesale_delta,
+             h.stock_value_delta     AS last_stock_value_delta,
+             h.retail_value_delta    AS last_retail_value_delta,
+             h.wholesale_value_delta AS last_wholesale_value_delta,
+             h.source                AS last_price_change_source,
+             h.reason                AS last_price_change_reason,
+             h.created_at            AS last_price_changed_at
+      FROM products p
+      LEFT JOIN product_price_history h ON h.id = (
+        SELECT id FROM product_price_history
+        WHERE product_id = p.id
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+      )
+      WHERE p.active=1
+      ORDER BY p.name
+    `).all();
   },
   getById(id) {
     return db.prepare('SELECT * FROM products WHERE id=?').get(id);
@@ -1065,15 +1332,28 @@ const productsRepo = {
            p.stock||0,p.stock_min||5,p.unit||'und', p.condition||'nuevo');
     return r.lastInsertRowid;
   },
-  update(id, p) {
-    db.prepare(`
-      UPDATE products SET code=?,barcode=?,name=?,brand=?,category=?,description=?,model=?,
-      cost=?,price=?,wholesale=?,taxable=?,tax_pct=?,stock_min=?,unit=?,condition=?,updated_at=datetime('now')
-      WHERE id=?
-    `).run(p.code,p.barcode||'',p.name,p.brand||'',p.category||'',p.description||'',
-           p.model||'',p.cost,p.price,p.wholesale||p.price,
-           normalizeTaxable(p.taxable, 1), normalizeTaxPct(p.tax_pct, 18),
-           p.stock_min||5,p.unit||'und', p.condition||'nuevo',id);
+  update(id, p, opts = {}) {
+    return db.transaction(() => {
+      const before = db.prepare('SELECT * FROM products WHERE id=?').get(id);
+      if (!before) throw new Error('Producto no encontrado');
+
+      db.prepare(`
+        UPDATE products SET code=?,barcode=?,name=?,brand=?,category=?,description=?,model=?,
+        cost=?,price=?,wholesale=?,taxable=?,tax_pct=?,stock_min=?,unit=?,condition=?,updated_at=datetime('now')
+        WHERE id=?
+      `).run(p.code,p.barcode||'',p.name,p.brand||'',p.category||'',p.description||'',
+             p.model||'',p.cost,p.price,p.wholesale||p.price,
+             normalizeTaxable(p.taxable, 1), normalizeTaxPct(p.tax_pct, 18),
+             p.stock_min||5,p.unit||'und', p.condition||'nuevo',id);
+
+      const after = db.prepare('SELECT * FROM products WHERE id=?').get(id);
+      recordProductPriceHistory(id, before, after, {
+        userId: opts.userId,
+        source: opts.source || 'manual',
+        reason: opts.reason || 'Edición de producto',
+        stockAtChange: opts.stockAtChange,
+      });
+    })();
   },
   adjustStock(id, qty, type, reason, saleId = null, userId = null) {
     // VALIDACIÓN: qty=0 no debe crear movimiento ni alterar stock
@@ -1101,6 +1381,17 @@ const productsRepo = {
       WHERE m.product_id=?
       ORDER BY m.created_at DESC
     `).all(productId);
+  },
+  getPriceHistory(productId, limit = 100) {
+    const safeLimit = Math.max(1, Math.min(500, Number.parseInt(limit, 10) || 100));
+    return db.prepare(`
+      SELECT h.*, u.name as user_name
+      FROM product_price_history h
+      LEFT JOIN users u ON u.id = h.user_id
+      WHERE h.product_id=?
+      ORDER BY h.created_at DESC, h.id DESC
+      LIMIT ?
+    `).all(productId, safeLimit);
   },
 };
 
@@ -1536,6 +1827,27 @@ const salesRepo = {
     const sale  = db.prepare('SELECT * FROM sales WHERE id=?').get(id);
     if (!sale) return null;
     sale.items  = db.prepare('SELECT * FROM sale_items WHERE sale_id=?').all(id);
+    const payments = db.prepare(`
+      SELECT id, numero_recibo, amount, method, note, balance_before, balance_after, cajero, created_at
+      FROM payments
+      WHERE sale_id=?
+      ORDER BY created_at DESC, id DESC
+    `).all(id);
+    sale.payments = payments;
+    sale.payment_amount = payments.length
+      ? round2(payments.reduce((sum, p) => sum + (p.amount || 0), 0))
+      : null;
+    sale.receipt_numbers = payments
+      .map(p => p.numero_recibo || p.id)
+      .filter(Boolean)
+      .join(', ');
+    if (payments.length) {
+      sale.last_receipt_number = payments[0].numero_recibo || payments[0].id;
+      sale.last_payment_date = payments[0].created_at;
+      sale.balance_after_payment = payments[0].balance_after;
+    } else if ((sale.payment_method || '').toLowerCase() !== 'credito' && sale.type === 'factura') {
+      sale.balance_after_payment = 0;
+    }
     // Para notas de crédito (devoluciones con B04): adjuntar el NCF y el número
     // real de la factura original que esta nota modifica, para poder mostrarlos
     // en la impresión (la referencia "Ref. venta original" usa el número real,
@@ -1907,6 +2219,7 @@ const reportsRepo = {
     const totalRevNeto    = round2((totalRev - totalDevol));
     const grossProfitNeto = round2((grossProfit - totalDevol));
     const marginNeto      = totalRevNeto > 0 ? (grossProfitNeto / totalRevNeto) * 100 : 0;
+    const priceChangeData = reportsRepo.priceChanges({ range, dateFrom, dateTo, limit: 8 });
 
     return {
       byMethod,
@@ -1917,9 +2230,59 @@ const reportsRepo = {
       totalRevNeto, grossProfitNeto, marginNeto,
       topProducts,
       dailySales,
+      priceChanges: priceChangeData.rows,
+      priceChangeSummary: priceChangeData.summary,
       devolucion:   { count: devData?.count || 0, total: totalDevol },
       abonos:       { count: abonosData?.count || 0, total: abonosData?.total || 0 },
       ventasContado, ventasCredito, cobradoMes,
+    };
+  },
+
+  priceChanges({ range = 'month', dateFrom = null, dateTo = null, limit = 100 } = {}) {
+    const safeLimit = Math.max(1, Math.min(500, Number.parseInt(limit, 10) || 100));
+    const f = buildDateFilter('h.created_at', { range, dateFrom, dateTo });
+
+    const rows = db.prepare(`
+      SELECT h.*,
+             p.category,
+             p.stock as current_stock,
+             p.cost as current_cost,
+             p.price as current_price,
+             p.wholesale as current_wholesale,
+             u.name as user_name
+      FROM product_price_history h
+      LEFT JOIN products p ON p.id = h.product_id
+      LEFT JOIN users u ON u.id = h.user_id
+      WHERE ${f.sql}
+      ORDER BY h.created_at DESC, h.id DESC
+      LIMIT ?
+    `).all(...f.params, safeLimit);
+
+    const summary = db.prepare(`
+      SELECT COUNT(*) as count,
+             COALESCE(SUM(stock_at_change),0) as affected_units,
+             COALESCE(SUM(stock_value_delta),0) as cost_impact,
+             COALESCE(SUM(retail_value_delta),0) as retail_impact,
+             SUM(CASE WHEN cost_delta > 0 THEN 1 ELSE 0 END) as cost_increases,
+             SUM(CASE WHEN cost_delta < 0 THEN 1 ELSE 0 END) as cost_decreases,
+             SUM(CASE WHEN price_delta > 0 THEN 1 ELSE 0 END) as price_increases,
+             SUM(CASE WHEN price_delta < 0 THEN 1 ELSE 0 END) as price_decreases
+      FROM product_price_history h
+      WHERE ${f.sql}
+    `).get(...f.params);
+
+    return {
+      rows,
+      summary: {
+        count: summary?.count || 0,
+        affectedUnits: summary?.affected_units || 0,
+        costImpact: round2(summary?.cost_impact || 0),
+        retailImpact: round2(summary?.retail_impact || 0),
+        costIncreases: summary?.cost_increases || 0,
+        costDecreases: summary?.cost_decreases || 0,
+        priceIncreases: summary?.price_increases || 0,
+        priceDecreases: summary?.price_decreases || 0,
+      },
     };
   },
 
@@ -2350,7 +2713,7 @@ const purchasesRepo = {
   create({ supplierId, supplierName, items, notes, userId, cajero }) {
     return db.transaction(() => {
       // Calcular totales
-      const subtotal = items.reduce((s, i) => s + (i.unit_cost * i.qty_ordered), 0);
+      const subtotal = round2(items.reduce((s, i) => s + (moneyVal(i.unit_cost) * (Number.parseInt(i.qty_ordered, 10) || 0)), 0));
       const total    = subtotal;
 
       const r = db.prepare(`
@@ -2369,36 +2732,73 @@ const purchasesRepo = {
                item.unit_cost * item.qty_ordered);
       }
 
+      audit(userId || null, cajero || '', 'compra_creada', 'purchase_orders', poId,
+            `OC #${poId} | ${items.length} item(s) | Total: ${total}`);
+
       return { poId, total };
     })();
   },
 
-  receive(id, { items, userId }) {
+  receive(id, { items, userId, userName = '', costs = {} }) {
     return db.transaction(() => {
       const po = db.prepare(`SELECT * FROM purchase_orders WHERE id=?`).get(id);
       if (!po) throw new Error('Orden no encontrada');
       if (po.status === 'recibido') throw new Error('Esta orden ya fue recibida completamente');
 
-      for (const item of items) {
-        if (!item.qty_received || item.qty_received <= 0) continue;
+      const receiveRows = [];
+      for (const raw of (items || [])) {
+        const qtyReceived = Number.parseInt(raw.qty_received, 10) || 0;
+        if (qtyReceived <= 0) continue;
+        const poItem = db.prepare(`
+          SELECT * FROM purchase_items WHERE id=? AND purchase_order_id=?
+        `).get(raw.id, id);
+        if (!poItem) throw new Error('Línea de compra no encontrada');
+        const remaining = (Number.parseInt(poItem.qty_ordered, 10) || 0)
+          - (Number.parseInt(poItem.qty_received, 10) || 0);
+        if (qtyReceived > remaining) {
+          throw new Error(`Cantidad recibida supera lo pendiente para ${poItem.product_name}`);
+        }
+        receiveRows.push({ ...poItem, qty_received: qtyReceived });
+      }
 
+      if (!receiveRows.length) throw new Error('Ingresa al menos una cantidad a recibir');
+
+      const allocation = allocatePurchaseCosts(receiveRows, costs);
+      for (const item of allocation.items) {
         // Actualizar item de la orden
         db.prepare(`
-          UPDATE purchase_items SET qty_received = qty_received + ?
+          UPDATE purchase_items
+          SET qty_received = qty_received + ?,
+              allocated_extra_cost = COALESCE(allocated_extra_cost,0) + ?,
+              landed_unit_cost = CASE
+                WHEN (qty_received + ?) > 0 THEN
+                  ROUND(((COALESCE(NULLIF(landed_unit_cost,0), unit_cost, 0) * qty_received) + (? * ?)) / (qty_received + ?), 2)
+                ELSE ?
+              END
           WHERE id=? AND purchase_order_id=?
-        `).run(item.qty_received, item.id, id);
+        `).run(
+          item.qty_received,
+          item.allocatedExtra,
+          item.qty_received,
+          item.landedUnitCost,
+          item.qty_received,
+          item.qty_received,
+          item.landedUnitCost,
+          item.id,
+          id
+        );
 
         // Actualizar stock y costo promedio ponderado
         if (item.product_id) {
           // 1. Leer stock y costo actuales ANTES de ajustar
           const prodActual = db.prepare(
-            `SELECT stock, cost FROM products WHERE id=?`
+            `SELECT * FROM products WHERE id=?`
           ).get(item.product_id);
 
           const stockActual   = prodActual?.stock  || 0;
           const costoActual   = prodActual?.cost   || 0;
           const stockNuevo    = item.qty_received;
-          const costoNuevo    = item.unit_cost;
+          const costoNuevo    = item.landedUnitCost || item.unit_cost;
 
           // 2. Calcular costo — promedio ponderado para nuevos, fijo para especiales
           const esEspecial = ['usado','reacondicionado','consignacion','especial']
@@ -2418,9 +2818,10 @@ const purchasesRepo = {
           }
 
           // 3. Ajustar stock
+          const reason = `Recepción OC #${id} | Base: ${item.unit_cost} | Gastos: ${item.allocatedExtra} | Costo real: ${costoNuevo} | Promedio: ${costoPromedio}`;
           productsRepo.adjustStock(
             item.product_id, item.qty_received, 'entrada',
-            `Recepción OC #${id} | Costo unit: ${costoNuevo} | Promedio: ${costoPromedio}`,
+            reason,
             null, userId
           );
 
@@ -2430,6 +2831,13 @@ const purchasesRepo = {
             db.prepare(
               `UPDATE products SET cost=?, updated_at=datetime('now') WHERE id=?`
             ).run(costoPromedio, item.product_id);
+            const prodDespues = db.prepare(`SELECT * FROM products WHERE id=?`).get(item.product_id);
+            recordProductPriceHistory(item.product_id, prodActual, prodDespues, {
+              userId,
+              source: 'compra',
+              reason,
+              stockAtChange: stockActual,
+            });
           }
         }
       }
@@ -2441,21 +2849,41 @@ const purchasesRepo = {
       `).get(id);
 
       const newStatus = pendingItems.c === 0 ? 'recibido' : 'parcial';
+      const newFreight = round2((po.freight_cost || 0) + allocation.freight);
+      const newCustoms = round2((po.customs_cost || 0) + allocation.customs);
+      const newTransport = round2((po.transport_cost || 0) + allocation.transport);
+      const newOther = round2((po.other_cost || 0) + allocation.other);
+      const newLanded = round2(newFreight + newCustoms + newTransport + newOther);
+      const newTotal = round2((po.subtotal || 0) + (po.tax_amt || 0) + newLanded);
 
       db.prepare(`
-        UPDATE purchase_orders SET status=?, received_at=datetime('now') WHERE id=?
-      `).run(newStatus, id);
+        UPDATE purchase_orders
+        SET status=?,
+            received_at=CASE WHEN ?='recibido' THEN datetime('now') ELSE received_at END,
+            freight_cost=?,
+            customs_cost=?,
+            transport_cost=?,
+            other_cost=?,
+            landed_cost=?,
+            total=?
+        WHERE id=?
+      `).run(newStatus, newStatus, newFreight, newCustoms, newTransport, newOther, newLanded, newTotal, id);
 
-      audit(userId, '', 'compra_recibida', 'purchase_orders', id,
-            `OC #${id} | Status: ${newStatus}`);
+      audit(userId, userName || '', 'compra_recibida', 'purchase_orders', id,
+            `OC #${id} | Status: ${newStatus} | Mercancía: ${allocation.baseTotal} | Gastos: ${allocation.totalExtra} | Costo real: ${allocation.landedTotal}`);
 
-      return { status: newStatus };
+      return {
+        status: newStatus,
+        baseValue: allocation.baseTotal,
+        landedCost: allocation.totalExtra,
+        receivedValue: allocation.landedTotal,
+      };
     })();
   },
 
-  cancel(id, userId) {
+  cancel(id, userId, userName = '') {
     db.prepare(`UPDATE purchase_orders SET status='cancelado' WHERE id=?`).run(id);
-    audit(userId, '', 'compra_cancelada', 'purchase_orders', id, `OC #${id} cancelada`);
+    audit(userId, userName || '', 'compra_cancelada', 'purchase_orders', id, `OC #${id} cancelada`);
   },
 };
 

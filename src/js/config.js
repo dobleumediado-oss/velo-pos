@@ -611,7 +611,6 @@ async function renderConfiguracion(el) {
     const rows = Object.keys(PRINT_CATEGORIES).map(cat => {
       const c   = printCfg[cat] || {};
       const def = PRINT_CATEGORIES[cat];
-      const autoPrintChecked = c.autoPrint !== undefined ? c.autoPrint : def.autoPrintDefault;
       return `
         <tr data-cat="${cat}">
           <td style="padding:8px 6px;font-size:12px;font-weight:600">${def.label}</td>
@@ -619,12 +618,10 @@ async function renderConfiguracion(el) {
             <select class="inp pc-printer" style="font-size:12px;padding:5px 8px;width:100%">${printerOpts(c.printer||'')}</select>
           </td>
           <td style="padding:8px 6px;text-align:center">
-            <input type="checkbox" class="pc-preview" ${c.preview?'checked':''}>
+            <input type="checkbox" class="pc-preview" checked disabled>
           </td>
           <td style="padding:8px 6px;text-align:center">
-            ${cat === 'ticket'
-              ? `<input type="checkbox" class="pc-autoprint" ${autoPrintChecked?'checked':''}>`
-              : '<span style="color:var(--muted2);font-size:11px">—</span>'}
+            <span style="color:var(--muted2);font-size:11px">Siempre con vista previa</span>
           </td>
         </tr>`;
     }).join('');
@@ -632,9 +629,8 @@ async function renderConfiguracion(el) {
     catCard.innerHTML = `
       <div class="fxb mb8"><div class="card-title">Impresión por módulo</div></div>
       <div style="font-size:11px;color:var(--muted2);margin-bottom:10px">
-        Asigna una impresora distinta por tipo de documento y decide si quieres ver una vista
-        previa antes de imprimir. "Auto-imprimir" solo aplica a tickets de venta — si lo
-        desactivas, cada venta abrirá una vista previa en vez de imprimir directo.
+        Asigna una impresora distinta por tipo de documento. La vista previa es obligatoria
+        antes de imprimir o guardar PDF, para confirmar los datos del documento.
       </div>
       <div style="font-size:11px;color:#92400e;background:#fff7ed;border:1px solid #fcd9a5;border-radius:6px;padding:7px 9px;margin-bottom:10px">
         ⚠ <strong>Reportes, Contabilidad y Bancos</strong> se imprimen en hoja tamaño carta.
@@ -645,7 +641,7 @@ async function renderConfiguracion(el) {
         <thead><tr style="text-align:left;font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:.04em">
           <th style="padding:4px 6px">Módulo</th><th style="padding:4px 6px">Impresora</th>
           <th style="padding:4px 6px;text-align:center">Vista previa</th>
-          <th style="padding:4px 6px;text-align:center">Auto-imprimir</th>
+          <th style="padding:4px 6px;text-align:center">Salida</th>
         </tr></thead>
         <tbody id="pc-rows">${rows}</tbody>
       </table>
@@ -659,10 +655,7 @@ async function renderConfiguracion(el) {
       catCard.querySelectorAll('#pc-rows tr[data-cat]').forEach(row => {
         const cat     = row.dataset.cat;
         const printer = row.querySelector('.pc-printer')?.value || '';
-        const preview = row.querySelector('.pc-preview')?.checked || false;
-        const autoEl  = row.querySelector('.pc-autoprint');
-        const entry   = { printer, preview };
-        if (autoEl) entry.autoPrint = autoEl.checked;
+        const entry   = { printer, preview: true, autoPrint: false };
         newCfg[cat] = entry;
       });
       const res = await window.api.print.saveConfig({ config: newCfg, requestUserId: user?.id });

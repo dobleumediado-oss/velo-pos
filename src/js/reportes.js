@@ -194,7 +194,8 @@ function renderReporteContenido(el, d) {
   const {
     byMethod, totalRev, totalCost, totalTax, totalDisc,
     totalUnits, totalSales, grossProfit, netRev, margin,
-    topProducts, dailySales, devolucion, abonos
+    topProducts, dailySales, devolucion, abonos,
+    priceChanges = [], priceChangeSummary = {}
   } = d;
 
   // Si todas las ventas fueron importadas sin precio de costo, no calcular margen
@@ -338,6 +339,92 @@ function renderReporteContenido(el, d) {
     });
   }
   grid.appendChild(prodCard);
+
+  // ── Cambios de costo / precio ───────────────
+  const priceCard = h('div', { class: 'card' });
+  priceCard.appendChild(h('div', { class: 'fxb mb8' },
+    h('div', { class: 'card-title' }, 'Cambios de Costo / Precio'),
+    h('span', { style: { fontSize: '10px', color: 'var(--muted2)' } },
+      `${priceChangeSummary.count || 0} cambio${(priceChangeSummary.count || 0) === 1 ? '' : 's'}`)
+  ));
+
+  if (!priceChanges.length) {
+    priceCard.appendChild(h('div', { style: { color: 'var(--muted2)', fontSize: '12px', padding: '14px 0' } },
+      'Sin cambios en este período'));
+  } else {
+    priceCard.appendChild(h('div', {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(3,minmax(0,1fr))',
+        gap: '8px',
+        marginBottom: '10px'
+      }
+    },
+      h('div', { style: { background: 'var(--surface2)', border: '1px solid var(--line2)', borderRadius: '8px', padding: '10px' } },
+        h('div', { class: 'met-label' }, 'Impacto costo'),
+        h('div', { style: {
+          fontSize: '17px', fontWeight: 800,
+          color: (priceChangeSummary.costImpact || 0) > 0 ? 'var(--amber)' : 'var(--green)'
+        } }, fmt(priceChangeSummary.costImpact || 0))
+      ),
+      h('div', { style: { background: 'var(--surface2)', border: '1px solid var(--line2)', borderRadius: '8px', padding: '10px' } },
+        h('div', { class: 'met-label' }, 'Impacto venta'),
+        h('div', { style: { fontSize: '17px', fontWeight: 800 } },
+          fmt(priceChangeSummary.retailImpact || 0))
+      ),
+      h('div', { style: { background: 'var(--surface2)', border: '1px solid var(--line2)', borderRadius: '8px', padding: '10px' } },
+        h('div', { class: 'met-label' }, 'Unidades afectadas'),
+        h('div', { style: { fontSize: '17px', fontWeight: 800 } },
+          String(priceChangeSummary.affectedUnits || 0))
+      )
+    ));
+
+    priceChanges.slice(0, 8).forEach(ch => {
+      const costDelta = Number(ch.cost_delta || 0);
+      const priceDelta = Number(ch.price_delta || 0);
+      const impact = Number(ch.stock_value_delta || 0);
+      const retailImpact = Number(ch.retail_value_delta || 0);
+      const date = String(ch.created_at || '').split(' ')[0].split('T')[0];
+      priceCard.appendChild(h('div', { style: {
+        padding: '9px 0',
+        borderTop: '1px solid var(--line2)',
+      } },
+        h('div', { class: 'fxb', style: { gap: '8px', alignItems: 'start' } },
+          h('div', { style: { minWidth: 0 } },
+            h('div', { style: {
+              fontSize: '12px', fontWeight: 700,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
+            } }, ch.product_name || 'Producto'),
+            h('div', { style: { fontSize: '10px', color: 'var(--muted2)' } },
+              `${ch.product_code || '—'} · ${fdate(date)} · ${ch.source || 'manual'} · ${ch.user_name || 'Sistema'}`),
+            h('div', { style: {
+              fontSize: '10px',
+              color: 'var(--muted2)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              maxWidth: '260px'
+            } }, `${ch.reason || 'Sin motivo'} · stock ant. ${ch.stock_at_change || 0}`)
+          ),
+          h('div', { style: { textAlign: 'right', flexShrink: 0 } },
+            h('div', { style: {
+              fontSize: '11px',
+              color: costDelta > 0 ? 'var(--amber)' : costDelta < 0 ? 'var(--green)' : 'var(--muted)'
+            } }, `Costo ${costDelta > 0 ? '+' : ''}${fmt(costDelta)}`),
+            h('div', { style: { fontSize: '11px', color: 'var(--muted2)' } },
+              `Venta ${priceDelta > 0 ? '+' : ''}${fmt(priceDelta)}`),
+            h('div', { style: {
+              fontSize: '11px', fontWeight: 700,
+              color: impact > 0 ? 'var(--amber)' : impact < 0 ? 'var(--green)' : 'var(--muted)'
+            } }, `Impacto ${impact > 0 ? '+' : ''}${fmt(impact)}`),
+            h('div', { style: { fontSize: '10px', color: 'var(--muted2)' } },
+              `Valor venta ${retailImpact > 0 ? '+' : ''}${fmt(retailImpact)}`)
+          )
+        )
+      ));
+    });
+  }
+  grid.appendChild(priceCard);
 
   // ── Créditos pendientes ──────────────────────
   const creditClients = DB.customers.filter(c => c.balance > 0 && c.id !== 1);
@@ -796,6 +883,29 @@ function exportReportePDF() {
       <td style="text-align:right">${p.total_rev > 0 ? ((p.total_profit/p.total_rev)*100).toFixed(0) : 0}%</td>
     </tr>`).join('');
 
+  const priceRows = (d.priceChanges || []).map(ch => {
+    const date = String(ch.created_at || '').split(' ')[0].split('T')[0];
+    const costDelta = Number(ch.cost_delta || 0);
+    const priceDelta = Number(ch.price_delta || 0);
+    const impact = Number(ch.stock_value_delta || 0);
+    const retailImpact = Number(ch.retail_value_delta || 0);
+    return `
+      <tr>
+        <td>${fdate(date)}</td>
+        <td>${_esc(ch.product_code || '')}</td>
+        <td>${_esc(ch.product_name || '')}</td>
+        <td>${_esc(ch.source || 'manual')}</td>
+        <td>${_esc(ch.user_name || 'Sistema')}</td>
+        <td style="text-align:right">${fmt(ch.cost_before || 0)} → ${fmt(ch.cost_after || 0)}</td>
+        <td style="text-align:right">${costDelta > 0 ? '+' : ''}${fmt(costDelta)}</td>
+        <td style="text-align:right">${priceDelta > 0 ? '+' : ''}${fmt(priceDelta)}</td>
+        <td style="text-align:right">${ch.stock_at_change || 0}</td>
+        <td style="text-align:right;font-weight:700">${impact > 0 ? '+' : ''}${fmt(impact)}</td>
+        <td style="text-align:right">${retailImpact > 0 ? '+' : ''}${fmt(retailImpact)}</td>
+        <td>${_esc(ch.reason || '')}</td>
+      </tr>`;
+  }).join('');
+
   const html = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"/>
 <title>Reporte — ${_esc(CFG.biz)}</title>
@@ -888,6 +998,21 @@ function exportReportePDF() {
     <tbody>${prodRows || '<tr><td colspan="7" style="text-align:center;color:#9ca3af">Sin datos</td></tr>'}</tbody>
   </table>
 
+  <h3>Cambios de Costo / Precio</h3>
+  <table>
+    <thead><tr>
+      <th>Fecha</th><th>Código</th><th>Producto</th><th>Origen</th><th>Usuario</th>
+      <th style="text-align:right">Costo</th>
+      <th style="text-align:right">Var. costo</th>
+      <th style="text-align:right">Var. venta</th>
+      <th style="text-align:right">Stock ant.</th>
+      <th style="text-align:right">Impacto costo</th>
+      <th style="text-align:right">Impacto venta</th>
+      <th>Motivo</th>
+    </tr></thead>
+    <tbody>${priceRows || '<tr><td colspan="12" style="text-align:center;color:#9ca3af">Sin cambios de costo/precio en el período</td></tr>'}</tbody>
+  </table>
+
   <div class="foot">
     ${_esc(CFG.biz)} · RNC: ${_esc(CFG.rnc)} · Tel: ${_esc(CFG.phone)} · ${_esc(CFG.addr)}
   </div>
@@ -973,6 +1098,8 @@ async function _renderReporteInventario(el) {
   const units    = prods.reduce((a, p) => a + (p.stock||0), 0);
   const lowStock = prods.filter(p => (p.stock||0) <= (p.stock_min||5));
   const noPrice  = prods.filter(p => !p.cost || p.cost === 0);
+  const changedProducts = prods.filter(p => p.last_price_change_id);
+  const latestCostImpact = changedProducts.reduce((a, p) => a + (Number(p.last_stock_value_delta) || 0), 0);
 
   // ── Métricas resumen ─────────────────────────
   const metWrap = h('div', { class: 'metrics' });
@@ -1001,6 +1128,21 @@ async function _renderReporteInventario(el) {
   });
   el.appendChild(metWrap);
 
+  if (changedProducts.length) {
+    el.appendChild(h('div', {
+      class: 'alrt b',
+      style: 'margin:0 0 14px'
+    },
+      h('div', { class: 'alrt-dot b' }),
+      h('div', null,
+        h('div', { style: { fontWeight: 700, fontSize: '12px' } },
+          `${changedProducts.length} producto${changedProducts.length === 1 ? '' : 's'} con historial de cambio de costo/precio`),
+        h('div', { class: 'alrt-sub' },
+          `Variación de costo sobre stock anterior: ${fmt(latestCostImpact)}`)
+      )
+    ));
+  }
+
   // ── Tabla de inventario ──────────────────────
   const card = h('div', { class: 'card', style: 'margin-top:16px' });
 
@@ -1012,6 +1154,7 @@ async function _renderReporteInventario(el) {
     { v: 'todos',   l: 'Todos' },
     { v: 'bajo',    l: `⚠ Bajo stock (${lowStock.length})` },
     { v: 'sinCosto',l: `Sin costo (${noPrice.length})` },
+    { v: 'conCambios', l: `Con cambios (${changedProducts.length})` },
   ].forEach(f => {
     filterBtns.appendChild(h('button', {
       class: `btn btn-sm ${invFilter===f.v?'btn-dark':'btn-out'}`,
@@ -1046,6 +1189,7 @@ async function _renderReporteInventario(el) {
 
     if (filter === 'bajo')     rows = rows.filter(p => (p.stock||0) <= (p.stock_min||5));
     if (filter === 'sinCosto') rows = rows.filter(p => !p.cost || p.cost === 0);
+    if (filter === 'conCambios') rows = rows.filter(p => p.last_price_change_id);
 
     const tw = document.getElementById('inv-table-wrap');
     if (!tw) return;
@@ -1067,6 +1211,7 @@ async function _renderReporteInventario(el) {
           <th style="padding:8px 6px">Producto</th>
           <th style="padding:8px 6px">Categoría</th>
           <th style="padding:8px 6px;text-align:right">Costo unit.</th>
+          <th style="padding:8px 6px;text-align:right">Últ. variación</th>
           <th style="padding:8px 6px;text-align:right">Stock</th>
           <th style="padding:8px 6px;text-align:right">Mín.</th>
           <th style="padding:8px 6px;text-align:right;color:var(--green)">Valor total</th>
@@ -1078,6 +1223,11 @@ async function _renderReporteInventario(el) {
           const val    = (p.stock||0) * (p.cost||0);
           const isBajo = (p.stock||0) <= (p.stock_min||5);
           const isZero = (p.stock||0) === 0;
+          const lastDelta = Number(p.last_cost_delta || 0);
+          const deltaColor = lastDelta > 0 ? 'var(--amber)' : lastDelta < 0 ? 'var(--green)' : 'var(--muted2)';
+          const lastDate = p.last_price_changed_at
+            ? fdate(String(p.last_price_changed_at).split(' ')[0].split('T')[0])
+            : '';
           return `
             <tr style="border-bottom:1px solid var(--line2);${isBajo?'background:var(--amber-bg)':''}"
                 onmouseover="this.style.background='var(--surface2)'"
@@ -1086,6 +1236,11 @@ async function _renderReporteInventario(el) {
               <td style="padding:8px 6px;font-weight:500">${p.name}</td>
               <td style="padding:8px 6px;color:var(--muted)">${p.category||'—'}</td>
               <td style="padding:8px 6px;text-align:right">${fmt(p.cost||0)}</td>
+              <td style="padding:8px 6px;text-align:right;color:${deltaColor}">
+                ${p.last_price_change_id
+                  ? `<strong>${lastDelta > 0 ? '+' : ''}${fmt(lastDelta)}</strong><br><span style="font-size:10px;color:var(--muted2)">${lastDate}</span>`
+                  : '<span style="color:var(--muted2)">—</span>'}
+              </td>
               <td style="padding:8px 6px;text-align:right;font-weight:700;color:${isZero?'var(--red)':isBajo?'var(--amber)':'var(--ink)'}">${p.stock||0}</td>
               <td style="padding:8px 6px;text-align:right;color:var(--muted)">${p.stock_min||5}</td>
               <td style="padding:8px 6px;text-align:right;font-weight:700;color:var(--green)">${fmt(val)}</td>
@@ -1099,7 +1254,7 @@ async function _renderReporteInventario(el) {
       </tbody>
       <tfoot>
         <tr style="border-top:2px solid var(--line);font-weight:700;background:var(--surface2)">
-          <td colspan="4" style="padding:10px 6px;text-align:right;color:var(--muted)">
+          <td colspan="5" style="padding:10px 6px;text-align:right;color:var(--muted)">
             TOTAL (${rows.length} productos)
           </td>
           <td style="padding:10px 6px;text-align:right">${rows.reduce((a,p)=>a+(p.stock||0),0)}</td>
@@ -1144,25 +1299,32 @@ function exportInventarioValorizadoPDF(prods) {
     <table>
       <thead><tr>
         <th>Código</th><th>Producto</th><th>Categoría</th>
-        <th class="r">Costo</th><th class="r">Stock</th><th class="r">Valor</th><th class="r">Estado</th>
+        <th class="r">Costo</th><th class="r">Últ. variación</th><th class="r">Stock</th><th class="r">Valor</th><th class="r">Estado</th>
       </tr></thead>
       <tbody>
-        ${sorted.map(p => `
+        ${sorted.map(p => {
+          const lastDelta = Number(p.last_cost_delta || 0);
+          const deltaText = p.last_price_change_id
+            ? `${lastDelta > 0 ? '+' : ''}$${lastDelta.toFixed(2)}`
+            : '—';
+          return `
           <tr>
             <td>${_esc(p.code)||'—'}</td>
             <td>${_esc(p.name)}</td>
             <td>${_esc(p.category)||'—'}</td>
             <td class="r">$${(p.cost||0).toFixed(2)}</td>
+            <td class="r">${deltaText}</td>
             <td class="r">${p.stock||0}</td>
             <td class="r">$${((p.stock||0)*(p.cost||0)).toFixed(2)}</td>
             <td class="r ${(p.stock||0)<=(p.stock_min||5)?'badge-bajo':'badge-ok'}">
               ${(p.stock||0)===0?'SIN STOCK':(p.stock||0)<=(p.stock_min||5)?'BAJO':'OK'}
             </td>
-          </tr>`).join('')}
+          </tr>`;
+        }).join('')}
       </tbody>
       <tfoot>
         <tr class="total">
-          <td colspan="4">TOTAL (${sorted.length} productos)</td>
+          <td colspan="5">TOTAL (${sorted.length} productos)</td>
           <td class="r">${sorted.reduce((a,p)=>a+(p.stock||0),0)}</td>
           <td class="r">$${total.toFixed(2)}</td>
           <td></td>
