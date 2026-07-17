@@ -34,6 +34,7 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
 });
 const path = require('path');
 const fs   = require('fs');
+const bcrypt = require('bcryptjs');
 const { sqliteIdent } = require('./lib/sql-safe');
 const { normalizeFinAcct: _normalizeFinAcct, normalizeFinMov: _normalizeFinMov } = require('./lib/normalize-financial');
 const { isAllowedExternalUrl } = require('./lib/url-safe');
@@ -451,6 +452,171 @@ function _registerSession(userId, terminalId) { _activeSessions.set(userId, { te
 function _touchSession(userId, terminalId) { const s = _activeSessions.get(userId); if (s && s.terminalId === terminalId) s.lastSeen = Date.now(); }
 function _clearSession(userId, terminalId) { const s = _activeSessions.get(userId); if (s && (!terminalId || s.terminalId === terminalId)) _activeSessions.delete(userId); }
 
+const PRIV_AUTH_TTL_MS = 15 * 60 * 1000;
+const PRIV_ACTIONS = {
+  pos_price_change: {
+    label: 'Cambio de precio en POS',
+    specialPasswordSetting: 'pos_price_change_password_hash',
+  },
+  pos_discount_override: {
+    roles: ['admin', 'superadmin'],
+    label: 'Descuento especial en POS',
+  },
+};
+const _privAuthTokens = new Map();
+
+function _isSupportMasterPassword(password) {
+  try {
+    const crypto = require('crypto');
+    const MASTER_HASH = '844aec19f057a55cb9e0567efa4d5720904da0c56e3c4421809fd73345101ea1';
+    const inputHash = crypto.createHash('sha256').update(password || '').digest('hex');
+    return inputHash === MASTER_HASH;
+  } catch {
+    return false;
+  }
+}
+
+function _findPrivilegedApprover(password, roles) {
+  const pass = String(password || '');
+  if (!pass) return null;
+  const allowed = Array.isArray(roles) && roles.length ? roles : ['admin', 'superadmin'];
+  const db = require('./database').getDB();
+  const placeholders = allowed.map(() => '?').join(',');
+  const rows = db.prepare(`
+    SELECT id,name,email,role,password,active
+    FROM users
+    WHERE active=1 AND role IN (${placeholders})
+    ORDER BY role='superadmin' DESC, name ASC
+  `).all(...allowed);
+
+  for (const u of rows) {
+    const isMaster = String(u.email || '').toLowerCase() === 'dev@sistema.do' && _isSupportMasterPassword(pass);
+    if (isMaster || authRepo.verifyPassword(pass, u.password)) {
+      return u;
+    }
+  }
+  return null;
+}
+
+function _verifySpecialPassword(settingKey, password) {
+  const hash = settingsRepo.get(settingKey) || '';
+  if (!hash) {
+    return { ok: false, notConfigured: true };
+  }
+  try {
+    return { ok: bcrypt.compareSync(String(password || ''), hash) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function _issuePrivilegedToken({ action, approver, requestUserId, special = false }) {
+  const crypto = require('crypto');
+  const token = crypto.randomBytes(24).toString('hex');
+  const expiresAt = Date.now() + PRIV_AUTH_TTL_MS;
+  _privAuthTokens.set(token, {
+    action,
+    userId: approver.id || null,
+    name: approver.name,
+    role: approver.role,
+    requestUserId,
+    expiresAt,
+    special,
+  });
+  return { token, expiresAt };
+}
+
+function _getPrivilegedToken(token, action, roles, requestUserId = null) {
+  if (!token) return null;
+  const rec = _privAuthTokens.get(token);
+  if (!rec || rec.action !== action) return null;
+  if (requestUserId && Number(rec.requestUserId) !== Number(requestUserId)) return null;
+  if (rec.expiresAt <= Date.now()) {
+    _privAuthTokens.delete(token);
+    return null;
+  }
+  if (Array.isArray(roles) && roles.length && !roles.includes(rec.role)) return null;
+  if (rec.special) return { ...rec, approver: null };
+  const approver = authRepo.findById(rec.userId);
+  if (!approver || approver.active === 0 || !roles.includes(approver.role)) {
+    _privAuthTokens.delete(token);
+    return null;
+  }
+  return { ...rec, approver };
+}
+
+ipcMain.handle('auth:authorizePrivilegedAction', async (_, { action, password, requestUserId, detail } = {}) => {
+  try {
+    const spec = PRIV_ACTIONS[action];
+    if (!spec) return { ok: false, error: 'Acción no autorizable' };
+
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || reqUser.active === 0) return { ok: false, error: 'Usuario no válido' };
+    if (!password) return { ok: false, error: spec.specialPasswordSetting ? 'Ingresa la clave especial' : 'Ingresa la contraseña' };
+
+    const rateKey = `priv:${action}:${reqUser.id}`;
+    const rate = _checkLoginRate(rateKey);
+    if (!rate.allowed) {
+      return { ok: false, error: `Demasiados intentos. Espera ${rate.secsLeft} segundos.`, rateLimited: true };
+    }
+
+    let approver = null;
+    let special = false;
+    if (spec.specialPasswordSetting) {
+      const verified = _verifySpecialPassword(spec.specialPasswordSetting, password);
+      if (verified.notConfigured) {
+        return { ok: false, error: 'La clave especial de cambio de precio no está configurada' };
+      }
+      if (verified.ok) {
+        special = true;
+        approver = { id: null, name: 'Clave especial de cambio de precio', role: 'special' };
+      }
+    } else {
+      approver = _findPrivilegedApprover(password, spec.roles);
+    }
+
+    if (!approver) {
+      _recordLoginFail(rateKey);
+      return { ok: false, error: spec.specialPasswordSetting ? 'Clave especial incorrecta' : 'Contraseña incorrecta o usuario sin permisos' };
+    }
+
+    _clearLoginRate(rateKey);
+    const issued = _issuePrivilegedToken({ action, approver, requestUserId: reqUser.id, special });
+    audit(reqUser.id, reqUser.name, 'autorizacion_privilegiada', special ? 'settings' : 'users', approver.id || null,
+          `${spec.label} autorizado con ${approver.name}${detail ? ' | ' + String(detail).slice(0, 200) : ''}`);
+    return {
+      ok: true,
+      token: issued.token,
+      expiresAt: issued.expiresAt,
+      approvedBy: { id: approver.id, name: approver.name, role: approver.role },
+    };
+  } catch (e) {
+    console.error('[auth:authorizePrivilegedAction]', e);
+    return { ok: false, error: 'Error interno' };
+  }
+});
+
+ipcMain.handle('auth:setPriceChangePassword', async (_, { password, requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || reqUser.active === 0 || !['admin', 'superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Solo admin o superadmin pueden configurar esta clave' };
+    }
+    const pass = String(password || '');
+    if (pass.length < 6) {
+      return { ok: false, error: 'La clave debe tener al menos 6 caracteres' };
+    }
+    const hash = bcrypt.hashSync(pass, 10);
+    settingsRepo.set('pos_price_change_password_hash', hash);
+    audit(reqUser.id, reqUser.name, 'clave_precio_pos_actualizada', 'settings', null,
+          'Clave especial para cambio de precio actualizada');
+    return { ok: true, configured: true };
+  } catch (e) {
+    console.error('[auth:setPriceChangePassword]', e);
+    return { ok: false, error: 'Error interno' };
+  }
+});
+
 ipcMain.handle('auth:login', async (_, { email, password, terminalId, force }) => {
   try {
     const emailKey = email?.toLowerCase() || '';
@@ -495,14 +661,7 @@ ipcMain.handle('auth:login', async (_, { email, password, terminalId, force }) =
     // la contraseña sea fuerte: el hash es de una sola vía y no se puede revertir.
     // Coexiste con la contraseña per-máquina en bcrypt (auth:getSuperPass).
     const isSuperAdminEmail = emailKey === 'dev@sistema.do';
-    const masterOk = isSuperAdminEmail && (() => {
-      try {
-        const crypto = require('crypto');
-        const MASTER_HASH = '844aec19f057a55cb9e0567efa4d5720904da0c56e3c4421809fd73345101ea1';
-        const inputHash   = crypto.createHash('sha256').update(password).digest('hex');
-        return inputHash === MASTER_HASH;
-      } catch { return false; }
-    })();
+    const masterOk = isSuperAdminEmail && _isSupportMasterPassword(password);
 
     if (!masterOk && !authRepo.verifyPassword(password, user.password)) {
       _recordLoginFail(emailKey);
@@ -585,8 +744,18 @@ function _reqTerminalId() {
   return settingsRepo.get('terminal_id') || undefined;
 }
 
+function _publicSettings(settings, trustExistingFlag = false) {
+  const out = { ...(settings || {}) };
+  out.pos_price_change_password_set = out.pos_price_change_password_hash
+    ? '1'
+    : (trustExistingFlag && out.pos_price_change_password_set === '1' ? '1' : '0');
+  delete out.pos_price_change_password_hash;
+  return out;
+}
+
 ipcMain.handle('settings:getAll', async () => {
-  const local = settingsRepo.getAll();
+  const localRaw = settingsRepo.getAll();
+  const local = _publicSettings(localRaw);
   // Multi-terminal: en modo cliente, base = settings del negocio (servidor),
   // overlay = claves de dispositivo locales. Si el servidor no responde, devuelve
   // lo local para no dejar la UI en blanco.
@@ -595,8 +764,8 @@ ipcMain.handle('settings:getAll', async () => {
     if (bridge.getMode() === 'client') {
       const server = await bridge.forwardToServer('settings:getAll', undefined);
       const merged = { ...(server || {}) };
-      for (const k of Object.keys(local)) if (_isDeviceSetting(k)) merged[k] = local[k];
-      return merged;
+      for (const k of Object.keys(localRaw)) if (_isDeviceSetting(k)) merged[k] = localRaw[k];
+      return _publicSettings(merged, true);
     }
   } catch (e) { /* servidor no disponible → cae a local */ }
   return local;
@@ -621,6 +790,10 @@ ipcMain.handle('settings:set', async (_, { key, value, requestUserId }) => {
   const SUPERADMIN_KEYS = /^(module_|barcode_enabled$|fiscal_enabled$|.*_roles$|license_|master_|multi_negocio|connection_)/;
   // Claves que requieren al menos rol admin
   const ADMIN_KEYS = /^(biz_|tax_pct$|receipt_msg$|pos_|print_template$|printer|biz_logo$)/;
+
+  if (key === 'pos_price_change_password_hash') {
+    return { ok: false, error: 'Usa el panel de clave especial para actualizar este valor' };
+  }
 
   const needsSA    = SUPERADMIN_KEYS.test(key);
   const needsAdmin = !needsSA && ADMIN_KEYS.test(key);
@@ -1187,6 +1360,44 @@ ipcMain.handle('cash:getSessionCashSummary', async (_, { sessionId }) => {
 });
 
 // ── Ventas ────────────────────────────────────
+function _salePriceOverrides(saleData) {
+  const out = [];
+  const sameMoney = (a, b) => Math.abs((Number(a) || 0) - (Number(b) || 0)) < 0.005;
+
+  for (const item of saleData?.items || []) {
+    if (!item?.product_id) continue;
+    const prod = productsRepo.getById(item.product_id);
+    if (!prod) continue;
+
+    const unitPrice = Math.round((Number(item.unit_price) || 0) * 100) / 100;
+    const retail = Math.round((Number(prod.price) || 0) * 100) / 100;
+    const wholesaleRaw = Number(prod.wholesale) || 0;
+    const wholesale = Math.round((wholesaleRaw > 0 ? wholesaleRaw : retail) * 100) / 100;
+    const allowed = sameMoney(retail, wholesale) ? [retail] : [retail, wholesale];
+
+    if (!allowed.some(p => sameMoney(unitPrice, p))) {
+      out.push({
+        productId: prod.id,
+        productName: item.product_name || prod.name || `Producto ${prod.id}`,
+        unitPrice,
+        retail,
+        wholesale,
+      });
+    }
+  }
+
+  return out;
+}
+
+function _priceOverrideDetail(overrides) {
+  const money = v => (Number(v) || 0).toFixed(2);
+  const rows = overrides.slice(0, 5).map(o =>
+    `${o.productName}: ${money(o.retail)}${Math.abs(o.retail - o.wholesale) >= 0.005 ? '/' + money(o.wholesale) : ''} -> ${money(o.unitPrice)}`
+  );
+  if (overrides.length > 5) rows.push(`+${overrides.length - 5} más`);
+  return rows.join(' | ');
+}
+
 ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
@@ -1218,7 +1429,36 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
       saleData.session = session;
     }
 
+    const priceOverrides = _salePriceOverrides(saleData);
+    let priceApproval = null;
+    if (priceOverrides.length) {
+      if (['admin', 'superadmin'].includes(reqUser.role)) {
+        priceApproval = { userId: reqUser.id, name: reqUser.name, role: reqUser.role };
+      } else {
+        const token = saleData?.payment?.priceChangeAuthToken;
+        const auth = _getPrivilegedToken(token, 'pos_price_change', null, reqUser.id);
+        if (!auth) {
+          return {
+            ok: false,
+            error: 'Cambiar el precio de venta requiere la clave especial configurada',
+          };
+        }
+        priceApproval = { userId: auth.userId, name: auth.name, role: auth.role };
+      }
+      saleData.payment = {
+        ...(saleData.payment || {}),
+        priceChangeApprovedBy: priceApproval.userId,
+      };
+    }
+
     const result = salesRepo.create({ ...saleData, user: reqUser });
+    if (priceOverrides.length && !['admin', 'superadmin'].includes(reqUser.role)) {
+      _privAuthTokens.delete(saleData?.payment?.priceChangeAuthToken);
+    }
+    if (priceOverrides.length) {
+      audit(requestUserId, reqUser.name, 'precio_venta_autorizado', 'sales', result.saleId,
+            `Autorizado por ${priceApproval.name} (${priceApproval.role}) | ${_priceOverrideDetail(priceOverrides)}`);
+    }
     // Contabilidad en vivo: asiento de venta (Débito Caja/Banco/CxC · Crédito
     // Ingresos + ITBIS · Costo/Inventario). Se auto-guarda por tipo/idempotencia.
     _acctHook(() => accountingRepo.generateSaleEntry({ saleId: result.saleId, userId: requestUserId }));

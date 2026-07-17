@@ -22,12 +22,74 @@ let invHistAccounting = '';
 let invHistRows = [];
 let invHistLoadedKey = '';
 let invHistToken = 0;
+let invRenderTimer = null;
+let invProductReloadToken = 0;
 
 const invEsc = s => String(s || '')
   .replace(/&/g, '&amp;')
   .replace(/</g, '&lt;')
   .replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;');
+
+const invIdle = (fn) => {
+  if (typeof window !== 'undefined' && window.requestIdleCallback) {
+    return window.requestIdleCallback(fn, { timeout: 250 });
+  }
+  return setTimeout(fn, 16);
+};
+
+function scheduleInvTableRender(delay = 90) {
+  clearTimeout(invRenderTimer);
+  invRenderTimer = setTimeout(() => renderInvTable(), delay);
+}
+
+function invalidateInvHistoryCache() {
+  invHistLoadedKey = '';
+}
+
+function patchInvProductLocal(id, patch = {}) {
+  const idx = DB.products.findIndex(p => Number(p.id) === Number(id));
+  if (idx >= 0) DB.products[idx] = { ...DB.products[idx], ...patch, id: DB.products[idx].id };
+  else if (patch && id) DB.products.push({ ...patch, id });
+}
+
+function removeInvProductLocal(id) {
+  DB.products = DB.products.filter(p => Number(p.id) !== Number(id));
+}
+
+function renderInvCurrentView() {
+  if (document.getElementById('inv-table-wrap')) {
+    renderInvTable();
+    return;
+  }
+  const page = document.getElementById('page');
+  if (page) renderInventario(page);
+}
+
+async function refreshInventoryDataDeferred({ invalidateHistory = false } = {}) {
+  const token = ++invProductReloadToken;
+  await new Promise(resolve => (
+    typeof requestAnimationFrame === 'function'
+      ? requestAnimationFrame(resolve)
+      : setTimeout(resolve, 0)
+  ));
+  try {
+    await reloadProducts();
+    if (token !== invProductReloadToken) return;
+    if (invalidateHistory) invalidateInvHistoryCache();
+    renderInvCurrentView();
+  } catch (e) {
+    console.warn('[inventario] refresco diferido:', e.message);
+  }
+}
+
+function applyInventoryMutation({ productId, patch, remove = false, invalidateHistory = false } = {}) {
+  if (invalidateHistory) invalidateInvHistoryCache();
+  if (remove) removeInvProductLocal(productId);
+  else if (productId && patch) patchInvProductLocal(productId, patch);
+  renderInvCurrentView();
+  refreshInventoryDataDeferred({ invalidateHistory });
+}
 
 function renderInventario(el) {
   el.innerHTML = '';
@@ -133,7 +195,7 @@ function renderInventario(el) {
           class: 'inp', type: 'text',
           placeholder: 'Buscar por nombre, código, marca...',
           value: invSearch,
-          oninput: e => { invSearch = e.target.value; renderInvTable(); }
+          oninput: e => { invSearch = e.target.value; scheduleInvTableRender(); }
         })
       ),
       (() => {
@@ -431,7 +493,7 @@ async function renderInvPriceHistory(wrap) {
         type: 'text',
         placeholder: 'Buscar producto, código, motivo, usuario...',
         value: invHistSearch,
-        oninput: e => { invHistSearch = e.target.value; renderInvTable(); }
+        oninput: e => { invHistSearch = e.target.value; scheduleInvTableRender(); }
       })
     ),
     (() => {
@@ -584,44 +646,48 @@ async function renderInvPriceHistory(wrap) {
       </div>
     </div>`;
 
-  const tableRows = rows.length
-    ? rows.map(h => {
-        const date = String(h.created_at || '').split(' ')[0].split('T')[0];
-        const impact = Number(h.stock_value_delta || 0);
-        const impactColor = impact > 0 ? 'var(--amber)' : impact < 0 ? 'var(--green)' : 'var(--muted)';
-        const acct = invHistAccountingInfo(h);
-        const productId = Number(h.product_id || 0);
-        return `
-          <tr>
-            <td style="font-size:11px;color:var(--muted)">${fdate(date)}</td>
-            <td class="tm" style="font-size:11px">${esc(h.product_code || '')}</td>
-            <td>
-              <div class="tb">${esc(h.product_name || 'Producto')}</div>
-              <div class="ts">${esc(h.category || '')}</div>
-            </td>
-            <td><span class="badge n">${sourceLabel[h.source] || esc(h.source || 'Manual')}</span></td>
-            <td style="text-align:right">
-              <div style="font-weight:700">${fmt(h.cost_before || 0)} → ${fmt(h.cost_after || 0)}</div>
-              <div style="font-size:10px;color:var(--muted2)">${signedFmt(h.cost_delta)}</div>
-            </td>
-            <td style="text-align:right">
-              <div style="font-weight:700">${fmt(h.price_before || 0)} → ${fmt(h.price_after || 0)}</div>
-              <div style="font-size:10px;color:var(--muted2)">${signedFmt(h.price_delta)}</div>
-            </td>
-            <td style="text-align:center;font-weight:700">${h.stock_at_change || 0}</td>
-            <td style="text-align:right;font-weight:700;color:${impactColor}">${signedFmt(impact)}</td>
-            <td style="text-align:center">${acct.html}</td>
-            <td style="font-size:11px;color:var(--muted2);max-width:240px">
-              ${esc(h.reason || '—')}<br>
-              <span style="font-size:10px">${esc(h.user_name || 'Sistema')}</span>
-            </td>
-            <td style="text-align:right">
-              <button class="btn btn-ghost btn-sm" data-action="kardex" data-product-id="${productId}">
-                ${svg('chart')} Kardex
-              </button>
-            </td>
-          </tr>`;
-      }).join('')
+  const rowHTML = h => {
+    const date = String(h.created_at || '').split(' ')[0].split('T')[0];
+    const impact = Number(h.stock_value_delta || 0);
+    const impactColor = impact > 0 ? 'var(--amber)' : impact < 0 ? 'var(--green)' : 'var(--muted)';
+    const acct = invHistAccountingInfo(h);
+    const productId = Number(h.product_id || 0);
+    return `
+      <tr>
+        <td style="font-size:11px;color:var(--muted)">${fdate(date)}</td>
+        <td class="tm" style="font-size:11px">${esc(h.product_code || '')}</td>
+        <td>
+          <div class="tb">${esc(h.product_name || 'Producto')}</div>
+          <div class="ts">${esc(h.category || '')}</div>
+        </td>
+        <td><span class="badge n">${sourceLabel[h.source] || esc(h.source || 'Manual')}</span></td>
+        <td style="text-align:right">
+          <div style="font-weight:700">${fmt(h.cost_before || 0)} → ${fmt(h.cost_after || 0)}</div>
+          <div style="font-size:10px;color:var(--muted2)">${signedFmt(h.cost_delta)}</div>
+        </td>
+        <td style="text-align:right">
+          <div style="font-weight:700">${fmt(h.price_before || 0)} → ${fmt(h.price_after || 0)}</div>
+          <div style="font-size:10px;color:var(--muted2)">${signedFmt(h.price_delta)}</div>
+        </td>
+        <td style="text-align:center;font-weight:700">${h.stock_at_change || 0}</td>
+        <td style="text-align:right;font-weight:700;color:${impactColor}">${signedFmt(impact)}</td>
+        <td style="text-align:center">${acct.html}</td>
+        <td style="font-size:11px;color:var(--muted2);max-width:240px">
+          ${esc(h.reason || '—')}<br>
+          <span style="font-size:10px">${esc(h.user_name || 'Sistema')}</span>
+        </td>
+        <td style="text-align:right">
+          <button class="btn btn-ghost btn-sm" data-action="kardex" data-product-id="${productId}">
+            ${svg('chart')} Kardex
+          </button>
+        </td>
+      </tr>`;
+  };
+
+  const BATCH = 80;
+  let rendered = Math.min(BATCH, rows.length);
+  const firstRows = rows.length
+    ? rows.slice(0, rendered).map(rowHTML).join('')
     : `<tr><td colspan="11" style="text-align:center;color:var(--muted2);padding:22px">
          Sin cambios que coincidan con los filtros</td></tr>`;
 
@@ -644,9 +710,29 @@ async function renderInvPriceHistory(wrap) {
             <th></th>
           </tr>
         </thead>
-        <tbody>${tableRows}</tbody>
+        <tbody>${firstRows}</tbody>
       </table>
     </div>`;
+
+  if (rendered < rows.length) {
+    const scroller = body.querySelector('.tw');
+    const tbody = body.querySelector('tbody');
+    let loadingMore = false;
+    const loadMore = () => {
+      if (loadingMore || rendered >= rows.length) return;
+      loadingMore = true;
+      invIdle(() => {
+        if (token !== invHistToken || !document.body.contains(body)) return;
+        const next = rows.slice(rendered, rendered + BATCH).map(rowHTML).join('');
+        tbody.insertAdjacentHTML('beforeend', next);
+        rendered += BATCH;
+        loadingMore = false;
+      });
+    };
+    scroller?.addEventListener('scroll', () => {
+      if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 260) loadMore();
+    });
+  }
 
   body.addEventListener('click', e => {
     const btn = e.target.closest('[data-action="kardex"]');
@@ -807,7 +893,7 @@ async function openKardexModal(p) {
             <th style="text-align:right">Costo</th>
             <th style="text-align:right">Precio final</th>
             <th style="text-align:center">Stock ant.</th>
-            <th style="text-align:right">Variación</th>
+            <th style="text-align:right">Impacto<br>inventario</th>
             <th style="text-align:center">Contab.</th>
             <th>Motivo / Usuario</th>
           </tr>
@@ -976,11 +1062,11 @@ async function confirmarEntrada() {
   }
 
   // Actualizar costo — promedio ponderado para nuevos, fijo para usados/especiales
+  let costoFinal = null;
   if (newCost > 0) {
     const p = DB.products.find(x => x.id === id);
     if (p) {
       const esEspecial = ['usado','reacondicionado','consignacion','especial'].includes(p.condition);
-      let costoFinal;
       if (esEspecial) {
         // Productos usados/especiales: costo fijo, no promedio
         costoFinal = newCost;
@@ -1003,11 +1089,17 @@ async function confirmarEntrada() {
     }
   }
 
-  await reloadProducts();
   closeModal();
   const p = DB.products.find(x => x.id === id);
   toast(`✓ Entrada registrada — Stock: ${result.after} ${p?.unit||'und'}`);
-  renderInventario(document.getElementById('page'));
+  applyInventoryMutation({
+    productId: id,
+    patch: {
+      stock: result.after,
+      ...(costoFinal != null ? { cost: costoFinal } : {}),
+    },
+    invalidateHistory: costoFinal != null,
+  });
 }
 
 // ══════════════════════════════════════════════
@@ -1323,18 +1415,20 @@ async function guardarProducto(id) {
 
   if (!result.ok) { toast(result.error || 'Error al guardar', 'err'); return; }
 
-  await reloadProducts();
   closeModal();
   toast(id ? '✓ Producto actualizado' : '✓ Producto registrado');
-  renderInventario(document.getElementById('page'));
+  applyInventoryMutation({
+    productId: id || result.id,
+    patch: { ...data, id: id || result.id },
+    invalidateHistory: !!result.historyId,
+  });
 }
 
 async function eliminarProducto(id) {
   const result = await window.api.products.delete({ id, requestUserId: user.id });
   if (!result.ok) { toast(result.error || 'Error', 'err'); return; }
-  await reloadProducts();
   toast('Producto inactivado');
-  renderInventario(document.getElementById('page'));
+  applyInventoryMutation({ productId: id, remove: true });
 }
 
 // ══════════════════════════════════════════════
@@ -1427,10 +1521,9 @@ async function confirmarAjuste(id, currentStock) {
     toast(result.error || 'Error al ajustar', 'err'); return;
   }
 
-  await reloadProducts();
   closeModal();
   toast(`✓ Stock ajustado: ${result.before} → ${result.after}`);
-  renderInventario(document.getElementById('page'));
+  applyInventoryMutation({ productId: id, patch: { stock: result.after } });
 }
 
 // ══════════════════════════════════════════════
@@ -1618,7 +1711,6 @@ async function confirmarMoverCategoria() {
     else fail++;
   }
 
-  await reloadProducts();
   closeModal();
 
   if (fail === 0) {
@@ -1626,7 +1718,9 @@ async function confirmarMoverCategoria() {
   } else {
     toast(`${ok} movidos, ${fail} con error`, 'w');
   }
-  renderInventario(document.getElementById('page'));
+  ids.forEach(id => patchInvProductLocal(id, { category: destCat }));
+  renderInvCurrentView();
+  refreshInventoryDataDeferred();
 }
 
 // ══════════════════════════════════════════════

@@ -29,6 +29,7 @@ const _gFmt = n => 'RD$' + (n||0).toLocaleString('es-DO', { minimumFractionDigit
 const _gFmtDate = d => d ? new Date(d + 'T00:00:00').toLocaleDateString('es-DO', { day:'2-digit', month:'short', year:'numeric' }) : '—';
 const _gToday = () => new Date().toISOString().split('T')[0];
 const _gThisMonth = () => _gToday().slice(0,7);
+const _gSvg = (name, size = 16) => (svg(name) || '').replace('<svg ', `<svg style="width:${size}px;height:${size}px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:0 0 ${size}px" `);
 
 const STATUS_LABEL = {
   borrador:             { t:'Borrador',              c:'var(--muted2)' },
@@ -184,7 +185,7 @@ async function _renderGastosContent(content, user) {
 async function renderResumen(el, user) {
   el.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;padding:40px;color:var(--muted2)">
     <div style="text-align:center">
-      <div style="font-size:24px;margin-bottom:8px">${svg('chart')}</div>
+      <div style="font-size:24px;margin-bottom:8px">${_gSvg('chart', 24)}</div>
       <div>Cargando resumen...</div>
     </div>
   </div>`;
@@ -229,7 +230,7 @@ async function renderResumen(el, user) {
         }).join('')}
       </div>` : `
       <div style="background:var(--bg2);border-radius:10px;padding:32px;text-align:center;color:var(--muted2);border:0.5px solid var(--line2)">
-        ${svg('chart')}
+        ${_gSvg('chart', 24)}
         <div style="margin-top:8px;font-size:13px">Sin gastos registrados este mes</div>
         <div style="font-size:11px;margin-top:4px">Registra el primer gasto para ver el resumen</div>
       </div>`}`;
@@ -249,12 +250,13 @@ async function renderListaGastos(el, user) {
       <input id="gf-from" type="date" class="inp" style="width:130px;font-size:12px" value="${_gThisMonth()}-01">
       <input id="gf-to"   type="date" class="inp" style="width:130px;font-size:12px" value="${_gToday()}">
       <select id="gf-status" class="inp" style="width:160px;font-size:12px">
-        <option value="">Todos los estados</option>
+        <option value="">Estados activos</option>
         <option value="pendiente_pago">Pendiente de pago</option>
         <option value="pendiente_aprobacion">Pend. aprobación</option>
         <option value="parcialmente_pagado">Parcial</option>
         <option value="pagado">Pagado</option>
         <option value="anulado">Anulado</option>
+        <option value="rechazado">Rechazado</option>
       </select>
       <button class="btn btn-ghost btn-sm" id="gf-apply">${svg('filter')} Filtrar</button>
     </div>
@@ -283,7 +285,7 @@ async function renderListaGastos(el, user) {
 
       if (!data.length) {
         wrap.innerHTML = `<div style="text-align:center;padding:40px;color:var(--muted2)">
-          ${svg('list')}<div style="margin-top:8px;font-size:13px">Sin gastos en este período</div></div>`;
+          ${_gSvg('list', 24)}<div style="margin-top:8px;font-size:13px">Sin gastos en este período</div></div>`;
         return;
       }
 
@@ -358,13 +360,13 @@ async function renderPorPagar(el, user) {
 
     el.innerHTML = `
       ${vencidas.length ? `<div style="background:#fef2f2;border:1px solid #ef4444;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#991b1b">
-        ${svg('alert')} <strong>${vencidas.length} factura${vencidas.length>1?'s':''} vencida${vencidas.length>1?'s':''}</strong> por un total de <strong>${_gFmt(vencidas.reduce((a,e)=>a+(e.total-e.paid_amount),0))}</strong>
+        ${_gSvg('alert', 14)} <strong>${vencidas.length} factura${vencidas.length>1?'s':''} vencida${vencidas.length>1?'s':''}</strong> por un total de <strong>${_gFmt(vencidas.reduce((a,e)=>a+(e.total-e.paid_amount),0))}</strong>
       </div>` : ''}
       ${proximas.length ? `<div style="background:#fffbeb;border:1px solid #f59e0b;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#92400e">
-        ${svg('bell')} Tienes <strong>${proximas.length} factura${proximas.length>1?'s':''}</strong> que vencen esta semana por <strong>${_gFmt(proximas.reduce((a,e)=>a+(e.total-e.paid_amount),0))}</strong>
+        ${_gSvg('bell', 14)} Tienes <strong>${proximas.length} factura${proximas.length>1?'s':''}</strong> que vencen esta semana por <strong>${_gFmt(proximas.reduce((a,e)=>a+(e.total-e.paid_amount),0))}</strong>
       </div>` : ''}
       ${!data.length ? `<div style="text-align:center;padding:40px;color:var(--muted2)">
-        ${svg('check')}<div style="margin-top:8px;font-size:13px">Sin cuentas pendientes</div></div>` : `
+        ${_gSvg('check', 24)}<div style="margin-top:8px;font-size:13px">Sin cuentas pendientes</div></div>` : `
       <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse;font-size:12px">
           <thead>
@@ -416,7 +418,7 @@ async function renderRecurrentes(el, user) {
         <button class="btn btn-dark btn-sm" id="btn-new-recurrent">${svg('plus')} Nueva plantilla</button>
       </div>
       ${!data.length ? `<div style="text-align:center;padding:40px;color:var(--muted2)">
-        ${svg('clock')}<div style="margin-top:8px;font-size:13px">Sin gastos recurrentes configurados</div></div>` : `
+        ${_gSvg('clock', 24)}<div style="margin-top:8px;font-size:13px">Sin gastos recurrentes configurados</div></div>` : `
       <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse;font-size:12px">
           <thead>
@@ -468,8 +470,8 @@ async function renderProveedoresGastos(el, user) {
           <div style="background:var(--bg2);border-radius:10px;padding:14px 16px;border:0.5px solid var(--line2)">
             <div style="font-weight:600;font-size:13px;margin-bottom:2px">${s.name}</div>
             ${s.rnc ? `<div style="font-size:11px;color:var(--muted2)">RNC: ${s.rnc}</div>` : ''}
-            ${s.phone ? `<div style="font-size:11px;color:var(--muted2)">${svg('phone')} ${s.phone}</div>` : ''}
-            ${s.email ? `<div style="font-size:11px;color:var(--muted2)">${svg('mail')} ${s.email}</div>` : ''}
+            ${s.phone ? `<div style="font-size:11px;color:var(--muted2)">${_gSvg('phone', 12)} ${s.phone}</div>` : ''}
+            ${s.email ? `<div style="font-size:11px;color:var(--muted2)">${_gSvg('mail', 12)} ${s.email}</div>` : ''}
             <div style="margin-top:8px;display:flex;gap:6px;align-items:center">
               <span style="font-size:10px;padding:2px 8px;border-radius:100px;background:${s.status==='activo'?'var(--green,#00c07a)':'var(--red,#ef4444)'}22;color:${s.status==='activo'?'var(--green,#00c07a)':'var(--red,#ef4444)'};font-weight:600">${s.status||'activo'}</span>
               <button class="btn btn-ghost btn-sm" style="margin-left:auto;font-size:11px;padding:3px 8px" onclick="imprimirEstadoCuentaProveedor(${s.id})" title="Imprimir estado de cuenta">${svg('print')} Estado de cuenta</button>
@@ -610,7 +612,7 @@ async function renderPresupuestos(el, user) {
         <button class="btn btn-dark btn-sm" id="btn-add-budget">${svg('plus')} Agregar presupuesto</button>
       </div>
       ${!data.length ? `<div style="text-align:center;padding:40px;color:var(--muted2)">
-        ${svg('dollar')}<div style="margin-top:8px;font-size:13px">Sin presupuestos configurados para este mes</div></div>` : `
+        ${_gSvg('dollar', 24)}<div style="margin-top:8px;font-size:13px">Sin presupuestos configurados para este mes</div></div>` : `
       <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse;font-size:12px">
           <thead>
@@ -1080,8 +1082,9 @@ window.rechazarGasto = (id) => {
 window.anularGasto = (id) => {
   const user = _getUser();
   abrirModal('Anular gasto', `
-    <div style="color:var(--amber,#f59e0b);margin-bottom:12px;font-size:13px">
-      ${svg('alert')} Esta acción no se puede deshacer. Si el gasto afectó la caja, se creará un contramovimiento.
+    <div style="display:flex;gap:10px;align-items:flex-start;background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;line-height:1.45">
+      ${_gSvg('alert', 18)}
+      <div>Esta acción no se puede deshacer. Si el gasto afectó la caja, se creará un contramovimiento.</div>
     </div>
     <div class="fg"><label class="lbl">Motivo de anulación *</label>
       <textarea class="inp" id="cancel-reason" rows="3" placeholder="Indica el motivo..."></textarea></div>`,

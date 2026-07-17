@@ -899,6 +899,44 @@ async function renderConfiguracion(el) {
   }
   colRight.appendChild(usersCard);
 
+  // ── Clave especial para cambio de precio en POS ─────────────────
+  if (isAdmin) {
+    const priceKeyConfigured = settings.pos_price_change_password_set === '1';
+    const priceKeyCard = h('div', { class: 'card' });
+    priceKeyCard.innerHTML = `
+      <div class="fxb mb8">
+        <div class="card-title">Clave para cambio de precio</div>
+        <span id="price-key-status" class="badge ${priceKeyConfigured ? 'g' : 'a'}">
+          ${priceKeyConfigured ? 'Configurada' : 'No configurada'}
+        </span>
+      </div>
+      <div class="alrt ${priceKeyConfigured ? 'b' : 'a'}" style="margin-bottom:12px">
+        <div class="alrt-dot ${priceKeyConfigured ? 'b' : 'a'}"></div>
+        <div>
+          <div class="alrt-title">Clave especial del POS</div>
+          <div class="alrt-sub">
+            Los cajeros la necesitarán para cambiar el precio final de un producto.
+            No es la contraseña de login del administrador.
+          </div>
+        </div>
+      </div>
+      <div class="fg">
+        <label class="lbl">Nueva clave especial</label>
+        <input class="inp" id="cfg-price-key" type="password" autocomplete="new-password"
+               placeholder="Mínimo 6 caracteres"/>
+      </div>
+      <div class="fg">
+        <label class="lbl">Confirmar clave</label>
+        <input class="inp" id="cfg-price-key-confirm" type="password" autocomplete="new-password"
+               placeholder="Repite la clave"/>
+      </div>
+      <button class="btn btn-dark btn-fw" id="btn-save-price-key">
+        ${svg('lock')} Guardar clave especial
+      </button>`;
+    colRight.appendChild(priceKeyCard);
+    priceKeyCard.querySelector('#btn-save-price-key')?.addEventListener('click', guardarClavePrecioPOS);
+  }
+
   // ── Diagnóstico del sistema (solo superadmin) ──
   if (isSA) {
     const diagCard = h('div', { class: 'card', id: 'diag-card' });
@@ -1007,6 +1045,44 @@ async function guardarConfiguracion() {
   CFG.fiscalEnabled = s.fiscal_enabled === '1';
   CFG.itbis        = parseFloat(s.tax_pct) || 18;
   toast('✓ Configuración guardada');
+}
+
+async function guardarClavePrecioPOS() {
+  const pass = document.getElementById('cfg-price-key')?.value || '';
+  const pass2 = document.getElementById('cfg-price-key-confirm')?.value || '';
+  if (pass.length < 6) { toast('La clave debe tener al menos 6 caracteres', 'err'); return; }
+  if (pass !== pass2) { toast('Las claves no coinciden', 'err'); return; }
+
+  const btn = document.getElementById('btn-save-price-key');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `${svg('clock')} Guardando...`;
+  }
+
+  const res = await window.api.auth.setPriceChangePassword({
+    password: pass,
+    requestUserId: _cfgUser()?.id || user?.id,
+  }).catch(e => ({ ok: false, error: e?.message || 'No se pudo guardar la clave' }));
+
+  if (btn) {
+    btn.disabled = false;
+    btn.innerHTML = `${svg('lock')} Guardar clave especial`;
+  }
+
+  if (!res?.ok) {
+    toast(res?.error || 'No se pudo guardar la clave', 'err');
+    return;
+  }
+
+  document.getElementById('cfg-price-key').value = '';
+  document.getElementById('cfg-price-key-confirm').value = '';
+  const badge = document.getElementById('price-key-status');
+  if (badge) {
+    badge.className = 'badge g';
+    badge.textContent = 'Configurada';
+  }
+  if (DB.settings) DB.settings.pos_price_change_password_set = '1';
+  toast('✓ Clave especial de cambio de precio guardada');
 }
 
 

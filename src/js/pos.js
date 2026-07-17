@@ -180,6 +180,11 @@ async function renderPOS(el) {
     renderPOSGrid();
     renderInvTabs();
     renderCart();
+    if (window._pendingPOSResaleCart) {
+      const pending = window._pendingPOSResaleCart;
+      window._pendingPOSResaleCart = null;
+      setTimeout(() => posLoadResaleCart(pending), 0);
+    }
   } catch(e) {
     console.error('[renderPOS]', e);
     if (el) el.innerHTML = `<div style="padding:40px;text-align:center">
@@ -358,10 +363,16 @@ function posAddItem(pid) {
     return;
   }
 
-  const exist = inv.cart.find(i => i.pid === pid);
+  const exist = inv.cart.find(i =>
+    i.pid === pid &&
+    !i.resale_source &&
+    posMoneyEq(i.price, price)
+  );
 
   if (exist) {
-    if (exist.qty >= prod.stock) { toast('No hay más stock', 'err'); return; }
+    const idx = inv.cart.indexOf(exist);
+    const maxForLine = Math.max(0, (Number(prod.stock) || 0) - posCartQtyForProduct(pid, idx));
+    if (exist.qty >= maxForLine) { toast('No hay más stock', 'err'); return; }
     exist.qty++;
   } else {
     inv.cart.push({
@@ -429,7 +440,7 @@ function renderCart() {
       html += `
         <div class="cart-item">
           <div class="ci-info">
-            <div class="ci-name">${item.name}</div>
+            <div class="ci-name">${posEscHtml(item.name)}</div>
             <div class="ci-price" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
               <span style="font-size:10px;color:var(--muted2);font-weight:600">Precio final</span>
               <input type="number" min="0" step="0.01" value="${Number(item.price || 0).toFixed(2)}"
@@ -441,6 +452,10 @@ function renderCart() {
                 onclick="this.select()"/>
               ${item.taxable === 0 ? '' : `<span style="font-size:10px;color:var(--blue);font-weight:700">ITBIS incl.</span>`}
             </div>
+            ${item.resale_source?.saleId ? `
+              <div style="font-size:10px;color:var(--green);font-weight:700;margin-top:3px">
+                Reventa de venta #${String(item.resale_source.saleId).padStart(5,'0')}
+              </div>` : ''}
           </div>
           <div class="qc">
             <button class="qb" onclick="posQty(${idx},-1)">−</button>
@@ -497,14 +512,24 @@ function posSetType(t) {
   renderCart();
 }
 
+function posCartQtyForProduct(productId, exceptIdx = -1) {
+  return currentInv().cart.reduce((sum, item, idx) => {
+    if (idx === exceptIdx) return sum;
+    return Number(item.product_id || item.pid) === Number(productId)
+      ? sum + (Number(item.qty) || 0)
+      : sum;
+  }, 0);
+}
+
 function posQty(idx, delta) {
   const inv  = currentInv();
   const item = inv.cart[idx];
   if (!item) return;
   const prod = DB.products.find(p => p.id === item.pid);
+  const maxForLine = Math.max(0, (prod?.stock || 999) - posCartQtyForProduct(prod?.id || item.product_id || item.pid, idx));
   item.qty += delta;
-  if (delta > 0 && item.qty > (prod?.stock || 999)) {
-    item.qty = prod?.stock || 999;
+  if (delta > 0 && item.qty > maxForLine) {
+    item.qty = maxForLine;
     toast('Sin más stock', 'w');
   }
   if (item.qty <= 0) inv.cart.splice(idx, 1);
@@ -517,18 +542,181 @@ function posSetQty(idx, val) {
   const item = inv.cart[idx];
   if (!item) return;
   const prod = DB.products.find(p => p.id === item.pid);
-  item.qty   = Math.max(1, Math.min(parseInt(val) || 1, prod?.stock || 999));
+  const maxForLine = Math.max(0, (prod?.stock || 999) - posCartQtyForProduct(prod?.id || item.product_id || item.pid, idx));
+  if (maxForLine <= 0) {
+    inv.cart.splice(idx, 1);
+    toast('Sin stock disponible para esa línea', 'w');
+  } else {
+    item.qty = Math.max(1, Math.min(parseInt(val) || 1, maxForLine));
+  }
   renderInvTabs();
   renderCart();
 }
 
-function posSetPrice(idx, val) {
+function posEscHtml(v) {
+  return String(v == null ? '' : v)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function posMoneyEq(a, b) {
+  return Math.abs((Number(a) || 0) - (Number(b) || 0)) < 0.005;
+}
+
+function posLineCatalogPrices(item) {
+  const prod = DB.products.find(p => p.id === (item?.product_id || item?.pid));
+  if (!prod) return [];
+  const retail = Math.round((Number(prod.price) || 0) * 100) / 100;
+  const wholesaleRaw = Number(prod.wholesale) || 0;
+  const wholesale = Math.round((wholesaleRaw > 0 ? wholesaleRaw : retail) * 100) / 100;
+  return posMoneyEq(retail, wholesale)
+    ? [{ label: 'Detalle', value: retail }]
+    : [{ label: 'Detalle', value: retail }, { label: 'Mayorista', value: wholesale }];
+}
+
+function posFindPriceOverrides(items) {
+  return (items || []).map(item => {
+    const unitPrice = Math.round((Number(item?.unit_price ?? item?.price) || 0) * 100) / 100;
+    const catalogPrices = posLineCatalogPrices(item);
+    if (!catalogPrices.length || catalogPrices.some(p => posMoneyEq(p.value, unitPrice))) return null;
+    return { item, unitPrice, catalogPrices };
+  }).filter(Boolean);
+}
+
+function posAuthStillValid(holder) {
+  return !!(
+    holder?.priceChangeAuthToken &&
+    holder?.priceChangeAuthExpiresAt &&
+    Number(holder.priceChangeAuthExpiresAt) > Date.now() + 5000
+  );
+}
+
+function posStorePriceAuth(holder, auth) {
+  if (!holder || !auth) return;
+  holder.priceChangeAuthToken = auth.token;
+  holder.priceChangeAuthExpiresAt = auth.expiresAt;
+  holder.priceChangeApprovedBy = auth.approvedBy?.id || null;
+  holder.priceChangeApprovedName = auth.approvedBy?.name || '';
+  holder.priceChangeApprovedRole = auth.approvedBy?.role || '';
+}
+
+async function posPromptPriceChangeAuth(changes, contextLabel = 'Cambio de precio en POS') {
+  const first = changes[0];
+  const itemName = first?.item?.product_name || first?.item?.name || 'Producto';
+  const catalogText = (first?.catalogPrices || [])
+    .map(p => `${p.label}: ${fmt(p.value)}`)
+    .join(' · ');
+  const detail = `${itemName}: ${catalogText || 'precio de catálogo'} -> ${fmt(first?.unitPrice || 0)}`;
+
+  return new Promise(resolve => {
+    let done = false;
+    const finish = value => {
+      if (done) return;
+      done = true;
+      resolve(value);
+    };
+
+    openModal(`
+      <div class="modal-title">Autorizar cambio de precio</div>
+      <div class="modal-sub">
+        Esta operación requiere la clave especial de cambio de precio.
+      </div>
+      <div class="alrt a" style="margin-bottom:14px">
+        <div class="alrt-dot a"></div>
+        <div>
+          <div class="alrt-title">${posEscHtml(contextLabel)}</div>
+          <div class="alrt-sub">${posEscHtml(detail)}${changes.length > 1 ? ` · ${changes.length - 1} cambio(s) adicional(es)` : ''}</div>
+        </div>
+      </div>
+      <div class="fg">
+        <label class="lbl">Clave especial de cambio de precio</label>
+        <div class="inp-ic">
+          <div class="ic">${svg('lock')}</div>
+          <input class="inp" id="price-auth-pass" type="password"
+                 placeholder="Clave especial"/>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-out" id="price-auth-cancel">Cancelar</button>
+        <button class="btn btn-dark" id="price-auth-ok">
+          ${svg('check')} Autorizar precio
+        </button>
+      </div>
+    `);
+
+    const passEl = document.getElementById('price-auth-pass');
+    const okBtn = document.getElementById('price-auth-ok');
+    const cancelBtn = document.getElementById('price-auth-cancel');
+    const submit = async () => {
+      const password = passEl?.value?.trim();
+      if (!password) { toast('Ingresa la contraseña', 'err'); return; }
+      if (okBtn) {
+        okBtn.disabled = true;
+        okBtn.innerHTML = `${svg('clock')} Validando...`;
+      }
+      const res = await window.api.auth.authorizePrivilegedAction({
+        action: 'pos_price_change',
+        password,
+        requestUserId: user.id,
+        detail,
+      }).catch(e => ({ ok: false, error: e?.message || 'No se pudo validar' }));
+      if (!res?.ok) {
+        toast(res?.error || 'Contraseña incorrecta', 'err');
+        if (okBtn) {
+          okBtn.disabled = false;
+          okBtn.innerHTML = `${svg('check')} Autorizar precio`;
+        }
+        passEl?.select();
+        return;
+      }
+      closeModal();
+      finish(res);
+    };
+
+    okBtn?.addEventListener('click', submit);
+    cancelBtn?.addEventListener('click', () => { closeModal(); finish(null); });
+    passEl?.addEventListener('keydown', e => {
+      if (e.key === 'Enter') submit();
+      if (e.key === 'Escape') { closeModal(); finish(null); }
+    });
+    setTimeout(() => passEl?.focus(), 80);
+  });
+}
+
+async function posEnsureSalePriceAuthorization(holder, items, contextLabel) {
+  const changes = posFindPriceOverrides(items);
+  if (!changes.length) return true;
+  if (['admin', 'superadmin'].includes(user?.role)) return true;
+  if (posAuthStillValid(holder)) return true;
+  if (DB?.settings?.pos_price_change_password_set === '0') {
+    toast('Configura primero la clave especial de cambio de precio en Configuración', 'err');
+    return false;
+  }
+
+  const auth = await posPromptPriceChangeAuth(changes, contextLabel);
+  if (!auth) return false;
+  posStorePriceAuth(holder, auth);
+  return true;
+}
+
+async function posSetPrice(idx, val) {
   const inv  = currentInv();
   const item = inv.cart[idx];
   if (!item) return;
   const price = Math.round(Math.max(0, parseFloat(val) || 0) * 100) / 100;
   if (price <= 0) {
     toast('El precio final debe ser mayor a 0', 'err');
+    renderCart();
+    return;
+  }
+  const ok = await posEnsureSalePriceAuthorization(
+    inv,
+    [{ ...item, unit_price: price, price }],
+    `Producto: ${item.name || item.product_name || ''}`
+  );
+  if (!ok) {
     renderCart();
     return;
   }
@@ -544,6 +732,98 @@ function posRemItem(idx) {
   renderCart();
 }
 
+function posLoadResaleCart(payload = {}) {
+  if (!document.getElementById('cart-wrap')) {
+    window._pendingPOSResaleCart = payload;
+    return false;
+  }
+  const rawItems = Array.isArray(payload.items) ? payload.items : [];
+  if (!rawItems.length) { toast('No hay artículos de reventa para cargar', 'w'); return false; }
+
+  const reserved = new Map();
+  const skipped = [];
+  const cart = [];
+
+  rawItems.forEach(src => {
+    const prod = DB.products.find(p =>
+      p.active !== 0 && (
+        Number(p.id) === Number(src.product_id) ||
+        (src.product_code && String(p.code || '').trim().toLowerCase() === String(src.product_code).trim().toLowerCase())
+      )
+    );
+    if (!prod) { skipped.push(src.product_name || 'Producto no vinculado'); return; }
+
+    const used = reserved.get(prod.id) || 0;
+    const available = Math.max(0, (Number(prod.stock) || 0) - used);
+    const qty = Math.min(Math.max(1, Number.parseInt(src.qty, 10) || 1), available);
+    const price = Math.round((Number(src.unit_price || src.price) || 0) * 100) / 100;
+    if (qty <= 0) { skipped.push(prod.name); return; }
+    if (price <= 0) { skipped.push(`${prod.name} sin precio`); return; }
+
+    const taxable = src.taxable === undefined || src.taxable === null
+      ? (prod.taxable === 0 ? 0 : 1)
+      : (src.taxable === 0 || src.taxable === false || src.taxable === '0' ? 0 : 1);
+    const taxPct = taxable
+      ? (parseFloat(src.tax_pct ?? prod.tax_pct ?? CFG.itbis ?? 18) || 18)
+      : 0;
+
+    reserved.set(prod.id, used + qty);
+    cart.push({
+      pid:          prod.id,
+      product_id:   prod.id,
+      product_code: prod.code || src.product_code || '',
+      product_name: src.product_name || prod.name,
+      name:         src.product_name || prod.name,
+      price,
+      unit_price:   price,
+      unit_cost:    prod.cost || 0,
+      cost:         prod.cost || 0,
+      taxable,
+      tax_pct:      taxPct,
+      qty,
+      resale_source: {
+        saleId: src.source_sale_id || null,
+        itemId: src.source_item_id || null,
+      },
+    });
+  });
+
+  if (!cart.length) {
+    toast('No se pudo cargar la reventa: los artículos no tienen stock disponible', 'err');
+    return false;
+  }
+
+  let inv = currentInv();
+  if (inv.cart.length) {
+    addInvoice();
+    inv = currentInv();
+  }
+
+  inv.cart = cart;
+  inv.itype = 'factura';
+  inv.pmode = 'retail';
+  inv.pmeth = 'efectivo';
+  inv.disc = 0;
+  inv.priceChangeAuthToken = null;
+  inv.priceChangeAuthExpiresAt = null;
+  inv.priceChangeApprovedBy = null;
+
+  if (payload.customer?.id) {
+    inv.cliId = payload.customer.id;
+    inv.cliName = payload.customer.name || '';
+    inv.cliCedula = payload.customer.rnc || '';
+  }
+
+  renderInvTabs();
+  renderCart();
+  renderPOSGrid();
+  if (typeof window.ventasClearResaleCart === 'function') window.ventasClearResaleCart(true);
+  toast(`✓ Reventa cargada en factura #${inv.id}${skipped.length ? ` · ${skipped.length} línea(s) omitida(s)` : ''}`);
+  return true;
+}
+
+window.posLoadResaleCart = posLoadResaleCart;
+
 function posDisc(val) {
   currentInv().disc = Math.min(100, Math.max(0, parseFloat(val) || 0));
   renderCart();
@@ -558,8 +838,8 @@ function posDiscConPin(input, val) {
   // si el nuevo valor también supera el límite.
   currentInv().discApprovedBy = null;
 
-  // Admin no necesita PIN
-  if (user?.role === 'admin') { posDisc(pct); return; }
+  // Admin y superadmin no necesitan PIN
+  if (['admin', 'superadmin'].includes(user?.role)) { posDisc(pct); return; }
 
   // Sin restricción si es menor al límite
   if (pct <= DISC_LIMIT) { posDisc(pct); return; }
@@ -569,31 +849,35 @@ function posDiscConPin(input, val) {
   openModal(`
     <div class="modal-title">Descuento requiere autorización</div>
     <div class="modal-sub">
-      Los descuentos mayores al ${DISC_LIMIT}% requieren aprobación del administrador.
+      Los descuentos mayores al ${DISC_LIMIT}% requieren aprobación de un admin o superadmin.
     </div>
     <div class="alrt a" style="margin-bottom:14px">
       <div class="alrt-dot a"></div>
       <div>
         <div class="alrt-title">Descuento solicitado: ${pct}%</div>
-        <div class="alrt-sub">Ingresa la contraseña del administrador para autorizar.</div>
+        <div class="alrt-sub">Ingresa la contraseña de admin o superadmin para autorizar.</div>
       </div>
     </div>
     <div class="fg">
-      <label class="lbl">Contraseña del administrador</label>
+      <label class="lbl">Contraseña de admin o superadmin</label>
       <div class="inp-ic">
         <div class="ic">${svg('lock')}</div>
         <input class="inp" id="pin-pass" type="password"
-               placeholder="Contraseña del admin"
-               onkeydown="if(event.key==='Enter') autorizarDescuento(${pct})"/>
+               placeholder="Contraseña de admin o superadmin"/>
       </div>
     </div>
     <div class="modal-foot">
-      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-dark" onclick="autorizarDescuento(${pct})">
+      <button class="btn btn-out" id="pin-cancel">Cancelar</button>
+      <button class="btn btn-dark" id="pin-ok">
         ${svg('check')} Autorizar descuento
       </button>
     </div>
   `);
+  document.getElementById('pin-ok')?.addEventListener('click', () => autorizarDescuento(pct));
+  document.getElementById('pin-cancel')?.addEventListener('click', closeModal);
+  document.getElementById('pin-pass')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') autorizarDescuento(pct);
+  });
   setTimeout(() => document.getElementById('pin-pass')?.focus(), 100);
 }
 
@@ -601,29 +885,21 @@ async function autorizarDescuento(pct) {
   const pass = document.getElementById('pin-pass')?.value?.trim();
   if (!pass) { toast('Ingresa la contraseña', 'err'); return; }
 
-  // Asegurar que tenemos la lista de admins actualizada
-  let admins = (window._cachedUsers || []).filter(u => u.role === 'admin' && u.active);
-  if (!admins.length) {
-    const allUsers = await window.api.users.getAll().catch(() => []);
-    window._cachedUsers = allUsers || [];
-    admins = allUsers.filter(u => u.role === 'admin' && u.active);
-  }
+  const res = await window.api.auth.authorizePrivilegedAction({
+    action: 'pos_discount_override',
+    password: pass,
+    requestUserId: user.id,
+    detail: `Descuento ${pct}%`,
+  }).catch(e => ({ ok: false, error: e?.message || 'No se pudo validar' }));
 
-  let autorizado    = false;
-  let approvedAdmin = null;
-  for (const admin of admins) {
-    const res = await window.api.auth.login({ email: admin.email, password: pass });
-    if (res.ok && res.user?.role === 'admin') { autorizado = true; approvedAdmin = admin; break; }
-  }
-
-  if (!autorizado) {
-    toast('Contraseña incorrecta', 'err');
+  if (!res?.ok) {
+    toast(res?.error || 'Contraseña incorrecta', 'err');
     document.getElementById('pin-pass')?.select();
     return;
   }
 
   closeModal();
-  currentInv().discApprovedBy = approvedAdmin.id;
+  currentInv().discApprovedBy = res.approvedBy?.id || null;
   posDisc(pct);
   toast(`✓ Descuento de ${pct}% autorizado`);
 }
@@ -1028,6 +1304,11 @@ async function finalizarVenta() {
   const cliCedula = document.getElementById('cbr-cedula')?.value?.trim() || '';
   // Capturar AQUÍ (antes de closeModal): el DOM del modal se elimina al cerrar.
   const wantConduce = !!document.getElementById('cbr-conduce')?.checked;
+  const btnConfirmar = document.getElementById('btn-confirmar-venta');
+
+  inv.pmeth = pmeth;
+  inv.cliName = cliName;
+  inv.cliCedula = cliCedula;
 
   if (!inv.cart.length) return;
 
@@ -1051,13 +1332,6 @@ async function finalizarVenta() {
       toast(`El monto recibido (${fmt(received)}) no cubre el total (${fmt(total)})`, 'err');
       return;
     }
-  }
-
-  // Deshabilitar botón para evitar doble click
-  const btnConfirmar = document.getElementById('btn-confirmar-venta');
-  if (btnConfirmar) {
-    btnConfirmar.disabled   = true;
-    btnConfirmar.innerHTML  = `${svg('clock')} Procesando...`;
   }
 
   // Buscar cliente registrado o usar consumidor final
@@ -1087,6 +1361,18 @@ async function finalizarVenta() {
     mixCard = parseFloat(document.getElementById('cbr-mix-card')?.value) || 0;
   }
 
+  const priceAuthOk = await posEnsureSalePriceAuthorization(inv, items, 'Venta actual');
+  if (!priceAuthOk) {
+    openCobroModal(inv);
+    return;
+  }
+
+  // Deshabilitar botón para evitar doble click cuando el modal de cobro sigue abierto.
+  if (btnConfirmar?.isConnected) {
+    btnConfirmar.disabled   = true;
+    btnConfirmar.innerHTML  = `${svg('clock')} Procesando...`;
+  }
+
   const saleData = {
     customer,
     items,
@@ -1095,6 +1381,7 @@ async function finalizarVenta() {
       disc:           inv.disc || 0,
       discApprovedBy: inv.discApprovedBy || null,
       priceMode:      inv.pmode || 'retail',
+      priceChangeAuthToken: inv.priceChangeAuthToken || null,
       mixEfec,
       mixCard,
     },
@@ -1110,9 +1397,11 @@ async function finalizarVenta() {
 
     if (!result.ok) {
       toast(result.error || 'Error al registrar la venta', 'err');
-      if (btnConfirmar) {
+      if (btnConfirmar?.isConnected) {
         btnConfirmar.disabled  = false;
         btnConfirmar.innerHTML = `${svg('check')} Confirmar y Cobrar`;
+      } else {
+        openCobroModal(inv);
       }
       return;
     }
@@ -1215,9 +1504,11 @@ async function finalizarVenta() {
   } catch (e) {
     console.error('[finalizarVenta]', e);
     toast('Error inesperado al procesar la venta', 'err');
-    if (btnConfirmar) {
+    if (btnConfirmar?.isConnected) {
       btnConfirmar.disabled  = false;
       btnConfirmar.innerHTML = `${svg('check')} Confirmar y Cobrar`;
+    } else {
+      openCobroModal(inv);
     }
   }
 }

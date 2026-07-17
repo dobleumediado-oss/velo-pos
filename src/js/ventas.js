@@ -51,6 +51,246 @@ function ventasEsc(v) {
     .replace(/"/g, '&quot;');
 }
 
+function ventasLoadResaleCart() {
+  try {
+    const raw = sessionStorage.getItem('vp_resale_cart');
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+let ventasResaleCart = ventasLoadResaleCart();
+
+function ventasSaveResaleCart() {
+  try { sessionStorage.setItem('vp_resale_cart', JSON.stringify(ventasResaleCart)); } catch {}
+}
+
+function ventasFindResaleProduct(item) {
+  const pid = Number(item?.product_id || item?.pid || 0);
+  if (pid) {
+    const direct = DB.products.find(p => Number(p.id) === pid && p.active !== 0);
+    if (direct) return direct;
+  }
+  const code = String(item?.product_code || item?.code || '').trim().toLowerCase();
+  if (code) {
+    return DB.products.find(p => p.active !== 0 && String(p.code || '').trim().toLowerCase() === code) || null;
+  }
+  return null;
+}
+
+function ventasResaleProductQty(productId, exceptUid = '') {
+  return ventasResaleCart.reduce((sum, item) => {
+    if (item.uid === exceptUid) return sum;
+    return Number(item.product_id) === Number(productId) ? sum + (Number(item.qty) || 0) : sum;
+  }, 0);
+}
+
+function ventasResaleLineKey(saleId, item, idx, productId, price) {
+  return [saleId, item?.id || idx, productId, ventasRound2(price)].join(':');
+}
+
+function ventasLineFinalUnitPrice(item, sale) {
+  const fiscal = ventasLineFiscal(item, sale || {});
+  const qty = Math.max(1, Number(fiscal.qty || item?.qty) || 1);
+  const gross = Number(fiscal.gross);
+  if (Number.isFinite(gross) && gross > 0) return ventasRound2(gross / qty);
+  return ventasRound2(Number(item?.unit_price ?? item?.price) || 0);
+}
+
+function ventasSameResaleCustomer() {
+  const keyed = ventasResaleCart
+    .map(i => {
+      const id = Number(i.customer_id || 0);
+      const name = String(i.customer_name || '').trim().toLowerCase();
+      const rnc = String(i.customer_rnc || '').replace(/\D/g, '');
+      if (id && id !== 1) return `id:${id}`;
+      if (name || rnc) return `cf:${name}|${rnc}`;
+      return '';
+    })
+    .filter(Boolean);
+  const keys = [...new Set(keyed)];
+  if (keys.length !== 1) return null;
+  const first = ventasResaleCart.find(i => {
+    const id = Number(i.customer_id || 0);
+    const name = String(i.customer_name || '').trim().toLowerCase();
+    const rnc = String(i.customer_rnc || '').replace(/\D/g, '');
+    const key = id && id !== 1 ? `id:${id}` : (name || rnc ? `cf:${name}|${rnc}` : '');
+    return key === keys[0];
+  });
+  return {
+    id: first.customer_id || 1,
+    name: first.customer_name || '',
+    rnc: first.customer_rnc || '',
+  };
+}
+
+function renderVentasResaleCart() {
+  const pageEl = document.getElementById('page');
+  document.getElementById('ventas-resale-cart')?.remove();
+  if (!pageEl || (typeof page !== 'undefined' && page !== 'ventas') || !ventasResaleCart.length) return;
+
+  const totalQty = ventasResaleCart.reduce((a, i) => a + (Number(i.qty) || 0), 0);
+  const total = ventasRound2(ventasResaleCart.reduce((a, i) => a + ((Number(i.unit_price) || 0) * (Number(i.qty) || 0)), 0));
+  const box = document.createElement('div');
+  box.id = 'ventas-resale-cart';
+  box.style.cssText = [
+    'position:fixed', 'right:22px', 'bottom:22px', 'z-index:500',
+    'width:min(390px,calc(100vw - 44px))', 'background:var(--surface)',
+    'border:1px solid var(--line)', 'border-radius:10px', 'box-shadow:0 14px 42px #0003',
+    'overflow:hidden'
+  ].join(';');
+  box.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);background:var(--surface2)">
+      <div style="width:30px;height:30px;border-radius:8px;background:var(--green-bg);color:var(--green);display:flex;align-items:center;justify-content:center">${svg('return')}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:800;font-size:13px">Carrito de reventa</div>
+        <div style="font-size:11px;color:var(--muted2)">${totalQty} artículo${totalQty !== 1 ? 's' : ''} · ${fmt(total)}</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" data-resale-action="clear" title="Vaciar">${svg('trash')}</button>
+    </div>
+    <div style="max-height:270px;overflow:auto;padding:8px 10px">
+      ${ventasResaleCart.map(item => {
+        const prod = DB.products.find(p => Number(p.id) === Number(item.product_id));
+        const stock = Number(prod?.stock || 0);
+        const reserved = ventasResaleProductQty(item.product_id, item.uid);
+        const sourceMax = Number.parseInt(item.source_qty, 10) || Number(item.qty) || 1;
+        const max = Math.max(0, Math.min(sourceMax, stock - reserved));
+        const qtyValue = Math.max(1, Math.min(Number(item.qty) || 1, Math.max(1, max)));
+        return `
+          <div data-uid="${ventasEsc(item.uid)}" style="display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line2)">
+            <div style="min-width:0">
+              <div style="font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${ventasEsc(item.product_name)}</div>
+              <div style="font-size:10px;color:var(--muted2)">Venta #${String(item.source_sale_id).padStart(5,'0')} · ${fmt(item.unit_price)} · stock ${stock}</div>
+            </div>
+            <input class="inp" data-resale-action="qty" type="number" min="1" max="${Math.max(1, max)}" value="${qtyValue}"
+              style="width:58px;padding:4px 6px;text-align:center;font-size:12px" ${max <= 0 ? 'disabled' : ''}/>
+            <button class="btn btn-ghost btn-sm" data-resale-action="remove" style="color:var(--red)" title="Quitar">×</button>
+          </div>`;
+      }).join('')}
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;padding:10px 12px;border-top:1px solid var(--line);background:var(--surface)">
+      <button class="btn btn-out btn-sm" data-resale-action="keep" style="flex:0 0 auto">Seguir eligiendo</button>
+      <button class="btn btn-dark btn-sm" data-resale-action="send" style="flex:1">${svg('cash')} Enviar a punto de venta</button>
+    </div>`;
+
+  box.addEventListener('click', e => {
+    const action = e.target.closest('[data-resale-action]')?.dataset.resaleAction;
+    const row = e.target.closest('[data-uid]');
+    if (action === 'remove' && row) ventasRemoveResaleItem(row.dataset.uid);
+    if (action === 'clear') ventasClearResaleCart();
+    if (action === 'send') ventasSendResaleToPOS();
+    if (action === 'keep') toast('Abre otra venta y agrega más artículos', 'ok');
+  });
+  box.addEventListener('change', e => {
+    if (e.target?.dataset?.resaleAction !== 'qty') return;
+    const row = e.target.closest('[data-uid]');
+    if (row) ventasSetResaleQty(row.dataset.uid, e.target.value);
+  });
+  pageEl.appendChild(box);
+}
+
+function ventasAddResaleItem(saleId, idx) {
+  const cache = window._ventasDetalleCache?.[saleId];
+  const item = cache?.items?.[idx];
+  if (!item) { toast('No se encontró la línea de venta', 'err'); return; }
+  const prod = ventasFindResaleProduct(item);
+  if (!prod) { toast('Ese artículo no está vinculado a un producto activo', 'err'); return; }
+  if ((Number(prod.stock) || 0) <= 0) { toast(`"${prod.name}" no tiene stock disponible`, 'w'); return; }
+
+  const detail = cache.detail || {};
+  const input = document.querySelector(`[data-resale-qty="${saleId}:${idx}"]`);
+  const requested = Math.max(1, Number.parseInt(input?.value, 10) || 1);
+  const soldQty = Math.max(1, Number.parseInt(item.qty, 10) || 1);
+  const unitPrice = ventasLineFinalUnitPrice(item, detail);
+  if (unitPrice <= 0) { toast('La línea no tiene precio de venta válido', 'err'); return; }
+
+  const uid = ventasResaleLineKey(saleId, item, idx, prod.id, unitPrice);
+  const existing = ventasResaleCart.find(x => x.uid === uid);
+  const alreadyOther = ventasResaleProductQty(prod.id, uid);
+  const currentQty = existing ? Number(existing.qty) || 0 : 0;
+  const available = Math.max(0, (Number(prod.stock) || 0) - alreadyOther - currentQty);
+  const remainingFromSource = Math.max(0, soldQty - currentQty);
+  const addQty = Math.min(requested, remainingFromSource, available);
+  if (addQty <= 0) { toast('No hay stock libre para agregar más de ese producto', 'w'); return; }
+
+  const lineTaxable = (detail.type || 'factura') === 'factura' && ventasTaxable(item);
+  const payload = {
+    uid,
+    product_id: prod.id,
+    product_code: prod.code || ventasItemCode(item),
+    product_name: item.product_name || item.name || prod.name,
+    unit_price: unitPrice,
+    qty: addQty,
+    source_qty: soldQty,
+    source_sale_id: saleId,
+    source_item_id: item.id || idx,
+    customer_id: detail.customer_id || detail.clientId || 0,
+    customer_name: detail.customer_name || detail.clientName || '',
+    customer_rnc: detail.customer_rnc || detail.clientCedula || '',
+    taxable: lineTaxable ? 1 : 0,
+    tax_pct: lineTaxable ? ventasTaxPct(item, detail.tax_pct ?? CFG.itbis ?? 18) : 0,
+  };
+  if (existing) existing.qty += addQty;
+  else ventasResaleCart.push(payload);
+  ventasSaveResaleCart();
+  renderVentasResaleCart();
+  toast(`✓ ${payload.product_name} agregado a reventa`);
+}
+
+function ventasSetResaleQty(uid, qtyRaw) {
+  const item = ventasResaleCart.find(i => i.uid === uid);
+  if (!item) return;
+  const prod = DB.products.find(p => Number(p.id) === Number(item.product_id));
+  const reserved = ventasResaleProductQty(item.product_id, uid);
+  const sourceMax = Number.parseInt(item.source_qty, 10) || Number(item.qty) || 1;
+  const max = Math.max(1, Math.min(sourceMax, (Number(prod?.stock) || 0) - reserved));
+  item.qty = Math.max(1, Math.min(Number.parseInt(qtyRaw, 10) || 1, max));
+  ventasSaveResaleCart();
+  renderVentasResaleCart();
+}
+
+function ventasRemoveResaleItem(uid) {
+  ventasResaleCart = ventasResaleCart.filter(i => i.uid !== uid);
+  ventasSaveResaleCart();
+  renderVentasResaleCart();
+}
+
+function ventasClearResaleCart(silent = false) {
+  ventasResaleCart = [];
+  ventasSaveResaleCart();
+  renderVentasResaleCart();
+  if (!silent) toast('Carrito de reventa vacío');
+}
+
+function ventasBuildResalePayload() {
+  return {
+    items: ventasResaleCart.map(i => ({ ...i })),
+    customer: ventasSameResaleCustomer(),
+  };
+}
+
+function ventasSendResaleToPOS() {
+  if (!ventasResaleCart.length) { toast('No hay artículos para enviar', 'w'); return; }
+  const payload = ventasBuildResalePayload();
+  window._pendingPOSResaleCart = payload;
+  document.getElementById('ventas-resale-cart')?.remove();
+  if (typeof closeModal === 'function') closeModal();
+  routeTo('pos');
+  setTimeout(() => {
+    if (
+      window._pendingPOSResaleCart === payload &&
+      typeof window.posLoadResaleCart === 'function' &&
+      document.getElementById('cart-wrap')
+    ) {
+      window._pendingPOSResaleCart = null;
+      window.posLoadResaleCart(payload);
+    }
+  }, 180);
+}
+
+window.ventasClearResaleCart = ventasClearResaleCart;
+window.ventasAddResaleItem = ventasAddResaleItem;
+
 function ventasItemCode(item) {
   const direct = item?.product_code || item?.code || item?.sku;
   if (direct) return direct;
@@ -195,6 +435,7 @@ function renderVentas(el) {
   const tableWrap = h('div', { id: 'ventas-table-wrap' });
   el.appendChild(resWrap);
   el.appendChild(tableWrap);
+  renderVentasResaleCart();
 
   refreshVentas(el);
 }
@@ -733,6 +974,16 @@ async function confirmarConversionCotizacion() {
     return;
   }
 
+  const priceAuthOk = await posEnsureSalePriceAuthorization(
+    est,
+    itemsValidos,
+    `Cotización ${facturaLabel(sale)}`
+  );
+  if (!priceAuthOk) {
+    convertirCotizacionAVenta({ id: cotizId });
+    return;
+  }
+
   const customer = DB.customers.find(c => c.id === sale.customer_id) ||
     { id: 1, name: sale.customer_name || 'Consumidor Final', rnc: '' };
 
@@ -753,6 +1004,7 @@ async function confirmarConversionCotizacion() {
         method:    est.pay,
         disc:      est.discount,
         priceMode: sale.price_mode || 'retail',
+        priceChangeAuthToken: est.priceChangeAuthToken || null,
       },
       type:    'factura',
       session: cajaSession,
@@ -817,10 +1069,42 @@ async function openDetalleVentaModal(s) {
   const sale  = await window.api.sales.getById({ id: s.id });
   const detail = sale || s || {};
   const items = sale?.items || [];
+  window._ventasDetalleCache = window._ventasDetalleCache || {};
+  window._ventasDetalleCache[s.id] = { detail, items };
 
   const itemsFiscal = items.map(i => ventasLineFiscal(i, detail));
+  const saleType = detail.type || 'factura';
+  const saleStatus = detail.status || 'completed';
+  const canResell = saleType !== 'cotizacion'
+    && saleType !== 'devolucion'
+    && saleStatus === 'completed';
   const itemsRows = items.map((i, idx) => {
     const f = itemsFiscal[idx];
+    const resaleProd = ventasFindResaleProduct(i);
+    const soldQty = Math.max(1, Number.parseInt(i.qty, 10) || 1);
+    const resalePrice = ventasLineFinalUnitPrice(i, detail);
+    const resaleUid = resaleProd ? ventasResaleLineKey(s.id, i, idx, resaleProd.id, resalePrice) : '';
+    const alreadyInCart = resaleUid
+      ? (ventasResaleCart.find(x => x.uid === resaleUid)?.qty || 0)
+      : 0;
+    const alreadyProduct = resaleProd ? ventasResaleProductQty(resaleProd.id, resaleUid) : 0;
+    const stockAvailable = resaleProd ? Math.max(0, Number(resaleProd.stock || 0) - alreadyProduct - alreadyInCart) : 0;
+    const maxAdd = resaleProd ? Math.max(0, Math.min(soldQty - alreadyInCart, stockAvailable)) : 0;
+    const resaleCell = !canResell ? ''
+      : resaleProd && resalePrice > 0 && maxAdd > 0
+      ? `<td style="text-align:right;white-space:nowrap">
+           <div style="display:flex;gap:6px;align-items:center;justify-content:flex-end">
+             <input class="inp" data-resale-qty="${s.id}:${idx}" type="number" min="1" max="${maxAdd}" value="1"
+               style="width:54px;padding:4px 6px;text-align:center;font-size:12px"/>
+             <button class="btn btn-out btn-sm" data-resale-add="${s.id}:${idx}" title="Agregar al carrito de reventa">
+               ${svg('plus')} Revender
+             </button>
+           </div>
+           <div style="font-size:10px;color:var(--muted2);margin-top:3px">disp. ${stockAvailable} · venta ${soldQty}</div>
+         </td>`
+      : `<td style="text-align:right;color:var(--muted2);font-size:11px">
+           ${!resaleProd ? 'No vinculado' : resalePrice <= 0 ? 'Sin precio' : 'Sin stock'}
+         </td>`;
     return `
       <tr>
         <td style="font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap">
@@ -832,6 +1116,7 @@ async function openDetalleVentaModal(s) {
         <td style="text-align:right;color:var(--muted)">${fmt(f.net)}</td>
         <td style="text-align:right;color:${f.tax > 0 ? 'var(--amber)' : 'var(--muted2)'}">${fmt(f.tax)}</td>
         <td style="text-align:right;font-weight:700">${fmt(f.gross)}</td>
+        ${resaleCell}
       </tr>`;
   }).join('');
 
@@ -900,8 +1185,9 @@ async function openDetalleVentaModal(s) {
           <th style="text-align:right">Monto bruto</th>
           <th style="text-align:right">ITBIS</th>
           <th style="text-align:right">Importe</th>
+          ${canResell ? '<th style="text-align:right">Revender</th>' : ''}
         </tr></thead>
-        <tbody>${itemsRows || '<tr><td colspan="7" style="color:var(--muted2);text-align:center">Sin detalle</td></tr>'}</tbody>
+        <tbody>${itemsRows || `<tr><td colspan="${canResell ? 8 : 7}" style="color:var(--muted2);text-align:center">Sin detalle</td></tr>`}</tbody>
       </table>
     </div>
     <div class="card" style="background:var(--surface2)">
@@ -942,6 +1228,16 @@ async function openDetalleVentaModal(s) {
         : ''}
     </div>
   `, 'modal-xl');
+
+  setTimeout(() => {
+    const modal = document.getElementById('modal-ov');
+    modal?.querySelectorAll('[data-resale-add]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const [saleId, itemIdx] = String(btn.dataset.resaleAdd || '').split(':').map(Number);
+        ventasAddResaleItem(saleId, itemIdx);
+      });
+    });
+  }, 0);
 }
 
 // ── Anulación (solo admin) ────────────────────

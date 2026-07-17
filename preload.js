@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('api', {
     login:        (data)     => ipcRenderer.invoke('auth:login', data),
     logout:       (data)     => ipcRenderer.invoke('auth:logout', data),
     heartbeat:    (data)     => ipcRenderer.invoke('auth:heartbeat', data),
+    authorizePrivilegedAction: (data) => ipcRenderer.invoke('auth:authorizePrivilegedAction', data),
+    setPriceChangePassword: (data) => ipcRenderer.invoke('auth:setPriceChangePassword', data),
     getSuperPass: ()         => ipcRenderer.invoke('auth:getSuperPass'),
   },
 

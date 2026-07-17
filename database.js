@@ -1005,6 +1005,7 @@ function seedIfEmpty() {
     ['printer',        ''],
     ['receipt_msg',    '¡Gracias por su compra!'],
     ['password_changed','0'],
+    ['pos_price_change_password_hash',''],
     ['ncf_counter',    '0'],
     ['barcode_enabled','0'],
     ['barcode_printer',''],
@@ -3100,6 +3101,8 @@ function seedExpenseCategories() {
 // ══════════════════════════════════════════════
 // REPOSITORIO: GASTOS Y CUENTAS POR PAGAR
 // ══════════════════════════════════════════════
+const EXPENSE_NON_ACTIVE_STATUS_SQL = "('anulado','rechazado','borrador')";
+
 const expensesRepo = {
   // ── Configuración ────────────────────────
   getConfig() {
@@ -3145,7 +3148,7 @@ const expensesRepo = {
   },
 
   // ── CRUD Gastos ──────────────────────────
-  getAll({ status, from, to, supplier_id, category_id, user_id, limit } = {}) {
+  getAll({ status, from, to, date, supplier_id, category_id, user_id, limit, include_inactive, includeInactive } = {}) {
     let q = `SELECT e.*,
       ec.name as category_name, ec.parent_id as category_parent_id,
       s.name as supplier_name,
@@ -3159,13 +3162,20 @@ const expensesRepo = {
     WHERE 1=1`;
     const params = [];
     if (status)      { q += ' AND e.status=?';      params.push(status); }
-    if (from)        { q += ' AND e.issue_date>=?';  params.push(from); }
-    if (to)          { q += ' AND e.issue_date<=?';  params.push(to); }
+    else if (!include_inactive && !includeInactive) {
+      q += ` AND e.status NOT IN ${EXPENSE_NON_ACTIVE_STATUS_SQL}`;
+    }
+    if (date)        { q += ' AND e.issue_date=?';   params.push(date); }
+    else {
+      if (from)      { q += ' AND e.issue_date>=?';  params.push(from); }
+      if (to)        { q += ' AND e.issue_date<=?';  params.push(to); }
+    }
     if (supplier_id) { q += ' AND e.supplier_id=?';  params.push(supplier_id); }
     if (category_id) { q += ' AND e.category_id=?';  params.push(category_id); }
     if (user_id)     { q += ' AND e.user_id=?';      params.push(user_id); }
     q += ' ORDER BY e.created_at DESC';
-    if (limit) q += ` LIMIT ${parseInt(limit)}`;
+    const safeLimit = Number.parseInt(limit, 10);
+    if (Number.isFinite(safeLimit) && safeLimit > 0) q += ` LIMIT ${safeLimit}`;
     return db.prepare(q).all(...params);
   },
 
@@ -3185,16 +3195,26 @@ const expensesRepo = {
     return e;
   },
 
-  getSummary({ from, to } = {}) {
-    const dateFilter = from && to ? `AND e.issue_date BETWEEN '${from}' AND '${to}'` : '';
+  getSummary({ from, to, month } = {}) {
+    const where = [`e.type='gasto'`, `e.status NOT IN ${EXPENSE_NON_ACTIVE_STATUS_SQL}`];
+    const params = [];
+    if (month) {
+      where.push("strftime('%Y-%m', e.issue_date)=?");
+      params.push(String(month).slice(0, 7));
+    } else {
+      if (from) { where.push('e.issue_date>=?'); params.push(from); }
+      if (to)   { where.push('e.issue_date<=?'); params.push(to); }
+    }
+    const baseWhere = where.join(' AND ');
+    const value = (sql) => db.prepare(sql).get(...params).v;
     return {
-      total:       db.prepare(`SELECT COALESCE(SUM(total),0) as v FROM expenses e WHERE type='gasto' ${dateFilter}`).get().v,
-      paid:        db.prepare(`SELECT COALESCE(SUM(paid_amount),0) as v FROM expenses e WHERE type='gasto' ${dateFilter}`).get().v,
-      pending:     db.prepare(`SELECT COALESCE(SUM(total-paid_amount),0) as v FROM expenses e WHERE type='gasto' AND status NOT IN ('pagado','anulado') ${dateFilter}`).get().v,
-      overdue:     db.prepare(`SELECT COALESCE(SUM(total-paid_amount),0) as v FROM expenses e WHERE type='gasto' AND status NOT IN ('pagado','anulado') AND due_date < date('now') ${dateFilter}`).get().v,
-      from_cash:   db.prepare(`SELECT COALESCE(SUM(paid_amount),0) as v FROM expenses e WHERE type='gasto' AND payment_source='caja' ${dateFilter}`).get().v,
-      count:       db.prepare(`SELECT COUNT(*) as v FROM expenses e WHERE type='gasto' ${dateFilter}`).get().v,
-      by_category: db.prepare(`SELECT ec.name, COALESCE(SUM(e.total),0) as total FROM expenses e LEFT JOIN expense_categories ec ON e.category_id=ec.id WHERE e.type='gasto' ${dateFilter} GROUP BY e.category_id ORDER BY total DESC LIMIT 8`).all(),
+      total:       value(`SELECT COALESCE(SUM(total),0) as v FROM expenses e WHERE ${baseWhere}`),
+      paid:        value(`SELECT COALESCE(SUM(paid_amount),0) as v FROM expenses e WHERE ${baseWhere}`),
+      pending:     value(`SELECT COALESCE(SUM(total-paid_amount),0) as v FROM expenses e WHERE ${baseWhere} AND e.status!='pagado'`),
+      overdue:     value(`SELECT COALESCE(SUM(total-paid_amount),0) as v FROM expenses e WHERE ${baseWhere} AND e.status!='pagado' AND e.due_date < date('now')`),
+      from_cash:   value(`SELECT COALESCE(SUM(paid_amount),0) as v FROM expenses e WHERE ${baseWhere} AND e.payment_source='caja'`),
+      count:       value(`SELECT COUNT(*) as v FROM expenses e WHERE ${baseWhere}`),
+      by_category: db.prepare(`SELECT ec.name, COALESCE(SUM(e.total),0) as total FROM expenses e LEFT JOIN expense_categories ec ON e.category_id=ec.id WHERE ${baseWhere} GROUP BY e.category_id ORDER BY total DESC LIMIT 8`).all(...params),
     };
   },
 
@@ -3350,7 +3370,7 @@ const expensesRepo = {
     return db.prepare(`
       SELECT b.*, ec.name as category_name,
         COALESCE((SELECT SUM(e.total) FROM expenses e WHERE e.category_id=b.category_id
-          AND strftime('%Y-%m',e.issue_date)=b.month AND e.status NOT IN ('anulado','borrador')),0) as spent
+          AND strftime('%Y-%m',e.issue_date)=b.month AND e.status NOT IN ${EXPENSE_NON_ACTIVE_STATUS_SQL}),0) as spent
       FROM expense_budgets b
       LEFT JOIN expense_categories ec ON b.category_id=ec.id
       WHERE b.month=?
