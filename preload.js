@@ -320,6 +320,11 @@ contextBridge.exposeInMainWorld('api', {
     getPrices: () => ipcRenderer.invoke('fuel:getPrices'),
   },
 
+  // ── Banner de tasas del topbar (dólar Banreservas + combustible) ──
+  banner: {
+    getRates: () => ipcRenderer.invoke('banner:getRates'),
+  },
+
   // ── Facturación Electrónica e-CF (MSeller) ────────────────────
   ecf: {
     emit:       (d) => ipcRenderer.invoke('ecf:emit',       d),

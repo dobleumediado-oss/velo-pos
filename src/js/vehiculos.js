@@ -16,6 +16,22 @@ const TIPO_ICON  = { carro:'🚗', camioneta:'🛻', moto:'🏍️', camion:'�
 const TIPO_LABEL = { carro:'Carro', camioneta:'Camioneta/Pick-up', moto:'Motocicleta', camion:'Camión', furgoneta:'Furgoneta', otro:'Otro' };
 const STATUS_V   = { activo:'#00c07a', inactivo:'#6b7280', taller:'#f59e0b' };
 
+// Cada tipo de combustible define QUÉ variantes (grados) aplican. El grado es la
+// llave con la que se busca el precio en la tabla de precios del MICM — por eso
+// un vehículo de gasoil nunca debe quedar con grado "premium" (precio de gasolina).
+const FUEL_TYPES = {
+  gasolina:  { label:'Gasolina',           grades:[['premium','Gasolina Premium'],['regular','Gasolina Regular']] },
+  diesel:    { label:'Gasoil / Diesel',    grades:[['diesel','Gasoil Óptimo'],['gasoil_regular','Gasoil Regular']] },
+  glp:       { label:'Gas GLP',            grades:[['glp','GLP']] },
+  gnv:       { label:'Gas Natural (GNV)',  grades:[['gnv','GNV']] },
+  hibrido:   { label:'Híbrido (gasolina)', grades:[['premium','Gasolina Premium'],['regular','Gasolina Regular']] },
+  electrico: { label:'Eléctrico',          grades:[['ninguno','No aplica — eléctrico']] },
+};
+const GRADE_LABEL = {
+  premium:'Gasolina Premium', regular:'Gasolina Regular', diesel:'Gasoil Óptimo',
+  gasoil_regular:'Gasoil Regular', glp:'GLP', gnv:'GNV', ninguno:'Eléctrico',
+};
+
 // ══════════════════════════════════════════════
 // BASE DE DATOS AMPLIADA DE VEHÍCULOS
 // Cubre los vehículos más comunes en RD + validación por año
@@ -389,12 +405,12 @@ Responde SOLO con JSON:
 // Rendimiento estimado por tipo y combustible (km/galón)
 function _estimarRendimiento(tipo, fuelGrade) {
   const base = {
-    carro:     { premium: 38, regular: 35, diesel: 45 },
-    camioneta: { premium: 28, regular: 26, diesel: 32 },
-    moto:      { premium: 65, regular: 60, diesel: 0  },
-    camion:    { premium: 0,  regular: 0,  diesel: 14 },
-    furgoneta: { premium: 22, regular: 20, diesel: 28 },
-    otro:      { premium: 30, regular: 28, diesel: 35 },
+    carro:     { premium: 38, regular: 35, diesel: 45, gasoil_regular: 45, glp: 32, gnv: 34 },
+    camioneta: { premium: 28, regular: 26, diesel: 32, gasoil_regular: 32, glp: 22, gnv: 24 },
+    moto:      { premium: 65, regular: 60, diesel: 0,  gasoil_regular: 0,  glp: 55, gnv: 55 },
+    camion:    { premium: 0,  regular: 0,  diesel: 14, gasoil_regular: 14, glp: 10, gnv: 12 },
+    furgoneta: { premium: 22, regular: 20, diesel: 28, gasoil_regular: 28, glp: 18, gnv: 20 },
+    otro:      { premium: 30, regular: 28, diesel: 35, gasoil_regular: 35, glp: 25, gnv: 27 },
   };
   return base[tipo]?.[fuelGrade] || 30;
 }
@@ -437,10 +453,10 @@ async function renderVehiculos(el) {
     <span style="font-size:12px;font-weight:700;color:var(--purple,#8b5cf6)">GLP: ${_vFmt(fuelPrices.glp)}</span>
     <span style="font-size:12px;font-weight:700;color:var(--teal,#14b8a6)">GNV: ${_vFmt(fuelPrices.gnv)}</span>
     <span style="font-size:10px;color:var(--muted2);margin-left:auto">
-      Fuente: MIC RD · ${_fuelPricesSource === 'micm' || _fuelPricesSource === 'micm-directo' ? 
-        '<span style=\'color:var(--green,#00c07a)\'>✓ tiempo real</span>' : 
-        '<span style=\'color:var(--amber,#f59e0b)\">estimado — sin internet</span>'}
-    </span>\``;
+      Fuente: MIC RD · ${['micm','micm-directo','presto-directo','prestocombustibles'].includes(_fuelPricesSource)
+        ? '<span style="color:var(--green,#00c07a)">✓ tiempo real</span>'
+        : '<span style="color:var(--amber,#f59e0b)">estimado — sin internet</span>'}
+    </span>`;
   el.appendChild(fuelBanner);
 
   // Header
@@ -472,11 +488,15 @@ async function renderVehiculos(el) {
     const grid = document.createElement('div');
     grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px';
     vehiculos.forEach(v => {
-      // Costo por km con precio real de combustible
+      // Costo por km con precio real del combustible de ESTE vehículo
+      const esElectrico = v.fuel_type === 'electrico' || v.fuel_grade === 'ninguno';
       const grade     = v.fuel_grade || 'premium';
-      const precioGal = fuelPrices[grade] || fuelPrices.premium;
+      const precioGal = esElectrico ? 0 : (fuelPrices[grade] ?? fuelPrices.premium);
       const kmg       = v.km_per_gallon || 30;
-      const costKm    = (precioGal / kmg).toFixed(2);
+      const costKm    = esElectrico ? '0.00' : (precioGal / kmg).toFixed(2);
+      const fuelInfo  = esElectrico
+        ? '⚡ Eléctrico · sin costo de combustible'
+        : `⛽ ${GRADE_LABEL[grade] || grade} · ${kmg} km/gal · <strong style="color:var(--ink)">RD$${costKm}/km</strong>`;
 
       const card = document.createElement('div');
       card.style.cssText = 'background:var(--bg2);border-radius:12px;border:0.5px solid var(--line2);overflow:hidden';
@@ -490,7 +510,7 @@ async function renderVehiculos(el) {
           <div style="font-size:11px;color:var(--muted2)">${v.year||''} ${v.plate?'· '+v.plate:''} ${v.color?'· '+v.color:''}</div>
         </div>
         <div style="padding:10px 16px;font-size:12px;color:var(--muted2)">
-          <div>⛽ ${v.fuel_grade} · ${kmg} km/gal · <strong style="color:var(--ink)">RD$${costKm}/km</strong></div>
+          <div>${fuelInfo}</div>
           <div>📍 Odómetro: ${(v.odometer||0).toLocaleString()} km</div>
         </div>
         <div style="padding:8px 12px;display:flex;gap:6px;border-top:0.5px solid var(--line2)">
@@ -573,16 +593,13 @@ function modalNuevoVehiculo(parentEl, vehiculo = null) {
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div class="fg"><label class="lbl">Tipo de combustible</label>
         <select class="inp" id="v-fuel-type">
-          <option value="gasolina" ${(v.fuel_type||'gasolina')==='gasolina'?'selected':''}>Gasolina</option>
-          <option value="diesel"   ${v.fuel_type==='diesel'?'selected':''}>Gasoil / Diesel</option>
-          <option value="electrico"${v.fuel_type==='electrico'?'selected':''}>Eléctrico</option>
-          <option value="hibrido"  ${v.fuel_type==='hibrido'?'selected':''}>Híbrido</option>
+          ${Object.entries(FUEL_TYPES).map(([ft, def]) =>
+            `<option value="${ft}" ${(v.fuel_type||'gasolina')===ft?'selected':''}>${def.label}</option>`).join('')}
         </select></div>
-      <div class="fg"><label class="lbl">Grado de gasolina</label>
+      <div class="fg"><label class="lbl">Combustible específico</label>
         <select class="inp" id="v-fuel-grade">
-          <option value="premium" ${(v.fuel_grade||'premium')==='premium'?'selected':''}>Premium</option>
-          <option value="regular" ${v.fuel_grade==='regular'?'selected':''}>Regular</option>
-          <option value="diesel"  ${v.fuel_grade==='diesel'?'selected':''}>Gasoil</option>
+          ${(FUEL_TYPES[v.fuel_type||'gasolina']||FUEL_TYPES.gasolina).grades.map(([g, lbl]) =>
+            `<option value="${g}" ${(v.fuel_grade||'premium')===g?'selected':''}>${lbl}</option>`).join('')}
         </select></div>
     </div>
 
@@ -621,12 +638,18 @@ function modalNuevoVehiculo(parentEl, vehiculo = null) {
     const brand = overlay.querySelector('#v-brand')?.value.trim();
     const model = overlay.querySelector('#v-model')?.value.trim();
     const tipo  = overlay.querySelector('#v-type')?.value || 'carro';
-    const grade = overlay.querySelector('#v-fuel-grade')?.value || 'premium';
+    const ftype = overlay.querySelector('#v-fuel-type')?.value || 'gasolina';
+    const esElectrico = ftype === 'electrico';
+    // El grado DEBE pertenecer al tipo de combustible (evita gasoil con precio
+    // de gasolina). Si no corresponde, se toma el primero válido del tipo.
+    const gradesDef = (FUEL_TYPES[ftype] || FUEL_TYPES.gasolina).grades;
+    let grade = overlay.querySelector('#v-fuel-grade')?.value || gradesDef[0][0];
+    if (!gradesDef.some(([g]) => g === grade)) grade = gradesDef[0][0];
     const kmgVal = overlay.querySelector('#v-kmg')?.value;
-    const kmg   = kmgVal ? parseFloat(kmgVal) : _estimarRendimiento(tipo, grade);
+    const kmg   = esElectrico ? 0 : (kmgVal ? parseFloat(kmgVal) : _estimarRendimiento(tipo, grade));
 
     if (!brand || !model) throw new Error('Marca y modelo son obligatorios');
-    if (kmg <= 0) throw new Error('El rendimiento debe ser mayor a 0');
+    if (!esElectrico && kmg <= 0) throw new Error('El rendimiento debe ser mayor a 0');
 
     const anio = parseInt(overlay.querySelector('#v-year')?.value) || null;
     if (anio && (anio < 1960 || anio > new Date().getFullYear() + 1)) {
@@ -679,14 +702,31 @@ function modalNuevoVehiculo(parentEl, vehiculo = null) {
 
     const fuelPrices  = window._fuelPrices || _FUEL_FALLBACK;
 
+    // Reconstruir el select de grados según el tipo de combustible elegido,
+    // conservando la selección actual si sigue siendo válida.
+    function rebuildGrades() {
+      if (!fuelGradeEl) return;
+      const ftype  = fuelTypeEl?.value || 'gasolina';
+      const grades = (FUEL_TYPES[ftype] || FUEL_TYPES.gasolina).grades;
+      const prev   = fuelGradeEl.value;
+      fuelGradeEl.innerHTML = grades.map(([g, lbl]) => `<option value="${g}">${lbl}</option>`).join('');
+      fuelGradeEl.value = grades.some(([g]) => g === prev) ? prev : grades[0][0];
+    }
+
     // Actualizar precio de combustible mostrado
     function updateFuelPrice() {
+      const ftype = fuelTypeEl?.value || 'gasolina';
       const grade = fuelGradeEl?.value || 'premium';
       const tipo  = typeEl?.value || 'carro';
-      const kmg   = parseFloat(kmgEl?.value) || _estimarRendimiento(tipo, grade);
-      const precio = fuelPrices[grade] || fuelPrices.premium;
+      if (ftype === 'electrico') {
+        if (fuelPriceVal) fuelPriceVal.textContent = '⚡ Eléctrico';
+        if (fuelCostKm)   fuelCostKm.textContent   = 'Sin costo de combustible';
+        return;
+      }
+      const kmg    = parseFloat(kmgEl?.value) || _estimarRendimiento(tipo, grade);
+      const precio = fuelPrices[grade] ?? fuelPrices.premium;
       const costKm = precio / kmg;
-      if (fuelPriceVal) fuelPriceVal.textContent = `${_vFmt(precio)} / galón`;
+      if (fuelPriceVal) fuelPriceVal.textContent = `${_vFmt(precio)} / galón — ${GRADE_LABEL[grade] || grade}`;
       if (fuelCostKm)   fuelCostKm.textContent   = `Costo estimado: RD$${costKm.toFixed(2)} por km`;
     }
 
@@ -730,9 +770,9 @@ function modalNuevoVehiculo(parentEl, vehiculo = null) {
         if (kmgHint) kmgHint.textContent = 'Eléctrico — sin consumo de combustible';
         return;
       }
-      const est = _estimarRendimiento(tipo, ftype === 'diesel' ? 'diesel' : grade);
+      const est = _estimarRendimiento(tipo, grade);
       if (kmgEl) kmgEl.value = est;
-      if (kmgHint) kmgHint.textContent = `Estimado para ${TIPO_LABEL[tipo]||tipo} · puedes ajustarlo`;
+      if (kmgHint) kmgHint.textContent = `Estimado para ${TIPO_LABEL[tipo]||tipo} · ${GRADE_LABEL[grade]||grade} · puedes ajustarlo`;
     }
 
     // Validar marca con IA al hacer clic en botón
@@ -840,10 +880,9 @@ function modalNuevoVehiculo(parentEl, vehiculo = null) {
       else { yearFb.style.color='var(--green,#00c07a)'; yearFb.textContent = `✓ ${anio}`; }
     });
 
-    // Combustible
+    // Combustible: al cambiar el tipo, los grados disponibles cambian con él
     fuelTypeEl?.addEventListener('change', () => {
-      if (fuelTypeEl.value === 'diesel' && fuelGradeEl) fuelGradeEl.value = 'diesel';
-      else if (fuelTypeEl.value === 'electrico' && fuelGradeEl) fuelGradeEl.value = 'premium';
+      rebuildGrades();
       autoRendimiento(); updateFuelPrice();
     });
     fuelGradeEl?.addEventListener('change', () => { autoRendimiento(); updateFuelPrice(); });
@@ -928,6 +967,20 @@ function modalNuevoMantenimiento(vehicleId, vehicleName, tipos, user) {
       <div class="fg"><label class="lbl">Costo (RD$)</label>
         <input class="inp" id="m-cost" type="number" min="0" placeholder="0"></div>
     </div>
+    ${(typeof CFG !== 'undefined' && CFG.module_gastos === '1') ? `
+    <div class="fg" id="m-pay-wrap" style="display:none">
+      <label class="lbl">¿Cómo se pagó?</label>
+      <select class="inp" id="m-paymethod">
+        <option value="credito">Quedó por pagar (crédito al taller)</option>
+        <option value="efectivo">Efectivo — caja / caja chica</option>
+        <option value="transferencia">Transferencia — banco</option>
+        <option value="tarjeta">Tarjeta — banco</option>
+        <option value="cheque">Cheque — banco</option>
+      </select>
+      <div style="font-size:10px;color:var(--muted2);margin-top:2px">
+        Se registrará automáticamente como gasto en el módulo de Gastos (categoría: Mantenimiento de vehículos)
+      </div>
+    </div>` : ''}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div class="fg"><label class="lbl">Odómetro actual (km)</label>
         <input class="inp" id="m-odo" type="number" placeholder="Km al hacer el servicio"></div>
@@ -943,6 +996,7 @@ function modalNuevoMantenimiento(vehicleId, vehicleName, tipos, user) {
     let type = overlay.querySelector('#m-type')?.value;
     if (type === '__otro') type = overlay.querySelector('#m-otro')?.value.trim();
     if (!type) throw new Error('Selecciona el tipo de mantenimiento');
+    const method = overlay.querySelector('#m-paymethod')?.value || 'credito';
     const res = await window.api.maintenance.create({
       data: {
         vehicle_id:  vehicleId, type,
@@ -952,11 +1006,19 @@ function modalNuevoMantenimiento(vehicleId, vehicleName, tipos, user) {
         next_date:   overlay.querySelector('#m-next')?.value || null,
         workshop:    overlay.querySelector('#m-workshop')?.value.trim(),
         notes:       overlay.querySelector('#m-notes')?.value,
+        payment_method: method,
+        pay_now:        method !== 'credito',
       },
       requestUserId: user.id,
     });
     if (!res.ok) throw new Error(res.error);
-    _vToast('✓ Mantenimiento registrado');
+    if (res.expenseWarning) {
+      _vToast(`⚠ Mantenimiento registrado, pero el gasto: ${res.expenseWarning}`);
+    } else if (res.expenseId) {
+      _vToast('✓ Mantenimiento registrado · gasto creado en Gastos');
+    } else {
+      _vToast('✓ Mantenimiento registrado');
+    }
     const el = document.getElementById('main-content');
     if (el) renderVehiculos(el);
   }, 'Registrar');
@@ -964,6 +1026,11 @@ function modalNuevoMantenimiento(vehicleId, vehicleName, tipos, user) {
   setTimeout(() => {
     document.getElementById('m-type')?.addEventListener('change', (e) => {
       document.getElementById('m-otro-wrap').style.display = e.target.value === '__otro' ? 'block' : 'none';
+    });
+    // Mostrar "¿cómo se pagó?" solo cuando hay costo
+    document.getElementById('m-cost')?.addEventListener('input', (e) => {
+      const wrap = document.getElementById('m-pay-wrap');
+      if (wrap) wrap.style.display = (parseFloat(e.target.value) || 0) > 0 ? 'block' : 'none';
     });
   }, 100);
 }

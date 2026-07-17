@@ -208,7 +208,7 @@ async function renderEnvios(el) {
                 <div style="display:flex;gap:4px">
                   ${e.status === 'pendiente' ? `<button class="btn btn-ghost btn-sm" style="color:var(--blue)" title="Marcar en camino" data-envio-id="${e.id}" data-envio-status="en_camino">🚚</button>` : ''}
                   ${e.status === 'en_camino' ? `<button class="btn btn-ghost btn-sm" style="color:var(--green)" title="Confirmar entrega" data-envio-id="${e.id}" data-envio-status="entregado">✅</button>` : ''}
-                  ${e.status === 'pendiente' ? `<button class="btn btn-ghost btn-sm" style="color:var(--red)" title="Cancelar" data-envio-id="${e.id}" data-envio-status="cancelado">✗</button>` : ''}
+                  ${['pendiente','en_camino'].includes(e.status) ? `<button class="btn btn-ghost btn-sm" style="color:var(--red)" title="Cancelar" data-envio-id="${e.id}" data-envio-status="cancelado">✗</button>` : ''}
                   ${e.dest_lat && e.dest_lng ? `<button class="btn btn-ghost btn-sm" title="Ver en mapa" onclick="abrirMapa(${e.dest_lat},${e.dest_lng},'${(e.dest_address||'').replace(/'/g,'')}')">🗺</button>` : ''}
                 </div>
               </td>
@@ -267,8 +267,8 @@ function modalNuevoEnvio(parentEl, vehiculos) {
     </div>
     <input type="hidden" id="e-tipo" value="propio">
 
-    <!-- Destino -->
-    <div class="fg">
+    <!-- Destino (solo vehículo propio — en expreso el destino es la parada) -->
+    <div class="fg" id="e-dest-wrap">
       <label class="lbl">Dirección de destino *</label>
       <input class="inp" id="e-dest" placeholder="Ej: Av. Independencia 123, Santiago, RD" autocomplete="off">
       <button class="btn btn-ghost btn-sm" id="btn-geocode" style="margin-top:6px;width:100%">
@@ -288,10 +288,13 @@ function modalNuevoEnvio(parentEl, vehiculos) {
       <div id="e-map-result" style="display:none;background:var(--bg2);border-radius:8px;padding:9px 12px;font-size:12px;margin-top:8px;border:0.5px solid var(--line2)"></div>
     </div>
 
-    <!-- Cliente -->
-    <div class="fg">
+    <!-- Cliente — buscador sobre los clientes del sistema -->
+    <div class="fg" style="position:relative">
       <label class="lbl">Cliente</label>
-      <input class="inp" id="e-customer" placeholder="Nombre del cliente (opcional)">
+      <input class="inp" id="e-customer" placeholder="Escribe para buscar el cliente..." autocomplete="off">
+      <input type="hidden" id="e-customer-id">
+      <div id="e-customer-list" style="display:none;position:absolute;z-index:999;background:var(--bg,#fff);border:1px solid var(--line2,#e5e7eb);border-radius:8px;max-height:220px;overflow-y:auto;box-shadow:0 4px 20px #0003;width:100%;left:0;top:100%"></div>
+      <div id="e-customer-info" style="font-size:11px;margin-top:4px;min-height:14px;color:var(--muted2)"></div>
     </div>
 
     <!-- SECCIÓN VEHÍCULO PROPIO -->
@@ -363,15 +366,27 @@ function modalNuevoEnvio(parentEl, vehiculos) {
     <input type="hidden" id="e-distance">`;
 
   const overlay = _eModal('Nuevo envío', html, async (ov) => {
-    const dest  = ov.querySelector('#e-dest')?.value.trim();
     const tipo  = ov.querySelector('#e-tipo')?.value || 'propio';
     const fee   = parseFloat(ov.querySelector('#e-fee')?.value) || 0;
-    if (!dest) throw new Error('La dirección de destino es obligatoria');
     if (!fee)  throw new Error('Ingresa la tarifa del envío');
+
+    // Destino según el tipo: vehículo propio usa la dirección escrita/mapa;
+    // expreso usa la parada de destino (la dirección física no aplica).
+    let dest;
+    if (tipo === 'propio') {
+      dest = ov.querySelector('#e-dest')?.value.trim();
+      if (!dest) throw new Error('La dirección de destino es obligatoria');
+    } else {
+      const carrier = ov.querySelector('#e-carrier')?.value || '';
+      const cdest   = ov.querySelector('#e-carrier-dest')?.value || '';
+      if (!carrier) throw new Error('Selecciona el expreso/parada');
+      if (!cdest)   throw new Error('Selecciona el destino en la parada');
+      dest = cdest;
+    }
 
     const data = {
       dest_address:     dest,
-      customer_id:      null,
+      customer_id:      parseInt(ov.querySelector('#e-customer-id')?.value) || null,
       dest_lat:         parseFloat(ov.querySelector('#e-lat')?.value)      || null,
       dest_lng:         parseFloat(ov.querySelector('#e-lng')?.value)      || null,
       distance_km:      parseFloat(ov.querySelector('#e-distance')?.value) || null,
@@ -389,6 +404,8 @@ function modalNuevoEnvio(parentEl, vehiculos) {
       data.carrier_stop     = ov.querySelector('#e-carrier-stop')?.value.trim() || '';
       data.carrier_tracking = ov.querySelector('#e-carrier-tracking')?.value.trim() || '';
       data.carrier_dest     = ov.querySelector('#e-carrier-dest')?.value || '';
+      // Datos como lat/lng/distancia solo aplican a vehículo propio
+      data.dest_lat = null; data.dest_lng = null; data.distance_km = null;
     }
 
     const res = await window.api.deliveries.create({ data, requestUserId: user.id });
@@ -407,18 +424,16 @@ function modalNuevoEnvio(parentEl, vehiculos) {
       const expresoEl  = document.getElementById('tipo-expreso');
       const secPropio  = document.getElementById('sec-propio');
       const secExpreso = document.getElementById('sec-expreso');
-      const btnGeo = document.getElementById('btn-geocode');
+      const destWrap = document.getElementById('e-dest-wrap');
       const mapRes = document.getElementById('e-map-result');
-      const mapWrap = document.getElementById('e-map-wrap');
       if (tipo === 'propio') {
         propioEl.style.cssText  += ';border-color:var(--green,#00c07a);background:rgba(0,192,122,.07)';
         expresoEl.style.cssText += ';border-color:var(--line2);background:';
         secPropio.style.display  = 'block';
         secExpreso.style.display = 'none';
         document.getElementById('e-fee-hint').textContent = 'Lo que cobras al cliente por el envío';
-        // Vehículo propio: la búsqueda por mapa SÍ aplica (destino exacto + distancia).
-        if (btnGeo)  btnGeo.style.display  = '';
-        if (mapWrap) mapWrap.style.display = '';
+        // Vehículo propio: dirección + mapa SÍ aplican (destino exacto + distancia).
+        if (destWrap) destWrap.style.display = '';
         // Reactivar el mapa (recalcula tamaño; lo monta si aún no existe).
         if (window._enviosInitMap) window._enviosInitMap();
       } else {
@@ -427,13 +442,85 @@ function modalNuevoEnvio(parentEl, vehiculos) {
         secPropio.style.display  = 'none';
         secExpreso.style.display = 'block';
         document.getElementById('e-fee-hint').textContent = 'Tarifa que cobra el expreso (manual)';
-        // Expreso/Parada: no aplica mapa — el destino es la parada, tarifa manual.
-        if (btnGeo)  btnGeo.style.display  = 'none';
-        if (mapWrap) mapWrap.style.display = 'none';
+        // Expreso/Parada: la dirección física no aplica — el destino es la parada.
+        // Se oculta el bloque completo (input + botón buscar + mapa).
+        if (destWrap) destWrap.style.display = 'none';
         if (mapRes)  mapRes.style.display  = 'none';
         onCarrierChange();
       }
     };
+
+    // ── Buscador de clientes del sistema ───────────────────────────────────
+    const custInp  = document.getElementById('e-customer');
+    const custIdEl = document.getElementById('e-customer-id');
+    const custList = document.getElementById('e-customer-list');
+    const custInfo = document.getElementById('e-customer-info');
+    const _custEsc  = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    const _custNorm = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+    // Refrescar la caché de clientes en segundo plano (el modal no espera)
+    if (window.api?.customers?.getAll) {
+      window.api.customers.getAll()
+        .then(r => { if (Array.isArray(r)) DB.customers = r; })
+        .catch(() => {});
+    }
+
+    function _custSelect(c) {
+      custInp.value  = c.name;
+      custIdEl.value = c.id;
+      const parts = [];
+      if (c.phone)   parts.push(`📞 ${_custEsc(c.phone)}`);
+      if (c.address) parts.push(`📍 ${_custEsc(c.address)}`);
+      custInfo.innerHTML = `<span style="color:var(--green,#00c07a)">✓ Cliente vinculado</span>${parts.length ? ' · ' + parts.join(' · ') : ''}`;
+      custList.style.display = 'none';
+      // Vehículo propio: si el cliente tiene dirección y aún no escribiste una, se usa la suya
+      const destInp = document.getElementById('e-dest');
+      if (document.getElementById('e-tipo')?.value === 'propio' && c.address && destInp && !destInp.value.trim()) {
+        destInp.value = c.address;
+      }
+    }
+
+    function _custRender(filter) {
+      if (!custList) return;
+      const raw = String(filter || '').trim();
+      const q = _custNorm(raw);
+      const all = (DB?.customers || []).filter(c => c.active !== 0);
+      const matches = q
+        ? all.filter(c => _custNorm(c.name).includes(q) ||
+                          String(c.phone || '').includes(raw) ||
+                          String(c.rnc   || '').includes(raw))
+        : all;
+      if (!matches.length) { custList.style.display = 'none'; return; }
+      custList.innerHTML = matches.slice(0, 8).map(c => `
+        <div data-cid="${c.id}" style="padding:9px 14px;cursor:pointer;border-bottom:0.5px solid var(--line2,#eee)"
+             onmouseenter="this.style.background='var(--bg2,#f5f5f5)'" onmouseleave="this.style.background=''">
+          <div style="font-size:13px;font-weight:500">${_custEsc(c.name)}</div>
+          <div style="font-size:10px;color:var(--muted2,#888)">${[c.phone, c.rnc].filter(Boolean).map(_custEsc).join(' · ') || 'Sin datos de contacto'}</div>
+        </div>`).join('');
+      custList.style.display = 'block';
+      custList.querySelectorAll('[data-cid]').forEach(div => {
+        div.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          const c = (DB?.customers || []).find(x => x.id === Number(div.dataset.cid));
+          if (c) _custSelect(c);
+        });
+      });
+    }
+
+    custInp?.addEventListener('input', () => {
+      // Al editar el texto se pierde el vínculo — debe re-seleccionar de la lista
+      custIdEl.value = '';
+      custInfo.innerHTML = custInp.value.trim()
+        ? '<span style="color:var(--amber,#f59e0b)">Selecciónalo de la lista para vincular sus datos</span>'
+        : '';
+      _custRender(custInp.value);
+    });
+    custInp?.addEventListener('focus', () => _custRender(custInp.value));
+    document.addEventListener('mousedown', (e) => {
+      if (custList && !custInp?.contains(e.target) && !custList.contains(e.target)) {
+        custList.style.display = 'none';
+      }
+    });
 
     // Cambio de expreso — cargar destinos
     window.onCarrierChange = () => {
@@ -688,37 +775,18 @@ window.actualizarEnvio = async (id, status) => {
   const res = await window.api.deliveries.updateStatus({ id, status, requestUserId: user.id });
   if (!res.ok) { alert(res.error); return; }
 
-  // ── Registrar gasto cuando sale el envío (En camino) ─────────────────────
-  // Se usa la tarifa del envío — es lo que realmente se paga
-  if (status === 'en_camino' && CFG.module_gastos === '1' && window.api?.expenses) {
-    try {
-      const allRes = await window.api.deliveries.getAll({ limit: 200 });
-      const envio  = (allRes?.data || []).find(e => e.id === id);
-      if (envio && envio.delivery_fee > 0) {
-        const esExpreso  = envio.delivery_type === 'expreso' || envio.carrier_name;
-        const categoria  = esExpreso ? 'Envíos — Expreso/Parada' : 'Envíos — Vehículo Propio';
-        const descripcion = esExpreso
-          ? `Envío #${id} vía ${envio.carrier_name||'Expreso'} → ${envio.dest_address}`
-          : `Envío #${id} → ${envio.dest_address}`;
-        await window.api.expenses.create({
-          data: {
-            category:    categoria,
-            description: descripcion,
-            amount:      envio.delivery_fee,
-            date:        new Date().toISOString().split('T')[0],
-            status:      'pagado',
-            notes:       envio.carrier_tracking
-              ? `Rastreo: ${envio.carrier_tracking}`
-              : 'Registrado automáticamente al despachar',
-          },
-          requestUserId: user.id,
-        });
-      }
-    } catch(e) { console.warn('[Envíos] Gasto:', e.message); }
-  }
-
+  // El gasto del envío lo registra el proceso main (deliveries:updateStatus):
+  // expreso → tarifa al despachar; vehículo propio → combustible al entregar.
+  // Antes se creaba aquí y quedaba mal: categoría ignorada y estado "pagado"
+  // sin ningún pago real registrado.
   const labels2 = { en_camino: 'En camino 🚚', entregado: 'Entregado ✅', cancelado: 'Cancelado' };
-  _eToast(`✓ Envío marcado como: ${labels2[status] || status}`);
+  if (res.expenseWarning) {
+    _eToast(`⚠ Envío actualizado, pero el gasto: ${res.expenseWarning}`);
+  } else if (res.expenseId) {
+    _eToast(`✓ Envío ${labels2[status] || status} · gasto registrado en Gastos`);
+  } else {
+    _eToast(`✓ Envío marcado como: ${labels2[status] || status}`);
+  }
 
   // Recargar en tiempo real
   const mainEl = document.getElementById('main-content') ||

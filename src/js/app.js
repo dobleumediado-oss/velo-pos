@@ -725,12 +725,26 @@ function buildTopbar() {
   }));
   left.appendChild(h('span', { class: 'tb-title' }, titles[page] || 'Velo POS'));
 
-  // ── Centro: reloj digital ────────────────────
-  const clockWrap = h('div', { class: 'tb-clock', id: 'tb-clock-wrap' });
+  // ── Centro: reloj digital + banner de tasas ──
+  // El .tb-clock trae flex:1 del CSS (era el centro elástico del topbar);
+  // aquí el elástico pasa a ser centerWrap y el reloj vuelve a tamaño natural.
+  const clockWrap = h('div', { class: 'tb-clock', id: 'tb-clock-wrap', style: { flex: '0 0 auto' } });
   const clockTime = h('div', { class: 'tb-clock-time', id: 'tb-clock-time' });
   const clockDate = h('div', { class: 'tb-clock-date', id: 'tb-clock-date' });
   clockWrap.appendChild(clockTime);
   clockWrap.appendChild(clockDate);
+
+  // Banner multifuncional: tasa del dólar (Banreservas) + combustible a elegir,
+  // con flechas de variación vs el valor anterior (▲ verde subió · ▼ roja bajó)
+  const ratesWrap = h('div', {
+    id: 'tb-rates',
+    style: { display: 'flex', alignItems: 'center', gap: '8px' }
+  });
+  const centerWrap = h('div', {
+    style: { display: 'flex', alignItems: 'center', gap: '16px', justifyContent: 'center', flex: '1', minWidth: '0' }
+  });
+  centerWrap.appendChild(clockWrap);
+  centerWrap.appendChild(ratesWrap);
 
   // ── Derecha: pills + bell ────────────────────
   const right = h('div', { class: 'tb-right' });
@@ -768,11 +782,106 @@ function buildTopbar() {
   right.appendChild(bell);
 
   tb.appendChild(left);
-  tb.appendChild(clockWrap);
+  tb.appendChild(centerWrap);
   tb.appendChild(right);
 
-  // Iniciar/reiniciar el ticker del reloj
+  // Iniciar/reiniciar el ticker del reloj y el banner de tasas
   _startTopbarClock();
+  _startTopbarRates();
+}
+
+// ── Banner de tasas del topbar ────────────────
+// Dólar Banreservas (compra/venta) + un combustible a elegir (clic para
+// cambiar), ambos con flecha de variación respecto al valor anterior:
+// subió → ▲ verde +X · bajó → ▼ roja −X. Datos vía IPC (caché en main).
+let _ratesData = null;
+let _ratesTs   = 0;
+let _ratesInterval = null;
+const _RATES_TTL = 30 * 60 * 1000; // refresco cada 30 min
+
+const _BANNER_FUELS = ['premium', 'regular', 'diesel', 'gasoil_regular', 'glp', 'gnv', 'kerosene'];
+const _BANNER_FUEL_LABEL = {
+  premium: 'G. Premium', regular: 'G. Regular', diesel: 'Gasoil Ópt.',
+  gasoil_regular: 'Gasoil Reg.', glp: 'GLP', gnv: 'GNV', kerosene: 'Kerosene',
+};
+
+function _bannerArrow(delta) {
+  if (!delta) return '';
+  const up  = delta > 0;
+  const val = Math.abs(delta).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return up
+    ? `<span style="color:var(--green,#00c07a);font-weight:700;font-size:10px"> ▲ +${val}</span>`
+    : `<span style="color:var(--red,#ef4444);font-weight:700;font-size:10px"> ▼ -${val}</span>`;
+}
+
+function _bannerNum(v) {
+  return Number(v || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function _renderTopbarRates() {
+  const wrap = document.getElementById('tb-rates');
+  if (!wrap) return;
+  const d = _ratesData;
+  if (!d) { wrap.innerHTML = ''; return; }
+
+  const chipStyle = 'display:flex;flex-direction:column;justify-content:center;padding:4px 10px;' +
+    'background:var(--surface2,var(--bg2));border:1px solid var(--line,var(--line2));border-radius:8px;' +
+    'font-size:11px;line-height:1.35;white-space:nowrap';
+  const parts = [];
+
+  // ── Dólar Banreservas: compra y venta, cada una con su flecha ──
+  if (d.usd?.compra && d.usd?.venta) {
+    parts.push(`
+      <div style="${chipStyle}" title="Tasa del dólar — Banreservas (${d.usd.source})">
+        <div style="font-size:9px;font-weight:700;color:var(--muted2);letter-spacing:.04em">💵 US$ BANRESERVAS</div>
+        <div style="color:var(--ink)">
+          <b>C:</b> ${_bannerNum(d.usd.compra.value)}${_bannerArrow(d.usd.compra.delta)}
+          <span style="color:var(--muted2)"> · </span>
+          <b>V:</b> ${_bannerNum(d.usd.venta.value)}${_bannerArrow(d.usd.venta.delta)}
+        </div>
+      </div>`);
+  }
+
+  // ── Combustible elegido (clic = cambiar) ──
+  let grade = localStorage.getItem('vp_banner_fuel') || 'premium';
+  if (!d.fuel?.[grade]) grade = _BANNER_FUELS.find(g => d.fuel?.[g]) || null;
+  if (grade && d.fuel[grade]) {
+    const f = d.fuel[grade];
+    parts.push(`
+      <div id="tb-rate-fuel" style="${chipStyle};cursor:pointer" title="Clic para cambiar de combustible (RD$/galón)">
+        <div style="font-size:9px;font-weight:700;color:var(--muted2);letter-spacing:.04em">⛽ ${_BANNER_FUEL_LABEL[grade] || grade}</div>
+        <div style="color:var(--ink)"><b>RD$${_bannerNum(f.value)}</b>${_bannerArrow(f.delta)}</div>
+      </div>`);
+  }
+
+  wrap.innerHTML = parts.join('');
+
+  // Clic en el chip de combustible → rotar al siguiente disponible
+  document.getElementById('tb-rate-fuel')?.addEventListener('click', () => {
+    const avail = _BANNER_FUELS.filter(g => _ratesData?.fuel?.[g]);
+    if (!avail.length) return;
+    const cur = localStorage.getItem('vp_banner_fuel') || 'premium';
+    const next = avail[(avail.indexOf(cur) + 1) % avail.length];
+    localStorage.setItem('vp_banner_fuel', next);
+    _renderTopbarRates();
+  });
+}
+
+async function _fetchTopbarRates() {
+  if (!window.api?.banner?.getRates) return;
+  try {
+    const res = await window.api.banner.getRates();
+    if (res?.ok && res.data) { _ratesData = res.data; _ratesTs = Date.now(); }
+  } catch { /* sin internet: se mantiene el último valor */ }
+  _renderTopbarRates();
+}
+
+function _startTopbarRates() {
+  // Pintar de inmediato con lo cacheado; refetch solo si está viejo
+  _renderTopbarRates();
+  if (!_ratesData || (Date.now() - _ratesTs) > _RATES_TTL) _fetchTopbarRates();
+  if (_ratesInterval) clearInterval(_ratesInterval);
+  _ratesInterval = setInterval(_fetchTopbarRates, _RATES_TTL);
 }
 
 // ── Reloj del topbar ──────────────────────────

@@ -2404,6 +2404,23 @@ ipcMain.handle('importar:importarVenta', async (_, { venta, requestUserId }) => 
         if (existing) return { ok: true, saleId: existing.id, skipped: true };
       }
 
+      // ── Desglose de ITBIS (precio final con impuesto INCLUIDO) ────────────
+      // El sistema viejo factura a precio final: 1,200 = 1,016.95 + 183.05.
+      // Si el archivo no trae el ITBIS, se EXTRAE del total (nunca se suma
+      // encima, o la factura reimpresa mostraría un total mayor al cobrado).
+      const _r2 = n => Math.round((Number(n) || 0) * 100) / 100;
+      const _vType = venta.type || 'factura';
+      const _vTotal = _r2(venta.total);
+      const _vTaxPct = _vType === 'factura' ? 18 : 0;
+      let _vTaxAmt = _r2(venta.tax_amt || 0);
+      if (_vTaxPct > 0 && _vTaxAmt <= 0 && _vTotal > 0) {
+        _vTaxAmt = _r2(_vTotal - _vTotal / (1 + _vTaxPct / 100));
+      }
+      let _vSubtotal = _r2(venta.subtotal || 0);
+      if (!(_vSubtotal > 0) || Math.abs(_vSubtotal + _vTaxAmt - _vTotal) > 0.02) {
+        _vSubtotal = _r2(_vTotal - _vTaxAmt);
+      }
+
       const saleR = db.prepare(`
         INSERT INTO sales(
           cash_session_id, customer_id, customer_name, customer_rnc,
@@ -2415,12 +2432,12 @@ ipcMain.handle('importar:importarVenta', async (_, { venta, requestUserId }) => 
         null,
         custId,
         venta.customer_name || 'Consumidor Final',
-        venta.type || 'factura',
-        venta.subtotal || venta.total,
+        _vType,
+        _vSubtotal,
         venta.discount_pct || 0,
-        venta.type === 'factura' ? 18 : 0,
-        venta.tax_amt || 0,
-        venta.total,
+        _vTaxPct,
+        _vTaxAmt,
+        _vTotal,
         venta.payment_method || 'efectivo',
         'Importación histórica',
         requestUserId || null,
@@ -2430,21 +2447,26 @@ ipcMain.handle('importar:importarVenta', async (_, { venta, requestUserId }) => 
       );
       const saleId = saleR.lastInsertRowid;
 
-      // Insertar items — producto genérico de importación (product_id=null)
+      // Insertar items — producto genérico de importación (product_id=null),
+      // con el mismo desglose de ITBIS incluido por línea
       if (venta.items && venta.items.length) {
         for (const item of venta.items) {
+          const _lp = Number(item.unit_price || venta.total) || 0;
+          const _lq = Number(item.qty || 1) || 1;
+          const _lGross = _r2(_lp * _lq);
+          const _lTax = _vTaxPct > 0 ? _r2(_lGross - _lGross / (1 + _vTaxPct / 100)) : 0;
           db.prepare(`
             INSERT INTO sale_items(
               sale_id, product_id, product_code, product_name,
-              unit_cost, unit_price, qty, subtotal
-            ) VALUES (?, NULL, ?, ?, 0, ?, ?, ?)
+              unit_cost, unit_price, qty, subtotal,
+              taxable, tax_pct, tax_amt, net_subtotal
+            ) VALUES (?, NULL, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
           `).run(
             saleId,
             item.product_code || 'IMP',
             item.product_name || 'Producto importado',
-            item.unit_price   || venta.total,
-            item.qty          || 1,
-            (item.unit_price || venta.total) * (item.qty || 1)
+            _lp, _lq, _lGross,
+            _vTaxPct > 0 ? 1 : 0, _vTaxPct, _lTax, _r2(_lGross - _lTax)
           );
         }
       }
@@ -3146,8 +3168,9 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, requestUserId } = 
           cajero, user_id, ncf, notes, created_at, numero_factura, numero_factura_fmt, old_id_factura, import_source)
         VALUES (?, ?, ?, '', ?, ?, ?, 0, 0, ?, ?, ?, ?, 'retail', 'Importación histórica', NULL, ?, ?, ?, ?, ?, ?, 'equiparts_bak')`);
       const insItem = db.prepare(`
-        INSERT INTO sale_items(sale_id, product_id, product_code, product_name, unit_cost, unit_price, qty, subtotal)
-        VALUES (?, ?, ?, ?, 0, ?, ?, ?)`);
+        INSERT INTO sale_items(sale_id, product_id, product_code, product_name, unit_cost, unit_price, qty, subtotal,
+          taxable, tax_pct, tax_amt, net_subtotal)
+        VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)`);
       const facturas = new Map();
       for (const v of ventas) {
         const oid = _aioIntOrNull(v.old_id_factura);
@@ -3191,17 +3214,25 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, requestUserId } = 
         const dt = (f.date || new Date().toISOString().split('T')[0]) + ' 00:00:00';
         const fmt = f.numero_factura_fmt || (f.numero_factura != null ? String(f.numero_factura).padStart(8,'0') : '');
         const notes = f.numero_factura != null ? `Factura #${fmt}${f.ncf ? ' | NCF:' + f.ncf : ''}` : 'Factura importada';
+        // ITBIS incluido en el precio final del sistema viejo: se EXTRAE del
+        // total (1,200 = 1,016.95 + 183.05). Antes se guardaba tax_amt=0 con
+        // tax_pct=18 y la plantilla inflaba el total al reimprimir.
+        const _r2aio = n => Math.round((Number(n) || 0) * 100) / 100;
         const taxPct = 18;
+        const taxAmt = _r2aio(f.total - f.total / (1 + taxPct / 100));
+        const netSubtotal = _r2aio(f.total - taxAmt);
         const r = insSale.run(null, custId, f.customer_name, f.type, f.status,
-          f.total, taxPct, 0, f.total, f.payment_method, f.ncf, notes, dt,
+          netSubtotal, taxPct, taxAmt, f.total, f.payment_method, f.ncf, notes, dt,
           f.numero_factura, fmt, f.old_id_factura);
         const saleId = r.lastInsertRowid;
         const items = f.items.length ? f.items
           : [{ product_code: 'IMP', product_name: 'Factura importada', qty: 1, unit_price: f.total, line_total: f.total }];
         for (const it of items) {
           const pid = prodByCode.get((it.product_code || '').trim()) || null;
+          const lineGross = _r2aio(it.line_total || (it.unit_price * it.qty));
+          const lineTax = _r2aio(lineGross - lineGross / (1 + taxPct / 100));
           insItem.run(saleId, pid, it.product_code, it.product_name, it.unit_price, it.qty,
-            it.line_total || (it.unit_price * it.qty));
+            lineGross, 1, taxPct, lineTax, _r2aio(lineGross - lineTax));
           stats.items++;
         }
         stats.fac_new++;
@@ -3579,13 +3610,77 @@ ipcMain.handle('maintenance:create', async (_, { data, requestUserId }) => {
         vehiclesRepo.update(data.vehicle_id, { ...v, odometer: data.odometer_at });
       }
     }
-    return { ok:true, id };
+
+    // ── Gasto automático (módulo Gastos activo y costo > 0) ──────────────────
+    // El mantenimiento es un gasto operativo real: se registra en Gastos y la
+    // contabilidad lo devenga (Déb 6110 Mantenimiento · Créd 2101 CxP). Si el
+    // usuario indicó cómo lo pagó, se salda de inmediato (Déb CxP · Créd Caja/Banco).
+    let expenseId = null, expenseWarning = null;
+    const cost = parseFloat(data.cost) || 0;
+    if (cost > 0 && settingsRepo.get('module_gastos') === '1') {
+      try {
+        const v = vehiclesRepo.getById(data.vehicle_id);
+        const vName = v ? `${v.brand} ${v.model}${v.plate ? ' (' + v.plate + ')' : ''}` : `vehículo #${data.vehicle_id}`;
+        const catId = expensesRepo.ensureCategory('Mantenimiento de vehículos', 'Operación');
+        const method = data.payment_method || 'credito';   // 'credito' = queda por pagar
+        expenseId = expensesRepo.create({
+          type: 'gasto', category_id: catId,
+          description: `Mantenimiento: ${data.type} — ${vName}`,
+          amount: cost, total: cost,
+          payment_method: method,
+          payment_source: 'pendiente',
+          issue_date: data.date_done || undefined,
+          notes: (data.workshop ? `Taller: ${data.workshop}. ` : '') + 'Generado desde Vehículos → Mantenimiento',
+          user_id: requestUserId, status: 'pendiente_pago',
+        });
+        maintenanceRepo.setExpense(id, expenseId);
+        audit(requestUserId, u.name, 'gasto_creado', 'expenses', expenseId, `Mantenimiento ${data.type} — ${vName}`);
+
+        // Pago inmediato si el usuario indicó un método real (no crédito).
+        // Efectivo: sale de la caja abierta; sin caja abierta, de caja chica.
+        // Transferencia/tarjeta/cheque: banco.
+        let autoPay = null;
+        if (data.pay_now === true && method !== 'credito') {
+          const session = method === 'efectivo' ? cashRepo.getOpen(_reqTerminalId()) : null;
+          const paySource = method === 'efectivo' ? (session ? 'caja' : 'caja_chica') : 'banco';
+          try {
+            autoPay = expensesRepo.pay({
+              expenseId, amount: cost, payment_method: method, payment_source: paySource,
+              cash_session_id: session ? session.id : null,
+              userId: requestUserId, userName: u.name,
+            });
+          } catch (e) { expenseWarning = e.message; }
+        }
+        _acctHook(() => {
+          accountingRepo.generateExpenseAccrualEntry({ expenseId, userId: requestUserId });
+          if (autoPay?.paymentId) accountingRepo.generateExpensePaymentEntry({ paymentId: autoPay.paymentId, userId: requestUserId });
+        });
+      } catch (e) { expenseWarning = e.message; }
+    }
+    return { ok:true, id, expenseId, expenseWarning };
   } catch(e) { return { ok:false, error:e.message }; }
 });
 ipcMain.handle('maintenance:delete', async (_, { id, requestUserId }) => {
   try {
     const u = authRepo.findById(requestUserId);
     if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    // Si el mantenimiento generó un gasto, se anula (devuelve el dinero a caja si
+    // aplicó) y se reversan sus asientos — así lo contable no queda descuadrado.
+    const m = maintenanceRepo.getById(id);
+    if (m?.expense_id) {
+      try {
+        expensesRepo.cancel(m.expense_id, requestUserId, u.name, 'Mantenimiento de vehículo eliminado');
+        _acctHook(() => {
+          const motivo = 'Mantenimiento de vehículo eliminado';
+          accountingRepo.reverseSourceEntries('gasto',      m.expense_id, requestUserId, motivo);
+          accountingRepo.reverseSourceEntries('gasto_dev',  m.expense_id, requestUserId, motivo);
+          accountingRepo.reverseSourceEntries('gasto_pago', m.expense_id, requestUserId, motivo);
+        });
+      } catch (e) {
+        // 'Ya está anulado' no debe impedir borrar el registro de mantenimiento
+        if (!/anulado/i.test(e.message)) return { ok:false, error:`No se pudo anular el gasto vinculado: ${e.message}` };
+      }
+    }
     maintenanceRepo.delete(id);
     return { ok:true };
   } catch(e) { return { ok:false, error:e.message }; }
@@ -3622,9 +3717,64 @@ ipcMain.handle('deliveries:updateStatus', async (_, { id, status, requestUserId 
   try {
     const u = authRepo.findById(requestUserId);
     if (!u) return { ok:false, error:'Sin sesión' };
+    const delivery = deliveriesRepo.getById(id);
+    if (!delivery) return { ok:false, error:'Envío no encontrado' };
     deliveriesRepo.updateStatus(id, status, requestUserId);
     audit(requestUserId, u.name, `envio_${status}`, 'deliveries', id, '');
-    return { ok:true };
+
+    // ── Gasto automático del envío (módulo Gastos activo) ────────────────────
+    // Expreso/parada: la tarifa se le paga al expreso al despachar → gasto de
+    //   Mensajería al pasar a "en_camino".
+    // Vehículo propio: el costo real es el combustible estimado del viaje →
+    //   gasto de Combustible al confirmar la entrega. (La tarifa cobrada al
+    //   cliente es un INGRESO, no un gasto — el código viejo la registraba mal.)
+    // Se crean como "por pagar" (devengo Déb gasto · Créd CxP): reflejan la
+    // obligación sin sacar dinero de caja que nadie contó. Se pagan desde Gastos.
+    let expenseId = null, expenseWarning = null;
+    const esExpreso = delivery.delivery_type === 'expreso' || !!delivery.carrier_name;
+    if (settingsRepo.get('module_gastos') === '1' && !delivery.expense_id) {
+      let catId = null, desc = '', amount = 0;
+      if (esExpreso && status === 'en_camino' && (delivery.delivery_fee || 0) > 0) {
+        catId  = expensesRepo.ensureCategory('Mensajería', 'Operación');
+        desc   = `Envío #${id} vía ${delivery.carrier_name || 'expreso'} → ${delivery.dest_address}`;
+        amount = delivery.delivery_fee;
+      } else if (!esExpreso && status === 'entregado' && (delivery.fuel_cost || 0) > 0) {
+        catId  = expensesRepo.ensureCategory('Combustible', 'Operación');
+        desc   = `Combustible envío #${id} → ${delivery.dest_address}` +
+                 (delivery.distance_km ? ` (${delivery.distance_km.toFixed(1)} km)` : '');
+        amount = delivery.fuel_cost;
+      }
+      if (catId && amount > 0) {
+        try {
+          expenseId = expensesRepo.create({
+            type: 'gasto', category_id: catId, description: desc,
+            amount, total: amount,
+            payment_method: 'credito', payment_source: 'pendiente',
+            notes: (delivery.carrier_tracking ? `Rastreo: ${delivery.carrier_tracking}. ` : '') +
+                   'Generado automáticamente desde Envíos',
+            user_id: requestUserId, status: 'pendiente_pago',
+          });
+          deliveriesRepo.setExpense(id, expenseId);
+          audit(requestUserId, u.name, 'gasto_creado', 'expenses', expenseId, desc);
+          _acctHook(() => accountingRepo.generateExpenseAccrualEntry({ expenseId, userId: requestUserId }));
+        } catch (e) { expenseWarning = e.message; }
+      }
+    }
+
+    // Cancelación de un envío que ya generó gasto → anular el gasto y reversar
+    if (status === 'cancelado' && delivery.expense_id) {
+      try {
+        expensesRepo.cancel(delivery.expense_id, requestUserId, u.name, `Envío #${id} cancelado`);
+        _acctHook(() => {
+          const motivo = `Envío #${id} cancelado`;
+          accountingRepo.reverseSourceEntries('gasto',      delivery.expense_id, requestUserId, motivo);
+          accountingRepo.reverseSourceEntries('gasto_dev',  delivery.expense_id, requestUserId, motivo);
+          accountingRepo.reverseSourceEntries('gasto_pago', delivery.expense_id, requestUserId, motivo);
+        });
+      } catch (e) { if (!/anulado/i.test(e.message)) expenseWarning = e.message; }
+    }
+
+    return { ok:true, expenseId, expenseWarning };
   } catch(e) { return { ok:false, error:e.message }; }
 });
 
@@ -4551,6 +4701,94 @@ async function getFuelPricesCached(force = false) {
 ipcMain.handle('fuel:getPrices', async () => {
   const r = await getFuelPricesCached();
   return { ok: true, source: r.source, data: r.data };
+});
+
+// ══════════════════════════════════════════════
+// TASA DEL DÓLAR (Banreservas) + BANNER DE TASAS
+// ══════════════════════════════════════════════
+// Fuente 1: banreservas.com publica compra/venta server-side con clases
+// tasacambio-compraUS / tasacambio-ventaUS. Fuente 2 (respaldo): infodolar.
+async function _scrapeUsdRate() {
+  try {
+    const res = await fetch('https://www.banreservas.com', {
+      signal: AbortSignal.timeout(8000),
+      headers: { 'User-Agent': 'Mozilla/5.0 VeloPOS' },
+    });
+    if (res.ok) {
+      const html   = await res.text();
+      const compra = parseFloat(html.match(/tasacambio-compraUS[^>]*>\s*([\d.,]+)/i)?.[1]?.replace(/,/g, ''));
+      const venta  = parseFloat(html.match(/tasacambio-ventaUS[^>]*>\s*([\d.,]+)/i)?.[1]?.replace(/,/g, ''));
+      if (compra > 20 && compra < 500 && venta >= compra && venta < 500) {
+        return { source: 'banreservas', compra, venta };
+      }
+    }
+  } catch (e) { console.warn('[USD] Banreservas error:', e.message); }
+
+  try {
+    const res = await fetch('https://www.infodolar.com.do/precio-dolar-entidad-banreservas.aspx', {
+      signal: AbortSignal.timeout(8000),
+      headers: { 'User-Agent': 'Mozilla/5.0 VeloPOS' },
+    });
+    if (res.ok) {
+      const html = await res.text();
+      // La página lista: $compra, $compra, $variación, $venta, $venta, $variación
+      const nums = [...html.matchAll(/\$\s*([\d]+\.[\d]+)/g)].map(m => parseFloat(m[1]));
+      const compra = nums.find(n => n > 20 && n < 500);
+      const venta  = nums.find(n => n > 20 && n < 500 && n > compra);
+      if (compra && venta) return { source: 'infodolar', compra, venta };
+    }
+  } catch (e) { console.warn('[USD] Infodolar error:', e.message); }
+  return null;
+}
+
+let _usdCache = null, _usdCacheTs = 0;
+// 30 min, alineado con el refresco del topbar: si Banreservas cambia la
+// pizarra durante el día, el banner lo refleja en la siguiente media hora.
+const USD_CACHE_MS = 30 * 60 * 1000;
+
+async function getUsdRateCached() {
+  if (_usdCache && (Date.now() - _usdCacheTs) < USD_CACHE_MS) return _usdCache;
+  const fresh = await _scrapeUsdRate();
+  if (fresh) { _usdCache = fresh; _usdCacheTs = Date.now(); }
+  return _usdCache; // último valor bueno, o null si nunca hubo
+}
+
+// Banner de tasas del topbar: dólar + combustibles con variación vs el valor
+// ANTERIOR (persistida en settings — sobrevive reinicios). Al detectar un valor
+// nuevo, el actual pasa a "anterior" y la flecha muestra la diferencia.
+ipcMain.handle('banner:getRates', async () => {
+  try {
+    const [usd, fuelRes] = await Promise.all([getUsdRateCached(), getFuelPricesCached()]);
+    const fuel = fuelRes?.data || {};
+
+    let state = {};
+    try { state = JSON.parse(settingsRepo.get('banner_rate_state') || '{}'); } catch {}
+    let changed = false;
+    const track = (key, val) => {
+      const v = Number(val);
+      if (!Number.isFinite(v) || v <= 0) return null;
+      const s = state[key];
+      if (!s || s.cur !== v) { state[key] = { prev: s ? s.cur : null, cur: v }; changed = true; }
+      const prev = state[key].prev;
+      return { value: v, delta: prev != null ? Math.round((v - prev) * 100) / 100 : 0 };
+    };
+
+    const out = {
+      usd: usd ? {
+        compra: track('usd_compra', usd.compra),
+        venta:  track('usd_venta',  usd.venta),
+        source: usd.source,
+      } : null,
+      fuel: {},
+      fuelSource: fuelRes?.source || 'fallback',
+    };
+    for (const k of ['premium', 'regular', 'diesel', 'gasoil_regular', 'kerosene', 'glp', 'gnv']) {
+      const t = track('fuel_' + k, fuel[k]);
+      if (t) out.fuel[k] = t;
+    }
+    if (changed) settingsRepo.set('banner_rate_state', JSON.stringify(state));
+    return { ok: true, data: out };
+  } catch (e) { return { ok: false, error: e.message }; }
 });
 
 

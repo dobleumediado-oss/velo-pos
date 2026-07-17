@@ -185,6 +185,8 @@ function printReceipt(sale, isReprint = false) {
       biz_bank_account: DB?.settings?.biz_bank_account || '',
       biz_bank_holder:  DB?.settings?.biz_bank_holder  || '',
       biz_bank_iban:    DB?.settings?.biz_bank_iban    || '',
+      // '0' oculta la columna "Código" de artículos SOLO en la impresión
+      print_item_code:  DB?.settings?.print_item_code  || '1',
     };
 
     const saleForPlant = {
@@ -1278,6 +1280,7 @@ function testPrint() {
       biz_bank_account: DB?.settings?.biz_bank_account || '010-000000-0-0',
       biz_bank_holder:  DB?.settings?.biz_bank_holder  || '',
       biz_bank_iban:    DB?.settings?.biz_bank_iban    || 'DO00 0000 0000 0000 0000 0000',
+      print_item_code:  DB?.settings?.print_item_code  || '1',
     };
     const sale = getSampleSale(cfg);
     const html = plantilla.render(sale, cfg, plantilla.opciones);

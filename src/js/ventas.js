@@ -83,16 +83,22 @@ function ventasLineFiscal(item, sale) {
 
   const disc = Math.min(100, Math.max(0, parseFloat(sale?.discount_pct || sale?.disc || 0) || 0));
   const factor = 1 - (disc / 100);
-  const net = ventasRound2((Number.isFinite(storedSubtotal) ? storedSubtotal : unit * qty) * factor);
-  const shouldTax = (sale?.type || 'factura') === 'factura' && (Number(sale?.tax_amt || sale?.itbis || 0) > 0);
-  const pct = shouldTax ? ventasTaxPct(item, sale?.tax_pct || CFG?.itbis || 18) : 0;
-  const tax = pct > 0 ? ventasRound2(net * (pct / 100)) : 0;
+  // Línea legacy/importada sin desglose guardado: el precio es FINAL con ITBIS
+  // INCLUIDO (convención del sistema y del POS viejo). El impuesto se EXTRAE del
+  // precio (1,200 = 1,016.95 + 183.05) — sumarlo encima inflaría el total cobrado.
+  const gross = ventasRound2((Number.isFinite(storedSubtotal) ? storedSubtotal : unit * qty) * factor);
+  const isFactura = (sale?.type || 'factura') === 'factura';
+  const rawPct = item?.tax_pct ?? sale?.tax_pct;
+  const pct = isFactura && ventasTaxable(item)
+    ? Math.max(0, Math.min(100, parseFloat(rawPct) || 0)) : 0;
+  const net = pct > 0 ? ventasRound2(gross / (1 + pct / 100)) : gross;
+  const tax = ventasRound2(gross - net);
   return {
     qty,
     unitNet: qty ? ventasRound2(net / qty) : unit,
     net,
     tax,
-    gross: ventasRound2(net + tax),
+    gross,
   };
 }
 
@@ -321,7 +327,12 @@ function renderVentasTable() {
       ? new Date(s.created_at).toLocaleTimeString('es-DO',
           { hour: '2-digit', minute: '2-digit' })
       : (s.time || '');
-    const taxAmt    = s.tax_amt || s.itbis || 0;
+    // Legacy/importada sin ITBIS en cabecera: extraerlo del total (precio final
+    // con impuesto incluido), igual que el detalle y la impresión.
+    let taxAmt = s.tax_amt || s.itbis || 0;
+    if (!taxAmt && (s.type || 'factura') === 'factura' && Number(s.tax_pct) > 0 && Number(s.total) > 0) {
+      taxAmt = ventasRound2(s.total - s.total / (1 + Number(s.tax_pct) / 100));
+    }
     const tieneNcf  = !!(s.ncf);
     const ecfOk     = s.ecf_status === 'Aceptado';
 
@@ -807,8 +818,9 @@ async function openDetalleVentaModal(s) {
   const detail = sale || s || {};
   const items = sale?.items || [];
 
-  const itemsRows = items.map(i => {
-    const f = ventasLineFiscal(i, detail);
+  const itemsFiscal = items.map(i => ventasLineFiscal(i, detail));
+  const itemsRows = items.map((i, idx) => {
+    const f = itemsFiscal[idx];
     return `
       <tr>
         <td style="font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap">
@@ -825,7 +837,13 @@ async function openDetalleVentaModal(s) {
 
   const method  = detail.payment_method || detail.pay || '';
   const fecha   = (detail.created_at || detail.date || '').split('T')[0].split(' ')[0];
-  const taxAmt  = detail.tax_amt  || detail.itbis    || 0;
+  // Legacy/importada sin ITBIS en cabecera: usar el desglose extraído de las
+  // líneas (incluido en el precio) para que el modal cuadre con la impresión.
+  const lineTaxSum = ventasRound2(itemsFiscal.reduce((a, f) => a + (f.tax || 0), 0));
+  const lineNetSum = ventasRound2(itemsFiscal.reduce((a, f) => a + (f.net || 0), 0));
+  const headerTax  = Number(detail.tax_amt || detail.itbis || 0);
+  const taxAmt   = headerTax > 0 ? headerTax : lineTaxSum;
+  const netShown = headerTax > 0 ? (detail.subtotal ?? lineNetSum) : (lineTaxSum > 0 ? lineNetSum : (detail.subtotal ?? lineNetSum));
   const discAmt = detail.discount_amt || detail.discAmt || 0;
   const discPct = detail.discount_pct || detail.disc   || 0;
   const tieneNcf = !!(detail.ncf);
@@ -887,7 +905,7 @@ async function openDetalleVentaModal(s) {
       </table>
     </div>
     <div class="card" style="background:var(--surface2)">
-        <div class="tr"><span>Monto bruto</span><span>${fmt(detail.subtotal)}</span></div>
+        <div class="tr"><span>Monto bruto</span><span>${fmt(netShown)}</span></div>
       ${discPct > 0
         ? `<div class="tr"><span>Descuento (${discPct}%)</span>
            <span>-${fmt(discAmt)}</span></div>` : ''}
@@ -1004,7 +1022,7 @@ async function reimprimirVenta(saleId) {
         due_date:        sale.due_date || null,
         customer_id:     sale.customer_id || null,
         customer_name:   sale.customer_name  || 'Consumidor Final',
-        customer_rnc:    sale.customer_rnc   || '',
+        customer_rnc:    sale.customer_rnc   || _cust?.rnc || '',
         customer_address: _cust?.address || '',
         customer_phone:   _cust?.phone   || '',
 	        customer_email:   _cust?.email   || '',
@@ -1061,7 +1079,7 @@ async function guardarVentaPDF(saleId) {
     id: sale.id, date: fecha, time: hora, type: sale.type,
     numero_factura: sale.numero_factura, numero_factura_fmt: sale.numero_factura_fmt,
     due_date: sale.due_date || null, customer_id: sale.customer_id || null,
-    customer_name: sale.customer_name || 'Consumidor Final', customer_rnc: sale.customer_rnc || '',
+    customer_name: sale.customer_name || 'Consumidor Final', customer_rnc: sale.customer_rnc || _custPdf?.rnc || '',
     customer_address: _custPdf?.address || '', customer_phone: _custPdf?.phone || '', customer_email: _custPdf?.email || '',
 	    items: (sale.items || []).map(i => ({
 	      product_code: ventasItemCode(i),

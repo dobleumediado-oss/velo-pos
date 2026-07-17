@@ -82,6 +82,8 @@ async function renderConfiguracion(el) {
       biz_bank_account: s.biz_bank_account || '010-000000-0-0',
       biz_bank_holder:  s.biz_bank_holder  || '',
       biz_bank_iban:    s.biz_bank_iban    || 'DO00 0000 0000 0000 0000 0000',
+      // Mostrar/ocultar la columna "Código" en los documentos impresos
+      print_item_code:  s.print_item_code  || '1',
     };
   }
 
@@ -241,6 +243,24 @@ async function renderConfiguracion(el) {
     pBtns.appendChild(btnEdit);
   }
   plantCard.appendChild(pBtns);
+
+  // Opción: columna "Código" de artículos en documentos impresos.
+  // Solo afecta la impresión/PDF — dentro del sistema el código siempre se ve.
+  const codeRow = h('div', { style: 'display:flex;align-items:center;gap:8px;margin-top:12px' });
+  const codeChk = h('input', { type: 'checkbox', id: 'cfg-print-item-code', style: 'width:15px;height:15px;cursor:pointer' });
+  codeChk.checked = (settings.print_item_code || '1') !== '0';
+  codeChk.addEventListener('change', async () => {
+    const value = codeChk.checked ? '1' : '0';
+    await window.api.settings.set({ key: 'print_item_code', value, requestUserId: user?.id });
+    if (typeof DB !== 'undefined' && DB.settings) DB.settings.print_item_code = value;
+    toast(codeChk.checked ? '✓ El código de artículo se imprimirá' : '✓ Código de artículo oculto en impresión');
+    // Refrescar la vista previa si está abierta
+    if (document.getElementById('plt-preview-wrap')?.style.display !== 'none') _renderPreview(window._PA);
+  });
+  codeRow.appendChild(codeChk);
+  codeRow.appendChild(h('label', { for: 'cfg-print-item-code', style: 'font-size:12px;cursor:pointer;color:var(--ink)' },
+    'Mostrar código de artículo en documentos impresos'));
+  plantCard.appendChild(codeRow);
 
   // Zona de preview
   const pPrevWrap = h('div', { id: 'plt-preview-wrap', style: 'display:none;margin-top:14px' });

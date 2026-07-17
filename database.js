@@ -44,6 +44,7 @@ function initDB(customDataDir) {
   migrateProductsModel();
   createTables();
   migratePriceHistoryAccountingColumns();
+  migrateVehiclesModule();
   migratePurchaseColumns();
   migrateTaxColumns();
   migrateECFColumns();
@@ -522,16 +523,16 @@ function createTables() {
     CREATE TABLE IF NOT EXISTS vehicles (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
       type            TEXT NOT NULL DEFAULT 'carro'
-                        CHECK(type IN ('carro','moto','camion','furgoneta','otro')),
+                        CHECK(type IN ('carro','camioneta','moto','camion','furgoneta','otro')),
       brand           TEXT NOT NULL,
       model           TEXT NOT NULL,
       year            INTEGER,
       plate           TEXT,
       color           TEXT,
       fuel_type       TEXT DEFAULT 'gasolina'
-                        CHECK(fuel_type IN ('gasolina','diesel','electrico','hibrido')),
+                        CHECK(fuel_type IN ('gasolina','diesel','glp','gnv','electrico','hibrido')),
       fuel_grade      TEXT DEFAULT 'premium'
-                        CHECK(fuel_grade IN ('premium','regular','diesel')),
+                        CHECK(fuel_grade IN ('premium','regular','diesel','gasoil_regular','glp','gnv','ninguno')),
       km_per_gallon   REAL DEFAULT 35,
       odometer        REAL DEFAULT 0,
       status          TEXT DEFAULT 'activo'
@@ -557,6 +558,7 @@ function createTables() {
       cost            REAL DEFAULT 0,
       workshop        TEXT,
       notes           TEXT,
+      expense_id      INTEGER REFERENCES expenses(id),
       user_id         INTEGER REFERENCES users(id),
       created_at      TEXT DEFAULT (datetime('now'))
     );
@@ -586,6 +588,12 @@ function createTables() {
       fuel_used       REAL,
       fuel_cost       REAL,
       delivery_fee    REAL DEFAULT 0,
+      delivery_type   TEXT DEFAULT 'propio',
+      carrier_name    TEXT DEFAULT '',
+      carrier_stop    TEXT DEFAULT '',
+      carrier_tracking TEXT DEFAULT '',
+      carrier_dest    TEXT DEFAULT '',
+      expense_id      INTEGER REFERENCES expenses(id),
       status          TEXT DEFAULT 'pendiente'
                         CHECK(status IN ('pendiente','en_camino','entregado','cancelado')),
       scheduled_at    TEXT,
@@ -661,7 +669,8 @@ function createTables() {
     CREATE INDEX IF NOT EXISTS idx_inv_product       ON inventory_movements(product_id);
     CREATE INDEX IF NOT EXISTS idx_price_hist_product ON product_price_history(product_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_price_hist_date    ON product_price_history(created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_price_hist_accounting ON product_price_history(accounting_entry_id);
+    -- idx_price_hist_accounting se crea en migratePriceHistoryAccountingColumns():
+    -- en BDs existentes la columna accounting_entry_id aún no existe en este punto.
     CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);
     CREATE INDEX IF NOT EXISTS idx_purchase_items_po ON purchase_items(purchase_order_id);
     CREATE INDEX IF NOT EXISTS idx_products_barcode  ON products(barcode);
@@ -710,6 +719,73 @@ function migratePriceHistoryAccountingColumns() {
     db.prepare('CREATE INDEX IF NOT EXISTS idx_price_hist_accounting ON product_price_history(accounting_entry_id)').run();
   } catch (e) {
     console.error('[MIGRATE] product_price_history contabilidad:', e.message);
+  }
+}
+
+// ── Migración módulo vehículos/envíos (segura e idempotente) ─────────────────
+// 1) SQLite no permite editar un CHECK: si la tabla vehicles existe con el CHECK
+//    viejo (sin 'camioneta'/'glp'), se reconstruye copiando los datos (ids se
+//    preservan, así deliveries/vehicle_maintenance no pierden sus referencias).
+// 2) Columnas nuevas de deliveries (expreso/parada + enlace a gasto) y de
+//    vehicle_maintenance (enlace a gasto) vía ALTER TABLE.
+function migrateVehiclesModule() {
+  try {
+    const tblSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='vehicles'").get()?.sql || '';
+    if (tblSql && (!tblSql.includes("'camioneta'") || !tblSql.includes("'glp'") || !tblSql.includes("'ninguno'"))) {
+      db.pragma('foreign_keys = OFF');
+      db.transaction(() => {
+        db.exec(`
+          CREATE TABLE vehicles_new (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            type            TEXT NOT NULL DEFAULT 'carro'
+                              CHECK(type IN ('carro','camioneta','moto','camion','furgoneta','otro')),
+            brand           TEXT NOT NULL,
+            model           TEXT NOT NULL,
+            year            INTEGER,
+            plate           TEXT,
+            color           TEXT,
+            fuel_type       TEXT DEFAULT 'gasolina'
+                              CHECK(fuel_type IN ('gasolina','diesel','glp','gnv','electrico','hibrido')),
+            fuel_grade      TEXT DEFAULT 'premium'
+                              CHECK(fuel_grade IN ('premium','regular','diesel','gasoil_regular','glp','gnv','ninguno')),
+            km_per_gallon   REAL DEFAULT 35,
+            odometer        REAL DEFAULT 0,
+            status          TEXT DEFAULT 'activo'
+                              CHECK(status IN ('activo','inactivo','taller')),
+            notes           TEXT,
+            user_id         INTEGER REFERENCES users(id),
+            created_at      TEXT DEFAULT (datetime('now')),
+            updated_at      TEXT DEFAULT (datetime('now'))
+          );
+        `);
+        db.exec(`INSERT INTO vehicles_new(id,type,brand,model,year,plate,color,fuel_type,fuel_grade,
+                   km_per_gallon,odometer,status,notes,user_id,created_at,updated_at)
+                 SELECT id,type,brand,model,year,plate,color,fuel_type,fuel_grade,
+                   km_per_gallon,odometer,status,notes,user_id,created_at,updated_at FROM vehicles`);
+        db.exec('DROP TABLE vehicles');
+        db.exec('ALTER TABLE vehicles_new RENAME TO vehicles');
+      })();
+      db.pragma('foreign_keys = ON');
+      console.log('[MIGRATE] vehicles: tipos ampliados (camioneta, GLP, GNV)');
+    }
+
+    const addCol = (table, col, def) => {
+      const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+      if (!cols.includes(col)) {
+        db.prepare(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`).run();
+        console.log(`[MIGRATE] ${table}.${col} agregada`);
+      }
+    };
+    addCol('deliveries', 'delivery_type',    "TEXT DEFAULT 'propio'");
+    addCol('deliveries', 'carrier_name',     "TEXT DEFAULT ''");
+    addCol('deliveries', 'carrier_stop',     "TEXT DEFAULT ''");
+    addCol('deliveries', 'carrier_tracking', "TEXT DEFAULT ''");
+    addCol('deliveries', 'carrier_dest',     "TEXT DEFAULT ''");
+    addCol('deliveries', 'expense_id',       'INTEGER DEFAULT NULL');
+    addCol('vehicle_maintenance', 'expense_id', 'INTEGER DEFAULT NULL');
+  } catch (e) {
+    db.pragma('foreign_keys = ON');
+    console.error('[MIGRATE] vehiculos/envios:', e.message);
   }
 }
 
@@ -3052,6 +3128,21 @@ const expensesRepo = {
     db.prepare(`UPDATE expense_categories SET name=?,affects_profit=?,requires_approval=?,requires_attachment=?,approval_limit=?,active=? WHERE id=?`)
       .run(data.name, data.affects_profit??1, data.requires_approval??0, data.requires_attachment??0, data.approval_limit||0, data.active??1, id);
   },
+  // Busca una categoría por nombre (case-insensitive); si no existe la crea,
+  // colgada del grupo indicado (que también se crea si falta). Usado por los
+  // gastos automáticos de mantenimiento y envíos.
+  ensureCategory(name, parentName = null) {
+    const found = db.prepare('SELECT id FROM expense_categories WHERE name=? COLLATE NOCASE AND active=1').get(name);
+    if (found) return found.id;
+    let parentId = null;
+    if (parentName) {
+      const p = db.prepare('SELECT id FROM expense_categories WHERE name=? COLLATE NOCASE AND parent_id IS NULL AND active=1').get(parentName);
+      parentId = p ? p.id
+        : db.prepare('INSERT INTO expense_categories(name,affects_profit,requires_approval) VALUES(?,1,0)').run(parentName).lastInsertRowid;
+    }
+    return db.prepare('INSERT INTO expense_categories(name,parent_id,affects_profit,requires_approval) VALUES(?,?,1,0)')
+      .run(name, parentId).lastInsertRowid;
+  },
 
   // ── CRUD Gastos ──────────────────────────
   getAll({ status, from, to, supplier_id, category_id, user_id, limit } = {}) {
@@ -3315,14 +3406,27 @@ const vehiclesRepo = {
            data.fuel_grade||'premium', data.km_per_gallon||35,
            data.odometer||0, data.status||'activo', data.notes||'', id);
   },
-  delete(id) { db.prepare('DELETE FROM vehicles WHERE id=?').run(id); },
+  delete(id) {
+    // FK ON: primero el historial de mantenimiento (sus gastos quedan como
+    // registro histórico) y desasignar envíos; luego el vehículo.
+    db.transaction(() => {
+      db.prepare('DELETE FROM vehicle_maintenance WHERE vehicle_id=?').run(id);
+      db.prepare('UPDATE deliveries SET vehicle_id=NULL WHERE vehicle_id=?').run(id);
+      db.prepare('DELETE FROM vehicles WHERE id=?').run(id);
+    })();
+  },
 
   // Calcular costo estimado de combustible para una distancia
   calcFuelCost(vehicleId, distanceKm, fuelPrices) {
     const v = this.getById(vehicleId);
     if (!v) return null;
+    // Eléctrico: no consume combustible — costo 0 (no se estima electricidad)
+    if (v.fuel_type === 'electrico' || v.fuel_grade === 'ninguno') {
+      return { gallons: 0, cost: 0, fuel_grade: v.fuel_grade,
+               km_per_gallon: v.km_per_gallon, electric: true };
+    }
     const gallons = distanceKm / (v.km_per_gallon || 35);
-    const pricePerGallon = parseFloat(fuelPrices[v.fuel_grade] || fuelPrices.premium || 293);
+    const pricePerGallon = parseFloat(fuelPrices[v.fuel_grade] ?? fuelPrices.premium ?? 293);
     const cost = gallons * pricePerGallon;
     return { gallons: round2(gallons), cost: round2(cost),
              fuel_grade: v.fuel_grade, km_per_gallon: v.km_per_gallon };
@@ -3352,6 +3456,10 @@ const maintenanceRepo = {
       data.date_done||todayStr(), data.next_date||null,
       data.cost||0, data.workshop||'', data.notes||'', data.user_id||null).lastInsertRowid;
   },
+  getById(id) { return db.prepare('SELECT * FROM vehicle_maintenance WHERE id=?').get(id); },
+  setExpense(id, expenseId) {
+    db.prepare('UPDATE vehicle_maintenance SET expense_id=? WHERE id=?').run(expenseId, id);
+  },
   delete(id) { db.prepare('DELETE FROM vehicle_maintenance WHERE id=?').run(id); },
 };
 
@@ -3377,13 +3485,19 @@ const deliveriesRepo = {
   create(data) {
     return db.prepare(`INSERT INTO deliveries(sale_id,customer_id,vehicle_id,driver_id,
       origin_address,dest_address,dest_lat,dest_lng,distance_km,fuel_used,fuel_cost,
-      delivery_fee,status,scheduled_at,notes,user_id)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      delivery_fee,delivery_type,carrier_name,carrier_stop,carrier_tracking,carrier_dest,
+      status,scheduled_at,notes,user_id)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       data.sale_id||null, data.customer_id||null, data.vehicle_id||null, data.driver_id||null,
       data.origin_address||'', data.dest_address, data.dest_lat||null, data.dest_lng||null,
       data.distance_km||null, data.fuel_used||null, data.fuel_cost||null,
-      data.delivery_fee||0, data.status||'pendiente', data.scheduled_at||null,
+      data.delivery_fee||0, data.delivery_type||'propio', data.carrier_name||'',
+      data.carrier_stop||'', data.carrier_tracking||'', data.carrier_dest||'',
+      data.status||'pendiente', data.scheduled_at||null,
       data.notes||'', data.user_id||null).lastInsertRowid;
+  },
+  setExpense(id, expenseId) {
+    db.prepare('UPDATE deliveries SET expense_id=? WHERE id=?').run(expenseId, id);
   },
   updateStatus(id, status, userId) {
     db.prepare(`UPDATE deliveries SET status=?,${status==='entregado'?"delivered_at=datetime('now'),":""} updated_at=datetime('now') WHERE id=?`)
@@ -4227,6 +4341,10 @@ const accountingRepo = {
       else if (catName.includes('sueldo') || catName.includes('nómina') || catName.includes('personal'))
                                              expAccId = getAccId('account_salary','6106');
       else if (catName.includes('combustible')) expAccId = getAccId('account_fuel','6107');
+      else if (catName.includes('mantenimiento') || catName.includes('reparaci'))
+        expAccId = getAccId('account_maintenance','6110') || getAccId('account_other_exp','6120');
+      else if (catName.includes('transporte') || catName.includes('mensajer') || catName.includes('envío') || catName.includes('envio'))
+        expAccId = getAccId('account_transport','6108') || getAccId('account_other_exp','6120');
 
       const lines = [
         { account_id: expAccId, debit: expense.total, credit: 0,             description: expense.description },
@@ -4403,6 +4521,10 @@ const accountingRepo = {
     else if (cat.includes('sueldo') || cat.includes('nómina') || cat.includes('nomina') || cat.includes('personal'))
                                          id = getAccId('account_salary',   '6106');
     else if (cat.includes('combustible')) id = getAccId('account_fuel',    '6107');
+    else if (cat.includes('mantenimiento') || cat.includes('reparaci'))
+      id = getAccId('account_maintenance', '6110') || getAccId('account_other_exp', '6120');
+    else if (cat.includes('transporte') || cat.includes('mensajer') || cat.includes('envío') || cat.includes('envio'))
+      id = getAccId('account_transport', '6108') || getAccId('account_other_exp', '6120');
     return id;
   },
 
