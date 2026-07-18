@@ -638,7 +638,6 @@ async function imprimirReporteDia() {
   // ── Cargar gastos del día si el módulo está activo ──────────────────────────
   let gastosDelDia  = [];
   let totalGastos   = 0;
-  let gastosEnvios  = 0;
   const today_      = today();
 
   if (CFG.module_gastos === '1' && window.api?.expenses) {
@@ -649,26 +648,9 @@ async function imprimirReporteDia() {
     } catch(e) { console.warn('[Caja] gastos:', e.message); }
   }
 
-  // ── Cargar envíos del día como gasto si el módulo está activo ───────────────
-  if (CFG.module_envios === '1' && window.api?.deliveries) {
-    try {
-      const eRes = await window.api.deliveries.getAll({ date: today_, limit: 100 });
-      const envios = eRes?.ok ? (eRes.data || []) : [];
-      gastosEnvios = envios
-        .filter(e => e.status === 'entregado')
-        .reduce((a, e) => a + (e.fee || e.tarifa || 0), 0);
-      // Agregar envíos a la lista de gastos del día
-      envios.filter(e => e.status === 'entregado').forEach(e => {
-        gastosDelDia.push({
-          category: 'Envíos y Despachos',
-          description: `Envío → ${e.address || e.destination || 'Destino'}`,
-          amount: e.fee || e.tarifa || 0,
-          paid: true,
-        });
-      });
-      totalGastos += gastosEnvios;
-    } catch(e) { console.warn('[Caja] envíos:', e.message); }
-  }
+  // Nota: la tarifa cobrada por envíos NO se suma como gasto — es un ingreso.
+  // Los gastos reales de envíos (mensajería/combustible) los crea el proceso
+  // main como expenses y ya vienen incluidos en la carga de arriba.
 
   printCierreCaja({
     cajero:          ses.cajero,
@@ -690,7 +672,6 @@ async function imprimirReporteDia() {
     // Gastos del día
     gastosDelDia,
     totalGastos,
-    gastosEnvios,
     gananciaReal:    totalVentas - totalGastos,
   });
 }
@@ -950,7 +931,7 @@ function printResumen(cajaId) {
   </div>
 
   <!-- Gastos del día — solo si módulo activo -->
-  ${CFG.module_gastos === '1' || CFG.module_envios === '1' ? `
+  ${CFG.module_gastos === '1' ? `
   <h3 style="color:#DC2626">Gastos del Día</h3>
   <table id="gastos-table-placeholder">
     <thead><tr>

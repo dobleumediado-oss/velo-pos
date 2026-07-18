@@ -53,6 +53,7 @@ function initDB(customDataDir) {
   migrateV2IdentityColumns();   // Fase 1 migración v2 (identidad real Equiparts)
   seedIfEmpty();
   ensureNcfIntegrity();         // C2: índice UNIQUE parcial contra NCF duplicados
+  ensureDeliveryExpenseIntegrity(); // gastos de envíos pre-v1.18 sin enlazar/anular
 
   console.log('[DB] Iniciada en:', DB_PATH);
   return db;
@@ -106,6 +107,51 @@ function ensureNcfIntegrity() {
     apply('sales',   'uidx_sales_ncf');
     apply('ncf_log', 'uidx_ncflog_ncf');
   } catch (e) { console.error('[NCF] ensureNcfIntegrity:', e.message); }
+}
+
+// ── Integridad envíos ↔ gastos: red de seguridad para gastos huérfanos ────────
+// Hasta v1.17.9 el gasto del envío lo creaba el renderer al marcar "en camino"
+// SIN guardar expense_id en el envío, así que cancelar el envío no encontraba
+// nada que anular y el gasto quedaba vivo para siempre. Corre en CADA arranque
+// (idempotente): identifica esos gastos automáticos por descripción+notas, los
+// enlaza a su envío, y si el envío está cancelado anula el gasto y reversa sus
+// asientos. Los gastos creados por el flujo nuevo (v1.18+) ya vienen enlazados
+// y no entran al filtro.
+function ensureDeliveryExpenseIntegrity() {
+  try {
+    if (!tableExists('deliveries') || !tableExists('expenses')) return;
+    const orphans = db.prepare(`
+      SELECT e.id, e.description, e.status FROM expenses e
+      WHERE (e.description LIKE 'Envío #%' OR e.description LIKE 'Combustible envío #%')
+        AND (e.notes LIKE 'Rastreo:%' OR e.notes LIKE 'Registrado automáticamente%'
+             OR e.notes LIKE '%Generado automáticamente desde Envíos%')
+        AND e.id NOT IN (SELECT expense_id FROM deliveries WHERE expense_id IS NOT NULL)
+    `).all();
+    let linked = 0, voided = 0;
+    for (const g of orphans) {
+      const m = (g.description || '').match(/env[ií]o #(\d+)/i);
+      if (!m) continue;
+      const d = db.prepare('SELECT id, status, expense_id FROM deliveries WHERE id=?').get(Number(m[1]));
+      if (!d) continue;
+      if (d.expense_id == null) {
+        db.prepare('UPDATE deliveries SET expense_id=? WHERE id=?').run(g.id, d.id);
+        linked++;
+      }
+      if (d.status === 'cancelado' && g.status !== 'anulado') {
+        const motivo = `Envío #${d.id} cancelado — saneo automático de gasto huérfano`;
+        try {
+          expensesRepo.cancel(g.id, null, 'sistema', motivo);
+          accountingRepo.reverseSourceEntries('gasto',      g.id, null, motivo);
+          accountingRepo.reverseSourceEntries('gasto_dev',  g.id, null, motivo);
+          accountingRepo.reverseSourceEntries('gasto_pago', g.id, null, motivo);
+          voided++;
+        } catch (e) { console.error(`[Envíos] saneo gasto #${g.id}:`, e.message); }
+      }
+    }
+    if (linked || voided) {
+      console.log(`[Envíos] Saneo de gastos huérfanos: ${linked} enlazado(s), ${voided} anulado(s)`);
+    }
+  } catch (e) { console.error('[Envíos] ensureDeliveryExpenseIntegrity:', e.message); }
 }
 
 // ══════════════════════════════════════════════
@@ -4821,6 +4867,11 @@ const accountingRepo = {
     const f = from || (curMonth + '-01');
     const t = to   || new Date().toISOString().split('T')[0];
 
+    // Los ajustes de valorización de inventario (edición manual de costo) NO son
+    // resultados operativos: mantienen 1105 = stock × costo, pero mezclarlos en
+    // ingresos/gastos del período distorsiona la utilidad con solo editar un
+    // costo. Se excluyen aquí (junto con sus reversos); siguen visibles en el
+    // widget "Ajustes de valor de inventario" y en los reportes por cuenta.
     const getSum = (type, field) => {
       const r = db.prepare(`
         SELECT COALESCE(SUM(l.${field}),0) as v
@@ -4828,6 +4879,10 @@ const accountingRepo = {
         JOIN accounting_entries e ON l.entry_id=e.id
         JOIN accounting_accounts a ON l.account_id=a.id
         WHERE e.status IN ('confirmado','anulado') AND a.type=? AND e.date BETWEEN ? AND ?
+          AND e.source_module!='inventario_valor'
+          AND NOT (e.source_module='reverso' AND EXISTS(
+            SELECT 1 FROM accounting_entries o
+            WHERE o.id=e.reversal_of AND o.source_module='inventario_valor'))
       `).get(type, f, t);
       return r.v || 0;
     };
