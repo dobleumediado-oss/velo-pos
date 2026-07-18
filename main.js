@@ -940,18 +940,21 @@ ipcMain.handle('connection:test', async (_, { requestUserId, host, port } = {}) 
 // comprueba si el servidor responde; el renderer muestra pantalla de recuperación
 // en vez de intentar cargar datos (que colgaría la app). No expone la llave.
 ipcMain.handle('connection:clientPreflight', async () => {
+  // El flag localGuard le dice a la pantalla de recuperación si "Volver a modo
+  // local" pide contraseña. Se lee del cache LOCAL (funciona con servidor caído).
+  const localGuard = () => !!settingsRepo.get('local_mode_password_hash');
   try {
     const mode = settingsRepo.get('connection_mode') || 'local';
     const terminalId = settingsRepo.get('terminal_id') || '';
     if (mode !== 'client') return { ok: true, mode, reachable: true, authorized: true, terminalId };
     const host = settingsRepo.get('connection_server_ip') || '';
     const port = Number(settingsRepo.get('connection_server_port')) || 8443;
-    if (!host) return { ok: true, mode, reachable: false, authorized: false, host: '', port, terminalId, reason: 'no-ip' };
+    if (!host) return { ok: true, mode, reachable: false, authorized: false, host: '', port, terminalId, reason: 'no-ip', localGuard: localGuard() };
 
     const { healthCheck, rpcCall } = require('./src/main/net-client');
     // 1) ¿El servidor está encendido/alcanzable? (/health, sin auth)
     const h = await healthCheck({ host, port, timeoutMs: 4000 });
-    if (!h.ok) return { ok: true, mode, reachable: false, authorized: false, host, port, terminalId, reason: 'offline' };
+    if (!h.ok) return { ok: true, mode, reachable: false, authorized: false, host, port, terminalId, reason: 'offline', localGuard: localGuard() };
 
     // 2) ¿Este terminal está AUTORIZADO? Ping RPC autenticado (llave + allowlist).
     //    Sin esto, un servidor encendido pero que rechaza al terminal dejaba pasar
@@ -960,17 +963,80 @@ ipcMain.handle('connection:clientPreflight', async () => {
     const ping = await rpcCall({ host, port, accessKey, terminalId, channel: 'version:getInfo', args: {}, timeoutMs: 4000 });
     const authorized = !!(ping && ping.ok === true);
     const reason = authorized ? 'ok' : ((ping && ping.error) || 'unauthorized');
-    return { ok: true, mode, reachable: true, authorized, host, port, terminalId, reason };
-  } catch (e) { return { ok: true, mode: 'client', reachable: false, authorized: false, error: e.message }; }
+
+    // 3) Refrescar el cache local de la contraseña de modo local. Se genera en el
+    //    panel dev del servidor; cada conexión exitosa la trae (solo el hash) para
+    //    poder validarla después SIN servidor. Nunca bloquea el preflight.
+    if (authorized) {
+      try {
+        const g = await rpcCall({ host, port, accessKey, terminalId, channel: 'connection:localGuardHash', args: {}, timeoutMs: 4000 });
+        if (g && g.ok === true && g.data && typeof g.data.hash === 'string') {
+          settingsRepo.set('local_mode_password_hash', g.data.hash);
+        }
+      } catch { /* sin refresco esta vez; queda el cache anterior */ }
+    }
+    return { ok: true, mode, reachable: true, authorized, host, port, terminalId, reason, localGuard: localGuard() };
+  } catch (e) { return { ok: true, mode: 'client', reachable: false, authorized: false, error: e.message, localGuard: localGuard() }; }
 });
 
 // Cambia el modo de conexión (usado por la pantalla de recuperación offline para
 // volver a 'local' sin login). connection_mode es device-setting → se guarda local.
-ipcMain.handle('connection:setMode', async (_, { mode } = {}) => {
+// Si el dev configuró contraseña de modo local (panel dev del servidor, cacheada
+// aquí en cada conexión), volver a 'local' la exige: evita que un cajero
+// desconecte la terminal del servidor por un toque accidental.
+ipcMain.handle('connection:setMode', async (_, { mode, password } = {}) => {
   try {
     if (!['local', 'server', 'client'].includes(mode)) return { ok: false, error: 'Modo inválido' };
+    const currentMode = settingsRepo.get('connection_mode') || 'local';
+    if (mode === 'local' && currentMode === 'client') {
+      const hash = settingsRepo.get('local_mode_password_hash') || '';
+      if (hash) {
+        if (!password) return { ok: false, error: 'PASSWORD_REQUIRED' };
+        if (!bcrypt.compareSync(String(password), hash)) return { ok: false, error: 'PASSWORD_INCORRECT' };
+      }
+    }
     settingsRepo.set('connection_mode', mode);
     return { ok: true, mode };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// ── Contraseña de modo local (panel dev) ─────────────────────────────────────
+// La genera el superadmin en la PC SERVIDOR; los clientes cachean el hash en
+// cada conexión exitosa (clientPreflight) y la piden al "Volver a modo local".
+
+// Hash para que los clientes lo cacheen. NO es localOnly: sirve por RPC a
+// terminales ya autenticadas (llave + allowlist). Solo expone el hash bcrypt.
+ipcMain.handle('connection:localGuardHash', async () => {
+  try { return { ok: true, hash: settingsRepo.get('local_mode_password_hash') || '' }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('connection:localGuardStatus', async (_, { requestUserId } = {}) => {
+  try {
+    if (!_connRequireSA(requestUserId)) return { ok: false, error: 'Solo el superadmin' };
+    return { ok: true, configured: !!settingsRepo.get('local_mode_password_hash') };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// Genera (o quita, con remove:true) la contraseña. Devuelve el texto plano UNA
+// sola vez para que el dev la copie; en la BD solo queda el hash bcrypt.
+ipcMain.handle('connection:generateLocalPassword', async (_, { requestUserId, remove } = {}) => {
+  try {
+    const u = _connRequireSA(requestUserId);
+    if (!u) return { ok: false, error: 'Solo el superadmin' };
+    if (remove) {
+      settingsRepo.set('local_mode_password_hash', '');
+      audit(requestUserId, u.name, 'modo_local_password_removida', 'settings', null, '');
+      return { ok: true, removed: true };
+    }
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sin O/0/I/1 (legibilidad)
+    const bytes = require('crypto').randomBytes(8);
+    let pwd = '';
+    for (let i = 0; i < 8; i++) pwd += alphabet[bytes[i] % alphabet.length];
+    pwd = `${pwd.slice(0, 4)}-${pwd.slice(4, 8)}`;
+    settingsRepo.set('local_mode_password_hash', bcrypt.hashSync(pwd, 10));
+    audit(requestUserId, u.name, 'modo_local_password_generada', 'settings', null, '');
+    return { ok: true, password: pwd };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
@@ -5371,6 +5437,11 @@ function setupMultiTerminal() {
     const SERVER_DENY = new Set([
       'app:getTerminalInfo',
       'connection:getInfo', 'connection:generateKey', 'connection:test', 'connection:setAllowedTerminal',
+      // Gestión de la contraseña de modo local: SOLO desde la PC servidor. Un
+      // cliente remoto no debe poder generarla ni quitarla (solo leer el hash).
+      'connection:localGuardStatus', 'connection:generateLocalPassword',
+      // El modo de conexión del servidor tampoco se cambia por red.
+      'connection:setMode',
       'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke', 'license:generate',
       'update:check', 'update:download', 'update:install',
       'print:html', 'print:toPDF', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',

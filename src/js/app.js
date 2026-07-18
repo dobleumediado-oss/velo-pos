@@ -212,15 +212,66 @@ function renderClientOffline(pf) {
       msg.textContent = 'El servidor sigue sin responder. Revisa la conexión e intenta de nuevo.';
     } catch { msg.textContent = 'El servidor sigue sin responder.'; }
   };
-  document.getElementById('co-local').onclick = async () => {
-    const msg = document.getElementById('co-msg');
-    msg.textContent = 'Cambiando a modo local…';
+  // Volver a modo local es una acción seria (la PC queda con datos propios,
+  // separados del servidor) → siempre modal de confirmación, y si el dev
+  // configuró contraseña de modo local (panel dev del servidor), se exige aquí.
+  document.getElementById('co-local').onclick = () => _confirmLocalMode(pf);
+}
+
+// Modal de confirmación (pre-login, sin dependencias de openModal) para volver
+// a modo local desde la pantalla de recuperación.
+function _confirmLocalMode(pf) {
+  const needsPwd = !!(pf && pf.localGuard);
+  const overlay = h('div', { style: {
+    position: 'fixed', inset: '0', background: 'rgba(0,0,0,.55)', zIndex: '9999',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' } });
+
+  const msgEl = h('div', { style: { fontSize: '12px', minHeight: '16px', color: 'var(--red,#ef4444)', marginBottom: '10px' } }, '');
+  const pwdInput = needsPwd
+    ? h('input', { class: 'inp', type: 'password', placeholder: 'Contraseña de modo local',
+        style: { width: '100%', marginBottom: '10px', textAlign: 'center', letterSpacing: '.1em' } })
+    : null;
+
+  const doConfirm = async () => {
+    if (needsPwd && !pwdInput.value.trim()) { msgEl.textContent = 'Ingresa la contraseña.'; return; }
+    msgEl.style.color = 'var(--muted2,#6b7280)';
+    msgEl.textContent = 'Cambiando a modo local…';
     try {
-      const r = await window.api.connection.setMode({ mode: 'local' });
+      const r = await window.api.connection.setMode({ mode: 'local', password: needsPwd ? pwdInput.value.trim() : undefined });
       if (r && r.ok) { location.reload(); return; }
-      msg.textContent = (r && r.error) || 'No se pudo cambiar el modo.';
-    } catch (e) { msg.textContent = e.message || 'Error al cambiar el modo.'; }
+      msgEl.style.color = 'var(--red,#ef4444)';
+      msgEl.textContent = r?.error === 'PASSWORD_INCORRECT' ? 'Contraseña incorrecta.'
+                        : r?.error === 'PASSWORD_REQUIRED'  ? 'Se requiere la contraseña.'
+                        : (r?.error || 'No se pudo cambiar el modo.');
+    } catch (e) {
+      msgEl.style.color = 'var(--red,#ef4444)';
+      msgEl.textContent = e.message || 'Error al cambiar el modo.';
+    }
   };
+
+  const card = h('div', { style: { maxWidth: '420px', width: '100%', background: 'var(--surface,#fff)',
+    border: '1px solid var(--line2,#e5e7eb)', borderRadius: '14px', padding: '24px', textAlign: 'center' } },
+    h('div', { style: { fontSize: '34px', marginBottom: '8px' } }, '⚠️'),
+    h('div', { style: { fontSize: '16px', fontWeight: '700', marginBottom: '8px' } }, '¿Volver a modo local?'),
+    h('div', { style: { fontSize: '12px', color: 'var(--muted2,#6b7280)', marginBottom: '12px', textAlign: 'left' } },
+      'Esta PC dejará de trabajar con los datos del servidor y pasará a usar su propia base LOCAL (vacía o desactualizada). ',
+      h('strong', null, 'Lo que registres en modo local NO se sincroniza con el servidor'),
+      ', y para volver a conectarla habrá que configurarla de nuevo. Úsalo solo si el servidor no va a volver pronto.'),
+    pwdInput,
+    msgEl,
+    h('div', { style: { display: 'flex', gap: '10px', justifyContent: 'center' } },
+      h('button', { class: 'btn-ghost', onclick: () => overlay.remove() }, 'Cancelar'),
+      h('button', { class: 'btn', style: { background: 'var(--red,#ef4444)', borderColor: 'var(--red,#ef4444)' },
+        onclick: doConfirm }, 'Sí, volver a modo local')
+    )
+  );
+  overlay.appendChild(card);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+  if (pwdInput) {
+    pwdInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doConfirm(); });
+    setTimeout(() => pwdInput.focus(), 50);
+  }
 }
 
 function renderLogin() {

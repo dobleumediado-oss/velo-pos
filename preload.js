@@ -149,6 +149,8 @@ contextBridge.exposeInMainWorld('api', {
     setAllowedTerminal: (data) => ipcRenderer.invoke('connection:setAllowedTerminal', data),
     clientPreflight:    ()     => ipcRenderer.invoke('connection:clientPreflight'),
     setMode:            (data) => ipcRenderer.invoke('connection:setMode', data),
+    localGuardStatus:      (data) => ipcRenderer.invoke('connection:localGuardStatus', data),
+    generateLocalPassword: (data) => ipcRenderer.invoke('connection:generateLocalPassword', data),
   },
 
   // ── Categorías ────────────────────────────────

@@ -83,6 +83,68 @@ async function renderSuperAdmin(el) {
   );
   el.appendChild(superPassCard);
 
+  // ── Contraseña de modo local (terminales cliente) ────────────────────────────
+  // Protege el botón "Volver a modo local" de la pantalla de recuperación de las
+  // terminales cliente: sin esta contraseña, un cajero podía desconectar la
+  // terminal del servidor con un toque accidental. Se genera AQUÍ (PC servidor);
+  // cada terminal cliente cachea el hash al conectarse y la exige aun sin red.
+  const lgCard = h('div', { class: 'card', style: 'margin-bottom:16px' });
+  const _lgRender = (state) => {
+    lgCard.innerHTML = '';
+    lgCard.appendChild(h('div', { class: 'card-title mb8' }, '🛡 Contraseña de Modo Local — Terminales Cliente'));
+    lgCard.appendChild(h('div', { style: 'font-size:12px;color:var(--muted2);margin-bottom:12px' },
+      'Protege el botón "Volver a modo local" en las PCs cliente cuando el servidor está apagado. ',
+      'Cada terminal la cachea al conectarse, así que funciona aunque no haya red. ',
+      'Genérala en la PC servidor y guárdala tú — no se vuelve a mostrar.'));
+
+    if (state.error) {
+      lgCard.appendChild(h('div', { class: 'alrt a' }, h('div', { class: 'alrt-dot a' }),
+        h('div', { style: 'font-size:11px' }, state.error === 'FORBIDDEN' || /servidor/i.test(state.error)
+          ? 'Esta gestión solo está disponible en la PC servidor (o en modo local).'
+          : state.error)));
+      return;
+    }
+
+    if (state.password) {
+      lgCard.appendChild(h('div', { style: 'background:var(--surface2);border-radius:8px;padding:12px;margin-bottom:12px' },
+        h('div', { style: 'font-size:10px;font-weight:700;color:var(--muted2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px' }, 'Contraseña generada — cópiala AHORA'),
+        h('div', { style: 'display:flex;align-items:center;gap:10px;flex-wrap:wrap' },
+          h('span', { style: 'font-family:var(--mono);font-size:18px;font-weight:800;color:var(--green);letter-spacing:.08em' }, state.password),
+          h('button', { class: 'btn-ghost', style: 'font-size:11px;padding:3px 10px',
+            onclick: () => { navigator.clipboard.writeText(state.password); toast('Contraseña copiada', 'ok'); } }, 'Copiar')),
+        h('div', { style: 'font-size:11px;color:var(--muted2);margin-top:8px' },
+          'Las terminales cliente la recibirán (solo el hash) en su próxima conexión al servidor.')));
+    }
+
+    lgCard.appendChild(h('div', { style: 'display:flex;align-items:center;gap:10px;flex-wrap:wrap' },
+      h('span', { style: `font-size:12px;font-weight:600;color:${state.configured ? 'var(--green)' : 'var(--muted2)'}` },
+        state.configured ? '● Protección activa' : '○ Sin protección configurada'),
+      h('button', { class: 'btn', style: 'font-size:12px', onclick: async () => {
+        if (state.configured && !confirm('Ya hay una contraseña activa. ¿Generar una nueva? La anterior dejará de funcionar.')) return;
+        const r = await window.api.connection.generateLocalPassword({ requestUserId: user.id });
+        if (r?.ok) _lgRender({ configured: true, password: r.password });
+        else toast(r?.error || 'No se pudo generar', 'err');
+      } }, state.configured ? 'Regenerar contraseña' : 'Generar contraseña'),
+      state.configured
+        ? h('button', { class: 'btn-ghost', style: 'font-size:12px;color:var(--red)', onclick: async () => {
+            if (!confirm('¿Quitar la protección? El botón "Volver a modo local" quedará sin contraseña en las terminales.')) return;
+            const r = await window.api.connection.generateLocalPassword({ requestUserId: user.id, remove: true });
+            if (r?.ok) _lgRender({ configured: false });
+            else toast(r?.error || 'No se pudo quitar', 'err');
+          } }, 'Quitar protección')
+        : null));
+  };
+  try {
+    const lgStatus = await window.api.connection.localGuardStatus({ requestUserId: user.id });
+    if (lgStatus?.ok) _lgRender({ configured: !!lgStatus.configured });
+    else _lgRender({ error: lgStatus?.error || 'No disponible' });
+  } catch (e) {
+    // En modo cliente este canal se reenvía y el servidor lo deniega (gestión
+    // solo en la PC servidor) → mostrar la pista en vez del error crudo.
+    _lgRender({ error: e?.message || 'No disponible' });
+  }
+  el.appendChild(lgCard);
+
     // ── Generador de licencias ───────────────────
   const licCard = h('div', { class: 'card', style: { marginBottom: '16px' } });
 
