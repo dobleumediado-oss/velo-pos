@@ -477,10 +477,16 @@ function renderCart() {
 
   html += `
     <div class="cart-foot">
-      <div class="flex" style="margin-bottom:8px">
-        <span style="font-size:11px;color:var(--muted);flex:1">Descuento %</span>
-        <input type="number" min="0" max="100" value="${inv.disc || 0}"
-               class="inp" style="width:64px;padding:4px 7px;font-size:12px;text-align:right"
+      <div class="flex" style="margin-bottom:8px;gap:6px;align-items:center">
+        <span style="font-size:11px;color:var(--muted);flex:1">Descuento</span>
+        <select class="inp" style="width:58px;padding:4px;font-size:12px"
+                onchange="posDiscMode(this.value)" title="Tipo de descuento">
+          <option value="pct" ${(inv.discMode || 'pct') !== 'amt' ? 'selected' : ''}>%</option>
+          <option value="amt" ${inv.discMode === 'amt' ? 'selected' : ''}>RD$</option>
+        </select>
+        <input type="number" min="0" ${inv.discMode === 'amt' ? 'step="0.01"' : 'max="100"'}
+               value="${inv.discMode === 'amt' ? (inv.discAmtInput || 0) : (inv.disc || 0)}"
+               class="inp" style="width:72px;padding:4px 7px;font-size:12px;text-align:right"
                oninput="posDiscConPin(this, this.value)"/>
       </div>
       <div class="tr"><span>Subtotal sin ITBIS</span><span>${fmt(subtotal)}</span></div>
@@ -804,6 +810,7 @@ function posLoadResaleCart(payload = {}) {
   inv.pmode = 'retail';
   inv.pmeth = 'efectivo';
   inv.disc = 0;
+  inv.discAmtInput = 0;
   inv.priceChangeAuthToken = null;
   inv.priceChangeAuthExpiresAt = null;
   inv.priceChangeApprovedBy = null;
@@ -829,23 +836,46 @@ function posDisc(val) {
   renderCart();
 }
 
+// Cambia entre descuento por porcentaje y por monto fijo. El modelo interno
+// SIEMPRE es porcentaje (inv.disc) — el resto del flujo (cobro, servidor,
+// recibos) no cambia; el modo monto solo convierte RD$ → % equivalente.
+function posDiscMode(m) {
+  const inv = currentInv();
+  inv.discMode = m === 'amt' ? 'amt' : 'pct';
+  inv.disc = 0;
+  inv.discAmtInput = 0;
+  inv.discApprovedBy = null;
+  renderCart();
+}
+
 // Descuento con PIN para valores mayores al límite
 const DISC_LIMIT = 10; // % máximo sin autorización del admin
 function posDiscConPin(input, val) {
-  const pct = Math.min(100, Math.max(0, parseFloat(val) || 0));
+  const inv  = currentInv();
+  const mode = inv.discMode || 'pct';
+  let pct, amt = 0;
+  if (mode === 'amt') {
+    const gross = _posRound2(inv.cart.reduce((a, i) => a + ((Number(i.price) || 0) * (Number(i.qty) || 0)), 0));
+    amt = Math.max(0, parseFloat(val) || 0);
+    if (gross <= 0) { input.value = 0; return; }
+    if (amt > gross) { amt = gross; input.value = amt; }
+    pct = (amt / gross) * 100;
+  } else {
+    pct = Math.min(100, Math.max(0, parseFloat(val) || 0));
+  }
 
   // Cualquier cambio invalida una autorización previa — debe re-autorizarse
   // si el nuevo valor también supera el límite.
-  currentInv().discApprovedBy = null;
+  inv.discApprovedBy = null;
 
-  // Admin y superadmin no necesitan PIN
-  if (['admin', 'superadmin'].includes(user?.role)) { posDisc(pct); return; }
+  const aplicar = () => { if (mode === 'amt') inv.discAmtInput = amt; posDisc(pct); };
 
-  // Sin restricción si es menor al límite
-  if (pct <= DISC_LIMIT) { posDisc(pct); return; }
+  // Admin y superadmin no necesitan PIN; sin restricción bajo el límite
+  if (['admin', 'superadmin'].includes(user?.role) || pct <= DISC_LIMIT) { aplicar(); return; }
 
   // Revertir el input visualmente y pedir autorización
-  input.value = currentInv()?.disc || 0;
+  input.value = mode === 'amt' ? (inv.discAmtInput || 0) : (inv.disc || 0);
+  const pctShow = Math.round(pct * 100) / 100;
   openModal(`
     <div class="modal-title">Descuento requiere autorización</div>
     <div class="modal-sub">
@@ -854,7 +884,7 @@ function posDiscConPin(input, val) {
     <div class="alrt a" style="margin-bottom:14px">
       <div class="alrt-dot a"></div>
       <div>
-        <div class="alrt-title">Descuento solicitado: ${pct}%</div>
+        <div class="alrt-title">Descuento solicitado: ${mode === 'amt' ? `${fmt(amt)} (${pctShow}%)` : `${pctShow}%`}</div>
         <div class="alrt-sub">Ingresa la contraseña de admin o superadmin para autorizar.</div>
       </div>
     </div>
@@ -873,23 +903,24 @@ function posDiscConPin(input, val) {
       </button>
     </div>
   `);
-  document.getElementById('pin-ok')?.addEventListener('click', () => autorizarDescuento(pct));
+  document.getElementById('pin-ok')?.addEventListener('click', () => autorizarDescuento(pct, mode, amt));
   document.getElementById('pin-cancel')?.addEventListener('click', closeModal);
   document.getElementById('pin-pass')?.addEventListener('keydown', e => {
-    if (e.key === 'Enter') autorizarDescuento(pct);
+    if (e.key === 'Enter') autorizarDescuento(pct, mode, amt);
   });
   setTimeout(() => document.getElementById('pin-pass')?.focus(), 100);
 }
 
-async function autorizarDescuento(pct) {
+async function autorizarDescuento(pct, mode = 'pct', amt = 0) {
   const pass = document.getElementById('pin-pass')?.value?.trim();
   if (!pass) { toast('Ingresa la contraseña', 'err'); return; }
 
+  const pctShow = Math.round(pct * 100) / 100;
   const res = await window.api.auth.authorizePrivilegedAction({
     action: 'pos_discount_override',
     password: pass,
     requestUserId: user.id,
-    detail: `Descuento ${pct}%`,
+    detail: mode === 'amt' ? `Descuento ${fmt(amt)} (${pctShow}%)` : `Descuento ${pctShow}%`,
   }).catch(e => ({ ok: false, error: e?.message || 'No se pudo validar' }));
 
   if (!res?.ok) {
@@ -899,9 +930,11 @@ async function autorizarDescuento(pct) {
   }
 
   closeModal();
-  currentInv().discApprovedBy = res.approvedBy?.id || null;
+  const inv = currentInv();
+  inv.discApprovedBy = res.approvedBy?.id || null;
+  if (mode === 'amt') inv.discAmtInput = amt;
   posDisc(pct);
-  toast(`✓ Descuento de ${pct}% autorizado`);
+  toast(`✓ Descuento de ${mode === 'amt' ? fmt(amt) : pctShow + '%'} autorizado`);
 }
 
 // ── Calcular totales ──────────────────────────
@@ -1063,7 +1096,7 @@ function openCobroModal(inv) {
     <div class="card" style="background:var(--surface2);margin-top:10px">
         <div class="tr"><span>Subtotal sin ITBIS</span><span>${fmt(subtotal)}</span></div>
       ${disc > 0
-        ? `<div class="tr"><span>Descuento (${disc}%)</span>
+        ? `<div class="tr"><span>Descuento (${Math.round(disc*100)/100}%)</span>
            <span>−${fmt(discAmt)}</span></div>` : ''}
       ${inv.itype === 'factura' && itbis > 0
         ? `<div class="tr"><span>ITBIS (${CFG.itbis}%)</span><span>${fmt(itbis)}</span></div>` : ''}
@@ -1769,7 +1802,7 @@ function previsualizarFactura(sale) {
   <div class="tots">
     <div class="tr-tot"><span>Subtotal sin ITBIS</span><span>${fmt(sale.subtotal)}</span></div>
     ${(sale.disc || 0) > 0
-      ? `<div class="tr-tot"><span>Descuento (${sale.disc}%)</span>
+      ? `<div class="tr-tot"><span>Descuento (${Math.round((sale.disc||0)*100)/100}%)</span>
          <span style="color:#DC2626">-${fmt(sale.discAmt || 0)}</span></div>` : ''}
     ${isFactura && sale.itbis > 0
       ? `<div class="tr-tot"><span>ITBIS (${sale.tax_pct || CFG.itbis}%)</span>

@@ -35,7 +35,8 @@
   "devDependencies": {
     "@electron/rebuild": "^3.7.2",
     "electron": "^29.1.0",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "jsbarcode": "^3.12.3"
   },
   "build": {
     "appId": "do.velopos.app",

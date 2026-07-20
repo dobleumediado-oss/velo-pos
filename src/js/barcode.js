@@ -3,7 +3,7 @@
 // Acceso: admin y superadmin
 // El superadmin configura el diseño en su panel.
 // El admin crea y manda a imprimir desde aquí.
-// Usa JsBarcode (CDN) cargado dinámicamente.
+// Usa JsBarcode local (src/vendor/jsbarcode) cargado dinámicamente.
 // ══════════════════════════════════════════════
 
 // ── Estado local del módulo ───────────────────
@@ -15,15 +15,53 @@ let _bcState = {
 };
 
 // ── Cargar JsBarcode una sola vez ─────────────
+// SIEMPRE local (vendorizado en src/vendor): el CDN estaba bloqueado por el CSP
+// (script-src 'self') y además esta app corre offline — nunca cargaba y las
+// etiquetas salían sin código de barras en todos los formatos.
 function _loadJsBarcode() {
   return new Promise((res) => {
     if (window.JsBarcode) { res(); return; }
     const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js';
+    s.src = 'vendor/jsbarcode/JsBarcode.all.min.js';
     s.onload = res;
-    s.onerror = res; // si falla, continuamos sin crash
+    s.onerror = () => { console.error('[Etiquetas] No se pudo cargar JsBarcode local'); res(); };
     document.head.appendChild(s);
   });
+}
+
+// Pre-renderiza el código de barras como SVG EN LA APP (donde JsBarcode ya está
+// cargado) y devuelve el markup listo. Así el HTML generado no necesita scripts
+// ni red: funciona igual en el iframe de vista previa y en la ventana de
+// impresión, sin depender del CSP de cada contexto.
+function _bcRenderSvg(value, d) {
+  if (!window.JsBarcode) return '';
+  const tmp = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  try {
+    JsBarcode(tmp, String(value), {
+      format:       d.format || 'CODE128',
+      width:        d.barWidth || 1.5,
+      height:       d.barHeight || 20,
+      fontSize:     d.barFontSize || 8,
+      margin:       0,
+      displayValue: d.showBarcodeText !== false,
+      background:   'transparent',
+      lineColor:    d.barColor || '#000000',
+    });
+  } catch (e) {
+    // Valor inválido para el formato elegido (ej. EAN13 exige 12-13 dígitos):
+    // reintentar en CODE128, que acepta cualquier texto — mejor una etiqueta
+    // legible que un hueco en blanco.
+    try {
+      JsBarcode(tmp, String(value), {
+        format: 'CODE128', width: d.barWidth || 1.5, height: d.barHeight || 20,
+        fontSize: d.barFontSize || 8, margin: 0,
+        displayValue: d.showBarcodeText !== false,
+        background: 'transparent', lineColor: d.barColor || '#000000',
+      });
+    } catch { return ''; }
+  }
+  tmp.setAttribute('style', 'max-width:100%;height:auto');
+  return tmp.outerHTML;
 }
 
 // ══════════════════════════════════════════════
@@ -47,6 +85,8 @@ async function renderBarcode(el) {
   _bcState.printers = await window.api.print.getPrinters().catch(() => []);
   if (!Array.isArray(_bcState.printers)) _bcState.printers = [];
   _bcState.selPrinter = settings?.barcode_printer || settings?.printer || '';
+  _bcState.labelType  = settings?.barcode_label_type || 'interno';
+  _bcState.paper72    = settings?.barcode_paper_72mm === '1';
 
   el.innerHTML = '';
   el.style.overflowY = 'auto';
@@ -99,6 +139,34 @@ async function renderBarcode(el) {
 
   // Columna derecha: config de impresión + resumen
   const rightCol = h('div', { style: 'display:flex;flex-direction:column;gap:16px' });
+
+  // Card tipo de etiqueta + papel
+  const typeCard = h('div', { class: 'card' });
+  const _lt = _bcState.labelType;
+  typeCard.innerHTML = `
+    <div class="card-title mb8">Tipo de Etiqueta</div>
+    <div style="display:flex;flex-direction:column;gap:8px;font-size:12.5px">
+      <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">
+        <input type="radio" name="bc-ltype" value="interno" ${_lt === 'interno' ? 'checked' : ''}
+               onchange="bcSetLabelType(this.value)" style="margin-top:2px"/>
+        <span><b>Interno</b><br><span style="color:var(--muted2);font-size:11px">Nombre, código, precio y código de barras</span></span>
+      </label>
+      <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">
+        <input type="radio" name="bc-ltype" value="proveedor" ${_lt === 'proveedor' ? 'checked' : ''}
+               onchange="bcSetLabelType(this.value)" style="margin-top:2px"/>
+        <span><b>Proveedor</b><br><span style="color:var(--muted2);font-size:11px">Nombre, código y código de barras (sin precio)</span></span>
+      </label>
+      <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">
+        <input type="radio" name="bc-ltype" value="personalizado" ${_lt === 'personalizado' ? 'checked' : ''}
+               onchange="bcSetLabelType(this.value)" style="margin-top:2px"/>
+        <span><b>Personalizado</b><br><span style="color:var(--muted2);font-size:11px">Según el diseño configurado en el panel</span></span>
+      </label>
+    </div>
+    <label style="display:flex;gap:8px;align-items:center;cursor:pointer;margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:12.5px">
+      <input type="checkbox" id="bc-72mm" ${_bcState.paper72 ? 'checked' : ''} onchange="bcSetPaper72(this.checked)"/>
+      <span><b>Papel térmico 72mm</b> <span style="color:var(--muted2);font-size:11px">(rollo, 1 columna, sin márgenes)</span></span>
+    </label>`;
+  rightCol.appendChild(typeCard);
 
   // Card impresora
   const prCard = h('div', { class: 'card' });
@@ -312,6 +380,29 @@ async function bcSavePrinter(name) {
   _bcUpdatePrinterBadge();
 }
 
+// ── Tipo de etiqueta y papel térmico ──────────
+async function bcSetLabelType(v) {
+  _bcState.labelType = v;
+  await window.api.settings.set({ key: 'barcode_label_type', value: v }).catch(() => {});
+}
+async function bcSetPaper72(on) {
+  _bcState.paper72 = !!on;
+  await window.api.settings.set({ key: 'barcode_paper_72mm', value: on ? '1' : '0' }).catch(() => {});
+}
+
+// Diseño EFECTIVO para generar/imprimir: aplica el tipo de etiqueta elegido
+// (interno = con precio, proveedor = sin precio) sobre el diseño base, y el
+// preset de papel térmico 72mm (1 columna a lo ancho del rollo, sin márgenes).
+// 'personalizado' respeta el diseño tal cual lo configuró el panel.
+function _bcEffectiveDesign() {
+  const d = { ...(_bcState.design || _bcDefaultDesign()) };
+  const t = _bcState.labelType || 'interno';
+  if (t === 'interno')   Object.assign(d, { showName: true, showCode: true, showPrice: true,  showBarcode: true });
+  if (t === 'proveedor') Object.assign(d, { showName: true, showCode: true, showPrice: false, showBarcode: true });
+  if (_bcState.paper72)  Object.assign(d, { labelW: 72, cols: 1, gapMm: 3, pageMm: 0 });
+  return d;
+}
+
 function _bcUpdatePrinterBadge() {
   const badge = document.getElementById('bc-printer-badge');
   if (!badge) return;
@@ -348,7 +439,7 @@ function _bcLabelType(name) {
 // ══════════════════════════════════════════════
 function _bcBuildLabelsHTML(items) {
   // items = [{ product, qty }]
-  const d = _bcState.design;
+  const d = _bcEffectiveDesign();
   if (!d) return '';
 
   const lw  = d.labelW || 50;      // mm
@@ -364,8 +455,6 @@ function _bcBuildLabelsHTML(items) {
   });
 
   const labelHTML = (p) => {
-    // Generar ID único para canvas del barcode
-    const uid = `bc-${p.id}-${Math.random().toString(36).slice(2,7)}`;
     const barcodeVal = p.barcode || p.code || String(p.id).padStart(8,'0');
 
     return `
@@ -396,26 +485,7 @@ function _bcBuildLabelsHTML(items) {
                text-align:center;line-height:1">
             ${_bcEsc(p.brand)}
           </div>` : ''}
-        ${d.showBarcode !== false ? `
-          <svg id="${uid}" style="max-width:100%;height:auto"></svg>
-          <script>
-            (function(){
-              var el = document.getElementById('${uid}');
-              if(!el||!window.JsBarcode) return;
-              try {
-                JsBarcode(el,'${_bcJsStr(barcodeVal)}',{
-                  format:'${_bcJsStr(d.format||'CODE128')}',
-                  width:${d.barWidth||1.5},
-                  height:${d.barHeight||20},
-                  fontSize:${d.barFontSize||8},
-                  margin:0,
-                  displayValue:${d.showBarcodeText!==false},
-                  background:'transparent',
-                  lineColor:'${_bcJsStr(d.barColor||'#000000')}'
-                });
-              } catch(e){ el.style.display='none'; }
-            })();
-          <\/script>` : ''}
+        ${d.showBarcode !== false ? _bcRenderSvg(barcodeVal, d) : ''}
         ${d.showCode && p.code ? `
           <div style="font-size:${d.codeFontSize||6}pt;font-family:monospace;
                color:${d.codeColor||'#555'};text-align:center">
@@ -458,7 +528,6 @@ function _bcBuildLabelsHTML(items) {
     </div>`;
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
-    <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
     ${styles}
     </head><body>
     ${preview}
@@ -470,18 +539,6 @@ function _bcBuildLabelsHTML(items) {
 
 function _bcEsc(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-
-// Escapa un valor para insertarlo de forma segura dentro de un literal
-// de cadena JS con comillas simples (ej. dentro de un <script> generado
-// dinámicamente). Sin esto, un código de barras/código de producto con
-// comillas o "</script>" puede inyectar JS arbitrario — ver auditoría.
-function _bcJsStr(s) {
-  return String(s||'')
-    .replace(/\\/g, '\\\\')
-    .replace(/'/g, "\\'")
-    .replace(/<\/script/gi, '<\\/script')
-    .replace(/[\r\n]/g, '');
 }
 
 // ══════════════════════════════════════════════
@@ -539,7 +596,7 @@ async function _bcPrint() {
 
   const total = items.reduce((s, i) => s + i.qty, 0);
   const html  = _bcBuildLabelsHTML(items);
-  const d     = _bcState.design;
+  const d     = _bcEffectiveDesign();
 
   try {
     const result = await window.api.print.html({

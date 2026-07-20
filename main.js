@@ -4019,6 +4019,28 @@ ipcMain.handle('deliveries:create', async (_, { data, requestUserId }) => {
     return { ok:true, id, fuel_cost: data.fuel_cost };
   } catch(e) { return { ok:false, error:e.message }; }
 });
+// Edición de un envío existente. Solo mientras está vivo (pendiente/en camino):
+// un envío entregado o cancelado es un registro histórico. La tarifa queda
+// bloqueada si ya generó gasto (cambiarla descuadraría Gastos/contabilidad).
+ipcMain.handle('deliveries:update', async (_, { id, data, requestUserId }) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u) return { ok:false, error:'Sin sesión' };
+    const delivery = deliveriesRepo.getById(id);
+    if (!delivery) return { ok:false, error:'Envío no encontrado' };
+    if (!['pendiente','en_camino'].includes(delivery.status)) {
+      return { ok:false, error:'Solo se pueden editar envíos pendientes o en camino' };
+    }
+    if (delivery.expense_id && data?.delivery_fee !== undefined
+        && Math.abs((Number(data.delivery_fee) || 0) - (delivery.delivery_fee || 0)) >= 0.005) {
+      return { ok:false, error:'La tarifa no se puede cambiar: este envío ya generó un gasto' };
+    }
+    deliveriesRepo.update(id, data || {});
+    audit(requestUserId, u.name, 'envio_editado', 'deliveries', id, String(data?.dest_address || delivery.dest_address || ''));
+    return { ok:true };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+
 ipcMain.handle('deliveries:updateStatus', async (_, { id, status, requestUserId }) => {
   try {
     const u = authRepo.findById(requestUserId);

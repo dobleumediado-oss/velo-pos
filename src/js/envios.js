@@ -5,6 +5,7 @@
 // ══════════════════════════════════════════════
 
 let _enviosVehiculos = [];  // caché de vehículos para el handler delegado del botón
+let _enviosCache     = [];  // última lista cargada — para Ver/Editar sin re-consultar
 
 function _eUser() {
   if (window._currentUser) return window._currentUser;
@@ -133,6 +134,7 @@ async function renderEnvios(el) {
   const envios    = envRes?.data  || [];
   const vehiculos = vehRes?.data  || [];
   _enviosVehiculos = vehiculos;  // disponible para el handler delegado
+  _enviosCache     = envios;     // para Ver/Editar sin re-consultar
 
   el.innerHTML = '';
 
@@ -206,9 +208,12 @@ async function renderEnvios(el) {
               <td style="padding:10px 12px">${_eBadge(e.status)}</td>
               <td style="padding:10px 12px">
                 <div style="display:flex;gap:4px">
+                  <button class="btn btn-ghost btn-sm" title="Ver detalle" data-envio-view="${e.id}">👁</button>
+                  ${['pendiente','en_camino'].includes(e.status) ? `<button class="btn btn-ghost btn-sm" title="Editar" data-envio-edit="${e.id}">✏️</button>` : ''}
                   ${e.status === 'pendiente' ? `<button class="btn btn-ghost btn-sm" style="color:var(--blue)" title="Marcar en camino" data-envio-id="${e.id}" data-envio-status="en_camino">🚚</button>` : ''}
                   ${e.status === 'en_camino' ? `<button class="btn btn-ghost btn-sm" style="color:var(--green)" title="Confirmar entrega" data-envio-id="${e.id}" data-envio-status="entregado">✅</button>` : ''}
                   ${['pendiente','en_camino'].includes(e.status) ? `<button class="btn btn-ghost btn-sm" style="color:var(--red)" title="Cancelar" data-envio-id="${e.id}" data-envio-status="cancelado">✗</button>` : ''}
+                  ${e.status === 'entregado' ? `<button class="btn btn-ghost btn-sm" style="color:var(--red)" title="Anular entrega" data-envio-id="${e.id}" data-envio-status="cancelado">✗</button>` : ''}
                   ${e.dest_lat && e.dest_lng ? `<button class="btn btn-ghost btn-sm" title="Ver en mapa" onclick="abrirMapa(${e.dest_lat},${e.dest_lng},'${(e.dest_address||'').replace(/'/g,'')}')">🗺</button>` : ''}
                 </div>
               </td>
@@ -229,6 +234,10 @@ async function renderEnvios(el) {
         modalNuevoEnvio(el, _enviosVehiculos || []);
         return;
       }
+      const viewBtn = ev.target.closest('[data-envio-view]');
+      if (viewBtn) { ev.preventDefault(); verEnvio(Number(viewBtn.dataset.envioView)); return; }
+      const editBtn = ev.target.closest('[data-envio-edit]');
+      if (editBtn) { ev.preventDefault(); editarEnvio(Number(editBtn.dataset.envioEdit)); return; }
       const statusBtn = ev.target.closest('[data-envio-status]');
       if (statusBtn) {
         ev.preventDefault();
@@ -291,7 +300,7 @@ function modalNuevoEnvio(parentEl, vehiculos) {
     <!-- Cliente — buscador sobre los clientes del sistema -->
     <div class="fg" style="position:relative">
       <label class="lbl">Cliente</label>
-      <input class="inp" id="e-customer" placeholder="Escribe para buscar el cliente..." autocomplete="off">
+      <input class="inp" id="e-customer" placeholder="Busca un cliente o escribe un nombre libre..." autocomplete="off">
       <input type="hidden" id="e-customer-id">
       <div id="e-customer-list" style="display:none;position:absolute;z-index:999;background:var(--bg,#fff);border:1px solid var(--line2,#e5e7eb);border-radius:8px;max-height:220px;overflow-y:auto;box-shadow:0 4px 20px #0003;width:100%;left:0;top:100%"></div>
       <div id="e-customer-info" style="font-size:11px;margin-top:4px;min-height:14px;color:var(--muted2)"></div>
@@ -384,9 +393,14 @@ function modalNuevoEnvio(parentEl, vehiculos) {
       dest = cdest;
     }
 
+    // Cliente: si se seleccionó de la lista va vinculado por id; si solo se
+    // escribió un nombre (cliente NO registrado) se guarda el texto tal cual.
+    const custId   = parseInt(ov.querySelector('#e-customer-id')?.value) || null;
+    const custName = String(ov.querySelector('#e-customer')?.value || '').trim();
     const data = {
       dest_address:     dest,
-      customer_id:      parseInt(ov.querySelector('#e-customer-id')?.value) || null,
+      customer_id:      custId,
+      customer_name:    custId ? '' : custName,
       dest_lat:         parseFloat(ov.querySelector('#e-lat')?.value)      || null,
       dest_lng:         parseFloat(ov.querySelector('#e-lng')?.value)      || null,
       distance_km:      parseFloat(ov.querySelector('#e-distance')?.value) || null,
@@ -511,7 +525,7 @@ function modalNuevoEnvio(parentEl, vehiculos) {
       // Al editar el texto se pierde el vínculo — debe re-seleccionar de la lista
       custIdEl.value = '';
       custInfo.innerHTML = custInp.value.trim()
-        ? '<span style="color:var(--amber,#f59e0b)">Selecciónalo de la lista para vincular sus datos</span>'
+        ? '<span style="color:var(--muted2,#6b7280)">Se guardará como cliente no registrado — selecciónalo de la lista si quieres vincularlo</span>'
         : '';
       _custRender(custInp.value);
     });
@@ -762,13 +776,116 @@ function modalNuevoEnvio(parentEl, vehiculos) {
   }, 150);
 }
 
+// ── Ver detalle del envío (todos los estados) ─────────────────────────────────
+function verEnvio(id) {
+  const e = (_enviosCache || []).find(x => Number(x.id) === Number(id));
+  if (!e) { _eToast('No se encontró el envío'); return; }
+  const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const st  = STATUS_ENV[e.status] || { label: e.status, color: 'var(--muted2)', bg: 'var(--bg2)' };
+  const esExpreso = e.delivery_type === 'expreso' || !!e.carrier_name;
+  const fila = (lbl, val) => val ? `
+    <div style="display:flex;justify-content:space-between;gap:14px;padding:7px 0;border-bottom:0.5px solid var(--line2)">
+      <span style="color:var(--muted2);flex-shrink:0">${lbl}</span>
+      <span style="text-align:right;font-weight:500">${val}</span>
+    </div>` : '';
+  const fecha = v => v ? String(v).replace('T', ' ').slice(0, 16) : '';
+  const html = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <span style="background:${st.bg};color:${st.color};font-size:11px;font-weight:700;padding:3px 10px;border-radius:99px">${st.label}</span>
+      <span style="font-size:12px;color:var(--muted2)">${esExpreso ? '🚌 Expreso/Parada' : '🚗 Vehículo propio'}</span>
+    </div>
+    <div style="font-size:12.5px">
+      ${fila('Destino', esc(e.dest_address))}
+      ${fila('Parada', esc(e.carrier_stop))}
+      ${fila('Expreso', esc(e.carrier_name))}
+      ${fila('Rastreo', esc(e.carrier_tracking))}
+      ${fila('Cliente', esc(e.customer_name))}
+      ${fila('Vehículo', e.brand ? esc(`${e.brand} ${e.model || ''} ${e.plate ? '(' + e.plate + ')' : ''}`) : '')}
+      ${fila('Distancia', e.distance_km ? e.distance_km.toFixed(1) + ' km' : '')}
+      ${fila('Combustible est.', e.fuel_cost ? _eFmt(e.fuel_cost) + (e.fuel_used ? ` · ${e.fuel_used.toFixed(2)} gal` : '') : '')}
+      ${fila('Tarifa cobrada', `<span style="color:var(--green,#00c07a);font-weight:700">${_eFmt(e.delivery_fee)}</span>`)}
+      ${fila('Gasto vinculado', e.expense_id ? `Gasto #${e.expense_id} (módulo Gastos)` : '')}
+      ${fila('Creado', fecha(e.created_at))}
+      ${fila('Programado', fecha(e.scheduled_at))}
+      ${fila('Entregado', fecha(e.delivered_at))}
+      ${fila('Notas', esc(e.notes))}
+    </div>`;
+  const ov = _eModal(`Envío #${id} — Detalle`, html, async () => {}, 'Cerrar');
+  ov.querySelector('#em-cancel')?.remove();
+}
+
+// ── Editar envío (solo pendiente / en camino) ─────────────────────────────────
+function editarEnvio(id) {
+  const e = (_enviosCache || []).find(x => Number(x.id) === Number(id));
+  if (!e) { _eToast('No se encontró el envío'); return; }
+  if (!['pendiente', 'en_camino'].includes(e.status)) {
+    _eToast('Solo se pueden editar envíos pendientes o en camino'); return;
+  }
+  const user = _eUser();
+  const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const esExpreso = e.delivery_type === 'expreso' || !!e.carrier_name;
+  const feeLocked = !!e.expense_id;
+  const nombreOriginal = e.customer_name || '';
+  const html = `
+    <div class="fg">
+      <label class="lbl">Destino *</label>
+      <input class="inp" id="ee-dest" value="${esc(e.dest_address)}">
+    </div>
+    <div class="fg">
+      <label class="lbl">Cliente</label>
+      <input class="inp" id="ee-customer" value="${esc(nombreOriginal)}" placeholder="Nombre del cliente (libre)">
+      <div style="font-size:10px;color:var(--muted2);margin-top:3px">Si lo cambias se guarda como cliente no registrado</div>
+    </div>
+    <div class="fg">
+      <label class="lbl">Tarifa cobrada (RD$)</label>
+      <input class="inp" id="ee-fee" type="number" min="0" step="0.01" value="${e.delivery_fee || 0}" ${feeLocked ? 'disabled' : ''}>
+      ${feeLocked ? '<div style="font-size:10px;color:var(--amber,#f59e0b);margin-top:3px">Bloqueada: este envío ya generó un gasto</div>' : ''}
+    </div>
+    ${esExpreso ? `
+    <div class="fg">
+      <label class="lbl">No. de rastreo</label>
+      <input class="inp" id="ee-tracking" value="${esc(e.carrier_tracking)}">
+    </div>` : ''}
+    <div class="fg">
+      <label class="lbl">Fecha programada</label>
+      <input class="inp" id="ee-date" type="date" value="${String(e.scheduled_at || '').split('T')[0].split(' ')[0]}">
+    </div>
+    <div class="fg">
+      <label class="lbl">Notas</label>
+      <textarea class="inp" id="ee-notes" rows="2">${esc(e.notes)}</textarea>
+    </div>`;
+  _eModal(`Editar envío #${id}`, html, async (ov) => {
+    const dest = ov.querySelector('#ee-dest')?.value.trim();
+    if (!dest) throw new Error('El destino es obligatorio');
+    const nombre = ov.querySelector('#ee-customer')?.value.trim() || '';
+    const data = {
+      dest_address: dest,
+      notes:        ov.querySelector('#ee-notes')?.value || '',
+      scheduled_at: ov.querySelector('#ee-date')?.value || null,
+    };
+    // Cliente: solo se toca si cambió el texto — cambiarlo desvincula el
+    // cliente registrado y guarda el nombre libre.
+    if (nombre !== nombreOriginal) { data.customer_name = nombre; data.customer_id = null; }
+    if (!feeLocked) data.delivery_fee = parseFloat(ov.querySelector('#ee-fee')?.value) || 0;
+    if (esExpreso) data.carrier_tracking = ov.querySelector('#ee-tracking')?.value.trim() || '';
+    const res = await window.api.deliveries.update({ id, data, requestUserId: user.id });
+    if (!res?.ok) throw new Error(res?.error || 'No se pudo guardar');
+    _eToast('✓ Envío actualizado');
+    const mainEl = document.getElementById('main-content') || document.querySelector('.main-content');
+    if (mainEl) renderEnvios(mainEl);
+  }, 'Guardar cambios');
+}
+
 // ── Actualizar estado del envío ───────────────
 window.actualizarEnvio = async (id, status) => {
   const user   = _eUser();
+  const env    = (_enviosCache || []).find(x => Number(x.id) === Number(id));
   const labels = {
     en_camino: '¿Marcar como En camino?',
     entregado: '¿Confirmar entrega?',
-    cancelado: '¿Cancelar este envío?'
+    cancelado: env?.status === 'entregado'
+      ? '¿Anular este envío ENTREGADO? Si generó un gasto (combustible/mensajería), se anulará y sus asientos se reversarán.'
+      : '¿Cancelar este envío? Si ya generó un gasto, se anulará también.'
   };
   if (!confirm(labels[status] || '¿Actualizar estado?')) return;
 

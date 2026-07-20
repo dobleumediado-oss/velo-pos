@@ -1191,6 +1191,36 @@ function closeModal() {
   document.getElementById('modal-ov')?.remove();
 }
 
+// Reemplazo de prompt(): Electron NO implementa window.prompt (lanza error y el
+// flujo muere en silencio). Modal propio → Promise<string|null> (null = canceló).
+// Overlay independiente de openModal para poder pedir texto encima de un modal.
+function askText(message, { title = 'Confirmar', defaultValue = '', placeholder = '' } = {}) {
+  return new Promise((resolve) => {
+    let ov;
+    const done = (val) => { ov.remove(); resolve(val); };
+    const input = h('input', { class: 'inp', value: defaultValue, placeholder,
+      style: { width: '100%', marginTop: '12px' } });
+    ov = h('div', {
+      style: { position: 'fixed', inset: '0', background: 'rgba(0,0,0,.55)', zIndex: '10000',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' },
+      onclick: (e) => { if (e.target === ov) done(null); } },
+      h('div', { style: { maxWidth: '420px', width: '100%', background: 'var(--surface,#fff)',
+        border: '1px solid var(--line2,#e5e7eb)', borderRadius: '14px', padding: '22px' } },
+        h('div', { style: { fontSize: '15px', fontWeight: '700', marginBottom: '6px' } }, title),
+        h('div', { style: { fontSize: '12.5px', color: 'var(--muted2,#6b7280)', whiteSpace: 'pre-line' } }, message),
+        input,
+        h('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '14px' } },
+          h('button', { class: 'btn-ghost', onclick: () => done(null) }, 'Cancelar'),
+          h('button', { class: 'btn', onclick: () => done(input.value) }, 'Aceptar'))));
+    document.body.appendChild(ov);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') done(input.value);
+      if (e.key === 'Escape') done(null);
+    });
+    setTimeout(() => input.focus(), 30);
+  });
+}
+
 // ══════════════════════════════════════════════
 // LÓGICA DE MODALES "SUCIOS" (protección de datos sin guardar)
 // Genérico: sirve tanto para openModal como para overlays propios (envíos).

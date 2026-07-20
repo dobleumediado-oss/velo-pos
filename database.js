@@ -828,6 +828,8 @@ function migrateVehiclesModule() {
     addCol('deliveries', 'carrier_tracking', "TEXT DEFAULT ''");
     addCol('deliveries', 'carrier_dest',     "TEXT DEFAULT ''");
     addCol('deliveries', 'expense_id',       'INTEGER DEFAULT NULL');
+    // Cliente NO registrado: nombre libre sin exigir alta en Clientes.
+    addCol('deliveries', 'customer_name',    "TEXT DEFAULT ''");
     addCol('vehicle_maintenance', 'expense_id', 'INTEGER DEFAULT NULL');
   } catch (e) {
     db.pragma('foreign_keys = ON');
@@ -1485,10 +1487,13 @@ const productsRepo = {
       }
       if (existing) return existing.id; // retornar el id existente sin duplicar
     }
+    // Sin código de barras propio → usar el código del artículo como barcode.
+    // Así toda etiqueta impresa es escaneable en el POS sin configurar nada.
+    const barcode = String(p.barcode || '').trim() || String(p.code || '').trim();
     const r = db.prepare(`
       INSERT INTO products(code,barcode,name,brand,category,description,model,cost,price,wholesale,taxable,tax_pct,stock,stock_min,unit,condition)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    `).run(p.code,p.barcode||'',p.name,p.brand||'',p.category||'',p.description||'',
+    `).run(p.code,barcode,p.name,p.brand||'',p.category||'',p.description||'',
            p.model||'',p.cost,p.price,p.wholesale||p.price,
            normalizeTaxable(p.taxable, 1), normalizeTaxPct(p.tax_pct, 18),
            p.stock||0,p.stock_min||5,p.unit||'und', p.condition||'nuevo');
@@ -1499,11 +1504,13 @@ const productsRepo = {
       const before = db.prepare('SELECT * FROM products WHERE id=?').get(id);
       if (!before) throw new Error('Producto no encontrado');
 
+      // Igual que en create(): barcode vacío → código del artículo.
+      const barcode = String(p.barcode || '').trim() || String(p.code || '').trim();
       db.prepare(`
         UPDATE products SET code=?,barcode=?,name=?,brand=?,category=?,description=?,model=?,
         cost=?,price=?,wholesale=?,taxable=?,tax_pct=?,stock_min=?,unit=?,condition=?,updated_at=datetime('now')
         WHERE id=?
-      `).run(p.code,p.barcode||'',p.name,p.brand||'',p.category||'',p.description||'',
+      `).run(p.code,barcode,p.name,p.brand||'',p.category||'',p.description||'',
              p.model||'',p.cost,p.price,p.wholesale||p.price,
              normalizeTaxable(p.taxable, 1), normalizeTaxPct(p.tax_pct, 18),
              p.stock_min||5,p.unit||'und', p.condition||'nuevo',id);
@@ -3534,8 +3541,10 @@ const maintenanceRepo = {
 // ══════════════════════════════════════════════
 const deliveriesRepo = {
   getAll({ status, from, to } = {}) {
+    // customer_name: prioridad al nombre libre guardado en el envío (cliente no
+    // registrado); si está vacío, el nombre del cliente vinculado.
     let q = `SELECT d.*, v.brand, v.model, v.plate, v.km_per_gallon, v.fuel_grade,
-      u.name as driver_name, c.name as customer_name
+      u.name as driver_name, COALESCE(NULLIF(d.customer_name,''), c.name) as customer_name
       FROM deliveries d
       LEFT JOIN vehicles v ON d.vehicle_id=v.id
       LEFT JOIN users u ON d.driver_id=u.id
@@ -3549,12 +3558,13 @@ const deliveriesRepo = {
   },
   getById(id) { return db.prepare('SELECT * FROM deliveries WHERE id=?').get(id); },
   create(data) {
-    return db.prepare(`INSERT INTO deliveries(sale_id,customer_id,vehicle_id,driver_id,
+    return db.prepare(`INSERT INTO deliveries(sale_id,customer_id,customer_name,vehicle_id,driver_id,
       origin_address,dest_address,dest_lat,dest_lng,distance_km,fuel_used,fuel_cost,
       delivery_fee,delivery_type,carrier_name,carrier_stop,carrier_tracking,carrier_dest,
       status,scheduled_at,notes,user_id)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-      data.sale_id||null, data.customer_id||null, data.vehicle_id||null, data.driver_id||null,
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      data.sale_id||null, data.customer_id||null, String(data.customer_name||'').trim(),
+      data.vehicle_id||null, data.driver_id||null,
       data.origin_address||'', data.dest_address, data.dest_lat||null, data.dest_lng||null,
       data.distance_km||null, data.fuel_used||null, data.fuel_cost||null,
       data.delivery_fee||0, data.delivery_type||'propio', data.carrier_name||'',
@@ -3564,6 +3574,25 @@ const deliveriesRepo = {
   },
   setExpense(id, expenseId) {
     db.prepare('UPDATE deliveries SET expense_id=? WHERE id=?').run(expenseId, id);
+  },
+  // Edición de campos operativos (no toca estado ni gasto vinculado; los campos
+  // no enviados conservan su valor actual).
+  update(id, data = {}) {
+    const cur = this.getById(id);
+    if (!cur) throw new Error('Envío no encontrado');
+    db.prepare(`UPDATE deliveries SET dest_address=?, customer_id=?, customer_name=?,
+      delivery_fee=?, carrier_tracking=?, carrier_stop=?, notes=?, scheduled_at=?,
+      updated_at=datetime('now') WHERE id=?`).run(
+      data.dest_address !== undefined ? String(data.dest_address || '').trim() : cur.dest_address,
+      data.customer_id !== undefined ? (data.customer_id || null) : cur.customer_id,
+      data.customer_name !== undefined ? String(data.customer_name || '').trim() : (cur.customer_name || ''),
+      data.delivery_fee !== undefined ? (Number(data.delivery_fee) || 0) : cur.delivery_fee,
+      data.carrier_tracking !== undefined ? String(data.carrier_tracking || '').trim() : (cur.carrier_tracking || ''),
+      data.carrier_stop !== undefined ? String(data.carrier_stop || '').trim() : (cur.carrier_stop || ''),
+      data.notes !== undefined ? String(data.notes || '') : (cur.notes || ''),
+      data.scheduled_at !== undefined ? (data.scheduled_at || null) : cur.scheduled_at,
+      id);
+    return this.getById(id);
   },
   updateStatus(id, status, userId) {
     db.prepare(`UPDATE deliveries SET status=?,${status==='entregado'?"delivered_at=datetime('now'),":""} updated_at=datetime('now') WHERE id=?`)
@@ -4867,22 +4896,22 @@ const accountingRepo = {
     const f = from || (curMonth + '-01');
     const t = to   || new Date().toISOString().split('T')[0];
 
-    // Los ajustes de valorización de inventario (edición manual de costo) NO son
-    // resultados operativos: mantienen 1105 = stock × costo, pero mezclarlos en
-    // ingresos/gastos del período distorsiona la utilidad con solo editar un
-    // costo. Se excluyen aquí (junto con sus reversos); siguen visibles en el
-    // widget "Ajustes de valor de inventario" y en los reportes por cuenta.
+    // Las cards del período cuentan SOLO asientos activos:
+    //   · sin 'anulado' y sin reversos — un asiento anulado y su reverso se
+    //     excluyen COMO PAR. Si se incluyen ambos solo cuadran cuando caen en el
+    //     mismo período; anular una venta de un mes anterior dejaba al mes
+    //     actual con solo el reverso → ingresos/utilidad NEGATIVOS fantasma.
+    //   · sin 'inventario_valor' (revalorización por edición de costo): mantiene
+    //     1105 = stock × costo pero no es resultado operativo. Sigue visible en
+    //     el widget "Ajustes de valor de inventario" y en reportes por cuenta.
     const getSum = (type, field) => {
       const r = db.prepare(`
         SELECT COALESCE(SUM(l.${field}),0) as v
         FROM accounting_entry_lines l
         JOIN accounting_entries e ON l.entry_id=e.id
         JOIN accounting_accounts a ON l.account_id=a.id
-        WHERE e.status IN ('confirmado','anulado') AND a.type=? AND e.date BETWEEN ? AND ?
-          AND e.source_module!='inventario_valor'
-          AND NOT (e.source_module='reverso' AND EXISTS(
-            SELECT 1 FROM accounting_entries o
-            WHERE o.id=e.reversal_of AND o.source_module='inventario_valor'))
+        WHERE e.status='confirmado' AND a.type=? AND e.date BETWEEN ? AND ?
+          AND e.source_module NOT IN ('inventario_valor','reverso')
       `).get(type, f, t);
       return r.v || 0;
     };

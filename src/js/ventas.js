@@ -1072,6 +1072,11 @@ async function openDetalleVentaModal(s) {
   window._ventasDetalleCache = window._ventasDetalleCache || {};
   window._ventasDetalleCache[s.id] = { detail, items };
 
+  // Refrescar productos ANTES de pintar la columna Revender: el stock que se
+  // muestra/valida sale de DB.products, y ese cache es del arranque — tras
+  // ventas, compras o ajustes quedaba viejo y "Revender" no veía el stock real.
+  try { await reloadProducts(); } catch { /* si falla, se usa el cache */ }
+
   const itemsFiscal = items.map(i => ventasLineFiscal(i, detail));
   const saleType = detail.type || 'factura';
   const saleStatus = detail.status || 'completed';

@@ -667,7 +667,7 @@ async function renderSuperAdmin(el) {
       ${todasPlantillas.map(p => {
         const esActiva = p.id === plantActualId || (!plantActualId && p.id === 'termica_80_clasica');
         // Etiquetar tipo solo de forma informativa, sin confundir
-        const tipoTag = p.tipo === '58mm' ? '58mm' : p.tipo === 'carta' ? 'carta' : '80mm';
+        const tipoTag = p.tipo === 'carta' ? 'carta' : (p.tipo || '80mm');
         return `<div id="sa-plant-row-${p.id}"
                      style="display:flex;align-items:center;gap:10px;padding:8px 10px;
                             border-radius:8px;transition:.15s;

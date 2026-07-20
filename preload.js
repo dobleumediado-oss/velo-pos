@@ -262,6 +262,7 @@ contextBridge.exposeInMainWorld('api', {
     getAll:        (d) => ipcRenderer.invoke('deliveries:getAll', d),
     getSummary:    ()  => ipcRenderer.invoke('deliveries:getSummary'),
     create:        (d) => ipcRenderer.invoke('deliveries:create', d),
+    update:        (d) => ipcRenderer.invoke('deliveries:update', d),
     updateStatus:  (d) => ipcRenderer.invoke('deliveries:updateStatus', d),
     geocode:       (d) => ipcRenderer.invoke('deliveries:geocode', d),
     reverseGeocode:(d) => ipcRenderer.invoke('deliveries:reverseGeocode', d),

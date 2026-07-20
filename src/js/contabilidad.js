@@ -475,8 +475,8 @@ window._printAsiento = async function(id) {
 // revierte también, el cuadre de Inventario (1105) lo va a señalar.
 window._reverseAjusteInv = async function(id) {
   if (!confirm('¿Anular este ajuste de valorización? Se creará un asiento de reverso. El costo del producto NO se modifica.')) return;
-  const reason = prompt('Razón de la anulación:', 'Ajuste de costo revertido');
-  if (!reason) return;
+  const reason = await askText('Razón de la anulación:', { title: 'Anular ajuste', defaultValue: 'Ajuste de costo revertido' });
+  if (!reason || !reason.trim()) return;
   const res = await window.api.accounting.reverseEntry({ id, reason, requestUserId: user.id });
   if (res?.ok) {
     toast('Ajuste anulado y reversión creada', 's');
@@ -487,8 +487,8 @@ window._reverseAjusteInv = async function(id) {
 };
 
 window._reverseAsiento = async function(id) {
-  const reason = prompt('Razón de la anulación:');
-  if (!reason) return;
+  const reason = await askText('Razón de la anulación:', { title: 'Anular asiento' });
+  if (!reason || !reason.trim()) return;
   const res = await window.api.accounting.reverseEntry({ id, reason, requestUserId: user.id });
   if (res?.ok) {
     toast('Asiento anulado y reversión creada', 's');
@@ -1425,7 +1425,7 @@ function _openDepreciarModal() {
 }
 
 async function _bajaActivo(a) {
-  const reason = prompt(`Dar de baja "${a.name}" (valor en libros ${fmt(a.book_value)}).\nSe retirará el activo y su depreciación acumulada; el valor en libros restante se registra como pérdida.\n\nMotivo (obligatorio):`);
+  const reason = await askText(`Dar de baja "${a.name}" (valor en libros ${fmt(a.book_value)}).\nSe retirará el activo y su depreciación acumulada; el valor en libros restante se registra como pérdida.`, { title: 'Dar de baja activo', placeholder: 'Motivo (obligatorio)' });
   if (reason === null) return;
   if (!reason.trim()) { toast('El motivo es obligatorio', 'e'); return; }
   const r = await window.api.assets.dispose({ id: a.id, reason, requestUserId: user.id });
@@ -1655,7 +1655,7 @@ function _openCerrarPeriodoModal(el) {
 }
 
 async function _reabrirPeriodo(p, el) {
-  const reason = prompt(`Reabrir "${p.name}" (${p.date_from} a ${p.date_to}).\nMotivo (obligatorio):`);
+  const reason = await askText(`Reabrir "${p.name}" (${p.date_from} a ${p.date_to}).`, { title: 'Reabrir período', placeholder: 'Motivo (obligatorio)' });
   if (reason === null) return;
   if (!reason.trim()) { toast('El motivo es obligatorio', 'e'); return; }
   const r = await window.api.accounting.reopenPeriod({ id: p.id, reason, requestUserId: user.id });

@@ -95,6 +95,23 @@ const PLANTILLAS = [
     render: (sale, cfg, opts) => renderTermicaMinimal(sale, cfg, opts, 76),
   },
 
+  // ═══════════════ 72mm ═══════════════
+  // Para papel térmico de 72mm o impresoras de 80mm cuya área imprimible real
+  // es ~72mm (los bordes salían recortados con las plantillas de 80). El
+  // contenido se renderiza a 68mm, con margen de seguridad en ambos casos.
+  {
+    id:        'termica_72_clasica',
+    nombre:    'Clásica 72mm',
+    tipo:      '72mm',
+    icono:     '🧾',
+    desc:      'Ticket térmico para papel de 72mm (o impresoras de 80mm que recortan los bordes).',
+    opciones: {
+      logo: true, rnc: true, ncf: true, mensaje: true,
+      cedula: true, codigoBarra: false,
+    },
+    render: (sale, cfg, opts) => renderTermica(sale, cfg, opts, 68),
+  },
+
   // ═══════════════ Carta/A4 ═══════════════
   {
     id:        'carta_recibo',
@@ -519,7 +536,7 @@ function renderTermica(sale, cfg, opts, widthMm = 76) {
   <div style="display:flex;justify-content:space-between">
     <span>Subtotal:</span><span>RD$${Number(sale.subtotal||0).toLocaleString('es-DO')}</span>
   </div>
-  ${sale.discount_amt > 0 ? `<div style="display:flex;justify-content:space-between"><span>Descuento (${sale.discount_pct}%):</span><span>-RD$${Number(sale.discount_amt).toLocaleString('es-DO')}</span></div>` : ''}
+  ${sale.discount_amt > 0 ? `<div style="display:flex;justify-content:space-between"><span>Descuento (${Math.round((sale.discount_pct||0)*100)/100}%):</span><span>-RD$${Number(sale.discount_amt).toLocaleString('es-DO')}</span></div>` : ''}
   ${_showItbis(sale) ? `<div style="display:flex;justify-content:space-between"><span>ITBIS (${sale.tax_pct||18}%):</span><span>RD$${(Math.round(_displayTaxAmt(sale)*100)/100).toLocaleString('es-DO')}</span></div>` : ''}
   <div style="text-align:center">${sepD}</div>
   <div style="display:flex;justify-content:space-between;font-weight:700;font-size:${widthMm<=52?'12px':'13px'}">

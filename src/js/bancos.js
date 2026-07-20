@@ -343,8 +343,8 @@ window._saveMov = async function(accountId) {
 };
 
 window._cancelMov = async function(id) {
-  const reason = prompt('Razón de la anulación:');
-  if (!reason) return;
+  const reason = await askText('Razón de la anulación:', { title: 'Anular movimiento' });
+  if (!reason || !reason.trim()) return;
   const res = await window.api.financial.cancelMovement({ id, reason, requestUserId: user.id });
   if (res?.ok) {
     toast('Movimiento anulado', 's');
