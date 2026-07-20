@@ -981,10 +981,11 @@ function invTotal(inv) { return calcTotals(inv).total; }
 function openCobroModal(inv) {
   if (!inv || !inv.cart.length) return;
   const { subtotal, itbis, total, discAmt, disc } = calcTotals(inv);
+  window._cbrBaseTotals = { subtotal, itbis, total, discAmt };
 
   openModal(`
     <div class="modal-title">Cobrar Venta</div>
-    <div class="modal-sub">Total a cobrar: <strong>${fmt(total)}</strong></div>
+    <div class="modal-sub">Total a cobrar: <strong id="cbr-header-total">${fmt(total)}</strong></div>
 
     <div class="card" style="background:var(--surface2);margin-bottom:14px">
       <div style="font-weight:700;font-size:12px;margin-bottom:10px">Datos del cliente</div>
@@ -1032,20 +1033,66 @@ function openCobroModal(inv) {
       </select>
     </div>
 
-    <!-- Cuenta que recibe el dinero (transferencia/tarjeta) -->
+    <!-- Transferencia: cuenta bancaria receptora + conversión según moneda -->
     ${_cbrBankAccounts().length ? `
     <div class="fg" id="cbr-acct-wrap" style="display:${_cbrNeedsAccount(inv.pmeth) ? 'block' : 'none'}">
       <label class="lbl">Cuenta que recibe el pago</label>
-      <select class="inp" id="cbr-account">
+      <select class="inp" id="cbr-account" onchange="cbrUpdatePaymentCurrency()">
         <option value="">— Selecciona la cuenta —</option>
         ${_cbrBankAccounts().map(a =>
-          `<option value="${a.id}" ${inv.financialAccountId===a.id?'selected':''}>${posEscHtml(a.name)}${a.bank_name?` · ${posEscHtml(a.bank_name)}`:''}${a.currency&&a.currency!=='DOP'?` (${a.currency})`:''}</option>`
+          `<option value="${a.id}" ${Number(inv.financialAccountId)===Number(a.id)?'selected':''}>${posEscHtml(a.name)}${a.bank_name?` · ${posEscHtml(a.bank_name)}`:''}${a.currency&&a.currency!=='DOP'?` (${a.currency})`:''}</option>`
         ).join('')}
       </select>
       <div style="font-size:10.5px;color:var(--muted2);margin-top:4px">
         El dinero entra a esta cuenta en Bancos y Cuentas, y saldrá en la factura.
       </div>
+      <div id="cbr-fx-wrap" class="card" style="display:none;background:var(--blue-bg);border-color:var(--blue-line);margin-top:9px;padding:10px 12px">
+        <div class="g2" style="align-items:end">
+          <div class="fg" style="margin-bottom:0">
+            <label class="lbl">Tasa USD utilizada</label>
+            <input class="inp" id="cbr-exchange-rate" type="number" min="20" max="500" step="0.01"
+                   value="${Number(inv.exchangeRate || 0) || ''}" placeholder="Consultando..."
+                   oninput="cbrUpdatePaymentCurrency()"/>
+          </div>
+          <div id="cbr-fx-detail" style="font-size:11px;color:var(--blue);padding-bottom:8px"></div>
+        </div>
+      </div>
+      <div id="cbr-transfer-ref-wrap" style="display:${inv.pmeth === 'transferencia' ? 'block' : 'none'};margin-top:9px">
+        <label class="lbl">Referencia de transferencia <span style="font-weight:400;color:var(--muted)">(opcional)</span></label>
+        <input class="inp" id="cbr-transfer-ref" maxlength="80" value="${posEscHtml(inv.paymentReference || '')}"
+               placeholder="Número o referencia bancaria"/>
+      </div>
     </div>` : ''}
+
+    <!-- Tarjeta: instrumento del cliente, no cuenta bancaria -->
+    <div class="card" id="cbr-card-wrap" style="display:${inv.pmeth === 'tarjeta' ? 'block' : 'none'};background:var(--surface2);margin-bottom:12px">
+      <div style="font-weight:700;font-size:12px;margin-bottom:10px">Datos de la tarjeta del cliente</div>
+      <div class="g2">
+        <div class="fg" style="margin-bottom:0">
+          <label class="lbl">Tipo / marca *</label>
+          <select class="inp" id="cbr-card-brand">
+            <option value="">— Selecciona —</option>
+            ${['Visa','Mastercard','American Express','Discover','Diners Club','UnionPay','ATH','Otra'].map(brand =>
+              `<option value="${brand}" ${inv.cardBrand===brand?'selected':''}>${brand}</option>`
+            ).join('')}
+          </select>
+        </div>
+        <div class="fg" style="margin-bottom:0">
+          <label class="lbl">Últimos 4 dígitos <span style="font-weight:400;color:var(--muted)">(opcional)</span></label>
+          <input class="inp" id="cbr-card-last4" inputmode="numeric" maxlength="4"
+                 value="${posEscHtml(inv.cardLast4 || '')}" placeholder="1234"
+                 oninput="this.value=this.value.replace(/\\D/g,'').slice(0,4)"/>
+        </div>
+      </div>
+      <div class="fg" style="margin:10px 0 0">
+        <label class="lbl">Código de autorización <span style="font-weight:400;color:var(--muted)">(opcional)</span></label>
+        <input class="inp" id="cbr-card-ref" maxlength="80" value="${posEscHtml(inv.paymentReference || '')}"
+               placeholder="Referencia del voucher o autorización"/>
+      </div>
+      <div style="font-size:10.5px;color:var(--muted2);margin-top:5px">
+        Por seguridad nunca se almacena el número completo de la tarjeta.
+      </div>
+    </div>
 
     <!-- Efectivo simple -->
     <div id="cbr-efec" style="display:${!inv.pmeth || inv.pmeth==='efectivo' ? 'block' : 'none'}">
@@ -1109,13 +1156,14 @@ function openCobroModal(inv) {
     </div>
 
     <div class="card" style="background:var(--surface2);margin-top:10px">
-        <div class="tr"><span>Subtotal sin ITBIS</span><span>${fmt(subtotal)}</span></div>
+        <div class="tr"><span>Subtotal sin ITBIS</span><span id="cbr-summary-subtotal">${fmt(subtotal)}</span></div>
       ${disc > 0
         ? `<div class="tr"><span>Descuento (${Math.round(disc*100)/100}%)</span>
-           <span>−${fmt(discAmt)}</span></div>` : ''}
+           <span id="cbr-summary-discount">−${fmt(discAmt)}</span></div>` : ''}
       ${inv.itype === 'factura' && itbis > 0
-        ? `<div class="tr"><span>ITBIS (${CFG.itbis}%)</span><span>${fmt(itbis)}</span></div>` : ''}
-      <div class="tr grand"><span>TOTAL</span><span>${fmt(total)}</span></div>
+        ? `<div class="tr"><span>ITBIS (${CFG.itbis}%)</span><span id="cbr-summary-itbis">${fmt(itbis)}</span></div>` : ''}
+      <div class="tr grand"><span id="cbr-total-label">TOTAL</span><span id="cbr-summary-total">${fmt(total)}</span></div>
+      <div id="cbr-summary-base" style="display:none;text-align:right;font-size:10.5px;color:var(--muted);padding-top:5px"></div>
     </div>
 
     ${inv.itype === 'factura' ? `
@@ -1143,7 +1191,28 @@ function openCobroModal(inv) {
   setTimeout(() => {
     const pmeth = document.getElementById('cbr-pmeth')?.value;
     if (!pmeth || pmeth === 'efectivo') cbrCalcCambio(total);
+    cbrUpdatePaymentCurrency();
   }, 50);
+
+  // Reutilizar de inmediato la tasa ya visible en el topbar y refrescarla en
+  // segundo plano. La tasa queda editable para confirmar el valor real acordado.
+  const cachedUsd = Number(
+    (typeof _ratesData !== 'undefined' && _ratesData?.usd?.venta?.value) || 0
+  );
+  if (cachedUsd > 0) {
+    window._cbrUsdRate = cachedUsd;
+    const rateInput = document.getElementById('cbr-exchange-rate');
+    if (rateInput && !Number(rateInput.value)) rateInput.value = cachedUsd.toFixed(2);
+  }
+  window.api?.banner?.getRates?.().then(res => {
+    const rate = Number(res?.data?.usd?.venta?.value || 0);
+    if (rate > 0) {
+      window._cbrUsdRate = rate;
+      const rateInput = document.getElementById('cbr-exchange-rate');
+      if (rateInput && !Number(rateInput.value)) rateInput.value = rate.toFixed(2);
+      cbrUpdatePaymentCurrency();
+    }
+  }).catch(() => {});
 
   // Cargar los tipos de comprobante con secuencia disponible (para el preview
   // del NCF que se emitirá). Se cachea en window._ncfAvail; si falla, se asume
@@ -1160,15 +1229,72 @@ function openCobroModal(inv) {
   setTimeout(cbrDocHint, 40);
 }
 
-// Cuentas de banco/tarjeta activas para elegir dónde entra un pago no-efectivo.
+// Solo cuentas bancarias: una tarjeta identifica el instrumento del cliente y
+// no debe obligarlo a escoger la cuenta interna donde el adquirente liquidará.
 function _cbrBankAccounts() {
   return (DB.financialAccounts || []).filter(a =>
-    a.is_active !== false && (a.type === 'banco' || a.type === 'tarjeta'));
+    a.is_active !== false && a.type === 'banco');
 }
-// El pago necesita cuenta receptora cuando es transferencia, tarjeta o mixto
-// (la parte no-efectivo del mixto entra a una cuenta).
+// Transferencia y mixto necesitan destino; tarjeta se vincula automáticamente
+// en el backend a una cuenta tipo Tarjeta cuando exista.
 function _cbrNeedsAccount(pmeth) {
-  return pmeth === 'transferencia' || pmeth === 'tarjeta' || pmeth === 'mixto';
+  return pmeth === 'transferencia' || pmeth === 'mixto';
+}
+
+function _cbrMoney(amount, currency = 'DOP') {
+  const n = Number(amount) || 0;
+  return currency === 'USD'
+    ? `US$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : fmt(n);
+}
+
+function cbrUpdatePaymentCurrency() {
+  const totals = window._cbrBaseTotals;
+  if (!totals) return;
+  const method = document.getElementById('cbr-pmeth')?.value || 'efectivo';
+  const accountId = Number(document.getElementById('cbr-account')?.value || 0);
+  const account = _cbrBankAccounts().find(a => Number(a.id) === accountId);
+  const isUsd = !!account && String(account.currency || 'DOP').toUpperCase() === 'USD';
+  const rateInput = document.getElementById('cbr-exchange-rate');
+  if (isUsd && rateInput && !Number(rateInput.value) && Number(window._cbrUsdRate) > 0) {
+    rateInput.value = Number(window._cbrUsdRate).toFixed(2);
+  }
+  const rate = Number(rateInput?.value || 0);
+  const validRate = rate >= 20 && rate <= 500;
+  const fxWrap = document.getElementById('cbr-fx-wrap');
+  if (fxWrap) fxWrap.style.display = isUsd ? 'block' : 'none';
+
+  const setText = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+  };
+  const convertSummary = method === 'transferencia' && isUsd && validRate;
+  const money = (dop) => convertSummary ? _cbrMoney(dop / rate, 'USD') : _cbrMoney(dop, 'DOP');
+  setText('cbr-summary-subtotal', money(totals.subtotal));
+  setText('cbr-summary-itbis', money(totals.itbis));
+  setText('cbr-summary-discount', `−${money(totals.discAmt)}`);
+  setText('cbr-summary-total', money(totals.total));
+  setText('cbr-header-total', money(totals.total));
+  setText('cbr-total-label', convertSummary ? 'TOTAL A TRANSFERIR (USD)' : 'TOTAL');
+
+  const base = document.getElementById('cbr-summary-base');
+  if (base) {
+    base.style.display = convertSummary ? 'block' : 'none';
+    base.textContent = convertSummary
+      ? `Equivalente fiscal: ${fmt(totals.total)} · Tasa RD$${rate.toFixed(2)} por US$1`
+      : '';
+  }
+  const detail = document.getElementById('cbr-fx-detail');
+  if (detail) {
+    if (!isUsd) detail.textContent = '';
+    else if (!validRate) detail.textContent = 'Indica una tasa válida para calcular el depósito.';
+    else if (method === 'mixto') {
+      const nonCash = Number(document.getElementById('cbr-mix-card')?.value || 0);
+      detail.textContent = `Parte no efectiva: ${fmt(nonCash)} → ${_cbrMoney(nonCash / rate, 'USD')}`;
+    } else {
+      detail.textContent = `${fmt(totals.total)} → ${_cbrMoney(totals.total / rate, 'USD')}`;
+    }
+  }
 }
 
 function cbrTogglePago(val) {
@@ -1177,6 +1303,11 @@ function cbrTogglePago(val) {
   document.getElementById('cbr-cred').style.display   = val === 'credito'   ? 'block' : 'none';
   const acctWrap = document.getElementById('cbr-acct-wrap');
   if (acctWrap) acctWrap.style.display = _cbrNeedsAccount(val) ? 'block' : 'none';
+  const cardWrap = document.getElementById('cbr-card-wrap');
+  if (cardWrap) cardWrap.style.display = val === 'tarjeta' ? 'block' : 'none';
+  const transferRef = document.getElementById('cbr-transfer-ref-wrap');
+  if (transferRef) transferRef.style.display = val === 'transferencia' ? 'block' : 'none';
+  cbrUpdatePaymentCurrency();
 }
 
 // Mantener compatibilidad con llamadas existentes
@@ -1203,6 +1334,7 @@ function cbrCalcMixto(total) {
     el.style.color      = 'var(--amber)';
     el.textContent      = `Cambio: ${fmt(diff)}`;
   }
+  cbrUpdatePaymentCurrency();
 }
 
 function cbrCalcCambio(total) {
@@ -1365,17 +1497,41 @@ async function finalizarVenta() {
   const cliCedula = document.getElementById('cbr-cedula')?.value?.trim() || '';
   // Capturar AQUÍ (antes de closeModal): el DOM del modal se elimina al cerrar.
   const wantConduce = !!document.getElementById('cbr-conduce')?.checked;
-  const finAcctId   = parseInt(document.getElementById('cbr-account')?.value) || null;
+  const selectedAccountId = parseInt(document.getElementById('cbr-account')?.value) || null;
+  const finAcctId = _cbrNeedsAccount(pmeth) ? selectedAccountId : null;
+  const selectedAccount = _cbrBankAccounts().find(a => Number(a.id) === Number(finAcctId));
+  const accountCurrency = String(selectedAccount?.currency || 'DOP').toUpperCase();
+  const exchangeRate = accountCurrency === 'USD'
+    ? Number(document.getElementById('cbr-exchange-rate')?.value || 0) : 1;
+  const cardBrand = pmeth === 'tarjeta'
+    ? document.getElementById('cbr-card-brand')?.value || '' : '';
+  const cardLast4 = pmeth === 'tarjeta'
+    ? String(document.getElementById('cbr-card-last4')?.value || '').replace(/\D/g, '').slice(-4) : '';
+  const paymentReference = pmeth === 'tarjeta'
+    ? document.getElementById('cbr-card-ref')?.value?.trim() || ''
+    : (pmeth === 'transferencia'
+      ? document.getElementById('cbr-transfer-ref')?.value?.trim() || '' : '');
   const btnConfirmar = document.getElementById('btn-confirmar-venta');
 
-  // Si hay cuentas registradas y el pago es transferencia/tarjeta, exigir elegir
-  // a cuál entra (así la factura y Bancos reflejan la cuenta correcta).
-  if (!finAcctId && _cbrBankAccounts().length &&
-      (pmeth === 'transferencia' || pmeth === 'tarjeta')) {
+  // Transferencia sí requiere cuenta; tarjeta requiere la marca utilizada por el
+  // cliente y el backend resuelve internamente la cuenta de liquidación.
+  if (!finAcctId && _cbrBankAccounts().length && pmeth === 'transferencia') {
     toast('Selecciona la cuenta que recibe el pago', 'w');
     return;
   }
+  if (pmeth === 'tarjeta' && !cardBrand) {
+    toast('Selecciona el tipo o marca de la tarjeta', 'w');
+    return;
+  }
+  if (accountCurrency === 'USD' && (exchangeRate < 20 || exchangeRate > 500)) {
+    toast('Indica una tasa USD válida para calcular el monto que entra a la cuenta', 'w');
+    return;
+  }
   inv.financialAccountId = finAcctId;
+  inv.exchangeRate = exchangeRate;
+  inv.cardBrand = cardBrand;
+  inv.cardLast4 = cardLast4;
+  inv.paymentReference = paymentReference;
 
   inv.pmeth = pmeth;
   inv.cliName = cliName;
@@ -1456,6 +1612,10 @@ async function finalizarVenta() {
       mixEfec,
       mixCard,
       financialAccountId: finAcctId,
+      exchangeRate,
+      cardBrand,
+      cardLast4,
+      reference: paymentReference,
     },
     type: inv.itype || 'factura',
     session: cajaSession,
@@ -1533,7 +1693,13 @@ async function finalizarVenta() {
       cajero:    user.name,
       ncf:       result.ncf || '',
       tax_pct:   result.taxPct ?? CFG.itbis,
-      financial_account_id: finAcctId,
+      financial_account_id: result.financialAccountId || finAcctId,
+      payment_currency: result.paymentCurrency || 'DOP',
+      exchange_rate: result.exchangeRate || 1,
+      account_amount: result.accountAmount || 0,
+      card_brand: result.cardBrand || cardBrand,
+      card_last4: result.cardLast4 || cardLast4,
+      payment_reference: result.paymentReference || paymentReference,
     };
 
     // Imprimir ticket 80mm en impresora térmica

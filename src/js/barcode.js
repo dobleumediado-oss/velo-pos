@@ -12,6 +12,10 @@ let _bcState = {
   design: null,      // diseño cargado de settings
   printers: [],
   selPrinter: '',
+  profileId: '',
+  mediaWidthMm: 100,
+  printerDpi: 203,
+  mediaMode: 'gap',
 };
 
 // ── Cargar JsBarcode una sola vez ─────────────
@@ -86,7 +90,22 @@ async function renderBarcode(el) {
   if (!Array.isArray(_bcState.printers)) _bcState.printers = [];
   _bcState.selPrinter = settings?.barcode_printer || settings?.printer || '';
   _bcState.labelType  = settings?.barcode_label_type || 'interno';
-  _bcState.paper72    = settings?.barcode_paper_72mm === '1';
+  _bcState.profileId = settings?.barcode_printer_profile ||
+    (settings?.barcode_paper_72mm === '1' ? 'label_generic' : '');
+  _bcState.mediaWidthMm = Number(settings?.barcode_media_width_mm) ||
+    (settings?.barcode_paper_72mm === '1' ? 72 : 100);
+  _bcState.printerDpi = Number(settings?.barcode_printer_dpi) || 203;
+  _bcState.mediaMode = settings?.barcode_media_mode || 'gap';
+  if (!_bcState.profileId && typeof resolvePrinterProfile === 'function') {
+    const detected = resolvePrinterProfile(_bcState.selPrinter, 'barcode', {
+      barcode_media_width_mm: _bcState.mediaWidthMm,
+      barcode_printer_dpi: _bcState.printerDpi,
+    });
+    if (detected.id === 'label_2connect_108') {
+      _bcState.mediaWidthMm = detected.widthMm;
+      _bcState.printerDpi = detected.dpi;
+    }
+  }
 
   el.innerHTML = '';
   el.style.overflowY = 'auto';
@@ -140,7 +159,7 @@ async function renderBarcode(el) {
   // Columna derecha: config de impresión + resumen
   const rightCol = h('div', { style: 'display:flex;flex-direction:column;gap:16px' });
 
-  // Card tipo de etiqueta + papel
+  // Card tipo de etiqueta
   const typeCard = h('div', { class: 'card' });
   const _lt = _bcState.labelType;
   typeCard.innerHTML = `
@@ -161,11 +180,7 @@ async function renderBarcode(el) {
                onchange="bcSetLabelType(this.value)" style="margin-top:2px"/>
         <span><b>Personalizado</b><br><span style="color:var(--muted2);font-size:11px">Según el diseño configurado en el panel</span></span>
       </label>
-    </div>
-    <label style="display:flex;gap:8px;align-items:center;cursor:pointer;margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:12.5px">
-      <input type="checkbox" id="bc-72mm" ${_bcState.paper72 ? 'checked' : ''} onchange="bcSetPaper72(this.checked)"/>
-      <span><b>Papel térmico 72mm</b> <span style="color:var(--muted2);font-size:11px">(rollo, 1 columna, sin márgenes)</span></span>
-    </label>`;
+    </div>`;
   rightCol.appendChild(typeCard);
 
   // Card impresora
@@ -183,6 +198,37 @@ async function renderBarcode(el) {
       </select>
     </div>
     <div id="bc-printer-badge" style="margin-top:4px"></div>
+    <div class="fg" style="margin-top:12px">
+      <label class="lbl">Perfil del medio</label>
+      <select class="inp" id="bc-profile" onchange="bcSetPrinterProfile(this.value)">
+        <option value="" ${!_bcState.profileId?'selected':''}>Automático según impresora</option>
+        <option value="label_2connect_108" ${_bcState.profileId==='label_2connect_108'?'selected':''}>2Connect 2C-LP427B · 108 mm · 203 dpi</option>
+        <option value="label_generic" ${_bcState.profileId==='label_generic'?'selected':''}>Universal · ancho configurable</option>
+      </select>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div class="fg" style="margin:0">
+        <label class="lbl">Ancho del rollo (mm)</label>
+        <input class="inp" id="bc-media-width" type="number" min="20" max="150" step="0.1"
+               value="${_bcState.mediaWidthMm}" onchange="bcSaveMediaConfig()"/>
+      </div>
+      <div class="fg" style="margin:0">
+        <label class="lbl">Resolución (DPI)</label>
+        <input class="inp" id="bc-dpi" type="number" min="100" max="1200"
+               value="${_bcState.printerDpi}" onchange="bcSaveMediaConfig()"/>
+      </div>
+    </div>
+    <div class="fg" style="margin-top:8px">
+      <label class="lbl">Avance del papel</label>
+      <select class="inp" id="bc-media-mode" onchange="bcSaveMediaConfig()">
+        <option value="gap" ${_bcState.mediaMode==='gap'?'selected':''}>Etiquetas con espacio / sensor (una fila por avance)</option>
+        <option value="mark" ${_bcState.mediaMode==='mark'?'selected':''}>Marca negra / sensor (una fila por avance)</option>
+        <option value="continuous" ${_bcState.mediaMode==='continuous'?'selected':''}>Rollo continuo</option>
+      </select>
+      <div style="font-size:11px;color:var(--muted2);margin-top:5px">
+        Envío universal por el controlador del sistema. Compatible con equipos que internamente emulan ZPL/TSPL/EPS/EPL/DPL.
+      </div>
+    </div>
     <div class="fg" style="margin-top:12px">
       <label class="lbl">Copias por producto (global)</label>
       <input class="inp" id="bc-global-qty" type="number" min="1" max="999" value="1"
@@ -385,22 +431,59 @@ async function bcSetLabelType(v) {
   _bcState.labelType = v;
   await window.api.settings.set({ key: 'barcode_label_type', value: v }).catch(() => {});
 }
-async function bcSetPaper72(on) {
-  _bcState.paper72 = !!on;
-  await window.api.settings.set({ key: 'barcode_paper_72mm', value: on ? '1' : '0' }).catch(() => {});
+async function bcSetPrinterProfile(id) {
+  _bcState.profileId = id || '';
+  if (id === 'label_2connect_108') {
+    _bcState.mediaWidthMm = 108;
+    _bcState.printerDpi = 203;
+    const width = document.getElementById('bc-media-width');
+    const dpi = document.getElementById('bc-dpi');
+    if (width) width.value = '108';
+    if (dpi) dpi.value = '203';
+  }
+  await bcSaveMediaConfig();
+  _bcUpdatePrinterBadge();
+}
+
+async function bcSaveMediaConfig() {
+  _bcState.mediaWidthMm = Math.min(150, Math.max(20,
+    Number(document.getElementById('bc-media-width')?.value) || _bcState.mediaWidthMm || 100));
+  _bcState.printerDpi = Math.min(1200, Math.max(100,
+    Number(document.getElementById('bc-dpi')?.value) || _bcState.printerDpi || 203));
+  _bcState.mediaMode = document.getElementById('bc-media-mode')?.value || _bcState.mediaMode || 'gap';
+  await Promise.all([
+    window.api.settings.set({ key: 'barcode_printer_profile', value: _bcState.profileId || '' }),
+    window.api.settings.set({ key: 'barcode_media_width_mm', value: String(_bcState.mediaWidthMm) }),
+    window.api.settings.set({ key: 'barcode_printer_dpi', value: String(_bcState.printerDpi) }),
+    window.api.settings.set({ key: 'barcode_media_mode', value: _bcState.mediaMode }),
+  ]).catch(() => {});
 }
 
 // Diseño EFECTIVO para generar/imprimir: aplica el tipo de etiqueta elegido
 // (interno = con precio, proveedor = sin precio) sobre el diseño base, y el
-// preset de papel térmico 72mm (1 columna a lo ancho del rollo, sin márgenes).
 // 'personalizado' respeta el diseño tal cual lo configuró el panel.
 function _bcEffectiveDesign() {
   const d = { ...(_bcState.design || _bcDefaultDesign()) };
   const t = _bcState.labelType || 'interno';
   if (t === 'interno')   Object.assign(d, { showName: true, showCode: true, showPrice: true,  showBarcode: true });
   if (t === 'proveedor') Object.assign(d, { showName: true, showCode: true, showPrice: false, showBarcode: true });
-  if (_bcState.paper72)  Object.assign(d, { labelW: 72, cols: 1, gapMm: 3, pageMm: 0 });
+  // En rollos/etiquetas el margen exterior pertenece al perfil del driver. El
+  // padding interno de la etiqueta sigue protegiendo texto y código de barras.
+  d.pageMm = 0;
   return d;
+}
+
+function _bcPrinterProfile() {
+  const settings = {
+    barcode_printer_profile: _bcState.profileId,
+    barcode_media_width_mm: _bcState.mediaWidthMm,
+    barcode_printer_dpi: _bcState.printerDpi,
+  };
+  return typeof resolvePrinterProfile === 'function'
+    ? resolvePrinterProfile(_bcState.selPrinter, 'barcode', settings)
+    : { id: 'label_generic', label: 'Etiquetas', kind: 'labels',
+        widthMm: _bcState.mediaWidthMm || 100, printableWidthMm: _bcState.mediaWidthMm || 100,
+        dpi: _bcState.printerDpi || 203, languages: ['Driver'] };
 }
 
 function _bcUpdatePrinterBadge() {
@@ -408,14 +491,17 @@ function _bcUpdatePrinterBadge() {
   if (!badge) return;
   const p = _bcState.selPrinter;
   if (!p) {
-    badge.innerHTML = `<div class="badge n">Sin impresora específica — usa la del sistema</div>`;
+    const profile = _bcPrinterProfile();
+    badge.innerHTML = `<div class="badge n">Impresora del sistema · ${profile.widthMm}mm · ${profile.dpi}dpi</div>`;
     return;
   }
   const tipo = _bcLabelType(p);
+  const profile = _bcPrinterProfile();
   badge.innerHTML = `
     <div style="display:flex;gap:6px;align-items:center">
       <div class="badge g">${svg('check')} ${p}</div>
       ${tipo ? `<div class="badge b">${tipo}</div>` : ''}
+      <div class="badge n">${profile.widthMm}mm · ${profile.dpi}dpi</div>
     </div>`;
 }
 
@@ -423,6 +509,7 @@ function _bcLabelType(name) {
   if (!name) return '';
   const n = name.toLowerCase();
   if (/zebra|zpl/.test(n))    return 'Zebra · ZPL';
+  if (/2\s*connect|2c[-_ ]?lp427|lp[-_ ]?427/.test(n)) return '2Connect · ZPL/TSPL';
   if (/honeyw/.test(n))       return 'Honeywell';
   if (/tsc/.test(n))          return 'TSC';
   if (/sato/.test(n))         return 'SATO';
@@ -442,10 +529,16 @@ function _bcBuildLabelsHTML(items) {
   const d = _bcEffectiveDesign();
   if (!d) return '';
 
-  const lw  = d.labelW || 50;      // mm
-  const lh  = d.labelH || 25;      // mm
-  const gap = d.gapMm || 2;        // mm entre etiquetas
-  const cols = d.cols || 2;
+  const profile = _bcPrinterProfile();
+  const layout = typeof calculateLabelLayout === 'function'
+    ? calculateLabelLayout(d, profile)
+    : { labelW: d.labelW || 50, labelH: d.labelH || 25, gapMm: d.gapMm || 2,
+        pageMm: d.pageMm || 0, mediaWidthMm: profile.widthMm || 100, cols: d.cols || 1,
+        rowHeightMm: (d.labelH || 25) + (d.gapMm || 2), adjusted: false };
+  const lw = layout.labelW;
+  const lh = layout.labelH;
+  const gap = layout.gapMm;
+  const cols = layout.cols;
 
   let allLabels = [];
   items.forEach(({ product: p, qty }) => {
@@ -504,36 +597,36 @@ function _bcBuildLabelsHTML(items) {
       </div>`;
   };
 
+  const rows = [];
+  for (let i = 0; i < allLabels.length; i += cols) rows.push(allLabels.slice(i, i + cols));
+  const fixedRows = _bcState.mediaMode !== 'continuous';
   const styles = `
     <style>
-      @page { margin: ${d.pageMm||5}mm; }
-      body  { margin:0;padding:0;background:#fff; }
-      .vp-label-grid {
+      @page { size:${layout.mediaWidthMm}mm ${fixedRows ? layout.rowHeightMm + 'mm' : 'auto'}; margin:0; }
+      html,body { width:${layout.mediaWidthMm}mm;margin:0;padding:0;background:#fff; }
+      .vp-label-row {
+        width:${layout.mediaWidthMm}mm;
+        min-height:${fixedRows ? layout.rowHeightMm : lh}mm;
+        padding:${layout.pageMm}mm;
         display:grid;
         grid-template-columns: repeat(${cols}, ${lw}mm);
-        gap:${gap}mm;
+        column-gap:${gap}mm;
         justify-content:center;
+        align-content:start;
+        box-sizing:border-box;
+        overflow:hidden;
+        ${fixedRows ? 'break-after:page;page-break-after:always;' : ''}
       }
+      .vp-label-row:last-child { break-after:auto;page-break-after:auto; }
       @media print {
         .no-print { display:none!important; }
       }
     </style>`;
 
-  const preview = `
-    <div class="no-print" style="padding:12px;background:#f5f5f5;border-bottom:1px solid #ddd;display:flex;gap:8px;align-items:center">
-      <button onclick="window.print()" style="padding:6px 16px;background:#1a1a1a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600">
-        🖨 Imprimir
-      </button>
-      <span style="font-size:12px;color:#666">${allLabels.length} etiqueta(s) · ${cols} col · ${lw}×${lh}mm</span>
-    </div>`;
-
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
     ${styles}
     </head><body>
-    ${preview}
-    <div class="vp-label-grid">
-      ${allLabels.map(p => labelHTML(p)).join('\n')}
-    </div>
+    ${rows.map(row => `<div class="vp-label-row">${row.map(p => labelHTML(p)).join('\n')}</div>`).join('\n')}
     </body></html>`;
 }
 
@@ -597,12 +690,17 @@ async function _bcPrint() {
   const total = items.reduce((s, i) => s + i.qty, 0);
   const html  = _bcBuildLabelsHTML(items);
   const d     = _bcEffectiveDesign();
+  const profile = _bcPrinterProfile();
+  const layout = typeof calculateLabelLayout === 'function'
+    ? calculateLabelLayout(d, profile)
+    : { mediaWidthMm: profile.widthMm || d.labelW || 50, rowHeightMm: (d.labelH || 25) + (d.gapMm || 2) };
 
   try {
     const result = await window.api.print.html({
       html,
       printerName:  _bcState.selPrinter || '',
-      printerWidth: `${d.labelW || 50}mm`,
+      printerWidth: `${layout.mediaWidthMm}mm`,
+      printerHeight: _bcState.mediaMode === 'continuous' ? undefined : `${layout.rowHeightMm}mm`,
       jobType:      'barcode_labels',
       referenceId:  null,
       userId:       user?.id,

@@ -6,6 +6,13 @@
 let _bancosTab  = 'cuentas';
 let _bancosAcct = null; // cuenta seleccionada para movimientos
 
+function _bancosMoney(value, currency = 'DOP') {
+  const n = Number(value) || 0;
+  return String(currency || 'DOP').toUpperCase() === 'USD'
+    ? `US$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : fmt(n);
+}
+
 async function renderBancos(el) {
   el.innerHTML = '';
 
@@ -76,7 +83,7 @@ async function _renderBancosCtAs(el) {
     const icons = { caja: '💵', banco: '🏦', tarjeta: '💳', otro: '💼' };
     const icon = icons[c.type] || '💼';
     const badgeText = _bancosTypeLabel(c);
-    const cur = (c.currency && c.currency !== 'DOP') ? c.currency : '';
+    const cur = String(c.currency || 'DOP').toUpperCase();
     // Sublíneas informativas: banco · nº de cuenta.
     const subLines = [];
     if (c.bank_name) subLines.push(c.bank_name);
@@ -88,10 +95,10 @@ async function _renderBancosCtAs(el) {
       h('div', { class: 'fin-card-icon', style: { background: 'var(--surface2)', fontSize: '18px' } }, icon),
       h('div', { class: 'fin-card-label' }, c.name),
       h('div', { class: 'fin-card-amount' },
-        (cur ? cur + ' ' : '') + fmt(c.balance)),
+        _bancosMoney(c.balance, cur)),
       h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', flexWrap: 'wrap' } },
         h('span', { class: `acct-type-badge ${typeClass}` }, badgeText),
-        cur ? h('span', { style: { fontSize: '10px', fontWeight: '700', color: 'var(--muted2)' } }, cur) : null,
+        cur !== 'DOP' ? h('span', { style: { fontSize: '10px', fontWeight: '700', color: 'var(--muted2)' } }, cur) : null,
         !c.is_active ? h('span', { style: { fontSize: '10px', color: 'var(--muted2)' } }, 'inactiva') : null
       ),
       subLines.length
@@ -243,7 +250,7 @@ function _openBancosDetailModal(c) {
     <div style="padding:24px;min-width:400px">
       <div class="modal-title">${_e(c.name)}</div>
       <div style="font-size:28px;font-weight:800;color:var(--accent);margin:12px 0">
-        ${cur !== 'DOP' ? cur + ' ' : ''}${fmt(c.balance)}
+        ${_bancosMoney(c.balance, cur)}
       </div>
       <div style="font-size:12px;color:var(--muted2);margin-bottom:12px">
         <span class="acct-type-badge acct-type-${c.type}">${_bancosTypeLabel(c)}</span>
@@ -289,7 +296,8 @@ async function _renderBancosMov(el) {
     onchange: async (e) => {
       _bancosAcct = parseInt(e.target.value) || null;
       movBody.innerHTML = '';
-      await _renderBancosMovList(movBody, _bancosAcct);
+      const selected = cuentas.find(c => Number(c.id) === Number(_bancosAcct));
+      await _renderBancosMovList(movBody, _bancosAcct, selected?.currency || 'DOP');
     }
   }, h('option', { value: '' }, '— Selecciona cuenta —'),
   ...cuentas.map(c => h('option', { value: c.id, ...(c.id === _bancosAcct ? { selected: true } : {}) }, c.name)));
@@ -302,10 +310,13 @@ async function _renderBancosMov(el) {
 
   const movBody = h('div');
   el.appendChild(movBody);
-  if (_bancosAcct) await _renderBancosMovList(movBody, _bancosAcct);
+  if (_bancosAcct) {
+    const selected = cuentas.find(c => Number(c.id) === Number(_bancosAcct));
+    await _renderBancosMovList(movBody, _bancosAcct, selected?.currency || 'DOP');
+  }
 }
 
-async function _renderBancosMovList(el, accountId) {
+async function _renderBancosMovList(el, accountId, currency = 'DOP') {
   if (!accountId) return;
   const res = await window.api.financial.getMovements({ accountId, limit: 100 });
   const movs = res?.data || [];
@@ -336,8 +347,8 @@ async function _renderBancosMovList(el, accountId) {
         h('td', null, h('span', { class: `mov-type-${m.type}` }, m.type)),
         h('td', null, m.description || '—'),
         h('td', null, m.reference || '—'),
-        h('td', { class: `num ${isEgreso?'debit':'credit'}` }, `${isEgreso?'-':'+'} ${fmt(m.amount)}`),
-        h('td', { class: 'num' }, fmt(m.balance_after)),
+        h('td', { class: `num ${isEgreso?'debit':'credit'}` }, `${isEgreso?'-':'+'} ${_bancosMoney(m.amount, currency)}`),
+        h('td', { class: 'num' }, _bancosMoney(m.balance_after, currency)),
         h('td', null, h('span', { class: `mov-status-${m.status}` }, m.status)),
         h('td', null, m.status === 'activo'
           ? h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '3px 8px', color: '#ef4444' },
@@ -356,7 +367,7 @@ function _openMovModal(accountId, cuentas) {
     <div style="padding:24px;min-width:360px">
       <div class="modal-title">Nuevo movimiento</div>
       <div style="font-size:12px;color:var(--muted2);margin-bottom:16px">
-        Cuenta: <strong>${c?.name || accountId}</strong> · Balance: <strong>${fmt(c?.balance || 0)}</strong>
+        Cuenta: <strong>${c?.name || accountId}</strong> · Balance: <strong>${_bancosMoney(c?.balance || 0, c?.currency || 'DOP')}</strong>
       </div>
       <div style="display:flex;flex-direction:column;gap:12px">
         <div>
@@ -367,7 +378,7 @@ function _openMovModal(accountId, cuentas) {
           </select>
         </div>
         <div>
-          <label class="lbl">Monto (RD$) *</label>
+          <label class="lbl">Monto (${String(c?.currency || 'DOP').toUpperCase() === 'USD' ? 'US$' : 'RD$'}) *</label>
           <input id="mv-amount" class="inp" type="number" min="0.01" step="0.01" placeholder="0.00">
         </div>
         <div>
@@ -434,14 +445,14 @@ async function _renderBancosTransfer(el) {
         h('label', { class: 'lbl' }, 'Cuenta origen *'),
         h('select', { id: 'tr-from', class: 'inp' },
           h('option', { value: '' }, '— Selecciona —'),
-          ...cuentas.map(c => h('option', { value: c.id }, `${c.name} · ${fmt(c.balance)}`))
+          ...cuentas.map(c => h('option', { value: c.id }, `${c.name} · ${_bancosMoney(c.balance, c.currency)}`))
         )
       ),
       h('div', null,
         h('label', { class: 'lbl' }, 'Cuenta destino *'),
         h('select', { id: 'tr-to', class: 'inp' },
           h('option', { value: '' }, '— Selecciona —'),
-          ...cuentas.map(c => h('option', { value: c.id }, `${c.name} · ${fmt(c.balance)}`))
+          ...cuentas.map(c => h('option', { value: c.id }, `${c.name} · ${_bancosMoney(c.balance, c.currency)}`))
         )
       ),
       h('div', null,

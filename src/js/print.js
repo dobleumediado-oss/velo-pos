@@ -1,8 +1,7 @@
 // ══════════════════════════════════════════════
 // print.js — Servicio de Impresión
-//   · Ticket de venta 80mm (AOKIA AK-3380 USB)
-//   · Recibo de abono 80mm
-//   · Cierre de caja 80mm
+//   · Tickets térmicos de ancho configurable (58/72/80/108mm y personalizados)
+//   · Etiquetas mediante el controlador universal del sistema
 //   · Factura A4 previsualización
 //   · Reimpresión auditada
 //   · Usa impresora guardada en settings
@@ -90,6 +89,16 @@ function buildLogoHeader(logo1, logo2, opts = {}) {
 // ── Obtener impresora guardada ────────────────
 function _getSavedPrinter() {
   return (DB?.settings?.printer || CFG?.printer || '').trim();
+}
+
+function _getTicketPrinterProfile(printerName = _getSavedPrinter()) {
+  if (typeof resolvePrinterProfile === 'function') {
+    return resolvePrinterProfile(printerName, 'ticket');
+  }
+  const type = typeof detectPrinterType === 'function' ? detectPrinterType(printerName) : '80mm';
+  const widthMm = type === '58mm' ? 58 : type === '72mm' ? 72 : type === '108mm' ? 108 : 80;
+  return { id: `ticket_${widthMm}`, kind: type === 'carta' ? 'sheet' : 'continuous',
+    widthMm, printableWidthMm: Math.max(20, widthMm - 4), dpi: 203 };
 }
 
 // ══════════════════════════════════════════════
@@ -325,7 +334,23 @@ function printReceipt(sale, isReprint = false) {
     if (sale.mix_efec > 0) lines.push(tRow('  Efectivo:', fmt(sale.mix_efec)));
     if (sale.mix_card > 0) lines.push(tRow('  Tarjeta/Trans.:', fmt(sale.mix_card)));
   } else {
-    lines.push(tRow('Método de pago:', metodo));
+    const cardBrand = String(sale.card_brand || '').trim();
+    const cardLast4 = String(sale.card_last4 || '').replace(/\D/g, '').slice(-4);
+    const methodText = metodo === 'TARJETA'
+      ? `TARJETA${cardBrand ? ' ' + cardBrand.toUpperCase() : ''}`
+      : metodo;
+    lines.push(tRow('Método de pago:', methodText));
+    if (metodo === 'TARJETA' && cardLast4) lines.push(tRow('Últimos dígitos:', `**** ${cardLast4}`));
+    if (sale.payment_reference) {
+      lines.push(tRow(metodo === 'TARJETA' ? 'Autorización:' : 'Referencia:', String(sale.payment_reference)));
+    }
+  }
+
+  if (String(sale.payment_currency || '').toUpperCase() === 'USD' && Number(sale.account_amount) > 0) {
+    const usd = `US$${Number(sale.account_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    lines.push(tRow('Pagado en USD:', usd));
+    lines.push(tRow('Tasa USD:', `RD$${Number(sale.exchange_rate || 0).toFixed(2)}`));
+    lines.push(tRow('Base factura:', fmt(total)));
   }
 
   if (isFactura && !isDevolucion && sale.ncf && sale.ncf.trim()) {
@@ -693,10 +718,11 @@ function printCierreCaja(data) {
 // MOTOR INTERNO — ENVIAR A IMPRESORA
 // ══════════════════════════════════════════════
 function _sendToPrinter(lines, jobType = '', referenceId = null, isReprint = false) {
+  const categoryPrinter = _getCategoryConfig(_categoryForJobType(jobType)).printer || _getSavedPrinter();
   // Si la impresora es de cartuchos/carta y no se llegó acá desde una plantilla,
   // usar plantilla carta_recibo automáticamente (el contenido de líneas no se adapta bien a carta)
   const _printerTypeCheck = typeof detectPrinterType === 'function'
-    ? detectPrinterType(_getSavedPrinter()) : 'unknown';
+    ? detectPrinterType(categoryPrinter) : 'unknown';
   if (_printerTypeCheck === 'carta' && typeof getPlantilla === 'function') {
     const _cartaPlant = getPlantilla(DB?.settings?.print_template || 'carta_recibo');
     if (_cartaPlant && _cartaPlant.tipo === 'carta') {
@@ -721,17 +747,19 @@ function _sendToPrinter(lines, jobType = '', referenceId = null, isReprint = fal
     .map(l => `<div class="ln">${_escHtml(l)}</div>`)
     .join('');
 
-  const printerType = typeof detectPrinterType === 'function'
-    ? detectPrinterType(_getSavedPrinter()) : 'unknown';
-  const isThermal = printerType !== 'unknown' && printerType !== 'carta';
+  const profile = _getTicketPrinterProfile(categoryPrinter);
+  const isThermal = profile.kind !== 'sheet';
+  const paperWidth = profile.widthMm || 80;
+  const printableWidth = Math.min(paperWidth, profile.printableWidthMm || paperWidth - 4);
+  const sideMargin = Math.max(0, (paperWidth - printableWidth) / 2);
   const pageCSS = isThermal
-    ? '@page { size: 80mm auto; margin: 2mm 3mm 4mm 3mm; }'
+    ? `@page { size: ${paperWidth}mm auto; margin: 2mm ${sideMargin}mm 4mm ${sideMargin}mm; }`
     : '@page { size: letter; margin: 15mm 15mm 15mm 15mm; }';
   const bodyCSS = isThermal
-    ? 'width: 76mm; max-width: 76mm; font-family: \'Courier New\', Courier, monospace; font-size: 11.5px; line-height: 1.4;'
+    ? `width: ${printableWidth}mm; max-width: ${printableWidth}mm; font-family: 'Courier New', Courier, monospace; font-size: 11.5px; line-height: 1.4;`
     : 'width: 100%; max-width: 180mm; font-family: Arial, sans-serif; font-size: 12px; line-height: 1.5;';
   const mediaCSS = isThermal
-    ? 'html, body { width: 80mm; }'
+    ? `html { width: ${paperWidth}mm; } body { width: ${printableWidth}mm; }`
     : 'html, body { width: 100%; }';
 
   const html = `<!DOCTYPE html>
@@ -989,9 +1017,10 @@ function _dispatchPrintWindow(html, jobType = '', referenceId = null, isReprint 
   const catCfg    = _getCategoryConfig(category);
 
   const printerName = catCfg.printer || _getSavedPrinter();
-  const printerType = typeof detectPrinterType === 'function'
-    ? detectPrinterType(printerName)
-    : 'unknown';
+  const profile = _getTicketPrinterProfile(printerName);
+  const printerType = typeof printerProfileLegacyType === 'function'
+    ? printerProfileLegacyType(profile)
+    : (typeof detectPrinterType === 'function' ? detectPrinterType(printerName) : 'unknown');
 
   // ── Impresoras carta/cartuchos ────────────────────────────────────────────
   // silent:false → Electron abre diálogo con vista previa
@@ -1049,13 +1078,15 @@ function _dispatchPrintWindow(html, jobType = '', referenceId = null, isReprint 
   }
 
   // ── Impresoras térmicas (58mm / 80mm): API nativa Electron, silent:true ──
-  const printerWidth = printerType === '58mm' ? 58000 : 80000;
+  const printerWidth = Math.round((profile.widthMm || 80) * 1000);
 
   if (window.api?.print?.html) {
     _printDispatch({
       html,
       printerName:  printerName || undefined,
-      printerWidth: printerName ? printerWidth : undefined,
+      // También se pasa sin impresora elegida: Electron abre el diálogo, pero
+      // conserva el tamaño real del rollo en lugar de asumir una hoja Letter.
+      printerWidth,
       jobType,
       referenceId,
       userId: user?.id || null,
@@ -1189,6 +1220,8 @@ async function openPrinterConfig() {
   } catch {}
 
   const saved = _getSavedPrinter();
+  const currentProfile = _getTicketPrinterProfile(saved);
+  const savedProfile = DB?.settings?.printer_profile || '';
 
   const options = printers.length
     ? printers.map(p => `
@@ -1199,28 +1232,46 @@ async function openPrinterConfig() {
 
   openModal(`
     <div class="modal-title">Configurar Impresora</div>
-    <div class="modal-sub">Selecciona la impresora térmica AOKIA 80mm</div>
+    <div class="modal-sub">Configura la impresora instalada y el medio físico que utilizará</div>
 
     <div class="fg">
       <label class="lbl">Impresora instalada</label>
       <select class="inp" id="sel-printer">${options}</select>
       <div style="font-size:11px;color:var(--muted);margin-top:5px">
-        En Windows: la AOKIA debe aparecer como "AOKIA AK-3380" o similar.
-        Si no aparece, instala el driver USB primero y reinicia el sistema.
+        La impresora debe aparecer instalada en el sistema. Para equipos USB como
+        2Connect, Zebra, TSC o AOKIA instala primero el controlador del fabricante.
       </div>
     </div>
 
     <div class="fg">
-      <label class="lbl">Tipo de impresora</label>
-      <select class="inp" id="sel-printer-type">
-        <option value="">Detectar automáticamente</option>
-        <option value="80mm" ${(DB?.settings?.printer_type)==='80mm'?'selected':''}>Térmica 80mm (rollo de tickets)</option>
-        <option value="58mm" ${(DB?.settings?.printer_type)==='58mm'?'selected':''}>Térmica 58mm (portátil)</option>
-        <option value="carta" ${(DB?.settings?.printer_type)==='carta'?'selected':''}>Carta / Láser / Inkjet (hojas)</option>
+      <label class="lbl">Perfil de papel</label>
+      <select class="inp" id="sel-printer-profile" onchange="printerProfileFormChanged()">
+        <option value="" ${!savedProfile?'selected':''}>Detectar automáticamente</option>
+        <option value="ticket_58" ${savedProfile==='ticket_58'?'selected':''}>Ticket térmico · 58 mm</option>
+        <option value="ticket_72" ${savedProfile==='ticket_72'?'selected':''}>Ticket térmico · 72 mm</option>
+        <option value="ticket_80" ${savedProfile==='ticket_80'?'selected':''}>Ticket térmico · 80 mm</option>
+        <option value="label_2connect_108" ${savedProfile==='label_2connect_108'?'selected':''}>2Connect 2C-LP427B · etiquetas/rollo 108 mm · 203 dpi</option>
+        <option value="continuous_custom" ${savedProfile==='continuous_custom'?'selected':''}>Rollo continuo · ancho personalizado</option>
+        <option value="sheet" ${savedProfile==='sheet'?'selected':''}>Carta / A4 · láser o tinta</option>
       </select>
       <div style="font-size:11px;color:var(--muted);margin-top:5px">
-        Si tu impresora es de <strong>hojas (láser/inkjet)</strong> y salía en blanco,
-        elige <strong>"Carta / Láser"</strong>. La detección automática a veces asume térmica.
+        La 2C-LP427B trabaja mediante su driver y puede recibir el documento aunque
+        internamente emule ZPL/TSPL/EPS/EPL/DPL. Para tickets usa rollo continuo; para
+        etiquetas usa el módulo <strong>Etiquetas</strong> y su sensor de espacios.
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="fg">
+        <label class="lbl">Ancho del medio (mm)</label>
+        <input class="inp" id="sel-printer-width" type="number" min="20" max="150" step="0.1"
+               value="${savedProfile === 'continuous_custom' ? (DB?.settings?.printer_width_mm || 80) : (currentProfile.widthMm || 80)}"
+               ${savedProfile && savedProfile !== 'continuous_custom' ? 'disabled' : ''}/>
+      </div>
+      <div class="fg">
+        <label class="lbl">Resolución (DPI)</label>
+        <input class="inp" id="sel-printer-dpi" type="number" min="100" max="1200"
+               value="${currentProfile.dpi || DB?.settings?.printer_dpi || 203}"/>
       </div>
     </div>
 
@@ -1249,21 +1300,47 @@ async function savePrinterConfig() {
   const sel = document.getElementById('sel-printer');
   if (!sel) return;
   const name = sel.value.trim();
-  const ptype = document.getElementById('sel-printer-type')?.value || '';
+  const profileId = document.getElementById('sel-printer-profile')?.value || '';
+  const widthMm = document.getElementById('sel-printer-width')?.value || '';
+  const dpi = document.getElementById('sel-printer-dpi')?.value || '203';
+  const resolved = typeof resolvePrinterProfile === 'function'
+    ? resolvePrinterProfile(name, 'ticket', { printer_profile: profileId, printer_width_mm: widthMm, printer_dpi: dpi })
+    : null;
+  const ptype = resolved && typeof printerProfileLegacyType === 'function'
+    ? printerProfileLegacyType(resolved) : '';
   const result = await window.api.print.savePrinter({
     printerName: name,
     requestUserId: user?.id,
   });
   if (result?.ok) {
     // Guardar también el tipo forzado (override de detectPrinterType)
-    try { await window.api.settings.set({ key: 'printer_type', value: ptype, requestUserId: user?.id }); } catch {}
-    if (DB.settings) { DB.settings.printer = name; DB.settings.printer_type = ptype; }
-    if (CFG) { CFG.printer = name; CFG.printer_type = ptype; }
+    try {
+      await Promise.all([
+        window.api.settings.set({ key: 'printer_profile', value: profileId, requestUserId: user?.id }),
+        window.api.settings.set({ key: 'printer_width_mm', value: widthMm, requestUserId: user?.id }),
+        window.api.settings.set({ key: 'printer_dpi', value: dpi, requestUserId: user?.id }),
+        window.api.settings.set({ key: 'printer_type', value: ptype, requestUserId: user?.id }),
+      ]);
+    } catch {}
+    if (DB.settings) Object.assign(DB.settings, { printer: name, printer_profile: profileId,
+      printer_width_mm: widthMm, printer_dpi: dpi, printer_type: ptype });
+    if (CFG) Object.assign(CFG, { printer: name, printer_profile: profileId,
+      printer_width_mm: widthMm, printer_dpi: dpi, printer_type: ptype });
     toast(name ? `Impresora guardada: ${name}` : 'Impresora limpiada');
     closeModal();
   } else {
     toast(result?.error || 'Error al guardar', 'err');
   }
+}
+
+function printerProfileFormChanged() {
+  const id = document.getElementById('sel-printer-profile')?.value || '';
+  const profile = (typeof PRINTER_PROFILES !== 'undefined' && PRINTER_PROFILES[id]) || null;
+  const width = document.getElementById('sel-printer-width');
+  const dpi = document.getElementById('sel-printer-dpi');
+  if (profile && width) width.value = profile.widthMm;
+  if (profile && dpi) dpi.value = profile.dpi;
+  if (width) width.disabled = !!profile && id !== 'continuous_custom';
 }
 
 function testPrint() {
@@ -1295,13 +1372,16 @@ function testPrint() {
   }
 
   // Fallback: ticket de prueba clásico
+  const testProfile = _getTicketPrinterProfile();
   const testLines = [
     tCenter(CFG.biz || 'Mi Negocio'),
     tline(),
     tCenter('*** PRUEBA DE IMPRESIÓN ***'),
     tline(),
     tRow('Impresora:', (_getSavedPrinter() || 'predeterminada').slice(0, 22)),
-    tRow('Ancho papel:', '80mm'),
+    tRow('Perfil:', testProfile.label || testProfile.id || 'Automático'),
+    tRow('Ancho papel:', `${testProfile.widthMm || 80}mm`),
+    tRow('Resolución:', `${testProfile.dpi || 203} DPI`),
     tRow('Columnas:', String(THERMAL.cols)),
     tline('-'),
     tCenter('Texto de prueba'),

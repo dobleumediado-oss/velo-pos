@@ -139,6 +139,21 @@ ok(near(b.discAmt, 11.8), `descuento 11.8 = 10% de 118 final (obtuvo ${b.discAmt
 ok(near(b.subtotal, 90), `subtotal neto 90 después de descuento (obtuvo ${b.subtotal})`);
 ok(near(b.taxAmt, 16.2), `ITBIS 16.2 incluido después de descuento (obtuvo ${b.taxAmt})`);
 ok(near(b.total, 106.2), `total 106.2 (obtuvo ${b.total})`);
+const bReturn = DB.returnsRepo.create({
+  originalSaleId: b.saleId,
+  items: [{ ...item(1), qty: 1 }],
+  session: null,
+  user,
+  reason: 'devolución con descuento',
+});
+ok(near(bReturn.total, 106.2),
+  `devolución respeta el descuento original y reembolsa 106.2 (obtuvo ${bReturn.total})`);
+ok(near(bReturn.taxAmt, 16.2),
+  `devolución descontada conserva ITBIS 16.2 (obtuvo ${bReturn.taxAmt})`);
+ok(!DB.salesRepo.getAll({ range: 'all', view: 'sales' }).some(s => s.id === b.saleId),
+  'una factura con devolución vigente no aparece en la vista Ventas');
+ok(!DB.salesRepo.getAll({ range: 'all', view: 'sales' }).some(s => s.id === bReturn.returnId),
+  'la nota de crédito no se mezcla en la vista Ventas');
 
 console.log('\n== C. Cotización: sin ITBIS, sin mover stock ==');
 const stockBefore = DB.productsRepo.getById(prodId).stock;
@@ -163,6 +178,117 @@ const ret = DB.returnsRepo.create({
 ok(near(ret.total, 150), `devolución respeta precio histórico final 150 (obtuvo ${ret.total})`);
 ok(near(ret.taxAmt, 22.88), `devolución respeta ITBIS histórico 22.88 (obtuvo ${ret.taxAmt})`);
 ok(DB.productsRepo.getById(prodId).stock === stockBeforeReturn + 1, `devolución repone stock ${stockBeforeReturn}→${stockBeforeReturn + 1}`);
+const saleWithReturn = DB.salesRepo.getAll({ range: 'all' }).find(s => s.id === c2.saleId);
+ok(Number(saleWithReturn?.has_active_return) === 1, 'venta original queda identificada para salir de la pantalla Ventas');
+ok(!DB.salesRepo.getAll({ range: 'all', view: 'sales' }).some(s => s.id === c2.saleId),
+  'la vista Ventas excluye la factura desde que se registra la devolución');
+ok(DB.salesRepo.countAll({ range: 'all', view: 'sales' }) ===
+   DB.salesRepo.getAll({ range: 'all', view: 'sales' }).length,
+  'el contador de Ventas usa el mismo filtro que el listado');
+const stockBeforeCancelReturn = DB.productsRepo.getById(prodId).stock;
+DB.returnsRepo.cancel(ret.returnId, 'devolución registrada por error', userId, user.name);
+ok(DB.productsRepo.getById(prodId).stock === stockBeforeCancelReturn - 1,
+  'anular devolución retira nuevamente el artículo del inventario');
+ok(DB.salesRepo.getById(c2.saleId).status === 'completed',
+  'anular la única devolución reactiva la factura original');
+ok(DB.salesRepo.getAll({ range: 'all', view: 'sales' }).some(s => s.id === c2.saleId),
+  'al anular la devolución, la factura vuelve a aparecer en Ventas');
+ok(!DB.salesRepo.getAll({ range: 'all' }).some(s => s.id === ret.returnId),
+  'devolución anulada desaparece del listado operativo');
+const saleToCancel = DB.salesRepo.create({
+  customer: { id: custId, name: 'x' },
+  items: [item(1, 150)],
+  payment: { method: 'efectivo' },
+  user,
+  type: 'factura',
+});
+DB.salesRepo.cancel(saleToCancel.saleId, 'venta creada por error', userId, user.name);
+ok(DB.salesRepo.getById(saleToCancel.saleId).status === 'cancelled',
+  'Anular marca la venta como anulada para conservar solo la auditoría');
+ok(!DB.salesRepo.getAll({ range: 'all', view: 'sales' }).some(s => s.id === saleToCancel.saleId),
+  'una venta anulada deja de existir en la pantalla Ventas');
+
+console.log('\n== C2b. Cobros USD y tarjeta profesional ==');
+// La suite financiera inicializa solo el esquema núcleo; recrear aquí las tablas
+// que en la aplicación real instala la migración del módulo Bancos.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS financial_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, type TEXT NOT NULL,
+    bank_name TEXT DEFAULT '', account_number TEXT DEFAULT '', currency TEXT DEFAULT 'DOP',
+    account_subtype TEXT DEFAULT '', initial_balance REAL DEFAULT 0,
+    current_balance REAL DEFAULT 0, description TEXT DEFAULT '', notes TEXT DEFAULT '',
+    user_id INTEGER, active INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS financial_movements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, financial_account_id INTEGER NOT NULL,
+    type TEXT NOT NULL, amount REAL NOT NULL, balance_before REAL DEFAULT 0,
+    balance_after REAL DEFAULT 0, description TEXT DEFAULT '', reference_type TEXT DEFAULT '',
+    reference_id INTEGER, related_account_id INTEGER, method TEXT DEFAULT 'efectivo',
+    notes TEXT DEFAULT '', user_id INTEGER, status TEXT DEFAULT 'activo',
+    cancelled_by INTEGER, cancel_reason TEXT, cancelled_at TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+`);
+const usdAccountId = DB.financialAccountsRepo.create({
+  name: 'Cuenta USD Test', type: 'banco', bank_name: 'BanReservas',
+  currency: 'USD', account_subtype: 'corriente', userId,
+});
+const usdSale = DB.salesRepo.create({
+  customer: { id: custId, name: 'x' },
+  items: [item(1, 118)],
+  payment: {
+    method: 'transferencia', financialAccountId: usdAccountId,
+    exchangeRate: 59, reference: 'TRX-USD-001',
+  },
+  user,
+  type: 'factura',
+});
+const usdSaleRow = DB.salesRepo.getById(usdSale.saleId);
+ok(usdSaleRow.payment_currency === 'USD' && near(usdSaleRow.exchange_rate, 59),
+  'venta conserva USD y la tasa histórica utilizada');
+ok(near(usdSaleRow.account_amount, 2) && near(DB.financialAccountsRepo.getById(usdAccountId).current_balance, 2),
+  'RD$118 se acreditan como US$2.00 en la cuenta USD');
+ok(usdSaleRow.payment_reference === 'TRX-USD-001',
+  'transferencia conserva su referencia bancaria');
+const usdReturn = DB.returnsRepo.create({
+  originalSaleId: usdSale.saleId,
+  items: [{ ...item(1, 118), qty: 1 }],
+  session: null,
+  user,
+  reason: 'devolución USD',
+});
+ok(near(DB.financialAccountsRepo.getById(usdAccountId).current_balance, 0),
+  'devolución retira US$2.00 de la misma cuenta USD');
+DB.returnsRepo.cancel(usdReturn.returnId, 'devolución USD anulada', userId, user.name);
+ok(near(DB.financialAccountsRepo.getById(usdAccountId).current_balance, 2),
+  'anular la devolución restaura exactamente US$2.00');
+DB.salesRepo.cancel(usdSale.saleId, 'venta USD anulada', userId, user.name);
+ok(near(DB.financialAccountsRepo.getById(usdAccountId).current_balance, 0),
+  'anular la venta retira el monto USD, no el total nominal en RD$');
+
+const visaAccountId = DB.financialAccountsRepo.create({
+  name: 'Liquidación Visa', type: 'tarjeta', bank_name: 'Adquirente Test',
+  currency: 'DOP', userId,
+});
+const cardSale = DB.salesRepo.create({
+  customer: { id: custId, name: 'x' },
+  items: [item(1, 118)],
+  payment: {
+    method: 'tarjeta', cardBrand: 'Visa', cardLast4: '4242',
+    reference: 'AUTH-7788',
+  },
+  user,
+  type: 'factura',
+});
+const cardSaleRow = DB.salesRepo.getById(cardSale.saleId);
+ok(cardSaleRow.card_brand === 'Visa' && cardSaleRow.card_last4 === '4242' &&
+   cardSaleRow.payment_reference === 'AUTH-7788',
+  'tarjeta conserva marca, últimos 4 y autorización sin almacenar el número completo');
+ok(Number(cardSaleRow.financial_account_id) === Number(visaAccountId) &&
+   near(DB.financialAccountsRepo.getById(visaAccountId).current_balance, 118),
+  'Visa se vincula automáticamente a su cuenta interna sin pedírsela al cajero');
+
 const c3 = DB.salesRepo.create({ customer: { id: custId, name: 'x' }, items: [itemNoTax(1)], payment: { method: 'efectivo' }, user, type: 'factura' });
 ok(near(c3.total, 100), `producto exento total 100 (obtuvo ${c3.total})`);
 ok(near(c3.taxAmt, 0), `producto exento sin ITBIS (obtuvo ${c3.taxAmt})`);
@@ -211,6 +337,49 @@ ok(near(gainAccount.balance, -100), `aumento de costo acredita ingreso por ajust
 const acctDup = DB.accountingRepo.generateInventoryRevaluationEntry({ historyId: acctUpdate.historyId, userId });
 const adjCount = db.prepare("SELECT COUNT(*) c FROM accounting_entries WHERE source_module='inventario_valor' AND source_id=?").get(acctUpdate.historyId).c;
 ok(acctDup?.entryId === acctEntry.entryId && adjCount === 1, 'ajuste contable es idempotente y no duplica asientos');
+throws(() => DB.accountingRepo.reverseEntry(acctEntry.entryId, userId, 'intento directo'),
+  'bloquea anulación directa de un asiento automático');
+const autoVoid = DB.accountingRepo.reverseSourceEntry(
+  'inventario_valor', acctUpdate.historyId, userId, 'origen anulado en prueba'
+);
+ok(autoVoid?.entryId === acctEntry.entryId &&
+   DB.accountingRepo.getEntryById(acctEntry.entryId).status === 'anulado',
+  'el módulo de origen puede anular su asiento automático sin crear reverso');
+ok(near(DB.accountingRepo.getAccountByCode('1105').balance, 0) &&
+   near(DB.accountingRepo.getAccountByCode('4104').balance, 0),
+  'anular desde el origen restaura los saldos automáticos');
+
+const cashAccount = DB.accountingRepo.getAccountByCode('1101');
+const capitalAccount = DB.accountingRepo.getAccountByCode('3101');
+throws(() => DB.accountingRepo.createEntry({
+  date: '2026-07-20', concept: 'Línea inválida', source_module: 'manual', userId,
+  lines: [
+    { account_id: cashAccount.id, debit: 10, credit: 10 },
+    { account_id: capitalAccount.id, debit: 0, credit: 0 },
+  ],
+}), 'rechaza líneas con débito y crédito simultáneos o ambos en cero');
+const manualEntry = DB.accountingRepo.createEntry({
+  date: '2026-07-20', concept: 'Asiento manual a anular', source_module: 'manual', userId,
+  lines: [
+    { account_id: cashAccount.id, debit: 25, credit: 0, description: 'Prueba' },
+    { account_id: capitalAccount.id, debit: 0, credit: 25, description: 'Prueba' },
+  ],
+});
+const cashBeforeVoid = DB.accountingRepo.getAccountByCode('1101').balance;
+const capitalBeforeVoid = DB.accountingRepo.getAccountByCode('3101').balance;
+const manualVoid = DB.accountingRepo.reverseEntry(manualEntry.entryId, userId, 'prueba de anulación');
+const reversedOriginal = DB.accountingRepo.getEntryById(manualEntry.entryId);
+ok(manualVoid.entryId === manualEntry.entryId && reversedOriginal.status === 'anulado',
+  'anulación retira el asiento original sin crear otro documento');
+ok(!DB.accountingRepo.getEntries({ includeHistory: false }).some(e =>
+  e.id === manualEntry.entryId), 'lista normal oculta el asiento anulado');
+ok(db.prepare("SELECT COUNT(*) c FROM accounting_entries WHERE source_module='reverso'").get().c === 0,
+  'anular no crea ningún asiento REVERSO');
+ok(near(DB.accountingRepo.getAccountByCode('1101').balance, cashBeforeVoid - 25) &&
+   near(DB.accountingRepo.getAccountByCode('3101').balance, capitalBeforeVoid + 25),
+  'anulación restaura directamente los saldos de las cuentas');
+throws(() => DB.accountingRepo.reverseEntry(manualEntry.entryId, userId, 'segunda anulación'),
+  'impide anular dos veces el mismo asiento');
 db.prepare("INSERT INTO settings(key,value) VALUES('module_contabilidad','0') ON CONFLICT(key) DO UPDATE SET value='0'").run();
 
 const buyProdId = DB.productsRepo.create({
@@ -385,8 +554,31 @@ const legacyHtml = renderCartaRecibo({
 });
 ok(legacyHtml.includes('RECIBO DE PAGO'), 'A4 pagada se titula RECIBO DE PAGO');
 ok(legacyHtml.includes('Código') && legacyHtml.includes('ITBIS') && legacyHtml.includes('Importe'), 'A4 muestra Código, ITBIS e Importe');
-ok(legacyHtml.includes('2,907.46'), 'A4 calcula ITBIS desde líneas legacy sin tax_amt');
-ok(legacyHtml.includes('19,060.00'), 'A4 calcula total con impuestos desde líneas legacy');
+ok(legacyHtml.includes('2,463.95'), 'A4 extrae ITBIS incluido desde líneas legacy sin tax_amt');
+ok(legacyHtml.includes('16,152.54'), 'A4 conserva el total histórico ya cobrado sin inflarlo');
+const usdHtml = renderCartaRecibo({
+  id: 3001, type: 'factura', status: 'completed', date: '2026-07-20',
+  customer_name: 'Cliente USD', payment_method: 'transferencia',
+  payment_currency: 'USD', exchange_rate: 60.25, account_amount: 10,
+  total: 602.5, subtotal: 602.5, items: [], financial_account_id: 99,
+  payment_reference: 'TRX-USD-001',
+}, { biz_name: 'EQUIPARTS', bank_accounts: [{ id: 99, name: 'EQUIPARTS', bank_name: 'BanReservas', currency: 'USD' }] }, {
+  logo: false, rnc: true, ncf: true, mensaje: true, cedula: true,
+});
+ok(usdHtml.includes('US$10.00') && usdHtml.includes('RD$60.25') && usdHtml.includes('TRX-USD-001'),
+  'plantilla A4 muestra monto USD, tasa y referencia bancaria');
+const cardHtml = renderCartaRecibo({
+  id: 3002, type: 'factura', status: 'completed', date: '2026-07-20',
+  customer_name: 'Cliente Tarjeta', payment_method: 'tarjeta',
+  card_brand: 'Mastercard', card_last4: '5454', payment_reference: 'AUTH-99',
+  total: 500, subtotal: 500, items: [], financial_account_id: 77,
+}, { biz_name: 'EQUIPARTS', bank_accounts: [{ id: 77, name: 'Cuenta interna', bank_name: 'Banco X' }] }, {
+  logo: false, rnc: true, ncf: true, mensaje: true, cedula: true,
+});
+ok(cardHtml.includes('Tarjeta Mastercard') && cardHtml.includes('•••• 5454') && cardHtml.includes('AUTH-99'),
+  'plantilla A4 refleja marca, últimos 4 y autorización de tarjeta');
+ok(!cardHtml.includes('Cuenta interna') && !cardHtml.includes('Banco X'),
+  'plantilla de tarjeta no expone la cuenta bancaria interna');
 
 console.log('\n== I. Normalización de búsqueda (lib/text-normalize) ==');
 const { searchNorm, digitsOf } = require('../lib/text-normalize');

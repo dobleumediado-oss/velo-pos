@@ -45,3 +45,10 @@ Módulo completo de contabilidad + bancos, agregado en las migraciones v1.6.x.
 - `accounting_entries.source_module` = tipo de asiento (`venta`, `gasto`, `manual`, `abono`, etc.).
 - Auto-asientos generados vía `generateSaleEntry`/`generateExpenseEntry` tras cada venta/gasto (silencioso, no bloqueante).
 - `syncHistorical` (IPC) puede rellenar hasta 500 ventas + 500 gastos no sincronizados.
+
+## Anulaciones (v1.21.2)
+- La lista y los estados financieros solo consideran asientos vigentes (`status='confirmado'`).
+- Al anular no se crea ningún asiento adicional llamado `REVERSO`: el sistema retira el efecto del original y lo oculta de Contabilidad dentro de una sola transacción.
+- El usuario, motivo y fecha permanecen en `audit_logs`; el módulo contable no muestra documentos anulados.
+- Los asientos automáticos se anulan desde su módulo de origen (Ventas, Gastos, Devoluciones, etc.); Contabilidad solo permite anular directamente asientos manuales, ajustes, apertura y cierre.
+- La migración `1.21.2` elimina los reversos históricos y reconstruye el balance cacheado del catálogo desde asientos vigentes.

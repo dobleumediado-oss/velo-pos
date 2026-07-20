@@ -96,14 +96,22 @@ try {
     terminal_id: 'term-1',
     printer: 'Ticket',
     printer_type: '80mm',
+    printer_profile: 'ticket_80',
+    printer_width_mm: '80',
+    printer_dpi: '203',
     print_config: '{}',
     barcode_printer: 'Etiquetas',
+    barcode_printer_profile: 'label_2connect_108',
+    barcode_media_width_mm: '108',
+    barcode_printer_dpi: '203',
+    barcode_media_mode: 'gap',
     biz_name: 'No copiar',
     tax_pct: '18',
     module_multi_negocio: '1',
   });
   ok(pickedSettings.connection_mode === 'server' && pickedSettings.terminal_id === 'term-1', 'detecta settings de conexión y terminal');
   ok(pickedSettings.print_config === '{}' && pickedSettings.barcode_printer === 'Etiquetas', 'detecta settings locales de impresión');
+  ok(pickedSettings.printer_profile === 'ticket_80' && pickedSettings.barcode_media_width_mm === '108', 'conserva perfiles físicos por terminal');
   ok(!('biz_name' in pickedSettings) && !('module_multi_negocio' in pickedSettings), 'excluye settings propios del negocio');
   ok(businessCtx.normalizeBusinessInput({ name: '  Taller Norte  ', description: '  Demo  ' }).name === 'Taller Norte', 'normaliza nombre de negocio');
   try {

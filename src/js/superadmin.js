@@ -604,16 +604,22 @@ async function renderSuperAdmin(el) {
   const printerNow    = DB?.settings?.printer || CFG?.printer || '';
   const printerTypeNow = typeof detectPrinterType === 'function'
     ? detectPrinterType(printerNow) : 'unknown';
-  const tipoActual    = printerTypeNow === 'carta' ? 'carta' : '80mm';
+  const tipoActual    = printerTypeNow === 'carta' ? 'carta'
+    : printerTypeNow === '58mm' ? '58mm'
+    : printerTypeNow === '72mm' ? '72mm' : '80mm';
   const plantActualId = DB?.settings?.print_template || '';
   const todasPlantillas = typeof PLANTILLAS !== 'undefined' ? PLANTILLAS : [];
 
   const tipoColor = printerTypeNow === 'carta'  ? 'var(--amber)' :
                     printerTypeNow === '58mm'    ? 'var(--green)'  :
+                    printerTypeNow === '72mm'    ? 'var(--green)'  :
+                    printerTypeNow === '108mm'   ? 'var(--green)'  :
                     printerTypeNow === '80mm'    ? 'var(--green)'  : 'var(--muted)';
   const tipoLabel = printerTypeNow === 'carta'  ? '📄 Carta / A4' :
                     printerTypeNow === '58mm'    ? '🧾 Térmica 58mm' :
-                    printerTypeNow === '80mm'    ? '🧾 Térmica 80mm' : '⚠ No reconocida (80mm default)';
+                    printerTypeNow === '72mm'    ? '🧾 Térmica 72mm' :
+                    printerTypeNow === '108mm'   ? '🏷 Etiquetas 108mm' :
+                    printerTypeNow === '80mm'    ? '🧾 Térmica 80mm' : 'Ancho personalizado';
 
   // Tipo de la plantilla actualmente activa
   const plantActivaObj   = todasPlantillas.find(p => p.id === plantActualId);

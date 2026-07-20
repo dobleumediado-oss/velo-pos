@@ -16,6 +16,9 @@ function _esc(str) {
 
 // ── Detección de tipo de impresora ────────────
 function detectPrinterType(printerName) {
+  if (typeof resolvePrinterProfile === 'function') {
+    return printerProfileLegacyType(resolvePrinterProfile(printerName, 'ticket'));
+  }
   // Override explícito del usuario (Configuración → Impresora → Tipo).
   // Tiene prioridad sobre la auto-detección: evita que una impresora láser/carta
   // con nombre no reconocido caiga al default '80mm' (térmica) y reciba trabajos
@@ -23,7 +26,7 @@ function detectPrinterType(printerName) {
   try {
     const forced = (typeof DB !== 'undefined' && DB?.settings?.printer_type) ||
                    (typeof CFG !== 'undefined' && CFG?.printer_type) || '';
-    if (['58mm', '80mm', 'carta'].includes(forced)) return forced;
+    if (['58mm', '72mm', '80mm', '108mm', 'carta'].includes(forced)) return forced;
   } catch {}
 
   if (!printerName) return 'unknown';
@@ -31,6 +34,8 @@ function detectPrinterType(printerName) {
 
   if (/58|mini|port|pocket|handheld|bt.*print|print.*bt/.test(n)) return '58mm';
 
+  if (/2\s*connect|2c[-_ ]?lp427|lp[-_ ]?427/.test(n)) return '108mm';
+  if (/72\s*mm/.test(n)) return '72mm';
   if (/80|thermal|termi|receipt|pos|ticket|aokia|epson.?tm|star.?tsp|bixolon|sewoo|xprint|citizen|rongta|hprt|zjiang|iposp|goojprt|rpp|srp|scp|tsp|tm-t|tm-u|eu-t/.test(n)) return '80mm';
 
   if (/laser|inkjet|officejet|laserjet|pixma|envy|deskjet|ecotank|l-series|brother|canon|hp |ricoh|xerox|kyocera|samsung.*ml|samsung.*clp|pdf|fax|onenote|xps/.test(n)) return 'carta';
@@ -374,9 +379,31 @@ function _metodoPagoLabel(m) {
   return map[k] || (m ? m.charAt(0).toUpperCase() + m.slice(1) : 'Efectivo');
 }
 
+function _pagoDetalleLabel(sale) {
+  const method = (sale?.payment_method || '').toLowerCase();
+  if (method !== 'tarjeta') return _metodoPagoLabel(method);
+  const brand = String(sale?.card_brand || '').trim();
+  const last4 = String(sale?.card_last4 || '').replace(/\D/g, '').slice(-4);
+  return `Tarjeta${brand ? ' ' + brand : ''}${last4 ? ' •••• ' + last4 : ''}`;
+}
+
+function _pagoResumenTexto(sale) {
+  const parts = [_pagoDetalleLabel(sale)];
+  if (String(sale?.payment_currency || '').toUpperCase() === 'USD' && Number(sale?.account_amount) > 0) {
+    const usd = Number(sale.account_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    parts.push(`US$${usd} @ RD$${Number(sale.exchange_rate || 0).toFixed(2)}`);
+  }
+  if (sale?.payment_reference) {
+    parts.push(`${String(sale.payment_method).toLowerCase() === 'tarjeta' ? 'Aut.' : 'Ref.'} ${sale.payment_reference}`);
+  }
+  return parts.join(' · ');
+}
+
 // ¿El método de pago implica datos bancarios?
 function _esPagoBancario(m) {
-  return ['transferencia', 'deposito', 'cheque', 'tarjeta'].includes((m || '').toLowerCase());
+  // Tarjeta muestra marca/autorización; la cuenta de liquidación es interna y no
+  // debe imprimirse como si el cliente hubiese realizado una transferencia.
+  return ['transferencia', 'deposito', 'cheque'].includes((m || '').toLowerCase());
 }
 
 // Texto de una cuenta registrada (Bancos y Cuentas) para la factura.
@@ -561,7 +588,7 @@ function renderTermica(sale, cfg, opts, widthMm = 76) {
   <div style="display:flex;justify-content:space-between"><span>Método:</span><span>MIXTO</span></div>
   ${sale.mix_efec > 0 ? `<div style="display:flex;justify-content:space-between"><span>  Efectivo:</span><span>RD$${Number(sale.mix_efec).toLocaleString('es-DO')}</span></div>` : ''}
   ${sale.mix_card > 0 ? `<div style="display:flex;justify-content:space-between"><span>  Tarjeta/Trans.:</span><span>RD$${Number(sale.mix_card).toLocaleString('es-DO')}</span></div>` : ''}
-  ` : `<div style="display:flex;justify-content:space-between"><span>Método de pago:</span><span>${(sale.payment_method||'efectivo').toUpperCase()}</span></div>`}
+  ` : `<div style="display:flex;justify-content:space-between"><span>Método de pago:</span><span>${_esc(_pagoResumenTexto(sale))}</span></div>`}
   ${_showNcf(sale, opts) ? `
   <div style="text-align:center">${sep}</div>
   <div style="text-align:center">Documento con validez fiscal</div>
@@ -639,7 +666,7 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
   <div class="row"><span>Método:</span><span>MIXTO</span></div>
   ${sale.mix_efec > 0 ? `<div class="row"><span style="padding-left:8px">Efectivo:</span><span>RD$${Number(sale.mix_efec).toLocaleString('es-DO')}</span></div>` : ''}
   ${sale.mix_card > 0 ? `<div class="row"><span style="padding-left:8px">Tarjeta/Trans.:</span><span>RD$${Number(sale.mix_card).toLocaleString('es-DO')}</span></div>` : ''}
-  ` : `<div class="row"><span>Forma de pago:</span><span>${(sale.payment_method||'efectivo').toUpperCase()}</span></div>`}
+  ` : `<div class="row"><span>Forma de pago:</span><span>${_esc(_pagoResumenTexto(sale))}</span></div>`}
   ${_showNcf(sale, opts) ? `<hr class="sep"/><div class="center" style="font-size:10px">Documento con validez fiscal</div><div class="center" style="font-size:10px;font-weight:700">NCF: ${ncf}</div>` : ''}
   ${opts.mensaje && cfg.receipt_msg && !isCotizacion ? `<hr class="sep"/><div class="center">${cfg.receipt_msg}</div>` : ''}
   <hr class="sep"/>
@@ -672,7 +699,7 @@ function renderTermicaMinimal(sale, cfg, opts, widthMm = 76) {
     <span>RD$${Number(sale.total||0).toLocaleString('es-DO')}</span>
   </div>
   ${_showNcf(sale, opts) ? `<div style="border-top:1px dashed #000;margin:3px 0"></div><div style="text-align:center;font-size:9px">NCF: ${ncf}</div>` : ''}
-  <div style="text-align:center;font-size:9px;margin-top:3px">${sale.payment_method||'EFECTIVO'} · ${isCotizacion ? 'Cotización sin valor fiscal' : 'Gracias'}</div>
+  <div style="text-align:center;font-size:9px;margin-top:3px">${_esc(_pagoResumenTexto(sale))} · ${isCotizacion ? 'Cotización sin valor fiscal' : 'Gracias'}</div>
 </body></html>`;
 }
 
@@ -695,6 +722,7 @@ function renderCartaRecibo(sale, cfg, opts) {
 
   const ncf       = _getNcf(sale);
   const method    = (sale.payment_method || 'efectivo').toLowerCase();
+  const paymentLabel = _pagoDetalleLabel(sale);
   const showTax   = _showItbis(sale);
   const taxPct    = Number(sale.tax_pct != null ? sale.tax_pct : 18);
   const displaySubtotal = _displaySubtotal(sale);
@@ -746,14 +774,25 @@ function renderCartaRecibo(sale, cfg, opts) {
     cells.push(`<div class="cell"><span class="ic">${_a4ic('cal')}</span><div><div class="k">Vencimiento</div><div class="v">${_fechaCorta(sale.due_date)}</div></div></div>`);
   }
   if (showMoney) {
-    cells.push(`<div class="cell"><span class="ic">${_a4ic('pay')}</span><div><div class="k">Método de pago</div><div class="v">${_metodoPagoLabel(method)}</div></div></div>`);
+    cells.push(`<div class="cell"><span class="ic">${_a4ic('pay')}</span><div><div class="k">Método de pago</div><div class="v">${_esc(paymentLabel)}</div></div></div>`);
+  }
+  if (showMoney && method === 'tarjeta' && sale.payment_reference) {
+    cells.push(`<div class="cell"><span class="ic">${_a4ic('ref')}</span><div><div class="k">Autorización de tarjeta</div><div class="v">${_esc(sale.payment_reference)}</div></div></div>`);
+  }
+  if (showMoney && method === 'transferencia' && sale.payment_reference) {
+    cells.push(`<div class="cell"><span class="ic">${_a4ic('ref')}</span><div><div class="k">Referencia bancaria</div><div class="v">${_esc(sale.payment_reference)}</div></div></div>`);
+  }
+  if (showMoney && String(sale.payment_currency || '').toUpperCase() === 'USD' && Number(sale.account_amount) > 0) {
+    const usd = Number(sale.account_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const rate = Number(sale.exchange_rate || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    cells.push(`<div class="cell cell-wide"><span class="ic">${_a4ic('pay')}</span><div><div class="k">Pago recibido en dólares</div><div class="v">US$${usd} <small>· Tasa RD$${rate} por US$1 · Base fiscal RD$${_n2(sale.total)}</small></div></div></div>`);
   }
   if (isAbono && (sale.original_sale_id || sale.applied_invoice)) {
     const ap = sale.applied_invoice || facturaLabelOriginal(sale);
     cells.push(`<div class="cell"><span class="ic">${_a4ic('ref')}</span><div><div class="k">Factura aplicada</div><div class="v">${_esc(ap)}</div></div></div>`);
   }
   // Datos bancarios en el strip — SOLO para pago bancario contado (transferencia/
-  // tarjeta/depósito/cheque). Preferir la cuenta registrada que recibió el pago;
+  // depósito/cheque). Preferir la cuenta registrada que recibió el pago;
   // si no hay, caer a los datos bancarios de Configuración (compatibilidad).
   // El crédito NO va aquí: sus cuentas se listan completas al pie (ver abajo).
   const bankAccounts = Array.isArray(cfg.bank_accounts) ? cfg.bank_accounts : [];
@@ -787,7 +826,7 @@ function renderCartaRecibo(sale, cfg, opts) {
     ['Líneas', String((sale.items || []).length)],
     ['Fecha', _fechaCorta(sale.date)],
     ['Artículos', Number.isInteger(totalUnits) ? String(totalUnits) : _n2(totalUnits)],
-    showMoney ? ['Pago', _metodoPagoLabel(method)] : ['Tipo', docWord],
+    showMoney ? ['Pago', _esc(paymentLabel)] : ['Tipo', docWord],
     ['Página', '<span class="a4-cur">1</span>/<span class="a4-tot">1</span>'],
   ];
   const summary = `<div class="summary">${sumItems.map(([k, v]) =>
@@ -796,7 +835,7 @@ function renderCartaRecibo(sale, cfg, opts) {
   const paySummary = showMoney && !isCotizacion ? `
     <div class="legacy-pay">
       <div><b>Representante</b><span>${_esc(sale.cajero || '')}</span></div>
-      <div><b>Forma de pago</b><span>${_esc(_metodoPagoLabel(method))}</span></div>
+      <div><b>Forma de pago</b><span>${_esc(paymentLabel)}</span></div>
       <div><b>Tipo de factura</b><span>${_esc(_tipoFacturacion(sale))}</span></div>
       <div class="lp-wide"><b>Observaciones</b><span>${_esc(sale.notes || 'No aceptamos devoluciones. Cambios solamente antes de 24 horas.')}</span></div>
       <div><b>Número transacción</b><span>${_esc(sale.transaction_number || sale.id || '—')}</span></div>
@@ -1095,7 +1134,7 @@ function renderCartaFormal(sale, cfg, opts) {
       <label>Detalles</label>
       <div>Fecha: <strong>${sale.date}</strong></div>
       <div>Cajero: ${_esc(sale.cajero||'')}</div>
-      <div>Pago: ${(sale.payment_method||'efectivo').toUpperCase()}</div>
+      <div>Pago: ${_esc(_pagoResumenTexto(sale))}</div>
     </div>
   </div>
 
@@ -1204,7 +1243,7 @@ function renderCartaNCF(sale, cfg, opts) {
       <div style="font-size:11px;color:#666">Factura No.</div>
       <div style="font-size:20px;font-weight:700">${facturaLabel(sale)}</div>
       <div>Cajero: ${_esc(sale.cajero||'')}</div>
-      <div>Método: ${(sale.payment_method||'efectivo').toUpperCase()}</div>
+      <div>Método: ${_esc(_pagoResumenTexto(sale))}</div>
     </div>
   </div>
 
@@ -1297,7 +1336,7 @@ function renderMediaCarta(sale, cfg, opts) {
   ${_showNcf(sale, opts) ? `<div style="font-size:9px;color:#555;margin-top:4px">NCF: ${ncf}</div>` : ''}
   ${isCotizacion ? `<div style="font-size:9px;color:#888;font-style:italic;margin-top:2px">Sin valor fiscal</div>` : ''}
   <div style="text-align:center;font-size:9px;color:#666;margin-top:6px">
-    ${sale.payment_method||'EFECTIVO'} · ${opts.mensaje && cfg.receipt_msg && !isCotizacion ? cfg.receipt_msg : 'Gracias por su compra'}
+    ${_esc(_pagoResumenTexto(sale))} · ${opts.mensaje && cfg.receipt_msg && !isCotizacion ? cfg.receipt_msg : 'Gracias por su compra'}
   </div>
 </body></html>`;
 }

@@ -162,14 +162,8 @@ async function _contRenderDash(el) {
         ),
         h('div', { style: { textAlign: 'right', flexShrink: 0 } },
           h('div', { style: { fontSize: '12px', fontWeight: 800, color: 'var(--accent)' } }, fmt(e.total_debit || 0)),
-          h('div', { style: { display: 'flex', gap: '4px', justifyContent: 'flex-end', marginTop: '4px' } },
-            h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '3px 8px' },
-              onclick: () => { _contTab = 'asientos'; renderContabilidad(document.getElementById('page')); } }, 'Ver asiento'),
-            e.status === 'confirmado'
-              ? h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '3px 8px', color: '#ef4444' },
-                  onclick: () => _reverseAjusteInv(e.id) }, 'Anular ajuste')
-              : null
-          )
+          h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '3px 8px', marginTop: '4px' },
+            onclick: () => { _contTab = 'asientos'; renderContabilidad(document.getElementById('page')); } }, 'Ver asiento')
         )
       ));
     });
@@ -385,7 +379,7 @@ async function _reloadAsientos() {
         h('td', null, h('div', { style: { display: 'flex', gap: '4px' } },
           h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '2px 7px' },
             onclick: () => _openVerAsiento(e.id) }, 'Ver'),
-          e.status === 'confirmado'
+          e.status === 'confirmado' && ['manual','ajuste','apertura','cierre'].includes(e.source_module || 'manual')
             ? h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '2px 7px', color: '#ef4444' },
                 onclick: () => _reverseAsiento(e.id) }, 'Anular')
             : null
@@ -470,28 +464,12 @@ window._printAsiento = async function(id) {
   printHTML(html, 'contabilidad');
 };
 
-// Anula un ajuste de valorización de inventario desde el dashboard (crea el
-// asiento de reverso). No toca el costo del producto: si el costo no se
-// revierte también, el cuadre de Inventario (1105) lo va a señalar.
-window._reverseAjusteInv = async function(id) {
-  if (!confirm('¿Anular este ajuste de valorización? Se creará un asiento de reverso. El costo del producto NO se modifica.')) return;
-  const reason = await askText('Razón de la anulación:', { title: 'Anular ajuste', defaultValue: 'Ajuste de costo revertido' });
-  if (!reason || !reason.trim()) return;
-  const res = await window.api.accounting.reverseEntry({ id, reason, requestUserId: user.id });
-  if (res?.ok) {
-    toast('Ajuste anulado y reversión creada', 's');
-    renderContabilidad(document.getElementById('page'));
-  } else {
-    toast(res?.error || 'Error al anular', 'e');
-  }
-};
-
 window._reverseAsiento = async function(id) {
   const reason = await askText('Razón de la anulación:', { title: 'Anular asiento' });
   if (!reason || !reason.trim()) return;
   const res = await window.api.accounting.reverseEntry({ id, reason, requestUserId: user.id });
   if (res?.ok) {
-    toast('Asiento anulado y reversión creada', 's');
+    toast('Asiento anulado', 's');
     closeModal();
     await _reloadAsientos();
   } else {

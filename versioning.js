@@ -1019,6 +1019,116 @@ const MIGRATIONS = [
       addCol('sales', 'financial_account_id', 'INTEGER DEFAULT NULL');
     }
   },
+  {
+    version: '1.21.1',
+    description: 'Contabilidad: sanear reversos técnicos y reconstruir saldos vigentes',
+    run(db) {
+      const hasEntries = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='accounting_entries'"
+      ).get();
+      const hasAccounts = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='accounting_accounts'"
+      ).get();
+      if (!hasEntries || !hasAccounts) return;
+
+      // Versiones anteriores dejaban los reversos como confirmados e incluso
+      // permitían reversar un reverso. Todos son contrapartidas técnicas de
+      // operaciones ya anuladas y no deben actuar como asientos independientes.
+      db.prepare("UPDATE accounting_entries SET status='anulado' WHERE source_module='reverso'").run();
+
+      // El balance cacheado pudo quedar reactivado por cadenas REVERSO:REVERSO.
+      // Se reconstruye desde la única fuente válida: asientos vigentes.
+      db.prepare(`
+        UPDATE accounting_accounts
+        SET balance=COALESCE((
+          SELECT SUM(l.debit-l.credit)
+          FROM accounting_entry_lines l
+          JOIN accounting_entries e ON e.id=l.entry_id
+          WHERE l.account_id=accounting_accounts.id
+            AND e.status='confirmado'
+            AND e.source_module!='reverso'
+        ),0), updated_at=datetime('now')
+      `).run();
+      console.log('[MIGRATION 1.21.1] Reversos saneados y saldos contables reconstruidos');
+    }
+  },
+  {
+    version: '1.21.2',
+    description: 'Contabilidad simple: eliminar asientos de reverso heredados',
+    run(db) {
+      const hasEntries = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='accounting_entries'"
+      ).get();
+      const hasLines = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='accounting_entry_lines'"
+      ).get();
+      const hasAccounts = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='accounting_accounts'"
+      ).get();
+      if (!hasEntries || !hasLines || !hasAccounts) return;
+
+      // Asegurar que todo asiento que alguna vez fue objeto de un reverso quede
+      // anulado antes de retirar las contrapartidas técnicas antiguas.
+      db.prepare(`
+        UPDATE accounting_entries SET status='anulado'
+        WHERE id IN (
+          SELECT reversal_of FROM accounting_entries
+          WHERE source_module='reverso' AND reversal_of IS NOT NULL
+        )
+      `).run();
+
+      // Romper enlaces autorreferenciales, borrar detalle y finalmente cabeceras.
+      db.prepare('UPDATE accounting_entries SET reversed_by=NULL,reversal_of=NULL').run();
+      db.prepare(`DELETE FROM accounting_entry_lines
+                  WHERE entry_id IN (SELECT id FROM accounting_entries WHERE source_module='reverso')`).run();
+      const removed = db.prepare("DELETE FROM accounting_entries WHERE source_module='reverso'").run().changes;
+
+      db.prepare(`
+        UPDATE accounting_accounts
+        SET balance=COALESCE((
+          SELECT SUM(l.debit-l.credit)
+          FROM accounting_entry_lines l
+          JOIN accounting_entries e ON e.id=l.entry_id
+          WHERE l.account_id=accounting_accounts.id AND e.status='confirmado'
+        ),0),updated_at=datetime('now')
+      `).run();
+      console.log(`[MIGRATION 1.21.2] ${removed} reverso(s) eliminado(s); saldos reconstruidos`);
+    }
+  },
+  {
+    version: '1.21.3',
+    description: 'Ventas multimoneda y detalle profesional de pagos con tarjeta',
+    run(db) {
+      const exists = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='sales'"
+      ).get();
+      if (!exists) return;
+      const addCol = (name, definition) => {
+        const cols = db.prepare('PRAGMA table_info(sales)').all().map(c => c.name);
+        if (!cols.includes(name)) db.exec(`ALTER TABLE sales ADD COLUMN ${name} ${definition}`);
+      };
+      addCol('payment_currency', "TEXT DEFAULT 'DOP'");
+      addCol('exchange_rate', 'REAL DEFAULT 1');
+      addCol('account_amount', 'REAL DEFAULT 0');
+      addCol('card_brand', "TEXT DEFAULT ''");
+      addCol('card_last4', "TEXT DEFAULT ''");
+      addCol('payment_reference', "TEXT DEFAULT ''");
+      console.log('[MIGRATION 1.21.3] Moneda y datos de tarjeta agregados a ventas');
+    }
+  },
+  {
+    version: '1.21.4',
+    description: 'Perfiles universales de impresión y soporte 2Connect 2C-LP427B de 108mm/203dpi',
+    run(db) {
+      const insert = db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING');
+      [
+        ['printer_profile', ''], ['printer_width_mm', '80'], ['printer_dpi', '203'],
+        ['barcode_printer_profile', ''], ['barcode_media_width_mm', '100'],
+        ['barcode_printer_dpi', '203'], ['barcode_media_mode', 'gap'],
+      ].forEach(([key, value]) => insert.run(key, value));
+      console.log('[MIGRATION 1.21.4] Perfiles universales de impresión agregados');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

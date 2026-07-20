@@ -1573,6 +1573,19 @@ ipcMain.handle('sales:cancel', async (_, { id, reason, requestUserId }) => {
     if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
       return { ok: false, error: 'Solo el administrador puede anular ventas' };
     }
+    const sale = salesRepo.getById(id);
+    if (!sale) return { ok: false, error: 'Venta no encontrada' };
+
+    // Una nota de crédito no puede anularse con las reglas de una venta normal:
+    // debe retirar el inventario repuesto y restaurar la CxC cuando corresponda.
+    if (sale.type === 'devolucion') {
+      const result = returnsRepo.cancel(id, reason, requestUserId, reqUser.name);
+      _acctHook(() => accountingRepo.reverseSourceEntry(
+        'devolucion', id, requestUserId, 'Devolución anulada: ' + (reason || '')
+      ));
+      return { ok: true, isReturn: true, originalSaleId: result.originalSaleId, overpayment: 0 };
+    }
+
     const cancelResult = salesRepo.cancel(id, reason, requestUserId, reqUser.name);
     // Contabilidad en vivo: reversar el asiento de la venta anulada.
     _acctHook(() => accountingRepo.reverseSourceEntry('venta', id, requestUserId, 'Venta anulada: ' + (reason || '')));
@@ -1758,12 +1771,12 @@ ipcMain.handle('license:revoke', async (_, { requestUserId } = {}) => {
  * - Si se pasa printerName, la preselecciona en el diálogo
  * - Registra el trabajo en print_jobs para auditoría y reimpresión
  */
-async function _attemptPrintHTML({ html, printerName, printerWidth, pageHint }) {
-  // isThermal: solo cuando hay printerName Y printerWidth
-  // carta: printerName sin printerWidth (o sin printerName)
+async function _attemptPrintHTML({ html, printerName, printerWidth, printerHeight, pageHint }) {
+  // isSizedMedia: rollos/etiquetas con tamaño explícito, incluso si se abre el
+  // diálogo del sistema porque aún no hay una impresora seleccionada.
   // Para carta usamos 816px (≈ 8.5" a 96dpi) para que el layout renderice correcto
   // Para térmica 480px es suficiente — papel angosto
-  const isThermal  = !!(printerName && printerWidth);
+  const isThermal  = !!printerWidth;
   const printWin = new BrowserWindow({
     width:  isThermal ? 480 : 816,
     height: isThermal ? 700 : 1056,
@@ -1800,11 +1813,16 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, pageHint }) 
     await new Promise(r => setTimeout(r, isThermal ? 250 : 500));
 
     // Ancho del papel en micrones (printerWidth puede venir "50mm" o número)
+    const toMicrons = (value, fallback) => {
+      if (typeof value === 'string' && value.trim().toLowerCase().endsWith('mm')) {
+        return Math.round(parseFloat(value) * 1000);
+      }
+      if (typeof value === 'number') return value;
+      return parseInt(value, 10) || fallback;
+    };
     let paperWidth = 80000;
     if (printerWidth) {
-      if (typeof printerWidth === 'string' && printerWidth.endsWith('mm')) paperWidth = Math.round(parseFloat(printerWidth) * 1000);
-      else if (typeof printerWidth === 'number') paperWidth = printerWidth;
-      else paperWidth = parseInt(printerWidth) || 80000;
+      paperWidth = toMicrons(printerWidth, 80000);
     }
 
     // Térmica: altura del papel = altura REAL del contenido. Antes se usaba
@@ -1817,6 +1835,7 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, pageHint }) 
       if (px && px > 0) thermalHeight = Math.round(px * 264.583) + 8000;  // +~3mm de margen
     } catch {}
 
+    const fixedHeight = printerHeight ? toMicrons(printerHeight, thermalHeight) : 0;
     const printOptions = {
       // Imprime DIRECTO (sin diálogo) siempre que haya una impresora elegida —
       // aplica tanto a térmica como a carta/láser. El diálogo solo aparece si no
@@ -1824,10 +1843,12 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, pageHint }) 
       silent:          !!printerName,
       printBackground: true,
       margins:         isThermal
-        ? { marginType: 'custom', top: 2, bottom: 2, left: 2, right: 2 }
+        // El HTML ya define sus márgenes en mm. Añadir márgenes del driver aquí
+        // desplaza y recorta especialmente las etiquetas de ancho completo.
+        ? { marginType: 'custom', top: 0, bottom: 0, left: 0, right: 0 }
         : { marginType: 'default' },
       pageSize: isThermal
-        ? { width: paperWidth, height: thermalHeight }
+        ? { width: paperWidth, height: fixedHeight || thermalHeight }
         : pageHint === 'half-letter'
           ? { width: 139700, height: 107950 }
           : 'Letter',
@@ -1849,10 +1870,10 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, pageHint }) 
   }
 }
 
-ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, jobType, referenceId, userId, pageHint }) => {
+ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, printerHeight, jobType, referenceId, userId, pageHint }) => {
   try {
     try {
-      await _attemptPrintHTML({ html, printerName, printerWidth, pageHint });
+      await _attemptPrintHTML({ html, printerName, printerWidth, printerHeight, pageHint });
     } catch (firstErr) {
       // Reintento automático único — solo para impresión silenciosa (térmica),
       // donde un fallo normalmente es un problema transitorio (impresora ocupada
@@ -1861,7 +1882,7 @@ ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, jobTyp
       const wasThermalAttempt = !!(printerName && printerWidth);
       if (!wasThermalAttempt) throw firstErr;
       await new Promise(r => setTimeout(r, 1200));
-      await _attemptPrintHTML({ html, printerName, printerWidth, pageHint });
+      await _attemptPrintHTML({ html, printerName, printerWidth, printerHeight, pageHint });
     }
 
     // Registrar trabajo exitoso en print_jobs
@@ -1899,7 +1920,11 @@ ipcMain.handle('print:onServer', async (_, { html, jobType, referenceId, userId 
   try {
     const printerName  = settingsRepo.get('printer') || undefined;
     const ptype        = settingsRepo.get('printer_type') || '';
-    const printerWidth = ptype === '58mm' ? 58000 : ptype === '80mm' ? 80000 : undefined;
+    const savedWidth   = Number(settingsRepo.get('printer_width_mm')) || 0;
+    const printerWidth = ptype === 'carta' ? undefined
+      : savedWidth ? Math.round(savedWidth * 1000)
+      : ptype === '58mm' ? 58000 : ptype === '72mm' ? 72000
+      : ptype === '108mm' ? 108000 : ptype === '80mm' ? 80000 : undefined;
     await _attemptPrintHTML({ html, printerName, printerWidth });
     if (jobType && referenceId) {
       try {
@@ -5963,9 +5988,12 @@ ipcMain.handle('accounting:createEntry', async (_, { data, requestUserId }) => {
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('accounting:getEntries', async (_, { from, to, type, source_module, status, limit } = {}) => {
+ipcMain.handle('accounting:getEntries', async (_, { from, to, type, source_module, status, includeHistory, limit } = {}) => {
   try {
-    return { ok: true, data: accountingRepo.getEntries({ from, to, source_module: source_module || type, status, limit }) };
+    return { ok: true, data: accountingRepo.getEntries({
+      from, to, source_module: source_module || type, status,
+      includeHistory: includeHistory === true, limit,
+    }) };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
@@ -6242,7 +6270,14 @@ ipcMain.handle('accounting:syncHistorical', async (_, { requestUserId } = {}) =>
         )
     `).all();
     for (const ae of staleEntries) {
-      try { accountingRepo.reverseEntry(ae.id, requestUserId || 0, 'Origen anulado (reconciliación de sincronización)'); reversed++; }
+      try {
+        accountingRepo.reverseEntry(
+          ae.id, requestUserId || 0,
+          'Origen anulado (reconciliación de sincronización)',
+          { allowSystem: true }
+        );
+        reversed++;
+      }
       catch (e) { failed++; console.error(`[accounting:syncHistorical] reversar asiento ${ae.id}: ${e.message}`); }
     }
 

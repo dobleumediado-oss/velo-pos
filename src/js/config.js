@@ -177,7 +177,9 @@ async function renderConfiguracion(el) {
   const pHdr = h('div', { class: 'fxb mb8' });
   pHdr.appendChild(h('div', { class: 'card-title' }, 'Plantillas de Impresión'));
   const pBadge = h('span', { class: 'badge b', style: 'font-size:11px' },
-    printerType==='58mm'?'Térmica 58mm':printerType==='80mm'?'Térmica 80mm':printerType==='carta'?'Carta/A4':'Auto');
+    printerType==='58mm'?'Térmica 58mm':printerType==='72mm'?'Térmica 72mm':
+    printerType==='80mm'?'Térmica 80mm':printerType==='108mm'?'Etiquetas 108mm':
+    printerType==='carta'?'Carta/A4':'Personalizada');
   pHdr.appendChild(pBadge);
   plantCard.appendChild(pHdr);
 
@@ -189,8 +191,10 @@ async function renderConfiguracion(el) {
       <div class="alrt-title">Impresora: ${printerSaved||'No configurada'}</div>
       <div class="alrt-sub">Tipo detectado: ${
         printerType==='58mm'?'Térmica 58mm':
+        printerType==='72mm'?'Térmica 72mm':
         printerType==='80mm'?'Térmica 80mm':
-        printerType==='carta'?'Carta / A4':'No reconocida — usando 80mm por defecto'
+        printerType==='108mm'?'Etiquetas / rollo 108mm':
+        printerType==='carta'?'Carta / A4':'Ancho personalizado'
       }</div>
     </div>`;
   plantCard.appendChild(pAlert);

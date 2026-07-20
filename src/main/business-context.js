@@ -10,8 +10,15 @@ const DEVICE_SETTING_KEYS = new Set([
   'terminal_id',
   'printer',
   'printer_type',
+  'printer_profile',
+  'printer_width_mm',
+  'printer_dpi',
   'print_config',
   'barcode_printer',
+  'barcode_printer_profile',
+  'barcode_media_width_mm',
+  'barcode_printer_dpi',
+  'barcode_media_mode',
 ]);
 
 function isValidBusinessId(bizId) {

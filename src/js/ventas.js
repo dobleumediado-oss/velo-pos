@@ -441,7 +441,10 @@ function renderVentas(el) {
 }
 
 async function refreshVentas(el) {
-  await reloadSales({ range: ventasRange });
+  // La vista de Ventas se resuelve también en BD: excluye facturas anuladas y
+  // cualquier factura que tenga una devolución vigente. Así no depende de un
+  // filtro visual ni de datos que hayan quedado previamente en memoria.
+  await reloadSales({ range: ventasRange, view: 'sales' });
   renderVentasTable();
 }
 
@@ -467,7 +470,10 @@ function renderVentasTable() {
     } else {
       if (s.type === 'cotizacion') return false;
       if (s.type === 'devolucion') return false;
-      if (s.status === 'cancelled') return false;
+      // Una factura anulada, totalmente devuelta o que ya tiene una nota de
+      // crédito pertenece a Devoluciones/Auditoría, no al historial operativo.
+      if (s.status !== 'completed') return false;
+      if (Number(s.has_active_return) === 1) return false;
     }
 
     // Filtro de método (solo facturas)
@@ -669,12 +675,14 @@ function renderVentasTable() {
                   html: `${svg('check')} Convertir`
                 })
               : null,
-            user?.role === 'admin'
+            ['admin','superadmin'].includes(user?.role) &&
+            s.status === 'completed' && s.type !== 'cotizacion'
               ? h('button', {
                   class: 'btn btn-ghost btn-sm',
                   style: { color: 'var(--red)' },
+                  title: 'Anular venta',
                   onclick: () => openAnulacionModal(s),
-                  html: svg('xmark')
+                  html: `${svg('xmark')} Anular`
                 })
               : null
           )
@@ -724,7 +732,7 @@ async function enviarEcf(saleId) {
       closeModal();
 
       // Recargar para reflejar el nuevo ecf_status
-      await reloadSales({ range: ventasRange });
+      await reloadSales({ range: ventasRange, view: 'sales' });
       renderVentasTable();
 
       // Toast de éxito con QR si está disponible
@@ -1020,7 +1028,7 @@ async function confirmarConversionCotizacion() {
     requestUserId: user.id,
   });
 
-	  await reloadSales({ range: 'all' });
+	  await reloadSales({ range: 'all', view: 'sales' });
 	  await reloadProducts();
 	  const convertedSale = await window.api.sales.getById({ id: result.saleId }).catch(() => null);
 	  const convertedItems = convertedSale?.items?.length
@@ -1126,6 +1134,13 @@ async function openDetalleVentaModal(s) {
   }).join('');
 
   const method  = detail.payment_method || detail.pay || '';
+  const cardLast4 = String(detail.card_last4 || '').replace(/\D/g, '').slice(-4);
+  const paymentDetail = method === 'tarjeta'
+    ? `Tarjeta${detail.card_brand ? ' ' + detail.card_brand : ''}${cardLast4 ? ' •••• ' + cardLast4 : ''}`
+    : method;
+  const currencyDetail = String(detail.payment_currency || '').toUpperCase() === 'USD' && Number(detail.account_amount) > 0
+    ? ` · US$${Number(detail.account_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} @ RD$${Number(detail.exchange_rate || 0).toFixed(2)}`
+    : '';
   const fecha   = (detail.created_at || detail.date || '').split('T')[0].split(' ')[0];
   // Legacy/importada sin ITBIS en cabecera: usar el desglose extraído de las
   // líneas (incluido en el precio) para que el modal cuadre con la impresión.
@@ -1176,7 +1191,9 @@ async function openDetalleVentaModal(s) {
       <div>
         <div class="lbl">Comprobante</div>
         <div style="font-weight:600;text-transform:capitalize">${detail.type || 'factura'}</div>
-        <div class="ts">Pago: ${method}</div>
+        <div class="ts">Pago: ${ventasEsc(paymentDetail)}${ventasEsc(currencyDetail)}</div>
+        ${detail.payment_reference
+          ? `<div class="ts">Referencia: ${ventasEsc(detail.payment_reference)}</div>` : ''}
       </div>
     </div>
     ${ecfSection}
@@ -1226,9 +1243,9 @@ async function openDetalleVentaModal(s) {
              ${svg('return')} Devolver
            </button>`
         : ''}
-      ${user?.role === 'admin'
+      ${['admin','superadmin'].includes(user?.role) && s.status === 'completed'
         ? `<button class="btn btn-red" onclick="closeModal();openAnulacionModal(DB.sales.find(x=>x.id===${s.id}))">
-             Anular
+             ${s.type === 'devolucion' ? 'Anular devolución' : 'Anular'}
            </button>`
         : ''}
     </div>
@@ -1247,10 +1264,14 @@ async function openDetalleVentaModal(s) {
 
 // ── Anulación (solo admin) ────────────────────
 function openAnulacionModal(s) {
+  if (!s) { toast('Documento no encontrado', 'err'); return; }
+  const isReturn = s.type === 'devolucion';
   openModal(`
-    <div class="modal-title">Anular Venta #${s.id}</div>
+    <div class="modal-title">Anular ${isReturn ? 'Devolución' : 'Venta'} #${s.id}</div>
     <div class="modal-sub" style="color:var(--red)">
-      Esta acción revierte el inventario y no puede deshacerse.
+      ${isReturn
+        ? 'Se retirará del inventario la mercancía repuesta y se restaurará la cuenta por cobrar cuando corresponda.'
+        : 'Esta acción revierte inventario, caja y contabilidad. El documento dejará de aparecer en Ventas.'}
     </div>
     <div class="fg mt14">
       <label class="lbl">Motivo de anulación *</label>
@@ -1276,14 +1297,18 @@ async function confirmarAnulacion(saleId) {
 
   if (!result.ok) { toast(result.error || 'Error al anular', 'err'); return; }
 
-  await reloadSales({ range: ventasRange });
+  await reloadSales(result.isReturn
+    ? { range: 'all' }
+    : { range: ventasRange, view: 'sales' });
   await reloadProducts();
+  if (result.isReturn) await reloadCustomers();
   closeModal();
-  toast(`✓ Venta #${saleId} anulada`);
+  toast(`✓ ${result.isReturn ? 'Devolución' : 'Venta'} #${saleId} anulada`);
   if (result.overpayment > 0) {
     toast(`⚠ El cliente ya había pagado de más por esta factura — excedente de ${fmt(result.overpayment)} a revisar manualmente (reembolso o crédito)`, 'w');
   }
-  renderVentas(document.getElementById('page'));
+  if (result.isReturn) renderDevoluciones(document.getElementById('page'));
+  else renderVentas(document.getElementById('page'));
 }
 
 // ── Iniciar devolución desde historial ────────
@@ -1505,7 +1530,12 @@ function exportVentasPDF() {
 // ══════════════════════════════════════════════
 // DEVOLUCIONES
 // ══════════════════════════════════════════════
-function renderDevoluciones(el) {
+async function renderDevoluciones(el) {
+  // Devoluciones tiene su propia carga completa. No reutiliza la colección
+  // filtrada de Ventas, porque allí las notas de crédito se excluyen adrede.
+  el.innerHTML = '<div class="empty"><p>Cargando devoluciones...</p></div>';
+  await reloadSales({ range: 'all' });
+  if (page !== 'devoluciones' || !el.isConnected) return;
   el.innerHTML = '';
 
   el.appendChild(h('div', { class: 'sec-hdr' },
@@ -1654,7 +1684,10 @@ async function buscarFacturaDevolucion() {
 
   for (const s of matches) {
     const saleCompleto = await window.api.sales.getById({ id: s.id });
-    const items = saleCompleto?.items || [];
+    const items = (saleCompleto?.items || []).filter(i =>
+      Number(i.returnable_qty ?? i.qty) > 0
+    );
+    if (!items.length) continue;
     const fecha = (s.created_at || '').split('T')[0].split(' ')[0];
 
     const card = h('div', { class: 'card', style: { marginBottom: '8px' } });
@@ -1675,12 +1708,12 @@ async function buscarFacturaDevolucion() {
           h('div', { style: { fontSize: '12px', fontWeight: 600 } },
             item.product_name || item.name),
           h('div', { style: { fontSize: '10px', color: 'var(--muted)' } },
-            `${item.qty} × ${fmt(item.unit_price || item.price)}`)
+            `${item.returnable_qty ?? item.qty} disponible(s) de ${item.qty} · ${fmt(item.unit_price || item.price)} c/u`)
         ),
         h('input', {
           class: 'inp', type: 'number',
           id: `dev-qty-${s.id}-${idx}`,
-          value: item.qty, min: 1, max: item.qty,
+          value: item.returnable_qty ?? item.qty, min: 1, max: item.returnable_qty ?? item.qty,
           style: { width: '56px', padding: '4px 6px', fontSize: '12px', textAlign: 'center' }
         })
       ));
@@ -1713,7 +1746,11 @@ async function procesarDevolucion(originalSale, items) {
           tax_pct:      item.tax_pct,
           tax_amt:      item.tax_amt,
           net_subtotal: item.net_subtotal,
-          qty: Math.min(parseInt(qtyEl?.value) || item.qty, item.qty),
+          original_qty: item.qty,
+          qty: Math.min(
+            parseInt(qtyEl?.value) || (item.returnable_qty ?? item.qty),
+            item.returnable_qty ?? item.qty
+          ),
         });
       }
   });
@@ -1732,11 +1769,22 @@ async function procesarDevolucion(originalSale, items) {
       i.net_subtotal !== null && i.net_subtotal !== undefined
     );
     const totals = hasIncludedTaxSnapshot
-      ? ventasCalcIncludedTotals(returnItems, { type: originalSale.type, discPct: 0 })
+      ? (() => {
+          const subtotal = ventasRound2(returnItems.reduce((sum, i) => {
+            const ratio = i.original_qty ? i.qty / i.original_qty : 0;
+            return sum + (Number(i.net_subtotal) || 0) * ratio;
+          }, 0));
+          const taxAmt = ventasRound2(returnItems.reduce((sum, i) => {
+            const ratio = i.original_qty ? i.qty / i.original_qty : 0;
+            return sum + (Number(i.tax_amt) || 0) * ratio;
+          }, 0));
+          return { subtotal, taxAmt, total: ventasRound2(subtotal + taxAmt) };
+        })()
       : (() => {
-          const subtotalOld = Math.round(returnItems.reduce((a, i) => a + i.unit_price * i.qty, 0) * 100) / 100;
-          const taxOld = Math.round(subtotalOld * (taxPct / 100) * 100) / 100;
-          return { subtotal: subtotalOld, taxAmt: taxOld, total: Math.round((subtotalOld + taxOld) * 100) / 100 };
+          return ventasCalcIncludedTotals(returnItems, {
+            type: originalSale.type,
+            discPct: originalSale.discount_pct || originalSale.disc || 0,
+          });
         })();
     const total = totals.total;
 

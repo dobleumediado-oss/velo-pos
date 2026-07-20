@@ -322,6 +322,13 @@ function createTables() {
       price_mode      TEXT DEFAULT 'retail' CHECK(price_mode IN ('retail','wholesale')),
       cajero          TEXT DEFAULT '',
       user_id         INTEGER REFERENCES users(id),
+      financial_account_id INTEGER DEFAULT NULL,
+      payment_currency TEXT DEFAULT 'DOP',
+      exchange_rate   REAL DEFAULT 1,
+      account_amount  REAL DEFAULT 0,
+      card_brand      TEXT DEFAULT '',
+      card_last4      TEXT DEFAULT '',
+      payment_reference TEXT DEFAULT '',
       notes           TEXT DEFAULT '',
       cancelled_at    TEXT,
       cancel_reason   TEXT DEFAULT '',
@@ -1051,12 +1058,19 @@ function seedIfEmpty() {
     ['fiscal_enabled', '0'],   // 0 = sin RNC/NCF/ITBIS · solo superadmin lo activa
     ['currency',       'RD$'],
     ['printer',        ''],
+    ['printer_profile',''],
+    ['printer_width_mm','80'],
+    ['printer_dpi',    '203'],
     ['receipt_msg',    '¡Gracias por su compra!'],
     ['password_changed','0'],
     ['pos_price_change_password_hash',''],
     ['ncf_counter',    '0'],
     ['barcode_enabled','0'],
     ['barcode_printer',''],
+    ['barcode_printer_profile',''],
+    ['barcode_media_width_mm','100'],
+    ['barcode_printer_dpi','203'],
+    ['barcode_media_mode','gap'],
     ['barcode_design', ''],
     // ── Módulos activables por superadmin ──────────
     ['module_sucursales',      '0'],
@@ -1771,8 +1785,10 @@ const cashRepo = {
       const method = (m.method || 'efectivo').toLowerCase();
       const amt = m.amount || 0;
 
-      // Una venta anulada deja su movimiento original: no debe contar.
-      if (m.type === 'venta' && m.reference_id && cancelledSet.has(m.reference_id)) {
+      // Una venta o devolución anulada deja su movimiento original por trazabilidad,
+      // pero ya no debe afectar el efectivo esperado de la caja.
+      if ((m.type === 'venta' || m.type === 'devolucion') &&
+          m.reference_id && cancelledSet.has(m.reference_id)) {
         continue;
       }
 
@@ -1866,14 +1882,74 @@ const salesRepo = {
         }
       }
 
-      // 4. Crear venta
-      const finAcctId = (type === 'factura' || payment.method === 'credito')
+      // 4. Resolver el instrumento de cobro y la moneda REAL de la cuenta.
+      // La factura conserva DOP como moneda contable/fiscal base; account_amount
+      // es lo que efectivamente entra en la cuenta (p. ej. US$10, no RD$600).
+      const method = payment.method || 'efectivo';
+      const brandMap = {
+        visa: 'Visa', mastercard: 'Mastercard', amex: 'American Express',
+        'american express': 'American Express', discover: 'Discover',
+        diners: 'Diners Club', 'diners club': 'Diners Club',
+        unionpay: 'UnionPay', ath: 'ATH', otra: 'Otra', otro: 'Otra',
+      };
+      const brandKey = String(payment.cardBrand || '').trim().toLowerCase();
+      const cardBrand = method === 'tarjeta' ? (brandMap[brandKey] || 'Otra') : '';
+      const cardLast4 = method === 'tarjeta'
+        ? String(payment.cardLast4 || '').replace(/\D/g, '').slice(-4) : '';
+      const paymentReference = String(payment.reference || '').trim().slice(0, 80);
+
+      let finAcctId = type === 'factura'
         ? (parseInt(payment.financialAccountId) || null) : null;
+
+      // Tarjeta no obliga al cajero a escoger una cuenta bancaria. Si existe una
+      // cuenta tipo Tarjeta en DOP, se enlaza automáticamente, priorizando una que
+      // contenga la marca ("Visa", "Mastercard", etc.) en su nombre/banco.
+      if (type === 'factura' && method === 'tarjeta') {
+        const cardAccounts = db.prepare(
+          "SELECT * FROM financial_accounts WHERE active=1 AND type='tarjeta' AND UPPER(COALESCE(currency,'DOP'))='DOP' ORDER BY id"
+        ).all();
+        const needle = cardBrand.toLowerCase();
+        const autoAccount = cardAccounts.find(a =>
+          `${a.name || ''} ${a.bank_name || ''}`.toLowerCase().includes(needle)
+        ) || cardAccounts[0];
+        finAcctId = autoAccount?.id || null;
+      }
+
+      let account = finAcctId
+        ? db.prepare('SELECT * FROM financial_accounts WHERE id=?').get(finAcctId)
+        : null;
+      if (finAcctId && (!account || !account.active)) {
+        throw new Error('La cuenta que recibe el pago no existe o está inactiva');
+      }
+      if (method === 'transferencia' && account && account.type !== 'banco') {
+        throw new Error('Las transferencias deben recibirse en una cuenta bancaria');
+      }
+
+      const paymentCurrency = account
+        ? String(account.currency || 'DOP').toUpperCase() : 'DOP';
+      if (!['DOP', 'USD'].includes(paymentCurrency)) {
+        throw new Error(`Moneda de cuenta no soportada: ${paymentCurrency}`);
+      }
+      const baseAccountAmount = method === 'mixto'
+        ? round2(payment.mixCard || 0) : (method === 'credito' ? 0 : total);
+      let exchangeRate = 1;
+      let accountAmount = round2(baseAccountAmount);
+      if (paymentCurrency === 'USD' && baseAccountAmount > 0) {
+        exchangeRate = round2(Number.parseFloat(payment.exchangeRate) || 0);
+        if (exchangeRate < 20 || exchangeRate > 500) {
+          throw new Error('Indica una tasa USD válida para acreditar la cuenta en dólares');
+        }
+        accountAmount = round2(baseAccountAmount / exchangeRate);
+      }
+
+      // Crear venta
       const saleR = db.prepare(`
         INSERT INTO sales(cash_session_id,customer_id,customer_name,customer_rnc,
           type,status,subtotal,discount_pct,discount_amt,tax_pct,tax_amt,total,
-          payment_method,price_mode,cajero,user_id,financial_account_id,created_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
+          payment_method,price_mode,cajero,user_id,financial_account_id,
+          payment_currency,exchange_rate,account_amount,card_brand,card_last4,
+          payment_reference,created_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
       `).run(
         session?.id || null,
         customer.id,
@@ -1881,11 +1957,17 @@ const salesRepo = {
         customer.rnc  || '',
         type, 'completed',
         subtotal, discPct, discAmt, taxPct, taxAmt, total,
-        payment.method || 'efectivo',
+        method,
         payment.priceMode || 'retail',
         user.name || '',
         user.id,
-        finAcctId
+        finAcctId,
+        paymentCurrency,
+        exchangeRate,
+        accountAmount,
+        cardBrand,
+        cardLast4,
+        paymentReference
       );
       const saleId = saleR.lastInsertRowid;
 
@@ -1993,15 +2075,17 @@ const salesRepo = {
       // El dinero que entra por transferencia/tarjeta se registra como ingreso en
       // esa cuenta operativa → su balance sube y queda el movimiento trazable.
       // No-fatal: un problema aquí nunca debe abortar una venta ya cobrada.
-      if (finAcctId && payment.method !== 'credito') {
-        let acctAmount = total;
-        if (payment.method === 'mixto') acctAmount = round2(payment.mixCard || 0); // solo la parte no-efectivo
-        if (acctAmount > 0.005) {
+      if (finAcctId && method !== 'credito') {
+        if (accountAmount > 0.005) {
           try {
             financialAccountsRepo.addMovement({
-              accountId: finAcctId, type: 'venta', amount: acctAmount,
-              description: `Venta #${saleId}`, referenceType: 'sale', referenceId: saleId,
-              method: payment.method, userId: user.id,
+              accountId: finAcctId, type: 'venta', amount: accountAmount,
+              description: `Venta #${saleId}${cardBrand ? ` · ${cardBrand}` : ''}`,
+              referenceType: 'sale', referenceId: saleId,
+              method, userId: user.id,
+              notes: paymentCurrency === 'USD'
+                ? `Base RD$${baseAccountAmount.toFixed(2)} · Tasa ${exchangeRate.toFixed(2)}`
+                : paymentReference,
             });
           } catch (e) { console.error('[venta] movimiento a cuenta bancaria:', e.message); }
         }
@@ -2014,9 +2098,14 @@ const salesRepo = {
 
       // 10. Auditoría
       audit(user.id, user.name, 'venta_creada', 'sales', saleId,
-            `Total: ${total} | Método: ${payment.method} | Items: ${items.length}`);
+            `Total: ${total} | Método: ${method} | Moneda cuenta: ${paymentCurrency} | Monto cuenta: ${accountAmount} | Items: ${items.length}`);
 
-      return { saleId, total, subtotal, taxAmt, discAmt, taxPct, ncf };
+      return {
+        saleId, total, subtotal, taxAmt, discAmt, taxPct, ncf,
+        financialAccountId: finAcctId,
+        paymentCurrency, exchangeRate, accountAmount,
+        cardBrand, cardLast4, paymentReference,
+      };
     });
 
     return createSaleTx(); // Si algo falla, revierte TODO
@@ -2025,7 +2114,22 @@ const salesRepo = {
   getById(id) {
     const sale  = db.prepare('SELECT * FROM sales WHERE id=?').get(id);
     if (!sale) return null;
-    sale.items  = db.prepare('SELECT * FROM sale_items WHERE sale_id=?').all(id);
+    sale.items  = db.prepare(`
+      SELECT si.*,
+        COALESCE((
+          SELECT SUM(rsi.qty)
+          FROM sales ret
+          JOIN sale_items rsi ON rsi.sale_id=ret.id
+          WHERE ret.type='devolucion'
+            AND ret.original_sale_id=si.sale_id
+            AND ret.status!='cancelled'
+            AND rsi.product_id=si.product_id
+        ),0) AS returned_qty
+      FROM sale_items si WHERE si.sale_id=?
+    `).all(id).map(item => ({
+      ...item,
+      returnable_qty: Math.max(0, (item.qty || 0) - (item.returned_qty || 0)),
+    }));
     const payments = db.prepare(`
       SELECT id, numero_recibo, amount, method, note, balance_before, balance_after, cajero, created_at
       FROM payments
@@ -2060,9 +2164,22 @@ const salesRepo = {
     return sale;
   },
 
-  getAll({ range = 'today', customerId, method, limit = 200, offset = 0 } = {}) {
+  getAll({ range = 'today', customerId, method, view, limit = 200, offset = 0 } = {}) {
     let where = "WHERE s.status != 'cancelled'";
     const params = [];
+    // Vista estrictamente operativa del módulo Ventas: una factura que ya tiene
+    // cualquier devolución vigente pasa a Devoluciones y deja de formar parte de
+    // este resultado. El filtro vive en BD para que tabla, métricas y exportación
+    // trabajen sobre exactamente el mismo conjunto.
+    if (view === 'sales') {
+      where += ` AND s.status='completed' AND s.type!='devolucion'
+        AND NOT EXISTS (
+          SELECT 1 FROM sales ret
+          WHERE ret.type='devolucion'
+            AND ret.original_sale_id=s.id
+            AND ret.status!='cancelled'
+        )`;
+    }
     // Filtrar SOLO por fecha real, nunca por origen (cajero): una venta
     // importada con fecha del mes cuenta como venta del mes.
     if (range === 'today') {
@@ -2081,6 +2198,12 @@ const salesRepo = {
       SELECT s.*,
              GROUP_CONCAT(si.product_name || ' x' || si.qty, ' | ') as items_summary,
              COALESCE(SUM(si.unit_cost * si.qty), 0) as cost_total,
+             EXISTS(
+               SELECT 1 FROM sales ret
+               WHERE ret.type='devolucion'
+                 AND ret.original_sale_id=s.id
+                 AND ret.status!='cancelled'
+             ) AS has_active_return,
              orig.numero_factura     AS original_numero_factura,
              orig.numero_factura_fmt AS original_numero_factura_fmt
       FROM sales s
@@ -2097,9 +2220,18 @@ const salesRepo = {
    * Cuenta el total de ventas que coinciden con un filtro (sin traer filas).
    * Permite al frontend saber cuántas páginas hay para la paginación real.
    */
-  countAll({ range = 'today', customerId, method } = {}) {
+  countAll({ range = 'today', customerId, method, view } = {}) {
     let where = "WHERE status != 'cancelled'";
     const params = [];
+    if (view === 'sales') {
+      where += ` AND status='completed' AND type!='devolucion'
+        AND NOT EXISTS (
+          SELECT 1 FROM sales ret
+          WHERE ret.type='devolucion'
+            AND ret.original_sale_id=sales.id
+            AND ret.status!='cancelled'
+        )`;
+    }
     // Filtrar SOLO por fecha real, nunca por origen (coherente con getAll).
     if (range === 'today') {
       where += ` AND date(created_at)=date('now','localtime')`;
@@ -2238,18 +2370,16 @@ const salesRepo = {
       // Revertir el ingreso reflejado en la cuenta bancaria/tarjeta (si lo hubo):
       // saca de esa cuenta el mismo monto que entró al vender. No-fatal.
       if (sale.financial_account_id && sale.payment_method !== 'credito') {
-        let acctAmount = sale.total;
-        if (sale.payment_method === 'mixto') {
-          // Solo se reflejó la parte no-efectivo: recuperarla del movimiento original.
-          const mov = db.prepare(
-            "SELECT amount FROM financial_movements WHERE reference_type='sale' AND reference_id=? AND type='venta' AND status='activo'"
-          ).get(id);
-          acctAmount = mov?.amount || 0;
-        }
+        // Recuperar el movimiento original es la fuente más segura: contiene USD
+        // cuando la cuenta es USD y solo la parte no-efectivo cuando fue mixto.
+        const mov = db.prepare(
+          "SELECT amount FROM financial_movements WHERE reference_type='sale' AND reference_id=? AND type='venta' AND status='activo' ORDER BY id DESC LIMIT 1"
+        ).get(id);
+        const acctAmount = mov?.amount || sale.account_amount || sale.total;
         if (acctAmount > 0.005) {
           try {
             financialAccountsRepo.addMovement({
-              accountId: sale.financial_account_id, type: 'ajuste', amount: -acctAmount,
+              accountId: sale.financial_account_id, type: 'retiro', amount: -acctAmount,
               description: `Anulación venta #${id}`, referenceType: 'sale', referenceId: id,
               method: sale.payment_method, userId,
             });
@@ -2749,14 +2879,33 @@ const returnsRepo = {
       const taxPct = original.tax_pct || 0;
       let subtotal, taxAmt, total;
       if (hasIncludedTaxSnapshot) {
-        const totals = calcIncludedTaxTotals(preparedReturnItems, { type: original.type, discPct: 0 });
-        subtotal = totals.subtotal;
-        taxAmt   = totals.taxAmt;
-        total    = totals.total;
+        // Las líneas modernas guardan el neto/ITBIS DESPUÉS del descuento.
+        // Reembolsar por esos snapshots evita devolver el precio completo de una
+        // factura que originalmente tuvo descuento.
+        subtotal = 0;
+        taxAmt = 0;
+        for (const item of preparedReturnItems) {
+          const orig = originalItems.find(oi => oi.product_id === item.product_id);
+          const ratio = orig?.qty ? item.qty / orig.qty : 0;
+          item.net_subtotal = round2((orig?.net_subtotal || 0) * ratio);
+          item.tax_amt = round2((orig?.tax_amt || 0) * ratio);
+          const lineTotal = round2(item.net_subtotal + item.tax_amt);
+          item.unit_price = item.qty ? round2(lineTotal / item.qty) : 0;
+          subtotal += item.net_subtotal;
+          taxAmt += item.tax_amt;
+        }
+        subtotal = round2(subtotal);
+        taxAmt = round2(taxAmt);
+        total = round2(subtotal + taxAmt);
       } else {
-        subtotal = round2(preparedReturnItems.reduce((a, i) => a + i.unit_price * i.qty, 0));
-        taxAmt   = round2(subtotal * (taxPct / 100));
-        total    = round2((subtotal + taxAmt));
+        // Compatibilidad con ventas antiguas sin snapshots por línea.
+        const totals = calcIncludedTaxTotals(preparedReturnItems, {
+          type: original.type,
+          discPct: original.discount_pct || 0,
+        });
+        subtotal = totals.subtotal;
+        taxAmt = totals.taxAmt;
+        total = totals.total;
       }
 
       // 4. Crear venta de tipo 'devolucion'
@@ -2783,6 +2932,22 @@ const returnsRepo = {
         originalSaleId
       );
       const returnId = retR.lastInsertRowid;
+      const returnCurrency = String(original.payment_currency || 'DOP').toUpperCase();
+      const returnRate = returnCurrency === 'USD' ? Number(original.exchange_rate || 0) : 1;
+      const returnAccountAmount = returnCurrency === 'USD' && returnRate > 0
+        ? round2(total / returnRate) : round2(total);
+      db.prepare(`
+        UPDATE sales SET financial_account_id=?,payment_currency=?,exchange_rate=?,
+          account_amount=?,card_brand=?,card_last4=? WHERE id=?
+      `).run(
+        original.financial_account_id || null,
+        returnCurrency,
+        returnRate || 1,
+        original.financial_account_id ? returnAccountAmount : 0,
+        original.card_brand || '',
+        original.card_last4 || '',
+        returnId
+      );
 
       // 5. Insertar items de la devolución y reponer stock
       for (const item of preparedReturnItems) {
@@ -2825,6 +2990,23 @@ const returnsRepo = {
           method: 'efectivo',
           referenceId: returnId,
           description: `Devolución venta #${originalSaleId}`,
+          userId: user.id,
+        });
+      }
+
+      // Si el cobro original entró a una cuenta financiera, el reembolso sale de
+      // la misma cuenta y en su misma moneda. Para USD se conserva la tasa histórica.
+      if (original.financial_account_id && original.payment_method !== 'credito' && returnAccountAmount > 0.005) {
+        financialAccountsRepo.addMovement({
+          accountId: original.financial_account_id,
+          type: 'retiro',
+          amount: -returnAccountAmount,
+          description: `Devolución #${returnId} · Venta #${originalSaleId}`,
+          referenceType: 'return',
+          referenceId: returnId,
+          method: original.payment_method,
+          notes: returnCurrency === 'USD'
+            ? `Reembolso base RD$${total.toFixed(2)} · Tasa ${returnRate.toFixed(2)}` : '',
           userId: user.id,
         });
       }
@@ -2881,6 +3063,102 @@ const returnsRepo = {
     });
 
     return createReturnTx();
+  },
+
+  /**
+   * Anula una devolución sin tratarla como una venta ordinaria.
+   * La nota de crédito permanece solo como rastro de auditoría y deja de aparecer
+   * en los listados operativos. Se deshacen inventario y CxC en una transacción.
+   */
+  cancel(returnId, reason, userId, userName) {
+    if (!reason?.trim()) throw new Error('El motivo de anulación es obligatorio');
+
+    return db.transaction(() => {
+      const ret = db.prepare('SELECT * FROM sales WHERE id=?').get(returnId);
+      if (!ret) throw new Error('Devolución no encontrada');
+      if (ret.type !== 'devolucion') throw new Error('El documento indicado no es una devolución');
+      if (ret.status === 'cancelled') throw new Error('La devolución ya está anulada');
+
+      const original = db.prepare('SELECT * FROM sales WHERE id=?').get(ret.original_sale_id);
+      if (!original) throw new Error('La venta original de la devolución no existe');
+
+      const items = db.prepare('SELECT * FROM sale_items WHERE sale_id=?').all(returnId);
+      for (const item of items) {
+        const product = db.prepare('SELECT stock,name FROM products WHERE id=?').get(item.product_id);
+        if (!product) throw new Error(`Producto ID ${item.product_id} no existe`);
+        if ((product.stock || 0) < (item.qty || 0)) {
+          throw new Error(
+            `No se puede anular: el inventario de "${product.name}" ya fue utilizado. ` +
+            `Disponible: ${product.stock || 0}; requerido: ${item.qty || 0}.`
+          );
+        }
+      }
+
+      // La devolución repuso existencias; al anularla se retiran nuevamente.
+      for (const item of items) {
+        productsRepo.adjustStock(
+          item.product_id, -item.qty, 'salida',
+          `Anulación devolución #${returnId} de venta #${ret.original_sale_id}`,
+          returnId, userId
+        );
+      }
+
+      // Restaurar la cuenta por cobrar que había reducido la devolución.
+      if (original.payment_method === 'credito' && original.customer_id !== 1) {
+        db.prepare(`UPDATE customers SET balance=balance+?,updated_at=datetime('now') WHERE id=?`)
+          .run(ret.total || 0, original.customer_id);
+      }
+
+      // Reponer en la cuenta el monto que había salido al efectuar la devolución.
+      if (ret.financial_account_id && ret.payment_method !== 'credito') {
+        const refundMov = db.prepare(
+          "SELECT amount FROM financial_movements WHERE reference_type='return' AND reference_id=? AND status='activo' ORDER BY id DESC LIMIT 1"
+        ).get(returnId);
+        const refundAmount = refundMov?.amount || ret.account_amount || 0;
+        if (refundAmount > 0.005) {
+          financialAccountsRepo.addMovement({
+            accountId: ret.financial_account_id,
+            type: 'deposito',
+            amount: refundAmount,
+            description: `Anulación devolución #${returnId}`,
+            referenceType: 'return_cancel',
+            referenceId: returnId,
+            method: ret.payment_method,
+            notes: 'Restauración del reembolso anulado',
+            userId,
+          });
+        }
+      }
+
+      db.prepare(`UPDATE sales SET status='cancelled',cancelled_at=datetime('now'),cancel_reason=? WHERE id=?`)
+        .run(reason.trim(), returnId);
+
+      // Recalcular si la factura original sigue totalmente devuelta por otras notas
+      // de crédito vigentes. Si no, vuelve a estar disponible en Devoluciones.
+      const originalItems = db.prepare('SELECT product_id,qty FROM sale_items WHERE sale_id=?').all(original.id);
+      const activeReturned = db.prepare(`
+        SELECT si.product_id,COALESCE(SUM(si.qty),0) qty
+        FROM sales s JOIN sale_items si ON si.sale_id=s.id
+        WHERE s.type='devolucion' AND s.original_sale_id=? AND s.status!='cancelled'
+        GROUP BY si.product_id
+      `).all(original.id);
+      const returnedByProduct = new Map(activeReturned.map(r => [r.product_id, r.qty || 0]));
+      const stillFullyReturned = originalItems.length > 0 && originalItems.every(i =>
+        (returnedByProduct.get(i.product_id) || 0) >= i.qty
+      );
+      db.prepare('UPDATE sales SET status=? WHERE id=?')
+        .run(stillFullyReturned ? 'returned' : 'completed', original.id);
+
+      if (ret.ncf && String(ret.ncf).trim()) {
+        db.prepare(`UPDATE ncf_log SET status='anulado',voided_at=datetime('now')
+                    WHERE sale_id=? AND ncf=? AND status!='anulado'`)
+          .run(returnId, String(ret.ncf).trim());
+      }
+
+      audit(userId, userName, 'devolucion_anulada', 'sales', returnId,
+        `Venta original #${original.id} | Motivo: ${reason.trim()}`);
+      return { ok: true, originalSaleId: original.id };
+    })();
   },
 };
 
@@ -4113,14 +4391,29 @@ const accountingRepo = {
 
   createEntry({ date, concept, reference, source_module, source_id, lines, notes, userId, status }) {
     return db.transaction(() => {
+      if (!String(concept || '').trim()) throw new Error('El concepto del asiento es obligatorio');
       if (!lines || lines.length < 2) throw new Error('El asiento debe tener al menos 2 líneas');
-      const totalDebit  = lines.reduce((s, l) => s + (parseFloat(l.debit)  || 0), 0);
-      const totalCredit = lines.reduce((s, l) => s + (parseFloat(l.credit) || 0), 0);
+      const entryDate = date || new Date().toISOString().split('T')[0];
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(entryDate).slice(0, 10))) {
+        throw new Error('La fecha del asiento debe tener formato YYYY-MM-DD');
+      }
+      const normalizedLines = lines.map((line, index) => {
+        const debit = round2(Number.parseFloat(line.debit) || 0);
+        const credit = round2(Number.parseFloat(line.credit) || 0);
+        if (debit < 0 || credit < 0) {
+          throw new Error(`Línea ${index + 1}: débito y crédito no pueden ser negativos`);
+        }
+        if ((debit > 0 && credit > 0) || (debit === 0 && credit === 0)) {
+          throw new Error(`Línea ${index + 1}: indique débito o crédito, pero no ambos`);
+        }
+        return { ...line, debit, credit };
+      });
+      const totalDebit  = round2(normalizedLines.reduce((s, l) => s + l.debit, 0));
+      const totalCredit = round2(normalizedLines.reduce((s, l) => s + l.credit, 0));
       if (Math.abs(totalDebit - totalCredit) > 0.01) {
         throw new Error(`Asiento descuadrado: Débito=${totalDebit.toFixed(2)} ≠ Crédito=${totalCredit.toFixed(2)}`);
       }
       // Bloqueo de período: no se postea en un período contable cerrado.
-      const entryDate = date || new Date().toISOString().split('T')[0];
       if (this.isDateLocked(entryDate)) {
         throw new Error(`El período contable de ${entryDate} está cerrado — no se pueden postear asientos en esa fecha.`);
       }
@@ -4130,30 +4423,37 @@ const accountingRepo = {
         INSERT INTO accounting_entries(number,date,concept,reference,source_module,source_id,
           total_debit,total_credit,status,notes,user_id)
         VALUES(?,?,?,?,?,?,?,?,?,?,?)
-      `).run(number, date||new Date().toISOString().split('T')[0], concept, reference||'',
+      `).run(number, String(entryDate).slice(0, 10), String(concept).trim(), reference||'',
              source_module||'', source_id||null, totalDebit, totalCredit,
              entryStatus, notes||'', userId||null);
       const entryId = r.lastInsertRowid;
-      for (const line of lines) {
-        const acc = db.prepare('SELECT id,active FROM accounting_accounts WHERE id=?').get(line.account_id);
+      for (const line of normalizedLines) {
+        const acc = db.prepare('SELECT id,active,is_summary FROM accounting_accounts WHERE id=?').get(line.account_id);
         if (!acc) throw new Error(`Cuenta ID ${line.account_id} no existe`);
         if (!acc.active) throw new Error(`La cuenta ${line.account_id} está inactiva`);
+        if (acc.is_summary) throw new Error(`La cuenta ${line.account_id} es de resumen y no admite movimientos`);
         db.prepare(`INSERT INTO accounting_entry_lines(entry_id,account_id,description,debit,credit,reference)
           VALUES(?,?,?,?,?,?)`).run(entryId, line.account_id, line.description||'',
-          parseFloat(line.debit)||0, parseFloat(line.credit)||0, line.reference||'');
-        // Actualizar saldo de cuenta
-        const netChange = (parseFloat(line.debit)||0) - (parseFloat(line.credit)||0);
-        db.prepare(`UPDATE accounting_accounts SET balance=balance+?,updated_at=datetime('now') WHERE id=?`)
-          .run(netChange, line.account_id);
+          line.debit, line.credit, line.reference||'');
+        // Solo un asiento confirmado afecta saldos. Los borradores existen para
+        // preparación/revisión, no forman parte de la contabilidad vigente.
+        if (entryStatus === 'confirmado') {
+          const netChange = line.debit - line.credit;
+          db.prepare(`UPDATE accounting_accounts SET balance=balance+?,updated_at=datetime('now') WHERE id=?`)
+            .run(netChange, line.account_id);
+        }
       }
       return { entryId, number, totalDebit, totalCredit };
     })();
   },
 
-  getEntries({ from, to, source_module, status, limit = 200 } = {}) {
+  getEntries({ from, to, source_module, status, includeHistory = false, limit = 200 } = {}) {
     let q = `SELECT e.*, u.name as user_name FROM accounting_entries e
       LEFT JOIN users u ON e.user_id=u.id WHERE 1=1`;
     const params = [];
+    // La pantalla operativa solo muestra asientos vigentes. Los originales
+    // anulados quedan fuera de la lista; el motivo permanece en Auditoría.
+    if (!includeHistory) q += " AND e.status!='anulado' AND e.source_module!='reverso'";
     if (from)          { q += ' AND e.date>=?'; params.push(from); }
     if (to)            { q += ' AND e.date<=?'; params.push(to); }
     if (source_module) { q += ' AND e.source_module=?'; params.push(source_module); }
@@ -4173,49 +4473,39 @@ const accountingRepo = {
     return entry;
   },
 
-  reverseEntry(entryId, userId, reason) {
+  reverseEntry(entryId, userId, reason, { allowSystem = false } = {}) {
     return db.transaction(() => {
       const original = this.getEntryById(entryId);
       if (!original) throw new Error('Asiento no encontrado');
       if (original.status === 'anulado') throw new Error('El asiento ya está anulado');
+      if (original.source_module === 'reverso' || original.reversal_of) {
+        throw new Error('Un asiento de reversión no puede volver a anularse');
+      }
+      const manualSources = new Set(['manual', 'ajuste', 'apertura', 'cierre']);
+      if (!allowSystem && !manualSources.has(original.source_module || 'manual')) {
+        throw new Error(
+          'Este asiento fue generado automáticamente. Anule la operación desde su módulo de origen.'
+        );
+      }
       if (!reason?.trim()) throw new Error('El motivo de anulación es obligatorio');
 
-      // Crear asiento de reverso
-      const reversalLines = original.lines.map(l => ({
-        account_id:  l.account_id,
-        description: `Reverso: ${l.description}`,
-        debit:       l.credit,
-        credit:      l.debit,
-        reference:   original.number,
-      }));
+      // El cliente no usa asientos de reverso visibles. Retirar el efecto del
+      // asiento original directamente mantiene el catálogo cuadrado sin crear
+      // otra fila contable llamada "REVERSO". Todo ocurre en esta transacción.
+      if (original.status === 'confirmado') {
+        for (const line of original.lines) {
+          const netChange = (Number(line.debit) || 0) - (Number(line.credit) || 0);
+          db.prepare(`UPDATE accounting_accounts
+            SET balance=balance-?,updated_at=datetime('now') WHERE id=?`)
+            .run(netChange, line.account_id);
+        }
+      }
 
-      const reversal = this.createEntry({
-        date:          new Date().toISOString().split('T')[0],
-        concept:       `REVERSO: ${original.concept}`,
-        reference:     original.number,
-        source_module: 'reverso',
-        source_id:     original.id,
-        lines:         reversalLines,
-        notes:         reason,
-        userId,
-        status:        'confirmado',
-      });
-
-      // Marcar original como anulado
-      db.prepare(`UPDATE accounting_entries SET status='anulado',reversed_by=?,
-        updated_at=datetime('now') WHERE id=?`).run(reversal.entryId, entryId);
-      db.prepare(`UPDATE accounting_entries SET reversal_of=? WHERE id=?`)
-        .run(entryId, reversal.entryId);
-
-      // NOTA: no revertir aquí los saldos manualmente. El asiento de reverso creado
-      // arriba con createEntry() ya invierte débito/crédito y ajusta
-      // accounting_accounts.balance por cada línea. Un segundo ajuste manual duplicaba
-      // la reversión y descuadraba la columna de saldo cacheada (los estados —balanza y
-      // balance general— recalculan desde las líneas, por eso no se veía en esos reportes,
-      // pero la lista de cuentas sí mostraba saldos erróneos tras cada anulación).
+      db.prepare(`UPDATE accounting_entries SET status='anulado',reversed_by=NULL,
+        reversal_of=NULL,updated_at=datetime('now') WHERE id=?`).run(entryId);
 
       audit(userId, '', 'asiento_anulado', 'accounting_entries', entryId, reason);
-      return { ok: true, reversalId: reversal.entryId, reversalNumber: reversal.number };
+      return { ok: true, entryId, number: original.number };
     })();
   },
 
@@ -4226,7 +4516,7 @@ const accountingRepo = {
       FROM accounting_entry_lines l
       JOIN accounting_entries e ON l.entry_id=e.id
       JOIN accounting_accounts a ON l.account_id=a.id
-      WHERE e.status IN ('confirmado','anulado')`;
+      WHERE e.status='confirmado' AND e.source_module!='reverso'`;
     const params = [];
     if (accountId) { q += ' AND l.account_id=?'; params.push(accountId); }
     if (from)      { q += ' AND e.date>=?'; params.push(from); }
@@ -4237,20 +4527,20 @@ const accountingRepo = {
 
   // ── Balance de comprobación ───────────────
   getTrialBalance({ from, to } = {}) {
+    const dateSql = `${from ? ' AND e.date>=?' : ''}${to ? ' AND e.date<=?' : ''}`;
+    const dateParams = [...(from ? [from] : []), ...(to ? [to] : [])];
     const accounts = db.prepare(`SELECT a.*,
       COALESCE((SELECT SUM(l.debit)  FROM accounting_entry_lines l
         JOIN accounting_entries e ON l.entry_id=e.id
-        WHERE l.account_id=a.id AND e.status IN ('confirmado','anulado')
-        ${from ? "AND e.date>='"+from+"'" : ''}
-        ${to   ? "AND e.date<='"+to+"'"   : ''}),0) as period_debit,
+        WHERE l.account_id=a.id AND e.status='confirmado' AND e.source_module!='reverso'
+        ${dateSql}),0) as period_debit,
       COALESCE((SELECT SUM(l.credit) FROM accounting_entry_lines l
         JOIN accounting_entries e ON l.entry_id=e.id
-        WHERE l.account_id=a.id AND e.status IN ('confirmado','anulado')
-        ${from ? "AND e.date>='"+from+"'" : ''}
-        ${to   ? "AND e.date<='"+to+"'"   : ''}),0) as period_credit
+        WHERE l.account_id=a.id AND e.status='confirmado' AND e.source_module!='reverso'
+        ${dateSql}),0) as period_credit
       FROM accounting_accounts a
       WHERE a.active=1 AND a.is_summary=0
-      ORDER BY a.code`).all();
+      ORDER BY a.code`).all(...dateParams, ...dateParams);
 
     return accounts.map(a => ({
       ...a,
@@ -4269,7 +4559,7 @@ const accountingRepo = {
         FROM accounting_entry_lines l
         JOIN accounting_entries e ON l.entry_id=e.id
         JOIN accounting_accounts a ON l.account_id=a.id
-        WHERE e.status IN ('confirmado','anulado') AND a.active=1 AND a.is_summary=0
+        WHERE e.status='confirmado' AND e.source_module!='reverso' AND a.active=1 AND a.is_summary=0
           AND a.type IN (${types.map(()=>'?').join(',')})
           ${from ? `AND e.date>=?` : ''}
           ${to   ? `AND e.date<=?` : ''}
@@ -4304,7 +4594,7 @@ const accountingRepo = {
         FROM accounting_entry_lines l
         JOIN accounting_entries e ON l.entry_id=e.id
         JOIN accounting_accounts a ON l.account_id=a.id
-        WHERE e.status IN ('confirmado','anulado') AND a.active=1 AND a.is_summary=0
+        WHERE e.status='confirmado' AND e.source_module!='reverso' AND a.active=1 AND a.is_summary=0
           AND a.type IN (${types.map(()=>'?').join(',')})
           ${to ? 'AND e.date<=?' : ''}
         GROUP BY a.id ORDER BY a.code
@@ -4342,14 +4632,14 @@ const accountingRepo = {
     const beginningCash = from ? r2(db.prepare(`
       SELECT COALESCE(SUM(l.debit-l.credit),0) v FROM accounting_entry_lines l
       JOIN accounting_entries e ON l.entry_id=e.id
-      WHERE e.status IN ('confirmado','anulado') AND l.account_id IN (${ph}) AND e.date < ?`).get(...cashIds, from).v) : 0;
+      WHERE e.status='confirmado' AND e.source_module!='reverso' AND l.account_id IN (${ph}) AND e.date < ?`).get(...cashIds, from).v) : 0;
 
     const rows = db.prepare(`
       SELECT e.id, e.date, e.concept, e.source_module,
         COALESCE(SUM(CASE WHEN l.account_id IN (${ph}) THEN l.debit-l.credit ELSE 0 END),0) as cash_delta
       FROM accounting_entries e
       JOIN accounting_entry_lines l ON l.entry_id=e.id
-      WHERE e.status IN ('confirmado','anulado')
+      WHERE e.status='confirmado' AND e.source_module!='reverso'
         ${from ? 'AND e.date>=?' : ''} ${to ? 'AND e.date<=?' : ''}
       GROUP BY e.id HAVING cash_delta != 0
       ORDER BY e.date ASC, e.id ASC`).all(...cashIds, ...(from ? [from] : []), ...(to ? [to] : []));
@@ -4563,7 +4853,7 @@ const accountingRepo = {
         "SELECT id FROM accounting_entries WHERE source_module=? AND source_id=? AND status='confirmado'"
       ).get(sourceModule, sourceId);
       if (!entry) return null;
-      return this.reverseEntry(entry.id, userId || null, reason || 'Origen anulado');
+      return this.reverseEntry(entry.id, userId || null, reason || 'Origen anulado', { allowSystem: true });
     } catch (e) {
       console.error('[accounting] reverseSourceEntry:', e.message);
       return null;
@@ -4582,7 +4872,7 @@ const accountingRepo = {
       ).all(sourceModule, sourceId);
       let n = 0;
       for (const e of entries) {
-        try { this.reverseEntry(e.id, userId || null, reason || 'Origen anulado'); n++; }
+        try { this.reverseEntry(e.id, userId || null, reason || 'Origen anulado', { allowSystem: true }); n++; }
         catch (err) { console.error('[accounting] reverseSourceEntries:', err.message); }
       }
       return n;
@@ -4977,7 +5267,7 @@ const accountingRepo = {
       if (!acc) return 0;
       const r = db.prepare(`SELECT COALESCE(SUM(l.debit-l.credit),0) as v
         FROM accounting_entry_lines l JOIN accounting_entries e ON l.entry_id=e.id
-        WHERE l.account_id=? AND e.status IN ('confirmado','anulado')`).get(acc.id);
+        WHERE l.account_id=? AND e.status='confirmado' AND e.source_module!='reverso'`).get(acc.id);
       return r.v || 0;
     };
 
