@@ -537,6 +537,69 @@ async function renderConfiguracion(el) {
     </div>` : ''}`;
   colLeft.appendChild(bizCard);
 
+  // ── Combustibles del banner (topbar) ─────────────────────────────────────
+  // Permite elegir CUÁLES combustibles se muestran en la barra superior. Cada
+  // uno seleccionado agrega su propio chip (dos o más precios lado a lado).
+  const fuelDefs = (typeof _BANNER_FUELS !== 'undefined') ? _BANNER_FUELS : [];
+  const fuelLabel = (typeof _BANNER_FUEL_LABEL !== 'undefined') ? _BANNER_FUEL_LABEL : {};
+  if (fuelDefs.length) {
+    let selected;
+    try { selected = JSON.parse(settings.banner_fuels || '[]'); } catch { selected = []; }
+    if (!Array.isArray(selected)) selected = [];
+    // Sin configuración previa: reflejar el default histórico (el que el banner
+    // mostraba con localStorage), para que el estado inicial no se vea vacío.
+    if (!selected.length) {
+      const legacy = (() => { try { return localStorage.getItem('vp_banner_fuel'); } catch { return null; } })();
+      selected = [legacy && fuelDefs.includes(legacy) ? legacy : 'premium'];
+    }
+
+    const fuelCard = h('div', { class: 'card', style: 'margin-top:16px' });
+    fuelCard.appendChild(h('div', { class: 'card-title mb8' }, '⛽ Combustibles en la barra superior'));
+    fuelCard.appendChild(h('div', { style: 'font-size:11px;color:var(--muted2);margin-bottom:12px' },
+      'Marca los combustibles que quieres ver en el banner del topbar. Cada uno muestra su propio precio (RD$/galón) al lado del dólar. Puedes elegir varios.'));
+
+    const grid = h('div', { style: 'display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px' });
+    const saveFuels = async (arr) => {
+      const val = JSON.stringify(arr);
+      const r = await window.api.settings.set({ key: 'banner_fuels', value: val, requestUserId: user?.id });
+      if (r && !r.ok) { toast(r.error || 'Sin permisos', 'e'); return false; }
+      CFG.banner_fuels = val;
+      if (typeof _renderTopbarRates === 'function') _renderTopbarRates();
+      return true;
+    };
+
+    fuelDefs.forEach(g => {
+      const id = `cfg-fuel-${g}`;
+      const row = h('label', { for: id,
+        style: 'display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line2);border-radius:8px;cursor:pointer;font-size:12px' },
+        h('input', { type: 'checkbox', id, checked: selected.includes(g) ? 'checked' : undefined,
+          onchange: async (e) => {
+            let cur;
+            try { cur = JSON.parse(CFG.banner_fuels || '[]'); } catch { cur = []; }
+            if (!Array.isArray(cur)) cur = [];
+            // Si aún no hay config, partir del estado que se muestra en pantalla.
+            if (!cur.length) cur = fuelDefs.filter(x => document.getElementById(`cfg-fuel-${x}`)?.checked && x !== g);
+            if (e.target.checked) { if (!cur.includes(g)) cur.push(g); }
+            else cur = cur.filter(x => x !== g);
+            if (!cur.length) {
+              // No dejar el banner sin ningún combustible: revertir el desmarque.
+              e.target.checked = true;
+              toast('Debe quedar al menos un combustible', 'w');
+              return;
+            }
+            // Mantener el orden canónico de _BANNER_FUELS.
+            const ordered = fuelDefs.filter(x => cur.includes(x));
+            await saveFuels(ordered);
+          } }),
+        h('span', null, fuelLabel[g] || g));
+      grid.appendChild(row);
+    });
+    fuelCard.appendChild(grid);
+    fuelCard.appendChild(h('div', { style: 'font-size:10px;color:var(--muted2);margin-top:10px' },
+      'Los precios provienen del servicio oficial (MICM) y se actualizan solos. Un combustible sin precio disponible esa semana simplemente no aparece.'));
+    colLeft.appendChild(fuelCard);
+  }
+
   // ── NCF Avanzado (cuando módulo activo) ──────
   if (CFG.module_ncf_avanzado === '1' && isSA) {
     const ncfCard = h('div', { class: 'card', style: 'margin-top:16px' });

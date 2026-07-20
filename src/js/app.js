@@ -893,21 +893,34 @@ function _renderTopbarRates() {
       </div>`);
   }
 
-  // ── Combustible elegido (clic = cambiar) ──
-  let grade = localStorage.getItem('vp_banner_fuel') || 'premium';
-  if (!d.fuel?.[grade]) grade = _BANNER_FUELS.find(g => d.fuel?.[g]) || null;
-  if (grade && d.fuel[grade]) {
+  // ── Combustibles a mostrar ──
+  // Fuente: setting banner_fuels (JSON array), configurable desde Configuración
+  // → un chip por combustible seleccionado, mostrados lado a lado. Si no hay
+  // configuración todavía, se cae al modo legacy: un solo chip (localStorage,
+  // clic para rotar). Se filtra a los que realmente traen precio.
+  const grades = _bannerSelectedFuels().filter(g => d.fuel?.[g]);
+  const legacyMode = grades.length === 0;
+  let showGrades = grades;
+  if (legacyMode) {
+    let g = localStorage.getItem('vp_banner_fuel') || 'premium';
+    if (!d.fuel?.[g]) g = _BANNER_FUELS.find(x => d.fuel?.[x]) || null;
+    showGrades = g ? [g] : [];
+  }
+
+  showGrades.forEach((grade, i) => {
     const f = d.fuel[grade];
+    if (!f) return;
+    const clickable = legacyMode; // en modo legacy el chip rota; configurado no
     parts.push(`
-      <div id="tb-rate-fuel" style="${chipStyle};cursor:pointer" title="Clic para cambiar de combustible (RD$/galón)">
+      <div ${clickable ? 'id="tb-rate-fuel"' : `data-fuel-chip="${grade}"`} style="${chipStyle}${clickable ? ';cursor:pointer' : ''}" title="${clickable ? 'Clic para cambiar de combustible · ' : ''}RD$/galón">
         <div style="font-size:9px;font-weight:700;color:var(--muted2);letter-spacing:.04em">⛽ ${_BANNER_FUEL_LABEL[grade] || grade}</div>
         <div style="color:var(--ink)"><b>RD$${_bannerNum(f.value)}</b>${_bannerArrow(f.delta)}</div>
       </div>`);
-  }
+  });
 
   wrap.innerHTML = parts.join('');
 
-  // Clic en el chip de combustible → rotar al siguiente disponible
+  // Modo legacy: clic en el chip único → rotar al siguiente disponible
   document.getElementById('tb-rate-fuel')?.addEventListener('click', () => {
     const avail = _BANNER_FUELS.filter(g => _ratesData?.fuel?.[g]);
     if (!avail.length) return;
@@ -916,6 +929,17 @@ function _renderTopbarRates() {
     localStorage.setItem('vp_banner_fuel', next);
     _renderTopbarRates();
   });
+}
+
+// Combustibles elegidos para el banner (desde el setting banner_fuels). Devuelve
+// [] si no hay configuración → el render usa el modo legacy de un solo chip.
+function _bannerSelectedFuels() {
+  try {
+    const raw = (typeof CFG !== 'undefined' && CFG.banner_fuels) || '';
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter(g => _BANNER_FUELS.includes(g)) : [];
+  } catch { return []; }
 }
 
 async function _fetchTopbarRates() {

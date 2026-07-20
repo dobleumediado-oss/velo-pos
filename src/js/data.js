@@ -19,6 +19,7 @@ const DB = {
   caja:      [],
   payments:  [],
   settings:  {},
+  financialAccounts: [],
   activeBusiness: null,
   // Alias para compatibilidad con módulos viejos
   get clients() { return this.customers; },
@@ -146,6 +147,9 @@ async function loadAppData() {
       CFG.activeBusinessId     = DB.activeBusiness?.id || '';
       CFG.activeBusinessName   = DB.activeBusiness?.name || (CFG.activeBusinessId ? CFG.biz : '');
       CFG.connectionMode       = settings.connection_mode || CFG.connectionMode || 'local';
+      // Combustibles a mostrar en el banner del topbar (JSON array de grados).
+      // Vacío/ausente → el banner cae al default (premium) y su localStorage.
+      CFG.banner_fuels         = settings.banner_fuels || '';
 
       // Permisos por rol — qué roles pueden acceder a cada módulo
       CFG.module_gastos_roles        = settings.module_gastos_roles        || 'admin';
@@ -182,6 +186,7 @@ async function loadAppData() {
     // Fase 2 también: ventas de hoy y categorías
     reloadSales({ range: 'today' }).catch(() => {});
     reloadCategories().catch(() => {});
+    reloadFinancialAccounts().catch(() => {});
 
     // Datos que SÍ esperamos al inicio (ya los tenemos de Fase 1)
     const customers = [];
@@ -208,6 +213,16 @@ async function loadAppData() {
 
 async function reloadProducts() {
   DB.products = await window.api.products.getAll() || [];
+}
+
+// Cuentas financieras (Bancos y Cuentas) — cacheadas para el cobro (selección de
+// cuenta en transferencia) y para la plantilla A4 (datos bancarios en factura).
+async function reloadFinancialAccounts() {
+  try {
+    const r = await window.api.financial?.getAll?.();
+    DB.financialAccounts = (r?.ok ? r.data : (Array.isArray(r) ? r : [])) || [];
+  } catch { DB.financialAccounts = DB.financialAccounts || []; }
+  return DB.financialAccounts;
 }
 
 async function reloadCustomers() {
