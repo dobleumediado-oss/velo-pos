@@ -1000,6 +1000,25 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.17.9] Historial de precios enlazado a contabilidad');
     }
   },
+  {
+    version: '1.21.0',
+    description: 'Cuentas bancarias: subtipo (Ahorros/Corriente) + enlace venta↔cuenta financiera',
+    run(db) {
+      // Aditiva e idempotente (guard por PRAGMA). Corre después de que existen
+      // financial_accounts (migración 1.6.0) y sales (createTables).
+      const addCol = (table, col, def) => {
+        const exists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table);
+        if (!exists) return;
+        const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+        if (!cols.includes(col)) {
+          db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+          console.log(`[MIGRATION 1.21.0] ${table}.${col} agregada`);
+        }
+      };
+      addCol('financial_accounts', 'account_subtype', "TEXT DEFAULT ''");
+      addCol('sales', 'financial_account_id', 'INTEGER DEFAULT NULL');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

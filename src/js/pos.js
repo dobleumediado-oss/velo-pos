@@ -1032,6 +1032,21 @@ function openCobroModal(inv) {
       </select>
     </div>
 
+    <!-- Cuenta que recibe el dinero (transferencia/tarjeta) -->
+    ${_cbrBankAccounts().length ? `
+    <div class="fg" id="cbr-acct-wrap" style="display:${_cbrNeedsAccount(inv.pmeth) ? 'block' : 'none'}">
+      <label class="lbl">Cuenta que recibe el pago</label>
+      <select class="inp" id="cbr-account">
+        <option value="">— Selecciona la cuenta —</option>
+        ${_cbrBankAccounts().map(a =>
+          `<option value="${a.id}" ${inv.financialAccountId===a.id?'selected':''}>${posEscHtml(a.name)}${a.bank_name?` · ${posEscHtml(a.bank_name)}`:''}${a.currency&&a.currency!=='DOP'?` (${a.currency})`:''}</option>`
+        ).join('')}
+      </select>
+      <div style="font-size:10.5px;color:var(--muted2);margin-top:4px">
+        El dinero entra a esta cuenta en Bancos y Cuentas, y saldrá en la factura.
+      </div>
+    </div>` : ''}
+
     <!-- Efectivo simple -->
     <div id="cbr-efec" style="display:${!inv.pmeth || inv.pmeth==='efectivo' ? 'block' : 'none'}">
       <div class="fg">
@@ -1145,10 +1160,23 @@ function openCobroModal(inv) {
   setTimeout(cbrDocHint, 40);
 }
 
+// Cuentas de banco/tarjeta activas para elegir dónde entra un pago no-efectivo.
+function _cbrBankAccounts() {
+  return (DB.financialAccounts || []).filter(a =>
+    a.is_active !== false && (a.type === 'banco' || a.type === 'tarjeta'));
+}
+// El pago necesita cuenta receptora cuando es transferencia, tarjeta o mixto
+// (la parte no-efectivo del mixto entra a una cuenta).
+function _cbrNeedsAccount(pmeth) {
+  return pmeth === 'transferencia' || pmeth === 'tarjeta' || pmeth === 'mixto';
+}
+
 function cbrTogglePago(val) {
   document.getElementById('cbr-efec').style.display   = val === 'efectivo'  ? 'block' : 'none';
   document.getElementById('cbr-mixto').style.display  = val === 'mixto'     ? 'block' : 'none';
   document.getElementById('cbr-cred').style.display   = val === 'credito'   ? 'block' : 'none';
+  const acctWrap = document.getElementById('cbr-acct-wrap');
+  if (acctWrap) acctWrap.style.display = _cbrNeedsAccount(val) ? 'block' : 'none';
 }
 
 // Mantener compatibilidad con llamadas existentes
@@ -1337,7 +1365,17 @@ async function finalizarVenta() {
   const cliCedula = document.getElementById('cbr-cedula')?.value?.trim() || '';
   // Capturar AQUÍ (antes de closeModal): el DOM del modal se elimina al cerrar.
   const wantConduce = !!document.getElementById('cbr-conduce')?.checked;
+  const finAcctId   = parseInt(document.getElementById('cbr-account')?.value) || null;
   const btnConfirmar = document.getElementById('btn-confirmar-venta');
+
+  // Si hay cuentas registradas y el pago es transferencia/tarjeta, exigir elegir
+  // a cuál entra (así la factura y Bancos reflejan la cuenta correcta).
+  if (!finAcctId && _cbrBankAccounts().length &&
+      (pmeth === 'transferencia' || pmeth === 'tarjeta')) {
+    toast('Selecciona la cuenta que recibe el pago', 'w');
+    return;
+  }
+  inv.financialAccountId = finAcctId;
 
   inv.pmeth = pmeth;
   inv.cliName = cliName;
@@ -1417,6 +1455,7 @@ async function finalizarVenta() {
       priceChangeAuthToken: inv.priceChangeAuthToken || null,
       mixEfec,
       mixCard,
+      financialAccountId: finAcctId,
     },
     type: inv.itype || 'factura',
     session: cajaSession,
@@ -1494,6 +1533,7 @@ async function finalizarVenta() {
       cajero:    user.name,
       ncf:       result.ncf || '',
       tax_pct:   result.taxPct ?? CFG.itbis,
+      financial_account_id: finAcctId,
     };
 
     // Imprimir ticket 80mm en impresora térmica

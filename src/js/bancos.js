@@ -75,19 +75,28 @@ async function _renderBancosCtAs(el) {
     const typeClass = `acct-type-${c.type || 'otro'}`;
     const icons = { caja: '💵', banco: '🏦', tarjeta: '💳', otro: '💼' };
     const icon = icons[c.type] || '💼';
+    const badgeText = _bancosTypeLabel(c);
+    const cur = (c.currency && c.currency !== 'DOP') ? c.currency : '';
+    // Sublíneas informativas: banco · nº de cuenta.
+    const subLines = [];
+    if (c.bank_name) subLines.push(c.bank_name);
+    if (c.account_number) subLines.push(c.account_number);
     const card = h('div', { class: `fin-card${!c.is_active ? ' opacity-50' : ''}`,
       style: { cursor: 'pointer', position: 'relative' },
       onclick: () => _openBancosDetailModal(c)
     },
       h('div', { class: 'fin-card-icon', style: { background: 'var(--surface2)', fontSize: '18px' } }, icon),
       h('div', { class: 'fin-card-label' }, c.name),
-      h('div', { class: 'fin-card-amount' }, fmt(c.balance)),
-      h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' } },
-        h('span', { class: `acct-type-badge ${typeClass}` }, c.type || 'otro'),
+      h('div', { class: 'fin-card-amount' },
+        (cur ? cur + ' ' : '') + fmt(c.balance)),
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', flexWrap: 'wrap' } },
+        h('span', { class: `acct-type-badge ${typeClass}` }, badgeText),
+        cur ? h('span', { style: { fontSize: '10px', fontWeight: '700', color: 'var(--muted2)' } }, cur) : null,
         !c.is_active ? h('span', { style: { fontSize: '10px', color: 'var(--muted2)' } }, 'inactiva') : null
       ),
-      h('div', { class: 'fin-card-sub', style: { marginTop: '4px' } },
-        c.bank_name ? `${c.bank_name}` : (c.account_number ? `****${c.account_number.slice(-4)}` : ''))
+      subLines.length
+        ? h('div', { class: 'fin-card-sub', style: { marginTop: '4px' } }, subLines.join(' · '))
+        : null
     );
     cards.appendChild(card);
   });
@@ -104,48 +113,81 @@ async function _renderBancosCtAs(el) {
 
 function _openBancosCreateModal(acct = null) {
   const editing = !!acct;
+  const _v = s => String(s ?? '').replace(/"/g, '&quot;');
+  const isBankish = (acct?.type === 'banco' || acct?.type === 'tarjeta');
   openModal(`
-    <div style="padding:24px;min-width:380px">
+    <div style="padding:24px;min-width:520px;max-width:560px">
       <div class="modal-title">${editing ? 'Editar cuenta' : 'Nueva cuenta financiera'}</div>
-      <div style="display:flex;flex-direction:column;gap:14px;margin-top:16px">
-        <div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px">
+        <div style="grid-column:1/-1">
           <label class="lbl">Nombre de la cuenta *</label>
-          <input id="fa-name" class="inp" value="${acct?.name || ''}" placeholder="Ej: Caja Principal">
+          <input id="fa-name" class="inp" value="${_v(acct?.name)}" placeholder="Ej: Caja Principal">
         </div>
         <div>
           <label class="lbl">Tipo *</label>
-          <select id="fa-type" class="inp">
+          <select id="fa-type" class="inp" onchange="_bancosOnTypeChange(this.value)">
             ${['caja','banco','tarjeta','otro'].map(t =>
               `<option value="${t}" ${acct?.type===t?'selected':''}>${t.charAt(0).toUpperCase()+t.slice(1)}</option>`
             ).join('')}
           </select>
         </div>
-        <div>
+        <!-- Balance inicial: solo caja/otro (banco/tarjeta parten en 0) -->
+        <div id="fa-bal-wrap" style="display:${isBankish ? 'none' : 'block'}">
           <label class="lbl">Balance inicial (RD$)</label>
           <input id="fa-bal" class="inp" type="number" min="0" step="0.01"
             value="${editing ? '' : (acct?.balance || 0)}"
             ${editing ? 'disabled title="Use un movimiento para ajustar el balance"' : ''}>
         </div>
+        <!-- Subtipo de cuenta: solo Banco -->
+        <div id="fa-subtype-wrap" style="display:${acct?.type==='banco' ? 'block' : 'none'}">
+          <label class="lbl">Tipo de cuenta</label>
+          <select id="fa-subtype" class="inp">
+            ${[['','—'],['ahorros','Ahorros'],['corriente','Corriente']].map(([v,l]) =>
+              `<option value="${v}" ${(acct?.account_subtype||'')===v?'selected':''}>${l}</option>`
+            ).join('')}
+          </select>
+        </div>
+        <!-- Moneda: relevante para banco/tarjeta -->
+        <div id="fa-currency-wrap" style="display:${isBankish ? 'block' : 'none'}">
+          <label class="lbl">Moneda</label>
+          <select id="fa-currency" class="inp">
+            ${[['DOP','Pesos (DOP)'],['USD','Dólares (USD)']].map(([v,l]) =>
+              `<option value="${v}" ${(acct?.currency||'DOP')===v?'selected':''}>${l}</option>`
+            ).join('')}
+          </select>
+        </div>
         <div>
           <label class="lbl">Nombre del banco</label>
-          <input id="fa-bank" class="inp" value="${acct?.bank_name || ''}" placeholder="BanReservas, Popular...">
+          <input id="fa-bank" class="inp" value="${_v(acct?.bank_name)}" placeholder="BanReservas, Popular...">
         </div>
         <div>
-          <label class="lbl">Número de cuenta / últimos 4 dígitos</label>
-          <input id="fa-num" class="inp" value="${acct?.account_number || ''}" placeholder="****1234">
+          <label class="lbl">Número de cuenta</label>
+          <input id="fa-num" class="inp" value="${_v(acct?.account_number)}" placeholder="000-0000000-0">
         </div>
-        <div>
+        <div style="grid-column:1/-1">
           <label class="lbl">Descripción</label>
-          <input id="fa-desc" class="inp" value="${acct?.description || ''}">
+          <input id="fa-desc" class="inp" value="${_v(acct?.description)}">
         </div>
-        <div style="display:flex;gap:10px;margin-top:8px">
-          <button class="btn" onclick="_saveBancosAcct(${acct?.id || 'null'})">${editing ? 'Guardar' : 'Crear'}</button>
-          <button class="btn-ghost" onclick="closeModal()">Cancelar</button>
-        </div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:18px">
+        <button class="btn" onclick="_saveBancosAcct(${acct?.id || 'null'})">${editing ? 'Guardar' : 'Crear'}</button>
+        <button class="btn-ghost" onclick="closeModal()">Cancelar</button>
       </div>
     </div>
   `);
 }
+
+// Muestra/oculta campos según el tipo de cuenta:
+//   banco   → subtipo (Ahorros/Corriente) + moneda, sin balance inicial
+//   tarjeta → moneda, sin balance inicial
+//   caja/otro → balance inicial, sin subtipo ni moneda
+window._bancosOnTypeChange = function(type) {
+  const show = (id, on) => { const el = document.getElementById(id); if (el) el.style.display = on ? 'block' : 'none'; };
+  const isBankish = type === 'banco' || type === 'tarjeta';
+  show('fa-bal-wrap', !isBankish);
+  show('fa-subtype-wrap', type === 'banco');
+  show('fa-currency-wrap', isBankish);
+};
 
 window._saveBancosAcct = async function(id) {
   const name    = document.getElementById('fa-name').value.trim();
@@ -155,11 +197,16 @@ window._saveBancosAcct = async function(id) {
   const bank    = document.getElementById('fa-bank').value.trim();
   const num     = document.getElementById('fa-num').value.trim();
   const desc    = document.getElementById('fa-desc').value.trim();
+  const subtype = document.getElementById('fa-subtype')?.value || '';
+  const currency= document.getElementById('fa-currency')?.value || 'DOP';
 
   if (!name) { toast('El nombre es obligatorio', 'w'); return; }
 
-  const data = { name, type, bank_name: bank, account_number: num, description: desc };
-  if (!id) data.balance = bal;
+  const data = { name, type, bank_name: bank, account_number: num, description: desc,
+    account_subtype: type === 'banco' ? subtype : '',
+    currency: (type === 'banco' || type === 'tarjeta') ? currency : 'DOP' };
+  // Balance inicial solo para caja/otro (banco/tarjeta parten en 0).
+  if (!id && type !== 'banco' && type !== 'tarjeta') data.balance = bal;
 
   let res;
   if (id) {
@@ -170,6 +217,7 @@ window._saveBancosAcct = async function(id) {
 
   if (res?.ok) {
     toast(id ? 'Cuenta actualizada' : 'Cuenta creada', 's');
+    if (typeof reloadFinancialAccounts === 'function') await reloadFinancialAccounts().catch(() => {});
     closeModal();
     routeTo('bancos');
   } else {
@@ -177,15 +225,35 @@ window._saveBancosAcct = async function(id) {
   }
 };
 
+// Etiqueta legible del tipo/subtipo de cuenta (ej. "Banco · Ahorros").
+function _bancosTypeLabel(c) {
+  const base = { caja: 'Caja', banco: 'Banco', tarjeta: 'Tarjeta', otro: 'Otro' }[c.type] || (c.type || 'otro');
+  const sub  = { ahorros: 'Ahorros', corriente: 'Corriente' }[c.account_subtype] || '';
+  return sub ? `${base} · ${sub}` : base;
+}
+
 function _openBancosDetailModal(c) {
+  const _e = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const cur = c.currency || 'DOP';
+  const infoRow = (lbl, val) => val ? `
+    <div style="display:flex;justify-content:space-between;gap:14px;padding:6px 0;border-bottom:0.5px solid var(--line2)">
+      <span style="color:var(--muted2)">${lbl}</span><span style="font-weight:600;text-align:right">${val}</span>
+    </div>` : '';
   openModal(`
-    <div style="padding:24px;min-width:380px">
-      <div class="modal-title">${c.name}</div>
-      <div style="font-size:28px;font-weight:800;color:var(--accent);margin:12px 0">${fmt(c.balance)}</div>
-      <div style="font-size:12px;color:var(--muted2);margin-bottom:16px">
-        <span class="acct-type-badge acct-type-${c.type}">${c.type}</span>
-        ${c.bank_name ? ` · ${c.bank_name}` : ''}
-        ${c.account_number ? ` · ${c.account_number}` : ''}
+    <div style="padding:24px;min-width:400px">
+      <div class="modal-title">${_e(c.name)}</div>
+      <div style="font-size:28px;font-weight:800;color:var(--accent);margin:12px 0">
+        ${cur !== 'DOP' ? cur + ' ' : ''}${fmt(c.balance)}
+      </div>
+      <div style="font-size:12px;color:var(--muted2);margin-bottom:12px">
+        <span class="acct-type-badge acct-type-${c.type}">${_bancosTypeLabel(c)}</span>
+      </div>
+      <div style="font-size:12.5px;margin-bottom:16px">
+        ${infoRow('Banco', _e(c.bank_name))}
+        ${infoRow('Número de cuenta', _e(c.account_number))}
+        ${infoRow('Tipo de cuenta', { ahorros: 'Ahorros', corriente: 'Corriente' }[c.account_subtype] || '')}
+        ${infoRow('Moneda', cur === 'USD' ? 'Dólares (USD)' : 'Pesos (DOP)')}
+        ${infoRow('Descripción', _e(c.description))}
       </div>
       <div style="display:flex;flex-direction:column;gap:8px">
         <button class="btn" onclick="closeModal();_bancosTab='movimientos';_bancosAcct=${c.id};routeTo('bancos')">
@@ -206,7 +274,7 @@ function _openBancosDetailModal(c) {
 
 window._toggleBancosAcct = async function(id, active) {
   const res = await window.api.financial.toggleActive({ id, active, requestUserId: user.id });
-  if (res?.ok) { toast(active ? 'Cuenta activada' : 'Cuenta desactivada', 's'); closeModal(); routeTo('bancos'); }
+  if (res?.ok) { toast(active ? 'Cuenta activada' : 'Cuenta desactivada', 's'); if (typeof reloadFinancialAccounts === 'function') await reloadFinancialAccounts().catch(() => {}); closeModal(); routeTo('bancos'); }
   else toast(res?.error || 'Error', 'e');
 };
 

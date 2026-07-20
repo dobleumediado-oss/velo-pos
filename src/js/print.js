@@ -180,11 +180,16 @@ function printReceipt(sale, isReprint = false) {
       biz_logo:    DB?.settings?.biz_logo    || CFG?.biz_logo || '',
       biz_logo_2:  DB?.settings?.biz_logo_2  || CFG?.biz_logo_2 || '',
       receipt_msg: DB?.settings?.receipt_msg || '¡Gracias por su compra!',
-      // Datos bancarios del negocio (para facturas por transferencia/depósito)
+      // Datos bancarios del negocio (fallback si no hay cuentas registradas)
       biz_bank_name:    DB?.settings?.biz_bank_name    || '',
       biz_bank_account: DB?.settings?.biz_bank_account || '',
       biz_bank_holder:  DB?.settings?.biz_bank_holder  || '',
       biz_bank_iban:    DB?.settings?.biz_bank_iban    || '',
+      // Cuentas registradas (Bancos y Cuentas) — fuente preferida para la factura:
+      // transferencia → la cuenta que recibió el pago; crédito → todas, para que
+      // el cliente sepa a dónde transferir. Solo banco/tarjeta activas.
+      bank_accounts: (DB?.financialAccounts || []).filter(a =>
+        a.is_active !== false && (a.type === 'banco' || a.type === 'tarjeta')),
       // '0' oculta la columna "Código" de artículos SOLO en la impresión
       print_item_code:  DB?.settings?.print_item_code  || '1',
     };
@@ -204,6 +209,7 @@ function printReceipt(sale, isReprint = false) {
       customer_email:   sale.customer_email   || '',
       due_date:         sale.due_date || null,
       applied_invoice:  sale.applied_invoice || null,
+      financial_account_id: sale.financial_account_id || null,
       cajero:        sale.cajero || user?.name || '',
 	      items: (sale.items || []).map(i => ({
 	        product_code: _printProductCode(i),

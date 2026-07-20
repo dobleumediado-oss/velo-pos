@@ -376,7 +376,21 @@ function _metodoPagoLabel(m) {
 
 // ¿El método de pago implica datos bancarios?
 function _esPagoBancario(m) {
-  return ['transferencia', 'deposito', 'cheque'].includes((m || '').toLowerCase());
+  return ['transferencia', 'deposito', 'cheque', 'tarjeta'].includes((m || '').toLowerCase());
+}
+
+// Texto de una cuenta registrada (Bancos y Cuentas) para la factura.
+function _a4CuentaText(acc) {
+  if (!acc) return '';
+  const parts = [];
+  if (acc.bank_name) parts.push(`Banco: <small>${_esc(acc.bank_name)}</small>`);
+  const sub = { ahorros: 'Ahorros', corriente: 'Corriente' }[acc.account_subtype] || '';
+  if (acc.account_number) parts.push(`Cuenta${sub ? ' ' + sub : ''}: <small>${_esc(acc.account_number)}</small>`);
+  else if (sub) parts.push(`Tipo: <small>${sub}</small>`);
+  if (acc.currency && acc.currency !== 'DOP') parts.push(`Moneda: <small>${_esc(acc.currency)}</small>`);
+  // El nombre de la cuenta suele ser el titular en estos negocios.
+  if (acc.name) parts.push(`Titular: <small>${_esc(acc.name)}</small>`);
+  return parts.join(' &nbsp;·&nbsp; ');
 }
 
 // Distingue el documento del cliente por longitud (formato RD):
@@ -738,16 +752,28 @@ function renderCartaRecibo(sale, cfg, opts) {
     const ap = sale.applied_invoice || facturaLabelOriginal(sale);
     cells.push(`<div class="cell"><span class="ic">${_a4ic('ref')}</span><div><div class="k">Factura aplicada</div><div class="v">${_esc(ap)}</div></div></div>`);
   }
-  // Datos bancarios — solo una vez, si el pago es bancario y hay datos del negocio
-  const hasBank = cfg.biz_bank_name || cfg.biz_bank_account || cfg.biz_bank_iban;
-  if (_esPagoBancario(method) && hasBank) {
-    const parts = [];
-    if (cfg.biz_bank_name)    parts.push(`Banco: <small>${_esc(cfg.biz_bank_name)}</small>`);
-    if (cfg.biz_bank_account) parts.push(`Cuenta: <small>${_esc(cfg.biz_bank_account)}</small>`);
-    if (cfg.biz_bank_holder)  parts.push(`Titular: <small>${_esc(cfg.biz_bank_holder)}</small>`);
-    const line1 = parts.join(' &nbsp;·&nbsp; ');
-    const line2 = cfg.biz_bank_iban ? `<div class="v" style="margin-top:2px">IBAN: <small>${_esc(cfg.biz_bank_iban)}</small></div>` : '';
-    cells.push(`<div class="cell cell-wide"><span class="ic">${_a4ic('bank')}</span><div><div class="k">Datos bancarios</div><div class="v">${line1}</div>${line2}</div></div>`);
+  // Datos bancarios en el strip — SOLO para pago bancario contado (transferencia/
+  // tarjeta/depósito/cheque). Preferir la cuenta registrada que recibió el pago;
+  // si no hay, caer a los datos bancarios de Configuración (compatibilidad).
+  // El crédito NO va aquí: sus cuentas se listan completas al pie (ver abajo).
+  const bankAccounts = Array.isArray(cfg.bank_accounts) ? cfg.bank_accounts : [];
+  const saleAccount  = sale.financial_account_id
+    ? bankAccounts.find(a => Number(a.id) === Number(sale.financial_account_id))
+    : null;
+  const hasCfgBank = cfg.biz_bank_name || cfg.biz_bank_account || cfg.biz_bank_iban;
+  if (_esPagoBancario(method) && method !== 'credito') {
+    if (saleAccount) {
+      const line1 = _a4CuentaText(saleAccount);
+      cells.push(`<div class="cell cell-wide"><span class="ic">${_a4ic('bank')}</span><div><div class="k">Cuenta de pago</div><div class="v">${line1}</div></div></div>`);
+    } else if (hasCfgBank) {
+      const parts = [];
+      if (cfg.biz_bank_name)    parts.push(`Banco: <small>${_esc(cfg.biz_bank_name)}</small>`);
+      if (cfg.biz_bank_account) parts.push(`Cuenta: <small>${_esc(cfg.biz_bank_account)}</small>`);
+      if (cfg.biz_bank_holder)  parts.push(`Titular: <small>${_esc(cfg.biz_bank_holder)}</small>`);
+      const line1 = parts.join(' &nbsp;·&nbsp; ');
+      const line2 = cfg.biz_bank_iban ? `<div class="v" style="margin-top:2px">IBAN: <small>${_esc(cfg.biz_bank_iban)}</small></div>` : '';
+      cells.push(`<div class="cell cell-wide"><span class="ic">${_a4ic('bank')}</span><div><div class="k">Datos bancarios</div><div class="v">${line1}</div>${line2}</div></div>`);
+    }
   }
   const strip = cells.length
     ? `<div class="strip">${cells.join('')}</div>` : '';
@@ -810,6 +836,29 @@ function renderCartaRecibo(sale, cfg, opts) {
       <div class="sign"><div class="sign-line"></div>Entregado por</div>
       <div class="sign"><div class="sign-line"></div>Recibido por</div>
     </div>` : '';
+
+  // ── Cuentas para transferir (ventas a CRÉDITO) ──────
+  // En una factura a crédito el cliente pagará después: se listan TODAS las
+  // cuentas registradas para que sepa a dónde transferir. Fallback: datos
+  // bancarios de Configuración si aún no hay cuentas registradas.
+  let cuentasPago = '';
+  if (showMoney && method === 'credito') {
+    const rowsAcc = bankAccounts.map(a => `<div class="pay-acc">${_a4CuentaText(a)}</div>`);
+    if (!rowsAcc.length && hasCfgBank) {
+      const p = [];
+      if (cfg.biz_bank_name)    p.push(`Banco: <small>${_esc(cfg.biz_bank_name)}</small>`);
+      if (cfg.biz_bank_account) p.push(`Cuenta: <small>${_esc(cfg.biz_bank_account)}</small>`);
+      if (cfg.biz_bank_holder)  p.push(`Titular: <small>${_esc(cfg.biz_bank_holder)}</small>`);
+      if (cfg.biz_bank_iban)    p.push(`IBAN: <small>${_esc(cfg.biz_bank_iban)}</small>`);
+      if (p.length) rowsAcc.push(`<div class="pay-acc">${p.join(' &nbsp;·&nbsp; ')}</div>`);
+    }
+    if (rowsAcc.length) {
+      cuentasPago = `<div class="pay-accounts">
+        <div class="pay-accounts-t">Cuentas para transferir su pago</div>
+        ${rowsAcc.join('')}
+      </div>`;
+    }
+  }
 
   const footMsg = (opts.mensaje && cfg.receipt_msg && !isCotizacion) ? _esc(cfg.receipt_msg) : '';
   const footWeb = cfg.biz_web ? _esc(cfg.biz_web) : (bizContact.length ? bizContact.join(' · ') : '');
@@ -892,6 +941,11 @@ function renderCartaRecibo(sale, cfg, opts) {
   .docfoot { margin-top:26px; padding-top:12px; border-top:1px solid #eceef3; text-align:center; color:#8a90a0; font-size:10.5px; break-inside:avoid; }
   .docfoot .sep { margin:0 10px; color:#cfd3dd; }
   img { max-width:100%; height:auto; }
+  .pay-accounts { margin-top:12px; border:1px solid #d8dbe3; border-radius:8px; padding:10px 14px; background:#f9fafb; page-break-inside:avoid; }
+  .pay-accounts-t { font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.5px; color:#4b5263; margin-bottom:6px; }
+  .pay-acc { font-size:11px; color:#1f2430; padding:3px 0; border-top:1px solid #eceef3; }
+  .pay-acc:first-of-type { border-top:none; }
+  .pay-acc small { color:#4b5263; }
 </style></head><body>
   <div class="hdr">
     <div class="hdr-l">
@@ -933,6 +987,7 @@ function renderCartaRecibo(sale, cfg, opts) {
   </table>
 
   ${totalsBox}
+  ${cuentasPago}
   ${paySummary}
   ${firma}
   ${noteFiscal ? `<div class="note">${noteFiscal}</div>` : ''}

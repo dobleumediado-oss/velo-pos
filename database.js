@@ -1867,11 +1867,13 @@ const salesRepo = {
       }
 
       // 4. Crear venta
+      const finAcctId = (type === 'factura' || payment.method === 'credito')
+        ? (parseInt(payment.financialAccountId) || null) : null;
       const saleR = db.prepare(`
         INSERT INTO sales(cash_session_id,customer_id,customer_name,customer_rnc,
           type,status,subtotal,discount_pct,discount_amt,tax_pct,tax_amt,total,
-          payment_method,price_mode,cajero,user_id,created_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
+          payment_method,price_mode,cajero,user_id,financial_account_id,created_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
       `).run(
         session?.id || null,
         customer.id,
@@ -1882,7 +1884,8 @@ const salesRepo = {
         payment.method || 'efectivo',
         payment.priceMode || 'retail',
         user.name || '',
-        user.id
+        user.id,
+        finAcctId
       );
       const saleId = saleR.lastInsertRowid;
 
@@ -1983,6 +1986,24 @@ const salesRepo = {
             description: `Venta #${saleId}`,
             userId: user.id
           });
+        }
+      }
+
+      // 8b. Reflejar en la cuenta bancaria/tarjeta seleccionada (Bancos y Cuentas).
+      // El dinero que entra por transferencia/tarjeta se registra como ingreso en
+      // esa cuenta operativa → su balance sube y queda el movimiento trazable.
+      // No-fatal: un problema aquí nunca debe abortar una venta ya cobrada.
+      if (finAcctId && payment.method !== 'credito') {
+        let acctAmount = total;
+        if (payment.method === 'mixto') acctAmount = round2(payment.mixCard || 0); // solo la parte no-efectivo
+        if (acctAmount > 0.005) {
+          try {
+            financialAccountsRepo.addMovement({
+              accountId: finAcctId, type: 'venta', amount: acctAmount,
+              description: `Venta #${saleId}`, referenceType: 'sale', referenceId: saleId,
+              method: payment.method, userId: user.id,
+            });
+          } catch (e) { console.error('[venta] movimiento a cuenta bancaria:', e.message); }
         }
       }
 
@@ -2212,6 +2233,28 @@ const salesRepo = {
         overpayment = Math.max(0, round2(-theoretical));
         const newBal = Math.max(0, round2(theoretical));
         db.prepare('UPDATE customers SET balance=? WHERE id=?').run(newBal, sale.customer_id);
+      }
+
+      // Revertir el ingreso reflejado en la cuenta bancaria/tarjeta (si lo hubo):
+      // saca de esa cuenta el mismo monto que entró al vender. No-fatal.
+      if (sale.financial_account_id && sale.payment_method !== 'credito') {
+        let acctAmount = sale.total;
+        if (sale.payment_method === 'mixto') {
+          // Solo se reflejó la parte no-efectivo: recuperarla del movimiento original.
+          const mov = db.prepare(
+            "SELECT amount FROM financial_movements WHERE reference_type='sale' AND reference_id=? AND type='venta' AND status='activo'"
+          ).get(id);
+          acctAmount = mov?.amount || 0;
+        }
+        if (acctAmount > 0.005) {
+          try {
+            financialAccountsRepo.addMovement({
+              accountId: sale.financial_account_id, type: 'ajuste', amount: -acctAmount,
+              description: `Anulación venta #${id}`, referenceType: 'sale', referenceId: id,
+              method: sale.payment_method, userId,
+            });
+          } catch (e) { console.error('[venta] reverso movimiento bancario:', e.message); }
+        }
       }
 
       audit(userId, userName, 'venta_anulada', 'sales', id, `Motivo: ${reason}`);
@@ -3674,14 +3717,18 @@ const financialAccountsRepo = {
   getById(id) {
     return db.prepare('SELECT * FROM financial_accounts WHERE id=?').get(id);
   },
-  create({ name, type, bank_name, account_number, currency, initial_balance, description, notes, userId }) {
-    const bal = parseFloat(initial_balance) || 0;
+  create({ name, type, bank_name, account_number, currency, account_subtype, initial_balance, balance, description, notes, userId }) {
+    // Las cuentas de banco/tarjeta parten en 0 (reciben ingresos): el balance
+    // inicial solo aplica a caja/otro. Evita inflar el saldo bancario a mano.
+    // (La UI envía `balance`; se acepta como alias de initial_balance.)
+    const isBankish = type === 'banco' || type === 'tarjeta';
+    const bal = isBankish ? 0 : (parseFloat(initial_balance ?? balance) || 0);
     const r = db.prepare(`
-      INSERT INTO financial_accounts(name,type,bank_name,account_number,currency,
+      INSERT INTO financial_accounts(name,type,bank_name,account_number,currency,account_subtype,
         initial_balance,current_balance,description,notes,user_id,active)
-      VALUES(?,?,?,?,?,?,?,?,?,?,1)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,1)
     `).run(name, type||'caja', bank_name||'', account_number||'',
-           currency||'DOP', bal, bal, description||'', notes||'', userId||null);
+           currency||'DOP', account_subtype||'', bal, bal, description||'', notes||'', userId||null);
     const accId = r.lastInsertRowid;
     if (bal > 0) {
       db.prepare(`
@@ -3692,13 +3739,13 @@ const financialAccountsRepo = {
     }
     return accId;
   },
-  update(id, { name, type, bank_name, account_number, currency, description, notes, active }) {
+  update(id, { name, type, bank_name, account_number, currency, account_subtype, description, notes, active }) {
     db.prepare(`
       UPDATE financial_accounts SET name=?,type=?,bank_name=?,account_number=?,
-        currency=?,description=?,notes=?,active=?,updated_at=datetime('now')
+        currency=?,account_subtype=?,description=?,notes=?,active=?,updated_at=datetime('now')
       WHERE id=?
     `).run(name, type||'caja', bank_name||'', account_number||'',
-           currency||'DOP', description||'', notes||'', active??1, id);
+           currency||'DOP', account_subtype||'', description||'', notes||'', active??1, id);
   },
   toggleActive(id, active) {
     db.prepare(`UPDATE financial_accounts SET active=?,updated_at=datetime('now') WHERE id=?`)
