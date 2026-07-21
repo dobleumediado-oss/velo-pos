@@ -9,3 +9,8 @@ data/
 .DS_Store
 out/
 releases/
+
+# Datos de clientes — nunca al repo (nombres, RNC, montos, CxC)
+csv_v2/
+Excepciones_migracion_*.xlsx
+*.bak
