@@ -3704,35 +3704,26 @@ ipcMain.handle('customers:getItemsForCustomer', async (_, { customerId }) => {
 ipcMain.handle('customers:getFacturasPendientes', async (_, { customerId }) => {
   try {
     const db = require('./database').getDB();
+    const { allocatePendingInvoices } = require('./lib/pending-invoices');
+    const customer = db.prepare('SELECT balance FROM customers WHERE id=?').get(customerId);
+    if (!customer) return { ok: false, facturas: [], error: 'Cliente no encontrado' };
+
     // Obtener facturas a crédito en orden cronológico (ASC = FIFO)
     const sales = db.prepare(`
       SELECT s.id, s.total, s.subtotal, s.tax_amt, s.discount_amt,
              s.created_at, s.notes, s.ncf, s.status,
              s.numero_factura, s.numero_factura_fmt
       FROM sales s
-      WHERE s.customer_id=? AND s.payment_method='credito'
+      WHERE s.customer_id=?
+        AND LOWER(TRIM(s.payment_method)) IN ('credito','crédito','credit')
         AND s.status!='cancelled' AND s.type='factura'
-      ORDER BY s.created_at ASC
+      ORDER BY s.created_at ASC, s.id ASC
     `).all(customerId);
 
-    // Total de pagos reales del cliente — excluir "Saldo inicial importado" porque ese
-    // registro es un marcador contable que no corresponde a ninguna factura específica;
-    // sumarlo aquí haría que el FIFO consuma facturas que siguen pendientes.
-    const { totalPaid } = db.prepare(
-      "SELECT COALESCE(SUM(amount),0) AS totalPaid FROM payments WHERE customer_id=? AND note != 'Saldo inicial importado'"
-    ).get(customerId);
-
-    // Distribuir pagos FIFO: las facturas más antiguas se pagan primero
-    let remaining = totalPaid;
-    const facturas = sales.map(s => {
-      const paid     = Math.min(remaining, s.total);
-      remaining      = Math.max(0, remaining - paid);
-      const pendiente = Math.max(0, Math.round((s.total - paid) * 100) / 100);
-      return { ...s, pendiente };
-    }).filter(s => s.pendiente > 0.005)
-      .reverse(); // volver a DESC para mostrar las más recientes primero
-
-    return { ok: true, facturas };
+    // No volver a restar payments: customers.balance ya incorpora todos los
+    // abonos y devoluciones. Restarlos otra vez ocultaba facturas importadas.
+    const result = allocatePendingInvoices(sales, customer.balance);
+    return { ok: true, ...result };
   } catch(e) { return { ok: false, facturas: [], error: e.message }; }
 });
 

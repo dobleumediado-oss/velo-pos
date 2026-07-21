@@ -26,8 +26,9 @@
     "test:url": "node scripts/test-url-safe.js",
     "test:login": "node scripts/test-login-rate.js",
     "test:printing": "node scripts/test-printer-profiles.js",
+    "test:pending-invoices": "node scripts/test-pending-invoices.js",
     "test:salespeople": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-salespeople.js",
-    "test": "npm run test:url && npm run test:login && npm run test:business && npm run test:import && npm run test:financial && npm run test:printing && npm run test:salespeople"
+    "test": "npm run test:url && npm run test:login && npm run test:business && npm run test:import && npm run test:financial && npm run test:printing && npm run test:pending-invoices && npm run test:salespeople"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
