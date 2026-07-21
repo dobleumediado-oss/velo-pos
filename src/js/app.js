@@ -652,10 +652,12 @@ function buildSidebar() {
     { key: 'clientes',  icon: 'users',    label: 'Clientes' },
     { key: 'ventas',    icon: 'list',     label: 'Ventas' },
     { key: 'devoluciones', icon: 'return', label: 'Devoluciones' },
-    ...(_adminPuede('module_vendedores') ? [{ key: 'vendedores', icon: 'users', label: 'Vendedores y Nómina' }] : []),
+    ...(_adminPuede('module_vendedores') ? [{ key: 'vendedores', icon: 'users', label: 'Vendedores' }] : []),
+    ...(_adminPuede('module_vendedores') ? [{ key: 'comisiones', icon: 'trend', label: 'Comisiones' }] : []),
     { sep: 'Finanzas' },
     { key: 'caja',      icon: 'cash',     label: 'Caja' },
     ...(_adminPuede('module_gastos') ? [{ key: 'gastos', icon: 'dollar', label: 'Gastos' }] : []),
+    ...(_adminPuede('module_vendedores') ? [{ key: 'nomina', icon: 'calendar', label: 'Nómina' }] : []),
     ...(_adminPuede('module_contabilidad') ? [
       { key: 'bancos',       icon: 'bank',    label: 'Bancos y Cuentas' },
       { key: 'contabilidad', icon: 'ledger',  label: 'Contabilidad' },
@@ -759,7 +761,9 @@ function buildTopbar() {
     clientes:      'Clientes',
     ventas:        'Ventas',
     devoluciones:  'Devoluciones',
-    vendedores:    'Vendedores y Nómina',
+    vendedores:    'Vendedores',
+    comisiones:     'Comisiones',
+    nomina:        'Nómina',
     caja:          'Caja',
     gastos:        'Gastos y Cuentas por Pagar',
     vehiculos:     'Vehículos y Mantenimiento',
@@ -1134,6 +1138,8 @@ function routeTo(p) {
       conduce:      ['module_conduce'],
       etiquetas:    ['barcode_enabled'],
       vendedores:   ['module_vendedores'],
+      comisiones:    ['module_vendedores'],
+      nomina:       ['module_vendedores'],
     };
     const allowedAdmin = [...baseAdmin];
     Object.entries(modRoutesAdmin).forEach(([route, keys]) => {
@@ -1191,6 +1197,8 @@ function routeTo(p) {
     case 'ventas':       renderVentas(el);         break;
     case 'devoluciones': renderDevoluciones(el);   break;
     case 'vendedores':   renderVendedores(el);     break;
+    case 'comisiones':    renderComisiones(el);     break;
+    case 'nomina':       renderNomina(el);         break;
     case 'caja':         renderCaja(el);           break;
     case 'reportes':     renderReportes(el);       break;
     case 'auditoria':

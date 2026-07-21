@@ -18,6 +18,8 @@ console.log('\n== Allowlist de URLs externas ==');
 // Permitidas
 expect('https://wa.me/18091234567', true);
 expect('https://api.whatsapp.com/send?phone=1809', true);
+expect('https://www.google.com/maps/dir/?api=1&destination=18.48,-69.93', true);
+expect('https://www.waze.com/ul?ll=18.48,-69.93&navigate=yes', true);
 // Bloqueadas
 expect('http://wa.me/123', false);                 // http, no https
 expect('https://evil.com', false);                 // host no permitido
@@ -28,6 +30,7 @@ expect('', false);
 expect(null, false);
 expect('no es una url', false);
 expect('https://sub.wa.me/x', false);              // subdominio no listado
+expect('https://maps.google.com.evil.com/x', false);
 
 console.log(`\n== RESULTADO: ${pass} OK, ${fail} fallos ==`);
 process.exit(fail ? 1 : 0);

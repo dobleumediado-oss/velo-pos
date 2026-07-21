@@ -29,27 +29,43 @@ console.log('\n== A. Registro fijo y ambulante ==');
 const fixedId=DB.salespeopleRepo.create({name:'Ana Fija',seller_type:'fijo',linked_user_id:user.id,
   commission_mode:'percent_sales',commission_rate:10,commission_frequency:'mensual',salary_amount:1000,payroll_frequency:'mensual'},...auditArgs);
 const streetId=DB.salespeopleRepo.create({name:'Luis Ambulante',seller_type:'ambulante',booklet_code:'T-01',
-  zone:'Santo Domingo Norte',route:'Ruta 4',sales_goal:25000,map_lat:18.5123,map_lng:-69.9012,
+  zone:'Santo Domingo Norte',route:'Ruta 4',coverage_address:'Av. Hermanas Mirabal',sales_goal:25000,map_lat:18.5123,map_lng:-69.9012,
   commission_mode:'percent_margin',commission_rate:20,commission_frequency:'quincenal',salary_amount:0},...auditArgs);
 ok(DB.salespeopleRepo.getAll({status:'activo'}).length===2,'registra vendedores fijos y ambulantes');
 ok(DB.salespeopleRepo.getById(streetId).linked_user_id==null,'ambulante existe sin usuario del POS');
+ok(DB.salespeopleRepo.getById(streetId).booklet_code==='','el perfil ambulante no administra talonarios externos');
 ok(near(DB.salespeopleRepo.getById(streetId).sales_goal,25000),'conserva la meta comercial del vendedor');
 ok(near(DB.salespeopleRepo.getById(streetId).map_lat,18.5123)&&near(DB.salespeopleRepo.getById(streetId).map_lng,-69.9012),'conserva coordenadas operativas opcionales');
+ok(DB.salespeopleRepo.getById(streetId).coverage_address==='Av. Hermanas Mirabal'&&!!DB.salespeopleRepo.getById(streetId).location_updated_at,'conserva dirección y fecha de actualización de cobertura');
+DB.salespeopleRepo.updateLocation(streetId,{lat:18.5201,lng:-69.9001,coverage_address:'Santo Domingo Norte'},...auditArgs);
+ok(near(DB.salespeopleRepo.getById(streetId).map_lat,18.5201)&&DB.salespeopleRepo.getById(streetId).coverage_address==='Santo Domingo Norte','actualiza el punto geográfico del ambulante de forma independiente');
 ok(periodFor('quincenal','2026-07-20').from==='2026-07-16'&&periodFor('quincenal','2026-07-20').to==='2026-07-31','sugiere automáticamente segunda quincena');
 
-console.log('\n== B. Venta interna y talonario externo ==');
+console.log('\n== B. Venta interna y comprobante externo con productos ==');
 const internal=DB.salesRepo.create({customer:{id:customerId,name:'Cliente vendedor'},items:[{product_id:productId,product_code:'VEN-P1',product_name:'Producto vendedor',unit_cost:50,unit_price:118,taxable:1,tax_pct:18,qty:1}],payment:{method:'efectivo'},user,type:'factura'});
 ok(internal.salespersonId===fixedId,'venta del usuario vinculado se asigna automáticamente al vendedor');
-const extId=DB.salespeopleRepo.createExternalSale({salesperson_id:streetId,sale_date:today,booklet_number:'T-01',receipt_number:'0001',customer_name:'Colmado Ruta',gross_amount:500,discount_amount:50,cost_amount:300,collected_amount:450,payment_method:'efectivo'},...auditArgs);
-ok(DB.salespeopleRepo.getExternalSales({salespersonId:streetId}).some(x=>x.id===extId&&near(x.net_amount,450)),'venta de talonario calcula venta neta 500-50=450');
-throws(()=>DB.salespeopleRepo.createExternalSale({salesperson_id:streetId,sale_date:today,booklet_number:'T-01',receipt_number:'0001',gross_amount:100},...auditArgs),'impide duplicar recibo dentro del mismo talonario');
+const extId=DB.salespeopleRepo.createExternalSale({salesperson_id:streetId,sale_date:today,receipt_number:'0001',customer_name:'Colmado Ruta',
+  items:[
+    {product_id:productId,qty:2,unit_price:200,unit_cost:100},
+    {product_name:'Producto libre del comprobante',qty:1,unit_price:100,unit_cost:100},
+  ],discount_amount:50,collected_amount:450,payment_method:'efectivo'},...auditArgs);
+ok(DB.salespeopleRepo.getExternalSales({salespersonId:streetId}).some(x=>x.id===extId&&near(x.net_amount,450)&&x.item_count===2),'venta externa suma productos y calcula venta neta 500-50=450');
+const extDetail=DB.salespeopleRepo.getExternalSaleById(extId);
+ok(extDetail.items.length===2&&near(extDetail.cost_amount,300),'conserva productos, cantidades, precios y costo para calcular margen');
+throws(()=>DB.salespeopleRepo.createExternalSale({salesperson_id:streetId,sale_date:today,receipt_number:'0001',gross_amount:100},...auditArgs),'impide duplicar la referencia externa del mismo vendedor');
+throws(()=>DB.salespeopleRepo.createExternalSale({salesperson_id:fixedId,sale_date:today,receipt_number:'EXT-FIJA',gross_amount:100},...auditArgs),'reserva las ventas externas para vendedores ambulantes');
+const automaticRefId=DB.salespeopleRepo.createExternalSale({salesperson_id:streetId,sale_date:today,items:[{product_name:'Venta sin número físico',qty:1,unit_price:25,unit_cost:10}]},...auditArgs);
+ok(/^EXT-\d{6}$/.test(DB.salespeopleRepo.getExternalSaleById(automaticRefId).receipt_number),'genera referencia interna cuando el recibo físico no tiene número');
+DB.salespeopleRepo.cancelExternalSale(automaticRefId,'Venta auxiliar de prueba',...auditArgs);
 
 console.log('\n== C. Comisión automática ==');
 const fixedPreview=DB.salespeopleRepo.previewCommission({salespersonId:fixedId,from:today,to:today});
 ok(near(fixedPreview.salesTotal,118)&&near(fixedPreview.commissionTotal,11.8),'10% sobre venta neta del POS = 11.80');
 const streetPreview=DB.salespeopleRepo.previewCommission({salespersonId:streetId,from:today,to:today});
-ok(near(streetPreview.marginTotal,150)&&near(streetPreview.commissionTotal,30),'20% sobre margen del talonario = 30.00');
+ok(near(streetPreview.marginTotal,150)&&near(streetPreview.commissionTotal,30),'20% sobre margen de la venta externa = 30.00');
 const commission=DB.salespeopleRepo.generateCommission({salespersonId:streetId,from:today,to:today},...auditArgs);
+const commissionDetail=DB.salespeopleRepo.getCommissionById(commission.id);
+ok(commissionDetail.id===commission.id&&commissionDetail.lines.length===1&&commissionDetail.salesperson_id===streetId,'detalle de comisión conserva vendedor, origen y líneas calculadas');
 DB.salespeopleRepo.approveCommission(commission.id,...auditArgs);
 ok(DB.salespeopleRepo.getCommissionRuns({salespersonId:streetId})[0].status==='aprobado','corte queda aprobado y disponible para nómina');
 throws(()=>DB.salespeopleRepo.generateCommission({salespersonId:streetId,from:today,to:today},...auditArgs),'impide duplicar comisiones con períodos cruzados');

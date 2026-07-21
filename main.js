@@ -4746,6 +4746,11 @@ ipcMain.handle('salespeople:update', async (_, { id,data,requestUserId }) => {
     salespeopleRepo.update(id,data||{},requestUserId,u.name);return {ok:true};
   } catch(e){return {ok:false,error:e.message};}
 });
+ipcMain.handle('salespeople:updateLocation', async (_, { id,data,requestUserId }) => {
+  try { const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};
+    return {ok:true,data:salespeopleRepo.updateLocation(id,data||{},requestUserId,u.name)};
+  } catch(e){return {ok:false,error:e.message};}
+});
 ipcMain.handle('salespeople:toggle', async (_, { id,active,requestUserId }) => {
   try { const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};
     salespeopleRepo.toggle(id,!!active,requestUserId,u.name);return {ok:true};
@@ -4753,6 +4758,9 @@ ipcMain.handle('salespeople:toggle', async (_, { id,active,requestUserId }) => {
 });
 ipcMain.handle('salespeople:getExternalSales', async (_, filters) => {
   try{return {ok:true,data:salespeopleRepo.getExternalSales(filters||{})};}catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:getExternalSaleById', async (_, { id }) => {
+  try{return {ok:true,data:salespeopleRepo.getExternalSaleById(id)};}catch(e){return {ok:false,error:e.message};}
 });
 ipcMain.handle('salespeople:createExternalSale', async (_, { data,requestUserId }) => {
   try{const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};
@@ -4777,6 +4785,9 @@ ipcMain.handle('salespeople:generateCommission', async (_, { data,requestUserId 
 });
 ipcMain.handle('salespeople:getCommissionRuns', async (_, filters) => {
   try{return {ok:true,data:salespeopleRepo.getCommissionRuns(filters||{})};}catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:getCommissionById', async (_, { id }) => {
+  try{return {ok:true,data:salespeopleRepo.getCommissionById(id)};}catch(e){return {ok:false,error:e.message};}
 });
 ipcMain.handle('salespeople:approveCommission', async (_, { id,requestUserId }) => {
   try{const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};
@@ -6118,6 +6129,15 @@ ipcMain.handle('accounting:reverseEntry', async (_, { id, reason, requestUserId 
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
+ipcMain.handle('accounting:deleteEntry', async (_, { id, reason, requestUserId }) => {
+  try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
+    const removed = accountingRepo.deleteEntry(id, requestUserId, reason);
+    audit.log(requestUserId, 'accounting_entry_delete', `Asiento retirado: ${id}. Motivo: ${reason}`);
+    return { ok: true, data: removed };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
 ipcMain.handle('accounting:getLedger', async (_, { accountId, from, to } = {}) => {
   try {
     const rows = accountingRepo.getLedger({ accountId, from, to });
@@ -6201,6 +6221,16 @@ ipcMain.handle('accounting:getDashboardStats', async () => {
 ipcMain.handle('accounting:getReconciliation', async () => {
   try {
     return { ok: true, data: accountingRepo.getReconciliation() };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('accounting:initializeReconciliation', async (_, { date, requestUserId } = {}) => {
+  try {
+    if (!_requireAccountingRole(requestUserId)) return _NO_ACCT_ROLE;
+    const data = accountingRepo.initializeReconciliation({ date, userId: requestUserId });
+    audit.log(requestUserId, 'accounting_reconciliation_initialize',
+      `Saldos auxiliares inicializados${data.entry?.number ? `: ${data.entry.number}` : ''}`);
+    return { ok: true, data };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 

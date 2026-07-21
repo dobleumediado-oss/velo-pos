@@ -386,9 +386,9 @@ async function _reloadAsientos() {
         h('td', null, h('div', { style: { display: 'flex', gap: '4px' } },
           h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '2px 7px' },
             onclick: () => _openVerAsiento(e.id) }, 'Ver'),
-          e.status === 'confirmado' && ['manual','ajuste','apertura','cierre'].includes(e.source_module || 'manual')
+          e.status === 'confirmado'
             ? h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '2px 7px', color: '#ef4444' },
-                onclick: () => _reverseAsiento(e.id) }, 'Anular')
+                onclick: () => _deleteAsiento(e.id, e.source_module) }, 'Eliminar')
             : null
         ))
       )
@@ -439,6 +439,7 @@ async function _openVerAsiento(id) {
       </table>
       <div style="display:flex;gap:8px;margin-top:14px">
         <button class="print-btn" onclick="_printAsiento(${id})">🖨 Imprimir</button>
+        ${entry.status === 'confirmado' ? `<button class="btn-ghost" style="color:#ef4444" onclick="_deleteAsiento(${id},'${_esc(entry.source_module || 'manual')}')">Eliminar asiento</button>` : ''}
         <button class="btn-ghost" onclick="closeModal()">Cerrar</button>
       </div>
     </div>
@@ -481,6 +482,27 @@ window._reverseAsiento = async function(id) {
     await _reloadAsientos();
   } else {
     toast(res?.error || 'Error al anular', 'e');
+  }
+};
+
+window._deleteAsiento = async function(id, sourceModule = 'manual') {
+  const automatic = !['manual', 'ajuste', 'apertura', 'cierre'].includes(sourceModule || 'manual');
+  const explanation = automatic
+    ? 'Este asiento fue generado por otro módulo. Se retirará únicamente su efecto contable; la operación de origen seguirá existiendo en su módulo y la eliminación quedará en Auditoría.'
+    : 'El asiento desaparecerá de los libros y se retirará su efecto de todas las cuentas. La eliminación quedará registrada en Auditoría.';
+  if (!confirm(`¿Eliminar este asiento contable?\n\n${explanation}`)) return;
+  const reason = await askText('Indica el motivo de la corrección:', {
+    title: 'Eliminar asiento contable',
+    placeholder: 'Ej.: asiento creado por error',
+  });
+  if (!reason || !reason.trim()) return;
+  const res = await window.api.accounting.deleteEntry({ id, reason: reason.trim(), requestUserId: user.id });
+  if (res?.ok) {
+    toast('Asiento eliminado de la contabilidad', 's');
+    closeModal();
+    await _reloadAsientos();
+  } else {
+    toast(res?.error || 'No se pudo eliminar el asiento', 'e');
   }
 };
 
@@ -1424,17 +1446,22 @@ async function _bajaActivo(a) {
 async function _contRenderCuadres(el) {
   const res    = await window.api.accounting.getReconciliation();
   const checks = res?.data || [];
-  const allOk  = checks.length && checks.every(c => c.ok);
+  const allOk  = checks.length && checks.every(c => c.state === 'ok' || c.ok);
+  const pending = checks.some(c => c.state === 'pendiente');
 
   el.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' } },
     h('div', { style: { fontSize: '13px', fontWeight: '600', color: 'var(--ink)' } }, 'Verificación auxiliar ↔ mayor'),
-    h('span', { class: `entry-status entry-status-${allOk ? 'activo' : 'anulado'}`, style: { fontSize: '12px' } },
-      allOk ? '✓ Todo cuadra' : '⚠ Hay descuadres')
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+      pending ? h('button', { class: 'btn', style: { fontSize: '11px' }, onclick: () => _initializeReconciliation(el) }, 'Inicializar saldos contables') : null,
+      h('span', { class: `entry-status entry-status-${allOk ? 'activo' : (pending ? 'pendiente' : 'anulado')}`, style: { fontSize: '12px' } },
+        allOk ? '✓ Todo cuadra' : (pending ? '◷ Pendiente de inicialización' : '⚠ Hay descuadres'))
+    )
   ));
 
   el.appendChild(h('div', { style: { fontSize: '12px', color: 'var(--muted2)', marginBottom: '14px' } },
-    'Compara el saldo contable (cuenta control del mayor) con el auxiliar operativo. ' +
-    'Una diferencia indica operaciones sin asiento, importaciones o ajustes manuales; sincroniza el histórico o revisa el origen.'));
+    pending
+      ? 'Los auxiliares ya contienen saldos históricos, pero Contabilidad todavía no tiene su asiento de apertura. Esto no se marca como error hasta inicializar los saldos.'
+      : 'Compara el saldo contable (cuenta control del mayor) con el auxiliar operativo. Una diferencia posterior a la apertura sí indica una operación sin asiento o un ajuste por revisar.'));
 
   const tbl = h('table', { class: 'ledger-tbl', style: { width: '100%' } },
     h('thead', null, h('tr', null,
@@ -1448,11 +1475,29 @@ async function _contRenderCuadres(el) {
       h('td', null, h('div', null, c.name), h('div', { style: { fontSize: '10px', color: 'var(--muted2)' } }, c.note)),
       h('td', { class: 'num' }, fmt(c.control)),
       h('td', { class: 'num' }, fmt(c.auxiliar)),
-      h('td', { class: 'num', style: { color: c.ok ? 'var(--muted2)' : '#ef4444', fontWeight: '700' } }, fmt(c.diff)),
-      h('td', null, h('span', { class: `entry-status entry-status-${c.ok ? 'activo' : 'anulado'}` }, c.ok ? '✓ Cuadra' : '⚠ Descuadre'))
+      h('td', { class: 'num', style: { color: c.ok ? 'var(--muted2)' : (c.state === 'pendiente' ? '#d97706' : '#ef4444'), fontWeight: '700' } }, fmt(c.diff)),
+      h('td', null, h('span', { class: `entry-status entry-status-${c.ok ? 'activo' : (c.state === 'pendiente' ? 'pendiente' : 'anulado')}` },
+        c.ok ? '✓ Cuadra' : (c.state === 'pendiente' ? '◷ Sin apertura' : '⚠ Descuadre')))
     )))
   );
   el.appendChild(h('div', { class: 'tw' }, tbl));
+}
+
+async function _initializeReconciliation(el) {
+  const date = await askText('Fecha del asiento de apertura (YYYY-MM-DD):', {
+    title: 'Inicializar saldos contables',
+    placeholder: _isoDate(0),
+    defaultValue: _isoDate(0),
+  });
+  if (date === null) return;
+  const cleanDate = String(date || '').trim() || _isoDate(0);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(cleanDate)) { toast('Usa el formato YYYY-MM-DD', 'e'); return; }
+  if (!confirm('Se creará un asiento de apertura balanceado con los saldos actuales de Clientes, Inventario y Cuentas por pagar.\n\nEsta acción se realiza una sola vez y quedará en Auditoría. ¿Continuar?')) return;
+  const res = await window.api.accounting.initializeReconciliation({ date: cleanDate, requestUserId: user.id });
+  if (!res?.ok) { toast(res?.error || 'No se pudieron inicializar los saldos', 'e'); return; }
+  toast(res.data?.entry?.number ? `Saldos inicializados en ${res.data.entry.number}` : 'Los auxiliares ya estaban cuadrados', 's');
+  el.innerHTML = '';
+  await _contRenderCuadres(el);
 }
 
 // ══════════════════════════════════════════════

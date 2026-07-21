@@ -6,6 +6,8 @@
 
 let _enviosVehiculos = [];  // caché de vehículos para el handler delegado del botón
 let _enviosCache     = [];  // última lista cargada — para Ver/Editar sin re-consultar
+let _enviosView      = 'activos'; // los cancelados viven en Historial, no en la operación diaria
+let _enviosRoot      = null;
 
 function _eUser() {
   if (window._currentUser) return window._currentUser;
@@ -13,6 +15,15 @@ function _eUser() {
 }
 const _eFmt   = n => 'RD$' + (n||0).toLocaleString('es-DO', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 const _eToday = () => new Date().toISOString().split('T')[0];
+const _eEsc   = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+
+async function _eReload() {
+  const target = _enviosRoot || document.getElementById('page') ||
+    document.getElementById('main-content') || document.querySelector('.main-content');
+  if (target) await renderEnvios(target);
+  else if (typeof routeTo === 'function') routeTo('envios');
+}
 
 const STATUS_ENV = {
   pendiente:  { label:'Pendiente',  color:'#f59e0b', bg:'#fffbeb' },
@@ -115,6 +126,7 @@ const EXPRESOS_RD = {
 
 // ── Render principal ──────────────────────────
 async function renderEnvios(el) {
+  _enviosRoot = el;
   el.innerHTML = window.experienceLoading?.('Preparando envíos y rutas…') || '<div class="empty"><p>Cargando envíos…</p></div>';
   const user = _eUser();
   if (!user) return;
@@ -132,6 +144,9 @@ async function renderEnvios(el) {
 
   const summary   = sumRes?.data  || {};
   const envios    = envRes?.data  || [];
+  const visibleEnvios = _enviosView === 'historial'
+    ? envios.filter(e => e.status === 'cancelado')
+    : envios.filter(e => e.status !== 'cancelado');
   const vehiculos = vehRes?.data  || [];
   _enviosVehiculos = vehiculos;  // disponible para el handler delegado
   _enviosCache     = envios;     // para Ver/Editar sin re-consultar
@@ -166,10 +181,26 @@ async function renderEnvios(el) {
     </div>`).join('');
   el.appendChild(metrics);
 
-  if (!envios.length) {
+  const filters = document.createElement('div');
+  filters.className = 'envios-viewbar';
+  filters.innerHTML = `
+    <div class="envios-segments" role="tablist" aria-label="Vista de envíos">
+      <button class="envios-segment ${_enviosView === 'activos' ? 'is-active' : ''}" data-envio-view-mode="activos" role="tab" aria-selected="${_enviosView === 'activos'}">
+        Vigentes <span>${envios.filter(e => e.status !== 'cancelado').length}</span>
+      </button>
+      <button class="envios-segment ${_enviosView === 'historial' ? 'is-active' : ''}" data-envio-view-mode="historial" role="tab" aria-selected="${_enviosView === 'historial'}">
+        Historial de cancelados <span>${envios.filter(e => e.status === 'cancelado').length}</span>
+      </button>
+    </div>
+    <div class="envios-viewhint">${_enviosView === 'historial' ? 'Solo consulta: un envío cancelado no puede reactivarse.' : 'Los cancelados no se mezclan con la operación diaria.'}</div>`;
+  el.appendChild(filters);
+
+  if (!visibleEnvios.length) {
     const empty = document.createElement('div');
     empty.className = 'empty ui-empty-state';
-    empty.innerHTML = `<div>${svg('truck')}</div><p>Sin envíos registrados</p><span>Registra el primer despacho para comenzar a controlar entregas y tarifas.</span>`;
+    empty.innerHTML = _enviosView === 'historial'
+      ? `<div>${svg('check')}</div><p>Sin envíos cancelados</p><span>El historial está limpio.</span>`
+      : `<div>${svg('truck')}</div><p>Sin envíos vigentes</p><span>Registra el primer despacho para comenzar a controlar entregas y tarifas.</span>`;
     el.appendChild(empty);
   } else {
     const wrap = document.createElement('div');
@@ -188,34 +219,34 @@ async function renderEnvios(el) {
           </tr>
         </thead>
         <tbody>
-          ${envios.map(e => {
+          ${visibleEnvios.map(e => {
             // Determinar "Vía" — vehículo propio o expreso
             const via = e.carrier_name
-              ? `<span style="color:var(--blue,#3b82f6);font-weight:500">🚌 ${e.carrier_name}</span>`
+              ? `<span style="color:var(--blue,#3b82f6);font-weight:500">🚌 ${_eEsc(e.carrier_name)}</span>`
               : (e.brand
-                ? `<span style="color:var(--muted2)">🚗 ${e.brand} ${e.model} ${e.plate?'('+e.plate+')':''}</span>`
+                ? `<span style="color:var(--muted2)">🚗 ${_eEsc(e.brand)} ${_eEsc(e.model)} ${e.plate?'('+_eEsc(e.plate)+')':''}</span>`
                 : '<span style="color:var(--muted2)">—</span>');
             return `
             <tr style="border-bottom:0.5px solid var(--line2)">
               <td style="padding:10px 12px;max-width:180px">
-                <div style="font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.dest_address}</div>
-                ${e.carrier_stop ? `<div style="font-size:10px;color:var(--muted2)">Parada: ${e.carrier_stop}</div>` : ''}
-                ${e.carrier_tracking ? `<div style="font-size:10px;color:var(--blue,#3b82f6)">Rastreo: ${e.carrier_tracking}</div>` : ''}
+                <div style="font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_eEsc(e.dest_address)}</div>
+                ${e.carrier_stop ? `<div style="font-size:10px;color:var(--muted2)">Parada: ${_eEsc(e.carrier_stop)}</div>` : ''}
+                ${e.carrier_tracking ? `<div style="font-size:10px;color:var(--blue,#3b82f6)">Rastreo: ${_eEsc(e.carrier_tracking)}</div>` : ''}
               </td>
-              <td style="padding:10px 12px;color:var(--muted2)">${e.customer_name||'—'}</td>
+              <td style="padding:10px 12px;color:var(--muted2)">${_eEsc(e.customer_name||'—')}</td>
               <td style="padding:10px 12px">${via}</td>
               <td style="padding:10px 12px;text-align:right;color:var(--muted2)">${e.distance_km ? e.distance_km.toFixed(1)+' km' : '—'}</td>
               <td style="padding:10px 12px;text-align:right;font-weight:700;color:var(--green,#00c07a)">${_eFmt(e.delivery_fee)}</td>
               <td style="padding:10px 12px">${_eBadge(e.status)}</td>
               <td style="padding:10px 12px">
-                <div style="display:flex;gap:4px">
-                  <button class="btn btn-ghost btn-sm" title="Ver detalle" data-envio-view="${e.id}">👁</button>
-                  ${['pendiente','en_camino'].includes(e.status) ? `<button class="btn btn-ghost btn-sm" title="Editar" data-envio-edit="${e.id}">✏️</button>` : ''}
-                  ${e.status === 'pendiente' ? `<button class="btn btn-ghost btn-sm" style="color:var(--blue)" title="Marcar en camino" data-envio-id="${e.id}" data-envio-status="en_camino">🚚</button>` : ''}
-                  ${e.status === 'en_camino' ? `<button class="btn btn-ghost btn-sm" style="color:var(--green)" title="Confirmar entrega" data-envio-id="${e.id}" data-envio-status="entregado">✅</button>` : ''}
-                  ${['pendiente','en_camino'].includes(e.status) ? `<button class="btn btn-ghost btn-sm" style="color:var(--red)" title="Cancelar" data-envio-id="${e.id}" data-envio-status="cancelado">✗</button>` : ''}
-                  ${e.status === 'entregado' ? `<button class="btn btn-ghost btn-sm" style="color:var(--red)" title="Anular entrega" data-envio-id="${e.id}" data-envio-status="cancelado">✗</button>` : ''}
-                  ${e.dest_lat && e.dest_lng ? `<button class="btn btn-ghost btn-sm" title="Ver en mapa" onclick="abrirMapa(${e.dest_lat},${e.dest_lng},'${(e.dest_address||'').replace(/'/g,'')}')">🗺</button>` : ''}
+                <div class="envios-actions">
+                  <button class="env-action env-action-neutral" title="Ver todos los datos" aria-label="Ver envío ${e.id}" data-envio-view="${e.id}">${svg('eye')}<span>Ver</span></button>
+                  ${e.status === 'pendiente' ? `<button class="env-action env-action-primary" title="Despachar y marcar en camino" data-envio-id="${e.id}" data-envio-status="en_camino">${svg('truck')}<span>Despachar</span></button>` : ''}
+                  ${e.status === 'en_camino' ? `<button class="env-action env-action-success" title="Confirmar que fue entregado" data-envio-id="${e.id}" data-envio-status="entregado">${svg('check')}<span>Entregar</span></button>` : ''}
+                  ${['pendiente','en_camino'].includes(e.status) ? `<button class="env-action env-action-neutral env-action-icon" title="Editar envío" aria-label="Editar envío ${e.id}" data-envio-edit="${e.id}">${svg('edit')}</button>` : ''}
+                  ${['pendiente','en_camino'].includes(e.status) ? `<button class="env-action env-action-danger env-action-icon" title="Cancelar envío" aria-label="Cancelar envío ${e.id}" data-envio-id="${e.id}" data-envio-status="cancelado">${svg('xmark')}</button>` : ''}
+                  ${e.status === 'entregado' ? `<button class="env-action env-action-danger" title="Anular una entrega confirmada" data-envio-id="${e.id}" data-envio-status="cancelado">${svg('xmark')}<span>Anular</span></button>` : ''}
+                  ${e.status !== 'cancelado' && e.dest_lat && e.dest_lng ? `<button class="env-action env-action-neutral env-action-icon" title="Abrir destino en el mapa" aria-label="Abrir mapa del envío ${e.id}" data-envio-map="${e.id}">${svg('map-pin')}</button>` : ''}
                 </div>
               </td>
             </tr>`;
@@ -235,10 +266,24 @@ async function renderEnvios(el) {
         modalNuevoEnvio(el, _enviosVehiculos || []);
         return;
       }
+      const viewModeBtn = ev.target.closest('[data-envio-view-mode]');
+      if (viewModeBtn) {
+        ev.preventDefault();
+        _enviosView = viewModeBtn.dataset.envioViewMode === 'historial' ? 'historial' : 'activos';
+        _eReload();
+        return;
+      }
       const viewBtn = ev.target.closest('[data-envio-view]');
       if (viewBtn) { ev.preventDefault(); verEnvio(Number(viewBtn.dataset.envioView)); return; }
       const editBtn = ev.target.closest('[data-envio-edit]');
       if (editBtn) { ev.preventDefault(); editarEnvio(Number(editBtn.dataset.envioEdit)); return; }
+      const mapBtn = ev.target.closest('[data-envio-map]');
+      if (mapBtn) {
+        ev.preventDefault();
+        const envio = (_enviosCache || []).find(x => Number(x.id) === Number(mapBtn.dataset.envioMap));
+        if (envio?.dest_lat && envio?.dest_lng) abrirMapa(envio.dest_lat, envio.dest_lng, envio.dest_address || '');
+        return;
+      }
       const statusBtn = ev.target.closest('[data-envio-status]');
       if (statusBtn) {
         ev.preventDefault();
@@ -426,7 +471,7 @@ function modalNuevoEnvio(parentEl, vehiculos) {
     const res = await window.api.deliveries.create({ data, requestUserId: user.id });
     if (!res.ok) throw new Error(res.error);
     _eToast('✓ Envío registrado');
-    renderEnvios(document.getElementById('main-content') || parentEl);
+    await _eReload();
   }, 'Registrar envío');
 
   // ── Lógica interactiva del modal ─────────────────────────────────────────
@@ -872,8 +917,7 @@ function editarEnvio(id) {
     const res = await window.api.deliveries.update({ id, data, requestUserId: user.id });
     if (!res?.ok) throw new Error(res?.error || 'No se pudo guardar');
     _eToast('✓ Envío actualizado');
-    const mainEl = document.getElementById('main-content') || document.querySelector('.main-content');
-    if (mainEl) renderEnvios(mainEl);
+    await _eReload();
   }, 'Guardar cambios');
 }
 
@@ -907,10 +951,7 @@ window.actualizarEnvio = async (id, status) => {
   }
 
   // Recargar en tiempo real
-  const mainEl = document.getElementById('main-content') ||
-                 document.querySelector('.main-content');
-  if (mainEl) await renderEnvios(mainEl);
-  else if (typeof routeTo === 'function') routeTo('envios');
+  await _eReload();
 };
 
 window.abrirMapa = (lat, lng, address) => {

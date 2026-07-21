@@ -3944,8 +3944,23 @@ const deliveriesRepo = {
     return this.getById(id);
   },
   updateStatus(id, status, userId) {
-    db.prepare(`UPDATE deliveries SET status=?,${status==='entregado'?"delivered_at=datetime('now'),":""} updated_at=datetime('now') WHERE id=?`)
-      .run(status, id);
+    const current = this.getById(id);
+    if (!current) throw new Error('Envío no encontrado');
+    const transitions = {
+      pendiente: ['en_camino', 'cancelado'],
+      en_camino: ['entregado', 'cancelado'],
+      entregado: ['cancelado'],
+      cancelado: [],
+    };
+    if (!transitions[current.status]?.includes(status)) {
+      const from = ({ pendiente: 'Pendiente', en_camino: 'En camino', entregado: 'Entregado', cancelado: 'Cancelado' })[current.status] || current.status;
+      const to = ({ pendiente: 'Pendiente', en_camino: 'En camino', entregado: 'Entregado', cancelado: 'Cancelado' })[status] || status;
+      throw new Error(`No se puede cambiar un envío de ${from} a ${to}`);
+    }
+    db.prepare(`UPDATE deliveries SET status=?,
+      delivered_at=${status === 'entregado' ? "datetime('now')" : 'NULL'},
+      updated_at=datetime('now') WHERE id=?`).run(status, id);
+    return this.getById(id);
   },
   getSummary() {
     return {
@@ -4535,6 +4550,16 @@ const accountingRepo = {
       audit(userId, '', 'asiento_anulado', 'accounting_entries', entryId, reason);
       return { ok: true, entryId, number: original.number };
     })();
+  },
+
+  // Eliminación lógica de un asiento desde Contabilidad. Puede retirar tanto
+  // asientos manuales como automáticos, pero conserva el documento anulado y
+  // el motivo en Auditoría. Así desaparece de libros/reportes sin destruir la
+  // trazabilidad ni dejar saldos acumulados en el catálogo.
+  deleteEntry(entryId, userId, reason) {
+    const result = this.reverseEntry(entryId, userId, reason, { allowSystem: true });
+    audit(userId, '', 'asiento_eliminado', 'accounting_entries', entryId, reason);
+    return result;
   },
 
   // ── Mayor general (movimientos por cuenta) ─
@@ -5222,15 +5247,81 @@ const accountingRepo = {
       WHERE e.source_module='compra' AND e.status='confirmado' AND l.account_id=?`).get(apId).t : 0;
     const cxpAux = r2(cxpGastos + cxpCompras);
 
-    const mk = (name, control, auxiliar, note) => {
+    const initialized = settingsRepo.get('accounting_control_baseline') === '1';
+    const mk = (name, control, auxiliar, note, key, code) => {
       const diff = r2(control - auxiliar);
-      return { name, control: r2(control), auxiliar: r2(auxiliar), diff, ok: Math.abs(diff) < 0.01, note };
+      const ok = Math.abs(diff) < 0.01;
+      return {
+        name, control: r2(control), auxiliar: r2(auxiliar), diff, ok, note, key, code,
+        state: ok ? 'ok' : (initialized ? 'descuadre' : 'pendiente'),
+      };
     };
     return [
-      mk('Cuentas por cobrar (1104)', cxcCtrl, cxcAux, 'Contable vs suma de saldos de clientes'),
-      mk('Inventario (1105)',         invCtrl, invAux, 'Contable vs valor de stock a costo'),
-      mk('Cuentas por pagar (2101)',  cxpCtrl, cxpAux, 'Contable vs gastos pendientes + compras recibidas'),
+      mk('Cuentas por cobrar (1104)', cxcCtrl, cxcAux, 'Contable vs suma de saldos de clientes', 'account_ar', '1104'),
+      mk('Inventario (1105)',         invCtrl, invAux, 'Contable vs valor de stock a costo', 'account_inventory', '1105'),
+      mk('Cuentas por pagar (2101)',  cxpCtrl, cxpAux, 'Contable vs gastos pendientes + compras recibidas', 'account_ap', '2101'),
     ];
+  },
+
+  // Crea una apertura balanceada para datos operativos que ya existían antes
+  // de activar Contabilidad. No debe ejecutarse automáticamente: el usuario
+  // confirma la fecha y la acción queda registrada en Auditoría.
+  initializeReconciliation({ date, userId } = {}) {
+    return db.transaction(() => {
+      if (settingsRepo.get('accounting_control_baseline') === '1') {
+        throw new Error('Los saldos auxiliares ya fueron inicializados');
+      }
+      const checks = this.getReconciliation();
+      const cfg = this.getConfig();
+      const lines = [];
+      let net = 0;
+
+      for (const check of checks) {
+        const accountId = cfg[check.key]?.account_id || this.getAccountByCode(check.code)?.id;
+        if (!accountId) throw new Error(`Falta configurar la cuenta control ${check.code}`);
+        // CxC e Inventario tienen saldo deudor. CxP se guarda acreedor (negativo).
+        const currentRaw = check.code === '2101' ? -check.control : check.control;
+        const targetRaw = check.code === '2101' ? -check.auxiliar : check.auxiliar;
+        const delta = round2(targetRaw - currentRaw);
+        if (Math.abs(delta) < 0.01) continue;
+        lines.push({
+          account_id: accountId,
+          debit: delta > 0 ? delta : 0,
+          credit: delta < 0 ? -delta : 0,
+          description: `Saldo inicial ${check.name.replace(/\s*\([^)]*\)$/, '')}`,
+        });
+        net = round2(net + delta);
+      }
+
+      let entry = null;
+      if (lines.length) {
+        const equityId = cfg.account_equity?.account_id || this.getAccountByCode('3101')?.id;
+        if (!equityId) throw new Error('Falta la cuenta de capital 3101 para balancear la apertura');
+        if (Math.abs(net) >= 0.01) {
+          lines.push({
+            account_id: equityId,
+            debit: net < 0 ? -net : 0,
+            credit: net > 0 ? net : 0,
+            description: 'Contrapartida de saldos iniciales',
+          });
+        }
+        if (lines.length < 2) throw new Error('No fue posible construir una apertura balanceada');
+        entry = this.createEntry({
+          date: date || new Date().toISOString().slice(0, 10),
+          concept: 'Inicialización de saldos auxiliares',
+          reference: 'APERTURA-AUXILIARES',
+          source_module: 'apertura',
+          lines,
+          notes: 'Apertura de CxC, inventario y CxP existentes antes de activar Contabilidad.',
+          userId,
+          status: 'confirmado',
+        });
+      }
+      settingsRepo.set('accounting_control_baseline', '1');
+      audit(userId, '', 'saldos_auxiliares_inicializados', 'accounting_entries', entry?.entryId || null,
+        entry ? `Asiento ${entry.number}` : 'Sin diferencias');
+      return { ok: true, entry, checks: this.getReconciliation() };
+    })();
   },
 
   // ── Reporte 606 (compras/gastos con NCF — formato DGII preliminar) ─────────

@@ -29,7 +29,7 @@ El color nunca sustituye el texto, el estado o el valor; solo refuerza la orient
 
 ## Cobertura
 
-La capa común cubre Dashboard, Punto de Venta, Inventario, Compras, Clientes, Ventas, Devoluciones, Vendedores y Nómina, Caja, Gastos, Bancos, Contabilidad, Vehículos, Envíos, Conduces, Sucursales, Reportes, Etiquetas, Configuración, Auditoría y Panel de Desarrollador. El inicio de sesión conserva su experiencia oscura propia y comparte tipografía, controles y retroalimentación.
+La capa común cubre Dashboard, Punto de Venta, Inventario, Compras, Clientes, Ventas, Devoluciones, Vendedores, Nómina, Caja, Gastos, Bancos, Contabilidad, Vehículos, Envíos, Conduces, Sucursales, Reportes, Etiquetas, Configuración, Auditoría y Panel de Desarrollador. El inicio de sesión conserva su experiencia oscura propia y comparte tipografía, controles y retroalimentación.
 
 ## Reglas de mantenimiento
 
@@ -91,10 +91,11 @@ La cuarta capa lleva los componentes visuales a decisiones y flujos operativos r
 
 - **Dashboard personalizable:** cada usuario puede mostrar, ocultar y ordenar pulso ejecutivo, cuentas por cobrar, indicadores, caja, gastos, fiscalidad y análisis. La preferencia queda separada por usuario y negocio.
 - **Tendencias compactas:** las métricas muestran minigráficas cuando existe historial real; si no existe, se comunica el estado sin fabricar comparaciones.
-- **Perfiles comerciales completos:** cada vendedor dispone de meta, avance, rentabilidad, tendencia de talonarios, datos operativos y línea de tiempo documental.
+- **Perfiles comerciales completos:** cada vendedor dispone de meta, avance, rentabilidad, tendencia de ventas externas, datos operativos y línea de tiempo documental.
 - **Calendario empresarial:** comisiones, nóminas, viáticos y recibos ambulantes conviven en una agenda mensual navegable.
 - **Flujo visual:** comisiones y nóminas se organizan en borrador, aprobado y pagado, conservando sus acciones reales.
-- **Cobertura ambulante:** el mapa operativo diferencia coordenadas configuradas de posiciones aproximadas por zona; nunca presenta una ubicación aproximada como GPS real.
+- **Cobertura ambulante:** la vista se organiza con zona y ruta, sin pedir coordenadas técnicas al usuario.
+- **Nómina independiente:** usa una identidad visual financiera propia y separa compensación, períodos y pagos de la operación cotidiana de Vendedores.
 
 El tablero se persiste bajo `velo:dashboard-layout:v1:{negocio}:{usuario}`. Las nuevas vistas son presentaciones de datos existentes y respetan las mismas validaciones, permisos, auditoría e integración contable de los módulos de origen.
 

@@ -380,7 +380,53 @@ ok(near(DB.accountingRepo.getAccountByCode('1101').balance, cashBeforeVoid - 25)
   'anulación restaura directamente los saldos de las cuentas');
 throws(() => DB.accountingRepo.reverseEntry(manualEntry.entryId, userId, 'segunda anulación'),
   'impide anular dos veces el mismo asiento');
+
+const automaticEntry = DB.accountingRepo.createEntry({
+  date: '2026-07-20', concept: 'Devolución automática corregible',
+  source_module: 'devolucion', source_id: 999001, userId,
+  lines: [
+    { account_id: cashAccount.id, debit: 40, credit: 0, description: 'Prueba automática' },
+    { account_id: capitalAccount.id, debit: 0, credit: 40, description: 'Prueba automática' },
+  ],
+});
+const autoCashBeforeDelete = DB.accountingRepo.getAccountByCode('1101').balance;
+const deletedAutomatic = DB.accountingRepo.deleteEntry(automaticEntry.entryId, userId, 'registro automático incorrecto');
+ok(deletedAutomatic.entryId === automaticEntry.entryId &&
+   DB.accountingRepo.getEntryById(automaticEntry.entryId).status === 'anulado',
+  'Contabilidad puede retirar un asiento automático conservando su auditoría');
+ok(near(DB.accountingRepo.getAccountByCode('1101').balance, autoCashBeforeDelete - 40) &&
+   !DB.accountingRepo.getEntries().some(e => e.id === automaticEntry.entryId),
+  'eliminar asiento automático restaura saldos y lo oculta de los libros vigentes');
+
+db.prepare("DELETE FROM settings WHERE key='accounting_control_baseline'").run();
+const reconciliationBefore = DB.accountingRepo.getReconciliation();
+ok(reconciliationBefore.every(c => c.ok || c.state === 'pendiente'),
+  'auxiliares históricos sin apertura se muestran pendientes, no como descuadre real');
+const initialized = DB.accountingRepo.initializeReconciliation({ date: '2026-07-20', userId });
+const reconciliationAfter = DB.accountingRepo.getReconciliation();
+ok(initialized.ok && reconciliationAfter.every(c => c.ok && c.state === 'ok'),
+  'inicialización crea una apertura balanceada y cuadra CxC, inventario y CxP');
+throws(() => DB.accountingRepo.initializeReconciliation({ date: '2026-07-20', userId }),
+  'la apertura de auxiliares solo puede ejecutarse una vez');
+
 db.prepare("INSERT INTO settings(key,value) VALUES('module_contabilidad','0') ON CONFLICT(key) DO UPDATE SET value='0'").run();
+
+console.log('\n== C5. Flujo de estados de envíos ==');
+const deliveryId = DB.deliveriesRepo.create({
+  dest_address: 'Destino de prueba', delivery_fee: 500, user_id: userId,
+});
+throws(() => DB.deliveriesRepo.updateStatus(deliveryId, 'entregado', userId),
+  'impide saltar un envío de pendiente directamente a entregado');
+DB.deliveriesRepo.updateStatus(deliveryId, 'en_camino', userId);
+ok(DB.deliveriesRepo.getById(deliveryId).status === 'en_camino', 'permite despachar un envío pendiente');
+DB.deliveriesRepo.updateStatus(deliveryId, 'entregado', userId);
+ok(DB.deliveriesRepo.getById(deliveryId).status === 'entregado' && !!DB.deliveriesRepo.getById(deliveryId).delivered_at,
+  'confirmar entrega registra estado y fecha de entrega');
+DB.deliveriesRepo.updateStatus(deliveryId, 'cancelado', userId);
+ok(DB.deliveriesRepo.getById(deliveryId).status === 'cancelado' && !DB.deliveriesRepo.getById(deliveryId).delivered_at,
+  'anular una entrega limpia la fecha y la envía al historial');
+throws(() => DB.deliveriesRepo.updateStatus(deliveryId, 'en_camino', userId),
+  'un envío cancelado no puede reactivarse');
 
 const buyProdId = DB.productsRepo.create({
   code: 'PH2', name: 'Producto Compra Historial', cost: 50, price: 100,

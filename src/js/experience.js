@@ -12,7 +12,8 @@
     dash:{ label:'Dashboard', icon:'grid', group:'Resumen' }, pos:{ label:'Punto de Venta', icon:'monitor', group:'Operación' },
     inventario:{ label:'Inventario', icon:'box', group:'Gestión' }, compras:{ label:'Compras', icon:'truck', group:'Gestión' },
     clientes:{ label:'Clientes', icon:'users', group:'Gestión' }, ventas:{ label:'Ventas', icon:'list', group:'Gestión' },
-    devoluciones:{ label:'Devoluciones', icon:'return', group:'Gestión' }, vendedores:{ label:'Vendedores y Nómina', icon:'users', group:'Equipo' },
+    devoluciones:{ label:'Devoluciones', icon:'return', group:'Gestión' }, vendedores:{ label:'Vendedores', icon:'users', group:'Equipo' },
+    comisiones:{ label:'Comisiones', icon:'trend', group:'Equipo' }, nomina:{ label:'Nómina', icon:'calendar', group:'Finanzas' },
     caja:{ label:'Caja', icon:'cash', group:'Finanzas' }, gastos:{ label:'Gastos', icon:'dollar', group:'Finanzas' },
     bancos:{ label:'Bancos y Cuentas', icon:'bank', group:'Finanzas' }, contabilidad:{ label:'Contabilidad', icon:'ledger', group:'Finanzas' },
     vehiculos:{ label:'Vehículos', icon:'car', group:'Operación' }, envios:{ label:'Envíos', icon:'truck', group:'Operación' },
@@ -275,9 +276,9 @@
         const pendingComm = (comm?.data || []).filter(x => x.status === 'borrador').length;
         const pendingPayroll = (payroll?.data || []).filter(x => ['borrador','aprobado'].includes(x.status)).length;
         if (pendingComm) items.push({ tone:'purple', icon:'trend', title:`${pendingComm} comisión${pendingComm === 1 ? '' : 'es'} por aprobar`,
-          detail:'Cortes calculados pendientes de validación.', route:'vendedores', sellerTab:'comisiones', priority:2 });
+          detail:'Liquidaciones calculadas pendientes de validación.', route:'comisiones', commissionTab:'liquidaciones', priority:2 });
         if (pendingPayroll) items.push({ tone:'blue', icon:'calendar', title:`${pendingPayroll} nómina${pendingPayroll === 1 ? '' : 's'} pendiente${pendingPayroll === 1 ? '' : 's'}`,
-          detail:'Borradores o pagos aprobados aún sin completar.', route:'vendedores', sellerTab:'nomina', priority:2 });
+          detail:'Borradores o pagos aprobados aún sin completar.', route:'nomina', payrollTab:'periodos', priority:2 });
       } catch {}
     }
     return items.sort((a,b) => a.priority - b.priority);
@@ -290,6 +291,8 @@
     if (item.expenseTab) { try { _gastosTab = item.expenseTab; } catch {} }
     if (typeof routeTo === 'function') routeTo(item.route);
     if (item.sellerTab) setTimeout(() => window._venSetTab?.(item.sellerTab), 350);
+    if (item.commissionTab) setTimeout(() => window._comSetTab?.(item.commissionTab), 350);
+    if (item.payrollTab) setTimeout(() => window._nomSetTab?.(item.payrollTab), 350);
   }
 
   async function openNotifications() {

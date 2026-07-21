@@ -5,7 +5,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 (function () {
-  const GUIDE_REV = 'experience-3.2';
+  const GUIDE_REV = 'experience-3.3';
   const STORAGE_PREFIX = 'vp_guided_tours_v2';
   let active = null;
   let renderToken = 0;
@@ -72,7 +72,11 @@
         { title:'Un tablero a tu medida', icon:'settings', route:'dash', selector:'.dash-personalize-btn', wait:2200,
           text:'Muestra, oculta y ordena los bloques del Dashboard. Tu diseño se guarda de forma independiente para este usuario y negocio.' },
         { title:'Dirección comercial visual', icon:'users', route:'vendedores', requires:'vendedores', selector:'.ven-nav', wait:2500,
-          text:'Perfiles, metas, calendario, flujo de compensación y cobertura ambulante reúnen la operación comercial sin duplicar movimientos.' },
+          text:'Perfiles, metas, ventas externas, viáticos, agenda y cobertura reúnen la operación comercial.' },
+        { title:'Comisiones independientes', icon:'trend', route:'comisiones', requires:'vendedores', selector:'.com-nav', wait:2500,
+          text:'Reglas, cálculos y aprobaciones tienen su propia área antes de conectarse con Nómina.' },
+        { title:'Nómina en su propia área', icon:'calendar', route:'nomina', requires:'nomina', selector:'.nom-nav', wait:2500,
+          text:'Salarios, comisiones aprobadas, bonos, deducciones y pagos ahora tienen un módulo financiero separado y conectado.' },
       ],
     },
     owner: {
@@ -84,7 +88,9 @@
         { title:'Navegación organizada', icon:'menu', selector:'.sidebar', text:'Los módulos están agrupados por gestión, finanzas, logística y sistema. El menú se adapta a los permisos habilitados.' },
         { title:'Inventario conectado', icon:'box', selector:'.nav-item[data-key="inventario"]', requires:'inventario', text:'Productos, existencias, costos e historial alimentan ventas, compras, reportes y contabilidad.' },
         { title:'Ventas y devoluciones', icon:'list', selector:'.nav-item[data-key="ventas"]', requires:'ventas', text:'Consulta la operación comercial. Las devoluciones viven en su propio módulo y dejan de mezclarse con las ventas vigentes.' },
-        { title:'Vendedores y nómina', icon:'users', selector:'.nav-item[data-key="vendedores"]', requires:'vendedores', text:'Controla fijos y ambulantes, talonarios, comisiones, viáticos y nóminas conectadas con Gastos.' },
+        { title:'Operación de vendedores', icon:'users', selector:'.nav-item[data-key="vendedores"]', requires:'vendedores', text:'Controla perfiles fijos y ambulantes, rutas, metas, cobertura, ventas externas y viáticos.' },
+        { title:'Comisiones comerciales', icon:'trend', selector:'.nav-item[data-key="comisiones"]', requires:'vendedores', text:'Gestiona reglas, cálculos, aprobaciones e historial sin mezclarlos con Nómina.' },
+        { title:'Nómina independiente', icon:'calendar', selector:'.nav-item[data-key="nomina"]', requires:'nomina', text:'Configura salarios, genera períodos y paga liquidaciones conectadas automáticamente con Gastos y Contabilidad.' },
         { title:'Gastos y obligaciones', icon:'dollar', selector:'.nav-item[data-key="gastos"]', requires:'gastos', text:'Registra gastos, viáticos, nómina y cuentas por pagar para reflejarlos correctamente en la operación.' },
         { title:'Contabilidad integrada', icon:'ledger', selector:'.nav-item[data-key="contabilidad"]', requires:'contabilidad', text:'Los módulos de origen alimentan los asientos y estados financieros sin exigir doble digitación.' },
         { title:'Reportes para decidir', icon:'chart', selector:'.nav-item[data-key="reportes"]', requires:'reportes', text:'Convierte los movimientos del sistema en indicadores comerciales y financieros para el dueño.' },

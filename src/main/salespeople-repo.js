@@ -28,6 +28,8 @@ function ensureSalespeopleSchema(db) {
       sales_goal           REAL NOT NULL DEFAULT 0,
       map_lat              REAL,
       map_lng              REAL,
+      coverage_address     TEXT DEFAULT '',
+      location_updated_at  TEXT,
       payroll_frequency    TEXT NOT NULL DEFAULT 'mensual'
                              CHECK(payroll_frequency IN ('semanal','quincenal','mensual')),
       status               TEXT NOT NULL DEFAULT 'activo' CHECK(status IN ('activo','inactivo')),
@@ -64,6 +66,20 @@ function ensureSalespeopleSchema(db) {
       UNIQUE(salesperson_id,booklet_number,receipt_number)
     );
     CREATE INDEX IF NOT EXISTS idx_seller_external_date ON seller_external_sales(salesperson_id,sale_date,status);
+
+    CREATE TABLE IF NOT EXISTS seller_external_sale_items (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      external_sale_id  INTEGER NOT NULL REFERENCES seller_external_sales(id) ON DELETE CASCADE,
+      product_id        INTEGER REFERENCES products(id),
+      product_code      TEXT DEFAULT '',
+      product_name      TEXT NOT NULL,
+      qty               REAL NOT NULL DEFAULT 1,
+      unit_price        REAL NOT NULL DEFAULT 0,
+      unit_cost         REAL NOT NULL DEFAULT 0,
+      line_total        REAL NOT NULL DEFAULT 0,
+      created_at        TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_seller_external_items_sale ON seller_external_sale_items(external_sale_id);
 
     CREATE TABLE IF NOT EXISTS seller_commission_runs (
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -164,6 +180,8 @@ function ensureSalespeopleSchema(db) {
   if (!sellerCols.includes('sales_goal')) db.exec('ALTER TABLE salespeople ADD COLUMN sales_goal REAL NOT NULL DEFAULT 0');
   if (!sellerCols.includes('map_lat')) db.exec('ALTER TABLE salespeople ADD COLUMN map_lat REAL');
   if (!sellerCols.includes('map_lng')) db.exec('ALTER TABLE salespeople ADD COLUMN map_lng REAL');
+  if (!sellerCols.includes('coverage_address')) db.exec("ALTER TABLE salespeople ADD COLUMN coverage_address TEXT DEFAULT ''");
+  if (!sellerCols.includes('location_updated_at')) db.exec('ALTER TABLE salespeople ADD COLUMN location_updated_at TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_sales_salesperson_date ON sales(salesperson_id,created_at,status)');
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_payroll_unique_period ON payroll_runs(date_from,date_to,frequency) WHERE status!='anulado'");
 }
@@ -230,7 +248,7 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
     `).all(seller.id, from, to);
     const external = db().prepare(`
       SELECT id source_id,'talonario' source_type,sale_date,
-        TRIM(COALESCE(booklet_number,'') || CASE WHEN booklet_number!='' THEN '-' ELSE '' END || receipt_number) reference,
+        receipt_number reference,
         customer_name,
         MAX(0,gross_amount-discount_amount-return_amount) sale_amount,
         MAX(0,cost_amount) cost_amount
@@ -297,14 +315,15 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
       if (!name) throw new Error('El nombre del vendedor es obligatorio');
       const code = text(data.code, 30) || `VEN-${String((db().prepare('SELECT COALESCE(MAX(id),0)+1 n FROM salespeople').get().n)).padStart(4, '0')}`;
       const r = db().prepare(`INSERT INTO salespeople(code,name,seller_type,linked_user_id,document,phone,email,address,zone,route,
-        booklet_code,hire_date,commission_mode,commission_rate,commission_fixed,commission_frequency,salary_amount,sales_goal,map_lat,map_lng,payroll_frequency,notes,created_by)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(code,name,data.seller_type==='ambulante'?'ambulante':'fijo',
+        booklet_code,hire_date,commission_mode,commission_rate,commission_fixed,commission_frequency,salary_amount,sales_goal,map_lat,map_lng,coverage_address,location_updated_at,payroll_frequency,notes,created_by)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(code,name,data.seller_type==='ambulante'?'ambulante':'fijo',
         Number(data.linked_user_id)||null,text(data.document,30),text(data.phone,30),text(data.email,120),text(data.address,250),
-        text(data.zone,100),text(data.route,120),text(data.booklet_code,50),data.hire_date||null,
+        text(data.zone,100),text(data.route,120),'',data.hire_date||null,
         ['none','percent_sales','percent_margin','fixed_sale'].includes(data.commission_mode)?data.commission_mode:'percent_sales',
         money(data.commission_rate),money(data.commission_fixed),
         ['semanal','quincenal','mensual'].includes(data.commission_frequency)?data.commission_frequency:'mensual',
         money(data.salary_amount),money(data.sales_goal),coordinate(data.map_lat,-90,90),coordinate(data.map_lng,-180,180),
+        text(data.coverage_address,250),(data.map_lat!==''&&data.map_lat!=null&&data.map_lng!==''&&data.map_lng!=null)?new Date().toISOString():null,
         ['semanal','quincenal','mensual'].includes(data.payroll_frequency)?data.payroll_frequency:'mensual',
         text(data.notes,500),userId||null);
       audit(userId||0,userName||'','vendedor_creado','salespeople',r.lastInsertRowid,`${code} · ${name}`);
@@ -314,18 +333,32 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
       const current = requireSeller(id);
       const name = text(data.name,120);
       if (!name) throw new Error('El nombre del vendedor es obligatorio');
+      const nextLat = coordinate(data.map_lat,-90,90);
+      const nextLng = coordinate(data.map_lng,-180,180);
+      const locationChanged = nextLat !== current.map_lat || nextLng !== current.map_lng;
       db().prepare(`UPDATE salespeople SET code=?,name=?,seller_type=?,linked_user_id=?,document=?,phone=?,email=?,address=?,zone=?,route=?,
-        booklet_code=?,hire_date=?,commission_mode=?,commission_rate=?,commission_fixed=?,commission_frequency=?,salary_amount=?,sales_goal=?,map_lat=?,map_lng=?,payroll_frequency=?,
+        booklet_code=?,hire_date=?,commission_mode=?,commission_rate=?,commission_fixed=?,commission_frequency=?,salary_amount=?,sales_goal=?,map_lat=?,map_lng=?,coverage_address=?,
+        location_updated_at=CASE WHEN ?=1 THEN datetime('now','localtime') ELSE location_updated_at END,payroll_frequency=?,
         notes=?,updated_at=datetime('now','localtime') WHERE id=?`).run(text(data.code,30)||current.code,name,
         data.seller_type==='ambulante'?'ambulante':'fijo',Number(data.linked_user_id)||null,text(data.document,30),text(data.phone,30),
-        text(data.email,120),text(data.address,250),text(data.zone,100),text(data.route,120),text(data.booklet_code,50),data.hire_date||current.hire_date,
+        text(data.email,120),text(data.address,250),text(data.zone,100),text(data.route,120),'',data.hire_date||current.hire_date,
         ['none','percent_sales','percent_margin','fixed_sale'].includes(data.commission_mode)?data.commission_mode:'percent_sales',
         money(data.commission_rate),money(data.commission_fixed),
         ['semanal','quincenal','mensual'].includes(data.commission_frequency)?data.commission_frequency:'mensual',money(data.salary_amount),money(data.sales_goal),
-        coordinate(data.map_lat,-90,90),coordinate(data.map_lng,-180,180),
+        nextLat,nextLng,text(data.coverage_address,250),locationChanged?1:0,
         ['semanal','quincenal','mensual'].includes(data.payroll_frequency)?data.payroll_frequency:'mensual',text(data.notes,500),id);
       audit(userId||0,userName||'','vendedor_actualizado','salespeople',id,name);
       return true;
+    },
+    updateLocation(id, data, userId, userName) {
+      const seller = requireSeller(id);
+      if (seller.seller_type !== 'ambulante') throw new Error('La cobertura geográfica solo aplica a vendedores ambulantes');
+      const lat = coordinate(data.lat,-90,90), lng = coordinate(data.lng,-180,180);
+      if (lat == null || lng == null) throw new Error('La ubicación indicada no es válida');
+      db().prepare(`UPDATE salespeople SET map_lat=?,map_lng=?,coverage_address=?,location_updated_at=datetime('now','localtime'),updated_at=datetime('now','localtime') WHERE id=?`)
+        .run(lat,lng,text(data.coverage_address,250)||seller.coverage_address||'',id);
+      audit(userId||0,userName||'','vendedor_ubicacion_actualizada','salespeople',id,`${seller.name} · ${lat}, ${lng}`);
+      return requireSeller(id);
     },
     toggle(id, active, userId, userName) {
       const seller = requireSeller(id);
@@ -351,20 +384,60 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
         expenseTotal:money(rows.reduce((s,r)=>s+r.expenses,0)) };
     },
     createExternalSale(data, userId, userName) {
-      const seller = requireSeller(data.salesperson_id);
-      const receipt = text(data.receipt_number,50);
-      if (!receipt) throw new Error('El número del recibo o talonario es obligatorio');
-      const gross = money(data.gross_amount), discount = money(data.discount_amount), returned = money(data.return_amount);
-      if (gross <= 0 || discount + returned > gross) throw new Error('Los montos de la venta externa no son válidos');
-      const net = money(gross-discount-returned);
-      const collected = Math.min(net,money(data.collected_amount == null ? net : data.collected_amount));
-      const r = db().prepare(`INSERT INTO seller_external_sales(salesperson_id,sale_date,booklet_number,receipt_number,customer_name,
-        gross_amount,discount_amount,return_amount,cost_amount,collected_amount,payment_method,notes,created_by)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(seller.id,isoDate(data.sale_date),text(data.booklet_number||seller.booklet_code,50),receipt,
-        text(data.customer_name,120)||'Consumidor Final',gross,discount,returned,Math.min(net,money(data.cost_amount)),collected,
-        text(data.payment_method,30)||'efectivo',text(data.notes,500),userId||null);
-      audit(userId||0,userName||'','venta_ambulante_creada','seller_external_sales',r.lastInsertRowid,`${seller.name} · ${receipt} · RD$${net}`);
-      return r.lastInsertRowid;
+      return db().transaction(() => {
+        const seller = requireSeller(data.salesperson_id);
+        if (seller.seller_type !== 'ambulante') throw new Error('Las ventas externas solo aplican a vendedores ambulantes');
+        const receipt = text(data.receipt_number,50) || `EXT-${String(db().prepare('SELECT COALESCE(MAX(id),0)+1 n FROM seller_external_sales').get().n).padStart(6,'0')}`;
+        if (db().prepare('SELECT id FROM seller_external_sales WHERE salesperson_id=? AND receipt_number=? LIMIT 1').get(seller.id,receipt)) {
+          throw new Error('Ese número de recibo externo ya fue registrado para el vendedor');
+        }
+        const suppliedItems = Array.isArray(data.items);
+        const items = (suppliedItems ? data.items : []).map((item, index) => {
+          const product = Number(item.product_id)
+            ? db().prepare('SELECT id,code,name,price,cost FROM products WHERE id=?').get(Number(item.product_id))
+            : null;
+          const name = text(item.product_name || product?.name, 180);
+          const qty = money(item.qty);
+          const unitPrice = money(item.unit_price ?? product?.price);
+          const unitCost = Math.min(unitPrice, money(item.unit_cost ?? product?.cost));
+          if (!name || qty <= 0 || unitPrice <= 0) {
+            throw new Error(`Producto ${index + 1}: completa descripción, cantidad y precio`);
+          }
+          return {
+            product_id: product?.id || null,
+            product_code: text(item.product_code || product?.code, 60),
+            product_name: name,
+            qty,
+            unit_price: unitPrice,
+            unit_cost: unitCost,
+            line_total: money(qty * unitPrice),
+          };
+        });
+        if (suppliedItems && !items.length) throw new Error('Agrega al menos un producto vendido');
+
+        const gross = items.length
+          ? money(items.reduce((sum, item) => sum + item.line_total, 0))
+          : money(data.gross_amount);
+        const itemCost = items.length
+          ? money(items.reduce((sum, item) => sum + item.qty * item.unit_cost, 0))
+          : money(data.cost_amount);
+        const discount = money(data.discount_amount), returned = money(data.return_amount);
+        if (gross <= 0 || discount + returned > gross) throw new Error('Los montos de la venta externa no son válidos');
+        const net = money(gross-discount-returned);
+        const collected = Math.min(net,money(data.collected_amount == null ? net : data.collected_amount));
+        const r = db().prepare(`INSERT INTO seller_external_sales(salesperson_id,sale_date,booklet_number,receipt_number,customer_name,
+          gross_amount,discount_amount,return_amount,cost_amount,collected_amount,payment_method,notes,created_by)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(seller.id,isoDate(data.sale_date),'',receipt,
+          text(data.customer_name,120)||'Consumidor Final',gross,discount,returned,Math.min(net,itemCost),collected,
+          text(data.payment_method,30)||'efectivo',text(data.notes,500),userId||null);
+        if (items.length) {
+          const insertItem = db().prepare(`INSERT INTO seller_external_sale_items(external_sale_id,product_id,product_code,product_name,qty,unit_price,unit_cost,line_total)
+            VALUES(?,?,?,?,?,?,?,?)`);
+          items.forEach(item => insertItem.run(r.lastInsertRowid,item.product_id,item.product_code,item.product_name,item.qty,item.unit_price,item.unit_cost,item.line_total));
+        }
+        audit(userId||0,userName||'','venta_ambulante_creada','seller_external_sales',r.lastInsertRowid,`${seller.name} · ${receipt} · RD$${net}`);
+        return r.lastInsertRowid;
+      })();
     },
     getExternalSales({ salespersonId, from, to, includeCancelled } = {}) {
       let where = includeCancelled ? 'WHERE 1=1' : "WHERE es.status='registrada'";
@@ -373,9 +446,18 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
       if (from) { where+=' AND es.sale_date>=?';args.push(isoDate(from)); }
       if (to) { where+=' AND es.sale_date<=?';args.push(isoDate(to)); }
       return db().prepare(`SELECT es.*,sp.name salesperson_name,sp.seller_type,
+        (SELECT COUNT(*) FROM seller_external_sale_items i WHERE i.external_sale_id=es.id) item_count,
         MAX(0,es.gross_amount-es.discount_amount-es.return_amount) net_amount
         FROM seller_external_sales es JOIN salespeople sp ON sp.id=es.salesperson_id ${where}
         ORDER BY es.sale_date DESC,es.id DESC`).all(...args);
+    },
+    getExternalSaleById(id) {
+      const sale = db().prepare(`SELECT es.*,sp.name salesperson_name,sp.seller_type,
+        MAX(0,es.gross_amount-es.discount_amount-es.return_amount) net_amount
+        FROM seller_external_sales es JOIN salespeople sp ON sp.id=es.salesperson_id WHERE es.id=?`).get(Number(id));
+      if (!sale) return null;
+      sale.items = db().prepare(`SELECT * FROM seller_external_sale_items WHERE external_sale_id=? ORDER BY id`).all(sale.id);
+      return sale;
     },
     cancelExternalSale(id, reason, userId, userName) {
       const sale=db().prepare('SELECT * FROM seller_external_sales WHERE id=?').get(id);
@@ -421,6 +503,13 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
       return db().prepare(`SELECT r.*,sp.name salesperson_name,sp.seller_type,
         (SELECT COUNT(*) FROM seller_commission_lines l WHERE l.commission_run_id=r.id) sales_count
         FROM seller_commission_runs r JOIN salespeople sp ON sp.id=r.salesperson_id ${where} ORDER BY r.date_to DESC,r.id DESC`).all(...args);
+    },
+    getCommissionById(id) {
+      const run=db().prepare(`SELECT r.*,sp.name salesperson_name,sp.code salesperson_code,sp.seller_type
+        FROM seller_commission_runs r JOIN salespeople sp ON sp.id=r.salesperson_id WHERE r.id=?`).get(Number(id));
+      if(!run)return null;
+      run.lines=db().prepare(`SELECT * FROM seller_commission_lines WHERE commission_run_id=? ORDER BY sale_date,source_type,source_id`).all(run.id);
+      return run;
     },
     approveCommission(id,userId,userName){
       const run=db().prepare('SELECT * FROM seller_commission_runs WHERE id=?').get(id);
