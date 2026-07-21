@@ -139,7 +139,7 @@ const {
   productsRepo, customersRepo, cashRepo,
   salesRepo, returnsRepo, reportsRepo, suppliersRepo, purchasesRepo, audit,
   expensesRepo, branchesRepo, vehiclesRepo, maintenanceRepo, deliveriesRepo, ncfRepo,
-  financialAccountsRepo, bankReconRepo, accountingRepo, fixedAssetsRepo, conduceRepo
+  financialAccountsRepo, bankReconRepo, accountingRepo, fixedAssetsRepo, conduceRepo, salespeopleRepo
 } = require('./database');
 
 const {
@@ -4717,6 +4717,112 @@ ipcMain.handle('expenses:upsertBudget', async (_, { data, requestUserId }) => {
     expensesRepo.upsertBudget(data);
     return { ok:true };
   } catch(e) { return { ok:false, error:e.message }; }
+});
+
+// ══════════════════════════════════════════════
+// IPC — VENDEDORES, COMISIONES, VIÁTICOS Y NÓMINA
+// ══════════════════════════════════════════════
+function _salespeopleAdmin(requestUserId) {
+  const u = authRepo.findById(requestUserId);
+  if (!u || !['admin','superadmin'].includes(u.role)) return null;
+  return u;
+}
+
+ipcMain.handle('salespeople:getAll', async (_, filters) => {
+  try { return { ok:true, data:salespeopleRepo.getAll(filters||{}) }; }
+  catch(e) { return { ok:false,error:e.message }; }
+});
+ipcMain.handle('salespeople:getDashboard', async (_, filters) => {
+  try { return { ok:true,data:salespeopleRepo.getDashboard(filters||{}) }; }
+  catch(e) { return { ok:false,error:e.message }; }
+});
+ipcMain.handle('salespeople:create', async (_, { data,requestUserId }) => {
+  try { const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};
+    return {ok:true,id:salespeopleRepo.create(data||{},requestUserId,u.name)};
+  } catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:update', async (_, { id,data,requestUserId }) => {
+  try { const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};
+    salespeopleRepo.update(id,data||{},requestUserId,u.name);return {ok:true};
+  } catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:toggle', async (_, { id,active,requestUserId }) => {
+  try { const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};
+    salespeopleRepo.toggle(id,!!active,requestUserId,u.name);return {ok:true};
+  } catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:getExternalSales', async (_, filters) => {
+  try{return {ok:true,data:salespeopleRepo.getExternalSales(filters||{})};}catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:createExternalSale', async (_, { data,requestUserId }) => {
+  try{const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};
+    return {ok:true,id:salespeopleRepo.createExternalSale(data||{},requestUserId,u.name)};
+  }catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:cancelExternalSale', async (_, { id,reason,requestUserId }) => {
+  try{const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};
+    salespeopleRepo.cancelExternalSale(id,reason,requestUserId,u.name);return {ok:true};
+  }catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:suggestedPeriod', async (_, { salespersonId,asOf }) => {
+  try{return {ok:true,data:salespeopleRepo.suggestedPeriod(salespersonId,asOf)};}catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:previewCommission', async (_, data) => {
+  try{return {ok:true,data:salespeopleRepo.previewCommission(data||{})};}catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:generateCommission', async (_, { data,requestUserId }) => {
+  try{const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};
+    return {ok:true,data:salespeopleRepo.generateCommission(data||{},requestUserId,u.name)};
+  }catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:getCommissionRuns', async (_, filters) => {
+  try{return {ok:true,data:salespeopleRepo.getCommissionRuns(filters||{})};}catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:approveCommission', async (_, { id,requestUserId }) => {
+  try{const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};
+    salespeopleRepo.approveCommission(id,requestUserId,u.name);return {ok:true};
+  }catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:createExpense', async (_, { data,requestUserId }) => {
+  try{const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};
+    const method=data?.payment_method||'efectivo';let session=null;
+    if(data?.pay_now&&data?.payment_source==='caja'){session=cashRepo.getOpen(_reqTerminalId());if(!session)return {ok:false,error:'No hay caja abierta'};}
+    const result=salespeopleRepo.createSellerExpense({...data,cash_session_id:session?.id||null},requestUserId,u.name);
+    _acctHook(()=>{accountingRepo.generateExpenseAccrualEntry({expenseId:result.expenseId,userId:requestUserId});if(result.paymentId)accountingRepo.generateExpensePaymentEntry({paymentId:result.paymentId,userId:requestUserId});});
+    return {ok:true,...result};
+  }catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:getExpenses', async (_, filters) => {
+  try{return {ok:true,data:salespeopleRepo.getSellerExpenses(filters||{})};}catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:generatePayroll', async (_, { data,requestUserId }) => {
+  try{const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};
+    return {ok:true,id:salespeopleRepo.generatePayroll(data||{},requestUserId,u.name)};
+  }catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:getPayrollRuns', async () => {
+  try{return {ok:true,data:salespeopleRepo.getPayrollRuns()};}catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:getPayrollById', async (_, { id }) => {
+  try{return {ok:true,data:salespeopleRepo.getPayrollById(id)};}catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:updatePayrollItem', async (_, { id,data,requestUserId }) => {
+  try{const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};
+    salespeopleRepo.updatePayrollItem(id,data||{});return {ok:true};
+  }catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:approvePayroll', async (_, { id,requestUserId }) => {
+  try{const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};
+    salespeopleRepo.approvePayroll(id,requestUserId,u.name);return {ok:true};
+  }catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:payPayroll', async (_, { id,data,requestUserId }) => {
+  try{const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};let session=null;
+    if(data?.payment_source==='caja'){session=cashRepo.getOpen(_reqTerminalId());if(!session)return {ok:false,error:'No hay caja abierta'};}
+    const refs=salespeopleRepo.payPayroll(id,{...data,cash_session_id:session?.id||null},requestUserId,u.name);
+    _acctHook(()=>refs.forEach(ref=>{accountingRepo.generateExpenseAccrualEntry({expenseId:ref.expenseId,userId:requestUserId});accountingRepo.generateExpensePaymentEntry({paymentId:ref.paymentId,userId:requestUserId});}));
+    return {ok:true,paid:refs.length};
+  }catch(e){return {ok:false,error:e.message};}
 });
 
 

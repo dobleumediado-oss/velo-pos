@@ -417,7 +417,7 @@ function _estimarRendimiento(tipo, fuelGrade) {
 
 // ── Render principal ──────────────────────────
 async function renderVehiculos(el) {
-  el.innerHTML = '<div style="padding:32px;text-align:center;color:var(--muted2)">Cargando vehículos...</div>';
+  el.innerHTML = window.experienceLoading?.('Preparando flota y mantenimientos…') || '<div class="empty"><p>Cargando vehículos…</p></div>';
   const user = _vUser();
   if (!user) return;
 
@@ -442,7 +442,7 @@ async function renderVehiculos(el) {
 
   // Banner de precio de combustible actual
   const fuelBanner = document.createElement('div');
-  fuelBanner.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;background:var(--bg2);border-radius:10px;border:0.5px solid var(--line2);padding:10px 14px;align-items:center';
+  fuelBanner.className = 'ui-context-bar';
   fuelBanner.innerHTML = `
     <span style="font-size:11px;color:var(--muted2);font-weight:600">⛽ PRECIO COMBUSTIBLE HOY (RD$/galón):</span>
     <span style="font-size:12px;font-weight:700;color:var(--green,#00c07a)">Premium: ${_vFmt(fuelPrices.premium)}</span>
@@ -457,11 +457,9 @@ async function renderVehiculos(el) {
         ? '<span style="color:var(--green,#00c07a)">✓ tiempo real</span>'
         : '<span style="color:var(--amber,#f59e0b)">estimado — sin internet</span>'}
     </span>`;
-  el.appendChild(fuelBanner);
-
   // Header
   const hdr = document.createElement('div');
-  hdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px';
+  hdr.className = 'sec-hdr';
   hdr.innerHTML = `
     <div>
       <h2 style="font-size:18px;font-weight:600;margin:0;color:var(--ink)">Vehículos y Mantenimiento</h2>
@@ -469,11 +467,12 @@ async function renderVehiculos(el) {
     </div>
     <button class="btn btn-dark btn-sm" id="btn-nuevo-vehiculo">+ Nuevo vehículo</button>`;
   el.appendChild(hdr);
+  el.appendChild(fuelBanner);
 
   // Alertas de mantenimiento
   if (pendientes.length) {
     const alert = document.createElement('div');
-    alert.style.cssText = 'background:#fffbeb;border:1px solid #f59e0b;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#92400e';
+    alert.className = 'alrt a';
     alert.innerHTML = `⚠ <strong>${pendientes.length} mantenimiento${pendientes.length>1?'s':''} próximo${pendientes.length>1?'s':''}</strong>: 
       ${pendientes.slice(0,3).map(p=>`${p.brand} ${p.model} — ${p.type} (${_vDate(p.next_date)})`).join(' · ')}`;
     el.appendChild(alert);
@@ -481,12 +480,12 @@ async function renderVehiculos(el) {
 
   if (!vehiculos.length) {
     const empty = document.createElement('div');
-    empty.style.cssText = 'text-align:center;padding:48px;color:var(--muted2)';
-    empty.innerHTML = '<div style="font-size:40px">🚗</div><div style="margin-top:8px;font-size:13px">Sin vehículos registrados</div><div style="font-size:11px;margin-top:4px">Agrega el primer vehículo de la empresa</div>';
+    empty.className = 'empty ui-empty-state';
+    empty.innerHTML = `<div>${svg('car')}</div><p>Sin vehículos registrados</p><span>Agrega la primera unidad para controlar combustible y mantenimiento.</span>`;
     el.appendChild(empty);
   } else {
     const grid = document.createElement('div');
-    grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px';
+    grid.className = 'ui-card-grid';
     vehiculos.forEach(v => {
       // Costo por km con precio real del combustible de ESTE vehículo
       const esElectrico = v.fuel_type === 'electrico' || v.fuel_grade === 'ninguno';
@@ -499,7 +498,7 @@ async function renderVehiculos(el) {
         : `⛽ ${GRADE_LABEL[grade] || grade} · ${kmg} km/gal · <strong style="color:var(--ink)">RD$${costKm}/km</strong>`;
 
       const card = document.createElement('div');
-      card.style.cssText = 'background:var(--bg2);border-radius:12px;border:0.5px solid var(--line2);overflow:hidden';
+      card.className = 'ui-entity-card ui-vehicle-card';
       card.innerHTML = `
         <div style="padding:14px 16px;border-bottom:1px solid var(--line2)">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">

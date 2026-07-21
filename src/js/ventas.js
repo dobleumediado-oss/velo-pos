@@ -607,6 +607,10 @@ function renderVentasTable() {
         h('td', null,
           h('div', { class: 'tb' }, cliName),
           h('div', { class: 'ts' }, s.cajero || ''),
+          s.salesperson_name
+            ? h('div', { class: 'ts', style: { color: 'var(--green)' } },
+                `Vendedor: ${s.salesperson_code ? s.salesperson_code + ' · ' : ''}${s.salesperson_name}`)
+            : null,
           // Badges de modelos únicos en esta venta
           (() => {
             const models = [...new Set(
@@ -1181,6 +1185,7 @@ async function openDetalleVentaModal(s) {
     <div class="modal-title">Venta ${typeof facturaLabel === 'function' ? facturaLabel(sale || s) : '#'+String(s.id).padStart(5,'0')}</div>
     <div class="modal-sub">
       ${fdate(fecha)} · Cajero: ${detail.cajero || '—'}
+      ${detail.salesperson_name ? ` · Vendedor: ${ventasEsc(detail.salesperson_code ? detail.salesperson_code + ' · ' : '')}${ventasEsc(detail.salesperson_name)}` : ''}
     </div>
     <div class="g2" style="margin-bottom:14px">
       <div>
@@ -1377,6 +1382,9 @@ async function reimprimirVenta(saleId) {
         transaction_number: sale.id,
         notes:           sale.notes || '',
         cajero:          sale.cajero,
+        salesperson_id:   sale.salesperson_id || null,
+        salesperson_name: sale.salesperson_name || '',
+        salesperson_code: sale.salesperson_code || '',
         // NCF real de la venta (factura) o nota de crédito B04 (devolución),
         // y el NCF que la nota modifica — antes la reimpresión no los pasaba.
         ncf:             sale.ncf || '',
@@ -1419,6 +1427,9 @@ async function guardarVentaPDF(saleId) {
     receipt_number: sale.last_receipt_number, receipt_numbers: sale.receipt_numbers,
     transaction_number: sale.id, notes: sale.notes || '',
     cajero: sale.cajero, ncf: sale.ncf || '', tax_pct: sale.tax_pct, modifies_ncf: sale.modifies_ncf || '',
+    salesperson_id: sale.salesperson_id || null,
+    salesperson_name: sale.salesperson_name || '',
+    salesperson_code: sale.salesperson_code || '',
     original_sale_id: sale.original_sale_id || null,
     original_numero_factura: sale.original_numero_factura,
     original_numero_factura_fmt: sale.original_numero_factura_fmt,

@@ -21,8 +21,15 @@ async function renderBancos(el) {
     return;
   }
 
-  const wrap = h('div', { style: { padding: '20px', maxWidth: '1100px', margin: '0 auto' } });
+  const wrap = h('div', { class: 'module-workspace' });
   el.appendChild(wrap);
+
+  wrap.appendChild(h('div', { class: 'sec-hdr' },
+    h('div', null,
+      h('div', { class: 'sec-title' }, 'Bancos y Cuentas'),
+      h('div', { class: 'sec-sub' }, 'Saldos, movimientos, transferencias y conciliación financiera')
+    )
+  ));
 
   // Tabs — la barra queda FIJA; el clic re-renderiza SOLO el cuerpo (sin pestañeo
   // del módulo completo).

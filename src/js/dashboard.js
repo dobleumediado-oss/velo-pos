@@ -3,12 +3,114 @@
 //               Usa campos SQLite correctamente
 // ══════════════════════════════════════════════
 
+const _DASH_WIDGETS = [
+  { id:'pulse', label:'Pulso ejecutivo', help:'Salud operativa, caja y prioridades' },
+  { id:'credits', label:'Cuentas por cobrar', help:'Clientes con balances y vencimientos' },
+  { id:'metrics', label:'Indicadores comerciales', help:'Ventas, ganancia, créditos y cotizaciones' },
+  { id:'cashflow', label:'Ventas y abonos', help:'Composición del efectivo cobrado' },
+  { id:'expenses', label:'Gastos y cuentas por pagar', help:'Egresos y compromisos del período' },
+  { id:'fiscal', label:'Resumen fiscal', help:'ITBIS, secuencias y alertas NCF' },
+  { id:'analysis', label:'Análisis y operación', help:'Gráficas, inventario y actividad reciente' },
+];
+
+function _dashLayoutKey() {
+  return `velo:dashboard-layout:v1:${CFG?.biz || 'business'}:${user?.id || 'user'}`;
+}
+
+function _dashDefaultLayout() {
+  return _DASH_WIDGETS.map(x => ({ id:x.id, visible:true }));
+}
+
+function _dashLoadLayout() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(_dashLayoutKey()) || '[]');
+    const map = new Map(saved.map(x => [x.id, x]));
+    const ordered = saved.filter(x => _DASH_WIDGETS.some(w => w.id === x.id));
+    _DASH_WIDGETS.forEach(w => { if (!map.has(w.id)) ordered.push({ id:w.id, visible:true }); });
+    return ordered.map(x => ({ id:x.id, visible:x.visible !== false }));
+  } catch (_) { return _dashDefaultLayout(); }
+}
+
+function _dashSaveLayout(layout) {
+  localStorage.setItem(_dashLayoutKey(), JSON.stringify(layout));
+}
+
+function _dashWidget(el, id) {
+  if (el) el.dataset.dashboardWidget = id;
+  return el;
+}
+
+function _dashApplyLayout(root) {
+  const layout = _dashLoadLayout();
+  layout.forEach(item => {
+    root.querySelectorAll(`[data-dashboard-widget="${item.id}"]`).forEach(node => {
+      node.hidden = !item.visible;
+      root.appendChild(node);
+    });
+  });
+}
+
+function _dashSparkline(values, color = '#10b981') {
+  const clean = (values || []).map(Number).filter(Number.isFinite);
+  if (clean.length < 2 || !clean.some(v => v > 0)) return '<span class="dash-spark-empty">Sin historial suficiente</span>';
+  const max = Math.max(...clean, 1);
+  const min = Math.min(...clean);
+  const span = Math.max(max - min, 1);
+  const points = clean.map((v, i) => `${(i / (clean.length - 1)) * 100},${28 - ((v - min) / span) * 24}`).join(' ');
+  return `<svg class="dash-spark" viewBox="0 0 100 32" preserveAspectRatio="none" aria-label="Tendencia del período"><polyline points="${points}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+
+function dashConfigure() {
+  const exp = window.VeloExperience;
+  if (!exp?.openDrawer) return;
+  let layout = _dashLoadLayout();
+  const renderRows = body => {
+    body.querySelector('[data-dash-layout-list]').innerHTML = layout.map((item, index) => {
+      const meta = _DASH_WIDGETS.find(x => x.id === item.id);
+      return `<div class="dash-config-row" data-widget="${item.id}">
+        <label><input type="checkbox" ${item.visible ? 'checked' : ''}/><span><strong>${meta?.label || item.id}</strong><small>${meta?.help || ''}</small></span></label>
+        <div><button data-move="up" ${index === 0 ? 'disabled' : ''} aria-label="Subir">↑</button><button data-move="down" ${index === layout.length - 1 ? 'disabled' : ''} aria-label="Bajar">↓</button></div>
+      </div>`;
+    }).join('');
+  };
+  const body = exp.openDrawer({ id:'dashboard-config', title:'Personaliza tu tablero', subtitle:'El orden y la visibilidad se guardan para tu usuario', width:'500px', content:`
+    <div class="dash-config-intro">Organiza el tablero según lo que revisas primero. Los datos y permisos no cambian.</div>
+    <div class="dash-config-list" data-dash-layout-list></div>
+    <div class="dash-config-actions"><button class="btn btn-out" data-reset>Restablecer</button><button class="btn btn-green" data-save>Guardar diseño</button></div>` });
+  renderRows(body);
+  body.addEventListener('change', e => {
+    const row = e.target.closest('[data-widget]');
+    if (!row || e.target.type !== 'checkbox') return;
+    const item = layout.find(x => x.id === row.dataset.widget);
+    if (item) item.visible = e.target.checked;
+  });
+  body.addEventListener('click', async e => {
+    const row = e.target.closest('[data-widget]');
+    const move = e.target.closest('[data-move]')?.dataset.move;
+    if (row && move) {
+      const index = layout.findIndex(x => x.id === row.dataset.widget);
+      const next = move === 'up' ? index - 1 : index + 1;
+      if (index >= 0 && next >= 0 && next < layout.length) [layout[index], layout[next]] = [layout[next], layout[index]];
+      renderRows(body);
+      return;
+    }
+    if (e.target.closest('[data-reset]')) { layout = _dashDefaultLayout(); renderRows(body); return; }
+    if (e.target.closest('[data-save]')) {
+      _dashSaveLayout(layout);
+      exp.closeDrawer();
+      const mainEl = document.getElementById('main-content') || document.getElementById('page');
+      if (mainEl) await renderDash(mainEl);
+    }
+  });
+}
+
 async function renderDash(el) {
   // Fluidez: doble-buffer. En vez de `el.innerHTML=''` (destello en blanco),
   // construimos todo en un buffer fuera de pantalla (pero dentro del documento,
   // para que el canvas del chart tenga dimensiones) y hacemos un swap atómico
   // al final. El contenido viejo permanece visible mientras corre el build.
   const root = document.createElement('div');
+  root.className = 'module-canvas';
   root.style.cssText = 'position:absolute;left:-99999px;top:0;width:' + (el.clientWidth || 900) + 'px';
   document.body.appendChild(root);
 
@@ -151,10 +253,15 @@ async function renderDash(el) {
     ),
     h('div', { style: 'display:flex;gap:6px' },
       h('button', {
+        class: 'btn btn-out btn-sm dash-personalize-btn',
+        onclick: dashConfigure,
+        html: `⚙ Personalizar`
+      }),
+      h('button', {
         class: 'btn btn-out btn-sm',
         title: 'Actualizar ahora',
         onclick: async () => {
-          const mainEl = document.getElementById('main-content');
+          const mainEl = document.getElementById('page');
           if (mainEl) await renderDash(mainEl);
         },
         html: `↻ Actualizar`
@@ -166,6 +273,41 @@ async function renderDash(el) {
       })
     )
   ));
+
+  // ── Pulso ejecutivo ─────────────────────────
+  // Resume salud y pendientes sin obligar al propietario a interpretar todas
+  // las tarjetas. Cada bloque lleva directamente al área que requiere acción.
+  const overdueCredits = creditAlerts.filter(a => a.status === 'overdue').length;
+  const payablePending = (gastosData?.payable || []).filter(x =>
+    !['pagado','anulado','rechazado'].includes(String(x.status || '').toLowerCase())).length;
+  const actionCount = lowStock.length + creditAlerts.length + payablePending + (cajaOpen ? 0 : 1);
+  const healthScore = Math.max(0, 100
+    - Math.min(30, lowStock.length * 3)
+    - Math.min(30, overdueCredits * 7)
+    - Math.min(20, payablePending * 3)
+    - (cajaOpen ? 0 : 12));
+  const healthTone = healthScore >= 85 ? 'good' : healthScore >= 65 ? 'warn' : 'risk';
+
+  const executiveStrip = h('section', { class: 'ux-exec-strip' },
+    h('div', { class: `ux-exec-health ${healthTone}` },
+      h('div', { class: 'ux-exec-ring', style: `--score:${healthScore}` }, h('strong', null, healthScore)),
+      h('div', null, h('span', null, 'SALUD OPERATIVA'),
+        h('b', null, healthScore >= 85 ? 'Operación saludable' : healthScore >= 65 ? 'Requiere seguimiento' : 'Atención prioritaria'))
+    ),
+    h('button', { onclick: () => routeTo('caja') },
+      h('span', { class: `ux-exec-dot ${cajaOpen ? 'good' : 'risk'}` }),
+      h('div', null, h('small', null, 'CAJA'), h('strong', null, cajaOpen ? 'Sesión activa' : 'Pendiente de apertura'))
+    ),
+    h('button', { onclick: () => window.experienceOpenNotifications?.() },
+      h('span', { class: `ux-exec-count ${actionCount ? 'warn' : 'good'}` }, String(actionCount)),
+      h('div', null, h('small', null, 'PRIORIDADES'), h('strong', null, actionCount ? 'Revisar pendientes' : 'Todo bajo control'))
+    ),
+    h('button', { onclick: () => window.experienceOpenQuickActions?.() },
+      h('span', { class: 'ux-exec-action', html: svg('plus') }),
+      h('div', null, h('small', null, 'ACCIÓN RÁPIDA'), h('strong', null, 'Crear o registrar'))
+    )
+  );
+  root.appendChild(_dashWidget(executiveStrip, 'pulse'));
 
   // ── Card CxC: Cuentas por Cobrar ─────────────
   if (creditAlerts.length) {
@@ -254,7 +396,7 @@ async function renderDash(el) {
     });
 
     cxcBox.appendChild(listWrap);
-    root.appendChild(cxcBox);
+    root.appendChild(_dashWidget(cxcBox, 'credits'));
   }
 
   // ── Selector de período ──────────────────────
@@ -319,13 +461,18 @@ async function renderDash(el) {
   const cotizTotal = cotizPeriod.reduce((a,s) => a+(s.total||0), 0);
 
   const metWrap = h('div', { class: 'metrics' });
+  const trend7 = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    trend7.push(dailyByDate[d.toISOString().split('T')[0]]?.total || 0);
+  }
   [
     { icon: 'dollar', color: 'g', label: `Ventas (${periodLabel})`,
-      val: fmt(periodRev), badge: `${periodSales.length} transac.`, badgeType: 'nu' },
+      val: fmt(periodRev), badge: `${periodSales.length} transac.`, badgeType: 'nu', spark:_dashSparkline(trend7) },
     { icon: 'trend',  color: 'g', label: `Ganancia (${periodLabel})`,
       val: fmt(periodProfit > 0 ? periodProfit : 0),
       badge: `${periodMargin}% margen`,
-      badgeType: periodProfit > 0 ? 'nu' : 'dn' },
+      badgeType: periodProfit > 0 ? 'nu' : 'dn', spark:_dashSparkline(trend7, '#6366f1') },
     { icon: 'chart',  color: 'p', label: 'Ventas del Mes',
       val: fmt(mRev),
       badge: mVentasContado > 0 || mVentasCredito > 0
@@ -350,7 +497,7 @@ async function renderDash(el) {
       click: () => { window._ventasTabInicial = 'cotizaciones'; routeTo('ventas'); } },
   ].forEach(m => {
     const card = h('div', {
-      class: 'metric',
+      class: 'metric dash-metric-card',
       style: m.click ? { cursor: 'pointer' } : {},
       ...(m.click ? { onclick: m.click } : {})
     },
@@ -359,13 +506,14 @@ async function renderDash(el) {
       ),
       h('div', { class: 'met-label' }, m.label),
       h('div', { class: 'met-val' }, m.val),
+      m.spark ? h('div', { class:'dash-metric-spark', html:m.spark }) : null,
       h('div', { class: 'met-foot' },
         h('span', { class: `met-badge ${m.badgeType}` }, m.badge)
       )
     );
     metWrap.appendChild(card);
   });
-  root.appendChild(metWrap);
+  root.appendChild(_dashWidget(metWrap, 'metrics'));
 
   // ── Barra resumen mensual: desglose de cobradoMes ────────────────────────────
   // cobradoMes = ventas al contado + abonos de CxC (dinero real recibido)
@@ -415,7 +563,7 @@ async function renderDash(el) {
       )
     )
   );
-  root.appendChild(resumenBar);
+  root.appendChild(_dashWidget(resumenBar, 'cashflow'));
 
   // ── Cards de Gastos (si módulo activo) ───────────────────────────────────────
   if (gastosData?.summary) {
@@ -460,7 +608,7 @@ async function renderDash(el) {
       );
       gasMetWrap.appendChild(card);
     });
-    root.appendChild(gasMetWrap);
+    root.appendChild(_dashWidget(gasMetWrap, 'expenses'));
   }
 
   // ── Cards de NCF (si fiscal activo) ──────────────────────────────────────────
@@ -503,7 +651,7 @@ async function renderDash(el) {
       );
       ncfMetWrap.appendChild(card);
     });
-    root.appendChild(ncfMetWrap);
+    root.appendChild(_dashWidget(ncfMetWrap, 'fiscal'));
 
     // Alertas NCF si las hay
     if (alerts.length > 0) {
@@ -527,7 +675,7 @@ async function renderDash(el) {
           )
         ));
       });
-      root.appendChild(ncfAlertBox);
+      root.appendChild(_dashWidget(ncfAlertBox, 'fiscal'));
     }
   }
 
@@ -770,7 +918,9 @@ async function renderDash(el) {
   rightCol.appendChild(lastCard);
 
   grid.appendChild(rightCol);
-  root.appendChild(grid);
+  root.appendChild(_dashWidget(grid, 'analysis'));
+
+  _dashApplyLayout(root);
 
   // ── Swap atómico ────────────────────────────
   // Mover todo lo construido al contenedor real de una sola vez (sin destello).

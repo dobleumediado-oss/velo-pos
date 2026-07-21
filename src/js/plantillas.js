@@ -562,6 +562,7 @@ function renderTermica(sale, cfg, opts, widthMm = 76) {
     <span>Hora: ${sale.time}</span>
     <span>Cajero: ${_esc((sale.cajero||'').split(' ')[0])}</span>
   </div>
+  ${sale.salesperson_name ? `<div style="display:flex;justify-content:space-between"><span>Vendedor:</span><span>${_esc((sale.salesperson_code ? sale.salesperson_code + ' · ' : '') + sale.salesperson_name)}</span></div>` : ''}
   <div style="display:flex;justify-content:space-between">
     <span>Cliente:</span>
     <span>${_esc(sale.customer_name||'Consumidor Final')}</span>
@@ -645,6 +646,7 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
   <div class="row"><span>Fecha:</span><span>${sale.date} ${sale.time}</span></div>
   <div class="row"><span>Cliente:</span><span>${_esc(sale.customer_name||'Consumidor Final')}</span></div>
   <div class="row"><span>Cajero:</span><span>${_esc(sale.cajero||'')}</span></div>
+  ${sale.salesperson_name ? `<div class="row"><span>Vendedor:</span><span>${_esc((sale.salesperson_code ? sale.salesperson_code + ' · ' : '') + sale.salesperson_name)}</span></div>` : ''}
   <hr class="sep-d"/>
   ${(sale.items||[]).map(i => `
     <div style="font-weight:600">${_esc(i.product_name||i.name)}</div>
@@ -834,7 +836,7 @@ function renderCartaRecibo(sale, cfg, opts) {
 
   const paySummary = showMoney && !isCotizacion ? `
     <div class="legacy-pay">
-      <div><b>Representante</b><span>${_esc(sale.cajero || '')}</span></div>
+      <div><b>Representante</b><span>${_esc(sale.salesperson_name || sale.cajero || '')}</span></div>
       <div><b>Forma de pago</b><span>${_esc(paymentLabel)}</span></div>
       <div><b>Tipo de factura</b><span>${_esc(_tipoFacturacion(sale))}</span></div>
       <div class="lp-wide"><b>Observaciones</b><span>${_esc(sale.notes || 'No aceptamos devoluciones. Cambios solamente antes de 24 horas.')}</span></div>
@@ -1134,6 +1136,7 @@ function renderCartaFormal(sale, cfg, opts) {
       <label>Detalles</label>
       <div>Fecha: <strong>${sale.date}</strong></div>
       <div>Cajero: ${_esc(sale.cajero||'')}</div>
+      ${sale.salesperson_name ? `<div>Vendedor: ${_esc((sale.salesperson_code ? sale.salesperson_code + ' · ' : '') + sale.salesperson_name)}</div>` : ''}
       <div>Pago: ${_esc(_pagoResumenTexto(sale))}</div>
     </div>
   </div>
@@ -1243,6 +1246,7 @@ function renderCartaNCF(sale, cfg, opts) {
       <div style="font-size:11px;color:#666">Factura No.</div>
       <div style="font-size:20px;font-weight:700">${facturaLabel(sale)}</div>
       <div>Cajero: ${_esc(sale.cajero||'')}</div>
+      ${sale.salesperson_name ? `<div>Vendedor: ${_esc((sale.salesperson_code ? sale.salesperson_code + ' · ' : '') + sale.salesperson_name)}</div>` : ''}
       <div>Método: ${_esc(_pagoResumenTexto(sale))}</div>
     </div>
   </div>

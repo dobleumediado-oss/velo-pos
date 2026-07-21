@@ -612,6 +612,8 @@ function renderApp() {
   buildSidebar();
   buildTopbar();
   routeTo(page);
+  window.VeloExperience?.mount();
+  window.VeloTour?.maybeOffer?.();
 }
 
 // ══════════════════════════════════════════════
@@ -650,6 +652,7 @@ function buildSidebar() {
     { key: 'clientes',  icon: 'users',    label: 'Clientes' },
     { key: 'ventas',    icon: 'list',     label: 'Ventas' },
     { key: 'devoluciones', icon: 'return', label: 'Devoluciones' },
+    ...(_adminPuede('module_vendedores') ? [{ key: 'vendedores', icon: 'users', label: 'Vendedores y Nómina' }] : []),
     { sep: 'Finanzas' },
     { key: 'caja',      icon: 'cash',     label: 'Caja' },
     ...(_adminPuede('module_gastos') ? [{ key: 'gastos', icon: 'dollar', label: 'Gastos' }] : []),
@@ -688,6 +691,7 @@ function buildSidebar() {
     { key: 'ventas',    icon: 'list',     label: 'Ventas' },
     { key: 'caja',      icon: 'cash',     label: 'Caja' },
     ...(_cajeroPuede('module_gastos')     ? [{ key: 'gastos',     icon: 'dollar',  label: 'Gastos' }]      : []),
+    ...(_cajeroPuede('module_vendedores') ? [{ key: 'vendedores', icon: 'users',   label: 'Vendedores' }]   : []),
     ...(_cajeroPuede('module_envios')     ? [{ key: 'envios',     icon: 'truck',   label: 'Envíos' }]      : []),
     ...(_cajeroPuede('module_conduce')    ? [{ key: 'conduce',    icon: 'pkg',     label: 'Conduces' }]    : []),
     ...(_cajeroPuede('module_sucursales') ? [{ key: 'sucursales', icon: 'building',label: 'Sucursales' }]  : []),
@@ -755,16 +759,20 @@ function buildTopbar() {
     clientes:      'Clientes',
     ventas:        'Ventas',
     devoluciones:  'Devoluciones',
+    vendedores:    'Vendedores y Nómina',
     caja:          'Caja',
     gastos:        'Gastos y Cuentas por Pagar',
     vehiculos:     'Vehículos y Mantenimiento',
     envios:        'Envíos y Despachos',
     sucursales:    'Sucursales',
+    conduce:       'Conduces y Entregas',
     reportes:      'Reportes',
+    auditoria:     'Auditoría del Sistema',
     configuracion: 'Configuración',
     etiquetas:     'Etiquetas de Código de Barras',
     bancos:        'Bancos y Cuentas Financieras',
     contabilidad:  'Contabilidad',
+    superadmin:    'Panel de Desarrollador',
   };
 
   // ── Izquierda: toggle + título ───────────────
@@ -815,9 +823,19 @@ function buildTopbar() {
       : `${svg('xmark')} Caja Cerrada`
   }));
 
+  // ── Acciones rápidas globales ────────────────
+  right.appendChild(h('button', {
+    class: 'ib ux-top-action',
+    'aria-label': 'Crear rápidamente',
+    title: 'Crear rápidamente (⌘J / Ctrl+J)',
+    onclick: () => window.experienceOpenQuickActions?.(),
+    html: svg('plus')
+  }));
+
   // ── Buscador global ⌘K ─────────────────────
   right.appendChild(h('button', {
     class: 'btn btn-ghost',
+    'aria-label': 'Buscar en todo el sistema',
     title: 'Búsqueda global (⌘K / Ctrl+K)',
     style: { fontSize: '12px', padding: '5px 10px', gap: '5px',
              border: '1px solid var(--line)', borderRadius: '8px' },
@@ -825,12 +843,39 @@ function buildTopbar() {
     html: `${svg('search')} <span style="font-size:11px;color:var(--muted)">⌘K</span>`
   }));
 
+  right.appendChild(h('button', {
+    class: 'ib ux-command-trigger',
+    'aria-label': 'Abrir centro de mando',
+    title: 'Centro de mando (⌘⇧P / Ctrl+Shift+P)',
+    onclick: () => window.experienceOpenCommandCenter?.(),
+    html: svg('chart')
+  }));
+
   const alerts = getCreditAlerts();
-  const bell = h('div', { class: 'ib', onclick: () => routeTo('clientes') },
+  const experienceAlerts = window.VeloExperience?.notificationCount?.() || alerts.length;
+  const bell = h('button', {
+    class: 'ib', title: 'Centro de notificaciones',
+    'aria-label': 'Abrir centro de notificaciones',
+    onclick: () => window.experienceOpenNotifications?.()
+  },
     h('div', { html: svg('bell') })
   );
-  if (alerts.length) bell.appendChild(h('span', { class: 'dot' }));
+  if (experienceAlerts) bell.appendChild(h('span', { class: 'ib-badge' }, experienceAlerts > 99 ? '99+' : String(experienceAlerts)));
   right.appendChild(bell);
+
+  right.appendChild(h('button', {
+    class: 'ib', title: 'Apariencia y densidad',
+    'aria-label': 'Cambiar apariencia y densidad',
+    onclick: () => window.experienceOpenAppearance?.(),
+    html: svg('half')
+  }));
+
+  right.appendChild(h('button', {
+    class: 'ib ux-guide-trigger', title: 'Guía y recorridos',
+    'aria-label': 'Abrir guía y recorridos',
+    onclick: () => window.experienceOpenGuide?.(),
+    html: svg('help')
+  }));
 
   tb.appendChild(left);
   tb.appendChild(centerWrap);
@@ -1088,6 +1133,7 @@ function routeTo(p) {
       envios:       ['module_envios'],
       conduce:      ['module_conduce'],
       etiquetas:    ['barcode_enabled'],
+      vendedores:   ['module_vendedores'],
     };
     const allowedAdmin = [...baseAdmin];
     Object.entries(modRoutesAdmin).forEach(([route, keys]) => {
@@ -1108,6 +1154,7 @@ function routeTo(p) {
       sucursales: ['module_sucursales'],
       vehiculos:  ['module_vehiculos', 'module_mantenimiento'],
       etiquetas:  ['barcode_enabled'],
+      vendedores: ['module_vendedores'],
     };
     Object.entries(modRoutes).forEach(([route, keys]) => {
       const active  = keys.some(k => CFG[k] === '1' || (k === 'barcode_enabled' && window._bcEnabled));
@@ -1126,7 +1173,11 @@ function routeTo(p) {
 
   const el = document.getElementById('page');
   if (!el) return;
-  el.className = 'page fi';
+  // La ruta queda expuesta como clase y atributo semántico. El sistema visual
+  // usa este contrato para dar identidad a cada módulo sin acoplar estilos a
+  // su lógica interna ni depender de selectores frágiles por posición.
+  el.className = `page fi module-page module-${page}`;
+  el.dataset.module = page;
   // Reset estilos inline que el POS establece (padding:0, overflow:hidden)
   // Sin esto, todos los módulos que vienen después del POS pierden su padding
   el.style.cssText = '';
@@ -1139,6 +1190,7 @@ function routeTo(p) {
     case 'clientes':     renderClientes(el);       break;
     case 'ventas':       renderVentas(el);         break;
     case 'devoluciones': renderDevoluciones(el);   break;
+    case 'vendedores':   renderVendedores(el);     break;
     case 'caja':         renderCaja(el);           break;
     case 'reportes':     renderReportes(el);       break;
     case 'auditoria':
@@ -1158,6 +1210,10 @@ function routeTo(p) {
     case 'superadmin':   renderSuperAdmin(el);     break;
     default:             renderDash(el);
   }
+  // Los módulos asíncronos se observan automáticamente; este pase cubre las
+  // vistas sincrónicas y habilita orden/columnas desde el primer fotograma.
+  requestAnimationFrame(() => window.VeloExperience?.enhancePage?.(el));
+  window.VeloExperience?.onRoute?.(page);
 }
 
 // ══════════════════════════════════════════════
@@ -1437,6 +1493,7 @@ function _openGSearch() {
 
   const ov = h('div', {
     id: 'gsearch-ov',
+    class: 'ux-search-overlay',
     style: {
       position: 'fixed', inset: 0, zIndex: 9999,
       background: 'rgba(0,0,0,.55)', backdropFilter: 'blur(4px)',
@@ -1447,6 +1504,7 @@ function _openGSearch() {
   });
 
   const box = h('div', {
+    class: 'ux-search-box',
     style: {
       width: '600px', maxWidth: '95vw',
       background: 'var(--surface)', borderRadius: '14px',
@@ -1467,10 +1525,19 @@ function _openGSearch() {
       borderRadius: 0, background: 'transparent',
     },
     oninput: e => _runGSearch(e.target.value, results),
+    onkeydown: e => {
+      if (e.key === 'ArrowDown') { e.preventDefault(); _moveGSearch(1); }
+      if (e.key === 'ArrowUp') { e.preventDefault(); _moveGSearch(-1); }
+      if (e.key === 'Enter') {
+        const active = document.querySelector('#gsearch-results [data-gsearch-item].active') || document.querySelector('#gsearch-results [data-gsearch-item]');
+        if (active) { e.preventDefault(); active.click(); }
+      }
+    },
   });
 
   const results = h('div', {
     id: 'gsearch-results',
+    class: 'ux-search-results',
     style: { maxHeight: '420px', overflowY: 'auto', padding: '8px 0' }
   });
 
@@ -1483,27 +1550,38 @@ function _openGSearch() {
     html: '<span>↵ Abrir</span><span>Esc Cerrar</span><span>⌘K Alternar</span>'
   });
 
-  results.innerHTML = `<div style="text-align:center;padding:32px;color:var(--muted2);font-size:13px">
-    Empieza a escribir para buscar en todo el sistema</div>`;
+  results.innerHTML = window.VeloExperience?.searchHome?.() || `<div class="ux-search-empty">Empieza a escribir para buscar en todo el sistema</div>`;
 
   box.appendChild(inp);
   box.appendChild(results);
   box.appendChild(footer);
   ov.appendChild(box);
   document.body.appendChild(ov);
+  window.VeloExperience?.bindSearchHome?.(results);
   setTimeout(() => inp.focus(), 50);
 }
 
 function _closeGSearch() {
   document.getElementById('gsearch-ov')?.remove();
   _gSearchOpen = false;
+  _gSearchIndex = -1;
 }
 
 let _gSearchSeq = 0;
+let _gSearchIndex = -1;
+function _moveGSearch(delta) {
+  const items = [...document.querySelectorAll('#gsearch-results [data-gsearch-item]')];
+  if (!items.length) return;
+  _gSearchIndex = (_gSearchIndex + delta + items.length) % items.length;
+  items.forEach((item,index) => item.classList.toggle('active',index === _gSearchIndex));
+  items[_gSearchIndex].scrollIntoView({ block:'nearest' });
+}
 async function _runGSearch(q, resultsEl) {
   if (!q || q.trim().length < 2) {
-    resultsEl.innerHTML = `<div style="text-align:center;padding:32px;color:var(--muted2);font-size:13px">
-      Empieza a escribir para buscar en todo el sistema</div>`;
+    ++_gSearchSeq;
+    _gSearchIndex = -1;
+    resultsEl.innerHTML = window.VeloExperience?.searchHome?.() || `<div class="ux-search-empty">Empieza a escribir para buscar en todo el sistema</div>`;
+    window.VeloExperience?.bindSearchHome?.(resultsEl);
     return;
   }
   const ql = q.trim();
@@ -1552,6 +1630,7 @@ async function _runGSearch(q, resultsEl) {
   const total = prods.length + facturas.length + clientes.length;
 
   if (!total) {
+    _gSearchIndex = -1;
     resultsEl.innerHTML = `<div style="text-align:center;padding:32px;color:var(--muted2)">
       Sin resultados para "<strong>${_escHtml(q)}</strong>"</div>`;
     return;
@@ -1565,7 +1644,7 @@ async function _runGSearch(q, resultsEl) {
       Productos (${prods.length})</div>`);
     prods.forEach(p => {
       sections.push(`
-        <div onclick="closeModal&&closeModal();_closeGSearch();routeTo('inventario');setTimeout(()=>openProductoModal(DB.products.find(x=>x.id===${p.id})),300)"
+        <div class="ux-search-result" data-gsearch-item tabindex="-1" onclick="closeModal&&closeModal();_closeGSearch();routeTo('inventario');setTimeout(()=>openProductoModal(DB.products.find(x=>x.id===${p.id})),300)"
              style="padding:10px 16px;cursor:pointer;display:flex;justify-content:space-between;
                     align-items:center;transition:background .1s"
              onmouseenter="this.style.background='var(--surface2)'"
@@ -1599,7 +1678,7 @@ async function _runGSearch(q, resultsEl) {
         .map(i => DB.products?.find(p=>p.id===i.product_id)?.model)
         .filter(Boolean))];
       sections.push(`
-        <div onclick="_closeGSearch();_openVentaGlobal(${s.id})"
+        <div class="ux-search-result" data-gsearch-item tabindex="-1" onclick="_closeGSearch();_openVentaGlobal(${s.id})"
              style="padding:10px 16px;cursor:pointer;display:flex;justify-content:space-between;
                     align-items:center"
              onmouseenter="this.style.background='var(--surface2)'"
@@ -1628,7 +1707,7 @@ async function _runGSearch(q, resultsEl) {
       Clientes (${clientes.length})</div>`);
     clientes.forEach(c => {
       sections.push(`
-        <div onclick="_closeGSearch();routeTo('clientes');setTimeout(()=>openEstadoCuentaModal&&openEstadoCuentaModal(DB.customers.find(x=>x.id===${c.id})),300)"
+        <div class="ux-search-result" data-gsearch-item tabindex="-1" onclick="_closeGSearch();routeTo('clientes');setTimeout(()=>openEstadoCuentaModal&&openEstadoCuentaModal(DB.customers.find(x=>x.id===${c.id})),300)"
              style="padding:10px 16px;cursor:pointer;display:flex;justify-content:space-between;
                     align-items:center"
              onmouseenter="this.style.background='var(--surface2)'"
@@ -1643,6 +1722,7 @@ async function _runGSearch(q, resultsEl) {
     });
   }
 
+  _gSearchIndex = -1;
   resultsEl.innerHTML = sections.join('');
 }
 

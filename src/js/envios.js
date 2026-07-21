@@ -115,7 +115,7 @@ const EXPRESOS_RD = {
 
 // ── Render principal ──────────────────────────
 async function renderEnvios(el) {
-  el.innerHTML = '<div style="padding:32px;text-align:center;color:var(--muted2)">Cargando envíos...</div>';
+  el.innerHTML = window.experienceLoading?.('Preparando envíos y rutas…') || '<div class="empty"><p>Cargando envíos…</p></div>';
   const user = _eUser();
   if (!user) return;
 
@@ -140,7 +140,7 @@ async function renderEnvios(el) {
 
   // Header
   const hdr = document.createElement('div');
-  hdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px';
+  hdr.className = 'sec-hdr';
   hdr.innerHTML = `
     <div>
       <h2 style="font-size:18px;font-weight:600;margin:0;color:var(--ink)">Envíos y Despachos</h2>
@@ -151,28 +151,29 @@ async function renderEnvios(el) {
 
   // Métricas
   const metrics = document.createElement('div');
-  metrics.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin-bottom:16px';
+  metrics.className = 'metrics';
   const totalTarifa = envios.filter(e => e.status === 'entregado').reduce((a,e) => a + (e.delivery_fee||0), 0);
   metrics.innerHTML = [
-    ['📦 Pendientes', summary.pendiente||0, '#f59e0b'],
-    ['🚚 En camino',  summary.en_camino||0, '#3b82f6'],
-    ['✅ Entregados', summary.entregado||0, '#00c07a'],
-    ['💰 Total cobrado', _eFmt(totalTarifa), '#8b5cf6'],
-  ].map(([label, val, color]) => `
-    <div style="background:var(--bg2);border-radius:10px;padding:12px 14px;border:0.5px solid var(--line2)">
-      <div style="font-size:11px;color:var(--muted2);margin-bottom:4px">${label}</div>
-      <div style="font-size:18px;font-weight:600;color:${color}">${val}</div>
+    ['clock', 'a', 'Pendientes', summary.pendiente||0],
+    ['truck', 'b', 'En camino', summary.en_camino||0],
+    ['check', 'g', 'Entregados', summary.entregado||0],
+    ['dollar', 'p', 'Total cobrado', _eFmt(totalTarifa)],
+  ].map(([icon, tone, label, val]) => `
+    <div class="metric">
+      <div class="met-top"><div class="met-icon ${tone}">${svg(icon)}</div></div>
+      <div class="met-label">${label}</div>
+      <div class="met-val">${val}</div>
     </div>`).join('');
   el.appendChild(metrics);
 
   if (!envios.length) {
     const empty = document.createElement('div');
-    empty.style.cssText = 'text-align:center;padding:48px;color:var(--muted2);background:var(--bg2);border-radius:10px;border:0.5px solid var(--line2)';
-    empty.innerHTML = '<div style="font-size:36px">📦</div><div style="margin-top:8px;font-size:13px">Sin envíos registrados</div>';
+    empty.className = 'empty ui-empty-state';
+    empty.innerHTML = `<div>${svg('truck')}</div><p>Sin envíos registrados</p><span>Registra el primer despacho para comenzar a controlar entregas y tarifas.</span>`;
     el.appendChild(empty);
   } else {
     const wrap = document.createElement('div');
-    wrap.style.cssText = 'overflow-x:auto;background:var(--bg2);border-radius:10px;border:0.5px solid var(--line2)';
+    wrap.className = 'card tw ui-table-card';
     wrap.innerHTML = `
       <table style="width:100%;border-collapse:collapse;font-size:12px">
         <thead>

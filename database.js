@@ -12,6 +12,7 @@ const { app }  = require('electron');
 const { todayStr, nowStr, addDaysStr } = require('./lib/dates');
 const { searchNorm: _searchNorm, digitsOf: _digitsOf } = require('./lib/text-normalize');
 const { round2 } = require('./lib/money');
+const { ensureSalespeopleSchema, createSalespeopleRepo } = require('./src/main/salespeople-repo');
 
 let dataDir;
 let DB_PATH;
@@ -322,6 +323,7 @@ function createTables() {
       price_mode      TEXT DEFAULT 'retail' CHECK(price_mode IN ('retail','wholesale')),
       cajero          TEXT DEFAULT '',
       user_id         INTEGER REFERENCES users(id),
+      salesperson_id  INTEGER REFERENCES salespeople(id),
       financial_account_id INTEGER DEFAULT NULL,
       payment_currency TEXT DEFAULT 'DOP',
       exchange_rate   REAL DEFAULT 1,
@@ -984,6 +986,7 @@ function migrateECFColumns() {
       console.log(`[DB] Columna ${col} agregada a sales`);
     } catch { /* ya existe */ }
   });
+  ensureSalespeopleSchema(db);
 }
 
 // Migración segura de columnas en expenses y expense_payments
@@ -1079,6 +1082,8 @@ function seedIfEmpty() {
     ['module_envios',          '0'],
     ['module_ncf_avanzado',    '0'],
     ['module_multi_negocio',   '0'],
+    ['module_vendedores',      '1'],
+    ['module_vendedores_roles','admin'],
     // ── e-CF MSeller ──────────────────────────────
     ['ecf_email',        ''],
     ['ecf_password',     ''],
@@ -1942,14 +1947,25 @@ const salesRepo = {
         accountAmount = round2(baseAccountAmount / exchangeRate);
       }
 
+      // Vendedor asignado: selección explícita del POS o vínculo automático con
+      // el usuario que factura. Un ambulante puede existir sin usuario del sistema.
+      let salespersonId = Number(payment.salespersonId) || null;
+      if (!salespersonId) {
+        salespersonId = db.prepare("SELECT id FROM salespeople WHERE linked_user_id=? AND status='activo'").get(user.id)?.id || null;
+      }
+      if (salespersonId) {
+        const validSeller = db.prepare("SELECT id FROM salespeople WHERE id=? AND status='activo'").get(salespersonId);
+        if (!validSeller) throw new Error('El vendedor seleccionado no existe o está inactivo');
+      }
+
       // Crear venta
       const saleR = db.prepare(`
         INSERT INTO sales(cash_session_id,customer_id,customer_name,customer_rnc,
           type,status,subtotal,discount_pct,discount_amt,tax_pct,tax_amt,total,
-          payment_method,price_mode,cajero,user_id,financial_account_id,
+          payment_method,price_mode,cajero,user_id,salesperson_id,financial_account_id,
           payment_currency,exchange_rate,account_amount,card_brand,card_last4,
           payment_reference,created_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
       `).run(
         session?.id || null,
         customer.id,
@@ -1961,6 +1977,7 @@ const salesRepo = {
         payment.priceMode || 'retail',
         user.name || '',
         user.id,
+        salespersonId,
         finAcctId,
         paymentCurrency,
         exchangeRate,
@@ -2103,7 +2120,7 @@ const salesRepo = {
       return {
         saleId, total, subtotal, taxAmt, discAmt, taxPct, ncf,
         financialAccountId: finAcctId,
-        paymentCurrency, exchangeRate, accountAmount,
+        paymentCurrency, exchangeRate, accountAmount, salespersonId,
         cardBrand, cardLast4, paymentReference,
       };
     });
@@ -2112,7 +2129,8 @@ const salesRepo = {
   },
 
   getById(id) {
-    const sale  = db.prepare('SELECT * FROM sales WHERE id=?').get(id);
+    const sale  = db.prepare(`SELECT s.*,sp.name salesperson_name,sp.code salesperson_code
+      FROM sales s LEFT JOIN salespeople sp ON sp.id=s.salesperson_id WHERE s.id=?`).get(id);
     if (!sale) return null;
     sale.items  = db.prepare(`
       SELECT si.*,
@@ -2196,6 +2214,8 @@ const salesRepo = {
     params.push(limit, offset);
     return db.prepare(`
       SELECT s.*,
+             sp.name AS salesperson_name,
+             sp.code AS salesperson_code,
              GROUP_CONCAT(si.product_name || ' x' || si.qty, ' | ') as items_summary,
              COALESCE(SUM(si.unit_cost * si.qty), 0) as cost_total,
              EXISTS(
@@ -2209,6 +2229,7 @@ const salesRepo = {
       FROM sales s
       LEFT JOIN sale_items si ON s.id = si.sale_id
       LEFT JOIN sales orig    ON orig.id = s.original_sale_id
+      LEFT JOIN salespeople sp ON sp.id = s.salesperson_id
       ${where}
       GROUP BY s.id
       ORDER BY s.id DESC
@@ -2274,12 +2295,15 @@ const salesRepo = {
     const likeNoHash = `%${termNoHash.toLowerCase()}%`;
     const rows = db.prepare(`
       SELECT s.*,
+             sp.name AS salesperson_name,
+             sp.code AS salesperson_code,
              GROUP_CONCAT(si.product_name || ' x' || si.qty, ' | ') as items_summary,
              c.phone AS _cust_phone,
              (SELECT GROUP_CONCAT(p.numero_recibo, ',') FROM payments p WHERE p.sale_id = s.id) AS _recibos
       FROM sales s
       LEFT JOIN sale_items si ON s.id = si.sale_id
       LEFT JOIN customers c   ON c.id = s.customer_id
+      LEFT JOIN salespeople sp ON sp.id = s.salesperson_id
       WHERE s.status != 'cancelled'
         AND (
           s.id = ?
@@ -2289,6 +2313,8 @@ const salesRepo = {
           OR lower(s.customer_name) LIKE ?
           OR lower(s.customer_rnc)  LIKE ?
           OR lower(s.notes)         LIKE ?
+          OR lower(sp.name)         LIKE ?
+          OR lower(sp.code)         LIKE ?
           OR lower(si.product_name) LIKE ?
           OR lower(si.product_code) LIKE ?
           OR lower(c.phone)         LIKE ?
@@ -2300,7 +2326,7 @@ const salesRepo = {
     `).all(
       Number.isFinite(idNum) ? idNum : -1,
       Number.isFinite(facNum) ? facNum : -1,
-      likeNoHash, like, like, like, like, like, like, like, likeNoHash
+      likeNoHash, like, like, like, like, like, like, like, like, like, likeNoHash
     );
 
     // Filtro fino con normalización de tildes/Ñ y dígitos con guarda.
@@ -2320,6 +2346,8 @@ const salesRepo = {
       matchDigits(s._cust_phone) ||
       matchDigits(s._recibos) ||
       matchText(s.notes) ||
+      matchText(s.salesperson_name) ||
+      matchText(s.salesperson_code) ||
       matchText(s.items_summary)
     );
 
@@ -5788,6 +5816,10 @@ const conduceRepo = {
   },
 };
 
+// Vendedores/nómina se mantiene en un repositorio separado para no seguir
+// creciendo este archivo monolítico; usa siempre la DB activa (multi-negocio).
+const salespeopleRepo = createSalespeopleRepo({ getDb: () => db, expensesRepo, audit });
+
 // ══════════════════════════════════════════════
 // EXPORTS
 // ══════════════════════════════════════════════
@@ -5821,4 +5853,5 @@ module.exports = {
   fixedAssetsRepo,
   accountingRepo,
   conduceRepo,
+  salespeopleRepo,
 };

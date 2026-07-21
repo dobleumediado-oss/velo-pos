@@ -15,6 +15,7 @@ async function renderConfiguracion(el) {
   // swap atómico al final. El contenido viejo permanece visible → sin el blanco
   // "limpiar → esperar datos → contenido".
   const root = document.createElement('div');
+  root.className = 'module-canvas';
 
   // ── Cargar datos necesarios ─────────────────
   const settings    = await window.api.settings.getAll();

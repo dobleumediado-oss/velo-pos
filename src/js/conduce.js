@@ -35,7 +35,7 @@ let _cndFormItems    = [];   // líneas del formulario en edición
 
 // ── Render principal (listado) ────────────────
 async function renderConduce(el) {
-  el.innerHTML = '<div style="padding:32px;text-align:center;color:var(--muted2)">Cargando conduces...</div>';
+  el.innerHTML = window.experienceLoading?.('Preparando conduces…') || '<div class="empty"><p>Cargando conduces…</p></div>';
   if (!window.api?.conduce) {
     el.innerHTML = '<div style="padding:32px;text-align:center;color:var(--red,#ef4444)">Módulo de conduces no disponible. Reinicia la aplicación.</div>';
     return;
@@ -63,7 +63,7 @@ function _cndRenderList(el, list) {
   // Métricas por estado
   const counts = {};
   list.forEach(c => { counts[c.status] = (counts[c.status] || 0) + 1; });
-  const metrics = h('div', { class: 'metrics', style: { gridTemplateColumns: 'repeat(5,1fr)', marginBottom: '14px' } });
+  const metrics = h('div', { class: 'metrics metrics-five' });
   [
     { k: '',           l: 'Total',       v: list.length },
     { k: 'despachado', l: 'Despachados', v: counts.despachado || 0 },

@@ -6,6 +6,7 @@
 
 const fs   = require('fs');
 const path = require('path');
+const { ensureSalespeopleSchema } = require('./src/main/salespeople-repo');
 
 // ── Versión centralizada — siempre desde package.json ──
 // Nunca hardcodeada aquí. Así package.json es la única fuente de verdad.
@@ -1127,6 +1128,17 @@ const MIGRATIONS = [
         ['barcode_printer_dpi', '203'], ['barcode_media_mode', 'gap'],
       ].forEach(([key, value]) => insert.run(key, value));
       console.log('[MIGRATION 1.21.4] Perfiles universales de impresión agregados');
+    }
+  },
+  {
+    version: '1.22.0',
+    description: 'Módulo profesional de vendedores, comisiones, viáticos y nómina',
+    run(db) {
+      ensureSalespeopleSchema(db);
+      const insert = db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING');
+      insert.run('module_vendedores', '1');
+      insert.run('module_vendedores_roles', 'admin');
+      console.log('[MIGRATION 1.22.0] Vendedores, comisiones, viáticos y nómina creados');
     }
   },
 ];

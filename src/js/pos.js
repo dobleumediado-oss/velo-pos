@@ -12,6 +12,12 @@ let posSearch = '';
 async function renderPOS(el) {
   try {
     await chkCaja();
+    if (CFG.module_vendedores === '1' && window.api?.salespeople?.getAll) {
+      try {
+        const sellers = await window.api.salespeople.getAll({ status: 'activo' });
+        DB.salespeople = Array.isArray(sellers) ? sellers : (sellers?.data || []);
+      } catch { /* el POS sigue disponible si el módulo auxiliar no responde */ }
+    }
     el.innerHTML = '';
     el.style.padding  = '0';
     el.style.overflow = 'hidden';
@@ -1022,6 +1028,16 @@ function openCobroModal(inv) {
       </div>
     </div>
 
+    ${CFG.module_vendedores === '1' && (DB.salespeople||[]).length ? `
+    <div class="fg">
+      <label class="lbl">Vendedor asignado <span style="font-weight:400;color:var(--muted)">(opcional)</span></label>
+      <select class="inp" id="cbr-salesperson">
+        <option value="">— Venta de mostrador / asignación automática —</option>
+        ${(DB.salespeople||[]).filter(s=>s.status==='activo').map(s=>`<option value="${s.id}" ${Number(inv.salespersonId)===Number(s.id)?'selected':''}>${posEscHtml(s.code)} · ${posEscHtml(s.name)} (${s.seller_type})</option>`).join('')}
+      </select>
+      <div style="font-size:10.5px;color:var(--muted2);margin-top:4px">Se utilizará para comisión y rendimiento; no cambia el cajero que factura.</div>
+    </div>` : ''}
+
     <div class="fg">
       <label class="lbl">Método de pago</label>
       <select class="inp" id="cbr-pmeth" onchange="cbrTogglePago(this.value)">
@@ -1512,6 +1528,7 @@ async function finalizarVenta() {
     : (pmeth === 'transferencia'
       ? document.getElementById('cbr-transfer-ref')?.value?.trim() || '' : '');
   const btnConfirmar = document.getElementById('btn-confirmar-venta');
+  const salespersonId = parseInt(document.getElementById('cbr-salesperson')?.value) || null;
 
   // Transferencia sí requiere cuenta; tarjeta requiere la marca utilizada por el
   // cliente y el backend resuelve internamente la cuenta de liquidación.
@@ -1532,6 +1549,7 @@ async function finalizarVenta() {
   inv.cardBrand = cardBrand;
   inv.cardLast4 = cardLast4;
   inv.paymentReference = paymentReference;
+  inv.salespersonId = salespersonId;
 
   inv.pmeth = pmeth;
   inv.cliName = cliName;
@@ -1616,6 +1634,7 @@ async function finalizarVenta() {
       cardBrand,
       cardLast4,
       reference: paymentReference,
+      salespersonId,
     },
     type: inv.itype || 'factura',
     session: cajaSession,
@@ -1700,6 +1719,8 @@ async function finalizarVenta() {
       card_brand: result.cardBrand || cardBrand,
       card_last4: result.cardLast4 || cardLast4,
       payment_reference: result.paymentReference || paymentReference,
+      salesperson_id: result.salespersonId || salespersonId,
+      salesperson_name: (DB.salespeople||[]).find(s=>Number(s.id)===Number(result.salespersonId||salespersonId))?.name || '',
     };
 
     // Imprimir ticket 80mm en impresora térmica

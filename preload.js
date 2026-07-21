@@ -83,6 +83,31 @@ contextBridge.exposeInMainWorld('api', {
     return:  (data)          => ipcRenderer.invoke('sales:return', data),
   },
 
+  // ── Vendedores, comisiones, viáticos y nómina ──────────────
+  salespeople: {
+    getAll:             (d) => ipcRenderer.invoke('salespeople:getAll', d),
+    getDashboard:       (d) => ipcRenderer.invoke('salespeople:getDashboard', d),
+    create:             (d) => ipcRenderer.invoke('salespeople:create', d),
+    update:             (d) => ipcRenderer.invoke('salespeople:update', d),
+    toggle:             (d) => ipcRenderer.invoke('salespeople:toggle', d),
+    getExternalSales:   (d) => ipcRenderer.invoke('salespeople:getExternalSales', d),
+    createExternalSale: (d) => ipcRenderer.invoke('salespeople:createExternalSale', d),
+    cancelExternalSale: (d) => ipcRenderer.invoke('salespeople:cancelExternalSale', d),
+    suggestedPeriod:    (d) => ipcRenderer.invoke('salespeople:suggestedPeriod', d),
+    previewCommission:  (d) => ipcRenderer.invoke('salespeople:previewCommission', d),
+    generateCommission: (d) => ipcRenderer.invoke('salespeople:generateCommission', d),
+    getCommissionRuns:  (d) => ipcRenderer.invoke('salespeople:getCommissionRuns', d),
+    approveCommission:  (d) => ipcRenderer.invoke('salespeople:approveCommission', d),
+    createExpense:      (d) => ipcRenderer.invoke('salespeople:createExpense', d),
+    getExpenses:        (d) => ipcRenderer.invoke('salespeople:getExpenses', d),
+    generatePayroll:    (d) => ipcRenderer.invoke('salespeople:generatePayroll', d),
+    getPayrollRuns:     ()  => ipcRenderer.invoke('salespeople:getPayrollRuns'),
+    getPayrollById:     (d) => ipcRenderer.invoke('salespeople:getPayrollById', d),
+    updatePayrollItem:  (d) => ipcRenderer.invoke('salespeople:updatePayrollItem', d),
+    approvePayroll:     (d) => ipcRenderer.invoke('salespeople:approvePayroll', d),
+    payPayroll:         (d) => ipcRenderer.invoke('salespeople:payPayroll', d),
+  },
+
   // ── Reportes ──────────────────────────────
   reports: {
     summary:      (data)     => ipcRenderer.invoke('reports:summary', data),

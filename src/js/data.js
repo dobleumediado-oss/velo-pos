@@ -20,6 +20,7 @@ const DB = {
   payments:  [],
   settings:  {},
   financialAccounts: [],
+  salespeople: [],
   activeBusiness: null,
   // Alias para compatibilidad con módulos viejos
   get clients() { return this.customers; },
@@ -74,6 +75,7 @@ let CFG = {
   module_ncf_avanzado:     '0',
   module_multi_negocio:    '0',
   module_contabilidad:     '0',
+  module_vendedores:       '0',
   activeBusinessId:        '',
   activeBusinessName:      '',
   connectionMode:          'local',
@@ -144,6 +146,7 @@ async function loadAppData() {
       CFG.module_gastos        = settings.module_gastos        || '0';
       CFG.module_multi_negocio = settings.module_multi_negocio || '0';
       CFG.module_contabilidad  = settings.module_contabilidad  || '0';
+      CFG.module_vendedores    = settings.module_vendedores    || '0';
       CFG.activeBusinessId     = DB.activeBusiness?.id || '';
       CFG.activeBusinessName   = DB.activeBusiness?.name || (CFG.activeBusinessId ? CFG.biz : '');
       CFG.connectionMode       = settings.connection_mode || CFG.connectionMode || 'local';
@@ -154,6 +157,7 @@ async function loadAppData() {
       // Permisos por rol — qué roles pueden acceder a cada módulo
       CFG.module_gastos_roles        = settings.module_gastos_roles        || 'admin';
       CFG.module_contabilidad_roles  = settings.module_contabilidad_roles  || 'admin';
+      CFG.module_vendedores_roles    = settings.module_vendedores_roles    || 'admin';
       CFG.barcode_enabled_roles      = settings.barcode_enabled_roles      || 'admin';
       CFG.module_sucursales_roles    = settings.module_sucursales_roles    || 'admin';
       CFG.module_vehiculos_roles     = settings.module_vehiculos_roles     || 'admin';
@@ -176,11 +180,15 @@ async function loadAppData() {
       window.api.customers.getAllPayments
         ? window.api.customers.getAllPayments().catch(() => [])
         : Promise.resolve([]),
-    ]).then(([customers, sessions, users, payments]) => {
+      window.api.salespeople?.getAll
+        ? window.api.salespeople.getAll({ status:'activo' }).catch(() => ({ok:false,data:[]}))
+        : Promise.resolve({ok:false,data:[]}),
+    ]).then(([customers, sessions, users, payments, sellers]) => {
       window._cachedUsers = users || [];
       DB.customers = customers || [];
       DB.caja      = sessions  || [];
       DB.payments  = payments  || [];
+      DB.salespeople = sellers?.data || [];
     }).catch(e => console.warn('[loadAppData phase2]', e));
 
     // Fase 2 también: ventas de hoy y categorías
@@ -339,7 +347,7 @@ async function chkCaja() {
 function newInvObj(id) {
   return {
     id, cart: [], pmode: 'retail', itype: 'factura',
-    pmeth: 'efectivo', cliId: 1, cliName: '', cliCedula: '', disc: 0
+    pmeth: 'efectivo', cliId: 1, cliName: '', cliCedula: '', salespersonId: null, disc: 0
   };
 }
 

@@ -220,6 +220,9 @@ function printReceipt(sale, isReprint = false) {
       applied_invoice:  sale.applied_invoice || null,
       financial_account_id: sale.financial_account_id || null,
       cajero:        sale.cajero || user?.name || '',
+      salesperson_id:   sale.salesperson_id || null,
+      salesperson_name: sale.salesperson_name || '',
+      salesperson_code: sale.salesperson_code || '',
 	      items: (sale.items || []).map(i => ({
 	        product_code: _printProductCode(i),
 	        product_name: i.product_name || i.name || '',
@@ -292,6 +295,9 @@ function printReceipt(sale, isReprint = false) {
   lines.push(tline());
   lines.push(tRow(`No.: ${facturaLabel(sale)}`, `Fecha: ${sale.date || today()}`));
   lines.push(tRow(`Hora: ${sale.time || nowt()}`, `Cajero: ${(sale.cajero||'').split(' ')[0]}`));
+  if (sale.salesperson_name) {
+    lines.push(tRow('Vendedor:', `${sale.salesperson_code ? sale.salesperson_code + ' · ' : ''}${sale.salesperson_name}`.slice(0, 28)));
+  }
 
   const cliName = sale.customer_name || sale.clientName || 'Consumidor Final';
   const cliRnc  = sale.customer_rnc  || sale.clientCedula || '';

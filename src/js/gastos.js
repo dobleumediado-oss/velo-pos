@@ -57,7 +57,7 @@ function daysLabel(days) {
 // ── Render principal ──────────────────────────
 async function renderGastos(el) {
   // ── Limpiar DOM PRIMERO antes de cualquier await ──────────────
-  el.innerHTML = '<div style="padding:32px;text-align:center;color:var(--muted2)">Cargando módulo de gastos...</div>';
+  el.innerHTML = window.experienceLoading?.('Preparando gastos y obligaciones…') || '<div class="empty"><p>Cargando gastos…</p></div>';
 
   const user = _getUser();
   if (!user) {
@@ -90,7 +90,7 @@ async function renderGastos(el) {
 
   // ── Header ────────────────────────────────
   const header = document.createElement('div');
-  header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px';
+  header.className = 'sec-hdr';
   header.innerHTML = `
     <div>
       <h2 style="font-size:18px;font-weight:600;margin:0;color:var(--ink)">Gastos y Cuentas por Pagar</h2>
@@ -121,11 +121,11 @@ async function renderGastos(el) {
   });
 
   const tabBar = document.createElement('div');
-  tabBar.style.cssText = 'display:flex;gap:0;border-bottom:1px solid var(--line2);margin-bottom:16px;overflow-x:auto';
+  tabBar.className = 'mod-tabs';
   tabs.forEach(t => {
     const btn = document.createElement('button');
     btn.dataset.tab = t.key;
-    btn.style.cssText = `padding:8px 16px;border:none;background:none;font-size:13px;cursor:pointer;border-bottom:2px solid ${_gastosTab===t.key?'var(--accent)':'transparent'};color:${_gastosTab===t.key?'var(--accent)':'var(--muted2)'};font-weight:${_gastosTab===t.key?'600':'400'};white-space:nowrap`;
+    btn.className = `mod-tab ${_gastosTab === t.key ? 'on' : ''}`;
     btn.textContent = t.label;
     // Pestaña FIJA: el clic re-renderiza SOLO el contenido (sin reconstruir el
     // módulo ni re-consultar config/categorías) → sin pestañeo.
@@ -134,9 +134,7 @@ async function renderGastos(el) {
       _gastosTab = t.key;
       tabBar.querySelectorAll('button').forEach(b => {
         const on = b.dataset.tab === t.key;
-        b.style.borderBottom = `2px solid ${on ? 'var(--accent)' : 'transparent'}`;
-        b.style.color = on ? 'var(--accent)' : 'var(--muted2)';
-        b.style.fontWeight = on ? '600' : '400';
+        b.classList.toggle('on', on);
       });
       _renderGastosContent(content, user);
     });

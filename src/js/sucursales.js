@@ -15,7 +15,7 @@ const _sDate = d => d ? new Date(d+'T00:00:00').toLocaleDateString('es-DO',{day:
 // SUCURSALES
 // ══════════════════════════════════════════════
 async function renderSucursales(el) {
-  el.innerHTML = '<div style="padding:32px;text-align:center;color:var(--muted2)">Cargando sucursales...</div>';
+  el.innerHTML = window.experienceLoading?.('Preparando sucursales…') || '<div class="empty"><p>Cargando sucursales…</p></div>';
   const user = _sUser();
   if (!user || !['admin','superadmin'].includes(user.role)) {
     el.innerHTML = '<div style="padding:32px;text-align:center;color:var(--muted2)">Sin acceso.</div>';
@@ -28,7 +28,7 @@ async function renderSucursales(el) {
   el.innerHTML = '';
 
   const hdr = document.createElement('div');
-  hdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:16px';
+  hdr.className = 'sec-hdr';
   hdr.innerHTML = `
     <div>
       <h2 style="font-size:18px;font-weight:600;margin:0;color:var(--ink)">Sucursales</h2>
@@ -39,15 +39,15 @@ async function renderSucursales(el) {
 
   if (!branches.length) {
     const empty = document.createElement('div');
-    empty.style.cssText = 'text-align:center;padding:48px;color:var(--muted2);background:var(--bg2);border-radius:10px;border:0.5px solid var(--line2)';
-    empty.innerHTML = '<div style="font-size:36px">🏪</div><div style="margin-top:8px;font-size:13px">Sin sucursales registradas</div><div style="font-size:11px;margin-top:4px">Agrega la primera sucursal del negocio</div>';
+    empty.className = 'empty ui-empty-state';
+    empty.innerHTML = `<div>${svg('building')}</div><p>Sin sucursales registradas</p><span>Agrega la primera ubicación operativa del negocio.</span>`;
     el.appendChild(empty);
   } else {
     const grid = document.createElement('div');
-    grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px';
+    grid.className = 'ui-card-grid';
     branches.forEach(b => {
       const card = document.createElement('div');
-      card.style.cssText = 'background:var(--bg2);border-radius:12px;border:0.5px solid var(--line2);padding:16px';
+      card.className = 'ui-entity-card';
       card.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
           <div style="font-size:15px;font-weight:600;color:var(--ink)">🏪 ${b.name}</div>
