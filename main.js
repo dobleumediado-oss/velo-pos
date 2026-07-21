@@ -3446,15 +3446,20 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, requestUserId } = 
       // 4b) INVENTARIO
       const findProdByCode = db.prepare(`SELECT id FROM products WHERE code = ? LIMIT 1`);
       const insProd = db.prepare(`
-        INSERT INTO products(code, barcode, name, brand, category, cost, price, wholesale, stock, stock_min, unit, active)
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`);
+        INSERT INTO products(code, barcode, name, brand, category, cost, price, wholesale, taxable, tax_pct, stock, stock_min, unit, active)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`);
       for (const p of inventario) {
         const code = (p.code || '').trim();
         if (!code) continue;
         if (findProdByCode.get(code)) { stats.prod_skip++; continue; }
+        // ITBIS por artículo (articulo.itbis en faprodb). El CSV trae taxable 1/0
+        // y tax_pct 18. Sin esas columnas (CSV viejo) → gravado al 18%.
+        const taxable = (String(p.taxable).trim() === '0') ? 0 : 1;
+        const taxPct  = _aioNum(p.tax_pct) || 18;
         insProd.run(code, (p.barcode || code).trim(), (p.name || 'Producto').trim(),
           (p.brand || 'GENERICA').trim(), (p.category || 'GENERICO').trim(),
           _aioNum(p.cost), _aioNum(p.price), _aioNum(p.wholesale),
+          taxable, taxPct,
           parseInt(p.stock, 10) || 0, parseInt(p.stock_min, 10) || 5, (p.unit || 'UNIDAD').trim());
         stats.prod_new++;
       }

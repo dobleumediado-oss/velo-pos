@@ -319,7 +319,7 @@ function abrirAllInOne() {
         <div class="alrt-sub">
           Se crea un backup automático del <code>velo.db</code> antes de borrar.
           Luego se importan los 4 CSV desde la carpeta que elijas y se valida el CxC
-          contra el checkpoint (RD$12,214,797.62 / 53 clientes / 170 pendientes).
+          contra el total que traen los propios CSV. Si no cuadra, se revierte todo.
         </div>
       </div>
     </div>

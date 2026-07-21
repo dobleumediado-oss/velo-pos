@@ -21,7 +21,9 @@
  * Requiere que la Fase 1 (columnas v2) ya esté aplicada.
  * Idempotente: se puede correr varias veces sin duplicar (dedup por old_id_*).
  *
- * CHECKPOINT esperado tras importar: CxC = RD$12,214,797.62 / 170 pendientes.
+ * CHECKPOINT: se deriva de los propios CSV al final del proceso (suma de
+ * `balance` deduplicada por old_id_factura). No hay numero magico: si cambia
+ * el BAK, el target cambia solo.
  */
 
 const fs   = require('fs');
@@ -140,13 +142,20 @@ const runImport = db.transaction(() => {
   // ── 0) INVENTARIO (#5) — productos reales, dedup por code ────────────
   const findProdByCode = db.prepare(`SELECT id FROM products WHERE code = ? LIMIT 1`);
   const insProd = db.prepare(`
-    INSERT INTO products(code, barcode, name, brand, category, cost, price, wholesale, stock, stock_min, unit, active)
-    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    INSERT INTO products(code, barcode, name, brand, category, cost, price, wholesale, taxable, tax_pct, stock, stock_min, unit, active)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
   `);
   for (const p of inventario) {
     const code = (p.code || '').trim();
     if (!code) continue;
     if (findProdByCode.get(code)) { stats.prod_skip++; continue; }
+    // ITBIS por artículo (viene de articulo.itbis en faprodb).
+    // El CSV trae taxable 1/0; tax_pct siempre 18 (el único artículo al 15%
+    // se normalizó a 18, y los exentos conservan 18 para que marcar la
+    // casilla en Velo calcule bien sin editar el porcentaje a mano).
+    // Si el CSV no trae las columnas (formato viejo) → gravado al 18%.
+    const taxable = (String(p.taxable).trim() === '0') ? 0 : 1;
+    const taxPct  = num(p.tax_pct) || 18;
     insProd.run(
       code,
       (p.barcode || code).trim(),
@@ -154,6 +163,7 @@ const runImport = db.transaction(() => {
       (p.brand || 'GENERICA').trim(),
       (p.category || 'GENERICO').trim(),
       num(p.cost), num(p.price), num(p.wholesale),
+      taxable, taxPct,
       parseInt(p.stock, 10) || 0,
       parseInt(p.stock_min, 10) || 5,
       (p.unit || 'UNIDAD').trim()
@@ -386,12 +396,26 @@ console.log(`CxC total en Velo:    RD$${(cxc.cxc_total || 0).toLocaleString('en-
 console.log(`Clientes con saldo:   ${cxc.clientes_con_saldo}`);
 console.log(`Facturas importadas:  ${facturasImp}`);
 console.log('');
-console.log('TARGET esperado:      RD$12,214,797.62 / 53 clientes / 170 pendientes');
 
-const targetCxc = 12214797.62;
-const diff = Math.abs((cxc.cxc_total || 0) - targetCxc);
-if (diff < 1) {
-  console.log('\n✅ CxC CUADRA con el checkpoint del BAK. Importación correcta.');
+// Target DINAMICO: sale de los propios CSV, no de una constante. El campo
+// `balance` se repite en cada item de una misma factura (identificada por
+// old_id_factura), asi que se toma UNA sola vez por factura y se suman solo
+// las que tienen balance > 0. Mismo criterio que el ALL IN ONE en main.js.
+const balancePorFactura = new Map();
+for (const row of ventas) {
+  const oid = row.old_id_factura;
+  if (!balancePorFactura.has(oid)) balancePorFactura.set(oid, num(row.balance));
+}
+let targetCxc = 0;
+for (const bal of balancePorFactura.values()) if (bal > 0) targetCxc += bal;
+targetCxc = Math.round(targetCxc * 100) / 100;
+const targetPend = [...balancePorFactura.values()].filter(b => b > 0).length;
+
+console.log(`TARGET (desde el CSV): RD$${targetCxc.toLocaleString('en-US', {minimumFractionDigits:2})} / ${targetPend} facturas pendientes`);
+
+const diff = Math.abs(Math.round((cxc.cxc_total || 0) * 100) / 100 - targetCxc);
+if (diff < 0.01) {
+  console.log('\n✅ CxC CUADRA con el total del CSV. Importación correcta.');
 } else {
   console.log(`\n⚠️  CxC difiere del target por RD$${diff.toFixed(2)}. Revisar antes de dar por buena la carga.`);
 }
