@@ -831,7 +831,15 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
   } catch { window._cliModalItems = []; }
 
   const totalCompras = ventas.reduce((a, s) => a + s.total, 0);
-  const totalAbonado = pagos.reduce((a, p) => a + p.amount, 0);
+  // Los descuentos llegan como pagos con method='descuento' (migración Equiparts).
+  // NO son efectivo: cierran factura sin que entre dinero. Se totalizan aparte
+  // para que la caja no se infle y el gerente vea de dónde sale la diferencia
+  // entre lo comprado y lo abonado.
+  const esDescuento  = p => String(p.method || '').toLowerCase() === 'descuento';
+  const abonosReales = pagos.filter(p => !esDescuento(p));
+  const descuentos   = pagos.filter(esDescuento);
+  const totalAbonado = abonosReales.reduce((a, p) => a + p.amount, 0);
+  const totalDesc    = descuentos.reduce((a, p) => a + p.amount, 0);
 
   const ventasRows = ventas.length === 0
     ? `<tr><td colspan="5" style="text-align:center;color:var(--muted2);padding:14px;font-size:12px">
@@ -868,14 +876,15 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
                  if(s)openDetalleVentaModal(s);
                },100)">${facturaLabel(p)} ↗</span>`
           : '';
-        const concepto = p.note || 'Abono';
+        const esDesc = String(p.method || '').toLowerCase() === 'descuento';
+        const concepto = p.note || (esDesc ? 'Descuento aplicado' : 'Abono');
         return `
-          <tr>
+          <tr${esDesc ? ' style="background:rgba(245,158,11,.07)"' : ''}>
             <td style="font-size:11px;color:var(--muted)">${fdate(fecha)}</td>
-            <td style="font-size:12px">${concepto}${facturaRef}</td>
-            <td style="text-align:right;color:var(--green);font-weight:700">+${fmt(p.amount)}</td>
+            <td style="font-size:12px${esDesc ? ';color:var(--amber)' : ''}">${concepto}${facturaRef}</td>
+            <td style="text-align:right;font-weight:700;color:${esDesc ? 'var(--amber)' : 'var(--green)'}">${esDesc ? '' : '+'}${fmt(p.amount)}</td>
             <td>
-              <span class="badge g">${p.method || 'efectivo'}</span>
+              <span class="badge ${esDesc ? 'a' : 'g'}">${p.method || 'efectivo'}</span>
               <span style="font-size:10px;color:var(--muted2);margin-left:4px">
                 ${fmt(p.balance_before)} → ${fmt(p.balance_after)}
               </span>
@@ -912,7 +921,7 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
     <div id="cli-modal-body">
 
     <!-- Métricas -->
-    <div class="metrics" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px">
+    <div class="metrics" style="grid-template-columns:repeat(${totalDesc > 0 ? 5 : 4},1fr);margin-bottom:14px">
       <div class="metric">
         <div class="met-label">Balance Pendiente</div>
         <div class="met-val" style="color:${balance>0?'var(--red)':'var(--green)'}">
@@ -931,8 +940,24 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
       <div class="metric">
         <div class="met-label">Total Abonado</div>
         <div class="met-val" style="font-size:14px;color:var(--green)">${fmt(totalAbonado)}</div>
+        <div style="font-size:10px;color:var(--muted2)">${abonosReales.length} abono${abonosReales.length!==1?'s':''}</div>
       </div>
+      ${totalDesc > 0 ? `
+      <div class="metric">
+        <div class="met-label">Descuentos</div>
+        <div class="met-val" style="font-size:14px;color:var(--amber)">${fmt(totalDesc)}</div>
+        <div style="font-size:10px;color:var(--muted2)">${descuentos.length} aplicado${descuentos.length!==1?'s':''}</div>
+      </div>` : ''}
     </div>
+
+    ${totalDesc > 0 ? `
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px;
+                  background:rgba(245,158,11,.07);border:1px solid var(--line);
+                  border-radius:6px;padding:8px 12px;margin-bottom:14px">
+        <span style="color:var(--muted)">Rebajado sin efectivo:</span>
+        <span style="color:var(--amber);font-weight:700">${fmt(totalDesc)}</span>
+        <span style="color:var(--muted2)">— cerró factura sin que entrara dinero, no cuenta como cobro en caja</span>
+      </div>` : ''}
 
     ${creditLimit > 0 ? `
       <div style="margin-bottom:14px">
@@ -1043,14 +1068,34 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
     window.api.customers.getFacturasPendientes({ customerId: c.id }).then(res => {
       const body = document.getElementById('cli-facturas-body');
       if (!body) return;
-      const facturas = res?.facturas || [];
-      if (!facturas.length) {
-        body.innerHTML = `<div style="text-align:center;padding:24px;color:var(--muted2)">
-          <div style="font-size:24px;margin-bottom:8px">✅</div>
-          <div>Sin facturas a crédito pendientes</div></div>`;
+      if (!res?.ok) {
+        body.innerHTML = `<div style="text-align:center;padding:24px;color:var(--red)">
+          <div style="font-size:24px;margin-bottom:8px">⚠️</div>
+          <div>No se pudieron cargar las facturas pendientes</div>
+          <div style="font-size:11px;margin-top:4px;color:var(--muted2)">${esc(res?.error || 'Error desconocido')}</div>
+        </div>`;
         return;
       }
-      body.innerHTML = facturas.map((f, idx) => {
+      const facturas = res?.facturas || [];
+      const saldoSinFactura = Number(res?.unallocatedBalance || 0);
+      if (!facturas.length) {
+        body.innerHTML = saldoSinFactura > 0.005
+          ? `<div style="text-align:center;padding:24px;color:var(--amber)">
+              <div style="font-size:24px;margin-bottom:8px">⚠️</div>
+              <div style="font-weight:700">Saldo pendiente sin factura asociada</div>
+              <div style="font-size:12px;margin-top:5px;color:var(--muted2)">${fmt(saldoSinFactura)}</div>
+            </div>`
+          : `<div style="text-align:center;padding:24px;color:var(--muted2)">
+              <div style="font-size:24px;margin-bottom:8px">✅</div>
+              <div>Sin facturas a crédito pendientes</div></div>`;
+        return;
+      }
+      const saldoSinFacturaAviso = saldoSinFactura > 0.005
+        ? `<div style="padding:10px 12px;margin-bottom:10px;border:1px solid var(--amber);border-radius:8px;color:var(--amber);font-size:12px">
+            ⚠ Además hay ${fmt(saldoSinFactura)} de saldo inicial sin factura asociada.
+          </div>`
+        : '';
+      body.innerHTML = saldoSinFacturaAviso + facturas.map((f, idx) => {
         const fecha = (f.created_at||'').split('T')[0].split(' ')[0];
         const diasD = Math.floor((Date.now()-new Date(fecha).getTime())/86400000);
         const ref   = facturaLabel(f, f.notes?.match(/import_ref:([^\s|]+)/)?.[1]);
@@ -1097,7 +1142,12 @@ async function exportClientCreditPDF(c) {
   ).reverse();
 
   const totalCompras = ventas.reduce((a, s) => a + s.total, 0);
-  const totalAbonado = pagos.reduce((a, p) => a + p.amount, 0);
+  // Descuentos aparte del efectivo — ver nota en openEstadoCuentaModal.
+  const esDescuento  = p => String(p.method || '').toLowerCase() === 'descuento';
+  const abonosReales = pagos.filter(p => !esDescuento(p));
+  const descuentos   = pagos.filter(esDescuento);
+  const totalAbonado = abonosReales.reduce((a, p) => a + p.amount, 0);
+  const totalDesc    = descuentos.reduce((a, p) => a + p.amount, 0);
 
   const _e = t => String(t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
@@ -1122,11 +1172,12 @@ async function exportClientCreditPDF(c) {
   const pagosRows = pagos.length === 0
     ? `<tr><td colspan="4" style="text-align:center;color:#9ca3af;padding:12px">Sin abonos registrados</td></tr>`
     : [...pagos].reverse().map(p => {
-        const fecha = (p.created_at || '').split('T')[0].split(' ')[0];
-        return `<tr>
+        const fecha  = (p.created_at || '').split('T')[0].split(' ')[0];
+        const esDesc = esDescuento(p);
+        return `<tr${esDesc ? ' style="background:#fffbeb"' : ''}>
           <td>${fdate(fecha)}</td>
-          <td>${_e(p.note || 'Abono')}</td>
-          <td style="text-align:right;color:#16a34a;font-weight:700">+${fmt(p.amount)}</td>
+          <td${esDesc ? ' style="color:#b45309"' : ''}>${_e(p.note || (esDesc ? 'Descuento aplicado' : 'Abono'))}</td>
+          <td style="text-align:right;font-weight:700;color:${esDesc ? '#b45309' : '#16a34a'}">${esDesc ? '' : '+'}${fmt(p.amount)}</td>
           <td>${_e(p.method || 'efectivo')} <span style="color:#9ca3af;font-size:10px">${fmt(p.balance_before)} → ${fmt(p.balance_after)}</span></td>
         </tr>`;
       }).join('');
@@ -1178,7 +1229,7 @@ async function exportClientCreditPDF(c) {
     ${_e(CFG.biz || '')}
   </div>
 
-  <div class="metrics">
+  <div class="metrics"${totalDesc > 0 ? ' style="grid-template-columns:repeat(5,1fr)"' : ''}>
     <div class="met" style="border-color:${balance>0?'#fecaca':'#bbf7d0'};background:${balance>0?'#fef2f2':'#f0fdf4'}">
       <div class="met-l">Balance Pendiente</div>
       <div class="met-v" style="color:${balance>0?'#dc2626':'#16a34a'}">${fmt(balance)}</div>
@@ -1197,9 +1248,21 @@ async function exportClientCreditPDF(c) {
     <div class="met">
       <div class="met-l">Total Abonado</div>
       <div class="met-v" style="color:#16a34a">${fmt(totalAbonado)}</div>
-      <div class="met-s">${pagos.length} abono${pagos.length!==1?'s':''}</div>
+      <div class="met-s">${abonosReales.length} abono${abonosReales.length!==1?'s':''}</div>
     </div>
+    ${totalDesc > 0 ? `
+    <div class="met" style="border-color:#fde68a;background:#fffbeb">
+      <div class="met-l">Descuentos</div>
+      <div class="met-v" style="color:#b45309">${fmt(totalDesc)}</div>
+      <div class="met-s">${descuentos.length} aplicado${descuentos.length!==1?'s':''}</div>
+    </div>` : ''}
   </div>
+
+  ${totalDesc > 0 ? `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;
+       padding:8px 12px;margin-bottom:16px;font-size:10px;color:#92400e">
+    Rebajado sin efectivo: <strong>${fmt(totalDesc)}</strong> — cerró factura sin que entrara dinero.
+    No cuenta como cobro en caja.
+  </div>` : ''}
 
   ${creditLimit>0?`<div style="font-size:10px;color:#6b7280;margin-bottom:16px">
     Crédito utilizado: ${usedPct.toFixed(0)}% ·

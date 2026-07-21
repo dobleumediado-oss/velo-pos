@@ -2557,11 +2557,14 @@ const reportsRepo = {
 
     // Abonos recibidos en el período (excluir saldos iniciales importados)
     // Usa hfp: excluye históricos solo en 'today', no en 'month'
+    // method='descuento' se excluye: es una rebaja que cierra factura sin que
+    // entre efectivo, no un cobro. Sumarlo inflaría la caja.
     const abonosData = db.prepare(`
       SELECT COUNT(*) as count, SUM(amount) as total
       FROM payments
       WHERE ${f.payments.sql}
-        AND note != 'Saldo inicial importado' ${hfp}
+        AND note != 'Saldo inicial importado'
+        AND LOWER(COALESCE(method,'efectivo')) != 'descuento' ${hfp}
     `).get(...f.payments.params);
 
     // Desglose contado vs crédito (para cobradoMes)
@@ -2725,7 +2728,8 @@ const reportsRepo = {
     const byDay = db.prepare(`
       SELECT date(p.created_at) AS day,
              COUNT(*) AS count,
-             COALESCE(SUM(p.amount),0) AS total,
+             COALESCE(SUM(CASE WHEN LOWER(COALESCE(p.method,'efectivo'))!='descuento' THEN p.amount ELSE 0 END),0) AS total,
+             COALESCE(SUM(CASE WHEN LOWER(COALESCE(p.method,'efectivo'))='descuento' THEN p.amount ELSE 0 END),0) AS discount_total,
              SUM(CASE WHEN p.cajero='Importación histórica' THEN p.amount ELSE 0 END) AS imported_total,
              SUM(CASE WHEN p.cajero!='Importación histórica' THEN p.amount ELSE 0 END) AS current_total
       FROM payments p
@@ -2738,7 +2742,8 @@ const reportsRepo = {
     const byMonth = db.prepare(`
       SELECT strftime('%Y-%m',p.created_at) AS month,
              COUNT(*) AS count,
-             COALESCE(SUM(p.amount),0) AS total,
+             COALESCE(SUM(CASE WHEN LOWER(COALESCE(p.method,'efectivo'))!='descuento' THEN p.amount ELSE 0 END),0) AS total,
+             COALESCE(SUM(CASE WHEN LOWER(COALESCE(p.method,'efectivo'))='descuento' THEN p.amount ELSE 0 END),0) AS discount_total,
              SUM(CASE WHEN p.cajero='Importación histórica' THEN p.amount ELSE 0 END) AS imported_total,
              SUM(CASE WHEN p.cajero!='Importación histórica' THEN p.amount ELSE 0 END) AS current_total
       FROM payments p
@@ -2760,7 +2765,8 @@ const reportsRepo = {
 
     const summary = db.prepare(`
       SELECT COUNT(*) AS count,
-             COALESCE(SUM(p.amount),0) AS total,
+             COALESCE(SUM(CASE WHEN LOWER(COALESCE(p.method,'efectivo'))!='descuento' THEN p.amount ELSE 0 END),0) AS total,
+             COALESCE(SUM(CASE WHEN LOWER(COALESCE(p.method,'efectivo'))='descuento' THEN p.amount ELSE 0 END),0) AS discount_total,
              SUM(CASE WHEN p.cajero='Importación histórica' THEN p.amount ELSE 0 END) AS imported_total,
              SUM(CASE WHEN p.cajero!='Importación histórica' THEN p.amount ELSE 0 END) AS current_total,
              COUNT(DISTINCT p.customer_id) AS customers
@@ -2772,6 +2778,7 @@ const reportsRepo = {
       summary: {
         count: summary?.count || 0,
         total: summary?.total || 0,
+        discountTotal: summary?.discount_total || 0,
         importedTotal: summary?.imported_total || 0,
         currentTotal: summary?.current_total || 0,
         customers: summary?.customers || 0,
