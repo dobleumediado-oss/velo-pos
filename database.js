@@ -319,6 +319,7 @@ function createTables() {
       tax_pct         REAL DEFAULT 18,
       tax_amt         REAL DEFAULT 0,
       total           REAL NOT NULL DEFAULT 0,
+      source_balance  REAL DEFAULT NULL,
       payment_method  TEXT DEFAULT 'efectivo',
       price_mode      TEXT DEFAULT 'retail' CHECK(price_mode IN ('retail','wholesale')),
       cajero          TEXT DEFAULT '',
@@ -719,6 +720,7 @@ function createTables() {
     CREATE INDEX IF NOT EXISTS idx_sales_session     ON sales(cash_session_id);
     CREATE INDEX IF NOT EXISTS idx_sale_items_sale   ON sale_items(sale_id);
     CREATE INDEX IF NOT EXISTS idx_payments_customer ON payments(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_payments_sale     ON payments(sale_id);
     CREATE INDEX IF NOT EXISTS idx_audit_user        ON audit_logs(user_id);
     CREATE INDEX IF NOT EXISTS idx_audit_action      ON audit_logs(action);
     CREATE INDEX IF NOT EXISTS idx_inv_product       ON inventory_movements(product_id);
@@ -918,6 +920,10 @@ function migrateV2IdentityColumns() {
     { col: 'numero_factura_fmt', def: 'TEXT' },
     { col: 'old_id_factura',     def: 'INTEGER' },
     { col: 'import_source',      def: 'TEXT' },
+    // Saldo individual informado por el sistema de origen. Es NULL para ventas
+    // nativas; permite conservar exactamente qué facturas históricas siguen
+    // abiertas sin reconstruirlas desde el balance agregado del cliente.
+    { col: 'source_balance',     def: 'REAL DEFAULT NULL' },
   ];
   salesCols.forEach(({ col, def }) => {
     try {
@@ -957,6 +963,7 @@ function migrateV2IdentityColumns() {
     `CREATE INDEX IF NOT EXISTS idx_sales_old_id_factura   ON sales(old_id_factura)`,
     `CREATE INDEX IF NOT EXISTS idx_payments_numero_recibo ON payments(numero_recibo)`,
     `CREATE INDEX IF NOT EXISTS idx_payments_old_pd        ON payments(old_id_pago_detalle)`,
+    `CREATE INDEX IF NOT EXISTS idx_payments_sale          ON payments(sale_id)`,
     `CREATE INDEX IF NOT EXISTS idx_customers_old_id       ON customers(old_id_cliente)`,
   ];
   idx.forEach(sql => {

@@ -229,8 +229,8 @@ const runImport = db.transaction(() => {
       type, status, subtotal, discount_pct, discount_amt,
       tax_pct, tax_amt, total, payment_method, price_mode,
       cajero, user_id, ncf, notes, created_at,
-      numero_factura, numero_factura_fmt, old_id_factura, import_source
-    ) VALUES (?, ?, ?, '', ?, ?, ?, 0, 0, ?, ?, ?, ?, 'retail', 'Importación histórica', NULL, ?, ?, ?, ?, ?, ?, 'equiparts_bak')
+      numero_factura, numero_factura_fmt, old_id_factura, source_balance, import_source
+    ) VALUES (?, ?, ?, '', ?, ?, ?, 0, 0, ?, ?, ?, ?, 'retail', 'Importación histórica', NULL, ?, ?, ?, ?, ?, ?, ?, 'equiparts_bak')
   `);
   // product_id se enlaza al catálogo real por código (#4, #2). Si no existe, NULL.
   const insItem = db.prepare(`
@@ -292,7 +292,7 @@ const runImport = db.transaction(() => {
       null, custId, f.customer_name, f.type, f.status,
       f.total, taxPct, 0, f.total, f.payment_method,
       f.ncf, notes, dt,
-      f.numero_factura, fmt, f.old_id_factura
+      f.numero_factura, fmt, f.old_id_factura, f.balance
     );
     const saleId = r.lastInsertRowid;
 

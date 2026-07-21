@@ -3501,8 +3501,9 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, requestUserId } = 
       const insSale = db.prepare(`
         INSERT INTO sales(cash_session_id, customer_id, customer_name, customer_rnc, type, status,
           subtotal, discount_pct, discount_amt, tax_pct, tax_amt, total, payment_method, price_mode,
-          cajero, user_id, ncf, notes, created_at, numero_factura, numero_factura_fmt, old_id_factura, import_source)
-        VALUES (?, ?, ?, '', ?, ?, ?, 0, 0, ?, ?, ?, ?, 'retail', 'Importación histórica', NULL, ?, ?, ?, ?, ?, ?, 'equiparts_bak')`);
+          cajero, user_id, ncf, notes, created_at, numero_factura, numero_factura_fmt, old_id_factura,
+          source_balance, import_source)
+        VALUES (?, ?, ?, '', ?, ?, ?, 0, 0, ?, ?, ?, ?, 'retail', 'Importación histórica', NULL, ?, ?, ?, ?, ?, ?, ?, 'equiparts_bak')`);
       const insItem = db.prepare(`
         INSERT INTO sale_items(sale_id, product_id, product_code, product_name, unit_cost, unit_price, qty, subtotal,
           taxable, tax_pct, tax_amt, net_subtotal)
@@ -3559,7 +3560,7 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, requestUserId } = 
         const netSubtotal = _r2aio(f.total - taxAmt);
         const r = insSale.run(null, custId, f.customer_name, f.type, f.status,
           netSubtotal, taxPct, taxAmt, f.total, f.payment_method, f.ncf, notes, dt,
-          f.numero_factura, fmt, f.old_id_factura);
+          f.numero_factura, fmt, f.old_id_factura, f.balance);
         const saleId = r.lastInsertRowid;
         const items = f.items.length ? f.items
           : [{ product_code: 'IMP', product_name: 'Factura importada', qty: 1, unit_price: f.total, line_total: f.total }];
@@ -3709,26 +3710,8 @@ ipcMain.handle('customers:getItemsForCustomer', async (_, { customerId }) => {
 ipcMain.handle('customers:getFacturasPendientes', async (_, { customerId }) => {
   try {
     const db = require('./database').getDB();
-    const { allocatePendingInvoices } = require('./lib/pending-invoices');
-    const customer = db.prepare('SELECT balance FROM customers WHERE id=?').get(customerId);
-    if (!customer) return { ok: false, facturas: [], error: 'Cliente no encontrado' };
-
-    // Obtener facturas a crédito en orden cronológico (ASC = FIFO)
-    const sales = db.prepare(`
-      SELECT s.id, s.total, s.subtotal, s.tax_amt, s.discount_amt,
-             s.created_at, s.notes, s.ncf, s.status,
-             s.numero_factura, s.numero_factura_fmt
-      FROM sales s
-      WHERE s.customer_id=?
-        AND LOWER(TRIM(s.payment_method)) IN ('credito','crédito','credit')
-        AND s.status!='cancelled' AND s.type='factura'
-      ORDER BY s.created_at ASC, s.id ASC
-    `).all(customerId);
-
-    // No volver a restar payments: customers.balance ya incorpora todos los
-    // abonos y devoluciones. Restarlos otra vez ocultaba facturas importadas.
-    const result = allocatePendingInvoices(sales, customer.balance);
-    return { ok: true, ...result };
+    const { getPendingInvoices } = require('./lib/pending-invoices');
+    return { ok: true, ...getPendingInvoices(db, customerId) };
   } catch(e) { return { ok: false, facturas: [], error: e.message }; }
 });
 

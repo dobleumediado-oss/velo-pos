@@ -1141,6 +1141,18 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.22.0] Vendedores, comisiones, viáticos y nómina creados');
     }
   },
+  {
+    version: '1.24.1',
+    description: 'Conservar el saldo individual de facturas históricas pendientes',
+    run(db) {
+      const cols = db.prepare('PRAGMA table_info(sales)').all().map(c => c.name);
+      if (!cols.includes('source_balance')) {
+        db.exec('ALTER TABLE sales ADD COLUMN source_balance REAL DEFAULT NULL');
+      }
+      db.exec('CREATE INDEX IF NOT EXISTS idx_payments_sale ON payments(sale_id)');
+      console.log('[MIGRATION 1.24.1] Saldo individual de facturas históricas habilitado');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════
