@@ -612,6 +612,9 @@ function renderApp() {
   buildSidebar();
   buildTopbar();
   routeTo(page);
+  // Mantiene el indicador de Preventa ligado a la cola real incluso en modo
+  // local (sin eventos SSE) y permite retirar reservas vencidas del badge.
+  if (typeof preventaConfigureMonitor === 'function') preventaConfigureMonitor();
   window.VeloExperience?.mount();
   window.VeloTour?.maybeOffer?.();
 }
@@ -646,6 +649,7 @@ function buildSidebar() {
   const adminNavItems = [
     { key: 'dash',      icon: 'grid',     label: 'Dashboard',   badge: alertBadge > 0 ? alertBadge : null },
     { key: 'pos',       icon: 'monitor',  label: 'Punto de Venta' },
+    ...(preventaCanAccess() ? [{ key: 'preventa', icon: 'cash', label: 'Preventa y Despacho', badge: window._preventaPendingCount || null }] : []),
     { sep: 'Gestión' },
     { key: 'inventario',icon: 'box',      label: 'Inventario' },
     { key: 'compras',   icon: 'truck',    label: 'Compras' },
@@ -688,6 +692,7 @@ function buildSidebar() {
 
   const cajeroNavItems = [
     { key: 'pos',       icon: 'monitor',  label: 'Punto de Venta' },
+    ...(preventaCanAccess() ? [{ key: 'preventa', icon: 'cash', label: 'Preventa y Despacho', badge: window._preventaPendingCount || null }] : []),
     { key: 'clientes',  icon: 'users',    label: 'Clientes',
       badge: alertBadge > 0 ? alertBadge : null },
     { key: 'ventas',    icon: 'list',     label: 'Ventas' },
@@ -756,6 +761,7 @@ function buildTopbar() {
   const titles = {
     dash:          'Dashboard',
     pos:           'Punto de Venta',
+    preventa:      'Preventa y Despacho',
     inventario:    'Inventario',
     compras:       'Compras',
     clientes:      'Clientes',
@@ -1117,11 +1123,18 @@ function routeTo(p) {
     clearInterval(window._dashRefreshInterval);
     window._dashRefreshInterval = null;
   }
+  if (p !== 'preventa' && window._preventaRefreshTimer) {
+    clearInterval(window._preventaRefreshTimer);
+    window._preventaRefreshTimer = null;
+  }
   // Bloquear navegación si hay cambio de contraseña obligatorio pendiente
   if (window._pwdChangeRequired && p !== 'configuracion') {
     toast('Debes cambiar tu contraseña antes de continuar', 'w');
     renderCambioContrasenaObligatorio();
     return;
+  }
+  if (p === 'preventa' && !preventaCanAccess()) {
+    p = user?.role === 'cajero' ? 'pos' : 'dash';
   }
   page = p;
 
@@ -1140,6 +1153,7 @@ function routeTo(p) {
       vendedores:   ['module_vendedores'],
       comisiones:    ['module_vendedores'],
       nomina:       ['module_vendedores'],
+      preventa:     ['module_preventa'],
     };
     const allowedAdmin = [...baseAdmin];
     Object.entries(modRoutesAdmin).forEach(([route, keys]) => {
@@ -1161,6 +1175,7 @@ function routeTo(p) {
       vehiculos:  ['module_vehiculos', 'module_mantenimiento'],
       etiquetas:  ['barcode_enabled'],
       vendedores: ['module_vendedores'],
+      preventa:   ['module_preventa'],
     };
     Object.entries(modRoutes).forEach(([route, keys]) => {
       const active  = keys.some(k => CFG[k] === '1' || (k === 'barcode_enabled' && window._bcEnabled));
@@ -1191,6 +1206,7 @@ function routeTo(p) {
   switch (page) {
     case 'dash':         renderDash(el);          break;
     case 'pos':          renderPOS(el);            break;
+    case 'preventa':     renderPreventa(el);       break;
     case 'inventario':   renderInventario(el);     break;
     case 'compras':      renderCompras(el);         break;
     case 'clientes':     renderClientes(el);       break;
@@ -1228,6 +1244,10 @@ function routeTo(p) {
 // LOGOUT
 // ══════════════════════════════════════════════
 async function doLogout() {
+  if (window._preventaBadgeTimer) {
+    clearInterval(window._preventaBadgeTimer);
+    window._preventaBadgeTimer = null;
+  }
   // Limpiar auto-refresh del dashboard
   if (window._dashRefreshInterval) {
     clearInterval(window._dashRefreshInterval);

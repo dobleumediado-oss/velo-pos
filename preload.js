@@ -83,6 +83,16 @@ contextBridge.exposeInMainWorld('api', {
     return:  (data)          => ipcRenderer.invoke('sales:return', data),
   },
 
+  // ── Preventa / órdenes compartidas de cobro ─────
+  checkout: {
+    create:     (data) => ipcRenderer.invoke('checkout:create', data),
+    list:       (data) => ipcRenderer.invoke('checkout:list', data),
+    getById:    (data) => ipcRenderer.invoke('checkout:getById', data),
+    cancel:     (data) => ipcRenderer.invoke('checkout:cancel', data),
+    dispatch:   (data) => ipcRenderer.invoke('checkout:dispatch', data),
+    pay:        (data) => ipcRenderer.invoke('checkout:pay', data),
+  },
+
   // ── Vendedores, comisiones, viáticos y nómina ──────────────
   salespeople: {
     getAll:             (d) => ipcRenderer.invoke('salespeople:getAll', d),

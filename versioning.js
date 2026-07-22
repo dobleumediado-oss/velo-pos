@@ -7,6 +7,7 @@
 const fs   = require('fs');
 const path = require('path');
 const { ensureSalespeopleSchema } = require('./src/main/salespeople-repo');
+const { ensureCheckoutOrdersSchema } = require('./src/main/checkout-orders-repo');
 
 // ── Versión centralizada — siempre desde package.json ──
 // Nunca hardcodeada aquí. Así package.json es la única fuente de verdad.
@@ -1151,6 +1152,19 @@ const MIGRATIONS = [
       }
       db.exec('CREATE INDEX IF NOT EXISTS idx_payments_sale ON payments(sale_id)');
       console.log('[MIGRATION 1.24.1] Saldo individual de facturas históricas habilitado');
+    }
+  },
+  {
+    version: '1.25.0',
+    description: 'Preventa y despacho con órdenes de cobro compartidas entre terminales',
+    run(db) {
+      ensureCheckoutOrdersSchema(db);
+      const insert = db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING');
+      insert.run('checkout_reservation_minutes', '30');
+      insert.run('checkout_notifications_sound', '1');
+      insert.run('module_preventa', '1');
+      insert.run('module_preventa_roles', 'admin,cajero');
+      console.log('[MIGRATION 1.25.0] Órdenes de cobro y reservas de inventario habilitadas');
     }
   },
 ];

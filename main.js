@@ -139,7 +139,8 @@ const {
   productsRepo, customersRepo, cashRepo,
   salesRepo, returnsRepo, reportsRepo, suppliersRepo, purchasesRepo, audit,
   expensesRepo, branchesRepo, vehiclesRepo, maintenanceRepo, deliveriesRepo, ncfRepo,
-  financialAccountsRepo, bankReconRepo, accountingRepo, fixedAssetsRepo, conduceRepo, salespeopleRepo
+  financialAccountsRepo, bankReconRepo, accountingRepo, fixedAssetsRepo, conduceRepo, salespeopleRepo,
+  checkoutOrdersRepo
 } = require('./database');
 
 const {
@@ -787,7 +788,7 @@ ipcMain.handle('settings:set', async (_, { key, value, requestUserId }) => {
   // Claves que solo puede cambiar el superadmin. `connection_*` es topología
   // de red (multi-terminal): modo servidor/cliente, IP, puerto, clave — decisión
   // de nivel superadmin.
-  const SUPERADMIN_KEYS = /^(module_|barcode_enabled$|fiscal_enabled$|.*_roles$|license_|master_|multi_negocio|connection_)/;
+  const SUPERADMIN_KEYS = /^(module_|barcode_enabled$|fiscal_enabled$|.*_roles$|checkout_|license_|master_|multi_negocio|connection_)/;
   // Claves que requieren al menos rol admin
   const ADMIN_KEYS = /^(biz_|tax_pct$|receipt_msg$|pos_|print_template$|printer|biz_logo$)/;
 
@@ -1535,6 +1536,121 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
   }
 });
 
+// ── Preventa y despacho: órdenes compartidas entre terminales ─────────────
+function _checkoutAuthorizedUser(requestUserId) {
+  const reqUser = authRepo.findById(requestUserId);
+  if (!reqUser || reqUser.active === 0) throw new Error('Usuario no válido');
+  if ((settingsRepo.get('module_preventa') || '1') !== '1') {
+    throw new Error('El módulo Preventa y Despacho está desactivado');
+  }
+  if (reqUser.role !== 'superadmin') {
+    const roles = String(settingsRepo.get('module_preventa_roles') || 'admin,cajero')
+      .split(',').map(role => role.trim()).filter(Boolean);
+    if (!roles.includes(reqUser.role)) throw new Error('No tienes acceso a Preventa y Despacho');
+  }
+  return reqUser;
+}
+
+ipcMain.handle('checkout:create', async (_, { orderData, requestUserId } = {}) => {
+  try {
+    const reqUser = _checkoutAuthorizedUser(requestUserId);
+    if (!orderData?.items?.length) return { ok: false, error: 'La orden debe tener productos' };
+
+    const overrides = _salePriceOverrides({ items: orderData.items });
+    let priceApprovedBy = null;
+    if (overrides.length) {
+      if (['admin', 'superadmin'].includes(reqUser.role)) {
+        priceApprovedBy = reqUser.id;
+      } else {
+        const token = orderData.priceChangeAuthToken;
+        const auth = _getPrivilegedToken(token, 'pos_price_change', null, reqUser.id);
+        if (!auth) {
+          return { ok: false, error: 'El precio modificado requiere la clave especial configurada' };
+        }
+        priceApprovedBy = auth.userId;
+      }
+    }
+
+    const order = checkoutOrdersRepo.create({
+      ...orderData,
+      createdBy: reqUser.id,
+      createdByName: reqUser.name,
+      terminalId: _reqTerminalId(),
+      priceApprovedBy,
+      reservationMinutes: Number(settingsRepo.get('checkout_reservation_minutes')) || 30,
+    });
+    if (overrides.length && !['admin', 'superadmin'].includes(reqUser.role)) {
+      _privAuthTokens.delete(orderData.priceChangeAuthToken);
+    }
+    return { ok: true, data: order };
+  } catch (e) {
+    console.error('[checkout:create]', e);
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('checkout:list', async (_, { statuses, limit, requestUserId } = {}) => {
+  try {
+    _checkoutAuthorizedUser(requestUserId);
+    return { ok: true, data: checkoutOrdersRepo.list({ statuses, limit }) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('checkout:getById', async (_, { id, requestUserId } = {}) => {
+  try {
+    _checkoutAuthorizedUser(requestUserId);
+    const order = checkoutOrdersRepo.getById(id);
+    return order ? { ok: true, data: order } : { ok: false, error: 'Orden no encontrada' };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('checkout:cancel', async (_, { id, reason, requestUserId } = {}) => {
+  try {
+    const reqUser = _checkoutAuthorizedUser(requestUserId);
+    const order = checkoutOrdersRepo.cancel({ id, reason, user: reqUser });
+    return { ok: true, data: order };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('checkout:dispatch', async (_, { id, requestUserId } = {}) => {
+  try {
+    const reqUser = _checkoutAuthorizedUser(requestUserId);
+    const order = checkoutOrdersRepo.markDispatched({ id, user: reqUser });
+    return { ok: true, data: order };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('checkout:pay', async (_, { id, payment, requestUserId } = {}) => {
+  try {
+    const reqUser = _checkoutAuthorizedUser(requestUserId);
+    const terminalId = _reqTerminalId();
+    const session = cashRepo.getOpen(terminalId);
+    const method = payment?.method || 'efectivo';
+    if (reqUser.role === 'cajero' && !session) {
+      return { ok: false, error: 'Debes abrir la caja de esta terminal antes de cobrar' };
+    }
+    if (method !== 'credito' && !session) {
+      return { ok: false, error: 'Abre la caja de esta terminal para registrar el cobro' };
+    }
+    const result = checkoutOrdersRepo.pay({
+      id, payment: payment || {}, session, user: reqUser, terminalId,
+    });
+    _acctHook(() => accountingRepo.generateSaleEntry({ saleId: result.saleId, userId: requestUserId }));
+    return { ok: true, ...result };
+  } catch (e) {
+    console.error('[checkout:pay]', e);
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle('sales:getById', async (_, { id }) => {
   return salesRepo.getById(id);
 });
@@ -2180,6 +2296,8 @@ ipcMain.handle('business:resetData', async (_, { requestUserId }) => {
       'expense_categories',
       'print_jobs',
       'audit_logs',
+      'checkout_order_items',
+      'checkout_orders',
       'payments',
       'sale_items',
       'sales',
@@ -3433,6 +3551,7 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, requestUserId } = 
       // 4a) RESET: vaciar tablas que la migración toca (orden no crítico con FK off)
       const wipe = [
         'inventory_movements', 'product_price_history', 'ecf_log', 'ncf_log', 'deliveries',
+        'checkout_order_items', 'checkout_orders',
         'sale_items', 'payments', 'sales', 'customers', 'products',
       ];
       for (const t of wipe) {

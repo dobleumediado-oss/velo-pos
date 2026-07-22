@@ -13,6 +13,7 @@ const { todayStr, nowStr, addDaysStr } = require('./lib/dates');
 const { searchNorm: _searchNorm, digitsOf: _digitsOf } = require('./lib/text-normalize');
 const { round2 } = require('./lib/money');
 const { ensureSalespeopleSchema, createSalespeopleRepo } = require('./src/main/salespeople-repo');
+const { ensureCheckoutOrdersSchema, createCheckoutOrdersRepo } = require('./src/main/checkout-orders-repo');
 
 let dataDir;
 let DB_PATH;
@@ -52,6 +53,7 @@ function initDB(customDataDir) {
   migrateExpensesColumns();
   migratePaymentsColumns();
   migrateV2IdentityColumns();   // Fase 1 migración v2 (identidad real Equiparts)
+  ensureCheckoutOrdersSchema(db);
   seedIfEmpty();
   ensureNcfIntegrity();         // C2: índice UNIQUE parcial contra NCF duplicados
   ensureDeliveryExpenseIntegrity(); // gastos de envíos pre-v1.18 sin enlazar/anular
@@ -1091,6 +1093,9 @@ function seedIfEmpty() {
     ['module_multi_negocio',   '0'],
     ['module_vendedores',      '1'],
     ['module_vendedores_roles','admin'],
+    ['module_preventa',        '1'],
+    ['module_preventa_roles',  'admin,cajero'],
+    ['checkout_notifications_sound','1'],
     // ── e-CF MSeller ──────────────────────────────
     ['ecf_email',        ''],
     ['ecf_password',     ''],
@@ -1464,6 +1469,13 @@ const productsRepo = {
       : '';
     return db.prepare(`
       SELECT p.*,
+             COALESCE((
+               SELECT SUM(coi.qty)
+               FROM checkout_order_items coi
+               JOIN checkout_orders co ON co.id=coi.order_id
+               WHERE coi.product_id=p.id AND co.status='pending'
+                 AND co.expires_at > datetime('now','localtime')
+             ),0) AS reserved_stock,
              h.id                    AS last_price_change_id,
              h.cost_before           AS last_cost_before,
              h.cost_after            AS last_cost_after,
@@ -1846,13 +1858,41 @@ const salesRepo = {
       const afectaStock = (type === 'factura' || payment.method === 'credito');
       const headerTaxPct = type === 'factura' ? configuredTaxPct() : 0;
       const saleItems = [];
+      const requestedByProduct = new Map();
+      for (const item of items) {
+        const productId = Number(item.product_id);
+        requestedByProduct.set(productId,
+          (requestedByProduct.get(productId) || 0) + (Number(item.qty) || 0));
+      }
+      if (afectaStock && tableExists('checkout_orders')) {
+        db.prepare(`
+          UPDATE checkout_orders SET status='expired',updated_at=datetime('now','localtime')
+          WHERE status='pending' AND expires_at <= datetime('now','localtime')
+        `).run();
+      }
+      const stockValidated = new Set();
 
       // 1. Validar stock y normalizar snapshot de línea. unit_price es precio final.
       for (const item of items) {
         const prod = db.prepare('SELECT stock,name,taxable,tax_pct FROM products WHERE id=?').get(item.product_id);
         if (!prod) throw new Error(`Producto ID ${item.product_id} no existe`);
-        if (prod.stock < item.qty && afectaStock) {
-          throw new Error(`Stock insuficiente para "${prod.name}"`);
+        const productId = Number(item.product_id);
+        if (afectaStock && !stockValidated.has(productId)) {
+          const ownOrderId = Number(payment.checkoutOrderId) || 0;
+          const reserved = tableExists('checkout_orders')
+            ? (db.prepare(`
+                SELECT COALESCE(SUM(i.qty),0) AS qty
+                FROM checkout_order_items i
+                JOIN checkout_orders o ON o.id=i.order_id
+                WHERE i.product_id=? AND o.status='pending'
+                  AND o.expires_at > datetime('now','localtime') AND o.id<>?
+              `).get(productId, ownOrderId).qty || 0)
+            : 0;
+          const available = Number(prod.stock) - Number(reserved);
+          if (available < (requestedByProduct.get(productId) || 0)) {
+            throw new Error(`Stock disponible insuficiente para "${prod.name}"`);
+          }
+          stockValidated.add(productId);
         }
         const unitPrice = round2(Number.parseFloat(item.unit_price) || 0);
         const taxable = type === 'factura'
@@ -2374,6 +2414,14 @@ const salesRepo = {
       db.prepare(`
         UPDATE sales SET status='cancelled',cancelled_at=datetime('now'),cancel_reason=? WHERE id=?
       `).run(reason, id);
+      if (tableExists('checkout_orders')) {
+        db.prepare(`
+          UPDATE checkout_orders
+          SET status='cancelled',cancel_reason=?,cancelled_at=datetime('now','localtime'),
+              updated_at=datetime('now','localtime')
+          WHERE sale_id=? AND status IN ('paid','dispatched')
+        `).run(`Factura anulada: ${reason || 'sin motivo'}`.slice(0, 300), id);
+      }
 
       // Fiscal: si la venta tenía un NCF, marcarlo como anulado en ncf_log para que
       // aparezca en el reporte 608 (comprobantes anulados). Aplica a facturas (B01/B02…)
@@ -5924,6 +5972,7 @@ const conduceRepo = {
 // Vendedores/nómina se mantiene en un repositorio separado para no seguir
 // creciendo este archivo monolítico; usa siempre la DB activa (multi-negocio).
 const salespeopleRepo = createSalespeopleRepo({ getDb: () => db, expensesRepo, audit });
+const checkoutOrdersRepo = createCheckoutOrdersRepo({ getDb: () => db, salesRepo, audit });
 
 // ══════════════════════════════════════════════
 // EXPORTS
@@ -5959,4 +6008,5 @@ module.exports = {
   accountingRepo,
   conduceRepo,
   salespeopleRepo,
+  checkoutOrdersRepo,
 };

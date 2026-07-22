@@ -76,6 +76,7 @@ let CFG = {
   module_multi_negocio:    '0',
   module_contabilidad:     '0',
   module_vendedores:       '0',
+  module_preventa:         '1',
   activeBusinessId:        '',
   activeBusinessName:      '',
   connectionMode:          'local',
@@ -147,6 +148,7 @@ async function loadAppData() {
       CFG.module_multi_negocio = settings.module_multi_negocio || '0';
       CFG.module_contabilidad  = settings.module_contabilidad  || '0';
       CFG.module_vendedores    = settings.module_vendedores    || '0';
+      CFG.module_preventa      = settings.module_preventa      || '1';
       CFG.activeBusinessId     = DB.activeBusiness?.id || '';
       CFG.activeBusinessName   = DB.activeBusiness?.name || (CFG.activeBusinessId ? CFG.biz : '');
       CFG.connectionMode       = settings.connection_mode || CFG.connectionMode || 'local';
@@ -158,6 +160,7 @@ async function loadAppData() {
       CFG.module_gastos_roles        = settings.module_gastos_roles        || 'admin';
       CFG.module_contabilidad_roles  = settings.module_contabilidad_roles  || 'admin';
       CFG.module_vendedores_roles    = settings.module_vendedores_roles    || 'admin';
+      CFG.module_preventa_roles      = settings.module_preventa_roles      || 'admin,cajero';
       CFG.barcode_enabled_roles      = settings.barcode_enabled_roles      || 'admin';
       CFG.module_sucursales_roles    = settings.module_sucursales_roles    || 'admin';
       CFG.module_vehiculos_roles     = settings.module_vehiculos_roles     || 'admin';
@@ -298,6 +301,9 @@ async function _applyRemoteSync() {
       await reloadSales({ range: (typeof ventasRange !== 'undefined' ? ventasRange : 'today') });
       if (at === 'ventas' && typeof renderVentasTable === 'function') renderVentasTable();
     }
+    if (s.has('checkout_orders') && typeof preventaHandleSync === 'function') {
+      await preventaHandleSync();
+    }
   } catch (e) { console.error('[sync]', e); }
 }
 function _onRemoteSync(data) {
@@ -360,20 +366,33 @@ function currentInv() {
 }
 
 function addInvoice() {
-  invCounter++;
+  invCounter = invoices.length + 1;
   invoices.push(newInvObj(invCounter));
   activeInvoice = invoices.length - 1;
 }
 
+function renumberInvoices() {
+  invoices.forEach((inv, idx) => { inv.id = idx + 1; });
+  invCounter = invoices.length;
+}
+
 function removeInvoice(idx) {
   if (invoices.length === 1) {
-    invCounter++;
-    invoices[0] = newInvObj(invCounter);
+    // El POS siempre conserva un espacio de trabajo activo. Cerrar el único
+    // ticket reinicia el ciclo completo en Factura #1. Mientras quede otra
+    // pestaña abierta el contador continúa; al cerrar todas vuelve a empezar.
+    invCounter = 1;
+    invoices[0] = newInvObj(1);
     activeInvoice = 0;
     return;
   }
+  if (idx < 0 || idx >= invoices.length) return;
   invoices.splice(idx, 1);
-  if (activeInvoice >= invoices.length) activeInvoice = invoices.length - 1;
+  if (idx < activeInvoice) activeInvoice--;
+  else if (activeInvoice >= invoices.length) activeInvoice = invoices.length - 1;
+  // Los números representan espacios de trabajo abiertos, no números fiscales.
+  // Compactarlos evita saltos (#1, #3, #4) y elimina gestión manual innecesaria.
+  renumberInvoices();
 }
 
 function resetInvoices() {

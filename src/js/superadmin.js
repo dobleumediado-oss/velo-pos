@@ -273,6 +273,7 @@ async function renderSuperAdmin(el) {
     { key: 'module_vendedores',    icon: '🧑‍💼', title: 'Vendedores + Nómina', desc: 'Activa dos áreas conectadas: operación comercial y liquidaciones financieras.', cajeroCan: false },
     // Módulos operativos
     { key: 'barcode_enabled',      icon: '🏷️', title: 'Etiquetas / Código de Barras',  desc: 'Diseñador e impresión de etiquetas con códigos de barras.', cajeroCan: true, special: 'barcode' },
+    { key: 'module_preventa',      icon: '🧾', title: 'Preventa y Despacho',             desc: 'Prepara órdenes, reserva inventario y las envía a caja para su cobro y entrega.', cajeroCan: true },
     { key: 'module_sucursales',    icon: '🏪', title: 'Sucursales',                     desc: 'Registro de sucursales (sync en Cloud 2026).',            cajeroCan: true  },
     { key: 'module_vehiculos',     icon: '🚗', title: 'Vehículos',                      desc: 'Registro de vehículos de la empresa.',                    cajeroCan: true  },
     { key: 'module_mantenimiento', icon: '🔧', title: 'Mantenimiento',                  desc: 'Historial de mantenimiento de vehículos.',                cajeroCan: true  },
@@ -310,7 +311,7 @@ async function renderSuperAdmin(el) {
 
   modsDefs.forEach(mod => {
     const enabled     = settings[mod.key] === '1' || settings[mod.key] === true || settings[mod.key] === 1;
-    const rolesVal    = settings[mod.key + '_roles'] || (mod.key === 'module_envios' ? 'admin,cajero' : 'admin');
+    const rolesVal    = settings[mod.key + '_roles'] || (['module_envios','module_preventa'].includes(mod.key) ? 'admin,cajero' : 'admin');
     const adminOn     = rolesVal.includes('admin');
     const cajeroOn    = rolesVal.includes('cajero');
 
@@ -424,6 +425,42 @@ async function renderSuperAdmin(el) {
     rolesRow.appendChild(cajeroChip);
 
     wrapper.appendChild(rolesRow);
+
+    if (mod.key === 'module_preventa') {
+      const extra = document.createElement('div');
+      extra.style.cssText = 'display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:10px;padding:10px 12px;border-radius:9px;background:var(--surface2);font-size:11px;color:var(--muted)';
+      const reservation = Number(settings.checkout_reservation_minutes) || 30;
+      const soundEnabled = settings.checkout_notifications_sound !== '0';
+      extra.innerHTML = `
+        <label style="display:flex;align-items:center;gap:7px;font-weight:600;color:var(--ink3)">
+          Reserva de inventario
+          <select class="inp" data-pv-setting="reservation" style="width:100px;padding:5px 7px;font-size:11px">
+            ${[10,15,20,30,45,60,90,120].map(minutes => `<option value="${minutes}" ${minutes===reservation?'selected':''}>${minutes} min</option>`).join('')}
+          </select>
+        </label>
+        <label style="display:flex;align-items:center;gap:7px;font-weight:600;color:var(--ink3);cursor:pointer">
+          <input type="checkbox" data-pv-setting="sound" ${soundEnabled?'checked':''} style="accent-color:var(--green)"/>
+          Avisos sonoros en tiempo real
+        </label>`;
+      extra.querySelector('[data-pv-setting="reservation"]')?.addEventListener('change', async event => {
+        const value = String(Math.max(10, Math.min(120, Number(event.target.value) || 30)));
+        const result = await window.api.settings.set({ key: 'checkout_reservation_minutes', value, requestUserId: window._currentUser?.id });
+        if (!result?.ok) return toast(result?.error || 'No se pudo guardar el tiempo de reserva', 'err');
+        DB.settings.checkout_reservation_minutes = value;
+        toast(`Reserva de inventario: ${value} minutos`, 's');
+      });
+      extra.querySelector('[data-pv-setting="sound"]')?.addEventListener('change', async event => {
+        const value = event.target.checked ? '1' : '0';
+        const result = await window.api.settings.set({ key: 'checkout_notifications_sound', value, requestUserId: window._currentUser?.id });
+        if (!result?.ok) {
+          event.target.checked = !event.target.checked;
+          return toast(result?.error || 'No se pudo guardar el aviso sonoro', 'err');
+        }
+        DB.settings.checkout_notifications_sound = value;
+        toast(event.target.checked ? 'Avisos sonoros activados' : 'Avisos sonoros silenciados', 's');
+      });
+      wrapper.appendChild(extra);
+    }
     modsCard.appendChild(wrapper);
   });
 
@@ -1009,6 +1046,10 @@ async function saToggleModule(key, enabled) {
   // CFG ya fue actualizado por loadAppData — ahora sí reconstruir el nav
   if (typeof buildSidebar === 'function') buildSidebar();
   if (typeof buildTopbar  === 'function') buildTopbar();
+  if (key === 'module_preventa' && typeof preventaConfigureMonitor === 'function') {
+    preventaConfigureMonitor();
+    if (!enabled && typeof page !== 'undefined' && page === 'preventa' && typeof routeTo === 'function') routeTo('dash');
+  }
 
   if (typeof toast === 'function') toast(`${enabled ? '✓ Módulo activado' : '✗ Módulo desactivado'}: ${key.replace('module_','').replace(/_/g,' ')}`);
 

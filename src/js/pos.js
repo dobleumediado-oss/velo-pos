@@ -216,6 +216,10 @@ function _setPosPmode(mode) {
 }
 
 // ── Grid de productos ─────────────────────────
+function _posAvailableStock(product) {
+  return Math.max(0, (Number(product?.stock) || 0) - (Number(product?.reserved_stock) || 0));
+}
+
 function renderPOSGrid() {
   const grid = document.getElementById('pos-grid');
   if (!grid) return;
@@ -248,8 +252,10 @@ function renderPOSGrid() {
   // HTML de una tarjeta de producto
   const cardHTML = (p) => {
     const price  = (pm === 'wholesale' && p.wholesale > 0) ? p.wholesale : p.price;
-    const isOut  = p.stock <= 0;
-    const isLow  = p.stock > 0 && p.stock <= p.stock_min;
+    const available = _posAvailableStock(p);
+    const reserved = Number(p.reserved_stock) || 0;
+    const isOut  = available <= 0;
+    const isLow  = available > 0 && available <= p.stock_min;
     const inCart = inv.cart.find(i => i.pid === p.id);
     return `
       <div class="prod-card ${isOut ? 'out' : ''}"
@@ -268,7 +274,7 @@ function renderPOSGrid() {
         ${p.taxable === 0 ? '' : `<div style="font-size:9.5px;font-weight:700;color:var(--blue);margin-top:1px">ITBIS incl.</div>`}
         ${p.model ? `<div style="font-size:10px;font-weight:600;color:var(--blue);margin-top:2px">${p.model}</div>` : ''}
         <div class="pc-stock" style="color:${isLow ? 'var(--red)' : 'var(--muted2)'}">
-          ${isOut ? 'Sin stock' : `${p.stock} disponibles`}
+          ${isOut ? 'Sin disponibilidad' : `${available} disponibles`}${reserved > 0 ? ` · ${reserved} reservados` : ''}
         </div>
         ${inCart ? `<div style="margin-top:5px;font-size:10px;font-weight:700;
           color:var(--green);background:var(--green-bg);padding:2px 6px;
@@ -345,8 +351,12 @@ function posRemoveTab(idx) {
 // ── Agregar al carrito ────────────────────────
 function posAddItem(pid) {
   const inv  = currentInv();
+  if (inv.checkoutOrderId) {
+    toast('Esta orden de despacho esta bloqueada; cobrala o cierrala', 'w');
+    return;
+  }
   const prod = DB.products.find(p => p.id === pid);
-  if (!prod || prod.stock <= 0) { toast('Sin stock', 'err'); return; }
+  if (!prod || _posAvailableStock(prod) <= 0) { toast('Sin disponibilidad', 'err'); return; }
 
   // Animación en la tarjeta del producto
   const card = document.getElementById(`pcard-${pid}`);
@@ -377,7 +387,7 @@ function posAddItem(pid) {
 
   if (exist) {
     const idx = inv.cart.indexOf(exist);
-    const maxForLine = Math.max(0, (Number(prod.stock) || 0) - posCartQtyForProduct(pid, idx));
+    const maxForLine = Math.max(0, _posAvailableStock(prod) - posCartQtyForProduct(pid, idx));
     if (exist.qty >= maxForLine) { toast('No hay más stock', 'err'); return; }
     exist.qty++;
   } else {
@@ -406,29 +416,30 @@ function renderCart() {
   if (!wrap) return;
 
   const inv = currentInv();
+  const checkoutLocked = !!inv.checkoutOrderId;
   const { subtotal, itbis, total, disc, discAmt } = calcTotals(inv);
 
   let html = `
     <div class="cart-hdr">
       <div class="fxb">
         <div>
-          <span style="font-weight:700;font-size:13px">Factura #${inv.id}</span>
+          <span style="font-weight:700;font-size:13px">${checkoutLocked ? `Orden ${posEscHtml(inv.checkoutOrderNumber || '')}` : `Factura #${inv.id}`}</span>
           <span style="font-size:10px;color:var(--muted);margin-left:8px">
             ${inv.cart.length} artículo${inv.cart.length !== 1 ? 's' : ''}
           </span>
         </div>
-        <button class="btn btn-ghost btn-sm" onclick="posLimpiar()">
-          ${svg('trash')} Limpiar
+        <button class="btn btn-ghost btn-sm" onclick="${checkoutLocked ? 'posCloseCheckoutOrder()' : 'posLimpiar()'}">
+          ${checkoutLocked ? 'Cerrar orden' : `${svg('trash')} Limpiar`}
         </button>
       </div>
-      <div class="flex" style="margin-top:8px;gap:5px">
+      ${checkoutLocked ? `<div class="alrt g" style="margin-top:8px;padding:7px 9px"><div><div class="alrt-title">Lista para cobrar</div><div class="alrt-sub">Los articulos y precios estan bloqueados porque vienen de despacho.</div></div></div>` : `<div class="flex" style="margin-top:8px;gap:5px">
         ${['factura','cotizacion'].map(t => `
           <button class="btn btn-sm ${inv.itype === t ? 'btn-dark' : 'btn-out'}"
                   style="font-size:10px;padding:3px 9px"
                   onclick="posSetType('${t}')">
             ${t === 'factura' ? 'Factura' : 'Cotización'}
           </button>`).join('')}
-      </div>
+      </div>`}
     </div>`;
 
   html += `<div class="cart-body">`;
@@ -449,13 +460,13 @@ function renderCart() {
             <div class="ci-name">${posEscHtml(item.name)}</div>
             <div class="ci-price" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
               <span style="font-size:10px;color:var(--muted2);font-weight:600">Precio final</span>
-              <input type="number" min="0" step="0.01" value="${Number(item.price || 0).toFixed(2)}"
+              ${checkoutLocked ? `<strong>${fmt(item.price)}</strong>` : `<input type="number" min="0" step="0.01" value="${Number(item.price || 0).toFixed(2)}"
                 style="width:92px;text-align:right;font-size:12px;font-weight:700;
                        border:1px solid var(--line);border-radius:4px;padding:2px 5px;
                        font-family:inherit;background:var(--surface)"
                 onchange="posSetPrice(${idx},this.value)"
                 onkeydown="if(event.key==='Enter')this.blur()"
-                onclick="this.select()"/>
+                onclick="this.select()"/>`}
               ${item.taxable === 0 ? '' : `<span style="font-size:10px;color:var(--blue);font-weight:700">ITBIS incl.</span>`}
             </div>
             ${item.resale_source?.saleId ? `
@@ -463,7 +474,7 @@ function renderCart() {
                 Reventa de venta #${String(item.resale_source.saleId).padStart(5,'0')}
               </div>` : ''}
           </div>
-          <div class="qc">
+          ${checkoutLocked ? `<div class="qc"><strong>x${item.qty}</strong></div>` : `<div class="qc">
             <button class="qb" onclick="posQty(${idx},-1)">−</button>
             <input type="number" min="1" value="${item.qty}"
               style="width:42px;text-align:center;font-size:12px;font-weight:700;
@@ -472,10 +483,10 @@ function renderCart() {
               oninput="posSetQty(${idx},this.value)"
               onclick="this.select()"/>
             <button class="qb" onclick="posQty(${idx},1)">+</button>
-          </div>
+          </div>`}
           <div class="ci-total">${fmt(item.price * item.qty)}</div>
-          <button class="qb" style="margin-left:4px;color:var(--red)"
-                  onclick="posRemItem(${idx})">×</button>
+          ${checkoutLocked ? '' : `<button class="qb" style="margin-left:4px;color:var(--red)"
+                  onclick="posRemItem(${idx})">×</button>`}
         </div>`;
     });
   }
@@ -483,6 +494,9 @@ function renderCart() {
 
   html += `
     <div class="cart-foot">
+      ${checkoutLocked ? `
+      <div class="tr" style="margin-bottom:8px"><span>Origen</span><strong>${posEscHtml(inv.checkoutOrderNumber || 'Orden de despacho')}</strong></div>
+      ` : `
       <div class="flex" style="margin-bottom:8px;gap:6px;align-items:center">
         <span style="font-size:11px;color:var(--muted);flex:1">Descuento</span>
         <select class="inp" style="width:58px;padding:4px;font-size:12px"
@@ -492,20 +506,29 @@ function renderCart() {
         </select>
         <input type="number" min="0" ${inv.discMode === 'amt' ? 'step="0.01"' : 'max="100"'}
                value="${inv.discMode === 'amt' ? (inv.discAmtInput || 0) : (inv.disc || 0)}"
+               id="pos-discount-input" inputmode="decimal" autocomplete="off"
                class="inp" style="width:72px;padding:4px 7px;font-size:12px;text-align:right"
+               onfocus="this.select()"
                oninput="posDiscConPin(this, this.value)"/>
       </div>
-      <div class="tr"><span>Subtotal sin ITBIS</span><span>${fmt(subtotal)}</span></div>
+      `}
+      <div class="tr"><span>Subtotal sin ITBIS</span><span id="pos-subtotal-value">${fmt(subtotal)}</span></div>
       ${inv.itype === 'factura' && itbis > 0
-        ? `<div class="tr"><span>ITBIS (${CFG.itbis}%)</span><span>${fmt(itbis)}</span></div>` : ''}
-      ${disc > 0
-        ? `<div class="tr"><span>Descuento</span><span>−${fmt(discAmt)}</span></div>` : ''}
-      <div class="tr grand"><span>TOTAL</span><span>${fmt(total)}</span></div>
-      <button class="btn btn-green btn-fw btn-lg"
+        ? `<div class="tr"><span>ITBIS (${CFG.itbis}%)</span><span id="pos-itbis-value">${fmt(itbis)}</span></div>` : ''}
+      <div class="tr" id="pos-discount-row" style="${disc > 0 ? '' : 'display:none'}">
+        <span>Descuento</span><span id="pos-discount-value">−${fmt(discAmt)}</span>
+      </div>
+      <div class="tr grand"><span>TOTAL</span><span id="pos-total-value">${fmt(total)}</span></div>
+      ${!checkoutLocked && inv.itype === 'factura' && preventaCanAccess() ? `<button class="btn btn-out btn-fw" id="pos-send-checkout-btn"
+              style="margin-top:12px;font-size:12px;opacity:${inv.cart.length ? '1' : '.4'}"
+              ${inv.cart.length ? '' : 'disabled'} onclick="openCheckoutSendModal(invoices[activeInvoice])">
+        ${svg('send')} Enviar a caja
+      </button>` : ''}
+      <button class="btn btn-green btn-fw btn-lg" id="pos-charge-btn"
               style="margin-top:12px;font-size:14px;opacity:${inv.cart.length ? '1' : '.4'}"
               ${inv.cart.length ? '' : 'disabled'}
               onclick="openCobroModal(invoices[activeInvoice])">
-        ${svg('cash')} Cobrar ${fmt(total)}
+        ${svg('cash')} ${checkoutLocked ? `Cobrar ${posEscHtml(inv.checkoutOrderNumber || '')}` : `Cobrar ${fmt(total)}`}
       </button>
     </div>`;
 
@@ -514,14 +537,23 @@ function renderCart() {
 
 // ── Helpers carrito ───────────────────────────
 function posLimpiar() {
+  if (currentInv().checkoutOrderId) return posCloseCheckoutOrder();
   currentInv().cart = [];
   renderInvTabs();
   renderCart();
 }
 
 function posSetType(t) {
+  if (currentInv().checkoutOrderId) return;
   currentInv().itype = t;
   renderCart();
+}
+
+function posCloseCheckoutOrder() {
+  removeInvoice(activeInvoice);
+  renderInvTabs();
+  renderCart();
+  renderPOSGrid();
 }
 
 function posCartQtyForProduct(productId, exceptIdx = -1) {
@@ -535,10 +567,11 @@ function posCartQtyForProduct(productId, exceptIdx = -1) {
 
 function posQty(idx, delta) {
   const inv  = currentInv();
+  if (inv.checkoutOrderId) return;
   const item = inv.cart[idx];
   if (!item) return;
   const prod = DB.products.find(p => p.id === item.pid);
-  const maxForLine = Math.max(0, (prod?.stock || 999) - posCartQtyForProduct(prod?.id || item.product_id || item.pid, idx));
+  const maxForLine = Math.max(0, (prod ? _posAvailableStock(prod) : 999) - posCartQtyForProduct(prod?.id || item.product_id || item.pid, idx));
   item.qty += delta;
   if (delta > 0 && item.qty > maxForLine) {
     item.qty = maxForLine;
@@ -551,10 +584,11 @@ function posQty(idx, delta) {
 
 function posSetQty(idx, val) {
   const inv  = currentInv();
+  if (inv.checkoutOrderId) return;
   const item = inv.cart[idx];
   if (!item) return;
   const prod = DB.products.find(p => p.id === item.pid);
-  const maxForLine = Math.max(0, (prod?.stock || 999) - posCartQtyForProduct(prod?.id || item.product_id || item.pid, idx));
+  const maxForLine = Math.max(0, (prod ? _posAvailableStock(prod) : 999) - posCartQtyForProduct(prod?.id || item.product_id || item.pid, idx));
   if (maxForLine <= 0) {
     inv.cart.splice(idx, 1);
     toast('Sin stock disponible para esa línea', 'w');
@@ -700,6 +734,9 @@ async function posPromptPriceChangeAuth(changes, contextLabel = 'Cambio de preci
 async function posEnsureSalePriceAuthorization(holder, items, contextLabel) {
   const changes = posFindPriceOverrides(items);
   if (!changes.length) return true;
+  // Las ordenes compartidas son inmutables y el backend ya valido/aprobo sus
+  // precios al enviarlas desde despacho.
+  if (holder?.checkoutOrderId) return true;
   if (['admin', 'superadmin'].includes(user?.role)) return true;
   if (posAuthStillValid(holder)) return true;
   if (DB?.settings?.pos_price_change_password_set === '0') {
@@ -715,6 +752,7 @@ async function posEnsureSalePriceAuthorization(holder, items, contextLabel) {
 
 async function posSetPrice(idx, val) {
   const inv  = currentInv();
+  if (inv.checkoutOrderId) return;
   const item = inv.cart[idx];
   if (!item) return;
   const price = Math.round(Math.max(0, parseFloat(val) || 0) * 100) / 100;
@@ -739,6 +777,7 @@ async function posSetPrice(idx, val) {
 }
 
 function posRemItem(idx) {
+  if (currentInv().checkoutOrderId) return;
   currentInv().cart.splice(idx, 1);
   renderInvTabs();
   renderCart();
@@ -766,7 +805,7 @@ function posLoadResaleCart(payload = {}) {
     if (!prod) { skipped.push(src.product_name || 'Producto no vinculado'); return; }
 
     const used = reserved.get(prod.id) || 0;
-    const available = Math.max(0, (Number(prod.stock) || 0) - used);
+    const available = Math.max(0, _posAvailableStock(prod) - used);
     const qty = Math.min(Math.max(1, Number.parseInt(src.qty, 10) || 1), available);
     const price = Math.round((Number(src.unit_price || src.price) || 0) * 100) / 100;
     if (qty <= 0) { skipped.push(prod.name); return; }
@@ -839,7 +878,38 @@ window.posLoadResaleCart = posLoadResaleCart;
 
 function posDisc(val) {
   currentInv().disc = Math.min(100, Math.max(0, parseFloat(val) || 0));
-  renderCart();
+  posRefreshCartTotals();
+}
+
+// Actualiza únicamente los importes del pie. Re-renderizar todo el carrito en
+// cada `input` reemplazaba el campo activo y hacía perder el foco después del
+// primer dígito, tanto en RD$ como en porcentaje.
+function posRefreshCartTotals() {
+  const inv = currentInv();
+  if (!inv) return;
+  const { subtotal, itbis, total, disc, discAmt } = calcTotals(inv);
+  const setText = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+  };
+  setText('pos-subtotal-value', fmt(subtotal));
+  setText('pos-itbis-value', fmt(itbis));
+  setText('pos-discount-value', `−${fmt(discAmt)}`);
+  setText('pos-total-value', fmt(total));
+
+  const discRow = document.getElementById('pos-discount-row');
+  if (discRow) discRow.style.display = disc > 0 ? '' : 'none';
+
+  const chargeBtn = document.getElementById('pos-charge-btn');
+  if (chargeBtn) {
+    chargeBtn.disabled = !inv.cart.length;
+    chargeBtn.style.opacity = inv.cart.length ? '1' : '.4';
+    chargeBtn.innerHTML = `${svg('cash')} Cobrar ${fmt(total)}`;
+  }
+
+  // La pestaña muestra el total, pero vive fuera del carrito: puede repintarse
+  // sin tocar ni desenfocar el campo de descuento.
+  renderInvTabs();
 }
 
 // Cambia entre descuento por porcentaje y por monto fijo. El modelo interno
@@ -939,6 +1009,8 @@ async function autorizarDescuento(pct, mode = 'pct', amt = 0) {
   const inv = currentInv();
   inv.discApprovedBy = res.approvedBy?.id || null;
   if (mode === 'amt') inv.discAmtInput = amt;
+  const discountInput = document.getElementById('pos-discount-input');
+  if (discountInput) discountInput.value = mode === 'amt' ? amt : pctShow;
   posDisc(pct);
   toast(`✓ Descuento de ${mode === 'amt' ? fmt(amt) : pctShow + '%'} autorizado`);
 }
@@ -982,6 +1054,253 @@ function calcTotals(inv) {
 function invTotal(inv) { return calcTotals(inv).total; }
 
 // ══════════════════════════════════════════════
+// ENVIAR A CAJA — PREVENTA COMPARTIDA
+// ══════════════════════════════════════════════
+function pvCustomerMatches(customer, query) {
+  if (!customer || customer.active === 0 || Number(customer.id) === 1) return false;
+  const term = searchNorm(query);
+  const termDigits = digitsOf(query);
+  if (!term && !termDigits) return true;
+
+  const searchable = searchNorm([
+    customer.name, customer.rnc, customer.phone, customer.email,
+  ].filter(Boolean).join(' '));
+  if (term && searchable.includes(term)) return true;
+  return termDigits.length > 0 && [customer.rnc, customer.phone]
+    .some(value => digitsOf(value).includes(termDigits));
+}
+
+function pvUpdateCustomerState(customer = null, occasionalName = '') {
+  const el = document.getElementById('pv-customer-selected');
+  if (!el) return;
+  if (customer && Number(customer.id) !== 1) {
+    el.className = 'is-registered';
+    el.innerHTML = `${svg('check')} Cliente registrado seleccionado`;
+  } else if (occasionalName && searchNorm(occasionalName) !== 'consumidor final') {
+    el.className = '';
+    el.textContent = 'Cliente ocasional — no vinculado al registro de clientes';
+  } else {
+    el.className = '';
+    el.textContent = 'Venta a Consumidor Final';
+  }
+}
+
+function pvFilterCustomers(query, showAll = false) {
+  const dd = document.getElementById('pv-customer-dd');
+  if (!dd) return;
+  const inv = currentInv();
+  const typed = String(query || '').trim();
+  const selected = (DB.customers || []).find(c => Number(c.id) === Number(inv.cliId));
+  const stillSelected = selected && Number(selected.id) !== 1 &&
+    searchNorm(selected.name) === searchNorm(typed);
+
+  // En cuanto se modifica el texto, ya no se debe conservar silenciosamente el
+  // ID ni el documento del cliente que estaba seleccionado antes.
+  if (!stillSelected) {
+    const hadRegisteredCustomer = Number(inv.cliId) !== 1;
+    inv.cliId = 1;
+    inv.cliName = typed || 'Consumidor Final';
+    if (hadRegisteredCustomer) {
+      inv.cliCedula = '';
+      const rnc = document.getElementById('pv-customer-rnc');
+      if (rnc) rnc.value = '';
+    }
+    pvUpdateCustomerState(null, inv.cliName);
+  } else {
+    pvUpdateCustomerState(selected);
+  }
+
+  const normalized = searchNorm(typed);
+  const showConsumerFinal = !normalized || normalized === 'consumidor final';
+  const matches = (DB.customers || [])
+    .filter(c => pvCustomerMatches(c, showConsumerFinal && showAll ? '' : typed))
+    .slice(0, 10);
+
+  let html = showConsumerFinal ? `
+    <div class="cli-opt" onmousedown="event.preventDefault()" onclick="pvSelectCustomer(1)">
+      <div class="cli-opt-name">Consumidor Final</div>
+      <div class="cli-opt-meta">Continuar sin vincular un cliente registrado</div>
+    </div>` : '';
+
+  html += matches.map(c => `
+    <div class="cli-opt" onmousedown="event.preventDefault()" onclick="pvSelectCustomer(${Number(c.id)})">
+      <div class="cli-opt-name">${posEscHtml(c.name)}
+        ${Number(c.balance) > 0 ? `<span class="pv-customer-balance">Bal: ${fmt(c.balance)}</span>` : ''}
+      </div>
+      <div class="cli-opt-meta">${posEscHtml(c.rnc || 'Sin RNC')} · ${posEscHtml(c.phone || 'Sin teléfono')}</div>
+    </div>`).join('');
+
+  if (!matches.length && !showConsumerFinal) {
+    html = `
+      <div class="cli-opt" style="cursor:default" onmousedown="event.preventDefault()"
+           onclick="document.getElementById('pv-customer-dd')?.classList.remove('show');document.getElementById('pv-customer-rnc')?.focus()">
+        <div class="cli-opt-name" style="color:var(--muted)">No se encontró “${posEscHtml(typed)}”</div>
+        <div class="cli-opt-meta">Puedes continuar como cliente ocasional o buscar con otro dato</div>
+      </div>`;
+  }
+
+  dd.innerHTML = html;
+  dd.classList.toggle('show', Boolean(html));
+}
+
+function pvSelectCustomer(id) {
+  const inv = currentInv();
+  const nameInput = document.getElementById('pv-customer-search');
+  const rncInput = document.getElementById('pv-customer-rnc');
+  const dd = document.getElementById('pv-customer-dd');
+
+  if (Number(id) === 1) {
+    inv.cliId = 1;
+    inv.cliName = 'Consumidor Final';
+    inv.cliCedula = '';
+    if (nameInput) nameInput.value = inv.cliName;
+    if (rncInput) rncInput.value = '';
+    pvUpdateCustomerState();
+    dd?.classList.remove('show');
+    return;
+  }
+
+  const customer = (DB.customers || []).find(c => Number(c.id) === Number(id));
+  if (!customer) return;
+  inv.cliId = customer.id;
+  inv.cliName = customer.name;
+  inv.cliCedula = customer.rnc || '';
+  if (nameInput) nameInput.value = customer.name;
+  if (rncInput) rncInput.value = customer.rnc || '';
+  pvUpdateCustomerState(customer);
+  dd?.classList.remove('show');
+}
+
+async function openCheckoutSendModal(inv) {
+  if (!preventaCanAccess()) {
+    toast('El módulo Preventa y Despacho está desactivado o no tienes acceso', 'w');
+    return;
+  }
+  if (!inv || !inv.cart.length || inv.checkoutOrderId) return;
+  if (inv.itype !== 'factura') {
+    toast('Solo las facturas pueden enviarse a caja', 'w');
+    return;
+  }
+  // Esta pantalla también puede abrirse inmediatamente después de iniciar sesión.
+  // Actualizar aquí evita depender de que otra sección haya cargado los clientes.
+  try { await reloadCustomers(); } catch (_) {
+    toast('No se pudo actualizar la lista de clientes; se usará la información disponible', 'w');
+  }
+  const totals = calcTotals(inv);
+  const minutes = Number(DB.settings?.checkout_reservation_minutes) || 30;
+  openModal(`
+    <div class="modal-title">Enviar orden a caja</div>
+    <div class="modal-sub">Caja recibira la orden en tiempo real. La factura y el NCF se generan unicamente al cobrar.</div>
+    <div class="alrt a" style="margin:12px 0"><div><div class="alrt-title">Reserva automatica por ${minutes} minutos</div><div class="alrt-sub">Si no se cobra a tiempo, los articulos vuelven a quedar disponibles.</div></div></div>
+    <div class="card" style="background:var(--surface2);margin-bottom:12px">
+      <div class="fg">
+        <label class="lbl">Buscar cliente registrado
+          <span style="font-weight:400;color:var(--muted);font-size:10px;margin-left:6px">— nombre, RNC, cédula o teléfono</span>
+        </label>
+        <div class="cli-search-wrap">
+          <div class="inp-ic">
+            <div class="ic">${svg('search')}</div>
+            <input class="inp" id="pv-customer-search" type="search" autocomplete="off"
+                   placeholder="Nombre, RNC, cédula o teléfono..."
+                   value="${posEscHtml(inv.cliName || 'Consumidor Final')}"
+                   onfocus="this.select();pvFilterCustomers(this.value,true)"
+                   oninput="pvFilterCustomers(this.value)"
+                   onblur="setTimeout(()=>document.getElementById('pv-customer-dd')?.classList.remove('show'),180)"/>
+          </div>
+          <div id="pv-customer-dd" class="cli-dropdown"></div>
+        </div>
+        <div class="pv-customer-state">
+          <span id="pv-customer-selected">${inv.cliId && Number(inv.cliId) !== 1
+            ? `${svg('check')} Cliente registrado seleccionado`
+            : (inv.cliName && inv.cliName !== 'Consumidor Final' ? 'Cliente ocasional' : 'Venta a Consumidor Final')}</span>
+          <button class="btn btn-out pv-customer-final" type="button" onclick="pvSelectCustomer(1)">Consumidor Final</button>
+        </div>
+      </div>
+      <div class="fg" style="margin-bottom:0"><label class="lbl">Cedula / RNC</label>
+        <input class="inp" id="pv-customer-rnc" inputmode="numeric" placeholder="Se completa al elegir el cliente"
+               value="${posEscHtml(inv.cliCedula || '')}"/></div>
+    </div>
+    ${CFG.module_vendedores === '1' && (DB.salespeople||[]).length ? `
+      <div class="fg"><label class="lbl">Vendedor asignado</label><select class="inp" id="pv-salesperson">
+        <option value="">— Asignacion automatica —</option>
+        ${(DB.salespeople||[]).filter(s=>s.status==='activo').map(s=>`<option value="${s.id}" ${Number(inv.salespersonId)===Number(s.id)?'selected':''}>${posEscHtml(s.code)} · ${posEscHtml(s.name)}</option>`).join('')}
+      </select></div>` : ''}
+    <div class="fg"><label class="lbl">Nota para caja / despacho <span style="font-weight:400;color:var(--muted)">(opcional)</span></label>
+      <textarea class="inp" id="pv-notes" rows="2" maxlength="500" placeholder="Ej: Cliente espera en mostrador 2"></textarea></div>
+    <div class="card" style="background:var(--surface2)">
+      <div class="tr"><span>${inv.cart.length} articulo(s)</span><span>${fmt(totals.subtotal)}</span></div>
+      ${totals.discAmt > 0 ? `<div class="tr"><span>Descuento</span><span>−${fmt(totals.discAmt)}</span></div>` : ''}
+      <div class="tr"><span>ITBIS incluido</span><span>${fmt(totals.itbis)}</span></div>
+      <div class="tr grand"><span>TOTAL</span><span>${fmt(totals.total)}</span></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-green" id="pv-send-btn" onclick="posSubmitCheckoutOrder()">${svg('send')} Enviar a caja</button>
+    </div>
+  `, 'modal-lg');
+}
+
+function _posCheckoutItems(inv) {
+  return inv.cart.map(i => ({
+    product_id: i.product_id || i.pid,
+    product_code: i.product_code || i.code || '',
+    product_name: i.product_name || i.name,
+    unit_price: Number(i.unit_price ?? i.price) || 0,
+    taxable: _posTaxable(i) ? 1 : 0,
+    tax_pct: _posTaxable(i) ? _posTaxPct(i) : 0,
+    qty: Number(i.qty) || 0,
+  }));
+}
+
+async function posSubmitCheckoutOrder() {
+  const inv = currentInv();
+  if (!inv?.cart?.length || inv.checkoutOrderId) return;
+  const cliName = document.getElementById('pv-customer-search')?.value?.trim() || 'Consumidor Final';
+  const cliCedula = document.getElementById('pv-customer-rnc')?.value?.trim() || '';
+  const salespersonId = Number(document.getElementById('pv-salesperson')?.value) || inv.salespersonId || null;
+  const items = _posCheckoutItems(inv);
+  const authorized = await posEnsureSalePriceAuthorization(inv, items, 'Orden para caja');
+  if (!authorized) {
+    openCheckoutSendModal(inv);
+    return;
+  }
+  inv.cliName = cliName;
+  inv.cliCedula = cliCedula;
+  inv.salespersonId = salespersonId;
+  let customer = { id: 1, name: cliName, rnc: cliCedula };
+  if (inv.cliId && inv.cliId !== 1) {
+    const found = DB.customers.find(c => Number(c.id) === Number(inv.cliId));
+    if (found) customer = { id: found.id, name: cliName || found.name, rnc: cliCedula || found.rnc || '' };
+  }
+  const button = document.getElementById('pv-send-btn');
+  if (button) { button.disabled = true; button.innerHTML = `${svg('clock')} Enviando...`; }
+  try {
+    const res = await window.api.checkout.create({
+      orderData: {
+        customer, items, discountPct: inv.disc || 0, priceMode: inv.pmode || 'retail',
+        salespersonId, priceChangeAuthToken: inv.priceChangeAuthToken || null,
+        notes: document.getElementById('pv-notes')?.value?.trim() || '',
+      },
+      requestUserId: user.id,
+    });
+    if (!res?.ok) {
+      if (button) { button.disabled = false; button.innerHTML = `${svg('send')} Enviar a caja`; }
+      return toast(res?.error || 'No se pudo enviar la orden', 'err');
+    }
+    closeModal();
+    window._preventaPendingCount = Number(window._preventaPendingCount || 0) + 1;
+    if (typeof buildSidebar === 'function') buildSidebar();
+    toast(`✓ ${res.data.number} enviada a caja — ${fmt(res.data.total)}`);
+    await reloadProducts().catch(() => {});
+    removeInvoice(activeInvoice);
+    renderPOS(document.getElementById('page'));
+  } catch (e) {
+    toast('No se pudo conectar con caja: ' + e.message, 'err');
+    if (button?.isConnected) { button.disabled = false; button.innerHTML = `${svg('send')} Enviar a caja`; }
+  }
+}
+
+// ══════════════════════════════════════════════
 // MODAL DE COBRO
 // ══════════════════════════════════════════════
 function openCobroModal(inv) {
@@ -990,8 +1309,8 @@ function openCobroModal(inv) {
   window._cbrBaseTotals = { subtotal, itbis, total, discAmt };
 
   openModal(`
-    <div class="modal-title">Cobrar Venta</div>
-    <div class="modal-sub">Total a cobrar: <strong id="cbr-header-total">${fmt(total)}</strong></div>
+    <div class="modal-title">${inv.checkoutOrderId ? `Cobrar ${posEscHtml(inv.checkoutOrderNumber || 'orden de despacho')}` : 'Cobrar Venta'}</div>
+    <div class="modal-sub">Total a cobrar: <strong id="cbr-header-total">${fmt(total)}</strong>${inv.checkoutOrderId ? ' · preparada en despacho' : ''}</div>
 
     <div class="card" style="background:var(--surface2);margin-bottom:14px">
       <div style="font-weight:700;font-size:12px;margin-bottom:10px">Datos del cliente</div>
@@ -1008,6 +1327,7 @@ function openCobroModal(inv) {
                    placeholder="Consumidor Final o nombre nuevo..."
                    autocomplete="off"
                    value="${inv.cliName || ''}"
+                   ${inv.checkoutOrderId ? 'readonly' : ''}
                    oninput="cbrFilterCli(this.value)"
                    onblur="setTimeout(()=>{document.getElementById('cbr-cli-dd')?.classList.remove('show')},180)"/>
           </div>
@@ -1020,6 +1340,7 @@ function openCobroModal(inv) {
           <input class="inp" id="cbr-cedula" type="text"
                  placeholder="RNC 9 díg. · Cédula 11 díg."
                  value="${inv.cliCedula || ''}"
+                 ${inv.checkoutOrderId ? 'readonly' : ''}
                  oninput="cbrDocHint()" style="flex:1;min-width:0"/>
           <button class="btn btn-out" type="button" onclick="cbrValidarDGII()"
                   title="Verificar en la DGII (requiere internet)" style="flex-shrink:0">DGII</button>
@@ -1031,7 +1352,7 @@ function openCobroModal(inv) {
     ${CFG.module_vendedores === '1' && (DB.salespeople||[]).length ? `
     <div class="fg">
       <label class="lbl">Vendedor asignado <span style="font-weight:400;color:var(--muted)">(opcional)</span></label>
-      <select class="inp" id="cbr-salesperson">
+      <select class="inp" id="cbr-salesperson" ${inv.checkoutOrderId ? 'disabled' : ''}>
         <option value="">— Venta de mostrador / asignación automática —</option>
         ${(DB.salespeople||[]).filter(s=>s.status==='activo').map(s=>`<option value="${s.id}" ${Number(inv.salespersonId)===Number(s.id)?'selected':''}>${posEscHtml(s.code)} · ${posEscHtml(s.name)} (${s.seller_type})</option>`).join('')}
       </select>
@@ -1641,10 +1962,16 @@ async function finalizarVenta() {
   };
 
   try {
-    const result = await window.api.sales.create({
-      saleData,
-      requestUserId: user.id,
-    });
+    const result = inv.checkoutOrderId
+      ? await window.api.checkout.pay({
+          id: inv.checkoutOrderId,
+          payment: saleData.payment,
+          requestUserId: user.id,
+        })
+      : await window.api.sales.create({
+          saleData,
+          requestUserId: user.id,
+        });
 
     if (!result.ok) {
       toast(result.error || 'Error al registrar la venta', 'err');
@@ -1659,11 +1986,16 @@ async function finalizarVenta() {
 
     // Venta exitosa
     closeModal();
-    toast(`✓ Venta #${result.saleId} registrada — ${fmt(result.total)}`);
+    toast(inv.checkoutOrderId
+      ? `✓ ${inv.checkoutOrderNumber} cobrada · Factura #${result.saleId} — ${fmt(result.total)}`
+      : `✓ Venta #${result.saleId} registrada — ${fmt(result.total)}`);
 
 	    // Recargar datos actualizados desde SQLite
 	    await Promise.all([reloadProducts(), reloadCustomers()]);
 	    await reloadSales({ range: 'today' });
+	    if (inv.checkoutOrderId && typeof preventaHandleSync === 'function') {
+	      await preventaHandleSync();
+	    }
 	    const savedSale = await window.api.sales.getById({ id: result.saleId }).catch(() => null);
 	    const printItems = savedSale?.items?.length
 	      ? savedSale.items.map(i => ({
@@ -1753,6 +2085,7 @@ async function finalizarVenta() {
       });
     }
 
+    const returnToPreventa = !!inv.checkoutOrderId;
     // Limpiar factura y refrescar POS
     removeInvoice(activeInvoice);
     renderPOS(document.getElementById('page'));
@@ -1760,6 +2093,11 @@ async function finalizarVenta() {
     // Ofrecer WhatsApp después de la venta (opcional)
     // Toast con botón — no bloquea el flujo
     _posToastWhatsApp(saleForPrint);
+    // Una orden compartida vuelve a la cola de caja para continuar con la
+    // siguiente, sin iniciar otro cobro automáticamente.
+    if (returnToPreventa && typeof routeTo === 'function') {
+      setTimeout(() => routeTo('preventa'), 180);
+    }
 
   } catch (e) {
     console.error('[finalizarVenta]', e);

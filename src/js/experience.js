@@ -17,7 +17,7 @@
     caja:{ label:'Caja', icon:'cash', group:'Finanzas' }, gastos:{ label:'Gastos', icon:'dollar', group:'Finanzas' },
     bancos:{ label:'Bancos y Cuentas', icon:'bank', group:'Finanzas' }, contabilidad:{ label:'Contabilidad', icon:'ledger', group:'Finanzas' },
     vehiculos:{ label:'Vehículos', icon:'car', group:'Operación' }, envios:{ label:'Envíos', icon:'truck', group:'Operación' },
-    conduce:{ label:'Conduces', icon:'pkg', group:'Operación' }, sucursales:{ label:'Sucursales', icon:'building', group:'Operación' },
+    conduce:{ label:'Conduces', icon:'pkg', group:'Operación' }, preventa:{ label:'Preventa y Despacho', icon:'cash', group:'Operación' }, sucursales:{ label:'Sucursales', icon:'building', group:'Operación' },
     reportes:{ label:'Reportes', icon:'chart', group:'Análisis' }, etiquetas:{ label:'Etiquetas', icon:'barcode', group:'Sistema' },
     configuracion:{ label:'Configuración', icon:'settings', group:'Sistema' }, auditoria:{ label:'Auditoría', icon:'alert', group:'Sistema' },
     superadmin:{ label:'Panel Dev', icon:'code', group:'Sistema' },

@@ -17,8 +17,13 @@
 const CHANNEL_SCOPES = {
   // Venta: baja stock, puede afectar el balance del cliente (crédito) y el historial.
   'sales:create':        ['sales', 'products', 'customers'],
-  'sales:cancel':        ['sales', 'products', 'customers'],
+  'sales:cancel':        ['sales', 'products', 'customers', 'checkout_orders'],
   'sales:return':        ['sales', 'products', 'customers'],
+  // Preventa: la cola cambia en vivo; al cobrar también cambian venta y stock.
+  'checkout:create':     ['checkout_orders', 'products'],
+  'checkout:cancel':     ['checkout_orders', 'products'],
+  'checkout:dispatch':   ['checkout_orders'],
+  'checkout:pay':        ['checkout_orders', 'sales', 'products', 'customers'],
   // Inventario.
   'products:create':     ['products'],
   'products:update':     ['products'],

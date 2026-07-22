@@ -17,6 +17,7 @@ Aplicación **Electron v29** de punto de venta (POS) **offline** para micro-nego
 - **Activación de módulos** vía settings: `module_gastos='1'`, `module_contabilidad='1'`, etc., toggleados en `src/js/superadmin.js` (`modsDefs`).
 - **Roles**: `admin`, `cajero`, `superadmin`.
 - **Contexto RD**: ITBIS 18%, moneda DOP, NCF (comprobantes fiscales), cumplimiento DGII.
+- **Preventa multi-terminal**: despacho prepara y reserva; caja cobra y genera la factura; despacho confirma la entrega. Ver [Preventa y Despacho](preventa-despacho.md).
 
 ## Normalización de nombres de campo IPC (importante)
 La BD a veces usa columnas distintas a lo que espera la UI. Los handlers en `main.js` normalizan:
