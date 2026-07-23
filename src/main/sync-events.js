@@ -33,6 +33,9 @@ const CHANNEL_SCOPES = {
   // Clientes / cuentas por cobrar.
   'customers:create':    ['customers'],
   'customers:update':    ['customers'],
+  'customers:createContact':['customers'],
+  'customers:updateContact':['customers'],
+  'customers:deleteContact':['customers'],
   'customers:delete':    ['customers'],
   'customers:addPayment':['customers', 'sales'],
 };

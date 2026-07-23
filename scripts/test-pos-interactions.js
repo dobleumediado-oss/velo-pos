@@ -37,6 +37,7 @@ const context = vm.createContext({
   clearTimeout,
   AbortController,
   svg() { return ''; },
+  toast() {},
   window: { api: { sync: { onChanged() {} } } },
   document: {
     getElementById(id) {
@@ -53,6 +54,7 @@ vm.runInContext(`${dataSource}\nthis.__posState={
   setUser(v){user=v},
   setTax(v){CFG.itbis=v},
   setCustomers(v){DB.customers=v},
+  setProducts(v){DB.products=v},
   setPreventaConfig(enabled,roles){CFG.module_preventa=enabled;CFG.module_preventa_roles=roles},
   snapshot(){return {activeInvoice,invCounter,invoices:invoices.map(i=>({id:i.id,cart:[...i.cart]}))}}
 };`, context, { filename: 'data.js' });
@@ -99,10 +101,11 @@ const posSource = fs.readFileSync(path.join(root, 'src/js/pos.js'), 'utf8');
 vm.runInContext(`${posSource}\nlet __renderCartCalls=0;
 renderCart=()=>{__renderCartCalls++};
 this.__posDiscount={posDiscConPin,calcTotals,renderCalls:()=>__renderCartCalls};
-this.__posCustomers={pvCustomerMatches,pvFilterCustomers,pvSelectCustomer};`,
+this.__posCustomers={pvCustomerMatches,pvCustomerOptions,pvFilterCustomers,pvSelectCustomer,posSelectCustomer,_setPosPmode};`,
 context, { filename: 'pos.js' });
 const discount = context.__posDiscount;
 const customers = context.__posCustomers;
+context.toast = () => {};
 
 const pctInput = { value: '4' };
 discount.posDiscConPin(pctInput, '4');
@@ -128,6 +131,9 @@ console.log('  ✓ permite escribir RD$40 seguido sin perder el foco');
 state.setCustomers([
   { id: 1, name: 'Consumidor Final', active: 1 },
   { id: 7, name: 'José Peña', rnc: '1-31-45678-9', phone: '809-555-0182', email: 'ventas@pena.do', active: 1 },
+  { id: 9, name: 'Motores del Caribe, SRL', trade_name: 'MotoCaribe', customer_type: 'company',
+    rnc: '130123456', preferred_price_mode: 'wholesale', active: 1,
+    contacts:[{ id:91, name:'Ana Pérez', role:'Compras', phone:'809-555-2000', document:'00100000001', active:1 }] },
   { id: 8, name: 'Cliente inactivo', rnc: '101010101', phone: '8090000000', active: 0 },
 ]);
 assert(customers.pvCustomerMatches({ id: 7, name: 'José Peña', active: 1 }, 'jose pena'),
@@ -136,6 +142,11 @@ assert(customers.pvCustomerMatches({ id: 7, name: 'José Peña', rnc: '1-31-4567
   'la búsqueda debe ignorar guiones del RNC');
 assert(customers.pvCustomerMatches({ id: 7, name: 'José Peña', phone: '809-555-0182', active: 1 }, '5550182'),
   'la búsqueda debe aceptar fragmentos del teléfono');
+const representativeResult = customers.pvCustomerOptions('ana perez')[0];
+assert.strictEqual(representativeResult.customer.id, 9,
+  'buscar un representante debe resolver la empresa vinculada');
+assert.strictEqual(representativeResult.contact.id, 91,
+  'la opción debe conservar el representante seleccionado');
 
 ['pv-customer-search', 'pv-customer-rnc', 'pv-customer-dd', 'pv-customer-selected'].forEach(element);
 state.currentInv().cliId = 1;
@@ -150,8 +161,31 @@ assert.strictEqual(elements.get('pv-customer-rnc').value, '',
   'editar el nombre debe limpiar el documento del cliente anterior');
 customers.pvSelectCustomer(1);
 assert.strictEqual(elements.get('pv-customer-search').value, 'Consumidor Final');
+customers.pvSelectCustomer(9, 91);
+assert.strictEqual(state.currentInv().cliId, 9, 'el POS vincula la cuenta empresarial');
+assert.strictEqual(state.currentInv().cliContactId, 91, 'el POS vincula el representante');
+assert.strictEqual(state.currentInv().pmode, 'wholesale', 'aplica el precio preferido de la empresa');
 console.log('  ✓ busca clientes por nombre, RNC o teléfono y vincula el registro correcto');
+console.log('  ✓ busca representantes y usa la cuenta, contacto y precio de su empresa');
 console.log('  ✓ evita mezclar el ID de un cliente con el nombre o RNC de otro');
+
+['pos-customer-search', 'pos-customer-dd', 'pos-customer-state'].forEach(element);
+state.setProducts([{ id:100, price:118, wholesale:100, active:1 }]);
+state.currentInv().cart = [{ pid:100, product_id:100, price:118, unit_price:118, qty:1, manual_price:false }];
+customers.posSelectCustomer(9, 91);
+assert.strictEqual(state.currentInv().cart[0].price, 100,
+  'elegir una empresa mayorista debe recalcular los artículos no modificados');
+customers.posSelectCustomer(7);
+assert.strictEqual(state.currentInv().pmode, 'retail',
+  'elegir un cliente de detalle debe salir del modo mayorista');
+assert.strictEqual(state.currentInv().cart[0].price, 118,
+  'volver a precio detalle debe recalcular el carrito');
+state.currentInv().cart[0].manual_price = true;
+state.currentInv().cart[0].price = 111;
+customers.posSelectCustomer(9, 91);
+assert.strictEqual(state.currentInv().cart[0].price, 111,
+  'el precio elegido manualmente no debe ser sobrescrito por el cliente');
+console.log('  ✓ el selector principal aplica detalle/mayorista y respeta precios manuales');
 
 context.__sidebarRenderCalls = 0;
 context.buildSidebar = () => { context.__sidebarRenderCalls += 1; };

@@ -1633,7 +1633,12 @@ async function _runGSearch(q, resultsEl) {
     matchText(c.phone, qNorm) ||
     matchDigits(c.phone, qDigits) ||
     matchText(c.rnc, qNorm) ||
-    matchDigits(c.rnc, qDigits)
+    matchDigits(c.rnc, qDigits) ||
+    matchText(c.trade_name, qNorm) ||
+    (c.contacts || []).some(contact =>
+      matchText(contact.name, qNorm) || matchText(contact.role, qNorm) ||
+      matchDigits(contact.phone, qDigits) || matchDigits(contact.document, qDigits)
+    )
   )).slice(0, 3);
 
   // ── Facturas: búsqueda en TODO el historial vía backend ──
@@ -1734,6 +1739,9 @@ async function _runGSearch(q, resultsEl) {
                                border-top:1px solid var(--line);margin-top:4px">
       Clientes (${clientes.length})</div>`);
     clientes.forEach(c => {
+      const matchedContact = (c.contacts || []).find(contact =>
+        matchText(contact.name, qNorm) || matchText(contact.role, qNorm) ||
+        matchDigits(contact.phone, qDigits) || matchDigits(contact.document, qDigits));
       sections.push(`
         <div class="ux-search-result" data-gsearch-item tabindex="-1" onclick="_closeGSearch();routeTo('clientes');setTimeout(()=>openEstadoCuentaModal&&openEstadoCuentaModal(DB.customers.find(x=>x.id===${c.id})),300)"
              style="padding:10px 16px;cursor:pointer;display:flex;justify-content:space-between;
@@ -1742,7 +1750,7 @@ async function _runGSearch(q, resultsEl) {
              onmouseleave="this.style.background=''">
           <div>
             <div style="font-weight:600;font-size:13px">${_escHtml(c.name)}</div>
-            <div style="font-size:11px;color:var(--muted)">${_escHtml(c.phone||'')} ${c.rnc?'· '+_escHtml(c.rnc):''}</div>
+            <div style="font-size:11px;color:var(--muted)">${matchedContact ? `${_escHtml(matchedContact.name)}${matchedContact.role ? ' · '+_escHtml(matchedContact.role) : ''} · ` : ''}${_escHtml(c.phone||'')} ${c.rnc?'· '+_escHtml(c.rnc):''}</div>
           </div>
           ${c.balance>0?`<div style="font-weight:700;color:var(--red);flex-shrink:0;margin-left:12px">
             ${typeof fmt==='function'?fmt(c.balance):c.balance}</div>`:''}

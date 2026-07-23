@@ -233,7 +233,7 @@ async function renderEnvios(el) {
                 ${e.carrier_stop ? `<div style="font-size:10px;color:var(--muted2)">Parada: ${_eEsc(e.carrier_stop)}</div>` : ''}
                 ${e.carrier_tracking ? `<div style="font-size:10px;color:var(--blue,#3b82f6)">Rastreo: ${_eEsc(e.carrier_tracking)}</div>` : ''}
               </td>
-              <td style="padding:10px 12px;color:var(--muted2)">${_eEsc(e.customer_name||'—')}</td>
+              <td style="padding:10px 12px;color:var(--muted2)">${_eEsc(e.customer_name||'—')}${e.customer_contact_name ? `<div style="font-size:10px">Recibe: ${_eEsc(e.customer_contact_name)}</div>` : ''}</td>
               <td style="padding:10px 12px">${via}</td>
               <td style="padding:10px 12px;text-align:right;color:var(--muted2)">${e.distance_km ? e.distance_km.toFixed(1)+' km' : '—'}</td>
               <td style="padding:10px 12px;text-align:right;font-weight:700;color:var(--green,#00c07a)">${_eFmt(e.delivery_fee)}</td>
@@ -348,6 +348,7 @@ function modalNuevoEnvio(parentEl, vehiculos) {
       <label class="lbl">Cliente</label>
       <input class="inp" id="e-customer" placeholder="Busca un cliente o escribe un nombre libre..." autocomplete="off">
       <input type="hidden" id="e-customer-id">
+      <input type="hidden" id="e-customer-contact-id">
       <div id="e-customer-list" style="display:none;position:absolute;z-index:999;background:var(--bg,#fff);border:1px solid var(--line2,#e5e7eb);border-radius:8px;max-height:220px;overflow-y:auto;box-shadow:0 4px 20px #0003;width:100%;left:0;top:100%"></div>
       <div id="e-customer-info" style="font-size:11px;margin-top:4px;min-height:14px;color:var(--muted2)"></div>
     </div>
@@ -442,10 +443,12 @@ function modalNuevoEnvio(parentEl, vehiculos) {
     // Cliente: si se seleccionó de la lista va vinculado por id; si solo se
     // escribió un nombre (cliente NO registrado) se guarda el texto tal cual.
     const custId   = parseInt(ov.querySelector('#e-customer-id')?.value) || null;
+    const contactId= parseInt(ov.querySelector('#e-customer-contact-id')?.value) || null;
     const custName = String(ov.querySelector('#e-customer')?.value || '').trim();
     const data = {
       dest_address:     dest,
       customer_id:      custId,
+      customer_contact_id: contactId,
       customer_name:    custId ? '' : custName,
       dest_lat:         parseFloat(ov.querySelector('#e-lat')?.value)      || null,
       dest_lng:         parseFloat(ov.querySelector('#e-lng')?.value)      || null,
@@ -513,6 +516,7 @@ function modalNuevoEnvio(parentEl, vehiculos) {
     // ── Buscador de clientes del sistema ───────────────────────────────────
     const custInp  = document.getElementById('e-customer');
     const custIdEl = document.getElementById('e-customer-id');
+    const contactIdEl = document.getElementById('e-customer-contact-id');
     const custList = document.getElementById('e-customer-list');
     const custInfo = document.getElementById('e-customer-info');
     const _custEsc  = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -525,10 +529,12 @@ function modalNuevoEnvio(parentEl, vehiculos) {
         .catch(() => {});
     }
 
-    function _custSelect(c) {
+    function _custSelect(c, contact = null) {
       custInp.value  = c.name;
       custIdEl.value = c.id;
+      if (contactIdEl) contactIdEl.value = contact?.id || '';
       const parts = [];
+      if (contact) parts.push(`👤 ${_custEsc(contact.name)}${contact.role ? ` · ${_custEsc(contact.role)}` : ''}`);
       if (c.phone)   parts.push(`📞 ${_custEsc(c.phone)}`);
       if (c.address) parts.push(`📍 ${_custEsc(c.address)}`);
       custInfo.innerHTML = `<span style="color:var(--green,#00c07a)">✓ Cliente vinculado</span>${parts.length ? ' · ' + parts.join(' · ') : ''}`;
@@ -545,24 +551,33 @@ function modalNuevoEnvio(parentEl, vehiculos) {
       const raw = String(filter || '').trim();
       const q = _custNorm(raw);
       const all = (DB?.customers || []).filter(c => c.active !== 0);
-      const matches = q
-        ? all.filter(c => _custNorm(c.name).includes(q) ||
-                          String(c.phone || '').includes(raw) ||
-                          String(c.rnc   || '').includes(raw))
-        : all;
+      const matches = [];
+      all.forEach(c => {
+        if (!q || _custNorm(c.name).includes(q) || _custNorm(c.trade_name).includes(q) ||
+            String(c.phone || '').includes(raw) || String(c.rnc || '').includes(raw)) {
+          matches.push({ customer:c, contact:null });
+        }
+        if (q) (c.contacts || []).filter(contact => contact.active !== 0 && contact.can_receive !== 0).forEach(contact => {
+          if (_custNorm(`${contact.name} ${contact.role} ${contact.email}`).includes(q) ||
+              String(contact.phone || '').includes(raw) || String(contact.document || '').includes(raw)) {
+            matches.push({ customer:c, contact });
+          }
+        });
+      });
       if (!matches.length) { custList.style.display = 'none'; return; }
-      custList.innerHTML = matches.slice(0, 8).map(c => `
-        <div data-cid="${c.id}" style="padding:9px 14px;cursor:pointer;border-bottom:0.5px solid var(--line2,#eee)"
+      custList.innerHTML = matches.slice(0, 8).map(({customer:c,contact}) => `
+        <div data-cid="${c.id}" data-contact-id="${contact?.id || ''}" style="padding:9px 14px;cursor:pointer;border-bottom:0.5px solid var(--line2,#eee)"
              onmouseenter="this.style.background='var(--bg2,#f5f5f5)'" onmouseleave="this.style.background=''">
-          <div style="font-size:13px;font-weight:500">${_custEsc(c.name)}</div>
-          <div style="font-size:10px;color:var(--muted2,#888)">${[c.phone, c.rnc].filter(Boolean).map(_custEsc).join(' · ') || 'Sin datos de contacto'}</div>
+          <div style="font-size:13px;font-weight:500">${contact ? `${_custEsc(contact.name)} · ` : ''}${_custEsc(c.name)}</div>
+          <div style="font-size:10px;color:var(--muted2,#888)">${contact ? [contact.role,contact.phone].filter(Boolean).map(_custEsc).join(' · ') : ([c.phone, c.rnc].filter(Boolean).map(_custEsc).join(' · ') || 'Sin datos de contacto')}</div>
         </div>`).join('');
       custList.style.display = 'block';
       custList.querySelectorAll('[data-cid]').forEach(div => {
         div.addEventListener('mousedown', (e) => {
           e.preventDefault();
           const c = (DB?.customers || []).find(x => x.id === Number(div.dataset.cid));
-          if (c) _custSelect(c);
+          const contact = (c?.contacts || []).find(x => x.id === Number(div.dataset.contactId));
+          if (c) _custSelect(c, contact || null);
         });
       });
     }
@@ -570,6 +585,7 @@ function modalNuevoEnvio(parentEl, vehiculos) {
     custInp?.addEventListener('input', () => {
       // Al editar el texto se pierde el vínculo — debe re-seleccionar de la lista
       custIdEl.value = '';
+      if (contactIdEl) contactIdEl.value = '';
       custInfo.innerHTML = custInp.value.trim()
         ? '<span style="color:var(--muted2,#6b7280)">Se guardará como cliente no registrado — selecciónalo de la lista si quieres vincularlo</span>'
         : '';
@@ -846,6 +862,7 @@ function verEnvio(id) {
       ${fila('Expreso', esc(e.carrier_name))}
       ${fila('Rastreo', esc(e.carrier_tracking))}
       ${fila('Cliente', esc(e.customer_name))}
+      ${e.customer_contact_name ? fila('Representante', `${esc(e.customer_contact_name)}${e.customer_contact_role ? ` · ${esc(e.customer_contact_role)}` : ''}`) : ''}
       ${fila('Vehículo', e.brand ? esc(`${e.brand} ${e.model || ''} ${e.plate ? '(' + e.plate + ')' : ''}`) : '')}
       ${fila('Distancia', e.distance_km ? e.distance_km.toFixed(1) + ' km' : '')}
       ${fila('Combustible est.', e.fuel_cost ? _eFmt(e.fuel_cost) + (e.fuel_used ? ` · ${e.fuel_used.toFixed(2)} gal` : '') : '')}

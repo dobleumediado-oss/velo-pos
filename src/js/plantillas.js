@@ -187,6 +187,11 @@ function getSampleSale(cfg) {
     customer_address:'Calle Duarte #45, Local 1, Santiago',
     customer_phone: '(809) 000-0000',
     customer_email: 'ventas@cliente.com',
+    customer_type: 'company',
+    customer_trade_name: 'Cliente Ejemplo',
+    customer_contact_name: 'María Rodríguez',
+    customer_contact_role: 'Encargada de compras',
+    customer_contact_phone: '(809) 555-0101',
     cajero:         'Cajero Demo',
     // NCF de muestra (solo para la vista previa) — deriva "B01 Crédito Fiscal"
 	    ncf:            'B0100000237',
@@ -568,6 +573,7 @@ function renderTermica(sale, cfg, opts, widthMm = 76) {
     <span>${_esc(sale.customer_name||'Consumidor Final')}</span>
   </div>
   ${opts.cedula && sale.customer_rnc ? `<div style="display:flex;justify-content:space-between"><span>Cédula/RNC:</span><span>${_esc(sale.customer_rnc)}</span></div>` : ''}
+  ${sale.customer_contact_name ? `<div style="display:flex;justify-content:space-between"><span>Solicitado por:</span><span>${_esc(sale.customer_contact_name)}${sale.customer_contact_role ? ` · ${_esc(sale.customer_contact_role)}` : ''}</span></div>` : ''}
   <div style="text-align:center">${sep}</div>
   <div style="display:flex;justify-content:space-between;font-weight:700">
     <span>DESCRIPCIÓN</span><span>TOTAL</span>
@@ -645,6 +651,7 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
   <div class="row"><span>No.:</span><span style="font-weight:700">${facturaLabel(sale)}</span></div>
   <div class="row"><span>Fecha:</span><span>${sale.date} ${sale.time}</span></div>
   <div class="row"><span>Cliente:</span><span>${_esc(sale.customer_name||'Consumidor Final')}</span></div>
+  ${sale.customer_contact_name ? `<div class="row"><span>Solicitado por:</span><span>${_esc(sale.customer_contact_name)}${sale.customer_contact_role ? ` · ${_esc(sale.customer_contact_role)}` : ''}</span></div>` : ''}
   <div class="row"><span>Cajero:</span><span>${_esc(sale.cajero||'')}</span></div>
   ${sale.salesperson_name ? `<div class="row"><span>Vendedor:</span><span>${_esc((sale.salesperson_code ? sale.salesperson_code + ' · ' : '') + sale.salesperson_name)}</span></div>` : ''}
   <hr class="sep-d"/>
@@ -852,6 +859,9 @@ function renderCartaRecibo(sale, cfg, opts) {
   if (sale.customer_address) cliLines.push(_esc(sale.customer_address));
   if (sale.customer_phone)   cliLines.push(_esc(sale.customer_phone));
   if (sale.customer_email)   cliLines.push(_esc(sale.customer_email));
+  if (sale.customer_contact_name) {
+    cliLines.push(`Solicitado por: ${_esc(sale.customer_contact_name)}${sale.customer_contact_role ? ` · ${_esc(sale.customer_contact_role)}` : ''}`);
+  }
 
   // ── Contacto del negocio ────────────────────────────
   const bizContact = [];
@@ -1131,6 +1141,7 @@ function renderCartaFormal(sale, cfg, opts) {
       <label>Cliente</label>
       <strong>${_esc(sale.customer_name||'Consumidor Final')}</strong>
       ${opts.cedula && sale.customer_rnc ? `<br/><span style="font-size:11px;color:#666">RNC/Cédula: ${_esc(sale.customer_rnc)}</span>` : ''}
+      ${sale.customer_contact_name ? `<br/><span style="font-size:11px;color:#444">Solicitado por: ${_esc(sale.customer_contact_name)}${sale.customer_contact_role ? ` · ${_esc(sale.customer_contact_role)}` : ''}</span>` : ''}
     </div>
     <div class="info-box">
       <label>Detalles</label>
@@ -1254,6 +1265,7 @@ function renderCartaNCF(sale, cfg, opts) {
   <div style="background:#f3f4f6;padding:7px 12px;border-radius:4px;margin-bottom:8px">
     <strong>Cliente:</strong> ${_esc(sale.customer_name||'Consumidor Final')}
     ${opts.cedula && sale.customer_rnc ? ` &nbsp;|&nbsp; <strong>RNC/Cédula:</strong> ${_esc(sale.customer_rnc)}` : ''}
+    ${sale.customer_contact_name ? `<br/><strong>Solicitado por:</strong> ${_esc(sale.customer_contact_name)}${sale.customer_contact_role ? ` · ${_esc(sale.customer_contact_role)}` : ''}` : ''}
   </div>
 
   <table>
@@ -1324,6 +1336,7 @@ function renderMediaCarta(sale, cfg, opts) {
   </div>
   <div style="background:#f3f4f6;padding:4px 8px;margin-bottom:6px;border-radius:3px;font-size:10px">
     Cliente: <strong>${_esc(sale.customer_name||'Consumidor Final')}</strong>
+    ${sale.customer_contact_name ? ` · Solicitado por: <strong>${_esc(sale.customer_contact_name)}</strong>` : ''}
   </div>
   <table>
     <thead><tr><th>Producto</th><th style="text-align:center">Q</th><th style="text-align:right">Total</th></tr></thead>

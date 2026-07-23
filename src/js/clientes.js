@@ -13,6 +13,18 @@ let cliSearch = '';
 let cliTab    = 'todos';
 let cliSort   = 'name-asc';
 
+function cliEsc(value) {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function cliRepresentativeLine(record, prefix = 'Solicitado por') {
+  if (!record?.customer_contact_name) return '';
+  return `<div style="font-size:10px;color:var(--blue);margin-top:2px">
+    ${prefix}: <strong>${cliEsc(record.customer_contact_name)}</strong>${record.customer_contact_role ? ` · ${cliEsc(record.customer_contact_role)}` : ''}
+  </div>`;
+}
+
 // facturaLabel() ahora es global (definido en data.js) — reutilizado aquí.
 
 function renderClientes(el) {
@@ -30,6 +42,8 @@ function renderClientes(el) {
 
   const alerts    = getCreditAlerts();
   const clientes  = DB.customers.filter(c => c.id !== 1 && c.active !== 0);
+  const personas  = clientes.filter(c => c.customer_type !== 'company');
+  const empresas  = clientes.filter(c => c.customer_type === 'company');
   const conDeuda  = clientes.filter(c => c.balance > 0);
   const totalDeuda= conDeuda.reduce((a, c) => a + c.balance, 0);
 
@@ -102,6 +116,8 @@ function renderClientes(el) {
       h('div', { class: 'tabs', style: { marginBottom: 0 } },
         ...[
           { k: 'todos',   l: 'Todos' },
+          { k: 'personas', l: `Personas (${personas.length})` },
+          { k: 'empresas', l: `Empresas (${empresas.length})` },
           { k: 'credito', l: `Con Crédito (${conDeuda.length})` },
           { k: 'alertas', l: alerts.length ? `Alertas (${alerts.length})` : 'Alertas' },
         ].map(t => h('button', {
@@ -153,6 +169,8 @@ function renderCliTable() {
 
   let clients = DB.customers.filter(c => {
     if (c.id === 1 || c.active === 0) return false;
+    if (cliTab === 'personas') return c.customer_type !== 'company';
+    if (cliTab === 'empresas') return c.customer_type === 'company';
     if (cliTab === 'credito') return c.balance > 0;
     if (cliTab === 'alertas') return !!alertMap[c.id];
     return true;
@@ -163,7 +181,13 @@ function renderCliTable() {
     matchText(c.rnc, qNorm) ||
     matchDigits(c.rnc, qDigits) ||
     matchText(c.phone, qNorm) ||
-    matchDigits(c.phone, qDigits)
+    matchDigits(c.phone, qDigits) ||
+    matchText(c.trade_name, qNorm) ||
+    (c.contacts || []).some(contact =>
+      matchText(contact.name, qNorm) || matchText(contact.role, qNorm) ||
+      matchText(contact.email, qNorm) || matchDigits(contact.phone, qDigits) ||
+      matchDigits(contact.document, qDigits)
+    )
   ).sort((a, b) => {
     if (cliSort === 'name-asc')     return a.name.localeCompare(b.name);
     if (cliSort === 'name-desc')    return b.name.localeCompare(a.name);
@@ -235,8 +259,16 @@ function renderCliTable() {
 
     const tr = h('tr', null,
       h('td', null,
-        h('div', { class: 'tb', style: { opacity: isBloqueado ? '0.6' : '1' } }, c.name),
-        h('div', { class: 'ts' }, c.rnc || 'Sin RNC')
+        h('div', { class: 'tb', style: { opacity: isBloqueado ? '0.6' : '1' } },
+          c.name,
+          c.customer_type === 'company'
+            ? h('span', { class: 'badge b', style: { marginLeft: '6px', fontSize: '9px' } }, 'Empresa')
+            : null),
+        h('div', { class: 'ts' }, [
+          c.trade_name || '', c.rnc || 'Sin RNC',
+          c.customer_type === 'company' && (c.contacts || []).length
+            ? `${c.contacts.length} representante${c.contacts.length === 1 ? '' : 's'}` : '',
+        ].filter(Boolean).join(' · '))
       ),
       h('td', { class: 'ts' }, c.phone || '—'),
       h('td', null,
@@ -296,6 +328,14 @@ function renderCliTable() {
                 html: `${svg('edit')} Editar`
               })
             : null,
+          c.customer_type === 'company'
+            ? h('button', {
+                class: 'btn btn-ghost btn-sm',
+                title: ['admin','superadmin'].includes(user?.role) ? 'Gestionar representantes' : 'Ver representantes',
+                onclick: () => openRepresentantesModal(c.id),
+                html: `${svg('users')} Representantes`
+              })
+            : null,
           ['admin','superadmin','cajero'].includes(user?.role)
             ? h('button', {
                 class: 'btn btn-ghost btn-sm',
@@ -336,47 +376,85 @@ function renderCliTable() {
 // ══════════════════════════════════════════════
 function openClienteModal(c = null) {
   const isEdit      = !!c?.id;
+  const customerType= c?.customer_type === 'company' ? 'company' : 'person';
   const creditLimit = Number(c?.credit_limit || 0);
   const creditDays  = Number(c?.credit_days  || 30);
   const balance     = Number(c?.balance || 0);
 
   openModal(`
     <div class="modal-title">${isEdit ? 'Editar Cliente' : 'Nuevo Cliente'}</div>
-    <div class="modal-sub">${isEdit ? c.name : 'Registrar nuevo cliente'}</div>
+    <div class="modal-sub">${isEdit ? cliEsc(c.name) : 'Registrar nuevo cliente'}</div>
+
+    <div class="fg">
+      <label class="lbl">Tipo de cliente</label>
+      <div class="tabs" style="margin-bottom:0">
+        <button type="button" id="cf-type-person" class="tab ${customerType==='person'?'on':''}"
+                onclick="onCustomerTypeChange('person')">Persona</button>
+        <button type="button" id="cf-type-company" class="tab ${customerType==='company'?'on':''}"
+                onclick="onCustomerTypeChange('company')">Empresa</button>
+      </div>
+      <input type="hidden" id="cf-type" value="${customerType}"/>
+    </div>
 
     <div class="g2">
       <div class="fg">
-        <label class="lbl">Nombre *</label>
+        <label class="lbl" id="cf-name-label">${customerType==='company'?'Razón social':'Nombre completo'} *</label>
         <input class="inp" id="cf-name" type="text" placeholder="Taller García"
-               value="${isEdit ? c.name : ''}"/>
+               value="${isEdit ? cliEsc(c.name) : ''}"/>
       </div>
       <div class="fg">
         <label class="lbl">RNC / Cédula</label>
         <div style="display:flex;gap:6px">
           <input class="inp" id="cf-rnc" type="text" placeholder="RNC 9 díg. · Cédula 11 díg."
-                 value="${isEdit ? (c.rnc || '') : ''}" oninput="onRncInput()" style="flex:1;min-width:0"/>
+                 value="${isEdit ? cliEsc(c.rnc || '') : ''}" oninput="onRncInput()" style="flex:1;min-width:0"/>
           <button class="btn btn-out" type="button" onclick="verificarRncDGII()"
                   title="Verificar en la DGII (requiere internet)" style="flex-shrink:0">DGII</button>
         </div>
         <div id="cf-rnc-hint" style="font-size:10.5px;margin-top:4px;color:var(--muted2)"></div>
       </div>
     </div>
+    <div class="g2 cf-company-only" style="display:${customerType==='company'?'grid':'none'}">
+      <div class="fg">
+        <label class="lbl">Nombre comercial <span style="font-weight:400;color:var(--muted)">(opcional)</span></label>
+        <input class="inp" id="cf-trade-name" type="text" placeholder="Nombre conocido del negocio"
+               value="${isEdit ? cliEsc(c.trade_name || '') : ''}"/>
+      </div>
+      <div class="fg">
+        <label class="lbl">Correo de facturación</label>
+        <input class="inp" id="cf-billing-email" type="email" placeholder="facturacion@empresa.com"
+               value="${isEdit ? cliEsc(c.billing_email || '') : ''}"/>
+      </div>
+    </div>
     <div class="g2">
       <div class="fg">
         <label class="lbl">Teléfono</label>
         <input class="inp" id="cf-phone" type="tel" placeholder="809-555-0000"
-               value="${isEdit ? (c.phone || '') : ''}"/>
+               value="${isEdit ? cliEsc(c.phone || '') : ''}"/>
       </div>
       <div class="fg">
         <label class="lbl">Dirección</label>
         <input class="inp" id="cf-address" type="text" placeholder="Calle, sector..."
-               value="${isEdit ? (c.address || '') : ''}"/>
+               value="${isEdit ? cliEsc(c.address || '') : ''}"/>
       </div>
     </div>
     <div class="fg">
       <label class="lbl">Email</label>
       <input class="inp" id="cf-email" type="email" placeholder="correo@ejemplo.com"
-             value="${isEdit ? (c.email || '') : ''}"/>
+             value="${isEdit ? cliEsc(c.email || '') : ''}"/>
+    </div>
+    <div class="g2">
+      <div class="fg">
+        <label class="lbl">Precio preferido</label>
+        <select class="inp" id="cf-price-mode">
+          <option value="retail" ${(c?.preferred_price_mode||'retail')==='retail'?'selected':''}>Detalle</option>
+          <option value="wholesale" ${c?.preferred_price_mode==='wholesale'?'selected':''}>Mayorista</option>
+        </select>
+      </div>
+      <div class="fg">
+        <label class="lbl">Notas internas</label>
+        <input class="inp" id="cf-notes" type="text" maxlength="500" placeholder="Información comercial opcional"
+               value="${isEdit ? cliEsc(c.notes || '') : ''}"/>
+      </div>
     </div>
 
     <hr style="margin:12px 0;border:none;border-top:1px solid var(--line)"/>
@@ -410,6 +488,11 @@ function openClienteModal(c = null) {
           <option value="moroso"   ${c.status==='moroso'?'selected':''}>Moroso</option>
         </select>
       </div>` : ''}
+    ${isEdit && customerType === 'company' ? `
+      <div class="alrt b" style="margin-top:10px">
+        <div><div class="alrt-title">Representantes de la empresa</div>
+        <div class="alrt-sub">${(c.contacts||[]).length} registrado(s). Guarda los cambios y usa “Representantes” desde la lista para administrarlos.</div></div>
+      </div>` : ''}
 
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
@@ -419,7 +502,22 @@ function openClienteModal(c = null) {
     </div>
   `);
   // Inicializa el detector de tipo de documento (muestra RNC/Cédula al editar)
-  setTimeout(onRncInput, 30);
+  setTimeout(() => { onCustomerTypeChange(customerType); onRncInput(); }, 30);
+}
+
+function onCustomerTypeChange(type) {
+  const value = type === 'company' ? 'company' : 'person';
+  const input = document.getElementById('cf-type');
+  if (input) input.value = value;
+  document.getElementById('cf-type-person')?.classList.toggle('on', value === 'person');
+  document.getElementById('cf-type-company')?.classList.toggle('on', value === 'company');
+  document.querySelectorAll('.cf-company-only').forEach(el => {
+    el.style.display = value === 'company' ? 'grid' : 'none';
+  });
+  const label = document.getElementById('cf-name-label');
+  if (label) label.textContent = value === 'company' ? 'Razón social *' : 'Nombre completo *';
+  const name = document.getElementById('cf-name');
+  if (name) name.placeholder = value === 'company' ? 'Repuestos del Cibao, SRL' : 'María Pérez';
 }
 
 // ── Validación de documento RD (offline) ──────────────────────────────────
@@ -518,18 +616,24 @@ async function verificarRncDGII() {
 }
 
 async function guardarCliente(id) {
+  const customerType = document.getElementById('cf-type')?.value === 'company' ? 'company' : 'person';
   const name    = document.getElementById('cf-name')?.value?.trim();
   const rnc     = document.getElementById('cf-rnc')?.value?.trim()     || '';
   const phone   = document.getElementById('cf-phone')?.value?.trim()   || '';
   const address = document.getElementById('cf-address')?.value?.trim() || '';
   const email   = document.getElementById('cf-email')?.value?.trim()   || '';
+  const tradeName = document.getElementById('cf-trade-name')?.value?.trim() || '';
+  const billingEmail = document.getElementById('cf-billing-email')?.value?.trim() || '';
+  const preferredPriceMode = document.getElementById('cf-price-mode')?.value === 'wholesale' ? 'wholesale' : 'retail';
+  const notes = document.getElementById('cf-notes')?.value?.trim() || '';
   const limit   = parseFloat(document.getElementById('cf-limit')?.value)   || 0;
   const days    = parseInt(document.getElementById('cf-days')?.value)       || 30;
   const status  = document.getElementById('cf-status')?.value              || 'activo';
 
   if (!name) { toast('El nombre es requerido', 'err'); return; }
 
-  const data = { name, rnc, phone, address, email,
+  const data = { name, customer_type: customerType, trade_name: tradeName, rnc, phone, address, email,
+    billing_email: billingEmail, preferred_price_mode: preferredPriceMode, notes,
     credit_limit: limit, credit_days: days, status };
 
   let result;
@@ -546,6 +650,173 @@ async function guardarCliente(id) {
   toast(id ? '✓ Cliente actualizado' : '✓ Cliente registrado');
   renderClientes(document.getElementById('page'));
   buildSidebar();
+}
+
+// ══════════════════════════════════════════════
+// REPRESENTANTES DE EMPRESA
+// ══════════════════════════════════════════════
+function openRepresentantesModal(customerId) {
+  const company = (DB.customers || []).find(c => Number(c.id) === Number(customerId));
+  if (!company || company.customer_type !== 'company') {
+    toast('La empresa no está disponible', 'err');
+    return;
+  }
+  const contacts = (company.contacts || []).filter(c => c.active !== 0);
+  const canManage = ['admin','superadmin'].includes(user?.role);
+  openModal(`
+    <div class="modal-title">Representantes</div>
+    <div class="modal-sub">${cliEsc(company.name)}${company.rnc ? ` · ${cliEsc(company.rnc)}` : ''}</div>
+    ${canManage ? `<div style="display:flex;justify-content:flex-end;margin:12px 0">
+      <button class="btn btn-dark" onclick="openRepresentanteForm(${company.id})">${svg('plus')} Nuevo representante</button>
+    </div>` : '<div style="height:8px"></div>'}
+    ${contacts.length ? `<div class="card" style="padding:0;overflow:hidden">
+      ${contacts.map(contact => `
+        <div style="padding:13px 14px;border-bottom:1px solid var(--line)">
+          <div style="display:flex;align-items:flex-start;gap:12px">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:750">${cliEsc(contact.name)}${contact.is_primary ? ' <span class="badge g">Principal</span>' : ''}</div>
+            <div class="ts">${[contact.role,contact.document,contact.phone,contact.email].filter(Boolean).map(cliEsc).join(' · ') || 'Sin datos adicionales'}</div>
+            <div class="ts" style="margin-top:3px">${[
+              contact.can_order ? 'Puede solicitar' : '',
+              contact.can_receive ? 'Puede recibir' : '',
+              contact.can_receive_invoices ? 'Recibe facturas' : '',
+            ].filter(Boolean).join(' · ') || 'Sin permisos operativos'}</div>
+          </div>
+          ${canManage ? `<button class="btn btn-ghost btn-sm" onclick="openRepresentanteForm(${company.id},${contact.id})">${svg('edit')} Editar</button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="confirmEliminarRepresentante(${company.id},${contact.id})">${svg('trash')}</button>` : ''}
+          </div>
+          <div id="rep-activity-${contact.id}" style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--line);font-size:11px;color:var(--muted2)">
+            Cargando actividad comercial...
+          </div>
+        </div>`).join('')}
+    </div>` : `<div class="empty" style="padding:32px"><div>${svg('users')}</div><p>Sin representantes</p><span>Agrega las personas que compran o reciben en nombre de esta empresa.</span></div>`}
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
+  `, 'modal-lg');
+  cargarActividadRepresentantes(company.id, contacts);
+}
+
+async function cargarActividadRepresentantes(customerId, contacts) {
+  try {
+    const [salesRaw, payments, pending] = await Promise.all([
+      window.api.sales.getAll({ customerId, range: 'all', limit: 9999 }),
+      window.api.customers.getPayments({ customerId }),
+      window.api.customers.getFacturasPendientes({ customerId }),
+    ]);
+    const sales = (Array.isArray(salesRaw) ? salesRaw : []).filter(s => s.status !== 'cancelled');
+    const pays = Array.isArray(payments) ? payments : [];
+    const pendingInvoices = pending?.ok ? (pending.facturas || []) : [];
+
+    contacts.forEach(contact => {
+      const el = document.getElementById(`rep-activity-${contact.id}`);
+      if (!el) return;
+      const documents = sales.filter(s => Number(s.customer_contact_id) === Number(contact.id));
+      const invoices = documents.filter(s => s.type === 'factura');
+      const quotes = documents.filter(s => s.type === 'cotizacion');
+      const creditInvoices = invoices.filter(s => ['credito','crédito','credit'].includes(String(s.payment_method || '').toLowerCase()));
+      const attributedPayments = pays.filter(p => Number(p.customer_contact_id) === Number(contact.id));
+      const pendingCredit = pendingInvoices
+        .filter(f => Number(f.customer_contact_id) === Number(contact.id))
+        .reduce((sum, f) => sum + Number(f.pendiente || 0), 0);
+      const invoiced = invoices.reduce((sum, s) => sum + Number(s.total || 0), 0);
+      const paid = attributedPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+      const timeline = [
+        ...documents.map(s => ({ date: s.created_at, label: `${facturaLabel(s)} · ${s.type === 'cotizacion' ? 'Cotización' : 'Factura'} · ${fmt(s.total || 0)}` })),
+        ...attributedPayments.map(p => ({ date: p.created_at, label: `Abono #${String(p.id).padStart(5,'0')} · ${fmt(p.amount || 0)}` })),
+      ].sort((a,b) => String(b.date || '').localeCompare(String(a.date || ''))).slice(0, 3);
+      el.innerHTML = `
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:${timeline.length ? '7px' : '0'}">
+          <span class="badge">${invoices.length} factura${invoices.length === 1 ? '' : 's'} · ${fmt(invoiced)}</span>
+          <span class="badge b">${quotes.length} cotización${quotes.length === 1 ? '' : 'es'}</span>
+          <span class="badge ${pendingCredit > 0 ? 'r' : 'g'}">Crédito pendiente: ${fmt(pendingCredit)}</span>
+          <span class="badge g">${attributedPayments.length} abono${attributedPayments.length === 1 ? '' : 's'} · ${fmt(paid)}</span>
+        </div>
+        ${creditInvoices.length ? `<div style="color:var(--amber);margin-bottom:5px"><strong>${creditInvoices.length}</strong> factura${creditInvoices.length === 1 ? '' : 's'} tomada${creditInvoices.length === 1 ? '' : 's'} a crédito por este representante.</div>` : ''}
+        ${timeline.length ? timeline.map(item => `<div style="display:flex;justify-content:space-between;gap:10px;padding:2px 0">
+          <span>${cliEsc(item.label)}</span><span style="color:var(--muted2);white-space:nowrap">${item.date ? fdate(String(item.date).split('T')[0].split(' ')[0]) : ''}</span>
+        </div>`).join('') : '<div>Sin operaciones atribuidas todavía.</div>'}`;
+    });
+  } catch (error) {
+    contacts.forEach(contact => {
+      const el = document.getElementById(`rep-activity-${contact.id}`);
+      if (el) el.textContent = 'No se pudo cargar la actividad comercial.';
+    });
+  }
+}
+
+function openRepresentanteForm(customerId, contactId = null) {
+  const company = (DB.customers || []).find(c => Number(c.id) === Number(customerId));
+  const contact = (company?.contacts || []).find(c => Number(c.id) === Number(contactId));
+  if (!company) return;
+  openModal(`
+    <div class="modal-title">${contact ? 'Editar representante' : 'Nuevo representante'}</div>
+    <div class="modal-sub">Actuará en nombre de ${cliEsc(company.name)}</div>
+    <div class="g2">
+      <div class="fg"><label class="lbl">Nombre completo *</label>
+        <input class="inp" id="cr-name" value="${cliEsc(contact?.name || '')}" placeholder="Juan Pérez"/></div>
+      <div class="fg"><label class="lbl">Cargo</label>
+        <input class="inp" id="cr-role" value="${cliEsc(contact?.role || '')}" placeholder="Encargado de compras"/></div>
+    </div>
+    <div class="g2">
+      <div class="fg"><label class="lbl">Cédula / documento</label>
+        <input class="inp" id="cr-document" value="${cliEsc(contact?.document || '')}"/></div>
+      <div class="fg"><label class="lbl">Teléfono / WhatsApp</label>
+        <input class="inp" id="cr-phone" type="tel" value="${cliEsc(contact?.phone || '')}"/></div>
+    </div>
+    <div class="fg"><label class="lbl">Correo</label>
+      <input class="inp" id="cr-email" type="email" value="${cliEsc(contact?.email || '')}"/></div>
+    <div class="card" style="background:var(--surface2);margin-top:8px">
+      <label style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><input id="cr-primary" type="checkbox" ${contact?.is_primary?'checked':''}/> Representante principal</label>
+      <label style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><input id="cr-order" type="checkbox" ${contact?.can_order!==0?'checked':''}/> Puede solicitar compras</label>
+      <label style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><input id="cr-receive" type="checkbox" ${contact?.can_receive!==0?'checked':''}/> Puede recibir mercancía</label>
+      <label style="display:flex;gap:8px;align-items:center"><input id="cr-invoices" type="checkbox" ${contact?.can_receive_invoices!==0?'checked':''}/> Puede recibir facturas</label>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="openRepresentantesModal(${company.id})">Volver</button>
+      <button class="btn btn-dark" id="cr-save" onclick="guardarRepresentante(${company.id},${contact?.id || 'null'})">${svg('check')} Guardar</button>
+    </div>
+  `);
+}
+
+async function guardarRepresentante(customerId, contactId) {
+  const data = {
+    name: document.getElementById('cr-name')?.value?.trim() || '',
+    role: document.getElementById('cr-role')?.value?.trim() || '',
+    document: document.getElementById('cr-document')?.value?.trim() || '',
+    phone: document.getElementById('cr-phone')?.value?.trim() || '',
+    email: document.getElementById('cr-email')?.value?.trim() || '',
+    is_primary: document.getElementById('cr-primary')?.checked ? 1 : 0,
+    can_order: document.getElementById('cr-order')?.checked ? 1 : 0,
+    can_receive: document.getElementById('cr-receive')?.checked ? 1 : 0,
+    can_receive_invoices: document.getElementById('cr-invoices')?.checked ? 1 : 0,
+  };
+  if (!data.name) return toast('El nombre del representante es requerido', 'err');
+  const btn = document.getElementById('cr-save');
+  if (btn) btn.disabled = true;
+  const result = contactId
+    ? await window.api.customers.updateContact({ id: contactId, data, requestUserId: user.id })
+    : await window.api.customers.createContact({ customerId, data, requestUserId: user.id });
+  if (!result?.ok) {
+    if (btn) btn.disabled = false;
+    return toast(result?.error || 'No se pudo guardar el representante', 'err');
+  }
+  await reloadCustomers();
+  toast(contactId ? '✓ Representante actualizado' : '✓ Representante registrado');
+  openRepresentantesModal(customerId);
+  renderCliTable();
+}
+
+function confirmEliminarRepresentante(customerId, contactId) {
+  const company = (DB.customers || []).find(c => Number(c.id) === Number(customerId));
+  const contact = (company?.contacts || []).find(c => Number(c.id) === Number(contactId));
+  if (!contact) return;
+  confirmModal(`¿Desactivar a <strong>${cliEsc(contact.name)}</strong> como representante de ${cliEsc(company.name)}?`, async () => {
+    const result = await window.api.customers.deleteContact({ id: contactId, requestUserId: user.id });
+    if (!result?.ok) return toast(result?.error || 'No se pudo desactivar', 'err');
+    await reloadCustomers();
+    toast('✓ Representante desactivado');
+    openRepresentantesModal(customerId);
+    renderCliTable();
+  }, 'Desactivar', 'btn-red');
 }
 
 function confirmEliminarCliente(c) {
@@ -658,6 +929,10 @@ function clienteWhatsApp(c) {
 function openAbonoModal(c) {
   const balance   = Number(c.balance || 0);
   const creditDue = c.credit_due || null;
+  const contacts  = c.customer_type === 'company'
+    ? (c.contacts || []).filter(x => x.active !== 0)
+    : [];
+  const primaryContact = contacts.find(x => x.is_primary) || contacts[0] || null;
 
   openModal(`
     <div class="modal-title">Registrar Abono</div>
@@ -709,6 +984,17 @@ function openAbonoModal(c) {
       </div>
     </div>
 
+    ${contacts.length ? `<div class="fg">
+      <label class="lbl">Representante que realiza el abono</label>
+      <select class="inp" id="ab-contact">
+        <option value="">— No especificado —</option>
+        ${contacts.map(contact => `<option value="${contact.id}" ${Number(contact.id) === Number(primaryContact?.id) ? 'selected' : ''}>
+          ${cliEsc(contact.name)}${contact.role ? ` · ${cliEsc(contact.role)}` : ''}${contact.is_primary ? ' · Principal' : ''}
+        </option>`).join('')}
+      </select>
+      <div class="ts" style="margin-top:4px">Quedará registrado en el recibo y el estado de cuenta de la empresa.</div>
+    </div>` : ''}
+
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-green" id="btn-abono"
@@ -734,6 +1020,7 @@ async function registrarAbono(clientId, balanceActual) {
   const amount = parseFloat(document.getElementById('ab-amount')?.value);
   const method = document.getElementById('ab-method')?.value  || 'efectivo';
   const note   = document.getElementById('ab-note')?.value?.trim() || '';
+  const contactId = Number(document.getElementById('ab-contact')?.value) || null;
 
   if (!amount || amount <= 0) {
     toast('Ingresa un monto válido', 'err'); return;
@@ -746,7 +1033,7 @@ async function registrarAbono(clientId, balanceActual) {
   if (btn) { btn.disabled = true; btn.textContent = 'Procesando...'; }
 
   const result = await window.api.customers.addPayment({
-    data: { customerId: clientId, amount, method, note },
+    data: { customerId: clientId, amount, method, note, contactId },
     requestUserId: user.id,
   });
 
@@ -771,6 +1058,10 @@ async function registrarAbono(clientId, balanceActual) {
       balance_before: balanceActual,
       balance_after:  result.after,
       created_at:     new Date().toISOString(),
+      customer_contact_id: result.customer_contact_id || null,
+      customer_contact_name: result.customer_contact_name || '',
+      customer_contact_document: result.customer_contact_document || '',
+      customer_contact_role: result.customer_contact_role || '',
     },
     customer: {
       name:  c?.name  || '',
@@ -794,6 +1085,10 @@ function guardarAbonoPDF(paymentId) {
     payment: {
       id: p.id, amount: p.amount, method: p.method, note: p.note || 'Abono',
       balance_before: p.balance_before, balance_after: p.balance_after, created_at: p.created_at,
+      customer_contact_id: p.customer_contact_id || null,
+      customer_contact_name: p.customer_contact_name || '',
+      customer_contact_document: p.customer_contact_document || '',
+      customer_contact_role: p.customer_contact_role || '',
     },
     customer: { name: c.name || '', rnc: c.rnc || '' },
     cajero: (window._currentUser && window._currentUser.name) || '',
@@ -851,7 +1146,7 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
         return `
           <tr>
             <td style="font-size:11px;color:var(--muted)">${fdate(fecha)}</td>
-            <td style="font-size:12px">${facturaLabel(s)} <span style="font-size:10px;color:var(--muted)">${tipo}</span></td>
+            <td style="font-size:12px">${facturaLabel(s)} <span style="font-size:10px;color:var(--muted)">${tipo}</span>${cliRepresentativeLine(s)}</td>
             <td style="text-align:right;font-weight:600">${fmt(s.total)}</td>
             <td><span class="badge ${
               (s.payment_method||s.pay)==='credito' ? 'a' :
@@ -881,7 +1176,7 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
         return `
           <tr${esDesc ? ' style="background:rgba(245,158,11,.07)"' : ''}>
             <td style="font-size:11px;color:var(--muted)">${fdate(fecha)}</td>
-            <td style="font-size:12px${esDesc ? ';color:var(--amber)' : ''}">${concepto}${facturaRef}</td>
+            <td style="font-size:12px${esDesc ? ';color:var(--amber)' : ''}">${cliEsc(concepto)}${facturaRef}${cliRepresentativeLine(p, 'Pagado por')}</td>
             <td style="text-align:right;font-weight:700;color:${esDesc ? 'var(--amber)' : 'var(--green)'}">${esDesc ? '' : '+'}${fmt(p.amount)}</td>
             <td>
               <span class="badge ${esDesc ? 'a' : 'g'}">${p.method || 'efectivo'}</span>
@@ -899,9 +1194,12 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
 
   openModal(`
     <div class="modal-title">
-      ${c.name}
-      <span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:8px">${c.rnc||''} ${c.phone ? '· '+c.phone : ''}</span>
+      ${cliEsc(c.name)}
+      <span style="font-size:12px;font-weight:400;color:var(--muted);margin-left:8px">${cliEsc(c.rnc||'')} ${c.phone ? '· '+cliEsc(c.phone) : ''}</span>
     </div>
+    ${c.customer_type === 'company' && (c.contacts || []).length ? `<div style="display:flex;gap:5px;flex-wrap:wrap;margin:7px 0 12px">
+      ${(c.contacts || []).filter(x => x.active !== 0).map(contact => `<span class="badge ${contact.is_primary ? 'b' : ''}">${cliEsc(contact.name)}${contact.role ? ` · ${cliEsc(contact.role)}` : ''}</span>`).join('')}
+    </div>` : ''}
 
     <!-- Pestañas del cliente -->
     <div class="tabs" style="margin-bottom:14px">
@@ -994,6 +1292,7 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
                       <span style="font-weight:700;font-size:12px">${facturaLabel(s)}</span>
                       <span style="font-size:10px;color:var(--muted);margin-left:6px">${tipo}</span>
                       <span style="font-size:10px;color:var(--muted2);margin-left:6px">${fdate(fecha)}</span>
+                      ${cliRepresentativeLine(s)}
                     </div>
                     <div style="display:flex;align-items:center;gap:8px">
                       <span style="font-size:10px;font-weight:600;color:${metColor};
@@ -1106,6 +1405,7 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
               <span style="font-weight:700">${ref}</span>
               <span style="font-size:11px;color:var(--muted);margin-left:8px">${fdate(fecha)}</span>
               <span class="badge ${diasD>30?'r':'a'}" style="margin-left:6px">${diasD}d</span>
+              ${cliRepresentativeLine(f)}
             </div>
             <div style="text-align:right">
               <div style="font-weight:800;color:var(--red)">${fmt(f.pendiente)}</div>
@@ -1137,9 +1437,8 @@ async function exportClientCreditPDF(c) {
   const usedPct     = creditLimit > 0 ? Math.min((balance / creditLimit) * 100, 100) : 0;
 
   const pagos  = await window.api.customers.getPayments({ customerId: c.id }) || [];
-  const ventas = DB.sales.filter(s =>
-    (s.customer_id || s.clientId) === c.id && s.status !== 'cancelled'
-  ).reverse();
+  const ventasRaw = await window.api.sales.getAll({ customerId: c.id, range: 'all', limit: 9999 }) || [];
+  const ventas = ventasRaw.filter(s => s.status !== 'cancelled').reverse();
 
   const totalCompras = ventas.reduce((a, s) => a + s.total, 0);
   // Descuentos aparte del efectivo — ver nota en openEstadoCuentaModal.
@@ -1162,7 +1461,9 @@ async function exportClientCreditPDF(c) {
         const metodoBadge = (s.payment_method || s.pay || '—');
         return `<tr>
           <td>${fdate(fecha)}</td>
-          <td>${facturaLabel(s)} <span style="color:#9ca3af;font-size:10px">${tipo}</span></td>
+          <td>${facturaLabel(s)} <span style="color:#9ca3af;font-size:10px">${tipo}</span>
+            ${s.customer_contact_name ? `<div style="color:#2563eb;font-size:9px;margin-top:2px">Solicitado por: <strong>${_e(s.customer_contact_name)}</strong>${s.customer_contact_role ? ` · ${_e(s.customer_contact_role)}` : ''}</div>` : ''}
+          </td>
           <td style="text-align:right;font-weight:700">${fmt(s.total)}</td>
           <td>${_e(metodoBadge)}</td>
           <td><span style="color:${s.status==='returned'||s.status==='cancelled'?'#dc2626':'#16a34a'};font-weight:600">${estado}</span></td>
@@ -1176,7 +1477,9 @@ async function exportClientCreditPDF(c) {
         const esDesc = esDescuento(p);
         return `<tr${esDesc ? ' style="background:#fffbeb"' : ''}>
           <td>${fdate(fecha)}</td>
-          <td${esDesc ? ' style="color:#b45309"' : ''}>${_e(p.note || (esDesc ? 'Descuento aplicado' : 'Abono'))}</td>
+          <td${esDesc ? ' style="color:#b45309"' : ''}>${_e(p.note || (esDesc ? 'Descuento aplicado' : 'Abono'))}
+            ${p.customer_contact_name ? `<div style="color:#2563eb;font-size:9px;margin-top:2px">Pagado por: <strong>${_e(p.customer_contact_name)}</strong>${p.customer_contact_role ? ` · ${_e(p.customer_contact_role)}` : ''}</div>` : ''}
+          </td>
           <td style="text-align:right;font-weight:700;color:${esDesc ? '#b45309' : '#16a34a'}">${esDesc ? '' : '+'}${fmt(p.amount)}</td>
           <td>${_e(p.method || 'efectivo')} <span style="color:#9ca3af;font-size:10px">${fmt(p.balance_before)} → ${fmt(p.balance_after)}</span></td>
         </tr>`;
@@ -1184,7 +1487,7 @@ async function exportClientCreditPDF(c) {
 
   const html = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"/>
-<title>Estado de Cuenta — ${_e(c.name)}</title>
+<title>Estado de Cuenta: ${_e(c.name)}</title>
 <style>
   body{font-family:Arial,sans-serif;font-size:11px;color:#111;padding:24px;max-width:800px;margin:0 auto}
   h2{font-size:17px;margin-bottom:2px}
@@ -1221,7 +1524,7 @@ async function exportClientCreditPDF(c) {
     </button>
   </div>
 
-  <h2>Estado de Cuenta — ${_e(c.name)}</h2>
+  <h2>Estado de Cuenta: ${_e(c.name)}</h2>
   <div class="sub">
     RNC: ${_e(c.rnc || 'Sin RNC')} ·
     Tel: ${_e(c.phone || 'Sin teléfono')} ·

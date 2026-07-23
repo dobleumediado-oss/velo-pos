@@ -36,6 +36,15 @@ function _escHtml(str) {
     .replace(/>/g, '&gt;');
 }
 
+function _ensureUtf8HTML(html) {
+  const source = String(html || '');
+  if (/<meta\s+[^>]*charset=/i.test(source)) return source;
+  if (/<head[^>]*>/i.test(source)) {
+    return source.replace(/<head([^>]*)>/i, '<head$1><meta charset="UTF-8"/>');
+  }
+  return `<meta charset="UTF-8"/>${source}`;
+}
+
 // ── Encabezado de logo(s) para documentos ─────
 // Renderiza 1 o 2 logos con un layout seguro y compartido por TODOS los
 // documentos imprimibles (tickets térmicos, facturas carta, conduces, etc.).
@@ -216,6 +225,14 @@ function printReceipt(sale, isReprint = false) {
       customer_address: sale.customer_address || sale.cust_addr || '',
       customer_phone:   sale.customer_phone   || '',
       customer_email:   sale.customer_email   || '',
+      customer_type:    sale.customer_type    || 'person',
+      customer_trade_name: sale.customer_trade_name || '',
+      customer_contact_id: sale.customer_contact_id || null,
+      customer_contact_name: sale.customer_contact_name || '',
+      customer_contact_document: sale.customer_contact_document || '',
+      customer_contact_role: sale.customer_contact_role || '',
+      customer_contact_phone: sale.customer_contact_phone || '',
+      customer_contact_email: sale.customer_contact_email || '',
       due_date:         sale.due_date || null,
       applied_invoice:  sale.applied_invoice || null,
       financial_account_id: sale.financial_account_id || null,
@@ -303,6 +320,7 @@ function printReceipt(sale, isReprint = false) {
   const cliRnc  = sale.customer_rnc  || sale.clientCedula || '';
   lines.push(tRow('Cliente:', cliName.slice(0, 28)));
   if (cliRnc) lines.push(tRow('RNC/Céd:', cliRnc));
+  if (sale.customer_contact_name) lines.push(tRow('Solicitado por:', String(sale.customer_contact_name).slice(0, 26)));
 
   lines.push(tline());
   lines.push(tRow('DESCRIPCIÓN', 'TOTAL'));
@@ -424,6 +442,7 @@ function printConduce(sale) {
   const cliRnc  = sale.customer_rnc  || sale.clientCedula || '';
   lines.push(tRow('Cliente:', cliName.slice(0, 28)));
   if (cliRnc) lines.push(tRow('RNC/Céd:', cliRnc));
+  if (sale.customer_contact_name) lines.push(tRow('Solicitado por:', String(sale.customer_contact_name).slice(0, 26)));
   // Enlaza el conduce con la factura fiscal, si tiene NCF.
   if (sale.ncf && String(sale.ncf).trim()) lines.push(tRow('Ref. NCF:', String(sale.ncf).trim()));
 
@@ -547,6 +566,7 @@ function printConduceDoc(dn) {
     <div class="row"><span class="k">Cliente:</span> <b>${esc(dn.customer_name || 'Consumidor Final')}</b></div>
     <div class="row"><span class="k">Estado:</span> <b>${STL[dn.status] || dn.status}</b></div>
     ${dn.customer_rnc ? `<div class="row"><span class="k">RNC/Céd.:</span> <b>${esc(dn.customer_rnc)}</b></div>` : '<div></div>'}
+    ${dn.customer_contact_name ? `<div class="row"><span class="k">Representante:</span> <b>${esc(dn.customer_contact_name)}${dn.customer_contact_role ? ` · ${esc(dn.customer_contact_role)}` : ''}</b></div>` : '<div></div>'}
     <div class="row"><span class="k">Origen:</span> <b>${origen[dn.source_type] || dn.source_type}${dn.source_id ? ' #' + dn.source_id : ''}</b></div>
     ${dn.delivery_address ? `<div class="row" style="grid-column:1/3"><span class="k">Dirección de entrega:</span> <b>${esc(dn.delivery_address)}</b></div>` : ''}
     ${dn.driver_name ? `<div class="row"><span class="k">Chofer:</span> <b>${esc(dn.driver_name)}</b></div>` : ''}
@@ -596,6 +616,11 @@ function printAbono({ payment, customer, cajero }) {
   lines.push(tline());
   lines.push(tRow('Cliente:', customer.name.slice(0, 28)));
   if (customer.rnc) lines.push(tRow('RNC/Céd:', customer.rnc));
+  if (payment.customer_contact_name) {
+    lines.push(tRow('Pagado por:', String(payment.customer_contact_name).slice(0, 26)));
+    if (payment.customer_contact_role) lines.push(tRow('Cargo:', String(payment.customer_contact_role).slice(0, 28)));
+    if (payment.customer_contact_document) lines.push(tRow('Documento:', String(payment.customer_contact_document).slice(0, 24)));
+  }
   lines.push(tline());
   lines.push(tRow('Balance anterior:', fmt(payment.balance_before || 0)));
   lines.push(tRow('Monto abonado:', fmt(payment.amount || 0)));
@@ -875,6 +900,7 @@ function _suggestedPrintName(jobType, referenceId) {
 }
 
 function _htmlForPreview(html) {
+  html = _ensureUtf8HTML(html);
   const previewStyle = `
     <style>
       @media screen {
@@ -1111,6 +1137,7 @@ function _dispatchPrintWindow(html, jobType = '', referenceId = null, isReprint 
 }
 
 function _openPrintWindowFallback(html) {
+  html = _ensureUtf8HTML(html);
   // Inyectar botones de control en el HTML.
   //  · Barra fija ABAJO-derecha para no tapar el encabezado del documento
   //    (la caja "FACTURA N." / número vive arriba-derecha).
@@ -1181,9 +1208,7 @@ function _printViaIframe(html) {
 // printHTML — Para reportes A4 (se mantiene igual)
 // ══════════════════════════════════════════════
 function printHTML(html, category = 'reporte') {
-  if (!html.includes('<meta charset')) {
-    html = html.replace('<head>', '<head><meta charset="UTF-8"/>');
-  }
+  html = _ensureUtf8HTML(html);
   // Intercepción para "Guardar PDF" (mismo mecanismo que _openPrintWindow).
   if (window._pdfSaveRequest) {
     const name = window._pdfSaveRequest.name;

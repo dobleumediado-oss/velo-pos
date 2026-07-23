@@ -75,7 +75,9 @@ const VELO_FIELDS = {
     { key: 'description', label: 'Descripción',     required: false },
   ],
   clientes: [
+    { key: 'customer_type',label: 'Tipo (persona/empresa)',          required: false },
     { key: 'name',         label: 'Nombre',                          required: true  },
+    { key: 'trade_name',   label: 'Nombre comercial',                required: false },
     { key: 'phone',        label: 'Teléfono',                        required: false },
     { key: 'email',        label: 'Email',                           required: false },
     { key: 'rnc',          label: 'RNC/Cédula',                      required: false },
@@ -85,6 +87,10 @@ const VELO_FIELDS = {
     { key: 'credit_days',  label: 'Días de crédito',                 required: false },
     { key: 'credit_due',   label: 'Fecha vencimiento',               required: false },
     { key: 'status',       label: 'Estado (activo/bloqueado/moroso)', required: false },
+    { key: 'contact_name', label: 'Representante principal',          required: false },
+    { key: 'contact_role', label: 'Cargo del representante',          required: false },
+    { key: 'contact_phone',label: 'Teléfono del representante',       required: false },
+    { key: 'contact_email',label: 'Correo del representante',         required: false },
   ],
   ventas: [
     { key: 'date',           label: 'Fecha',           required: true  },
@@ -1437,6 +1443,9 @@ async function ejecutarImportacion() {
 
         const data = {
           name, rnc,
+          customer_type: mapping.customer_type && /empresa|company|jur[ií]dica/i.test(String(row[mapping.customer_type]||''))
+            ? 'company' : 'person',
+          trade_name: mapping.trade_name ? String(row[mapping.trade_name]||'').trim() : '',
           phone:        mapping.phone    ? String(row[mapping.phone]||'').trim()   : '',
           email:        mapping.email    ? String(row[mapping.email]||'').trim()   : '',
           address:      mapping.address  ? String(row[mapping.address]||'').trim() : '',
@@ -1450,6 +1459,21 @@ async function ejecutarImportacion() {
           sessionIds.push({ tabla: 'customers', id: result.id });
           existingClientNames.add(name.toLowerCase());
           if (rnc) existingClientRNCs.add(rnc);
+          const contactName = mapping.contact_name ? String(row[mapping.contact_name]||'').trim() : '';
+          if (data.customer_type === 'company' && contactName && window.api.customers.createContact) {
+            const contactResult = await window.api.customers.createContact({
+              customerId: result.id,
+              data: {
+                name: contactName,
+                role: mapping.contact_role ? String(row[mapping.contact_role]||'').trim() : '',
+                phone: mapping.contact_phone ? String(row[mapping.contact_phone]||'').trim() : '',
+                email: mapping.contact_email ? String(row[mapping.contact_email]||'').trim() : '',
+                is_primary: 1,
+              },
+              requestUserId: user.id,
+            });
+            if (!contactResult?.ok) errores.push({ fila:i+2, nombre:contactName, campo:'representante', error:contactResult?.error||'No importado', tipo:'ajuste' });
+          }
           // Si tiene balance, importar como crédito
           if (balance > 0) {
             await window.api.importar.importarCredito({

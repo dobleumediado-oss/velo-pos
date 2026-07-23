@@ -81,7 +81,8 @@ function _pvMatchesSearch(order, query) {
   const termDigits = digitsOf(query);
   if (!term && !termDigits) return true;
   const text = searchNorm([
-    order.number, order.customer_name, order.customer_rnc, order.created_by_name,
+    order.number, order.customer_name, order.customer_rnc, order.customer_contact_name,
+    order.customer_contact_role, order.customer_contact_phone, order.created_by_name,
     order.paid_by_name, order.salesperson_name, order.items_summary, order.notes,
   ].filter(Boolean).join(' '));
   if (term && text.includes(term)) return true;
@@ -116,7 +117,7 @@ function _pvCard(order) {
       </div>
       ${_pvFlow(order)}
       <div class="pv-customer">${_pvEsc(order.customer_name || 'Consumidor Final')}</div>
-      <div class="pv-customer-meta">${_pvEsc(order.customer_rnc || 'Sin RNC/Cédula')}${order.salesperson_name ? ` · Vendedor: ${_pvEsc(order.salesperson_name)}` : ''}</div>
+      <div class="pv-customer-meta">${_pvEsc(order.customer_rnc || 'Sin RNC/Cédula')}${order.customer_contact_name ? ` · Solicitó: ${_pvEsc(order.customer_contact_name)}` : ''}${order.salesperson_name ? ` · Vendedor: ${_pvEsc(order.salesperson_name)}` : ''}</div>
       <div class="pv-items">${_pvEsc(order.items_summary || `${order.item_count || 0} artículos`)}</div>
       ${order.notes ? `<div class="pv-note">${svg('edit')} ${_pvEsc(order.notes)}</div>` : ''}
       <div class="pv-order-foot">
@@ -336,6 +337,7 @@ async function preventaVerDetalle(id) {
     <div class="card" style="background:var(--surface2);margin:14px 0">
       <div class="tr"><span>Cliente</span><strong>${_pvEsc(order.customer_name || 'Consumidor Final')}</strong></div>
       <div class="tr"><span>RNC / Cédula</span><span>${_pvEsc(order.customer_rnc || '—')}</span></div>
+      ${order.customer_contact_name ? `<div class="tr"><span>Representante</span><strong>${_pvEsc(order.customer_contact_name)}${order.customer_contact_role ? ` · ${_pvEsc(order.customer_contact_role)}` : ''}</strong></div>` : ''}
       ${order.salesperson_name ? `<div class="tr"><span>Vendedor</span><span>${_pvEsc(order.salesperson_name)}</span></div>` : ''}
       ${order.notes ? `<div class="tr"><span>Nota</span><span>${_pvEsc(order.notes)}</span></div>` : ''}
     </div>
@@ -382,6 +384,10 @@ async function preventaCobrar(id) {
     })),
     cliId: order.customer_id || 1, cliName: order.customer_name || 'Consumidor Final',
     cliCedula: order.customer_rnc || '', pmode: order.price_mode || 'retail',
+    cliContactId: order.customer_contact_id || null,
+    cliContactName: order.customer_contact_name || '',
+    cliContactRole: order.customer_contact_role || '',
+    cliContactPhone: order.customer_contact_phone || '',
     disc: Number(order.discount_pct) || 0, salespersonId: order.salesperson_id || null, itype: 'factura',
   };
   routeTo('pos');

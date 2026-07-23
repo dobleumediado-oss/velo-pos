@@ -65,6 +65,25 @@ function ensureCheckoutOrdersSchema(db) {
       ON checkout_order_items(product_id);
   `);
 
+  // Snapshots de cuenta/representante para bases creadas antes de empresas.
+  const companyCols = [
+    ['customer_type', "TEXT DEFAULT 'person'"],
+    ['customer_trade_name', "TEXT DEFAULT ''"],
+    ['customer_address', "TEXT DEFAULT ''"],
+    ['customer_phone', "TEXT DEFAULT ''"],
+    ['customer_email', "TEXT DEFAULT ''"],
+    ['customer_contact_id', 'INTEGER'],
+    ['customer_contact_name', "TEXT DEFAULT ''"],
+    ['customer_contact_document', "TEXT DEFAULT ''"],
+    ['customer_contact_role', "TEXT DEFAULT ''"],
+    ['customer_contact_phone', "TEXT DEFAULT ''"],
+    ['customer_contact_email', "TEXT DEFAULT ''"],
+  ];
+  for (const [col, def] of companyCols) {
+    try { db.prepare(`ALTER TABLE checkout_orders ADD COLUMN ${col} ${def}`).run(); }
+    catch { /* ya existe */ }
+  }
+
   // Se ejecuta en cada arranque con INSERT OR IGNORE. Así también reciben el
   // control modular las instalaciones de desarrollo que ya habían registrado
   // la migración 1.24.2 antes de incorporarse estos ajustes.
@@ -191,29 +210,53 @@ function createCheckoutOrdersRepo({ getDb, salesRepo, audit }) {
       const totals = taxTotals(items, data.discountPct);
       const minutes = Math.max(5, Math.min(480, Number(data.reservationMinutes) || 30));
       const customerId = Number(data.customer?.id) || 1;
-      const customer = db().prepare('SELECT id,name,rnc FROM customers WHERE id=? AND active=1').get(customerId);
+      const customer = db().prepare('SELECT * FROM customers WHERE id=? AND active=1').get(customerId);
       if (!customer) throw new Error('Cliente no encontrado o inactivo');
+      const contactId = Number(data.customer?.contact_id || data.customer?.contact?.id) || null;
+      const contact = contactId
+        ? db().prepare(`SELECT * FROM customer_contacts WHERE id=? AND customer_id=? AND active=1 AND can_order=1`)
+            .get(contactId, customer.id)
+        : null;
+      if (contactId && (!contact || customer.customer_type !== 'company')) {
+        throw new Error('El representante no pertenece a la empresa, está inactivo o no puede solicitar compras');
+      }
 
       const orderR = db().prepare(`
         INSERT INTO checkout_orders(
           status,customer_id,customer_name,customer_rnc,price_mode,
+          customer_type,customer_trade_name,customer_address,customer_phone,customer_email,
+          customer_contact_id,customer_contact_name,customer_contact_document,
+          customer_contact_role,customer_contact_phone,customer_contact_email,
           discount_pct,discount_amt,subtotal,tax_amt,total,salesperson_id,
           price_approved_by,created_by,created_by_name,origin_terminal_id,notes,expires_at
         ) VALUES(
-          'pending',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime',?)
+          'pending',@customer_id,@customer_name,@customer_rnc,@price_mode,
+          @customer_type,@customer_trade_name,@customer_address,@customer_phone,@customer_email,
+          @customer_contact_id,@customer_contact_name,@customer_contact_document,
+          @customer_contact_role,@customer_contact_phone,@customer_contact_email,
+          @discount_pct,@discount_amt,@subtotal,@tax_amt,@total,@salesperson_id,
+          @price_approved_by,@created_by,@created_by_name,@origin_terminal_id,@notes,
+          datetime('now','localtime',@expires_modifier)
         )
-      `).run(
-        customer.id,
-        String(data.customer?.name || customer.name || 'Consumidor Final').slice(0, 160),
-        String(data.customer?.rnc || customer.rnc || '').slice(0, 32),
-        data.priceMode === 'wholesale' ? 'wholesale' : 'retail',
-        totals.discountPct, totals.discountAmt, totals.subtotal, totals.taxAmt, totals.total,
-        Number(data.salespersonId) || null,
-        Number(data.priceApprovedBy) || null,
-        Number(data.createdBy), String(data.createdByName || '').slice(0, 120),
-        String(data.terminalId || '').slice(0, 100), String(data.notes || '').slice(0, 500),
-        `+${minutes} minutes`
-      );
+      `).run({
+        customer_id: customer.id,
+        customer_name: String(customer.id === 1 ? (data.customer?.name || customer.name) : customer.name || 'Consumidor Final').slice(0, 160),
+        customer_rnc: String(customer.id === 1 ? (data.customer?.rnc || customer.rnc) : customer.rnc || '').slice(0, 32),
+        price_mode: data.priceMode === 'wholesale' ? 'wholesale' : 'retail',
+        customer_type: customer.customer_type || 'person',
+        customer_trade_name: customer.trade_name || '', customer_address: customer.address || '',
+        customer_phone: customer.phone || '', customer_email: customer.billing_email || customer.email || '',
+        customer_contact_id: contact?.id || null, customer_contact_name: contact?.name || '',
+        customer_contact_document: contact?.document || '', customer_contact_role: contact?.role || '',
+        customer_contact_phone: contact?.phone || '', customer_contact_email: contact?.email || '',
+        discount_pct: totals.discountPct, discount_amt: totals.discountAmt,
+        subtotal: totals.subtotal, tax_amt: totals.taxAmt, total: totals.total,
+        salesperson_id: Number(data.salespersonId) || null,
+        price_approved_by: Number(data.priceApprovedBy) || null,
+        created_by: Number(data.createdBy), created_by_name: String(data.createdByName || '').slice(0, 120),
+        origin_terminal_id: String(data.terminalId || '').slice(0, 100),
+        notes: String(data.notes || '').slice(0, 500), expires_modifier: `+${minutes} minutes`,
+      });
       const id = Number(orderR.lastInsertRowid);
       const number = `OC-${String(id).padStart(6, '0')}`;
       db().prepare('UPDATE checkout_orders SET number=? WHERE id=?').run(number, id);
@@ -284,6 +327,17 @@ function createCheckoutOrdersRepo({ getDb, salesRepo, audit }) {
         id: order.customer_id || 1,
         name: order.customer_name || 'Consumidor Final',
         rnc: order.customer_rnc || '',
+        customer_type: order.customer_type || 'person',
+        trade_name: order.customer_trade_name || '',
+        address: order.customer_address || '', phone: order.customer_phone || '', email: order.customer_email || '',
+        contact_id: order.customer_contact_id || null,
+        preserve_customer_snapshot: true,
+        preserve_contact_snapshot: true,
+        contact: order.customer_contact_id ? {
+          id: order.customer_contact_id, name: order.customer_contact_name || '',
+          document: order.customer_contact_document || '', role: order.customer_contact_role || '',
+          phone: order.customer_contact_phone || '', email: order.customer_contact_email || '',
+        } : null,
       };
       const saleResult = salesRepo.create({
         session,
@@ -299,6 +353,7 @@ function createCheckoutOrdersRepo({ getDb, salesRepo, audit }) {
         },
         user,
         type: 'factura',
+        trustedCustomerSnapshot: true,
       });
       db().prepare(`
         UPDATE checkout_orders SET status='paid',sale_id=?,cash_session_id=?,paid_by=?,paid_by_name=?,

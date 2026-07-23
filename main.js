@@ -1274,6 +1274,51 @@ ipcMain.handle('customers:update', async (_, { id, data, requestUserId }) => {
   }
 });
 
+ipcMain.handle('customers:getContacts', async (_, { customerId }) => {
+  return customersRepo.getContacts(customerId);
+});
+
+function _customerContactAdmin(requestUserId) {
+  const reqUser = authRepo.findById(requestUserId);
+  if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+    throw new Error('Solo un administrador puede gestionar representantes');
+  }
+  return reqUser;
+}
+
+ipcMain.handle('customers:createContact', async (_, { customerId, data, requestUserId }) => {
+  try {
+    const reqUser = _customerContactAdmin(requestUserId);
+    const id = customersRepo.createContact(customerId, data || {});
+    audit(reqUser.id, reqUser.name, 'representante_creado', 'customer_contacts', id, data?.name || '');
+    return { ok: true, id, contacts: customersRepo.getContacts(customerId) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('customers:updateContact', async (_, { id, data, requestUserId }) => {
+  try {
+    const reqUser = _customerContactAdmin(requestUserId);
+    const contacts = customersRepo.updateContact(id, data || {});
+    audit(reqUser.id, reqUser.name, 'representante_editado', 'customer_contacts', id, data?.name || '');
+    return { ok: true, contacts };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('customers:deleteContact', async (_, { id, requestUserId }) => {
+  try {
+    const reqUser = _customerContactAdmin(requestUserId);
+    const result = customersRepo.deleteContact(id);
+    audit(reqUser.id, reqUser.name, 'representante_desactivado', 'customer_contacts', id, result.name);
+    return { ok: true, ...result };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 // ── Contabilidad en vivo ──────────────────────────────────────────────────
 // Ejecuta un hook contable DESPUÉS de que la operación commiteó (better-sqlite3
 // no permite transacciones anidadas) y NUNCA rompe la operación si falla. Las
@@ -2298,11 +2343,15 @@ ipcMain.handle('business:resetData', async (_, { requestUserId }) => {
       'audit_logs',
       'checkout_order_items',
       'checkout_orders',
+      'delivery_note_invoice_links',
+      'delivery_note_items',
+      'delivery_notes',
       'payments',
       'sale_items',
       'sales',
       'cash_movements',
       'cash_sessions',
+      'customer_contacts',
       'customers',
       'inventory_movements',
       'product_price_history',
@@ -3298,6 +3347,7 @@ ipcMain.handle('importar:rollback', async (_, { ids, requestUserId }) => {
             deleted++;
           } else if (tabla === 'customers') {
             db.prepare('DELETE FROM payments WHERE customer_id=?').run(id);
+            db.prepare('DELETE FROM customer_contacts WHERE customer_id=?').run(id);
             db.prepare('DELETE FROM customers WHERE id=?').run(id);
             deleted++;
           } else if (tabla === 'sales') {
@@ -3552,13 +3602,14 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, requestUserId } = 
       const wipe = [
         'inventory_movements', 'product_price_history', 'ecf_log', 'ncf_log', 'deliveries',
         'checkout_order_items', 'checkout_orders',
-        'sale_items', 'payments', 'sales', 'customers', 'products',
+        'delivery_note_invoice_links', 'delivery_note_items', 'delivery_notes',
+        'sale_items', 'payments', 'sales', 'customer_contacts', 'customers', 'products',
       ];
       for (const t of wipe) {
         try { db.prepare(`DELETE FROM ${t}`).run(); } catch (_) { /* tabla ausente: ignorar */ }
       }
       // Reset de autoincrement para IDs limpios
-      try { db.prepare(`DELETE FROM sqlite_sequence WHERE name IN ('sales','sale_items','payments','customers','products','product_price_history')`).run(); } catch (_) {}
+      try { db.prepare(`DELETE FROM sqlite_sequence WHERE name IN ('sales','sale_items','payments','customer_contacts','customers','products','product_price_history')`).run(); } catch (_) {}
       // Recrear Consumidor Final (id=1) — resolveCust cae aquí por defecto
       db.prepare(`INSERT INTO customers(id, name, active, balance) VALUES (1, 'Consumidor Final', 1, 0)`).run();
 

@@ -1167,6 +1167,62 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.25.0] Órdenes de cobro y reservas de inventario habilitadas');
     }
   },
+  {
+    version: '1.26.0',
+    description: 'Clientes persona/empresa, representantes y snapshots documentales',
+    run(db) {
+      const addCol = (table, col, def) => {
+        const exists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table);
+        if (!exists) return;
+        const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+        if (!cols.includes(col)) db.prepare(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`).run();
+      };
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS customer_contacts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          customer_id INTEGER NOT NULL REFERENCES customers(id),
+          name TEXT NOT NULL, document TEXT DEFAULT '', role TEXT DEFAULT '',
+          phone TEXT DEFAULT '', email TEXT DEFAULT '', is_primary INTEGER DEFAULT 0,
+          can_order INTEGER DEFAULT 1, can_receive INTEGER DEFAULT 1,
+          can_receive_invoices INTEGER DEFAULT 1, active INTEGER DEFAULT 1,
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          updated_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_customer_contacts_customer ON customer_contacts(customer_id,active);
+        CREATE INDEX IF NOT EXISTS idx_customer_contacts_name ON customer_contacts(name) WHERE active=1;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_contacts_primary
+          ON customer_contacts(customer_id) WHERE active=1 AND is_primary=1;
+      `);
+      [
+        ['customer_type', "TEXT DEFAULT 'person'"], ['trade_name', "TEXT DEFAULT ''"],
+        ['billing_email', "TEXT DEFAULT ''"], ['preferred_price_mode', "TEXT DEFAULT 'retail'"],
+        ['notes', "TEXT DEFAULT ''"],
+      ].forEach(([c,d]) => addCol('customers', c, d));
+      const snapshots = [
+        ['customer_type', "TEXT DEFAULT 'person'"], ['customer_trade_name', "TEXT DEFAULT ''"],
+        ['customer_address', "TEXT DEFAULT ''"], ['customer_phone', "TEXT DEFAULT ''"],
+        ['customer_email', "TEXT DEFAULT ''"], ['customer_contact_id', 'INTEGER'],
+        ['customer_contact_name', "TEXT DEFAULT ''"], ['customer_contact_document', "TEXT DEFAULT ''"],
+        ['customer_contact_role', "TEXT DEFAULT ''"], ['customer_contact_phone', "TEXT DEFAULT ''"],
+        ['customer_contact_email', "TEXT DEFAULT ''"],
+      ];
+      snapshots.forEach(([c,d]) => addCol('sales', c, d));
+      [['customer_contact_id','INTEGER'],['customer_contact_name',"TEXT DEFAULT ''"],
+       ['customer_contact_document',"TEXT DEFAULT ''"],['customer_contact_role',"TEXT DEFAULT ''"],
+       ['customer_contact_phone',"TEXT DEFAULT ''"],['customer_contact_email',"TEXT DEFAULT ''"]]
+        .forEach(([c,d]) => addCol('payments', c, d));
+      db.exec('CREATE INDEX IF NOT EXISTS idx_payments_customer_contact ON payments(customer_contact_id)');
+      ensureCheckoutOrdersSchema(db);
+      [['customer_contact_id','INTEGER'],['customer_contact_name',"TEXT DEFAULT ''"],
+       ['customer_contact_role',"TEXT DEFAULT ''"],['customer_contact_phone',"TEXT DEFAULT ''"]]
+        .forEach(([c,d]) => addCol('deliveries', c, d));
+      [['customer_contact_id','INTEGER'],['customer_contact_name',"TEXT DEFAULT ''"],
+       ['customer_contact_document',"TEXT DEFAULT ''"],['customer_contact_role',"TEXT DEFAULT ''"],
+       ['customer_contact_phone',"TEXT DEFAULT ''"],['customer_contact_email',"TEXT DEFAULT ''"]]
+        .forEach(([c,d]) => addCol('delivery_notes', c, d));
+      console.log('[MIGRATION 1.26.0] Empresas, representantes y snapshots habilitados');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

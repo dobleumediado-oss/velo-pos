@@ -353,7 +353,9 @@ async function chkCaja() {
 function newInvObj(id) {
   return {
     id, cart: [], pmode: 'retail', itype: 'factura',
-    pmeth: 'efectivo', cliId: 1, cliName: '', cliCedula: '', salespersonId: null, disc: 0
+    pmeth: 'efectivo', cliId: 1, cliName: '', cliCedula: '',
+    cliContactId: null, cliContactName: '', cliContactRole: '', cliContactPhone: '',
+    salespersonId: null, disc: 0
   };
 }
 

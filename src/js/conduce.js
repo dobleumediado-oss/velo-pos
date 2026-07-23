@@ -116,7 +116,11 @@ function _cndRenderRows() {
   let rows = window.__cndList || [];
   if (_cndFilterStatus) rows = rows.filter(c => c.status === _cndFilterStatus);
   if (q) rows = rows.filter(c =>
-    (c.number || '').toLowerCase().includes(q) || (c.customer_name || '').toLowerCase().includes(q));
+    (c.number || '').toLowerCase().includes(q) ||
+    (c.customer_name || '').toLowerCase().includes(q) ||
+    (c.customer_contact_name || '').toLowerCase().includes(q) ||
+    (c.customer_contact_role || '').toLowerCase().includes(q) ||
+    (c.customer_contact_phone || '').toLowerCase().includes(q));
 
   if (!rows.length) {
     tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--muted2);padding:22px">Sin conduces</td></tr>`;
@@ -126,7 +130,10 @@ function _cndRenderRows() {
   tbody.innerHTML = rows.map(c => `
     <tr style="cursor:pointer" data-id="${c.id}">
       <td class="tm" style="font-weight:700">${c.number}</td>
-      <td>${_cndEsc(c.customer_name || 'Consumidor Final')}</td>
+      <td>
+        <div>${_cndEsc(c.customer_name || 'Consumidor Final')}</div>
+        ${c.customer_contact_name ? `<div style="font-size:11px;color:var(--muted2)">Solicitado por: ${_cndEsc(c.customer_contact_name)}${c.customer_contact_role ? ` · ${_cndEsc(c.customer_contact_role)}` : ''}</div>` : ''}
+      </td>
       <td style="font-size:12px;color:var(--muted)">${fdate(c.issue_date)}</td>
       <td style="font-size:11px;color:var(--muted2)">${origen[c.source_type] || c.source_type}${c.source_id ? ' #' + c.source_id : ''}</td>
       <td style="text-align:center">${c.item_count || 0}</td>
@@ -171,6 +178,7 @@ async function _cndOpenDetail(id) {
 
     <div class="card" style="background:var(--surface2);margin-bottom:12px;font-size:12px">
       ${dn.customer_rnc ? `<div class="tr"><span>RNC/Céd.</span><span>${_cndEsc(dn.customer_rnc)}</span></div>` : ''}
+      ${dn.customer_contact_name ? `<div class="tr"><span>Solicitado por</span><span>${_cndEsc(dn.customer_contact_name)}${dn.customer_contact_role ? ` · ${_cndEsc(dn.customer_contact_role)}` : ''}${dn.customer_contact_phone ? ` · ${_cndEsc(dn.customer_contact_phone)}` : ''}</span></div>` : ''}
       ${dn.delivery_address ? `<div class="tr"><span>Dirección</span><span>${_cndEsc(dn.delivery_address)}</span></div>` : ''}
       ${dn.driver_name ? `<div class="tr"><span>Chofer</span><span>${_cndEsc(dn.driver_name)}${dn.vehicle_plate ? ' · ' + _cndEsc(dn.vehicle_plate) : ''}</span></div>` : ''}
       ${dn.dispatch_date ? `<div class="tr"><span>Despachado</span><span>${dn.dispatch_date}</span></div>` : ''}
@@ -368,6 +376,7 @@ async function _cndDoInvoice(id) {
 function _cndOpenForm(id = null) {
   _cndFormItems = [];
   const doRender = (dn) => {
+    const selectedCompany = dn ? (DB.customers || []).find(c => Number(c.id) === Number(dn.customer_id)) : null;
     if (dn) {
       _cndFormItems = (dn.items || []).map(it => ({
         product_id: it.product_id, sku: it.sku, description: it.description,
@@ -381,7 +390,12 @@ function _cndOpenForm(id = null) {
         <div class="fg"><label class="lbl">Cliente</label>
           <input class="inp" id="cnd-f-name" list="cnd-cli-list" placeholder="Nombre del cliente"
                  value="${dn ? _cndEsc(dn.customer_name) : ''}" oninput="_cndFillCustomer(this.value)"/>
-          <datalist id="cnd-cli-list">${(DB.customers || []).map(c => `<option value="${_cndEsc(c.name)}">`).join('')}</datalist>
+          <datalist id="cnd-cli-list">${(DB.customers || []).flatMap(c => [
+            `<option value="${_cndEsc(c.name)}">`,
+            c.trade_name ? `<option value="${_cndEsc(c.trade_name)}">` : '',
+            ...(c.customer_type === 'company' ? (c.contacts || []).filter(contact => contact.active !== 0 && contact.can_order !== 0).map(contact =>
+              `<option value="${_cndEsc(contact.name)}">${_cndEsc(c.name)}${contact.role ? ` · ${_cndEsc(contact.role)}` : ''}`) : []),
+          ]).join('')}</datalist>
         </div>
         <div class="fg"><label class="lbl">RNC / Cédula</label>
           <input class="inp" id="cnd-f-rnc" placeholder="Opcional" value="${dn ? _cndEsc(dn.customer_rnc || '') : ''}"/>
@@ -390,6 +404,13 @@ function _cndOpenForm(id = null) {
       <div class="fg"><label class="lbl">Dirección de entrega</label>
         <input class="inp" id="cnd-f-addr" placeholder="Opcional" value="${dn ? _cndEsc(dn.delivery_address || '') : ''}"/></div>
       <input type="hidden" id="cnd-f-cliid" value="${dn ? (dn.customer_id || '') : ''}"/>
+      <div class="fg" id="cnd-contact-wrap" style="display:${selectedCompany?.customer_type === 'company' ? 'block' : 'none'}">
+        <label class="lbl">Representante <span style="font-weight:400;color:var(--muted)">(opcional)</span></label>
+        <select class="inp" id="cnd-f-contact">
+          <option value="">— Sin representante —</option>
+          ${(selectedCompany?.contacts || []).filter(c=>c.active!==0 && c.can_order!==0).map(c => `<option value="${c.id}" ${Number(dn?.customer_contact_id)===Number(c.id)?'selected':''}>${_cndEsc(c.name)}${c.role ? ` · ${_cndEsc(c.role)}` : ''}</option>`).join('')}
+        </select>
+      </div>
 
       <div style="font-weight:700;font-size:12px;margin:10px 0 6px">Productos</div>
       <div style="position:relative;margin-bottom:8px">
@@ -425,14 +446,41 @@ function _cndOpenForm(id = null) {
 }
 
 function _cndFillCustomer(name) {
-  const c = (DB.customers || []).find(x => x.name === name);
+  const normalized = String(name || '').trim().toLowerCase();
+  let matchedContact = null;
+  const c = (DB.customers || []).find(x => {
+    if (String(x.name || '').trim().toLowerCase() === normalized ||
+        String(x.trade_name || '').trim().toLowerCase() === normalized) return true;
+    matchedContact = (x.contacts || []).find(contact =>
+      contact.active !== 0 && contact.can_order !== 0 && String(contact.name || '').trim().toLowerCase() === normalized) || null;
+    return !!matchedContact;
+  });
   if (c) {
+    const nameInput = document.getElementById('cnd-f-name');
     const rnc = document.getElementById('cnd-f-rnc');
     const addr = document.getElementById('cnd-f-addr');
     const cid = document.getElementById('cnd-f-cliid');
+    if (nameInput) nameInput.value = c.name;
     if (cid) cid.value = c.id;
-    if (rnc && !rnc.value) rnc.value = c.rnc || '';
-    if (addr && !addr.value) addr.value = c.address || '';
+    if (rnc) rnc.value = c.rnc || '';
+    if (addr) addr.value = c.address || '';
+    const wrap = document.getElementById('cnd-contact-wrap');
+    const select = document.getElementById('cnd-f-contact');
+    if (wrap && select) {
+      const contacts = (c.contacts || []).filter(contact => contact.active !== 0 && contact.can_order !== 0);
+      wrap.style.display = c.customer_type === 'company' ? 'block' : 'none';
+      select.innerHTML = '<option value="">— Sin representante —</option>' + contacts.map(contact =>
+        `<option value="${contact.id}">${_cndEsc(contact.name)}${contact.role ? ` · ${_cndEsc(contact.role)}` : ''}</option>`).join('');
+      const primary = contacts.find(contact => contact.is_primary) || null;
+      select.value = matchedContact?.id || primary?.id || '';
+    }
+  } else {
+    const cid = document.getElementById('cnd-f-cliid');
+    const wrap = document.getElementById('cnd-contact-wrap');
+    const select = document.getElementById('cnd-f-contact');
+    if (cid) cid.value = '';
+    if (wrap) wrap.style.display = 'none';
+    if (select) select.innerHTML = '<option value="">— Sin representante —</option>';
   }
 }
 
@@ -489,6 +537,16 @@ async function _cndSave(id) {
     delivery_address: document.getElementById('cnd-f-addr')?.value?.trim() || '',
     notes:            document.getElementById('cnd-f-notes')?.value?.trim() || '',
   };
+  const company = (DB.customers || []).find(c => Number(c.id) === Number(header.customer_id));
+  const contact = (company?.contacts || []).find(c => Number(c.id) === Number(document.getElementById('cnd-f-contact')?.value));
+  if (contact) {
+    header.customer_contact_id = contact.id;
+    header.customer_contact_name = contact.name || '';
+    header.customer_contact_document = contact.document || '';
+    header.customer_contact_role = contact.role || '';
+    header.customer_contact_phone = contact.phone || '';
+    header.customer_contact_email = contact.email || '';
+  }
   const u = _cndUser();
   let r;
   if (id) r = await window.api.conduce.update({ id, header, items, requestUserId: u?.id });
@@ -558,7 +616,14 @@ function _cndDoc(id, save) {
       else if (typeof printConduce === 'function') {
         printConduce({
           id: dn.number, date: dn.issue_date, cajero: '', customer_name: dn.customer_name,
-          customer_rnc: dn.customer_rnc, items: (dn.items || []).map(it => ({ name: it.description, qty: it.requested_qty })),
+          customer_rnc: dn.customer_rnc,
+          customer_contact_id: dn.customer_contact_id,
+          customer_contact_name: dn.customer_contact_name,
+          customer_contact_document: dn.customer_contact_document,
+          customer_contact_role: dn.customer_contact_role,
+          customer_contact_phone: dn.customer_contact_phone,
+          customer_contact_email: dn.customer_contact_email,
+          items: (dn.items || []).map(it => ({ name: it.description, qty: it.requested_qty })),
         });
       }
     };

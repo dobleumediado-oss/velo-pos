@@ -484,6 +484,9 @@ function renderVentasTable() {
       String(s.id).includes(q) ||
       matchText(name, qNorm) ||
       matchText(rnc, qNorm) ||
+      matchText(s.customer_contact_name, qNorm) ||
+      matchText(s.customer_contact_role, qNorm) ||
+      matchDigits(s.customer_contact_phone, qDigits) ||
       matchDigits(rnc, qDigits) ||
       // Teléfono del cliente — solo si la búsqueda trae dígitos (anti falso positivo)
       (() => {
@@ -996,8 +999,12 @@ async function confirmarConversionCotizacion() {
     return;
   }
 
-  const customer = DB.customers.find(c => c.id === sale.customer_id) ||
-    { id: 1, name: sale.customer_name || 'Consumidor Final', rnc: '' };
+  const account = DB.customers.find(c => c.id === sale.customer_id);
+  const currentContact = (account?.contacts || []).find(c => Number(c.id) === Number(sale.customer_contact_id));
+  const customer = account ? {
+    ...account,
+    contact_id: currentContact?.id || null,
+  } : { id: 1, name: sale.customer_name || 'Consumidor Final', rnc: sale.customer_rnc || '' };
 
   const result = await window.api.sales.create({
     saleData: {
@@ -1058,8 +1065,17 @@ async function confirmarConversionCotizacion() {
   printReceipt({
     id:             result.saleId,
     type:           'factura',
-    customer_name:  sale.customer_name || 'Consumidor Final',
-    customer_rnc:   sale.customer_rnc  || '',
+    customer_name:  convertedSale?.customer_name || sale.customer_name || 'Consumidor Final',
+    customer_rnc:   convertedSale?.customer_rnc || sale.customer_rnc || '',
+    customer_address: convertedSale?.customer_address || sale.customer_address || '',
+    customer_phone: convertedSale?.customer_phone || sale.customer_phone || '',
+    customer_email: convertedSale?.customer_email || sale.customer_email || '',
+    customer_contact_id: convertedSale?.customer_contact_id || sale.customer_contact_id || null,
+    customer_contact_name: convertedSale?.customer_contact_name || sale.customer_contact_name || '',
+    customer_contact_document: convertedSale?.customer_contact_document || sale.customer_contact_document || '',
+    customer_contact_role: convertedSale?.customer_contact_role || sale.customer_contact_role || '',
+    customer_contact_phone: convertedSale?.customer_contact_phone || sale.customer_contact_phone || '',
+    customer_contact_email: convertedSale?.customer_contact_email || sale.customer_contact_email || '',
 	    items:          convertedItems,
       subtotal:       result.subtotal || ventasCalcIncludedTotals(itemsValidos, { type:'factura', discPct: est.discount }).subtotal,
       discount_pct:   est.discount,
@@ -1192,6 +1208,7 @@ async function openDetalleVentaModal(s) {
         <div class="lbl">Cliente</div>
         <div style="font-weight:600">${detail.customer_name || detail.clientName || 'Consumidor Final'}</div>
         <div class="ts">${detail.customer_rnc || detail.clientCedula || 'Sin RNC'}</div>
+        ${detail.customer_contact_name ? `<div class="ts" style="margin-top:4px">Solicitado por: <strong>${ventasEsc(detail.customer_contact_name)}</strong>${detail.customer_contact_role ? ` · ${ventasEsc(detail.customer_contact_role)}` : ''}</div>` : ''}
       </div>
       <div>
         <div class="lbl">Comprobante</div>
@@ -1354,9 +1371,17 @@ async function reimprimirVenta(saleId) {
         customer_id:     sale.customer_id || null,
         customer_name:   sale.customer_name  || 'Consumidor Final',
         customer_rnc:    sale.customer_rnc   || _cust?.rnc || '',
-        customer_address: _cust?.address || '',
-        customer_phone:   _cust?.phone   || '',
-	        customer_email:   _cust?.email   || '',
+        customer_address: sale.customer_address || _cust?.address || '',
+        customer_phone:   sale.customer_phone || _cust?.phone || '',
+	        customer_email:   sale.customer_email || _cust?.billing_email || _cust?.email || '',
+        customer_type: sale.customer_type || _cust?.customer_type || 'person',
+        customer_trade_name: sale.customer_trade_name || _cust?.trade_name || '',
+        customer_contact_id: sale.customer_contact_id || null,
+        customer_contact_name: sale.customer_contact_name || '',
+        customer_contact_document: sale.customer_contact_document || '',
+        customer_contact_role: sale.customer_contact_role || '',
+        customer_contact_phone: sale.customer_contact_phone || '',
+        customer_contact_email: sale.customer_contact_email || '',
 	        items:           (sale.items || []).map(i => ({
 	          product_code:  ventasItemCode(i),
 	          product_name: i.product_name,
@@ -1414,7 +1439,17 @@ async function guardarVentaPDF(saleId) {
     numero_factura: sale.numero_factura, numero_factura_fmt: sale.numero_factura_fmt,
     due_date: sale.due_date || null, customer_id: sale.customer_id || null,
     customer_name: sale.customer_name || 'Consumidor Final', customer_rnc: sale.customer_rnc || _custPdf?.rnc || '',
-    customer_address: _custPdf?.address || '', customer_phone: _custPdf?.phone || '', customer_email: _custPdf?.email || '',
+    customer_address: sale.customer_address || _custPdf?.address || '',
+    customer_phone: sale.customer_phone || _custPdf?.phone || '',
+    customer_email: sale.customer_email || _custPdf?.billing_email || _custPdf?.email || '',
+    customer_type: sale.customer_type || _custPdf?.customer_type || 'person',
+    customer_trade_name: sale.customer_trade_name || _custPdf?.trade_name || '',
+    customer_contact_id: sale.customer_contact_id || null,
+    customer_contact_name: sale.customer_contact_name || '',
+    customer_contact_document: sale.customer_contact_document || '',
+    customer_contact_role: sale.customer_contact_role || '',
+    customer_contact_phone: sale.customer_contact_phone || '',
+    customer_contact_email: sale.customer_contact_email || '',
 	    items: (sale.items || []).map(i => ({
 	      product_code: ventasItemCode(i),
 	      product_name: i.product_name, qty: i.qty, unit_price: i.unit_price, unit_cost: i.unit_cost || 0,
@@ -1663,7 +1698,9 @@ async function buscarFacturaDevolucion() {
       String(s.id).includes(q) ||
       matchText(s.customer_name, qNorm) ||
       matchText(s.customer_rnc, qNorm) ||
+      matchText(s.customer_contact_name, qNorm) ||
       matchDigits(s.customer_rnc, qDigits) ||
+      matchDigits(s.customer_contact_phone, qDigits) ||
       matchDigits(cli?.phone, qDigits) ||
       // Producto dentro de la factura: items[] si está cargado, si no items_summary
       (s.items && s.items.length

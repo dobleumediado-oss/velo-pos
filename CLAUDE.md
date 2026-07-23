@@ -3,7 +3,7 @@
 Punto de entrada para trabajar en este proyecto. Este archivo es el **hub central**: resume lo esencial y enlaza a la documentación extendida en [`docs/`](docs/). Consulta el tema específico antes de tocar ese módulo.
 
 ## Qué es
-Aplicación **Electron v29** de punto de venta (POS) **offline** para micro-negocios de República Dominicana (tiendas de auto repuestos, etc.). Versión actual: `1.25.0` (ver `package.json`).
+Aplicación **Electron v29** de punto de venta (POS) **offline** para micro-negocios de República Dominicana (tiendas de auto repuestos, etc.). Versión actual: `1.26.0` (ver `package.json`).
 
 ## Stack y arquitectura
 - **Electron v29** — `contextIsolation: true`, `nodeIntegration: false`.
@@ -37,6 +37,7 @@ Cada tema tiene su archivo dedicado en [`docs/`](docs/). Todos enlazan de vuelta
 - **[Módulo de Contabilidad](docs/accounting-module.md)** — módulo completo de contabilidad + bancos (migraciones v1.6.x): archivos tocados, esquema de BD, flujo de activación, repos y handlers.
 - **[Módulo de Impresión](docs/printing-module.md)** — overhaul del servicio global de impresión (v1.7.0): arquitectura, categorías, bugs corregidos y trabajo diferido deliberadamente.
 - **[Preventa y Despacho](docs/preventa-despacho.md)** — órdenes compartidas entre preparación, caja y entrega; reservas, estados, permisos y operación multi-terminal.
+- **[Clientes empresa y representantes](docs/clientes-empresas.md)** — cuentas personales/empresariales, contactos operativos, crédito consolidado y snapshots documentales.
 - **[Proceso de Release](docs/release-process.md)** — ⚠️ empujar un tag `v*` = deploy en vivo a clientes reales vía electron-updater. **Confirmar siempre con el usuario antes de tag.**
 
 ## Antes de trabajar

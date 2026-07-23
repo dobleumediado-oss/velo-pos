@@ -53,6 +53,7 @@ function initDB(customDataDir) {
   migrateExpensesColumns();
   migratePaymentsColumns();
   migrateV2IdentityColumns();   // Fase 1 migración v2 (identidad real Equiparts)
+  migrateCustomerCompanies();   // Personas, empresas, representantes y snapshots
   ensureCheckoutOrdersSchema(db);
   seedIfEmpty();
   ensureNcfIntegrity();         // C2: índice UNIQUE parcial contra NCF duplicados
@@ -257,10 +258,15 @@ function createTables() {
     CREATE TABLE IF NOT EXISTS customers (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
       name           TEXT NOT NULL,
+      customer_type  TEXT DEFAULT 'person' CHECK(customer_type IN ('person','company')),
+      trade_name     TEXT DEFAULT '',
       rnc            TEXT DEFAULT '',
       phone          TEXT DEFAULT '',
       address        TEXT DEFAULT '',
       email          TEXT DEFAULT '',
+      billing_email  TEXT DEFAULT '',
+      preferred_price_mode TEXT DEFAULT 'retail' CHECK(preferred_price_mode IN ('retail','wholesale')),
+      notes          TEXT DEFAULT '',
       credit_limit   REAL DEFAULT 0,
       credit_days    INTEGER DEFAULT 30,
       balance        REAL DEFAULT 0,
@@ -269,6 +275,25 @@ function createTables() {
       active         INTEGER DEFAULT 1,
       created_at     TEXT DEFAULT (datetime('now')),
       updated_at     TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Representantes operativos de clientes empresa. La cuenta, el crédito y
+    -- las facturas siempre pertenecen al customer_id padre.
+    CREATE TABLE IF NOT EXISTS customer_contacts (
+      id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+      customer_id          INTEGER NOT NULL REFERENCES customers(id),
+      name                 TEXT NOT NULL,
+      document             TEXT DEFAULT '',
+      role                 TEXT DEFAULT '',
+      phone                TEXT DEFAULT '',
+      email                TEXT DEFAULT '',
+      is_primary           INTEGER DEFAULT 0,
+      can_order            INTEGER DEFAULT 1,
+      can_receive          INTEGER DEFAULT 1,
+      can_receive_invoices INTEGER DEFAULT 1,
+      active               INTEGER DEFAULT 1,
+      created_at           TEXT DEFAULT (datetime('now','localtime')),
+      updated_at           TEXT DEFAULT (datetime('now','localtime'))
     );
 
     -- ── Sesiones de caja ──
@@ -313,6 +338,17 @@ function createTables() {
       customer_id     INTEGER REFERENCES customers(id),
       customer_name   TEXT DEFAULT 'Consumidor Final',
       customer_rnc    TEXT DEFAULT '',
+      customer_type   TEXT DEFAULT 'person',
+      customer_trade_name TEXT DEFAULT '',
+      customer_address TEXT DEFAULT '',
+      customer_phone   TEXT DEFAULT '',
+      customer_email   TEXT DEFAULT '',
+      customer_contact_id INTEGER REFERENCES customer_contacts(id),
+      customer_contact_name TEXT DEFAULT '',
+      customer_contact_document TEXT DEFAULT '',
+      customer_contact_role TEXT DEFAULT '',
+      customer_contact_phone TEXT DEFAULT '',
+      customer_contact_email TEXT DEFAULT '',
       type            TEXT DEFAULT 'factura' CHECK(type IN ('factura','cotizacion','devolucion')),
       status          TEXT DEFAULT 'completed' CHECK(status IN ('completed','cancelled','returned')),
       subtotal        REAL NOT NULL DEFAULT 0,
@@ -372,6 +408,12 @@ function createTables() {
       cajero          TEXT DEFAULT '',
       user_id         INTEGER REFERENCES users(id),
       cash_session_id INTEGER REFERENCES cash_sessions(id),
+      customer_contact_id       INTEGER REFERENCES customer_contacts(id),
+      customer_contact_name     TEXT DEFAULT '',
+      customer_contact_document TEXT DEFAULT '',
+      customer_contact_role     TEXT DEFAULT '',
+      customer_contact_phone    TEXT DEFAULT '',
+      customer_contact_email    TEXT DEFAULT '',
       created_at      TEXT DEFAULT (datetime('now','localtime'))
     );
 
@@ -636,6 +678,10 @@ function createTables() {
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
       sale_id         INTEGER REFERENCES sales(id),
       customer_id     INTEGER REFERENCES customers(id),
+      customer_contact_id INTEGER REFERENCES customer_contacts(id),
+      customer_contact_name TEXT DEFAULT '',
+      customer_contact_role TEXT DEFAULT '',
+      customer_contact_phone TEXT DEFAULT '',
       vehicle_id      INTEGER REFERENCES vehicles(id),
       driver_id       INTEGER REFERENCES users(id),
       origin_address  TEXT,
@@ -746,6 +792,10 @@ function createTables() {
     CREATE INDEX IF NOT EXISTS idx_payments_date     ON payments(created_at DESC);
     -- Fase 1: búsqueda de cliente por teléfono (ventas, buscador global)
     CREATE INDEX IF NOT EXISTS idx_customers_phone   ON customers(phone) WHERE active=1;
+    CREATE INDEX IF NOT EXISTS idx_customer_contacts_customer ON customer_contacts(customer_id, active);
+    CREATE INDEX IF NOT EXISTS idx_customer_contacts_name ON customer_contacts(name) WHERE active=1;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_contacts_primary
+      ON customer_contacts(customer_id) WHERE active=1 AND is_primary=1;
     -- Fase 1: reportes filtran por estado + fecha juntos; compuesto evita escaneo
     CREATE INDEX IF NOT EXISTS idx_sales_status_date ON sales(status, created_at);
   `);
@@ -761,6 +811,97 @@ function migrateProductsModel() {
 
 function tableExists(name) {
   return !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name);
+}
+
+// Clientes empresariales: migración idempotente para instalaciones existentes.
+// Todos los registros previos permanecen como persona hasta que el usuario los
+// cambie explícitamente; no inferimos el tipo solo por la longitud del documento.
+function migrateCustomerCompanies() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS customer_contacts (
+      id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+      customer_id          INTEGER NOT NULL REFERENCES customers(id),
+      name                 TEXT NOT NULL,
+      document             TEXT DEFAULT '',
+      role                 TEXT DEFAULT '',
+      phone                TEXT DEFAULT '',
+      email                TEXT DEFAULT '',
+      is_primary           INTEGER DEFAULT 0,
+      can_order            INTEGER DEFAULT 1,
+      can_receive          INTEGER DEFAULT 1,
+      can_receive_invoices INTEGER DEFAULT 1,
+      active               INTEGER DEFAULT 1,
+      created_at           TEXT DEFAULT (datetime('now','localtime')),
+      updated_at           TEXT DEFAULT (datetime('now','localtime'))
+    )
+  `);
+
+  const customerCols = [
+    ['customer_type', "TEXT DEFAULT 'person'"],
+    ['trade_name', "TEXT DEFAULT ''"],
+    ['billing_email', "TEXT DEFAULT ''"],
+    ['preferred_price_mode', "TEXT DEFAULT 'retail'"],
+    ['notes', "TEXT DEFAULT ''"],
+  ];
+  const saleCols = [
+    ['customer_type', "TEXT DEFAULT 'person'"],
+    ['customer_trade_name', "TEXT DEFAULT ''"],
+    ['customer_address', "TEXT DEFAULT ''"],
+    ['customer_phone', "TEXT DEFAULT ''"],
+    ['customer_email', "TEXT DEFAULT ''"],
+    ['customer_contact_id', 'INTEGER'],
+    ['customer_contact_name', "TEXT DEFAULT ''"],
+    ['customer_contact_document', "TEXT DEFAULT ''"],
+    ['customer_contact_role', "TEXT DEFAULT ''"],
+    ['customer_contact_phone', "TEXT DEFAULT ''"],
+    ['customer_contact_email', "TEXT DEFAULT ''"],
+  ];
+  for (const [col, def] of customerCols) {
+    try { db.prepare(`ALTER TABLE customers ADD COLUMN ${col} ${def}`).run(); }
+    catch { /* ya existe */ }
+  }
+  for (const [col, def] of saleCols) {
+    try { db.prepare(`ALTER TABLE sales ADD COLUMN ${col} ${def}`).run(); }
+    catch { /* ya existe */ }
+  }
+  const paymentCols = [
+    ['customer_contact_id', 'INTEGER'],
+    ['customer_contact_name', "TEXT DEFAULT ''"],
+    ['customer_contact_document', "TEXT DEFAULT ''"],
+    ['customer_contact_role', "TEXT DEFAULT ''"],
+    ['customer_contact_phone', "TEXT DEFAULT ''"],
+    ['customer_contact_email', "TEXT DEFAULT ''"],
+  ];
+  if (tableExists('payments')) {
+    for (const [col, def] of paymentCols) {
+      try { db.prepare(`ALTER TABLE payments ADD COLUMN ${col} ${def}`).run(); }
+      catch { /* ya existe */ }
+    }
+  }
+  // Conduce se crea mediante versioning en instalaciones nuevas. En bases que
+  // ya lo tienen, adelantamos estas columnas para que el repositorio sea seguro
+  // incluso antes de ejecutar el migrador de versión.
+  if (tableExists('delivery_notes')) {
+    const deliveryNoteCols = [
+      ['customer_contact_id', 'INTEGER'],
+      ['customer_contact_name', "TEXT DEFAULT ''"],
+      ['customer_contact_document', "TEXT DEFAULT ''"],
+      ['customer_contact_role', "TEXT DEFAULT ''"],
+      ['customer_contact_phone', "TEXT DEFAULT ''"],
+      ['customer_contact_email', "TEXT DEFAULT ''"],
+    ];
+    for (const [col, def] of deliveryNoteCols) {
+      try { db.prepare(`ALTER TABLE delivery_notes ADD COLUMN ${col} ${def}`).run(); }
+      catch { /* ya existe */ }
+    }
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_customer_contacts_customer ON customer_contacts(customer_id, active);
+    CREATE INDEX IF NOT EXISTS idx_customer_contacts_name ON customer_contacts(name) WHERE active=1;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_contacts_primary
+      ON customer_contacts(customer_id) WHERE active=1 AND is_primary=1;
+    CREATE INDEX IF NOT EXISTS idx_payments_customer_contact ON payments(customer_contact_id);
+  `);
 }
 
 function migratePriceHistoryAccountingColumns() {
@@ -843,6 +984,10 @@ function migrateVehiclesModule() {
     addCol('deliveries', 'expense_id',       'INTEGER DEFAULT NULL');
     // Cliente NO registrado: nombre libre sin exigir alta en Clientes.
     addCol('deliveries', 'customer_name',    "TEXT DEFAULT ''");
+    addCol('deliveries', 'customer_contact_id', 'INTEGER DEFAULT NULL');
+    addCol('deliveries', 'customer_contact_name', "TEXT DEFAULT ''");
+    addCol('deliveries', 'customer_contact_role', "TEXT DEFAULT ''");
+    addCol('deliveries', 'customer_contact_phone', "TEXT DEFAULT ''");
     addCol('vehicle_maintenance', 'expense_id', 'INTEGER DEFAULT NULL');
   } catch (e) {
     db.pragma('foreign_keys = ON');
@@ -1612,43 +1757,173 @@ const productsRepo = {
 };
 
 // ── Clientes ──────────────────────────────────
+function normalizeCustomerType(value) {
+  return value === 'company' ? 'company' : 'person';
+}
+
+function assertUniqueCustomerDocument(rnc, excludeId = null) {
+  const digits = String(rnc || '').replace(/\D/g, '');
+  if (!digits) return;
+  const rows = db.prepare(`SELECT id,rnc,name FROM customers WHERE active=1 AND (? IS NULL OR id<>?)`).all(excludeId, excludeId);
+  const duplicate = rows.find(row => String(row.rnc || '').replace(/\D/g, '') === digits);
+  if (duplicate) throw new Error(`Ese RNC/Cédula ya pertenece a ${duplicate.name}`);
+}
+
+function contactsForCustomer(customerId) {
+  return db.prepare(`
+    SELECT * FROM customer_contacts
+    WHERE customer_id=? AND active=1
+    ORDER BY is_primary DESC,name COLLATE NOCASE
+  `).all(customerId);
+}
+
+function ensurePrimaryCustomerContact(customerId) {
+  const primary = db.prepare(`SELECT id FROM customer_contacts WHERE customer_id=? AND active=1 AND is_primary=1 LIMIT 1`).get(customerId);
+  if (primary) return primary.id;
+  const first = db.prepare(`SELECT id FROM customer_contacts WHERE customer_id=? AND active=1 ORDER BY id LIMIT 1`).get(customerId);
+  if (first) db.prepare('UPDATE customer_contacts SET is_primary=1 WHERE id=?').run(first.id);
+  return first?.id || null;
+}
+
 const customersRepo = {
   getAll() {
-    return db.prepare('SELECT * FROM customers WHERE active=1 ORDER BY name').all();
+    return db.prepare('SELECT * FROM customers WHERE active=1 ORDER BY name').all()
+      .map(customer => ({ ...customer, contacts: contactsForCustomer(customer.id) }));
   },
   getById(id) {
-    return db.prepare('SELECT * FROM customers WHERE id=?').get(id);
+    const customer = db.prepare('SELECT * FROM customers WHERE id=?').get(id);
+    return customer ? { ...customer, contacts: contactsForCustomer(customer.id) } : null;
   },
   create(c) {
+    const name = String(c.name || '').replace(/\s+/g, ' ').trim();
+    if (!name) throw new Error('El nombre del cliente es requerido');
+    assertUniqueCustomerDocument(c.rnc);
+    const customerType = normalizeCustomerType(c.customer_type);
     const r = db.prepare(`
-      INSERT INTO customers(name,rnc,phone,address,email,credit_limit,credit_days)
-      VALUES(?,?,?,?,?,?,?)
-    `).run(c.name,c.rnc||'',c.phone||'',c.address||'',c.email||'',c.credit_limit||0,c.credit_days||30);
+      INSERT INTO customers(
+        name,customer_type,trade_name,rnc,phone,address,email,billing_email,
+        preferred_price_mode,notes,credit_limit,credit_days
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      name, customerType, customerType === 'company' ? String(c.trade_name || '').trim() : '',
+      String(c.rnc || '').trim(), String(c.phone || '').trim(), String(c.address || '').trim(),
+      String(c.email || '').trim(), customerType === 'company' ? String(c.billing_email || '').trim() : '',
+      c.preferred_price_mode === 'wholesale' ? 'wholesale' : 'retail', String(c.notes || '').trim(),
+      Number(c.credit_limit) || 0, Math.max(1, Number(c.credit_days) || 30)
+    );
     return r.lastInsertRowid;
   },
   update(id, c) {
+    const name = String(c.name || '').replace(/\s+/g, ' ').trim();
+    if (!name) throw new Error('El nombre del cliente es requerido');
+    assertUniqueCustomerDocument(c.rnc, id);
+    const customerType = normalizeCustomerType(c.customer_type);
     db.prepare(`
-      UPDATE customers SET name=?,rnc=?,phone=?,address=?,email=?,
-      credit_limit=?,credit_days=?,status=?,updated_at=datetime('now')
+      UPDATE customers SET name=?,customer_type=?,trade_name=?,rnc=?,phone=?,address=?,email=?,
+      billing_email=?,preferred_price_mode=?,notes=?,credit_limit=?,credit_days=?,status=?,updated_at=datetime('now')
       WHERE id=?
-    `).run(c.name,c.rnc||'',c.phone||'',c.address||'',c.email||'',
-           c.credit_limit||0,c.credit_days||30,c.status||'activo',id);
+    `).run(
+      name, customerType, customerType === 'company' ? String(c.trade_name || '').trim() : '',
+      String(c.rnc || '').trim(), String(c.phone || '').trim(), String(c.address || '').trim(),
+      String(c.email || '').trim(), customerType === 'company' ? String(c.billing_email || '').trim() : '',
+      c.preferred_price_mode === 'wholesale' ? 'wholesale' : 'retail', String(c.notes || '').trim(),
+      Number(c.credit_limit) || 0, Math.max(1, Number(c.credit_days) || 30), c.status || 'activo', id
+    );
+    if (customerType !== 'company') {
+      db.prepare("UPDATE customer_contacts SET active=0,updated_at=datetime('now','localtime') WHERE customer_id=? AND active=1").run(id);
+    }
   },
-  addPayment({ customerId, amount, method, note, saleId = null, cajero = '', userId = null, sessionId = null }) {
+  getContacts(customerId) {
+    return contactsForCustomer(customerId);
+  },
+  createContact(customerId, c) {
+    const customer = db.prepare("SELECT id,customer_type FROM customers WHERE id=? AND active=1").get(customerId);
+    if (!customer) throw new Error('Cliente no encontrado');
+    if (customer.customer_type !== 'company') throw new Error('Solo las empresas pueden tener representantes');
+    const name = String(c.name || '').replace(/\s+/g, ' ').trim();
+    if (!name) throw new Error('El nombre del representante es requerido');
+    return db.transaction(() => {
+      const primary = c.is_primary ? 1 : 0;
+      if (primary) db.prepare('UPDATE customer_contacts SET is_primary=0 WHERE customer_id=?').run(customerId);
+      const r = db.prepare(`
+        INSERT INTO customer_contacts(
+          customer_id,name,document,role,phone,email,is_primary,
+          can_order,can_receive,can_receive_invoices
+        ) VALUES(?,?,?,?,?,?,?,?,?,?)
+      `).run(
+        customerId, name, String(c.document || '').trim(), String(c.role || '').trim(),
+        String(c.phone || '').trim(), String(c.email || '').trim(), primary,
+        c.can_order === false || c.can_order === 0 ? 0 : 1,
+        c.can_receive === false || c.can_receive === 0 ? 0 : 1,
+        c.can_receive_invoices === false || c.can_receive_invoices === 0 ? 0 : 1
+      );
+      ensurePrimaryCustomerContact(customerId);
+      return Number(r.lastInsertRowid);
+    })();
+  },
+  updateContact(id, c) {
+    const current = db.prepare('SELECT * FROM customer_contacts WHERE id=? AND active=1').get(id);
+    if (!current) throw new Error('Representante no encontrado');
+    const name = String(c.name || '').replace(/\s+/g, ' ').trim();
+    if (!name) throw new Error('El nombre del representante es requerido');
+    db.transaction(() => {
+      const primary = c.is_primary ? 1 : 0;
+      if (primary) db.prepare('UPDATE customer_contacts SET is_primary=0 WHERE customer_id=?').run(current.customer_id);
+      db.prepare(`
+        UPDATE customer_contacts SET name=?,document=?,role=?,phone=?,email=?,is_primary=?,
+          can_order=?,can_receive=?,can_receive_invoices=?,updated_at=datetime('now','localtime')
+        WHERE id=?
+      `).run(
+        name, String(c.document || '').trim(), String(c.role || '').trim(),
+        String(c.phone || '').trim(), String(c.email || '').trim(), primary,
+        c.can_order === false || c.can_order === 0 ? 0 : 1,
+        c.can_receive === false || c.can_receive === 0 ? 0 : 1,
+        c.can_receive_invoices === false || c.can_receive_invoices === 0 ? 0 : 1, id
+      );
+      ensurePrimaryCustomerContact(current.customer_id);
+    })();
+    return this.getContacts(current.customer_id);
+  },
+  deleteContact(id) {
+    const current = db.prepare('SELECT * FROM customer_contacts WHERE id=? AND active=1').get(id);
+    if (!current) throw new Error('Representante no encontrado');
+    db.transaction(() => {
+      db.prepare("UPDATE customer_contacts SET active=0,is_primary=0,updated_at=datetime('now','localtime') WHERE id=?").run(id);
+      ensurePrimaryCustomerContact(current.customer_id);
+    })();
+    return { id, customerId: current.customer_id, name: current.name };
+  },
+  addPayment({ customerId, amount, method, note, saleId = null, contactId = null, cajero = '', userId = null, sessionId = null }) {
     // VALIDACIONES: prevenir abonos inválidos que corrompan el balance
     if (!amount || amount <= 0) throw new Error('El monto del abono debe ser mayor a cero');
     if (amount > 9999999) throw new Error('Monto de abono excede el límite permitido');
-    const cust = db.prepare('SELECT balance,credit_due FROM customers WHERE id=?').get(customerId);
+    const cust = db.prepare('SELECT id,customer_type,balance,credit_due FROM customers WHERE id=?').get(customerId);
     if (!cust) throw new Error('Cliente no encontrado');
     if (cust.balance <= 0) throw new Error('El cliente no tiene balance pendiente');
     const before = round2(cust.balance);
     if (amount > before + 0.01) throw new Error(`El abono (${amount.toFixed(2)}) supera el balance actual (${before.toFixed(2)})`);
     const after  = Math.max(0, round2((before - amount)));
+    let contact = null;
+    if (contactId) {
+      contact = db.prepare(`
+        SELECT id,name,document,role,phone,email
+        FROM customer_contacts
+        WHERE id=? AND customer_id=? AND active=1
+      `).get(Number(contactId), Number(customerId));
+      if (!contact) throw new Error('El representante seleccionado no pertenece a esta empresa o está inactivo');
+    }
     const payTx = db.transaction(() => {
       const payInsert = db.prepare(`
-        INSERT INTO payments(customer_id,sale_id,amount,method,note,balance_before,balance_after,cajero,user_id,cash_session_id,created_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
-      `).run(customerId, saleId, amount, method, note||'Abono', before, after, cajero, userId, sessionId || null);
+        INSERT INTO payments(
+          customer_id,sale_id,amount,method,note,balance_before,balance_after,cajero,user_id,cash_session_id,
+          customer_contact_id,customer_contact_name,customer_contact_document,customer_contact_role,
+          customer_contact_phone,customer_contact_email,created_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
+      `).run(
+        customerId, saleId, amount, method, note||'Abono', before, after, cajero, userId, sessionId || null,
+        contact?.id || null, contact?.name || '', contact?.document || '', contact?.role || '',
+        contact?.phone || '', contact?.email || ''
+      );
       const paymentId = payInsert.lastInsertRowid;
       db.prepare(`
         UPDATE customers SET balance=?,credit_due=?,updated_at=datetime('now') WHERE id=?
@@ -1660,7 +1935,15 @@ const customersRepo = {
           VALUES(?,?,?,?,?,?,?)
         `).run(sessionId, 'abono', amount, method || 'efectivo', saleId, `Abono cliente`, userId);
       }
-      return { before, after, amount, paymentId };
+      return {
+        before, after, amount, paymentId,
+        customer_contact_id: contact?.id || null,
+        customer_contact_name: contact?.name || '',
+        customer_contact_document: contact?.document || '',
+        customer_contact_role: contact?.role || '',
+        customer_contact_phone: contact?.phone || '',
+        customer_contact_email: contact?.email || '',
+      };
     });
     return payTx();
   },
@@ -1683,13 +1966,19 @@ const customersRepo = {
     if (Number(id) === 1) throw new Error('No se puede eliminar el cliente "Consumidor Final"');
     const cust = db.prepare('SELECT id,name,balance FROM customers WHERE id=?').get(id);
     if (!cust) throw new Error('Cliente no encontrado');
-    db.prepare(`UPDATE customers SET active=0,updated_at=datetime('now') WHERE id=?`).run(id);
+    db.transaction(() => {
+      db.prepare(`UPDATE customers SET active=0,updated_at=datetime('now') WHERE id=?`).run(id);
+      db.prepare(`UPDATE customer_contacts SET active=0,is_primary=0,updated_at=datetime('now','localtime') WHERE customer_id=?`).run(id);
+    })();
     return { id, name: cust.name, balance: cust.balance || 0 };
   },
   deleteAll() {
     const rows = db.prepare(`SELECT id,balance FROM customers WHERE active=1 AND id != 1`).all();
     const totalBalance = rows.reduce((s, r) => s + (r.balance || 0), 0);
-    db.prepare(`UPDATE customers SET active=0,updated_at=datetime('now') WHERE active=1 AND id != 1`).run();
+    db.transaction(() => {
+      db.prepare(`UPDATE customer_contacts SET active=0,is_primary=0,updated_at=datetime('now','localtime') WHERE customer_id IN (SELECT id FROM customers WHERE active=1 AND id != 1)`).run();
+      db.prepare(`UPDATE customers SET active=0,updated_at=datetime('now') WHERE active=1 AND id != 1`).run();
+    })();
     return { count: rows.length, totalBalance };
   },
 };
@@ -1850,8 +2139,74 @@ const cashRepo = {
 // ── Ventas ────────────────────────────────────
 const salesRepo = {
   // Transacción completa de venta
-  create({ session, customer, items, payment, user, type = 'factura' }) {
+  create({ session, customer, items, payment, user, type = 'factura', trustedCustomerSnapshot = false }) {
     const createSaleTx = db.transaction(() => {
+      // Para clientes registrados, la base de datos es la autoridad. El renderer
+      // solo elige la cuenta y, opcionalmente, uno de sus representantes.
+      const requestedCustomer = customer || {};
+      const requestedCustomerId = Number(requestedCustomer.id) || 1;
+      let selectedContact = null;
+      if (requestedCustomerId !== 1) {
+        const account = db.prepare('SELECT * FROM customers WHERE id=? AND active=1').get(requestedCustomerId);
+        if (!account) throw new Error('Cliente no encontrado o inactivo');
+        const contactId = Number(requestedCustomer.contact_id || requestedCustomer.contact?.id) || null;
+        if (contactId) {
+          const storedContact = db.prepare(`
+            SELECT * FROM customer_contacts
+            WHERE id=? AND customer_id=?
+          `).get(contactId, account.id);
+          if (!storedContact) throw new Error('El representante no pertenece a la empresa seleccionada');
+          if (trustedCustomerSnapshot && requestedCustomer.preserve_contact_snapshot) {
+            selectedContact = {
+              ...storedContact,
+              name: requestedCustomer.contact?.name || storedContact.name,
+              document: requestedCustomer.contact?.document || storedContact.document,
+              role: requestedCustomer.contact?.role || storedContact.role,
+              phone: requestedCustomer.contact?.phone || storedContact.phone,
+              email: requestedCustomer.contact?.email || storedContact.email,
+            };
+          } else {
+            if (account.customer_type !== 'company') throw new Error('Solo una empresa puede usar representantes');
+            if (storedContact.active !== 1) throw new Error('El representante seleccionado está inactivo');
+            if (storedContact.can_order !== 1) throw new Error('El representante no está autorizado para solicitar compras');
+            selectedContact = storedContact;
+          }
+        }
+        const preserveAccount = trustedCustomerSnapshot && requestedCustomer.preserve_customer_snapshot;
+        customer = {
+          id: account.id,
+          name: preserveAccount ? (requestedCustomer.name || account.name) : account.name,
+          rnc: preserveAccount ? (requestedCustomer.rnc ?? account.rnc ?? '') : (account.rnc || ''),
+          customer_type: preserveAccount
+            ? (requestedCustomer.customer_type || account.customer_type || 'person')
+            : (account.customer_type || 'person'),
+          trade_name: preserveAccount
+            ? (requestedCustomer.trade_name ?? account.trade_name ?? '')
+            : (account.trade_name || ''),
+          address: preserveAccount
+            ? (requestedCustomer.address ?? account.address ?? '')
+            : (account.address || ''),
+          phone: preserveAccount
+            ? (requestedCustomer.phone ?? account.phone ?? '')
+            : (account.phone || ''),
+          email: preserveAccount
+            ? (requestedCustomer.email ?? account.billing_email ?? account.email ?? '')
+            : (account.billing_email || account.email || ''),
+          contact: selectedContact,
+        };
+      } else {
+        customer = {
+          id: 1,
+          name: String(requestedCustomer.name || 'Consumidor Final').trim() || 'Consumidor Final',
+          rnc: String(requestedCustomer.rnc || '').trim(),
+          customer_type: 'person', trade_name: '',
+          address: String(requestedCustomer.address || '').trim(),
+          phone: String(requestedCustomer.phone || '').trim(),
+          email: String(requestedCustomer.email || '').trim(),
+          contact: null,
+        };
+      }
+
       // ¿Esta venta afecta inventario? (descuenta stock). Una sola fuente de
       // verdad para validación Y descuento, así nunca quedan asimétricas.
       // Factura y venta a crédito mueven inventario; la cotización no.
@@ -2008,31 +2363,46 @@ const salesRepo = {
       // Crear venta
       const saleR = db.prepare(`
         INSERT INTO sales(cash_session_id,customer_id,customer_name,customer_rnc,
+          customer_type,customer_trade_name,customer_address,customer_phone,customer_email,
+          customer_contact_id,customer_contact_name,customer_contact_document,
+          customer_contact_role,customer_contact_phone,customer_contact_email,
           type,status,subtotal,discount_pct,discount_amt,tax_pct,tax_amt,total,
           payment_method,price_mode,cajero,user_id,salesperson_id,financial_account_id,
           payment_currency,exchange_rate,account_amount,card_brand,card_last4,
           payment_reference,created_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
-      `).run(
-        session?.id || null,
-        customer.id,
-        customer.name || 'Consumidor Final',
-        customer.rnc  || '',
-        type, 'completed',
-        subtotal, discPct, discAmt, taxPct, taxAmt, total,
-        method,
-        payment.priceMode || 'retail',
-        user.name || '',
-        user.id,
-        salespersonId,
-        finAcctId,
-        paymentCurrency,
-        exchangeRate,
-        accountAmount,
-        cardBrand,
-        cardLast4,
-        paymentReference
-      );
+        VALUES(
+          @cash_session_id,@customer_id,@customer_name,@customer_rnc,
+          @customer_type,@customer_trade_name,@customer_address,@customer_phone,@customer_email,
+          @customer_contact_id,@customer_contact_name,@customer_contact_document,
+          @customer_contact_role,@customer_contact_phone,@customer_contact_email,
+          @type,'completed',@subtotal,@discount_pct,@discount_amt,@tax_pct,@tax_amt,@total,
+          @payment_method,@price_mode,@cajero,@user_id,@salesperson_id,@financial_account_id,
+          @payment_currency,@exchange_rate,@account_amount,@card_brand,@card_last4,
+          @payment_reference,datetime('now','localtime')
+        )
+      `).run({
+        cash_session_id: session?.id || null,
+        customer_id: customer.id,
+        customer_name: customer.name || 'Consumidor Final',
+        customer_rnc: customer.rnc || '',
+        customer_type: customer.customer_type || 'person',
+        customer_trade_name: customer.trade_name || '',
+        customer_address: customer.address || '',
+        customer_phone: customer.phone || '',
+        customer_email: customer.email || '',
+        customer_contact_id: selectedContact?.id || null,
+        customer_contact_name: selectedContact?.name || '',
+        customer_contact_document: selectedContact?.document || '',
+        customer_contact_role: selectedContact?.role || '',
+        customer_contact_phone: selectedContact?.phone || '',
+        customer_contact_email: selectedContact?.email || '',
+        type, subtotal, discount_pct: discPct, discount_amt: discAmt, tax_pct: taxPct,
+        tax_amt: taxAmt, total, payment_method: method,
+        price_mode: payment.priceMode || 'retail', cajero: user.name || '', user_id: user.id,
+        salesperson_id: salespersonId, financial_account_id: finAcctId,
+        payment_currency: paymentCurrency, exchange_rate: exchangeRate, account_amount: accountAmount,
+        card_brand: cardBrand, card_last4: cardLast4, payment_reference: paymentReference,
+      });
       const saleId = saleR.lastInsertRowid;
 
       // 4b. Generar NCF — SOLO facturas, con fiscal activo Y una secuencia registrada.
@@ -2359,6 +2729,9 @@ const salesRepo = {
           OR lower(s.ncf)           LIKE ?
           OR lower(s.customer_name) LIKE ?
           OR lower(s.customer_rnc)  LIKE ?
+          OR lower(s.customer_contact_name) LIKE ?
+          OR lower(s.customer_contact_role) LIKE ?
+          OR lower(s.customer_contact_phone) LIKE ?
           OR lower(s.notes)         LIKE ?
           OR lower(sp.name)         LIKE ?
           OR lower(sp.code)         LIKE ?
@@ -2373,7 +2746,7 @@ const salesRepo = {
     `).all(
       Number.isFinite(idNum) ? idNum : -1,
       Number.isFinite(facNum) ? facNum : -1,
-      likeNoHash, like, like, like, like, like, like, like, like, like, likeNoHash
+      likeNoHash, like, like, like, like, like, like, like, like, like, like, like, like, likeNoHash
     );
 
     // Filtro fino con normalización de tildes/Ñ y dígitos con guarda.
@@ -2390,6 +2763,9 @@ const salesRepo = {
       matchText(s.customer_name) ||
       matchText(s.customer_rnc) ||
       matchDigits(s.customer_rnc) ||
+      matchText(s.customer_contact_name) ||
+      matchText(s.customer_contact_role) ||
+      matchDigits(s.customer_contact_phone) ||
       matchDigits(s._cust_phone) ||
       matchDigits(s._recibos) ||
       matchText(s.notes) ||
@@ -3002,15 +3378,29 @@ const returnsRepo = {
       const retR = db.prepare(`
         INSERT INTO sales(
           cash_session_id, customer_id, customer_name, customer_rnc,
+          customer_type,customer_trade_name,customer_address,customer_phone,customer_email,
+          customer_contact_id,customer_contact_name,customer_contact_document,
+          customer_contact_role,customer_contact_phone,customer_contact_email,
           type, status, subtotal, discount_pct, discount_amt,
           tax_pct, tax_amt, total, payment_method, price_mode,
           cajero, user_id, notes, original_sale_id
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       `).run(
         session?.id || original.cash_session_id || null,
         original.customer_id,
         original.customer_name,
         original.customer_rnc,
+        original.customer_type || 'person',
+        original.customer_trade_name || '',
+        original.customer_address || '',
+        original.customer_phone || '',
+        original.customer_email || '',
+        original.customer_contact_id || null,
+        original.customer_contact_name || '',
+        original.customer_contact_document || '',
+        original.customer_contact_role || '',
+        original.customer_contact_phone || '',
+        original.customer_contact_email || '',
         'devolucion', 'completed',
         subtotal, 0, 0,
         taxPct, taxAmt, total,
@@ -3969,12 +4359,21 @@ const deliveriesRepo = {
   },
   getById(id) { return db.prepare('SELECT * FROM deliveries WHERE id=?').get(id); },
   create(data) {
-    return db.prepare(`INSERT INTO deliveries(sale_id,customer_id,customer_name,vehicle_id,driver_id,
+    let contact = null;
+    if (data.customer_contact_id && data.customer_id) {
+      contact = db.prepare(`SELECT * FROM customer_contacts WHERE id=? AND customer_id=? AND active=1 AND can_receive=1`)
+        .get(data.customer_contact_id, data.customer_id);
+      if (!contact) throw new Error('El representante no pertenece a la empresa, está inactivo o no puede recibir mercancía');
+    }
+    return db.prepare(`INSERT INTO deliveries(
+      sale_id,customer_id,customer_name,customer_contact_id,customer_contact_name,
+      customer_contact_role,customer_contact_phone,vehicle_id,driver_id,
       origin_address,dest_address,dest_lat,dest_lng,distance_km,fuel_used,fuel_cost,
       delivery_fee,delivery_type,carrier_name,carrier_stop,carrier_tracking,carrier_dest,
       status,scheduled_at,notes,user_id)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       data.sale_id||null, data.customer_id||null, String(data.customer_name||'').trim(),
+      contact?.id || null, contact?.name || '', contact?.role || '', contact?.phone || '',
       data.vehicle_id||null, data.driver_id||null,
       data.origin_address||'', data.dest_address, data.dest_lat||null, data.dest_lng||null,
       data.distance_km||null, data.fuel_used||null, data.fuel_cost||null,
@@ -5670,18 +6069,47 @@ const conduceRepo = {
     }
   },
 
-  create({ header = {}, items = [], userId = null }) {
+  create({ header = {}, items = [], userId = null, trustedSnapshot = false }) {
     const number = header.number || this.generateNumber();
     const tx = db.transaction(() => {
+      let account = null;
+      if (header.customer_id && !(trustedSnapshot && header.preserve_contact_snapshot)) {
+        account = db.prepare('SELECT * FROM customers WHERE id=? AND active=1').get(header.customer_id);
+        if (!account) throw new Error('Cliente no encontrado o inactivo');
+      }
+      let contact = null;
+      if (header.customer_contact_id && header.customer_id) {
+        const stored = db.prepare('SELECT * FROM customer_contacts WHERE id=? AND customer_id=?')
+          .get(header.customer_contact_id, header.customer_id);
+        if (!stored) throw new Error('El representante no pertenece al cliente seleccionado');
+        if (trustedSnapshot && header.preserve_contact_snapshot) {
+          contact = {
+            ...stored, name: header.customer_contact_name || stored.name,
+            document: header.customer_contact_document || stored.document,
+            role: header.customer_contact_role || stored.role,
+            phone: header.customer_contact_phone || stored.phone,
+            email: header.customer_contact_email || stored.email,
+          };
+        } else {
+          const contactAccount = db.prepare('SELECT customer_type FROM customers WHERE id=?').get(header.customer_id);
+          if (contactAccount?.customer_type !== 'company') throw new Error('Solo una empresa puede usar representantes');
+          if (stored.active !== 1) throw new Error('El representante seleccionado está inactivo');
+          if (stored.can_order !== 1) throw new Error('El representante no está autorizado para solicitar compras');
+          contact = stored;
+        }
+      }
       const r = db.prepare(`
         INSERT INTO delivery_notes
-          (number, customer_id, customer_name, customer_rnc, branch_id,
+          (number, customer_id, customer_name, customer_rnc,
+           customer_contact_id,customer_contact_name,customer_contact_document,
+           customer_contact_role,customer_contact_phone,customer_contact_email,branch_id,
            source_type, source_id, status, issue_date, delivery_address,
            driver_name, vehicle_plate, notes, invoice_id, created_by)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       `).run(
-        number, header.customer_id || null, header.customer_name || 'Consumidor Final',
-        header.customer_rnc || '', header.branch_id || null,
+        number, header.customer_id || null, account?.name || header.customer_name || 'Consumidor Final',
+        account?.rnc || header.customer_rnc || '', contact?.id || null, contact?.name || '', contact?.document || '',
+        contact?.role || '', contact?.phone || '', contact?.email || '', header.branch_id || null,
         header.source_type || 'manual', header.source_id || null,
         header.status || 'borrador', header.issue_date || todayStr(),
         header.delivery_address || '', header.driver_name || '',
@@ -5722,19 +6150,38 @@ const conduceRepo = {
   },
 
   update(id, { header = {}, items = null }) {
-    const dn = db.prepare('SELECT status FROM delivery_notes WHERE id=?').get(id);
+    const dn = db.prepare('SELECT * FROM delivery_notes WHERE id=?').get(id);
     if (!dn) throw new Error('Conduce no encontrado');
     if (dn.status !== 'borrador') throw new Error('Solo se puede editar un conduce en BORRADOR');
     const tx = db.transaction(() => {
+      let account = null;
+      let contact = null;
+      if (header.customer_id) {
+        account = db.prepare('SELECT * FROM customers WHERE id=? AND active=1').get(header.customer_id);
+        if (!account) throw new Error('Cliente no encontrado o inactivo');
+      }
+      if (header.customer_contact_id) {
+        if (!account || account.customer_type !== 'company') {
+          throw new Error('Solo una empresa puede tener representante');
+        }
+        contact = db.prepare(`
+          SELECT * FROM customer_contacts WHERE id=? AND customer_id=? AND active=1 AND can_order=1
+        `).get(header.customer_contact_id, account.id);
+        if (!contact) throw new Error('El representante no pertenece a la empresa, está inactivo o no puede solicitar compras');
+      }
       db.prepare(`
         UPDATE delivery_notes SET
-          customer_id=?, customer_name=?, customer_rnc=?, branch_id=?,
+          customer_id=?, customer_name=?, customer_rnc=?, customer_contact_id=?,
+          customer_contact_name=?,customer_contact_document=?,customer_contact_role=?,
+          customer_contact_phone=?,customer_contact_email=?,branch_id=?,
           delivery_address=?, driver_name=?, vehicle_plate=?, notes=?,
           updated_at=datetime('now','localtime')
         WHERE id=?
       `).run(
-        header.customer_id || null, header.customer_name || 'Consumidor Final',
-        header.customer_rnc || '', header.branch_id || null,
+        header.customer_id || null, account?.name || header.customer_name || 'Consumidor Final',
+        account?.rnc || header.customer_rnc || '', contact?.id || null,
+        contact?.name || '',contact?.document || '',contact?.role || '',
+        contact?.phone || '',contact?.email || '',header.branch_id || null,
         header.delivery_address || '', header.driver_name || '',
         header.vehicle_plate || '', header.notes || '', id
       );
@@ -5856,7 +6303,17 @@ const conduceRepo = {
     // 1) Crear la factura (descuenta stock una sola vez — afectaStock=true)
     const saleRes = salesRepo.create({
       session,
-      customer: { id: dn.customer_id || 1, name: dn.customer_name, rnc: dn.customer_rnc || '' },
+      customer: {
+        id: dn.customer_id || 1, name: dn.customer_name, rnc: dn.customer_rnc || '',
+        contact_id: dn.customer_contact_id || null,
+        preserve_customer_snapshot: true, preserve_contact_snapshot: true,
+        customer_type: dn.customer_contact_id ? 'company' : undefined,
+        contact: dn.customer_contact_id ? {
+          id:dn.customer_contact_id,name:dn.customer_contact_name || '',
+          document:dn.customer_contact_document || '',role:dn.customer_contact_role || '',
+          phone:dn.customer_contact_phone || '',email:dn.customer_contact_email || '',
+        } : null,
+      },
       items: toInvoice.map(t => ({
         product_id: t.prod.id, product_code: t.prod.code, product_name: t.prod.name,
         unit_cost: t.prod.cost, unit_price: t.price, qty: t.qty,
@@ -5864,6 +6321,7 @@ const conduceRepo = {
       payment: { method: payment.method || 'efectivo', disc: payment.disc || 0, priceMode },
       user,
       type: 'factura',
+      trustedCustomerSnapshot: true,
     });
     const saleId = saleRes.saleId;
 
@@ -5901,6 +6359,14 @@ const conduceRepo = {
       header: {
         customer_id: sale.customer_id, customer_name: sale.customer_name,
         customer_rnc: sale.customer_rnc,
+        customer_contact_id: sale.customer_contact_id || null,
+        customer_contact_name: sale.customer_contact_name || '',
+        customer_contact_document: sale.customer_contact_document || '',
+        customer_contact_role: sale.customer_contact_role || '',
+        customer_contact_phone: sale.customer_contact_phone || '',
+        customer_contact_email: sale.customer_contact_email || '',
+        preserve_contact_snapshot: true,
+        preserve_customer_snapshot: true,
         source_type: sale.type === 'cotizacion' ? 'cotizacion' : 'factura',
         source_id: saleId,
         invoice_id: sale.type === 'factura' ? saleId : null,
@@ -5910,6 +6376,7 @@ const conduceRepo = {
         description: it.product_name, unit: 'und', qty: it.qty,
       })),
       userId,
+      trustedSnapshot: true,
     });
 
     // Si viene de una factura, ya está facturado: enlazar y marcar (no re-factura).

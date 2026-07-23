@@ -57,6 +57,26 @@ async function renderPOS(el) {
       </select>`;
     left.appendChild(topBar);
 
+    const customerBar = h('div', {
+      style: 'display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-shrink:0;position:relative'
+    });
+    customerBar.innerHTML = `
+      <span style="font-size:11px;color:var(--muted);font-weight:600;flex-shrink:0">Cliente:</span>
+      <div class="cli-search-wrap" style="flex:1;min-width:0">
+        <div class="inp-ic">
+          <div class="ic">${svg('user')}</div>
+          <input class="inp" id="pos-customer-search" type="search" autocomplete="off"
+                 placeholder="Consumidor Final · buscar nombre, RNC, teléfono o representante"
+                 onfocus="this.select();posFilterCustomers(this.value,true)"
+                 oninput="posFilterCustomers(this.value)"
+                 onblur="setTimeout(()=>document.getElementById('pos-customer-dd')?.classList.remove('show'),180)"/>
+        </div>
+        <div id="pos-customer-dd" class="cli-dropdown"></div>
+      </div>
+      <div id="pos-customer-state" style="font-size:10.5px;color:var(--muted);white-space:nowrap;max-width:240px;overflow:hidden;text-overflow:ellipsis"></div>
+      <button class="btn btn-out btn-sm" type="button" onclick="posSelectCustomer(1)" title="Volver a Consumidor Final">Limpiar</button>`;
+    left.appendChild(customerBar);
+
     const modeBar = h('div', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-shrink:0' });
     modeBar.innerHTML = `
       <span style="font-size:11px;color:var(--muted);font-weight:600">Precio:</span>
@@ -186,6 +206,7 @@ async function renderPOS(el) {
     renderPOSGrid();
     renderInvTabs();
     renderCart();
+    renderPOSCustomerSelection();
     if (window._pendingPOSResaleCart) {
       const pending = window._pendingPOSResaleCart;
       window._pendingPOSResaleCart = null;
@@ -205,7 +226,22 @@ async function renderPOS(el) {
 // Actualiza el modo, mueve el resaltado 'on' al botón activo y redibuja la
 // grilla. Antes solo se redibujaba la grilla y el resaltado quedaba pegado.
 function _setPosPmode(mode) {
-  currentInv().pmode = mode;
+  const inv = currentInv();
+  mode = mode === 'wholesale' ? 'wholesale' : 'retail';
+  inv.pmode = mode;
+  if (!inv.checkoutOrderId) {
+    inv.cart.forEach(item => {
+      if (item.resale_source || item.manual_price) return;
+      const product = DB.products.find(p => Number(p.id) === Number(item.pid || item.product_id));
+      if (!product) return;
+      const price = mode === 'wholesale' && Number(product.wholesale) > 0
+        ? Number(product.wholesale) : Number(product.price);
+      if (price > 0) {
+        item.price = price;
+        item.unit_price = price;
+      }
+    });
+  }
   const tabs = document.getElementById('pos-pmode-tabs');
   if (tabs) {
     tabs.querySelectorAll('button[data-pmode]').forEach(btn => {
@@ -213,6 +249,8 @@ function _setPosPmode(mode) {
     });
   }
   renderPOSGrid();
+  renderInvTabs();
+  renderCart();
 }
 
 // ── Grid de productos ─────────────────────────
@@ -330,7 +368,7 @@ function renderInvTabs() {
   addBtn.className   = 'inv-tab-add';
   addBtn.title       = 'Nueva factura';
   addBtn.textContent = '+';
-  addBtn.onclick     = () => { addInvoice(); renderInvTabs(); renderCart(); };
+  addBtn.onclick     = () => { addInvoice(); renderInvTabs(); renderCart(); renderPOSGrid(); renderPOSCustomerSelection(); };
   wrap.appendChild(addBtn);
 }
 
@@ -339,6 +377,7 @@ function posSetTab(idx) {
   renderInvTabs();
   renderCart();
   renderPOSGrid();
+  renderPOSCustomerSelection();
 }
 
 function posRemoveTab(idx) {
@@ -346,6 +385,7 @@ function posRemoveTab(idx) {
   renderInvTabs();
   renderCart();
   renderPOSGrid();
+  renderPOSCustomerSelection();
 }
 
 // ── Agregar al carrito ────────────────────────
@@ -403,6 +443,7 @@ function posAddItem(pid) {
       cost:         prod.cost,
       taxable:      prod.taxable === 0 ? 0 : 1,
       tax_pct:      parseFloat(prod.tax_pct ?? CFG.itbis ?? 18) || 18,
+      manual_price:  false,
       qty: 1
     });
   }
@@ -772,6 +813,7 @@ async function posSetPrice(idx, val) {
   }
   item.price = price;
   item.unit_price = price;
+  item.manual_price = true;
   renderInvTabs();
   renderCart();
 }
@@ -1063,19 +1105,161 @@ function pvCustomerMatches(customer, query) {
   if (!term && !termDigits) return true;
 
   const searchable = searchNorm([
-    customer.name, customer.rnc, customer.phone, customer.email,
+    customer.name, customer.trade_name, customer.rnc, customer.phone, customer.email, customer.billing_email,
   ].filter(Boolean).join(' '));
   if (term && searchable.includes(term)) return true;
   return termDigits.length > 0 && [customer.rnc, customer.phone]
     .some(value => digitsOf(value).includes(termDigits));
 }
 
-function pvUpdateCustomerState(customer = null, occasionalName = '') {
+function pvContactMatches(contact, query) {
+  const term = searchNorm(query);
+  const termDigits = digitsOf(query);
+  const searchable = searchNorm([contact?.name, contact?.role, contact?.email].filter(Boolean).join(' '));
+  if (term && searchable.includes(term)) return true;
+  return termDigits.length > 0 && [contact?.document, contact?.phone]
+    .some(value => digitsOf(value).includes(termDigits));
+}
+
+function pvCustomerOptions(query, showAll = false) {
+  const typed = String(query || '').trim();
+  const options = [];
+  for (const customer of (DB.customers || [])) {
+    if (!customer || customer.active === 0 || Number(customer.id) === 1) continue;
+    if (showAll || pvCustomerMatches(customer, typed)) options.push({ customer, contact: null });
+    if (!showAll && typed) {
+      for (const contact of (customer.contacts || [])) {
+        if (contact.active !== 0 && contact.can_order !== 0 && pvContactMatches(contact, typed)) options.push({ customer, contact });
+      }
+    }
+    if (options.length >= 10) break;
+  }
+  return options.slice(0, 10);
+}
+
+// Selector permanente del POS. La identidad se guarda en la factura activa
+// antes de agregar artículos, para que el catálogo y el carrito nazcan con el
+// precio preferido del cliente (detalle o mayorista).
+function renderPOSCustomerSelection() {
+  const inv = currentInv();
+  const input = document.getElementById('pos-customer-search');
+  const state = document.getElementById('pos-customer-state');
+  const customer = (DB.customers || []).find(c => Number(c.id) === Number(inv.cliId));
+  const contact = (customer?.contacts || []).find(c => Number(c.id) === Number(inv.cliContactId));
+  if (input) input.value = Number(inv.cliId) !== 1 && customer ? customer.name : 'Consumidor Final';
+  if (state) {
+    if (Number(inv.cliId) !== 1 && customer) {
+      state.style.color = 'var(--green)';
+      state.textContent = `${customer.customer_type === 'company' ? 'Empresa' : 'Cliente'}: ${customer.name}` +
+        `${contact ? ` · ${contact.name}` : ''} · ${inv.pmode === 'wholesale' ? 'Mayorista' : 'Detalle'}`;
+      state.title = state.textContent;
+    } else {
+      state.style.color = 'var(--muted)';
+      state.textContent = 'Consumidor Final · Precio detalle';
+      state.title = state.textContent;
+    }
+  }
+}
+
+function posFilterCustomers(query, showAll = false) {
+  const dd = document.getElementById('pos-customer-dd');
+  if (!dd) return;
+  const inv = currentInv();
+  const typed = String(query || '').trim();
+  const selected = (DB.customers || []).find(c => Number(c.id) === Number(inv.cliId));
+  const stillSelected = selected && Number(selected.id) !== 1 &&
+    searchNorm(selected.name) === searchNorm(typed);
+
+  if (!showAll && !stillSelected) {
+    const hadRegisteredCustomer = Number(inv.cliId) !== 1;
+    inv.cliId = 1;
+    inv.cliName = typed || 'Consumidor Final';
+    inv.cliCedula = '';
+    inv.cliContactId = null;
+    inv.cliContactName = '';
+    inv.cliContactRole = '';
+    inv.cliContactPhone = '';
+    if (hadRegisteredCustomer) _setPosPmode('retail');
+    const state = document.getElementById('pos-customer-state');
+    if (state) {
+      state.style.color = typed ? 'var(--amber)' : 'var(--muted)';
+      state.textContent = typed ? 'Selecciona un resultado para vincularlo' : 'Consumidor Final · Precio detalle';
+    }
+  }
+
+  const normalized = searchNorm(typed);
+  const showConsumerFinal = !normalized || normalized === 'consumidor final';
+  const matches = pvCustomerOptions(showConsumerFinal && showAll ? '' : typed, showConsumerFinal && showAll);
+  let html = showConsumerFinal ? `
+    <div class="cli-opt" onmousedown="event.preventDefault()" onclick="posSelectCustomer(1)">
+      <div class="cli-opt-name">Consumidor Final</div>
+      <div class="cli-opt-meta">Venta sin cliente registrado · precio detalle</div>
+    </div>` : '';
+  html += matches.map(({ customer: c, contact }) => `
+    <div class="cli-opt" onmousedown="event.preventDefault()" onclick="posSelectCustomer(${Number(c.id)},${contact ? Number(contact.id) : 'null'})">
+      <div class="cli-opt-name">${contact
+        ? `${posEscHtml(contact.name)} <span class="badge b">Representante</span>`
+        : posEscHtml(c.name)}
+        <span style="font-size:10px;color:${c.preferred_price_mode === 'wholesale' ? 'var(--blue)' : 'var(--muted)'};margin-left:6px">
+          ${c.preferred_price_mode === 'wholesale' ? 'Mayorista' : 'Detalle'}
+        </span>
+      </div>
+      <div class="cli-opt-meta">${contact
+        ? `${posEscHtml(contact.role || 'Sin cargo')} · ${posEscHtml(c.name)} · ${posEscHtml(contact.phone || 'Sin teléfono')}`
+        : `${posEscHtml(c.customer_type === 'company' ? 'Empresa' : 'Persona')} · ${posEscHtml(c.rnc || 'Sin RNC')} · ${posEscHtml(c.phone || 'Sin teléfono')}`}</div>
+    </div>`).join('');
+  if (!matches.length && !showConsumerFinal) {
+    html = `<div class="cli-opt" style="cursor:default">
+      <div class="cli-opt-name" style="color:var(--muted)">No se encontró “${posEscHtml(typed)}”</div>
+      <div class="cli-opt-meta">Busca por nombre, documento, teléfono o representante</div>
+    </div>`;
+  }
+  dd.innerHTML = html;
+  dd.classList.toggle('show', Boolean(html));
+}
+
+function posSelectCustomer(id, contactId = null) {
+  const inv = currentInv();
+  if (inv.checkoutOrderId) {
+    toast('La identidad de una orden enviada a caja no puede modificarse', 'w');
+    return;
+  }
+  document.getElementById('pos-customer-dd')?.classList.remove('show');
+  if (Number(id) === 1) {
+    inv.cliId = 1;
+    inv.cliName = 'Consumidor Final';
+    inv.cliCedula = '';
+    inv.cliContactId = null;
+    inv.cliContactName = '';
+    inv.cliContactRole = '';
+    inv.cliContactPhone = '';
+    _setPosPmode('retail');
+    renderPOSCustomerSelection();
+    return;
+  }
+  const customer = (DB.customers || []).find(c => Number(c.id) === Number(id) && c.active !== 0);
+  if (!customer) return;
+  const contact = (customer.contacts || []).find(c =>
+    Number(c.id) === Number(contactId) && c.active !== 0 && c.can_order !== 0
+  );
+  inv.cliId = customer.id;
+  inv.cliName = customer.name;
+  inv.cliCedula = customer.rnc || '';
+  inv.cliContactId = contact?.id || null;
+  inv.cliContactName = contact?.name || '';
+  inv.cliContactRole = contact?.role || '';
+  inv.cliContactPhone = contact?.phone || '';
+  _setPosPmode(customer.preferred_price_mode === 'wholesale' ? 'wholesale' : 'retail');
+  renderPOSCustomerSelection();
+  toast(`✓ ${customer.name}${contact ? ` · ${contact.name}` : ''} · precio ${inv.pmode === 'wholesale' ? 'mayorista' : 'detalle'}`);
+}
+
+function pvUpdateCustomerState(customer = null, occasionalName = '', contact = null) {
   const el = document.getElementById('pv-customer-selected');
   if (!el) return;
   if (customer && Number(customer.id) !== 1) {
     el.className = 'is-registered';
-    el.innerHTML = `${svg('check')} Cliente registrado seleccionado`;
+    el.innerHTML = `${svg('check')} ${customer.customer_type === 'company' ? 'Empresa' : 'Cliente'} seleccionado${contact ? ` · ${posEscHtml(contact.name)}` : ''}`;
   } else if (occasionalName && searchNorm(occasionalName) !== 'consumidor final') {
     el.className = '';
     el.textContent = 'Cliente ocasional — no vinculado al registro de clientes';
@@ -1100,6 +1284,10 @@ function pvFilterCustomers(query, showAll = false) {
     const hadRegisteredCustomer = Number(inv.cliId) !== 1;
     inv.cliId = 1;
     inv.cliName = typed || 'Consumidor Final';
+    inv.cliContactId = null;
+    inv.cliContactName = '';
+    inv.cliContactRole = '';
+    inv.cliContactPhone = '';
     if (hadRegisteredCustomer) {
       inv.cliCedula = '';
       const rnc = document.getElementById('pv-customer-rnc');
@@ -1107,14 +1295,13 @@ function pvFilterCustomers(query, showAll = false) {
     }
     pvUpdateCustomerState(null, inv.cliName);
   } else {
-    pvUpdateCustomerState(selected);
+    const contact = (selected.contacts || []).find(c => Number(c.id) === Number(inv.cliContactId));
+    pvUpdateCustomerState(selected, '', contact);
   }
 
   const normalized = searchNorm(typed);
   const showConsumerFinal = !normalized || normalized === 'consumidor final';
-  const matches = (DB.customers || [])
-    .filter(c => pvCustomerMatches(c, showConsumerFinal && showAll ? '' : typed))
-    .slice(0, 10);
+  const matches = pvCustomerOptions(showConsumerFinal && showAll ? '' : typed, showConsumerFinal && showAll);
 
   let html = showConsumerFinal ? `
     <div class="cli-opt" onmousedown="event.preventDefault()" onclick="pvSelectCustomer(1)">
@@ -1122,12 +1309,14 @@ function pvFilterCustomers(query, showAll = false) {
       <div class="cli-opt-meta">Continuar sin vincular un cliente registrado</div>
     </div>` : '';
 
-  html += matches.map(c => `
-    <div class="cli-opt" onmousedown="event.preventDefault()" onclick="pvSelectCustomer(${Number(c.id)})">
-      <div class="cli-opt-name">${posEscHtml(c.name)}
+  html += matches.map(({ customer: c, contact }) => `
+    <div class="cli-opt" onmousedown="event.preventDefault()" onclick="pvSelectCustomer(${Number(c.id)},${contact ? Number(contact.id) : 'null'})">
+      <div class="cli-opt-name">${contact ? `${posEscHtml(contact.name)} <span class="badge b">Representante</span>` : posEscHtml(c.name)}
         ${Number(c.balance) > 0 ? `<span class="pv-customer-balance">Bal: ${fmt(c.balance)}</span>` : ''}
       </div>
-      <div class="cli-opt-meta">${posEscHtml(c.rnc || 'Sin RNC')} · ${posEscHtml(c.phone || 'Sin teléfono')}</div>
+      <div class="cli-opt-meta">${contact
+        ? `${posEscHtml(contact.role || 'Sin cargo')} · ${posEscHtml(c.name)} · ${posEscHtml(contact.phone || 'Sin teléfono')}`
+        : `${posEscHtml(c.customer_type === 'company' ? 'Empresa' : 'Persona')} · ${posEscHtml(c.rnc || 'Sin RNC')} · ${posEscHtml(c.phone || 'Sin teléfono')}`}</div>
     </div>`).join('');
 
   if (!matches.length && !showConsumerFinal) {
@@ -1143,7 +1332,7 @@ function pvFilterCustomers(query, showAll = false) {
   dd.classList.toggle('show', Boolean(html));
 }
 
-function pvSelectCustomer(id) {
+function pvSelectCustomer(id, contactId = null) {
   const inv = currentInv();
   const nameInput = document.getElementById('pv-customer-search');
   const rncInput = document.getElementById('pv-customer-rnc');
@@ -1153,6 +1342,10 @@ function pvSelectCustomer(id) {
     inv.cliId = 1;
     inv.cliName = 'Consumidor Final';
     inv.cliCedula = '';
+    inv.cliContactId = null;
+    inv.cliContactName = '';
+    inv.cliContactRole = '';
+    inv.cliContactPhone = '';
     if (nameInput) nameInput.value = inv.cliName;
     if (rncInput) rncInput.value = '';
     pvUpdateCustomerState();
@@ -1165,9 +1358,15 @@ function pvSelectCustomer(id) {
   inv.cliId = customer.id;
   inv.cliName = customer.name;
   inv.cliCedula = customer.rnc || '';
+  const contact = (customer.contacts || []).find(c => Number(c.id) === Number(contactId) && c.can_order !== 0);
+  inv.cliContactId = contact?.id || null;
+  inv.cliContactName = contact?.name || '';
+  inv.cliContactRole = contact?.role || '';
+  inv.cliContactPhone = contact?.phone || '';
+  inv.pmode = customer.preferred_price_mode === 'wholesale' ? 'wholesale' : 'retail';
   if (nameInput) nameInput.value = customer.name;
   if (rncInput) rncInput.value = customer.rnc || '';
-  pvUpdateCustomerState(customer);
+  pvUpdateCustomerState(customer, '', contact);
   dd?.classList.remove('show');
 }
 
@@ -1211,7 +1410,7 @@ async function openCheckoutSendModal(inv) {
         </div>
         <div class="pv-customer-state">
           <span id="pv-customer-selected">${inv.cliId && Number(inv.cliId) !== 1
-            ? `${svg('check')} Cliente registrado seleccionado`
+            ? `${svg('check')} Cliente registrado seleccionado${inv.cliContactName ? ` · ${posEscHtml(inv.cliContactName)}` : ''}`
             : (inv.cliName && inv.cliName !== 'Consumidor Final' ? 'Cliente ocasional' : 'Venta a Consumidor Final')}</span>
           <button class="btn btn-out pv-customer-final" type="button" onclick="pvSelectCustomer(1)">Consumidor Final</button>
         </div>
@@ -1270,7 +1469,15 @@ async function posSubmitCheckoutOrder() {
   let customer = { id: 1, name: cliName, rnc: cliCedula };
   if (inv.cliId && inv.cliId !== 1) {
     const found = DB.customers.find(c => Number(c.id) === Number(inv.cliId));
-    if (found) customer = { id: found.id, name: cliName || found.name, rnc: cliCedula || found.rnc || '' };
+    if (found) {
+      const contact = (found.contacts || []).find(c => Number(c.id) === Number(inv.cliContactId));
+      customer = {
+        id: found.id, name: found.name, rnc: found.rnc || '',
+        contact_id: contact?.id || null,
+        contact: contact ? { id: contact.id, name: contact.name, document: contact.document || '',
+          role: contact.role || '', phone: contact.phone || '', email: contact.email || '' } : null,
+      };
+    }
   }
   const button = document.getElementById('pv-send-btn');
   if (button) { button.disabled = true; button.innerHTML = `${svg('clock')} Enviando...`; }
@@ -1346,6 +1553,9 @@ function openCobroModal(inv) {
                   title="Verificar en la DGII (requiere internet)" style="flex-shrink:0">DGII</button>
         </div>
         <div id="cbr-cedula-hint" style="font-size:10.5px;margin-top:4px;color:var(--muted2)"></div>
+      </div>
+      <div id="cbr-contact-selected" style="${inv.cliContactName ? '' : 'display:none;'}margin-top:9px;padding:8px 10px;border-radius:8px;background:var(--blue-bg);font-size:11px;color:var(--blue)">
+        ${inv.cliContactName ? `Solicitado por <strong>${posEscHtml(inv.cliContactName)}</strong>${inv.cliContactRole ? ` · ${posEscHtml(inv.cliContactRole)}` : ''}` : ''}
       </div>
     </div>
 
@@ -1440,7 +1650,7 @@ function openCobroModal(inv) {
           <input class="inp" id="cbr-received" type="number"
                  placeholder="${fmt(total)}"
                  value="${total.toFixed(2)}"
-                 oninput="cbrCalcCambio(${total})"
+                 oninput="cbrCalcCambio()"
                  onfocus="this.select()"/>
         </div>
         <div id="cbr-cambio"
@@ -1461,7 +1671,7 @@ function openCobroModal(inv) {
               <div class="ic">${svg('cash')}</div>
               <input class="inp" id="cbr-mix-efec" type="number" min="0"
                      placeholder="0.00" value="0"
-                     oninput="cbrCalcMixto(${total})"/>
+                     oninput="cbrCalcMixto()"/>
             </div>
           </div>
           <div class="fg" style="margin-bottom:0">
@@ -1470,7 +1680,7 @@ function openCobroModal(inv) {
               <div class="ic">${svg('card')}</div>
               <input class="inp" id="cbr-mix-card" type="number" min="0"
                      placeholder="0.00" value="0"
-                     oninput="cbrCalcMixto(${total})"/>
+                     oninput="cbrCalcMixto()"/>
             </div>
           </div>
         </div>
@@ -1650,7 +1860,7 @@ function cbrTogglePago(val) {
 // Mantener compatibilidad con llamadas existentes
 function cbrToggleCredito(val) { cbrTogglePago(val); }
 
-function cbrCalcMixto(total) {
+function cbrCalcMixto(total = calcTotals(currentInv()).total) {
   const efec = parseFloat(document.getElementById('cbr-mix-efec')?.value) || 0;
   const card = parseFloat(document.getElementById('cbr-mix-card')?.value) || 0;
   const suma = efec + card;
@@ -1674,7 +1884,7 @@ function cbrCalcMixto(total) {
   cbrUpdatePaymentCurrency();
 }
 
-function cbrCalcCambio(total) {
+function cbrCalcCambio(total = calcTotals(currentInv()).total) {
   const rec    = parseFloat(document.getElementById('cbr-received')?.value) || 0;
   const cambio = rec - total;
   const el     = document.getElementById('cbr-cambio');
@@ -1685,19 +1895,45 @@ function cbrCalcCambio(total) {
   el.style.color = cambio >= 0 ? 'var(--green)' : 'var(--red)';
 }
 
+function cbrRefreshTotals(oldTotal = null) {
+  const totals = calcTotals(currentInv());
+  window._cbrBaseTotals = { subtotal:totals.subtotal, itbis:totals.itbis, total:totals.total, discAmt:totals.discAmt };
+  const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+  setText('cbr-header-total', fmt(totals.total));
+  setText('cbr-summary-subtotal', fmt(totals.subtotal));
+  setText('cbr-summary-discount', `−${fmt(totals.discAmt)}`);
+  setText('cbr-summary-itbis', fmt(totals.itbis));
+  setText('cbr-summary-total', fmt(totals.total));
+  const received = document.getElementById('cbr-received');
+  if (received && (!received.value || oldTotal == null || Math.abs(Number(received.value) - Number(oldTotal)) < 0.01)) {
+    received.value = totals.total.toFixed(2);
+  }
+  cbrCalcCambio(totals.total);
+  cbrCalcMixto(totals.total);
+  cbrUpdatePaymentCurrency();
+}
+
 function cbrFilterCli(q) {
   const dd = document.getElementById('cbr-cli-dd');
   if (!dd) return;
+  const inv = currentInv();
+  const selected = (DB.customers || []).find(c => Number(c.id) === Number(inv.cliId));
+  if (selected && searchNorm(selected.name) !== searchNorm(q)) {
+    const oldTotal = calcTotals(inv).total;
+    inv.cliId = 1;
+    inv.cliContactId = null;
+    inv.cliContactName = '';
+    inv.cliContactRole = '';
+    inv.cliContactPhone = '';
+    const contactEl = document.getElementById('cbr-contact-selected');
+    if (contactEl) contactEl.style.display = 'none';
+    _setPosPmode('retail');
+    cbrRefreshTotals(oldTotal);
+  }
   if (!q.trim() || q.trim().toLowerCase() === 'consumidor final') {
     dd.classList.remove('show'); return;
   }
-  const matches = DB.customers.filter(c =>
-    c.active !== 0 && c.id !== 1 && (
-      c.name.toLowerCase().includes(q.toLowerCase()) ||
-      (c.rnc && c.rnc.includes(q)) ||
-      (c.phone && c.phone.includes(q))
-    )
-  ).slice(0, 8);
+  const matches = pvCustomerOptions(q, false).slice(0, 8);
 
   if (!matches.length) {
     dd.innerHTML = `
@@ -1711,33 +1947,51 @@ function cbrFilterCli(q) {
     return;
   }
 
-  dd.innerHTML = matches.map(c => `
-    <div class="cli-opt" onclick="cbrSelectCli(${c.id})">
-      <div class="cli-opt-name">${c.name}
+  dd.innerHTML = matches.map(({ customer: c, contact }) => `
+    <div class="cli-opt" onclick="cbrSelectCli(${c.id},${contact ? contact.id : 'null'})">
+      <div class="cli-opt-name">${contact ? `${posEscHtml(contact.name)} <span class="badge b">Representante</span>` : posEscHtml(c.name)}
         ${c.balance > 0
           ? `<span style="font-size:10px;color:var(--amber);margin-left:6px">
              Bal: ${fmt(c.balance)}</span>`
           : ''}
       </div>
       <div class="cli-opt-meta">
-        ${c.rnc || 'Sin RNC'} · ${c.phone || 'Sin teléfono'}
+        ${contact
+          ? `${posEscHtml(contact.role || 'Sin cargo')} · ${posEscHtml(c.name)} · ${posEscHtml(contact.phone || 'Sin teléfono')}`
+          : `${posEscHtml(c.customer_type === 'company' ? 'Empresa' : 'Persona')} · ${posEscHtml(c.rnc || 'Sin RNC')} · ${posEscHtml(c.phone || 'Sin teléfono')}`}
       </div>
     </div>`).join('');
   dd.classList.add('show');
 }
 
-function cbrSelectCli(id) {
+function cbrSelectCli(id, contactId = null) {
   const c = DB.customers.find(c => c.id === id);
   if (!c) return;
   const inv     = currentInv();
+  const oldTotal = calcTotals(inv).total;
   inv.cliId     = c.id;
   inv.cliName   = c.name;
   inv.cliCedula = c.rnc || '';
+  const contact = (c.contacts || []).find(item => Number(item.id) === Number(contactId));
+  inv.cliContactId = contact?.id || null;
+  inv.cliContactName = contact?.name || '';
+  inv.cliContactRole = contact?.role || '';
+  inv.cliContactPhone = contact?.phone || '';
+  _setPosPmode(c.preferred_price_mode === 'wholesale' ? 'wholesale' : 'retail');
   const sn = document.getElementById('cbr-name');
   const sc = document.getElementById('cbr-cedula');
   if (sn) sn.value = c.name;
   if (sc) sc.value = c.rnc || '';
+  const contactEl = document.getElementById('cbr-contact-selected');
+  if (contactEl) {
+    contactEl.style.display = contact ? 'block' : 'none';
+    contactEl.innerHTML = contact
+      ? `Solicitado por <strong>${posEscHtml(contact.name)}</strong>${contact.role ? ` · ${posEscHtml(contact.role)}` : ''}`
+      : '';
+  }
   document.getElementById('cbr-cli-dd')?.classList.remove('show');
+  cbrRefreshTotals(oldTotal);
+  renderPOSCustomerSelection();
   cbrDocHint();
 }
 
@@ -1904,8 +2158,14 @@ async function finalizarVenta() {
   let customer = { id: 1, name: cliName, rnc: cliCedula };
   if (inv.cliId && inv.cliId !== 1) {
     const c = DB.customers.find(c => c.id === inv.cliId);
-    if (c) customer = { id: c.id, name: cliName || c.name, rnc: cliCedula || c.rnc || '',
-                        address: c.address || '', phone: c.phone || '', email: c.email || '' };
+    if (c) {
+      const contact = (c.contacts || []).find(item => Number(item.id) === Number(inv.cliContactId));
+      customer = {
+        id: c.id, name: c.name, rnc: c.rnc || '', address: c.address || '',
+        phone: c.phone || '', email: c.billing_email || c.email || '',
+        contact_id: contact?.id || null,
+      };
+    }
   }
 
   // Preparar items con snapshot de precios
@@ -2032,8 +2292,16 @@ async function finalizarVenta() {
                       { hour: '2-digit', minute: '2-digit' }),
       type:         inv.itype,
       clientId:     customer.id,
-      clientName:   cliName,
-      clientCedula: cliCedula,
+      clientName:   savedSale?.customer_name || customer.name || cliName,
+      clientCedula: savedSale?.customer_rnc || customer.rnc || cliCedula,
+	      customer_type: savedSale?.customer_type || 'person',
+	      customer_trade_name: savedSale?.customer_trade_name || '',
+	      customer_contact_id: savedSale?.customer_contact_id || null,
+	      customer_contact_name: savedSale?.customer_contact_name || '',
+	      customer_contact_document: savedSale?.customer_contact_document || '',
+	      customer_contact_role: savedSale?.customer_contact_role || '',
+	      customer_contact_phone: savedSale?.customer_contact_phone || '',
+	      customer_contact_email: savedSale?.customer_contact_email || '',
 	      items:        printItems,
       subtotal:  result.subtotal,
       disc:      inv.disc || 0,
@@ -2061,11 +2329,11 @@ async function finalizarVenta() {
       id:              result.saleId,
       type:            inv.itype,
       customer_id:      customer.id,
-      customer_name:   cliName,
-      customer_rnc:    cliCedula,
-      customer_address: customer.address || '',
-      customer_phone:   customer.phone   || '',
-      customer_email:   customer.email   || '',
+      customer_name:   savedSale?.customer_name || customer.name || cliName,
+      customer_rnc:    savedSale?.customer_rnc || customer.rnc || cliCedula,
+      customer_address: savedSale?.customer_address || customer.address || '',
+      customer_phone:   savedSale?.customer_phone || customer.phone || '',
+      customer_email:   savedSale?.customer_email || customer.email || '',
       payment_method:  pmeth,
       payment_amount:  pmeth === 'credito' ? 0 : result.total,
       balance_after_payment: pmeth === 'credito' ? result.total : 0,
@@ -2080,8 +2348,8 @@ async function finalizarVenta() {
       printConduce({
         ...saleForPrint,
         id:            result.saleId,
-        customer_name: cliName,
-        customer_rnc:  cliCedula,
+        customer_name: savedSale?.customer_name || customer.name || cliName,
+        customer_rnc:  savedSale?.customer_rnc || customer.rnc || cliCedula,
       });
     }
 
@@ -2279,7 +2547,7 @@ function previsualizarFactura(sale) {
   const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8"/>
-<title>${isFactura ? 'Factura' : 'Cotización'} #${sale.id}</title>
+<title>${isFactura ? 'Factura' : 'Cotizaci&oacute;n'} #${sale.id}</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
   body{font-family:Arial,sans-serif;font-size:13px;color:#0D0F12}
@@ -2330,7 +2598,7 @@ function previsualizarFactura(sale) {
       </div>
     </div>
     <div>
-      <div class="doc-type">${isFactura ? 'FACTURA' : 'COTIZACIÓN'}</div>
+      <div class="doc-type">${isFactura ? 'FACTURA' : 'COTIZACI&Oacute;N'}</div>
       <div class="doc-meta">
         ${facturaLabel(sale)}<br>
         ${sale.date} ${sale.time}<br>
@@ -2345,13 +2613,16 @@ function previsualizarFactura(sale) {
         <div class="cv">${_esc(sale.clientName)||'Consumidor Final'}</div>
       </div>
       ${sale.clientCedula
-        ? `<div><div class="cl">RNC / Cédula</div>
+        ? `<div><div class="cl">RNC / C&eacute;dula</div>
            <div class="cv">${_esc(sale.clientCedula)}</div></div>` : ''}
       <div>
         <div class="cl">Método de pago</div>
         <div class="cv" style="text-transform:capitalize">${_esc(sale.pay)}</div>
       </div>
     </div>
+    ${sale.customer_contact_name ? `<div style="margin-top:10px;padding-top:9px;border-top:1px solid #E5E7EB;font-size:11px;color:#2563EB">
+      Solicitado por: <strong>${_esc(sale.customer_contact_name)}</strong>${sale.customer_contact_role ? ` · ${_esc(sale.customer_contact_role)}` : ''}${sale.customer_contact_document ? ` · Documento: ${_esc(sale.customer_contact_document)}` : ''}
+    </div>` : ''}
   </div>
   <table>
     <thead>
