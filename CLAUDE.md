@@ -3,7 +3,7 @@
 Punto de entrada para trabajar en este proyecto. Este archivo es el **hub central**: resume lo esencial y enlaza a la documentación extendida en [`docs/`](docs/). Consulta el tema específico antes de tocar ese módulo.
 
 ## Qué es
-Aplicación **Electron v29** de punto de venta (POS) **offline** para micro-negocios de República Dominicana (tiendas de auto repuestos, etc.). Versión actual: `1.26.0` (ver `package.json`).
+Aplicación **Electron v29** de punto de venta (POS) **offline** para micro-negocios de República Dominicana (tiendas de auto repuestos, etc.). Versión actual: `1.26.1` (ver `package.json`).
 
 ## Stack y arquitectura
 - **Electron v29** — `contextIsolation: true`, `nodeIntegration: false`.

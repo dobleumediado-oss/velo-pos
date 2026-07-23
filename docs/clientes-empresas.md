@@ -2,7 +2,7 @@
 
 [← Volver a CLAUDE.md](../CLAUDE.md) · Relacionados: [Visión general](overview.md) · [Preventa y Despacho](preventa-despacho.md) · [Impresión](printing-module.md)
 
-Desde la versión 1.26.0, una cuenta de cliente puede ser una **persona** o una **empresa**. El diseño está optimizado para una sola empresa usuaria de Velo POS, uno o dos usuarios y varias terminales conectadas al mismo negocio; no introduce sucursales ni cuentas independientes por representante.
+Desde la versión 1.26.1, una cuenta de cliente puede ser una **persona** o una **empresa**. El diseño está optimizado para una sola empresa usuaria de Velo POS, uno o dos usuarios y varias terminales conectadas al mismo negocio; no introduce sucursales ni cuentas independientes por representante.
 
 ## Modelo operativo
 
@@ -80,7 +80,7 @@ Las pestañas **Personas** y **Empresas** permiten trabajar ambos grupos por sep
 ## Archivos principales
 
 - `database.js`: migración idempotente, repositorios, validaciones y snapshots.
-- `versioning.js`: migración `1.26.0` para instalaciones existentes.
+- `versioning.js`: migración `1.26.1` para instalaciones existentes.
 - `main.js` y `preload.js`: API IPC y permisos administrativos.
 - `src/js/clientes.js`: alta de persona/empresa y gestión de representantes.
 - `src/js/pos.js`, `preventa.js`, `conduce.js`, `envios.js`: selección y trazabilidad operativa.

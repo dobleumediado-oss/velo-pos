@@ -1168,7 +1168,7 @@ const MIGRATIONS = [
     }
   },
   {
-    version: '1.26.0',
+    version: '1.26.1',
     description: 'Clientes persona/empresa, representantes y snapshots documentales',
     run(db) {
       const addCol = (table, col, def) => {
@@ -1220,7 +1220,7 @@ const MIGRATIONS = [
        ['customer_contact_document',"TEXT DEFAULT ''"],['customer_contact_role',"TEXT DEFAULT ''"],
        ['customer_contact_phone',"TEXT DEFAULT ''"],['customer_contact_email',"TEXT DEFAULT ''"]]
         .forEach(([c,d]) => addCol('delivery_notes', c, d));
-      console.log('[MIGRATION 1.26.0] Empresas, representantes y snapshots habilitados');
+      console.log('[MIGRATION 1.26.1] Empresas, representantes y snapshots habilitados');
     }
   },
 ];

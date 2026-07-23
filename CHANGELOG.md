@@ -1,6 +1,6 @@
 # Historial de versiones
 
-## 1.26.0 — 2026-07-22
+## 1.26.1 — 2026-07-22
 
 ### Nuevo
 
@@ -32,7 +32,7 @@
 ### Verificación
 
 - Pruebas específicas cubren empresa, representante, documento único, selector y precios del POS, preventa, crédito, abonos, conduce, envío y persistencia histórica.
-- 284 comprobaciones automatizadas aprobadas; migraciones y estructura del instalador verificadas para Velo POS 1.26.0.
+- 284 comprobaciones automatizadas aprobadas; migraciones y estructura del instalador verificadas para Velo POS 1.26.1.
 
 ## 1.25.0 — 2026-07-22
 
