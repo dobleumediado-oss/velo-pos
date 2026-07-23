@@ -211,6 +211,8 @@ function _cndRenderActions(dn) {
 
   btns.push(`<button class="btn btn-out btn-sm" onclick="_cndPrint(${dn.id})">${svg('print')} Imprimir</button>`);
   btns.push(`<button class="btn btn-out btn-sm" onclick="_cndSavePDF(${dn.id})">${svg('pdf')} Guardar PDF</button>`);
+  btns.push(`<button class="btn btn-out btn-sm" style="color:#128C7E;border-color:#25D366"
+    onclick="_cndWhatsAppPDF(${dn.id})">${svg('pdf')} PDF por WhatsApp</button>`);
 
   if (dn.status === 'borrador') {
     btns.push(`<button class="btn btn-out btn-sm" onclick="_cndOpenForm(${dn.id})">${svg('edit')} Editar</button>`);
@@ -367,7 +369,7 @@ async function _cndDoInvoice(id) {
     requestUserId: u?.id,
   });
   if (!r.ok) { toast(r.error || 'No se pudo facturar', 'err'); return; }
-  toast(`✓ Factura #${r.saleId} generada${r.ncf ? ' · NCF ' + r.ncf : ''}`);
+  toast(`✓ ${r.documentNumberFmt || 'Factura #' + r.saleId} generada${r.ncf ? ' · NCF ' + r.ncf : ''}`);
   closeModal();
   renderConduce(document.getElementById('page'));
 }
@@ -554,7 +556,10 @@ async function _cndSave(id) {
   if (!r.ok) { toast(r.error || 'No se pudo guardar', 'err'); return; }
   toast(id ? '✓ Conduce actualizado' : `✓ Conduce ${r.data?.number || ''} creado`);
   closeModal();
-  renderConduce(document.getElementById('page'));
+  await renderConduce(document.getElementById('page'));
+  // Al crear, abrir inmediatamente el documento final para imprimir, guardar o
+  // preparar el PDF para WhatsApp sin obligar al usuario a buscarlo en la lista.
+  if (!id && r.data?.id) _cndOpenDetail(r.data.id);
 }
 
 // ── Reportes de conduce ───────────────────────
@@ -636,3 +641,36 @@ function _cndDoc(id, save) {
 }
 function _cndPrint(id)   { _cndDoc(id, false); }
 function _cndSavePDF(id) { _cndDoc(id, true);  }
+
+async function _cndWhatsAppPDF(id) {
+  const r = await window.api.conduce.getById({ id });
+  const dn = r?.data;
+  if (!dn) { toast('Conduce no encontrado', 'err'); return; }
+  if (typeof enviarDocumentoPDFWhatsApp !== 'function') {
+    toast('Envío de PDF no disponible', 'err');
+    return;
+  }
+  const customer = (DB.customers || []).find(c => Number(c.id) === Number(dn.customer_id));
+  const phone = (dn.customer_contact_phone || customer?.phone || '').replace(/\D/g, '');
+  const message = [
+    `Conduce ${dn.number} · ${CFG.biz}`,
+    `Cliente: ${dn.customer_name || 'Consumidor Final'}`,
+    `Fecha: ${fdate(dn.issue_date)}`,
+    'Adjuntamos la nota de entrega en formato PDF.',
+  ].join('\n');
+  const build = () => {
+    if (typeof printConduceDoc === 'function') return printConduceDoc(dn);
+    return printConduce({
+      id: dn.number, date: dn.issue_date, customer_name: dn.customer_name,
+      customer_rnc: dn.customer_rnc,
+      customer_contact_name: dn.customer_contact_name,
+      customer_contact_role: dn.customer_contact_role,
+      items: (dn.items || []).map(it => ({ name: it.description, qty: it.requested_qty })),
+    });
+  };
+  enviarDocumentoPDFWhatsApp(build, `Conduce-${dn.number}`, {
+    message,
+    phone,
+    clientName: dn.customer_name || 'cliente',
+  });
+}

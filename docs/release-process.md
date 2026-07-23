@@ -7,9 +7,13 @@ Empujar un tag git `v*` es un **deploy a producción a negocios cliente reales**
 ## Mecanismo
 1. Bump de `version` en `package.json`.
 2. `git tag vX.Y.Z && git push origin vX.Y.Z`.
-3. `.github/workflows/release.yml` dispara en push de tag `v*`, corre en `windows-latest`, ejecuta `npm run release:win` (`electron-builder --win --publish always`).
-4. Publica a GitHub Releases (`owner: dobleumediado-oss`, `repo: velo-pos`) — sube `Velo-POS-Setup-X.Y.Z.exe` + `latest.yml`.
-5. Las instalaciones cliente corren `electron-updater` apuntado a los releases de este repo — auto-detectan e instalan la nueva versión, sin descarga manual del dueño del negocio.
+3. `.github/workflows/release.yml` dispara en push de tag `v*`, corre pruebas en
+   `windows-latest` y compila las dos ediciones.
+4. Publica `Velo-POS-Terminal-Setup-X.Y.Z.exe` + `latest.yml`.
+5. Publica `Velo-POS-Server-Setup-X.Y.Z.exe` + `server.yml`.
+6. `electron-updater` selecciona el canal de su edición; un Servidor nunca recibe
+   por error el instalador Terminal.
+7. WinSW se descarga desde su release oficial durante el build y se valida por SHA-256.
 6. El pipeline completo (build + publish) toma ~1.5 min — rápido, no un gate largo de CI.
 
 ## Riesgo

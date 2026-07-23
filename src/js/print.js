@@ -610,7 +610,10 @@ function printAbono({ payment, customer, cajero }) {
   lines.push(tline());
   lines.push(tCenter('*** RECIBO DE ABONO ***'));
   lines.push(tline());
-  lines.push(tRow(`No.: ${String(payment.id).padStart(5,'0')}`,
+  const paymentNumber = typeof reciboLabel === 'function'
+    ? reciboLabel(payment)
+    : String(payment.id).padStart(5, '0');
+  lines.push(tRow(`No.: ${paymentNumber}`,
     `Fecha: ${(payment.created_at || today()).split('T')[0].split(' ')[0]}`));
   lines.push(tRow('Cajero:', (cajero || '').split(' ')[0]));
   lines.push(tline());
@@ -654,7 +657,10 @@ function printPagoProveedor({ payment, expense, cajero }) {
   lines.push(tline());
   lines.push(tCenter('*** PAGO A PROVEEDOR ***'));
   lines.push(tline());
-  lines.push(tRow(`No.: ${String(payment.id).padStart(5,'0')}`,
+  const paymentNumber = payment.document_number_fmt
+    || (payment.document_number ? `PPR-${String(payment.document_number).padStart(6, '0')}` : '')
+    || `PPR-${String(payment.id).padStart(6,'0')}`;
+  lines.push(tRow(`No.: ${paymentNumber}`,
     `Fecha: ${(payment.created_at || today()).split('T')[0].split(' ')[0]}`));
   lines.push(tRow('Cajero:', (cajero || '').split(' ')[0]));
   lines.push(tline());
@@ -826,6 +832,7 @@ function _sendToPrinter(lines, jobType = '', referenceId = null, isReprint = fal
 // cotización, conduce, abono, reportes, etc. sin duplicar lógica.
 // Se guarda en window.* para compartir un binding único entre todos los scripts.
 window._pdfSaveRequest = null;
+window._pdfWhatsAppRequest = null;
 window._printPreviewJob = null;
 window._printPreviewBypass = false;
 
@@ -866,6 +873,65 @@ function guardarDocumentoPDF(buildAndPrintFn, suggestedName) {
     if (window._pdfSaveRequest === request) window._pdfSaveRequest = null;
     toast(e?.message || 'No se pudo preparar el PDF', 'err');
   }
+}
+
+// Genera el mismo PDF que se imprime, lo deja temporalmente disponible y abre
+// el flujo universal de WhatsApp. WhatsApp Web/Desktop no permite a una URL
+// adjuntar archivos automáticamente; por eso se revela el PDF listo para
+// arrastrar/adjuntar, sin fingir que fue enviado.
+function enviarDocumentoPDFWhatsApp(buildAndPrintFn, suggestedName, options = {}) {
+  const request = {
+    name: suggestedName || 'documento',
+    message: options.message || '',
+    phone: options.phone || '',
+    clientName: options.clientName || 'cliente',
+  };
+  window._pdfWhatsAppRequest = request;
+
+  const finishWithHTML = (html) => {
+    if (typeof html === 'string' && html.trim() && window._pdfWhatsAppRequest === request) {
+      window._pdfWhatsAppRequest = null;
+      _prepareWhatsAppPDF(html, request);
+      return;
+    }
+    if (window._pdfWhatsAppRequest === request) window._pdfWhatsAppRequest = null;
+  };
+  try {
+    const result = typeof buildAndPrintFn === 'function' ? buildAndPrintFn() : buildAndPrintFn;
+    if (result && typeof result.then === 'function') {
+      result.then(finishWithHTML).catch(e => {
+        if (window._pdfWhatsAppRequest === request) window._pdfWhatsAppRequest = null;
+        toast(e?.message || 'No se pudo preparar el PDF', 'err');
+      });
+      return;
+    }
+    finishWithHTML(result);
+  } catch (e) {
+    if (window._pdfWhatsAppRequest === request) window._pdfWhatsAppRequest = null;
+    toast(e?.message || 'No se pudo preparar el PDF', 'err');
+  }
+}
+
+async function _prepareWhatsAppPDF(html, request) {
+  if (!window.api?.print?.toPDF) {
+    toast('Generación de PDF no disponible', 'err');
+    return;
+  }
+  const result = await window.api.print.toPDF({
+    html,
+    suggestedName: request.name,
+    temporary: true,
+  });
+  if (!result?.ok || !result.path) {
+    toast(result?.error || 'No se pudo preparar el PDF', 'err');
+    return;
+  }
+  openWhatsAppModal(
+    request.message,
+    request.phone,
+    request.clientName,
+    { attachmentPath: result.path, attachmentName: request.name }
+  );
 }
 
 async function _guardarPDF(html, suggestedName) {
@@ -963,16 +1029,62 @@ function _printPreviewClose() {
   if (typeof closeModal === 'function') closeModal();
 }
 
+function _printNeedsReportNumber(job) {
+  const category = _categoryForJobType(job?.jobType);
+  return ['reporte', 'contabilidad', 'bancos', 'caja'].includes(category);
+}
+
+function _injectPrintedDocumentNumber(html, number) {
+  if (!number || String(html).includes('data-velo-document-number=')) return html;
+  const stamp = `<div data-velo-document-number="${_escHtml(number)}"
+    style="font-family:Arial,sans-serif;font-size:9px;color:#6b7280;text-align:right;
+           max-width:100%;margin:0 0 6px;padding:0 2px">
+    Documento: <strong>${_escHtml(number)}</strong>
+  </div>`;
+  return String(html).includes('<body')
+    ? String(html).replace(/(<body[^>]*>)/i, `$1${stamp}`)
+    : stamp + String(html);
+}
+
+async function _ensurePrintDocumentNumber(job) {
+  if (!job || !_printNeedsReportNumber(job) || job.documentNumber) return job;
+  if (!window.api?.documents?.issue) return job;
+  const sourceId = `print:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  const result = await window.api.documents.issue({
+    kind: 'reporte',
+    sourceType: 'print_job',
+    sourceId,
+  });
+  if (!result?.ok || !result.data?.formatted_number) {
+    throw new Error(result?.error || 'No se pudo asignar el número del reporte');
+  }
+  job.documentNumber = result.data.formatted_number;
+  job.html = _injectPrintedDocumentNumber(job.html, job.documentNumber);
+  job.suggestedName = `${job.suggestedName || 'Reporte'}-${job.documentNumber}`;
+  return job;
+}
+
 async function _printPreviewSavePDF() {
   const job = window._printPreviewJob;
   if (!job) return;
-  await _guardarPDF(job.html, job.suggestedName);
+  try {
+    await _ensurePrintDocumentNumber(job);
+    await _guardarPDF(job.html, job.suggestedName);
+  } catch (e) {
+    toast(e?.message || 'No se pudo numerar el reporte', 'err');
+  }
 }
 
-function _printPreviewPrint() {
+async function _printPreviewPrint() {
   const job = window._printPreviewJob;
-  window._printPreviewJob = null;
   if (!job) return;
+  try {
+    await _ensurePrintDocumentNumber(job);
+  } catch (e) {
+    toast(e?.message || 'No se pudo numerar el reporte', 'err');
+    return;
+  }
+  window._printPreviewJob = null;
   if (typeof closeModal === 'function') closeModal();
   window._printPreviewBypass = true;
   try {
@@ -1021,6 +1133,12 @@ function _printTargetHere() {
 }
 
 function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = false) {
+  if (window._pdfWhatsAppRequest) {
+    const request = window._pdfWhatsAppRequest;
+    window._pdfWhatsAppRequest = null;
+    _prepareWhatsAppPDF(html, request);
+    return;
+  }
   // Intercepción: si se pidió guardar en PDF, mostrar preview y guardar desde ahí.
   if (window._pdfSaveRequest) {
     const name = window._pdfSaveRequest.name;
@@ -1209,6 +1327,12 @@ function _printViaIframe(html) {
 // ══════════════════════════════════════════════
 function printHTML(html, category = 'reporte') {
   html = _ensureUtf8HTML(html);
+  if (window._pdfWhatsAppRequest) {
+    const request = window._pdfWhatsAppRequest;
+    window._pdfWhatsAppRequest = null;
+    _prepareWhatsAppPDF(html, request);
+    return;
+  }
   // Intercepción para "Guardar PDF" (mismo mecanismo que _openPrintWindow).
   if (window._pdfSaveRequest) {
     const name = window._pdfSaveRequest.name;

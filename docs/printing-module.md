@@ -9,6 +9,8 @@ Enviado 2026-06-21/22 en 3 bloques escalonados (auditados primero, confirmando a
 - **Categorías** (`PRINT_CATEGORIES`): `ticket`, `pago`, `caja`, `contabilidad`, `bancos`, `reporte`. Cada una con su override de impresora + toggles `preview`/`autoPrint`, guardadas como JSON en `settings.print_config` (leído vía `DB.settings.print_config`, guardado vía `window.api.print.saveConfig` — solo admin/superadmin).
 - `_categoryForJobType(jobType)` mapea jobTypes térmicos (`ticket`, `abono`, `cierre`, `pago_proveedor`, `test`) → categoría. Para llamadas `printHTML` el 2º argumento ES la categoría directamente.
 - `_printDispatch()` envuelve `window.api.print.html` con un guard de en-vuelo (Set con clave `jobType:referenceId`) para evitar doble-envío por doble-clicks rápidos.
+- Los reportes reciben un correlativo `REP-XXXXXX` solo al confirmar imprimir o guardar PDF; abrir/cerrar la vista previa no consume números.
+- `enviarDocumentoPDFWhatsApp()` reutiliza exactamente el HTML de impresión, genera un PDF temporal y abre el flujo de WhatsApp con el archivo listo para adjuntar.
 - El handler `print:html` de `main.js` auto-reintenta una vez (1.2s delay) al fallar, pero **solo para impresiones silenciosas/térmicas** — los fallos no-silenciosos (diálogo) suelen ser cancelación explícita del usuario, nunca se reintentan.
 - La "Cola de impresión" intencionalmente NO es una cola persistente de worker en background — es retry + dedup-guard + un panel de reintento manual (solo ticket, vía `reimprimirVenta`). Una cola persistente real requeriría guardar el HTML completo por job en `print_jobs`; se juzgó no valer la pena.
 

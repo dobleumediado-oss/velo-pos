@@ -106,7 +106,9 @@ async function selectBusinessFromLogin(bizId, label, opts = {}) {
 
   const name = label || (nextId ? 'este negocio' : 'Negocio Principal');
   const isClientMode = CFG.connectionMode === 'client';
-  const restartText = isClientMode ? 'el servidor se reiniciará automáticamente' : 'Velo POS se reiniciará automáticamente';
+  const restartText = isClientMode
+    ? 'solo esta terminal se reiniciará; las demás continuarán trabajando'
+    : 'Velo POS se reiniciará automáticamente';
   if (!confirm(`Abrir "${name}" ahora? ${restartText}.`)) {
     return { ok: false, cancelled: true };
   }
@@ -139,12 +141,7 @@ async function selectBusinessFromLogin(bizId, label, opts = {}) {
     const r = await window.api.business.selectForLogin({ bizId: nextId || null });
     if (r?.ok) {
       if (r.relaunching) {
-        if (r.target === 'server' || isClientMode) {
-          setMsg('Servidor reiniciando. Consultando de nuevo...');
-          setTimeout(() => location.reload(), 5000);
-        } else {
-          setMsg('Reiniciando Velo POS...');
-        }
+        setMsg(isClientMode ? 'Reiniciando esta terminal...' : 'Reiniciando Velo POS...');
       } else {
         setMsg('Negocio activo.');
         location.reload();
@@ -352,7 +349,7 @@ function renderLogin() {
         style: { minHeight: '14px', marginTop: '5px', fontSize: '10px', color: 'rgba(255,255,255,.38)' }
       }, loginBiz.error
         ? `No se pudo cargar la lista: ${loginBiz.error}`
-        : (isClientMode ? 'Al cambiar, se actualiza el negocio del servidor y esta PC vuelve a consultar.' : ''))
+        : (isClientMode ? 'La selección aplica solo a esta terminal; no cambia las demás cajas.' : ''))
     );
   }
 
@@ -1718,7 +1715,7 @@ async function _runGSearch(q, resultsEl) {
              onmouseleave="this.style.background=''">
           <div>
             <div style="font-weight:600;font-size:13px">
-              ${s.numero_factura_fmt ? '#'+_escHtml(s.numero_factura_fmt) : '#'+String(s.id).padStart(5,'0')} · ${_escHtml(s.customer_name||'Consumidor Final')}
+              ${_escHtml(typeof facturaLabel === 'function' ? facturaLabel(s) : (s.numero_factura_fmt ? '#'+s.numero_factura_fmt : '#'+String(s.id).padStart(5,'0')))} · ${_escHtml(s.customer_name||'Consumidor Final')}
             </div>
             <div style="font-size:11px;color:var(--muted)">
               ${typeof fdate==='function'?fdate(fecha):fecha}

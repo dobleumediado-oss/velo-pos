@@ -53,6 +53,7 @@ function initDB(customDataDir) {
   migrateExpensesColumns();
   migratePaymentsColumns();
   migrateV2IdentityColumns();   // Fase 1 migración v2 (identidad real Equiparts)
+  migrateDocumentNumbering();   // Secuencias internas independientes por tipo documental
   migrateCustomerCompanies();   // Personas, empresas, representantes y snapshots
   ensureCheckoutOrdersSchema(db);
   seedIfEmpty();
@@ -1132,6 +1133,210 @@ function migrateV2IdentityColumns() {
   } catch (e) { console.log('[MIGRATE v2] idx ncf:', e.message); }
 }
 
+// ── Numeración documental interna ──────────────────────────────────────────
+// El ID de una fila es una llave técnica, no el número que debe ver el cliente.
+// Cada familia documental mantiene su propio correlativo; los NCF continúan
+// siendo administrados exclusivamente por ncf_sequences (rangos DGII).
+const DOCUMENT_SEQUENCE_DEFAULTS = {
+  factura_contado: { prefix: 'FAC', pad: 6 },
+  factura_credito: { prefix: 'FCR', pad: 6 },
+  cotizacion:      { prefix: 'COT', pad: 6 },
+  nota_credito:    { prefix: 'NCR', pad: 6 },
+  abono:           { prefix: 'ABO', pad: 6 },
+  recibo:          { prefix: 'REC', pad: 6 },
+  pago_proveedor:  { prefix: 'PPR', pad: 6 },
+  conduce:         { prefix: 'CON', pad: 6 },
+  reporte:         { prefix: 'REP', pad: 6 },
+};
+
+function documentKindForSale(type, paymentMethod) {
+  if (type === 'cotizacion') return 'cotizacion';
+  if (type === 'devolucion') return 'nota_credito';
+  return String(paymentMethod || '').toLowerCase() === 'credito'
+    ? 'factura_credito'
+    : 'factura_contado';
+}
+
+function _issueDocumentNumber(kind, sourceType, sourceId) {
+  const cfg = DOCUMENT_SEQUENCE_DEFAULTS[kind];
+  if (!cfg) throw new Error(`Tipo documental no soportado: ${kind}`);
+  const source = String(sourceType || '').trim();
+  const sourceKey = sourceId == null ? '' : String(sourceId);
+  if (source && sourceKey) {
+    const existing = db.prepare(`
+      SELECT kind,sequence_number,formatted_number
+      FROM document_issues
+      WHERE kind=? AND source_type=? AND source_id=?
+    `).get(kind, source, sourceKey);
+    if (existing) return existing;
+  }
+
+  db.prepare(`
+    INSERT INTO document_sequences(kind,prefix,current,pad_length)
+    VALUES(?,?,0,?)
+    ON CONFLICT(kind) DO NOTHING
+  `).run(kind, cfg.prefix, cfg.pad);
+  const seq = db.prepare('SELECT * FROM document_sequences WHERE kind=?').get(kind);
+  const next = Number(seq.current || 0) + 1;
+  db.prepare(`
+    UPDATE document_sequences
+    SET current=?,updated_at=datetime('now','localtime')
+    WHERE kind=?
+  `).run(next, kind);
+  const formatted = `${seq.prefix}-${String(next).padStart(Number(seq.pad_length) || cfg.pad, '0')}`;
+  db.prepare(`
+    INSERT INTO document_issues(
+      kind,sequence_number,formatted_number,source_type,source_id,status
+    ) VALUES(?,?,?,?,?,'active')
+  `).run(kind, next, formatted, source, sourceKey);
+  return { kind, sequence_number: next, formatted_number: formatted };
+}
+
+function migrateDocumentNumbering() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS document_sequences (
+      kind       TEXT PRIMARY KEY,
+      prefix     TEXT NOT NULL,
+      current    INTEGER NOT NULL DEFAULT 0,
+      pad_length INTEGER NOT NULL DEFAULT 6,
+      updated_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE TABLE IF NOT EXISTS document_issues (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind             TEXT NOT NULL,
+      sequence_number  INTEGER NOT NULL,
+      formatted_number TEXT NOT NULL,
+      source_type      TEXT DEFAULT '',
+      source_id        TEXT DEFAULT '',
+      status           TEXT DEFAULT 'active' CHECK(status IN ('active','cancelled','deleted')),
+      created_at       TEXT DEFAULT (datetime('now','localtime')),
+      UNIQUE(kind, sequence_number),
+      UNIQUE(kind, source_type, source_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_document_issues_source
+      ON document_issues(source_type,source_id);
+  `);
+  for (const [kind, cfg] of Object.entries(DOCUMENT_SEQUENCE_DEFAULTS)) {
+    db.prepare(`
+      INSERT INTO document_sequences(kind,prefix,current,pad_length)
+      VALUES(?,?,0,?)
+      ON CONFLICT(kind) DO NOTHING
+    `).run(kind, cfg.prefix, cfg.pad);
+  }
+
+  const add = (table, col, def) => {
+    if (!tableExists(table)) return;
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+    if (!cols.includes(col)) db.prepare(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`).run();
+  };
+  [['sales','document_kind',"TEXT DEFAULT ''"],
+   ['sales','document_number','INTEGER'],
+   ['sales','document_number_fmt',"TEXT DEFAULT ''"],
+   ['sales','receipt_document_number','INTEGER'],
+   ['sales','receipt_document_number_fmt',"TEXT DEFAULT ''"],
+   ['payments','document_kind',"TEXT DEFAULT ''"],
+   ['payments','document_number','INTEGER'],
+   ['payments','document_number_fmt',"TEXT DEFAULT ''"],
+   ['expense_payments','document_kind',"TEXT DEFAULT ''"],
+   ['expense_payments','document_number','INTEGER'],
+   ['expense_payments','document_number_fmt',"TEXT DEFAULT ''"]]
+    .forEach(([table, col, def]) => add(table, col, def));
+
+  // Solo numeramos registros nativos. Los importados conservan exactamente el
+  // número histórico que traían del sistema anterior.
+  const tx = db.transaction(() => {
+    const nativeSales = db.prepare(`
+      SELECT id,type,payment_method
+      FROM sales
+      WHERE COALESCE(import_source,'')=''
+        AND COALESCE(document_number_fmt,'')=''
+      ORDER BY id
+    `).all();
+    for (const sale of nativeSales) {
+      const kind = documentKindForSale(sale.type, sale.payment_method);
+      const issued = _issueDocumentNumber(kind, 'sale', sale.id);
+      db.prepare(`
+        UPDATE sales SET document_kind=?,document_number=?,document_number_fmt=?
+        WHERE id=?
+      `).run(kind, issued.sequence_number, issued.formatted_number, sale.id);
+    }
+
+    const nativeReceipts = db.prepare(`
+      SELECT id FROM sales
+      WHERE COALESCE(import_source,'')=''
+        AND type='factura'
+        AND LOWER(COALESCE(payment_method,''))!='credito'
+        AND COALESCE(receipt_document_number_fmt,'')=''
+      ORDER BY id
+    `).all();
+    for (const sale of nativeReceipts) {
+      const issued = _issueDocumentNumber('recibo', 'sale_receipt', sale.id);
+      db.prepare(`
+        UPDATE sales SET receipt_document_number=?,receipt_document_number_fmt=?
+        WHERE id=?
+      `).run(issued.sequence_number, issued.formatted_number, sale.id);
+    }
+
+    const nativePayments = db.prepare(`
+      SELECT id FROM payments
+      WHERE COALESCE(import_source,'')=''
+        AND COALESCE(document_number_fmt,'')=''
+      ORDER BY id
+    `).all();
+    for (const payment of nativePayments) {
+      const issued = _issueDocumentNumber('abono', 'payment', payment.id);
+      db.prepare(`
+        UPDATE payments SET document_kind='abono',document_number=?,document_number_fmt=?,
+          numero_recibo=COALESCE(numero_recibo,?)
+        WHERE id=?
+      `).run(issued.sequence_number, issued.formatted_number, issued.sequence_number, payment.id);
+    }
+
+    const supplierPayments = db.prepare(`
+      SELECT id FROM expense_payments
+      WHERE COALESCE(document_number_fmt,'')=''
+      ORDER BY id
+    `).all();
+    for (const payment of supplierPayments) {
+      const issued = _issueDocumentNumber('pago_proveedor', 'expense_payment', payment.id);
+      db.prepare(`
+        UPDATE expense_payments
+        SET document_kind='pago_proveedor',document_number=?,document_number_fmt=?
+        WHERE id=?
+      `).run(issued.sequence_number, issued.formatted_number, payment.id);
+    }
+  });
+  tx();
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_sales_document_number
+      ON sales(document_kind,document_number);
+    CREATE INDEX IF NOT EXISTS idx_payments_document_number
+      ON payments(document_kind,document_number);
+    CREATE INDEX IF NOT EXISTS idx_expense_payments_document_number
+      ON expense_payments(document_kind,document_number);
+  `);
+}
+
+const documentNumberRepo = {
+  issue(kind, sourceType = '', sourceId = '') {
+    return db.transaction(() => _issueDocumentNumber(kind, sourceType, sourceId))();
+  },
+  get(kind, sourceType, sourceId) {
+    return db.prepare(`
+      SELECT kind,sequence_number,formatted_number,status,created_at
+      FROM document_issues WHERE kind=? AND source_type=? AND source_id=?
+    `).get(kind, String(sourceType || ''), String(sourceId ?? '')) || null;
+  },
+  markStatus(kind, sourceType, sourceId, status) {
+    if (!['active','cancelled','deleted'].includes(status)) throw new Error('Estado documental inválido');
+    db.prepare(`
+      UPDATE document_issues SET status=?
+      WHERE kind=? AND source_type=? AND source_id=?
+    `).run(status, kind, String(sourceType || ''), String(sourceId ?? ''));
+  },
+};
+
 function migrateECFColumns() {
   const cols = ['ecf_status', 'ecf_qr', 'ecf_pdf', 'ecf_sent_at'];
   cols.forEach(col => {
@@ -1925,6 +2130,16 @@ const customersRepo = {
         contact?.phone || '', contact?.email || ''
       );
       const paymentId = payInsert.lastInsertRowid;
+      const documentIssue = _issueDocumentNumber('abono', 'payment', paymentId);
+      db.prepare(`
+        UPDATE payments
+        SET document_kind='abono',document_number=?,document_number_fmt=?,
+            numero_recibo=COALESCE(numero_recibo,?)
+        WHERE id=?
+      `).run(
+        documentIssue.sequence_number, documentIssue.formatted_number,
+        documentIssue.sequence_number, paymentId
+      );
       db.prepare(`
         UPDATE customers SET balance=?,credit_due=?,updated_at=datetime('now') WHERE id=?
       `).run(after, after <= 0 ? null : cust.credit_due, customerId);
@@ -1937,6 +2152,10 @@ const customersRepo = {
       }
       return {
         before, after, amount, paymentId,
+        document_kind: 'abono',
+        document_number: documentIssue.sequence_number,
+        document_number_fmt: documentIssue.formatted_number,
+        numero_recibo: documentIssue.sequence_number,
         customer_contact_id: contact?.id || null,
         customer_contact_name: contact?.name || '',
         customer_contact_document: contact?.document || '',
@@ -1953,6 +2172,7 @@ const customersRepo = {
     // Alias con prefijo sale_ para no colisionar con columnas de payments.
     return db.prepare(`
       SELECT p.*,
+             s.document_number_fmt AS sale_document_number_fmt,
              s.numero_factura     AS sale_numero_factura,
              s.numero_factura_fmt AS sale_numero_factura_fmt,
              s.ncf                AS sale_ncf
@@ -2141,6 +2361,14 @@ const salesRepo = {
   // Transacción completa de venta
   create({ session, customer, items, payment, user, type = 'factura', trustedCustomerSnapshot = false }) {
     const createSaleTx = db.transaction(() => {
+      if (!['factura', 'cotizacion'].includes(type)) {
+        throw new Error('Tipo de documento de venta no soportado');
+      }
+      payment = { ...(payment || {}) };
+      // Una cotización es un documento comercial: no cobra, no crea CxC, no
+      // utiliza una cuenta financiera y no depende del estado de la caja.
+      if (type === 'cotizacion') payment.method = 'cotizacion';
+
       // Para clientes registrados, la base de datos es la autoridad. El renderer
       // solo elige la cuenta y, opcionalmente, uno de sus representantes.
       const requestedCustomer = customer || {};
@@ -2209,8 +2437,9 @@ const salesRepo = {
 
       // ¿Esta venta afecta inventario? (descuenta stock). Una sola fuente de
       // verdad para validación Y descuento, así nunca quedan asimétricas.
-      // Factura y venta a crédito mueven inventario; la cotización no.
-      const afectaStock = (type === 'factura' || payment.method === 'credito');
+      // Solo la factura mueve inventario. "Crédito" es una forma de pago de la
+      // factura, nunca una razón para convertir una cotización en movimiento.
+      const afectaStock = type === 'factura';
       const headerTaxPct = type === 'factura' ? configuredTaxPct() : 0;
       const saleItems = [];
       const requestedByProduct = new Map();
@@ -2272,7 +2501,7 @@ const salesRepo = {
       const taxPct = headerTaxPct;
 
       // 3. Validar crédito
-      if (payment.method === 'credito' && customer.id !== 1) {
+      if (type === 'factura' && payment.method === 'credito' && customer.id !== 1) {
         const cust = db.prepare('SELECT balance,credit_limit,status FROM customers WHERE id=?').get(customer.id);
         if (!cust) throw new Error('Cliente no encontrado');
         if (cust.status === 'bloqueado') {
@@ -2337,8 +2566,11 @@ const salesRepo = {
       if (!['DOP', 'USD'].includes(paymentCurrency)) {
         throw new Error(`Moneda de cuenta no soportada: ${paymentCurrency}`);
       }
-      const baseAccountAmount = method === 'mixto'
-        ? round2(payment.mixCard || 0) : (method === 'credito' ? 0 : total);
+      const baseAccountAmount = type !== 'factura'
+        ? 0
+        : (method === 'mixto'
+          ? round2(payment.mixCard || 0)
+          : (method === 'credito' ? 0 : total));
       let exchangeRate = 1;
       let accountAmount = round2(baseAccountAmount);
       if (paymentCurrency === 'USD' && baseAccountAmount > 0) {
@@ -2404,6 +2636,23 @@ const salesRepo = {
         card_brand: cardBrand, card_last4: cardLast4, payment_reference: paymentReference,
       });
       const saleId = saleR.lastInsertRowid;
+      const documentKind = documentKindForSale(type, method);
+      const documentIssue = _issueDocumentNumber(documentKind, 'sale', saleId);
+      const receiptIssue = type === 'factura' && method !== 'credito'
+        ? _issueDocumentNumber('recibo', 'sale_receipt', saleId)
+        : null;
+      db.prepare(`
+        UPDATE sales
+        SET document_kind=?,document_number=?,document_number_fmt=?,
+            receipt_document_number=?,receipt_document_number_fmt=?
+        WHERE id=?
+      `).run(
+        documentKind, documentIssue.sequence_number,
+        documentIssue.formatted_number,
+        receiptIssue?.sequence_number || null,
+        receiptIssue?.formatted_number || '',
+        saleId
+      );
 
       // 4b. Generar NCF — SOLO facturas, con fiscal activo Y una secuencia registrada.
       // El comprobante NUNCA se fabrica con un contador interno: proviene
@@ -2461,7 +2710,7 @@ const salesRepo = {
       }
 
       // 7. Actualizar crédito del cliente
-      if (payment.method === 'credito' && customer.id !== 1) {
+      if (type === 'factura' && payment.method === 'credito' && customer.id !== 1) {
         const ci = db.prepare('SELECT balance,credit_days FROM customers WHERE id=?').get(customer.id);
         const newBalance = (ci.balance || 0) + total;
         const dueDate = ci.credit_due && ci.credit_due >= todayStr()
@@ -2473,7 +2722,7 @@ const salesRepo = {
       }
 
       // 8. Movimiento de caja
-      if (session?.id && payment.method !== 'credito') {
+      if (type === 'factura' && session?.id && payment.method !== 'credito') {
         if (payment.method === 'mixto') {
           // Registrar dos movimientos separados para pago mixto
           if ((payment.mixEfec || 0) > 0) {
@@ -2509,7 +2758,7 @@ const salesRepo = {
       // El dinero que entra por transferencia/tarjeta se registra como ingreso en
       // esa cuenta operativa → su balance sube y queda el movimiento trazable.
       // No-fatal: un problema aquí nunca debe abortar una venta ya cobrada.
-      if (finAcctId && method !== 'credito') {
+      if (type === 'factura' && finAcctId && method !== 'credito') {
         if (accountAmount > 0.005) {
           try {
             financialAccountsRepo.addMovement({
@@ -2526,16 +2775,21 @@ const salesRepo = {
       }
 
       // 9. Actualizar totales de sesión
-      if (session?.id) {
+      if (type === 'factura' && session?.id) {
         cashRepo.updateTotals(session.id, total);
       }
 
       // 10. Auditoría
-      audit(user.id, user.name, 'venta_creada', 'sales', saleId,
-            `Total: ${total} | Método: ${method} | Moneda cuenta: ${paymentCurrency} | Monto cuenta: ${accountAmount} | Items: ${items.length}`);
+      audit(user.id, user.name, type === 'cotizacion' ? 'cotizacion_creada' : 'venta_creada', 'sales', saleId,
+            `Documento: ${documentIssue.formatted_number} | Total: ${total} | Método: ${method} | Moneda cuenta: ${paymentCurrency} | Monto cuenta: ${accountAmount} | Items: ${items.length}`);
 
       return {
         saleId, total, subtotal, taxAmt, discAmt, taxPct, ncf,
+        documentKind,
+        documentNumber: documentIssue.sequence_number,
+        documentNumberFmt: documentIssue.formatted_number,
+        receiptDocumentNumber: receiptIssue?.sequence_number || null,
+        receiptDocumentNumberFmt: receiptIssue?.formatted_number || '',
         financialAccountId: finAcctId,
         paymentCurrency, exchangeRate, accountAmount, salespersonId,
         cardBrand, cardLast4, paymentReference,
@@ -2566,7 +2820,8 @@ const salesRepo = {
       returnable_qty: Math.max(0, (item.qty || 0) - (item.returned_qty || 0)),
     }));
     const payments = db.prepare(`
-      SELECT id, numero_recibo, amount, method, note, balance_before, balance_after, cajero, created_at
+      SELECT id,document_kind,document_number,document_number_fmt,numero_recibo,
+             amount,method,note,balance_before,balance_after,cajero,created_at
       FROM payments
       WHERE sale_id=?
       ORDER BY created_at DESC, id DESC
@@ -2576,23 +2831,28 @@ const salesRepo = {
       ? round2(payments.reduce((sum, p) => sum + (p.amount || 0), 0))
       : null;
     sale.receipt_numbers = payments
-      .map(p => p.numero_recibo || p.id)
+      .map(p => p.document_number_fmt || p.numero_recibo || p.id)
       .filter(Boolean)
       .join(', ');
     if (payments.length) {
-      sale.last_receipt_number = payments[0].numero_recibo || payments[0].id;
+      sale.last_receipt_number = payments[0].document_number_fmt || payments[0].numero_recibo || payments[0].id;
       sale.last_payment_date = payments[0].created_at;
       sale.balance_after_payment = payments[0].balance_after;
     } else if ((sale.payment_method || '').toLowerCase() !== 'credito' && sale.type === 'factura') {
       sale.balance_after_payment = 0;
+      sale.last_receipt_number = sale.receipt_document_number_fmt || '';
     }
     // Para notas de crédito (devoluciones con B04): adjuntar el NCF y el número
     // real de la factura original que esta nota modifica, para poder mostrarlos
     // en la impresión (la referencia "Ref. venta original" usa el número real,
     // no el id interno).
     if (sale.type === 'devolucion' && sale.original_sale_id) {
-      const orig = db.prepare('SELECT ncf, numero_factura, numero_factura_fmt FROM sales WHERE id=?').get(sale.original_sale_id);
+      const orig = db.prepare(`
+        SELECT ncf,document_number_fmt,numero_factura,numero_factura_fmt
+        FROM sales WHERE id=?
+      `).get(sale.original_sale_id);
       sale.modifies_ncf = (orig && orig.ncf) ? orig.ncf : '';
+      sale.original_document_number_fmt = orig ? orig.document_number_fmt : '';
       sale.original_numero_factura     = orig ? orig.numero_factura     : null;
       sale.original_numero_factura_fmt = orig ? orig.numero_factura_fmt : null;
     }
@@ -2725,6 +2985,7 @@ const salesRepo = {
         AND (
           s.id = ?
           OR s.numero_factura = ?
+          OR lower(s.document_number_fmt) LIKE ?
           OR lower(s.numero_factura_fmt) LIKE ?
           OR lower(s.ncf)           LIKE ?
           OR lower(s.customer_name) LIKE ?
@@ -2746,7 +3007,7 @@ const salesRepo = {
     `).all(
       Number.isFinite(idNum) ? idNum : -1,
       Number.isFinite(facNum) ? facNum : -1,
-      likeNoHash, like, like, like, like, like, like, like, like, like, like, like, like, likeNoHash
+      likeNoHash, likeNoHash, like, like, like, like, like, like, like, like, like, like, like, like, likeNoHash
     );
 
     // Filtro fino con normalización de tildes/Ñ y dígitos con guarda.
@@ -2757,6 +3018,8 @@ const salesRepo = {
       String(s.id) === term ||
       String(s.id).includes(term) ||
       (Number.isFinite(facNum) && s.numero_factura === facNum) ||
+      matchText(s.document_number_fmt) ||
+      matchDigits(s.document_number_fmt) ||
       matchText(s.numero_factura_fmt) ||
       matchDigits(s.numero_factura_fmt) ||
       matchText(s.ncf) ||
@@ -2778,6 +3041,65 @@ const salesRepo = {
     return filtered.slice(0, limit).map(({ _cust_phone, _recibos, ...rest }) => rest);
   },
 
+  // Las cotizaciones no se "anulan": se eliminan de la operación porque nunca
+  // debieron afectar caja, inventario ni CxC. Se conserva únicamente la huella
+  // de auditoría y el correlativo queda marcado como eliminado (no se reutiliza).
+  deleteQuote(id, userId, userName) {
+    const tx = db.transaction(() => {
+      const sale = db.prepare('SELECT * FROM sales WHERE id=?').get(id);
+      if (!sale) throw new Error('Cotización no encontrada');
+      if (sale.type !== 'cotizacion') throw new Error('Solo se pueden eliminar cotizaciones');
+
+      // Reparación de cotizaciones antiguas creadas por la ruta financiera.
+      const items = db.prepare('SELECT * FROM sale_items WHERE sale_id=?').all(id);
+      const movedStock = db.prepare(`
+        SELECT COUNT(*) AS c FROM inventory_movements
+        WHERE sale_id=? AND type='salida'
+      `).get(id)?.c || 0;
+      if (movedStock > 0) {
+        for (const item of items) {
+          productsRepo.adjustStock(
+            item.product_id, item.qty, 'devolucion',
+            `Corrección al eliminar cotización ${sale.document_number_fmt || '#' + id}`,
+            id, userId
+          );
+        }
+      }
+
+      if (sale.payment_method === 'credito' && sale.customer_id && sale.customer_id !== 1) {
+        const customer = db.prepare('SELECT balance FROM customers WHERE id=?').get(sale.customer_id);
+        const newBalance = Math.max(0, round2((customer?.balance || 0) - (sale.total || 0)));
+        db.prepare(`
+          UPDATE customers
+          SET balance=?,credit_due=CASE WHEN ?<=0 THEN NULL ELSE credit_due END,
+              updated_at=datetime('now','localtime')
+          WHERE id=?
+        `).run(newBalance, newBalance, sale.customer_id);
+      }
+
+      const removedCashMovements = db.prepare(
+        "DELETE FROM cash_movements WHERE type='venta' AND reference_id=?"
+      ).run(id).changes;
+      if (sale.cash_session_id && removedCashMovements > 0) {
+        db.prepare(`
+          UPDATE cash_sessions
+          SET sales_total=MAX(0,sales_total-?),sales_count=MAX(0,sales_count-1)
+          WHERE id=?
+        `).run(sale.total || 0, sale.cash_session_id);
+      }
+      db.prepare(`
+        UPDATE document_issues SET status='deleted'
+        WHERE kind='cotizacion' AND source_type='sale' AND source_id=?
+      `).run(String(id));
+      db.prepare('DELETE FROM sale_items WHERE sale_id=?').run(id);
+      db.prepare('DELETE FROM sales WHERE id=?').run(id);
+      audit(userId, userName, 'cotizacion_eliminada', 'sales', id,
+        `${sale.document_number_fmt || '#' + id} · ${sale.customer_name || 'Consumidor Final'} · Total ${sale.total || 0}`);
+      return { id, documentNumber: sale.document_number_fmt || '', total: sale.total || 0 };
+    });
+    return tx();
+  },
+
   cancel(id, reason, userId, userName) {
     const sale = db.prepare('SELECT * FROM sales WHERE id=?').get(id);
     if (!sale) throw new Error('Venta no encontrada');
@@ -2790,6 +3112,10 @@ const salesRepo = {
       db.prepare(`
         UPDATE sales SET status='cancelled',cancelled_at=datetime('now'),cancel_reason=? WHERE id=?
       `).run(reason, id);
+      db.prepare(`
+        UPDATE document_issues SET status='cancelled'
+        WHERE source_type IN ('sale','sale_receipt') AND source_id=?
+      `).run(String(id));
       if (tableExists('checkout_orders')) {
         db.prepare(`
           UPDATE checkout_orders
@@ -2916,7 +3242,7 @@ const reportsRepo = {
              SUM(total) as total, SUM(tax_amt) as tax,
              SUM(discount_amt) as discount
       FROM sales
-      WHERE status='completed' AND type != 'devolucion'
+      WHERE status='completed' AND type='factura'
         ${hf} AND ${f.withoutAlias.sql}
       GROUP BY payment_method
     `).all(...f.withoutAlias.params);
@@ -2929,7 +3255,7 @@ const reportsRepo = {
              SUM(si.qty) as total_units
       FROM sale_items si
       JOIN sales s ON si.sale_id = s.id
-      WHERE s.status='completed' AND s.type != 'devolucion'
+      WHERE s.status='completed' AND s.type='factura'
         ${hfs} AND ${f.withAlias.sql}
     `).get(...f.withAlias.params);
 
@@ -2945,7 +3271,7 @@ const reportsRepo = {
     const discData = db.prepare(`
       SELECT SUM(discount_amt) as total_discount
       FROM sales
-      WHERE status='completed' AND type != 'devolucion'
+      WHERE status='completed' AND type='factura'
         ${hf} AND ${f.withoutAlias.sql}
     `).get(...f.withoutAlias.params);
 
@@ -2953,7 +3279,7 @@ const reportsRepo = {
     const taxData = db.prepare(`
       SELECT SUM(tax_amt) as total_tax
       FROM sales
-      WHERE status='completed' AND type != 'devolucion'
+      WHERE status='completed' AND type='factura'
         ${hf} AND ${f.withoutAlias.sql}
     `).get(...f.withoutAlias.params);
 
@@ -2966,7 +3292,7 @@ const reportsRepo = {
              SUM(COALESCE(si.net_subtotal, si.unit_price * si.qty) - (si.unit_cost * si.qty)) as total_profit
       FROM sale_items si
       JOIN sales s ON si.sale_id = s.id
-      WHERE s.status='completed' AND s.type != 'devolucion'
+      WHERE s.status='completed' AND s.type='factura'
         ${hfs} AND ${f.withAlias.sql}
       GROUP BY si.product_id
       ORDER BY total_rev DESC LIMIT 10
@@ -2980,7 +3306,7 @@ const reportsRepo = {
              SUM(si.unit_cost * si.qty) as cost
       FROM sales s
       LEFT JOIN sale_items si ON s.id = si.sale_id
-      WHERE s.status='completed' AND s.type != 'devolucion'
+      WHERE s.status='completed' AND s.type='factura'
         ${hfs} AND ${f.withAlias.sql}
       GROUP BY day
       ORDER BY day ASC
@@ -3004,7 +3330,7 @@ const reportsRepo = {
         SUM(CASE WHEN payment_method != 'credito' THEN total ELSE 0 END) as ventas_contado,
         SUM(CASE WHEN payment_method  = 'credito' THEN total ELSE 0 END) as ventas_credito
       FROM sales
-      WHERE status='completed' AND type != 'devolucion'
+      WHERE status='completed' AND type='factura'
         ${hf} AND ${f.withoutAlias.sql}
     `).get(...f.withoutAlias.params);
 
@@ -3144,6 +3470,7 @@ const reportsRepo = {
              c.rnc  AS customer_rnc,
              s.total AS sale_total,
              s.created_at AS sale_created_at,
+             s.document_number_fmt AS sale_document_number_fmt,
              s.numero_factura     AS sale_numero_factura,
              s.numero_factura_fmt AS sale_numero_factura_fmt,
              s.ncf                AS sale_ncf,
@@ -3246,7 +3573,7 @@ const reportsRepo = {
              SUM(si.unit_cost * si.qty) as cost
       FROM sales s
       LEFT JOIN sale_items si ON s.id = si.sale_id
-      WHERE s.status='completed' AND s.type != 'devolucion'
+      WHERE s.status='completed' AND s.type='factura'
         AND date(s.created_at) >= date('now','-'||?||' days','localtime')
         AND (? = 1 OR s.cajero != 'Importación histórica')
       GROUP BY day
@@ -3261,7 +3588,7 @@ const reportsRepo = {
              SUM(s.total) as total,
              SUM(s.tax_amt) as tax
       FROM sales s
-      WHERE s.status='completed' AND s.type != 'devolucion'
+      WHERE s.status='completed' AND s.type='factura'
         AND date(s.created_at) >= date('now','-'||?||' months','localtime')
         AND (? = 1 OR s.cajero != 'Importación histórica')
       GROUP BY month
@@ -3412,6 +3739,12 @@ const returnsRepo = {
         originalSaleId
       );
       const returnId = retR.lastInsertRowid;
+      const returnDocument = _issueDocumentNumber('nota_credito', 'sale', returnId);
+      db.prepare(`
+        UPDATE sales
+        SET document_kind='nota_credito',document_number=?,document_number_fmt=?
+        WHERE id=?
+      `).run(returnDocument.sequence_number, returnDocument.formatted_number, returnId);
       const returnCurrency = String(original.payment_currency || 'DOP').toUpperCase();
       const returnRate = returnCurrency === 'USD' ? Number(original.exchange_rate || 0) : 1;
       const returnAccountAmount = returnCurrency === 'USD' && returnRate > 0
@@ -3539,7 +3872,14 @@ const returnsRepo = {
       audit(user.id, user.name, 'devolucion_procesada', 'sales', returnId,
         `Venta original #${originalSaleId} | Total devuelto: ${total} | Items: ${preparedReturnItems.length}${ncfNota ? ' | NC B04: ' + ncfNota : ''}`);
 
-      return { returnId, total, subtotal, taxAmt, overpayment, ncf: ncfNota, modifies_ncf: ncfNota ? String(original.ncf).trim() : '' };
+      return {
+        returnId, total, subtotal, taxAmt, overpayment,
+        documentKind: 'nota_credito',
+        documentNumber: returnDocument.sequence_number,
+        documentNumberFmt: returnDocument.formatted_number,
+        ncf: ncfNota,
+        modifies_ncf: ncfNota ? String(original.ncf).trim() : '',
+      };
     });
 
     return createReturnTx();
@@ -3612,6 +3952,10 @@ const returnsRepo = {
 
       db.prepare(`UPDATE sales SET status='cancelled',cancelled_at=datetime('now'),cancel_reason=? WHERE id=?`)
         .run(reason.trim(), returnId);
+      db.prepare(`
+        UPDATE document_issues SET status='cancelled'
+        WHERE kind='nota_credito' AND source_type='sale' AND source_id=?
+      `).run(String(returnId));
 
       // Recalcular si la factura original sigue totalmente devuelta por otras notas
       // de crédito vigentes. Si no, vuelve a estar disponible en Devoluciones.
@@ -4118,6 +4462,13 @@ const expensesRepo = {
         cash_session_id,cash_movement_id,reference,notes,user_id)
         VALUES(?,?,?,?,?,?,?,?,?)`).run(expenseId, amount, payment_method||'efectivo',
         payment_source||'caja', cash_session_id||null, cashMovementId, reference||null, notes||null, userId);
+      const paymentId = payRow.lastInsertRowid;
+      const documentIssue = _issueDocumentNumber('pago_proveedor', 'expense_payment', paymentId);
+      db.prepare(`
+        UPDATE expense_payments
+        SET document_kind='pago_proveedor',document_number=?,document_number_fmt=?
+        WHERE id=?
+      `).run(documentIssue.sequence_number, documentIssue.formatted_number, paymentId);
 
       // Actualizar gasto
       const newPaid = expense.paid_amount + amount;
@@ -4132,7 +4483,12 @@ const expensesRepo = {
 
       audit(userId, userName||'', 'gasto_pagado', 'expenses', expenseId,
         `Pago: RD$${amount} | Método: ${payment_method} | Estado: ${newStatus}${expense.approved_by ? '' : ' | Aprobado al pagar'}`);
-      return { ok: true, newStatus, newPaid, cashMovementId, paymentId: payRow.lastInsertRowid };
+      return {
+        ok: true, newStatus, newPaid, cashMovementId, paymentId,
+        documentKind: 'pago_proveedor',
+        documentNumber: documentIssue.sequence_number,
+        documentNumberFmt: documentIssue.formatted_number,
+      };
     })();
   },
 
@@ -4176,6 +4532,13 @@ const expensesRepo = {
       // Anular pagos activos
       db.prepare("UPDATE expense_payments SET status='anulado',cancel_reason=?,cancelled_by=? WHERE expense_id=? AND status='pagado'")
         .run(reason, userId, expenseId);
+      db.prepare(`
+        UPDATE document_issues SET status='cancelled'
+        WHERE kind='pago_proveedor' AND source_type='expense_payment'
+          AND source_id IN (
+            SELECT CAST(id AS TEXT) FROM expense_payments WHERE expense_id=?
+          )
+      `).run(expenseId);
       db.prepare("UPDATE expenses SET status=?,cancel_reason=?,cancelled_by=?,cancelled_at=datetime('now'),updated_at=datetime('now') WHERE id=?")
         .run('anulado', reason, userId, expenseId);
       audit(userId, userName, 'gasto_anulado', 'expenses', expenseId, reason);
@@ -6021,17 +6384,24 @@ const fixedAssetsRepo = {
 // los handlers (main.js). Arquitectura single-almacén: inventario global.
 // ══════════════════════════════════════════════
 const conduceRepo = {
-  // Próximo número correlativo: CD-00001, CD-00002, ...
+  _syncSequence() {
+    const existingMax = db.prepare('SELECT number FROM delivery_notes ORDER BY id').all()
+      .reduce((max, row) => {
+        const n = parseInt(String(row.number || '').replace(/[^\d]/g, ''), 10);
+        return Number.isFinite(n) ? Math.max(max, n) : max;
+      }, 0);
+    db.prepare(`
+      UPDATE document_sequences
+      SET current=MAX(current,?),updated_at=datetime('now','localtime')
+      WHERE kind='conduce'
+    `).run(existingMax);
+  },
+
+  // Vista previa del próximo correlativo; no consume el número hasta guardar.
   generateNumber() {
-    const row = db.prepare(
-      "SELECT number FROM delivery_notes WHERE number LIKE 'CD-%' ORDER BY id DESC LIMIT 1"
-    ).get();
-    let next = 1;
-    if (row && row.number) {
-      const n = parseInt(String(row.number).replace(/[^\d]/g, ''), 10);
-      if (Number.isFinite(n)) next = n + 1;
-    }
-    return 'CD-' + String(next).padStart(5, '0');
+    this._syncSequence();
+    const seq = db.prepare("SELECT * FROM document_sequences WHERE kind='conduce'").get();
+    return `${seq.prefix}-${String(Number(seq.current || 0) + 1).padStart(Number(seq.pad_length) || 6, '0')}`;
   },
 
   // Transiciones de estado permitidas (documentales — el conduce no mueve stock).
@@ -6070,8 +6440,11 @@ const conduceRepo = {
   },
 
   create({ header = {}, items = [], userId = null, trustedSnapshot = false }) {
-    const number = header.number || this.generateNumber();
     const tx = db.transaction(() => {
+      this._syncSequence();
+      const pendingKey = `pending:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+      const issued = _issueDocumentNumber('conduce', 'delivery_note_pending', pendingKey);
+      const number = issued.formatted_number;
       let account = null;
       if (header.customer_id && !(trustedSnapshot && header.preserve_contact_snapshot)) {
         account = db.prepare('SELECT * FROM customers WHERE id=? AND active=1').get(header.customer_id);
@@ -6116,6 +6489,11 @@ const conduceRepo = {
         header.vehicle_plate || '', header.notes || '', header.invoice_id || null, userId
       );
       const id = r.lastInsertRowid;
+      db.prepare(`
+        UPDATE document_issues
+        SET source_type='delivery_note',source_id=?
+        WHERE kind='conduce' AND source_type='delivery_note_pending' AND source_id=?
+      `).run(String(id), pendingKey);
       this._insertItems(id, items);
       return id;
     });
@@ -6341,7 +6719,15 @@ const conduceRepo = {
     });
     linkTx();
 
-    return { saleId, ncf: saleRes.ncf, total: saleRes.total, conduce: this.getById(conduceId) };
+    return {
+      saleId,
+      documentKind: saleRes.documentKind,
+      documentNumber: saleRes.documentNumber,
+      documentNumberFmt: saleRes.documentNumberFmt,
+      ncf: saleRes.ncf,
+      total: saleRes.total,
+      conduce: this.getById(conduceId),
+    };
   },
 
   // Genera un conduce A PARTIR de una venta existente (cotización o factura).
@@ -6474,6 +6860,7 @@ module.exports = {
   fixedAssetsRepo,
   accountingRepo,
   conduceRepo,
+  documentNumberRepo,
   salespeopleRepo,
   checkoutOrdersRepo,
 };

@@ -18,15 +18,20 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
     // normales se reenvían al servidor DENTRO del handler, con el error capturado).
     'auth:login',
     'connection:getInfo', 'connection:generateKey', 'connection:test', 'connection:setAllowedTerminal',
+    'connection:setTerminalBusinesses',
     'connection:clientPreflight', 'connection:setMode',
     'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke', 'license:generate',
     'update:check', 'update:download', 'update:install',
     // Versión = propia de cada máquina (no la del servidor).
     'version:getInfo', 'version:getAppVersion',
     'settings:set', 'settings:getAll',
+    // El negocio activo pertenece a ESTA terminal. En modo cliente estos
+    // handlers consultan al servicio y cambian solo la sesión local.
+    'business:getAll', 'business:getActive', 'business:selectForLogin', 'business:switch',
     // Impresión = operación de dispositivo: cada terminal imprime en SU impresora.
     // (print:onServer NO va aquí: es la opción explícita de imprimir en el servidor.)
     'print:html', 'print:toPDF', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
+    'shell:showItemInFolder',
     // Diagnóstico local: NUNCA reenviar (si se reenvía y el servidor cae, el propio
     // logger de errores falla → cascada). El log de cada terminal es local.
     'log:error',
@@ -34,12 +39,29 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
 });
 const path = require('path');
 const fs   = require('fs');
+const { spawn } = require('child_process');
 const bcrypt = require('bcryptjs');
 const { sqliteIdent } = require('./lib/sql-safe');
 const { normalizeFinAcct: _normalizeFinAcct, normalizeFinMov: _normalizeFinMov } = require('./lib/normalize-financial');
 const { isAllowedExternalUrl } = require('./lib/url-safe');
 const { checkLoginRate: _checkLoginRate, recordLoginFail: _recordLoginFail, clearLoginRate: _clearLoginRate } = require('./lib/login-rate-limit');
 const businessCtx = require('./src/main/business-context');
+
+function _runtimeArg(name) {
+  const prefix = `--${name}=`;
+  const value = process.argv.find(arg => String(arg).startsWith(prefix));
+  return value ? value.slice(prefix.length) : '';
+}
+const RUNTIME = Object.freeze({
+  service: process.argv.includes('--velo-server-service'),
+  worker: process.argv.includes('--velo-service-worker'),
+  headless: process.argv.includes('--velo-server-service') || process.argv.includes('--velo-service-worker'),
+  rootDataDir: _runtimeArg('velo-root-data-dir'),
+  dataDir: _runtimeArg('velo-data-dir'),
+  businessId: _runtimeArg('velo-business-id'),
+  workerPort: Number(_runtimeArg('velo-worker-port')) || 0,
+});
+if (RUNTIME.headless) app.disableHardwareAcceleration();
 
 // ── Cargar API key de Claude ──────────────────
 // En desarrollo: leer del .env local (nunca se empaqueta en el instalador)
@@ -69,7 +91,9 @@ function _loadApiKey() {
   }
 
   const userData = app.getPath('userData');
-  const keyDest  = path.join(userData, 'velo-ai.key');
+  const keyDest  = RUNTIME.worker
+    ? path.join(DATA_DIR, 'velo-ai.key')
+    : path.join(userData, 'velo-ai.key');
 
   // ── Auto-provisioning desde USB ──────────────────────────────
   // Si el vendedor coloca un velo-ai.key junto al .exe en el USB,
@@ -139,7 +163,7 @@ const {
   productsRepo, customersRepo, cashRepo,
   salesRepo, returnsRepo, reportsRepo, suppliersRepo, purchasesRepo, audit,
   expensesRepo, branchesRepo, vehiclesRepo, maintenanceRepo, deliveriesRepo, ncfRepo,
-  financialAccountsRepo, bankReconRepo, accountingRepo, fixedAssetsRepo, conduceRepo, salespeopleRepo,
+  financialAccountsRepo, bankReconRepo, accountingRepo, fixedAssetsRepo, conduceRepo, documentNumberRepo, salespeopleRepo,
   checkoutOrdersRepo
 } = require('./database');
 
@@ -180,6 +204,11 @@ autoUpdater.setFeedURL({
   repo:        'velo-pos',
   releaseType: 'release',
 });
+if (app.isPackaged && fs.existsSync(path.join(process.resourcesPath, 'server-edition.json'))) {
+  // La edición Servidor tiene su propio manifiesto `server.yml`; así una
+  // actualización nunca sustituye el servicio por el instalador de Terminal.
+  autoUpdater.channel = 'server';
+}
 
 // ── Estado global del updater (para el panel de Configuración) ──
 const updaterState = {
@@ -875,6 +904,19 @@ function _connRequireSA(requestUserId) {
 function _connTerminalNames() {
   try { return JSON.parse(settingsRepo.get('connection_terminal_names') || '{}'); } catch { return {}; }
 }
+function _serverEditionMarker() {
+  if (!app.isPackaged || RUNTIME.headless) return null;
+  const markerPath = path.join(process.resourcesPath, 'server-edition.json');
+  if (!fs.existsSync(markerPath)) return null;
+  try { return JSON.parse(fs.readFileSync(markerPath, 'utf8')); }
+  catch { return { port: 8443 }; }
+}
+function _installedServiceDataDir() {
+  const marker = _serverEditionMarker();
+  if (!marker) return '';
+  const programData = process.env.PROGRAMDATA || 'C:\\ProgramData';
+  return path.join(programData, marker.dataDirectory || 'Velo POS Server', 'data');
+}
 // Direcciones IPv4 reales de esta PC (para mostrar a qué IP conectan los clientes).
 // Detecta Tailscale (rango CGNAT 100.64.0.0/10 o interfaz "tailscale"/"utun").
 function _localAddresses() {
@@ -903,6 +945,14 @@ ipcMain.handle('connection:getInfo', async (_, { requestUserId } = {}) => {
     if (!terminalId) { terminalId = require('crypto').randomUUID(); settingsRepo.set('terminal_id', terminalId); }
     const names = _connTerminalNames();
     const mode  = settingsRepo.get('connection_mode') || 'local';
+    const serviceDataDir = _installedServiceDataDir();
+    if (serviceDataDir) {
+      const remote = await require('./src/main/ipc-bridge').forwardToServer(
+        'serverAdmin:getInfo',
+        { requestUserId },
+      );
+      return { ...remote, serviceMode: true, terminalId, machineId: getMachineId() };
+    }
     return {
       ok: true, mode, terminalId, machineId: getMachineId(),
       serverIp:   settingsRepo.get('connection_server_ip')   || '',
@@ -919,6 +969,14 @@ ipcMain.handle('connection:generateKey', async (_, { requestUserId } = {}) => {
   try {
     if (!_connRequireSA(requestUserId)) return { ok: false, error: 'Solo el superadmin' };
     const key = require('./src/main/connection').generateAccessKey();
+    const serviceDataDir = _installedServiceDataDir();
+    if (serviceDataDir) {
+      const remote = await require('./src/main/ipc-bridge').forwardToServer(
+        'serverAdmin:generateKey',
+        { requestUserId, accessKey: key },
+      );
+      if (!remote?.ok) return remote || { ok: false, error: 'No se pudo actualizar el servicio' };
+    }
     settingsRepo.set('connection_access_key', key);
     return { ok: true, accessKey: key };
   } catch (e) { return { ok: false, error: e.message }; }
@@ -961,7 +1019,26 @@ ipcMain.handle('connection:clientPreflight', async () => {
     //    Sin esto, un servidor encendido pero que rechaza al terminal dejaba pasar
     //    a un login que no podía funcionar.
     const accessKey = settingsRepo.get('connection_access_key') || '';
-    const ping = await rpcCall({ host, port, accessKey, terminalId, channel: 'version:getInfo', args: {}, timeoutMs: 4000 });
+    let businessId = settingsRepo.get('connection_business_id') || 'principal';
+    let ping = await rpcCall({ host, port, accessKey, terminalId, businessId, channel: 'version:getInfo', args: {}, timeoutMs: 4000 });
+    // Si el negocio guardado fue archivado o el administrador cambió los
+    // permisos de esta caja, recupera automáticamente el primer negocio válido.
+    if (ping?.error === 'FORBIDDEN') {
+      const available = await rpcCall({
+        host, port, accessKey, terminalId, businessId,
+        channel: 'service:businesses:list', args: {}, timeoutMs: 4000,
+      });
+      const firstAllowed = available?.ok && Array.isArray(available.data) ? available.data[0] : null;
+      if (firstAllowed?.id) {
+        businessId = firstAllowed.id;
+        settingsRepo.set('connection_business_id', businessId);
+        settingsRepo.set('connection_business_name', firstAllowed.name || '');
+        ping = await rpcCall({
+          host, port, accessKey, terminalId, businessId,
+          channel: 'version:getInfo', args: {}, timeoutMs: 4000,
+        });
+      }
+    }
     const authorized = !!(ping && ping.ok === true);
     const reason = authorized ? 'ok' : ((ping && ping.error) || 'unauthorized');
 
@@ -970,7 +1047,7 @@ ipcMain.handle('connection:clientPreflight', async () => {
     //    poder validarla después SIN servidor. Nunca bloquea el preflight.
     if (authorized) {
       try {
-        const g = await rpcCall({ host, port, accessKey, terminalId, channel: 'connection:localGuardHash', args: {}, timeoutMs: 4000 });
+        const g = await rpcCall({ host, port, accessKey, terminalId, businessId, channel: 'connection:localGuardHash', args: {}, timeoutMs: 4000 });
         if (g && g.ok === true && g.data && typeof g.data.hash === 'string') {
           settingsRepo.set('local_mode_password_hash', g.data.hash);
         }
@@ -1045,6 +1122,13 @@ ipcMain.handle('connection:setAllowedTerminal', async (_, { requestUserId, termi
   try {
     if (!_connRequireSA(requestUserId)) return { ok: false, error: 'Solo el superadmin' };
     const conn = require('./src/main/connection');
+    const serviceDataDir = _installedServiceDataDir();
+    if (serviceDataDir) {
+      return await require('./src/main/ipc-bridge').forwardToServer(
+        'serverAdmin:setAllowedTerminal',
+        { requestUserId, terminalId, name, remove },
+      );
+    }
     let list  = conn.parseAllowlist(settingsRepo.get('connection_allowlist'));
     const names = _connTerminalNames();
     if (remove) { list = list.filter(id => id !== terminalId); delete names[terminalId]; }
@@ -1052,6 +1136,115 @@ ipcMain.handle('connection:setAllowedTerminal', async (_, { requestUserId, termi
     settingsRepo.set('connection_allowlist', JSON.stringify(list));
     settingsRepo.set('connection_terminal_names', JSON.stringify(names));
     return { ok: true, count: list.length };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('connection:setTerminalBusinesses', async (_, { requestUserId, terminalId, businessIds } = {}) => {
+  try {
+    if (!_connRequireSA(requestUserId)) return { ok: false, error: 'Solo el superadmin' };
+    if (!_installedServiceDataDir()) return { ok: false, error: 'Disponible únicamente con Velo POS Server Service' };
+    return await require('./src/main/ipc-bridge').forwardToServer(
+      'serverAdmin:setTerminalBusinesses',
+      { requestUserId, terminalId, businessIds },
+    );
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// Administración del servicio: estos canales se ejecutan exclusivamente en el
+// worker principal y el gateway los enruta allí. La autorización funcional se
+// valida contra el superadmin de la base principal.
+ipcMain.handle('serverAdmin:getInfo', async (_, { requestUserId } = {}) => {
+  try {
+    if (!RUNTIME.worker || RUNTIME.businessId !== 'principal') return { ok: false, error: 'Servicio no disponible' };
+    if (!_connRequireSA(requestUserId)) return { ok: false, error: 'Solo el superadmin' };
+    const cfg = require('./src/main/service-config').loadServiceConfig(DATA_DIR);
+    const businesses = require('./src/main/server-service').listServiceBusinesses(DATA_DIR, cfg)
+      .map(({ dataDir, ...item }) => item);
+    return {
+      ok: true,
+      mode: 'server',
+      serviceMode: true,
+      serverIp: '127.0.0.1',
+      serverPort: String(cfg.port || 8443),
+      accessKey: cfg.accessKey,
+      hasKey: !!cfg.accessKey,
+      allowlist: cfg.allowlist.map(id => ({
+        terminalId: id,
+        name: cfg.terminalNames?.[id] || '',
+        businesses: cfg.terminalBusinesses?.[id] || [],
+      })),
+      businesses,
+      addresses: _localAddresses(),
+    };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('serverAdmin:generateKey', async (_, { requestUserId, accessKey } = {}) => {
+  try {
+    if (!RUNTIME.worker || RUNTIME.businessId !== 'principal') return { ok: false, error: 'Servicio no disponible' };
+    const user = _connRequireSA(requestUserId);
+    if (!user) return { ok: false, error: 'Solo el superadmin' };
+    const serviceConfig = require('./src/main/service-config');
+    const current = serviceConfig.loadServiceConfig(DATA_DIR);
+    const nextKey = String(accessKey || require('./src/main/connection').generateAccessKey());
+    serviceConfig.saveServiceConfig(DATA_DIR, { ...current, accessKey: nextKey });
+    audit(requestUserId, user.name, 'service_access_key_regenerada', 'settings', null, '');
+    return { ok: true, accessKey: nextKey };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('serverAdmin:setAllowedTerminal', async (_, { requestUserId, terminalId, name, remove } = {}) => {
+  try {
+    if (!RUNTIME.worker || RUNTIME.businessId !== 'principal') return { ok: false, error: 'Servicio no disponible' };
+    const user = _connRequireSA(requestUserId);
+    if (!user) return { ok: false, error: 'Solo el superadmin' };
+    const id = String(terminalId || '').trim();
+    if (!id) return { ok: false, error: 'ID de terminal requerido' };
+    const serviceConfig = require('./src/main/service-config');
+    const current = serviceConfig.loadServiceConfig(DATA_DIR);
+    let allowlist = [...current.allowlist];
+    const terminalNames = { ...current.terminalNames };
+    const terminalBusinesses = { ...current.terminalBusinesses };
+    if (remove) {
+      allowlist = allowlist.filter(item => item !== id);
+      delete terminalNames[id];
+      delete terminalBusinesses[id];
+    } else {
+      if (!allowlist.includes(id)) allowlist.push(id);
+      if (name) terminalNames[id] = String(name).trim().slice(0, 80);
+    }
+    serviceConfig.saveServiceConfig(DATA_DIR, {
+      ...current,
+      allowlist,
+      terminalNames,
+      terminalBusinesses,
+    });
+    audit(requestUserId, user.name, remove ? 'service_terminal_removida' : 'service_terminal_autorizada', 'settings', null, id);
+    return { ok: true, count: allowlist.length };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('serverAdmin:setTerminalBusinesses', async (_, { requestUserId, terminalId, businessIds } = {}) => {
+  try {
+    if (!RUNTIME.worker || RUNTIME.businessId !== 'principal') return { ok: false, error: 'Servicio no disponible' };
+    const user = _connRequireSA(requestUserId);
+    if (!user) return { ok: false, error: 'Solo el superadmin' };
+    const id = String(terminalId || '').trim();
+    const serviceConfig = require('./src/main/service-config');
+    const current = serviceConfig.loadServiceConfig(DATA_DIR);
+    if (!current.allowlist.includes(id)) return { ok: false, error: 'La terminal no está autorizada' };
+    const valid = new Set(
+      require('./src/main/server-service').listServiceBusinesses(DATA_DIR, current).map(item => item.id),
+    );
+    const clean = [...new Set((Array.isArray(businessIds) ? businessIds : [])
+      .map(String)
+      .filter(item => valid.has(item)))];
+    const terminalBusinesses = { ...current.terminalBusinesses };
+    if (clean.length) terminalBusinesses[id] = clean;
+    else delete terminalBusinesses[id]; // vacío = acceso a todos
+    serviceConfig.saveServiceConfig(DATA_DIR, { ...current, terminalBusinesses });
+    audit(requestUserId, user.name, 'service_terminal_negocios', 'settings', null, `${id}: ${clean.join(',') || 'todos'}`);
+    return { ok: true, businesses: clean };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
@@ -1514,6 +1707,9 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
     if (!reqUser) return { ok: false, error: 'Usuario no válido' };
+    if (!['factura', 'cotizacion'].includes(saleData?.type || 'factura')) {
+      return { ok: false, error: 'Tipo de documento no soportado' };
+    }
 
     // ── Validación básica de integridad (segunda línea de defensa tras el renderer) ──
     if (!saleData?.items?.length) {
@@ -1535,7 +1731,7 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
     }
 
     // Verificar caja abierta (cajero debe tener caja)
-    if (reqUser.role === 'cajero') {
+    if (reqUser.role === 'cajero' && (saleData?.type || 'factura') === 'factura') {
       const session = cashRepo.getOpen(_reqTerminalId());
       if (!session) return { ok: false, error: 'Debes abrir la caja antes de vender' };
       saleData.session = session;
@@ -1573,7 +1769,9 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
     }
     // Contabilidad en vivo: asiento de venta (Débito Caja/Banco/CxC · Crédito
     // Ingresos + ITBIS · Costo/Inventario). Se auto-guarda por tipo/idempotencia.
-    _acctHook(() => accountingRepo.generateSaleEntry({ saleId: result.saleId, userId: requestUserId }));
+    if ((saleData?.type || 'factura') === 'factura') {
+      _acctHook(() => accountingRepo.generateSaleEntry({ saleId: result.saleId, userId: requestUserId }));
+    }
     return { ok: true, ...result };
   } catch (e) {
     console.error('[sales:create]', e);
@@ -1751,6 +1949,33 @@ ipcMain.handle('sales:cancel', async (_, { id, reason, requestUserId }) => {
     // Contabilidad en vivo: reversar el asiento de la venta anulada.
     _acctHook(() => accountingRepo.reverseSourceEntry('venta', id, requestUserId, 'Venta anulada: ' + (reason || '')));
     return { ok: true, overpayment: cancelResult?.overpayment || 0 };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('sales:deleteQuote', async (_, { id, requestUserId }) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !reqUser.active) return { ok: false, error: 'Usuario no válido' };
+    const sale = salesRepo.getById(id);
+    if (!sale || sale.type !== 'cotizacion') {
+      return { ok: false, error: 'Cotización no encontrada' };
+    }
+    // Versiones anteriores podían generar por error un asiento para cotizaciones.
+    accountingRepo.reverseSourceEntry(
+      'venta', id, requestUserId, 'Cotización eliminada'
+    );
+    return { ok: true, ...salesRepo.deleteQuote(id, requestUserId, reqUser.name) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('documents:issue', async (_, { kind, sourceType, sourceId } = {}) => {
+  try {
+    const issued = documentNumberRepo.issue(kind, sourceType || '', sourceId || '');
+    return { ok: true, data: issued };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -2103,7 +2328,7 @@ ipcMain.handle('print:onServer', async (_, { html, jobType, referenceId, userId 
 
 // Guardar un documento como PDF (mismo HTML que se imprime) con diálogo "Guardar como".
 // Universal: sirve para factura, cotización, conduce, abono, reportes, etc.
-ipcMain.handle('print:toPDF', async (_, { html, suggestedName, open } = {}) => {
+ipcMain.handle('print:toPDF', async (_, { html, suggestedName, open, temporary } = {}) => {
   try {
     if (!html || !String(html).trim()) return { ok: false, error: 'Sin contenido para el PDF' };
     const os = require('os');
@@ -2205,6 +2430,17 @@ ipcMain.handle('print:toPDF', async (_, { html, suggestedName, open } = {}) => {
     }
 
     const safeName = String(suggestedName || 'documento').replace(/[^\w\-. ]/g, '_');
+    if (temporary) {
+      const shareDir = path.join(app.getPath('temp'), 'velo-pos-whatsapp');
+      fs.mkdirSync(shareDir, { recursive: true });
+      const base = safeName.toLowerCase().endsWith('.pdf') ? safeName : safeName + '.pdf';
+      const filePath = path.join(
+        shareDir,
+        `${path.basename(base, '.pdf')}-${Date.now()}.pdf`
+      );
+      fs.writeFileSync(filePath, pdfBuf);
+      return { ok: true, path: filePath, temporary: true };
+    }
     const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
       title: 'Guardar PDF',
       defaultPath: safeName.endsWith('.pdf') ? safeName : safeName + '.pdf',
@@ -2336,6 +2572,7 @@ ipcMain.handle('business:resetData', async (_, { requestUserId }) => {
       'expense_budgets',
       'expense_config',
       'recurring_expenses',
+      'document_issues',
       'expense_payments',
       'expenses',
       'expense_categories',
@@ -2381,6 +2618,16 @@ ipcMain.handle('business:resetData', async (_, { requestUserId }) => {
         } catch(e) {
           console.error(`[reset] ✗ ${tabla}:`, e.message);
         }
+      }
+      // Las definiciones permanecen disponibles; solo reiniciamos el último
+      // correlativo después de retirar todas las emisiones del negocio anterior.
+      try {
+        db.prepare(`
+          UPDATE document_sequences
+          SET current=0,updated_at=datetime('now','localtime')
+        `).run();
+      } catch (e) {
+        console.error('[reset] ✗ document_sequences:', e.message);
       }
 
       // Limpiar settings — solo borrar NCF counters
@@ -2584,12 +2831,16 @@ ipcMain.handle('license:getMachineId', async () => {
 // ══════════════════════════════════════════════
 // APP LIFECYCLE
 // ══════════════════════════════════════════════
-const DATA_DIR = app.isPackaged
-  ? path.join(app.getPath('userData'), 'data')
-  : path.join(__dirname, 'data');
+const DATA_DIR = RUNTIME.rootDataDir
+  ? path.resolve(RUNTIME.rootDataDir)
+  : (app.isPackaged
+      ? path.join(app.getPath('userData'), 'data')
+      : path.join(__dirname, 'data'));
 
-let ACTIVE_DATA_DIR = DATA_DIR;
-let ACTIVE_BUSINESS_ID = null;
+let ACTIVE_DATA_DIR = RUNTIME.dataDir ? path.resolve(RUNTIME.dataDir) : DATA_DIR;
+let ACTIVE_BUSINESS_ID = RUNTIME.businessId && RUNTIME.businessId !== 'principal'
+  ? RUNTIME.businessId
+  : null;
 function currentDataDir() { return ACTIVE_DATA_DIR || DATA_DIR; }
 function currentBusinessId() { return ACTIVE_BUSINESS_ID || null; }
 function safeFileSlug(value) {
@@ -3603,6 +3854,7 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, requestUserId } = 
         'inventory_movements', 'product_price_history', 'ecf_log', 'ncf_log', 'deliveries',
         'checkout_order_items', 'checkout_orders',
         'delivery_note_invoice_links', 'delivery_note_items', 'delivery_notes',
+        'document_issues',
         'sale_items', 'payments', 'sales', 'customer_contacts', 'customers', 'products',
       ];
       for (const t of wipe) {
@@ -3610,6 +3862,12 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, requestUserId } = 
       }
       // Reset de autoincrement para IDs limpios
       try { db.prepare(`DELETE FROM sqlite_sequence WHERE name IN ('sales','sale_items','payments','customer_contacts','customers','products','product_price_history')`).run(); } catch (_) {}
+      try {
+        db.prepare(`
+          UPDATE document_sequences
+          SET current=0,updated_at=datetime('now','localtime')
+        `).run();
+      } catch (_) {}
       // Recrear Consumidor Final (id=1) — resolveCust cae aquí por defecto
       db.prepare(`INSERT INTO customers(id, name, active, balance) VALUES (1, 'Consumidor Final', 1, 0)`).run();
 
@@ -4508,8 +4766,12 @@ ipcMain.handle('conduce:invoice', async (_, { id, lines = null, payment = {}, pr
       conduceId: id, lines, payment, priceMode,
       session, user: { id: u.id, name: u.name },
     });
+    _acctHook(() => accountingRepo.generateSaleEntry({
+      saleId: res.saleId,
+      userId: requestUserId,
+    }));
     audit(requestUserId, u.name, 'conduce_facturado', 'delivery_notes', id,
-      `${res.conduce.number} → factura #${res.saleId} · Total: ${res.total}`);
+      `${res.conduce.number} → ${res.documentNumberFmt || 'factura #' + res.saleId} · Total: ${res.total}`);
     return { ok: true, ...res };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -5045,18 +5307,73 @@ function prepareBusinessDb(bizDir, name) {
 
 // IPC — Multi-negocios
 ipcMain.handle('business:getAll', async () => {
-  try { return { ok: true, data: loadBusinesses() }; }
+  try {
+    const bridge = require('./src/main/ipc-bridge');
+    if (bridge.getMode() === 'client') {
+      const rows = await bridge.forwardToServer('service:businesses:list', {});
+      return {
+        ok: true,
+        // El selector ya agrega "Negocio Principal"; evitamos duplicarlo.
+        data: (Array.isArray(rows) ? rows : []).filter(item => item.id !== 'principal'),
+      };
+    }
+    return { ok: true, data: loadBusinesses() };
+  }
   catch(e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('business:getActive', async () => {
-  try { return { ok: true, data: getActiveBusiness() }; }
+  try {
+    const bridge = require('./src/main/ipc-bridge');
+    if (bridge.getMode() === 'client') {
+      const selected = settingsRepo.get('connection_business_id') || 'principal';
+      const rows = await bridge.forwardToServer('service:businesses:list', {});
+      const active = (Array.isArray(rows) ? rows : []).find(item => item.id === selected);
+      if (!active) {
+        settingsRepo.set('connection_business_id', 'principal');
+        const principal = (Array.isArray(rows) ? rows : []).find(item => item.id === 'principal');
+        return { ok: true, data: principal ? { ...principal, id: null } : null };
+      }
+      return { ok: true, data: active.id === 'principal' ? { ...active, id: null } : active };
+    }
+    return { ok: true, data: getActiveBusiness() };
+  }
   catch(e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('business:selectForLogin', async (_, { bizId } = {}) => {
   try {
-    const remoteTerminal = require('./src/main/ipc-bridge').currentTerminalId();
+    const bridge = require('./src/main/ipc-bridge');
+    if (bridge.getMode() === 'client') {
+      const nextId = bizId ? String(bizId).trim() : 'principal';
+      const rows = await bridge.forwardToServer('service:businesses:list', {});
+      const target = (Array.isArray(rows) ? rows : []).find(item => item.id === nextId);
+      if (!target) return { ok: false, error: 'Negocio no encontrado o no autorizado para esta terminal' };
+
+      const currentId = settingsRepo.get('connection_business_id') || 'principal';
+      if (nextId === currentId) {
+        return { ok: true, changed: false, relaunching: false, id: nextId === 'principal' ? null : nextId, target: 'local' };
+      }
+      settingsRepo.set('connection_business_id', nextId);
+      settingsRepo.set('connection_business_name', target.name || '');
+      logInfo('business', 'Negocio cambiado solo para esta terminal', {
+        businessId: nextId,
+        terminalId: settingsRepo.get('terminal_id') || '',
+      });
+      setTimeout(() => {
+        try { app.relaunch(); app.exit(0); }
+        catch (e) { logError('business', 'No se pudo reiniciar la terminal: ' + e.message); }
+      }, 250);
+      return {
+        ok: true,
+        changed: true,
+        relaunching: true,
+        id: nextId === 'principal' ? null : nextId,
+        target: 'local',
+      };
+    }
+
+    const remoteTerminal = bridge.currentTerminalId();
 
     const nextId = bizId ? String(bizId).trim() : null;
     const currentId = currentBusinessId() || null;
@@ -5125,6 +5442,16 @@ ipcMain.handle('business:switch', async (_, { bizId, requestUserId }) => {
   try {
     const u = authRepo.findById(requestUserId);
     if (!u || u.role !== 'superadmin') return { ok: false, error: 'Solo superadmin' };
+    const bridge = require('./src/main/ipc-bridge');
+    if (bridge.getMode() === 'client') {
+      const nextId = bizId ? String(bizId).trim() : 'principal';
+      const rows = await bridge.forwardToServer('service:businesses:list', {});
+      const target = (Array.isArray(rows) ? rows : []).find(item => item.id === nextId);
+      if (!target) return { ok: false, error: 'Negocio no encontrado o no autorizado para esta terminal' };
+      settingsRepo.set('connection_business_id', nextId);
+      settingsRepo.set('connection_business_name', target.name || '');
+      return { ok: true, restart_required: true, id: nextId === 'principal' ? null : nextId, target: 'local' };
+    }
     if (!bizId) {
       setActiveBusiness(null);
       return { ok: true, restart_required: true, id: null };
@@ -5726,10 +6053,12 @@ ipcMain.handle('ecf:getLog', async (_, { limit = 50, offset = 0, requestUserId }
 // Ver docs/multi-terminal-sync.md
 let _rpcServer = null;
 let _syncStream = null;
+let _serverService = null;
 function setupMultiTerminal() {
   const bridge = require('./src/main/ipc-bridge');
   const conn   = require('./src/main/connection');
-  const getMode = () => settingsRepo.get('connection_mode') || 'local';
+  const getMode = () => RUNTIME.worker ? 'server' : (settingsRepo.get('connection_mode') || 'local');
+  const selectedClientBusiness = () => settingsRepo.get('connection_business_id') || 'principal';
 
   bridge.configureBridge({
     mode: getMode,
@@ -5738,6 +6067,7 @@ function setupMultiTerminal() {
       port:       Number(settingsRepo.get('connection_server_port')) || 8443,
       accessKey:  settingsRepo.get('connection_access_key')  || '',
       terminalId: settingsRepo.get('terminal_id')            || '',
+      businessId: selectedClientBusiness(),
     }),
   });
 
@@ -5755,15 +6085,23 @@ function setupMultiTerminal() {
       'connection:localGuardStatus', 'connection:generateLocalPassword',
       // El modo de conexión del servidor tampoco se cambia por red.
       'connection:setMode',
+      // El negocio de una terminal se cambia localmente y el gateway la enruta
+      // al worker correcto. Nunca debe reiniciar un worker ni al servicio.
+      'business:getAll', 'business:getActive', 'business:selectForLogin', 'business:switch',
       'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke', 'license:generate',
       'update:check', 'update:download', 'update:install',
       'print:html', 'print:toPDF', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
     ]);
+    const serviceSecurity = () => {
+      if (!RUNTIME.worker) return null;
+      try { return require('./src/main/service-config').loadServiceConfig(DATA_DIR); }
+      catch { return null; }
+    };
     _rpcServer = startRpcServer({
-      port: Number(settingsRepo.get('connection_server_port')) || 8443,
-      host: '0.0.0.0',
-      getAccessKey: () => settingsRepo.get('connection_access_key') || '',
-      getAllowlist: () => conn.parseAllowlist(settingsRepo.get('connection_allowlist')),
+      port: RUNTIME.workerPort || Number(settingsRepo.get('connection_server_port')) || 8443,
+      host: RUNTIME.worker ? '127.0.0.1' : '0.0.0.0',
+      getAccessKey: () => serviceSecurity()?.accessKey || settingsRepo.get('connection_access_key') || '',
+      getAllowlist: () => serviceSecurity()?.allowlist || conn.parseAllowlist(settingsRepo.get('connection_allowlist')),
       dispatch: bridge.dispatch,
       denyChannel: (ch) => SERVER_DENY.has(ch),
       onLog: (lvl, msg, extra) => { try { (lvl === 'error' ? logError : lvl === 'warn' ? logWarn : logInfo)('rpc', msg, extra); } catch {} },
@@ -5777,7 +6115,7 @@ function setupMultiTerminal() {
     bridge.setAfterMutation((channel) => {
       const scopes = scopesForChannel(channel);
       if (!scopes) return;
-      try { _rpcServer && _rpcServer.broadcast({ scopes }); } catch {}
+      try { _rpcServer && _rpcServer.broadcast({ scopes }, RUNTIME.businessId || currentBusinessId() || 'principal'); } catch {}
       try { mainWindow && mainWindow.webContents.send('sync:changed', { scopes }); } catch {}
     });
 
@@ -5792,6 +6130,7 @@ function setupMultiTerminal() {
         port:       Number(settingsRepo.get('connection_server_port')) || 8443,
         accessKey:  settingsRepo.get('connection_access_key')  || '',
         terminalId: settingsRepo.get('terminal_id')            || '',
+        businessId: selectedClientBusiness(),
       };
       _syncStream = openEventStream({
         ...cfg,
@@ -5805,13 +6144,7 @@ function setupMultiTerminal() {
   }
 }
 
-app.whenReady().then(() => {
-  // Cargar API key de Claude (necesita userData, disponible solo aquí)
-  _loadApiKey();
-
-  // Logger persistente + manejadores globales de error (Fase 2)
-  initLogger(DATA_DIR);
-  logInfo('app', `Velo POS iniciando — v${APP_VERSION}`);
+function _bindProcessErrors() {
   process.on('uncaughtException', (err) => {
     logError('uncaughtException', err?.message || String(err), { stack: err?.stack });
     console.error('[uncaughtException]', err);
@@ -5820,13 +6153,131 @@ app.whenReady().then(() => {
     logError('unhandledRejection', reason?.message || String(reason), { stack: reason?.stack });
     console.error('[unhandledRejection]', reason);
   });
+}
+
+function _launchBusinessWorker({ business, port }) {
+  const args = [];
+  if (!app.isPackaged) args.push(__dirname);
+  args.push(
+    '--velo-service-worker',
+    `--velo-root-data-dir=${DATA_DIR}`,
+    `--velo-data-dir=${business.dataDir}`,
+    `--velo-business-id=${business.id}`,
+    `--velo-worker-port=${port}`,
+    '--disable-gpu',
+  );
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+  return spawn(process.execPath, args, {
+    env,
+    windowsHide: true,
+    stdio: app.isPackaged ? 'ignore' : 'inherit',
+  });
+}
+
+function _scheduleAutoBackups() {
+  const runAutoBackup = async () => {
+    try {
+      const dbInst = require('./database').getDB();
+      if (!dbInst) return;
+      const p = await createAutoBackup(currentDataDir(), dbInst, 10);
+      console.log('[Backup] Automático creado:', p);
+    } catch (e) {
+      console.error('[Backup] Automático falló:', e.message);
+    }
+  };
+  setTimeout(runAutoBackup, 30000);
+  setInterval(runAutoBackup, 6 * 60 * 60 * 1000);
+}
+
+async function _configureInstalledServerConsole() {
+  if (!app.isPackaged || RUNTIME.headless) return;
+  const marker = path.join(process.resourcesPath, 'server-edition.json');
+  if (!fs.existsSync(marker)) return;
+  let port = 8443;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(marker, 'utf8'));
+    port = Number(parsed.port) || port;
+  } catch {}
+
+  let terminalId = settingsRepo.get('terminal_id');
+  if (!terminalId) {
+    terminalId = require('crypto').randomUUID();
+    settingsRepo.set('terminal_id', terminalId);
+  }
+  // La consola del servidor es técnicamente otra terminal del servicio. Se deja
+  // configurada antes del bootstrap para que nunca opere por accidente en una
+  // copia local si el servicio todavía está arrancando.
+  settingsRepo.set('connection_mode', 'client');
+  settingsRepo.set('connection_server_ip', '127.0.0.1');
+  settingsRepo.set('connection_server_port', String(port));
+  settingsRepo.set('connection_business_id', settingsRepo.get('connection_business_id') || 'principal');
+
+  const { localBootstrap } = require('./src/main/net-client');
+  for (let attempt = 1; attempt <= 10; attempt++) {
+    const result = await localBootstrap({ port, terminalId, name: 'Consola del servidor', timeoutMs: 2500 });
+    if (result?.ok && result.data?.accessKey) {
+      settingsRepo.set('connection_access_key', result.data.accessKey);
+      settingsRepo.set('connection_server_port', String(result.data.port || port));
+      logInfo('server-service', 'Consola local enlazada al servicio', { terminalId, port });
+      return;
+    }
+    if (!result?.offline && result?.error === 'FORBIDDEN' && settingsRepo.get('connection_access_key')) return;
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  logWarn('server-service', 'La consola quedó en modo cliente pero el bootstrap local aún no respondió', { port });
+}
+
+app.whenReady().then(async () => {
+  // El supervisor es un proceso sin ventana ni base abierta: escucha en el
+  // puerto público y mantiene un worker SQLite aislado por cada negocio.
+  if (RUNTIME.service) {
+    initLogger(DATA_DIR);
+    _bindProcessErrors();
+    try {
+      const { startServerService } = require('./src/main/server-service');
+      _serverService = startServerService({
+        rootDataDir: DATA_DIR,
+        launchWorker: _launchBusinessWorker,
+        onLog: (lvl, msg, extra) => {
+          try { (lvl === 'error' ? logError : lvl === 'warn' ? logWarn : logInfo)('server-service', msg, extra); } catch {}
+        },
+      });
+      logInfo('server-service', `Servicio Velo POS iniciado — v${APP_VERSION}`, {
+        dataDir: DATA_DIR,
+        port: _serverService.port,
+      });
+    } catch (e) {
+      logError('server-service', 'No pudo iniciar: ' + e.message, { stack: e.stack });
+      app.exit(1);
+    }
+    return;
+  }
+
+  // Cargar API key de Claude (necesita userData, disponible solo aquí)
+  _loadApiKey();
+
+  // Logger persistente + manejadores globales de error (Fase 2)
+  initLogger(DATA_DIR);
+  logInfo('app', `Velo POS iniciando — v${APP_VERSION}`);
+  _bindProcessErrors();
 
   try {
-    const active = businessCtx.resolveActiveBusiness(DATA_DIR);
-    ACTIVE_DATA_DIR = active.dataDir || DATA_DIR;
-    ACTIVE_BUSINESS_ID = active.businessId || null;
+    if (!RUNTIME.worker) {
+      if (_serverEditionMarker()) {
+        // La consola del servicio usa la raíz únicamente como almacén de
+        // configuración del dispositivo; el negocio real siempre llega por RPC.
+        ACTIVE_DATA_DIR = DATA_DIR;
+        ACTIVE_BUSINESS_ID = null;
+      } else {
+        const active = businessCtx.resolveActiveBusiness(DATA_DIR);
+        ACTIVE_DATA_DIR = active.dataDir || DATA_DIR;
+        ACTIVE_BUSINESS_ID = active.businessId || null;
+      }
+    }
     db = initDB(currentDataDir());
     initVersioning(db, currentDataDir());
+    await _configureInstalledServerConsole();
     if (ACTIVE_BUSINESS_ID) {
       logInfo('business', 'Negocio activo al iniciar', {
         businessId: ACTIVE_BUSINESS_ID,
@@ -5844,6 +6295,15 @@ app.whenReady().then(() => {
     app.quit();
     return;
   }
+  if (RUNTIME.worker) {
+    logInfo('server-service', 'Worker de negocio listo', {
+      businessId: RUNTIME.businessId || 'principal',
+      port: RUNTIME.workerPort,
+      dataDir: currentDataDir(),
+    });
+    _scheduleAutoBackups();
+    return;
+  }
   createWindow();
   // Verificar actualizaciones 8 segundos después del arranque,
   // cuando la ventana ya está completamente cargada y visible.
@@ -5853,25 +6313,16 @@ app.whenReady().then(() => {
   // Corre en background con db.backup() (no bloquea ventas). Uno al arrancar
   // (tras 30s para no competir con la carga inicial) y luego cada 6 horas.
   // Cualquier fallo se registra pero nunca interrumpe la operación del POS.
-  const runAutoBackup = async () => {
-    try {
-      const dbInst = require('./database').getDB();
-      if (!dbInst) return;
-      const p = await createAutoBackup(currentDataDir(), dbInst, 10);
-      console.log('[Backup] Automático creado:', p);
-    } catch (e) {
-      console.error('[Backup] Automático falló:', e.message);
-    }
-  };
-  setTimeout(runAutoBackup, 30000);
-  setInterval(runAutoBackup, 6 * 60 * 60 * 1000);
+  _scheduleAutoBackups();
 });
 
 app.on('window-all-closed', () => {
+  if (RUNTIME.headless) return;
   if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('activate', () => {
+  if (RUNTIME.headless) return;
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
 
@@ -5879,6 +6330,7 @@ app.on('activate', () => {
 app.on('before-quit', () => {
   if (_syncStream) { try { _syncStream.close(); } catch {} _syncStream = null; }
   if (_rpcServer) { try { _rpcServer.close(); } catch {} _rpcServer = null; }
+  if (_serverService) { try { _serverService.close(); } catch {} _serverService = null; }
   const dbInst = require('./database').getDB();
   if (dbInst) dbInst.close();
 });
@@ -5997,6 +6449,18 @@ ipcMain.handle('shell:openExternal', async (_, { url }) => {
     // No usar startsWith: valida protocolo y hostname real para evitar bypass.
     if (!isAllowedExternalUrl(url)) return { ok: false, error: 'URL no permitida' };
     await shell.openExternal(url);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('shell:showItemInFolder', async (_, { path: filePath } = {}) => {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) {
+      return { ok: false, error: 'El archivo PDF ya no está disponible' };
+    }
+    shell.showItemInFolder(filePath);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };

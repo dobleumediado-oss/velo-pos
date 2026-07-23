@@ -18,6 +18,7 @@ const { AsyncLocalStorage } = require('async_hooks');
 // concurrencia (cada dispatch corre en su propio contexto async).
 const _als = new AsyncLocalStorage();
 function currentTerminalId() { const s = _als.getStore(); return s && s.terminalId; }
+function currentBusinessId() { const s = _als.getStore(); return s && s.businessId; }
 
 // ipcMain solo existe dentro de Electron; en pruebas con node puro no está.
 let _ipcMain = null;
@@ -83,7 +84,10 @@ function registerHandler(channel, fn) {
 function dispatch(channel, args, ctx) {
   const fn = _handlers.get(channel);
   if (!fn) return Promise.resolve({ __unknown: true });
-  return _als.run({ terminalId: ctx && ctx.terminalId }, () =>
+  return _als.run({
+    terminalId: ctx && ctx.terminalId,
+    businessId: ctx && ctx.businessId,
+  }, () =>
     Promise.resolve(fn(args)).then((r) => { _notifyMutation(channel); return r; })
   );
 }
@@ -139,4 +143,17 @@ async function forwardToServer(channel, args) {
 function hasChannel(channel) { return _handlers.has(channel); }
 function channelCount() { return _handlers.size; }
 
-module.exports = { configureBridge, setAfterMutation, registerHandler, routeCall, dispatch, installIpcInterceptor, getMode, forwardToServer, currentTerminalId, hasChannel, channelCount };
+module.exports = {
+  configureBridge,
+  setAfterMutation,
+  registerHandler,
+  routeCall,
+  dispatch,
+  installIpcInterceptor,
+  getMode,
+  forwardToServer,
+  currentTerminalId,
+  currentBusinessId,
+  hasChannel,
+  channelCount,
+};

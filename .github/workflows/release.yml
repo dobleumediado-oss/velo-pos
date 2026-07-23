@@ -22,7 +22,15 @@ jobs:
       - name: Instalar dependencias
         run: npm ci
 
-      - name: Compilar y publicar instalador Windows
+      - name: Pruebas y validaciones
+        run: npm run release:check
+
+      - name: Compilar y publicar Terminal Windows
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-        run: npm run release:win
+        run: npm run release:win:terminal
+
+      - name: Compilar y publicar Servidor Windows
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: npm run release:win:server

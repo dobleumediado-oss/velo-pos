@@ -1,5 +1,41 @@
 # Historial de versiones
 
+## 1.27.0 — 2026-07-23
+
+### Corregido
+
+- Las cantidades del POS aceptan varios dígitos sin perder el foco.
+- Las cotizaciones se eliminan realmente y ya no pasan por la anulación de facturas.
+- Crear una cotización no mueve inventario, caja, crédito, cuentas financieras ni contabilidad.
+- Los reportes financieros excluyen cotizaciones.
+- Convertir una cotización genera la factura y elimina correctamente el documento de origen.
+- Facturar un conduce genera también el asiento contable de la factura.
+- Los reportes de abonos muestran el correlativo documental y no el ID técnico.
+- El reinicio total y la migración integral reinician correctamente los correlativos
+  internos sin mezclar documentos de dos negocios.
+- La interfaz usa “Cotizar/Crear cotización” en vez de “Cobrar” cuando corresponde.
+
+### Nuevo
+
+- **Velo POS Server Service** para Windows: mantiene datos y terminales disponibles
+  aunque la interfaz de la PC servidor esté cerrada.
+- Supervisor con un worker SQLite aislado por negocio, gateway único en el puerto
+  8443 y recuperación automática ante fallos.
+- Dos instaladores independientes: Servidor y Terminal, con canales de actualización
+  separados para impedir que una edición reemplace accidentalmente a la otra.
+- Migración segura al instalar Servidor: respaldo previo, copia sin borrar el origen
+  y conservación de datos/backups al desinstalar.
+- Negocio seleccionado por terminal; cambiarlo ya no reinicia ni modifica el servidor
+  o las demás cajas.
+- Asignación de cada terminal a todos los negocios o a un negocio específico.
+- Prueba automatizada del gateway, autenticación, aislamiento y routing multi-negocio.
+- Secuencias independientes para facturas al contado, facturas a crédito, cotizaciones,
+  notas de crédito, abonos, recibos, pagos a proveedores, conduces y reportes.
+- Números documentales anulados o eliminados no se reutilizan.
+- PDF por WhatsApp desde facturas, cotizaciones y conduces, reutilizando la plantilla de impresión.
+- Pruebas de regresión específicas para numeración, cotizaciones no financieras,
+  eliminación, cantidades y exclusión de reportes.
+
 ## 1.26.1 — 2026-07-22
 
 ### Nuevo

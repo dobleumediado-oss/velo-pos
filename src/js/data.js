@@ -28,7 +28,7 @@ const DB = {
 };
 
 // ── Número de factura mostrable (helper global) ───────────────
-// Prioridad: numero_factura_fmt → numero_factura (padStart 8) → id interno (padStart 5).
+// Prioridad: correlativo documental → número histórico importado → id interno.
 // Acepta objetos de venta (s), factura pendiente (f), pago con JOIN (p) o
 // match de búsqueda por artículo (m); reconoce los alias equivalentes de cada campo.
 // `fallbackRef` (opcional) se usa antes del id interno — p.ej. la referencia de
@@ -37,6 +37,8 @@ const DB = {
 // módulos (clientes, ventas, pos, reportes, plantillas, print).
 function facturaLabel(o, fallbackRef) {
   if (!o) return fallbackRef || '';
+  const documentFmt = o.document_number_fmt || o.sale_document_number_fmt;
+  if (documentFmt) return documentFmt;
   const fmt = o.numero_factura_fmt || o.sale_numero_factura_fmt || o.numFact;
   if (fmt) return '#' + fmt;
   const num = o.numero_factura != null ? o.numero_factura : o.sale_numero_factura;
@@ -46,12 +48,39 @@ function facturaLabel(o, fallbackRef) {
   return '#' + String(id != null ? id : '').padStart(5, '0');
 }
 
+function documentTypeLabel(o) {
+  const kind = o?.document_kind || '';
+  const byKind = {
+    factura_contado: 'Factura al contado',
+    factura_credito: 'Factura a crédito',
+    cotizacion: 'Cotización',
+    nota_credito: 'Nota de crédito',
+    abono: 'Abono',
+    recibo: 'Recibo',
+    pago_proveedor: 'Pago a proveedor',
+    conduce: 'Conduce',
+    reporte: 'Reporte',
+  };
+  if (byKind[kind]) return byKind[kind];
+  if (o?.type === 'cotizacion') return 'Cotización';
+  if (o?.type === 'devolucion') return 'Nota de crédito';
+  return 'Factura';
+}
+
+function reciboLabel(o) {
+  if (!o) return '';
+  if (o.document_number_fmt) return o.document_number_fmt;
+  const n = o.numero_recibo != null ? o.numero_recibo : o.id;
+  return n != null ? `REC-${String(n).padStart(6, '0')}` : '';
+}
+
 // Etiqueta de la factura ORIGINAL de una devolución/nota de crédito.
 // Usa el número real de la venta original (original_numero_factura_fmt, provisto
 // por getById/getAll) y cae al id interno (original_sale_id) solo si no existe.
 function facturaLabelOriginal(sale) {
   if (!sale) return '';
   return facturaLabel({
+    document_number_fmt: sale.original_document_number_fmt,
     numero_factura_fmt: sale.original_numero_factura_fmt,
     numero_factura:     sale.original_numero_factura,
     id:                 sale.original_sale_id,
@@ -541,12 +570,14 @@ function getSales(range = 'today') {
 // Usa shell.openExternal para abrir en el
 // navegador real del sistema (no Electron interno)
 // ══════════════════════════════════════════════
-function openWhatsAppModal(msg, defPhone = '', clientName = 'cliente') {
+function openWhatsAppModal(msg, defPhone = '', clientName = 'cliente', options = {}) {
   // Escapar todo lo dinámico antes de interpolarlo en el HTML del modal —
   // msg/clientName pueden venir de datos del cliente (nombre, notas, etc.)
   const escapedMsg   = _escHtml(msg);
   const escapedName  = _escHtml(clientName);
   const escapedPhone = _escHtml((defPhone || '').replace(/\D/g, ''));
+  const attachmentPath = String(options.attachmentPath || '');
+  const attachmentName = _escHtml(options.attachmentName || 'Documento PDF');
 
   openModal(`
     <div class="modal-title" style="display:flex;align-items:center;gap:10px">
@@ -560,6 +591,17 @@ function openWhatsAppModal(msg, defPhone = '', clientName = 'cliente') {
       Enviar por WhatsApp
     </div>
     <div class="modal-sub">A: ${escapedName}</div>
+
+    ${attachmentPath ? `
+    <div class="card" style="background:var(--green-bg,#ecfdf5);border-color:#86efac;margin-bottom:12px">
+      <div style="font-size:12px;font-weight:700;color:#166534">✓ PDF preparado: ${attachmentName}.pdf</div>
+      <div style="font-size:11px;color:#4b5563;margin-top:3px">
+        Al abrir WhatsApp también mostraremos el archivo en su carpeta. Arrástralo al chat o usa el clip para adjuntarlo.
+      </div>
+      <button class="btn btn-out btn-sm" style="margin-top:8px" onclick="_waShowAttachment()">
+        ${typeof svg === 'function' ? svg('folder') : ''} Mostrar PDF
+      </button>
+    </div>` : ''}
 
     <div class="fg">
       <label class="lbl">Número de WhatsApp</label>
@@ -593,17 +635,25 @@ ${escapedMsg}
           <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
           <path d="M12 0C5.373 0 0 5.373 0 12c0 2.124.557 4.118 1.529 5.847L0 24l6.335-1.501A11.934 11.934 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.801 9.801 0 01-5.002-1.367l-.359-.214-3.72.881.896-3.614-.234-.371A9.818 9.818 0 012.182 12C2.182 6.575 6.575 2.182 12 2.182S21.818 6.575 21.818 12 17.425 21.818 12 21.818z"/>
         </svg>
-        Abrir WhatsApp
+        ${attachmentPath ? 'Abrir WhatsApp y adjuntar PDF' : 'Abrir WhatsApp'}
       </button>
     </div>
   `);
 
   // Guardar msg para que _waEnviar lo use
   window._waPendingMsg = msg;
+  window._waPendingAttachment = attachmentPath;
   setTimeout(() => {
     const inp = document.getElementById('wa-phone-input');
     if (inp) { inp.focus(); inp.select(); }
   }, 100);
+}
+
+async function _waShowAttachment() {
+  const filePath = window._waPendingAttachment || '';
+  if (!filePath || !window.api?.shell?.showItemInFolder) return;
+  const result = await window.api.shell.showItemInFolder(filePath);
+  if (result?.ok === false) toast(result.error || 'No se pudo mostrar el PDF', 'err');
 }
 
 async function _waEnviar() {
@@ -630,11 +680,16 @@ async function _waEnviar() {
 
   closeModal();
 
+  if (window._waPendingAttachment) {
+    await window.api?.shell?.showItemInFolder?.(window._waPendingAttachment).catch(() => null);
+  }
   // Abrir en el NAVEGADOR DEL SISTEMA via shell.openExternal
   const result = await window.api.shell.openExternal(url).catch(() => ({ ok: false }));
   if (result?.ok === false) {
     toast('No se pudo abrir WhatsApp — verifica que tengas un navegador instalado', 'e');
   } else {
-    toast('✓ WhatsApp abierto en el navegador', 'ok');
+    toast(window._waPendingAttachment
+      ? '✓ WhatsApp abierto · adjunta el PDF que mostramos en la carpeta'
+      : '✓ WhatsApp abierto en el navegador', 'ok');
   }
 }

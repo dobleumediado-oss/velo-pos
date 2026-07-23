@@ -1,0 +1,5 @@
+{
+  "edition": "server",
+  "port": 8443,
+  "dataDirectory": "Velo POS Server"
+}

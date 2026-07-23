@@ -3,7 +3,7 @@
 Punto de entrada para trabajar en este proyecto. Este archivo es el **hub central**: resume lo esencial y enlaza a la documentación extendida en [`docs/`](docs/). Consulta el tema específico antes de tocar ese módulo.
 
 ## Qué es
-Aplicación **Electron v29** de punto de venta (POS) **offline** para micro-negocios de República Dominicana (tiendas de auto repuestos, etc.). Versión actual: `1.26.1` (ver `package.json`).
+Aplicación **Electron v29** de punto de venta (POS) **offline** para micro-negocios de República Dominicana (tiendas de auto repuestos, etc.). Versión actual: `1.27.0` (ver `package.json`).
 
 ## Stack y arquitectura
 - **Electron v29** — `contextIsolation: true`, `nodeIntegration: false`.
@@ -36,8 +36,11 @@ Cada tema tiene su archivo dedicado en [`docs/`](docs/). Todos enlazan de vuelta
 - **[Visión general](docs/overview.md)** — arquitectura, stack, patrones y convenciones (base de la sección de arriba).
 - **[Módulo de Contabilidad](docs/accounting-module.md)** — módulo completo de contabilidad + bancos (migraciones v1.6.x): archivos tocados, esquema de BD, flujo de activación, repos y handlers.
 - **[Módulo de Impresión](docs/printing-module.md)** — overhaul del servicio global de impresión (v1.7.0): arquitectura, categorías, bugs corregidos y trabajo diferido deliberadamente.
+- **[Flujos y numeración documental](docs/document-workflows.md)** — secuencias independientes, auditoría, eliminación de cotizaciones y PDF por WhatsApp.
 - **[Preventa y Despacho](docs/preventa-despacho.md)** — órdenes compartidas entre preparación, caja y entrega; reservas, estados, permisos y operación multi-terminal.
 - **[Clientes empresa y representantes](docs/clientes-empresas.md)** — cuentas personales/empresariales, contactos operativos, crédito consolidado y snapshots documentales.
+- **[Velo POS Server Service](docs/server-service.md)** — instalación permanente sin nube, migración segura, dos instaladores y operación por Tailscale.
+- **[Multi-terminal](docs/multi-terminal-sync.md)** — gateway, workers por negocio, autorización por caja y sincronización en tiempo real.
 - **[Proceso de Release](docs/release-process.md)** — ⚠️ empujar un tag `v*` = deploy en vivo a clientes reales vía electron-updater. **Confirmar siempre con el usuario antes de tag.**
 
 ## Antes de trabajar

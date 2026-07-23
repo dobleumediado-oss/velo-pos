@@ -33,9 +33,9 @@ function startRpcServer({ port = 8443, host = '0.0.0.0', getAccessKey, getAllowl
   // Cada entrada es un `res` de una respuesta /events abierta. broadcast() les
   // escribe un aviso "algo cambió en scope X" (sin datos). El heartbeat mantiene
   // vivo el socket a través de NAT/Tailscale.
-  const sseClients = new Set();
+  const sseClients = new Map();
   const heartbeat = setInterval(() => {
-    for (const r of sseClients) { try { r.write(':hb\n\n'); } catch {} }
+    for (const r of sseClients.keys()) { try { r.write(':hb\n\n'); } catch {} }
   }, 20000);
   if (heartbeat.unref) heartbeat.unref();
 
@@ -48,6 +48,7 @@ function startRpcServer({ port = 8443, host = '0.0.0.0', getAccessKey, getAllowl
     if (req.method === 'GET' && req.url === '/events') {
       const key = req.headers['x-access-key'];
       const tid = req.headers['x-terminal-id'];
+      const bid = String(req.headers['x-business-id'] || '');
       const okKey = conn.verifyAccessKey(key, getAccessKey ? getAccessKey() : null);
       const okTid = conn.isTerminalAuthorized(tid, getAllowlist ? getAllowlist() : []);
       if (!okKey || !okTid) {
@@ -60,8 +61,8 @@ function startRpcServer({ port = 8443, host = '0.0.0.0', getAccessKey, getAllowl
         'Connection': 'keep-alive',
       });
       res.write(':ok\n\n');
-      sseClients.add(res);
-      log('info', 'sse conectado', { terminalId: tid, total: sseClients.size });
+      sseClients.set(res, bid);
+      log('info', 'sse conectado', { terminalId: tid, businessId: bid, total: sseClients.size });
       req.on('close', () => { sseClients.delete(res); });
       return;
     }
@@ -102,7 +103,10 @@ function startRpcServer({ port = 8443, host = '0.0.0.0', getAccessKey, getAllowl
       }
 
       try {
-        const result = await dispatch(parsed.channel, parsed.args, { terminalId: parsed.auth && parsed.auth.terminalId });
+        const result = await dispatch(parsed.channel, parsed.args, {
+          terminalId: parsed.auth && parsed.auth.terminalId,
+          businessId: parsed.auth && parsed.auth.businessId,
+        });
         if (result && result.__unknown === true) {
           return _sendJson(res, 404, conn.makeResponse(false, null, conn.RPC_ERRORS.UNKNOWN_CHANNEL));
         }
@@ -119,11 +123,14 @@ function startRpcServer({ port = 8443, host = '0.0.0.0', getAccessKey, getAllowl
 
   // Difunde un aviso a todos los clientes SSE. `obj` p.ej. { scopes:['products'] }.
   // Nunca lanza; un cliente muerto se limpia solo en su 'close'.
-  const broadcast = (obj) => {
+  const broadcast = (obj, businessId = '') => {
     if (!sseClients.size) return;
     let line;
     try { line = `data: ${JSON.stringify(obj)}\n\n`; } catch { return; }
-    for (const r of sseClients) { try { r.write(line); } catch {} }
+    for (const [r, clientBusinessId] of sseClients.entries()) {
+      if (businessId && clientBusinessId && clientBusinessId !== businessId) continue;
+      try { r.write(line); } catch {}
+    }
   };
 
   return {
@@ -132,7 +139,7 @@ function startRpcServer({ port = 8443, host = '0.0.0.0', getAccessKey, getAllowl
     broadcast,
     close: () => new Promise((resolve) => {
       clearInterval(heartbeat);
-      for (const r of sseClients) { try { r.end(); } catch {} }
+      for (const r of sseClients.keys()) { try { r.end(); } catch {} }
       sseClients.clear();
       server.close(resolve);
     }),

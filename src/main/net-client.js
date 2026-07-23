@@ -19,10 +19,14 @@ const _agent = new http.Agent({ keepAlive: true, keepAliveMsecs: 15000, maxSocke
 // Llama a un canal en el servidor. Resuelve SIEMPRE (no rechaza) con:
 //   { ok:true, data } | { ok:false, error, offline? }
 // offline:true → no se pudo llegar al servidor (red/timeout) → la UI debe avisar.
-function rpcCall({ host, port, accessKey, terminalId, channel, args, timeoutMs = 8000 }) {
+function rpcCall({ host, port, accessKey, terminalId, businessId, channel, args, timeoutMs = 8000 }) {
   return new Promise((resolve) => {
     let payload;
-    try { payload = Buffer.from(JSON.stringify(conn.makeRequest(channel, args, { accessKey, terminalId }))); }
+    try {
+      payload = Buffer.from(JSON.stringify(conn.makeRequest(channel, args, {
+        accessKey, terminalId, businessId,
+      })));
+    }
     catch { return resolve({ ok: false, error: 'BAD_REQUEST' }); }
 
     const req = http.request({
@@ -63,13 +67,39 @@ function healthCheck({ host, port, timeoutMs = 5000 }) {
   });
 }
 
+// Solo lo usa la edición Servidor en su primera ejecución. El gateway acepta
+// este endpoint únicamente desde loopback y una sola vez.
+function localBootstrap({ port = 8443, terminalId, name = 'Servidor local', timeoutMs = 5000 }) {
+  return new Promise((resolve) => {
+    const payload = Buffer.from(JSON.stringify({ terminalId, name }));
+    const req = http.request({
+      host: '127.0.0.1',
+      port,
+      path: '/local-bootstrap',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': payload.length },
+      timeout: timeoutMs,
+    }, res => {
+      let body = '';
+      res.on('data', chunk => { body += chunk; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(body || '{}')); }
+        catch { resolve({ ok: false, error: 'BAD_RESPONSE' }); }
+      });
+    });
+    req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: 'TIMEOUT', offline: true }); });
+    req.on('error', error => resolve({ ok: false, error: error.code || 'NETWORK', offline: true }));
+    req.end(payload);
+  });
+}
+
 // ── Consumidor de eventos SSE (Fase C — push tiempo real) ─────────────────────
 // El cliente abre un GET /events de larga duración al servidor y recibe avisos
 // "algo cambió en scope X" (sin datos). onEvent recibe el objeto ya parseado.
 // Robusto: nunca lanza; ante corte/timeout/servidor caído reintenta con backoff.
 // Devuelve { close() } para cerrarlo en el before-quit. Autenticación por headers
 // (clave + terminalId), verificados por el servidor contra clave y allowlist.
-function openEventStream({ host, port, accessKey, terminalId, onEvent, onStatus, retryMs = 3000 }) {
+function openEventStream({ host, port, accessKey, terminalId, businessId, onEvent, onStatus, retryMs = 3000 }) {
   let stopped = false;
   let req = null;
   let reconnecting = false;
@@ -89,6 +119,7 @@ function openEventStream({ host, port, accessKey, terminalId, onEvent, onStatus,
           'Accept': 'text/event-stream',
           'x-access-key': accessKey || '',
           'x-terminal-id': terminalId || '',
+          'x-business-id': businessId || '',
         },
         // SIN timeout: la respuesta SSE es de larga duración a propósito.
       }, (res) => {
@@ -124,4 +155,4 @@ function openEventStream({ host, port, accessKey, terminalId, onEvent, onStatus,
   return { close: () => { stopped = true; try { req && req.destroy(); } catch {} } };
 }
 
-module.exports = { rpcCall, healthCheck, openEventStream };
+module.exports = { rpcCall, healthCheck, localBootstrap, openEventStream };

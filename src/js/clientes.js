@@ -721,7 +721,7 @@ async function cargarActividadRepresentantes(customerId, contacts) {
       const paid = attributedPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
       const timeline = [
         ...documents.map(s => ({ date: s.created_at, label: `${facturaLabel(s)} · ${s.type === 'cotizacion' ? 'Cotización' : 'Factura'} · ${fmt(s.total || 0)}` })),
-        ...attributedPayments.map(p => ({ date: p.created_at, label: `Abono #${String(p.id).padStart(5,'0')} · ${fmt(p.amount || 0)}` })),
+        ...attributedPayments.map(p => ({ date: p.created_at, label: `${reciboLabel(p)} · Abono · ${fmt(p.amount || 0)}` })),
       ].sort((a,b) => String(b.date || '').localeCompare(String(a.date || ''))).slice(0, 3);
       el.innerHTML = `
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:${timeline.length ? '7px' : '0'}">
@@ -1052,6 +1052,10 @@ async function registrarAbono(clientId, balanceActual) {
   printAbono({
     payment: {
       id:             result.paymentId || 0,
+      document_kind:  result.document_kind || 'abono',
+      document_number: result.document_number,
+      document_number_fmt: result.document_number_fmt || '',
+      numero_recibo:  result.numero_recibo,
       amount,
       method,
       note:           note || 'Abono',
@@ -1083,7 +1087,10 @@ function guardarAbonoPDF(paymentId) {
   const c = (ctx && ctx.customer) || {};
   const build = () => printAbono({
     payment: {
-      id: p.id, amount: p.amount, method: p.method, note: p.note || 'Abono',
+      id: p.id, document_kind: p.document_kind || 'abono',
+      document_number: p.document_number, document_number_fmt: p.document_number_fmt || '',
+      numero_recibo: p.numero_recibo,
+      amount: p.amount, method: p.method, note: p.note || 'Abono',
       balance_before: p.balance_before, balance_after: p.balance_after, created_at: p.created_at,
       customer_contact_id: p.customer_contact_id || null,
       customer_contact_name: p.customer_contact_name || '',
@@ -1094,7 +1101,7 @@ function guardarAbonoPDF(paymentId) {
     cajero: (window._currentUser && window._currentUser.name) || '',
   });
   if (typeof guardarDocumentoPDF === 'function') {
-    guardarDocumentoPDF(build, `Abono-${String(p.id).padStart(5, '0')}`);
+    guardarDocumentoPDF(build, `Abono-${(typeof reciboLabel === 'function' ? reciboLabel(p) : String(p.id).padStart(5, '0'))}`);
   } else { build(); }
 }
 

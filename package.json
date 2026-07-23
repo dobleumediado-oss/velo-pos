@@ -1,6 +1,6 @@
 {
   "name": "velo-pos",
-  "version": "1.26.1",
+  "version": "1.27.0",
   "description": "Sistema POS desktop profesional para comercios, repuestos, sucursales y operaciones empresariales",
   "main": "main.js",
   "scripts": {
@@ -8,10 +8,15 @@
     "dev": "electron . --dev",
     "rebuild": "npx @electron/rebuild -f -w better-sqlite3 --arch x64",
     "build": "electron-builder",
-    "build:win": "electron-builder --win",
+    "prepare:server-service": "node build/windows-service/prepare-winsw.js",
+    "build:win:terminal": "electron-builder --config build/electron-builder-terminal.js --win",
+    "build:win:server": "npm run prepare:server-service && electron-builder --config build/electron-builder-server.js --win",
+    "build:win": "npm run build:win:terminal && npm run build:win:server",
     "build:mac": "electron-builder --mac",
     "db:reset": "node scripts/resetDB.js",
-    "release:win": "electron-builder --win --publish always",
+    "release:win:terminal": "electron-builder --config build/electron-builder-terminal.js --win --publish always",
+    "release:win:server": "npm run prepare:server-service && electron-builder --config build/electron-builder-server.js --win --publish always",
+    "release:win": "npm run release:win:terminal && npm run release:win:server",
     "release:mac": "electron-builder --mac --publish always",
     "verify-version": "node -e \"const v=require('./package.json').version; console.log('Version:',v); if(!v) process.exit(1)\"",
     "release": "npm run release:check && npm run build:win",
@@ -31,7 +36,9 @@
     "test:printing": "node scripts/test-printer-profiles.js",
     "test:pending-invoices": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-pending-invoices.js",
     "test:salespeople": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-salespeople.js",
-    "test": "npm run test:url && npm run test:login && npm run test:pos && npm run test:checkout && npm run test:customer-companies && npm run test:business && npm run test:import && npm run test:financial && npm run test:printing && npm run test:pending-invoices && npm run test:salespeople"
+    "test:documents": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-document-workflows.js",
+    "test:server-service": "node scripts/test-server-service.js",
+    "test": "npm run test:url && npm run test:login && npm run test:pos && npm run test:checkout && npm run test:customer-companies && npm run test:business && npm run test:import && npm run test:financial && npm run test:printing && npm run test:pending-invoices && npm run test:salespeople && npm run test:documents && npm run test:server-service"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

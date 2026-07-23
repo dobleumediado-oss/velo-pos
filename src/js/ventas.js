@@ -682,6 +682,15 @@ function renderVentasTable() {
                   html: `${svg('check')} Convertir`
                 })
               : null,
+            s.status === 'completed' && s.type === 'cotizacion'
+              ? h('button', {
+                  class: 'btn btn-ghost btn-sm',
+                  style: { color: 'var(--red)' },
+                  title: 'Eliminar cotización',
+                  onclick: () => eliminarCotizacion(s),
+                  html: `${svg('trash')} Eliminar`
+                })
+              : null,
             ['admin','superadmin'].includes(user?.role) &&
             s.status === 'completed' && s.type !== 'cotizacion'
               ? h('button', {
@@ -863,7 +872,7 @@ async function convertirCotizacionAVenta(s) {
     it._stock !== null && it._stock >= 0 && it._stock < it.qty && it.qty > 0);
 
   openModal(`
-    <div class="modal-title">Convertir Cotización #${String(s.id).padStart(5,'0')} en Venta</div>
+    <div class="modal-title">Convertir Cotización ${facturaLabel(sale)} en Venta</div>
     <div class="modal-sub">
       Cliente: <strong>${sale.customer_name || 'Consumidor Final'}</strong> ·
       ${(sale.created_at||'').split('T')[0]}
@@ -1033,11 +1042,13 @@ async function confirmarConversionCotizacion() {
 
   if (!result.ok) { toast(result.error || 'Error al convertir', 'err'); return; }
 
-  await window.api.sales.cancel({
+  const removedQuote = await window.api.sales.deleteQuote({
     id: cotizId,
-    reason: `Convertida en factura #${result.saleId}`,
     requestUserId: user.id,
   });
+  if (!removedQuote?.ok) {
+    toast(`La factura se creó, pero la cotización original no pudo eliminarse: ${removedQuote?.error || 'error desconocido'}`, 'w');
+  }
 
 	  await reloadSales({ range: 'all', view: 'sales' });
 	  await reloadProducts();
@@ -1061,9 +1072,15 @@ async function confirmarConversionCotizacion() {
   delete window._convSale;
   delete window._convOrigId;
 
-  toast(`✓ Cotización convertida → Factura #${String(result.saleId).padStart(5,'0')}`);
+  toast(`✓ Cotización convertida → ${facturaLabel(convertedSale || {
+    id: result.saleId,
+    document_number_fmt: result.documentNumberFmt,
+  })}`);
   printReceipt({
     id:             result.saleId,
+    document_kind:  convertedSale?.document_kind || result.documentKind || '',
+    document_number: convertedSale?.document_number || result.documentNumber,
+    document_number_fmt: convertedSale?.document_number_fmt || result.documentNumberFmt || '',
     type:           'factura',
     customer_name:  convertedSale?.customer_name || sale.customer_name || 'Consumidor Final',
     customer_rnc:   convertedSale?.customer_rnc || sale.customer_rnc || '',
@@ -1198,7 +1215,7 @@ async function openDetalleVentaModal(s) {
     </div>` : '';
 
   openModal(`
-    <div class="modal-title">Venta ${typeof facturaLabel === 'function' ? facturaLabel(sale || s) : '#'+String(s.id).padStart(5,'0')}</div>
+    <div class="modal-title">${documentTypeLabel(detail)} ${typeof facturaLabel === 'function' ? facturaLabel(sale || s) : '#'+String(s.id).padStart(5,'0')}</div>
     <div class="modal-sub">
       ${fdate(fecha)} · Cajero: ${detail.cajero || '—'}
       ${detail.salesperson_name ? ` · Vendedor: ${ventasEsc(detail.salesperson_code ? detail.salesperson_code + ' · ' : '')}${ventasEsc(detail.salesperson_name)}` : ''}
@@ -1212,8 +1229,10 @@ async function openDetalleVentaModal(s) {
       </div>
       <div>
         <div class="lbl">Comprobante</div>
-        <div style="font-weight:600;text-transform:capitalize">${detail.type || 'factura'}</div>
-        <div class="ts">Pago: ${ventasEsc(paymentDetail)}${ventasEsc(currencyDetail)}</div>
+        <div style="font-weight:600">${documentTypeLabel(detail)}</div>
+        ${detail.type === 'cotizacion'
+          ? '<div class="ts">Sin cobro · sin movimiento de inventario</div>'
+          : `<div class="ts">Pago: ${ventasEsc(paymentDetail)}${ventasEsc(currencyDetail)}</div>`}
         ${detail.payment_reference
           ? `<div class="ts">Referencia: ${ventasEsc(detail.payment_reference)}</div>` : ''}
       </div>
@@ -1253,19 +1272,29 @@ async function openDetalleVentaModal(s) {
       </button>
       <button class="btn btn-out" style="background:#25D366;color:#fff;border-color:#25D366"
               onclick="ventaWhatsApp(${s.id})"
-              title="Enviar resumen por WhatsApp">
+              title="Enviar resumen de texto por WhatsApp">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="flex-shrink:0">
           <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
           <path d="M12 0C5.373 0 0 5.373 0 12c0 2.124.557 4.118 1.529 5.847L0 24l6.335-1.501A11.934 11.934 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.801 9.801 0 01-5.002-1.367l-.359-.214-3.72.881.896-3.614-.234-.371A9.818 9.818 0 012.182 12C2.182 6.575 6.575 2.182 12 2.182S21.818 6.575 21.818 12 17.425 21.818 12 21.818z"/>
         </svg>
-        WhatsApp
+        WhatsApp texto
       </button>
-      ${s.type !== 'devolucion' && s.status === 'completed'
+      <button class="btn btn-out" style="color:#128C7E;border-color:#25D366"
+              onclick="ventaWhatsAppPDF(${s.id})"
+              title="Preparar el documento PDF y abrir WhatsApp">
+        ${svg('pdf')} PDF por WhatsApp
+      </button>
+      ${s.type === 'factura' && s.status === 'completed'
         ? `<button class="btn btn-amber" onclick="closeModal();iniciarDevolucionDesdeVenta(${s.id})">
              ${svg('return')} Devolver
            </button>`
         : ''}
-      ${['admin','superadmin'].includes(user?.role) && s.status === 'completed'
+      ${s.status === 'completed' && s.type === 'cotizacion'
+        ? `<button class="btn btn-red" onclick="closeModal();eliminarCotizacion(DB.sales.find(x=>x.id===${s.id}))">
+             ${svg('trash')} Eliminar cotización
+           </button>`
+        : ''}
+      ${['admin','superadmin'].includes(user?.role) && s.status === 'completed' && s.type !== 'cotizacion'
         ? `<button class="btn btn-red" onclick="closeModal();openAnulacionModal(DB.sales.find(x=>x.id===${s.id}))">
              ${s.type === 'devolucion' ? 'Anular devolución' : 'Anular'}
            </button>`
@@ -1282,6 +1311,39 @@ async function openDetalleVentaModal(s) {
       });
     });
   }, 0);
+}
+
+function eliminarCotizacion(s) {
+  if (!s || s.type !== 'cotizacion') {
+    toast('Cotización no encontrada', 'err');
+    return;
+  }
+  confirmModal(
+    `¿Eliminar definitivamente la cotización <strong>${facturaLabel(s)}</strong>?
+     <br><span style="font-size:11px;color:var(--muted)">
+       Se quitará inmediatamente de Ventas. Su número no se reutilizará y la acción quedará auditada.
+     </span>`,
+    async () => {
+      const result = await window.api.sales.deleteQuote({
+        id: s.id,
+        requestUserId: user.id,
+      });
+      closeModal();
+      if (!result?.ok) {
+        toast(result?.error || 'No se pudo eliminar la cotización', 'err');
+        return;
+      }
+      await Promise.all([
+        reloadSales({ range: ventasRange, view: 'sales' }),
+        reloadProducts(),
+        reloadCustomers(),
+      ]);
+      renderVentasTable();
+      toast(`✓ Cotización ${result.documentNumber || facturaLabel(s)} eliminada`);
+    },
+    'Eliminar ahora',
+    'btn-red'
+  );
 }
 
 // ── Anulación (solo admin) ────────────────────
@@ -1351,7 +1413,7 @@ async function reimprimirVenta(saleId) {
     : '';
 
   confirmModal(
-    `¿Reimprimir la factura <strong>${facturaLabel(sale)}</strong>?
+    `¿Reimprimir ${documentTypeLabel(sale).toLowerCase()} <strong>${facturaLabel(sale)}</strong>?
      <br><span style="font-size:11px;color:var(--muted)">
        Quedará registrado en el log de auditoría como reimpresión.
      </span>`,
@@ -1361,6 +1423,11 @@ async function reimprimirVenta(saleId) {
       const _cust = (DB.customers || []).find(c => c.id === sale.customer_id);
       printReceipt({
         id:              sale.id,
+        document_kind:   sale.document_kind || '',
+        document_number: sale.document_number,
+        document_number_fmt: sale.document_number_fmt || '',
+        receipt_document_number: sale.receipt_document_number,
+        receipt_document_number_fmt: sale.receipt_document_number_fmt || '',
         // Número real de factura para que la reimpresión muestre #00002311, no el id interno.
         numero_factura:     sale.numero_factura,
         numero_factura_fmt: sale.numero_factura_fmt,
@@ -1404,7 +1471,7 @@ async function reimprimirVenta(saleId) {
         balance_after_payment: sale.balance_after_payment,
         receipt_number:  sale.last_receipt_number,
         receipt_numbers: sale.receipt_numbers,
-        transaction_number: sale.id,
+        transaction_number: sale.document_number_fmt || sale.id,
         notes:           sale.notes || '',
         cajero:          sale.cajero,
         salesperson_id:   sale.salesperson_id || null,
@@ -1417,6 +1484,7 @@ async function reimprimirVenta(saleId) {
         modifies_ncf:    sale.modifies_ncf || '',
         // Devolución: referencia a la factura original (número real).
         original_sale_id:            sale.original_sale_id || null,
+        original_document_number_fmt: sale.original_document_number_fmt || '',
         original_numero_factura:     sale.original_numero_factura,
         original_numero_factura_fmt: sale.original_numero_factura_fmt,
       }, true); // true = isReprint
@@ -1426,16 +1494,18 @@ async function reimprimirVenta(saleId) {
   );
 }
 
-// ── Guardar venta como PDF (bajo demanda) ─────
-async function guardarVentaPDF(saleId) {
-  const sale = await window.api.sales.getById({ id: saleId });
-  if (!sale) { toast('Venta no encontrada', 'err'); return; }
+function ventasPrintPayload(sale) {
   const fecha = (sale.created_at || '').split('T')[0];
   const hora  = sale.created_at
     ? new Date(sale.created_at).toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' }) : '';
   const _custPdf = (DB.customers || []).find(c => c.id === sale.customer_id);
-  const payload = {
+  return {
     id: sale.id, date: fecha, time: hora, type: sale.type,
+    document_kind: sale.document_kind || '',
+    document_number: sale.document_number,
+    document_number_fmt: sale.document_number_fmt || '',
+    receipt_document_number: sale.receipt_document_number,
+    receipt_document_number_fmt: sale.receipt_document_number_fmt || '',
     numero_factura: sale.numero_factura, numero_factura_fmt: sale.numero_factura_fmt,
     due_date: sale.due_date || null, customer_id: sale.customer_id || null,
     customer_name: sale.customer_name || 'Consumidor Final', customer_rnc: sale.customer_rnc || _custPdf?.rnc || '',
@@ -1460,18 +1530,26 @@ async function guardarVentaPDF(saleId) {
     tax_amt: sale.tax_amt || 0, total: sale.total, payment_method: sale.payment_method,
     payment_amount: sale.payment_amount, balance_after_payment: sale.balance_after_payment,
     receipt_number: sale.last_receipt_number, receipt_numbers: sale.receipt_numbers,
-    transaction_number: sale.id, notes: sale.notes || '',
+    transaction_number: sale.document_number_fmt || sale.id, notes: sale.notes || '',
     cajero: sale.cajero, ncf: sale.ncf || '', tax_pct: sale.tax_pct, modifies_ncf: sale.modifies_ncf || '',
     salesperson_id: sale.salesperson_id || null,
     salesperson_name: sale.salesperson_name || '',
     salesperson_code: sale.salesperson_code || '',
     original_sale_id: sale.original_sale_id || null,
+    original_document_number_fmt: sale.original_document_number_fmt || '',
     original_numero_factura: sale.original_numero_factura,
     original_numero_factura_fmt: sale.original_numero_factura_fmt,
   };
+}
+
+// ── Guardar venta como PDF (bajo demanda) ─────
+async function guardarVentaPDF(saleId) {
+  const sale = await window.api.sales.getById({ id: saleId });
+  if (!sale) { toast('Venta no encontrada', 'err'); return; }
+  const payload = ventasPrintPayload(sale);
   const label = sale.type === 'cotizacion' ? 'Cotizacion' : sale.type === 'devolucion' ? 'Devolucion' : 'Factura';
   if (typeof guardarDocumentoPDF === 'function') {
-    guardarDocumentoPDF(() => printReceipt(payload, true), `${label}-${String(sale.id).padStart(5, '0')}`);
+    guardarDocumentoPDF(() => printReceipt(payload, true), `${label}-${facturaLabel(sale).replace(/^#/, '')}`);
   } else {
     toast('Guardar PDF no disponible', 'err');
   }
@@ -1518,6 +1596,37 @@ async function ventaWhatsApp(saleId) {
     : (CFG.phone || '').replace(/[^0-9]/g, '');
 
   openWhatsAppModal(msg, defPhone, cliente);
+}
+
+async function ventaWhatsAppPDF(saleId) {
+  const sale = await window.api.sales.getById({ id: saleId });
+  if (!sale) { toast('No se pudo cargar el documento', 'err'); return; }
+  if (typeof enviarDocumentoPDFWhatsApp !== 'function') {
+    toast('Envío de PDF no disponible', 'err');
+    return;
+  }
+  const cliente = sale.customer_name || 'Consumidor Final';
+  const client = (DB.customers || []).find(c => Number(c.id) === Number(sale.customer_id));
+  const phone = (
+    sale.customer_contact_phone ||
+    sale.customer_phone ||
+    client?.phone ||
+    ''
+  ).replace(/\D/g, '');
+  const typeName = documentTypeLabel(sale);
+  const message = [
+    `${typeName} ${facturaLabel(sale)} · ${CFG.biz}`,
+    `Cliente: ${cliente}`,
+    `Total: ${fmt(sale.total || 0)}`,
+    'Adjuntamos el documento en formato PDF.',
+    'Gracias por su preferencia.',
+  ].join('\n');
+  const fileLabel = `${typeName.replace(/\s+/g, '-')}-${facturaLabel(sale).replace(/^#/, '')}`;
+  enviarDocumentoPDFWhatsApp(
+    () => printReceipt(ventasPrintPayload(sale), true),
+    fileLabel,
+    { message, phone, clientName: cliente }
+  );
 }
 
 // ── Exportar PDF ventas ───────────────────────

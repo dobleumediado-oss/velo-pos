@@ -1591,7 +1591,7 @@ async function renderConexionCard(container) {
   const mode  = res.mode || 'local';
   const badge = mode === 'local' ? 'g' : mode === 'server' ? 'b' : 'a';
   const btn   = (v, t) => `<button class="btn ${mode===v?'btn-dark':'btn-out'} btn-sm" style="flex:1"
-      onclick="cambiarModoConexion('${v}')">${t}</button>`;
+      ${res.serviceMode ? 'disabled title="El instalador Servidor administra este modo"' : `onclick="cambiarModoConexion('${v}')"`}>${t}</button>`;
 
   let body = '';
   if (mode === 'local') {
@@ -1599,11 +1599,23 @@ async function renderConexionCard(container) {
       <div><div class="alrt-title">Trabajando en modo local</div>
       <div class="alrt-sub">Esta máquina usa su propia base de datos (como hasta ahora).</div></div></div>`;
   } else if (mode === 'server') {
-    const rows = (res.allowlist || []).map(t => `
-      <div class="tr" style="font-size:11px;padding:4px 0">
-        <span class="mono">${_esc((t.name ? t.name + ' · ' : '') + t.terminalId.slice(0, 8))}…</span>
-        <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="quitarTerminalAllow('${_esc(t.terminalId)}')">Quitar</button>
-      </div>`).join('') || `<div style="font-size:11px;color:var(--muted2)">Ninguna terminal autorizada aún.</div>`;
+    const rows = (res.allowlist || []).map(t => {
+      const assigned = Array.isArray(t.businesses) ? t.businesses : [];
+      const selected = assigned.length === 1 ? assigned[0] : '';
+      const businessSelect = res.serviceMode && Array.isArray(res.businesses)
+        ? `<select class="inp" style="width:180px;height:30px;font-size:10px;padding:4px 7px"
+            onchange="asignarNegocioTerminal('${_esc(t.terminalId)}',this.value)">
+            <option value="" ${selected ? '' : 'selected'}>Todos los negocios</option>
+            ${res.businesses.map(b => `<option value="${_esc(b.id)}" ${selected===b.id?'selected':''}>${_esc(b.name || b.id)}</option>`).join('')}
+          </select>`
+        : '';
+      return `
+        <div class="tr" style="font-size:11px;padding:4px 0;gap:7px">
+          <span class="mono" style="flex:1">${_esc((t.name ? t.name + ' · ' : '') + t.terminalId.slice(0, 8))}…</span>
+          ${businessSelect}
+          <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="quitarTerminalAllow('${_esc(t.terminalId)}')">Quitar</button>
+        </div>`;
+    }).join('') || `<div style="font-size:11px;color:var(--muted2)">Ninguna terminal autorizada aún.</div>`;
     const addrRows = (res.addresses || []).length
       ? (res.addresses || []).map(a => `
           <div class="tr" style="font-size:12px;align-items:center">
@@ -1612,10 +1624,10 @@ async function renderConexionCard(container) {
           </div>`).join('')
       : `<div style="font-size:11px;color:var(--muted2)">No se detectaron direcciones de red.</div>`;
     body = `
-      <div style="font-size:12px;margin-bottom:8px">Esta PC es el <b>servidor</b>. Las demás se conectan a esta dirección:</div>
+      <div style="font-size:12px;margin-bottom:8px">Esta PC ejecuta <b>Velo POS Server Service</b>. Seguirá disponible aunque cierres esta ventana.</div>
       <div style="font-weight:700;font-size:11px;margin-bottom:2px">IP de este servidor</div>
       ${addrRows}
-      <div style="font-size:10px;color:var(--muted2);margin:4px 0 8px">La IP de red local puede cambiar al reiniciar el router; fíjala en el router si es posible.</div>
+      <div style="font-size:10px;color:var(--muted2);margin:4px 0 8px">Para acceso remoto sin nube, usa preferentemente la IP de Tailscale.</div>
       <div class="tr" style="font-size:12px"><span>Puerto</span><span class="mono">${_esc(res.serverPort)}</span></div>
       <div class="tr" style="font-size:12px;align-items:center"><span>Clave de acceso</span>
         <span class="mono" style="font-weight:700">${res.accessKey ? _esc(res.accessKey) : '— sin generar —'}</span></div>
@@ -1656,7 +1668,7 @@ async function renderConexionCard(container) {
     ${body}
     <div style="font-size:10px;color:var(--muted2);margin-top:10px">
       ID de esta terminal: <span class="mono">${_esc((res.terminalId||'').slice(0,8))}…</span>
-      · Cambiar el modo requiere reiniciar la app.</div>`;
+      · ${res.serviceMode ? 'Modo administrado por el instalador Servidor.' : 'Cambiar el modo requiere reiniciar la app.'}</div>`;
   container.innerHTML = '';
   container.appendChild(card);
 }
@@ -1721,6 +1733,20 @@ async function quitarTerminalAllow(id) {
   if (!res || res.ok === false) { toast(res?.error || 'No se pudo quitar', 'err'); return; }
   toast('✓ Terminal quitada');
   _connReRender();
+}
+
+async function asignarNegocioTerminal(terminalId, businessId) {
+  const res = await window.api.connection.setTerminalBusinesses({
+    requestUserId: _cfgUser()?.id,
+    terminalId,
+    businessIds: businessId ? [businessId] : [],
+  });
+  if (!res || res.ok === false) {
+    toast(res?.error || 'No se pudo asignar el negocio', 'err');
+    _connReRender();
+    return;
+  }
+  toast(businessId ? '✓ Caja asignada al negocio' : '✓ Caja con acceso a todos los negocios');
 }
 
 // ══════════════════════════════════════════════

@@ -59,8 +59,17 @@ function authorizeRequest(req, { accessKey, allowlist } = {}) {
 }
 
 // ── Sobre RPC (JSON) — el transporte HTTP/WS solo lo serializa ──
-function makeRequest(channel, args, { accessKey, terminalId } = {}) {
-  return { v: 1, channel, args: args === undefined ? null : args, auth: { accessKey, terminalId } };
+function makeRequest(channel, args, { accessKey, terminalId, businessId } = {}) {
+  return {
+    v: 1,
+    channel,
+    args: args === undefined ? null : args,
+    auth: {
+      accessKey,
+      terminalId,
+      businessId: businessId == null ? '' : String(businessId),
+    },
+  };
 }
 function validateRequest(req) {
   if (!req || typeof req !== 'object') return RPC_ERRORS.BAD_REQUEST;

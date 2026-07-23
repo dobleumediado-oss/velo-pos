@@ -84,7 +84,12 @@ contextBridge.exposeInMainWorld('api', {
     count:   (data)          => ipcRenderer.invoke('sales:count', data),
     search:  (data)          => ipcRenderer.invoke('sales:search', data),
     cancel:  (data)          => ipcRenderer.invoke('sales:cancel', data),
+    deleteQuote: (data)      => ipcRenderer.invoke('sales:deleteQuote', data),
     return:  (data)          => ipcRenderer.invoke('sales:return', data),
+  },
+
+  documents: {
+    issue: (data)            => ipcRenderer.invoke('documents:issue', data),
   },
 
   // ── Preventa / órdenes compartidas de cobro ─────
@@ -144,6 +149,7 @@ contextBridge.exposeInMainWorld('api', {
   // ── Shell — abrir links en navegador del sistema ──
   shell: {
     openExternal: (url)      => ipcRenderer.invoke('shell:openExternal', { url }),
+    showItemInFolder: (path) => ipcRenderer.invoke('shell:showItemInFolder', { path }),
   },
 
 
@@ -189,6 +195,7 @@ contextBridge.exposeInMainWorld('api', {
     generateKey:        (data) => ipcRenderer.invoke('connection:generateKey', data),
     test:               (data) => ipcRenderer.invoke('connection:test', data),
     setAllowedTerminal: (data) => ipcRenderer.invoke('connection:setAllowedTerminal', data),
+    setTerminalBusinesses: (data) => ipcRenderer.invoke('connection:setTerminalBusinesses', data),
     clientPreflight:    ()     => ipcRenderer.invoke('connection:clientPreflight'),
     setMode:            (data) => ipcRenderer.invoke('connection:setMode', data),
     localGuardStatus:      (data) => ipcRenderer.invoke('connection:localGuardStatus', data),

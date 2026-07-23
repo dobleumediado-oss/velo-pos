@@ -9,6 +9,7 @@ data/
 .DS_Store
 out/
 releases/
+build/windows-service/vendor/
 
 # Datos de clientes — nunca al repo (nombres, RNC, montos, CxC)
 csv_v2/

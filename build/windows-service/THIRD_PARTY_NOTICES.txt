@@ -1,0 +1,8 @@
+Velo POS Server Service incluye Windows Service Wrapper (WinSW) v2.12.0.
+
+Proyecto: https://github.com/winsw/winsw
+Licencia: MIT
+Copyright: WinSW contributors
+
+El binario se descarga desde el release oficial y se valida con SHA-256 durante
+la compilación del instalador.

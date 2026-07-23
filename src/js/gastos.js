@@ -1032,6 +1032,9 @@ window.pagarGasto = (id, saldo) => {
         printPagoProveedor({
           payment: {
             id:             res.paymentId || id,
+            document_kind:  res.documentKind || 'pago_proveedor',
+            document_number: res.documentNumber,
+            document_number_fmt: res.documentNumberFmt || '',
             amount,
             method,
             reference,

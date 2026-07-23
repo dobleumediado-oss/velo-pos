@@ -1,6 +1,6 @@
 # Visión general — Velo POS Desktop
 
-[← Volver a CLAUDE.md](../CLAUDE.md) · Relacionados: [Clientes empresa](clientes-empresas.md) · [Contabilidad](accounting-module.md) · [Impresión](printing-module.md) · [Release](release-process.md)
+[← Volver a CLAUDE.md](../CLAUDE.md) · Relacionados: [Servidor](server-service.md) · [Multi-terminal](multi-terminal-sync.md) · [Flujos documentales](document-workflows.md) · [Clientes empresa](clientes-empresas.md) · [Contabilidad](accounting-module.md) · [Impresión](printing-module.md) · [Release](release-process.md)
 
 Aplicación **Electron v29** de punto de venta (POS) **offline** para micro-negocios de República Dominicana (tiendas de auto repuestos, etc.).
 
@@ -19,7 +19,10 @@ Aplicación **Electron v29** de punto de venta (POS) **offline** para micro-nego
 - **Contexto RD**: ITBIS 18%, moneda DOP, NCF (comprobantes fiscales), cumplimiento DGII.
 - **Preventa multi-terminal**: despacho prepara y reserva; caja cobra y genera la factura; despacho confirma la entrega. Ver [Preventa y Despacho](preventa-despacho.md).
 - **Clientes empresariales**: una empresa concentra datos fiscales, crédito e historial; sus representantes identifican quién solicita o recibe sin crear cuentas separadas. Ver [Clientes empresa y representantes](clientes-empresas.md).
-- **Alcance operativo**: una sola empresa usuaria, inventario global y varias terminales; no se modelan sucursales en el flujo empresarial actual.
+- **Numeración documental**: facturas al contado/crédito, cotizaciones, notas de crédito, abonos, recibos, conduces y reportes usan correlativos independientes. Ver [Flujos documentales](document-workflows.md).
+- **Alcance operativo**: una instalación puede contener varios negocios aislados y
+  varias terminales, sin modelar sucursales. En despliegues multi-terminal,
+  **Velo POS Server Service** mantiene un worker SQLite independiente por negocio.
 
 ## Normalización de nombres de campo IPC (importante)
 La BD a veces usa columnas distintas a lo que espera la UI. Los handlers en `main.js` normalizan:

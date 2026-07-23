@@ -755,9 +755,10 @@ function renderAbonosContenido(el, d) {
   const rowsHtml = rows.length ? rows.map(p => {
     const fecha = (p.created_at || '').split('T')[0].split(' ')[0];
     // Mostrar el número de factura REAL (numero_factura_fmt), no el sale_id interno.
-    const factura = p.sale_numero_factura_fmt
-      ? `#${p.sale_numero_factura_fmt}`
-      : (p.sale_id ? `#${String(p.sale_id).padStart(5, '0')}` : 'Sin factura');
+    const factura = p.sale_document_number_fmt
+      || (p.sale_numero_factura_fmt
+        ? `#${p.sale_numero_factura_fmt}`
+        : (p.sale_id ? `#${String(p.sale_id).padStart(5, '0')}` : 'Sin factura'));
     const source = p.imported ? 'Histórico' : 'POS';
     return `<tr>
       <td>${fdate(fecha)}</td>
@@ -803,7 +804,11 @@ function exportAbonosPDF() {
     return `<tr>
       <td>${fdate(fecha)}</td>
       <td>${_repEsc(p.customer_name || 'Cliente eliminado')}</td>
-      <td>${p.sale_numero_factura_fmt ? '#' + _repEsc(p.sale_numero_factura_fmt) : (p.sale_id ? '#' + String(p.sale_id).padStart(5, '0') : 'Sin factura')}</td>
+      <td>${p.sale_document_number_fmt
+        ? _repEsc(p.sale_document_number_fmt)
+        : (p.sale_numero_factura_fmt
+          ? '#' + _repEsc(p.sale_numero_factura_fmt)
+          : (p.sale_id ? '#' + String(p.sale_id).padStart(5, '0') : 'Sin factura'))}</td>
       <td>${_repEsc(p.method || 'efectivo')}</td>
       <td>${p.imported ? 'Histórico' : 'POS'}</td>
       <td style="text-align:right;font-weight:700">${fmt(p.amount || 0)}</td>

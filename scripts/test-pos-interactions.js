@@ -100,7 +100,7 @@ state.currentInv().cart.push({ name: 'Artículo', price: 105, qty: 1, taxable: 1
 const posSource = fs.readFileSync(path.join(root, 'src/js/pos.js'), 'utf8');
 vm.runInContext(`${posSource}\nlet __renderCartCalls=0;
 renderCart=()=>{__renderCartCalls++};
-this.__posDiscount={posDiscConPin,calcTotals,renderCalls:()=>__renderCartCalls};
+this.__posDiscount={posDiscConPin,calcTotals,posSetQty,posCommitQty,renderCalls:()=>__renderCartCalls};
 this.__posCustomers={pvCustomerMatches,pvCustomerOptions,pvFilterCustomers,pvSelectCustomer,posSelectCustomer,_setPosPmode};`,
 context, { filename: 'pos.js' });
 const discount = context.__posDiscount;
@@ -127,6 +127,23 @@ assert.strictEqual(state.currentInv().discAmtInput, 40);
 assert.strictEqual(discount.renderCalls(), 0, 'escribir RD$ no debe reemplazar el carrito');
 assert.strictEqual(elements.get('pos-total-value').textContent, 'RD$65.00');
 console.log('  ✓ permite escribir RD$40 seguido sin perder el foco');
+
+state.setProducts([{ id: 100, price: 10, wholesale: 9, stock: 100, active: 1 }]);
+state.currentInv().discMode = 'pct';
+state.currentInv().disc = 0;
+state.currentInv().cart = [{ pid:100, product_id:100, name:'Cantidad', price:10, qty:1, taxable:0 }];
+const qtyInput = { value:'4' };
+discount.posSetQty(0, qtyInput);
+qtyInput.value = '40';
+discount.posSetQty(0, qtyInput);
+assert.strictEqual(state.currentInv().cart[0].qty, 40);
+assert.strictEqual(discount.renderCalls(), 0, 'escribir cantidad no debe reemplazar el campo activo');
+qtyInput.value = '';
+discount.posSetQty(0, qtyInput);
+assert.strictEqual(state.currentInv().cart[0].qty, 40, 'vaciar temporalmente no debe forzar cantidad 1');
+discount.posCommitQty(0, qtyInput);
+assert.strictEqual(qtyInput.value, 40, 'al salir de un campo vacío restaura la última cantidad válida');
+console.log('  ✓ permite escribir cantidades de varios dígitos sin perder el foco');
 
 state.setCustomers([
   { id: 1, name: 'Consumidor Final', active: 1 },
