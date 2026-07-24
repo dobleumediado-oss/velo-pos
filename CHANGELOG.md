@@ -1,5 +1,12 @@
 # Historial de versiones
 
+## 1.29.2 — 2026-07-24
+
+### Etiquetas
+
+- El código de barras ahora escala al ancho disponible de la etiqueta (viewBox
+  responsivo): con un margen configurado ya no se recorta el código ni el texto.
+
 ## 1.29.1 — 2026-07-24
 
 ### Etiquetas

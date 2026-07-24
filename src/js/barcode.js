@@ -64,7 +64,21 @@ function _bcRenderSvg(value, d) {
       });
     } catch { return ''; }
   }
-  tmp.setAttribute('style', 'max-width:100%;height:auto');
+  // JsBarcode fija width/height absolutos y NO pone viewBox, así el SVG no
+  // escala: si es más ancho que su contenedor (p.ej. al aplicar un margen),
+  // overflow:hidden lo RECORTA en vez de encogerlo. Le añadimos un viewBox y
+  // ancho 100% para que SIEMPRE escale al contenedor y nunca se corte.
+  const wAttr = parseFloat(tmp.getAttribute('width')) || 0;
+  const hAttr = parseFloat(tmp.getAttribute('height')) || 0;
+  if (wAttr && hAttr) {
+    if (!tmp.getAttribute('viewBox')) tmp.setAttribute('viewBox', `0 0 ${wAttr} ${hAttr}`);
+    tmp.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    tmp.removeAttribute('width');
+    tmp.removeAttribute('height');
+    tmp.setAttribute('style', 'width:100%;height:auto;display:block');
+  } else {
+    tmp.setAttribute('style', 'max-width:100%;height:auto');
+  }
   return tmp.outerHTML;
 }
 
