@@ -99,6 +99,23 @@ async function renderBarcodeDesigner(container) {
                  value="${design.pageMm}" oninput="_bcdUpdate()"/>
         </div>
       </div>
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line2)">
+        <div style="font-size:12px;font-weight:700;margin-bottom:6px">🎯 Calibración de posición</div>
+        <div style="font-size:11px;color:var(--muted2);margin-bottom:8px">Empuja el contenido para centrarlo en TU etiqueta. Positivo = derecha / abajo; negativo = izquierda / arriba.</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:end">
+          <div class="fg" style="margin:0">
+            <label class="lbl">Ajuste horizontal (mm)</label>
+            <input class="inp" id="bcd-offx" type="number" min="-30" max="30" step="0.5"
+                   value="${Number(design.offsetXmm) || 0}" oninput="_bcdUpdate()"/>
+          </div>
+          <div class="fg" style="margin:0">
+            <label class="lbl">Ajuste vertical (mm)</label>
+            <input class="inp" id="bcd-offy" type="number" min="-30" max="30" step="0.5"
+                   value="${Number(design.offsetYmm) || 0}" oninput="_bcdUpdate()"/>
+          </div>
+          <button class="btn btn-out btn-sm" onclick="_bcdPrintCalibration()" title="Imprime un marco del tamaño de la etiqueta con cruz al centro para verificar la posición">${svg('print')} Prueba</button>
+        </div>
+      </div>
     </div>
 
     <!-- Código de barras -->
@@ -370,6 +387,8 @@ function _bcdReadDesign() {
     paddingMm:     gi('bcd-pad'),
     gapMm:         gi('bcd-gap'),
     pageMm:        gi('bcd-pagemm'),
+    offsetXmm:     parseFloat(gv('bcd-offx')) || 0,
+    offsetYmm:     parseFloat(gv('bcd-offy')) || 0,
     elemGap:       1,
 
     format:        gv('bcd-format') || 'CODE128',
@@ -446,6 +465,7 @@ function _bcdUpdatePreview() {
 
   lbl.style.cssText = `
     width:${lw}px;height:${lh}px;
+    transform:translate(${(Number(d.offsetXmm) || 0) * PX}px, ${(Number(d.offsetYmm) || 0) * PX}px);
     padding:${(Number(d.paddingMm) || 0) * PX}px ${((Number(d.pageMm) || 0) + (Number(d.paddingMm) || 0)) * PX}px;
     background:${d.bgColor};
     border:${d.showBorder?'1px solid #ccc':'none'};
@@ -576,6 +596,42 @@ async function _bcdSave() {
     }).catch(() => {});
   } catch(e) {
     toast('Error al guardar: ' + e.message, 'e');
+  }
+}
+
+// ── Prueba de calibración ─────────────────────
+// Imprime un marco del tamaño exacto de la etiqueta + cruz al centro, con el
+// ajuste fino aplicado. El usuario compara el marco con su etiqueta física:
+// si no calza, ajusta "Ajuste vertical/horizontal" hasta centrarlo.
+function _bcdPrintCalibration() {
+  const d = window._bcdDesign || _bcdReadDesign();
+  const lw = Number(d.labelW) || 50;
+  const lh = Number(d.labelH) || 30;
+  const gap = Number(d.gapMm) || 2;
+  const ox = Number(d.offsetXmm) || 0;
+  const oy = Number(d.offsetYmm) || 0;
+  const pageH = lh + gap;
+  const printerName = (window._bcdPrinter && window._bcdPrinter.name) || '';
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+    @page { size:${lw}mm ${pageH}mm; margin:0; }
+    html,body { width:${lw}mm; margin:0; padding:0; background:#fff; }
+    .cal { position:relative; width:${lw}mm; height:${pageH}mm; overflow:hidden; }
+    .frame { position:absolute; left:0; top:0; width:${lw}mm; height:${lh}mm; box-sizing:border-box;
+             border:0.3mm solid #000; transform:translate(${ox}mm, ${oy}mm); }
+    .vl { position:absolute; left:50%; top:8%; bottom:8%; width:0; border-left:0.2mm dashed #000; }
+    .hl { position:absolute; top:50%; left:8%; right:8%; height:0; border-top:0.2mm dashed #000; }
+    .lbl { position:absolute; left:1.5mm; top:1mm; font:2.6mm/1 Arial; }
+  </style></head><body>
+    <div class="cal"><div class="frame">
+      <div class="vl"></div><div class="hl"></div>
+      <div class="lbl">${lw}×${lh}mm ${(ox||oy)?`· ajuste ${ox},${oy}`:''}</div>
+    </div></div>
+  </body></html>`;
+  if (typeof printLabelBatch === 'function') {
+    printLabelBatch({ html, printerName, widthMm: lw, heightMm: pageH, userId: user?.id });
+    toast('Prueba enviada · compara el marco con tu etiqueta y ajusta si hace falta', 'ok');
+  } else {
+    toast('No se pudo imprimir la prueba de calibración', 'err');
   }
 }
 

@@ -593,6 +593,7 @@ function _bcBuildLabelsHTML(items) {
         align-items:${d.align||'center'};
         justify-content:${d.vAlign||'center'};
         box-sizing:border-box;
+        transform:translate(${Number(d.offsetXmm)||0}mm, ${Number(d.offsetYmm)||0}mm);
         overflow:hidden;
         font-family:${d.fontFamily||'Arial,sans-serif'};
         color:${d.textColor||'#000000'};
@@ -767,6 +768,8 @@ function _bcDefaultDesign() {
     cols:         4,
     pageMm:       5,
     elemGap:      1,
+    offsetXmm:    0,   // Ajuste fino horizontal (calibración de posición)
+    offsetYmm:    0,   // Ajuste fino vertical (calibración de posición)
 
     // Código de barras
     format:       'CODE128',

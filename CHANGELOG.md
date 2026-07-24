@@ -1,5 +1,14 @@
 # Historial de versiones
 
+## 1.29.3 — 2026-07-24
+
+### Etiquetas
+
+- Calibrador de posición en el diseñador: ajuste fino horizontal y vertical en
+  milímetros para centrar el contenido en la etiqueta física, con vista previa
+  en vivo y una impresión de prueba (marco del tamaño de la etiqueta con cruz al
+  centro) para verificar y afinar la posición.
+
 ## 1.29.2 — 2026-07-24
 
 ### Etiquetas
