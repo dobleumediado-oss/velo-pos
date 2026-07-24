@@ -199,6 +199,14 @@ async function loadAppData() {
       CFG.fiscal_enabled_roles       = settings.fiscal_enabled_roles       || 'admin';
         CFG.itbis = parseFloat(settings.tax_pct) || 18;
       window._bcEnabled = settings.barcode_enabled === '1' || settings.barcode_enabled === true;
+
+      // Carga GENÉRICA de módulos: copia a CFG CUALQUIER setting 'module_*'
+      // (activación y '*_roles'). Así módulos como Conduce —o cualquiera nuevo—
+      // persisten su activación al reiniciar sin tener que listarlos uno por uno.
+      // (Antes: module_conduce no se cargaba y desaparecía del sidebar al cerrar.)
+      Object.keys(settings).forEach(k => {
+        if (k.indexOf('module_') === 0 && CFG[k] === undefined) CFG[k] = settings[k];
+      });
     }
 
     // Verificar caja — necesario antes de mostrar POS

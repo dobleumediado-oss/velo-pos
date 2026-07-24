@@ -1,5 +1,13 @@
 # Historial de versiones
 
+## 1.29.4 — 2026-07-24
+
+### Corregido
+
+- Los módulos activados desde el panel (p. ej. Conduces) ya no desaparecen del
+  menú al reiniciar la aplicación: la activación de cualquier módulo se carga
+  correctamente al arrancar.
+
 ## 1.29.3 — 2026-07-24
 
 ### Etiquetas
