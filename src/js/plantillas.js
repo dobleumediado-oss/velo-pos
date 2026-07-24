@@ -404,6 +404,12 @@ function _pagoResumenTexto(sale) {
   return parts.join(' · ');
 }
 
+function _customerPhoneLabel(sale) {
+  const type = String(sale?.customer_phone_type || 'telefono').toLowerCase();
+  const label = type === 'celular' ? 'Celular' : type === 'flota' ? 'Flota' : 'Teléfono';
+  return sale?.customer_phone ? `${label}: ${_esc(sale.customer_phone)}` : '';
+}
+
 // ¿El método de pago implica datos bancarios?
 function _esPagoBancario(m) {
   // Tarjeta muestra marca/autorización; la cuenta de liquidación es interna y no
@@ -573,6 +579,7 @@ function renderTermica(sale, cfg, opts, widthMm = 76) {
     <span>${_esc(sale.customer_name||'Consumidor Final')}</span>
   </div>
   ${opts.cedula && sale.customer_rnc ? `<div style="display:flex;justify-content:space-between"><span>Cédula/RNC:</span><span>${_esc(sale.customer_rnc)}</span></div>` : ''}
+  ${sale.customer_phone ? `<div style="display:flex;justify-content:space-between"><span>${_customerPhoneLabel(sale).split(':')[0]}:</span><span>${_esc(sale.customer_phone)}</span></div>` : ''}
   ${sale.customer_contact_name ? `<div style="display:flex;justify-content:space-between"><span>Solicitado por:</span><span>${_esc(sale.customer_contact_name)}${sale.customer_contact_role ? ` · ${_esc(sale.customer_contact_role)}` : ''}</span></div>` : ''}
   <div style="text-align:center">${sep}</div>
   <div style="display:flex;justify-content:space-between;font-weight:700">
@@ -586,10 +593,13 @@ function renderTermica(sale, cfg, opts, widthMm = 76) {
   </div>
   ${sale.discount_amt > 0 ? `<div style="display:flex;justify-content:space-between"><span>Descuento (${Math.round((sale.discount_pct||0)*100)/100}%):</span><span>-RD$${Number(sale.discount_amt).toLocaleString('es-DO')}</span></div>` : ''}
   ${_showItbis(sale) ? `<div style="display:flex;justify-content:space-between"><span>ITBIS (${sale.tax_pct||18}%):</span><span>RD$${(Math.round(_displayTaxAmt(sale)*100)/100).toLocaleString('es-DO')}</span></div>` : ''}
+  ${Number(sale.additional_charges_total || 0) > 0 ? `<div style="display:flex;justify-content:space-between"><span>Cargos adicionales:</span><span>RD$${Number(sale.additional_charges_total).toLocaleString('es-DO')}</span></div>` : ''}
   <div style="text-align:center">${sepD}</div>
   <div style="display:flex;justify-content:space-between;font-weight:700;font-size:${widthMm<=52?'12px':'13px'}">
     <span>TOTAL:</span><span>RD$${Number(sale.total||0).toLocaleString('es-DO')}</span>
   </div>
+  ${String(sale.display_currency || '').toUpperCase() === 'USD' && Number(sale.display_exchange_rate) > 0
+    ? `<div style="display:flex;justify-content:space-between"><span>Equivalente USD:</span><strong>US$${Number(sale.display_amount || (Number(sale.total || 0) / Number(sale.display_exchange_rate))).toFixed(2)}</strong></div>` : ''}
   <div style="text-align:center">${sepD}</div>
   ${sale.payment_method === 'mixto' ? `
   <div style="display:flex;justify-content:space-between"><span>Método:</span><span>MIXTO</span></div>
@@ -651,6 +661,7 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
   <div class="row"><span>No.:</span><span style="font-weight:700">${facturaLabel(sale)}</span></div>
   <div class="row"><span>Fecha:</span><span>${sale.date} ${sale.time}</span></div>
   <div class="row"><span>Cliente:</span><span>${_esc(sale.customer_name||'Consumidor Final')}</span></div>
+  ${sale.customer_phone ? `<div class="row"><span>${_customerPhoneLabel(sale).split(':')[0]}:</span><span>${_esc(sale.customer_phone)}</span></div>` : ''}
   ${sale.customer_contact_name ? `<div class="row"><span>Solicitado por:</span><span>${_esc(sale.customer_contact_name)}${sale.customer_contact_role ? ` · ${_esc(sale.customer_contact_role)}` : ''}</span></div>` : ''}
   <div class="row"><span>Cajero:</span><span>${_esc(sale.cajero||'')}</span></div>
   ${sale.salesperson_name ? `<div class="row"><span>Vendedor:</span><span>${_esc((sale.salesperson_code ? sale.salesperson_code + ' · ' : '') + sale.salesperson_name)}</span></div>` : ''}
@@ -665,11 +676,14 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
   <div class="row"><span>Subtotal</span><span>RD$${Number(sale.subtotal||0).toLocaleString('es-DO')}</span></div>
   ${sale.discount_amt > 0 ? `<div class="row"><span>Descuento ${sale.discount_pct}%</span><span style="color:#e00">-RD$${Number(sale.discount_amt).toLocaleString('es-DO')}</span></div>` : ''}
   ${_showItbis(sale) ? `<div class="row"><span>ITBIS (${sale.tax_pct||18}%)</span><span>RD$${(Math.round(_displayTaxAmt(sale)*100)/100).toLocaleString('es-DO')}</span></div>` : ''}
+  ${Number(sale.additional_charges_total || 0) > 0 ? `<div class="row"><span>Cargos adicionales</span><span>RD$${Number(sale.additional_charges_total).toLocaleString('es-DO')}</span></div>` : ''}
   <hr class="sep-d"/>
   <div class="total-row">
     <span>▶ TOTAL</span>
     <span>RD$${Number(sale.total||0).toLocaleString('es-DO')}</span>
   </div>
+  ${String(sale.display_currency || '').toUpperCase() === 'USD' && Number(sale.display_exchange_rate) > 0
+    ? `<div class="row"><span>Equivalente USD</span><strong>US$${Number(sale.display_amount || (Number(sale.total || 0) / Number(sale.display_exchange_rate))).toFixed(2)}</strong></div>` : ''}
   <hr class="sep-d"/>
   ${sale.payment_method === 'mixto' ? `
   <div class="row"><span>Método:</span><span>MIXTO</span></div>
@@ -696,6 +710,7 @@ function renderTermicaMinimal(sale, cfg, opts, widthMm = 76) {
 </style></head><body>
   <div style="text-align:center;font-size:12px;font-weight:700;margin-bottom:2px">${_esc(cfg.biz_name||'Mi Negocio')}</div>
   <div style="text-align:center;font-size:9px;margin-bottom:4px">${sale.date} ${sale.time} · ${facturaLabel(sale)}</div>
+  ${sale.customer_phone ? `<div style="text-align:center;font-size:9px;margin-bottom:3px">${_customerPhoneLabel(sale)}</div>` : ''}
   <div style="border-top:1px dashed #000;margin:3px 0"></div>
   ${(sale.items||[]).map(i => `
     <div style="display:flex;justify-content:space-between">
@@ -707,6 +722,8 @@ function renderTermicaMinimal(sale, cfg, opts, widthMm = 76) {
     <span>TOTAL</span>
     <span>RD$${Number(sale.total||0).toLocaleString('es-DO')}</span>
   </div>
+  ${String(sale.display_currency || '').toUpperCase() === 'USD' && Number(sale.display_exchange_rate) > 0
+    ? `<div style="display:flex;justify-content:space-between;font-size:9px"><span>Equiv. USD</span><strong>US$${Number(sale.display_amount || (Number(sale.total || 0) / Number(sale.display_exchange_rate))).toFixed(2)}</strong></div>` : ''}
   ${_showNcf(sale, opts) ? `<div style="border-top:1px dashed #000;margin:3px 0"></div><div style="text-align:center;font-size:9px">NCF: ${ncf}</div>` : ''}
   <div style="text-align:center;font-size:9px;margin-top:3px">${_esc(_pagoResumenTexto(sale))} · ${isCotizacion ? 'Cotización sin valor fiscal' : 'Gracias'}</div>
 </body></html>`;
@@ -796,6 +813,12 @@ function renderCartaRecibo(sale, cfg, opts) {
     const rate = Number(sale.exchange_rate || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     cells.push(`<div class="cell cell-wide"><span class="ic">${_a4ic('pay')}</span><div><div class="k">Pago recibido en dólares</div><div class="v">US$${usd} <small>· Tasa RD$${rate} por US$1 · Base fiscal RD$${_n2(sale.total)}</small></div></div></div>`);
   }
+  if (showMoney && String(sale.display_currency || '').toUpperCase() === 'USD' &&
+      Number(sale.display_exchange_rate) > 0) {
+    const usd = Number(sale.display_amount || (displayTotal / Number(sale.display_exchange_rate)))
+      .toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    cells.push(`<div class="cell cell-wide"><span class="ic">${_a4ic('pay')}</span><div><div class="k">Equivalente en dólares</div><div class="v">US$${usd} <small>· Total fiscal RD$${_n2(displayTotal)}</small></div></div></div>`);
+  }
   if (isAbono && (sale.original_sale_id || sale.applied_invoice)) {
     const ap = sale.applied_invoice || facturaLabelOriginal(sale);
     cells.push(`<div class="cell"><span class="ic">${_a4ic('ref')}</span><div><div class="k">Factura aplicada</div><div class="v">${_esc(ap)}</div></div></div>`);
@@ -829,9 +852,10 @@ function renderCartaRecibo(sale, cfg, opts) {
   // ── Fila resumen compacta ───────────────────────────
   // "Artículos" = total de unidades de la factura (40 unidades de un solo
   // producto → 40). El RNC/cédula NO va aquí: sale en el bloque CLIENTE.
-  const totalUnits = (sale.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0);
+  const totalUnits = (sale.items || []).filter(i => !i._is_charge)
+    .reduce((a, i) => a + (Number(i.qty) || 0), 0);
   const sumItems = [
-    ['Moneda', 'DOP'],
+    ['Moneda', String(sale.display_currency || 'DOP').toUpperCase()],
     ['Líneas', String((sale.items || []).length)],
     ['Fecha', _fechaCorta(sale.date)],
     ['Artículos', Number.isInteger(totalUnits) ? String(totalUnits) : _n2(totalUnits)],
@@ -857,7 +881,7 @@ function renderCartaRecibo(sale, cfg, opts) {
     cliLines.push(`${_dk.label}: ${_esc(sale.customer_rnc)}`);
   }
   if (sale.customer_address) cliLines.push(_esc(sale.customer_address));
-  if (sale.customer_phone)   cliLines.push(_esc(sale.customer_phone));
+  if (sale.customer_phone)   cliLines.push(_customerPhoneLabel(sale));
   if (sale.customer_email)   cliLines.push(_esc(sale.customer_email));
   if (sale.customer_contact_name) {
     cliLines.push(`Solicitado por: ${_esc(sale.customer_contact_name)}${sale.customer_contact_role ? ` · ${_esc(sale.customer_contact_role)}` : ''}`);
@@ -875,6 +899,7 @@ function renderCartaRecibo(sale, cfg, opts) {
         <div class="tr"><span>Sub Total sin impuestos</span><span>${_n2(displaySubtotal)}</span></div>
         ${showTax ? `<div class="tr"><span>Total ITBIS</span><span>${_n2(displayTax)}</span></div>` : ''}
         <div class="tr"><span>Descuento</span><span>${displayDiscount > 0 ? '-' : ''}${_n2(displayDiscount)}</span></div>
+        ${Number(sale.additional_charges_total || 0) > 0 ? `<div class="tr"><span>Cargos adicionales</span><span>${_n2(sale.additional_charges_total)}</span></div>` : ''}
         <div class="tr grand"><span>Total con impuestos</span><span>${_n2(displayTotal)}</span></div>
         ${!isCotizacion ? `<div class="tr"><span>Su pago</span><span>${_n2(paidAmount)}</span></div>` : ''}
         ${!isCotizacion ? `<div class="tr"><span>Balance después del pago</span><span>${_n2(balanceAfter)}</span></div>` : ''}
@@ -1141,6 +1166,7 @@ function renderCartaFormal(sale, cfg, opts) {
       <label>Cliente</label>
       <strong>${_esc(sale.customer_name||'Consumidor Final')}</strong>
       ${opts.cedula && sale.customer_rnc ? `<br/><span style="font-size:11px;color:#666">RNC/Cédula: ${_esc(sale.customer_rnc)}</span>` : ''}
+      ${sale.customer_phone ? `<br/><span style="font-size:11px;color:#666">${_customerPhoneLabel(sale)}</span>` : ''}
       ${sale.customer_contact_name ? `<br/><span style="font-size:11px;color:#444">Solicitado por: ${_esc(sale.customer_contact_name)}${sale.customer_contact_role ? ` · ${_esc(sale.customer_contact_role)}` : ''}</span>` : ''}
     </div>
     <div class="info-box">
@@ -1169,7 +1195,10 @@ function renderCartaFormal(sale, cfg, opts) {
     <div class="total-row"><span>Sub Total sin impuestos</span><span>RD$${_n2(displaySubtotal)}</span></div>
     ${showTax ? `<div class="total-row"><span>Total ITBIS</span><span>RD$${_n2(displayTax)}</span></div>` : ''}
     ${displayDiscount > 0 ? `<div class="total-row"><span>Descuento</span><span style="color:#dc2626">-RD$${_n2(displayDiscount)}</span></div>` : ''}
+    ${Number(sale.additional_charges_total || 0) > 0 ? `<div class="total-row"><span>Cargos adicionales</span><span>RD$${_n2(sale.additional_charges_total)}</span></div>` : ''}
     <div class="total-row grand-total"><span>Total con impuestos</span><span>RD$${_n2(displayTotal)}</span></div>
+    ${String(sale.display_currency || '').toUpperCase() === 'USD' && Number(sale.display_exchange_rate) > 0
+      ? `<div class="total-row"><span>Equivalente USD</span><strong>US$${Number(sale.display_amount || (displayTotal / Number(sale.display_exchange_rate))).toFixed(2)}</strong></div>` : ''}
   </div>
 
   ${isDevolucion && sale.original_sale_id ? `<div style="margin-top:8px;font-size:11px;color:#555">Ref. venta original: ${facturaLabelOriginal(sale)}</div>` : ''}
@@ -1265,6 +1294,7 @@ function renderCartaNCF(sale, cfg, opts) {
   <div style="background:#f3f4f6;padding:7px 12px;border-radius:4px;margin-bottom:8px">
     <strong>Cliente:</strong> ${_esc(sale.customer_name||'Consumidor Final')}
     ${opts.cedula && sale.customer_rnc ? ` &nbsp;|&nbsp; <strong>RNC/Cédula:</strong> ${_esc(sale.customer_rnc)}` : ''}
+    ${sale.customer_phone ? `<br/><strong>${_customerPhoneLabel(sale).split(':')[0]}:</strong> ${_esc(sale.customer_phone)}` : ''}
     ${sale.customer_contact_name ? `<br/><strong>Solicitado por:</strong> ${_esc(sale.customer_contact_name)}${sale.customer_contact_role ? ` · ${_esc(sale.customer_contact_role)}` : ''}` : ''}
   </div>
 
@@ -1283,7 +1313,10 @@ function renderCartaNCF(sale, cfg, opts) {
       <tr><td>Sub Total sin impuestos</td><td style="text-align:right">RD$${_n2(displaySubtotal)}</td></tr>
       ${showTax ? `<tr><td>Total ITBIS</td><td style="text-align:right">RD$${_n2(displayTax)}</td></tr>` : ''}
       ${displayDiscount > 0 ? `<tr><td>Descuento</td><td style="text-align:right;color:red">-RD$${_n2(displayDiscount)}</td></tr>` : ''}
+      ${Number(sale.additional_charges_total || 0) > 0 ? `<tr><td>Cargos adicionales</td><td style="text-align:right">RD$${_n2(sale.additional_charges_total)}</td></tr>` : ''}
       <tr class="grand"><td>Total con impuestos</td><td style="text-align:right">RD$${_n2(displayTotal)}</td></tr>
+      ${String(sale.display_currency || '').toUpperCase() === 'USD' && Number(sale.display_exchange_rate) > 0
+        ? `<tr><td>Equivalente USD</td><td style="text-align:right"><strong>US$${Number(sale.display_amount || (displayTotal / Number(sale.display_exchange_rate))).toFixed(2)}</strong></td></tr>` : ''}
     </table>
   </div>
 
@@ -1336,6 +1369,7 @@ function renderMediaCarta(sale, cfg, opts) {
   </div>
   <div style="background:#f3f4f6;padding:4px 8px;margin-bottom:6px;border-radius:3px;font-size:10px">
     Cliente: <strong>${_esc(sale.customer_name||'Consumidor Final')}</strong>
+    ${sale.customer_phone ? ` · ${_customerPhoneLabel(sale)}` : ''}
     ${sale.customer_contact_name ? ` · Solicitado por: <strong>${_esc(sale.customer_contact_name)}</strong>` : ''}
   </div>
   <table>
@@ -1345,10 +1379,13 @@ function renderMediaCarta(sale, cfg, opts) {
   <table class="totals">
     <tr><td style="padding:3px">Subtotal</td><td style="text-align:right;padding:3px">RD$${Number(sale.subtotal||0).toLocaleString('es-DO')}</td></tr>
     ${_showItbis(sale) ? `<tr><td style="padding:3px">ITBIS (${sale.tax_pct||18}%)</td><td style="text-align:right;padding:3px">RD$${(Math.round(_displayTaxAmt(sale)*100)/100).toLocaleString('es-DO')}</td></tr>` : ''}
+    ${Number(sale.additional_charges_total || 0) > 0 ? `<tr><td style="padding:3px">Cargos adicionales</td><td style="text-align:right;padding:3px">RD$${Number(sale.additional_charges_total).toLocaleString('es-DO')}</td></tr>` : ''}
     <tr style="font-size:13px;font-weight:700;border-top:2px solid #000">
       <td style="padding:4px">TOTAL</td>
       <td style="text-align:right;padding:4px">RD$${Number(sale.total||0).toLocaleString('es-DO')}</td>
     </tr>
+    ${String(sale.display_currency || '').toUpperCase() === 'USD' && Number(sale.display_exchange_rate) > 0
+      ? `<tr><td style="padding:3px">Equiv. USD</td><td style="text-align:right;padding:3px"><strong>US$${Number(sale.display_amount || (Number(sale.total || 0) / Number(sale.display_exchange_rate))).toFixed(2)}</strong></td></tr>` : ''}
   </table>
   ${_showNcf(sale, opts) ? `<div style="font-size:9px;color:#555;margin-top:4px">NCF: ${ncf}</div>` : ''}
   ${isCotizacion ? `<div style="font-size:9px;color:#888;font-style:italic;margin-top:2px">Sin valor fiscal</div>` : ''}

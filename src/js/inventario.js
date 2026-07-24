@@ -910,7 +910,7 @@ async function openKardexModal(p) {
         ${svg('pkg')} Ajustar stock
       </button>
     </div>
-  `, 'modal-lg');
+  `, 'modal-xxl mtw');
 }
 
 // ══════════════════════════════════════════════

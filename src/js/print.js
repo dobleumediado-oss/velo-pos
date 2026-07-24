@@ -176,6 +176,22 @@ function _printDispatch(payload) {
   return window.api.print.html(payload).then(r => { release(); return r; }, e => { release(); throw e; });
 }
 
+// Punto único para trabajos de etiquetas. Conserva las dimensiones exactas
+// del medio, evita dobles envíos y mantiene el módulo de etiquetas desacoplado
+// del transporte IPC de impresión.
+function printLabelBatch({ html, printerName = '', widthMm, heightMm, userId = null }) {
+  return _printDispatch({
+    html,
+    printerName,
+    printerWidth: `${Number(widthMm)}mm`,
+    printerHeight: heightMm ? `${Number(heightMm)}mm` : undefined,
+    jobType: 'barcode_labels',
+    referenceId: null,
+    userId,
+    silent: true,
+  });
+}
+
 // ══════════════════════════════════════════════
 // TICKET DE VENTA 80MM
 // ══════════════════════════════════════════════
@@ -183,7 +199,7 @@ function printReceipt(sale, isReprint = false) {
   if (!sale) return;
 
   // ── Usar sistema de plantillas si está configurado ──
-  const templateId = DB?.settings?.print_template;
+  const templateId = sale.print_template_id || DB?.settings?.print_template;
   const plantilla  = templateId ? getPlantilla(templateId) : null;
 
   if (plantilla) {
@@ -224,6 +240,7 @@ function printReceipt(sale, isReprint = false) {
       customer_id:      sale.customer_id      || sale.clientId || null,
       customer_address: sale.customer_address || sale.cust_addr || '',
       customer_phone:   sale.customer_phone   || '',
+      customer_phone_type: sale.customer_phone_type || 'telefono',
       customer_email:   sale.customer_email   || '',
       customer_type:    sale.customer_type    || 'person',
       customer_trade_name: sale.customer_trade_name || '',
@@ -251,6 +268,10 @@ function printReceipt(sale, isReprint = false) {
 	        tax_amt:      i.tax_amt,
 	        net_subtotal: i.net_subtotal,
 	      })),
+      // Los cargos NO se inyectan como líneas de producto: cada plantilla los
+      // muestra en su fila "Cargos adicionales" (a partir de additional_charges_total).
+      // Inyectarlos aquí los duplicaba (línea + fila de totales) y descuadraba
+      // el subtotal mostrado contra las líneas listadas.
       subtotal:      sale.subtotal     || 0,
       discount_pct:  sale.discount_pct || sale.disc    || 0,
       discount_amt:  sale.discount_amt || sale.discAmt || 0,
@@ -259,6 +280,11 @@ function printReceipt(sale, isReprint = false) {
       tax_pct:       sale.tax_pct ?? DB?.settings?.tax_pct ?? CFG?.itbis ?? 18,
       tax_amt:       sale.tax_amt      || sale.itbis   || 0,
       total:         sale.total        || 0,
+      charges:       Array.isArray(sale.charges) ? sale.charges : [],
+      additional_charges_total: sale.additional_charges_total || 0,
+      display_currency: sale.display_currency || 'DOP',
+      display_exchange_rate: sale.display_exchange_rate || 1,
+      display_amount: sale.display_amount || 0,
       payment_method: sale.payment_method || sale.pay || 'efectivo',
       payment_amount: sale.payment_amount ?? sale.paid_amount ?? null,
       paid_amount:    sale.paid_amount ?? sale.payment_amount ?? null,
@@ -286,7 +312,11 @@ function printReceipt(sale, isReprint = false) {
     } catch {}
     const _optsConEstilos = { ...plantilla.opciones, _estilos: _estilosReal };
     const html = plantilla.render(saleForPlant, cfg, _optsConEstilos);
-    _openPrintWindow(html, 'ticket', sale.id, isReprint);
+    _openPrintWindow(html, 'ticket', sale.id, isReprint, {
+      printerName: sale.print_printer_name || '',
+      profileId: sale.print_profile_id || '',
+      templateId,
+    });
     return html;
   }
 
@@ -320,6 +350,11 @@ function printReceipt(sale, isReprint = false) {
   const cliRnc  = sale.customer_rnc  || sale.clientCedula || '';
   lines.push(tRow('Cliente:', cliName.slice(0, 28)));
   if (cliRnc) lines.push(tRow('RNC/Céd:', cliRnc));
+  if (sale.customer_phone) {
+    const phoneLabel = sale.customer_phone_type === 'celular' ? 'Celular:'
+      : sale.customer_phone_type === 'flota' ? 'Flota:' : 'Teléfono:';
+    lines.push(tRow(phoneLabel, String(sale.customer_phone).slice(0, 24)));
+  }
   if (sale.customer_contact_name) lines.push(tRow('Solicitado por:', String(sale.customer_contact_name).slice(0, 26)));
 
   lines.push(tline());
@@ -347,8 +382,16 @@ function printReceipt(sale, isReprint = false) {
     lines.push(tRow('Subtotal sin ITBIS:', fmt(subtotal)));
   if (discPct > 0) lines.push(tRow(`Descuento (${discPct}%):`, `-${fmt(discAmt)}`));
   if ((isFactura || isDevolucion) && itbis > 0) lines.push(tRow(`ITBIS (${sale.tax_pct ?? CFG?.itbis ?? 18}%):`, fmt(itbis)));
+  if (Number(sale.additional_charges_total || 0) > 0) {
+    lines.push(tRow('Cargos adicionales:', fmt(sale.additional_charges_total)));
+  }
   lines.push(tlineD());
   lines.push(tRow('TOTAL:', fmt(total)));
+  if (String(sale.display_currency || '').toUpperCase() === 'USD' &&
+      Number(sale.display_exchange_rate) > 0) {
+    const usd = Number(sale.display_amount || (total / Number(sale.display_exchange_rate)));
+    lines.push(tRow('Equivalente USD:', `US$${usd.toFixed(2)}`));
+  }
   lines.push(tlineD());
   lines.push('');
 
@@ -996,6 +1039,7 @@ function _openPrintPreview(html, opts = {}) {
     suggestedName: opts.suggestedName || _suggestedPrintName(opts.jobType, opts.referenceId),
     mode: opts.mode || 'print',
     source: opts.source || 'document',
+    printOptions: opts.printOptions || {},
   };
   window._printPreviewJob = job;
 
@@ -1089,7 +1133,7 @@ async function _printPreviewPrint() {
   window._printPreviewBypass = true;
   try {
     if (job.source === 'html') _dispatchPrintHTML(job.html, job.jobType || 'reporte');
-    else _openPrintWindow(job.html, job.jobType, job.referenceId, job.isReprint);
+    else _openPrintWindow(job.html, job.jobType, job.referenceId, job.isReprint, job.printOptions || {});
   } finally {
     window._printPreviewBypass = false;
   }
@@ -1132,7 +1176,7 @@ function _printTargetHere() {
   if (pj) _openPrintWindowFallback(pj.html);   // flujo normal: ventana con diálogo/impresora
 }
 
-function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = false) {
+function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = false, printOptions = {}) {
   if (window._pdfWhatsAppRequest) {
     const request = window._pdfWhatsAppRequest;
     window._pdfWhatsAppRequest = null;
@@ -1143,18 +1187,18 @@ function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = fa
   if (window._pdfSaveRequest) {
     const name = window._pdfSaveRequest.name;
     window._pdfSaveRequest = null;
-    _openPrintPreview(html, { jobType, referenceId, isReprint, mode: 'pdf', suggestedName: name });
+    _openPrintPreview(html, { jobType, referenceId, isReprint, mode: 'pdf', suggestedName: name, printOptions });
     return;
   }
   if (!window._printPreviewBypass) {
-    _openPrintPreview(html, { jobType, referenceId, isReprint, mode: 'print' });
+    _openPrintPreview(html, { jobType, referenceId, isReprint, mode: 'print', printOptions });
     return;
   }
 
-  _dispatchPrintWindow(html, jobType, referenceId, isReprint);
+  _dispatchPrintWindow(html, jobType, referenceId, isReprint, printOptions);
 }
 
-function _dispatchPrintWindow(html, jobType = '', referenceId = null, isReprint = false) {
+function _dispatchPrintWindow(html, jobType = '', referenceId = null, isReprint = false, printOptions = {}) {
   // Multi-terminal: terminal cliente SIN impresora física → ofrecer imprimir en
   // el servidor (mostrador) o aquí eligiendo impresora. En local/servidor o con
   // impresora configurada, no aplica (flujo normal).
@@ -1166,18 +1210,31 @@ function _dispatchPrintWindow(html, jobType = '', referenceId = null, isReprint 
   const category = _categoryForJobType(jobType);
   const catCfg    = _getCategoryConfig(category);
 
-  const printerName = catCfg.printer || _getSavedPrinter();
-  const profile = _getTicketPrinterProfile(printerName);
-  const printerType = typeof printerProfileLegacyType === 'function'
+  const printerName = printOptions.printerName || catCfg.printer || _getSavedPrinter();
+  const profile = printOptions.profileId && typeof resolvePrinterProfile === 'function'
+    ? resolvePrinterProfile(printerName, 'ticket', {
+        ...(DB?.settings || {}),
+        printer_profile: printOptions.profileId,
+      })
+    : _getTicketPrinterProfile(printerName);
+  let printerType = typeof printerProfileLegacyType === 'function'
     ? printerProfileLegacyType(profile)
     : (typeof detectPrinterType === 'function' ? detectPrinterType(printerName) : 'unknown');
+
+  // Si el cobro fijó una plantilla explícita, el PAPEL lo manda la plantilla
+  // (carta vs térmica), no el perfil adivinado de la impresora. Evita mandar
+  // una factura de hoja a una térmica (o al revés) al elegir salida en el POS.
+  if (printOptions.templateId && typeof getPlantilla === 'function') {
+    const _tpl = getPlantilla(printOptions.templateId);
+    if (_tpl) printerType = _tpl.tipo === 'carta' ? 'carta' : 'thermal';
+  }
 
   // ── Impresoras carta/cartuchos ────────────────────────────────────────────
   // silent:false → Electron abre diálogo con vista previa
   // Pasar printerName para usar la impresora guardada (no la predeterminada)
   // NO pasar printerWidth → main.js detecta isThermal=false → pageSize:Letter
   if (printerType === 'carta') {
-    const _activeTemplateId = DB?.settings?.print_template || '';
+    const _activeTemplateId = printOptions.templateId || DB?.settings?.print_template || '';
     const _pageHint = _activeTemplateId === 'media_carta' ? 'half-letter' : undefined;
     if (window.api?.print?.html) {
       _printDispatch({

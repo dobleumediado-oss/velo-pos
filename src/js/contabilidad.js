@@ -443,7 +443,7 @@ async function _openVerAsiento(id) {
         <button class="btn-ghost" onclick="closeModal()">Cerrar</button>
       </div>
     </div>
-  `);
+  `, 'modal-xl');
 }
 
 window._printAsiento = async function(id) {

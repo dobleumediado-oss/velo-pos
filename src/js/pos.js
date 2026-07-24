@@ -458,7 +458,7 @@ function renderCart() {
 
   const inv = currentInv();
   const checkoutLocked = !!inv.checkoutOrderId;
-  const { subtotal, itbis, total, disc, discAmt } = calcTotals(inv);
+  const { subtotal, itbis, total, disc, discAmt, chargesTotal } = calcTotals(inv);
 
   let html = `
     <div class="cart-hdr">
@@ -539,7 +539,8 @@ function renderCart() {
     <div class="cart-foot">
       ${checkoutLocked ? `
       <div class="tr" style="margin-bottom:8px"><span>Origen</span><strong>${posEscHtml(inv.checkoutOrderNumber || 'Orden de despacho')}</strong></div>
-      ` : `
+      <div style="font-size:10px;color:var(--green);margin-bottom:7px">Caja puede aplicar un descuento autorizado y cargos adicionales antes de cobrar.</div>
+      ` : ''}
       <div class="flex" style="margin-bottom:8px;gap:6px;align-items:center">
         <span style="font-size:11px;color:var(--muted);flex:1">Descuento</span>
         <select class="inp" style="width:58px;padding:4px;font-size:12px"
@@ -554,14 +555,46 @@ function renderCart() {
                onfocus="this.select()"
                oninput="posDiscConPin(this, this.value)"/>
       </div>
-      `}
+      ${inv.itype === 'factura' ? `
+      <div style="border-top:1px solid var(--line2);padding-top:7px;margin-top:4px">
+        ${(inv.charges || []).map((charge, idx) => `
+          <div class="tr" style="font-size:11px">
+            <span>${posEscHtml(charge.description)}
+              <button class="btn btn-ghost btn-sm" style="padding:0 4px;color:var(--red)" onclick="posRemoveCharge(${idx})">×</button>
+            </span>
+            <span>${fmt(charge.amount)}</span>
+          </div>`).join('')}
+        <button class="btn btn-out btn-sm btn-fw" type="button" onclick="openPosChargeModal()"
+                style="margin:3px 0 7px">${svg('plus')} Agregar envío u otro cargo</button>
+      </div>` : ''}
       <div class="tr"><span>Subtotal sin ITBIS</span><span id="pos-subtotal-value">${fmt(subtotal)}</span></div>
       ${inv.itype === 'factura' && itbis > 0
         ? `<div class="tr"><span>ITBIS (${CFG.itbis}%)</span><span id="pos-itbis-value">${fmt(itbis)}</span></div>` : ''}
       <div class="tr" id="pos-discount-row" style="${disc > 0 ? '' : 'display:none'}">
         <span>Descuento</span><span id="pos-discount-value">−${fmt(discAmt)}</span>
       </div>
+      <div class="tr" id="pos-charges-row" style="${chargesTotal > 0 ? '' : 'display:none'}">
+        <span>Cargos adicionales</span><span id="pos-charges-value">${fmt(chargesTotal)}</span>
+      </div>
       <div class="tr grand"><span>TOTAL</span><span id="pos-total-value">${fmt(total)}</span></div>
+      <div style="margin-top:7px">
+        <button class="btn btn-ghost btn-sm btn-fw" type="button" onclick="posToggleUsd()">
+          ${inv.displayCurrency === 'USD' ? 'Mostrar total en pesos' : 'Convertir total a dólares'}
+        </button>
+        ${inv.displayCurrency === 'USD' ? `
+          <div style="display:grid;grid-template-columns:1fr 88px;gap:7px;align-items:center;margin-top:6px;padding:7px 9px;background:var(--blue-bg);border:1px solid var(--blue-line);border-radius:7px">
+            <div>
+              <div style="font-size:10px;color:var(--muted)">Equivalente</div>
+              <strong id="pos-usd-total">${_cbrMoney(total / (Number(inv.displayExchangeRate) || 1), 'USD')}</strong>
+            </div>
+            <div>
+              <label style="display:block;font-size:9px;color:var(--muted)">Tasa venta</label>
+              <input class="inp" type="number" min="20" max="500" step="0.01"
+                     value="${Number(inv.displayExchangeRate || 0) || ''}"
+                     oninput="posSetUsdRate(this.value)" style="padding:4px 6px;text-align:right"/>
+            </div>
+          </div>` : ''}
+      </div>
       ${!checkoutLocked && inv.itype === 'factura' && preventaCanAccess() ? `<button class="btn btn-out btn-fw" id="pos-send-checkout-btn"
               style="margin-top:12px;font-size:12px;opacity:${inv.cart.length ? '1' : '.4'}"
               ${inv.cart.length ? '' : 'disabled'} onclick="openCheckoutSendModal(invoices[activeInvoice])">
@@ -599,6 +632,82 @@ function posCloseCheckoutOrder() {
   renderInvTabs();
   renderCart();
   renderPOSGrid();
+}
+
+function openPosChargeModal() {
+  const inv = currentInv();
+  if (!inv || inv.itype !== 'factura') return;
+  openModal(`
+    <div class="modal-title">Agregar cargo a la factura</div>
+    <div class="modal-sub">Para envío, instalación, transporte u otro servicio asociado a esta venta.</div>
+    <div class="fg">
+      <label class="lbl">Concepto *</label>
+      <input class="inp" id="pos-charge-description" maxlength="120" placeholder="Ej: Envío a domicilio"/>
+    </div>
+    <div class="fg">
+      <label class="lbl">Monto (RD$) *</label>
+      <input class="inp" id="pos-charge-amount" type="number" min="0.01" max="9999999" step="0.01" placeholder="0.00"/>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-dark" onclick="posSaveCharge()">${svg('check')} Agregar cargo</button>
+    </div>
+  `);
+  setTimeout(() => document.getElementById('pos-charge-description')?.focus(), 60);
+}
+
+function posSaveCharge() {
+  const inv = currentInv();
+  const description = document.getElementById('pos-charge-description')?.value?.replace(/\s+/g, ' ').trim() || '';
+  const amount = _posRound2(document.getElementById('pos-charge-amount')?.value);
+  if (!description) return toast('Indica el concepto del cargo', 'w');
+  if (!(amount > 0) || amount > 9999999) return toast('Indica un monto válido', 'w');
+  inv.charges = Array.isArray(inv.charges) ? inv.charges : [];
+  if (inv.charges.length >= 20) return toast('La factura alcanzó el máximo de cargos adicionales', 'w');
+  inv.charges.push({ description, amount });
+  closeModal();
+  renderInvTabs();
+  renderCart();
+}
+
+function posRemoveCharge(index) {
+  const inv = currentInv();
+  if (!Array.isArray(inv.charges)) return;
+  inv.charges.splice(index, 1);
+  renderInvTabs();
+  renderCart();
+}
+
+async function posToggleUsd() {
+  const inv = currentInv();
+  if (inv.displayCurrency === 'USD') {
+    inv.displayCurrency = 'DOP';
+    renderCart();
+    return;
+  }
+  inv.displayCurrency = 'USD';
+  if (!(Number(inv.displayExchangeRate) >= 20)) {
+    const cached = Number((typeof _ratesData !== 'undefined' && _ratesData?.usd?.venta?.value) || 0);
+    if (cached >= 20) inv.displayExchangeRate = cached;
+    else {
+      try {
+        const res = await window.api?.banner?.getRates?.();
+        const live = Number(res?.data?.usd?.venta?.value || 0);
+        if (live >= 20) inv.displayExchangeRate = live;
+      } catch {}
+    }
+  }
+  renderCart();
+}
+
+function posSetUsdRate(value) {
+  const inv = currentInv();
+  inv.displayExchangeRate = Number(value) || 0;
+  const totalEl = document.getElementById('pos-usd-total');
+  const rate = Number(inv.displayExchangeRate);
+  if (totalEl) totalEl.textContent = rate >= 20 && rate <= 500
+    ? _cbrMoney(calcTotals(inv).total / rate, 'USD')
+    : 'Tasa inválida';
 }
 
 function posCartQtyForProduct(productId, exceptIdx = -1) {
@@ -953,7 +1062,7 @@ function posDisc(val) {
 function posRefreshCartTotals() {
   const inv = currentInv();
   if (!inv) return;
-  const { subtotal, itbis, total, disc, discAmt } = calcTotals(inv);
+  const { subtotal, itbis, total, disc, discAmt, chargesTotal } = calcTotals(inv);
   const setText = (id, value) => {
     const el = document.getElementById(id);
     if (el) el.textContent = value;
@@ -962,9 +1071,18 @@ function posRefreshCartTotals() {
   setText('pos-itbis-value', fmt(itbis));
   setText('pos-discount-value', `−${fmt(discAmt)}`);
   setText('pos-total-value', fmt(total));
+  setText('pos-charges-value', fmt(chargesTotal));
 
   const discRow = document.getElementById('pos-discount-row');
   if (discRow) discRow.style.display = disc > 0 ? '' : 'none';
+  const chargesRow = document.getElementById('pos-charges-row');
+  if (chargesRow) chargesRow.style.display = chargesTotal > 0 ? '' : 'none';
+  const usdTotal = document.getElementById('pos-usd-total');
+  if (usdTotal && inv.displayCurrency === 'USD') {
+    const rate = Number(inv.displayExchangeRate);
+    usdTotal.textContent = rate >= 20 && rate <= 500
+      ? _cbrMoney(total / rate, 'USD') : 'Tasa inválida';
+  }
 
   const chargeBtn = document.getElementById('pos-charge-btn');
   if (chargeBtn) {
@@ -989,6 +1107,7 @@ function posDiscMode(m) {
   inv.disc = 0;
   inv.discAmtInput = 0;
   inv.discApprovedBy = null;
+  inv.discAuthToken = null;
   renderCart();
 }
 
@@ -1011,6 +1130,7 @@ function posDiscConPin(input, val) {
   // Cualquier cambio invalida una autorización previa — debe re-autorizarse
   // si el nuevo valor también supera el límite.
   inv.discApprovedBy = null;
+  inv.discAuthToken = null;
 
   const aplicar = () => { if (mode === 'amt') inv.discAmtInput = amt; posDisc(pct); };
 
@@ -1076,6 +1196,7 @@ async function autorizarDescuento(pct, mode = 'pct', amt = 0) {
   closeModal();
   const inv = currentInv();
   inv.discApprovedBy = res.approvedBy?.id || null;
+  inv.discAuthToken = res.token || null;
   if (mode === 'amt') inv.discAmtInput = amt;
   const discountInput = document.getElementById('pos-discount-input');
   if (discountInput) discountInput.value = mode === 'amt' ? amt : pctShow;
@@ -1101,7 +1222,11 @@ function calcTotals(inv) {
   const disc = Math.min(100, Math.max(0, parseFloat(inv.disc) || 0));
   const grossSubtotal = _posRound2(inv.cart.reduce((a, i) => a + ((Number(i.price) || 0) * (Number(i.qty) || 0)), 0));
   const discAmt = _posRound2(grossSubtotal * (disc / 100));
-  const total = _posRound2(grossSubtotal - discAmt);
+  const itemsTotal = _posRound2(grossSubtotal - discAmt);
+  const chargesTotal = inv.itype === 'factura'
+    ? _posRound2((inv.charges || []).reduce((sum, row) => sum + (Number(row.amount) || 0), 0))
+    : 0;
+  const total = _posRound2(itemsTotal + chargesTotal);
   const factor = 1 - (disc / 100);
 
   let taxAcc = 0;
@@ -1115,8 +1240,8 @@ function calcTotals(inv) {
   });
 
   const itbis = inv.itype === 'factura' ? _posRound2(taxAcc) : 0;
-  const subtotal = _posRound2(total - itbis);
-  return { subtotal, grossSubtotal, discAmt, itbis, total, disc };
+  const subtotal = _posRound2(itemsTotal - itbis);
+  return { subtotal, grossSubtotal, discAmt, itbis, itemsTotal, chargesTotal, total, disc };
 }
 
 function invTotal(inv) { return calcTotals(inv).total; }
@@ -1132,9 +1257,10 @@ function pvCustomerMatches(customer, query) {
 
   const searchable = searchNorm([
     customer.name, customer.trade_name, customer.rnc, customer.phone, customer.email, customer.billing_email,
+    ...(customer.phones || []).map(p => p.phone),
   ].filter(Boolean).join(' '));
   if (term && searchable.includes(term)) return true;
-  return termDigits.length > 0 && [customer.rnc, customer.phone]
+  return termDigits.length > 0 && [customer.rnc, customer.phone, ...(customer.phones || []).map(p => p.phone)]
     .some(value => digitsOf(value).includes(termDigits));
 }
 
@@ -1201,6 +1327,9 @@ function posFilterCustomers(query, showAll = false) {
     inv.cliId = 1;
     inv.cliName = typed || 'Consumidor Final';
     inv.cliCedula = '';
+    inv.cliPhone = '';
+    inv.cliPhoneType = 'celular';
+    inv.cliPhoneId = null;
     inv.cliContactId = null;
     inv.cliContactName = '';
     inv.cliContactRole = '';
@@ -1271,6 +1400,10 @@ function posSelectCustomer(id, contactId = null) {
   inv.cliId = customer.id;
   inv.cliName = customer.name;
   inv.cliCedula = customer.rnc || '';
+  const primaryPhone = (customer.phones || []).find(p => p.is_primary) || (customer.phones || [])[0] || null;
+  inv.cliPhone = primaryPhone?.phone || customer.phone || '';
+  inv.cliPhoneType = primaryPhone?.phone_type || 'telefono';
+  inv.cliPhoneId = primaryPhone?.id || null;
   inv.cliContactId = contact?.id || null;
   inv.cliContactName = contact?.name || '';
   inv.cliContactRole = contact?.role || '';
@@ -1444,6 +1577,17 @@ async function openCheckoutSendModal(inv) {
       <div class="fg" style="margin-bottom:0"><label class="lbl">Cedula / RNC</label>
         <input class="inp" id="pv-customer-rnc" inputmode="numeric" placeholder="Se completa al elegir el cliente"
                value="${posEscHtml(inv.cliCedula || '')}"/></div>
+      <div style="display:grid;grid-template-columns:120px 1fr;gap:8px;margin-top:9px">
+        <div class="fg" style="margin:0"><label class="lbl">Tipo</label>
+          <select class="inp" id="pv-customer-phone-type">
+            <option value="telefono" ${inv.cliPhoneType==='telefono'?'selected':''}>Teléfono</option>
+            <option value="celular" ${inv.cliPhoneType==='celular'?'selected':''}>Celular</option>
+            <option value="flota" ${inv.cliPhoneType==='flota'?'selected':''}>Flota</option>
+          </select></div>
+        <div class="fg" style="margin:0"><label class="lbl">Número para esta venta</label>
+          <input class="inp" id="pv-customer-phone" inputmode="tel" maxlength="40"
+            placeholder="809-555-0000" value="${posEscHtml(inv.cliPhone || '')}"></div>
+      </div>
     </div>
     ${CFG.module_vendedores === '1' && (DB.salespeople||[]).length ? `
       <div class="fg"><label class="lbl">Vendedor asignado</label><select class="inp" id="pv-salesperson">
@@ -1482,6 +1626,8 @@ async function posSubmitCheckoutOrder() {
   if (!inv?.cart?.length || inv.checkoutOrderId) return;
   const cliName = document.getElementById('pv-customer-search')?.value?.trim() || 'Consumidor Final';
   const cliCedula = document.getElementById('pv-customer-rnc')?.value?.trim() || '';
+  const cliPhone = document.getElementById('pv-customer-phone')?.value?.trim() || '';
+  const cliPhoneType = document.getElementById('pv-customer-phone-type')?.value || 'telefono';
   const salespersonId = Number(document.getElementById('pv-salesperson')?.value) || inv.salespersonId || null;
   const items = _posCheckoutItems(inv);
   const authorized = await posEnsureSalePriceAuthorization(inv, items, 'Orden para caja');
@@ -1491,14 +1637,17 @@ async function posSubmitCheckoutOrder() {
   }
   inv.cliName = cliName;
   inv.cliCedula = cliCedula;
+  inv.cliPhone = cliPhone;
+  inv.cliPhoneType = cliPhoneType;
   inv.salespersonId = salespersonId;
-  let customer = { id: 1, name: cliName, rnc: cliCedula };
+  let customer = { id: 1, name: cliName, rnc: cliCedula, phone: cliPhone, phone_type: cliPhoneType };
   if (inv.cliId && inv.cliId !== 1) {
     const found = DB.customers.find(c => Number(c.id) === Number(inv.cliId));
     if (found) {
       const contact = (found.contacts || []).find(c => Number(c.id) === Number(inv.cliContactId));
       customer = {
         id: found.id, name: found.name, rnc: found.rnc || '',
+        phone: cliPhone || found.phone || '', phone_type: cliPhoneType,
         contact_id: contact?.id || null,
         contact: contact ? { id: contact.id, name: contact.name, document: contact.document || '',
           role: contact.role || '', phone: contact.phone || '', email: contact.email || '' } : null,
@@ -1512,6 +1661,7 @@ async function posSubmitCheckoutOrder() {
       orderData: {
         customer, items, discountPct: inv.disc || 0, priceMode: inv.pmode || 'retail',
         salespersonId, priceChangeAuthToken: inv.priceChangeAuthToken || null,
+        discountAuthToken: inv.discAuthToken || null,
         notes: document.getElementById('pv-notes')?.value?.trim() || '',
       },
       requestUserId: user.id,
@@ -1536,11 +1686,25 @@ async function posSubmitCheckoutOrder() {
 // ══════════════════════════════════════════════
 // MODAL DE COBRO
 // ══════════════════════════════════════════════
+// Impresoras instaladas en ESTA terminal. Se cachean para poder ofrecer, al
+// cobrar, un selector de impresora + plantilla (solo cuando hay más de una).
+let _posPrintersCache = null;
+async function _posLoadPrinters() {
+  try {
+    const list = await window.api?.print?.getPrinters?.();
+    _posPrintersCache = Array.isArray(list) ? list.filter(p => p && p.name) : [];
+  } catch { _posPrintersCache = []; }
+  return _posPrintersCache;
+}
+function _posSaleTemplates() {
+  return (typeof PLANTILLAS !== 'undefined' ? PLANTILLAS : []).filter(p => p && p.tipo !== 'etiqueta');
+}
+
 function openCobroModal(inv) {
   if (!inv || !inv.cart.length) return;
   const { subtotal, itbis, total, discAmt, disc } = calcTotals(inv);
   const isQuote = inv.itype === 'cotizacion';
-  window._cbrBaseTotals = { subtotal, itbis, total, discAmt };
+  window._cbrBaseTotals = { subtotal, itbis, total, discAmt, chargesTotal: calcTotals(inv).chargesTotal };
 
   openModal(`
     <div class="modal-title">${isQuote
@@ -1585,6 +1749,22 @@ function openCobroModal(inv) {
         </div>
         <div id="cbr-cedula-hint" style="font-size:10.5px;margin-top:4px;color:var(--muted2)"></div>
       </div>
+      <div class="g2" style="margin-top:9px">
+        <div class="fg" style="margin-bottom:0">
+          <label class="lbl">Tipo de número</label>
+          <select class="inp" id="cbr-phone-type" ${inv.checkoutOrderId ? 'disabled' : ''}>
+            <option value="telefono" ${inv.cliPhoneType==='telefono'?'selected':''}>Teléfono</option>
+            <option value="celular" ${inv.cliPhoneType==='celular'?'selected':''}>Celular</option>
+            <option value="flota" ${inv.cliPhoneType==='flota'?'selected':''}>Flota</option>
+          </select>
+        </div>
+        <div class="fg" style="margin-bottom:0">
+          <label class="lbl">Número para esta factura</label>
+          <input class="inp" id="cbr-phone" type="tel" maxlength="40"
+                 placeholder="809-555-0000" value="${posEscHtml(inv.cliPhone || '')}"
+                 ${inv.checkoutOrderId ? 'readonly' : ''}/>
+        </div>
+      </div>
       <div id="cbr-contact-selected" style="${inv.cliContactName ? '' : 'display:none;'}margin-top:9px;padding:8px 10px;border-radius:8px;background:var(--blue-bg);font-size:11px;color:var(--blue)">
         ${inv.cliContactName ? `Solicitado por <strong>${posEscHtml(inv.cliContactName)}</strong>${inv.cliContactRole ? ` · ${posEscHtml(inv.cliContactRole)}` : ''}` : ''}
       </div>
@@ -1608,6 +1788,13 @@ function openCobroModal(inv) {
         <div class="alrt-sub">No mueve inventario, caja, crédito ni contabilidad. Podrás convertirlo en factura posteriormente.</div>
       </div>
     </div>` : ''}
+
+    <div class="fg">
+      <label class="lbl">Fecha del documento</label>
+      <input class="inp" id="cbr-sale-date" type="date"
+             value="${posEscHtml(inv.saleDate || new Date().toISOString().slice(0,10))}"/>
+      <div style="font-size:10.5px;color:var(--muted2);margin-top:4px">La factura aparecerá en el historial y los reportes de esta fecha.</div>
+    </div>
 
     <div class="fg" style="${isQuote ? 'display:none' : ''}">
       <label class="lbl">Método de pago</label>
@@ -1749,9 +1936,13 @@ function openCobroModal(inv) {
            <span id="cbr-summary-discount">−${fmt(discAmt)}</span></div>` : ''}
       ${inv.itype === 'factura' && itbis > 0
         ? `<div class="tr"><span>ITBIS (${CFG.itbis}%)</span><span id="cbr-summary-itbis">${fmt(itbis)}</span></div>` : ''}
+      ${Number(calcTotals(inv).chargesTotal) > 0
+        ? `<div class="tr"><span>Cargos adicionales</span><span id="cbr-summary-charges">${fmt(calcTotals(inv).chargesTotal)}</span></div>` : ''}
       <div class="tr grand"><span id="cbr-total-label">TOTAL</span><span id="cbr-summary-total">${fmt(total)}</span></div>
       <div id="cbr-summary-base" style="display:none;text-align:right;font-size:10.5px;color:var(--muted);padding-top:5px"></div>
     </div>
+
+    <div id="cbr-print-output"></div>
 
     ${inv.itype === 'factura' ? `
     <label style="display:flex;align-items:center;gap:9px;margin-top:12px;padding:10px 12px;
@@ -1760,7 +1951,7 @@ function openCobroModal(inv) {
       <span>
         <strong>Generar también un conduce</strong>
         <span style="color:var(--muted);font-size:11px;display:block">
-          Se imprime después de la factura, con las mismas líneas pero <strong>sin precios</strong>.
+          Se guarda en Conduces y se imprime después de la factura, <strong>sin precios</strong>.
         </span>
       </span>
     </label>` : ''}
@@ -1801,6 +1992,36 @@ function openCobroModal(inv) {
     }
   }).catch(() => {});
 
+  // Salida de impresión al cobrar. La PLANTILLA siempre se puede elegir (define
+  // el papel: térmica o carta). El selector de IMPRESORA solo aparece cuando hay
+  // MÁS DE UNA instalada; con una sola (o ninguna) se usa la global por defecto.
+  _posLoadPrinters().then(printers => {
+    const host = document.getElementById('cbr-print-output');
+    if (!host) return;
+    const list = printers || [];
+    const multi = list.length >= 2;
+    const defPrinter = DB?.settings?.printer || '';
+    const defTemplate = inv.printTemplateId || DB?.settings?.print_template || 'termica_80_clasica';
+    const templateOpts = _posSaleTemplates()
+      .map(p => `<option value="${p.id}" ${p.id === defTemplate ? 'selected' : ''}>${posEscHtml(p.nombre)}</option>`).join('');
+    const printerBlock = multi ? `
+          <div class="fg" style="margin-bottom:0"><label class="lbl">Impresora</label>
+            <select class="inp" id="cbr-printer">
+              <option value="">Predeterminada / diálogo del sistema</option>
+              ${list.map(p => `<option value="${posEscHtml(p.name)}" ${p.name === defPrinter ? 'selected' : ''}>${posEscHtml(p.name)}${p.isDefault ? ' (predeterminada)' : ''}</option>`).join('')}
+            </select></div>` : '';
+    host.innerHTML = `
+      <div class="card" style="margin-top:10px">
+        <div style="font-weight:700;font-size:12px;margin-bottom:9px">Salida de impresión</div>
+        <div class="${multi ? 'g2' : ''}">
+          ${printerBlock}
+          <div class="fg" style="margin-bottom:0"><label class="lbl">Plantilla</label>
+            <select class="inp" id="cbr-template">${templateOpts}</select></div>
+        </div>
+        <div style="font-size:10.5px;color:var(--muted2);margin-top:6px">${multi ? 'Elige impresora y plantilla para esta factura.' : 'Elige la plantilla con la que sale esta factura.'} Por defecto usa tu configuración global.</div>
+      </div>`;
+  }).catch(() => {});
+
   // Cargar los tipos de comprobante con secuencia disponible (para el preview
   // del NCF que se emitirá). Se cachea en window._ncfAvail; si falla, se asume
   // "desconocido" y el preview no advierte de secuencias faltantes.
@@ -1808,7 +2029,7 @@ function openCobroModal(inv) {
   if (inv.itype === 'factura' && CFG.fiscalEnabled && window.api?.ncf?.getSequences) {
     window.api.ncf.getSequences().then(seqs => {
       const avail = new Set();
-      (seqs || []).forEach(s => { if (s.active && s.current < s.to_num) avail.add(s.type); });
+      (seqs?.data || []).forEach(s => { if (s.active && s.current < s.to_num) avail.add(s.type); });
       window._ncfAvail = avail;
       cbrDocHint();
     }).catch(() => { window._ncfAvail = new Set(); cbrDocHint(); });
@@ -1860,6 +2081,7 @@ function cbrUpdatePaymentCurrency() {
   setText('cbr-summary-subtotal', money(totals.subtotal));
   setText('cbr-summary-itbis', money(totals.itbis));
   setText('cbr-summary-discount', `−${money(totals.discAmt)}`);
+  setText('cbr-summary-charges', money(totals.chargesTotal || 0));
   setText('cbr-summary-total', money(totals.total));
   setText('cbr-header-total', money(totals.total));
   setText('cbr-total-label', convertSummary ? 'TOTAL A TRANSFERIR (USD)' : 'TOTAL');
@@ -1937,12 +2159,16 @@ function cbrCalcCambio(total = calcTotals(currentInv()).total) {
 
 function cbrRefreshTotals(oldTotal = null) {
   const totals = calcTotals(currentInv());
-  window._cbrBaseTotals = { subtotal:totals.subtotal, itbis:totals.itbis, total:totals.total, discAmt:totals.discAmt };
+  window._cbrBaseTotals = {
+    subtotal: totals.subtotal, itbis: totals.itbis, total: totals.total,
+    discAmt: totals.discAmt, chargesTotal: totals.chargesTotal,
+  };
   const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
   setText('cbr-header-total', fmt(totals.total));
   setText('cbr-summary-subtotal', fmt(totals.subtotal));
   setText('cbr-summary-discount', `−${fmt(totals.discAmt)}`);
   setText('cbr-summary-itbis', fmt(totals.itbis));
+  setText('cbr-summary-charges', fmt(totals.chargesTotal));
   setText('cbr-summary-total', fmt(totals.total));
   const received = document.getElementById('cbr-received');
   if (received && (!received.value || oldTotal == null || Math.abs(Number(received.value) - Number(oldTotal)) < 0.01)) {
@@ -2012,6 +2238,10 @@ function cbrSelectCli(id, contactId = null) {
   inv.cliId     = c.id;
   inv.cliName   = c.name;
   inv.cliCedula = c.rnc || '';
+  const primaryPhone = (c.phones || []).find(p => p.is_primary) || (c.phones || [])[0] || null;
+  inv.cliPhone = primaryPhone?.phone || c.phone || '';
+  inv.cliPhoneType = primaryPhone?.phone_type || 'telefono';
+  inv.cliPhoneId = primaryPhone?.id || null;
   const contact = (c.contacts || []).find(item => Number(item.id) === Number(contactId));
   inv.cliContactId = contact?.id || null;
   inv.cliContactName = contact?.name || '';
@@ -2022,6 +2252,10 @@ function cbrSelectCli(id, contactId = null) {
   const sc = document.getElementById('cbr-cedula');
   if (sn) sn.value = c.name;
   if (sc) sc.value = c.rnc || '';
+  const phoneEl = document.getElementById('cbr-phone');
+  const phoneTypeEl = document.getElementById('cbr-phone-type');
+  if (phoneEl) phoneEl.value = inv.cliPhone;
+  if (phoneTypeEl) phoneTypeEl.value = inv.cliPhoneType;
   const contactEl = document.getElementById('cbr-contact-selected');
   if (contactEl) {
     contactEl.style.display = contact ? 'block' : 'none';
@@ -2129,6 +2363,11 @@ async function finalizarVenta() {
     : (document.getElementById('cbr-pmeth')?.value || 'efectivo');
   const cliName   = document.getElementById('cbr-name')?.value?.trim()   || 'Consumidor Final';
   const cliCedula = document.getElementById('cbr-cedula')?.value?.trim() || '';
+  const cliPhone = document.getElementById('cbr-phone')?.value?.trim() || '';
+  const cliPhoneType = document.getElementById('cbr-phone-type')?.value || 'telefono';
+  const saleDate = document.getElementById('cbr-sale-date')?.value || new Date().toISOString().slice(0,10);
+  const chosenPrinter = document.getElementById('cbr-printer')?.value || '';
+  const chosenTemplate = document.getElementById('cbr-template')?.value || '';
   // Capturar AQUÍ (antes de closeModal): el DOM del modal se elimina al cerrar.
   const wantConduce = !!document.getElementById('cbr-conduce')?.checked;
   const selectedAccountId = parseInt(document.getElementById('cbr-account')?.value) || null;
@@ -2162,6 +2401,15 @@ async function finalizarVenta() {
     toast('Indica una tasa USD válida para calcular el monto que entra a la cuenta', 'w');
     return;
   }
+  if (inv.displayCurrency === 'USD' &&
+      (Number(inv.displayExchangeRate) < 20 || Number(inv.displayExchangeRate) > 500)) {
+    toast('Indica una tasa de venta USD válida para la conversión de la factura', 'w');
+    return;
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(saleDate)) {
+    toast('Selecciona una fecha válida para el documento', 'w');
+    return;
+  }
   inv.financialAccountId = finAcctId;
   inv.exchangeRate = exchangeRate;
   inv.cardBrand = cardBrand;
@@ -2172,6 +2420,12 @@ async function finalizarVenta() {
   inv.pmeth = pmeth;
   inv.cliName = cliName;
   inv.cliCedula = cliCedula;
+  inv.cliPhone = cliPhone;
+  inv.cliPhoneType = cliPhoneType;
+  inv.saleDate = saleDate;
+  inv.printPrinterName = chosenPrinter;
+  inv.printProfileId = '';
+  inv.printTemplateId = chosenTemplate;
 
   if (!inv.cart.length) return;
 
@@ -2198,14 +2452,15 @@ async function finalizarVenta() {
   }
 
   // Buscar cliente registrado o usar consumidor final
-  let customer = { id: 1, name: cliName, rnc: cliCedula };
+  let customer = { id: 1, name: cliName, rnc: cliCedula, phone: cliPhone, phone_type: cliPhoneType };
   if (inv.cliId && inv.cliId !== 1) {
     const c = DB.customers.find(c => c.id === inv.cliId);
     if (c) {
       const contact = (c.contacts || []).find(item => Number(item.id) === Number(inv.cliContactId));
       customer = {
         id: c.id, name: c.name, rnc: c.rnc || '', address: c.address || '',
-        phone: c.phone || '', email: c.billing_email || c.email || '',
+        phone: cliPhone || c.phone || '', phone_type: cliPhoneType,
+        phone_id: inv.cliPhoneId || null, email: c.billing_email || c.email || '',
         contact_id: contact?.id || null,
       };
     }
@@ -2251,6 +2506,7 @@ async function finalizarVenta() {
       method:         pmeth,
       disc:           inv.disc || 0,
       discApprovedBy: inv.discApprovedBy || null,
+      discountAuthToken: inv.discAuthToken || null,
       priceMode:      inv.pmode || 'retail',
       priceChangeAuthToken: inv.priceChangeAuthToken || null,
       mixEfec,
@@ -2261,6 +2517,10 @@ async function finalizarVenta() {
       cardLast4,
       reference: paymentReference,
       salespersonId,
+      charges: inv.charges || [],
+      displayCurrency: inv.displayCurrency || 'DOP',
+      displayExchangeRate: inv.displayCurrency === 'USD' ? Number(inv.displayExchangeRate) : 1,
+      saleDate,
     },
     type: inv.itype || 'factura',
     session: cajaSession,
@@ -2341,7 +2601,7 @@ async function finalizarVenta() {
       receipt_document_number: savedSale?.receipt_document_number || result.receiptDocumentNumber || null,
       receipt_document_number_fmt: savedSale?.receipt_document_number_fmt || result.receiptDocumentNumberFmt || '',
       receipt_number: savedSale?.last_receipt_number || result.receiptDocumentNumberFmt || '',
-      date:         new Date().toISOString().split('T')[0],
+      date:         String(savedSale?.created_at || saleDate).slice(0, 10),
       time:         new Date().toLocaleTimeString('es-DO',
                       { hour: '2-digit', minute: '2-digit' }),
       type:         inv.itype,
@@ -2356,7 +2616,11 @@ async function finalizarVenta() {
 	      customer_contact_role: savedSale?.customer_contact_role || '',
 	      customer_contact_phone: savedSale?.customer_contact_phone || '',
 	      customer_contact_email: savedSale?.customer_contact_email || '',
+      customer_phone: savedSale?.customer_phone || cliPhone,
+      customer_phone_type: savedSale?.customer_phone_type || cliPhoneType,
 	      items:        printItems,
+      charges:      savedSale?.charges || inv.charges || [],
+      additional_charges_total: savedSale?.additional_charges_total || result.additionalChargesTotal || 0,
       subtotal:  result.subtotal,
       disc:      inv.disc || 0,
       discAmt:   result.discAmt || 0,
@@ -2370,6 +2634,9 @@ async function finalizarVenta() {
       payment_currency: result.paymentCurrency || 'DOP',
       exchange_rate: result.exchangeRate || 1,
       account_amount: result.accountAmount || 0,
+      display_currency: result.displayCurrency || inv.displayCurrency || 'DOP',
+      display_exchange_rate: result.displayExchangeRate || inv.displayExchangeRate || 1,
+      display_amount: result.displayAmount || 0,
       card_brand: result.cardBrand || cardBrand,
       card_last4: result.cardLast4 || cardLast4,
       payment_reference: result.paymentReference || paymentReference,
@@ -2387,6 +2654,7 @@ async function finalizarVenta() {
       customer_rnc:    savedSale?.customer_rnc || customer.rnc || cliCedula,
       customer_address: savedSale?.customer_address || customer.address || '',
       customer_phone:   savedSale?.customer_phone || customer.phone || '',
+      customer_phone_type: savedSale?.customer_phone_type || customer.phone_type || 'telefono',
       customer_email:   savedSale?.customer_email || customer.email || '',
       payment_method:  pmeth,
       payment_amount:  (pmeth === 'credito' || isQuote) ? 0 : result.total,
@@ -2394,17 +2662,25 @@ async function finalizarVenta() {
       transaction_number: result.documentNumberFmt || result.saleId,
       mix_efec:        mixEfec,
       mix_card:        mixCard,
+      print_printer_name: inv.printPrinterName || '',
+      print_profile_id: inv.printProfileId || '',
+      print_template_id: inv.printTemplateId || '',
     });
 
-    // Conduce opcional: solo si el usuario marcó la casilla. Se imprime DESPUÉS
-    // de la factura, con las mismas líneas pero sin precios (nota de entrega).
-    if (wantConduce && typeof printConduce === 'function') {
-      printConduce({
-        ...saleForPrint,
-        id:            result.saleId,
-        customer_name: savedSale?.customer_name || customer.name || cliName,
-        customer_rnc:  savedSale?.customer_rnc || customer.rnc || cliCedula,
+    // El conduce opcional se crea primero en el módulo de Conduces y luego se
+    // imprime. Así conserva numeración, estado, relación con la factura y
+    // trazabilidad; ya no era una impresión suelta imposible de consultar.
+    if (wantConduce) {
+      const conduceResult = await window.api.conduce.fromSale({
+        saleId: result.saleId,
+        requestUserId: user.id,
       });
+      if (conduceResult?.ok && conduceResult.data) {
+        if (typeof printConduceDoc === 'function') printConduceDoc(conduceResult.data);
+        toast(`✓ Conduce ${conduceResult.data.number} guardado e impreso`);
+      } else {
+        toast(`La venta se guardó, pero el conduce no pudo generarse: ${conduceResult?.error || 'error desconocido'}`, 'w');
+      }
     }
 
     const returnToPreventa = !!inv.checkoutOrderId;

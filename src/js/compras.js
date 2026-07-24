@@ -195,7 +195,7 @@ async function verOrden(id) {
         ? `<button class="btn btn-dark" onclick="closeModal();recibirOrden(${po.id})">${svg('download')} Recibir mercancía</button>`
         : `<button class="btn btn-out" onclick="closeModal()">Cerrar</button>`}
     </div>
-  `, 'modal-xl');
+  `, 'modal-xxl mtw');
 }
 
 // ── Nueva orden de compra ─────────────────────

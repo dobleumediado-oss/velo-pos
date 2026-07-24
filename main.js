@@ -31,7 +31,7 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
     // Impresión = operación de dispositivo: cada terminal imprime en SU impresora.
     // (print:onServer NO va aquí: es la opción explícita de imprimir en el servidor.)
     'print:html', 'print:toPDF', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
-    'shell:showItemInFolder',
+    'shell:openExternal', 'shell:showItemInFolder',
     // Diagnóstico local: NUNCA reenviar (si se reenvía y el servidor cae, el propio
     // logger de errores falla → cascada). El log de cada terminal es local.
     'log:error',
@@ -1703,6 +1703,21 @@ function _priceOverrideDetail(overrides) {
   return rows.join(' | ');
 }
 
+function _resolveDiscountApproval(reqUser, discountPct, token) {
+  const pct = Math.max(0, Math.min(100, Number(discountPct) || 0));
+  if (pct <= 10) return null;
+  if (['admin', 'superadmin'].includes(reqUser.role)) {
+    return { userId: reqUser.id, name: reqUser.name, role: reqUser.role, token: null };
+  }
+  const auth = _getPrivilegedToken(
+    token, 'pos_discount_override', ['admin', 'superadmin'], reqUser.id
+  );
+  if (!auth) {
+    throw new Error('Los descuentos mayores al 10% requieren autorización de un administrador');
+  }
+  return { userId: auth.userId, name: auth.name, role: auth.role, token };
+}
+
 ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
@@ -1739,6 +1754,22 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
 
     const priceOverrides = _salePriceOverrides(saleData);
     let priceApproval = null;
+    let discountApproval = null;
+    try {
+      discountApproval = _resolveDiscountApproval(
+        reqUser,
+        saleData?.payment?.disc,
+        saleData?.payment?.discountAuthToken
+      );
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+    if (discountApproval) {
+      saleData.payment = {
+        ...(saleData.payment || {}),
+        discApprovedBy: discountApproval.userId,
+      };
+    }
     if (priceOverrides.length) {
       if (['admin', 'superadmin'].includes(reqUser.role)) {
         priceApproval = { userId: reqUser.id, name: reqUser.name, role: reqUser.role };
@@ -1763,9 +1794,14 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
     if (priceOverrides.length && !['admin', 'superadmin'].includes(reqUser.role)) {
       _privAuthTokens.delete(saleData?.payment?.priceChangeAuthToken);
     }
+    if (discountApproval?.token) _privAuthTokens.delete(discountApproval.token);
     if (priceOverrides.length) {
       audit(requestUserId, reqUser.name, 'precio_venta_autorizado', 'sales', result.saleId,
             `Autorizado por ${priceApproval.name} (${priceApproval.role}) | ${_priceOverrideDetail(priceOverrides)}`);
+    }
+    if (discountApproval) {
+      audit(requestUserId, reqUser.name, 'descuento_venta_autorizado', 'sales', result.saleId,
+            `${Number(saleData.payment.disc).toFixed(2)}% autorizado por ${discountApproval.name}`);
     }
     // Contabilidad en vivo: asiento de venta (Débito Caja/Banco/CxC · Crédito
     // Ingresos + ITBIS · Costo/Inventario). Se auto-guarda por tipo/idempotencia.
@@ -1801,6 +1837,14 @@ ipcMain.handle('checkout:create', async (_, { orderData, requestUserId } = {}) =
 
     const overrides = _salePriceOverrides({ items: orderData.items });
     let priceApprovedBy = null;
+    let discountApproval = null;
+    try {
+      discountApproval = _resolveDiscountApproval(
+        reqUser, orderData.discountPct, orderData.discountAuthToken
+      );
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
     if (overrides.length) {
       if (['admin', 'superadmin'].includes(reqUser.role)) {
         priceApprovedBy = reqUser.id;
@@ -1820,11 +1864,13 @@ ipcMain.handle('checkout:create', async (_, { orderData, requestUserId } = {}) =
       createdByName: reqUser.name,
       terminalId: _reqTerminalId(),
       priceApprovedBy,
+      discountApprovedBy: discountApproval?.userId || null,
       reservationMinutes: Number(settingsRepo.get('checkout_reservation_minutes')) || 30,
     });
     if (overrides.length && !['admin', 'superadmin'].includes(reqUser.role)) {
       _privAuthTokens.delete(orderData.priceChangeAuthToken);
     }
+    if (discountApproval?.token) _privAuthTokens.delete(discountApproval.token);
     return { ok: true, data: order };
   } catch (e) {
     console.error('[checkout:create]', e);
@@ -1877,6 +1923,23 @@ ipcMain.handle('checkout:pay', async (_, { id, payment, requestUserId } = {}) =>
     const terminalId = _reqTerminalId();
     const session = cashRepo.getOpen(terminalId);
     const method = payment?.method || 'efectivo';
+    const pendingOrder = checkoutOrdersRepo.getById(id);
+    if (!pendingOrder) return { ok: false, error: 'Orden no encontrada' };
+    const requestedDiscount = payment?.disc !== undefined
+      ? Number(payment.disc) : Number(pendingOrder.discount_pct || 0);
+    const keepsAuthorizedDiscount = requestedDiscount > 10
+      && Math.abs(requestedDiscount - Number(pendingOrder.discount_pct || 0)) < 0.0001
+      && Number(pendingOrder.discount_approved_by || 0) > 0;
+    let discountApproval = null;
+    if (!keepsAuthorizedDiscount) {
+      try {
+        discountApproval = _resolveDiscountApproval(
+          reqUser, requestedDiscount, payment?.discountAuthToken
+        );
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
+    }
     if (reqUser.role === 'cajero' && !session) {
       return { ok: false, error: 'Debes abrir la caja de esta terminal antes de cobrar' };
     }
@@ -1886,6 +1949,11 @@ ipcMain.handle('checkout:pay', async (_, { id, payment, requestUserId } = {}) =>
     const result = checkoutOrdersRepo.pay({
       id, payment: payment || {}, session, user: reqUser, terminalId,
     });
+    if (discountApproval?.token) _privAuthTokens.delete(discountApproval.token);
+    if (discountApproval) {
+      audit(requestUserId, reqUser.name, 'descuento_orden_autorizado', 'sales', result.saleId,
+            `${requestedDiscount.toFixed(2)}% autorizado por ${discountApproval.name}`);
+    }
     _acctHook(() => accountingRepo.generateSaleEntry({ saleId: result.saleId, userId: requestUserId }));
     return { ok: true, ...result };
   } catch (e) {
@@ -1923,6 +1991,23 @@ ipcMain.handle('sales:search', async (_, { q, limit } = {}) => {
   } catch (e) {
     console.error('[sales:search]', e);
     return [];
+  }
+});
+
+ipcMain.handle('sales:updateDate', async (_, { id, saleDate, requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Solo un administrador puede cambiar la fecha de una factura emitida' };
+    }
+    const previous = salesRepo.getById(id);
+    if (!previous) return { ok: false, error: 'Venta no encontrada' };
+    const updated = salesRepo.updateDate(id, saleDate);
+    audit(requestUserId, reqUser.name, 'fecha_venta_cambiada', 'sales', id,
+      `${String(previous.created_at || '').slice(0, 10)} → ${saleDate}`);
+    return { ok: true, data: updated };
+  } catch (e) {
+    return { ok: false, error: e.message };
   }
 });
 
@@ -1979,6 +2064,29 @@ ipcMain.handle('documents:issue', async (_, { kind, sourceType, sourceId } = {})
   } catch (e) {
     return { ok: false, error: e.message };
   }
+});
+
+ipcMain.handle('documents:getSequences', async (_, { requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
+    return { ok: true, data: documentNumberRepo.getSequences() };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('documents:updateSequence', async (_, { kind, data, requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
+    const updated = documentNumberRepo.updateSequence(kind, data || {});
+    audit(requestUserId, reqUser.name, 'secuencia_documental_actualizada', 'document_sequences', null,
+      `${kind}: próximo ${Number(updated.current || 0) + 1}`);
+    return { ok: true, data: updated };
+  } catch (e) { return { ok: false, error: e.message }; }
 });
 
 // ── Devoluciones ──────────────────────────────
@@ -2584,11 +2692,13 @@ ipcMain.handle('business:resetData', async (_, { requestUserId }) => {
       'delivery_note_items',
       'delivery_notes',
       'payments',
+      'sale_charges',
       'sale_items',
       'sales',
       'cash_movements',
       'cash_sessions',
       'customer_contacts',
+      'customer_phones',
       'customers',
       'inventory_movements',
       'product_price_history',
@@ -3855,13 +3965,14 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, requestUserId } = 
         'checkout_order_items', 'checkout_orders',
         'delivery_note_invoice_links', 'delivery_note_items', 'delivery_notes',
         'document_issues',
-        'sale_items', 'payments', 'sales', 'customer_contacts', 'customers', 'products',
+        'sale_charges', 'sale_items', 'payments', 'sales',
+        'customer_phones', 'customer_contacts', 'customers', 'products',
       ];
       for (const t of wipe) {
         try { db.prepare(`DELETE FROM ${t}`).run(); } catch (_) { /* tabla ausente: ignorar */ }
       }
       // Reset de autoincrement para IDs limpios
-      try { db.prepare(`DELETE FROM sqlite_sequence WHERE name IN ('sales','sale_items','payments','customer_contacts','customers','products','product_price_history')`).run(); } catch (_) {}
+      try { db.prepare(`DELETE FROM sqlite_sequence WHERE name IN ('sales','sale_charges','sale_items','payments','customer_phones','customer_contacts','customers','products','product_price_history')`).run(); } catch (_) {}
       try {
         db.prepare(`
           UPDATE document_sequences
@@ -3950,6 +4061,7 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, requestUserId } = 
             date: (v.date || '').slice(0, 10), total: _aioNum(v.total), balance: _aioNum(v.balance),
             payment_method: v.payment_method || 'efectivo',
             status: v.status === 'cancelled' ? 'cancelled' : 'completed',
+            factura_nota: (v.factura_nota || '').trim(),
             type: 'factura', items: [],
           });
         }
@@ -3978,7 +4090,8 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, requestUserId } = 
         const custId = resolveCust(f.old_id_cliente, f.customer_name);
         const dt = (f.date || new Date().toISOString().split('T')[0]) + ' 00:00:00';
         const fmt = f.numero_factura_fmt || (f.numero_factura != null ? String(f.numero_factura).padStart(8,'0') : '');
-        const notes = f.numero_factura != null ? `Factura #${fmt}${f.ncf ? ' | NCF:' + f.ncf : ''}` : 'Factura importada';
+        const notes = (f.numero_factura != null ? `Factura #${fmt}${f.ncf ? ' | NCF:' + f.ncf : ''}` : 'Factura importada')
+          + (f.factura_nota ? ' | ' + f.factura_nota : '');
         // ITBIS incluido en el precio final del sistema viejo: se EXTRAE del
         // total (1,200 = 1,016.95 + 183.05). Antes se guardaba tax_amt=0 con
         // tax_pct=18 y la plantilla inflaba el total al reimprimir.
@@ -6457,10 +6570,13 @@ ipcMain.handle('shell:openExternal', async (_, { url }) => {
 
 ipcMain.handle('shell:showItemInFolder', async (_, { path: filePath } = {}) => {
   try {
-    if (!filePath || !fs.existsSync(filePath)) {
+    const allowedRoot = path.resolve(app.getPath('temp'), 'velo-pos-whatsapp');
+    const resolvedPath = filePath ? path.resolve(String(filePath)) : '';
+    const isAllowed = resolvedPath === allowedRoot || resolvedPath.startsWith(`${allowedRoot}${path.sep}`);
+    if (!isAllowed || !fs.existsSync(resolvedPath)) {
       return { ok: false, error: 'El archivo PDF ya no está disponible' };
     }
-    shell.showItemInFolder(filePath);
+    shell.showItemInFolder(resolvedPath);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };

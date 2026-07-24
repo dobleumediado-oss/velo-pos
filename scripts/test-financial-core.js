@@ -558,8 +558,9 @@ ok(normalizeFinMov({ type: 'retiro' }).type === 'egreso' && normalizeFinMov({ ty
 ok(normalizeFinMov({ type: 'deposito' }).db_type === 'deposito', 'movimiento: conserva db_type original');
 
 console.log('\n== H. Helpers de fecha (lib/dates) ==');
-const { todayStr, addDaysStr } = require('../lib/dates');
+const { todayStr, nowStr, addDaysStr } = require('../lib/dates');
 ok(/^\d{4}-\d{2}-\d{2}$/.test(todayStr()), `todayStr formato YYYY-MM-DD (${todayStr()})`);
+ok(/^\d{2}:\d{2}:\d{2}$/.test(nowStr()), `nowStr usa hora SQLite HH:MM:SS (${nowStr()})`);
 ok(addDaysStr('2026-01-31', 1) === '2026-02-01', 'addDaysStr cruza fin de mes: 2026-01-31 +1 = 2026-02-01');
 ok(addDaysStr('2026-12-31', 1) === '2027-01-01', 'addDaysStr cruza fin de año: 2026-12-31 +1 = 2027-01-01');
 ok(addDaysStr('2024-02-28', 1) === '2024-02-29', 'addDaysStr respeta año bisiesto: 2024-02-28 +1 = 2024-02-29');
@@ -625,6 +626,27 @@ ok(cardHtml.includes('Tarjeta Mastercard') && cardHtml.includes('•••• 54
   'plantilla A4 refleja marca, últimos 4 y autorización de tarjeta');
 ok(!cardHtml.includes('Cuenta interna') && !cardHtml.includes('Banco X'),
   'plantilla de tarjeta no expone la cuenta bancaria interna');
+const documentSample = {
+  id: 3003, type: 'factura', status: 'completed', date: '2026-07-20', time: '10:30',
+  customer_name: 'Cliente Multiformato', customer_phone: '829-555-0000',
+  customer_phone_type: 'celular', payment_method: 'efectivo',
+  display_currency: 'USD', display_exchange_rate: 60, display_amount: 10,
+  additional_charges_total: 128, total: 600, subtotal: 400, tax_amt: 72, tax_pct: 18,
+  items: [
+    { product_name: 'Producto', qty: 4, unit_price: 118, taxable: 1, tax_pct: 18 },
+    { product_name: 'Envío', qty: 1, unit_price: 128, taxable: 0, tax_pct: 0, _is_charge: true },
+  ],
+};
+const cfgSample = { biz_name: 'EQUIPARTS', biz_phone: '809', receipt_msg: 'Gracias' };
+const optsSample = { logo: false, rnc: true, ncf: true, mensaje: true, cedula: true, _estilos: {} };
+[
+  'termica_58_basica', 'termica_80_clasica', 'termica_80_moderna', 'termica_80_minimal',
+  'carta_recibo', 'carta_formal', 'carta_ncf', 'media_carta',
+].forEach(id => {
+  const html = getPlantilla(id).render(documentSample, cfgSample, optsSample);
+  ok(html.includes('US$10.00') && html.includes('Celular') && html.includes('Envío'),
+    `${id} imprime USD, tipo de teléfono y cargo`);
+});
 
 console.log('\n== I. Normalización de búsqueda (lib/text-normalize) ==');
 const { searchNorm, digitsOf } = require('../lib/text-normalize');

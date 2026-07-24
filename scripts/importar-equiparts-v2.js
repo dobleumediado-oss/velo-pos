@@ -257,6 +257,7 @@ const runImport = db.transaction(() => {
         payment_method: v.payment_method || 'efectivo',
         status: v.status === 'cancelled' ? 'cancelled' : 'completed',
         estado_origen: v.estado_origen || '',
+        factura_nota: (v.factura_nota || '').trim(),
         type: 'factura',
         items: [],
       });
@@ -284,8 +285,9 @@ const runImport = db.transaction(() => {
     const custId = resolveCust(f.old_id_cliente, f.customer_name);
     const dt = (f.date || new Date().toISOString().split('T')[0]) + ' 00:00:00';
     const fmt = f.numero_factura_fmt || (f.numero_factura != null ? String(f.numero_factura).padStart(8,'0') : '');
-    const notes = f.numero_factura != null
-      ? `Factura #${fmt}${f.ncf ? ' | NCF:' + f.ncf : ''}` : 'Factura importada';
+    const notes = (f.numero_factura != null
+      ? `Factura #${fmt}${f.ncf ? ' | NCF:' + f.ncf : ''}` : 'Factura importada')
+      + (f.factura_nota ? ' | ' + f.factura_nota : '');
     const taxPct = f.type === 'factura' ? 18 : 0;
 
     const r = insSale.run(

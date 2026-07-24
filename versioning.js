@@ -1223,6 +1223,55 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.26.1] Empresas, representantes y snapshots habilitados');
     }
   },
+  {
+    version: '1.28.0',
+    description: 'Mejoras integrales de POS: teléfonos múltiples, cargos, conversión USD y fecha documental',
+    run(db) {
+      const addCol = (table, col, def) => {
+        const exists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table);
+        if (!exists) return;
+        const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+        if (!cols.includes(col)) db.prepare(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`).run();
+      };
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS customer_phones (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+          phone_type TEXT NOT NULL DEFAULT 'telefono'
+            CHECK(phone_type IN ('telefono','celular','flota')),
+          phone TEXT NOT NULL,is_primary INTEGER NOT NULL DEFAULT 0,
+          active INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          updated_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_customer_phones_customer ON customer_phones(customer_id,active);
+        CREATE INDEX IF NOT EXISTS idx_customer_phones_phone ON customer_phones(phone) WHERE active=1;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_phones_primary
+          ON customer_phones(customer_id) WHERE active=1 AND is_primary=1;
+        CREATE TABLE IF NOT EXISTS sale_charges (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          sale_id INTEGER NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+          description TEXT NOT NULL,amount REAL NOT NULL CHECK(amount >= 0),
+          created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_sale_charges_sale ON sale_charges(sale_id);
+      `);
+      addCol('sales', 'customer_phone_type', "TEXT DEFAULT 'telefono'");
+      addCol('sales', 'additional_charges_total', 'REAL DEFAULT 0');
+      addCol('sales', 'display_currency', "TEXT DEFAULT 'DOP'");
+      addCol('sales', 'display_exchange_rate', 'REAL DEFAULT 1');
+      addCol('sales', 'display_amount', 'REAL DEFAULT 0');
+      db.prepare(`
+        INSERT INTO customer_phones(customer_id,phone_type,phone,is_primary)
+        SELECT c.id,'telefono',TRIM(c.phone),1 FROM customers c
+        WHERE TRIM(COALESCE(c.phone,''))<>''
+          AND NOT EXISTS (SELECT 1 FROM customer_phones p WHERE p.customer_id=c.id AND p.active=1)
+      `).run();
+      const insert = db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING');
+      insert.run('printer_destinations', '[]');
+      console.log('[MIGRATION 1.28.0] Flujos avanzados de venta habilitados');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

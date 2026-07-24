@@ -383,8 +383,11 @@ function newInvObj(id) {
   return {
     id, cart: [], pmode: 'retail', itype: 'factura',
     pmeth: 'efectivo', cliId: 1, cliName: '', cliCedula: '',
+    cliPhone: '', cliPhoneType: 'celular', cliPhoneId: null,
     cliContactId: null, cliContactName: '', cliContactRole: '', cliContactPhone: '',
-    salespersonId: null, disc: 0
+    salespersonId: null, disc: 0, discApprovedBy: null, discAuthToken: null, charges: [],
+    displayCurrency: 'DOP', displayExchangeRate: 0, saleDate: new Date().toISOString().split('T')[0],
+    printPrinterName: '', printProfileId: '', printTemplateId: ''
   };
 }
 
@@ -619,12 +622,9 @@ function openWhatsAppModal(msg, defPhone = '', clientName = 'cliente', options =
     </div>
 
     <div style="margin-top:12px">
-      <label class="lbl">Vista previa del mensaje</label>
-      <div style="background:var(--surface2);border:1px solid var(--line);border-radius:8px;
-                  padding:12px;font-size:12px;line-height:1.7;color:var(--ink3);
-                  max-height:180px;overflow-y:auto;white-space:pre-wrap;font-family:var(--mono)">
-${escapedMsg}
-      </div>
+      <label class="lbl">Mensaje <span style="font-weight:400;color:var(--muted)">(puedes editarlo antes de abrir WhatsApp)</span></label>
+      <textarea class="inp" id="wa-message-input" rows="8" maxlength="4000"
+                style="padding:12px;font-size:12px;line-height:1.55;resize:vertical;font-family:var(--mono)">${escapedMsg}</textarea>
     </div>
 
     <div class="modal-foot">
@@ -659,7 +659,7 @@ async function _waShowAttachment() {
 async function _waEnviar() {
   const inp   = document.getElementById('wa-phone-input');
   const phone = (inp?.value || '').replace(/\D/g, '').trim();
-  const msg   = window._waPendingMsg || '';
+  const msg   = document.getElementById('wa-message-input')?.value ?? window._waPendingMsg ?? '';
 
   if (!phone) {
     inp?.classList.add('inp-err');

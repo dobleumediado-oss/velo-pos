@@ -97,9 +97,9 @@ function renderCaja(el) {
       const tbody = h('tbody', null);
       [...tdS].reverse().slice(0, 10).forEach(s => {
         tbody.appendChild(h('tr', null,
-          h('td', { class: 'tm' }, `#${s.id}`),
+          h('td', { class: 'tm' }, facturaLabel(s)),
           h('td', null, h('div', { class: 'tb' }, s.customer_name || s.clientName || 'Consumidor Final')),
-          h('td', null, `${s.items.length} art.`),
+          h('td', null, `${Number(s.item_qty_total || 0)} art.`),
           h('td', null, h('span', { class: `badge ${s.pay==='efectivo'?'g':s.pay==='tarjeta'?'b':s.pay==='transferencia'?'p':'a'}` }, s.pay)),
           h('td', { style: { fontWeight: 700 } }, fmt(s.total))
         ));

@@ -1143,24 +1143,23 @@ async function openDetalleVentaModal(s) {
     const resaleCell = !canResell ? ''
       : resaleProd && resalePrice > 0 && maxAdd > 0
       ? `<td style="text-align:right;white-space:nowrap">
-           <div style="display:flex;gap:6px;align-items:center;justify-content:flex-end">
+           <div style="display:flex;gap:4px;align-items:center;justify-content:flex-end">
              <input class="inp" data-resale-qty="${s.id}:${idx}" type="number" min="1" max="${maxAdd}" value="1"
-               style="width:54px;padding:4px 6px;text-align:center;font-size:12px"/>
-             <button class="btn btn-out btn-sm" data-resale-add="${s.id}:${idx}" title="Agregar al carrito de reventa">
-               ${svg('plus')} Revender
-             </button>
+               style="width:40px;padding:3px 4px;text-align:center;font-size:11px"/>
+             <button class="btn btn-out btn-sm" data-resale-add="${s.id}:${idx}" title="Revender: agregar al carrito"
+               style="padding:4px 7px">${svg('plus')}</button>
            </div>
-           <div style="font-size:10px;color:var(--muted2);margin-top:3px">disp. ${stockAvailable} · venta ${soldQty}</div>
+           <div style="font-size:9px;color:var(--muted2);margin-top:2px">disp. ${stockAvailable} · vta ${soldQty}</div>
          </td>`
-      : `<td style="text-align:right;color:var(--muted2);font-size:11px">
-           ${!resaleProd ? 'No vinculado' : resalePrice <= 0 ? 'Sin precio' : 'Sin stock'}
+      : `<td style="text-align:right;color:var(--muted2);font-size:10.5px">
+           ${!resaleProd ? 'No vinc.' : resalePrice <= 0 ? 'Sin precio' : 'Sin stock'}
          </td>`;
     return `
       <tr>
-        <td style="font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap">
+        <td style="font-family:var(--mono);font-size:10px;color:var(--muted);white-space:nowrap">
           ${ventasEsc(ventasItemCode(i) || '—')}
         </td>
-        <td style="min-width:190px">${ventasEsc(i.product_name || i.name || 'Producto')}</td>
+        <td style="min-width:120px">${ventasEsc(i.product_name || i.name || 'Producto')}</td>
         <td style="text-align:right">${fmt(f.unitNet)}</td>
         <td style="text-align:center;font-weight:700">${f.qty}</td>
         <td style="text-align:right;color:var(--muted)">${fmt(f.net)}</td>
@@ -1225,6 +1224,7 @@ async function openDetalleVentaModal(s) {
         <div class="lbl">Cliente</div>
         <div style="font-weight:600">${detail.customer_name || detail.clientName || 'Consumidor Final'}</div>
         <div class="ts">${detail.customer_rnc || detail.clientCedula || 'Sin RNC'}</div>
+        ${detail.customer_phone ? `<div class="ts">${detail.customer_phone_type === 'celular' ? 'Celular' : detail.customer_phone_type === 'flota' ? 'Flota' : 'Teléfono'}: ${ventasEsc(detail.customer_phone)}</div>` : ''}
         ${detail.customer_contact_name ? `<div class="ts" style="margin-top:4px">Solicitado por: <strong>${ventasEsc(detail.customer_contact_name)}</strong>${detail.customer_contact_role ? ` · ${ventasEsc(detail.customer_contact_role)}` : ''}</div>` : ''}
       </div>
       <div>
@@ -1253,6 +1253,13 @@ async function openDetalleVentaModal(s) {
         <tbody>${itemsRows || `<tr><td colspan="${canResell ? 8 : 7}" style="color:var(--muted2);text-align:center">Sin detalle</td></tr>`}</tbody>
       </table>
     </div>
+    ${(detail.charges || []).length ? `
+      <div class="card" style="margin-bottom:12px">
+        <div class="lbl" style="margin-bottom:6px">Cargos agregados a la factura</div>
+        ${(detail.charges || []).map(charge => `
+          <div class="tr"><span>${ventasEsc(charge.description || 'Cargo adicional')}</span><span>${fmt(charge.amount)}</span></div>
+        `).join('')}
+      </div>` : ''}
     <div class="card" style="background:var(--surface2)">
         <div class="tr"><span>Monto bruto</span><span>${fmt(netShown)}</span></div>
       ${discPct > 0
@@ -1260,7 +1267,11 @@ async function openDetalleVentaModal(s) {
            <span>-${fmt(discAmt)}</span></div>` : ''}
         ${taxAmt > 0
           ? `<div class="tr"><span>ITBIS (${detail.tax_pct || CFG.itbis || 18}%)</span><span>${fmt(taxAmt)}</span></div>` : ''}
+      ${Number(detail.additional_charges_total || 0) > 0
+        ? `<div class="tr"><span>Cargos adicionales</span><span>${fmt(detail.additional_charges_total)}</span></div>` : ''}
       <div class="tr grand"><span>Importe / Total</span><span>${fmt(detail.total)}</span></div>
+      ${String(detail.display_currency || '').toUpperCase() === 'USD' && Number(detail.display_exchange_rate) > 0
+        ? `<div class="tr"><span>Equivalente USD · tasa RD$${Number(detail.display_exchange_rate).toFixed(2)}</span><strong>US$${Number(detail.display_amount || (detail.total / detail.display_exchange_rate)).toFixed(2)}</strong></div>` : ''}
     </div>
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
@@ -1270,6 +1281,9 @@ async function openDetalleVentaModal(s) {
       <button class="btn btn-out" onclick="guardarVentaPDF(${s.id})">
         ${svg('pdf')} Guardar PDF
       </button>
+      ${['admin','superadmin'].includes(user?.role)
+        ? `<button class="btn btn-out" onclick="closeModal();openVentaDateModal(${s.id})">${svg('calendar')} Cambiar fecha</button>`
+        : ''}
       <button class="btn btn-out" style="background:#25D366;color:#fff;border-color:#25D366"
               onclick="ventaWhatsApp(${s.id})"
               title="Enviar resumen de texto por WhatsApp">
@@ -1300,7 +1314,7 @@ async function openDetalleVentaModal(s) {
            </button>`
         : ''}
     </div>
-  `, 'modal-xl');
+  `, 'modal-xl mtw');
 
   setTimeout(() => {
     const modal = document.getElementById('modal-ov');
@@ -1440,6 +1454,7 @@ async function reimprimirVenta(saleId) {
         customer_rnc:    sale.customer_rnc   || _cust?.rnc || '',
         customer_address: sale.customer_address || _cust?.address || '',
         customer_phone:   sale.customer_phone || _cust?.phone || '',
+        customer_phone_type: sale.customer_phone_type || 'telefono',
 	        customer_email:   sale.customer_email || _cust?.billing_email || _cust?.email || '',
         customer_type: sale.customer_type || _cust?.customer_type || 'person',
         customer_trade_name: sale.customer_trade_name || _cust?.trade_name || '',
@@ -1461,6 +1476,11 @@ async function reimprimirVenta(saleId) {
 	          tax_amt:      i.tax_amt,
 	          net_subtotal: i.net_subtotal,
 	        })),
+        charges: sale.charges || [],
+        additional_charges_total: sale.additional_charges_total || 0,
+        display_currency: sale.display_currency || 'DOP',
+        display_exchange_rate: sale.display_exchange_rate || 1,
+        display_amount: sale.display_amount || 0,
         subtotal:        sale.subtotal,
         discount_pct:    sale.discount_pct || 0,
         discount_amt:    sale.discount_amt || 0,
@@ -1511,6 +1531,7 @@ function ventasPrintPayload(sale) {
     customer_name: sale.customer_name || 'Consumidor Final', customer_rnc: sale.customer_rnc || _custPdf?.rnc || '',
     customer_address: sale.customer_address || _custPdf?.address || '',
     customer_phone: sale.customer_phone || _custPdf?.phone || '',
+    customer_phone_type: sale.customer_phone_type || 'telefono',
     customer_email: sale.customer_email || _custPdf?.billing_email || _custPdf?.email || '',
     customer_type: sale.customer_type || _custPdf?.customer_type || 'person',
     customer_trade_name: sale.customer_trade_name || _custPdf?.trade_name || '',
@@ -1526,6 +1547,11 @@ function ventasPrintPayload(sale) {
 	      subtotal: i.subtotal, taxable: i.taxable, tax_pct: i.tax_pct,
 	      tax_amt: i.tax_amt, net_subtotal: i.net_subtotal,
 	    })),
+    charges: sale.charges || [],
+    additional_charges_total: sale.additional_charges_total || 0,
+    display_currency: sale.display_currency || 'DOP',
+    display_exchange_rate: sale.display_exchange_rate || 1,
+    display_amount: sale.display_amount || 0,
     subtotal: sale.subtotal, discount_pct: sale.discount_pct || 0, discount_amt: sale.discount_amt || 0,
     tax_amt: sale.tax_amt || 0, total: sale.total, payment_method: sale.payment_method,
     payment_amount: sale.payment_amount, balance_after_payment: sale.balance_after_payment,
@@ -1540,6 +1566,39 @@ function ventasPrintPayload(sale) {
     original_numero_factura: sale.original_numero_factura,
     original_numero_factura_fmt: sale.original_numero_factura_fmt,
   };
+}
+
+function openVentaDateModal(saleId) {
+  const sale = (DB.sales || []).find(row => Number(row.id) === Number(saleId));
+  if (!sale) return toast('Venta no encontrada', 'err');
+  const current = String(sale.created_at || sale.date || '').slice(0, 10);
+  openModal(`
+    <div class="modal-title">Cambiar fecha del documento</div>
+    <div class="modal-sub">${facturaLabel(sale)} · se moverá al período seleccionado en ventas, caja y reportes.</div>
+    <div class="fg">
+      <label class="lbl">Nueva fecha</label>
+      <input class="inp" id="venta-new-date" type="date" value="${ventasEsc(current)}"/>
+    </div>
+    <div class="alrt a">
+      <div><div class="alrt-title">Cambio auditado</div>
+      <div class="alrt-sub">El número de factura y el NCF no cambian. Solo se ajusta la fecha histórica asociada.</div></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-dark" onclick="guardarVentaDate(${saleId})">${svg('check')} Guardar fecha</button>
+    </div>
+  `);
+}
+
+async function guardarVentaDate(saleId) {
+  const saleDate = document.getElementById('venta-new-date')?.value || '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(saleDate)) return toast('Selecciona una fecha válida', 'w');
+  const result = await window.api.sales.updateDate({ id: saleId, saleDate, requestUserId: user.id });
+  if (!result?.ok) return toast(result?.error || 'No se pudo cambiar la fecha', 'err');
+  closeModal();
+  await reloadSales({ range: ventasRange, view: ventasTab === 'cotizaciones' ? undefined : 'sales' });
+  toast(`✓ ${facturaLabel(result.data)} movida al ${fdate(saleDate)}`);
+  renderVentas(document.getElementById('page'));
 }
 
 // ── Guardar venta como PDF (bajo demanda) ─────

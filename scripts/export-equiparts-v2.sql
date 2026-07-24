@@ -42,7 +42,10 @@ GO
    La MISMA expresion se usa en la query de ventas, asi el enlace queda intacto. */
 SELECT CASE WHEN d.n > 1 THEN a.codigo + '-' + CAST(a.id_articulo AS VARCHAR)
             ELSE a.codigo END AS code,
-  ISNULL(a.codigo_barra,a.codigo) AS barcode, a.Articulo AS name,
+  ISNULL(a.codigo_barra,a.codigo) AS barcode,
+  -- Quitar comillas dobles del nombre (marcas de pulgadas del sistema viejo,
+  -- ej. TORNILLO 1/2") — ensucian la ficha y no aportan.
+  REPLACE(a.Articulo,'"','') AS name,
   a.costo_compra AS cost, ISNULL(pv.precio,a.precio_venta) AS price,
   ISNULL(pm.precio,a.precio_por_mayor) AS wholesale,
   CASE WHEN ISNULL(a.itbis,0) > 0 THEN 1 ELSE 0 END AS taxable,
@@ -73,10 +76,20 @@ SELECT c.id_cliente AS old_id_cliente,
     CASE WHEN ISNULL(c.apellido,'')<>'' THEN ' '+c.apellido ELSE '' END)),',',' ') AS name,
   CASE WHEN LTRIM(RTRIM(ISNULL(c.cedula,''))) IN ('','-','--','---')
        THEN '' ELSE LTRIM(RTRIM(c.cedula)) END AS rnc,
-  CASE WHEN LTRIM(RTRIM(ISNULL(c.telefono,''))) IN ('','-','--','---')
-       THEN CASE WHEN LTRIM(RTRIM(ISNULL(c.celular,''))) IN ('','-','--','---')
-                 THEN '' ELSE LTRIM(RTRIM(c.celular)) END
-       ELSE LTRIM(RTRIM(c.telefono)) END AS phone,
+  -- La tabla destino tiene UNA columna phone. faprodb guarda numeros en
+  -- telefono y/o celular. Se combinan: si ambos existen y son distintos ->
+  -- "telefono / celular"; si solo uno -> ese; si ninguno -> ''.
+  CASE
+    WHEN LTRIM(RTRIM(ISNULL(c.telefono,''))) NOT IN ('','-','--','---')
+     AND LTRIM(RTRIM(ISNULL(c.celular,'')))  NOT IN ('','-','--','---')
+     AND LTRIM(RTRIM(c.telefono)) <> LTRIM(RTRIM(c.celular))
+      THEN LTRIM(RTRIM(c.telefono)) + ' / ' + LTRIM(RTRIM(c.celular))
+    WHEN LTRIM(RTRIM(ISNULL(c.telefono,''))) NOT IN ('','-','--','---')
+      THEN LTRIM(RTRIM(c.telefono))
+    WHEN LTRIM(RTRIM(ISNULL(c.celular,'')))  NOT IN ('','-','--','---')
+      THEN LTRIM(RTRIM(c.celular))
+    ELSE ''
+  END AS phone,
   REPLACE(ISNULL(c.direccion,''),',',' ') AS address,
   ISNULL(c.email,'') AS email,
   30 AS credit_days
@@ -88,7 +101,8 @@ ORDER BY c.id_cliente;
    3) 3_ventas_v2.csv              esperado: 9081 filas (una por item)
    header: old_id_factura,numero_factura,numero_factura_fmt,ncf,customer_name,
            old_id_cliente,date,total,balance,payment_method,status,
-           estado_origen,product_code,product_name,qty,unit_price,line_total
+           estado_origen,product_code,product_name,qty,unit_price,line_total,
+           factura_nota
    payment_method sale del BALANCE, no de condicion_pago. Ver hallazgo 1.
    ─────────────────────────────────────────────────────────────────────────── */
 SELECT f.id_factura AS old_id_factura, f.codigo_factura AS numero_factura,
@@ -103,8 +117,10 @@ SELECT f.id_factura AS old_id_factura, f.codigo_factura AS numero_factura,
   'completed' AS status, f.estado_factura AS estado_origen,
   ISNULL(CASE WHEN d.n > 1 THEN a.codigo + '-' + CAST(a.id_articulo AS VARCHAR)
               ELSE a.codigo END, 'IMP') AS product_code,
-  REPLACE(ISNULL(a.Articulo,'Producto'),',',' ') AS product_name,
-  fd.cantidad AS qty, fd.precio AS unit_price, fd.importe AS line_total
+  REPLACE(REPLACE(ISNULL(a.Articulo,'Producto'),'"',''),',',' ') AS product_name,
+  fd.cantidad AS qty, fd.precio AS unit_price, fd.importe AS line_total,
+  -- Nota real de la factura (el importador la anexa a sales.notes).
+  REPLACE(REPLACE(ISNULL(f.nota,''),'"',''),',',' ') AS factura_nota
 FROM dbo.factura f
 -- LEFT (no INNER): la factura 204628 no tiene lineas en factura_detalle y con
 -- INNER se perdia, dejando huerfano su recibo de RD$630. El importador le crea
@@ -138,7 +154,12 @@ FROM (
          pd.monto AS amount,
          LOWER(LTRIM(RTRIM(ISNULL(p.forma_pago,'efectivo')))) AS method,
          p.id_pago AS numero_recibo,
-         REPLACE(ISNULL(p.concepto,'Pago de factura'),',',' ') AS notes,
+         -- Nota real del abono: pago_detalle.nota; si viene vacia, el concepto
+         -- del pago. El importador la anexa a payments.note.
+         REPLACE(REPLACE(
+           CASE WHEN LTRIM(RTRIM(ISNULL(pd.nota,''))) <> ''
+                THEN pd.nota ELSE ISNULL(p.concepto,'Pago de factura') END,
+           '"',''),',',' ') AS notes,
          pd.id_pago_detalle AS _ord, 0 AS _tipo
   FROM dbo.pago_detalle pd
   INNER JOIN dbo.pago    p ON p.id_pago    = pd.id_pago
@@ -154,7 +175,11 @@ FROM (
          REPLACE(LTRIM(RTRIM(ISNULL(c.nombre,'') +
            CASE WHEN ISNULL(c.apellido,'')<>'' THEN ' '+c.apellido ELSE '' END)),',',' '),
          CONVERT(VARCHAR(10), p.fecha, 120),
-         pd.descuento, 'descuento', p.id_pago, 'Descuento aplicado',
+         pd.descuento, 'descuento', p.id_pago,
+         REPLACE(REPLACE(
+           CASE WHEN LTRIM(RTRIM(ISNULL(pd.nota,''))) <> ''
+                THEN 'Descuento aplicado | ' + pd.nota ELSE 'Descuento aplicado' END,
+           '"',''),',',' '),
          pd.id_pago_detalle, 1
   FROM dbo.pago_detalle pd
   INNER JOIN dbo.pago    p ON p.id_pago    = pd.id_pago

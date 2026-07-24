@@ -143,13 +143,15 @@ async function renderNCFAvanzado(el) {
     return;
   }
 
-  const [seqRes, alertRes] = await Promise.all([
+  const [seqRes, alertRes, docSeqRes] = await Promise.all([
     window.api.ncf.getSequences(),
     window.api.ncf.getAlerts(),
+    window.api.documents.getSequences({ requestUserId: user.id }),
   ]);
 
   const secuencias = seqRes?.data || [];
   const alertas = alertRes?.data || [];
+  const documentSequences = docSeqRes?.data || [];
 
   el.innerHTML = '';
 
@@ -221,6 +223,40 @@ async function renderNCFAvanzado(el) {
     el.appendChild(wrap);
   }
 
+  const cashSequence = documentSequences.find(s => s.kind === 'factura_contado') || {
+    kind: 'factura_contado', prefix: 'FAC', current: 0, pad_length: 8,
+  };
+  const nextCash = Number(cashSequence.current || 0) + 1;
+  const documentCard = document.createElement('div');
+  documentCard.style.cssText = 'margin-top:18px;padding-top:16px;border-top:1px solid var(--line2)';
+  documentCard.innerHTML = `
+    <div style="font-size:14px;font-weight:600;color:var(--ink);margin-bottom:4px">Secuencia de facturas al contado</div>
+    <div style="font-size:11px;color:var(--muted2);margin-bottom:12px">
+      Controla el próximo número interno de factura. No altera comprobantes NCF ni números ya emitidos.
+    </div>
+    <div style="display:grid;grid-template-columns:minmax(100px,1fr) minmax(130px,1fr) minmax(110px,1fr) auto;gap:10px;align-items:end">
+      <div class="fg" style="margin:0">
+        <label class="lbl">Prefijo</label>
+        <input class="inp" id="cash-seq-prefix" maxlength="8"
+          value="${String(cashSequence.prefix || 'FAC').replace(/["<>&]/g, '')}">
+      </div>
+      <div class="fg" style="margin:0">
+        <label class="lbl">Último número emitido</label>
+        <input class="inp" id="cash-seq-current" type="number" min="0" step="1"
+          value="${Number(cashSequence.current || 0)}">
+      </div>
+      <div class="fg" style="margin:0">
+        <label class="lbl">Cantidad de dígitos</label>
+        <input class="inp" id="cash-seq-pad" type="number" min="3" max="12" step="1"
+          value="${Number(cashSequence.pad_length || 8)}">
+      </div>
+      <button class="btn btn-dark btn-sm" id="btn-save-cash-seq">Guardar secuencia</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted2);margin-top:8px">
+      Próxima factura: <strong style="font-family:var(--mono);color:var(--ink)">${cashSequence.prefix || 'FAC'}-${String(nextCash).padStart(Number(cashSequence.pad_length || 8), '0')}</strong>
+    </div>`;
+  el.appendChild(documentCard);
+
   // Delegación de eventos: enganchamos el listener al contenedor `el` (que
   // persiste), no a los botones concretos. Como renderNCFAvanzado es async y
   // renderConfiguracion puede re-renderizar durante el await, enganchar
@@ -232,10 +268,44 @@ async function renderNCFAvanzado(el) {
       const nueva   = ev.target.closest('#btn-nueva-seq');
       const validar = ev.target.closest('#btn-validar-rnc');
       const repNcf  = ev.target.closest('#btn-rep-ncf');
+      const saveCash = ev.target.closest('#btn-save-cash-seq');
       if (nueva)   { ev.preventDefault(); modalNuevaSecuencia(el); }
       if (validar) { ev.preventDefault(); modalValidarRNC(); }
       if (repNcf)  { ev.preventDefault(); modalReporteNCF(); }
+      if (saveCash) {
+        ev.preventDefault();
+        guardarSecuenciaFacturaContado(el, saveCash);
+      }
     });
+  }
+}
+
+async function guardarSecuenciaFacturaContado(parentEl, button) {
+  const user = _sUser();
+  const prefix = parentEl.querySelector('#cash-seq-prefix')?.value?.trim().toUpperCase() || 'FAC';
+  const current = Number(parentEl.querySelector('#cash-seq-current')?.value);
+  const padLength = Number(parentEl.querySelector('#cash-seq-pad')?.value);
+  if (!Number.isInteger(current) || current < 0) {
+    _sToast('El último número emitido debe ser un entero igual o mayor a cero');
+    return;
+  }
+  if (!Number.isInteger(padLength) || padLength < 3 || padLength > 12) {
+    _sToast('La cantidad de dígitos debe estar entre 3 y 12');
+    return;
+  }
+  button.disabled = true;
+  try {
+    const res = await window.api.documents.updateSequence({
+      kind: 'factura_contado',
+      data: { prefix, current, padLength },
+      requestUserId: user.id,
+    });
+    if (!res?.ok) throw new Error(res?.error || 'No se pudo guardar la secuencia');
+    _sToast('✓ Secuencia de facturas al contado actualizada');
+    await renderNCFAvanzado(parentEl);
+  } catch (e) {
+    _sToast(e.message || 'No se pudo guardar la secuencia');
+    button.disabled = false;
   }
 }
 

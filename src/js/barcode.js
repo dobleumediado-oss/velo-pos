@@ -658,11 +658,10 @@ function _bcOpenPreview() {
 
 function _bcShowPreviewModal(html, title) {
   openModal(`
-    <div class="modal-title">${title}</div>
+    <div class="modal-title">${_bcEsc(title)}</div>
     <div class="modal-sub">Revisa antes de imprimir</div>
     <iframe id="bc-preview-iframe"
-            style="width:100%;height:500px;border:1px solid var(--line);border-radius:8px;background:#fff;margin-top:12px"
-            srcdoc="${html.replace(/"/g, '&quot;')}">
+            style="width:100%;height:500px;border:1px solid var(--line);border-radius:8px;background:#fff;margin-top:12px">
     </iframe>
     <div class="modal-foot" style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
       <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
@@ -671,6 +670,8 @@ function _bcShowPreviewModal(html, title) {
       </button>
     </div>
   `, 'modal-xl');
+  const iframe = document.getElementById('bc-preview-iframe');
+  if (iframe) iframe.srcdoc = html;
 }
 
 // ══════════════════════════════════════════════
@@ -696,15 +697,12 @@ async function _bcPrint() {
     : { mediaWidthMm: profile.widthMm || d.labelW || 50, rowHeightMm: (d.labelH || 25) + (d.gapMm || 2) };
 
   try {
-    const result = await window.api.print.html({
+    const result = await printLabelBatch({
       html,
       printerName:  _bcState.selPrinter || '',
-      printerWidth: `${layout.mediaWidthMm}mm`,
-      printerHeight: _bcState.mediaMode === 'continuous' ? undefined : `${layout.rowHeightMm}mm`,
-      jobType:      'barcode_labels',
-      referenceId:  null,
-      userId:       user?.id,
-      silent:       true,
+      widthMm: layout.mediaWidthMm,
+      heightMm: _bcState.mediaMode === 'continuous' ? null : layout.rowHeightMm,
+      userId: user?.id,
     });
     if (result?.ok !== false) {
       toast(`✓ ${total} etiqueta(s) enviadas a imprimir`, 'ok');

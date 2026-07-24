@@ -55,6 +55,7 @@ function initDB(customDataDir) {
   migrateV2IdentityColumns();   // Fase 1 migración v2 (identidad real Equiparts)
   migrateDocumentNumbering();   // Secuencias internas independientes por tipo documental
   migrateCustomerCompanies();   // Personas, empresas, representantes y snapshots
+  migrateSalesWorkflowEnhancements(); // Teléfonos múltiples, cargos, USD y fecha documental
   ensureCheckoutOrdersSchema(db);
   seedIfEmpty();
   ensureNcfIntegrity();         // C2: índice UNIQUE parcial contra NCF duplicados
@@ -905,6 +906,64 @@ function migrateCustomerCompanies() {
   `);
 }
 
+// Mejoras operativas del POS. Corre en cada arranque para que una base creada
+// por una versión intermedia también quede completa aunque ya figure una
+// migración de versión como aplicada.
+function migrateSalesWorkflowEnhancements() {
+  const addCol = (table, col, def) => {
+    if (!tableExists(table)) return;
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+    if (!cols.includes(col)) db.prepare(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`).run();
+  };
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS customer_phones (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      phone_type  TEXT NOT NULL DEFAULT 'telefono'
+                    CHECK(phone_type IN ('telefono','celular','flota')),
+      phone       TEXT NOT NULL,
+      is_primary  INTEGER NOT NULL DEFAULT 0,
+      active      INTEGER NOT NULL DEFAULT 1,
+      created_at  TEXT DEFAULT (datetime('now','localtime')),
+      updated_at  TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_customer_phones_customer
+      ON customer_phones(customer_id,active);
+    CREATE INDEX IF NOT EXISTS idx_customer_phones_phone
+      ON customer_phones(phone) WHERE active=1;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_phones_primary
+      ON customer_phones(customer_id) WHERE active=1 AND is_primary=1;
+
+    CREATE TABLE IF NOT EXISTS sale_charges (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      sale_id     INTEGER NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+      description TEXT NOT NULL,
+      amount      REAL NOT NULL CHECK(amount >= 0),
+      created_at  TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_sale_charges_sale ON sale_charges(sale_id);
+  `);
+
+  addCol('sales', 'customer_phone_type', "TEXT DEFAULT 'telefono'");
+  addCol('sales', 'additional_charges_total', 'REAL DEFAULT 0');
+  addCol('sales', 'display_currency', "TEXT DEFAULT 'DOP'");
+  addCol('sales', 'display_exchange_rate', 'REAL DEFAULT 1');
+  addCol('sales', 'display_amount', 'REAL DEFAULT 0');
+
+  // Llevar el teléfono legacy a la colección nueva sin duplicarlo.
+  db.prepare(`
+    INSERT INTO customer_phones(customer_id,phone_type,phone,is_primary)
+    SELECT c.id,'telefono',TRIM(c.phone),1
+    FROM customers c
+    WHERE TRIM(COALESCE(c.phone,''))<>''
+      AND NOT EXISTS (
+        SELECT 1 FROM customer_phones p
+        WHERE p.customer_id=c.id AND p.active=1
+      )
+  `).run();
+}
+
 function migratePriceHistoryAccountingColumns() {
   try {
     if (!tableExists('product_price_history')) return;
@@ -1334,6 +1393,32 @@ const documentNumberRepo = {
       UPDATE document_issues SET status=?
       WHERE kind=? AND source_type=? AND source_id=?
     `).run(status, kind, String(sourceType || ''), String(sourceId ?? ''));
+  },
+  getSequences() {
+    return db.prepare(`
+      SELECT kind,prefix,current,pad_length,updated_at
+      FROM document_sequences
+      ORDER BY kind
+    `).all();
+  },
+  updateSequence(kind, { prefix, current, padLength } = {}) {
+    const cfg = DOCUMENT_SEQUENCE_DEFAULTS[kind];
+    if (!cfg) throw new Error('Tipo documental no soportado');
+    const cleanPrefix = String(prefix || cfg.prefix).replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 8);
+    const cleanCurrent = Math.max(0, Math.floor(Number(current) || 0));
+    const cleanPad = Math.max(3, Math.min(12, Math.floor(Number(padLength) || cfg.pad)));
+    const issuedMax = db.prepare(
+      'SELECT COALESCE(MAX(sequence_number),0) AS n FROM document_issues WHERE kind=?'
+    ).get(kind)?.n || 0;
+    if (cleanCurrent < issuedMax) {
+      throw new Error(`La secuencia no puede retroceder por debajo de ${issuedMax}; esos números ya fueron emitidos`);
+    }
+    db.prepare(`
+      UPDATE document_sequences
+      SET prefix=?,current=?,pad_length=?,updated_at=datetime('now','localtime')
+      WHERE kind=?
+    `).run(cleanPrefix || cfg.prefix, cleanCurrent, cleanPad, kind);
+    return db.prepare('SELECT * FROM document_sequences WHERE kind=?').get(kind);
   },
 };
 
@@ -1982,6 +2067,54 @@ function contactsForCustomer(customerId) {
   `).all(customerId);
 }
 
+function phonesForCustomer(customerId) {
+  if (!tableExists('customer_phones')) return [];
+  return db.prepare(`
+    SELECT id,customer_id,phone_type,phone,is_primary,active
+    FROM customer_phones
+    WHERE customer_id=? AND active=1
+    ORDER BY is_primary DESC,id
+  `).all(customerId);
+}
+
+function normalizeCustomerPhones(input, legacyPhone = '') {
+  const allowed = new Set(['telefono', 'celular', 'flota']);
+  const rows = Array.isArray(input) ? input : [];
+  const clean = rows.map((row, index) => ({
+    phone_type: allowed.has(String(row?.phone_type || row?.type || '').toLowerCase())
+      ? String(row.phone_type || row.type).toLowerCase() : 'telefono',
+    phone: String(row?.phone || row?.number || '').trim().slice(0, 40),
+    is_primary: row?.is_primary ? 1 : 0,
+    _index: index,
+  })).filter(row => row.phone);
+  if (!clean.length && String(legacyPhone || '').trim()) {
+    clean.push({ phone_type: 'telefono', phone: String(legacyPhone).trim().slice(0, 40), is_primary: 1, _index: 0 });
+  }
+  if (clean.length && !clean.some(row => row.is_primary)) clean[0].is_primary = 1;
+  let foundPrimary = false;
+  clean.forEach(row => {
+    if (row.is_primary && !foundPrimary) foundPrimary = true;
+    else row.is_primary = 0;
+    delete row._index;
+  });
+  return clean.slice(0, 12);
+}
+
+function replaceCustomerPhones(customerId, phones, legacyPhone = '') {
+  if (!tableExists('customer_phones')) return [];
+  const clean = normalizeCustomerPhones(phones, legacyPhone);
+  db.prepare("UPDATE customer_phones SET active=0,is_primary=0,updated_at=datetime('now','localtime') WHERE customer_id=?").run(customerId);
+  const ins = db.prepare(`
+    INSERT INTO customer_phones(customer_id,phone_type,phone,is_primary,active)
+    VALUES(?,?,?,?,1)
+  `);
+  clean.forEach(row => ins.run(customerId, row.phone_type, row.phone, row.is_primary));
+  const primary = clean.find(row => row.is_primary) || clean[0];
+  db.prepare("UPDATE customers SET phone=?,updated_at=datetime('now') WHERE id=?")
+    .run(primary?.phone || '', customerId);
+  return phonesForCustomer(customerId);
+}
+
 function ensurePrimaryCustomerContact(customerId) {
   const primary = db.prepare(`SELECT id FROM customer_contacts WHERE customer_id=? AND active=1 AND is_primary=1 LIMIT 1`).get(customerId);
   if (primary) return primary.id;
@@ -1993,11 +2126,19 @@ function ensurePrimaryCustomerContact(customerId) {
 const customersRepo = {
   getAll() {
     return db.prepare('SELECT * FROM customers WHERE active=1 ORDER BY name').all()
-      .map(customer => ({ ...customer, contacts: contactsForCustomer(customer.id) }));
+      .map(customer => ({
+        ...customer,
+        contacts: contactsForCustomer(customer.id),
+        phones: phonesForCustomer(customer.id),
+      }));
   },
   getById(id) {
     const customer = db.prepare('SELECT * FROM customers WHERE id=?').get(id);
-    return customer ? { ...customer, contacts: contactsForCustomer(customer.id) } : null;
+    return customer ? {
+      ...customer,
+      contacts: contactsForCustomer(customer.id),
+      phones: phonesForCustomer(customer.id),
+    } : null;
   },
   create(c) {
     const name = String(c.name || '').replace(/\s+/g, ' ').trim();
@@ -2016,6 +2157,7 @@ const customersRepo = {
       c.preferred_price_mode === 'wholesale' ? 'wholesale' : 'retail', String(c.notes || '').trim(),
       Number(c.credit_limit) || 0, Math.max(1, Number(c.credit_days) || 30)
     );
+    replaceCustomerPhones(Number(r.lastInsertRowid), c.phones, c.phone);
     return r.lastInsertRowid;
   },
   update(id, c) {
@@ -2037,6 +2179,7 @@ const customersRepo = {
     if (customerType !== 'company') {
       db.prepare("UPDATE customer_contacts SET active=0,updated_at=datetime('now','localtime') WHERE customer_id=? AND active=1").run(id);
     }
+    replaceCustomerPhones(id, c.phones, c.phone);
   },
   getContacts(customerId) {
     return contactsForCustomer(customerId);
@@ -2189,6 +2332,7 @@ const customersRepo = {
     db.transaction(() => {
       db.prepare(`UPDATE customers SET active=0,updated_at=datetime('now') WHERE id=?`).run(id);
       db.prepare(`UPDATE customer_contacts SET active=0,is_primary=0,updated_at=datetime('now','localtime') WHERE customer_id=?`).run(id);
+      db.prepare(`UPDATE customer_phones SET active=0,is_primary=0,updated_at=datetime('now','localtime') WHERE customer_id=?`).run(id);
     })();
     return { id, name: cust.name, balance: cust.balance || 0 };
   },
@@ -2197,6 +2341,7 @@ const customersRepo = {
     const totalBalance = rows.reduce((s, r) => s + (r.balance || 0), 0);
     db.transaction(() => {
       db.prepare(`UPDATE customer_contacts SET active=0,is_primary=0,updated_at=datetime('now','localtime') WHERE customer_id IN (SELECT id FROM customers WHERE active=1 AND id != 1)`).run();
+      db.prepare(`UPDATE customer_phones SET active=0,is_primary=0,updated_at=datetime('now','localtime') WHERE customer_id IN (SELECT id FROM customers WHERE active=1 AND id != 1)`).run();
       db.prepare(`UPDATE customers SET active=0,updated_at=datetime('now') WHERE active=1 AND id != 1`).run();
     })();
     return { count: rows.length, totalBalance };
@@ -2261,7 +2406,9 @@ const cashRepo = {
   },
   getSessionSales(sessionId) {
     return db.prepare(`
-      SELECT s.*, si.product_name, si.qty, si.unit_price
+      SELECT s.*,
+        COALESCE((SELECT SUM(si.qty) FROM sale_items si WHERE si.sale_id=s.id),0) AS item_qty_total,
+        COALESCE((SELECT COUNT(*) FROM sale_items si WHERE si.sale_id=s.id),0) AS item_lines_count
       FROM sales s
       WHERE s.cash_session_id=? AND s.status != 'cancelled'
       ORDER BY s.id DESC
@@ -2374,6 +2521,7 @@ const salesRepo = {
       const requestedCustomer = customer || {};
       const requestedCustomerId = Number(requestedCustomer.id) || 1;
       let selectedContact = null;
+      let selectedCustomerPhoneType = String(requestedCustomer.phone_type || 'telefono').toLowerCase();
       if (requestedCustomerId !== 1) {
         const account = db.prepare('SELECT * FROM customers WHERE id=? AND active=1').get(requestedCustomerId);
         if (!account) throw new Error('Cliente no encontrado o inactivo');
@@ -2422,6 +2570,13 @@ const salesRepo = {
             : (account.billing_email || account.email || ''),
           contact: selectedContact,
         };
+        const storedPhones = phonesForCustomer(account.id);
+        const requestedPhoneId = Number(requestedCustomer.phone_id) || null;
+        const storedPhone = (requestedPhoneId
+          ? storedPhones.find(row => Number(row.id) === requestedPhoneId)
+          : null) || storedPhones.find(row => row.is_primary) || storedPhones[0] || null;
+        if (!preserveAccount && storedPhone) customer.phone = storedPhone.phone;
+        selectedCustomerPhoneType = storedPhone?.phone_type || selectedCustomerPhoneType;
       } else {
         customer = {
           id: 1,
@@ -2433,6 +2588,8 @@ const salesRepo = {
           email: String(requestedCustomer.email || '').trim(),
           contact: null,
         };
+        selectedCustomerPhoneType = ['telefono','celular','flota'].includes(selectedCustomerPhoneType)
+          ? selectedCustomerPhoneType : 'telefono';
       }
 
       // ¿Esta venta afecta inventario? (descuenta stock). Una sola fuente de
@@ -2497,8 +2654,44 @@ const salesRepo = {
 
       // 2. Calcular totales con precio final: neto + ITBIS incluido = total.
       const discPct = payment.disc || 0;
-      const { subtotal, discAmt, taxAmt, total } = calcIncludedTaxTotals(saleItems, { type, discPct });
+      const calculated = calcIncludedTaxTotals(saleItems, { type, discPct });
+      const charges = (Array.isArray(payment.charges) ? payment.charges : [])
+        .map(row => ({
+          description: String(row?.description || '').replace(/\s+/g, ' ').trim().slice(0, 120),
+          amount: round2(Number(row?.amount) || 0),
+        }))
+        .filter(row => row.description && row.amount > 0 && row.amount <= 9999999)
+        .slice(0, 20);
+      const additionalChargesTotal = type === 'factura'
+        ? round2(charges.reduce((sum, row) => sum + row.amount, 0)) : 0;
+      const subtotal = calculated.subtotal;
+      const discAmt = calculated.discAmt;
+      const taxAmt = calculated.taxAmt;
+      const total = round2(calculated.total + additionalChargesTotal);
       const taxPct = headerTaxPct;
+
+      const displayCurrency = String(payment.displayCurrency || 'DOP').toUpperCase() === 'USD'
+        ? 'USD' : 'DOP';
+      let displayExchangeRate = 1;
+      let displayAmount = 0;
+      if (displayCurrency === 'USD') {
+        displayExchangeRate = round2(Number(payment.displayExchangeRate) || 0);
+        if (displayExchangeRate < 20 || displayExchangeRate > 500) {
+          throw new Error('Indica una tasa USD válida para mostrar la conversión de la factura');
+        }
+        displayAmount = round2(total / displayExchangeRate);
+      }
+      const requestedSaleDate = String(payment.saleDate || '').trim();
+      if (requestedSaleDate) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedSaleDate)) {
+          throw new Error('La fecha del documento no es válida');
+        }
+        const parsedSaleDate = new Date(`${requestedSaleDate}T12:00:00`);
+        if (Number.isNaN(parsedSaleDate.getTime()) ||
+            parsedSaleDate.toISOString().slice(0, 10) !== requestedSaleDate) {
+          throw new Error('La fecha del documento no es válida');
+        }
+      }
 
       // 3. Validar crédito
       if (type === 'factura' && payment.method === 'credito' && customer.id !== 1) {
@@ -2595,22 +2788,24 @@ const salesRepo = {
       // Crear venta
       const saleR = db.prepare(`
         INSERT INTO sales(cash_session_id,customer_id,customer_name,customer_rnc,
-          customer_type,customer_trade_name,customer_address,customer_phone,customer_email,
+          customer_type,customer_trade_name,customer_address,customer_phone,customer_phone_type,customer_email,
           customer_contact_id,customer_contact_name,customer_contact_document,
           customer_contact_role,customer_contact_phone,customer_contact_email,
           type,status,subtotal,discount_pct,discount_amt,tax_pct,tax_amt,total,
           payment_method,price_mode,cajero,user_id,salesperson_id,financial_account_id,
           payment_currency,exchange_rate,account_amount,card_brand,card_last4,
+          additional_charges_total,display_currency,display_exchange_rate,display_amount,
           payment_reference,created_at)
         VALUES(
           @cash_session_id,@customer_id,@customer_name,@customer_rnc,
-          @customer_type,@customer_trade_name,@customer_address,@customer_phone,@customer_email,
+          @customer_type,@customer_trade_name,@customer_address,@customer_phone,@customer_phone_type,@customer_email,
           @customer_contact_id,@customer_contact_name,@customer_contact_document,
           @customer_contact_role,@customer_contact_phone,@customer_contact_email,
           @type,'completed',@subtotal,@discount_pct,@discount_amt,@tax_pct,@tax_amt,@total,
           @payment_method,@price_mode,@cajero,@user_id,@salesperson_id,@financial_account_id,
           @payment_currency,@exchange_rate,@account_amount,@card_brand,@card_last4,
-          @payment_reference,datetime('now','localtime')
+          @additional_charges_total,@display_currency,@display_exchange_rate,@display_amount,
+          @payment_reference,@created_at
         )
       `).run({
         cash_session_id: session?.id || null,
@@ -2621,6 +2816,7 @@ const salesRepo = {
         customer_trade_name: customer.trade_name || '',
         customer_address: customer.address || '',
         customer_phone: customer.phone || '',
+        customer_phone_type: selectedCustomerPhoneType,
         customer_email: customer.email || '',
         customer_contact_id: selectedContact?.id || null,
         customer_contact_name: selectedContact?.name || '',
@@ -2633,9 +2829,22 @@ const salesRepo = {
         price_mode: payment.priceMode || 'retail', cajero: user.name || '', user_id: user.id,
         salesperson_id: salespersonId, financial_account_id: finAcctId,
         payment_currency: paymentCurrency, exchange_rate: exchangeRate, account_amount: accountAmount,
+        additional_charges_total: additionalChargesTotal,
+        display_currency: displayCurrency,
+        display_exchange_rate: displayExchangeRate,
+        display_amount: displayAmount,
         card_brand: cardBrand, card_last4: cardLast4, payment_reference: paymentReference,
+        created_at: requestedSaleDate
+          ? `${requestedSaleDate} ${db.prepare("SELECT time('now','localtime') AS value").get().value}`
+          : db.prepare("SELECT datetime('now','localtime') AS value").get().value,
       });
       const saleId = saleR.lastInsertRowid;
+      if (charges.length) {
+        const insertCharge = db.prepare(
+          'INSERT INTO sale_charges(sale_id,description,amount) VALUES(?,?,?)'
+        );
+        charges.forEach(row => insertCharge.run(saleId, row.description, row.amount));
+      }
       const documentKind = documentKindForSale(type, method);
       const documentIssue = _issueDocumentNumber(documentKind, 'sale', saleId);
       const receiptIssue = type === 'factura' && method !== 'credito'
@@ -2792,6 +3001,7 @@ const salesRepo = {
         receiptDocumentNumberFmt: receiptIssue?.formatted_number || '',
         financialAccountId: finAcctId,
         paymentCurrency, exchangeRate, accountAmount, salespersonId,
+        additionalChargesTotal, displayCurrency, displayExchangeRate, displayAmount,
         cardBrand, cardLast4, paymentReference,
       };
     });
@@ -2819,6 +3029,9 @@ const salesRepo = {
       ...item,
       returnable_qty: Math.max(0, (item.qty || 0) - (item.returned_qty || 0)),
     }));
+    sale.charges = tableExists('sale_charges')
+      ? db.prepare('SELECT id,description,amount FROM sale_charges WHERE sale_id=? ORDER BY id').all(id)
+      : [];
     const payments = db.prepare(`
       SELECT id,document_kind,document_number,document_number_fmt,numero_recibo,
              amount,method,note,balance_before,balance_after,cajero,created_at
@@ -2894,6 +3107,8 @@ const salesRepo = {
              sp.name AS salesperson_name,
              sp.code AS salesperson_code,
              GROUP_CONCAT(si.product_name || ' x' || si.qty, ' | ') as items_summary,
+             COALESCE(SUM(si.qty), 0) as item_qty_total,
+             COUNT(si.id) as item_lines_count,
              COALESCE(SUM(si.unit_cost * si.qty), 0) as cost_total,
              EXISTS(
                SELECT 1 FROM sales ret
@@ -2942,6 +3157,38 @@ const salesRepo = {
     if (method)     { where += ' AND payment_method=?'; params.push(method); }
     const row = db.prepare(`SELECT COUNT(*) AS n FROM sales ${where}`).get(...params);
     return row ? row.n : 0;
+  },
+
+  updateDate(id, saleDate) {
+    const clean = String(saleDate || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(clean)) throw new Error('Fecha inválida');
+    const parsed = new Date(`${clean}T12:00:00`);
+    if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== clean) {
+      throw new Error('Fecha inválida');
+    }
+    const sale = db.prepare('SELECT id,created_at,status FROM sales WHERE id=?').get(id);
+    if (!sale) throw new Error('Venta no encontrada');
+    const time = String(sale.created_at || '').match(/\d{2}:\d{2}:\d{2}/)?.[0]
+      || db.prepare("SELECT time('now','localtime') AS value").get().value;
+    const next = `${clean} ${time}`;
+    db.transaction(() => {
+      db.prepare('UPDATE sales SET created_at=? WHERE id=?').run(next, id);
+      // Mantener las historias operativas alineadas con la fecha documental.
+      db.prepare(`
+        UPDATE cash_movements SET created_at=?
+        WHERE reference_id=? AND type IN ('venta','devolucion')
+      `).run(next, id);
+      if (tableExists('financial_movements')) {
+        db.prepare(`
+          UPDATE financial_movements SET created_at=?
+          WHERE reference_type='sale' AND reference_id=?
+        `).run(next, id);
+      }
+      if (tableExists('ncf_log')) {
+        db.prepare('UPDATE ncf_log SET issued_at=? WHERE sale_id=?').run(next, id);
+      }
+    })();
+    return this.getById(id);
   },
 
   /**

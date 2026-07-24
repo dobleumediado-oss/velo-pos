@@ -194,9 +194,18 @@ select.inp{cursor:pointer}
 .modal{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:26px;width:540px;max-width:95vw;max-height:88vh;overflow-y:auto;box-shadow:var(--sh-lg)}
 .modal-lg{width:680px}
 .modal-xl{width:780px}
+.modal-xxl{width:960px}
+/* Modales cuyo contenido principal es una tabla ancha (.mtw = modal table wide):
+   COMPACTA el contenido (padding y fuente menores) para meter más columnas sin
+   agrandar el modal. Se combina con el ancho que ya tenga el modal (xl/xxl). Si
+   aun así no caben (historiales de 12+ columnas) el .tw hace scroll horizontal. */
+.mtw thead th{padding:7px 8px;font-size:9.5px;letter-spacing:.04em}
+.mtw tbody td{padding:8px 8px;font-size:11.5px}
+.mtw .tw{border:1px solid var(--line2);border-radius:12px}
+.mtw tbody td .inp{font-size:11px}
 .modal-title{font-weight:800;font-size:16px;color:var(--ink);margin-bottom:3px}
 .modal-sub{font-size:12px;color:var(--muted);margin-bottom:20px}
-.modal-foot{display:flex;gap:8px;justify-content:flex-end;margin-top:20px;padding-top:16px;border-top:1px solid var(--line)}
+.modal-foot{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;margin-top:20px;padding-top:16px;border-top:1px solid var(--line)}
 
 /* ── Alert ── */
 .alrt{display:flex;gap:10px;padding:11px 13px;border-radius:var(--r-sm);margin-bottom:7px;border:1px solid;align-items:flex-start}

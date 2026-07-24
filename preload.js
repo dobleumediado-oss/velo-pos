@@ -83,6 +83,7 @@ contextBridge.exposeInMainWorld('api', {
     getAll:  (data)          => ipcRenderer.invoke('sales:getAll', data),
     count:   (data)          => ipcRenderer.invoke('sales:count', data),
     search:  (data)          => ipcRenderer.invoke('sales:search', data),
+    updateDate: (data)       => ipcRenderer.invoke('sales:updateDate', data),
     cancel:  (data)          => ipcRenderer.invoke('sales:cancel', data),
     deleteQuote: (data)      => ipcRenderer.invoke('sales:deleteQuote', data),
     return:  (data)          => ipcRenderer.invoke('sales:return', data),
@@ -90,6 +91,8 @@ contextBridge.exposeInMainWorld('api', {
 
   documents: {
     issue: (data)            => ipcRenderer.invoke('documents:issue', data),
+    getSequences: (data)     => ipcRenderer.invoke('documents:getSequences', data),
+    updateSequence: (data)   => ipcRenderer.invoke('documents:updateSequence', data),
   },
 
   // ── Preventa / órdenes compartidas de cobro ─────

@@ -1,12 +1,12 @@
 {
   "name": "velo-pos",
-  "version": "1.27.0",
+  "version": "1.28.0",
   "description": "Sistema POS desktop profesional para comercios, repuestos, sucursales y operaciones empresariales",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "rebuild": "npx @electron/rebuild -f -w better-sqlite3 --arch x64",
+    "rebuild": "electron-builder install-app-deps",
     "build": "electron-builder",
     "prepare:server-service": "node build/windows-service/prepare-winsw.js",
     "build:win:terminal": "electron-builder --config build/electron-builder-terminal.js --win",
@@ -37,19 +37,27 @@
     "test:pending-invoices": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-pending-invoices.js",
     "test:salespeople": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-salespeople.js",
     "test:documents": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-document-workflows.js",
+    "test:sales-workflow": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-sales-workflow-enhancements.js",
     "test:server-service": "node scripts/test-server-service.js",
-    "test": "npm run test:url && npm run test:login && npm run test:pos && npm run test:checkout && npm run test:customer-companies && npm run test:business && npm run test:import && npm run test:financial && npm run test:printing && npm run test:pending-invoices && npm run test:salespeople && npm run test:documents && npm run test:server-service"
+    "test": "npm run test:url && npm run test:login && npm run test:pos && npm run test:checkout && npm run test:customer-companies && npm run test:business && npm run test:import && npm run test:financial && npm run test:printing && npm run test:pending-invoices && npm run test:salespeople && npm run test:documents && npm run test:sales-workflow && npm run test:server-service"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
-    "better-sqlite3": "^9.4.3",
+    "better-sqlite3": "^12.11.1",
     "electron-updater": "^6.8.3"
   },
   "devDependencies": {
-    "@electron/rebuild": "^3.7.2",
-    "electron": "^29.1.0",
-    "electron-builder": "^24.13.3",
+    "electron": "^41.7.1",
+    "electron-builder": "^26.15.3",
     "jsbarcode": "^3.12.3"
+  },
+  "overrides": {
+    "js-yaml": "^4.3.0",
+    "glob@7.2.3": {
+      "minimatch": {
+        "brace-expansion": "1.1.16"
+      }
+    }
   },
   "build": {
     "appId": "do.velopos.app",

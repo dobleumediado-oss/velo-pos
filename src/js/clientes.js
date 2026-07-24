@@ -182,6 +182,7 @@ function renderCliTable() {
     matchDigits(c.rnc, qDigits) ||
     matchText(c.phone, qNorm) ||
     matchDigits(c.phone, qDigits) ||
+    (c.phones || []).some(p => matchText(p.phone, qNorm) || matchDigits(p.phone, qDigits)) ||
     matchText(c.trade_name, qNorm) ||
     (c.contacts || []).some(contact =>
       matchText(contact.name, qNorm) || matchText(contact.role, qNorm) ||
@@ -270,7 +271,9 @@ function renderCliTable() {
             ? `${c.contacts.length} representante${c.contacts.length === 1 ? '' : 's'}` : '',
         ].filter(Boolean).join(' · '))
       ),
-      h('td', { class: 'ts' }, c.phone || '—'),
+      h('td', { class: 'ts' }, (c.phones || []).length
+        ? c.phones.map(p => `${p.phone_type === 'celular' ? 'Cel.' : p.phone_type === 'flota' ? 'Flota' : 'Tel.'}: ${p.phone}`).join(' · ')
+        : (c.phone || '—')),
       h('td', null,
         h('div', { style: { fontSize: '12px', fontWeight: 600 } }, fmt(creditLimit)),
         creditLimit > 0
@@ -380,6 +383,9 @@ function openClienteModal(c = null) {
   const creditLimit = Number(c?.credit_limit || 0);
   const creditDays  = Number(c?.credit_days  || 30);
   const balance     = Number(c?.balance || 0);
+  const phones = (Array.isArray(c?.phones) && c.phones.length)
+    ? c.phones
+    : (c?.phone ? [{ phone_type: 'telefono', phone: c.phone, is_primary: 1 }] : [{ phone_type: 'celular', phone: '', is_primary: 1 }]);
 
   openModal(`
     <div class="modal-title">${isEdit ? 'Editar Cliente' : 'Nuevo Cliente'}</div>
@@ -427,9 +433,14 @@ function openClienteModal(c = null) {
     </div>
     <div class="g2">
       <div class="fg">
-        <label class="lbl">Teléfono</label>
-        <input class="inp" id="cf-phone" type="tel" placeholder="809-555-0000"
-               value="${isEdit ? cliEsc(c.phone || '') : ''}"/>
+        <div class="fxb" style="margin-bottom:6px">
+          <label class="lbl" style="margin:0">Teléfonos</label>
+          <button type="button" class="btn btn-out btn-sm" onclick="cfAddPhoneRow()">+ Agregar número</button>
+        </div>
+        <div id="cf-phone-list" style="display:flex;flex-direction:column;gap:6px">
+          ${phones.map((p, index) => cfPhoneRowHtml(p, index)).join('')}
+        </div>
+        <div style="font-size:10px;color:var(--muted2);margin-top:5px">Marca el principal para búsquedas, WhatsApp y documentos.</div>
       </div>
       <div class="fg">
         <label class="lbl">Dirección</label>
@@ -503,6 +514,46 @@ function openClienteModal(c = null) {
   `);
   // Inicializa el detector de tipo de documento (muestra RNC/Cédula al editar)
   setTimeout(() => { onCustomerTypeChange(customerType); onRncInput(); }, 30);
+}
+
+function cfPhoneRowHtml(phone = {}, index = Date.now()) {
+  const type = ['telefono','celular','flota'].includes(phone.phone_type) ? phone.phone_type : 'telefono';
+  return `<div class="cf-phone-row" style="display:grid;grid-template-columns:105px 1fr 26px 26px;gap:5px;align-items:center">
+    <select class="inp cf-phone-type" aria-label="Tipo de teléfono">
+      <option value="telefono" ${type==='telefono'?'selected':''}>Teléfono</option>
+      <option value="celular" ${type==='celular'?'selected':''}>Celular</option>
+      <option value="flota" ${type==='flota'?'selected':''}>Flota</option>
+    </select>
+    <input class="inp cf-phone-number" type="tel" maxlength="40" placeholder="809-555-0000"
+           value="${cliEsc(phone.phone || '')}"/>
+    <input type="radio" name="cf-phone-primary" class="cf-phone-primary"
+           title="Número principal" aria-label="Número principal" ${phone.is_primary || index===0?'checked':''}/>
+    <button type="button" class="btn btn-ghost btn-sm" title="Quitar número"
+            onclick="cfRemovePhoneRow(this)" style="padding:3px">×</button>
+  </div>`;
+}
+
+function cfAddPhoneRow() {
+  const list = document.getElementById('cf-phone-list');
+  if (!list) return;
+  if (list.querySelectorAll('.cf-phone-row').length >= 12) {
+    toast('Puedes registrar hasta 12 números por cliente', 'w');
+    return;
+  }
+  list.insertAdjacentHTML('beforeend', cfPhoneRowHtml({ phone_type: 'celular', phone: '', is_primary: false }, Date.now()));
+}
+
+function cfRemovePhoneRow(button) {
+  const row = button?.closest('.cf-phone-row');
+  const list = document.getElementById('cf-phone-list');
+  if (!row || !list) return;
+  const wasPrimary = !!row.querySelector('.cf-phone-primary')?.checked;
+  row.remove();
+  if (wasPrimary) {
+    const first = list.querySelector('.cf-phone-primary');
+    if (first) first.checked = true;
+  }
+  if (!list.querySelector('.cf-phone-row')) cfAddPhoneRow();
 }
 
 function onCustomerTypeChange(type) {
@@ -619,7 +670,13 @@ async function guardarCliente(id) {
   const customerType = document.getElementById('cf-type')?.value === 'company' ? 'company' : 'person';
   const name    = document.getElementById('cf-name')?.value?.trim();
   const rnc     = document.getElementById('cf-rnc')?.value?.trim()     || '';
-  const phone   = document.getElementById('cf-phone')?.value?.trim()   || '';
+  const phones = [...document.querySelectorAll('#cf-phone-list .cf-phone-row')].map(row => ({
+    phone_type: row.querySelector('.cf-phone-type')?.value || 'telefono',
+    phone: row.querySelector('.cf-phone-number')?.value?.trim() || '',
+    is_primary: !!row.querySelector('.cf-phone-primary')?.checked,
+  })).filter(row => row.phone);
+  if (phones.length && !phones.some(row => row.is_primary)) phones[0].is_primary = true;
+  const phone = (phones.find(row => row.is_primary) || phones[0])?.phone || '';
   const address = document.getElementById('cf-address')?.value?.trim() || '';
   const email   = document.getElementById('cf-email')?.value?.trim()   || '';
   const tradeName = document.getElementById('cf-trade-name')?.value?.trim() || '';
@@ -632,7 +689,7 @@ async function guardarCliente(id) {
 
   if (!name) { toast('El nombre es requerido', 'err'); return; }
 
-  const data = { name, customer_type: customerType, trade_name: tradeName, rnc, phone, address, email,
+  const data = { name, customer_type: customerType, trade_name: tradeName, rnc, phone, phones, address, email,
     billing_email: billingEmail, preferred_price_mode: preferredPriceMode, notes,
     credit_limit: limit, credit_days: days, status };
 
@@ -905,9 +962,13 @@ async function toggleEstadoCliente(c) {
 // ── Enviar mensaje por WhatsApp ───────────────
 function clienteWhatsApp(c) {
   if (!c) { toast('Cliente no encontrado', 'err'); return; }
-  if (!c.phone) { toast('Este cliente no tiene teléfono registrado', 'w'); return; }
+  const preferred = (c.phones || []).find(p => p.is_primary)
+    || (c.phones || []).find(p => p.phone_type === 'celular')
+    || (c.phones || [])[0];
+  const customerPhone = preferred?.phone || c.phone || '';
+  if (!customerPhone) { toast('Este cliente no tiene teléfono registrado', 'w'); return; }
 
-  const phone   = c.phone.replace(/\D/g, '');
+  const phone   = customerPhone.replace(/\D/g, '');
   const balance = Number(c.balance || 0);
 
   const msg = [

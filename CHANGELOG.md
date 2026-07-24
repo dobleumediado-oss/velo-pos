@@ -1,5 +1,46 @@
 # Historial de versiones
 
+## 1.28.0 — 2026-07-24
+
+### POS y facturación
+
+- Conversión opcional del total de DOP a USD con la tasa de venta vigente,
+  modificación manual y recálculo inmediato; la tasa y el equivalente quedan
+  congelados en la factura y aparecen en todas las plantillas.
+- Cargos adicionales por envío u otros conceptos, integrados al total, caja,
+  crédito, reimpresión, PDF e historial.
+- Fecha de emisión seleccionable al cobrar y cambio histórico auditado por
+  administradores, manteniendo alineados venta, caja, bancos y NCF.
+- Teléfono ocasional tipado en el cobro y teléfonos múltiples por cliente
+  (`Teléfono`, `Celular` y `Flota`) con número principal.
+- Órdenes de despacho cobradas en caja admiten descuentos autorizados y cargos
+  sin desbloquear artículos o precios reservados.
+
+### Documentos, impresión y comunicación
+
+- WhatsApp vuelve a abrirse localmente en todas las terminales; el mensaje
+  predeterminado ahora puede editarse antes de enviarlo.
+- Los conduces solicitados al cobrar se guardan formalmente en el módulo,
+  conservan su relación con la factura y luego se imprimen.
+- Destinos de impresión configurables para elegir impresora, perfil de papel y
+  plantilla en cada venta.
+- Secuencia de facturas al contado personalizable junto a la configuración NCF,
+  sin permitir reutilizar números ya emitidos.
+- Facturas importadas de Equiparts conservan el mismo número histórico en
+  ventas, reimpresión, PDF y factura.
+
+### Caja, etiquetas y seguridad
+
+- Las sesiones de caja cuentan las unidades vendidas en lugar de mostrar cero.
+- Impresión de etiquetas centralizada, previsualización endurecida y perfil
+  validado para 2Connect 2C-LP427B de 108 mm/203 dpi.
+- Validación de descuentos superiores al 10% también en el proceso principal,
+  con autorización de un administrador, token de un solo uso y auditoría.
+- Fechas inválidas, rutas ajenas al PDF temporal de WhatsApp y formatos horarios
+  incompatibles con SQLite quedan rechazados.
+- Pruebas de regresión para teléfonos, cargos, USD, fechas, caja, numeración y
+  conduces.
+
 ## 1.27.0 — 2026-07-23
 
 ### Corregido

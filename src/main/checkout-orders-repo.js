@@ -71,6 +71,7 @@ function ensureCheckoutOrdersSchema(db) {
     ['customer_trade_name', "TEXT DEFAULT ''"],
     ['customer_address', "TEXT DEFAULT ''"],
     ['customer_phone', "TEXT DEFAULT ''"],
+    ['customer_phone_type', "TEXT DEFAULT 'telefono'"],
     ['customer_email', "TEXT DEFAULT ''"],
     ['customer_contact_id', 'INTEGER'],
     ['customer_contact_name', "TEXT DEFAULT ''"],
@@ -78,6 +79,7 @@ function ensureCheckoutOrdersSchema(db) {
     ['customer_contact_role', "TEXT DEFAULT ''"],
     ['customer_contact_phone', "TEXT DEFAULT ''"],
     ['customer_contact_email', "TEXT DEFAULT ''"],
+    ['discount_approved_by', 'INTEGER'],
   ];
   for (const [col, def] of companyCols) {
     try { db.prepare(`ALTER TABLE checkout_orders ADD COLUMN ${col} ${def}`).run(); }
@@ -224,17 +226,17 @@ function createCheckoutOrdersRepo({ getDb, salesRepo, audit }) {
       const orderR = db().prepare(`
         INSERT INTO checkout_orders(
           status,customer_id,customer_name,customer_rnc,price_mode,
-          customer_type,customer_trade_name,customer_address,customer_phone,customer_email,
+          customer_type,customer_trade_name,customer_address,customer_phone,customer_phone_type,customer_email,
           customer_contact_id,customer_contact_name,customer_contact_document,
           customer_contact_role,customer_contact_phone,customer_contact_email,
-          discount_pct,discount_amt,subtotal,tax_amt,total,salesperson_id,
+          discount_pct,discount_amt,subtotal,tax_amt,total,salesperson_id,discount_approved_by,
           price_approved_by,created_by,created_by_name,origin_terminal_id,notes,expires_at
         ) VALUES(
           'pending',@customer_id,@customer_name,@customer_rnc,@price_mode,
-          @customer_type,@customer_trade_name,@customer_address,@customer_phone,@customer_email,
+          @customer_type,@customer_trade_name,@customer_address,@customer_phone,@customer_phone_type,@customer_email,
           @customer_contact_id,@customer_contact_name,@customer_contact_document,
           @customer_contact_role,@customer_contact_phone,@customer_contact_email,
-          @discount_pct,@discount_amt,@subtotal,@tax_amt,@total,@salesperson_id,
+          @discount_pct,@discount_amt,@subtotal,@tax_amt,@total,@salesperson_id,@discount_approved_by,
           @price_approved_by,@created_by,@created_by_name,@origin_terminal_id,@notes,
           datetime('now','localtime',@expires_modifier)
         )
@@ -245,13 +247,17 @@ function createCheckoutOrdersRepo({ getDb, salesRepo, audit }) {
         price_mode: data.priceMode === 'wholesale' ? 'wholesale' : 'retail',
         customer_type: customer.customer_type || 'person',
         customer_trade_name: customer.trade_name || '', customer_address: customer.address || '',
-        customer_phone: customer.phone || '', customer_email: customer.billing_email || customer.email || '',
+        customer_phone: String(data.customer?.phone || customer.phone || '').slice(0, 40),
+        customer_phone_type: ['telefono','celular','flota'].includes(data.customer?.phone_type)
+          ? data.customer.phone_type : 'telefono',
+        customer_email: customer.billing_email || customer.email || '',
         customer_contact_id: contact?.id || null, customer_contact_name: contact?.name || '',
         customer_contact_document: contact?.document || '', customer_contact_role: contact?.role || '',
         customer_contact_phone: contact?.phone || '', customer_contact_email: contact?.email || '',
         discount_pct: totals.discountPct, discount_amt: totals.discountAmt,
         subtotal: totals.subtotal, tax_amt: totals.taxAmt, total: totals.total,
         salesperson_id: Number(data.salespersonId) || null,
+        discount_approved_by: Number(data.discountApprovedBy) || null,
         price_approved_by: Number(data.priceApprovedBy) || null,
         created_by: Number(data.createdBy), created_by_name: String(data.createdByName || '').slice(0, 120),
         origin_terminal_id: String(data.terminalId || '').slice(0, 100),
@@ -329,7 +335,8 @@ function createCheckoutOrdersRepo({ getDb, salesRepo, audit }) {
         rnc: order.customer_rnc || '',
         customer_type: order.customer_type || 'person',
         trade_name: order.customer_trade_name || '',
-        address: order.customer_address || '', phone: order.customer_phone || '', email: order.customer_email || '',
+        address: order.customer_address || '', phone: order.customer_phone || '',
+        phone_type: order.customer_phone_type || 'telefono', email: order.customer_email || '',
         contact_id: order.customer_contact_id || null,
         preserve_customer_snapshot: true,
         preserve_contact_snapshot: true,
@@ -339,13 +346,15 @@ function createCheckoutOrdersRepo({ getDb, salesRepo, audit }) {
           phone: order.customer_contact_phone || '', email: order.customer_contact_email || '',
         } : null,
       };
+      const effectiveDiscount = payment?.disc !== undefined
+        ? Number(payment.disc) || 0 : Number(order.discount_pct) || 0;
       const saleResult = salesRepo.create({
         session,
         customer,
         items,
         payment: {
           ...(payment || {}),
-          disc: order.discount_pct || 0,
+          disc: effectiveDiscount,
           priceMode: order.price_mode || 'retail',
           salespersonId: order.salesperson_id || null,
           checkoutOrderId: order.id,
@@ -357,10 +366,13 @@ function createCheckoutOrdersRepo({ getDb, salesRepo, audit }) {
       });
       db().prepare(`
         UPDATE checkout_orders SET status='paid',sale_id=?,cash_session_id=?,paid_by=?,paid_by_name=?,
+          discount_pct=?,discount_amt=?,subtotal=?,tax_amt=?,total=?,
           paid_terminal_id=?,paid_at=datetime('now','localtime'),updated_at=datetime('now','localtime')
         WHERE id=? AND status='pending'
       `).run(
         saleResult.saleId, session?.id || null, user.id, user.name || '',
+        effectiveDiscount, saleResult.discAmt || 0, saleResult.subtotal || 0,
+        saleResult.taxAmt || 0, saleResult.total || 0,
         String(terminalId || '').slice(0, 100), id
       );
       audit(user.id, user.name, 'orden_cobro_pagada', 'checkout_orders', id,
