@@ -234,6 +234,7 @@ function printReceipt(sale, isReprint = false) {
       biz_logo_2:  DB?.settings?.biz_logo_2  || CFG?.biz_logo_2 || '',
       logo_size:   DB?.settings?.logo_size   || 'mediano',
       receipt_msg: DB?.settings?.receipt_msg || '¡Gracias por su compra!',
+      invoice_notes: DB?.settings?.invoice_notes || '',
       // Datos bancarios del negocio (fallback si no hay cuentas registradas)
       biz_bank_name:    DB?.settings?.biz_bank_name    || '',
       biz_bank_account: DB?.settings?.biz_bank_account || '',
@@ -1090,6 +1091,7 @@ function _openPrintPreview(html, opts = {}) {
 
 function _printPreviewClose() {
   window._printPreviewJob = null;
+  window._printAfter = null;   // cerró sin imprimir → cancelar el encadenado (ej. conduce)
   if (typeof closeModal === 'function') closeModal();
 }
 
@@ -1157,6 +1159,11 @@ async function _printPreviewPrint() {
   } finally {
     window._printPreviewBypass = false;
   }
+  // Encadenar la siguiente impresión (ej. el conduce DESPUÉS de la factura),
+  // ya con el modal de la factura cerrado, para que no se pisen.
+  const after = window._printAfter;
+  window._printAfter = null;
+  if (typeof after === 'function') setTimeout(after, 250);
 }
 
 // ── Multi-terminal: elección de destino de impresión ─────────────────────────
@@ -1596,6 +1603,7 @@ function testPrint() {
       biz_logo_2:  DB?.settings?.biz_logo_2  || '',
       logo_size:   DB?.settings?.logo_size   || 'mediano',
       receipt_msg: DB?.settings?.receipt_msg || '¡Gracias por su compra!',
+      invoice_notes: DB?.settings?.invoice_notes || '',
       biz_bank_name:    DB?.settings?.biz_bank_name    || 'BANCO DEMO, S.A.',
       biz_bank_account: DB?.settings?.biz_bank_account || '010-000000-0-0',
       biz_bank_holder:  DB?.settings?.biz_bank_holder  || '',

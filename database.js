@@ -6992,6 +6992,13 @@ const conduceRepo = {
     const sale = db.prepare('SELECT * FROM sales WHERE id=?').get(saleId);
     if (!sale) throw new Error('Venta/cotización no encontrada');
     if (sale.type === 'devolucion') throw new Error('No se puede generar un conduce de una devolución');
+    // Idempotente: si ya existe un conduce (no anulado) para esta venta, se
+    // devuelve el existente en vez de duplicar. Así el botón "Generar conduce"
+    // puede pulsarse varias veces sin crear copias.
+    const existing = db.prepare(
+      "SELECT id FROM delivery_notes WHERE source_id=? AND source_type IN ('factura','cotizacion') AND status!='anulado' ORDER BY id DESC LIMIT 1"
+    ).get(saleId);
+    if (existing) return this.getById(existing.id);
     const items = db.prepare('SELECT * FROM sale_items WHERE sale_id=?').all(saleId);
     if (!items.length) throw new Error('La venta no tiene líneas');
 

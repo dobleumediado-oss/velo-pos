@@ -2710,7 +2710,26 @@ async function finalizarVenta() {
       salesperson_name: (DB.salespeople||[]).find(s=>Number(s.id)===Number(result.salespersonId||salespersonId))?.name || '',
     };
 
-    // Imprimir ticket 80mm en impresora térmica
+    // Conduce opcional: se crea AHORA (queda guardado en Conduces con su número
+    // y su relación con la factura) y se ENCADENA para imprimirse DESPUÉS de la
+    // factura de forma automática — primero sale la factura, luego el conduce.
+    let _conduceForPrint = null;
+    if (wantConduce) {
+      const conduceResult = await window.api.conduce.fromSale({
+        saleId: result.saleId, requestUserId: user.id,
+      });
+      if (conduceResult?.ok && conduceResult.data) {
+        _conduceForPrint = conduceResult.data;
+        toast(`✓ Conduce ${conduceResult.data.number} guardado en Conduces`);
+      } else {
+        toast(`La venta se guardó, pero el conduce no pudo generarse: ${conduceResult?.error || 'error desconocido'}`, 'w');
+      }
+    }
+    window._printAfter = _conduceForPrint
+      ? () => { if (typeof printConduceDoc === 'function') printConduceDoc(_conduceForPrint); }
+      : null;
+
+    // Imprimir la factura primero; al terminar, el hook imprime el conduce.
     printReceipt({
       ...saleForPrint,
       id:              result.saleId,
@@ -2732,22 +2751,6 @@ async function finalizarVenta() {
       print_profile_id: inv.printProfileId || '',
       print_template_id: inv.printTemplateId || '',
     });
-
-    // El conduce opcional se crea primero en el módulo de Conduces y luego se
-    // imprime. Así conserva numeración, estado, relación con la factura y
-    // trazabilidad; ya no era una impresión suelta imposible de consultar.
-    if (wantConduce) {
-      const conduceResult = await window.api.conduce.fromSale({
-        saleId: result.saleId,
-        requestUserId: user.id,
-      });
-      if (conduceResult?.ok && conduceResult.data) {
-        if (typeof printConduceDoc === 'function') printConduceDoc(conduceResult.data);
-        toast(`✓ Conduce ${conduceResult.data.number} guardado e impreso`);
-      } else {
-        toast(`La venta se guardó, pero el conduce no pudo generarse: ${conduceResult?.error || 'error desconocido'}`, 'w');
-      }
-    }
 
     const returnToPreventa = !!inv.checkoutOrderId;
     // Limpiar factura y refrescar POS

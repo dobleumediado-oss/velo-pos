@@ -11,6 +11,20 @@ async function renderBarcodeDesigner(container) {
   const rawDesign = settings?.barcode_design;
   let design = rawDesign ? JSON.parse(rawDesign) : _bcDefaultDesign();
 
+  // Impresora seleccionada en el módulo Etiquetas → el preview "detecta" el
+  // medio real (ancho/DPI) para presentarse fiel a lo que va a salir.
+  const detPrinter = settings?.barcode_printer || settings?.printer || '';
+  const detProfile = (typeof resolvePrinterProfile === 'function')
+    ? resolvePrinterProfile(detPrinter, 'barcode', settings)
+    : { widthMm: Number(settings?.barcode_media_width_mm) || 50,
+        dpi: Number(settings?.barcode_printer_dpi) || 203, label: 'Etiquetas' };
+  window._bcdPrinter = {
+    name: detPrinter,
+    widthMm: Math.round((Number(detProfile.widthMm) || 50) * 10) / 10,
+    dpi: Number(detProfile.dpi) || 203,
+    label: detProfile.label || 'Etiquetas',
+  };
+
   // ── Producto de muestra para preview ─────────
   const sampleProduct = DB.products[0] || {
     id: 1, name: 'Producto de Muestra', brand: 'Marca Ejemplo',
@@ -287,6 +301,11 @@ async function renderBarcodeDesigner(container) {
       <div style="font-size:11px;color:var(--muted2);margin-bottom:8px">
         Usando: <strong>${sampleProduct.name}</strong>
       </div>
+      <div id="bcd-detect" style="font-size:10.5px;color:var(--muted2);background:var(--surface2);border-radius:7px;padding:7px 9px;margin-bottom:8px;line-height:1.5">
+        <div><strong>Impresora:</strong> ${detPrinter ? (typeof _bcEsc === 'function' ? _bcEsc(detPrinter) : detPrinter) : 'Ninguna seleccionada (usa el ancho configurado)'}</div>
+        <div><strong>Medio detectado:</strong> ${window._bcdPrinter.widthMm} mm · ${window._bcdPrinter.dpi} dpi</div>
+      </div>
+      <div id="bcd-detect-warn" style="display:none;font-size:10.5px;margin-bottom:8px;background:#fff7ed;border:1px solid #fcd9a5;color:#92400e;border-radius:7px;padding:7px 9px"></div>
       <div id="bcd-preview-wrap" style="
         background:#f0f0f0;
         border-radius:8px;
@@ -427,7 +446,7 @@ function _bcdUpdatePreview() {
 
   lbl.style.cssText = `
     width:${lw}px;height:${lh}px;
-    padding:${d.paddingMm*PX}px;
+    padding:${(Number(d.paddingMm) || 0) * PX}px ${((Number(d.pageMm) || 0) + (Number(d.paddingMm) || 0)) * PX}px;
     background:${d.bgColor};
     border:${d.showBorder?'1px solid #ccc':'none'};
     border-radius:${d.borderRadius}px;
@@ -508,8 +527,31 @@ function _bcdUpdatePreview() {
   }
 
   if (info) {
-    info.textContent = `${d.labelW}×${d.labelH}mm · ${d.cols} columnas · ${d.format}`;
+    info.textContent = `${d.labelW}×${d.labelH} mm · tamaño real aprox. · ${d.format}`;
   }
+
+  // Aviso de coherencia: si el ancho del diseño no coincide con el medio
+  // detectado de la impresora, se muestra y se ofrece igualarlos.
+  const warn = document.getElementById('bcd-detect-warn');
+  const det = window._bcdPrinter;
+  if (warn && det && det.widthMm > 0) {
+    if (Math.abs((Number(d.labelW) || 0) - det.widthMm) > 0.5) {
+      warn.style.display = 'block';
+      warn.innerHTML = `⚠ El ancho del diseño (<strong>${d.labelW}mm</strong>) no coincide con el medio detectado (<strong>${det.widthMm}mm</strong>).
+        <button class="btn btn-out btn-sm" style="margin-top:5px" onclick="_bcdUseDetectedWidth()">Usar ${det.widthMm}mm</button>`;
+    } else {
+      warn.style.display = 'none';
+    }
+  }
+}
+
+// Igualar el ancho del diseño al medio detectado de la impresora.
+function _bcdUseDetectedWidth() {
+  const det = window._bcdPrinter;
+  const el = document.getElementById('bcd-lw');
+  if (!det || !el) return;
+  el.value = det.widthMm;
+  _bcdUpdate();
 }
 
 // ── Guardar diseño ─────────────────────────────
@@ -520,6 +562,10 @@ async function _bcdSave() {
 
   try {
     await window.api.settings.set({ key: 'barcode_design', value: JSON.stringify(design) });
+    // El ancho del diseño ES el ancho real con el que se imprime: se sincroniza
+    // con la config del módulo Etiquetas para que ambos paneles y la impresión
+    // usen el MISMO valor (una sola fuente de verdad).
+    await window.api.settings.set({ key: 'barcode_media_width_mm', value: String(design.labelW) }).catch(() => {});
     toast('✓ Diseño de etiquetas guardado', 'ok');
 
     // Log auditoría

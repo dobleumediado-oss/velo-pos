@@ -1,5 +1,31 @@
 # Historial de versiones
 
+## 1.29.1 — 2026-07-24
+
+### Etiquetas
+
+- El "Margen de página" del diseñador ahora sí se aplica (margen horizontal),
+  sin alterar la altura de página para no provocar deriva entre etiquetas.
+- El ancho de la etiqueta es una sola fuente de verdad: sincronizado entre el
+  módulo Etiquetas, el diseñador y la impresión.
+- El preview del diseñador detecta la impresora seleccionada (ancho/DPI del
+  medio), se muestra a tamaño real aproximado y avisa si el diseño no coincide
+  con el medio, con opción de igualarlo.
+
+### Conduce
+
+- Al cobrar con "Generar conduce", primero se imprime la factura y luego, de
+  forma automática y sin solaparse, el conduce (que ya queda guardado en el
+  módulo Conduces).
+- Nuevo botón "Generar conduce" en el detalle de una venta ya realizada: crea el
+  conduce, lo guarda en Conduces y lo imprime. Es idempotente: no duplica si la
+  factura ya tenía uno.
+
+### Facturación
+
+- Las "Observaciones" de la factura A4 se pueden personalizar desde
+  Configuración, conservando el texto por defecto si se deja vacío.
+
 ## 1.29.0 — 2026-07-24
 
 ### Impresión y facturación

@@ -879,7 +879,7 @@ function renderCartaRecibo(sale, cfg, opts) {
       <div><b>Representante</b><span>${_esc(sale.salesperson_name || sale.cajero || '')}</span></div>
       <div><b>Forma de pago</b><span>${_esc(paymentLabel)}</span></div>
       <div><b>Tipo de factura</b><span>${_esc(_tipoFacturacion(sale))}</span></div>
-      <div class="lp-wide"><b>Observaciones</b><span>${_esc(sale.notes || 'No aceptamos devoluciones. Cambios solamente antes de 24 horas.')}</span></div>
+      <div class="lp-wide"><b>Observaciones</b><span>${_esc(sale.notes || cfg.invoice_notes || 'No aceptamos devoluciones. Cambios solamente antes de 24 horas.')}</span></div>
       <div><b>Número transacción</b><span>${_esc(sale.transaction_number || sale.id || '—')}</span></div>
     </div>` : '';
 

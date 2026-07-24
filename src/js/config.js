@@ -86,6 +86,7 @@ async function renderConfiguracion(el) {
       // Mostrar/ocultar la columna "Código" en los documentos impresos
       print_item_code:  s.print_item_code  || '1',
       logo_size:        s.logo_size        || 'mediano',
+      invoice_notes:    s.invoice_notes    || '',
     };
   }
 
@@ -470,6 +471,12 @@ async function renderConfiguracion(el) {
     <div class="fg">
       <label class="lbl">Mensaje en recibos</label>
       <input class="inp" id="cfg-receipt-msg" type="text" placeholder="¡Gracias por su compra!" value="${_esc(settings.receipt_msg||'')}"/>
+    </div>
+    <div class="fg">
+      <label class="lbl">Observaciones de la factura</label>
+      <textarea class="inp" id="cfg-invoice-notes" rows="2" maxlength="300"
+        placeholder="No aceptamos devoluciones. Cambios solamente antes de 24 horas.">${_esc(settings.invoice_notes ?? 'No aceptamos devoluciones. Cambios solamente antes de 24 horas.')}</textarea>
+      <div style="font-size:11px;color:var(--muted2);margin-top:4px">Aparece en el recuadro "Observaciones" de la factura A4 (si una venta no trae su propia nota).</div>
     </div>
 
     <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
@@ -1123,6 +1130,7 @@ async function guardarConfiguracion() {
     ['biz_email',   'cfg-biz-email'],
     ['biz_web',     'cfg-biz-web'],
     ['receipt_msg', 'cfg-receipt-msg'],
+    ['invoice_notes', 'cfg-invoice-notes'],
     ['biz_bank_name',    'cfg-bank-name'],
     ['biz_bank_account', 'cfg-bank-account'],
     ['biz_bank_holder',  'cfg-bank-holder'],

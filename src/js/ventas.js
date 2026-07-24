@@ -1298,6 +1298,12 @@ async function openDetalleVentaModal(s) {
               title="Preparar el documento PDF y abrir WhatsApp">
         ${svg('pdf')} PDF por WhatsApp
       </button>
+      ${CFG.module_conduce === '1' && s.type === 'factura' && s.status === 'completed'
+        ? `<button class="btn btn-out" onclick="generarConduceVenta(${s.id})"
+                   title="Crear el conduce de esta factura, guardarlo en Conduces e imprimirlo">
+             ${svg('truck')} Generar conduce
+           </button>`
+        : ''}
       ${s.type === 'factura' && s.status === 'completed'
         ? `<button class="btn btn-amber" onclick="closeModal();iniciarDevolucionDesdeVenta(${s.id})">
              ${svg('return')} Devolver
@@ -1602,6 +1608,16 @@ async function guardarVentaDate(saleId) {
   await reloadSales({ range: ventasRange, view: ventasTab === 'cotizaciones' ? undefined : 'sales' });
   toast(`✓ ${facturaLabel(result.data)} movida al ${fdate(saleDate)}`);
   renderVentas(document.getElementById('page'));
+}
+
+// Generar (o reutilizar) el conduce de una venta ya realizada, guardarlo en el
+// módulo Conduces e imprimirlo. Idempotente: si ya existe, reimprime el mismo.
+async function generarConduceVenta(saleId) {
+  const res = await window.api.conduce.fromSale({ saleId, requestUserId: user.id });
+  if (!res?.ok || !res.data) { toast(res?.error || 'No se pudo generar el conduce', 'err'); return; }
+  closeModal();
+  if (typeof printConduceDoc === 'function') printConduceDoc(res.data);
+  toast(`✓ Conduce ${res.data.number} guardado en Conduces`);
 }
 
 // ── Guardar venta como PDF (bajo demanda) ─────

@@ -454,12 +454,20 @@ async function bcSaveMediaConfig() {
   _bcState.printerDpi = Math.min(1200, Math.max(100,
     Number(document.getElementById('bc-dpi')?.value) || _bcState.printerDpi || 203));
   _bcState.mediaMode = document.getElementById('bc-media-mode')?.value || _bcState.mediaMode || 'gap';
-  await Promise.all([
+  // El ancho de la etiqueta es una sola fuente de verdad: al cambiarlo aquí,
+  // también se guarda en el diseño para que el diseñador (y su preview) queden
+  // sincronizados con lo que realmente se imprime.
+  const saves = [
     window.api.settings.set({ key: 'barcode_printer_profile', value: _bcState.profileId || '' }),
     window.api.settings.set({ key: 'barcode_media_width_mm', value: String(_bcState.mediaWidthMm) }),
     window.api.settings.set({ key: 'barcode_printer_dpi', value: String(_bcState.printerDpi) }),
     window.api.settings.set({ key: 'barcode_media_mode', value: _bcState.mediaMode }),
-  ]).catch(() => {});
+  ];
+  if (_bcState.design && typeof _bcState.design === 'object') {
+    _bcState.design.labelW = _bcState.mediaWidthMm;
+    saves.push(window.api.settings.set({ key: 'barcode_design', value: JSON.stringify(_bcState.design) }));
+  }
+  await Promise.all(saves).catch(() => {});
 }
 
 // Diseño EFECTIVO para generar/imprimir: aplica el tipo de etiqueta elegido
@@ -470,9 +478,10 @@ function _bcEffectiveDesign() {
   const t = _bcState.labelType || 'interno';
   if (t === 'interno')   Object.assign(d, { showName: true, showCode: true, showPrice: true,  showBarcode: true });
   if (t === 'proveedor') Object.assign(d, { showName: true, showCode: true, showPrice: false, showBarcode: true });
-  // En rollos/etiquetas el margen exterior pertenece al perfil del driver. El
-  // padding interno de la etiqueta sigue protegiendo texto y código de barras.
-  d.pageMm = 0;
+  // Se HONRA el "Margen de página" configurado en el diseñador: la etiqueta se
+  // inset por ese margen (lw = ancho - 2·margen) para dejar aire alrededor del
+  // contenido. Se acota para que nunca deje la etiqueta sin espacio útil.
+  d.pageMm = Math.max(0, Math.min(Number(d.pageMm) || 0, ((Number(d.labelW) || 50) / 2) - 5));
   return d;
 }
 
@@ -609,14 +618,18 @@ function _bcBuildLabelsHTML(items) {
   const rows = [];
   for (let i = 0; i < allLabels.length; i += cols) rows.push(allLabels.slice(i, i + cols));
   const fixedRows = _bcState.mediaMode !== 'continuous';
+  // Altura de página = alto de etiqueta + separación (SIN sumarle el margen):
+  // el margen se aplica solo como inset horizontal (padding L/R) para no crecer
+  // la página verticalmente y evitar deriva entre etiquetas.
+  const rowH = lh + gap;
   const styles = `
     <style>
-      @page { size:${layout.mediaWidthMm}mm ${fixedRows ? layout.rowHeightMm + 'mm' : 'auto'}; margin:0; }
+      @page { size:${layout.mediaWidthMm}mm ${fixedRows ? rowH + 'mm' : 'auto'}; margin:0; }
       html,body { width:${layout.mediaWidthMm}mm;margin:0;padding:0;background:#fff; }
       .vp-label-row {
         width:${layout.mediaWidthMm}mm;
-        min-height:${fixedRows ? layout.rowHeightMm : lh}mm;
-        padding:${layout.pageMm}mm;
+        min-height:${fixedRows ? rowH : lh}mm;
+        padding:0 ${layout.pageMm}mm;
         display:grid;
         grid-template-columns: repeat(${cols}, ${lw}mm);
         column-gap:${gap}mm;
