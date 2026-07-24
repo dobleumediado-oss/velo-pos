@@ -1481,6 +1481,9 @@ async function reimprimirVenta(saleId) {
         display_currency: sale.display_currency || 'DOP',
         display_exchange_rate: sale.display_exchange_rate || 1,
         display_amount: sale.display_amount || 0,
+        // Reimprimir con la misma salida elegida en la venta (plantilla/tipo).
+        print_template_id: sale.print_template_id || '',
+        print_printer_type: sale.print_printer_type || '',
         subtotal:        sale.subtotal,
         discount_pct:    sale.discount_pct || 0,
         discount_amt:    sale.discount_amt || 0,

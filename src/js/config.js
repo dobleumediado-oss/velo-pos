@@ -85,6 +85,7 @@ async function renderConfiguracion(el) {
       biz_bank_iban:    s.biz_bank_iban    || 'DO00 0000 0000 0000 0000 0000',
       // Mostrar/ocultar la columna "Código" en los documentos impresos
       print_item_code:  s.print_item_code  || '1',
+      logo_size:        s.logo_size        || 'mediano',
     };
   }
 
@@ -650,6 +651,28 @@ async function renderConfiguracion(el) {
       current:  settings.biz_logo_2 || '',
       emptyMsg: 'Se mostrará junto al principal en los documentos.',
     }));
+
+    // Tamaño del logo en las facturas de hoja (A4/Carta).
+    const curLogoSize = settings.logo_size || 'mediano';
+    const logoSizeCard = h('div', { class: 'card', style: 'margin-top:16px' });
+    logoSizeCard.innerHTML = `
+      <div class="card-title mb8">Tamaño del logo en factura</div>
+      <div style="font-size:11px;color:var(--muted2);margin-bottom:10px">Aplica a las facturas de hoja (A4/Carta). No cambia los tickets térmicos.</div>
+      <select class="inp" id="cfg-logo-size">
+        <option value="pequeno" ${curLogoSize==='pequeno'?'selected':''}>Pequeño</option>
+        <option value="mediano" ${curLogoSize==='mediano'?'selected':''}>Mediano (por defecto)</option>
+        <option value="grande" ${curLogoSize==='grande'?'selected':''}>Grande</option>
+      </select>`;
+    colLeft.appendChild(logoSizeCard);
+    logoSizeCard.querySelector('#cfg-logo-size')?.addEventListener('change', async (e) => {
+      const value = e.target.value;
+      const res = await window.api.settings.set({ key: 'logo_size', value, requestUserId: user?.id });
+      if (!res?.ok) { toast(res?.error || 'No se pudo guardar', 'err'); return; }
+      settings.logo_size = value;
+      if (DB?.settings) DB.settings.logo_size = value;
+      if (typeof _renderPreview === 'function' && window._PA) _renderPreview(window._PA);
+      toast('✓ Tamaño del logo actualizado');
+    });
   }
 
   // ── Modo de conexión / multi-terminal (solo superadmin) ──
@@ -680,8 +703,25 @@ async function renderConfiguracion(el) {
       <div class="flex" style="gap:8px">
         <button class="btn btn-dark btn-fw" onclick="openPrinterConfig()">${svg('settings')} Configurar</button>
         <button class="btn btn-out btn-fw" onclick="testPrint()">${svg('print')} Prueba</button>
+      </div>
+      <div class="fg" style="margin-top:14px;margin-bottom:0">
+        <label class="lbl">Densidad de impresión térmica</label>
+        <select class="inp" id="cfg-thermal-density">
+          <option value="normal" ${(settings.thermal_density||'normal')==='normal'?'selected':''}>Normal</option>
+          <option value="oscura" ${settings.thermal_density==='oscura'?'selected':''}>Oscura (texto más grueso)</option>
+          <option value="maxima" ${settings.thermal_density==='maxima'?'selected':''}>Máxima</option>
+        </select>
+        <div style="font-size:11px;color:var(--muted2);margin-top:5px">Sube el grosor del texto si la impresión térmica sale muy clara. Para más oscuridad aún, sube también la densidad en el driver de la impresora.</div>
       </div>`;
     colLeft.appendChild(printerCard);
+    printerCard.querySelector('#cfg-thermal-density')?.addEventListener('change', async (e) => {
+      const value = e.target.value;
+      const res = await window.api.settings.set({ key: 'thermal_density', value, requestUserId: user?.id });
+      if (!res?.ok) { toast(res?.error || 'No se pudo guardar', 'err'); return; }
+      settings.thermal_density = value;
+      if (DB?.settings) DB.settings.thermal_density = value;
+      toast('✓ Densidad de impresión actualizada');
+    });
   }
 
   // ── Impresión por módulo/documento (solo superadmin) ──

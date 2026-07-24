@@ -410,6 +410,15 @@ function _customerPhoneLabel(sale) {
   return sale?.customer_phone ? `${label}: ${_esc(sale.customer_phone)}` : '';
 }
 
+// Factor de tamaño del logo en las facturas de hoja (config: logo_size).
+// pequeno 0.6 · mediano 1 (por defecto) · grande 1.4.
+function _logoScale(cfg) {
+  const s = String(cfg?.logo_size || 'mediano').toLowerCase();
+  if (s === 'pequeno' || s === 'pequeño' || s === 'small') return 0.6;
+  if (s === 'grande' || s === 'large') return 1.4;
+  return 1;
+}
+
 // ¿El método de pago implica datos bancarios?
 function _esPagoBancario(m) {
   // Tarjeta muestra marca/autorización; la cuenta de liquidación es interna y no
@@ -1025,7 +1034,7 @@ function renderCartaRecibo(sale, cfg, opts) {
 </style></head><body>
   <div class="hdr">
     <div class="hdr-l">
-      ${opts.logo ? `<div class="logos">${buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:150, maxH:56, align:'left', marginBottom:0 })}</div>` : ''}
+      ${opts.logo ? `<div class="logos">${buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:150, maxH:56, align:'left', marginBottom:0, scale:_logoScale(cfg) })}</div>` : ''}
       <div class="biz-name">${_esc(cfg.biz_name || 'Mi Negocio')}</div>
       ${opts.rnc && cfg.biz_rnc ? `<div class="biz-line">RNC: ${_esc(cfg.biz_rnc)}</div>` : ''}
       ${cfg.biz_addr ? `<div class="biz-line">${_esc(cfg.biz_addr)}</div>` : ''}
@@ -1149,7 +1158,7 @@ function renderCartaFormal(sale, cfg, opts) {
 </style></head><body>
   <div class="header-bar">
     <div>
-      ${opts.logo ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:160, maxH:45, align:'left', marginBottom:4, filter:'brightness(10)', br:true }) : ''}
+      ${opts.logo ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:160, maxH:45, align:'left', marginBottom:4, filter:'brightness(10)', br:true, scale:_logoScale(cfg) }) : ''}
       <div class="biz-name">${_esc(cfg.biz_name||'Mi Negocio')}</div>
       <div style="font-size:11px;opacity:.8">
         ${opts.rnc && cfg.biz_rnc ? `RNC: ${_esc(cfg.biz_rnc)} · ` : ''}${_esc(cfg.biz_addr||'')} · ${_esc(cfg.biz_phone||'')}
@@ -1277,7 +1286,7 @@ function renderCartaNCF(sale, cfg, opts) {
 
   <div class="header">
     <div>
-      ${opts.logo ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:180, maxH:50, align:'left', marginBottom:4, filter:'grayscale(100%) contrast(150%)', br:true }) : ''}
+      ${opts.logo ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:180, maxH:50, align:'left', marginBottom:4, filter:'grayscale(100%) contrast(150%)', br:true, scale:_logoScale(cfg) }) : ''}
       <strong style="font-size:14px">${_esc(cfg.biz_name||'Mi Negocio')}</strong><br/>
       RNC: <strong>${_esc(cfg.biz_rnc||'---')}</strong><br/>
       ${_esc(cfg.biz_addr||'')}<br/>Tel: ${_esc(cfg.biz_phone||'')}
@@ -1356,7 +1365,7 @@ function renderMediaCarta(sale, cfg, opts) {
 </style></head><body>
   <div class="header">
     <div>
-      ${opts.logo ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:140, maxH:35, align:'left', marginBottom:3, filter:'grayscale(100%) contrast(150%)', br:true }) : ''}
+      ${opts.logo ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:140, maxH:35, align:'left', marginBottom:3, filter:'grayscale(100%) contrast(150%)', br:true, scale:_logoScale(cfg) }) : ''}
       <strong style="font-size:12px">${_esc(cfg.biz_name||'Mi Negocio')}</strong><br/>
       ${opts.rnc && cfg.biz_rnc ? `RNC: ${_esc(cfg.biz_rnc)}<br/>` : ''}
       ${_esc(cfg.biz_addr||'')} · Tel: ${_esc(cfg.biz_phone||'')}

@@ -208,7 +208,7 @@ async function renderBarcode(el) {
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
       <div class="fg" style="margin:0">
-        <label class="lbl">Ancho del rollo (mm)</label>
+        <label class="lbl">Ancho de la etiqueta (mm)</label>
         <input class="inp" id="bc-media-width" type="number" min="20" max="150" step="0.1"
                value="${_bcState.mediaWidthMm}" onchange="bcSaveMediaConfig()"/>
       </div>
@@ -217,6 +217,9 @@ async function renderBarcode(el) {
         <input class="inp" id="bc-dpi" type="number" min="100" max="1200"
                value="${_bcState.printerDpi}" onchange="bcSaveMediaConfig()"/>
       </div>
+    </div>
+    <div style="font-size:11px;color:var(--muted2);margin-top:5px">
+      El código de barras y el texto se ajustan a este ancho <b>real en milímetros</b>: es el ancho con el que sale la etiqueta. La resolución (DPI) es solo informativa.
     </div>
     <div class="fg" style="margin-top:8px">
       <label class="lbl">Avance del papel</label>
@@ -255,7 +258,7 @@ async function renderBarcode(el) {
     <div style="background:var(--surface2);border-radius:8px;padding:12px;font-size:12px">
       <div class="tr" style="margin-bottom:6px">
         <span style="color:var(--muted2)">Tamaño</span>
-        <span style="font-weight:700">${d.labelW}×${d.labelH} mm</span>
+        <span style="font-weight:700">${_bcState.mediaWidthMm || d.labelW}×${d.labelH} mm</span>
       </div>
       <div class="tr" style="margin-bottom:6px">
         <span style="color:var(--muted2)">Tipo código</span>
@@ -535,10 +538,16 @@ function _bcBuildLabelsHTML(items) {
     : { labelW: d.labelW || 50, labelH: d.labelH || 25, gapMm: d.gapMm || 2,
         pageMm: d.pageMm || 0, mediaWidthMm: profile.widthMm || 100, cols: d.cols || 1,
         rowHeightMm: (d.labelH || 25) + (d.gapMm || 2), adjusted: false };
-  const lw = layout.labelW;
+  const cols = layout.cols;
+  // A una sola columna (caso normal de rollo), la etiqueta LLENA el ancho real
+  // configurado en mm — no un ancho de diseño aparte. Así "Ancho de la etiqueta
+  // (mm)" es lo que realmente se imprime y el contenido no desborda el papel.
+  // Con varias columnas se respeta el ancho de diseño para el multi-columna.
+  const lw = cols <= 1
+    ? Math.max(10, layout.mediaWidthMm - (layout.pageMm * 2))
+    : layout.labelW;
   const lh = layout.labelH;
   const gap = layout.gapMm;
-  const cols = layout.cols;
 
   let allLabels = [];
   items.forEach(({ product: p, qty }) => {

@@ -1700,6 +1700,62 @@ function _posSaleTemplates() {
   return (typeof PLANTILLAS !== 'undefined' ? PLANTILLAS : []).filter(p => p && p.tipo !== 'etiqueta');
 }
 
+// Tipo de impresión: 'carta' | '58mm' | '72mm' | '80mm' | 'label' | 'custom'.
+// · Con impresora específica elegida → se infiere de SU nombre.
+// · Sin impresora específica (global/predeterminada) → lo define la PLANTILLA
+//   configurada en Configuración, para NO contradecir lo que el usuario ya eligió
+//   (si tiene activa una plantilla carta, la salida por defecto es carta).
+function _posPrinterType(printerName) {
+  if (printerName) {
+    try {
+      if (typeof inferPrinterProfileId === 'function' && typeof PRINTER_PROFILES !== 'undefined'
+          && typeof printerProfileLegacyType === 'function') {
+        return printerProfileLegacyType(PRINTER_PROFILES[inferPrinterProfileId(printerName, 'ticket')]);
+      }
+    } catch {}
+    return '80mm';
+  }
+  const globalTpl = DB?.settings?.print_template || '';
+  const tpl = (typeof PLANTILLAS !== 'undefined') ? PLANTILLAS.find(p => p.id === globalTpl) : null;
+  if (tpl && tpl.tipo) return tpl.tipo;
+  try {
+    if (typeof resolvePrinterProfile === 'function' && typeof printerProfileLegacyType === 'function') {
+      return printerProfileLegacyType(resolvePrinterProfile('', 'ticket'));
+    }
+  } catch {}
+  return '80mm';
+}
+// Plantillas de factura compatibles con el papel de la impresora
+// (carta ↔ plantillas de hoja; térmica ↔ plantillas de ticket).
+function _posTemplatesForPrinter(printerName) {
+  const all = _posSaleTemplates();
+  const sheet = _posPrinterType(printerName) === 'carta';
+  const compat = all.filter(p => (sheet ? p.tipo === 'carta' : p.tipo !== 'carta'));
+  return compat.length ? compat : all;
+}
+// Mejor plantilla por defecto para una impresora: la global si es compatible;
+// si no, una acorde al tipo/ancho detectado.
+function _posDefaultTemplateForPrinter(printerName) {
+  const compat = _posTemplatesForPrinter(printerName).map(p => p.id);
+  const global = DB?.settings?.print_template || '';
+  if (global && compat.includes(global)) return global;
+  const byType = { carta: 'carta_recibo', '58mm': 'termica_58_basica', '72mm': 'termica_72_clasica', '80mm': 'termica_80_clasica' };
+  const pick = byType[_posPrinterType(printerName)];
+  return (pick && compat.includes(pick)) ? pick : (compat[0] || 'termica_80_clasica');
+}
+function _posTemplateOptions(printerName, selectedId) {
+  const sel = selectedId || _posDefaultTemplateForPrinter(printerName);
+  return _posTemplatesForPrinter(printerName)
+    .map(p => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${posEscHtml(p.nombre)}</option>`).join('');
+}
+// Al cambiar la impresora, la plantilla se re-ajusta al papel correcto.
+function posCbrPrinterChanged() {
+  const printerEl = document.getElementById('cbr-printer');
+  const tplEl = document.getElementById('cbr-template');
+  if (!tplEl) return;
+  tplEl.innerHTML = _posTemplateOptions(printerEl ? printerEl.value : '', null);
+}
+
 function openCobroModal(inv) {
   if (!inv || !inv.cart.length) return;
   const { subtotal, itbis, total, discAmt, disc } = calcTotals(inv);
@@ -2001,13 +2057,16 @@ function openCobroModal(inv) {
     const list = printers || [];
     const multi = list.length >= 2;
     const defPrinter = DB?.settings?.printer || '';
-    const defTemplate = inv.printTemplateId || DB?.settings?.print_template || 'termica_80_clasica';
-    const templateOpts = _posSaleTemplates()
-      .map(p => `<option value="${p.id}" ${p.id === defTemplate ? 'selected' : ''}>${posEscHtml(p.nombre)}</option>`).join('');
+    // Impresora efectiva inicial: la global si está instalada, si no la del diálogo.
+    const effectivePrinter = list.some(p => p.name === defPrinter) ? defPrinter : '';
+    // Respetar una plantilla ya elegida solo si es compatible con esa impresora.
+    const keepTpl = inv.printTemplateId
+      && _posTemplatesForPrinter(effectivePrinter).some(p => p.id === inv.printTemplateId)
+      ? inv.printTemplateId : null;
     const printerBlock = multi ? `
           <div class="fg" style="margin-bottom:0"><label class="lbl">Impresora</label>
-            <select class="inp" id="cbr-printer">
-              <option value="">Predeterminada / diálogo del sistema</option>
+            <select class="inp" id="cbr-printer" onchange="posCbrPrinterChanged()">
+              <option value="" ${effectivePrinter === '' ? 'selected' : ''}>Predeterminada / diálogo del sistema</option>
               ${list.map(p => `<option value="${posEscHtml(p.name)}" ${p.name === defPrinter ? 'selected' : ''}>${posEscHtml(p.name)}${p.isDefault ? ' (predeterminada)' : ''}</option>`).join('')}
             </select></div>` : '';
     host.innerHTML = `
@@ -2016,9 +2075,9 @@ function openCobroModal(inv) {
         <div class="${multi ? 'g2' : ''}">
           ${printerBlock}
           <div class="fg" style="margin-bottom:0"><label class="lbl">Plantilla</label>
-            <select class="inp" id="cbr-template">${templateOpts}</select></div>
+            <select class="inp" id="cbr-template">${_posTemplateOptions(effectivePrinter, keepTpl)}</select></div>
         </div>
-        <div style="font-size:10.5px;color:var(--muted2);margin-top:6px">${multi ? 'Elige impresora y plantilla para esta factura.' : 'Elige la plantilla con la que sale esta factura.'} Por defecto usa tu configuración global.</div>
+        <div style="font-size:10.5px;color:var(--muted2);margin-top:6px">${multi ? 'Elige la impresora; la plantilla se ajusta sola al tipo de papel (térmica o carta).' : 'La plantilla se ajusta al tipo de tu impresora.'} Puedes cambiarla dentro de las compatibles.</div>
       </div>`;
   }).catch(() => {});
 
@@ -2368,6 +2427,10 @@ async function finalizarVenta() {
   const saleDate = document.getElementById('cbr-sale-date')?.value || new Date().toISOString().slice(0,10);
   const chosenPrinter = document.getElementById('cbr-printer')?.value || '';
   const chosenTemplate = document.getElementById('cbr-template')?.value || '';
+  // Tipo de impresión que se tomó de la salida (lo define la plantilla elegida:
+  // 'carta' para hoja, o el ancho térmico). Se guarda en la venta.
+  const chosenPrintType = (typeof PLANTILLAS !== 'undefined'
+    ? PLANTILLAS.find(p => p.id === chosenTemplate)?.tipo : '') || '';
   // Capturar AQUÍ (antes de closeModal): el DOM del modal se elimina al cerrar.
   const wantConduce = !!document.getElementById('cbr-conduce')?.checked;
   const selectedAccountId = parseInt(document.getElementById('cbr-account')?.value) || null;
@@ -2426,6 +2489,7 @@ async function finalizarVenta() {
   inv.printPrinterName = chosenPrinter;
   inv.printProfileId = '';
   inv.printTemplateId = chosenTemplate;
+  inv.printType = chosenPrintType;
 
   if (!inv.cart.length) return;
 
@@ -2521,6 +2585,8 @@ async function finalizarVenta() {
       displayCurrency: inv.displayCurrency || 'DOP',
       displayExchangeRate: inv.displayCurrency === 'USD' ? Number(inv.displayExchangeRate) : 1,
       saleDate,
+      printTemplateId: inv.printTemplateId || '',
+      printPrinterType: inv.printType || '',
     },
     type: inv.itype || 'factura',
     session: cajaSession,

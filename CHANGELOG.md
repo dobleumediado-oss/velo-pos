@@ -1,5 +1,33 @@
 # Historial de versiones
 
+## 1.29.0 — 2026-07-24
+
+### Impresión y facturación
+
+- Tamaño del logo en la factura configurable en tres opciones (pequeño, mediano,
+  grande) para las plantillas de hoja (A4/Carta), con vista previa en vivo.
+- La tasa de cambio ya no se imprime en la factura: solo el equivalente en USD.
+- Salida de impresión coherente al cobrar: si no se elige una impresora, la
+  plantilla por defecto es la configurada en Configuración (carta o térmica);
+  al elegir una impresora, el sistema detecta su tipo y ajusta la plantilla
+  compatible. La plantilla usada queda guardada en la venta y se respeta al
+  reimprimir.
+- Densidad de impresión térmica configurable (normal, oscura, máxima) para
+  cuando la impresión térmica sale muy clara.
+
+### Etiquetas
+
+- El ancho configurado en milímetros es ahora el ancho real de la etiqueta: el
+  código de barras y el texto se ajustan a ese ancho y ya no desbordan el papel.
+
+### Interfaz
+
+- Modal de detalle de venta y otros modales con tablas anchas: contenido
+  compactado que cabe sin desplazamiento horizontal y con los botones siempre
+  visibles.
+- Corrección: los cargos adicionales dejaban de imprimirse dos veces en la
+  factura.
+
 ## 1.28.0 — 2026-07-24
 
 ### POS y facturación

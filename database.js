@@ -950,6 +950,9 @@ function migrateSalesWorkflowEnhancements() {
   addCol('sales', 'display_currency', "TEXT DEFAULT 'DOP'");
   addCol('sales', 'display_exchange_rate', 'REAL DEFAULT 1');
   addCol('sales', 'display_amount', 'REAL DEFAULT 0');
+  // Salida de impresión elegida al cobrar: plantilla y tipo de papel usados.
+  addCol('sales', 'print_template_id', "TEXT DEFAULT ''");
+  addCol('sales', 'print_printer_type', "TEXT DEFAULT ''");
 
   // Llevar el teléfono legacy a la colección nueva sin duplicarlo.
   db.prepare(`
@@ -2795,6 +2798,7 @@ const salesRepo = {
           payment_method,price_mode,cajero,user_id,salesperson_id,financial_account_id,
           payment_currency,exchange_rate,account_amount,card_brand,card_last4,
           additional_charges_total,display_currency,display_exchange_rate,display_amount,
+          print_template_id,print_printer_type,
           payment_reference,created_at)
         VALUES(
           @cash_session_id,@customer_id,@customer_name,@customer_rnc,
@@ -2805,6 +2809,7 @@ const salesRepo = {
           @payment_method,@price_mode,@cajero,@user_id,@salesperson_id,@financial_account_id,
           @payment_currency,@exchange_rate,@account_amount,@card_brand,@card_last4,
           @additional_charges_total,@display_currency,@display_exchange_rate,@display_amount,
+          @print_template_id,@print_printer_type,
           @payment_reference,@created_at
         )
       `).run({
@@ -2833,6 +2838,8 @@ const salesRepo = {
         display_currency: displayCurrency,
         display_exchange_rate: displayExchangeRate,
         display_amount: displayAmount,
+        print_template_id: String(payment.printTemplateId || '').slice(0, 40),
+        print_printer_type: String(payment.printPrinterType || '').slice(0, 20),
         card_brand: cardBrand, card_last4: cardLast4, payment_reference: paymentReference,
         created_at: requestedSaleDate
           ? `${requestedSaleDate} ${db.prepare("SELECT time('now','localtime') AS value").get().value}`

@@ -60,8 +60,10 @@ function _ensureUtf8HTML(html) {
 // Devuelve '' si no hay ningún logo.
 function buildLogoHeader(logo1, logo2, opts = {}) {
   const unit         = opts.unit || 'px';
-  const maxH         = opts.maxH != null ? opts.maxH : 60;
-  const maxW         = opts.maxW != null ? opts.maxW : 180;
+  // Escala opcional (Tamaño del logo en factura): 0.6 pequeño · 1 mediano · 1.4 grande.
+  const scale        = Number(opts.scale) > 0 ? Number(opts.scale) : 1;
+  const maxH         = Math.round((opts.maxH != null ? opts.maxH : 60) * scale);
+  const maxW         = Math.round((opts.maxW != null ? opts.maxW : 180) * scale);
   const filter       = opts.filter || '';
   const align        = opts.align  || 'center';
   const marginBottom = opts.marginBottom || 0;
@@ -192,6 +194,23 @@ function printLabelBatch({ html, printerName = '', widthMm, heightMm, userId = n
   });
 }
 
+// Densidad de impresión térmica (config: thermal_density). Engrosa los glifos
+// para que no salgan muy claros. 'normal' no cambia nada.
+function _thermalDensityCss() {
+  const level = String(DB?.settings?.thermal_density || 'normal').toLowerCase();
+  if (level === 'oscura' || level === 'alta') return '*{font-weight:600!important}';
+  if (level === 'maxima') return '*{font-weight:700!important;-webkit-text-stroke:0.25px currentColor}';
+  return '';
+}
+function _injectThermalDensity(html) {
+  const css = _thermalDensityCss();
+  if (!css || typeof html !== 'string') return html;
+  const style = `<style>${css}</style>`;
+  if (html.includes('</head>')) return html.replace('</head>', style + '</head>');
+  if (/<body[^>]*>/.test(html)) return html.replace(/<body[^>]*>/, m => m + style);
+  return style + html;
+}
+
 // ══════════════════════════════════════════════
 // TICKET DE VENTA 80MM
 // ══════════════════════════════════════════════
@@ -213,6 +232,7 @@ function printReceipt(sale, isReprint = false) {
       biz_web:     DB?.settings?.biz_web     || '',
       biz_logo:    DB?.settings?.biz_logo    || CFG?.biz_logo || '',
       biz_logo_2:  DB?.settings?.biz_logo_2  || CFG?.biz_logo_2 || '',
+      logo_size:   DB?.settings?.logo_size   || 'mediano',
       receipt_msg: DB?.settings?.receipt_msg || '¡Gracias por su compra!',
       // Datos bancarios del negocio (fallback si no hay cuentas registradas)
       biz_bank_name:    DB?.settings?.biz_bank_name    || '',
@@ -1229,6 +1249,10 @@ function _dispatchPrintWindow(html, jobType = '', referenceId = null, isReprint 
     if (_tpl) printerType = _tpl.tipo === 'carta' ? 'carta' : 'thermal';
   }
 
+  // Térmica: aplicar la densidad configurada (glifos más gruesos/oscuros) para
+  // que no salga muy clara. Complementa la densidad del driver de la impresora.
+  if (printerType !== 'carta') html = _injectThermalDensity(html);
+
   // ── Impresoras carta/cartuchos ────────────────────────────────────────────
   // silent:false → Electron abre diálogo con vista previa
   // Pasar printerName para usar la impresora guardada (no la predeterminada)
@@ -1570,6 +1594,7 @@ function testPrint() {
       biz_web:     DB?.settings?.biz_web     || '',
       biz_logo:    DB?.settings?.biz_logo    || '',
       biz_logo_2:  DB?.settings?.biz_logo_2  || '',
+      logo_size:   DB?.settings?.logo_size   || 'mediano',
       receipt_msg: DB?.settings?.receipt_msg || '¡Gracias por su compra!',
       biz_bank_name:    DB?.settings?.biz_bank_name    || 'BANCO DEMO, S.A.',
       biz_bank_account: DB?.settings?.biz_bank_account || '010-000000-0-0',
