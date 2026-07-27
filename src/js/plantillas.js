@@ -220,15 +220,33 @@ function getSampleSale(cfg) {
 // comprobante fiscal que no existe en el sistema.
 function _getNcf(sale) {
   if (sale.type !== 'factura') return '';
+  if (sale.adjusted_copy) return '';
   return (sale.ncf && sale.ncf.trim()) ? sale.ncf.trim() : '';
 }
 
 // Etiqueta del tipo de documento
 function _docLabel(sale) {
   if (sale.type === 'cotizacion') return 'COTIZACIÓN';
-  if (sale.type === 'devolucion') return 'NOTA DE DEVOLUCIÓN';
+  if (sale.type === 'devolucion') return 'NOTA DE CRÉDITO';
+  if (sale.type === 'factura' && sale.adjusted_copy) return 'FACTURA AJUSTADA';
   if (sale.type === 'factura')    return 'FACTURA';
   return 'RECIBO DE COMPRA';
+}
+
+function _adjustedCopyNotice(sale) {
+  if (!sale?.adjusted_copy) return '';
+  const refs = Array.isArray(sale.related_documents) && sale.related_documents.length
+    ? `<div>Documentos relacionados: ${_esc(sale.related_documents.join(', '))}</div>`
+    : '';
+  const ncf = sale.adjusted_reference_ncf
+    ? `<div>Referencia NCF original: ${_esc(sale.adjusted_reference_ncf)}</div>`
+    : '';
+  return `<div style="margin:5px 0;padding:5px 7px;border:1px solid #111;text-align:center;font-size:9px;line-height:1.35">
+    <strong>REIMPRESIÓN CONSOLIDADA</strong>
+    <div>Estado vigente de la operación · No sustituye los comprobantes fiscales emitidos.</div>
+    ${sale.adjusted_reference ? `<div>Referencia: ${_esc(sale.adjusted_reference)}</div>` : ''}
+    ${ncf}${refs}
+  </div>`;
 }
 
 function _lineGross(i) {
@@ -454,6 +472,11 @@ function _docKind(doc) {
 // Tipo de facturación: Contado / Crédito / Abono
 function _tipoFacturacion(sale) {
   if (sale.type === 'abono') return 'Abono';
+  if (sale.adjusted_copy) {
+    return (sale.payment_method || '').toLowerCase() === 'credito'
+      ? 'Factura ajustada · Crédito'
+      : 'Factura ajustada';
+  }
   if ((sale.payment_method || '').toLowerCase() === 'credito') return 'Crédito';
   return 'Contado';
 }
@@ -462,11 +485,11 @@ function _tipoFacturacion(sale) {
 function _a4DocTitle(sale) {
   switch (sale.type) {
     case 'cotizacion': return 'COTIZACIÓN';
-    case 'devolucion': return 'NOTA DE DEVOLUCIÓN';
+    case 'devolucion': return 'NOTA DE CRÉDITO';
     case 'abono':      return 'RECIBO DE ABONO';
     case 'conduce':    return 'CONDUCE';
     case 'reporte':    return 'REPORTE';
-    case 'factura':    return 'FACTURA';
+    case 'factura':    return sale.adjusted_copy ? 'FACTURA AJUSTADA' : 'FACTURA';
     default:           return 'RECIBO';
   }
 }
@@ -572,6 +595,7 @@ function renderTermica(sale, cfg, opts, widthMm = 76) {
   ${_termicaHeader(cfg, opts, widthMm)}
   <div style="text-align:center;font-weight:700">*** ${_docLabel(sale)} ***</div>
   ${sale.isReprint ? '<div style="text-align:center">--- REIMPRESIÓN ---</div>' : ''}
+  ${_adjustedCopyNotice(sale)}
   ${isDevolucion && sale.original_sale_id ? `<div style="text-align:center">Ref. venta ${facturaLabelOriginal(sale)}</div>` : ''}
   <div style="text-align:center">${sep}</div>
   <div style="display:flex;justify-content:space-between">
@@ -666,6 +690,7 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
     ◆ ${_docLabel(sale)} ◆
     ${isDevolucion && sale.original_sale_id ? `<div style="font-size:10px;text-align:center">Ref. venta ${facturaLabelOriginal(sale)}</div>` : ''}
   </div>
+  ${_adjustedCopyNotice(sale)}
   <hr class="sep"/>
   <div class="row"><span>No.:</span><span style="font-weight:700">${facturaLabel(sale)}</span></div>
   <div class="row"><span>Fecha:</span><span>${sale.date} ${sale.time}</span></div>
@@ -718,6 +743,7 @@ function renderTermicaMinimal(sale, cfg, opts, widthMm = 76) {
          font-size:10.5px; line-height:1.4; color:#000; }
 </style></head><body>
   <div style="text-align:center;font-size:12px;font-weight:700;margin-bottom:2px">${_esc(cfg.biz_name||'Mi Negocio')}</div>
+  ${sale.adjusted_copy ? `<div style="text-align:center;font-weight:700">${_docLabel(sale)}</div>${_adjustedCopyNotice(sale)}` : ''}
   <div style="text-align:center;font-size:9px;margin-bottom:4px">${sale.date} ${sale.time} · ${facturaLabel(sale)}</div>
   ${sale.customer_phone ? `<div style="text-align:center;font-size:9px;margin-bottom:3px">${_customerPhoneLabel(sale)}</div>` : ''}
   <div style="border-top:1px dashed #000;margin:3px 0"></div>
@@ -771,7 +797,7 @@ function renderCartaRecibo(sale, cfg, opts) {
   // Documentos monetarios (todos menos conduce/reporte sin importe)
   const showMoney = !isConduce && !isReporte;
 
-  const paidReceipt = isFactura && statusLabel === 'Pagada';
+  const paidReceipt = isFactura && statusLabel === 'Pagada' && !sale.adjusted_copy;
   const docWord   = paidReceipt ? 'RECIBO DE PAGO' : _a4DocTitle(sale);
   const docNum    = facturaLabel(sale).replace(/^#/, '');
   const showNum   = !isReporte;
@@ -959,18 +985,18 @@ function renderCartaRecibo(sale, cfg, opts) {
   body { font-family:'Helvetica Neue',Arial,sans-serif; font-size:11px; color:#1f2430; line-height:1.42; }
   .hdr { display:flex; justify-content:space-between; gap:24px; align-items:flex-start; }
   .hdr-l { flex:1; min-width:0; }
-  .hdr-r { width:46%; max-width:330px; }
+  .hdr-r { width:40%; max-width:290px; }
   .logos { margin-bottom:10px; }
   .biz-name { font-size:16px; font-weight:700; letter-spacing:.2px; }
   .biz-line { font-size:11px; color:#4b5263; margin-top:2px; }
   .biz-contact { font-size:11px; color:#4b5263; margin-top:7px; }
   .biz-contact span { margin-right:16px; }
-  .titlebox { border:1px solid #d8dbe3; border-radius:8px; padding:12px 16px; display:flex; justify-content:space-between; align-items:center; }
-  .titlebox .t { font-size:15px; font-weight:800; letter-spacing:.5px; }
-  .titlebox .n { font-size:16px; font-weight:800; }
-  .paid-state { text-align:right; font-size:14px; font-weight:800; margin-top:7px; }
+  .titlebox { border:1px solid #e2e5eb; border-radius:6px; padding:7px 10px; display:flex; justify-content:flex-end; gap:10px; align-items:baseline; white-space:nowrap; }
+  .titlebox .t { font-size:9px; font-weight:700; letter-spacing:.45px; color:#72798a; text-transform:uppercase; }
+  .titlebox .n { font-size:12px; font-weight:750; }
+  .paid-state { text-align:right; font-size:11px; font-weight:700; margin-top:5px; }
   .receipt-line { text-align:right; font-size:11px; color:#4b5263; margin-top:2px; }
-  .datebox { border:1px solid #eceef3; border-radius:8px; padding:8px 16px; display:flex; justify-content:space-between; align-items:center; margin-top:8px; font-size:11px; }
+  .datebox { border:1px solid #eceef3; border-radius:6px; padding:6px 10px; display:flex; justify-content:space-between; align-items:center; margin-top:6px; font-size:10px; }
   .datebox b { font-weight:700; }
   .client { margin-top:14px; }
   .client .cl-lbl { font-size:10px; font-weight:700; letter-spacing:1px; color:#8a90a0; }
@@ -1043,7 +1069,7 @@ function renderCartaRecibo(sale, cfg, opts) {
     <div class="hdr-r">
       <div class="titlebox">
         <div class="t">${docWord}${showNum && !paidReceipt ? ' N.' : ''}</div>
-        ${showNum ? `<div class="n">${paidReceipt ? 'Factura # ' : ''}${_esc(docNum)}</div>` : ''}
+        ${showNum ? `<div class="n">${paidReceipt ? 'Factura #' : '#'} ${_esc(docNum)}</div>` : ''}
       </div>
       <div class="paid-state">${_esc(statusLabel)}</div>
       ${receiptNo ? `<div class="receipt-line">Recibo #: <b>${_esc(receiptNo)}</b></div>` : ''}
@@ -1057,6 +1083,7 @@ function renderCartaRecibo(sale, cfg, opts) {
     </div>
   </div>
 
+  ${_adjustedCopyNotice(sale)}
   ${strip}
   ${summary}
 
@@ -1170,6 +1197,7 @@ function renderCartaFormal(sale, cfg, opts) {
     </div>
   </div>
 
+  ${_adjustedCopyNotice(sale)}
   <div class="info-grid">
     <div class="info-box">
       <label>Cliente</label>
@@ -1272,18 +1300,24 @@ function renderCartaNCF(sale, cfg, opts) {
   .grand { font-size:15px; font-weight:700; border-top:2px solid #000; padding-top:5px; }
   img { display:block; max-height:50px; max-width:180px; }
 </style></head><body>
-  ${isCotizacion
+  ${sale.adjusted_copy
+    ? `<div style="border:2px solid #1a1a1a;border-radius:6px;padding:8px 14px;text-align:center;margin-bottom:10px">
+         <div style="font-size:13px;font-weight:800">FACTURA AJUSTADA</div>
+         <div style="font-size:9px;text-transform:uppercase">Reimpresión consolidada · Sin valor fiscal independiente</div>
+       </div>`
+    : isCotizacion
     ? `<div style="border:2px dashed #aaa;border-radius:6px;padding:8px 14px;text-align:center;margin-bottom:10px">
          <div style="font-size:13px;font-weight:700">COTIZACIÓN</div>
          <div style="font-size:9px;color:#888;text-transform:uppercase">Sin valor fiscal · ${sale.date}</div>
        </div>`
     : `<div class="ncf-box">
-         <div class="ncf-label">${isDevolucion ? 'Nota de Devolución' : 'Número de Comprobante Fiscal'}</div>
+         <div class="ncf-label">${isDevolucion ? 'Nota de Crédito' : 'Número de Comprobante Fiscal'}</div>
          <div class="ncf-num">${ncf || '—'}</div>
          <div class="ncf-label">Factura con Valor Fiscal · ${sale.date}</div>
        </div>`
   }
 
+  ${_adjustedCopyNotice(sale)}
   <div class="header">
     <div>
       ${opts.logo ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:180, maxH:50, align:'left', marginBottom:4, filter:'grayscale(100%) contrast(150%)', br:true, scale:_logoScale(cfg) }) : ''}
@@ -1376,6 +1410,7 @@ function renderMediaCarta(sale, cfg, opts) {
       ${_docLabel(sale)}
     </div>
   </div>
+  ${_adjustedCopyNotice(sale)}
   <div style="background:#f3f4f6;padding:4px 8px;margin-bottom:6px;border-radius:3px;font-size:10px">
     Cliente: <strong>${_esc(sale.customer_name||'Consumidor Final')}</strong>
     ${sale.customer_phone ? ` · ${_customerPhoneLabel(sale)}` : ''}

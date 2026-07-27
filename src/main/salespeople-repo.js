@@ -233,7 +233,7 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
 
   function commissionSources(seller, from, to) {
     const internal = db().prepare(`
-      SELECT s.id source_id,'sistema' source_type,date(s.created_at) sale_date,
+      SELECT s.id source_id,'sistema' source_type,s.sale_date,
         COALESCE(s.numero_factura_fmt,s.numero_factura,printf('%08d',s.id)) reference,
         s.customer_name,
         MAX(0,s.total-COALESCE((SELECT SUM(r.total) FROM sales r
@@ -243,8 +243,8 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
             WHERE r.type='devolucion' AND r.original_sale_id=s.id AND r.status!='cancelled'),0)) cost_amount
       FROM sales s
       WHERE s.salesperson_id=? AND s.type='factura' AND s.status!='cancelled'
-        AND date(s.created_at) BETWEEN ? AND ?
-      ORDER BY s.created_at,s.id
+        AND s.sale_date BETWEEN ? AND ?
+      ORDER BY s.sale_date,s.id
     `).all(seller.id, from, to);
     const external = db().prepare(`
       SELECT id source_id,'talonario' source_type,sale_date,

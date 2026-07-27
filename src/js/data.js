@@ -49,6 +49,7 @@ function facturaLabel(o, fallbackRef) {
 }
 
 function documentTypeLabel(o) {
+  if (o?.correction_kind === 'product_addition') return 'Documento de aumento';
   const kind = o?.document_kind || '';
   const byKind = {
     factura_contado: 'Factura al contado',
@@ -293,7 +294,7 @@ async function reloadSales(filters = {}) {
     clientName:   s.customer_name  || s.clientName  || 'Consumidor Final',
     clientCedula: s.customer_rnc   || s.clientCedula || '',
     pay:          s.payment_method || s.pay          || 'efectivo',
-    date:         (s.created_at    || s.date || '').split('T')[0].split(' ')[0],
+    date:         (s.sale_date     || s.date || '').split('T')[0].split(' ')[0],
     time:         s.created_at
       ? new Date(s.created_at).toLocaleTimeString('es-DO',
           { hour: '2-digit', minute: '2-digit' })
@@ -562,7 +563,7 @@ function getCreditAlerts() {
 function getSales(range = 'today') {
   const td = today();
   return DB.sales.filter(s => {
-    const d = (s.created_at || '').split('T')[0] || s.created_at?.split(' ')[0];
+    const d = (s.sale_date || '').split('T')[0] || s.sale_date?.split(' ')[0];
     if (range === 'today')     return d === td;
     if (range === 'yesterday') {
       const y = new Date(); y.setDate(y.getDate() - 1);

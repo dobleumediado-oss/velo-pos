@@ -164,7 +164,7 @@ const {
   salesRepo, returnsRepo, reportsRepo, suppliersRepo, purchasesRepo, audit,
   expensesRepo, branchesRepo, vehiclesRepo, maintenanceRepo, deliveriesRepo, ncfRepo,
   financialAccountsRepo, bankReconRepo, accountingRepo, fixedAssetsRepo, conduceRepo, documentNumberRepo, salespeopleRepo,
-  checkoutOrdersRepo
+  checkoutOrdersRepo, saleCorrectionsRepo
 } = require('./database');
 
 const {
@@ -1994,28 +1994,163 @@ ipcMain.handle('sales:search', async (_, { q, limit } = {}) => {
   }
 });
 
-ipcMain.handle('sales:updateDate', async (_, { id, saleDate, requestUserId } = {}) => {
+ipcMain.handle('sales:corrections:getImpact', async (_, { id, saleDate, requestUserId } = {}) => {
   try {
-    const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Solo un administrador puede cambiar la fecha de una factura emitida' };
-    }
-    const previous = salesRepo.getById(id);
-    if (!previous) return { ok: false, error: 'Venta no encontrada' };
-    const updated = salesRepo.updateDate(id, saleDate);
-    audit(requestUserId, reqUser.name, 'fecha_venta_cambiada', 'sales', id,
-      `${String(previous.created_at || '').slice(0, 10)} → ${saleDate}`);
-    return { ok: true, data: updated };
+    return { ok: true, data: saleCorrectionsRepo.impact(id, saleDate, requestUserId) };
   } catch (e) {
-    return { ok: false, error: e.message };
+    return { ok: false, error: e.message, code: e.code || 'VALIDATION_ERROR' };
+  }
+});
+
+ipcMain.handle('sales:corrections:changeDate', async (_, data = {}) => {
+  try {
+    const result = saleCorrectionsRepo.changeDate({
+      saleId: data.id,
+      newSaleDate: data.saleDate,
+      reason: data.reason,
+      userId: data.requestUserId,
+      authorizedByUserId: data.authorizedByUserId || data.requestUserId,
+      expectedRevision: data.expectedRevision,
+      idempotencyKey: data.idempotencyKey,
+      terminalId: data.terminalId || '',
+      ipAddress: data.ipAddress || '',
+    });
+    return { ok: true, ...result };
+  } catch (e) {
+    return { ok: false, error: e.message, code: e.code || 'VALIDATION_ERROR' };
+  }
+});
+
+// Compatibilidad con renderers anteriores: conserva el canal, pero lo dirige
+// al servicio seguro y exige motivo/idempotencia; nunca vuelve a tocar created_at.
+ipcMain.handle('sales:updateDate', async (_, data = {}) => {
+  try {
+    const result = saleCorrectionsRepo.changeDate({
+      saleId: data.id,
+      newSaleDate: data.saleDate,
+      reason: data.reason,
+      userId: data.requestUserId,
+      authorizedByUserId: data.authorizedByUserId || data.requestUserId,
+      expectedRevision: data.expectedRevision,
+      idempotencyKey: data.idempotencyKey,
+      terminalId: data.terminalId || '',
+    });
+    return { ok: true, ...result };
+  } catch (e) {
+    return { ok: false, error: e.message, code: e.code || 'VALIDATION_ERROR' };
+  }
+});
+
+ipcMain.handle('sales:corrections:updateAdministrative', async (_, data = {}) => {
+  try {
+    const result = saleCorrectionsRepo.updateAdministrativeData({
+      saleId: data.id,
+      values: data.values,
+      reason: data.reason,
+      userId: data.requestUserId,
+      expectedRevision: data.expectedRevision,
+      idempotencyKey: data.idempotencyKey,
+      terminalId: data.terminalId || '',
+    });
+    return { ok: true, ...result };
+  } catch (e) {
+    return { ok: false, error: e.message, code: e.code || 'VALIDATION_ERROR' };
+  }
+});
+
+ipcMain.handle('sales:corrections:getProductModel', async (_, { id, requestUserId } = {}) => {
+  try {
+    return { ok: true, data: saleCorrectionsRepo.productCorrectionModel(id, requestUserId) };
+  } catch (e) {
+    return { ok: false, error: e.message, code: e.code || 'VALIDATION_ERROR' };
+  }
+});
+
+ipcMain.handle('sales:corrections:correctProducts', async (_, data = {}) => {
+  try {
+    const reqUser = authRepo.findById(data.requestUserId);
+    if (!reqUser) return { ok: false, error: 'Usuario no válido' };
+    const session = cashRepo.getOpen(_reqTerminalId());
+    const result = saleCorrectionsRepo.correctProducts({
+      saleId: data.id,
+      lines: data.lines,
+      addedItems: data.addedItems,
+      reason: data.reason,
+      userId: data.requestUserId,
+      expectedRevision: data.expectedRevision,
+      idempotencyKey: data.idempotencyKey,
+      terminalId: data.terminalId || _reqTerminalId(),
+      session,
+      additionPaymentMethod: data.additionPaymentMethod,
+    });
+    for (const returnId of result.returnIds || []) {
+      _acctHook(() => accountingRepo.generateReturnEntry({
+        returnSaleId: returnId,
+        userId: data.requestUserId,
+      }));
+    }
+    if (result.additionSaleId) {
+      _acctHook(() => accountingRepo.generateSaleEntry({
+        saleId: result.additionSaleId,
+        userId: data.requestUserId,
+      }));
+    }
+    return { ok: true, ...result };
+  } catch (e) {
+    console.error('[sales:corrections:correctProducts]', e);
+    return { ok: false, error: e.message, code: e.code || 'VALIDATION_ERROR' };
+  }
+});
+
+ipcMain.handle('sales:corrections:getMonetaryCreditModel', async (_, { id, requestUserId } = {}) => {
+  try {
+    return { ok: true, data: saleCorrectionsRepo.monetaryCreditModel(id, requestUserId) };
+  } catch (e) {
+    return { ok: false, error: e.message, code: e.code || 'VALIDATION_ERROR' };
+  }
+});
+
+ipcMain.handle('sales:corrections:createMonetaryCredit', async (_, data = {}) => {
+  try {
+    const reqUser = authRepo.findById(data.requestUserId);
+    if (!reqUser) return { ok: false, error: 'Usuario no válido' };
+    const session = cashRepo.getOpen(_reqTerminalId());
+    const result = saleCorrectionsRepo.createMonetaryCredit({
+      saleId: data.id,
+      amount: data.amount,
+      reason: data.reason,
+      userId: data.requestUserId,
+      expectedRevision: data.expectedRevision,
+      idempotencyKey: data.idempotencyKey,
+      terminalId: data.terminalId || _reqTerminalId(),
+      session,
+    });
+    for (const returnId of result.returnIds || []) {
+      _acctHook(() => accountingRepo.generateReturnEntry({
+        returnSaleId: returnId,
+        userId: data.requestUserId,
+      }));
+    }
+    return { ok: true, ...result };
+  } catch (e) {
+    console.error('[sales:corrections:createMonetaryCredit]', e);
+    return { ok: false, error: e.message, code: e.code || 'VALIDATION_ERROR' };
+  }
+});
+
+ipcMain.handle('sales:corrections:getHistory', async (_, { id, requestUserId } = {}) => {
+  try {
+    return { ok: true, data: saleCorrectionsRepo.history(id, requestUserId) };
+  } catch (e) {
+    return { ok: false, error: e.message, code: e.code || 'VALIDATION_ERROR' };
   }
 });
 
 ipcMain.handle('sales:cancel', async (_, { id, reason, requestUserId }) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Solo el administrador puede anular ventas' };
+    if (!reqUser || !saleCorrectionsRepo.hasPermission(reqUser, 'sales.cancel')) {
+      return { ok: false, error: 'Permiso requerido: sales.cancel' };
     }
     const sale = salesRepo.getById(id);
     if (!sale) return { ok: false, error: 'Venta no encontrada' };
@@ -2094,6 +2229,12 @@ ipcMain.handle('sales:return', async (_, { originalSaleId, items, reason, reques
   try {
     const reqUser = authRepo.findById(requestUserId);
     if (!reqUser) return { ok: false, error: 'Usuario no válido' };
+    if (!saleCorrectionsRepo.hasPermission(reqUser, 'sales.request_return')) {
+      return { ok: false, error: 'Permiso requerido: sales.request_return' };
+    }
+    if (String(reason || '').trim().length < 5) {
+      return { ok: false, error: 'El motivo de la devolución es obligatorio y debe ser específico' };
+    }
 
     // Verificar caja abierta
     const session = cashRepo.getOpen(_reqTerminalId());

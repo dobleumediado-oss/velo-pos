@@ -14,6 +14,10 @@ const { searchNorm: _searchNorm, digitsOf: _digitsOf } = require('./lib/text-nor
 const { round2 } = require('./lib/money');
 const { ensureSalespeopleSchema, createSalespeopleRepo } = require('./src/main/salespeople-repo');
 const { ensureCheckoutOrdersSchema, createCheckoutOrdersRepo } = require('./src/main/checkout-orders-repo');
+const {
+  ensureSaleCorrectionsSchema,
+  createSaleCorrectionsRepo,
+} = require('./src/main/sale-corrections-repo');
 
 let dataDir;
 let DB_PATH;
@@ -53,16 +57,102 @@ function initDB(customDataDir) {
   migrateExpensesColumns();
   migratePaymentsColumns();
   migrateV2IdentityColumns();   // Fase 1 migración v2 (identidad real Equiparts)
+  backupBeforeHistoricalNumberContinuation();
   migrateDocumentNumbering();   // Secuencias internas independientes por tipo documental
   migrateCustomerCompanies();   // Personas, empresas, representantes y snapshots
   migrateSalesWorkflowEnhancements(); // Teléfonos múltiples, cargos, USD y fecha documental
   ensureCheckoutOrdersSchema(db);
+  backupBeforeSaleCorrectionsMigration();
+  backupBeforeProductCorrectionsMigration();
+  ensureSaleCorrectionsSchema(db);
   seedIfEmpty();
   ensureNcfIntegrity();         // C2: índice UNIQUE parcial contra NCF duplicados
   ensureDeliveryExpenseIntegrity(); // gastos de envíos pre-v1.18 sin enlazar/anular
 
   console.log('[DB] Iniciada en:', DB_PATH);
   return db;
+}
+
+// Respaldo puntual antes de introducir la separación de fechas. Solo corre una
+// vez por base (cuando sale_date aún no existe) y nunca sustituye respaldos.
+function backupBeforeSaleCorrectionsMigration() {
+  try {
+    const hasSales = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sales'").get();
+    if (!hasSales) return;
+    const migrated = db.prepare('PRAGMA table_info(sales)').all().some(column => column.name === 'sale_date');
+    if (migrated || !DB_PATH || !fs.existsSync(DB_PATH)) return;
+    try { db.pragma('wal_checkpoint(FULL)'); } catch {}
+    const backupDir = path.join(dataDir, 'backups');
+    if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const destination = path.join(backupDir, `velo_pre_sale_corrections_${stamp}.db`);
+    fs.copyFileSync(DB_PATH, destination, fs.constants.COPYFILE_EXCL);
+    console.log('[BACKUP] Respaldo previo a correcciones de factura:', path.basename(destination));
+  } catch (error) {
+    // La migración no continúa sin respaldo en una base existente: es preferible
+    // un arranque abortado a modificar estructura sin copia recuperable.
+    throw new Error(`No se pudo crear el respaldo previo a correcciones de factura: ${error.message}`);
+  }
+}
+
+// Segundo respaldo puntual: instalaciones que ya tenían corrección de fechas
+// reciben ahora documentos compensatorios para líneas. No se amplía el esquema
+// de una base con ventas sin dejar antes una copia independiente.
+function backupBeforeProductCorrectionsMigration() {
+  try {
+    const hasSales = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sales'").get();
+    if (!hasSales) return;
+    const migrated = db.prepare('PRAGMA table_info(sales)').all()
+      .some(column => column.name === 'correction_kind');
+    if (migrated || !DB_PATH || !fs.existsSync(DB_PATH)) return;
+    try { db.pragma('wal_checkpoint(FULL)'); } catch {}
+    const backupDir = path.join(dataDir, 'backups');
+    if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const destination = path.join(backupDir, `velo_pre_product_corrections_${stamp}.db`);
+    fs.copyFileSync(DB_PATH, destination, fs.constants.COPYFILE_EXCL);
+    console.log('[BACKUP] Respaldo previo a corrección de productos:', path.basename(destination));
+  } catch (error) {
+    throw new Error(`No se pudo crear el respaldo previo a corrección de productos: ${error.message}`);
+  }
+}
+
+// La continuidad histórica puede alinear números FAC/FCR emitidos después de
+// una importación. Antes de cambiar esas etiquetas documentales se crea una
+// copia única y recuperable de la base.
+function backupBeforeHistoricalNumberContinuation() {
+  try {
+    if (!DB_PATH || !fs.existsSync(DB_PATH) || !tableExists('sales')) return;
+    const columns = db.prepare('PRAGMA table_info(sales)').all().map(column => column.name);
+    if (!['import_source','numero_factura','document_kind'].every(column => columns.includes(column))) return;
+    const imported = db.prepare(`
+      SELECT COALESCE(MAX(id),0) max_id
+      FROM sales
+      WHERE type='factura'
+        AND COALESCE(import_source,'')<>''
+        AND numero_factura IS NOT NULL
+        AND CAST(numero_factura AS INTEGER)>0
+    `).get();
+    if (!Number(imported?.max_id || 0)) return;
+    const pending = db.prepare(`
+      SELECT COUNT(*) count
+      FROM sales
+      WHERE type='factura'
+        AND COALESCE(import_source,'')=''
+        AND id>?
+        AND COALESCE(document_kind,'')!='factura_historica'
+    `).get(Number(imported.max_id));
+    if (!Number(pending?.count || 0)) return;
+    try { db.pragma('wal_checkpoint(FULL)'); } catch {}
+    const backupDir = path.join(dataDir, 'backups');
+    if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const destination = path.join(backupDir, `velo_pre_historical_numbering_${stamp}.db`);
+    fs.copyFileSync(DB_PATH, destination, fs.constants.COPYFILE_EXCL);
+    console.log('[BACKUP] Respaldo previo a continuidad de numeración histórica:', path.basename(destination));
+  } catch (error) {
+    throw new Error(`No se pudo respaldar la numeración anterior: ${error.message}`);
+  }
 }
 
 // Inicializa una base secundaria sin dejar el proceso apuntando a ella.
@@ -1202,6 +1292,9 @@ function migrateV2IdentityColumns() {
 const DOCUMENT_SEQUENCE_DEFAULTS = {
   factura_contado: { prefix: 'FAC', pad: 6 },
   factura_credito: { prefix: 'FCR', pad: 6 },
+  // Se activa únicamente cuando existen facturas importadas con numeración
+  // histórica. Contado y crédito comparten entonces la secuencia original.
+  factura_historica: { prefix: '', pad: 8 },
   cotizacion:      { prefix: 'COT', pad: 6 },
   nota_credito:    { prefix: 'NCR', pad: 6 },
   abono:           { prefix: 'ABO', pad: 6 },
@@ -1211,9 +1304,31 @@ const DOCUMENT_SEQUENCE_DEFAULTS = {
   reporte:         { prefix: 'REP', pad: 6 },
 };
 
+function importedInvoiceSequenceInfo() {
+  if (!db || !tableExists('sales')) return { count: 0, max: 0, pad: 8, maxImportedId: 0 };
+  const row = db.prepare(`
+    SELECT COUNT(*) count,
+           COALESCE(MAX(CAST(numero_factura AS INTEGER)),0) max_number,
+           COALESCE(MAX(LENGTH(TRIM(numero_factura_fmt))),8) pad_length,
+           COALESCE(MAX(id),0) max_imported_id
+    FROM sales
+    WHERE type='factura'
+      AND COALESCE(import_source,'')<>''
+      AND numero_factura IS NOT NULL
+      AND CAST(numero_factura AS INTEGER)>0
+  `).get();
+  return {
+    count: Number(row?.count || 0),
+    max: Number(row?.max_number || 0),
+    pad: Math.max(3, Math.min(12, Number(row?.pad_length || 8))),
+    maxImportedId: Number(row?.max_imported_id || 0),
+  };
+}
+
 function documentKindForSale(type, paymentMethod) {
   if (type === 'cotizacion') return 'cotizacion';
   if (type === 'devolucion') return 'nota_credito';
+  if (importedInvoiceSequenceInfo().count > 0) return 'factura_historica';
   return String(paymentMethod || '').toLowerCase() === 'credito'
     ? 'factura_credito'
     : 'factura_contado';
@@ -1238,6 +1353,16 @@ function _issueDocumentNumber(kind, sourceType, sourceId) {
     VALUES(?,?,0,?)
     ON CONFLICT(kind) DO NOTHING
   `).run(kind, cfg.prefix, cfg.pad);
+  if (kind === 'factura_historica') {
+    const historical = importedInvoiceSequenceInfo();
+    db.prepare(`
+      UPDATE document_sequences
+      SET current=MAX(current,?),
+          pad_length=MAX(pad_length,?),
+          updated_at=datetime('now','localtime')
+      WHERE kind=?
+    `).run(historical.max, historical.pad, kind);
+  }
   const seq = db.prepare('SELECT * FROM document_sequences WHERE kind=?').get(kind);
   const next = Number(seq.current || 0) + 1;
   db.prepare(`
@@ -1245,7 +1370,8 @@ function _issueDocumentNumber(kind, sourceType, sourceId) {
     SET current=?,updated_at=datetime('now','localtime')
     WHERE kind=?
   `).run(next, kind);
-  const formatted = `${seq.prefix}-${String(next).padStart(Number(seq.pad_length) || cfg.pad, '0')}`;
+  const digits = String(next).padStart(Number(seq.pad_length) || cfg.pad, '0');
+  const formatted = seq.prefix ? `${seq.prefix}-${digits}` : digits;
   db.prepare(`
     INSERT INTO document_issues(
       kind,sequence_number,formatted_number,source_type,source_id,status
@@ -1307,6 +1433,52 @@ function migrateDocumentNumbering() {
   // Solo numeramos registros nativos. Los importados conservan exactamente el
   // número histórico que traían del sistema anterior.
   const tx = db.transaction(() => {
+    const historical = importedInvoiceSequenceInfo();
+    if (historical.count > 0) {
+      db.prepare(`
+        UPDATE document_sequences
+        SET current=MAX(current,?),
+            pad_length=MAX(pad_length,?),
+            updated_at=datetime('now','localtime')
+        WHERE kind='factura_historica'
+      `).run(historical.max, historical.pad);
+
+      // Si la migración histórica ya estaba cargada cuando Velo comenzó a
+      // facturar, alinear únicamente las ventas posteriores a esa importación.
+      // No se renumeran documentos nativos anteriores a un import tardío.
+      const continuationSales = db.prepare(`
+        SELECT id
+        FROM sales
+        WHERE COALESCE(import_source,'')=''
+          AND type='factura'
+          AND id>?
+          AND COALESCE(document_kind,'')!='factura_historica'
+        ORDER BY id
+      `).all(historical.maxImportedId);
+      for (const sale of continuationSales) {
+        db.prepare(`
+          UPDATE document_issues
+          SET status='cancelled'
+          WHERE source_type='sale' AND source_id=? AND status='active'
+            AND kind IN ('factura_contado','factura_credito')
+        `).run(String(sale.id));
+        const issued = _issueDocumentNumber('factura_historica', 'sale', sale.id);
+        db.prepare(`
+          UPDATE sales
+          SET document_kind='factura_historica',
+              document_number=?,
+              document_number_fmt=?,
+              numero_factura=?,
+              numero_factura_fmt=?
+          WHERE id=?
+        `).run(
+          issued.sequence_number, issued.formatted_number,
+          issued.sequence_number, issued.formatted_number,
+          sale.id
+        );
+      }
+    }
+
     const nativeSales = db.prepare(`
       SELECT id,type,payment_method
       FROM sales
@@ -1318,9 +1490,16 @@ function migrateDocumentNumbering() {
       const kind = documentKindForSale(sale.type, sale.payment_method);
       const issued = _issueDocumentNumber(kind, 'sale', sale.id);
       db.prepare(`
-        UPDATE sales SET document_kind=?,document_number=?,document_number_fmt=?
+        UPDATE sales
+        SET document_kind=?,document_number=?,document_number_fmt=?,
+            numero_factura=CASE WHEN ?='factura_historica' THEN ? ELSE numero_factura END,
+            numero_factura_fmt=CASE WHEN ?='factura_historica' THEN ? ELSE numero_factura_fmt END
         WHERE id=?
-      `).run(kind, issued.sequence_number, issued.formatted_number, sale.id);
+      `).run(
+        kind, issued.sequence_number, issued.formatted_number,
+        kind, issued.sequence_number, kind, issued.formatted_number,
+        sale.id
+      );
     }
 
     const nativeReceipts = db.prepare(`
@@ -2799,7 +2978,7 @@ const salesRepo = {
           payment_currency,exchange_rate,account_amount,card_brand,card_last4,
           additional_charges_total,display_currency,display_exchange_rate,display_amount,
           print_template_id,print_printer_type,
-          payment_reference,created_at)
+          payment_reference,created_at,original_sale_date,sale_date,updated_at)
         VALUES(
           @cash_session_id,@customer_id,@customer_name,@customer_rnc,
           @customer_type,@customer_trade_name,@customer_address,@customer_phone,@customer_phone_type,@customer_email,
@@ -2810,7 +2989,7 @@ const salesRepo = {
           @payment_currency,@exchange_rate,@account_amount,@card_brand,@card_last4,
           @additional_charges_total,@display_currency,@display_exchange_rate,@display_amount,
           @print_template_id,@print_printer_type,
-          @payment_reference,@created_at
+          @payment_reference,@created_at,@original_sale_date,@sale_date,@created_at
         )
       `).run({
         cash_session_id: session?.id || null,
@@ -2841,9 +3020,9 @@ const salesRepo = {
         print_template_id: String(payment.printTemplateId || '').slice(0, 40),
         print_printer_type: String(payment.printPrinterType || '').slice(0, 20),
         card_brand: cardBrand, card_last4: cardLast4, payment_reference: paymentReference,
-        created_at: requestedSaleDate
-          ? `${requestedSaleDate} ${db.prepare("SELECT time('now','localtime') AS value").get().value}`
-          : db.prepare("SELECT datetime('now','localtime') AS value").get().value,
+        created_at: db.prepare("SELECT datetime('now','localtime') AS value").get().value,
+        original_sale_date: requestedSaleDate || db.prepare("SELECT date('now','localtime') AS value").get().value,
+        sale_date: requestedSaleDate || db.prepare("SELECT date('now','localtime') AS value").get().value,
       });
       const saleId = saleR.lastInsertRowid;
       if (charges.length) {
@@ -2860,13 +3039,17 @@ const salesRepo = {
       db.prepare(`
         UPDATE sales
         SET document_kind=?,document_number=?,document_number_fmt=?,
-            receipt_document_number=?,receipt_document_number_fmt=?
+            receipt_document_number=?,receipt_document_number_fmt=?,
+            numero_factura=CASE WHEN ?='factura_historica' THEN ? ELSE numero_factura END,
+            numero_factura_fmt=CASE WHEN ?='factura_historica' THEN ? ELSE numero_factura_fmt END
         WHERE id=?
       `).run(
         documentKind, documentIssue.sequence_number,
         documentIssue.formatted_number,
         receiptIssue?.sequence_number || null,
         receiptIssue?.formatted_number || '',
+        documentKind, documentIssue.sequence_number,
+        documentKind, documentIssue.formatted_number,
         saleId
       );
 
@@ -2897,7 +3080,11 @@ const salesRepo = {
             if (remaining <= (seq.alert_at || 50)) {
               console.log('[NCF] ALERTA: quedan ' + remaining + ' comprobantes tipo ' + ncfType);
             }
-            db.prepare("UPDATE sales SET ncf=? WHERE id=?").run(ncf, saleId);
+            db.prepare(`
+              UPDATE sales
+              SET ncf=?,fiscal_issued_at=datetime('now','localtime'),updated_at=datetime('now','localtime')
+              WHERE id=?
+            `).run(ncf, saleId);
           } else {
             // Sin secuencia registrada para este tipo → factura sin comprobante fiscal.
             console.warn('[NCF] Sin secuencia registrada para ' + ncfType +
@@ -3062,19 +3249,227 @@ const salesRepo = {
       sale.balance_after_payment = 0;
       sale.last_receipt_number = sale.receipt_document_number_fmt || '';
     }
-    // Para notas de crédito (devoluciones con B04): adjuntar el NCF y el número
-    // real de la factura original que esta nota modifica, para poder mostrarlos
-    // en la impresión (la referencia "Ref. venta original" usa el número real,
-    // no el id interno).
-    if (sale.type === 'devolucion' && sale.original_sale_id) {
+    // Adjuntar la referencia documental real a toda nota de crédito o factura
+    // complementaria. Nunca mostrar el id técnico como si fuera el correlativo.
+    if (sale.original_sale_id) {
       const orig = db.prepare(`
-        SELECT ncf,document_number_fmt,numero_factura,numero_factura_fmt
+        SELECT ncf,document_kind,document_number_fmt,numero_factura,numero_factura_fmt,
+               old_id_factura,import_source
         FROM sales WHERE id=?
       `).get(sale.original_sale_id);
-      sale.modifies_ncf = (orig && orig.ncf) ? orig.ncf : '';
+      if (sale.type === 'devolucion') sale.modifies_ncf = (orig && orig.ncf) ? orig.ncf : '';
       sale.original_document_number_fmt = orig ? orig.document_number_fmt : '';
+      sale.original_document_kind       = orig ? orig.document_kind       : '';
       sale.original_numero_factura     = orig ? orig.numero_factura     : null;
       sale.original_numero_factura_fmt = orig ? orig.numero_factura_fmt : null;
+      sale.original_old_id_factura     = orig ? orig.old_id_factura     : null;
+      sale.original_import_source      = orig ? orig.import_source      : '';
+    }
+    if (sale.type === 'factura' && sale.correction_kind !== 'product_addition') {
+      const operation = db.prepare(`
+        SELECT
+          COALESCE((
+            SELECT SUM(supp.total) FROM sales supp
+            WHERE supp.type='factura'
+              AND supp.original_sale_id=?
+              AND supp.correction_kind='product_addition'
+              AND supp.status!='cancelled'
+          ),0) additions,
+          COALESCE((
+            SELECT SUM(ret.total) FROM sales ret
+            WHERE ret.type='devolucion'
+              AND ret.status!='cancelled'
+              AND (
+                ret.original_sale_id=?
+                OR ret.original_sale_id IN (
+                  SELECT supp.id FROM sales supp
+                  WHERE supp.type='factura'
+                    AND supp.original_sale_id=?
+                    AND supp.correction_kind='product_addition'
+                    AND supp.status!='cancelled'
+                )
+              )
+          ),0) credits
+      `).get(sale.id, sale.id, sale.id);
+      sale.adjustment_addition_total = round2(operation?.additions || 0);
+      sale.operation_credit_total = round2(operation?.credits || 0);
+      sale.operation_total = round2(
+        Number(sale.total || 0) +
+        sale.adjustment_addition_total -
+        sale.operation_credit_total
+      );
+
+      // Copia consolidada para consulta/reimpresión de la factura ajustada.
+      // Los documentos compensatorios permanecen inmutables en la base, pero el
+      // cliente ve las cantidades actualmente vigentes en una sola operación.
+      if (sale.adjustment_addition_total > 0 || sale.operation_credit_total > 0) {
+        const sources = db.prepare(`
+          SELECT id FROM sales
+          WHERE id=?
+             OR (
+               original_sale_id=?
+               AND type='factura'
+               AND correction_kind='product_addition'
+               AND status!='cancelled'
+             )
+          ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END,id
+        `).all(sale.id, sale.id, sale.id);
+        const sourceIds = sources.map(row => Number(row.id));
+        const marks = sourceIds.map(() => '?').join(',');
+        const sourceItems = db.prepare(`
+          SELECT sale_id,product_id,product_code,product_name,unit_cost,unit_price,
+                 qty,subtotal,taxable,tax_pct,tax_amt,net_subtotal
+          FROM sale_items
+          WHERE sale_id IN (${marks})
+          ORDER BY sale_id,id
+        `).all(...sourceIds);
+        const returnedItems = db.prepare(`
+          SELECT ret.original_sale_id source_sale_id,
+                 rsi.product_id,rsi.product_code,rsi.product_name,SUM(rsi.qty) qty
+          FROM sales ret
+          JOIN sale_items rsi ON rsi.sale_id=ret.id
+          WHERE ret.type='devolucion'
+            AND ret.status!='cancelled'
+            AND ret.original_sale_id IN (${marks})
+            AND ret.correction_kind!='monetary_credit'
+          GROUP BY ret.original_sale_id,rsi.product_id,rsi.product_code,rsi.product_name
+        `).all(...sourceIds);
+        const itemKey = row => row.product_id != null
+          ? `id:${row.product_id}`
+          : `text:${String(row.product_code || '').trim().toLowerCase()}|${String(row.product_name || '').trim().toLowerCase()}`;
+        const returnedBySource = new Map();
+        returnedItems.forEach(row => {
+          returnedBySource.set(`${row.source_sale_id}|${itemKey(row)}`, Number(row.qty || 0));
+        });
+        const grouped = new Map();
+        sourceItems.forEach(row => {
+          const key = `${row.sale_id}|${itemKey(row)}`;
+          if (!grouped.has(key)) {
+            grouped.set(key, {
+              sale_id: row.sale_id,
+              product_id: row.product_id,
+              product_code: row.product_code || '',
+              product_name: row.product_name || 'Producto',
+              unit_cost: Number(row.unit_cost || 0),
+              taxable: row.taxable,
+              tax_pct: row.tax_pct,
+              qty: 0,
+              gross: 0,
+              tax: 0,
+              net: 0,
+            });
+          }
+          const current = grouped.get(key);
+          const qty = Number(row.qty || 0);
+          const gross = row.subtotal != null
+            ? Number(row.subtotal || 0)
+            : Number(row.unit_price || 0) * qty;
+          const tax = Number(row.tax_amt || 0);
+          current.qty += qty;
+          current.gross += gross;
+          current.tax += tax;
+          current.net += row.net_subtotal != null
+            ? Number(row.net_subtotal || 0)
+            : gross - tax;
+        });
+        sale.adjusted_items = [...grouped.values()].map(line => {
+          const returned = returnedBySource.get(`${line.sale_id}|${itemKey(line)}`) || 0;
+          const qty = Math.max(0, line.qty - returned);
+          const ratio = line.qty > 0 ? qty / line.qty : 0;
+          return {
+            product_id: line.product_id,
+            product_code: line.product_code,
+            product_name: line.product_name,
+            unit_cost: line.unit_cost,
+            unit_price: line.qty > 0 ? round2(line.gross / line.qty) : 0,
+            qty,
+            subtotal: round2(line.gross * ratio),
+            taxable: line.taxable,
+            tax_pct: line.tax_pct,
+            tax_amt: round2(line.tax * ratio),
+            net_subtotal: round2(line.net * ratio),
+          };
+        }).filter(line => line.qty > 0);
+
+        const adjustedAmounts = db.prepare(`
+          SELECT
+            COALESCE(SUM(CASE
+              WHEN doc.type='factura' THEN doc.subtotal
+              WHEN doc.type='devolucion' THEN -doc.subtotal
+              ELSE 0 END),0) subtotal,
+            COALESCE(SUM(CASE
+              WHEN doc.type='factura' THEN doc.tax_amt
+              WHEN doc.type='devolucion' THEN -doc.tax_amt
+              ELSE 0 END),0) tax_amt
+          FROM sales doc
+          WHERE doc.status!='cancelled'
+            AND (
+              doc.id=?
+              OR (
+                doc.type='factura'
+                AND doc.original_sale_id=?
+                AND doc.correction_kind='product_addition'
+              )
+              OR (
+                doc.type='devolucion'
+                AND (
+                  doc.original_sale_id=?
+                  OR doc.original_sale_id IN (
+                    SELECT supp.id FROM sales supp
+                    WHERE supp.type='factura'
+                      AND supp.original_sale_id=?
+                      AND supp.correction_kind='product_addition'
+                      AND supp.status!='cancelled'
+                  )
+                )
+              )
+            )
+        `).get(sale.id, sale.id, sale.id, sale.id);
+        sale.adjusted_subtotal = round2(adjustedAmounts?.subtotal || 0);
+        sale.adjusted_tax_amt = round2(adjustedAmounts?.tax_amt || 0);
+        sale.adjustment_documents = db.prepare(`
+          SELECT id,type,correction_kind,document_number_fmt,numero_factura_fmt,ncf,
+                 subtotal,tax_amt,total,created_at
+          FROM sales
+          WHERE status!='cancelled'
+            AND (
+              (type='factura' AND original_sale_id=? AND correction_kind='product_addition')
+              OR (
+                type='devolucion'
+                AND (
+                  original_sale_id=?
+                  OR original_sale_id IN (
+                    SELECT supp.id FROM sales supp
+                    WHERE supp.type='factura'
+                      AND supp.original_sale_id=?
+                      AND supp.correction_kind='product_addition'
+                      AND supp.status!='cancelled'
+                  )
+                )
+              )
+            )
+          ORDER BY created_at,id
+        `).all(sale.id, sale.id, sale.id);
+        sale.adjustment_documents
+          .filter(document => document.type === 'devolucion' &&
+            document.correction_kind === 'monetary_credit')
+          .forEach(document => {
+            sale.adjusted_items.push({
+              product_id: null,
+              product_code: 'AJUSTE',
+              product_name: 'AJUSTE MONETARIO / NOTA DE CRÉDITO',
+              unit_cost: 0,
+              unit_price: -round2(document.total || 0),
+              qty: 1,
+              subtotal: -round2(document.total || 0),
+              taxable: Number(document.tax_amt || 0) !== 0 ? 1 : 0,
+              tax_pct: sale.tax_pct,
+              tax_amt: -round2(document.tax_amt || 0),
+              net_subtotal: -round2(document.subtotal || 0),
+              _is_adjustment: true,
+            });
+          });
+      }
     }
     return sale;
   },
@@ -3082,27 +3477,25 @@ const salesRepo = {
   getAll({ range = 'today', customerId, method, view, limit = 200, offset = 0 } = {}) {
     let where = "WHERE s.status != 'cancelled'";
     const params = [];
-    // Vista estrictamente operativa del módulo Ventas: una factura que ya tiene
-    // cualquier devolución vigente pasa a Devoluciones y deja de formar parte de
-    // este resultado. El filtro vive en BD para que tabla, métricas y exportación
-    // trabajen sobre exactamente el mismo conjunto.
+    // Ventas conserva visible la factura original aunque tenga ajustes. Las notas
+    // de crédito viven además en Devoluciones, pero nunca "reemplazan" ni hacen
+    // desaparecer el documento que modifican.
     if (view === 'sales') {
-      where += ` AND s.status='completed' AND s.type!='devolucion'
-        AND NOT EXISTS (
-          SELECT 1 FROM sales ret
-          WHERE ret.type='devolucion'
-            AND ret.original_sale_id=s.id
-            AND ret.status!='cancelled'
+      where += ` AND s.status IN ('completed','returned') AND s.type!='devolucion'
+        AND NOT (
+          s.type='factura'
+          AND s.correction_kind='product_addition'
+          AND s.original_sale_id IS NOT NULL
         )`;
     }
-    // Filtrar SOLO por fecha real, nunca por origen (cajero): una venta
-    // importada con fecha del mes cuenta como venta del mes.
+    // Ventas y reportes comerciales usan la fecha operativa. created_at queda
+    // reservado para auditoría técnica y jamás se refecha.
     if (range === 'today') {
-      where += ` AND date(s.created_at)=date('now','localtime')`;
+      where += ` AND s.sale_date=date('now','localtime')`;
     } else if (range === 'week') {
-      where += ` AND date(s.created_at)>=date('now','-7 days','localtime')`;
+      where += ` AND s.sale_date>=date('now','-7 days','localtime')`;
     } else if (range === 'month') {
-      where += ` AND strftime('%Y-%m',s.created_at)=strftime('%Y-%m','now','localtime')`;
+      where += ` AND strftime('%Y-%m',s.sale_date)=strftime('%Y-%m','now','localtime')`;
     }
     if (customerId) { where += ' AND s.customer_id=?'; params.push(customerId); }
     if (method)     { where += ' AND s.payment_method=?'; params.push(method); }
@@ -3123,15 +3516,56 @@ const salesRepo = {
                  AND ret.original_sale_id=s.id
                  AND ret.status!='cancelled'
              ) AS has_active_return,
+             COALESCE((
+               SELECT SUM(ret.total) FROM sales ret
+               WHERE ret.type='devolucion'
+                 AND ret.original_sale_id=s.id
+                 AND ret.status!='cancelled'
+             ),0) AS adjustment_credit_total,
+             COALESCE((
+               SELECT SUM(supp.total) FROM sales supp
+               WHERE supp.type='factura'
+                 AND supp.original_sale_id=s.id
+                 AND supp.correction_kind='product_addition'
+                 AND supp.status!='cancelled'
+             ),0) AS adjustment_addition_total,
+             COALESCE((
+               SELECT SUM(ret.total) FROM sales ret
+               WHERE ret.type='devolucion'
+                 AND ret.status!='cancelled'
+                 AND (
+                   ret.original_sale_id=s.id
+                   OR ret.original_sale_id IN (
+                     SELECT supp.id FROM sales supp
+                     WHERE supp.type='factura'
+                       AND supp.original_sale_id=s.id
+                       AND supp.correction_kind='product_addition'
+                       AND supp.status!='cancelled'
+                   )
+                 )
+             ),0) AS operation_credit_total,
+             EXISTS(
+               SELECT 1 FROM sale_corrections sc
+               WHERE sc.sale_id=CASE
+                 WHEN s.correction_kind='product_addition' AND s.original_sale_id IS NOT NULL
+                   THEN s.original_sale_id
+                 ELSE s.id
+               END
+                 AND sc.action='correct_products'
+             ) AS has_product_correction,
+             orig.document_kind       AS original_document_kind,
+             orig.document_number_fmt AS original_document_number_fmt,
              orig.numero_factura     AS original_numero_factura,
-             orig.numero_factura_fmt AS original_numero_factura_fmt
+             orig.numero_factura_fmt AS original_numero_factura_fmt,
+             orig.old_id_factura     AS original_old_id_factura,
+             orig.import_source      AS original_import_source
       FROM sales s
       LEFT JOIN sale_items si ON s.id = si.sale_id
       LEFT JOIN sales orig    ON orig.id = s.original_sale_id
       LEFT JOIN salespeople sp ON sp.id = s.salesperson_id
       ${where}
       GROUP BY s.id
-      ORDER BY s.id DESC
+      ORDER BY s.sale_date DESC, s.id DESC
       LIMIT ? OFFSET ?
     `).all(...params);
   },
@@ -3144,21 +3578,20 @@ const salesRepo = {
     let where = "WHERE status != 'cancelled'";
     const params = [];
     if (view === 'sales') {
-      where += ` AND status='completed' AND type!='devolucion'
-        AND NOT EXISTS (
-          SELECT 1 FROM sales ret
-          WHERE ret.type='devolucion'
-            AND ret.original_sale_id=sales.id
-            AND ret.status!='cancelled'
+      where += ` AND status IN ('completed','returned') AND type!='devolucion'
+        AND NOT (
+          type='factura'
+          AND correction_kind='product_addition'
+          AND original_sale_id IS NOT NULL
         )`;
     }
-    // Filtrar SOLO por fecha real, nunca por origen (coherente con getAll).
+    // Coherente con getAll: fecha operativa, no fecha técnica de creación.
     if (range === 'today') {
-      where += ` AND date(created_at)=date('now','localtime')`;
+      where += ` AND sale_date=date('now','localtime')`;
     } else if (range === 'week') {
-      where += ` AND date(created_at)>=date('now','-7 days','localtime')`;
+      where += ` AND sale_date>=date('now','-7 days','localtime')`;
     } else if (range === 'month') {
-      where += ` AND strftime('%Y-%m',created_at)=strftime('%Y-%m','now','localtime')`;
+      where += ` AND strftime('%Y-%m',sale_date)=strftime('%Y-%m','now','localtime')`;
     }
     if (customerId) { where += ' AND customer_id=?'; params.push(customerId); }
     if (method)     { where += ' AND payment_method=?'; params.push(method); }
@@ -3166,36 +3599,8 @@ const salesRepo = {
     return row ? row.n : 0;
   },
 
-  updateDate(id, saleDate) {
-    const clean = String(saleDate || '').trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(clean)) throw new Error('Fecha inválida');
-    const parsed = new Date(`${clean}T12:00:00`);
-    if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== clean) {
-      throw new Error('Fecha inválida');
-    }
-    const sale = db.prepare('SELECT id,created_at,status FROM sales WHERE id=?').get(id);
-    if (!sale) throw new Error('Venta no encontrada');
-    const time = String(sale.created_at || '').match(/\d{2}:\d{2}:\d{2}/)?.[0]
-      || db.prepare("SELECT time('now','localtime') AS value").get().value;
-    const next = `${clean} ${time}`;
-    db.transaction(() => {
-      db.prepare('UPDATE sales SET created_at=? WHERE id=?').run(next, id);
-      // Mantener las historias operativas alineadas con la fecha documental.
-      db.prepare(`
-        UPDATE cash_movements SET created_at=?
-        WHERE reference_id=? AND type IN ('venta','devolucion')
-      `).run(next, id);
-      if (tableExists('financial_movements')) {
-        db.prepare(`
-          UPDATE financial_movements SET created_at=?
-          WHERE reference_type='sale' AND reference_id=?
-        `).run(next, id);
-      }
-      if (tableExists('ncf_log')) {
-        db.prepare('UPDATE ncf_log SET issued_at=? WHERE sale_id=?').run(next, id);
-      }
-    })();
-    return this.getById(id);
+  updateDate() {
+    throw new Error('Usa el flujo transaccional sales:corrections:changeDate');
   },
 
   /**
@@ -3448,19 +3853,19 @@ const reportsRepo = {
     const _buildFilters = () => {
       if (range === 'custom' && safeFrom && safeTo) {
         return {
-          withAlias:    { sql: `date(s.created_at) BETWEEN ? AND ?`,  params: [safeFrom, safeTo] },
-          withoutAlias: { sql: `date(created_at)   BETWEEN ? AND ?`,  params: [safeFrom, safeTo] },
+          withAlias:    { sql: `s.sale_date BETWEEN ? AND ?`,  params: [safeFrom, safeTo] },
+          withoutAlias: { sql: `sale_date   BETWEEN ? AND ?`,  params: [safeFrom, safeTo] },
           payments:     { sql: `date(created_at)   BETWEEN ? AND ?`,  params: [safeFrom, safeTo] },
         };
       }
       if (range === 'month') return {
-        withAlias:    { sql: `strftime('%Y-%m',s.created_at) = strftime('%Y-%m','now','localtime')`, params: [] },
-        withoutAlias: { sql: `strftime('%Y-%m',created_at)   = strftime('%Y-%m','now','localtime')`, params: [] },
+        withAlias:    { sql: `strftime('%Y-%m',s.sale_date) = strftime('%Y-%m','now','localtime')`, params: [] },
+        withoutAlias: { sql: `strftime('%Y-%m',sale_date)   = strftime('%Y-%m','now','localtime')`, params: [] },
         payments:     { sql: `strftime('%Y-%m',created_at)   = strftime('%Y-%m','now','localtime')`, params: [] },
       };
       if (range === 'week') return {
-        withAlias:    { sql: `date(s.created_at) >= date('now','-6 days','localtime')`, params: [] },
-        withoutAlias: { sql: `date(created_at)   >= date('now','-6 days','localtime')`, params: [] },
+        withAlias:    { sql: `s.sale_date >= date('now','-6 days','localtime')`, params: [] },
+        withoutAlias: { sql: `sale_date   >= date('now','-6 days','localtime')`, params: [] },
         payments:     { sql: `date(created_at)   >= date('now','-6 days','localtime')`, params: [] },
       };
       if (range === 'all') return {
@@ -3470,8 +3875,8 @@ const reportsRepo = {
       };
       // today (default)
       return {
-        withAlias:    { sql: `date(s.created_at) = date('now','localtime')`, params: [] },
-        withoutAlias: { sql: `date(created_at)   = date('now','localtime')`, params: [] },
+        withAlias:    { sql: `s.sale_date = date('now','localtime')`, params: [] },
+        withoutAlias: { sql: `sale_date   = date('now','localtime')`, params: [] },
         payments:     { sql: `date(created_at)   = date('now','localtime')`, params: [] },
       };
     };
@@ -3554,7 +3959,7 @@ const reportsRepo = {
 
     // Ventas por día (últimos 30 o en rango)
     const dailySales = db.prepare(`
-      SELECT date(s.created_at) as day,
+      SELECT s.sale_date as day,
              COUNT(*) as count,
              SUM(s.total) as total,
              SUM(si.unit_cost * si.qty) as cost
@@ -3724,6 +4129,9 @@ const reportsRepo = {
              c.rnc  AS customer_rnc,
              s.total AS sale_total,
              s.created_at AS sale_created_at,
+             s.sale_date AS sale_date,
+             s.original_sale_date AS sale_original_date,
+             s.fiscal_issued_at AS sale_fiscal_issued_at,
              s.document_number_fmt AS sale_document_number_fmt,
              s.numero_factura     AS sale_numero_factura,
              s.numero_factura_fmt AS sale_numero_factura_fmt,
@@ -3820,7 +4228,7 @@ const reportsRepo = {
 
   dailyTrend({ days = 30, includeHistorical = true } = {}) {
     return db.prepare(`
-      SELECT date(s.created_at) as day,
+      SELECT s.sale_date as day,
              COUNT(DISTINCT s.id) as count,
              SUM(s.total) as total,
              SUM(s.tax_amt) as tax,
@@ -3828,7 +4236,7 @@ const reportsRepo = {
       FROM sales s
       LEFT JOIN sale_items si ON s.id = si.sale_id
       WHERE s.status='completed' AND s.type='factura'
-        AND date(s.created_at) >= date('now','-'||?||' days','localtime')
+        AND s.sale_date >= date('now','-'||?||' days','localtime')
         AND (? = 1 OR s.cajero != 'Importación histórica')
       GROUP BY day
       ORDER BY day ASC
@@ -3837,13 +4245,13 @@ const reportsRepo = {
 
   monthlyTrend({ months = 12, includeHistorical = true } = {}) {
     return db.prepare(`
-      SELECT strftime('%Y-%m', s.created_at) as month,
+      SELECT strftime('%Y-%m', s.sale_date) as month,
              COUNT(DISTINCT s.id) as count,
              SUM(s.total) as total,
              SUM(s.tax_amt) as tax
       FROM sales s
       WHERE s.status='completed' AND s.type='factura'
-        AND date(s.created_at) >= date('now','-'||?||' months','localtime')
+        AND s.sale_date >= date('now','-'||?||' months','localtime')
         AND (? = 1 OR s.cajero != 'Importación histórica')
       GROUP BY month
       ORDER BY month ASC
@@ -3864,8 +4272,17 @@ const returnsRepo = {
    * - Registra movimiento de caja si aplica (devolución en efectivo)
    * - Todo en una sola transacción — si algo falla, revierte todo
    */
-  create({ originalSaleId, items, session, user, reason = '' }) {
+  create({
+    originalSaleId,
+    items = [],
+    session,
+    user,
+    reason = '',
+    monetaryAmount = null,
+    monetaryLabel = 'Descuento o ajuste monetario posterior',
+  }) {
     const createReturnTx = db.transaction(() => {
+      const isMonetaryCredit = monetaryAmount !== null && monetaryAmount !== undefined;
       // 1. Verificar que la venta original existe y no está ya cancelada
       const original = db.prepare('SELECT * FROM sales WHERE id=?').get(originalSaleId);
       if (!original) throw new Error('Venta original no encontrada');
@@ -3896,27 +4313,35 @@ const returnsRepo = {
       prevReturns.forEach(r => { yaDevuelto[r.product_id] = r.devuelto || 0; });
 
       const preparedReturnItems = [];
-      for (const item of items) {
-        const orig = originalItems.find(oi => oi.product_id === item.product_id);
-        if (!orig) throw new Error(`Producto ID ${item.product_id} no pertenece a esta venta`);
-        const yaDev = yaDevuelto[item.product_id] || 0;
-        const disponible = orig.qty - yaDev;
-        if (item.qty > disponible) {
-          throw new Error(
-            `Cantidad a devolver (${item.qty}) supera lo disponible para "${orig.product_name}". ` +
-            `Vendido: ${orig.qty}, ya devuelto: ${yaDev}, disponible: ${disponible}.`
-          );
+      if (!isMonetaryCredit) {
+        if (!Array.isArray(items) || items.length === 0) {
+          throw new Error('Debes seleccionar al menos un producto para devolver');
         }
-        preparedReturnItems.push({
-          product_id:   orig.product_id,
-          product_code: orig.product_code || '',
-          product_name: orig.product_name,
-          unit_cost:    orig.unit_cost || 0,
-          unit_price:   orig.unit_price || 0,
-          qty:          item.qty,
-          taxable:      orig.taxable,
-          tax_pct:      orig.tax_pct,
-        });
+        for (const item of items) {
+          if (!Number.isInteger(Number(item.qty)) || Number(item.qty) <= 0) {
+            throw new Error('La cantidad a devolver debe ser un número entero mayor que cero');
+          }
+          const orig = originalItems.find(oi => oi.product_id === item.product_id);
+          if (!orig) throw new Error(`Producto ID ${item.product_id} no pertenece a esta venta`);
+          const yaDev = yaDevuelto[item.product_id] || 0;
+          const disponible = orig.qty - yaDev;
+          if (Number(item.qty) > disponible) {
+            throw new Error(
+              `Cantidad a devolver (${item.qty}) supera lo disponible para "${orig.product_name}". ` +
+              `Vendido: ${orig.qty}, ya devuelto: ${yaDev}, disponible: ${disponible}.`
+            );
+          }
+          preparedReturnItems.push({
+            product_id:   orig.product_id,
+            product_code: orig.product_code || '',
+            product_name: orig.product_name,
+            unit_cost:    orig.unit_cost || 0,
+            unit_price:   orig.unit_price || 0,
+            qty:          Number(item.qty),
+            taxable:      orig.taxable,
+            tax_pct:      orig.tax_pct,
+          });
+        }
       }
 
       // 3. Calcular totales de la devolución (usando precios históricos del snapshot)
@@ -3925,7 +4350,40 @@ const returnsRepo = {
       );
       const taxPct = original.tax_pct || 0;
       let subtotal, taxAmt, total;
-      if (hasIncludedTaxSnapshot) {
+      if (isMonetaryCredit) {
+        const requestedAmount = round2(Number(monetaryAmount));
+        if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) {
+          throw new Error('El importe de la nota de crédito debe ser mayor que cero');
+        }
+        const activeCredits = db.prepare(`
+          SELECT COALESCE(SUM(total),0) total
+          FROM sales
+          WHERE type='devolucion' AND original_sale_id=? AND status!='cancelled'
+        `).get(originalSaleId).total || 0;
+        const availableCredit = round2(Math.max(0, Number(original.total || 0) - Number(activeCredits || 0)));
+        if (requestedAmount > availableCredit + 0.005) {
+          throw new Error(
+            `El importe supera el saldo disponible para acreditar. Disponible: RD$${availableCredit.toFixed(2)}`
+          );
+        }
+        total = requestedAmount;
+        const originalTotal = Number(original.total || 0);
+        const originalTax = Math.max(0, Number(original.tax_amt || 0));
+        taxAmt = originalTotal > 0 ? round2(total * (originalTax / originalTotal)) : 0;
+        subtotal = round2(total - taxAmt);
+        preparedReturnItems.push({
+          product_id: null,
+          product_code: 'AJUSTE',
+          product_name: String(monetaryLabel || 'Descuento o ajuste monetario posterior').trim().slice(0, 180),
+          unit_cost: 0,
+          unit_price: total,
+          qty: 1,
+          taxable: taxAmt > 0 ? 1 : 0,
+          tax_pct: taxPct,
+          net_subtotal: subtotal,
+          tax_amt: taxAmt,
+        });
+      } else if (hasIncludedTaxSnapshot) {
         // Las líneas modernas guardan el neto/ITBIS DESPUÉS del descuento.
         // Reembolsar por esos snapshots evita devolver el precio completo de una
         // factura que originalmente tuvo descuento.
@@ -3964,8 +4422,9 @@ const returnsRepo = {
           customer_contact_role,customer_contact_phone,customer_contact_email,
           type, status, subtotal, discount_pct, discount_amt,
           tax_pct, tax_amt, total, payment_method, price_mode,
-          cajero, user_id, notes, original_sale_id
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          cajero, user_id, notes, original_sale_id,
+          original_sale_date,sale_date,updated_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
       `).run(
         session?.id || original.cash_session_id || null,
         original.customer_id,
@@ -3990,15 +4449,23 @@ const returnsRepo = {
         user.name || '',
         user.id,
         reason || `Devolución de venta #${originalSaleId}`,
-        originalSaleId
+        originalSaleId,
+        db.prepare("SELECT date('now','localtime') value").get().value,
+        db.prepare("SELECT date('now','localtime') value").get().value
       );
       const returnId = retR.lastInsertRowid;
       const returnDocument = _issueDocumentNumber('nota_credito', 'sale', returnId);
       db.prepare(`
         UPDATE sales
-        SET document_kind='nota_credito',document_number=?,document_number_fmt=?
+        SET document_kind='nota_credito',document_number=?,document_number_fmt=?,
+            correction_kind=?
         WHERE id=?
-      `).run(returnDocument.sequence_number, returnDocument.formatted_number, returnId);
+      `).run(
+        returnDocument.sequence_number,
+        returnDocument.formatted_number,
+        isMonetaryCredit ? 'monetary_credit' : '',
+        returnId
+      );
       const returnCurrency = String(original.payment_currency || 'DOP').toUpperCase();
       const returnRate = returnCurrency === 'USD' ? Number(original.exchange_rate || 0) : 1;
       const returnAccountAmount = returnCurrency === 'USD' && returnRate > 0
@@ -4028,11 +4495,14 @@ const returnsRepo = {
                item.unit_cost || 0, item.unit_price, item.qty, round2(item.unit_price * item.qty),
                item.taxable, item.tax_pct, item.tax_amt, item.net_subtotal);
 
-        // Reponer stock con registro de movimiento
-        productsRepo.adjustStock(
-          item.product_id, +item.qty, 'devolucion',
-          `Devolución de venta #${originalSaleId}`, returnId, user.id
-        );
+        // Una nota monetaria documenta un descuento/error de importe: nunca crea
+        // una entrada ficticia de mercancía. Solo las devoluciones físicas reponen.
+        if (!isMonetaryCredit) {
+          productsRepo.adjustStock(
+            item.product_id, +item.qty, 'devolucion',
+            `Devolución de venta #${originalSaleId}`, returnId, user.id
+          );
+        }
       }
 
       // 6. Si la venta original era a crédito, reducir balance del cliente
@@ -4048,12 +4518,41 @@ const returnsRepo = {
         }
       }
 
-      // 7. Registrar movimiento de caja (la devolución sale de caja si era efectivo)
-      if (session?.id && original.payment_method === 'efectivo') {
+      // 7. Distribuir el reembolso según el pago real. En pagos mixtos se conserva
+      // la proporción efectivo/no efectivo de la venta original: solo la parte
+      // efectiva sale físicamente de caja y el resto vuelve a la cuenta financiera.
+      let cashRefundBase = original.payment_method === 'efectivo' ? total : 0;
+      let financialRefundBase = original.financial_account_id && original.payment_method !== 'credito'
+        ? total : 0;
+      if (original.payment_method === 'mixto') {
+        const mix = db.prepare(`
+          SELECT LOWER(COALESCE(method,'efectivo')) method,COALESCE(SUM(amount),0) amount
+          FROM cash_movements
+          WHERE type='venta' AND reference_id=?
+          GROUP BY LOWER(COALESCE(method,'efectivo'))
+        `).all(originalSaleId);
+        const cashPaid = mix
+          .filter(row => row.method === 'efectivo')
+          .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+        const paidTotal = mix.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+        const cashRatio = paidTotal > 0 ? Math.max(0, Math.min(1, cashPaid / paidTotal)) : 0;
+        cashRefundBase = round2(total * cashRatio);
+        financialRefundBase = original.financial_account_id
+          ? round2(total - cashRefundBase) : 0;
+      }
+      const actualReturnAccountAmount = returnCurrency === 'USD' && returnRate > 0
+        ? round2(financialRefundBase / returnRate) : round2(financialRefundBase);
+      if (original.financial_account_id) {
+        db.prepare('UPDATE sales SET account_amount=? WHERE id=?')
+          .run(actualReturnAccountAmount, returnId);
+      }
+
+      // Registrar movimiento de caja solo por el efectivo que realmente se entrega.
+      if (session?.id && cashRefundBase > 0.005) {
         cashRepo.addMovement({
           sessionId: session.id,
           type: 'devolucion',
-          amount: -total,
+          amount: -cashRefundBase,
           method: 'efectivo',
           referenceId: returnId,
           description: `Devolución venta #${originalSaleId}`,
@@ -4063,17 +4562,17 @@ const returnsRepo = {
 
       // Si el cobro original entró a una cuenta financiera, el reembolso sale de
       // la misma cuenta y en su misma moneda. Para USD se conserva la tasa histórica.
-      if (original.financial_account_id && original.payment_method !== 'credito' && returnAccountAmount > 0.005) {
+      if (original.financial_account_id && original.payment_method !== 'credito' && actualReturnAccountAmount > 0.005) {
         financialAccountsRepo.addMovement({
           accountId: original.financial_account_id,
           type: 'retiro',
-          amount: -returnAccountAmount,
+          amount: -actualReturnAccountAmount,
           description: `Devolución #${returnId} · Venta #${originalSaleId}`,
           referenceType: 'return',
           referenceId: returnId,
           method: original.payment_method,
           notes: returnCurrency === 'USD'
-            ? `Reembolso base RD$${total.toFixed(2)} · Tasa ${returnRate.toFixed(2)}` : '',
+            ? `Reembolso base RD$${financialRefundBase.toFixed(2)} · Tasa ${returnRate.toFixed(2)}` : '',
           userId: user.id,
         });
       }
@@ -4082,14 +4581,16 @@ const returnsRepo = {
       // completamente devueltos, sumando ESTA devolución con las anteriores (yaDevuelto).
       // Antes solo miraba los items de la tanda actual, así que devoluciones parciales
       // en varias tandas nunca marcaban la venta como devuelta.
-      const currentReturn = {};
-      for (const i of preparedReturnItems) currentReturn[i.product_id] = (currentReturn[i.product_id] || 0) + i.qty;
-      const allReturned = originalItems.every(oi => {
-        const totalDevuelto = (yaDevuelto[oi.product_id] || 0) + (currentReturn[oi.product_id] || 0);
-        return totalDevuelto >= oi.qty;
-      });
-      if (allReturned) {
-        db.prepare(`UPDATE sales SET status='returned' WHERE id=?`).run(originalSaleId);
+      if (!isMonetaryCredit) {
+        const currentReturn = {};
+        for (const i of preparedReturnItems) currentReturn[i.product_id] = (currentReturn[i.product_id] || 0) + i.qty;
+        const allReturned = originalItems.every(oi => {
+          const totalDevuelto = (yaDevuelto[oi.product_id] || 0) + (currentReturn[oi.product_id] || 0);
+          return totalDevuelto >= oi.qty;
+        });
+        if (allReturned) {
+          db.prepare(`UPDATE sales SET status='returned' WHERE id=?`).run(originalSaleId);
+        }
       }
 
       // 8b. Nota de crédito B04 — SOLO si la factura original tenía NCF y el modo
@@ -4115,7 +4616,11 @@ const returnsRepo = {
               ' sin NCF. Registra un rango B04 en el Panel NCF.');
           }
           if (ncfNota) {
-            db.prepare("UPDATE sales SET ncf=? WHERE id=?").run(ncfNota, returnId);
+            db.prepare(`
+              UPDATE sales
+              SET ncf=?,fiscal_issued_at=datetime('now','localtime'),updated_at=datetime('now','localtime')
+              WHERE id=?
+            `).run(ncfNota, returnId);
             db.prepare("INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc,modifies_ncf) VALUES(?,?,?,?,?)")
               .run(ncfNota, 'B04', returnId, original.customer_rnc || '', String(original.ncf).trim());
           }
@@ -4123,11 +4628,21 @@ const returnsRepo = {
       }
 
       // 9. Auditoría
-      audit(user.id, user.name, 'devolucion_procesada', 'sales', returnId,
-        `Venta original #${originalSaleId} | Total devuelto: ${total} | Items: ${preparedReturnItems.length}${ncfNota ? ' | NC B04: ' + ncfNota : ''}`);
+      audit(
+        user.id,
+        user.name,
+        isMonetaryCredit ? 'nota_credito_monetaria_emitida' : 'devolucion_procesada',
+        'sales',
+        returnId,
+        `Venta original #${originalSaleId} | ${isMonetaryCredit ? 'Crédito monetario' : 'Total devuelto'}: ${total} | ` +
+          `Items: ${preparedReturnItems.length} | Inventario: ${isMonetaryCredit ? 'sin movimiento' : 'repuesto'}` +
+          `${ncfNota ? ' | NC B04: ' + ncfNota : ''}`
+      );
 
       return {
         returnId, total, subtotal, taxAmt, overpayment,
+        creditKind: isMonetaryCredit ? 'monetary' : 'product_return',
+        inventoryMoved: !isMonetaryCredit,
         documentKind: 'nota_credito',
         documentNumber: returnDocument.sequence_number,
         documentNumberFmt: returnDocument.formatted_number,
@@ -4157,24 +4672,29 @@ const returnsRepo = {
       if (!original) throw new Error('La venta original de la devolución no existe');
 
       const items = db.prepare('SELECT * FROM sale_items WHERE sale_id=?').all(returnId);
-      for (const item of items) {
-        const product = db.prepare('SELECT stock,name FROM products WHERE id=?').get(item.product_id);
-        if (!product) throw new Error(`Producto ID ${item.product_id} no existe`);
-        if ((product.stock || 0) < (item.qty || 0)) {
-          throw new Error(
-            `No se puede anular: el inventario de "${product.name}" ya fue utilizado. ` +
-            `Disponible: ${product.stock || 0}; requerido: ${item.qty || 0}.`
-          );
+      const isMonetaryCredit = ret.correction_kind === 'monetary_credit';
+      if (!isMonetaryCredit) {
+        for (const item of items) {
+          const product = db.prepare('SELECT stock,name FROM products WHERE id=?').get(item.product_id);
+          if (!product) throw new Error(`Producto ID ${item.product_id} no existe`);
+          if ((product.stock || 0) < (item.qty || 0)) {
+            throw new Error(
+              `No se puede anular: el inventario de "${product.name}" ya fue utilizado. ` +
+              `Disponible: ${product.stock || 0}; requerido: ${item.qty || 0}.`
+            );
+          }
         }
       }
 
       // La devolución repuso existencias; al anularla se retiran nuevamente.
-      for (const item of items) {
-        productsRepo.adjustStock(
-          item.product_id, -item.qty, 'salida',
-          `Anulación devolución #${returnId} de venta #${ret.original_sale_id}`,
-          returnId, userId
-        );
+      if (!isMonetaryCredit) {
+        for (const item of items) {
+          productsRepo.adjustStock(
+            item.product_id, -item.qty, 'salida',
+            `Anulación devolución #${returnId} de venta #${ret.original_sale_id}`,
+            returnId, userId
+          );
+        }
       }
 
       // Restaurar la cuenta por cobrar que había reducido la devolución.
@@ -5863,7 +6383,7 @@ const accountingRepo = {
       if (lines.length < 2) return null;
 
       return this.createEntry({
-        date:          (sale.created_at || new Date().toISOString()).split('T')[0],
+        date:          sale.sale_date || (sale.created_at || new Date().toISOString()).split('T')[0],
         concept:       `Venta #${saleId} — ${sale.customer_name || 'Consumidor Final'}`,
         reference:     `V-${saleId}`,
         source_module: 'venta',
@@ -6043,7 +6563,22 @@ const accountingRepo = {
       const lines = [];
       if (revAccId && net > 0) lines.push({ account_id: revAccId, debit: net,   credit: 0, description: `Devolución venta #${ref}` });
       if (taxAccId && tax > 0) lines.push({ account_id: taxAccId, debit: tax,   credit: 0, description: `ITBIS devolución #${ref}` });
-      if (creditAccId)         lines.push({ account_id: creditAccId, debit: 0, credit: total, description: `Devolución venta #${ref}` });
+      if (method === 'mixto') {
+        const cashPart = Math.abs(db.prepare(`
+          SELECT COALESCE(SUM(amount),0) amount
+          FROM cash_movements
+          WHERE type='devolucion' AND reference_id=? AND LOWER(COALESCE(method,'efectivo'))='efectivo'
+        `).get(returnSaleId).amount || 0);
+        const bankPart = Math.max(0, round2(total - cashPart));
+        if (cashAccId && cashPart > 0) {
+          lines.push({ account_id: cashAccId, debit: 0, credit: cashPart, description: `Devolución efectivo venta #${ref}` });
+        }
+        if (bankAccId && bankPart > 0) {
+          lines.push({ account_id: bankAccId, debit: 0, credit: bankPart, description: `Devolución tarjeta/transferencia venta #${ref}` });
+        }
+      } else if (creditAccId) {
+        lines.push({ account_id: creditAccId, debit: 0, credit: total, description: `Devolución venta #${ref}` });
+      }
 
       const items = db.prepare('SELECT * FROM sale_items WHERE sale_id=?').all(returnSaleId);
       const cost = items.reduce((s,i)=> s + (Math.abs(i.unit_cost||0) * Math.abs(i.qty||1)), 0);
@@ -6054,7 +6589,7 @@ const accountingRepo = {
       if (lines.length < 2) return null;
 
       return this.createEntry({
-        date:          (ret.created_at || new Date().toISOString()).split('T')[0],
+        date:          ret.sale_date || (ret.created_at || new Date().toISOString()).split('T')[0],
         concept:       `Devolución venta #${ref} — ${ret.customer_name||'Consumidor Final'}`,
         reference:     `DV-${returnSaleId}`,
         source_module: 'devolucion',
@@ -7087,6 +7622,11 @@ const conduceRepo = {
 // creciendo este archivo monolítico; usa siempre la DB activa (multi-negocio).
 const salespeopleRepo = createSalespeopleRepo({ getDb: () => db, expensesRepo, audit });
 const checkoutOrdersRepo = createCheckoutOrdersRepo({ getDb: () => db, salesRepo, audit });
+const saleCorrectionsRepo = createSaleCorrectionsRepo({
+  getDb: () => db,
+  salesRepo,
+  returnsRepo,
+});
 
 // ══════════════════════════════════════════════
 // EXPORTS
@@ -7124,4 +7664,5 @@ module.exports = {
   documentNumberRepo,
   salespeopleRepo,
   checkoutOrdersRepo,
+  saleCorrectionsRepo,
 };

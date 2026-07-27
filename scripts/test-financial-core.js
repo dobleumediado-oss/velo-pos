@@ -150,8 +150,9 @@ ok(near(bReturn.total, 106.2),
   `devolución respeta el descuento original y reembolsa 106.2 (obtuvo ${bReturn.total})`);
 ok(near(bReturn.taxAmt, 16.2),
   `devolución descontada conserva ITBIS 16.2 (obtuvo ${bReturn.taxAmt})`);
-ok(!DB.salesRepo.getAll({ range: 'all', view: 'sales' }).some(s => s.id === b.saleId),
-  'una factura con devolución vigente no aparece en la vista Ventas');
+const adjustedDiscountSale = DB.salesRepo.getAll({ range: 'all', view: 'sales' }).find(s => s.id === b.saleId);
+ok(adjustedDiscountSale && near(adjustedDiscountSale.adjustment_credit_total, 106.2),
+  'la factura original permanece en Ventas marcada con su crédito aplicado');
 ok(!DB.salesRepo.getAll({ range: 'all', view: 'sales' }).some(s => s.id === bReturn.returnId),
   'la nota de crédito no se mezcla en la vista Ventas');
 
@@ -179,9 +180,10 @@ ok(near(ret.total, 150), `devolución respeta precio histórico final 150 (obtuv
 ok(near(ret.taxAmt, 22.88), `devolución respeta ITBIS histórico 22.88 (obtuvo ${ret.taxAmt})`);
 ok(DB.productsRepo.getById(prodId).stock === stockBeforeReturn + 1, `devolución repone stock ${stockBeforeReturn}→${stockBeforeReturn + 1}`);
 const saleWithReturn = DB.salesRepo.getAll({ range: 'all' }).find(s => s.id === c2.saleId);
-ok(Number(saleWithReturn?.has_active_return) === 1, 'venta original queda identificada para salir de la pantalla Ventas');
-ok(!DB.salesRepo.getAll({ range: 'all', view: 'sales' }).some(s => s.id === c2.saleId),
-  'la vista Ventas excluye la factura desde que se registra la devolución');
+ok(Number(saleWithReturn?.has_active_return) === 1, 'venta original queda identificada como ajustada');
+const visibleAdjustedSale = DB.salesRepo.getAll({ range: 'all', view: 'sales' }).find(s => s.id === c2.saleId);
+ok(visibleAdjustedSale && near(visibleAdjustedSale.adjustment_credit_total, 150),
+  'la vista Ventas conserva la factura y expone su total neto ajustado');
 ok(DB.salesRepo.countAll({ range: 'all', view: 'sales' }) ===
    DB.salesRepo.getAll({ range: 'all', view: 'sales' }).length,
   'el contador de Ventas usa el mismo filtro que el listado');
@@ -192,7 +194,7 @@ ok(DB.productsRepo.getById(prodId).stock === stockBeforeCancelReturn - 1,
 ok(DB.salesRepo.getById(c2.saleId).status === 'completed',
   'anular la única devolución reactiva la factura original');
 ok(DB.salesRepo.getAll({ range: 'all', view: 'sales' }).some(s => s.id === c2.saleId),
-  'al anular la devolución, la factura vuelve a aparecer en Ventas');
+  'al anular la devolución, la factura continúa en Ventas sin el ajuste');
 ok(!DB.salesRepo.getAll({ range: 'all' }).some(s => s.id === ret.returnId),
   'devolución anulada desaparece del listado operativo');
 const saleToCancel = DB.salesRepo.create({
@@ -603,6 +605,9 @@ ok(legacyHtml.includes('RECIBO DE PAGO'), 'A4 pagada se titula RECIBO DE PAGO');
 ok(legacyHtml.includes('Código') && legacyHtml.includes('ITBIS') && legacyHtml.includes('Importe'), 'A4 muestra Código, ITBIS e Importe');
 ok(legacyHtml.includes('2,463.95'), 'A4 extrae ITBIS incluido desde líneas legacy sin tax_amt');
 ok(legacyHtml.includes('16,152.54'), 'A4 conserva el total histórico ya cobrado sin inflarlo');
+ok(legacyHtml.includes('.titlebox .t { font-size:9px') &&
+  legacyHtml.includes('Factura #') && legacyHtml.includes('00002335'),
+  'A4 usa encabezado documental sutil y conserva la numeración histórica');
 const usdHtml = renderCartaRecibo({
   id: 3001, type: 'factura', status: 'completed', date: '2026-07-20',
   customer_name: 'Cliente USD', payment_method: 'transferencia',
@@ -647,6 +652,23 @@ const optsSample = { logo: false, rnc: true, ncf: true, mensaje: true, cedula: t
   ok(html.includes('US$10.00') && html.includes('Celular') && html.includes('Envío'),
     `${id} imprime USD, tipo de teléfono y cargo`);
 });
+const adjustedSample = {
+  ...documentSample,
+  adjusted_copy: true,
+  adjusted_reference: '#2499',
+  adjusted_reference_ncf: 'B0200000407',
+  related_documents: ['NCR-000001', 'FAC-000005'],
+};
+const adjustedFormats = [
+  'termica_58_basica', 'termica_80_clasica', 'termica_80_moderna', 'termica_80_minimal',
+  'carta_recibo', 'carta_formal', 'carta_ncf', 'media_carta',
+].map(id => getPlantilla(id).render(adjustedSample, cfgSample, optsSample));
+ok(adjustedFormats.every(html => html.includes('FACTURA AJUSTADA')),
+  'todas las plantillas identifican la reimpresión como FACTURA AJUSTADA');
+ok(adjustedFormats.every(html => html.includes('No sustituye los comprobantes fiscales')),
+  'todas las plantillas aclaran que la copia consolidada no sustituye documentos fiscales');
+ok(adjustedFormats.every(html => html.includes('#2499') && html.includes('B0200000407')),
+  'todas las plantillas conservan referencia operativa y NCF original');
 
 console.log('\n== I. Normalización de búsqueda (lib/text-normalize) ==');
 const { searchNorm, digitsOf } = require('../lib/text-normalize');

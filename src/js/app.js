@@ -1702,7 +1702,7 @@ async function _runGSearch(q, resultsEl) {
                                border-top:1px solid var(--line);margin-top:4px">
       Facturas (${facturas.length})</div>`);
     facturas.forEach(s => {
-      const fecha = (s.created_at||'').split('T')[0].split(' ')[0];
+      const fecha = (s.sale_date||'').split('T')[0].split(' ')[0];
       // Modelos: si la venta trae items los usa; si no, intenta del summary.
       const models = [...new Set((s.items||[])
         .map(i => DB.products?.find(p=>p.id===i.product_id)?.model)

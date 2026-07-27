@@ -73,7 +73,8 @@ ok(saved.charges.length === 1 && near(saved.additional_charges_total, 128),
 ok(near(saved.total, 600), 'suma el cargo al total de la factura');
 ok(saved.display_currency === 'USD' && near(saved.display_exchange_rate, 60) && near(saved.display_amount, 10),
   'guarda equivalencia USD y tasa histórica editable');
-ok(String(saved.created_at).startsWith('2026-07-20 '), 'emite la factura en la fecha seleccionada');
+ok(saved.sale_date === '2026-07-20' && saved.original_sale_date === '2026-07-20',
+  'emite la factura en la fecha operativa seleccionada sin falsear created_at');
 throws(() => DB.salesRepo.create({
   customer: { id: customerId },
   items: [{ product_id: productId, unit_price: 118, qty: 1 }],
@@ -84,13 +85,25 @@ throws(() => DB.salesRepo.create({
 console.log('\n== C. Caja, cambio histórico y numeración ==');
 const sessionSales = DB.cashRepo.getSessionSales(cashId);
 ok(sessionSales[0].item_qty_total === 4, 'la sesión de caja cuenta unidades, no solo líneas');
-DB.salesRepo.updateDate(sale.saleId, '2026-07-19');
-ok(String(DB.salesRepo.getById(sale.saleId).created_at).startsWith('2026-07-19 '),
-  'mueve la venta y su historia a la nueva fecha');
-const movement = db.prepare(
+const movementBefore = db.prepare(
   "SELECT created_at FROM cash_movements WHERE reference_id=? AND type='venta' ORDER BY id DESC LIMIT 1"
 ).get(sale.saleId);
-ok(String(movement.created_at).startsWith('2026-07-19 '), 'mantiene alineado el movimiento de caja');
+DB.saleCorrectionsRepo.changeDate({
+  saleId: sale.saleId,
+  newSaleDate: '2026-07-19',
+  reason: 'Corrección de prueba controlada',
+  userId: user.id,
+  expectedRevision: saved.revision,
+  idempotencyKey: `workflow-date-${sale.saleId}-${Date.now()}`,
+});
+const corrected = DB.salesRepo.getById(sale.saleId);
+ok(corrected.sale_date === '2026-07-19' && corrected.original_sale_date === '2026-07-20',
+  'mueve solo la fecha operativa y conserva la fecha original');
+const movementAfter = db.prepare(
+  "SELECT created_at FROM cash_movements WHERE reference_id=? AND type='venta' ORDER BY id DESC LIMIT 1"
+).get(sale.saleId);
+ok(movementAfter.created_at === movementBefore.created_at,
+  'conserva la fecha real del movimiento de caja');
 
 DB.documentNumberRepo.updateSequence('factura_contado', {
   prefix: 'EQ', current: 500, padLength: 7,

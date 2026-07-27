@@ -2667,7 +2667,7 @@ async function finalizarVenta() {
       receipt_document_number: savedSale?.receipt_document_number || result.receiptDocumentNumber || null,
       receipt_document_number_fmt: savedSale?.receipt_document_number_fmt || result.receiptDocumentNumberFmt || '',
       receipt_number: savedSale?.last_receipt_number || result.receiptDocumentNumberFmt || '',
-      date:         String(savedSale?.created_at || saleDate).slice(0, 10),
+      date:         String(savedSale?.original_sale_date || savedSale?.sale_date || saleDate).slice(0, 10),
       time:         new Date().toLocaleTimeString('es-DO',
                       { hour: '2-digit', minute: '2-digit' }),
       type:         inv.itype,

@@ -51,6 +51,55 @@ function ventasEsc(v) {
     .replace(/"/g, '&quot;');
 }
 
+// En el historial operativo conservamos la referencia corta que el personal
+// ya reconoce (#2499, por ejemplo). Para documentos migrados se antepone el
+// número histórico real de FabPro; el correlativo fiscal/documental de Velo se
+// muestra como identidad secundaria, nunca se pierde.
+function ventasHistoryReference(sale) {
+  if (!sale) return '';
+  const imported = !!String(sale.import_source || '').trim();
+  if (imported) {
+    const historicalFmt = String(sale.numero_factura_fmt || '').trim();
+    if (historicalFmt) return `#${historicalFmt}`;
+    if (sale.numero_factura != null && sale.numero_factura !== '') {
+      return `#${String(sale.numero_factura).padStart(8, '0')}`;
+    }
+    if (sale.old_id_factura != null && sale.old_id_factura !== '') {
+      return `#${sale.old_id_factura}`;
+    }
+  }
+  if (
+    sale.document_kind === 'factura_historica' ||
+    (
+      sale.numero_factura_fmt &&
+      /^\d+$/.test(String(sale.document_number_fmt || sale.numero_factura_fmt).trim())
+    )
+  ) {
+    return `#${String(sale.document_number_fmt || sale.numero_factura_fmt).trim()}`;
+  }
+  const id = sale.id != null ? sale.id : (sale.sale_id != null ? sale.sale_id : sale.saleId);
+  return `#${String(id != null ? id : '')}`;
+}
+
+function ventasOriginalHistoryReference(sale) {
+  if (!sale) return '';
+  return ventasHistoryReference({
+    id: sale.original_sale_id,
+    document_kind: sale.original_document_kind,
+    document_number_fmt: sale.original_document_number_fmt,
+    import_source: sale.original_import_source,
+    numero_factura: sale.original_numero_factura,
+    numero_factura_fmt: sale.original_numero_factura_fmt,
+    old_id_factura: sale.original_old_id_factura,
+  });
+}
+
+function ventasImportSourceLabel(source) {
+  const normalized = String(source || '').trim().toLowerCase();
+  if (normalized === 'equiparts_bak') return 'Importada de FabPro';
+  return normalized ? 'Documento importado' : '';
+}
+
 function ventasLoadResaleCart() {
   try {
     const raw = sessionStorage.getItem('vp_resale_cart');
@@ -298,6 +347,14 @@ function ventasItemCode(item) {
   return prod?.code || '';
 }
 
+function ventasDisplayProductName(value) {
+  const clean = String(value || 'Producto').trim();
+  return clean
+    .replace(/^["'“”]+/, '')
+    .replace(/["'“”]+$/, '')
+    .trim() || 'Producto';
+}
+
 function ventasLineFiscal(item, sale) {
   const qty = Number(item?.qty) || 0;
   const unit = Number(item?.unit_price ?? item?.price) || 0;
@@ -441,11 +498,44 @@ function renderVentas(el) {
 }
 
 async function refreshVentas(el) {
-  // La vista de Ventas se resuelve también en BD: excluye facturas anuladas y
-  // cualquier factura que tenga una devolución vigente. Así no depende de un
-  // filtro visual ni de datos que hayan quedado previamente en memoria.
+  // La vista de Ventas excluye anuladas y notas de crédito, pero conserva la
+  // factura original cuando está ajustada para que nunca "desaparezca".
   await reloadSales({ range: ventasRange, view: 'sales' });
   renderVentasTable();
+}
+
+function ventasEffectiveTotal(sale) {
+  if (
+    sale?.type === 'factura' &&
+    sale?.correction_kind !== 'product_addition' &&
+    (
+      Number(sale?.adjustment_addition_total || 0) > 0.005 ||
+      Number(sale?.operation_credit_total || 0) > 0.005
+    )
+  ) {
+    return ventasOperationTotal(sale);
+  }
+  return Math.max(0, ventasRound2(
+    Number(sale?.total || 0) - Number(sale?.adjustment_credit_total || 0)
+  ));
+}
+
+function ventasOperationTotal(sale) {
+  return Math.max(0, ventasRound2(
+    Number(sale?.total || 0) +
+    Number(sale?.adjustment_addition_total || 0) -
+    Number(sale?.operation_credit_total ?? sale?.adjustment_credit_total ?? 0)
+  ));
+}
+
+function ventasHasAdjustedCopy(sale) {
+  return sale?.type === 'factura' &&
+    sale?.correction_kind !== 'product_addition' &&
+    Array.isArray(sale?.adjusted_items) &&
+    (
+      Number(sale?.adjustment_addition_total || 0) > 0.005 ||
+      Number(sale?.operation_credit_total || 0) > 0.005
+    );
 }
 
 function renderVentasTable() {
@@ -470,10 +560,9 @@ function renderVentasTable() {
     } else {
       if (s.type === 'cotizacion') return false;
       if (s.type === 'devolucion') return false;
-      // Una factura anulada, totalmente devuelta o que ya tiene una nota de
-      // crédito pertenece a Devoluciones/Auditoría, no al historial operativo.
-      if (s.status !== 'completed') return false;
-      if (Number(s.has_active_return) === 1) return false;
+      // La factura original permanece visible aun con devolución total; solo una
+      // anulación la retira del historial operativo de Ventas.
+      if (!['completed','returned'].includes(s.status)) return false;
     }
 
     // Filtro de método (solo facturas)
@@ -482,6 +571,10 @@ function renderVentasTable() {
     // Búsqueda extendida: #, cliente, RNC, teléfono, producto (código/nombre/modelo)
     const matchQ = !qNorm ||
       String(s.id).includes(q) ||
+      matchText(facturaLabel(s), qNorm) ||
+      matchText(ventasHistoryReference(s), qNorm) ||
+      matchText(facturaLabelOriginal(s), qNorm) ||
+      matchText(ventasOriginalHistoryReference(s), qNorm) ||
       matchText(name, qNorm) ||
       matchText(rnc, qNorm) ||
       matchText(s.customer_contact_name, qNorm) ||
@@ -513,7 +606,7 @@ function renderVentasTable() {
   // Resumen
   if (resWrap) {
     resWrap.innerHTML = '';
-    const total = sales.reduce((a, s) => a + (s.total || 0), 0);
+    const total = sales.reduce((a, s) => a + ventasEffectiveTotal(s), 0);
 
     const resGrid = h('div', { class: 'metrics',
       style: { gridTemplateColumns: 'repeat(4,1fr)', marginBottom: '16px' } });
@@ -521,13 +614,13 @@ function renderVentasTable() {
     const metItems = esCotizTab ? [
       { icon: 'list',   color: 'p', label: 'Cotizaciones',   val: sales.length },
       { icon: 'dollar', color: 'g', label: 'Valor Total',    val: fmt(total) },
-      { icon: 'clock',  color: 'a', label: 'Pendientes hoy', val: sales.filter(s => (s.created_at||'').slice(0,10) === today()).length },
+      { icon: 'clock',  color: 'a', label: 'Pendientes hoy', val: sales.filter(s => (s.sale_date||'').slice(0,10) === today()).length },
       { icon: 'check',  color: 'b', label: 'Convertibles',   val: sales.filter(s => s.status !== 'cancelled').length },
     ] : [
-      { icon: 'list',  color: 'b', label: 'Transacciones', val: sales.length },
-      { icon: 'dollar',color: 'g', label: 'Total',         val: fmt(total) },
-      { icon: 'cash',  color: 'g', label: 'Efectivo',      val: fmt(sales.filter(s => (s.payment_method||s.pay) === 'efectivo').reduce((a,s)=>a+(s.total||0),0)) },
-      { icon: 'card',  color: 'p', label: 'Tarj/Trans',    val: fmt(sales.filter(s => ['tarjeta','transferencia'].includes(s.payment_method||s.pay||'')).reduce((a,s)=>a+(s.total||0),0)) },
+      { icon: 'list',  color: 'b', label: 'Documentos', val: sales.length },
+      { icon: 'dollar',color: 'g', label: 'Total neto documentos', val: fmt(total) },
+      { icon: 'cash',  color: 'g', label: 'Efectivo neto', val: fmt(sales.filter(s => (s.payment_method||s.pay) === 'efectivo').reduce((a,s)=>a+ventasEffectiveTotal(s),0)) },
+      { icon: 'card',  color: 'p', label: 'Tarj/Trans neto', val: fmt(sales.filter(s => ['tarjeta','transferencia'].includes(s.payment_method||s.pay||'')).reduce((a,s)=>a+ventasEffectiveTotal(s),0)) },
     ];
 
     metItems.forEach(m => {
@@ -559,7 +652,7 @@ function renderVentasTable() {
   const tbl   = h('table', null,
     h('thead', null,
       h('tr', null,
-        ...['#','Fecha','Cliente','Método','ITBIS','Total',''].map(t =>
+        ...['Documento','Fecha','Cliente','Método','ITBIS','Total',''].map(t =>
           h('th', null, t)
         )
       )
@@ -567,12 +660,30 @@ function renderVentasTable() {
   );
   const tbody = h('tbody', null);
 
-  // Orden del historial: la venta más reciente arriba (descendente por id,
-  // que es el orden de creación), y de ahí bajando a las más antiguas.
-  [...sales].sort((a, b) => (b.id || 0) - (a.id || 0)).forEach(s => {
+  // Mantener preparada la agrupación de cada factura con sus respaldos de
+  // aumento. La vista normal solo recibe la raíz; auditoría conserva la familia.
+  const operationId = row => row.correction_kind === 'product_addition' && row.original_sale_id
+    ? Number(row.original_sale_id) : Number(row.id);
+  const operationDates = new Map();
+  sales.forEach(row => {
+    const key = operationId(row);
+    const date = String(row.sale_date || row.created_at || '');
+    if (date > String(operationDates.get(key) || '')) operationDates.set(key, date);
+  });
+  [...sales].sort((a, b) => {
+    const rootA = operationId(a);
+    const rootB = operationId(b);
+    if (rootA !== rootB) {
+      return String(operationDates.get(rootB) || '').localeCompare(String(operationDates.get(rootA) || '')) ||
+        rootB - rootA;
+    }
+    const aSupplement = a.correction_kind === 'product_addition' ? 1 : 0;
+    const bSupplement = b.correction_kind === 'product_addition' ? 1 : 0;
+    return aSupplement - bSupplement || Number(a.id) - Number(b.id);
+  }).forEach(s => {
     const method    = s.payment_method || s.pay || '';
     const cliName   = s.customer_name  || s.clientName || 'Consumidor Final';
-    const fecha     = (s.created_at || s.date || '').split('T')[0].split(' ')[0];
+    const fecha     = (s.sale_date || s.date || '').split('T')[0].split(' ')[0];
     const hora      = s.created_at
       ? new Date(s.created_at).toLocaleTimeString('es-DO',
           { hour: '2-digit', minute: '2-digit' })
@@ -585,6 +696,11 @@ function renderVentasTable() {
     }
     const tieneNcf  = !!(s.ncf);
     const ecfOk     = s.ecf_status === 'Aceptado';
+    const adjusted = Number(s.has_product_correction) === 1 || Number(s.has_active_return) === 1 ||
+      s.correction_kind === 'product_addition';
+    const isSupplement = s.correction_kind === 'product_addition' && s.original_sale_id;
+    const effectiveTotal = ventasEffectiveTotal(s);
+    const operationTotal = !isSupplement && adjusted ? ventasOperationTotal(s) : effectiveTotal;
 
     // Badge e-CF en la columna # (junto al tipo)
     const ecfBadge = tieneNcf
@@ -597,10 +713,28 @@ function renderVentasTable() {
       : null;
 
     tbody.appendChild(
-      h('tr', null,
+      h('tr', { class: isSupplement ? 'sale-supplement-row' : adjusted ? 'sale-operation-row' : '' },
         h('td', null,
-          h('span', { class: 'tm', style: { fontSize: '11px' } }, `#${s.id}`),
-          h('div', { style: { fontSize: '10px', color: 'var(--muted2)' } }, s.type || 'factura'),
+          h('span', { class: 'tm', style: { fontSize: '12px' } }, ventasHistoryReference(s)),
+          h('div', { class: 'sale-document-identity' },
+            s.import_source
+              ? ventasImportSourceLabel(s.import_source)
+              : s.document_kind === 'factura_historica'
+                ? 'Numeración histórica continuada'
+                : (s.document_number_fmt ? `Velo · ${s.document_number_fmt}` : 'Velo')),
+          h('div', { style: { fontSize: '10px', color: 'var(--muted2)' } },
+            isSupplement
+              ? `Aumento vinculado a ${ventasOriginalHistoryReference(s)}`
+              : s.type === 'factura' ? (s.import_source ? 'Factura histórica' : 'Factura original') : s.type),
+          adjusted
+            ? h('div', {
+                style: { marginTop: '3px' },
+                html: `<span class="badge a" style="font-size:9px;padding:1px 5px">${
+                  s.status === 'returned' ? 'Devuelta total' :
+                  s.correction_kind === 'product_addition' ? 'Aumento vinculado' : 'Ajustada'
+                }</span>`
+              })
+            : null,
           ecfBadge
         ),
         h('td', null,
@@ -649,7 +783,13 @@ function renderVentasTable() {
           taxAmt > 0 ? fmt(taxAmt) : '—'
         ),
         h('td', null,
-          h('span', { style: { fontWeight: 700, fontSize: '14px' } }, fmt(s.total))
+          h('span', { style: { fontWeight: 700, fontSize: '14px' } }, fmt(operationTotal)),
+          !isSupplement && adjusted
+            ? h('div', { class: 'ts' },
+                `Operación: original ${fmt(s.total)} + aumentos ${fmt(s.adjustment_addition_total || 0)} − créditos ${fmt(s.operation_credit_total || 0)}`)
+            : isSupplement
+              ? h('div', { class: 'ts' }, `Documento relacionado · ${fmt(effectiveTotal)}`)
+              : null
         ),
         h('td', null,
           h('div', { class: 'flex', style: { gap: '3px' } },
@@ -875,7 +1015,7 @@ async function convertirCotizacionAVenta(s) {
     <div class="modal-title">Convertir Cotización ${facturaLabel(sale)} en Venta</div>
     <div class="modal-sub">
       Cliente: <strong>${sale.customer_name || 'Consumidor Final'}</strong> ·
-      ${(sale.created_at||'').split('T')[0]}
+      ${sale.sale_date || ''}
     </div>
 
     ${hayStockBajo ? `
@@ -1113,7 +1253,8 @@ async function confirmarConversionCotizacion() {
 async function openDetalleVentaModal(s) {
   const sale  = await window.api.sales.getById({ id: s.id });
   const detail = sale || s || {};
-  const items = sale?.items || [];
+  const adjustedCopy = ventasHasAdjustedCopy(detail);
+  const items = adjustedCopy ? detail.adjusted_items : (sale?.items || []);
   window._ventasDetalleCache = window._ventasDetalleCache || {};
   window._ventasDetalleCache[s.id] = { detail, items };
 
@@ -1159,7 +1300,7 @@ async function openDetalleVentaModal(s) {
         <td style="font-family:var(--mono);font-size:10px;color:var(--muted);white-space:nowrap">
           ${ventasEsc(ventasItemCode(i) || '—')}
         </td>
-        <td style="min-width:120px">${ventasEsc(i.product_name || i.name || 'Producto')}</td>
+        <td style="min-width:120px">${ventasEsc(ventasDisplayProductName(i.product_name || i.name))}</td>
         <td style="text-align:right">${fmt(f.unitNet)}</td>
         <td style="text-align:center;font-weight:700">${f.qty}</td>
         <td style="text-align:right;color:var(--muted)">${fmt(f.net)}</td>
@@ -1177,18 +1318,41 @@ async function openDetalleVentaModal(s) {
   const currencyDetail = String(detail.payment_currency || '').toUpperCase() === 'USD' && Number(detail.account_amount) > 0
     ? ` · US$${Number(detail.account_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} @ RD$${Number(detail.exchange_rate || 0).toFixed(2)}`
     : '';
-  const fecha   = (detail.created_at || detail.date || '').split('T')[0].split(' ')[0];
+  const fecha   = (detail.sale_date || detail.date || '').split('T')[0].split(' ')[0];
   // Legacy/importada sin ITBIS en cabecera: usar el desglose extraído de las
   // líneas (incluido en el precio) para que el modal cuadre con la impresión.
   const lineTaxSum = ventasRound2(itemsFiscal.reduce((a, f) => a + (f.tax || 0), 0));
   const lineNetSum = ventasRound2(itemsFiscal.reduce((a, f) => a + (f.net || 0), 0));
-  const headerTax  = Number(detail.tax_amt || detail.itbis || 0);
+  const headerTax  = Number(
+    adjustedCopy ? detail.adjusted_tax_amt : (detail.tax_amt || detail.itbis || 0)
+  );
   const taxAmt   = headerTax > 0 ? headerTax : lineTaxSum;
-  const netShown = headerTax > 0 ? (detail.subtotal ?? lineNetSum) : (lineTaxSum > 0 ? lineNetSum : (detail.subtotal ?? lineNetSum));
-  const discAmt = detail.discount_amt || detail.discAmt || 0;
-  const discPct = detail.discount_pct || detail.disc   || 0;
+  const detailSubtotal = adjustedCopy ? detail.adjusted_subtotal : detail.subtotal;
+  const detailTotal = adjustedCopy ? detail.operation_total : detail.total;
+  const netShown = headerTax > 0 ? (detailSubtotal ?? lineNetSum) : (lineTaxSum > 0 ? lineNetSum : (detailSubtotal ?? lineNetSum));
+  const discAmt = adjustedCopy ? 0 : (detail.discount_amt || detail.discAmt || 0);
+  const discPct = adjustedCopy ? 0 : (detail.discount_pct || detail.disc || 0);
   const tieneNcf = !!(detail.ncf);
   const ecfOk    = detail.ecf_status === 'Aceptado';
+  const isSupplement = detail.correction_kind === 'product_addition' && detail.original_sale_id;
+  const hasOperationAdjustments = !isSupplement && (
+    Number(detail.adjustment_addition_total || 0) > 0.005 ||
+    Number(detail.operation_credit_total || 0) > 0.005
+  );
+  const relatedOperationSection = isSupplement ? `
+    <div class="alrt a" style="margin-bottom:12px">
+      <div><div class="alrt-title">Documento interno de aumento</div>
+      <div class="alrt-sub">Este documento agrega productos o cantidades a ${ventasEsc(ventasOriginalHistoryReference(detail))}. No reemplaza la factura original.</div></div>
+    </div>` : hasOperationAdjustments ? `
+    <div class="card sale-operation-summary" style="background:var(--surface2);margin-bottom:12px">
+      <div class="lbl" style="margin-bottom:8px">Operación completa después de correcciones</div>
+      <div class="g3">
+        <div><span class="lbl">Factura original</span><strong>${fmt(detail.total || 0)}</strong></div>
+        <div><span class="lbl">Aumentos</span><strong style="color:var(--green)">+${fmt(detail.adjustment_addition_total || 0)}</strong></div>
+        <div><span class="lbl">Notas de crédito</span><strong style="color:var(--red)">-${fmt(detail.operation_credit_total || 0)}</strong></div>
+      </div>
+      <div class="tr grand" style="margin-top:8px"><span>Total neto de la operación</span><span>${fmt(detail.operation_total || detail.total || 0)}</span></div>
+    </div>` : '';
 
   // Sección e-CF en el detalle
   const ecfSection = tieneNcf ? `
@@ -1214,10 +1378,21 @@ async function openDetalleVentaModal(s) {
     </div>` : '';
 
   openModal(`
-    <div class="modal-title">${documentTypeLabel(detail)} ${typeof facturaLabel === 'function' ? facturaLabel(sale || s) : '#'+String(s.id).padStart(5,'0')}</div>
+    <div class="modal-title">${documentTypeLabel(detail)} ${ventasEsc(ventasHistoryReference(detail))}</div>
     <div class="modal-sub">
+      ${detail.import_source
+        ? `${ventasEsc(ventasImportSourceLabel(detail.import_source))} · `
+        : (detail.document_number_fmt ? `Documento Velo ${ventasEsc(detail.document_number_fmt)} · ` : '')}
       ${fdate(fecha)} · Cajero: ${detail.cajero || '—'}
       ${detail.salesperson_name ? ` · Vendedor: ${ventasEsc(detail.salesperson_code ? detail.salesperson_code + ' · ' : '')}${ventasEsc(detail.salesperson_name)}` : ''}
+    </div>
+    <div class="card" style="background:var(--surface2);margin-bottom:12px">
+      <div class="g3">
+        <div><div class="lbl">Fecha original</div><strong>${fdate(detail.original_sale_date || fecha)}</strong></div>
+        <div><div class="lbl">Fecha operativa actual</div><strong>${fdate(detail.sale_date || fecha)}</strong></div>
+        <div><div class="lbl">Fecha fiscal</div><strong>${detail.fiscal_issued_at ? fdate(String(detail.fiscal_issued_at).slice(0,10)) : 'No aplica'}</strong></div>
+      </div>
+      ${detail.date_modified_at ? `<div class="ts" style="margin-top:8px">Fecha modificada: ${ventasEsc(detail.date_change_reason || 'Motivo auditado')} · ${ventasEsc(detail.date_modified_at)}</div>` : ''}
     </div>
     <div class="g2" style="margin-bottom:14px">
       <div>
@@ -1237,6 +1412,12 @@ async function openDetalleVentaModal(s) {
           ? `<div class="ts">Referencia: ${ventasEsc(detail.payment_reference)}</div>` : ''}
       </div>
     </div>
+    ${relatedOperationSection}
+    ${adjustedCopy ? `
+      <div class="alrt g" style="margin-bottom:12px">
+        <div><div class="alrt-title">Vista consolidada de la factura ajustada</div>
+        <div class="alrt-sub">Aquí aparecen las cantidades vigentes. Las notas de crédito y documentos de aumento permanecen únicamente en el historial de auditoría.</div></div>
+      </div>` : ''}
     ${ecfSection}
     <div class="tw" style="margin-bottom:12px">
       <table>
@@ -1269,20 +1450,20 @@ async function openDetalleVentaModal(s) {
           ? `<div class="tr"><span>ITBIS (${detail.tax_pct || CFG.itbis || 18}%)</span><span>${fmt(taxAmt)}</span></div>` : ''}
       ${Number(detail.additional_charges_total || 0) > 0
         ? `<div class="tr"><span>Cargos adicionales</span><span>${fmt(detail.additional_charges_total)}</span></div>` : ''}
-      <div class="tr grand"><span>Importe / Total</span><span>${fmt(detail.total)}</span></div>
+      <div class="tr grand"><span>${adjustedCopy ? 'Total vigente de la operación' : 'Importe / Total'}</span><span>${fmt(detailTotal)}</span></div>
       ${String(detail.display_currency || '').toUpperCase() === 'USD' && Number(detail.display_exchange_rate) > 0
-        ? `<div class="tr"><span>Equivalente USD · tasa RD$${Number(detail.display_exchange_rate).toFixed(2)}</span><strong>US$${Number(detail.display_amount || (detail.total / detail.display_exchange_rate)).toFixed(2)}</strong></div>` : ''}
+        ? `<div class="tr"><span>Equivalente USD · tasa RD$${Number(detail.display_exchange_rate).toFixed(2)}</span><strong>US$${Number(detailTotal / detail.display_exchange_rate).toFixed(2)}</strong></div>` : ''}
     </div>
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
       <button class="btn btn-out" onclick="reimprimirVenta(${s.id})">
-        ${svg('print')} Reimprimir
+        ${svg('print')} ${adjustedCopy ? 'Reimprimir factura ajustada' : 'Reimprimir documento'}
       </button>
       <button class="btn btn-out" onclick="guardarVentaPDF(${s.id})">
         ${svg('pdf')} Guardar PDF
       </button>
-      ${['admin','superadmin'].includes(user?.role)
-        ? `<button class="btn btn-out" onclick="closeModal();openVentaDateModal(${s.id})">${svg('calendar')} Cambiar fecha</button>`
+      ${detail.type === 'factura'
+        ? `<button class="btn btn-dark" onclick="closeModal();openFacturaCorreccion(${s.id})">${svg('calendar')} Corregir / ajustar factura</button>`
         : ''}
       <button class="btn btn-out" style="background:#25D366;color:#fff;border-color:#25D366"
               onclick="ventaWhatsApp(${s.id})"
@@ -1320,7 +1501,7 @@ async function openDetalleVentaModal(s) {
            </button>`
         : ''}
     </div>
-  `, 'modal-xl mtw');
+  `, 'modal-xxl mtw sale-detail-modal');
 
   setTimeout(() => {
     const modal = document.getElementById('modal-ov');
@@ -1370,10 +1551,13 @@ function eliminarCotizacion(s) {
 function openAnulacionModal(s) {
   if (!s) { toast('Documento no encontrado', 'err'); return; }
   const isReturn = s.type === 'devolucion';
+  const isMonetaryCredit = isReturn && s.correction_kind === 'monetary_credit';
   openModal(`
-    <div class="modal-title">Anular ${isReturn ? 'Devolución' : 'Venta'} #${s.id}</div>
+    <div class="modal-title">Anular ${isMonetaryCredit ? 'Nota de crédito' : isReturn ? 'Devolución' : 'Venta'} ${facturaLabel(s)}</div>
     <div class="modal-sub" style="color:var(--red)">
-      ${isReturn
+      ${isMonetaryCredit
+        ? 'Se revertirá el reembolso o la reducción de la cuenta por cobrar. El inventario permanecerá intacto.'
+        : isReturn
         ? 'Se retirará del inventario la mercancía repuesta y se restaurará la cuenta por cobrar cuando corresponda.'
         : 'Esta acción revierte inventario, caja y contabilidad. El documento dejará de aparecer en Ventas.'}
     </div>
@@ -1392,6 +1576,9 @@ function openAnulacionModal(s) {
 }
 
 async function confirmarAnulacion(saleId) {
+  const targetSale = (DB.sales || []).find(row => Number(row.id) === Number(saleId));
+  const isMonetaryCredit = targetSale?.type === 'devolucion' &&
+    targetSale?.correction_kind === 'monetary_credit';
   const reason = document.getElementById('anul-reason')?.value?.trim();
   if (!reason) { toast('El motivo es requerido', 'err'); return; }
 
@@ -1407,7 +1594,7 @@ async function confirmarAnulacion(saleId) {
   await reloadProducts();
   if (result.isReturn) await reloadCustomers();
   closeModal();
-  toast(`✓ ${result.isReturn ? 'Devolución' : 'Venta'} #${saleId} anulada`);
+  toast(`✓ ${isMonetaryCredit ? 'Nota de crédito' : result.isReturn ? 'Devolución' : 'Venta'} ${facturaLabel(targetSale || { id: saleId })} anulada`);
   if (result.overpayment > 0) {
     toast(`⚠ El cliente ya había pagado de más por esta factura — excedente de ${fmt(result.overpayment)} a revisar manualmente (reembolso o crédito)`, 'w');
   }
@@ -1425,111 +1612,40 @@ async function iniciarDevolucionDesdeVenta(saleId) {
 async function reimprimirVenta(saleId) {
   const sale = await window.api.sales.getById({ id: saleId });
   if (!sale) { toast('Venta no encontrada', 'err'); return; }
-
-  const fecha = (sale.created_at || '').split('T')[0];
-  const hora  = sale.created_at
-    ? new Date(sale.created_at).toLocaleTimeString('es-DO',
-        { hour: '2-digit', minute: '2-digit' })
-    : '';
+  const adjustedCopy = ventasHasAdjustedCopy(sale);
 
   confirmModal(
-    `¿Reimprimir ${documentTypeLabel(sale).toLowerCase()} <strong>${facturaLabel(sale)}</strong>?
+    `¿Reimprimir ${adjustedCopy ? 'la factura ajustada' : documentTypeLabel(sale).toLowerCase()} <strong>${ventasHistoryReference(sale)}</strong>?
      <br><span style="font-size:11px;color:var(--muted)">
-       Quedará registrado en el log de auditoría como reimpresión.
+       ${adjustedCopy
+         ? 'Se imprimirán los productos, cantidades y total vigentes en una sola copia consolidada. No sustituye los comprobantes fiscales relacionados.'
+         : 'Quedará registrado en el log de auditoría como reimpresión.'}
      </span>`,
     () => {
-      // Datos de contacto del cliente para la plantilla A4 (dirección/tel/email
-      // no viven en la fila de la venta; se toman del cache de clientes).
-      const _cust = (DB.customers || []).find(c => c.id === sale.customer_id);
-      printReceipt({
-        id:              sale.id,
-        document_kind:   sale.document_kind || '',
-        document_number: sale.document_number,
-        document_number_fmt: sale.document_number_fmt || '',
-        receipt_document_number: sale.receipt_document_number,
-        receipt_document_number_fmt: sale.receipt_document_number_fmt || '',
-        // Número real de factura para que la reimpresión muestre #00002311, no el id interno.
-        numero_factura:     sale.numero_factura,
-        numero_factura_fmt: sale.numero_factura_fmt,
-        date:            fecha,
-        time:            hora,
-        type:            sale.type,
-        due_date:        sale.due_date || null,
-        customer_id:     sale.customer_id || null,
-        customer_name:   sale.customer_name  || 'Consumidor Final',
-        customer_rnc:    sale.customer_rnc   || _cust?.rnc || '',
-        customer_address: sale.customer_address || _cust?.address || '',
-        customer_phone:   sale.customer_phone || _cust?.phone || '',
-        customer_phone_type: sale.customer_phone_type || 'telefono',
-	        customer_email:   sale.customer_email || _cust?.billing_email || _cust?.email || '',
-        customer_type: sale.customer_type || _cust?.customer_type || 'person',
-        customer_trade_name: sale.customer_trade_name || _cust?.trade_name || '',
-        customer_contact_id: sale.customer_contact_id || null,
-        customer_contact_name: sale.customer_contact_name || '',
-        customer_contact_document: sale.customer_contact_document || '',
-        customer_contact_role: sale.customer_contact_role || '',
-        customer_contact_phone: sale.customer_contact_phone || '',
-        customer_contact_email: sale.customer_contact_email || '',
-	        items:           (sale.items || []).map(i => ({
-	          product_code:  ventasItemCode(i),
-	          product_name: i.product_name,
-	          qty:          i.qty,
-	          unit_price:   i.unit_price,
-	          unit_cost:    i.unit_cost || 0,
-	          subtotal:     i.subtotal,
-	          taxable:      i.taxable,
-	          tax_pct:      i.tax_pct,
-	          tax_amt:      i.tax_amt,
-	          net_subtotal: i.net_subtotal,
-	        })),
-        charges: sale.charges || [],
-        additional_charges_total: sale.additional_charges_total || 0,
-        display_currency: sale.display_currency || 'DOP',
-        display_exchange_rate: sale.display_exchange_rate || 1,
-        display_amount: sale.display_amount || 0,
-        // Reimprimir con la misma salida elegida en la venta (plantilla/tipo).
-        print_template_id: sale.print_template_id || '',
-        print_printer_type: sale.print_printer_type || '',
-        subtotal:        sale.subtotal,
-        discount_pct:    sale.discount_pct || 0,
-        discount_amt:    sale.discount_amt || 0,
-        tax_amt:         sale.tax_amt      || 0,
-        total:           sale.total,
-        payment_method:  sale.payment_method,
-        payment_amount:  sale.payment_amount,
-        balance_after_payment: sale.balance_after_payment,
-        receipt_number:  sale.last_receipt_number,
-        receipt_numbers: sale.receipt_numbers,
-        transaction_number: sale.document_number_fmt || sale.id,
-        notes:           sale.notes || '',
-        cajero:          sale.cajero,
-        salesperson_id:   sale.salesperson_id || null,
-        salesperson_name: sale.salesperson_name || '',
-        salesperson_code: sale.salesperson_code || '',
-        // NCF real de la venta (factura) o nota de crédito B04 (devolución),
-        // y el NCF que la nota modifica — antes la reimpresión no los pasaba.
-        ncf:             sale.ncf || '',
-        tax_pct:         sale.tax_pct,
-        modifies_ncf:    sale.modifies_ncf || '',
-        // Devolución: referencia a la factura original (número real).
-        original_sale_id:            sale.original_sale_id || null,
-        original_document_number_fmt: sale.original_document_number_fmt || '',
-        original_numero_factura:     sale.original_numero_factura,
-        original_numero_factura_fmt: sale.original_numero_factura_fmt,
-      }, true); // true = isReprint
+      printReceipt(ventasPrintPayload(sale), true);
     },
-    'Reimprimir',
+    adjustedCopy ? 'Imprimir ajustada' : 'Reimprimir',
     'btn-dark'
   );
 }
 
 function ventasPrintPayload(sale) {
-  const fecha = (sale.created_at || '').split('T')[0];
+  const fecha = sale.original_sale_date || (sale.created_at || '').split('T')[0];
   const hora  = sale.created_at
     ? new Date(sale.created_at).toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' }) : '';
   const _custPdf = (DB.customers || []).find(c => c.id === sale.customer_id);
+  const adjustedCopy = ventasHasAdjustedCopy(sale);
+  const printItems = adjustedCopy ? sale.adjusted_items : (sale.items || []);
+  const relatedDocuments = adjustedCopy
+    ? (sale.adjustment_documents || []).map(document => facturaLabel(document)).filter(Boolean)
+    : [];
   return {
     id: sale.id, date: fecha, time: hora, type: sale.type,
+    adjusted_copy: adjustedCopy,
+    adjusted_reference: adjustedCopy ? ventasHistoryReference(sale) : '',
+    adjusted_reference_ncf: adjustedCopy ? (sale.ncf || '') : '',
+    related_documents: relatedDocuments,
+    correction_kind: sale.correction_kind || '',
     document_kind: sale.document_kind || '',
     document_number: sale.document_number,
     document_number_fmt: sale.document_number_fmt || '',
@@ -1550,9 +1666,9 @@ function ventasPrintPayload(sale) {
     customer_contact_role: sale.customer_contact_role || '',
     customer_contact_phone: sale.customer_contact_phone || '',
     customer_contact_email: sale.customer_contact_email || '',
-	    items: (sale.items || []).map(i => ({
+	    items: printItems.map(i => ({
 	      product_code: ventasItemCode(i),
-	      product_name: i.product_name, qty: i.qty, unit_price: i.unit_price, unit_cost: i.unit_cost || 0,
+	      product_name: ventasDisplayProductName(i.product_name), qty: i.qty, unit_price: i.unit_price, unit_cost: i.unit_cost || 0,
 	      subtotal: i.subtotal, taxable: i.taxable, tax_pct: i.tax_pct,
 	      tax_amt: i.tax_amt, net_subtotal: i.net_subtotal,
 	    })),
@@ -1561,11 +1677,22 @@ function ventasPrintPayload(sale) {
     display_currency: sale.display_currency || 'DOP',
     display_exchange_rate: sale.display_exchange_rate || 1,
     display_amount: sale.display_amount || 0,
-    subtotal: sale.subtotal, discount_pct: sale.discount_pct || 0, discount_amt: sale.discount_amt || 0,
-    tax_amt: sale.tax_amt || 0, total: sale.total, payment_method: sale.payment_method,
+    subtotal: adjustedCopy ? sale.adjusted_subtotal : sale.subtotal,
+    discount_pct: adjustedCopy ? 0 : (sale.discount_pct || 0),
+    discount_amt: adjustedCopy ? 0 : (sale.discount_amt || 0),
+    tax_amt: adjustedCopy ? sale.adjusted_tax_amt : (sale.tax_amt || 0),
+    total: adjustedCopy ? sale.operation_total : sale.total,
+    payment_method: adjustedCopy && Number(sale.adjustment_addition_total || 0) > 0
+      ? 'varios'
+      : sale.payment_method,
     payment_amount: sale.payment_amount, balance_after_payment: sale.balance_after_payment,
     receipt_number: sale.last_receipt_number, receipt_numbers: sale.receipt_numbers,
-    transaction_number: sale.document_number_fmt || sale.id, notes: sale.notes || '',
+    transaction_number: adjustedCopy
+      ? `${ventasHistoryReference(sale)} · ${sale.document_number_fmt || ''}`.trim()
+      : (sale.document_number_fmt || sale.id),
+    notes: adjustedCopy
+      ? `Copia consolidada de la operación ajustada. ${relatedDocuments.length ? `Documentos relacionados: ${relatedDocuments.join(', ')}.` : ''}`
+      : (sale.notes || ''),
     cajero: sale.cajero, ncf: sale.ncf || '', tax_pct: sale.tax_pct, modifies_ncf: sale.modifies_ncf || '',
     salesperson_id: sale.salesperson_id || null,
     salesperson_name: sale.salesperson_name || '',
@@ -1577,37 +1704,927 @@ function ventasPrintPayload(sale) {
   };
 }
 
-function openVentaDateModal(saleId) {
-  const sale = (DB.sales || []).find(row => Number(row.id) === Number(saleId));
-  if (!sale) return toast('Venta no encontrada', 'err');
-  const current = String(sale.created_at || sale.date || '').slice(0, 10);
+function ventasCorrectionKey(kind, saleId) {
+  if (globalThis.crypto?.randomUUID) return `${kind}:${saleId}:${crypto.randomUUID()}`;
+  return `${kind}:${saleId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+}
+
+function ventasCorrectionAction({ icon, title, description, enabled, onclick, tone = '' }) {
+  return `
+    <button type="button" class="btn btn-out" ${enabled ? `onclick="${onclick}"` : 'disabled'}
+      style="height:auto;min-height:76px;text-align:left;display:flex;align-items:flex-start;gap:10px;padding:12px;${enabled ? '' : 'opacity:.55'}">
+      <span style="color:${tone || 'var(--blue)'};margin-top:2px">${svg(icon)}</span>
+      <span><strong style="display:block;margin-bottom:3px">${ventasEsc(title)}</strong>
+      <small style="display:block;white-space:normal;line-height:1.35;color:var(--muted2)">${ventasEsc(description)}</small></span>
+    </button>`;
+}
+
+async function openFacturaCorreccion(saleId) {
+  const preview = await window.api.sales.corrections.getImpact({
+    id: saleId,
+    requestUserId: user.id,
+  });
+  if (!preview?.ok) return toast(preview?.error || 'No se pudo evaluar la factura', 'err');
+  const ctx = preview.data;
+  const sale = ctx.sale;
+  const perms = new Set(ctx.permissions || []);
+  const active = sale.type === 'factura' && sale.status === 'completed';
+  const correctable = sale.type === 'factura' && sale.status !== 'cancelled';
+  const canCorrect = perms.has('sales.correct');
+  const canReturn = perms.has('sales.request_return') && active;
+  const canCancel = perms.has('sales.cancel') && active;
+  const canAudit = perms.has('sales.view_audit');
+  const fiscalLocked = !!ctx.fiscal;
+
   openModal(`
-    <div class="modal-title">Cambiar fecha del documento</div>
-    <div class="modal-sub">${facturaLabel(sale)} · se moverá al período seleccionado en ventas, caja y reportes.</div>
-    <div class="fg">
-      <label class="lbl">Nueva fecha</label>
-      <input class="inp" id="venta-new-date" type="date" value="${ventasEsc(current)}"/>
+    <div class="modal-title">Corregir / ajustar factura</div>
+    <div class="modal-sub">${facturaLabel(sale)} · ${ventasEsc(sale.ncf || 'Sin NCF')} · ${ventasEsc(sale.customer_name || 'Consumidor Final')}</div>
+    <div class="alrt a" style="margin-bottom:14px">
+      <div>
+        <div class="alrt-title">La factura emitida no se sobrescribe</div>
+        <div class="alrt-sub">Cada acción conserva el comprobante, los datos originales y las fechas reales de pagos, caja, contabilidad y emisión fiscal.</div>
+      </div>
     </div>
-    <div class="alrt a">
-      <div><div class="alrt-title">Cambio auditado</div>
-      <div class="alrt-sub">El número de factura y el NCF no cambian. Solo se ajusta la fecha histórica asociada.</div></div>
+    <div class="g2" style="gap:8px">
+      ${ventasCorrectionAction({
+        icon: 'calendar', title: 'Cambiar fecha de venta',
+        description: active && perms.has('sales.change_date')
+          ? 'Mueve la factura en Ventas, dashboards, reportes comerciales e inventario operativo.'
+          : 'Requiere una factura activa y el permiso sales.change_date.',
+        enabled: canCorrect && active && perms.has('sales.change_date'),
+        onclick: `closeModal();openVentaDateModal(${sale.id})`,
+      })}
+      ${ventasCorrectionAction({
+        icon: 'edit', title: 'Editar información administrativa',
+        description: 'Notas internas, orden, chofer, ruta, entrega y etiquetas; nunca datos fiscales o totales.',
+        enabled: canCorrect && perms.has('sales.edit_internal_data') && sale.status !== 'cancelled',
+        onclick: `closeModal();openVentaAdminModal(${sale.id})`,
+      })}
+      ${ventasCorrectionAction({
+        icon: 'return', title: 'Corregir productos o cantidades',
+        description: canCorrect && correctable
+          ? 'Agrega, aumenta, reduce o quita productos en una sola pantalla; Velo genera los documentos relacionados.'
+          : 'Requiere una factura disponible y permiso para corregir.',
+        enabled: canCorrect && correctable,
+        onclick: `closeModal();openVentaProductCorrection(${sale.id})`,
+        tone: 'var(--amber)',
+      })}
+      ${ventasCorrectionAction({
+        icon: 'dollar', title: 'Aplicar descuento posterior',
+        description: canReturn
+          ? 'Emite una nota de crédito por importe, reembolsa o reduce la cuenta del cliente y no mueve inventario.'
+          : 'No disponible para este estado o permiso.',
+        enabled: canReturn && perms.has('sales.issue_credit_note'),
+        onclick: `closeModal();openVentaMonetaryCredit(${sale.id})`,
+        tone: 'var(--amber)',
+      })}
+      ${ventasCorrectionAction({
+        icon: 'return', title: 'Registrar devolución o reembolso',
+        description: canReturn ? 'Permite devolución parcial o total y su compensación de inventario/CxC.' : 'No disponible para este estado o permiso.',
+        enabled: canReturn,
+        onclick: `closeModal();iniciarDevolucionDesdeVenta(${sale.id})`,
+        tone: 'var(--amber)',
+      })}
+      ${ventasCorrectionAction({
+        icon: 'card', title: 'Cambiar método de pago',
+        description: 'Bloqueado: los pagos emitidos conservan su fecha y método real; debe hacerse mediante un proceso de reembolso y nuevo cobro.',
+        enabled: false,
+      })}
+      ${ventasCorrectionAction({
+        icon: 'list', title: 'Registrar nota de crédito',
+        description: canReturn ? 'Crea una nota de crédito monetaria vinculada (B04 cuando corresponde), sin registrar una devolución física.' : 'Requiere permiso sales.issue_credit_note y factura activa.',
+        enabled: canReturn && perms.has('sales.issue_credit_note'),
+        onclick: `closeModal();openVentaMonetaryCredit(${sale.id})`,
+        tone: 'var(--amber)',
+      })}
+      ${ventasCorrectionAction({
+        icon: 'plus', title: 'Nota de débito / cargo posterior',
+        description: fiscalLocked
+          ? 'Bloqueado para e-CF emitido: debe emitirse un documento fiscal de cargo en el proveedor fiscal.'
+          : 'No se altera el total original; emite una nueva factura vinculada desde el POS.',
+        enabled: false,
+      })}
+      ${ventasCorrectionAction({
+        icon: 'xmark', title: 'Anular factura',
+        description: canCancel ? 'Genera reversos controlados sin borrar el documento ni reutilizar su secuencia.' : 'Requiere permiso sales.cancel y factura activa.',
+        enabled: canCancel,
+        onclick: `closeModal();openVentaCancellationFromCorrection(${sale.id})`,
+        tone: 'var(--red)',
+      })}
+      ${ventasCorrectionAction({
+        icon: 'edit', title: 'Sustituir factura',
+        description: 'Bloqueado en edición directa: primero debe compensarse la factura original y luego emitirse una nueva con el cliente/comprobante correcto.',
+        enabled: false,
+      })}
+      ${ventasCorrectionAction({
+        icon: 'list', title: 'Ver historial de cambios',
+        description: canAudit ? 'Línea de tiempo inmutable con valores anteriores, nuevos, usuarios y documentos.' : 'Requiere permiso sales.view_audit.',
+        enabled: canAudit,
+        onclick: `closeModal();openVentaCorrectionsHistory(${sale.id})`,
+      })}
+    </div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
+  `, 'modal-xl');
+}
+
+async function openVentaMonetaryCredit(saleId) {
+  const response = await window.api.sales.corrections.getMonetaryCreditModel({
+    id: saleId,
+    requestUserId: user.id,
+  });
+  if (!response?.ok) return toast(response?.error || 'No se pudo preparar la nota de crédito', 'err');
+  const model = response.data;
+  if (Number(model.availableCredit || 0) <= 0) {
+    return toast('La factura ya no tiene saldo disponible para otra nota de crédito', 'w');
+  }
+  window._ventaMonetaryCredit = {
+    model,
+    idempotencyKey: ventasCorrectionKey('monetary-credit', model.root.id),
+  };
+  const settlement = String(model.root.payment_method || '').toLowerCase() === 'credito'
+    ? 'El importe reducirá la cuenta por cobrar del cliente.'
+    : ['efectivo', 'mixto'].includes(String(model.root.payment_method || '').toLowerCase())
+      ? 'El importe se registrará como reembolso; para la parte en efectivo debes tener la caja abierta.'
+      : 'El reembolso se registrará por el mismo medio financiero de la factura.';
+  openModal(`
+    <div class="modal-title">Nota de crédito por descuento o ajuste</div>
+    <div class="modal-sub">${facturaLabel(model.root)} · ajuste monetario sin devolución de productos</div>
+    <div class="alrt g" style="margin-bottom:12px">
+      <div><div class="alrt-title">El inventario no cambiará</div>
+      <div class="alrt-sub">Esta opción sirve para descuentos posteriores, bonificaciones o errores de importe. Si el cliente entrega mercancía, usa “Registrar devolución”.</div></div>
+    </div>
+    <div class="card" style="background:var(--surface2);margin-bottom:12px">
+      <div class="g3">
+        <div><span class="lbl">Total original</span><strong>${fmt(model.root.total || 0)}</strong></div>
+        <div><span class="lbl">Ya acreditado</span><strong>-${fmt(model.creditedTotal || 0)}</strong></div>
+        <div><span class="lbl">Máximo disponible</span><strong>${fmt(model.availableCredit || 0)}</strong></div>
+      </div>
+    </div>
+    <div class="g2">
+      <div class="fg">
+        <label class="lbl">Importe final de la nota de crédito *</label>
+        <input class="inp" id="vmc-amount" type="number" min="0.01"
+          max="${Number(model.availableCredit || 0).toFixed(2)}" step="0.01"
+          placeholder="0.00" autofocus/>
+        <div class="ts">Incluye el ITBIS proporcional de la factura original.</div>
+      </div>
+      <div class="fg">
+        <label class="lbl">Motivo específico *</label>
+        <input class="inp" id="vmc-reason" maxlength="500"
+          placeholder="Ej.: descuento comercial acordado después de facturar"/>
+      </div>
+    </div>
+    <div class="alrt a" style="margin-top:12px">
+      <div><div class="alrt-title">Cómo queda la operación</div>
+      <div class="alrt-sub">${ventasEsc(settlement)} La factura original y su NCF no se reemplazan.</div></div>
     </div>
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-dark" onclick="guardarVentaDate(${saleId})">${svg('check')} Guardar fecha</button>
+      <button class="btn btn-dark" onclick="ventasConfirmMonetaryCredit()">${svg('check')} Revisar y emitir</button>
     </div>
-  `);
+  `, 'modal-lg');
+}
+
+function ventasConfirmMonetaryCredit() {
+  const state = window._ventaMonetaryCredit;
+  if (!state?.model) return;
+  const amount = ventasRound2(Number(document.getElementById('vmc-amount')?.value || 0));
+  const reason = document.getElementById('vmc-reason')?.value?.trim() || '';
+  if (amount <= 0) return toast('Escribe un importe mayor que cero', 'w');
+  if (amount > Number(state.model.availableCredit || 0) + 0.005) {
+    return toast(`El máximo disponible es ${fmt(state.model.availableCredit || 0)}`, 'w');
+  }
+  if (reason.length < 5) return toast('Escribe un motivo específico', 'w');
+  state.pendingAmount = amount;
+  state.pendingReason = reason;
+  confirmModal(
+    `<strong>Emitir nota de crédito monetaria</strong><br/><br/>
+     Importe: <strong>${fmt(amount)}</strong><br/>
+     Inventario: <strong>sin movimiento</strong><br/>
+     Motivo: <strong>${ventasEsc(reason)}</strong><br/><br/>
+     <span style="font-size:11px;color:var(--muted)">La factura original permanecerá intacta y la nota quedará vinculada.</span>`,
+    () => ventasSubmitMonetaryCredit(),
+    'Emitir nota de crédito',
+    'btn-dark'
+  );
+}
+
+async function ventasSubmitMonetaryCredit() {
+  const state = window._ventaMonetaryCredit;
+  if (!state?.model) return;
+  const result = await window.api.sales.corrections.createMonetaryCredit({
+    id: state.model.root.id,
+    amount: state.pendingAmount,
+    reason: state.pendingReason,
+    expectedRevision: Number(state.model.root.revision || 0),
+    idempotencyKey: state.idempotencyKey,
+    requestUserId: user.id,
+  });
+  if (!result?.ok) return toast(result?.error || 'No se pudo emitir la nota de crédito', 'err');
+  await Promise.all([
+    reloadSales({ range: 'all' }),
+    reloadProducts(),
+    reloadCustomers(),
+  ]);
+  renderVentas(document.getElementById('page'));
+  ventasOpenProductCorrectionResult(result, state.model.root.id);
+  toast('✓ Nota de crédito emitida sin movimiento de inventario');
+}
+
+function ventasProductLineUnitTotal(line) {
+  const originalQty = Number(line?.original_qty || 0);
+  const snapshotTotal = Number(line?.net_subtotal || 0) + Number(line?.tax_amt || 0);
+  if (originalQty > 0 && snapshotTotal > 0) return ventasRound2(snapshotTotal / originalQty);
+  return ventasRound2(Number(line?.unit_price || 0));
+}
+
+function ventasProductCorrectionSummary() {
+  const state = window._ventaProductCorrection;
+  if (!state?.model) return { credit: 0, addition: 0, net: 0, changed: false };
+  let credit = 0;
+  let addition = 0;
+  let changed = false;
+  state.model.lines.forEach((line, index) => {
+    const input = document.getElementById(`vpc-line-${index}`);
+    const target = Math.max(0, Number.parseInt(input?.value, 10) || 0);
+    const current = Number(line.current_qty || 0);
+    const unit = ventasProductLineUnitTotal(line);
+    if (target < current) {
+      credit += (current - target) * unit;
+      changed = true;
+    } else if (target > current) {
+      addition += (target - current) * unit;
+      changed = true;
+    }
+  });
+  (state.addedItems || []).forEach((row, index) => {
+    const qty = Math.max(0, Number.parseInt(document.getElementById(`vpc-added-qty-${index}`)?.value, 10) || row.qty || 0);
+    const price = Math.max(0, Number.parseFloat(document.getElementById(`vpc-added-price-${index}`)?.value) || 0);
+    if (qty > 0) {
+      addition += qty * price;
+      changed = true;
+    }
+  });
+  return {
+    credit: ventasRound2(credit),
+    addition: ventasRound2(addition),
+    net: ventasRound2(addition - credit),
+    changed,
+  };
+}
+
+function ventasRefreshProductCorrectionSummary() {
+  const summary = ventasProductCorrectionSummary();
+  const target = document.getElementById('vpc-summary');
+  if (!target) return;
+  const netLabel = summary.net > 0
+    ? `Cliente paga ${fmt(summary.net)} más`
+    : summary.net < 0
+      ? `Cliente recibe crédito/reembolso de ${fmt(Math.abs(summary.net))}`
+      : 'La diferencia neta es cero';
+  target.innerHTML = `
+    <div class="g3">
+      <div><span class="lbl">A favor del cliente</span><strong style="color:var(--red)">-${fmt(summary.credit)}</strong></div>
+      <div><span class="lbl">Productos agregados</span><strong style="color:var(--green)">${fmt(summary.addition)}</strong></div>
+      <div><span class="lbl">Resultado</span><strong>${ventasEsc(netLabel)}</strong></div>
+    </div>
+    <div class="ts" style="margin-top:7px">
+      Velo conservará el documento original, aplicará los respaldos internos necesarios y mostrará una sola factura Ajustada en Ventas.
+    </div>`;
+  const paymentWrap = document.getElementById('vpc-payment-wrap');
+  if (paymentWrap) paymentWrap.style.display = summary.addition > 0 ? '' : 'none';
+  const save = document.getElementById('vpc-save');
+  if (save) save.disabled = !summary.changed;
+}
+
+function ventasAdjustProductCorrectionQty(index, delta) {
+  const input = document.getElementById(`vpc-line-${index}`);
+  if (!input) return;
+  input.value = Math.max(0, (Number.parseInt(input.value, 10) || 0) + Number(delta || 0));
+  ventasRefreshProductCorrectionSummary();
+}
+
+function ventasRenderAddedCorrectionItems() {
+  const state = window._ventaProductCorrection;
+  const target = document.getElementById('vpc-added-items');
+  if (!state || !target) return;
+  target.innerHTML = (state.addedItems || []).length
+    ? state.addedItems.map((row, index) => `
+        <div style="display:grid;grid-template-columns:minmax(160px,1fr) 72px 110px 36px;gap:7px;align-items:end;padding:8px 0;border-top:1px solid var(--line2)">
+          <div><span class="lbl">Producto nuevo</span><strong>${ventasEsc(ventasDisplayProductName(row.product.name))}</strong>
+            <div class="ts">${ventasEsc(row.product.code || '')} · disponibles ${Number(row.product.stock || 0)}</div>
+          </div>
+          <div><label class="lbl">Cantidad</label><input class="inp" id="vpc-added-qty-${index}" type="number" min="1" max="999999" value="${row.qty || 1}" oninput="ventasRefreshProductCorrectionSummary()"/></div>
+          <div><label class="lbl">Precio final</label><input class="inp" id="vpc-added-price-${index}" type="number" min="0" step="0.01" value="${Number(row.unitPrice || 0).toFixed(2)}" oninput="ventasRefreshProductCorrectionSummary()"/></div>
+          <button type="button" class="btn btn-out" style="color:var(--red);padding:8px" onclick="ventasRemoveAddedCorrectionItem(${index})">${svg('xmark')}</button>
+        </div>`).join('')
+    : '<div class="ts" style="padding:9px 0">No has agregado productos nuevos.</div>';
+  ventasRefreshProductCorrectionSummary();
+}
+
+function ventasAddCorrectionProduct() {
+  const state = window._ventaProductCorrection;
+  const search = document.getElementById('vpc-product-search');
+  const typed = String(search?.value || '').trim();
+  const productId = Number(typed.match(/^(\d+)\s+·/)?.[1] || 0);
+  const product = state?.model?.products?.find(row => Number(row.id) === productId);
+  if (!product) return toast('Escribe el nombre o código y selecciona un producto de la lista', 'w');
+
+  const existingIndex = state.model.lines.findIndex(line => Number(line.product_id) === productId);
+  if (existingIndex >= 0) {
+    ventasAdjustProductCorrectionQty(existingIndex, 1);
+    if (search) search.value = '';
+    toast('Cantidad aumentada en la línea existente');
+    return;
+  }
+  const addedIndex = (state.addedItems || []).findIndex(row => Number(row.product.id) === productId);
+  if (addedIndex >= 0) {
+    const qtyInput = document.getElementById(`vpc-added-qty-${addedIndex}`);
+    if (qtyInput) qtyInput.value = (Number.parseInt(qtyInput.value, 10) || 0) + 1;
+    if (search) search.value = '';
+    ventasRefreshProductCorrectionSummary();
+    return;
+  }
+  const price = state.model.root.price_mode === 'wholesale'
+    ? Number(product.wholesale || product.price || 0)
+    : Number(product.price || 0);
+  state.addedItems.push({ product, qty: 1, unitPrice: price });
+  ventasRenderAddedCorrectionItems();
+  if (search) search.value = '';
+}
+
+function ventasRemoveAddedCorrectionItem(index) {
+  const state = window._ventaProductCorrection;
+  if (!state) return;
+  state.addedItems.splice(index, 1);
+  ventasRenderAddedCorrectionItems();
+}
+
+async function openVentaProductCorrection(saleId) {
+  const response = await window.api.sales.corrections.getProductModel({
+    id: saleId,
+    requestUserId: user.id,
+  });
+  if (!response?.ok) return toast(response?.error || 'No se pudo preparar la corrección', 'err');
+  const model = response.data;
+  window._ventaProductCorrection = {
+    model,
+    addedItems: [],
+    idempotencyKey: ventasCorrectionKey('products', model.root.id),
+  };
+  const defaultMethod = ['efectivo','tarjeta','transferencia','credito'].includes(model.root.payment_method)
+    ? model.root.payment_method : 'efectivo';
+  const lineGroups = new Map();
+  model.lines.forEach((line, index) => {
+    const key = `${line.source_sale_id}:${line.source_document_number}`;
+    if (!lineGroups.has(key)) lineGroups.set(key, []);
+    lineGroups.get(key).push({ line, index });
+  });
+  const existingRows = [...lineGroups.values()].map(group => {
+    const source = group[0].line;
+    return `
+      <section class="vpc-document-group">
+        <div class="vpc-document-head">
+          <strong>${source.source_kind === 'original' ? 'Factura original' : 'Aumento anterior'}</strong>
+          <span>${ventasEsc(source.source_document_number)}</span>
+        </div>
+        ${group.map(({ line, index }) => `
+          <div class="vpc-product-row">
+            <div class="vpc-product-info">
+              <strong>${ventasEsc(ventasDisplayProductName(line.product_name))}</strong>
+              <div class="ts">${ventasEsc(line.product_code || '')}</div>
+              <div class="ts">Importe unitario final (ITBIS incluido): ${fmt(ventasProductLineUnitTotal(line))}</div>
+            </div>
+            <div class="vpc-qty">
+              <button type="button" class="btn btn-out" onclick="ventasAdjustProductCorrectionQty(${index},-1)">−</button>
+              <input class="inp" id="vpc-line-${index}" type="number" min="0" max="999999"
+                value="${Number(line.current_qty || 0)}" aria-label="Cantidad corregida"
+                oninput="ventasRefreshProductCorrectionSummary()"/>
+              <button type="button" class="btn btn-out" onclick="ventasAdjustProductCorrectionQty(${index},1)">+</button>
+            </div>
+            <div class="ts vpc-qty-help">
+              Facturado: <strong>${Number(line.current_qty || 0)}</strong><br/>
+              Usa 0 para retirar; aumenta para agregar unidades.
+            </div>
+          </div>`).join('')}
+      </section>`;
+  }).join('');
+  const options = (model.products || []).map(product =>
+    `<option value="${product.id} · ${ventasEsc(product.code || '')} · ${ventasEsc(ventasDisplayProductName(product.name))}">${fmt(product.price || 0)} · stock ${Number(product.stock || 0)}</option>`
+  ).join('');
+  const warningTitles = {
+    FISCAL_DOCUMENT_PRESERVED: 'Documento fiscal original protegido',
+    NCF_PRESERVED: 'NCF original protegido',
+    MIXED_PAYMENT: 'Pago mixto',
+  };
+  const fiscalWarning = (model.warnings || []).find(warning =>
+    ['FISCAL_DOCUMENT_PRESERVED', 'NCF_PRESERVED'].includes(warning.code)
+  );
+  const visibleWarnings = (model.warnings || []).filter(warning =>
+    !['FISCAL_DOCUMENT_PRESERVED', 'NCF_PRESERVED'].includes(warning.code)
+  );
+
+  openModal(`
+    <div class="vpc-head">
+      <div class="modal-title">Corregir productos de la factura</div>
+      <div class="modal-sub">${facturaLabel(model.root)} · ajusta cantidades o agrega productos.</div>
+    </div>
+    <div class="vpc-scroll">
+      <div class="alrt a" style="margin-bottom:12px">
+        <div><div class="alrt-title">La factura original no se modifica</div>
+        <div class="alrt-sub">Reducir crea una nota de crédito; aumentar crea un respaldo interno vinculado. En Ventas se mantendrá una sola factura Ajustada.${fiscalWarning ? ` ${ventasEsc(fiscalWarning.message)}` : ''}</div></div>
+      </div>
+      ${visibleWarnings.map(warning => `
+        <div class="alrt ${warning.severity === 'high' ? 'r' : 'a'}" style="margin-bottom:8px">
+          <div><div class="alrt-title">${ventasEsc(warningTitles[warning.code] || 'Aviso importante')}</div><div class="alrt-sub">${ventasEsc(warning.message)}</div></div>
+        </div>`).join('')}
+      <div class="card vpc-current" style="margin-bottom:12px">
+        <div class="lbl" style="margin-bottom:7px">Documentos y productos vigentes</div>
+        ${existingRows || '<div class="ts">Todos los productos originales fueron retirados. Puedes agregar otros nuevos.</div>'}
+      </div>
+      <div class="card" style="margin-bottom:12px">
+        <div class="lbl" style="margin-bottom:7px">Agregar otro producto</div>
+        <div style="display:grid;grid-template-columns:1fr auto;gap:7px">
+          <input class="inp" id="vpc-product-search" list="vpc-products-list"
+            placeholder="Escribe el código, nombre o escanea el producto"
+            onkeydown="if(event.key==='Enter'){event.preventDefault();ventasAddCorrectionProduct()}"/>
+          <datalist id="vpc-products-list">${options}</datalist>
+          <button type="button" class="btn btn-dark" onclick="ventasAddCorrectionProduct()">${svg('plus')} Agregar</button>
+        </div>
+        <div id="vpc-added-items"></div>
+      </div>
+      <div class="card" id="vpc-summary" style="background:var(--surface2);margin-bottom:12px"></div>
+      <div class="g2 vpc-fields">
+        <div class="fg">
+          <label class="lbl">Motivo de la corrección *</label>
+          <input class="inp" id="vpc-reason" maxlength="500" placeholder="Ej.: se facturó una cantidad incorrecta"/>
+        </div>
+        <div class="fg" id="vpc-payment-wrap" style="display:none">
+          <label class="lbl">Cómo cobrar lo agregado</label>
+          <select class="inp" id="vpc-payment-method">
+            <option value="efectivo" ${defaultMethod === 'efectivo' ? 'selected' : ''}>Efectivo</option>
+            <option value="tarjeta" ${defaultMethod === 'tarjeta' ? 'selected' : ''}>Tarjeta</option>
+            <option value="transferencia" ${defaultMethod === 'transferencia' ? 'selected' : ''}>Transferencia</option>
+            ${Number(model.root.customer_id) !== 1 ? `<option value="credito" ${defaultMethod === 'credito' ? 'selected' : ''}>Cuenta por cobrar</option>` : ''}
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot vpc-foot">
+      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-dark" id="vpc-save" disabled onclick="ventasConfirmProductCorrection()">${svg('check')} Revisar y aplicar</button>
+    </div>
+  `, 'modal-xxl vpc-modal');
+  ventasRenderAddedCorrectionItems();
+}
+
+function ventasConfirmProductCorrection() {
+  const state = window._ventaProductCorrection;
+  if (!state?.model) return;
+  const reason = document.getElementById('vpc-reason')?.value?.trim() || '';
+  if (reason.length < 5) return toast('Escribe un motivo específico', 'w');
+  const summary = ventasProductCorrectionSummary();
+  if (!summary.changed) return toast('No hay cambios de productos', 'w');
+  state.pendingReason = reason;
+  state.pendingPaymentMethod = document.getElementById('vpc-payment-method')?.value || 'efectivo';
+  state.pendingLines = state.model.lines.map((line, index) => ({
+    sourceSaleId: Number(line.source_sale_id),
+    productId: Number(line.product_id),
+    targetQty: Math.max(0, Number.parseInt(document.getElementById(`vpc-line-${index}`)?.value, 10) || 0),
+  }));
+  state.pendingAddedItems = (state.addedItems || []).map((row, index) => ({
+    productId: Number(row.product.id),
+    qty: Math.max(0, Number.parseInt(document.getElementById(`vpc-added-qty-${index}`)?.value, 10) || row.qty || 0),
+    unitPrice: Math.max(0, Number.parseFloat(document.getElementById(`vpc-added-price-${index}`)?.value) || 0),
+  })).filter(row => row.qty > 0);
+  confirmModal(
+    `<strong>Resultado de la corrección</strong><br/><br/>
+     Nota de crédito: <strong>${fmt(summary.credit)}</strong><br/>
+     Aumento aplicado: <strong>${fmt(summary.addition)}</strong><br/>
+     Diferencia neta: <strong>${fmt(summary.net)}</strong><br/><br/>
+     <span style="font-size:11px;color:var(--muted)">En Ventas permanecerá una sola factura marcada como Ajustada, lista para reimprimir con su estado vigente.</span>`,
+    () => ventasSubmitProductCorrection(),
+    'Aplicar corrección',
+    'btn-dark'
+  );
+}
+
+async function ventasSubmitProductCorrection() {
+  const state = window._ventaProductCorrection;
+  if (!state?.model) return;
+  const result = await window.api.sales.corrections.correctProducts({
+    id: state.model.root.id,
+    lines: state.pendingLines || [],
+    addedItems: state.pendingAddedItems || [],
+    reason: state.pendingReason,
+    additionPaymentMethod: state.pendingPaymentMethod,
+    expectedRevision: Number(state.model.root.revision || 0),
+    idempotencyKey: state.idempotencyKey,
+    requestUserId: user.id,
+  });
+  if (!result?.ok) return toast(result?.error || 'No se pudo aplicar la corrección', 'err');
+  await Promise.all([
+    reloadSales({ range: 'all' }),
+    reloadProducts(),
+    reloadCustomers(),
+  ]);
+  renderVentas(document.getElementById('page'));
+  ventasOpenProductCorrectionResult(result, state.model.root.id);
+  toast('✓ Corrección aplicada y documentos listos para imprimir');
+}
+
+async function ventasPrintGeneratedCorrectionDocument(saleId) {
+  const sale = await window.api.sales.getById({ id: saleId });
+  if (!sale) return toast('No se pudo cargar el documento', 'err');
+  printReceipt(ventasPrintPayload(sale), false);
+}
+
+function ventasOpenOriginalAfterCorrection(saleId) {
+  const sale = (DB.sales || []).find(row => Number(row.id) === Number(saleId));
+  if (!sale) return toast('Factura original no encontrada', 'err');
+  closeModal();
+  openDetalleVentaModal(sale);
+}
+
+function ventasOpenProductCorrectionResult(result, originalSaleId) {
+  const isMonetaryCredit = result.creditKind === 'monetary';
+  openModal(`
+    <div class="modal-title">${isMonetaryCredit ? 'Nota de crédito emitida' : 'Corrección aplicada'}</div>
+    <div class="modal-sub">En Ventas permanece una sola factura y ahora aparece marcada como Ajustada.</div>
+    <div class="alrt g" style="margin-bottom:12px">
+      <div><div class="alrt-title">Documentos creados correctamente</div>
+      <div class="alrt-sub">
+        Crédito: ${fmt(result.creditTotal || 0)} · Cargos agregados: ${fmt(result.additionTotal || 0)} ·
+        Diferencia: ${fmt(result.netDifference || 0)}${isMonetaryCredit ? ' · Inventario sin cambios' : ''}
+      </div></div>
+    </div>
+    <div class="card" style="background:var(--surface2);margin-bottom:12px">
+      <strong style="display:block;margin-bottom:5px">¿Qué deseas imprimir?</strong>
+      <div class="ts">
+        Entrega al cliente la factura ajustada: contiene los productos, cantidades y total vigentes en una sola copia.
+      </div>
+      <div style="display:grid;gap:7px;margin-top:10px">
+        <button class="btn btn-dark" onclick="closeModal();reimprimirVenta(${originalSaleId})">
+          ${svg('print')} Reimprimir factura ajustada
+        </button>
+      </div>
+    </div>
+    <div class="alrt a">
+      <div><div class="alrt-title">Sin ventas duplicadas</div>
+      <div class="alrt-sub">Las notas de crédito y aumentos vinculados quedan disponibles en el historial de auditoría, pero no aparecen como ventas independientes.</div></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="ventasOpenOriginalAfterCorrection(${originalSaleId})">${svg('eye')} Ver factura ajustada</button>
+      <button class="btn btn-dark" onclick="closeModal()">Terminar</button>
+    </div>
+  `, 'modal-lg');
+}
+
+function ventasOpenSimpleCorrectionResult(saleId, message) {
+  openModal(`
+    <div class="modal-title">Corrección guardada</div>
+    <div class="modal-sub">${ventasEsc(message || 'La corrección quedó registrada con auditoría.')}</div>
+    <div class="alrt g" style="margin-bottom:12px">
+      <div><div class="alrt-title">La factura original permanece intacta</div>
+      <div class="alrt-sub">Puedes entregar un resumen actualizado o reimprimir una copia del documento original.</div></div>
+    </div>
+    <div style="display:grid;gap:8px">
+      <button class="btn btn-dark" onclick="imprimirVentaResumenActualizado(${saleId})">
+        ${svg('print')} Imprimir resumen actualizado
+      </button>
+      <button class="btn btn-out" onclick="closeModal();reimprimirVenta(${saleId})">
+        ${svg('print')} Reimprimir factura original
+      </button>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="ventasOpenOriginalAfterCorrection(${saleId})">${svg('eye')} Ver factura</button>
+      <button class="btn btn-dark" onclick="closeModal()">Terminar</button>
+    </div>
+  `, 'modal-lg');
+}
+
+async function openVentaCancellationFromCorrection(saleId) {
+  const cached = (DB.sales || []).find(row => Number(row.id) === Number(saleId));
+  const sale = cached || await window.api.sales.getById({ id: saleId });
+  if (!sale) return toast('Factura no encontrada', 'err');
+  openAnulacionModal(sale);
+}
+
+async function openVentaDateModal(saleId) {
+  const preview = await window.api.sales.corrections.getImpact({
+    id: saleId,
+    requestUserId: user.id,
+  });
+  if (!preview?.ok) return toast(preview?.error || 'No se pudo cargar el impacto', 'err');
+  const ctx = preview.data;
+  const sale = ctx.sale;
+  const current = String(sale.sale_date || '').slice(0, 10);
+  window._ventaDateCorrection = {
+    saleId,
+    revision: Number(sale.revision || 0),
+    idempotencyKey: ventasCorrectionKey('change-date', saleId),
+  };
+  openModal(`
+    <div class="modal-title">Cambiar fecha operativa de venta</div>
+    <div class="modal-sub">${facturaLabel(sale)} · NCF: ${ventasEsc(sale.ncf || 'No aplica')} · ${ventasEsc(sale.customer_name || 'Consumidor Final')}</div>
+    <div class="g3" style="margin-bottom:12px">
+      <div><label class="lbl">Fecha original</label><strong>${fdate(sale.original_sale_date || current)}</strong></div>
+      <div><label class="lbl">Fecha operativa actual</label><strong>${fdate(current)}</strong></div>
+      <div><label class="lbl">Fecha fiscal</label><strong>${sale.fiscal_issued_at ? fdate(String(sale.fiscal_issued_at).slice(0,10)) : 'No aplica'}</strong></div>
+    </div>
+    <div class="g2">
+      <div class="fg">
+        <label class="lbl">Nueva fecha *</label>
+        <input class="inp" id="venta-new-date" type="date" value="${ventasEsc(current)}"
+          onchange="ventasRefreshDateImpact(${saleId})"/>
+      </div>
+      <div class="fg">
+        <label class="lbl">Motivo obligatorio *</label>
+        <input class="inp" id="venta-date-reason" maxlength="500"
+          placeholder="Ej.: error al seleccionar la fecha"/>
+      </div>
+    </div>
+    <div class="alrt a">
+      <div><div class="alrt-title">Acción auditada y no destructiva</div>
+      <div class="alrt-sub">La factura se moverá en los reportes comerciales. La fecha original permanecerá guardada. Pagos, cierres, asientos y fecha fiscal conservarán su fecha real.</div></div>
+    </div>
+    <div id="venta-date-impact">${ventasRenderDateImpact(ctx)}</div>
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-dark" id="venta-date-save" onclick="guardarVentaDate(${saleId})">${svg('check')} Confirmar cambio</button>
+    </div>
+  `, 'modal-lg');
+}
+
+function ventasRenderDateImpact(ctx) {
+  const sale = ctx.sale || {};
+  const warnings = ctx.warnings || [];
+  return `
+    <div class="card" style="margin-top:12px;background:var(--surface2)">
+      <div class="g3">
+        <div><span class="lbl">Total</span><strong>${fmt(sale.total || 0)}</strong></div>
+        <div><span class="lbl">Pago</span><strong>${ventasEsc(sale.payment_method || '—')}</strong></div>
+        <div><span class="lbl">Caja original</span><strong>${ctx.cash ? `#${ctx.cash.id} · ${ventasEsc(ctx.cash.status)}` : 'Sin caja'}</strong></div>
+      </div>
+      ${(ctx.modules || []).map(module => `
+        <div style="padding:7px 0;border-top:1px solid var(--line2)">
+          <strong style="font-size:11px">${ventasEsc(module.label)}</strong>
+          <div class="ts">${ventasEsc(module.effect)}</div>
+        </div>`).join('')}
+    </div>
+    ${warnings.map(warning => `
+      <div class="alrt ${warning.severity === 'high' ? 'r' : 'a'}" style="margin-top:8px">
+        <div><div class="alrt-title">${ventasEsc(warning.code.replace(/_/g, ' '))}</div>
+        <div class="alrt-sub">${ventasEsc(warning.message)}${warning.permitted === false ? ` · ${ventasEsc(warning.requiresPermission || 'Permiso adicional requerido')}` : ''}</div></div>
+      </div>`).join('')}`;
+}
+
+async function ventasRefreshDateImpact(saleId) {
+  const saleDate = document.getElementById('venta-new-date')?.value || '';
+  const target = document.getElementById('venta-date-impact');
+  if (!target || !saleDate) return;
+  target.innerHTML = '<div class="ts" style="padding:12px">Evaluando impacto…</div>';
+  const preview = await window.api.sales.corrections.getImpact({
+    id: saleId,
+    saleDate,
+    requestUserId: user.id,
+  });
+  target.innerHTML = preview?.ok
+    ? ventasRenderDateImpact(preview.data)
+    : `<div class="alrt r"><div><div class="alrt-title">No se puede evaluar</div><div class="alrt-sub">${ventasEsc(preview?.error || 'Error')}</div></div></div>`;
+  const save = document.getElementById('venta-date-save');
+  if (save) save.disabled = !preview?.ok || (preview.data?.warnings || []).some(w => w.permitted === false);
 }
 
 async function guardarVentaDate(saleId) {
+  const state = window._ventaDateCorrection;
   const saleDate = document.getElementById('venta-new-date')?.value || '';
+  const reason = document.getElementById('venta-date-reason')?.value?.trim() || '';
   if (!/^\d{4}-\d{2}-\d{2}$/.test(saleDate)) return toast('Selecciona una fecha válida', 'w');
-  const result = await window.api.sales.updateDate({ id: saleId, saleDate, requestUserId: user.id });
-  if (!result?.ok) return toast(result?.error || 'No se pudo cambiar la fecha', 'err');
+  if (reason.length < 5) return toast('Escribe un motivo específico', 'w');
+  const button = document.getElementById('venta-date-save');
+  if (button) button.disabled = true;
+  const result = await window.api.sales.corrections.changeDate({
+    id: saleId,
+    saleDate,
+    reason,
+    requestUserId: user.id,
+    authorizedByUserId: user.id,
+    expectedRevision: state?.revision,
+    idempotencyKey: state?.idempotencyKey || ventasCorrectionKey('change-date', saleId),
+  });
+  if (!result?.ok) {
+    if (button) button.disabled = false;
+    return toast(result?.error || 'No se pudo cambiar la fecha', 'err');
+  }
   closeModal();
   await reloadSales({ range: ventasRange, view: ventasTab === 'cotizaciones' ? undefined : 'sales' });
-  toast(`✓ ${facturaLabel(result.data)} movida al ${fdate(saleDate)}`);
   renderVentas(document.getElementById('page'));
+  ventasOpenSimpleCorrectionResult(
+    result.data.id,
+    `${facturaLabel(result.data)} movida al ${fdate(saleDate)} sin alterar pagos ni fecha fiscal.`
+  );
+  toast('✓ Fecha operativa corregida');
+}
+
+async function openVentaAdminModal(saleId) {
+  const preview = await window.api.sales.corrections.getImpact({ id: saleId, requestUserId: user.id });
+  if (!preview?.ok) return toast(preview?.error || 'No se pudo cargar la factura', 'err');
+  const sale = preview.data.sale;
+  const data = sale.administrative_data || {};
+  window._ventaAdminCorrection = {
+    revision: Number(sale.revision || 0),
+    idempotencyKey: ventasCorrectionKey('administrative', saleId),
+  };
+  openModal(`
+    <div class="modal-title">Información administrativa</div>
+    <div class="modal-sub">${facturaLabel(sale)} · estos campos no cambian el comprobante, cliente fiscal ni importes.</div>
+    <div class="g2">
+      <div class="fg"><label class="lbl">Referencia de pedido</label><input class="inp" id="vac-order" maxlength="500" value="${ventasEsc(data.order_reference || '')}"/></div>
+      <div class="fg"><label class="lbl">Orden de compra</label><input class="inp" id="vac-po" maxlength="500" value="${ventasEsc(data.purchase_order || '')}"/></div>
+      <div class="fg"><label class="lbl">Chofer</label><input class="inp" id="vac-driver" maxlength="500" value="${ventasEsc(data.driver || '')}"/></div>
+      <div class="fg"><label class="lbl">Ruta</label><input class="inp" id="vac-route" maxlength="500" value="${ventasEsc(data.route || '')}"/></div>
+      <div class="fg"><label class="lbl">Etiquetas</label><input class="inp" id="vac-tags" maxlength="500" value="${ventasEsc(data.tags || '')}"/></div>
+      <div class="fg"><label class="lbl">Contacto no fiscal</label><input class="inp" id="vac-contact" maxlength="500" value="${ventasEsc(data.non_fiscal_contact || '')}"/></div>
+    </div>
+    <div class="fg"><label class="lbl">Nota interna</label><textarea class="inp" id="vac-note" rows="2" maxlength="500">${ventasEsc(data.internal_note || '')}</textarea></div>
+    <div class="fg"><label class="lbl">Información de entrega</label><textarea class="inp" id="vac-delivery" rows="2" maxlength="1000">${ventasEsc(data.delivery_info || '')}</textarea></div>
+    <div class="fg"><label class="lbl">Motivo del cambio *</label><input class="inp" id="vac-reason" maxlength="500" placeholder="Motivo administrativo específico"/></div>
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-dark" onclick="guardarVentaAdmin(${saleId})">${svg('check')} Guardar con auditoría</button>
+    </div>
+  `, 'modal-lg');
+}
+
+async function guardarVentaAdmin(saleId) {
+  const reason = document.getElementById('vac-reason')?.value?.trim() || '';
+  if (reason.length < 5) return toast('Escribe un motivo específico', 'w');
+  const state = window._ventaAdminCorrection || {};
+  const result = await window.api.sales.corrections.updateAdministrative({
+    id: saleId,
+    values: {
+      order_reference: document.getElementById('vac-order')?.value || '',
+      purchase_order: document.getElementById('vac-po')?.value || '',
+      driver: document.getElementById('vac-driver')?.value || '',
+      route: document.getElementById('vac-route')?.value || '',
+      tags: document.getElementById('vac-tags')?.value || '',
+      non_fiscal_contact: document.getElementById('vac-contact')?.value || '',
+      internal_note: document.getElementById('vac-note')?.value || '',
+      delivery_info: document.getElementById('vac-delivery')?.value || '',
+    },
+    reason,
+    requestUserId: user.id,
+    expectedRevision: state.revision,
+    idempotencyKey: state.idempotencyKey || ventasCorrectionKey('administrative', saleId),
+  });
+  if (!result?.ok) return toast(result?.error || 'No se pudo guardar', 'err');
+  closeModal();
+  await reloadSales({ range: ventasRange, view: 'sales' });
+  renderVentas(document.getElementById('page'));
+  ventasOpenSimpleCorrectionResult(saleId, 'Información administrativa guardada con auditoría.');
+  toast('✓ Información administrativa corregida');
+}
+
+async function openVentaCorrectionsHistory(saleId) {
+  const result = await window.api.sales.corrections.getHistory({ id: saleId, requestUserId: user.id });
+  if (!result?.ok) return toast(result?.error || 'No se pudo cargar el historial', 'err');
+  const data = result.data;
+  const sale = data.sale;
+  const events = [
+    {
+      date: sale.created_at,
+      title: 'Factura creada',
+      detail: `Fecha original: ${fdate(sale.original_sale_date)} · Total: ${fmt(sale.total)}${sale.ncf ? ` · NCF ${sale.ncf}` : ''}`,
+    },
+    ...(data.payments || []).map(payment => ({
+      date: payment.created_at,
+      title: 'Pago recibido',
+      detail: `${fmt(payment.amount)} · ${payment.method || 'efectivo'} · fecha real conservada`,
+    })),
+    ...(data.corrections || []).map(correction => ({
+      date: correction.created_at,
+      title: correction.action === 'change_sale_date'
+        ? 'Fecha operativa modificada'
+        : correction.action === 'correct_products'
+          ? 'Productos corregidos'
+          : correction.action === 'create_monetary_credit'
+            ? 'Nota de crédito monetaria'
+            : 'Información administrativa modificada',
+      detail: correction.action === 'change_sale_date'
+        ? `${fdate(correction.before_data.sale_date)} → ${fdate(correction.after_data.sale_date)} · ${correction.reason} · Autorizó: ${correction.authorized_by_name || '—'}`
+        : correction.action === 'correct_products'
+          ? `Crédito: ${fmt(correction.metadata.creditTotal || 0)} · agregado: ${fmt(correction.metadata.additionTotal || 0)} · ${correction.reason}`
+          : correction.action === 'create_monetary_credit'
+            ? `Crédito: ${fmt(correction.metadata.creditTotal || 0)} · inventario sin movimiento · ${correction.reason}`
+            : `${correction.reason} · ${correction.affected_modules.join(', ')}`,
+    })),
+    ...(data.relatedDocuments || []).map(document => ({
+      date: document.created_at,
+      title: document.type === 'devolucion'
+        ? (document.correction_kind === 'monetary_credit' ? 'Nota de crédito monetaria' : 'Nota de crédito por devolución')
+        : document.document_role === 'supplemental_invoice'
+          ? 'Documento interno de aumento'
+          : 'Documento relacionado',
+      detail: `${document.document_number_fmt || document.numero_factura_fmt || '#' + document.id} · ${fmt(document.total)} · ${document.status}`,
+    })),
+    ...(data.commissionAdjustments || []).map(adjustment => ({
+      date: adjustment.created_at,
+      title: 'Ajuste de comisión',
+      detail: `${fdate(adjustment.previous_sale_date)} → ${fdate(adjustment.new_sale_date)} · ${fmt(adjustment.commission_amount)} · ${adjustment.status}`,
+    })),
+    ...(data.accountingEntries || []).map(entry => ({
+      date: entry.created_at,
+      title: entry.status === 'reversado' ? 'Ajuste contable / reverso' : 'Asiento contable',
+      detail: `${entry.number || '#' + entry.id} · fecha contable ${entry.date} · ${entry.status}`,
+    })),
+    ...(data.auditEvents || [])
+      .filter(event => ![
+        'fecha_operativa_venta_cambiada',
+        'datos_administrativos_venta_cambiados',
+        'productos_venta_corregidos',
+        'nota_credito_monetaria_registrada',
+      ].includes(event.action))
+      .map(event => ({
+        date: event.created_at,
+        title: event.action.replace(/_/g, ' '),
+        detail: `${event.user_name || 'Sistema'} · ${event.detail || ''}`,
+      })),
+  ].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  openModal(`
+    <div class="modal-title">Historial de correcciones</div>
+    <div class="modal-sub">${facturaLabel(sale)} · registro inmutable</div>
+    <div class="card" style="background:var(--surface2);margin-bottom:12px">
+      <div class="g3">
+        <div><span class="lbl">Total original</span><strong>${fmt(sale.total)}</strong></div>
+        <div><span class="lbl">Fecha original</span><strong>${fdate(sale.original_sale_date)}</strong></div>
+        <div><span class="lbl">Fecha operativa</span><strong>${fdate(sale.sale_date)}</strong></div>
+      </div>
+    </div>
+    <div style="display:grid;gap:8px;max-height:470px;overflow:auto">
+      ${events.map(event => `
+        <div style="display:grid;grid-template-columns:135px 1fr;gap:12px;padding:10px 0;border-bottom:1px solid var(--line2)">
+          <div class="ts">${ventasEsc(event.date || '')}</div>
+          <div><strong style="font-size:12px">${ventasEsc(event.title)}</strong><div class="ts" style="margin-top:3px">${ventasEsc(event.detail)}</div></div>
+        </div>`).join('') || '<div class="empty"><p>Sin eventos</p></div>'}
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
+      <button class="btn btn-dark" onclick="imprimirVentaResumenActualizado(${sale.id})">${svg('print')} Imprimir resumen actualizado</button>
+    </div>
+  `, 'modal-lg');
+}
+
+async function imprimirVentaResumenActualizado(saleId) {
+  const result = await window.api.sales.corrections.getHistory({ id: saleId, requestUserId: user.id });
+  if (!result?.ok) return toast(result?.error || 'No se pudo preparar el resumen', 'err');
+  const data = result.data;
+  const sale = data.sale;
+  const creditTotal = (data.relatedDocuments || [])
+    .filter(document => document.type === 'devolucion' && document.status !== 'cancelled')
+    .reduce((sum, document) => sum + Number(document.total || 0), 0);
+  const debitTotal = (data.relatedDocuments || [])
+    .filter(document => document.document_role === 'supplemental_invoice' && document.status !== 'cancelled')
+    .reduce((sum, document) => sum + Number(document.total || 0), 0);
+  const netTotal = Math.max(0, Number(sale.total || 0) - creditTotal + debitTotal);
+  const paymentTotal = (data.payments || []).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const paymentState = creditTotal > 0 || debitTotal > 0
+    ? 'Distribuido entre la factura original y sus documentos relacionados'
+    : sale.payment_method === 'credito'
+    ? (paymentTotal >= netTotal ? 'Pagada' : `Pendiente: ${fmt(Math.max(0, netTotal - paymentTotal))}`)
+    : 'Pagada / cobrada en su fecha real';
+  const rows = (data.corrections || []).map(correction => `
+    <tr><td>${ventasEsc(correction.created_at)}</td><td>${ventasEsc(correction.action)}</td>
+    <td>${ventasEsc(correction.reason)}</td><td>${ventasEsc(correction.authorized_by_name || '—')}</td></tr>`).join('');
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+    body{font-family:Arial,sans-serif;color:#111827;margin:28px;font-size:12px}
+    h1{font-size:20px;margin:0 0 4px}.muted{color:#6b7280}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0}
+    .box{border:1px solid #e5e7eb;border-radius:7px;padding:10px}.box span{display:block;color:#6b7280;font-size:10px;text-transform:uppercase}
+    .box strong{display:block;font-size:15px;margin-top:4px}table{width:100%;border-collapse:collapse;margin-top:16px}
+    th,td{text-align:left;border-bottom:1px solid #e5e7eb;padding:7px}th{background:#f3f4f6;font-size:10px;text-transform:uppercase}
+    .notice{margin-top:22px;border:1px solid #f59e0b;background:#fffbeb;padding:11px;border-radius:7px;font-weight:700}
+  </style></head><body>
+    <h1>Resumen actualizado de operación</h1>
+    <div class="muted">${ventasEsc(facturaLabel(sale))}${sale.ncf ? ` · NCF ${ventasEsc(sale.ncf)}` : ''} · ${ventasEsc(sale.customer_name || 'Consumidor Final')}</div>
+    <div class="grid">
+      <div class="box"><span>Total original</span><strong>${fmt(sale.total)}</strong></div>
+      <div class="box"><span>Notas de crédito / devoluciones</span><strong>-${fmt(creditTotal)}</strong></div>
+      <div class="box"><span>Aumentos vinculados</span><strong>+${fmt(debitTotal)}</strong></div>
+      <div class="box"><span>Total neto comercial</span><strong>${fmt(netTotal)}</strong></div>
+      <div class="box"><span>Fecha original</span><strong>${fdate(sale.original_sale_date)}</strong></div>
+      <div class="box"><span>Fecha operativa actual</span><strong>${fdate(sale.sale_date)}</strong></div>
+      <div class="box"><span>Fecha fiscal</span><strong>${sale.fiscal_issued_at ? fdate(String(sale.fiscal_issued_at).slice(0,10)) : 'No aplica'}</strong></div>
+    </div>
+    <div class="box"><span>Estado de pago</span><strong>${ventasEsc(paymentState)}</strong></div>
+    <table><thead><tr><th>Fecha</th><th>Acción</th><th>Motivo</th><th>Autorizó</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="4">Sin correcciones aplicadas</td></tr>'}</tbody></table>
+    <div class="notice">Este documento es un resumen comercial y no sustituye la factura ni los documentos fiscales relacionados.</div>
+  </body></html>`;
+  if (typeof printHTML === 'function') {
+    await printHTML(html, 'factura');
+  } else {
+    toast('Servicio de impresión no disponible', 'err');
+  }
 }
 
 // Generar (o reutilizar) el conduce de una venta ya realizada, guardarlo en el
@@ -1639,7 +2656,7 @@ async function ventaWhatsApp(saleId) {
   if (!sale) { toast('No se pudo cargar la venta', 'e'); return; }
 
   const items   = sale.items || [];
-  const fecha   = (sale.created_at || sale.date || '').split('T')[0].split(' ')[0];
+  const fecha   = (sale.sale_date || sale.date || '').split('T')[0].split(' ')[0];
   const tipo    = sale.type === 'cotizacion' ? 'COTIZACION' : 'FACTURA';
   const cliente = sale.customer_name || 'Consumidor Final';
   const taxAmt  = sale.tax_amt || 0;
@@ -1717,7 +2734,7 @@ function exportVentasPDF() {
   const total = sales.reduce((a, s) => a + (s.total || 0), 0);
 
   const rows = [...sales].sort((a, b) => (b.id || 0) - (a.id || 0)).map(s => {
-    const fecha  = (s.created_at || s.date || '').split('T')[0].split(' ')[0];
+    const fecha  = (s.sale_date || s.date || '').split('T')[0].split(' ')[0];
     const method = s.payment_method || s.pay || '';
     const name   = s.customer_name  || 'Consumidor Final';
     return `
@@ -1773,15 +2790,15 @@ async function renderDevoluciones(el) {
 
   el.appendChild(h('div', { class: 'sec-hdr' },
     h('div', null,
-      h('div', { class: 'sec-title' }, 'Devoluciones'),
-      h('div', { class: 'sec-sub' }, 'Procesar devolución por número de factura')
+      h('div', { class: 'sec-title' }, 'Devoluciones y notas de crédito'),
+      h('div', { class: 'sec-sub' }, 'Devuelve productos o consulta ajustes monetarios emitidos')
     )
   ));
 
   const searchCard = h('div', { class: 'card mb20' });
   searchCard.appendChild(
     h('div', { style: { fontWeight: 700, fontSize: '13px', marginBottom: '12px' } },
-      'Buscar factura para devolver')
+      'Buscar factura para devolver productos')
   );
 
   const searchRow = h('div', { class: 'flex', style: { gap: '8px' } },
@@ -1820,13 +2837,13 @@ async function renderDevoluciones(el) {
   const devs = DB.sales.filter(s => s.type === 'devolucion');
   const histCard = h('div', { class: 'card' });
   histCard.appendChild(h('div', { class: 'fxb mb8' },
-    h('div', { class: 'card-title' }, `Historial (${devs.length})`)
+        h('div', { class: 'card-title' }, `Historial de créditos (${devs.length})`)
   ));
 
   if (!devs.length) {
     histCard.appendChild(h('div', { class: 'empty', style: { padding: '24px' } },
       h('div', { html: svg('return'), style: { color: 'var(--muted2)' } }),
-      h('p', null, 'Sin devoluciones registradas')
+      h('p', null, 'Sin devoluciones ni notas de crédito registradas')
     ));
   } else {
     const tw  = h('div', { class: 'tw' });
@@ -1839,11 +2856,15 @@ async function renderDevoluciones(el) {
     );
     const tbody = h('tbody', null);
     [...devs].reverse().forEach(d => {
-      const fecha = (d.created_at || d.date || '').split('T')[0].split(' ')[0];
+      const fecha = (d.sale_date || d.date || '').split('T')[0].split(' ')[0];
       tbody.appendChild(h('tr', { style: { background: 'var(--red-bg)' } },
         h('td', { class: 'tm' }, facturaLabel(d)),
         h('td', { class: 'ts' }, fdate(fecha)),
-        h('td', null, h('div', { class: 'tb' }, d.customer_name || d.clientName || '—')),
+        h('td', null,
+          h('div', { class: 'tb' }, d.customer_name || d.clientName || '—'),
+          h('div', { class: 'ts' },
+            d.correction_kind === 'monetary_credit' ? 'Ajuste monetario' : 'Devolución de productos')
+        ),
         h('td', { class: 'tm' }, d.original_sale_id ? facturaLabelOriginal(d) : '—'),
         h('td', null, h('span', { style: { fontWeight: 700, color: 'var(--red)' } },
           `-${fmt(d.total)}`)),
@@ -1923,7 +2944,7 @@ async function buscarFacturaDevolucion() {
       Number(i.returnable_qty ?? i.qty) > 0
     );
     if (!items.length) continue;
-    const fecha = (s.created_at || '').split('T')[0].split(' ')[0];
+    const fecha = (s.sale_date || '').split('T')[0].split(' ')[0];
 
     const card = h('div', { class: 'card', style: { marginBottom: '8px' } });
     card.appendChild(h('div', { class: 'fxb', style: { marginBottom: '8px' } },

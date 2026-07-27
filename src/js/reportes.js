@@ -769,6 +769,7 @@ function renderAbonosContenido(el, d) {
       <td>
         <div>${factura}${p.sale_ncf ? ` <span style="font-size:10px;color:var(--muted2)">${_repEsc(p.sale_ncf)}</span>` : ''}</div>
         <div style="font-size:10px;color:var(--muted2)">${_repEsc(p.note || 'Abono')}</div>
+        ${p.sale_date ? `<div style="font-size:10px;color:var(--muted2)">Venta: ${_repEsc(p.sale_date)}${p.sale_fiscal_issued_at ? ` · Fiscal: ${_repEsc(String(p.sale_fiscal_issued_at).slice(0,10))}` : ''}</div>` : ''}
       </td>
       <td><span class="badge g">${_repEsc(p.method || 'efectivo')}</span></td>
       <td><span class="badge ${p.imported ? 'a' : 'b'}">${source}</span></td>

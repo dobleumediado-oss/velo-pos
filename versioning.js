@@ -8,6 +8,7 @@ const fs   = require('fs');
 const path = require('path');
 const { ensureSalespeopleSchema } = require('./src/main/salespeople-repo');
 const { ensureCheckoutOrdersSchema } = require('./src/main/checkout-orders-repo');
+const { ensureSaleCorrectionsSchema } = require('./src/main/sale-corrections-repo');
 
 // ── Versión centralizada — siempre desde package.json ──
 // Nunca hardcodeada aquí. Así package.json es la única fuente de verdad.
@@ -1270,6 +1271,22 @@ const MIGRATIONS = [
       const insert = db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING');
       insert.run('printer_destinations', '[]');
       console.log('[MIGRATION 1.28.0] Flujos avanzados de venta habilitados');
+    }
+  },
+  {
+    version: '1.30.0-sale-corrections',
+    description: 'Corrección controlada de facturas: fechas separadas, permisos e historial inmutable',
+    run(db) {
+      ensureSaleCorrectionsSchema(db);
+      console.log('[MIGRATION 1.30.0-sale-corrections] Correcciones controladas habilitadas');
+    }
+  },
+  {
+    version: '1.30.0-product-corrections',
+    description: 'Corrección de productos: notas de crédito, facturas complementarias y documentos enlazados',
+    run(db) {
+      ensureSaleCorrectionsSchema(db);
+      console.log('[MIGRATION 1.30.0-product-corrections] Corrección de productos habilitada');
     }
   },
 ];

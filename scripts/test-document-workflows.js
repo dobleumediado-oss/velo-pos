@@ -123,6 +123,26 @@ const supplierPayment = DB.expensesRepo.pay({
 ok(supplierPayment.documentNumberFmt === 'PPR-000001',
   'pago a proveedor usa su secuencia PPR');
 
+console.log('\n== Continuidad de numeración histórica importada ==');
+db.prepare(`
+  INSERT INTO sales(
+    customer_id,customer_name,type,status,subtotal,total,payment_method,cajero,
+    numero_factura,numero_factura_fmt,old_id_factura,import_source,
+    original_sale_date,sale_date,created_at,updated_at
+  ) VALUES(?,?,'factura','completed',100,100,'efectivo','Importación histórica',
+           2363,'00002363',253202,'equiparts_bak',
+           '2026-07-21','2026-07-21','2026-07-21 00:00:00','2026-07-21 00:00:00')
+`).run(customerId, 'Cliente histórico');
+const continuedCash = DB.salesRepo.getById(create('efectivo').saleId);
+const continuedCredit = DB.salesRepo.getById(create('credito').saleId);
+ok(continuedCash.document_kind === 'factura_historica' &&
+  continuedCash.document_number_fmt === '00002364' &&
+  continuedCash.numero_factura_fmt === '00002364',
+  'con datos importados la factura continúa en 00002364');
+ok(continuedCredit.document_kind === 'factura_historica' &&
+  continuedCredit.document_number_fmt === '00002365',
+  'contado y crédito comparten la secuencia histórica');
+
 try { db.close(); } catch {}
 try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
 

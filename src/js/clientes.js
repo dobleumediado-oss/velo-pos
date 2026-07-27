@@ -777,7 +777,7 @@ async function cargarActividadRepresentantes(customerId, contacts) {
       const invoiced = invoices.reduce((sum, s) => sum + Number(s.total || 0), 0);
       const paid = attributedPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
       const timeline = [
-        ...documents.map(s => ({ date: s.created_at, label: `${facturaLabel(s)} · ${s.type === 'cotizacion' ? 'Cotización' : 'Factura'} · ${fmt(s.total || 0)}` })),
+        ...documents.map(s => ({ date: s.sale_date, label: `${facturaLabel(s)} · ${s.type === 'cotizacion' ? 'Cotización' : 'Factura'} · ${fmt(s.total || 0)}` })),
         ...attributedPayments.map(p => ({ date: p.created_at, label: `${reciboLabel(p)} · Abono · ${fmt(p.amount || 0)}` })),
       ].sort((a,b) => String(b.date || '').localeCompare(String(a.date || ''))).slice(0, 3);
       el.innerHTML = `
@@ -1208,7 +1208,7 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
     ? `<tr><td colspan="5" style="text-align:center;color:var(--muted2);padding:14px;font-size:12px">
          Sin compras registradas</td></tr>`
     : ventas.map(s => {
-        const fecha = (s.created_at || s.date || '').split('T')[0].split(' ')[0];
+        const fecha = (s.sale_date || s.date || '').split('T')[0].split(' ')[0];
         const tipo  = s.type === 'devolucion' ? 'Devolución' :
                       s.type === 'cotizacion' ? 'Cotización' : 'Factura';
         return `
@@ -1348,7 +1348,7 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
         ${ventas.length === 0
           ? `<div style="text-align:center;padding:16px;color:var(--muted2);font-size:12px">Sin facturas registradas</div>`
           : ventas.map((s, idx) => {
-              const fecha = (s.created_at||s.date||'').split('T')[0].split(' ')[0];
+              const fecha = (s.sale_date||s.date||'').split('T')[0].split(' ')[0];
               const tipo  = s.type==='devolucion'?'Devolución':s.type==='cotizacion'?'Cotización':'Factura';
               const metColor = (s.payment_method||s.pay)==='credito'?'var(--amber)':s.type==='devolucion'?'var(--red)':'var(--green)';
               return `
@@ -1521,7 +1521,7 @@ async function exportClientCreditPDF(c) {
   const ventasRows = ventas.length === 0
     ? `<tr><td colspan="5" style="text-align:center;color:#9ca3af;padding:12px">Sin compras registradas</td></tr>`
     : ventas.map(s => {
-        const fecha = (s.created_at || s.date || '').split('T')[0].split(' ')[0];
+        const fecha = (s.sale_date || s.date || '').split('T')[0].split(' ')[0];
         const tipo  = s.type === 'devolucion' ? 'Devolución' :
                       s.type === 'cotizacion' ? 'Cotización' : 'Factura';
         const estado = s.status === 'returned' ? 'Devuelta' :

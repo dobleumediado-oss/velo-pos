@@ -10,8 +10,9 @@ independientes:
 
 | Documento | Prefijo | Cuándo se emite |
 |---|---:|---|
-| Factura al contado | `FAC-` | Al completar una factura no financiada |
-| Factura a crédito | `FCR-` | Al completar una factura a crédito |
+| Factura al contado | `FAC-` | Instalaciones nuevas sin facturas importadas |
+| Factura a crédito | `FCR-` | Instalaciones nuevas sin facturas importadas |
+| Factura con historial migrado | número histórico, sin prefijo | Continúa la secuencia compartida del sistema anterior |
 | Cotización | `COT-` | Al guardar una cotización |
 | Nota de crédito | `NCR-` | Al procesar una devolución |
 | Abono | `ABO-` | Al registrar un pago sobre CxC |
@@ -29,6 +30,16 @@ los rangos autorizados en `ncf_sequences`.
 - `document_issues` relaciona el correlativo con su registro de origen.
 - Un número anulado o eliminado se marca, pero nunca se reutiliza.
 - Los documentos importados conservan su número histórico.
+- Si existen facturas importadas con un número histórico válido, las nuevas
+  facturas de contado y crédito comparten esa misma secuencia. Velo parte del
+  número mayor importado más uno; por ejemplo, después de `00002363` emite
+  `00002364`.
+- `FAC-` y `FCR-` se mantienen como comportamiento predeterminado únicamente
+  para negocios sin historial importado.
+- En el historial de Ventas se conserva además la referencia corta reconocida
+  por el personal (`#2499`, por ejemplo). Las ventas nativas muestran debajo su
+  correlativo Velo (`FAC-000004`); las migradas se identifican como
+  `Importada de FabPro` y priorizan su número histórico.
 - Las cotizaciones nuevas no mueven inventario, caja, crédito ni contabilidad.
 - Eliminar una cotización la retira inmediatamente de la operación y conserva
   solo su correlativo y el evento de auditoría.

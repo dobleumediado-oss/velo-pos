@@ -1,6 +1,6 @@
 {
   "name": "velo-pos",
-  "version": "1.29.4",
+  "version": "1.30.0",
   "description": "Sistema POS desktop profesional para comercios, repuestos, sucursales y operaciones empresariales",
   "main": "main.js",
   "scripts": {
@@ -38,8 +38,9 @@
     "test:salespeople": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-salespeople.js",
     "test:documents": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-document-workflows.js",
     "test:sales-workflow": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-sales-workflow-enhancements.js",
+    "test:sale-corrections": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-sale-corrections.js",
     "test:server-service": "node scripts/test-server-service.js",
-    "test": "npm run test:url && npm run test:login && npm run test:pos && npm run test:checkout && npm run test:customer-companies && npm run test:business && npm run test:import && npm run test:financial && npm run test:printing && npm run test:pending-invoices && npm run test:salespeople && npm run test:documents && npm run test:sales-workflow && npm run test:server-service"
+    "test": "npm run test:url && npm run test:login && npm run test:pos && npm run test:checkout && npm run test:customer-companies && npm run test:business && npm run test:import && npm run test:financial && npm run test:printing && npm run test:pending-invoices && npm run test:salespeople && npm run test:documents && npm run test:sales-workflow && npm run test:sale-corrections && npm run test:server-service"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

@@ -354,11 +354,22 @@ function printReceipt(sale, isReprint = false) {
   lines.push(tline());
 
   let docLabel = '*** RECIBO DE COMPRA ***';
-  if (isFactura)    docLabel = '*** FACTURA ***';
+  if (isFactura)    docLabel = sale.adjusted_copy ? '*** FACTURA AJUSTADA ***' : '*** FACTURA ***';
   if (isCotizacion) docLabel = '*** COTIZACIÓN ***';
-  if (isDevolucion) docLabel = '*** NOTA DE DEVOLUCIÓN ***';
+  if (isDevolucion) docLabel = '*** NOTA DE CRÉDITO ***';
   lines.push(tCenter(docLabel));
   if (isReprint)    lines.push(tCenter('--- REIMPRESIÓN ---'));
+  if (sale.adjusted_copy) {
+    lines.push(tCenter('--- COPIA CONSOLIDADA ---'));
+    lines.push(tCenter('No sustituye comprobantes fiscales'));
+    if (sale.adjusted_reference) lines.push(tCenter(`Ref.: ${sale.adjusted_reference}`));
+    if (sale.adjusted_reference_ncf) {
+      lines.push(tCenter(`Ref. NCF original: ${sale.adjusted_reference_ncf}`));
+    }
+    if (Array.isArray(sale.related_documents) && sale.related_documents.length) {
+      lines.push(tCenter(`Docs.: ${sale.related_documents.join(', ')}`));
+    }
+  }
 
   lines.push(tline());
   lines.push(tRow(`No.: ${facturaLabel(sale)}`, `Fecha: ${sale.date || today()}`));
@@ -441,7 +452,7 @@ function printReceipt(sale, isReprint = false) {
     lines.push(tRow('Base factura:', fmt(total)));
   }
 
-  if (isFactura && !isDevolucion && sale.ncf && sale.ncf.trim()) {
+  if (isFactura && !isDevolucion && !sale.adjusted_copy && sale.ncf && sale.ncf.trim()) {
     // Usar el NCF real guardado en la venta — nunca fabricar uno.
     // El NCF real se asigna y registra en ncf_log al crear la venta;
     // si no está guardado, no se imprime ninguno.
@@ -451,6 +462,9 @@ function printReceipt(sale, isReprint = false) {
   }
 
   if (isDevolucion) {
+    if (sale.correction_kind === 'monetary_credit') {
+      lines.push(tCenter('AJUSTE MONETARIO — SIN DEVOLUCIÓN DE PRODUCTOS'));
+    }
     // Nota de crédito fiscal: si la devolución tiene un B04 asignado, imprimirlo
     // junto con el NCF de la factura que modifica (requisito DGII). Nunca fabricar
     // uno: solo se imprime el B04 realmente guardado en la devolución.

@@ -1,5 +1,48 @@
 # Historial de versiones
 
+## 1.30.0 — 2026-07-27
+
+### Corrección controlada de facturas
+
+- Una factura emitida ya puede corregirse sin borrar ni reemplazar su identidad
+  original: permite cambiar cantidades, quitar productos y agregar productos.
+- Las reducciones generan la nota de crédito correspondiente y los aumentos
+  quedan documentados y enlazados, manteniendo inventario, caja, crédito,
+  contabilidad e impuestos consistentes.
+- Ventas conserva una sola operación visible, marcada como `Ajustada`, con su
+  total vigente; los documentos compensatorios permanecen disponibles en la
+  auditoría sin duplicar la venta para el usuario.
+- La factura ajustada puede reimprimirse o guardarse en PDF como copia
+  consolidada, mostrando cantidades vigentes, créditos aplicados, total actual,
+  referencia original y NCF original.
+- La devolución física y la nota de crédito monetaria quedan diferenciadas: es
+  posible acreditar un importe sin simular entrada de mercancía al inventario.
+
+### Seguridad, fechas y auditoría
+
+- La fecha operativa puede corregirse sin alterar la fecha fiscal, el NCF, la
+  fecha técnica de creación ni las fechas reales de cobro, caja e inventario.
+- Nuevos permisos por rol, motivo obligatorio, prevención de doble confirmación,
+  control de concurrencia e historial inmutable de cada corrección.
+- Se crean respaldos automáticos antes de activar correcciones de facturas,
+  correcciones de productos o realinear una numeración histórica.
+
+### Numeración e impresión
+
+- Cuando existen facturas importadas, las nuevas facturas continúan la
+  numeración histórica máxima compartida entre contado y crédito. Una
+  instalación sin datos importados conserva la numeración predeterminada
+  `FAC-000001` / `FCR-000001`.
+- Las facturas importadas se identifican por su número documental real y no por
+  el ID técnico interno de la base de datos.
+- El encabezado de factura/recibo en A4 y Carta es más compacto y discreto.
+
+### Verificación
+
+- Pruebas de regresión para correcciones de fecha, productos, inventario,
+  devoluciones, notas de crédito, reimpresión, numeración importada, documentos,
+  finanzas y servicio multi-terminal.
+
 ## 1.29.4 — 2026-07-24
 
 ### Corregido

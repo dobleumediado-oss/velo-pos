@@ -425,7 +425,7 @@ async function renderDash(el) {
   if (dashPeriod === '3days') {
     const cutoff = new Date(Date.now() - 3*24*60*60*1000).toISOString().split('T')[0];
     periodSales  = (weekSales||[]).filter(s => isOperationalSale(s)
-      && (s.created_at||'').slice(0,10) >= cutoff);
+      && (s.sale_date||'').slice(0,10) >= cutoff);
   } else if (dashPeriod === 'week') {
     periodSales = (weekSales||[]).filter(isOperationalSale);
   } else if (dashPeriod === 'month') {
@@ -449,14 +449,14 @@ async function renderDash(el) {
     s.type === 'cotizacion' && s.status !== 'cancelled');
   const cotizPeriod = (() => {
     if (dashPeriod === 'today') {
-      return cotizaciones.filter(s => (s.created_at||'').slice(0,10) === today_);
+      return cotizaciones.filter(s => (s.sale_date||'').slice(0,10) === today_);
     } else if (dashPeriod === '3days') {
       const c3 = new Date(Date.now()-3*24*60*60*1000).toISOString().split('T')[0];
-      return cotizaciones.filter(s => (s.created_at||'').slice(0,10) >= c3);
+      return cotizaciones.filter(s => (s.sale_date||'').slice(0,10) >= c3);
     } else if (dashPeriod === 'week') {
       return cotizaciones;
     }
-    return cotizaciones.filter(s => (s.created_at||'').slice(0,7) === monthPfx);
+    return cotizaciones.filter(s => (s.sale_date||'').slice(0,7) === monthPfx);
   })();
   const cotizTotal = cotizPeriod.reduce((a,s) => a+(s.total||0), 0);
 
@@ -901,7 +901,7 @@ async function renderDash(el) {
     ));
   } else {
     last5.forEach(s => {
-      const fecha   = (s.created_at || s.date || '').split('T')[0].split(' ')[0];
+      const fecha   = (s.sale_date || s.date || '').split('T')[0].split(' ')[0];
       const cliName = s.customer_name || s.clientName || 'Consumidor Final';
       lastCard.appendChild(h('div', { class: 'fxb', style: {
         padding: '8px 0', borderBottom: '1px solid var(--line2)'
@@ -1088,7 +1088,7 @@ async function _dashRenderChart(canvasId, labels, data, dates, period, detailEl,
         }
         // Filtrar ventas del día/mes seleccionado
         const daySales = (allSales||[]).filter(s => {
-          const sd = (s.created_at||'').split('T')[0].split(' ')[0];
+          const sd = (s.sale_date||'').split('T')[0].split(' ')[0];
           return (period === '12m' ? sd.slice(0,7) === d : sd === d) &&
                  s.status !== 'cancelled' && s.status !== 'returned' &&
                  s.type !== 'devolucion';
@@ -1181,7 +1181,7 @@ function _dashRenderNativeChart(canvas, labels, data, dates, period, detailEl, a
       return;
     }
     const daySales = (allSales || []).filter(s => {
-      const sd = (s.created_at || '').split('T')[0].split(' ')[0];
+      const sd = (s.sale_date || '').split('T')[0].split(' ')[0];
       return (period === '12m' ? sd.slice(0, 7) === d : sd === d) &&
              s.status !== 'cancelled' && s.status !== 'returned' &&
              s.type !== 'devolucion';
