@@ -111,58 +111,23 @@ async function renderPOS(el) {
       const sc = document.getElementById('pos-cat');
       if (si) {
         si.addEventListener('input', e => { posSearch = e.target.value; renderPOSGrid(); });
-        // Soporte para lector de código de barras USB (simula Enter al escanear)
+        // Enter en el buscador: resuelve el producto (código interno o de barras).
         si.addEventListener('keydown', e => {
           if (e.key === 'Enter') {
             e.preventDefault();
-            const q = si.value.trim();
-            if (!q) return;
-            // Buscar producto exacto por código interno O código de barras
-            const exacto = DB.products.find(p =>
-              p.active !== 0 && (
-                p.code?.toLowerCase()    === q.toLowerCase() ||
-                p.code?.toLowerCase()    === q.toLowerCase().replace(/^0+/, '') ||
-                p.barcode?.toLowerCase() === q.toLowerCase() ||
-                p.barcode?.toLowerCase() === q.toLowerCase().replace(/^0+/, '')
-              )
-            );
-            if (exacto) {
-              posAddItem(exacto.id);
-              si.value  = '';
-              posSearch = '';
-              renderPOSGrid();
-              toast(`✓ ${exacto.name} agregado`, 'ok');
-            } else {
-              // Si no hay coincidencia exacta, buscar parcial
-              posSearch = q;
-              renderPOSGrid();
-              // Si hay un solo resultado, agregarlo automáticamente
-              const qN = searchNorm(q);
-              const filtered = DB.products.filter(p =>
-                p.active !== 0 && (
-                  matchText(p.name, qN) ||
-                  matchText(p.code, qN) ||
-                  matchText(p.barcode, qN) ||
-                  matchText(p.model, qN)
-                )
-              );
-              if (filtered.length === 1) {
-                posAddItem(filtered[0].id);
-                si.value  = '';
-                posSearch = '';
-                renderPOSGrid();
-                toast(`✓ ${filtered[0].name} agregado`, 'ok');
-              }
-            }
+            _posResolveScan(si.value);
           }
         });
       }
       if (sc) sc.addEventListener('change', () => renderPOSGrid());
       document.getElementById('pos-search')?.focus();
 
-      // ── Focus global para lector de código de barras ──────────────────
-      // El escáner USB envía teclas como si fuera teclado — si el foco está
-      // en otro lado, redirigimos automáticamente al campo de búsqueda.
+      // ── Captura global del lector de código de barras ─────────────────
+      // Un escaneo SIEMPRE debe agregar el producto — nunca debe caer como
+      // cantidad en un campo enfocado. El lector USB "teclea" mucho más rápido
+      // que una persona; detectamos esa ráfaga por el tiempo entre teclas y la
+      // desviamos al alta de producto, bloqueando que contamine el campo de
+      // cantidad (donde un código numérico se interpretaba como "todo el stock").
       // Se instala una sola vez y se limpia cuando el POS se desmonta.
       if (window._barcodeListenerAbort) {
         window._barcodeListenerAbort.abort(); // limpiar listener anterior
@@ -170,37 +135,53 @@ async function renderPOS(el) {
       const barcodeAbort = new AbortController();
       window._barcodeListenerAbort = barcodeAbort;
 
-      let _barcodeBuffer = '';
-      let _barcodeTimer  = null;
+      const SCAN_GAP_MS  = 30;   // teclas más rápidas que esto ⇒ lector, no humano
+      const SCAN_MIN_LEN = 3;    // largo mínimo para considerarlo un escaneo
+      let scanBuf = '';
+      let scanLastTs = 0;
 
       document.addEventListener('keydown', (e) => {
-        const tag = document.activeElement?.tagName?.toLowerCase();
-        const isPOSActive = !!document.getElementById('pos-search');
-        if (!isPOSActive) {
-          // El POS ya no está montado — el AbortController debería haberlo limpiado
-          // pero por si acaso, limpiar manualmente
+        if (!document.getElementById('pos-search')) {
+          // El POS ya no está montado — limpiar por si el abort no corrió.
           barcodeAbort.abort();
           return;
         }
-        if (['input','textarea','select'].includes(tag)) return;
         if (e.ctrlKey || e.metaKey || e.altKey) return;
 
-        if (e.key.length === 1) {
-          _barcodeBuffer += e.key;
-          clearTimeout(_barcodeTimer);
-          _barcodeTimer = setTimeout(() => { _barcodeBuffer = ''; }, 100);
+        const now = Date.now();
+        const gap = now - scanLastTs;
+        scanLastTs = now;
+
+        if (e.key === 'Enter') {
+          // Escaneo = ráfaga con largo suficiente y el Enter llegó pegado.
+          const isScan = scanBuf.length >= SCAN_MIN_LEN && gap <= SCAN_GAP_MS;
+          const code   = scanBuf;
+          scanBuf = '';
+          if (isScan) {
+            e.preventDefault();
+            e.stopPropagation();     // que NO llegue al campo enfocado ni a su Enter
+            _posHandleScan(code);
+          }
+          return;
         }
 
-        if (e.key === 'Enter' && _barcodeBuffer) {
-          const si = document.getElementById('pos-search');
-          if (si) {
-            si.value  = _barcodeBuffer;
-            posSearch = _barcodeBuffer;
-            si.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-          }
-          _barcodeBuffer = '';
+        if (e.key.length !== 1) return;
+
+        // Tecla lenta ⇒ arranca una secuencia nueva (tecleo humano).
+        if (gap > SCAN_GAP_MS) scanBuf = '';
+        scanBuf += e.key;
+
+        // En plena ráfaga sobre un campo que NO es el buscador (p.ej. la
+        // cantidad del carrito), bloquea el carácter: así el código escaneado
+        // no se escribe como cantidad. El 1er carácter puede filtrarse, pero
+        // el carrito se redibuja al agregar y queda consistente.
+        const el = document.activeElement;
+        if (el && el.id !== 'pos-search' &&
+            ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) &&
+            gap <= SCAN_GAP_MS && scanBuf.length >= 2) {
+          e.preventDefault();
         }
-      }, { signal: barcodeAbort.signal });
+      }, { capture: true, signal: barcodeAbort.signal });
     }, 0);
 
     renderPOSGrid();
@@ -389,6 +370,59 @@ function posRemoveTab(idx) {
 }
 
 // ── Agregar al carrito ────────────────────────
+// ── Resolución de escaneo / búsqueda por Enter ────────────────────────
+// Busca coincidencia EXACTA por código interno o código de barras; si no
+// hay, hace búsqueda parcial y agrega solo si el resultado es único.
+// SIEMPRE agrega cantidad 1 (vía posAddItem). Reutilizada por el buscador
+// y por la captura global del lector.
+function _posResolveScan(q) {
+  q = String(q == null ? '' : q).trim();
+  if (!q) return;
+  const si = document.getElementById('pos-search');
+  const exacto = DB.products.find(p =>
+    p.active !== 0 && (
+      p.code?.toLowerCase()    === q.toLowerCase() ||
+      p.code?.toLowerCase()    === q.toLowerCase().replace(/^0+/, '') ||
+      p.barcode?.toLowerCase() === q.toLowerCase() ||
+      p.barcode?.toLowerCase() === q.toLowerCase().replace(/^0+/, '')
+    )
+  );
+  if (exacto) {
+    posAddItem(exacto.id);
+    if (si) si.value = '';
+    posSearch = '';
+    renderPOSGrid();
+    toast(`✓ ${exacto.name} agregado`, 'ok');
+    return;
+  }
+  // Sin coincidencia exacta: búsqueda parcial; se agrega solo si es única.
+  posSearch = q;
+  renderPOSGrid();
+  const qN = searchNorm(q);
+  const filtered = DB.products.filter(p =>
+    p.active !== 0 && (
+      matchText(p.name, qN) ||
+      matchText(p.code, qN) ||
+      matchText(p.barcode, qN) ||
+      matchText(p.model, qN)
+    )
+  );
+  if (filtered.length === 1) {
+    posAddItem(filtered[0].id);
+    if (si) si.value = '';
+    posSearch = '';
+    renderPOSGrid();
+    toast(`✓ ${filtered[0].name} agregado`, 'ok');
+  }
+}
+
+// Maneja un escaneo del lector: resuelve el producto y devuelve el foco al
+// buscador para el siguiente escaneo.
+function _posHandleScan(code) {
+  _posResolveScan(code);
+  document.getElementById('pos-search')?.focus();
+}
+
 function posAddItem(pid) {
   const inv  = currentInv();
   if (inv.checkoutOrderId) {

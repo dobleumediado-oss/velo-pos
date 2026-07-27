@@ -1147,16 +1147,20 @@ function openProductoModal(p = null) {
         <label class="lbl">
           Código de barras
           <span style="font-weight:400;color:var(--muted2);font-size:11px">
-            — escanea o escribe el EAN/UPC
+            — escanea el EAN/UPC, o déjalo vacío para uno numérico automático
           </span>
         </label>
-        <div style="position:relative">
-          <input class="inp" id="pf-barcode" type="text"
-                 placeholder="7501234567890"
-                 value="${isEdit ? (p.barcode||'') : ''}"
-                 style="padding-left:32px"/>
-          <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);
-                        color:var(--muted2);font-size:14px">⊟</span>
+        <div style="display:flex;gap:6px;align-items:stretch">
+          <div style="position:relative;flex:1">
+            <input class="inp" id="pf-barcode" type="text"
+                   placeholder="Se genera numérico al guardar"
+                   value="${isEdit ? (p.barcode||'') : ''}"
+                   style="padding-left:32px;width:100%"/>
+            <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);
+                          color:var(--muted2);font-size:14px">⊟</span>
+          </div>
+          <button type="button" class="btn btn-out btn-sm" onclick="pfAutoBarcode()"
+                  title="Generar un código de barras numérico (se lee mejor que el alfanumérico)">Generar</button>
         </div>
       </div>
       <div class="fg">
@@ -1373,6 +1377,31 @@ document.addEventListener('input', e => {
   }
 });
 
+// Genera el próximo código de barras NUMÉRICO libre.
+// Numérico = barras gruesas y legibles por el lector; el alfanumérico (código
+// interno tipo "BIC-BO2-001") salía denso y el escáner no lo leía. El prefijo 2
+// es el rango de uso interno de EAN, así no colisiona con EAN/UPC reales del
+// proveedor. Toma el mayor numérico existente + 1 para no repetir.
+function _pfNextNumericBarcode() {
+  const BASE = 200000000000; // 12 dígitos, prefijo 2 (uso interno)
+  let max = BASE;
+  (typeof DB !== 'undefined' ? (DB.products || []) : []).forEach(p => {
+    const b = String(p.barcode || '').trim();
+    if (/^\d{6,13}$/.test(b)) {
+      const n = Number(b);
+      if (Number.isFinite(n) && n > max) max = n;
+    }
+  });
+  return String(max + 1);
+}
+
+// Rellena el campo de código de barras con uno numérico escaneable.
+function pfAutoBarcode() {
+  const el = document.getElementById('pf-barcode');
+  if (!el) return;
+  el.value = _pfNextNumericBarcode();
+}
+
 async function pfConditionChange() {
   const val   = document.getElementById('pf-condition')?.value;
   const alert = document.getElementById('pf-condition-alert');
@@ -1387,7 +1416,7 @@ async function guardarProducto(id) {
   const category  = document.getElementById('pf-cat')?.value               || '';
   const unit      = document.getElementById('pf-unit')?.value              || 'und';
   const desc      = document.getElementById('pf-desc')?.value?.trim()      || '';
-  const barcode    = document.getElementById('pf-barcode')?.value?.trim()   || '';
+  let   barcode    = document.getElementById('pf-barcode')?.value?.trim()   || '';
   const condition  = document.getElementById('pf-condition')?.value || 'nuevo';
   const cost      = parseFloat(document.getElementById('pf-cost')?.value)  || 0;
   const price     = parseFloat(document.getElementById('pf-price')?.value) || 0;
@@ -1400,6 +1429,10 @@ async function guardarProducto(id) {
   if (!name)      { toast('El nombre es requerido', 'err');  return; }
   if (!code)      { toast('El código es requerido', 'err');  return; }
   if (price <= 0) { toast('El precio debe ser mayor a 0', 'err'); return; }
+
+  // Sin código de barras ⇒ generamos uno NUMÉRICO (escaneable). Los códigos
+  // internos alfanuméricos salían densos en la etiqueta y el lector no los leía.
+  if (!barcode) barcode = _pfNextNumericBarcode();
   if (taxable && (tax_pct < 0 || tax_pct > 100)) {
     toast('El ITBIS debe estar entre 0% y 100%', 'err'); return;
   }
