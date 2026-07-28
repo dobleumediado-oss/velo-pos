@@ -233,7 +233,7 @@ async function renderEnvios(el) {
                 ${e.carrier_stop ? `<div style="font-size:10px;color:var(--muted2)">Parada: ${_eEsc(e.carrier_stop)}</div>` : ''}
                 ${e.carrier_tracking ? `<div style="font-size:10px;color:var(--blue,#3b82f6)">Rastreo: ${_eEsc(e.carrier_tracking)}</div>` : ''}
               </td>
-              <td style="padding:10px 12px;color:var(--muted2)">${_eEsc(e.customer_name||'—')}${e.customer_contact_name ? `<div style="font-size:10px">Recibe: ${_eEsc(e.customer_contact_name)}</div>` : ''}</td>
+              <td style="padding:10px 12px;color:var(--muted2)">${_eEsc(e.customer_name||'—')}${e.customer_contact_name ? `<div style="font-size:10px">Recibe: ${_eEsc(e.customer_contact_name)}</div>` : ''}${e.customer_branch_name ? `<div style="font-size:10px">Entregar en: ${_eEsc(e.customer_branch_name)}</div>` : ''}</td>
               <td style="padding:10px 12px">${via}</td>
               <td style="padding:10px 12px;text-align:right;color:var(--muted2)">${e.distance_km ? e.distance_km.toFixed(1)+' km' : '—'}</td>
               <td style="padding:10px 12px;text-align:right;font-weight:700;color:var(--green,#00c07a)">${_eFmt(e.delivery_fee)}</td>
@@ -349,8 +349,13 @@ function modalNuevoEnvio(parentEl, vehiculos) {
       <input class="inp" id="e-customer" placeholder="Busca un cliente o escribe un nombre libre..." autocomplete="off">
       <input type="hidden" id="e-customer-id">
       <input type="hidden" id="e-customer-contact-id">
+      <input type="hidden" id="e-customer-branch-id">
       <div id="e-customer-list" style="display:none;position:absolute;z-index:999;background:var(--bg,#fff);border:1px solid var(--line2,#e5e7eb);border-radius:8px;max-height:220px;overflow-y:auto;box-shadow:0 4px 20px #0003;width:100%;left:0;top:100%"></div>
       <div id="e-customer-info" style="font-size:11px;margin-top:4px;min-height:14px;color:var(--muted2)"></div>
+      <div id="e-branch-wrap" style="display:none;margin-top:6px">
+        <label class="lbl" style="font-size:11px">Sucursal de entrega</label>
+        <select class="inp" id="e-customer-branch"><option value="">Casa matriz / sin sucursal específica</option></select>
+      </div>
     </div>
 
     <!-- SECCIÓN VEHÍCULO PROPIO -->
@@ -444,11 +449,13 @@ function modalNuevoEnvio(parentEl, vehiculos) {
     // escribió un nombre (cliente NO registrado) se guarda el texto tal cual.
     const custId   = parseInt(ov.querySelector('#e-customer-id')?.value) || null;
     const contactId= parseInt(ov.querySelector('#e-customer-contact-id')?.value) || null;
+    const branchId = parseInt(ov.querySelector('#e-customer-branch-id')?.value) || null;
     const custName = String(ov.querySelector('#e-customer')?.value || '').trim();
     const data = {
       dest_address:     dest,
       customer_id:      custId,
       customer_contact_id: contactId,
+      customer_branch_id: branchId,
       customer_name:    custId ? '' : custName,
       dest_lat:         parseFloat(ov.querySelector('#e-lat')?.value)      || null,
       dest_lng:         parseFloat(ov.querySelector('#e-lng')?.value)      || null,
@@ -519,7 +526,28 @@ function modalNuevoEnvio(parentEl, vehiculos) {
     const contactIdEl = document.getElementById('e-customer-contact-id');
     const custList = document.getElementById('e-customer-list');
     const custInfo = document.getElementById('e-customer-info');
+    const branchWrap = document.getElementById('e-branch-wrap');
+    const branchSel  = document.getElementById('e-customer-branch');
+    const branchIdEl = document.getElementById('e-customer-branch-id');
     const _custEsc  = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    // Muestra/oculta y llena el selector de sucursal según el cliente elegido.
+    function _branchPopulate(c) {
+      if (!branchWrap || !branchSel) return;
+      const branches = (c?.customer_type === 'company' ? (c.branches || []) : []).filter(b => b.active !== 0);
+      if (branchIdEl) branchIdEl.value = '';
+      if (!branches.length) { branchWrap.style.display = 'none'; branchSel.innerHTML = '<option value="">Casa matriz / sin sucursal específica</option>'; return; }
+      branchWrap.style.display = 'block';
+      branchSel.innerHTML = '<option value="">Casa matriz / sin sucursal específica</option>' + branches.map(b =>
+        `<option value="${b.id}">${_custEsc(b.name)}${b.code ? ` (Est. ${_custEsc(b.code)})` : ''}${b.address ? ` · ${_custEsc(b.address)}` : ''}</option>`).join('');
+    }
+    branchSel?.addEventListener('change', () => {
+      if (branchIdEl) branchIdEl.value = branchSel.value || '';
+      const cid = parseInt(custIdEl?.value) || null;
+      const c = (DB?.customers || []).find(x => x.id === cid);
+      const b = (c?.branches || []).find(x => x.id === Number(branchSel.value));
+      const destInp = document.getElementById('e-dest');
+      if (b?.address && document.getElementById('e-tipo')?.value === 'propio' && destInp) destInp.value = b.address;
+    });
     const _custNorm = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
     // Refrescar la caché de clientes en segundo plano (el modal no espera)
@@ -539,6 +567,7 @@ function modalNuevoEnvio(parentEl, vehiculos) {
       if (c.address) parts.push(`📍 ${_custEsc(c.address)}`);
       custInfo.innerHTML = `<span style="color:var(--green,#00c07a)">✓ Cliente vinculado</span>${parts.length ? ' · ' + parts.join(' · ') : ''}`;
       custList.style.display = 'none';
+      _branchPopulate(c);
       // Vehículo propio: si el cliente tiene dirección y aún no escribiste una, se usa la suya
       const destInp = document.getElementById('e-dest');
       if (document.getElementById('e-tipo')?.value === 'propio' && c.address && destInp && !destInp.value.trim()) {
@@ -586,6 +615,8 @@ function modalNuevoEnvio(parentEl, vehiculos) {
       // Al editar el texto se pierde el vínculo — debe re-seleccionar de la lista
       custIdEl.value = '';
       if (contactIdEl) contactIdEl.value = '';
+      if (branchIdEl) branchIdEl.value = '';
+      if (branchWrap) branchWrap.style.display = 'none';
       custInfo.innerHTML = custInp.value.trim()
         ? '<span style="color:var(--muted2,#6b7280)">Se guardará como cliente no registrado — selecciónalo de la lista si quieres vincularlo</span>'
         : '';
@@ -863,6 +894,7 @@ function verEnvio(id) {
       ${fila('Rastreo', esc(e.carrier_tracking))}
       ${fila('Cliente', esc(e.customer_name))}
       ${e.customer_contact_name ? fila('Representante', `${esc(e.customer_contact_name)}${e.customer_contact_role ? ` · ${esc(e.customer_contact_role)}` : ''}`) : ''}
+      ${e.customer_branch_name ? fila('Entregar en', `${esc(e.customer_branch_name)}${e.customer_branch_code ? ` (Est. ${esc(e.customer_branch_code)})` : ''}`) : ''}
       ${fila('Vehículo', e.brand ? esc(`${e.brand} ${e.model || ''} ${e.plate ? '(' + e.plate + ')' : ''}`) : '')}
       ${fila('Distancia', e.distance_km ? e.distance_km.toFixed(1) + ' km' : '')}
       ${fila('Combustible est.', e.fuel_cost ? _eFmt(e.fuel_cost) + (e.fuel_used ? ` · ${e.fuel_used.toFixed(2)} gal` : '') : '')}

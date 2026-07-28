@@ -269,6 +269,8 @@ function renderCliTable() {
           c.trade_name || '', c.rnc || 'Sin RNC',
           c.customer_type === 'company' && (c.contacts || []).length
             ? `${c.contacts.length} representante${c.contacts.length === 1 ? '' : 's'}` : '',
+          c.customer_type === 'company' && (c.branches || []).length
+            ? `${c.branches.length} sucursal${c.branches.length === 1 ? '' : 'es'}` : '',
         ].filter(Boolean).join(' · '))
       ),
       h('td', { class: 'ts' }, (c.phones || []).length
@@ -337,6 +339,14 @@ function renderCliTable() {
                 title: ['admin','superadmin'].includes(user?.role) ? 'Gestionar representantes' : 'Ver representantes',
                 onclick: () => openRepresentantesModal(c.id),
                 html: `${svg('users')} Representantes`
+              })
+            : null,
+          c.customer_type === 'company'
+            ? h('button', {
+                class: 'btn btn-ghost btn-sm',
+                title: ['admin','superadmin'].includes(user?.role) ? 'Gestionar sucursales' : 'Ver sucursales',
+                onclick: () => openSucursalesModal(c.id),
+                html: `${svg('map-pin')} Sucursales`
               })
             : null,
           ['admin','superadmin','cajero'].includes(user?.role)
@@ -872,6 +882,112 @@ function confirmEliminarRepresentante(customerId, contactId) {
     await reloadCustomers();
     toast('✓ Representante desactivado');
     openRepresentantesModal(customerId);
+    renderCliTable();
+  }, 'Desactivar', 'btn-red');
+}
+
+// ══════════════════════════════════════════════
+// SUCURSALES DEL CLIENTE EMPRESA
+// La empresa es dueña del RNC, crédito y cuenta por cobrar; las sucursales son
+// solo ubicaciones de entrega bajo esa misma cuenta (mismo RNC, sin choque).
+// ══════════════════════════════════════════════
+function openSucursalesModal(customerId) {
+  const company = (DB.customers || []).find(c => Number(c.id) === Number(customerId));
+  if (!company || company.customer_type !== 'company') {
+    toast('La empresa no está disponible', 'err');
+    return;
+  }
+  const branches = (company.branches || []).filter(b => b.active !== 0);
+  const canManage = ['admin','superadmin'].includes(user?.role);
+  openModal(`
+    <div class="modal-title">Sucursales</div>
+    <div class="modal-sub">${cliEsc(company.name)}${company.rnc ? ` · ${cliEsc(company.rnc)}` : ''}</div>
+    <div class="alrt b" style="margin:12px 0"><div><div class="alrt-title">Mismo RNC, una sola cuenta</div>
+      <div class="alrt-sub">El crédito, las facturas y la cuenta por cobrar siguen a nombre de la empresa. Las sucursales son ubicaciones de entrega.</div></div></div>
+    ${canManage ? `<div style="display:flex;justify-content:flex-end;margin:12px 0">
+      <button class="btn btn-dark" onclick="openSucursalForm(${company.id})">${svg('plus')} Nueva sucursal</button>
+    </div>` : '<div style="height:8px"></div>'}
+    ${branches.length ? `<div class="card" style="padding:0;overflow:hidden">
+      ${branches.map(branch => `
+        <div style="padding:13px 14px;border-bottom:1px solid var(--line);display:flex;align-items:flex-start;gap:12px">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:750">${cliEsc(branch.name)}${branch.is_primary ? ' <span class="badge g">Principal</span>' : ''}${branch.code ? ` <span class="badge">Est. ${cliEsc(branch.code)}</span>` : ''}</div>
+            <div class="ts">${[branch.address, branch.phone, branch.manager ? `Encargado: ${branch.manager}` : ''].filter(Boolean).map(cliEsc).join(' · ') || 'Sin datos adicionales'}</div>
+          </div>
+          ${canManage ? `<button class="btn btn-ghost btn-sm" onclick="openSucursalForm(${company.id},${branch.id})">${svg('edit')} Editar</button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="confirmEliminarSucursal(${company.id},${branch.id})">${svg('trash')}</button>` : ''}
+        </div>`).join('')}
+    </div>` : `<div class="empty" style="padding:32px"><div>${svg('map-pin')}</div><p>Sin sucursales</p><span>Agrega las ubicaciones de entrega de esta empresa (mismo RNC).</span></div>`}
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
+  `, 'modal-lg');
+}
+
+function openSucursalForm(customerId, branchId = null) {
+  const company = (DB.customers || []).find(c => Number(c.id) === Number(customerId));
+  const branch = (company?.branches || []).find(b => Number(b.id) === Number(branchId));
+  if (!company) return;
+  openModal(`
+    <div class="modal-title">${branch ? 'Editar sucursal' : 'Nueva sucursal'}</div>
+    <div class="modal-sub">Ubicación de entrega de ${cliEsc(company.name)}</div>
+    <div class="g2">
+      <div class="fg"><label class="lbl">Nombre de la sucursal *</label>
+        <input class="inp" id="cs-name" value="${cliEsc(branch?.name || '')}" placeholder="Sucursal Santiago"/></div>
+      <div class="fg"><label class="lbl">No. de establecimiento</label>
+        <input class="inp" id="cs-code" value="${cliEsc(branch?.code || '')}" placeholder="002"/></div>
+    </div>
+    <div class="fg"><label class="lbl">Dirección</label>
+      <input class="inp" id="cs-address" value="${cliEsc(branch?.address || '')}" placeholder="Av. Estrella Sadhalá #45"/></div>
+    <div class="g2">
+      <div class="fg"><label class="lbl">Teléfono</label>
+        <input class="inp" id="cs-phone" type="tel" value="${cliEsc(branch?.phone || '')}"/></div>
+      <div class="fg"><label class="lbl">Encargado</label>
+        <input class="inp" id="cs-manager" value="${cliEsc(branch?.manager || '')}" placeholder="Persona de contacto"/></div>
+    </div>
+    <div class="card" style="background:var(--surface2);margin-top:8px">
+      <label style="display:flex;gap:8px;align-items:center"><input id="cs-primary" type="checkbox" ${branch?.is_primary?'checked':''}/> Sucursal principal</label>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="openSucursalesModal(${company.id})">Volver</button>
+      <button class="btn btn-dark" id="cs-save" onclick="guardarSucursal(${company.id},${branch?.id || 'null'})">${svg('check')} Guardar</button>
+    </div>
+  `);
+}
+
+async function guardarSucursal(customerId, branchId) {
+  const data = {
+    name: document.getElementById('cs-name')?.value?.trim() || '',
+    code: document.getElementById('cs-code')?.value?.trim() || '',
+    address: document.getElementById('cs-address')?.value?.trim() || '',
+    phone: document.getElementById('cs-phone')?.value?.trim() || '',
+    manager: document.getElementById('cs-manager')?.value?.trim() || '',
+    is_primary: document.getElementById('cs-primary')?.checked ? 1 : 0,
+  };
+  if (!data.name) return toast('El nombre de la sucursal es requerido', 'err');
+  const btn = document.getElementById('cs-save');
+  if (btn) btn.disabled = true;
+  const result = branchId
+    ? await window.api.customers.updateBranch({ id: branchId, data, requestUserId: user.id })
+    : await window.api.customers.createBranch({ customerId, data, requestUserId: user.id });
+  if (!result?.ok) {
+    if (btn) btn.disabled = false;
+    return toast(result?.error || 'No se pudo guardar la sucursal', 'err');
+  }
+  await reloadCustomers();
+  toast(branchId ? '✓ Sucursal actualizada' : '✓ Sucursal registrada');
+  openSucursalesModal(customerId);
+  renderCliTable();
+}
+
+function confirmEliminarSucursal(customerId, branchId) {
+  const company = (DB.customers || []).find(c => Number(c.id) === Number(customerId));
+  const branch = (company?.branches || []).find(b => Number(b.id) === Number(branchId));
+  if (!branch) return;
+  confirmModal(`¿Desactivar la sucursal <strong>${cliEsc(branch.name)}</strong> de ${cliEsc(company.name)}?`, async () => {
+    const result = await window.api.customers.deleteBranch({ id: branchId, requestUserId: user.id });
+    if (!result?.ok) return toast(result?.error || 'No se pudo desactivar', 'err');
+    await reloadCustomers();
+    toast('✓ Sucursal desactivada');
+    openSucursalesModal(customerId);
     renderCliTable();
   }, 'Desactivar', 'btn-red');
 }

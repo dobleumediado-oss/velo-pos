@@ -117,7 +117,7 @@ function _pvCard(order) {
       </div>
       ${_pvFlow(order)}
       <div class="pv-customer">${_pvEsc(order.customer_name || 'Consumidor Final')}</div>
-      <div class="pv-customer-meta">${_pvEsc(order.customer_rnc || 'Sin RNC/Cédula')}${order.customer_contact_name ? ` · Solicitó: ${_pvEsc(order.customer_contact_name)}` : ''}${order.salesperson_name ? ` · Vendedor: ${_pvEsc(order.salesperson_name)}` : ''}</div>
+      <div class="pv-customer-meta">${_pvEsc(order.customer_rnc || 'Sin RNC/Cédula')}${order.customer_contact_name ? ` · Solicitó: ${_pvEsc(order.customer_contact_name)}` : ''}${order.customer_branch_name ? ` · Entregar en: ${_pvEsc(order.customer_branch_name)}` : ''}${order.salesperson_name ? ` · Vendedor: ${_pvEsc(order.salesperson_name)}` : ''}</div>
       <div class="pv-items">${_pvEsc(order.items_summary || `${order.item_count || 0} artículos`)}</div>
       ${order.notes ? `<div class="pv-note">${svg('edit')} ${_pvEsc(order.notes)}</div>` : ''}
       <div class="pv-order-foot">
@@ -338,6 +338,7 @@ async function preventaVerDetalle(id) {
       <div class="tr"><span>Cliente</span><strong>${_pvEsc(order.customer_name || 'Consumidor Final')}</strong></div>
       <div class="tr"><span>RNC / Cédula</span><span>${_pvEsc(order.customer_rnc || '—')}</span></div>
       ${order.customer_contact_name ? `<div class="tr"><span>Representante</span><strong>${_pvEsc(order.customer_contact_name)}${order.customer_contact_role ? ` · ${_pvEsc(order.customer_contact_role)}` : ''}</strong></div>` : ''}
+      ${order.customer_branch_name ? `<div class="tr"><span>Entregar en</span><strong>${_pvEsc(order.customer_branch_name)}${order.customer_branch_code ? ` (Est. ${_pvEsc(order.customer_branch_code)})` : ''}${order.customer_branch_address ? ` · ${_pvEsc(order.customer_branch_address)}` : ''}</strong></div>` : ''}
       ${order.salesperson_name ? `<div class="tr"><span>Vendedor</span><span>${_pvEsc(order.salesperson_name)}</span></div>` : ''}
       ${order.notes ? `<div class="tr"><span>Nota</span><span>${_pvEsc(order.notes)}</span></div>` : ''}
     </div>

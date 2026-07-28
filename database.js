@@ -388,6 +388,28 @@ function createTables() {
       updated_at           TEXT DEFAULT (datetime('now','localtime'))
     );
 
+    -- ── Sucursales de un cliente empresa ──
+    -- La empresa (customers) es dueña del RNC, el crédito y la cuenta por cobrar.
+    -- Las sucursales son UBICACIONES/entregas bajo esa misma cuenta: NO son
+    -- clientes aparte ni tienen RNC propio, así que comparten el RNC sin chocar
+    -- con la regla de unicidad de documento.
+    CREATE TABLE IF NOT EXISTS customer_branches (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      customer_id  INTEGER NOT NULL REFERENCES customers(id),
+      name         TEXT NOT NULL,
+      code         TEXT DEFAULT '',
+      address      TEXT DEFAULT '',
+      phone        TEXT DEFAULT '',
+      manager      TEXT DEFAULT '',
+      is_primary   INTEGER DEFAULT 0,
+      active       INTEGER DEFAULT 1,
+      created_at   TEXT DEFAULT (datetime('now','localtime')),
+      updated_at   TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_customer_branches_customer ON customer_branches(customer_id, active);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_branches_primary
+      ON customer_branches(customer_id) WHERE active=1 AND is_primary=1;
+
     -- ── Sesiones de caja ──
     CREATE TABLE IF NOT EXISTS cash_sessions (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -441,6 +463,11 @@ function createTables() {
       customer_contact_role TEXT DEFAULT '',
       customer_contact_phone TEXT DEFAULT '',
       customer_contact_email TEXT DEFAULT '',
+      customer_branch_id   INTEGER REFERENCES customer_branches(id),
+      customer_branch_name TEXT DEFAULT '',
+      customer_branch_code TEXT DEFAULT '',
+      customer_branch_address TEXT DEFAULT '',
+      customer_branch_phone TEXT DEFAULT '',
       type            TEXT DEFAULT 'factura' CHECK(type IN ('factura','cotizacion','devolucion')),
       status          TEXT DEFAULT 'completed' CHECK(status IN ('completed','cancelled','returned')),
       subtotal        REAL NOT NULL DEFAULT 0,
@@ -774,6 +801,11 @@ function createTables() {
       customer_contact_name TEXT DEFAULT '',
       customer_contact_role TEXT DEFAULT '',
       customer_contact_phone TEXT DEFAULT '',
+      customer_branch_id INTEGER REFERENCES customer_branches(id),
+      customer_branch_name TEXT DEFAULT '',
+      customer_branch_code TEXT DEFAULT '',
+      customer_branch_address TEXT DEFAULT '',
+      customer_branch_phone TEXT DEFAULT '',
       vehicle_id      INTEGER REFERENCES vehicles(id),
       driver_id       INTEGER REFERENCES users(id),
       origin_address  TEXT,
@@ -947,6 +979,13 @@ function migrateCustomerCompanies() {
     ['customer_contact_role', "TEXT DEFAULT ''"],
     ['customer_contact_phone', "TEXT DEFAULT ''"],
     ['customer_contact_email', "TEXT DEFAULT ''"],
+    // Sucursal de entrega (Fase 2): snapshot para el documento. La empresa
+    // sigue siendo dueña del RNC/crédito; esto solo indica DÓNDE se entrega.
+    ['customer_branch_id', 'INTEGER'],
+    ['customer_branch_name', "TEXT DEFAULT ''"],
+    ['customer_branch_code', "TEXT DEFAULT ''"],
+    ['customer_branch_address', "TEXT DEFAULT ''"],
+    ['customer_branch_phone', "TEXT DEFAULT ''"],
   ];
   for (const [col, def] of customerCols) {
     try { db.prepare(`ALTER TABLE customers ADD COLUMN ${col} ${def}`).run(); }
@@ -981,6 +1020,11 @@ function migrateCustomerCompanies() {
       ['customer_contact_role', "TEXT DEFAULT ''"],
       ['customer_contact_phone', "TEXT DEFAULT ''"],
       ['customer_contact_email', "TEXT DEFAULT ''"],
+      ['customer_branch_id', 'INTEGER'],
+      ['customer_branch_name', "TEXT DEFAULT ''"],
+      ['customer_branch_code', "TEXT DEFAULT ''"],
+      ['customer_branch_address', "TEXT DEFAULT ''"],
+      ['customer_branch_phone', "TEXT DEFAULT ''"],
     ];
     for (const [col, def] of deliveryNoteCols) {
       try { db.prepare(`ALTER TABLE delivery_notes ADD COLUMN ${col} ${def}`).run(); }
@@ -993,6 +1037,26 @@ function migrateCustomerCompanies() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_contacts_primary
       ON customer_contacts(customer_id) WHERE active=1 AND is_primary=1;
     CREATE INDEX IF NOT EXISTS idx_payments_customer_contact ON payments(customer_contact_id);
+  `);
+  // Sucursales del cliente empresa (idempotente). La empresa conserva RNC,
+  // crédito y cuenta por cobrar; las sucursales son solo ubicaciones de entrega.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS customer_branches (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      customer_id  INTEGER NOT NULL REFERENCES customers(id),
+      name         TEXT NOT NULL,
+      code         TEXT DEFAULT '',
+      address      TEXT DEFAULT '',
+      phone        TEXT DEFAULT '',
+      manager      TEXT DEFAULT '',
+      is_primary   INTEGER DEFAULT 0,
+      active       INTEGER DEFAULT 1,
+      created_at   TEXT DEFAULT (datetime('now','localtime')),
+      updated_at   TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_customer_branches_customer ON customer_branches(customer_id, active);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_branches_primary
+      ON customer_branches(customer_id) WHERE active=1 AND is_primary=1;
   `);
 }
 
@@ -1141,6 +1205,11 @@ function migrateVehiclesModule() {
     addCol('deliveries', 'customer_contact_name', "TEXT DEFAULT ''");
     addCol('deliveries', 'customer_contact_role', "TEXT DEFAULT ''");
     addCol('deliveries', 'customer_contact_phone', "TEXT DEFAULT ''");
+    addCol('deliveries', 'customer_branch_id', 'INTEGER DEFAULT NULL');
+    addCol('deliveries', 'customer_branch_name', "TEXT DEFAULT ''");
+    addCol('deliveries', 'customer_branch_code', "TEXT DEFAULT ''");
+    addCol('deliveries', 'customer_branch_address', "TEXT DEFAULT ''");
+    addCol('deliveries', 'customer_branch_phone', "TEXT DEFAULT ''");
     addCol('vehicle_maintenance', 'expense_id', 'INTEGER DEFAULT NULL');
   } catch (e) {
     db.pragma('foreign_keys = ON');
@@ -2249,6 +2318,15 @@ function contactsForCustomer(customerId) {
   `).all(customerId);
 }
 
+function branchesForCustomer(customerId) {
+  if (!tableExists('customer_branches')) return [];
+  return db.prepare(`
+    SELECT * FROM customer_branches
+    WHERE customer_id=? AND active=1
+    ORDER BY is_primary DESC,name COLLATE NOCASE
+  `).all(customerId);
+}
+
 function phonesForCustomer(customerId) {
   if (!tableExists('customer_phones')) return [];
   return db.prepare(`
@@ -2305,12 +2383,21 @@ function ensurePrimaryCustomerContact(customerId) {
   return first?.id || null;
 }
 
+function ensurePrimaryCustomerBranch(customerId) {
+  const primary = db.prepare(`SELECT id FROM customer_branches WHERE customer_id=? AND active=1 AND is_primary=1 LIMIT 1`).get(customerId);
+  if (primary) return primary.id;
+  const first = db.prepare(`SELECT id FROM customer_branches WHERE customer_id=? AND active=1 ORDER BY id LIMIT 1`).get(customerId);
+  if (first) db.prepare('UPDATE customer_branches SET is_primary=1 WHERE id=?').run(first.id);
+  return first?.id || null;
+}
+
 const customersRepo = {
   getAll() {
     return db.prepare('SELECT * FROM customers WHERE active=1 ORDER BY name').all()
       .map(customer => ({
         ...customer,
         contacts: contactsForCustomer(customer.id),
+        branches: branchesForCustomer(customer.id),
         phones: phonesForCustomer(customer.id),
       }));
   },
@@ -2319,6 +2406,7 @@ const customersRepo = {
     return customer ? {
       ...customer,
       contacts: contactsForCustomer(customer.id),
+      branches: branchesForCustomer(customer.id),
       phones: phonesForCustomer(customer.id),
     } : null;
   },
@@ -2360,6 +2448,7 @@ const customersRepo = {
     );
     if (customerType !== 'company') {
       db.prepare("UPDATE customer_contacts SET active=0,updated_at=datetime('now','localtime') WHERE customer_id=? AND active=1").run(id);
+      db.prepare("UPDATE customer_branches SET active=0,is_primary=0,updated_at=datetime('now','localtime') WHERE customer_id=? AND active=1").run(id);
     }
     replaceCustomerPhones(id, c.phones, c.phone);
   },
@@ -2420,6 +2509,60 @@ const customersRepo = {
     db.transaction(() => {
       db.prepare("UPDATE customer_contacts SET active=0,is_primary=0,updated_at=datetime('now','localtime') WHERE id=?").run(id);
       ensurePrimaryCustomerContact(current.customer_id);
+    })();
+    return { id, customerId: current.customer_id, name: current.name };
+  },
+  // ── Sucursales del cliente empresa ──
+  // Ubicaciones de entrega bajo la misma cuenta; sin RNC ni crédito propio.
+  getBranches(customerId) {
+    return branchesForCustomer(customerId);
+  },
+  createBranch(customerId, b) {
+    const customer = db.prepare("SELECT id,customer_type FROM customers WHERE id=? AND active=1").get(customerId);
+    if (!customer) throw new Error('Cliente no encontrado');
+    if (customer.customer_type !== 'company') throw new Error('Solo las empresas pueden tener sucursales');
+    const name = String(b.name || '').replace(/\s+/g, ' ').trim();
+    if (!name) throw new Error('El nombre de la sucursal es requerido');
+    return db.transaction(() => {
+      const primary = b.is_primary ? 1 : 0;
+      if (primary) db.prepare('UPDATE customer_branches SET is_primary=0 WHERE customer_id=?').run(customerId);
+      const r = db.prepare(`
+        INSERT INTO customer_branches(customer_id,name,code,address,phone,manager,is_primary)
+        VALUES(?,?,?,?,?,?,?)
+      `).run(
+        customerId, name, String(b.code || '').trim(), String(b.address || '').trim(),
+        String(b.phone || '').trim(), String(b.manager || '').trim(), primary
+      );
+      ensurePrimaryCustomerBranch(customerId);
+      return Number(r.lastInsertRowid);
+    })();
+  },
+  updateBranch(id, b) {
+    const current = db.prepare('SELECT * FROM customer_branches WHERE id=? AND active=1').get(id);
+    if (!current) throw new Error('Sucursal no encontrada');
+    const name = String(b.name || '').replace(/\s+/g, ' ').trim();
+    if (!name) throw new Error('El nombre de la sucursal es requerido');
+    db.transaction(() => {
+      const primary = b.is_primary ? 1 : 0;
+      if (primary) db.prepare('UPDATE customer_branches SET is_primary=0 WHERE customer_id=?').run(current.customer_id);
+      db.prepare(`
+        UPDATE customer_branches SET name=?,code=?,address=?,phone=?,manager=?,is_primary=?,
+          updated_at=datetime('now','localtime')
+        WHERE id=?
+      `).run(
+        name, String(b.code || '').trim(), String(b.address || '').trim(),
+        String(b.phone || '').trim(), String(b.manager || '').trim(), primary, id
+      );
+      ensurePrimaryCustomerBranch(current.customer_id);
+    })();
+    return this.getBranches(current.customer_id);
+  },
+  deleteBranch(id) {
+    const current = db.prepare('SELECT * FROM customer_branches WHERE id=? AND active=1').get(id);
+    if (!current) throw new Error('Sucursal no encontrada');
+    db.transaction(() => {
+      db.prepare("UPDATE customer_branches SET active=0,is_primary=0,updated_at=datetime('now','localtime') WHERE id=?").run(id);
+      ensurePrimaryCustomerBranch(current.customer_id);
     })();
     return { id, customerId: current.customer_id, name: current.name };
   },
@@ -2703,6 +2846,7 @@ const salesRepo = {
       const requestedCustomer = customer || {};
       const requestedCustomerId = Number(requestedCustomer.id) || 1;
       let selectedContact = null;
+      let selectedBranch = null;
       let selectedCustomerPhoneType = String(requestedCustomer.phone_type || 'telefono').toLowerCase();
       if (requestedCustomerId !== 1) {
         const account = db.prepare('SELECT * FROM customers WHERE id=? AND active=1').get(requestedCustomerId);
@@ -2728,6 +2872,25 @@ const salesRepo = {
             if (storedContact.active !== 1) throw new Error('El representante seleccionado está inactivo');
             if (storedContact.can_order !== 1) throw new Error('El representante no está autorizado para solicitar compras');
             selectedContact = storedContact;
+          }
+        }
+        // Sucursal de entrega (Fase 2): ubicación bajo la misma empresa/RNC.
+        const branchId = Number(requestedCustomer.branch_id || requestedCustomer.branch?.id) || null;
+        if (branchId) {
+          const storedBranch = db.prepare(`SELECT * FROM customer_branches WHERE id=? AND customer_id=?`).get(branchId, account.id);
+          if (!storedBranch) throw new Error('La sucursal no pertenece a la empresa seleccionada');
+          if (trustedCustomerSnapshot && requestedCustomer.preserve_branch_snapshot) {
+            selectedBranch = {
+              ...storedBranch,
+              name: requestedCustomer.branch?.name || storedBranch.name,
+              code: requestedCustomer.branch?.code || storedBranch.code,
+              address: requestedCustomer.branch?.address || storedBranch.address,
+              phone: requestedCustomer.branch?.phone || storedBranch.phone,
+            };
+          } else {
+            if (account.customer_type !== 'company') throw new Error('Solo una empresa puede tener sucursales');
+            if (storedBranch.active !== 1) throw new Error('La sucursal seleccionada está inactiva');
+            selectedBranch = storedBranch;
           }
         }
         const preserveAccount = trustedCustomerSnapshot && requestedCustomer.preserve_customer_snapshot;
@@ -2973,6 +3136,7 @@ const salesRepo = {
           customer_type,customer_trade_name,customer_address,customer_phone,customer_phone_type,customer_email,
           customer_contact_id,customer_contact_name,customer_contact_document,
           customer_contact_role,customer_contact_phone,customer_contact_email,
+          customer_branch_id,customer_branch_name,customer_branch_code,customer_branch_address,customer_branch_phone,
           type,status,subtotal,discount_pct,discount_amt,tax_pct,tax_amt,total,
           payment_method,price_mode,cajero,user_id,salesperson_id,financial_account_id,
           payment_currency,exchange_rate,account_amount,card_brand,card_last4,
@@ -2984,6 +3148,7 @@ const salesRepo = {
           @customer_type,@customer_trade_name,@customer_address,@customer_phone,@customer_phone_type,@customer_email,
           @customer_contact_id,@customer_contact_name,@customer_contact_document,
           @customer_contact_role,@customer_contact_phone,@customer_contact_email,
+          @customer_branch_id,@customer_branch_name,@customer_branch_code,@customer_branch_address,@customer_branch_phone,
           @type,'completed',@subtotal,@discount_pct,@discount_amt,@tax_pct,@tax_amt,@total,
           @payment_method,@price_mode,@cajero,@user_id,@salesperson_id,@financial_account_id,
           @payment_currency,@exchange_rate,@account_amount,@card_brand,@card_last4,
@@ -3008,6 +3173,11 @@ const salesRepo = {
         customer_contact_role: selectedContact?.role || '',
         customer_contact_phone: selectedContact?.phone || '',
         customer_contact_email: selectedContact?.email || '',
+        customer_branch_id: selectedBranch?.id || null,
+        customer_branch_name: selectedBranch?.name || '',
+        customer_branch_code: selectedBranch?.code || '',
+        customer_branch_address: selectedBranch?.address || '',
+        customer_branch_phone: selectedBranch?.phone || '',
         type, subtotal, discount_pct: discPct, discount_amt: discAmt, tax_pct: taxPct,
         tax_amt: taxAmt, total, payment_method: method,
         price_mode: payment.priceMode || 'retail', cajero: user.name || '', user_id: user.id,
@@ -5502,15 +5672,24 @@ const deliveriesRepo = {
         .get(data.customer_contact_id, data.customer_id);
       if (!contact) throw new Error('El representante no pertenece a la empresa, está inactivo o no puede recibir mercancía');
     }
+    let custBranch = null;
+    if (data.customer_branch_id && data.customer_id) {
+      custBranch = db.prepare(`SELECT * FROM customer_branches WHERE id=? AND customer_id=? AND active=1`)
+        .get(data.customer_branch_id, data.customer_id);
+      if (!custBranch) throw new Error('La sucursal no pertenece a la empresa o está inactiva');
+    }
     return db.prepare(`INSERT INTO deliveries(
       sale_id,customer_id,customer_name,customer_contact_id,customer_contact_name,
-      customer_contact_role,customer_contact_phone,vehicle_id,driver_id,
+      customer_contact_role,customer_contact_phone,
+      customer_branch_id,customer_branch_name,customer_branch_code,customer_branch_address,customer_branch_phone,
+      vehicle_id,driver_id,
       origin_address,dest_address,dest_lat,dest_lng,distance_km,fuel_used,fuel_cost,
       delivery_fee,delivery_type,carrier_name,carrier_stop,carrier_tracking,carrier_dest,
       status,scheduled_at,notes,user_id)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       data.sale_id||null, data.customer_id||null, String(data.customer_name||'').trim(),
       contact?.id || null, contact?.name || '', contact?.role || '', contact?.phone || '',
+      custBranch?.id || null, custBranch?.name || '', custBranch?.code || '', custBranch?.address || '', custBranch?.phone || '',
       data.vehicle_id||null, data.driver_id||null,
       data.origin_address||'', data.dest_address, data.dest_lat||null, data.dest_lng||null,
       data.distance_km||null, data.fuel_used||null, data.fuel_cost||null,
@@ -7260,18 +7439,38 @@ const conduceRepo = {
           contact = stored;
         }
       }
+      // Sucursal de entrega del cliente (distinta de branch_id, que es la
+      // sucursal del propio negocio).
+      let custBranch = null;
+      if (header.customer_branch_id && header.customer_id) {
+        const storedB = db.prepare('SELECT * FROM customer_branches WHERE id=? AND customer_id=?')
+          .get(header.customer_branch_id, header.customer_id);
+        if (!storedB) throw new Error('La sucursal no pertenece al cliente seleccionado');
+        if (trustedSnapshot && header.preserve_branch_snapshot) {
+          custBranch = { ...storedB, name: header.customer_branch_name || storedB.name,
+            code: header.customer_branch_code || storedB.code,
+            address: header.customer_branch_address || storedB.address,
+            phone: header.customer_branch_phone || storedB.phone };
+        } else {
+          if (storedB.active !== 1) throw new Error('La sucursal seleccionada está inactiva');
+          custBranch = storedB;
+        }
+      }
       const r = db.prepare(`
         INSERT INTO delivery_notes
           (number, customer_id, customer_name, customer_rnc,
            customer_contact_id,customer_contact_name,customer_contact_document,
-           customer_contact_role,customer_contact_phone,customer_contact_email,branch_id,
+           customer_contact_role,customer_contact_phone,customer_contact_email,
+           customer_branch_id,customer_branch_name,customer_branch_code,customer_branch_address,customer_branch_phone,branch_id,
            source_type, source_id, status, issue_date, delivery_address,
            driver_name, vehicle_plate, notes, invoice_id, created_by)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       `).run(
         number, header.customer_id || null, account?.name || header.customer_name || 'Consumidor Final',
         account?.rnc || header.customer_rnc || '', contact?.id || null, contact?.name || '', contact?.document || '',
-        contact?.role || '', contact?.phone || '', contact?.email || '', header.branch_id || null,
+        contact?.role || '', contact?.phone || '', contact?.email || '',
+        custBranch?.id || null, custBranch?.name || '', custBranch?.code || '', custBranch?.address || '', custBranch?.phone || '',
+        header.branch_id || null,
         header.source_type || 'manual', header.source_id || null,
         header.status || 'borrador', header.issue_date || todayStr(),
         header.delivery_address || '', header.driver_name || '',
@@ -7336,11 +7535,21 @@ const conduceRepo = {
         `).get(header.customer_contact_id, account.id);
         if (!contact) throw new Error('El representante no pertenece a la empresa, está inactivo o no puede solicitar compras');
       }
+      let custBranch = null;
+      if (header.customer_branch_id) {
+        if (!account || account.customer_type !== 'company') {
+          throw new Error('Solo una empresa puede tener sucursales');
+        }
+        custBranch = db.prepare('SELECT * FROM customer_branches WHERE id=? AND customer_id=? AND active=1')
+          .get(header.customer_branch_id, account.id);
+        if (!custBranch) throw new Error('La sucursal no pertenece a la empresa o está inactiva');
+      }
       db.prepare(`
         UPDATE delivery_notes SET
           customer_id=?, customer_name=?, customer_rnc=?, customer_contact_id=?,
           customer_contact_name=?,customer_contact_document=?,customer_contact_role=?,
-          customer_contact_phone=?,customer_contact_email=?,branch_id=?,
+          customer_contact_phone=?,customer_contact_email=?,
+          customer_branch_id=?,customer_branch_name=?,customer_branch_code=?,customer_branch_address=?,customer_branch_phone=?,branch_id=?,
           delivery_address=?, driver_name=?, vehicle_plate=?, notes=?,
           updated_at=datetime('now','localtime')
         WHERE id=?
@@ -7348,7 +7557,9 @@ const conduceRepo = {
         header.customer_id || null, account?.name || header.customer_name || 'Consumidor Final',
         account?.rnc || header.customer_rnc || '', contact?.id || null,
         contact?.name || '',contact?.document || '',contact?.role || '',
-        contact?.phone || '',contact?.email || '',header.branch_id || null,
+        contact?.phone || '',contact?.email || '',
+        custBranch?.id || null, custBranch?.name || '', custBranch?.code || '', custBranch?.address || '', custBranch?.phone || '',
+        header.branch_id || null,
         header.delivery_address || '', header.driver_name || '',
         header.vehicle_plate || '', header.notes || '', id
       );

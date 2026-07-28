@@ -77,6 +77,14 @@ async function renderPOS(el) {
       <button class="btn btn-out btn-sm" type="button" onclick="posSelectCustomer(1)" title="Volver a Consumidor Final">Limpiar</button>`;
     left.appendChild(customerBar);
 
+    // Barra de sucursal de entrega: solo aparece si el cliente es una empresa
+    // con sucursales registradas (se llena en renderPOSCustomerSelection).
+    const branchBar = h('div', {
+      id: 'pos-branch-bar',
+      style: 'display:none;align-items:center;gap:8px;margin-bottom:10px;flex-shrink:0'
+    });
+    left.appendChild(branchBar);
+
     const modeBar = h('div', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-shrink:0' });
     modeBar.innerHTML = `
       <span style="font-size:11px;color:var(--muted);font-weight:600">Precio:</span>
@@ -1337,7 +1345,7 @@ function renderPOSCustomerSelection() {
     if (Number(inv.cliId) !== 1 && customer) {
       state.style.color = 'var(--green)';
       state.textContent = `${customer.customer_type === 'company' ? 'Empresa' : 'Cliente'}: ${customer.name}` +
-        `${contact ? ` · ${contact.name}` : ''} · ${inv.pmode === 'wholesale' ? 'Mayorista' : 'Detalle'}`;
+        `${contact ? ` · ${contact.name}` : ''}${inv.cliBranchName ? ` · Entregar en: ${inv.cliBranchName}` : ''} · ${inv.pmode === 'wholesale' ? 'Mayorista' : 'Detalle'}`;
       state.title = state.textContent;
     } else {
       state.style.color = 'var(--muted)';
@@ -1345,6 +1353,47 @@ function renderPOSCustomerSelection() {
       state.title = state.textContent;
     }
   }
+  renderPOSBranchSelection(customer);
+}
+
+// Selector "Sucursal de entrega": visible solo para empresas con sucursales.
+// La empresa sigue siendo dueña del RNC/crédito; esto solo elige dónde entregar.
+function renderPOSBranchSelection(customer) {
+  const bar = document.getElementById('pos-branch-bar');
+  if (!bar) return;
+  const inv = currentInv();
+  const branches = (customer?.customer_type === 'company' ? (customer.branches || []) : [])
+    .filter(b => b.active !== 0);
+  if (!branches.length) {
+    bar.style.display = 'none';
+    bar.innerHTML = '';
+    if (inv.cliBranchId) { inv.cliBranchId = null; inv.cliBranchName = ''; }
+    return;
+  }
+  bar.style.display = 'flex';
+  const locked = !!inv.checkoutOrderId;
+  bar.innerHTML = `
+    <span style="font-size:11px;color:var(--muted);font-weight:600;flex-shrink:0">Sucursal de entrega:</span>
+    <select class="inp" style="flex:1;min-width:0;max-width:340px;font-size:12px;padding:5px 8px"
+            ${locked ? 'disabled' : ''} onchange="posSelectBranch(this.value)">
+      <option value="">Casa matriz / sin sucursal específica</option>
+      ${branches.map(b => `<option value="${b.id}" ${Number(inv.cliBranchId) === Number(b.id) ? 'selected' : ''}>
+        ${posEscHtml(b.name)}${b.code ? ` (Est. ${posEscHtml(b.code)})` : ''}${b.address ? ` · ${posEscHtml(b.address)}` : ''}
+      </option>`).join('')}
+    </select>`;
+}
+
+function posSelectBranch(branchId) {
+  const inv = currentInv();
+  if (inv.checkoutOrderId) return;
+  const customer = (DB.customers || []).find(c => Number(c.id) === Number(inv.cliId));
+  const branch = (customer?.branches || []).find(b => Number(b.id) === Number(branchId) && b.active !== 0);
+  inv.cliBranchId = branch?.id || null;
+  inv.cliBranchName = branch?.name || '';
+  inv.cliBranchCode = branch?.code || '';
+  inv.cliBranchAddress = branch?.address || '';
+  inv.cliBranchPhone = branch?.phone || '';
+  renderPOSCustomerSelection();
 }
 
 function posFilterCustomers(query, showAll = false) {
@@ -1368,6 +1417,11 @@ function posFilterCustomers(query, showAll = false) {
     inv.cliContactName = '';
     inv.cliContactRole = '';
     inv.cliContactPhone = '';
+    inv.cliBranchId = null;
+    inv.cliBranchName = '';
+    inv.cliBranchCode = '';
+    inv.cliBranchAddress = '';
+    inv.cliBranchPhone = '';
     if (hadRegisteredCustomer) _setPosPmode('retail');
     const state = document.getElementById('pos-customer-state');
     if (state) {
@@ -1422,6 +1476,11 @@ function posSelectCustomer(id, contactId = null) {
     inv.cliContactName = '';
     inv.cliContactRole = '';
     inv.cliContactPhone = '';
+    inv.cliBranchId = null;
+    inv.cliBranchName = '';
+    inv.cliBranchCode = '';
+    inv.cliBranchAddress = '';
+    inv.cliBranchPhone = '';
     _setPosPmode('retail');
     renderPOSCustomerSelection();
     return;
@@ -1442,6 +1501,13 @@ function posSelectCustomer(id, contactId = null) {
   inv.cliContactName = contact?.name || '';
   inv.cliContactRole = contact?.role || '';
   inv.cliContactPhone = contact?.phone || '';
+  // Al elegir (o reelegir) una empresa, la sucursal previa no aplica: se limpia
+  // y el cajero elige la de entrega en su selector propio.
+  inv.cliBranchId = null;
+  inv.cliBranchName = '';
+  inv.cliBranchCode = '';
+  inv.cliBranchAddress = '';
+  inv.cliBranchPhone = '';
   _setPosPmode(customer.preferred_price_mode === 'wholesale' ? 'wholesale' : 'retail');
   renderPOSCustomerSelection();
   toast(`✓ ${customer.name}${contact ? ` · ${contact.name}` : ''} · precio ${inv.pmode === 'wholesale' ? 'mayorista' : 'detalle'}`);
@@ -1481,6 +1547,8 @@ function pvFilterCustomers(query, showAll = false) {
     inv.cliContactName = '';
     inv.cliContactRole = '';
     inv.cliContactPhone = '';
+    inv.cliBranchId = null; inv.cliBranchName = ''; inv.cliBranchCode = '';
+    inv.cliBranchAddress = ''; inv.cliBranchPhone = '';
     if (hadRegisteredCustomer) {
       inv.cliCedula = '';
       const rnc = document.getElementById('pv-customer-rnc');
@@ -1539,6 +1607,8 @@ function pvSelectCustomer(id, contactId = null) {
     inv.cliContactName = '';
     inv.cliContactRole = '';
     inv.cliContactPhone = '';
+    inv.cliBranchId = null; inv.cliBranchName = ''; inv.cliBranchCode = '';
+    inv.cliBranchAddress = ''; inv.cliBranchPhone = '';
     if (nameInput) nameInput.value = inv.cliName;
     if (rncInput) rncInput.value = '';
     pvUpdateCustomerState();
@@ -1556,6 +1626,8 @@ function pvSelectCustomer(id, contactId = null) {
   inv.cliContactName = contact?.name || '';
   inv.cliContactRole = contact?.role || '';
   inv.cliContactPhone = contact?.phone || '';
+  inv.cliBranchId = null; inv.cliBranchName = ''; inv.cliBranchCode = '';
+  inv.cliBranchAddress = ''; inv.cliBranchPhone = '';
   inv.pmode = customer.preferred_price_mode === 'wholesale' ? 'wholesale' : 'retail';
   if (nameInput) nameInput.value = customer.name;
   if (rncInput) rncInput.value = customer.rnc || '';
@@ -1685,6 +1757,11 @@ async function posSubmitCheckoutOrder() {
         contact_id: contact?.id || null,
         contact: contact ? { id: contact.id, name: contact.name, document: contact.document || '',
           role: contact.role || '', phone: contact.phone || '', email: contact.email || '' } : null,
+        branch_id: inv.cliBranchId || null,
+        branch: inv.cliBranchId ? {
+          id: inv.cliBranchId, name: inv.cliBranchName || '', code: inv.cliBranchCode || '',
+          address: inv.cliBranchAddress || '', phone: inv.cliBranchPhone || ''
+        } : null,
       };
     }
   }
@@ -2560,6 +2637,11 @@ async function finalizarVenta() {
         phone: cliPhone || c.phone || '', phone_type: cliPhoneType,
         phone_id: inv.cliPhoneId || null, email: c.billing_email || c.email || '',
         contact_id: contact?.id || null,
+        branch_id: inv.cliBranchId || null,
+        branch: inv.cliBranchId ? {
+          id: inv.cliBranchId, name: inv.cliBranchName || '', code: inv.cliBranchCode || '',
+          address: inv.cliBranchAddress || '', phone: inv.cliBranchPhone || ''
+        } : null,
       };
     }
   }
@@ -2716,6 +2798,11 @@ async function finalizarVenta() {
 	      customer_contact_role: savedSale?.customer_contact_role || '',
 	      customer_contact_phone: savedSale?.customer_contact_phone || '',
 	      customer_contact_email: savedSale?.customer_contact_email || '',
+	      customer_branch_id: savedSale?.customer_branch_id || null,
+	      customer_branch_name: savedSale?.customer_branch_name || '',
+	      customer_branch_code: savedSale?.customer_branch_code || '',
+	      customer_branch_address: savedSale?.customer_branch_address || '',
+	      customer_branch_phone: savedSale?.customer_branch_phone || '',
       customer_phone: savedSale?.customer_phone || cliPhone,
       customer_phone_type: savedSale?.customer_phone_type || cliPhoneType,
 	      items:        printItems,

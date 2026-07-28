@@ -614,6 +614,7 @@ function renderTermica(sale, cfg, opts, widthMm = 76) {
   ${opts.cedula && sale.customer_rnc ? `<div style="display:flex;justify-content:space-between"><span>Cédula/RNC:</span><span>${_esc(sale.customer_rnc)}</span></div>` : ''}
   ${sale.customer_phone ? `<div style="display:flex;justify-content:space-between"><span>${_customerPhoneLabel(sale).split(':')[0]}:</span><span>${_esc(sale.customer_phone)}</span></div>` : ''}
   ${sale.customer_contact_name ? `<div style="display:flex;justify-content:space-between"><span>Solicitado por:</span><span>${_esc(sale.customer_contact_name)}${sale.customer_contact_role ? ` · ${_esc(sale.customer_contact_role)}` : ''}</span></div>` : ''}
+  ${sale.customer_branch_name ? `<div style="display:flex;justify-content:space-between"><span>Entregar en:</span><span>${_esc(sale.customer_branch_name)}${sale.customer_branch_address ? ` · ${_esc(sale.customer_branch_address)}` : ''}</span></div>` : ''}
   <div style="text-align:center">${sep}</div>
   <div style="display:flex;justify-content:space-between;font-weight:700">
     <span>DESCRIPCIÓN</span><span>TOTAL</span>
@@ -697,6 +698,7 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
   <div class="row"><span>Cliente:</span><span>${_esc(sale.customer_name||'Consumidor Final')}</span></div>
   ${sale.customer_phone ? `<div class="row"><span>${_customerPhoneLabel(sale).split(':')[0]}:</span><span>${_esc(sale.customer_phone)}</span></div>` : ''}
   ${sale.customer_contact_name ? `<div class="row"><span>Solicitado por:</span><span>${_esc(sale.customer_contact_name)}${sale.customer_contact_role ? ` · ${_esc(sale.customer_contact_role)}` : ''}</span></div>` : ''}
+  ${sale.customer_branch_name ? `<div class="row"><span>Entregar en:</span><span>${_esc(sale.customer_branch_name)}${sale.customer_branch_address ? ` · ${_esc(sale.customer_branch_address)}` : ''}</span></div>` : ''}
   <div class="row"><span>Cajero:</span><span>${_esc(sale.cajero||'')}</span></div>
   ${sale.salesperson_name ? `<div class="row"><span>Vendedor:</span><span>${_esc((sale.salesperson_code ? sale.salesperson_code + ' · ' : '') + sale.salesperson_name)}</span></div>` : ''}
   <hr class="sep-d"/>
@@ -920,6 +922,9 @@ function renderCartaRecibo(sale, cfg, opts) {
   if (sale.customer_email)   cliLines.push(_esc(sale.customer_email));
   if (sale.customer_contact_name) {
     cliLines.push(`Solicitado por: ${_esc(sale.customer_contact_name)}${sale.customer_contact_role ? ` · ${_esc(sale.customer_contact_role)}` : ''}`);
+  }
+  if (sale.customer_branch_name) {
+    cliLines.push(`Entregar en: ${_esc(sale.customer_branch_name)}${sale.customer_branch_address ? ` · ${_esc(sale.customer_branch_address)}` : ''}`);
   }
 
   // ── Contacto del negocio ────────────────────────────
@@ -1205,6 +1210,7 @@ function renderCartaFormal(sale, cfg, opts) {
       ${opts.cedula && sale.customer_rnc ? `<br/><span style="font-size:11px;color:#666">RNC/Cédula: ${_esc(sale.customer_rnc)}</span>` : ''}
       ${sale.customer_phone ? `<br/><span style="font-size:11px;color:#666">${_customerPhoneLabel(sale)}</span>` : ''}
       ${sale.customer_contact_name ? `<br/><span style="font-size:11px;color:#444">Solicitado por: ${_esc(sale.customer_contact_name)}${sale.customer_contact_role ? ` · ${_esc(sale.customer_contact_role)}` : ''}</span>` : ''}
+      ${sale.customer_branch_name ? `<br/><span style="font-size:11px;color:#444">Entregar en: ${_esc(sale.customer_branch_name)}${sale.customer_branch_address ? ` · ${_esc(sale.customer_branch_address)}` : ''}</span>` : ''}
     </div>
     <div class="info-box">
       <label>Detalles</label>
@@ -1339,6 +1345,7 @@ function renderCartaNCF(sale, cfg, opts) {
     ${opts.cedula && sale.customer_rnc ? ` &nbsp;|&nbsp; <strong>RNC/Cédula:</strong> ${_esc(sale.customer_rnc)}` : ''}
     ${sale.customer_phone ? `<br/><strong>${_customerPhoneLabel(sale).split(':')[0]}:</strong> ${_esc(sale.customer_phone)}` : ''}
     ${sale.customer_contact_name ? `<br/><strong>Solicitado por:</strong> ${_esc(sale.customer_contact_name)}${sale.customer_contact_role ? ` · ${_esc(sale.customer_contact_role)}` : ''}` : ''}
+    ${sale.customer_branch_name ? `<br/><strong>Entregar en:</strong> ${_esc(sale.customer_branch_name)}${sale.customer_branch_address ? ` · ${_esc(sale.customer_branch_address)}` : ''}` : ''}
   </div>
 
   <table>
@@ -1415,6 +1422,7 @@ function renderMediaCarta(sale, cfg, opts) {
     Cliente: <strong>${_esc(sale.customer_name||'Consumidor Final')}</strong>
     ${sale.customer_phone ? ` · ${_customerPhoneLabel(sale)}` : ''}
     ${sale.customer_contact_name ? ` · Solicitado por: <strong>${_esc(sale.customer_contact_name)}</strong>` : ''}
+    ${sale.customer_branch_name ? ` · Entregar en: <strong>${_esc(sale.customer_branch_name)}</strong>` : ''}
   </div>
   <table>
     <thead><tr><th>Producto</th><th style="text-align:center">Q</th><th style="text-align:right">Total</th></tr></thead>

@@ -298,6 +298,7 @@ function bindAutoUpdaterEvents() {
       cancelId:  1,
     }).then(({ response }) => {
       if (response === 0) {
+        isQuitting = true; // instalación de update: no pedir confirmación de cierre
         autoUpdater.quitAndInstall(false, true);
       }
     });
@@ -388,6 +389,7 @@ ipcMain.handle('update:install', async (_, { cartEmpty } = {}) => {
     });
     if (response === 0) return { ok: false, cancelled: true };
   }
+  isQuitting = true; // instalación de update: no pedir confirmación de cierre
   autoUpdater.quitAndInstall(false, true);
   return { ok: true };
 });
@@ -399,6 +401,9 @@ ipcMain.handle('update:getState', async () => {
 
 let db;
 let mainWindow;
+// Cierre programático (update, relaunch, quit por menú): NO debe pedir
+// confirmación. Solo el cierre iniciado por el usuario (X / Alt+F4) pregunta.
+let isQuitting = false;
 
 // ── Seguridad de navegación externa ─────────────────────────────
 // El renderer solo debe cargar archivos locales de la app. Cualquier link externo
@@ -451,6 +456,28 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
     mainWindow.maximize();
+  });
+
+  // Confirmar antes de cerrar por la X / Alt+F4 (evita cierres accidentales que
+  // podrían interrumpir una venta o un cierre de caja en curso). No aplica a
+  // cierres programáticos (updates, relaunch): esos marcan isQuitting=true.
+  mainWindow.on('close', (e) => {
+    if (isQuitting) return;
+    const choice = dialog.showMessageBoxSync(mainWindow, {
+      type: 'question',
+      buttons: ['Cancelar', 'Cerrar Velo POS'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+      title: 'Cerrar Velo POS',
+      message: '¿Seguro que deseas cerrar Velo POS?',
+      detail: 'Se cerrará la aplicación. Verifica que no tengas una venta o un cierre de caja en curso.',
+    });
+    if (choice === 0) {
+      e.preventDefault(); // Cancelar: la ventana permanece abierta
+    } else {
+      isQuitting = true;  // Confirmado: permitir el cierre real
+    }
   });
 
   // En producción no abrir DevTools
@@ -1506,6 +1533,44 @@ ipcMain.handle('customers:deleteContact', async (_, { id, requestUserId }) => {
     const reqUser = _customerContactAdmin(requestUserId);
     const result = customersRepo.deleteContact(id);
     audit(reqUser.id, reqUser.name, 'representante_desactivado', 'customer_contacts', id, result.name);
+    return { ok: true, ...result };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// ── Sucursales del cliente empresa ──
+ipcMain.handle('customers:getBranches', async (_, { customerId }) => {
+  return customersRepo.getBranches(customerId);
+});
+
+ipcMain.handle('customers:createBranch', async (_, { customerId, data, requestUserId }) => {
+  try {
+    const reqUser = _customerContactAdmin(requestUserId);
+    const id = customersRepo.createBranch(customerId, data || {});
+    audit(reqUser.id, reqUser.name, 'sucursal_cliente_creada', 'customer_branches', id, data?.name || '');
+    return { ok: true, id, branches: customersRepo.getBranches(customerId) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('customers:updateBranch', async (_, { id, data, requestUserId }) => {
+  try {
+    const reqUser = _customerContactAdmin(requestUserId);
+    const branches = customersRepo.updateBranch(id, data || {});
+    audit(reqUser.id, reqUser.name, 'sucursal_cliente_editada', 'customer_branches', id, data?.name || '');
+    return { ok: true, branches };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('customers:deleteBranch', async (_, { id, requestUserId }) => {
+  try {
+    const reqUser = _customerContactAdmin(requestUserId);
+    const result = customersRepo.deleteBranch(id);
+    audit(reqUser.id, reqUser.name, 'sucursal_cliente_desactivada', 'customer_branches', id, result.name);
     return { ok: true, ...result };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -6582,6 +6647,7 @@ app.on('activate', () => {
 
 // Cierre limpio
 app.on('before-quit', () => {
+  isQuitting = true; // cualquier quit programático (update/menú) omite el diálogo
   if (_syncStream) { try { _syncStream.close(); } catch {} _syncStream = null; }
   if (_rpcServer) { try { _rpcServer.close(); } catch {} _rpcServer = null; }
   if (_serverService) { try { _serverService.close(); } catch {} _serverService = null; }

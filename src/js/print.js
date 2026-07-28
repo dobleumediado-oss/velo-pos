@@ -271,6 +271,11 @@ function printReceipt(sale, isReprint = false) {
       customer_contact_role: sale.customer_contact_role || '',
       customer_contact_phone: sale.customer_contact_phone || '',
       customer_contact_email: sale.customer_contact_email || '',
+      customer_branch_id: sale.customer_branch_id || null,
+      customer_branch_name: sale.customer_branch_name || '',
+      customer_branch_code: sale.customer_branch_code || '',
+      customer_branch_address: sale.customer_branch_address || '',
+      customer_branch_phone: sale.customer_branch_phone || '',
       due_date:         sale.due_date || null,
       applied_invoice:  sale.applied_invoice || null,
       financial_account_id: sale.financial_account_id || null,
@@ -388,6 +393,7 @@ function printReceipt(sale, isReprint = false) {
     lines.push(tRow(phoneLabel, String(sale.customer_phone).slice(0, 24)));
   }
   if (sale.customer_contact_name) lines.push(tRow('Solicitado por:', String(sale.customer_contact_name).slice(0, 26)));
+  if (sale.customer_branch_name) lines.push(tRow('Entregar en:', String(sale.customer_branch_name).slice(0, 26)));
 
   lines.push(tline());
   lines.push(tRow('DESCRIPCIÓN', 'TOTAL'));
@@ -521,6 +527,7 @@ function printConduce(sale) {
   lines.push(tRow('Cliente:', cliName.slice(0, 28)));
   if (cliRnc) lines.push(tRow('RNC/Céd:', cliRnc));
   if (sale.customer_contact_name) lines.push(tRow('Solicitado por:', String(sale.customer_contact_name).slice(0, 26)));
+  if (sale.customer_branch_name) lines.push(tRow('Entregar en:', String(sale.customer_branch_name).slice(0, 26)));
   // Enlaza el conduce con la factura fiscal, si tiene NCF.
   if (sale.ncf && String(sale.ncf).trim()) lines.push(tRow('Ref. NCF:', String(sale.ncf).trim()));
 
@@ -645,6 +652,7 @@ function printConduceDoc(dn) {
     <div class="row"><span class="k">Estado:</span> <b>${STL[dn.status] || dn.status}</b></div>
     ${dn.customer_rnc ? `<div class="row"><span class="k">RNC/Céd.:</span> <b>${esc(dn.customer_rnc)}</b></div>` : '<div></div>'}
     ${dn.customer_contact_name ? `<div class="row"><span class="k">Representante:</span> <b>${esc(dn.customer_contact_name)}${dn.customer_contact_role ? ` · ${esc(dn.customer_contact_role)}` : ''}</b></div>` : '<div></div>'}
+    ${dn.customer_branch_name ? `<div class="row"><span class="k">Entregar en:</span> <b>${esc(dn.customer_branch_name)}${dn.customer_branch_code ? ` (Est. ${esc(dn.customer_branch_code)})` : ''}</b></div>` : ''}
     <div class="row"><span class="k">Origen:</span> <b>${origen[dn.source_type] || dn.source_type}${dn.source_id ? ' #' + dn.source_id : ''}</b></div>
     ${dn.delivery_address ? `<div class="row" style="grid-column:1/3"><span class="k">Dirección de entrega:</span> <b>${esc(dn.delivery_address)}</b></div>` : ''}
     ${dn.driver_name ? `<div class="row"><span class="k">Chofer:</span> <b>${esc(dn.driver_name)}</b></div>` : ''}

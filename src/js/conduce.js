@@ -179,6 +179,7 @@ async function _cndOpenDetail(id) {
     <div class="card" style="background:var(--surface2);margin-bottom:12px;font-size:12px">
       ${dn.customer_rnc ? `<div class="tr"><span>RNC/Céd.</span><span>${_cndEsc(dn.customer_rnc)}</span></div>` : ''}
       ${dn.customer_contact_name ? `<div class="tr"><span>Solicitado por</span><span>${_cndEsc(dn.customer_contact_name)}${dn.customer_contact_role ? ` · ${_cndEsc(dn.customer_contact_role)}` : ''}${dn.customer_contact_phone ? ` · ${_cndEsc(dn.customer_contact_phone)}` : ''}</span></div>` : ''}
+      ${dn.customer_branch_name ? `<div class="tr"><span>Entregar en</span><span>${_cndEsc(dn.customer_branch_name)}${dn.customer_branch_code ? ` (Est. ${_cndEsc(dn.customer_branch_code)})` : ''}</span></div>` : ''}
       ${dn.delivery_address ? `<div class="tr"><span>Dirección</span><span>${_cndEsc(dn.delivery_address)}</span></div>` : ''}
       ${dn.driver_name ? `<div class="tr"><span>Chofer</span><span>${_cndEsc(dn.driver_name)}${dn.vehicle_plate ? ' · ' + _cndEsc(dn.vehicle_plate) : ''}</span></div>` : ''}
       ${dn.dispatch_date ? `<div class="tr"><span>Despachado</span><span>${dn.dispatch_date}</span></div>` : ''}
@@ -413,6 +414,13 @@ function _cndOpenForm(id = null) {
           ${(selectedCompany?.contacts || []).filter(c=>c.active!==0 && c.can_order!==0).map(c => `<option value="${c.id}" ${Number(dn?.customer_contact_id)===Number(c.id)?'selected':''}>${_cndEsc(c.name)}${c.role ? ` · ${_cndEsc(c.role)}` : ''}</option>`).join('')}
         </select>
       </div>
+      <div class="fg" id="cnd-branch-wrap" style="display:${(selectedCompany?.customer_type === 'company' && (selectedCompany?.branches||[]).some(b=>b.active!==0)) ? 'block' : 'none'}">
+        <label class="lbl">Sucursal de entrega <span style="font-weight:400;color:var(--muted)">(opcional)</span></label>
+        <select class="inp" id="cnd-f-branch" onchange="_cndBranchChange()">
+          <option value="">Casa matriz / sin sucursal específica</option>
+          ${(selectedCompany?.branches || []).filter(b=>b.active!==0).map(b => `<option value="${b.id}" ${Number(dn?.customer_branch_id)===Number(b.id)?'selected':''}>${_cndEsc(b.name)}${b.code ? ` (Est. ${_cndEsc(b.code)})` : ''}${b.address ? ` · ${_cndEsc(b.address)}` : ''}</option>`).join('')}
+        </select>
+      </div>
 
       <div style="font-weight:700;font-size:12px;margin:10px 0 6px">Productos</div>
       <div style="position:relative;margin-bottom:8px">
@@ -476,6 +484,15 @@ function _cndFillCustomer(name) {
       const primary = contacts.find(contact => contact.is_primary) || null;
       select.value = matchedContact?.id || primary?.id || '';
     }
+    const bwrap = document.getElementById('cnd-branch-wrap');
+    const bsel = document.getElementById('cnd-f-branch');
+    if (bwrap && bsel) {
+      const branches = (c.branches || []).filter(b => b.active !== 0);
+      bwrap.style.display = (c.customer_type === 'company' && branches.length) ? 'block' : 'none';
+      bsel.innerHTML = '<option value="">Casa matriz / sin sucursal específica</option>' + branches.map(b =>
+        `<option value="${b.id}">${_cndEsc(b.name)}${b.code ? ` (Est. ${_cndEsc(b.code)})` : ''}${b.address ? ` · ${_cndEsc(b.address)}` : ''}</option>`).join('');
+      bsel.value = '';
+    }
   } else {
     const cid = document.getElementById('cnd-f-cliid');
     const wrap = document.getElementById('cnd-contact-wrap');
@@ -483,7 +500,23 @@ function _cndFillCustomer(name) {
     if (cid) cid.value = '';
     if (wrap) wrap.style.display = 'none';
     if (select) select.innerHTML = '<option value="">— Sin representante —</option>';
+    const bwrap = document.getElementById('cnd-branch-wrap');
+    const bsel = document.getElementById('cnd-f-branch');
+    if (bwrap) bwrap.style.display = 'none';
+    if (bsel) bsel.innerHTML = '<option value="">Casa matriz / sin sucursal específica</option>';
   }
+}
+
+// Al elegir una sucursal, autollena la dirección de entrega con la de la
+// sucursal (si el campo está vacío o traía otra sucursal), para no reescribirla.
+function _cndBranchChange() {
+  const bsel = document.getElementById('cnd-f-branch');
+  const addr = document.getElementById('cnd-f-addr');
+  if (!bsel || !addr) return;
+  const cid = Number(document.getElementById('cnd-f-cliid')?.value) || null;
+  const company = (DB.customers || []).find(c => Number(c.id) === Number(cid));
+  const branch = (company?.branches || []).find(b => Number(b.id) === Number(bsel.value));
+  if (branch?.address) addr.value = branch.address;
 }
 
 function _cndProdSearch(q) {
@@ -548,6 +581,14 @@ async function _cndSave(id) {
     header.customer_contact_role = contact.role || '';
     header.customer_contact_phone = contact.phone || '';
     header.customer_contact_email = contact.email || '';
+  }
+  const branch = (company?.branches || []).find(b => Number(b.id) === Number(document.getElementById('cnd-f-branch')?.value) && b.active !== 0);
+  if (branch) {
+    header.customer_branch_id = branch.id;
+    header.customer_branch_name = branch.name || '';
+    header.customer_branch_code = branch.code || '';
+    header.customer_branch_address = branch.address || '';
+    header.customer_branch_phone = branch.phone || '';
   }
   const u = _cndUser();
   let r;
@@ -628,6 +669,8 @@ function _cndDoc(id, save) {
           customer_contact_role: dn.customer_contact_role,
           customer_contact_phone: dn.customer_contact_phone,
           customer_contact_email: dn.customer_contact_email,
+          customer_branch_name: dn.customer_branch_name,
+          customer_branch_code: dn.customer_branch_code,
           items: (dn.items || []).map(it => ({ name: it.description, qty: it.requested_qty })),
         });
       }
@@ -665,6 +708,8 @@ async function _cndWhatsAppPDF(id) {
       customer_rnc: dn.customer_rnc,
       customer_contact_name: dn.customer_contact_name,
       customer_contact_role: dn.customer_contact_role,
+      customer_branch_name: dn.customer_branch_name,
+      customer_branch_code: dn.customer_branch_code,
       items: (dn.items || []).map(it => ({ name: it.description, qty: it.requested_qty })),
     });
   };

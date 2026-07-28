@@ -79,6 +79,11 @@ function ensureCheckoutOrdersSchema(db) {
     ['customer_contact_role', "TEXT DEFAULT ''"],
     ['customer_contact_phone', "TEXT DEFAULT ''"],
     ['customer_contact_email', "TEXT DEFAULT ''"],
+    ['customer_branch_id', 'INTEGER'],
+    ['customer_branch_name', "TEXT DEFAULT ''"],
+    ['customer_branch_code', "TEXT DEFAULT ''"],
+    ['customer_branch_address', "TEXT DEFAULT ''"],
+    ['customer_branch_phone', "TEXT DEFAULT ''"],
     ['discount_approved_by', 'INTEGER'],
   ];
   for (const [col, def] of companyCols) {
@@ -222,6 +227,13 @@ function createCheckoutOrdersRepo({ getDb, salesRepo, audit }) {
       if (contactId && (!contact || customer.customer_type !== 'company')) {
         throw new Error('El representante no pertenece a la empresa, está inactivo o no puede solicitar compras');
       }
+      const branchId = Number(data.customer?.branch_id || data.customer?.branch?.id) || null;
+      const custBranch = branchId
+        ? db().prepare(`SELECT * FROM customer_branches WHERE id=? AND customer_id=? AND active=1`).get(branchId, customer.id)
+        : null;
+      if (branchId && (!custBranch || customer.customer_type !== 'company')) {
+        throw new Error('La sucursal no pertenece a la empresa o está inactiva');
+      }
 
       const orderR = db().prepare(`
         INSERT INTO checkout_orders(
@@ -229,6 +241,7 @@ function createCheckoutOrdersRepo({ getDb, salesRepo, audit }) {
           customer_type,customer_trade_name,customer_address,customer_phone,customer_phone_type,customer_email,
           customer_contact_id,customer_contact_name,customer_contact_document,
           customer_contact_role,customer_contact_phone,customer_contact_email,
+          customer_branch_id,customer_branch_name,customer_branch_code,customer_branch_address,customer_branch_phone,
           discount_pct,discount_amt,subtotal,tax_amt,total,salesperson_id,discount_approved_by,
           price_approved_by,created_by,created_by_name,origin_terminal_id,notes,expires_at
         ) VALUES(
@@ -236,6 +249,7 @@ function createCheckoutOrdersRepo({ getDb, salesRepo, audit }) {
           @customer_type,@customer_trade_name,@customer_address,@customer_phone,@customer_phone_type,@customer_email,
           @customer_contact_id,@customer_contact_name,@customer_contact_document,
           @customer_contact_role,@customer_contact_phone,@customer_contact_email,
+          @customer_branch_id,@customer_branch_name,@customer_branch_code,@customer_branch_address,@customer_branch_phone,
           @discount_pct,@discount_amt,@subtotal,@tax_amt,@total,@salesperson_id,@discount_approved_by,
           @price_approved_by,@created_by,@created_by_name,@origin_terminal_id,@notes,
           datetime('now','localtime',@expires_modifier)
@@ -254,6 +268,9 @@ function createCheckoutOrdersRepo({ getDb, salesRepo, audit }) {
         customer_contact_id: contact?.id || null, customer_contact_name: contact?.name || '',
         customer_contact_document: contact?.document || '', customer_contact_role: contact?.role || '',
         customer_contact_phone: contact?.phone || '', customer_contact_email: contact?.email || '',
+        customer_branch_id: custBranch?.id || null, customer_branch_name: custBranch?.name || '',
+        customer_branch_code: custBranch?.code || '', customer_branch_address: custBranch?.address || '',
+        customer_branch_phone: custBranch?.phone || '',
         discount_pct: totals.discountPct, discount_amt: totals.discountAmt,
         subtotal: totals.subtotal, tax_amt: totals.taxAmt, total: totals.total,
         salesperson_id: Number(data.salespersonId) || null,
@@ -340,10 +357,17 @@ function createCheckoutOrdersRepo({ getDb, salesRepo, audit }) {
         contact_id: order.customer_contact_id || null,
         preserve_customer_snapshot: true,
         preserve_contact_snapshot: true,
+        preserve_branch_snapshot: true,
         contact: order.customer_contact_id ? {
           id: order.customer_contact_id, name: order.customer_contact_name || '',
           document: order.customer_contact_document || '', role: order.customer_contact_role || '',
           phone: order.customer_contact_phone || '', email: order.customer_contact_email || '',
+        } : null,
+        branch_id: order.customer_branch_id || null,
+        branch: order.customer_branch_id ? {
+          id: order.customer_branch_id, name: order.customer_branch_name || '',
+          code: order.customer_branch_code || '', address: order.customer_branch_address || '',
+          phone: order.customer_branch_phone || '',
         } : null,
       };
       const effectiveDiscount = payment?.disc !== undefined
