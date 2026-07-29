@@ -53,20 +53,26 @@ function renderCaja(el) {
     const tdS    = DB.sales.filter(s =>
       (s.cash_session_id || s.cajaId) === sesId && s.type !== 'devolucion' && s.status !== 'returned' && s.status !== 'cancelled');
     const tdDevs = DB.sales.filter(s => (s.cash_session_id || s.cajaId) === cajaSession.id && s.type === 'devolucion');
+    const tdPayments = (DB.payments || []).filter(p =>
+      Number(p.cash_session_id) === Number(sesId) && p.cajero !== 'Importación histórica');
     const tdRev  = tdS.reduce((a, s) => a + s.total, 0);
     const tdDev  = tdDevs.reduce((a, s) => a + s.total, 0);
-    const tdEfec = tdS.filter(s => (s.payment_method || s.pay) === 'efectivo').reduce((a, s) => a + s.total, 0);
-    const tdCard = tdS.filter(s => (s.payment_method || s.pay) === 'tarjeta').reduce((a, s) => a + s.total, 0);
-    const tdTrans= tdS.filter(s => (s.payment_method || s.pay) === 'transferencia').reduce((a, s) => a + s.total, 0);
-    const tdCred = tdS.filter(s => (s.payment_method || s.pay) === 'credito').reduce((a, s) => a + s.total, 0);
+    const tdEfec = tdS.filter(s => (s.payment_method || s.pay) === 'efectivo').reduce((a, s) => a + s.total, 0)
+      + tdPayments.filter(p => (p.method || 'efectivo') === 'efectivo').reduce((a,p)=>a+Number(p.amount||0),0);
+    const tdCard = tdS.filter(s => (s.payment_method || s.pay) === 'tarjeta').reduce((a, s) => a + s.total, 0)
+      + tdPayments.filter(p => p.method === 'tarjeta').reduce((a,p)=>a+Number(p.amount||0),0);
+    const tdTrans= tdS.filter(s => (s.payment_method || s.pay) === 'transferencia').reduce((a, s) => a + s.total, 0)
+      + tdPayments.filter(p => ['transferencia','cheque'].includes(p.method)).reduce((a,p)=>a+Number(p.amount||0),0);
+    const tdCred = tdS.filter(s => (s.payment_method || s.pay) === 'credito')
+      .reduce((a, s) => a + Number(s.balance_after_payment ?? s.total ?? 0), 0);
     const tdNet  = tdRev - tdDev;
 
     const statGrid = h('div', { class: 'metrics', style: { gridTemplateColumns: 'repeat(4,1fr)' } });
     [
       { icon: 'dollar', color: 'g', label: 'Total Vendido',    val: fmt(tdRev) },
-      { icon: 'cash',   color: 'b', label: 'Efectivo',         val: fmt(tdEfec) },
-      { icon: 'card',   color: 'p', label: 'Tarjeta/Trans.',   val: fmt(tdCard + tdTrans) },
-      { icon: 'users',  color: 'a', label: 'Crédito (no cobrado)', val: fmt(tdCred) },
+      { icon: 'cash',   color: 'b', label: 'Efectivo recibido', val: fmt(tdEfec) },
+      { icon: 'card',   color: 'p', label: 'Tarjeta/Trans. recibidas', val: fmt(tdCard + tdTrans) },
+      { icon: 'users',  color: 'a', label: 'Crédito pendiente', val: fmt(tdCred) },
     ].forEach(m => {
       statGrid.appendChild(
         h('div', { class: 'metric' },
@@ -92,7 +98,7 @@ function renderCaja(el) {
     } else {
       const tw = h('div', { class: 'tw' });
       const tbl = h('table', null,
-        h('thead', null, h('tr', null, ...['#','Cliente','Artículos','Método','Total'].map(t => h('th', null, t))))
+        h('thead', null, h('tr', null, ...['#','Cliente','Artículos','Método','Total',''].map(t => h('th', null, t))))
       );
       const tbody = h('tbody', null);
       [...tdS].reverse().slice(0, 10).forEach(s => {
@@ -100,8 +106,15 @@ function renderCaja(el) {
           h('td', { class: 'tm' }, facturaLabel(s)),
           h('td', null, h('div', { class: 'tb' }, s.customer_name || s.clientName || 'Consumidor Final')),
           h('td', null, `${Number(s.item_qty_total || 0)} art.`),
-          h('td', null, h('span', { class: `badge ${s.pay==='efectivo'?'g':s.pay==='tarjeta'?'b':s.pay==='transferencia'?'p':'a'}` }, s.pay)),
-          h('td', { style: { fontWeight: 700 } }, fmt(s.total))
+          h('td', null,
+            h('span', { class: `badge ${(s.payment_method||s.pay)==='efectivo'?'g':(s.payment_method||s.pay)==='tarjeta'?'b':(s.payment_method||s.pay)==='transferencia'?'p':'a'}` }, s.payment_method||s.pay),
+            (s.payment_method||s.pay)==='credito'
+              ? h('div',{class:'ts'},`Pagado ${fmt(s.payment_amount||0)} · Pendiente ${fmt(s.balance_after_payment??s.total)}`)
+              : null),
+          h('td', { style: { fontWeight: 700 } }, fmt(s.total)),
+          h('td', null,h('div',{class:'flex',style:{gap:'3px'}},
+            h('button',{class:'btn btn-ghost btn-sm',onclick:()=>openDetalleVentaModal(s),html:svg('eye')}),
+            h('button',{class:'btn btn-ghost btn-sm',onclick:()=>reimprimirVenta(s.id),html:svg('print')})))
         ));
       });
       tbl.appendChild(tbody);
@@ -109,6 +122,29 @@ function renderCaja(el) {
       sesCard.appendChild(tw);
     }
     el.appendChild(sesCard);
+
+    // Abonos de esta sesión, incluidos pagos iniciales de facturas a crédito.
+    const payCard = h('div', { class: 'card mb20' });
+    payCard.appendChild(h('div',{class:'fxb mb8'},
+      h('div',{class:'card-title'},`Abonos y pagos iniciales (${tdPayments.length})`),
+      h('button',{class:'btn btn-ghost btn-sm',onclick:()=>{ window._ventasTabInicial='abonos'; routeTo('ventas'); },html:`${svg('list')} Ver historial`})));
+    if (!tdPayments.length) {
+      payCard.appendChild(h('div',{class:'empty',style:{padding:'18px'}},h('p',null,'Sin abonos en esta sesión')));
+    } else {
+      const rows = [...tdPayments].reverse().map(p => h('tr',null,
+        h('td',{class:'tm'},reciboLabel(p)),
+        h('td',null,h('div',{class:'tb'},p.customer_name||DB.customers.find(c=>Number(c.id)===Number(p.customer_id))?.name||'Cliente')),
+        h('td',{class:'tm'},paymentInvoiceSummary(p)),
+        h('td',null,h('span',{class:`badge ${(p.method||'')==='efectivo'?'g':'b'}`},p.method||'efectivo')),
+        h('td',{style:{fontWeight:800,color:'var(--green)'}},fmt(p.amount)),
+        h('td',null,h('div',{class:'flex',style:{gap:'3px'}},
+          h('button',{class:'btn btn-ghost btn-sm',onclick:()=>openAbonoDetalleModal(p),html:svg('eye')}),
+          h('button',{class:'btn btn-ghost btn-sm',onclick:()=>reimprimirAbono(p.id),html:svg('print')})))));
+      payCard.appendChild(h('div',{class:'tw'},h('table',null,
+        h('thead',null,h('tr',null,...['Recibo','Cliente','Factura','Método','Monto',''].map(x=>h('th',null,x)))),
+        h('tbody',null,...rows))));
+    }
+    el.appendChild(payCard);
 
     // Devoluciones de esta sesión (visibilidad para el cajero) ─────────
     if (tdDevs.length) {
@@ -620,7 +656,7 @@ async function imprimirReporteDia() {
   const devs     = DB.sales.filter(s =>
     (s.cash_session_id || s.cajaId) === sesId && s.type === 'devolucion');
   const abonos   = DB.payments.filter(p =>
-    p.cash_session_id === sesId || (!p.cash_session_id));
+    Number(p.cash_session_id) === Number(sesId));
 
   const totalEfec  = ventas.filter(s => (s.payment_method||s.pay) === 'efectivo').reduce((a,s) => a+s.total,0);
   const totalCard  = ventas.filter(s => (s.payment_method||s.pay) === 'tarjeta').reduce((a,s) => a+s.total,0);

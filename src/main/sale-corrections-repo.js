@@ -964,6 +964,7 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
         additionSaleId: metadata.additionSaleId || null,
         creditTotal: metadata.creditTotal || 0,
         additionTotal: metadata.additionTotal || 0,
+        overpayment: metadata.overpayment || 0,
       };
     }
 
@@ -1078,6 +1079,7 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
           additionSaleId: metadata.additionSaleId || null,
           creditTotal: metadata.creditTotal || 0,
           additionTotal: metadata.additionTotal || 0,
+          overpayment: metadata.overpayment || 0,
         };
       }
       const lockedRoot = db().prepare('SELECT * FROM sales WHERE id=?').get(beforeRoot.id);
@@ -1089,6 +1091,7 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
 
       const returnIds = [];
       let creditTotal = 0;
+      let overpayment = 0;
       for (const [sourceSaleId, returnItems] of reductionsBySale.entries()) {
         const result = returnsRepo.create({
           originalSaleId: sourceSaleId,
@@ -1099,6 +1102,7 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
         });
         returnIds.push(Number(result.returnId));
         creditTotal = Math.round((creditTotal + Number(result.total || 0)) * 100) / 100;
+        overpayment = Math.round((overpayment + Number(result.overpayment || 0)) * 100) / 100;
       }
 
       let additionSaleId = null;
@@ -1211,6 +1215,7 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
         additionSaleId,
         creditTotal,
         additionTotal,
+        overpayment,
         netDifference: Math.round((additionTotal - creditTotal) * 100) / 100,
         paymentMethod: additionRows.length ? method : null,
         originalFiscalDocumentPreserved: true,
@@ -1257,6 +1262,7 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
         additionSaleId,
         creditTotal,
         additionTotal,
+        overpayment,
         netDifference: metadata.netDifference,
         data: afterModel.root,
       };

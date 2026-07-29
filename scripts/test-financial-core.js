@@ -535,13 +535,123 @@ const d = DB.salesRepo.create({ customer: { id: custId, name: 'Taller Pérez' },
 const balAfter = DB.customersRepo.getById(custId).balance;
 ok(near(balAfter - balBefore, d.total), `balance +${d.total} tras venta a crédito (Δ=${(balAfter - balBefore).toFixed(2)})`);
 
-console.log('\n== E. Abono baja el balance y el sobrepago se rechaza ==');
+console.log('\n== E. Crédito con pago inicial crea abono y registra caja ==');
+const cashSessionId = Number(db.prepare(`
+  INSERT INTO cash_sessions(user_id,cajero,open_date,open_time,open_amount,open_bills,status)
+  VALUES(?,?,date('now','localtime'),time('now','localtime'),0,'{}','open')
+`).run(userId, user.name).lastInsertRowid);
+const beforeInitialSale = DB.customersRepo.getById(custId).balance;
+const creditWithInitial = DB.salesRepo.create({
+  session: { id: cashSessionId },
+  customer: { id: custId, name: 'Taller Pérez' },
+  items: [itemNoTax(1)],
+  payment: {
+    method: 'credito', initialPaymentAmount: 40,
+    initialPaymentMethod: 'efectivo', notes: 'Entrega parcial acordada',
+  },
+  user, type: 'factura',
+});
+ok(near(DB.customersRepo.getById(custId).balance - beforeInitialSale, 60),
+  'el balance aumenta solo por el saldo a crédito (100 - 40)');
+ok(creditWithInitial.initialPaymentId > 0 && near(creditWithInitial.outstandingBalance, 60),
+  'la venta devuelve el recibo del pago inicial y su saldo pendiente');
+const initialPayment = db.prepare('SELECT * FROM payments WHERE id=?').get(creditWithInitial.initialPaymentId);
+ok(initialPayment.sale_id === creditWithInitial.saleId && near(initialPayment.amount, 40),
+  'el pago inicial queda vinculado a la factura');
+ok(near(db.prepare("SELECT amount FROM cash_movements WHERE type='abono' AND reference_id=?").get(creditWithInitial.saleId)?.amount, 40),
+  'el pago inicial se refleja en movimientos de caja');
+ok(DB.salesRepo.getById(creditWithInitial.saleId).notes === 'Entrega parcial acordada',
+  'las notas del POS quedan persistidas en la venta');
+
+console.log('\n== F. Abono exige factura cuando hay varias y evita sobrepago ==');
 const preAbono = DB.customersRepo.getById(custId).balance;
-DB.customersRepo.addPayment({ customerId: custId, amount: 50, method: 'efectivo', note: 'abono test', userId });
+throws(() => DB.customersRepo.addPayment({
+  customerId: custId, amount: 10, method: 'efectivo', note: 'sin factura', userId,
+}), 'exige seleccionar factura cuando el cliente tiene varias pendientes');
+DB.customersRepo.addPayment({
+  customerId: custId, saleId: d.saleId, amount: 50,
+  method: 'efectivo', note: 'abono test', userId, sessionId: cashSessionId,
+});
 ok(near(DB.customersRepo.getById(custId).balance, preAbono - 50), `balance -50 tras abono (obtuvo ${DB.customersRepo.getById(custId).balance.toFixed(2)})`);
 throws(() => DB.customersRepo.addPayment({ customerId: custId, amount: 9e9, method: 'efectivo', userId }), 'rechaza abono mayor al balance');
 
-console.log('\n== F. Exclusión de "Importación histórica" ==');
+console.log('\n== F2. Un recibo distribuido entre varias facturas ==');
+const multiA = DB.salesRepo.create({
+  customer: { id: custId, name: 'Taller Pérez' }, items: [itemNoTax(1)],
+  payment: { method: 'credito' }, user, type: 'factura',
+});
+const multiB = DB.salesRepo.create({
+  customer: { id: custId, name: 'Taller Pérez' }, items: [itemNoTax(1)],
+  payment: { method: 'credito' }, user, type: 'factura',
+});
+const beforeMultiPayment = DB.customersRepo.getById(custId).balance;
+const distributed = DB.customersRepo.addPayment({
+  customerId: custId, amount: 150, method: 'transferencia',
+  note: 'abono multi-factura', userId, sessionId: cashSessionId,
+  allocations: [
+    { saleId: multiA.saleId, amount: 100 },
+    { saleId: multiB.saleId, amount: 50 },
+  ],
+});
+ok(distributed.saleId === null && distributed.allocations.length === 2,
+  'conserva un solo recibo con dos aplicaciones y sin una factura única');
+ok(near(DB.customersRepo.getById(custId).balance, beforeMultiPayment - 150),
+  'el balance del cliente baja una sola vez por el total del recibo');
+ok(db.prepare('SELECT COUNT(*) count FROM payment_allocations WHERE payment_id=?').get(distributed.paymentId).count === 2,
+  'guarda las dos facturas en la tabla de distribución');
+ok(DB.customersRepo.getAllPayments()
+  .find(payment => Number(payment.id) === Number(distributed.paymentId))?.allocations.length === 2,
+  'el historial reconstruye todas las facturas incluidas en el recibo');
+const distributedSaleRows = DB.salesRepo.getAll({ range: 'all', view: 'sales', limit: 500 });
+const distributedA = distributedSaleRows.find(sale => Number(sale.id) === Number(multiA.saleId));
+const distributedB = distributedSaleRows.find(sale => Number(sale.id) === Number(multiB.saleId));
+ok(near(distributedA?.payment_amount, 100) && near(distributedA?.balance_after_payment, 0),
+  'Ventas refleja la aplicación de 100 y la primera factura saldada');
+ok(near(distributedB?.payment_amount, 50) && near(distributedB?.balance_after_payment, 50),
+  'Ventas refleja la aplicación parcial y el saldo de la segunda factura');
+ok(near(DB.salesRepo.getById(multiB.saleId).payment_amount, 50),
+  'el modal de la venta muestra solo la parte del recibo aplicada a esa factura');
+throws(() => DB.customersRepo.addPayment({
+  customerId: custId, amount: 20, method: 'efectivo', userId,
+  allocations: [{ saleId: multiB.saleId, amount: 10 }],
+}), 'rechaza un recibo cuya distribución no coincide con el monto cobrado');
+throws(() => DB.salesRepo.cancel(multiA.saleId, 'no debe permitir', userId, user.name),
+  'impide anular una factura que ya tiene un abono aplicado');
+
+console.log('\n== F3. Reportes segmentados para detalle, mayorista y empresas ==');
+const companyId = DB.customersRepo.create({
+  name: 'Empresa Reporte SRL', customer_type: 'company',
+  rnc: '131999999', credit_limit: 100000,
+});
+DB.salesRepo.create({
+  session: { id: cashSessionId },
+  customer: { id: companyId, name: 'Empresa Reporte SRL', customer_type: 'company', rnc: '131999999' },
+  items: [itemNoTax(1)],
+  payment: { method: 'efectivo', priceMode: 'wholesale' },
+  user, type: 'factura',
+});
+const companyCredit = DB.salesRepo.create({
+  customer: { id: companyId, name: 'Empresa Reporte SRL', customer_type: 'company', rnc: '131999999' },
+  items: [itemNoTax(1)],
+  payment: { method: 'credito', priceMode: 'wholesale' },
+  user, type: 'factura',
+});
+DB.customersRepo.addPayment({
+  customerId: companyId, amount: 30, method: 'efectivo', userId,
+  saleId: companyCredit.saleId, sessionId: cashSessionId,
+});
+const companyWholesaleReport = DB.reportsRepo.summary(
+  'all', null, null, { priceMode: 'wholesale', customerType: 'company' }
+);
+ok(companyWholesaleReport.totalSales >= 1 &&
+   companyWholesaleReport.salesDetail.every(row => row.price_mode === 'wholesale' && row.customer_type === 'company'),
+  'filtra el reporte combinando mayorista + empresa');
+ok(companyWholesaleReport.topCustomers.some(row => row.customer_id === companyId),
+  'incluye clientes principales y detalle imprimible del segmento');
+ok(near(companyWholesaleReport.abonos.total, 30),
+  'atribuye al segmento solo los abonos aplicados a sus facturas');
+
+console.log('\n== G. Exclusión de "Importación histórica" ==');
 db.prepare(`INSERT INTO sales(customer_id,customer_name,type,status,subtotal,total,cajero,user_id,created_at)
             VALUES(?,?,'factura','completed',500,590,'Importación histórica',?,datetime('now','localtime'))`).run(custId, 'Hist', userId);
 const vivas = db.prepare("SELECT COUNT(*) c FROM sales WHERE date(created_at)=date('now','localtime') AND cajero!='Importación histórica'").get().c;

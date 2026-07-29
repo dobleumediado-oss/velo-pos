@@ -12,6 +12,7 @@ const { app }  = require('electron');
 const { todayStr, nowStr, addDaysStr } = require('./lib/dates');
 const { searchNorm: _searchNorm, digitsOf: _digitsOf } = require('./lib/text-normalize');
 const { round2 } = require('./lib/money');
+const { getPendingInvoices } = require('./lib/pending-invoices');
 const { ensureSalespeopleSchema, createSalespeopleRepo } = require('./src/main/salespeople-repo');
 const { ensureCheckoutOrdersSchema, createCheckoutOrdersRepo } = require('./src/main/checkout-orders-repo');
 const {
@@ -535,6 +536,23 @@ function createTables() {
       customer_contact_email    TEXT DEFAULT '',
       created_at      TEXT DEFAULT (datetime('now','localtime'))
     );
+
+    -- Un recibo de abono puede distribuirse entre varias facturas sin crear
+    -- cobros duplicados en Caja ni alterar su numeración documental.
+    CREATE TABLE IF NOT EXISTS payment_allocations (
+      id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+      payment_id             INTEGER NOT NULL REFERENCES payments(id),
+      sale_id                INTEGER NOT NULL REFERENCES sales(id),
+      amount                 REAL NOT NULL CHECK(amount > 0),
+      invoice_balance_before REAL NOT NULL DEFAULT 0,
+      invoice_balance_after  REAL NOT NULL DEFAULT 0,
+      created_at             TEXT DEFAULT (datetime('now','localtime')),
+      UNIQUE(payment_id, sale_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_payment_allocations_payment
+      ON payment_allocations(payment_id);
+    CREATE INDEX IF NOT EXISTS idx_payment_allocations_sale
+      ON payment_allocations(sale_id);
 
     -- ── Proveedores / compras ──
     CREATE TABLE IF NOT EXISTS suppliers (
@@ -2391,6 +2409,51 @@ function ensurePrimaryCustomerBranch(customerId) {
   return first?.id || null;
 }
 
+function hydratePaymentAllocations(payment) {
+  if (!payment) return payment;
+  let allocations = [];
+  if (tableExists('payment_allocations')) {
+    allocations = db.prepare(`
+      SELECT pa.id,pa.payment_id,pa.sale_id,pa.amount,
+             pa.invoice_balance_before,pa.invoice_balance_after,
+             s.status AS sale_status,s.correction_kind,s.original_sale_id,
+             s.document_number_fmt,s.numero_factura,s.numero_factura_fmt,s.ncf,
+             s.sale_date,s.total AS sale_total
+      FROM payment_allocations pa
+      JOIN sales s ON s.id=pa.sale_id
+      WHERE pa.payment_id=?
+      ORDER BY pa.id
+    `).all(payment.id);
+  }
+  // Compatibilidad: los abonos anteriores a esta actualización conservan
+  // sale_id en payments y se presentan como una aplicación única.
+  if (!allocations.length && payment.sale_id) {
+    allocations = [{
+      payment_id: payment.id,
+      sale_id: payment.sale_id,
+      amount: payment.amount,
+      invoice_balance_before: null,
+      invoice_balance_after: null,
+      sale_status: payment.sale_status || '',
+      correction_kind: payment.sale_correction_kind || '',
+      original_sale_id: payment.sale_original_sale_id || null,
+      document_number_fmt: payment.sale_document_number_fmt || '',
+      numero_factura: payment.sale_numero_factura,
+      numero_factura_fmt: payment.sale_numero_factura_fmt || '',
+      ncf: payment.sale_ncf || '',
+      sale_date: payment.sale_date || '',
+      sale_total: payment.sale_total || 0,
+      legacy: true,
+    }];
+  }
+  return {
+    ...payment,
+    allocations,
+    allocation_count: allocations.length,
+    allocated_amount: round2(allocations.reduce((sum, row) => sum + Number(row.amount || 0), 0)),
+  };
+}
+
 const customersRepo = {
   getAll() {
     return db.prepare('SELECT * FROM customers WHERE active=1 ORDER BY name').all()
@@ -2566,15 +2629,75 @@ const customersRepo = {
     })();
     return { id, customerId: current.customer_id, name: current.name };
   },
-  addPayment({ customerId, amount, method, note, saleId = null, contactId = null, cajero = '', userId = null, sessionId = null }) {
+  addPayment({
+    customerId, amount, method, note, saleId = null, allocations = null,
+    contactId = null, cajero = '', userId = null, sessionId = null
+  }) {
     // VALIDACIONES: prevenir abonos inválidos que corrompan el balance
-    if (!amount || amount <= 0) throw new Error('El monto del abono debe ser mayor a cero');
+    amount = round2(Number(amount));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error('El monto del abono debe ser mayor a cero');
+    }
     if (amount > 9999999) throw new Error('Monto de abono excede el límite permitido');
     const cust = db.prepare('SELECT id,customer_type,balance,credit_due FROM customers WHERE id=?').get(customerId);
     if (!cust) throw new Error('Cliente no encontrado');
     if (cust.balance <= 0) throw new Error('El cliente no tiene balance pendiente');
     const before = round2(cust.balance);
     if (amount > before + 0.01) throw new Error(`El abono (${amount.toFixed(2)}) supera el balance actual (${before.toFixed(2)})`);
+    const pending = getPendingInvoices(db, customerId);
+    const pendingInvoices = pending.facturas || [];
+    const bySaleId = new Map(pendingInvoices.map(invoice => [Number(invoice.id), invoice]));
+    const requested = new Map();
+    if (Array.isArray(allocations)) {
+      allocations.forEach(row => {
+        const id = Number(row?.saleId ?? row?.sale_id);
+        const value = round2(Number(row?.amount) || 0);
+        if (id > 0 && value > 0) requested.set(id, round2((requested.get(id) || 0) + value));
+      });
+    }
+    if (!requested.size && saleId) requested.set(Number(saleId), round2(Number(amount)));
+    if (!requested.size && pendingInvoices.length === 1) {
+      requested.set(Number(pendingInvoices[0].id), round2(Number(amount)));
+    }
+    if (!requested.size && pendingInvoices.length > 1) {
+      throw new Error('Este cliente tiene varias facturas pendientes. Selecciona una o varias facturas y distribuye el abono');
+    }
+
+    const normalizedAllocations = [];
+    for (const [invoiceId, appliedAmount] of requested.entries()) {
+      const invoice = bySaleId.get(invoiceId);
+      if (!invoice) {
+        throw new Error('Una factura seleccionada no pertenece al cliente, está anulada o ya no tiene balance pendiente');
+      }
+      const invoicePending = round2(Number(invoice.pendiente || 0));
+      if (appliedAmount > invoicePending + 0.01) {
+        throw new Error(
+          `El monto aplicado a la factura excede su pendiente (${invoicePending.toFixed(2)})`
+        );
+      }
+      normalizedAllocations.push({
+        saleId: invoiceId,
+        amount: appliedAmount,
+        invoiceBalanceBefore: invoicePending,
+        invoiceBalanceAfter: Math.max(0, round2(invoicePending - appliedAmount)),
+        invoice,
+      });
+    }
+    const allocatedAmount = round2(normalizedAllocations.reduce((sum, row) => sum + row.amount, 0));
+    const unallocatedAmount = round2(Number(amount) - allocatedAmount);
+    if (unallocatedAmount < -0.01) {
+      throw new Error('La distribución entre facturas supera el monto total del abono');
+    }
+    if (pendingInvoices.length &&
+        unallocatedAmount > Number(pending.unallocatedBalance || 0) + 0.01) {
+      throw new Error(`Falta distribuir ${unallocatedAmount.toFixed(2)} del abono entre las facturas seleccionadas`);
+    }
+    if (!pendingInvoices.length && Number(pending.unallocatedBalance || 0) + 0.01 < Number(amount)) {
+      throw new Error('No existe saldo histórico suficiente sin factura para aplicar este abono');
+    }
+    const selectedInvoice = normalizedAllocations.length === 1
+      ? normalizedAllocations[0].invoice : null;
+    saleId = selectedInvoice ? Number(selectedInvoice.id) : null;
     const after  = Math.max(0, round2((before - amount)));
     let contact = null;
     if (contactId) {
@@ -2598,6 +2721,17 @@ const customersRepo = {
         contact?.phone || '', contact?.email || ''
       );
       const paymentId = payInsert.lastInsertRowid;
+      if (normalizedAllocations.length) {
+        const insertAllocation = db.prepare(`
+          INSERT INTO payment_allocations(
+            payment_id,sale_id,amount,invoice_balance_before,invoice_balance_after
+          ) VALUES(?,?,?,?,?)
+        `);
+        normalizedAllocations.forEach(row => insertAllocation.run(
+          paymentId, row.saleId, row.amount,
+          row.invoiceBalanceBefore, row.invoiceBalanceAfter
+        ));
+      }
       const documentIssue = _issueDocumentNumber('abono', 'payment', paymentId);
       db.prepare(`
         UPDATE payments
@@ -2616,10 +2750,20 @@ const customersRepo = {
         db.prepare(`
           INSERT INTO cash_movements(cash_session_id,type,amount,method,reference_id,description,user_id)
           VALUES(?,?,?,?,?,?,?)
-        `).run(sessionId, 'abono', amount, method || 'efectivo', saleId, `Abono cliente`, userId);
+        `).run(
+          sessionId, 'abono', amount, method || 'efectivo',
+          saleId || paymentId,
+          normalizedAllocations.length > 1
+            ? `Abono distribuido en ${normalizedAllocations.length} facturas`
+            : 'Abono cliente',
+          userId
+        );
       }
       return {
-        before, after, amount, paymentId,
+        before, after, amount, paymentId, saleId: saleId || null,
+        sale_document_number_fmt: selectedInvoice?.document_number_fmt || '',
+        sale_numero_factura: selectedInvoice?.numero_factura ?? null,
+        sale_numero_factura_fmt: selectedInvoice?.numero_factura_fmt || '',
         document_kind: 'abono',
         document_number: documentIssue.sequence_number,
         document_number_fmt: documentIssue.formatted_number,
@@ -2630,6 +2774,19 @@ const customersRepo = {
         customer_contact_role: contact?.role || '',
         customer_contact_phone: contact?.phone || '',
         customer_contact_email: contact?.email || '',
+        allocations: normalizedAllocations.map(row => ({
+          sale_id: row.saleId,
+          amount: row.amount,
+          invoice_balance_before: row.invoiceBalanceBefore,
+          invoice_balance_after: row.invoiceBalanceAfter,
+          document_number_fmt: row.invoice.document_number_fmt || '',
+          numero_factura: row.invoice.numero_factura ?? null,
+          numero_factura_fmt: row.invoice.numero_factura_fmt || '',
+          ncf: row.invoice.ncf || '',
+          correction_kind: row.invoice.correction_kind || '',
+          original_sale_id: row.invoice.original_sale_id || null,
+        })),
+        unallocated_amount: Math.max(0, unallocatedAmount),
       };
     });
     return payTx();
@@ -2643,12 +2800,36 @@ const customersRepo = {
              s.document_number_fmt AS sale_document_number_fmt,
              s.numero_factura     AS sale_numero_factura,
              s.numero_factura_fmt AS sale_numero_factura_fmt,
-             s.ncf                AS sale_ncf
+             s.ncf                AS sale_ncf,
+             s.status             AS sale_status,
+             s.correction_kind    AS sale_correction_kind,
+             s.original_sale_id   AS sale_original_sale_id,
+             s.sale_date          AS sale_date,
+             s.total              AS sale_total
       FROM payments p
       LEFT JOIN sales s ON s.id = p.sale_id
       WHERE p.customer_id=?
       ORDER BY p.created_at DESC
-    `).all(customerId);
+    `).all(customerId).map(hydratePaymentAllocations);
+  },
+  getAllPayments() {
+    return db.prepare(`
+      SELECT p.*,
+             c.name AS customer_name,c.rnc AS customer_rnc,c.phone AS customer_phone,
+             s.document_number_fmt AS sale_document_number_fmt,
+             s.numero_factura AS sale_numero_factura,
+             s.numero_factura_fmt AS sale_numero_factura_fmt,
+             s.ncf AS sale_ncf,
+             s.status AS sale_status,
+             s.correction_kind AS sale_correction_kind,
+             s.original_sale_id AS sale_original_sale_id,
+             s.sale_date AS sale_date,
+             s.total AS sale_total
+      FROM payments p
+      LEFT JOIN customers c ON c.id=p.customer_id
+      LEFT JOIN sales s ON s.id=p.sale_id
+      ORDER BY p.created_at DESC,p.id DESC
+    `).all().map(hydratePaymentAllocations);
   },
   delete(id) {
     if (Number(id) === 1) throw new Error('No se puede eliminar el cliente "Consumidor Final"');
@@ -3014,6 +3195,27 @@ const salesRepo = {
       const taxAmt = calculated.taxAmt;
       const total = round2(calculated.total + additionalChargesTotal);
       const taxPct = headerTaxPct;
+      const initialPaymentAmount = type === 'factura' && payment.method === 'credito'
+        ? round2(Number(payment.initialPaymentAmount) || 0)
+        : 0;
+      const initialPaymentMethod = String(payment.initialPaymentMethod || 'efectivo').toLowerCase();
+      if (initialPaymentAmount < 0 || initialPaymentAmount > total + 0.01) {
+        throw new Error('El pago inicial no puede ser negativo ni superar el total de la factura');
+      }
+      if (type === 'factura' && payment.method === 'credito') {
+        if (customer.id === 1) {
+          throw new Error('Selecciona un cliente registrado para realizar una venta a crédito');
+        }
+        if (initialPaymentAmount >= total - 0.005) {
+          throw new Error('Si el cliente paga el total, registra la venta como contado');
+        }
+        if (initialPaymentAmount > 0 && !session?.id) {
+          throw new Error('Abre la caja antes de recibir el pago inicial');
+        }
+        if (!['efectivo','transferencia','tarjeta','cheque'].includes(initialPaymentMethod)) {
+          throw new Error('Método de pago inicial no válido');
+        }
+      }
 
       const displayCurrency = String(payment.displayCurrency || 'DOP').toUpperCase() === 'USD'
         ? 'USD' : 'DOP';
@@ -3039,7 +3241,7 @@ const salesRepo = {
       }
 
       // 3. Validar crédito
-      if (type === 'factura' && payment.method === 'credito' && customer.id !== 1) {
+      if (type === 'factura' && payment.method === 'credito') {
         const cust = db.prepare('SELECT balance,credit_limit,status FROM customers WHERE id=?').get(customer.id);
         if (!cust) throw new Error('Cliente no encontrado');
         if (cust.status === 'bloqueado') {
@@ -3051,7 +3253,8 @@ const salesRepo = {
         if (cust.credit_limit <= 0) {
           throw new Error('Este cliente no tiene límite de crédito configurado — contacte al administrador');
         }
-        if (cust.balance + total > cust.credit_limit) {
+        const creditExposure = round2(total - initialPaymentAmount);
+        if (cust.balance + creditExposure > cust.credit_limit) {
           throw new Error(`Límite de crédito excedido. Disponible: ${(cust.credit_limit - cust.balance).toFixed(2)}`);
         }
       }
@@ -3142,7 +3345,7 @@ const salesRepo = {
           payment_currency,exchange_rate,account_amount,card_brand,card_last4,
           additional_charges_total,display_currency,display_exchange_rate,display_amount,
           print_template_id,print_printer_type,
-          payment_reference,created_at,original_sale_date,sale_date,updated_at)
+          payment_reference,notes,created_at,original_sale_date,sale_date,updated_at)
         VALUES(
           @cash_session_id,@customer_id,@customer_name,@customer_rnc,
           @customer_type,@customer_trade_name,@customer_address,@customer_phone,@customer_phone_type,@customer_email,
@@ -3154,7 +3357,7 @@ const salesRepo = {
           @payment_currency,@exchange_rate,@account_amount,@card_brand,@card_last4,
           @additional_charges_total,@display_currency,@display_exchange_rate,@display_amount,
           @print_template_id,@print_printer_type,
-          @payment_reference,@created_at,@original_sale_date,@sale_date,@created_at
+          @payment_reference,@notes,@created_at,@original_sale_date,@sale_date,@created_at
         )
       `).run({
         cash_session_id: session?.id || null,
@@ -3190,6 +3393,7 @@ const salesRepo = {
         print_template_id: String(payment.printTemplateId || '').slice(0, 40),
         print_printer_type: String(payment.printPrinterType || '').slice(0, 20),
         card_brand: cardBrand, card_last4: cardLast4, payment_reference: paymentReference,
+        notes: String(payment.notes || '').trim().slice(0, 1000),
         created_at: db.prepare("SELECT datetime('now','localtime') AS value").get().value,
         original_sale_date: requestedSaleDate || db.prepare("SELECT date('now','localtime') AS value").get().value,
         sale_date: requestedSaleDate || db.prepare("SELECT date('now','localtime') AS value").get().value,
@@ -3283,15 +3487,57 @@ const salesRepo = {
       }
 
       // 7. Actualizar crédito del cliente
-      if (type === 'factura' && payment.method === 'credito' && customer.id !== 1) {
+      let initialPaymentId = null;
+      let outstandingBalance = 0;
+      if (type === 'factura' && payment.method === 'credito') {
         const ci = db.prepare('SELECT balance,credit_days FROM customers WHERE id=?').get(customer.id);
-        const newBalance = (ci.balance || 0) + total;
+        const debtBeforeInitial = round2((ci.balance || 0) + total);
+        const newBalance = round2(debtBeforeInitial - initialPaymentAmount);
+        outstandingBalance = round2(total - initialPaymentAmount);
         const dueDate = ci.credit_due && ci.credit_due >= todayStr()
           ? ci.credit_due
           : addDaysStr(todayStr(), ci.credit_days || 30);
         db.prepare(`
           UPDATE customers SET balance=?,credit_due=?,updated_at=datetime('now') WHERE id=?
         `).run(newBalance, dueDate, customer.id);
+
+        // El pago inicial es un abono real: queda vinculado a la factura, baja
+        // la CxC, aparece en Caja/Ventas y conserva su propio número de recibo.
+        if (initialPaymentAmount > 0) {
+          const paymentInsert = db.prepare(`
+            INSERT INTO payments(
+              customer_id,sale_id,amount,method,note,balance_before,balance_after,
+              cajero,user_id,cash_session_id,
+              customer_contact_id,customer_contact_name,customer_contact_document,
+              customer_contact_role,customer_contact_phone,customer_contact_email,created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
+          `).run(
+            customer.id, saleId, initialPaymentAmount, initialPaymentMethod,
+            'Pago inicial de factura a crédito', debtBeforeInitial, newBalance,
+            user.name || '', user.id, session.id,
+            selectedContact?.id || null, selectedContact?.name || '',
+            selectedContact?.document || '', selectedContact?.role || '',
+            selectedContact?.phone || '', selectedContact?.email || ''
+          );
+          initialPaymentId = Number(paymentInsert.lastInsertRowid);
+          const initialIssue = _issueDocumentNumber('abono', 'payment', initialPaymentId);
+          db.prepare(`
+            UPDATE payments
+            SET document_kind='abono',document_number=?,document_number_fmt=?,
+                numero_recibo=COALESCE(numero_recibo,?)
+            WHERE id=?
+          `).run(
+            initialIssue.sequence_number, initialIssue.formatted_number,
+            initialIssue.sequence_number, initialPaymentId
+          );
+          cashRepo.addMovement({
+            sessionId: session.id, type: 'abono',
+            amount: initialPaymentAmount, method: initialPaymentMethod,
+            referenceId: saleId,
+            description: `Pago inicial ${documentIssue.formatted_number}`,
+            userId: user.id,
+          });
+        }
       }
 
       // 8. Movimiento de caja
@@ -3367,6 +3613,8 @@ const salesRepo = {
         paymentCurrency, exchangeRate, accountAmount, salespersonId,
         additionalChargesTotal, displayCurrency, displayExchangeRate, displayAmount,
         cardBrand, cardLast4, paymentReference,
+        initialPaymentId, initialPaymentAmount, initialPaymentMethod,
+        outstandingBalance,
       };
     });
 
@@ -3397,12 +3645,27 @@ const salesRepo = {
       ? db.prepare('SELECT id,description,amount FROM sale_charges WHERE sale_id=? ORDER BY id').all(id)
       : [];
     const payments = db.prepare(`
-      SELECT id,document_kind,document_number,document_number_fmt,numero_recibo,
-             amount,method,note,balance_before,balance_after,cajero,created_at
-      FROM payments
-      WHERE sale_id=?
+      SELECT p.id,p.document_kind,p.document_number,p.document_number_fmt,p.numero_recibo,
+             COALESCE((
+               SELECT pa.amount
+               FROM payment_allocations pa
+               WHERE pa.payment_id=p.id AND pa.sale_id=?
+             ),p.amount) AS amount,
+             p.amount AS payment_total,p.method,p.note,p.balance_before,p.balance_after,
+             p.cajero,p.created_at
+      FROM payments p
+      WHERE (
+          p.sale_id=?
+          AND NOT EXISTS (
+            SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=p.id
+          )
+        )
+        OR EXISTS (
+          SELECT 1 FROM payment_allocations pa
+          WHERE pa.payment_id=p.id AND pa.sale_id=?
+        )
       ORDER BY created_at DESC, id DESC
-    `).all(id);
+    `).all(id, id, id);
     sale.payments = payments;
     sale.payment_amount = payments.length
       ? round2(payments.reduce((sum, p) => sum + (p.amount || 0), 0))
@@ -3414,7 +3677,19 @@ const salesRepo = {
     if (payments.length) {
       sale.last_receipt_number = payments[0].document_number_fmt || payments[0].numero_recibo || payments[0].id;
       sale.last_payment_date = payments[0].created_at;
-      sale.balance_after_payment = payments[0].balance_after;
+      if ((sale.payment_method || '').toLowerCase() === 'credito' && sale.customer_id) {
+        const pending = getPendingInvoices(db, sale.customer_id);
+        sale.balance_after_payment = round2(
+          pending.facturas.find(invoice => Number(invoice.id) === Number(sale.id))?.pendiente || 0
+        );
+      } else {
+        sale.balance_after_payment = 0;
+      }
+    } else if ((sale.payment_method || '').toLowerCase() === 'credito' && sale.type === 'factura') {
+      const pending = getPendingInvoices(db, sale.customer_id);
+      sale.balance_after_payment = round2(
+        pending.facturas.find(invoice => Number(invoice.id) === Number(sale.id))?.pendiente || 0
+      );
     } else if ((sale.payment_method || '').toLowerCase() !== 'credito' && sale.type === 'factura') {
       sale.balance_after_payment = 0;
       sale.last_receipt_number = sale.receipt_document_number_fmt || '';
@@ -3680,6 +3955,43 @@ const salesRepo = {
              COALESCE(SUM(si.qty), 0) as item_qty_total,
              COUNT(si.id) as item_lines_count,
              COALESCE(SUM(si.unit_cost * si.qty), 0) as cost_total,
+             (
+               COALESCE((
+                 SELECT SUM(p.amount)
+                 FROM payments p
+                 WHERE p.sale_id=s.id
+                   AND NOT EXISTS (
+                     SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=p.id
+                   )
+               ),0)
+               +
+               COALESCE((
+                 SELECT SUM(pa.amount)
+                 FROM payment_allocations pa
+                 WHERE pa.sale_id=s.id
+               ),0)
+             ) AS payment_amount,
+             CASE
+               WHEN LOWER(COALESCE(s.payment_method,''))='credito' THEN MAX(0, ROUND(
+                 s.total - (
+                   COALESCE((
+                     SELECT SUM(p.amount)
+                     FROM payments p
+                     WHERE p.sale_id=s.id
+                       AND NOT EXISTS (
+                         SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=p.id
+                       )
+                   ),0)
+                   +
+                   COALESCE((
+                     SELECT SUM(pa.amount)
+                     FROM payment_allocations pa
+                     WHERE pa.sale_id=s.id
+                   ),0)
+                 ), 2
+               ))
+               ELSE 0
+             END AS balance_after_payment,
              EXISTS(
                SELECT 1 FROM sales ret
                WHERE ret.type='devolucion'
@@ -3805,7 +4117,20 @@ const salesRepo = {
              sp.code AS salesperson_code,
              GROUP_CONCAT(si.product_name || ' x' || si.qty, ' | ') as items_summary,
              c.phone AS _cust_phone,
-             (SELECT GROUP_CONCAT(p.numero_recibo, ',') FROM payments p WHERE p.sale_id = s.id) AS _recibos
+             (
+               SELECT GROUP_CONCAT(p.numero_recibo, ',')
+               FROM payments p
+               WHERE (
+                   p.sale_id=s.id
+                   AND NOT EXISTS (
+                     SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=p.id
+                   )
+                 )
+                 OR EXISTS (
+                   SELECT 1 FROM payment_allocations pa
+                   WHERE pa.payment_id=p.id AND pa.sale_id=s.id
+                 )
+             ) AS _recibos
       FROM sales s
       LEFT JOIN sale_items si ON s.id = si.sale_id
       LEFT JOIN customers c   ON c.id = s.customer_id
@@ -3828,7 +4153,23 @@ const salesRepo = {
           OR lower(si.product_name) LIKE ?
           OR lower(si.product_code) LIKE ?
           OR lower(c.phone)         LIKE ?
-          OR EXISTS (SELECT 1 FROM payments p WHERE p.sale_id = s.id AND CAST(p.numero_recibo AS TEXT) LIKE ?)
+          OR EXISTS (
+            SELECT 1
+            FROM payments p
+            WHERE CAST(p.numero_recibo AS TEXT) LIKE ?
+              AND (
+                  (
+                    p.sale_id=s.id
+                    AND NOT EXISTS (
+                      SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=p.id
+                    )
+                  )
+                  OR EXISTS (
+                    SELECT 1 FROM payment_allocations pa
+                    WHERE pa.payment_id=p.id AND pa.sale_id=s.id
+                  )
+              )
+          )
         )
       GROUP BY s.id
       ORDER BY s.id DESC
@@ -3936,6 +4277,24 @@ const salesRepo = {
     if (sale.status === 'returned')  throw new Error('No se puede anular una venta con devolución procesada');
     // SEGURIDAD: solo facturas y ventas de crédito pueden anularse
     if (sale.type === 'cotizacion') throw new Error('Las cotizaciones no se anulan — elimínalas directamente');
+    const legacyApplied = db.prepare(`
+      SELECT COALESCE(SUM(p.amount),0) total
+      FROM payments p
+      WHERE p.sale_id=?
+        ${tableExists('payment_allocations')
+          ? 'AND NOT EXISTS (SELECT 1 FROM payment_allocations pa WHERE pa.payment_id=p.id)'
+          : ''}
+    `).get(id)?.total || 0;
+    const distributedApplied = tableExists('payment_allocations')
+      ? db.prepare('SELECT COALESCE(SUM(amount),0) total FROM payment_allocations WHERE sale_id=?').get(id)?.total || 0
+      : 0;
+    const appliedTotal = round2(Number(legacyApplied) + Number(distributedApplied));
+    if (appliedTotal > 0.005) {
+      throw new Error(
+        `Esta factura tiene ${appliedTotal.toFixed(2)} en abonos aplicados. ` +
+        'No puede anularse hasta procesar formalmente el reembolso o reverso de esos cobros'
+      );
+    }
 
     const cancelTx = db.transaction(() => {
       db.prepare(`
@@ -4011,7 +4370,7 @@ const salesRepo = {
 
 // ── Reportes ──────────────────────────────────
 const reportsRepo = {
-  summary(range = 'today', dateFrom = null, dateTo = null) {
+  summary(range = 'today', dateFrom = null, dateTo = null, filters = {}) {
     // ── Validar inputs para prevenir inyección ──
     // dateFrom y dateTo deben ser YYYY-MM-DD o null
     const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -4052,6 +4411,27 @@ const reportsRepo = {
     };
 
     const f = _buildFilters();
+    const priceMode = ['retail', 'wholesale'].includes(String(filters?.priceMode || ''))
+      ? String(filters.priceMode) : 'all';
+    const customerType = ['person', 'company'].includes(String(filters?.customerType || ''))
+      ? String(filters.customerType) : 'all';
+    const segmentOnly = { sql: '1=1', params: [] };
+    if (priceMode !== 'all') {
+      f.withAlias.sql += ` AND COALESCE(s.price_mode,'retail')=?`;
+      f.withAlias.params.push(priceMode);
+      f.withoutAlias.sql += ` AND COALESCE(price_mode,'retail')=?`;
+      f.withoutAlias.params.push(priceMode);
+      segmentOnly.sql += ` AND COALESCE(s.price_mode,'retail')=?`;
+      segmentOnly.params.push(priceMode);
+    }
+    if (customerType !== 'all') {
+      f.withAlias.sql += ` AND COALESCE(s.customer_type,'person')=?`;
+      f.withAlias.params.push(customerType);
+      f.withoutAlias.sql += ` AND COALESCE(customer_type,'person')=?`;
+      f.withoutAlias.params.push(customerType);
+      segmentOnly.sql += ` AND COALESCE(s.customer_type,'person')=?`;
+      segmentOnly.params.push(customerType);
+    }
 
     // Regla contable: filtrar SOLO por fecha real, NUNCA por origen.
     // Una venta cuenta una vez, en su fecha, por su total — sin importar si
@@ -4132,9 +4512,12 @@ const reportsRepo = {
       SELECT s.sale_date as day,
              COUNT(*) as count,
              SUM(s.total) as total,
-             SUM(si.unit_cost * si.qty) as cost
+             SUM(COALESCE((
+               SELECT SUM(si.unit_cost * si.qty)
+               FROM sale_items si
+               WHERE si.sale_id=s.id
+             ),0)) as cost
       FROM sales s
-      LEFT JOIN sale_items si ON s.id = si.sale_id
       WHERE s.status='completed' AND s.type='factura'
         ${hfs} AND ${f.withAlias.sql}
       GROUP BY day
@@ -4145,13 +4528,59 @@ const reportsRepo = {
     // Usa hfp: excluye históricos solo en 'today', no en 'month'
     // method='descuento' se excluye: es una rebaja que cierra factura sin que
     // entre efectivo, no un cobro. Sumarlo inflaría la caja.
-    const abonosData = db.prepare(`
-      SELECT COUNT(*) as count, SUM(amount) as total
-      FROM payments
-      WHERE ${f.payments.sql}
-        AND note != 'Saldo inicial importado'
-        AND LOWER(COALESCE(method,'efectivo')) != 'descuento' ${hfp}
-    `).get(...f.payments.params);
+    let abonosData;
+    if (priceMode === 'all' && customerType === 'all') {
+      abonosData = db.prepare(`
+        SELECT COUNT(*) as count, SUM(amount) as total
+        FROM payments
+        WHERE ${f.payments.sql}
+          AND note != 'Saldo inicial importado'
+          AND LOWER(COALESCE(method,'efectivo')) != 'descuento' ${hfp}
+      `).get(...f.payments.params);
+    } else {
+      // Cuando el dueño filtra un segmento, un recibo distribuido puede tocar
+      // facturas de segmentos distintos. Solo se atribuye a este reporte la
+      // parte realmente aplicada a facturas que cumplen el filtro.
+      const candidatePayments = db.prepare(`
+        SELECT id,sale_id,amount
+        FROM payments
+        WHERE ${f.payments.sql}
+          AND note != 'Saldo inicial importado'
+          AND LOWER(COALESCE(method,'efectivo')) != 'descuento' ${hfp}
+      `).all(...f.payments.params);
+      let filteredPaymentTotal = 0;
+      let filteredPaymentCount = 0;
+      for (const payment of candidatePayments) {
+        const allocated = db.prepare(`
+          SELECT COALESCE(SUM(pa.amount),0) AS total
+          FROM payment_allocations pa
+          JOIN sales s ON s.id=pa.sale_id
+          WHERE pa.payment_id=?
+            AND s.status!='cancelled'
+            AND ${segmentOnly.sql}
+        `).get(payment.id, ...segmentOnly.params)?.total || 0;
+        const hasAllocations = db.prepare(
+          'SELECT 1 FROM payment_allocations WHERE payment_id=? LIMIT 1'
+        ).get(payment.id);
+        let attributable = Number(allocated || 0);
+        if (!hasAllocations && payment.sale_id) {
+          const directMatch = db.prepare(`
+            SELECT 1
+            FROM sales s
+            WHERE s.id=? AND s.status!='cancelled' AND ${segmentOnly.sql}
+          `).get(payment.sale_id, ...segmentOnly.params);
+          attributable = directMatch ? Number(payment.amount || 0) : 0;
+        }
+        if (attributable > 0.005) {
+          filteredPaymentTotal += attributable;
+          filteredPaymentCount += 1;
+        }
+      }
+      abonosData = {
+        count: filteredPaymentCount,
+        total: round2(filteredPaymentTotal),
+      };
+    }
 
     // Desglose contado vs crédito (para cobradoMes)
     const contadoCreditoData = db.prepare(`
@@ -4162,6 +4591,52 @@ const reportsRepo = {
       WHERE status='completed' AND type='factura'
         ${hf} AND ${f.withoutAlias.sql}
     `).get(...f.withoutAlias.params);
+
+    // Segmentación comercial para el dueño: detalle/mayorista,
+    // personas/empresas, clientes principales y facturas auditables.
+    const byPriceMode = db.prepare(`
+      SELECT COALESCE(price_mode,'retail') AS segment,
+             COUNT(*) AS count,COALESCE(SUM(total),0) AS total,
+             COALESCE(AVG(total),0) AS average_ticket
+      FROM sales
+      WHERE status='completed' AND type='factura'
+        AND ${f.withoutAlias.sql}
+      GROUP BY COALESCE(price_mode,'retail')
+      ORDER BY total DESC
+    `).all(...f.withoutAlias.params);
+    const byCustomerType = db.prepare(`
+      SELECT COALESCE(customer_type,'person') AS segment,
+             COUNT(*) AS count,COALESCE(SUM(total),0) AS total,
+             COALESCE(AVG(total),0) AS average_ticket
+      FROM sales
+      WHERE status='completed' AND type='factura'
+        AND ${f.withoutAlias.sql}
+      GROUP BY COALESCE(customer_type,'person')
+      ORDER BY total DESC
+    `).all(...f.withoutAlias.params);
+    const topCustomers = db.prepare(`
+      SELECT customer_id,customer_name,customer_rnc,
+             COALESCE(customer_type,'person') AS customer_type,
+             COUNT(*) AS count,COALESCE(SUM(total),0) AS total,
+             COALESCE(AVG(total),0) AS average_ticket
+      FROM sales
+      WHERE status='completed' AND type='factura'
+        AND ${f.withoutAlias.sql}
+      GROUP BY customer_id,customer_name,customer_rnc,COALESCE(customer_type,'person')
+      ORDER BY total DESC
+      LIMIT 15
+    `).all(...f.withoutAlias.params);
+    const salesDetail = db.prepare(`
+      SELECT id,sale_date,customer_name,customer_rnc,customer_type,
+             price_mode,payment_method,total,tax_amt,discount_amt,
+             document_number_fmt,numero_factura,numero_factura_fmt,ncf,
+             CASE WHEN COALESCE(import_source,'')<>'' THEN 1 ELSE 0 END AS imported
+      FROM sales
+      WHERE status='completed' AND type='factura'
+        AND ${f.withoutAlias.sql}
+      ORDER BY sale_date DESC,id DESC
+      LIMIT 1000
+    `).all(...f.withoutAlias.params);
 
     const totalRev      = byMethod.reduce((a, m) => a + (m.total || 0), 0);
     const totalCost     = costData?.total_cost   || 0;
@@ -4203,6 +4678,9 @@ const reportsRepo = {
       devolucion:   { count: devData?.count || 0, total: totalDevol },
       abonos:       { count: abonosData?.count || 0, total: abonosData?.total || 0 },
       ventasContado, ventasCredito, cobradoMes,
+      averageTicket: totalSales > 0 ? round2(totalRev / totalSales) : 0,
+      byPriceMode, byCustomerType, topCustomers, salesDetail,
+      filters: { priceMode, customerType },
     };
   },
 
@@ -4313,7 +4791,7 @@ const reportsRepo = {
       WHERE ${baseWhere}
       ORDER BY p.created_at DESC, p.id DESC
       LIMIT 5000
-    `).all(...f.params);
+    `).all(...f.params).map(hydratePaymentAllocations);
 
     const byDay = db.prepare(`
       SELECT date(p.created_at) AS day,

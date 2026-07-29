@@ -6,6 +6,7 @@
  */
 'use strict';
 const { isAllowedExternalUrl } = require('../lib/url-safe');
+const { buildWhatsAppUrls, normalizeWhatsAppPhone } = require('../lib/whatsapp-url');
 
 let pass = 0, fail = 0;
 function expect(url, allowed) {
@@ -31,6 +32,26 @@ expect(null, false);
 expect('no es una url', false);
 expect('https://sub.wa.me/x', false);              // subdominio no listado
 expect('https://maps.google.com.evil.com/x', false);
+
+console.log('\n== Enlaces de WhatsApp Desktop/Web ==');
+try {
+  const urls = buildWhatsAppUrls({ phone: '+1 (809) 123-4567', message: 'Hola & gracias' });
+  if (urls.phone === '18091234567' &&
+      urls.appUrl === 'whatsapp://send?phone=18091234567&text=Hola%20%26%20gracias' &&
+      urls.webUrl === 'https://wa.me/18091234567?text=Hola%20%26%20gracias') {
+    pass++; console.log('  ✓ construye protocolo Desktop y fallback Web con el mismo mensaje');
+  } else {
+    fail++; console.log('  ✗ construye URLs inesperadas', urls);
+  }
+  normalizeWhatsAppPhone('123');
+  fail++; console.log('  ✗ aceptó un teléfono demasiado corto');
+} catch (e) {
+  if (e.message === 'Número de WhatsApp inválido') {
+    pass++; console.log('  ✓ rechaza teléfonos inválidos');
+  } else {
+    fail++; console.log('  ✗ error inesperado:', e.message);
+  }
+}
 
 console.log(`\n== RESULTADO: ${pass} OK, ${fail} fallos ==`);
 process.exit(fail ? 1 : 0);

@@ -9,7 +9,7 @@
 let ventasSearch = '';
 let ventasRange  = 'today';
 let ventasPay    = '';
-let ventasTab    = 'facturas'; // 'facturas' | 'cotizaciones'
+let ventasTab    = 'facturas'; // 'facturas' | 'cotizaciones' | 'abonos'
 
 function ventasRound2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
@@ -429,7 +429,11 @@ function renderVentas(el) {
     h('button', {
       class: `tab ${ventasTab === 'cotizaciones' ? 'on' : ''}`,
       onclick: () => { ventasTab = 'cotizaciones'; renderVentas(el); }
-    }, 'Cotizaciones')
+    }, 'Cotizaciones'),
+    h('button', {
+      class: `tab ${ventasTab === 'abonos' ? 'on' : ''}`,
+      onclick: () => { ventasTab = 'abonos'; renderVentas(el); }
+    }, 'Abonos')
   ));
 
   // ── Filtros ───────────────────────────────────
@@ -498,6 +502,11 @@ function renderVentas(el) {
 }
 
 async function refreshVentas(el) {
+  if (ventasTab === 'abonos') {
+    if (typeof reloadPayments === 'function') await reloadPayments();
+    renderVentasTable();
+    return;
+  }
   // La vista de Ventas excluye anuladas y notas de crédito, pero conserva la
   // factura original cuando está ajustada para que nunca "desaparezca".
   await reloadSales({ range: ventasRange, view: 'sales' });
@@ -542,6 +551,10 @@ function renderVentasTable() {
   const resWrap   = document.getElementById('ventas-resumen');
   const tableWrap = document.getElementById('ventas-table-wrap');
   if (!tableWrap) return;
+  if (ventasTab === 'abonos') {
+    renderVentasAbonos(resWrap, tableWrap);
+    return;
+  }
 
   const q = ventasSearch.trim();
   const qNorm   = searchNorm(q);
@@ -777,7 +790,11 @@ function renderVentasTable() {
             method === 'tarjeta'       ? 'b' :
             method === 'transferencia' ? 'p' :
             method === 'credito'       ? 'a' : 'n'
-          }` }, method)
+          }` }, method),
+          method === 'credito'
+            ? h('div',{class:'ts',style:{marginTop:'3px'}},
+                `Pagado ${fmt(s.payment_amount || 0)} · Pendiente ${fmt(s.balance_after_payment ?? operationTotal)}`)
+            : null
         ),
         h('td', { style: { fontSize: '12px', color: 'var(--muted)' } },
           taxAmt > 0 ? fmt(taxAmt) : '—'
@@ -851,6 +868,77 @@ function renderVentasTable() {
   tw.appendChild(tbl);
   card.appendChild(tw);
   tableWrap.appendChild(card);
+}
+
+function ventasPaymentInRange(payment) {
+  const date = String(payment.created_at || '').slice(0, 10);
+  if (!date || ventasRange === 'all') return true;
+  const now = new Date();
+  const todayText = now.toISOString().slice(0, 10);
+  if (ventasRange === 'today') return date === todayText;
+  const paymentDate = new Date(`${date}T12:00:00`);
+  if (ventasRange === 'week') {
+    const start = new Date();
+    start.setDate(start.getDate() - 7);
+    return paymentDate >= start;
+  }
+  return ventasRange === 'month'
+    ? date.slice(0, 7) === todayText.slice(0, 7)
+    : true;
+}
+
+function renderVentasAbonos(resWrap, tableWrap) {
+  const q = searchNorm(ventasSearch.trim());
+  const payments = (DB.payments || []).filter(p => {
+    if (!ventasPaymentInRange(p)) return false;
+    if (!q) return true;
+    return [
+      reciboLabel(p), p.customer_name, p.customer_rnc, p.note, p.method,
+      p.sale_document_number_fmt, p.sale_numero_factura_fmt,
+      ...paymentAllocationsOf(p).flatMap(row => [
+        paymentAllocationLabel(row), row.ncf,
+      ]),
+    ].some(value => matchText(value, q));
+  });
+  const total = payments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+  const cash = payments.filter(p => (p.method || 'efectivo') === 'efectivo')
+    .reduce((sum, p) => sum + Number(p.amount || 0), 0);
+  if (resWrap) {
+    resWrap.innerHTML = '';
+    const metrics = h('div', { class: 'metrics', style: { gridTemplateColumns:'repeat(4,1fr)',marginBottom:'16px' } });
+    [
+      { icon:'list',color:'b',label:'Abonos',val:payments.length },
+      { icon:'dollar',color:'g',label:'Total recibido',val:fmt(total) },
+      { icon:'cash',color:'g',label:'En efectivo',val:fmt(cash) },
+      { icon:'card',color:'p',label:'Otros métodos',val:fmt(total-cash) },
+    ].forEach(m => metrics.appendChild(h('div',{class:'metric'},
+      h('div',{class:'met-top'},h('div',{class:`met-icon ${m.color}`,html:svg(m.icon)})),
+      h('div',{class:'met-label'},m.label),h('div',{class:'met-val'},String(m.val)))));
+    resWrap.appendChild(metrics);
+  }
+  tableWrap.innerHTML = '';
+  if (!payments.length) {
+    tableWrap.appendChild(h('div',{class:'empty'},h('p',null,'Sin abonos en este período')));
+    return;
+  }
+  const rows = payments.map(p => {
+    const invoice = paymentInvoiceSummary(p);
+    return h('tr',null,
+      h('td',{class:'tm'},reciboLabel(p)),
+      h('td',null,fdate(String(p.created_at||'').slice(0,10))),
+      h('td',null,h('div',{class:'tb'},p.customer_name||'Cliente'),h('div',{class:'ts'},p.customer_rnc||'')),
+      h('td',{class:'tm'},invoice),
+      h('td',null,h('span',{class:`badge ${(p.method||'')==='efectivo'?'g':'b'}`},p.method||'efectivo')),
+      h('td',{style:{fontWeight:800,color:'var(--green)'}},fmt(p.amount)),
+      h('td',null,h('div',{class:'flex',style:{gap:'3px'}},
+        h('button',{class:'btn btn-ghost btn-sm',onclick:()=>openAbonoDetalleModal(p),html:`${svg('eye')} Ver`}),
+        h('button',{class:'btn btn-ghost btn-sm',onclick:()=>reimprimirAbono(p.id),html:svg('print')})
+      )));
+  });
+  const table = h('table',null,
+    h('thead',null,h('tr',null,...['Recibo','Fecha','Cliente','Factura','Método','Monto',''].map(x=>h('th',null,x)))),
+    h('tbody',null,...rows));
+  tableWrap.appendChild(h('div',{class:'card'},h('div',{class:'tw'},table)));
 }
 
 // ── Enviar e-CF ───────────────────────────────
@@ -1451,9 +1539,17 @@ async function openDetalleVentaModal(s) {
       ${Number(detail.additional_charges_total || 0) > 0
         ? `<div class="tr"><span>Cargos adicionales</span><span>${fmt(detail.additional_charges_total)}</span></div>` : ''}
       <div class="tr grand"><span>${adjustedCopy ? 'Total vigente de la operación' : 'Importe / Total'}</span><span>${fmt(detailTotal)}</span></div>
+      ${method === 'credito'
+        ? `<div class="tr"><span>Pagado por adelantado / abonado</span><strong style="color:var(--green)">${fmt(detail.payment_amount || 0)}</strong></div>
+           <div class="tr"><span>Saldo pendiente de esta factura</span><strong style="color:var(--amber)">${fmt(detail.balance_after_payment ?? detailTotal)}</strong></div>`
+        : ''}
       ${String(detail.display_currency || '').toUpperCase() === 'USD' && Number(detail.display_exchange_rate) > 0
         ? `<div class="tr"><span>Equivalente USD · tasa RD$${Number(detail.display_exchange_rate).toFixed(2)}</span><strong>US$${Number(detailTotal / detail.display_exchange_rate).toFixed(2)}</strong></div>` : ''}
     </div>
+    ${detail.notes ? `<div class="card" style="margin-top:10px">
+      <div class="lbl">Notas de la venta</div>
+      <div style="font-size:12px;margin-top:5px;white-space:pre-wrap">${ventasEsc(detail.notes)}</div>
+    </div>` : ''}
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
       <button class="btn btn-out" onclick="reimprimirVenta(${s.id})">
@@ -2258,6 +2354,14 @@ function ventasOpenProductCorrectionResult(result, originalSaleId) {
         Diferencia: ${fmt(result.netDifference || 0)}${isMonetaryCredit ? ' · Inventario sin cambios' : ''}
       </div></div>
     </div>
+    ${Number(result.overpayment || 0) > 0.005 ? `
+      <div class="alrt a" style="margin-bottom:12px">
+        <div><div class="alrt-title">Quedó dinero a favor del cliente</div>
+        <div class="alrt-sub">
+          La reducción supera el saldo pendiente en ${fmt(result.overpayment)}.
+          Registra el reembolso o crédito correspondiente; no se aplica a otra factura automáticamente.
+        </div></div>
+      </div>` : ''}
     <div class="card" style="background:var(--surface2);margin-bottom:12px">
       <strong style="display:block;margin-bottom:5px">¿Qué deseas imprimir?</strong>
       <div class="ts">
@@ -2278,6 +2382,9 @@ function ventasOpenProductCorrectionResult(result, originalSaleId) {
       <button class="btn btn-dark" onclick="closeModal()">Terminar</button>
     </div>
   `, 'modal-lg');
+  if (Number(result.overpayment || 0) > 0.005) {
+    toast(`⚠ Excedente a favor del cliente: ${fmt(result.overpayment)}`, 'w');
+  }
 }
 
 function ventasOpenSimpleCorrectionResult(saleId, message) {
@@ -2644,7 +2751,10 @@ async function guardarVentaPDF(saleId) {
   const payload = ventasPrintPayload(sale);
   const label = sale.type === 'cotizacion' ? 'Cotizacion' : sale.type === 'devolucion' ? 'Devolucion' : 'Factura';
   if (typeof guardarDocumentoPDF === 'function') {
-    guardarDocumentoPDF(() => printReceipt(payload, true), `${label}-${facturaLabel(sale).replace(/^#/, '')}`);
+    guardarDocumentoPDF(
+      () => printReceipt(payload, true),
+      clientDocumentFilename(sale.customer_name, facturaLabel(sale), label)
+    );
   } else {
     toast('Guardar PDF no disponible', 'err');
   }
@@ -2716,7 +2826,7 @@ async function ventaWhatsAppPDF(saleId) {
     'Adjuntamos el documento en formato PDF.',
     'Gracias por su preferencia.',
   ].join('\n');
-  const fileLabel = `${typeName.replace(/\s+/g, '-')}-${facturaLabel(sale).replace(/^#/, '')}`;
+  const fileLabel = clientDocumentFilename(sale.customer_name, facturaLabel(sale), typeName);
   enviarDocumentoPDFWhatsApp(
     () => printReceipt(ventasPrintPayload(sale), true),
     fileLabel,

@@ -31,7 +31,7 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
     // Impresión = operación de dispositivo: cada terminal imprime en SU impresora.
     // (print:onServer NO va aquí: es la opción explícita de imprimir en el servidor.)
     'print:html', 'print:toPDF', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
-    'shell:openExternal', 'shell:showItemInFolder',
+    'shell:openExternal', 'shell:openWhatsApp', 'shell:showItemInFolder',
     // Diagnóstico local: NUNCA reenviar (si se reenvía y el servidor cae, el propio
     // logger de errores falla → cascada). El log de cada terminal es local.
     'log:error',
@@ -44,6 +44,7 @@ const bcrypt = require('bcryptjs');
 const { sqliteIdent } = require('./lib/sql-safe');
 const { normalizeFinAcct: _normalizeFinAcct, normalizeFinMov: _normalizeFinMov } = require('./lib/normalize-financial');
 const { isAllowedExternalUrl } = require('./lib/url-safe');
+const { buildWhatsAppUrls } = require('./lib/whatsapp-url');
 const { checkLoginRate: _checkLoginRate, recordLoginFail: _recordLoginFail, clearLoginRate: _clearLoginRate } = require('./lib/login-rate-limit');
 const businessCtx = require('./src/main/business-context');
 
@@ -1595,6 +1596,9 @@ ipcMain.handle('customers:addPayment', async (_, { data, requestUserId }) => {
     }
     // Obtener sesión de caja activa
     const session = cashRepo.getOpen(_reqTerminalId());
+    if (!session && String(data?.method || 'efectivo').toLowerCase() !== 'descuento') {
+      return { ok: false, error: 'Abre la caja antes de registrar un abono' };
+    }
     const result  = customersRepo.addPayment({
       ...data,
       cajero:    reqUser?.name,
@@ -1647,8 +1651,7 @@ ipcMain.handle('customers:getPayments', async (_, { customerId }) => {
 });
 
 ipcMain.handle('customers:getAllPayments', async () => {
-  const db = require('./database').getDB();
-  return db.prepare('SELECT * FROM payments ORDER BY created_at DESC').all();
+  return customersRepo.getAllPayments();
 });
 
 ipcMain.handle('customers:getHistory', async (_, { customerId }) => {
@@ -1810,10 +1813,18 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
       }
     }
 
-    // Verificar caja abierta (cajero debe tener caja)
+    // Verificar caja abierta. Todo cobro real necesita una sesión, incluido el
+    // pago inicial de una factura a crédito.
     if (reqUser.role === 'cajero' && (saleData?.type || 'factura') === 'factura') {
       const session = cashRepo.getOpen(_reqTerminalId());
       if (!session) return { ok: false, error: 'Debes abrir la caja antes de vender' };
+      saleData.session = session;
+    }
+    if ((saleData?.type || 'factura') === 'factura' &&
+        saleData?.payment?.method === 'credito' &&
+        Number(saleData?.payment?.initialPaymentAmount || 0) > 0) {
+      const session = cashRepo.getOpen(_reqTerminalId());
+      if (!session) return { ok: false, error: 'Abre la caja antes de recibir el pago inicial' };
       saleData.session = session;
     }
 
@@ -1872,6 +1883,11 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
     // Ingresos + ITBIS · Costo/Inventario). Se auto-guarda por tipo/idempotencia.
     if ((saleData?.type || 'factura') === 'factura') {
       _acctHook(() => accountingRepo.generateSaleEntry({ saleId: result.saleId, userId: requestUserId }));
+      if (result.initialPaymentId) {
+        _acctHook(() => accountingRepo.generatePaymentEntry({
+          paymentId: result.initialPaymentId, userId: requestUserId,
+        }));
+      }
     }
     return { ok: true, ...result };
   } catch (e) {
@@ -2020,6 +2036,11 @@ ipcMain.handle('checkout:pay', async (_, { id, payment, requestUserId } = {}) =>
             `${requestedDiscount.toFixed(2)}% autorizado por ${discountApproval.name}`);
     }
     _acctHook(() => accountingRepo.generateSaleEntry({ saleId: result.saleId, userId: requestUserId }));
+    if (result.initialPaymentId) {
+      _acctHook(() => accountingRepo.generatePaymentEntry({
+        paymentId: result.initialPaymentId, userId: requestUserId,
+      }));
+    }
     return { ok: true, ...result };
   } catch (e) {
     console.error('[checkout:pay]', e);
@@ -2323,13 +2344,18 @@ ipcMain.handle('sales:return', async (_, { originalSaleId, items, reason, reques
 });
 
 // ── Reportes ──────────────────────────────────
-ipcMain.handle('reports:summary', async (_, { range, dateFrom, dateTo, requestUserId }) => {
+ipcMain.handle('reports:summary', async (_, {
+  range, dateFrom, dateTo, priceMode, customerType, requestUserId
+}) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
     if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
       return { ok: false, error: 'Sin permisos' };
     }
-    return { ok: true, data: reportsRepo.summary(range, dateFrom, dateTo) };
+    return {
+      ok: true,
+      data: reportsRepo.summary(range, dateFrom, dateTo, { priceMode, customerType }),
+    };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -6770,6 +6796,23 @@ ipcMain.handle('shell:openExternal', async (_, { url }) => {
     if (!isAllowedExternalUrl(url)) return { ok: false, error: 'URL no permitida' };
     await shell.openExternal(url);
     return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// WhatsApp Desktop primero. Si el protocolo whatsapp:// no está registrado en
+// el equipo, caer de forma controlada a wa.me en el navegador.
+ipcMain.handle('shell:openWhatsApp', async (_, payload = {}) => {
+  try {
+    const urls = buildWhatsAppUrls(payload);
+    try {
+      await shell.openExternal(urls.appUrl);
+      return { ok: true, target: 'app' };
+    } catch {
+      await shell.openExternal(urls.webUrl);
+      return { ok: true, target: 'web' };
+    }
   } catch (e) {
     return { ok: false, error: e.message };
   }

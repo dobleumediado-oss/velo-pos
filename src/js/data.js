@@ -75,6 +75,52 @@ function reciboLabel(o) {
   return n != null ? `REC-${String(n).padStart(6, '0')}` : '';
 }
 
+function paymentAllocationsOf(payment) {
+  if (Array.isArray(payment?.allocations) && payment.allocations.length) {
+    return payment.allocations;
+  }
+  if (!payment?.sale_id) return [];
+  return [{
+    sale_id: payment.sale_id,
+    amount: payment.amount,
+    document_number_fmt: payment.sale_document_number_fmt || '',
+    numero_factura: payment.sale_numero_factura,
+    numero_factura_fmt: payment.sale_numero_factura_fmt || '',
+    ncf: payment.sale_ncf || '',
+  }];
+}
+
+function paymentAllocationLabel(allocation) {
+  return facturaLabel({
+    id: allocation?.sale_id,
+    document_number_fmt: allocation?.document_number_fmt,
+    numero_factura: allocation?.numero_factura,
+    numero_factura_fmt: allocation?.numero_factura_fmt,
+  });
+}
+
+function paymentInvoiceSummary(payment) {
+  const allocations = paymentAllocationsOf(payment);
+  if (!allocations.length) return 'Saldo histórico';
+  if (allocations.length === 1) return paymentAllocationLabel(allocations[0]);
+  return `${allocations.length} facturas`;
+}
+
+// Nombre legible y estable para PDFs de clientes:
+// PrimerNombre-PrimerApellido-NUMERO-DOCUMENTO.pdf
+function clientDocumentFilename(customerName, documentNumber, fallback = 'Documento') {
+  const words = String(customerName || '').trim().split(/\s+/).filter(Boolean);
+  const firstName = words[0] || 'Cliente';
+  const surnameIndex = words.length >= 4 ? 2 : (words.length >= 2 ? 1 : -1);
+  const firstSurname = surnameIndex >= 0 ? words[surnameIndex] : '';
+  const clean = value => String(value || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return [clean(firstName), clean(firstSurname), clean(documentNumber)]
+    .filter(Boolean).join('-') || clean(fallback) || 'Documento';
+}
+
 // Etiqueta de la factura ORIGINAL de una devolución/nota de crédito.
 // Usa el número real de la venta original (original_numero_factura_fmt, provisto
 // por getById/getAll) y cae al id interno (original_sale_id) solo si no existe.
@@ -278,6 +324,13 @@ async function reloadCustomers() {
   DB.customers = await window.api.customers.getAll() || [];
 }
 
+async function reloadPayments() {
+  DB.payments = window.api.customers.getAllPayments
+    ? (await window.api.customers.getAllPayments() || [])
+    : [];
+  return DB.payments;
+}
+
 async function reloadSales(filters = {}) {
   // Para el historial completo (range:'all') subimos el límite por defecto:
   // antes se cortaba en 200 y el usuario no veía todas sus ventas. El render
@@ -332,8 +385,9 @@ async function _applyRemoteSync() {
       else if (at === 'inventario' && typeof renderInvTable === 'function') renderInvTable();
     }
     if (s.has('customers')) {
-      await reloadCustomers();
+      await Promise.all([reloadCustomers(), reloadPayments()]);
       if (at === 'clientes' && typeof renderCliTable === 'function') renderCliTable();
+      if (at === 'caja' && typeof renderCaja === 'function') renderCaja(document.getElementById('page'));
     }
     if (s.has('sales')) {
       await reloadSales({ range: (typeof ventasRange !== 'undefined' ? ventasRange : 'today') });
@@ -396,7 +450,8 @@ function newInvObj(id) {
     cliContactId: null, cliContactName: '', cliContactRole: '', cliContactPhone: '',
     salespersonId: null, disc: 0, discApprovedBy: null, discAuthToken: null, charges: [],
     displayCurrency: 'DOP', displayExchangeRate: 0, saleDate: new Date().toISOString().split('T')[0],
-    printPrinterName: '', printProfileId: '', printTemplateId: ''
+    printPrinterName: '', printProfileId: '', printTemplateId: '',
+    initialPaymentAmount: 0, notes: ''
   };
 }
 
@@ -579,8 +634,8 @@ function getSales(range = 'today') {
 }
 // ══════════════════════════════════════════════
 // WHATSAPP — Modal universal
-// Usa shell.openExternal para abrir en el
-// navegador real del sistema (no Electron interno)
+// Intenta WhatsApp Desktop y usa wa.me solo cuando la aplicación no está
+// instalada o el protocolo whatsapp:// no está registrado.
 // ══════════════════════════════════════════════
 function openWhatsAppModal(msg, defPhone = '', clientName = 'cliente', options = {}) {
   // Escapar todo lo dinámico antes de interpolarlo en el HTML del modal —
@@ -684,21 +739,22 @@ async function _waEnviar() {
     return;
   }
 
-  const encoded = encodeURIComponent(msg);
-  const url     = 'https://wa.me/' + phone + '?text=' + encoded;
-
   closeModal();
 
   if (window._waPendingAttachment) {
     await window.api?.shell?.showItemInFolder?.(window._waPendingAttachment).catch(() => null);
   }
-  // Abrir en el NAVEGADOR DEL SISTEMA via shell.openExternal
-  const result = await window.api.shell.openExternal(url).catch(() => ({ ok: false }));
+  const result = window.api.shell.openWhatsApp
+    ? await window.api.shell.openWhatsApp({ phone, message: msg }).catch(() => ({ ok: false }))
+    : await window.api.shell.openExternal(
+        'https://wa.me/' + phone + '?text=' + encodeURIComponent(msg)
+      ).catch(() => ({ ok: false, target: 'web' }));
   if (result?.ok === false) {
-    toast('No se pudo abrir WhatsApp — verifica que tengas un navegador instalado', 'e');
+    toast('No se pudo abrir WhatsApp — verifica la instalación o el navegador', 'e');
   } else {
+    const destination = result?.target === 'app' ? 'WhatsApp Desktop' : 'WhatsApp Web';
     toast(window._waPendingAttachment
-      ? '✓ WhatsApp abierto · adjunta el PDF que mostramos en la carpeta'
-      : '✓ WhatsApp abierto en el navegador', 'ok');
+      ? `✓ ${destination} abierto · adjunta el PDF que mostramos en la carpeta`
+      : `✓ ${destination} abierto`, 'ok');
   }
 }

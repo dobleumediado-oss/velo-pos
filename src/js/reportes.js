@@ -15,6 +15,8 @@ let repDateFrom = '';
 let repDateTo   = '';
 let repData     = null;
 let repTab      = 'financiero'; // 'financiero' | 'abonos' | 'inventario'
+let repPriceMode = 'all';
+let repCustomerType = 'all';
 
 function _repEsc(v) {
   return String(v == null ? '' : v)
@@ -64,17 +66,13 @@ async function renderReportes(el) {
       html: t.l,
       onclick: () => {
         if (repTab === t.v) return;
-        const prev = repTab;
         repTab = t.v;
         // Actualizar estado visual de las pestañas sin reconstruir
         mainTabs.querySelectorAll('button').forEach((b, i) => {
           b.classList.toggle('btn-dark', mainDefs[i].v === t.v);
           b.classList.toggle('btn-out',  mainDefs[i].v !== t.v);
         });
-        // Inventario tiene layout distinto (sin barra de rango) → re-render completo.
-        // Financiero↔Abonos comparten layout → solo swap de datos (fluido).
-        if (t.v === 'inventario' || prev === 'inventario') renderReportes(el);
-        else cargarYRenderizar(el);
+        renderReportes(el);
       }
     }));
   });
@@ -127,6 +125,46 @@ async function renderReportes(el) {
   rangeBar.appendChild(customDiv);
   el.appendChild(rangeBar);
 
+  if (repTab === 'financiero') {
+    const segmentBar = h('div', {
+      class: 'card',
+      style: 'padding:11px 13px;margin-bottom:16px;display:flex;gap:12px;align-items:end;flex-wrap:wrap'
+    });
+    segmentBar.innerHTML = `
+      <div style="min-width:190px">
+        <label class="lbl">Tipo de precio</label>
+        <select class="inp" id="rep-price-mode">
+          <option value="all" ${repPriceMode === 'all' ? 'selected' : ''}>Todas las ventas</option>
+          <option value="retail" ${repPriceMode === 'retail' ? 'selected' : ''}>Ventas al detalle</option>
+          <option value="wholesale" ${repPriceMode === 'wholesale' ? 'selected' : ''}>Ventas mayoristas</option>
+        </select>
+      </div>
+      <div style="min-width:190px">
+        <label class="lbl">Tipo de cliente</label>
+        <select class="inp" id="rep-customer-type">
+          <option value="all" ${repCustomerType === 'all' ? 'selected' : ''}>Personas y empresas</option>
+          <option value="person" ${repCustomerType === 'person' ? 'selected' : ''}>Personas</option>
+          <option value="company" ${repCustomerType === 'company' ? 'selected' : ''}>Empresas</option>
+        </select>
+      </div>
+      <button class="btn btn-dark btn-sm" id="rep-apply-segments">${svg('search')} Aplicar</button>
+      <button class="btn btn-out btn-sm" id="rep-clear-segments">Limpiar</button>
+      <div class="ts" style="margin-left:auto;max-width:330px">
+        El PDF y la impresión respetan exactamente estos filtros.
+      </div>`;
+    segmentBar.querySelector('#rep-apply-segments')?.addEventListener('click', async () => {
+      repPriceMode = segmentBar.querySelector('#rep-price-mode')?.value || 'all';
+      repCustomerType = segmentBar.querySelector('#rep-customer-type')?.value || 'all';
+      await cargarYRenderizar(el);
+    });
+    segmentBar.querySelector('#rep-clear-segments')?.addEventListener('click', async () => {
+      repPriceMode = 'all';
+      repCustomerType = 'all';
+      await renderReportes(el);
+    });
+    el.appendChild(segmentBar);
+  }
+
   await cargarYRenderizar(el);
 }
 
@@ -153,7 +191,7 @@ async function cargarYRenderizar(el) {
   // off-screen mientras el fetch (local, rápido) corre, y se hace un swap
   // atómico al final → sin el destello "blanco → Cargando… → contenido".
   const swap = (nodeOrFrag) => {
-    Array.from(el.children).slice(3).forEach(c => c.remove());
+    Array.from(el.children).slice(repTab === 'financiero' ? 4 : 3).forEach(c => c.remove());
     if (nodeOrFrag) el.appendChild(nodeOrFrag);
   };
   const errBox = (msg) => h('div', { class: 'alrt r' },
@@ -166,6 +204,8 @@ async function cargarYRenderizar(el) {
       range:         repRange,
       dateFrom:      repDateFrom || null,
       dateTo:        repDateTo   || null,
+      priceMode:     repPriceMode,
+      customerType:  repCustomerType,
       requestUserId: user.id,
     };
     const result = repTab === 'abonos'
@@ -243,6 +283,54 @@ function renderReporteContenido(el, d) {
     );
   });
   el.appendChild(sec);
+
+  const priceLabels = { retail: 'Detalle', wholesale: 'Mayorista' };
+  const customerLabels = { person: 'Personas', company: 'Empresas' };
+  const filteredLabel = [
+    d.filters?.priceMode !== 'all' ? priceLabels[d.filters?.priceMode] : '',
+    d.filters?.customerType !== 'all' ? customerLabels[d.filters?.customerType] : '',
+  ].filter(Boolean).join(' · ') || 'Todas las ventas';
+  const segmentGrid = h('div', {
+    class: 'gg2',
+    style: { gap: '16px', alignItems: 'start', marginBottom: '16px' }
+  });
+  const segmentCard = h('div', { class: 'card' });
+  segmentCard.innerHTML = `
+    <div class="fxb mb8">
+      <div>
+        <div class="card-title">Segmentación comercial</div>
+        <div class="ts">${_repEsc(filteredLabel)} · Ticket promedio ${fmt(d.averageTicket || 0)}</div>
+      </div>
+      <span class="badge b">${d.totalSales || 0} facturas</span>
+    </div>
+    <div class="g2" style="gap:8px">
+      ${(d.byPriceMode || []).map(row => `<div style="padding:10px;border:1px solid var(--line);border-radius:8px">
+        <div class="ts">${priceLabels[row.segment] || row.segment}</div>
+        <strong style="font-size:17px">${fmt(row.total)}</strong>
+        <div class="ts">${row.count} facturas · promedio ${fmt(row.average_ticket)}</div>
+      </div>`).join('') || '<div class="ts">Sin ventas por tipo de precio.</div>'}
+      ${(d.byCustomerType || []).map(row => `<div style="padding:10px;border:1px solid var(--line);border-radius:8px">
+        <div class="ts">${customerLabels[row.segment] || row.segment}</div>
+        <strong style="font-size:17px">${fmt(row.total)}</strong>
+        <div class="ts">${row.count} facturas · promedio ${fmt(row.average_ticket)}</div>
+      </div>`).join('')}
+    </div>`;
+  segmentGrid.appendChild(segmentCard);
+
+  const customerCard = h('div', { class: 'card' });
+  customerCard.innerHTML = `
+    <div class="fxb mb8">
+      <div class="card-title">Clientes principales</div>
+      <span class="ts">Por facturación del período</span>
+    </div>
+    ${(d.topCustomers || []).slice(0, 8).map((row, index) => `<div class="tr" style="padding:7px 0;border-top:${index ? '1px solid var(--line)' : '0'}">
+      <span style="min-width:0"><strong>${_repEsc(row.customer_name || 'Consumidor Final')}</strong>
+        <span class="ts" style="display:block">${customerLabels[row.customer_type] || row.customer_type} · ${row.count} facturas</span>
+      </span>
+      <strong>${fmt(row.total)}</strong>
+    </div>`).join('') || '<div class="ts" style="padding:12px 0">Sin clientes en este período.</div>'}`;
+  segmentGrid.appendChild(customerCard);
+  el.appendChild(segmentGrid);
 
   // ── Grid de reportes ─────────────────────────
   const grid = h('div', { class: 'gg2', style: { gap: '16px', alignItems: 'start' } });
@@ -614,6 +702,30 @@ function renderReporteContenido(el, d) {
     chartCard.appendChild(barChart);
     el.appendChild(chartCard);
   }
+
+  const detailRows = d.salesDetail || [];
+  const detailCard = h('div', { class: 'card', style: { marginTop: '16px' } });
+  detailCard.innerHTML = `
+    <div class="fxb mb8">
+      <div>
+        <div class="card-title">Facturas incluidas en el reporte</div>
+        <div class="ts">${detailRows.length >= 1000 ? 'Primeras 1,000 facturas' : `${detailRows.length} facturas`} · ${_repEsc(filteredLabel)}</div>
+      </div>
+    </div>
+    <div class="tw" style="max-height:420px;overflow:auto">
+      <table>
+        <thead><tr><th>Fecha</th><th>Documento</th><th>Cliente</th><th>Segmento</th><th>Método</th><th style="text-align:right">Total</th></tr></thead>
+        <tbody>${detailRows.map(row => `<tr>
+          <td>${fdate(row.sale_date)}</td>
+          <td><strong>${_repEsc(facturaLabel(row))}</strong>${row.ncf ? `<div class="ts">${_repEsc(row.ncf)}</div>` : ''}</td>
+          <td>${_repEsc(row.customer_name || 'Consumidor Final')}</td>
+          <td><span class="badge n">${priceLabels[row.price_mode] || row.price_mode}</span> <span class="badge ${row.customer_type === 'company' ? 'p' : 'b'}">${customerLabels[row.customer_type] || row.customer_type}</span></td>
+          <td style="text-transform:capitalize">${_repEsc(row.payment_method || '')}</td>
+          <td style="text-align:right;font-weight:800">${fmt(row.total)}</td>
+        </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;padding:18px;color:var(--muted2)">Sin facturas</td></tr>'}</tbody>
+      </table>
+    </div>`;
+  el.appendChild(detailCard);
 }
 
 function renderAbonosContenido(el, d) {
@@ -755,10 +867,10 @@ function renderAbonosContenido(el, d) {
   const rowsHtml = rows.length ? rows.map(p => {
     const fecha = (p.created_at || '').split('T')[0].split(' ')[0];
     // Mostrar el número de factura REAL (numero_factura_fmt), no el sale_id interno.
-    const factura = p.sale_document_number_fmt
-      || (p.sale_numero_factura_fmt
-        ? `#${p.sale_numero_factura_fmt}`
-        : (p.sale_id ? `#${String(p.sale_id).padStart(5, '0')}` : 'Sin factura'));
+    const factura = paymentInvoiceSummary(p);
+    const allocationDetail = paymentAllocationsOf(p)
+      .map(row => `${_repEsc(paymentAllocationLabel(row))}: ${fmt(row.amount)}`)
+      .join(' · ');
     const source = p.imported ? 'Histórico' : 'POS';
     return `<tr>
       <td>${fdate(fecha)}</td>
@@ -768,6 +880,7 @@ function renderAbonosContenido(el, d) {
       </td>
       <td>
         <div>${factura}${p.sale_ncf ? ` <span style="font-size:10px;color:var(--muted2)">${_repEsc(p.sale_ncf)}</span>` : ''}</div>
+        ${allocationDetail ? `<div style="font-size:10px;color:var(--blue)">${allocationDetail}</div>` : ''}
         <div style="font-size:10px;color:var(--muted2)">${_repEsc(p.note || 'Abono')}</div>
         ${p.sale_date ? `<div style="font-size:10px;color:var(--muted2)">Venta: ${_repEsc(p.sale_date)}${p.sale_fiscal_issued_at ? ` · Fiscal: ${_repEsc(String(p.sale_fiscal_issued_at).slice(0,10))}` : ''}</div>` : ''}
       </td>
@@ -805,11 +918,9 @@ function exportAbonosPDF() {
     return `<tr>
       <td>${fdate(fecha)}</td>
       <td>${_repEsc(p.customer_name || 'Cliente eliminado')}</td>
-      <td>${p.sale_document_number_fmt
-        ? _repEsc(p.sale_document_number_fmt)
-        : (p.sale_numero_factura_fmt
-          ? '#' + _repEsc(p.sale_numero_factura_fmt)
-          : (p.sale_id ? '#' + String(p.sale_id).padStart(5, '0') : 'Sin factura'))}</td>
+      <td>${_repEsc(paymentAllocationsOf(p)
+        .map(row => `${paymentAllocationLabel(row)} (${fmt(row.amount)})`)
+        .join(', ') || 'Saldo histórico')}</td>
       <td>${_repEsc(p.method || 'efectivo')}</td>
       <td>${p.imported ? 'Histórico' : 'POS'}</td>
       <td style="text-align:right;font-weight:700">${fmt(p.amount || 0)}</td>
@@ -874,6 +985,10 @@ function exportReportePDF() {
     all: 'Histórico',
     custom: `${repDateFrom ? fdate(repDateFrom) : ''} — ${repDateTo ? fdate(repDateTo) : ''}`
   }[repRange] || repRange;
+  const segmentLabel = [
+    d.filters?.priceMode === 'retail' ? 'Detalle' : d.filters?.priceMode === 'wholesale' ? 'Mayorista' : '',
+    d.filters?.customerType === 'company' ? 'Empresas' : d.filters?.customerType === 'person' ? 'Personas' : '',
+  ].filter(Boolean).join(' · ') || 'Todas las ventas';
 
   const payRows = (d.byMethod || []).map(m => `
     <tr>
@@ -917,6 +1032,25 @@ function exportReportePDF() {
         <td>${_esc(ch.reason || '')}</td>
       </tr>`;
   }).join('');
+  const customerRows = (d.topCustomers || []).map(row => `
+    <tr>
+      <td>${_repEsc(row.customer_name || 'Consumidor Final')}</td>
+      <td>${row.customer_type === 'company' ? 'Empresa' : 'Persona'}</td>
+      <td style="text-align:center">${row.count}</td>
+      <td style="text-align:right">${fmt(row.average_ticket)}</td>
+      <td style="text-align:right;font-weight:700">${fmt(row.total)}</td>
+    </tr>`).join('');
+  const invoiceRows = (d.salesDetail || []).map(row => `
+    <tr>
+      <td>${fdate(row.sale_date)}</td>
+      <td>${_repEsc(facturaLabel(row))}</td>
+      <td>${_repEsc(row.customer_name || 'Consumidor Final')}</td>
+      <td>${row.price_mode === 'wholesale' ? 'Mayorista' : 'Detalle'}</td>
+      <td>${row.customer_type === 'company' ? 'Empresa' : 'Persona'}</td>
+      <td>${_repEsc(row.payment_method || '')}</td>
+      <td style="text-align:right">${fmt(row.tax_amt || 0)}</td>
+      <td style="text-align:right;font-weight:700">${fmt(row.total || 0)}</td>
+    </tr>`).join('');
 
   const html = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"/>
@@ -953,6 +1087,7 @@ function exportReportePDF() {
   <h2>Reporte Financiero — ${_esc(CFG.biz)}</h2>
   <div class="sub">
     Período: <strong>${rangeLabel}</strong> ·
+    Segmento: <strong>${_repEsc(segmentLabel)}</strong> ·
     Generado: ${fdate(today())} a las ${nowt()} ·
     RNC: ${_esc(CFG.rnc)}
   </div>
@@ -1008,6 +1143,18 @@ function exportReportePDF() {
       <th style="text-align:right">Margen</th>
     </tr></thead>
     <tbody>${prodRows || '<tr><td colspan="7" style="text-align:center;color:#9ca3af">Sin datos</td></tr>'}</tbody>
+  </table>
+
+  <h3>Clientes principales</h3>
+  <table>
+    <thead><tr><th>Cliente</th><th>Tipo</th><th style="text-align:center">Facturas</th><th style="text-align:right">Ticket promedio</th><th style="text-align:right">Total</th></tr></thead>
+    <tbody>${customerRows || '<tr><td colspan="5" style="text-align:center;color:#9ca3af">Sin datos</td></tr>'}</tbody>
+  </table>
+
+  <h3>Facturas del segmento</h3>
+  <table>
+    <thead><tr><th>Fecha</th><th>Documento</th><th>Cliente</th><th>Precio</th><th>Cliente tipo</th><th>Método</th><th style="text-align:right">ITBIS</th><th style="text-align:right">Total</th></tr></thead>
+    <tbody>${invoiceRows || '<tr><td colspan="8" style="text-align:center;color:#9ca3af">Sin facturas</td></tr>'}</tbody>
   </table>
 
   <h3>Cambios de Costo / Precio</h3>

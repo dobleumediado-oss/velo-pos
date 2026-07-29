@@ -166,6 +166,7 @@ contextBridge.exposeInMainWorld('api', {
   // ── Shell — abrir links en navegador del sistema ──
   shell: {
     openExternal: (url)      => ipcRenderer.invoke('shell:openExternal', { url }),
+    openWhatsApp: (data)     => ipcRenderer.invoke('shell:openWhatsApp', data),
     showItemInFolder: (path) => ipcRenderer.invoke('shell:showItemInFolder', { path }),
   },
 

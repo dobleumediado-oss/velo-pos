@@ -1103,13 +1103,21 @@ function clienteWhatsApp(c) {
 // ══════════════════════════════════════════════
 // MODAL ABONO
 // ══════════════════════════════════════════════
-function openAbonoModal(c) {
+async function openAbonoModal(c) {
   const balance   = Number(c.balance || 0);
   const creditDue = c.credit_due || null;
   const contacts  = c.customer_type === 'company'
     ? (c.contacts || []).filter(x => x.active !== 0)
     : [];
   const primaryContact = contacts.find(x => x.is_primary) || contacts[0] || null;
+  let pending = { facturas: [], unallocatedBalance: balance };
+  try {
+    const result = await window.api.customers.getFacturasPendientes({ customerId: c.id });
+    if (result?.ok) pending = result;
+  } catch {}
+  const invoices = pending.facturas || [];
+  window._abonoPendingInvoices = invoices;
+  window._abonoUnallocatedBalance = Number(pending.unallocatedBalance || 0);
 
   openModal(`
     <div class="modal-title">Registrar Abono</div>
@@ -1133,15 +1141,56 @@ function openAbonoModal(c) {
         <div class="ic">${svg('dollar')}</div>
         <input class="inp" id="ab-amount" type="number" min="1"
                max="${balance}" placeholder="${balance}"
-               oninput="calcAbonoResto(${balance})"/>
+               oninput="abonoAmountChanged(${balance})"/>
       </div>
       <div id="ab-resto" style="font-size:12px;color:var(--muted);margin-top:4px"></div>
     </div>
 
+    ${invoices.length ? `<div class="card" style="padding:12px;margin-bottom:14px;background:var(--surface2)">
+      <div class="fxb" style="gap:10px;margin-bottom:9px">
+        <div>
+          <div style="font-size:12px;font-weight:800">Distribuir entre facturas</div>
+          <div class="ts">Puedes seleccionar varias. La última puede recibir un abono parcial.</div>
+        </div>
+        <div class="flex" style="gap:5px;flex-wrap:wrap;justify-content:flex-end">
+          <button class="btn btn-out btn-sm" onclick="abonoAutoDistribuir(${balance})">Automático</button>
+          <button class="btn btn-ghost btn-sm" onclick="abonoLimpiarDistribucion(${balance})">Limpiar</button>
+        </div>
+      </div>
+      <div style="max-height:240px;overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--surface)">
+        ${invoices.map((invoice, index) => {
+          const pendingAmount = Number(invoice.pendiente || 0);
+          const corrected = invoice.correction_kind === 'product_addition' || Number(invoice.revision || 0) > 0;
+          return `<label style="display:grid;grid-template-columns:22px minmax(0,1fr) 132px;gap:8px;align-items:center;padding:10px;border-bottom:1px solid var(--line);cursor:pointer">
+            <input type="checkbox" class="ab-invoice-check" data-sale-id="${invoice.id}"
+                   data-pending="${pendingAmount}" ${invoices.length === 1 ? 'checked' : ''}
+                   onchange="abonoToggleInvoice(${invoice.id},${pendingAmount},${balance})"/>
+            <span style="min-width:0">
+              <strong>${cliEsc(facturaLabel(invoice))}</strong>
+              ${corrected ? '<span class="badge a" style="margin-left:5px">Ajustada</span>' : ''}
+              <span class="ts" style="display:block">Pendiente ${fmt(pendingAmount)}${invoice.ncf ? ` · NCF ${cliEsc(invoice.ncf)}` : ''}</span>
+            </span>
+            <input class="inp ab-allocation-amount" id="ab-alloc-${invoice.id}" type="number"
+                   min="0" max="${pendingAmount}" step="0.01"
+                   value="${invoices.length === 1 ? '' : ''}" placeholder="RD$ 0.00"
+                   ${invoices.length === 1 ? '' : 'disabled'}
+                   onclick="event.stopPropagation()" oninput="abonoAllocationChanged(${balance})"/>
+          </label>`;
+        }).join('')}
+      </div>
+      ${Number(pending.unallocatedBalance || 0) > 0 ? `<div class="ts" style="margin-top:7px">
+        Además existen ${fmt(pending.unallocatedBalance)} de saldo histórico sin una factura identificable; cualquier remanente puede aplicarse allí.
+      </div>` : ''}
+      <div id="ab-allocation-summary" class="alrt b" style="margin:10px 0 0;padding:9px 11px"></div>
+    </div>` : `<div class="alrt b" style="margin-bottom:12px">
+      <div class="alrt-dot b"></div>
+      <div><div class="alrt-title">Saldo anterior sin factura identificable</div>
+      <div class="alrt-sub">El abono reducirá el balance histórico del cliente.</div></div>
+    </div>`}
+
     <div style="margin-bottom:12px">
-      <button class="btn btn-out btn-sm"
-              onclick="document.getElementById('ab-amount').value=${balance};calcAbonoResto(${balance})">
-        Saldar todo: ${fmt(balance)}
+      <button class="btn btn-out btn-sm" onclick="abonoSaldarTodo(${balance})">
+        Usar balance completo: <span>${fmt(balance)}</span>
       </button>
     </div>
 
@@ -1180,17 +1229,102 @@ function openAbonoModal(c) {
       </button>
     </div>
   `);
+  abonoAmountChanged(balance);
 }
 
-function calcAbonoResto(balance) {
+function abonoAmountChanged(balance) {
+  const amount = Math.max(0, Number(document.getElementById('ab-amount')?.value || 0));
+  const invoices = window._abonoPendingInvoices || [];
+  if (invoices.length === 1) {
+    const row = invoices[0];
+    const allocation = document.getElementById(`ab-alloc-${row.id}`);
+    if (allocation) allocation.value = Math.min(amount, Number(row.pendiente || 0)).toFixed(2);
+  }
+  abonoAllocationChanged(balance);
+}
+
+function abonoToggleInvoice(saleId, pending, balance) {
+  const check = document.querySelector(`.ab-invoice-check[data-sale-id="${saleId}"]`);
+  const input = document.getElementById(`ab-alloc-${saleId}`);
+  if (!check || !input) return;
+  input.disabled = !check.checked;
+  if (!check.checked) {
+    input.value = '';
+  } else {
+    const total = Number(document.getElementById('ab-amount')?.value || 0);
+    const already = [...document.querySelectorAll('.ab-allocation-amount')]
+      .filter(el => el !== input && !el.disabled)
+      .reduce((sum, el) => sum + Number(el.value || 0), 0);
+    input.value = Math.min(Number(pending || 0), Math.max(0, total - already)).toFixed(2);
+  }
+  abonoAllocationChanged(balance);
+}
+
+function abonoAutoDistribuir(balance) {
+  let remaining = Math.max(0, Number(document.getElementById('ab-amount')?.value || 0));
+  document.querySelectorAll('.ab-invoice-check').forEach(check => {
+    const pending = Number(check.dataset.pending || 0);
+    const saleId = check.dataset.saleId;
+    const applied = Math.min(pending, remaining);
+    check.checked = applied > 0;
+    const input = document.getElementById(`ab-alloc-${saleId}`);
+    if (input) {
+      input.disabled = applied <= 0;
+      input.value = applied > 0 ? applied.toFixed(2) : '';
+    }
+    remaining = Math.max(0, remaining - applied);
+  });
+  abonoAllocationChanged(balance);
+}
+
+function abonoLimpiarDistribucion(balance) {
+  document.querySelectorAll('.ab-invoice-check').forEach(check => { check.checked = false; });
+  document.querySelectorAll('.ab-allocation-amount').forEach(input => {
+    input.value = '';
+    input.disabled = true;
+  });
+  abonoAllocationChanged(balance);
+}
+
+function abonoSaldarTodo(balance) {
+  const input = document.getElementById('ab-amount');
+  if (input) input.value = Number(balance || 0).toFixed(2);
+  abonoAutoDistribuir(balance);
+}
+
+function abonoAllocationChanged(balance) {
   const amt   = parseFloat(document.getElementById('ab-amount')?.value) || 0;
   const resto = balance - amt;
   const el    = document.getElementById('ab-resto');
-  if (!el) return;
-  el.textContent = resto <= 0
-    ? '✓ La deuda quedará saldada completamente'
-    : `Balance restante: ${fmt(Math.max(0, resto))}`;
-  el.style.color = resto <= 0 ? 'var(--green)' : 'var(--muted)';
+  if (el) {
+    el.textContent = resto <= 0
+      ? '✓ La deuda total del cliente quedará saldada'
+      : `Balance total restante del cliente: ${fmt(Math.max(0, resto))}`;
+    el.style.color = resto <= 0 ? 'var(--green)' : 'var(--muted)';
+  }
+  const allocated = [...document.querySelectorAll('.ab-allocation-amount')]
+    .filter(input => !input.disabled)
+    .reduce((sum, input) => sum + Number(input.value || 0), 0);
+  const remaining = Math.round((amt - allocated) * 100) / 100;
+  const historicalMax = Number(window._abonoUnallocatedBalance || 0);
+  const summary = document.getElementById('ab-allocation-summary');
+  if (summary) {
+    const selected = document.querySelectorAll('.ab-invoice-check:checked').length;
+    const historicalApplied = Math.max(0, remaining);
+    const valid = Math.abs(remaining) <= 0.01 ||
+      (remaining > 0 && historicalApplied <= historicalMax + 0.01);
+    summary.className = `alrt ${valid ? 'g' : remaining < 0 ? 'r' : 'a'}`;
+    summary.innerHTML = `<div>
+      <strong>${selected} factura${selected === 1 ? '' : 's'} seleccionada${selected === 1 ? '' : 's'}</strong> ·
+      Distribuido ${fmt(allocated)} ·
+      ${Math.abs(remaining) <= 0.01
+        ? '<span style="color:var(--green)">Monto completado</span>'
+        : remaining > 0
+          ? `Falta distribuir ${fmt(remaining)}${historicalApplied <= historicalMax + 0.01 ? ' (irá a saldo histórico)' : ''}`
+          : `Exceso distribuido ${fmt(Math.abs(remaining))}`}
+    </div>`;
+    summary.dataset.valid = valid ? '1' : '0';
+  }
 }
 
 async function registrarAbono(clientId, balanceActual) {
@@ -1198,6 +1332,12 @@ async function registrarAbono(clientId, balanceActual) {
   const method = document.getElementById('ab-method')?.value  || 'efectivo';
   const note   = document.getElementById('ab-note')?.value?.trim() || '';
   const contactId = Number(document.getElementById('ab-contact')?.value) || null;
+  const allocations = [...document.querySelectorAll('.ab-invoice-check:checked')]
+    .map(check => ({
+      saleId: Number(check.dataset.saleId),
+      amount: Number(document.getElementById(`ab-alloc-${check.dataset.saleId}`)?.value || 0),
+    }))
+    .filter(row => row.saleId && row.amount > 0);
 
   if (!amount || amount <= 0) {
     toast('Ingresa un monto válido', 'err'); return;
@@ -1205,12 +1345,15 @@ async function registrarAbono(clientId, balanceActual) {
   if (amount > balanceActual + 0.01) {
     toast(`El abono no puede ser mayor al balance (${fmt(balanceActual)})`, 'err'); return;
   }
+  if (document.getElementById('ab-allocation-summary')?.dataset.valid !== '1') {
+    toast('Distribuye el monto completo entre las facturas seleccionadas', 'w'); return;
+  }
 
   const btn = document.getElementById('btn-abono');
   if (btn) { btn.disabled = true; btn.textContent = 'Procesando...'; }
 
   const result = await window.api.customers.addPayment({
-    data: { customerId: clientId, amount, method, note, contactId },
+    data: { customerId: clientId, amount, method, note, contactId, allocations },
     requestUserId: user.id,
   });
 
@@ -1220,11 +1363,14 @@ async function registrarAbono(clientId, balanceActual) {
     return;
   }
 
-  await reloadCustomers();
+  await Promise.all([
+    reloadCustomers(),
+    typeof reloadPayments === 'function' ? reloadPayments() : Promise.resolve(),
+  ]);
   closeModal();
   toast(`✓ Abono de ${fmt(amount)} registrado`);
 
-  // Imprimir recibo de abono en impresora térmica 80mm
+  // Imprimir con la plantilla y la impresora global elegidas en Configuración.
   const c = DB.customers.find(c => c.id === clientId);
   printAbono({
     payment: {
@@ -1238,6 +1384,14 @@ async function registrarAbono(clientId, balanceActual) {
       note:           note || 'Abono',
       balance_before: balanceActual,
       balance_after:  result.after,
+      sale_id:        result.saleId || null,
+      allocations:    result.allocations || allocations,
+      applied_invoice: result.saleId ? facturaLabel({
+        id: result.saleId,
+        document_number_fmt: result.sale_document_number_fmt,
+        numero_factura: result.sale_numero_factura,
+        numero_factura_fmt: result.sale_numero_factura_fmt,
+      }) : '',
       created_at:     new Date().toISOString(),
       customer_contact_id: result.customer_contact_id || null,
       customer_contact_name: result.customer_contact_name || '',
@@ -1259,9 +1413,12 @@ async function registrarAbono(clientId, balanceActual) {
 // Guardar un recibo de abono como PDF (bajo demanda, desde el historial).
 function guardarAbonoPDF(paymentId) {
   const ctx = window._cliAbonoData;
-  const p = ctx && (ctx.pagos || []).find(x => x.id === paymentId);
+  const p = (ctx && (ctx.pagos || []).find(x => x.id === paymentId))
+    || (DB.payments || []).find(x => Number(x.id) === Number(paymentId));
   if (!p) { toast('Abono no encontrado', 'err'); return; }
-  const c = (ctx && ctx.customer) || {};
+  const c = (ctx && ctx.customer)
+    || (DB.customers || []).find(x => Number(x.id) === Number(p.customer_id))
+    || { name: p.customer_name || '', rnc: p.customer_rnc || '', phone: p.customer_phone || '' };
   const build = () => printAbono({
     payment: {
       id: p.id, document_kind: p.document_kind || 'abono',
@@ -1269,6 +1426,17 @@ function guardarAbonoPDF(paymentId) {
       numero_recibo: p.numero_recibo,
       amount: p.amount, method: p.method, note: p.note || 'Abono',
       balance_before: p.balance_before, balance_after: p.balance_after, created_at: p.created_at,
+      sale_id: p.sale_id || null,
+      sale_document_number_fmt: p.sale_document_number_fmt || '',
+      sale_numero_factura: p.sale_numero_factura,
+      sale_numero_factura_fmt: p.sale_numero_factura_fmt || '',
+      allocations: paymentAllocationsOf(p),
+      applied_invoice: p.sale_id ? facturaLabel({
+        id: p.sale_id,
+        document_number_fmt: p.sale_document_number_fmt,
+        numero_factura: p.sale_numero_factura,
+        numero_factura_fmt: p.sale_numero_factura_fmt,
+      }) : '',
       customer_contact_id: p.customer_contact_id || null,
       customer_contact_name: p.customer_contact_name || '',
       customer_contact_document: p.customer_contact_document || '',
@@ -1278,8 +1446,78 @@ function guardarAbonoPDF(paymentId) {
     cajero: (window._currentUser && window._currentUser.name) || '',
   });
   if (typeof guardarDocumentoPDF === 'function') {
-    guardarDocumentoPDF(build, `Abono-${(typeof reciboLabel === 'function' ? reciboLabel(p) : String(p.id).padStart(5, '0'))}`);
+    const docNo = typeof reciboLabel === 'function' ? reciboLabel(p) : String(p.id).padStart(5, '0');
+    guardarDocumentoPDF(build, clientDocumentFilename(c.name, docNo, 'Abono'));
   } else { build(); }
+}
+
+function reimprimirAbono(paymentId) {
+  const p = (DB.payments || []).find(x => Number(x.id) === Number(paymentId))
+    || window._cliAbonoData?.pagos?.find(x => Number(x.id) === Number(paymentId));
+  if (!p) { toast('Abono no encontrado', 'err'); return; }
+  const c = (DB.customers || []).find(x => Number(x.id) === Number(p.customer_id))
+    || window._cliAbonoData?.customer
+    || { name: p.customer_name || '', rnc: p.customer_rnc || '', phone: p.customer_phone || '' };
+  printAbono({ payment: p, customer: c, cajero: p.cajero || user?.name || '', isReprint: true });
+}
+
+function openAbonoDetalleModal(paymentOrId) {
+  const p = typeof paymentOrId === 'object'
+    ? paymentOrId
+    : (DB.payments || []).find(x => Number(x.id) === Number(paymentOrId));
+  if (!p) { toast('Abono no encontrado', 'err'); return; }
+  const c = (DB.customers || []).find(x => Number(x.id) === Number(p.customer_id))
+    || { name: p.customer_name || 'Cliente', rnc: p.customer_rnc || '', phone: p.customer_phone || '' };
+  const allocations = paymentAllocationsOf(p);
+  const allocationRows = allocations.length
+    ? allocations.map(row => `<div class="tr" style="padding:7px 0;border-top:1px solid var(--line)">
+        <span><strong>${cliEsc(paymentAllocationLabel(row))}</strong>${row.ncf ? `<span class="ts" style="display:block">NCF ${cliEsc(row.ncf)}</span>` : ''}</span>
+        <span style="text-align:right"><strong>${fmt(row.amount)}</strong>${row.invoice_balance_after != null ? `<span class="ts" style="display:block">Queda ${fmt(row.invoice_balance_after)}</span>` : ''}</span>
+      </div>`).join('')
+    : '<div class="ts">Aplicado al saldo histórico sin factura identificada.</div>';
+  openModal(`
+    <div class="modal-title">Abono ${cliEsc(reciboLabel(p))}</div>
+    <div class="modal-sub">${cliEsc(c.name || '')} · ${fdate(String(p.created_at || '').slice(0,10))}</div>
+    <div class="card" style="background:var(--surface2);margin-top:14px">
+      <div class="g2">
+        <div><div class="ts">Monto abonado</div><div style="font-size:22px;font-weight:800;color:var(--green)">${fmt(p.amount)}</div></div>
+        <div><div class="ts">Aplicación</div><div style="font-size:15px;font-weight:700">${cliEsc(paymentInvoiceSummary(p))}</div></div>
+        <div><div class="ts">Método</div><div style="font-weight:700;text-transform:capitalize">${cliEsc(p.method || 'efectivo')}</div></div>
+        <div><div class="ts">Balance del cliente después</div><div style="font-weight:700">${fmt(p.balance_after)}</div></div>
+      </div>
+      ${p.note ? `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)">
+        <div class="ts">Nota</div><div style="font-size:12px">${cliEsc(p.note)}</div>
+      </div>` : ''}
+      <div style="margin-top:12px">
+        <div class="ts" style="font-weight:800;margin-bottom:3px">Facturas abonadas</div>
+        ${allocationRows}
+      </div>
+    </div>
+    <div class="modal-foot" style="flex-wrap:wrap">
+      <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
+      <button class="btn btn-out" onclick="reimprimirAbono(${p.id})">${svg('print')} Reimprimir</button>
+      <button class="btn btn-out" onclick="guardarAbonoPDF(${p.id})">${svg('pdf')} Guardar PDF</button>
+      <button class="btn btn-green" onclick="abonoWhatsApp(${p.id})">WhatsApp</button>
+    </div>
+  `);
+}
+
+function abonoWhatsApp(paymentId) {
+  const p = (DB.payments || []).find(x => Number(x.id) === Number(paymentId));
+  if (!p) return;
+  const c = (DB.customers || []).find(x => Number(x.id) === Number(p.customer_id))
+    || { name: p.customer_name || 'Cliente', phone: p.customer_phone || '' };
+  const allocations = paymentAllocationsOf(p);
+  const applied = allocations.length
+    ? allocations.map(row => `${paymentAllocationLabel(row)}: ${fmt(row.amount)}`).join('\n')
+    : 'Saldo histórico';
+  openWhatsAppModal([
+    `Recibo de abono ${reciboLabel(p)} · ${CFG.biz}`,
+    `Cliente: ${c.name}`,
+    `Monto: ${fmt(p.amount)}`,
+    `Aplicado a: ${applied}`,
+    `Balance restante: ${fmt(p.balance_after)}`,
+  ].join('\n'), String(c.phone || '').replace(/\D/g, ''), c.name);
 }
 
 // ══════════════════════════════════════════════
@@ -1369,6 +1607,8 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
               </span>
               <button class="btn btn-ghost btn-sm" style="margin-left:4px" title="Guardar recibo en PDF"
                       onclick="guardarAbonoPDF(${p.id})">${svg('pdf')}</button>
+              <button class="btn btn-ghost btn-sm" style="margin-left:2px" title="Ver y reimprimir"
+                      onclick="openAbonoDetalleModal(${p.id})">${svg('eye')}</button>
             </td>
           </tr>`;
       }).join('');

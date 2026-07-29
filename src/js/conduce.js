@@ -676,7 +676,7 @@ function _cndDoc(id, save) {
       }
     };
     if (save && typeof guardarDocumentoPDF === 'function') {
-      guardarDocumentoPDF(build, `Conduce-${dn.number}`);
+      guardarDocumentoPDF(build, clientDocumentFilename(dn.customer_name, dn.number, 'Conduce'));
     } else {
       build();
     }

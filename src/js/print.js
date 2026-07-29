@@ -181,14 +181,19 @@ function _printDispatch(payload) {
 // Punto único para trabajos de etiquetas. Conserva las dimensiones exactas
 // del medio, evita dobles envíos y mantiene el módulo de etiquetas desacoplado
 // del transporte IPC de impresión.
-function printLabelBatch({ html, printerName = '', widthMm, heightMm, userId = null }) {
+function printLabelBatch({
+  html, printerName = '', widthMm, heightMm, userId = null, referenceId = null
+}) {
+  if (!String(html || '').includes('class="vp-label"')) {
+    return Promise.resolve({ ok: false, error: 'El trabajo no contiene etiquetas para imprimir' });
+  }
   return _printDispatch({
     html,
     printerName,
     printerWidth: `${Number(widthMm)}mm`,
     printerHeight: heightMm ? `${Number(heightMm)}mm` : undefined,
     jobType: 'barcode_labels',
-    referenceId: null,
+    referenceId: referenceId || Math.floor(Date.now() / 1000),
     userId,
     silent: true,
   });
@@ -337,7 +342,27 @@ function printReceipt(sale, isReprint = false) {
       if (_rawEstilos) _estilosReal = JSON.parse(_rawEstilos);
     } catch {}
     const _optsConEstilos = { ...plantilla.opciones, _estilos: _estilosReal };
-    const html = plantilla.render(saleForPlant, cfg, _optsConEstilos);
+    let html = plantilla.render(saleForPlant, cfg, _optsConEstilos);
+    // Todas las plantillas configurables deben dejar explícito el adelanto y
+    // el saldo financiado. carta_recibo ya lo integra dentro de sus totales.
+    if (templateId !== 'carta_recibo' &&
+        String(saleForPlant.payment_method || '').toLowerCase() === 'credito') {
+      const paid = Number(saleForPlant.payment_amount || 0);
+      const balance = Number(
+        saleForPlant.balance_after_payment != null
+          ? saleForPlant.balance_after_payment
+          : Math.max(0, Number(saleForPlant.total || 0) - paid)
+      );
+      const paymentBlock = `<div style="margin:10px 0;padding:8px 10px;border:1px solid #d7dae3;border-radius:6px;font-family:Arial,sans-serif;font-size:11px">
+        <div style="display:flex;justify-content:space-between;gap:12px"><span>Pago inicial recibido</span><strong>RD$${paid.toLocaleString('es-DO',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div>
+        <div style="display:flex;justify-content:space-between;gap:12px;margin-top:4px"><span>Balance a crédito</span><strong>RD$${balance.toLocaleString('es-DO',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div>
+      </div>`;
+      html = html.includes('</body>') ? html.replace('</body>', paymentBlock + '</body>') : html + paymentBlock;
+    }
+    if (templateId !== 'carta_recibo' && saleForPlant.notes) {
+      const noteBlock = `<div style="margin:8px 0;padding:7px 9px;border:1px solid #e5e7eb;border-radius:5px;font-family:Arial,sans-serif;font-size:10px"><strong>Notas:</strong> ${_escHtml(saleForPlant.notes)}</div>`;
+      html = html.includes('</body>') ? html.replace('</body>', noteBlock + '</body>') : html + noteBlock;
+    }
     _openPrintWindow(html, 'ticket', sale.id, isReprint, {
       printerName: sale.print_printer_name || '',
       profileId: sale.print_profile_id || '',
@@ -456,6 +481,12 @@ function printReceipt(sale, isReprint = false) {
     lines.push(tRow('Pagado en USD:', usd));
     lines.push(tRow('Tasa USD:', `RD$${Number(sale.exchange_rate || 0).toFixed(2)}`));
     lines.push(tRow('Base factura:', fmt(total)));
+  }
+  if (sale.notes) {
+    lines.push('');
+    lines.push('NOTA:');
+    String(sale.notes).match(new RegExp(`.{1,${Math.max(12, THERMAL.cols - 2)}}`, 'g'))
+      ?.forEach(line => lines.push(line));
   }
 
   if (isFactura && !isDevolucion && !sale.adjusted_copy && sale.ncf && sale.ncf.trim()) {
@@ -684,50 +715,75 @@ function printConduceDoc(dn) {
 }
 
 // ══════════════════════════════════════════════
-// RECIBO DE ABONO 80MM
+// RECIBO DE ABONO — usa la MISMA plantilla e impresora configuradas para las
+// facturas. Solo Ventas puede cambiar la salida cuando existen varias impresoras.
 // ══════════════════════════════════════════════
-function printAbono({ payment, customer, cajero }) {
+function printAbono({ payment, customer, cajero, isReprint = false }) {
   if (!payment || !customer) return;
-
-  const lines = [];
-  lines.push(tCenter(CFG.biz));
-  if (CFG.rnc)   lines.push(tCenter(`RNC: ${CFG.rnc}`));
-  if (CFG.phone) lines.push(tCenter(`Tel: ${CFG.phone}`));
-  lines.push(tline());
-  lines.push(tCenter('*** RECIBO DE ABONO ***'));
-  lines.push(tline());
   const paymentNumber = typeof reciboLabel === 'function'
     ? reciboLabel(payment)
     : String(payment.id).padStart(5, '0');
-  lines.push(tRow(`No.: ${paymentNumber}`,
-    `Fecha: ${(payment.created_at || today()).split('T')[0].split(' ')[0]}`));
-  lines.push(tRow('Cajero:', (cajero || '').split(' ')[0]));
-  lines.push(tline());
-  lines.push(tRow('Cliente:', customer.name.slice(0, 28)));
-  if (customer.rnc) lines.push(tRow('RNC/Céd:', customer.rnc));
-  if (payment.customer_contact_name) {
-    lines.push(tRow('Pagado por:', String(payment.customer_contact_name).slice(0, 26)));
-    if (payment.customer_contact_role) lines.push(tRow('Cargo:', String(payment.customer_contact_role).slice(0, 28)));
-    if (payment.customer_contact_document) lines.push(tRow('Documento:', String(payment.customer_contact_document).slice(0, 24)));
+  const amount = Number(payment.amount || 0);
+  const allocations = typeof paymentAllocationsOf === 'function'
+    ? paymentAllocationsOf(payment) : [];
+  const allocatedAmount = allocations.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const receiptItems = allocations.map(row => {
+    const label = typeof paymentAllocationLabel === 'function'
+      ? paymentAllocationLabel(row) : `#${row.sale_id}`;
+    return {
+      product_code: 'ABONO',
+      product_name: `Abono a ${label}${row.ncf ? ` · NCF ${row.ncf}` : ''}`,
+      qty: 1, unit_price: Number(row.amount || 0), subtotal: Number(row.amount || 0),
+      taxable: 0, tax_pct: 0, tax_amt: 0, net_subtotal: Number(row.amount || 0),
+    };
+  });
+  const historicalAmount = Math.max(0, Math.round((amount - allocatedAmount) * 100) / 100);
+  if (historicalAmount > 0.005 || !receiptItems.length) {
+    receiptItems.push({
+      product_code: 'ABONO',
+      product_name: 'Aplicación a saldo histórico sin factura identificada',
+      qty: 1, unit_price: historicalAmount || amount, subtotal: historicalAmount || amount,
+      taxable: 0, tax_pct: 0, tax_amt: 0, net_subtotal: historicalAmount || amount,
+    });
   }
-  lines.push(tline());
-  lines.push(tRow('Balance anterior:', fmt(payment.balance_before || 0)));
-  lines.push(tRow('Monto abonado:', fmt(payment.amount || 0)));
-  lines.push(tlineD());
-  lines.push(tRow('BALANCE PENDIENTE:', fmt(payment.balance_after || 0)));
-  lines.push(tlineD());
-  lines.push('');
-  lines.push(tRow('Método:', (payment.method || 'efectivo').toUpperCase()));
-  if (payment.note && payment.note !== 'Abono') {
-    lines.push(tRow('Nota:', payment.note.slice(0, 30)));
-  }
-  lines.push('');
-  lines.push(tCenter('Gracias por su pago'));
-  lines.push(tline());
-  lines.push('');
-  lines.push('');
-
-  _sendToPrinter(lines, 'abono', payment.id);
+  return printReceipt({
+    id: payment.id,
+    type: 'abono',
+    document_kind: payment.document_kind || 'abono',
+    document_number: payment.document_number,
+    document_number_fmt: payment.document_number_fmt || paymentNumber,
+    receipt_number: paymentNumber,
+    transaction_number: paymentNumber,
+    date: (payment.created_at || today()).split('T')[0].split(' ')[0],
+    customer_id: payment.customer_id || customer.id || null,
+    customer_name: customer.name || payment.customer_name || '',
+    customer_rnc: customer.rnc || payment.customer_rnc || '',
+    customer_phone: customer.phone || payment.customer_phone || '',
+    customer_contact_id: payment.customer_contact_id || null,
+    customer_contact_name: payment.customer_contact_name || '',
+    customer_contact_document: payment.customer_contact_document || '',
+    customer_contact_role: payment.customer_contact_role || '',
+    customer_contact_phone: payment.customer_contact_phone || '',
+    cajero: cajero || payment.cajero || '',
+    applied_invoice: payment.applied_invoice ||
+      (typeof paymentInvoiceSummary === 'function' ? paymentInvoiceSummary(payment) : ''),
+    payment_allocations: allocations,
+    original_sale_id: payment.sale_id || null,
+    items: receiptItems,
+    subtotal: amount,
+    tax_pct: 0,
+    tax_amt: 0,
+    total: amount,
+    payment_method: payment.method || 'efectivo',
+    payment_amount: amount,
+    paid_amount: amount,
+    balance_before: Number(payment.balance_before || 0),
+    balance_after: Number(payment.balance_after || 0),
+    balance_after_payment: Number(payment.balance_after || 0),
+    notes: payment.note && payment.note !== 'Abono' ? payment.note : '',
+    print_template_id: DB?.settings?.print_template || '',
+    print_printer_name: DB?.settings?.printer || '',
+  }, isReprint);
 }
 
 // ══════════════════════════════════════════════

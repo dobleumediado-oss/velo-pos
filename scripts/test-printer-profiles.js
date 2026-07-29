@@ -1,6 +1,8 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 const {
   PRINTER_PROFILES,
   inferPrinterProfileId,
@@ -66,6 +68,20 @@ test('mantiene compatibilidad con perfiles históricos de ticket', () => {
   assert.strictEqual(resolvePrinterProfile('Mini 58 Printer', 'ticket', {}).widthMm, 58);
   assert.strictEqual(resolvePrinterProfile('AOKIA AK-3380', 'ticket', {}).widthMm, 80);
   assert.strictEqual(resolvePrinterProfile('HP LaserJet', 'ticket', {}).kind, 'sheet');
+});
+
+test('Etiquetas usa JsBarcode local y bloquea trabajos incompletos', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/js/barcode.js'), 'utf8');
+  assert.ok(source.includes("vendor/jsbarcode/JsBarcode.all.min.js"));
+  assert.ok(source.includes('renderedCodes < total'));
+  assert.ok(source.includes('No se enviaron etiquetas en blanco'));
+});
+
+test('el despacho de etiquetas valida contenido y conserva el alto calculado', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/js/print.js'), 'utf8');
+  assert.ok(source.includes("String(html || '').includes('class=\"vp-label\"')"));
+  assert.ok(source.includes("jobType: 'barcode_labels'"));
+  assert.ok(source.includes("printerHeight: heightMm ? `${Number(heightMm)}mm` : undefined"));
 });
 
 console.log(`\n${passed} pruebas de impresión aprobadas.`);

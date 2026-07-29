@@ -1,5 +1,60 @@
 # Historial de versiones
 
+## 1.33.0 — 2026-07-29
+
+### Ventas a crédito y abonos
+
+- Las ventas a crédito permiten registrar un pago inicial y conservan en la
+  factura el importe adelantado y el balance pendiente.
+- Un importe recibido inferior al total convierte la operación en crédito,
+  registra el cobro real en Caja y deja únicamente la diferencia en CxC.
+- Los abonos pueden distribuirse entre varias facturas en un solo recibo,
+  mostrando en vivo cuánto se aplicó, cuáles quedaron saldadas y qué balance
+  conserva cada documento.
+- Caja, Ventas, Clientes, Reportes y Contabilidad reflejan el mismo abono sin
+  duplicar ingresos. El recibo enumera todas las facturas y montos aplicados.
+- Una factura anulada no admite abonos y una factura con cobros aplicados no
+  puede anularse sin procesar formalmente el reembolso o reverso.
+
+### Reportes y administración
+
+- Reportes financieros filtrables por ventas al detalle o mayoristas y por
+  clientes persona o empresa, incluyendo combinaciones de ambos segmentos.
+- Nuevos indicadores de ticket promedio, clientes principales y detalle de
+  facturas incluidas; el PDF y la impresión respetan los filtros seleccionados.
+- Los abonos multifactura se atribuyen a cada segmento solo por el importe
+  realmente aplicado a sus facturas.
+- Las correcciones de productos muestran cualquier excedente que quede a favor
+  del cliente para evitar saldos ocultos o aplicaciones automáticas ambiguas.
+
+### Impresión, PDF y comunicación
+
+- Los recibos de abono utilizan la plantilla e impresora global configuradas y
+  pueden reabrirse, reimprimirse o guardarse desde Clientes, Caja y Ventas.
+- Etiquetas usa el generador de códigos local, valida que todos los SVG estén
+  completos antes de imprimir y abre el selector del sistema si la impresora
+  guardada ya no está instalada.
+- El alto, ancho, separación y perfil físico de las etiquetas se conservan en
+  el despacho de impresión para evitar páginas vacías o códigos recortados.
+- Los botones de WhatsApp intentan abrir primero la aplicación instalada y
+  conservan WhatsApp Web como alternativa segura.
+- Los PDF usan el primer nombre, primer apellido y número documental del
+  comprobante para producir nombres de archivo identificables.
+- El POS incorpora una casilla de notas que queda guardada e impresa con la
+  venta.
+
+### Migración y verificación
+
+- Nueva tabla de aplicaciones de pago para relacionar un único recibo con
+  múltiples facturas, compatible con pagos históricos de una sola factura.
+- La migración fue probada sobre una copia consistente de la base importada:
+  2,494 ventas y 2,699 pagos históricos conservaron sus conteos, importes y
+  huellas, sin registros huérfanos.
+- Pruebas funcionales, financieras, de CxC, correcciones, impresión,
+  empaquetado, multi-negocio y servicio Windows aprobadas antes del release.
+- Se conserva sin modificar el NCF histórico duplicado `B0100000046` para que
+  su conciliación fiscal se realice separadamente con los documentos fuente.
+
 ## 1.30.0 — 2026-07-27
 
 ### Corrección controlada de facturas

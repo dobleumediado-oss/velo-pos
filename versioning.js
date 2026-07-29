@@ -1219,7 +1219,10 @@ const MIGRATIONS = [
         .forEach(([c,d]) => addCol('deliveries', c, d));
       [['customer_contact_id','INTEGER'],['customer_contact_name',"TEXT DEFAULT ''"],
        ['customer_contact_document',"TEXT DEFAULT ''"],['customer_contact_role',"TEXT DEFAULT ''"],
-       ['customer_contact_phone',"TEXT DEFAULT ''"],['customer_contact_email',"TEXT DEFAULT ''"]]
+       ['customer_contact_phone',"TEXT DEFAULT ''"],['customer_contact_email',"TEXT DEFAULT ''"],
+       ['customer_branch_id','INTEGER'],['customer_branch_name',"TEXT DEFAULT ''"],
+       ['customer_branch_code',"TEXT DEFAULT ''"],['customer_branch_address',"TEXT DEFAULT ''"],
+       ['customer_branch_phone',"TEXT DEFAULT ''"]]
         .forEach(([c,d]) => addCol('delivery_notes', c, d));
       console.log('[MIGRATION 1.26.1] Empresas, representantes y snapshots habilitados');
     }
@@ -1287,6 +1290,29 @@ const MIGRATIONS = [
     run(db) {
       ensureSaleCorrectionsSchema(db);
       console.log('[MIGRATION 1.30.0-product-corrections] Corrección de productos habilitada');
+    }
+  },
+  {
+    version: '1.32.1-payment-allocations',
+    description: 'Distribución de un recibo de abono entre múltiples facturas',
+    run(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS payment_allocations (
+          id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+          payment_id             INTEGER NOT NULL REFERENCES payments(id),
+          sale_id                INTEGER NOT NULL REFERENCES sales(id),
+          amount                 REAL NOT NULL CHECK(amount > 0),
+          invoice_balance_before REAL NOT NULL DEFAULT 0,
+          invoice_balance_after  REAL NOT NULL DEFAULT 0,
+          created_at             TEXT DEFAULT (datetime('now','localtime')),
+          UNIQUE(payment_id, sale_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_payment_allocations_payment
+          ON payment_allocations(payment_id);
+        CREATE INDEX IF NOT EXISTS idx_payment_allocations_sale
+          ON payment_allocations(sale_id);
+      `);
+      console.log('[MIGRATION 1.32.1-payment-allocations] Abonos multi-factura habilitados');
     }
   },
 ];

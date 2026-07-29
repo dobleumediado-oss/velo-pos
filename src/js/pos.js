@@ -2087,13 +2087,29 @@ function openCobroModal(inv) {
 
     <!-- Crédito -->
     <div id="cbr-cred" style="display:${!isQuote && inv.pmeth==='credito' ? 'block' : 'none'}">
-      <div class="alrt a">
+      <div class="alrt a" style="margin-bottom:10px">
         <div class="alrt-dot a"></div>
         <div>
           <div class="alrt-title">Venta a crédito</div>
-          <div class="alrt-sub">El saldo se agregará al balance del cliente.</div>
+          <div class="alrt-sub">Requiere un cliente registrado. El pago inicial entra a Caja como un abono de esta factura.</div>
         </div>
       </div>
+      <div class="fg">
+        <label class="lbl">Pago inicial recibido (RD$) <span style="font-weight:400;color:var(--muted)">(opcional)</span></label>
+        <div class="inp-ic">
+          <div class="ic">${svg('dollar')}</div>
+          <input class="inp" id="cbr-initial-payment" type="number" min="0" max="${total.toFixed(2)}" step="0.01"
+                 value="${Number(inv.initialPaymentAmount || 0).toFixed(2)}"
+                 oninput="cbrCalcInitial()"/>
+        </div>
+        <div id="cbr-credit-balance" style="font-size:12px;color:var(--muted);margin-top:5px"></div>
+      </div>
+    </div>
+
+    <div class="fg" style="margin-top:10px">
+      <label class="lbl">Notas de la venta <span style="font-weight:400;color:var(--muted)">(opcional)</span></label>
+      <textarea class="inp" id="cbr-notes" rows="2" maxlength="1000"
+                placeholder="Observaciones que deben quedar guardadas e imprimirse en la factura">${posEscHtml(inv.notes || '')}</textarea>
     </div>
 
     <div class="card" style="background:var(--surface2);margin-top:10px">
@@ -2136,6 +2152,7 @@ function openCobroModal(inv) {
   setTimeout(() => {
     const pmeth = document.getElementById('cbr-pmeth')?.value;
     if (!pmeth || pmeth === 'efectivo') cbrCalcCambio(total);
+    if (pmeth === 'credito') cbrCalcInitial(total);
     cbrUpdatePaymentCurrency();
   }, 50);
 
@@ -2286,6 +2303,15 @@ function cbrTogglePago(val) {
   if (cardWrap) cardWrap.style.display = val === 'tarjeta' ? 'block' : 'none';
   const transferRef = document.getElementById('cbr-transfer-ref-wrap');
   if (transferRef) transferRef.style.display = val === 'transferencia' ? 'block' : 'none';
+  if (val === 'credito') {
+    const received = Number(document.getElementById('cbr-received')?.value || 0);
+    const total = calcTotals(currentInv()).total;
+    const initial = document.getElementById('cbr-initial-payment');
+    if (initial && received > 0 && received < total - 0.005 && Number(initial.value || 0) <= 0) {
+      initial.value = received.toFixed(2);
+    }
+    cbrCalcInitial(total);
+  }
   cbrUpdatePaymentCurrency();
 }
 
@@ -2325,6 +2351,32 @@ function cbrCalcCambio(total = calcTotals(currentInv()).total) {
     ? `Cambio: ${fmt(cambio)}`
     : `Faltan: ${fmt(Math.abs(cambio))}`;
   el.style.color = cambio >= 0 ? 'var(--green)' : 'var(--red)';
+  clearTimeout(window._cbrAutoCreditTimer);
+  if (rec > 0 && rec < total - 0.005) {
+    window._cbrAutoCreditTimer = setTimeout(() => {
+      const method = document.getElementById('cbr-pmeth');
+      if (!method || method.value !== 'efectivo') return;
+      const currentReceived = Number(document.getElementById('cbr-received')?.value || 0);
+      if (!(currentReceived > 0 && currentReceived < total - 0.005)) return;
+      method.value = 'credito';
+      const initial = document.getElementById('cbr-initial-payment');
+      if (initial) initial.value = currentReceived.toFixed(2);
+      currentInv().initialPaymentAmount = currentReceived;
+      cbrTogglePago('credito');
+      toast(`Pago parcial detectado: ${fmt(currentReceived)} inicial y ${fmt(total - currentReceived)} a crédito`, 'ok');
+    }, 450);
+  }
+}
+
+function cbrCalcInitial(total = calcTotals(currentInv()).total) {
+  const input = document.getElementById('cbr-initial-payment');
+  const paid = Math.max(0, Number(input?.value || 0));
+  const pending = Math.max(0, total - paid);
+  currentInv().initialPaymentAmount = paid;
+  const el = document.getElementById('cbr-credit-balance');
+  if (el) {
+    el.innerHTML = `Pago inicial: <strong>${fmt(paid)}</strong> · Quedará a crédito: <strong style="color:var(--amber)">${fmt(pending)}</strong>`;
+  }
 }
 
 function cbrRefreshTotals(oldTotal = null) {
@@ -2560,6 +2612,9 @@ async function finalizarVenta() {
       ? document.getElementById('cbr-transfer-ref')?.value?.trim() || '' : '');
   const btnConfirmar = document.getElementById('btn-confirmar-venta');
   const salespersonId = parseInt(document.getElementById('cbr-salesperson')?.value) || null;
+  const initialPaymentAmount = pmeth === 'credito'
+    ? Number(document.getElementById('cbr-initial-payment')?.value || 0) : 0;
+  const saleNotes = document.getElementById('cbr-notes')?.value?.trim() || '';
 
   // Transferencia sí requiere cuenta; tarjeta requiere la marca utilizada por el
   // cliente y el backend resuelve internamente la cuenta de liquidación.
@@ -2590,6 +2645,8 @@ async function finalizarVenta() {
   inv.cardLast4 = cardLast4;
   inv.paymentReference = paymentReference;
   inv.salespersonId = salespersonId;
+  inv.initialPaymentAmount = initialPaymentAmount;
+  inv.notes = saleNotes;
 
   inv.pmeth = pmeth;
   inv.cliName = cliName;
@@ -2603,6 +2660,18 @@ async function finalizarVenta() {
   inv.printType = chosenPrintType;
 
   if (!inv.cart.length) return;
+
+  const currentTotal = calcTotals(inv).total;
+  if (!isQuote && pmeth === 'credito') {
+    if (!(inv.cliId && inv.cliId !== 1)) {
+      toast('Selecciona un cliente registrado para realizar una venta a crédito', 'w');
+      return;
+    }
+    if (initialPaymentAmount < 0 || initialPaymentAmount >= currentTotal - 0.005) {
+      toast('El pago inicial debe ser menor que el total; si paga todo usa una venta al contado', 'w');
+      return;
+    }
+  }
 
   // Validar pago mixto: los montos deben sumar el total
   if (!isQuote && pmeth === 'mixto') {
@@ -2703,6 +2772,9 @@ async function finalizarVenta() {
       saleDate,
       printTemplateId: inv.printTemplateId || '',
       printPrinterType: inv.printType || '',
+      initialPaymentAmount,
+      initialPaymentMethod: 'efectivo',
+      notes: saleNotes,
     },
     type: inv.itype || 'factura',
     session: cajaSession,
@@ -2741,7 +2813,11 @@ async function finalizarVenta() {
         : `✓ Venta ${savedDocumentLabel} registrada — ${fmt(result.total)}`));
 
 	    // Recargar datos actualizados desde SQLite
-	    await Promise.all([reloadProducts(), reloadCustomers()]);
+	    await Promise.all([
+	      reloadProducts(),
+	      reloadCustomers(),
+	      typeof reloadPayments === 'function' ? reloadPayments() : Promise.resolve(),
+	    ]);
 	    await reloadSales({ range: 'today' });
 	    if (inv.checkoutOrderId && typeof preventaHandleSync === 'function') {
 	      await preventaHandleSync();
@@ -2829,6 +2905,7 @@ async function finalizarVenta() {
       payment_reference: result.paymentReference || paymentReference,
       salesperson_id: result.salespersonId || salespersonId,
       salesperson_name: (DB.salespeople||[]).find(s=>Number(s.id)===Number(result.salespersonId||salespersonId))?.name || '',
+      notes: savedSale?.notes || saleNotes,
     };
 
     // Conduce opcional: se crea AHORA (queda guardado en Conduces con su número
@@ -2863,8 +2940,8 @@ async function finalizarVenta() {
       customer_phone_type: savedSale?.customer_phone_type || customer.phone_type || 'telefono',
       customer_email:   savedSale?.customer_email || customer.email || '',
       payment_method:  pmeth,
-      payment_amount:  (pmeth === 'credito' || isQuote) ? 0 : result.total,
-      balance_after_payment: pmeth === 'credito' ? result.total : 0,
+      payment_amount:  isQuote ? 0 : (pmeth === 'credito' ? result.initialPaymentAmount : result.total),
+      balance_after_payment: pmeth === 'credito' ? result.outstandingBalance : 0,
       transaction_number: result.documentNumberFmt || result.saleId,
       mix_efec:        mixEfec,
       mix_card:        mixCard,
@@ -3026,7 +3103,8 @@ function _posSendWhatsAppPDF(sale) {
   };
   enviarDocumentoPDFWhatsApp(
     () => printReceipt(payload, true),
-    `${sale.type === 'cotizacion' ? 'Cotizacion' : 'Factura'}-${label.replace(/^#/, '')}`,
+    clientDocumentFilename(sale.clientName || sale.customer_name, label,
+      sale.type === 'cotizacion' ? 'Cotizacion' : 'Factura'),
     { message, phone, clientName: sale.clientName || 'cliente' }
   );
 }

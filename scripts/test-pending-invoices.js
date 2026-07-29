@@ -68,6 +68,34 @@ ok(near(legacyImported.facturas.find(f => f.id === 10)?.pendiente, 40)
   'usa únicamente los cobros históricos enlazados para la compatibilidad');
 db.close();
 
+const linkedDb = new Database(':memory:');
+linkedDb.exec(`
+  CREATE TABLE customers(id INTEGER PRIMARY KEY, balance REAL);
+  CREATE TABLE sales(
+    id INTEGER PRIMARY KEY, customer_id INTEGER, total REAL, subtotal REAL,
+    tax_amt REAL, discount_amt REAL, created_at TEXT, notes TEXT, ncf TEXT,
+    status TEXT, numero_factura INTEGER, numero_factura_fmt TEXT,
+    source_balance REAL, import_source TEXT, payment_method TEXT, type TEXT
+  );
+  CREATE TABLE payments(
+    id INTEGER PRIMARY KEY, sale_id INTEGER, amount REAL,
+    import_source TEXT, cajero TEXT
+  );
+  INSERT INTO customers VALUES(1, 120);
+  INSERT INTO sales VALUES
+    (20,1,500,500,0,0,'2024-01-01','','','completed',20,'00000020',100,'equiparts_bak','credito','factura'),
+    (21,1,100,100,0,0,'2026-01-01','','','completed',21,'00000021',NULL,'','credito','factura');
+  INSERT INTO payments VALUES
+    (1,20,20,'','Cajero'),
+    (2,21,60,'','Cajero');
+`);
+const linked = getPendingInvoices(linkedDb, 1);
+ok(near(linked.facturas.find(f => f.id === 20)?.pendiente, 80),
+  'resta de source_balance los abonos posteriores a la migración');
+ok(near(linked.facturas.find(f => f.id === 21)?.pendiente, 40),
+  'resta de una factura nativa únicamente sus pagos vinculados');
+linkedDb.close();
+
 const partial = allocatePendingInvoices([
   { id: 1, total: 100 },
   { id: 2, total: 200 },

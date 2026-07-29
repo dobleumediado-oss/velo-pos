@@ -24,11 +24,14 @@ let _bcState = {
 // etiquetas salían sin código de barras en todos los formatos.
 function _loadJsBarcode() {
   return new Promise((res) => {
-    if (window.JsBarcode) { res(); return; }
+    if (window.JsBarcode) { res(true); return; }
     const s = document.createElement('script');
     s.src = 'vendor/jsbarcode/JsBarcode.all.min.js';
-    s.onload = res;
-    s.onerror = () => { console.error('[Etiquetas] No se pudo cargar JsBarcode local'); res(); };
+    s.onload = () => res(!!window.JsBarcode);
+    s.onerror = () => {
+      console.error('[Etiquetas] No se pudo cargar JsBarcode local');
+      res(false);
+    };
     document.head.appendChild(s);
   });
 }
@@ -90,7 +93,14 @@ async function renderBarcode(el) {
     routeTo('dash'); return;
   }
 
-  await _loadJsBarcode();
+  const barcodeReady = await _loadJsBarcode();
+  if (!barcodeReady) {
+    el.innerHTML = `<div class="alrt r"><div class="alrt-dot r"></div><div>
+      <div class="alrt-title">No se pudo cargar el generador de códigos de barras</div>
+      <div class="alrt-sub">Reinicia Velo. La impresión fue detenida para evitar etiquetas en blanco.</div>
+    </div></div>`;
+    return;
+  }
 
   // Cargar diseño guardado
   const settings    = await window.api.settings.getAll();
@@ -636,7 +646,7 @@ function _bcBuildLabelsHTML(items) {
   // Altura de página = alto de etiqueta + separación (SIN sumarle el margen):
   // el margen se aplica solo como inset horizontal (padding L/R) para no crecer
   // la página verticalmente y evitar deriva entre etiquetas.
-  const rowH = lh + gap;
+  const rowH = layout.rowHeightMm || (lh + gap);
   const styles = `
     <style>
       @page { size:${layout.mediaWidthMm}mm ${fixedRows ? rowH + 'mm' : 'auto'}; margin:0; }
@@ -724,9 +734,22 @@ async function _bcPrint() {
     product: DB.products.find(p => p.id == id),
     qty: _bcState.selected[id] || 1
   })).filter(i => i.product);
+  if (!items.length) {
+    toast('Los productos seleccionados ya no están disponibles', 'err');
+    return;
+  }
+  if (!window.JsBarcode && !(await _loadJsBarcode())) {
+    toast('No se pudo generar el código de barras. No se enviaron etiquetas en blanco.', 'err');
+    return;
+  }
 
   const total = items.reduce((s, i) => s + i.qty, 0);
   const html  = _bcBuildLabelsHTML(items);
+  const renderedCodes = (html.match(/<svg\b/g) || []).length;
+  if (!html || !html.includes('class="vp-label"') || renderedCodes < total) {
+    toast(`No se generaron todos los códigos (${renderedCodes}/${total}). Revisa el formato y los códigos de producto.`, 'err');
+    return;
+  }
   const d     = _bcEffectiveDesign();
   const profile = _bcPrinterProfile();
   const layout = typeof calculateLabelLayout === 'function'
@@ -734,12 +757,20 @@ async function _bcPrint() {
     : { mediaWidthMm: profile.widthMm || d.labelW || 50, rowHeightMm: (d.labelH || 25) + (d.gapMm || 2) };
 
   try {
+    const selectedInstalled = !_bcState.selPrinter ||
+      _bcState.printers.some(printer => printer.name === _bcState.selPrinter);
+    if (!selectedInstalled) {
+      toast('La impresora guardada ya no está instalada. Se abrirá el selector del sistema.', 'w');
+      _bcState.selPrinter = '';
+      await window.api.settings.set({ key: 'barcode_printer', value: '' }).catch(() => {});
+    }
     const result = await printLabelBatch({
       html,
       printerName:  _bcState.selPrinter || '',
       widthMm: layout.mediaWidthMm,
       heightMm: _bcState.mediaMode === 'continuous' ? null : layout.rowHeightMm,
       userId: user?.id,
+      referenceId: Math.floor(Date.now() / 1000),
     });
     if (result?.ok !== false) {
       toast(`✓ ${total} etiqueta(s) enviadas a imprimir`, 'ok');
@@ -748,10 +779,10 @@ async function _bcPrint() {
         entityId: null, detail: `${total} etiquetas (${items.length} productos)`,
         userId: user?.id }).catch(() => {});
     } else {
-      toast('Error al imprimir: ' + (result?.error || 'desconocido'), 'e');
+      toast('Error al imprimir: ' + (result?.error || 'desconocido'), 'err');
     }
   } catch (e) {
-    toast('Error de impresión: ' + e.message, 'e');
+    toast('Error de impresión: ' + e.message, 'err');
   }
 }
 
