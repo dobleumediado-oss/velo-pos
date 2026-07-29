@@ -16,7 +16,77 @@ let _bcState = {
   mediaWidthMm: 100,
   printerDpi: 203,
   mediaMode: 'gap',
+  calibrations: {},
+  detection: null,
 };
+
+function _bcCalibrationKey(printerName) {
+  return String(printerName || '__system_default__').trim().toLowerCase();
+}
+
+function _bcParseCalibrations(raw) {
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw || '{}') : raw;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function _bcSelectedPrinterInfo(name = _bcState.selPrinter) {
+  return (_bcState.printers || []).find(p => p.name === name) ||
+    (name ? { name, displayName: name, description: '', isDefault: false, status: 0 } : null);
+}
+
+function _bcDetectPrinter(name = _bcState.selPrinter) {
+  const info = _bcSelectedPrinterInfo(name);
+  const settings = {
+    barcode_printer_profile: _bcState.profileId,
+    barcode_media_width_mm: _bcState.mediaWidthMm,
+    barcode_printer_dpi: _bcState.printerDpi,
+  };
+  if (typeof detectLabelPrinter === 'function') {
+    return detectLabelPrinter(info || '', settings);
+  }
+  const profile = _bcPrinterProfile();
+  return {
+    ...profile,
+    printerName: name || '',
+    displayName: name || 'Impresora del sistema',
+    confidence: 'low',
+    reason: 'Confirma las medidas con una prueba',
+    isDefault: info?.isDefault === true,
+    status: Number(info?.status) || 0,
+  };
+}
+
+function _bcCurrentCalibration(printerName = _bcState.selPrinter) {
+  return _bcState.calibrations?.[_bcCalibrationKey(printerName)] || null;
+}
+
+function _bcSyncMediaControls() {
+  const printer = document.getElementById('bc-printer-sel');
+  const profile = document.getElementById('bc-profile');
+  const width = document.getElementById('bc-media-width');
+  const dpi = document.getElementById('bc-dpi');
+  const mode = document.getElementById('bc-media-mode');
+  if (printer) printer.value = _bcState.selPrinter || '';
+  if (profile) profile.value = _bcState.profileId || '';
+  if (width) width.value = String(_bcState.mediaWidthMm);
+  if (dpi) dpi.value = String(_bcState.printerDpi);
+  if (mode) mode.value = _bcState.mediaMode || 'gap';
+}
+
+function _bcApplySavedCalibration(printerName = _bcState.selPrinter) {
+  const saved = _bcCurrentCalibration(printerName);
+  if (!saved) return false;
+  _bcState.profileId = saved.profileId || _bcState.profileId || '';
+  _bcState.mediaWidthMm = Number(saved.widthMm) || _bcState.mediaWidthMm;
+  _bcState.printerDpi = Number(saved.dpi) || _bcState.printerDpi;
+  _bcState.mediaMode = saved.mediaMode || _bcState.mediaMode || 'gap';
+  _bcSyncMediaControls();
+  return true;
+}
 
 // ── Cargar JsBarcode una sola vez ─────────────
 // SIEMPRE local (vendorizado en src/vendor): el CDN estaba bloqueado por el CSP
@@ -107,6 +177,7 @@ async function renderBarcode(el) {
   const rawDesign   = settings?.barcode_design;
   _bcState.design   = rawDesign ? JSON.parse(rawDesign) : _bcDefaultDesign();
   _bcState.selected = {};
+  _bcState.calibrations = _bcParseCalibrations(settings?.barcode_calibrations);
 
   // Impresoras disponibles
   // getPrinters retorna el array directamente (no { ok, data })
@@ -120,14 +191,13 @@ async function renderBarcode(el) {
     (settings?.barcode_paper_72mm === '1' ? 72 : 100);
   _bcState.printerDpi = Number(settings?.barcode_printer_dpi) || 203;
   _bcState.mediaMode = settings?.barcode_media_mode || 'gap';
-  if (!_bcState.profileId && typeof resolvePrinterProfile === 'function') {
-    const detected = resolvePrinterProfile(_bcState.selPrinter, 'barcode', {
-      barcode_media_width_mm: _bcState.mediaWidthMm,
-      barcode_printer_dpi: _bcState.printerDpi,
-    });
-    if (detected.id === 'label_2connect_108') {
-      _bcState.mediaWidthMm = detected.widthMm;
-      _bcState.printerDpi = detected.dpi;
+  const hasSavedCalibration = _bcApplySavedCalibration();
+  _bcState.detection = _bcDetectPrinter();
+  if (!hasSavedCalibration) {
+    if (!_bcState.profileId && _bcState.detection?.id === 'label_2connect_108') {
+      _bcState.profileId = _bcState.detection.id;
+      _bcState.mediaWidthMm = _bcState.detection.widthMm;
+      _bcState.printerDpi = _bcState.detection.dpi;
     }
   }
 
@@ -209,8 +279,18 @@ async function renderBarcode(el) {
 
   // Card impresora
   const prCard = h('div', { class: 'card' });
+  const detectedNow = _bcState.detection || _bcDetectPrinter();
+  const detectionTone = detectedNow.confidence === 'high' ? 'var(--green)'
+    : detectedNow.confidence === 'medium' ? 'var(--blue)' : 'var(--orange)';
+  const detectionLabel = detectedNow.confidence === 'high' ? 'Modelo reconocido'
+    : detectedNow.confidence === 'medium' ? 'Familia reconocida' : 'Requiere prueba';
   prCard.innerHTML = `
-    <div class="card-title mb8">Impresora de Etiquetas</div>
+    <div class="fxb mb8">
+      <div class="card-title">Impresora de Etiquetas</div>
+      <button class="btn btn-out btn-sm" onclick="_bcOpenCalibrationWizard()">
+        ${svg('settings')} Detectar y calibrar
+      </button>
+    </div>
     <div class="fg">
       <label class="lbl">Seleccionar impresora</label>
       <select class="inp" id="bc-printer-sel" onchange="bcSavePrinter(this.value)">
@@ -222,6 +302,13 @@ async function renderBarcode(el) {
       </select>
     </div>
     <div id="bc-printer-badge" style="margin-top:4px"></div>
+    <div id="bc-detection-summary" style="margin-top:8px;padding:8px 10px;border:1px solid var(--line);
+         border-left:3px solid ${detectionTone};border-radius:7px;background:var(--surface2);
+         font-size:11px;line-height:1.45;color:var(--muted2)">
+      <div style="font-weight:700;color:var(--ink3)">${detectionLabel} · ${detectedNow.widthMm} mm · ${detectedNow.dpi} DPI</div>
+      <div>${_bcEsc(detectedNow.reason || '')}</div>
+      ${_bcCurrentCalibration() ? '<div style="color:var(--green);font-weight:700">✓ Calibración guardada para esta impresora</div>' : ''}
+    </div>
     <div class="fg" style="margin-top:12px">
       <label class="lbl">Perfil del medio</label>
       <select class="inp" id="bc-profile" onchange="bcSetPrinterProfile(this.value)">
@@ -449,8 +536,22 @@ function _bcUpdateSummary() {
 // ── Impresora ─────────────────────────────────
 async function bcSavePrinter(name) {
   _bcState.selPrinter = name;
-  await window.api.settings.set({ key: 'barcode_printer', value: name }).catch(() => {});
+  const hasSaved = _bcApplySavedCalibration(name);
+  _bcState.detection = _bcDetectPrinter(name);
+  if (!hasSaved && _bcState.detection?.confidence === 'high') {
+    _bcState.profileId = _bcState.detection.id;
+    _bcState.mediaWidthMm = _bcState.detection.widthMm;
+    _bcState.printerDpi = _bcState.detection.dpi;
+  }
+  _bcSyncMediaControls();
+  await Promise.all([
+    window.api.settings.set({ key: 'barcode_printer', value: name, requestUserId: user?.id }),
+    window.api.settings.set({ key: 'barcode_printer_profile', value: _bcState.profileId || '', requestUserId: user?.id }),
+    window.api.settings.set({ key: 'barcode_media_width_mm', value: String(_bcState.mediaWidthMm), requestUserId: user?.id }),
+    window.api.settings.set({ key: 'barcode_printer_dpi', value: String(_bcState.printerDpi), requestUserId: user?.id }),
+  ]).catch(() => {});
   _bcUpdatePrinterBadge();
+  _bcRenderDetectionSummary();
 }
 
 // ── Tipo de etiqueta y papel térmico ──────────
@@ -478,6 +579,14 @@ async function bcSaveMediaConfig() {
   _bcState.printerDpi = Math.min(1200, Math.max(100,
     Number(document.getElementById('bc-dpi')?.value) || _bcState.printerDpi || 203));
   _bcState.mediaMode = document.getElementById('bc-media-mode')?.value || _bcState.mediaMode || 'gap';
+  const calibration = _bcCurrentCalibration();
+  if (calibration) {
+    calibration.profileId = _bcState.profileId || calibration.profileId;
+    calibration.widthMm = _bcState.mediaWidthMm;
+    calibration.dpi = _bcState.printerDpi;
+    calibration.mediaMode = _bcState.mediaMode;
+    calibration.updatedAt = new Date().toISOString();
+  }
   // El ancho de la etiqueta es una sola fuente de verdad: al cambiarlo aquí,
   // también se guarda en el diseño para que el diseñador (y su preview) queden
   // sincronizados con lo que realmente se imprime.
@@ -487,11 +596,21 @@ async function bcSaveMediaConfig() {
     window.api.settings.set({ key: 'barcode_printer_dpi', value: String(_bcState.printerDpi) }),
     window.api.settings.set({ key: 'barcode_media_mode', value: _bcState.mediaMode }),
   ];
+  if (calibration) {
+    saves.push(window.api.settings.set({
+      key: 'barcode_calibrations',
+      value: JSON.stringify(_bcState.calibrations),
+      requestUserId: user?.id,
+    }));
+  }
   if (_bcState.design && typeof _bcState.design === 'object') {
     _bcState.design.labelW = _bcState.mediaWidthMm;
     saves.push(window.api.settings.set({ key: 'barcode_design', value: JSON.stringify(_bcState.design) }));
   }
   await Promise.all(saves).catch(() => {});
+  _bcState.detection = _bcDetectPrinter();
+  _bcUpdatePrinterBadge();
+  _bcRenderDetectionSummary();
 }
 
 // Diseño EFECTIVO para generar/imprimir: aplica el tipo de etiqueta elegido
@@ -499,6 +618,13 @@ async function bcSaveMediaConfig() {
 // 'personalizado' respeta el diseño tal cual lo configuró el panel.
 function _bcEffectiveDesign() {
   const d = { ...(_bcState.design || _bcDefaultDesign()) };
+  const calibration = _bcCurrentCalibration();
+  if (calibration) {
+    d.labelH = Number(calibration.labelHeightMm) || d.labelH;
+    d.gapMm = Number.isFinite(Number(calibration.gapMm)) ? Number(calibration.gapMm) : d.gapMm;
+    d.offsetXmm = Number(calibration.offsetXmm) || 0;
+    d.offsetYmm = Number(calibration.offsetYmm) || 0;
+  }
   const t = _bcState.labelType || 'interno';
   if (t === 'interno')   Object.assign(d, { showName: true, showCode: true, showPrice: true,  showBarcode: true });
   if (t === 'proveedor') Object.assign(d, { showName: true, showCode: true, showPrice: false, showBarcode: true });
@@ -538,7 +664,23 @@ function _bcUpdatePrinterBadge() {
       <div class="badge g">${svg('check')} ${p}</div>
       ${tipo ? `<div class="badge b">${tipo}</div>` : ''}
       <div class="badge n">${profile.widthMm}mm · ${profile.dpi}dpi</div>
+      ${_bcCurrentCalibration() ? '<div class="badge g">Calibrada</div>' : ''}
     </div>`;
+}
+
+function _bcRenderDetectionSummary() {
+  const box = document.getElementById('bc-detection-summary');
+  if (!box) return;
+  const detected = _bcState.detection || _bcDetectPrinter();
+  const tone = detected.confidence === 'high' ? 'var(--green)'
+    : detected.confidence === 'medium' ? 'var(--blue)' : 'var(--orange)';
+  const label = detected.confidence === 'high' ? 'Modelo reconocido'
+    : detected.confidence === 'medium' ? 'Familia reconocida' : 'Requiere prueba';
+  box.style.borderLeftColor = tone;
+  box.innerHTML = `
+    <div style="font-weight:700;color:var(--ink3)">${label} · ${detected.widthMm} mm · ${detected.dpi} DPI</div>
+    <div>${_bcEsc(detected.reason || '')}</div>
+    ${_bcCurrentCalibration() ? '<div style="color:var(--green);font-weight:700">✓ Calibración guardada para esta impresora</div>' : ''}`;
 }
 
 function _bcLabelType(name) {
@@ -555,6 +697,325 @@ function _bcLabelType(name) {
   if (/godex/.test(n))        return 'Godex';
   if (/argox/.test(n))        return 'Argox';
   return '';
+}
+
+// ══════════════════════════════════════════════
+// ASISTENTE DE DETECCIÓN Y CALIBRACIÓN
+// ══════════════════════════════════════════════
+function _bcOpenCalibrationWizard() {
+  const detected = _bcDetectPrinter();
+  const saved = _bcCurrentCalibration();
+  const d = _bcState.design || _bcDefaultDesign();
+  window._bcCalWizard = {
+    printerName: _bcState.selPrinter || '',
+    detected,
+    profileId: saved?.profileId || _bcState.profileId || detected.id || 'label_generic',
+    widthMm: Number(saved?.widthMm) || Number(_bcState.mediaWidthMm) || detected.widthMm || 50,
+    labelHeightMm: Number(saved?.labelHeightMm) || Number(d.labelH) || 25,
+    gapMm: Number.isFinite(Number(saved?.gapMm)) ? Number(saved.gapMm) : (Number(d.gapMm) || 0),
+    dpi: Number(saved?.dpi) || Number(_bcState.printerDpi) || detected.dpi || 203,
+    mediaMode: saved?.mediaMode || _bcState.mediaMode || 'gap',
+    offsetXmm: saved && Number.isFinite(Number(saved.offsetXmm))
+      ? Number(saved.offsetXmm) : (Number(d.offsetXmm) || 0),
+    offsetYmm: saved && Number.isFinite(Number(saved.offsetYmm))
+      ? Number(saved.offsetYmm) : (Number(d.offsetYmm) || 0),
+  };
+
+  const confidenceText = detected.confidence === 'high' ? 'Alta'
+    : detected.confidence === 'medium' ? 'Media' : 'Por confirmar';
+  const confidenceColor = detected.confidence === 'high' ? 'var(--green)'
+    : detected.confidence === 'medium' ? 'var(--blue)' : 'var(--orange)';
+  const printerTitle = detected.displayName || detected.printerName || 'Impresora predeterminada del sistema';
+
+  openModal(`
+    <div class="modal-title">Detectar y calibrar impresora de etiquetas</div>
+    <div class="modal-sub">Una prueba corta guarda las medidas y la posición únicamente para esta impresora.</div>
+
+    <div style="display:grid;grid-template-columns:minmax(0,1.15fr) minmax(280px,.85fr);gap:14px;margin-top:14px">
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div style="border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--surface2)">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
+            <div>
+              <div style="font-size:11px;color:var(--muted2);font-weight:700;text-transform:uppercase">1 · Detección</div>
+              <div style="font-size:13px;font-weight:700;color:var(--ink);margin-top:3px">${_bcEsc(printerTitle)}</div>
+              <div style="font-size:11px;color:var(--muted2);margin-top:3px">${_bcEsc(detected.reason || '')}</div>
+            </div>
+            <div class="badge ${detected.confidence === 'high' ? 'g' : detected.confidence === 'medium' ? 'b' : 'o'}">
+              Confianza ${confidenceText.toLowerCase()}
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:9px;font-size:11px">
+            <span class="badge n">${detected.label || detected.id}</span>
+            <span class="badge n">${detected.widthMm} mm</span>
+            <span class="badge n">${detected.dpi} DPI</span>
+            ${detected.isDefault ? '<span class="badge g">Predeterminada</span>' : ''}
+          </div>
+          ${detected.confidence !== 'low' ? `
+            <button class="btn btn-out btn-sm" style="margin-top:9px" onclick="_bcCalUseDetected()">
+              Usar valores detectados
+            </button>` : `
+            <div style="font-size:10.5px;color:${confidenceColor};margin-top:8px">
+              El controlador no informa el tamaño físico. Confírmalo con la etiqueta de prueba.
+            </div>`}
+        </div>
+
+        <div style="border:1px solid var(--line);border-radius:10px;padding:12px">
+          <div style="font-size:11px;color:var(--muted2);font-weight:700;text-transform:uppercase;margin-bottom:9px">2 · Medidas del rollo</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:9px">
+            <div class="fg" style="margin:0">
+              <label class="lbl">Ancho (mm)</label>
+              <input class="inp" id="bc-cal-width" type="number" min="20" max="150" step="0.1"
+                     value="${window._bcCalWizard.widthMm}" oninput="_bcCalRender()">
+            </div>
+            <div class="fg" style="margin:0">
+              <label class="lbl">Alto (mm)</label>
+              <input class="inp" id="bc-cal-height" type="number" min="8" max="300" step="0.5"
+                     value="${window._bcCalWizard.labelHeightMm}" oninput="_bcCalRender()">
+            </div>
+            <div class="fg" style="margin:0">
+              <label class="lbl">Separación (mm)</label>
+              <input class="inp" id="bc-cal-gap" type="number" min="0" max="30" step="0.5"
+                     value="${window._bcCalWizard.gapMm}" oninput="_bcCalRender()">
+            </div>
+            <div class="fg" style="margin:0">
+              <label class="lbl">Resolución</label>
+              <select class="inp" id="bc-cal-dpi" onchange="_bcCalRender()">
+                ${[203,300,600].map(v => `<option value="${v}" ${Number(window._bcCalWizard.dpi)===v?'selected':''}>${v} DPI</option>`).join('')}
+              </select>
+            </div>
+            <div class="fg" style="margin:0;grid-column:span 2">
+              <label class="lbl">Sensor / avance</label>
+              <select class="inp" id="bc-cal-mode" onchange="_bcCalRender()">
+                <option value="gap" ${window._bcCalWizard.mediaMode==='gap'?'selected':''}>Espacio entre etiquetas</option>
+                <option value="mark" ${window._bcCalWizard.mediaMode==='mark'?'selected':''}>Marca negra</option>
+                <option value="continuous" ${window._bcCalWizard.mediaMode==='continuous'?'selected':''}>Rollo continuo</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div style="border:1px solid var(--line);border-radius:10px;padding:12px">
+          <div style="font-size:11px;color:var(--muted2);font-weight:700;text-transform:uppercase">3 · Centrar contenido</div>
+          <div style="font-size:11px;color:var(--muted2);margin:4px 0 10px">Imprime la prueba. Después mueve el contenido en la dirección que necesite el papel.</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div>
+              <label class="lbl">Horizontal X</label>
+              <div style="display:flex;gap:4px;align-items:center">
+                <button class="btn btn-out btn-sm" onclick="_bcCalAdjust('x',-0.5)">←</button>
+                <input class="inp" id="bc-cal-x" type="number" min="-30" max="30" step="0.5"
+                       value="${window._bcCalWizard.offsetXmm}" oninput="_bcCalRender()" style="text-align:center">
+                <button class="btn btn-out btn-sm" onclick="_bcCalAdjust('x',0.5)">→</button>
+              </div>
+            </div>
+            <div>
+              <label class="lbl">Vertical Y</label>
+              <div style="display:flex;gap:4px;align-items:center">
+                <button class="btn btn-out btn-sm" onclick="_bcCalAdjust('y',-0.5)">↑</button>
+                <input class="inp" id="bc-cal-y" type="number" min="-30" max="30" step="0.5"
+                       value="${window._bcCalWizard.offsetYmm}" oninput="_bcCalRender()" style="text-align:center">
+                <button class="btn btn-out btn-sm" onclick="_bcCalAdjust('y',0.5)">↓</button>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:9px">
+            <button class="btn btn-out btn-sm" onclick="_bcCalResetPosition()">Centrar en 0,0</button>
+            <button class="btn btn-dark btn-sm" onclick="_bcCalPrintTest()">${svg('print')} Imprimir prueba</button>
+          </div>
+          <div id="bc-cal-result" style="font-size:11px;color:var(--muted2);margin-top:8px">
+            La prueba debe mostrar marco, cuatro esquinas, cruz central y medidas.
+          </div>
+        </div>
+      </div>
+
+      <div style="border:1px solid var(--line);border-radius:10px;padding:12px;display:flex;flex-direction:column">
+        <div style="font-size:11px;color:var(--muted2);font-weight:700;text-transform:uppercase">Vista de calibración</div>
+        <div id="bc-cal-sheet" style="margin-top:10px;flex:1;min-height:260px;background:#e5e7eb;border-radius:8px;
+             display:flex;align-items:flex-start;justify-content:center;padding:18px;overflow:hidden">
+          <div id="bc-cal-preview" style="position:relative;background:#fff;border:2px solid #111;box-sizing:border-box">
+            <div style="position:absolute;left:50%;top:10%;bottom:10%;border-left:1px dashed #111"></div>
+            <div style="position:absolute;top:50%;left:8%;right:8%;border-top:1px dashed #111"></div>
+            <div style="position:absolute;left:50%;top:50%;width:6px;height:6px;margin:-3px;border-radius:50%;background:#111"></div>
+            <div style="position:absolute;left:0;right:0;top:10px;text-align:center;font-size:11px;font-weight:700">PRUEBA DE ETIQUETA</div>
+            <div id="bc-cal-preview-meta" style="position:absolute;left:4px;right:4px;bottom:6px;text-align:center;font-size:9px"></div>
+          </div>
+        </div>
+        <div id="bc-cal-page-info" style="font-size:11px;color:var(--muted2);text-align:center;margin-top:8px"></div>
+        <div class="alrt b" style="margin-top:10px">
+          <div class="alrt-dot b"></div>
+          <div>
+            <div class="alrt-title">La detección propone; la prueba confirma</div>
+            <div class="alrt-sub">El controlador puede identificar el modelo, pero no siempre sabe qué rollo está colocado.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-foot" style="margin-top:14px">
+      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-green" onclick="_bcCalSave()">${svg('check')} Guardar calibración</button>
+    </div>
+  `, 'modal-xl');
+  _bcCalRender();
+}
+
+function _bcCalNumber(id, fallback, min, max) {
+  const value = Number(document.getElementById(id)?.value);
+  return Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
+}
+
+function _bcCalRead() {
+  const cal = window._bcCalWizard;
+  if (!cal) return null;
+  cal.widthMm = _bcCalNumber('bc-cal-width', cal.widthMm, 20, 150);
+  cal.labelHeightMm = _bcCalNumber('bc-cal-height', cal.labelHeightMm, 8, 300);
+  cal.gapMm = _bcCalNumber('bc-cal-gap', cal.gapMm, 0, 30);
+  cal.dpi = _bcCalNumber('bc-cal-dpi', cal.dpi, 100, 1200);
+  cal.offsetXmm = _bcCalNumber('bc-cal-x', cal.offsetXmm, -30, 30);
+  cal.offsetYmm = _bcCalNumber('bc-cal-y', cal.offsetYmm, -30, 30);
+  cal.mediaMode = document.getElementById('bc-cal-mode')?.value || cal.mediaMode || 'gap';
+  return cal;
+}
+
+function _bcCalRender() {
+  const cal = _bcCalRead();
+  if (!cal) return;
+  const preview = document.getElementById('bc-cal-preview');
+  const meta = document.getElementById('bc-cal-preview-meta');
+  const info = document.getElementById('bc-cal-page-info');
+  const scale = Math.min(3, 330 / Math.max(20, cal.widthMm));
+  if (preview) {
+    preview.style.width = `${Math.max(100, cal.widthMm * scale)}px`;
+    preview.style.height = `${Math.max(65, cal.labelHeightMm * scale)}px`;
+    preview.style.transform = `translate(${cal.offsetXmm * scale}px, ${cal.offsetYmm * scale}px)`;
+  }
+  if (meta) meta.textContent = `${cal.widthMm}×${cal.labelHeightMm}mm · X ${cal.offsetXmm} / Y ${cal.offsetYmm}`;
+  if (info) {
+    const pageHeight = cal.mediaMode === 'continuous' ? 'automático' : `${cal.labelHeightMm + cal.gapMm} mm`;
+    info.textContent = `Papel: ${cal.widthMm} mm × ${pageHeight} · ${cal.dpi} DPI`;
+  }
+}
+
+function _bcCalAdjust(axis, delta) {
+  const id = axis === 'x' ? 'bc-cal-x' : 'bc-cal-y';
+  const input = document.getElementById(id);
+  if (!input) return;
+  input.value = String(Math.min(30, Math.max(-30, (Number(input.value) || 0) + delta)));
+  _bcCalRender();
+}
+
+function _bcCalResetPosition() {
+  const x = document.getElementById('bc-cal-x');
+  const y = document.getElementById('bc-cal-y');
+  if (x) x.value = '0';
+  if (y) y.value = '0';
+  _bcCalRender();
+}
+
+function _bcCalUseDetected() {
+  const cal = window._bcCalWizard;
+  if (!cal?.detected) return;
+  const width = document.getElementById('bc-cal-width');
+  const dpi = document.getElementById('bc-cal-dpi');
+  if (width) width.value = String(cal.detected.widthMm);
+  if (dpi) dpi.value = String(cal.detected.dpi);
+  cal.profileId = cal.detected.id || cal.profileId;
+  _bcCalRender();
+}
+
+async function _bcCalPrintTest() {
+  const cal = _bcCalRead();
+  const resultBox = document.getElementById('bc-cal-result');
+  if (!cal || typeof printLabelBatch !== 'function' || typeof buildLabelCalibrationHTML !== 'function') {
+    toast('No se pudo preparar la prueba de calibración', 'err');
+    return;
+  }
+  if (cal.printerName && !_bcState.printers.some(p => p.name === cal.printerName)) {
+    toast('La impresora seleccionada ya no está disponible', 'err');
+    return;
+  }
+  const html = buildLabelCalibrationHTML({
+    widthMm: cal.widthMm,
+    labelHeightMm: cal.labelHeightMm,
+    gapMm: cal.gapMm,
+    offsetXmm: cal.offsetXmm,
+    offsetYmm: cal.offsetYmm,
+    printerLabel: cal.detected?.displayName || cal.printerName,
+  });
+  if (resultBox) {
+    resultBox.style.color = 'var(--blue)';
+    resultBox.textContent = 'Enviando prueba…';
+  }
+  try {
+    const result = await printLabelBatch({
+      html,
+      printerName: cal.printerName,
+      widthMm: cal.widthMm,
+      heightMm: cal.mediaMode === 'continuous' ? null : cal.labelHeightMm + cal.gapMm,
+      userId: user?.id,
+      referenceId: Math.floor(Date.now() / 1000),
+    });
+    if (result?.ok === false) throw new Error(result.error || 'La impresora rechazó la prueba');
+    if (resultBox) {
+      resultBox.style.color = 'var(--green)';
+      resultBox.innerHTML = '✓ Prueba enviada. Si el marco no está centrado, usa las flechas y vuelve a imprimir.';
+    }
+    toast('✓ Prueba de calibración enviada', 'ok');
+  } catch (e) {
+    if (resultBox) {
+      resultBox.style.color = 'var(--red)';
+      resultBox.textContent = `No se imprimió: ${e.message}`;
+    }
+    toast('No se pudo imprimir la prueba: ' + e.message, 'err');
+  }
+}
+
+async function _bcCalSave() {
+  const cal = _bcCalRead();
+  if (!cal) return;
+  const key = _bcCalibrationKey(cal.printerName);
+  const saved = {
+    profileId: cal.profileId || 'label_generic',
+    widthMm: cal.widthMm,
+    labelHeightMm: cal.labelHeightMm,
+    gapMm: cal.gapMm,
+    dpi: cal.dpi,
+    mediaMode: cal.mediaMode,
+    offsetXmm: cal.offsetXmm,
+    offsetYmm: cal.offsetYmm,
+    updatedAt: new Date().toISOString(),
+  };
+  _bcState.calibrations[key] = saved;
+  _bcState.profileId = saved.profileId;
+  _bcState.mediaWidthMm = saved.widthMm;
+  _bcState.printerDpi = saved.dpi;
+  _bcState.mediaMode = saved.mediaMode;
+
+  try {
+    const payload = JSON.stringify(_bcState.calibrations);
+    const results = await Promise.all([
+      window.api.settings.set({ key: 'barcode_calibrations', value: payload, requestUserId: user?.id }),
+      window.api.settings.set({ key: 'barcode_printer_profile', value: saved.profileId, requestUserId: user?.id }),
+      window.api.settings.set({ key: 'barcode_media_width_mm', value: String(saved.widthMm), requestUserId: user?.id }),
+      window.api.settings.set({ key: 'barcode_printer_dpi', value: String(saved.dpi), requestUserId: user?.id }),
+      window.api.settings.set({ key: 'barcode_media_mode', value: saved.mediaMode, requestUserId: user?.id }),
+    ]);
+    const failed = results.find(r => r?.ok === false);
+    if (failed) throw new Error(failed.error || 'No se pudo guardar la calibración');
+    _bcSyncMediaControls();
+    _bcUpdatePrinterBadge();
+    _bcRenderDetectionSummary();
+    window.api.audit?.log?.({
+      action: 'barcode_printer_calibrated',
+      entity: 'settings',
+      entityId: null,
+      detail: `${cal.printerName || 'sistema'} · ${saved.widthMm}×${saved.labelHeightMm}mm · X${saved.offsetXmm}/Y${saved.offsetYmm}`,
+      userId: user?.id,
+    }).catch(() => {});
+    closeModal();
+    toast('✓ Calibración guardada para esta impresora', 'ok');
+  } catch (e) {
+    toast('No se pudo guardar la calibración: ' + e.message, 'err');
+  }
 }
 
 // ══════════════════════════════════════════════

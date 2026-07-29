@@ -1788,6 +1788,7 @@ function seedIfEmpty() {
     ['barcode_printer_dpi','203'],
     ['barcode_media_mode','gap'],
     ['barcode_design', ''],
+    ['barcode_calibrations', '{}'],
     // ── Módulos activables por superadmin ──────────
     ['module_sucursales',      '0'],
     ['module_vehiculos',       '0'],

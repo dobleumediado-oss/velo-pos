@@ -19,6 +19,7 @@ const DEVICE_SETTING_KEYS = new Set([
   'barcode_media_width_mm',
   'barcode_printer_dpi',
   'barcode_media_mode',
+  'barcode_calibrations',
 ]);
 
 function isValidBusinessId(bizId) {

@@ -1,5 +1,27 @@
 # Historial de versiones
 
+## 1.33.1 — 2026-07-29
+
+### Etiquetas e impresoras
+
+- Corrige la regresión que sumaba el margen lateral al alto físico y podía
+  desplazar el contenido hasta producir etiquetas en blanco. El avance vuelve a
+  ser exclusivamente `alto de etiqueta + separación`.
+- Nuevo asistente **Detectar y calibrar** dentro del módulo de Etiquetas:
+  combina nombre, nombre visible y descripción del controlador para reconocer
+  el modelo y sugerir perfil, ancho y DPI.
+- La prueba física muestra marco, esquinas, cruz central, medidas y ajustes X/Y;
+  el sistema solo confirma que fue enviada después de recibir una respuesta
+  satisfactoria del proceso de impresión.
+- Ancho, alto, separación, sensor, DPI y desplazamientos se guardan por
+  impresora y por terminal. Cambiar de impresora recupera su propia calibración
+  sin modificar la de las demás.
+- Controles guiados de centrado en pasos de 0.5 mm, vista previa inmediata,
+  indicador de confianza de detección y aviso cuando el controlador no puede
+  conocer el rollo físico instalado.
+- La antigua prueba del Diseñador utiliza ahora el mismo documento validado y
+  deja de mostrar un éxito falso cuando el trabajo fue rechazado.
+
 ## 1.33.0 — 2026-07-29
 
 ### Ventas a crédito y abonos

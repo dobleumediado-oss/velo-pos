@@ -603,35 +603,36 @@ async function _bcdSave() {
 // Imprime un marco del tamaño exacto de la etiqueta + cruz al centro, con el
 // ajuste fino aplicado. El usuario compara el marco con su etiqueta física:
 // si no calza, ajusta "Ajuste vertical/horizontal" hasta centrarlo.
-function _bcdPrintCalibration() {
+async function _bcdPrintCalibration() {
   const d = window._bcdDesign || _bcdReadDesign();
-  const lw = Number(d.labelW) || 50;
+  const lw = Number(window._bcdPrinter?.widthMm) || Number(d.labelW) || 50;
   const lh = Number(d.labelH) || 30;
-  const gap = Number(d.gapMm) || 2;
+  const gap = Number.isFinite(Number(d.gapMm)) ? Number(d.gapMm) : 2;
   const ox = Number(d.offsetXmm) || 0;
   const oy = Number(d.offsetYmm) || 0;
   const pageH = lh + gap;
   const printerName = (window._bcdPrinter && window._bcdPrinter.name) || '';
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-    @page { size:${lw}mm ${pageH}mm; margin:0; }
-    html,body { width:${lw}mm; margin:0; padding:0; background:#fff; }
-    .cal { position:relative; width:${lw}mm; height:${pageH}mm; overflow:hidden; }
-    .frame { position:absolute; left:0; top:0; width:${lw}mm; height:${lh}mm; box-sizing:border-box;
-             border:0.3mm solid #000; transform:translate(${ox}mm, ${oy}mm); }
-    .vl { position:absolute; left:50%; top:8%; bottom:8%; width:0; border-left:0.2mm dashed #000; }
-    .hl { position:absolute; top:50%; left:8%; right:8%; height:0; border-top:0.2mm dashed #000; }
-    .lbl { position:absolute; left:1.5mm; top:1mm; font:2.6mm/1 Arial; }
-  </style></head><body>
-    <div class="cal"><div class="frame">
-      <div class="vl"></div><div class="hl"></div>
-      <div class="lbl">${lw}×${lh}mm ${(ox||oy)?`· ajuste ${ox},${oy}`:''}</div>
-    </div></div>
-  </body></html>`;
-  if (typeof printLabelBatch === 'function') {
-    printLabelBatch({ html, printerName, widthMm: lw, heightMm: pageH, userId: user?.id });
-    toast('Prueba enviada · compara el marco con tu etiqueta y ajusta si hace falta', 'ok');
-  } else {
+  if (typeof printLabelBatch !== 'function' || typeof buildLabelCalibrationHTML !== 'function') {
     toast('No se pudo imprimir la prueba de calibración', 'err');
+    return;
+  }
+  const html = buildLabelCalibrationHTML({
+    widthMm: lw,
+    labelHeightMm: lh,
+    gapMm: gap,
+    offsetXmm: ox,
+    offsetYmm: oy,
+    printerLabel: window._bcdPrinter?.name || '',
+  });
+  try {
+    const result = await printLabelBatch({
+      html, printerName, widthMm: lw, heightMm: pageH,
+      userId: user?.id, referenceId: Math.floor(Date.now() / 1000),
+    });
+    if (result?.ok === false) throw new Error(result.error || 'La impresora rechazó la prueba');
+    toast('✓ Prueba enviada · compara el marco y ajusta si hace falta', 'ok');
+  } catch (e) {
+    toast('No se pudo imprimir la prueba: ' + e.message, 'err');
   }
 }
 

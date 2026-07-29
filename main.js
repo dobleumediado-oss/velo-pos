@@ -2805,6 +2805,8 @@ ipcMain.handle('print:getPrinters', async () => {
     const printers = await mainWindow.webContents.getPrintersAsync();
     return printers.map(p => ({
       name:      p.name,
+      displayName: p.displayName || p.name,
+      description: p.description || '',
       isDefault: p.isDefault,
       status:    p.status || 0,
     }));
