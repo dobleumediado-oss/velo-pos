@@ -24,6 +24,9 @@ async function renderConfiguracion(el) {
   const licResult   = await window.api.license.getStatus().catch(() => ({ ok: false }));
   const lic         = licResult.ok ? licResult.data : null;
   const isSA        = user?.role === 'superadmin';
+  // La detección de dispositivos vive en Centro de impresión. Configuración no
+  // espera al sistema operativo para poder abrir más rápido.
+  const installedPrinters = [];
   // El logo puede gestionarlo el Administrador además del "Dev" (superadmin).
   // El backend ya lo permite (ADMIN_KEYS en main.js); aquí abrimos la UI.
   const isAdmin     = ['admin', 'superadmin'].includes(user?.role);
@@ -49,6 +52,21 @@ async function renderConfiguracion(el) {
   // ══════════════════════
   // COLUMNA IZQUIERDA
   // ══════════════════════
+
+  if (isAdmin) {
+    const printCenterCard = h('div', { class: 'card' });
+    printCenterCard.innerHTML = `
+      <div class="fxb">
+        <div>
+          <div class="card-title">Impresión</div>
+          <div style="font-size:11px;color:var(--muted2);margin-top:4px">
+            Impresoras, plantillas, rutas, calibración e historial están organizados en un solo lugar.
+          </div>
+        </div>
+        <button class="btn btn-dark" onclick="routeTo('impresion')">${svg('print')} Abrir centro</button>
+      </div>`;
+    colLeft.appendChild(printCenterCard);
+  }
 
   // ══════════════════════════════════════════════
   // PLANTILLAS DE IMPRESIÓN
@@ -277,7 +295,8 @@ async function renderConfiguracion(el) {
   pPrevWrap.appendChild(pIframe);
   plantCard.appendChild(pPrevWrap);
 
-  colLeft.appendChild(plantCard);
+  // La interfaz completa se presenta en Centro de impresión. Este bloque se
+  // conserva temporalmente como compatibilidad para el personalizador existente.
 
   // Inicializar grid y preview automático
   setTimeout(() => {
@@ -691,25 +710,58 @@ async function renderConfiguracion(el) {
 
   // ── Impresora (solo superadmin) ──────────────
   if (isSA) {
+    const labelDetection = settings.barcode_printer
+      ? (installedPrinters.find(p => p.name === settings.barcode_printer) || null)
+      : null;
+    const labelInstalled = !!labelDetection;
+    const documentProfile = typeof resolvePrinterProfile === 'function'
+      ? resolvePrinterProfile(settings.printer || '', 'ticket', settings)
+      : null;
     const printerCard = h('div', { class: 'card' });
     printerCard.innerHTML = `
-      <div class="fxb mb8"><div class="card-title">Impresora Térmica</div></div>
+      <div class="fxb mb8"><div class="card-title">Impresoras</div></div>
+      <div style="font-size:11px;color:var(--muted2);margin-bottom:12px">
+        Documentos y etiquetas se administran por separado; ninguna selección reemplaza la otra.
+      </div>
+      <div style="padding:11px;border:1px solid var(--line);border-radius:9px;margin-bottom:10px">
+        <div class="fxb">
+          <div><strong style="font-size:12px">Documentos</strong>
+            <div style="font-size:10.5px;color:var(--muted2);margin-top:2px">Facturas, recibos y reportes</div>
+          </div>
+          <span class="badge ${settings.printer?'g':'n'}">${settings.printer ? 'Configurada' : 'Pendiente'}</span>
+        </div>
       <div class="tr" style="font-size:12px;margin-bottom:10px">
         <span>Impresora guardada</span>
         <span style="font-weight:600;color:${settings.printer?'var(--green)':'var(--muted2)'}">
-          ${settings.printer ? settings.printer.slice(0,30) : 'No configurada'}
+          ${settings.printer ? _escHtml(settings.printer.slice(0,30)) : 'No configurada'}
         </span>
       </div>
-      <div class="alrt b" style="margin-bottom:12px">
-        <div class="alrt-dot b"></div>
-        <div>
-          <div class="alrt-title">${detectPrinterType(settings.printer||'')==='58mm'?'Térmica 58mm detectada':'Térmica 80mm (default)'}</div>
-          <div class="alrt-sub">Conecta por USB, instala en Windows y configura aquí.</div>
+        <div style="font-size:10.5px;color:var(--muted2);margin-bottom:10px">
+          ${documentProfile ? `${_escHtml(documentProfile.label)} · ${documentProfile.dpi} DPI` : 'Perfil por configurar'}
+        </div>
+        <div class="flex" style="gap:8px">
+          <button class="btn btn-dark btn-fw" onclick="openPrinterConfig()">${svg('settings')} Configurar documentos</button>
+          <button class="btn btn-out" onclick="testPrint()">${svg('print')} Prueba</button>
         </div>
       </div>
-      <div class="flex" style="gap:8px">
-        <button class="btn btn-dark btn-fw" onclick="openPrinterConfig()">${svg('settings')} Configurar</button>
-        <button class="btn btn-out btn-fw" onclick="testPrint()">${svg('print')} Prueba</button>
+      <div style="padding:11px;border:1px solid var(--line);border-radius:9px">
+        <div class="fxb">
+          <div><strong style="font-size:12px">Etiquetas</strong>
+            <div style="font-size:10.5px;color:var(--muted2);margin-top:2px">Código de barras, sensor y calibración</div>
+          </div>
+          <span class="badge ${labelInstalled?'g':settings.barcode_printer?'o':'n'}">
+            ${labelInstalled ? 'Conectada' : settings.barcode_printer ? 'No disponible' : 'Pendiente'}
+          </span>
+        </div>
+        <div class="tr" style="font-size:12px;margin:9px 0 10px">
+          <span>Impresora dedicada</span>
+          <span style="font-weight:600;color:${labelInstalled?'var(--green)':'var(--muted2)'}">
+            ${settings.barcode_printer ? _escHtml(settings.barcode_printer.slice(0,30)) : 'No configurada'}
+          </span>
+        </div>
+        <button class="btn btn-out btn-fw" onclick="pcGoToPrintingTab('labels')">
+          ${svg('barcode')} Seleccionar y calibrar
+        </button>
       </div>
       <div class="fg" style="margin-top:14px;margin-bottom:0">
         <label class="lbl">Densidad de impresión térmica</label>
@@ -720,7 +772,7 @@ async function renderConfiguracion(el) {
         </select>
         <div style="font-size:11px;color:var(--muted2);margin-top:5px">Sube el grosor del texto si la impresión térmica sale muy clara. Para más oscuridad aún, sube también la densidad en el driver de la impresora.</div>
       </div>`;
-    colLeft.appendChild(printerCard);
+    // Dispositivos y densidad se administran desde Centro de impresión.
     printerCard.querySelector('#cfg-thermal-density')?.addEventListener('change', async (e) => {
       const value = e.target.value;
       const res = await window.api.settings.set({ key: 'thermal_density', value, requestUserId: user?.id });
@@ -733,7 +785,10 @@ async function renderConfiguracion(el) {
 
   // ── Impresión por módulo/documento (solo superadmin) ──
   if (isSA) {
-    const printers = await window.api.print.getPrinters().catch(() => []);
+    const printers = installedPrinters.filter(p => {
+      if (typeof detectLabelPrinter !== 'function') return true;
+      return !['high', 'medium'].includes(detectLabelPrinter(p, {}).confidence);
+    });
     let printCfg = {};
     try { printCfg = JSON.parse(settings.print_config || '{}'); } catch {}
 
@@ -765,7 +820,8 @@ async function renderConfiguracion(el) {
       <div class="fxb mb8"><div class="card-title">Impresión por módulo</div></div>
       <div style="font-size:11px;color:var(--muted2);margin-bottom:10px">
         Asigna una impresora distinta por tipo de documento. La vista previa es obligatoria
-        antes de imprimir o guardar PDF, para confirmar los datos del documento.
+        antes de imprimir o guardar PDF. Las impresoras reconocidas como etiquetadoras
+        no aparecen aquí: se administran desde <strong>Etiquetas</strong>.
       </div>
       <div style="font-size:11px;color:#92400e;background:#fff7ed;border:1px solid #fcd9a5;border-radius:6px;padding:7px 9px;margin-bottom:10px">
         ⚠ <strong>Reportes, Contabilidad y Bancos</strong> se imprimen en hoja tamaño carta.
@@ -783,7 +839,7 @@ async function renderConfiguracion(el) {
       <div style="margin-top:12px">
         <button class="btn btn-dark btn-fw" id="btn-save-print-config">${svg('check')} Guardar configuración</button>
       </div>`;
-    colLeft.appendChild(catCard);
+    // Las rutas por documento se administran desde Centro de impresión.
 
     catCard.querySelector('#btn-save-print-config')?.addEventListener('click', async () => {
       const newCfg = {};

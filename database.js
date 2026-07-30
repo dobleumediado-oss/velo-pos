@@ -491,9 +491,16 @@ function createTables() {
       card_last4      TEXT DEFAULT '',
       payment_reference TEXT DEFAULT '',
       notes           TEXT DEFAULT '',
+      print_template_id TEXT DEFAULT '',
+      print_printer_type TEXT DEFAULT '',
+      print_printer_name TEXT DEFAULT '',
+      print_profile_id TEXT DEFAULT '',
+      print_copies    INTEGER DEFAULT 1,
+      print_action    TEXT DEFAULT 'print',
       cancelled_at    TEXT,
       cancel_reason   TEXT DEFAULT '',
       original_sale_id INTEGER,
+      replaces_sale_id INTEGER REFERENCES sales(id),
       created_at      TEXT DEFAULT (datetime('now','localtime'))
     );
 
@@ -534,6 +541,13 @@ function createTables() {
       customer_contact_role     TEXT DEFAULT '',
       customer_contact_phone    TEXT DEFAULT '',
       customer_contact_email    TEXT DEFAULT '',
+      status          TEXT NOT NULL DEFAULT 'active',
+      voided_at       TEXT DEFAULT NULL,
+      void_reason     TEXT DEFAULT '',
+      voided_by       INTEGER REFERENCES users(id),
+      voided_by_name  TEXT DEFAULT '',
+      void_cash_session_id INTEGER REFERENCES cash_sessions(id),
+      replaces_payment_id INTEGER REFERENCES payments(id),
       created_at      TEXT DEFAULT (datetime('now','localtime'))
     );
 
@@ -1020,6 +1034,13 @@ function migrateCustomerCompanies() {
     ['customer_contact_role', "TEXT DEFAULT ''"],
     ['customer_contact_phone', "TEXT DEFAULT ''"],
     ['customer_contact_email', "TEXT DEFAULT ''"],
+    ['status', "TEXT NOT NULL DEFAULT 'active'"],
+    ['voided_at', 'TEXT DEFAULT NULL'],
+    ['void_reason', "TEXT DEFAULT ''"],
+    ['voided_by', 'INTEGER'],
+    ['voided_by_name', "TEXT DEFAULT ''"],
+    ['void_cash_session_id', 'INTEGER'],
+    ['replaces_payment_id', 'INTEGER'],
   ];
   if (tableExists('payments')) {
     for (const [col, def] of paymentCols) {
@@ -1055,6 +1076,11 @@ function migrateCustomerCompanies() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_contacts_primary
       ON customer_contacts(customer_id) WHERE active=1 AND is_primary=1;
     CREATE INDEX IF NOT EXISTS idx_payments_customer_contact ON payments(customer_contact_id);
+    CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
+    CREATE INDEX IF NOT EXISTS idx_payments_replaces ON payments(replaces_payment_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_active_replacement
+      ON payments(replaces_payment_id)
+      WHERE replaces_payment_id IS NOT NULL AND COALESCE(status,'active')='active';
   `);
   // Sucursales del cliente empresa (idempotente). La empresa conserva RNC,
   // crédito y cuenta por cobrar; las sucursales son solo ubicaciones de entrega.
@@ -1125,6 +1151,10 @@ function migrateSalesWorkflowEnhancements() {
   // Salida de impresión elegida al cobrar: plantilla y tipo de papel usados.
   addCol('sales', 'print_template_id', "TEXT DEFAULT ''");
   addCol('sales', 'print_printer_type', "TEXT DEFAULT ''");
+  addCol('sales', 'print_printer_name', "TEXT DEFAULT ''");
+  addCol('sales', 'print_profile_id', "TEXT DEFAULT ''");
+  addCol('sales', 'print_copies', 'INTEGER DEFAULT 1');
+  addCol('sales', 'print_action', "TEXT DEFAULT 'print'");
 
   // Llevar el teléfono legacy a la colección nueva sin duplicarlo.
   db.prepare(`
@@ -1467,6 +1497,113 @@ function _issueDocumentNumber(kind, sourceType, sourceId) {
   return { kind, sequence_number: next, formatted_number: formatted };
 }
 
+// Reutilización controlada de una numeración comercial interna.
+//
+// No "libera" el número para la próxima venta: lo transfiere exclusivamente
+// desde una factura anulada a su reemplazo. El antecedente permanece en sales
+// y document_reuse_log conserva la cadena de auditoría. Nunca aplica a NCF,
+// e-CF, documentos importados, clientes registrados ni otras familias.
+function _reuseCancelledConsumerFinalNumber(originalSaleId, replacementSaleId, kind, userId = null) {
+  originalSaleId = Number(originalSaleId);
+  replacementSaleId = Number(replacementSaleId);
+  if (!originalSaleId || !replacementSaleId || originalSaleId === replacementSaleId) {
+    throw new Error('La factura de origen para registrar nuevamente no es válida');
+  }
+
+  const original = db.prepare('SELECT * FROM sales WHERE id=?').get(originalSaleId);
+  const replacement = db.prepare('SELECT * FROM sales WHERE id=?').get(replacementSaleId);
+  if (!original || !replacement) throw new Error('No se encontró la factura que se desea reemplazar');
+  if (original.type !== 'factura' || original.status !== 'cancelled') {
+    throw new Error('Solo puede registrarse nuevamente una factura previamente anulada');
+  }
+  if (Number(original.customer_id) !== 1 || Number(replacement.customer_id) !== 1) {
+    throw new Error('La reutilización está reservada a facturas de Consumidor Final');
+  }
+  if (String(original.import_source || '').trim()) {
+    throw new Error('La numeración de una factura importada no puede reutilizarse');
+  }
+  if (String(original.ncf || '').trim() || String(original.ecf_status || '').trim()) {
+    throw new Error('Una factura con NCF o e-CF conserva definitivamente su numeración');
+  }
+  const fiscalEnabled = db.prepare(
+    "SELECT value FROM settings WHERE key='fiscal_enabled'"
+  ).get()?.value === '1';
+  const availableConsumerNcf = fiscalEnabled
+    ? db.prepare(`
+        SELECT id FROM ncf_sequences
+        WHERE type='B02' AND active=1 AND current < to_num
+        ORDER BY id
+        LIMIT 1
+      `).get()
+    : null;
+  if (availableConsumerNcf) {
+    throw new Error(
+      'El reemplazo generaría un comprobante fiscal B02; debe emitirse con un número comercial nuevo'
+    );
+  }
+  if (replacement.type !== 'factura') {
+    throw new Error('El documento de reemplazo debe ser una factura');
+  }
+  if (String(original.document_kind || '') !== String(kind || '')) {
+    throw new Error('El reemplazo debe conservar la misma familia de numeración');
+  }
+  if (!['factura_contado', 'factura_historica'].includes(String(kind || ''))) {
+    throw new Error('Esta familia documental no permite reutilización');
+  }
+  const relatedDocuments = db.prepare(`
+    SELECT COUNT(*) AS total
+    FROM sales
+    WHERE original_sale_id=? AND status!='cancelled'
+  `).get(originalSaleId)?.total || 0;
+  if (relatedDocuments > 0) {
+    throw new Error(
+      'La factura tiene notas de crédito, devoluciones o ajustes relacionados y no puede reutilizar su número'
+    );
+  }
+
+  const existingReplacement = db.prepare(`
+    SELECT id FROM sales WHERE replaces_sale_id=? LIMIT 1
+  `).get(originalSaleId);
+  if (existingReplacement) {
+    throw new Error('Esta factura anulada ya fue registrada nuevamente');
+  }
+  const issue = db.prepare(`
+    SELECT id,kind,sequence_number,formatted_number,status
+    FROM document_issues
+    WHERE kind=? AND source_type='sale' AND source_id=?
+    LIMIT 1
+  `).get(kind, String(originalSaleId));
+  if (!issue || issue.status !== 'cancelled') {
+    throw new Error('La numeración original no está disponible para reemplazo controlado');
+  }
+
+  db.prepare(`
+    UPDATE document_issues
+    SET source_id=?,status='active'
+    WHERE id=? AND status='cancelled'
+  `).run(String(replacementSaleId), issue.id);
+  db.prepare(`
+    UPDATE sales SET replaces_sale_id=? WHERE id=?
+  `).run(originalSaleId, replacementSaleId);
+  db.prepare(`
+    INSERT INTO document_reuse_log(
+      kind,sequence_number,formatted_number,original_sale_id,replacement_sale_id,user_id,reason
+    ) VALUES(?,?,?,?,?,?,?)
+  `).run(
+    issue.kind, issue.sequence_number, issue.formatted_number,
+    originalSaleId, replacementSaleId, userId || null,
+    String(original.cancel_reason || 'Factura anulada y registrada nuevamente').slice(0, 500)
+  );
+
+  return {
+    kind: issue.kind,
+    sequence_number: issue.sequence_number,
+    formatted_number: issue.formatted_number,
+    reused: true,
+    original_sale_id: originalSaleId,
+  };
+}
+
 function migrateDocumentNumbering() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS document_sequences (
@@ -1490,6 +1627,21 @@ function migrateDocumentNumbering() {
     );
     CREATE INDEX IF NOT EXISTS idx_document_issues_source
       ON document_issues(source_type,source_id);
+    CREATE TABLE IF NOT EXISTS document_reuse_log (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind             TEXT NOT NULL,
+      sequence_number  INTEGER NOT NULL,
+      formatted_number TEXT NOT NULL,
+      original_sale_id INTEGER NOT NULL REFERENCES sales(id),
+      replacement_sale_id INTEGER NOT NULL REFERENCES sales(id),
+      user_id          INTEGER REFERENCES users(id),
+      reason           TEXT DEFAULT '',
+      created_at       TEXT DEFAULT (datetime('now','localtime')),
+      UNIQUE(original_sale_id),
+      UNIQUE(replacement_sale_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_document_reuse_number
+      ON document_reuse_log(kind,sequence_number);
   `);
   for (const [kind, cfg] of Object.entries(DOCUMENT_SEQUENCE_DEFAULTS)) {
     db.prepare(`
@@ -1509,6 +1661,7 @@ function migrateDocumentNumbering() {
    ['sales','document_number_fmt',"TEXT DEFAULT ''"],
    ['sales','receipt_document_number','INTEGER'],
    ['sales','receipt_document_number_fmt',"TEXT DEFAULT ''"],
+   ['sales','replaces_sale_id','INTEGER'],
    ['payments','document_kind',"TEXT DEFAULT ''"],
    ['payments','document_number','INTEGER'],
    ['payments','document_number_fmt',"TEXT DEFAULT ''"],
@@ -1639,6 +1792,8 @@ function migrateDocumentNumbering() {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_sales_document_number
       ON sales(document_kind,document_number);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_replacement
+      ON sales(replaces_sale_id) WHERE replaces_sale_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_payments_document_number
       ON payments(document_kind,document_number);
     CREATE INDEX IF NOT EXISTS idx_expense_payments_document_number
@@ -2632,7 +2787,8 @@ const customersRepo = {
   },
   addPayment({
     customerId, amount, method, note, saleId = null, allocations = null,
-    contactId = null, cajero = '', userId = null, sessionId = null
+    contactId = null, cajero = '', userId = null, sessionId = null,
+    replacesPaymentId = null
   }) {
     // VALIDACIONES: prevenir abonos inválidos que corrompan el balance
     amount = round2(Number(amount));
@@ -2645,6 +2801,35 @@ const customersRepo = {
     if (cust.balance <= 0) throw new Error('El cliente no tiene balance pendiente');
     const before = round2(cust.balance);
     if (amount > before + 0.01) throw new Error(`El abono (${amount.toFixed(2)}) supera el balance actual (${before.toFixed(2)})`);
+    let replacedPayment = null;
+    if (replacesPaymentId) {
+      replacedPayment = db.prepare('SELECT * FROM payments WHERE id=?').get(Number(replacesPaymentId));
+      if (!replacedPayment) throw new Error('El abono anulado que se desea corregir no existe');
+      if (Number(replacedPayment.customer_id) !== Number(customerId)) {
+        throw new Error('El abono corregido debe pertenecer al mismo cliente');
+      }
+      if (String(replacedPayment.status || 'active').toLowerCase() !== 'cancelled') {
+        throw new Error('Primero debes anular el abono que se desea corregir');
+      }
+      if (
+        String(replacedPayment.import_source || '').trim() ||
+        String(replacedPayment.cajero || '').trim() === 'Importación histórica' ||
+        String(replacedPayment.note || '').trim() === 'Saldo inicial importado'
+      ) {
+        throw new Error('Los abonos importados no pueden reemplazarse');
+      }
+      const activeReplacement = db.prepare(`
+        SELECT id FROM payments
+        WHERE replaces_payment_id=? AND COALESCE(status,'active')='active'
+        LIMIT 1
+      `).get(Number(replacesPaymentId));
+      if (activeReplacement) {
+        throw new Error('Este abono anulado ya tiene un recibo corregido vigente');
+      }
+      replacesPaymentId = Number(replacesPaymentId);
+    } else {
+      replacesPaymentId = null;
+    }
     const pending = getPendingInvoices(db, customerId);
     const pendingInvoices = pending.facturas || [];
     const bySaleId = new Map(pendingInvoices.map(invoice => [Number(invoice.id), invoice]));
@@ -2694,7 +2879,7 @@ const customersRepo = {
       throw new Error(`Falta distribuir ${unallocatedAmount.toFixed(2)} del abono entre las facturas seleccionadas`);
     }
     if (!pendingInvoices.length && Number(pending.unallocatedBalance || 0) + 0.01 < Number(amount)) {
-      throw new Error('No existe saldo histórico suficiente sin factura para aplicar este abono');
+      throw new Error('No existe saldo no vinculado suficiente para aplicar este abono');
     }
     const selectedInvoice = normalizedAllocations.length === 1
       ? normalizedAllocations[0].invoice : null;
@@ -2714,12 +2899,12 @@ const customersRepo = {
         INSERT INTO payments(
           customer_id,sale_id,amount,method,note,balance_before,balance_after,cajero,user_id,cash_session_id,
           customer_contact_id,customer_contact_name,customer_contact_document,customer_contact_role,
-          customer_contact_phone,customer_contact_email,created_at
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
+          customer_contact_phone,customer_contact_email,replaces_payment_id,created_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
       `).run(
         customerId, saleId, amount, method, note||'Abono', before, after, cajero, userId, sessionId || null,
         contact?.id || null, contact?.name || '', contact?.document || '', contact?.role || '',
-        contact?.phone || '', contact?.email || ''
+        contact?.phone || '', contact?.email || '', replacesPaymentId
       );
       const paymentId = payInsert.lastInsertRowid;
       if (normalizedAllocations.length) {
@@ -2775,6 +2960,12 @@ const customersRepo = {
         customer_contact_role: contact?.role || '',
         customer_contact_phone: contact?.phone || '',
         customer_contact_email: contact?.email || '',
+        replaces_payment_id: replacesPaymentId,
+        replaces_payment_document_number_fmt:
+          replacedPayment?.document_number_fmt ||
+          (replacedPayment?.numero_recibo != null
+            ? `REC-${String(replacedPayment.numero_recibo).padStart(6, '0')}`
+            : ''),
         allocations: normalizedAllocations.map(row => ({
           sale_id: row.saleId,
           amount: row.amount,
@@ -2791,6 +2982,147 @@ const customersRepo = {
       };
     });
     return payTx();
+  },
+  cancelPayment({
+    id, reason, userId = null, userName = '', sessionId = null
+  }) {
+    id = Number(id);
+    reason = String(reason || '').replace(/\s+/g, ' ').trim();
+    if (!id) throw new Error('Abono no válido');
+    if (reason.length < 5) throw new Error('Escribe un motivo de anulación de al menos 5 caracteres');
+
+    const payment = db.prepare('SELECT * FROM payments WHERE id=?').get(id);
+    if (!payment) throw new Error('Abono no encontrado');
+    if (String(payment.status || 'active').toLowerCase() === 'cancelled') {
+      throw new Error('Este abono ya fue anulado');
+    }
+    if (
+      String(payment.import_source || '').trim() ||
+      String(payment.cajero || '').trim() === 'Importación histórica'
+    ) {
+      throw new Error(
+        'Los abonos importados forman parte del saldo histórico y no pueden anularse desde Ventas'
+      );
+    }
+    if (String(payment.note || '').trim() === 'Saldo inicial importado') {
+      throw new Error('El saldo inicial importado no es un abono anulable');
+    }
+
+    const customer = db.prepare(
+      'SELECT id,balance,credit_due,credit_days FROM customers WHERE id=?'
+    ).get(payment.customer_id);
+    if (!customer) throw new Error('El cliente del abono ya no existe');
+
+    const allocations = tableExists('payment_allocations')
+      ? db.prepare('SELECT * FROM payment_allocations WHERE payment_id=? ORDER BY id').all(id)
+      : [];
+    const relatedSaleIds = [...new Set([
+      ...allocations.map(row => Number(row.sale_id)),
+      ...(payment.sale_id ? [Number(payment.sale_id)] : []),
+    ].filter(Boolean))];
+    if (relatedSaleIds.length) {
+      const placeholders = relatedSaleIds.map(() => '?').join(',');
+      const cancelledInvoice = db.prepare(`
+        SELECT id,document_number_fmt,numero_factura_fmt
+        FROM sales
+        WHERE id IN (${placeholders}) AND status='cancelled'
+        LIMIT 1
+      `).get(...relatedSaleIds);
+      if (cancelledInvoice) {
+        throw new Error(
+          'Una factura vinculada ya está anulada. Revisa esa factura antes de reversar el abono'
+        );
+      }
+    }
+
+    const method = String(payment.method || 'efectivo').trim().toLowerCase();
+    const requiresCashTrace = !['credito', 'descuento'].includes(method);
+    let reversalSession = null;
+    if (requiresCashTrace) {
+      reversalSession = sessionId
+        ? db.prepare("SELECT id,status FROM cash_sessions WHERE id=?").get(Number(sessionId))
+        : null;
+      if (!reversalSession || reversalSession.status !== 'open') {
+        throw new Error(
+          'Abre la caja antes de anular este abono; la devolución debe quedar registrada en la sesión actual'
+        );
+      }
+    }
+
+    const currentBalance = round2(Number(customer.balance || 0));
+    const restoredBalance = round2(currentBalance + Number(payment.amount || 0));
+    let restoredDue = customer.credit_due || null;
+    if (!restoredDue && relatedSaleIds.length) {
+      const placeholders = relatedSaleIds.map(() => '?').join(',');
+      const oldest = db.prepare(`
+        SELECT COALESCE(s.sale_date,date(s.created_at)) AS sale_date
+        FROM sales s
+        WHERE s.id IN (${placeholders})
+        ORDER BY COALESCE(s.sale_date,date(s.created_at)),s.id
+        LIMIT 1
+      `).get(...relatedSaleIds);
+      if (oldest?.sale_date) {
+        restoredDue = db.prepare(
+          "SELECT date(?, '+' || ? || ' days') AS due"
+        ).get(
+          oldest.sale_date,
+          Math.max(1, Number(customer.credit_days) || 30)
+        )?.due;
+      }
+    }
+    if (!restoredDue) restoredDue = todayStr();
+
+    const cancelTx = db.transaction(() => {
+      const changed = db.prepare(`
+        UPDATE payments
+        SET status='cancelled',
+            voided_at=datetime('now','localtime'),
+            void_reason=?,
+            voided_by=?,
+            voided_by_name=?,
+            void_cash_session_id=?
+        WHERE id=? AND COALESCE(status,'active')!='cancelled'
+      `).run(
+        reason, userId || null, String(userName || '').trim(),
+        reversalSession?.id || null, id
+      );
+      if (!changed.changes) throw new Error('Este abono ya fue anulado');
+
+      db.prepare(`
+        UPDATE customers
+        SET balance=?,credit_due=?,updated_at=datetime('now','localtime')
+        WHERE id=?
+      `).run(restoredBalance, restoredDue, payment.customer_id);
+
+      if (requiresCashTrace) {
+        db.prepare(`
+          INSERT INTO cash_movements(
+            cash_session_id,type,amount,method,reference_id,description,user_id
+          ) VALUES(?,?,?,?,?,?,?)
+        `).run(
+          reversalSession.id, 'salida', Number(payment.amount || 0),
+          method || 'efectivo', id,
+          `Anulación de abono ${payment.document_number_fmt || payment.numero_recibo || '#' + id}: ${reason}`,
+          userId || null
+        );
+      }
+
+      return {
+        paymentId: id,
+        customerId: Number(payment.customer_id),
+        amount: Number(payment.amount || 0),
+        method,
+        previousBalance: currentBalance,
+        restoredBalance,
+        restoredDue,
+        cashSessionId: reversalSession?.id || null,
+        allocations: allocations.map(row => ({
+          sale_id: Number(row.sale_id),
+          amount: Number(row.amount || 0),
+        })),
+      };
+    });
+    return cancelTx();
   },
   getPayments(customerId) {
     // LEFT JOIN a sales para que la referencia de factura en el historial de
@@ -3345,7 +3677,7 @@ const salesRepo = {
           payment_method,price_mode,cajero,user_id,salesperson_id,financial_account_id,
           payment_currency,exchange_rate,account_amount,card_brand,card_last4,
           additional_charges_total,display_currency,display_exchange_rate,display_amount,
-          print_template_id,print_printer_type,
+          print_template_id,print_printer_type,print_printer_name,print_profile_id,print_copies,print_action,
           payment_reference,notes,created_at,original_sale_date,sale_date,updated_at)
         VALUES(
           @cash_session_id,@customer_id,@customer_name,@customer_rnc,
@@ -3357,7 +3689,7 @@ const salesRepo = {
           @payment_method,@price_mode,@cajero,@user_id,@salesperson_id,@financial_account_id,
           @payment_currency,@exchange_rate,@account_amount,@card_brand,@card_last4,
           @additional_charges_total,@display_currency,@display_exchange_rate,@display_amount,
-          @print_template_id,@print_printer_type,
+          @print_template_id,@print_printer_type,@print_printer_name,@print_profile_id,@print_copies,@print_action,
           @payment_reference,@notes,@created_at,@original_sale_date,@sale_date,@created_at
         )
       `).run({
@@ -3393,6 +3725,10 @@ const salesRepo = {
         display_amount: displayAmount,
         print_template_id: String(payment.printTemplateId || '').slice(0, 40),
         print_printer_type: String(payment.printPrinterType || '').slice(0, 20),
+        print_printer_name: String(payment.printPrinterName || '').slice(0, 255),
+        print_profile_id: String(payment.printProfileId || '').slice(0, 80),
+        print_copies: Math.max(1, Math.min(9, parseInt(payment.printCopies, 10) || 1)),
+        print_action: payment.printAction === 'none' ? 'none' : 'print',
         card_brand: cardBrand, card_last4: cardLast4, payment_reference: paymentReference,
         notes: String(payment.notes || '').trim().slice(0, 1000),
         created_at: db.prepare("SELECT datetime('now','localtime') AS value").get().value,
@@ -3406,8 +3742,19 @@ const salesRepo = {
         );
         charges.forEach(row => insertCharge.run(saleId, row.description, row.amount));
       }
-      const documentKind = documentKindForSale(type, method);
-      const documentIssue = _issueDocumentNumber(documentKind, 'sale', saleId);
+      const replacesSaleId = type === 'factura'
+        ? (Number(payment.replacesSaleId) || null)
+        : null;
+      const replacementSource = replacesSaleId
+        ? db.prepare('SELECT document_kind FROM sales WHERE id=?').get(replacesSaleId)
+        : null;
+      const documentKind = replacementSource?.document_kind ||
+        documentKindForSale(type, method);
+      const documentIssue = replacesSaleId
+        ? _reuseCancelledConsumerFinalNumber(
+            replacesSaleId, saleId, documentKind, user.id
+          )
+        : _issueDocumentNumber(documentKind, 'sale', saleId);
       const receiptIssue = type === 'factura' && method !== 'credito'
         ? _issueDocumentNumber('recibo', 'sale_receipt', saleId)
         : null;
@@ -3616,6 +3963,8 @@ const salesRepo = {
         cardBrand, cardLast4, paymentReference,
         initialPaymentId, initialPaymentAmount, initialPaymentMethod,
         outstandingBalance,
+        replacesSaleId,
+        reusedDocumentNumber: !!documentIssue.reused,
       };
     });
 
@@ -3655,15 +4004,18 @@ const salesRepo = {
              p.amount AS payment_total,p.method,p.note,p.balance_before,p.balance_after,
              p.cajero,p.created_at
       FROM payments p
-      WHERE (
-          p.sale_id=?
-          AND NOT EXISTS (
-            SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=p.id
+      WHERE COALESCE(p.status,'active')='active'
+        AND (
+          (
+            p.sale_id=?
+            AND NOT EXISTS (
+              SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=p.id
+            )
           )
-        )
-        OR EXISTS (
-          SELECT 1 FROM payment_allocations pa
-          WHERE pa.payment_id=p.id AND pa.sale_id=?
+          OR EXISTS (
+            SELECT 1 FROM payment_allocations pa
+            WHERE pa.payment_id=p.id AND pa.sale_id=?
+          )
         )
       ORDER BY created_at DESC, id DESC
     `).all(id, id, id);
@@ -3711,6 +4063,21 @@ const salesRepo = {
       sale.original_old_id_factura     = orig ? orig.old_id_factura     : null;
       sale.original_import_source      = orig ? orig.import_source      : '';
     }
+    if (sale.replaces_sale_id) {
+      sale.replaces_sale = db.prepare(`
+        SELECT id,status,document_kind,document_number,document_number_fmt,
+               cancelled_at,cancel_reason
+        FROM sales WHERE id=?
+      `).get(sale.replaces_sale_id) || null;
+    }
+    sale.replacement_sale = db.prepare(`
+      SELECT id,status,document_kind,document_number,document_number_fmt,
+             created_at
+      FROM sales
+      WHERE replaces_sale_id=?
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(sale.id) || null;
     if (sale.type === 'factura' && sale.correction_kind !== 'product_addition') {
       const operation = db.prepare(`
         SELECT
@@ -3961,6 +4328,7 @@ const salesRepo = {
                  SELECT SUM(p.amount)
                  FROM payments p
                  WHERE p.sale_id=s.id
+                   AND COALESCE(p.status,'active')='active'
                    AND NOT EXISTS (
                      SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=p.id
                    )
@@ -3969,7 +4337,9 @@ const salesRepo = {
                COALESCE((
                  SELECT SUM(pa.amount)
                  FROM payment_allocations pa
+                 JOIN payments ap ON ap.id=pa.payment_id
                  WHERE pa.sale_id=s.id
+                   AND COALESCE(ap.status,'active')='active'
                ),0)
              ) AS payment_amount,
              CASE
@@ -3979,6 +4349,7 @@ const salesRepo = {
                      SELECT SUM(p.amount)
                      FROM payments p
                      WHERE p.sale_id=s.id
+                       AND COALESCE(p.status,'active')='active'
                        AND NOT EXISTS (
                          SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=p.id
                        )
@@ -3987,7 +4358,9 @@ const salesRepo = {
                    COALESCE((
                      SELECT SUM(pa.amount)
                      FROM payment_allocations pa
+                     JOIN payments ap ON ap.id=pa.payment_id
                      WHERE pa.sale_id=s.id
+                       AND COALESCE(ap.status,'active')='active'
                    ),0)
                  ), 2
                ))
@@ -4282,12 +4655,18 @@ const salesRepo = {
       SELECT COALESCE(SUM(p.amount),0) total
       FROM payments p
       WHERE p.sale_id=?
+        AND COALESCE(p.status,'active')='active'
         ${tableExists('payment_allocations')
           ? 'AND NOT EXISTS (SELECT 1 FROM payment_allocations pa WHERE pa.payment_id=p.id)'
           : ''}
     `).get(id)?.total || 0;
     const distributedApplied = tableExists('payment_allocations')
-      ? db.prepare('SELECT COALESCE(SUM(amount),0) total FROM payment_allocations WHERE sale_id=?').get(id)?.total || 0
+      ? db.prepare(`
+          SELECT COALESCE(SUM(pa.amount),0) total
+          FROM payment_allocations pa
+          JOIN payments p ON p.id=pa.payment_id
+          WHERE pa.sale_id=? AND COALESCE(p.status,'active')='active'
+        `).get(id)?.total || 0
       : 0;
     const appliedTotal = round2(Number(legacyApplied) + Number(distributedApplied));
     if (appliedTotal > 0.005) {
@@ -4526,7 +4905,7 @@ const reportsRepo = {
     `).all(...f.withAlias.params);
 
     // Abonos recibidos en el período (excluir saldos iniciales importados)
-    // Usa hfp: excluye históricos solo en 'today', no en 'month'
+    // Usa hfp: el alcance temporal no cambia si un registro es importado.
     // method='descuento' se excluye: es una rebaja que cierra factura sin que
     // entre efectivo, no un cobro. Sumarlo inflaría la caja.
     let abonosData;
@@ -4535,6 +4914,7 @@ const reportsRepo = {
         SELECT COUNT(*) as count, SUM(amount) as total
         FROM payments
         WHERE ${f.payments.sql}
+          AND COALESCE(status,'active')='active'
           AND note != 'Saldo inicial importado'
           AND LOWER(COALESCE(method,'efectivo')) != 'descuento' ${hfp}
       `).get(...f.payments.params);
@@ -4546,6 +4926,7 @@ const reportsRepo = {
         SELECT id,sale_id,amount
         FROM payments
         WHERE ${f.payments.sql}
+          AND COALESCE(status,'active')='active'
           AND note != 'Saldo inicial importado'
           AND LOWER(COALESCE(method,'efectivo')) != 'descuento' ${hfp}
       `).all(...f.payments.params);
@@ -4770,7 +5151,9 @@ const reportsRepo = {
     };
 
     const f = buildFilter();
-    const baseWhere = `${f.sql} AND COALESCE(p.note,'') != 'Saldo inicial importado'`;
+    const baseWhere = `${f.sql}
+      AND COALESCE(p.status,'active')='active'
+      AND COALESCE(p.note,'') != 'Saldo inicial importado'`;
 
     const rows = db.prepare(`
       SELECT p.*,
@@ -4785,7 +5168,8 @@ const reportsRepo = {
              s.numero_factura     AS sale_numero_factura,
              s.numero_factura_fmt AS sale_numero_factura_fmt,
              s.ncf                AS sale_ncf,
-             CASE WHEN p.cajero='Importación histórica' THEN 1 ELSE 0 END AS imported
+             CASE WHEN COALESCE(p.import_source,'')<>'' OR p.cajero='Importación histórica'
+                  OR p.note='Saldo inicial importado' THEN 1 ELSE 0 END AS imported
       FROM payments p
       LEFT JOIN customers c ON c.id = p.customer_id
       LEFT JOIN sales s ON s.id = p.sale_id
@@ -4799,8 +5183,10 @@ const reportsRepo = {
              COUNT(*) AS count,
              COALESCE(SUM(CASE WHEN LOWER(COALESCE(p.method,'efectivo'))!='descuento' THEN p.amount ELSE 0 END),0) AS total,
              COALESCE(SUM(CASE WHEN LOWER(COALESCE(p.method,'efectivo'))='descuento' THEN p.amount ELSE 0 END),0) AS discount_total,
-             SUM(CASE WHEN p.cajero='Importación histórica' THEN p.amount ELSE 0 END) AS imported_total,
-             SUM(CASE WHEN p.cajero!='Importación histórica' THEN p.amount ELSE 0 END) AS current_total
+             SUM(CASE WHEN COALESCE(p.import_source,'')<>'' OR p.cajero='Importación histórica'
+                           OR p.note='Saldo inicial importado' THEN p.amount ELSE 0 END) AS imported_total,
+             SUM(CASE WHEN COALESCE(p.import_source,'')='' AND p.cajero!='Importación histórica'
+                           AND p.note!='Saldo inicial importado' THEN p.amount ELSE 0 END) AS current_total
       FROM payments p
       WHERE ${baseWhere}
       GROUP BY day
@@ -4836,8 +5222,10 @@ const reportsRepo = {
       SELECT COUNT(*) AS count,
              COALESCE(SUM(CASE WHEN LOWER(COALESCE(p.method,'efectivo'))!='descuento' THEN p.amount ELSE 0 END),0) AS total,
              COALESCE(SUM(CASE WHEN LOWER(COALESCE(p.method,'efectivo'))='descuento' THEN p.amount ELSE 0 END),0) AS discount_total,
-             SUM(CASE WHEN p.cajero='Importación histórica' THEN p.amount ELSE 0 END) AS imported_total,
-             SUM(CASE WHEN p.cajero!='Importación histórica' THEN p.amount ELSE 0 END) AS current_total,
+             SUM(CASE WHEN COALESCE(p.import_source,'')<>'' OR p.cajero='Importación histórica'
+                           OR p.note='Saldo inicial importado' THEN p.amount ELSE 0 END) AS imported_total,
+             SUM(CASE WHEN COALESCE(p.import_source,'')='' AND p.cajero!='Importación histórica'
+                           AND p.note!='Saldo inicial importado' THEN p.amount ELSE 0 END) AS current_total,
              COUNT(DISTINCT p.customer_id) AS customers
       FROM payments p
       WHERE ${baseWhere}
@@ -7116,6 +7504,7 @@ const accountingRepo = {
 
       const payment = db.prepare('SELECT * FROM payments WHERE id=?').get(paymentId);
       if (!payment) return null;
+      if (String(payment.status || 'active').toLowerCase() !== 'active') return null;
       // Solo abonos REALES reducen la CxC: ignorar monto 0 y el marcador contable
       // "Saldo inicial importado" (no es un cobro, es el saldo de apertura de la deuda).
       if (!payment.amount || payment.amount <= 0) return null;

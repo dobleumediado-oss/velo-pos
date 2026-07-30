@@ -610,7 +610,7 @@ async function renderSuperAdmin(el) {
     <div class="alrt g" style="margin-bottom:12px">
       <div class="alrt-dot g"></div>
       <div>
-        <div class="alrt-title">Módulo activo — el admin lo ve en el sidebar</div>
+        <div class="alrt-title">Módulo activo — disponible en Centro de impresión</div>
         <div class="alrt-sub">
           Impresoras compatibles: Zebra, Honeywell, TSC, SATO, Bixolon, Brother, DYMO, Argox, Godex y cualquier impresora del sistema.
         </div>
@@ -620,24 +620,25 @@ async function renderSuperAdmin(el) {
       <div class="alrt-dot n"></div>
       <div>
         <div class="alrt-title">Módulo inactivo</div>
-        <div class="alrt-sub">Actívalo para que aparezca "Etiquetas" en el sidebar del administrador.</div>
+        <div class="alrt-sub">Actívalo para habilitar la producción de etiquetas dentro del Centro de impresión.</div>
       </div>
     </div>`}
   `;
 
-  // Contenedor del diseñador (se agrega solo si módulo está activo)
-  const bcDesignerContainer = h('div', { id: 'bc-designer-container',
-    style: `display:${bcEnabled ? 'block' : 'none'};margin-top:12px;padding-top:12px;border-top:1px solid var(--line)` });
-  bcModCard.appendChild(bcDesignerContainer);
+  const bcCenterLink = h('button', {
+    class: 'btn btn-out btn-fw',
+    style: 'margin-top:12px',
+    onclick: () => pcGoToPrintingTab('labels'),
+    html: `${svg('print')} Abrir Etiquetas en Centro de impresión`,
+  });
+  bcModCard.appendChild(bcCenterLink);
 
   el.appendChild(bcModCard);
 
-  // Renderizar diseñador si ya está activo
-  if (bcEnabled && typeof renderBarcodeDesigner === 'function') {
-    renderBarcodeDesigner(bcDesignerContainer);
-  }
+  // El diseñador se administra exclusivamente desde Centro de impresión.
 
   // ── Plantillas de impresión (diagnóstico) ────
+  if (false) { // Migrado a Centro de impresión; se conserva solo como compatibilidad histórica.
   const plantDiagCard = h('div', { class: 'card' });
   const printerNow    = DB?.settings?.printer || CFG?.printer || '';
   const printerTypeNow = typeof detectPrinterType === 'function'
@@ -738,7 +739,8 @@ async function renderSuperAdmin(el) {
         </div>`;
       }).join('')}
     </div>`;
-  el.appendChild(plantDiagCard);
+  // El diagnóstico completo de plantillas vive en Centro de impresión.
+  }
 
   // ── Herramientas peligrosas ──────────────────
   const dangerCard = h('div', { class: 'card' });

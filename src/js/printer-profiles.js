@@ -64,11 +64,35 @@ function inferPrinterProfileId(printerName, scope = 'ticket') {
   return 'ticket_80';
 }
 
+function getPrinterRuntimeState(printerInfo) {
+  const info = printerInfo || {};
+  const options = info.options && typeof info.options === 'object' ? info.options : {};
+  const rawAccepting = options['printer-is-accepting-jobs'];
+  const acceptingJobs = rawAccepting === true || String(rawAccepting).toLowerCase() === 'true'
+    ? true
+    : rawAccepting === false || String(rawAccepting).toLowerCase() === 'false'
+      ? false : null;
+  const stateReason = String(
+    options['printer-state-reasons'] || options['printer-state-message'] || ''
+  ).trim();
+  const criticalReason = /(offline|not-connected|paused|stopped|media-empty|media-jam|door-open|cover-open)/i
+    .test(stateReason);
+  return {
+    acceptingJobs,
+    stateReason,
+    stateCode: String(options['printer-state'] ?? info.status ?? '').trim(),
+    reportedIssue: acceptingJobs === false || criticalReason,
+    model: String(options['printer-make-and-model'] || options.driverName || '').trim(),
+    deviceUri: String(options['device-uri'] || options['printer-uri-supported'] || '').trim(),
+  };
+}
+
 function detectLabelPrinter(printerInfo, explicitSettings) {
   const info = typeof printerInfo === 'string'
     ? { name: printerInfo }
     : (printerInfo || {});
-  const identity = [info.name, info.displayName, info.description]
+  const runtime = getPrinterRuntimeState(info);
+  const identity = [info.name, info.displayName, info.description, runtime.model, runtime.deviceUri]
     .filter(Boolean).join(' ');
   const id = inferPrinterProfileId(identity, 'barcode');
   const profile = resolvePrinterProfile(identity, 'barcode', {
@@ -85,12 +109,81 @@ function detectLabelPrinter(printerInfo, explicitSettings) {
     displayName: String(info.displayName || info.name || ''),
     isDefault: info.isDefault === true,
     status: Number(info.status) || 0,
+    runtime,
     confidence: exactModel ? 'high' : knownLabelFamily ? 'medium' : 'low',
     reason: exactModel
       ? 'Modelo 2Connect reconocido por el nombre del controlador'
       : knownLabelFamily
         ? 'Familia de impresora de etiquetas reconocida'
         : 'Controlador genérico: confirma las medidas con una prueba',
+  };
+}
+
+function classifyLabelPrinters(printers, explicitSettings) {
+  return (Array.isArray(printers) ? printers : []).map(printer => ({
+    ...printer,
+    labelDetection: detectLabelPrinter(printer, explicitSettings),
+  }));
+}
+
+// Solo selecciona automáticamente cuando hay una única impresora que el
+// controlador permite reconocer como equipo de etiquetas. Una impresora
+// genérica nunca se toma por defecto y la impresora de documentos no participa.
+function chooseLabelPrinter(printers, savedPrinter, explicitSettings) {
+  const classified = classifyLabelPrinters(printers, explicitSettings);
+  const saved = String(savedPrinter || '').trim();
+  if (saved && classified.some(item => item.name === saved)) {
+    return { printerName: saved, autoDetected: false, classified };
+  }
+  const candidates = classified.filter(item =>
+    ['high', 'medium'].includes(item.labelDetection?.confidence)
+  );
+  if (!saved && candidates.length === 1) {
+    return { printerName: candidates[0].name, autoDetected: true, classified };
+  }
+  return { printerName: '', autoDetected: false, classified };
+}
+
+function normalizePrinterSnapshot(printers) {
+  return (Array.isArray(printers) ? printers : [])
+    .filter(printer => printer && String(printer.name || '').trim())
+    .map(printer => ({
+      ...printer,
+      name: String(printer.name).trim(),
+      displayName: String(printer.displayName || printer.name).trim(),
+      description: String(printer.description || '').trim(),
+      isDefault: printer.isDefault === true,
+      status: Number(printer.status) || 0,
+      options: printer.options && typeof printer.options === 'object' ? { ...printer.options } : {},
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function diffPrinterSnapshots(previous, next) {
+  const before = normalizePrinterSnapshot(previous);
+  const after = normalizePrinterSnapshot(next);
+  const beforeByName = new Map(before.map(printer => [printer.name, printer]));
+  const afterByName = new Map(after.map(printer => [printer.name, printer]));
+  const comparable = printer => JSON.stringify({
+    displayName: printer.displayName,
+    description: printer.description,
+    isDefault: printer.isDefault,
+    status: printer.status,
+    runtime: getPrinterRuntimeState(printer),
+  });
+  const added = after.filter(printer => !beforeByName.has(printer.name));
+  const removed = before.filter(printer => !afterByName.has(printer.name));
+  const updated = after.filter(printer => {
+    const old = beforeByName.get(printer.name);
+    return old && comparable(old) !== comparable(printer);
+  });
+  return {
+    previous: before,
+    printers: after,
+    added,
+    removed,
+    updated,
+    changed: added.length > 0 || removed.length > 0 || updated.length > 0,
   };
 }
 
@@ -127,15 +220,23 @@ function resolvePrinterProfile(printerName, scope = 'ticket', explicitSettings) 
 
 function buildLabelCalibrationHTML({
   widthMm = 50,
+  labelWidthMm,
   labelHeightMm = 25,
   gapMm = 2,
+  pageMm = 0,
+  cols = 1,
   offsetXmm = 0,
   offsetYmm = 0,
   printerLabel = '',
 } = {}) {
   const width = _printerNumber(widthMm, 50, 20, 150);
+  const labelWidth = _printerNumber(labelWidthMm, width, 10, 150);
   const height = _printerNumber(labelHeightMm, 25, 8, 300);
   const gap = _printerNumber(gapMm, 2, 0, 30);
+  const layout = calculateLabelLayout(
+    { labelW: labelWidth, labelH: height, gapMm: gap, pageMm, cols },
+    { widthMm: width, printableWidthMm: width }
+  );
   const offsetX = _printerNumber(offsetXmm, 0, -30, 30);
   const offsetY = _printerNumber(offsetYmm, 0, -30, 30);
   const pageHeight = height + gap;
@@ -146,9 +247,12 @@ function buildLabelCalibrationHTML({
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
     @page { size:${width}mm ${pageHeight}mm; margin:0; }
     html,body { width:${width}mm; margin:0; padding:0; background:#fff; }
-    .vp-label-row { position:relative; width:${width}mm; height:${pageHeight}mm; overflow:hidden; }
-    .vp-label { position:absolute; left:0.6mm; top:0.6mm;
-      width:calc(${width}mm - 1.2mm); height:calc(${height}mm - 1.2mm);
+    .vp-label-row { width:${width}mm; height:${pageHeight}mm; padding:0 ${layout.pageMm}mm;
+      display:grid; grid-template-columns:repeat(${layout.cols}, ${labelWidth}mm);
+      column-gap:${gap}mm; justify-content:center; align-content:start;
+      box-sizing:border-box; overflow:hidden; }
+    .vp-label { position:relative; margin:0.6mm;
+      width:calc(${labelWidth}mm - 1.2mm); height:calc(${height}mm - 1.2mm);
       box-sizing:border-box; border:0.35mm solid #000;
       transform:translate(${offsetX}mm, ${offsetY}mm); overflow:hidden;
       font-family:Arial,sans-serif; color:#000; background:#fff; }
@@ -167,13 +271,13 @@ function buildLabelCalibrationHTML({
       text-align:center; font:2.2mm/1.15 Arial; white-space:nowrap; overflow:hidden; }
   </style></head><body>
     <div class="vp-label-row" data-velo-label-calibration="1">
-      <div class="vp-label">
+      ${Array.from({ length: layout.cols }, () => `<div class="vp-label">
         <i class="corner tl"></i><i class="corner tr"></i>
         <i class="corner bl"></i><i class="corner br"></i>
         <i class="vl"></i><i class="hl"></i><i class="dot"></i>
         <div class="title">PRUEBA DE ETIQUETA</div>
-        <div class="meta">${width}×${height}mm · X ${offsetX} / Y ${offsetY}${safePrinter ? ` · ${safePrinter}` : ''}</div>
-      </div>
+        <div class="meta">${labelWidth}×${height}mm · X ${offsetX} / Y ${offsetY}${safePrinter ? ` · ${safePrinter}` : ''}</div>
+      </div>`).join('')}
     </div>
   </body></html>`;
 }
@@ -193,27 +297,76 @@ function calculateLabelLayout(design, profile) {
   const labelH = _printerNumber(design?.labelH, 25, 8, 300);
   const gapMm = _printerNumber(design?.gapMm, 2, 0, 30);
   const pageMm = Math.max(0, _printerNumber(design?.pageMm, 0, 0, 30));
-  const mediaWidthMm = _printerNumber(profile?.printableWidthMm || profile?.widthMm, 100, 20, 150);
-  const available = Math.max(labelW, mediaWidthMm - (pageMm * 2));
-  const maxCols = Math.max(1, Math.floor((available + gapMm) / (labelW + gapMm)));
+  const mediaWidthMm = _printerNumber(profile?.widthMm, 100, 20, 150);
+  const printableWidthMm = _printerNumber(
+    profile?.printableWidthMm,
+    mediaWidthMm,
+    Math.min(16, mediaWidthMm),
+    mediaWidthMm
+  );
+  const availableWidthMm = Math.max(0, printableWidthMm - (pageMm * 2));
+  const rawMaxCols = Math.floor((availableWidthMm + gapMm) / (labelW + gapMm));
+  const maxCols = Math.max(1, rawMaxCols);
   const requestedCols = Math.max(1, Math.floor(Number(design?.cols) || 1));
   const cols = Math.min(requestedCols, maxCols);
   const usedWidthMm = (cols * labelW) + ((cols - 1) * gapMm);
+  const fitsMedia = labelW <= availableWidthMm + 0.01;
+  const overflowMm = Math.max(0, usedWidthMm - availableWidthMm);
   return {
-    labelW, labelH, gapMm, pageMm, mediaWidthMm,
-    cols, requestedCols, maxCols, usedWidthMm,
+    labelW, labelH, gapMm, pageMm, mediaWidthMm, printableWidthMm,
+    availableWidthMm, cols, requestedCols, maxCols, usedWidthMm,
+    fitsMedia, overflowMm,
     // pageMm es el margen lateral del rollo. No forma parte del avance vertical:
     // sumarlo al alto hace que Chromium y el driver reciban un papel más largo
     // que la etiqueta física, lo que puede desplazar el contenido o imprimirla
     // completamente en blanco.
     rowHeightMm: labelH + gapMm,
-    adjusted: cols !== requestedCols,
+    adjusted: cols !== requestedCols || !fitsMedia,
+  };
+}
+
+function normalizeLabelText(value) {
+  let text = String(value ?? '').trim().replace(/\s+/g, ' ');
+  const quotePairs = [['"', '"'], ["'", "'"], ['“', '”'], ['‘', '’']];
+  const pair = quotePairs.find(([left, right]) =>
+    text.length >= 2 && text.startsWith(left) && text.endsWith(right)
+  );
+  if (pair) text = text.slice(pair[0].length, -pair[1].length).trim();
+  return text;
+}
+
+function buildLabelRenderModel(product, design, profile) {
+  const p = product || {};
+  const d = design || {};
+  const code = normalizeLabelText(p.code);
+  const barcodeValue = normalizeLabelText(p.barcode) || code ||
+    String(p.id ?? '').padStart(8, '0');
+  const barcodeVisible = d.showBarcode !== false && !!barcodeValue;
+  const barcodeTextVisible = barcodeVisible && d.showBarcodeText !== false;
+  const standaloneCodeVisible = d.showCode === true && !!code &&
+    (!barcodeTextVisible || code !== barcodeValue);
+
+  return {
+    layout: calculateLabelLayout(d, profile || {}),
+    product: {
+      ...p,
+      name: normalizeLabelText(p.name),
+      brand: normalizeLabelText(p.brand),
+      code,
+    },
+    barcodeValue,
+    barcodeVisible,
+    barcodeTextVisible,
+    standaloneCodeVisible,
   };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    PRINTER_PROFILES, inferPrinterProfileId, detectLabelPrinter, resolvePrinterProfile,
+    PRINTER_PROFILES, inferPrinterProfileId, detectLabelPrinter, classifyLabelPrinters,
+    chooseLabelPrinter, getPrinterRuntimeState, normalizePrinterSnapshot,
+    diffPrinterSnapshots, resolvePrinterProfile,
     buildLabelCalibrationHTML, printerProfileLegacyType, calculateLabelLayout,
+    normalizeLabelText, buildLabelRenderModel,
   };
 }

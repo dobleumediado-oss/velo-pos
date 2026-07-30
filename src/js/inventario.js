@@ -1837,5 +1837,5 @@ function exportInventarioPDF() {
   <div class="foot">${_esc(CFG.biz)} &#183; ${_esc(CFG.phone)} &#183; ${_esc(CFG.addr)}</div>
 </body></html>`;
 
-  printHTML(html);
+  printHTML(html, 'inventario');
 }

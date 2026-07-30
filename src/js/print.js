@@ -119,17 +119,44 @@ function _getTicketPrinterProfile(printerName = _getSavedPrinter()) {
 // vista previa forzada, y (solo "ticket") impresión automática tras venta.
 // Si una categoría no tiene override, cae a la impresora global guardada.
 const PRINT_CATEGORIES = {
-  ticket:       { label: 'Ventas / Tickets',          autoPrintDefault: true  },
-  pago:         { label: 'Pagos / Abonos / CxC / CxP',autoPrintDefault: true  },
-  caja:         { label: 'Caja / Arqueos / Cierres',  autoPrintDefault: false },
-  contabilidad: { label: 'Contabilidad',              autoPrintDefault: false },
-  bancos:       { label: 'Bancos',                    autoPrintDefault: false },
-  reporte:      { label: 'Reportes (ventas/inventario)', autoPrintDefault: false },
+  ticket:       { label: 'Facturas y ventas',         autoPrintDefault: true,  previewDefault: false, media: 'any'   },
+  cotizacion:   { label: 'Cotizaciones',               autoPrintDefault: true,  previewDefault: false, media: 'any'   },
+  pago:         { label: 'Pagos y abonos',             autoPrintDefault: true,  previewDefault: false, media: 'any'   },
+  conduce:      { label: 'Conduces y entregas',        autoPrintDefault: true,  previewDefault: false, media: 'any'   },
+  caja:         { label: 'Caja, arqueos y cierres',    autoPrintDefault: false, previewDefault: true,  media: 'sheet' },
+  inventario:   { label: 'Inventario y etiquetas de anaquel', autoPrintDefault: false, previewDefault: true, media: 'sheet' },
+  compras:      { label: 'Compras y recepciones',      autoPrintDefault: false, previewDefault: true,  media: 'sheet' },
+  contabilidad: { label: 'Contabilidad',               autoPrintDefault: false, previewDefault: true,  media: 'sheet' },
+  bancos:       { label: 'Bancos',                     autoPrintDefault: false, previewDefault: true,  media: 'sheet' },
+  reporte:      { label: 'Reportes',                   autoPrintDefault: false, previewDefault: true,  media: 'sheet' },
+};
+
+const PRINT_CHANNELS = {
+  ventas:    { label: 'Caja · ventas',       icon: 'cash',    accepts: 'document' },
+  pagos:     { label: 'Caja · pagos',        icon: 'dollar',  accepts: 'document' },
+  caja:      { label: 'Administración · caja', icon: 'ledger', accepts: 'document' },
+  oficina:   { label: 'Oficina',             icon: 'print',   accepts: 'document' },
+  almacen:   { label: 'Almacén y despacho',  icon: 'box',     accepts: 'document' },
+  etiquetas: { label: 'Etiquetas',           icon: 'barcode', accepts: 'label' },
+};
+
+const _DEFAULT_PRINT_CHANNEL = {
+  ticket: 'ventas',
+  cotizacion: 'ventas',
+  pago: 'pagos',
+  caja: 'caja',
+  conduce: 'almacen',
+  inventario: 'almacen',
+  compras: 'almacen',
+  contabilidad: 'oficina',
+  bancos: 'oficina',
+  reporte: 'oficina',
 };
 
 // jobType (el identificador interno de cada función de impresión) → categoría
 const _JOB_TYPE_CATEGORY = {
-  ticket: 'ticket', test: 'ticket', prueba_plantilla: 'ticket', conduce: 'ticket',
+  ticket: 'ticket', factura: 'ticket', test: 'ticket', prueba_plantilla: 'ticket',
+  cotizacion: 'cotizacion', conduce: 'conduce',
   abono: 'pago', pago_proveedor: 'pago',
   cierre: 'caja',
 };
@@ -138,18 +165,60 @@ function _categoryForJobType(jobType) {
 }
 
 function _getPrintConfig() {
-  try { return JSON.parse(DB?.settings?.print_config || '{}'); } catch { return {}; }
+  try {
+    return JSON.parse(DB?.settings?.print_route_config || DB?.settings?.print_config || '{}');
+  } catch { return {}; }
+}
+
+function _getPrinterBindings() {
+  let saved = {};
+  try { saved = JSON.parse(DB?.settings?.printer_channel_bindings || '{}') || {}; } catch {}
+  const fallback = DB?.settings?.printer || '';
+  const value = (channel, legacy) => Object.prototype.hasOwnProperty.call(saved, channel)
+    ? String(saved[channel] || '').trim() : String(legacy || '').trim();
+  return {
+    ventas: value('ventas', fallback),
+    pagos: value('pagos', fallback),
+    caja: value('caja', fallback),
+    oficina: value('oficina', fallback),
+    almacen: value('almacen', fallback),
+    etiquetas: value('etiquetas', DB?.settings?.barcode_printer || ''),
+  };
+}
+
+function _getPrinterChannelProfiles() {
+  let saved = {};
+  try { saved = JSON.parse(DB?.settings?.printer_channel_profiles || '{}') || {}; } catch {}
+  return saved && typeof saved === 'object' ? saved : {};
 }
 
 function _getCategoryConfig(category) {
   const all = _getPrintConfig();
   const cat = all[category] || {};
+  const definition = PRINT_CATEGORIES[category] || {};
+  const channel = PRINT_CHANNELS[cat.channel] ? cat.channel : (_DEFAULT_PRINT_CHANNEL[category] || 'oficina');
+  const bindings = _getPrinterBindings();
+  const profiles = _getPrinterChannelProfiles();
+  const hasExplicitProfile = Object.prototype.hasOwnProperty.call(profiles, channel);
+  let hasExplicitBinding = false;
+  try {
+    const rawBindings = JSON.parse(DB?.settings?.printer_channel_bindings || '{}') || {};
+    hasExplicitBinding = Object.prototype.hasOwnProperty.call(rawBindings, channel);
+  } catch {}
   return {
-    printer:   (cat.printer || '').trim(),
-    preview:   cat.preview === true,
+    channel,
+    bindingConfigured: hasExplicitBinding,
+    profileConfigured: hasExplicitProfile,
+    // `cat.printer` conserva rutas creadas por versiones anteriores. Al guardar
+    // desde el Centro nuevo queda reemplazada por channel + binding local.
+    printer:   String(hasExplicitBinding ? bindings[channel] : (cat.printer || bindings[channel] || '')).trim(),
+    template:  (cat.template || '').trim(),
+    profileId: String(cat.profileId || profiles[channel] || '').trim(),
+    copies:    Math.max(1, Math.min(9, parseInt(cat.copies, 10) || 1)),
+    preview:   cat.preview !== undefined ? cat.preview === true : definition.previewDefault === true,
     autoPrint: cat.autoPrint !== undefined
       ? cat.autoPrint !== false
-      : (PRINT_CATEGORIES[category]?.autoPrintDefault ?? true),
+      : (definition.autoPrintDefault ?? true),
   };
 }
 
@@ -160,12 +229,130 @@ function _printProductCode(item) {
   return prod?.code || '';
 }
 
+// ══════════════════════════════════════════════
+// MONITOR LOCAL DE IMPRESORAS
+// ══════════════════════════════════════════════
+// Electron no expone un evento universal de conexión/desconexión para todas las
+// marcas. VELO mantiene una fotografía local, la refresca mientras la app está
+// visible y también al recuperar foco o antes de imprimir.
+const PRINTER_MONITOR_INTERVAL_MS = 4000;
+let _printerMonitorTimer = null;
+let _printerMonitorInFlight = null;
+let _printerMonitorState = {
+  printers: [],
+  initialized: false,
+  checkedAt: 0,
+  error: '',
+};
+
+function printerMonitorGetState() {
+  return {
+    ..._printerMonitorState,
+    printers: [...(_printerMonitorState.printers || [])],
+  };
+}
+
+async function printerMonitorRefresh(options = {}) {
+  if (_printerMonitorInFlight) return _printerMonitorInFlight;
+  const run = async () => {
+    try {
+      const raw = await window.api?.print?.getPrinters?.();
+      const next = typeof normalizePrinterSnapshot === 'function'
+        ? normalizePrinterSnapshot(raw)
+        : (Array.isArray(raw) ? raw : []);
+      const diff = typeof diffPrinterSnapshots === 'function'
+        ? diffPrinterSnapshots(_printerMonitorState.printers, next)
+        : { printers: next, added: [], removed: [], updated: [], changed: true };
+      const initial = !_printerMonitorState.initialized;
+      _printerMonitorState = {
+        printers: diff.printers,
+        initialized: true,
+        checkedAt: Date.now(),
+        error: '',
+      };
+      if (initial || diff.changed || options.forceEvent === true) {
+        document.dispatchEvent(new CustomEvent('velo:printers-changed', {
+          detail: {
+            ...diff,
+            initial,
+            reason: options.reason || 'monitor',
+            checkedAt: _printerMonitorState.checkedAt,
+          },
+        }));
+      }
+      return [...diff.printers];
+    } catch (error) {
+      _printerMonitorState.error = error?.message || String(error);
+      _printerMonitorState.checkedAt = Date.now();
+      document.dispatchEvent(new CustomEvent('velo:printer-monitor-error', {
+        detail: { error: _printerMonitorState.error, checkedAt: _printerMonitorState.checkedAt },
+      }));
+      return [...(_printerMonitorState.printers || [])];
+    } finally {
+      _printerMonitorInFlight = null;
+    }
+  };
+  _printerMonitorInFlight = run();
+  return _printerMonitorInFlight;
+}
+
+function printerMonitorStart() {
+  if (_printerMonitorTimer) return;
+  printerMonitorRefresh({ reason: 'startup' });
+  _printerMonitorTimer = setInterval(() => {
+    if (document.visibilityState === 'visible') {
+      printerMonitorRefresh({ reason: 'interval' });
+    }
+  }, PRINTER_MONITOR_INTERVAL_MS);
+}
+
+function printerMonitorStop() {
+  if (_printerMonitorTimer) clearInterval(_printerMonitorTimer);
+  _printerMonitorTimer = null;
+}
+
+async function printerMonitorEnsureAvailable(printerName, maxAgeMs = 1500) {
+  const name = String(printerName || '').trim();
+  if (!name) return { available: true, printer: null };
+  if (!_printerMonitorState.initialized ||
+      (Date.now() - _printerMonitorState.checkedAt) > maxAgeMs) {
+    await printerMonitorRefresh({ reason: 'preflight', force: true });
+  }
+  if (_printerMonitorState.error) {
+    return {
+      available: null,
+      indeterminate: true,
+      printer: null,
+      error: _printerMonitorState.error,
+      checkedAt: _printerMonitorState.checkedAt,
+    };
+  }
+  const printer = (_printerMonitorState.printers || []).find(item => item.name === name);
+  const runtime = printer && typeof getPrinterRuntimeState === 'function'
+    ? getPrinterRuntimeState(printer) : null;
+  return {
+    available: !!printer,
+    printer: printer || null,
+    runtime,
+    ready: !!printer && !runtime?.reportedIssue,
+    checkedAt: _printerMonitorState.checkedAt,
+  };
+}
+
+window.addEventListener('focus', () => {
+  printerMonitorRefresh({ reason: 'focus' });
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') printerMonitorRefresh({ reason: 'visible' });
+});
+window.addEventListener('beforeunload', printerMonitorStop);
+
 // ── Guard contra impresión duplicada ──────────
 // Evita reenviar el mismo documento si el usuario presiona "Imprimir"
 // varias veces muy rápido mientras el trabajo anterior sigue en curso.
 const _inFlightPrintKeys = new Set();
 
-function _printDispatch(payload) {
+async function _printDispatch(payload) {
   const key = (payload.jobType && payload.referenceId != null)
     ? `${payload.jobType}:${payload.referenceId}` : null;
   if (key) {
@@ -175,7 +362,28 @@ function _printDispatch(payload) {
     _inFlightPrintKeys.add(key);
   }
   const release = () => { if (key) _inFlightPrintKeys.delete(key); };
-  return window.api.print.html(payload).then(r => { release(); return r; }, e => { release(); throw e; });
+  try {
+    if (payload.printerName) {
+      const check = await printerMonitorEnsureAvailable(payload.printerName);
+      if (check.available === false) {
+        return {
+          ok: false,
+          printerUnavailable: true,
+          error: `La impresora “${payload.printerName}” ya no está disponible en esta terminal`,
+        };
+      }
+      if (check.runtime?.reportedIssue) {
+        return {
+          ok: false,
+          printerNotReady: true,
+          error: `La impresora “${payload.printerName}” reporta una incidencia: ${check.runtime.stateReason || 'no acepta trabajos'}`,
+        };
+      }
+    }
+    return await window.api.print.html(payload);
+  } finally {
+    release();
+  }
 }
 
 // Punto único para trabajos de etiquetas. Conserva las dimensiones exactas
@@ -186,6 +394,12 @@ function printLabelBatch({
 }) {
   if (!String(html || '').includes('class="vp-label"')) {
     return Promise.resolve({ ok: false, error: 'El trabajo no contiene etiquetas para imprimir' });
+  }
+  if (!String(printerName || '').trim()) {
+    return Promise.resolve({
+      ok: false,
+      error: 'Selecciona una impresora de etiquetas; la impresora de documentos no se usa automáticamente',
+    });
   }
   return _printDispatch({
     html,
@@ -223,7 +437,9 @@ function printReceipt(sale, isReprint = false) {
   if (!sale) return;
 
   // ── Usar sistema de plantillas si está configurado ──
-  const templateId = sale.print_template_id || DB?.settings?.print_template;
+  const jobType = sale.type === 'cotizacion' ? 'cotizacion' : 'ticket';
+  const routeConfig = _getCategoryConfig(_categoryForJobType(jobType));
+  const templateId = sale.print_template_id || routeConfig.template || DB?.settings?.print_template;
   const plantilla  = templateId ? getPlantilla(templateId) : null;
 
   if (plantilla) {
@@ -363,10 +579,12 @@ function printReceipt(sale, isReprint = false) {
       const noteBlock = `<div style="margin:8px 0;padding:7px 9px;border:1px solid #e5e7eb;border-radius:5px;font-family:Arial,sans-serif;font-size:10px"><strong>Notas:</strong> ${_escHtml(saleForPlant.notes)}</div>`;
       html = html.includes('</body>') ? html.replace('</body>', noteBlock + '</body>') : html + noteBlock;
     }
-    _openPrintWindow(html, 'ticket', sale.id, isReprint, {
+    _openPrintWindow(html, jobType, sale.id, isReprint, {
       printerName: sale.print_printer_name || '',
       profileId: sale.print_profile_id || '',
       templateId,
+      copies: sale.print_copies || routeConfig.copies || 1,
+      preview: sale.print_preview,
     });
     return html;
   }
@@ -724,6 +942,7 @@ function printAbono({ payment, customer, cajero, isReprint = false }) {
     ? reciboLabel(payment)
     : String(payment.id).padStart(5, '0');
   const amount = Number(payment.amount || 0);
+  const cancelled = String(payment.status || 'active').toLowerCase() === 'cancelled';
   const allocations = typeof paymentAllocationsOf === 'function'
     ? paymentAllocationsOf(payment) : [];
   const allocatedAmount = allocations.reduce((sum, row) => sum + Number(row.amount || 0), 0);
@@ -780,7 +999,15 @@ function printAbono({ payment, customer, cajero, isReprint = false }) {
     balance_before: Number(payment.balance_before || 0),
     balance_after: Number(payment.balance_after || 0),
     balance_after_payment: Number(payment.balance_after || 0),
-    notes: payment.note && payment.note !== 'Abono' ? payment.note : '',
+    status: cancelled ? 'cancelled' : 'completed',
+    cancel_reason: cancelled ? (payment.void_reason || 'Abono anulado') : '',
+    notes: [
+      cancelled ? `ANULADO — ${payment.void_reason || 'Sin motivo registrado'}` : '',
+      !cancelled && payment.replaces_payment_id
+        ? `Corrige recibo ${payment.replaces_payment_document_number_fmt || '#' + payment.replaces_payment_id}`
+        : '',
+      payment.note && payment.note !== 'Abono' ? payment.note : '',
+    ].filter(Boolean).join(' · '),
     print_template_id: DB?.settings?.print_template || '',
     print_printer_name: DB?.settings?.printer || '',
   }, isReprint);
@@ -1247,9 +1474,11 @@ async function _printPreviewPrint() {
 // ── Multi-terminal: elección de destino de impresión ─────────────────────────
 // Solo aplica a una terminal CLIENTE sin impresora local. En local/servidor o con
 // impresora configurada devuelve false → flujo de impresión normal (sin cambios).
-function _shouldOfferServerPrint() {
+function _shouldOfferServerPrint(jobType = 'ticket') {
   const mode = (typeof CFG !== 'undefined' && CFG.connectionMode) || 'local';
-  return mode === 'client' && !_getSavedPrinter();
+  const category = _categoryForJobType(jobType);
+  const route = _getCategoryConfig(category);
+  return mode === 'client' && !route.printer;
 }
 
 function _offerPrintTarget(html, jobType, referenceId) {
@@ -1270,7 +1499,15 @@ function _printTargetServer() {
   const pj = window._pendingPrint; window._pendingPrint = null;
   if (typeof closeModal === 'function') closeModal();
   if (!pj) return;
-  window.api.print.onServer({ html: pj.html, jobType: pj.jobType, referenceId: pj.referenceId, userId: (typeof user !== 'undefined' && user?.id) || null })
+  const route = _getCategoryConfig(_categoryForJobType(pj.jobType));
+  window.api.print.onServer({
+    html: pj.html,
+    jobType: pj.jobType,
+    referenceId: pj.referenceId,
+    userId: (typeof user !== 'undefined' && user?.id) || null,
+    channel: route.channel || '',
+    copies: route.copies || 1,
+  })
     .then(r => toast(r && r.ok ? '✓ Enviado a la impresora del mostrador' : (r && r.error) || 'No se pudo imprimir en el servidor', r && r.ok ? 's' : 'err'))
     .catch(() => toast('Sin conexión al servidor', 'err'));
 }
@@ -1295,19 +1532,29 @@ function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = fa
     _openPrintPreview(html, { jobType, referenceId, isReprint, mode: 'pdf', suggestedName: name, printOptions });
     return;
   }
-  if (!window._printPreviewBypass) {
+  const category = _categoryForJobType(jobType);
+  const categoryConfig = _getCategoryConfig(category);
+  const shouldPreview = isReprint || (printOptions.preview !== undefined
+    ? printOptions.preview === true
+    : categoryConfig.preview === true);
+  if (!window._printPreviewBypass && shouldPreview) {
     _openPrintPreview(html, { jobType, referenceId, isReprint, mode: 'print', printOptions });
     return;
   }
 
   _dispatchPrintWindow(html, jobType, referenceId, isReprint, printOptions);
+  // En el flujo VELO directo no hay modal que dispare el documento encadenado.
+  // Dar tiempo al spooler antes de enviar, por ejemplo, el conduce posterior.
+  const after = window._printAfter;
+  window._printAfter = null;
+  if (typeof after === 'function') setTimeout(after, 1200);
 }
 
 function _dispatchPrintWindow(html, jobType = '', referenceId = null, isReprint = false, printOptions = {}) {
   // Multi-terminal: terminal cliente SIN impresora física → ofrecer imprimir en
   // el servidor (mostrador) o aquí eligiendo impresora. En local/servidor o con
   // impresora configurada, no aplica (flujo normal).
-  if (_shouldOfferServerPrint()) {
+  if (_shouldOfferServerPrint(jobType)) {
     _offerPrintTarget(html, jobType, referenceId);
     return;
   }
@@ -1315,13 +1562,21 @@ function _dispatchPrintWindow(html, jobType = '', referenceId = null, isReprint 
   const category = _categoryForJobType(jobType);
   const catCfg    = _getCategoryConfig(category);
 
-  const printerName = printOptions.printerName || catCfg.printer || _getSavedPrinter();
-  const profile = printOptions.profileId && typeof resolvePrinterProfile === 'function'
+  const printerName = printOptions.printerName || catCfg.printer
+    || (catCfg.bindingConfigured ? '' : _getSavedPrinter());
+  const selectedProfileId = printOptions.profileId || catCfg.profileId || '';
+  const profile = selectedProfileId && typeof resolvePrinterProfile === 'function'
     ? resolvePrinterProfile(printerName, 'ticket', {
         ...(DB?.settings || {}),
-        printer_profile: printOptions.profileId,
+        printer_profile: selectedProfileId,
       })
-    : _getTicketPrinterProfile(printerName);
+    : (catCfg.profileConfigured && typeof resolvePrinterProfile === 'function'
+      ? resolvePrinterProfile(printerName, 'ticket', {
+          ...(DB?.settings || {}),
+          printer_profile: '',
+          printer_type: '',
+        })
+      : _getTicketPrinterProfile(printerName));
   let printerType = typeof printerProfileLegacyType === 'function'
     ? printerProfileLegacyType(profile)
     : (typeof detectPrinterType === 'function' ? detectPrinterType(printerName) : 'unknown');
@@ -1354,6 +1609,7 @@ function _dispatchPrintWindow(html, jobType = '', referenceId = null, isReprint 
         jobType,
         referenceId,
         userId: user?.id || null,
+        copies: Math.max(1, parseInt(printOptions.copies || catCfg.copies, 10) || 1),
       }).then(result => {
         if (!result?.ok && !result?.duplicate) {
           if (result?.error && result.error !== 'Impresión cancelada o fallida') {
@@ -1383,6 +1639,7 @@ function _dispatchPrintWindow(html, jobType = '', referenceId = null, isReprint 
           pageHint:     _pageHint,
           jobType, referenceId,
           userId: user?.id || null,
+          copies: Math.max(1, parseInt(printOptions.copies || catCfg.copies, 10) || 1),
         }).then(result => {
           if (!result?.ok && !result?.duplicate) _openPrintWindowFallback(html);
         }).catch(() => _openPrintWindowFallback(html));
@@ -1406,6 +1663,7 @@ function _dispatchPrintWindow(html, jobType = '', referenceId = null, isReprint 
       jobType,
       referenceId,
       userId: user?.id || null,
+      copies: Math.max(1, parseInt(printOptions.copies || catCfg.copies, 10) || 1),
     }).then(result => {
       if (!result?.ok && !result?.duplicate) {
         if (result?.error && result.error !== 'Impresión cancelada o fallida') {
@@ -1506,22 +1764,31 @@ function printHTML(html, category = 'reporte') {
     _openPrintPreview(html, { jobType: category, mode: 'pdf', suggestedName: name, source: 'html' });
     return;
   }
-  if (!window._printPreviewBypass) {
+  const resolvedCategory = _categoryForJobType(category);
+  if (!window._printPreviewBypass && _getCategoryConfig(resolvedCategory).preview) {
     _openPrintPreview(html, { jobType: category, mode: 'print', source: 'html' });
     return;
   }
 
-  _dispatchPrintHTML(html, category);
+  _dispatchPrintHTML(html, resolvedCategory);
 }
 
 function _dispatchPrintHTML(html, category = 'reporte') {
+  category = _categoryForJobType(category);
   // Multi-terminal: reportes también respetan la elección de destino (cliente sin
   // impresora → servidor / aquí).
-  if (_shouldOfferServerPrint()) { _offerPrintTarget(html, category, null); return; }
+  if (_shouldOfferServerPrint(category)) { _offerPrintTarget(html, category, null); return; }
   const catCfg = _getCategoryConfig(category);
 
   if (window.api?.print?.html) {
-    _printDispatch({ html, printerName: catCfg.printer || undefined, jobType: category, referenceId: null, userId: user?.id })
+    _printDispatch({
+      html,
+      printerName: catCfg.printer || (catCfg.bindingConfigured ? '' : _getSavedPrinter()) || undefined,
+      jobType: category,
+      referenceId: null,
+      userId: user?.id,
+      copies: catCfg.copies || 1,
+    })
       .then(result => {
         if (!result?.ok && !result?.duplicate) _openPrintWindowFallback(html);
       })
@@ -1539,28 +1806,33 @@ async function openPrinterConfig() {
   try {
     printers = await window.api.print.getPrinters();
   } catch {}
+  const documentPrinters = printers.filter(p => {
+    if (p?.name && p.name === DB?.settings?.barcode_printer) return false;
+    if (typeof detectLabelPrinter !== 'function') return true;
+    return !['high', 'medium'].includes(detectLabelPrinter(p, {}).confidence);
+  });
 
   const saved = _getSavedPrinter();
   const currentProfile = _getTicketPrinterProfile(saved);
   const savedProfile = DB?.settings?.printer_profile || '';
 
-  const options = printers.length
-    ? printers.map(p => `
+  const options = documentPrinters.length
+    ? documentPrinters.map(p => `
         <option value="${_escHtml(p.name)}" ${p.name === saved ? 'selected' : ''}>
           ${_escHtml(p.name)}${p.isDefault ? ' (predeterminada)' : ''}
         </option>`).join('')
-    : `<option value="">Sin impresoras detectadas</option>`;
+    : `<option value="">Sin impresoras de documentos detectadas</option>`;
 
   openModal(`
-    <div class="modal-title">Configurar Impresora</div>
-    <div class="modal-sub">Configura la impresora instalada y el medio físico que utilizará</div>
+    <div class="modal-title">Configurar impresora de documentos</div>
+    <div class="modal-sub">Aplica a facturas, recibos y reportes. Las etiquetas se configuran por separado.</div>
 
     <div class="fg">
       <label class="lbl">Impresora instalada</label>
       <select class="inp" id="sel-printer">${options}</select>
       <div style="font-size:11px;color:var(--muted);margin-top:5px">
-        La impresora debe aparecer instalada en el sistema. Para equipos USB como
-        2Connect, Zebra, TSC o AOKIA instala primero el controlador del fabricante.
+        La impresora debe aparecer instalada en el sistema. Esta selección nunca
+        cambia la impresora dedicada del módulo Etiquetas.
       </div>
     </div>
 
@@ -1571,14 +1843,12 @@ async function openPrinterConfig() {
         <option value="ticket_58" ${savedProfile==='ticket_58'?'selected':''}>Ticket térmico · 58 mm</option>
         <option value="ticket_72" ${savedProfile==='ticket_72'?'selected':''}>Ticket térmico · 72 mm</option>
         <option value="ticket_80" ${savedProfile==='ticket_80'?'selected':''}>Ticket térmico · 80 mm</option>
-        <option value="label_2connect_108" ${savedProfile==='label_2connect_108'?'selected':''}>2Connect 2C-LP427B · etiquetas/rollo 108 mm · 203 dpi</option>
         <option value="continuous_custom" ${savedProfile==='continuous_custom'?'selected':''}>Rollo continuo · ancho personalizado</option>
         <option value="sheet" ${savedProfile==='sheet'?'selected':''}>Carta / A4 · láser o tinta</option>
       </select>
       <div style="font-size:11px;color:var(--muted);margin-top:5px">
-        La 2C-LP427B trabaja mediante su driver y puede recibir el documento aunque
-        internamente emule ZPL/TSPL/EPS/EPL/DPL. Para tickets usa rollo continuo; para
-        etiquetas usa el módulo <strong>Etiquetas</strong> y su sensor de espacios.
+        Para rollos de etiquetas usa el módulo <strong>Etiquetas</strong>, donde
+        se seleccionan su impresora, medidas, sensor y calibración independientes.
       </div>
     </div>
 
@@ -1596,12 +1866,12 @@ async function openPrinterConfig() {
       </div>
     </div>
 
-    ${!printers.length ? `
+    ${!documentPrinters.length ? `
       <div class="alrt w" style="margin-top:8px">
         <div class="alrt-dot w"></div>
         <div>
-          <div class="alrt-title">No se detectaron impresoras</div>
-          <div class="alrt-sub">Verifica que la impresora esté encendida y conectada por USB.</div>
+          <div class="alrt-title">No se detectó una impresora de documentos</div>
+          <div class="alrt-sub">Las impresoras reconocidas como etiquetadoras se configuran únicamente en Etiquetas.</div>
         </div>
       </div>` : ''}
 

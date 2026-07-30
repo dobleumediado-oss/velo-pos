@@ -477,7 +477,10 @@ function diagnoseCredit({ db }) {
            COALESCE((SELECT SUM(s.total) FROM sales s
              WHERE s.customer_id=c.id AND s.payment_method='credito'
                AND s.type='devolucion' AND s.status!='cancelled'),0) AS returns_total,
-           COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.customer_id=c.id),0) AS paid_total
+           COALESCE((
+             SELECT SUM(p.amount) FROM payments p
+             WHERE p.customer_id=c.id AND COALESCE(p.status,'active')='active'
+           ),0) AS paid_total
     FROM customers c
     WHERE c.active=1 AND c.id != 1
   `).all();

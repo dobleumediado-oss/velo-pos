@@ -53,8 +53,11 @@ function renderCaja(el) {
     const tdS    = DB.sales.filter(s =>
       (s.cash_session_id || s.cajaId) === sesId && s.type !== 'devolucion' && s.status !== 'returned' && s.status !== 'cancelled');
     const tdDevs = DB.sales.filter(s => (s.cash_session_id || s.cajaId) === cajaSession.id && s.type === 'devolucion');
-    const tdPayments = (DB.payments || []).filter(p =>
-      Number(p.cash_session_id) === Number(sesId) && p.cajero !== 'Importación histórica');
+    const tdPaymentsAll = (DB.payments || []).filter(p =>
+      Number(p.cash_session_id) === Number(sesId) && !isImportedRecord(p));
+    const tdPayments = tdPaymentsAll.filter(
+      p => String(p.status || 'active').toLowerCase() !== 'cancelled'
+    );
     const tdRev  = tdS.reduce((a, s) => a + s.total, 0);
     const tdDev  = tdDevs.reduce((a, s) => a + s.total, 0);
     const tdEfec = tdS.filter(s => (s.payment_method || s.pay) === 'efectivo').reduce((a, s) => a + s.total, 0)
@@ -128,20 +131,24 @@ function renderCaja(el) {
     payCard.appendChild(h('div',{class:'fxb mb8'},
       h('div',{class:'card-title'},`Abonos y pagos iniciales (${tdPayments.length})`),
       h('button',{class:'btn btn-ghost btn-sm',onclick:()=>{ window._ventasTabInicial='abonos'; routeTo('ventas'); },html:`${svg('list')} Ver historial`})));
-    if (!tdPayments.length) {
+    if (!tdPaymentsAll.length) {
       payCard.appendChild(h('div',{class:'empty',style:{padding:'18px'}},h('p',null,'Sin abonos en esta sesión')));
     } else {
-      const rows = [...tdPayments].reverse().map(p => h('tr',null,
+      const rows = [...tdPaymentsAll].reverse().map(p => {
+        const cancelled = String(p.status || 'active').toLowerCase() === 'cancelled';
+        return h('tr',{style:cancelled?{opacity:'.72',background:'var(--surface2)'}:null},
         h('td',{class:'tm'},reciboLabel(p)),
         h('td',null,h('div',{class:'tb'},p.customer_name||DB.customers.find(c=>Number(c.id)===Number(p.customer_id))?.name||'Cliente')),
         h('td',{class:'tm'},paymentInvoiceSummary(p)),
         h('td',null,h('span',{class:`badge ${(p.method||'')==='efectivo'?'g':'b'}`},p.method||'efectivo')),
-        h('td',{style:{fontWeight:800,color:'var(--green)'}},fmt(p.amount)),
+        h('td',null,h('span',{class:`badge ${cancelled?'r':'g'}`},cancelled?'Anulado':'Vigente')),
+        h('td',{style:{fontWeight:800,color:cancelled?'var(--muted2)':'var(--green)',textDecoration:cancelled?'line-through':'none'}},fmt(p.amount)),
         h('td',null,h('div',{class:'flex',style:{gap:'3px'}},
           h('button',{class:'btn btn-ghost btn-sm',onclick:()=>openAbonoDetalleModal(p),html:svg('eye')}),
-          h('button',{class:'btn btn-ghost btn-sm',onclick:()=>reimprimirAbono(p.id),html:svg('print')})))));
+          h('button',{class:'btn btn-ghost btn-sm',onclick:()=>reimprimirAbono(p.id),html:svg('print')}))));
+      });
       payCard.appendChild(h('div',{class:'tw'},h('table',null,
-        h('thead',null,h('tr',null,...['Recibo','Cliente','Factura','Método','Monto',''].map(x=>h('th',null,x)))),
+        h('thead',null,h('tr',null,...['Recibo','Cliente','Factura','Método','Estado','Monto',''].map(x=>h('th',null,x)))),
         h('tbody',null,...rows))));
     }
     el.appendChild(payCard);
@@ -434,7 +441,8 @@ async function openCierreCajaModal() {
     .filter(p =>
       p.cash_session_id === cajaSession.id &&
       (p.method || 'efectivo') === 'efectivo' &&
-      p.cajero !== 'Importación histórica'
+      String(p.status || 'active').toLowerCase() !== 'cancelled' &&
+      !isImportedRecord(p)
     )
     .reduce((a, p) => a + (p.amount || 0), 0);
 
@@ -656,7 +664,9 @@ async function imprimirReporteDia() {
   const devs     = DB.sales.filter(s =>
     (s.cash_session_id || s.cajaId) === sesId && s.type === 'devolucion');
   const abonos   = DB.payments.filter(p =>
-    Number(p.cash_session_id) === Number(sesId));
+    Number(p.cash_session_id) === Number(sesId)
+      && String(p.status || 'active').toLowerCase() !== 'cancelled'
+      && !isImportedRecord(p));
 
   const totalEfec  = ventas.filter(s => (s.payment_method||s.pay) === 'efectivo').reduce((a,s) => a+s.total,0);
   const totalCard  = ventas.filter(s => (s.payment_method||s.pay) === 'tarjeta').reduce((a,s) => a+s.total,0);

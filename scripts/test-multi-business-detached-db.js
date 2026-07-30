@@ -100,6 +100,8 @@ try {
     printer_width_mm: '80',
     printer_dpi: '203',
     print_config: '{}',
+    printer_channel_bindings: '{"ventas":"Caja"}',
+    printer_channel_profiles: '{"ventas":"ticket_80"}',
     barcode_printer: 'Etiquetas',
     barcode_printer_profile: 'label_2connect_108',
     barcode_media_width_mm: '108',
@@ -110,7 +112,11 @@ try {
     module_multi_negocio: '1',
   });
   ok(pickedSettings.connection_mode === 'server' && pickedSettings.terminal_id === 'term-1', 'detecta settings de conexión y terminal');
-  ok(pickedSettings.print_config === '{}' && pickedSettings.barcode_printer === 'Etiquetas', 'detecta settings locales de impresión');
+  ok(pickedSettings.print_config === '{}'
+    && pickedSettings.printer_channel_bindings === '{"ventas":"Caja"}'
+    && pickedSettings.printer_channel_profiles === '{"ventas":"ticket_80"}'
+    && pickedSettings.barcode_printer === 'Etiquetas',
+  'detecta settings locales de impresión y perfiles por canal');
   ok(pickedSettings.printer_profile === 'ticket_80' && pickedSettings.barcode_media_width_mm === '108', 'conserva perfiles físicos por terminal');
   ok(!('biz_name' in pickedSettings) && !('module_multi_negocio' in pickedSettings), 'excluye settings propios del negocio');
   ok(businessCtx.normalizeBusinessInput({ name: '  Taller Norte  ', description: '  Demo  ' }).name === 'Taller Norte', 'normaliza nombre de negocio');

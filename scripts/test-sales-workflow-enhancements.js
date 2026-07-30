@@ -58,6 +58,12 @@ const sale = DB.salesRepo.create({
     displayCurrency: 'USD',
     displayExchangeRate: 60,
     saleDate: '2026-07-20',
+    printTemplateId: 'carta_recibo',
+    printPrinterType: 'carta',
+    printPrinterName: 'HP Test',
+    printProfileId: 'sheet',
+    printCopies: 2,
+    printAction: 'print',
   },
   session: { id: cashId },
   user,
@@ -66,6 +72,9 @@ const sale = DB.salesRepo.create({
 const saved = DB.salesRepo.getById(sale.saleId);
 ok(saved.customer_phone === '1*2345' && saved.customer_phone_type === 'flota',
   'la factura guarda el número elegido y su tipo');
+ok(saved.print_template_id === 'carta_recibo' && saved.print_printer_name === 'HP Test'
+    && saved.print_profile_id === 'sheet' && saved.print_copies === 2,
+  'conserva la salida de impresión usada para reimpresiones');
 
 console.log('\n== B. Cargo adicional, USD y fecha documental ==');
 ok(saved.charges.length === 1 && near(saved.additional_charges_total, 128),

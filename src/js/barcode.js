@@ -21,7 +21,7 @@ let _bcState = {
 };
 
 function _bcCalibrationKey(printerName) {
-  return String(printerName || '__system_default__').trim().toLowerCase();
+  return String(printerName || '').trim().toLowerCase();
 }
 
 function _bcParseCalibrations(raw) {
@@ -31,6 +31,20 @@ function _bcParseCalibrations(raw) {
   } catch {
     return {};
   }
+}
+
+function _bcLabelBindings(raw, printerName) {
+  let bindings = {};
+  try { bindings = JSON.parse(raw || '{}') || {}; } catch {}
+  bindings.etiquetas = String(printerName || '').trim();
+  return JSON.stringify(bindings);
+}
+
+function _bcLabelProfiles(raw, profileId) {
+  let profiles = {};
+  try { profiles = JSON.parse(raw || '{}') || {}; } catch {}
+  profiles.etiquetas = String(profileId || '').trim();
+  return JSON.stringify(profiles);
 }
 
 function _bcSelectedPrinterInfo(name = _bcState.selPrinter) {
@@ -52,7 +66,7 @@ function _bcDetectPrinter(name = _bcState.selPrinter) {
   return {
     ...profile,
     printerName: name || '',
-    displayName: name || 'Impresora del sistema',
+    displayName: name || 'Sin impresora de etiquetas configurada',
     confidence: 'low',
     reason: 'Confirma las medidas con una prueba',
     isDefault: info?.isDefault === true,
@@ -158,10 +172,14 @@ function _bcRenderSvg(value, d) {
 // ══════════════════════════════════════════════
 // RENDER PRINCIPAL
 // ══════════════════════════════════════════════
-async function renderBarcode(el) {
-  if (!['admin', 'superadmin'].includes(user?.role)) {
+async function renderBarcode(el, options = {}) {
+  const canOperate = ['admin', 'superadmin'].includes(user?.role)
+    || (user?.role === 'cajero' && window._bcEnabled
+      && String(CFG?.barcode_enabled_roles || 'admin').includes('cajero'));
+  if (!canOperate) {
     routeTo('dash'); return;
   }
+  const embedded = options?.embedded === true;
 
   const barcodeReady = await _loadJsBarcode();
   if (!barcodeReady) {
@@ -181,9 +199,40 @@ async function renderBarcode(el) {
 
   // Impresoras disponibles
   // getPrinters retorna el array directamente (no { ok, data })
-  _bcState.printers = await window.api.print.getPrinters().catch(() => []);
+  _bcState.printers = typeof printerMonitorRefresh === 'function'
+    ? await printerMonitorRefresh({ reason: 'labels-open' })
+    : await window.api.print.getPrinters().catch(() => []);
   if (!Array.isArray(_bcState.printers)) _bcState.printers = [];
-  _bcState.selPrinter = settings?.barcode_printer || settings?.printer || '';
+  const savedLabelPrinter = String(settings?.barcode_printer || '').trim();
+  const labelChoice = typeof chooseLabelPrinter === 'function'
+    ? chooseLabelPrinter(_bcState.printers, savedLabelPrinter, settings)
+    : { printerName: savedLabelPrinter, autoDetected: false,
+        classified: _bcState.printers.map(printer => ({ ...printer,
+          labelDetection: _bcDetectPrinter(printer.name) })) };
+  _bcState.printers = labelChoice.classified;
+  _bcState.selPrinter = savedLabelPrinter || labelChoice.printerName;
+  if (!savedLabelPrinter && labelChoice.autoDetected) {
+    const bindingRaw = _bcLabelBindings(
+      settings?.printer_channel_bindings || DB?.settings?.printer_channel_bindings,
+      _bcState.selPrinter
+    );
+    await window.api.settings.set({
+      key: 'barcode_printer',
+      value: _bcState.selPrinter,
+      requestUserId: user?.id,
+    }).catch(() => {});
+    await window.api.settings.set({
+      key: 'printer_channel_bindings',
+      value: bindingRaw,
+      requestUserId: user?.id,
+    }).catch(() => {});
+    settings.barcode_printer = _bcState.selPrinter;
+    settings.printer_channel_bindings = bindingRaw;
+    if (DB?.settings) Object.assign(DB.settings, {
+      barcode_printer: _bcState.selPrinter,
+      printer_channel_bindings: bindingRaw,
+    });
+  }
   _bcState.labelType  = settings?.barcode_label_type || 'interno';
   _bcState.profileId = settings?.barcode_printer_profile ||
     (settings?.barcode_paper_72mm === '1' ? 'label_generic' : '');
@@ -206,12 +255,24 @@ async function renderBarcode(el) {
   el.style.paddingBottom = '60px';
 
   // ── Header ──────────────────────────────────
-  el.appendChild(h('div', { class: 'sec-hdr' },
+  el.appendChild(h('div', {
+    class: embedded ? 'card' : 'sec-hdr',
+    style: embedded ? 'margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:12px' : ''
+  },
     h('div', null,
-      h('div', { class: 'sec-title' }, 'Etiquetas de Código de Barras'),
-      h('div', { class: 'sec-sub' }, 'Selecciona productos, define cantidad e imprime')
+      h('div', { class: embedded ? 'card-title' : 'sec-title' }, 'Producción de etiquetas'),
+      h('div', {
+        class: embedded ? '' : 'sec-sub',
+        style: embedded ? 'font-size:11px;color:var(--muted2);margin-top:3px' : ''
+      }, 'Selecciona productos, define cantidad e imprime')
     ),
     h('div', { style: 'display:flex;gap:8px' },
+      h('button', {
+        class: 'btn btn-out btn-sm',
+        style: ['admin','superadmin'].includes(user?.role) ? '' : 'display:none',
+        onclick: () => pcOpenLabelDesigner(),
+        html: `${svg('settings')} Diseñar`
+      }),
       h('button', {
         class: 'btn btn-out btn-sm',
         onclick: () => _bcOpenPreview(),
@@ -294,11 +355,7 @@ async function renderBarcode(el) {
     <div class="fg">
       <label class="lbl">Seleccionar impresora</label>
       <select class="inp" id="bc-printer-sel" onchange="bcSavePrinter(this.value)">
-        <option value="">— Impresora del sistema —</option>
-        ${_bcState.printers.map(p => `
-          <option value="${p.name}" ${p.name === _bcState.selPrinter ? 'selected' : ''}>
-            ${p.name}${_bcLabelType(p.name) ? ' · ' + _bcLabelType(p.name) : ''}
-          </option>`).join('')}
+        ${_bcPrinterOptions()}
       </select>
     </div>
     <div id="bc-printer-badge" style="margin-top:4px"></div>
@@ -319,7 +376,7 @@ async function renderBarcode(el) {
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
       <div class="fg" style="margin:0">
-        <label class="lbl">Ancho de la etiqueta (mm)</label>
+        <label class="lbl">Ancho del rollo / medio (mm)</label>
         <input class="inp" id="bc-media-width" type="number" min="20" max="150" step="0.1"
                value="${_bcState.mediaWidthMm}" onchange="bcSaveMediaConfig()"/>
       </div>
@@ -330,7 +387,7 @@ async function renderBarcode(el) {
       </div>
     </div>
     <div style="font-size:11px;color:var(--muted2);margin-top:5px">
-      El código de barras y el texto se ajustan a este ancho <b>real en milímetros</b>: es el ancho con el que sale la etiqueta. La resolución (DPI) es solo informativa.
+      Este valor describe el <b>papel o soporte físico</b>. El tamaño de cada etiqueta se define aparte en el diseñador y nunca se estira automáticamente.
     </div>
     <div class="fg" style="margin-top:8px">
       <label class="lbl">Avance del papel</label>
@@ -369,7 +426,11 @@ async function renderBarcode(el) {
     <div style="background:var(--surface2);border-radius:8px;padding:12px;font-size:12px">
       <div class="tr" style="margin-bottom:6px">
         <span style="color:var(--muted2)">Tamaño</span>
-        <span style="font-weight:700">${_bcState.mediaWidthMm || d.labelW}×${d.labelH} mm</span>
+        <span style="font-weight:700">${d.labelW}×${d.labelH} mm</span>
+      </div>
+      <div class="tr" style="margin-bottom:6px">
+        <span style="color:var(--muted2)">Medio</span>
+        <span style="font-weight:700">${_bcState.mediaWidthMm} mm</span>
       </div>
       <div class="tr" style="margin-bottom:6px">
         <span style="color:var(--muted2)">Tipo código</span>
@@ -384,10 +445,10 @@ async function renderBarcode(el) {
         <span>${[d.showName?'Nombre':'',d.showPrice?'Precio':'',d.showBrand?'Marca':'',d.showCode?'Código':''].filter(Boolean).join(', ')||'—'}</span>
       </div>
     </div>
-    ${user?.role === 'superadmin' ? `
+    ${['admin','superadmin'].includes(user?.role) ? `
     <button class="btn btn-out btn-sm" style="margin-top:10px;width:100%"
-            onclick="routeTo('superadmin')">
-      ${svg('settings')} Cambiar diseño en Panel Dev
+            onclick="pcOpenLabelDesigner()">
+      ${svg('settings')} Editar diseño de etiqueta
     </button>` : `
     <div style="font-size:11px;color:var(--muted2);margin-top:8px">
       El diseño lo configura el administrador del sistema
@@ -544,12 +605,18 @@ async function bcSavePrinter(name) {
     _bcState.printerDpi = _bcState.detection.dpi;
   }
   _bcSyncMediaControls();
+  const bindingRaw = _bcLabelBindings(DB?.settings?.printer_channel_bindings, name);
   await Promise.all([
     window.api.settings.set({ key: 'barcode_printer', value: name, requestUserId: user?.id }),
+    window.api.settings.set({ key: 'printer_channel_bindings', value: bindingRaw, requestUserId: user?.id }),
     window.api.settings.set({ key: 'barcode_printer_profile', value: _bcState.profileId || '', requestUserId: user?.id }),
     window.api.settings.set({ key: 'barcode_media_width_mm', value: String(_bcState.mediaWidthMm), requestUserId: user?.id }),
     window.api.settings.set({ key: 'barcode_printer_dpi', value: String(_bcState.printerDpi), requestUserId: user?.id }),
   ]).catch(() => {});
+  if (DB?.settings) Object.assign(DB.settings, {
+    barcode_printer: name,
+    printer_channel_bindings: bindingRaw,
+  });
   _bcUpdatePrinterBadge();
   _bcRenderDetectionSummary();
 }
@@ -587,11 +654,19 @@ async function bcSaveMediaConfig() {
     calibration.mediaMode = _bcState.mediaMode;
     calibration.updatedAt = new Date().toISOString();
   }
-  // El ancho de la etiqueta es una sola fuente de verdad: al cambiarlo aquí,
-  // también se guarda en el diseño para que el diseñador (y su preview) queden
-  // sincronizados con lo que realmente se imprime.
+  // El ancho del medio y el ancho de cada etiqueta son medidas distintas.
+  // Cambiar el rollo nunca debe estirar ni sobrescribir el diseño guardado.
+  const channelProfiles = _bcLabelProfiles(
+    DB?.settings?.printer_channel_profiles,
+    _bcState.profileId
+  );
   const saves = [
     window.api.settings.set({ key: 'barcode_printer_profile', value: _bcState.profileId || '' }),
+    window.api.settings.set({
+      key: 'printer_channel_profiles',
+      value: channelProfiles,
+      requestUserId: user?.id,
+    }),
     window.api.settings.set({ key: 'barcode_media_width_mm', value: String(_bcState.mediaWidthMm) }),
     window.api.settings.set({ key: 'barcode_printer_dpi', value: String(_bcState.printerDpi) }),
     window.api.settings.set({ key: 'barcode_media_mode', value: _bcState.mediaMode }),
@@ -603,11 +678,8 @@ async function bcSaveMediaConfig() {
       requestUserId: user?.id,
     }));
   }
-  if (_bcState.design && typeof _bcState.design === 'object') {
-    _bcState.design.labelW = _bcState.mediaWidthMm;
-    saves.push(window.api.settings.set({ key: 'barcode_design', value: JSON.stringify(_bcState.design) }));
-  }
   await Promise.all(saves).catch(() => {});
+  if (DB?.settings) DB.settings.printer_channel_profiles = channelProfiles;
   _bcState.detection = _bcDetectPrinter();
   _bcUpdatePrinterBadge();
   _bcRenderDetectionSummary();
@@ -653,33 +725,54 @@ function _bcUpdatePrinterBadge() {
   if (!badge) return;
   const p = _bcState.selPrinter;
   if (!p) {
-    const profile = _bcPrinterProfile();
-    badge.innerHTML = `<div class="badge n">Impresora del sistema · ${profile.widthMm}mm · ${profile.dpi}dpi</div>`;
+    badge.innerHTML = `<div class="badge o">Selecciona una impresora de etiquetas</div>
+      <div style="font-size:10.5px;color:var(--muted2);margin-top:5px">
+        Velo no usará la impresora de facturas ni la predeterminada del sistema.
+      </div>`;
     return;
   }
   const tipo = _bcLabelType(p);
   const profile = _bcPrinterProfile();
+  const printerInfo = (_bcState.printers || []).find(printer => printer.name === p);
+  const available = !!printerInfo;
+  const runtime = printerInfo && typeof getPrinterRuntimeState === 'function'
+    ? getPrinterRuntimeState(printerInfo) : null;
+  const ready = available && !runtime?.reportedIssue;
   badge.innerHTML = `
     <div style="display:flex;gap:6px;align-items:center">
-      <div class="badge g">${svg('check')} ${p}</div>
+      <div class="badge ${ready ? 'g' : available ? 'o' : 'r'}">${ready ? svg('check') : svg('alert')} ${p}</div>
       ${tipo ? `<div class="badge b">${tipo}</div>` : ''}
       <div class="badge n">${profile.widthMm}mm · ${profile.dpi}dpi</div>
       ${_bcCurrentCalibration() ? '<div class="badge g">Calibrada</div>' : ''}
-    </div>`;
+    </div>
+    ${!available ? `<div style="font-size:10.5px;color:var(--red);margin-top:5px">
+      La cola guardada no está disponible. VELO no enviará el trabajo hasta que vuelva o selecciones otra.
+    </div>` : runtime?.reportedIssue ? `<div style="font-size:10.5px;color:var(--orange);margin-top:5px">
+      El controlador reporta: ${_bcEsc(runtime.stateReason || 'no acepta trabajos')}.
+    </div>` : ''}`;
 }
 
 function _bcRenderDetectionSummary() {
   const box = document.getElementById('bc-detection-summary');
   if (!box) return;
   const detected = _bcState.detection || _bcDetectPrinter();
-  const tone = detected.confidence === 'high' ? 'var(--green)'
+  const available = !!_bcState.selPrinter &&
+    (_bcState.printers || []).some(printer => printer.name === _bcState.selPrinter);
+  const tone = detected.runtime?.reportedIssue ? 'var(--red)'
+    : detected.confidence === 'high' ? 'var(--green)'
     : detected.confidence === 'medium' ? 'var(--blue)' : 'var(--orange)';
-  const label = detected.confidence === 'high' ? 'Modelo reconocido'
+  const label = detected.runtime?.reportedIssue ? 'Incidencia reportada'
+    : detected.confidence === 'high' ? 'Modelo reconocido'
     : detected.confidence === 'medium' ? 'Familia reconocida' : 'Requiere prueba';
   box.style.borderLeftColor = tone;
   box.innerHTML = `
     <div style="font-weight:700;color:var(--ink3)">${label} · ${detected.widthMm} mm · ${detected.dpi} DPI</div>
     <div>${_bcEsc(detected.reason || '')}</div>
+    ${detected.runtime?.model ? `<div>Modelo del controlador: ${_bcEsc(detected.runtime.model)}</div>` : ''}
+    ${detected.runtime?.stateReason ? `<div>Estado: ${_bcEsc(detected.runtime.stateReason)}</div>` : ''}
+    ${_bcState.selPrinter ? `<div style="color:${available ? 'var(--green)' : 'var(--red)'};font-weight:700">
+      ${available ? '✓ Cola disponible en esta terminal' : '⚠ Cola no disponible en esta terminal'}
+    </div>` : ''}
     ${_bcCurrentCalibration() ? '<div style="color:var(--green);font-weight:700">✓ Calibración guardada para esta impresora</div>' : ''}`;
 }
 
@@ -699,10 +792,75 @@ function _bcLabelType(name) {
   return '';
 }
 
+function _bcPrinterOptions() {
+  const printers = _bcState.printers || [];
+  const dedicated = printers.filter(p =>
+    ['high', 'medium'].includes(p.labelDetection?.confidence)
+  );
+  const manual = printers.filter(p =>
+    !['high', 'medium'].includes(p.labelDetection?.confidence)
+  );
+  const render = p => {
+    const type = _bcLabelType(p.name);
+    const suffix = type || p.labelDetection?.confidence === 'high'
+      ? (type || 'Modelo reconocido')
+      : 'Selección manual';
+    return `<option value="${_bcEsc(p.name)}" ${p.name === _bcState.selPrinter ? 'selected' : ''}>
+      ${_bcEsc(p.displayName || p.name)} · ${_bcEsc(suffix)}
+    </option>`;
+  };
+  return `
+    <option value="">— Selecciona la impresora de etiquetas —</option>
+    ${_bcState.selPrinter && !printers.some(p => p.name === _bcState.selPrinter)
+      ? `<option value="${_bcEsc(_bcState.selPrinter)}" selected disabled>${_bcEsc(_bcState.selPrinter)} · no disponible</option>`
+      : ''}
+    ${dedicated.length ? `<optgroup label="Impresoras de etiquetas detectadas">${dedicated.map(render).join('')}</optgroup>` : ''}
+    ${manual.length ? `<optgroup label="Otras impresoras (selección manual)">${manual.map(render).join('')}</optgroup>` : ''}
+  `;
+}
+
+async function _bcHandlePrinterSnapshot(printers) {
+  const settings = {
+    barcode_printer_profile: _bcState.profileId,
+    barcode_media_width_mm: _bcState.mediaWidthMm,
+    barcode_printer_dpi: _bcState.printerDpi,
+  };
+  _bcState.printers = typeof classifyLabelPrinters === 'function'
+    ? classifyLabelPrinters(printers, settings)
+    : (Array.isArray(printers) ? printers : []);
+  const select = document.getElementById('bc-printer-sel');
+  if (!select) return;
+
+  if (!_bcState.selPrinter && typeof chooseLabelPrinter === 'function') {
+    const choice = chooseLabelPrinter(_bcState.printers, '', settings);
+    _bcState.printers = choice.classified;
+    if (choice.autoDetected && choice.printerName) {
+      await bcSavePrinter(choice.printerName);
+      toast(`✓ Etiquetadora detectada: ${choice.printerName}`, 'ok');
+    }
+  }
+  select.innerHTML = _bcPrinterOptions();
+  select.value = _bcState.selPrinter || '';
+  _bcState.detection = _bcDetectPrinter();
+  _bcUpdatePrinterBadge();
+  _bcRenderDetectionSummary();
+}
+
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('velo:printers-changed', event => {
+    _bcHandlePrinterSnapshot(event.detail?.printers || []).catch(() => {});
+  });
+}
+
 // ══════════════════════════════════════════════
 // ASISTENTE DE DETECCIÓN Y CALIBRACIÓN
 // ══════════════════════════════════════════════
 function _bcOpenCalibrationWizard() {
+  if (!_bcState.selPrinter) {
+    toast('Selecciona primero la impresora de etiquetas', 'w');
+    document.getElementById('bc-printer-sel')?.focus();
+    return;
+  }
   const detected = _bcDetectPrinter();
   const saved = _bcCurrentCalibration();
   const d = _bcState.design || _bcDefaultDesign();
@@ -711,8 +869,11 @@ function _bcOpenCalibrationWizard() {
     detected,
     profileId: saved?.profileId || _bcState.profileId || detected.id || 'label_generic',
     widthMm: Number(saved?.widthMm) || Number(_bcState.mediaWidthMm) || detected.widthMm || 50,
+    labelWidthMm: Number(d.labelW) || 50,
     labelHeightMm: Number(saved?.labelHeightMm) || Number(d.labelH) || 25,
     gapMm: Number.isFinite(Number(saved?.gapMm)) ? Number(saved.gapMm) : (Number(d.gapMm) || 0),
+    pageMm: Number(d.pageMm) || 0,
+    cols: Math.max(1, Number(d.cols) || 1),
     dpi: Number(saved?.dpi) || Number(_bcState.printerDpi) || detected.dpi || 203,
     mediaMode: saved?.mediaMode || _bcState.mediaMode || 'gap',
     offsetXmm: saved && Number.isFinite(Number(saved.offsetXmm))
@@ -725,7 +886,7 @@ function _bcOpenCalibrationWizard() {
     : detected.confidence === 'medium' ? 'Media' : 'Por confirmar';
   const confidenceColor = detected.confidence === 'high' ? 'var(--green)'
     : detected.confidence === 'medium' ? 'var(--blue)' : 'var(--orange)';
-  const printerTitle = detected.displayName || detected.printerName || 'Impresora predeterminada del sistema';
+  const printerTitle = detected.displayName || detected.printerName;
 
   openModal(`
     <div class="modal-title">Detectar y calibrar impresora de etiquetas</div>
@@ -760,15 +921,20 @@ function _bcOpenCalibrationWizard() {
         </div>
 
         <div style="border:1px solid var(--line);border-radius:10px;padding:12px">
-          <div style="font-size:11px;color:var(--muted2);font-weight:700;text-transform:uppercase;margin-bottom:9px">2 · Medidas del rollo</div>
+          <div style="font-size:11px;color:var(--muted2);font-weight:700;text-transform:uppercase;margin-bottom:9px">2 · Medio y etiqueta física</div>
           <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:9px">
             <div class="fg" style="margin:0">
-              <label class="lbl">Ancho (mm)</label>
+              <label class="lbl">Ancho del medio</label>
               <input class="inp" id="bc-cal-width" type="number" min="20" max="150" step="0.1"
                      value="${window._bcCalWizard.widthMm}" oninput="_bcCalRender()">
             </div>
             <div class="fg" style="margin:0">
-              <label class="lbl">Alto (mm)</label>
+              <label class="lbl">Ancho etiqueta</label>
+              <input class="inp" id="bc-cal-label-width" type="number" min="10" max="150" step="0.5"
+                     value="${window._bcCalWizard.labelWidthMm}" oninput="_bcCalRender()">
+            </div>
+            <div class="fg" style="margin:0">
+              <label class="lbl">Alto etiqueta</label>
               <input class="inp" id="bc-cal-height" type="number" min="8" max="300" step="0.5"
                      value="${window._bcCalWizard.labelHeightMm}" oninput="_bcCalRender()">
             </div>
@@ -867,6 +1033,7 @@ function _bcCalRead() {
   const cal = window._bcCalWizard;
   if (!cal) return null;
   cal.widthMm = _bcCalNumber('bc-cal-width', cal.widthMm, 20, 150);
+  cal.labelWidthMm = _bcCalNumber('bc-cal-label-width', cal.labelWidthMm, 10, 150);
   cal.labelHeightMm = _bcCalNumber('bc-cal-height', cal.labelHeightMm, 8, 300);
   cal.gapMm = _bcCalNumber('bc-cal-gap', cal.gapMm, 0, 30);
   cal.dpi = _bcCalNumber('bc-cal-dpi', cal.dpi, 100, 1200);
@@ -882,16 +1049,26 @@ function _bcCalRender() {
   const preview = document.getElementById('bc-cal-preview');
   const meta = document.getElementById('bc-cal-preview-meta');
   const info = document.getElementById('bc-cal-page-info');
+  const layout = typeof calculateLabelLayout === 'function'
+    ? calculateLabelLayout({
+      labelW: cal.labelWidthMm,
+      labelH: cal.labelHeightMm,
+      gapMm: cal.gapMm,
+      pageMm: cal.pageMm,
+      cols: cal.cols,
+    }, { widthMm: cal.widthMm, printableWidthMm: cal.widthMm })
+    : { cols: 1, requestedCols: 1, fitsMedia: true };
   const scale = Math.min(3, 330 / Math.max(20, cal.widthMm));
   if (preview) {
-    preview.style.width = `${Math.max(100, cal.widthMm * scale)}px`;
+    preview.style.width = `${Math.max(40, cal.labelWidthMm * scale)}px`;
     preview.style.height = `${Math.max(65, cal.labelHeightMm * scale)}px`;
     preview.style.transform = `translate(${cal.offsetXmm * scale}px, ${cal.offsetYmm * scale}px)`;
   }
-  if (meta) meta.textContent = `${cal.widthMm}×${cal.labelHeightMm}mm · X ${cal.offsetXmm} / Y ${cal.offsetYmm}`;
+  if (meta) meta.textContent = `${cal.labelWidthMm}×${cal.labelHeightMm}mm · X ${cal.offsetXmm} / Y ${cal.offsetYmm}`;
   if (info) {
     const pageHeight = cal.mediaMode === 'continuous' ? 'automático' : `${cal.labelHeightMm + cal.gapMm} mm`;
-    info.textContent = `Papel: ${cal.widthMm} mm × ${pageHeight} · ${cal.dpi} DPI`;
+    info.textContent = `Medio: ${cal.widthMm} mm × ${pageHeight} · ${layout.cols}/${layout.requestedCols} columna(s) · ${cal.dpi} DPI`;
+    info.style.color = layout.fitsMedia ? 'var(--muted2)' : 'var(--red)';
   }
 }
 
@@ -929,14 +1106,34 @@ async function _bcCalPrintTest() {
     toast('No se pudo preparar la prueba de calibración', 'err');
     return;
   }
+  if (!cal.printerName) {
+    toast('Selecciona una impresora de etiquetas antes de imprimir la prueba', 'w');
+    return;
+  }
   if (cal.printerName && !_bcState.printers.some(p => p.name === cal.printerName)) {
     toast('La impresora seleccionada ya no está disponible', 'err');
     return;
   }
+  const layout = typeof calculateLabelLayout === 'function'
+    ? calculateLabelLayout({
+      labelW: cal.labelWidthMm,
+      labelH: cal.labelHeightMm,
+      gapMm: cal.gapMm,
+      pageMm: cal.pageMm,
+      cols: cal.cols,
+    }, { widthMm: cal.widthMm, printableWidthMm: cal.widthMm })
+    : { fitsMedia: true };
+  if (layout.fitsMedia === false) {
+    toast('La etiqueta no cabe en el medio configurado. Corrige las medidas antes de imprimir la prueba.', 'err');
+    return;
+  }
   const html = buildLabelCalibrationHTML({
     widthMm: cal.widthMm,
+    labelWidthMm: cal.labelWidthMm,
     labelHeightMm: cal.labelHeightMm,
     gapMm: cal.gapMm,
+    pageMm: cal.pageMm,
+    cols: cal.cols,
     offsetXmm: cal.offsetXmm,
     offsetYmm: cal.offsetYmm,
     printerLabel: cal.detected?.displayName || cal.printerName,
@@ -972,6 +1169,10 @@ async function _bcCalPrintTest() {
 async function _bcCalSave() {
   const cal = _bcCalRead();
   if (!cal) return;
+  if (!cal.printerName) {
+    toast('Selecciona una impresora de etiquetas antes de guardar', 'w');
+    return;
+  }
   const key = _bcCalibrationKey(cal.printerName);
   const saved = {
     profileId: cal.profileId || 'label_generic',
@@ -1008,7 +1209,7 @@ async function _bcCalSave() {
       action: 'barcode_printer_calibrated',
       entity: 'settings',
       entityId: null,
-      detail: `${cal.printerName || 'sistema'} · ${saved.widthMm}×${saved.labelHeightMm}mm · X${saved.offsetXmm}/Y${saved.offsetYmm}`,
+      detail: `${cal.printerName} · ${saved.widthMm}×${saved.labelHeightMm}mm · X${saved.offsetXmm}/Y${saved.offsetYmm}`,
       userId: user?.id,
     }).catch(() => {});
     closeModal();
@@ -1021,89 +1222,103 @@ async function _bcCalSave() {
 // ══════════════════════════════════════════════
 // GENERACIÓN DE HTML DE ETIQUETAS
 // ══════════════════════════════════════════════
-function _bcBuildLabelsHTML(items) {
+function _bcBuildLabelMarkup(product, design, profile) {
+  const d = design || _bcEffectiveDesign();
+  const fallbackModel = {
+    product: {
+      ...product,
+      name: String(product?.name || '').trim(),
+      brand: String(product?.brand || '').trim(),
+      code: String(product?.code || '').trim(),
+    },
+    barcodeValue: product?.barcode || product?.code || String(product?.id || '').padStart(8, '0'),
+    barcodeVisible: d.showBarcode !== false,
+    standaloneCodeVisible: d.showCode === true,
+  };
+  const model = typeof buildLabelRenderModel === 'function'
+    ? buildLabelRenderModel(product, d, profile || _bcPrinterProfile())
+    : fallbackModel;
+  const p = model.product;
+
+  return `
+    <div class="vp-label" data-label-width-mm="${Number(d.labelW) || 50}" style="
+      width:${Number(d.labelW) || 50}mm;height:${Number(d.labelH) || 25}mm;
+      padding:${Number(d.paddingMm) || 0}mm;
+      background:${d.bgColor || '#ffffff'};
+      border:${d.showBorder ? '0.25mm solid #bbb' : 'none'};
+      border-radius:${Number(d.borderRadius) || 0}px;
+      display:flex;flex-direction:column;
+      align-items:${d.align || 'center'};
+      justify-content:${d.vAlign || 'center'};
+      box-sizing:border-box;
+      transform:translate(${Number(d.offsetXmm) || 0}mm, ${Number(d.offsetYmm) || 0}mm);
+      overflow:hidden;
+      font-family:${d.fontFamily || 'Arial,sans-serif'};
+      color:${d.textColor || '#000000'};
+      gap:${Number(d.elemGap) || 0}mm;
+      page-break-inside:avoid;
+    ">
+      ${d.showName && p.name ? `
+        <div class="vp-label-name" style="font-size:${d.nameFontSize || 7}pt;font-weight:${d.nameBold ? '700' : '400'};
+             text-align:center;line-height:1.1;width:100%;
+             overflow:hidden;white-space:nowrap;text-overflow:ellipsis">
+          ${_bcEsc(p.name)}
+        </div>` : ''}
+      ${d.showBrand && p.brand ? `
+        <div class="vp-label-brand" style="font-size:${d.brandFontSize || 6}pt;color:${d.brandColor || '#666'};
+             text-align:center;line-height:1;width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">
+          ${_bcEsc(p.brand)}
+        </div>` : ''}
+      ${model.barcodeVisible ? `
+        <div class="vp-label-barcode" style="width:100%;padding:0 1mm;box-sizing:border-box;overflow:hidden">
+          ${_bcRenderSvg(model.barcodeValue, d)}
+        </div>` : ''}
+      ${model.standaloneCodeVisible ? `
+        <div class="vp-label-code" style="font-size:${d.codeFontSize || 6}pt;font-family:monospace;
+             color:${d.codeColor || '#555'};text-align:center;width:100%;
+             overflow:hidden;white-space:nowrap;text-overflow:ellipsis">
+          ${_bcEsc(p.code)}
+        </div>` : ''}
+      ${d.showPrice ? `
+        <div class="vp-label-price" style="font-size:${d.priceFontSize || 9}pt;font-weight:700;
+             color:${d.priceColor || '#000'};text-align:center;line-height:1">
+          ${fmt(p.price)}
+        </div>` : ''}
+      ${d.customText ? `
+        <div class="vp-label-custom" style="font-size:${d.customFontSize || 6}pt;text-align:center;
+             color:${d.customColor || '#444'};width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">
+          ${_bcEsc(d.customText)}
+        </div>` : ''}
+    </div>`;
+}
+
+function _bcBuildLabelsHTML(items, options = {}) {
   // items = [{ product, qty }]
-  const d = _bcEffectiveDesign();
+  const d = options.design || _bcEffectiveDesign();
   if (!d) return '';
 
-  const profile = _bcPrinterProfile();
+  const profile = options.profile || _bcPrinterProfile();
   const layout = typeof calculateLabelLayout === 'function'
     ? calculateLabelLayout(d, profile)
     : { labelW: d.labelW || 50, labelH: d.labelH || 25, gapMm: d.gapMm || 2,
         pageMm: d.pageMm || 0, mediaWidthMm: profile.widthMm || 100, cols: d.cols || 1,
         rowHeightMm: (d.labelH || 25) + (d.gapMm || 2), adjusted: false };
   const cols = layout.cols;
-  // A una sola columna (caso normal de rollo), la etiqueta LLENA el ancho real
-  // configurado en mm — no un ancho de diseño aparte. Así "Ancho de la etiqueta
-  // (mm)" es lo que realmente se imprime y el contenido no desborda el papel.
-  // Con varias columnas se respeta el ancho de diseño para el multi-columna.
-  const lw = cols <= 1
-    ? Math.max(10, layout.mediaWidthMm - (layout.pageMm * 2))
-    : layout.labelW;
+  const lw = layout.labelW;
   const lh = layout.labelH;
   const gap = layout.gapMm;
 
-  let allLabels = [];
+  const allLabels = [];
   items.forEach(({ product: p, qty }) => {
     for (let i = 0; i < qty; i++) {
       allLabels.push(p);
     }
   });
 
-  const labelHTML = (p) => {
-    const barcodeVal = p.barcode || p.code || String(p.id).padStart(8,'0');
-
-    return `
-      <div class="vp-label" style="
-        width:${lw}mm;height:${lh}mm;
-        padding:${d.paddingMm||2}mm;
-        background:${d.bgColor||'#ffffff'};
-        border:${d.showBorder?'1px solid #ccc':'none'};
-        border-radius:${d.borderRadius||2}px;
-        display:flex;flex-direction:column;
-        align-items:${d.align||'center'};
-        justify-content:${d.vAlign||'center'};
-        box-sizing:border-box;
-        transform:translate(${Number(d.offsetXmm)||0}mm, ${Number(d.offsetYmm)||0}mm);
-        overflow:hidden;
-        font-family:${d.fontFamily||'Arial,sans-serif'};
-        color:${d.textColor||'#000000'};
-        gap:${d.elemGap||1}mm;
-        page-break-inside:avoid;
-      ">
-        ${d.showName && p.name ? `
-          <div style="font-size:${d.nameFontSize||7}pt;font-weight:${d.nameBold?'700':'400'};
-               text-align:center;line-height:1.1;width:100%;
-               overflow:hidden;white-space:nowrap;text-overflow:ellipsis">
-            ${_bcEsc(p.name)}
-          </div>` : ''}
-        ${d.showBrand && p.brand ? `
-          <div style="font-size:${d.brandFontSize||6}pt;color:${d.brandColor||'#666'};
-               text-align:center;line-height:1">
-            ${_bcEsc(p.brand)}
-          </div>` : ''}
-        ${d.showBarcode !== false ? _bcRenderSvg(barcodeVal, d) : ''}
-        ${d.showCode && p.code ? `
-          <div style="font-size:${d.codeFontSize||6}pt;font-family:monospace;
-               color:${d.codeColor||'#555'};text-align:center">
-            ${_bcEsc(p.code)}
-          </div>` : ''}
-        ${d.showPrice ? `
-          <div style="font-size:${d.priceFontSize||9}pt;font-weight:700;
-               color:${d.priceColor||'#000'};text-align:center">
-            ${fmt(p.price)}
-          </div>` : ''}
-        ${d.customText ? `
-          <div style="font-size:${d.customFontSize||6}pt;text-align:center;
-               color:${d.customColor||'#444'}">
-            ${_bcEsc(d.customText)}
-          </div>` : ''}
-      </div>`;
-  };
-
   const rows = [];
   for (let i = 0; i < allLabels.length; i += cols) rows.push(allLabels.slice(i, i + cols));
-  const fixedRows = _bcState.mediaMode !== 'continuous';
+  const fixedRows = (options.mediaMode || _bcState.mediaMode) !== 'continuous';
+  const preview = options.preview === true;
   // Altura de página = alto de etiqueta + separación (SIN sumarle el margen):
   // el margen se aplica solo como inset horizontal (padding L/R) para no crecer
   // la página verticalmente y evitar deriva entre etiquetas.
@@ -1126,6 +1341,12 @@ function _bcBuildLabelsHTML(items) {
         ${fixedRows ? 'break-after:page;page-break-after:always;' : ''}
       }
       .vp-label-row:last-child { break-after:auto;page-break-after:auto; }
+      @media screen {
+        html { width:100%;min-height:100%;background:#eef1f4;padding:14px 0;box-sizing:border-box; }
+        body { margin:0 auto;background:transparent; }
+        .vp-label-row { background:#fff;outline:1px dashed #aeb6c2;box-shadow:0 3px 12px rgba(15,23,42,.08);margin:0 auto 12px; }
+        .vp-label { outline:1px dotted #c6ccd5;outline-offset:-1px; }
+      }
       @media print {
         .no-print { display:none!important; }
       }
@@ -1134,7 +1355,10 @@ function _bcBuildLabelsHTML(items) {
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
     ${styles}
     </head><body>
-    ${rows.map(row => `<div class="vp-label-row">${row.map(p => labelHTML(p)).join('\n')}</div>`).join('\n')}
+    ${rows.map(row => `<div class="vp-label-row">${row.map(p => _bcBuildLabelMarkup(p, d, profile)).join('\n')}</div>`).join('\n')}
+    ${preview ? `<div class="no-print" style="font:11px Arial,sans-serif;color:#5f6b7a;text-align:center;padding:2px 8px 12px">
+      Línea punteada exterior: medio de ${layout.mediaWidthMm} mm · línea interior: etiqueta de ${lw}×${lh} mm
+    </div>` : ''}
     </body></html>`;
 }
 
@@ -1151,8 +1375,8 @@ function _bcOpenPreview() {
     // Si nada seleccionado, preview con el primer producto
     const sample = DB.products[0];
     if (!sample) { toast('No hay productos en inventario', 'w'); return; }
-    const html = _bcBuildLabelsHTML([{ product: sample, qty: 2 }]);
-    _bcShowPreviewModal(html, 'Vista previa — diseño actual');
+    const html = _bcBuildLabelsHTML([{ product: sample, qty: 1 }], { preview: true });
+    _bcShowPreviewModal(html, 'Vista previa — producto de muestra');
     return;
   }
   const items = ids.map(id => ({
@@ -1160,16 +1384,33 @@ function _bcOpenPreview() {
     qty: _bcState.selected[id] || 1
   })).filter(i => i.product);
 
-  const html = _bcBuildLabelsHTML(items);
+  const html = _bcBuildLabelsHTML(items, { preview: true });
   _bcShowPreviewModal(html, 'Vista previa');
 }
 
 function _bcShowPreviewModal(html, title) {
+  const d = _bcEffectiveDesign();
+  const layout = typeof calculateLabelLayout === 'function'
+    ? calculateLabelLayout(d, _bcPrinterProfile())
+    : { labelW: d.labelW, labelH: d.labelH, mediaWidthMm: _bcState.mediaWidthMm, cols: d.cols, requestedCols: d.cols };
+  const typeName = ({ interno: 'Interno · con precio', proveedor: 'Proveedor · sin precio',
+    personalizado: 'Personalizado' })[_bcState.labelType] || 'Interno · con precio';
+  const fitMessage = !layout.fitsMedia
+    ? `La etiqueta excede el ancho útil por ${layout.overflowMm.toFixed(1)} mm`
+    : layout.adjusted
+      ? `${layout.requestedCols} columnas solicitadas; Velo imprimirá ${layout.cols} para evitar recortes`
+      : `${layout.cols} columna(s) por fila`;
   openModal(`
     <div class="modal-title">${_bcEsc(title)}</div>
-    <div class="modal-sub">Revisa antes de imprimir</div>
+    <div class="modal-sub">Representación física del medio, las etiquetas y sus cortes.</div>
+    <div class="bc-preview-meta">
+      <div><span>Etiqueta</span><strong>${layout.labelW}×${layout.labelH} mm</strong></div>
+      <div><span>Medio</span><strong>${layout.mediaWidthMm} mm</strong></div>
+      <div><span>Contenido</span><strong>${typeName}</strong></div>
+      <div class="${layout.adjusted ? 'warn' : ''}"><span>Distribución</span><strong>${fitMessage}</strong></div>
+    </div>
     <iframe id="bc-preview-iframe"
-            style="width:100%;height:500px;border:1px solid var(--line);border-radius:8px;background:#fff;margin-top:12px">
+            class="bc-preview-frame" title="Vista previa física de etiquetas">
     </iframe>
     <div class="modal-foot" style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
       <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
@@ -1179,13 +1420,28 @@ function _bcShowPreviewModal(html, title) {
     </div>
   `, 'modal-xl');
   const iframe = document.getElementById('bc-preview-iframe');
-  if (iframe) iframe.srcdoc = html;
+  if (iframe) {
+    iframe.addEventListener('load', () => {
+      try {
+        const body = iframe.contentDocument?.body;
+        const doc = iframe.contentDocument?.documentElement;
+        const contentHeight = Math.max(body?.scrollHeight || 0, doc?.scrollHeight || 0);
+        iframe.style.height = `${Math.max(170, Math.min(360, contentHeight + 4))}px`;
+      } catch {}
+    }, { once: true });
+    iframe.srcdoc = html;
+  }
 }
 
 // ══════════════════════════════════════════════
 // IMPRESIÓN
 // ══════════════════════════════════════════════
 async function _bcPrint() {
+  if (!_bcState.selPrinter) {
+    toast('Selecciona la impresora de etiquetas. Velo no usará la impresora de facturas.', 'w');
+    document.getElementById('bc-printer-sel')?.focus();
+    return;
+  }
   const ids = Object.keys(_bcState.selected);
   if (!ids.length) {
     toast('Selecciona al menos un producto', 'w');
@@ -1216,18 +1472,22 @@ async function _bcPrint() {
   const layout = typeof calculateLabelLayout === 'function'
     ? calculateLabelLayout(d, profile)
     : { mediaWidthMm: profile.widthMm || d.labelW || 50, rowHeightMm: (d.labelH || 25) + (d.gapMm || 2) };
+  if (layout.fitsMedia === false) {
+    toast(`La etiqueta de ${layout.labelW} mm no cabe en los ${layout.availableWidthMm.toFixed(1)} mm útiles del medio. Corrige el diseño o el margen.`, 'err');
+    return;
+  }
 
   try {
-    const selectedInstalled = !_bcState.selPrinter ||
-      _bcState.printers.some(printer => printer.name === _bcState.selPrinter);
+    const selectedInstalled = _bcState.printers.some(
+      printer => printer.name === _bcState.selPrinter
+    );
     if (!selectedInstalled) {
-      toast('La impresora guardada ya no está instalada. Se abrirá el selector del sistema.', 'w');
-      _bcState.selPrinter = '';
-      await window.api.settings.set({ key: 'barcode_printer', value: '' }).catch(() => {});
+      toast('La impresora de etiquetas guardada ya no está instalada. Selecciona otra.', 'err');
+      return;
     }
     const result = await printLabelBatch({
       html,
-      printerName:  _bcState.selPrinter || '',
+      printerName:  _bcState.selPrinter,
       widthMm: layout.mediaWidthMm,
       heightMm: _bcState.mediaMode === 'continuous' ? null : layout.rowHeightMm,
       userId: user?.id,
@@ -1257,7 +1517,7 @@ function _bcDefaultDesign() {
     labelH:       25,      // mm alto
     paddingMm:    2,
     gapMm:        2,
-    cols:         4,
+    cols:         1,
     pageMm:       5,
     elemGap:      1,
     offsetXmm:    0,   // Ajuste fino horizontal (calibración de posición)

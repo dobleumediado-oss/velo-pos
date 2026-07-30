@@ -618,6 +618,64 @@ throws(() => DB.customersRepo.addPayment({
 throws(() => DB.salesRepo.cancel(multiA.saleId, 'no debe permitir', userId, user.name),
   'impide anular una factura que ya tiene un abono aplicado');
 
+console.log('\n== F2b. Anulación profesional de abono distribuido ==');
+const balanceBeforeVoid = DB.customersRepo.getById(custId).balance;
+const voidedDistributed = DB.customersRepo.cancelPayment({
+  id: distributed.paymentId,
+  reason: 'Monto registrado por error',
+  userId,
+  userName: user.name,
+  sessionId: cashSessionId,
+});
+const cancelledPayment = db.prepare('SELECT * FROM payments WHERE id=?').get(distributed.paymentId);
+ok(cancelledPayment.status === 'cancelled'
+  && cancelledPayment.void_reason === 'Monto registrado por error'
+  && cancelledPayment.voided_by === userId,
+  'conserva el recibo como anulado con motivo y responsable');
+ok(near(DB.customersRepo.getById(custId).balance, balanceBeforeVoid + 150)
+  && near(voidedDistributed.restoredBalance, balanceBeforeVoid + 150),
+  'restaura una sola vez el monto completo al balance del cliente');
+ok(db.prepare('SELECT COUNT(*) count FROM payment_allocations WHERE payment_id=?')
+  .get(distributed.paymentId).count === 2,
+  'conserva intacta la trazabilidad de las facturas originalmente abonadas');
+const reopenedRows = DB.salesRepo.getAll({ range: 'all', view: 'sales', limit: 500 });
+ok(near(reopenedRows.find(row => row.id === multiA.saleId)?.payment_amount, 0)
+  && near(reopenedRows.find(row => row.id === multiB.saleId)?.payment_amount, 0),
+  'Ventas deja de considerar el abono anulado y reabre ambas facturas');
+ok(db.prepare(`
+  SELECT COUNT(*) count FROM cash_movements
+  WHERE cash_session_id=? AND type='salida' AND reference_id=?
+`).get(cashSessionId, distributed.paymentId).count === 1,
+  'registra en caja un contramovimiento trazable por la anulación');
+throws(() => DB.customersRepo.cancelPayment({
+  id: distributed.paymentId,
+  reason: 'Segundo intento inválido',
+  userId,
+  userName: user.name,
+  sessionId: cashSessionId,
+}), 'impide anular dos veces el mismo abono');
+const correctedDistributed = DB.customersRepo.addPayment({
+  customerId: custId, amount: 150, method: 'transferencia',
+  note: 'abono multi-factura corregido', userId, sessionId: cashSessionId,
+  replacesPaymentId: distributed.paymentId,
+  allocations: [
+    { saleId: multiA.saleId, amount: 100 },
+    { saleId: multiB.saleId, amount: 50 },
+  ],
+});
+ok(Number(db.prepare('SELECT replaces_payment_id FROM payments WHERE id=?')
+  .get(correctedDistributed.paymentId)?.replaces_payment_id) === Number(distributed.paymentId),
+  'el recibo corregido queda vinculado al abono anulado');
+ok(near(DB.salesRepo.getById(multiA.saleId).payment_amount, 100)
+  && near(DB.salesRepo.getById(multiB.saleId).payment_amount, 50),
+  'el nuevo recibo reaplica exactamente la distribución confirmada');
+throws(() => DB.customersRepo.addPayment({
+  customerId: custId, amount: 1, method: 'efectivo',
+  note: 'reemplazo duplicado', userId, sessionId: cashSessionId,
+  replacesPaymentId: distributed.paymentId,
+  allocations: [{ saleId: multiB.saleId, amount: 1 }],
+}), 'impide crear dos reemplazos vigentes para el mismo abono anulado');
+
 console.log('\n== F3. Reportes segmentados para detalle, mayorista y empresas ==');
 const companyId = DB.customersRepo.create({
   name: 'Empresa Reporte SRL', customer_type: 'company',

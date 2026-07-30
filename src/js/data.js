@@ -75,6 +75,14 @@ function reciboLabel(o) {
   return n != null ? `REC-${String(n).padStart(6, '0')}` : '';
 }
 
+// "Histórico" en Velo significa exclusivamente importado desde otro sistema.
+// La antigüedad de un registro nativo nunca lo convierte en histórico.
+function isImportedRecord(record) {
+  return !!String(record?.import_source || '').trim()
+    || String(record?.cajero || '').trim() === 'Importación histórica'
+    || String(record?.note || '').trim() === 'Saldo inicial importado';
+}
+
 function paymentAllocationsOf(payment) {
   if (Array.isArray(payment?.allocations) && payment.allocations.length) {
     return payment.allocations;
@@ -101,7 +109,9 @@ function paymentAllocationLabel(allocation) {
 
 function paymentInvoiceSummary(payment) {
   const allocations = paymentAllocationsOf(payment);
-  if (!allocations.length) return 'Saldo histórico';
+  if (!allocations.length) {
+    return isImportedRecord(payment) ? 'Saldo importado' : 'Saldo no vinculado';
+  }
   if (allocations.length === 1) return paymentAllocationLabel(allocations[0]);
   return `${allocations.length} facturas`;
 }
@@ -451,7 +461,9 @@ function newInvObj(id) {
     salespersonId: null, disc: 0, discApprovedBy: null, discAuthToken: null, charges: [],
     displayCurrency: 'DOP', displayExchangeRate: 0, saleDate: new Date().toISOString().split('T')[0],
     printPrinterName: '', printProfileId: '', printTemplateId: '',
-    initialPaymentAmount: 0, notes: ''
+    printCopies: 0, printAction: '',
+    initialPaymentAmount: 0, notes: '',
+    replacesSaleId: null, replacementDocumentNumber: ''
   };
 }
 

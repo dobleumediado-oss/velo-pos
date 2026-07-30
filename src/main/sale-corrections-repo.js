@@ -437,7 +437,8 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
     const payments = db().prepare(`
       SELECT COUNT(*) count,COALESCE(SUM(amount),0) total,
              MAX(created_at) last_payment_at
-      FROM payments WHERE sale_id=?
+      FROM payments
+      WHERE sale_id=? AND COALESCE(status,'active')='active'
     `).get(sale.id);
     const returns = db().prepare(`
       SELECT COUNT(*) count,COALESCE(SUM(total),0) total
@@ -1516,7 +1517,9 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
     `).all(sale.id, sale.id);
     const payments = db().prepare(`
       SELECT id,amount,method,created_at,document_number_fmt
-      FROM payments WHERE sale_id=? ORDER BY created_at,id
+      FROM payments
+      WHERE sale_id=? AND COALESCE(status,'active')='active'
+      ORDER BY created_at,id
     `).all(sale.id);
     const commissionAdjustments = _tableExists(db(), 'commission_adjustments')
       ? db().prepare('SELECT * FROM commission_adjustments WHERE sale_id=? ORDER BY created_at,id').all(sale.id)

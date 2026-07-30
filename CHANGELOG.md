@@ -1,5 +1,57 @@
 # Historial de versiones
 
+## 1.34.0 — 2026-07-30
+
+### Centro de impresión inteligente
+
+- Nuevo Centro de impresión que reúne impresoras, rutas por departamento,
+  plantillas, etiquetas, calibración y diagnóstico en una sola área organizada.
+- Facturas, recibos, reportes y etiquetas mantienen impresoras independientes;
+  una impresora de etiquetas ya no se mezcla con la configurada para documentos.
+- El POS permite elegir rápidamente entre las impresoras disponibles cuando hay
+  más de una, sin alterar la preferencia permanente del negocio.
+- Monitor en tiempo real que refresca impresoras al enfocar la aplicación y cada
+  cuatro segundos, informa desconexión, pausa, falta de papel o error cuando el
+  controlador lo reporta y bloquea envíos a colas no disponibles.
+- La detección utiliza nombre, descripción, opciones del controlador y familia
+  del modelo para separar impresoras térmicas, de documentos y de etiquetas.
+- Diagnóstico de plantillas y rutas con vista previa para detectar medidas,
+  destino o configuración incompatible antes de imprimir.
+
+### Etiquetas y códigos de barras
+
+- Se separan el ancho físico del rollo y el ancho real de cada etiqueta, evitando
+  que la vista previa estire una etiqueta de 50 mm al medio detectado de 108 mm.
+- Diseñador y salida física comparten el mismo motor de renderizado, medidas,
+  márgenes, separación, DPI y calibración guardada por impresora y terminal.
+- Vista previa compacta y proporcional, sin espacios de página engañosos, con
+  centrado, límites seguros y eliminación del código humano duplicado.
+- Preflight de impresora y medio antes de imprimir, con mensajes accionables y
+  actualización automática al conectar, desconectar o cambiar una impresora.
+
+### Documentos, abonos y operación
+
+- Anulación profesional de abonos: revierte sus aplicaciones, restaura los
+  balances de las facturas y retira el ingreso de Caja conservando el recibo
+  anulado para auditoría; luego puede registrarse correctamente uno nuevo.
+- Las ventas ajustadas conservan su documento original, muestran el resultado
+  vigente en Ventas y permiten reimprimir la versión ajustada sin duplicarla.
+- La numeración migrada conserva los identificadores originales y continúa su
+  secuencia; los documentos nuevos usan la numeración predeterminada cuando no
+  existe una migración aplicable.
+- Solo una factura interna de consumidor final sin comprobante fiscal puede
+  reutilizar de forma controlada su número tras anularse; NCF, recibos y demás
+  documentos emitidos conservan su número ocupado para trazabilidad.
+- Reportes segmentados por detalle, mayorista y empresa, con impresión y PDF
+  coherentes con los filtros de gestión seleccionados.
+
+### Calidad y compatibilidad
+
+- Cobertura ampliada para perfiles de impresión, detección de etiquetas,
+  preflight, abonos, correcciones, numeración y flujos multi-negocio.
+- Release verificado contra la base migrada sin alterar ventas, pagos ni
+  relaciones históricas.
+
 ## 1.33.1 — 2026-07-29
 
 ### Etiquetas e impresoras

@@ -516,13 +516,19 @@ function renderCart() {
         </button>
       </div>
       ${checkoutLocked ? `<div class="alrt g" style="margin-top:8px;padding:7px 9px"><div><div class="alrt-title">Lista para cobrar</div><div class="alrt-sub">Los articulos y precios estan bloqueados porque vienen de despacho.</div></div></div>` : `<div class="flex" style="margin-top:8px;gap:5px">
-        ${['factura','cotizacion'].map(t => `
+        ${(inv.replacesSaleId ? ['factura'] : ['factura','cotizacion']).map(t => `
           <button class="btn btn-sm ${inv.itype === t ? 'btn-dark' : 'btn-out'}"
                   style="font-size:10px;padding:3px 9px"
                   onclick="posSetType('${t}')">
             ${t === 'factura' ? 'Factura' : 'Cotización'}
           </button>`).join('')}
       </div>`}
+      ${inv.replacesSaleId ? `
+        <div style="margin-top:8px;padding:7px 9px;border:1px solid var(--amber-line);
+                    border-radius:7px;background:var(--amber-bg);font-size:10.5px;color:var(--muted2)">
+          <strong style="color:var(--text)">Registro sustitutivo · ${posEscHtml(inv.replacementDocumentNumber || '')}</strong>
+          <span> — conserva únicamente el número comercial; la anulación original seguirá auditada.</span>
+        </div>` : ''}
     </div>`;
 
   html += `<div class="cart-body">`;
@@ -554,7 +560,7 @@ function renderCart() {
             </div>
             ${item.resale_source?.saleId ? `
               <div style="font-size:10px;color:var(--green);font-weight:700;margin-top:3px">
-                Reventa de venta #${String(item.resale_source.saleId).padStart(5,'0')}
+                ${inv.replacesSaleId ? 'Línea de factura anulada' : 'Reventa de venta'} #${String(item.resale_source.saleId).padStart(5,'0')}
               </div>` : ''}
           </div>
           ${checkoutLocked ? `<div class="qc"><strong>x${item.qty}</strong></div>` : `<div class="qc">
@@ -658,13 +664,20 @@ function renderCart() {
 // ── Helpers carrito ───────────────────────────
 function posLimpiar() {
   if (currentInv().checkoutOrderId) return posCloseCheckoutOrder();
-  currentInv().cart = [];
+  const inv = currentInv();
+  inv.cart = [];
+  inv.replacesSaleId = null;
+  inv.replacementDocumentNumber = '';
   renderInvTabs();
   renderCart();
 }
 
 function posSetType(t) {
   if (currentInv().checkoutOrderId) return;
+  if (currentInv().replacesSaleId && t !== 'factura') {
+    toast('El reemplazo controlado debe registrarse como factura', 'w');
+    return;
+  }
   currentInv().itype = t;
   renderCart();
 }
@@ -1069,10 +1082,19 @@ function posLoadResaleCart(payload = {}) {
 
   inv.cart = cart;
   inv.itype = 'factura';
-  inv.pmode = 'retail';
+  inv.pmode = payload.priceMode === 'wholesale' ? 'wholesale' : 'retail';
   inv.pmeth = 'efectivo';
-  inv.disc = 0;
+  inv.disc = Math.max(0, Math.min(100, Number(payload.discountPct) || 0));
   inv.discAmtInput = 0;
+  inv.charges = Array.isArray(payload.charges)
+    ? payload.charges.map(row => ({
+        description: String(row.description || ''),
+        amount: Number(row.amount || 0),
+      })).filter(row => row.description && row.amount > 0)
+    : [];
+  inv.notes = String(payload.notes || '');
+  inv.replacesSaleId = Number(payload.replacementOfSaleId) || null;
+  inv.replacementDocumentNumber = String(payload.replacementDocumentNumber || '');
   inv.priceChangeAuthToken = null;
   inv.priceChangeAuthExpiresAt = null;
   inv.priceChangeApprovedBy = null;
@@ -1087,7 +1109,9 @@ function posLoadResaleCart(payload = {}) {
   renderCart();
   renderPOSGrid();
   if (typeof window.ventasClearResaleCart === 'function') window.ventasClearResaleCart(true);
-  toast(`✓ Reventa cargada en factura #${inv.id}${skipped.length ? ` · ${skipped.length} línea(s) omitida(s)` : ''}`);
+  toast(inv.replacesSaleId
+    ? `✓ ${inv.replacementDocumentNumber || 'Factura anulada'} lista para corregir y registrar nuevamente`
+    : `✓ Reventa cargada en factura #${inv.id}${skipped.length ? ` · ${skipped.length} línea(s) omitida(s)` : ''}`);
   return true;
 }
 
@@ -1800,10 +1824,21 @@ async function posSubmitCheckoutOrder() {
 // Impresoras instaladas en ESTA terminal. Se cachean para poder ofrecer, al
 // cobrar, un selector de impresora + plantilla (solo cuando hay más de una).
 let _posPrintersCache = null;
+function _posFilterDocumentPrinters(list) {
+  return (Array.isArray(list) ? list : []).filter(p => {
+    if (!p?.name) return false;
+    if (p.name === DB?.settings?.barcode_printer) return false;
+    if (typeof detectLabelPrinter !== 'function') return true;
+    const confidence = detectLabelPrinter(p, DB?.settings || {}).confidence;
+    return !['high', 'medium'].includes(confidence);
+  });
+}
 async function _posLoadPrinters() {
   try {
-    const list = await window.api?.print?.getPrinters?.();
-    _posPrintersCache = Array.isArray(list) ? list.filter(p => p && p.name) : [];
+    const list = typeof printerMonitorRefresh === 'function'
+      ? await printerMonitorRefresh({ reason: 'pos-open' })
+      : await window.api?.print?.getPrinters?.();
+    _posPrintersCache = _posFilterDocumentPrinters(list);
   } catch { _posPrintersCache = []; }
   return _posPrintersCache;
 }
@@ -1863,8 +1898,131 @@ function _posTemplateOptions(printerName, selectedId) {
 function posCbrPrinterChanged() {
   const printerEl = document.getElementById('cbr-printer');
   const tplEl = document.getElementById('cbr-template');
+  const profileEl = document.getElementById('cbr-print-profile');
   if (!tplEl) return;
+  // Una elección manual sale del perfil del canal y vuelve a detección automática.
+  if (profileEl) profileEl.value = '';
   tplEl.innerHTML = _posTemplateOptions(printerEl ? printerEl.value : '', null);
+  posUpdatePrintSummary();
+}
+
+function posTogglePrintOptions(force) {
+  const panel = document.getElementById('cbr-print-options');
+  const button = document.getElementById('cbr-print-change');
+  if (!panel) return;
+  const open = force !== undefined ? !!force : panel.style.display === 'none';
+  panel.style.display = open ? 'block' : 'none';
+  if (button) button.textContent = open ? 'Listo' : 'Cambiar';
+}
+
+function posUpdatePrintSummary() {
+  const summary = document.getElementById('cbr-print-summary');
+  const action = document.getElementById('cbr-print-action')?.value || 'print';
+  const printer = document.getElementById('cbr-printer')?.value || '';
+  const templateId = document.getElementById('cbr-template')?.value || '';
+  const copies = Math.max(1, parseInt(document.getElementById('cbr-print-copies')?.value, 10) || 1);
+  const template = _posSaleTemplates().find(p => p.id === templateId);
+  const channel = document.getElementById('cbr-print-channel')?.value || '';
+  const channelLabel = typeof PRINT_CHANNELS !== 'undefined' ? PRINT_CHANNELS[channel]?.label : '';
+  if (!summary) return;
+  summary.innerHTML = action === 'none'
+    ? `<strong>No imprimir</strong><span style="color:var(--muted2)"> · la venta se guardará normalmente</span>`
+    : `<strong>${posEscHtml(channelLabel || printer || 'Impresora predeterminada')}</strong>
+       ${channelLabel ? `<span style="color:var(--muted2)"> · ${posEscHtml(printer || 'diálogo del sistema')}</span>` : ''}
+       <span style="color:var(--muted2)"> · ${posEscHtml(template?.nombre || 'Plantilla general')}${copies > 1 ? ` · ${copies} copias` : ''}</span>`;
+}
+
+async function posRenderPrintOutput(inv, isQuote) {
+  const host = document.getElementById('cbr-print-output');
+  if (!host) return;
+  window._posPrintOutputContext = { inv, isQuote };
+  const list = await _posLoadPrinters();
+  if (!document.getElementById('cbr-print-output')) return;
+  const category = isQuote ? 'cotizacion' : 'ticket';
+  const routeCfg = typeof _getCategoryConfig === 'function'
+    ? _getCategoryConfig(category) : { printer: '', template: '', copies: 1, autoPrint: true };
+  const configuredPrinter = inv.printPrinterName || routeCfg.printer || DB?.settings?.printer || '';
+  const configuredInfo = list.find(p => p.name === configuredPrinter);
+  const configuredRuntime = configuredInfo && typeof getPrinterRuntimeState === 'function'
+    ? getPrinterRuntimeState(configuredInfo) : null;
+  const printerAvailable = !configuredPrinter || !!configuredInfo;
+  const effectivePrinter = printerAvailable ? configuredPrinter : '';
+  const compatibleIds = _posTemplatesForPrinter(effectivePrinter).map(p => p.id);
+  const preferredTemplate = inv.printTemplateId || routeCfg.template || DB?.settings?.print_template || '';
+  const effectiveTemplate = compatibleIds.includes(preferredTemplate)
+    ? preferredTemplate : _posDefaultTemplateForPrinter(effectivePrinter);
+  const action = inv.printAction || (routeCfg.autoPrint === false ? 'none' : 'print');
+  const copies = Math.max(1, Math.min(9, parseInt(inv.printCopies || routeCfg.copies, 10) || 1));
+  const needsAttention = !!configuredPrinter &&
+    (!printerAvailable || configuredRuntime?.reportedIssue);
+  const effectiveProfile = inv.printProfileId || routeCfg.profileId || '';
+
+  host.innerHTML = `
+    <div class="card" style="margin-top:10px;padding:10px 12px;${needsAttention ? 'border-color:var(--amber)' : ''}">
+      <div style="display:flex;align-items:center;gap:9px">
+        <span style="color:${needsAttention ? 'var(--amber)' : 'var(--green)'}">${svg('print')}</span>
+        <div id="cbr-print-summary" style="min-width:0;flex:1;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
+        <button type="button" class="btn btn-out btn-sm" id="cbr-print-change"
+                onclick="posTogglePrintOptions()">${needsAttention ? 'Resolver' : 'Cambiar'}</button>
+      </div>
+      ${needsAttention ? `<div style="font-size:10.5px;color:var(--amber);margin:7px 0 0 27px">
+        ${!printerAvailable
+          ? `La impresora configurada “${posEscHtml(configuredPrinter)}” no está disponible en esta terminal.`
+          : `La impresora “${posEscHtml(configuredPrinter)}” reporta: ${posEscHtml(configuredRuntime?.stateReason || 'no acepta trabajos')}.`}
+      </div>` : ''}
+      <div id="cbr-print-options" style="display:${needsAttention ? 'block' : 'none'};margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
+        <input type="hidden" id="cbr-print-channel" value="${posEscHtml(routeCfg.channel || '')}"/>
+        <input type="hidden" id="cbr-print-profile" value="${posEscHtml(effectiveProfile)}"/>
+        <div class="g2">
+          <div class="fg" style="margin-bottom:8px"><label class="lbl">Al confirmar</label>
+            <select class="inp" id="cbr-print-action" onchange="posUpdatePrintSummary()">
+              <option value="print" ${action === 'print' ? 'selected' : ''}>Imprimir automáticamente</option>
+              <option value="none" ${action === 'none' ? 'selected' : ''}>Guardar sin imprimir</option>
+            </select>
+          </div>
+          <div class="fg" style="margin-bottom:8px"><label class="lbl">Impresora de documentos</label>
+            <select class="inp" id="cbr-printer" onchange="posCbrPrinterChanged()">
+              <option value="">Predeterminada / diálogo del sistema</option>
+              ${list.map(p => `<option value="${posEscHtml(p.name)}" ${p.name === effectivePrinter ? 'selected' : ''}>
+                ${posEscHtml(p.name)}${p.isDefault ? ' (predeterminada)' : ''}${typeof getPrinterRuntimeState === 'function' && getPrinterRuntimeState(p).reportedIssue ? ' · incidencia' : ''}</option>`).join('')}
+            </select>
+          </div>
+          <div class="fg" style="margin-bottom:0"><label class="lbl">Plantilla compatible</label>
+            <select class="inp" id="cbr-template" onchange="posUpdatePrintSummary()">
+              ${_posTemplateOptions(effectivePrinter, effectiveTemplate)}
+            </select>
+          </div>
+          <div class="fg" style="margin-bottom:0"><label class="lbl">Copias</label>
+            <input class="inp" id="cbr-print-copies" type="number" min="1" max="9" step="1"
+                   value="${copies}" oninput="posUpdatePrintSummary()"/>
+          </div>
+        </div>
+        <div style="font-size:10.5px;color:var(--muted2);margin-top:7px">
+          Las impresoras de etiquetas se administran aparte y nunca aparecen en esta lista.
+        </div>
+      </div>
+    </div>`;
+  posUpdatePrintSummary();
+}
+
+function _posCapturePrintOutput(inv) {
+  if (!inv) return;
+  inv.printAction = document.getElementById('cbr-print-action')?.value || inv.printAction;
+  inv.printPrinterName = document.getElementById('cbr-printer')?.value || '';
+  inv.printTemplateId = document.getElementById('cbr-template')?.value || inv.printTemplateId;
+  inv.printCopies = Math.max(1,
+    parseInt(document.getElementById('cbr-print-copies')?.value, 10) || inv.printCopies || 1);
+  inv.printProfileId = document.getElementById('cbr-print-profile')?.value || '';
+}
+
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('velo:printers-changed', event => {
+    _posPrintersCache = _posFilterDocumentPrinters(event.detail?.printers || []);
+    const context = window._posPrintOutputContext;
+    if (!context?.inv || !document.getElementById('cbr-print-output')) return;
+    _posCapturePrintOutput(context.inv);
+    posRenderPrintOutput(context.inv, context.isQuote).catch(() => {});
+  });
 }
 
 function openCobroModal(inv) {
@@ -2176,38 +2334,9 @@ function openCobroModal(inv) {
     }
   }).catch(() => {});
 
-  // Salida de impresión al cobrar. La PLANTILLA siempre se puede elegir (define
-  // el papel: térmica o carta). El selector de IMPRESORA solo aparece cuando hay
-  // MÁS DE UNA instalada; con una sola (o ninguna) se usa la global por defecto.
-  _posLoadPrinters().then(printers => {
-    const host = document.getElementById('cbr-print-output');
-    if (!host) return;
-    const list = printers || [];
-    const multi = list.length >= 2;
-    const defPrinter = DB?.settings?.printer || '';
-    // Impresora efectiva inicial: la global si está instalada, si no la del diálogo.
-    const effectivePrinter = list.some(p => p.name === defPrinter) ? defPrinter : '';
-    // Respetar una plantilla ya elegida solo si es compatible con esa impresora.
-    const keepTpl = inv.printTemplateId
-      && _posTemplatesForPrinter(effectivePrinter).some(p => p.id === inv.printTemplateId)
-      ? inv.printTemplateId : null;
-    const printerBlock = multi ? `
-          <div class="fg" style="margin-bottom:0"><label class="lbl">Impresora</label>
-            <select class="inp" id="cbr-printer" onchange="posCbrPrinterChanged()">
-              <option value="" ${effectivePrinter === '' ? 'selected' : ''}>Predeterminada / diálogo del sistema</option>
-              ${list.map(p => `<option value="${posEscHtml(p.name)}" ${p.name === defPrinter ? 'selected' : ''}>${posEscHtml(p.name)}${p.isDefault ? ' (predeterminada)' : ''}</option>`).join('')}
-            </select></div>` : '';
-    host.innerHTML = `
-      <div class="card" style="margin-top:10px">
-        <div style="font-weight:700;font-size:12px;margin-bottom:9px">Salida de impresión</div>
-        <div class="${multi ? 'g2' : ''}">
-          ${printerBlock}
-          <div class="fg" style="margin-bottom:0"><label class="lbl">Plantilla</label>
-            <select class="inp" id="cbr-template">${_posTemplateOptions(effectivePrinter, keepTpl)}</select></div>
-        </div>
-        <div style="font-size:10.5px;color:var(--muted2);margin-top:6px">${multi ? 'Elige la impresora; la plantilla se ajusta sola al tipo de papel (térmica o carta).' : 'La plantilla se ajusta al tipo de tu impresora.'} Puedes cambiarla dentro de las compatibles.</div>
-      </div>`;
-  }).catch(() => {});
+  // VELO: resolver la ruta sin interrumpir el cobro. Las opciones permanecen
+  // plegadas cuando la configuración es válida y solo se abren ante una incidencia.
+  posRenderPrintOutput(inv, isQuote).catch(() => {});
 
   // Cargar los tipos de comprobante con secuencia disponible (para el preview
   // del NCF que se emitirá). Se cachea en window._ncfAvail; si falla, se asume
@@ -2588,8 +2717,20 @@ async function finalizarVenta() {
   const cliPhone = document.getElementById('cbr-phone')?.value?.trim() || '';
   const cliPhoneType = document.getElementById('cbr-phone-type')?.value || 'telefono';
   const saleDate = document.getElementById('cbr-sale-date')?.value || new Date().toISOString().slice(0,10);
-  const chosenPrinter = document.getElementById('cbr-printer')?.value || '';
-  const chosenTemplate = document.getElementById('cbr-template')?.value || '';
+  const checkoutPrintRoute = typeof _getCategoryConfig === 'function'
+    ? _getCategoryConfig(isQuote ? 'cotizacion' : 'ticket')
+    : { printer: '', template: '', profileId: '', copies: 1, autoPrint: true };
+  const printerInput = document.getElementById('cbr-printer');
+  const templateInput = document.getElementById('cbr-template');
+  const profileInput = document.getElementById('cbr-print-profile');
+  const actionInput = document.getElementById('cbr-print-action');
+  const chosenPrinter = printerInput ? printerInput.value : (inv.printPrinterName || checkoutPrintRoute.printer || '');
+  const chosenTemplate = templateInput ? templateInput.value : (inv.printTemplateId || checkoutPrintRoute.template || DB?.settings?.print_template || '');
+  const chosenPrintProfile = profileInput ? profileInput.value : (inv.printProfileId || checkoutPrintRoute.profileId || '');
+  const chosenPrintAction = actionInput ? actionInput.value
+    : (inv.printAction || (checkoutPrintRoute.autoPrint === false ? 'none' : 'print'));
+  const chosenPrintCopies = Math.max(1, Math.min(9,
+    parseInt(document.getElementById('cbr-print-copies')?.value || inv.printCopies || checkoutPrintRoute.copies, 10) || 1));
   // Tipo de impresión que se tomó de la salida (lo define la plantilla elegida:
   // 'carta' para hoja, o el ancho térmico). Se guarda en la venta.
   const chosenPrintType = (typeof PLANTILLAS !== 'undefined'
@@ -2655,9 +2796,11 @@ async function finalizarVenta() {
   inv.cliPhoneType = cliPhoneType;
   inv.saleDate = saleDate;
   inv.printPrinterName = chosenPrinter;
-  inv.printProfileId = '';
+  inv.printProfileId = chosenPrintProfile;
   inv.printTemplateId = chosenTemplate;
   inv.printType = chosenPrintType;
+  inv.printAction = chosenPrintAction;
+  inv.printCopies = chosenPrintCopies;
 
   if (!inv.cart.length) return;
 
@@ -2772,9 +2915,14 @@ async function finalizarVenta() {
       saleDate,
       printTemplateId: inv.printTemplateId || '',
       printPrinterType: inv.printType || '',
+      printPrinterName: inv.printPrinterName || '',
+      printProfileId: inv.printProfileId || '',
+      printCopies: inv.printCopies || 1,
+      printAction: inv.printAction || 'print',
       initialPaymentAmount,
       initialPaymentMethod: 'efectivo',
       notes: saleNotes,
+      replacesSaleId: inv.replacesSaleId || null,
     },
     type: inv.itype || 'factura',
     session: cajaSession,
@@ -2923,12 +3071,12 @@ async function finalizarVenta() {
         toast(`La venta se guardó, pero el conduce no pudo generarse: ${conduceResult?.error || 'error desconocido'}`, 'w');
       }
     }
-    window._printAfter = _conduceForPrint
+    window._printAfter = _conduceForPrint && inv.printAction !== 'none'
       ? () => { if (typeof printConduceDoc === 'function') printConduceDoc(_conduceForPrint); }
       : null;
 
     // Imprimir la factura primero; al terminar, el hook imprime el conduce.
-    printReceipt({
+    if (inv.printAction !== 'none') printReceipt({
       ...saleForPrint,
       id:              result.saleId,
       type:            inv.itype,
@@ -2948,6 +3096,7 @@ async function finalizarVenta() {
       print_printer_name: inv.printPrinterName || '',
       print_profile_id: inv.printProfileId || '',
       print_template_id: inv.printTemplateId || '',
+      print_copies: inv.printCopies || 1,
     });
 
     const returnToPreventa = !!inv.checkoutOrderId;

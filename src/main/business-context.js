@@ -14,6 +14,8 @@ const DEVICE_SETTING_KEYS = new Set([
   'printer_width_mm',
   'printer_dpi',
   'print_config',
+  'printer_channel_bindings',
+  'printer_channel_profiles',
   'barcode_printer',
   'barcode_printer_profile',
   'barcode_media_width_mm',

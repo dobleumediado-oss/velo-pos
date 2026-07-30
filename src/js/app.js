@@ -66,6 +66,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Cargar todos los datos vía IPC
   await loadAppData();
+  if (typeof printerMonitorStart === 'function') printerMonitorStart();
 
   // Multi-negocio se elige desde el login. Si cambia el negocio activo,
   // main reinicia Velo POS para montar la base de datos correcta.
@@ -669,8 +670,7 @@ function buildSidebar() {
     ...(_adminPuede('module_conduce')       ? [{ key: 'conduce',    icon: 'pkg',      label: 'Conduces'      }] : []),
     { key: 'reportes',  icon: 'chart',    label: 'Reportes' },
     { sep: 'Sistema' },
-    { key: 'etiquetas', icon: 'barcode',  label: 'Etiquetas',
-      ...(window._bcEnabled && (CFG.barcode_enabled_roles || 'admin').includes('admin') ? {} : { hidden: true }) },
+    { key: 'impresion', icon: 'print', label: 'Centro de impresión' },
     { key: 'configuracion', icon: 'settings', label: 'Configuración' },
     ...(user?.role === 'superadmin'
       ? [{ key: 'auditoria', icon: 'alert',  label: 'Auditoría' },
@@ -702,7 +702,7 @@ function buildSidebar() {
     ...((_cajeroPuede('module_vehiculos') || _cajeroPuede('module_mantenimiento'))
                                           ? [{ key: 'vehiculos',  icon: 'car',     label: 'Vehículos' }]  : []),
     ...(window._bcEnabled && (CFG.barcode_enabled_roles || 'admin').includes('cajero')
-                                          ? [{ key: 'etiquetas',  icon: 'barcode', label: 'Etiquetas' }]  : []),
+                                          ? [{ key: 'impresion', icon: 'print', label: 'Centro de impresión' }] : []),
   ];
 
   const items = ['admin','superadmin'].includes(user?.role) ? adminNavItems : cajeroNavItems;
@@ -776,6 +776,7 @@ function buildTopbar() {
     reportes:      'Reportes',
     auditoria:     'Auditoría del Sistema',
     configuracion: 'Configuración',
+    impresion:     'Centro de impresión',
     etiquetas:     'Etiquetas de Código de Barras',
     bancos:        'Bancos y Cuentas Financieras',
     contabilidad:  'Contabilidad',
@@ -1133,11 +1134,15 @@ function routeTo(p) {
   if (p === 'preventa' && !preventaCanAccess()) {
     p = user?.role === 'cajero' ? 'pos' : 'dash';
   }
+  if (p === 'impresion' && page !== 'impresion' && ['admin','superadmin'].includes(user?.role)) {
+    if (!window._pcPreserveTabOnce) _pcActiveTab = 'devices';
+    window._pcPreserveTabOnce = false;
+  }
   page = p;
 
   // Admin: rutas base + módulos opcionales con permiso admin
   if (user?.role === 'admin') {
-    const baseAdmin = ['dash','pos','inventario','compras','clientes','ventas','devoluciones','caja','reportes','configuracion'];
+    const baseAdmin = ['dash','pos','inventario','compras','clientes','ventas','devoluciones','caja','reportes','configuracion','impresion'];
     const modRoutesAdmin = {
       gastos:       ['module_gastos'],
       bancos:       ['module_contabilidad'],
@@ -1170,7 +1175,7 @@ function routeTo(p) {
       conduce:    ['module_conduce'],
       sucursales: ['module_sucursales'],
       vehiculos:  ['module_vehiculos', 'module_mantenimiento'],
-      etiquetas:  ['barcode_enabled'],
+      impresion:  ['barcode_enabled'],
       vendedores: ['module_vendedores'],
       preventa:   ['module_preventa'],
     };
@@ -1225,9 +1230,11 @@ function routeTo(p) {
     case 'conduce':      renderConduce(el);        break;
     case 'sucursales':   renderSucursales(el);     break;
     case 'configuracion':renderConfiguracion(el);  break;
+    case 'impresion':    renderPrintingCenter(el); break;
     case 'etiquetas':
       if (!window._bcEnabled && user?.role !== 'superadmin') { renderDash(el); break; }
-      renderBarcode(el); break;
+      _pcActiveTab = 'labels';
+      renderPrintingCenter(el); break;
     case 'superadmin':   renderSuperAdmin(el);     break;
     default:             renderDash(el);
   }

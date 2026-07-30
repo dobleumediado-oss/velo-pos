@@ -28,7 +28,15 @@ los rangos autorizados en `ncf_sequences`.
 
 - `document_sequences` guarda el último número de cada familia.
 - `document_issues` relaciona el correlativo con su registro de origen.
-- Un número anulado o eliminado se marca, pero nunca se reutiliza.
+- Como regla general, un número emitido y anulado permanece consumido.
+- Excepción comercial controlada: una factura **nativa**, de **Consumidor
+  Final**, **sin NCF ni e-CF** puede usar “Anular y registrar nuevamente”. El
+  mismo número interno pasa únicamente a su reemplazo vinculado; no queda libre
+  para cualquier venta siguiente. La factura anulada permanece en la base y
+  `document_reuse_log` conserva origen, reemplazo, usuario, motivo y fecha.
+- La excepción no aplica a documentos importados, clientes registrados,
+  recibos, abonos, notas de crédito, cotizaciones, conduces ni reportes. El
+  recibo del reemplazo siempre recibe un correlativo `REC-` nuevo.
 - Los documentos importados conservan su número histórico.
 - Si existen facturas importadas con un número histórico válido, las nuevas
   facturas de contado y crédito comparten esa misma secuencia. Velo parte del

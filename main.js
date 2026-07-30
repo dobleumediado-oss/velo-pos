@@ -847,7 +847,7 @@ ipcMain.handle('settings:set', async (_, { key, value, requestUserId }) => {
   // de nivel superadmin.
   const SUPERADMIN_KEYS = /^(module_|barcode_enabled$|fiscal_enabled$|.*_roles$|checkout_|license_|master_|multi_negocio|connection_)/;
   // Claves que requieren al menos rol admin
-  const ADMIN_KEYS = /^(biz_|tax_pct$|receipt_msg$|pos_|print_template$|printer|biz_logo$)/;
+  const ADMIN_KEYS = /^(biz_|tax_pct$|receipt_msg$|pos_|print_|printer|biz_logo$)/;
 
   if (key === 'pos_price_change_password_hash') {
     return { ok: false, error: 'Usa el panel de clave especial para actualizar este valor' };
@@ -1606,9 +1606,43 @@ ipcMain.handle('customers:addPayment', async (_, { data, requestUserId }) => {
       sessionId: session?.id || null,
     });
     audit(requestUserId, reqUser?.name || '', 'abono_registrado', 'customers',
-          data.customerId, `Monto: ${data.amount}`);
+          data.customerId,
+          `Monto: ${data.amount}${result.replaces_payment_id
+            ? ` | Corrige abono #${result.replaces_payment_id}`
+            : ''}`);
     // Contabilidad en vivo: Débito Caja/Banco · Crédito Cuentas por Cobrar.
     _acctHook(() => accountingRepo.generatePaymentEntry({ paymentId: result.paymentId, userId: requestUserId }));
+    return { ok: true, ...result };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('customers:cancelPayment', async (_, { id, reason, requestUserId }) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Solo un administrador puede anular abonos' };
+    }
+    const cleanReason = String(reason || '').replace(/\s+/g, ' ').trim();
+    if (cleanReason.length < 5) {
+      return { ok: false, error: 'Escribe un motivo de anulación de al menos 5 caracteres' };
+    }
+    const session = cashRepo.getOpen(_reqTerminalId());
+    const result = customersRepo.cancelPayment({
+      id,
+      reason: cleanReason,
+      userId: reqUser.id,
+      userName: reqUser.name,
+      sessionId: session?.id || null,
+    });
+    audit(
+      reqUser.id, reqUser.name, 'abono_anulado', 'payments', Number(id),
+      `Monto: ${result.amount} | Balance restaurado: ${result.restoredBalance} | Motivo: ${cleanReason}`
+    );
+    _acctHook(() => accountingRepo.reverseSourceEntry(
+      'abono', Number(id), reqUser.id, `Abono anulado: ${cleanReason}`
+    ));
     return { ok: true, ...result };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -1790,6 +1824,15 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
     if (!reqUser) return { ok: false, error: 'Usuario no válido' };
+    if (
+      Number(saleData?.payment?.replacesSaleId || 0) &&
+      !saleCorrectionsRepo.hasPermission(reqUser, 'sales.cancel')
+    ) {
+      return {
+        ok: false,
+        error: 'Permiso requerido para registrar nuevamente una factura anulada',
+      };
+    }
     if (!['factura', 'cotizacion'].includes(saleData?.type || 'factura')) {
       return { ok: false, error: 'Tipo de documento no soportado' };
     }
@@ -2492,12 +2535,39 @@ ipcMain.handle('license:revoke', async (_, { requestUserId } = {}) => {
 
 // ── Impresión ─────────────────────────────────
 
+async function _assertPrinterQueueAvailable(webContents, printerName) {
+  const requested = String(printerName || '').trim();
+  if (!requested) return null;
+  const printers = await webContents.getPrintersAsync();
+  const match = (printers || []).find(printer => printer.name === requested);
+  if (!match) {
+    const error = new Error(
+      `La impresora “${requested}” ya no está disponible. Revisa la conexión o selecciona otra impresora.`
+    );
+    error.code = 'PRINTER_UNAVAILABLE';
+    throw error;
+  }
+  try {
+    const { getPrinterRuntimeState } = require('./src/js/printer-profiles');
+    const runtime = getPrinterRuntimeState(match);
+    if (runtime.reportedIssue) {
+      const detail = runtime.stateReason || 'el controlador no está aceptando trabajos';
+      const error = new Error(`La impresora “${requested}” reporta una incidencia: ${detail}.`);
+      error.code = 'PRINTER_NOT_READY';
+      throw error;
+    }
+  } catch (error) {
+    if (error?.code === 'PRINTER_NOT_READY') throw error;
+  }
+  return match;
+}
+
 /**
  * Imprime HTML en la impresora seleccionada.
  * - Si se pasa printerName, la preselecciona en el diálogo
  * - Registra el trabajo en print_jobs para auditoría y reimpresión
  */
-async function _attemptPrintHTML({ html, printerName, printerWidth, printerHeight, pageHint }) {
+async function _attemptPrintHTML({ html, printerName, printerWidth, printerHeight, pageHint, copies = 1 }) {
   // isSizedMedia: rollos/etiquetas con tamaño explícito, incluso si se abre el
   // diálogo del sistema porque aún no hay una impresora seleccionada.
   // Para carta usamos 816px (≈ 8.5" a 96dpi) para que el layout renderice correcto
@@ -2537,6 +2607,10 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, printerHeigh
       );
     } catch {}
     await new Promise(r => setTimeout(r, isThermal ? 250 : 500));
+    // Segunda barrera, ejecutada en el proceso principal inmediatamente antes
+    // de imprimir. Evita que una selección que desapareció después de abrir el
+    // modal termine en una cola equivocada o en un fallo silencioso.
+    await _assertPrinterQueueAvailable(printWin.webContents, printerName);
 
     // Ancho del papel en micrones (printerWidth puede venir "50mm" o número)
     const toMicrons = (value, fallback) => {
@@ -2578,6 +2652,7 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, printerHeigh
         : pageHint === 'half-letter'
           ? { width: 139700, height: 107950 }
           : 'Letter',
+      copies: Math.max(1, Math.min(9, parseInt(copies, 10) || 1)),
     };
     if (printerName) printOptions.deviceName = printerName;
 
@@ -2596,19 +2671,24 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, printerHeigh
   }
 }
 
-ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, printerHeight, jobType, referenceId, userId, pageHint }) => {
+ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, printerHeight, jobType, referenceId, userId, pageHint, copies }) => {
   try {
+    if (jobType === 'barcode_labels' && !String(printerName || '').trim()) {
+      throw new Error(
+        'Selecciona una impresora de etiquetas; este trabajo no puede usar la impresora de documentos'
+      );
+    }
     try {
-      await _attemptPrintHTML({ html, printerName, printerWidth, printerHeight, pageHint });
+      await _attemptPrintHTML({ html, printerName, printerWidth, printerHeight, pageHint, copies });
     } catch (firstErr) {
       // Reintento automático único — solo para impresión silenciosa (térmica),
       // donde un fallo normalmente es un problema transitorio (impresora ocupada
       // o temporalmente no disponible), no una cancelación explícita del usuario.
       // En modo diálogo (carta) un fallo suele ser el usuario cancelando — no reintentar.
       const wasThermalAttempt = !!(printerName && printerWidth);
-      if (!wasThermalAttempt) throw firstErr;
+      if (!wasThermalAttempt || firstErr?.code === 'PRINTER_UNAVAILABLE') throw firstErr;
       await new Promise(r => setTimeout(r, 1200));
-      await _attemptPrintHTML({ html, printerName, printerWidth, printerHeight, pageHint });
+      await _attemptPrintHTML({ html, printerName, printerWidth, printerHeight, pageHint, copies });
     }
 
     // Registrar trabajo exitoso en print_jobs
@@ -2634,7 +2714,12 @@ ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, printe
       } catch {}
     }
     console.error('[print:html]', e.message);
-    return { ok: false, error: e.message };
+    return {
+      ok: false,
+      error: e.message,
+      code: e.code || '',
+      printerUnavailable: e.code === 'PRINTER_UNAVAILABLE',
+    };
   }
 });
 
@@ -2642,16 +2727,32 @@ ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, printe
 // cliente el interceptor reenvía esta llamada al servidor, que la ejecuta con SU
 // impresora configurada. Es la opción "imprimir por el servidor" cuando la terminal
 // no tiene impresora física. Ver docs/multi-terminal-sync.md §8.
-ipcMain.handle('print:onServer', async (_, { html, jobType, referenceId, userId } = {}) => {
+ipcMain.handle('print:onServer', async (_, { html, jobType, referenceId, userId, channel, copies } = {}) => {
   try {
-    const printerName  = settingsRepo.get('printer') || undefined;
-    const ptype        = settingsRepo.get('printer_type') || '';
-    const savedWidth   = Number(settingsRepo.get('printer_width_mm')) || 0;
+    let bindings = {}, profiles = {};
+    try { bindings = JSON.parse(settingsRepo.get('printer_channel_bindings') || '{}') || {}; } catch {}
+    try { profiles = JSON.parse(settingsRepo.get('printer_channel_profiles') || '{}') || {}; } catch {}
+    const safeChannel = ['ventas','pagos','caja','oficina','almacen'].includes(channel) ? channel : 'ventas';
+    const printerName  = bindings[safeChannel] || settingsRepo.get('printer') || undefined;
+    const profileId    = profiles[safeChannel] || settingsRepo.get('printer_profile') || '';
+    let ptype = settingsRepo.get('printer_type') || '';
+    let resolvedWidth = 0;
+    try {
+      const { resolvePrinterProfile, printerProfileLegacyType } = require('./src/js/printer-profiles');
+      const resolved = resolvePrinterProfile(printerName || '', 'ticket', {
+        printer_profile: profileId,
+        printer_width_mm: settingsRepo.get('printer_width_mm') || '',
+        printer_dpi: settingsRepo.get('printer_dpi') || '',
+      });
+      ptype = printerProfileLegacyType(resolved);
+      resolvedWidth = Number(resolved?.widthMm) || 0;
+    } catch {}
+    const savedWidth = resolvedWidth || Number(settingsRepo.get('printer_width_mm')) || 0;
     const printerWidth = ptype === 'carta' ? undefined
       : savedWidth ? Math.round(savedWidth * 1000)
       : ptype === '58mm' ? 58000 : ptype === '72mm' ? 72000
       : ptype === '108mm' ? 108000 : ptype === '80mm' ? 80000 : undefined;
-    await _attemptPrintHTML({ html, printerName, printerWidth });
+    await _attemptPrintHTML({ html, printerName, printerWidth, copies });
     if (jobType && referenceId) {
       try {
         require('./database').getDB().prepare(
@@ -2809,6 +2910,7 @@ ipcMain.handle('print:getPrinters', async () => {
       description: p.description || '',
       isDefault: p.isDefault,
       status:    p.status || 0,
+      options:   p.options && typeof p.options === 'object' ? p.options : {},
     }));
   } catch (e) {
     console.error('[print:getPrinters]', e);
@@ -2821,10 +2923,14 @@ ipcMain.handle('print:getPrinters', async () => {
  */
 ipcMain.handle('print:savePrinter', async (_, { printerName, requestUserId }) => {
   try {
-    settingsRepo.set('printer', printerName);
     const reqUser = requestUserId ? authRepo.findById(requestUserId) : null;
+    if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Solo administradores pueden configurar impresoras' };
+    }
+    const safePrinterName = String(printerName || '').trim().slice(0, 255);
+    settingsRepo.set('printer', safePrinterName);
     audit(requestUserId || 0, reqUser?.name || 'sistema',
-      'impresora_configurada', 'settings', null, printerName);
+      'impresora_configurada', 'settings', null, safePrinterName);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -2842,7 +2948,43 @@ ipcMain.handle('print:saveConfig', async (_, { config, requestUserId }) => {
     if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) {
       return { ok: false, error: 'Solo administradores pueden modificar la configuración de impresión' };
     }
-    settingsRepo.set('print_config', JSON.stringify(config || {}));
+    const allowedCategories = new Set([
+      'ticket', 'cotizacion', 'pago', 'conduce', 'caja', 'inventario',
+      'compras', 'contabilidad', 'bancos', 'reporte',
+    ]);
+    const allowedChannels = new Set(['ventas', 'pagos', 'caja', 'oficina', 'almacen']);
+    const safeConfig = {};
+    Object.entries(config || {}).forEach(([category, value]) => {
+      if (!allowedCategories.has(category) || !value || typeof value !== 'object') return;
+      safeConfig[category] = {
+        channel: allowedChannels.has(value.channel) ? value.channel : '',
+        // Solo para migración de configuraciones anteriores; el Centro nuevo no
+        // envía nombres físicos dentro de una política global.
+        printer: String(value.printer || '').trim().slice(0, 255),
+        template: String(value.template || '').trim().slice(0, 80),
+        profileId: String(value.profileId || '').trim().slice(0, 80),
+        copies: Math.max(1, Math.min(9, parseInt(value.copies, 10) || 1)),
+        preview: value.preview === true,
+        autoPrint: value.autoPrint !== false,
+      };
+    });
+    // Política global del negocio. Los nombres físicos de impresora viven en
+    // printer_channel_bindings, que es local a cada terminal.
+    const serialized = JSON.stringify(safeConfig);
+    try {
+      const bridge = require('./src/main/ipc-bridge');
+      if (bridge.getMode() === 'client') {
+        return await bridge.forwardToServer('settings:set', {
+          key: 'print_route_config',
+          value: serialized,
+          requestUserId,
+        });
+      }
+    } catch (e) {
+      if (e?.offline) return { ok: false, error: 'Sin conexión al servidor' };
+      if (e?.message) return { ok: false, error: e.message };
+    }
+    settingsRepo.set('print_route_config', serialized);
     audit(requestUserId, reqUser.name, 'config_impresion_actualizada', 'settings', null, '');
     return { ok: true };
   } catch (e) {

@@ -1103,7 +1103,7 @@ function clienteWhatsApp(c) {
 // ══════════════════════════════════════════════
 // MODAL ABONO
 // ══════════════════════════════════════════════
-async function openAbonoModal(c) {
+async function openAbonoModal(c, prefill = null) {
   const balance   = Number(c.balance || 0);
   const creditDue = c.credit_due || null;
   const contacts  = c.customer_type === 'company'
@@ -1120,8 +1120,15 @@ async function openAbonoModal(c) {
   window._abonoUnallocatedBalance = Number(pending.unallocatedBalance || 0);
 
   openModal(`
-    <div class="modal-title">Registrar Abono</div>
+    <div class="modal-title">${prefill ? 'Registrar abono corregido' : 'Registrar Abono'}</div>
     <div class="modal-sub">${c.name} · Balance: <strong style="color:var(--red)">${fmt(balance)}</strong></div>
+    ${prefill ? `<div class="alrt b" style="margin-bottom:14px">
+      <div class="alrt-dot b"></div>
+      <div>
+        <div class="alrt-title">Corrección de ${cliEsc(prefill.sourceReceipt || 'recibo anulado')}</div>
+        <div class="alrt-sub">Los datos fueron precargados. Revisa el monto, método y distribución antes de confirmar.</div>
+      </div>
+    </div>` : ''}
 
     <div class="alrt ${creditDue && creditDue < today() ? 'r' : 'a'}" style="margin-bottom:14px">
       <div class="alrt-dot ${creditDue && creditDue < today() ? 'r' : 'a'}"></div>
@@ -1179,13 +1186,13 @@ async function openAbonoModal(c) {
         }).join('')}
       </div>
       ${Number(pending.unallocatedBalance || 0) > 0 ? `<div class="ts" style="margin-top:7px">
-        Además existen ${fmt(pending.unallocatedBalance)} de saldo histórico sin una factura identificable; cualquier remanente puede aplicarse allí.
+        Además existen ${fmt(pending.unallocatedBalance)} de saldo no vinculado a una factura; cualquier remanente puede aplicarse allí.
       </div>` : ''}
       <div id="ab-allocation-summary" class="alrt b" style="margin:10px 0 0;padding:9px 11px"></div>
     </div>` : `<div class="alrt b" style="margin-bottom:12px">
       <div class="alrt-dot b"></div>
-      <div><div class="alrt-title">Saldo anterior sin factura identificable</div>
-      <div class="alrt-sub">El abono reducirá el balance histórico del cliente.</div></div>
+      <div><div class="alrt-title">Saldo no vinculado a una factura</div>
+      <div class="alrt-sub">El abono reducirá el balance pendiente general del cliente.</div></div>
     </div>`}
 
     <div style="margin-bottom:12px">
@@ -1224,11 +1231,40 @@ async function openAbonoModal(c) {
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-green" id="btn-abono"
-              onclick="registrarAbono(${c.id}, ${balance})">
+              onclick="registrarAbono(${c.id}, ${balance}, ${Number(prefill?.replacesPaymentId) || 'null'})">
         ${svg('check')} Registrar Abono
       </button>
     </div>
   `);
+  if (prefill) {
+    const amountInput = document.getElementById('ab-amount');
+    const methodInput = document.getElementById('ab-method');
+    const noteInput = document.getElementById('ab-note');
+    const contactInput = document.getElementById('ab-contact');
+    if (amountInput) amountInput.value = Math.min(balance, Number(prefill.amount || 0)).toFixed(2);
+    if (methodInput && [...methodInput.options].some(option => option.value === prefill.method)) {
+      methodInput.value = prefill.method;
+    }
+    if (noteInput) noteInput.value = prefill.note || '';
+    if (contactInput && prefill.contactId) contactInput.value = String(prefill.contactId);
+
+    document.querySelectorAll('.ab-invoice-check').forEach(check => {
+      check.checked = false;
+      const input = document.getElementById(`ab-alloc-${check.dataset.saleId}`);
+      if (input) { input.disabled = true; input.value = ''; }
+    });
+    (prefill.allocations || []).forEach(row => {
+      const check = document.querySelector(
+        `.ab-invoice-check[data-sale-id="${Number(row.saleId)}"]`
+      );
+      const input = document.getElementById(`ab-alloc-${Number(row.saleId)}`);
+      if (!check || !input) return;
+      const pendingAmount = Number(check.dataset.pending || 0);
+      check.checked = true;
+      input.disabled = false;
+      input.value = Math.min(pendingAmount, Number(row.amount || 0)).toFixed(2);
+    });
+  }
   abonoAmountChanged(balance);
 }
 
@@ -1320,14 +1356,14 @@ function abonoAllocationChanged(balance) {
       ${Math.abs(remaining) <= 0.01
         ? '<span style="color:var(--green)">Monto completado</span>'
         : remaining > 0
-          ? `Falta distribuir ${fmt(remaining)}${historicalApplied <= historicalMax + 0.01 ? ' (irá a saldo histórico)' : ''}`
+          ? `Falta distribuir ${fmt(remaining)}${historicalApplied <= historicalMax + 0.01 ? ' (irá al saldo no vinculado)' : ''}`
           : `Exceso distribuido ${fmt(Math.abs(remaining))}`}
     </div>`;
     summary.dataset.valid = valid ? '1' : '0';
   }
 }
 
-async function registrarAbono(clientId, balanceActual) {
+async function registrarAbono(clientId, balanceActual, replacesPaymentId = null) {
   const amount = parseFloat(document.getElementById('ab-amount')?.value);
   const method = document.getElementById('ab-method')?.value  || 'efectivo';
   const note   = document.getElementById('ab-note')?.value?.trim() || '';
@@ -1353,7 +1389,10 @@ async function registrarAbono(clientId, balanceActual) {
   if (btn) { btn.disabled = true; btn.textContent = 'Procesando...'; }
 
   const result = await window.api.customers.addPayment({
-    data: { customerId: clientId, amount, method, note, contactId, allocations },
+    data: {
+      customerId: clientId, amount, method, note, contactId, allocations,
+      replacesPaymentId: Number(replacesPaymentId) || null,
+    },
     requestUserId: user.id,
   });
 
@@ -1397,6 +1436,9 @@ async function registrarAbono(clientId, balanceActual) {
       customer_contact_name: result.customer_contact_name || '',
       customer_contact_document: result.customer_contact_document || '',
       customer_contact_role: result.customer_contact_role || '',
+      replaces_payment_id: result.replaces_payment_id || null,
+      replaces_payment_document_number_fmt:
+        result.replaces_payment_document_number_fmt || '',
     },
     customer: {
       name:  c?.name  || '',
@@ -1426,6 +1468,8 @@ function guardarAbonoPDF(paymentId) {
       numero_recibo: p.numero_recibo,
       amount: p.amount, method: p.method, note: p.note || 'Abono',
       balance_before: p.balance_before, balance_after: p.balance_after, created_at: p.created_at,
+      status: p.status || 'active', void_reason: p.void_reason || '',
+      voided_at: p.voided_at || '', voided_by_name: p.voided_by_name || '',
       sale_id: p.sale_id || null,
       sale_document_number_fmt: p.sale_document_number_fmt || '',
       sale_numero_factura: p.sale_numero_factura,
@@ -1468,16 +1512,48 @@ function openAbonoDetalleModal(paymentOrId) {
   if (!p) { toast('Abono no encontrado', 'err'); return; }
   const c = (DB.customers || []).find(x => Number(x.id) === Number(p.customer_id))
     || { name: p.customer_name || 'Cliente', rnc: p.customer_rnc || '', phone: p.customer_phone || '' };
+  const cancelled = String(p.status || 'active').toLowerCase() === 'cancelled';
+  const imported = isImportedRecord(p);
+  const canCancel = !cancelled && !imported
+    && ['admin','superadmin'].includes(user?.role)
+    && typeof openAnularAbonoModal === 'function';
   const allocations = paymentAllocationsOf(p);
   const allocationRows = allocations.length
     ? allocations.map(row => `<div class="tr" style="padding:7px 0;border-top:1px solid var(--line)">
         <span><strong>${cliEsc(paymentAllocationLabel(row))}</strong>${row.ncf ? `<span class="ts" style="display:block">NCF ${cliEsc(row.ncf)}</span>` : ''}</span>
         <span style="text-align:right"><strong>${fmt(row.amount)}</strong>${row.invoice_balance_after != null ? `<span class="ts" style="display:block">Queda ${fmt(row.invoice_balance_after)}</span>` : ''}</span>
       </div>`).join('')
-    : '<div class="ts">Aplicado al saldo histórico sin factura identificada.</div>';
+    : `<div class="ts">Aplicado al ${imported ? 'saldo importado' : 'saldo no vinculado a una factura'}.</div>`;
+  const replacement = (DB.payments || []).find(
+    row => Number(row.replaces_payment_id) === Number(p.id)
+      && String(row.status || 'active').toLowerCase() !== 'cancelled'
+  );
+  const replaces = p.replaces_payment_id
+    ? (DB.payments || []).find(row => Number(row.id) === Number(p.replaces_payment_id))
+    : null;
   openModal(`
     <div class="modal-title">Abono ${cliEsc(reciboLabel(p))}</div>
     <div class="modal-sub">${cliEsc(c.name || '')} · ${fdate(String(p.created_at || '').slice(0,10))}</div>
+    ${cancelled ? `
+      <div style="margin-top:12px;padding:11px 13px;border:1px solid #fecaca;background:#fff7f7;border-radius:10px">
+        <div style="font-weight:800;color:var(--red)">Abono anulado</div>
+        <div class="ts" style="margin-top:3px">
+          ${cliEsc(p.void_reason || 'Sin motivo registrado')}
+          ${p.voided_by_name ? ` · Por ${cliEsc(p.voided_by_name)}` : ''}
+          ${p.voided_at ? ` · ${cliEsc(fdate(String(p.voided_at).slice(0,10)))}` : ''}
+        </div>
+      </div>` : ''}
+    ${replacement ? `<div class="alrt g" style="margin-top:10px">
+      <div class="alrt-dot g"></div><div>
+        <div class="alrt-title">Corregido mediante ${cliEsc(reciboLabel(replacement))}</div>
+        <div class="alrt-sub">El nuevo recibo conserva el vínculo con este abono anulado.</div>
+      </div>
+    </div>` : replaces ? `<div class="alrt b" style="margin-top:10px">
+      <div class="alrt-dot b"></div><div>
+        <div class="alrt-title">Reemplaza a ${cliEsc(reciboLabel(replaces))}</div>
+        <div class="alrt-sub">Este es el recibo corregido vigente.</div>
+      </div>
+    </div>` : ''}
     <div class="card" style="background:var(--surface2);margin-top:14px">
       <div class="g2">
         <div><div class="ts">Monto abonado</div><div style="font-size:22px;font-weight:800;color:var(--green)">${fmt(p.amount)}</div></div>
@@ -1497,7 +1573,10 @@ function openAbonoDetalleModal(paymentOrId) {
       <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
       <button class="btn btn-out" onclick="reimprimirAbono(${p.id})">${svg('print')} Reimprimir</button>
       <button class="btn btn-out" onclick="guardarAbonoPDF(${p.id})">${svg('pdf')} Guardar PDF</button>
-      <button class="btn btn-green" onclick="abonoWhatsApp(${p.id})">WhatsApp</button>
+      ${!cancelled ? `<button class="btn btn-green" onclick="abonoWhatsApp(${p.id})">WhatsApp</button>` : ''}
+      ${canCancel ? `<button class="btn btn-red" onclick="closeModal();setTimeout(()=>openAnularAbonoModal(${p.id}),80)">
+        ${svg('x')} Anular abono
+      </button>` : ''}
     </div>
   `);
 }
@@ -1505,12 +1584,16 @@ function openAbonoDetalleModal(paymentOrId) {
 function abonoWhatsApp(paymentId) {
   const p = (DB.payments || []).find(x => Number(x.id) === Number(paymentId));
   if (!p) return;
+  if (String(p.status || 'active').toLowerCase() === 'cancelled') {
+    toast('Un abono anulado no puede enviarse como comprobante vigente', 'w');
+    return;
+  }
   const c = (DB.customers || []).find(x => Number(x.id) === Number(p.customer_id))
     || { name: p.customer_name || 'Cliente', phone: p.customer_phone || '' };
   const allocations = paymentAllocationsOf(p);
   const applied = allocations.length
     ? allocations.map(row => `${paymentAllocationLabel(row)}: ${fmt(row.amount)}`).join('\n')
-    : 'Saldo histórico';
+    : (isImportedRecord(p) ? 'Saldo importado' : 'Saldo no vinculado');
   openWhatsAppModal([
     `Recibo de abono ${reciboLabel(p)} · ${CFG.biz}`,
     `Cliente: ${c.name}`,
@@ -1553,8 +1636,9 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
   // para que la caja no se infle y el gerente vea de dónde sale la diferencia
   // entre lo comprado y lo abonado.
   const esDescuento  = p => String(p.method || '').toLowerCase() === 'descuento';
-  const abonosReales = pagos.filter(p => !esDescuento(p));
-  const descuentos   = pagos.filter(esDescuento);
+  const esVigente = p => String(p.status || 'active').toLowerCase() !== 'cancelled';
+  const abonosReales = pagos.filter(p => esVigente(p) && !esDescuento(p));
+  const descuentos   = pagos.filter(p => esVigente(p) && esDescuento(p));
   const totalAbonado = abonosReales.reduce((a, p) => a + p.amount, 0);
   const totalDesc    = descuentos.reduce((a, p) => a + p.amount, 0);
 
@@ -1594,12 +1678,17 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
                },100)">${facturaLabel(p)} ↗</span>`
           : '';
         const esDesc = String(p.method || '').toLowerCase() === 'descuento';
+        const cancelled = String(p.status || 'active').toLowerCase() === 'cancelled';
         const concepto = p.note || (esDesc ? 'Descuento aplicado' : 'Abono');
         return `
-          <tr${esDesc ? ' style="background:rgba(245,158,11,.07)"' : ''}>
+          <tr${cancelled
+            ? ' style="background:rgba(239,68,68,.05);opacity:.72"'
+            : esDesc ? ' style="background:rgba(245,158,11,.07)"' : ''}>
             <td style="font-size:11px;color:var(--muted)">${fdate(fecha)}</td>
-            <td style="font-size:12px${esDesc ? ';color:var(--amber)' : ''}">${cliEsc(concepto)}${facturaRef}${cliRepresentativeLine(p, 'Pagado por')}</td>
-            <td style="text-align:right;font-weight:700;color:${esDesc ? 'var(--amber)' : 'var(--green)'}">${esDesc ? '' : '+'}${fmt(p.amount)}</td>
+            <td style="font-size:12px${cancelled ? ';color:var(--red)' : esDesc ? ';color:var(--amber)' : ''}">
+              ${cancelled ? '<strong>ANULADO · </strong>' : ''}${cliEsc(concepto)}${facturaRef}${cliRepresentativeLine(p, 'Pagado por')}
+            </td>
+            <td style="text-align:right;font-weight:700;color:${cancelled ? 'var(--muted2)' : esDesc ? 'var(--amber)' : 'var(--green)'};${cancelled ? 'text-decoration:line-through' : ''}">${esDesc ? '' : '+'}${fmt(p.amount)}</td>
             <td>
               <span class="badge ${esDesc ? 'a' : 'g'}">${p.method || 'efectivo'}</span>
               <span style="font-size:10px;color:var(--muted2);margin-left:4px">
@@ -1867,8 +1956,9 @@ async function exportClientCreditPDF(c) {
   const totalCompras = ventas.reduce((a, s) => a + s.total, 0);
   // Descuentos aparte del efectivo — ver nota en openEstadoCuentaModal.
   const esDescuento  = p => String(p.method || '').toLowerCase() === 'descuento';
-  const abonosReales = pagos.filter(p => !esDescuento(p));
-  const descuentos   = pagos.filter(esDescuento);
+  const esVigente = p => String(p.status || 'active').toLowerCase() !== 'cancelled';
+  const abonosReales = pagos.filter(p => esVigente(p) && !esDescuento(p));
+  const descuentos   = pagos.filter(p => esVigente(p) && esDescuento(p));
   const totalAbonado = abonosReales.reduce((a, p) => a + p.amount, 0);
   const totalDesc    = descuentos.reduce((a, p) => a + p.amount, 0);
 
@@ -1899,12 +1989,13 @@ async function exportClientCreditPDF(c) {
     : [...pagos].reverse().map(p => {
         const fecha  = (p.created_at || '').split('T')[0].split(' ')[0];
         const esDesc = esDescuento(p);
-        return `<tr${esDesc ? ' style="background:#fffbeb"' : ''}>
+        const cancelled = !esVigente(p);
+        return `<tr${cancelled ? ' style="background:#fef2f2;color:#9ca3af"' : esDesc ? ' style="background:#fffbeb"' : ''}>
           <td>${fdate(fecha)}</td>
-          <td${esDesc ? ' style="color:#b45309"' : ''}>${_e(p.note || (esDesc ? 'Descuento aplicado' : 'Abono'))}
+          <td${cancelled ? ' style="color:#dc2626"' : esDesc ? ' style="color:#b45309"' : ''}>${cancelled ? '<strong>ANULADO · </strong>' : ''}${_e(p.note || (esDesc ? 'Descuento aplicado' : 'Abono'))}
             ${p.customer_contact_name ? `<div style="color:#2563eb;font-size:9px;margin-top:2px">Pagado por: <strong>${_e(p.customer_contact_name)}</strong>${p.customer_contact_role ? ` · ${_e(p.customer_contact_role)}` : ''}</div>` : ''}
           </td>
-          <td style="text-align:right;font-weight:700;color:${esDesc ? '#b45309' : '#16a34a'}">${esDesc ? '' : '+'}${fmt(p.amount)}</td>
+          <td style="text-align:right;font-weight:700;color:${cancelled ? '#9ca3af' : esDesc ? '#b45309' : '#16a34a'};${cancelled ? 'text-decoration:line-through' : ''}">${esDesc ? '' : '+'}${fmt(p.amount)}</td>
           <td>${_e(p.method || 'efectivo')} <span style="color:#9ca3af;font-size:10px">${fmt(p.balance_before)} → ${fmt(p.balance_after)}</span></td>
         </tr>`;
       }).join('');

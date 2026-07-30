@@ -900,14 +900,17 @@ function renderVentasAbonos(resWrap, tableWrap) {
       ]),
     ].some(value => matchText(value, q));
   });
-  const total = payments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
-  const cash = payments.filter(p => (p.method || 'efectivo') === 'efectivo')
+  const activePayments = payments.filter(
+    p => String(p.status || 'active').toLowerCase() !== 'cancelled'
+  );
+  const total = activePayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+  const cash = activePayments.filter(p => (p.method || 'efectivo') === 'efectivo')
     .reduce((sum, p) => sum + Number(p.amount || 0), 0);
   if (resWrap) {
     resWrap.innerHTML = '';
     const metrics = h('div', { class: 'metrics', style: { gridTemplateColumns:'repeat(4,1fr)',marginBottom:'16px' } });
     [
-      { icon:'list',color:'b',label:'Abonos',val:payments.length },
+      { icon:'list',color:'b',label:'Abonos vigentes',val:activePayments.length },
       { icon:'dollar',color:'g',label:'Total recibido',val:fmt(total) },
       { icon:'cash',color:'g',label:'En efectivo',val:fmt(cash) },
       { icon:'card',color:'p',label:'Otros métodos',val:fmt(total-cash) },
@@ -923,22 +926,157 @@ function renderVentasAbonos(resWrap, tableWrap) {
   }
   const rows = payments.map(p => {
     const invoice = paymentInvoiceSummary(p);
-    return h('tr',null,
+    const cancelled = String(p.status || 'active').toLowerCase() === 'cancelled';
+    const imported = isImportedRecord(p);
+    const canCancel = !cancelled && !imported && ['admin','superadmin'].includes(user?.role);
+    return h('tr',{style:cancelled?{opacity:'.72',background:'var(--surface2)'}:null},
       h('td',{class:'tm'},reciboLabel(p)),
       h('td',null,fdate(String(p.created_at||'').slice(0,10))),
       h('td',null,h('div',{class:'tb'},p.customer_name||'Cliente'),h('div',{class:'ts'},p.customer_rnc||'')),
       h('td',{class:'tm'},invoice),
       h('td',null,h('span',{class:`badge ${(p.method||'')==='efectivo'?'g':'b'}`},p.method||'efectivo')),
-      h('td',{style:{fontWeight:800,color:'var(--green)'}},fmt(p.amount)),
+      h('td',null,h('span',{class:`badge ${cancelled?'r':'g'}`},cancelled?'Anulado':'Vigente')),
+      h('td',{style:{fontWeight:800,color:cancelled?'var(--muted2)':'var(--green)',textDecoration:cancelled?'line-through':'none'}},fmt(p.amount)),
       h('td',null,h('div',{class:'flex',style:{gap:'3px'}},
         h('button',{class:'btn btn-ghost btn-sm',onclick:()=>openAbonoDetalleModal(p),html:`${svg('eye')} Ver`}),
-        h('button',{class:'btn btn-ghost btn-sm',onclick:()=>reimprimirAbono(p.id),html:svg('print')})
+        h('button',{class:'btn btn-ghost btn-sm',onclick:()=>reimprimirAbono(p.id),title:cancelled?'Reimprimir comprobante anulado':'Reimprimir',html:svg('print')}),
+        canCancel
+          ? h('button',{
+              class:'btn btn-ghost btn-sm',
+              style:{color:'var(--red)'},
+              onclick:()=>openAnularAbonoModal(p),
+              html:`${svg('x')} Anular`
+            })
+          : null
       )));
   });
   const table = h('table',null,
-    h('thead',null,h('tr',null,...['Recibo','Fecha','Cliente','Factura','Método','Monto',''].map(x=>h('th',null,x)))),
+    h('thead',null,h('tr',null,...['Recibo','Fecha','Cliente','Factura','Método','Estado','Monto',''].map(x=>h('th',null,x)))),
     h('tbody',null,...rows));
   tableWrap.appendChild(h('div',{class:'card'},h('div',{class:'tw'},table)));
+}
+
+function openAnularAbonoModal(paymentOrId) {
+  const p = typeof paymentOrId === 'object'
+    ? paymentOrId
+    : (DB.payments || []).find(row => Number(row.id) === Number(paymentOrId));
+  if (!p) { toast('Abono no encontrado', 'err'); return; }
+  if (!['admin','superadmin'].includes(user?.role)) {
+    toast('Solo un administrador puede anular abonos', 'err');
+    return;
+  }
+  if (String(p.status || 'active').toLowerCase() === 'cancelled') {
+    toast('Este abono ya fue anulado', 'w');
+    return;
+  }
+  const method = String(p.method || 'efectivo').toLowerCase();
+  const requiresCash = !['credito','descuento'].includes(method);
+  openModal(`
+    <div class="modal-title">Anular abono ${ventasEsc(reciboLabel(p))}</div>
+    <div class="modal-sub">La operación quedará en el historial; no se eliminará ningún registro.</div>
+    <div class="card" style="margin-top:14px;background:var(--surface2)">
+      <div class="g2">
+        <div><div class="ts">Cliente</div><strong>${ventasEsc(p.customer_name || 'Cliente')}</strong></div>
+        <div><div class="ts">Monto a restaurar</div><strong style="color:var(--red)">${fmt(p.amount)}</strong></div>
+        <div><div class="ts">Aplicado a</div><strong>${ventasEsc(paymentInvoiceSummary(p))}</strong></div>
+        <div><div class="ts">Método</div><strong style="text-transform:capitalize">${ventasEsc(method)}</strong></div>
+      </div>
+    </div>
+    <div style="margin-top:14px;padding:11px 13px;border:1px solid #fecaca;background:#fff7f7;border-radius:10px;font-size:12px;line-height:1.5">
+      <strong>¿Qué hará Velo?</strong><br>
+      Restaurará ${fmt(p.amount)} al balance del cliente, reabrirá el saldo de las facturas abonadas
+      y reversará el asiento contable.
+      ${requiresCash
+        ? ' La devolución quedará registrada en la caja abierta de esta terminal.'
+        : ''}
+    </div>
+    ${requiresCash && !cajaOpen
+      ? `<div style="margin-top:10px;color:var(--red);font-size:12px;font-weight:700">
+          Debes abrir la caja antes de confirmar la anulación.
+        </div>`
+      : ''}
+    <label class="lbl" for="ventas-void-payment-reason" style="margin-top:15px">
+      Motivo de la anulación *
+    </label>
+    <textarea id="ventas-void-payment-reason" class="inp" rows="3"
+      maxlength="300" placeholder="Ej.: El abono fue registrado con un monto incorrecto"></textarea>
+    <label style="display:flex;align-items:flex-start;gap:9px;margin-top:12px;padding:10px 12px;
+                  border:1px solid var(--line);border-radius:9px;cursor:pointer;background:var(--surface2)">
+      <input id="ventas-reenter-payment" type="checkbox" style="margin-top:2px">
+      <span>
+        <strong style="font-size:12px">Registrar el abono corregido después de anular</strong>
+        <span class="ts" style="display:block;margin-top:2px">
+          Abrirá el formulario con cliente, monto, método y facturas precargados para revisarlos antes de confirmar.
+        </span>
+      </span>
+    </label>
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="closeModal()">Conservar abono</button>
+      <button class="btn btn-red" onclick="confirmarAnulacionAbono(${Number(p.id)})"
+        ${requiresCash && !cajaOpen ? 'disabled' : ''}>
+        ${svg('x')} Confirmar anulación
+      </button>
+    </div>
+  `);
+  setTimeout(() => document.getElementById('ventas-void-payment-reason')?.focus(), 60);
+}
+
+async function confirmarAnulacionAbono(paymentId) {
+  const originalPayment = (DB.payments || []).find(
+    payment => Number(payment.id) === Number(paymentId)
+  );
+  const registerAgain = !!document.getElementById('ventas-reenter-payment')?.checked;
+  const correctionPrefill = registerAgain && originalPayment ? {
+    replacesPaymentId: Number(originalPayment.id),
+    sourceReceipt: reciboLabel(originalPayment),
+    amount: Number(originalPayment.amount || 0),
+    method: originalPayment.method || 'efectivo',
+    note: originalPayment.note === 'Abono' ? '' : (originalPayment.note || ''),
+    contactId: Number(originalPayment.customer_contact_id) || null,
+    allocations: paymentAllocationsOf(originalPayment).map(row => ({
+      saleId: Number(row.sale_id),
+      amount: Number(row.amount || 0),
+    })),
+  } : null;
+  const reason = String(document.getElementById('ventas-void-payment-reason')?.value || '')
+    .replace(/\s+/g, ' ').trim();
+  if (reason.length < 5) {
+    toast('Escribe un motivo de al menos 5 caracteres', 'w');
+    document.getElementById('ventas-void-payment-reason')?.focus();
+    return;
+  }
+  const buttons = document.querySelectorAll('.modal-foot button');
+  buttons.forEach(button => { button.disabled = true; });
+  const result = await window.api.customers.cancelPayment({
+    id: Number(paymentId),
+    reason,
+    requestUserId: user.id,
+  });
+  if (!result?.ok) {
+    buttons.forEach(button => { button.disabled = false; });
+    toast(result?.error || 'No se pudo anular el abono', 'err');
+    return;
+  }
+  closeModal();
+  await Promise.all([
+    reloadPayments(),
+    reloadCustomers(),
+    reloadSales({ range: ventasRange, view: 'sales' }),
+  ]);
+  renderVentasTable();
+  buildSidebar();
+  buildTopbar();
+  if (correctionPrefill) {
+    const customer = (DB.customers || []).find(
+      row => Number(row.id) === Number(result.customerId)
+    );
+    if (customer && typeof openAbonoModal === 'function') {
+      toast('Abono anulado. Revisa y confirma el recibo corregido.');
+      await openAbonoModal(customer, correctionPrefill);
+      return;
+    }
+  }
+  toast(`Abono anulado · balance restaurado a ${fmt(result.restoredBalance)}`);
 }
 
 // ── Enviar e-CF ───────────────────────────────
@@ -1482,6 +1620,16 @@ async function openDetalleVentaModal(s) {
       </div>
       ${detail.date_modified_at ? `<div class="ts" style="margin-top:8px">Fecha modificada: ${ventasEsc(detail.date_change_reason || 'Motivo auditado')} · ${ventasEsc(detail.date_modified_at)}</div>` : ''}
     </div>
+    ${detail.replaces_sale_id ? `
+      <div style="margin:-2px 0 12px;padding:8px 10px;border:1px solid var(--amber-line);
+                  border-radius:8px;background:var(--amber-bg);font-size:11px;color:var(--muted2)">
+        <strong style="color:var(--text)">Factura registrada nuevamente</strong>
+        · conserva ${ventasEsc(detail.document_number_fmt || facturaLabel(detail))}
+        y reemplaza una operación anulada.
+        ${detail.replaces_sale?.cancel_reason
+          ? ` Motivo: ${ventasEsc(detail.replaces_sale.cancel_reason)}.`
+          : ''}
+      </div>` : ''}
     <div class="g2" style="margin-bottom:14px">
       <div>
         <div class="lbl">Cliente</div>
@@ -1644,10 +1792,50 @@ function eliminarCotizacion(s) {
 }
 
 // ── Anulación (solo admin) ────────────────────
+function activePaymentsForSale(saleId) {
+  return (DB.payments || []).filter(payment => {
+    if (String(payment.status || 'active').toLowerCase() === 'cancelled') return false;
+    if (Number(payment.sale_id) === Number(saleId)) return true;
+    return paymentAllocationsOf(payment).some(
+      allocation => Number(allocation.sale_id) === Number(saleId)
+    );
+  });
+}
+
+function openPaymentsForSale(saleId) {
+  const sale = (DB.sales || []).find(row => Number(row.id) === Number(saleId));
+  closeModal();
+  ventasTab = 'abonos';
+  ventasSearch = sale ? facturaLabel(sale) : '';
+  renderVentas(document.getElementById('page'));
+}
+
+function ventaPuedeReutilizarNumero(sale) {
+  return !!sale &&
+    sale.type === 'factura' &&
+    sale.status === 'completed' &&
+    Number(sale.customer_id) === 1 &&
+    !String(sale.ncf || '').trim() &&
+    !String(sale.ecf_status || '').trim() &&
+    !String(sale.import_source || '').trim() &&
+    ['factura_contado', 'factura_historica'].includes(String(sale.document_kind || '')) &&
+    !Number(sale.has_product_correction || 0) &&
+    Number(sale.adjustment_addition_total || 0) === 0 &&
+    Number(sale.operation_credit_total || 0) === 0;
+}
+
 function openAnulacionModal(s) {
   if (!s) { toast('Documento no encontrado', 'err'); return; }
   const isReturn = s.type === 'devolucion';
   const isMonetaryCredit = isReturn && s.correction_kind === 'monetary_credit';
+  const activePayments = isReturn ? [] : activePaymentsForSale(s.id);
+  const canRegisterAgain = !isReturn && ventaPuedeReutilizarNumero(s);
+  const paidAmount = activePayments.reduce((sum, payment) => {
+    const allocation = paymentAllocationsOf(payment).find(
+      row => Number(row.sale_id) === Number(s.id)
+    );
+    return sum + Number(allocation?.amount ?? payment.amount ?? 0);
+  }, 0);
   openModal(`
     <div class="modal-title">Anular ${isMonetaryCredit ? 'Nota de crédito' : isReturn ? 'Devolución' : 'Venta'} ${facturaLabel(s)}</div>
     <div class="modal-sub" style="color:var(--red)">
@@ -1657,6 +1845,24 @@ function openAnulacionModal(s) {
         ? 'Se retirará del inventario la mercancía repuesta y se restaurará la cuenta por cobrar cuando corresponda.'
         : 'Esta acción revierte inventario, caja y contabilidad. El documento dejará de aparecer en Ventas.'}
     </div>
+    ${activePayments.length ? `
+      <div class="alrt w" style="margin-top:14px">
+        <div class="alrt-dot w"></div>
+        <div>
+          <div class="alrt-title">Esta factura tiene ${activePayments.length} abono(s) vigente(s) por ${fmt(paidAmount)}</div>
+          <div class="alrt-sub">
+            Para conservar caja, balance e historial cuadrados, anula primero cada abono.
+            Luego podrás anular la factura. Ningún recibo será eliminado.
+          </div>
+        </div>
+      </div>` : ''}
+    ${canRegisterAgain ? `
+      <div style="margin-top:12px;padding:8px 10px;border:1px solid var(--line);
+                  border-radius:8px;background:var(--surface2);font-size:11px;color:var(--muted2)">
+        Al registrarla nuevamente se copiarán sus productos al POS y se conservará
+        <strong style="color:var(--text)">${ventasEsc(s.document_number_fmt || facturaLabel(s))}</strong>.
+        La factura anulada seguirá guardada como antecedente.
+      </div>` : ''}
     <div class="fg mt14">
       <label class="lbl">Motivo de anulación *</label>
       <input class="inp" id="anul-reason" type="text"
@@ -1664,19 +1870,37 @@ function openAnulacionModal(s) {
     </div>
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-red" onclick="confirmarAnulacion(${s.id})">
-        ${svg('xmark')} Confirmar Anulación
+      ${activePayments.length ? `
+        <button class="btn btn-dark" onclick="openPaymentsForSale(${Number(s.id)})">
+          ${svg('list')} Revisar abonos
+        </button>` : ''}
+      <button class="btn btn-red" onclick="confirmarAnulacion(${s.id})"
+        ${activePayments.length ? 'disabled' : ''}>
+        ${svg('xmark')} Solo anular
       </button>
+      ${canRegisterAgain ? `
+        <button class="btn btn-dark" onclick="confirmarAnulacion(${s.id},true)"
+          ${activePayments.length ? 'disabled' : ''}>
+          ${svg('receipt')} Anular y registrar nuevamente
+        </button>` : ''}
     </div>
   `);
 }
 
-async function confirmarAnulacion(saleId) {
+async function confirmarAnulacion(saleId, registerAgain = false) {
   const targetSale = (DB.sales || []).find(row => Number(row.id) === Number(saleId));
   const isMonetaryCredit = targetSale?.type === 'devolucion' &&
     targetSale?.correction_kind === 'monetary_credit';
   const reason = document.getElementById('anul-reason')?.value?.trim();
   if (!reason) { toast('El motivo es requerido', 'err'); return; }
+  let replacementSource = null;
+  if (registerAgain) {
+    replacementSource = await window.api.sales.getById({ id: saleId }).catch(() => null);
+    if (!ventaPuedeReutilizarNumero(replacementSource || targetSale)) {
+      toast('Esta factura no cumple las condiciones para reutilizar su número', 'err');
+      return;
+    }
+  }
 
   const result = await window.api.sales.cancel({
     id: saleId, reason, requestUserId: user.id
@@ -1693,6 +1917,29 @@ async function confirmarAnulacion(saleId) {
   toast(`✓ ${isMonetaryCredit ? 'Nota de crédito' : result.isReturn ? 'Devolución' : 'Venta'} ${facturaLabel(targetSale || { id: saleId })} anulada`);
   if (result.overpayment > 0) {
     toast(`⚠ El cliente ya había pagado de más por esta factura — excedente de ${fmt(result.overpayment)} a revisar manualmente (reembolso o crédito)`, 'w');
+  }
+  if (registerAgain && replacementSource) {
+    window._pendingPOSResaleCart = {
+      replacementOfSaleId: Number(saleId),
+      replacementDocumentNumber:
+        replacementSource.document_number_fmt || facturaLabel(replacementSource),
+      priceMode: replacementSource.price_mode || 'retail',
+      discountPct: replacementSource.discount_pct || 0,
+      charges: replacementSource.charges || [],
+      notes: replacementSource.notes || '',
+      customer: {
+        id: 1,
+        name: replacementSource.customer_name || 'Consumidor Final',
+        rnc: '',
+      },
+      items: (replacementSource.items || []).map(item => ({
+        ...item,
+        source_sale_id: Number(saleId),
+        source_item_id: item.id || null,
+      })),
+    };
+    routeTo('pos');
+    return;
   }
   if (result.isReturn) renderDevoluciones(document.getElementById('page'));
   else renderVentas(document.getElementById('page'));
@@ -1797,6 +2044,10 @@ function ventasPrintPayload(sale) {
     original_document_number_fmt: sale.original_document_number_fmt || '',
     original_numero_factura: sale.original_numero_factura,
     original_numero_factura_fmt: sale.original_numero_factura_fmt,
+    print_printer_name: sale.print_printer_name || '',
+    print_profile_id: sale.print_profile_id || '',
+    print_template_id: sale.print_template_id || '',
+    print_copies: sale.print_copies || 1,
   };
 }
 

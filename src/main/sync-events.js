@@ -38,6 +38,7 @@ const CHANNEL_SCOPES = {
   'customers:deleteContact':['customers'],
   'customers:delete':    ['customers'],
   'customers:addPayment':['customers', 'sales'],
+  'customers:cancelPayment':['customers', 'sales'],
 };
 
 // Devuelve el array de scopes de un canal, o null si no difunde.

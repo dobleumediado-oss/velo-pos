@@ -87,6 +87,107 @@ const quote2 = create('efectivo', 'cotizacion');
 ok(DB.salesRepo.getById(quote2.saleId).document_number_fmt === 'COT-000002',
   'el correlativo eliminado no vuelve a utilizarse');
 
+console.log('\n== Reutilización controlada de factura no fiscal ==');
+const consumerSale = DB.salesRepo.create({
+  session: null,
+  customer: { id: 1, name: 'Consumidor Final', rnc: '' },
+  items: [line(1)],
+  payment: { method: 'efectivo' },
+  user: admin,
+  type: 'factura',
+});
+const consumerBefore = DB.salesRepo.getById(consumerSale.saleId);
+DB.salesRepo.cancel(consumerSale.saleId, 'Error de facturación', admin.id, admin.name);
+const consumerReplacement = DB.salesRepo.create({
+  session: null,
+  customer: { id: 1, name: 'Consumidor Final', rnc: '' },
+  items: [line(1)],
+  payment: {
+    method: 'efectivo',
+    replacesSaleId: consumerSale.saleId,
+  },
+  user: admin,
+  type: 'factura',
+});
+const consumerAfter = DB.salesRepo.getById(consumerReplacement.saleId);
+ok(
+  consumerAfter.document_number_fmt === consumerBefore.document_number_fmt &&
+  consumerAfter.replaces_sale_id === consumerSale.saleId,
+  'Consumidor Final sin NCF conserva el número comercial al registrarse nuevamente'
+);
+ok(
+  DB.salesRepo.getById(consumerSale.saleId).status === 'cancelled' &&
+  db.prepare('SELECT COUNT(*) c FROM document_reuse_log WHERE original_sale_id=? AND replacement_sale_id=?')
+    .get(consumerSale.saleId, consumerReplacement.saleId).c === 1,
+  'conserva la factura anulada y la cadena de auditoría del reemplazo'
+);
+ok(
+  consumerAfter.receipt_document_number_fmt !== consumerBefore.receipt_document_number_fmt,
+  'el recibo nuevo mantiene su propia secuencia y no reutiliza el recibo anulado'
+);
+let duplicateReplacementBlocked = false;
+try {
+  DB.salesRepo.create({
+    session: null,
+    customer: { id: 1, name: 'Consumidor Final', rnc: '' },
+    items: [line(1)],
+    payment: { method: 'efectivo', replacesSaleId: consumerSale.saleId },
+    user: admin,
+    type: 'factura',
+  });
+} catch (error) {
+  duplicateReplacementBlocked = /ya fue registrada nuevamente/.test(error.message);
+}
+ok(duplicateReplacementBlocked, 'impide dos reemplazos vigentes para una misma factura anulada');
+const fiscalConsumer = DB.salesRepo.create({
+  session: null,
+  customer: { id: 1, name: 'Consumidor Final', rnc: '' },
+  items: [line(1)],
+  payment: { method: 'efectivo' },
+  user: admin,
+  type: 'factura',
+});
+db.prepare("UPDATE sales SET ncf='B0200000001' WHERE id=?").run(fiscalConsumer.saleId);
+DB.salesRepo.cancel(fiscalConsumer.saleId, 'Error en comprobante', admin.id, admin.name);
+let fiscalReplacementBlocked = false;
+try {
+  DB.salesRepo.create({
+    session: null,
+    customer: { id: 1, name: 'Consumidor Final', rnc: '' },
+    items: [line(1)],
+    payment: { method: 'efectivo', replacesSaleId: fiscalConsumer.saleId },
+    user: admin,
+    type: 'factura',
+  });
+} catch (error) {
+  fiscalReplacementBlocked = /NCF o e-CF/.test(error.message);
+}
+ok(fiscalReplacementBlocked, 'un comprobante fiscal anulado nunca libera su número');
+
+const registeredCustomerSale = DB.salesRepo.create({
+  session: null,
+  customer: { id: customerId },
+  items: [line(1)],
+  payment: { method: 'efectivo' },
+  user: admin,
+  type: 'factura',
+});
+DB.salesRepo.cancel(registeredCustomerSale.saleId, 'Error en cliente', admin.id, admin.name);
+let registeredCustomerBlocked = false;
+try {
+  DB.salesRepo.create({
+    session: null,
+    customer: { id: 1, name: 'Consumidor Final', rnc: '' },
+    items: [line(1)],
+    payment: { method: 'efectivo', replacesSaleId: registeredCustomerSale.saleId },
+    user: admin,
+    type: 'factura',
+  });
+} catch (error) {
+  registeredCustomerBlocked = /Consumidor Final/.test(error.message);
+}
+ok(registeredCustomerBlocked, 'una factura de cliente registrado no reutiliza su correlativo');
+
 console.log('\n== Abono, conduce y reporte ==');
 const payment = DB.customersRepo.addPayment({
   customerId, amount: 18, method: 'efectivo',
