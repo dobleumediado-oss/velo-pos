@@ -3050,7 +3050,8 @@ const customersRepo = {
     }
 
     const currentBalance = round2(Number(customer.balance || 0));
-    const restoredBalance = round2(currentBalance + Number(payment.amount || 0));
+    let restoredBalance = round2(currentBalance + Number(payment.amount || 0));
+    let reconciledFromDocuments = false;
     let restoredDue = customer.credit_due || null;
     if (!restoredDue && relatedSaleIds.length) {
       const placeholders = relatedSaleIds.map(() => '?').join(',');
@@ -3088,6 +3089,16 @@ const customersRepo = {
       );
       if (!changed.changes) throw new Error('Este abono ya fue anulado');
 
+      // Si el acumulado del cliente llegó desfasado desde otra terminal, sumar
+      // el monto a ciegas infla la deuda. Cuando toda la CxC está vinculada a
+      // facturas, la fuente segura son los documentos vigentes y sus abonos
+      // activos (el recibo ya está marcado como anulado en este punto).
+      const receivableProjection = getPendingInvoices(db, payment.customer_id);
+      if (receivableProjection.fullyReconcilable) {
+        restoredBalance = round2(Number(receivableProjection.capacityTotal || 0));
+        reconciledFromDocuments = true;
+      }
+
       db.prepare(`
         UPDATE customers
         SET balance=?,credit_due=?,updated_at=datetime('now','localtime')
@@ -3115,6 +3126,7 @@ const customersRepo = {
         previousBalance: currentBalance,
         restoredBalance,
         restoredDue,
+        reconciledFromDocuments,
         cashSessionId: reversalSession?.id || null,
         allocations: allocations.map(row => ({
           sale_id: Number(row.sale_id),

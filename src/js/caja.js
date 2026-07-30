@@ -126,23 +126,24 @@ function renderCaja(el) {
     }
     el.appendChild(sesCard);
 
-    // Abonos de esta sesión, incluidos pagos iniciales de facturas a crédito.
+    // Abonos vigentes de esta sesión, incluidos pagos iniciales de facturas a
+    // crédito. Los anulados permanecen auditables desde «Ver historial», pero
+    // no deben ocupar la vista operativa de Caja.
     const payCard = h('div', { class: 'card mb20' });
     payCard.appendChild(h('div',{class:'fxb mb8'},
       h('div',{class:'card-title'},`Abonos y pagos iniciales (${tdPayments.length})`),
       h('button',{class:'btn btn-ghost btn-sm',onclick:()=>{ window._ventasTabInicial='abonos'; routeTo('ventas'); },html:`${svg('list')} Ver historial`})));
-    if (!tdPaymentsAll.length) {
+    if (!tdPayments.length) {
       payCard.appendChild(h('div',{class:'empty',style:{padding:'18px'}},h('p',null,'Sin abonos en esta sesión')));
     } else {
-      const rows = [...tdPaymentsAll].reverse().map(p => {
-        const cancelled = String(p.status || 'active').toLowerCase() === 'cancelled';
-        return h('tr',{style:cancelled?{opacity:'.72',background:'var(--surface2)'}:null},
+      const rows = [...tdPayments].reverse().map(p => {
+        return h('tr',null,
         h('td',{class:'tm'},reciboLabel(p)),
         h('td',null,h('div',{class:'tb'},p.customer_name||DB.customers.find(c=>Number(c.id)===Number(p.customer_id))?.name||'Cliente')),
         h('td',{class:'tm'},paymentInvoiceSummary(p)),
         h('td',null,h('span',{class:`badge ${(p.method||'')==='efectivo'?'g':'b'}`},p.method||'efectivo')),
-        h('td',null,h('span',{class:`badge ${cancelled?'r':'g'}`},cancelled?'Anulado':'Vigente')),
-        h('td',{style:{fontWeight:800,color:cancelled?'var(--muted2)':'var(--green)',textDecoration:cancelled?'line-through':'none'}},fmt(p.amount)),
+        h('td',null,h('span',{class:'badge g'},'Vigente')),
+        h('td',{style:{fontWeight:800,color:'var(--green)'}},fmt(p.amount)),
         h('td',null,h('div',{class:'flex',style:{gap:'3px'}},
           h('button',{class:'btn btn-ghost btn-sm',onclick:()=>openAbonoDetalleModal(p),html:svg('eye')}),
           h('button',{class:'btn btn-ghost btn-sm',onclick:()=>reimprimirAbono(p.id),html:svg('print')}))));

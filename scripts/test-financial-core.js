@@ -42,6 +42,7 @@ const DB = require('../database');
 DB.initDB(tmpDir);
 const db = DB.getDB();
 const { seedAccountingCatalog } = require('../versioning');
+const { repairCancelledPaymentInflation } = require('../lib/pending-invoices');
 
 function setupAccountingCore() {
   db.exec(`
@@ -676,6 +677,80 @@ throws(() => DB.customersRepo.addPayment({
   allocations: [{ saleId: multiB.saleId, amount: 1 }],
 }), 'impide crear dos reemplazos vigentes para el mismo abono anulado');
 
+console.log('\n== F2c. Dos abonos anulados y uno vigente no inflan la deuda ==');
+const voidSequenceCustomerId = DB.customersRepo.create({
+  name: 'Cliente secuencia de anulaciones',
+  customer_type: 'person',
+  credit_limit: 1000,
+});
+const voidSequenceSale = DB.salesRepo.create({
+  customer: { id: voidSequenceCustomerId, name: 'Cliente secuencia de anulaciones' },
+  items: [itemNoTax(1)],
+  payment: { method: 'credito' },
+  user,
+  type: 'factura',
+});
+const voidSequenceOriginalBalance = DB.customersRepo
+  .getById(voidSequenceCustomerId).balance;
+const addAndVoidSequencePayment = index => {
+  const payment = DB.customersRepo.addPayment({
+    customerId: voidSequenceCustomerId,
+    saleId: voidSequenceSale.saleId,
+    amount: 30,
+    method: 'efectivo',
+    note: `abono a anular ${index}`,
+    userId,
+    sessionId: cashSessionId,
+  });
+  // Reproduce el desfase observado en una terminal real: el recibo conserva
+  // before/after correctos, pero el acumulado del cliente vuelve al valor
+  // anterior antes de confirmar la anulación.
+  db.prepare('UPDATE customers SET balance=? WHERE id=?')
+    .run(voidSequenceOriginalBalance, voidSequenceCustomerId);
+  const cancelled = DB.customersRepo.cancelPayment({
+    id: payment.paymentId,
+    reason: `Anulación de prueba ${index}`,
+    userId,
+    userName: user.name,
+    sessionId: cashSessionId,
+  });
+  ok(cancelled.reconciledFromDocuments
+    && near(cancelled.restoredBalance, voidSequenceOriginalBalance),
+  `anulación ${index} reconcilia la deuda documental sin sumar sobre el acumulado desfasado`);
+  return payment;
+};
+addAndVoidSequencePayment(1);
+addAndVoidSequencePayment(2);
+const voidSequenceActive = DB.customersRepo.addPayment({
+  customerId: voidSequenceCustomerId,
+  saleId: voidSequenceSale.saleId,
+  amount: 30,
+  method: 'efectivo',
+  note: 'abono vigente final',
+  userId,
+  sessionId: cashSessionId,
+});
+const voidSequenceFinalBalance = DB.customersRepo
+  .getById(voidSequenceCustomerId).balance;
+ok(near(voidSequenceFinalBalance, voidSequenceOriginalBalance - 30),
+  'dos anulaciones quedan en cero neto y solo el abono vigente reduce la deuda');
+ok(db.prepare(`
+  SELECT COUNT(*) count FROM payments
+  WHERE customer_id=? AND status='cancelled'
+`).get(voidSequenceCustomerId).count === 2
+  && db.prepare(`
+    SELECT COUNT(*) count FROM payments
+    WHERE customer_id=? AND status='active'
+  `).get(voidSequenceCustomerId).count === 1
+  && Number(voidSequenceActive.paymentId) > 0,
+  'conserva dos recibos anulados y exactamente un abono vigente');
+db.prepare('UPDATE customers SET balance=? WHERE id=?')
+  .run(voidSequenceFinalBalance + 60, voidSequenceCustomerId);
+const repairedVoidSequence = repairCancelledPaymentInflation(db);
+ok(repairedVoidSequence.length === 1
+  && near(DB.customersRepo.getById(voidSequenceCustomerId).balance, voidSequenceFinalBalance),
+  'la migración repara el exceso histórico exacto de los dos abonos anulados');
+
 console.log('\n== F3. Reportes segmentados para detalle, mayorista y empresas ==');
 const companyId = DB.customersRepo.create({
   name: 'Empresa Reporte SRL', customer_type: 'company',
@@ -845,6 +920,15 @@ ok(searchNorm('  José García  ') === 'jose garcia', 'searchNorm minúsculas + 
 ok(searchNorm(null) === '' && searchNorm(undefined) === '', 'searchNorm tolera null/undefined');
 ok(digitsOf('809-555-1234') === '8095551234', 'digitsOf deja solo dígitos');
 ok(digitsOf('RNC: 1-30-12345-6') === '130123456', 'digitsOf sobre RNC con guiones');
+
+console.log('\n== L. Consistencia visual del precio final ==');
+const ventasSource = fs.readFileSync(
+  path.join(__dirname, '..', 'src', 'js', 'ventas.js'), 'utf8'
+);
+ok(ventasSource.includes('<th style="text-align:right">Precio final</th>')
+  && ventasSource.includes('<th style="text-align:right">Base sin ITBIS</th>')
+  && ventasSource.includes('<td style="text-align:right">${fmt(resalePrice)}</td>'),
+  'el detalle de Ventas muestra el precio unitario final con ITBIS incluido');
 
 // ── Limpieza ──
 db.close();

@@ -9,6 +9,7 @@ const path = require('path');
 const { ensureSalespeopleSchema } = require('./src/main/salespeople-repo');
 const { ensureCheckoutOrdersSchema } = require('./src/main/checkout-orders-repo');
 const { ensureSaleCorrectionsSchema } = require('./src/main/sale-corrections-repo');
+const { repairCancelledPaymentInflation } = require('./lib/pending-invoices');
 
 // ── Versión centralizada — siempre desde package.json ──
 // Nunca hardcodeada aquí. Así package.json es la única fuente de verdad.
@@ -1313,6 +1314,23 @@ const MIGRATIONS = [
           ON payment_allocations(sale_id);
       `);
       console.log('[MIGRATION 1.32.1-payment-allocations] Abonos multi-factura habilitados');
+    }
+  },
+  {
+    version: '1.34.1-reconcile-cancelled-payments',
+    description: 'Reconciliar balances inflados por abonos anulados',
+    run(db) {
+      const repairs = repairCancelledPaymentInflation(db);
+      repairs.forEach(repair => {
+        console.log(
+          `[MIGRATION 1.34.1] CxC reparada: ${repair.customerName || '#' + repair.customerId} ` +
+          `${repair.previousBalance.toFixed(2)} → ${repair.repairedBalance.toFixed(2)} ` +
+          `(${repair.cancelledCount} abono(s) anulado(s))`
+        );
+      });
+      console.log(
+        `[MIGRATION 1.34.1] ${repairs.length} balance(s) conciliado(s) desde documentos vigentes`
+      );
     }
   },
 ];

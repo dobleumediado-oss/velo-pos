@@ -1004,9 +1004,9 @@ function openAnularAbonoModal(paymentOrId) {
                   border:1px solid var(--line);border-radius:9px;cursor:pointer;background:var(--surface2)">
       <input id="ventas-reenter-payment" type="checkbox" style="margin-top:2px">
       <span>
-        <strong style="font-size:12px">Registrar el abono corregido después de anular</strong>
+        <strong style="font-size:12px">Anular y abrir un nuevo abono para corregirlo</strong>
         <span class="ts" style="display:block;margin-top:2px">
-          Abrirá el formulario con cliente, monto, método y facturas precargados para revisarlos antes de confirmar.
+          No se registra automáticamente: abrirá el formulario con los datos precargados para revisarlos y confirmarlos.
         </span>
       </span>
     </label>
@@ -1527,7 +1527,7 @@ async function openDetalleVentaModal(s) {
           ${ventasEsc(ventasItemCode(i) || '—')}
         </td>
         <td style="min-width:120px">${ventasEsc(ventasDisplayProductName(i.product_name || i.name))}</td>
-        <td style="text-align:right">${fmt(f.unitNet)}</td>
+        <td style="text-align:right">${fmt(resalePrice)}</td>
         <td style="text-align:center;font-weight:700">${f.qty}</td>
         <td style="text-align:right;color:var(--muted)">${fmt(f.net)}</td>
         <td style="text-align:right;color:${f.tax > 0 ? 'var(--amber)' : 'var(--muted2)'}">${fmt(f.tax)}</td>
@@ -1660,9 +1660,9 @@ async function openDetalleVentaModal(s) {
         <thead><tr>
           <th>Código</th>
           <th>Nombre artículo</th>
-          <th style="text-align:right">Precio venta</th>
+          <th style="text-align:right">Precio final</th>
           <th style="text-align:center">Cantidad</th>
-          <th style="text-align:right">Monto bruto</th>
+          <th style="text-align:right">Base sin ITBIS</th>
           <th style="text-align:right">ITBIS</th>
           <th style="text-align:right">Importe</th>
           ${canResell ? '<th style="text-align:right">Revender</th>' : ''}
@@ -1678,7 +1678,7 @@ async function openDetalleVentaModal(s) {
         `).join('')}
       </div>` : ''}
     <div class="card" style="background:var(--surface2)">
-        <div class="tr"><span>Monto bruto</span><span>${fmt(netShown)}</span></div>
+        <div class="tr"><span>Subtotal sin ITBIS</span><span>${fmt(netShown)}</span></div>
       ${discPct > 0
         ? `<div class="tr"><span>Descuento (${discPct}%)</span>
            <span>-${fmt(discAmt)}</span></div>` : ''}

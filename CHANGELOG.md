@@ -1,5 +1,30 @@
 # Historial de versiones
 
+## 1.34.1 — 2026-07-30
+
+### Abonos y cuentas por cobrar
+
+- Corrige el caso donde anular un abono podía sumar su monto sobre un balance
+  desfasado y producir una deuda mayor que las facturas realmente pendientes.
+- La anulación reconstruye la CxC desde facturas, devoluciones y abonos vigentes
+  cuando toda la cuenta posee trazabilidad documental.
+- Migración automática y conservadora para reparar balances ya inflados: solo
+  actúa cuando el exceso coincide exactamente con los abonos anulados y no
+  existen saldos vivos sin factura.
+- Caja vuelve a mostrar únicamente abonos vigentes; los anulados permanecen en
+  «Ver historial» para auditoría y reimpresión.
+- La opción de corregir un abono ahora aclara que primero anula y luego abre un
+  formulario nuevo que el usuario debe revisar y confirmar.
+
+### Precios e ITBIS
+
+- El detalle de Ventas muestra el precio unitario final con ITBIS incluido, de
+  forma consistente con el estado de cuenta y el precio realmente cobrado.
+- El desglose fiscal se identifica claramente como «Base sin ITBIS»,
+  «ITBIS» e «Importe», evitando presentar la base neta como precio de venta.
+- Nuevas pruebas reproducen dos abonos anulados, uno vigente, un balance
+  previamente desfasado y la reparación automática sin inflar la deuda.
+
 ## 1.34.0 — 2026-07-30
 
 ### Centro de impresión inteligente
