@@ -413,7 +413,10 @@ function _normCaja(s) {
     close:      s.close_amount|| s.close || 0,
     expected:   s.expected    || 0,
     diff:       s.difference  || s.diff || 0,
-    total:      s.sales_total || s.total || 0,
+    // Los acumulados live vienen calculados desde facturas vigentes. El cache
+    // persistido queda como respaldo para servidores anteriores.
+    total:      s.live_sales_total ?? s.sales_total ?? s.total ?? 0,
+    salesCount: s.live_sales_count ?? s.sales_count ?? 0,
     openBills:  typeof s.open_bills  === 'string' ? JSON.parse(s.open_bills  || '{}') : (s.openBills  || {}),
     closeBills: typeof s.close_bills === 'string' ? JSON.parse(s.close_bills || '{}') : (s.closeBills || {}),
     obs:        s.notes || s.obs || '',
@@ -728,8 +731,10 @@ async function imprimirReporteDia() {
 // ══════════════════════════════════════════════
 function openResumenModal(raw) {
   const s = _normCaja(raw);
-  const sesVentas = DB.sales.filter(v => v.cajaId === s.id && v.type !== 'devolucion');
-  const sesDevs   = DB.sales.filter(v => v.cajaId === s.id && v.type === 'devolucion');
+  const sesVentas = DB.sales.filter(v =>
+    v.cajaId === s.id && v.type !== 'devolucion' && v.status !== 'cancelled');
+  const sesDevs   = DB.sales.filter(v =>
+    v.cajaId === s.id && v.type === 'devolucion' && v.status !== 'cancelled');
   const byMethod  = {};
   sesVentas.forEach(v => { byMethod[v.pay] = (byMethod[v.pay] || 0) + v.total; });
 

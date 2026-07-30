@@ -1,5 +1,29 @@
 # Historial de versiones
 
+## 1.34.2 — 2026-07-30
+
+### Caja y anulaciones
+
+- Corrige los resúmenes de caja que podían conservar en el total una factura
+  anulada y mostrar el doble aunque el desglose por método estuviera correcto.
+- Al anular una factura, el total y la cantidad de ventas de su sesión se
+  reconstruyen desde las facturas vigentes en vez de restar sobre un cache.
+- Migración automática para conciliar sesiones históricas ya afectadas sin
+  eliminar facturas anuladas ni modificar su auditoría.
+- El resumen visual y el diagnóstico del sistema usan la misma fuente vigente,
+  excluyendo cotizaciones, devoluciones y documentos anulados.
+
+### Clientes y WhatsApp
+
+- Los teléfonos de clientes nuevos, números adicionales y representantes
+  comienzan con el prefijo internacional `1`.
+- Un número dominicano de 10 dígitos se normaliza automáticamente:
+  `8091234567` pasa a `18091234567`.
+- El prefijo no se duplica si el número ya comienza con `1`; un `1` sin número
+  no se guarda como teléfono válido.
+- Los clientes antiguos con teléfonos de 10 dígitos también se corrigen al
+  abrir WhatsApp, sin reescribir sus datos históricos.
+
 ## 1.34.1 — 2026-07-30
 
 ### Abonos y cuentas por cobrar

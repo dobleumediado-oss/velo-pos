@@ -37,6 +37,8 @@ const contactId = DB.customersRepo.createContact(companyId, {
 const company = DB.customersRepo.getById(companyId);
 ok(company.customer_type === 'company' && company.trade_name === 'MotoCaribe',
   'guarda la empresa sin convertirla en una persona');
+ok(company.phone === '18095551000' && company.contacts[0].phone === '18095552000',
+  'guarda teléfonos dominicanos con prefijo 1 para WhatsApp');
 ok(company.contacts.length === 1 && company.contacts[0].id === contactId,
   'devuelve los representantes dentro de la cuenta empresarial');
 ok(company.contacts[0].is_primary === 1 && company.contacts[0].can_order === 1,

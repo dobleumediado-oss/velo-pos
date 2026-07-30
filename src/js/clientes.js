@@ -395,7 +395,9 @@ function openClienteModal(c = null) {
   const balance     = Number(c?.balance || 0);
   const phones = (Array.isArray(c?.phones) && c.phones.length)
     ? c.phones
-    : (c?.phone ? [{ phone_type: 'telefono', phone: c.phone, is_primary: 1 }] : [{ phone_type: 'celular', phone: '', is_primary: 1 }]);
+    : (c?.phone
+      ? [{ phone_type: 'telefono', phone: c.phone, is_primary: 1 }]
+      : [{ phone_type: 'celular', phone: isEdit ? '' : '1', is_primary: 1 }]);
 
   openModal(`
     <div class="modal-title">${isEdit ? 'Editar Cliente' : 'Nuevo Cliente'}</div>
@@ -534,13 +536,28 @@ function cfPhoneRowHtml(phone = {}, index = Date.now()) {
       <option value="celular" ${type==='celular'?'selected':''}>Celular</option>
       <option value="flota" ${type==='flota'?'selected':''}>Flota</option>
     </select>
-    <input class="inp cf-phone-number" type="tel" maxlength="40" placeholder="809-555-0000"
-           value="${cliEsc(phone.phone || '')}"/>
+    <input class="inp cf-phone-number" type="tel" maxlength="40" placeholder="1809-555-0000"
+           value="${cliEsc(phone.phone || '')}" onblur="cfNormalizePhoneInput(this)"/>
     <input type="radio" name="cf-phone-primary" class="cf-phone-primary"
            title="Número principal" aria-label="Número principal" ${phone.is_primary || index===0?'checked':''}/>
     <button type="button" class="btn btn-ghost btn-sm" title="Quitar número"
             onclick="cfRemovePhoneRow(this)" style="padding:3px">×</button>
   </div>`;
+}
+
+function cfNormalizePhone(value) {
+  const raw = String(value || '').trim();
+  const digits = raw.replace(/\D/g, '');
+  if (!digits || digits === '1') return '';
+  if (digits.length === 10) return `1${digits}`;
+  if (digits.length === 11 && digits.startsWith('1')) return digits;
+  return raw;
+}
+
+function cfNormalizePhoneInput(input) {
+  if (!input) return;
+  const normalized = cfNormalizePhone(input.value);
+  input.value = normalized || (String(input.value || '').replace(/\D/g, '') === '1' ? '1' : '');
 }
 
 function cfAddPhoneRow() {
@@ -550,7 +567,7 @@ function cfAddPhoneRow() {
     toast('Puedes registrar hasta 12 números por cliente', 'w');
     return;
   }
-  list.insertAdjacentHTML('beforeend', cfPhoneRowHtml({ phone_type: 'celular', phone: '', is_primary: false }, Date.now()));
+  list.insertAdjacentHTML('beforeend', cfPhoneRowHtml({ phone_type: 'celular', phone: '1', is_primary: false }, Date.now()));
 }
 
 function cfRemovePhoneRow(button) {
@@ -682,7 +699,7 @@ async function guardarCliente(id) {
   const rnc     = document.getElementById('cf-rnc')?.value?.trim()     || '';
   const phones = [...document.querySelectorAll('#cf-phone-list .cf-phone-row')].map(row => ({
     phone_type: row.querySelector('.cf-phone-type')?.value || 'telefono',
-    phone: row.querySelector('.cf-phone-number')?.value?.trim() || '',
+    phone: cfNormalizePhone(row.querySelector('.cf-phone-number')?.value),
     is_primary: !!row.querySelector('.cf-phone-primary')?.checked,
   })).filter(row => row.phone);
   if (phones.length && !phones.some(row => row.is_primary)) phones[0].is_primary = true;
@@ -827,7 +844,9 @@ function openRepresentanteForm(customerId, contactId = null) {
       <div class="fg"><label class="lbl">Cédula / documento</label>
         <input class="inp" id="cr-document" value="${cliEsc(contact?.document || '')}"/></div>
       <div class="fg"><label class="lbl">Teléfono / WhatsApp</label>
-        <input class="inp" id="cr-phone" type="tel" value="${cliEsc(contact?.phone || '')}"/></div>
+        <input class="inp" id="cr-phone" type="tel"
+               value="${cliEsc(contact?.phone || (contact ? '' : '1'))}"
+               onblur="cfNormalizePhoneInput(this)"/></div>
     </div>
     <div class="fg"><label class="lbl">Correo</label>
       <input class="inp" id="cr-email" type="email" value="${cliEsc(contact?.email || '')}"/></div>
@@ -849,7 +868,7 @@ async function guardarRepresentante(customerId, contactId) {
     name: document.getElementById('cr-name')?.value?.trim() || '',
     role: document.getElementById('cr-role')?.value?.trim() || '',
     document: document.getElementById('cr-document')?.value?.trim() || '',
-    phone: document.getElementById('cr-phone')?.value?.trim() || '',
+    phone: cfNormalizePhone(document.getElementById('cr-phone')?.value),
     email: document.getElementById('cr-email')?.value?.trim() || '',
     is_primary: document.getElementById('cr-primary')?.checked ? 1 : 0,
     can_order: document.getElementById('cr-order')?.checked ? 1 : 0,

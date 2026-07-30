@@ -10,6 +10,7 @@ const { ensureSalespeopleSchema } = require('./src/main/salespeople-repo');
 const { ensureCheckoutOrdersSchema } = require('./src/main/checkout-orders-repo');
 const { ensureSaleCorrectionsSchema } = require('./src/main/sale-corrections-repo');
 const { repairCancelledPaymentInflation } = require('./lib/pending-invoices');
+const { reconcileCashSessionTotals } = require('./lib/cash-session-totals');
 
 // ── Versión centralizada — siempre desde package.json ──
 // Nunca hardcodeada aquí. Así package.json es la única fuente de verdad.
@@ -1330,6 +1331,23 @@ const MIGRATIONS = [
       });
       console.log(
         `[MIGRATION 1.34.1] ${repairs.length} balance(s) conciliado(s) desde documentos vigentes`
+      );
+    }
+  },
+  {
+    version: '1.34.2-reconcile-cash-session-totals',
+    description: 'Recalcular totales de caja desde facturas vigentes',
+    run(db) {
+      const result = reconcileCashSessionTotals(db);
+      result.repairs.forEach(repair => {
+        console.log(
+          `[MIGRATION 1.34.2] Caja #${repair.sessionId}: ` +
+          `${repair.previousTotal.toFixed(2)} (${repair.previousCount}) → ` +
+          `${repair.repairedTotal.toFixed(2)} (${repair.repairedCount})`
+        );
+      });
+      console.log(
+        `[MIGRATION 1.34.2] ${result.repaired}/${result.checked} sesión(es) conciliada(s)`
       );
     }
   },

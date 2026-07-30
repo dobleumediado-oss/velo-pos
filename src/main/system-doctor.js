@@ -205,8 +205,8 @@ function diagnoseCash({ db, cashRepo }) {
     FROM cash_sessions cs
     LEFT JOIN sales s
       ON s.cash_session_id=cs.id
-     AND s.status!='cancelled'
-     AND s.type!='cotizacion'
+     AND COALESCE(s.status,'completed')!='cancelled'
+     AND s.type='factura'
     GROUP BY cs.id
     HAVING ABS(COALESCE(cs.sales_total,0)-COALESCE(SUM(s.total),0)) > 1
         OR COALESCE(cs.sales_count,0) != COUNT(s.id)

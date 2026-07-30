@@ -13,6 +13,8 @@ const { todayStr, nowStr, addDaysStr } = require('./lib/dates');
 const { searchNorm: _searchNorm, digitsOf: _digitsOf } = require('./lib/text-normalize');
 const { round2 } = require('./lib/money');
 const { getPendingInvoices } = require('./lib/pending-invoices');
+const { reconcileCashSessionTotals } = require('./lib/cash-session-totals');
+const { normalizeCustomerPhone } = require('./lib/customer-phone');
 const { ensureSalespeopleSchema, createSalespeopleRepo } = require('./src/main/salespeople-repo');
 const { ensureCheckoutOrdersSchema, createCheckoutOrdersRepo } = require('./src/main/checkout-orders-repo');
 const {
@@ -2517,12 +2519,13 @@ function normalizeCustomerPhones(input, legacyPhone = '') {
   const clean = rows.map((row, index) => ({
     phone_type: allowed.has(String(row?.phone_type || row?.type || '').toLowerCase())
       ? String(row.phone_type || row.type).toLowerCase() : 'telefono',
-    phone: String(row?.phone || row?.number || '').trim().slice(0, 40),
+    phone: normalizeCustomerPhone(row?.phone || row?.number).slice(0, 40),
     is_primary: row?.is_primary ? 1 : 0,
     _index: index,
   })).filter(row => row.phone);
   if (!clean.length && String(legacyPhone || '').trim()) {
-    clean.push({ phone_type: 'telefono', phone: String(legacyPhone).trim().slice(0, 40), is_primary: 1, _index: 0 });
+    const phone = normalizeCustomerPhone(legacyPhone).slice(0, 40);
+    if (phone) clean.push({ phone_type: 'telefono', phone, is_primary: 1, _index: 0 });
   }
   if (clean.length && !clean.some(row => row.is_primary)) clean[0].is_primary = 1;
   let foundPrimary = false;
@@ -2690,7 +2693,7 @@ const customersRepo = {
         ) VALUES(?,?,?,?,?,?,?,?,?,?)
       `).run(
         customerId, name, String(c.document || '').trim(), String(c.role || '').trim(),
-        String(c.phone || '').trim(), String(c.email || '').trim(), primary,
+        normalizeCustomerPhone(c.phone), String(c.email || '').trim(), primary,
         c.can_order === false || c.can_order === 0 ? 0 : 1,
         c.can_receive === false || c.can_receive === 0 ? 0 : 1,
         c.can_receive_invoices === false || c.can_receive_invoices === 0 ? 0 : 1
@@ -2713,7 +2716,7 @@ const customersRepo = {
         WHERE id=?
       `).run(
         name, String(c.document || '').trim(), String(c.role || '').trim(),
-        String(c.phone || '').trim(), String(c.email || '').trim(), primary,
+        normalizeCustomerPhone(c.phone), String(c.email || '').trim(), primary,
         c.can_order === false || c.can_order === 0 ? 0 : 1,
         c.can_receive === false || c.can_receive === 0 ? 0 : 1,
         c.can_receive_invoices === false || c.can_receive_invoices === 0 ? 0 : 1, id
@@ -3249,7 +3252,21 @@ const cashRepo = {
   },
   getSessions(limit = 30) {
     return db.prepare(`
-      SELECT cs.*, u.name as user_name
+      SELECT cs.*, u.name as user_name,
+        ROUND(COALESCE((
+          SELECT SUM(s.total)
+          FROM sales s
+          WHERE s.cash_session_id=cs.id
+            AND s.type='factura'
+            AND COALESCE(s.status,'completed')!='cancelled'
+        ),0),2) AS live_sales_total,
+        COALESCE((
+          SELECT COUNT(*)
+          FROM sales s
+          WHERE s.cash_session_id=cs.id
+            AND s.type='factura'
+            AND COALESCE(s.status,'completed')!='cancelled'
+        ),0) AS live_sales_count
       FROM cash_sessions cs
       LEFT JOIN users u ON cs.user_id = u.id
       ORDER BY cs.id DESC LIMIT ?
@@ -4750,6 +4767,13 @@ const salesRepo = {
             });
           } catch (e) { console.error('[venta] reverso movimiento bancario:', e.message); }
         }
+      }
+
+      // cash_sessions conserva acumulados para resúmenes rápidos. Al anular no
+      // se resta a ciegas: se reconstruye desde las facturas vigentes para
+      // corregir también cualquier desfase previo de esa misma sesión.
+      if (sale.cash_session_id) {
+        reconcileCashSessionTotals(db, { sessionId: sale.cash_session_id });
       }
 
       audit(userId, userName, 'venta_anulada', 'sales', id, `Motivo: ${reason}`);

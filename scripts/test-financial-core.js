@@ -43,6 +43,7 @@ DB.initDB(tmpDir);
 const db = DB.getDB();
 const { seedAccountingCatalog } = require('../versioning');
 const { repairCancelledPaymentInflation } = require('../lib/pending-invoices');
+const { reconcileCashSessionTotals } = require('../lib/cash-session-totals');
 
 function setupAccountingCore() {
   db.exec(`
@@ -564,6 +565,47 @@ ok(near(db.prepare("SELECT amount FROM cash_movements WHERE type='abono' AND ref
 ok(DB.salesRepo.getById(creditWithInitial.saleId).notes === 'Entrega parcial acordada',
   'las notas del POS quedan persistidas en la venta');
 
+console.log('\n== E2. Anular factura reconcilia el resumen de caja ==');
+let sessionTotals = db.prepare(
+  'SELECT sales_total,sales_count FROM cash_sessions WHERE id=?'
+).get(cashSessionId);
+ok(near(sessionTotals.sales_total, 100) && sessionTotals.sales_count === 1,
+  'la factura a crédito incrementa una sola vez el acumulado de la sesión');
+const cashSaleToCancel = DB.salesRepo.create({
+  session: { id: cashSessionId },
+  customer: { id: custId, name: 'Taller Pérez' },
+  items: [itemNoTax(1)],
+  payment: { method: 'efectivo' },
+  user, type: 'factura',
+});
+sessionTotals = db.prepare(
+  'SELECT sales_total,sales_count FROM cash_sessions WHERE id=?'
+).get(cashSessionId);
+ok(near(sessionTotals.sales_total, 200) && sessionTotals.sales_count === 2,
+  'el cache de caja acumula las dos facturas antes de anular');
+DB.salesRepo.cancel(cashSaleToCancel.saleId, 'factura de prueba anulada', userId, user.name);
+sessionTotals = db.prepare(
+  'SELECT sales_total,sales_count FROM cash_sessions WHERE id=?'
+).get(cashSessionId);
+ok(near(sessionTotals.sales_total, 100) && sessionTotals.sales_count === 1,
+  'anular reconstruye total y cantidad desde facturas vigentes');
+
+// Reproduce el dato ya desfasado observado en el cliente. getSessions expone
+// inmediatamente la fuente viva y la migración repara también el cache físico.
+db.prepare('UPDATE cash_sessions SET sales_total=134076,sales_count=2 WHERE id=?')
+  .run(cashSessionId);
+const liveSession = DB.cashRepo.getSessions().find(s => s.id === cashSessionId);
+ok(near(liveSession.live_sales_total, 100) && liveSession.live_sales_count === 1,
+  'el resumen consulta el total vivo aunque el cache histórico esté desfasado');
+const cashRepair = reconcileCashSessionTotals(db, { sessionId: cashSessionId });
+sessionTotals = db.prepare(
+  'SELECT sales_total,sales_count FROM cash_sessions WHERE id=?'
+).get(cashSessionId);
+ok(cashRepair.repaired === 1
+  && near(sessionTotals.sales_total, 100)
+  && sessionTotals.sales_count === 1,
+  'la reparación histórica corrige total y cantidad almacenados');
+
 console.log('\n== F. Abono exige factura cuando hay varias y evita sobrepago ==');
 const preAbono = DB.customersRepo.getById(custId).balance;
 throws(() => DB.customersRepo.addPayment({
@@ -929,6 +971,12 @@ ok(ventasSource.includes('<th style="text-align:right">Precio final</th>')
   && ventasSource.includes('<th style="text-align:right">Base sin ITBIS</th>')
   && ventasSource.includes('<td style="text-align:right">${fmt(resalePrice)}</td>'),
   'el detalle de Ventas muestra el precio unitario final con ITBIS incluido');
+const cajaSource = fs.readFileSync(
+  path.join(__dirname, '..', 'src', 'js', 'caja.js'), 'utf8'
+);
+ok(cajaSource.includes('s.live_sales_total ?? s.sales_total')
+  && cajaSource.includes("v.status !== 'cancelled'"),
+  'el resumen de Caja prioriza acumulados vivos y excluye anulaciones');
 
 // ── Limpieza ──
 db.close();

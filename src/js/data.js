@@ -649,12 +649,18 @@ function getSales(range = 'today') {
 // Intenta WhatsApp Desktop y usa wa.me solo cuando la aplicación no está
 // instalada o el protocolo whatsapp:// no está registrado.
 // ══════════════════════════════════════════════
+function _waPhoneDigits(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (digits.length === 10) return `1${digits}`;
+  return digits;
+}
+
 function openWhatsAppModal(msg, defPhone = '', clientName = 'cliente', options = {}) {
   // Escapar todo lo dinámico antes de interpolarlo en el HTML del modal —
   // msg/clientName pueden venir de datos del cliente (nombre, notas, etc.)
   const escapedMsg   = _escHtml(msg);
   const escapedName  = _escHtml(clientName);
-  const escapedPhone = _escHtml((defPhone || '').replace(/\D/g, ''));
+  const escapedPhone = _escHtml(_waPhoneDigits(defPhone));
   const attachmentPath = String(options.attachmentPath || '');
   const attachmentName = _escHtml(options.attachmentName || 'Documento PDF');
 
@@ -734,7 +740,7 @@ async function _waShowAttachment() {
 
 async function _waEnviar() {
   const inp   = document.getElementById('wa-phone-input');
-  const phone = (inp?.value || '').replace(/\D/g, '').trim();
+  const phone = _waPhoneDigits(inp?.value);
   const msg   = document.getElementById('wa-message-input')?.value ?? window._waPendingMsg ?? '';
 
   if (!phone) {

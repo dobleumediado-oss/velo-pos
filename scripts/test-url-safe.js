@@ -53,5 +53,16 @@ try {
   }
 }
 
+try {
+  if (normalizeWhatsAppPhone('809-123-4567') === '18091234567' &&
+      normalizeWhatsAppPhone('18091234567') === '18091234567') {
+    pass++; console.log('  ✓ agrega el prefijo 1 a teléfonos dominicanos de 10 dígitos sin duplicarlo');
+  } else {
+    fail++; console.log('  ✗ no normalizó correctamente el prefijo 1');
+  }
+} catch (e) {
+  fail++; console.log('  ✗ falló al normalizar el prefijo 1:', e.message);
+}
+
 console.log(`\n== RESULTADO: ${pass} OK, ${fail} fallos ==`);
 process.exit(fail ? 1 : 0);
