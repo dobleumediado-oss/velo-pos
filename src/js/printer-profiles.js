@@ -53,14 +53,22 @@ function _printerSettings(explicit) {
   return {};
 }
 
+function _isKnownLabelPrinterName(value) {
+  const n = String(value || '').toLowerCase();
+  return /2\s*connect|2c[-_ ]?lp427|lp[-_ ]?427|zebra|\bzpl\b|honeyw|\btsc\b|sato|dymo|brother\s*ql|\bql[-_ ]?(?:5|6|7|8|9|10)\d{2}[a-z]*\b|godex|argox|labelwriter|label|etiquet/.test(n);
+}
+
 function inferPrinterProfileId(printerName, scope = 'ticket') {
   const n = String(printerName || '').toLowerCase();
   if (/2\s*connect|2c[-_ ]?lp427|lp[-_ ]?427/.test(n)) return 'label_2connect_108';
+  // Las familias dedicadas a etiquetas deben evaluarse antes de las marcas
+  // genéricas de oficina. Brother fabrica impresoras de hojas, pero la línea
+  // Brother QL (incluida QL-710W) es una etiquetadora térmica.
+  if (_isKnownLabelPrinterName(n)) return 'label_generic';
   if (scope === 'barcode') return 'label_generic';
   if (/58|mini|port|pocket|handheld|bt.*print|print.*bt/.test(n)) return 'ticket_58';
   if (/72\s*mm/.test(n)) return 'ticket_72';
   if (/laser|inkjet|officejet|laserjet|pixma|envy|deskjet|ecotank|epson|\bet[- _]?\d{3,5}\b|\bwf[- _]?\d+\b|workforce|l-series|brother|canon|hp |ricoh|xerox|kyocera|samsung.*ml|samsung.*clp|pdf|fax|onenote|xps|a4|a3|ledger|legal/.test(n)) return 'sheet';
-  if (/zebra|zpl|tsc|sato|dymo|brother.?ql|godex|argox|label|etiquet/.test(n)) return 'label_generic';
   return 'ticket_80';
 }
 
@@ -101,7 +109,7 @@ function detectLabelPrinter(printerInfo, explicitSettings) {
   });
   const normalized = identity.toLowerCase();
   const exactModel = id === 'label_2connect_108';
-  const knownLabelFamily = /zebra|zpl|honeyw|tsc|sato|dymo|brother.?ql|godex|argox|label|etiquet|2\s*connect|2c[-_ ]?lp427/.test(normalized);
+  const knownLabelFamily = _isKnownLabelPrinterName(normalized);
 
   return {
     ...profile,
@@ -200,6 +208,13 @@ function resolvePrinterProfile(printerName, scope = 'ticket', explicitSettings) 
       '108mm': 'label_2connect_108', carta: 'sheet' })[legacy] || '';
   }
   if (!PRINTER_PROFILES[id]) id = inferredId;
+
+  // Repara automáticamente una clasificación “hoja” guardada por versiones
+  // anteriores cuando el modelo físico es inequívocamente una etiquetadora.
+  // Mantiene intacta una impresora Brother HL/MFC o Epson de oficina.
+  if (_isKnownLabelPrinterName(printerName) && PRINTER_PROFILES[id]?.kind === 'sheet') {
+    id = inferredId;
+  }
 
   // Un perfil térmico guardado por una versión anterior nunca debe imponerse a
   // una impresora de hojas inequívocamente reconocida por el controlador.

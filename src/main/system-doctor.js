@@ -259,10 +259,20 @@ function diagnoseCash({ db, cashRepo }) {
 
 function diagnoseSales({ db }) {
   const rows = db.prepare(`
-    SELECT s.id, s.type, s.status, s.subtotal, s.discount_amt, s.tax_pct, s.tax_amt, s.total,
+    SELECT s.id, s.type, s.status, s.subtotal, s.discount_pct, s.discount_amt,
+           s.tax_pct, s.tax_amt, s.total,s.additional_charges_total,
            s.cajero, s.notes,
            COUNT(si.id) AS item_count,
-           COALESCE(SUM(si.unit_price * si.qty),0) AS item_subtotal
+           COALESCE(SUM(si.unit_price * si.qty),0) AS item_gross,
+           COALESCE(SUM(
+             CASE
+               WHEN COALESCE(si.taxable,1)=1 AND COALESCE(si.tax_pct,s.tax_pct,0)>0
+               THEN ((si.unit_price * si.qty) * (1-(COALESCE(s.discount_pct,0)/100.0)))
+                    - (((si.unit_price * si.qty) * (1-(COALESCE(s.discount_pct,0)/100.0)))
+                       / (1+(COALESCE(si.tax_pct,s.tax_pct,0)/100.0)))
+               ELSE 0
+             END
+           ),0) AS item_tax
     FROM sales s
     LEFT JOIN sale_items si ON si.sale_id=s.id
     WHERE s.status!='cancelled'
@@ -281,39 +291,44 @@ function diagnoseSales({ db }) {
       (isHistorical ? noItemsHistorical : noItemsCurrent).push(sale.id);
       continue;
     }
-    const itemSubtotal = round2(sale.item_subtotal);
+    const itemGross = round2(sale.item_gross);
     const discount = round2(sale.discount_amt || 0);
-    const base = round2(itemSubtotal - discount);
-    const expectedTax = round2(base * ((Number(sale.tax_pct) || 0) / 100));
-    const expectedTotal = round2(base + expectedTax);
-    const netTotal = round2(base);
-    const storedTotal = round2((sale.subtotal || 0) - (sale.discount_amt || 0) + (sale.tax_amt || 0));
+    const grossAfterDiscount = round2(itemGross - discount);
+    const expectedTax = sale.type === 'factura' ? round2(sale.item_tax) : 0;
+    const expectedSubtotal = round2(grossAfterDiscount - expectedTax);
+    const charges = sale.type === 'factura'
+      ? round2(sale.additional_charges_total || 0) : 0;
+    const expectedTotal = round2(grossAfterDiscount + charges);
+    const netTotal = round2(grossAfterDiscount);
+    const storedTotal = round2((sale.subtotal || 0) + (sale.tax_amt || 0) + charges);
 
     if (isHistorical) {
       const matchesNetItems = absDiff(sale.total, netTotal) <= 1;
-      const matchesGrossItems = absDiff(sale.total, expectedTotal) <= 1;
+      const legacyTax = round2(netTotal * ((Number(sale.tax_pct) || 0) / 100));
+      const legacyGrossTotal = round2(netTotal + legacyTax);
+      const matchesGrossItems = absDiff(sale.total, legacyGrossTotal) <= 1;
       if (!matchesNetItems && !matchesGrossItems) {
         historicalMismatch.push({
           id: sale.id,
           subtotal: round2(sale.subtotal),
           calcNet: netTotal,
-          calcGross: expectedTotal,
+          calcGross: legacyGrossTotal,
           total: round2(sale.total),
         });
-      } else if (matchesGrossItems && round2(sale.tax_amt) === 0 && round2(expectedTax) > 0) {
+      } else if (matchesGrossItems && round2(sale.tax_amt) === 0 && legacyTax > 0) {
         historicalTaxIncluded += 1;
       }
       continue;
     }
 
-    if (absDiff(sale.subtotal, itemSubtotal) > 0.02 ||
+    if (absDiff(sale.subtotal, expectedSubtotal) > 0.02 ||
         absDiff(sale.tax_amt, expectedTax) > 0.02 ||
         absDiff(sale.total, expectedTotal) > 0.02 ||
         absDiff(sale.total, storedTotal) > 0.02) {
       currentMismatch.push({
         id: sale.id,
         subtotal: round2(sale.subtotal),
-        calcSubtotal: itemSubtotal,
+        calcSubtotal: expectedSubtotal,
         total: round2(sale.total),
         calcTotal: expectedTotal,
       });
@@ -347,7 +362,33 @@ function diagnoseSales({ db }) {
       )
   `).get().c || 0;
 
-  const hasError = noItemsCurrent.length > 0 || currentMismatch.length > 0;
+  const duplicateOperations = db.prepare(`
+    SELECT operation_id,COUNT(*) AS total
+    FROM sales
+    WHERE TRIM(COALESCE(operation_id,''))!=''
+    GROUP BY operation_id
+    HAVING COUNT(*) > 1
+    LIMIT 20
+  `).all();
+
+  const salesWithoutFinancialMovement = tableExists(db, 'financial_movements')
+    ? db.prepare(`
+        SELECT s.id,s.financial_account_id,s.account_amount
+        FROM sales s
+        WHERE s.status!='cancelled' AND s.type='factura'
+          AND s.financial_account_id IS NOT NULL AND s.account_amount > 0
+          AND NOT EXISTS (
+            SELECT 1 FROM financial_movements fm
+            WHERE fm.reference_type='sale' AND fm.reference_id=s.id
+              AND fm.type='venta' AND fm.status='activo'
+          )
+        ORDER BY s.id DESC
+        LIMIT 20
+      `).all()
+    : [];
+
+  const hasError = noItemsCurrent.length > 0 || currentMismatch.length > 0
+    || duplicateOperations.length > 0 || salesWithoutFinancialMovement.length > 0;
   const hasWarn = noItemsHistorical.length > 0 || historicalMismatch.length > 0 ||
     historicalTaxIncluded > 0 || mixedMismatch.length > 0 || nonCreditWithoutMovement > 0;
   const pieces = [
@@ -359,6 +400,9 @@ function diagnoseSales({ db }) {
     historicalTaxIncluded ? `${historicalTaxIncluded} historicos con ITBIS incluido` : null,
     mixedMismatch.length ? `${mixedMismatch.length} pagos mixtos descuadrados` : null,
     nonCreditWithoutMovement ? `${nonCreditWithoutMovement} ventas sin movimiento de caja` : null,
+    duplicateOperations.length ? `${duplicateOperations.length} operaciones duplicadas` : null,
+    salesWithoutFinancialMovement.length
+      ? `${salesWithoutFinancialMovement.length} ventas sin movimiento bancario` : null,
   ].filter(Boolean);
 
   return result('sales_logic', 'Logica de ventas', statusFrom(hasError, hasWarn), pieces.join(' | '), {
@@ -381,6 +425,8 @@ function diagnoseSales({ db }) {
       historicalTaxIncluded,
       mixedMismatch: mixedMismatch.slice(0, 10),
       nonCreditWithoutMovement,
+      duplicateOperations,
+      salesWithoutFinancialMovement,
     },
   });
 }
@@ -535,6 +581,162 @@ function diagnoseCredit({ db }) {
       overdueActive: overdueActive.slice(0, 10),
     },
   });
+}
+
+function diagnosePayments({ db }) {
+  if (!tableExists(db, 'payments')) {
+    return result('payment_logic', 'Abonos y pagos', 'error', 'Falta la tabla de abonos', {
+      category: 'negocio',
+      impact: 'No se pueden registrar ni auditar abonos de clientes.',
+      fix: 'Ejecutar las migraciones con un respaldo previo.',
+    });
+  }
+
+  const duplicateOperations = db.prepare(`
+    SELECT operation_id,COUNT(*) AS total
+    FROM payments
+    WHERE TRIM(COALESCE(operation_id,''))!=''
+    GROUP BY operation_id
+    HAVING COUNT(*) > 1
+    LIMIT 20
+  `).all();
+
+  const orphanAllocations = tableExists(db, 'payment_allocations')
+    ? count(db, `
+        SELECT COUNT(*) c
+        FROM payment_allocations pa
+        LEFT JOIN payments p ON p.id=pa.payment_id
+        LEFT JOIN sales s ON s.id=pa.sale_id
+        WHERE p.id IS NULL OR s.id IS NULL
+      `)
+    : 0;
+
+  const missingCashTrace = tableExists(db, 'cash_movements')
+    ? db.prepare(`
+        SELECT p.id,p.customer_id,p.amount,p.method,p.cash_session_id
+        FROM payments p
+        WHERE COALESCE(p.status,'active')='active'
+          AND p.cash_session_id IS NOT NULL
+          AND p.amount > 0
+          AND p.note!='Saldo inicial importado'
+          AND LOWER(COALESCE(p.method,'efectivo')) NOT IN ('credito','descuento')
+          AND NOT EXISTS (
+            SELECT 1 FROM cash_movements cm
+            WHERE cm.payment_id=p.id AND cm.type='abono'
+          )
+        ORDER BY p.id DESC
+        LIMIT 20
+      `).all()
+    : [];
+
+  const cancelledWithActiveAccounting = tableExists(db, 'accounting_entries')
+    ? db.prepare(`
+        SELECT p.id,e.id AS entry_id
+        FROM payments p
+        JOIN accounting_entries e
+          ON e.source_module='abono' AND e.source_id=p.id
+        WHERE COALESCE(p.status,'active')='cancelled'
+          AND e.status='confirmado'
+        LIMIT 20
+      `).all()
+    : [];
+
+  const accountingEnabled = tableExists(db, 'settings')
+    && db.prepare("SELECT value FROM settings WHERE key='module_contabilidad'").get()?.value === '1';
+  const activeWithoutAccounting = accountingEnabled && tableExists(db, 'accounting_entries')
+    ? db.prepare(`
+        SELECT p.id,p.customer_id,p.amount
+        FROM payments p
+        WHERE COALESCE(p.status,'active')='active'
+          AND p.amount > 0
+          AND p.note!='Saldo inicial importado'
+          AND NOT EXISTS (
+            SELECT 1 FROM accounting_entries e
+            WHERE e.source_module='abono' AND e.source_id=p.id
+              AND e.status='confirmado'
+          )
+        ORDER BY p.id DESC
+        LIMIT 20
+      `).all()
+    : [];
+
+  const activeWithoutFinancialMovement = tableExists(db, 'financial_movements')
+    ? db.prepare(`
+        SELECT p.id,p.financial_account_id,p.account_amount
+        FROM payments p
+        WHERE COALESCE(p.status,'active')='active'
+          AND p.financial_account_id IS NOT NULL
+          AND p.account_amount > 0
+          AND NOT EXISTS (
+            SELECT 1 FROM financial_movements fm
+            WHERE fm.reference_type='payment' AND fm.reference_id=p.id
+              AND fm.type='abono_recibido' AND fm.status='activo'
+          )
+        ORDER BY p.id DESC
+        LIMIT 20
+      `).all()
+    : [];
+
+  const cancelledWithoutCashReversal = tableExists(db, 'cash_movements')
+    ? db.prepare(`
+        SELECT p.id,p.amount,p.method
+        FROM payments p
+        WHERE COALESCE(p.status,'active')='cancelled'
+          AND EXISTS (
+            SELECT 1 FROM cash_movements cm
+            WHERE cm.payment_id=p.id AND cm.type='abono'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM cash_movements cm
+            WHERE cm.payment_id=p.id AND cm.type='salida'
+          )
+        ORDER BY p.id DESC
+        LIMIT 20
+      `).all()
+    : [];
+
+  const hasError = duplicateOperations.length > 0
+    || orphanAllocations > 0
+    || cancelledWithActiveAccounting.length > 0
+    || activeWithoutAccounting.length > 0
+    || activeWithoutFinancialMovement.length > 0;
+  const hasWarn = missingCashTrace.length > 0 || cancelledWithoutCashReversal.length > 0;
+  const pieces = [
+    duplicateOperations.length ? `${duplicateOperations.length} operaciones duplicadas` : null,
+    orphanAllocations ? `${orphanAllocations} distribuciones huerfanas` : null,
+    missingCashTrace.length ? `${missingCashTrace.length} abonos sin movimiento de caja` : null,
+    activeWithoutAccounting.length ? `${activeWithoutAccounting.length} abonos sin asiento contable` : null,
+    activeWithoutFinancialMovement.length ? `${activeWithoutFinancialMovement.length} abonos sin movimiento bancario` : null,
+    cancelledWithActiveAccounting.length ? `${cancelledWithActiveAccounting.length} anulados con asiento contable vigente` : null,
+    cancelledWithoutCashReversal.length ? `${cancelledWithoutCashReversal.length} anulados sin salida de caja` : null,
+  ].filter(Boolean);
+
+  return result(
+    'payment_logic',
+    'Abonos y pagos',
+    statusFrom(hasError, hasWarn),
+    pieces.length ? pieces.join(' | ') : 'Abonos, distribuciones, caja y contabilidad consistentes',
+    {
+      category: 'negocio',
+      impact: hasError
+        ? 'Un abono puede duplicarse o permanecer vigente en un auxiliar después de anularse.'
+        : hasWarn
+          ? 'Hay abonos cuya trazabilidad de caja necesita revisión.'
+          : 'Los abonos conservan una sola operación y trazabilidad completa.',
+      fix: hasError || hasWarn
+        ? 'Revisar los recibos indicados y reconstruir únicamente sus enlaces con respaldo previo.'
+        : 'Sin accion requerida.',
+      value: {
+        duplicateOperations,
+        orphanAllocations,
+        missingCashTrace,
+        activeWithoutAccounting,
+        activeWithoutFinancialMovement,
+        cancelledWithActiveAccounting,
+        cancelledWithoutCashReversal,
+      },
+    }
+  );
 }
 
 function diagnoseFiscal({ db, settingsRepo }) {
@@ -871,6 +1073,7 @@ async function runSystemDoctor({ db, dataDir, appRoot, cashRepo, settingsRepo, g
   safeSection(results, 'sales_logic', 'Logica de ventas', () => diagnoseSales({ db }));
   safeSection(results, 'inventory_logic', 'Inventario real', () => diagnoseInventory({ db }));
   safeSection(results, 'credit_logic', 'Credito y cuentas por cobrar', () => diagnoseCredit({ db }));
+  safeSection(results, 'payment_logic', 'Abonos y pagos', () => diagnosePayments({ db }));
   safeSection(results, 'fiscal_logic', 'Fiscal / NCF / e-CF', () => diagnoseFiscal({ db, settingsRepo }));
   safeSection(results, 'accounting_logic', 'Contabilidad', () => diagnoseAccounting({ db, settingsRepo }));
   safeSection(results, 'security', 'Seguridad operativa', () => diagnoseSecurity({ db, settingsRepo, getLicenseStatus, dataDir }));

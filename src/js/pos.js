@@ -2758,6 +2758,51 @@ async function cbrValidarDGII() {
 // ══════════════════════════════════════════════
 // FINALIZAR VENTA — via IPC → SQLite
 // ══════════════════════════════════════════════
+function posAwaitSaleAction(operation, timeoutMs = 12000) {
+  const testTimeout = Number(window.__VELO_TEST_SALE_TIMEOUT_MS || 0);
+  const effectiveTimeout = testTimeout > 0 ? testTimeout : timeoutMs;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const error = new Error('SALE_CONFIRMATION_TIMEOUT');
+      error.offline = true;
+      reject(error);
+    }, effectiveTimeout);
+    Promise.resolve(operation).then(
+      value => { clearTimeout(timer); resolve(value); },
+      error => { clearTimeout(timer); reject(error); }
+    );
+  });
+}
+
+async function posConfirmSaleWithRecovery(inv, saleData, requestUserId) {
+  const request = inv.checkoutOrderId
+    ? {
+        id: inv.checkoutOrderId,
+        payment: saleData.payment,
+        requestUserId,
+      }
+    : { saleData, requestUserId };
+  const submit = () => inv.checkoutOrderId
+    ? window.api.checkout.pay(request)
+    : window.api.sales.create(request);
+  try {
+    return await posAwaitSaleAction(submit());
+  } catch (originalError) {
+    try {
+      const recovered = inv.checkoutOrderId
+        ? await posAwaitSaleAction(submit(), 3000)
+        : await posAwaitSaleAction(window.api.sales.getByOperation({
+            saleData,
+            requestUserId,
+          }), 3000);
+      if (recovered?.ok && (inv.checkoutOrderId || recovered?.found)) {
+        return { ...recovered, recovered: true };
+      }
+    } catch {}
+    throw originalError;
+  }
+}
+
 async function finalizarVenta() {
   const inv       = currentInv();
   const isQuote   = inv.itype === 'cotizacion';
@@ -2965,6 +3010,16 @@ async function finalizarVenta() {
     return;
   }
 
+  if (inv.saleSubmitting) return;
+  inv.saleSubmitting = true;
+  if (!inv.saleOperationId) {
+    try {
+      inv.saleOperationId = `sale:${window.crypto?.randomUUID?.() || `${Date.now()}:${Math.random().toString(36).slice(2)}`}`;
+    } catch {
+      inv.saleOperationId = `sale:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    }
+  }
+
   // Deshabilitar botón para evitar doble click cuando el modal de cobro sigue abierto.
   if (btnConfirmar?.isConnected) {
     btnConfirmar.disabled   = true;
@@ -2972,6 +3027,7 @@ async function finalizarVenta() {
   }
 
   const saleData = {
+    operationId: inv.saleOperationId,
     customer,
     items,
     payment: {
@@ -3011,19 +3067,12 @@ async function finalizarVenta() {
     session: cajaSession,
   };
 
+  let saleCommitted = false;
   try {
-    const result = inv.checkoutOrderId
-      ? await window.api.checkout.pay({
-          id: inv.checkoutOrderId,
-          payment: saleData.payment,
-          requestUserId: user.id,
-        })
-      : await window.api.sales.create({
-          saleData,
-          requestUserId: user.id,
-        });
+    const result = await posConfirmSaleWithRecovery(inv, saleData, user.id);
 
     if (!result.ok) {
+      inv.saleSubmitting = false;
       toast(result.error || 'Error al registrar la venta', 'err');
       if (btnConfirmar?.isConnected) {
         btnConfirmar.disabled  = false;
@@ -3033,27 +3082,22 @@ async function finalizarVenta() {
       }
       return;
     }
+    saleCommitted = true;
 
     // Venta exitosa
     closeModal();
     const savedDocumentLabel = result.documentNumberFmt || `#${result.saleId}`;
-    toast(isQuote
+    toast(result.recovered
+      ? `✓ ${savedDocumentLabel} recuperada; no se duplicó el cobro`
+      : isQuote
       ? `✓ Cotización ${savedDocumentLabel} creada — ${fmt(result.total)}`
       : (inv.checkoutOrderId
         ? `✓ ${inv.checkoutOrderNumber} cobrada · ${savedDocumentLabel} — ${fmt(result.total)}`
         : `✓ Venta ${savedDocumentLabel} registrada — ${fmt(result.total)}`));
 
-	    // Recargar datos actualizados desde SQLite
-	    await Promise.all([
-	      reloadProducts(),
-	      reloadCustomers(),
-	      typeof reloadPayments === 'function' ? reloadPayments() : Promise.resolve(),
-	    ]);
-	    await reloadSales({ range: 'today' });
-	    if (inv.checkoutOrderId && typeof preventaHandleSync === 'function') {
-	      await preventaHandleSync();
-	    }
-	    const savedSale = await window.api.sales.getById({ id: result.saleId }).catch(() => null);
+	    // El backend devuelve el snapshot confirmado junto con la venta. El
+	    // display no depende de recargas secundarias ni de otra consulta IPC.
+	    const savedSale = result.sale || null;
 	    const printItems = savedSale?.items?.length
 	      ? savedSale.items.map(i => ({
 	          product_code:  i.product_code || '',
@@ -3144,14 +3188,19 @@ async function finalizarVenta() {
     // factura de forma automática — primero sale la factura, luego el conduce.
     let _conduceForPrint = null;
     if (wantConduce) {
-      const conduceResult = await window.api.conduce.fromSale({
-        saleId: result.saleId, requestUserId: user.id,
-      });
-      if (conduceResult?.ok && conduceResult.data) {
-        _conduceForPrint = conduceResult.data;
-        toast(`✓ Conduce ${conduceResult.data.number} guardado en Conduces`);
-      } else {
-        toast(`La venta se guardó, pero el conduce no pudo generarse: ${conduceResult?.error || 'error desconocido'}`, 'w');
+      try {
+        const conduceResult = await posAwaitSaleAction(window.api.conduce.fromSale({
+          saleId: result.saleId, requestUserId: user.id,
+        }), 5000);
+        if (conduceResult?.ok && conduceResult.data) {
+          _conduceForPrint = conduceResult.data;
+          toast(`✓ Conduce ${conduceResult.data.number} guardado en Conduces`);
+        } else {
+          toast(`La venta se guardó, pero el conduce no pudo generarse: ${conduceResult?.error || 'error desconocido'}`, 'w');
+        }
+      } catch (conduceError) {
+        console.error('[POS] venta confirmada; conduce pendiente:', conduceError);
+        toast('La venta quedó guardada. El conduce no respondió y puede generarse desde Ventas.', 'w');
       }
     }
     window._printAfter = _conduceForPrint && inv.printAction !== 'none'
@@ -3182,6 +3231,27 @@ async function finalizarVenta() {
       print_copies: inv.printCopies || 1,
     });
 
+    // Reconciliar inventario, clientes, abonos y ventas en segundo plano. Una
+    // lectura lenta nunca convierte una venta ya cobrada en un error visual.
+    Promise.allSettled([
+      reloadProducts(),
+      reloadCustomers(),
+      typeof reloadPayments === 'function' ? reloadPayments() : Promise.resolve(),
+      reloadSales({ range: 'today' }),
+      inv.checkoutOrderId && typeof preventaHandleSync === 'function'
+        ? preventaHandleSync() : Promise.resolve(),
+    ]).then(results => {
+      if (results.some(item => item.status === 'rejected')) {
+        window.VeloExperience?.rememberFailure?.({
+          label:'Actualizar datos después de venta',
+          detail:'La venta fue confirmada, pero una vista no terminó de refrescarse.',
+          module:'pos', retryKey:`sale-refresh:${result.saleId}`,
+        });
+      }
+      buildSidebar();
+      buildTopbar();
+    }).catch(() => {});
+
     const returnToPreventa = !!inv.checkoutOrderId;
     // Limpiar factura y refrescar POS
     removeInvoice(activeInvoice);
@@ -3198,13 +3268,23 @@ async function finalizarVenta() {
 
   } catch (e) {
     console.error('[finalizarVenta]', e);
-    toast('Error inesperado al procesar la venta', 'err');
+    toast(saleCommitted
+      ? 'La venta quedó registrada, pero falló una acción posterior. Puedes abrirla desde Ventas.'
+      : 'Error inesperado al procesar la venta', saleCommitted ? 'w' : 'err');
+    if (saleCommitted) {
+      closeModal();
+      removeInvoice(activeInvoice);
+      renderPOS(document.getElementById('page'));
+      return;
+    }
     if (btnConfirmar?.isConnected) {
       btnConfirmar.disabled  = false;
       btnConfirmar.innerHTML = `${svg('check')} ${isQuote ? 'Crear cotización' : 'Confirmar y cobrar'}`;
     } else {
       openCobroModal(inv);
     }
+  } finally {
+    inv.saleSubmitting = false;
   }
 }
 

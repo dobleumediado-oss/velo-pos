@@ -1122,6 +1122,111 @@ function clienteWhatsApp(c) {
 // ══════════════════════════════════════════════
 // MODAL ABONO
 // ══════════════════════════════════════════════
+function abonoOperationId(customerId) {
+  try {
+    if (window.crypto?.randomUUID) return `payment:${customerId}:${window.crypto.randomUUID()}`;
+  } catch {}
+  return `payment:${customerId}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function abonoAwaitConfirmation(operation, requestedTimeoutMs = 0) {
+  const testTimeout = Number(window.__VELO_TEST_PAYMENT_TIMEOUT_MS || 0);
+  const timeoutMs = Number(requestedTimeoutMs) > 0
+    ? Number(requestedTimeoutMs)
+    : testTimeout > 0 ? testTimeout : 12000;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const error = new Error('ABONO_CONFIRMATION_TIMEOUT');
+      error.offline = true;
+      reject(error);
+    }, timeoutMs);
+    Promise.resolve(operation).then(
+      result => { clearTimeout(timer); resolve(result); },
+      error => { clearTimeout(timer); reject(error); }
+    );
+  });
+}
+
+function abonoPayloadFingerprint(data) {
+  const note = String(data?.note || '').trim();
+  let noteHash = 0;
+  for (let i = 0; i < note.length; i += 1) {
+    noteHash = ((noteHash << 5) - noteHash + note.charCodeAt(i)) | 0;
+  }
+  const allocations = (data?.allocations || [])
+    .map(row => [Number(row.saleId), Number(row.amount || 0).toFixed(2)])
+    .filter(row => row[0] && Number(row[1]) > 0)
+    .sort((a, b) => a[0] - b[0]);
+  return JSON.stringify({
+    customerId: Number(data?.customerId),
+    amount: Number(data?.amount || 0).toFixed(2),
+    method: String(data?.method || 'efectivo').toLowerCase(),
+    allocations,
+    financialAccountId: Number(data?.financialAccountId) || null,
+    exchangeRate: Number(data?.exchangeRate || 1).toFixed(2),
+    contactId: Number(data?.contactId) || null,
+    replacesPaymentId: Number(data?.replacesPaymentId) || null,
+    noteHash,
+  });
+}
+
+function abonoPendingKey(customerId) {
+  return `velo:payment-pending:${Number(customerId)}`;
+}
+
+function abonoReadPending(customerId, fingerprint) {
+  try {
+    const raw = window.localStorage?.getItem(abonoPendingKey(customerId));
+    const pending = raw ? JSON.parse(raw) : null;
+    const fresh = pending && Date.now() - Number(pending.createdAt || 0) < 86400000;
+    if (fresh && pending.fingerprint === fingerprint && pending.operationId) return pending;
+    if (raw) window.localStorage?.removeItem(abonoPendingKey(customerId));
+  } catch {}
+  return null;
+}
+
+function abonoRememberPending(customerId, fingerprint, operationId) {
+  try {
+    window.localStorage?.setItem(abonoPendingKey(customerId), JSON.stringify({
+      operationId, fingerprint, createdAt: Date.now(),
+    }));
+  } catch {}
+}
+
+function abonoClearPending(customerId, operationId) {
+  try {
+    const key = abonoPendingKey(customerId);
+    const raw = window.localStorage?.getItem(key);
+    const pending = raw ? JSON.parse(raw) : null;
+    if (!pending || !operationId || pending.operationId === operationId) {
+      window.localStorage?.removeItem(key);
+    }
+  } catch {}
+}
+
+async function abonoConfirmWithRecovery(request) {
+  try {
+    return await abonoAwaitConfirmation(window.api.customers.addPayment(request));
+  } catch (originalError) {
+    const ambiguous = originalError?.message === 'SERVER_OFFLINE'
+      || originalError?.message === 'ABONO_CONFIRMATION_TIMEOUT'
+      || originalError?.offline;
+    if (!ambiguous || !window.api.customers.getPaymentByOperation) throw originalError;
+    try {
+      const recovered = await abonoAwaitConfirmation(
+        window.api.customers.getPaymentByOperation({
+          operationId: request.data.operationId,
+          customerId: request.data.customerId,
+          requestUserId: request.requestUserId,
+        }),
+        3000
+      );
+      if (recovered?.found) return recovered;
+    } catch {}
+    throw originalError;
+  }
+}
+
 async function openAbonoModal(c, prefill = null) {
   const balance   = Number(c.balance || 0);
   const creditDue = c.credit_due || null;
@@ -1135,6 +1240,7 @@ async function openAbonoModal(c, prefill = null) {
     if (result?.ok) pending = result;
   } catch {}
   const invoices = pending.facturas || [];
+  const operationId = String(prefill?.operationId || abonoOperationId(c.id));
   window._abonoPendingInvoices = invoices;
   window._abonoUnallocatedBalance = Number(pending.unallocatedBalance || 0);
 
@@ -1271,6 +1377,7 @@ async function openAbonoModal(c, prefill = null) {
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-green" id="btn-abono"
+              data-operation-id="${cliEsc(operationId)}"
               onclick="registrarAbono(${c.id}, ${balance}, ${Number(prefill?.replacesPaymentId) || 'null'})">
         ${svg('check')} Registrar Abono
       </button>
@@ -1464,44 +1571,62 @@ async function registrarAbono(clientId, balanceActual, replacesPaymentId = null)
   }
 
   const btn = document.getElementById('btn-abono');
-  if (btn) { btn.disabled = true; btn.textContent = 'Procesando...'; }
-
-  const result = await window.api.customers.addPayment({
-    data: {
-      customerId: clientId, amount, method, note, contactId, allocations,
-      financialAccountId, exchangeRate, paymentReference: note,
-      replacesPaymentId: Number(replacesPaymentId) || null,
-    },
-    requestUserId: user.id,
-  });
-
-  if (!result.ok) {
-    toast(result.error || 'Error al registrar abono', 'err');
-    if (btn) { btn.disabled = false; btn.innerHTML = `${svg('check')} Registrar Abono`; }
-    return;
+  const paymentData = {
+    customerId: clientId, amount, method, note, contactId, allocations,
+    financialAccountId, exchangeRate, paymentReference: note,
+    replacesPaymentId: Number(replacesPaymentId) || null,
+  };
+  const fingerprint = abonoPayloadFingerprint(paymentData);
+  const pending = abonoReadPending(clientId, fingerprint);
+  const operationId = pending?.operationId
+    || btn?.dataset?.operationId
+    || abonoOperationId(clientId);
+  paymentData.operationId = operationId;
+  if (window._abonoSubmitting) return;
+  window._abonoSubmitting = operationId;
+  abonoRememberPending(clientId, fingerprint, operationId);
+  if (btn) {
+    btn.dataset.operationId = operationId;
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    btn.innerHTML = `${svg('refresh')} Confirmando abono…`;
   }
 
-  await Promise.all([
-    reloadCustomers(),
-    typeof reloadPayments === 'function' ? reloadPayments() : Promise.resolve(),
-  ]);
-  closeModal();
-  toast(`✓ Abono de ${fmt(amount)} registrado`);
+  try {
+    const result = await abonoConfirmWithRecovery({
+      data: paymentData,
+      requestUserId: user.id,
+    });
 
-  // Imprimir con la plantilla y la impresora global elegidas en Configuración.
-  const c = DB.customers.find(c => c.id === clientId);
-  printAbono({
-    payment: {
+    if (!result?.ok) {
+      // Respuesta explícita: el backend confirmó que no creó el abono. Una
+      // próxima corrección debe usar una operación nueva.
+      abonoClearPending(clientId, operationId);
+      toast(result?.error || 'Error al registrar abono', 'err');
+      return;
+    }
+    abonoClearPending(clientId, operationId);
+
+    // El backend ya confirmó el dinero. Reflejarlo inmediatamente en memoria y
+    // abrir el display ANTES de cualquier recarga de red: una consulta secundaria
+    // lenta nunca debe ocultar el recibo ni dejar al cajero en "Procesando".
+    const customer = DB.customers.find(c => Number(c.id) === Number(clientId));
+    const payment = {
       id:             result.paymentId || 0,
+      customer_id:    clientId,
+      customer_name:  customer?.name || '',
+      customer_rnc:   customer?.rnc || '',
+      customer_phone: customer?.phone || '',
       document_kind:  result.document_kind || 'abono',
       document_number: result.document_number,
       document_number_fmt: result.document_number_fmt || '',
       numero_recibo:  result.numero_recibo,
-      amount,
+      amount:         Number(result.amount ?? amount),
       method,
       note:           note || 'Abono',
-      balance_before: balanceActual,
-      balance_after:  result.after,
+      balance_before: Number(result.before ?? balanceActual),
+      balance_after:  Number(result.after ?? Math.max(0, balanceActual - amount)),
+      cash_session_id: result.cash_session_id || null,
       sale_id:        result.saleId || null,
       allocations:    result.allocations || allocations,
       applied_invoice: result.saleId ? facturaLabel({
@@ -1510,7 +1635,7 @@ async function registrarAbono(clientId, balanceActual, replacesPaymentId = null)
         numero_factura: result.sale_numero_factura,
         numero_factura_fmt: result.sale_numero_factura_fmt,
       }) : '',
-      created_at:     new Date().toISOString(),
+      created_at:     result.created_at || new Date().toISOString(),
       customer_contact_id: result.customer_contact_id || null,
       customer_contact_name: result.customer_contact_name || '',
       customer_contact_document: result.customer_contact_document || '',
@@ -1518,17 +1643,92 @@ async function registrarAbono(clientId, balanceActual, replacesPaymentId = null)
       replaces_payment_id: result.replaces_payment_id || null,
       replaces_payment_document_number_fmt:
         result.replaces_payment_document_number_fmt || '',
-    },
-    customer: {
-      name:  c?.name  || '',
-      rnc:   c?.rnc   || '',
-      phone: c?.phone || '',
-    },
-    cajero: user?.name || '',
-  });
+      operation_id: operationId,
+      status: 'active',
+    };
+    if (customer) customer.balance = payment.balance_after;
+    DB.payments = [payment, ...(DB.payments || []).filter(
+      row => Number(row.id) !== Number(payment.id)
+    )];
 
-  renderClientes(document.getElementById('page'));
-  buildSidebar();
+    closeModal();
+    toast(result.idempotent
+      ? `✓ Abono ${result.document_number_fmt || ''} confirmado; no se duplicó`
+      : `✓ Abono de ${fmt(payment.amount)} registrado`);
+    try {
+      // printAbono solo abre el display. El spooler se ejecuta exclusivamente
+      // cuando la persona presiona "Imprimir" dentro de esa vista.
+      printAbono({
+        payment,
+        customer: {
+          id: clientId,
+          name:  customer?.name  || '',
+          rnc:   customer?.rnc   || '',
+          phone: customer?.phone || '',
+        },
+        cajero: user?.name || '',
+      });
+    } catch (displayError) {
+      toast('El abono quedó registrado, pero no se pudo abrir el display', 'w');
+      window.api?.log?.error?.('payments-display', displayError?.message || String(displayError), {
+        paymentId: payment.id,
+      })?.catch?.(() => {});
+    }
+
+    // Reconciliar los caches en segundo plano. El resultado principal ya está
+    // visible y no depende de estas lecturas.
+    const activeSalesRange = (typeof ventasRange !== 'undefined' && ventasRange)
+      ? ventasRange : 'today';
+    Promise.allSettled([
+      reloadCustomers(),
+      typeof reloadPayments === 'function' ? reloadPayments() : Promise.resolve(),
+      typeof reloadSales === 'function'
+        ? reloadSales({ range:activeSalesRange, view:'sales' })
+        : Promise.resolve(),
+    ]).then(results => {
+      const failed = results.some(item => item.status === 'rejected');
+      if (failed) {
+        window.VeloExperience?.rememberFailure?.({
+          label:'Actualizar historial de abonos',
+          detail:'El abono fue confirmado, pero una vista no terminó de refrescarse.',
+          module:'clientes', retryKey:`payment-refresh:${payment.id}`,
+        });
+      }
+      if (typeof page !== 'undefined' && page === 'clientes') {
+        renderClientes(document.getElementById('page'));
+      } else if (typeof page !== 'undefined' && page === 'ventas'
+          && typeof renderVentasTable === 'function') {
+        renderVentasTable();
+      } else if (typeof page !== 'undefined' && page === 'caja'
+          && typeof renderCaja === 'function') {
+        renderCaja(document.getElementById('page'));
+      }
+      buildSidebar();
+    }).catch(() => {});
+  } catch (error) {
+    const offline = error?.message === 'SERVER_OFFLINE'
+      || error?.message === 'ABONO_CONFIRMATION_TIMEOUT'
+      || error?.offline;
+    toast(offline
+      ? 'No se recibió confirmación del servidor. Puedes reintentar: VELO usará la misma operación y no duplicará el abono.'
+      : (error?.message || 'No se pudo registrar el abono'), 'err');
+    window.VeloExperience?.rememberFailure?.({
+      label:'Confirmación de abono pendiente',
+      detail:offline
+        ? 'No se recibió la respuesta. Reintentar desde este formulario es seguro.'
+        : (error?.message || 'No se pudo completar el abono'),
+      module:'clientes', retryKey:`payment:${operationId}`,
+      payload:{ customerId:clientId, operationId },
+    });
+  } finally {
+    if (window._abonoSubmitting === operationId) window._abonoSubmitting = null;
+    const currentButton = document.getElementById('btn-abono');
+    if (currentButton && currentButton.dataset.operationId === operationId) {
+      currentButton.disabled = false;
+      currentButton.removeAttribute('aria-busy');
+      currentButton.innerHTML = `${svg('check')} Registrar Abono`;
+    }
+  }
 }
 
 // Guardar un recibo de abono como PDF (bajo demanda, desde el historial).

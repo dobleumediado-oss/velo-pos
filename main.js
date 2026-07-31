@@ -1604,7 +1604,22 @@ function _acctHook(fn) {
   try { fn(); } catch (e) { try { logError('accounting', 'hook falló', { error: e.message }); } catch {} }
 }
 
+function _auditAfterCommit(args, context = {}) {
+  try {
+    audit(...args);
+    return true;
+  } catch (error) {
+    try {
+      logError('audit', 'operación confirmada; auditoría secundaria falló', {
+        ...context, error: error.message,
+      });
+    } catch {}
+    return false;
+  }
+}
+
 ipcMain.handle('customers:addPayment', async (_, { data, requestUserId }) => {
+  const startedAt = Date.now();
   try {
     const reqUser = authRepo.findById(requestUserId);
     if (!reqUser) return { ok: false, error: 'Usuario no válido' };
@@ -1623,20 +1638,60 @@ ipcMain.handle('customers:addPayment', async (_, { data, requestUserId }) => {
       userId:    requestUserId,
       sessionId: session?.id || null,
     });
-    audit(requestUserId, reqUser?.name || '', 'abono_registrado', 'customers',
-          data.customerId,
-          `Monto: ${data.amount}${result.replaces_payment_id
-            ? ` | Corrige abono #${result.replaces_payment_id}`
-            : ''}`);
+    // El abono ya fue confirmado atómicamente. Un fallo secundario de auditoría
+    // no puede convertir una operación cobrada en un "error" para la interfaz,
+    // porque el cajero podría reintentar y duplicarla.
+    if (!result.idempotent) {
+      _auditAfterCommit([
+        requestUserId, reqUser?.name || '', 'abono_registrado', 'customers',
+        data.customerId,
+        `Monto: ${data.amount}${result.replaces_payment_id
+          ? ` | Corrige abono #${result.replaces_payment_id}`
+          : ''}`,
+      ], { paymentId: result.paymentId, operationId: result.operation_id || '' });
+    }
     // Contabilidad en vivo: Débito Caja/Banco · Crédito Cuentas por Cobrar.
     _acctHook(() => accountingRepo.generatePaymentEntry({ paymentId: result.paymentId, userId: requestUserId }));
+    const durationMs = Date.now() - startedAt;
+    if (durationMs > 1500) {
+      try { logWarn('payments', 'abono confirmado con latencia alta', {
+        paymentId: result.paymentId, durationMs, idempotent: !!result.idempotent,
+      }); } catch {}
+    }
     return { ok: true, ...result };
   } catch (e) {
+    try { logError('payments', 'no se pudo confirmar el abono', {
+      operationId: data?.operationId || '', customerId: data?.customerId || null,
+      durationMs: Date.now() - startedAt, error: e.message,
+    }); } catch {}
     return { ok: false, error: e.message };
   }
 });
 
+ipcMain.handle('customers:getPaymentByOperation', async (_, {
+  operationId, customerId, requestUserId
+}) => {
+  const reqUser = authRepo.findById(requestUserId);
+  if (!reqUser) return { ok: false, error: 'Usuario no válido' };
+  const payment = customersRepo.getPaymentByOperationId(operationId, customerId);
+  if (!payment) return { ok: true, found: false };
+  if (payment.status !== 'active') {
+    return { ok: false, found: true, error: 'El abono fue confirmado, pero ya se encuentra anulado' };
+  }
+  return { ok: true, found: true, ...payment };
+});
+
+ipcMain.handle('customers:getPaymentStatus', async (_, { id, requestUserId }) => {
+  const reqUser = authRepo.findById(requestUserId);
+  if (!_hasActionPermission(reqUser, 'cancel_payment', ['admin', 'superadmin'])) {
+    return { ok: false, error: 'No tienes permiso para consultar esta anulación' };
+  }
+  const payment = customersRepo.getPaymentStatus(id);
+  return payment ? { ok: true, found: true, ...payment } : { ok: true, found: false };
+});
+
 ipcMain.handle('customers:cancelPayment', async (_, { id, reason, requestUserId }) => {
+  const startedAt = Date.now();
   try {
     const reqUser = authRepo.findById(requestUserId);
     if (!_hasActionPermission(reqUser, 'cancel_payment', ['admin', 'superadmin'])) {
@@ -1654,7 +1709,7 @@ ipcMain.handle('customers:cancelPayment', async (_, { id, reason, requestUserId 
       userName: reqUser.name,
       sessionId: session?.id || null,
     });
-    audit(
+    _auditAfterCommit([
       reqUser.id, reqUser.name, 'abono_anulado', 'payments', Number(id),
       JSON.stringify({
         document: result.documentNumber || '',
@@ -1665,10 +1720,13 @@ ipcMain.handle('customers:cancelPayment', async (_, { id, reason, requestUserId 
         financialAccountId: result.financialAccountId,
         allocations: result.allocations || [],
         reason: cleanReason,
-      })
-    );
+      }),
+    ], { paymentId: Number(id), durationMs: Date.now() - startedAt });
     return { ok: true, ...result };
   } catch (e) {
+    try { logError('payments', 'no se pudo anular el abono', {
+      paymentId: Number(id) || null, durationMs: Date.now() - startedAt, error: e.message,
+    }); } catch {}
     return { ok: false, error: e.message };
   }
 });
@@ -1763,7 +1821,7 @@ ipcMain.handle('cash:open', async (_, { openAmount, openBills, requestUserId, te
       userId: requestUserId, cajero: reqUser.name,
       openAmount, openBills, terminalId
     });
-    return { ok: true, id };
+    return { ok: true, id, session: cashRepo.getOpen(terminalId) };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -1783,7 +1841,9 @@ ipcMain.handle('cash:close', async (_, { sessionId, closeAmount, closeBills, exp
       closeBills, expected: parseFloat(expected) || 0,
       notes, userId: requestUserId, cajero: reqUser.name
     });
-    return { ok: true, ...result };
+    const closedSession = cashRepo.getSessions(100)
+      .find(row => Number(row.id) === Number(sessionId)) || null;
+    return { ok: true, ...result, session: closedSession };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -1886,6 +1946,19 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
       return { ok: false, error: 'Tipo de documento no soportado' };
     }
 
+    // Resolver reintentos ANTES de volver a exigir tokens de autorización que
+    // ya fueron consumidos por la primera confirmación.
+    const confirmed = salesRepo.getConfirmedOperation({
+      operationId: saleData?.operationId,
+      customer: saleData?.customer,
+      items: saleData?.items,
+      payment: saleData?.payment,
+      type: saleData?.type || 'factura',
+    });
+    if (confirmed) {
+      return { ok: true, ...confirmed, sale: salesRepo.getById(confirmed.saleId) };
+    }
+
     // ── Validación básica de integridad (segunda línea de defensa tras el renderer) ──
     if (!saleData?.items?.length) {
       return { ok: false, error: 'La venta debe tener al menos un producto' };
@@ -1959,15 +2032,15 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
     }
 
     const result = salesRepo.create({ ...saleData, user: reqUser });
-    if (priceOverrides.length && !['admin', 'superadmin'].includes(reqUser.role)) {
+    if (!result.idempotent && priceOverrides.length && !['admin', 'superadmin'].includes(reqUser.role)) {
       _privAuthTokens.delete(saleData?.payment?.priceChangeAuthToken);
     }
-    if (discountApproval?.token) _privAuthTokens.delete(discountApproval.token);
-    if (priceOverrides.length) {
+    if (!result.idempotent && discountApproval?.token) _privAuthTokens.delete(discountApproval.token);
+    if (!result.idempotent && priceOverrides.length) {
       audit(requestUserId, reqUser.name, 'precio_venta_autorizado', 'sales', result.saleId,
             `Autorizado por ${priceApproval.name} (${priceApproval.role}) | ${_priceOverrideDetail(priceOverrides)}`);
     }
-    if (discountApproval) {
+    if (!result.idempotent && discountApproval) {
       audit(requestUserId, reqUser.name, 'descuento_venta_autorizado', 'sales', result.saleId,
             `${Number(saleData.payment.disc).toFixed(2)}% autorizado por ${discountApproval.name}`);
     }
@@ -1981,7 +2054,7 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
         }));
       }
     }
-    return { ok: true, ...result };
+    return { ok: true, ...result, sale: salesRepo.getById(result.saleId) };
   } catch (e) {
     console.error('[sales:create]', e);
     return { ok: false, error: e.message };
@@ -2098,6 +2171,16 @@ ipcMain.handle('checkout:pay', async (_, { id, payment, requestUserId } = {}) =>
     const method = payment?.method || 'efectivo';
     const pendingOrder = checkoutOrdersRepo.getById(id);
     if (!pendingOrder) return { ok: false, error: 'Orden no encontrada' };
+    if (['paid', 'dispatched'].includes(pendingOrder.status) && pendingOrder.sale_id) {
+      const confirmed = salesRepo.getConfirmationById(pendingOrder.sale_id, { idempotent: true });
+      if (!confirmed) return { ok: false, error: 'La orden cobrada no tiene una venta recuperable' };
+      return {
+        ok: true,
+        ...confirmed,
+        order: pendingOrder,
+        sale: salesRepo.getById(confirmed.saleId),
+      };
+    }
     const requestedDiscount = payment?.disc !== undefined
       ? Number(payment.disc) : Number(pendingOrder.discount_pct || 0);
     const keepsAuthorizedDiscount = requestedDiscount > 10
@@ -2133,7 +2216,7 @@ ipcMain.handle('checkout:pay', async (_, { id, payment, requestUserId } = {}) =>
         paymentId: result.initialPaymentId, userId: requestUserId,
       }));
     }
-    return { ok: true, ...result };
+    return { ok: true, ...result, sale: salesRepo.getById(result.saleId) };
   } catch (e) {
     console.error('[checkout:pay]', e);
     return { ok: false, error: e.message };
@@ -2169,6 +2252,25 @@ ipcMain.handle('sales:search', async (_, { q, limit } = {}) => {
   } catch (e) {
     console.error('[sales:search]', e);
     return [];
+  }
+});
+
+ipcMain.handle('sales:getByOperation', async (_, { saleData, requestUserId }) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser) return { ok: false, error: 'Usuario no válido' };
+    const confirmed = salesRepo.getConfirmedOperation({
+      operationId: saleData?.operationId,
+      customer: saleData?.customer,
+      items: saleData?.items,
+      payment: saleData?.payment,
+      type: saleData?.type || 'factura',
+    });
+    return confirmed
+      ? { ok: true, found: true, ...confirmed, sale: salesRepo.getById(confirmed.saleId) }
+      : { ok: true, found: false };
+  } catch (e) {
+    return { ok: false, error: e.message };
   }
 });
 
@@ -2332,6 +2434,17 @@ ipcMain.handle('sales:cancel', async (_, { id, reason, requestUserId }) => {
     }
     const sale = salesRepo.getById(id);
     if (!sale) return { ok: false, error: 'Venta no encontrada' };
+    // Reintento seguro: si la BD confirmó la anulación pero la respuesta IPC se
+    // perdió, no se repite inventario, caja ni contabilidad.
+    if (sale.status === 'cancelled') {
+      return {
+        ok: true,
+        idempotent: true,
+        isReturn: sale.type === 'devolucion',
+        originalSaleId: sale.original_sale_id || null,
+        overpayment: 0,
+      };
+    }
 
     // Una nota de crédito no puede anularse con las reglas de una venta normal:
     // debe retirar el inventario repuesto y restaurar la CxC cuando corresponda.

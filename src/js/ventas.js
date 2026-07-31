@@ -51,6 +51,28 @@ function ventasEsc(v) {
     .replace(/"/g, '&quot;');
 }
 
+function ventasRefreshAfterMutation({
+  range = ventasRange, view = 'sales', products = false,
+  customers = false, payments = false, onDone = null,
+} = {}) {
+  const tasks = [reloadSales({ range, ...(view ? { view } : {}) })];
+  if (products) tasks.push(reloadProducts());
+  if (customers) tasks.push(reloadCustomers());
+  if (payments && typeof reloadPayments === 'function') tasks.push(reloadPayments());
+  return Promise.allSettled(tasks).then(results => {
+    const failed = results.some(item => item.status === 'rejected');
+    if (failed) {
+      window.VeloExperience?.rememberFailure?.({
+        label:'Actualizar Ventas',
+        detail:'La operación fue confirmada, pero una consulta secundaria no terminó.',
+        module:'ventas', retryKey:`sales-refresh:${Date.now()}`,
+      });
+    }
+    if (typeof onDone === 'function') onDone(results);
+    return { ok: !failed, results };
+  }).catch(() => ({ ok: false, results: [] }));
+}
+
 // En el historial operativo conservamos la referencia corta que el personal
 // ya reconoce (#2499, por ejemplo). Para documentos migrados se antepone el
 // número histórico real de FabPro; el correlativo fiscal/documental de Velo se
@@ -929,7 +951,10 @@ function renderVentasAbonos(resWrap, tableWrap) {
     const invoice = paymentInvoiceSummary(p);
     const cancelled = false;
     const imported = isImportedRecord(p);
-    const canCancel = !cancelled && !imported && ['admin','superadmin'].includes(user?.role);
+    const canCancel = !cancelled && !imported && (
+      window.VeloExperience?.can?.('cancel_payment', 'admin,superadmin')
+      ?? ['admin','superadmin'].includes(user?.role)
+    );
     return h('tr',{style:cancelled?{opacity:'.72',background:'var(--surface2)'}:null},
       h('td',{class:'tm'},reciboLabel(p)),
       h('td',null,fdate(String(p.created_at||'').slice(0,10))),
@@ -962,8 +987,10 @@ function openAnularAbonoModal(paymentOrId) {
     ? paymentOrId
     : (DB.payments || []).find(row => Number(row.id) === Number(paymentOrId));
   if (!p) { toast('Abono no encontrado', 'err'); return; }
-  if (!['admin','superadmin'].includes(user?.role)) {
-    toast('Solo un administrador puede anular abonos', 'err');
+  const canCancel = window.VeloExperience?.can?.('cancel_payment', 'admin,superadmin')
+    ?? ['admin','superadmin'].includes(user?.role);
+  if (!canCancel) {
+    toast('No tienes permiso para anular abonos', 'err');
     return;
   }
   if (String(p.status || 'active').toLowerCase() === 'cancelled') {
@@ -1013,7 +1040,8 @@ function openAnularAbonoModal(paymentOrId) {
     </label>
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Conservar abono</button>
-      <button class="btn btn-red" onclick="confirmarAnulacionAbono(${Number(p.id)})"
+      <button class="btn btn-red" id="ventas-confirm-payment-void"
+        onclick="confirmarAnulacionAbono(${Number(p.id)})"
         ${requiresCash && !cajaOpen ? 'disabled' : ''}>
         ${svg('x')} Confirmar anulación
       </button>
@@ -1022,7 +1050,60 @@ function openAnularAbonoModal(paymentOrId) {
   setTimeout(() => document.getElementById('ventas-void-payment-reason')?.focus(), 60);
 }
 
+function ventasAwaitPaymentAction(operation, timeoutMs = 12000) {
+  const testTimeout = Number(window.__VELO_TEST_PAYMENT_TIMEOUT_MS || 0);
+  const effectiveTimeout = testTimeout > 0 ? testTimeout : timeoutMs;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const error = new Error('PAYMENT_ACTION_TIMEOUT');
+      error.offline = true;
+      reject(error);
+    }, effectiveTimeout);
+    Promise.resolve(operation).then(
+      value => { clearTimeout(timer); resolve(value); },
+      error => { clearTimeout(timer); reject(error); }
+    );
+  });
+}
+
+async function ventasCancelPaymentWithRecovery(request) {
+  try {
+    return await ventasAwaitPaymentAction(window.api.customers.cancelPayment(request));
+  } catch (originalError) {
+    if (!window.api.customers.getPaymentStatus) throw originalError;
+    try {
+      const status = await ventasAwaitPaymentAction(
+        window.api.customers.getPaymentStatus({
+          id: request.id,
+          requestUserId: request.requestUserId,
+        }),
+        3000
+      );
+      if (status?.ok && status?.found && status.status === 'cancelled') {
+        return { ok: true, recovered: true, ...status };
+      }
+    } catch {}
+    throw originalError;
+  }
+}
+
+async function ventasCreateSaleWithRecovery(saleData, requestUserId) {
+  const request = { saleData, requestUserId };
+  try {
+    return await ventasAwaitPaymentAction(window.api.sales.create(request));
+  } catch (originalError) {
+    try {
+      const recovered = await ventasAwaitPaymentAction(
+        window.api.sales.getByOperation(request), 3000
+      );
+      if (recovered?.ok && recovered?.found) return { ...recovered, recovered: true };
+    } catch {}
+    throw originalError;
+  }
+}
+
 async function confirmarAnulacionAbono(paymentId) {
+  if (window._paymentVoidSubmitting) return;
   const originalPayment = (DB.payments || []).find(
     payment => Number(payment.id) === Number(paymentId)
   );
@@ -1050,36 +1131,60 @@ async function confirmarAnulacionAbono(paymentId) {
   }
   const buttons = document.querySelectorAll('.modal-foot button');
   buttons.forEach(button => { button.disabled = true; });
-  const result = await window.api.customers.cancelPayment({
-    id: Number(paymentId),
-    reason,
-    requestUserId: user.id,
-  });
-  if (!result?.ok) {
-    buttons.forEach(button => { button.disabled = false; });
-    toast(result?.error || 'No se pudo anular el abono', 'err');
-    return;
-  }
-  closeModal();
-  await Promise.all([
-    reloadPayments(),
-    reloadCustomers(),
-    reloadSales({ range: ventasRange, view: 'sales' }),
-  ]);
-  renderVentasTable();
-  buildSidebar();
-  buildTopbar();
-  if (correctionPrefill) {
+  window._paymentVoidSubmitting = Number(paymentId);
+  try {
+    const result = await ventasCancelPaymentWithRecovery({
+      id: Number(paymentId),
+      reason,
+      requestUserId: user.id,
+    });
+    if (!result?.ok) {
+      toast(result?.error || 'No se pudo anular el abono', 'err');
+      return;
+    }
+
+    // La operación principal ya terminó: actualizar el snapshot y liberar la UI
+    // antes de consultar nuevamente todos los módulos.
+    DB.payments = (DB.payments || []).filter(row => Number(row.id) !== Number(paymentId));
     const customer = (DB.customers || []).find(
       row => Number(row.id) === Number(result.customerId)
     );
-    if (customer && typeof openAbonoModal === 'function') {
+    if (customer) customer.balance = Number(result.restoredBalance || customer.balance || 0);
+    closeModal();
+    renderVentasTable();
+    buildSidebar();
+    buildTopbar();
+
+    Promise.allSettled([
+      reloadPayments(),
+      reloadCustomers(),
+      reloadSales({ range: ventasRange, view: 'sales' }),
+    ]).then(() => {
+      if (typeof page !== 'undefined' && page === 'ventas') renderVentasTable();
+      buildSidebar();
+      buildTopbar();
+    }).catch(() => {});
+
+    if (correctionPrefill && customer && typeof openAbonoModal === 'function') {
       toast('Abono anulado. Revisa y confirma el recibo corregido.');
       await openAbonoModal(customer, correctionPrefill);
       return;
     }
+    toast(`${result.recovered ? 'Anulación recuperada' : 'Abono anulado'} · balance restaurado a ${fmt(result.restoredBalance)}`);
+  } catch (error) {
+    const ambiguous = error?.offline || error?.message === 'SERVER_OFFLINE'
+      || error?.message === 'PAYMENT_ACTION_TIMEOUT';
+    toast(ambiguous
+      ? 'No se pudo confirmar el resultado. VELO verificó el recibo y no encontró una anulación completada; puedes reintentar.'
+      : (error?.message || 'No se pudo anular el abono'), 'err');
+  } finally {
+    if (window._paymentVoidSubmitting === Number(paymentId)) {
+      window._paymentVoidSubmitting = null;
+    }
+    document.querySelectorAll('.modal-foot button').forEach(button => {
+      button.disabled = false;
+    });
   }
-  toast(`Abono anulado · balance restaurado a ${fmt(result.restoredBalance)}`);
 }
 
 // ── Enviar e-CF ───────────────────────────────
@@ -1301,7 +1406,7 @@ async function convertirCotizacionAVenta(s) {
 
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal();delete window._convEstado;delete window._convSale">Cancelar</button>
-      <button class="btn btn-green" onclick="confirmarConversionCotizacion()">
+      <button class="btn btn-green" id="ventas-confirm-conversion" onclick="confirmarConversionCotizacion()">
         ✓ Confirmar venta
       </button>
     </div>
@@ -1338,6 +1443,7 @@ async function confirmarConversionCotizacion() {
   const sale = window._convSale;
   const cotizId = window._convOrigId;
   if (!est || !sale) return;
+  if (est.submitting) return;
 
   // Leer valores finales de inputs
   est.items.forEach((it, idx) => {
@@ -1384,8 +1490,21 @@ async function confirmarConversionCotizacion() {
     contact_id: currentContact?.id || null,
   } : { id: 1, name: sale.customer_name || 'Consumidor Final', rnc: sale.customer_rnc || '' };
 
-  const result = await window.api.sales.create({
-    saleData: {
+  if (!est.operationId) {
+    try {
+      est.operationId = `sale:quote:${cotizId}:${window.crypto?.randomUUID?.() || `${Date.now()}:${Math.random().toString(36).slice(2)}`}`;
+    } catch {
+      est.operationId = `sale:quote:${cotizId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    }
+  }
+  est.submitting = true;
+  const confirmButton = document.getElementById('ventas-confirm-conversion');
+  if (confirmButton) {
+    confirmButton.disabled = true;
+    confirmButton.textContent = 'Procesando...';
+  }
+  const saleData = {
+      operationId: est.operationId,
       customer,
       items: itemsValidos.map(i => ({
         product_id:   i.product_id,
@@ -1405,23 +1524,44 @@ async function confirmarConversionCotizacion() {
       },
       type:    'factura',
       session: cajaSession,
-    },
-    requestUserId: user.id,
-  });
+    };
+  let result;
+  try {
+    result = await ventasCreateSaleWithRecovery(saleData, user.id);
+  } catch (error) {
+    est.submitting = false;
+    if (confirmButton?.isConnected) {
+      confirmButton.disabled = false;
+      confirmButton.textContent = '✓ Confirmar venta';
+    }
+    toast('No se recibió confirmación. Revisa Ventas antes de volver a intentar.', 'err');
+    return;
+  }
 
-  if (!result.ok) { toast(result.error || 'Error al convertir', 'err'); return; }
+  if (!result.ok) {
+    est.submitting = false;
+    if (confirmButton?.isConnected) {
+      confirmButton.disabled = false;
+      confirmButton.textContent = '✓ Confirmar venta';
+    }
+    toast(result.error || 'Error al convertir', 'err');
+    return;
+  }
 
-  const removedQuote = await window.api.sales.deleteQuote({
-    id: cotizId,
-    requestUserId: user.id,
-  });
+  let removedQuote = null;
+  try {
+    removedQuote = await ventasAwaitPaymentAction(window.api.sales.deleteQuote({
+      id: cotizId,
+      requestUserId: user.id,
+    }), 4000);
+  } catch {
+    removedQuote = { ok: false, error: 'la confirmación no respondió' };
+  }
   if (!removedQuote?.ok) {
     toast(`La factura se creó, pero la cotización original no pudo eliminarse: ${removedQuote?.error || 'error desconocido'}`, 'w');
   }
 
-	  await reloadSales({ range: 'all', view: 'sales' });
-	  await reloadProducts();
-	  const convertedSale = await window.api.sales.getById({ id: result.saleId }).catch(() => null);
+	  const convertedSale = result.sale || null;
 	  const convertedItems = convertedSale?.items?.length
 	    ? convertedSale.items.map(i => ({
 	        product_code: ventasItemCode(i),
@@ -1476,6 +1616,9 @@ async function confirmarConversionCotizacion() {
   });
 
   renderVentas(document.getElementById('page'));
+  ventasRefreshAfterMutation({ range:'all', view:'sales', products:true, onDone:() => {
+    if (typeof page !== 'undefined' && page === 'ventas') renderVentas(document.getElementById('page'));
+  }});
 }
 
 
@@ -1781,13 +1924,10 @@ function eliminarCotizacion(s) {
         toast(result?.error || 'No se pudo eliminar la cotización', 'err');
         return;
       }
-      await Promise.all([
-        reloadSales({ range: ventasRange, view: 'sales' }),
-        reloadProducts(),
-        reloadCustomers(),
-      ]);
+      DB.sales = (DB.sales || []).filter(row => Number(row.id) !== Number(s.id));
       renderVentasTable();
       toast(`✓ Cotización ${result.documentNumber || facturaLabel(s)} eliminada`);
+      ventasRefreshAfterMutation({ products: true, customers: true, onDone: renderVentasTable });
     },
     'Eliminar ahora',
     'btn-red'
@@ -1891,6 +2031,7 @@ function openAnulacionModal(s) {
 }
 
 async function confirmarAnulacion(saleId, registerAgain = false) {
+  if (window._veloSaleCancellationPending) return;
   const targetSale = (DB.sales || []).find(row => Number(row.id) === Number(saleId));
   const isMonetaryCredit = targetSale?.type === 'devolucion' &&
     targetSale?.correction_kind === 'monetary_credit';
@@ -1905,18 +2046,41 @@ async function confirmarAnulacion(saleId, registerAgain = false) {
     }
   }
 
-  const result = await window.api.sales.cancel({
-    id: saleId, reason, requestUserId: user.id
-  });
+  window._veloSaleCancellationPending = true;
+  const modalButtons = [...document.querySelectorAll('.modal-foot button')];
+  modalButtons.forEach(button => { button.disabled = true; });
+  let result;
+  try {
+    const request = { id: saleId, reason, requestUserId: user.id };
+    try {
+      result = await ventasAwaitPaymentAction(window.api.sales.cancel(request));
+    } catch (originalError) {
+      // El backend hace la anulación idempotente. Este segundo envío solo
+      // recupera la confirmación si la primera respuesta se perdió.
+      try {
+        result = await ventasAwaitPaymentAction(window.api.sales.cancel(request), 3000);
+        if (result?.ok) result.recovered = true;
+      } catch {
+        throw originalError;
+      }
+    }
+  } catch (error) {
+    toast('No se recibió confirmación de la anulación. Revisa el historial antes de reintentar.', 'err');
+    modalButtons.forEach(button => { button.disabled = false; });
+    window._veloSaleCancellationPending = false;
+    return;
+  }
 
-  if (!result.ok) { toast(result.error || 'Error al anular', 'err'); return; }
+  if (!result?.ok) {
+    toast(result?.error || 'Error al anular', 'err');
+    modalButtons.forEach(button => { button.disabled = false; });
+    window._veloSaleCancellationPending = false;
+    return;
+  }
+  window._veloSaleCancellationPending = false;
 
-  await reloadSales(result.isReturn
-    ? { range: 'all' }
-    : { range: ventasRange, view: 'sales' });
-  await reloadProducts();
-  if (result.isReturn) await reloadCustomers();
   closeModal();
+  DB.sales = (DB.sales || []).filter(row => Number(row.id) !== Number(saleId));
   toast(`✓ ${isMonetaryCredit ? 'Nota de crédito' : result.isReturn ? 'Devolución' : 'Venta'} ${facturaLabel(targetSale || { id: saleId })} anulada`);
   if (result.overpayment > 0) {
     toast(`⚠ El cliente ya había pagado de más por esta factura — excedente de ${fmt(result.overpayment)} a revisar manualmente (reembolso o crédito)`, 'w');
@@ -1941,11 +2105,29 @@ async function confirmarAnulacion(saleId, registerAgain = false) {
         source_item_id: item.id || null,
       })),
     };
+    ventasRefreshAfterMutation({
+      range: result.isReturn ? 'all' : ventasRange,
+      view: result.isReturn ? null : 'sales', products: true,
+      customers: !!result.isReturn,
+    });
     routeTo('pos');
     return;
   }
   if (result.isReturn) renderDevoluciones(document.getElementById('page'));
   else renderVentas(document.getElementById('page'));
+  ventasRefreshAfterMutation({
+    range: result.isReturn ? 'all' : ventasRange,
+    view: result.isReturn ? null : 'sales', products: true,
+    customers: !!result.isReturn,
+    onDone: () => {
+      if (typeof page === 'undefined') return;
+      if (result.isReturn && page === 'devoluciones') {
+        renderDevoluciones(document.getElementById('page'));
+      } else if (!result.isReturn && page === 'ventas') {
+        renderVentas(document.getElementById('page'));
+      }
+    },
+  });
 }
 
 // ── Iniciar devolución desde historial ────────
@@ -2271,14 +2453,16 @@ async function ventasSubmitMonetaryCredit() {
     requestUserId: user.id,
   });
   if (!result?.ok) return toast(result?.error || 'No se pudo emitir la nota de crédito', 'err');
-  await Promise.all([
-    reloadSales({ range: 'all' }),
-    reloadProducts(),
-    reloadCustomers(),
-  ]);
-  renderVentas(document.getElementById('page'));
   ventasOpenProductCorrectionResult(result, state.model.root.id);
   toast('✓ Nota de crédito emitida sin movimiento de inventario');
+  ventasRefreshAfterMutation({
+    range: 'all', view: null, products: true, customers: true,
+    onDone: () => {
+      if (typeof page !== 'undefined' && page === 'ventas') {
+        renderVentas(document.getElementById('page'));
+      }
+    },
+  });
 }
 
 function ventasProductLineUnitTotal(line) {
@@ -2573,14 +2757,16 @@ async function ventasSubmitProductCorrection() {
     requestUserId: user.id,
   });
   if (!result?.ok) return toast(result?.error || 'No se pudo aplicar la corrección', 'err');
-  await Promise.all([
-    reloadSales({ range: 'all' }),
-    reloadProducts(),
-    reloadCustomers(),
-  ]);
-  renderVentas(document.getElementById('page'));
   ventasOpenProductCorrectionResult(result, state.model.root.id);
   toast('✓ Corrección aplicada y documentos listos para imprimir');
+  ventasRefreshAfterMutation({
+    range: 'all', view: null, products: true, customers: true,
+    onDone: () => {
+      if (typeof page !== 'undefined' && page === 'ventas') {
+        renderVentas(document.getElementById('page'));
+      }
+    },
+  });
 }
 
 async function ventasPrintGeneratedCorrectionDocument(saleId) {
@@ -2779,13 +2965,19 @@ async function guardarVentaDate(saleId) {
     return toast(result?.error || 'No se pudo cambiar la fecha', 'err');
   }
   closeModal();
-  await reloadSales({ range: ventasRange, view: ventasTab === 'cotizaciones' ? undefined : 'sales' });
-  renderVentas(document.getElementById('page'));
   ventasOpenSimpleCorrectionResult(
     result.data.id,
     `${facturaLabel(result.data)} movida al ${fdate(saleDate)} sin alterar pagos ni fecha fiscal.`
   );
   toast('✓ Fecha operativa corregida');
+  ventasRefreshAfterMutation({
+    range: ventasRange, view: ventasTab === 'cotizaciones' ? null : 'sales',
+    onDone: () => {
+      if (typeof page !== 'undefined' && page === 'ventas') {
+        renderVentas(document.getElementById('page'));
+      }
+    },
+  });
 }
 
 async function openVentaAdminModal(saleId) {
@@ -2841,10 +3033,16 @@ async function guardarVentaAdmin(saleId) {
   });
   if (!result?.ok) return toast(result?.error || 'No se pudo guardar', 'err');
   closeModal();
-  await reloadSales({ range: ventasRange, view: 'sales' });
-  renderVentas(document.getElementById('page'));
   ventasOpenSimpleCorrectionResult(saleId, 'Información administrativa guardada con auditoría.');
   toast('✓ Información administrativa corregida');
+  ventasRefreshAfterMutation({
+    range: ventasRange, view: 'sales',
+    onDone: () => {
+      if (typeof page !== 'undefined' && page === 'ventas') {
+        renderVentas(document.getElementById('page'));
+      }
+    },
+  });
 }
 
 async function openVentaCorrectionsHistory(saleId) {

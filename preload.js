@@ -62,6 +62,8 @@ contextBridge.exposeInMainWorld('api', {
     delete:        (data)      => ipcRenderer.invoke('customers:delete', data),
     deleteAll:     (data)      => ipcRenderer.invoke('customers:deleteAll', data),
     addPayment:    (data)      => ipcRenderer.invoke('customers:addPayment', data),
+    getPaymentByOperation: (data) => ipcRenderer.invoke('customers:getPaymentByOperation', data),
+    getPaymentStatus: (data) => ipcRenderer.invoke('customers:getPaymentStatus', data),
     cancelPayment: (data)      => ipcRenderer.invoke('customers:cancelPayment', data),
     getPayments:   (data)      => ipcRenderer.invoke('customers:getPayments', data),
     getAllPayments: (data)      => ipcRenderer.invoke('customers:getAllPayments', data),
@@ -85,6 +87,7 @@ contextBridge.exposeInMainWorld('api', {
   // ── Ventas ────────────────────────────────
   sales: {
     create:  (data)          => ipcRenderer.invoke('sales:create', data),
+    getByOperation: (data)   => ipcRenderer.invoke('sales:getByOperation', data),
     getById: (data)          => ipcRenderer.invoke('sales:getById', data),
     getAll:  (data)          => ipcRenderer.invoke('sales:getAll', data),
     count:   (data)          => ipcRenderer.invoke('sales:count', data),

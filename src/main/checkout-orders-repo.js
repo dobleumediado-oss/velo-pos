@@ -336,6 +336,11 @@ function createCheckoutOrdersRepo({ getDb, salesRepo, audit }) {
       expireStale();
       const order = db().prepare('SELECT * FROM checkout_orders WHERE id=?').get(id);
       if (!order) throw new Error('Orden no encontrada');
+      if (['paid', 'dispatched'].includes(order.status) && order.sale_id) {
+        const confirmed = salesRepo.getConfirmationById(order.sale_id, { idempotent: true });
+        if (!confirmed) throw new Error('La orden fue cobrada, pero su venta no está disponible');
+        return { ...confirmed, order: getById(id) };
+      }
       if (order.status !== 'pending') {
         const labels = { paid: 'ya fue cobrada', dispatched: 'ya fue despachada', cancelled: 'fue cancelada', expired: 'vencio' };
         throw new Error(`La orden ${labels[order.status] || 'ya no esta pendiente'}`);

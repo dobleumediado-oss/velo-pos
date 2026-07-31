@@ -1,5 +1,37 @@
 # Historial de versiones
 
+## 1.35.1 — 2026-07-31
+
+### Ventas, abonos y caja resilientes
+
+- Las ventas y los abonos incorporan confirmaciones idempotentes: un doble clic,
+  una respuesta perdida o un reintento de red ya no duplica documentos, cobros,
+  inventario, caja ni cuentas por cobrar.
+- La misma operación no puede reutilizarse alterando productos, cliente, monto,
+  método, cuenta financiera o distribución entre facturas.
+- El POS recupera ventas y recibos que SQLite ya confirmó, abre el display sin
+  esperar recargas secundarias y evita quedar indefinidamente en «Procesando».
+- Las anulaciones de ventas y abonos son recuperables y conservan sincronizados
+  inventario, balance, caja, bancos y contabilidad.
+- Abrir y cerrar caja tolera respuestas perdidas; cerrar caja ya no abre ni
+  imprime automáticamente el reporte.
+- Convertir una cotización en factura utiliza la misma protección contra cobros
+  duplicados y no depende de una segunda consulta para mostrar el documento.
+
+### Datos, diagnóstico e impresión
+
+- Las recargas concurrentes descartan respuestas antiguas y cada consulta
+  secundaria puede fallar de forma independiente sin vaciar clientes, abonos o
+  sesiones que ya estaban visibles.
+- El diagnóstico financiero entiende correctamente que el precio de venta ya
+  incluye ITBIS y revisa operaciones duplicadas, trazabilidad de caja, bancos y
+  residuos contables de anulaciones.
+- Brother QL permanece en el canal independiente de etiquetas y Epson ET-4810
+  se identifica como impresora de hojas; ninguna impresión se envía antes de
+  pulsar «Imprimir» en el display.
+- Se agregan regresiones automatizadas para respuestas perdidas, doble clic,
+  carga fuera de orden, caja, diagnóstico financiero y perfiles de impresora.
+
 ## 1.34.2 — 2026-07-30
 
 ### Caja y anulaciones

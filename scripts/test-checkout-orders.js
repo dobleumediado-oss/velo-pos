@@ -76,9 +76,12 @@ ok(!!paid.saleId && paid.order.status === 'paid', 'el cobro convierte la orden e
 ok(DB.productsRepo.getById(productId).stock === 0, 'descuenta el stock una sola vez al cobrar');
 ok(paid.order.paid_terminal_id === 'caja-1' && paid.order.origin_terminal_id === 'despacho-1',
   'conserva terminal de origen y terminal de cobro');
-throws(() => DB.checkoutOrdersRepo.pay({
+const paidRetry = DB.checkoutOrdersRepo.pay({
   id:first.id, payment:{ method:'efectivo' }, session:null, user, terminalId:'caja-2'
-}), 'impide cobrar dos veces la misma orden');
+});
+ok(paidRetry.idempotent === true && paidRetry.saleId === paid.saleId
+  && DB.productsRepo.getById(productId).stock === 0,
+  'un reintento devuelve la misma venta sin cobrar ni descontar stock dos veces');
 const dispatched = DB.checkoutOrdersRepo.markDispatched({ id:first.id, user });
 ok(dispatched.status === 'dispatched', 'despacho confirma la entrega despues del pago');
 DB.salesRepo.cancel(paid.saleId, 'Prueba de anulacion', user.id, user.name);

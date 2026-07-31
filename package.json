@@ -1,6 +1,6 @@
 {
   "name": "velo-pos",
-  "version": "1.35.0",
+  "version": "1.35.1",
   "description": "Sistema POS desktop profesional para comercios, repuestos, sucursales y operaciones empresariales",
   "main": "main.js",
   "scripts": {
@@ -42,7 +42,11 @@
     "test:sale-corrections": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-sale-corrections.js",
     "test:server-service": "node scripts/test-server-service.js",
     "test:experience": "node scripts/test-experience-system.js",
-    "test": "npm run test:url && npm run test:input-normalization && npm run test:login && npm run test:pos && npm run test:checkout && npm run test:customer-companies && npm run test:business && npm run test:import && npm run test:financial && npm run test:printing && npm run test:pending-invoices && npm run test:salespeople && npm run test:documents && npm run test:sales-workflow && npm run test:sale-corrections && npm run test:server-service && npm run test:experience"
+    "test:payment-ui": "node scripts/test-payment-ui-resilience.js",
+    "test:cash-ui": "node scripts/test-cash-ui-resilience.js",
+    "test:system-doctor": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-system-doctor-financial.js",
+    "test:data-loader": "node scripts/test-data-loader-resilience.js",
+    "test": "npm run test:url && npm run test:input-normalization && npm run test:login && npm run test:pos && npm run test:data-loader && npm run test:checkout && npm run test:customer-companies && npm run test:business && npm run test:import && npm run test:financial && npm run test:payment-ui && npm run test:cash-ui && npm run test:printing && npm run test:pending-invoices && npm run test:salespeople && npm run test:documents && npm run test:sales-workflow && npm run test:sale-corrections && npm run test:system-doctor && npm run test:server-service && npm run test:experience"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

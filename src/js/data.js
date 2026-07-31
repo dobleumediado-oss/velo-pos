@@ -186,6 +186,7 @@ let CATS = [
   'Filtros','Eléctrico','Frenos','Suspensión',
   'Motor','Lubricantes','Encendido','Enfriamiento','Otros'
 ];
+let appDataLoadGeneration = 0;
 
 async function reloadCategories() {
   try {
@@ -202,6 +203,7 @@ async function reloadCategories() {
 // Cada módulo recarga lo que necesita bajo demanda.
 // ══════════════════════════════════════════════
 async function loadAppData() {
+  const loadGeneration = ++appDataLoadGeneration;
   try {
     // ── OPTIMIZACIÓN: Carga en 2 fases ────────────────────────────
     // Fase 1: crítico — lo que el usuario ve primero (productos + settings)
@@ -216,6 +218,10 @@ async function loadAppData() {
         ? window.api.business.getActive().catch(() => null)
         : Promise.resolve(null),
     ]);
+
+    // Si otra recarga comenzó mientras esperábamos, este snapshot ya es viejo
+    // y no debe sobrescribir datos más recientes.
+    if (loadGeneration !== appDataLoadGeneration) return;
 
     DB.products = products || [];
     DB.settings = settings || {};
@@ -262,7 +268,7 @@ async function loadAppData() {
       CFG.module_envios_roles        = settings.module_envios_roles        || 'admin,cajero';
       CFG.module_ncf_avanzado_roles  = settings.module_ncf_avanzado_roles  || 'admin';
       CFG.fiscal_enabled_roles       = settings.fiscal_enabled_roles       || 'admin';
-        CFG.itbis = parseFloat(settings.tax_pct) || 18;
+      CFG.itbis = parseFloat(settings.tax_pct) || 18;
       window._bcEnabled = settings.barcode_enabled === '1' || settings.barcode_enabled === true;
 
       // Carga GENÉRICA de módulos: copia a CFG CUALQUIER setting 'module_*'
@@ -279,7 +285,7 @@ async function loadAppData() {
     await chkCaja();
 
     // Fase 2: cargar el resto en background sin bloquear
-    Promise.all([
+    Promise.allSettled([
       window.api.customers.getAll(),
       window.api.cash.getSessions(),
       window.api.users.getAll(),
@@ -289,12 +295,18 @@ async function loadAppData() {
       window.api.salespeople?.getAll
         ? window.api.salespeople.getAll({ status:'activo' }).catch(() => ({ok:false,data:[]}))
         : Promise.resolve({ok:false,data:[]}),
-    ]).then(([customers, sessions, users, payments, sellers]) => {
-      window._cachedUsers = users || [];
-      DB.customers = customers || [];
-      DB.caja      = sessions  || [];
-      DB.payments  = payments  || [];
-      DB.salespeople = sellers?.data || [];
+    ]).then(results => {
+      if (loadGeneration !== appDataLoadGeneration) return;
+      const [customers, sessions, users, payments, sellers] = results;
+      if (users.status === 'fulfilled') window._cachedUsers = users.value || [];
+      if (customers.status === 'fulfilled') DB.customers = customers.value || [];
+      if (sessions.status === 'fulfilled') DB.caja = sessions.value || [];
+      if (payments.status === 'fulfilled') DB.payments = payments.value || [];
+      if (sellers.status === 'fulfilled') DB.salespeople = sellers.value?.data || [];
+      const rejected = results.filter(item => item.status === 'rejected');
+      if (rejected.length) {
+        console.warn('[loadAppData phase2]', `${rejected.length} consulta(s) secundaria(s) fallaron`);
+      }
     }).catch(e => console.warn('[loadAppData phase2]', e));
 
     // Fase 2 también: ventas de hoy y categorías
@@ -302,21 +314,15 @@ async function loadAppData() {
     reloadCategories().catch(() => {});
     reloadFinancialAccounts().catch(() => {});
 
-    // Datos que SÍ esperamos al inicio (ya los tenemos de Fase 1)
-    const customers = [];
-    const sessions  = [];
-    const users     = [];
-    const payments  = [];
-
-    // Cache de usuarios para dropdown de login
-    window._cachedUsers = users || [];
-
-    DB.customers = customers || [];
-    DB.caja      = sessions  || [];
-    DB.payments  = payments  || [];
-    // Ventas: cargar sólo hoy al inicio. Los módulos que necesitan más rango
-    // llaman reloadSales({ range: 'week'|'month'|'all' }) ellos mismos.
-    DB.sales     = [];
+    // No vaciar aquí los datos de la fase 2. Ese bloque se ejecutaba justo
+    // después de lanzar Promise.all() y creaba una carrera: clientes, abonos y
+    // sesiones podían aparecer, desaparecer y volver a aparecer según la
+    // velocidad del disco o de la red. Conservamos el cache previo hasta que la
+    // consulta secundaria entregue un snapshot completo y coherente.
+    DB.customers = DB.customers || [];
+    DB.caja      = DB.caja      || [];
+    DB.payments  = DB.payments  || [];
+    DB.sales     = DB.sales     || [];
 
     // (CFG ya aplicado en Fase 1 — ver arriba)
 
@@ -474,7 +480,8 @@ function newInvObj(id) {
     initialPaymentAmount: 0, initialPaymentMethod: 'efectivo',
     initialPaymentFinancialAccountId: null, initialPaymentExchangeRate: 1,
     initialPaymentReference: '', notes: '',
-    replacesSaleId: null, replacementDocumentNumber: ''
+    replacesSaleId: null, replacementDocumentNumber: '',
+    saleOperationId: '', saleSubmitting: false
   };
 }
 

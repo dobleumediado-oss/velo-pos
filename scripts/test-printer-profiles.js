@@ -34,6 +34,18 @@ test('detecta la 2Connect 2C-LP427B aunque el driver varíe el separador', () =>
   assert.strictEqual(inferPrinterProfileId('2C_LP427 Printer', 'barcode'), 'label_2connect_108');
 });
 
+test('Brother QL-710W conserva el canal térmico aunque el driver incluya la marca Brother', () => {
+  const exactName = 'Brother QL-710W WIFI - Brother';
+  assert.strictEqual(inferPrinterProfileId(exactName, 'ticket'), 'label_generic');
+  assert.strictEqual(inferPrinterProfileId(exactName, 'barcode'), 'label_generic');
+  assert.strictEqual(detectLabelPrinter({ name: exactName }, {}).confidence, 'medium');
+  assert.strictEqual(resolvePrinterProfile(exactName, 'barcode', {
+    barcode_printer_profile: 'sheet',
+    barcode_media_width_mm: '62',
+  }).kind, 'labels');
+  assert.strictEqual(inferPrinterProfileId('Brother HL-L2350DW', 'ticket'), 'sheet');
+});
+
 test('el preset 2Connect conserva 108mm y 203dpi', () => {
   const p = resolvePrinterProfile('2Connect LP-427', 'barcode', {});
   assert.strictEqual(p.widthMm, 108);

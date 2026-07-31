@@ -14,6 +14,56 @@ function _cajaUser() {
   try { return JSON.parse(sessionStorage.getItem('vp_user')); } catch { return null; }
 }
 
+function cajaAwaitAction(operation, timeoutMs = 12000) {
+  const testTimeout = Number(window.__VELO_TEST_CASH_TIMEOUT_MS || 0);
+  const effectiveTimeout = testTimeout > 0 ? testTimeout : timeoutMs;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('CASH_ACTION_TIMEOUT')), effectiveTimeout);
+    Promise.resolve(operation).then(
+      value => { clearTimeout(timer); resolve(value); },
+      error => { clearTimeout(timer); reject(error); }
+    );
+  });
+}
+
+function cajaTerminalId() {
+  return (typeof TERMINAL_ID !== 'undefined' && TERMINAL_ID)
+    || (typeof CFG !== 'undefined' && CFG.terminalId) || undefined;
+}
+
+async function cajaOpenWithRecovery(payload) {
+  try {
+    return await cajaAwaitAction(window.api.cash.open(payload));
+  } catch (originalError) {
+    try {
+      const existing = await cajaAwaitAction(
+        window.api.cash.getOpen({ terminalId: payload.terminalId }), 3000
+      );
+      const sameUser = Number(existing?.user_id) === Number(payload.requestUserId);
+      const sameAmount = Math.abs(Number(existing?.open_amount || 0) - Number(payload.openAmount || 0)) < 0.005;
+      if (existing && sameUser && sameAmount) {
+        return { ok: true, id: existing.id, session: existing, recovered: true };
+      }
+    } catch {}
+    throw originalError;
+  }
+}
+
+async function cajaCloseWithRecovery(payload) {
+  try {
+    return await cajaAwaitAction(window.api.cash.close(payload));
+  } catch (originalError) {
+    try {
+      const sessions = await cajaAwaitAction(window.api.cash.getSessions(), 3000);
+      const closed = (sessions || []).find(row =>
+        Number(row.id) === Number(payload.sessionId) && row.status === 'closed'
+      );
+      if (closed) return { ok: true, recovered: true, session: closed };
+    } catch {}
+    throw originalError;
+  }
+}
+
 function renderCaja(el) {
   el.innerHTML = '';
 
@@ -329,11 +379,11 @@ async function confirmarApertura() {
 
   let result;
   try {
-    result = await window.api.cash.open({
+    result = await cajaOpenWithRecovery({
       openAmount: fondo,
       openBills:  bills,
       requestUserId: user.id,
-      terminalId: (typeof TERMINAL_ID !== 'undefined' && TERMINAL_ID) || (typeof CFG !== 'undefined' && CFG.terminalId) || undefined,
+      terminalId: cajaTerminalId(),
     });
   } catch (e) {
     if (btn) btn.disabled = false;
@@ -347,12 +397,20 @@ async function confirmarApertura() {
     return;
   }
 
-  await chkCaja();
+  cajaOpen = true;
+  cajaSession = result.session || {
+    id: result.id, user_id: user.id, cajero: user.name,
+    open_amount: fondo, open_bills: JSON.stringify(bills), status: 'open',
+  };
   closeModal();
-  toast('✓ Caja abierta');
+  toast(result.recovered ? '✓ Caja abierta y confirmada' : '✓ Caja abierta');
   renderCaja(document.getElementById('page'));
   buildTopbar();
   buildSidebar();
+  Promise.resolve(chkCaja()).then(() => {
+    if (typeof page !== 'undefined' && page === 'caja') renderCaja(document.getElementById('page'));
+    buildTopbar();
+  }).catch(() => {});
 }
 
 // ══════════════════════════════════════════════
@@ -369,7 +427,7 @@ async function cerrarSesionHuerfana(sessionId) {
 
   let result;
   try {
-    result = await window.api.cash.close({
+    result = await cajaCloseWithRecovery({
       sessionId,
       closeAmount: 0,
       closeBills:  {},
@@ -389,13 +447,14 @@ async function cerrarSesionHuerfana(sessionId) {
     return;
   }
 
-  // Recargar datos y abrir modal de apertura nueva
-  await window.api.cash.getSessions().then(sessions => {
-    DB.caja = sessions || [];
-  });
-  await chkCaja();
+  cajaOpen = false;
+  cajaSession = null;
   closeModal();
   toast('Sesión anterior cerrada — ahora puedes abrir caja', 'ok');
+  Promise.allSettled([
+    window.api.cash.getSessions().then(sessions => { DB.caja = sessions || []; }),
+    chkCaja(),
+  ]).catch(() => {});
   setTimeout(() => openAperturaCajaModal(), 300);
 }
 
@@ -617,7 +676,7 @@ async function confirmarCierre(expected) {
 
   let result;
   try {
-    result = await window.api.cash.close({
+    result = await cajaCloseWithRecovery({
       sessionId:     cajaSession.id,
       closeAmount:   closeAmt,
       closeBills,
@@ -637,24 +696,20 @@ async function confirmarCierre(expected) {
     return;
   }
 
-  // Recargar sesiones reales desde SQLite (incluye la que se acaba de cerrar)
-  await window.api.cash.getSessions().then(sessions => {
-    DB.caja = sessions || [];
-  });
-
   cajaOpen    = false;
   cajaSession = null;
   closeModal();
 
-  toast('✓ Caja cerrada — Generando reporte...');
-
-  // Imprimir reporte con gastos del día (async)
-  await imprimirReporteDia();
-
-  toast('✓ Reporte generado');
+  toast(result.recovered ? '✓ Caja cerrada y confirmada' : '✓ Caja cerrada');
   renderCaja(document.getElementById('page'));
   buildTopbar();
   buildSidebar();
+  // El reporte queda disponible bajo demanda. Cerrar caja nunca abre ni envía
+  // una impresión automáticamente.
+  window.api.cash.getSessions().then(sessions => {
+    DB.caja = sessions || [];
+    if (typeof page !== 'undefined' && page === 'caja') renderCaja(document.getElementById('page'));
+  }).catch(() => {});
 }
 
 // ══════════════════════════════════════════════

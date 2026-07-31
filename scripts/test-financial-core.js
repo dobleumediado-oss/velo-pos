@@ -167,6 +167,21 @@ const c = DB.salesRepo.create({ customer: { id: custId, name: 'x' }, items: [ite
 ok(near(c.taxAmt, 0), `cotización sin ITBIS (obtuvo ${c.taxAmt})`);
 ok(near(c.total, 118), `cotización total = precio final 118 (obtuvo ${c.total})`);
 ok(DB.productsRepo.getById(prodId).stock === stockBefore, `stock intacto en cotización (${stockBefore})`);
+const saleOperationId = `sale-retry-${Date.now()}`;
+const idempotentQuotePayload = {
+  operationId: saleOperationId,
+  customer: { id: custId, name: 'x' },
+  items: [item(1)], payment: { method: 'efectivo' }, user, type: 'cotizacion',
+};
+const idempotentQuote = DB.salesRepo.create(idempotentQuotePayload);
+const idempotentQuoteRetry = DB.salesRepo.create(idempotentQuotePayload);
+ok(idempotentQuoteRetry.idempotent === true
+  && idempotentQuoteRetry.saleId === idempotentQuote.saleId,
+  'un reintento de venta reutiliza el documento sin duplicarlo');
+throws(() => DB.salesRepo.create({
+  ...idempotentQuotePayload,
+  items: [item(1, 150)],
+}), 'una operación de venta no puede reutilizarse con otros datos');
 
 console.log('\n== C2. Precio final modificado y producto exento ==');
 const c2 = DB.salesRepo.create({ customer: { id: custId, name: 'x' }, items: [item(1, 150)], payment: { method: 'efectivo' }, user, type: 'factura' });
@@ -636,9 +651,11 @@ const multiB = DB.salesRepo.create({
 });
 const beforeMultiPayment = DB.customersRepo.getById(custId).balance;
 const cashSummaryBeforeDistributed = DB.cashRepo.getSessionCashSummary(cashSessionId);
+const distributedOperationId = `payment-distributed-${Date.now()}`;
 const distributed = DB.customersRepo.addPayment({
   customerId: custId, amount: 150, method: 'transferencia',
   note: 'abono multi-factura', userId, sessionId: cashSessionId,
+  operationId: distributedOperationId,
   allocations: [
     { saleId: multiA.saleId, amount: 100 },
     { saleId: multiB.saleId, amount: 50 },
@@ -648,6 +665,41 @@ ok(distributed.saleId === null && distributed.allocations.length === 2,
   'conserva un solo recibo con dos aplicaciones y sin una factura única');
 ok(near(DB.customersRepo.getById(custId).balance, beforeMultiPayment - 150),
   'el balance del cliente baja una sola vez por el total del recibo');
+const distributedRetry = DB.customersRepo.addPayment({
+  customerId: custId, amount: 150, method: 'transferencia',
+  note: 'abono multi-factura', userId, sessionId: cashSessionId,
+  operationId: distributedOperationId,
+  allocations: [
+    { saleId: multiA.saleId, amount: 100 },
+    { saleId: multiB.saleId, amount: 50 },
+  ],
+});
+ok(distributedRetry.idempotent === true
+  && Number(distributedRetry.paymentId) === Number(distributed.paymentId),
+  'un reintento de red reutiliza el mismo recibo de abono');
+const distributedRecovered = DB.customersRepo.getPaymentByOperationId(
+  distributedOperationId, custId
+);
+ok(distributedRecovered?.idempotent === true
+  && Number(distributedRecovered.paymentId) === Number(distributed.paymentId)
+  && distributedRecovered.status === 'active',
+  'puede consultar por operación un abono cuya respuesta se perdió');
+ok(near(DB.customersRepo.getById(custId).balance, beforeMultiPayment - 150)
+  && db.prepare('SELECT COUNT(*) count FROM payments WHERE operation_id=?')
+    .get(distributedOperationId).count === 1,
+  'el reintento idempotente no duplica deuda, caja ni recibos');
+throws(() => DB.customersRepo.addPayment({
+  customerId: custId, amount: 149, method: 'transferencia',
+  note: 'payload alterado', userId, sessionId: cashSessionId,
+  operationId: distributedOperationId,
+  allocations: [{ saleId: multiA.saleId, amount: 100 }, { saleId: multiB.saleId, amount: 49 }],
+}), 'una clave idempotente no puede reutilizarse con otro monto');
+throws(() => DB.customersRepo.addPayment({
+  customerId: custId, amount: 150, method: 'transferencia',
+  note: 'abono multi-factura', userId, sessionId: cashSessionId,
+  operationId: distributedOperationId,
+  allocations: [{ saleId: multiA.saleId, amount: 90 }, { saleId: multiB.saleId, amount: 60 }],
+}), 'una clave idempotente tampoco permite cambiar la distribución entre facturas');
 ok(db.prepare('SELECT COUNT(*) count FROM payment_allocations WHERE payment_id=?').get(distributed.paymentId).count === 2,
   'guarda las dos facturas en la tabla de distribución');
 ok(DB.customersRepo.getAllPayments()
@@ -678,6 +730,10 @@ const voidedDistributed = DB.customersRepo.cancelPayment({
   userName: user.name,
   sessionId: cashSessionId,
 });
+const voidedDistributedStatus = DB.customersRepo.getPaymentStatus(distributed.paymentId);
+ok(voidedDistributedStatus?.status === 'cancelled'
+  && near(voidedDistributedStatus.restoredBalance, voidedDistributed.restoredBalance),
+  'la recuperación de anulación consulta el estado y balance ya confirmados');
 const cancelledPayment = db.prepare('SELECT * FROM payments WHERE id=?').get(distributed.paymentId);
 ok(cancelledPayment.status === 'cancelled'
   && cancelledPayment.void_reason === 'Monto registrado por error'

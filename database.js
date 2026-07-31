@@ -7,6 +7,7 @@
 const Database = require('better-sqlite3');
 const path     = require('path');
 const fs       = require('fs');
+const crypto   = require('crypto');
 const bcrypt   = require('bcryptjs');
 const { app }  = require('electron');
 const { todayStr, nowStr, addDaysStr } = require('./lib/dates');
@@ -566,6 +567,8 @@ function createTables() {
       print_profile_id TEXT DEFAULT '',
       print_copies    INTEGER DEFAULT 1,
       print_action    TEXT DEFAULT 'print',
+      operation_id    TEXT DEFAULT '',
+      operation_fingerprint TEXT DEFAULT '',
       cancelled_at    TEXT,
       cancel_reason   TEXT DEFAULT '',
       original_sale_id INTEGER,
@@ -622,6 +625,7 @@ function createTables() {
       exchange_rate REAL DEFAULT 1,
       account_amount REAL DEFAULT 0,
       payment_reference TEXT DEFAULT '',
+      operation_id    TEXT DEFAULT '',
       created_at      TEXT DEFAULT (datetime('now','localtime'))
     );
 
@@ -1092,6 +1096,8 @@ function migrateCustomerCompanies() {
     ['customer_branch_code', "TEXT DEFAULT ''"],
     ['customer_branch_address', "TEXT DEFAULT ''"],
     ['customer_branch_phone', "TEXT DEFAULT ''"],
+    ['operation_id', "TEXT DEFAULT ''"],
+    ['operation_fingerprint', "TEXT DEFAULT ''"],
   ];
   for (const [col, def] of customerCols) {
     try { db.prepare(`ALTER TABLE customers ADD COLUMN ${col} ${def}`).run(); }
@@ -1100,6 +1106,13 @@ function migrateCustomerCompanies() {
   for (const [col, def] of saleCols) {
     try { db.prepare(`ALTER TABLE sales ADD COLUMN ${col} ${def}`).run(); }
     catch { /* ya existe */ }
+  }
+  try {
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uidx_sales_operation_id
+      ON sales(operation_id)
+      WHERE operation_id IS NOT NULL AND TRIM(operation_id)<>''`);
+  } catch (e) {
+    console.warn('[Sales] No se pudo asegurar idempotencia:', e.message);
   }
   const paymentCols = [
     ['customer_contact_id', 'INTEGER'],
@@ -1120,11 +1133,22 @@ function migrateCustomerCompanies() {
     ['exchange_rate', 'REAL DEFAULT 1'],
     ['account_amount', 'REAL DEFAULT 0'],
     ['payment_reference', "TEXT DEFAULT ''"],
+    ['operation_id', "TEXT DEFAULT ''"],
   ];
   if (tableExists('payments')) {
     for (const [col, def] of paymentCols) {
       try { db.prepare(`ALTER TABLE payments ADD COLUMN ${col} ${def}`).run(); }
       catch { /* ya existe */ }
+    }
+    // Una confirmación cuyo resultado se perdió por red puede reintentarse con
+    // el mismo operation_id sin cobrar dos veces. Los registros históricos no
+    // llevan clave y, por tanto, no se ven afectados.
+    try {
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uidx_payments_operation_id
+        ON payments(operation_id)
+        WHERE operation_id IS NOT NULL AND TRIM(operation_id)<>''`);
+    } catch (e) {
+      console.warn('[Payments] No se pudo asegurar idempotencia:', e.message);
     }
   }
   // Conduce se crea mediante versioning en instalaciones nuevas. En bases que
@@ -2716,6 +2740,95 @@ function hydratePaymentAllocations(payment) {
   };
 }
 
+function normalizeOperationId(value) {
+  return String(value || '').replace(/[^a-zA-Z0-9:_-]/g, '').slice(0, 100);
+}
+
+function canonicalPaymentAllocations(allocations, saleId = null, amount = 0) {
+  const totals = new Map();
+  for (const row of allocations || []) {
+    const id = Number(row?.saleId ?? row?.sale_id);
+    const value = round2(Number(row?.amount) || 0);
+    if (id > 0 && value > 0) totals.set(id, round2((totals.get(id) || 0) + value));
+  }
+  if (!totals.size && Number(saleId) > 0) totals.set(Number(saleId), round2(Number(amount) || 0));
+  return [...totals.entries()].sort((a, b) => a[0] - b[0]);
+}
+
+function paymentOperationFingerprint({
+  customerId, amount, method, note, saleId, allocations, contactId,
+  replacesPaymentId, financialAccountId, exchangeRate, paymentReference,
+}) {
+  const canonical = {
+    customerId: Number(customerId),
+    amount: round2(Number(amount) || 0),
+    method: String(method || 'efectivo').trim().toLowerCase(),
+    allocations: canonicalPaymentAllocations(allocations, saleId, amount),
+    contactId: Number(contactId) || null,
+    replacesPaymentId: Number(replacesPaymentId) || null,
+    financialAccountId: Number(financialAccountId) || null,
+    exchangeRate: round2(Number(exchangeRate) || 1),
+    reference: String(paymentReference || note || '').replace(/\s+/g, ' ').trim().slice(0, 120),
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
+function paymentConfirmationResult(payment, { idempotent = false } = {}) {
+  if (!payment) return null;
+  const hydrated = hydratePaymentAllocations(payment);
+  return {
+    before: Number(payment.balance_before || 0),
+    after: Number(payment.balance_after || 0),
+    amount: Number(payment.amount || 0),
+    paymentId: Number(payment.id),
+    saleId: payment.sale_id ? Number(payment.sale_id) : null,
+    sale_document_number_fmt: payment.sale_document_number_fmt || '',
+    sale_numero_factura: payment.sale_numero_factura ?? null,
+    sale_numero_factura_fmt: payment.sale_numero_factura_fmt || '',
+    document_kind: payment.document_kind || 'abono',
+    document_number: payment.document_number,
+    document_number_fmt: payment.document_number_fmt || '',
+    numero_recibo: payment.numero_recibo,
+    customer_contact_id: payment.customer_contact_id || null,
+    customer_contact_name: payment.customer_contact_name || '',
+    customer_contact_document: payment.customer_contact_document || '',
+    customer_contact_role: payment.customer_contact_role || '',
+    customer_contact_phone: payment.customer_contact_phone || '',
+    cash_session_id: payment.cash_session_id || null,
+    created_at: payment.created_at || '',
+    financial_account_id: payment.financial_account_id || null,
+    payment_currency: payment.payment_currency || 'DOP',
+    exchange_rate: Number(payment.exchange_rate || 1),
+    account_amount: Number(payment.account_amount || 0),
+    payment_reference: payment.payment_reference || '',
+    replaces_payment_id: payment.replaces_payment_id || null,
+    allocations: hydrated.allocations || [],
+    operation_id: payment.operation_id || '',
+    status: String(payment.status || 'active').toLowerCase(),
+    idempotent,
+  };
+}
+
+function findPaymentByOperationId(operationId, customerId = null) {
+  operationId = normalizeOperationId(operationId);
+  if (!operationId) return null;
+  const params = [operationId];
+  let customerFilter = '';
+  if (customerId != null) {
+    customerFilter = 'AND p.customer_id=?';
+    params.push(Number(customerId));
+  }
+  return db.prepare(`
+    SELECT p.*,s.document_number_fmt AS sale_document_number_fmt,
+           s.numero_factura AS sale_numero_factura,
+           s.numero_factura_fmt AS sale_numero_factura_fmt
+    FROM payments p
+    LEFT JOIN sales s ON s.id=p.sale_id
+    WHERE p.operation_id=? ${customerFilter}
+    LIMIT 1
+  `).get(...params) || null;
+}
+
 const customersRepo = {
   getAll() {
     return db.prepare('SELECT * FROM customers WHERE active=1 ORDER BY name').all()
@@ -2895,8 +3008,48 @@ const customersRepo = {
     customerId, amount, method, note, saleId = null, allocations = null,
     contactId = null, cajero = '', userId = null, sessionId = null,
     replacesPaymentId = null, financialAccountId = null,
-    exchangeRate = 1, paymentReference = ''
+    exchangeRate = 1, paymentReference = '', operationId = ''
   }) {
+    operationId = normalizeOperationId(operationId);
+    if (operationId) {
+      const previous = findPaymentByOperationId(operationId);
+      if (previous) {
+        if (String(previous.status || 'active').toLowerCase() !== 'active') {
+          throw new Error('Esta confirmación corresponde a un abono que ya fue anulado');
+        }
+        const previousAllocations = hydratePaymentAllocations(previous).allocations;
+        const requestedAllocations = Array.isArray(allocations) && allocations.length
+          ? allocations
+          : (saleId ? null : previousAllocations);
+        // Cuando el usuario no elige una cuenta, el backend selecciona la
+        // cuenta DOP compatible. En el reintento se compara contra esa decisión
+        // ya confirmada, sin aceptar una cuenta explícita diferente.
+        const requestedFinancialAccountId = Number(financialAccountId) || null;
+        const requestedFingerprint = paymentOperationFingerprint({
+          customerId, amount, method, note, saleId,
+          allocations: requestedAllocations, contactId, replacesPaymentId,
+          financialAccountId: requestedFinancialAccountId || previous.financial_account_id,
+          exchangeRate, paymentReference,
+        });
+        const storedFingerprint = paymentOperationFingerprint({
+          customerId: previous.customer_id,
+          amount: previous.amount,
+          method: previous.method,
+          note: previous.note,
+          saleId: previous.sale_id,
+          allocations: previousAllocations,
+          contactId: previous.customer_contact_id,
+          replacesPaymentId: previous.replaces_payment_id,
+          financialAccountId: previous.financial_account_id,
+          exchangeRate: previous.exchange_rate,
+          paymentReference: previous.payment_reference,
+        });
+        if (requestedFingerprint !== storedFingerprint) {
+          throw new Error('La operación ya fue confirmada con otros datos; actualiza el historial antes de continuar');
+        }
+        return paymentConfirmationResult(previous, { idempotent: true });
+      }
+    }
     // VALIDACIONES: prevenir abonos inválidos que corrompan el balance
     amount = round2(Number(amount));
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -3052,14 +3205,15 @@ const customersRepo = {
           customer_id,sale_id,amount,method,note,balance_before,balance_after,cajero,user_id,cash_session_id,
           customer_contact_id,customer_contact_name,customer_contact_document,customer_contact_role,
           customer_contact_phone,customer_contact_email,replaces_payment_id,
-          financial_account_id,payment_currency,exchange_rate,account_amount,payment_reference,created_at
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
+          financial_account_id,payment_currency,exchange_rate,account_amount,payment_reference,
+          operation_id,created_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
       `).run(
         customerId, saleId, amount, method, note||'Abono', before, after, cajero, userId, sessionId || null,
         contact?.id || null, contact?.name || '', contact?.document || '', contact?.role || '',
         contact?.phone || '', contact?.email || '', replacesPaymentId,
         financialAccount?.id || null, paymentCurrency, exchangeRate, accountAmount,
-        String(paymentReference || note || '').trim().slice(0, 120)
+        String(paymentReference || note || '').trim().slice(0, 120), operationId
       );
       const paymentId = payInsert.lastInsertRowid;
       if (normalizedAllocations.length) {
@@ -3131,11 +3285,14 @@ const customersRepo = {
         customer_contact_role: contact?.role || '',
         customer_contact_phone: contact?.phone || '',
         customer_contact_email: contact?.email || '',
+        cash_session_id: sessionId || null,
+        created_at: db.prepare('SELECT created_at FROM payments WHERE id=?').get(paymentId)?.created_at || '',
         financial_account_id: financialAccount?.id || null,
         payment_currency: paymentCurrency,
         exchange_rate: exchangeRate,
         account_amount: accountAmount,
         payment_reference: String(paymentReference || note || '').trim().slice(0, 120),
+        operation_id: operationId,
         replaces_payment_id: replacesPaymentId,
         replaces_payment_document_number_fmt:
           replacedPayment?.document_number_fmt ||
@@ -3158,6 +3315,30 @@ const customersRepo = {
       };
     });
     return payTx();
+  },
+  getPaymentByOperationId(operationId, customerId = null) {
+    const payment = findPaymentByOperationId(operationId, customerId);
+    if (!payment) return null;
+    return paymentConfirmationResult(payment, { idempotent: true });
+  },
+  getPaymentStatus(id) {
+    const payment = db.prepare(`
+      SELECT p.*,c.balance AS customer_balance,c.credit_due AS customer_credit_due
+      FROM payments p
+      JOIN customers c ON c.id=p.customer_id
+      WHERE p.id=?
+    `).get(Number(id));
+    if (!payment) return null;
+    return {
+      id: Number(payment.id),
+      customerId: Number(payment.customer_id),
+      status: String(payment.status || 'active').toLowerCase(),
+      amount: Number(payment.amount || 0),
+      restoredBalance: Number(payment.customer_balance || 0),
+      restoredDue: payment.customer_credit_due || null,
+      documentNumber: payment.document_number_fmt || '',
+      allocations: hydratePaymentAllocations(payment).allocations || [],
+    };
   },
   cancelPayment({
     id, reason, userId = null, userName = '', sessionId = null
@@ -3663,11 +3844,140 @@ const cashRepo = {
   },
 };
 
+function saleOperationFingerprint({ customer, items, payment, type }) {
+  const canonical = {
+    type: String(type || 'factura'),
+    customer: {
+      id: Number(customer?.id) || 1,
+      contactId: Number(customer?.contact_id ?? customer?.contact?.id) || null,
+      branchId: Number(customer?.branch_id ?? customer?.branch?.id) || null,
+      name: String(customer?.name || '').replace(/\s+/g, ' ').trim(),
+      rnc: String(customer?.rnc || '').replace(/\D/g, ''),
+    },
+    items: (items || []).map(item => ({
+      productId: Number(item.product_id),
+      qty: Number(item.qty),
+      unitPrice: round2(Number(item.unit_price)),
+      taxable: item.taxable === 0 || item.taxable === false || item.taxable === '0' ? 0 : 1,
+      taxPct: round2(Number(item.tax_pct) || 0),
+    })),
+    payment: {
+      method: String(payment?.method || 'efectivo').toLowerCase(),
+      disc: round2(Number(payment?.disc) || 0),
+      priceMode: String(payment?.priceMode || 'retail'),
+      mixEfec: round2(Number(payment?.mixEfec) || 0),
+      mixCard: round2(Number(payment?.mixCard) || 0),
+      financialAccountId: Number(payment?.financialAccountId) || null,
+      exchangeRate: round2(Number(payment?.exchangeRate) || 1),
+      cardBrand: String(payment?.cardBrand || '').trim().toLowerCase(),
+      cardLast4: String(payment?.cardLast4 || '').replace(/\D/g, '').slice(-4),
+      reference: String(payment?.reference || '').replace(/\s+/g, ' ').trim(),
+      salespersonId: Number(payment?.salespersonId) || null,
+      initialPaymentAmount: round2(Number(payment?.initialPaymentAmount) || 0),
+      initialPaymentMethod: String(payment?.initialPaymentMethod || 'efectivo').toLowerCase(),
+      initialPaymentFinancialAccountId: Number(payment?.initialPaymentFinancialAccountId) || null,
+      initialPaymentExchangeRate: round2(Number(payment?.initialPaymentExchangeRate) || 1),
+      initialPaymentReference: String(payment?.initialPaymentReference || '').replace(/\s+/g, ' ').trim(),
+      replacesSaleId: Number(payment?.replacesSaleId) || null,
+      saleDate: String(payment?.saleDate || '').trim(),
+      notes: String(payment?.notes || '').replace(/\s+/g, ' ').trim(),
+      displayCurrency: String(payment?.displayCurrency || 'DOP').toUpperCase(),
+      displayExchangeRate: round2(Number(payment?.displayExchangeRate) || 1),
+      charges: (payment?.charges || []).map(row => ({
+        description: String(row?.description || '').replace(/\s+/g, ' ').trim(),
+        amount: round2(Number(row?.amount) || 0),
+      })),
+    },
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
+function saleConfirmationResult(sale, { idempotent = false } = {}) {
+  if (!sale) return null;
+  const initialPayment = db.prepare(`
+    SELECT id,amount,method
+    FROM payments
+    WHERE sale_id=? AND note='Pago inicial de factura a crédito'
+      AND COALESCE(status,'active')='active'
+    ORDER BY id LIMIT 1
+  `).get(sale.id);
+  return {
+    saleId: Number(sale.id),
+    total: Number(sale.total || 0),
+    subtotal: Number(sale.subtotal || 0),
+    taxAmt: Number(sale.tax_amt || 0),
+    discAmt: Number(sale.discount_amt || 0),
+    taxPct: Number(sale.tax_pct || 0),
+    ncf: sale.ncf || '',
+    documentKind: sale.document_kind || '',
+    documentNumber: sale.document_number,
+    documentNumberFmt: sale.document_number_fmt || '',
+    receiptDocumentNumber: sale.receipt_document_number,
+    receiptDocumentNumberFmt: sale.receipt_document_number_fmt || '',
+    financialAccountId: sale.financial_account_id || null,
+    paymentCurrency: sale.payment_currency || 'DOP',
+    exchangeRate: Number(sale.exchange_rate || 1),
+    accountAmount: Number(sale.account_amount || 0),
+    salespersonId: sale.salesperson_id || null,
+    additionalChargesTotal: Number(sale.additional_charges_total || 0),
+    displayCurrency: sale.display_currency || 'DOP',
+    displayExchangeRate: Number(sale.display_exchange_rate || 1),
+    displayAmount: Number(sale.display_amount || 0),
+    cardBrand: sale.card_brand || '',
+    cardLast4: sale.card_last4 || '',
+    paymentReference: sale.payment_reference || '',
+    initialPaymentId: initialPayment?.id || null,
+    initialPaymentAmount: Number(initialPayment?.amount || 0),
+    initialPaymentMethod: initialPayment?.method || '',
+    outstandingBalance: sale.payment_method === 'credito'
+      ? Math.max(0, round2(Number(sale.total || 0) - Number(initialPayment?.amount || 0)))
+      : 0,
+    replacesSaleId: sale.replaces_sale_id || null,
+    reusedDocumentNumber: !!sale.replaces_sale_id,
+    operationId: sale.operation_id || '',
+    idempotent,
+  };
+}
+
+function findConfirmedSaleOperation({ operationId = '', customer, items, payment, type = 'factura' }) {
+  operationId = normalizeOperationId(operationId);
+  if (!operationId) return null;
+  const previous = db.prepare('SELECT * FROM sales WHERE operation_id=?').get(operationId);
+  if (!previous) return null;
+  if (String(previous.status || 'completed') === 'cancelled') {
+    throw new Error('Esta confirmación corresponde a una venta que ya fue anulada');
+  }
+  const fingerprint = saleOperationFingerprint({ customer, items, payment, type });
+  if (previous.operation_fingerprint !== fingerprint) {
+    throw new Error('La operación ya fue confirmada con otros datos; actualiza Ventas antes de continuar');
+  }
+  return saleConfirmationResult(previous, { idempotent: true });
+}
+
 // ── Ventas ────────────────────────────────────
 const salesRepo = {
+  getConfirmationById(id, { idempotent = true } = {}) {
+    const sale = db.prepare('SELECT * FROM sales WHERE id=?').get(Number(id));
+    return sale ? saleConfirmationResult(sale, { idempotent }) : null;
+  },
+  getConfirmedOperation({ operationId = '', customer, items, payment, type = 'factura' }) {
+    return findConfirmedSaleOperation({ operationId, customer, items, payment, type });
+  },
   // Transacción completa de venta
-  create({ session, customer, items, payment, user, type = 'factura', trustedCustomerSnapshot = false }) {
+  create({
+    session, customer, items, payment, user, type = 'factura',
+    trustedCustomerSnapshot = false, operationId = ''
+  }) {
+    operationId = normalizeOperationId(operationId);
+    const operationFingerprint = operationId
+      ? saleOperationFingerprint({ customer, items, payment, type }) : '';
     const createSaleTx = db.transaction(() => {
+      if (operationId) {
+        const confirmed = findConfirmedSaleOperation({
+          operationId, customer, items, payment, type,
+        });
+        if (confirmed) return confirmed;
+      }
       if (!['factura', 'cotizacion'].includes(type)) {
         throw new Error('Tipo de documento de venta no soportado');
       }
@@ -4039,7 +4349,8 @@ const salesRepo = {
           payment_currency,exchange_rate,account_amount,card_brand,card_last4,
           additional_charges_total,display_currency,display_exchange_rate,display_amount,
           print_template_id,print_printer_type,print_printer_name,print_profile_id,print_copies,print_action,
-          payment_reference,notes,created_at,original_sale_date,sale_date,updated_at)
+          payment_reference,notes,operation_id,operation_fingerprint,
+          created_at,original_sale_date,sale_date,updated_at)
         VALUES(
           @cash_session_id,@customer_id,@customer_name,@customer_rnc,
           @customer_type,@customer_trade_name,@customer_address,@customer_phone,@customer_phone_type,@customer_email,
@@ -4051,7 +4362,8 @@ const salesRepo = {
           @payment_currency,@exchange_rate,@account_amount,@card_brand,@card_last4,
           @additional_charges_total,@display_currency,@display_exchange_rate,@display_amount,
           @print_template_id,@print_printer_type,@print_printer_name,@print_profile_id,@print_copies,@print_action,
-          @payment_reference,@notes,@created_at,@original_sale_date,@sale_date,@created_at
+          @payment_reference,@notes,@operation_id,@operation_fingerprint,
+          @created_at,@original_sale_date,@sale_date,@created_at
         )
       `).run({
         cash_session_id: session?.id || null,
@@ -4092,6 +4404,8 @@ const salesRepo = {
         print_action: payment.printAction === 'none' ? 'none' : 'print',
         card_brand: cardBrand, card_last4: cardLast4, payment_reference: paymentReference,
         notes: String(payment.notes || '').trim().slice(0, 1000),
+        operation_id: operationId,
+        operation_fingerprint: operationFingerprint,
         created_at: db.prepare("SELECT datetime('now','localtime') AS value").get().value,
         original_sale_date: requestedSaleDate || db.prepare("SELECT date('now','localtime') AS value").get().value,
         sale_date: requestedSaleDate || db.prepare("SELECT date('now','localtime') AS value").get().value,
@@ -4347,6 +4661,8 @@ const salesRepo = {
         outstandingBalance,
         replacesSaleId,
         reusedDocumentNumber: !!documentIssue.reused,
+        operationId,
+        idempotent: false,
       };
     });
 
