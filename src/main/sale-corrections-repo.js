@@ -435,11 +435,31 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
     const ecf = ecfState(sale.id);
     const commissions = commissionLinks(sale.id);
     const payments = db().prepare(`
-      SELECT COUNT(*) count,COALESCE(SUM(amount),0) total,
+      SELECT COUNT(*) count,
+             COALESCE(SUM(
+               CASE WHEN EXISTS(
+                 SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=payments.id
+               ) THEN COALESCE((
+                 SELECT pa.amount FROM payment_allocations pa
+                 WHERE pa.payment_id=payments.id AND pa.sale_id=?
+               ),0) ELSE amount END
+             ),0) total,
              MAX(created_at) last_payment_at
       FROM payments
-      WHERE sale_id=? AND COALESCE(status,'active')='active'
-    `).get(sale.id);
+      WHERE COALESCE(status,'active')='active'
+        AND (
+          (
+            sale_id=?
+            AND NOT EXISTS(
+              SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=payments.id
+            )
+          )
+          OR EXISTS(
+            SELECT 1 FROM payment_allocations pa
+            WHERE pa.payment_id=payments.id AND pa.sale_id=?
+          )
+        )
+    `).get(sale.id, sale.id, sale.id);
     const returns = db().prepare(`
       SELECT COUNT(*) count,COALESCE(SUM(total),0) total
       FROM sales
@@ -1516,11 +1536,30 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
       ORDER BY created_at,id
     `).all(sale.id, sale.id);
     const payments = db().prepare(`
-      SELECT id,amount,method,created_at,document_number_fmt
+      SELECT payments.id,
+             CASE WHEN EXISTS(
+               SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=payments.id
+             ) THEN COALESCE((
+               SELECT pa.amount FROM payment_allocations pa
+               WHERE pa.payment_id=payments.id AND pa.sale_id=?
+             ),0) ELSE payments.amount END amount,
+             payments.amount payment_total,method,created_at,document_number_fmt
       FROM payments
-      WHERE sale_id=? AND COALESCE(status,'active')='active'
+      WHERE COALESCE(status,'active')='active'
+        AND (
+          (
+            sale_id=?
+            AND NOT EXISTS(
+              SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=payments.id
+            )
+          )
+          OR EXISTS(
+            SELECT 1 FROM payment_allocations pa
+            WHERE pa.payment_id=payments.id AND pa.sale_id=?
+          )
+        )
       ORDER BY created_at,id
-    `).all(sale.id);
+    `).all(sale.id, sale.id, sale.id);
     const commissionAdjustments = _tableExists(db(), 'commission_adjustments')
       ? db().prepare('SELECT * FROM commission_adjustments WHERE sale_id=? ORDER BY created_at,id').all(sale.id)
       : [];

@@ -103,6 +103,7 @@ function openEventStream({ host, port, accessKey, terminalId, businessId, onEven
   let stopped = false;
   let req = null;
   let reconnecting = false;
+  let hasConnected = false;
 
   const scheduleReconnect = () => {
     if (stopped || reconnecting) return;
@@ -128,7 +129,9 @@ function openEventStream({ host, port, accessKey, terminalId, businessId, onEven
           try { onStatus && onStatus({ ok: false, code: res.statusCode }); } catch {}
           return scheduleReconnect();
         }
-        try { onStatus && onStatus({ ok: true }); } catch {}
+        const reconnected = hasConnected;
+        hasConnected = true;
+        try { onStatus && onStatus({ ok: true, reconnected }); } catch {}
         res.setEncoding('utf8');
         let buf = '';
         res.on('data', (chunk) => {

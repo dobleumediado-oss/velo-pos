@@ -236,6 +236,14 @@ test('mantiene compatibilidad con perfiles históricos de ticket', () => {
   assert.strictEqual(resolvePrinterProfile('HP LaserJet', 'ticket', {}).kind, 'sheet');
 });
 
+test('Epson ET-4810 WiFi se detecta como hoja y corrige un perfil térmico heredado', () => {
+  assert.strictEqual(inferPrinterProfileId('ET-4810 Series WiFi', 'ticket'), 'sheet');
+  assert.strictEqual(resolvePrinterProfile('EPSON ET-4810 Series WiFi', 'ticket', {
+    printer_profile: 'ticket_80',
+    printer_width_mm: '80',
+  }).kind, 'sheet');
+});
+
 test('el módulo de etiquetas no hereda la impresora de facturas ni permite salida implícita', () => {
   const barcodeSource = fs.readFileSync(path.join(__dirname, '../src/js/barcode.js'), 'utf8');
   const designerSource = fs.readFileSync(path.join(__dirname, '../src/js/barcode-designer.js'), 'utf8');
@@ -317,11 +325,23 @@ test('el cobro VELO resuelve la salida sin mezclar etiquetadoras', () => {
   const databaseSource = fs.readFileSync(path.join(__dirname, '../database.js'), 'utf8');
   const mainSource = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
   assert.ok(posSource.includes('function posRenderPrintOutput'));
-  assert.ok(posSource.includes('Guardar sin imprimir'));
+  assert.ok(posSource.includes('Guardar sin abrir documento'));
+  assert.ok(posSource.includes('Mostrar documento'));
   assert.ok(posSource.includes("return !['high', 'medium'].includes(confidence)"));
   assert.ok(databaseSource.includes("'print_printer_name'"));
   assert.ok(databaseSource.includes("'print_copies'"));
   assert.ok(mainSource.includes('copies: Math.max(1, Math.min(9'));
+});
+
+test('ningún documento se imprime automáticamente antes del botón del display', () => {
+  const printSource = fs.readFileSync(path.join(__dirname, '../src/js/print.js'), 'utf8');
+  const posSource = fs.readFileSync(path.join(__dirname, '../src/js/pos.js'), 'utf8');
+  assert.ok(printSource.includes('const shouldPreview = true'));
+  assert.ok(printSource.includes('ningún documento se envía automáticamente al spooler'));
+  assert.ok(printSource.includes('solo el botón Imprimir del display despacha el trabajo'));
+  assert.ok(printSource.includes('if (!window._printPreviewBypass)'));
+  assert.ok(!posSource.includes('Imprimir automáticamente'));
+  assert.ok(!posSource.includes('autoPrint: true'));
 });
 
 test('monitorea impresoras y vuelve a validarlas inmediatamente antes del envío', () => {

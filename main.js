@@ -47,6 +47,9 @@ const { isAllowedExternalUrl } = require('./lib/url-safe');
 const { buildWhatsAppUrls } = require('./lib/whatsapp-url');
 const { checkLoginRate: _checkLoginRate, recordLoginFail: _recordLoginFail, clearLoginRate: _clearLoginRate } = require('./lib/login-rate-limit');
 const businessCtx = require('./src/main/business-context');
+const {
+  inferPrinterProfileId,
+} = require('./src/js/printer-profiles');
 
 function _runtimeArg(name) {
   const prefix = `--${name}=`;
@@ -165,7 +168,7 @@ const {
   salesRepo, returnsRepo, reportsRepo, suppliersRepo, purchasesRepo, audit,
   expensesRepo, branchesRepo, vehiclesRepo, maintenanceRepo, deliveriesRepo, ncfRepo,
   financialAccountsRepo, bankReconRepo, accountingRepo, fixedAssetsRepo, conduceRepo, documentNumberRepo, salespeopleRepo,
-  checkoutOrdersRepo, saleCorrectionsRepo
+  checkoutOrdersRepo, saleCorrectionsRepo, ensureUppercasePersistence
 } = require('./database');
 
 const {
@@ -846,15 +849,14 @@ ipcMain.handle('settings:set', async (_, { key, value, requestUserId }) => {
   // de red (multi-terminal): modo servidor/cliente, IP, puerto, clave — decisión
   // de nivel superadmin.
   const SUPERADMIN_KEYS = /^(module_|barcode_enabled$|fiscal_enabled$|.*_roles$|checkout_|license_|master_|multi_negocio|connection_)/;
-  // Claves que requieren al menos rol admin
-  const ADMIN_KEYS = /^(biz_|tax_pct$|receipt_msg$|pos_|print_|printer|biz_logo$)/;
-
   if (key === 'pos_price_change_password_hash') {
     return { ok: false, error: 'Usa el panel de clave especial para actualizar este valor' };
   }
 
   const needsSA    = SUPERADMIN_KEYS.test(key);
-  const needsAdmin = !needsSA && ADMIN_KEYS.test(key);
+  // Defensa por defecto: toda clave desconocida requiere administrador. Las
+  // configuraciones no son un almacén libre escribible desde el renderer.
+  const needsAdmin = !needsSA;
 
   if (needsSA || needsAdmin) {
     if (!requestUserId) return { ok: false, error: 'Se requiere autenticación para cambiar esta configuración' };
@@ -1638,11 +1640,17 @@ ipcMain.handle('customers:cancelPayment', async (_, { id, reason, requestUserId 
     });
     audit(
       reqUser.id, reqUser.name, 'abono_anulado', 'payments', Number(id),
-      `Monto: ${result.amount} | Balance restaurado: ${result.restoredBalance} | Motivo: ${cleanReason}`
+      JSON.stringify({
+        document: result.documentNumber || '',
+        amount: result.amount,
+        method: result.method,
+        restoredBalance: result.restoredBalance,
+        cashSessionId: result.cashSessionId,
+        financialAccountId: result.financialAccountId,
+        allocations: result.allocations || [],
+        reason: cleanReason,
+      })
     );
-    _acctHook(() => accountingRepo.reverseSourceEntry(
-      'abono', Number(id), reqUser.id, `Abono anulado: ${cleanReason}`
-    ));
     return { ok: true, ...result };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -1679,13 +1687,29 @@ ipcMain.handle('customers:deleteAll', async (_, { requestUserId }) => {
   }
 });
 
-ipcMain.handle('customers:getPayments', async (_, { customerId }) => {
+ipcMain.handle('customers:getPayments', async (_, {
+  customerId, includeCancelled = false, requestUserId = null
+}) => {
   if (!customerId || customerId === 0) return [];
-  return customersRepo.getPayments(customerId);
+  if (includeCancelled === true) {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) {
+      throw new Error('Solo administradores pueden consultar abonos anulados');
+    }
+  }
+  return customersRepo.getPayments(customerId, { includeCancelled: includeCancelled === true });
 });
 
-ipcMain.handle('customers:getAllPayments', async () => {
-  return customersRepo.getAllPayments();
+ipcMain.handle('customers:getAllPayments', async (_, {
+  includeCancelled = false, requestUserId = null
+} = {}) => {
+  if (includeCancelled === true) {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) {
+      throw new Error('Solo administradores pueden consultar abonos anulados');
+    }
+  }
+  return customersRepo.getAllPayments({ includeCancelled: includeCancelled === true });
 });
 
 ipcMain.handle('customers:getHistory', async (_, { customerId }) => {
@@ -1762,6 +1786,15 @@ ipcMain.handle('cash:getSessionCashSummary', async (_, { sessionId }) => {
     return cashRepo.getSessionCashSummary(sessionId);
   } catch (e) {
     console.error('[cash:getSessionCashSummary]', e);
+    return null;
+  }
+});
+
+ipcMain.handle('cash:getSessionReport', async (_, { sessionId }) => {
+  try {
+    return cashRepo.getSessionReport(sessionId);
+  } catch (e) {
+    console.error('[cash:getSessionReport]', e);
     return null;
   }
 });
@@ -2437,28 +2470,82 @@ ipcMain.handle('reports:creditAlerts', async () => {
 });
 
 // ── Auditoría ─────────────────────────────────
-ipcMain.handle('audit:getLogs', async (_, { limit = 200, action, entity } = {}) => {
+function _auditReader(requestUserId) {
+  const reqUser = authRepo.findById(requestUserId);
+  if (!reqUser || reqUser.active === 0 ||
+      !['admin', 'superadmin'].includes(reqUser.role)) {
+    throw new Error('Solo administradores pueden consultar Auditoría');
+  }
+  return reqUser;
+}
+
+function _auditPage({ limit = 100, offset = 0, action, entity } = {}) {
+  const dbInst = require('./database').getDB();
+  const safeLimit = Math.max(1, Math.min(200, Number(limit) || 100));
+  const safeOffset = Math.max(0, Number(offset) || 0);
+  let whereSql = '';
+  const params = [];
+  const where = [];
+  if (action) { where.push('action LIKE ?'); params.push(`%${String(action).slice(0, 80)}%`); }
+  if (entity) { where.push('entity=?'); params.push(String(entity).slice(0, 80)); }
+  if (where.length) whereSql = ' WHERE ' + where.join(' AND ');
+  const total = dbInst.prepare(`SELECT COUNT(*) count FROM audit_logs${whereSql}`)
+    .get(...params)?.count || 0;
+  const rows = dbInst.prepare(`
+    SELECT * FROM audit_logs${whereSql}
+    ORDER BY id DESC LIMIT ? OFFSET ?
+  `).all(...params, safeLimit, safeOffset);
+  return {
+    rows,
+    total,
+    offset: safeOffset,
+    nextOffset: safeOffset + rows.length < total ? safeOffset + rows.length : null,
+  };
+}
+
+ipcMain.handle('audit:getLogs', async (_, {
+  limit = 200, offset = 0, action, entity, requestUserId
+} = {}) => {
   try {
-    const dbInst = require('./database').getDB();
-    let query  = 'SELECT * FROM audit_logs';
-    const params = [];
-    const where  = [];
-    if (action) { where.push('action LIKE ?'); params.push(`%${action}%`); }
-    if (entity) { where.push('entity=?');      params.push(entity); }
-    if (where.length) query += ' WHERE ' + where.join(' AND ');
-    query += ' ORDER BY id DESC LIMIT ?';
-    params.push(limit);
-    return dbInst.prepare(query).all(...params);
+    _auditReader(requestUserId);
+    return _auditPage({ limit, offset, action, entity }).rows;
   } catch (e) {
     return [];
   }
 });
 
-ipcMain.handle('audit:log', async (_, { action, entity, entityId, detail, userId } = {}) => {
+ipcMain.handle('audit:getLogsPage', async (_, {
+  limit = 100, offset = 0, action, entity, requestUserId
+} = {}) => {
+  try {
+    _auditReader(requestUserId);
+    return { ok: true, data: _auditPage({ limit, offset, action, entity }) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('audit:log', async (_, {
+  action, entity, entityId, detail, userId, requestUserId
+} = {}) => {
   try {
     if (!action) return { ok: false, error: 'action requerida' };
-    const reqUser = userId ? authRepo.findById(userId) : null;
-    audit(userId || 0, reqUser?.name || 'sistema', action, entity || '', entityId || null, detail || '');
+    const actorId = Number(requestUserId || userId) || null;
+    const reqUser = actorId ? authRepo.findById(actorId) : null;
+    if (!reqUser || reqUser.active === 0) {
+      return { ok: false, error: 'Usuario no válido para registrar Auditoría' };
+    }
+    const allowedRendererActions = new Set([
+      'barcode_printer_calibrated', 'barcode_print',
+      'barcode_design_saved', 'barcode_module_enabled',
+      'barcode_module_disabled', 'module_toggled',
+    ]);
+    if (!allowedRendererActions.has(String(action))) {
+      return { ok: false, error: 'La acción de auditoría debe registrarse desde su módulo de origen' };
+    }
+    audit(reqUser.id, reqUser.name, String(action).slice(0, 80),
+      String(entity || '').slice(0, 80), entityId || null,
+      String(detail || '').slice(0, 2000));
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -2671,11 +2758,43 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, printerHeigh
   }
 }
 
-ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, printerHeight, jobType, referenceId, userId, pageHint, copies }) => {
+ipcMain.handle('print:html', async (_, {
+  html, printerName, printerWidth, printerHeight, jobType, referenceId,
+  userId, pageHint, copies, userConfirmed = false
+}) => {
   try {
+    if (userConfirmed !== true) {
+      throw new Error('La impresión requiere confirmación explícita desde la vista previa');
+    }
+    const reqUser = userId ? authRepo.findById(userId) : null;
+    if (userId && (!reqUser || reqUser.active === 0)) {
+      throw new Error('Usuario no válido para imprimir');
+    }
+    if (jobType === 'abono' && referenceId) {
+      const payment = require('./database').getDB().prepare(
+        "SELECT status,document_number_fmt FROM payments WHERE id=?"
+      ).get(Number(referenceId));
+      if (!payment) throw new Error('El abono ya no existe');
+      if (String(payment.status || 'active').toLowerCase() !== 'active') {
+        throw new Error(
+          `El abono ${payment.document_number_fmt || '#' + referenceId} está anulado y no puede reimprimirse como vigente`
+        );
+      }
+    }
     if (jobType === 'barcode_labels' && !String(printerName || '').trim()) {
       throw new Error(
         'Selecciona una impresora de etiquetas; este trabajo no puede usar la impresora de documentos'
+      );
+    }
+    const inferredProfile = inferPrinterProfileId(printerName, 'ticket');
+    if (printerWidth && inferredProfile === 'sheet') {
+      throw new Error(
+        `La impresora “${String(printerName || '').trim()}” usa hojas; no acepta una plantilla térmica`
+      );
+    }
+    if (jobType === 'barcode_labels' && inferredProfile === 'sheet') {
+      throw new Error(
+        `La impresora “${String(printerName || '').trim()}” es de documentos y no puede usarse para etiquetas`
       );
     }
     try {
@@ -2727,8 +2846,13 @@ ipcMain.handle('print:html', async (_, { html, printerName, printerWidth, printe
 // cliente el interceptor reenvía esta llamada al servidor, que la ejecuta con SU
 // impresora configurada. Es la opción "imprimir por el servidor" cuando la terminal
 // no tiene impresora física. Ver docs/multi-terminal-sync.md §8.
-ipcMain.handle('print:onServer', async (_, { html, jobType, referenceId, userId, channel, copies } = {}) => {
+ipcMain.handle('print:onServer', async (_, {
+  html, jobType, referenceId, userId, channel, copies, userConfirmed = false
+} = {}) => {
   try {
+    if (userConfirmed !== true) {
+      throw new Error('La impresión requiere confirmación explícita del usuario');
+    }
     let bindings = {}, profiles = {};
     try { bindings = JSON.parse(settingsRepo.get('printer_channel_bindings') || '{}') || {}; } catch {}
     try { profiles = JSON.parse(settingsRepo.get('printer_channel_profiles') || '{}') || {}; } catch {}
@@ -2875,12 +2999,12 @@ ipcMain.handle('print:toPDF', async (_, { html, suggestedName, open, temporary }
       const shareDir = path.join(app.getPath('temp'), 'velo-pos-whatsapp');
       fs.mkdirSync(shareDir, { recursive: true });
       const base = safeName.toLowerCase().endsWith('.pdf') ? safeName : safeName + '.pdf';
-      const filePath = path.join(
-        shareDir,
-        `${path.basename(base, '.pdf')}-${Date.now()}.pdf`
-      );
+      // El número documental ya hace único el nombre. Mantenerlo exacto permite
+      // que, al guardarlo desde WhatsApp, conserve cliente/empresa + documento
+      // en vez de terminar con un timestamp técnico incomprensible.
+      const filePath = path.join(shareDir, base);
       fs.writeFileSync(filePath, pdfBuf);
-      return { ok: true, path: filePath, temporary: true };
+      return { ok: true, path: filePath, name: base, temporary: true };
     }
     const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
       title: 'Guardar PDF',
@@ -2964,8 +3088,8 @@ ipcMain.handle('print:saveConfig', async (_, { config, requestUserId }) => {
         template: String(value.template || '').trim().slice(0, 80),
         profileId: String(value.profileId || '').trim().slice(0, 80),
         copies: Math.max(1, Math.min(9, parseInt(value.copies, 10) || 1)),
-        preview: value.preview === true,
-        autoPrint: value.autoPrint !== false,
+        preview: true,
+        autoPrint: false,
       };
     });
     // Política global del negocio. Los nombres físicos de impresora viven en
@@ -3000,13 +3124,15 @@ ipcMain.handle('print:getJobs', async (_, { referenceId, jobType } = {}) => {
     const dbInst = require('./database').getDB();
     let query = 'SELECT * FROM print_jobs';
     const params = [];
+    const where = ['invalidated_at IS NULL'];
     if (referenceId && jobType) {
-      query += ' WHERE reference_id=? AND type=?';
+      where.push('reference_id=?', 'type=?');
       params.push(referenceId, jobType);
     } else if (referenceId) {
-      query += ' WHERE reference_id=?';
+      where.push('reference_id=?');
       params.push(referenceId);
     }
+    query += ' WHERE ' + where.join(' AND ');
     query += ' ORDER BY created_at DESC LIMIT 50';
     return dbInst.prepare(query).all(...params);
   } catch (e) {
@@ -6624,7 +6750,21 @@ function setupMultiTerminal() {
       _syncStream = openEventStream({
         ...cfg,
         onEvent:  (ev) => { try { mainWindow && mainWindow.webContents.send('sync:changed', ev); } catch {} },
-        onStatus: (st) => { try { logInfo('multiterminal', 'sse estado', st); } catch {} },
+        onStatus: (st) => {
+          try { logInfo('multiterminal', 'sse estado', st); } catch {}
+          if (st?.ok && st?.reconnected) {
+            // SSE no promete replay histórico. Tras recuperar conexión hacemos
+            // una resincronización dirigida para no conservar un abono, venta o
+            // stock que cambió mientras esta terminal estaba desconectada.
+            try {
+              mainWindow && mainWindow.webContents.send('sync:changed', {
+                full: true,
+                scopes: ['customers', 'sales', 'products', 'checkout_orders'],
+                reason: 'reconnected',
+              });
+            } catch {}
+          }
+        },
       });
       logInfo('multiterminal', 'Cliente SSE iniciado', cfg);
     } catch (e) { logError('multiterminal', 'SSE cliente falló: ' + e.message); }
@@ -6766,6 +6906,7 @@ app.whenReady().then(async () => {
     }
     db = initDB(currentDataDir());
     initVersioning(db, currentDataDir());
+    ensureUppercasePersistence();
     await _configureInstalledServerConsole();
     if (ACTIVE_BUSINESS_ID) {
       logInfo('business', 'Negocio activo al iniciar', {

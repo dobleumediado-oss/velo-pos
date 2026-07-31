@@ -21,7 +21,7 @@ async function renderAuditoria(el) {
       <div class="ic">${svg('search')}</div>
       <input class="inp" id="audit-search" type="text"
              placeholder="Buscar por acción, usuario, detalle..."
-             value="${auditFilter}"
+             value="${auditEsc(auditFilter)}"
              oninput="auditFilter=this.value;renderAuditTable(auditAllLogs)"/>
     </div>
     <select class="inp" style="width:180px" id="audit-entity"
@@ -31,6 +31,7 @@ async function renderAuditoria(el) {
       <option value="products">Productos</option>
       <option value="sales">Ventas</option>
       <option value="customers">Clientes</option>
+      <option value="payments">Abonos</option>
       <option value="cash_sessions">Caja</option>
       <option value="settings">Configuración</option>
     </select>`;
@@ -42,8 +43,37 @@ async function renderAuditoria(el) {
 
   // Cargar logs
   tableWrap.innerHTML = `<div style="text-align:center;padding:40px;color:var(--muted2)">Cargando...</div>`;
-  const logs = await window.api.audit.getLogs({ limit: 300, requestUserId: user?.id });
-  window.auditAllLogs = logs || [];
+  const response = await window.api.audit.getLogsPage({
+    limit: 200, offset: 0, requestUserId: user?.id
+  });
+  const pageData = response?.ok ? response.data : { rows: [], total: 0, nextOffset: null };
+  window.auditAllLogs = pageData.rows || [];
+  window.auditNextOffset = pageData.nextOffset;
+  window.auditTotalLogs = pageData.total || window.auditAllLogs.length;
+  renderAuditTable(window.auditAllLogs);
+}
+
+function auditEsc(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+async function auditLoadMore() {
+  if (window.auditNextOffset == null) return;
+  const btn = document.getElementById('audit-load-more');
+  if (btn) { btn.disabled = true; btn.textContent = 'Cargando…'; }
+  const response = await window.api.audit.getLogsPage({
+    limit: 200, offset: window.auditNextOffset, requestUserId: user?.id
+  });
+  if (!response?.ok) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Cargar más'; }
+    toast(response?.error || 'No se pudo cargar el historial', 'err');
+    return;
+  }
+  window.auditAllLogs = [...(window.auditAllLogs || []), ...(response.data.rows || [])];
+  window.auditNextOffset = response.data.nextOffset;
+  window.auditTotalLogs = response.data.total;
   renderAuditTable(window.auditAllLogs);
 }
 
@@ -83,6 +113,7 @@ function renderAuditTable(logs) {
     cierre_caja:        'var(--blue)',
     ajuste_inventario:  'var(--amber)',
     abono_registrado:   'var(--green)',
+    abono_anulado:      'var(--red)',
     producto_creado:    'var(--green)',
     producto_editado:   'var(--blue)',
     producto_inactivado:'var(--red)',
@@ -97,19 +128,19 @@ function renderAuditTable(logs) {
     const fecha = (l.created_at || '').replace('T', ' ').slice(0, 16);
     return `
       <tr>
-        <td style="font-size:11px;color:var(--muted);white-space:nowrap">${fecha}</td>
-        <td style="font-weight:600;font-size:12px">${l.user_name || '—'}</td>
+        <td style="font-size:11px;color:var(--muted);white-space:nowrap">${auditEsc(fecha)}</td>
+        <td style="font-weight:600;font-size:12px">${auditEsc(l.user_name || '—')}</td>
         <td>
           <span style="font-size:11px;font-weight:700;color:${color};
                 background:${color}22;padding:2px 7px;border-radius:20px;white-space:nowrap">
-            ${l.action || ''}
+            ${auditEsc(l.action || '')}
           </span>
         </td>
-        <td style="font-size:11px;color:var(--muted)">${l.entity || '—'}</td>
+        <td style="font-size:11px;color:var(--muted)">${auditEsc(l.entity || '—')}</td>
         <td style="font-size:11px;color:var(--muted2);max-width:260px;
                    overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-            title="${(l.detail||'').replace(/"/g,"'")}">
-          ${l.detail || '—'}
+            title="${auditEsc(l.detail || '')}">
+          ${auditEsc(l.detail || '—')}
         </td>
       </tr>`;
   }).join('');
@@ -135,6 +166,11 @@ function renderAuditTable(logs) {
           <tbody>${rows}</tbody>
         </table>
       </div>
+      ${window.auditNextOffset != null ? `<div style="padding:12px;text-align:center;border-top:1px solid var(--line)">
+        <button class="btn btn-out" id="audit-load-more" onclick="auditLoadMore()">
+          Cargar más · ${window.auditAllLogs.length} de ${window.auditTotalLogs || '…'}
+        </button>
+      </div>` : ''}
     </div>`;
 }
 
@@ -236,7 +272,9 @@ async function confirmarCambioPassword(obligatorio) {
 
   // Si era obligatorio, marcar como completado en settings
   if (obligatorio) {
-    await window.api.settings.set({ key: 'password_changed', value: '1' });
+    await window.api.settings.set({
+      key: 'password_changed', value: '1', requestUserId: user?.id
+    });
   }
 }
 
@@ -323,7 +361,9 @@ async function guardarContrasenaObligatoria() {
 
   if (!result.ok) { toast(result.error || 'Error al cambiar contraseña', 'err'); return; }
 
-  await window.api.settings.set({ key: 'password_changed', value: '1' });
+  await window.api.settings.set({
+    key: 'password_changed', value: '1', requestUserId: user?.id
+  });
   window._pwdChangeRequired = false;
   closeModal();
   toast('✓ Contraseña actualizada — acceso desbloqueado', 'ok');
@@ -492,7 +532,9 @@ async function wizardGuardarPassword() {
 
   if (!result.ok) { toast(result.error || 'Error', 'err'); return; }
 
-  await window.api.settings.set({ key: 'password_changed', value: '1' });
+  await window.api.settings.set({
+    key: 'password_changed', value: '1', requestUserId: user?.id
+  });
   window._pwdChangeRequired = false;
   wizardStep = 3;
   renderWizardStep();

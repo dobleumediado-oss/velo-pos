@@ -713,9 +713,13 @@ async function _cndWhatsAppPDF(id) {
       items: (dn.items || []).map(it => ({ name: it.description, qty: it.requested_qty })),
     });
   };
-  enviarDocumentoPDFWhatsApp(build, `Conduce-${dn.number}`, {
+  enviarDocumentoPDFWhatsApp(
+    build,
+    clientDocumentFilename(customer || dn.customer_name, dn.number, 'Conduce'),
+    {
     message,
     phone,
     clientName: dn.customer_name || 'cliente',
-  });
+    }
+  );
 }

@@ -64,7 +64,7 @@ contextBridge.exposeInMainWorld('api', {
     addPayment:    (data)      => ipcRenderer.invoke('customers:addPayment', data),
     cancelPayment: (data)      => ipcRenderer.invoke('customers:cancelPayment', data),
     getPayments:   (data)      => ipcRenderer.invoke('customers:getPayments', data),
-    getAllPayments: ()          => ipcRenderer.invoke('customers:getAllPayments'),
+    getAllPayments: (data)      => ipcRenderer.invoke('customers:getAllPayments', data),
     getHistory:             (data) => ipcRenderer.invoke('customers:getHistory',             data),
     getSaleItems:           (data) => ipcRenderer.invoke('customers:getSaleItems',           data),
     getFacturasPendientes:  (data) => ipcRenderer.invoke('customers:getFacturasPendientes',  data),
@@ -79,6 +79,7 @@ contextBridge.exposeInMainWorld('api', {
     getSessions:     ()      => ipcRenderer.invoke('cash:getSessions'),
     getSessionSales: (data)  => ipcRenderer.invoke('cash:getSessionSales', data),
     getSessionCashSummary: (data) => ipcRenderer.invoke('cash:getSessionCashSummary', data),
+    getSessionReport: (data) => ipcRenderer.invoke('cash:getSessionReport', data),
   },
 
   // ── Ventas ────────────────────────────────
@@ -162,6 +163,7 @@ contextBridge.exposeInMainWorld('api', {
   // ── Auditoría ─────────────────────────────
   audit: {
     getLogs: (data)          => ipcRenderer.invoke('audit:getLogs', data),
+    getLogsPage: (data)      => ipcRenderer.invoke('audit:getLogsPage', data),
     log:     (data)          => ipcRenderer.invoke('audit:log', data),
   },
   // ── Shell — abrir links en navegador del sistema ──

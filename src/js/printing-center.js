@@ -374,8 +374,6 @@ function pcRenderRoutes() {
     const assigned = bindings[channel] || '';
     const available = pcConnected(documentPrinters, assigned);
     const copies = Math.max(1, Math.min(9, parseInt(config.copies, 10) || 1));
-    const preview = config.preview !== undefined ? config.preview === true : definition.previewDefault === true;
-    const auto = config.autoPrint !== undefined ? config.autoPrint !== false : definition.autoPrintDefault !== false;
     return `<tr data-category="${category}">
       <td><strong>${pcEsc(definition.label)}</strong><div class="pc-route-status ${available ? 'ok' : ''}">
         ${assigned ? `${available ? '✓' : '⚠'} ${pcEsc(assigned)}` : 'Sin impresora: abrirá el diálogo'}
@@ -383,8 +381,7 @@ function pcRenderRoutes() {
       <td><select class="inp pc-route-channel" onchange="pcRouteChannelChanged(this)">${pcChannelOptions(channel)}</select></td>
       <td><select class="inp pc-route-template">${pcTemplateOptions(category, config.template || '')}</select></td>
       <td style="width:80px"><input class="inp pc-route-copies" type="number" min="1" max="9" value="${copies}"/></td>
-      <td style="text-align:center"><input class="pc-route-auto" type="checkbox" ${auto ? 'checked' : ''}/></td>
-      <td style="text-align:center"><input class="pc-route-preview" type="checkbox" ${preview ? 'checked' : ''}/></td>
+      <td style="text-align:center"><span class="badge g">Vista previa</span></td>
     </tr>`;
   }).join('');
   root.innerHTML = pcHeader(
@@ -394,10 +391,10 @@ function pcRenderRoutes() {
     <div class="alrt a" style="margin-bottom:13px"><div><div class="alrt-title">Rutas portables entre sucursales</div>
       <div class="alrt-sub">Aquí nunca se guardan nombres físicos de impresoras. Por eso la misma regla funciona en todas las computadoras.</div></div></div>
     <div class="tbl-wrap" style="overflow-x:auto"><table class="tbl">
-      <thead><tr><th>Documento</th><th>Canal</th><th>Plantilla</th><th>Copias</th><th>Automática</th><th>Vista previa</th></tr></thead>
+      <thead><tr><th>Documento</th><th>Canal</th><th>Plantilla</th><th>Copias</th><th>Confirmación</th></tr></thead>
       <tbody id="pc-route-rows">${rows}</tbody>
     </table></div>
-    <div style="font-size:10.5px;color:var(--muted2);margin-top:10px">Las reimpresiones siempre abren vista previa. El cobro directo usa estas preferencias sin añadir pasos.</div>
+    <div style="font-size:10.5px;color:var(--muted2);margin-top:10px">Todo documento abre su display. Solo se envía a la impresora al pulsar Imprimir.</div>
   </div>`;
 }
 
@@ -701,8 +698,8 @@ async function pcSaveRoutes() {
       channel: row.querySelector('.pc-route-channel')?.value || _DEFAULT_PRINT_CHANNEL[row.dataset.category] || 'oficina',
       template: row.querySelector('.pc-route-template')?.value || '',
       copies: Math.max(1, Math.min(9, parseInt(row.querySelector('.pc-route-copies')?.value, 10) || 1)),
-      autoPrint: !!row.querySelector('.pc-route-auto')?.checked,
-      preview: !!row.querySelector('.pc-route-preview')?.checked,
+      autoPrint: false,
+      preview: true,
     };
   });
   const result = await window.api.print.saveConfig({ config: next, requestUserId: user?.id });

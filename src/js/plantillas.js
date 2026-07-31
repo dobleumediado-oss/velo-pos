@@ -38,7 +38,7 @@ function detectPrinterType(printerName) {
   if (/72\s*mm/.test(n)) return '72mm';
   if (/80|thermal|termi|receipt|pos|ticket|aokia|epson.?tm|star.?tsp|bixolon|sewoo|xprint|citizen|rongta|hprt|zjiang|iposp|goojprt|rpp|srp|scp|tsp|tm-t|tm-u|eu-t/.test(n)) return '80mm';
 
-  if (/laser|inkjet|officejet|laserjet|pixma|envy|deskjet|ecotank|l-series|brother|canon|hp |ricoh|xerox|kyocera|samsung.*ml|samsung.*clp|pdf|fax|onenote|xps/.test(n)) return 'carta';
+  if (/laser|inkjet|officejet|laserjet|pixma|envy|deskjet|ecotank|epson|\bet[- _]?\d{3,5}\b|\bwf[- _]?\d+\b|workforce|l-series|brother|canon|hp |ricoh|xerox|kyocera|samsung.*ml|samsung.*clp|pdf|fax|onenote|xps/.test(n)) return 'carta';
 
   if (/a4|a3|ledger|legal/.test(n)) return 'carta';
 

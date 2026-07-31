@@ -462,7 +462,7 @@ async function openCierreCajaModal() {
   // se usa el cálculo local como respaldo para no quedar peor que antes.
   let expected;
   let usandoFuenteReal = false;
-  let efectivoReal = null;   // total efectivo entrante según cash_movements
+  let efectivoReal = null;   // movimiento neto según cash_movements
   try {
     const cashSummary = await window.api.cash.getSessionCashSummary
       ? await window.api.cash.getSessionCashSummary({ sessionId: cajaSession.id })
@@ -470,7 +470,10 @@ async function openCierreCajaModal() {
     if (cashSummary && typeof cashSummary.expected === 'number') {
       expected = cashSummary.expected;
       usandoFuenteReal = true;
-      efectivoReal = (cashSummary.byMethodIn && cashSummary.byMethodIn.efectivo) || 0;
+      efectivoReal = (
+        (cashSummary.byMethodNet && cashSummary.byMethodNet.efectivo) ??
+        (cashSummary.byMethodIn && cashSummary.byMethodIn.efectivo)
+      ) || 0;
     }
   } catch (e) {
     console.warn('[cierre] getSessionCashSummary falló, usando cálculo local:', e);
@@ -483,9 +486,8 @@ async function openCierreCajaModal() {
       - tdDevEfec;
   }
 
-  // Para el desglose visual: si tenemos la fuente real, el "efectivo entrante"
-  // mostrado incluye la porción efectivo de ventas mixtas y abonos. Si no,
-  // usamos el cálculo local (ventas efectivo simples + abonos).
+  // Para el desglose visual usamos el movimiento neto. Un abono anulado en la
+  // misma sesión queda en cero y no reaparece como dinero recibido.
   const efectivoEntranteMostrado = usandoFuenteReal && efectivoReal !== null
     ? efectivoReal
     : (tdEfec + tdAbonos);
@@ -507,7 +509,7 @@ async function openCierreCajaModal() {
         <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--muted2);margin-bottom:8px">Resumen del día</div>
         <div class="tr" style="font-size:12px"><span>Fondo inicial</span><span>${fmt(cajaSession.open_amount || cajaSession.open || 0)}</span></div>
         ${usandoFuenteReal
-          ? `<div class="tr" style="font-size:12px"><span>Efectivo recibido <span style="font-size:10px;color:var(--muted2)">(ventas + abonos)</span></span><span style="color:var(--green)">+${fmt(efectivoEntranteMostrado)}</span></div>`
+          ? `<div class="tr" style="font-size:12px"><span>Movimiento neto en efectivo <span style="font-size:10px;color:var(--muted2)">(ventas + abonos − salidas)</span></span><span style="color:${efectivoEntranteMostrado < 0 ? 'var(--red)' : 'var(--green)'}">${efectivoEntranteMostrado >= 0 ? '+' : '−'}${fmt(Math.abs(efectivoEntranteMostrado))}</span></div>`
           : `<div class="tr" style="font-size:12px"><span>Ventas efectivo</span><span style="color:var(--green)">+${fmt(tdEfec)}</span></div>
         ${tdAbonos > 0 ? `<div class="tr" style="font-size:12px"><span>Abonos en efectivo</span><span style="color:var(--green)">+${fmt(tdAbonos)}</span></div>` : ''}`}
         ${tdDevEfec > 0 ? `<div class="tr" style="font-size:12px"><span>Devoluciones efectivo</span><span style="color:var(--red)">−${fmt(tdDevEfec)}</span></div>` : ''}
@@ -663,27 +665,22 @@ async function imprimirReporteDia() {
   if (!ses) { toast('No hay sesión de caja', 'err'); return; }
 
   const sesId    = ses.id;
-  const ventas   = DB.sales.filter(s =>
-    (s.cash_session_id || s.cajaId) === sesId && s.type !== 'devolucion' && s.status !== 'cancelled');
-  const devs     = DB.sales.filter(s =>
-    (s.cash_session_id || s.cajaId) === sesId && s.type === 'devolucion');
-  const abonos   = DB.payments.filter(p =>
-    Number(p.cash_session_id) === Number(sesId)
-      && String(p.status || 'active').toLowerCase() !== 'cancelled'
-      && !isImportedRecord(p));
-
-  const totalEfec  = ventas.filter(s => (s.payment_method||s.pay) === 'efectivo').reduce((a,s) => a+s.total,0);
-  const totalCard  = ventas.filter(s => (s.payment_method||s.pay) === 'tarjeta').reduce((a,s) => a+s.total,0);
-  const totalTrans = ventas.filter(s => (s.payment_method||s.pay) === 'transferencia').reduce((a,s) => a+s.total,0);
-  const totalCred  = ventas.filter(s => (s.payment_method||s.pay) === 'credito').reduce((a,s) => a+s.total,0);
-  const totalAbonos     = abonos.reduce((a,p) => a+p.amount,0);
-  const totalDevolucion = devs.reduce((a,s) => a+s.total,0);
-  const totalVentas     = ventas.reduce((a,s) => a+s.total,0);
+  const report = await window.api.cash.getSessionReport({ sessionId: sesId });
+  if (!report?.session) { toast('No se pudo reconstruir el reporte de caja', 'err'); return; }
+  const ventas = (report.sales || []).filter(s => s.type !== 'devolucion');
+  const byMethod = report.totals?.bySaleMethod || {};
+  const totalEfec  = Number(byMethod.efectivo || 0);
+  const totalCard  = Number(byMethod.tarjeta || 0);
+  const totalTrans = Number(byMethod.transferencia || 0);
+  const totalCred  = Number(byMethod.credito || 0);
+  const totalAbonos = Number(report.totals?.payments || 0);
+  const totalDevolucion = Number(report.totals?.returns || 0);
+  const totalVentas = Number(report.totals?.sales || 0);
 
   const openAmt  = ses.open_amount || ses.open || 0;
-  const expected = openAmt + totalEfec + totalAbonos - totalDevolucion;
+  const expected = Number(report.summary?.expected ?? openAmt);
   const counted  = ses.close_amount || ses.close || 0;
-  const diff     = counted > 0 ? counted - expected : 0;
+  const diff     = counted > 0 ? Math.round((counted - expected) * 100) / 100 : 0;
 
   // ── Cargar gastos del día si el módulo está activo ──────────────────────────
   let gastosDelDia  = [];
@@ -807,23 +804,26 @@ function openResumenModal(raw) {
 // ══════════════════════════════════════════════
 // IMPRIMIR REPORTE COMPLETO DEL DÍA
 // ══════════════════════════════════════════════
-function printResumen(cajaId) {
-  // Buscar en DB.caja — campos SQLite
-  let s = DB.caja.find(c => c.id === cajaId);
-  if (!s) { toast('No se encontró la sesión', 'err'); return; }
-
-  s = _normCaja(s);
-
-  const sesVentas = DB.sales.filter(v => v.cajaId === s.id && v.type !== 'devolucion');
-  const sesDevs   = DB.sales.filter(v => v.cajaId === s.id && v.type === 'devolucion');
-  const byMethod  = {};
-  sesVentas.forEach(v => { byMethod[v.pay] = (byMethod[v.pay] || 0) + v.total; });
-
-  const totalVentas = sesVentas.reduce((a, v) => a + v.total, 0);
-  const totalDevs   = sesDevs.reduce((a, v) => a + v.total, 0);
+async function printResumen(cajaId) {
+  const report = await window.api.cash.getSessionReport({ sessionId: cajaId });
+  if (!report?.session) { toast('No se encontró la sesión', 'err'); return; }
+  const s = _normCaja(report.session);
+  const normalizeSale = row => ({
+    ...row,
+    cajaId: row.cash_session_id,
+    clientName: row.customer_name,
+    pay: row.payment_method,
+    time: String(row.created_at || '').split(' ')[1]?.slice(0, 5) || '',
+  });
+  const activeSales = (report.sales || []).map(normalizeSale);
+  const sesVentas = activeSales.filter(v => v.type !== 'devolucion');
+  const sesDevs = activeSales.filter(v => v.type === 'devolucion');
+  const byMethod = report.totals?.bySaleMethod || {};
+  const totalVentas = Number(report.totals?.sales || 0);
+  const totalDevs = Number(report.totals?.returns || 0);
+  const totalAbonos = Number(report.totals?.payments || 0);
   const totalNeto   = totalVentas - totalDevs;
-  const efec        = byMethod['efectivo'] || 0;
-  const expected    = (s.open || 0) + efec;
+  const expected = Number(report.summary?.expected || 0);
 
   // Tabla de ventas del día
   const ventasRows = sesVentas.map(v =>
@@ -944,6 +944,8 @@ function printResumen(cajaId) {
         </tr>`).join('')}
       ${sesDevs.length ? `<tr><td style="color:#DC2626">Devoluciones</td>
         <td style="text-align:right;color:#DC2626">−${fmt(totalDevs)}</td><td></td></tr>` : ''}
+      ${totalAbonos > 0 ? `<tr><td>Abonos vigentes</td>
+        <td style="text-align:right">${fmt(totalAbonos)}</td><td></td></tr>` : ''}
       <tr class="total-row" style="border-top:2px solid #e5e7eb">
         <td>NETO</td>
         <td style="text-align:right">${fmt(totalNeto)}</td>

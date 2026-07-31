@@ -16,6 +16,63 @@ const { reconcileCashSessionTotals } = require('./lib/cash-session-totals');
 // Nunca hardcodeada aquí. Así package.json es la única fuente de verdad.
 const APP_VERSION = require('./package.json').version;
 
+// Retira de los libros vigentes cualquier asiento de abono cuyo recibo ya fue
+// anulado. Algunas instalaciones antiguas alcanzaron a anular el recibo pero no
+// el asiento cuando la app se cerró antes de completar el hook contable.
+// El documento y sus líneas permanecen para Auditoría; solo dejan de afectar
+// balances y reportes, igual que una anulación realizada en la versión actual.
+function reconcileCancelledPaymentAccounting(db) {
+  const has = table => db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?"
+  ).get(table);
+  if (!has('payments') || !has('accounting_entries') ||
+      !has('accounting_entry_lines') || !has('accounting_accounts')) {
+    return { voidedEntries: 0, rebuiltAccounts: 0 };
+  }
+
+  const stale = db.prepare(`
+    SELECT e.id,e.source_id,p.document_number_fmt,p.numero_recibo
+    FROM accounting_entries e
+    JOIN payments p ON p.id=e.source_id
+    WHERE e.source_module='abono'
+      AND e.status='confirmado'
+      AND COALESCE(p.status,'active')='cancelled'
+  `).all();
+
+  const voidEntry = db.prepare(`
+    UPDATE accounting_entries
+    SET status='anulado',reversed_by=NULL,reversal_of=NULL,updated_at=datetime('now')
+    WHERE id=?
+  `);
+  const auditInsert = has('audit_logs') ? db.prepare(`
+    INSERT INTO audit_logs(user_id,user_name,action,entity,entity_id,detail)
+    VALUES(NULL,'Sistema','asiento_anulado_conciliacion','accounting_entries',?,?)
+  `) : null;
+  stale.forEach(row => {
+    voidEntry.run(row.id);
+    auditInsert?.run(
+      row.id,
+      `Abono anulado ${row.document_number_fmt || row.numero_recibo || '#' + row.source_id}`
+    );
+  });
+
+  // La columna balance es un cache del mayor. Reconstruirla desde las líneas
+  // confirmadas evita residuos contables de cierres inesperados y es idempotente.
+  const rebuilt = db.prepare(`
+    UPDATE accounting_accounts
+    SET balance=COALESCE((
+      SELECT ROUND(SUM(l.debit-l.credit),2)
+      FROM accounting_entry_lines l
+      JOIN accounting_entries e ON e.id=l.entry_id
+      WHERE l.account_id=accounting_accounts.id
+        AND e.status='confirmado'
+        AND e.source_module!='reverso'
+    ),0),
+    updated_at=datetime('now')
+  `).run();
+  return { voidedEntries: stale.length, rebuiltAccounts: rebuilt.changes || 0 };
+}
+
 // ── Migraciones por versión ───────────────────
 // Cada migración corre UNA SOLA VEZ por cliente
 // Se registra en la tabla db_migrations
@@ -1351,6 +1408,75 @@ const MIGRATIONS = [
       );
     }
   },
+  {
+    version: '1.34.3-reconcile-cancelled-payment-accounting',
+    description: 'Retirar de libros los asientos residuales de abonos anulados',
+    run(db) {
+      const result = reconcileCancelledPaymentAccounting(db);
+      console.log(
+        `[MIGRATION 1.34.3] ${result.voidedEntries} asiento(s) de abono anulado retirado(s); ` +
+        `${result.rebuiltAccounts} cuenta(s) reconstruida(s)`
+      );
+    }
+  },
+  {
+    version: '1.34.4-payment-lifecycle-hardening',
+    description: 'Abonos atómicos: caja, bancos, documentos, impresión e índices',
+    run(db) {
+      const addColumn = (table, column, definition) => {
+        const exists = db.prepare(
+          "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?"
+        ).get(table);
+        if (!exists) return;
+        const columns = db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name);
+        if (!columns.includes(column)) {
+          db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+        }
+      };
+      addColumn('payments', 'financial_account_id', 'INTEGER');
+      addColumn('payments', 'payment_currency', "TEXT DEFAULT 'DOP'");
+      addColumn('payments', 'exchange_rate', 'REAL DEFAULT 1');
+      addColumn('payments', 'account_amount', 'REAL DEFAULT 0');
+      addColumn('payments', 'payment_reference', "TEXT DEFAULT ''");
+      addColumn('cash_movements', 'payment_id', 'INTEGER');
+      addColumn('print_jobs', 'invalidated_at', 'TEXT');
+      addColumn('print_jobs', 'invalidation_reason', "TEXT DEFAULT ''");
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_payments_status_customer_created
+          ON payments(status,customer_id,created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_payments_session_status_created
+          ON payments(cash_session_id,status,created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_payments_financial_account
+          ON payments(financial_account_id,status);
+        CREATE INDEX IF NOT EXISTS idx_cash_movements_payment
+          ON cash_movements(payment_id,cash_session_id,type);
+        CREATE INDEX IF NOT EXISTS idx_cash_movements_session_created
+          ON cash_movements(cash_session_id,created_at,id);
+        CREATE INDEX IF NOT EXISTS idx_print_jobs_reference
+          ON print_jobs(type,reference_id,created_at DESC);
+        UPDATE document_issues
+        SET status='cancelled'
+        WHERE kind='abono' AND source_type='payment'
+          AND EXISTS(
+            SELECT 1 FROM payments p
+            WHERE CAST(p.id AS TEXT)=document_issues.source_id
+              AND COALESCE(p.status,'active')='cancelled'
+          );
+        UPDATE print_jobs
+        SET invalidated_at=COALESCE(invalidated_at,datetime('now','localtime')),
+            invalidation_reason=CASE
+              WHEN TRIM(COALESCE(invalidation_reason,''))='' THEN 'Abono anulado'
+              ELSE invalidation_reason END
+        WHERE type IN ('abono','payment')
+          AND EXISTS(
+            SELECT 1 FROM payments p
+            WHERE p.id=print_jobs.reference_id
+              AND COALESCE(p.status,'active')='cancelled'
+          );
+      `);
+      console.log('[MIGRATION 1.34.4] Ciclo de vida de abonos reforzado');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════
@@ -1756,6 +1882,7 @@ async function createAutoBackup(dataDir, db, keepLast = 10) {
 module.exports = {
   APP_VERSION,
   initVersioning,
+  reconcileCancelledPaymentAccounting,
   seedAccountingCatalog,
   createManualBackup,
   createAutoBackup,

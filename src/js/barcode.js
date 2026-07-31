@@ -624,7 +624,9 @@ async function bcSavePrinter(name) {
 // ── Tipo de etiqueta y papel térmico ──────────
 async function bcSetLabelType(v) {
   _bcState.labelType = v;
-  await window.api.settings.set({ key: 'barcode_label_type', value: v }).catch(() => {});
+  await window.api.settings.set({
+    key: 'barcode_label_type', value: v, requestUserId: user?.id
+  }).catch(() => {});
 }
 async function bcSetPrinterProfile(id) {
   _bcState.profileId = id || '';
@@ -661,15 +663,15 @@ async function bcSaveMediaConfig() {
     _bcState.profileId
   );
   const saves = [
-    window.api.settings.set({ key: 'barcode_printer_profile', value: _bcState.profileId || '' }),
+    window.api.settings.set({ key: 'barcode_printer_profile', value: _bcState.profileId || '', requestUserId: user?.id }),
     window.api.settings.set({
       key: 'printer_channel_profiles',
       value: channelProfiles,
       requestUserId: user?.id,
     }),
-    window.api.settings.set({ key: 'barcode_media_width_mm', value: String(_bcState.mediaWidthMm) }),
-    window.api.settings.set({ key: 'barcode_printer_dpi', value: String(_bcState.printerDpi) }),
-    window.api.settings.set({ key: 'barcode_media_mode', value: _bcState.mediaMode }),
+    window.api.settings.set({ key: 'barcode_media_width_mm', value: String(_bcState.mediaWidthMm), requestUserId: user?.id }),
+    window.api.settings.set({ key: 'barcode_printer_dpi', value: String(_bcState.printerDpi), requestUserId: user?.id }),
+    window.api.settings.set({ key: 'barcode_media_mode', value: _bcState.mediaMode, requestUserId: user?.id }),
   ];
   if (calibration) {
     saves.push(window.api.settings.set({

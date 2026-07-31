@@ -569,14 +569,16 @@ async function _bcdSave() {
   window._bcdDirty  = false;
 
   try {
-    await window.api.settings.set({ key: 'barcode_design', value: JSON.stringify(design) });
+    await window.api.settings.set({
+      key: 'barcode_design', value: JSON.stringify(design), requestUserId: user?.id
+    });
     if (_bcState && typeof _bcState === 'object') _bcState.design = { ...design };
     if (DB?.settings) DB.settings.barcode_design = JSON.stringify(design);
     toast('✓ Diseño de etiquetas guardado', 'ok');
 
     // Log auditoría
     window.api.audit?.log?.({
-      action: 'barcode_design_update', entity: 'settings',
+      action: 'barcode_design_saved', entity: 'settings',
       entityId: null, detail: `${design.labelW}×${design.labelH}mm · ${design.format}`,
       userId: user?.id
     }).catch(() => {});

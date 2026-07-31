@@ -41,6 +41,11 @@ function initDB(customDataDir) {
 
   DB_PATH = path.join(dataDir, 'velo.db');
   db = new Database(DB_PATH);
+  // SQLite UPPER() solo transforma ASCII. VELO_UPPER conserva acentos y Ñ,
+  // por lo que "Pérez" se guarda correctamente como "PÉREZ".
+  db.function('VELO_UPPER', { deterministic: true }, value =>
+    String(value ?? '').trim().toLocaleUpperCase('es-DO')
+  );
 
   // Rendimiento y seguridad
   db.pragma('journal_mode = WAL');
@@ -64,6 +69,7 @@ function initDB(customDataDir) {
   migrateDocumentNumbering();   // Secuencias internas independientes por tipo documental
   migrateCustomerCompanies();   // Personas, empresas, representantes y snapshots
   migrateSalesWorkflowEnhancements(); // Teléfonos múltiples, cargos, USD y fecha documental
+  ensureUppercasePersistence(); // Defensa backend para datos capturados por formularios
   ensureCheckoutOrdersSchema(db);
   backupBeforeSaleCorrectionsMigration();
   backupBeforeProductCorrectionsMigration();
@@ -74,6 +80,66 @@ function initDB(customDataDir) {
 
   console.log('[DB] Iniciada en:', DB_PATH);
   return db;
+}
+
+// La UI convierte texto mientras se escribe, pero importadores, terminales
+// antiguas o llamadas IPC directas también llegan al backend. Estos triggers
+// normalizan únicamente campos descriptivos (nunca email, contraseña, URL,
+// estados ni identificadores fiscales sensibles a formato).
+function ensureUppercasePersistence() {
+  const targets = {
+    customers: ['name', 'trade_name', 'address', 'notes'],
+    customer_contacts: ['name', 'role'],
+    customer_branches: ['name', 'code', 'address', 'manager'],
+    products: ['code', 'barcode', 'name', 'brand', 'category', 'description', 'model'],
+    suppliers: ['name', 'contact', 'address', 'notes'],
+    expenses: ['description', 'notes'],
+    vehicles: ['brand', 'model', 'plate', 'color', 'notes'],
+    delivery_notes: ['customer_name', 'delivery_address', 'driver_name', 'vehicle_plate', 'notes'],
+    purchase_orders: ['supplier_name', 'notes'],
+    sales: [
+      'customer_name', 'customer_trade_name', 'customer_address',
+      'customer_contact_name', 'customer_contact_role',
+      'customer_branch_name', 'customer_branch_code',
+      'customer_branch_address', 'notes',
+    ],
+    payments: ['note'],
+  };
+  Object.entries(targets).forEach(([table, requestedColumns]) => {
+    if (!tableExists(table)) return;
+    const available = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name));
+    const columns = requestedColumns.filter(column => available.has(column));
+    if (!columns.length) return;
+    const assignment = columns
+      .map(column => `"${column}"=VELO_UPPER(NEW."${column}")`)
+      .join(',');
+    const differs = columns
+      .map(column => `COALESCE(NEW."${column}",'')<>VELO_UPPER(NEW."${column}")`)
+      .join(' OR ');
+    db.exec(`
+      DROP TRIGGER IF EXISTS trg_${table}_uppercase_insert;
+      DROP TRIGGER IF EXISTS trg_${table}_uppercase_update;
+      CREATE TRIGGER trg_${table}_uppercase_insert
+      AFTER INSERT ON "${table}"
+      WHEN ${differs}
+      BEGIN
+        UPDATE "${table}" SET ${assignment} WHERE id=NEW.id;
+      END;
+      CREATE TRIGGER trg_${table}_uppercase_update
+      AFTER UPDATE ON "${table}"
+      WHEN ${differs}
+      BEGIN
+        UPDATE "${table}" SET ${assignment} WHERE id=NEW.id;
+      END;
+    `);
+    columns.forEach(column => {
+      db.prepare(`
+        UPDATE "${table}"
+        SET "${column}"=VELO_UPPER("${column}")
+        WHERE COALESCE("${column}",'')<>VELO_UPPER("${column}")
+      `).run();
+    });
+  });
 }
 
 // Respaldo puntual antes de introducir la separación de fechas. Solo corre una
@@ -443,6 +509,7 @@ function createTables() {
       amount          REAL NOT NULL,
       method          TEXT DEFAULT 'efectivo',
       reference_id    INTEGER,
+      payment_id      INTEGER REFERENCES payments(id),
       description     TEXT DEFAULT '',
       user_id         INTEGER REFERENCES users(id),
       created_at      TEXT DEFAULT (datetime('now'))
@@ -550,6 +617,11 @@ function createTables() {
       voided_by_name  TEXT DEFAULT '',
       void_cash_session_id INTEGER REFERENCES cash_sessions(id),
       replaces_payment_id INTEGER REFERENCES payments(id),
+      financial_account_id INTEGER REFERENCES financial_accounts(id),
+      payment_currency TEXT DEFAULT 'DOP',
+      exchange_rate REAL DEFAULT 1,
+      account_amount REAL DEFAULT 0,
+      payment_reference TEXT DEFAULT '',
       created_at      TEXT DEFAULT (datetime('now','localtime'))
     );
 
@@ -1043,6 +1115,11 @@ function migrateCustomerCompanies() {
     ['voided_by_name', "TEXT DEFAULT ''"],
     ['void_cash_session_id', 'INTEGER'],
     ['replaces_payment_id', 'INTEGER'],
+    ['financial_account_id', 'INTEGER'],
+    ['payment_currency', "TEXT DEFAULT 'DOP'"],
+    ['exchange_rate', 'REAL DEFAULT 1'],
+    ['account_amount', 'REAL DEFAULT 0'],
+    ['payment_reference', "TEXT DEFAULT ''"],
   ];
   if (tableExists('payments')) {
     for (const [col, def] of paymentCols) {
@@ -1080,10 +1157,36 @@ function migrateCustomerCompanies() {
     CREATE INDEX IF NOT EXISTS idx_payments_customer_contact ON payments(customer_contact_id);
     CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
     CREATE INDEX IF NOT EXISTS idx_payments_replaces ON payments(replaces_payment_id);
+    CREATE INDEX IF NOT EXISTS idx_payments_status_customer_created
+      ON payments(status,customer_id,created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_payments_session_status_created
+      ON payments(cash_session_id,status,created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_payments_financial_account
+      ON payments(financial_account_id,status);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_active_replacement
       ON payments(replaces_payment_id)
       WHERE replaces_payment_id IS NOT NULL AND COALESCE(status,'active')='active';
   `);
+  if (tableExists('cash_movements')) {
+    try { db.prepare('ALTER TABLE cash_movements ADD COLUMN payment_id INTEGER').run(); }
+    catch { /* ya existe */ }
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_cash_movements_payment
+        ON cash_movements(payment_id,cash_session_id,type);
+      CREATE INDEX IF NOT EXISTS idx_cash_movements_session_created
+        ON cash_movements(cash_session_id,created_at,id);
+    `);
+  }
+  if (tableExists('print_jobs')) {
+    try { db.prepare('ALTER TABLE print_jobs ADD COLUMN invalidated_at TEXT').run(); }
+    catch { /* ya existe */ }
+    try { db.prepare("ALTER TABLE print_jobs ADD COLUMN invalidation_reason TEXT DEFAULT ''").run(); }
+    catch { /* ya existe */ }
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_print_jobs_reference
+        ON print_jobs(type,reference_id,created_at DESC);
+    `);
+  }
   // Sucursales del cliente empresa (idempotente). La empresa conserva RNC,
   // crédito y cuenta por cobrar; las sucursales son solo ubicaciones de entrega.
   db.exec(`
@@ -2791,7 +2894,8 @@ const customersRepo = {
   addPayment({
     customerId, amount, method, note, saleId = null, allocations = null,
     contactId = null, cajero = '', userId = null, sessionId = null,
-    replacesPaymentId = null
+    replacesPaymentId = null, financialAccountId = null,
+    exchangeRate = 1, paymentReference = ''
   }) {
     // VALIDACIONES: prevenir abonos inválidos que corrompan el balance
     amount = round2(Number(amount));
@@ -2888,6 +2992,51 @@ const customersRepo = {
       ? normalizedAllocations[0].invoice : null;
     saleId = selectedInvoice ? Number(selectedInvoice.id) : null;
     const after  = Math.max(0, round2((before - amount)));
+    method = String(method || 'efectivo').trim().toLowerCase();
+    const bankMethod = ['transferencia', 'tarjeta', 'cheque'].includes(method);
+    let financialAccount = null;
+    let accountAmount = 0;
+    let paymentCurrency = 'DOP';
+    exchangeRate = round2(Number(exchangeRate) || 1);
+    if (bankMethod && tableExists('financial_accounts')) {
+      let accountId = Number(financialAccountId) || null;
+      if (!accountId) {
+        const preferredType = method === 'tarjeta' ? 'tarjeta' : 'banco';
+        accountId = db.prepare(`
+          SELECT id FROM financial_accounts
+          WHERE active=1 AND type=?
+          ORDER BY CASE WHEN upper(COALESCE(currency,'DOP'))='DOP' THEN 0 ELSE 1 END, id
+          LIMIT 1
+        `).get(preferredType)?.id || null;
+      }
+      financialAccount = accountId
+        ? db.prepare('SELECT * FROM financial_accounts WHERE id=? AND active=1').get(accountId)
+        : null;
+      if (!financialAccount) {
+        throw new Error(
+          `Configura o selecciona una cuenta activa para recibir el abono por ${method}`
+        );
+      }
+      if (method !== 'tarjeta' && financialAccount.type !== 'banco') {
+        throw new Error('Transferencias y cheques deben recibirse en una cuenta bancaria');
+      }
+      paymentCurrency = String(financialAccount.currency || 'DOP').toUpperCase();
+      if (!['DOP', 'USD'].includes(paymentCurrency)) {
+        throw new Error(`Moneda de cuenta no soportada: ${paymentCurrency}`);
+      }
+      if (paymentCurrency === 'USD') {
+        if (exchangeRate < 20 || exchangeRate > 500) {
+          throw new Error('Indica una tasa USD válida para acreditar la cuenta');
+        }
+        accountAmount = round2(amount / exchangeRate);
+      } else {
+        exchangeRate = 1;
+        accountAmount = amount;
+      }
+    } else {
+      financialAccountId = null;
+      exchangeRate = 1;
+    }
     let contact = null;
     if (contactId) {
       contact = db.prepare(`
@@ -2902,12 +3051,15 @@ const customersRepo = {
         INSERT INTO payments(
           customer_id,sale_id,amount,method,note,balance_before,balance_after,cajero,user_id,cash_session_id,
           customer_contact_id,customer_contact_name,customer_contact_document,customer_contact_role,
-          customer_contact_phone,customer_contact_email,replaces_payment_id,created_at
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
+          customer_contact_phone,customer_contact_email,replaces_payment_id,
+          financial_account_id,payment_currency,exchange_rate,account_amount,payment_reference,created_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
       `).run(
         customerId, saleId, amount, method, note||'Abono', before, after, cajero, userId, sessionId || null,
         contact?.id || null, contact?.name || '', contact?.document || '', contact?.role || '',
-        contact?.phone || '', contact?.email || '', replacesPaymentId
+        contact?.phone || '', contact?.email || '', replacesPaymentId,
+        financialAccount?.id || null, paymentCurrency, exchangeRate, accountAmount,
+        String(paymentReference || note || '').trim().slice(0, 120)
       );
       const paymentId = payInsert.lastInsertRowid;
       if (normalizedAllocations.length) {
@@ -2937,16 +3089,32 @@ const customersRepo = {
       // Registrar en movimientos de caja si hay sesión activa y el método es efectivo/transferencia/tarjeta
       if (sessionId && method !== 'credito') {
         db.prepare(`
-          INSERT INTO cash_movements(cash_session_id,type,amount,method,reference_id,description,user_id)
-          VALUES(?,?,?,?,?,?,?)
+          INSERT INTO cash_movements(
+            cash_session_id,type,amount,method,reference_id,payment_id,description,user_id
+          ) VALUES(?,?,?,?,?,?,?,?)
         `).run(
           sessionId, 'abono', amount, method || 'efectivo',
-          saleId || paymentId,
+          paymentId, paymentId,
           normalizedAllocations.length > 1
             ? `Abono distribuido en ${normalizedAllocations.length} facturas`
             : 'Abono cliente',
           userId
         );
+      }
+      if (financialAccount && accountAmount > 0.005) {
+        financialAccountsRepo.addMovement({
+          accountId: financialAccount.id,
+          type: 'abono_recibido',
+          amount: accountAmount,
+          description: `Abono ${documentIssue.formatted_number}`,
+          referenceType: 'payment',
+          referenceId: Number(paymentId),
+          method,
+          userId,
+          notes: paymentCurrency === 'USD'
+            ? `Base RD$${amount.toFixed(2)} · Tasa ${exchangeRate.toFixed(2)}`
+            : String(paymentReference || note || '').trim().slice(0, 300),
+        });
       }
       return {
         before, after, amount, paymentId, saleId: saleId || null,
@@ -2963,6 +3131,11 @@ const customersRepo = {
         customer_contact_role: contact?.role || '',
         customer_contact_phone: contact?.phone || '',
         customer_contact_email: contact?.email || '',
+        financial_account_id: financialAccount?.id || null,
+        payment_currency: paymentCurrency,
+        exchange_rate: exchangeRate,
+        account_amount: accountAmount,
+        payment_reference: String(paymentReference || note || '').trim().slice(0, 120),
         replaces_payment_id: replacesPaymentId,
         replaces_payment_document_number_fmt:
           replacedPayment?.document_number_fmt ||
@@ -3092,6 +3265,60 @@ const customersRepo = {
       );
       if (!changed.changes) throw new Error('Este abono ya fue anulado');
 
+      // El correlativo nunca se reutiliza, pero su ciclo de vida sí debe reflejar
+      // la realidad. Así Auditoría distingue un ABO vigente de uno anulado.
+      db.prepare(`
+        UPDATE document_issues
+        SET status='cancelled'
+        WHERE kind='abono' AND source_type='payment' AND source_id=?
+      `).run(String(id));
+
+      // Invalidar cualquier trabajo anterior: conservarlo en la bitácora no
+      // significa que pueda reimprimirse luego como un recibo vigente.
+      if (tableExists('print_jobs')) {
+        db.prepare(`
+          UPDATE print_jobs
+          SET invalidated_at=datetime('now','localtime'),
+              invalidation_reason=?
+          WHERE type IN ('abono','payment','ticket')
+            AND reference_id=?
+            AND invalidated_at IS NULL
+        `).run(`Abono anulado: ${reason}`.slice(0, 500), id);
+      }
+
+      // Bancos y Cuentas forma parte de la misma transacción del abono. Si el
+      // cobro entró a una cuenta, la anulación retira exactamente ese movimiento.
+      if (payment.financial_account_id && tableExists('financial_movements')) {
+        const financialMovement = db.prepare(`
+          SELECT id FROM financial_movements
+          WHERE reference_type='payment' AND reference_id=?
+            AND type='abono_recibido' AND status='activo'
+          ORDER BY id DESC LIMIT 1
+        `).get(id);
+        if (financialMovement) {
+          financialAccountsRepo.cancelMovement(
+            financialMovement.id, userId || null, `Abono anulado: ${reason}`
+          );
+        }
+      }
+
+      // Contabilidad también se revierte antes de confirmar la transacción. Un
+      // fallo aquí revierte deuda, caja, banco y documento: nunca queda media
+      // anulación aplicada.
+      if (tableExists('accounting_entries')) {
+        const accountingEntry = db.prepare(`
+          SELECT id FROM accounting_entries
+          WHERE source_module='abono' AND source_id=? AND status='confirmado'
+          ORDER BY id DESC LIMIT 1
+        `).get(id);
+        if (accountingEntry) {
+          accountingRepo.reverseEntry(
+            accountingEntry.id, userId || null, `Abono anulado: ${reason}`,
+            { allowSystem: true }
+          );
+        }
+      }
+
       // Si el acumulado del cliente llegó desfasado desde otra terminal, sumar
       // el monto a ciegas infla la deuda. Cuando toda la CxC está vinculada a
       // facturas, la fuente segura son los documentos vigentes y sus abonos
@@ -3111,11 +3338,11 @@ const customersRepo = {
       if (requiresCashTrace) {
         db.prepare(`
           INSERT INTO cash_movements(
-            cash_session_id,type,amount,method,reference_id,description,user_id
-          ) VALUES(?,?,?,?,?,?,?)
+            cash_session_id,type,amount,method,reference_id,payment_id,description,user_id
+          ) VALUES(?,?,?,?,?,?,?,?)
         `).run(
           reversalSession.id, 'salida', Number(payment.amount || 0),
-          method || 'efectivo', id,
+          method || 'efectivo', id, id,
           `Anulación de abono ${payment.document_number_fmt || payment.numero_recibo || '#' + id}: ${reason}`,
           userId || null
         );
@@ -3131,6 +3358,8 @@ const customersRepo = {
         restoredDue,
         reconciledFromDocuments,
         cashSessionId: reversalSession?.id || null,
+        documentNumber: payment.document_number_fmt || payment.numero_recibo || '',
+        financialAccountId: payment.financial_account_id || null,
         allocations: allocations.map(row => ({
           sale_id: Number(row.sale_id),
           amount: Number(row.amount || 0),
@@ -3139,7 +3368,7 @@ const customersRepo = {
     });
     return cancelTx();
   },
-  getPayments(customerId) {
+  getPayments(customerId, { includeCancelled = false } = {}) {
     // LEFT JOIN a sales para que la referencia de factura en el historial de
     // abonos muestre el número real (numero_factura_fmt), no el id interno.
     // Alias con prefijo sale_ para no colisionar con columnas de payments.
@@ -3157,10 +3386,11 @@ const customersRepo = {
       FROM payments p
       LEFT JOIN sales s ON s.id = p.sale_id
       WHERE p.customer_id=?
+        ${includeCancelled ? '' : "AND COALESCE(p.status,'active')='active'"}
       ORDER BY p.created_at DESC
     `).all(customerId).map(hydratePaymentAllocations);
   },
-  getAllPayments() {
+  getAllPayments({ includeCancelled = false } = {}) {
     return db.prepare(`
       SELECT p.*,
              c.name AS customer_name,c.rnc AS customer_rnc,c.phone AS customer_phone,
@@ -3176,6 +3406,7 @@ const customersRepo = {
       FROM payments p
       LEFT JOIN customers c ON c.id=p.customer_id
       LEFT JOIN sales s ON s.id=p.sale_id
+      ${includeCancelled ? '' : "WHERE COALESCE(p.status,'active')='active'"}
       ORDER BY p.created_at DESC,p.id DESC
     `).all().map(hydratePaymentAllocations);
   },
@@ -3232,7 +3463,9 @@ const cashRepo = {
     if (!session) throw new Error('Sesión de caja no encontrada');
     if (session.status === 'closed') throw new Error('Esta sesión de caja ya fue cerrada');
 
-    const diff = closeAmount - expected;
+    const canonical = this.getSessionCashSummary(sessionId);
+    expected = canonical?.expected ?? Number(expected || 0);
+    const diff = round2(closeAmount - expected);
     db.prepare(`
       UPDATE cash_sessions SET
         close_date=?, close_time=?, close_amount=?, close_bills=?,
@@ -3242,13 +3475,20 @@ const cashRepo = {
            expected, diff, notes || '', sessionId);
     audit(userId, cajero, 'cierre_caja', 'cash_sessions', sessionId,
           `Contado: ${closeAmount} | Esperado: ${expected} | Diferencia: ${diff}`);
-    return { diff };
+    return { diff, expected, summary: canonical };
   },
-  addMovement({ sessionId, type, amount, method, referenceId, description, userId }) {
+  addMovement({
+    sessionId, type, amount, method, referenceId, paymentId = null,
+    description, userId
+  }) {
     db.prepare(`
-      INSERT INTO cash_movements(cash_session_id,type,amount,method,reference_id,description,user_id)
-      VALUES(?,?,?,?,?,?,?)
-    `).run(sessionId, type, amount, method || 'efectivo', referenceId, description || '', userId);
+      INSERT INTO cash_movements(
+        cash_session_id,type,amount,method,reference_id,payment_id,description,user_id
+      ) VALUES(?,?,?,?,?,?,?,?)
+    `).run(
+      sessionId, type, amount, method || 'efectivo', referenceId,
+      paymentId || null, description || '', userId
+    );
   },
   getSessions(limit = 30) {
     return db.prepare(`
@@ -3327,7 +3567,7 @@ const cashRepo = {
     ).all(sessionId);
 
     let efectivoNeto = 0;          // solo efectivo físico
-    const byMethodIn = {};         // entradas por método (informativo)
+    const byMethodNet = {};        // movimiento neto por método
 
     for (const m of movements) {
       const method = (m.method || 'efectivo').toLowerCase();
@@ -3340,9 +3580,16 @@ const cashRepo = {
         continue;
       }
 
-      // Acumular informativo por método (entradas de venta/abono)
+      // Movimiento neto por método. Así un abono y su anulación dentro de la
+      // misma sesión dejan exactamente cero también en el resumen visual.
       if (m.type === 'venta' || m.type === 'abono') {
-        byMethodIn[method] = (byMethodIn[method] || 0) + amt;
+        byMethodNet[method] = (byMethodNet[method] || 0) + amt;
+      } else if (m.type === 'entrada') {
+        byMethodNet[method] = (byMethodNet[method] || 0) + amt;
+      } else if (m.type === 'salida') {
+        byMethodNet[method] = (byMethodNet[method] || 0) - amt;
+      } else if (m.type === 'devolucion') {
+        byMethodNet[method] = (byMethodNet[method] || 0) + amt;
       }
 
       // Efectivo físico: solo movimientos en efectivo afectan el conteo.
@@ -3365,8 +3612,53 @@ const cashRepo = {
       openAmount,
       efectivoNeto: round2(efectivoNeto),
       expected,
-      byMethodIn,
+      // Alias para terminales que todavía consulten el nombre anterior.
+      byMethodIn: byMethodNet,
+      byMethodNet,
       movementCount: movements.length,
+    };
+  },
+  getSessionReport(sessionId) {
+    const session = db.prepare('SELECT * FROM cash_sessions WHERE id=?').get(sessionId);
+    if (!session) return null;
+    const sales = this.getSessionSales(sessionId);
+    const payments = db.prepare(`
+      SELECT p.*,c.name customer_name,c.rnc customer_rnc
+      FROM payments p
+      LEFT JOIN customers c ON c.id=p.customer_id
+      WHERE p.cash_session_id=?
+        AND COALESCE(p.status,'active')='active'
+        AND COALESCE(p.import_source,'')=''
+      ORDER BY p.created_at,p.id
+    `).all(sessionId).map(hydratePaymentAllocations);
+    const movements = db.prepare(`
+      SELECT * FROM cash_movements
+      WHERE cash_session_id=?
+      ORDER BY created_at,id
+    `).all(sessionId);
+    const summary = this.getSessionCashSummary(sessionId);
+    const invoices = sales.filter(sale => sale.type === 'factura');
+    const returns = sales.filter(sale => sale.type === 'devolucion');
+    const bySaleMethod = {};
+    invoices.forEach(sale => {
+      const method = String(sale.payment_method || 'efectivo').toLowerCase();
+      bySaleMethod[method] = round2((bySaleMethod[method] || 0) + Number(sale.total || 0));
+    });
+    return {
+      session,
+      sales,
+      payments,
+      movements,
+      summary,
+      totals: {
+        sales: round2(invoices.reduce((sum, sale) => sum + Number(sale.total || 0), 0)),
+        returns: round2(returns.reduce((sum, sale) => sum + Number(sale.total || 0), 0)),
+        payments: round2(payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0)),
+        salesCount: invoices.length,
+        returnCount: returns.length,
+        paymentCount: payments.length,
+        bySaleMethod,
+      },
     };
   },
 };
@@ -3684,6 +3976,46 @@ const salesRepo = {
         accountAmount = round2(baseAccountAmount / exchangeRate);
       }
 
+      let initialFinancialAccount = null;
+      let initialPaymentCurrency = 'DOP';
+      let initialExchangeRate = 1;
+      let initialAccountAmount = 0;
+      if (type === 'factura' && method === 'credito' && initialPaymentAmount > 0 &&
+          ['transferencia', 'tarjeta', 'cheque'].includes(initialPaymentMethod)) {
+        let initialAccountId = Number(payment.initialPaymentFinancialAccountId) ||
+          Number(payment.financialAccountId) || null;
+        if (!initialAccountId) {
+          const preferredType = initialPaymentMethod === 'tarjeta' ? 'tarjeta' : 'banco';
+          initialAccountId = db.prepare(`
+            SELECT id FROM financial_accounts
+            WHERE active=1 AND type=?
+            ORDER BY CASE WHEN upper(COALESCE(currency,'DOP'))='DOP' THEN 0 ELSE 1 END, id
+            LIMIT 1
+          `).get(preferredType)?.id || null;
+        }
+        initialFinancialAccount = initialAccountId
+          ? db.prepare('SELECT * FROM financial_accounts WHERE id=? AND active=1').get(initialAccountId)
+          : null;
+        if (!initialFinancialAccount) {
+          throw new Error(
+            `Selecciona una cuenta activa para recibir el pago inicial por ${initialPaymentMethod}`
+          );
+        }
+        if (initialPaymentMethod !== 'tarjeta' && initialFinancialAccount.type !== 'banco') {
+          throw new Error('Transferencias y cheques deben recibirse en una cuenta bancaria');
+        }
+        initialPaymentCurrency = String(initialFinancialAccount.currency || 'DOP').toUpperCase();
+        initialExchangeRate = initialPaymentCurrency === 'USD'
+          ? round2(Number(payment.initialPaymentExchangeRate) || 0) : 1;
+        if (initialPaymentCurrency === 'USD' &&
+            (initialExchangeRate < 20 || initialExchangeRate > 500)) {
+          throw new Error('Indica una tasa USD válida para el pago inicial');
+        }
+        initialAccountAmount = initialPaymentCurrency === 'USD'
+          ? round2(initialPaymentAmount / initialExchangeRate)
+          : initialPaymentAmount;
+      }
+
       // Vendedor asignado: selección explícita del POS o vínculo automático con
       // el usuario que factura. Un ambulante puede existir sin usuario del sistema.
       let salespersonId = Number(payment.salespersonId) || null;
@@ -3886,15 +4218,20 @@ const salesRepo = {
               customer_id,sale_id,amount,method,note,balance_before,balance_after,
               cajero,user_id,cash_session_id,
               customer_contact_id,customer_contact_name,customer_contact_document,
-              customer_contact_role,customer_contact_phone,customer_contact_email,created_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
+              customer_contact_role,customer_contact_phone,customer_contact_email,
+              financial_account_id,payment_currency,exchange_rate,account_amount,
+              payment_reference,created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
           `).run(
             customer.id, saleId, initialPaymentAmount, initialPaymentMethod,
             'Pago inicial de factura a crédito', debtBeforeInitial, newBalance,
             user.name || '', user.id, session.id,
             selectedContact?.id || null, selectedContact?.name || '',
             selectedContact?.document || '', selectedContact?.role || '',
-            selectedContact?.phone || '', selectedContact?.email || ''
+            selectedContact?.phone || '', selectedContact?.email || '',
+            initialFinancialAccount?.id || null, initialPaymentCurrency,
+            initialExchangeRate, initialAccountAmount,
+            String(payment.initialPaymentReference || '').trim().slice(0, 120)
           );
           initialPaymentId = Number(paymentInsert.lastInsertRowid);
           const initialIssue = _issueDocumentNumber('abono', 'payment', initialPaymentId);
@@ -3910,10 +4247,26 @@ const salesRepo = {
           cashRepo.addMovement({
             sessionId: session.id, type: 'abono',
             amount: initialPaymentAmount, method: initialPaymentMethod,
-            referenceId: saleId,
+            referenceId: initialPaymentId,
+            paymentId: initialPaymentId,
             description: `Pago inicial ${documentIssue.formatted_number}`,
             userId: user.id,
           });
+          if (initialFinancialAccount && initialAccountAmount > 0.005) {
+            financialAccountsRepo.addMovement({
+              accountId: initialFinancialAccount.id,
+              type: 'abono_recibido',
+              amount: initialAccountAmount,
+              description: `Pago inicial ${initialIssue.formatted_number}`,
+              referenceType: 'payment',
+              referenceId: initialPaymentId,
+              method: initialPaymentMethod,
+              userId: user.id,
+              notes: initialPaymentCurrency === 'USD'
+                ? `Base RD$${initialPaymentAmount.toFixed(2)} · Tasa ${initialExchangeRate.toFixed(2)}`
+                : String(payment.initialPaymentReference || '').trim().slice(0, 300),
+            });
+          }
         }
       }
 
@@ -4523,7 +4876,8 @@ const salesRepo = {
              (
                SELECT GROUP_CONCAT(p.numero_recibo, ',')
                FROM payments p
-               WHERE (
+               WHERE COALESCE(p.status,'active')='active'
+                 AND (
                    p.sale_id=s.id
                    AND NOT EXISTS (
                      SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=p.id
@@ -4559,7 +4913,8 @@ const salesRepo = {
           OR EXISTS (
             SELECT 1
             FROM payments p
-            WHERE CAST(p.numero_recibo AS TEXT) LIKE ?
+            WHERE COALESCE(p.status,'active')='active'
+              AND CAST(p.numero_recibo AS TEXT) LIKE ?
               AND (
                   (
                     p.sale_id=s.id
@@ -7550,7 +7905,8 @@ const accountingRepo = {
       const cfg = this.getConfig();
       const getAccId = (key, fallback) => cfg[key]?.account_id || db.prepare("SELECT id FROM accounting_accounts WHERE code=?").get(fallback)?.id;
 
-      const cashAccId = payment.method === 'transferencia'
+      const method = String(payment.method || 'efectivo').toLowerCase();
+      const cashAccId = ['transferencia', 'tarjeta', 'cheque'].includes(method)
         ? getAccId('account_bank', '1103')
         : getAccId('account_cash', '1101');
       const arAccId = getAccId('account_ar', '1104');
@@ -8751,6 +9107,7 @@ module.exports = {
   purchasesRepo,
   initDB,
   initDetachedDB,
+  ensureUppercasePersistence,
   authRepo,
   settingsRepo,
   usersRepo,

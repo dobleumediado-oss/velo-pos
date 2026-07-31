@@ -119,10 +119,18 @@ function paymentInvoiceSummary(payment) {
 // Nombre legible y estable para PDFs de clientes:
 // PrimerNombre-PrimerApellido-NUMERO-DOCUMENTO.pdf
 function clientDocumentFilename(customerName, documentNumber, fallback = 'Documento') {
-  const words = String(customerName || '').trim().split(/\s+/).filter(Boolean);
+  const customer = customerName && typeof customerName === 'object' ? customerName : null;
+  const displayName = customer
+    ? (customer.customer_type === 'company'
+      ? (customer.trade_name || customer.customer_trade_name || customer.name || customer.customer_name)
+      : (customer.name || customer.customer_name))
+    : customerName;
+  const words = String(displayName || '').trim().split(/\s+/).filter(Boolean);
   const firstName = words[0] || 'Cliente';
-  const surnameIndex = words.length >= 4 ? 2 : (words.length >= 2 ? 1 : -1);
-  const firstSurname = surnameIndex >= 0 ? words[surnameIndex] : '';
+  const legalSuffix = /^(SRL|S\.?R\.?L\.?|SA|S\.?A\.?|EIRL|E\.?I\.?R\.?L\.?)$/i;
+  const firstSurname = customer?.customer_type === 'company'
+    ? (words.find((word, index) => index > 0 && !legalSuffix.test(word)) || '')
+    : (words.length >= 4 ? words[2] : (words[1] || ''));
   const clean = value => String(value || '')
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^A-Za-z0-9_-]+/g, '-')
@@ -462,7 +470,9 @@ function newInvObj(id) {
     displayCurrency: 'DOP', displayExchangeRate: 0, saleDate: new Date().toISOString().split('T')[0],
     printPrinterName: '', printProfileId: '', printTemplateId: '',
     printCopies: 0, printAction: '',
-    initialPaymentAmount: 0, notes: '',
+    initialPaymentAmount: 0, initialPaymentMethod: 'efectivo',
+    initialPaymentFinancialAccountId: null, initialPaymentExchangeRate: 1,
+    initialPaymentReference: '', notes: '',
     replacesSaleId: null, replacementDocumentNumber: ''
   };
 }

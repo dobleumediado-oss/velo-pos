@@ -1926,8 +1926,9 @@ function posUpdatePrintSummary() {
   const channelLabel = typeof PRINT_CHANNELS !== 'undefined' ? PRINT_CHANNELS[channel]?.label : '';
   if (!summary) return;
   summary.innerHTML = action === 'none'
-    ? `<strong>No imprimir</strong><span style="color:var(--muted2)"> · la venta se guardará normalmente</span>`
-    : `<strong>${posEscHtml(channelLabel || printer || 'Impresora predeterminada')}</strong>
+    ? `<strong>Guardar solamente</strong><span style="color:var(--muted2)"> · no abrirá el documento</span>`
+    : `<strong>Mostrar documento</strong><span style="color:var(--muted2)"> · imprimirás únicamente desde el display</span><br>
+       <strong>${posEscHtml(channelLabel || printer || 'Impresora predeterminada')}</strong>
        ${channelLabel ? `<span style="color:var(--muted2)"> · ${posEscHtml(printer || 'diálogo del sistema')}</span>` : ''}
        <span style="color:var(--muted2)"> · ${posEscHtml(template?.nombre || 'Plantilla general')}${copies > 1 ? ` · ${copies} copias` : ''}</span>`;
 }
@@ -1940,7 +1941,7 @@ async function posRenderPrintOutput(inv, isQuote) {
   if (!document.getElementById('cbr-print-output')) return;
   const category = isQuote ? 'cotizacion' : 'ticket';
   const routeCfg = typeof _getCategoryConfig === 'function'
-    ? _getCategoryConfig(category) : { printer: '', template: '', copies: 1, autoPrint: true };
+    ? _getCategoryConfig(category) : { printer: '', template: '', copies: 1, autoPrint: false };
   const configuredPrinter = inv.printPrinterName || routeCfg.printer || DB?.settings?.printer || '';
   const configuredInfo = list.find(p => p.name === configuredPrinter);
   const configuredRuntime = configuredInfo && typeof getPrinterRuntimeState === 'function'
@@ -1951,7 +1952,7 @@ async function posRenderPrintOutput(inv, isQuote) {
   const preferredTemplate = inv.printTemplateId || routeCfg.template || DB?.settings?.print_template || '';
   const effectiveTemplate = compatibleIds.includes(preferredTemplate)
     ? preferredTemplate : _posDefaultTemplateForPrinter(effectivePrinter);
-  const action = inv.printAction || (routeCfg.autoPrint === false ? 'none' : 'print');
+  const action = inv.printAction || 'print';
   const copies = Math.max(1, Math.min(9, parseInt(inv.printCopies || routeCfg.copies, 10) || 1));
   const needsAttention = !!configuredPrinter &&
     (!printerAvailable || configuredRuntime?.reportedIssue);
@@ -1974,10 +1975,10 @@ async function posRenderPrintOutput(inv, isQuote) {
         <input type="hidden" id="cbr-print-channel" value="${posEscHtml(routeCfg.channel || '')}"/>
         <input type="hidden" id="cbr-print-profile" value="${posEscHtml(effectiveProfile)}"/>
         <div class="g2">
-          <div class="fg" style="margin-bottom:8px"><label class="lbl">Al confirmar</label>
+          <div class="fg" style="margin-bottom:8px"><label class="lbl">Después de confirmar</label>
             <select class="inp" id="cbr-print-action" onchange="posUpdatePrintSummary()">
-              <option value="print" ${action === 'print' ? 'selected' : ''}>Imprimir automáticamente</option>
-              <option value="none" ${action === 'none' ? 'selected' : ''}>Guardar sin imprimir</option>
+              <option value="print" ${action === 'print' ? 'selected' : ''}>Mostrar documento</option>
+              <option value="none" ${action === 'none' ? 'selected' : ''}>Guardar sin abrir documento</option>
             </select>
           </div>
           <div class="fg" style="margin-bottom:8px"><label class="lbl">Impresora de documentos</label>
@@ -2007,7 +2008,7 @@ async function posRenderPrintOutput(inv, isQuote) {
 
 function _posCapturePrintOutput(inv) {
   if (!inv) return;
-  inv.printAction = document.getElementById('cbr-print-action')?.value || inv.printAction;
+  inv.printAction = document.getElementById('cbr-print-action')?.value || inv.printAction || 'print';
   inv.printPrinterName = document.getElementById('cbr-printer')?.value || '';
   inv.printTemplateId = document.getElementById('cbr-template')?.value || inv.printTemplateId;
   inv.printCopies = Math.max(1,
@@ -2262,6 +2263,39 @@ function openCobroModal(inv) {
         </div>
         <div id="cbr-credit-balance" style="font-size:12px;color:var(--muted);margin-top:5px"></div>
       </div>
+      <div class="g2">
+        <div class="fg">
+          <label class="lbl">Método del pago inicial</label>
+          <select class="inp" id="cbr-initial-method" onchange="cbrInitialMethodChanged()">
+            <option value="efectivo" ${(inv.initialPaymentMethod || 'efectivo') === 'efectivo' ? 'selected' : ''}>Efectivo</option>
+            <option value="transferencia" ${inv.initialPaymentMethod === 'transferencia' ? 'selected' : ''}>Transferencia</option>
+            <option value="tarjeta" ${inv.initialPaymentMethod === 'tarjeta' ? 'selected' : ''}>Tarjeta</option>
+            <option value="cheque" ${inv.initialPaymentMethod === 'cheque' ? 'selected' : ''}>Cheque</option>
+          </select>
+        </div>
+        <div class="fg" id="cbr-initial-account-wrap" style="display:none">
+          <label class="lbl">Cuenta que recibe *</label>
+          <select class="inp" id="cbr-initial-account" onchange="cbrInitialMethodChanged()">
+            <option value="">— Selecciona —</option>
+            ${_cbrBankAccounts().map(account => `<option value="${account.id}" data-currency="${posEscHtml(account.currency || 'DOP')}"
+              ${Number(inv.initialPaymentFinancialAccountId) === Number(account.id) ? 'selected' : ''}>
+              ${posEscHtml(account.name)}${account.bank_name ? ` · ${posEscHtml(account.bank_name)}` : ''}${account.currency === 'USD' ? ' · USD' : ''}
+            </option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="g2" id="cbr-initial-bank-detail" style="display:none">
+        <div class="fg">
+          <label class="lbl">Referencia</label>
+          <input class="inp" id="cbr-initial-reference" maxlength="120"
+                 value="${posEscHtml(inv.initialPaymentReference || '')}" placeholder="Transferencia, cheque o autorización"/>
+        </div>
+        <div class="fg" id="cbr-initial-exchange-wrap" style="display:none">
+          <label class="lbl">Tasa USD *</label>
+          <input class="inp" id="cbr-initial-exchange-rate" type="number" min="20" max="500" step="0.01"
+                 value="${Number(inv.initialPaymentExchangeRate || 0) || ''}" placeholder="RD$ por US$"/>
+        </div>
+      </div>
     </div>
 
     <div class="fg" style="margin-top:10px">
@@ -2311,6 +2345,7 @@ function openCobroModal(inv) {
     const pmeth = document.getElementById('cbr-pmeth')?.value;
     if (!pmeth || pmeth === 'efectivo') cbrCalcCambio(total);
     if (pmeth === 'credito') cbrCalcInitial(total);
+    if (pmeth === 'credito') cbrInitialMethodChanged();
     cbrUpdatePaymentCurrency();
   }, 50);
 
@@ -2440,6 +2475,7 @@ function cbrTogglePago(val) {
       initial.value = received.toFixed(2);
     }
     cbrCalcInitial(total);
+    cbrInitialMethodChanged();
   }
   cbrUpdatePaymentCurrency();
 }
@@ -2505,6 +2541,22 @@ function cbrCalcInitial(total = calcTotals(currentInv()).total) {
   const el = document.getElementById('cbr-credit-balance');
   if (el) {
     el.innerHTML = `Pago inicial: <strong>${fmt(paid)}</strong> · Quedará a crédito: <strong style="color:var(--amber)">${fmt(pending)}</strong>`;
+  }
+}
+
+function cbrInitialMethodChanged() {
+  const method = document.getElementById('cbr-initial-method')?.value || 'efectivo';
+  const bankMethod = ['transferencia','tarjeta','cheque'].includes(method);
+  const accountWrap = document.getElementById('cbr-initial-account-wrap');
+  const detail = document.getElementById('cbr-initial-bank-detail');
+  const account = document.getElementById('cbr-initial-account');
+  const exchangeWrap = document.getElementById('cbr-initial-exchange-wrap');
+  if (accountWrap) accountWrap.style.display = bankMethod ? 'block' : 'none';
+  if (detail) detail.style.display = bankMethod ? 'grid' : 'none';
+  const selected = account?.options?.[account.selectedIndex];
+  if (exchangeWrap) {
+    exchangeWrap.style.display =
+      bankMethod && selected?.dataset?.currency === 'USD' ? 'block' : 'none';
   }
 }
 
@@ -2719,7 +2771,7 @@ async function finalizarVenta() {
   const saleDate = document.getElementById('cbr-sale-date')?.value || new Date().toISOString().slice(0,10);
   const checkoutPrintRoute = typeof _getCategoryConfig === 'function'
     ? _getCategoryConfig(isQuote ? 'cotizacion' : 'ticket')
-    : { printer: '', template: '', profileId: '', copies: 1, autoPrint: true };
+    : { printer: '', template: '', profileId: '', copies: 1, autoPrint: false };
   const printerInput = document.getElementById('cbr-printer');
   const templateInput = document.getElementById('cbr-template');
   const profileInput = document.getElementById('cbr-print-profile');
@@ -2728,7 +2780,7 @@ async function finalizarVenta() {
   const chosenTemplate = templateInput ? templateInput.value : (inv.printTemplateId || checkoutPrintRoute.template || DB?.settings?.print_template || '');
   const chosenPrintProfile = profileInput ? profileInput.value : (inv.printProfileId || checkoutPrintRoute.profileId || '');
   const chosenPrintAction = actionInput ? actionInput.value
-    : (inv.printAction || (checkoutPrintRoute.autoPrint === false ? 'none' : 'print'));
+    : (inv.printAction || 'print');
   const chosenPrintCopies = Math.max(1, Math.min(9,
     parseInt(document.getElementById('cbr-print-copies')?.value || inv.printCopies || checkoutPrintRoute.copies, 10) || 1));
   // Tipo de impresión que se tomó de la salida (lo define la plantilla elegida:
@@ -2755,6 +2807,19 @@ async function finalizarVenta() {
   const salespersonId = parseInt(document.getElementById('cbr-salesperson')?.value) || null;
   const initialPaymentAmount = pmeth === 'credito'
     ? Number(document.getElementById('cbr-initial-payment')?.value || 0) : 0;
+  const initialPaymentMethod = pmeth === 'credito'
+    ? (document.getElementById('cbr-initial-method')?.value || 'efectivo') : 'efectivo';
+  const initialPaymentFinancialAccountId = pmeth === 'credito' &&
+    ['transferencia','tarjeta','cheque'].includes(initialPaymentMethod)
+    ? (Number(document.getElementById('cbr-initial-account')?.value) || null)
+    : null;
+  const initialAccount = _cbrBankAccounts().find(
+    account => Number(account.id) === Number(initialPaymentFinancialAccountId)
+  );
+  const initialPaymentExchangeRate = initialAccount?.currency === 'USD'
+    ? Number(document.getElementById('cbr-initial-exchange-rate')?.value || 0) : 1;
+  const initialPaymentReference =
+    document.getElementById('cbr-initial-reference')?.value?.trim() || '';
   const saleNotes = document.getElementById('cbr-notes')?.value?.trim() || '';
 
   // Transferencia sí requiere cuenta; tarjeta requiere la marca utilizada por el
@@ -2787,6 +2852,10 @@ async function finalizarVenta() {
   inv.paymentReference = paymentReference;
   inv.salespersonId = salespersonId;
   inv.initialPaymentAmount = initialPaymentAmount;
+  inv.initialPaymentMethod = initialPaymentMethod;
+  inv.initialPaymentFinancialAccountId = initialPaymentFinancialAccountId;
+  inv.initialPaymentExchangeRate = initialPaymentExchangeRate;
+  inv.initialPaymentReference = initialPaymentReference;
   inv.notes = saleNotes;
 
   inv.pmeth = pmeth;
@@ -2812,6 +2881,17 @@ async function finalizarVenta() {
     }
     if (initialPaymentAmount < 0 || initialPaymentAmount >= currentTotal - 0.005) {
       toast('El pago inicial debe ser menor que el total; si paga todo usa una venta al contado', 'w');
+      return;
+    }
+    if (initialPaymentAmount > 0 &&
+        ['transferencia','tarjeta','cheque'].includes(initialPaymentMethod) &&
+        !initialPaymentFinancialAccountId) {
+      toast('Selecciona la cuenta que recibe el pago inicial', 'w');
+      return;
+    }
+    if (initialPaymentAmount > 0 && initialAccount?.currency === 'USD' &&
+        (initialPaymentExchangeRate < 20 || initialPaymentExchangeRate > 500)) {
+      toast('Indica una tasa USD válida para el pago inicial', 'w');
       return;
     }
   }
@@ -2920,7 +3000,10 @@ async function finalizarVenta() {
       printCopies: inv.printCopies || 1,
       printAction: inv.printAction || 'print',
       initialPaymentAmount,
-      initialPaymentMethod: 'efectivo',
+      initialPaymentMethod,
+      initialPaymentFinancialAccountId,
+      initialPaymentExchangeRate,
+      initialPaymentReference,
       notes: saleNotes,
       replacesSaleId: inv.replacesSaleId || null,
     },
@@ -3252,7 +3335,11 @@ function _posSendWhatsAppPDF(sale) {
   };
   enviarDocumentoPDFWhatsApp(
     () => printReceipt(payload, true),
-    clientDocumentFilename(sale.clientName || sale.customer_name, label,
+    clientDocumentFilename({
+      name: sale.clientName || sale.customer_name,
+      customer_type: sale.customer_type || 'person',
+      trade_name: sale.customer_trade_name || '',
+    }, label,
       sale.type === 'cotizacion' ? 'Cotizacion' : 'Factura'),
     { message, phone, clientName: sale.clientName || 'cliente' }
   );

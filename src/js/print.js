@@ -119,10 +119,10 @@ function _getTicketPrinterProfile(printerName = _getSavedPrinter()) {
 // vista previa forzada, y (solo "ticket") impresión automática tras venta.
 // Si una categoría no tiene override, cae a la impresora global guardada.
 const PRINT_CATEGORIES = {
-  ticket:       { label: 'Facturas y ventas',         autoPrintDefault: true,  previewDefault: false, media: 'any'   },
-  cotizacion:   { label: 'Cotizaciones',               autoPrintDefault: true,  previewDefault: false, media: 'any'   },
-  pago:         { label: 'Pagos y abonos',             autoPrintDefault: true,  previewDefault: false, media: 'any'   },
-  conduce:      { label: 'Conduces y entregas',        autoPrintDefault: true,  previewDefault: false, media: 'any'   },
+  ticket:       { label: 'Facturas y ventas',         autoPrintDefault: false, previewDefault: true,  media: 'any'   },
+  cotizacion:   { label: 'Cotizaciones',               autoPrintDefault: false, previewDefault: true,  media: 'any'   },
+  pago:         { label: 'Pagos y abonos',             autoPrintDefault: false, previewDefault: true,  media: 'any'   },
+  conduce:      { label: 'Conduces y entregas',        autoPrintDefault: false, previewDefault: true,  media: 'any'   },
   caja:         { label: 'Caja, arqueos y cierres',    autoPrintDefault: false, previewDefault: true,  media: 'sheet' },
   inventario:   { label: 'Inventario y etiquetas de anaquel', autoPrintDefault: false, previewDefault: true, media: 'sheet' },
   compras:      { label: 'Compras y recepciones',      autoPrintDefault: false, previewDefault: true,  media: 'sheet' },
@@ -215,10 +215,8 @@ function _getCategoryConfig(category) {
     template:  (cat.template || '').trim(),
     profileId: String(cat.profileId || profiles[channel] || '').trim(),
     copies:    Math.max(1, Math.min(9, parseInt(cat.copies, 10) || 1)),
-    preview:   cat.preview !== undefined ? cat.preview === true : definition.previewDefault === true,
-    autoPrint: cat.autoPrint !== undefined
-      ? cat.autoPrint !== false
-      : (definition.autoPrintDefault ?? true),
+    preview: true,
+    autoPrint: false,
   };
 }
 
@@ -353,6 +351,7 @@ window.addEventListener('beforeunload', printerMonitorStop);
 const _inFlightPrintKeys = new Set();
 
 async function _printDispatch(payload) {
+  payload = { ...(payload || {}), userConfirmed: true };
   const key = (payload.jobType && payload.referenceId != null)
     ? `${payload.jobType}:${payload.referenceId}` : null;
   if (key) {
@@ -437,7 +436,11 @@ function printReceipt(sale, isReprint = false) {
   if (!sale) return;
 
   // ── Usar sistema de plantillas si está configurado ──
-  const jobType = sale.type === 'cotizacion' ? 'cotizacion' : 'ticket';
+  const jobType = sale.type === 'cotizacion'
+    ? 'cotizacion'
+    : sale.type === 'abono'
+      ? 'abono'
+      : 'ticket';
   const routeConfig = _getCategoryConfig(_categoryForJobType(jobType));
   const templateId = sale.print_template_id || routeConfig.template || DB?.settings?.print_template;
   const plantilla  = templateId ? getPlantilla(templateId) : null;
@@ -1299,7 +1302,13 @@ async function _prepareWhatsAppPDF(html, request) {
     request.message,
     request.phone,
     request.clientName,
-    { attachmentPath: result.path, attachmentName: request.name }
+    {
+      attachmentPath: result.path,
+      attachmentName: result.name || (
+        String(request.name || 'Documento').toLowerCase().endsWith('.pdf')
+          ? request.name : `${request.name}.pdf`
+      )
+    }
   );
 }
 
@@ -1507,6 +1516,7 @@ function _printTargetServer() {
     userId: (typeof user !== 'undefined' && user?.id) || null,
     channel: route.channel || '',
     copies: route.copies || 1,
+    userConfirmed: true,
   })
     .then(r => toast(r && r.ok ? '✓ Enviado a la impresora del mostrador' : (r && r.error) || 'No se pudo imprimir en el servidor', r && r.ok ? 's' : 'err'))
     .catch(() => toast('Sin conexión al servidor', 'err'));
@@ -1534,9 +1544,10 @@ function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = fa
   }
   const category = _categoryForJobType(jobType);
   const categoryConfig = _getCategoryConfig(category);
-  const shouldPreview = isReprint || (printOptions.preview !== undefined
-    ? printOptions.preview === true
-    : categoryConfig.preview === true);
+  // Política global: ningún documento se envía automáticamente al spooler.
+  // Confirmar una operación solo abre el display; imprimir exige el botón
+  // explícito del usuario dentro de esa vista previa.
+  const shouldPreview = true;
   if (!window._printPreviewBypass && shouldPreview) {
     _openPrintPreview(html, { jobType, referenceId, isReprint, mode: 'print', printOptions });
     return;
@@ -1765,7 +1776,9 @@ function printHTML(html, category = 'reporte') {
     return;
   }
   const resolvedCategory = _categoryForJobType(category);
-  if (!window._printPreviewBypass && _getCategoryConfig(resolvedCategory).preview) {
+  // Los reportes, estados y cierres obedecen la misma política que facturas:
+  // primero se muestran; solo el botón Imprimir del display despacha el trabajo.
+  if (!window._printPreviewBypass) {
     _openPrintPreview(html, { jobType: category, mode: 'print', source: 'html' });
     return;
   }

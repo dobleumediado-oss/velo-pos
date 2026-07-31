@@ -59,7 +59,7 @@ function inferPrinterProfileId(printerName, scope = 'ticket') {
   if (scope === 'barcode') return 'label_generic';
   if (/58|mini|port|pocket|handheld|bt.*print|print.*bt/.test(n)) return 'ticket_58';
   if (/72\s*mm/.test(n)) return 'ticket_72';
-  if (/laser|inkjet|officejet|laserjet|pixma|envy|deskjet|ecotank|l-series|brother|canon|hp |ricoh|xerox|kyocera|samsung.*ml|samsung.*clp|pdf|fax|onenote|xps|a4|a3|ledger|legal/.test(n)) return 'sheet';
+  if (/laser|inkjet|officejet|laserjet|pixma|envy|deskjet|ecotank|epson|\bet[- _]?\d{3,5}\b|\bwf[- _]?\d+\b|workforce|l-series|brother|canon|hp |ricoh|xerox|kyocera|samsung.*ml|samsung.*clp|pdf|fax|onenote|xps|a4|a3|ledger|legal/.test(n)) return 'sheet';
   if (/zebra|zpl|tsc|sato|dymo|brother.?ql|godex|argox|label|etiquet/.test(n)) return 'label_generic';
   return 'ticket_80';
 }
@@ -191,6 +191,7 @@ function resolvePrinterProfile(printerName, scope = 'ticket', explicitSettings) 
   const settings = _printerSettings(explicitSettings);
   const settingKey = scope === 'barcode' ? 'barcode_printer_profile' : 'printer_profile';
   let id = String(settings[settingKey] || '').trim();
+  const inferredId = inferPrinterProfileId(printerName, scope);
 
   // Compatibilidad con la configuración histórica printer_type.
   if (!id && scope === 'ticket') {
@@ -198,7 +199,14 @@ function resolvePrinterProfile(printerName, scope = 'ticket', explicitSettings) 
     id = ({ '58mm': 'ticket_58', '72mm': 'ticket_72', '80mm': 'ticket_80',
       '108mm': 'label_2connect_108', carta: 'sheet' })[legacy] || '';
   }
-  if (!PRINTER_PROFILES[id]) id = inferPrinterProfileId(printerName, scope);
+  if (!PRINTER_PROFILES[id]) id = inferredId;
+
+  // Un perfil térmico guardado por una versión anterior nunca debe imponerse a
+  // una impresora de hojas inequívocamente reconocida por el controlador.
+  // Esto corrige, entre otras, Epson EcoTank/ET (incluida ET-4810 Series WiFi).
+  if (scope !== 'barcode' && inferredId === 'sheet' && PRINTER_PROFILES[id]?.kind !== 'sheet') {
+    id = 'sheet';
+  }
 
   const base = PRINTER_PROFILES[id] || PRINTER_PROFILES.ticket_80;
   const widthKey = scope === 'barcode' ? 'barcode_media_width_mm' : 'printer_width_mm';

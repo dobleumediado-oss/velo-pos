@@ -1450,18 +1450,22 @@ async function _contRenderCuadres(el) {
   const pending = checks.some(c => c.state === 'pendiente');
 
   el.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' } },
-    h('div', { style: { fontSize: '13px', fontWeight: '600', color: 'var(--ink)' } }, 'Verificación auxiliar ↔ mayor'),
+    h('div', { style: { fontSize: '13px', fontWeight: '600', color: 'var(--ink)' } }, 'Control de saldos operativos ↔ contabilidad'),
     h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
-      pending ? h('button', { class: 'btn', style: { fontSize: '11px' }, onclick: () => _initializeReconciliation(el) }, 'Inicializar saldos contables') : null,
+      pending ? h('button', { class: 'btn', style: { fontSize: '11px' }, onclick: () => _initializeReconciliation(el) }, 'Crear asiento de apertura') : null,
       h('span', { class: `entry-status entry-status-${allOk ? 'activo' : (pending ? 'pendiente' : 'anulado')}`, style: { fontSize: '12px' } },
         allOk ? '✓ Todo cuadra' : (pending ? '◷ Pendiente de inicialización' : '⚠ Hay descuadres'))
     )
   ));
 
-  el.appendChild(h('div', { style: { fontSize: '12px', color: 'var(--muted2)', marginBottom: '14px' } },
-    pending
-      ? 'Los auxiliares ya contienen saldos históricos, pero Contabilidad todavía no tiene su asiento de apertura. Esto no se marca como error hasta inicializar los saldos.'
-      : 'Compara el saldo contable (cuenta control del mayor) con el auxiliar operativo. Una diferencia posterior a la apertura sí indica una operación sin asiento o un ajuste por revisar.'));
+  el.appendChild(h('div', {
+    style: pending
+      ? { fontSize: '12px', color: '#7c5a08', marginBottom: '14px', padding: '12px 14px',
+          background: '#fffbeb', border: '1px solid #f5d88a', borderRadius: '10px', lineHeight: '1.5' }
+      : { fontSize: '12px', color: 'var(--muted2)', marginBottom: '14px' }
+  }, pending
+    ? 'Configuración inicial pendiente. Velo detectó saldos operativos existentes de clientes, inventario y proveedores. Crea una sola vez el asiento de apertura para incorporarlos al mayor sin modificar las facturas, productos ni datos importados.'
+    : 'Compara el saldo contable (cuenta control del mayor) con el auxiliar operativo. Una diferencia posterior a la apertura sí indica una operación sin asiento o un ajuste por revisar.'));
 
   const tbl = h('table', { class: 'ledger-tbl', style: { width: '100%' } },
     h('thead', null, h('tr', null,
@@ -1475,9 +1479,10 @@ async function _contRenderCuadres(el) {
       h('td', null, h('div', null, c.name), h('div', { style: { fontSize: '10px', color: 'var(--muted2)' } }, c.note)),
       h('td', { class: 'num' }, fmt(c.control)),
       h('td', { class: 'num' }, fmt(c.auxiliar)),
-      h('td', { class: 'num', style: { color: c.ok ? 'var(--muted2)' : (c.state === 'pendiente' ? '#d97706' : '#ef4444'), fontWeight: '700' } }, fmt(c.diff)),
+      h('td', { class: 'num', style: { color: c.ok ? 'var(--muted2)' : (c.state === 'pendiente' ? '#d97706' : '#ef4444'), fontWeight: '700' } },
+        c.state === 'pendiente' ? 'Pendiente' : fmt(c.diff)),
       h('td', null, h('span', { class: `entry-status entry-status-${c.ok ? 'activo' : (c.state === 'pendiente' ? 'pendiente' : 'anulado')}` },
-        c.ok ? '✓ Cuadra' : (c.state === 'pendiente' ? '◷ Sin apertura' : '⚠ Descuadre')))
+        c.ok ? '✓ Cuadra' : (c.state === 'pendiente' ? '◷ Crear apertura' : '⚠ Descuadre')))
     )))
   );
   el.appendChild(h('div', { class: 'tw' }, tbl));
@@ -1492,7 +1497,7 @@ async function _initializeReconciliation(el) {
   if (date === null) return;
   const cleanDate = String(date || '').trim() || _isoDate(0);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(cleanDate)) { toast('Usa el formato YYYY-MM-DD', 'e'); return; }
-  if (!confirm('Se creará un asiento de apertura balanceado con los saldos actuales de Clientes, Inventario y Cuentas por pagar.\n\nEsta acción se realiza una sola vez y quedará en Auditoría. ¿Continuar?')) return;
+  if (!confirm('Se creará un asiento de apertura balanceado con los saldos actuales de Clientes, Inventario y Cuentas por pagar.\n\nNo cambia facturas, inventario ni datos importados. Esta acción se realiza una sola vez y quedará en Auditoría. ¿Continuar?')) return;
   const res = await window.api.accounting.initializeReconciliation({ date: cleanDate, requestUserId: user.id });
   if (!res?.ok) { toast(res?.error || 'No se pudieron inicializar los saldos', 'e'); return; }
   toast(res.data?.entry?.number ? `Saldos inicializados en ${res.data.entry.number}` : 'Los auxiliares ya estaban cuadrados', 's');

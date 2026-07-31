@@ -35,7 +35,7 @@ const contactId = DB.customersRepo.createContact(companyId, {
   phone: '809-555-2000', email: 'ana@motocaribe.do', is_primary: 1,
 });
 const company = DB.customersRepo.getById(companyId);
-ok(company.customer_type === 'company' && company.trade_name === 'MotoCaribe',
+ok(company.customer_type === 'company' && company.trade_name === 'MOTOCARIBE',
   'guarda la empresa sin convertirla en una persona');
 ok(company.phone === '18095551000' && company.contacts[0].phone === '18095552000',
   'guarda teléfonos dominicanos con prefijo 1 para WhatsApp');
@@ -65,20 +65,20 @@ const sale = DB.salesRepo.create({
   user:admin, type:'factura',
 });
 const storedSale = DB.salesRepo.getById(sale.saleId);
-ok(storedSale.customer_name === 'Motores del Caribe, SRL' && storedSale.customer_rnc === '130123456',
+ok(storedSale.customer_name === 'MOTORES DEL CARIBE, SRL' && storedSale.customer_rnc === '130123456',
   'el backend usa los datos reales de la empresa, no texto alterado desde el POS');
-ok(storedSale.customer_contact_name === 'Ana Pérez' && storedSale.customer_contact_role === 'Encargada de compras',
+ok(storedSale.customer_contact_name === 'ANA PÉREZ' && storedSale.customer_contact_role === 'ENCARGADA DE COMPRAS',
   'la venta conserva el representante seleccionado');
-ok(storedSale.customer_email === 'facturas@motocaribe.do' && storedSale.customer_address === 'Av. Principal 10',
+ok(storedSale.customer_email === 'facturas@motocaribe.do' && storedSale.customer_address === 'AV. PRINCIPAL 10',
   'guarda correo de facturación y dirección como snapshot histórico');
 
 const changedCompany = DB.customersRepo.getById(companyId);
 DB.customersRepo.update(companyId, { ...changedCompany, name:'Motores del Caribe Renovado, SRL', address:'Dirección nueva' });
 DB.customersRepo.updateContact(contactId, { ...company.contacts[0], name:'Ana Pérez Actualizada' });
 const historicalSale = DB.salesRepo.getById(sale.saleId);
-ok(historicalSale.customer_name === 'Motores del Caribe, SRL' && historicalSale.customer_address === 'Av. Principal 10',
+ok(historicalSale.customer_name === 'MOTORES DEL CARIBE, SRL' && historicalSale.customer_address === 'AV. PRINCIPAL 10',
   'editar la empresa no cambia una factura anterior');
-ok(historicalSale.customer_contact_name === 'Ana Pérez',
+ok(historicalSale.customer_contact_name === 'ANA PÉREZ',
   'editar el representante no cambia una factura anterior');
 
 console.log('\n== C. Preventa conserva el representante hasta caja ==');
@@ -87,7 +87,7 @@ const order = DB.checkoutOrdersRepo.create({
   priceMode:'wholesale', createdBy:admin.id, createdByName:admin.name,
   terminalId:'despacho-empresa', reservationMinutes:30,
 });
-ok(order.customer_name === 'Motores del Caribe Renovado, SRL' && order.customer_contact_name === 'Ana Pérez Actualizada',
+ok(order.customer_name === 'MOTORES DEL CARIBE RENOVADO, SRL' && order.customer_contact_name === 'ANA PÉREZ ACTUALIZADA',
   'la orden guarda la empresa y el representante vigentes al prepararse');
 DB.customersRepo.updateContact(contactId, { ...DB.customersRepo.getContacts(companyId)[0], name:'Cambio posterior' });
 const companyAfterOrder = DB.customersRepo.getById(companyId);
@@ -97,9 +97,9 @@ const paid = DB.checkoutOrdersRepo.pay({
   user:admin, terminalId:'caja-empresa',
 });
 const paidSale = DB.salesRepo.getById(paid.saleId);
-ok(paidSale.customer_contact_name === 'Ana Pérez Actualizada',
+ok(paidSale.customer_contact_name === 'ANA PÉREZ ACTUALIZADA',
   'caja factura con el snapshot de la orden aunque el contacto cambie después');
-ok(paidSale.customer_address === 'Dirección nueva',
+ok(paidSale.customer_address === 'DIRECCIÓN NUEVA',
   'caja conserva los datos empresariales de la orden aunque la cuenta cambie después');
 ok(paid.order.customer_contact_id === contactId && paid.order.status === 'paid',
   'la trazabilidad conecta orden, representante y venta');
@@ -119,10 +119,10 @@ const payment = DB.customersRepo.addPayment({
   cajero:admin.name, userId:admin.id,
 });
 const storedPayment = DB.customersRepo.getPayments(companyId).find(p => p.id === payment.paymentId);
-ok(storedPayment.customer_contact_name === 'Cambio posterior' && storedPayment.customer_contact_role === 'Encargada de compras',
+ok(storedPayment.customer_contact_name === 'CAMBIO POSTERIOR' && storedPayment.customer_contact_role === 'ENCARGADA DE COMPRAS',
   'el abono conserva quién pagó en nombre de la empresa');
 DB.customersRepo.updateContact(contactId, { ...DB.customersRepo.getContacts(companyId)[0], name:'Cambio después del abono' });
-ok(DB.customersRepo.getPayments(companyId).find(p => p.id === payment.paymentId).customer_contact_name === 'Cambio posterior',
+ok(DB.customersRepo.getPayments(companyId).find(p => p.id === payment.paymentId).customer_contact_name === 'CAMBIO POSTERIOR',
   'editar el representante no altera el recibo de abono histórico');
 ok(DB.customersRepo.getById(companyId).balance === 100,
   'el abono del representante reduce la cuenta consolidada de la empresa');
@@ -137,7 +137,7 @@ const conduceId = DB.conduceRepo.create({
   userId:admin.id,
 });
 const conduce = DB.conduceRepo.getById(conduceId);
-ok(conduce.customer_name === 'Motores del Caribe Renovado, SRL' && conduce.customer_contact_name === 'Cambio después del abono',
+ok(conduce.customer_name === 'MOTORES DEL CARIBE RENOVADO, SRL' && conduce.customer_contact_name === 'CAMBIO DESPUÉS DEL ABONO',
   'el conduce usa la empresa y representante vigentes desde la base de datos');
 const otherCompanyId = DB.customersRepo.create({ customer_type:'company', name:'Otra Empresa', rnc:'101010101' });
 const otherContactId = DB.customersRepo.createContact(otherCompanyId, { name:'Contacto Ajeno' });
@@ -152,7 +152,7 @@ const deliveryId = DB.deliveriesRepo.create({
   customer_contact_id:contactId, dest_address:'Santo Domingo', user_id:admin.id,
 });
 const delivery = DB.deliveriesRepo.getById(deliveryId);
-ok(delivery.customer_contact_name === 'Cambio después del abono' && delivery.customer_contact_role === 'Encargada de compras',
+ok(delivery.customer_contact_name === 'CAMBIO DESPUÉS DEL ABONO' && delivery.customer_contact_role === 'ENCARGADA DE COMPRAS',
   'el envío conserva el representante responsable de la entrega');
 
 const receivingOnlyId = DB.customersRepo.createContact(companyId, {
@@ -165,17 +165,17 @@ throws(() => DB.salesRepo.create({
 const receivingDeliveryId = DB.deliveriesRepo.create({
   customer_id:companyId, customer_contact_id:receivingOnlyId, dest_address:'Santo Domingo', user_id:admin.id,
 });
-ok(DB.deliveriesRepo.getById(receivingDeliveryId).customer_contact_name === 'Solo Recepción',
+ok(DB.deliveriesRepo.getById(receivingDeliveryId).customer_contact_name === 'SOLO RECEPCIÓN',
   'un contacto autorizado para recibir sí puede vincularse al envío');
 
 const saleConduce = DB.conduceRepo.createFromSale(sale.saleId, { userId:admin.id });
-ok(saleConduce.customer_name === 'Motores del Caribe, SRL' && saleConduce.customer_contact_name === 'Ana Pérez',
+ok(saleConduce.customer_name === 'MOTORES DEL CARIBE, SRL' && saleConduce.customer_contact_name === 'ANA PÉREZ',
   'un conduce generado desde factura conserva el snapshot histórico de la factura');
 
 DB.customersRepo.deleteContact(contactId);
 ok(!DB.customersRepo.getContacts(companyId).some(contact => contact.id === contactId),
   'desactivar un representante lo retira de operaciones nuevas sin borrar el historial');
-ok(DB.salesRepo.getById(sale.saleId).customer_contact_name === 'Ana Pérez',
+ok(DB.salesRepo.getById(sale.saleId).customer_contact_name === 'ANA PÉREZ',
   'el historial sobrevive a la desactivación del representante');
 
 db.close();

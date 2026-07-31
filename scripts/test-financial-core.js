@@ -41,7 +41,10 @@ const tmpDir = path.join(os.tmpdir(), `velo_fintest_${Date.now()}`);
 const DB = require('../database');
 DB.initDB(tmpDir);
 const db = DB.getDB();
-const { seedAccountingCatalog } = require('../versioning');
+const {
+  seedAccountingCatalog,
+  reconcileCancelledPaymentAccounting,
+} = require('../versioning');
 const { repairCancelledPaymentInflation } = require('../lib/pending-invoices');
 const { reconcileCashSessionTotals } = require('../lib/cash-session-totals');
 
@@ -274,6 +277,10 @@ ok(near(DB.financialAccountsRepo.getById(usdAccountId).current_balance, 0),
 const visaAccountId = DB.financialAccountsRepo.create({
   name: 'Liquidación Visa', type: 'tarjeta', bank_name: 'Adquirente Test',
   currency: 'DOP', userId,
+});
+const dopBankAccountId = DB.financialAccountsRepo.create({
+  name: 'Cuenta DOP Test', type: 'banco', bank_name: 'BanReservas',
+  currency: 'DOP', account_subtype: 'corriente', userId,
 });
 const cardSale = DB.salesRepo.create({
   customer: { id: custId, name: 'x' },
@@ -560,9 +567,9 @@ ok(creditWithInitial.initialPaymentId > 0 && near(creditWithInitial.outstandingB
 const initialPayment = db.prepare('SELECT * FROM payments WHERE id=?').get(creditWithInitial.initialPaymentId);
 ok(initialPayment.sale_id === creditWithInitial.saleId && near(initialPayment.amount, 40),
   'el pago inicial queda vinculado a la factura');
-ok(near(db.prepare("SELECT amount FROM cash_movements WHERE type='abono' AND reference_id=?").get(creditWithInitial.saleId)?.amount, 40),
+ok(near(db.prepare("SELECT amount FROM cash_movements WHERE type='abono' AND payment_id=?").get(creditWithInitial.initialPaymentId)?.amount, 40),
   'el pago inicial se refleja en movimientos de caja');
-ok(DB.salesRepo.getById(creditWithInitial.saleId).notes === 'Entrega parcial acordada',
+ok(DB.salesRepo.getById(creditWithInitial.saleId).notes === 'ENTREGA PARCIAL ACORDADA',
   'las notas del POS quedan persistidas en la venta');
 
 console.log('\n== E2. Anular factura reconcilia el resumen de caja ==');
@@ -628,6 +635,7 @@ const multiB = DB.salesRepo.create({
   payment: { method: 'credito' }, user, type: 'factura',
 });
 const beforeMultiPayment = DB.customersRepo.getById(custId).balance;
+const cashSummaryBeforeDistributed = DB.cashRepo.getSessionCashSummary(cashSessionId);
 const distributed = DB.customersRepo.addPayment({
   customerId: custId, amount: 150, method: 'transferencia',
   note: 'abono multi-factura', userId, sessionId: cashSessionId,
@@ -690,6 +698,39 @@ ok(db.prepare(`
   WHERE cash_session_id=? AND type='salida' AND reference_id=?
 `).get(cashSessionId, distributed.paymentId).count === 1,
   'registra en caja un contramovimiento trazable por la anulación');
+const cashSummaryAfterDistributedVoid = DB.cashRepo.getSessionCashSummary(cashSessionId);
+ok(near(
+  Number(cashSummaryAfterDistributedVoid.byMethodNet.transferencia || 0),
+  Number(cashSummaryBeforeDistributed.byMethodNet.transferencia || 0)
+), 'el resumen de caja elimina el efecto neto del abono anulado');
+ok(!DB.customersRepo.getAllPayments().some(row =>
+  Number(row.id) === Number(distributed.paymentId)),
+  'el historial operativo oculta inmediatamente el abono anulado');
+ok(DB.customersRepo.getAllPayments({ includeCancelled: true }).some(row =>
+  Number(row.id) === Number(distributed.paymentId) && row.status === 'cancelled'),
+  'Auditoría todavía puede consultar el recibo anulado y su trazabilidad');
+
+const staleCashAccount = DB.accountingRepo.getAccountByCode('1101');
+const staleArAccount = DB.accountingRepo.getAccountByCode('1104');
+const stalePaymentEntry = DB.accountingRepo.createEntry({
+  date: '2026-07-20',
+  concept: 'Residuo contable de abono anulado',
+  source_module: 'abono',
+  source_id: distributed.paymentId,
+  userId,
+  lines: [
+    { account_id: staleCashAccount.id, debit: 150, credit: 0, description: 'Residuo' },
+    { account_id: staleArAccount.id, debit: 0, credit: 150, description: 'Residuo' },
+  ],
+});
+const staleCashBalance = DB.accountingRepo.getAccountByCode('1101').balance;
+const staleArBalance = DB.accountingRepo.getAccountByCode('1104').balance;
+const accountingRepair = reconcileCancelledPaymentAccounting(db);
+ok(accountingRepair.voidedEntries === 1
+  && DB.accountingRepo.getEntryById(stalePaymentEntry.entryId).status === 'anulado'
+  && near(DB.accountingRepo.getAccountByCode('1101').balance, staleCashBalance - 150)
+  && near(DB.accountingRepo.getAccountByCode('1104').balance, staleArBalance + 150),
+  'la conciliación retira de libros un asiento residual de abono anulado');
 throws(() => DB.customersRepo.cancelPayment({
   id: distributed.paymentId,
   reason: 'Segundo intento inválido',

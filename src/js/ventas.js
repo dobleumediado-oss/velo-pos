@@ -890,6 +890,9 @@ function ventasPaymentInRange(payment) {
 function renderVentasAbonos(resWrap, tableWrap) {
   const q = searchNorm(ventasSearch.trim());
   const payments = (DB.payments || []).filter(p => {
+    // Los anulados solo existen para Auditoría; no son operaciones vigentes y
+    // no deben reaparecer en Ventas por un cache antiguo del renderer.
+    if (String(p.status || 'active').toLowerCase() === 'cancelled') return false;
     if (!ventasPaymentInRange(p)) return false;
     if (!q) return true;
     return [
@@ -900,9 +903,7 @@ function renderVentasAbonos(resWrap, tableWrap) {
       ]),
     ].some(value => matchText(value, q));
   });
-  const activePayments = payments.filter(
-    p => String(p.status || 'active').toLowerCase() !== 'cancelled'
-  );
+  const activePayments = payments;
   const total = activePayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
   const cash = activePayments.filter(p => (p.method || 'efectivo') === 'efectivo')
     .reduce((sum, p) => sum + Number(p.amount || 0), 0);
@@ -926,7 +927,7 @@ function renderVentasAbonos(resWrap, tableWrap) {
   }
   const rows = payments.map(p => {
     const invoice = paymentInvoiceSummary(p);
-    const cancelled = String(p.status || 'active').toLowerCase() === 'cancelled';
+    const cancelled = false;
     const imported = isImportedRecord(p);
     const canCancel = !cancelled && !imported && ['admin','superadmin'].includes(user?.role);
     return h('tr',{style:cancelled?{opacity:'.72',background:'var(--surface2)'}:null},
@@ -973,7 +974,7 @@ function openAnularAbonoModal(paymentOrId) {
   const requiresCash = !['credito','descuento'].includes(method);
   openModal(`
     <div class="modal-title">Anular abono ${ventasEsc(reciboLabel(p))}</div>
-    <div class="modal-sub">La operación quedará en el historial; no se eliminará ningún registro.</div>
+    <div class="modal-sub">Desaparecerá de Ventas, Caja, CxC y Contabilidad; la trazabilidad quedará únicamente en Auditoría.</div>
     <div class="card" style="margin-top:14px;background:var(--surface2)">
       <div class="g2">
         <div><div class="ts">Cliente</div><strong>${ventasEsc(p.customer_name || 'Cliente')}</strong></div>
@@ -985,7 +986,7 @@ function openAnularAbonoModal(paymentOrId) {
     <div style="margin-top:14px;padding:11px 13px;border:1px solid #fecaca;background:#fff7f7;border-radius:10px;font-size:12px;line-height:1.5">
       <strong>¿Qué hará Velo?</strong><br>
       Restaurará ${fmt(p.amount)} al balance del cliente, reabrirá el saldo de las facturas abonadas
-      y reversará el asiento contable.
+      y retirará el asiento de los libros vigentes.
       ${requiresCash
         ? ' La devolución quedará registrada en la caja abierta de esta terminal.'
         : ''}
@@ -1033,6 +1034,8 @@ async function confirmarAnulacionAbono(paymentId) {
     method: originalPayment.method || 'efectivo',
     note: originalPayment.note === 'Abono' ? '' : (originalPayment.note || ''),
     contactId: Number(originalPayment.customer_contact_id) || null,
+    financialAccountId: Number(originalPayment.financial_account_id) || null,
+    exchangeRate: Number(originalPayment.exchange_rate) || 1,
     allocations: paymentAllocationsOf(originalPayment).map(row => ({
       saleId: Number(row.sale_id),
       amount: Number(row.amount || 0),
@@ -3004,7 +3007,7 @@ async function guardarVentaPDF(saleId) {
   if (typeof guardarDocumentoPDF === 'function') {
     guardarDocumentoPDF(
       () => printReceipt(payload, true),
-      clientDocumentFilename(sale.customer_name, facturaLabel(sale), label)
+      clientDocumentFilename(sale, facturaLabel(sale), label)
     );
   } else {
     toast('Guardar PDF no disponible', 'err');
@@ -3077,7 +3080,7 @@ async function ventaWhatsAppPDF(saleId) {
     'Adjuntamos el documento en formato PDF.',
     'Gracias por su preferencia.',
   ].join('\n');
-  const fileLabel = clientDocumentFilename(sale.customer_name, facturaLabel(sale), typeName);
+  const fileLabel = clientDocumentFilename(sale, facturaLabel(sale), typeName);
   enviarDocumentoPDFWhatsApp(
     () => printReceipt(ventasPrintPayload(sale), true),
     fileLabel,

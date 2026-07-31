@@ -1223,7 +1223,7 @@ async function openAbonoModal(c, prefill = null) {
     <div class="g2">
       <div class="fg">
         <label class="lbl">Método de pago</label>
-        <select class="inp" id="ab-method">
+        <select class="inp" id="ab-method" onchange="abonoMethodChanged()">
           <option value="efectivo">Efectivo</option>
           <option value="transferencia">Transferencia</option>
           <option value="tarjeta">Tarjeta</option>
@@ -1234,6 +1234,27 @@ async function openAbonoModal(c, prefill = null) {
         <label class="lbl">Referencia / Nota</label>
         <input class="inp" id="ab-note" type="text" placeholder="Número de transferencia, etc."/>
       </div>
+    </div>
+
+    <div class="card" id="ab-account-wrap" style="display:none;padding:12px;margin-bottom:12px;background:var(--surface2)">
+      <div class="g2">
+        <div class="fg" style="margin-bottom:0">
+          <label class="lbl">Cuenta que recibe el abono *</label>
+          <select class="inp" id="ab-financial-account" onchange="abonoMethodChanged()">
+            <option value="">— Selecciona una cuenta —</option>
+            ${(DB.financialAccounts || []).filter(account =>
+              account.active !== 0 && ['banco','tarjeta'].includes(account.type)
+            ).map(account => `<option value="${account.id}" data-currency="${cliEsc(account.currency || 'DOP')}">
+              ${cliEsc(account.name)}${account.bank_name ? ` · ${cliEsc(account.bank_name)}` : ''}${account.currency === 'USD' ? ' · USD' : ''}
+            </option>`).join('')}
+          </select>
+        </div>
+        <div class="fg" id="ab-exchange-wrap" style="display:none;margin-bottom:0">
+          <label class="lbl">Tasa USD utilizada *</label>
+          <input class="inp" id="ab-exchange-rate" type="number" min="20" max="500" step="0.01" placeholder="RD$ por US$"/>
+        </div>
+      </div>
+      <div class="ts" style="margin-top:6px">El ingreso y una futura anulación quedarán conciliados en Bancos y Cuentas.</div>
     </div>
 
     ${contacts.length ? `<div class="fg">
@@ -1260,12 +1281,20 @@ async function openAbonoModal(c, prefill = null) {
     const methodInput = document.getElementById('ab-method');
     const noteInput = document.getElementById('ab-note');
     const contactInput = document.getElementById('ab-contact');
+    const accountInput = document.getElementById('ab-financial-account');
+    const exchangeInput = document.getElementById('ab-exchange-rate');
     if (amountInput) amountInput.value = Math.min(balance, Number(prefill.amount || 0)).toFixed(2);
     if (methodInput && [...methodInput.options].some(option => option.value === prefill.method)) {
       methodInput.value = prefill.method;
     }
     if (noteInput) noteInput.value = prefill.note || '';
     if (contactInput && prefill.contactId) contactInput.value = String(prefill.contactId);
+    if (accountInput && prefill.financialAccountId) {
+      accountInput.value = String(prefill.financialAccountId);
+    }
+    if (exchangeInput && Number(prefill.exchangeRate) > 1) {
+      exchangeInput.value = Number(prefill.exchangeRate).toFixed(2);
+    }
 
     document.querySelectorAll('.ab-invoice-check').forEach(check => {
       check.checked = false;
@@ -1284,7 +1313,25 @@ async function openAbonoModal(c, prefill = null) {
       input.value = Math.min(pendingAmount, Number(row.amount || 0)).toFixed(2);
     });
   }
+  abonoMethodChanged();
   abonoAmountChanged(balance);
+}
+
+function abonoMethodChanged() {
+  const method = document.getElementById('ab-method')?.value || 'efectivo';
+  const wrap = document.getElementById('ab-account-wrap');
+  const account = document.getElementById('ab-financial-account');
+  const exchangeWrap = document.getElementById('ab-exchange-wrap');
+  const bankMethod = ['transferencia','tarjeta','cheque'].includes(method);
+  if (wrap) wrap.style.display = bankMethod ? 'block' : 'none';
+  if (!bankMethod || !account) {
+    if (exchangeWrap) exchangeWrap.style.display = 'none';
+    return;
+  }
+  const selected = account.options[account.selectedIndex];
+  if (exchangeWrap) {
+    exchangeWrap.style.display = selected?.dataset?.currency === 'USD' ? 'block' : 'none';
+  }
 }
 
 function abonoAmountChanged(balance) {
@@ -1386,6 +1433,12 @@ async function registrarAbono(clientId, balanceActual, replacesPaymentId = null)
   const amount = parseFloat(document.getElementById('ab-amount')?.value);
   const method = document.getElementById('ab-method')?.value  || 'efectivo';
   const note   = document.getElementById('ab-note')?.value?.trim() || '';
+  const financialAccountId = Number(document.getElementById('ab-financial-account')?.value) || null;
+  const selectedAccount = (DB.financialAccounts || []).find(
+    account => Number(account.id) === financialAccountId
+  );
+  const exchangeRate = selectedAccount?.currency === 'USD'
+    ? Number(document.getElementById('ab-exchange-rate')?.value || 0) : 1;
   const contactId = Number(document.getElementById('ab-contact')?.value) || null;
   const allocations = [...document.querySelectorAll('.ab-invoice-check:checked')]
     .map(check => ({
@@ -1403,6 +1456,12 @@ async function registrarAbono(clientId, balanceActual, replacesPaymentId = null)
   if (document.getElementById('ab-allocation-summary')?.dataset.valid !== '1') {
     toast('Distribuye el monto completo entre las facturas seleccionadas', 'w'); return;
   }
+  if (['transferencia','tarjeta','cheque'].includes(method) && !financialAccountId) {
+    toast('Selecciona la cuenta que recibe el abono', 'w'); return;
+  }
+  if (selectedAccount?.currency === 'USD' && (exchangeRate < 20 || exchangeRate > 500)) {
+    toast('Indica una tasa USD válida', 'w'); return;
+  }
 
   const btn = document.getElementById('btn-abono');
   if (btn) { btn.disabled = true; btn.textContent = 'Procesando...'; }
@@ -1410,6 +1469,7 @@ async function registrarAbono(clientId, balanceActual, replacesPaymentId = null)
   const result = await window.api.customers.addPayment({
     data: {
       customerId: clientId, amount, method, note, contactId, allocations,
+      financialAccountId, exchangeRate, paymentReference: note,
       replacesPaymentId: Number(replacesPaymentId) || null,
     },
     requestUserId: user.id,
@@ -1510,7 +1570,7 @@ function guardarAbonoPDF(paymentId) {
   });
   if (typeof guardarDocumentoPDF === 'function') {
     const docNo = typeof reciboLabel === 'function' ? reciboLabel(p) : String(p.id).padStart(5, '0');
-    guardarDocumentoPDF(build, clientDocumentFilename(c.name, docNo, 'Abono'));
+    guardarDocumentoPDF(build, clientDocumentFilename(c, docNo, 'Abono'));
   } else { build(); }
 }
 
