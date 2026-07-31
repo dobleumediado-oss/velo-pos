@@ -271,6 +271,7 @@ async function loadAppData() {
       // (Antes: module_conduce no se cargaba y desaparecía del sidebar al cerrar.)
       Object.keys(settings).forEach(k => {
         if (k.indexOf('module_') === 0 && CFG[k] === undefined) CFG[k] = settings[k];
+        if (k.indexOf('permission_') === 0) CFG[k] = settings[k];
       });
     }
 

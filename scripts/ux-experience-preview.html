@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>VELO Experience QA</title>
+  <link rel="stylesheet" href="../src/css/styles.css">
+  <style>
+    body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font)}
+    .qa-shell{min-height:100vh;padding-top:58px}.qa-topbar{position:fixed;inset:0 0 auto 0;height:58px;padding:0 22px;background:var(--surface);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;z-index:20}
+    .qa-topbar strong{font-size:14px}.qa-topbar>span{flex:1}.qa-content{max-width:1180px;margin:auto;padding:24px}.qa-hero{padding:22px;border-radius:18px;background:linear-gradient(125deg,#0b2420,#057a5a);color:#fff;margin-bottom:14px}
+    .qa-hero small{font-weight:800;letter-spacing:.12em}.qa-hero h1{margin:4px 0;font-size:25px}.qa-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}.qa-card{padding:16px;border:1px solid var(--line);border-radius:14px;background:var(--surface)}
+    .qa-card small{color:var(--muted);font-weight:750}.qa-card strong{display:block;font-size:22px;margin-top:4px}.qa-layout{display:grid;grid-template-columns:1fr 390px;gap:14px}.qa-table{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--surface)}
+    table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:12px;border-bottom:1px solid var(--line2);font-size:11px}th{font-size:9px;color:var(--muted)}
+    @media(max-width:800px){.qa-grid,.qa-layout{grid-template-columns:1fr}.qa-content{padding:14px}}
+  </style>
+</head>
+<body>
+  <div class="qa-shell">
+    <header class="qa-topbar"><strong>VELO POS · Operación</strong><span></span>
+      <button class="ux-connection-chip" data-status="connected"><i></i><span>Conectado</span></button>
+      <button class="ib ux-recovery-trigger has-pending" data-count="2" aria-label="Recuperación">↻</button>
+    </header>
+    <main class="qa-content">
+      <section class="qa-hero"><small>CENTRO DE OPERACIONES</small><h1>Resumen claro y rápido</h1><p>Las prioridades, acciones y estados usan la misma jerarquía visual.</p></section>
+      <section class="qa-grid">
+        <article class="qa-card"><small>VENTAS DEL DÍA</small><strong>RD$184,520.00</strong></article>
+        <article class="qa-card"><small>POR COBRAR</small><strong>RD$37,038.00</strong></article>
+        <article class="qa-card"><small>OPERACIONES PENDIENTES</small><strong>2</strong></article>
+      </section>
+      <div class="qa-layout">
+        <section class="qa-table">
+          <div class="ux-table-bar"><span>3 registros</span><button>Columnas</button></div>
+          <table class="ux-smart-table"><thead><tr><th>DOCUMENTO</th><th>CLIENTE</th><th>ESTADO</th><th>TOTAL</th></tr></thead>
+            <tbody><tr><td>#00002379</td><td>ARBARO FUENTES</td><td><span class="badge" data-ux-status="success">Vigente</span></td><td>RD$67,038.00</td></tr>
+            <tr><td>#00002380</td><td>YARITZA PEÑA</td><td><span class="badge" data-ux-status="warning">Pendiente</span></td><td>RD$30,000.00</td></tr>
+            <tr><td>#00002381</td><td>CONSUMIDOR FINAL</td><td><span class="badge" data-ux-status="danger">Anulada</span></td><td>RD$0.00</td></tr></tbody>
+          </table>
+        </section>
+        <aside>
+          <div class="ux-health-summary ux-health-amber"><div><small>ESTADO GENERAL</small><strong>Operación con avisos</strong><span>10 correctos · 2 avisos · 0 críticos</span></div><button>↻ Revisar</button></div>
+          <div class="ux-health-list">
+            <article class="ux-health-item ux-tone-green"><span>✓</span><div><strong>Base de datos</strong><p>Integridad y relaciones correctas.</p></div><b>Correcto</b></article>
+            <article class="ux-health-item ux-tone-amber"><span>!</span><div><strong>Canales de impresión</strong><p>Conviene ejecutar una prueba de la impresora de etiquetas.</p></div><b>Revisar</b></article>
+          </div>
+        </aside>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

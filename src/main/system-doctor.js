@@ -818,30 +818,46 @@ function diagnoseSystem({ dataDir }) {
 }
 
 async function diagnosePrinter({ settingsRepo, mainWindow }) {
-  const printerSaved = settingsRepo.getAll()?.printer || '';
-  if (!printerSaved) {
-    return result('printer', 'Impresora', 'warn', 'No hay impresora fija configurada', {
+  const settings = settingsRepo.getAll() || {};
+  let bindings = {};
+  try { bindings = JSON.parse(settings.printer_channel_bindings || '{}') || {}; } catch {}
+  const channels = {
+    ventas: String(bindings.ventas || settings.printer || '').trim(),
+    caja: String(bindings.caja || bindings.ventas || settings.printer || '').trim(),
+    reportes: String(bindings.reportes || bindings.ventas || settings.printer || '').trim(),
+    etiquetas: String(bindings.etiquetas || settings.barcode_printer || '').trim(),
+  };
+  const configured = [...new Set(Object.values(channels).filter(Boolean))];
+  if (!configured.length) {
+    return result('printer', 'Canales de impresión', 'warn', 'No hay impresoras asignadas por departamento', {
       category: 'hardware',
-      impact: 'El sistema usara el dialogo o impresora por defecto.',
-      fix: 'Configurar impresora de recibos desde Configuracion.',
+      impact: 'El sistema pedirá una impresora cada vez, pero no mezclará etiquetas con documentos.',
+      fix: 'Asignar ventas, caja, reportes y etiquetas desde Centro de impresión.',
     });
   }
   if (!mainWindow?.webContents?.getPrintersAsync) {
-    return result('printer', 'Impresora', 'warn', `"${printerSaved}" configurada; no se pudo consultar el sistema`, {
+    return result('printer', 'Canales de impresión', 'warn', `${configured.length} equipo(s) configurado(s); no se pudo consultar el sistema`, {
       category: 'hardware',
-      impact: 'No se confirmo si la impresora existe en este equipo.',
-      fix: 'Abrir Configuracion e imprimir prueba.',
+      impact: 'No se confirmó si los equipos siguen conectados.',
+      fix: 'Abrir Centro de impresión y ejecutar el diagnóstico de plantillas.',
     });
   }
   const printers = await mainWindow.webContents.getPrintersAsync();
-  const found = printers.find(p => p.name === printerSaved);
-  return result('printer', 'Impresora', found ? 'ok' : 'error',
-    found ? `"${printerSaved}" encontrada` : `"${printerSaved}" configurada pero no encontrada`,
+  const available = new Set(printers.map(printer => printer.name));
+  const missing = configured.filter(name => !available.has(name));
+  const collision = channels.etiquetas && [channels.ventas, channels.caja, channels.reportes].includes(channels.etiquetas);
+  const status = missing.length ? 'error' : collision ? 'warn' : 'ok';
+  return result('printer', 'Canales de impresión', status,
+    missing.length
+      ? `No disponibles: ${missing.join(', ')}`
+      : collision
+        ? 'Etiquetas comparte equipo con documentos; confirmar que sea intencional'
+        : `${configured.length} equipo(s) disponible(s) y canales independientes`,
     {
       category: 'hardware',
-      impact: found ? 'Tickets y comprobantes pueden imprimirse.' : 'Las ventas pueden quedarse sin comprobante impreso.',
-      fix: found ? 'Sin accion requerida.' : 'Reconectar/instalar impresora o cambiar impresora configurada.',
-      value: { configured: printerSaved, found: !!found },
+      impact: status === 'ok' ? 'Cada departamento conserva su impresora y plantilla.' : 'Una salida puede fallar o usar un equipo no adecuado.',
+      fix: status === 'ok' ? 'Sin acción requerida.' : 'Reasignar canales y ejecutar una prueba desde Centro de impresión.',
+      value: { channels, configured, missing, collision },
     }
   );
 }

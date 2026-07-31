@@ -379,7 +379,32 @@ async function _printDispatch(payload) {
         };
       }
     }
-    return await window.api.print.html(payload);
+    const result = await window.api.print.html(payload);
+    if (!result?.ok && !result?.cancelled && !result?.duplicate) {
+      window.VeloExperience?.rememberFailure?.({
+        label:'Impresión no completada',
+        detail:result?.error || 'La impresora no confirmó el trabajo.',
+        module:'impresion',
+        retryKey:key ? `print:${key}` : '',
+        payload:key ? { jobType:payload.jobType, referenceId:payload.referenceId } : null,
+      });
+    } else if (result?.ok && key) {
+      try {
+        const pending = JSON.parse(localStorage.getItem('vp_recoverable_operations_v1') || '[]')
+          .find(item => item.retryKey === `print:${key}`);
+        if (pending) window.VeloExperience?.resolveFailure?.(pending.id);
+      } catch {}
+    }
+    return result;
+  } catch (error) {
+    window.VeloExperience?.rememberFailure?.({
+      label:'Impresión interrumpida',
+      detail:error?.message || 'No se pudo enviar el documento.',
+      module:'impresion',
+      retryKey:key ? `print:${key}` : '',
+      payload:key ? { jobType:payload.jobType, referenceId:payload.referenceId } : null,
+    });
+    throw error;
   } finally {
     release();
   }

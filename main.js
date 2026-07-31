@@ -606,6 +606,22 @@ function _getPrivilegedToken(token, action, roles, requestUserId = null) {
   return { ...rec, approver };
 }
 
+// Permisos operativos configurables. Conserva los roles históricos como
+// valores por defecto, pero permite que el superadmin decida con precisión
+// quién puede anular, reimprimir o restaurar información.
+function _actionRoles(key, fallback = ['admin', 'superadmin']) {
+  const raw = settingsRepo?.get?.(`permission_${key}_roles`);
+  const roles = String(raw || '')
+    .split(',')
+    .map(role => role.trim().toLowerCase())
+    .filter(role => ['cajero', 'admin', 'superadmin'].includes(role));
+  return roles.length ? [...new Set([...roles, 'superadmin'])] : fallback;
+}
+
+function _hasActionPermission(user, key, fallback) {
+  return !!user?.active && _actionRoles(key, fallback).includes(user.role);
+}
+
 ipcMain.handle('auth:authorizePrivilegedAction', async (_, { action, password, requestUserId, detail } = {}) => {
   try {
     const spec = PRIV_ACTIONS[action];
@@ -1623,8 +1639,8 @@ ipcMain.handle('customers:addPayment', async (_, { data, requestUserId }) => {
 ipcMain.handle('customers:cancelPayment', async (_, { id, reason, requestUserId }) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Solo un administrador puede anular abonos' };
+    if (!_hasActionPermission(reqUser, 'cancel_payment', ['admin', 'superadmin'])) {
+      return { ok: false, error: 'No tienes permiso para anular abonos' };
     }
     const cleanReason = String(reason || '').replace(/\s+/g, ' ').trim();
     if (cleanReason.length < 5) {
@@ -3308,8 +3324,8 @@ ipcMain.handle('backup:create', async (_, { requestUserId }) => {
 ipcMain.handle('backup:restore', async (_, { requestUserId, fileName } = {}) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Solo el administrador puede restaurar backups' };
+    if (!_hasActionPermission(reqUser, 'restore_backup', ['admin', 'superadmin'])) {
+      return { ok: false, error: 'No tienes permiso para restaurar backups' };
     }
 
     let filePath = null;
@@ -6101,12 +6117,13 @@ ipcMain.handle('business:delete', async (_, { bizId, requestUserId }) => {
 
 // ══════════════════════════════════════════════
 // IPC — DIAGNÓSTICO DEL SISTEMA
-// Solo accesible para superadmin
+// Administración recibe diagnóstico de solo lectura. Las reparaciones y
+// cambios sensibles continúan reservados al superadmin.
 // ══════════════════════════════════════════════
 ipcMain.handle('system:diagnose', async (_, { requestUserId } = {}) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || reqUser.role !== 'superadmin') {
+    if (!_hasActionPermission(reqUser, 'system_health', ['admin', 'superadmin'])) {
       return { ok: false, error: 'Sin permisos' };
     }
 
@@ -6752,6 +6769,15 @@ function setupMultiTerminal() {
         onEvent:  (ev) => { try { mainWindow && mainWindow.webContents.send('sync:changed', ev); } catch {} },
         onStatus: (st) => {
           try { logInfo('multiterminal', 'sse estado', st); } catch {}
+          try {
+            mainWindow && mainWindow.webContents.send('sync:changed', {
+              connection: {
+                status: st?.ok ? (st?.reconnected ? 'reconnected' : 'connected') : 'offline',
+                code: st?.code || null,
+                checkedAt: new Date().toISOString(),
+              },
+            });
+          } catch {}
           if (st?.ok && st?.reconnected) {
             // SSE no promete replay histórico. Tras recuperar conexión hacemos
             // una resincronización dirigida para no conservar un abono, venta o

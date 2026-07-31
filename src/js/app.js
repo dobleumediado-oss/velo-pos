@@ -15,7 +15,21 @@ window.addEventListener('unhandledrejection', (e) => {
   try {
     const r = e.reason;
     // No re-loguear nuestros propios errores de red (evita cualquier cascada).
-    if (r && (r.message === 'SERVER_OFFLINE' || r.offline)) return;
+    if (r && (r.message === 'SERVER_OFFLINE' || r.offline)) {
+      window.VeloExperience?.rememberFailure?.({
+        label:'Operación detenida por conexión',
+        detail:'La terminal no confirmó la operación. Revisa la conexión antes de repetirla.',
+        retryKey:'connection-offline',
+      });
+      return;
+    }
+    if (/impres|printer|whatsapp|pdf|network|conexi/i.test(String(r?.message || r || ''))) {
+      window.VeloExperience?.rememberFailure?.({
+        label:/impres|printer/i.test(String(r?.message || r || '')) ? 'Impresión no completada' : 'Comunicación no completada',
+        detail:r?.message || String(r),
+        module:/impres|printer/i.test(String(r?.message || r || '')) ? 'impresion' : '',
+      });
+    }
     window.api?.log?.error('renderer-promise',
       r?.message || String(r), { stack: r?.stack })?.catch?.(() => {});
   } catch {}
@@ -859,6 +873,15 @@ function buildTopbar() {
     html: svg('chart')
   }));
 
+  right.appendChild(h('button', {
+    class: 'ib ux-recovery-trigger',
+    'data-ux-recovery': '',
+    'aria-label': 'Recuperación de operaciones',
+    title: 'Recuperación de operaciones',
+    onclick: () => window.experienceOpenRecovery?.(),
+    html: svg('refresh')
+  }));
+
   const alerts = getCreditAlerts();
   const experienceAlerts = window.VeloExperience?.notificationCount?.() || alerts.length;
   const bell = h('button', {
@@ -888,6 +911,7 @@ function buildTopbar() {
   tb.appendChild(left);
   tb.appendChild(centerWrap);
   tb.appendChild(right);
+  window.VeloExperience?.refreshShell?.();
 
   // Iniciar/reiniciar el ticker del reloj y el banner de tasas
   _startTopbarClock();
@@ -1621,6 +1645,21 @@ async function _runGSearch(q, resultsEl) {
   const qDigits = digitsOf(ql);
   const seq = ++_gSearchSeq;  // token anti-condición de carrera
 
+  // ── Comandos operativos — la búsqueda también ejecuta acciones ──
+  const commandCatalog = [
+    { label:'Salud del sistema', detail:'Diagnosticar datos, caja, respaldos e impresión', terms:'salud diagnostico sistema respaldo impresora',
+      show:['admin','superadmin'].includes(user?.role), run:'window.experienceOpenSystemHealth?.()' },
+    { label:'Recuperación de operaciones', detail:'Revisar impresiones o conexiones pendientes', terms:'recuperar reintentar pendiente fallo conexion impresion',
+      show:true, run:'window.experienceOpenRecovery?.()' },
+    { label:'Crear rápidamente', detail:'Venta, cliente, producto, gasto o envío', terms:'crear nuevo venta cliente producto gasto envio',
+      show:true, run:'window.experienceOpenQuickActions?.()' },
+    { label:'Centro de impresión', detail:'Impresoras, plantillas, etiquetas y diagnóstico', terms:'imprimir impresora plantilla etiqueta calibrar',
+      show:true, route:'impresion' },
+  ];
+  const commands = commandCatalog.filter(command => command.show &&
+    (matchText(command.label, qNorm) || matchText(command.detail, qNorm) || matchText(command.terms, qNorm))
+  ).slice(0,3);
+
   // ── Productos (en memoria, catálogo completo) ──
   const prods = (DB.products || []).filter(p => p.active !== 0 && (
     matchText(p.name, qNorm) ||
@@ -1664,7 +1703,7 @@ async function _runGSearch(q, resultsEl) {
   // Si el usuario siguió escribiendo, descartar este resultado (llegó tarde).
   if (seq !== _gSearchSeq) return;
 
-  const total = prods.length + facturas.length + clientes.length;
+  const total = commands.length + prods.length + facturas.length + clientes.length;
 
   if (!total) {
     _gSearchIndex = -1;
@@ -1674,6 +1713,16 @@ async function _runGSearch(q, resultsEl) {
   }
 
   const sections = [];
+
+  if (commands.length) {
+    sections.push(`<div class="ux-search-section-label">Acciones (${commands.length})</div>`);
+    commands.forEach(command => sections.push(`
+      <button class="ux-search-result ux-search-command" data-gsearch-item
+        onclick="_closeGSearch();${command.route ? `routeTo('${command.route}')` : command.run}">
+        <span>${svg(command.route === 'impresion' ? 'print' : command.label.includes('Salud') ? 'check' : command.label.includes('Recuperación') ? 'refresh' : 'plus')}</span>
+        <span><strong>${_escHtml(command.label)}</strong><small>${_escHtml(command.detail)}</small></span><b>›</b>
+      </button>`));
+  }
 
   if (prods.length) {
     sections.push(`<div style="padding:6px 16px 2px;font-size:10px;font-weight:700;
