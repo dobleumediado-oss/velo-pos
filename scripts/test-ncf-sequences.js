@@ -10,6 +10,7 @@ const {
   normalizeLegacySequenceRange,
   formatLegacyNcf,
   canonicalizeLegacyNcf,
+  parseRecoverableDuplicatedTypeNcf,
   repairLegacyNcfData,
   recoverMalformedNcfEvidence,
 } = require('../lib/ncf-sequences');
@@ -31,6 +32,12 @@ ok(formatLegacyNcf('B01', 850) === 'B0100000850', 'genera B01 con exactamente 8 
 ok(canonicalizeLegacyNcf('B01100000855') === null, 'no reasigna un NCF B01 mal formado a otro comprobante');
 ok(canonicalizeLegacyNcf('B02200000403') === null, 'no reasigna un NCF B02 mal formado a otro comprobante');
 ok(canonicalizeLegacyNcf('B0100000849') === 'B0100000849', 'no altera un NCF correcto');
+ok(parseRecoverableDuplicatedTypeNcf('B01100000844')?.canonicalNcf === 'B0100000844',
+  'reconoce exactamente el dígito B01 duplicado por la versión defectuosa');
+ok(parseRecoverableDuplicatedTypeNcf('B141400000844')?.canonicalNcf === 'B1400000844',
+  'reconoce también tipos fiscales de dos dígitos como B14');
+ok(parseRecoverableDuplicatedTypeNcf('B01900000844') === null,
+  'rechaza recortar un exceso que no corresponde al tipo fiscal');
 
 let rejected = false;
 try { normalizeLegacySequenceRange('B01', 'B0200000001', 'B0200000100'); } catch { rejected = true; }
@@ -186,6 +193,142 @@ try {
   DB.ncfRepo.createSequence({ type: 'B01', prefix: 'B01', from_num: 875, to_num: 950 });
 } catch { overlapRejected = true; }
 ok(overlapRejected, 'rechaza rangos superpuestos que podrían duplicar comprobantes');
+
+console.log('\n== Recuperación guiada de documentos NCF mal formados ==');
+const recoverySequenceId = DB.ncfRepo.createSequence({
+  type: 'B15', prefix: 'B15', from_num: 844, to_num: 890, alert_at: 10,
+});
+const malformedSales = [
+  ['B151500000844', 'CLIENTE A', 1000],
+  ['B151500000845', 'CLIENTE B', 2000],
+  ['B151500000847', 'CLIENTE C', 3000],
+].map(([ncf, customer, total], index) => {
+  const saleId = Number(appDb.prepare(`
+    INSERT INTO sales(customer_name,type,status,subtotal,total,payment_method,notes,created_at)
+    VALUES(?,'factura','completed',?,?,'efectivo',?,datetime('now',?))
+  `).run(customer, total, total, `NOTA ORIGINAL ${index + 1}`, `+${index} seconds`).lastInsertRowid);
+  appDb.prepare('UPDATE sales SET ncf=? WHERE id=?').run(ncf, saleId);
+  const logId = Number(appDb.prepare(`
+    INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc,status,issued_at)
+    VALUES(?,'B15',?,'','emitido',datetime('now'))
+  `).run(ncf, saleId).lastInsertRowid);
+  return { saleId, logId, ncf, total };
+});
+const referenceLogId = Number(appDb.prepare(`
+  INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc,status,modifies_ncf,issued_at)
+  VALUES('B0400000999','B04',NULL,'','emitido','B151500000845',datetime('now'))
+`).run().lastInsertRowid);
+
+const financialBefore = malformedSales.map(row => appDb.prepare(`
+  SELECT subtotal,total,payment_method,notes,status FROM sales WHERE id=?
+`).get(row.saleId));
+const preview = DB.ncfRepo.previewMalformedRecovery(recoverySequenceId);
+ok(preview.can_recover && preview.recoverable_count === 3,
+  'la vista previa encuentra únicamente las tres facturas recuperables');
+ok(preview.next_ncf === 'B1500000846' && preview.regular_next_ncf === 'B1500000848' && preview.gaps.includes(846),
+  'prioriza el NCF saltado 846 y conserva 848 como continuación normal');
+
+let staleTokenRejected = false;
+try {
+  DB.ncfRepo.recoverMalformedDocuments({
+    id: recoverySequenceId, preview_token: 'TOKEN-INCORRECTO',
+    reason: 'RECUPERACIÓN CONTROLADA DE PRUEBA',
+  });
+} catch { staleTokenRejected = true; }
+ok(staleTokenRejected && appDb.prepare('SELECT ncf FROM sales WHERE id=?').get(malformedSales[0].saleId).ncf === 'B151500000844',
+  'un token inválido bloquea toda modificación antes de tocar documentos');
+
+const recovery = DB.ncfRepo.recoverMalformedDocuments({
+  id: recoverySequenceId,
+  preview_token: preview.token,
+  reason: 'RECUPERACIÓN CONTROLADA DE PRUEBA',
+});
+ok(recovery.recovered === 3 && recovery.next_ncf === 'B1500000846' && recovery.regular_next_ncf === 'B1500000848',
+  'recupera las correspondencias y deja 846 antes de continuar con 848');
+malformedSales.forEach((row, index) => {
+  const expected = ['B1500000844', 'B1500000845', 'B1500000847'][index];
+  ok(appDb.prepare('SELECT ncf FROM sales WHERE id=?').get(row.saleId).ncf === expected,
+    `corrige la factura ${row.ncf} a ${expected}`);
+  ok(appDb.prepare('SELECT ncf FROM ncf_log WHERE id=?').get(row.logId).ncf === expected,
+    `mantiene sincronizado el registro fiscal ${expected}`);
+  const financialAfter = appDb.prepare(`
+    SELECT subtotal,total,payment_method,notes,status FROM sales WHERE id=?
+  `).get(row.saleId);
+  ok(JSON.stringify(financialAfter) === JSON.stringify(financialBefore[index]),
+    `no altera importes, método, nota ni estado de la factura ${row.saleId}`);
+});
+ok(appDb.prepare('SELECT modifies_ncf FROM ncf_log WHERE id=?').get(referenceLogId).modifies_ncf === 'B1500000845',
+  'actualiza referencias fiscales relacionadas sin perder el vínculo');
+ok(appDb.prepare('SELECT current FROM ncf_sequences WHERE id=?').get(recoverySequenceId).current === 847,
+  'reconcilia el contador al último documento realmente ocupado');
+const sequenceWithGap = DB.ncfRepo.getSequences().find(row => Number(row.id) === Number(recoverySequenceId));
+ok(sequenceWithGap.available_gap_count === 1 && sequenceWithGap.next_issue_ncf === 'B1500000846',
+  'expone el salto disponible como el próximo comprobante real en Configuración');
+const gapAllocation = DB.ncfRepo.getNext('B15');
+const continuationAllocation = DB.ncfRepo.getNext('B15');
+ok(gapAllocation.ncf === 'B1500000846' && gapAllocation.from_available_gap,
+  'la próxima emisión consume primero el NCF saltado 846');
+ok(continuationAllocation.ncf === 'B1500000848' && !continuationAllocation.from_available_gap,
+  'después de agotar los saltados continúa con el correlativo 848');
+ok(appDb.prepare("SELECT COUNT(*) c FROM ncf_normalization_log WHERE reason LIKE 'Recuperación fiscal confirmada:%'").get().c >= 6,
+  'conserva auditoría old/new tanto de facturas como de registros fiscales');
+const idempotentPreview = DB.ncfRepo.previewMalformedRecovery(recoverySequenceId);
+ok(idempotentPreview.recoverable_count === 0 && !idempotentPreview.can_recover,
+  'una segunda ejecución no vuelve a modificar documentos ya recuperados');
+
+const conflictSequenceId = DB.ncfRepo.createSequence({
+  type: 'B16', prefix: 'B16', from_num: 10, to_num: 20, alert_at: 5,
+});
+const malformedConflictId = Number(appDb.prepare(`
+  INSERT INTO sales(customer_name,type,status,total,ncf)
+  VALUES('CONFLICTO A','factura','completed',10,'B161600000010')
+`).run().lastInsertRowid);
+appDb.prepare(`INSERT INTO ncf_log(ncf,type,sale_id,status) VALUES('B161600000010','B16',?,'emitido')`)
+  .run(malformedConflictId);
+appDb.prepare(`
+  INSERT INTO sales(customer_name,type,status,total,ncf)
+  VALUES('CONFLICTO B','factura','completed',10,'B1600000010')
+`).run();
+const conflictPreview = DB.ncfRepo.previewMalformedRecovery(conflictSequenceId);
+ok(!conflictPreview.can_recover && conflictPreview.conflicts.some(item => item.code.startsWith('TARGET_USED:')),
+  'bloquea la recuperación completa si el NCF destino ya pertenece a otro documento');
+
+console.log('\n== Venta real prioriza un B01 saltado ==');
+appDb.prepare('UPDATE ncf_sequences SET active=1,current=850 WHERE id=?').run(sequenceId);
+for (const [ncf, total] of [['B01100000851', 151], ['B01100000853', 153]]) {
+  const id = Number(appDb.prepare(`
+    INSERT INTO sales(customer_id,customer_name,customer_rnc,type,status,subtotal,total,payment_method)
+    VALUES(?,?,?,'factura','completed',?,?,'credito')
+  `).run(customerId, 'CLIENTE FISCAL', '131521665', total, total).lastInsertRowid);
+  appDb.prepare(`INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc,status) VALUES(?,'B01',?,?,'emitido')`)
+    .run(ncf, id, '131521665');
+  appDb.prepare('UPDATE sales SET ncf=? WHERE id=?').run(ncf, id);
+}
+const b01Preview = DB.ncfRepo.previewMalformedRecovery(sequenceId);
+ok(b01Preview.next_ncf === 'B0100000852' && b01Preview.regular_next_ncf === 'B0100000854',
+  'la recuperación B01 detecta 852 como salto disponible antes de 854');
+const b01Recovery = DB.ncfRepo.recoverMalformedDocuments({
+  id: sequenceId, preview_token: b01Preview.token,
+  reason: 'RECUPERACIÓN B01 PARA VENTA REAL',
+});
+ok(b01Recovery.next_ncf === 'B0100000852',
+  'la cola fiscal B01 anuncia 852 como siguiente comprobante');
+const gapSale = DB.salesRepo.create({
+  customer: { id: customerId },
+  items: [{
+    product_id: productId, product_code: 'NCF-001', product_name: 'PRODUCTO FISCAL',
+    unit_cost: 50, unit_price: 118, qty: 1, taxable: 1, tax_pct: 18,
+  }],
+  payment: { method: 'credito' }, session: null, user: admin, type: 'factura',
+});
+const issuedGapSale = DB.salesRepo.getById(gapSale.saleId);
+ok(issuedGapSale.ncf === 'B0100000852',
+  'una factura real consume automáticamente el B01 saltado 852');
+ok(appDb.prepare('SELECT ncf FROM ncf_log WHERE sale_id=?').get(gapSale.saleId).ncf === 'B0100000852',
+  'la venta real y su registro fiscal quedan sincronizados con el salto utilizado');
+const b01AfterGap = DB.ncfRepo.getSequences().find(row => Number(row.id) === Number(sequenceId));
+ok(b01AfterGap.next_issue_ncf === 'B0100000854' && b01AfterGap.available_gap_count === 0,
+  'tras usar el salto, VELO continúa automáticamente con 854');
 
 appDb.close();
 fs.rmSync(appDir, { recursive: true, force: true });

@@ -1705,9 +1705,13 @@ async function renderConexionCard(container) {
       <div class="alrt-sub">Esta máquina usa su propia base de datos (como hasta ahora).</div></div></div>`;
   } else if (mode === 'server') {
     const rows = (res.allowlist || []).map(t => {
+      const isServerConsole = String(t.terminalId || '') === String(res.terminalId || '')
+        || String(t.name || '') === 'Consola del servidor';
       const assigned = Array.isArray(t.businesses) ? t.businesses : [];
       const selected = assigned.length === 1 ? assigned[0] : '';
-      const businessSelect = res.serviceMode && Array.isArray(res.businesses)
+      const businessSelect = isServerConsole
+        ? `<span class="badge b" title="La consola administra todos los negocios">Todos los negocios</span>`
+        : res.serviceMode && Array.isArray(res.businesses)
         ? `<select class="inp" style="width:180px;height:30px;font-size:10px;padding:4px 7px"
             onchange="asignarNegocioTerminal('${_esc(t.terminalId)}',this.value)">
             <option value="" ${selected ? '' : 'selected'}>Todos los negocios</option>
@@ -1718,20 +1722,33 @@ async function renderConexionCard(container) {
         <div class="tr" style="font-size:11px;padding:4px 0;gap:7px">
           <span class="mono" style="flex:1">${_esc((t.name ? t.name + ' · ' : '') + t.terminalId.slice(0, 8))}…</span>
           ${businessSelect}
-          <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="quitarTerminalAllow('${_esc(t.terminalId)}')">Quitar</button>
+          ${isServerConsole
+            ? '<span style="font-size:10px;color:var(--muted2)">Consola protegida</span>'
+            : `<button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="quitarTerminalAllow('${_esc(t.terminalId)}')">Quitar</button>`}
         </div>`;
     }).join('') || `<div style="font-size:11px;color:var(--muted2)">Ninguna terminal autorizada aún.</div>`;
-    const addrRows = (res.addresses || []).length
-      ? (res.addresses || []).map(a => `
+    const detectedAddresses = Array.isArray(res.addresses) ? res.addresses : [];
+    const safeAddresses = detectedAddresses.filter(a => a.kind === 'tailscale' || a.kind === 'lan');
+    const addrRows = detectedAddresses.length
+      ? detectedAddresses.map(a => `
           <div class="tr" style="font-size:12px;align-items:center">
-            <span>${a.tailscale ? '🌐 Tailscale' : '🏠 Red local'}</span>
-            <span class="mono" style="font-weight:700">${_esc(a.ip)}:${_esc(res.serverPort)}</span>
+            <span>${a.kind === 'tailscale' ? '🌐' : a.kind === 'lan' ? '🏠' : a.kind === 'virtual' ? '🖥️' : '⚠️'} ${_esc(a.label || 'Red')}</span>
+            <span style="display:flex;align-items:center;gap:6px">
+              ${a.primary ? '<span class="badge g">Recomendada</span>' : ''}
+              <span class="mono" style="font-weight:700">${_esc(a.ip)}:${_esc(res.serverPort)}</span>
+            </span>
           </div>`).join('')
       : `<div style="font-size:11px;color:var(--muted2)">No se detectaron direcciones de red.</div>`;
+    const networkWarning = !detectedAddresses.length
+      ? `<div class="alrt a" style="margin:8px 0"><div class="alrt-dot a"></div><div><div class="alrt-title">Sin dirección utilizable</div><div class="alrt-sub">Conecta esta PC a la red o a Tailscale antes de configurar terminales.</div></div></div>`
+      : !safeAddresses.length
+        ? `<div class="alrt a" style="margin:8px 0"><div class="alrt-dot a"></div><div><div class="alrt-title">Solo se detectó una red virtual/NAT</div><div class="alrt-sub">La IP mostrada puede funcionar dentro de esta máquina virtual, pero normalmente no desde otras PCs. Usa Tailscale o configura Parallels/VM en modo red puente.</div></div></div>`
+        : '';
     body = `
       <div style="font-size:12px;margin-bottom:8px">Esta PC ejecuta <b>Velo POS Server Service</b>. Seguirá disponible aunque cierres esta ventana.</div>
       <div style="font-weight:700;font-size:11px;margin-bottom:2px">IP de este servidor</div>
       ${addrRows}
+      ${networkWarning}
       <div style="font-size:10px;color:var(--muted2);margin:4px 0 8px">Para acceso remoto sin nube, usa preferentemente la IP de Tailscale.</div>
       <div class="tr" style="font-size:12px"><span>Puerto</span><span class="mono">${_esc(res.serverPort)}</span></div>
       <div class="tr" style="font-size:12px;align-items:center"><span>Clave de acceso</span>
@@ -1763,13 +1780,19 @@ async function renderConexionCard(container) {
       <div id="conn-test-result" style="font-size:11px;margin-top:6px"></div>`;
   }
 
+  const modeControl = res.serviceMode
+    ? `<div class="alrt b" style="margin-bottom:12px"><div class="alrt-dot b"></div><div>
+        <div class="alrt-title">Servidor administrado por Velo POS Server</div>
+        <div class="alrt-sub">Este equipo fue instalado como servidor. El modo no se cambia desde esta pantalla para evitar desconectar las terminales.</div>
+      </div></div>`
+    : `<div style="display:flex;gap:6px;margin-bottom:12px">
+        ${btn('local','Local')}${btn('server','Servidor')}${btn('client','Cliente')}
+      </div>`;
   const card = h('div', { class: 'card' });
   card.innerHTML = `
     <div class="fxb mb8"><div class="card-title">Modo de Conexión</div>
       <span class="badge ${badge}">${_esc(mode)}</span></div>
-    <div style="display:flex;gap:6px;margin-bottom:12px">
-      ${btn('local','Local')}${btn('server','Servidor')}${btn('client','Cliente')}
-    </div>
+    ${modeControl}
     ${body}
     <div style="font-size:10px;color:var(--muted2);margin-top:10px">
       ID de esta terminal: <span class="mono">${_esc((res.terminalId||'').slice(0,8))}…</span>

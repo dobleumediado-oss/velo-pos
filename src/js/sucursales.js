@@ -10,6 +10,9 @@ function _sUser() {
 
 const _sFmt  = n => 'RD$' + (n||0).toLocaleString('es-DO', { minimumFractionDigits: 0 });
 const _sDate = d => d ? new Date(d+'T00:00:00').toLocaleDateString('es-DO',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+const _sEsc  = v => String(v == null ? '' : v)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
 // La base conserva únicamente el correlativo como entero. En pantalla siempre
 // mostramos el NCF completo para que 856 nunca se confunda con un comprobante
@@ -170,8 +173,7 @@ async function renderNCFAvanzado(el) {
     const alertDiv = document.createElement('div');
     alertDiv.style.cssText = 'background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#991b1b';
     alertDiv.innerHTML = `⚠ <strong>${alertas.length} secuencia${alertas.length>1?'s':''} con pocos comprobantes:</strong> ${alertas.map(a => {
-      const next = Number(a.current) < Number(a.from_num) ? Number(a.from_num) : Number(a.current) + 1;
-      return `${a.type}: ${a.remaining} restantes${next <= Number(a.to_num) ? ` · próximo ${_sNcf(a.type, next)}` : ''}`;
+      return `${a.type}: ${a.remaining} restantes${a.next_issue_ncf ? ` · próximo ${a.next_issue_ncf}` : ''}`;
     }).join(' · ')}`;
     el.appendChild(alertDiv);
   }
@@ -217,9 +219,9 @@ async function renderNCFAvanzado(el) {
             const to = Number(s.to_num);
             const current = Number(s.current);
             const total = Math.max(1, to - from + 1);
-            const used = Math.max(0, Math.min(total, current - from + 1));
-            const remaining = Math.max(0, to - Math.max(current, from - 1));
-            const next = current < from ? from : current + 1;
+            const remaining = Number(s.remaining ?? Math.max(0, to - Math.max(current, from - 1)));
+            const used = Math.max(0, Math.min(total, total - remaining));
+            const next = Number(s.next_issue_number ?? (current < from ? from : current + 1));
             const pct = Math.max(0, Math.min(100, used / total * 100)).toFixed(0);
             const color = remaining <= s.alert_at ? '#ef4444' : remaining <= s.alert_at * 3 ? '#f59e0b' : '#00c07a';
             return `<tr style="border-bottom:0.5px solid var(--line2)">
@@ -227,7 +229,7 @@ async function renderNCFAvanzado(el) {
               <td style="padding:8px;text-align:right;font-family:var(--mono)">${_sNcf(s.type, from)}</td>
               <td style="padding:8px;text-align:right;font-family:var(--mono)">${_sNcf(s.type, to)}</td>
               <td style="padding:8px;text-align:right;font-family:var(--mono)">${current >= from ? _sNcf(s.type, current) : 'Sin emitir'}</td>
-              <td style="padding:8px;text-align:right;font-family:var(--mono);font-weight:600;color:var(--ink)">${next <= to ? _sNcf(s.type, next) : 'Agotada'}</td>
+              <td style="padding:8px;text-align:right;font-family:var(--mono);font-weight:600;color:var(--ink)">${next <= to ? _sNcf(s.type, next) : 'Agotada'}${Number(s.available_gap_count || 0) ? `<div style="font-family:inherit;font-size:9px;color:#b45309">${Number(s.available_gap_count)} saltado(s) disponible(s)</div>` : ''}</td>
               <td style="padding:8px;text-align:right;font-weight:600;color:${color}">${remaining.toLocaleString()}</td>
               <td style="padding:8px;color:var(--muted2)">${s.expiry_date ? _sDate(s.expiry_date) : '—'}</td>
               <td style="padding:8px">
@@ -245,7 +247,7 @@ async function renderNCFAvanzado(el) {
 
     const explanation = document.createElement('div');
     explanation.style.cssText = 'font-size:10px;color:var(--muted2);margin-top:8px;line-height:1.45';
-    explanation.textContent = 'Los NCF se muestran completos. “Último usado” conserva el último correlativo consumido; “Próximo” solo se utiliza al confirmar una nueva factura fiscal.';
+    explanation.textContent = 'Los NCF se muestran completos. “Próximo” prioriza correlativos saltados, confirmados como disponibles y vigentes; después continúa desde el último correlativo consumido.';
     el.appendChild(explanation);
   }
 
@@ -311,7 +313,15 @@ window.administrarSecuenciaNcf = async (id) => {
   const sequence = (response?.data || []).find(item => Number(item.id) === Number(id));
   if (!sequence) return _sToast('La secuencia ya no está disponible');
   const user = _sUser();
+  const recoveryResponse = user?.role === 'superadmin'
+    ? await window.api.ncf.previewMalformedRecovery({ id: sequence.id, requestUserId: user.id })
+    : null;
+  if (user?.role === 'superadmin' && !recoveryResponse?.ok) {
+    return alert(recoveryResponse?.error || 'No se pudo verificar la integridad fiscal de esta secuencia');
+  }
+  const recovery = recoveryResponse?.ok ? recoveryResponse.data : null;
   const next = Math.max(Number(sequence.from_num), Number(sequence.current) + 1);
+  const actualNext = sequence.next_issue_ncf || _sNcf(sequence.type, next);
   const html = `
     <div class="alrt a" style="margin-bottom:14px"><div class="alrt-dot a"></div><div>
       <div class="alrt-title">Control fiscal protegido</div>
@@ -321,7 +331,11 @@ window.administrarSecuenciaNcf = async (id) => {
       <div><div class="lbl">Rango autorizado</div><strong style="font-family:var(--mono);font-size:12px">${_sNcf(sequence.type, sequence.from_num)} — ${_sNcf(sequence.type, sequence.to_num)}</strong></div>
       <div><div class="lbl">Último usado registrado</div><strong style="font-family:var(--mono);font-size:12px">${Number(sequence.current) >= Number(sequence.from_num) ? _sNcf(sequence.type, sequence.current) : 'Sin emitir'}</strong></div>
     </div>
-    <div class="fg"><label class="lbl">Próximo NCF que debe emitir *</label>
+    ${Number(sequence.available_gap_count || 0) ? `<div style="padding:10px 12px;margin-bottom:12px;border-radius:9px;background:#fffbeb;border:1px solid #fde68a">
+      <div class="lbl">Próximo NCF real</div><strong style="font-family:var(--mono);color:#92400e">${_sEsc(actualNext)}</strong>
+      <div style="font-size:10px;color:#92400e;margin-top:3px">VELO usará primero ${Number(sequence.available_gap_count)} correlativo(s) saltado(s) que nunca fueron emitidos.</div>
+    </div>` : ''}
+    <div class="fg"><label class="lbl">Continuación del rango después de los saltados *</label>
       <input class="inp" id="ncf-next" inputmode="numeric" value="${_sNcf(sequence.type, next)}">
       <div style="font-size:10px;color:var(--muted2);margin-top:3px">Puedes pegar el NCF completo. Si existen documentos válidos posteriores, VELO bloqueará el cambio.</div></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
@@ -329,7 +343,21 @@ window.administrarSecuenciaNcf = async (id) => {
       <div class="fg"><label class="lbl">Alerta cuando queden</label><input class="inp" id="ncf-edit-alert" type="number" min="1" value="${Number(sequence.alert_at) || 50}"></div>
     </div>
     <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin-bottom:12px"><input type="checkbox" id="ncf-edit-active" ${sequence.active ? 'checked' : ''}> Secuencia activa</label>
-    <div class="fg"><label class="lbl">Motivo de la corrección *</label><textarea class="inp" id="ncf-edit-reason" rows="3" placeholder="Ej.: Continuar desde el último NCF emitido por el sistema anterior"></textarea></div>
+    ${(recovery?.recoverable_count || recovery?.conflict_count) ? `
+      <div style="padding:12px 13px;margin-bottom:13px;border-radius:10px;background:${recovery.can_recover ? '#fff7ed' : '#fef2f2'};border:1px solid ${recovery.can_recover ? '#fed7aa' : '#fecaca'}">
+        <div style="font-size:12px;font-weight:750;color:${recovery.can_recover ? '#9a3412' : '#991b1b'}">
+          ${recovery.can_recover ? `Se detectaron ${recovery.recoverable_count} facturas con NCF mal formado` : 'La recuperación fiscal requiere revisión'}
+        </div>
+        <div style="font-size:10.5px;line-height:1.45;color:var(--muted);margin-top:3px">
+          ${recovery.can_recover
+            ? `Se conservarán los documentos originales en auditoría y el próximo NCF quedará en <strong>${_sEsc(recovery.next_ncf || 'rango agotado')}</strong>.`
+            : `${recovery.conflict_count} conflicto(s) impiden modificar documentos automáticamente.`}
+        </div>
+        <button type="button" class="btn btn-amber btn-sm" id="ncf-review-recovery" style="margin-top:9px">
+          ${recovery.recoverable_count ? `Revisar ${recovery.recoverable_count} correspondencias` : 'Revisar conflictos'}
+        </button>
+      </div>` : ''}
+    <div class="fg"><label class="lbl" for="ncf-edit-reason">Motivo de la corrección *</label><textarea class="inp" id="ncf-edit-reason" rows="3" maxlength="500" data-uppercase="off" autocomplete="off" spellcheck="true" placeholder="Ej.: Continuar desde el último NCF emitido por el sistema anterior"></textarea></div>
     <button class="btn btn-ghost btn-sm" id="ncf-retire" style="color:var(--red)">Retirar esta secuencia</button>`;
   const container = document.getElementById('ncf-avanzado-container');
   const overlay = _sModal(`Administrar secuencia ${sequence.type}`, html, async (ov) => {
@@ -350,6 +378,35 @@ window.administrarSecuenciaNcf = async (id) => {
     if (container) await renderNCFAvanzado(container);
   }, 'Guardar corrección');
 
+  // Los motivos son texto narrativo y deben aceptar escritura normal, incluso
+  // mediante escritorios remotos/IME. La normalización global en mayúsculas
+  // reescribe el valor en cada pulsación y algunos clientes remotos cancelan la
+  // composición del textarea. El backend conserva el motivo y lo audita igual.
+  const reasonInput = overlay.querySelector('#ncf-edit-reason');
+  reasonInput?.addEventListener('compositionstart', () => { reasonInput.dataset.composing = 'true'; });
+  reasonInput?.addEventListener('compositionend', () => { delete reasonInput.dataset.composing; });
+
+  // Mientras existan documentos recuperables no se permite adelantar el
+  // contador ni retirar el rango por separado: ambas acciones dejarían las
+  // facturas históricas fuera del 607 correcto.
+  if (recovery?.recoverable_count || recovery?.conflict_count) {
+    const saveButton = overlay.querySelector('#sm-confirm');
+    const retireButton = overlay.querySelector('#ncf-retire');
+    if (saveButton) {
+      saveButton.disabled = true;
+      saveButton.title = 'Primero revisa y recupera las facturas con NCF mal formado';
+    }
+    if (retireButton) {
+      retireButton.disabled = true;
+      retireButton.title = 'No se puede retirar una secuencia con facturas pendientes de recuperación';
+    }
+  }
+
+  overlay.querySelector('#ncf-review-recovery')?.addEventListener('click', () => {
+    overlay.remove();
+    abrirRecuperacionNcfMalformado(sequence.id, container);
+  });
+
   overlay.querySelector('#ncf-retire')?.addEventListener('click', async () => {
     const reason = overlay.querySelector('#ncf-edit-reason')?.value.trim() || '';
     if (reason.length < 10) return alert('Explica el motivo del retiro (mínimo 10 caracteres).');
@@ -363,6 +420,86 @@ window.administrarSecuenciaNcf = async (id) => {
     if (container) await renderNCFAvanzado(container);
   });
 };
+
+async function abrirRecuperacionNcfMalformado(sequenceId, container) {
+  const user = _sUser();
+  const response = await window.api.ncf.previewMalformedRecovery({
+    id: sequenceId,
+    requestUserId: user?.id,
+  });
+  if (!response?.ok) return alert(response?.error || 'No se pudo analizar la recuperación fiscal');
+  const preview = response.data;
+  if (!preview?.rows?.length && !preview?.conflicts?.length) {
+    _sToast('No quedan facturas con el patrón recuperable');
+    if (container) await renderNCFAvanzado(container);
+    return;
+  }
+  const rowHtml = preview.rows.map(row => `
+    <tr style="border-bottom:1px solid var(--line2)">
+      <td style="padding:8px;font-family:var(--mono)">#${Number(row.sale_id)}</td>
+      <td style="padding:8px"><div style="font-weight:650">${_sEsc(row.customer_name)}</div><small style="color:var(--muted2)">${_sEsc(row.customer_rnc || 'Sin RNC')}</small></td>
+      <td style="padding:8px;font-family:var(--mono);color:var(--red)">${_sEsc(row.old_ncf)}</td>
+      <td style="padding:8px;font-family:var(--mono);font-weight:750;color:var(--green)">${_sEsc(row.corrected_ncf)}</td>
+      <td style="padding:8px;text-align:right">${_sFmt(row.total)}</td>
+    </tr>`).join('');
+  const conflictHtml = preview.conflicts?.length ? `
+    <div style="padding:11px 12px;border:1px solid #fecaca;background:#fef2f2;border-radius:9px;margin-bottom:12px;color:#991b1b;font-size:11px">
+      <strong>Recuperación bloqueada</strong>
+      <ul style="margin:6px 0 0;padding-left:18px">${preview.conflicts.map(item => `<li>${_sEsc(item.message)}</li>`).join('')}</ul>
+    </div>` : '';
+  const gaps = (preview.gaps || []).map(value => _sNcf(preview.sequence.type, value));
+  const html = `
+    <div class="alrt a" style="margin-bottom:13px"><div class="alrt-dot a"></div><div>
+      <div class="alrt-title">Vista previa: todavía no se ha modificado nada</div>
+      <div class="alrt-sub">Al confirmar, VELO creará un respaldo, conservará cada NCF anterior en auditoría y corregirá factura, registro fiscal y referencias en una sola transacción.</div>
+    </div></div>
+    ${conflictHtml}
+    <div style="overflow:auto;max-height:310px;border:1px solid var(--line2);border-radius:10px;margin-bottom:12px">
+      <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:680px">
+        <thead><tr style="background:var(--surface2);color:var(--muted2)">
+          <th style="padding:8px;text-align:left">Factura</th><th style="padding:8px;text-align:left">Cliente</th>
+          <th style="padding:8px;text-align:left">NCF mal formado</th><th style="padding:8px;text-align:left">NCF recuperado</th>
+          <th style="padding:8px;text-align:right">Monto</th>
+        </tr></thead><tbody>${rowHtml}</tbody>
+      </table>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <div style="padding:10px;border:1px solid var(--line2);border-radius:9px"><div class="lbl">Próximo NCF después de recuperar</div><strong style="font-family:var(--mono)">${_sEsc(preview.next_ncf || 'Rango agotado')}</strong></div>
+      <div style="padding:10px;border:1px solid var(--line2);border-radius:9px"><div class="lbl">Saltos conservados sin utilizar</div><strong style="font-family:var(--mono);font-size:10px">${gaps.length ? _sEsc(gaps.join(', ')) : 'Ninguno'}</strong></div>
+    </div>
+    <div class="fg"><label class="lbl" for="ncf-recovery-reason">Motivo de la recuperación *</label>
+      <textarea class="inp" id="ncf-recovery-reason" rows="3" maxlength="500" data-uppercase="off" autocomplete="off" placeholder="Ej.: Corregir duplicación del tipo B01 generada por la versión anterior"></textarea></div>
+    <div class="fg"><label class="lbl" for="ncf-recovery-confirm">Confirmación *</label>
+      <input class="inp" id="ncf-recovery-confirm" data-uppercase="off" autocomplete="off" placeholder="Escribe RECUPERAR ${preview.recoverable_count}">
+      <div style="font-size:10px;color:var(--muted2);margin-top:3px">Esto no anula ventas ni cambia caja, inventario, productos, clientes o montos.</div></div>`;
+  const overlay = _sModal(
+    `Recuperar ${preview.recoverable_count} NCF mal formados`,
+    html,
+    async ov => {
+      const reason = ov.querySelector('#ncf-recovery-reason')?.value.trim() || '';
+      const confirmation = ov.querySelector('#ncf-recovery-confirm')?.value.trim() || '';
+      const result = await window.api.ncf.recoverMalformedDocuments({
+        id: sequenceId,
+        previewToken: preview.token,
+        reason,
+        confirmation,
+        requestUserId: user?.id,
+      });
+      if (!result?.ok) throw new Error(result?.error || 'No se pudo completar la recuperación');
+      _sToast(`✓ ${result.data.recovered} facturas recuperadas · próximo ${result.data.next_ncf || 'rango agotado'}`);
+      if (container) await renderNCFAvanzado(container);
+      setTimeout(() => alert(
+        `Recuperación completada.\n\n` +
+        `${result.data.recovered} factura(s) corregida(s).\n` +
+        `Próximo NCF: ${result.data.next_ncf || 'rango agotado'}.\n\n` +
+        `Ahora puedes reimprimir o reenviar las facturas corregidas desde Ventas y generar nuevamente el 607.`
+      ), 80);
+    },
+    `Recuperar ${preview.recoverable_count} facturas`,
+    { maxWidth: '840px' }
+  );
+  if (!preview.can_recover) overlay.querySelector('#sm-confirm').disabled = true;
+}
 
 async function guardarSecuenciaFacturaContado(parentEl, button) {
   const user = _sUser();
@@ -691,6 +828,7 @@ function modalReporteNCF() {
     if (!res?.ok) { body.innerHTML = `<div style="color:#ef4444;padding:16px">${esc(res?.error||'Error al generar')}</div>`; return; }
 
     const rows = res.data || [];
+    const invalidRows = rows.filter(row => row.ncf_valid === false);
     const totalSum = rows.reduce((a,r)=>a+(r.total||0),0);
     const title = is608 ? '608 — Comprobantes Anulados' : '607 — Comprobantes Emitidos';
     const fdt = (v) => (v||'').split('T')[0].split(' ')[0];
@@ -708,6 +846,10 @@ function modalReporteNCF() {
     }
 
     body.innerHTML = `
+      ${invalidRows.length ? `<div style="padding:11px 13px;margin-bottom:11px;border-radius:9px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;font-size:11px;line-height:1.45">
+        <strong>Reporte bloqueado: ${invalidRows.length} NCF inválido(s).</strong><br>
+        No imprimas ni utilices este reporte para la DGII. Recupera primero los documentos desde <em>Administrar secuencia</em>.
+      </div>` : ''}
       <div style="display:flex;justify-content:space-between;margin-bottom:10px;font-size:12px">
         <div><strong>${rows.length}</strong> comprobante(s)</div>
         <div>Total: <strong>${fmt(totalSum)}</strong></div>
@@ -717,11 +859,17 @@ function modalReporteNCF() {
           ${headCols.map((c,i)=>`<th style="padding:6px 8px;text-align:${i===headCols.length-1?'right':'left'}">${c}</th>`).join('')}
         </tr></thead>
         <tbody>
-          ${rows.map(r=>`<tr style="border-bottom:0.5px solid var(--line2)">
+          ${rows.map(r=>`<tr style="border-bottom:0.5px solid var(--line2);${r.ncf_valid === false ? 'background:#fef2f2;color:#991b1b' : ''}">
             ${rowCells(r).map((c,i)=>`<td style="padding:6px 8px;${i===0?'font-family:monospace;':''}text-align:${i===headCols.length-1?'right':'left'}">${esc(c)}</td>`).join('')}
           </tr>`).join('')}
         </tbody>
       </table>`;
+
+    if (invalidRows.length) {
+      printableHtml = '';
+      printBtn.disabled = true;
+      return;
+    }
 
     printableHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
       <style>
@@ -750,11 +898,11 @@ function modalReporteNCF() {
 }
 
 // ── Utilidades ────────────────────────────────
-function _sModal(titulo, html, onConfirm, confirmLabel='Guardar') {
+function _sModal(titulo, html, onConfirm, confirmLabel='Guardar', options={}) {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:#0008;z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
   overlay.innerHTML = `
-    <div style="background:var(--bg);border-radius:14px;width:100%;max-width:520px;max-height:90vh;overflow-y:auto;box-shadow:0 8px 40px #0004">
+    <div style="background:var(--bg);border-radius:14px;width:100%;max-width:${options.maxWidth || '520px'};max-height:90vh;overflow-y:auto;box-shadow:0 8px 40px #0004">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line2)">
         <div style="font-size:15px;font-weight:600">${titulo}</div>
         <button id="sm-close" style="background:none;border:none;cursor:pointer;color:var(--muted2);font-size:18px">✕</button>

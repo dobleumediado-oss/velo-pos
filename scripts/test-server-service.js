@@ -9,6 +9,7 @@ const http = require('http');
 const { EventEmitter } = require('events');
 const { startServerService } = require('../src/main/server-service');
 const { loadServiceConfig, saveServiceConfig } = require('../src/main/service-config');
+const { listLocalAddresses } = require('../lib/network-addresses');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'velo-service-test-'));
 const terminalId = 'terminal_test_12345678';
@@ -72,6 +73,15 @@ function launchFakeWorker({ business, port }) {
 }
 
 (async () => {
+  const addresses = listLocalAddresses({
+    Ethernet: [{ family: 'IPv4', internal: false, address: '10.211.55.3' }],
+    WiFi: [{ family: 'IPv4', internal: false, address: '192.168.1.20' }],
+    Tailscale: [{ family: 'IPv4', internal: false, address: '100.82.10.4' }],
+  });
+  assert.strictEqual(addresses[0].kind, 'tailscale', 'Tailscale debe recomendarse primero');
+  assert.strictEqual(addresses.find(item => item.ip === '10.211.55.3').kind, 'virtual', 'Parallels NAT no debe anunciarse como LAN real');
+  assert.strictEqual(addresses.find(item => item.ip === '192.168.1.20').kind, 'lan', 'la IP privada física debe conservarse como LAN');
+
   const bizId = 'biz_service_test';
   const bizDir = path.join(tmp, 'negocios', bizId);
   fs.mkdirSync(bizDir, { recursive: true });

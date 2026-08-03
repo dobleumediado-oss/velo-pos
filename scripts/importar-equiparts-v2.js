@@ -35,6 +35,7 @@ const {
   normalizeName: norm,
   round2,
   validateEquipartsData,
+  calculateInvoiceFiscalBreakdown,
   syncImportedCustomerPhones,
   assertForeignKeyIntegrity,
 } = require('../lib/equiparts-import');
@@ -202,7 +203,7 @@ const runImport = db.transaction(() => {
       tax_pct, tax_amt, total, payment_method, price_mode,
       cajero, user_id, ncf, notes, created_at,
       numero_factura, numero_factura_fmt, old_id_factura, source_balance, import_source
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, 'retail', 'Importación histórica', NULL, ?, ?, ?, ?, ?, ?, ?, 'equiparts_bak')
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'retail', 'Importación histórica', NULL, ?, ?, ?, ?, ?, ?, ?, 'equiparts_bak')
   `);
   // product_id se enlaza al catálogo real por código (#4, #2). Si no existe, NULL.
   const insItem = db.prepare(`
@@ -224,24 +225,19 @@ const runImport = db.transaction(() => {
     const fmt = f.numero_factura_fmt || (f.numero_factura != null ? String(f.numero_factura).padStart(8,'0') : '');
     const notes = (f.numero_factura != null
       ? `Factura #${fmt}${f.ncf ? ' | NCF:' + f.ncf : ''}` : 'Factura importada')
-      + (f.factura_nota ? ' | ' + f.factura_nota : '');
+      + (f.factura_nota ? ' | ' + f.factura_nota : '')
+      + (f.total_recovered_from_detail ? ` | TOTAL RECUPERADO DESDE DETALLE: RD$${f.total.toFixed(2)}` : '')
+      + (f.discount_recovered_from_totals ? ` | DESCUENTO LEGADO RECONSTRUIDO: RD$${f.discount_amt.toFixed(2)} (${f.discount_pct.toFixed(2)}%)` : '');
     const customer = db.prepare('SELECT rnc FROM customers WHERE id=?').get(custId);
     const items = f.items.length ? f.items
       : [{ product_code: 'IMP', product_name: 'Factura importada', qty: 1, unit_price: f.total, line_total: f.total, taxable: 1, tax_pct: 18 }];
-    const fiscalItems = items.map(item => {
-      const lineGross = round2(item.line_total || item.unit_price * item.qty);
-      const taxPct = item.taxable ? (Number(item.tax_pct) || 18) : 0;
-      const taxAmt = taxPct > 0 ? round2(lineGross - lineGross / (1 + taxPct / 100)) : 0;
-      return { ...item, lineGross, taxPct, taxAmt, netSubtotal: round2(lineGross - taxAmt) };
-    });
-    const taxAmt = round2(fiscalItems.reduce((sum, item) => sum + item.taxAmt, 0));
-    const netSubtotal = round2(f.total - taxAmt);
-    const taxRates = [...new Set(fiscalItems.filter(item => item.taxPct > 0).map(item => item.taxPct))];
-    const saleTaxPct = taxRates.length === 1 ? taxRates[0] : 0;
+    const breakdown = calculateInvoiceFiscalBreakdown(f, items);
+    const { fiscalItems, taxAmt, netSubtotal, saleTaxPct } = breakdown;
 
     const r = insSale.run(
       null, custId, f.customer_name, customer?.rnc || '', 'factura', f.status,
-      netSubtotal, saleTaxPct, taxAmt, f.total, f.payment_method,
+      netSubtotal, breakdown.discountPct, breakdown.discountAmt,
+      saleTaxPct, taxAmt, f.total, f.payment_method,
       f.ncf, notes, dt,
       f.numero_factura, fmt, f.old_id_factura, f.balance
     );
@@ -251,7 +247,7 @@ const runImport = db.transaction(() => {
     for (const it of fiscalItems) {
       const pid = prodByCode.get((it.product_code || '').trim()) || null;
       insItem.run(saleId, pid, it.product_code, it.product_name, it.unit_price, it.qty,
-        it.lineGross, it.taxable ? 1 : 0, it.taxPct, it.taxAmt, it.netSubtotal);
+        it.lineGross, it.taxable ? 1 : 0, it.taxPct, it.lineTax, it.lineNet);
       stats.items++;
     }
 
@@ -432,6 +428,7 @@ console.log(`Clientes:  ${stats.cli_new} nuevos, ${stats.cli_skip} ya existían`
 console.log(`Facturas:  ${stats.fac_new} importadas, ${stats.fac_skip} ya existían`);
 console.log(`Items:     ${stats.items} líneas de detalle`);
 console.log(`Recibos:   ${stats.rec_new} nuevos, ${stats.rec_skip} ya existían`);
+console.log(`Avisos:    ${validation.warnings.length} totales recuperados desde el detalle`);
 console.log('');
 
 // ── Validación de integridad ───────────────────────────────────────────

@@ -57,6 +57,7 @@ const {
   normalizeName: _aioNorm,
   round2: _aioRound2,
   validateEquipartsData,
+  calculateInvoiceFiscalBreakdown,
   syncImportedCustomerPhones,
   assertForeignKeyIntegrity,
 } = require('./lib/equiparts-import');
@@ -981,21 +982,7 @@ function _installedServiceDataDir() {
 // Direcciones IPv4 reales de esta PC (para mostrar a qué IP conectan los clientes).
 // Detecta Tailscale (rango CGNAT 100.64.0.0/10 o interfaz "tailscale"/"utun").
 function _localAddresses() {
-  const os = require('os');
-  const out = [];
-  const ifaces = os.networkInterfaces();
-  for (const name of Object.keys(ifaces)) {
-    for (const ni of (ifaces[name] || [])) {
-      if (ni.family !== 'IPv4' || ni.internal) continue;
-      // Señal principal: rango CGNAT oficial de Tailscale 100.64.0.0/10
-      // (100.64.x – 100.127.x). Secundaria: nombre de interfaz "tailscale".
-      const m = /^100\.(\d+)\./.exec(ni.address);
-      const isTs = (m && +m[1] >= 64 && +m[1] <= 127) || /tailscale/i.test(name);
-      out.push({ ip: ni.address, label: isTs ? 'Tailscale' : 'Red local', tailscale: !!isTs });
-    }
-  }
-  out.sort((a, b) => (b.tailscale ? 1 : 0) - (a.tailscale ? 1 : 0)); // Tailscale primero
-  return out;
+  return require('./lib/network-addresses').listLocalAddresses();
 }
 
 ipcMain.handle('connection:getInfo', async (_, { requestUserId } = {}) => {
@@ -1187,7 +1174,10 @@ ipcMain.handle('connection:setAllowedTerminal', async (_, { requestUserId, termi
     if (serviceDataDir) {
       return await require('./src/main/ipc-bridge').forwardToServer(
         'serverAdmin:setAllowedTerminal',
-        { requestUserId, terminalId, name, remove },
+        {
+          requestUserId, terminalId, name, remove,
+          protectedTerminalId: settingsRepo.get('terminal_id') || '',
+        },
       );
     }
     let list  = conn.parseAllowlist(settingsRepo.get('connection_allowlist'));
@@ -1206,7 +1196,10 @@ ipcMain.handle('connection:setTerminalBusinesses', async (_, { requestUserId, te
     if (!_installedServiceDataDir()) return { ok: false, error: 'Disponible únicamente con Velo POS Server Service' };
     return await require('./src/main/ipc-bridge').forwardToServer(
       'serverAdmin:setTerminalBusinesses',
-      { requestUserId, terminalId, businessIds },
+      {
+        requestUserId, terminalId, businessIds,
+        protectedTerminalId: settingsRepo.get('terminal_id') || '',
+      },
     );
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -1254,7 +1247,9 @@ ipcMain.handle('serverAdmin:generateKey', async (_, { requestUserId, accessKey }
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('serverAdmin:setAllowedTerminal', async (_, { requestUserId, terminalId, name, remove } = {}) => {
+ipcMain.handle('serverAdmin:setAllowedTerminal', async (_, {
+  requestUserId, terminalId, name, remove, protectedTerminalId,
+} = {}) => {
   try {
     if (!RUNTIME.worker || RUNTIME.businessId !== 'principal') return { ok: false, error: 'Servicio no disponible' };
     const user = _connRequireSA(requestUserId);
@@ -1263,6 +1258,11 @@ ipcMain.handle('serverAdmin:setAllowedTerminal', async (_, { requestUserId, term
     if (!id) return { ok: false, error: 'ID de terminal requerido' };
     const serviceConfig = require('./src/main/service-config');
     const current = serviceConfig.loadServiceConfig(DATA_DIR);
+    const isServerConsole = id === String(protectedTerminalId || '').trim()
+      || current.terminalNames?.[id] === 'Consola del servidor';
+    if (remove && isServerConsole) {
+      return { ok: false, error: 'La consola local del servidor está protegida y no puede quitarse' };
+    }
     let allowlist = [...current.allowlist];
     const terminalNames = { ...current.terminalNames };
     const terminalBusinesses = { ...current.terminalBusinesses };
@@ -1285,7 +1285,9 @@ ipcMain.handle('serverAdmin:setAllowedTerminal', async (_, { requestUserId, term
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('serverAdmin:setTerminalBusinesses', async (_, { requestUserId, terminalId, businessIds } = {}) => {
+ipcMain.handle('serverAdmin:setTerminalBusinesses', async (_, {
+  requestUserId, terminalId, businessIds, protectedTerminalId,
+} = {}) => {
   try {
     if (!RUNTIME.worker || RUNTIME.businessId !== 'principal') return { ok: false, error: 'Servicio no disponible' };
     const user = _connRequireSA(requestUserId);
@@ -1293,6 +1295,11 @@ ipcMain.handle('serverAdmin:setTerminalBusinesses', async (_, { requestUserId, t
     const id = String(terminalId || '').trim();
     const serviceConfig = require('./src/main/service-config');
     const current = serviceConfig.loadServiceConfig(DATA_DIR);
+    const isServerConsole = id === String(protectedTerminalId || '').trim()
+      || current.terminalNames?.[id] === 'Consola del servidor';
+    if (isServerConsole) {
+      return { ok: false, error: 'La consola local del servidor debe conservar acceso a todos los negocios' };
+    }
     if (!current.allowlist.includes(id)) return { ok: false, error: 'La terminal no está autorizada' };
     const valid = new Set(
       require('./src/main/server-service').listServiceBusinesses(DATA_DIR, current).map(item => item.id),
@@ -4706,7 +4713,7 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, files, requestUser
           subtotal, discount_pct, discount_amt, tax_pct, tax_amt, total, payment_method, price_mode,
           cajero, user_id, ncf, notes, created_at, numero_factura, numero_factura_fmt, old_id_factura,
           source_balance, import_source)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, 'retail', 'Importación histórica', NULL, ?, ?, ?, ?, ?, ?, ?, 'equiparts_bak')`);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'retail', 'Importación histórica', NULL, ?, ?, ?, ?, ?, ?, ?, 'equiparts_bak')`);
       const insItem = db.prepare(`
         INSERT INTO sale_items(sale_id, product_id, product_code, product_name, unit_cost, unit_price, qty, subtotal,
           taxable, tax_pct, tax_amt, net_subtotal)
@@ -4730,22 +4737,17 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, files, requestUser
         const dt = (f.date || new Date().toISOString().split('T')[0]) + ' 00:00:00';
         const fmt = f.numero_factura_fmt || (f.numero_factura != null ? String(f.numero_factura).padStart(8,'0') : '');
         const notes = (f.numero_factura != null ? `Factura #${fmt}${f.ncf ? ' | NCF:' + f.ncf : ''}` : 'Factura importada')
-          + (f.factura_nota ? ' | ' + f.factura_nota : '');
+          + (f.factura_nota ? ' | ' + f.factura_nota : '')
+          + (f.total_recovered_from_detail ? ` | TOTAL RECUPERADO DESDE DETALLE: RD$${f.total.toFixed(2)}` : '')
+          + (f.discount_recovered_from_totals ? ` | DESCUENTO LEGADO RECONSTRUIDO: RD$${f.discount_amt.toFixed(2)} (${f.discount_pct.toFixed(2)}%)` : '');
         const customer = db.prepare('SELECT rnc FROM customers WHERE id=?').get(custId);
         const items = f.items.length ? f.items
           : [{ product_code: 'IMP', product_name: 'Factura importada', qty: 1, unit_price: f.total, line_total: f.total, taxable: 1, tax_pct: 18 }];
-        const fiscalItems = items.map(it => {
-          const lineGross = _aioRound2(it.line_total || (it.unit_price * it.qty));
-          const taxPct = it.taxable ? (Number(it.tax_pct) || 18) : 0;
-          const lineTax = taxPct > 0 ? _aioRound2(lineGross - lineGross / (1 + taxPct / 100)) : 0;
-          return { ...it, lineGross, taxPct, lineTax, lineNet: _aioRound2(lineGross - lineTax) };
-        });
-        const taxAmt = _aioRound2(fiscalItems.reduce((sum, item) => sum + item.lineTax, 0));
-        const netSubtotal = _aioRound2(f.total - taxAmt);
-        const taxRates = [...new Set(fiscalItems.filter(item => item.taxPct > 0).map(item => item.taxPct))];
-        const saleTaxPct = taxRates.length === 1 ? taxRates[0] : 0;
+        const breakdown = calculateInvoiceFiscalBreakdown(f, items);
+        const { fiscalItems, taxAmt, netSubtotal, saleTaxPct } = breakdown;
         const r = insSale.run(null, custId, f.customer_name, customer?.rnc || '', 'factura', f.status,
-          netSubtotal, saleTaxPct, taxAmt, f.total, f.payment_method, f.ncf, notes, dt,
+          netSubtotal, breakdown.discountPct, breakdown.discountAmt,
+          saleTaxPct, taxAmt, f.total, f.payment_method, f.ncf, notes, dt,
           f.numero_factura, fmt, f.old_id_factura, f.balance);
         const saleId = r.lastInsertRowid;
         for (const it of fiscalItems) {
@@ -4912,7 +4914,7 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, files, requestUser
 
     try {
       audit(requestUserId || null, 'ALL IN ONE', 'migracion_allinone', 'sistema', null,
-        `CxC ${cxcTotal} / ${cxc.clientes_con_saldo} clientes / ${facturasImp} facturas`);
+        `CxC ${cxcTotal} / ${cxc.clientes_con_saldo} clientes / ${facturasImp} facturas / ${validation.warnings.length} advertencias conciliadas`);
     } catch (_) { /* auditoría no debe tumbar el resultado */ }
 
     return {
@@ -4924,6 +4926,7 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, files, requestUser
       facturas: facturasImp,
       target: targetCxc,
       cuadra,
+      warnings: validation.warnings,
     };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -5654,6 +5657,53 @@ ipcMain.handle('ncf:updateSequence', async (_, { id, data, reason, requestUserId
     const result = ncfRepo.updateSequence({ id: Number(id), ...(data || {}) });
     audit(requestUserId, u.name, 'ncf_secuencia_corregida', 'ncf_sequences', Number(id),
       `${cleanReason} | antes=${JSON.stringify(before.sequence)} | después=${JSON.stringify(result.sequence)} | backup=${path.basename(backupPath)}`);
+    return { ok:true, data:result, backup:backupPath };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('ncf:previewMalformedRecovery', async (_, { id, requestUserId } = {}) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || u.role !== 'superadmin') {
+      return { ok:false, error:'Solo un superadministrador puede revisar una recuperación fiscal' };
+    }
+    return { ok:true, data:ncfRepo.previewMalformedRecovery(Number(id)) };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('ncf:recoverMalformedDocuments', async (_, {
+  id, previewToken, reason, confirmation, requestUserId,
+} = {}) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || u.role !== 'superadmin') {
+      return { ok:false, error:'Solo un superadministrador puede ejecutar una recuperación fiscal' };
+    }
+    const cleanReason = String(reason || '').trim();
+    if (cleanReason.length < 10) {
+      return { ok:false, error:'Explica el motivo de la recuperación (mínimo 10 caracteres)' };
+    }
+    const preview = ncfRepo.previewMalformedRecovery(Number(id));
+    const requiredConfirmation = `RECUPERAR ${preview.recoverable_count}`;
+    if (String(confirmation || '').trim().toUpperCase() !== requiredConfirmation) {
+      return { ok:false, error:`Escribe ${requiredConfirmation} para confirmar la recuperación` };
+    }
+    if (!preview.can_recover) {
+      return { ok:false, error:'La recuperación tiene conflictos y no puede ejecutarse automáticamente' };
+    }
+    const backupDir = path.join(currentDataDir(), 'backups');
+    fs.mkdirSync(backupDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupPath = path.join(backupDir, `velo_before_ncf_document_recovery_${stamp}.db`);
+    await db.backup(backupPath);
+    const result = ncfRepo.recoverMalformedDocuments({
+      id: Number(id), preview_token: previewToken, reason: cleanReason,
+    });
+    audit(requestUserId, u.name, 'ncf_documentos_malformados_recuperados',
+      'ncf_sequences', Number(id),
+      `${cleanReason} | recuperados=${result.recovered} | referencias=${result.references} | próximo=${result.next_ncf || 'rango agotado'} | backup=${path.basename(backupPath)}`);
+    result.rows.forEach(row => {
+      audit(requestUserId, u.name, 'ncf_factura_recuperada', 'sales', Number(row.sale_id),
+        `${row.old_ncf} → ${row.corrected_ncf} | ${cleanReason}`);
+    });
     return { ok:true, data:result, backup:backupPath };
   } catch(e) { return { ok:false, error:e.message }; }
 });
@@ -6649,6 +6699,12 @@ ipcMain.handle('ecf:emit', async (_, { saleId, requestUserId } = {}) => {
     `).get(saleId);
     if (!sale) return { ok: false, error: 'Venta no encontrada' };
     if (sale.ecf_status === 'Aceptado') return { ok: false, error: 'Ya tiene e-CF emitido' };
+    if (String(sale.ncf || '').trim().toUpperCase().startsWith('B')) {
+      return {
+        ok: false,
+        error: 'La venta ya posee un NCF tradicional. VELO bloqueó la emisión de un e-CF adicional para evitar duplicidad fiscal.',
+      };
+    }
 
     // 2. Obtener items de la venta
     const items = db.prepare(`

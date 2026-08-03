@@ -7,6 +7,7 @@ const {
   parseCsv,
   loadEquipartsCsvPayload,
   validateEquipartsData,
+  calculateInvoiceFiscalBreakdown,
   syncImportedCustomerPhones,
   assertForeignKeyIntegrity,
 } = require('../lib/equiparts-import');
@@ -58,6 +59,36 @@ const broken = { ...data, ventas: data.ventas.map(row => ({ ...row, total: '999'
 let totalError = false;
 try { validateEquipartsData(broken); } catch (error) { totalError = /no cuadra/.test(error.message); }
 ok(totalError, 'rechaza una factura cuyo detalle no cuadra con el total');
+
+const zeroHeader = { ...data, ventas: data.ventas.map(row => ({ ...row, total: '0' })) };
+const recovered = validateEquipartsData(zeroHeader);
+ok(recovered.invoices.get(10).total === 168 && recovered.warnings.length === 1,
+  'recupera un total legado en cero únicamente desde líneas que cuadran');
+ok(recovered.invoices.get(10).total_recovered_from_detail === true,
+  'marca explícitamente la factura conciliada para auditoría y trazabilidad');
+
+const impossibleBalance = {
+  ...data,
+  ventas: data.ventas.map(row => ({ ...row, total: '0', balance: '999' })),
+};
+let balanceError = false;
+try { validateEquipartsData(impossibleBalance); } catch (error) { balanceError = /balance.+supera el total recuperado/i.test(error.message); }
+ok(balanceError, 'no recupera silenciosamente un encabezado cuyo balance supera el detalle');
+
+const discounted = {
+  ...data,
+  ventas: data.ventas.map(row => ({ ...row, total: '166.32', balance: '66.32' })),
+};
+const discountValidation = validateEquipartsData(discounted);
+const discountedInvoice = discountValidation.invoices.get(10);
+const discountBreakdown = calculateInvoiceFiscalBreakdown(discountedInvoice);
+ok(discountedInvoice.discount_amt === 1.68 && discountedInvoice.discount_pct === 1,
+  'reconstruye el descuento de factura cuando el detalle bruto supera al total cobrado');
+ok(discountValidation.warnings.some(w => w.code === 'INVOICE_DISCOUNT_RECOVERED_FROM_TOTALS'),
+  'reporta el descuento reconstruido como conciliación auditable');
+ok(discountBreakdown.netSubtotal + discountBreakdown.taxAmt === 166.32 &&
+   discountBreakdown.fiscalItems.reduce((sum, item) => sum + item.lineAfterDiscount, 0) === 166.32,
+  'prorratea descuento e ITBIS sin cambiar el total autoritativo');
 
 const asCsv = rows => {
   const headers = rows._headers;

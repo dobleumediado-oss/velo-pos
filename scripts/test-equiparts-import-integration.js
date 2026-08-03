@@ -38,6 +38,8 @@ P2,P2,PRODUCTO EXENTO,20,50,45,0,0,5,1,GENERAL,GENERICA,UND
 10,849,00000849,B0100000849,JUAN PEREZ,2,2026-08-03,168,68,credito,completed,Pendiente,P1,PRODUCTO GRAVADO,1,118,118,1,18,PRUEBA
 10,849,00000849,B0100000849,JUAN PEREZ,2,2026-08-03,168,68,credito,completed,Pendiente,P2,PRODUCTO EXENTO,1,50,50,0,0,PRUEBA
 11,850,00000850,,JUAN PEREZ,2,2026-08-03,50,0,efectivo,completed,Pagada,P2,PRODUCTO EXENTO,1,50,50,0,0,PRUEBA
+12,7117,00007117,,JUAN PEREZ,2,2026-08-03,0,0,efectivo,completed,Pagada,P1,TOTAL LEGADO EN CERO,1,3001.92,3001.92,1,18,PRUEBA RECUPERACION
+13,51438,00051438,,JUAN PEREZ,2,2026-08-03,583296,0,efectivo,completed,Pagada,P1,FACTURA CON DESCUENTO,1,588000,588000,1,18,PRUEBA DESCUENTO
 `,
   '4_recibos_v2.csv': `old_id_pago_detalle,old_id_factura,old_id_cliente,customer_name,date,amount,method,numero_recibo,notes
 20,10,2,JUAN PEREZ,2026-08-03,100,efectivo,3,ABONO INICIAL
@@ -79,6 +81,20 @@ ok(sale?.customer_rnc === '00112345678', 'snapshot de factura conserva el RNC');
 ok(sale?.ncf === 'B0100000849', 'factura conserva NCF válido de 11 caracteres');
 ok(sale?.subtotal === 150 && sale?.tax_amt === 18 && sale?.total === 168, 'total mixto gravado/exento no se infla al reimprimir');
 
+const recoveredSale = db.prepare(`SELECT total,notes FROM sales WHERE old_id_factura=12`).get();
+ok(recoveredSale?.total === 3001.92 && /TOTAL RECUPERADO DESDE DETALLE/.test(recoveredSale?.notes || ''),
+  'una factura con encabezado cero conserva el total de sus líneas y queda marcada');
+
+const discountedSale = db.prepare(`SELECT id,subtotal,discount_pct,discount_amt,tax_amt,total,notes FROM sales WHERE old_id_factura=13`).get();
+const discountedItem = db.prepare(`SELECT subtotal,tax_amt,net_subtotal FROM sale_items WHERE sale_id=?`).get(discountedSale.id);
+ok(discountedSale?.total === 583296 && discountedSale?.discount_amt === 4704 && discountedSale?.discount_pct === 0.8,
+  'la factura 51438 conserva RD$583,296 y reconstruye su descuento de 0.8%');
+ok(discountedSale.subtotal + discountedSale.tax_amt === discountedSale.total &&
+   discountedItem.tax_amt + discountedItem.net_subtotal === discountedSale.total,
+  'descuento, ITBIS y subtotal quedan cableados sin alterar el total cobrado');
+ok(/DESCUENTO LEGADO RECONSTRUIDO/.test(discountedSale.notes || ''),
+  'la reconstrucción del descuento queda identificada en la factura');
+
 const items = db.prepare(`SELECT taxable,tax_pct,tax_amt,net_subtotal,subtotal FROM sale_items WHERE sale_id=? ORDER BY id`).all(sale.id);
 ok(items.length === 2 && items[0].tax_amt === 18 && items[1].tax_amt === 0, 'ITBIS se conserva por línea');
 
@@ -94,7 +110,7 @@ console.log('\n== 2. Segunda ejecución idempotente ==');
 const second = runImport();
 ok(second.status === 0, `segunda importación termina correctamente${second.status === 0 ? '' : `: ${second.stderr || second.stdout}`}`);
 const db2 = new Database(path.join(dataDir, 'velo.db'), { readonly: true });
-ok(db2.prepare(`SELECT COUNT(*) count FROM sales WHERE old_id_factura IN (10,11)`).get().count === 2, 'no duplica las facturas');
+ok(db2.prepare(`SELECT COUNT(*) count FROM sales WHERE old_id_factura IN (10,11,12,13)`).get().count === 4, 'no duplica las facturas');
 ok(db2.prepare(`SELECT COUNT(*) count FROM payments WHERE old_id_pago_detalle=20`).get().count === 1, 'no duplica el abono');
 ok(db2.prepare(`SELECT COUNT(*) count FROM customer_phones WHERE customer_id=? AND active=1`).get(customer.id).count === 2, 'no duplica teléfonos');
 ok(db2.prepare(`SELECT COUNT(*) count FROM payment_allocations`).get().count === 2, 'no duplica asignaciones');

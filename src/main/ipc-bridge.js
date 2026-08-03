@@ -36,7 +36,12 @@ function rpcTimeoutFor(channel) {
   // Importar miles de ventas incluye validación, backup y una transacción
   // completa. El timeout general de 8 s hacía que el cliente mostrara
   // SERVER_OFFLINE aunque el servidor siguiera trabajando y pudiera confirmar.
-  return channel === 'importar:allInOneEquiparts' ? 10 * 60 * 1000 : 8000;
+  if (channel === 'importar:allInOneEquiparts') return 10 * 60 * 1000;
+  // Incluye backup consistente y una transacción fiscal auditada. En una base
+  // grande puede superar el timeout interactivo normal sin que el servidor se
+  // haya desconectado.
+  if (channel === 'ncf:recoverMalformedDocuments') return 2 * 60 * 1000;
+  return 8000;
 }
 function configureBridge({ mode, client } = {}) {
   if (typeof mode === 'function')   _ctx.mode = mode;

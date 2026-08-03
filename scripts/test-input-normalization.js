@@ -46,6 +46,23 @@ for (const type of ['email', 'password', 'url', 'search']) {
 const explicit = control('INPUT', 'text', 'Mezcla', { uppercase: 'off' });
 assert.strictEqual(shouldUppercaseEntryControl(explicit), false);
 
+// Los motivos de auditoría son narrativos. Deben conservar la escritura del
+// usuario y, sobre todo, no reescribirse durante una entrada remota o por IME.
+const auditReason = control('TEXTAREA', '', 'Continuar desde el sistema anterior', { uppercase: 'off' });
+assert.strictEqual(shouldUppercaseEntryControl(auditReason), false);
+assert.strictEqual(normalizeUppercaseEntry(auditReason), false);
+assert.strictEqual(auditReason.value, 'Continuar desde el sistema anterior');
+
+const branchesSource = fs.readFileSync(
+  path.join(__dirname, '..', 'src', 'js', 'sucursales.js'),
+  'utf8'
+);
+assert.match(
+  branchesSource,
+  /id="ncf-edit-reason"[^>]*data-uppercase="off"/,
+  'El motivo fiscal debe quedar fuera de la reescritura en vivo para admitir teclado remoto/IME'
+);
+
 const dataSource = fs.readFileSync(
   path.join(__dirname, '..', 'src', 'js', 'data.js'),
   'utf8'

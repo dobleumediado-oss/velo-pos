@@ -51,6 +51,19 @@ function ventasEsc(v) {
     .replace(/"/g, '&quot;');
 }
 
+function ventasIsTraditionalNcf(value) {
+  return /^B(?:01|02|04|14|15|16|17)\d{8}$/.test(String(value || '').trim().toUpperCase());
+}
+
+function ventasLooksLikeMalformedTraditionalNcf(value) {
+  const ncf = String(value || '').trim().toUpperCase();
+  return ncf.startsWith('B') && !ventasIsTraditionalNcf(ncf);
+}
+
+function ventasIsElectronicNcf(value) {
+  return /^E(?:31|32|33|34|41|43|44|45|46|47)\d{10}$/.test(String(value || '').trim().toUpperCase());
+}
+
 function ventasRefreshAfterMutation({
   range = ventasRange, view = 'sales', products = false,
   customers = false, payments = false, onDone = null,
@@ -730,6 +743,9 @@ function renderVentasTable() {
       taxAmt = ventasRound2(s.total - s.total / (1 + Number(s.tax_pct) / 100));
     }
     const tieneNcf  = !!(s.ncf);
+    const ncfTradicional = ventasIsTraditionalNcf(s.ncf);
+    const ncfTradicionalMalformado = ventasLooksLikeMalformedTraditionalNcf(s.ncf);
+    const ncfElectronico = ventasIsElectronicNcf(s.ncf) || s.ecf_status === 'Aceptado';
     const ecfOk     = s.ecf_status === 'Aceptado';
     const adjusted = Number(s.has_product_correction) === 1 || Number(s.has_active_return) === 1 ||
       s.correction_kind === 'product_addition';
@@ -737,13 +753,18 @@ function renderVentasTable() {
     const effectiveTotal = ventasEffectiveTotal(s);
     const operationTotal = !isSupplement && adjusted ? ventasOperationTotal(s) : effectiveTotal;
 
-    // Badge e-CF en la columna # (junto al tipo)
+    // Un Bxx es un NCF tradicional, no un e-CF pendiente. Separar ambos evita
+    // emitir un segundo comprobante fiscal sobre la misma venta.
     const ecfBadge = tieneNcf
       ? h('div', {
           style: { fontSize: '9px', marginTop: '2px' },
-          html: ecfOk
-            ? `<span class="badge g" style="font-size:9px;padding:1px 5px">e-CF ✓</span>`
-            : `<span class="badge n" style="font-size:9px;padding:1px 5px">e-CF</span>`
+          html: ncfTradicionalMalformado
+            ? `<span class="badge r" style="font-size:9px;padding:1px 5px">NCF a recuperar</span>`
+            : ncfTradicional
+              ? `<span class="badge n" style="font-size:9px;padding:1px 5px">NCF</span>`
+              : ncfElectronico && ecfOk
+                ? `<span class="badge g" style="font-size:9px;padding:1px 5px">e-CF ✓</span>`
+                : `<span class="badge n" style="font-size:9px;padding:1px 5px">e-CF</span>`
         })
       : null;
 
@@ -842,8 +863,8 @@ function renderVentasTable() {
               onclick: () => reimprimirVenta(s.id),
               html: svg('print')
             }),
-            // Botón e-CF — solo si tiene NCF y no está ya aceptado
-            tieneNcf && !ecfOk
+            // Nunca convertir un NCF tradicional existente en un segundo e-CF.
+            ncfElectronico && !ecfOk
               ? h('button', {
                   class: 'btn btn-sm',
                   style: { background: '#0066cc', color: '#fff', border: 'none' },
@@ -1192,6 +1213,10 @@ async function enviarEcf(saleId) {
   const sale = DB.sales.find(s => s.id === saleId);
   if (!sale) { toast('Venta no encontrada', 'err'); return; }
   if (!sale.ncf) { toast('Esta venta no tiene NCF asignado', 'w'); return; }
+  if (String(sale.ncf).trim().toUpperCase().startsWith('B')) {
+    toast('Esta venta ya tiene un NCF tradicional. No se puede emitir además un e-CF para la misma operación.', 'w');
+    return;
+  }
   if (sale.ecf_status === 'Aceptado') { toast('Ya tiene e-CF emitido', 'w'); return; }
 
   confirmModal(
@@ -1705,6 +1730,9 @@ async function openDetalleVentaModal(s) {
   const discAmt = adjustedCopy ? 0 : (detail.discount_amt || detail.discAmt || 0);
   const discPct = adjustedCopy ? 0 : (detail.discount_pct || detail.disc || 0);
   const tieneNcf = !!(detail.ncf);
+  const ncfTradicional = ventasIsTraditionalNcf(detail.ncf);
+  const ncfTradicionalMalformado = ventasLooksLikeMalformedTraditionalNcf(detail.ncf);
+  const ncfElectronico = ventasIsElectronicNcf(detail.ncf) || detail.ecf_status === 'Aceptado';
   const ecfOk    = detail.ecf_status === 'Aceptado';
   const isSupplement = detail.correction_kind === 'product_addition' && detail.original_sale_id;
   const hasOperationAdjustments = !isSupplement && (
@@ -1726,18 +1754,25 @@ async function openDetalleVentaModal(s) {
       <div class="tr grand" style="margin-top:8px"><span>Total neto de la operación</span><span>${fmt(detail.operation_total || detail.total || 0)}</span></div>
     </div>` : '';
 
-  // Sección e-CF en el detalle
+  // Sección fiscal: NCF tradicional y e-CF son documentos distintos.
   const ecfSection = tieneNcf ? `
-    <div class="card" style="background:${ecfOk ? 'var(--green-bg,#f0fdf4)' : 'var(--surface2)'};margin-bottom:12px">
+    <div class="card" style="background:${ncfTradicionalMalformado ? 'var(--red-bg,#fef2f2)' : ecfOk ? 'var(--green-bg,#f0fdf4)' : 'var(--surface2)'};margin-bottom:12px">
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div>
-          <div style="font-size:11px;color:var(--muted);margin-bottom:2px">Comprobante Fiscal Electrónico</div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:2px">${
+            ncfTradicionalMalformado ? 'NCF requiere recuperación' :
+            ncfTradicional ? 'Comprobante Fiscal NCF' : 'Comprobante Fiscal Electrónico'
+          }</div>
           <div style="font-family:monospace;font-weight:700;font-size:13px">${detail.ncf}</div>
-          ${ecfOk
+          ${ncfTradicionalMalformado
+            ? `<div style="font-size:10px;color:var(--red);margin-top:2px">Formato inválido · corrígelo desde Configuración → Comprobantes Fiscales</div>`
+            : ncfTradicional
+              ? `<div style="font-size:10px;color:var(--muted2);margin-top:2px">NCF tradicional emitido</div>`
+              : ecfOk
             ? `<div style="font-size:10px;color:var(--green);margin-top:2px">✓ Aceptado por DGII</div>`
             : `<div style="font-size:10px;color:var(--muted2);margin-top:2px">Pendiente de envío</div>`}
         </div>
-        ${!ecfOk
+        ${ncfElectronico && !ecfOk
           ? `<button class="btn btn-sm" style="background:#0066cc;color:#fff;border:none"
                onclick="closeModal();enviarEcf(${s.id})">
                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 2L11 13"/><path d="M22 2L15 22 11 13 2 9l20-7z"/></svg>

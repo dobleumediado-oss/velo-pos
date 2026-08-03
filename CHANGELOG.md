@@ -1,5 +1,37 @@
 # Historial de versiones
 
+## 1.36.2 — 2026-08-03
+
+### Importación All-in-One conciliada
+
+- Recupera facturas cuyo encabezado legado declara total cero cuando sus líneas
+  permiten reconstruir el importe de forma exacta y verificable.
+- Reconstruye descuentos omitidos por el exportador de Equiparts comparando el
+  detalle bruto con el total cobrado; conserva precio, cantidad y total original.
+- Prorratea el descuento por línea y recalcula subtotal e ITBIS sin inflar las
+  facturas impresas, dejando la conciliación identificada y auditada.
+- Mantiene el bloqueo para diferencias no conciliables, balances imposibles,
+  referencias huérfanas o cualquier importación que no cierre CxC.
+
+### Recuperación y continuidad fiscal
+
+- Incorpora una recuperación guiada de NCF mal formados con vista previa,
+  confirmación explícita, respaldo, transacción y auditoría por documento.
+- Los correlativos saltados que nunca fueron emitidos quedan en una cola segura
+  y se utilizan antes de continuar el rango, sin retroceder el contador fiscal.
+- Los reportes 607/608 bloquean la impresión si detectan un NCF inválido y Ventas
+  diferencia correctamente un NCF tradicional de un e-CF.
+- Se impide emitir un e-CF adicional sobre una venta que ya posee NCF tradicional.
+
+### Servidor y red multi-terminal
+
+- Distingue direcciones LAN, Tailscale y redes virtuales/NAT como Parallels para
+  no recomendar una IP inaccesible a las demás terminales.
+- La consola del servidor queda protegida visualmente y en backend: no puede
+  eliminarse ni perder acceso administrativo a los negocios.
+- La regla de firewall permite el puerto del servidor desde la subred local aun
+  cuando Windows haya clasificado incorrectamente el perfil de red.
+
 ## 1.36.1 — 2026-08-03
 
 ### Recuperación fiscal por empresa

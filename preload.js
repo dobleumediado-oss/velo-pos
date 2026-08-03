@@ -367,6 +367,8 @@ contextBridge.exposeInMainWorld('api', {
     createSequence:  (d) => ipcRenderer.invoke('ncf:createSequence', d),
     updateSequence:  (d) => ipcRenderer.invoke('ncf:updateSequence', d),
     removeSequence:  (d) => ipcRenderer.invoke('ncf:removeSequence', d),
+    previewMalformedRecovery: (d) => ipcRenderer.invoke('ncf:previewMalformedRecovery', d),
+    recoverMalformedDocuments: (d) => ipcRenderer.invoke('ncf:recoverMalformedDocuments', d),
     getAlerts:       ()  => ipcRenderer.invoke('ncf:getAlerts'),
     validateRnc:     (d) => ipcRenderer.invoke('ncf:validateRnc', d),
     getLog:          (d) => ipcRenderer.invoke('ncf:getLog', d),

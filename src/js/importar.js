@@ -394,6 +394,23 @@ async function ejecutarAllInOne() {
   const cxcFmt = (res.cxc || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const targetFmt = (res.target || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const cuadra = res.cuadra;
+  const warnings = Array.isArray(res.warnings) ? res.warnings : [];
+  const recoveredTotalCount = warnings.filter(w => w.code === 'INVOICE_TOTAL_RECOVERED_FROM_DETAIL').length;
+  const recoveredDiscountCount = warnings.filter(w => w.code === 'INVOICE_DISCOUNT_RECOVERED_FROM_TOTALS').length;
+  const reconciliationSummary = [
+    recoveredTotalCount ? `${recoveredTotalCount} total${recoveredTotalCount === 1 ? '' : 'es'} recuperado${recoveredTotalCount === 1 ? '' : 's'} desde líneas` : '',
+    recoveredDiscountCount ? `${recoveredDiscountCount} descuento${recoveredDiscountCount === 1 ? '' : 's'} reconstruido${recoveredDiscountCount === 1 ? '' : 's'}` : '',
+  ].filter(Boolean).join(' · ');
+  const warningDetails = warnings.slice(0, 5)
+    .map(warning => `<div style="margin-top:3px">• ${_escHtml(warning.message || '')}</div>`).join('');
+  const warningBlock = warnings.length ? `
+    <div class="alrt a" style="margin-bottom:14px">
+      <div class="alrt-dot a"></div>
+      <div>
+        <div class="alrt-title">${warnings.length} conciliación${warnings.length === 1 ? '' : 'es'} de datos históricos</div>
+        <div class="alrt-sub">${_escHtml(reconciliationSummary || 'Datos históricos conciliados')} sin alterar precios, cantidades ni el total cobrado.${warningDetails}${warnings.length > 5 ? `<div style="margin-top:3px">… y ${warnings.length - 5} más. Cada factura quedó marcada y el resumen quedó registrado en auditoría.</div>` : ''}</div>
+      </div>
+    </div>` : '';
 
   openModal(`
     <div style="text-align:center;margin-bottom:12px">
@@ -410,6 +427,7 @@ async function ejecutarAllInOne() {
         </div>
       </div>
     </div>
+    ${warningBlock}
     <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:14px">
       <tbody>
         <tr><td style="padding:4px 8px;color:var(--muted)">Productos</td><td style="padding:4px 8px;text-align:right;font-weight:600">${s.prod_new||0} nuevos · ${s.prod_skip||0} ya existían</td></tr>

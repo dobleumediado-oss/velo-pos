@@ -99,6 +99,6 @@ Get-NetFirewallRule -DisplayName 'Velo POS Server (LAN privada)' -ErrorAction Si
 New-NetFirewallRule -DisplayName 'Velo POS Server (Tailscale)' -Direction Inbound -Action Allow `
   -Protocol TCP -LocalPort 8443 -RemoteAddress '100.64.0.0/10' -Profile Any | Out-Null
 New-NetFirewallRule -DisplayName 'Velo POS Server (LAN privada)' -Direction Inbound -Action Allow `
-  -Protocol TCP -LocalPort 8443 -RemoteAddress LocalSubnet -Profile Private | Out-Null
+  -Protocol TCP -LocalPort 8443 -RemoteAddress LocalSubnet -Profile Any | Out-Null
 
 & $serviceExe start $serviceXml

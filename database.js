@@ -22,6 +22,7 @@ const {
   normalizeLegacySequenceNumber,
   formatLegacyNcf,
   parseCanonicalLegacyNcf,
+  parseRecoverableDuplicatedTypeNcf,
 } = require('./lib/ncf-sequences');
 const { ensureSalespeopleSchema, createSalespeopleRepo } = require('./src/main/salespeople-repo');
 const { ensureCheckoutOrdersSchema, createCheckoutOrdersRepo } = require('./src/main/checkout-orders-repo');
@@ -1605,6 +1606,101 @@ function documentKindForSale(type, paymentMethod) {
   return String(paymentMethod || '').toLowerCase() === 'credito'
     ? 'factura_credito'
     : 'factura_contado';
+}
+
+// NCF saltados pero nunca emitidos. La DGII permite utilizarlos mientras la
+// secuencia continúe vigente. Se guardan aparte del puntero `current` para no
+// retroceder el rango ni confundir un hueco disponible con un NCF ya usado.
+function ensureNcfAvailableNumbersTable() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ncf_available_numbers (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      sequence_id     INTEGER NOT NULL REFERENCES ncf_sequences(id),
+      ncf_type        TEXT NOT NULL,
+      sequence_number INTEGER NOT NULL,
+      status          TEXT NOT NULL DEFAULT 'available'
+                        CHECK(status IN ('available','issued','retired')),
+      source          TEXT NOT NULL DEFAULT 'recovery_gap',
+      issued_sale_id  INTEGER REFERENCES sales(id),
+      created_at      TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+      issued_at       TEXT,
+      UNIQUE(ncf_type,sequence_number)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ncf_available_queue
+      ON ncf_available_numbers(ncf_type,status,sequence_number);
+  `);
+}
+
+function allocateNextNcfNumber(type, saleId = null) {
+  ensureNcfAvailableNumbersTable();
+  const cleanType = normalizeLegacyType(type);
+
+  // Prioridad 1: correlativos saltados y verificados como nunca emitidos.
+  // Una comprobación final contra sales+ncf_log protege incluso si la base fue
+  // modificada por importación después de crear la cola.
+  while (true) {
+    const gap = db.prepare(`
+      SELECT a.*,s.to_num,s.alert_at
+      FROM ncf_available_numbers a
+      JOIN ncf_sequences s ON s.id=a.sequence_id
+      WHERE a.ncf_type=? AND a.status='available' AND s.active=1
+        AND (s.expiry_date IS NULL OR TRIM(s.expiry_date)='' OR date(s.expiry_date)>=date('now','localtime'))
+      ORDER BY a.sequence_number,a.id LIMIT 1
+    `).get(cleanType);
+    if (!gap) break;
+    const ncf = formatLegacyNcf(cleanType, gap.sequence_number);
+    const occupied = db.prepare(`
+      SELECT 1 FROM sales WHERE UPPER(TRIM(COALESCE(ncf,'')))=?
+      UNION ALL
+      SELECT 1 FROM ncf_log WHERE UPPER(TRIM(COALESCE(ncf,'')))=?
+      LIMIT 1
+    `).get(ncf, ncf);
+    if (occupied) {
+      db.prepare("UPDATE ncf_available_numbers SET status='retired' WHERE id=?").run(gap.id);
+      continue;
+    }
+    const claimed = db.prepare(`
+      UPDATE ncf_available_numbers
+      SET status='issued',issued_sale_id=?,issued_at=datetime('now','localtime')
+      WHERE id=? AND status='available'
+    `).run(saleId || null, gap.id);
+    if (claimed.changes !== 1) continue;
+    const queued = db.prepare("SELECT COUNT(*) c FROM ncf_available_numbers WHERE ncf_type=? AND status='available'")
+      .get(cleanType).c;
+    const tail = Math.max(0, Number(gap.to_num) - Number(
+      db.prepare('SELECT current FROM ncf_sequences WHERE id=?').get(gap.sequence_id)?.current || 0
+    ));
+    return {
+      ncf, remaining: Number(queued) + tail, sequence_id: gap.sequence_id,
+      from_available_gap: true, sequence_number: Number(gap.sequence_number),
+    };
+  }
+
+  // Prioridad 2: continuación normal del rango, sin regresar el puntero.
+  const seq = db.prepare(`
+    SELECT * FROM ncf_sequences
+    WHERE type=? AND active=1 AND current < to_num
+      AND (expiry_date IS NULL OR TRIM(expiry_date)='' OR date(expiry_date)>=date('now','localtime'))
+    ORDER BY id LIMIT 1
+  `).get(cleanType);
+  if (!seq) throw new Error(`Sin comprobantes vigentes disponibles tipo ${cleanType}`);
+  const current = normalizeLegacySequenceNumber(cleanType, seq.current, { allowZero: true });
+  const next = current + 1;
+  const ncf = formatLegacyNcf(cleanType, next);
+  const collision = db.prepare(`
+    SELECT 1 FROM sales WHERE UPPER(TRIM(COALESCE(ncf,'')))=?
+    UNION ALL
+    SELECT 1 FROM ncf_log WHERE UPPER(TRIM(COALESCE(ncf,'')))=?
+    LIMIT 1
+  `).get(ncf, ncf);
+  if (collision) throw new Error(`El próximo comprobante ${ncf} ya figura como emitido; revisa la secuencia fiscal`);
+  db.prepare('UPDATE ncf_sequences SET current=? WHERE id=?').run(next, seq.id);
+  const queued = db.prepare("SELECT COUNT(*) c FROM ncf_available_numbers WHERE ncf_type=? AND status='available'")
+    .get(cleanType).c;
+  return {
+    ncf, remaining: Number(queued) + (Number(seq.to_num) - next),
+    sequence_id: seq.id, from_available_gap: false, sequence_number: next,
+  };
 }
 
 function _issueDocumentNumber(kind, sourceType, sourceId) {
@@ -4491,20 +4587,24 @@ const salesRepo = {
         if (fiscalOn) {
           const docDigits = String(customer.rnc || '').replace(/\D/g, '');
           const ncfType   = docDigits.length === 9 ? 'B01' : 'B02';
-          const seq = db.prepare(
-            "SELECT * FROM ncf_sequences WHERE type=? AND active=1 AND current < to_num ORDER BY id ASC LIMIT 1"
-          ).get(ncfType);
-          if (seq) {
-            const next = seq.current + 1;
-            db.prepare("UPDATE ncf_sequences SET current=? WHERE id=?").run(next, seq.id);
-            // El prefijo nunca forma parte del contador. formatLegacyNcf
-            // impide emitir un B01/B02/B04 con más o menos de 8 correlativos.
-            ncf = formatLegacyNcf(ncfType, next);
+          ensureNcfAvailableNumbersTable();
+          const hasSequence = db.prepare(`
+            SELECT 1 FROM ncf_sequences s
+            WHERE s.type=? AND s.active=1
+              AND (s.expiry_date IS NULL OR TRIM(s.expiry_date)='' OR date(s.expiry_date)>=date('now','localtime'))
+              AND (s.current<s.to_num OR EXISTS(
+                SELECT 1 FROM ncf_available_numbers a
+                WHERE a.sequence_id=s.id AND a.status='available'
+              ))
+            LIMIT 1
+          `).get(ncfType);
+          if (hasSequence) {
+            const allocation = allocateNextNcfNumber(ncfType, saleId);
+            ncf = allocation.ncf;
             db.prepare("INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc) VALUES(?,?,?,?)")
               .run(ncf, ncfType, saleId, customer.rnc || '');
-            const remaining = seq.to_num - next;
-            if (remaining <= (seq.alert_at || 50)) {
-              console.log('[NCF] ALERTA: quedan ' + remaining + ' comprobantes tipo ' + ncfType);
+            if (allocation.remaining <= 50) {
+              console.log('[NCF] ALERTA: quedan ' + allocation.remaining + ' comprobantes tipo ' + ncfType);
             }
             db.prepare(`
               UPDATE sales
@@ -6375,15 +6475,21 @@ const returnsRepo = {
       if (original.ncf && String(original.ncf).trim()) {
         const fiscalOn = db.prepare("SELECT value FROM settings WHERE key='fiscal_enabled'").get()?.value === '1';
         if (fiscalOn) {
-          const seq = db.prepare(
-            "SELECT * FROM ncf_sequences WHERE type='B04' AND active=1 AND current < to_num ORDER BY id ASC LIMIT 1"
-          ).get();
-          if (seq) {
-            const next = seq.current + 1;
-            db.prepare("UPDATE ncf_sequences SET current=? WHERE id=?").run(next, seq.id);
-            ncfNota = formatLegacyNcf('B04', next);
-            const remaining = seq.to_num - next;
-            if (remaining <= (seq.alert_at || 50)) console.log('[NCF] ALERTA: quedan ' + remaining + ' notas de crédito B04');
+          ensureNcfAvailableNumbersTable();
+          const hasSequence = db.prepare(`
+            SELECT 1 FROM ncf_sequences s
+            WHERE s.type='B04' AND s.active=1
+              AND (s.expiry_date IS NULL OR TRIM(s.expiry_date)='' OR date(s.expiry_date)>=date('now','localtime'))
+              AND (s.current<s.to_num OR EXISTS(
+                SELECT 1 FROM ncf_available_numbers a
+                WHERE a.sequence_id=s.id AND a.status='available'
+              ))
+            LIMIT 1
+          `).get();
+          if (hasSequence) {
+            const allocation = allocateNextNcfNumber('B04', returnId);
+            ncfNota = allocation.ncf;
+            if (allocation.remaining <= 50) console.log('[NCF] ALERTA: quedan ' + allocation.remaining + ' notas de crédito B04');
           } else {
             console.warn('[NCF] Sin secuencia B04 registrada — nota de crédito #' + returnId +
               ' sin NCF. Registra un rango B04 en el Panel NCF.');
@@ -7355,8 +7461,199 @@ const deliveriesRepo = {
 // ══════════════════════════════════════════════
 // REPOSITORIO: NCF AVANZADO
 // ══════════════════════════════════════════════
+function ensureNcfRecoveryAuditTable() {
+  ensureNcfAvailableNumbersTable();
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ncf_normalization_log (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_table TEXT NOT NULL,
+      source_id    INTEGER NOT NULL,
+      field_name   TEXT NOT NULL,
+      old_value    TEXT NOT NULL,
+      new_value    TEXT NOT NULL,
+      reason       TEXT NOT NULL,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+      UNIQUE(source_table,source_id,field_name,old_value,new_value)
+    )
+  `);
+}
+
+function ncfRecoveryFingerprint(sequence, rows, conflicts) {
+  const payload = {
+    sequence: {
+      id: Number(sequence.id), type: sequence.type,
+      from: Number(sequence.from_num), to: Number(sequence.to_num),
+      current: Number(sequence.current),
+    },
+    rows: rows.map(row => ({
+      saleId: Number(row.sale_id), logId: Number(row.log_id) || null,
+      old: row.old_ncf, next: row.corrected_ncf,
+    })),
+    conflicts: conflicts.map(item => String(item.code || item.message || item)),
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
+
+function previewMalformedNcfRecovery(sequenceId) {
+  const sequence = db.prepare('SELECT * FROM ncf_sequences WHERE id=?').get(Number(sequenceId));
+  if (!sequence) throw new Error('La secuencia NCF no existe');
+  const type = normalizeLegacyType(sequence.type);
+  const sales = db.prepare(`
+    SELECT id,ncf,status,customer_name,customer_rnc,total,created_at,cancelled_at
+    FROM sales
+    WHERE TRIM(COALESCE(ncf,''))<>'' AND UPPER(substr(TRIM(ncf),1,3))=?
+    ORDER BY datetime(created_at),id
+  `).all(type);
+  const logsForSale = db.prepare(`
+    SELECT id,ncf,type,status,issued_at,voided_at,modifies_ncf
+    FROM ncf_log WHERE sale_id=? ORDER BY id
+  `);
+  const targetInSales = db.prepare("SELECT id FROM sales WHERE UPPER(TRIM(ncf))=? AND id<>? LIMIT 1");
+  const targetInLog = db.prepare("SELECT id,sale_id FROM ncf_log WHERE UPPER(TRIM(ncf))=? AND id<>? LIMIT 1");
+  const rows = [];
+  const conflicts = [];
+  const targetOwners = new Map();
+
+  sales.forEach(sale => {
+    const parsed = parseRecoverableDuplicatedTypeNcf(sale.ncf);
+    if (!parsed || parsed.type !== type) return;
+    if (parsed.sequence < Number(sequence.from_num) || parsed.sequence > Number(sequence.to_num)) {
+      conflicts.push({
+        code: `OUT_OF_RANGE:${sale.id}`,
+        sale_id: sale.id,
+        message: `${parsed.malformedNcf} pertenece al correlativo ${parsed.sequence}, fuera del rango autorizado`,
+      });
+      return;
+    }
+    const saleLogs = logsForSale.all(sale.id);
+    const matchingLogs = saleLogs.filter(log => String(log.ncf || '').trim().toUpperCase() === parsed.malformedNcf);
+    if (saleLogs.length && matchingLogs.length !== 1) {
+      conflicts.push({
+        code: `LOG_MISMATCH:${sale.id}`,
+        sale_id: sale.id,
+        message: `La factura #${sale.id} no tiene un único registro fiscal que coincida con ${parsed.malformedNcf}`,
+      });
+      return;
+    }
+    const log = matchingLogs[0] || null;
+    const priorOwner = targetOwners.get(parsed.canonicalNcf);
+    if (priorOwner) {
+      conflicts.push({
+        code: `DUPLICATE_TARGET:${sale.id}`,
+        sale_id: sale.id,
+        message: `${parsed.canonicalNcf} quedaría asignado a las facturas #${priorOwner} y #${sale.id}`,
+      });
+      return;
+    }
+    targetOwners.set(parsed.canonicalNcf, sale.id);
+    const saleCollision = targetInSales.get(parsed.canonicalNcf, sale.id);
+    const logCollision = targetInLog.get(parsed.canonicalNcf, log?.id || -1);
+    if (saleCollision || logCollision) {
+      conflicts.push({
+        code: `TARGET_USED:${sale.id}`,
+        sale_id: sale.id,
+        message: `${parsed.canonicalNcf} ya está registrado en otro documento`,
+      });
+      return;
+    }
+    rows.push({
+      sale_id: sale.id,
+      log_id: log?.id || null,
+      old_ncf: parsed.malformedNcf,
+      corrected_ncf: parsed.canonicalNcf,
+      sequence: parsed.sequence,
+      status: sale.status,
+      fiscal_status: log?.status || (sale.status === 'cancelled' ? 'anulado' : 'emitido'),
+      issued_at: log?.issued_at || sale.created_at,
+      customer_name: sale.customer_name || 'Consumidor Final',
+      customer_rnc: sale.customer_rnc || '',
+      total: Number(sale.total) || 0,
+      reference_count: db.prepare("SELECT COUNT(*) c FROM ncf_log WHERE UPPER(TRIM(COALESCE(modifies_ncf,'')))=?")
+        .get(parsed.malformedNcf).c,
+    });
+  });
+
+  // Un registro fiscal huérfano o distinto de la factura no se corrige por
+  // inferencia. Se muestra como conflicto para que soporte lo revise primero.
+  db.prepare(`
+    SELECT l.id,l.sale_id,l.ncf
+    FROM ncf_log l LEFT JOIN sales s ON s.id=l.sale_id
+    WHERE TRIM(COALESCE(l.ncf,''))<>'' AND UPPER(substr(TRIM(l.ncf),1,3))=?
+      AND (s.id IS NULL OR UPPER(TRIM(COALESCE(s.ncf,'')))<>UPPER(TRIM(l.ncf)))
+    ORDER BY l.id
+  `).all(type).forEach(log => {
+    const parsed = parseRecoverableDuplicatedTypeNcf(log.ncf);
+    if (!parsed || parsed.sequence < Number(sequence.from_num) || parsed.sequence > Number(sequence.to_num)) return;
+    conflicts.push({
+      code: `ORPHAN_LOG:${log.id}`,
+      sale_id: log.sale_id || null,
+      message: `El registro fiscal #${log.id} (${parsed.malformedNcf}) no coincide con su factura`,
+    });
+  });
+
+  rows.sort((a, b) => a.sequence - b.sequence || a.sale_id - b.sale_id);
+  const recoveredNumbers = rows.map(row => row.sequence);
+  const validNumbers = [
+    ...db.prepare("SELECT ncf FROM sales WHERE length(TRIM(COALESCE(ncf,'')))=11 AND UPPER(substr(TRIM(ncf),1,3))=?").all(type),
+    ...db.prepare("SELECT ncf FROM ncf_log WHERE length(TRIM(COALESCE(ncf,'')))=11 AND UPPER(substr(TRIM(ncf),1,3))=?").all(type),
+  ].map(item => parseCanonicalLegacyNcf(item.ncf)).filter(Boolean)
+    .map(item => item.sequence)
+    .filter(value => value >= Number(sequence.from_num) && value <= Number(sequence.to_num));
+  const occupied = [...new Set([...validNumbers, ...recoveredNumbers])].sort((a, b) => a - b);
+  const lastIssued = occupied.length ? occupied[occupied.length - 1] : Number(sequence.from_num) - 1;
+  const regularNextNumber = Math.min(Number(sequence.to_num) + 1, lastIssued + 1);
+  const gaps = [];
+  if (occupied.length) {
+    const set = new Set(occupied);
+    for (let value = Number(sequence.from_num); value < lastIssued; value++) {
+      if (!set.has(value)) gaps.push(value);
+    }
+  }
+  const preview = {
+    sequence,
+    rows,
+    conflicts,
+    recoverable_count: rows.length,
+    conflict_count: conflicts.length,
+    can_recover: rows.length > 0 && conflicts.length === 0,
+    last_recovered_number: recoveredNumbers.length ? Math.max(...recoveredNumbers) : null,
+    next_number: gaps.length ? gaps[0] : regularNextNumber,
+    next_ncf: (gaps.length ? gaps[0] : regularNextNumber) <= Number(sequence.to_num)
+      ? formatLegacyNcf(type, gaps.length ? gaps[0] : regularNextNumber) : null,
+    regular_next_number: regularNextNumber,
+    regular_next_ncf: regularNextNumber <= Number(sequence.to_num)
+      ? formatLegacyNcf(type, regularNextNumber) : null,
+    gaps,
+  };
+  preview.token = ncfRecoveryFingerprint(sequence, rows, conflicts);
+  return preview;
+}
+
 const ncfRepo = {
-  getSequences() { return db.prepare('SELECT * FROM ncf_sequences ORDER BY type, id').all(); },
+  getSequences() {
+    ensureNcfAvailableNumbersTable();
+    return db.prepare(`
+      SELECT s.*,
+        COALESCE((SELECT COUNT(*) FROM ncf_available_numbers a
+          WHERE a.sequence_id=s.id AND a.status='available'),0) available_gap_count,
+        (SELECT MIN(a.sequence_number) FROM ncf_available_numbers a
+          WHERE a.sequence_id=s.id AND a.status='available') next_gap_number
+      FROM ncf_sequences s ORDER BY s.type,s.id
+    `).all().map(sequence => {
+      const regularNext = Number(sequence.current) + 1;
+      const nextNumber = sequence.next_gap_number != null
+        ? Number(sequence.next_gap_number) : regularNext;
+      return {
+        ...sequence,
+        regular_next_number: regularNext,
+        next_issue_number: nextNumber,
+        next_issue_ncf: nextNumber <= Number(sequence.to_num)
+          ? formatLegacyNcf(sequence.type, nextNumber) : null,
+        remaining: Math.max(0, Number(sequence.to_num) - Number(sequence.current)) +
+          Number(sequence.available_gap_count || 0),
+      };
+    });
+  },
   getActive(type) { return db.prepare("SELECT * FROM ncf_sequences WHERE type=? AND active=1").get(type); },
   getSequenceUsage(id) {
     const sequence = db.prepare('SELECT * FROM ncf_sequences WHERE id=?').get(id);
@@ -7373,6 +7670,128 @@ const ncfRepo = {
       issuedCount: unique.length,
       firstIssued: unique[0] || null,
       lastIssued: unique.length ? unique[unique.length - 1] : null,
+    };
+  },
+  previewMalformedRecovery(id) {
+    return previewMalformedNcfRecovery(id);
+  },
+  recoverMalformedDocuments({ id, preview_token, reason }) {
+    const before = previewMalformedNcfRecovery(id);
+    if (!before.can_recover) {
+      if (!before.rows.length) throw new Error('No hay facturas con el patrón recuperable en esta secuencia');
+      throw new Error('La recuperación está bloqueada porque existen conflictos que requieren revisión');
+    }
+    if (!preview_token || preview_token !== before.token) {
+      throw new Error('Los datos fiscales cambiaron desde la vista previa. Revísalos nuevamente antes de confirmar');
+    }
+    const cleanReason = String(reason || '').trim();
+    if (cleanReason.length < 10) throw new Error('Explica el motivo de la recuperación (mínimo 10 caracteres)');
+    ensureNcfRecoveryAuditTable();
+    const auditChange = db.prepare(`
+      INSERT OR IGNORE INTO ncf_normalization_log
+        (source_table,source_id,field_name,old_value,new_value,reason)
+      VALUES(?,?,?,?,?,?)
+    `);
+    const result = db.transaction(() => {
+      let references = 0;
+      const queuedGaps = [];
+      for (const row of before.rows) {
+        const currentSale = db.prepare('SELECT ncf FROM sales WHERE id=?').get(row.sale_id);
+        if (String(currentSale?.ncf || '').trim().toUpperCase() !== row.old_ncf) {
+          throw new Error(`La factura #${row.sale_id} cambió durante la recuperación`);
+        }
+        db.prepare("UPDATE sales SET ncf=?,updated_at=datetime('now','localtime') WHERE id=?")
+          .run(row.corrected_ncf, row.sale_id);
+        auditChange.run('sales', row.sale_id, 'ncf', row.old_ncf, row.corrected_ncf,
+          `Recuperación fiscal confirmada: ${cleanReason}`);
+
+        if (row.log_id) {
+          const changed = db.prepare('UPDATE ncf_log SET ncf=? WHERE id=? AND UPPER(TRIM(ncf))=?')
+            .run(row.corrected_ncf, row.log_id, row.old_ncf);
+          if (changed.changes !== 1) throw new Error(`El registro fiscal de la factura #${row.sale_id} cambió`);
+          auditChange.run('ncf_log', row.log_id, 'ncf', row.old_ncf, row.corrected_ncf,
+            `Recuperación fiscal confirmada: ${cleanReason}`);
+        } else {
+          const sale = db.prepare('SELECT * FROM sales WHERE id=?').get(row.sale_id);
+          const inserted = db.prepare(`
+            INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc,issued_at,status,voided_at)
+            VALUES(?,?,?,?,?,?,?)
+          `).run(
+            row.corrected_ncf, before.sequence.type, row.sale_id, sale.customer_rnc || '',
+            sale.fiscal_issued_at || sale.created_at,
+            sale.status === 'cancelled' ? 'anulado' : 'emitido',
+            sale.status === 'cancelled' ? (sale.cancelled_at || sale.created_at) : null
+          );
+          auditChange.run('ncf_log', Number(inserted.lastInsertRowid), 'ncf', row.old_ncf, row.corrected_ncf,
+            `Registro fiscal reconstruido durante recuperación: ${cleanReason}`);
+        }
+
+        const referenceRows = db.prepare("SELECT id FROM ncf_log WHERE UPPER(TRIM(COALESCE(modifies_ncf,'')))=?")
+          .all(row.old_ncf);
+        referenceRows.forEach(reference => {
+          db.prepare('UPDATE ncf_log SET modifies_ncf=? WHERE id=?').run(row.corrected_ncf, reference.id);
+          auditChange.run('ncf_log', reference.id, 'modifies_ncf', row.old_ncf, row.corrected_ncf,
+            `Referencia fiscal recuperada: ${cleanReason}`);
+          references++;
+        });
+      }
+      db.prepare('UPDATE ncf_sequences SET current=? WHERE id=?')
+        .run(before.regular_next_number - 1, Number(id));
+      const insertGap = db.prepare(`
+        INSERT OR IGNORE INTO ncf_available_numbers(
+          sequence_id,ncf_type,sequence_number,status,source
+        ) VALUES(?,?,?,'available','malformed_ncf_recovery')
+      `);
+      before.gaps.forEach(sequenceNumber => {
+        const canonical = formatLegacyNcf(before.sequence.type, sequenceNumber);
+        const occupied = db.prepare(`
+          SELECT 1 FROM sales WHERE UPPER(TRIM(COALESCE(ncf,'')))=?
+          UNION ALL
+          SELECT 1 FROM ncf_log WHERE UPPER(TRIM(COALESCE(ncf,'')))=?
+          LIMIT 1
+        `).get(canonical, canonical);
+        if (occupied) throw new Error(`${canonical} ya no está disponible; revisa nuevamente la recuperación`);
+        const inserted = insertGap.run(Number(id), before.sequence.type, sequenceNumber);
+        const available = db.prepare(`
+          SELECT id,status FROM ncf_available_numbers
+          WHERE ncf_type=? AND sequence_number=?
+        `).get(before.sequence.type, sequenceNumber);
+        if (!available || available.status !== 'available') {
+          throw new Error(`${canonical} no puede agregarse a la cola de comprobantes disponibles`);
+        }
+        if (inserted.changes) {
+          queuedGaps.push(canonical);
+          auditChange.run(
+            'ncf_available_numbers', Number(available.id), 'status', 'gap_detected', 'available',
+            `Correlativo saltado conservado para emisión posterior: ${cleanReason}`
+          );
+        }
+      });
+      return {
+        recovered: before.rows.length, references, rows: before.rows,
+        queued_gaps: queuedGaps,
+      };
+    })();
+    const after = previewMalformedNcfRecovery(id);
+    const nextGap = db.prepare(`
+      SELECT sequence_number FROM ncf_available_numbers
+      WHERE sequence_id=? AND status='available'
+      ORDER BY sequence_number LIMIT 1
+    `).get(Number(id));
+    const regularNext = Number(after.sequence.current) + 1;
+    return {
+      ...result,
+      sequence: after.sequence,
+      next_number: nextGap ? Number(nextGap.sequence_number) : regularNext,
+      next_ncf: nextGap
+        ? formatLegacyNcf(after.sequence.type, Number(nextGap.sequence_number))
+        : Number(after.sequence.current) < Number(after.sequence.to_num)
+          ? formatLegacyNcf(after.sequence.type, regularNext)
+          : null,
+      regular_next_number: regularNext,
+      regular_next_ncf: Number(after.sequence.current) < Number(after.sequence.to_num)
+        ? formatLegacyNcf(after.sequence.type, regularNext)
+        : null,
     };
   },
   updateSequence({ id, next_number, expiry_date, alert_at, active }) {
@@ -7442,19 +7861,7 @@ const ncfRepo = {
       .run(cleanType, cleanType, from, to, current, expiry_date||null, alert_at||50).lastInsertRowid;
   },
   getNext(type) {
-    return db.transaction(() => {
-      const cleanType = normalizeLegacyType(type);
-      const seq = db.prepare("SELECT * FROM ncf_sequences WHERE type=? AND active=1 AND current < to_num").get(cleanType);
-      if (!seq) throw new Error(`Sin comprobantes disponibles tipo ${cleanType}`);
-      const current = normalizeLegacySequenceNumber(cleanType, seq.current, { allowZero: true });
-      const next = current + 1;
-      db.prepare('UPDATE ncf_sequences SET current=? WHERE id=?').run(next, seq.id);
-      const ncf = formatLegacyNcf(cleanType, next);
-      const remaining = seq.to_num - next;
-      // Alerta si quedan pocos
-      if (remaining <= seq.alert_at) console.log(`[NCF] ALERTA: quedan ${remaining} comprobantes tipo ${cleanType}`);
-      return { ncf, remaining, sequence_id: seq.id };
-    })();
+    return db.transaction(() => allocateNextNcfNumber(type))();
   },
   logNcf({ ncf, type, sale_id, customer_rnc }) {
     db.prepare('INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc) VALUES(?,?,?,?)').run(ncf, type, sale_id||null, customer_rnc||'');
@@ -7468,8 +7875,9 @@ const ncfRepo = {
       GROUP BY ncf HAVING veces>1 ORDER BY ncf`).all();
   },
   getAlerts() {
-    return db.prepare(`SELECT *, (to_num - current) as remaining FROM ncf_sequences
-      WHERE active=1 AND (to_num - current) <= alert_at ORDER BY remaining ASC`).all();
+    return this.getSequences()
+      .filter(sequence => sequence.active && sequence.remaining <= sequence.alert_at)
+      .sort((a, b) => a.remaining - b.remaining);
   },
   // ── Log de comprobantes (base para reportes 607/608) ──────────────────────
   // status: 'emitido' (default) | 'anulado'. Filtros de fecha sobre issued_at.
@@ -7483,7 +7891,16 @@ const ncfRepo = {
     if (status)                     { q += ` AND COALESCE(l.status,'emitido') = ?`; p.push(status); }
     if (type)                       { q += ` AND l.type = ?`; p.push(type); }
     q += ` ORDER BY l.issued_at DESC, l.id DESC`;
-    return db.prepare(q).all(...p);
+    return db.prepare(q).all(...p).map(row => {
+      const parsed = parseCanonicalLegacyNcf(row.ncf);
+      return {
+        ...row,
+        ncf_valid: !!parsed && parsed.type === row.type,
+        ncf_issue: parsed && parsed.type === row.type
+          ? ''
+          : 'NCF tradicional inválido: debe tener tipo B autorizado y exactamente 8 dígitos correlativos',
+      };
+    });
   },
   // 608: comprobantes anulados en el período.
   getVoided({ from, to } = {}) { return this.getLog({ from, to, status: 'anulado' }); },
