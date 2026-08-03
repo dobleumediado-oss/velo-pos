@@ -11,6 +11,16 @@ function _sUser() {
 const _sFmt  = n => 'RD$' + (n||0).toLocaleString('es-DO', { minimumFractionDigits: 0 });
 const _sDate = d => d ? new Date(d+'T00:00:00').toLocaleDateString('es-DO',{day:'2-digit',month:'short',year:'numeric'}) : '—';
 
+// La base conserva únicamente el correlativo como entero. En pantalla siempre
+// mostramos el NCF completo para que 856 nunca se confunda con un comprobante
+// sin ceros a la izquierda: B01 + 00000856.
+function _sNcf(type, sequence) {
+  const cleanType = String(type || '').trim().toUpperCase();
+  const cleanSequence = Number(sequence);
+  if (!/^B\d{2}$/.test(cleanType) || !Number.isInteger(cleanSequence) || cleanSequence < 1) return '—';
+  return `${cleanType}${String(cleanSequence).padStart(8, '0')}`;
+}
+
 // ══════════════════════════════════════════════
 // SUCURSALES
 // ══════════════════════════════════════════════
@@ -159,7 +169,10 @@ async function renderNCFAvanzado(el) {
   if (alertas.length) {
     const alertDiv = document.createElement('div');
     alertDiv.style.cssText = 'background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#991b1b';
-    alertDiv.innerHTML = `⚠ <strong>${alertas.length} secuencia${alertas.length>1?'s':''} con pocos comprobantes:</strong> ${alertas.map(a=>`${a.type}: ${a.remaining} restantes`).join(' · ')}`;
+    alertDiv.innerHTML = `⚠ <strong>${alertas.length} secuencia${alertas.length>1?'s':''} con pocos comprobantes:</strong> ${alertas.map(a => {
+      const next = Number(a.current) < Number(a.from_num) ? Number(a.from_num) : Number(a.current) + 1;
+      return `${a.type}: ${a.remaining} restantes${next <= Number(a.to_num) ? ` · próximo ${_sNcf(a.type, next)}` : ''}`;
+    }).join(' · ')}`;
     el.appendChild(alertDiv);
   }
 
@@ -188,39 +201,52 @@ async function renderNCFAvanzado(el) {
         <thead>
           <tr style="border-bottom:1px solid var(--line2);color:var(--muted2)">
             <th style="padding:8px;text-align:left">Tipo</th>
-            <th style="padding:8px;text-align:left">Prefijo</th>
             <th style="padding:8px;text-align:right">Desde</th>
             <th style="padding:8px;text-align:right">Hasta</th>
-            <th style="padding:8px;text-align:right">Actual</th>
+            <th style="padding:8px;text-align:right">Último usado</th>
+            <th style="padding:8px;text-align:right">Próximo</th>
             <th style="padding:8px;text-align:right">Restantes</th>
             <th style="padding:8px;text-align:left">Vencimiento</th>
             <th style="padding:8px;text-align:left">Estado</th>
+            <th style="padding:8px;text-align:right">Acciones</th>
           </tr>
         </thead>
         <tbody>
           ${secuencias.map(s => {
-            const remaining = s.to_num - s.current;
-            const pct = ((s.current - s.from_num + 1) / (s.to_num - s.from_num + 1) * 100).toFixed(0);
+            const from = Number(s.from_num);
+            const to = Number(s.to_num);
+            const current = Number(s.current);
+            const total = Math.max(1, to - from + 1);
+            const used = Math.max(0, Math.min(total, current - from + 1));
+            const remaining = Math.max(0, to - Math.max(current, from - 1));
+            const next = current < from ? from : current + 1;
+            const pct = Math.max(0, Math.min(100, used / total * 100)).toFixed(0);
             const color = remaining <= s.alert_at ? '#ef4444' : remaining <= s.alert_at * 3 ? '#f59e0b' : '#00c07a';
             return `<tr style="border-bottom:0.5px solid var(--line2)">
               <td style="padding:8px;font-weight:500">${s.type}</td>
-              <td style="padding:8px;color:var(--muted2)">${s.prefix}</td>
-              <td style="padding:8px;text-align:right">${s.from_num.toLocaleString()}</td>
-              <td style="padding:8px;text-align:right">${s.to_num.toLocaleString()}</td>
-              <td style="padding:8px;text-align:right">${s.current.toLocaleString()}</td>
+              <td style="padding:8px;text-align:right;font-family:var(--mono)">${_sNcf(s.type, from)}</td>
+              <td style="padding:8px;text-align:right;font-family:var(--mono)">${_sNcf(s.type, to)}</td>
+              <td style="padding:8px;text-align:right;font-family:var(--mono)">${current >= from ? _sNcf(s.type, current) : 'Sin emitir'}</td>
+              <td style="padding:8px;text-align:right;font-family:var(--mono);font-weight:600;color:var(--ink)">${next <= to ? _sNcf(s.type, next) : 'Agotada'}</td>
               <td style="padding:8px;text-align:right;font-weight:600;color:${color}">${remaining.toLocaleString()}</td>
               <td style="padding:8px;color:var(--muted2)">${s.expiry_date ? _sDate(s.expiry_date) : '—'}</td>
               <td style="padding:8px">
                 <div style="background:var(--line2);border-radius:4px;height:6px;width:80px">
                   <div style="background:${color};border-radius:4px;height:6px;width:${pct}%"></div>
                 </div>
-                <span style="font-size:10px;color:${color}">${pct}% usado</span>
+                <span style="font-size:10px;color:${color}">${s.active ? `${pct}% usado` : 'Retirada'}</span>
               </td>
+              <td style="padding:8px;text-align:right"><button class="btn btn-ghost btn-sm" onclick="administrarSecuenciaNcf(${Number(s.id)})">Administrar</button></td>
             </tr>`;
           }).join('')}
         </tbody>
       </table>`;
     el.appendChild(wrap);
+
+    const explanation = document.createElement('div');
+    explanation.style.cssText = 'font-size:10px;color:var(--muted2);margin-top:8px;line-height:1.45';
+    explanation.textContent = 'Los NCF se muestran completos. “Último usado” conserva el último correlativo consumido; “Próximo” solo se utiliza al confirmar una nueva factura fiscal.';
+    el.appendChild(explanation);
   }
 
   const cashSequence = documentSequences.find(s => s.kind === 'factura_contado') || {
@@ -279,6 +305,64 @@ async function renderNCFAvanzado(el) {
     });
   }
 }
+
+window.administrarSecuenciaNcf = async (id) => {
+  const response = await window.api.ncf.getSequences();
+  const sequence = (response?.data || []).find(item => Number(item.id) === Number(id));
+  if (!sequence) return _sToast('La secuencia ya no está disponible');
+  const user = _sUser();
+  const next = Math.max(Number(sequence.from_num), Number(sequence.current) + 1);
+  const html = `
+    <div class="alrt a" style="margin-bottom:14px"><div class="alrt-dot a"></div><div>
+      <div class="alrt-title">Control fiscal protegido</div>
+      <div class="alrt-sub">VELO creará un respaldo antes de cambiar esta secuencia. Nunca permitirá reutilizar un NCF válido ya emitido.</div>
+    </div></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <div><div class="lbl">Rango autorizado</div><strong style="font-family:var(--mono);font-size:12px">${_sNcf(sequence.type, sequence.from_num)} — ${_sNcf(sequence.type, sequence.to_num)}</strong></div>
+      <div><div class="lbl">Último usado registrado</div><strong style="font-family:var(--mono);font-size:12px">${Number(sequence.current) >= Number(sequence.from_num) ? _sNcf(sequence.type, sequence.current) : 'Sin emitir'}</strong></div>
+    </div>
+    <div class="fg"><label class="lbl">Próximo NCF que debe emitir *</label>
+      <input class="inp" id="ncf-next" inputmode="numeric" value="${_sNcf(sequence.type, next)}">
+      <div style="font-size:10px;color:var(--muted2);margin-top:3px">Puedes pegar el NCF completo. Si existen documentos válidos posteriores, VELO bloqueará el cambio.</div></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="fg"><label class="lbl">Vencimiento</label><input class="inp" id="ncf-edit-exp" type="date" value="${sequence.expiry_date || ''}"></div>
+      <div class="fg"><label class="lbl">Alerta cuando queden</label><input class="inp" id="ncf-edit-alert" type="number" min="1" value="${Number(sequence.alert_at) || 50}"></div>
+    </div>
+    <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin-bottom:12px"><input type="checkbox" id="ncf-edit-active" ${sequence.active ? 'checked' : ''}> Secuencia activa</label>
+    <div class="fg"><label class="lbl">Motivo de la corrección *</label><textarea class="inp" id="ncf-edit-reason" rows="3" placeholder="Ej.: Continuar desde el último NCF emitido por el sistema anterior"></textarea></div>
+    <button class="btn btn-ghost btn-sm" id="ncf-retire" style="color:var(--red)">Retirar esta secuencia</button>`;
+  const container = document.getElementById('ncf-avanzado-container');
+  const overlay = _sModal(`Administrar secuencia ${sequence.type}`, html, async (ov) => {
+    const reason = ov.querySelector('#ncf-edit-reason')?.value.trim() || '';
+    const res = await window.api.ncf.updateSequence({
+      id: sequence.id,
+      data: {
+        next_number: ov.querySelector('#ncf-next')?.value.trim(),
+        expiry_date: ov.querySelector('#ncf-edit-exp')?.value || null,
+        alert_at: Number(ov.querySelector('#ncf-edit-alert')?.value) || 50,
+        active: ov.querySelector('#ncf-edit-active')?.checked ? 1 : 0,
+      },
+      reason,
+      requestUserId: user.id,
+    });
+    if (!res?.ok) throw new Error(res?.error || 'No se pudo actualizar la secuencia');
+    _sToast(`✓ Próximo NCF: ${ov.querySelector('#ncf-next')?.value.trim()}`);
+    if (container) await renderNCFAvanzado(container);
+  }, 'Guardar corrección');
+
+  overlay.querySelector('#ncf-retire')?.addEventListener('click', async () => {
+    const reason = overlay.querySelector('#ncf-edit-reason')?.value.trim() || '';
+    if (reason.length < 10) return alert('Explica el motivo del retiro (mínimo 10 caracteres).');
+    if (!confirm('¿Retirar esta secuencia? Si tiene NCF emitidos se conservará como inactiva para auditoría.')) return;
+    const button = overlay.querySelector('#ncf-retire');
+    button.disabled = true;
+    const res = await window.api.ncf.removeSequence({ id: sequence.id, reason, requestUserId: user.id });
+    if (!res?.ok) { button.disabled = false; return alert(res?.error || 'No se pudo retirar la secuencia'); }
+    overlay.remove();
+    _sToast(res.data?.deleted ? '✓ Secuencia sin uso eliminada' : '✓ Secuencia retirada; historial conservado');
+    if (container) await renderNCFAvanzado(container);
+  });
+};
 
 async function guardarSecuenciaFacturaContado(parentEl, button) {
   const user = _sUser();

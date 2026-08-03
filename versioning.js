@@ -11,7 +11,7 @@ const { ensureCheckoutOrdersSchema } = require('./src/main/checkout-orders-repo'
 const { ensureSaleCorrectionsSchema } = require('./src/main/sale-corrections-repo');
 const { repairCancelledPaymentInflation } = require('./lib/pending-invoices');
 const { reconcileCashSessionTotals } = require('./lib/cash-session-totals');
-const { repairLegacyNcfData } = require('./lib/ncf-sequences');
+const { repairLegacyNcfData, recoverMalformedNcfEvidence } = require('./lib/ncf-sequences');
 
 // ── Versión centralizada — siempre desde package.json ──
 // Nunca hardcodeada aquí. Así package.json es la única fuente de verdad.
@@ -46,6 +46,38 @@ function backupBeforeLegacyNcfNormalization(db, dataDir) {
   const escapedPath = backupPath.replace(/'/g, "''");
   db.exec(`VACUUM INTO '${escapedPath}'`);
   console.log('[BACKUP] Respaldo previo a normalización NCF:', path.basename(backupPath));
+  return backupPath;
+}
+
+function backupBeforeMalformedNcfRecovery(db, dataDir) {
+  const migrationId = '1.36.1-recover-malformed-ncf-evidence';
+  const applied = db.prepare('SELECT 1 FROM db_migrations WHERE version=?').get(migrationId);
+  if (applied) return null;
+  const hasAudit = db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ncf_normalization_log'"
+  ).get();
+  if (!hasAudit) return null;
+  const affected = db.prepare(`
+    SELECT COUNT(*) c FROM ncf_normalization_log
+    WHERE reason LIKE 'Normalización NCF serie B:%'
+      AND source_table IN ('sales','ncf_log')
+      AND field_name IN ('ncf','modifies_ncf')
+      AND length(TRIM(old_value))>11
+  `).get().c;
+  const malformed = ['sales', 'ncf_log'].reduce((total, table) => {
+    const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table);
+    return total + (exists ? db.prepare(
+      `SELECT COUNT(*) c FROM ${table} WHERE length(TRIM(COALESCE(ncf,'')))>11`
+    ).get().c : 0);
+  }, 0);
+  if (!affected && !malformed) return null;
+
+  const backupDir = path.join(dataDir, 'backups');
+  fs.mkdirSync(backupDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupPath = path.join(backupDir, `velo_pre_ncf_recovery_${stamp}.db`);
+  db.exec(`VACUUM INTO '${backupPath.replace(/'/g, "''")}'`);
+  console.log('[BACKUP] Respaldo previo a recuperación NCF:', path.basename(backupPath));
   return backupPath;
 }
 
@@ -1525,6 +1557,21 @@ const MIGRATIONS = [
       }
     }
   },
+  {
+    version: '1.36.1-recover-malformed-ncf-evidence',
+    description: 'Restaurar evidencia NCF mal formada y recalcular secuencias desde documentos válidos',
+    run(db) {
+      const result = recoverMalformedNcfEvidence(db);
+      console.log(
+        `[MIGRATION 1.36.1] Evidencia NCF restaurada: ${result.sales} factura(s), ` +
+        `${result.log} registro(s), ${result.references} referencia(s); ` +
+        `${result.sequences} secuencia(s) conciliada(s); ${result.conflicts.length} conflicto(s)`
+      );
+      if (result.conflicts.length) {
+        console.warn('[MIGRATION 1.36.1] Conflictos NCF pendientes:', result.conflicts);
+      }
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════
@@ -1690,6 +1737,7 @@ function initVersioning(db, dataDir) {
 
   // Antes de la migración fiscal se crea un respaldo consistente y recuperable.
   backupBeforeLegacyNcfNormalization(db, dataDir);
+  backupBeforeMalformedNcfRecovery(db, dataDir);
 
   // Correr migraciones pendientes
   runMigrations(db);

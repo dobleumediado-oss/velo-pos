@@ -265,6 +265,7 @@ contextBridge.exposeInMainWorld('api', {
     importarGasto:   (data) => ipcRenderer.invoke('importar:importarGasto',   data),
     importarAbono:   (data) => ipcRenderer.invoke('importar:importarAbono',   data),
     readZIP:         (data) => ipcRenderer.invoke('importar:readZIP',         data),
+    pickEquipartsCsvSet: () => ipcRenderer.invoke('importar:pickEquipartsCsvSet'),
     allInOneEquiparts: (data) => ipcRenderer.invoke('importar:allInOneEquiparts', data),
     rollback:               (data) => ipcRenderer.invoke('importar:rollback',               data),
     importarFacturaCredito: (data) => ipcRenderer.invoke('importar:importarFacturaCredito', data),
@@ -364,6 +365,8 @@ contextBridge.exposeInMainWorld('api', {
   ncf: {
     getSequences:    ()  => ipcRenderer.invoke('ncf:getSequences'),
     createSequence:  (d) => ipcRenderer.invoke('ncf:createSequence', d),
+    updateSequence:  (d) => ipcRenderer.invoke('ncf:updateSequence', d),
+    removeSequence:  (d) => ipcRenderer.invoke('ncf:removeSequence', d),
     getAlerts:       ()  => ipcRenderer.invoke('ncf:getAlerts'),
     validateRnc:     (d) => ipcRenderer.invoke('ncf:validateRnc', d),
     getLog:          (d) => ipcRenderer.invoke('ncf:getLog', d),

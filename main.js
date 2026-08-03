@@ -25,6 +25,9 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
     // Versión = propia de cada máquina (no la del servidor).
     'version:getInfo', 'version:getAppVersion',
     'settings:set', 'settings:getAll',
+    // El selector lee los cuatro CSV en la máquina donde está el usuario. La
+    // importación validada sí se envía al servidor, que es dueño de la base.
+    'importar:pickEquipartsCsvSet',
     // El negocio activo pertenece a ESTA terminal. En modo cliente estos
     // handlers consultan al servicio y cambian solo la sesión local.
     'business:getAll', 'business:getActive', 'business:selectForLogin', 'business:switch',
@@ -46,7 +49,9 @@ const { normalizeFinAcct: _normalizeFinAcct, normalizeFinMov: _normalizeFinMov }
 const { isAllowedExternalUrl } = require('./lib/url-safe');
 const { buildWhatsAppUrls } = require('./lib/whatsapp-url');
 const {
+  EQUIPARTS_FILES,
   loadEquipartsCsvSet,
+  loadEquipartsCsvPayload,
   toNumber: _aioNum,
   toIntegerOrNull: _aioIntOrNull,
   normalizeName: _aioNorm,
@@ -4492,7 +4497,33 @@ ipcMain.handle('importar:importarFacturaCredito', async (_, {
 // Backup automático → RESET total (FK-safe) → import limpio → valida CxC.
 // Porta la lógica probada de scripts/importar-equiparts-v2.js a runtime,
 // sin proceso externo ni reinicio de Electron. Todo-o-nada.
-ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, requestUserId } = {}) => {
+ipcMain.handle('importar:pickEquipartsCsvSet', async () => {
+  try {
+    const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
+      title: 'Seleccionar carpeta con los 4 CSV de la migración v2',
+      properties: ['openDirectory'],
+    });
+    if (canceled || !filePaths?.length) return { ok: false, error: 'Cancelado' };
+    const csvDir = filePaths[0];
+    const files = {};
+    let totalBytes = 0;
+    for (const filename of Object.values(EQUIPARTS_FILES)) {
+      const filePath = path.join(csvDir, filename);
+      if (!fs.existsSync(filePath)) return { ok: false, error: `No se encontró el CSV: ${filename}` };
+      const stat = fs.statSync(filePath);
+      totalBytes += stat.size;
+      if (!stat.isFile() || totalBytes > 8 * 1024 * 1024) {
+        return { ok: false, error: 'Los CSV superan 8 MB; ejecuta la migración directamente en la PC Servidor' };
+      }
+      files[filename] = fs.readFileSync(filePath, 'utf8');
+    }
+    return { ok: true, files, sourceName: path.basename(csvDir), bytes: totalBytes };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, files, requestUserId } = {}) => {
   try {
     const db = require('./database').getDB();
     if (!db) return { ok: false, error: 'DB no inicializada' };
@@ -4510,7 +4541,7 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, requestUserId } = 
 
     // ── 0) Elegir carpeta si no vino ────────────────────────────────────
     let csvDir = dir;
-    if (!csvDir) {
+    if (!csvDir && !files) {
       const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
         title: 'Seleccionar carpeta con los 4 CSV de la migración v2',
         properties: ['openDirectory'],
@@ -4540,7 +4571,9 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, requestUserId } = 
     // ── 2) Cargar los 4 CSV (valida existencia y nombres) ──────────────
     let clientes, inventario, ventas, recibos, validation;
     try {
-      ({ clientes, inventario, ventas, recibos } = loadEquipartsCsvSet(csvDir));
+      ({ clientes, inventario, ventas, recibos } = files
+        ? loadEquipartsCsvPayload(files)
+        : loadEquipartsCsvSet(csvDir));
       validation = validateEquipartsData({ clientes, inventario, ventas, recibos });
     } catch (e) {
       return { ok: false, error: e.message };
@@ -5604,6 +5637,44 @@ ipcMain.handle('ncf:createSequence', async (_, { data, requestUserId }) => {
     const id = ncfRepo.createSequence(data);
     audit(requestUserId, u.name, 'ncf_secuencia_creada', 'ncf_sequences', id, `${data.type}: ${data.from_num}-${data.to_num}`);
     return { ok:true, id };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('ncf:updateSequence', async (_, { id, data, reason, requestUserId } = {}) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || u.role !== 'superadmin') return { ok:false, error:'Solo un superadministrador puede corregir una secuencia fiscal' };
+    const cleanReason = String(reason || '').trim();
+    if (cleanReason.length < 10) return { ok:false, error:'Explica el motivo de la corrección (mínimo 10 caracteres)' };
+    const before = ncfRepo.getSequenceUsage(Number(id));
+    const backupDir = path.join(currentDataDir(), 'backups');
+    fs.mkdirSync(backupDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupPath = path.join(backupDir, `velo_before_ncf_sequence_${stamp}.db`);
+    await db.backup(backupPath);
+    const result = ncfRepo.updateSequence({ id: Number(id), ...(data || {}) });
+    audit(requestUserId, u.name, 'ncf_secuencia_corregida', 'ncf_sequences', Number(id),
+      `${cleanReason} | antes=${JSON.stringify(before.sequence)} | después=${JSON.stringify(result.sequence)} | backup=${path.basename(backupPath)}`);
+    return { ok:true, data:result, backup:backupPath };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('ncf:removeSequence', async (_, { id, reason, requestUserId } = {}) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || u.role !== 'superadmin') return { ok:false, error:'Solo un superadministrador puede retirar una secuencia fiscal' };
+    const cleanReason = String(reason || '').trim();
+    if (cleanReason.length < 10) return { ok:false, error:'Explica el motivo del retiro (mínimo 10 caracteres)' };
+    const before = ncfRepo.getSequenceUsage(Number(id));
+    const backupDir = path.join(currentDataDir(), 'backups');
+    fs.mkdirSync(backupDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupPath = path.join(backupDir, `velo_before_ncf_sequence_${stamp}.db`);
+    await db.backup(backupPath);
+    const result = ncfRepo.removeSequence(Number(id));
+    audit(requestUserId, u.name,
+      result.deleted ? 'ncf_secuencia_eliminada_sin_uso' : 'ncf_secuencia_desactivada',
+      'ncf_sequences', Number(id),
+      `${cleanReason} | emitidos=${before.issuedCount} | rango=${before.sequence.type} ${before.sequence.from_num}-${before.sequence.to_num} | backup=${path.basename(backupPath)}`);
+    return { ok:true, data:result, backup:backupPath };
   } catch(e) { return { ok:false, error:e.message }; }
 });
 ipcMain.handle('ncf:getAlerts', async () => {

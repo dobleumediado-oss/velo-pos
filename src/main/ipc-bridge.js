@@ -32,6 +32,12 @@ let _ctx = {
   mode:   () => 'local',
   client: () => ({}),   // { host, port, accessKey, terminalId }
 };
+function rpcTimeoutFor(channel) {
+  // Importar miles de ventas incluye validación, backup y una transacción
+  // completa. El timeout general de 8 s hacía que el cliente mostrara
+  // SERVER_OFFLINE aunque el servidor siguiera trabajando y pudiera confirmar.
+  return channel === 'importar:allInOneEquiparts' ? 10 * 60 * 1000 : 8000;
+}
 function configureBridge({ mode, client } = {}) {
   if (typeof mode === 'function')   _ctx.mode = mode;
   if (typeof client === 'function') _ctx.client = client;
@@ -56,7 +62,7 @@ function _notifyMutation(channel) {
 async function routeCall(channel, arg) {
   if (_ctx.mode() === 'client') {
     const cfg = _ctx.client() || {};
-    const res = await rpcCall({ ...cfg, channel, args: arg });
+    const res = await rpcCall({ ...cfg, channel, args: arg, timeoutMs: rpcTimeoutFor(channel) });
     if (res && res.ok === true) return res.data;
     const err = new Error(res && res.offline ? 'SERVER_OFFLINE' : ((res && res.error) || 'RPC_ERROR'));
     err.offline = !!(res && res.offline);
@@ -111,7 +117,7 @@ function installIpcInterceptor(ipcMainRef, { localOnly } = {}) {
     orig(channel, async (event, arg) => {
       if (_ctx.mode() === 'client' && !localSet.has(channel)) {
         const cfg = _ctx.client() || {};
-        const res = await rpcCall({ ...cfg, channel, args: arg });
+        const res = await rpcCall({ ...cfg, channel, args: arg, timeoutMs: rpcTimeoutFor(channel) });
         if (res && res.ok === true) return res.data;
         const err = new Error(res && res.offline ? 'SERVER_OFFLINE' : ((res && res.error) || 'RPC_ERROR'));
         err.offline = !!(res && res.offline);
@@ -132,7 +138,7 @@ function installIpcInterceptor(ipcMainRef, { localOnly } = {}) {
 function getMode() { return _ctx.mode(); }
 async function forwardToServer(channel, args) {
   const cfg = _ctx.client() || {};
-  const res = await rpcCall({ ...cfg, channel, args });
+  const res = await rpcCall({ ...cfg, channel, args, timeoutMs: rpcTimeoutFor(channel) });
   if (res && res.ok === true) return res.data;
   const err = new Error(res && res.offline ? 'SERVER_OFFLINE' : ((res && res.error) || 'RPC_ERROR'));
   err.offline = !!(res && res.offline);
@@ -154,6 +160,7 @@ module.exports = {
   forwardToServer,
   currentTerminalId,
   currentBusinessId,
+  rpcTimeoutFor,
   hasChannel,
   channelCount,
 };

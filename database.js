@@ -7358,6 +7358,64 @@ const deliveriesRepo = {
 const ncfRepo = {
   getSequences() { return db.prepare('SELECT * FROM ncf_sequences ORDER BY type, id').all(); },
   getActive(type) { return db.prepare("SELECT * FROM ncf_sequences WHERE type=? AND active=1").get(type); },
+  getSequenceUsage(id) {
+    const sequence = db.prepare('SELECT * FROM ncf_sequences WHERE id=?').get(id);
+    if (!sequence) throw new Error('La secuencia NCF no existe');
+    const values = [
+      ...db.prepare("SELECT ncf FROM sales WHERE length(TRIM(COALESCE(ncf,'')))=11 AND UPPER(substr(TRIM(ncf),1,3))=?").all(sequence.type),
+      ...db.prepare("SELECT ncf FROM ncf_log WHERE length(TRIM(COALESCE(ncf,'')))=11 AND UPPER(substr(TRIM(ncf),1,3))=?").all(sequence.type),
+    ].map(row => parseCanonicalLegacyNcf(row.ncf)).filter(Boolean)
+      .map(item => item.sequence)
+      .filter(value => value >= sequence.from_num && value <= sequence.to_num);
+    const unique = [...new Set(values)].sort((a, b) => a - b);
+    return {
+      sequence,
+      issuedCount: unique.length,
+      firstIssued: unique[0] || null,
+      lastIssued: unique.length ? unique[unique.length - 1] : null,
+    };
+  },
+  updateSequence({ id, next_number, expiry_date, alert_at, active }) {
+    const usage = this.getSequenceUsage(id);
+    const sequence = usage.sequence;
+    const next = normalizeLegacySequenceNumber(sequence.type, next_number);
+    if (next < sequence.from_num || next > sequence.to_num + 1) {
+      throw new Error(
+        `El próximo NCF debe estar entre ${formatLegacyNcf(sequence.type, sequence.from_num)} ` +
+        `y ${formatLegacyNcf(sequence.type, sequence.to_num)} (o uno después si el rango se agotó)`
+      );
+    }
+    if (usage.lastIssued != null && next <= usage.lastIssued) {
+      throw new Error(
+        `No se puede reutilizar un NCF ya emitido. El último válido registrado es ${formatLegacyNcf(sequence.type, usage.lastIssued)}`
+      );
+    }
+    const nextActive = active === undefined ? Number(sequence.active) : (active ? 1 : 0);
+    if (nextActive) {
+      const other = db.prepare(`
+        SELECT id FROM ncf_sequences
+        WHERE id<>? AND type=? AND active=1
+          AND NOT(to_num < ? OR from_num > ?) LIMIT 1
+      `).get(id, sequence.type, sequence.from_num, sequence.to_num);
+      if (other) throw new Error(`Otra secuencia activa (#${other.id}) utiliza este rango`);
+    }
+    const alert = Math.max(1, Number.parseInt(alert_at, 10) || Number(sequence.alert_at) || 50);
+    db.prepare(`
+      UPDATE ncf_sequences
+      SET current=?,expiry_date=?,alert_at=?,active=?
+      WHERE id=?
+    `).run(next - 1, expiry_date || null, alert, nextActive, id);
+    return this.getSequenceUsage(id);
+  },
+  removeSequence(id) {
+    const usage = this.getSequenceUsage(id);
+    if (usage.issuedCount === 0) {
+      db.prepare('DELETE FROM ncf_sequences WHERE id=?').run(id);
+      return { deleted: true, deactivated: false, usage };
+    }
+    db.prepare('UPDATE ncf_sequences SET active=0 WHERE id=?').run(id);
+    return { deleted: false, deactivated: true, usage };
+  },
   createSequence({ type, prefix, from_num, to_num, expiry_date, alert_at }) {
     const cleanType = normalizeLegacyType(type);
     const cleanPrefix = String(prefix || cleanType).trim().toUpperCase();

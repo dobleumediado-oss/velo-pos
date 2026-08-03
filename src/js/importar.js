@@ -349,9 +349,27 @@ async function ejecutarAllInOne() {
   if (btn) { btn.disabled = true; btn.style.opacity = '.5'; btn.textContent = '⏳ Procesando…'; }
   let res;
   try {
-    res = await window.api.importar.allInOneEquiparts({ requestUserId: window._currentUser?.id });
+    const selected = await window.api.importar.pickEquipartsCsvSet();
+    if (!selected?.ok) {
+      if (selected?.error === 'Cancelado') { toast('Migración cancelada', 'w'); closeModal(); return; }
+      res = { ok: false, error: selected?.error || 'No se pudieron leer los CSV' };
+    } else {
+      if (btn) btn.textContent = '⏳ Validando e importando…';
+      res = await window.api.importar.allInOneEquiparts({
+        files: selected.files,
+        sourceName: selected.sourceName,
+        requestUserId: window._currentUser?.id,
+      });
+    }
   } catch (e) {
-    res = { ok: false, error: e.message };
+    const offline = e?.message === 'SERVER_OFFLINE' || e?.offline;
+    res = {
+      ok: false,
+      ambiguous: offline,
+      error: offline
+        ? 'No se pudo confirmar la operación con la PC Servidor. No vuelvas a ejecutarla todavía: conecta el servidor y verifica primero si la importación terminó.'
+        : (e?.message || 'Error desconocido'),
+    };
   }
 
   if (!res || !res.ok) {
@@ -363,7 +381,7 @@ async function ejecutarAllInOne() {
       </div>
       <div class="alrt r" style="margin-bottom:14px">
         <div class="alrt-dot r"></div>
-        <div><div class="alrt-title">Nada se importó (transacción revertida)</div>
+        <div><div class="alrt-title">${res?.ambiguous ? 'Resultado pendiente de confirmar' : 'Nada se importó (transacción revertida)'}</div>
         <div class="alrt-sub">${_escHtml((res && res.error) || 'Error desconocido')}</div></div>
       </div>
       ${res && res.backup ? `<div style="font-size:11px;color:var(--muted)">Backup previo: <code>${_escHtml(res.backup)}</code></div>` : ''}

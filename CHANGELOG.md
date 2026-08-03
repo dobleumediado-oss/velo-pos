@@ -1,5 +1,31 @@
 # Historial de versiones
 
+## 1.36.1 — 2026-08-03
+
+### Recuperación fiscal por empresa
+
+- Corrige la normalización de v1.36.0: un NCF mal formado conserva su valor
+  original como evidencia y nunca se transforma en otro comprobante válido.
+- Cada empresa y cada tipo de NCF recalculan su próximo correlativo desde sus
+  propios documentos válidos; ninguna numeración se comparte entre negocios.
+- La recuperación crea un respaldo antes de actuar y no baja la secuencia si
+  encuentra un comprobante válido posterior emitido después de actualizar.
+- Configuración muestra los NCF completos, diferencia «Último usado» y
+  «Próximo», y permite a un superadministrador corregir o retirar secuencias.
+- Toda corrección exige motivo, genera backup y auditoría; una secuencia sin uso
+  puede eliminarse y una utilizada solo se desactiva para conservar historial.
+
+### All-in-One en servidor y terminales
+
+- La carpeta se elige en la PC del usuario y los cuatro CSV validados se envían
+  al servidor dueño de la empresa activa, sin mezclar datos entre negocios.
+- La importación remota dispone de hasta diez minutos en lugar del timeout
+  general de ocho segundos, evitando falsos avisos `SERVER_OFFLINE`.
+- Una pérdida real de conexión ya no afirma que hubo reversión: advierte que el
+  resultado debe verificarse antes de reintentar la operación.
+- Se agregan regresiones para recuperación desde v1.36.0, secuencias protegidas,
+  retiro auditable, transporte de CSV y timeout prolongado.
+
 ## 1.36.0 — 2026-08-03
 
 ### Importación All-in-One segura

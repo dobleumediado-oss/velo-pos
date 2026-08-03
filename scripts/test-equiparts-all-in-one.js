@@ -2,8 +2,10 @@
 'use strict';
 
 const Database = require('better-sqlite3');
+const { rpcTimeoutFor } = require('../src/main/ipc-bridge');
 const {
   parseCsv,
+  loadEquipartsCsvPayload,
   validateEquipartsData,
   syncImportedCustomerPhones,
   assertForeignKeyIntegrity,
@@ -56,6 +58,21 @@ const broken = { ...data, ventas: data.ventas.map(row => ({ ...row, total: '999'
 let totalError = false;
 try { validateEquipartsData(broken); } catch (error) { totalError = /no cuadra/.test(error.message); }
 ok(totalError, 'rechaza una factura cuyo detalle no cuadra con el total');
+
+const asCsv = rows => {
+  const headers = rows._headers;
+  return [headers.join(','), ...rows.map(row => headers.map(header => row[header] || '').join(','))].join('\n');
+};
+const transported = loadEquipartsCsvPayload({
+  '1_inventario_v2.csv': asCsv(data.inventario),
+  '2_clientes_v2.csv': asCsv(data.clientes),
+  '3_ventas_v2.csv': asCsv(data.ventas),
+  '4_recibos_v2.csv': asCsv(data.recibos),
+});
+ok(validateEquipartsData(transported).targetCxc === 68,
+  'los cuatro CSV viajan desde una terminal y se reconstruyen íntegros en el servidor');
+ok(rpcTimeoutFor('importar:allInOneEquiparts') === 10 * 60 * 1000 && rpcTimeoutFor('products:getAll') === 8000,
+  'la importación remota no vence con el timeout general de ocho segundos');
 
 console.log('\n== 2. Teléfonos tipados, normalizados e idempotentes ==');
 const db = new Database(':memory:');
