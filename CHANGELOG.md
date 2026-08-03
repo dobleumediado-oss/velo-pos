@@ -1,5 +1,31 @@
 # Historial de versiones
 
+## 1.36.0 — 2026-08-03
+
+### Importación All-in-One segura
+
+- El importador de Equiparts valida por completo archivos, encabezados,
+  identidades, fechas, montos y comprobantes antes de modificar la empresa.
+- Cada importación crea un respaldo real, se ejecuta como una operación atómica
+  y restaura los datos si falla la integridad de ventas, inventario o CxC.
+- Solo un administrador puede importar y la operación se bloquea mientras
+  exista una caja abierta, evitando mezclar datos migrados con actividad viva.
+- Se conservan teléfonos, WhatsApp, RNC, condición fiscal, ITBIS y exenciones de
+  las facturas históricas sin duplicar clientes al repetir una importación.
+- Los recibos históricos aplicados a varias facturas se reconstruyen como un
+  solo abono con todas sus distribuciones, saldo anterior y saldo posterior.
+
+### Secuencias fiscales y comprobantes
+
+- Las secuencias NCF de serie B se normalizan con longitud y tipo estrictos para
+  impedir que un número de factura interna contamine el comprobante fiscal.
+- El sistema detecta y repara referencias o secuencias mal formadas, creando un
+  respaldo automático antes de efectuar cualquier corrección.
+- El diagnóstico del sistema y la configuración de sucursales utilizan la misma
+  validación fiscal, por lo que la vista, la emisión y la reparación coinciden.
+- Se agregan pruebas de regresión del importador, recibos multifactura,
+  idempotencia, integridad transaccional y secuencias NCF.
+
 ## 1.35.1 — 2026-07-31
 
 ### Ventas, abonos y caja resilientes

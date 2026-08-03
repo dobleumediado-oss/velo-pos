@@ -758,19 +758,36 @@ function diagnoseFiscal({ db, settingsRepo }) {
       HAVING COUNT(*) > 1
     )
   `);
+  const malformedLegacyNcf = count(db, `
+    SELECT COUNT(*) c FROM sales
+    WHERE UPPER(TRIM(COALESCE(ncf,''))) LIKE 'B%'
+      AND (
+        length(TRIM(ncf)) != 11
+        OR UPPER(substr(TRIM(ncf),1,3)) NOT IN ('B01','B02','B04','B14','B15','B16','B17')
+        OR substr(TRIM(ncf),4) GLOB '*[^0-9]*'
+      )
+  `);
 
   let sequenceAlerts = 0;
   let sequenceEmpty = 0;
+  let malformedSequences = 0;
   if (ncfAdvanced && tableExists(db, 'ncf_sequences')) {
     sequenceEmpty = count(db, "SELECT COUNT(*) c FROM ncf_sequences WHERE active=1 AND current >= to_num");
     sequenceAlerts = count(db, "SELECT COUNT(*) c FROM ncf_sequences WHERE active=1 AND (to_num-current) <= COALESCE(alert_at,50)");
+    malformedSequences = count(db, `
+      SELECT COUNT(*) c FROM ncf_sequences
+      WHERE type LIKE 'B%'
+        AND (prefix != type OR from_num < 1 OR to_num > 99999999
+             OR current < from_num-1 OR current > to_num)
+    `);
   }
 
   const ecfPartial = ['ecf_email', 'ecf_password', 'ecf_api_key']
     .map(k => String(settings?.[k] || '').trim())
     .filter(Boolean).length;
 
-  const hasError = fiscalOn && (!rnc || missingNcf > 0 || duplicatedNcf > 0 || sequenceEmpty > 0);
+  const hasError = fiscalOn && (!rnc || missingNcf > 0 || duplicatedNcf > 0 ||
+    malformedLegacyNcf > 0 || malformedSequences > 0 || sequenceEmpty > 0);
   const hasWarn = fiscalOn && ((taxPct < 0 || taxPct > 27) || sequenceAlerts > 0 || (ecfPartial > 0 && ecfPartial < 3));
   const detail = fiscalOn
     ? [
@@ -778,6 +795,8 @@ function diagnoseFiscal({ db, settingsRepo }) {
         `ITBIS ${Number.isFinite(taxPct) ? taxPct : 0}%`,
         missingNcf ? `${missingNcf} facturas sin NCF` : null,
         duplicatedNcf ? `${duplicatedNcf} NCF duplicados` : null,
+        malformedLegacyNcf ? `${malformedLegacyNcf} NCF serie B mal formados` : null,
+        malformedSequences ? `${malformedSequences} secuencias NCF inválidas` : null,
         sequenceEmpty ? `${sequenceEmpty} secuencias agotadas` : null,
         sequenceAlerts ? `${sequenceAlerts} secuencias en alerta` : null,
         ecfPartial > 0 && ecfPartial < 3 ? 'e-CF parcialmente configurado' : null,
@@ -796,7 +815,10 @@ function diagnoseFiscal({ db, settingsRepo }) {
       : hasWarn
         ? 'Completar credenciales e-CF y vigilar secuencias cercanas a agotarse.'
         : 'Sin accion requerida.',
-    value: { fiscalOn, rnc, taxPct, missingNcf, duplicatedNcf, sequenceEmpty, sequenceAlerts },
+    value: {
+      fiscalOn, rnc, taxPct, missingNcf, duplicatedNcf,
+      malformedLegacyNcf, malformedSequences, sequenceEmpty, sequenceAlerts,
+    },
   });
 }
 

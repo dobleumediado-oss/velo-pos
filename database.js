@@ -16,6 +16,13 @@ const { round2 } = require('./lib/money');
 const { getPendingInvoices } = require('./lib/pending-invoices');
 const { reconcileCashSessionTotals } = require('./lib/cash-session-totals');
 const { normalizeCustomerPhone } = require('./lib/customer-phone');
+const {
+  normalizeLegacyType,
+  normalizeLegacySequenceRange,
+  normalizeLegacySequenceNumber,
+  formatLegacyNcf,
+  parseCanonicalLegacyNcf,
+} = require('./lib/ncf-sequences');
 const { ensureSalespeopleSchema, createSalespeopleRepo } = require('./src/main/salespeople-repo');
 const { ensureCheckoutOrdersSchema, createCheckoutOrdersRepo } = require('./src/main/checkout-orders-repo');
 const {
@@ -1490,6 +1497,26 @@ function migrateV2IdentityColumns() {
       console.log(`[MIGRATE v2] payments.${col} agregada`);
     } catch { /* ya existe — ignorar */ }
   });
+
+  // Un recibo histórico puede distribuirse entre varias facturas. Esta tabla
+  // conserva cada id_pago_detalle del origen sin multiplicar el encabezado en
+  // payments y permite reejecutar la migración de forma idempotente.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS legacy_payment_details (
+      import_source       TEXT NOT NULL,
+      old_id_pago_detalle INTEGER NOT NULL,
+      payment_id          INTEGER NOT NULL REFERENCES payments(id) ON DELETE CASCADE,
+      sale_id             INTEGER NOT NULL REFERENCES sales(id),
+      amount              REAL NOT NULL,
+      method              TEXT DEFAULT '',
+      created_at          TEXT DEFAULT (datetime('now','localtime')),
+      PRIMARY KEY(import_source,old_id_pago_detalle)
+    );
+    CREATE INDEX IF NOT EXISTS idx_legacy_payment_details_payment
+      ON legacy_payment_details(payment_id);
+    CREATE INDEX IF NOT EXISTS idx_legacy_payment_details_sale
+      ON legacy_payment_details(sale_id);
+  `);
 
   // customers: mapa al id_cliente del BAK (conecta ventas y recibos al cliente)
   const custCols = [
@@ -4470,7 +4497,9 @@ const salesRepo = {
           if (seq) {
             const next = seq.current + 1;
             db.prepare("UPDATE ncf_sequences SET current=? WHERE id=?").run(next, seq.id);
-            ncf = seq.prefix + String(next).padStart(8, '0');
+            // El prefijo nunca forma parte del contador. formatLegacyNcf
+            // impide emitir un B01/B02/B04 con más o menos de 8 correlativos.
+            ncf = formatLegacyNcf(ncfType, next);
             db.prepare("INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc) VALUES(?,?,?,?)")
               .run(ncf, ncfType, saleId, customer.rnc || '');
             const remaining = seq.to_num - next;
@@ -6352,7 +6381,7 @@ const returnsRepo = {
           if (seq) {
             const next = seq.current + 1;
             db.prepare("UPDATE ncf_sequences SET current=? WHERE id=?").run(next, seq.id);
-            ncfNota = seq.prefix + String(next).padStart(8, '0');
+            ncfNota = formatLegacyNcf('B04', next);
             const remaining = seq.to_num - next;
             if (remaining <= (seq.alert_at || 50)) console.log('[NCF] ALERTA: quedan ' + remaining + ' notas de crédito B04');
           } else {
@@ -7330,19 +7359,42 @@ const ncfRepo = {
   getSequences() { return db.prepare('SELECT * FROM ncf_sequences ORDER BY type, id').all(); },
   getActive(type) { return db.prepare("SELECT * FROM ncf_sequences WHERE type=? AND active=1").get(type); },
   createSequence({ type, prefix, from_num, to_num, expiry_date, alert_at }) {
+    const cleanType = normalizeLegacyType(type);
+    const cleanPrefix = String(prefix || cleanType).trim().toUpperCase();
+    if (cleanPrefix !== cleanType) {
+      throw new Error(`El prefijo fiscal debe ser ${cleanType}; no puede modificarse`);
+    }
+    const { from, to } = normalizeLegacySequenceRange(cleanType, from_num, to_num);
+    const overlap = db.prepare(`
+      SELECT id,from_num,to_num FROM ncf_sequences
+      WHERE type=? AND NOT(to_num < ? OR from_num > ?) LIMIT 1
+    `).get(cleanType, from, to);
+    if (overlap) {
+      throw new Error(`El rango se cruza con la secuencia #${overlap.id} (${overlap.from_num}-${overlap.to_num})`);
+    }
+    const maxIssued = db.prepare("SELECT ncf FROM sales WHERE ncf LIKE ? AND length(TRIM(ncf))=11")
+      .all(`${cleanType}%`)
+      .map(row => parseCanonicalLegacyNcf(row.ncf))
+      .filter(Boolean)
+      .map(row => row.sequence)
+      .filter(sequence => sequence >= from && sequence <= to)
+      .reduce((max, sequence) => Math.max(max, sequence), 0);
+    const current = Math.max(from - 1, maxIssued);
     return db.prepare('INSERT INTO ncf_sequences(type,prefix,from_num,to_num,current,expiry_date,alert_at) VALUES(?,?,?,?,?,?,?)')
-      .run(type, prefix, from_num, to_num, from_num - 1, expiry_date||null, alert_at||50).lastInsertRowid;
+      .run(cleanType, cleanType, from, to, current, expiry_date||null, alert_at||50).lastInsertRowid;
   },
   getNext(type) {
     return db.transaction(() => {
-      const seq = db.prepare("SELECT * FROM ncf_sequences WHERE type=? AND active=1 AND current < to_num").get(type);
-      if (!seq) throw new Error(`Sin comprobantes disponibles tipo ${type}`);
-      const next = seq.current + 1;
+      const cleanType = normalizeLegacyType(type);
+      const seq = db.prepare("SELECT * FROM ncf_sequences WHERE type=? AND active=1 AND current < to_num").get(cleanType);
+      if (!seq) throw new Error(`Sin comprobantes disponibles tipo ${cleanType}`);
+      const current = normalizeLegacySequenceNumber(cleanType, seq.current, { allowZero: true });
+      const next = current + 1;
       db.prepare('UPDATE ncf_sequences SET current=? WHERE id=?').run(next, seq.id);
-      const ncf = seq.prefix + String(next).padStart(8, '0');
+      const ncf = formatLegacyNcf(cleanType, next);
       const remaining = seq.to_num - next;
       // Alerta si quedan pocos
-      if (remaining <= seq.alert_at) console.log(`[NCF] ALERTA: quedan ${remaining} comprobantes tipo ${type}`);
+      if (remaining <= seq.alert_at) console.log(`[NCF] ALERTA: quedan ${remaining} comprobantes tipo ${cleanType}`);
       return { ncf, remaining, sequence_id: seq.id };
     })();
   },

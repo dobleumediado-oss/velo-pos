@@ -11,10 +11,43 @@ const { ensureCheckoutOrdersSchema } = require('./src/main/checkout-orders-repo'
 const { ensureSaleCorrectionsSchema } = require('./src/main/sale-corrections-repo');
 const { repairCancelledPaymentInflation } = require('./lib/pending-invoices');
 const { reconcileCashSessionTotals } = require('./lib/cash-session-totals');
+const { repairLegacyNcfData } = require('./lib/ncf-sequences');
 
 // ── Versión centralizada — siempre desde package.json ──
 // Nunca hardcodeada aquí. Así package.json es la única fuente de verdad.
 const APP_VERSION = require('./package.json').version;
+
+function backupBeforeLegacyNcfNormalization(db, dataDir) {
+  const migrationId = '1.35.2-normalize-legacy-ncf';
+  const applied = db.prepare(
+    'SELECT 1 FROM db_migrations WHERE version=?'
+  ).get(migrationId);
+  if (applied) return null;
+
+  const hasTable = table => !!db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?"
+  ).get(table);
+  const malformedSales = hasTable('sales') ? db.prepare(`
+    SELECT COUNT(*) c FROM sales
+    WHERE UPPER(TRIM(COALESCE(ncf,''))) LIKE 'B%' AND length(TRIM(ncf))<>11
+  `).get().c : 0;
+  const malformedSequences = hasTable('ncf_sequences') ? db.prepare(`
+    SELECT COUNT(*) c FROM ncf_sequences
+    WHERE type LIKE 'B%' AND (prefix!=type OR from_num>99999999 OR to_num>99999999 OR current>99999999)
+  `).get().c : 0;
+  if (!malformedSales && !malformedSequences) return null;
+
+  const backupDir = path.join(dataDir, 'backups');
+  fs.mkdirSync(backupDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupPath = path.join(backupDir, `velo_pre_ncf_normalization_${stamp}.db`);
+  // VACUUM INTO usa la API de SQLite sobre la conexión abierta: incluye WAL y
+  // produce un archivo consistente antes de tocar cualquier dato fiscal.
+  const escapedPath = backupPath.replace(/'/g, "''");
+  db.exec(`VACUUM INTO '${escapedPath}'`);
+  console.log('[BACKUP] Respaldo previo a normalización NCF:', path.basename(backupPath));
+  return backupPath;
+}
 
 // Retira de los libros vigentes cualquier asiento de abono cuyo recibo ya fue
 // anulado. Algunas instalaciones antiguas alcanzaron a anular el recibo pero no
@@ -156,7 +189,7 @@ const MIGRATIONS = [
           ON CONFLICT(key) DO NOTHING
         `).run(String(maxId));
         db.prepare(`
-          UPDATE sales SET ncf = 'B01' || printf('%09d', id)
+          UPDATE sales SET ncf = 'B01' || printf('%08d', id)
           WHERE type='factura' AND (ncf IS NULL OR ncf='')
         `).run();
       } catch(e) {
@@ -1477,6 +1510,21 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.34.4] Ciclo de vida de abonos reforzado');
     }
   },
+  {
+    version: '1.35.2-normalize-legacy-ncf',
+    description: 'Normalizar NCF serie B y reparar secuencias con el tipo duplicado',
+    run(db) {
+      const result = repairLegacyNcfData(db);
+      console.log(
+        `[MIGRATION 1.35.2] NCF normalizados: ${result.sales} factura(s), ` +
+        `${result.log} registro(s), ${result.references} referencia(s), ` +
+        `${result.sequences} secuencia(s); ${result.conflicts.length} conflicto(s)`
+      );
+      if (result.conflicts.length) {
+        console.warn('[MIGRATION 1.35.2] Conflictos NCF pendientes:', result.conflicts);
+      }
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════
@@ -1639,6 +1687,9 @@ function initVersioning(db, dataDir) {
     INSERT OR IGNORE INTO app_info(key, value)
     VALUES('installed_at', datetime('now'))
   `).run();
+
+  // Antes de la migración fiscal se crea un respaldo consistente y recuperable.
+  backupBeforeLegacyNcfNormalization(db, dataDir);
 
   // Correr migraciones pendientes
   runMigrations(db);

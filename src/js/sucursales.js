@@ -325,15 +325,16 @@ function modalNuevaSecuencia(parentEl) {
       <select class="inp" id="ncf-type">
         ${tipos.map(t=>`<option value="${t.code}">${t.label}</option>`).join('')}
       </select></div>
-    <div class="fg"><label class="lbl">Prefijo *</label>
-      <input class="inp" id="ncf-prefix" placeholder="Ej: B01" value="B01">
-      <div style="font-size:10px;color:var(--muted2);margin-top:2px">Generalmente igual al tipo. Ej: B01, E31</div></div>
+    <div class="fg"><label class="lbl">Prefijo fiscal</label>
+      <input class="inp" id="ncf-prefix" value="B01" readonly>
+      <div style="font-size:10px;color:var(--muted2);margin-top:2px">VELO lo fija según el tipo para evitar comprobantes inválidos.</div></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-      <div class="fg"><label class="lbl">Desde (número) *</label>
-        <input class="inp" id="ncf-from" type="number" min="1" placeholder="1"></div>
-      <div class="fg"><label class="lbl">Hasta (número) *</label>
-        <input class="inp" id="ncf-to" type="number" min="1" placeholder="1000"></div>
+      <div class="fg"><label class="lbl">Primer comprobante *</label>
+        <input class="inp" id="ncf-from" inputmode="numeric" placeholder="849 o B0100000849"></div>
+      <div class="fg"><label class="lbl">Último comprobante *</label>
+        <input class="inp" id="ncf-to" inputmode="numeric" placeholder="1000 o B0100001000"></div>
     </div>
+    <div style="font-size:10px;color:var(--muted2);margin-top:-4px">Escribe el correlativo o pega el NCF completo; VELO conservará los 8 dígitos correctos.</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div class="fg"><label class="lbl">Vencimiento</label>
         <input class="inp" id="ncf-exp" type="date"></div>
@@ -344,10 +345,10 @@ function modalNuevaSecuencia(parentEl) {
   _sModal('Nueva secuencia NCF', html, async (ov) => {
     const type   = ov.querySelector('#ncf-type')?.value;
     const prefix = ov.querySelector('#ncf-prefix')?.value.trim().toUpperCase();
-    const from_n = parseInt(ov.querySelector('#ncf-from')?.value);
-    const to_n   = parseInt(ov.querySelector('#ncf-to')?.value);
+    const from_n = ov.querySelector('#ncf-from')?.value.trim();
+    const to_n   = ov.querySelector('#ncf-to')?.value.trim();
     if (!prefix) throw new Error('El prefijo es obligatorio');
-    if (!from_n || !to_n || from_n >= to_n) throw new Error('El rango debe ser válido (desde < hasta)');
+    if (!from_n || !to_n) throw new Error('Debes indicar el primer y el último comprobante');
 
     const res = await window.api.ncf.createSequence({
       data: {
@@ -358,7 +359,7 @@ function modalNuevaSecuencia(parentEl) {
       requestUserId: user.id,
     });
     if (!res.ok) throw new Error(res.error);
-    _sToast(`✓ Secuencia ${type} creada: ${(to_n-from_n+1).toLocaleString()} comprobantes`);
+    _sToast(`✓ Secuencia ${type} creada y validada`);
     renderNCFAvanzado(parentEl.closest('#main-content') || parentEl.parentElement || parentEl);
   }, 'Crear secuencia');
 

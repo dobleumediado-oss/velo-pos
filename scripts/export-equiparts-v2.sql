@@ -33,13 +33,13 @@ GO
    1) 1_inventario_v2.csv          esperado: 1245 filas
    header: code,barcode,name,cost,price,wholesale,taxable,tax_pct,stock,
            stock_min,category,brand,unit
-   ─────────────────────────────────────────────────────────────────────────── */
    OJO — CODIGOS DUPLICADOS: 14 codigos estan compartidos por 25 articulos
    DISTINTOS (ej. 'GB/T 297-1994' lo usan 5 rodamientos diferentes). La identidad
    real en faprodb es id_articulo, no codigo. Si se exporta el codigo crudo, el
    importador deduplica y se pierden 25 productos, ademas de enlazar mal los
    sale_items. Por eso al codigo repetido se le agrega '-<id_articulo>'.
-   La MISMA expresion se usa en la query de ventas, asi el enlace queda intacto. */
+   La MISMA expresion se usa en la query de ventas, asi el enlace queda intacto.
+   ─────────────────────────────────────────────────────────────────────────── */
 SELECT CASE WHEN d.n > 1 THEN a.codigo + '-' + CAST(a.id_articulo AS VARCHAR)
             ELSE a.codigo END AS code,
   ISNULL(a.codigo_barra,a.codigo) AS barcode,
@@ -68,28 +68,24 @@ ORDER BY a.codigo;
 
 /* ───────────────────────────────────────────────────────────────────────────
    2) 2_clientes_v2.csv            esperado: 313 filas
-   header: old_id_cliente,name,rnc,phone,address,email,credit_days
+   header: old_id_cliente,name,rnc,phone,celular,address,email,credit_days
    Nota: faprodb no tiene tabla de credito -> credit_days = 30 por defecto.
+   phone=telefono, celular=celular (columnas separadas). El importador crea
+   una fila en customer_phones por cada numero presente.
    ─────────────────────────────────────────────────────────────────────────── */
 SELECT c.id_cliente AS old_id_cliente,
   REPLACE(LTRIM(RTRIM(ISNULL(c.nombre,'') +
     CASE WHEN ISNULL(c.apellido,'')<>'' THEN ' '+c.apellido ELSE '' END)),',',' ') AS name,
   CASE WHEN LTRIM(RTRIM(ISNULL(c.cedula,''))) IN ('','-','--','---')
        THEN '' ELSE LTRIM(RTRIM(c.cedula)) END AS rnc,
-  -- La tabla destino tiene UNA columna phone. faprodb guarda numeros en
-  -- telefono y/o celular. Se combinan: si ambos existen y son distintos ->
-  -- "telefono / celular"; si solo uno -> ese; si ninguno -> ''.
-  CASE
-    WHEN LTRIM(RTRIM(ISNULL(c.telefono,''))) NOT IN ('','-','--','---')
-     AND LTRIM(RTRIM(ISNULL(c.celular,'')))  NOT IN ('','-','--','---')
-     AND LTRIM(RTRIM(c.telefono)) <> LTRIM(RTRIM(c.celular))
-      THEN LTRIM(RTRIM(c.telefono)) + ' / ' + LTRIM(RTRIM(c.celular))
-    WHEN LTRIM(RTRIM(ISNULL(c.telefono,''))) NOT IN ('','-','--','---')
-      THEN LTRIM(RTRIM(c.telefono))
-    WHEN LTRIM(RTRIM(ISNULL(c.celular,'')))  NOT IN ('','-','--','---')
-      THEN LTRIM(RTRIM(c.celular))
-    ELSE ''
-  END AS phone,
+  -- Velo modela varios telefonos tipados por cliente (customer_phones).
+  -- Se exportan telefono y celular en columnas SEPARADAS; el importador crea
+  -- una fila por cada uno (telefono=principal, celular=secundario) y ademas
+  -- deja el principal en customers.phone (campo legacy).
+  CASE WHEN LTRIM(RTRIM(ISNULL(c.telefono,''))) IN ('','-','--','---')
+       THEN '' ELSE LTRIM(RTRIM(c.telefono)) END AS phone,
+  CASE WHEN LTRIM(RTRIM(ISNULL(c.celular,'')))  IN ('','-','--','---')
+       THEN '' ELSE LTRIM(RTRIM(c.celular)) END AS celular,
   REPLACE(ISNULL(c.direccion,''),',',' ') AS address,
   ISNULL(c.email,'') AS email,
   30 AS credit_days
@@ -98,11 +94,12 @@ ORDER BY c.id_cliente;
 
 
 /* ───────────────────────────────────────────────────────────────────────────
-   3) 3_ventas_v2.csv              esperado: 9081 filas (una por item)
+   3) 3_ventas_v2.csv              esperado: 9082 filas
+                                      (9081 items + 1 factura sin detalle)
    header: old_id_factura,numero_factura,numero_factura_fmt,ncf,customer_name,
            old_id_cliente,date,total,balance,payment_method,status,
            estado_origen,product_code,product_name,qty,unit_price,line_total,
-           factura_nota
+           taxable,tax_pct,factura_nota
    payment_method sale del BALANCE, no de condicion_pago. Ver hallazgo 1.
    ─────────────────────────────────────────────────────────────────────────── */
 SELECT f.id_factura AS old_id_factura, f.codigo_factura AS numero_factura,
@@ -115,10 +112,16 @@ SELECT f.id_factura AS old_id_factura, f.codigo_factura AS numero_factura,
   f.monto_factura AS total, f.balance_factura AS balance,
   CASE WHEN f.balance_factura > 0 THEN 'credito' ELSE 'efectivo' END AS payment_method,
   'completed' AS status, f.estado_factura AS estado_origen,
-  ISNULL(CASE WHEN d.n > 1 THEN a.codigo + '-' + CAST(a.id_articulo AS VARCHAR)
-              ELSE a.codigo END, 'IMP') AS product_code,
-  REPLACE(REPLACE(ISNULL(a.Articulo,'Producto'),'"',''),',',' ') AS product_name,
+  CASE WHEN fd.id_factura_detalle IS NULL THEN ''
+       ELSE ISNULL(CASE WHEN d.n > 1 THEN a.codigo + '-' + CAST(a.id_articulo AS VARCHAR)
+                        ELSE a.codigo END, 'IMP') END AS product_code,
+  CASE WHEN fd.id_factura_detalle IS NULL THEN ''
+       ELSE REPLACE(REPLACE(ISNULL(a.Articulo,'Producto'),'"',''),',',' ') END AS product_name,
   fd.cantidad AS qty, fd.precio AS unit_price, fd.importe AS line_total,
+  CASE WHEN fd.id_factura_detalle IS NULL THEN ''
+       WHEN ISNULL(a.itbis,0)>0 THEN 1 ELSE 0 END AS taxable,
+  CASE WHEN fd.id_factura_detalle IS NULL THEN ''
+       WHEN ISNULL(a.itbis,0)>0 THEN ISNULL(a.itbis,18) ELSE 0 END AS tax_pct,
   -- Nota real de la factura (el importador la anexa a sales.notes).
   REPLACE(REPLACE(ISNULL(f.nota,''),'"',''),',',' ') AS factura_nota
 FROM dbo.factura f
@@ -195,8 +198,8 @@ ORDER BY _ord, _tipo;
    ─────────────────────────────────────────────────────────────────────────── */
 SELECT 'inventario' AS csv, COUNT(*) AS filas_esperadas FROM dbo.articulo WHERE estado='A'
 UNION ALL SELECT 'clientes', COUNT(*) FROM dbo.cliente
-UNION ALL SELECT 'ventas', COUNT(*) FROM dbo.factura_detalle fd
-          INNER JOIN dbo.factura f ON f.id_factura=fd.id_factura
+UNION ALL SELECT 'ventas', COUNT(*) FROM dbo.factura f
+          LEFT JOIN dbo.factura_detalle fd ON fd.id_factura=f.id_factura
           WHERE f.estado_factura<>'Anulada'
 UNION ALL SELECT 'recibos_efectivo', COUNT(*) FROM dbo.pago_detalle pd
           INNER JOIN dbo.factura f ON f.id_factura=pd.id_factura

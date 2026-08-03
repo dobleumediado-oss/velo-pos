@@ -321,11 +321,12 @@ function abrirAllInOne() {
     <div class="alrt r" style="margin-bottom:14px">
       <div class="alrt-dot r"></div>
       <div>
-        <div class="alrt-title">Esto BORRA todos los datos actuales</div>
+        <div class="alrt-title">Esto reemplaza los datos operativos migrados</div>
         <div class="alrt-sub">
           Se crea un backup automático del <code>velo.db</code> antes de borrar.
-          Luego se importan los 4 CSV desde la carpeta que elijas y se valida el CxC
-          contra el total que traen los propios CSV. Si no cuadra, se revierte todo.
+          Luego se reemplazan inventario, clientes, ventas, abonos y sus registros
+          dependientes. Usuarios y configuración se conservan. Si el CxC o la
+          integridad no cuadran, la operación completa se revierte.
         </div>
       </div>
     </div>
@@ -363,9 +364,9 @@ async function ejecutarAllInOne() {
       <div class="alrt r" style="margin-bottom:14px">
         <div class="alrt-dot r"></div>
         <div><div class="alrt-title">Nada se importó (transacción revertida)</div>
-        <div class="alrt-sub">${(res && res.error) || 'Error desconocido'}</div></div>
+        <div class="alrt-sub">${_escHtml((res && res.error) || 'Error desconocido')}</div></div>
       </div>
-      ${res && res.backup ? `<div style="font-size:11px;color:var(--muted)">Backup previo: <code>${res.backup}</code></div>` : ''}
+      ${res && res.backup ? `<div style="font-size:11px;color:var(--muted)">Backup previo: <code>${_escHtml(res.backup)}</code></div>` : ''}
       <div class="modal-foot"><button class="btn btn-dark" onclick="closeModal()">Cerrar</button></div>
     `);
     return;
@@ -400,7 +401,7 @@ async function ejecutarAllInOne() {
         <tr><td style="padding:4px 8px;color:var(--muted)">Recibos</td><td style="padding:4px 8px;text-align:right;font-weight:600">${s.rec_new||0} nuevos</td></tr>
       </tbody>
     </table>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:12px">Backup previo: <code>${res.backup||''}</code></div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:12px">Backup previo: <code>${_escHtml(res.backup||'')}</code></div>
     <div class="modal-foot">
       <button class="btn btn-dark" onclick="closeModal();location.reload()">Cerrar y recargar</button>
     </div>

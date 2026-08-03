@@ -26,8 +26,18 @@
  * el BAK, el target cambia solo.
  */
 
-const fs   = require('fs');
 const path = require('path');
+const {
+  EQUIPARTS_FILES: FILES,
+  loadEquipartsCsvSet,
+  toNumber: num,
+  toIntegerOrNull: intOrNull,
+  normalizeName: norm,
+  round2,
+  validateEquipartsData,
+  syncImportedCustomerPhones,
+  assertForeignKeyIntegrity,
+} = require('../lib/equiparts-import');
 
 // ── Parseo de argumentos ──────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -37,67 +47,24 @@ const getArg = (name, def) => {
 };
 // Carpeta donde están los 4 CSV. Por defecto: ./csv_v2 junto al proyecto.
 const CSV_DIR = path.resolve(getArg('dir', path.join(__dirname, '..', 'csv_v2')));
+const DATA_DIR = getArg('data-dir', '');
 const DRY_RUN = args.includes('--dry-run');
-
-const FILES = {
-  clientes:  '2_clientes_v2.csv',
-  inventario:'1_inventario_v2.csv',
-  ventas:    '3_ventas_v2.csv',
-  recibos:   '4_recibos_v2.csv',
-};
-
-// ── CSV parser real (maneja comillas y comas internas) ────────────────
-function parseCSV(text) {
-  const rows = [];
-  let field = '', row = [], inQuotes = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i], n = text[i + 1];
-    if (inQuotes) {
-      if (c === '"' && n === '"') { field += '"'; i++; }
-      else if (c === '"') { inQuotes = false; }
-      else { field += c; }
-    } else {
-      if (c === '"') { inQuotes = true; }
-      else if (c === ',') { row.push(field); field = ''; }
-      else if (c === '\r') { /* ignorar */ }
-      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
-      else { field += c; }
-    }
-  }
-  if (field !== '' || row.length) { row.push(field); rows.push(row); }
-  return rows;
-}
-
-function loadCSV(fname) {
-  const p = path.join(CSV_DIR, fname);
-  if (!fs.existsSync(p)) throw new Error(`No se encontró el CSV: ${p}`);
-  let text = fs.readFileSync(p, 'utf8');
-  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1); // quitar BOM si lo hubiera
-  const rows = parseCSV(text).filter(r => r.length && !(r.length === 1 && r[0] === ''));
-  const header = rows.shift();
-  return rows.map(r => {
-    const o = {};
-    header.forEach((h, i) => { o[h.trim()] = (r[i] !== undefined ? r[i] : '').trim(); });
-    return o;
-  });
-}
-
-const num = v => {
-  if (v === '' || v == null) return 0;
-  const n = Number(String(v).replace(/,/g, ''));
-  return Number.isFinite(n) ? n : 0;
-};
-const intOrNull = v => (v === '' || v == null) ? null : parseInt(v, 10);
-const norm = s => (s || '').trim().toLowerCase().normalize('NFC');
 
 // ── Arranque: inicializar la MISMA DB del proyecto ────────────────────
 const database = require('../database');
-const db = database.initDB();   // resuelve la ruta igual que la app
+const resolvedDataDir = DATA_DIR ? path.resolve(DATA_DIR) : path.join(__dirname, '..', 'data');
+const db = database.initDB(resolvedDataDir);
+// El script debe preparar exactamente el mismo esquema que la aplicación.
+// Antes solo llamaba initDB(), por lo que una base nueva carecía de tablas
+// creadas por versioning (p. ej. financial_accounts) y el primer abono fallaba.
+require('../versioning').initVersioning(db, resolvedDataDir);
+database.ensureUppercasePersistence();
 
 console.log('════════════════════════════════════════════════════');
 console.log(' IMPORTADOR EQUIPARTS v2');
 console.log('════════════════════════════════════════════════════');
 console.log('CSV dir :', CSV_DIR);
+console.log('Data dir:', resolvedDataDir);
 console.log('DRY RUN :', DRY_RUN ? 'SÍ (no escribe nada)' : 'no');
 console.log('');
 
@@ -121,10 +88,8 @@ if (missing.length) {
 console.log('✓ Fase 1 verificada (columnas v2 presentes)\n');
 
 // ── Cargar los CSV ────────────────────────────────────────────────────
-const clientes  = loadCSV(FILES.clientes);
-const inventario = loadCSV(FILES.inventario);   // #5: ahora SÍ se carga
-const ventas    = loadCSV(FILES.ventas);
-const recibos   = loadCSV(FILES.recibos);
+const { clientes, inventario, ventas, recibos } = loadEquipartsCsvSet(CSV_DIR);
+const validation = validateEquipartsData({ clientes, inventario, ventas, recibos });
 console.log(`Cargados: ${clientes.length} clientes, ${inventario.length} productos, ${ventas.length} líneas de venta, ${recibos.length} recibos\n`);
 
 // ══════════════════════════════════════════════════════════════════════
@@ -182,29 +147,36 @@ const runImport = db.transaction(() => {
     VALUES(?, ?, ?, ?, ?, ?, 0, 1, ?, 'equiparts_bak')
   `);
   const findCliByOld = db.prepare(`SELECT id FROM customers WHERE old_id_cliente = ? LIMIT 1`);
-  const allCustomers = db.prepare(`SELECT id, name FROM customers WHERE active=1`).all();
-
   for (const c of clientes) {
     const oldId = intOrNull(c.old_id_cliente);
     if (oldId == null) continue;
+    const tel = (c.phone   || '').trim();
+    const cel = (c.celular || '').trim();
     // dedup por old_id_cliente
     const exist = findCliByOld.get(oldId);
-    if (exist) { mapCli.set(oldId, exist.id); stats.cli_skip++; continue; }
-    // dedup secundario por nombre (evitar duplicar Consumidor Final u otros ya existentes)
-    const byName = allCustomers.find(x => norm(x.name) === norm(c.name));
-    if (byName) {
-      // enlazar old_id al existente
-      db.prepare(`UPDATE customers SET old_id_cliente=?, import_source='equiparts_bak' WHERE id=?`).run(oldId, byName.id);
-      mapCli.set(oldId, byName.id);
+    if (exist) {
+      syncImportedCustomerPhones(db, exist.id, tel, cel);
+      mapCli.set(oldId, exist.id);
+      stats.cli_skip++;
+      continue;
+    }
+    if (norm(c.name) === norm('Consumidor Final')) {
+      db.prepare(`
+        UPDATE customers SET old_id_cliente=?,import_source='equiparts_bak',rnc=?,address=?,email=?,credit_days=?
+        WHERE id=1
+      `).run(oldId, c.rnc || '', c.address || '', c.email || '', intOrNull(c.credit_days) || 30);
+      syncImportedCustomerPhones(db, 1, tel, cel);
+      mapCli.set(oldId, 1);
       stats.cli_skip++;
       continue;
     }
     const r = insCli.run(
       c.name || 'Cliente',
-      c.rnc || '', c.phone || '', c.address || '', c.email || '',
+      c.rnc || '', '', c.address || '', c.email || '',
       intOrNull(c.credit_days) || 30,
       oldId
     );
+    syncImportedCustomerPhones(db, Number(r.lastInsertRowid), tel, cel);
     mapCli.set(oldId, r.lastInsertRowid);
     stats.cli_new++;
   }
@@ -230,50 +202,15 @@ const runImport = db.transaction(() => {
       tax_pct, tax_amt, total, payment_method, price_mode,
       cajero, user_id, ncf, notes, created_at,
       numero_factura, numero_factura_fmt, old_id_factura, source_balance, import_source
-    ) VALUES (?, ?, ?, '', ?, ?, ?, 0, 0, ?, ?, ?, ?, 'retail', 'Importación histórica', NULL, ?, ?, ?, ?, ?, ?, ?, 'equiparts_bak')
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, 'retail', 'Importación histórica', NULL, ?, ?, ?, ?, ?, ?, ?, 'equiparts_bak')
   `);
   // product_id se enlaza al catálogo real por código (#4, #2). Si no existe, NULL.
   const insItem = db.prepare(`
-    INSERT INTO sale_items(sale_id, product_id, product_code, product_name, unit_cost, unit_price, qty, subtotal)
-    VALUES (?, ?, ?, ?, 0, ?, ?, ?)
+    INSERT INTO sale_items(sale_id, product_id, product_code, product_name, unit_cost, unit_price, qty, subtotal,
+      taxable,tax_pct,tax_amt,net_subtotal)
+    VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
   `);
-
-  // Agrupar líneas por old_id_factura
-  const facturas = new Map();
-  for (const v of ventas) {
-    const oid = intOrNull(v.old_id_factura);
-    if (oid == null) continue;
-    if (!facturas.has(oid)) {
-      facturas.set(oid, {
-        old_id_factura: oid,
-        numero_factura: intOrNull(v.numero_factura),
-        numero_factura_fmt: v.numero_factura_fmt || '',
-        ncf: (v.ncf || '').startsWith('B') ? v.ncf : '',
-        customer_name: v.customer_name || 'Consumidor Final',
-        old_id_cliente: intOrNull(v.old_id_cliente),
-        date: (v.date || '').slice(0, 10),
-        total: num(v.total),
-        balance: num(v.balance),
-        payment_method: v.payment_method || 'efectivo',
-        status: v.status === 'cancelled' ? 'cancelled' : 'completed',
-        estado_origen: v.estado_origen || '',
-        factura_nota: (v.factura_nota || '').trim(),
-        type: 'factura',
-        items: [],
-      });
-    }
-    const f = facturas.get(oid);
-    const pname = (v.product_name || '').trim();
-    if (pname) {
-      f.items.push({
-        product_code: v.product_code || 'IMP',
-        product_name: pname,
-        qty: Math.max(1, parseInt(v.qty, 10) || 1),
-        unit_price: num(v.unit_price),
-        line_total: num(v.line_total),
-      });
-    }
-  }
+  const facturas = validation.invoices;
 
   // Acumular balance por cliente (SOLO facturas Pendientes → CxC real)
   const balByCust = new Map();
@@ -288,23 +225,33 @@ const runImport = db.transaction(() => {
     const notes = (f.numero_factura != null
       ? `Factura #${fmt}${f.ncf ? ' | NCF:' + f.ncf : ''}` : 'Factura importada')
       + (f.factura_nota ? ' | ' + f.factura_nota : '');
-    const taxPct = f.type === 'factura' ? 18 : 0;
+    const customer = db.prepare('SELECT rnc FROM customers WHERE id=?').get(custId);
+    const items = f.items.length ? f.items
+      : [{ product_code: 'IMP', product_name: 'Factura importada', qty: 1, unit_price: f.total, line_total: f.total, taxable: 1, tax_pct: 18 }];
+    const fiscalItems = items.map(item => {
+      const lineGross = round2(item.line_total || item.unit_price * item.qty);
+      const taxPct = item.taxable ? (Number(item.tax_pct) || 18) : 0;
+      const taxAmt = taxPct > 0 ? round2(lineGross - lineGross / (1 + taxPct / 100)) : 0;
+      return { ...item, lineGross, taxPct, taxAmt, netSubtotal: round2(lineGross - taxAmt) };
+    });
+    const taxAmt = round2(fiscalItems.reduce((sum, item) => sum + item.taxAmt, 0));
+    const netSubtotal = round2(f.total - taxAmt);
+    const taxRates = [...new Set(fiscalItems.filter(item => item.taxPct > 0).map(item => item.taxPct))];
+    const saleTaxPct = taxRates.length === 1 ? taxRates[0] : 0;
 
     const r = insSale.run(
-      null, custId, f.customer_name, f.type, f.status,
-      f.total, taxPct, 0, f.total, f.payment_method,
+      null, custId, f.customer_name, customer?.rnc || '', 'factura', f.status,
+      netSubtotal, saleTaxPct, taxAmt, f.total, f.payment_method,
       f.ncf, notes, dt,
       f.numero_factura, fmt, f.old_id_factura, f.balance
     );
     const saleId = r.lastInsertRowid;
 
     // items (detalle real). Si no hay, una línea genérica.
-    const items = f.items.length ? f.items
-      : [{ product_code: 'IMP', product_name: 'Factura importada', qty: 1, unit_price: f.total, line_total: f.total }];
-    for (const it of items) {
+    for (const it of fiscalItems) {
       const pid = prodByCode.get((it.product_code || '').trim()) || null;
       insItem.run(saleId, pid, it.product_code, it.product_name, it.unit_price, it.qty,
-        it.line_total || (it.unit_price * it.qty));
+        it.lineGross, it.taxable ? 1 : 0, it.taxPct, it.taxAmt, it.netSubtotal);
       stats.items++;
     }
 
@@ -317,46 +264,153 @@ const runImport = db.transaction(() => {
     }
   }
 
-  // ── 3) RECIBOS → payments (dedup por old_id_pago_detalle) ───────────
-  // NO tocan el balance del cliente (el balance viene del BAK, paso 4).
+  // ── 3) RECIBOS → un payment por recibo/método, varias allocations ───
+  const sourceBalances = new Map([...mapCli.values()].map(customerId => [Number(customerId), 0]));
+  for (const invoice of facturas.values()) {
+    const customerId = resolveCust(invoice.old_id_cliente, invoice.customer_name);
+    sourceBalances.set(customerId, round2((sourceBalances.get(customerId) || 0) + invoice.balance));
+  }
   const findPayByOld = db.prepare(`SELECT id FROM payments WHERE old_id_pago_detalle = ? LIMIT 1`);
+  const findLegacyDetail = db.prepare(`
+    SELECT payment_id FROM legacy_payment_details
+    WHERE import_source='equiparts_bak' AND old_id_pago_detalle=?
+  `);
   const findSaleForRec = db.prepare(`SELECT id, customer_id FROM sales WHERE old_id_factura = ? LIMIT 1`);
   const insPay = db.prepare(`
     INSERT INTO payments(customer_id, sale_id, amount, method, note,
       balance_before, balance_after, cajero, user_id, created_at,
       numero_recibo, old_id_pago_detalle, import_source)
-    VALUES(?, ?, ?, ?, ?, 0, 0, 'Importación histórica', NULL, ?, ?, ?, 'equiparts_bak')
+    VALUES(?, ?, ?, ?, ?, ?, ?, 'Importación histórica', NULL, ?, ?, ?, 'equiparts_bak')
   `);
-
-  for (const rc of recibos) {
-    const oldPd = intOrNull(rc.old_id_pago_detalle);
-    if (oldPd == null) continue;
-    if (findPayByOld.get(oldPd)) { stats.rec_skip++; continue; }
-
-    // enlazar a la venta por old_id_factura; si no existe (facturas sin detalle),
-    // enlazar al cliente por old_id_cliente
-    const sale = findSaleForRec.get(intOrNull(rc.old_id_factura));
-    const custId = sale ? sale.customer_id
-      : resolveCust(intOrNull(rc.old_id_cliente), rc.customer_name);
-    const saleId = sale ? sale.id : null;
-    const dt = ((rc.date || '').slice(0,10) || new Date().toISOString().split('T')[0]) + ' 00:00:00';
-    const note = `Recibo #${rc.numero_recibo || ''}${rc.notes ? ' | ' + rc.notes : ''}`.trim();
-
-    insPay.run(
-      custId, saleId, num(rc.amount),
-      (rc.method || 'efectivo').toLowerCase(), note, dt,
-      intOrNull(rc.numero_recibo), oldPd
+  const insAllocation = db.prepare(`
+    INSERT OR IGNORE INTO payment_allocations(payment_id,sale_id,amount,invoice_balance_before,invoice_balance_after)
+    VALUES(?,?,?,?,?)
+  `);
+  const insLegacyDetail = db.prepare(`
+    INSERT OR IGNORE INTO legacy_payment_details(import_source,old_id_pago_detalle,payment_id,sale_id,amount,method)
+    VALUES('equiparts_bak',?,?,?,?,?)
+  `);
+  const receiptBalances = new Map();
+  const receiptsByInvoice = new Map();
+  for (const receipt of recibos) {
+    const invoiceId = intOrNull(receipt.old_id_factura);
+    if (!receiptsByInvoice.has(invoiceId)) receiptsByInvoice.set(invoiceId, []);
+    receiptsByInvoice.get(invoiceId).push(receipt);
+  }
+  for (const [invoiceId, rows] of receiptsByInvoice.entries()) {
+    let after = round2(facturas.get(invoiceId)?.balance || 0);
+    const ordered = [...rows].sort((a, b) =>
+      String(a.date || '').localeCompare(String(b.date || '')) ||
+      (intOrNull(a.old_id_pago_detalle) - intOrNull(b.old_id_pago_detalle))
     );
+    for (let index = ordered.length - 1; index >= 0; index -= 1) {
+      const receipt = ordered[index];
+      const before = round2(after + num(receipt.amount));
+      receiptBalances.set(String(receipt.old_id_pago_detalle), { before, after });
+      after = before;
+    }
+  }
+
+  const groupCustomerBalances = new Map();
+  const groupsByCustomer = new Map();
+  for (const group of validation.receiptGroups.values()) {
+    const customerId = resolveCust(group.old_id_cliente, group.customer_name);
+    if (!groupsByCustomer.has(customerId)) groupsByCustomer.set(customerId, []);
+    groupsByCustomer.get(customerId).push(group);
+  }
+  for (const [customerId, groups] of groupsByCustomer.entries()) {
+    let after = round2(sourceBalances.get(customerId) || 0);
+    const ordered = [...groups].sort((a, b) =>
+      String(a.date || '').localeCompare(String(b.date || '')) ||
+      ((a.numero_recibo ?? 0) - (b.numero_recibo ?? 0)) || a.key.localeCompare(b.key)
+    );
+    for (let index = ordered.length - 1; index >= 0; index -= 1) {
+      const group = ordered[index];
+      const before = round2(after + group.amount);
+      groupCustomerBalances.set(group.key, { before, after });
+      after = before;
+    }
+  }
+
+  for (const group of validation.receiptGroups.values()) {
+    const mappedPaymentIds = [...new Set(group.rows
+      .map(row => findLegacyDetail.get(row.old_id_pago_detalle)?.payment_id)
+      .filter(Boolean))];
+    if (mappedPaymentIds.length > 1) {
+      throw new Error(`Recibo ${group.numero_recibo}: sus aplicaciones ya apuntan a pagos diferentes`);
+    }
+    if (mappedPaymentIds.length === 1) {
+      stats.rec_skip++;
+      continue;
+    }
+    // Compatibilidad con una ejecución de la versión anterior: el primer
+    // detalle estaba guardado directamente en payments.old_id_pago_detalle.
+    const legacyPayment = findPayByOld.get(group.rows[0].old_id_pago_detalle);
+    if (legacyPayment) {
+      stats.rec_skip++;
+      continue;
+    }
+
+    const allocationBySale = new Map();
+    for (const row of group.rows) {
+      const sale = findSaleForRec.get(intOrNull(row.old_id_factura));
+      if (!sale) throw new Error(`Recibo ${group.numero_recibo || row.old_id_pago_detalle}: la factura importada no existe`);
+      const detailBalance = receiptBalances.get(String(row.old_id_pago_detalle)) || { before: 0, after: 0 };
+      const allocation = allocationBySale.get(sale.id) || {
+        saleId: sale.id, customerId: sale.customer_id, amount: 0,
+        before: detailBalance.before, after: detailBalance.after, rows: [],
+      };
+      allocation.amount = round2(allocation.amount + row.amount);
+      allocation.before = Math.max(allocation.before, detailBalance.before);
+      allocation.after = Math.min(allocation.after, detailBalance.after);
+      allocation.rows.push(row);
+      allocationBySale.set(sale.id, allocation);
+    }
+    const allocations = [...allocationBySale.values()];
+    if (allocations.some(allocation => allocation.customerId !== allocations[0].customerId)) {
+      throw new Error(`Recibo ${group.numero_recibo}: contiene facturas de clientes diferentes`);
+    }
+    const balances = groupCustomerBalances.get(group.key) || { before: 0, after: 0 };
+    const note = [`Recibo #${group.numero_recibo || ''}`, ...group.notes].filter(Boolean).join(' | ');
+    const dt = (group.date || new Date().toISOString().split('T')[0]) + ' 00:00:00';
+    const payment = insPay.run(
+      allocations[0].customerId, allocations[0].saleId, group.amount, group.method,
+      note, balances.before, balances.after, dt, group.numero_recibo, group.rows[0].old_id_pago_detalle
+    );
+    const paymentId = Number(payment.lastInsertRowid);
+    for (const allocation of allocations) {
+      insAllocation.run(paymentId, allocation.saleId, allocation.amount, allocation.before, allocation.after);
+      for (const row of allocation.rows) {
+        insLegacyDetail.run(row.old_id_pago_detalle, paymentId, allocation.saleId, row.amount, group.method);
+      }
+    }
     stats.rec_new++;
   }
 
   // ── 4) BALANCE DEL CLIENTE = suma de balance_factura pendientes (BAK) ─
   // El balance manda desde el BAK, NO se recalcula restando abonos.
-  const setBal = db.prepare(`UPDATE customers SET balance = ?, credit_due = ? WHERE id = ?`);
-  for (const [custId, bal] of balByCust.entries()) {
-    const b = Math.round(bal * 100) / 100;
-    setBal.run(b, b > 0 ? b : null, custId);
+  const dueByCust = new Map();
+  const creditDays = new Map(db.prepare('SELECT id,COALESCE(credit_days,30) days FROM customers').all().map(row => [row.id, row.days]));
+  for (const invoice of facturas.values()) {
+    const customerId = resolveCust(invoice.old_id_cliente, invoice.customer_name);
+    if (invoice.balance > 0 && invoice.date) {
+      const due = new Date(`${invoice.date}T12:00:00`);
+      due.setDate(due.getDate() + (parseInt(creditDays.get(customerId), 10) || 30));
+      const dueText = due.toISOString().slice(0, 10);
+      if (!dueByCust.has(customerId) || dueText < dueByCust.get(customerId)) dueByCust.set(customerId, dueText);
+    }
   }
+  const setBal = db.prepare(`UPDATE customers SET balance = ?, credit_due = ? WHERE id = ?`);
+  for (const [custId, balance] of sourceBalances.entries()) {
+    const amount = round2(balance);
+    setBal.run(amount, amount > 0 ? (dueByCust.get(custId) || null) : null, custId);
+  }
+
+  const cxc = round2(db.prepare(`SELECT COALESCE(SUM(balance),0) total FROM customers WHERE active=1 AND balance>0`).get().total);
+  if (Math.abs(cxc - validation.targetCxc) >= 0.01) {
+    throw new Error(`CxC no cuadra: Velo RD$${cxc.toFixed(2)} / CSV RD$${validation.targetCxc.toFixed(2)}`);
+  }
+  assertForeignKeyIntegrity(db);
 
   return balByCust;
 });
