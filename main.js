@@ -4739,7 +4739,8 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, files, requestUser
         const notes = (f.numero_factura != null ? `Factura #${fmt}${f.ncf ? ' | NCF:' + f.ncf : ''}` : 'Factura importada')
           + (f.factura_nota ? ' | ' + f.factura_nota : '')
           + (f.total_recovered_from_detail ? ` | TOTAL RECUPERADO DESDE DETALLE: RD$${f.total.toFixed(2)}` : '')
-          + (f.discount_recovered_from_totals ? ` | DESCUENTO LEGADO RECONSTRUIDO: RD$${f.discount_amt.toFixed(2)} (${f.discount_pct.toFixed(2)}%)` : '');
+          + (f.discount_recovered_from_totals ? ` | DESCUENTO LEGADO RECONSTRUIDO: RD$${f.discount_amt.toFixed(2)} (${f.discount_pct.toFixed(2)}%)` : '')
+          + (f.reconciliation_from_shortfall ? ` | DIFERENCIA NO DETALLADA CONCILIADA: RD$${f.reconciliation_amt.toFixed(2)}` : '');
         const customer = db.prepare('SELECT rnc FROM customers WHERE id=?').get(custId);
         const items = f.items.length ? f.items
           : [{ product_code: 'IMP', product_name: 'Factura importada', qty: 1, unit_price: f.total, line_total: f.total, taxable: 1, tax_pct: 18 }];

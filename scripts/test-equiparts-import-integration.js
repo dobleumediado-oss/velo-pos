@@ -33,6 +33,7 @@ P2,P2,PRODUCTO EXENTO,20,50,45,0,0,5,1,GENERAL,GENERICA,UND
   '2_clientes_v2.csv': `old_id_cliente,name,rnc,phone,celular,address,email,credit_days
 1,CONSUMIDOR FINAL,,,,,,30
 2,JUAN PEREZ,00112345678,8095550101,8295550101,CALLE 1,jp@example.com,30
+3,PEDRO SHORTFALL,,8095550303,,CALLE 3,,30
 `,
   '3_ventas_v2.csv': `old_id_factura,numero_factura,numero_factura_fmt,ncf,customer_name,old_id_cliente,date,total,balance,payment_method,status,estado_origen,product_code,product_name,qty,unit_price,line_total,taxable,tax_pct,factura_nota
 10,849,00000849,B0100000849,JUAN PEREZ,2,2026-08-03,168,68,credito,completed,Pendiente,P1,PRODUCTO GRAVADO,1,118,118,1,18,PRUEBA
@@ -40,6 +41,7 @@ P2,P2,PRODUCTO EXENTO,20,50,45,0,0,5,1,GENERAL,GENERICA,UND
 11,850,00000850,,JUAN PEREZ,2,2026-08-03,50,0,efectivo,completed,Pagada,P2,PRODUCTO EXENTO,1,50,50,0,0,PRUEBA
 12,7117,00007117,,JUAN PEREZ,2,2026-08-03,0,0,efectivo,completed,Pagada,P1,TOTAL LEGADO EN CERO,1,3001.92,3001.92,1,18,PRUEBA RECUPERACION
 13,51438,00051438,,JUAN PEREZ,2,2026-08-03,583296,0,efectivo,completed,Pagada,P1,FACTURA CON DESCUENTO,1,588000,588000,1,18,PRUEBA DESCUENTO
+14,851,00000851,,PEDRO SHORTFALL,3,2026-08-03,200,200,credito,completed,Pendiente,P1,PRODUCTO GRAVADO,1,118,118,1,18,PRUEBA FALTA DETALLE
 `,
   '4_recibos_v2.csv': `old_id_pago_detalle,old_id_factura,old_id_cliente,customer_name,date,amount,method,numero_recibo,notes
 20,10,2,JUAN PEREZ,2026-08-03,100,efectivo,3,ABONO INICIAL
@@ -95,6 +97,32 @@ ok(discountedSale.subtotal + discountedSale.tax_amt === discountedSale.total &&
 ok(/DESCUENTO LEGADO RECONSTRUIDO/.test(discountedSale.notes || ''),
   'la reconstrucción del descuento queda identificada en la factura');
 
+// Detalle < total (falta un renglón que el export viejo no trajo): items reales
+// intactos + una línea de conciliación transparente, sin escalar precios.
+const shortSale = db.prepare(`SELECT id,subtotal,tax_amt,total,source_balance,notes FROM sales WHERE old_id_factura=14`).get();
+const shortItems = db.prepare(`SELECT product_id,product_code,product_name,qty,unit_price,subtotal,taxable,tax_pct,tax_amt,net_subtotal FROM sale_items WHERE sale_id=? ORDER BY id`).all(shortSale.id);
+const shortReal = shortItems.filter(i => i.product_name !== 'Diferencia no detallada (sistema anterior)');
+const shortRecon = shortItems.filter(i => i.product_name === 'Diferencia no detallada (sistema anterior)');
+ok(shortReal.length === 1 && shortReal[0].subtotal === 118 && shortReal[0].product_id !== null,
+  'el item real conserva su line_total original (118) sin escalar y sigue ligado a su producto');
+ok(shortRecon.length === 1 && shortRecon[0].subtotal === 82,
+  'existe exactamente una línea "Diferencia no detallada" por el faltante (200 - 118 = 82)');
+ok(shortRecon[0].product_id === null && shortRecon[0].product_code === '',
+  'la línea de conciliación no tiene producto (product_id NULL) y no toca inventario');
+ok(shortRecon[0].taxable === 1 && shortRecon[0].tax_pct === 18 && shortRecon[0].tax_amt === 12.51,
+  'la conciliación hereda el régimen gravado dominante y su ITBIS queda extraído');
+ok(shortItems.reduce((sum, i) => sum + i.subtotal, 0) === 200 && shortSale.total === 200,
+  'la suma de líneas (real + conciliación) iguala exacto el total de cabecera');
+ok(db.prepare('SELECT COUNT(*) c FROM inventory_movements').get().c === 0,
+  'la importación histórica no genera ningún movimiento de inventario');
+ok(db.prepare('SELECT stock FROM products WHERE code=?').get('P1').stock === 10,
+  'el stock de los productos no se altera por las ventas importadas');
+const shortCustomer = db.prepare(`SELECT balance FROM customers WHERE old_id_cliente=3`).get();
+ok(shortCustomer && shortCustomer.balance === 200,
+  'la CxC del cliente sale del balance de origen y la línea de conciliación no la altera');
+ok(/DIFERENCIA NO DETALLADA CONCILIADA/.test(shortSale.notes || ''),
+  'la conciliación de la diferencia queda identificada en la factura');
+
 const items = db.prepare(`SELECT taxable,tax_pct,tax_amt,net_subtotal,subtotal FROM sale_items WHERE sale_id=? ORDER BY id`).all(sale.id);
 ok(items.length === 2 && items[0].tax_amt === 18 && items[1].tax_amt === 0, 'ITBIS se conserva por línea');
 
@@ -110,7 +138,7 @@ console.log('\n== 2. Segunda ejecución idempotente ==');
 const second = runImport();
 ok(second.status === 0, `segunda importación termina correctamente${second.status === 0 ? '' : `: ${second.stderr || second.stdout}`}`);
 const db2 = new Database(path.join(dataDir, 'velo.db'), { readonly: true });
-ok(db2.prepare(`SELECT COUNT(*) count FROM sales WHERE old_id_factura IN (10,11,12,13)`).get().count === 4, 'no duplica las facturas');
+ok(db2.prepare(`SELECT COUNT(*) count FROM sales WHERE old_id_factura IN (10,11,12,13,14)`).get().count === 5, 'no duplica las facturas');
 ok(db2.prepare(`SELECT COUNT(*) count FROM payments WHERE old_id_pago_detalle=20`).get().count === 1, 'no duplica el abono');
 ok(db2.prepare(`SELECT COUNT(*) count FROM customer_phones WHERE customer_id=? AND active=1`).get(customer.id).count === 2, 'no duplica teléfonos');
 ok(db2.prepare(`SELECT COUNT(*) count FROM payment_allocations`).get().count === 2, 'no duplica asignaciones');

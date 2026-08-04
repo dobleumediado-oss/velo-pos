@@ -10,6 +10,7 @@ const {
   calculateInvoiceFiscalBreakdown,
   syncImportedCustomerPhones,
   assertForeignKeyIntegrity,
+  round2,
 } = require('../lib/equiparts-import');
 
 let pass = 0;
@@ -55,10 +56,34 @@ ok(validation.targetCxc === 68, 'CxC se deriva una sola vez por factura');
 ok(validation.invoices.get(10).ncf === 'B0100000849', 'NCF histórico queda canónico y no duplica el tipo');
 ok(validation.invoices.get(10).items[1].taxable === 0, 'preserva líneas exentas');
 
-const broken = { ...data, ventas: data.ventas.map(row => ({ ...row, total: '999' })) };
-let totalError = false;
-try { validateEquipartsData(broken); } catch (error) { totalError = /no cuadra/.test(error.message); }
-ok(totalError, 'rechaza una factura cuyo detalle no cuadra con el total');
+// Detalle < total: NO se rechaza ni se escalan precios reales. El faltante se
+// registra como línea de conciliación transparente (detalle 168 vs total 999).
+const shortfall = { ...data, ventas: data.ventas.map(row => ({ ...row, total: '999' })) };
+const shortfallValidation = validateEquipartsData(shortfall);
+const shortfallInvoice = shortfallValidation.invoices.get(10);
+ok(shortfallInvoice.reconciliation_from_shortfall === true && shortfallInvoice.reconciliation_amt === 831,
+  'un detalle que suma menos que el total no se rechaza: marca la diferencia a conciliar');
+ok(shortfallValidation.warnings.some(w => w.code === 'INVOICE_SHORTFALL_RECONCILED'),
+  'reporta la diferencia no detallada como conciliación auditable');
+
+const shortfallBreakdown = calculateInvoiceFiscalBreakdown(shortfallInvoice);
+const reconLines = shortfallBreakdown.fiscalItems.filter(item => item.is_reconciliation);
+const realLines = shortfallBreakdown.fiscalItems.filter(item => !item.is_reconciliation);
+ok(reconLines.length === 1
+  && reconLines[0].product_name === 'Diferencia no detallada (sistema anterior)'
+  && reconLines[0].product_code === '' && reconLines[0].lineGross === 831,
+  'agrega exactamente una línea de conciliación por el faltante, sin código de producto');
+ok(realLines.length === 2
+  && realLines[0].lineGross === 118 && realLines[0].lineAfterDiscount === 118
+  && realLines[1].lineGross === 50 && realLines[1].lineAfterDiscount === 50,
+  'los items reales conservan su line_total original (no se escalan)');
+ok(shortfallBreakdown.fiscalItems.reduce((sum, item) => sum + item.lineGross, 0) === 999
+  && round2(shortfallBreakdown.netSubtotal + shortfallBreakdown.taxAmt) === 999,
+  'la suma de líneas iguala exacto el total y el ITBIS de cabecera cuadra');
+ok(reconLines[0].taxable === 1 && reconLines[0].taxPct === 18,
+  'la conciliación hereda el régimen gravado dominante (P1 gravado pesa más que P2 exento)');
+ok(shortfallBreakdown.discountAmt === 0 && shortfallBreakdown.reconciliationAmt === 831,
+  'no inventa un descuento: reporta el faltante como conciliación');
 
 const zeroHeader = { ...data, ventas: data.ventas.map(row => ({ ...row, total: '0' })) };
 const recovered = validateEquipartsData(zeroHeader);
