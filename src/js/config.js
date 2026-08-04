@@ -104,6 +104,11 @@ async function renderConfiguracion(el) {
       // Mostrar/ocultar la columna "Código" en los documentos impresos
       print_item_code:  s.print_item_code  || '1',
       logo_size:        s.logo_size        || 'mediano',
+      factura_font_size: s.factura_font_size || 'mediano',
+      invoice_branding_enabled: s.invoice_branding_enabled ?? '1',
+      invoice_branding_url:     s.invoice_branding_url  || 'https://wa.link/39cwoi',
+      invoice_branding_text:    s.invoice_branding_text || 'Sistema de facturación impulsado por VELO POS',
+      invoice_branding_cta:     s.invoice_branding_cta  || 'Solicita tu demostración',
       invoice_notes:    s.invoice_notes    || '',
     };
   }
@@ -699,6 +704,102 @@ async function renderConfiguracion(el) {
       if (typeof _renderPreview === 'function' && window._PA) _renderPreview(window._PA);
       toast('✓ Tamaño del logo actualizado');
     });
+
+    // Tamaño de letra en las facturas de hoja (A4/Carta).
+    const curFontSize = settings.factura_font_size || 'mediano';
+    const fontSizeCard = h('div', { class: 'card', style: 'margin-top:16px' });
+    fontSizeCard.innerHTML = `
+      <div class="card-title mb8">Tamaño de letra en factura</div>
+      <div style="font-size:11px;color:var(--muted2);margin-bottom:10px">Aumenta o reduce el texto de las facturas de hoja (A4/Carta). No cambia los tickets térmicos.</div>
+      <select class="inp" id="cfg-font-size">
+        <option value="pequeno" ${curFontSize==='pequeno'?'selected':''}>Pequeña</option>
+        <option value="mediano" ${curFontSize==='mediano'?'selected':''}>Mediana (por defecto)</option>
+        <option value="grande" ${curFontSize==='grande'?'selected':''}>Grande</option>
+        <option value="xgrande" ${curFontSize==='xgrande'?'selected':''}>Extra grande</option>
+      </select>`;
+    colLeft.appendChild(fontSizeCard);
+    fontSizeCard.querySelector('#cfg-font-size')?.addEventListener('change', async (e) => {
+      const value = e.target.value;
+      const res = await window.api.settings.set({ key: 'factura_font_size', value, requestUserId: user?.id });
+      if (!res?.ok) { toast(res?.error || 'No se pudo guardar', 'err'); return; }
+      settings.factura_font_size = value;
+      if (DB?.settings) DB.settings.factura_font_size = value;
+      if (typeof _renderPreview === 'function' && window._PA) _renderPreview(window._PA);
+      toast('✓ Tamaño de letra actualizado');
+    });
+  }
+
+  // ── Firma promocional VELO POS (solo superadmin) ──
+  // Bloque discreto con QR + texto al pie de las facturas oficiales. Se puede
+  // apagar por completo o editar destino/textos. La lógica de render vive en
+  // plantillas.js (renderInvoiceBranding); aquí solo se guardan los settings.
+  if (isSA) {
+    const brEnabled = String(settings.invoice_branding_enabled ?? '1') !== '0';
+    const brUrl  = settings.invoice_branding_url  || 'https://wa.link/39cwoi';
+    const brText = settings.invoice_branding_text || 'Sistema de facturación impulsado por VELO POS';
+    const brCta  = settings.invoice_branding_cta  || 'Solicita tu demostración';
+    const brandCard = h('div', { class: 'card', style: 'margin-top:16px' });
+    brandCard.innerHTML = `
+      <div class="fxb mb8">
+        <div class="card-title">Firma promocional VELO POS</div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--muted2)">
+          <input type="checkbox" id="cfg-brand-enabled" ${brEnabled ? 'checked' : ''}/>
+          <span>${brEnabled ? 'Activada' : 'Desactivada'}</span>
+        </label>
+      </div>
+      <div style="font-size:11px;color:var(--muted2);margin-bottom:12px">
+        Aparece pequeña al final de las facturas oficiales (contado, crédito, abono y devolución; con o sin NCF), en A4 y en tickets térmicos. No sale en cotizaciones, conduces ni reportes.
+      </div>
+      <div id="cfg-brand-fields" style="display:${brEnabled ? 'block' : 'none'}">
+        <div class="fg">
+          <label class="lbl">Enlace del QR (WhatsApp o web)</label>
+          <input class="inp" id="cfg-brand-url" value="${_esc(brUrl)}" placeholder="https://wa.link/..."/>
+          <div style="font-size:10.5px;color:var(--muted2);margin-top:3px">Solo enlaces https:// o whatsapp://. El QR se genera localmente (sin internet).</div>
+        </div>
+        <div class="fg" style="margin-top:10px">
+          <label class="lbl">Texto principal</label>
+          <input class="inp" id="cfg-brand-text" value="${_esc(brText)}"/>
+        </div>
+        <div class="fg" style="margin-top:10px">
+          <label class="lbl">Llamado a la acción</label>
+          <input class="inp" id="cfg-brand-cta" value="${_esc(brCta)}"/>
+        </div>
+      </div>`;
+    colLeft.appendChild(brandCard);
+
+    const _saveBrand = async (key, value, okMsg) => {
+      const res = await window.api.settings.set({ key, value, requestUserId: user?.id });
+      if (!res?.ok) { toast(res?.error || 'No se pudo guardar', 'err'); return false; }
+      settings[key] = value;
+      if (DB?.settings) DB.settings[key] = value;
+      if (typeof _renderPreview === 'function' && window._PA) _renderPreview(window._PA);
+      if (okMsg) toast(okMsg);
+      return true;
+    };
+
+    brandCard.querySelector('#cfg-brand-enabled')?.addEventListener('change', async (e) => {
+      const on = e.target.checked;
+      const fields = brandCard.querySelector('#cfg-brand-fields');
+      if (fields) fields.style.display = on ? 'block' : 'none';
+      const lbl = e.target.parentElement?.querySelector('span');
+      if (lbl) lbl.textContent = on ? 'Activada' : 'Desactivada';
+      await _saveBrand('invoice_branding_enabled', on ? '1' : '0', on ? '✓ Firma activada' : '✓ Firma desactivada');
+    });
+
+    const urlInput = brandCard.querySelector('#cfg-brand-url');
+    urlInput?.addEventListener('change', async (e) => {
+      const value = String(e.target.value || '').trim();
+      if (value && !/^(https?:|whatsapp:)\/\//i.test(value)) {
+        toast('El enlace debe empezar con https:// o whatsapp://', 'err');
+        e.target.value = settings.invoice_branding_url || 'https://wa.link/39cwoi';
+        return;
+      }
+      await _saveBrand('invoice_branding_url', value || 'https://wa.link/39cwoi', '✓ Enlace del QR actualizado');
+    });
+    brandCard.querySelector('#cfg-brand-text')?.addEventListener('change', (e) =>
+      _saveBrand('invoice_branding_text', String(e.target.value || '').trim() || 'Sistema de facturación impulsado por VELO POS', '✓ Texto actualizado'));
+    brandCard.querySelector('#cfg-brand-cta')?.addEventListener('change', (e) =>
+      _saveBrand('invoice_branding_cta', String(e.target.value || '').trim() || 'Solicita tu demostración', '✓ Llamado a la acción actualizado'));
   }
 
   // ── Modo de conexión / multi-terminal (solo superadmin) ──

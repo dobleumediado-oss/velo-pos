@@ -482,6 +482,12 @@ function printReceipt(sale, isReprint = false) {
       biz_logo:    DB?.settings?.biz_logo    || CFG?.biz_logo || '',
       biz_logo_2:  DB?.settings?.biz_logo_2  || CFG?.biz_logo_2 || '',
       logo_size:   DB?.settings?.logo_size   || 'mediano',
+      factura_font_size: DB?.settings?.factura_font_size || 'mediano',
+      // Firma promocional VELO POS (QR + texto). enabled por defecto salvo '0'.
+      invoice_branding_enabled: DB?.settings?.invoice_branding_enabled ?? '1',
+      invoice_branding_url:     DB?.settings?.invoice_branding_url  || 'https://wa.link/39cwoi',
+      invoice_branding_text:    DB?.settings?.invoice_branding_text || 'Sistema de facturación impulsado por VELO POS',
+      invoice_branding_cta:     DB?.settings?.invoice_branding_cta  || 'Solicita tu demostración',
       receipt_msg: DB?.settings?.receipt_msg || '¡Gracias por su compra!',
       invoice_notes: DB?.settings?.invoice_notes || '',
       // Datos bancarios del negocio (fallback si no hay cuentas registradas)
@@ -771,7 +777,9 @@ function printReceipt(sale, isReprint = false) {
   lines.push('');
   lines.push('');
 
-  return _sendToPrinter(lines, 'ticket', sale.id, isReprint);
+  // Se pasa `sale` para que el fallback clásico (sin plantilla) también lleve la
+  // firma promocional, gateada por el MISMO criterio que el path de plantillas.
+  return _sendToPrinter(lines, 'ticket', sale.id, isReprint, sale);
 }
 
 // ══════════════════════════════════════════════
@@ -1151,7 +1159,7 @@ function printCierreCaja(data) {
 // ══════════════════════════════════════════════
 // MOTOR INTERNO — ENVIAR A IMPRESORA
 // ══════════════════════════════════════════════
-function _sendToPrinter(lines, jobType = '', referenceId = null, isReprint = false) {
+function _sendToPrinter(lines, jobType = '', referenceId = null, isReprint = false, brandingSale = null) {
   const categoryPrinter = _getCategoryConfig(_categoryForJobType(jobType)).printer || _getSavedPrinter();
   // Si la impresora es de cartuchos/carta y no se llegó acá desde una plantilla,
   // usar plantilla carta_recibo automáticamente (el contenido de líneas no se adapta bien a carta)
@@ -1185,6 +1193,27 @@ function _sendToPrinter(lines, jobType = '', referenceId = null, isReprint = fal
   const isThermal = profile.kind !== 'sheet';
   const paperWidth = profile.widthMm || 80;
   const printableWidth = Math.min(paperWidth, profile.printableWidthMm || paperWidth - 4);
+
+  // Firma promocional VELO POS también en el ticket clásico (sin plantilla).
+  // Mismo gate que el path de plantillas (renderInvoiceBranding → _esFacturaOficial):
+  // solo facturas/devoluciones/abonos, nunca cotización/conduce/reporte. Si la
+  // librería o el QR fallan, devuelve '' y el ticket se imprime igual.
+  let brandingHtml = '';
+  if (brandingSale && typeof renderInvoiceBranding === 'function') {
+    try {
+      brandingHtml = renderInvoiceBranding(
+        {
+          invoice_branding_enabled: DB?.settings?.invoice_branding_enabled ?? '1',
+          invoice_branding_url:     DB?.settings?.invoice_branding_url  || 'https://wa.link/39cwoi',
+          invoice_branding_text:    DB?.settings?.invoice_branding_text || 'Sistema de facturación impulsado por VELO POS',
+          invoice_branding_cta:     DB?.settings?.invoice_branding_cta  || 'Solicita tu demostración',
+        },
+        brandingSale,
+        isThermal ? 'termica' : 'a4',
+        printableWidth
+      ) || '';
+    } catch (_e) { brandingHtml = ''; }
+  }
   const sideMargin = Math.max(0, (paperWidth - printableWidth) / 2);
   const pageCSS = isThermal
     ? `@page { size: ${paperWidth}mm auto; margin: 2mm ${sideMargin}mm 4mm ${sideMargin}mm; }`
@@ -1216,7 +1245,7 @@ function _sendToPrinter(lines, jobType = '', referenceId = null, isReprint = fal
   }
 </style>
 </head>
-<body>${logoHtml}${content}
+<body>${logoHtml}${content}${brandingHtml}
 </body></html>`;
 
   _openPrintWindow(html, jobType, referenceId, isReprint);
@@ -1988,6 +2017,12 @@ function testPrint() {
       biz_logo:    DB?.settings?.biz_logo    || '',
       biz_logo_2:  DB?.settings?.biz_logo_2  || '',
       logo_size:   DB?.settings?.logo_size   || 'mediano',
+      factura_font_size: DB?.settings?.factura_font_size || 'mediano',
+      // Firma promocional VELO POS (QR + texto). enabled por defecto salvo '0'.
+      invoice_branding_enabled: DB?.settings?.invoice_branding_enabled ?? '1',
+      invoice_branding_url:     DB?.settings?.invoice_branding_url  || 'https://wa.link/39cwoi',
+      invoice_branding_text:    DB?.settings?.invoice_branding_text || 'Sistema de facturación impulsado por VELO POS',
+      invoice_branding_cta:     DB?.settings?.invoice_branding_cta  || 'Solicita tu demostración',
       receipt_msg: DB?.settings?.receipt_msg || '¡Gracias por su compra!',
       invoice_notes: DB?.settings?.invoice_notes || '',
       biz_bank_name:    DB?.settings?.biz_bank_name    || 'BANCO DEMO, S.A.',

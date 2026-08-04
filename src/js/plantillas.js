@@ -59,7 +59,7 @@ const PLANTILLAS = [
       logo: false, rnc: true, ncf: true, mensaje: true,
       cedula: false, codigoBarra: false,
     },
-    render: (sale, cfg, opts) => renderTermica(sale, cfg, opts, 52),
+    render: (sale, cfg, opts) => _injectBranding(renderTermica(sale, cfg, opts, 52), cfg, sale, 'termica', 52),
   },
 
   // ═══════════════ 80mm ═══════════════
@@ -73,7 +73,7 @@ const PLANTILLAS = [
       logo: true, rnc: true, ncf: true, mensaje: true,
       cedula: true, codigoBarra: false,
     },
-    render: (sale, cfg, opts) => renderTermica(sale, cfg, opts, 76),
+    render: (sale, cfg, opts) => _injectBranding(renderTermica(sale, cfg, opts, 76), cfg, sale, 'termica', 76),
   },
   {
     id:        'termica_80_moderna',
@@ -85,7 +85,7 @@ const PLANTILLAS = [
       logo: true, rnc: true, ncf: true, mensaje: true,
       cedula: true, codigoBarra: false,
     },
-    render: (sale, cfg, opts) => renderTermicaModerna(sale, cfg, opts, 76),
+    render: (sale, cfg, opts) => _injectBranding(renderTermicaModerna(sale, cfg, opts, 76), cfg, sale, 'termica', 76),
   },
   {
     id:        'termica_80_minimal',
@@ -97,7 +97,7 @@ const PLANTILLAS = [
       logo: false, rnc: false, ncf: true, mensaje: false,
       cedula: false, codigoBarra: false,
     },
-    render: (sale, cfg, opts) => renderTermicaMinimal(sale, cfg, opts, 76),
+    render: (sale, cfg, opts) => _injectBranding(renderTermicaMinimal(sale, cfg, opts, 76), cfg, sale, 'termica', 76),
   },
 
   // ═══════════════ 72mm ═══════════════
@@ -114,7 +114,7 @@ const PLANTILLAS = [
       logo: true, rnc: true, ncf: true, mensaje: true,
       cedula: true, codigoBarra: false,
     },
-    render: (sale, cfg, opts) => renderTermica(sale, cfg, opts, 68),
+    render: (sale, cfg, opts) => _injectBranding(renderTermica(sale, cfg, opts, 68), cfg, sale, 'termica', 68),
   },
 
   // ═══════════════ Carta/A4 ═══════════════
@@ -128,7 +128,7 @@ const PLANTILLAS = [
       logo: true, rnc: true, ncf: true, mensaje: true,
       cedula: true, codigoBarra: false,
     },
-    render: (sale, cfg, opts) => renderCartaRecibo(sale, cfg, opts),
+    render: (sale, cfg, opts) => _scaleFonts(_injectBranding(renderCartaRecibo(sale, cfg, opts), cfg, sale, 'a4'), _fontScale(cfg)),
   },
   {
     id:        'carta_formal',
@@ -140,7 +140,7 @@ const PLANTILLAS = [
       logo: true, rnc: true, ncf: true, mensaje: true,
       cedula: true, codigoBarra: false,
     },
-    render: (sale, cfg, opts) => renderCartaFormal(sale, cfg, opts),
+    render: (sale, cfg, opts) => _scaleFonts(_injectBranding(renderCartaFormal(sale, cfg, opts), cfg, sale, 'a4'), _fontScale(cfg)),
   },
   {
     id:        'carta_ncf',
@@ -152,7 +152,7 @@ const PLANTILLAS = [
       logo: true, rnc: true, ncf: true, mensaje: true,
       cedula: true, codigoBarra: false,
     },
-    render: (sale, cfg, opts) => renderCartaNCF(sale, cfg, opts),
+    render: (sale, cfg, opts) => _scaleFonts(_injectBranding(renderCartaNCF(sale, cfg, opts), cfg, sale, 'a4'), _fontScale(cfg)),
   },
   {
     id:        'media_carta',
@@ -164,7 +164,7 @@ const PLANTILLAS = [
       logo: true, rnc: true, ncf: true, mensaje: true,
       cedula: false, codigoBarra: false,
     },
-    render: (sale, cfg, opts) => renderMediaCarta(sale, cfg, opts),
+    render: (sale, cfg, opts) => _scaleFonts(_injectBranding(renderMediaCarta(sale, cfg, opts), cfg, sale, 'a4compact'), _fontScale(cfg)),
   },
 ];
 
@@ -435,6 +435,165 @@ function _logoScale(cfg) {
   if (s === 'pequeno' || s === 'pequeño' || s === 'small') return 0.6;
   if (s === 'grande' || s === 'large') return 1.4;
   return 1;
+}
+
+// Factor global del tamaño de letra en las facturas de hoja (config: factura_font_size).
+// pequeno 0.9 · mediano 1 (por defecto) · grande 1.1 · xgrande 1.2.
+// Los pasos son moderados a propósito: solo se escala la letra (no los anchos de
+// columna ni los márgenes), así que un rango amplio podría desbordar las celdas
+// numéricas de ancho fijo. No aplica a los tickets térmicos.
+function _fontScale(cfg) {
+  const s = String(cfg?.factura_font_size || 'mediano').toLowerCase();
+  if (s === 'pequeno' || s === 'pequeño' || s === 'small') return 0.9;
+  if (s === 'grande'  || s === 'large')                    return 1.1;
+  if (s === 'xgrande' || s === 'extra' || s === 'xlarge')  return 1.2;
+  return 1;
+}
+
+// Multiplica proporcionalmente cada `font-size:Npx` del HTML por `factor`.
+// Único punto que ajusta el tamaño de letra de las plantillas de hoja; se
+// invoca desde el `render` de cada plantilla carta en PLANTILLAS, por lo que
+// cubre impresión real, vista previa y diagnóstico sin tocar cada plantilla.
+function _scaleFonts(html, factor) {
+  const f = Number(factor) || 1;
+  if (f === 1) return html;
+  return String(html).replace(/font-size:\s*([\d.]+)px/gi,
+    (_m, n) => `font-size:${(parseFloat(n) * f).toFixed(2)}px`);
+}
+
+// ══════════════════════════════════════════════
+// FIRMA PROMOCIONAL VELO POS (bloque reutilizable)
+// ──────────────────────────────────────────────
+// Bloque discreto con QR + texto que se inyecta al FINAL de las facturas
+// oficiales (contado/crédito/abono/devolución, con o sin NCF) en TODAS las rutas
+// de impresión/exportación, porque todas construyen su HTML desde el `render` de
+// PLANTILLAS y ahí se intercepta una sola vez (ver _injectBranding).
+//
+// Reglas duras:
+//  · Nunca aparece en cotización, conduce ni reporte.
+//  · Se puede activar/desactivar globalmente (config: invoice_branding_enabled).
+//  · Si el QR no puede generarse, la factura se imprime igual (solo texto+URL).
+//  · No lleva datos privados del cliente/NCF/RNC: solo la URL de demo configurada.
+//  · Usa `pt` en la variante A4 para que el ajuste de "tamaño de letra"
+//    (_scaleFonts, que solo toca px) NO altere su tamaño discreto.
+
+// Solo se permiten esquemas seguros; cualquier otra cosa desactiva el QR (nunca
+// se inyecta un enlace javascript:, data:, etc. en el documento impreso).
+function _veloSafeUrl(raw) {
+  const u = String(raw == null ? '' : raw).trim();
+  if (!u) return '';
+  return /^(https?:|whatsapp:)\/\//i.test(u) ? u : '';
+}
+
+// Configuración efectiva de la firma (con defaults). `enabled` solo se apaga con
+// el valor explícito '0'/'false'; ausente = encendido (por decisión del negocio).
+function _brandingSettings(cfg) {
+  const rawEnabled = cfg?.invoice_branding_enabled;
+  const enabled = !(String(rawEnabled == null ? '1' : rawEnabled).toLowerCase() === '0' ||
+                    String(rawEnabled).toLowerCase() === 'false');
+  return {
+    enabled,
+    url:  _veloSafeUrl(cfg?.invoice_branding_url || 'https://wa.link/39cwoi'),
+    text: String(cfg?.invoice_branding_text || 'Sistema de facturación impulsado por VELO POS'),
+    cta:  String(cfg?.invoice_branding_cta  || 'Solicita tu demostración'),
+  };
+}
+
+// ¿El documento es una factura oficial que debe llevar la firma?
+function _esFacturaOficial(sale) {
+  const t = String(sale?.type || 'factura').toLowerCase();
+  return t === 'factura' || t === 'devolucion' || t === 'abono';
+}
+
+// Genera el QR como SVG (local, sin red) y lo cachea por URL. El SVG es
+// autocontenido: se embebe en el HTML y funciona igual en vista previa,
+// impresión directa y PDF sin depender de scripts en la ventana de impresión.
+const _veloQrCache = {};
+function _veloQrSvg(url) {
+  if (!url) return '';
+  if (_veloQrCache[url] !== undefined) return _veloQrCache[url];
+  let out = '';
+  try {
+    if (typeof qrcode === 'function') {
+      const qr = qrcode(0, 'M'); // versión automática, corrección de errores M
+      qr.addData(url);
+      qr.make();
+      out = qr.createSvgTag({
+        cellSize: 2, margin: 2, scalable: true,
+        alt:   'Código QR para solicitar una demostración de VELO POS',
+        title: 'Solicita tu demostración de VELO POS',
+      }).replace('<svg ', '<svg style="display:block;width:100%;height:auto" ');
+      _veloQrCache[url] = out; // solo cachea resultados válidos
+    }
+  } catch (_e) { out = ''; }
+  return out;
+}
+
+// Devuelve el HTML del bloque promocional, o '' si está desactivado, si el
+// documento no es factura oficial, o si no hay URL válida.
+//  variant: 'a4' (hoja) | 'termica'   ·   widthMm: ancho útil térmico.
+function renderInvoiceBranding(cfg, sale, variant, widthMm) {
+  const s = _brandingSettings(cfg);
+  if (!s.enabled) return '';
+  if (!_esFacturaOficial(sale)) return '';
+  if (!s.url) return '';
+
+  const qr       = _veloQrSvg(s.url);
+  const shortUrl = _esc(s.url.replace(/^https?:\/\//i, '').replace(/^whatsapp:\/\//i, '').replace(/\/$/, ''));
+  const ctaHtml  = _esc(s.cta);
+
+  if (variant === 'termica') {
+    // Variante compacta y vertical, centrada, en negro puro (monocromo).
+    const qrMm = Math.round(Math.min(36, Math.max(26, (Number(widthMm) || 58) * 0.55)));
+    return `<div style="margin-top:6px;padding-top:5px;border-top:1px dashed #000;text-align:center;line-height:1.25">
+      <div style="font-size:10px;font-weight:700">Factura generada con VELO POS</div>
+      <div style="font-size:9px;margin:1px 0 ${qr ? '5px' : '2px'}">Escanea y ${ctaHtml.charAt(0).toLowerCase()}${ctaHtml.slice(1)}</div>
+      ${qr ? `<div style="width:${qrMm}mm;height:${qrMm}mm;margin:0 auto">${qr}</div>` : ''}
+      <div style="font-size:8.5px;margin-top:3px">${shortUrl}</div>
+    </div>`;
+  }
+
+  // Variante A4/Carta: QR pequeño a la izquierda, texto a la derecha. Discreto,
+  // sin fondo/borde/sombra, ancho acotado, seguro entre márgenes y sin partirse
+  // entre páginas. Tipografía en pt (peso mayor en VELO POS y en el CTA).
+  // 'a4compact' reduce la huella para hojas pequeñas (Media Carta), de modo que
+  // la firma no empuje el documento a una segunda página casi vacía.
+  const compact = variant === 'a4compact';
+  const qrPx   = compact ? 36 : 46;
+  const mtop   = compact ? 8  : 12;
+  const gap    = compact ? 8  : 9;
+  const mainPt = compact ? '7pt'   : '7.5pt';
+  const ctaPt  = compact ? '8pt'   : '8.5pt';
+  const urlPt  = compact ? '6.5pt' : '7pt';
+  const textHtml = _esc(s.text).replace('VELO POS', '<strong>VELO POS</strong>');
+  return `<div style="margin-top:${mtop}px;display:flex;align-items:center;gap:${gap}px;max-width:330px;color:#4b5263;break-inside:avoid;page-break-inside:avoid;-webkit-print-color-adjust:exact;print-color-adjust:exact">
+    ${qr ? `<div style="width:${qrPx}px;height:${qrPx}px;flex:0 0 auto">${qr}</div>` : ''}
+    <div style="line-height:1.3">
+      <div style="font-size:${mainPt};font-weight:600">${textHtml}</div>
+      <div style="font-size:${ctaPt};font-weight:800;margin-top:1px">${ctaHtml}</div>
+      <div style="font-size:${urlPt};margin-top:2px;color:#72798a">${shortUrl}</div>
+    </div>
+  </div>`;
+}
+
+// Inserta el bloque promocional al final REAL del documento, una sola vez.
+// Si existe el <script> de paginación (plantilla A4 moderna) lo coloca ANTES,
+// para que el cálculo de páginas (scrollHeight) incluya la firma; en el resto,
+// justo antes de </body>. Nunca duplica ni reordena el contenido existente.
+function _injectBranding(html, cfg, sale, variant, widthMm) {
+  // Blindaje total: la firma es opcional y NUNCA debe impedir imprimir. Cualquier
+  // fallo inesperado devuelve el documento original intacto (la factura sale igual).
+  try {
+    const block = renderInvoiceBranding(cfg, sale, variant, widthMm);
+    if (!block) return html;
+    const bodyEnd = html.lastIndexOf('</body>');
+    if (bodyEnd === -1) return html + block;
+    const scriptAt = html.lastIndexOf('<script', bodyEnd);
+    const pos = scriptAt !== -1 ? scriptAt : bodyEnd;
+    return html.slice(0, pos) + block + html.slice(pos);
+  } catch (_e) {
+    return html;
+  }
 }
 
 // ¿El método de pago implica datos bancarios?

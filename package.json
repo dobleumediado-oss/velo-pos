@@ -1,6 +1,6 @@
 {
   "name": "velo-pos",
-  "version": "1.36.4",
+  "version": "1.37.0",
   "description": "Sistema POS desktop profesional para comercios, repuestos, sucursales y operaciones empresariales",
   "main": "main.js",
   "scripts": {
@@ -54,7 +54,8 @@
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^12.11.1",
-    "electron-updater": "^6.8.3"
+    "electron-updater": "^6.8.3",
+    "qrcode-generator": "^1.5.2"
   },
   "devDependencies": {
     "electron": "^41.7.1",

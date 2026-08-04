@@ -438,6 +438,11 @@ function pcDiagnosticBusiness(settings) {
     receipt_msg: settings.receipt_msg || 'Gracias por su compra',
     print_item_code: settings.print_item_code || '1',
     logo_size: settings.logo_size || 'mediano',
+    factura_font_size: settings.factura_font_size || 'mediano',
+    invoice_branding_enabled: settings.invoice_branding_enabled ?? '1',
+    invoice_branding_url:     settings.invoice_branding_url  || 'https://wa.link/39cwoi',
+    invoice_branding_text:    settings.invoice_branding_text || 'Sistema de facturación impulsado por VELO POS',
+    invoice_branding_cta:     settings.invoice_branding_cta  || 'Solicita tu demostración',
     invoice_notes: settings.invoice_notes || '',
     bank_accounts: [],
   };
