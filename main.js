@@ -60,6 +60,8 @@ const {
   calculateInvoiceFiscalBreakdown,
   syncImportedCustomerPhones,
   assertForeignKeyIntegrity,
+  dropCorrectionImmutabilityTriggers,
+  restoreCorrectionImmutabilityTriggers,
 } = require('./lib/equiparts-import');
 const { checkLoginRate: _checkLoginRate, recordLoginFail: _recordLoginFail, clearLoginRate: _clearLoginRate } = require('./lib/login-rate-limit');
 const businessCtx = require('./src/main/business-context');
@@ -4623,10 +4625,15 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, files, requestUser
         'customer_phones', 'customer_contacts', 'customer_branches', 'customers', 'products',
         'cash_sessions',
       ];
+      // Los triggers de inmutabilidad fiscal bloquean el DELETE de las tablas de
+      // correcciones; se retiran para el reset y se recrean apenas queden vacías,
+      // todo dentro de esta misma transacción atómica.
+      dropCorrectionImmutabilityTriggers(db);
       for (const t of wipe) {
         const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t);
         if (exists) db.prepare(`DELETE FROM ${t}`).run();
       }
+      restoreCorrectionImmutabilityTriggers(db);
       // Reset de autoincrement para IDs limpios
       try { db.prepare(`DELETE FROM sqlite_sequence WHERE name IN ('sales','sale_charges','sale_items','payments','payment_allocations','customer_phones','customer_contacts','customer_branches','customers','products','product_price_history')`).run(); } catch (_) {}
       try {

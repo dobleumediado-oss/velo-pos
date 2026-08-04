@@ -11,6 +11,8 @@ const {
   syncImportedCustomerPhones,
   assertForeignKeyIntegrity,
   round2,
+  dropCorrectionImmutabilityTriggers,
+  restoreCorrectionImmutabilityTriggers,
 } = require('../lib/equiparts-import');
 
 let pass = 0;
@@ -169,6 +171,40 @@ let fkError = false;
 try { assertForeignKeyIntegrity(db); } catch (error) { fkError = /huérfanas/.test(error.message); }
 ok(fkError, 'bloquea la confirmación si el reset deja referencias huérfanas');
 db.close();
+
+console.log('\n== 4. Reset total sobre una base con correcciones inmutables ==');
+const cdb = new Database(':memory:');
+cdb.exec(`
+  CREATE TABLE sales(id INTEGER PRIMARY KEY);
+  CREATE TABLE sale_corrections(id INTEGER PRIMARY KEY, sale_id INTEGER);
+  CREATE TABLE sale_date_history(id INTEGER PRIMARY KEY, sale_id INTEGER);
+  CREATE TABLE sale_correction_documents(id INTEGER PRIMARY KEY, correction_id INTEGER);
+`);
+// Instala los triggers reales de inmutabilidad (misma función que usa el import).
+restoreCorrectionImmutabilityTriggers(cdb);
+cdb.prepare('INSERT INTO sale_correction_documents(id,correction_id) VALUES(1,1)').run();
+cdb.prepare('INSERT INTO sale_corrections(id,sale_id) VALUES(1,1)').run();
+cdb.prepare('INSERT INTO sale_date_history(id,sale_id) VALUES(1,1)').run();
+
+let blocked = false;
+try { cdb.prepare('DELETE FROM sale_correction_documents').run(); } catch (error) { blocked = /inmutables/.test(error.message); }
+ok(blocked, 'con datos de corrección, el trigger bloquea el DELETE (reproduce el fallo del import)');
+
+// El reset del ALL IN ONE retira los triggers, vacía y los recrea (atómico).
+dropCorrectionImmutabilityTriggers(cdb);
+cdb.prepare('DELETE FROM sale_correction_documents').run();
+cdb.prepare('DELETE FROM sale_date_history').run();
+cdb.prepare('DELETE FROM sale_corrections').run();
+restoreCorrectionImmutabilityTriggers(cdb);
+ok(cdb.prepare('SELECT COUNT(*) c FROM sale_correction_documents').get().c === 0
+  && cdb.prepare('SELECT COUNT(*) c FROM sale_corrections').get().c === 0,
+  'el reset total puede vaciar las tablas de correcciones tras retirar los triggers');
+
+let reBlocked = false;
+cdb.prepare('INSERT INTO sale_correction_documents(id,correction_id) VALUES(2,2)').run();
+try { cdb.prepare('DELETE FROM sale_correction_documents').run(); } catch (error) { reBlocked = /inmutables/.test(error.message); }
+ok(reBlocked, 'tras el reset, la inmutabilidad queda restaurada (nuevas correcciones vuelven a estar protegidas)');
+cdb.close();
 
 console.log(`\n== RESULTADO: ${pass} OK, ${fail} fallos ==`);
 process.exit(fail ? 1 : 0);
