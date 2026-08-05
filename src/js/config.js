@@ -106,6 +106,8 @@ async function renderConfiguracion(el) {
       logo_size:        s.logo_size        || 'mediano',
       factura_font_size: s.factura_font_size || 'mediano',
       factura_font_weight: s.factura_font_weight || 'normal',
+      factura_autoajuste: s.factura_autoajuste ?? '1',
+      factura_autoajuste_min: s.factura_autoajuste_min || '',
       invoice_branding_enabled: s.invoice_branding_enabled ?? '1',
       invoice_branding_url:     s.invoice_branding_url  || 'https://wa.link/39cwoi',
       invoice_branding_text:    s.invoice_branding_text || 'Sistema de facturación impulsado por VELO POS',

@@ -484,6 +484,8 @@ function printReceipt(sale, isReprint = false) {
       logo_size:   DB?.settings?.logo_size   || 'mediano',
       factura_font_size: DB?.settings?.factura_font_size || 'mediano',
       factura_font_weight: DB?.settings?.factura_font_weight || 'normal',
+      factura_autoajuste: DB?.settings?.factura_autoajuste ?? '1',
+      factura_autoajuste_min: DB?.settings?.factura_autoajuste_min || '',
       // Firma promocional VELO POS (QR + texto). enabled por defecto salvo '0'.
       invoice_branding_enabled: DB?.settings?.invoice_branding_enabled ?? '1',
       invoice_branding_url:     DB?.settings?.invoice_branding_url  || 'https://wa.link/39cwoi',
@@ -2026,6 +2028,8 @@ function testPrint() {
       logo_size:   DB?.settings?.logo_size   || 'mediano',
       factura_font_size: DB?.settings?.factura_font_size || 'mediano',
       factura_font_weight: DB?.settings?.factura_font_weight || 'normal',
+      factura_autoajuste: DB?.settings?.factura_autoajuste ?? '1',
+      factura_autoajuste_min: DB?.settings?.factura_autoajuste_min || '',
       // Firma promocional VELO POS (QR + texto). enabled por defecto salvo '0'.
       invoice_branding_enabled: DB?.settings?.invoice_branding_enabled ?? '1',
       invoice_branding_url:     DB?.settings?.invoice_branding_url  || 'https://wa.link/39cwoi',

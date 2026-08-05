@@ -442,6 +442,8 @@ function pcDiagnosticBusiness(settings) {
     logo_size: settings.logo_size || 'mediano',
     factura_font_size: settings.factura_font_size || 'mediano',
     factura_font_weight: settings.factura_font_weight || 'normal',
+    factura_autoajuste: settings.factura_autoajuste ?? '1',
+    factura_autoajuste_min: settings.factura_autoajuste_min || '',
     invoice_branding_enabled: settings.invoice_branding_enabled ?? '1',
     invoice_branding_url:     settings.invoice_branding_url  || 'https://wa.link/39cwoi',
     invoice_branding_text:    settings.invoice_branding_text || 'Sistema de facturación impulsado por VELO POS',
@@ -546,6 +548,31 @@ function renderInvoiceAppearanceCards(container, { settings, onSaved } = {}) {
       if (DB?.settings) DB.settings.factura_font_weight = value;
       refresh();
       toast('✓ Grosor de letra actualizado');
+    });
+
+    // Auto-ajuste a la hoja: evita la segunda hoja casi vacía cuando hay pocos
+    // artículos, encogiendo el contenido lo justo para que quepa. Solo A4/Carta.
+    const autofitOn = String(s.factura_autoajuste ?? '1') !== '0';
+    const autofitCard = h('div', { class: 'card', style: 'margin-top:16px' });
+    autofitCard.innerHTML = `
+      <div class="fxb mb8">
+        <div class="card-title">Ajustar factura a la hoja</div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--muted2)">
+          <input type="checkbox" id="cfg-autofit" ${autofitOn ? 'checked' : ''}/>
+          <span id="cfg-autofit-lbl">${autofitOn ? 'Activado' : 'Desactivado'}</span>
+        </label>
+      </div>
+      <div style="font-size:11px;color:var(--muted2)">Cuando una factura de hoja (A4/Carta) se pasa por poco, Velo la compacta lo justo para que no lance una segunda hoja casi vacía. Con muchos artículos deja fluir el documento normal. No afecta tickets térmicos.</div>`;
+    container.appendChild(autofitCard);
+    autofitCard.querySelector('#cfg-autofit')?.addEventListener('change', async (e) => {
+      const value = e.target.checked ? '1' : '0';
+      const res = await window.api.settings.set({ key: 'factura_autoajuste', value, requestUserId: user?.id });
+      if (!res?.ok) { toast(res?.error || 'No se pudo guardar', 'err'); return; }
+      s.factura_autoajuste = value;
+      if (DB?.settings) DB.settings.factura_autoajuste = value;
+      const lbl = autofitCard.querySelector('#cfg-autofit-lbl');
+      if (lbl) lbl.textContent = e.target.checked ? 'Activado' : 'Desactivado';
+      toast('✓ Ajuste a la hoja actualizado');
     });
   }
 

@@ -24,6 +24,13 @@ const PRINTER_PROFILES = Object.freeze({
     widthMm: 108, printableWidthMm: 108, dpi: 203,
     model: '2Connect 2C-LP427B', languages: ['Driver', 'ZPL', 'TSPL', 'EPS/EPL', 'DPL'],
   },
+  // 2Connect 2C-LP281B: cabezal de 54 mm máx., rollo variable 25–60 mm (por eso
+  // variableWidth: el ancho del medio lo define el cliente, no se fija en 54).
+  label_2connect_281: {
+    id: 'label_2connect_281', label: '2Connect 2C-LP281B · 54 mm máx.', kind: 'labels',
+    widthMm: 50, printableWidthMm: 50, dpi: 203, variableWidth: true,
+    model: '2Connect 2C-LP281B', languages: ['Driver', 'ZPL', 'TSPL', 'EPL', 'DPL'],
+  },
   label_generic: {
     id: 'label_generic', label: 'Etiquetas · ancho configurable', kind: 'labels',
     widthMm: 100, printableWidthMm: 100, dpi: 203,
@@ -55,11 +62,14 @@ function _printerSettings(explicit) {
 
 function _isKnownLabelPrinterName(value) {
   const n = String(value || '').toLowerCase();
-  return /2\s*connect|2c[-_ ]?lp427|lp[-_ ]?427|zebra|\bzpl\b|honeyw|\btsc\b|sato|dymo|brother\s*ql|\bql[-_ ]?(?:5|6|7|8|9|10)\d{2}[a-z]*\b|godex|argox|labelwriter|label|etiquet/.test(n);
+  return /2\s*connect|2c[-_ ]?lp(?:427|281)|lp[-_ ]?(?:427|281)|zebra|\bzpl\b|honeyw|\btsc\b|sato|dymo|brother\s*ql|\bql[-_ ]?(?:5|6|7|8|9|10)\d{2}[a-z]*\b|godex|argox|labelwriter|label|etiquet/.test(n);
 }
 
 function inferPrinterProfileId(printerName, scope = 'ticket') {
   const n = String(printerName || '').toLowerCase();
+  // El modelo específico se evalúa ANTES del match genérico "2connect": una
+  // LP281B contiene "2connect" y si no, caería en el perfil de 108 mm (LP427B).
+  if (/2c[-_ ]?lp281|lp[-_ ]?281/.test(n)) return 'label_2connect_281';
   if (/2\s*connect|2c[-_ ]?lp427|lp[-_ ]?427/.test(n)) return 'label_2connect_108';
   // Las familias dedicadas a etiquetas deben evaluarse antes de las marcas
   // genéricas de oficina. Brother fabrica impresoras de hojas, pero la línea
@@ -108,7 +118,7 @@ function detectLabelPrinter(printerInfo, explicitSettings) {
     barcode_printer_profile: id,
   });
   const normalized = identity.toLowerCase();
-  const exactModel = id === 'label_2connect_108';
+  const exactModel = id === 'label_2connect_108' || id === 'label_2connect_281';
   const knownLabelFamily = _isKnownLabelPrinterName(normalized);
 
   return {
@@ -226,7 +236,7 @@ function resolvePrinterProfile(printerName, scope = 'ticket', explicitSettings) 
   const base = PRINTER_PROFILES[id] || PRINTER_PROFILES.ticket_80;
   const widthKey = scope === 'barcode' ? 'barcode_media_width_mm' : 'printer_width_mm';
   const dpiKey = scope === 'barcode' ? 'barcode_printer_dpi' : 'printer_dpi';
-  const allowCustomWidth = id === 'label_generic' || id === 'continuous_custom';
+  const allowCustomWidth = base.variableWidth === true || id === 'label_generic' || id === 'continuous_custom';
   const widthMm = allowCustomWidth
     ? _printerNumber(settings[widthKey], base.widthMm, 20, 150)
     : base.widthMm;

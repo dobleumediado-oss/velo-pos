@@ -992,6 +992,16 @@ function renderCartaRecibo(sale, cfg, opts) {
   const _mlc = _ec.marginLeft   || '12mm';
   const _mrc = _ec.marginRight  || '12mm';
 
+  // Auto-ajuste ("compactar inteligente"): cuando el contenido se pasa de la hoja
+  // por poco (pocos artículos + pie de cuentas/representante/firma), lo encoge lo
+  // JUSTO para que quepa en el mismo número de páginas llenas, evitando la hoja
+  // extra casi vacía con un hueco. Se apaga con factura_autoajuste='0'. El piso
+  // (factura_autoajuste_min, def. 0.82) impide que la letra quede ilegible: si
+  // haría falta encoger más que eso, NO compacta y deja fluir el documento normal.
+  const _autofit    = String(cfg?.factura_autoajuste ?? '1') !== '0';
+  const _autofitMin = Math.min(0.95, Math.max(0.6,
+    Number(cfg?.factura_autoajuste_min) || 0.82));
+
   const isFactura    = sale.type === 'factura';
   const isCotizacion = sale.type === 'cotizacion';
   const isDevolucion = sale.type === 'devolucion';
@@ -1330,11 +1340,31 @@ function renderCartaRecibo(sale, cfg, opts) {
   <script>
     (function () {
       try {
-        // Estima el total de páginas (alto del contenido / alto útil de la hoja Carta).
+        // Alto útil de UNA hoja Carta (11in) menos los márgenes verticales.
         var dpi = 96;
         var pageH = dpi * 11;                       // Carta = 11in
         var margTop = ${parseFloat(_mtc) || 12}, margBot = ${parseFloat(_mbc) || 10};
         var usable = pageH - ((margTop + margBot) / 25.4) * dpi;
+        if (!(usable > 0)) usable = pageH;
+
+        // Auto-ajuste: si el contenido se pasa por poco, encógelo lo justo para
+        // llenar páginas completas (sin la hoja extra casi vacía). Nunca fuerza:
+        // si haría falta bajar del piso, se deja fluir el documento tal cual.
+        var autofit = ${_autofit ? 'true' : 'false'};
+        var floorScale = ${_autofitMin};
+        if (autofit) {
+          var raw = document.body.scrollHeight;
+          var pages = raw / usable;
+          var target = Math.floor(pages + 1e-3);    // páginas completas que caben
+          if (target >= 1 && pages > target) {
+            var scale = (target * usable) / raw;
+            if (scale >= floorScale && scale < 1) {
+              document.body.style.zoom = scale;       // 'zoom' refluye (no recorta)
+            }
+          }
+        }
+
+        // Total de páginas final (ya con el posible auto-ajuste aplicado).
         var total = Math.max(1, Math.ceil(document.body.scrollHeight / usable));
         document.querySelectorAll('.a4-tot').forEach(function (e) { e.textContent = String(total); });
       } catch (e) {}

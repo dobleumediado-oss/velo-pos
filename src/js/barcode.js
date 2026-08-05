@@ -243,8 +243,9 @@ async function renderBarcode(el, options = {}) {
   const hasSavedCalibration = _bcApplySavedCalibration();
   _bcState.detection = _bcDetectPrinter();
   if (!hasSavedCalibration) {
-    if (!_bcState.profileId && _bcState.detection?.id === 'label_2connect_108') {
-      _bcState.profileId = _bcState.detection.id;
+    const autoId = _bcState.detection?.id;
+    if (!_bcState.profileId && (autoId === 'label_2connect_108' || autoId === 'label_2connect_281')) {
+      _bcState.profileId = autoId;
       _bcState.mediaWidthMm = _bcState.detection.widthMm;
       _bcState.printerDpi = _bcState.detection.dpi;
     }
@@ -370,6 +371,7 @@ async function renderBarcode(el, options = {}) {
       <label class="lbl">Perfil del medio</label>
       <select class="inp" id="bc-profile" onchange="bcSetPrinterProfile(this.value)">
         <option value="" ${!_bcState.profileId?'selected':''}>Automático según impresora</option>
+        <option value="label_2connect_281" ${_bcState.profileId==='label_2connect_281'?'selected':''}>2Connect 2C-LP281B · 54 mm máx. · 203 dpi</option>
         <option value="label_2connect_108" ${_bcState.profileId==='label_2connect_108'?'selected':''}>2Connect 2C-LP427B · 108 mm · 203 dpi</option>
         <option value="label_generic" ${_bcState.profileId==='label_generic'?'selected':''}>Universal · ancho configurable</option>
       </select>
@@ -637,6 +639,15 @@ async function bcSetPrinterProfile(id) {
     const dpi = document.getElementById('bc-dpi');
     if (width) width.value = '108';
     if (dpi) dpi.value = '203';
+  } else if (id === 'label_2connect_281') {
+    // Ancho variable (rollo 25–60 mm): se conserva el que ya tenga el cliente si
+    // está dentro del rango del cabezal (≤54 mm); si no, un default sensato de 50.
+    _bcState.printerDpi = 203;
+    if (!(_bcState.mediaWidthMm >= 20 && _bcState.mediaWidthMm <= 54)) _bcState.mediaWidthMm = 50;
+    const width = document.getElementById('bc-media-width');
+    const dpi = document.getElementById('bc-dpi');
+    if (width) width.value = String(_bcState.mediaWidthMm);
+    if (dpi) dpi.value = '203';
   }
   await bcSaveMediaConfig();
   _bcUpdatePrinterBadge();
@@ -694,6 +705,11 @@ function _bcEffectiveDesign() {
   const d = { ...(_bcState.design || _bcDefaultDesign()) };
   const calibration = _bcCurrentCalibration();
   if (calibration) {
+    // El tamaño físico calibrado POR IMPRESORA manda sobre el diseño global:
+    // así 3 clientes con etiquetas distintas imprimen cada uno correcto. Se
+    // fusiona ancho + alto juntos (antes solo el alto, lo que descuadraba una
+    // impresora calibrada a un ancho distinto del diseño global).
+    d.labelW = Number(calibration.labelWidthMm) || d.labelW;
     d.labelH = Number(calibration.labelHeightMm) || d.labelH;
     d.gapMm = Number.isFinite(Number(calibration.gapMm)) ? Number(calibration.gapMm) : d.gapMm;
     d.offsetXmm = Number(calibration.offsetXmm) || 0;
@@ -1179,6 +1195,7 @@ async function _bcCalSave() {
   const saved = {
     profileId: cal.profileId || 'label_generic',
     widthMm: cal.widthMm,
+    labelWidthMm: cal.labelWidthMm,
     labelHeightMm: cal.labelHeightMm,
     gapMm: cal.gapMm,
     dpi: cal.dpi,
@@ -1346,8 +1363,8 @@ function _bcBuildLabelsHTML(items, options = {}) {
       @media screen {
         html { width:100%;min-height:100%;background:#eef1f4;padding:14px 0;box-sizing:border-box; }
         body { margin:0 auto;background:transparent; }
-        .vp-label-row { background:#fff;outline:1px dashed #aeb6c2;box-shadow:0 3px 12px rgba(15,23,42,.08);margin:0 auto 12px; }
-        .vp-label { outline:1px dotted #c6ccd5;outline-offset:-1px; }
+        .vp-label-row { background:#fff;outline:1px dashed #9aa6b6;box-shadow:0 3px 12px rgba(15,23,42,.08);margin:0 auto 12px; }
+        .vp-label { outline:0.3mm solid #5b6473;outline-offset:-0.15mm; }
       }
       @media print {
         .no-print { display:none!important; }
@@ -1414,6 +1431,9 @@ function _bcShowPreviewModal(html, title) {
     <iframe id="bc-preview-iframe"
             class="bc-preview-frame" title="Vista previa física de etiquetas">
     </iframe>
+    <div id="bc-preview-legend" style="text-align:center;font-size:10.5px;color:var(--muted2);margin-top:6px">
+      Línea discontinua = medio · línea sólida = etiqueta
+    </div>
     <div class="modal-foot" style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
       <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
       <button class="btn btn-green" onclick="closeModal();_bcPrint()">
@@ -1425,10 +1445,27 @@ function _bcShowPreviewModal(html, title) {
   if (iframe) {
     iframe.addEventListener('load', () => {
       try {
-        const body = iframe.contentDocument?.body;
-        const doc = iframe.contentDocument?.documentElement;
-        const contentHeight = Math.max(body?.scrollHeight || 0, doc?.scrollHeight || 0);
-        iframe.style.height = `${Math.max(170, Math.min(360, contentHeight + 4))}px`;
+        const cdoc = iframe.contentDocument;
+        const body = cdoc?.body;
+        if (!body) return;
+        // Fidelidad: se muestra EL MISMO HTML que se imprime, solo ampliado a
+        // escala uniforme (zoom) para que la etiqueta se vea grande y con sus
+        // proporciones reales — no chiquita perdida en el modal. Las líneas de
+        // medio (discontinua) y etiqueta (sólida) vienen del CSS @media screen.
+        const row = cdoc.querySelector('.vp-label-row');
+        const natW = row ? row.getBoundingClientRect().width : 0;
+        const frameW = iframe.clientWidth || 620;
+        const targetW = Math.min(Math.max(240, frameW - 24), 560);
+        const zoom = natW > 0 ? Math.max(1, Math.min(6, targetW / natW)) : 1;
+        body.style.zoom = zoom;
+        const contentHeight = body.scrollHeight; // ya refleja el zoom
+        iframe.style.height = `${Math.max(160, Math.min(440, contentHeight + 28))}px`;
+        const legend = document.getElementById('bc-preview-legend');
+        if (legend) {
+          legend.textContent =
+            `Discontinua = medio ${layout.mediaWidthMm} mm · sólida = etiqueta ` +
+            `${layout.labelW}×${layout.labelH} mm · escala ×${zoom.toFixed(1)} (tamaño real más pequeño)`;
+        }
       } catch {}
     }, { once: true });
     iframe.srcdoc = html;
