@@ -60,6 +60,7 @@ const {
   calculateInvoiceFiscalBreakdown,
   syncImportedCustomerPhones,
   assertForeignKeyIntegrity,
+  wipeExpensesFkSafe,
   dropCorrectionImmutabilityTriggers,
   restoreCorrectionImmutabilityTriggers,
 } = require('./lib/equiparts-import');
@@ -4634,6 +4635,11 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, files, requestUser
         if (exists) db.prepare(`DELETE FROM ${t}`).run();
       }
       restoreCorrectionImmutabilityTriggers(db);
+
+      // Gastos y pagos de gastos NO vienen en los CSV: el reset total también los
+      // limpia (FK-safe), evitando huérfanas a la caja borrada que abortaban la
+      // migración (ver wipeExpensesFkSafe en lib/equiparts-import.js).
+      wipeExpensesFkSafe(db);
       // Reset de autoincrement para IDs limpios
       try { db.prepare(`DELETE FROM sqlite_sequence WHERE name IN ('sales','sale_charges','sale_items','payments','payment_allocations','customer_phones','customer_contacts','customer_branches','customers','products','product_price_history')`).run(); } catch (_) {}
       try {

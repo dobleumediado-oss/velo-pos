@@ -10,6 +10,7 @@ const {
   calculateInvoiceFiscalBreakdown,
   syncImportedCustomerPhones,
   assertForeignKeyIntegrity,
+  wipeExpensesFkSafe,
   round2,
   dropCorrectionImmutabilityTriggers,
   restoreCorrectionImmutabilityTriggers,
@@ -205,6 +206,59 @@ cdb.prepare('INSERT INTO sale_correction_documents(id,correction_id) VALUES(2,2)
 try { cdb.prepare('DELETE FROM sale_correction_documents').run(); } catch (error) { reBlocked = /inmutables/.test(error.message); }
 ok(reBlocked, 'tras el reset, la inmutabilidad queda restaurada (nuevas correcciones vuelven a estar protegidas)');
 cdb.close();
+
+console.log('\n== 5. Gastos: el reset total los elimina (FK-safe), no aborta la migración ==');
+// Reproduce el fallo real de Equiparts (gasto+pago pagados desde caja) y agrega
+// TODOS los referrers de expenses para probar que el borrado es FK-completo:
+//   NOT NULL → seller_expense_links (se borra) · nullable → fixed_assets,
+//   vehicle_maintenance, payroll_items (se desvinculan y conservan su registro).
+const edb = new Database(':memory:');
+edb.pragma('foreign_keys = ON');
+edb.exec(`
+  CREATE TABLE cash_sessions(id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT);
+  CREATE TABLE cash_movements(id INTEGER PRIMARY KEY AUTOINCREMENT, amount REAL);
+  CREATE TABLE expenses(id INTEGER PRIMARY KEY AUTOINCREMENT, description TEXT, amount REAL,
+    cash_session_id INTEGER REFERENCES cash_sessions(id),
+    cash_movement_id INTEGER REFERENCES cash_movements(id));
+  CREATE TABLE expense_payments(id INTEGER PRIMARY KEY AUTOINCREMENT, expense_id INTEGER NOT NULL REFERENCES expenses(id),
+    amount REAL, cash_session_id INTEGER REFERENCES cash_sessions(id),
+    cash_movement_id INTEGER REFERENCES cash_movements(id));
+  CREATE TABLE seller_expense_links(id INTEGER PRIMARY KEY AUTOINCREMENT, expense_id INTEGER NOT NULL UNIQUE REFERENCES expenses(id));
+  CREATE TABLE fixed_assets(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, expense_id INTEGER REFERENCES expenses(id));
+  CREATE TABLE vehicle_maintenance(id INTEGER PRIMARY KEY AUTOINCREMENT, expense_id INTEGER REFERENCES expenses(id));
+  CREATE TABLE payroll_items(id INTEGER PRIMARY KEY AUTOINCREMENT, expense_id INTEGER REFERENCES expenses(id));
+`);
+edb.prepare(`INSERT INTO cash_sessions(id,status) VALUES(1,'closed')`).run();
+edb.prepare(`INSERT INTO cash_movements(id,amount) VALUES(1,500)`).run();
+edb.prepare(`INSERT INTO expenses(id,description,amount,cash_session_id,cash_movement_id) VALUES(1,'Gasto prueba',500,1,1)`).run();
+edb.prepare(`INSERT INTO expense_payments(id,expense_id,amount,cash_session_id,cash_movement_id) VALUES(1,1,500,1,1)`).run();
+edb.prepare(`INSERT INTO seller_expense_links(id,expense_id) VALUES(1,1)`).run();
+edb.prepare(`INSERT INTO fixed_assets(id,name,expense_id) VALUES(1,'Activo real',1)`).run();
+edb.prepare(`INSERT INTO vehicle_maintenance(id,expense_id) VALUES(1,1)`).run();
+edb.prepare(`INSERT INTO payroll_items(id,expense_id) VALUES(1,1)`).run();
+
+edb.pragma('foreign_keys = OFF');
+edb.transaction(() => {
+  edb.prepare('DELETE FROM cash_movements').run();
+  edb.prepare('DELETE FROM cash_sessions').run();
+  const before = edb.prepare('PRAGMA foreign_key_check').all();
+  ok(before.length === 4, 'sin el fix, el reset dejaría 4 referencias huérfanas de gastos→caja');
+  wipeExpensesFkSafe(edb);
+  assertForeignKeyIntegrity(edb); // no debe lanzar
+})();
+edb.pragma('foreign_keys = ON');
+ok(true, 'tras el borrado FK-safe, la integridad referencial pasa (la migración no se aborta)');
+ok(edb.prepare('SELECT COUNT(*) c FROM expenses').get().c === 0
+  && edb.prepare('SELECT COUNT(*) c FROM expense_payments').get().c === 0
+  && edb.prepare('SELECT COUNT(*) c FROM seller_expense_links').get().c === 0,
+  'gastos, pagos de gastos y enlaces de comisión quedan en cero');
+const asset = edb.prepare('SELECT name, expense_id FROM fixed_assets WHERE id=1').get();
+ok(asset && asset.name === 'Activo real' && asset.expense_id === null,
+  'activos/vehículos/nómina conservan su registro, solo se desvincula el expense_id');
+ok(edb.prepare('SELECT COUNT(*) c FROM vehicle_maintenance').get().c === 1
+  && edb.prepare('SELECT COUNT(*) c FROM payroll_items').get().c === 1,
+  'no se borra data ajena (mantenimiento de vehículos y nómina se conservan)');
+edb.close();
 
 console.log(`\n== RESULTADO: ${pass} OK, ${fail} fallos ==`);
 process.exit(fail ? 1 : 0);
