@@ -59,7 +59,7 @@ const PLANTILLAS = [
       logo: false, rnc: true, ncf: true, mensaje: true,
       cedula: false, codigoBarra: false,
     },
-    render: (sale, cfg, opts) => _injectBranding(renderTermica(sale, cfg, opts, 52), cfg, sale, 'termica', 52),
+    render: (sale, cfg, opts) => _injectBranding(_boostWeights(renderTermica(sale, cfg, opts, 52), _weightDelta(cfg)), cfg, sale, 'termica', 52),
   },
 
   // ═══════════════ 80mm ═══════════════
@@ -73,7 +73,7 @@ const PLANTILLAS = [
       logo: true, rnc: true, ncf: true, mensaje: true,
       cedula: true, codigoBarra: false,
     },
-    render: (sale, cfg, opts) => _injectBranding(renderTermica(sale, cfg, opts, 76), cfg, sale, 'termica', 76),
+    render: (sale, cfg, opts) => _injectBranding(_boostWeights(renderTermica(sale, cfg, opts, 76), _weightDelta(cfg)), cfg, sale, 'termica', 76),
   },
   {
     id:        'termica_80_moderna',
@@ -85,7 +85,7 @@ const PLANTILLAS = [
       logo: true, rnc: true, ncf: true, mensaje: true,
       cedula: true, codigoBarra: false,
     },
-    render: (sale, cfg, opts) => _injectBranding(renderTermicaModerna(sale, cfg, opts, 76), cfg, sale, 'termica', 76),
+    render: (sale, cfg, opts) => _injectBranding(_boostWeights(renderTermicaModerna(sale, cfg, opts, 76), _weightDelta(cfg)), cfg, sale, 'termica', 76),
   },
   {
     id:        'termica_80_minimal',
@@ -97,7 +97,7 @@ const PLANTILLAS = [
       logo: false, rnc: false, ncf: true, mensaje: false,
       cedula: false, codigoBarra: false,
     },
-    render: (sale, cfg, opts) => _injectBranding(renderTermicaMinimal(sale, cfg, opts, 76), cfg, sale, 'termica', 76),
+    render: (sale, cfg, opts) => _injectBranding(_boostWeights(renderTermicaMinimal(sale, cfg, opts, 76), _weightDelta(cfg)), cfg, sale, 'termica', 76),
   },
 
   // ═══════════════ 72mm ═══════════════
@@ -114,7 +114,7 @@ const PLANTILLAS = [
       logo: true, rnc: true, ncf: true, mensaje: true,
       cedula: true, codigoBarra: false,
     },
-    render: (sale, cfg, opts) => _injectBranding(renderTermica(sale, cfg, opts, 68), cfg, sale, 'termica', 68),
+    render: (sale, cfg, opts) => _injectBranding(_boostWeights(renderTermica(sale, cfg, opts, 68), _weightDelta(cfg)), cfg, sale, 'termica', 68),
   },
 
   // ═══════════════ Carta/A4 ═══════════════
@@ -128,7 +128,7 @@ const PLANTILLAS = [
       logo: true, rnc: true, ncf: true, mensaje: true,
       cedula: true, codigoBarra: false,
     },
-    render: (sale, cfg, opts) => _scaleFonts(_injectBranding(renderCartaRecibo(sale, cfg, opts), cfg, sale, 'a4'), _fontScale(cfg)),
+    render: (sale, cfg, opts) => _scaleFonts(_injectBranding(_boostWeights(renderCartaRecibo(sale, cfg, opts), _weightDelta(cfg)), cfg, sale, 'a4'), _fontScale(cfg)),
   },
   {
     id:        'carta_formal',
@@ -140,7 +140,7 @@ const PLANTILLAS = [
       logo: true, rnc: true, ncf: true, mensaje: true,
       cedula: true, codigoBarra: false,
     },
-    render: (sale, cfg, opts) => _scaleFonts(_injectBranding(renderCartaFormal(sale, cfg, opts), cfg, sale, 'a4'), _fontScale(cfg)),
+    render: (sale, cfg, opts) => _scaleFonts(_injectBranding(_boostWeights(renderCartaFormal(sale, cfg, opts), _weightDelta(cfg)), cfg, sale, 'a4'), _fontScale(cfg)),
   },
   {
     id:        'carta_ncf',
@@ -152,7 +152,7 @@ const PLANTILLAS = [
       logo: true, rnc: true, ncf: true, mensaje: true,
       cedula: true, codigoBarra: false,
     },
-    render: (sale, cfg, opts) => _scaleFonts(_injectBranding(renderCartaNCF(sale, cfg, opts), cfg, sale, 'a4'), _fontScale(cfg)),
+    render: (sale, cfg, opts) => _scaleFonts(_injectBranding(_boostWeights(renderCartaNCF(sale, cfg, opts), _weightDelta(cfg)), cfg, sale, 'a4'), _fontScale(cfg)),
   },
   {
     id:        'media_carta',
@@ -164,7 +164,7 @@ const PLANTILLAS = [
       logo: true, rnc: true, ncf: true, mensaje: true,
       cedula: false, codigoBarra: false,
     },
-    render: (sale, cfg, opts) => _scaleFonts(_injectBranding(renderMediaCarta(sale, cfg, opts), cfg, sale, 'a4compact'), _fontScale(cfg)),
+    render: (sale, cfg, opts) => _scaleFonts(_injectBranding(_boostWeights(renderMediaCarta(sale, cfg, opts), _weightDelta(cfg)), cfg, sale, 'a4compact'), _fontScale(cfg)),
   },
 ];
 
@@ -461,6 +461,39 @@ function _scaleFonts(html, factor) {
     (_m, n) => `font-size:${(parseFloat(n) * f).toFixed(2)}px`);
 }
 
+// Nivel de negrita de la letra en las facturas (config: factura_font_weight).
+// Devuelve un DELTA que se suma a cada font-weight, preservando la jerarquía
+// (los totales siguen más fuertes que las etiquetas). normal 0 (por defecto).
+function _weightDelta(cfg) {
+  const s = String(cfg?.factura_font_weight || 'normal').toLowerCase();
+  if (s === 'semi'    || s === 'semibold')              return 100;
+  if (s === 'negrita' || s === 'bold')                  return 200;
+  if (s === 'extra'   || s === 'xbold' || s === 'black') return 300;
+  return 0;
+}
+
+// Sube el grosor de la letra en `delta` (clamp 100–900). Reglas:
+//  1) Cada font-weight numérico explícito se incrementa (mantiene contraste
+//     relativo entre título/total/etiquetas).
+//  2) Se eleva la base heredada: `body` (texto sin weight = 400) y `<b>/<strong>`
+//     (700), inyectando una regla al final del <style>. Ningún template fija
+//     font-weight en body, así que esto solo agrega, nunca pisa una intención.
+// La firma promocional se inyecta DESPUÉS y trae su propio font-weight aislado,
+// por lo que este ajuste no la altera.
+function _boostWeights(html, delta) {
+  const d = Number(delta) || 0;
+  if (d === 0) return html;
+  const clamp = (w) => Math.max(100, Math.min(900, w));
+  let out = String(html)
+    .replace(/font-weight:\s*(\d{3})\b/gi, (_m, n) => `font-weight:${clamp(parseInt(n, 10) + d)}`)
+    .replace(/font-weight:\s*bold\b/gi,   `font-weight:${clamp(700 + d)}`)
+    .replace(/font-weight:\s*normal\b/gi, `font-weight:${clamp(400 + d)}`);
+  const baseRule = `body{font-weight:${clamp(400 + d)}}b,strong{font-weight:${clamp(700 + d)}}`;
+  const styleEnd = out.indexOf('</style>');
+  if (styleEnd !== -1) out = out.slice(0, styleEnd) + baseRule + out.slice(styleEnd);
+  return out;
+}
+
 // ══════════════════════════════════════════════
 // FIRMA PROMOCIONAL VELO POS (bloque reutilizable)
 // ──────────────────────────────────────────────
@@ -472,8 +505,10 @@ function _scaleFonts(html, factor) {
 // Reglas duras:
 //  · Nunca aparece en cotización, conduce ni reporte.
 //  · Se puede activar/desactivar globalmente (config: invoice_branding_enabled).
-//  · Si el QR no puede generarse, la factura se imprime igual (solo texto+URL).
-//  · No lleva datos privados del cliente/NCF/RNC: solo la URL de demo configurada.
+//  · Si el QR no puede generarse, la factura se imprime igual (solo texto/CTA).
+//  · La URL del QR es INTERNA (config): no se imprime; solo genera el código.
+//  · Junto al QR puede mostrarse, opcionalmente, teléfono y/o celular del negocio.
+//  · No lleva datos privados del cliente/NCF/RNC.
 //  · Usa `pt` en la variante A4 para que el ajuste de "tamaño de letra"
 //    (_scaleFonts, que solo toca px) NO altere su tamaño discreto.
 
@@ -491,12 +526,29 @@ function _brandingSettings(cfg) {
   const rawEnabled = cfg?.invoice_branding_enabled;
   const enabled = !(String(rawEnabled == null ? '1' : rawEnabled).toLowerCase() === '0' ||
                     String(rawEnabled).toLowerCase() === 'false');
+  // Contacto opcional que se muestra en la firma (en lugar de la URL, que ahora
+  // es interna): 'none' (por defecto) | 'phone' | 'mobile' | 'both'.
+  const contactRaw = String(cfg?.invoice_branding_contact || 'none').toLowerCase();
+  const contact = ['phone', 'mobile', 'both'].includes(contactRaw) ? contactRaw : 'none';
   return {
     enabled,
     url:  _veloSafeUrl(cfg?.invoice_branding_url || 'https://wa.link/39cwoi'),
     text: String(cfg?.invoice_branding_text || 'Sistema de facturación impulsado por VELO POS'),
     cta:  String(cfg?.invoice_branding_cta  || 'Solicita tu demostración'),
+    phone:  String(cfg?.invoice_branding_phone  || '').trim(),
+    mobile: String(cfg?.invoice_branding_mobile || '').trim(),
+    contact,
   };
+}
+
+// Texto de contacto opcional de la firma (Tel/Cel), según lo elegido. La URL del
+// QR ya NO se imprime en la factura: queda solo en Configuración para generar el
+// código. Devuelve '' si no hay contacto que mostrar.
+function _brandingContactText(s) {
+  const parts = [];
+  if ((s.contact === 'phone'  || s.contact === 'both') && s.phone)  parts.push('Tel: '  + s.phone);
+  if ((s.contact === 'mobile' || s.contact === 'both') && s.mobile) parts.push('Cel: ' + s.mobile);
+  return parts.join(' · ');
 }
 
 // ¿El documento es una factura oficial que debe llevar la firma?
@@ -538,18 +590,20 @@ function renderInvoiceBranding(cfg, sale, variant, widthMm) {
   if (!_esFacturaOficial(sale)) return '';
   if (!s.url) return '';
 
-  const qr       = _veloQrSvg(s.url);
-  const shortUrl = _esc(s.url.replace(/^https?:\/\//i, '').replace(/^whatsapp:\/\//i, '').replace(/\/$/, ''));
-  const ctaHtml  = _esc(s.cta);
+  const qr          = _veloQrSvg(s.url);
+  const ctaHtml     = _esc(s.cta);
+  // La URL ya no se imprime; en su lugar va el contacto opcional (Tel/Cel).
+  const contactHtml = _esc(_brandingContactText(s));
 
   if (variant === 'termica') {
     // Variante compacta y vertical, centrada, en negro puro (monocromo).
     const qrMm = Math.round(Math.min(36, Math.max(26, (Number(widthMm) || 58) * 0.55)));
-    return `<div style="margin-top:6px;padding-top:5px;border-top:1px dashed #000;text-align:center;line-height:1.25">
+    // font-weight:400 aísla la firma del ajuste global de negrita (_boostWeights).
+    return `<div style="margin-top:6px;padding-top:5px;border-top:1px dashed #000;text-align:center;line-height:1.25;font-weight:400">
       <div style="font-size:10px;font-weight:700">Factura generada con VELO POS</div>
       <div style="font-size:9px;margin:1px 0 ${qr ? '5px' : '2px'}">Escanea y ${ctaHtml.charAt(0).toLowerCase()}${ctaHtml.slice(1)}</div>
       ${qr ? `<div style="width:${qrMm}mm;height:${qrMm}mm;margin:0 auto">${qr}</div>` : ''}
-      <div style="font-size:8.5px;margin-top:3px">${shortUrl}</div>
+      ${contactHtml ? `<div style="font-size:8.5px;margin-top:3px">${contactHtml}</div>` : ''}
     </div>`;
   }
 
@@ -565,13 +619,16 @@ function renderInvoiceBranding(cfg, sale, variant, widthMm) {
   const mainPt = compact ? '7pt'   : '7.5pt';
   const ctaPt  = compact ? '8pt'   : '8.5pt';
   const urlPt  = compact ? '6.5pt' : '7pt';
-  const textHtml = _esc(s.text).replace('VELO POS', '<strong>VELO POS</strong>');
-  return `<div style="margin-top:${mtop}px;display:flex;align-items:center;gap:${gap}px;max-width:330px;color:#4b5263;break-inside:avoid;page-break-inside:avoid;-webkit-print-color-adjust:exact;print-color-adjust:exact">
+  // Peso explícito en un <span> (no <strong>) para que el ajuste global de
+  // negrita (regla b,strong de _boostWeights) no toque la firma. El contenedor
+  // fija font-weight:400 para aislar también el texto heredado.
+  const textHtml = _esc(s.text).replace('VELO POS', '<span style="font-weight:700">VELO POS</span>');
+  return `<div style="margin-top:${mtop}px;display:flex;align-items:center;gap:${gap}px;max-width:330px;color:#4b5263;font-weight:400;break-inside:avoid;page-break-inside:avoid;-webkit-print-color-adjust:exact;print-color-adjust:exact">
     ${qr ? `<div style="width:${qrPx}px;height:${qrPx}px;flex:0 0 auto">${qr}</div>` : ''}
     <div style="line-height:1.3">
       <div style="font-size:${mainPt};font-weight:600">${textHtml}</div>
       <div style="font-size:${ctaPt};font-weight:800;margin-top:1px">${ctaHtml}</div>
-      <div style="font-size:${urlPt};margin-top:2px;color:#72798a">${shortUrl}</div>
+      ${contactHtml ? `<div style="font-size:${urlPt};margin-top:2px;color:#72798a">${contactHtml}</div>` : ''}
     </div>
   </div>`;
 }

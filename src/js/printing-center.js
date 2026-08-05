@@ -140,6 +140,7 @@ function pcTabs(active = _pcActiveTab) {
   const tabs = [
     ['devices', 'Dispositivos y canales', 'print'],
     ['routes', 'Rutas', 'send'],
+    ['appearance', 'Apariencia y marca', 'tag'],
     ['labels', 'Etiquetas', 'barcode'],
     ['templates', 'Diagnóstico de plantillas', 'check'],
   ];
@@ -208,6 +209,7 @@ async function renderPrintingCenter(el) {
   _pcState = { root, settings, printers, documentPrinters, labelPrinters, jobs, printConfig, bindings, profiles };
 
   if (_pcActiveTab === 'routes') pcRenderRoutes();
+  else if (_pcActiveTab === 'appearance') pcRenderAppearance();
   else if (_pcActiveTab === 'templates') pcRenderTemplateDiagnostics();
   else pcRenderDevices();
 }
@@ -439,13 +441,249 @@ function pcDiagnosticBusiness(settings) {
     print_item_code: settings.print_item_code || '1',
     logo_size: settings.logo_size || 'mediano',
     factura_font_size: settings.factura_font_size || 'mediano',
+    factura_font_weight: settings.factura_font_weight || 'normal',
     invoice_branding_enabled: settings.invoice_branding_enabled ?? '1',
     invoice_branding_url:     settings.invoice_branding_url  || 'https://wa.link/39cwoi',
     invoice_branding_text:    settings.invoice_branding_text || 'Sistema de facturación impulsado por VELO POS',
     invoice_branding_cta:     settings.invoice_branding_cta  || 'Solicita tu demostración',
+    invoice_branding_phone:   settings.invoice_branding_phone   || '',
+    invoice_branding_mobile:  settings.invoice_branding_mobile  || '',
+    invoice_branding_contact: settings.invoice_branding_contact || 'none',
     invoice_notes: settings.invoice_notes || '',
     bank_accounts: [],
   };
+}
+
+// ══════════════════════════════════════════════
+// APARIENCIA Y MARCA (logo, tamaño/grosor de letra, firma promocional)
+// ──────────────────────────────────────────────
+// Estos controles vivían en Configuración; ahora residen en el Centro de
+// impresión. La construcción de las cards se extrajo a esta función global
+// reutilizable: recibe el objeto `settings` y un callback `onSaved` que refresca
+// la vista previa. Los helpers de logo (_buildLogoCard/guardarLogo/…) son
+// globales (definidos en config.js) y funcionan igual desde aquí.
+// ══════════════════════════════════════════════
+function renderInvoiceAppearanceCards(container, { settings, onSaved } = {}) {
+  if (!container || typeof _buildLogoCard !== 'function') return;
+  const s = settings || DB?.settings || {};
+  const isAdmin = ['admin', 'superadmin'].includes(user?.role);
+  const isSA = user?.role === 'superadmin';
+  const refresh = () => { if (typeof onSaved === 'function') onSaved(); };
+
+  if (isAdmin) {
+    container.appendChild(_buildLogoCard({
+      slot: '', title: 'Logo Principal', current: s.biz_logo || '',
+      emptyMsg: 'PNG, JPG o WEBP · 300×100px recomendado.',
+    }));
+    container.appendChild(_buildLogoCard({
+      slot: '2', title: 'Logo Secundario (opcional)', current: s.biz_logo_2 || '',
+      emptyMsg: 'Se mostrará junto al principal en los documentos.',
+    }));
+
+    // Tamaño del logo en las facturas de hoja (A4/Carta).
+    const curLogoSize = s.logo_size || 'mediano';
+    const logoSizeCard = h('div', { class: 'card', style: 'margin-top:16px' });
+    logoSizeCard.innerHTML = `
+      <div class="card-title mb8">Tamaño del logo en factura</div>
+      <div style="font-size:11px;color:var(--muted2);margin-bottom:10px">Aplica a las facturas de hoja (A4/Carta). No cambia los tickets térmicos.</div>
+      <select class="inp" id="cfg-logo-size">
+        <option value="pequeno" ${curLogoSize==='pequeno'?'selected':''}>Pequeño</option>
+        <option value="mediano" ${curLogoSize==='mediano'?'selected':''}>Mediano (por defecto)</option>
+        <option value="grande" ${curLogoSize==='grande'?'selected':''}>Grande</option>
+      </select>`;
+    container.appendChild(logoSizeCard);
+    logoSizeCard.querySelector('#cfg-logo-size')?.addEventListener('change', async (e) => {
+      const value = e.target.value;
+      const res = await window.api.settings.set({ key: 'logo_size', value, requestUserId: user?.id });
+      if (!res?.ok) { toast(res?.error || 'No se pudo guardar', 'err'); return; }
+      s.logo_size = value;
+      if (DB?.settings) DB.settings.logo_size = value;
+      refresh();
+      toast('✓ Tamaño del logo actualizado');
+    });
+
+    // Tamaño de letra en las facturas de hoja (A4/Carta).
+    const curFontSize = s.factura_font_size || 'mediano';
+    const fontSizeCard = h('div', { class: 'card', style: 'margin-top:16px' });
+    fontSizeCard.innerHTML = `
+      <div class="card-title mb8">Tamaño de letra en factura</div>
+      <div style="font-size:11px;color:var(--muted2);margin-bottom:10px">Aumenta o reduce el texto de las facturas de hoja (A4/Carta). No cambia los tickets térmicos.</div>
+      <select class="inp" id="cfg-font-size">
+        <option value="pequeno" ${curFontSize==='pequeno'?'selected':''}>Pequeña</option>
+        <option value="mediano" ${curFontSize==='mediano'?'selected':''}>Mediana (por defecto)</option>
+        <option value="grande" ${curFontSize==='grande'?'selected':''}>Grande</option>
+        <option value="xgrande" ${curFontSize==='xgrande'?'selected':''}>Extra grande</option>
+      </select>`;
+    container.appendChild(fontSizeCard);
+    fontSizeCard.querySelector('#cfg-font-size')?.addEventListener('change', async (e) => {
+      const value = e.target.value;
+      const res = await window.api.settings.set({ key: 'factura_font_size', value, requestUserId: user?.id });
+      if (!res?.ok) { toast(res?.error || 'No se pudo guardar', 'err'); return; }
+      s.factura_font_size = value;
+      if (DB?.settings) DB.settings.factura_font_size = value;
+      refresh();
+      toast('✓ Tamaño de letra actualizado');
+    });
+
+    // Grosor de la letra (nivel de negrita) en las facturas.
+    const curFontWeight = s.factura_font_weight || 'normal';
+    const fontWeightCard = h('div', { class: 'card', style: 'margin-top:16px' });
+    fontWeightCard.innerHTML = `
+      <div class="card-title mb8">Grosor de letra (negrita) en factura</div>
+      <div style="font-size:11px;color:var(--muted2);margin-bottom:10px">Aumenta el grosor de la letra de las facturas manteniendo la jerarquía (los totales siguen resaltando). Aplica a A4/Carta y también a los tickets térmicos.</div>
+      <select class="inp" id="cfg-font-weight">
+        <option value="normal" ${curFontWeight==='normal'?'selected':''}>Normal (por defecto)</option>
+        <option value="semi" ${curFontWeight==='semi'?'selected':''}>Semi-negrita</option>
+        <option value="negrita" ${curFontWeight==='negrita'?'selected':''}>Negrita</option>
+        <option value="extra" ${curFontWeight==='extra'?'selected':''}>Extra negrita</option>
+      </select>`;
+    container.appendChild(fontWeightCard);
+    fontWeightCard.querySelector('#cfg-font-weight')?.addEventListener('change', async (e) => {
+      const value = e.target.value;
+      const res = await window.api.settings.set({ key: 'factura_font_weight', value, requestUserId: user?.id });
+      if (!res?.ok) { toast(res?.error || 'No se pudo guardar', 'err'); return; }
+      s.factura_font_weight = value;
+      if (DB?.settings) DB.settings.factura_font_weight = value;
+      refresh();
+      toast('✓ Grosor de letra actualizado');
+    });
+  }
+
+  // Firma promocional VELO POS (solo superadmin).
+  if (isSA) {
+    const brEnabled = String(s.invoice_branding_enabled ?? '1') !== '0';
+    const brUrl  = s.invoice_branding_url  || 'https://wa.link/39cwoi';
+    const brText = s.invoice_branding_text || 'Sistema de facturación impulsado por VELO POS';
+    const brCta  = s.invoice_branding_cta  || 'Solicita tu demostración';
+    const brPhone   = s.invoice_branding_phone  || '';
+    const brMobile  = s.invoice_branding_mobile || '';
+    const brContact = ['phone', 'mobile', 'both'].includes(String(s.invoice_branding_contact || 'none')) ? s.invoice_branding_contact : 'none';
+    const brandCard = h('div', { class: 'card', style: 'margin-top:16px' });
+    brandCard.innerHTML = `
+      <div class="fxb mb8">
+        <div class="card-title">Firma promocional VELO POS</div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--muted2)">
+          <input type="checkbox" id="cfg-brand-enabled" ${brEnabled ? 'checked' : ''}/>
+          <span>${brEnabled ? 'Activada' : 'Desactivada'}</span>
+        </label>
+      </div>
+      <div style="font-size:11px;color:var(--muted2);margin-bottom:12px">
+        Aparece pequeña al final de las facturas oficiales (contado, crédito, abono y devolución; con o sin NCF), en A4 y en tickets térmicos. No sale en cotizaciones, conduces ni reportes.
+      </div>
+      <div id="cfg-brand-fields" style="display:${brEnabled ? 'block' : 'none'}">
+        <div class="fg">
+          <label class="lbl">Enlace del QR (uso interno — no se imprime)</label>
+          <input class="inp" id="cfg-brand-url" value="${pcEsc(brUrl)}" placeholder="https://wa.link/..."/>
+          <div style="font-size:10.5px;color:var(--muted2);margin-top:3px">Solo se usa para generar el código QR (localmente, sin internet). <b>La URL no aparece en la factura</b>, solo el QR.</div>
+        </div>
+        <div class="fg" style="margin-top:10px">
+          <label class="lbl">Texto principal</label>
+          <input class="inp" id="cfg-brand-text" value="${pcEsc(brText)}"/>
+        </div>
+        <div class="fg" style="margin-top:10px">
+          <label class="lbl">Llamado a la acción</label>
+          <input class="inp" id="cfg-brand-cta" value="${pcEsc(brCta)}"/>
+        </div>
+        <div style="border-top:1px solid var(--line);margin-top:14px;padding-top:12px">
+          <div style="font-size:11px;font-weight:700;color:var(--ink3);margin-bottom:2px">Contacto visible junto al QR (opcional)</div>
+          <div style="font-size:10.5px;color:var(--muted2);margin-bottom:8px">En lugar de la URL, puedes mostrar tu teléfono y/o celular. Elige cuál aparece en la factura.</div>
+          <div class="fg">
+            <label class="lbl">Mostrar en la factura</label>
+            <select class="inp" id="cfg-brand-contact">
+              <option value="none" ${brContact==='none'?'selected':''}>No mostrar contacto</option>
+              <option value="phone" ${brContact==='phone'?'selected':''}>Solo teléfono</option>
+              <option value="mobile" ${brContact==='mobile'?'selected':''}>Solo celular</option>
+              <option value="both" ${brContact==='both'?'selected':''}>Teléfono y celular</option>
+            </select>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+            <div class="fg">
+              <label class="lbl">Teléfono</label>
+              <input class="inp" id="cfg-brand-phone" value="${pcEsc(brPhone)}" placeholder="809-000-0000"/>
+            </div>
+            <div class="fg">
+              <label class="lbl">Celular</label>
+              <input class="inp" id="cfg-brand-mobile" value="${pcEsc(brMobile)}" placeholder="829-000-0000"/>
+            </div>
+          </div>
+        </div>
+      </div>`;
+    container.appendChild(brandCard);
+
+    const _saveBrand = async (key, value, okMsg) => {
+      const res = await window.api.settings.set({ key, value, requestUserId: user?.id });
+      if (!res?.ok) { toast(res?.error || 'No se pudo guardar', 'err'); return false; }
+      s[key] = value;
+      if (DB?.settings) DB.settings[key] = value;
+      refresh();
+      if (okMsg) toast(okMsg);
+      return true;
+    };
+
+    brandCard.querySelector('#cfg-brand-enabled')?.addEventListener('change', async (e) => {
+      const on = e.target.checked;
+      const fields = brandCard.querySelector('#cfg-brand-fields');
+      if (fields) fields.style.display = on ? 'block' : 'none';
+      const lbl = e.target.parentElement?.querySelector('span');
+      if (lbl) lbl.textContent = on ? 'Activada' : 'Desactivada';
+      await _saveBrand('invoice_branding_enabled', on ? '1' : '0', on ? '✓ Firma activada' : '✓ Firma desactivada');
+    });
+
+    brandCard.querySelector('#cfg-brand-url')?.addEventListener('change', async (e) => {
+      const value = String(e.target.value || '').trim();
+      if (value && !/^(https?:|whatsapp:)\/\//i.test(value)) {
+        toast('El enlace debe empezar con https:// o whatsapp://', 'err');
+        e.target.value = s.invoice_branding_url || 'https://wa.link/39cwoi';
+        return;
+      }
+      await _saveBrand('invoice_branding_url', value || 'https://wa.link/39cwoi', '✓ Enlace del QR actualizado');
+    });
+    brandCard.querySelector('#cfg-brand-text')?.addEventListener('change', (e) =>
+      _saveBrand('invoice_branding_text', String(e.target.value || '').trim() || 'Sistema de facturación impulsado por VELO POS', '✓ Texto actualizado'));
+    brandCard.querySelector('#cfg-brand-cta')?.addEventListener('change', (e) =>
+      _saveBrand('invoice_branding_cta', String(e.target.value || '').trim() || 'Solicita tu demostración', '✓ Llamado a la acción actualizado'));
+    brandCard.querySelector('#cfg-brand-contact')?.addEventListener('change', (e) =>
+      _saveBrand('invoice_branding_contact', e.target.value || 'none', '✓ Contacto de la firma actualizado'));
+    brandCard.querySelector('#cfg-brand-phone')?.addEventListener('change', (e) =>
+      _saveBrand('invoice_branding_phone', String(e.target.value || '').trim(), '✓ Teléfono actualizado'));
+    brandCard.querySelector('#cfg-brand-mobile')?.addEventListener('change', (e) =>
+      _saveBrand('invoice_branding_mobile', String(e.target.value || '').trim(), '✓ Celular actualizado'));
+  }
+}
+
+// Pestaña "Apariencia y marca": cards a la izquierda + vista previa A4 en vivo.
+function pcRenderAppearance() {
+  const { root, settings } = _pcState;
+  // Hook para que guardar/eliminar logo refresque esta vista (no Configuración).
+  window._appearanceRefresh = pcRefresh;
+  root.innerHTML = pcHeader('Personaliza el logo, la letra y la firma promocional de tus facturas.');
+
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,440px);gap:16px;align-items:start';
+  const left = document.createElement('div');
+  left.style.cssText = 'display:flex;flex-direction:column;gap:16px';
+  const right = document.createElement('div');
+  right.innerHTML = `<div class="card" style="position:sticky;top:12px">
+    <div class="card-title mb8">Vista previa · Factura A4 Moderna</div>
+    <div style="font-size:11px;color:var(--muted2);margin-bottom:8px">Ejemplo con datos de prueba. Se actualiza al guardar cada cambio.</div>
+    <iframe id="pc-appearance-preview" style="width:100%;height:520px;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
+  </div>`;
+  grid.appendChild(left);
+  grid.appendChild(right);
+  root.appendChild(grid);
+
+  renderInvoiceAppearanceCards(left, { settings, onSaved: pcRenderAppearancePreview });
+  pcRenderAppearancePreview();
+}
+
+// Renderiza la factura A4 de muestra con los settings actuales en el iframe.
+function pcRenderAppearancePreview() {
+  const frame = document.getElementById('pc-appearance-preview');
+  if (!frame || !_pcState || typeof getPlantilla !== 'function') return;
+  try {
+    const tpl = getPlantilla('carta_recibo');
+    frame.srcdoc = tpl.render(pcDiagnosticSample(), pcDiagnosticBusiness(_pcState.settings), { ...tpl.opciones });
+  } catch (_e) { /* la vista previa no es crítica */ }
 }
 
 function pcAnalyzeTemplate(template) {
