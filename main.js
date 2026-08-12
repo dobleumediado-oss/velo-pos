@@ -3575,10 +3575,17 @@ ipcMain.handle('license:activate', async (_, { licenseKey, requestUserId }) => {
   try {
     const result = activateLicense(DATA_DIR, licenseKey);
     if (result.ok) {
-      const reqUser = requestUserId ? authRepo.findById(requestUserId) : null;
-      audit(requestUserId || 0, reqUser?.name || 'admin',
-        'licencia_activada', 'license', null,
-        `Vence: ${result.expiry}`);
+      // La activación ya persistió license.key. La auditoría es secundaria:
+      // nunca debe hacer fallar la activación. Además user_id tiene FK a
+      // users(id) — sin usuario válido se guarda NULL, nunca 0.
+      try {
+        const reqUser = requestUserId ? authRepo.findById(requestUserId) : null;
+        audit(reqUser ? requestUserId : null, reqUser?.name || 'sistema',
+          'licencia_activada', 'license', null,
+          `Vence: ${result.expiry}`);
+      } catch (auditErr) {
+        console.error('[license:activate] auditoría falló (activación ya persistida):', auditErr.message);
+      }
     }
     return result;
   } catch (e) {

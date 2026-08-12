@@ -992,7 +992,7 @@ async function renderConfiguracion(el) {
         </div>
         <div class="fg" style="margin-bottom:8px">
           <label class="lbl">Clave de licencia</label>
-          <textarea class="inp" id="lic-key" rows="3" placeholder="2|ABCD...|Negocio|2027-01-01|FIRMA"
+          <textarea class="inp no-uppercase" id="lic-key" rows="3" data-uppercase="off" placeholder="2|ABCD...|Negocio|2027-01-01|FIRMA"
                  style="font-family:var(--mono);font-size:11px;resize:none;white-space:nowrap;overflow-x:auto"
                  onpaste="setTimeout(()=>{this.value=this.value.replace(/[\r\n\s]+/g,'')},0)"></textarea>
         </div>
@@ -1937,7 +1937,7 @@ async function renderECFConfig(container) {
         </div>
         <div class="fg">
           <label class="lbl">API Key</label>
-          <input class="inp" id="ecf-apikey" type="text"
+          <input class="inp no-uppercase" id="ecf-apikey" type="text" data-uppercase="off"
             value="${cfg.apiKey || ''}"
             placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
           <div style="font-size:10px;color:var(--muted2);margin-top:3px">
