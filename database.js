@@ -10044,6 +10044,114 @@ const crmRepo = {
         LIMIT ?`
     ).all(customerId, limit);
   },
+
+  // ── Cliente 360° (F1) ──────────────────────────
+  // RFM+ de 6 ejes + hábitos de compra + crédito, todo offline sobre datos
+  // que ya existen. Devuelve null si el cliente no existe.
+  customer360(customerId) {
+    const c = db.prepare(
+      `SELECT id, name, trade_name, customer_type, phone, rnc, email, address,
+              balance, credit_limit, credit_days, credit_due, status, preferred_price_mode
+         FROM customers WHERE id = ?`
+    ).get(customerId);
+    if (!c) return null;
+
+    // Ventas confirmadas (excluye cotizaciones/anuladas/devoluciones).
+    const sales = db.prepare(`
+      SELECT id, total, ncf, created_at,
+             CAST(julianday('now','localtime') - julianday(created_at) AS INTEGER) AS days_ago
+        FROM sales
+       WHERE customer_id = ? AND type='factura' AND status='completed'
+       ORDER BY created_at DESC
+    `).all(customerId);
+
+    const frequency = sales.length;
+    const monetary  = sales.reduce((s, x) => s + (x.total || 0), 0);
+    const recency   = frequency ? sales[0].days_ago : null;
+    const lastSale  = frequency ? sales[0].created_at : null;
+    const firstSale = frequency ? sales[frequency - 1].created_at : null;
+    const avgTicket = frequency ? monetary / frequency : 0;
+
+    // Eje 4 — Margen real aportado (subtotal − costo) de los ítems.
+    const marginRow = db.prepare(`
+      SELECT COALESCE(SUM(si.subtotal - si.unit_cost * si.qty), 0) AS margin
+        FROM sale_items si JOIN sales s ON s.id = si.sale_id
+       WHERE s.customer_id = ? AND s.type='factura' AND s.status='completed'
+    `).get(customerId);
+    const margin = marginRow.margin || 0;
+
+    // Eje 5 — Tendencia: gasto últimos 90 días vs los 90 previos.
+    const t = db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN julianday('now','localtime')-julianday(created_at) <= 90 THEN total END),0) AS recent,
+        COALESCE(SUM(CASE WHEN julianday('now','localtime')-julianday(created_at) > 90
+                      AND julianday('now','localtime')-julianday(created_at) <= 180 THEN total END),0) AS previous
+        FROM sales
+       WHERE customer_id = ? AND type='factura' AND status='completed'
+    `).get(customerId);
+    let direction = 'estable';
+    if (t.recent > t.previous * 1.15 && t.recent > 0) direction = 'subiendo';
+    else if (t.recent < t.previous * 0.85) direction = 'bajando';
+
+    // Eje 6 — Comportamiento de pago (crédito vencido o estado del cliente).
+    const overdue = !!(c.balance > 0 && c.credit_due && new Date(c.credit_due) < new Date());
+    const paymentStatus = (c.status === 'moroso' || overdue)
+      ? 'moroso'
+      : (c.status === 'bloqueado' ? 'bloqueado' : 'al_dia');
+
+    // "Suele comprar" — productos más recurrentes de este cliente.
+    const topProducts = db.prepare(`
+      SELECT si.product_name AS name, SUM(si.qty) AS qty, COUNT(DISTINCT si.sale_id) AS times
+        FROM sale_items si JOIN sales s ON s.id = si.sale_id
+       WHERE s.customer_id = ? AND s.type='factura' AND s.status='completed'
+       GROUP BY COALESCE(si.product_id, si.product_code), si.product_name
+       ORDER BY times DESC, qty DESC
+       LIMIT 5
+    `).all(customerId);
+
+    // Recompra prevista del producto más frecuente (promedio de días entre compras).
+    let nextRepurchase = null;
+    if (topProducts.length) {
+      const top = topProducts[0];
+      const g = db.prepare(`
+        SELECT MIN(s.created_at) AS first, MAX(s.created_at) AS last, COUNT(DISTINCT s.id) AS n
+          FROM sale_items si JOIN sales s ON s.id = si.sale_id
+         WHERE s.customer_id = ? AND s.type='factura' AND s.status='completed'
+           AND si.product_name = ?
+      `).get(customerId, top.name);
+      if (g.n >= 2) {
+        const span = (new Date(g.last) - new Date(g.first)) / 86400000;
+        const avgDays = Math.max(1, Math.round(span / (g.n - 1)));
+        const daysSince = Math.round((Date.now() - new Date(g.last)) / 86400000);
+        nextRepurchase = { product: top.name, avgDays, daysSince, due: daysSince >= avgDays * 0.85 };
+      }
+    }
+
+    // Segmento (misma lógica del panel de inicio) + puntajes RFM 1–5.
+    const segment = _crmSegmentOf({ freq: frequency, recency });
+    const rScore = recency == null ? 1 : recency <= 15 ? 5 : recency <= 45 ? 4 : recency <= 90 ? 3 : recency <= 180 ? 2 : 1;
+    const fScore = frequency >= 10 ? 5 : frequency >= 5 ? 4 : frequency >= 3 ? 3 : frequency >= 1 ? 2 : 1;
+    const mScore = monetary >= 100000 ? 5 : monetary >= 50000 ? 4 : monetary >= 20000 ? 3 : monetary >= 5000 ? 2 : 1;
+
+    const interactions = db.prepare(
+      `SELECT id, kind, reason, message, user_id, created_at
+         FROM customer_interactions WHERE customer_id = ?
+        ORDER BY created_at DESC LIMIT 10`
+    ).all(customerId);
+
+    return {
+      customer: c,
+      metrics: { recency, frequency, monetary, margin, avgTicket, firstSale, lastSale },
+      trend: { recent: t.recent, previous: t.previous, direction },
+      payment: { status: paymentStatus, overdue },
+      segment,
+      rfm: { r: rScore, f: fScore, m: mScore },
+      topProducts,
+      nextRepurchase,
+      recentSales: sales.slice(0, 10),
+      interactions,
+    };
+  },
 };
 
 module.exports = {

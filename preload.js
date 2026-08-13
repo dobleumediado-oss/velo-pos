@@ -76,6 +76,7 @@ contextBridge.exposeInMainWorld('api', {
   // ── CRM Cerebro (F0) ─────────────────────────
   crm: {
     overview:       ()  => ipcRenderer.invoke('crm:overview'),
+    customer360:    (d) => ipcRenderer.invoke('crm:customer360',    d),
     logInteraction: (d) => ipcRenderer.invoke('crm:logInteraction', d),
     interactions:   (d) => ipcRenderer.invoke('crm:interactions',   d),
   },

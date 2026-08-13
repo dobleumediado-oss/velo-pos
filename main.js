@@ -1573,6 +1573,16 @@ ipcMain.handle('crm:interactions', async (_, { customerId, limit }) => {
   }
 });
 
+ipcMain.handle('crm:customer360', async (_, { customerId }) => {
+  try {
+    const data = crmRepo.customer360(customerId);
+    if (!data) return { ok: false, error: 'Cliente no encontrado' };
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 function _customerContactAdmin(requestUserId) {
   const reqUser = authRepo.findById(requestUserId);
   if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {

@@ -55,5 +55,20 @@ ok(iid > 0, 'logInteraction inserta y devuelve id');
 const list = crmRepo.interactionsFor(c1);
 ok(list.length === 1 && list[0].kind === 'whatsapp', 'interactionsFor devuelve la interacción registrada');
 
-console.log(`\n${fail === 0 ? '✅' : '❌'} F0 CRM: ${pass} OK, ${fail} fallos`);
+// ── F1: Cliente 360° (RFM+ 6 ejes + hábitos) ──
+const p1 = db.prepare("INSERT INTO products(code,name,cost,price) VALUES(?,?,?,?)").run('P-ACE', 'Aceite 5W-30', 200, 500).lastInsertRowid;
+const anaSales = db.prepare("SELECT id FROM sales WHERE customer_id=? AND type='factura' AND status='completed'").all(c1);
+const item = db.prepare("INSERT INTO sale_items(sale_id,product_id,product_code,product_name,unit_cost,unit_price,qty,subtotal) VALUES(?,?,?,?,?,?,?,?)");
+anaSales.forEach(s => item.run(s.id, p1, 'P-ACE', 'Aceite 5W-30', 200, 500, 2, 1000)); // margen = 1000-400 = 600 c/u
+
+const c360 = crmRepo.customer360(c1);
+ok(c360 && c360.metrics.frequency === 5, `customer360: frequency 5 (${c360 && c360.metrics.frequency})`);
+ok(Math.abs(c360.metrics.monetary - 15000) < 0.01, `customer360: LTV 15000 (${c360.metrics.monetary})`);
+ok(Math.abs(c360.metrics.margin - 3000) < 0.01, `customer360: margen 3000 (5×600) (${c360.metrics.margin})`);
+ok(c360.segment === 'vip', `customer360: segmento vip (${c360.segment})`);
+ok(c360.rfm.f === 4, `customer360: F score = 4 para 5 compras (${c360.rfm.f})`);
+ok(c360.topProducts.length >= 1 && c360.topProducts[0].name === 'Aceite 5W-30', 'customer360: "suele comprar" detecta el aceite');
+ok(crmRepo.customer360(999999) === null, 'customer360: cliente inexistente devuelve null');
+
+console.log(`\n${fail === 0 ? '✅' : '❌'} F0+F1 CRM: ${pass} OK, ${fail} fallos`);
 process.exit(fail === 0 ? 0 : 1);
