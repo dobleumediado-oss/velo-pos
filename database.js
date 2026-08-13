@@ -9965,6 +9965,26 @@ function _crmSegmentOf(agg) {
   return 'frecuente';
 }
 
+// Clasifica un producto por demanda, rotación y antigüedad. Umbrales fijos y
+// explicables, iguales en el panel de inventario y en la ficha de producto.
+//   congelado = con stock pero sin venderse hace mucho (capital muerto)
+//   reponer   = se vende y está por agotarse (bajo mínimo o < 15 días de stock)
+//   estrella  = alta demanda (≥10 und/90d) con buen margen (≥25%)
+//   estable   = el resto con movimiento normal
+function _crmProductSegment(x) {
+  const stock = x.stock || 0;
+  if (stock > 0 && (
+        (x.qtyTotal === 0) ? (x.shelfAge != null && x.shelfAge > 120)
+                           : (x.daysSinceLastSale != null && x.daysSinceLastSale > 180))) {
+    return 'congelado';
+  }
+  if (x.qty90 > 0 && (stock <= (x.stockMin || 0) || (x.daysOfStock != null && x.daysOfStock < 15))) {
+    return 'reponer';
+  }
+  if (x.qty90 >= 10 && x.marginPct >= 25) return 'estrella';
+  return 'estable';
+}
+
 const crmRepo = {
   // Panel de inicio del CRM: totales, conteo por segmento y listas destacadas.
   // Solo lee ventas confirmadas (factura + completed); ignora cotizaciones,
@@ -10156,6 +10176,141 @@ const crmRepo = {
       nextRepurchase,
       recentSales: sales.slice(0, 10),
       interactions,
+    };
+  },
+
+  // ── Cerebro de inventario (F2) ─────────────────
+  // Segmenta cada producto activo por demanda/rotación/antigüedad, 100% offline
+  // sobre products + sale_items + inventory_movements que ya existen.
+  inventoryOverview() {
+    const products = db.prepare(
+      `SELECT id, name, code, category, stock, stock_min, cost, price, created_at
+         FROM products WHERE active=1`
+    ).all();
+
+    const soldRows = db.prepare(`
+      SELECT si.product_id AS pid,
+             SUM(CASE WHEN julianday('now','localtime')-julianday(s.created_at) <= 90 THEN si.qty ELSE 0 END) AS qty90,
+             SUM(si.qty) AS qtyTotal,
+             MAX(s.created_at) AS lastSale
+        FROM sale_items si JOIN sales s ON s.id = si.sale_id
+       WHERE s.type='factura' AND s.status='completed' AND si.product_id IS NOT NULL
+       GROUP BY si.product_id
+    `).all();
+    const sold = {};
+    soldRows.forEach(r => { sold[r.pid] = r; });
+
+    const entryRows = db.prepare(
+      `SELECT product_id AS pid, MAX(created_at) AS lastEntry
+         FROM inventory_movements WHERE type='entrada' GROUP BY product_id`
+    ).all();
+    const entry = {};
+    entryRows.forEach(r => { entry[r.pid] = r.lastEntry; });
+
+    const now = Date.now();
+    const daysSince = (iso) => iso ? Math.round((now - new Date(String(iso).replace(' ', 'T'))) / 86400000) : null;
+
+    const segments = { estrella: 0, estable: 0, reponer: 0, congelado: 0 };
+    const enriched = products.map(p => {
+      const s = sold[p.id] || { qty90: 0, qtyTotal: 0, lastSale: null };
+      const qty90 = s.qty90 || 0;
+      const velocity = qty90 / 90;
+      const daysOfStock = velocity > 0 ? Math.round(p.stock / velocity) : null;
+      const marginPct = p.price > 0 ? (p.price - p.cost) / p.price * 100 : 0;
+      const daysSinceLastSale = daysSince(s.lastSale);
+      const shelfAge = daysSince(entry[p.id] || p.created_at);
+      const segment = _crmProductSegment({
+        stock: p.stock, stockMin: p.stock_min, qty90, qtyTotal: s.qtyTotal || 0,
+        marginPct, daysSinceLastSale, shelfAge, daysOfStock,
+      });
+      segments[segment]++;
+      return {
+        id: p.id, name: p.name, code: p.code, stock: p.stock, stockMin: p.stock_min,
+        qty90, daysOfStock, marginPct, daysSinceLastSale, shelfAge,
+        stockValue: (p.stock || 0) * (p.cost || 0), segment,
+      };
+    });
+
+    return {
+      generatedAt: new Date().toISOString(),
+      totalProducts: products.length,
+      withStock: products.filter(p => (p.stock || 0) > 0).length,
+      stockValue: enriched.reduce((s, e) => s + e.stockValue, 0),
+      segments,
+      reorderList: enriched.filter(e => e.segment === 'reponer')
+        .sort((a, b) => (a.daysOfStock ?? 9999) - (b.daysOfStock ?? 9999)).slice(0, 8),
+      deadList: enriched.filter(e => e.segment === 'congelado')
+        .sort((a, b) => b.stockValue - a.stockValue).slice(0, 8),
+      starList: enriched.filter(e => e.segment === 'estrella')
+        .sort((a, b) => b.qty90 - a.qty90).slice(0, 8),
+    };
+  },
+
+  // Ficha 360° de un producto: rotación, margen, antigüedad, "se vende junto
+  // con" y movimientos recientes. Devuelve null si no existe.
+  product360(productId) {
+    const p = db.prepare(
+      `SELECT id, name, code, barcode, category, brand, model, stock, stock_min,
+              cost, price, wholesale, created_at
+         FROM products WHERE id = ?`
+    ).get(productId);
+    if (!p) return null;
+
+    const s = db.prepare(`
+      SELECT SUM(CASE WHEN julianday('now','localtime')-julianday(sa.created_at) <= 90 THEN si.qty ELSE 0 END) AS qty90,
+             SUM(si.qty) AS qtyTotal,
+             MAX(sa.created_at) AS lastSale,
+             COUNT(DISTINCT sa.id) AS timesSold
+        FROM sale_items si JOIN sales sa ON sa.id = si.sale_id
+       WHERE si.product_id = ? AND sa.type='factura' AND sa.status='completed'
+    `).get(productId);
+
+    const qty90 = s.qty90 || 0;
+    const velocity = qty90 / 90;
+    const velocityMonth = Math.round(velocity * 30 * 10) / 10;
+    const daysOfStock = velocity > 0 ? Math.round(p.stock / velocity) : null;
+    const marginPct = p.price > 0 ? (p.price - p.cost) / p.price * 100 : 0;
+
+    const now = Date.now();
+    const daysSince = (iso) => iso ? Math.round((now - new Date(String(iso).replace(' ', 'T'))) / 86400000) : null;
+    const lastEntry = db.prepare(
+      `SELECT MAX(created_at) AS e FROM inventory_movements WHERE product_id = ? AND type='entrada'`
+    ).get(productId).e;
+    const shelfAge = daysSince(lastEntry || p.created_at);
+    const daysSinceLastSale = daysSince(s.lastSale);
+
+    const segment = _crmProductSegment({
+      stock: p.stock, stockMin: p.stock_min, qty90, qtyTotal: s.qtyTotal || 0,
+      marginPct, daysSinceLastSale, shelfAge, daysOfStock,
+    });
+
+    const boughtWith = db.prepare(`
+      SELECT si2.product_name AS name, COUNT(DISTINCT si2.sale_id) AS times
+        FROM sale_items si1
+        JOIN sale_items si2 ON si2.sale_id = si1.sale_id AND si2.product_id <> si1.product_id
+        JOIN sales sa ON sa.id = si1.sale_id
+       WHERE si1.product_id = ? AND sa.type='factura' AND sa.status='completed'
+       GROUP BY COALESCE(si2.product_id, si2.product_name)
+       ORDER BY times DESC LIMIT 5
+    `).all(productId);
+
+    const recentMovements = db.prepare(
+      `SELECT type, qty, qty_after, reason, created_at
+         FROM inventory_movements WHERE product_id = ?
+        ORDER BY created_at DESC LIMIT 8`
+    ).all(productId);
+
+    return {
+      product: p,
+      metrics: {
+        stock: p.stock, stockMin: p.stock_min, cost: p.cost, price: p.price,
+        marginPct, stockValue: (p.stock || 0) * (p.cost || 0),
+      },
+      sales: {
+        qty90, qtyTotal: s.qtyTotal || 0, timesSold: s.timesSold || 0,
+        lastSale: s.lastSale, velocityMonth, daysOfStock, daysSinceLastSale,
+      },
+      shelfAge, segment, boughtWith, recentMovements,
     };
   },
 };

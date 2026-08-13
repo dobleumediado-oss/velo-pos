@@ -1583,6 +1583,24 @@ ipcMain.handle('crm:customer360', async (_, { customerId }) => {
   }
 });
 
+ipcMain.handle('crm:inventoryOverview', async () => {
+  try {
+    return { ok: true, data: crmRepo.inventoryOverview() };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('crm:product360', async (_, { productId }) => {
+  try {
+    const data = crmRepo.product360(productId);
+    if (!data) return { ok: false, error: 'Producto no encontrado' };
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 function _customerContactAdmin(requestUserId) {
   const reqUser = authRepo.findById(requestUserId);
   if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {

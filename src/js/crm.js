@@ -35,19 +35,51 @@ function _crmSegBadge(seg) {
   return `<span style="font-size:11px;font-weight:600;color:${cfg.color};border:1px solid ${cfg.color};border-radius:999px;padding:2px 10px">${cfg.label}</span>`;
 }
 
-// ── Render principal (panel de inicio) ─────────
+// ── Render principal (con pestañas) ────────────
+let _crmTab = 'clientes';
+
 async function renderCRM(el) {
+  window._crmPageEl = el;
+  const tabBtn = (key, label) => `
+    <button data-crmtab="${key}" onclick="switchCRMTab('${key}')"
+      style="border:none;background:none;cursor:pointer;padding:8px 4px;margin-right:18px;font-size:14px;font-weight:600;
+             color:${_crmTab === key ? 'var(--ink)' : 'var(--muted2)'};
+             border-bottom:2px solid ${_crmTab === key ? 'var(--accent,#059669)' : 'transparent'}">${label}</button>`;
   el.innerHTML = `
-    <div class="page-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:18px">
+    <div class="page-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px">
       <div>
         <h1 style="margin:0;display:flex;align-items:center;gap:10px">🧠 CRM Cerebro</h1>
-        <div style="font-size:12px;color:var(--muted2);margin-top:4px">Inteligencia offline sobre tus clientes · clic en un cliente para ver su panel 360°</div>
+        <div style="font-size:12px;color:var(--muted2);margin-top:4px">Inteligencia offline sobre clientes e inventario</div>
       </div>
       <span style="font-size:11px;color:var(--green,#00c07a);border:1px solid var(--green,#00c07a);border-radius:999px;padding:4px 10px">100% offline</span>
     </div>
-    <div id="crm-body"><div style="color:var(--muted2);padding:40px;text-align:center">Analizando clientes…</div></div>`;
+    <div style="border-bottom:1px solid var(--line2,#eee);margin-bottom:18px">
+      ${tabBtn('clientes', '👤 Clientes')}${tabBtn('inventario', '📦 Inventario')}
+    </div>
+    <div id="crm-tab-body"></div>`;
+  _crmLoadTab();
+}
 
-  const body = el.querySelector('#crm-body');
+function switchCRMTab(tab) {
+  _crmTab = tab;
+  document.querySelectorAll('[data-crmtab]').forEach(b => {
+    const on = b.dataset.crmtab === tab;
+    b.style.color = on ? 'var(--ink)' : 'var(--muted2)';
+    b.style.borderBottom = `2px solid ${on ? 'var(--accent,#059669)' : 'transparent'}`;
+  });
+  _crmLoadTab();
+}
+
+function _crmLoadTab() {
+  const body = document.getElementById('crm-tab-body');
+  if (!body) return;
+  if (_crmTab === 'inventario') return renderCRMInventario(body);
+  return renderCRMClientes(body);
+}
+
+// ── Pestaña Clientes ───────────────────────────
+async function renderCRMClientes(body) {
+  body.innerHTML = `<div style="color:var(--muted2);padding:40px;text-align:center">Analizando clientes…</div>`;
   let res;
   try {
     res = await window.api.crm.overview();
@@ -114,7 +146,7 @@ async function renderCRM(el) {
 
     <div style="margin-top:18px;padding:12px 14px;background:var(--surface3,#f3f4f6);border-radius:10px;font-size:12px;color:var(--muted2)">
       <strong style="color:var(--ink)">Cerebro de cliente activo.</strong> RFM+ de 6 ejes por cliente (recencia, frecuencia, monto, margen, tendencia y pago).
-      La Fase 2 añade el cerebro de inventario; la Fase 3, el redactor de mensajes de WhatsApp.
+      El cerebro de inventario está en la pestaña <strong style="color:var(--ink)">Inventario</strong>; la Fase 3 añade el redactor de mensajes de WhatsApp.
     </div>`;
 }
 
@@ -233,5 +265,158 @@ async function showCliente360(customerId) {
       </div>
     </div>`;
 
+  openModal(html, 'modal-lg');
+}
+
+// ── Pestaña Inventario (F2) ────────────────────
+const _CRM_PSEG = {
+  estrella:  { label: 'Estrella',  color: 'var(--green,#00c07a)',  desc: 'Alta demanda + buen margen. Nunca deben faltar.' },
+  estable:   { label: 'Estable',   color: 'var(--accent,#059669)', desc: 'Venta constante. El sostén del inventario.' },
+  reponer:   { label: 'Reponer',   color: 'var(--amber,#f59e0b)',  desc: 'Se agotan pronto. Pedir para no perder venta.' },
+  congelado: { label: 'Congelado', color: 'var(--red,#ef4444)',    desc: 'Sin venderse hace meses. Capital dormido.' },
+};
+
+function _crmPSegBadge(seg) {
+  const cfg = _CRM_PSEG[seg] || _CRM_PSEG.estable;
+  return `<span style="font-size:11px;font-weight:600;color:${cfg.color};border:1px solid ${cfg.color};border-radius:999px;padding:2px 10px">${cfg.label}</span>`;
+}
+
+async function renderCRMInventario(body) {
+  body.innerHTML = `<div style="color:var(--muted2);padding:40px;text-align:center">Analizando inventario…</div>`;
+  let res;
+  try {
+    res = await window.api.crm.inventoryOverview();
+  } catch (e) {
+    body.innerHTML = `<div style="color:var(--red,#ef4444);padding:24px">No se pudo cargar el inventario: ${e.message}</div>`;
+    return;
+  }
+  if (!res || !res.ok) {
+    body.innerHTML = `<div style="color:var(--red,#ef4444);padding:24px">No se pudo cargar el inventario: ${res?.error || 'error'}</div>`;
+    return;
+  }
+  const d = res.data;
+  const order = ['estrella', 'estable', 'reponer', 'congelado'];
+
+  const segCards = order.map(k => {
+    const cfg = _CRM_PSEG[k];
+    return `
+      <div class="card" style="padding:14px 16px;border-left:4px solid ${cfg.color}">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px">
+          <span style="font-size:13px;font-weight:600;color:var(--ink)">${cfg.label}</span>
+          <span style="font-size:22px;font-weight:700;color:var(--ink)">${d.segments[k] || 0}</span>
+        </div>
+        <div style="font-size:11px;color:var(--muted2);line-height:1.4;margin-top:4px">${cfg.desc}</div>
+      </div>`;
+  }).join('');
+
+  const prow = (p, right, subLeft) => `
+    <div onclick="showProducto360(${p.id})" title="Ver ficha de ${(p.name || '').replace(/"/g, '&quot;')}"
+         style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 4px;border-bottom:0.5px solid var(--line2,#eee);cursor:pointer"
+         onmouseover="this.style.background='var(--surface3,#f3f4f6)'" onmouseout="this.style.background=''">
+      <div style="min-width:0">
+        <div style="font-size:13px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.name}</div>
+        <div style="font-size:11px;color:var(--muted2)">${subLeft}</div>
+      </div>
+      <div style="font-size:12px;font-weight:600;color:var(--ink);white-space:nowrap;text-align:right">${right}</div>
+    </div>`;
+
+  const listOr = (items, fn, empty) => items && items.length ? items.map(fn).join('') : `<div style="color:var(--muted2);font-size:12px;padding:14px">${empty}</div>`;
+
+  body.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:8px">${segCards}</div>
+    <div style="font-size:11px;color:var(--muted2);margin:2px 0 18px">
+      ${d.totalProducts} productos activos · ${d.withStock} con stock · valor en inventario ${_crmFmtCompact(d.stockValue)}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px">
+      <div class="card" style="padding:16px">
+        <div style="font-size:13px;font-weight:700;color:var(--ink);margin-bottom:6px">⚠️ Reponer urgente</div>
+        ${listOr(d.reorderList, p => prow(p, `quedan ${p.stock}`, `${p.daysOfStock != null ? `~${p.daysOfStock} días de stock` : 'bajo mínimo'} · vendió ${p.qty90}/90d`), 'Nada urgente por reponer. 👍')}
+      </div>
+      <div class="card" style="padding:16px">
+        <div style="font-size:13px;font-weight:700;color:var(--ink);margin-bottom:6px">❄️ Capital congelado</div>
+        ${listOr(d.deadList, p => prow(p, _crmFmtCompact(p.stockValue), `${p.stock} und · ${p.daysSinceLastSale != null ? `sin venta hace ${p.daysSinceLastSale} días` : 'nunca vendido'}`), 'Sin inventario muerto. 🎉')}
+      </div>
+      <div class="card" style="padding:16px">
+        <div style="font-size:13px;font-weight:700;color:var(--ink);margin-bottom:6px">🏆 Productos estrella</div>
+        ${listOr(d.starList, p => prow(p, `${Math.round(p.marginPct)}% margen`, `vendió ${p.qty90} und/90d`), 'Aún sin estrellas claras.')}
+      </div>
+    </div>
+    <div style="margin-top:18px;padding:12px 14px;background:var(--surface3,#f3f4f6);border-radius:10px;font-size:12px;color:var(--muted2)">
+      <strong style="color:var(--ink)">Cerebro de inventario activo.</strong> Segmentación por demanda, rotación y antigüedad en estante — todo offline.
+      La Fase 2b añade caducidad y mantenimiento (atributos por producto/categoría).
+    </div>`;
+}
+
+// ── Producto 360° (F2) ─────────────────────────
+async function showProducto360(productId) {
+  openModal(`<div style="padding:40px;text-align:center;color:var(--muted2)">Cargando ficha…</div>`, 'modal-lg');
+  let res;
+  try {
+    res = await window.api.crm.product360({ productId });
+  } catch (e) {
+    openModal(`<div style="padding:24px;color:var(--red,#ef4444)">No se pudo cargar: ${e.message}</div>`);
+    return;
+  }
+  if (!res || !res.ok) {
+    openModal(`<div style="padding:24px;color:var(--red,#ef4444)">No se pudo cargar: ${res?.error || 'error'}</div>`);
+    return;
+  }
+  const d = res.data;
+  const p = d.product;
+  const mt = d.metrics;
+  const sa = d.sales;
+
+  const stat = (label, value, color, full) => `
+    <div style="background:var(--surface2,#fafafa);border-radius:10px;padding:10px 12px;min-width:0"${full ? ` title="${full}"` : ''}>
+      <div style="font-size:11px;color:var(--muted2);margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${label}</div>
+      <div style="font-size:15px;font-weight:700;color:${color || 'var(--ink)'};font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${value}</div>
+    </div>`;
+
+  const boughtWith = d.boughtWith.length
+    ? d.boughtWith.map(b => `<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:0.5px solid var(--line2,#eee);font-size:12px"><span style="color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${b.name}</span><span style="color:var(--muted2);white-space:nowrap">${b.times}×</span></div>`).join('')
+    : `<div style="color:var(--muted2);font-size:12px;padding:8px 0">Aún sin patrón de canasta.</div>`;
+
+  const movLabel = { entrada: '↑ Entrada', salida: '↓ Salida', ajuste: '≈ Ajuste', devolucion: '↩ Devolución', dano: '✖ Daño', perdida: '✖ Pérdida' };
+  const movements = d.recentMovements.length
+    ? d.recentMovements.map(mv => `<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:0.5px solid var(--line2,#eee);font-size:12px"><span style="color:var(--muted2)">${_crmDate(mv.created_at)} · ${movLabel[mv.type] || mv.type}</span><span style="color:var(--ink);font-weight:600">${mv.qty} → ${mv.qty_after}</span></div>`).join('')
+    : `<div style="color:var(--muted2);font-size:12px;padding:8px 0">Sin movimientos registrados.</div>`;
+
+  const reorderNote = (d.segment === 'reponer')
+    ? `<div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--amber,#f59e0b)22;font-size:12px;color:var(--ink)">⚠️ ${sa.daysOfStock != null ? `Se agota en ~${sa.daysOfStock} días al ritmo actual.` : 'Bajo el stock mínimo.'} Conviene reponer.</div>`
+    : (d.segment === 'congelado')
+      ? `<div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--red,#ef4444)18;font-size:12px;color:var(--ink)">❄️ ${sa.daysSinceLastSale != null ? `Sin venderse hace ${sa.daysSinceLastSale} días.` : 'Nunca vendido.'} Capital dormido — liquidar o promocionar.</div>`
+      : '';
+
+  const html = `
+    <div class="modal-head" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:16px 18px;border-bottom:1px solid var(--line2,#eee)">
+      <div style="min-width:0">
+        <div style="font-size:16px;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.name}</div>
+        <div style="font-size:11px;color:var(--muted2)">${p.code}${p.brand ? ` · ${p.brand}` : ''}${p.category ? ` · ${p.category}` : ''}${d.shelfAge != null ? ` · ${d.shelfAge} días en estante` : ''}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex:0 0 auto">${_crmPSegBadge(d.segment)}<button class="btn btn-ghost" onclick="closeModal()" style="font-size:18px;line-height:1;padding:2px 8px">×</button></div>
+    </div>
+    <div style="padding:16px 18px;max-height:70vh;overflow:auto">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-bottom:16px">
+        ${stat('Existencia', `${mt.stock} und`)}
+        ${stat('Rotación', sa.velocityMonth ? `${sa.velocityMonth}/mes` : '—')}
+        ${stat('Días de stock', sa.daysOfStock != null ? `${sa.daysOfStock} días` : '—')}
+        ${stat('Margen', `${Math.round(mt.marginPct)}%`, 'var(--green,#00c07a)')}
+        ${stat('Valor en stock', _crmFmtCompact(mt.stockValue), null, _crmFmt(mt.stockValue))}
+      </div>
+      ${reorderNote}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px">
+        <div class="card" style="padding:14px">
+          <div style="font-size:12px;font-weight:700;color:var(--ink);margin-bottom:6px">🔗 Se vende junto con</div>
+          ${boughtWith}
+        </div>
+        <div class="card" style="padding:14px">
+          <div style="font-size:12px;font-weight:700;color:var(--ink);margin-bottom:6px">📦 Movimientos recientes</div>
+          ${movements}
+        </div>
+      </div>
+      <div style="margin-top:14px;font-size:11px;color:var(--muted2)">
+        Costo ${_crmFmt(mt.cost)} · Precio ${_crmFmt(mt.price)} · Vendió ${sa.qty90} und en 90 días · ${sa.timesSold} ventas históricas
+      </div>
+    </div>`;
   openModal(html, 'modal-lg');
 }

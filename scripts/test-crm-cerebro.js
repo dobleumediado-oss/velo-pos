@@ -79,5 +79,26 @@ ok(c360.rfm.f === 4, `customer360: F score = 4 para 5 compras (${c360.rfm.f})`);
 ok(c360.topProducts.length >= 1 && c360.topProducts[0].name === 'Aceite 5W-30', 'customer360: "suele comprar" detecta el aceite');
 ok(crmRepo.customer360(999999) === null, 'customer360: cliente inexistente devuelve null');
 
-console.log(`\n${fail === 0 ? '✅' : '❌'} F0+F1 CRM: ${pass} OK, ${fail} fallos`);
+// ── F2: Cerebro de inventario ──
+const star = db.prepare("INSERT INTO products(code,name,cost,price,stock,stock_min) VALUES(?,?,?,?,?,?)").run('P-STAR', 'Bujía Estrella', 200, 500, 50, 5).lastInsertRowid;
+const dead = db.prepare("INSERT INTO products(code,name,cost,price,stock,stock_min) VALUES(?,?,?,?,?,?)").run('P-DEAD', 'Faro Muerto', 100, 300, 30, 5).lastInsertRowid;
+const sStar = db.prepare("INSERT INTO sales(customer_id,type,status,total,created_at) VALUES(?,'factura','completed',?,datetime('now','localtime','-10 days'))").run(c1, 10000).lastInsertRowid;
+item.run(sStar, star, 'P-STAR', 'Bujía Estrella', 200, 500, 20, 10000); // 20 und en 90d, margen 60%
+const sDead = db.prepare("INSERT INTO sales(customer_id,type,status,total,created_at) VALUES(?,'factura','completed',?,datetime('now','localtime','-300 days'))").run(c1, 300).lastInsertRowid;
+item.run(sDead, dead, 'P-DEAD', 'Faro Muerto', 100, 300, 1, 300); // última venta hace 300 días
+
+const inv = crmRepo.inventoryOverview();
+ok(inv.segments.estrella >= 1, `inventoryOverview: ≥1 estrella (${inv.segments.estrella})`);
+ok(inv.segments.congelado >= 1, `inventoryOverview: ≥1 congelado (${inv.segments.congelado})`);
+ok(inv.stockValue > 0, `inventoryOverview: valor de inventario > 0 (${inv.stockValue})`);
+
+const pStar = crmRepo.product360(star);
+ok(pStar.segment === 'estrella', `product360: bujía = estrella (${pStar.segment})`);
+ok(pStar.sales.qty90 === 20, `product360: qty90 = 20 (${pStar.sales.qty90})`);
+ok(Math.round(pStar.metrics.marginPct) === 60, `product360: margen 60% (${Math.round(pStar.metrics.marginPct)})`);
+const pDead = crmRepo.product360(dead);
+ok(pDead.segment === 'congelado', `product360: faro = congelado (${pDead.segment})`);
+ok(crmRepo.product360(999999) === null, 'product360: producto inexistente devuelve null');
+
+console.log(`\n${fail === 0 ? '✅' : '❌'} F0+F1+F2 CRM: ${pass} OK, ${fail} fallos`);
 process.exit(fail === 0 ? 0 : 1);
