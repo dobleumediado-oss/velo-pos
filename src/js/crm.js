@@ -10,6 +10,14 @@
 
 // ── Utilitarios locales ───────────────────────
 const _crmFmt = n => 'RD$' + (Number(n) || 0).toLocaleString('es-DO', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+// Compacto para tiles angostas: millones como "RD$8.86M", miles sin decimales.
+const _crmFmtCompact = n => {
+  n = Number(n) || 0;
+  const abs = Math.abs(n);
+  if (abs >= 1e6) return 'RD$' + (n / 1e6).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + 'M';
+  if (abs >= 1e4) return 'RD$' + Math.round(n).toLocaleString('es-DO');
+  return 'RD$' + n.toLocaleString('es-DO', { maximumFractionDigits: 2 });
+};
 const _crmRecency = d => (d == null) ? 'sin compras' : (d <= 0 ? 'hoy' : `hace ${d} día${d === 1 ? '' : 's'}`);
 const _crmDate = s => { if (!s) return '—'; const d = new Date(String(s).replace(' ', 'T')); return isNaN(d) ? String(s).slice(0, 10) : d.toLocaleDateString('es-DO', { day: '2-digit', month: 'short', year: 'numeric' }); };
 
@@ -128,10 +136,11 @@ async function showCliente360(customerId) {
   const c = d.customer;
   const m = d.metrics;
 
-  const stat = (label, value, color) => `
-    <div style="background:var(--surface2,#fafafa);border-radius:10px;padding:10px 12px">
-      <div style="font-size:11px;color:var(--muted2);margin-bottom:3px">${label}</div>
-      <div style="font-size:17px;font-weight:700;color:${color || 'var(--ink)'}">${value}</div>
+  const stat = (label, value, color, sub, full) => `
+    <div style="background:var(--surface2,#fafafa);border-radius:10px;padding:10px 12px;min-width:0"${full ? ` title="${full}"` : ''}>
+      <div style="font-size:11px;color:var(--muted2);margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${label}</div>
+      <div style="font-size:15px;font-weight:700;color:${color || 'var(--ink)'};font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${value}</div>
+      ${sub ? `<div style="font-size:10px;color:var(--muted2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${sub}</div>` : ''}
     </div>`;
 
   const rfmDot = (n) => `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:2px;background:${n ? 'var(--accent,#059669)' : 'var(--line2,#ddd)'}"></span>`;
@@ -182,11 +191,13 @@ async function showCliente360(customerId) {
     </div>
 
     <div style="padding:16px 18px;max-height:70vh;overflow:auto">
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-bottom:16px">
-        ${stat('Valor total (LTV)', _crmFmt(m.monetary))}
-        ${stat('Margen aportado', _crmFmt(m.margin), 'var(--green,#00c07a)')}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:16px">
+        ${stat('Valor total (LTV)', _crmFmtCompact(m.monetary), null, null, _crmFmt(m.monetary))}
+        ${m.marginKnown
+          ? stat('Margen aportado', _crmFmtCompact(m.margin), 'var(--green,#00c07a)', `${Math.round(m.marginPct)}% margen`, _crmFmt(m.margin))
+          : stat('Margen aportado', '—', 'var(--muted2)', 'sin costo registrado')}
         ${stat('Compras', m.frequency)}
-        ${stat('Ticket prom.', _crmFmt(m.avgTicket))}
+        ${stat('Ticket prom.', _crmFmtCompact(m.avgTicket), null, null, _crmFmt(m.avgTicket))}
         ${stat('Última compra', _crmRecency(m.recency))}
       </div>
 

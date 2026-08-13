@@ -65,6 +65,15 @@ const c360 = crmRepo.customer360(c1);
 ok(c360 && c360.metrics.frequency === 5, `customer360: frequency 5 (${c360 && c360.metrics.frequency})`);
 ok(Math.abs(c360.metrics.monetary - 15000) < 0.01, `customer360: LTV 15000 (${c360.metrics.monetary})`);
 ok(Math.abs(c360.metrics.margin - 3000) < 0.01, `customer360: margen 3000 (5×600) (${c360.metrics.margin})`);
+ok(c360.metrics.marginKnown === true, 'customer360: marginKnown=true cuando hay costo');
+
+// Cliente con ítems SIN costo (data importada) → margen no confiable
+const p0 = db.prepare("INSERT INTO products(code,name,cost,price) VALUES(?,?,?,?)").run('P-CORREA', 'Correa C52', 0, 800).lastInsertRowid;
+db.prepare("SELECT id FROM sales WHERE customer_id=? AND type='factura' AND status='completed'").all(c2)
+  .forEach(s => item.run(s.id, p0, 'P-CORREA', 'Correa C52', 0, 800, 1, 800)); // unit_cost 0
+const caro = crmRepo.customer360(c2);
+ok(caro.metrics.marginKnown === false, 'customer360: marginKnown=false cuando el costo es 0 (importado)');
+ok(caro.metrics.margin === 0, 'customer360: margen=0 (no se infla al 100%) sin costo');
 ok(c360.segment === 'vip', `customer360: segmento vip (${c360.segment})`);
 ok(c360.rfm.f === 4, `customer360: F score = 4 para 5 compras (${c360.rfm.f})`);
 ok(c360.topProducts.length >= 1 && c360.topProducts[0].name === 'Aceite 5W-30', 'customer360: "suele comprar" detecta el aceite');

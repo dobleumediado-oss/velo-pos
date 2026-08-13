@@ -10072,13 +10072,19 @@ const crmRepo = {
     const firstSale = frequency ? sales[frequency - 1].created_at : null;
     const avgTicket = frequency ? monetary / frequency : 0;
 
-    // Eje 4 — Margen real aportado (subtotal − costo) de los ítems.
+    // Eje 4 — Margen real aportado (ingreso de ítems − costo). Si el costo es 0
+    // en todos los ítems (típico de data importada sin costo), el margen no es
+    // confiable: marcamos marginKnown=false para no mostrar "100% de margen".
     const marginRow = db.prepare(`
-      SELECT COALESCE(SUM(si.subtotal - si.unit_cost * si.qty), 0) AS margin
+      SELECT COALESCE(SUM(si.subtotal), 0)          AS revenue,
+             COALESCE(SUM(si.unit_cost * si.qty), 0) AS cost
         FROM sale_items si JOIN sales s ON s.id = si.sale_id
        WHERE s.customer_id = ? AND s.type='factura' AND s.status='completed'
     `).get(customerId);
-    const margin = marginRow.margin || 0;
+    const marginKnown = (marginRow.cost || 0) > 0;
+    const margin      = marginKnown ? (marginRow.revenue - marginRow.cost) : 0;
+    const marginPct   = (marginKnown && marginRow.revenue > 0)
+      ? (margin / marginRow.revenue) * 100 : 0;
 
     // Eje 5 — Tendencia: gasto últimos 90 días vs los 90 previos.
     const t = db.prepare(`
@@ -10141,7 +10147,7 @@ const crmRepo = {
 
     return {
       customer: c,
-      metrics: { recency, frequency, monetary, margin, avgTicket, firstSale, lastSale },
+      metrics: { recency, frequency, monetary, margin, marginKnown, marginPct, avgTicket, firstSale, lastSale },
       trend: { recent: t.recent, previous: t.previous, direction },
       payment: { status: paymentStatus, overdue },
       segment,
