@@ -666,6 +666,7 @@ function buildSidebar() {
     { key: 'inventario',icon: 'box',      label: 'Inventario' },
     { key: 'compras',   icon: 'truck',    label: 'Compras' },
     { key: 'clientes',  icon: 'users',    label: 'Clientes' },
+    ...(_adminPuede('module_crm') ? [{ key: 'crm', icon: 'trend', label: 'CRM Cerebro' }] : []),
     { key: 'ventas',    icon: 'list',     label: 'Ventas' },
     { key: 'devoluciones', icon: 'return', label: 'Devoluciones' },
     ...(_adminPuede('module_vendedores') ? [{ key: 'vendedores', icon: 'users', label: 'Vendedores' }] : []),
@@ -1168,6 +1169,7 @@ function routeTo(p) {
   if (user?.role === 'admin') {
     const baseAdmin = ['dash','pos','inventario','compras','clientes','ventas','devoluciones','caja','reportes','configuracion','impresion'];
     const modRoutesAdmin = {
+      crm:          ['module_crm'],
       gastos:       ['module_gastos'],
       bancos:       ['module_contabilidad'],
       contabilidad: ['module_contabilidad'],
@@ -1236,6 +1238,7 @@ function routeTo(p) {
     case 'inventario':   renderInventario(el);     break;
     case 'compras':      renderCompras(el);         break;
     case 'clientes':     renderClientes(el);       break;
+    case 'crm':          renderCRM(el);            break;
     case 'ventas':       renderVentas(el);         break;
     case 'devoluciones': renderDevoluciones(el);   break;
     case 'vendedores':   renderVendedores(el);     break;

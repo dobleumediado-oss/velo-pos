@@ -9945,9 +9945,111 @@ const saleCorrectionsRepo = createSaleCorrectionsRepo({
 // ══════════════════════════════════════════════
 // EXPORTS
 // ══════════════════════════════════════════════
+// ══════════════════════════════════════════════
+// CRM CEREBRO — repositorio (F0/F1)
+// ──────────────────────────────────────────────
+// Segmentación RFM ligera calculada 100% offline sobre sales/customers.
+// F0 entrega el panel de inicio (conteos por segmento + destacados) y la
+// bitácora de interacciones. El scoring RFM+ de 6 ejes se profundiza en F1.
+// ══════════════════════════════════════════════
+
+// Clasifica un cliente según sus agregados de compra (recencia/frecuencia).
+// Umbrales conservadores y explicables — nada de "magia".
+function _crmSegmentOf(agg) {
+  const freq = agg.freq || 0;
+  if (freq === 0) return 'nuevo';
+  const r = (agg.recency == null) ? 9999 : agg.recency;
+  if (freq >= 3 && r <= 45) return 'vip';
+  if (freq >= 3 && r > 90)  return 'en_riesgo';
+  if (r > 90)               return 'dormido';
+  return 'frecuente';
+}
+
+const crmRepo = {
+  // Panel de inicio del CRM: totales, conteo por segmento y listas destacadas.
+  // Solo lee ventas confirmadas (factura + completed); ignora cotizaciones,
+  // devoluciones y anuladas para que los números reflejen negocio real.
+  overview() {
+    const customers = db.prepare(
+      `SELECT id, name, trade_name, customer_type, balance, credit_limit, status
+         FROM customers WHERE active=1`
+    ).all();
+
+    const agg = db.prepare(`
+      SELECT customer_id AS id,
+             COUNT(*)            AS freq,
+             COALESCE(SUM(total),0) AS monetary,
+             MAX(created_at)     AS last_sale,
+             CAST(julianday('now','localtime') - julianday(MAX(created_at)) AS INTEGER) AS recency
+        FROM sales
+       WHERE type='factura' AND status='completed' AND customer_id IS NOT NULL
+       GROUP BY customer_id
+    `).all();
+
+    const byId = {};
+    agg.forEach(a => { byId[a.id] = a; });
+
+    const segments = { vip: 0, frecuente: 0, en_riesgo: 0, dormido: 0, nuevo: 0 };
+    const enriched = customers.map(c => {
+      const a = byId[c.id] || { freq: 0, monetary: 0, recency: null };
+      const segment = _crmSegmentOf(a);
+      segments[segment]++;
+      return {
+        id: c.id,
+        name: c.trade_name || c.name,
+        freq: a.freq || 0,
+        monetary: a.monetary || 0,
+        recency: a.recency,
+        balance: c.balance || 0,
+        segment,
+      };
+    });
+
+    const topSpenders = enriched
+      .filter(e => e.monetary > 0)
+      .sort((x, y) => y.monetary - x.monetary)
+      .slice(0, 8);
+
+    const atRisk = enriched
+      .filter(e => e.segment === 'en_riesgo' || e.segment === 'dormido')
+      .sort((x, y) => y.monetary - x.monetary)
+      .slice(0, 8);
+
+    return {
+      generatedAt: new Date().toISOString(),
+      totalCustomers: customers.length,
+      withPurchases: agg.length,
+      segments,
+      topSpenders,
+      atRisk,
+    };
+  },
+
+  // Registra un contacto/nota del CRM en la bitácora del cliente.
+  logInteraction({ customerId, kind = 'nota', reason = '', message = '', userId = null }) {
+    const info = db.prepare(
+      `INSERT INTO customer_interactions(customer_id, kind, reason, message, user_id)
+       VALUES(?,?,?,?,?)`
+    ).run(customerId, kind, reason, message, userId);
+    return info.lastInsertRowid;
+  },
+
+  // Últimas interacciones de un cliente (para el historial del panel 360°).
+  interactionsFor(customerId, limit = 20) {
+    return db.prepare(
+      `SELECT id, kind, reason, message, user_id, created_at
+         FROM customer_interactions
+        WHERE customer_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?`
+    ).all(customerId, limit);
+  },
+};
+
 module.exports = {
   suppliersRepo,
   purchasesRepo,
+  crmRepo,
   initDB,
   initDetachedDB,
   ensureUppercasePersistence,

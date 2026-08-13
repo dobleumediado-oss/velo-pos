@@ -249,6 +249,7 @@ async function loadAppData() {
       CFG.module_contabilidad  = settings.module_contabilidad  || '0';
       CFG.module_vendedores    = settings.module_vendedores    || '0';
       CFG.module_preventa      = settings.module_preventa      || '1';
+      CFG.module_crm           = settings.module_crm           || '0';
       CFG.activeBusinessId     = DB.activeBusiness?.id || '';
       CFG.activeBusinessName   = DB.activeBusiness?.name || (CFG.activeBusinessId ? CFG.biz : '');
       CFG.connectionMode       = settings.connection_mode || CFG.connectionMode || 'local';
@@ -261,6 +262,7 @@ async function loadAppData() {
       CFG.module_contabilidad_roles  = settings.module_contabilidad_roles  || 'admin';
       CFG.module_vendedores_roles    = settings.module_vendedores_roles    || 'admin';
       CFG.module_preventa_roles      = settings.module_preventa_roles      || 'admin,cajero';
+      CFG.module_crm_roles           = settings.module_crm_roles           || 'admin';
       CFG.barcode_enabled_roles      = settings.barcode_enabled_roles      || 'admin';
       CFG.module_sucursales_roles    = settings.module_sucursales_roles    || 'admin';
       CFG.module_vehiculos_roles     = settings.module_vehiculos_roles     || 'admin';

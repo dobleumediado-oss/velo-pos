@@ -73,6 +73,13 @@ contextBridge.exposeInMainWorld('api', {
     getItemsForCustomer:    (data) => ipcRenderer.invoke('customers:getItemsForCustomer',    data),
   },
 
+  // ── CRM Cerebro (F0) ─────────────────────────
+  crm: {
+    overview:       ()  => ipcRenderer.invoke('crm:overview'),
+    logInteraction: (d) => ipcRenderer.invoke('crm:logInteraction', d),
+    interactions:   (d) => ipcRenderer.invoke('crm:interactions',   d),
+  },
+
   // ── Caja ──────────────────────────────────
   cash: {
     getOpen:         (data)  => ipcRenderer.invoke('cash:getOpen', data),

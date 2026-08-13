@@ -187,7 +187,7 @@ const {
   salesRepo, returnsRepo, reportsRepo, suppliersRepo, purchasesRepo, audit,
   expensesRepo, branchesRepo, vehiclesRepo, maintenanceRepo, deliveriesRepo, ncfRepo,
   financialAccountsRepo, bankReconRepo, accountingRepo, fixedAssetsRepo, conduceRepo, documentNumberRepo, salespeopleRepo,
-  checkoutOrdersRepo, saleCorrectionsRepo, ensureUppercasePersistence
+  checkoutOrdersRepo, saleCorrectionsRepo, ensureUppercasePersistence, crmRepo
 } = require('./database');
 
 const {
@@ -1540,6 +1540,37 @@ ipcMain.handle('customers:update', async (_, { id, data, requestUserId }) => {
 
 ipcMain.handle('customers:getContacts', async (_, { customerId }) => {
   return customersRepo.getContacts(customerId);
+});
+
+// ── CRM Cerebro (F0) ──────────────────────────
+// Solo admin/superadmin. El módulo se activa en superadmin (module_crm).
+ipcMain.handle('crm:overview', async () => {
+  try {
+    return { ok: true, data: crmRepo.overview() };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('crm:logInteraction', async (_, { customerId, kind, reason, message, requestUserId }) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
+    const id = crmRepo.logInteraction({ customerId, kind, reason, message, userId: requestUserId });
+    return { ok: true, id };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('crm:interactions', async (_, { customerId, limit }) => {
+  try {
+    return { ok: true, data: crmRepo.interactionsFor(customerId, limit || 20) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 });
 
 function _customerContactAdmin(requestUserId) {

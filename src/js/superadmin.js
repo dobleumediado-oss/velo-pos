@@ -271,6 +271,7 @@ async function renderSuperAdmin(el) {
     { key: 'module_gastos',        icon: '💰', title: 'Gastos y Egresos',               desc: 'Registro de gastos, categorías y reportes de egresos.',  cajeroCan: true  },
     { key: 'module_contabilidad',  icon: '📒', title: 'Contabilidad y Bancos',          desc: 'Bancos, catálogo de cuentas, asientos y reportes.',       cajeroCan: false },
     { key: 'module_vendedores',    icon: '🧑‍💼', title: 'Vendedores + Nómina', desc: 'Activa dos áreas conectadas: operación comercial y liquidaciones financieras.', cajeroCan: false },
+    { key: 'module_crm',           icon: '🧠', title: 'CRM Cerebro',                 desc: 'Inteligencia offline sobre clientes e inventario: segmentación, alertas y contacto.', cajeroCan: false },
     // Módulos operativos
     { key: 'barcode_enabled',      icon: '🏷️', title: 'Etiquetas / Código de Barras',  desc: 'Diseñador e impresión de etiquetas con códigos de barras.', cajeroCan: true, special: 'barcode' },
     { key: 'module_preventa',      icon: '🧾', title: 'Preventa y Despacho',             desc: 'Prepara órdenes, reserva inventario y las envía a caja para su cobro y entrega.', cajeroCan: true },
