@@ -237,6 +237,12 @@ select.inp{cursor:pointer}
 .modal-lg{width:680px}
 .modal-xl{width:780px}
 .modal-xxl{width:960px}
+/* Cobro del POS: densidad compacta sin ocultar información. Reduce padding del
+   modal y separación entre grupos de campos para que quepa más sin scroll. */
+.modal.pos-cobro{padding:19px}
+.pos-cobro .fg{margin-bottom:9px}
+.pos-cobro .g2{gap:10px}
+.pos-cobro .modal-foot{margin-top:12px}
 /* Modales cuyo contenido principal es una tabla ancha (.mtw = modal table wide):
    COMPACTA el contenido (padding y fuente menores) para meter más columnas sin
    agrandar el modal. Se combina con el ancho que ya tenga el modal (xl/xxl). Si

@@ -333,7 +333,7 @@ window.administrarSecuenciaNcf = async (id) => {
     </div>
     ${Number(sequence.available_gap_count || 0) ? `<div style="padding:10px 12px;margin-bottom:12px;border-radius:9px;background:#fffbeb;border:1px solid #fde68a">
       <div class="lbl">Próximo NCF real</div><strong style="font-family:var(--mono);color:#92400e">${_sEsc(actualNext)}</strong>
-      <div style="font-size:10px;color:#92400e;margin-top:3px">VELO usará primero ${Number(sequence.available_gap_count)} correlativo(s) saltado(s) que nunca fueron emitidos.</div>
+      <div style="font-size:10px;color:#92400e;margin-top:3px">VELO usará primero ${Number(sequence.available_gap_count)} correlativo(s) en cola —saltados nunca emitidos, o liberados al anular una factura cuyo comprobante no se entregó ni se reportó— antes de continuar el rango.</div>
     </div>` : ''}
     <div class="fg"><label class="lbl">Continuación del rango después de los saltados *</label>
       <input class="inp" id="ncf-next" inputmode="numeric" value="${_sNcf(sequence.type, next)}">

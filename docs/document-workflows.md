@@ -47,7 +47,7 @@ los rangos autorizados en `ncf_sequences`.
 - En el historial de Ventas se conserva además la referencia corta reconocida
   por el personal (`#2499`, por ejemplo). Las ventas nativas muestran debajo su
   correlativo Velo (`FAC-000004`); las migradas se identifican como
-  `Importada de FabPro` y priorizan su número histórico.
+  `Importada de FAPRO` y priorizan su número histórico.
 - Las cotizaciones nuevas no mueven inventario, caja, crédito ni contabilidad.
 - Eliminar una cotización la retira inmediatamente de la operación y conserva
   solo su correlativo y el evento de auditoría.

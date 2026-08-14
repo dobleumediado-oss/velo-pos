@@ -542,7 +542,11 @@ function renderCart() {
         </span>
       </div>`;
   } else {
-    inv.cart.forEach((item, idx) => {
+    // El artículo recién agregado se muestra de primero (arriba hacia abajo)
+    // para evitar scroll innecesario. No se altera el orden real del carrito ni
+    // los índices `idx` que usan los controles de cada línea: solo se invierte
+    // el recorrido de renderizado.
+    inv.cart.map((item, idx) => ({ item, idx })).reverse().forEach(({ item, idx }) => {
       html += `
         <div class="cart-item">
           <div class="ci-info">
@@ -2115,12 +2119,29 @@ function openCobroModal(inv) {
       </div>
     </div>` : ''}
 
+    ${!isQuote && CFG.fiscalEnabled ? `
+    <div class="g2">
+      <div class="fg" style="margin-bottom:0">
+        <label class="lbl">Fecha del documento</label>
+        <input class="inp" id="cbr-sale-date" type="date"
+               value="${posEscHtml(inv.saleDate || new Date().toISOString().slice(0,10))}"/>
+      </div>
+      <div class="fg" id="cbr-ncf-wrap" style="margin-bottom:0">
+        <label class="lbl">Tipo de comprobante fiscal</label>
+        <select class="inp" id="cbr-ncf-type" onchange="cbrDocHint()">
+          <option value="" selected>Sin comprobante</option>
+        </select>
+      </div>
+    </div>
+    <div style="font-size:10.5px;color:var(--muted2);margin-top:5px">
+      Fecha usada en historial y reportes · por defecto <strong>SIN comprobante</strong> (elige B01/B02 solo si piden factura fiscal).
+    </div>` : `
     <div class="fg">
       <label class="lbl">Fecha del documento</label>
       <input class="inp" id="cbr-sale-date" type="date"
              value="${posEscHtml(inv.saleDate || new Date().toISOString().slice(0,10))}"/>
       <div style="font-size:10.5px;color:var(--muted2);margin-top:4px">La factura aparecerá en el historial y los reportes de esta fecha.</div>
-    </div>
+    </div>`}
 
     <div class="fg" style="${isQuote ? 'display:none' : ''}">
       <label class="lbl">Método de pago</label>
@@ -2338,7 +2359,7 @@ function openCobroModal(inv) {
         ${svg('check')} ${isQuote ? 'Crear cotización' : 'Confirmar y cobrar'}
       </button>
     </div>
-  `, 'modal-lg');
+  `, 'modal-lg pos-cobro');
 
   // Inicializar cambio inmediatamente si método es efectivo
   setTimeout(() => {
@@ -2382,6 +2403,7 @@ function openCobroModal(inv) {
       const avail = new Set();
       (seqs?.data || []).forEach(s => { if (s.active && s.current < s.to_num) avail.add(s.type); });
       window._ncfAvail = avail;
+      cbrPopulateNcfTypes(avail);
       cbrDocHint();
     }).catch(() => { window._ncfAvail = new Set(); cbrDocHint(); });
   }
@@ -2672,8 +2694,33 @@ function cbrSelectCli(id, contactId = null) {
   cbrDocHint();
 }
 
+// Etiquetas de los tipos de comprobante DGII usados por el selector del cobro.
+const NCF_TYPE_LABELS = {
+  B01: 'B01 · Crédito Fiscal',
+  B02: 'B02 · Consumo',
+  B14: 'B14 · Régimen Especial',
+  B15: 'B15 · Gubernamental',
+  B16: 'B16 · Exportaciones',
+};
+
+// Rellena el selector "Tipo de comprobante" con los tipos que tienen secuencia
+// activa disponible. "Sin comprobante" es siempre la opción por defecto.
+function cbrPopulateNcfTypes(availSet) {
+  const sel = document.getElementById('cbr-ncf-type');
+  if (!sel) return;
+  const avail = availSet instanceof Set ? availSet : new Set();
+  const prev = sel.value;
+  const opts = ['<option value="">Sin comprobante</option>'];
+  ['B01', 'B02', 'B14', 'B15', 'B16'].forEach(t => {
+    if (avail.has(t)) opts.push(`<option value="${t}">${NCF_TYPE_LABELS[t]}</option>`);
+  });
+  sel.innerHTML = opts.join('');
+  // Conserva la elección previa si sigue siendo válida; por defecto, sin comprobante.
+  sel.value = (prev && avail.has(prev)) ? prev : '';
+}
+
 // ── Detector de documento + preview de comprobante en el POS ──────────────
-// Muestra si el documento es RNC/Cédula y QUÉ comprobante se emitirá (B01/B02),
+// Muestra si el documento es RNC/Cédula y QUÉ comprobante ELIGIÓ el cajero,
 // avisando si no hay secuencia registrada para ese tipo (saldrá sin NCF).
 // Reutiliza los helpers globales _docKind, _rncChecksum y _cedulaChecksum.
 function cbrDocHint() {
@@ -2697,15 +2744,20 @@ function cbrDocHint() {
     }
   }
 
-  // Línea 2 — comprobante fiscal que se emitirá (solo factura con fiscal activo)
+  // Línea 2 — comprobante fiscal ELEGIDO por el cajero (por defecto, ninguno).
   let compLine = '';
   if (inv.itype === 'factura' && CFG.fiscalEnabled) {
-    const tipo  = d.length === 9 ? 'B01' : 'B02';
-    const label = tipo === 'B01' ? 'B01 Crédito Fiscal' : 'B02 Consumo';
-    if (window._ncfAvail instanceof Set && !window._ncfAvail.has(tipo)) {
-      compLine = `Comprobante ${label}: ⚠ sin secuencia ${tipo} registrada → saldrá SIN NCF`;
+    const sel  = document.getElementById('cbr-ncf-type');
+    const tipo = sel ? sel.value : '';
+    if (!tipo) {
+      compLine = 'Sin comprobante fiscal';
     } else {
-      compLine = `Comprobante a emitir: ${label}`;
+      const label = NCF_TYPE_LABELS[tipo] || tipo;
+      if (window._ncfAvail instanceof Set && !window._ncfAvail.has(tipo)) {
+        compLine = `${label}: ⚠ sin secuencia ${tipo} registrada → saldrá SIN NCF`;
+      } else {
+        compLine = `Comprobante a emitir: ${label}`;
+      }
     }
   }
 
@@ -2814,6 +2866,8 @@ async function finalizarVenta() {
   const cliPhone = document.getElementById('cbr-phone')?.value?.trim() || '';
   const cliPhoneType = document.getElementById('cbr-phone-type')?.value || 'telefono';
   const saleDate = document.getElementById('cbr-sale-date')?.value || new Date().toISOString().slice(0,10);
+  // Tipo de comprobante fiscal elegido en el cobro (por defecto vacío = sin comprobante).
+  const ncfType = isQuote ? '' : (document.getElementById('cbr-ncf-type')?.value || '');
   const checkoutPrintRoute = typeof _getCategoryConfig === 'function'
     ? _getCategoryConfig(isQuote ? 'cotizacion' : 'ticket')
     : { printer: '', template: '', profileId: '', copies: 1, autoPrint: false };
@@ -3062,6 +3116,7 @@ async function finalizarVenta() {
       initialPaymentReference,
       notes: saleNotes,
       replacesSaleId: inv.replacesSaleId || null,
+      ncfType,
     },
     type: inv.itype || 'factura',
     session: cajaSession,

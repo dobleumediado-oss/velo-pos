@@ -2451,7 +2451,7 @@ ipcMain.handle('sales:corrections:getHistory', async (_, { id, requestUserId } =
   }
 });
 
-ipcMain.handle('sales:cancel', async (_, { id, reason, requestUserId }) => {
+ipcMain.handle('sales:cancel', async (_, { id, reason, requestUserId, reuseNcf }) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
     if (!reqUser || !saleCorrectionsRepo.hasPermission(reqUser, 'sales.cancel')) {
@@ -2481,7 +2481,7 @@ ipcMain.handle('sales:cancel', async (_, { id, reason, requestUserId }) => {
       return { ok: true, isReturn: true, originalSaleId: result.originalSaleId, overpayment: 0 };
     }
 
-    const cancelResult = salesRepo.cancel(id, reason, requestUserId, reqUser.name);
+    const cancelResult = salesRepo.cancel(id, reason, requestUserId, reqUser.name, { reuseNcf: !!reuseNcf });
     // Contabilidad en vivo: reversar el asiento de la venta anulada.
     _acctHook(() => accountingRepo.reverseSourceEntry('venta', id, requestUserId, 'Venta anulada: ' + (reason || '')));
     return { ok: true, overpayment: cancelResult?.overpayment || 0 };

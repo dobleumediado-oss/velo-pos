@@ -1703,6 +1703,74 @@ function allocateNextNcfNumber(type, saleId = null) {
   };
 }
 
+// Cola de numeración interna LIBERADA por anulación. A diferencia de los NCF,
+// el correlativo interno de factura (FAC-/FCR-) sí puede reutilizarse: al anular
+// una factura su número vuelve a esta cola para que la próxima factura del mismo
+// tipo lo tome y la secuencia "no quede con huecos". Nunca aplica a numeración
+// importada (factura_historica), que conserva su número histórico para siempre.
+function ensureDocumentAvailableNumbersTable() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS document_available_numbers (
+      id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind               TEXT NOT NULL,
+      sequence_number    INTEGER NOT NULL,
+      formatted_number   TEXT NOT NULL,
+      status             TEXT NOT NULL DEFAULT 'available'
+                           CHECK(status IN ('available','issued','retired')),
+      source             TEXT NOT NULL DEFAULT 'anulacion',
+      source_sale_id     INTEGER,
+      issued_source_type TEXT,
+      issued_source_id   TEXT,
+      created_at         TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+      issued_at          TEXT,
+      UNIQUE(kind,sequence_number)
+    );
+    CREATE INDEX IF NOT EXISTS idx_document_available_queue
+      ON document_available_numbers(kind,status,sequence_number);
+  `);
+}
+
+// Reclama el número liberado más bajo de la familia `kind` para asignarlo a la
+// nueva venta. Reutiliza el propio asiento anulado de document_issues (lo pone
+// 'active' y lo reapunta a la nueva venta) para no chocar con sus índices UNIQUE.
+// Devuelve null si no hay número liberado válido y se debe avanzar el correlativo.
+function _claimFreedDocumentNumber(kind, sourceType, sourceKey) {
+  if (!sourceType || !sourceKey) return null;
+  if (kind === 'factura_historica') return null;
+  ensureDocumentAvailableNumbersTable();
+  while (true) {
+    const gap = db.prepare(`
+      SELECT * FROM document_available_numbers
+      WHERE kind=? AND status='available'
+      ORDER BY sequence_number LIMIT 1
+    `).get(kind);
+    if (!gap) return null;
+    const issue = db.prepare(
+      'SELECT * FROM document_issues WHERE kind=? AND sequence_number=?'
+    ).get(kind, gap.sequence_number);
+    if (issue && issue.status === 'cancelled') {
+      db.prepare(`
+        UPDATE document_issues
+        SET status='active',source_type=?,source_id=?
+        WHERE id=? AND status='cancelled'
+      `).run(sourceType, sourceKey, issue.id);
+      db.prepare(`
+        UPDATE document_available_numbers
+        SET status='issued',issued_source_type=?,issued_source_id=?,
+            issued_at=datetime('now','localtime')
+        WHERE id=?
+      `).run(sourceType, sourceKey, gap.id);
+      return {
+        kind,
+        sequence_number: issue.sequence_number,
+        formatted_number: issue.formatted_number,
+      };
+    }
+    // Asiento ya reutilizado o inexistente → este número deja de estar libre.
+    db.prepare("UPDATE document_available_numbers SET status='retired' WHERE id=?").run(gap.id);
+  }
+}
+
 function _issueDocumentNumber(kind, sourceType, sourceId) {
   const cfg = DOCUMENT_SEQUENCE_DEFAULTS[kind];
   if (!cfg) throw new Error(`Tipo documental no soportado: ${kind}`);
@@ -1716,6 +1784,10 @@ function _issueDocumentNumber(kind, sourceType, sourceId) {
     `).get(kind, source, sourceKey);
     if (existing) return existing;
   }
+
+  // Antes de avanzar el correlativo, reutiliza un número liberado por anulación.
+  const reclaimed = _claimFreedDocumentNumber(kind, source, sourceKey);
+  if (reclaimed) return reclaimed;
 
   db.prepare(`
     INSERT INTO document_sequences(kind,prefix,current,pad_length)
@@ -4573,20 +4645,23 @@ const salesRepo = {
         saleId
       );
 
-      // 4b. Generar NCF — SOLO facturas, con fiscal activo Y una secuencia registrada.
-      // El comprobante NUNCA se fabrica con un contador interno: proviene
-      // exclusivamente de un rango autorizado por la DGII (tabla ncf_sequences).
-      // Si no existe una secuencia activa del tipo que corresponde, la factura
-      // sale como documento interno SIN NCF (no aparenta un comprobante inexistente).
-      // Tipo determinado automáticamente por el documento del cliente:
-      //   · RNC de 9 dígitos             → B01 (Crédito Fiscal)
-      //   · Cédula de 11 díg. o sin doc  → B02 (Consumo)
+      // 4b. Generar NCF — SOLO facturas, con fiscal activo, tipo ELEGIDO en el cobro
+      // y una secuencia registrada. El comprobante NUNCA se fabrica con un contador
+      // interno: proviene exclusivamente de un rango autorizado por la DGII
+      // (tabla ncf_sequences).
+      //
+      // El tipo lo elige el cajero en el POS (`payment.ncfType`). Por defecto la
+      // venta sale SIN COMPROBANTE (ncfType vacío): la mayoría de las ventas de
+      // mostrador no requieren comprobante fiscal. Solo cuando el cliente lo pide
+      // se selecciona B01 (Crédito Fiscal), B02 (Consumo), etc. Si el tipo elegido
+      // no tiene secuencia activa, la factura sale como documento interno SIN NCF
+      // (nunca aparenta un comprobante inexistente).
       let ncf = '';
-      if (type === 'factura') {
+      const requestedNcfType = String(payment.ncfType || '').trim().toUpperCase();
+      const ncfType = /^B(01|02|04|14|15|16|17)$/.test(requestedNcfType) ? requestedNcfType : '';
+      if (type === 'factura' && ncfType) {
         const fiscalOn = db.prepare("SELECT value FROM settings WHERE key='fiscal_enabled'").get()?.value === '1';
         if (fiscalOn) {
-          const docDigits = String(customer.rnc || '').replace(/\D/g, '');
-          const ncfType   = docDigits.length === 9 ? 'B01' : 'B02';
           ensureNcfAvailableNumbersTable();
           const hasSequence = db.prepare(`
             SELECT 1 FROM ncf_sequences s
@@ -5473,7 +5548,12 @@ const salesRepo = {
     return tx();
   },
 
-  cancel(id, reason, userId, userName) {
+  cancel(id, reason, userId, userName, options = {}) {
+    // reuseNcf: SOLO cuando el operador confirma que el comprobante NO se entregó
+    // ni se reportó (p. ej. error de RNC detectado antes de dárselo al cliente).
+    // Por defecto es false: el NCF se conserva ANULADO y aparece en el 608, que es
+    // el comportamiento fiscalmente correcto. Nunca se produce un NCF duplicado.
+    const reuseNcf = !!options.reuseNcf;
     const sale = db.prepare('SELECT * FROM sales WHERE id=?').get(id);
     if (!sale) throw new Error('Venta no encontrada');
     if (sale.status === 'cancelled') throw new Error('Venta ya está cancelada');
@@ -5513,6 +5593,40 @@ const salesRepo = {
         UPDATE document_issues SET status='cancelled'
         WHERE source_type IN ('sale','sale_receipt') AND source_id=?
       `).run(String(id));
+
+      // Liberar el correlativo interno (FAC-/FCR- y su recibo): vuelve a la cola
+      // para que la próxima factura del mismo tipo lo reutilice y la secuencia no
+      // quede con huecos. Nunca se libera numeración importada (factura_historica
+      // conserva su número histórico definitivo).
+      //
+      // Se recicla cuando es coherente con la decisión fiscal: si la factura no
+      // llevó comprobante (sin impacto fiscal) o si el operador eligió reutilizar
+      // también el NCF. En una anulación formal al 608 (se conserva el NCF) el
+      // número interno también se conserva, para no dejar dos documentos vivos con
+      // el mismo correlativo mientras el comprobante queda declarado como anulado.
+      const freeingAllowed = !String(sale.import_source || '').trim();
+      const hadNcf = !!(sale.ncf && String(sale.ncf).trim());
+      const freeDocNumber = freeingAllowed && (!hadNcf || reuseNcf);
+      if (freeDocNumber) {
+        ensureDocumentAvailableNumbersTable();
+        const freedIssues = db.prepare(`
+          SELECT kind,sequence_number,formatted_number
+          FROM document_issues
+          WHERE source_type IN ('sale','sale_receipt') AND source_id=? AND status='cancelled'
+        `).all(String(id));
+        const pushFreedNumber = db.prepare(`
+          INSERT INTO document_available_numbers(kind,sequence_number,formatted_number,status,source,source_sale_id)
+          VALUES(?,?,?,'available','anulacion',?)
+          ON CONFLICT(kind,sequence_number) DO UPDATE SET
+            status='available',source='anulacion',source_sale_id=excluded.source_sale_id,
+            issued_source_type=NULL,issued_source_id=NULL,issued_at=NULL
+        `);
+        for (const iss of freedIssues) {
+          if (iss.kind === 'factura_historica') continue;
+          pushFreedNumber.run(iss.kind, iss.sequence_number, iss.formatted_number, id);
+        }
+      }
+
       if (tableExists('checkout_orders')) {
         db.prepare(`
           UPDATE checkout_orders
@@ -5522,12 +5636,40 @@ const salesRepo = {
         `).run(`Factura anulada: ${reason || 'sin motivo'}`.slice(0, 300), id);
       }
 
-      // Fiscal: si la venta tenía un NCF, marcarlo como anulado en ncf_log para que
-      // aparezca en el reporte 608 (comprobantes anulados). Aplica a facturas (B01/B02…)
-      // y también a notas de crédito B04 si alguna vez se anula una devolución.
+      // Fiscal: por defecto el NCF se conserva ANULADO y aparece en el 608 (correcto).
+      // Solo si el operador pidió reutilizarlo (reuseNcf) — porque el comprobante NO
+      // se entregó ni reportó — el número vuelve a la cola de disponibles para que la
+      // próxima factura del mismo tipo lo tome; se retira de ncf_log y de la venta
+      // anulada para no chocar con el índice UNIQUE ni con la verificación de ocupación
+      // de allocateNextNcfNumber, evitando cualquier NCF duplicado.
+      // Un NCF importado o sin secuencia propia siempre se conserva 'anulado' (608).
       if (sale.ncf && String(sale.ncf).trim()) {
-        db.prepare(`UPDATE ncf_log SET status='anulado', voided_at=datetime('now')
-                    WHERE sale_id=? AND ncf=? AND status!='anulado'`).run(id, String(sale.ncf).trim());
+        const parsedNcf = (reuseNcf && freeingAllowed) ? parseCanonicalLegacyNcf(sale.ncf) : null;
+        const owningSeq = parsedNcf
+          ? db.prepare(`
+              SELECT id FROM ncf_sequences
+              WHERE type=? AND from_num<=? AND to_num>=?
+              ORDER BY id LIMIT 1
+            `).get(parsedNcf.type, parsedNcf.sequence, parsedNcf.sequence)
+          : null;
+        if (parsedNcf && owningSeq) {
+          ensureNcfAvailableNumbersTable();
+          db.prepare(`
+            INSERT INTO ncf_available_numbers(sequence_id,ncf_type,sequence_number,status,source)
+            VALUES(?,?,?,'available','anulacion')
+            ON CONFLICT(ncf_type,sequence_number) DO UPDATE SET
+              status='available',sequence_id=excluded.sequence_id,source='anulacion',
+              issued_sale_id=NULL,issued_at=NULL
+          `).run(owningSeq.id, parsedNcf.type, parsedNcf.sequence);
+          db.prepare("DELETE FROM ncf_log WHERE sale_id=? AND UPPER(TRIM(COALESCE(ncf,'')))=?")
+            .run(id, parsedNcf.ncf);
+          db.prepare("UPDATE sales SET ncf='' WHERE id=?").run(id);
+          audit(userId, userName, 'ncf_liberado_por_anulacion', 'sales', id,
+            `NCF ${parsedNcf.ncf} devuelto a la cola para reutilización`);
+        } else {
+          db.prepare(`UPDATE ncf_log SET status='anulado', voided_at=datetime('now')
+                      WHERE sale_id=? AND ncf=? AND status!='anulado'`).run(id, String(sale.ncf).trim());
+        }
       }
 
       // Reponer stock

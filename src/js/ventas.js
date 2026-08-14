@@ -88,7 +88,7 @@ function ventasRefreshAfterMutation({
 
 // En el historial operativo conservamos la referencia corta que el personal
 // ya reconoce (#2499, por ejemplo). Para documentos migrados se antepone el
-// número histórico real de FabPro; el correlativo fiscal/documental de Velo se
+// número histórico real de FAPRO; el correlativo fiscal/documental de Velo se
 // muestra como identidad secundaria, nunca se pierde.
 function ventasHistoryReference(sale) {
   if (!sale) return '';
@@ -131,7 +131,7 @@ function ventasOriginalHistoryReference(sale) {
 
 function ventasImportSourceLabel(source) {
   const normalized = String(source || '').trim().toLowerCase();
-  if (normalized === 'equiparts_bak') return 'Importada de FabPro';
+  if (normalized === 'equiparts_bak') return 'Importada de FAPRO';
   return normalized ? 'Documento importado' : '';
 }
 
@@ -1316,6 +1316,7 @@ async function convertirCotizacionAVenta(s) {
       })),
     pay:      'efectivo',
     discount: sale.discount_pct || 0,
+    ncfType:  '',
   };
   window._convEstado = estado;
   window._convSale   = sale;
@@ -1421,6 +1422,18 @@ async function convertirCotizacionAVenta(s) {
       </div>
     </div>
 
+    ${CFG.fiscalEnabled ? `
+    <div class="fg" style="margin-bottom:10px">
+      <label class="lbl">Tipo de comprobante fiscal</label>
+      <select class="inp" id="conv-ncf-type"
+              onchange="if(window._convEstado)window._convEstado.ncfType=this.value">
+        <option value="">Sin comprobante</option>
+      </select>
+      <div style="font-size:10px;color:var(--muted2);margin-top:4px">
+        Por defecto sin comprobante. Elige B01/B02 solo si el cliente pide factura con valor fiscal.
+      </div>
+    </div>` : ''}
+
     <div class="card" style="background:var(--surface2);margin-bottom:12px">
         <div class="tr"><span>Subtotal sin ITBIS</span><span>${fmt(subtotal)}</span></div>
         ${estado.discount > 0 ? `<div class="tr"><span>Descuento (${estado.discount}%)</span><span>−${fmt(discAmt)}</span></div>` : ''}
@@ -1436,6 +1449,41 @@ async function convertirCotizacionAVenta(s) {
       </button>
     </div>
   `, 'modal-lg');
+
+  if (CFG.fiscalEnabled) convPopulateNcfTypes(estado.ncfType);
+}
+
+// Etiquetas y poblado del selector de comprobante en la conversión de cotización.
+const CONV_NCF_LABELS = {
+  B01: 'B01 · Crédito Fiscal',
+  B02: 'B02 · Consumo',
+  B14: 'B14 · Régimen Especial',
+  B15: 'B15 · Gubernamental',
+  B16: 'B16 · Exportaciones',
+};
+function convPopulateNcfTypes(selected) {
+  const sel = document.getElementById('conv-ncf-type');
+  if (!sel) return;
+  const fill = (availSet) => {
+    const avail = availSet instanceof Set ? availSet : new Set();
+    const opts = ['<option value="">Sin comprobante</option>'];
+    ['B01', 'B02', 'B14', 'B15', 'B16'].forEach(t => {
+      if (avail.has(t)) opts.push(`<option value="${t}">${CONV_NCF_LABELS[t]}</option>`);
+    });
+    sel.innerHTML = opts.join('');
+    sel.value = (selected && avail.has(selected)) ? selected : '';
+    if (window._convEstado) window._convEstado.ncfType = sel.value;
+  };
+  if (window._convNcfAvail instanceof Set) { fill(window._convNcfAvail); return; }
+  fill(new Set());
+  if (window.api?.ncf?.getSequences) {
+    window.api.ncf.getSequences().then(seqs => {
+      const avail = new Set();
+      (seqs?.data || []).forEach(s => { if (s.active && s.current < s.to_num) avail.add(s.type); });
+      window._convNcfAvail = avail;
+      fill(avail);
+    }).catch(() => {});
+  }
 }
 
 // Handlers inline del modal de conversión
@@ -1546,6 +1594,7 @@ async function confirmarConversionCotizacion() {
         disc:      est.discount,
         priceMode: sale.price_mode || 'retail',
         priceChangeAuthToken: est.priceChangeAuthToken || null,
+        ncfType:   est.ncfType || '',
       },
       type:    'factura',
       session: cajaSession,
@@ -2041,6 +2090,20 @@ function openAnulacionModal(s) {
         <strong style="color:var(--text)">${ventasEsc(s.document_number_fmt || facturaLabel(s))}</strong>.
         La factura anulada seguirá guardada como antecedente.
       </div>` : ''}
+    ${!isReturn && String(s.ncf || '').trim() ? `
+      <div class="fg mt14" style="padding:10px 12px;border:1px solid var(--amber-line);border-radius:8px;background:var(--amber-bg)">
+        <label style="display:flex;gap:9px;align-items:flex-start;cursor:pointer;font-size:12px">
+          <input type="checkbox" id="anul-reuse-ncf" style="width:16px;height:16px;margin-top:1px;flex-shrink:0"/>
+          <span>
+            <strong>Reutilizar el comprobante ${ventasEsc(s.ncf)}</strong>
+            <span style="display:block;color:var(--muted2);font-size:11px;margin-top:3px;line-height:1.5">
+              Marca esto <strong>solo</strong> si el comprobante <strong>no se entregó ni se reportó</strong> al cliente
+              (p. ej. error de RNC detectado a tiempo). El NCF volverá a la cola y lo tomará la próxima factura.<br>
+              Si lo dejas sin marcar, el comprobante queda <strong>anulado en el 608</strong> — lo correcto y recomendado.
+            </span>
+          </span>
+        </label>
+      </div>` : ''}
     <div class="fg mt14">
       <label class="lbl">Motivo de anulación *</label>
       <input class="inp" id="anul-reason" type="text"
@@ -2081,12 +2144,15 @@ async function confirmarAnulacion(saleId, registerAgain = false) {
     }
   }
 
+  // Reutilizar el NCF solo si el operador lo confirmó (comprobante no entregado/reportado).
+  const reuseNcf = !!document.getElementById('anul-reuse-ncf')?.checked;
+
   window._veloSaleCancellationPending = true;
   const modalButtons = [...document.querySelectorAll('.modal-foot button')];
   modalButtons.forEach(button => { button.disabled = true; });
   let result;
   try {
-    const request = { id: saleId, reason, requestUserId: user.id };
+    const request = { id: saleId, reason, requestUserId: user.id, reuseNcf };
     try {
       result = await ventasAwaitPaymentAction(window.api.sales.cancel(request));
     } catch (originalError) {
