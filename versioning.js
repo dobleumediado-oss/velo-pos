@@ -1637,6 +1637,42 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.38.3-crm-cerebro] Tablas base del CRM Cerebro creadas (módulo apagado por defecto)');
     }
   },
+  {
+    version: '1.38.4-crm-inventory-care',
+    description: 'CRM Cerebro F2b: salud física del inventario — atributos de caducidad y mantenimiento por producto, con plantillas por categoría.',
+    run(db) {
+      const addCol = (table, col, def) => {
+        const exists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table);
+        if (!exists) return;
+        const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+        if (!cols.includes(col)) db.prepare(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`).run();
+      };
+      // Atributos físicos por producto. Opcionales: si quedan en su default, el
+      // producto no genera alertas (la mayoría del metal no caduca ni se engrasa).
+      addCol('products', 'perishable',        'INTEGER DEFAULT 0');
+      addCol('products', 'shelf_life_months', 'INTEGER DEFAULT NULL');
+      addCol('products', 'expiry_date',       'TEXT DEFAULT NULL');
+      addCol('products', 'care_type',         "TEXT DEFAULT ''");   // '', 'engrasar', 'rotar', 'revisar_carga', 'otro'
+      addCol('products', 'care_every_months', 'INTEGER DEFAULT NULL');
+      addCol('products', 'last_care_at',      'TEXT DEFAULT NULL');
+      addCol('products', 'storage_note',      "TEXT DEFAULT ''");
+
+      // Plantillas por categoría: se configuran una vez y se aplican a todos los
+      // productos de esa categoría, para no llenar miles a mano.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS crm_category_care (
+          category          TEXT PRIMARY KEY,
+          perishable        INTEGER DEFAULT 0,
+          shelf_life_months INTEGER DEFAULT NULL,
+          care_type         TEXT DEFAULT '',
+          care_every_months INTEGER DEFAULT NULL,
+          storage_note      TEXT DEFAULT '',
+          updated_at        TEXT DEFAULT (datetime('now','localtime'))
+        );
+      `);
+      console.log('[MIGRATION 1.38.4-crm-inventory-care] Atributos de caducidad/mantenimiento y plantillas de categoría listos');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

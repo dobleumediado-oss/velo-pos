@@ -324,8 +324,11 @@ async function renderCRMInventario(body) {
 
   body.innerHTML = `
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:8px">${segCards}</div>
-    <div style="font-size:11px;color:var(--muted2);margin:2px 0 18px">
-      ${d.totalProducts} productos activos · ${d.withStock} con stock · valor en inventario ${_crmFmtCompact(d.stockValue)}
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin:2px 0 18px">
+      <div style="font-size:11px;color:var(--muted2)">
+        ${d.totalProducts} productos activos · ${d.withStock} con stock · valor en inventario ${_crmFmtCompact(d.stockValue)}
+      </div>
+      <button class="btn btn-ghost" onclick="showCategoryTemplates()" style="font-size:12px;padding:5px 10px">⚙️ Plantillas de categoría</button>
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px">
       <div class="card" style="padding:16px">
@@ -341,11 +344,73 @@ async function renderCRMInventario(body) {
         ${listOr(d.starList, p => prow(p, `${Math.round(p.marginPct)}% margen`, `vendió ${p.qty90} und/90d`), 'Aún sin estrellas claras.')}
       </div>
     </div>
+    <div id="crm-warehouse" style="margin-top:16px"></div>
     <div style="margin-top:18px;padding:12px 14px;background:var(--surface3,#f3f4f6);border-radius:10px;font-size:12px;color:var(--muted2)">
-      <strong style="color:var(--ink)">Cerebro de inventario activo.</strong> Segmentación por demanda, rotación y antigüedad en estante — todo offline.
-      La Fase 2b añade caducidad y mantenimiento (atributos por producto/categoría).
+      <strong style="color:var(--ink)">Cerebro de inventario activo.</strong> Segmentación offline + salud física (caducidad y mantenimiento).
+      Configura los atributos por <strong style="color:var(--ink)">plantilla de categoría</strong> para no llenarlos uno a uno.
+    </div>`;
+
+  _crmLoadWarehouse();
+}
+
+// ── Revisar en almacén (F2b) ───────────────────
+async function _crmLoadWarehouse() {
+  const box = document.getElementById('crm-warehouse');
+  if (!box) return;
+  let res;
+  try { res = await window.api.crm.warehouseReview(); } catch { return; }
+  if (!res || !res.ok) return;
+  const w = res.data;
+
+  if (!w.configured) {
+    box.innerHTML = `
+      <div class="card" style="padding:16px">
+        <div style="font-size:13px;font-weight:700;color:var(--ink);margin-bottom:6px">🩺 Revisar en almacén</div>
+        <div style="font-size:12px;color:var(--muted2)">Aún no hay productos con caducidad o mantenimiento configurados.
+        Usa <strong style="color:var(--ink)">⚙️ Plantillas de categoría</strong> para activarlos (ej. "Baterías → caduca 18 meses").</div>
+      </div>`;
+    return;
+  }
+
+  const alert = (icon, borderVar, name, code, right, sub) => `
+    <div onclick="showProducto360(${'PID'})" style="display:flex;align-items:flex-start;gap:10px;background:var(--surface2,#fafafa);border-left:3px solid ${borderVar};border-radius:8px;padding:10px 12px;margin-bottom:8px;cursor:pointer"
+         onmouseover="this.style.background='var(--surface3,#f3f4f6)'" onmouseout="this.style.background='var(--surface2,#fafafa)'">
+      <span style="font-size:16px;line-height:1.2">${icon}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name} <span style="font-weight:400;color:var(--muted2);font-size:11px">${code || ''}</span></div>
+        <div style="font-size:11px;color:var(--muted2)">${sub}</div>
+      </div>
+      <div style="font-size:11px;font-weight:600;color:var(--ink);white-space:nowrap;text-align:right">${right}</div>
+    </div>`;
+
+  const expiring = w.expiring.map(p => alert(
+    '⏰', p.daysToExpiry < 0 ? 'var(--red,#ef4444)' : 'var(--amber,#f59e0b)',
+    p.name, p.code,
+    p.daysToExpiry < 0 ? 'vencido' : `${p.daysToExpiry} días`,
+    `${p.stock} und · ${p.daysToExpiry < 0 ? 'caducó' : 'caduca'} ${p.expiry}`
+  ).replace('PID', p.id)).join('') || `<div style="font-size:12px;color:var(--muted2);padding:6px 0">Nada por caducar. 👍</div>`;
+
+  const maint = w.maintenance.map(p => alert(
+    '🛢️', p.daysOverdue >= 0 ? 'var(--amber,#f59e0b)' : 'var(--accent,#059669)',
+    p.name, p.code,
+    p.daysOverdue >= 0 ? 'vencido' : 'pronto',
+    `${_crmCareLabel(p.careType)}${p.lastCare ? ` · último ${_crmDate(p.lastCare)}` : ''}`
+  ).replace('PID', p.id)).join('') || `<div style="font-size:12px;color:var(--muted2);padding:6px 0">Sin mantenimientos pendientes. 👍</div>`;
+
+  box.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px">
+      <div class="card" style="padding:16px">
+        <div style="font-size:13px;font-weight:700;color:var(--ink);margin-bottom:10px">⏰ Por caducar</div>
+        ${expiring}
+      </div>
+      <div class="card" style="padding:16px">
+        <div style="font-size:13px;font-weight:700;color:var(--ink);margin-bottom:10px">🛢️ Mantenimiento en almacén</div>
+        ${maint}
+      </div>
     </div>`;
 }
+
+const _crmCareLabel = t => ({ engrasar: 'Engrasar', rotar: 'Rotar existencias', revisar_carga: 'Revisar carga', otro: 'Mantenimiento' }[t] || 'Mantenimiento');
 
 // ── Producto 360° (F2) ─────────────────────────
 async function showProducto360(productId) {
@@ -404,6 +469,7 @@ async function showProducto360(productId) {
         ${stat('Valor en stock', _crmFmtCompact(mt.stockValue), null, _crmFmt(mt.stockValue))}
       </div>
       ${reorderNote}
+      ${_crmCareBlock(d)}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px">
         <div class="card" style="padding:14px">
           <div style="font-size:12px;font-weight:700;color:var(--ink);margin-bottom:6px">🔗 Se vende junto con</div>
@@ -419,4 +485,108 @@ async function showProducto360(productId) {
       </div>
     </div>`;
   openModal(html, 'modal-lg');
+}
+
+// ── F2b: salud física en la ficha de producto + plantillas ─────
+function _crmUser() {
+  if (window._currentUser) return window._currentUser;
+  try { const s = sessionStorage.getItem('vp_user'); if (s) return JSON.parse(s); } catch {}
+  return null;
+}
+
+function _crmCareBlock(d) {
+  const c = d.care;
+  if (!c || (!c.perishable && !c.expiry && !c.careType && !c.storageNote)) return '';
+  const rows = [];
+  if (c.expiry) {
+    const col = c.daysToExpiry < 0 ? 'var(--red,#ef4444)' : (c.daysToExpiry <= 60 ? 'var(--amber,#b45309)' : 'var(--muted2)');
+    rows.push(`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0"><span style="color:var(--muted2)">Caducidad</span><span style="color:${col};font-weight:600">${c.daysToExpiry < 0 ? `vencido (${c.expiry})` : `${c.expiry} · en ${c.daysToExpiry} días`}</span></div>`);
+  }
+  if (c.careType) {
+    const col = (c.daysToCare != null && c.daysToCare <= 0) ? 'var(--amber,#b45309)' : 'var(--muted2)';
+    rows.push(`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0"><span style="color:var(--muted2)">${_crmCareLabel(c.careType)}</span><span style="color:${col};font-weight:600">${c.daysToCare != null ? (c.daysToCare <= 0 ? 'vencido' : `en ${c.daysToCare} días`) : '—'}${c.lastCareAt ? ` · últ. ${_crmDate(c.lastCareAt)}` : ''}</span></div>`);
+  }
+  if (c.storageNote) rows.push(`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0"><span style="color:var(--muted2)">Almacenaje</span><span style="color:var(--ink)">${c.storageNote}</span></div>`);
+  return `<div class="card" style="padding:14px;margin-top:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <div style="font-size:12px;font-weight:700;color:var(--ink)">🩺 Salud física</div>
+      ${c.careType ? `<button class="btn btn-ghost" style="font-size:11px;padding:3px 8px" onclick="_crmMarkCareDone(${d.product.id})">Marcar mantenimiento hecho</button>` : ''}
+    </div>
+    ${rows.join('')}
+  </div>`;
+}
+
+async function _crmMarkCareDone(productId) {
+  const r = await window.api.crm.setProductCare({ productId, attrs: { markCareDone: true }, requestUserId: _crmUser()?.id });
+  if (!r || !r.ok) { toast(r?.error || 'No se pudo', 'e'); return; }
+  toast('Mantenimiento registrado', 's');
+  showProducto360(productId);
+}
+
+// ── Modal: plantillas de cuidado por categoría ──
+async function showCategoryTemplates() {
+  let res;
+  try { res = await window.api.crm.categoryTemplates(); } catch (e) { toast('No se pudo cargar', 'e'); return; }
+  if (!res || !res.ok) { toast(res?.error || 'Error', 'e'); return; }
+  window._crmCats = res.data;
+  if (!res.data.length) { openModal(`<div style="padding:24px;color:var(--muted2)">No hay categorías de productos aún.</div>`); return; }
+  const options = res.data.map((c, i) => `<option value="${i}">${c.category} (${c.productCount})${c.template ? ' ✓' : ''}</option>`).join('');
+  const careOpts = ['', 'engrasar', 'rotar', 'revisar_carga', 'otro'].map(v => `<option value="${v}">${v ? _crmCareLabel(v) : 'Ninguno'}</option>`).join('');
+  const html = `
+    <div class="modal-head" style="display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--line2,#eee)">
+      <div style="font-size:16px;font-weight:700;color:var(--ink)">⚙️ Plantillas de categoría</div>
+      <button class="btn btn-ghost" onclick="closeModal()" style="font-size:18px;padding:2px 8px">×</button>
+    </div>
+    <div style="padding:16px 18px;max-height:70vh;overflow:auto">
+      <div style="font-size:12px;color:var(--muted2);margin-bottom:14px">Define caducidad y mantenimiento para toda una categoría y aplícalo a sus productos de una vez — así no configuras miles a mano.</div>
+      <label style="font-size:12px;color:var(--muted2)">Categoría</label>
+      <select id="ct-cat" onchange="_crmFillTemplate()" style="width:100%;margin:4px 0 14px">${options}</select>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <input type="checkbox" id="ct-perish"> <label for="ct-perish" style="font-size:13px;color:var(--ink)">Este tipo de producto caduca</label>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+        <div><label style="font-size:12px;color:var(--muted2)">Vida útil (meses)</label><input id="ct-shelf" type="number" min="1" style="width:100%" placeholder="ej. 18"></div>
+        <div><label style="font-size:12px;color:var(--muted2)">Mantenimiento</label><select id="ct-care" style="width:100%">${careOpts}</select></div>
+        <div><label style="font-size:12px;color:var(--muted2)">Repetir cada (meses)</label><input id="ct-caremonths" type="number" min="1" style="width:100%" placeholder="ej. 6"></div>
+        <div><label style="font-size:12px;color:var(--muted2)">Nota de almacenaje</label><input id="ct-note" type="text" style="width:100%" placeholder="ej. mantener seco"></div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px">
+        <button class="btn" onclick="_crmSaveTemplate(false)">Guardar plantilla</button>
+        <button class="btn btn-green" onclick="_crmSaveTemplate(true)">Guardar y aplicar a la categoría</button>
+      </div>
+    </div>`;
+  openModal(html, 'modal-lg');
+  _crmFillTemplate();
+}
+
+function _crmFillTemplate() {
+  const cats = window._crmCats || [];
+  const sel = document.getElementById('ct-cat');
+  if (!sel) return;
+  const t = cats[+sel.value]?.template;
+  document.getElementById('ct-perish').checked = !!(t && t.perishable);
+  document.getElementById('ct-shelf').value = t?.shelf_life_months ?? '';
+  document.getElementById('ct-care').value = t?.care_type ?? '';
+  document.getElementById('ct-caremonths').value = t?.care_every_months ?? '';
+  document.getElementById('ct-note').value = t?.storage_note ?? '';
+}
+
+async function _crmSaveTemplate(applyNow) {
+  const cats = window._crmCats || [];
+  const category = cats[+document.getElementById('ct-cat').value]?.category;
+  if (!category) return;
+  const template = {
+    category,
+    perishable: document.getElementById('ct-perish').checked,
+    shelf_life_months: document.getElementById('ct-shelf').value,
+    care_type: document.getElementById('ct-care').value,
+    care_every_months: document.getElementById('ct-caremonths').value,
+    storage_note: document.getElementById('ct-note').value.trim(),
+    applyNow,
+  };
+  const r = await window.api.crm.saveCategoryTemplate({ template, requestUserId: _crmUser()?.id });
+  if (!r || !r.ok) { toast(r?.error || 'No se pudo guardar', 'e'); return; }
+  toast(applyNow ? `Aplicado a ${r.applied} producto(s)` : 'Plantilla guardada', 's');
+  closeModal();
+  if (_crmTab === 'inventario') _crmLoadTab();
 }

@@ -10251,7 +10251,9 @@ const crmRepo = {
   product360(productId) {
     const p = db.prepare(
       `SELECT id, name, code, barcode, category, brand, model, stock, stock_min,
-              cost, price, wholesale, created_at
+              cost, price, wholesale, created_at,
+              perishable, shelf_life_months, expiry_date, care_type, care_every_months,
+              last_care_at, storage_note
          FROM products WHERE id = ?`
     ).get(productId);
     if (!p) return null;
@@ -10300,6 +10302,24 @@ const crmRepo = {
         ORDER BY created_at DESC LIMIT 8`
     ).all(productId);
 
+    // Estado físico (F2b): caducidad y mantenimiento, si están configurados.
+    const parseD = (iso) => { const dd = new Date(String(iso).replace(' ', 'T')); return isNaN(dd) ? null : dd; };
+    const addM = (iso, months) => { const dd = iso ? parseD(iso) : null; if (!dd || months == null) return null; dd.setMonth(dd.getMonth() + Number(months)); return dd; };
+    const expiryDate = p.expiry_date ? parseD(p.expiry_date)
+      : (p.perishable && p.shelf_life_months ? addM(lastEntry || p.created_at, p.shelf_life_months) : null);
+    let careDue = null;
+    if (p.care_type && p.care_every_months) careDue = addM(p.last_care_at || lastEntry || p.created_at, p.care_every_months);
+    const care = {
+      perishable: !!p.perishable,
+      expiry: expiryDate ? expiryDate.toISOString().slice(0, 10) : null,
+      daysToExpiry: expiryDate ? Math.round((expiryDate - now) / 86400000) : null,
+      careType: p.care_type || '',
+      careEveryMonths: p.care_every_months,
+      lastCareAt: p.last_care_at,
+      daysToCare: careDue ? Math.round((careDue - now) / 86400000) : null,
+      storageNote: p.storage_note || '',
+    };
+
     return {
       product: p,
       metrics: {
@@ -10310,8 +10330,134 @@ const crmRepo = {
         qty90, qtyTotal: s.qtyTotal || 0, timesSold: s.timesSold || 0,
         lastSale: s.lastSale, velocityMonth, daysOfStock, daysSinceLastSale,
       },
-      shelfAge, segment, boughtWith, recentMovements,
+      shelfAge, segment, care, boughtWith, recentMovements,
     };
+  },
+
+  // ── Salud física del inventario (F2b) ──────────
+  // "Revisar en almacén": productos con stock que necesitan atención por
+  // caducidad, mantenimiento o sensibilidad. Solo actúa sobre los productos
+  // que tienen esos atributos configurados (por producto o plantilla).
+  warehouseReview() {
+    const products = db.prepare(
+      `SELECT id, name, code, category, stock, perishable, shelf_life_months, expiry_date,
+              care_type, care_every_months, last_care_at, storage_note, created_at
+         FROM products WHERE active=1`
+    ).all();
+    const entryRows = db.prepare(
+      `SELECT product_id AS pid, MAX(created_at) AS lastEntry
+         FROM inventory_movements WHERE type='entrada' GROUP BY product_id`
+    ).all();
+    const entry = {};
+    entryRows.forEach(r => { entry[r.pid] = r.lastEntry; });
+
+    const now = Date.now();
+    const parse = (iso) => { const d = new Date(String(iso).replace(' ', 'T')); return isNaN(d) ? null : d; };
+    const addMonths = (iso, months) => {
+      const d = iso ? parse(iso) : null;
+      if (!d || months == null) return null;
+      d.setMonth(d.getMonth() + Number(months));
+      return d;
+    };
+
+    const expiring = [], maintenance = [], sensitive = [];
+    products.forEach(p => {
+      if ((p.stock || 0) <= 0) return; // sin stock no hay nada físico que revisar
+      // Caducidad: fecha explícita, o estimada desde la última entrada + vida útil.
+      let expDate = null;
+      if (p.expiry_date) expDate = parse(p.expiry_date);
+      else if (p.perishable && p.shelf_life_months) expDate = addMonths(entry[p.id] || p.created_at, p.shelf_life_months);
+      if (expDate) {
+        const daysToExpiry = Math.round((expDate - now) / 86400000);
+        if (daysToExpiry <= 60) expiring.push({ id: p.id, name: p.name, code: p.code, stock: p.stock, daysToExpiry, expiry: expDate.toISOString().slice(0, 10) });
+      }
+      // Mantenimiento: vencido o por vencer (≤15 días) desde el último cuidado.
+      if (p.care_type && p.care_every_months) {
+        const due = addMonths(p.last_care_at || entry[p.id] || p.created_at, p.care_every_months);
+        if (due) {
+          const daysToCare = Math.round((due - now) / 86400000);
+          if (daysToCare <= 15) maintenance.push({ id: p.id, name: p.name, code: p.code, stock: p.stock, careType: p.care_type, daysOverdue: -daysToCare, lastCare: p.last_care_at });
+        }
+      }
+      if (p.storage_note) sensitive.push({ id: p.id, name: p.name, note: p.storage_note });
+    });
+
+    expiring.sort((a, b) => a.daysToExpiry - b.daysToExpiry);
+    maintenance.sort((a, b) => b.daysOverdue - a.daysOverdue);
+
+    return {
+      generatedAt: new Date().toISOString(),
+      configured: products.filter(p => p.perishable || p.care_type || p.expiry_date).length,
+      expiring: expiring.slice(0, 20),
+      maintenance: maintenance.slice(0, 20),
+      sensitive: sensitive.slice(0, 20),
+    };
+  },
+
+  // Categorías del inventario con su plantilla de cuidado (si existe) y conteo.
+  categoryTemplates() {
+    const cats = db.prepare(
+      `SELECT DISTINCT category FROM products
+        WHERE active=1 AND TRIM(COALESCE(category,'')) <> '' ORDER BY category`
+    ).all().map(r => r.category);
+    const tpls = {};
+    db.prepare(`SELECT * FROM crm_category_care`).all().forEach(t => { tpls[t.category] = t; });
+    return cats.map(c => ({
+      category: c,
+      template: tpls[c] || null,
+      productCount: db.prepare(`SELECT COUNT(*) n FROM products WHERE active=1 AND category=?`).get(c).n,
+    }));
+  },
+
+  // Guarda la plantilla de una categoría y, si applyNow, la aplica a todos sus
+  // productos de una vez (para no configurar miles a mano).
+  saveCategoryTemplate(t) {
+    const params = {
+      category: t.category,
+      perishable: t.perishable ? 1 : 0,
+      shelf_life_months: (t.shelf_life_months === '' || t.shelf_life_months == null) ? null : Number(t.shelf_life_months),
+      care_type: t.care_type || '',
+      care_every_months: (t.care_every_months === '' || t.care_every_months == null) ? null : Number(t.care_every_months),
+      storage_note: t.storage_note || '',
+    };
+    db.prepare(`
+      INSERT INTO crm_category_care(category,perishable,shelf_life_months,care_type,care_every_months,storage_note,updated_at)
+      VALUES(@category,@perishable,@shelf_life_months,@care_type,@care_every_months,@storage_note,datetime('now','localtime'))
+      ON CONFLICT(category) DO UPDATE SET
+        perishable=@perishable, shelf_life_months=@shelf_life_months, care_type=@care_type,
+        care_every_months=@care_every_months, storage_note=@storage_note, updated_at=datetime('now','localtime')
+    `).run(params);
+    let applied = 0;
+    if (t.applyNow) {
+      applied = db.prepare(`
+        UPDATE products SET perishable=@perishable, shelf_life_months=@shelf_life_months,
+          care_type=@care_type, care_every_months=@care_every_months, storage_note=@storage_note,
+          updated_at=datetime('now','localtime')
+        WHERE active=1 AND category=@category
+      `).run(params).changes;
+    }
+    return { ok: true, applied };
+  },
+
+  // Edita los atributos físicos de un producto; markCareDone marca el
+  // mantenimiento como recién hecho (reinicia el reloj del próximo).
+  setProductCare(productId, attrs = {}) {
+    const cur = db.prepare(
+      `SELECT perishable, shelf_life_months, expiry_date, care_type, care_every_months, last_care_at, storage_note
+         FROM products WHERE id = ?`
+    ).get(productId);
+    if (!cur) return { ok: false, error: 'Producto no encontrado' };
+    const next = { ...cur, ...attrs };
+    if (attrs.markCareDone) next.last_care_at = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    const num = (v) => (v === '' || v == null) ? null : Number(v);
+    db.prepare(
+      `UPDATE products SET perishable=?, shelf_life_months=?, expiry_date=?, care_type=?,
+              care_every_months=?, last_care_at=?, storage_note=?, updated_at=datetime('now','localtime')
+        WHERE id = ?`
+    ).run(next.perishable ? 1 : 0, num(next.shelf_life_months), next.expiry_date || null,
+          next.care_type || '', num(next.care_every_months), next.last_care_at || null,
+          next.storage_note || '', productId);
+    return { ok: true };
   },
 };
 

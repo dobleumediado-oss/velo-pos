@@ -100,5 +100,28 @@ const pDead = crmRepo.product360(dead);
 ok(pDead.segment === 'congelado', `product360: faro = congelado (${pDead.segment})`);
 ok(crmRepo.product360(999999) === null, 'product360: producto inexistente devuelve null');
 
-console.log(`\n${fail === 0 ? '✅' : '❌'} F0+F1+F2 CRM: ${pass} OK, ${fail} fallos`);
+// ── F2b: salud física (caducidad/mantenimiento/plantillas) ──
+const battId = db.prepare("INSERT INTO products(code,name,category,cost,price,stock,stock_min) VALUES(?,?,?,?,?,?,?)").run('P-BAT', 'Batería 12V', 'Baterías', 3000, 5000, 4, 2).lastInsertRowid;
+db.prepare("INSERT INTO inventory_movements(product_id,type,qty,qty_before,qty_after,created_at) VALUES(?,?,?,?,?,datetime('now','localtime','-500 days'))").run(battId, 'entrada', 10, 0, 10);
+// El normalizador puede guardar la categoría en MAYÚSCULAS; usar el valor real.
+const battCat = db.prepare("SELECT category FROM products WHERE id=?").get(battId).category;
+
+const tRes = crmRepo.saveCategoryTemplate({ category: battCat, perishable: true, shelf_life_months: 12, care_type: 'revisar_carga', care_every_months: 6, storage_note: 'lugar seco', applyNow: true });
+ok(tRes.ok && tRes.applied >= 1, `saveCategoryTemplate aplica a la categoría (${tRes.applied})`);
+ok(crmRepo.categoryTemplates().some(t => t.category === battCat && t.template && t.template.perishable === 1), 'categoryTemplates devuelve la plantilla guardada');
+
+const wr = crmRepo.warehouseReview();
+ok(wr.configured >= 1, `warehouseReview: ≥1 configurado (${wr.configured})`);
+ok(wr.expiring.some(e => e.id === battId), 'warehouseReview: batería (entrada -500d + vida 12m) aparece por caducar/vencida');
+
+const pb = crmRepo.product360(battId);
+ok(pb.care.perishable === true, 'product360: care.perishable=true tras aplicar plantilla');
+ok(pb.care.expiry != null, 'product360: caducidad estimada desde entrada + vida útil');
+
+const beforeCare = crmRepo.product360(battId).care.lastCareAt;
+crmRepo.setProductCare(battId, { markCareDone: true });
+const afterCare = crmRepo.product360(battId).care.lastCareAt;
+ok(afterCare && afterCare !== beforeCare, 'setProductCare markCareDone actualiza last_care_at');
+
+console.log(`\n${fail === 0 ? '✅' : '❌'} CRM F0→F2b: ${pass} OK, ${fail} fallos`);
 process.exit(fail === 0 ? 0 : 1);
