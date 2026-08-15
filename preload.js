@@ -78,6 +78,7 @@ contextBridge.exposeInMainWorld('api', {
     getOpen:         (data)  => ipcRenderer.invoke('cash:getOpen', data),
     open:            (data)  => ipcRenderer.invoke('cash:open', data),
     close:           (data)  => ipcRenderer.invoke('cash:close', data),
+    closePending:    (data)  => ipcRenderer.invoke('cash:closePending', data),
     getSessions:     ()      => ipcRenderer.invoke('cash:getSessions'),
     getSessionSales: (data)  => ipcRenderer.invoke('cash:getSessionSales', data),
     getSessionCashSummary: (data) => ipcRenderer.invoke('cash:getSessionCashSummary', data),

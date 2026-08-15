@@ -64,6 +64,7 @@ const {
   wipeExpensesFkSafe,
   dropCorrectionImmutabilityTriggers,
   restoreCorrectionImmutabilityTriggers,
+  buildOpenCashBlock,
 } = require('./lib/equiparts-import');
 const { checkLoginRate: _checkLoginRate, recordLoginFail: _recordLoginFail, clearLoginRate: _clearLoginRate } = require('./lib/login-rate-limit');
 const businessCtx = require('./src/main/business-context');
@@ -1875,8 +1876,51 @@ ipcMain.handle('cash:close', async (_, { sessionId, closeAmount, closeBills, exp
   }
 });
 
+ipcMain.handle('cash:closePending', async (_, { sessionId, confirmation, requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Solo un administrador puede conciliar una caja pendiente' };
+    }
+    if (confirmation !== 'CASH_ALREADY_CLOSED') {
+      return { ok: false, error: 'Debes confirmar que la caja física ya fue cerrada' };
+    }
+    const db = require('./database').getDB();
+    const pending = db.prepare(`
+      SELECT id,user_id,cajero,status,terminal_id FROM cash_sessions WHERE id=?
+    `).get(Number(sessionId));
+    if (!pending || pending.status !== 'open') {
+      return { ok: false, error: 'La sesión pendiente ya no está abierta' };
+    }
+    const currentTerminalId = String(_reqTerminalId() || '');
+    if (pending.terminal_id && pending.terminal_id === currentTerminalId) {
+      return { ok: false, error: 'Esta caja pertenece a la terminal actual. Ciérrala desde el módulo Caja para realizar el cuadre normal.' };
+    }
+    if (_sessionActiveElsewhere(pending.user_id, currentTerminalId)) {
+      return { ok: false, error: 'La terminal de esa caja todavía está conectada. Debe cerrarse desde allí para conservar el cuadre.' };
+    }
+    const result = cashRepo.closePending({
+      sessionId: pending.id,
+      confirmation,
+      userId: reqUser.id,
+      cajero: reqUser.name,
+    });
+    const closedSession = cashRepo.getSessions(100)
+      .find(row => Number(row.id) === Number(pending.id)) || null;
+    return { ok: true, ...result, session: closedSession };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle('cash:getSessions', async () => {
-  return cashRepo.getSessions();
+  const terminalNames = _connTerminalNames();
+  const currentTerminalId = String(_reqTerminalId() || '');
+  return cashRepo.getSessions().map(session => ({
+    ...session,
+    terminal_name: session.terminal_id ? (terminalNames[session.terminal_id] || '') : '',
+    is_current_terminal: !!session.terminal_id && session.terminal_id === currentTerminalId,
+  }));
 });
 
 ipcMain.handle('cash:getSessionSales', async (_, { sessionId }) => {
@@ -4554,12 +4598,12 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, files, requestUser
     if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) {
       return { ok: false, error: 'Solo un administrador puede ejecutar la migración All-in-One' };
     }
-    const openCash = db.prepare(`SELECT id,cajero FROM cash_sessions WHERE status='open' ORDER BY id DESC LIMIT 1`).get();
+    const openCash = db.prepare(`
+      SELECT id,cajero,open_date,open_time,terminal_id
+      FROM cash_sessions WHERE status='open' ORDER BY id DESC LIMIT 1
+    `).get();
     if (openCash) {
-      return {
-        ok: false,
-        error: `Cierra primero la caja abierta${openCash.cajero ? ` de ${openCash.cajero}` : ''}. La migración no puede ejecutarse durante una sesión activa.`,
-      };
+      return { ok: false, ...buildOpenCashBlock(openCash, _reqTerminalId(), _connTerminalNames()) };
     }
 
     // ── 0) Elegir carpeta si no vino ────────────────────────────────────

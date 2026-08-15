@@ -10,6 +10,7 @@ const read = file => fs.readFileSync(path.join(root, file), 'utf8');
 
 const experience = read('src/js/experience.js');
 const app = read('src/js/app.js');
+const icons = read('src/js/icons.js');
 const config = read('src/js/config.js');
 const importer = read('src/js/importar.js');
 const main = read('main.js');
@@ -19,6 +20,7 @@ const styles = read('src/css/styles.css');
 for (const [name, source] of [
   ['experience.js', experience],
   ['app.js', app],
+  ['icons.js', icons],
   ['config.js', config],
   ['importar.js', importer],
 ]) {
@@ -41,6 +43,10 @@ assert(app.includes('data-ux-recovery'), 'El topbar debe exponer recuperación')
 assert(app.includes('Operación detenida por conexión'), 'Los fallos de conexión deben ser recuperables');
 assert(app.includes('commandCatalog'), 'La búsqueda global debe incluir comandos operativos');
 assert(app.includes('Centro de impresión'), 'La búsqueda debe conducir al centro de impresión');
+assert(app.includes("id: 'lpass-toggle'"), 'El acceso debe permitir mostrar u ocultar la contraseña');
+assert(app.includes("input.type = showing ? 'password' : 'text'"), 'El ojo debe alternar la visibilidad de la contraseña');
+assert(app.includes("'aria-pressed': 'false'"), 'El ojo de contraseña debe comunicar su estado al lector de pantalla');
+assert(icons.includes("'eye-off'"), 'Debe existir el icono para volver a ocultar la contraseña');
 assert(config.includes('Solo se detectó una red virtual/NAT'), 'La conexión debe advertir cuando solo existe una IP virtual');
 assert(config.includes('Consola protegida'), 'La consola del servidor no debe ofrecer una acción de expulsión');
 assert(main.includes('La consola local del servidor está protegida'), 'El backend debe impedir expulsar la consola local');
@@ -63,6 +69,7 @@ assert(doctor.includes('Canales de impresión'), 'El diagnóstico debe comunicar
   '[data-ux-status="danger"]',
   '.ui-high-contrast',
   '.ui-large-text',
+  '.login-pass-toggle',
 ].forEach(selector => assert(styles.includes(selector), `Falta estilo global: ${selector}`));
 
 console.log('✓ Experiencia transversal, recuperación, permisos y salud del sistema verificados');

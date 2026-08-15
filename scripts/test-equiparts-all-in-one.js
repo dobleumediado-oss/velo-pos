@@ -18,6 +18,7 @@ const {
   round2,
   dropCorrectionImmutabilityTriggers,
   restoreCorrectionImmutabilityTriggers,
+  buildOpenCashBlock,
 } = require('../lib/equiparts-import');
 
 let pass = 0;
@@ -136,6 +137,19 @@ ok(validateEquipartsData(transported).targetCxc === 68,
   'los cuatro CSV viajan desde una terminal y se reconstruyen íntegros en el servidor');
 ok(rpcTimeoutFor('importar:allInOneEquiparts') === 10 * 60 * 1000 && rpcTimeoutFor('products:getAll') === 8000,
   'la importación remota no vence con el timeout general de ocho segundos');
+const otherCashBlock = buildOpenCashBlock({
+  id: 7, cajero: 'MARIELIS CONTRERAS', open_date: '2026-08-15', open_time: '08:00:00', terminal_id: 'TERM-OTRA',
+}, 'TERM-ACTUAL', { 'TERM-OTRA': 'Caja del almacén' });
+ok(otherCashBlock.code === 'OPEN_CASH_SESSION'
+  && otherCashBlock.openCash.isCurrentTerminal === false
+  && /otra terminal \(Caja del almacén\)/.test(otherCashBlock.error)
+  && /barra superior muestra el estado de esta terminal/.test(otherCashBlock.error),
+  'si otra terminal mantiene caja abierta, ALL IN ONE explica por qué la barra local puede decir cerrada');
+const ownCashBlock = buildOpenCashBlock({
+  id: 8, cajero: 'CAJERO LOCAL', open_date: '2026-08-15', open_time: '09:00:00', terminal_id: 'TERM-ACTUAL',
+}, 'TERM-ACTUAL');
+ok(ownCashBlock.openCash.isCurrentTerminal === true && /en esta terminal/.test(ownCashBlock.error),
+  'distingue una caja abierta en esta misma terminal de una caja remota');
 const fiscalResetOrder = ['ncf_available_numbers', 'ncf_log', 'ncf_sequences', 'ncf_normalization_log']
   .map(table => EQUIPARTS_RESET_TABLES.indexOf(table));
 ok(fiscalResetOrder.every(index => index >= 0)

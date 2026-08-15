@@ -98,6 +98,7 @@ body{font-family:var(--font);font-size:14px;line-height:1.5;color:var(--ink);bac
 .pill svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .pill.open{background:var(--green-bg);border-color:var(--green-line);color:var(--green)}
 .pill.closed{background:var(--red-bg);border-color:var(--red-line);color:var(--red)}
+.pill.other-open{background:var(--amber-bg);border-color:var(--amber-line);color:var(--amber)}
 .ib{width:32px;height:32px;border-radius:var(--r-sm);border:1px solid var(--line);background:var(--surface);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:.12s;position:relative}
 .ib:hover{background:var(--surface2)}
 .ib svg{width:15px;height:15px;stroke:var(--muted);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
@@ -432,6 +433,17 @@ select.inp{cursor:pointer}
 .login-card .inp::placeholder{color:rgba(255,255,255,.2)}
 .login-card .inp option{background:#1a1a2e;color:#fff}
 .login-card .inp-ic .ic{color:rgba(255,255,255,.3)}
+.login-card .login-pass-field .inp{padding-right:44px}
+.login-pass-toggle{
+  position:absolute;right:5px;top:50%;transform:translateY(-50%);z-index:2;
+  width:34px;height:34px;padding:0;border:0;border-radius:8px;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;
+  color:rgba(255,255,255,.48);background:transparent;transition:all .15s;
+}
+.login-pass-toggle:hover{color:#fff;background:rgba(255,255,255,.10)}
+.login-pass-toggle:focus-visible{outline:2px solid rgba(74,222,128,.75);outline-offset:1px}
+.login-pass-toggle[aria-pressed="true"]{color:#86efac;background:rgba(22,163,74,.16)}
+.login-pass-toggle svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 /* Botón ingresar */
 .login-card .btn-dark{
   background:linear-gradient(135deg,#16a34a,#15803d);border:none;color:#fff;

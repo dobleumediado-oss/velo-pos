@@ -16,6 +16,7 @@ let importState = {
   importando:  false,
   _sessionIds: [], // IDs insertados — para rollback
 };
+let _aioPendingOpenCash = null;
 
 // ── Utilidad limpieza numérica ────────────────
 function _impCleanNum(v) {
@@ -346,6 +347,85 @@ function abrirAllInOne() {
   `);
 }
 
+function confirmarCajaYaCerradaAllInOne() {
+  const pending = _aioPendingOpenCash;
+  if (!pending?.id) {
+    toast('No se encontró la sesión pendiente', 'err');
+    return;
+  }
+  const cashier = _escHtml(pending.cashier || 'Sin identificar');
+  const openedAt = _escHtml(pending.openedAt || 'fecha no disponible');
+  const terminal = _escHtml(pending.terminalName || 'terminal anterior');
+  openModal(`
+    <div style="text-align:center;margin-bottom:12px">
+      <div style="font-size:32px">⚠️</div>
+      <div class="modal-title">Confirmar cierre físico</div>
+      <div class="modal-sub">Reparación de una sesión pendiente en la base de datos</div>
+    </div>
+    <div class="alrt a" style="margin-bottom:14px">
+      <div class="alrt-dot a"></div>
+      <div>
+        <div class="alrt-title">${cashier} · ${terminal}</div>
+        <div class="alrt-sub">Apertura registrada: ${openedAt}</div>
+      </div>
+    </div>
+    <div style="font-size:12px;line-height:1.55;color:var(--ink3)">
+      Usa esta opción únicamente si confirmas que <strong>no existe otra terminal trabajando</strong>
+      y que la caja física ya fue cerrada. VELO calculará el efectivo esperado, marcará esta
+      sesión como cerrada y dejará una auditoría administrativa. No se eliminarán ventas ni movimientos.
+    </div>
+    <div id="aio-pending-cash-error" class="err" style="display:none;margin-top:12px"></div>
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-amber" id="aio-confirm-pending-cash" onclick="conciliarCajaPendienteAllInOne()">
+        ${svg('check')} Confirmo que ya fue cerrada
+      </button>
+    </div>
+  `);
+}
+
+async function conciliarCajaPendienteAllInOne() {
+  const pending = _aioPendingOpenCash;
+  const button = document.getElementById('aio-confirm-pending-cash');
+  const errorEl = document.getElementById('aio-pending-cash-error');
+  if (!pending?.id || button?.disabled) return;
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Conciliando…';
+  }
+  let result;
+  try {
+    result = await window.api.cash.closePending({
+      sessionId: pending.id,
+      confirmation: 'CASH_ALREADY_CLOSED',
+      requestUserId: window._currentUser?.id,
+    });
+  } catch (error) {
+    result = { ok: false, error: error?.message || 'No se pudo conciliar la caja pendiente' };
+  }
+  if (!result?.ok) {
+    if (button) {
+      button.disabled = false;
+      button.innerHTML = `${svg('check')} Confirmo que ya fue cerrada`;
+    }
+    if (errorEl) {
+      errorEl.style.display = 'block';
+      errorEl.textContent = result?.error || 'No se pudo conciliar la caja pendiente';
+    }
+    return;
+  }
+
+  _aioPendingOpenCash = null;
+  await Promise.allSettled([
+    chkCaja(),
+    window.api.cash.getSessions().then(sessions => { DB.caja = sessions || []; }),
+  ]);
+  buildTopbar();
+  closeModal();
+  toast('Caja pendiente conciliada. Ya puedes ejecutar ALL IN ONE.', 'ok');
+  setTimeout(abrirAllInOne, 120);
+}
+
 async function ejecutarAllInOne() {
   const btn = document.getElementById('aio-run');
   if (btn) { btn.disabled = true; btn.style.opacity = '.5'; btn.textContent = '⏳ Procesando…'; }
@@ -376,6 +456,8 @@ async function ejecutarAllInOne() {
 
   if (!res || !res.ok) {
     if (res && res.error === 'Cancelado') { toast('Migración cancelada', 'w'); closeModal(); return; }
+    const openCashBlocked = res?.code === 'OPEN_CASH_SESSION';
+    _aioPendingOpenCash = openCashBlocked ? (res.openCash || null) : null;
     openModal(`
       <div style="text-align:center;margin-bottom:12px">
         <div style="font-size:32px">❌</div>
@@ -387,7 +469,11 @@ async function ejecutarAllInOne() {
         <div class="alrt-sub">${_escHtml((res && res.error) || 'Error desconocido')}</div></div>
       </div>
       ${res && res.backup ? `<div style="font-size:11px;color:var(--muted)">Backup previo: <code>${_escHtml(res.backup)}</code></div>` : ''}
-      <div class="modal-foot"><button class="btn btn-dark" onclick="closeModal()">Cerrar</button></div>
+      <div class="modal-foot">
+        ${openCashBlocked ? `<button class="btn btn-out" onclick="closeModal();routeTo('caja')">${svg('cash')} Revisar cajas</button>` : ''}
+        ${openCashBlocked ? `<button class="btn btn-amber" onclick="confirmarCajaYaCerradaAllInOne()">${svg('check')} La caja ya fue cerrada</button>` : ''}
+        <button class="btn btn-dark" onclick="closeModal()">Cerrar</button>
+      </div>
     `);
     return;
   }

@@ -3853,6 +3853,28 @@ const cashRepo = {
           `Contado: ${closeAmount} | Esperado: ${expected} | Diferencia: ${diff}`);
     return { diff, expected, summary: canonical };
   },
+  closePending({ sessionId, confirmation, userId, cajero }) {
+    if (confirmation !== 'CASH_ALREADY_CLOSED') {
+      throw new Error('Debes confirmar que la caja física ya fue cerrada');
+    }
+    const session = db.prepare('SELECT * FROM cash_sessions WHERE id=?').get(Number(sessionId));
+    if (!session) throw new Error('Sesión de caja no encontrada');
+    if (session.status !== 'open') throw new Error('La sesión pendiente ya no está abierta');
+    const summary = this.getSessionCashSummary(session.id);
+    const expected = round2(Number(summary?.expected ?? session.open_amount ?? 0));
+    const result = this.close({
+      sessionId: session.id,
+      closeAmount: expected,
+      closeBills: {},
+      expected,
+      notes: 'Cierre técnico confirmado por administrador: la caja física ya estaba cerrada',
+      userId,
+      cajero,
+    });
+    audit(userId, cajero, 'caja_pendiente_conciliada', 'cash_sessions', session.id,
+      `Sesión de ${session.cajero || 'cajero'} marcada cerrada tras confirmación administrativa | Esperado: ${expected}`);
+    return { ...result, repaired: true, sessionId: session.id };
+  },
   addMovement({
     sessionId, type, amount, method, referenceId, paymentId = null,
     description, userId

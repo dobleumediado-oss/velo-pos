@@ -591,6 +591,30 @@ const cashSessionId = Number(db.prepare(`
   INSERT INTO cash_sessions(user_id,cajero,open_date,open_time,open_amount,open_bills,status)
   VALUES(?,?,date('now','localtime'),time('now','localtime'),0,'{}','open')
 `).run(userId, user.name).lastInsertRowid);
+const pendingCashSessionId = Number(db.prepare(`
+  INSERT INTO cash_sessions(user_id,cajero,open_date,open_time,open_amount,open_bills,status)
+  VALUES(?,?,date('now','localtime'),time('now','localtime'),250,'{}','open')
+`).run(userId, 'Caja huérfana').lastInsertRowid);
+throws(() => DB.cashRepo.closePending({
+  sessionId: pendingCashSessionId, confirmation: '', userId, cajero: user.name,
+}), 'una sesión pendiente no se cierra sin confirmación física explícita');
+const pendingCashRepair = DB.cashRepo.closePending({
+  sessionId: pendingCashSessionId,
+  confirmation: 'CASH_ALREADY_CLOSED',
+  userId,
+  cajero: user.name,
+});
+const repairedPendingCash = db.prepare('SELECT status,expected,close_amount,notes FROM cash_sessions WHERE id=?')
+  .get(pendingCashSessionId);
+ok(pendingCashRepair.repaired === true
+  && repairedPendingCash.status === 'closed'
+  && near(repairedPendingCash.expected, 250)
+  && near(repairedPendingCash.close_amount, 250),
+  'la confirmación administrativa cierra la sesión huérfana con el efectivo esperado');
+ok(/Cierre técnico confirmado/.test(repairedPendingCash.notes)
+  && db.prepare("SELECT COUNT(*) count FROM audit_logs WHERE action='caja_pendiente_conciliada' AND entity_id=?")
+    .get(pendingCashSessionId).count === 1,
+  'el cierre técnico conserva motivo y auditoría sin borrar movimientos');
 const beforeInitialSale = DB.customersRepo.getById(custId).balance;
 const creditWithInitial = DB.salesRepo.create({
   session: { id: cashSessionId },

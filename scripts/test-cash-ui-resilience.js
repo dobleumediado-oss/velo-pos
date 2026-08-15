@@ -7,6 +7,11 @@ const path = require('path');
 const vm = require('vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'js', 'caja.js'), 'utf8');
+const appSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'js', 'app.js'), 'utf8');
+const dataSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'js', 'data.js'), 'utf8');
+const importerSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'js', 'importar.js'), 'utf8');
+const mainSource = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+const preloadSource = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
 const context = {
   console, Promise, setTimeout, clearTimeout,
   sessionStorage: { getItem: () => null },
@@ -51,6 +56,19 @@ vm.runInContext(source, context, { filename: 'caja.js' });
   );
   assert.ok(!closeHandler.includes('await imprimirReporteDia('));
   console.log('  ✓ cerrar caja no abre ni imprime el reporte automáticamente');
+
+  assert.ok(appSource.includes("className: 'other-open'") && appSource.includes('Otra caja abierta'));
+  assert.ok(source.includes('Cajas abiertas en otras terminales') && source.includes('ALL IN ONE permanecerá protegido'));
+  assert.ok(dataSource.includes('window.api.cash.getSessions().catch(() => null)'));
+  assert.ok(importerSource.includes("res?.code === 'OPEN_CASH_SESSION'") && importerSource.includes('Revisar cajas'));
+  console.log('  ✓ diferencia la caja local cerrada de cajas abiertas en otras terminales');
+
+  assert.ok(preloadSource.includes("ipcRenderer.invoke('cash:closePending'"));
+  assert.ok(importerSource.includes('confirmarCajaYaCerradaAllInOne')
+    && importerSource.includes("confirmation: 'CASH_ALREADY_CLOSED'"));
+  assert.ok(mainSource.includes("ipcMain.handle('cash:closePending'")
+    && mainSource.includes('_sessionActiveElsewhere(pending.user_id, currentTerminalId)'));
+  console.log('  ✓ un administrador puede conciliar la sesión huérfana solo si la otra terminal ya no está conectada');
 
   console.log('\nResiliencia visual de Caja verificada.');
 })().catch(error => {

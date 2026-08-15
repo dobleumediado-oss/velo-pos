@@ -459,9 +459,13 @@ async function chkCaja() {
   // Caja por terminal: cada máquina consulta SU caja abierta. Sin terminalId
   // (no cargado aún) degrada al comportamiento histórico (caja global).
   const terminalId = await ensureTerminalId();
-  const session = await window.api.cash.getOpen({ terminalId });
+  const [session, sessions] = await Promise.all([
+    window.api.cash.getOpen({ terminalId }),
+    window.api.cash.getSessions().catch(() => null),
+  ]);
   cajaOpen    = !!session;
   cajaSession = session || null;
+  if (Array.isArray(sessions)) DB.caja = sessions;
 }
 
 // ══════════════════════════════════════════════

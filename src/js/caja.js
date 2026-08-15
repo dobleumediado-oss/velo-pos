@@ -66,6 +66,9 @@ async function cajaCloseWithRecovery(payload) {
 
 function renderCaja(el) {
   el.innerHTML = '';
+  const otherOpenSessions = (DB.caja || []).filter(session =>
+    session.status === 'open' && Number(session.id) !== Number(cajaSession?.id)
+  );
 
   // ── Header ───────────────────────────────────
   el.appendChild(h('div', { class: 'sec-hdr' },
@@ -74,7 +77,9 @@ function renderCaja(el) {
       h('div', { class: 'sec-sub' },
         cajaOpen
           ? `Abierta por ${cajaSession?.cajero} desde ${fdate(cajaSession?.open_date)} ${cajaSession?.open_time}`
-          : 'No hay caja abierta'
+          : otherOpenSessions.length
+            ? `Esta terminal está cerrada · ${otherOpenSessions.length === 1 ? 'hay otra caja abierta' : `hay ${otherOpenSessions.length} cajas abiertas`}`
+            : 'No hay caja abierta'
       )
     ),
     cajaOpen
@@ -94,8 +99,56 @@ function renderCaja(el) {
           class: 'btn btn-green',
           onclick: openAperturaCajaModal,
           html: `${svg('unlock')} Abrir Caja`
-        })
+      })
   ));
+
+  if (otherOpenSessions.length) {
+    const otherCard = h('div', { class: 'card', style: { borderColor: 'var(--amber-line)', marginBottom: '14px' } });
+    otherCard.appendChild(h('div', { class: 'fxb mb8' },
+      h('div', null,
+        h('div', { class: 'card-title' }, 'Cajas abiertas en otras terminales'),
+        h('div', { class: 'ts' }, 'La barra superior muestra por separado el estado de esta terminal.')
+      ),
+      h('button', {
+        class: 'btn btn-out btn-sm',
+        onclick: async () => {
+          await chkCaja();
+          renderCaja(el);
+          buildTopbar();
+        },
+        html: `${svg('refresh')} Actualizar estado`,
+      })
+    ));
+    otherCard.appendChild(h('div', { class: 'alrt a', style: { marginBottom: '10px' } },
+      h('div', { class: 'alrt-dot a' }),
+      h('div', null,
+        h('div', { class: 'alrt-title' }, 'ALL IN ONE permanecerá protegido'),
+        h('div', { class: 'alrt-sub' }, 'Cierra estas sesiones desde la terminal correspondiente antes de reemplazar los datos operativos.')
+      )
+    ));
+    const otherWrap = h('div', { class: 'tw' });
+    const otherTable = h('table', null,
+      h('thead', null, h('tr', null,
+        ...['Cajero', 'Apertura', 'Terminal', 'Estado'].map(label => h('th', null, label))
+      ))
+    );
+    const otherBody = h('tbody');
+    otherOpenSessions.forEach(raw => {
+      const session = _normCaja(raw);
+      const terminalLabel = raw.terminal_name
+        || (raw.terminal_id ? `Terminal ${String(raw.terminal_id).slice(0, 8)}` : 'Terminal anterior');
+      otherBody.appendChild(h('tr', null,
+        h('td', null, h('div', { class: 'tb' }, session.cajero || 'Sin identificar')),
+        h('td', { class: 'ts' }, `${fdate(session.od)} ${session.ot || ''}`.trim()),
+        h('td', null, terminalLabel),
+        h('td', null, h('span', { class: 'badge a' }, 'Abierta'))
+      ));
+    });
+    otherTable.appendChild(otherBody);
+    otherWrap.appendChild(otherTable);
+    otherCard.appendChild(otherWrap);
+    el.appendChild(otherCard);
+  }
 
   // ── Estado actual ─────────────────────────────
   if (cajaOpen && cajaSession) {

@@ -368,6 +368,40 @@ function renderLogin() {
     );
   }
 
+  function passwordLoginControl() {
+    const input = h('input', {
+      class: 'inp', id: 'lpass', type: 'password', placeholder: '••••••••',
+      autocomplete: 'current-password', spellcheck: 'false',
+      onkeydown: e => { if (e.key === 'Enter') doLogin(); }
+    });
+    const toggle = h('button', {
+      class: 'login-pass-toggle', id: 'lpass-toggle', type: 'button',
+      title: 'Mostrar contraseña', 'aria-label': 'Mostrar contraseña',
+      'aria-controls': 'lpass', 'aria-pressed': 'false', html: svg('eye'),
+      onmousedown: e => e.preventDefault(),
+      onclick: () => {
+        const showing = input.type === 'text';
+        const selectionStart = input.selectionStart;
+        const selectionEnd = input.selectionEnd;
+        input.type = showing ? 'password' : 'text';
+        const label = showing ? 'Mostrar contraseña' : 'Ocultar contraseña';
+        toggle.title = label;
+        toggle.setAttribute('aria-label', label);
+        toggle.setAttribute('aria-pressed', String(!showing));
+        toggle.innerHTML = svg(showing ? 'eye' : 'eye-off');
+        input.focus({ preventScroll: true });
+        if (selectionStart != null && selectionEnd != null) {
+          input.setSelectionRange(selectionStart, selectionEnd);
+        }
+      }
+    });
+    return h('div', { class: 'inp-ic login-pass-field' },
+      h('div', { class: 'ic', html: svg('lock') }),
+      input,
+      toggle
+    );
+  }
+
   function build() {
     root.innerHTML = '';
     const wrap = h('div', { class: 'login-wrap', style: { width:'100%', height:'100%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:'20px' } },
@@ -460,12 +494,7 @@ function renderLogin() {
         // Contraseña
         h('div', { class: 'fg' },
           h('label', { class: 'lbl' }, 'Contraseña'),
-          h('div', { class: 'inp-ic' },
-            h('div', { class: 'ic', html: svg('lock') }),
-            h('input', { class: 'inp', id: 'lpass', type: 'password', placeholder: '••••••••',
-              onkeydown: e => { if (e.key === 'Enter') doLogin(); }
-            })
-          )
+          passwordLoginControl()
         ),
 
         // Botón ingresar
@@ -838,11 +867,32 @@ function buildTopbar() {
     }, `Negocio: ${CFG.activeBusinessName || CFG.biz}`));
   }
 
+  const otherOpenCashSessions = (DB.caja || []).filter(session =>
+    session.status === 'open' && Number(session.id) !== Number(cajaSession?.id)
+  );
+  const cashPill = cajaOpen
+    ? {
+        className: 'open',
+        html: `${svg('check')} Caja Abierta`,
+        title: otherOpenCashSessions.length
+          ? `Caja abierta en esta terminal y ${otherOpenCashSessions.length} en otra terminal`
+          : 'Caja abierta en esta terminal',
+      }
+    : otherOpenCashSessions.length
+      ? {
+          className: 'other-open',
+          html: `${svg('warn')} ${otherOpenCashSessions.length === 1 ? 'Otra caja abierta' : `${otherOpenCashSessions.length} cajas abiertas`}`,
+          title: 'Esta terminal está cerrada, pero existe una caja abierta en otra terminal',
+        }
+      : {
+          className: 'closed',
+          html: `${svg('xmark')} Caja Cerrada`,
+          title: 'No hay caja abierta en esta terminal',
+        };
   right.appendChild(h('div', {
-    class: `pill ${cajaOpen ? 'open' : 'closed'}`,
-    html: cajaOpen
-      ? `${svg('check')} Caja Abierta`
-      : `${svg('xmark')} Caja Cerrada`
+    class: `pill ${cashPill.className}`,
+    title: cashPill.title,
+    html: cashPill.html,
   }));
 
   // ── Acciones rápidas globales ────────────────
