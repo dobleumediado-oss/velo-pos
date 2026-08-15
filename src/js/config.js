@@ -644,7 +644,7 @@ async function renderConfiguracion(el) {
   }
 
   // ── NCF Avanzado (cuando módulo activo) ──────
-  if (CFG.module_ncf_avanzado === '1' && isSA) {
+  if (CFG.module_ncf_avanzado === '1' && isAdmin) {
     const ncfCard = h('div', { class: 'card', style: 'margin-top:16px' });
     ncfCard.innerHTML = `
       <div class="fxb mb8">

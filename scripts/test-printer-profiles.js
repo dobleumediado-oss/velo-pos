@@ -356,6 +356,21 @@ test('ningún documento se imprime automáticamente antes del botón del display
   assert.ok(!posSource.includes('autoPrint: true'));
 });
 
+test('el conduce impreso prioriza entrega, observaciones y espacio de recepción', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/js/print.js'), 'utf8');
+  const start = source.indexOf('function printConduceDoc(dn)');
+  const end = source.indexOf('function printAbono(', start);
+  const conduce = source.slice(start, end);
+  assert.ok(start >= 0 && end > start);
+  assert.ok(!conduce.includes('<span class="k">Estado:</span>'));
+  assert.ok(!conduce.includes('<span class="k">Origen:</span>'));
+  assert.ok(conduce.indexOf('<table class="items">') < conduce.indexOf('<div class="notes">'));
+  assert.ok(conduce.indexOf('<div class="notes">') < conduce.indexOf('<div class="signs">'));
+  assert.ok(conduce.includes('margin-top:32px'));
+  assert.ok(conduce.includes('.received-document .document-line { flex:0 0 150px'));
+  assert.ok(conduce.includes('<span>Cédula:</span><span class="document-line">'));
+});
+
 test('monitorea impresoras y vuelve a validarlas inmediatamente antes del envío', () => {
   const printSource = fs.readFileSync(path.join(__dirname, '../src/js/print.js'), 'utf8');
   const posSource = fs.readFileSync(path.join(__dirname, '../src/js/pos.js'), 'utf8');

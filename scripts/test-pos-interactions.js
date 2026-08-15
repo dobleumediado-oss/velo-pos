@@ -101,10 +101,12 @@ const posSource = fs.readFileSync(path.join(root, 'src/js/pos.js'), 'utf8');
 vm.runInContext(`${posSource}\nlet __renderCartCalls=0;
 renderCart=()=>{__renderCartCalls++};
 this.__posDiscount={posDiscConPin,calcTotals,posSetQty,posCommitQty,renderCalls:()=>__renderCartCalls};
-this.__posCustomers={pvCustomerMatches,pvCustomerOptions,pvFilterCustomers,pvSelectCustomer,posSelectCustomer,_setPosPmode};`,
+this.__posCustomers={pvCustomerMatches,pvCustomerOptions,pvFilterCustomers,pvSelectCustomer,posSelectCustomer,_setPosPmode};
+this.__posTransfer={posLoadResaleCart};`,
 context, { filename: 'pos.js' });
 const discount = context.__posDiscount;
 const customers = context.__posCustomers;
+const transfer = context.__posTransfer;
 context.toast = () => {};
 
 const pctInput = { value: '4' };
@@ -203,6 +205,50 @@ customers.posSelectCustomer(9, 91);
 assert.strictEqual(state.currentInv().cart[0].price, 111,
   'el precio elegido manualmente no debe ser sobrescrito por el cliente');
 console.log('  ✓ el selector principal aplica detalle/mayorista y respeta precios manuales');
+
+element('cart-wrap');
+state.resetInvoices();
+state.setProducts([{
+  id: 100, code: 'P-100', name: 'Producto cotizado', price: 118,
+  wholesale: 100, cost: 50, stock: 12, active: 1, taxable: 1, tax_pct: 18,
+}]);
+const quoteLoaded = transfer.posLoadResaleCart({
+  sourceQuoteId: 44,
+  sourceQuoteNumber: 'COT-000044',
+  priceMode: 'wholesale',
+  discountPct: 5,
+  paymentMethod: 'transferencia',
+  ncfType: 'B01',
+  notes: 'Conservar estas observaciones',
+  salespersonId: 7,
+  customer: {
+    id: 9, name: 'Motores del Caribe, SRL', rnc: '130123456',
+    contactId: 91, contactName: 'Ana Pérez', branchId: 3, branchName: 'Sucursal Norte',
+  },
+  items: [{ product_id: 100, product_code: 'P-100', product_name: 'Producto cotizado',
+    unit_price: 105, taxable: 1, tax_pct: 18, qty: 3, source_item_id: 501 }],
+});
+assert.strictEqual(quoteLoaded, true, 'debe cargar la cotización en el POS');
+assert.strictEqual(state.currentInv().itype, 'factura', 'la conversión debe abrirse como factura');
+assert.strictEqual(state.currentInv().sourceQuoteId, 44, 'debe conservar la cotización de origen');
+assert.strictEqual(state.currentInv().cart[0].price, 105, 'debe conservar el precio cotizado');
+assert.strictEqual(state.currentInv().cart[0].qty, 3, 'debe conservar la cantidad cotizada');
+assert.strictEqual(state.currentInv().cliContactId, 91, 'debe conservar el representante del cliente');
+assert.strictEqual(state.currentInv().cliBranchId, 3, 'debe conservar la sucursal de entrega');
+assert.strictEqual(state.currentInv().disc, 5, 'debe conservar el descuento de la cotización');
+assert.strictEqual(state.currentInv().notes, 'Conservar estas observaciones',
+  'debe conservar las observaciones para el cobro');
+console.log('  ✓ Confirmar venta envía la cotización completa al Punto de Venta');
+
+const ventasSource = fs.readFileSync(path.join(root, 'src/js/ventas.js'), 'utf8');
+const conversionStart = ventasSource.indexOf('async function confirmarConversionCotizacion()');
+const conversionEnd = ventasSource.indexOf('async function openDetalleVentaModal', conversionStart);
+const conversionFlow = ventasSource.slice(conversionStart, conversionEnd);
+assert(conversionFlow.includes('window._pendingPOSResaleCart = payload'));
+assert(conversionFlow.includes("routeTo('pos')"));
+assert(!conversionFlow.includes('ventasCreateSaleWithRecovery'));
+assert(!conversionFlow.includes('deleteQuote'));
+console.log('  ✓ Ventas no cobra ni elimina la cotización antes de abrir el POS');
 
 context.__sidebarRenderCalls = 0;
 context.buildSidebar = () => { context.__sidebarRenderCalls += 1; };

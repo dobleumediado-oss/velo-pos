@@ -1,5 +1,30 @@
 # Historial de versiones
 
+## 1.40.0 — 2026-08-15
+
+### Cotizaciones integradas al punto de venta
+
+- «Confirmar venta» envía la cotización completa al POS y abre automáticamente
+  el punto de venta para terminar el cobro con todas sus herramientas.
+- Conserva cliente, contacto, sucursal, artículos, precios, descuentos, cargos,
+  vendedor, notas y preferencias de pago; la cotización solo se elimina cuando
+  la venta queda confirmada correctamente.
+
+### Importación ALL IN ONE y controles documentales
+
+- La importación destructiva reinicia también las secuencias de comprobantes,
+  los asientos contables, balances y períodos para comenzar desde una base limpia.
+- Cada recibo nuevo mantiene un correlativo propio al reemplazar una factura
+  anulada, sin reutilizar la numeración financiera anterior.
+
+### Precios, montos e impresión
+
+- Los campos monetarios muestran separadores y dos decimales mientras se escribe,
+  por ejemplo `1,000.00` y `50,000.00`.
+- Las facturas impresas muestran correctamente el precio unitario final con ITBIS.
+- El conduce elimina Estado y Origen, coloca Observaciones debajo de los artículos
+  y baja el espacio de Cédula para facilitar el llenado manual.
+
 ## 1.36.2 — 2026-08-03
 
 ### Importación All-in-One conciliada

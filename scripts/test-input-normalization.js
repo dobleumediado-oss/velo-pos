@@ -8,6 +8,12 @@ const {
   shouldUppercaseEntryControl,
   uppercaseEntryValue,
   normalizeUppercaseEntry,
+  shouldFormatMoneyControl,
+  formatMoneyEntryValue,
+  unformatMoneyEntryValue,
+  beginMoneyEntry,
+  normalizeMoneyEntry,
+  finishMoneyEntry,
 } = require('../src/js/input-normalization');
 
 function control(tagName, type = 'text', value = '', dataset = {}) {
@@ -99,3 +105,45 @@ assert.strictEqual(
 );
 
 console.log('✓ Captura global en mayúsculas y nombres documentales validados');
+
+assert.strictEqual(formatMoneyEntryValue('1000'), '1,000.00');
+assert.strictEqual(formatMoneyEntryValue('50000'), '50,000.00');
+assert.strictEqual(formatMoneyEntryValue('1234.5'), '1,234.50');
+assert.strictEqual(unformatMoneyEntryValue('50,000.00'), '50000.00');
+
+const price = control('INPUT', 'number', '1000');
+price.id = 'pf-price';
+assert.strictEqual(shouldFormatMoneyControl(price), true);
+assert.strictEqual(beginMoneyEntry(price), true);
+assert.strictEqual(price.type, 'text');
+assert.strictEqual(price.value, '1,000.00');
+price.value = '50000.00';
+price.selectionStart = 5;
+price.selectionEnd = 5;
+normalizeMoneyEntry(price);
+assert.strictEqual(price.value, '50,000.00');
+finishMoneyEntry(price);
+assert.strictEqual(price.type, 'number');
+assert.strictEqual(price.value, '50000.00');
+
+const quantity = control('INPUT', 'number', '1000');
+quantity.id = 'pf-stock';
+assert.strictEqual(shouldFormatMoneyControl(quantity), false);
+
+const percent = control('INPUT', 'number', '18');
+percent.id = 'pf-tax-pct';
+assert.strictEqual(shouldFormatMoneyControl(percent), false);
+
+const creditDays = control('INPUT', 'number', '30');
+creditDays.id = 'cf-days';
+creditDays.className = 'inp credito dias';
+assert.strictEqual(shouldFormatMoneyControl(creditDays), false);
+
+const bonus = control('INPUT', 'number', '2500', { nomBonus: '17' });
+assert.strictEqual(shouldFormatMoneyControl(bonus), true);
+
+const initialBalance = control('INPUT', 'number', '50000');
+initialBalance.id = 'fa-bal';
+assert.strictEqual(shouldFormatMoneyControl(initialBalance), true);
+
+console.log('✓ Montos con miles y dos decimales validados durante la captura');

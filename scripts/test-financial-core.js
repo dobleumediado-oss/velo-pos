@@ -182,6 +182,33 @@ throws(() => DB.salesRepo.create({
   ...idempotentQuotePayload,
   items: [item(1, 150)],
 }), 'una operación de venta no puede reutilizarse con otros datos');
+const stockBeforeQuoteConversion = DB.productsRepo.getById(prodId).stock;
+const quoteConversionPayload = {
+  operationId: `sale-from-quote-${Date.now()}`,
+  customer: { id: custId, name: 'x' },
+  items: [item(1)],
+  payment: { method: 'efectivo', sourceQuoteId: c.saleId },
+  user,
+  type: 'factura',
+};
+const convertedQuote = DB.salesRepo.create(quoteConversionPayload);
+ok(convertedQuote.convertedQuoteId === c.saleId && DB.salesRepo.getById(c.saleId) === null,
+  'confirmar en el POS convierte y retira la cotización dentro de la misma transacción');
+ok(DB.productsRepo.getById(prodId).stock === stockBeforeQuoteConversion - 1,
+  'la cotización cargada solo descuenta inventario cuando se confirma como venta');
+const convertedQuoteRetry = DB.salesRepo.create(quoteConversionPayload);
+ok(convertedQuoteRetry.idempotent === true && convertedQuoteRetry.saleId === convertedQuote.saleId,
+  'reintentar la confirmación del POS no duplica la venta aunque la cotización ya fue retirada');
+throws(() => DB.salesRepo.create({
+  operationId: `failed-sale-from-quote-${Date.now()}`,
+  customer: { id: custId, name: 'x' },
+  items: [item(9999)],
+  payment: { method: 'efectivo', sourceQuoteId: idempotentQuote.saleId },
+  user,
+  type: 'factura',
+}), 'si el cobro falla no elimina la cotización original');
+ok(DB.salesRepo.getById(idempotentQuote.saleId)?.type === 'cotizacion',
+  'la cotización permanece disponible después de una venta rechazada');
 
 console.log('\n== C2. Precio final modificado y producto exento ==');
 const c2 = DB.salesRepo.create({ customer: { id: custId, name: 'x' }, items: [item(1, 150)], payment: { method: 'efectivo' }, user, type: 'factura' });
@@ -990,6 +1017,24 @@ ok(legacyHtml.includes('16,152.54'), 'A4 conserva el total histórico ya cobrado
 ok(legacyHtml.includes('.titlebox .t { font-size:9px') &&
   legacyHtml.includes('Factura #') && legacyHtml.includes('00002335'),
   'A4 usa encabezado documental sutil y conserva la numeración histórica');
+const finalUnitSample = {
+  id: 2385, numero_factura_fmt: '00002385', type: 'factura', status: 'pending',
+  date: '2026-08-12', customer_name: 'CENTRO MULTISERVICIOS NAILAM SRL',
+  payment_method: 'credito', tax_pct: 18, subtotal: 838.98, tax_amt: 151.02,
+  total: 990,
+  items: [{
+    product_name: 'CASQUILLO TOMA DE FUERZA', qty: 6, unit_price: 165,
+    net_subtotal: 838.98, tax_amt: 151.02, subtotal: 990,
+  }],
+};
+const finalUnitFormats = ['carta_recibo', 'carta_formal', 'carta_ncf'].map(id =>
+  getPlantilla(id).render(finalUnitSample, { biz_name: 'EQUIPARTS' }, {
+    logo: false, rnc: true, ncf: true, mensaje: true, cedula: true,
+  }));
+ok(finalUnitFormats.every(html => html.includes('165.00') && !html.includes('139.83')),
+  'A4, Carta y NCF muestran el precio de venta unitario final con ITBIS incluido');
+ok(finalUnitFormats.every(html => html.includes('838.98') && html.includes('151.02') && html.includes('990.00')),
+  'corregir el precio unitario no altera la base, el ITBIS ni el importe de la línea');
 const usdHtml = renderCartaRecibo({
   id: 3001, type: 'factura', status: 'completed', date: '2026-07-20',
   customer_name: 'Cliente USD', payment_method: 'transferencia',

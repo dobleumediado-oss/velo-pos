@@ -60,6 +60,7 @@ const {
   calculateInvoiceFiscalBreakdown,
   syncImportedCustomerPhones,
   assertForeignKeyIntegrity,
+  wipeEquipartsResetTables,
   wipeExpensesFkSafe,
   dropCorrectionImmutabilityTriggers,
   restoreCorrectionImmutabilityTriggers,
@@ -2073,6 +2074,11 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
     // Ingresos + ITBIS · Costo/Inventario). Se auto-guarda por tipo/idempotencia.
     if ((saleData?.type || 'factura') === 'factura') {
       _acctHook(() => accountingRepo.generateSaleEntry({ saleId: result.saleId, userId: requestUserId }));
+      if (result.convertedQuoteId) {
+        _acctHook(() => accountingRepo.reverseSourceEntry(
+          'venta', result.convertedQuoteId, requestUserId, 'Cotización convertida desde Punto de Venta'
+        ));
+      }
       if (result.initialPaymentId) {
         _acctHook(() => accountingRepo.generatePaymentEntry({
           paymentId: result.initialPaymentId, userId: requestUserId,
@@ -4617,30 +4623,19 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, files, requestUser
     // FK off dentro de la transacción para limpieza masiva segura.
     db.pragma('foreign_keys = OFF');
     const runAll = db.transaction(() => {
+      try {
+        stats.accounting_removed = db.prepare('SELECT COUNT(*) count FROM accounting_entries').get()?.count || 0;
+      } catch (_) {
+        stats.accounting_removed = 0;
+      }
       // 4a) RESET: vaciar el núcleo migrado y TODOS sus dependientes. La lista
       // anterior omitía asignaciones, correcciones, sucursales y módulos que
       // referencian productos; con FK desactivadas eso dejaba huérfanos.
-      const wipe = [
-        'sale_correction_documents', 'sale_date_history', 'commission_adjustments', 'sale_corrections',
-        'document_reuse_log', 'legacy_payment_details', 'payment_allocations', 'cash_movements', 'print_jobs',
-        'inventory_movements', 'product_price_history', 'ecf_log', 'ncf_log', 'deliveries',
-        'checkout_order_items', 'checkout_orders',
-        'delivery_note_invoice_links', 'delivery_note_items', 'delivery_notes',
-        'seller_commission_lines', 'seller_commission_runs',
-        'seller_external_sale_items', 'seller_external_sales',
-        'purchase_items', 'purchase_orders', 'document_issues',
-        'sale_charges', 'sale_items', 'payments', 'sales',
-        'customer_phones', 'customer_contacts', 'customer_branches', 'customers', 'products',
-        'cash_sessions',
-      ];
       // Los triggers de inmutabilidad fiscal bloquean el DELETE de las tablas de
       // correcciones; se retiran para el reset y se recrean apenas queden vacías,
       // todo dentro de esta misma transacción atómica.
       dropCorrectionImmutabilityTriggers(db);
-      for (const t of wipe) {
-        const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t);
-        if (exists) db.prepare(`DELETE FROM ${t}`).run();
-      }
+      wipeEquipartsResetTables(db);
       restoreCorrectionImmutabilityTriggers(db);
 
       // Gastos y pagos de gastos NO vienen en los CSV: el reset total también los
@@ -4648,7 +4643,7 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, files, requestUser
       // migración (ver wipeExpensesFkSafe en lib/equiparts-import.js).
       wipeExpensesFkSafe(db);
       // Reset de autoincrement para IDs limpios
-      try { db.prepare(`DELETE FROM sqlite_sequence WHERE name IN ('sales','sale_charges','sale_items','payments','payment_allocations','customer_phones','customer_contacts','customer_branches','customers','products','product_price_history')`).run(); } catch (_) {}
+      try { db.prepare(`DELETE FROM sqlite_sequence WHERE name IN ('sales','sale_charges','sale_items','payments','payment_allocations','customer_phones','customer_contacts','customer_branches','customers','products','product_price_history','ncf_available_numbers','ncf_log','ncf_sequences','ncf_normalization_log','accounting_entry_lines','accounting_entries','accounting_periods')`).run(); } catch (_) {}
       try {
         db.prepare(`
           UPDATE document_sequences
@@ -4935,7 +4930,7 @@ ipcMain.handle('importar:allInOneEquiparts', async (_, { dir, files, requestUser
 
     try {
       audit(requestUserId || null, 'ALL IN ONE', 'migracion_allinone', 'sistema', null,
-        `CxC ${cxcTotal} / ${cxc.clientes_con_saldo} clientes / ${facturasImp} facturas / ${validation.warnings.length} advertencias conciliadas`);
+        `CxC ${cxcTotal} / ${cxc.clientes_con_saldo} clientes / ${facturasImp} facturas / ${stats.accounting_removed || 0} asientos anteriores eliminados / ${validation.warnings.length} advertencias conciliadas`);
     } catch (_) { /* auditoría no debe tumbar el resultado */ }
 
     return {

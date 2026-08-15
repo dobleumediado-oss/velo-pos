@@ -273,13 +273,18 @@ function _lineNet(i, sale) {
   return _lineGross(i) - _lineTax(i, sale);
 }
 
-function _lineNetUnit(i, sale) {
-  const qty = Number(i.qty || 1) || 1;
-  return _lineNet(i, sale) / qty;
-}
-
 function _lineImporte(i, sale) {
   return _lineNet(i, sale) + _lineTax(i, sale);
+}
+
+// El precio de venta del POS siempre es el precio FINAL por unidad, con ITBIS
+// incluido cuando corresponde. La base neta se muestra aparte en "Monto bruto".
+// Si una línea histórica no trae unit_price, se reconstruye desde su importe.
+function _lineFinalUnit(i, sale) {
+  const stored = Number(i.unit_price != null ? i.unit_price : i.price);
+  if (Number.isFinite(stored) && stored > 0) return stored;
+  const qty = Number(i.qty || 1) || 1;
+  return _lineImporte(i, sale) / qty;
 }
 
 function _sumLines(sale, fn) {
@@ -1035,15 +1040,15 @@ function renderCartaRecibo(sale, cfg, opts) {
   const rows = (sale.items || []).map((i, idx) => {
     const qty   = Number(i.qty || 1);
     const code  = i.product_code || i.code || i.sku || '—';
-    const unitNet = showTax ? _lineNetUnit(i, sale) : Number(i.unit_price || i.price || 0);
-    const lineNet = showTax ? _lineNet(i, sale) : (qty * unitNet);
+    const unitFinal = _lineFinalUnit(i, sale);
+    const lineNet = showTax ? _lineNet(i, sale) : (qty * unitFinal);
     const lineTax = showTax ? _lineTax(i, sale) : 0;
-    const importe = showTax ? _lineImporte(i, sale) : (qty * unitNet);
+    const importe = showTax ? _lineImporte(i, sale) : (qty * unitFinal);
     return `
     <tr>
       ${showCode ? `<td class="c-code">${_esc(code)}</td>` : ''}
       <td class="c-desc">${_esc(i.product_name || i.name || '')}</td>
-      ${showMoney ? `<td class="c-num">${_n2(unitNet)}</td>` : ''}
+      ${showMoney ? `<td class="c-num">${_n2(unitFinal)}</td>` : ''}
       <td class="c-num">${qty.toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
       ${showMoney ? `<td class="c-num">${_n2(lineNet)}</td>
       ${showTax ? `<td class="c-num">${_n2(lineTax)}</td>` : ''}
@@ -1393,16 +1398,16 @@ function renderCartaFormal(sale, cfg, opts) {
   const showCode = _showCode(cfg);
   const rows = (sale.items||[]).map((i,idx) => {
     const qty = Number(i.qty || 1);
-    const unitNet = showTax ? _lineNetUnit(i, sale) : Number(i.unit_price || i.price || 0);
-    const lineNet = showTax ? _lineNet(i, sale) : (qty * unitNet);
+    const unitFinal = _lineFinalUnit(i, sale);
+    const lineNet = showTax ? _lineNet(i, sale) : (qty * unitFinal);
     const lineTax = showTax ? _lineTax(i, sale) : 0;
-    const importe = showTax ? _lineImporte(i, sale) : (qty * unitNet);
+    const importe = showTax ? _lineImporte(i, sale) : (qty * unitFinal);
     return `
     <tr style="${idx%2===0?'background:#f9fafb':''}">
       ${showCode ? `<td style="padding:8px 8px;font-family:'Courier New',monospace;font-size:10px;color:#555">${_esc(i.product_code || i.code || '—')}</td>` : ''}
       <td style="padding:8px 8px">${_esc(i.product_name||i.name)}</td>
       <td style="text-align:center;padding:8px">${i.qty}</td>
-      <td style="text-align:right;padding:8px">RD$${_n2(unitNet)}</td>
+      <td style="text-align:right;padding:8px">RD$${_n2(unitFinal)}</td>
       <td style="text-align:right;padding:8px">RD$${_n2(lineNet)}</td>
       ${showTax ? `<td style="text-align:right;padding:8px">RD$${_n2(lineTax)}</td>` : ''}
       <td style="text-align:right;padding:8px;font-weight:600">RD$${_n2(importe)}</td>
@@ -1517,16 +1522,16 @@ function renderCartaNCF(sale, cfg, opts) {
   const showCode = _showCode(cfg);
   const rows = (sale.items||[]).map(i => {
     const qty = Number(i.qty || 1);
-    const unitNet = showTax ? _lineNetUnit(i, sale) : Number(i.unit_price || i.price || 0);
-    const lineNet = showTax ? _lineNet(i, sale) : (qty * unitNet);
+    const unitFinal = _lineFinalUnit(i, sale);
+    const lineNet = showTax ? _lineNet(i, sale) : (qty * unitFinal);
     const lineTax = showTax ? _lineTax(i, sale) : 0;
-    const importe = showTax ? _lineImporte(i, sale) : (qty * unitNet);
+    const importe = showTax ? _lineImporte(i, sale) : (qty * unitFinal);
     return `
     <tr>
       ${showCode ? `<td style="padding:7px 6px;font-family:'Courier New',monospace;font-size:10px">${_esc(i.product_code || i.code || '—')}</td>` : ''}
       <td style="padding:7px 6px">${_esc(i.product_name||i.name)}</td>
       <td style="text-align:center;padding:7px">${i.qty}</td>
-      <td style="text-align:right;padding:7px 6px">RD$${_n2(unitNet)}</td>
+      <td style="text-align:right;padding:7px 6px">RD$${_n2(unitFinal)}</td>
       <td style="text-align:right;padding:7px 6px">RD$${_n2(lineNet)}</td>
       ${showTax ? `<td style="text-align:right;padding:7px 6px">RD$${_n2(lineTax)}</td>` : ''}
       <td style="text-align:right;padding:7px 6px;font-weight:700">RD$${_n2(importe)}</td>

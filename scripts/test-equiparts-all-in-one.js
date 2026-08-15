@@ -2,14 +2,18 @@
 'use strict';
 
 const Database = require('better-sqlite3');
+const fs = require('fs');
+const path = require('path');
 const { rpcTimeoutFor } = require('../src/main/ipc-bridge');
 const {
+  EQUIPARTS_RESET_TABLES,
   parseCsv,
   loadEquipartsCsvPayload,
   validateEquipartsData,
   calculateInvoiceFiscalBreakdown,
   syncImportedCustomerPhones,
   assertForeignKeyIntegrity,
+  wipeEquipartsResetTables,
   wipeExpensesFkSafe,
   round2,
   dropCorrectionImmutabilityTriggers,
@@ -132,6 +136,51 @@ ok(validateEquipartsData(transported).targetCxc === 68,
   'los cuatro CSV viajan desde una terminal y se reconstruyen íntegros en el servidor');
 ok(rpcTimeoutFor('importar:allInOneEquiparts') === 10 * 60 * 1000 && rpcTimeoutFor('products:getAll') === 8000,
   'la importación remota no vence con el timeout general de ocho segundos');
+const fiscalResetOrder = ['ncf_available_numbers', 'ncf_log', 'ncf_sequences', 'ncf_normalization_log']
+  .map(table => EQUIPARTS_RESET_TABLES.indexOf(table));
+ok(fiscalResetOrder.every(index => index >= 0)
+  && fiscalResetOrder.every((index, position) => position === 0 || index > fiscalResetOrder[position - 1]),
+  'ALL IN ONE borra la cola, historial, rangos y auditoría de secuencias NCF en orden seguro');
+const fiscalDb = new Database(':memory:');
+fiscalDb.pragma('foreign_keys = ON');
+fiscalDb.exec(`
+  CREATE TABLE accounting_accounts(id INTEGER PRIMARY KEY AUTOINCREMENT,balance REAL,updated_at TEXT);
+  CREATE TABLE accounting_entries(id INTEGER PRIMARY KEY AUTOINCREMENT,number TEXT,reversed_by INTEGER REFERENCES accounting_entries(id));
+  CREATE TABLE accounting_entry_lines(id INTEGER PRIMARY KEY AUTOINCREMENT,entry_id INTEGER REFERENCES accounting_entries(id),account_id INTEGER REFERENCES accounting_accounts(id),debit REAL,credit REAL);
+  CREATE TABLE accounting_periods(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT);
+  CREATE TABLE depreciation_entries(id INTEGER PRIMARY KEY AUTOINCREMENT,accounting_entry_id INTEGER);
+  CREATE TABLE ncf_sequences(id INTEGER PRIMARY KEY AUTOINCREMENT,current INTEGER);
+  CREATE TABLE ncf_available_numbers(id INTEGER PRIMARY KEY AUTOINCREMENT,sequence_id INTEGER REFERENCES ncf_sequences(id));
+  CREATE TABLE ncf_log(id INTEGER PRIMARY KEY AUTOINCREMENT,ncf TEXT);
+  CREATE TABLE ncf_normalization_log(id INTEGER PRIMARY KEY AUTOINCREMENT,reason TEXT);
+  INSERT INTO ncf_sequences(current) VALUES(849);
+  INSERT INTO ncf_available_numbers(sequence_id) VALUES(1);
+  INSERT INTO ncf_log(ncf) VALUES('B0100000849');
+  INSERT INTO ncf_normalization_log(reason) VALUES('auditoría anterior');
+  INSERT INTO accounting_accounts(balance) VALUES(1250),(-1250);
+  INSERT INTO accounting_entries(number) VALUES('AS-000076');
+  INSERT INTO accounting_entry_lines(entry_id,account_id,debit,credit) VALUES(1,1,1250,0),(1,2,0,1250);
+  INSERT INTO accounting_periods(name) VALUES('Agosto 2026');
+  INSERT INTO depreciation_entries(accounting_entry_id) VALUES(1);
+`);
+const clearedFiscal = wipeEquipartsResetTables(fiscalDb);
+ok(['ncf_available_numbers', 'ncf_log', 'ncf_sequences', 'ncf_normalization_log']
+  .every(table => clearedFiscal.includes(table)
+    && fiscalDb.prepare(`SELECT COUNT(*) count FROM ${table}`).get().count === 0),
+  'el reset ejecutado deja en cero todas las secuencias y permite configurar un nuevo inicio');
+ok(['accounting_entry_lines', 'accounting_entries', 'accounting_periods']
+  .every(table => clearedFiscal.includes(table)
+    && fiscalDb.prepare(`SELECT COUNT(*) count FROM ${table}`).get().count === 0),
+  'ALL IN ONE elimina líneas, asientos contables y períodos anteriores');
+ok(fiscalDb.prepare('SELECT COUNT(*) count FROM accounting_accounts').get().count === 2
+  && fiscalDb.prepare('SELECT COALESCE(SUM(ABS(balance)),0) total FROM accounting_accounts').get().total === 0,
+  'conserva el catálogo contable pero reinicia todos sus saldos acumulados');
+ok(fiscalDb.prepare('SELECT accounting_entry_id FROM depreciation_entries WHERE id=1').get().accounting_entry_id === null,
+  'retira enlaces auxiliares hacia asientos eliminados sin borrar el activo fijo');
+fiscalDb.close();
+const configSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'js', 'config.js'), 'utf8');
+ok(/CFG\.module_ncf_avanzado === '1' && isAdmin/.test(configSource),
+  'un administrador que ejecuta ALL IN ONE puede abrir la sección y registrar el nuevo rango NCF');
 
 console.log('\n== 2. Teléfonos tipados, normalizados e idempotentes ==');
 const db = new Database(':memory:');

@@ -62,7 +62,7 @@ function createSale({ date, method = 'efectivo', qty = 2 } = {}) {
       product_id: productId, product_code: 'COR-001', product_name: 'Producto corrección',
       unit_cost: 60, unit_price: 118, taxable: 1, tax_pct: 18, qty,
     }],
-    payment: { method, saleDate: date },
+    payment: { method, saleDate: date, ncfType: 'B02' },
     session: { id: cashId },
     user: admin,
     type: 'factura',

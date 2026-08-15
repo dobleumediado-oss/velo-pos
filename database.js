@@ -4074,6 +4074,7 @@ function saleOperationFingerprint({ customer, items, payment, type }) {
       initialPaymentExchangeRate: round2(Number(payment?.initialPaymentExchangeRate) || 1),
       initialPaymentReference: String(payment?.initialPaymentReference || '').replace(/\s+/g, ' ').trim(),
       replacesSaleId: Number(payment?.replacesSaleId) || null,
+      sourceQuoteId: Number(payment?.sourceQuoteId) || null,
       saleDate: String(payment?.saleDate || '').trim(),
       notes: String(payment?.notes || '').replace(/\s+/g, ' ').trim(),
       displayCurrency: String(payment?.displayCurrency || 'DOP').toUpperCase(),
@@ -4180,6 +4181,19 @@ const salesRepo = {
       // Una cotización es un documento comercial: no cobra, no crea CxC, no
       // utiliza una cuenta financiera y no depende del estado de la caja.
       if (type === 'cotizacion') payment.method = 'cotizacion';
+
+      // Una conversión enviada al POS conserva la cotización hasta confirmar
+      // el cobro. Al llegar aquí se valida y se eliminará dentro de ESTA misma
+      // transacción, evitando una factura creada con la cotización aún activa.
+      const sourceQuoteId = type === 'factura'
+        ? (Number(payment.sourceQuoteId) || null)
+        : null;
+      const sourceQuote = sourceQuoteId
+        ? db.prepare('SELECT * FROM sales WHERE id=?').get(sourceQuoteId)
+        : null;
+      if (sourceQuoteId && (!sourceQuote || sourceQuote.type !== 'cotizacion')) {
+        throw new Error('La cotización de origen ya no está disponible');
+      }
 
       // Para clientes registrados, la base de datos es la autoridad. El renderer
       // solo elige la cuenta y, opcionalmente, uno de sus representantes.
@@ -4850,6 +4864,16 @@ const salesRepo = {
       audit(user.id, user.name, type === 'cotizacion' ? 'cotizacion_creada' : 'venta_creada', 'sales', saleId,
             `Documento: ${documentIssue.formatted_number} | Total: ${total} | Método: ${method} | Moneda cuenta: ${paymentCurrency} | Monto cuenta: ${accountAmount} | Items: ${items.length}`);
 
+      let convertedQuoteId = null;
+      let convertedQuoteNumber = '';
+      if (sourceQuote) {
+        const removed = salesRepo.deleteQuote(sourceQuoteId, user.id, user.name);
+        convertedQuoteId = Number(removed.id);
+        convertedQuoteNumber = removed.documentNumber || sourceQuote.document_number_fmt || '';
+        audit(user.id, user.name, 'cotizacion_convertida', 'sales', saleId,
+          `${convertedQuoteNumber || '#' + sourceQuoteId} → ${documentIssue.formatted_number}`);
+      }
+
       return {
         saleId, total, subtotal, taxAmt, discAmt, taxPct, ncf,
         documentKind,
@@ -4864,6 +4888,8 @@ const salesRepo = {
         initialPaymentId, initialPaymentAmount, initialPaymentMethod,
         outstandingBalance,
         replacesSaleId,
+        convertedQuoteId,
+        convertedQuoteNumber,
         reusedDocumentNumber: !!documentIssue.reused,
         operationId,
         idempotent: false,
@@ -5594,10 +5620,12 @@ const salesRepo = {
         WHERE source_type IN ('sale','sale_receipt') AND source_id=?
       `).run(String(id));
 
-      // Liberar el correlativo interno (FAC-/FCR- y su recibo): vuelve a la cola
-      // para que la próxima factura del mismo tipo lo reutilice y la secuencia no
-      // quede con huecos. Nunca se libera numeración importada (factura_historica
-      // conserva su número histórico definitivo).
+      // Liberar solo el correlativo interno de la factura (FAC-/FCR-): vuelve a
+      // la cola para que su reemplazo controlado pueda reutilizarlo. El recibo
+      // permanece anulado y nunca se recicla, porque el nuevo cobro debe conservar
+      // su propia numeración y una trazabilidad financiera inequívoca. Tampoco se
+      // libera numeración importada (factura_historica conserva su número histórico
+      // definitivo).
       //
       // Se recicla cuando es coherente con la decisión fiscal: si la factura no
       // llevó comprobante (sin impacto fiscal) o si el operador eligió reutilizar
@@ -5612,7 +5640,7 @@ const salesRepo = {
         const freedIssues = db.prepare(`
           SELECT kind,sequence_number,formatted_number
           FROM document_issues
-          WHERE source_type IN ('sale','sale_receipt') AND source_id=? AND status='cancelled'
+          WHERE source_type='sale' AND source_id=? AND status='cancelled'
         `).all(String(id));
         const pushFreedNumber = db.prepare(`
           INSERT INTO document_available_numbers(kind,sequence_number,formatted_number,status,source,source_sale_id)

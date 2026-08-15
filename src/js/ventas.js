@@ -1442,6 +1442,14 @@ async function convertirCotizacionAVenta(s) {
         <div style="font-size:10px;color:var(--muted2);margin-top:4px">El total usa precio final; el ITBIS se extrae de los artículos gravados.</div>
     </div>
 
+    <div class="alrt b" style="margin-bottom:12px">
+      <div class="alrt-dot b"></div>
+      <div>
+        <div class="alrt-title">La venta se completará en el Punto de Venta</div>
+        <div class="alrt-sub">Al confirmar se cargarán el cliente, los artículos, precios, descuento y observaciones en el POS. La cotización solo se eliminará después de cobrar.</div>
+      </div>
+    </div>
+
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal();delete window._convEstado;delete window._convSale">Cancelar</button>
       <button class="btn btn-green" id="ventas-confirm-conversion" onclick="confirmarConversionCotizacion()">
@@ -1516,9 +1524,8 @@ async function confirmarConversionCotizacion() {
   const sale = window._convSale;
   const cotizId = window._convOrigId;
   if (!est || !sale) return;
-  if (est.submitting) return;
 
-  // Leer valores finales de inputs
+  // Leer los ajustes hechos en el modal antes de continuar en el POS.
   est.items.forEach((it, idx) => {
     const input = document.getElementById('conv-qty-' + idx);
     if (input) it.qty = Math.max(0, parseInt(input.value)||0);
@@ -1531,7 +1538,8 @@ async function confirmarConversionCotizacion() {
   const itemsValidos = est.items.filter(i => i.qty > 0 && i.product_id);
   if (!itemsValidos.length) { toast('Agrega al menos un producto con cantidad mayor a 0', 'err'); return; }
 
-  // Verificar stock en tiempo real contra DB actual
+  // Verificar stock antes de abrir el POS. La cotización no se elimina ni se
+  // convierte todavía: eso ocurrirá solamente cuando el cobro sea confirmado.
   await reloadProducts();
   const sinStock = itemsValidos.filter(i => {
     const prod = DB.products.find(p => p.id === i.product_id);
@@ -1546,153 +1554,72 @@ async function confirmarConversionCotizacion() {
     return;
   }
 
-  const priceAuthOk = await posEnsureSalePriceAuthorization(
-    est,
-    itemsValidos,
-    `Cotización ${facturaLabel(sale)}`
-  );
-  if (!priceAuthOk) {
-    convertirCotizacionAVenta({ id: cotizId });
-    return;
-  }
-
   const account = DB.customers.find(c => c.id === sale.customer_id);
-  const currentContact = (account?.contacts || []).find(c => Number(c.id) === Number(sale.customer_contact_id));
-  const customer = account ? {
-    ...account,
-    contact_id: currentContact?.id || null,
-  } : { id: 1, name: sale.customer_name || 'Consumidor Final', rnc: sale.customer_rnc || '' };
+  const customer = {
+    id: account?.id || sale.customer_id || 1,
+    name: account?.name || sale.customer_name || 'Consumidor Final',
+    rnc: account?.rnc || sale.customer_rnc || '',
+    phone: sale.customer_phone || account?.phone || '',
+    phoneType: sale.customer_phone_type || 'telefono',
+    contactId: sale.customer_contact_id || null,
+    contactName: sale.customer_contact_name || '',
+    contactRole: sale.customer_contact_role || '',
+    contactPhone: sale.customer_contact_phone || '',
+    branchId: sale.customer_branch_id || null,
+    branchName: sale.customer_branch_name || '',
+    branchCode: sale.customer_branch_code || '',
+    branchAddress: sale.customer_branch_address || '',
+    branchPhone: sale.customer_branch_phone || '',
+  };
 
-  if (!est.operationId) {
-    try {
-      est.operationId = `sale:quote:${cotizId}:${window.crypto?.randomUUID?.() || `${Date.now()}:${Math.random().toString(36).slice(2)}`}`;
-    } catch {
-      est.operationId = `sale:quote:${cotizId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-    }
-  }
-  est.submitting = true;
+  const payload = {
+    sourceQuoteId: Number(cotizId),
+    sourceQuoteNumber: facturaLabel(sale),
+    priceMode: sale.price_mode || 'retail',
+    discountPct: est.discount,
+    paymentMethod: est.pay || 'efectivo',
+    ncfType: est.ncfType || '',
+    charges: Array.isArray(sale.charges) ? sale.charges : [],
+    notes: sale.notes || '',
+    salespersonId: sale.salesperson_id || null,
+    saleDate: today(),
+    customer,
+    items: itemsValidos.map(i => ({
+      product_id: i.product_id,
+      product_code: i.product_code || '',
+      product_name: i.product_name,
+      unit_cost: i.unit_cost || 0,
+      unit_price: i.unit_price,
+      taxable: ventasTaxable(i) ? 1 : 0,
+      tax_pct: ventasTaxable(i) ? ventasTaxPct(i) : 0,
+      qty: i.qty,
+      source_quote_id: Number(cotizId),
+      source_item_id: i.id || null,
+    })),
+  };
+
   const confirmButton = document.getElementById('ventas-confirm-conversion');
   if (confirmButton) {
     confirmButton.disabled = true;
-    confirmButton.textContent = 'Procesando...';
-  }
-  const saleData = {
-      operationId: est.operationId,
-      customer,
-      items: itemsValidos.map(i => ({
-        product_id:   i.product_id,
-        product_code: i.product_code || '',
-          product_name: i.product_name,
-          unit_cost:    i.unit_cost || 0,
-          unit_price:   i.unit_price,
-          taxable:      ventasTaxable(i) ? 1 : 0,
-          tax_pct:      ventasTaxable(i) ? ventasTaxPct(i) : 0,
-          qty:          i.qty,
-        })),
-      payment: {
-        method:    est.pay,
-        disc:      est.discount,
-        priceMode: sale.price_mode || 'retail',
-        priceChangeAuthToken: est.priceChangeAuthToken || null,
-        ncfType:   est.ncfType || '',
-      },
-      type:    'factura',
-      session: cajaSession,
-    };
-  let result;
-  try {
-    result = await ventasCreateSaleWithRecovery(saleData, user.id);
-  } catch (error) {
-    est.submitting = false;
-    if (confirmButton?.isConnected) {
-      confirmButton.disabled = false;
-      confirmButton.textContent = '✓ Confirmar venta';
-    }
-    toast('No se recibió confirmación. Revisa Ventas antes de volver a intentar.', 'err');
-    return;
+    confirmButton.textContent = 'Abriendo Punto de Venta...';
   }
 
-  if (!result.ok) {
-    est.submitting = false;
-    if (confirmButton?.isConnected) {
-      confirmButton.disabled = false;
-      confirmButton.textContent = '✓ Confirmar venta';
-    }
-    toast(result.error || 'Error al convertir', 'err');
-    return;
-  }
-
-  let removedQuote = null;
-  try {
-    removedQuote = await ventasAwaitPaymentAction(window.api.sales.deleteQuote({
-      id: cotizId,
-      requestUserId: user.id,
-    }), 4000);
-  } catch {
-    removedQuote = { ok: false, error: 'la confirmación no respondió' };
-  }
-  if (!removedQuote?.ok) {
-    toast(`La factura se creó, pero la cotización original no pudo eliminarse: ${removedQuote?.error || 'error desconocido'}`, 'w');
-  }
-
-	  const convertedSale = result.sale || null;
-	  const convertedItems = convertedSale?.items?.length
-	    ? convertedSale.items.map(i => ({
-	        product_code: ventasItemCode(i),
-	        product_name: i.product_name,
-	        qty: i.qty,
-	        unit_price: i.unit_price,
-	        unit_cost: i.unit_cost || 0,
-	        subtotal: i.subtotal,
-	        taxable: i.taxable,
-	        tax_pct: i.tax_pct,
-	        tax_amt: i.tax_amt,
-	        net_subtotal: i.net_subtotal,
-	      }))
-	    : itemsValidos;
-	  closeModal();
+  window._pendingPOSResaleCart = payload;
+  closeModal();
   delete window._convEstado;
   delete window._convSale;
   delete window._convOrigId;
-
-  toast(`✓ Cotización convertida → ${facturaLabel(convertedSale || {
-    id: result.saleId,
-    document_number_fmt: result.documentNumberFmt,
-  })}`);
-  printReceipt({
-    id:             result.saleId,
-    document_kind:  convertedSale?.document_kind || result.documentKind || '',
-    document_number: convertedSale?.document_number || result.documentNumber,
-    document_number_fmt: convertedSale?.document_number_fmt || result.documentNumberFmt || '',
-    type:           'factura',
-    customer_name:  convertedSale?.customer_name || sale.customer_name || 'Consumidor Final',
-    customer_rnc:   convertedSale?.customer_rnc || sale.customer_rnc || '',
-    customer_address: convertedSale?.customer_address || sale.customer_address || '',
-    customer_phone: convertedSale?.customer_phone || sale.customer_phone || '',
-    customer_email: convertedSale?.customer_email || sale.customer_email || '',
-    customer_contact_id: convertedSale?.customer_contact_id || sale.customer_contact_id || null,
-    customer_contact_name: convertedSale?.customer_contact_name || sale.customer_contact_name || '',
-    customer_contact_document: convertedSale?.customer_contact_document || sale.customer_contact_document || '',
-    customer_contact_role: convertedSale?.customer_contact_role || sale.customer_contact_role || '',
-    customer_contact_phone: convertedSale?.customer_contact_phone || sale.customer_contact_phone || '',
-    customer_contact_email: convertedSale?.customer_contact_email || sale.customer_contact_email || '',
-	    items:          convertedItems,
-      subtotal:       result.subtotal || ventasCalcIncludedTotals(itemsValidos, { type:'factura', discPct: est.discount }).subtotal,
-      discount_pct:   est.discount,
-      discount_amt:   result.discAmt || ventasCalcIncludedTotals(itemsValidos, { type:'factura', discPct: est.discount }).discAmt,
-      tax_amt:        result.taxAmt || 0,
-      tax_pct:        result.taxPct ?? CFG.itbis,
-      total:          result.total  || 0,
-    payment_method: est.pay,
-    cajero:         user.name,
-    date:           today(),
-    time:           nowt(),
-  });
-
-  renderVentas(document.getElementById('page'));
-  ventasRefreshAfterMutation({ range:'all', view:'sales', products:true, onDone:() => {
-    if (typeof page !== 'undefined' && page === 'ventas') renderVentas(document.getElementById('page'));
-  }});
+  routeTo('pos');
+  setTimeout(() => {
+    if (
+      window._pendingPOSResaleCart === payload &&
+      typeof window.posLoadResaleCart === 'function' &&
+      document.getElementById('cart-wrap')
+    ) {
+      window._pendingPOSResaleCart = null;
+      window.posLoadResaleCart(payload);
+    }
+  }, 180);
 }
 
 

@@ -220,7 +220,7 @@ function _setPosPmode(mode) {
   inv.pmode = mode;
   if (!inv.checkoutOrderId) {
     inv.cart.forEach(item => {
-      if (item.resale_source || item.manual_price) return;
+      if (item.resale_source || item.quote_source || item.manual_price) return;
       const product = DB.products.find(p => Number(p.id) === Number(item.pid || item.product_id));
       if (!product) return;
       const price = mode === 'wholesale' && Number(product.wholesale) > 0
@@ -464,6 +464,7 @@ function posAddItem(pid) {
   const exist = inv.cart.find(i =>
     i.pid === pid &&
     !i.resale_source &&
+    !i.quote_source &&
     posMoneyEq(i.price, price)
   );
 
@@ -516,7 +517,7 @@ function renderCart() {
         </button>
       </div>
       ${checkoutLocked ? `<div class="alrt g" style="margin-top:8px;padding:7px 9px"><div><div class="alrt-title">Lista para cobrar</div><div class="alrt-sub">Los articulos y precios estan bloqueados porque vienen de despacho.</div></div></div>` : `<div class="flex" style="margin-top:8px;gap:5px">
-        ${(inv.replacesSaleId ? ['factura'] : ['factura','cotizacion']).map(t => `
+        ${(inv.replacesSaleId || inv.sourceQuoteId ? ['factura'] : ['factura','cotizacion']).map(t => `
           <button class="btn btn-sm ${inv.itype === t ? 'btn-dark' : 'btn-out'}"
                   style="font-size:10px;padding:3px 9px"
                   onclick="posSetType('${t}')">
@@ -528,6 +529,12 @@ function renderCart() {
                     border-radius:7px;background:var(--amber-bg);font-size:10.5px;color:var(--muted2)">
           <strong style="color:var(--text)">Registro sustitutivo · ${posEscHtml(inv.replacementDocumentNumber || '')}</strong>
           <span> — conserva únicamente el número comercial; la anulación original seguirá auditada.</span>
+        </div>` : ''}
+      ${inv.sourceQuoteId ? `
+        <div style="margin-top:8px;padding:7px 9px;border:1px solid var(--green-line);
+                    border-radius:7px;background:var(--green-bg);font-size:10.5px;color:var(--muted2)">
+          <strong style="color:var(--text)">Cotización ${posEscHtml(inv.sourceQuoteNumber || '#' + inv.sourceQuoteId)} cargada</strong>
+          <span> — puedes modificarla con las herramientas del POS; se eliminará solo cuando confirmes la venta.</span>
         </div>` : ''}
     </div>`;
 
@@ -553,7 +560,7 @@ function renderCart() {
             <div class="ci-name">${posEscHtml(item.name)}</div>
             <div class="ci-price" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
               <span style="font-size:10px;color:var(--muted2);font-weight:600">Precio final</span>
-              ${checkoutLocked ? `<strong>${fmt(item.price)}</strong>` : `<input type="number" min="0" step="0.01" value="${Number(item.price || 0).toFixed(2)}"
+              ${checkoutLocked ? `<strong>${fmt(item.price)}</strong>` : `<input type="number" data-money="on" min="0" step="0.01" value="${Number(item.price || 0).toFixed(2)}"
                 style="width:92px;text-align:right;font-size:12px;font-weight:700;
                        border:1px solid var(--line);border-radius:4px;padding:2px 5px;
                        font-family:inherit;background:var(--surface)"
@@ -565,6 +572,10 @@ function renderCart() {
             ${item.resale_source?.saleId ? `
               <div style="font-size:10px;color:var(--green);font-weight:700;margin-top:3px">
                 ${inv.replacesSaleId ? 'Línea de factura anulada' : 'Reventa de venta'} #${String(item.resale_source.saleId).padStart(5,'0')}
+              </div>` : ''}
+            ${item.quote_source?.quoteId ? `
+              <div style="font-size:10px;color:var(--green);font-weight:700;margin-top:3px">
+                Cotización ${posEscHtml(item.quote_source.number || '#' + item.quote_source.quoteId)}
               </div>` : ''}
           </div>
           ${checkoutLocked ? `<div class="qc"><strong>x${item.qty}</strong></div>` : `<div class="qc">
@@ -600,7 +611,7 @@ function renderCart() {
           <option value="pct" ${(inv.discMode || 'pct') !== 'amt' ? 'selected' : ''}>%</option>
           <option value="amt" ${inv.discMode === 'amt' ? 'selected' : ''}>RD$</option>
         </select>
-        <input type="number" min="0" ${inv.discMode === 'amt' ? 'step="0.01"' : 'max="100"'}
+        <input type="number" min="0" data-money="${inv.discMode === 'amt' ? 'on' : 'off'}" ${inv.discMode === 'amt' ? 'step="0.01"' : 'max="100"'}
                value="${inv.discMode === 'amt' ? (inv.discAmtInput || 0) : (inv.disc || 0)}"
                id="pos-discount-input" inputmode="decimal" autocomplete="off"
                class="inp" style="width:72px;padding:4px 7px;font-size:12px;text-align:right"
@@ -672,6 +683,8 @@ function posLimpiar() {
   inv.cart = [];
   inv.replacesSaleId = null;
   inv.replacementDocumentNumber = '';
+  inv.sourceQuoteId = null;
+  inv.sourceQuoteNumber = '';
   renderInvTabs();
   renderCart();
 }
@@ -680,6 +693,10 @@ function posSetType(t) {
   if (currentInv().checkoutOrderId) return;
   if (currentInv().replacesSaleId && t !== 'factura') {
     toast('El reemplazo controlado debe registrarse como factura', 'w');
+    return;
+  }
+  if (currentInv().sourceQuoteId && t !== 'factura') {
+    toast('La cotización cargada debe completarse como factura', 'w');
     return;
   }
   currentInv().itype = t;
@@ -1023,7 +1040,8 @@ function posLoadResaleCart(payload = {}) {
     return false;
   }
   const rawItems = Array.isArray(payload.items) ? payload.items : [];
-  if (!rawItems.length) { toast('No hay artículos de reventa para cargar', 'w'); return false; }
+  const sourceQuoteId = Number(payload.sourceQuoteId) || null;
+  if (!rawItems.length) { toast('No hay artículos para cargar en el POS', 'w'); return false; }
 
   const reserved = new Map();
   const skipped = [];
@@ -1066,15 +1084,20 @@ function posLoadResaleCart(payload = {}) {
       taxable,
       tax_pct:      taxPct,
       qty,
-      resale_source: {
+      resale_source: sourceQuoteId ? null : {
         saleId: src.source_sale_id || null,
         itemId: src.source_item_id || null,
       },
+      quote_source: sourceQuoteId ? {
+        quoteId: sourceQuoteId,
+        number: String(payload.sourceQuoteNumber || ''),
+        itemId: src.source_item_id || null,
+      } : null,
     });
   });
 
   if (!cart.length) {
-    toast('No se pudo cargar la reventa: los artículos no tienen stock disponible', 'err');
+    toast('No se pudo cargar: los artículos no tienen stock disponible', 'err');
     return false;
   }
 
@@ -1087,7 +1110,8 @@ function posLoadResaleCart(payload = {}) {
   inv.cart = cart;
   inv.itype = 'factura';
   inv.pmode = payload.priceMode === 'wholesale' ? 'wholesale' : 'retail';
-  inv.pmeth = 'efectivo';
+  inv.pmeth = ['efectivo','tarjeta','transferencia','mixto','credito'].includes(payload.paymentMethod)
+    ? payload.paymentMethod : 'efectivo';
   inv.disc = Math.max(0, Math.min(100, Number(payload.discountPct) || 0));
   inv.discAmtInput = 0;
   inv.charges = Array.isArray(payload.charges)
@@ -1099,6 +1123,12 @@ function posLoadResaleCart(payload = {}) {
   inv.notes = String(payload.notes || '');
   inv.replacesSaleId = Number(payload.replacementOfSaleId) || null;
   inv.replacementDocumentNumber = String(payload.replacementDocumentNumber || '');
+  inv.sourceQuoteId = sourceQuoteId;
+  inv.sourceQuoteNumber = String(payload.sourceQuoteNumber || '');
+  inv.ncfType = String(payload.ncfType || '');
+  inv.salespersonId = Number(payload.salespersonId) || null;
+  inv.saleDate = /^\d{4}-\d{2}-\d{2}$/.test(String(payload.saleDate || ''))
+    ? String(payload.saleDate) : new Date().toISOString().slice(0, 10);
   inv.priceChangeAuthToken = null;
   inv.priceChangeAuthExpiresAt = null;
   inv.priceChangeApprovedBy = null;
@@ -1107,13 +1137,26 @@ function posLoadResaleCart(payload = {}) {
     inv.cliId = payload.customer.id;
     inv.cliName = payload.customer.name || '';
     inv.cliCedula = payload.customer.rnc || '';
+    inv.cliPhone = payload.customer.phone || '';
+    inv.cliPhoneType = payload.customer.phoneType || 'telefono';
+    inv.cliContactId = Number(payload.customer.contactId) || null;
+    inv.cliContactName = payload.customer.contactName || '';
+    inv.cliContactRole = payload.customer.contactRole || '';
+    inv.cliContactPhone = payload.customer.contactPhone || '';
+    inv.cliBranchId = Number(payload.customer.branchId) || null;
+    inv.cliBranchName = payload.customer.branchName || '';
+    inv.cliBranchCode = payload.customer.branchCode || '';
+    inv.cliBranchAddress = payload.customer.branchAddress || '';
+    inv.cliBranchPhone = payload.customer.branchPhone || '';
   }
 
   renderInvTabs();
   renderCart();
   renderPOSGrid();
-  if (typeof window.ventasClearResaleCart === 'function') window.ventasClearResaleCart(true);
-  toast(inv.replacesSaleId
+  if (!sourceQuoteId && typeof window.ventasClearResaleCart === 'function') window.ventasClearResaleCart(true);
+  toast(sourceQuoteId
+    ? `✓ Cotización ${inv.sourceQuoteNumber || '#' + sourceQuoteId} cargada en el Punto de Venta`
+    : inv.replacesSaleId
     ? `✓ ${inv.replacementDocumentNumber || 'Factura anulada'} lista para corregir y registrar nuevamente`
     : `✓ Reventa cargada en factura #${inv.id}${skipped.length ? ` · ${skipped.length} línea(s) omitida(s)` : ''}`);
   return true;
@@ -2129,7 +2172,7 @@ function openCobroModal(inv) {
       <div class="fg" id="cbr-ncf-wrap" style="margin-bottom:0">
         <label class="lbl">Tipo de comprobante fiscal</label>
         <select class="inp" id="cbr-ncf-type" onchange="cbrDocHint()">
-          <option value="" selected>Sin comprobante</option>
+          <option value="" ${inv.ncfType ? '' : 'selected'}>Sin comprobante</option>
         </select>
       </div>
     </div>
@@ -2709,7 +2752,7 @@ function cbrPopulateNcfTypes(availSet) {
   const sel = document.getElementById('cbr-ncf-type');
   if (!sel) return;
   const avail = availSet instanceof Set ? availSet : new Set();
-  const prev = sel.value;
+  const prev = sel.value || currentInv()?.ncfType || '';
   const opts = ['<option value="">Sin comprobante</option>'];
   ['B01', 'B02', 'B14', 'B15', 'B16'].forEach(t => {
     if (avail.has(t)) opts.push(`<option value="${t}">${NCF_TYPE_LABELS[t]}</option>`);
@@ -2956,6 +2999,7 @@ async function finalizarVenta() {
   inv.initialPaymentExchangeRate = initialPaymentExchangeRate;
   inv.initialPaymentReference = initialPaymentReference;
   inv.notes = saleNotes;
+  inv.ncfType = ncfType;
 
   inv.pmeth = pmeth;
   inv.cliName = cliName;
@@ -3116,12 +3160,15 @@ async function finalizarVenta() {
       initialPaymentReference,
       notes: saleNotes,
       replacesSaleId: inv.replacesSaleId || null,
+      sourceQuoteId: inv.sourceQuoteId || null,
       ncfType,
     },
     type: inv.itype || 'factura',
     session: cajaSession,
   };
 
+  const sourceQuoteId = !isQuote ? (Number(inv.sourceQuoteId) || null) : null;
+  const sourceQuoteNumber = String(inv.sourceQuoteNumber || '');
   let saleCommitted = false;
   try {
     const result = await posConfirmSaleWithRecovery(inv, saleData, user.id);
@@ -3142,7 +3189,9 @@ async function finalizarVenta() {
     // Venta exitosa
     closeModal();
     const savedDocumentLabel = result.documentNumberFmt || `#${result.saleId}`;
-    toast(result.recovered
+    toast(sourceQuoteId
+      ? `✓ Cotización ${sourceQuoteNumber || '#' + sourceQuoteId} convertida → ${savedDocumentLabel}`
+      : result.recovered
       ? `✓ ${savedDocumentLabel} recuperada; no se duplicó el cobro`
       : isQuote
       ? `✓ Cotización ${savedDocumentLabel} creada — ${fmt(result.total)}`

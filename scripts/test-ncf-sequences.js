@@ -161,7 +161,7 @@ const saleResult = DB.salesRepo.create({
     product_id: productId, product_code: 'NCF-001', product_name: 'PRODUCTO FISCAL',
     unit_cost: 50, unit_price: 118, qty: 1, taxable: 1, tax_pct: 18,
   }],
-  payment: { method: 'credito' },
+  payment: { method: 'credito', ncfType: 'B01' },
   session: null,
   user: admin,
   type: 'factura',
@@ -319,7 +319,7 @@ const gapSale = DB.salesRepo.create({
     product_id: productId, product_code: 'NCF-001', product_name: 'PRODUCTO FISCAL',
     unit_cost: 50, unit_price: 118, qty: 1, taxable: 1, tax_pct: 18,
   }],
-  payment: { method: 'credito' }, session: null, user: admin, type: 'factura',
+  payment: { method: 'credito', ncfType: 'B01' }, session: null, user: admin, type: 'factura',
 });
 const issuedGapSale = DB.salesRepo.getById(gapSale.saleId);
 ok(issuedGapSale.ncf === 'B0100000852',

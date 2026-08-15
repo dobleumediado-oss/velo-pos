@@ -873,12 +873,6 @@ function printConduceDoc(dn) {
   const showPrices = s.conduce_show_prices === '1';
   const esc = _escHtml;
 
-  const STL = {
-    borrador:'Borrador', preparado:'Preparado', despachado:'Despachado', parcial:'Parcial',
-    entregado:'Entregado', facturado:'Facturado', anulado:'Anulado', devuelto:'Devuelto',
-  };
-  const origen = { manual:'Manual', cotizacion:'Cotización', factura:'Factura' };
-
   const itemsRows = (dn.items || []).map((it, i) => `
     <tr>
       <td style="text-align:center">${i + 1}</td>
@@ -908,13 +902,18 @@ function printConduceDoc(dn) {
   .grid .k { color:#555; }
   .grid .row { display:flex; gap:6px; }
   .grid .row b { min-width:auto; }
-  table.items { width:100%; border-collapse:collapse; margin-bottom:16px; }
+  table.items { width:100%; border-collapse:collapse; margin-bottom:8px; }
   table.items th { background:#f3f4f6; text-align:left; padding:6px 8px; font-size:11px; border-bottom:1px solid #d1d5db; }
   table.items td { padding:6px 8px; border-bottom:1px solid #eee; vertical-align:top; }
   .obs { color:#777; font-size:10px; }
-  .signs { display:flex; gap:40px; margin-top:34px; }
+  .notes { min-height:54px; border:1px solid #d1d5db; border-radius:5px; padding:7px 9px; margin:0 0 16px; }
+  .notes .k { color:#555; font-size:11px; }
+  .notes .text { margin-top:5px; font-size:11px; font-weight:600; line-height:1.35; white-space:pre-wrap; }
+  .signs { display:flex; gap:40px; margin-top:28px; }
   .sign { flex:1; text-align:center; }
   .sign .line { border-top:1px solid #111; margin-top:26px; padding-top:5px; font-size:11px; color:#333; }
+  .received-document { display:flex; justify-content:center; align-items:flex-end; gap:7px; margin-top:32px; font-size:11px; color:#333; }
+  .received-document .document-line { flex:0 0 150px; min-height:17px; border-bottom:1px solid #111; padding:0 4px 2px; }
   .foot { margin-top:18px; text-align:center; color:#888; font-size:10px; }
 </style></head>
 <body>
@@ -940,15 +939,12 @@ function printConduceDoc(dn) {
 
   <div class="grid">
     <div class="row"><span class="k">Cliente:</span> <b>${esc(dn.customer_name || 'Consumidor Final')}</b></div>
-    <div class="row"><span class="k">Estado:</span> <b>${STL[dn.status] || dn.status}</b></div>
     ${dn.customer_rnc ? `<div class="row"><span class="k">RNC/Céd.:</span> <b>${esc(dn.customer_rnc)}</b></div>` : '<div></div>'}
     ${dn.customer_contact_name ? `<div class="row"><span class="k">Representante:</span> <b>${esc(dn.customer_contact_name)}${dn.customer_contact_role ? ` · ${esc(dn.customer_contact_role)}` : ''}</b></div>` : '<div></div>'}
     ${dn.customer_branch_name ? `<div class="row"><span class="k">Entregar en:</span> <b>${esc(dn.customer_branch_name)}${dn.customer_branch_code ? ` (Est. ${esc(dn.customer_branch_code)})` : ''}</b></div>` : ''}
-    <div class="row"><span class="k">Origen:</span> <b>${origen[dn.source_type] || dn.source_type}${dn.source_id ? ' #' + dn.source_id : ''}</b></div>
     ${dn.delivery_address ? `<div class="row" style="grid-column:1/3"><span class="k">Dirección de entrega:</span> <b>${esc(dn.delivery_address)}</b></div>` : ''}
     ${dn.driver_name ? `<div class="row"><span class="k">Chofer:</span> <b>${esc(dn.driver_name)}</b></div>` : ''}
     ${dn.vehicle_plate ? `<div class="row"><span class="k">Vehículo:</span> <b>${esc(dn.vehicle_plate)}</b></div>` : ''}
-    ${dn.notes ? `<div class="row" style="grid-column:1/3"><span class="k">Observaciones:</span> <b>${esc(dn.notes)}</b></div>` : ''}
   </div>
 
   <table class="items">
@@ -960,11 +956,16 @@ function printConduceDoc(dn) {
     <tbody>${itemsRows || `<tr><td colspan="${showPrices ? 6 : 5}" style="text-align:center;color:#888;padding:16px">Sin artículos</td></tr>`}</tbody>
   </table>
 
+  <div class="notes">
+    <div class="k">Observaciones:</div>
+    <div class="text">${esc(dn.notes || '')}</div>
+  </div>
+
   <div class="signs">
     <div class="sign"><div class="line">Entregado por</div></div>
     <div class="sign">
       <div class="line">Recibido por${dn.received_by_name ? ': ' + esc(dn.received_by_name) : ''}</div>
-      <div class="obs" style="margin-top:3px">Cédula: ${esc(dn.received_by_document || '____________________')}</div>
+      <div class="received-document"><span>Cédula:</span><span class="document-line">${esc(dn.received_by_document || '')}</span></div>
     </div>
   </div>
 

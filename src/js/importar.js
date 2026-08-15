@@ -325,7 +325,9 @@ function abrirAllInOne() {
         <div class="alrt-sub">
           Se crea un backup automático del <code>velo.db</code> antes de borrar.
           Luego se reemplazan inventario, clientes, ventas, abonos y sus registros
-          dependientes. Usuarios y configuración se conservan. Si el CxC o la
+          dependientes. También se borran las secuencias de comprobantes y los
+          asientos contables anteriores para comenzar con saldos limpios. Usuarios,
+          catálogo de cuentas y configuración se conservan. Si el CxC o la
           integridad no cuadran, la operación completa se revierte.
         </div>
       </div>
@@ -428,6 +430,13 @@ async function ejecutarAllInOne() {
       </div>
     </div>
     ${warningBlock}
+    <div class="alrt b" style="margin-bottom:14px">
+      <div class="alrt-dot b"></div>
+      <div>
+        <div class="alrt-title">Secuencias y contabilidad reiniciadas</div>
+        <div class="alrt-sub">Se eliminaron ${Number(s.accounting_removed || 0)} asiento(s) contable(s) anterior(es) y sus saldos quedaron en cero. Antes de emitir una nueva factura fiscal, ve a Configuración → Comprobantes NCF y registra el primer y último comprobante del rango que vas a utilizar.</div>
+      </div>
+    </div>
     <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:14px">
       <tbody>
         <tr><td style="padding:4px 8px;color:var(--muted)">Productos</td><td style="padding:4px 8px;text-align:right;font-weight:600">${s.prod_new||0} nuevos · ${s.prod_skip||0} ya existían</td></tr>
@@ -435,6 +444,7 @@ async function ejecutarAllInOne() {
         <tr><td style="padding:4px 8px;color:var(--muted)">Facturas</td><td style="padding:4px 8px;text-align:right;font-weight:600">${s.fac_new||0} importadas</td></tr>
         <tr style="background:var(--surface)"><td style="padding:4px 8px;color:var(--muted)">Ítems</td><td style="padding:4px 8px;text-align:right;font-weight:600">${s.items||0} líneas</td></tr>
         <tr><td style="padding:4px 8px;color:var(--muted)">Recibos</td><td style="padding:4px 8px;text-align:right;font-weight:600">${s.rec_new||0} nuevos</td></tr>
+        <tr style="background:var(--surface)"><td style="padding:4px 8px;color:var(--muted)">Asientos anteriores</td><td style="padding:4px 8px;text-align:right;font-weight:600">${s.accounting_removed||0} eliminados</td></tr>
       </tbody>
     </table>
     <div style="font-size:11px;color:var(--muted);margin-bottom:12px">Backup previo: <code>${_escHtml(res.backup||'')}</code></div>

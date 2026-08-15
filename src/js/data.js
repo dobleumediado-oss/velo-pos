@@ -481,6 +481,7 @@ function newInvObj(id) {
     initialPaymentFinancialAccountId: null, initialPaymentExchangeRate: 1,
     initialPaymentReference: '', notes: '',
     replacesSaleId: null, replacementDocumentNumber: '',
+    sourceQuoteId: null, sourceQuoteNumber: '', ncfType: '',
     saleOperationId: '', saleSubmitting: false
   };
 }
