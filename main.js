@@ -2573,7 +2573,11 @@ ipcMain.handle('documents:getSequences', async (_, { requestUserId } = {}) => {
     if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) {
       return { ok: false, error: 'Sin permisos' };
     }
-    return { ok: true, data: documentNumberRepo.getSequences() };
+    return {
+      ok: true,
+      data: documentNumberRepo.getSequences(),
+      activeInvoiceKind: documentNumberRepo.activeInvoiceKind(),
+    };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 

@@ -2149,6 +2149,13 @@ const documentNumberRepo = {
       ORDER BY kind
     `).all();
   },
+  // Familia de numeración que consumen realmente las facturas nuevas. Cuando el
+  // negocio importó facturas históricas, contado y crédito comparten la
+  // secuencia `factura_historica`; la de contado deja de usarse. La UI de
+  // configuración debe editar ESTA secuencia, no una que nunca se consume.
+  activeInvoiceKind() {
+    return documentKindForSale('factura', 'efectivo');
+  },
   updateSequence(kind, { prefix, current, padLength } = {}) {
     const cfg = DOCUMENT_SEQUENCE_DEFAULTS[kind];
     if (!cfg) throw new Error('Tipo documental no soportado');
@@ -2161,6 +2168,13 @@ const documentNumberRepo = {
     if (cleanCurrent < issuedMax) {
       throw new Error(`La secuencia no puede retroceder por debajo de ${issuedMax}; esos números ya fueron emitidos`);
     }
+    // Alta perezosa: una familia (p. ej. factura_historica) puede no tener aún
+    // su fila cuando se edita antes de emitir el primer documento nativo.
+    db.prepare(`
+      INSERT INTO document_sequences(kind,prefix,current,pad_length)
+      VALUES(?,?,?,?)
+      ON CONFLICT(kind) DO NOTHING
+    `).run(kind, cfg.prefix, 0, cfg.pad);
     db.prepare(`
       UPDATE document_sequences
       SET prefix=?,current=?,pad_length=?,updated_at=datetime('now','localtime')
@@ -8823,6 +8837,13 @@ const accountingRepo = {
 
       const lines = [];
       const method = sale.payment_method || 'efectivo';
+      // Número visible de la factura (nunca el id técnico de la fila): usa la
+      // numeración histórica importada, luego la interna del documento y, como
+      // último recurso, el id. Así el asiento cita el mismo número que ve el
+      // cliente en la factura impresa.
+      const invNo = (sale.numero_factura_fmt || '').trim()
+        || (sale.document_number_fmt || '').trim()
+        || `#${saleId}`;
 
       // Débito: qué recibimos
       let debitAccId = cashAccId;
@@ -8831,32 +8852,32 @@ const accountingRepo = {
       else if (method === 'credito')  debitAccId = arAccId;
 
       if (debitAccId) {
-        lines.push({ account_id: debitAccId, debit: sale.total, credit: 0, description: `Venta #${saleId}` });
+        lines.push({ account_id: debitAccId, debit: sale.total, credit: 0, description: `Factura ${invNo}` });
       }
 
       // Crédito: ingresos (neto sin ITBIS)
       const netSale = sale.total - (sale.tax_amt || 0);
       if (revAccId && netSale > 0) {
-        lines.push({ account_id: revAccId, debit: 0, credit: netSale, description: `Venta #${saleId}` });
+        lines.push({ account_id: revAccId, debit: 0, credit: netSale, description: `Factura ${invNo}` });
       }
       // Crédito: ITBIS por pagar
       if (taxAccId && (sale.tax_amt || 0) > 0) {
-        lines.push({ account_id: taxAccId, debit: 0, credit: sale.tax_amt, description: `ITBIS venta #${saleId}` });
+        lines.push({ account_id: taxAccId, debit: 0, credit: sale.tax_amt, description: `ITBIS factura ${invNo}` });
       }
 
       // COGS (costo de venta)
       const items = db.prepare('SELECT * FROM sale_items WHERE sale_id=?').all(saleId);
       const totalCost = items.reduce((s, i) => s + ((i.unit_cost||0) * (i.qty||1)), 0);
       if (cogsAccId && invAccId && totalCost > 0) {
-        lines.push({ account_id: cogsAccId, debit: totalCost, credit: 0, description: `Costo venta #${saleId}` });
-        lines.push({ account_id: invAccId, debit: 0, credit: totalCost, description: `Inventario venta #${saleId}` });
+        lines.push({ account_id: cogsAccId, debit: totalCost, credit: 0, description: `Costo factura ${invNo}` });
+        lines.push({ account_id: invAccId, debit: 0, credit: totalCost, description: `Inventario factura ${invNo}` });
       }
 
       if (lines.length < 2) return null;
 
       return this.createEntry({
         date:          sale.sale_date || (sale.created_at || new Date().toISOString()).split('T')[0],
-        concept:       `Venta #${saleId} — ${sale.customer_name || 'Consumidor Final'}`,
+        concept:       `Factura ${invNo} — ${sale.customer_name || 'Consumidor Final'}`,
         reference:     `V-${saleId}`,
         source_module: 'venta',
         source_id:     saleId,
@@ -9032,11 +9053,19 @@ const accountingRepo = {
       let creditAccId = cashAccId;
       if (method === 'transferencia' || method === 'tarjeta') creditAccId = bankAccId;
       else if (method === 'credito') creditAccId = arAccId;
-      const ref = ret.original_sale_id || returnSaleId;
+      // Número visible de la factura original devuelta (no el id técnico).
+      const original = ret.original_sale_id
+        ? db.prepare('SELECT numero_factura_fmt,document_number_fmt FROM sales WHERE id=?').get(ret.original_sale_id)
+        : null;
+      const ref = (original?.numero_factura_fmt || '').trim()
+        || (original?.document_number_fmt || '').trim()
+        || (ret.numero_factura_fmt || '').trim()
+        || (ret.document_number_fmt || '').trim()
+        || `#${ret.original_sale_id || returnSaleId}`;
 
       const lines = [];
-      if (revAccId && net > 0) lines.push({ account_id: revAccId, debit: net,   credit: 0, description: `Devolución venta #${ref}` });
-      if (taxAccId && tax > 0) lines.push({ account_id: taxAccId, debit: tax,   credit: 0, description: `ITBIS devolución #${ref}` });
+      if (revAccId && net > 0) lines.push({ account_id: revAccId, debit: net,   credit: 0, description: `Devolución factura ${ref}` });
+      if (taxAccId && tax > 0) lines.push({ account_id: taxAccId, debit: tax,   credit: 0, description: `ITBIS devolución ${ref}` });
       if (method === 'mixto') {
         const cashPart = Math.abs(db.prepare(`
           SELECT COALESCE(SUM(amount),0) amount
@@ -9045,26 +9074,26 @@ const accountingRepo = {
         `).get(returnSaleId).amount || 0);
         const bankPart = Math.max(0, round2(total - cashPart));
         if (cashAccId && cashPart > 0) {
-          lines.push({ account_id: cashAccId, debit: 0, credit: cashPart, description: `Devolución efectivo venta #${ref}` });
+          lines.push({ account_id: cashAccId, debit: 0, credit: cashPart, description: `Devolución efectivo factura ${ref}` });
         }
         if (bankAccId && bankPart > 0) {
-          lines.push({ account_id: bankAccId, debit: 0, credit: bankPart, description: `Devolución tarjeta/transferencia venta #${ref}` });
+          lines.push({ account_id: bankAccId, debit: 0, credit: bankPart, description: `Devolución tarjeta/transferencia factura ${ref}` });
         }
       } else if (creditAccId) {
-        lines.push({ account_id: creditAccId, debit: 0, credit: total, description: `Devolución venta #${ref}` });
+        lines.push({ account_id: creditAccId, debit: 0, credit: total, description: `Devolución factura ${ref}` });
       }
 
       const items = db.prepare('SELECT * FROM sale_items WHERE sale_id=?').all(returnSaleId);
       const cost = items.reduce((s,i)=> s + (Math.abs(i.unit_cost||0) * Math.abs(i.qty||1)), 0);
       if (cogsAccId && invAccId && cost > 0) {
-        lines.push({ account_id: invAccId,  debit: cost, credit: 0, description: `Inventario devolución #${ref}` });
-        lines.push({ account_id: cogsAccId, debit: 0, credit: cost, description: `Costo devolución #${ref}` });
+        lines.push({ account_id: invAccId,  debit: cost, credit: 0, description: `Inventario devolución factura ${ref}` });
+        lines.push({ account_id: cogsAccId, debit: 0, credit: cost, description: `Costo devolución factura ${ref}` });
       }
       if (lines.length < 2) return null;
 
       return this.createEntry({
         date:          ret.sale_date || (ret.created_at || new Date().toISOString()).split('T')[0],
-        concept:       `Devolución venta #${ref} — ${ret.customer_name||'Consumidor Final'}`,
+        concept:       `Devolución factura ${ref} — ${ret.customer_name||'Consumidor Final'}`,
         reference:     `DV-${returnSaleId}`,
         source_module: 'devolucion',
         source_id:     returnSaleId,

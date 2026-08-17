@@ -157,6 +157,26 @@
     return true;
   }
 
+  // Un campo numérico donde escribir un valor nuevo debe reemplazar al anterior
+  // sin obligar a borrarlo primero. Cubre montos (en edición money), campos
+  // type=number y cualquiera marcado con inputmode numérico/decimal.
+  function isNumericEntryControl(control) {
+    if (!control || String(control.tagName || '').toUpperCase() !== 'INPUT') return false;
+    if (control.disabled || control.readOnly) return false;
+    if (control.dataset?.moneyEditing === 'true') return true;
+    const type = String(control.type || 'text').toLowerCase();
+    if (type === 'number') return true;
+    const inputMode = String(
+      control.inputMode || control.getAttribute?.('inputmode') || ''
+    ).toLowerCase();
+    return inputMode === 'decimal' || inputMode === 'numeric';
+  }
+
+  function selectEntireEntry(control) {
+    if (typeof control?.select !== 'function') return;
+    try { control.select(); } catch {}
+  }
+
   function shouldUppercaseEntryControl(control) {
     if (!control || !control.tagName) return false;
     const tag = String(control.tagName).toUpperCase();
@@ -202,7 +222,28 @@
 
   if (typeof document !== 'undefined' && document?.addEventListener) {
     document.addEventListener('focus', event => {
-      beginMoneyEntry(event.target);
+      const control = event.target;
+      beginMoneyEntry(control);
+      // Al enfocar un campo numérico, selecciona todo su contenido para que el
+      // primer dígito escrito lo reemplace (sin obligar a borrar el valor
+      // anterior). Si el foco vino de un clic, el navegador coloca el cursor al
+      // soltar el ratón; por eso se re-selecciona en `mouseup` (más abajo),
+      // salvo que el usuario haya arrastrado una selección propia.
+      if (isNumericEntryControl(control)) {
+        control._selectNumericOnPointerUp = true;
+        selectEntireEntry(control);
+      }
+    }, true);
+    document.addEventListener('mouseup', event => {
+      const control = event.target;
+      if (!control || !control._selectNumericOnPointerUp) return;
+      control._selectNumericOnPointerUp = false;
+      // Diferido: el manejador por defecto del clic coloca el cursor tras el
+      // mouseup; seleccionar después gana. Respeta una selección manual (drag).
+      setTimeout(() => {
+        if (!isNumericEntryControl(control)) return;
+        if (control.selectionStart === control.selectionEnd) selectEntireEntry(control);
+      }, 0);
     }, true);
     document.addEventListener('beforeinput', event => {
       const control = event.target;

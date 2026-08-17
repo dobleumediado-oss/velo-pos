@@ -490,8 +490,11 @@ window._deleteAsiento = async function(id, sourceModule = 'manual') {
   const explanation = automatic
     ? 'Este asiento fue generado por otro módulo. Se retirará únicamente su efecto contable; la operación de origen seguirá existiendo en su módulo y la eliminación quedará en Auditoría.'
     : 'El asiento desaparecerá de los libros y se retirará su efecto de todas las cuentas. La eliminación quedará registrada en Auditoría.';
-  if (!confirm(`¿Eliminar este asiento contable?\n\n${explanation}`)) return;
-  const reason = await askText('Indica el motivo de la corrección:', {
+  // Sin confirm() nativo previo: además de ser un segundo diálogo, robaba el
+  // foco de la ventana y dejaba el campo de motivo sin poder escribir hasta
+  // hacer clic fuera y volver. El propio modal pide el motivo (obligatorio),
+  // que ya es la confirmación explícita de la acción.
+  const reason = await askText(`${explanation}\n\nIndica el motivo de la corrección:`, {
     title: 'Eliminar asiento contable',
     placeholder: 'Ej.: asiento creado por error',
   });

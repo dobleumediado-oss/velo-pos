@@ -1572,6 +1572,69 @@ const MIGRATIONS = [
       }
     }
   },
+  {
+    version: '1.40.3-asiento-numero-factura',
+    description: 'Los asientos de venta/devolución citan el número visible de la factura (00002386 / FAC-…) en lugar del id técnico de la fila. Solo corrige el texto del concepto y de las líneas; jamás toca montos, cuentas ni fechas.',
+    run(db) {
+      const has = (t) => db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(t);
+      if (!has('accounting_entries') || !has('accounting_entry_lines') || !has('sales')) return;
+      const cols = db.prepare('PRAGMA table_info(sales)').all().map(c => c.name);
+      if (!cols.includes('numero_factura_fmt') && !cols.includes('document_number_fmt')) return;
+
+      // Número visible de una factura a partir de su fila (nunca el id técnico).
+      const invoiceLabel = (saleId) => {
+        if (!saleId) return '';
+        const s = db.prepare('SELECT numero_factura_fmt,document_number_fmt FROM sales WHERE id=?').get(saleId);
+        if (!s) return '';
+        return String(s.numero_factura_fmt || '').trim() || String(s.document_number_fmt || '').trim() || '';
+      };
+
+      const entries = db.prepare(`
+        SELECT id, source_module, source_id, concept
+        FROM accounting_entries
+        WHERE source_module IN ('venta','devolucion') AND source_id IS NOT NULL
+      `).all();
+
+      const updEntry = db.prepare('UPDATE accounting_entries SET concept=? WHERE id=?');
+      const updLine  = db.prepare('UPDATE accounting_entry_lines SET description=? WHERE id=?');
+      let fixed = 0;
+
+      const tx = db.transaction(() => {
+        for (const e of entries) {
+          // Token del id técnico realmente presente en el texto. En ventas es el
+          // propio source_id; en devoluciones se usó la factura original.
+          let token = `#${e.source_id}`;
+          let invNo = '';
+          if (e.source_module === 'venta') {
+            invNo = invoiceLabel(e.source_id);
+          } else {
+            const ret = db.prepare('SELECT original_sale_id FROM sales WHERE id=?').get(e.source_id);
+            const originalId = ret && ret.original_sale_id ? ret.original_sale_id : e.source_id;
+            token = `#${originalId}`;
+            invNo = invoiceLabel(originalId) || invoiceLabel(e.source_id);
+          }
+          // Sin número visible confiable, o el texto no contiene el token: no se toca.
+          if (!invNo) continue;
+
+          let touched = false;
+          const lines = db.prepare('SELECT id,description FROM accounting_entry_lines WHERE entry_id=?').all(e.id);
+          for (const l of lines) {
+            if (l.description && l.description.includes(token)) {
+              updLine.run(l.description.split(token).join(invNo), l.id);
+              touched = true;
+            }
+          }
+          if (e.concept && e.concept.includes(token)) {
+            updEntry.run(e.concept.split(token).join(invNo), e.id);
+            touched = true;
+          }
+          if (touched) fixed++;
+        }
+      });
+      tx();
+      console.log(`[MIGRATION 1.40.3-asiento-numero-factura] Asientos con número de factura corregido: ${fixed}`);
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

@@ -1383,7 +1383,8 @@ function closeModal() {
 function askText(message, { title = 'Confirmar', defaultValue = '', placeholder = '' } = {}) {
   return new Promise((resolve) => {
     let ov;
-    const done = (val) => { ov.remove(); resolve(val); };
+    let stopWinFocus = () => {};
+    const done = (val) => { stopWinFocus(); ov.remove(); resolve(val); };
     const input = h('input', { class: 'inp', value: defaultValue, placeholder,
       style: { width: '100%', marginTop: '12px' } });
     ov = h('div', {
@@ -1403,7 +1404,21 @@ function askText(message, { title = 'Confirmar', defaultValue = '', placeholder 
       if (e.key === 'Enter') done(input.value);
       if (e.key === 'Escape') done(null);
     });
-    setTimeout(() => input.focus(), 30);
+    // Foco robusto: si este modal se abre justo después de un diálogo nativo
+    // (confirm/alert), la ventana recupera el foco de forma asíncrona y un solo
+    // `focus()` temprano se pierde —el usuario tenía que hacer clic fuera y
+    // volver para poder escribir—. Reintentamos en varios cuadros y, sobre todo,
+    // volvemos a enfocar cuando la ventana recupera el foco.
+    const focusInput = () => {
+      if (!ov.isConnected) return;
+      try { input.focus(); input.select?.(); } catch {}
+    };
+    requestAnimationFrame(focusInput);
+    setTimeout(focusInput, 30);
+    setTimeout(focusInput, 120);
+    const onWinFocus = () => { focusInput(); window.removeEventListener('focus', onWinFocus); };
+    window.addEventListener('focus', onWinFocus);
+    stopWinFocus = () => window.removeEventListener('focus', onWinFocus);
   });
 }
 
