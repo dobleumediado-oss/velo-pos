@@ -1651,6 +1651,14 @@ ipcMain.handle('crm:contactToday', async () => {
   }
 });
 
+ipcMain.handle('crm:learningStats', async () => {
+  try {
+    return { ok: true, data: crmRepo.learningStats() };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 function _customerContactAdmin(requestUserId) {
   const reqUser = authRepo.findById(requestUserId);
   if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {

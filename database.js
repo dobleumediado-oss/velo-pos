@@ -9989,8 +9989,22 @@ function _crmProductSegment(x) {
   if (x.qty90 > 0 && (stock <= (x.stockMin || 0) || (x.daysOfStock != null && x.daysOfStock < 15))) {
     return 'reponer';
   }
-  if (x.qty90 >= 10 && x.marginPct >= 25) return 'estrella';
+  if (x.qty90 >= (x.starQty || 10) && x.marginPct >= 25) return 'estrella';
   return 'estable';
+}
+
+// Umbral "estrella" adaptado al negocio (F-Aprendizaje): percentil 80 de las
+// unidades vendidas en 90 días, mínimo 5. Así "mucha venta" se calibra a la
+// escala real de ESTA tienda en vez de un número fijo.
+function _crmLearnedStarQty() {
+  const q = db.prepare(`
+    SELECT SUM(CASE WHEN julianday('now','localtime')-julianday(s.created_at) <= 90 THEN si.qty ELSE 0 END) AS q90
+      FROM sale_items si JOIN sales s ON s.id = si.sale_id
+     WHERE s.type='factura' AND s.status='completed' AND si.product_id IS NOT NULL
+     GROUP BY si.product_id
+  `).all().map(r => r.q90 || 0).filter(v => v > 0).sort((a, b) => a - b);
+  if (!q.length) return 10;
+  return Math.max(5, q[Math.min(q.length - 1, Math.floor(q.length * 0.8))]);
 }
 
 const crmRepo = {
@@ -10218,6 +10232,7 @@ const crmRepo = {
     const now = Date.now();
     const daysSince = (iso) => iso ? Math.round((now - new Date(String(iso).replace(' ', 'T'))) / 86400000) : null;
 
+    const starQty = _crmLearnedStarQty();
     const segments = { estrella: 0, estable: 0, reponer: 0, congelado: 0 };
     const enriched = products.map(p => {
       const s = sold[p.id] || { qty90: 0, qtyTotal: 0, lastSale: null };
@@ -10229,7 +10244,7 @@ const crmRepo = {
       const shelfAge = daysSince(entry[p.id] || p.created_at);
       const segment = _crmProductSegment({
         stock: p.stock, stockMin: p.stock_min, qty90, qtyTotal: s.qtyTotal || 0,
-        marginPct, daysSinceLastSale, shelfAge, daysOfStock,
+        marginPct, daysSinceLastSale, shelfAge, daysOfStock, starQty,
       });
       segments[segment]++;
       return {
@@ -10291,7 +10306,7 @@ const crmRepo = {
 
     const segment = _crmProductSegment({
       stock: p.stock, stockMin: p.stock_min, qty90, qtyTotal: s.qtyTotal || 0,
-      marginPct, daysSinceLastSale, shelfAge, daysOfStock,
+      marginPct, daysSinceLastSale, shelfAge, daysOfStock, starQty: _crmLearnedStarQty(),
     });
 
     const boughtWith = db.prepare(`
@@ -10557,6 +10572,72 @@ const crmRepo = {
 
     items.sort((x, y) => x.priority - y.priority);
     return { generatedAt: new Date().toISOString(), count: items.length, items: items.slice(0, 50) };
+  },
+
+  // ── El cerebro que aprende (F-Aprendizaje) ─────
+  // (A) lo aprendido del negocio (percentiles/ritmos propios) y
+  // (B) el bucle de resultados: ¿los contactos registrados llevaron a compra?
+  // Todo offline y explicable — sin caja negra.
+  learningStats() {
+    // (A) Aprendizaje del negocio
+    const salesCount = db.prepare(
+      `SELECT COUNT(*) n FROM sales WHERE type='factura' AND status='completed'`
+    ).get().n;
+    const customersWithPurchases = db.prepare(
+      `SELECT COUNT(DISTINCT customer_id) n FROM sales WHERE type='factura' AND status='completed' AND customer_id IS NOT NULL`
+    ).get().n;
+
+    // "compra grande" = percentil 75 de los totales
+    let bigTicket = 0;
+    if (salesCount > 0) {
+      bigTicket = db.prepare(
+        `SELECT total FROM sales WHERE type='factura' AND status='completed' ORDER BY total LIMIT 1 OFFSET ?`
+      ).get(Math.floor(salesCount * 0.75))?.total || 0;
+    }
+
+    // ritmo típico = mediana de la brecha promedio entre compras (clientes con 2+)
+    const gaps = db.prepare(`
+      SELECT (julianday(MAX(created_at)) - julianday(MIN(created_at))) / (COUNT(*) - 1) AS gap
+        FROM sales WHERE type='factura' AND status='completed' AND customer_id IS NOT NULL
+       GROUP BY customer_id HAVING COUNT(*) >= 2
+    `).all().map(r => r.gap).filter(g => g != null && g > 0).sort((a, b) => a - b);
+    const medianGapDays = gaps.length ? Math.round(gaps[Math.floor(gaps.length / 2)]) : null;
+
+    const starQty = _crmLearnedStarQty();
+
+    const mrow = db.prepare(`
+      SELECT COALESCE(SUM(si.subtotal),0) rev, COALESCE(SUM(si.unit_cost*si.qty),0) cost
+        FROM sale_items si JOIN sales s ON s.id = si.sale_id
+       WHERE s.type='factura' AND s.status='completed'
+    `).get();
+    const avgMarginPct = (mrow.cost > 0 && mrow.rev > 0) ? ((mrow.rev - mrow.cost) / mrow.rev * 100) : null;
+
+    // (B) Efectividad de contactos: interacción seguida de compra dentro de 30 días
+    const inter = db.prepare(`
+      SELECT ci.reason AS reason,
+             SUM(CASE WHEN EXISTS(
+               SELECT 1 FROM sales s
+                WHERE s.customer_id = ci.customer_id AND s.type='factura' AND s.status='completed'
+                  AND s.created_at > ci.created_at
+                  AND julianday(s.created_at) - julianday(ci.created_at) <= 30
+             ) THEN 1 ELSE 0 END) AS bought,
+             COUNT(*) AS sent
+        FROM customer_interactions ci
+       WHERE ci.kind IN ('whatsapp','llamada','recordatorio')
+       GROUP BY ci.reason
+    `).all();
+    const byReason = inter.map(r => ({
+      reason: r.reason || 'otro', sent: r.sent, bought: r.bought,
+      rate: r.sent ? Math.round(r.bought / r.sent * 100) : 0,
+    })).sort((a, b) => b.rate - a.rate);
+    const totSent = byReason.reduce((a, b) => a + b.sent, 0);
+    const totBought = byReason.reduce((a, b) => a + b.bought, 0);
+
+    return {
+      generatedAt: new Date().toISOString(),
+      business: { salesCount, customersWithPurchases, bigTicket, medianGapDays, starQty, avgMarginPct },
+      effectiveness: { sent: totSent, bought: totBought, rate: totSent ? Math.round(totBought / totSent * 100) : 0, byReason },
+    };
   },
 };
 

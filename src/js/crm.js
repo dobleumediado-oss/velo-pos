@@ -54,7 +54,7 @@ async function renderCRM(el) {
       <span style="font-size:11px;color:var(--green,#00c07a);border:1px solid var(--green,#00c07a);border-radius:999px;padding:4px 10px">100% offline</span>
     </div>
     <div style="border-bottom:1px solid var(--line2,#eee);margin-bottom:18px">
-      ${tabBtn('clientes', '👤 Clientes')}${tabBtn('inventario', '📦 Inventario')}${tabBtn('contactar', '📣 Contactar hoy')}
+      ${tabBtn('clientes', '👤 Clientes')}${tabBtn('inventario', '📦 Inventario')}${tabBtn('contactar', '📣 Contactar hoy')}${tabBtn('aprende', '🎓 Aprende')}
     </div>
     <div id="crm-tab-body"></div>`;
   _crmLoadTab();
@@ -75,6 +75,7 @@ function _crmLoadTab() {
   if (!body) return;
   if (_crmTab === 'inventario') return renderCRMInventario(body);
   if (_crmTab === 'contactar') return renderCRMContactar(body);
+  if (_crmTab === 'aprende') return renderCRMAprende(body);
   return renderCRMClientes(body);
 }
 
@@ -666,4 +667,70 @@ async function _crmSendWhatsApp(i) {
   } else {
     toast('No se encontró el envío de WhatsApp', 'e');
   }
+}
+
+// ── Pestaña Aprende (F-Aprendizaje) ────────────
+async function renderCRMAprende(body) {
+  body.innerHTML = `<div style="color:var(--muted2);padding:40px;text-align:center">Repasando lo aprendido…</div>`;
+  let res;
+  try { res = await window.api.crm.learningStats(); } catch (e) {
+    body.innerHTML = `<div style="color:var(--red,#ef4444);padding:24px">No se pudo cargar: ${e.message}</div>`; return;
+  }
+  if (!res || !res.ok) {
+    body.innerHTML = `<div style="color:var(--red,#ef4444);padding:24px">No se pudo cargar: ${res?.error || 'error'}</div>`; return;
+  }
+  const b = res.data.business;
+  const ef = res.data.effectiveness;
+
+  const insight = (icon, value, label) => `
+    <div class="card" style="padding:14px 16px">
+      <div style="font-size:20px;margin-bottom:4px">${icon}</div>
+      <div style="font-size:18px;font-weight:700;color:var(--ink)">${value}</div>
+      <div style="font-size:11px;color:var(--muted2);line-height:1.4;margin-top:2px">${label}</div>
+    </div>`;
+
+  const insights = `
+    <div style="font-size:13px;font-weight:700;color:var(--ink);margin-bottom:10px">🧠 Lo que aprendí de tu negocio</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:22px">
+      ${insight('🔁', b.medianGapDays != null ? `~${b.medianGapDays} días` : '—', 'Ritmo típico: cada cuánto vuelve un cliente. Lo uso para anticipar recompras.')}
+      ${insight('💰', b.bigTicket > 0 ? _crmFmtCompact(b.bigTicket) : '—', 'Una compra "grande" en tu tienda (25% superior). Calibra a tus mejores clientes.')}
+      ${insight('⭐', `≥ ${b.starQty} und/90d`, 'Cuánto debe vender un producto para ser "estrella" AQUÍ — se adapta a tu escala.')}
+      ${insight('📈', b.avgMarginPct != null ? `${Math.round(b.avgMarginPct)}%` : 'sin costo', 'Tu margen típico sobre los ítems con costo registrado.')}
+    </div>`;
+
+  let feedback;
+  if (!ef.sent) {
+    feedback = `
+      <div class="card" style="padding:20px;text-align:center">
+        <div style="font-size:13px;font-weight:700;color:var(--ink);margin-bottom:6px">📊 ¿Funcionan tus contactos?</div>
+        <div style="font-size:12px;color:var(--muted2)">Aún aprendiendo. Cada vez que envíes un mensaje desde <strong style="color:var(--ink)">Contactar hoy</strong>,
+        el cerebro anota si el cliente compró después — y aquí verás qué motivos funcionan mejor.</div>
+      </div>`;
+  } else {
+    const reasonLabel = r => ({ credito: 'Crédito', dormido: 'Dormido', recompra: 'Recompra' }[r] || 'Otro');
+    const rows = ef.byReason.map(r => {
+      const col = r.rate >= 40 ? 'var(--green,#00c07a)' : (r.rate >= 20 ? 'var(--amber,#f59e0b)' : 'var(--muted2)');
+      return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:0.5px solid var(--line2,#eee)">
+          <span style="font-size:13px;color:var(--ink)">${reasonLabel(r.reason)}</span>
+          <span style="font-size:12px;color:var(--muted2)">${r.bought}/${r.sent} compraron · <strong style="color:${col}">${r.rate}%</strong></span>
+        </div>`;
+    }).join('');
+    feedback = `
+      <div class="card" style="padding:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div style="font-size:13px;font-weight:700;color:var(--ink)">📊 ¿Funcionan tus contactos?</div>
+          <div style="font-size:12px;color:var(--muted2)">Global: <strong style="color:var(--ink)">${ef.rate}%</strong> (${ef.bought}/${ef.sent} compraron en 30 días)</div>
+        </div>
+        ${rows}
+        <div style="font-size:11px;color:var(--muted2);margin-top:10px">El cerebro prioriza los motivos que más venta generan en tu tienda.</div>
+      </div>`;
+  }
+
+  body.innerHTML = `
+    ${insights}
+    ${feedback}
+    <div style="margin-top:18px;padding:12px 14px;background:var(--surface3,#f3f4f6);border-radius:10px;font-size:12px;color:var(--muted2)">
+      <strong style="color:var(--ink)">Aprendizaje explicable.</strong> Todo sale de tus propios datos y puedes ver el porqué —
+      sin caja negra. Mientras más vendes y más contactos registras, más se afina.
+    </div>`;
 }

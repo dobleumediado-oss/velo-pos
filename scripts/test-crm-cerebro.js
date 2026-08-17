@@ -136,5 +136,18 @@ const dormItem = ct.items.find(x => x.customerId === c2);
 ok(dormItem && dormItem.reasonType === 'dormido', 'contactToday: cliente dormido (Caro) detectado');
 ok(ct.items[0].priority <= ct.items[ct.items.length - 1].priority, 'contactToday: ordenado por prioridad (crédito primero)');
 
-console.log(`\n${fail === 0 ? '✅' : '❌'} CRM F0→F3: ${pass} OK, ${fail} fallos`);
+// ── F-Aprendizaje: umbrales adaptativos + efectividad ──
+const ls = crmRepo.learningStats();
+ok(ls.business.starQty >= 5, `learningStats: umbral estrella aprendido del negocio (${ls.business.starQty})`);
+ok(typeof ls.business.salesCount === 'number' && ls.business.salesCount > 0, `learningStats: analiza ventas del negocio (${ls.business.salesCount})`);
+ok(ls.effectiveness && Array.isArray(ls.effectiveness.byReason), 'learningStats: estructura de efectividad de contactos');
+
+// Bucle de resultados: contacto seguido de compra dentro de 30 días = efectivo
+const learnCust = db.prepare("INSERT INTO customers(name) VALUES('Aprende Cliente')").run().lastInsertRowid;
+crmRepo.logInteraction({ customerId: learnCust, kind: 'whatsapp', reason: 'dormido', message: 'hola', userId: null });
+db.prepare("INSERT INTO sales(customer_id,type,status,total,created_at) VALUES(?,'factura','completed',1000,datetime('now','localtime','+1 day'))").run(learnCust);
+const dorm = crmRepo.learningStats().effectiveness.byReason.find(r => r.reason === 'dormido');
+ok(dorm && dorm.bought >= 1, `learningStats: contacto→compra cuenta como efectivo (${dorm && dorm.bought}/${dorm && dorm.sent})`);
+
+console.log(`\n${fail === 0 ? '✅' : '❌'} CRM completo (F0→F-Aprende): ${pass} OK, ${fail} fallos`);
 process.exit(fail === 0 ? 0 : 1);
