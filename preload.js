@@ -414,7 +414,7 @@ contextBridge.exposeInMainWorld('api', {
     emit:       (d) => ipcRenderer.invoke('ecf:emit',       d),
     getStatus:  (d) => ipcRenderer.invoke('ecf:getStatus',  d),
     saveConfig: (d) => ipcRenderer.invoke('ecf:saveConfig', d),
-    getConfig:  ()  => ipcRenderer.invoke('ecf:getConfig'),
+    getConfig:  (d) => ipcRenderer.invoke('ecf:getConfig', d),
     getLog:     (d) => ipcRenderer.invoke('ecf:getLog',     d),
   },
 

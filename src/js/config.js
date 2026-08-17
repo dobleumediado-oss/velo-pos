@@ -1905,7 +1905,11 @@ let auditFilter = '';
 // ══════════════════════════════════════════════════════════════════════════════
 
 async function renderECFConfig(container) {
-  const cfgRes = await window.api.ecf?.getConfig();
+  // El handler exige rol admin/superadmin identificado por requestUserId; sin él
+  // devuelve {ok:false} y la sección se mostraría siempre "Sin configurar".
+  let cfgRes = null;
+  try { cfgRes = await window.api.ecf?.getConfig({ requestUserId: _cfgUser()?.id }); }
+  catch (e) { console.warn('e-CF getConfig falló:', e?.message || e); }
   const cfg    = cfgRes?.ok ? cfgRes.data : {};
 
   container.innerHTML = `
