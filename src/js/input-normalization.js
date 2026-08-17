@@ -48,8 +48,15 @@
     const mode = moneyMode(control);
     if (['off', 'false', 'no', 'plain'].includes(mode)) return false;
     if (['on', 'true', 'yes', 'money', 'currency'].includes(mode)) return true;
+    // Auto-detección por palabra clave SOLO en campos numéricos.
+    // Un campo de texto (type=text/tel) puede contener palabras como "gasto",
+    // "pago", "devolución", "transferencia", "crédito" en labels de
+    // concepto/motivo/referencia/titular; tratarlo como monto filtraría las
+    // letras y dejaría escribir "solo números". Los montos reales de la app
+    // son type="number"; un monto que sea texto debe optar explícitamente con
+    // data-money="on".
     const type = String(control.type || 'text').toLowerCase();
-    if (!['number', 'text', 'tel'].includes(type)) return false;
+    if (type !== 'number') return false;
     const descriptor = ` ${moneyDescriptor(control)} `;
     if (NON_MONEY_WORDS.test(descriptor)) return false;
     return MONEY_WORDS.test(descriptor);

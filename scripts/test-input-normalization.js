@@ -147,3 +147,46 @@ initialBalance.id = 'fa-bal';
 assert.strictEqual(shouldFormatMoneyControl(initialBalance), true);
 
 console.log('✓ Montos con miles y dos decimales validados durante la captura');
+
+// Regresión: un campo de TEXTO cuyo label/nombre contiene una palabra
+// monetaria (gasto, pago, devolución, transferencia, crédito, retiro…) NO debe
+// tratarse como monto. Antes se clasificaba como money y filtraba las letras,
+// dejando escribir "solo números" en conceptos, motivos, referencias y demás.
+// Los montos reales son type="number"; un monto de texto debe optar con
+// data-money="on".
+function textFieldWithLabel(labelText, type = 'text', dataset = {}) {
+  const c = control('INPUT', type, '', dataset);
+  c.closest = () => ({ tagName: 'DIV', querySelector: () => ({ textContent: labelText }) });
+  return c;
+}
+
+for (const label of [
+  'Concepto del gasto',
+  'Motivo de devolución',
+  'Referencia de pago',
+  'Titular de tarjeta',
+  'Método de pago',
+  'Banco / transferencia',
+  'Motivo del retiro',
+  'Nota de crédito',
+  'Concepto de flete',
+  'Observaciones del abono',
+]) {
+  const field = textFieldWithLabel(label);
+  assert.strictEqual(
+    shouldFormatMoneyControl(field),
+    false,
+    `El campo de texto "${label}" no debe bloquearse a solo números`
+  );
+}
+
+// Un monto de texto explícito (data-money="on") sí se formatea, aunque el label
+// no contenga palabra monetaria: el opt-in manda.
+const explicitMoneyText = textFieldWithLabel('Valor personalizado', 'text', { money: 'on' });
+assert.strictEqual(shouldFormatMoneyControl(explicitMoneyText), true);
+
+// Y los montos reales (type="number") conservan el formato de miles.
+const realAmount = textFieldWithLabel('Monto', 'number');
+assert.strictEqual(shouldFormatMoneyControl(realAmount), true);
+
+console.log('✓ Campos de texto con palabras monetarias aceptan letras (no solo números)');
