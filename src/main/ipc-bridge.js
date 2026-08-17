@@ -95,11 +95,17 @@ function registerHandler(channel, fn) {
 function dispatch(channel, args, ctx) {
   const fn = _handlers.get(channel);
   if (!fn) return Promise.resolve({ __unknown: true });
+  // JSON no transporta `undefined`: una llamada sin argumentos viaja como `null`
+  // (makeRequest lo convierte). Muchos handlers usan la firma `(_, { x } = {})`,
+  // cuyo valor por defecto SOLO aplica a `undefined`, no a `null` → desestructurar
+  // `null` lanza TypeError ANTES del try/catch y el servidor responde HANDLER_ERROR.
+  // Restaurar `undefined` hace que el modo cliente se comporte igual que el local.
+  const normArgs = args === null ? undefined : args;
   return _als.run({
     terminalId: ctx && ctx.terminalId,
     businessId: ctx && ctx.businessId,
   }, () =>
-    Promise.resolve(fn(args)).then((r) => { _notifyMutation(channel); return r; })
+    Promise.resolve(fn(normArgs)).then((r) => { _notifyMutation(channel); return r; })
   );
 }
 
