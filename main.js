@@ -1643,6 +1643,14 @@ ipcMain.handle('crm:setProductCare', async (_, { productId, attrs, requestUserId
   }
 });
 
+ipcMain.handle('crm:contactToday', async () => {
+  try {
+    return { ok: true, data: crmRepo.contactToday() };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 function _customerContactAdmin(requestUserId) {
   const reqUser = authRepo.findById(requestUserId);
   if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {

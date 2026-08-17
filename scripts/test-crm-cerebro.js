@@ -123,5 +123,18 @@ crmRepo.setProductCare(battId, { markCareDone: true });
 const afterCare = crmRepo.product360(battId).care.lastCareAt;
 ok(afterCare && afterCare !== beforeCare, 'setProductCare markCareDone actualiza last_care_at');
 
-console.log(`\n${fail === 0 ? '✅' : '❌'} CRM F0→F2b: ${pass} OK, ${fail} fallos`);
+// ── F3: Contactar hoy (WhatsApp) ──
+db.prepare("INSERT INTO settings(key,value) VALUES('biz_name','Auto Repuestos Test') ON CONFLICT(key) DO UPDATE SET value=excluded.value").run();
+const credId = db.prepare("INSERT INTO customers(name,balance,credit_limit,credit_due) VALUES(?,?,?,datetime('now','localtime','+2 days'))").run('Cred Cliente', 5000, 10000).lastInsertRowid;
+
+const ct = crmRepo.contactToday();
+ok(ct.count >= 2, `contactToday: detecta ≥2 clientes (${ct.count})`);
+const credItem = ct.items.find(x => x.customerId === credId);
+ok(credItem && credItem.reasonType === 'credito', 'contactToday: crédito por vencer detectado');
+ok(credItem && /vence el/.test(credItem.message) && /Auto Repuestos Test/.test(credItem.message), 'contactToday: mensaje de crédito redactado con negocio y fecha');
+const dormItem = ct.items.find(x => x.customerId === c2);
+ok(dormItem && dormItem.reasonType === 'dormido', 'contactToday: cliente dormido (Caro) detectado');
+ok(ct.items[0].priority <= ct.items[ct.items.length - 1].priority, 'contactToday: ordenado por prioridad (crédito primero)');
+
+console.log(`\n${fail === 0 ? '✅' : '❌'} CRM F0→F3: ${pass} OK, ${fail} fallos`);
 process.exit(fail === 0 ? 0 : 1);

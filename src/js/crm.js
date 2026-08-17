@@ -54,7 +54,7 @@ async function renderCRM(el) {
       <span style="font-size:11px;color:var(--green,#00c07a);border:1px solid var(--green,#00c07a);border-radius:999px;padding:4px 10px">100% offline</span>
     </div>
     <div style="border-bottom:1px solid var(--line2,#eee);margin-bottom:18px">
-      ${tabBtn('clientes', '👤 Clientes')}${tabBtn('inventario', '📦 Inventario')}
+      ${tabBtn('clientes', '👤 Clientes')}${tabBtn('inventario', '📦 Inventario')}${tabBtn('contactar', '📣 Contactar hoy')}
     </div>
     <div id="crm-tab-body"></div>`;
   _crmLoadTab();
@@ -74,6 +74,7 @@ function _crmLoadTab() {
   const body = document.getElementById('crm-tab-body');
   if (!body) return;
   if (_crmTab === 'inventario') return renderCRMInventario(body);
+  if (_crmTab === 'contactar') return renderCRMContactar(body);
   return renderCRMClientes(body);
 }
 
@@ -146,7 +147,7 @@ async function renderCRMClientes(body) {
 
     <div style="margin-top:18px;padding:12px 14px;background:var(--surface3,#f3f4f6);border-radius:10px;font-size:12px;color:var(--muted2)">
       <strong style="color:var(--ink)">Cerebro de cliente activo.</strong> RFM+ de 6 ejes por cliente (recencia, frecuencia, monto, margen, tendencia y pago).
-      El cerebro de inventario está en la pestaña <strong style="color:var(--ink)">Inventario</strong>; la Fase 3 añade el redactor de mensajes de WhatsApp.
+      El cerebro de inventario está en <strong style="color:var(--ink)">Inventario</strong> y los mensajes listos para enviar, en <strong style="color:var(--ink)">Contactar hoy</strong>.
     </div>`;
 }
 
@@ -589,4 +590,80 @@ async function _crmSaveTemplate(applyNow) {
   toast(applyNow ? `Aplicado a ${r.applied} producto(s)` : 'Plantilla guardada', 's');
   closeModal();
   if (_crmTab === 'inventario') _crmLoadTab();
+}
+
+// ── Pestaña Contactar hoy (F3) ─────────────────
+const _CRM_REASON = {
+  credito:  { label: 'Crédito',  color: 'var(--amber,#f59e0b)' },
+  dormido:  { label: 'Dormido',  color: 'var(--blue,#3b82f6)' },
+  recompra: { label: 'Recompra', color: 'var(--green,#00c07a)' },
+};
+
+async function renderCRMContactar(body) {
+  body.innerHTML = `<div style="color:var(--muted2);padding:40px;text-align:center">Buscando a quién contactar…</div>`;
+  let res;
+  try { res = await window.api.crm.contactToday(); } catch (e) {
+    body.innerHTML = `<div style="color:var(--red,#ef4444);padding:24px">No se pudo cargar: ${e.message}</div>`; return;
+  }
+  if (!res || !res.ok) {
+    body.innerHTML = `<div style="color:var(--red,#ef4444);padding:24px">No se pudo cargar: ${res?.error || 'error'}</div>`; return;
+  }
+  const items = res.data.items || [];
+  window._crmContactItems = items;
+
+  if (!items.length) {
+    body.innerHTML = `
+      <div class="card" style="padding:28px;text-align:center">
+        <div style="font-size:32px;margin-bottom:8px">🎉</div>
+        <div style="font-size:14px;font-weight:600;color:var(--ink)">Nada urgente por contactar hoy</div>
+        <div style="font-size:12px;color:var(--muted2);margin-top:4px">El cerebro no detectó créditos por vencer, clientes dormidos ni recompras pendientes.</div>
+      </div>`;
+    return;
+  }
+
+  const cards = items.map((it, i) => {
+    const rc = _CRM_REASON[it.reasonType] || { label: it.reasonType, color: 'var(--muted2)' };
+    const initials = (it.name || '?').slice(0, 2).toUpperCase();
+    return `
+      <div class="card" style="padding:14px 16px;border-left:4px solid ${rc.color};margin-bottom:12px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+          <div style="display:flex;align-items:center;gap:10px;min-width:0">
+            <div style="width:34px;height:34px;border-radius:50%;background:${rc.color}22;color:${rc.color};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex:0 0 34px">${initials}</div>
+            <div style="min-width:0">
+              <div style="font-size:14px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${it.name}</div>
+              <div style="font-size:11px;color:${rc.color}">${rc.label} · ${it.reason}</div>
+            </div>
+          </div>
+          <button class="btn btn-green" onclick="_crmSendWhatsApp(${i})" style="font-size:12px;padding:6px 12px;white-space:nowrap">📲 Enviar por WhatsApp</button>
+        </div>
+        <div style="background:var(--surface2,#fafafa);border:1px dashed var(--line2,#ddd);border-radius:9px;padding:10px 12px;font-size:13px;color:var(--ink2,var(--ink));line-height:1.55">${it.message}</div>
+      </div>`;
+  }).join('');
+
+  body.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+      <div style="font-size:12px;color:var(--muted2)">${items.length} cliente(s) detectado(s) · mensajes redactados automáticamente</div>
+      <span style="font-size:11px;color:var(--green,#00c07a);border:1px solid var(--green,#00c07a);border-radius:999px;padding:3px 10px">redacción offline · envío manual</span>
+    </div>
+    ${cards}
+    <div style="margin-top:6px;padding:12px 14px;background:var(--surface3,#f3f4f6);border-radius:10px;font-size:12px;color:var(--muted2)">
+      El cerebro redacta cada mensaje con los datos del cliente. Al pulsar <strong style="color:var(--ink)">Enviar</strong> se abre WhatsApp con el texto listo — tú lo revisas y envías.
+    </div>`;
+}
+
+async function _crmSendWhatsApp(i) {
+  const it = (window._crmContactItems || [])[i];
+  if (!it) return;
+  // Registrar el contacto (alimenta el aprendizaje futuro) — sin bloquear el envío.
+  try {
+    await window.api.crm.logInteraction({
+      customerId: it.customerId, kind: 'whatsapp', reason: it.reasonType,
+      message: it.message, requestUserId: _crmUser()?.id,
+    });
+  } catch {}
+  if (typeof openWhatsAppModal === 'function') {
+    openWhatsAppModal(it.message, it.phone, it.name);
+  } else {
+    toast('No se encontró el envío de WhatsApp', 'e');
+  }
 }

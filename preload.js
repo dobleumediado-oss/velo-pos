@@ -83,6 +83,7 @@ contextBridge.exposeInMainWorld('api', {
     categoryTemplates: ()  => ipcRenderer.invoke('crm:categoryTemplates'),
     saveCategoryTemplate: (d) => ipcRenderer.invoke('crm:saveCategoryTemplate', d),
     setProductCare:    (d) => ipcRenderer.invoke('crm:setProductCare',    d),
+    contactToday:      ()  => ipcRenderer.invoke('crm:contactToday'),
     logInteraction:    (d) => ipcRenderer.invoke('crm:logInteraction',   d),
     interactions:      (d) => ipcRenderer.invoke('crm:interactions',     d),
   },

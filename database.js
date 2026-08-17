@@ -9965,6 +9965,14 @@ function _crmSegmentOf(agg) {
   return 'frecuente';
 }
 
+// Formato de dinero/fecha para los mensajes redactados del CRM (F3).
+function _crmMoney(n) { return (Number(n) || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function _crmDateStr(iso) {
+  const d = new Date(String(iso).replace(' ', 'T'));
+  if (isNaN(d)) return String(iso || '');
+  return d.toLocaleDateString('es-DO', { day: '2-digit', month: 'long', year: 'numeric' });
+}
+
 // Clasifica un producto por demanda, rotación y antigüedad. Umbrales fijos y
 // explicables, iguales en el panel de inventario y en la ficha de producto.
 //   congelado = con stock pero sin venderse hace mucho (capital muerto)
@@ -10458,6 +10466,97 @@ const crmRepo = {
           next.care_type || '', num(next.care_every_months), next.last_care_at || null,
           next.storage_note || '', productId);
     return { ok: true };
+  },
+
+  // ── Contactar hoy (F3) ─────────────────────────
+  // Detecta clientes que conviene contactar y REDACTA el mensaje (offline).
+  // El envío es manual: la UI abre WhatsApp con el texto ya escrito.
+  contactToday() {
+    const biz = db.prepare("SELECT value FROM settings WHERE key='biz_name'").get()?.value || 'nuestro negocio';
+    const now = Date.now();
+    const customers = db.prepare(
+      `SELECT id, name, trade_name, customer_type, phone, balance, credit_due, status
+         FROM customers WHERE active=1`
+    ).all();
+    const agg = db.prepare(`
+      SELECT customer_id AS id, COUNT(*) AS freq, MAX(created_at) AS last_sale,
+             CAST(julianday('now','localtime') - julianday(MAX(created_at)) AS INTEGER) AS recency
+        FROM sales WHERE type='factura' AND status='completed' AND customer_id IS NOT NULL
+       GROUP BY customer_id
+    `).all();
+    const byId = {};
+    agg.forEach(a => { byId[a.id] = a; });
+
+    const disp = c => c.customer_type === 'company' ? (c.trade_name || c.name) : c.name;
+    const first = c => String(disp(c) || '').trim().split(/\s+/)[0] || disp(c) || 'estimado cliente';
+
+    const topProductOf = (id) => db.prepare(`
+      SELECT si.product_name AS name FROM sale_items si JOIN sales s ON s.id = si.sale_id
+       WHERE s.customer_id = ? AND s.type='factura' AND s.status='completed'
+       GROUP BY COALESCE(si.product_id, si.product_code), si.product_name
+       ORDER BY COUNT(DISTINCT si.sale_id) DESC LIMIT 1
+    `).get(id)?.name;
+
+    const items = [];
+    customers.forEach(c => {
+      const a = byId[c.id];
+      const name = disp(c), fn = first(c);
+
+      // 1) Crédito por vencer (≤3 días) o vencido — máxima prioridad.
+      if (c.balance > 0 && c.credit_due) {
+        const due = new Date(String(c.credit_due).replace(' ', 'T'));
+        if (!isNaN(due)) {
+          const days = Math.round((due - now) / 86400000);
+          if (days <= 3) {
+            const overdue = days < 0;
+            items.push({
+              customerId: c.id, name, phone: c.phone || '', reasonType: 'credito', priority: overdue ? 0 : 1,
+              reason: overdue ? `Crédito vencido hace ${-days} día(s) · RD$${_crmMoney(c.balance)}`
+                              : (days === 0 ? `Crédito vence hoy · RD$${_crmMoney(c.balance)}` : `Crédito vence en ${days} día(s) · RD$${_crmMoney(c.balance)}`),
+              message: `Hola ${fn}, le saluda ${biz}. Le recordamos que su cuenta por RD$${_crmMoney(c.balance)} ${overdue ? 'está vencida desde el' : 'vence el'} ${_crmDateStr(c.credit_due)}. Cualquier cosa estamos a la orden. ¡Gracias!`,
+            });
+            return; // un solo motivo por cliente
+          }
+        }
+      }
+
+      // 2) Dormido: tenía compras y lleva 60+ días sin volver.
+      if (a && a.recency != null && a.recency >= 60) {
+        const prod = topProductOf(c.id);
+        items.push({
+          customerId: c.id, name, phone: c.phone || '', reasonType: 'dormido', priority: 3,
+          reason: `Sin comprar hace ${a.recency} días`,
+          message: `Hola ${fn}, ¿cómo va todo? Hace un tiempo no le vemos por ${biz}. Ya tenemos mercancía nueva${prod ? ` y contamos con ${prod} que suele llevar` : ''}. ¡Le esperamos!`,
+        });
+        return;
+      }
+
+      // 3) Recompra prevista: su producto habitual entra en ventana de recompra.
+      if (a && a.freq >= 2) {
+        const top = db.prepare(`
+          SELECT si.product_name AS name, MIN(s.created_at) AS first, MAX(s.created_at) AS last, COUNT(DISTINCT s.id) AS n
+            FROM sale_items si JOIN sales s ON s.id = si.sale_id
+           WHERE s.customer_id = ? AND s.type='factura' AND s.status='completed'
+           GROUP BY COALESCE(si.product_id, si.product_code), si.product_name
+           ORDER BY COUNT(DISTINCT s.id) DESC LIMIT 1
+        `).get(c.id);
+        if (top && top.n >= 2) {
+          const span = (new Date(top.last) - new Date(top.first)) / 86400000;
+          const avg = Math.max(1, Math.round(span / (top.n - 1)));
+          const since = Math.round((now - new Date(String(top.last).replace(' ', 'T'))) / 86400000);
+          if (since >= avg * 0.85 && since <= avg * 2) {
+            items.push({
+              customerId: c.id, name, phone: c.phone || '', reasonType: 'recompra', priority: 2,
+              reason: `Recompra de ${top.name}: cada ~${avg} días, van ${since}`,
+              message: `Hola ${fn}, según nuestro registro pronto le tocaría ${top.name}. Lo tenemos en existencia; si quiere se lo apartamos. ¡Saludos!`,
+            });
+          }
+        }
+      }
+    });
+
+    items.sort((x, y) => x.priority - y.priority);
+    return { generatedAt: new Date().toISOString(), count: items.length, items: items.slice(0, 50) };
   },
 };
 
