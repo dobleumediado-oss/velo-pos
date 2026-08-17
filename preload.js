@@ -73,6 +73,22 @@ contextBridge.exposeInMainWorld('api', {
     getItemsForCustomer:    (data) => ipcRenderer.invoke('customers:getItemsForCustomer',    data),
   },
 
+  // ── CRM Cerebro (F0) ─────────────────────────
+  crm: {
+    overview:          ()  => ipcRenderer.invoke('crm:overview'),
+    customer360:       (d) => ipcRenderer.invoke('crm:customer360',      d),
+    inventoryOverview: ()  => ipcRenderer.invoke('crm:inventoryOverview'),
+    product360:        (d) => ipcRenderer.invoke('crm:product360',       d),
+    warehouseReview:   ()  => ipcRenderer.invoke('crm:warehouseReview'),
+    categoryTemplates: ()  => ipcRenderer.invoke('crm:categoryTemplates'),
+    saveCategoryTemplate: (d) => ipcRenderer.invoke('crm:saveCategoryTemplate', d),
+    setProductCare:    (d) => ipcRenderer.invoke('crm:setProductCare',    d),
+    contactToday:      ()  => ipcRenderer.invoke('crm:contactToday'),
+    learningStats:     ()  => ipcRenderer.invoke('crm:learningStats'),
+    logInteraction:    (d) => ipcRenderer.invoke('crm:logInteraction',   d),
+    interactions:      (d) => ipcRenderer.invoke('crm:interactions',     d),
+  },
+
   // ── Caja ──────────────────────────────────
   cash: {
     getOpen:         (data)  => ipcRenderer.invoke('cash:getOpen', data),

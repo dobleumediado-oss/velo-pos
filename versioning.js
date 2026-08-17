@@ -1572,6 +1572,107 @@ const MIGRATIONS = [
       }
     }
   },
+  {
+    version: '1.38.3-crm-cerebro',
+    description: 'CRM Cerebro (F0): tablas base para scoring de clientes, interacciones, etiquetas y enriquecimiento web de productos. Módulo apagado por defecto.',
+    run(db) {
+      db.exec(`
+        -- Caché de scoring RFM+ por cliente. Se recalcula desde sales/payments;
+        -- guardar el resultado evita recomputar en cada apertura del panel.
+        CREATE TABLE IF NOT EXISTS customer_scores (
+          customer_id     INTEGER PRIMARY KEY REFERENCES customers(id) ON DELETE CASCADE,
+          recency_days    INTEGER DEFAULT NULL,
+          frequency       INTEGER NOT NULL DEFAULT 0,
+          monetary        REAL    NOT NULL DEFAULT 0,
+          margin          REAL    NOT NULL DEFAULT 0,
+          trend           REAL    NOT NULL DEFAULT 0,
+          payment_score   REAL    NOT NULL DEFAULT 0,
+          rfm_score       INTEGER NOT NULL DEFAULT 0,
+          segment         TEXT    NOT NULL DEFAULT 'nuevo',
+          computed_at     TEXT    DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_customer_scores_segment ON customer_scores(segment);
+
+        -- Bitácora de contactos del CRM (WhatsApp/llamada/nota). Alimenta el
+        -- historial de "Contactar hoy" y evita re-contactar al mismo cliente.
+        CREATE TABLE IF NOT EXISTS customer_interactions (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          customer_id  INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+          kind         TEXT NOT NULL DEFAULT 'nota'
+                         CHECK(kind IN ('nota','whatsapp','llamada','visita','recordatorio')),
+          reason       TEXT DEFAULT '',
+          message      TEXT DEFAULT '',
+          user_id      INTEGER REFERENCES users(id),
+          created_at   TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_customer_interactions_customer ON customer_interactions(customer_id, created_at);
+
+        -- Etiquetas libres para segmentar clientes a mano, junto al scoring auto.
+        CREATE TABLE IF NOT EXISTS crm_tags (
+          id     INTEGER PRIMARY KEY AUTOINCREMENT,
+          name   TEXT NOT NULL,
+          color  TEXT DEFAULT '#0f766e',
+          active INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_crm_tags_name ON crm_tags(name) WHERE active=1;
+        CREATE TABLE IF NOT EXISTS customer_tag_map (
+          customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+          tag_id      INTEGER NOT NULL REFERENCES crm_tags(id) ON DELETE CASCADE,
+          PRIMARY KEY (customer_id, tag_id)
+        );
+
+        -- Caché offline del enriquecimiento web de productos (código de barras).
+        -- Una vez traído de la web, queda local para siempre (patrón banner:getRates).
+        CREATE TABLE IF NOT EXISTS product_enrichment (
+          product_id  INTEGER PRIMARY KEY REFERENCES products(id) ON DELETE CASCADE,
+          source      TEXT DEFAULT '',
+          web_name    TEXT DEFAULT '',
+          web_brand   TEXT DEFAULT '',
+          web_category TEXT DEFAULT '',
+          image_url   TEXT DEFAULT '',
+          specs_json  TEXT DEFAULT '',
+          fetched_at  TEXT DEFAULT (datetime('now','localtime'))
+        );
+      `);
+      console.log('[MIGRATION 1.38.3-crm-cerebro] Tablas base del CRM Cerebro creadas (módulo apagado por defecto)');
+    }
+  },
+  {
+    version: '1.38.4-crm-inventory-care',
+    description: 'CRM Cerebro F2b: salud física del inventario — atributos de caducidad y mantenimiento por producto, con plantillas por categoría.',
+    run(db) {
+      const addCol = (table, col, def) => {
+        const exists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table);
+        if (!exists) return;
+        const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+        if (!cols.includes(col)) db.prepare(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`).run();
+      };
+      // Atributos físicos por producto. Opcionales: si quedan en su default, el
+      // producto no genera alertas (la mayoría del metal no caduca ni se engrasa).
+      addCol('products', 'perishable',        'INTEGER DEFAULT 0');
+      addCol('products', 'shelf_life_months', 'INTEGER DEFAULT NULL');
+      addCol('products', 'expiry_date',       'TEXT DEFAULT NULL');
+      addCol('products', 'care_type',         "TEXT DEFAULT ''");   // '', 'engrasar', 'rotar', 'revisar_carga', 'otro'
+      addCol('products', 'care_every_months', 'INTEGER DEFAULT NULL');
+      addCol('products', 'last_care_at',      'TEXT DEFAULT NULL');
+      addCol('products', 'storage_note',      "TEXT DEFAULT ''");
+
+      // Plantillas por categoría: se configuran una vez y se aplican a todos los
+      // productos de esa categoría, para no llenar miles a mano.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS crm_category_care (
+          category          TEXT PRIMARY KEY,
+          perishable        INTEGER DEFAULT 0,
+          shelf_life_months INTEGER DEFAULT NULL,
+          care_type         TEXT DEFAULT '',
+          care_every_months INTEGER DEFAULT NULL,
+          storage_note      TEXT DEFAULT '',
+          updated_at        TEXT DEFAULT (datetime('now','localtime'))
+        );
+      `);
+      console.log('[MIGRATION 1.38.4-crm-inventory-care] Atributos de caducidad/mantenimiento y plantillas de categoría listos');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

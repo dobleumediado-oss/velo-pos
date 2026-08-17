@@ -42,6 +42,7 @@
     "test:documents": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-document-workflows.js",
     "test:sales-workflow": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-sales-workflow-enhancements.js",
     "test:sale-corrections": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-sale-corrections.js",
+    "test:crm": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-crm-cerebro.js",
     "test:server-service": "node scripts/test-server-service.js",
     "test:experience": "node scripts/test-experience-system.js",
     "test:payment-ui": "node scripts/test-payment-ui-resilience.js",

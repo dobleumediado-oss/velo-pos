@@ -189,7 +189,7 @@ const {
   salesRepo, returnsRepo, reportsRepo, suppliersRepo, purchasesRepo, audit,
   expensesRepo, branchesRepo, vehiclesRepo, maintenanceRepo, deliveriesRepo, ncfRepo,
   financialAccountsRepo, bankReconRepo, accountingRepo, fixedAssetsRepo, conduceRepo, documentNumberRepo, salespeopleRepo,
-  checkoutOrdersRepo, saleCorrectionsRepo, ensureUppercasePersistence
+  checkoutOrdersRepo, saleCorrectionsRepo, ensureUppercasePersistence, crmRepo
 } = require('./database');
 
 const {
@@ -1542,6 +1542,123 @@ ipcMain.handle('customers:update', async (_, { id, data, requestUserId }) => {
 
 ipcMain.handle('customers:getContacts', async (_, { customerId }) => {
   return customersRepo.getContacts(customerId);
+});
+
+// ── CRM Cerebro (F0) ──────────────────────────
+// Solo admin/superadmin. El módulo se activa en superadmin (module_crm).
+ipcMain.handle('crm:overview', async () => {
+  try {
+    return { ok: true, data: crmRepo.overview() };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('crm:logInteraction', async (_, { customerId, kind, reason, message, requestUserId }) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
+    const id = crmRepo.logInteraction({ customerId, kind, reason, message, userId: requestUserId });
+    return { ok: true, id };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('crm:interactions', async (_, { customerId, limit }) => {
+  try {
+    return { ok: true, data: crmRepo.interactionsFor(customerId, limit || 20) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('crm:customer360', async (_, { customerId }) => {
+  try {
+    const data = crmRepo.customer360(customerId);
+    if (!data) return { ok: false, error: 'Cliente no encontrado' };
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('crm:inventoryOverview', async () => {
+  try {
+    return { ok: true, data: crmRepo.inventoryOverview() };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('crm:product360', async (_, { productId }) => {
+  try {
+    const data = crmRepo.product360(productId);
+    if (!data) return { ok: false, error: 'Producto no encontrado' };
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('crm:warehouseReview', async () => {
+  try {
+    return { ok: true, data: crmRepo.warehouseReview() };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('crm:categoryTemplates', async () => {
+  try {
+    return { ok: true, data: crmRepo.categoryTemplates() };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('crm:saveCategoryTemplate', async (_, { template, requestUserId }) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
+    const r = crmRepo.saveCategoryTemplate(template || {});
+    audit(requestUserId, reqUser.name, 'crm_plantilla_categoria', 'products', null, `${template?.category} (${r.applied} aplicados)`);
+    return r;
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('crm:setProductCare', async (_, { productId, attrs, requestUserId }) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Sin permisos' };
+    }
+    return crmRepo.setProductCare(productId, attrs || {});
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('crm:contactToday', async () => {
+  try {
+    return { ok: true, data: crmRepo.contactToday() };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('crm:learningStats', async () => {
+  try {
+    return { ok: true, data: crmRepo.learningStats() };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 });
 
 function _customerContactAdmin(requestUserId) {
