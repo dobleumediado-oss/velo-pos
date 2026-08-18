@@ -10912,12 +10912,30 @@ const productUnitsRepo = {
     ).run(saleId, unitId).changes;
   },
   // Stock EFECTIVO de un producto: por unidades si es serializado; si no, el
-  // campo numérico actual. Helper central para R5 — hoy nadie lo invoca, así que
-  // auto-repuestos no cambia.
+  // campo numérico actual. Helper central para el flujo serializado.
   effectiveStock(productId) {
     const p = db.prepare('SELECT stock, COALESCE(serialized,0) AS serialized FROM products WHERE id=?').get(productId);
     if (!p) return 0;
     return p.serialized ? this.countInStock(productId) : (p.stock || 0);
+  },
+  // Resumen de un producto serializado: conteo por estado + stock efectivo.
+  overview(productId) {
+    const rows = db.prepare(
+      'SELECT status, COUNT(*) n FROM product_units WHERE product_id=? GROUP BY status'
+    ).all(productId);
+    const byStatus = { en_stock: 0, reservado: 0, vendido: 0, servicio: 0, devuelto: 0 };
+    rows.forEach(r => { byStatus[r.status] = r.n; });
+    return { productId, byStatus, inStock: byStatus.en_stock };
+  },
+  // Marca (o desmarca) un producto como serializado. Solo permite apagarlo si no
+  // tiene unidades registradas, para no dejar equipos huérfanos.
+  setSerialized(productId, on) {
+    if (!on) {
+      const units = db.prepare('SELECT COUNT(*) n FROM product_units WHERE product_id=?').get(productId).n;
+      if (units > 0) throw new Error('No se puede desactivar el serializado: el producto ya tiene unidades registradas');
+    }
+    db.prepare('UPDATE products SET serialized=? WHERE id=?').run(on ? 1 : 0, productId);
+    return { ok: true };
   },
 };
 

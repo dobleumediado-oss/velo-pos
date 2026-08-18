@@ -189,7 +189,8 @@ const {
   salesRepo, returnsRepo, reportsRepo, suppliersRepo, purchasesRepo, audit,
   expensesRepo, branchesRepo, vehiclesRepo, maintenanceRepo, deliveriesRepo, ncfRepo,
   financialAccountsRepo, bankReconRepo, accountingRepo, fixedAssetsRepo, conduceRepo, documentNumberRepo, salespeopleRepo,
-  checkoutOrdersRepo, saleCorrectionsRepo, ensureUppercasePersistence, crmRepo
+  checkoutOrdersRepo, saleCorrectionsRepo, ensureUppercasePersistence, crmRepo,
+  productUnitsRepo
 } = require('./database');
 
 const {
@@ -1511,6 +1512,63 @@ ipcMain.handle('products:delete', async (_, { id, requestUserId }) => {
   } catch (e) {
     return { ok: false, error: e.message };
   }
+});
+
+// ── Inventario serializado (VELO TECH POS) ───────────────────────────────────
+// Gestión de unidades físicas por IMEI/serial. Handlers ADITIVOS: auto-repuestos
+// (serialized=0) nunca los invoca y el flujo de venta no cambia. La venta por
+// unidad y la UI del POS llegan en fases siguientes (R5b/R5c).
+ipcMain.handle('productUnits:listForProduct', async (_, { productId, status } = {}) => {
+  try { return { ok: true, data: productUnitsRepo.listForProduct(productId, status || null) }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('productUnits:overview', async (_, { productId } = {}) => {
+  try { return { ok: true, data: productUnitsRepo.overview(productId) }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('productUnits:findByImei', async (_, { imei } = {}) => {
+  try {
+    const unit = productUnitsRepo.findByImei(imei);
+    if (!unit) return { ok: true, found: false };
+    const product = productsRepo && unit.product_id
+      ? db.prepare('SELECT id,name,code FROM products WHERE id=?').get(unit.product_id) : null;
+    return { ok: true, found: true, unit, product };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('productUnits:setSerialized', async (_, { productId, on, requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Solo el administrador puede cambiar el tipo de inventario' };
+    }
+    const r = productUnitsRepo.setSerialized(productId, !!on);
+    audit(requestUserId, reqUser.name, 'producto_serializado', 'products', productId, `serializado=${on ? 1 : 0}`);
+    return r;
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('productUnits:create', async (_, { productId, units, requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Solo el administrador puede registrar equipos' };
+    }
+    const prod = db.prepare('SELECT id,COALESCE(serialized,0) AS serialized FROM products WHERE id=?').get(productId);
+    if (!prod) return { ok: false, error: 'Producto no encontrado' };
+    // Registrar equipos marca el producto como serializado automáticamente.
+    if (!prod.serialized) productUnitsRepo.setSerialized(productId, true);
+    const list = Array.isArray(units) ? units : [units];
+    const created = [];
+    for (const u of list) {
+      if (!u) continue;
+      created.push(productUnitsRepo.create({ ...u, product_id: productId }));
+    }
+    audit(requestUserId, reqUser.name, 'equipos_registrados', 'products', productId, `${created.length} unidad(es)`);
+    return { ok: true, created: created.length, ids: created };
+  } catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('products:getMovements', async (_, { productId }) => {

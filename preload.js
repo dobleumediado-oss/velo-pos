@@ -46,6 +46,15 @@ contextBridge.exposeInMainWorld('api', {
     getPriceHistory: (data)  => ipcRenderer.invoke('products:getPriceHistory', data),
   },
 
+  // ── Inventario serializado (VELO TECH POS) ────────────────
+  productUnits: {
+    listForProduct: (data) => ipcRenderer.invoke('productUnits:listForProduct', data),
+    overview:       (data) => ipcRenderer.invoke('productUnits:overview', data),
+    findByImei:     (data) => ipcRenderer.invoke('productUnits:findByImei', data),
+    setSerialized:  (data) => ipcRenderer.invoke('productUnits:setSerialized', data),
+    create:         (data) => ipcRenderer.invoke('productUnits:create', data),
+  },
+
   // ── Clientes ──────────────────────────────
   customers: {
     getAll:        ()          => ipcRenderer.invoke('customers:getAll'),
