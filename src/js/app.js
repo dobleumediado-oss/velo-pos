@@ -117,6 +117,17 @@ async function applyVerticalTheme() {
     const sel = modules.map(m => `[data-vertical="${v.id}"] .module-${m}`).join(',');
     css += `${sel}{--module-accent:${moduleAccent};--module-accent-soft:${moduleAccent}26}`;
   }
+  // Elementos con verde de MARCA hardcodeado (gradientes que la variable CSS no
+  // alcanza): logo del sidebar y botón de ingreso. Se re-pintan al color del
+  // rubro SOLO en este vertical (VELO POS conserva su verde).
+  const brand = theme && theme.green;
+  const brandDark = (theme && theme.teal) || brand;
+  if (brand && /^#[0-9A-Fa-f]{6}$/.test(String(brand))) {
+    const p = `[data-vertical="${v.id}"]`;
+    css += `${p} .sb-logo{background:linear-gradient(145deg,${brand},${brandDark})}`;
+    css += `${p} .login-card .btn-dark{background:linear-gradient(135deg,${brand},${brandDark})}`;
+    css += `${p} .login-card .btn-dark:hover{background:linear-gradient(135deg,${brandDark},${brand})}`;
+  }
   let styleEl = document.getElementById('vertical-theme-style');
   if (!styleEl) { styleEl = document.createElement('style'); styleEl.id = 'vertical-theme-style'; document.head.appendChild(styleEl); }
   styleEl.textContent = css;
