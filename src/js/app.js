@@ -78,8 +78,11 @@ async function loadVertical() {
 // label. Uso: vterm('product_singular', 'Repuesto').
 function vterm(key, fallback) {
   const term = (window._vertical && window._vertical.terminology) || {};
-  const v = term[key];
-  return (v != null && v !== '') ? v : (fallback != null ? fallback : key);
+  // Clave PRESENTE (aunque sea '') → se usa tal cual (permite ocultar un texto en
+  // un rubro, p. ej. model_hit=''). Ausente → fallback (auto-repuestos no define
+  // nada → siempre el texto actual).
+  if (Object.prototype.hasOwnProperty.call(term, key) && term[key] != null) return term[key];
+  return fallback != null ? fallback : key;
 }
 window.vterm = vterm;
 

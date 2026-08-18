@@ -1204,7 +1204,7 @@ function openProductoModal(p = null) {
     <div class="g2">
       <div class="fg">
         <label class="lbl">Nombre *</label>
-        <input class="inp" id="pf-name" type="text" placeholder="Filtro de aceite Toyota"
+        <input class="inp" id="pf-name" type="text" placeholder="${vterm('product_name_example', 'Filtro de aceite Toyota')}"
                value="${isEdit ? p.name : ''}"
                oninput="pfAutoCode(this.value)"/>
       </div>
@@ -1214,7 +1214,7 @@ function openProductoModal(p = null) {
             — se genera automáticamente o escribe uno
           </span>
         </label>
-        <input class="inp" id="pf-code" type="text" placeholder="FLT-001"
+        <input class="inp" id="pf-code" type="text" placeholder="${vterm('code_example', 'FLT-001')}"
                value="${isEdit ? p.code : ''}"/>
       </div>
       <div class="fg">
@@ -1261,13 +1261,13 @@ function openProductoModal(p = null) {
     <div class="g3">
       <div class="fg">
         <label class="lbl">Marca</label>
-        <input class="inp" id="pf-brand" type="text" placeholder="Denso, NGK..."
+        <input class="inp" id="pf-brand" type="text" placeholder="${vterm('brand_example', 'Denso, NGK...')}"
                value="${isEdit ? (p.brand || '') : ''}"/>
       </div>
       <div class="fg">
-        <label class="lbl">Modelo <span style="font-weight:400;color:var(--muted2);font-size:11px">(compatible)</span></label>
+        <label class="lbl">Modelo <span style="font-weight:400;color:var(--muted2);font-size:11px">${vterm('model_hint', '(compatible)')}</span></label>
         <input class="inp" id="pf-model" type="text"
-               placeholder="T40, DJI-T40, L4508..."
+               placeholder="${vterm('model_example', 'T40, DJI-T40, L4508...')}"
                list="pf-model-list"
                value="${isEdit ? (p.model || '') : ''}"/>
         <datalist id="pf-model-list"></datalist>

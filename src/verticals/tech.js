@@ -42,13 +42,20 @@ module.exports = {
   // un stylesheet de mayor especificidad ([data-vertical] .module-xxx).
   moduleAccent: '#2563EB',
 
-  // Terminología del rubro (fallback al texto actual donde no se define).
+  // Terminología del rubro (fallback al texto actual donde no se define). Cubre
+  // labels y ejemplos/placeholders que deben leerse como tecnología, no auto.
   terminology: {
-    product_singular: 'Equipo',
-    product_plural:   'Equipos',
-    code_label:       'IMEI / Serial',
-    catalog_title:    'Inventario de equipos',
-    new_product:      'Nuevo equipo',
+    product_singular:     'Equipo',
+    product_plural:       'Equipos',
+    code_label:           'IMEI / Serial',
+    catalog_title:        'Inventario de equipos',
+    new_product:          'Nuevo equipo',
+    // Ejemplos/placeholders del modal de producto:
+    product_name_example: 'iPhone 13 · 128GB · Negro',
+    code_example:         'CEL-001',
+    brand_example:        'Apple, Samsung, Xiaomi...',
+    model_hint:           '',                              // sin "(compatible)" en tech
+    model_example:        'iPhone 13, Galaxy S23, Redmi 12...',
   },
 
   // Set de módulos por defecto del rubro (se cablea a los toggles en R5/R6).
