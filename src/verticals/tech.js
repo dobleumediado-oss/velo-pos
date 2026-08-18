@@ -25,14 +25,17 @@ module.exports = {
   // product_units. Enciende el flujo serializado de R5.
   serialized: true,
 
-  // Tema (override-only): la marca verde de VELO POS pasa a azul en TECH.
-  // Placeholder — se calibra con el diseño final. Solo afecta al build TECH.
+  // Tema (override-only): paleta exacta del logo VELO TECH POS — azul royal del
+  // rayo sobre chrome oscuro. La marca verde de VELO POS pasa a azul; el sidebar
+  // se mantiene oscuro (comparte --ink con el texto), que es justo el lockup del
+  // logo sobre fondo negro. Un sidebar navy dedicado sería un ajuste de diseño
+  // aparte (requiere separar --ink del fondo del sidebar).
   theme: {
-    'green':       '#2563EB',
-    'green-bg':    '#EFF6FF',
-    'green-line':  '#BFDBFE',
-    'accent':      '#2563EB',
-    'teal':        '#1D4ED8',
+    'green':       '#2563EB',   // azul royal del rayo — botón primario / marca
+    'green-bg':    '#EAF1FE',   // tinte claro para fondos de éxito/marca
+    'green-line':  '#BBD3FA',   // borde claro de marca
+    'accent':      '#2563EB',   // acento de módulos
+    'teal':        '#1E40AF',   // navy secundario del logo
   },
 
   // Terminología del rubro (fallback al texto actual donde no se define).
