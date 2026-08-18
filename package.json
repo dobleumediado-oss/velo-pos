@@ -25,6 +25,8 @@
     "verify:integrity": "ELECTRON_RUN_AS_NODE=1 electron scripts/verify-historical-integrity.js",
     "verify:marker": "node scripts/check-historical-marker.js",
     "verify:packaging": "node scripts/check-packaging.js",
+    "test:suite-invariants": "node scripts/test-suite-invariants.js",
+    "test:suite-upgrade": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-suite-upgrade-safety.js",
     "test:import": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-import-hardening.js",
     "test:all-in-one": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-equiparts-all-in-one.js",
     "test:all-in-one-integration": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-equiparts-import-integration.js",
