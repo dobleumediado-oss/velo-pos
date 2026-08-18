@@ -1774,6 +1774,17 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.41.0-product-units-serialized] Inventario serializado listo (apagado por defecto)');
     }
   },
+  {
+    version: '1.41.0-sale-item-unit-link',
+    description: 'VELO SUITE: enlaza cada línea de venta con la unidad serializada vendida (sale_items.product_unit_id). Aditivo: NULL para toda venta fungible existente (auto-repuestos), que no cambia.',
+    run(db) {
+      const cols = db.prepare('PRAGMA table_info(sale_items)').all().map(c => c.name);
+      if (!cols.includes('product_unit_id')) {
+        db.prepare('ALTER TABLE sale_items ADD COLUMN product_unit_id INTEGER REFERENCES product_units(id)').run();
+      }
+      console.log('[MIGRATION 1.41.0-sale-item-unit-link] sale_items.product_unit_id listo');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

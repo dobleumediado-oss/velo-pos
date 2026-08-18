@@ -378,6 +378,7 @@ function createTables() {
       unit          TEXT DEFAULT 'und',
       model         TEXT DEFAULT '',
       condition     TEXT DEFAULT 'nuevo',
+      serialized    INTEGER DEFAULT 0,
       active        INTEGER DEFAULT 1,
       created_at    TEXT DEFAULT (datetime('now')),
       updated_at    TEXT DEFAULT (datetime('now'))
@@ -599,7 +600,29 @@ function createTables() {
       taxable     INTEGER DEFAULT NULL,
       tax_pct     REAL DEFAULT NULL,
       tax_amt     REAL DEFAULT NULL,
-      net_subtotal REAL DEFAULT NULL
+      net_subtotal REAL DEFAULT NULL,
+      product_unit_id INTEGER REFERENCES product_units(id)
+    );
+
+    -- ── Unidades serializadas (VELO TECH POS): cada equipo por IMEI/serial ──
+    -- Inerte para auto-repuestos (products.serialized=0). Ver migración
+    -- 1.41.0-product-units-serialized (esquema idéntico, para BDs existentes).
+    CREATE TABLE IF NOT EXISTS product_units (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id     INTEGER NOT NULL REFERENCES products(id),
+      imei           TEXT,
+      serial         TEXT,
+      condition      TEXT DEFAULT 'nuevo',
+      status         TEXT DEFAULT 'en_stock'
+                       CHECK(status IN ('en_stock','reservado','vendido','servicio','devuelto')),
+      unit_cost      REAL DEFAULT 0,
+      color          TEXT DEFAULT '',
+      capacity       TEXT DEFAULT '',
+      warranty_until TEXT,
+      sale_id        INTEGER REFERENCES sales(id),
+      received_at    TEXT DEFAULT (datetime('now','localtime')),
+      sold_at        TEXT,
+      notes          TEXT DEFAULT ''
     );
 
     -- ── Pagos / Abonos ──
@@ -4347,13 +4370,34 @@ const salesRepo = {
         `).run();
       }
       const stockValidated = new Set();
+      const usedUnits = new Set();   // unidades serializadas ya tomadas en esta venta
 
       // 1. Validar stock y normalizar snapshot de línea. unit_price es precio final.
       for (const item of items) {
-        const prod = db.prepare('SELECT stock,name,taxable,tax_pct FROM products WHERE id=?').get(item.product_id);
+        const prod = db.prepare('SELECT id,stock,name,taxable,tax_pct,COALESCE(serialized,0) AS serialized FROM products WHERE id=?').get(item.product_id);
         if (!prod) throw new Error(`Producto ID ${item.product_id} no existe`);
         const productId = Number(item.product_id);
-        if (afectaStock && !stockValidated.has(productId)) {
+        // Producto SERIALIZADO (VELO TECH POS): se vende una UNIDAD concreta por
+        // IMEI/serial; el stock sale de product_units, no del campo numérico. Para
+        // productos fungibles (auto-repuestos, serialized=0) nada de esto corre y
+        // la validación numérica de abajo es idéntica a la actual.
+        let _unitId = null;
+        if (afectaStock && prod.serialized) {
+          const ref = String(item.imei ?? item.serial ?? '').trim();
+          let unit = null;
+          if (item.product_unit_id) {
+            unit = db.prepare('SELECT * FROM product_units WHERE id=? AND product_id=?').get(Number(item.product_unit_id), productId);
+          } else if (ref) {   // solo con referencia NO vacía (un IMEI/serial en blanco no debe hacer match)
+            unit = db.prepare("SELECT * FROM product_units WHERE product_id=? AND (UPPER(TRIM(COALESCE(imei,'')))=UPPER(?) OR UPPER(TRIM(COALESCE(serial,'')))=UPPER(?)) LIMIT 1").get(productId, ref, ref);
+          }
+          if (!unit) throw new Error(`Selecciona el equipo (IMEI) a vender para "${prod.name}"`);
+          if (unit.status !== 'en_stock') throw new Error(`El equipo ${unit.imei || unit.serial || ('#' + unit.id)} ya no está disponible`);
+          if (usedUnits.has(unit.id)) throw new Error(`El equipo ${unit.imei || unit.serial || ('#' + unit.id)} está repetido en la venta`);
+          usedUnits.add(unit.id);
+          _unitId = unit.id;
+          if (unit.unit_cost != null) item.unit_cost = unit.unit_cost; // costo real de la unidad → asiento correcto
+          item.qty = 1;                                                // cada unidad serializada es una línea de 1
+        } else if (afectaStock && !stockValidated.has(productId)) {
           const ownOrderId = Number(payment.checkoutOrderId) || 0;
           const reserved = tableExists('checkout_orders')
             ? (db.prepare(`
@@ -4384,6 +4428,8 @@ const salesRepo = {
           unit_cost: round2(Number.parseFloat(item.unit_cost) || 0),
           taxable,
           tax_pct: itemTaxPct,
+          _serialized: !!prod.serialized,
+          product_unit_id: _unitId,
         });
       }
 
@@ -4744,22 +4790,30 @@ const salesRepo = {
         }
       }
 
-      // 5. Insertar items con snapshot
+      // 5. Insertar items con snapshot (product_unit_id enlaza la unidad vendida
+      //    en líneas serializadas; NULL en ventas fungibles).
       for (const item of saleItems) {
         db.prepare(`
           INSERT INTO sale_items(
             sale_id,product_id,product_code,product_name,unit_cost,unit_price,qty,subtotal,
-            taxable,tax_pct,tax_amt,net_subtotal
+            taxable,tax_pct,tax_amt,net_subtotal,product_unit_id
           )
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
         `).run(saleId, item.product_id, item.product_code, item.product_name,
                item.unit_cost, item.unit_price, item.qty, round2(item.unit_price * item.qty),
-               item.taxable, item.tax_pct, item.tax_amt, item.net_subtotal);
+               item.taxable, item.tax_pct, item.tax_amt, item.net_subtotal,
+               item.product_unit_id || null);
 
-        // 6. Descontar stock (misma condición que la validación: afectaStock)
+        // 6. Descontar stock. Serializado: marca la UNIDAD como vendida (el stock
+        //    ES el conteo de unidades). Fungible: descuenta el stock numérico como
+        //    siempre (auto-repuestos idéntico).
         if (afectaStock) {
-          productsRepo.adjustStock(item.product_id, -item.qty, 'salida',
-            `Venta #${saleId}`, saleId, user.id);
+          if (item._serialized && item.product_unit_id) {
+            productUnitsRepo.markSold(item.product_unit_id, saleId);
+          } else {
+            productsRepo.adjustStock(item.product_id, -item.qty, 'salida',
+              `Venta #${saleId}`, saleId, user.id);
+          }
         }
       }
 
