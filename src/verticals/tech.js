@@ -34,9 +34,13 @@ module.exports = {
     'green':       '#2563EB',   // azul royal del rayo — botón primario / marca
     'green-bg':    '#EAF1FE',   // tinte claro para fondos de éxito/marca
     'green-line':  '#BBD3FA',   // borde claro de marca
-    'accent':      '#2563EB',   // acento de módulos
+    'accent':      '#2563EB',   // acento base
     'teal':        '#1E40AF',   // navy secundario del logo
   },
+  // Acento por módulo: la app pinta cada módulo con su propio --module-accent
+  // (clase .module-xxx). Este valor los unifica al azul del rubro; se aplica con
+  // un stylesheet de mayor especificidad ([data-vertical] .module-xxx).
+  moduleAccent: '#2563EB',
 
   // Terminología del rubro (fallback al texto actual donde no se define).
   terminology: {

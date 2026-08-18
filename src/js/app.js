@@ -88,14 +88,35 @@ window.vterm = vterm;
 // La única rama que toca :root exige un theme no vacío (TECH, R4).
 async function applyVerticalTheme() {
   const v = await loadVertical();
-  const theme = v && v.theme;
-  if (!theme || typeof theme !== 'object') return;   // sin override → nada cambia
   const root = document.documentElement;
-  for (const [key, value] of Object.entries(theme)) {
-    if (value == null || value === '') continue;
-    const varName = key.startsWith('--') ? key : `--${key}`;
-    if (/^--[a-z0-9-]+$/i.test(varName)) root.style.setProperty(varName, String(value));
+  root.setAttribute('data-vertical', v.id || 'auto_parts');   // marca el rubro activo
+  const theme = v && v.theme;
+  const moduleAccent = v && v.moduleAccent;
+  if ((!theme || typeof theme !== 'object') && !moduleAccent) return;  // auto-repuestos → nada cambia
+
+  // 1) Variables base (marca): inline en <html> + regla [data-vertical] (doble seguro).
+  const baseRules = [];
+  if (theme && typeof theme === 'object') {
+    for (const [key, value] of Object.entries(theme)) {
+      if (value == null || value === '') continue;
+      const varName = key.startsWith('--') ? key : `--${key}`;
+      if (!/^--[a-z0-9-]+$/i.test(varName)) continue;
+      root.style.setProperty(varName, String(value));
+      baseRules.push(`${varName}:${value}`);
+    }
   }
+  // 2) Acento por módulo: cada .module-xxx fija su propio --module-accent; una
+  //    regla [data-vertical] .module-xxx es más específica y los unifica al rubro.
+  const modules = ['dash','pos','inventario','compras','clientes','ventas','devoluciones','caja','conduces','contabilidad','reportes','gastos','nomina','vehiculos','envios','preventa','crm','page'];
+  let css = '';
+  if (baseRules.length) css += `:root[data-vertical="${v.id}"]{${baseRules.join(';')}}`;
+  if (moduleAccent && /^#[0-9A-Fa-f]{6}$/.test(String(moduleAccent))) {
+    const sel = modules.map(m => `[data-vertical="${v.id}"] .module-${m}`).join(',');
+    css += `${sel}{--module-accent:${moduleAccent};--module-accent-soft:${moduleAccent}26}`;
+  }
+  let styleEl = document.getElementById('vertical-theme-style');
+  if (!styleEl) { styleEl = document.createElement('style'); styleEl.id = 'vertical-theme-style'; document.head.appendChild(styleEl); }
+  styleEl.textContent = css;
 }
 
 document.addEventListener('DOMContentLoaded', async () => {

@@ -976,6 +976,7 @@ ipcMain.handle('app:getVertical', async () => {
       product: active.product || null,
       serialized: !!active.serialized,
       theme: active.theme || null,
+      moduleAccent: active.moduleAccent || null,
       terminology: active.terminology || {},
       modules: active.modules || {},
     };
