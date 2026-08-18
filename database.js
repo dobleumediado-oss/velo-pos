@@ -2688,8 +2688,16 @@ const productsRepo = {
     const accountingJoin = hasAccountingEntries
       ? 'LEFT JOIN accounting_entries ae ON ae.id = h.accounting_entry_id'
       : '';
+    // Stock EFECTIVO: para productos serializados (VELO TECH POS) es el conteo de
+    // unidades en stock; para fungibles (auto-repuestos) es el campo numérico.
+    const effectiveStockSelect = tableExists('product_units')
+      ? `CASE WHEN COALESCE(p.serialized,0)=1
+               THEN COALESCE((SELECT COUNT(*) FROM product_units pu WHERE pu.product_id=p.id AND pu.status='en_stock'),0)
+               ELSE p.stock END      AS effective_stock,`
+      : `p.stock AS effective_stock,`;
     return db.prepare(`
       SELECT p.*,
+             ${effectiveStockSelect}
              COALESCE((
                SELECT SUM(coi.qty)
                FROM checkout_order_items coi
