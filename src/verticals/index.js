@@ -15,14 +15,22 @@
 
 const VERTICALS = {
   auto_parts: require('./auto-parts'),
-  // El vertical 'tech' (VELO TECH POS) se registra aquí en la fase R4.
+  tech:       require('./tech'),      // VELO TECH POS (R4)
 };
 
 const DEFAULT_VERTICAL = 'auto_parts';
 
 function activeVerticalId() {
+  // Precedencia: override de dev (env) > valor COMPILADO en el build
+  // (package.json.veloVertical, inyectado por electron-builder-*.extraMetadata)
+  // > default auto_parts. Un build VELO POS no lleva veloVertical → auto_parts.
   const fromEnv = String(process.env.VELO_VERTICAL || '').trim();
-  return VERTICALS[fromEnv] ? fromEnv : DEFAULT_VERTICAL;
+  if (VERTICALS[fromEnv]) return fromEnv;
+  try {
+    const baked = String(require('../../package.json').veloVertical || '').trim();
+    if (VERTICALS[baked]) return baked;
+  } catch { /* sin package.json accesible → default */ }
+  return DEFAULT_VERTICAL;
 }
 
 function getActiveVertical() {

@@ -74,6 +74,20 @@ if (terminalCfg) {
   else { failed++; console.error('  ✗ terminal.artifactName cambió →', terminalCfg.artifactName); }
 }
 
+// VELO TECH POS (y todo producto de la suite) DEBE ser separable de VELO POS:
+// otro appId y otro canal, para que un instalador jamás se cruce con clientes
+// de VELO POS por auto-update. Si el config TECH existe, lo verificamos.
+try {
+  const techCfg = require(path.join(__dirname, '..', 'build', 'electron-builder-tech.js'));
+  if (techCfg.appId === FROZEN.appId) {
+    failed++; console.error('  ✗ TECH comparte el appId de VELO POS → colisionaría con sus instalaciones');
+  } else { console.log('  ✓ TECH.appId separado =', JSON.stringify(techCfg.appId)); }
+  const techChannel = techCfg.publish && techCfg.publish.channel;
+  if (!techChannel || techChannel === 'latest') {
+    failed++; console.error('  ✗ TECH usa el canal de VELO POS (latest) → recibiría sus updates');
+  } else { console.log('  ✓ TECH.channel separado =', JSON.stringify(techChannel)); }
+} catch { /* aún no existe el build TECH → nada que verificar */ }
+
 if (failed) {
   console.error(`\n✗ INVARIANTES ROTOS (${failed}). Esto afectaría a clientes con VELO POS instalado.`);
   process.exit(1);
