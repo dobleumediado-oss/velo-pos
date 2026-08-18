@@ -10166,9 +10166,706 @@ const saleCorrectionsRepo = createSaleCorrectionsRepo({
 // ══════════════════════════════════════════════
 // EXPORTS
 // ══════════════════════════════════════════════
+// ══════════════════════════════════════════════
+// CRM CEREBRO — repositorio (F0/F1)
+// ──────────────────────────────────────────────
+// Segmentación RFM ligera calculada 100% offline sobre sales/customers.
+// F0 entrega el panel de inicio (conteos por segmento + destacados) y la
+// bitácora de interacciones. El scoring RFM+ de 6 ejes se profundiza en F1.
+// ══════════════════════════════════════════════
+
+// Clasifica un cliente según sus agregados de compra (recencia/frecuencia).
+// Umbrales conservadores y explicables — nada de "magia".
+function _crmSegmentOf(agg) {
+  const freq = agg.freq || 0;
+  if (freq === 0) return 'nuevo';
+  const r = (agg.recency == null) ? 9999 : agg.recency;
+  if (freq >= 3 && r <= 45) return 'vip';
+  if (freq >= 3 && r > 90)  return 'en_riesgo';
+  if (r > 90)               return 'dormido';
+  return 'frecuente';
+}
+
+// Formato de dinero/fecha para los mensajes redactados del CRM (F3).
+function _crmMoney(n) { return (Number(n) || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function _crmDateStr(iso) {
+  const d = new Date(String(iso).replace(' ', 'T'));
+  if (isNaN(d)) return String(iso || '');
+  return d.toLocaleDateString('es-DO', { day: '2-digit', month: 'long', year: 'numeric' });
+}
+
+// Clasifica un producto por demanda, rotación y antigüedad. Umbrales fijos y
+// explicables, iguales en el panel de inventario y en la ficha de producto.
+//   congelado = con stock pero sin venderse hace mucho (capital muerto)
+//   reponer   = se vende y está por agotarse (bajo mínimo o < 15 días de stock)
+//   estrella  = alta demanda (≥10 und/90d) con buen margen (≥25%)
+//   estable   = el resto con movimiento normal
+function _crmProductSegment(x) {
+  const stock = x.stock || 0;
+  if (stock > 0 && (
+        (x.qtyTotal === 0) ? (x.shelfAge != null && x.shelfAge > 120)
+                           : (x.daysSinceLastSale != null && x.daysSinceLastSale > 180))) {
+    return 'congelado';
+  }
+  if (x.qty90 > 0 && (stock <= (x.stockMin || 0) || (x.daysOfStock != null && x.daysOfStock < 15))) {
+    return 'reponer';
+  }
+  if (x.qty90 >= (x.starQty || 10) && x.marginPct >= 25) return 'estrella';
+  return 'estable';
+}
+
+// Umbral "estrella" adaptado al negocio (F-Aprendizaje): percentil 80 de las
+// unidades vendidas en 90 días, mínimo 5. Así "mucha venta" se calibra a la
+// escala real de ESTA tienda en vez de un número fijo.
+function _crmLearnedStarQty() {
+  const q = db.prepare(`
+    SELECT SUM(CASE WHEN julianday('now','localtime')-julianday(s.created_at) <= 90 THEN si.qty ELSE 0 END) AS q90
+      FROM sale_items si JOIN sales s ON s.id = si.sale_id
+     WHERE s.type='factura' AND s.status='completed' AND si.product_id IS NOT NULL
+     GROUP BY si.product_id
+  `).all().map(r => r.q90 || 0).filter(v => v > 0).sort((a, b) => a - b);
+  if (!q.length) return 10;
+  return Math.max(5, q[Math.min(q.length - 1, Math.floor(q.length * 0.8))]);
+}
+
+const crmRepo = {
+  // Panel de inicio del CRM: totales, conteo por segmento y listas destacadas.
+  // Solo lee ventas confirmadas (factura + completed); ignora cotizaciones,
+  // devoluciones y anuladas para que los números reflejen negocio real.
+  overview() {
+    const customers = db.prepare(
+      `SELECT id, name, trade_name, customer_type, balance, credit_limit, status
+         FROM customers WHERE active=1`
+    ).all();
+
+    const agg = db.prepare(`
+      SELECT customer_id AS id,
+             COUNT(*)            AS freq,
+             COALESCE(SUM(total),0) AS monetary,
+             MAX(created_at)     AS last_sale,
+             CAST(julianday('now','localtime') - julianday(MAX(created_at)) AS INTEGER) AS recency
+        FROM sales
+       WHERE type='factura' AND status='completed' AND customer_id IS NOT NULL
+       GROUP BY customer_id
+    `).all();
+
+    const byId = {};
+    agg.forEach(a => { byId[a.id] = a; });
+
+    const segments = { vip: 0, frecuente: 0, en_riesgo: 0, dormido: 0, nuevo: 0 };
+    const enriched = customers.map(c => {
+      const a = byId[c.id] || { freq: 0, monetary: 0, recency: null };
+      const segment = _crmSegmentOf(a);
+      segments[segment]++;
+      return {
+        id: c.id,
+        name: c.trade_name || c.name,
+        freq: a.freq || 0,
+        monetary: a.monetary || 0,
+        recency: a.recency,
+        balance: c.balance || 0,
+        segment,
+      };
+    });
+
+    const topSpenders = enriched
+      .filter(e => e.monetary > 0)
+      .sort((x, y) => y.monetary - x.monetary)
+      .slice(0, 8);
+
+    const atRisk = enriched
+      .filter(e => e.segment === 'en_riesgo' || e.segment === 'dormido')
+      .sort((x, y) => y.monetary - x.monetary)
+      .slice(0, 8);
+
+    return {
+      generatedAt: new Date().toISOString(),
+      totalCustomers: customers.length,
+      withPurchases: agg.length,
+      segments,
+      topSpenders,
+      atRisk,
+    };
+  },
+
+  // Registra un contacto/nota del CRM en la bitácora del cliente.
+  logInteraction({ customerId, kind = 'nota', reason = '', message = '', userId = null }) {
+    const info = db.prepare(
+      `INSERT INTO customer_interactions(customer_id, kind, reason, message, user_id)
+       VALUES(?,?,?,?,?)`
+    ).run(customerId, kind, reason, message, userId);
+    return info.lastInsertRowid;
+  },
+
+  // Últimas interacciones de un cliente (para el historial del panel 360°).
+  interactionsFor(customerId, limit = 20) {
+    return db.prepare(
+      `SELECT id, kind, reason, message, user_id, created_at
+         FROM customer_interactions
+        WHERE customer_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?`
+    ).all(customerId, limit);
+  },
+
+  // ── Cliente 360° (F1) ──────────────────────────
+  // RFM+ de 6 ejes + hábitos de compra + crédito, todo offline sobre datos
+  // que ya existen. Devuelve null si el cliente no existe.
+  customer360(customerId) {
+    const c = db.prepare(
+      `SELECT id, name, trade_name, customer_type, phone, rnc, email, address,
+              balance, credit_limit, credit_days, credit_due, status, preferred_price_mode
+         FROM customers WHERE id = ?`
+    ).get(customerId);
+    if (!c) return null;
+
+    // Ventas confirmadas (excluye cotizaciones/anuladas/devoluciones).
+    const sales = db.prepare(`
+      SELECT id, total, ncf, created_at,
+             CAST(julianday('now','localtime') - julianday(created_at) AS INTEGER) AS days_ago
+        FROM sales
+       WHERE customer_id = ? AND type='factura' AND status='completed'
+       ORDER BY created_at DESC
+    `).all(customerId);
+
+    const frequency = sales.length;
+    const monetary  = sales.reduce((s, x) => s + (x.total || 0), 0);
+    const recency   = frequency ? sales[0].days_ago : null;
+    const lastSale  = frequency ? sales[0].created_at : null;
+    const firstSale = frequency ? sales[frequency - 1].created_at : null;
+    const avgTicket = frequency ? monetary / frequency : 0;
+
+    // Eje 4 — Margen real aportado (ingreso de ítems − costo). Si el costo es 0
+    // en todos los ítems (típico de data importada sin costo), el margen no es
+    // confiable: marcamos marginKnown=false para no mostrar "100% de margen".
+    const marginRow = db.prepare(`
+      SELECT COALESCE(SUM(si.subtotal), 0)          AS revenue,
+             COALESCE(SUM(si.unit_cost * si.qty), 0) AS cost
+        FROM sale_items si JOIN sales s ON s.id = si.sale_id
+       WHERE s.customer_id = ? AND s.type='factura' AND s.status='completed'
+    `).get(customerId);
+    const marginKnown = (marginRow.cost || 0) > 0;
+    const margin      = marginKnown ? (marginRow.revenue - marginRow.cost) : 0;
+    const marginPct   = (marginKnown && marginRow.revenue > 0)
+      ? (margin / marginRow.revenue) * 100 : 0;
+
+    // Eje 5 — Tendencia: gasto últimos 90 días vs los 90 previos.
+    const t = db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN julianday('now','localtime')-julianday(created_at) <= 90 THEN total END),0) AS recent,
+        COALESCE(SUM(CASE WHEN julianday('now','localtime')-julianday(created_at) > 90
+                      AND julianday('now','localtime')-julianday(created_at) <= 180 THEN total END),0) AS previous
+        FROM sales
+       WHERE customer_id = ? AND type='factura' AND status='completed'
+    `).get(customerId);
+    let direction = 'estable';
+    if (t.recent > t.previous * 1.15 && t.recent > 0) direction = 'subiendo';
+    else if (t.recent < t.previous * 0.85) direction = 'bajando';
+
+    // Eje 6 — Comportamiento de pago (crédito vencido o estado del cliente).
+    const overdue = !!(c.balance > 0 && c.credit_due && new Date(c.credit_due) < new Date());
+    const paymentStatus = (c.status === 'moroso' || overdue)
+      ? 'moroso'
+      : (c.status === 'bloqueado' ? 'bloqueado' : 'al_dia');
+
+    // "Suele comprar" — productos más recurrentes de este cliente.
+    const topProducts = db.prepare(`
+      SELECT si.product_name AS name, SUM(si.qty) AS qty, COUNT(DISTINCT si.sale_id) AS times
+        FROM sale_items si JOIN sales s ON s.id = si.sale_id
+       WHERE s.customer_id = ? AND s.type='factura' AND s.status='completed'
+       GROUP BY COALESCE(si.product_id, si.product_code), si.product_name
+       ORDER BY times DESC, qty DESC
+       LIMIT 5
+    `).all(customerId);
+
+    // Recompra prevista del producto más frecuente (promedio de días entre compras).
+    let nextRepurchase = null;
+    if (topProducts.length) {
+      const top = topProducts[0];
+      const g = db.prepare(`
+        SELECT MIN(s.created_at) AS first, MAX(s.created_at) AS last, COUNT(DISTINCT s.id) AS n
+          FROM sale_items si JOIN sales s ON s.id = si.sale_id
+         WHERE s.customer_id = ? AND s.type='factura' AND s.status='completed'
+           AND si.product_name = ?
+      `).get(customerId, top.name);
+      if (g.n >= 2) {
+        const span = (new Date(g.last) - new Date(g.first)) / 86400000;
+        const avgDays = Math.max(1, Math.round(span / (g.n - 1)));
+        const daysSince = Math.round((Date.now() - new Date(g.last)) / 86400000);
+        nextRepurchase = { product: top.name, avgDays, daysSince, due: daysSince >= avgDays * 0.85 };
+      }
+    }
+
+    // Segmento (misma lógica del panel de inicio) + puntajes RFM 1–5.
+    const segment = _crmSegmentOf({ freq: frequency, recency });
+    const rScore = recency == null ? 1 : recency <= 15 ? 5 : recency <= 45 ? 4 : recency <= 90 ? 3 : recency <= 180 ? 2 : 1;
+    const fScore = frequency >= 10 ? 5 : frequency >= 5 ? 4 : frequency >= 3 ? 3 : frequency >= 1 ? 2 : 1;
+    const mScore = monetary >= 100000 ? 5 : monetary >= 50000 ? 4 : monetary >= 20000 ? 3 : monetary >= 5000 ? 2 : 1;
+
+    const interactions = db.prepare(
+      `SELECT id, kind, reason, message, user_id, created_at
+         FROM customer_interactions WHERE customer_id = ?
+        ORDER BY created_at DESC LIMIT 10`
+    ).all(customerId);
+
+    return {
+      customer: c,
+      metrics: { recency, frequency, monetary, margin, marginKnown, marginPct, avgTicket, firstSale, lastSale },
+      trend: { recent: t.recent, previous: t.previous, direction },
+      payment: { status: paymentStatus, overdue },
+      segment,
+      rfm: { r: rScore, f: fScore, m: mScore },
+      topProducts,
+      nextRepurchase,
+      recentSales: sales.slice(0, 10),
+      interactions,
+    };
+  },
+
+  // ── Cerebro de inventario (F2) ─────────────────
+  // Segmenta cada producto activo por demanda/rotación/antigüedad, 100% offline
+  // sobre products + sale_items + inventory_movements que ya existen.
+  inventoryOverview() {
+    const products = db.prepare(
+      `SELECT id, name, code, category, stock, stock_min, cost, price, created_at
+         FROM products WHERE active=1`
+    ).all();
+
+    const soldRows = db.prepare(`
+      SELECT si.product_id AS pid,
+             SUM(CASE WHEN julianday('now','localtime')-julianday(s.created_at) <= 90 THEN si.qty ELSE 0 END) AS qty90,
+             SUM(si.qty) AS qtyTotal,
+             MAX(s.created_at) AS lastSale
+        FROM sale_items si JOIN sales s ON s.id = si.sale_id
+       WHERE s.type='factura' AND s.status='completed' AND si.product_id IS NOT NULL
+       GROUP BY si.product_id
+    `).all();
+    const sold = {};
+    soldRows.forEach(r => { sold[r.pid] = r; });
+
+    const entryRows = db.prepare(
+      `SELECT product_id AS pid, MAX(created_at) AS lastEntry
+         FROM inventory_movements WHERE type='entrada' GROUP BY product_id`
+    ).all();
+    const entry = {};
+    entryRows.forEach(r => { entry[r.pid] = r.lastEntry; });
+
+    const now = Date.now();
+    const daysSince = (iso) => iso ? Math.round((now - new Date(String(iso).replace(' ', 'T'))) / 86400000) : null;
+
+    const starQty = _crmLearnedStarQty();
+    const segments = { estrella: 0, estable: 0, reponer: 0, congelado: 0 };
+    const enriched = products.map(p => {
+      const s = sold[p.id] || { qty90: 0, qtyTotal: 0, lastSale: null };
+      const qty90 = s.qty90 || 0;
+      const velocity = qty90 / 90;
+      const daysOfStock = velocity > 0 ? Math.round(p.stock / velocity) : null;
+      const marginPct = p.price > 0 ? (p.price - p.cost) / p.price * 100 : 0;
+      const daysSinceLastSale = daysSince(s.lastSale);
+      const shelfAge = daysSince(entry[p.id] || p.created_at);
+      const segment = _crmProductSegment({
+        stock: p.stock, stockMin: p.stock_min, qty90, qtyTotal: s.qtyTotal || 0,
+        marginPct, daysSinceLastSale, shelfAge, daysOfStock, starQty,
+      });
+      segments[segment]++;
+      return {
+        id: p.id, name: p.name, code: p.code, stock: p.stock, stockMin: p.stock_min,
+        qty90, daysOfStock, marginPct, daysSinceLastSale, shelfAge,
+        stockValue: (p.stock || 0) * (p.cost || 0), segment,
+      };
+    });
+
+    return {
+      generatedAt: new Date().toISOString(),
+      totalProducts: products.length,
+      withStock: products.filter(p => (p.stock || 0) > 0).length,
+      stockValue: enriched.reduce((s, e) => s + e.stockValue, 0),
+      segments,
+      reorderList: enriched.filter(e => e.segment === 'reponer')
+        .sort((a, b) => (a.daysOfStock ?? 9999) - (b.daysOfStock ?? 9999)).slice(0, 8),
+      deadList: enriched.filter(e => e.segment === 'congelado')
+        .sort((a, b) => b.stockValue - a.stockValue).slice(0, 8),
+      starList: enriched.filter(e => e.segment === 'estrella')
+        .sort((a, b) => b.qty90 - a.qty90).slice(0, 8),
+    };
+  },
+
+  // Ficha 360° de un producto: rotación, margen, antigüedad, "se vende junto
+  // con" y movimientos recientes. Devuelve null si no existe.
+  product360(productId) {
+    const p = db.prepare(
+      `SELECT id, name, code, barcode, category, brand, model, stock, stock_min,
+              cost, price, wholesale, created_at,
+              perishable, shelf_life_months, expiry_date, care_type, care_every_months,
+              last_care_at, storage_note
+         FROM products WHERE id = ?`
+    ).get(productId);
+    if (!p) return null;
+
+    const s = db.prepare(`
+      SELECT SUM(CASE WHEN julianday('now','localtime')-julianday(sa.created_at) <= 90 THEN si.qty ELSE 0 END) AS qty90,
+             SUM(si.qty) AS qtyTotal,
+             MAX(sa.created_at) AS lastSale,
+             COUNT(DISTINCT sa.id) AS timesSold
+        FROM sale_items si JOIN sales sa ON sa.id = si.sale_id
+       WHERE si.product_id = ? AND sa.type='factura' AND sa.status='completed'
+    `).get(productId);
+
+    const qty90 = s.qty90 || 0;
+    const velocity = qty90 / 90;
+    const velocityMonth = Math.round(velocity * 30 * 10) / 10;
+    const daysOfStock = velocity > 0 ? Math.round(p.stock / velocity) : null;
+    const marginPct = p.price > 0 ? (p.price - p.cost) / p.price * 100 : 0;
+
+    const now = Date.now();
+    const daysSince = (iso) => iso ? Math.round((now - new Date(String(iso).replace(' ', 'T'))) / 86400000) : null;
+    const lastEntry = db.prepare(
+      `SELECT MAX(created_at) AS e FROM inventory_movements WHERE product_id = ? AND type='entrada'`
+    ).get(productId).e;
+    const shelfAge = daysSince(lastEntry || p.created_at);
+    const daysSinceLastSale = daysSince(s.lastSale);
+
+    const segment = _crmProductSegment({
+      stock: p.stock, stockMin: p.stock_min, qty90, qtyTotal: s.qtyTotal || 0,
+      marginPct, daysSinceLastSale, shelfAge, daysOfStock, starQty: _crmLearnedStarQty(),
+    });
+
+    const boughtWith = db.prepare(`
+      SELECT si2.product_name AS name, COUNT(DISTINCT si2.sale_id) AS times
+        FROM sale_items si1
+        JOIN sale_items si2 ON si2.sale_id = si1.sale_id AND si2.product_id <> si1.product_id
+        JOIN sales sa ON sa.id = si1.sale_id
+       WHERE si1.product_id = ? AND sa.type='factura' AND sa.status='completed'
+       GROUP BY COALESCE(si2.product_id, si2.product_name)
+       ORDER BY times DESC LIMIT 5
+    `).all(productId);
+
+    const recentMovements = db.prepare(
+      `SELECT type, qty, qty_after, reason, created_at
+         FROM inventory_movements WHERE product_id = ?
+        ORDER BY created_at DESC LIMIT 8`
+    ).all(productId);
+
+    // Estado físico (F2b): caducidad y mantenimiento, si están configurados.
+    const parseD = (iso) => { const dd = new Date(String(iso).replace(' ', 'T')); return isNaN(dd) ? null : dd; };
+    const addM = (iso, months) => { const dd = iso ? parseD(iso) : null; if (!dd || months == null) return null; dd.setMonth(dd.getMonth() + Number(months)); return dd; };
+    const expiryDate = p.expiry_date ? parseD(p.expiry_date)
+      : (p.perishable && p.shelf_life_months ? addM(lastEntry || p.created_at, p.shelf_life_months) : null);
+    let careDue = null;
+    if (p.care_type && p.care_every_months) careDue = addM(p.last_care_at || lastEntry || p.created_at, p.care_every_months);
+    const care = {
+      perishable: !!p.perishable,
+      expiry: expiryDate ? expiryDate.toISOString().slice(0, 10) : null,
+      daysToExpiry: expiryDate ? Math.round((expiryDate - now) / 86400000) : null,
+      careType: p.care_type || '',
+      careEveryMonths: p.care_every_months,
+      lastCareAt: p.last_care_at,
+      daysToCare: careDue ? Math.round((careDue - now) / 86400000) : null,
+      storageNote: p.storage_note || '',
+    };
+
+    return {
+      product: p,
+      metrics: {
+        stock: p.stock, stockMin: p.stock_min, cost: p.cost, price: p.price,
+        marginPct, stockValue: (p.stock || 0) * (p.cost || 0),
+      },
+      sales: {
+        qty90, qtyTotal: s.qtyTotal || 0, timesSold: s.timesSold || 0,
+        lastSale: s.lastSale, velocityMonth, daysOfStock, daysSinceLastSale,
+      },
+      shelfAge, segment, care, boughtWith, recentMovements,
+    };
+  },
+
+  // ── Salud física del inventario (F2b) ──────────
+  // "Revisar en almacén": productos con stock que necesitan atención por
+  // caducidad, mantenimiento o sensibilidad. Solo actúa sobre los productos
+  // que tienen esos atributos configurados (por producto o plantilla).
+  warehouseReview() {
+    const products = db.prepare(
+      `SELECT id, name, code, category, stock, perishable, shelf_life_months, expiry_date,
+              care_type, care_every_months, last_care_at, storage_note, created_at
+         FROM products WHERE active=1`
+    ).all();
+    const entryRows = db.prepare(
+      `SELECT product_id AS pid, MAX(created_at) AS lastEntry
+         FROM inventory_movements WHERE type='entrada' GROUP BY product_id`
+    ).all();
+    const entry = {};
+    entryRows.forEach(r => { entry[r.pid] = r.lastEntry; });
+
+    const now = Date.now();
+    const parse = (iso) => { const d = new Date(String(iso).replace(' ', 'T')); return isNaN(d) ? null : d; };
+    const addMonths = (iso, months) => {
+      const d = iso ? parse(iso) : null;
+      if (!d || months == null) return null;
+      d.setMonth(d.getMonth() + Number(months));
+      return d;
+    };
+
+    const expiring = [], maintenance = [], sensitive = [];
+    products.forEach(p => {
+      if ((p.stock || 0) <= 0) return; // sin stock no hay nada físico que revisar
+      // Caducidad: fecha explícita, o estimada desde la última entrada + vida útil.
+      let expDate = null;
+      if (p.expiry_date) expDate = parse(p.expiry_date);
+      else if (p.perishable && p.shelf_life_months) expDate = addMonths(entry[p.id] || p.created_at, p.shelf_life_months);
+      if (expDate) {
+        const daysToExpiry = Math.round((expDate - now) / 86400000);
+        if (daysToExpiry <= 60) expiring.push({ id: p.id, name: p.name, code: p.code, stock: p.stock, daysToExpiry, expiry: expDate.toISOString().slice(0, 10) });
+      }
+      // Mantenimiento: vencido o por vencer (≤15 días) desde el último cuidado.
+      if (p.care_type && p.care_every_months) {
+        const due = addMonths(p.last_care_at || entry[p.id] || p.created_at, p.care_every_months);
+        if (due) {
+          const daysToCare = Math.round((due - now) / 86400000);
+          if (daysToCare <= 15) maintenance.push({ id: p.id, name: p.name, code: p.code, stock: p.stock, careType: p.care_type, daysOverdue: -daysToCare, lastCare: p.last_care_at });
+        }
+      }
+      if (p.storage_note) sensitive.push({ id: p.id, name: p.name, note: p.storage_note });
+    });
+
+    expiring.sort((a, b) => a.daysToExpiry - b.daysToExpiry);
+    maintenance.sort((a, b) => b.daysOverdue - a.daysOverdue);
+
+    return {
+      generatedAt: new Date().toISOString(),
+      configured: products.filter(p => p.perishable || p.care_type || p.expiry_date).length,
+      expiring: expiring.slice(0, 20),
+      maintenance: maintenance.slice(0, 20),
+      sensitive: sensitive.slice(0, 20),
+    };
+  },
+
+  // Categorías del inventario con su plantilla de cuidado (si existe) y conteo.
+  categoryTemplates() {
+    const cats = db.prepare(
+      `SELECT DISTINCT category FROM products
+        WHERE active=1 AND TRIM(COALESCE(category,'')) <> '' ORDER BY category`
+    ).all().map(r => r.category);
+    const tpls = {};
+    db.prepare(`SELECT * FROM crm_category_care`).all().forEach(t => { tpls[t.category] = t; });
+    return cats.map(c => ({
+      category: c,
+      template: tpls[c] || null,
+      productCount: db.prepare(`SELECT COUNT(*) n FROM products WHERE active=1 AND category=?`).get(c).n,
+    }));
+  },
+
+  // Guarda la plantilla de una categoría y, si applyNow, la aplica a todos sus
+  // productos de una vez (para no configurar miles a mano).
+  saveCategoryTemplate(t) {
+    const params = {
+      category: t.category,
+      perishable: t.perishable ? 1 : 0,
+      shelf_life_months: (t.shelf_life_months === '' || t.shelf_life_months == null) ? null : Number(t.shelf_life_months),
+      care_type: t.care_type || '',
+      care_every_months: (t.care_every_months === '' || t.care_every_months == null) ? null : Number(t.care_every_months),
+      storage_note: t.storage_note || '',
+    };
+    db.prepare(`
+      INSERT INTO crm_category_care(category,perishable,shelf_life_months,care_type,care_every_months,storage_note,updated_at)
+      VALUES(@category,@perishable,@shelf_life_months,@care_type,@care_every_months,@storage_note,datetime('now','localtime'))
+      ON CONFLICT(category) DO UPDATE SET
+        perishable=@perishable, shelf_life_months=@shelf_life_months, care_type=@care_type,
+        care_every_months=@care_every_months, storage_note=@storage_note, updated_at=datetime('now','localtime')
+    `).run(params);
+    let applied = 0;
+    if (t.applyNow) {
+      applied = db.prepare(`
+        UPDATE products SET perishable=@perishable, shelf_life_months=@shelf_life_months,
+          care_type=@care_type, care_every_months=@care_every_months, storage_note=@storage_note,
+          updated_at=datetime('now','localtime')
+        WHERE active=1 AND category=@category
+      `).run(params).changes;
+    }
+    return { ok: true, applied };
+  },
+
+  // Edita los atributos físicos de un producto; markCareDone marca el
+  // mantenimiento como recién hecho (reinicia el reloj del próximo).
+  setProductCare(productId, attrs = {}) {
+    const cur = db.prepare(
+      `SELECT perishable, shelf_life_months, expiry_date, care_type, care_every_months, last_care_at, storage_note
+         FROM products WHERE id = ?`
+    ).get(productId);
+    if (!cur) return { ok: false, error: 'Producto no encontrado' };
+    const next = { ...cur, ...attrs };
+    if (attrs.markCareDone) next.last_care_at = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    const num = (v) => (v === '' || v == null) ? null : Number(v);
+    db.prepare(
+      `UPDATE products SET perishable=?, shelf_life_months=?, expiry_date=?, care_type=?,
+              care_every_months=?, last_care_at=?, storage_note=?, updated_at=datetime('now','localtime')
+        WHERE id = ?`
+    ).run(next.perishable ? 1 : 0, num(next.shelf_life_months), next.expiry_date || null,
+          next.care_type || '', num(next.care_every_months), next.last_care_at || null,
+          next.storage_note || '', productId);
+    return { ok: true };
+  },
+
+  // ── Contactar hoy (F3) ─────────────────────────
+  // Detecta clientes que conviene contactar y REDACTA el mensaje (offline).
+  // El envío es manual: la UI abre WhatsApp con el texto ya escrito.
+  contactToday() {
+    const biz = db.prepare("SELECT value FROM settings WHERE key='biz_name'").get()?.value || 'nuestro negocio';
+    const now = Date.now();
+    const customers = db.prepare(
+      `SELECT id, name, trade_name, customer_type, phone, balance, credit_due, status
+         FROM customers WHERE active=1`
+    ).all();
+    const agg = db.prepare(`
+      SELECT customer_id AS id, COUNT(*) AS freq, MAX(created_at) AS last_sale,
+             CAST(julianday('now','localtime') - julianday(MAX(created_at)) AS INTEGER) AS recency
+        FROM sales WHERE type='factura' AND status='completed' AND customer_id IS NOT NULL
+       GROUP BY customer_id
+    `).all();
+    const byId = {};
+    agg.forEach(a => { byId[a.id] = a; });
+
+    const disp = c => c.customer_type === 'company' ? (c.trade_name || c.name) : c.name;
+    const first = c => String(disp(c) || '').trim().split(/\s+/)[0] || disp(c) || 'estimado cliente';
+
+    const topProductOf = (id) => db.prepare(`
+      SELECT si.product_name AS name FROM sale_items si JOIN sales s ON s.id = si.sale_id
+       WHERE s.customer_id = ? AND s.type='factura' AND s.status='completed'
+       GROUP BY COALESCE(si.product_id, si.product_code), si.product_name
+       ORDER BY COUNT(DISTINCT si.sale_id) DESC LIMIT 1
+    `).get(id)?.name;
+
+    const items = [];
+    customers.forEach(c => {
+      const a = byId[c.id];
+      const name = disp(c), fn = first(c);
+
+      // 1) Crédito por vencer (≤3 días) o vencido — máxima prioridad.
+      if (c.balance > 0 && c.credit_due) {
+        const due = new Date(String(c.credit_due).replace(' ', 'T'));
+        if (!isNaN(due)) {
+          const days = Math.round((due - now) / 86400000);
+          if (days <= 3) {
+            const overdue = days < 0;
+            items.push({
+              customerId: c.id, name, phone: c.phone || '', reasonType: 'credito', priority: overdue ? 0 : 1,
+              reason: overdue ? `Crédito vencido hace ${-days} día(s) · RD$${_crmMoney(c.balance)}`
+                              : (days === 0 ? `Crédito vence hoy · RD$${_crmMoney(c.balance)}` : `Crédito vence en ${days} día(s) · RD$${_crmMoney(c.balance)}`),
+              message: `Hola ${fn}, le saluda ${biz}. Le recordamos que su cuenta por RD$${_crmMoney(c.balance)} ${overdue ? 'está vencida desde el' : 'vence el'} ${_crmDateStr(c.credit_due)}. Cualquier cosa estamos a la orden. ¡Gracias!`,
+            });
+            return; // un solo motivo por cliente
+          }
+        }
+      }
+
+      // 2) Dormido: tenía compras y lleva 60+ días sin volver.
+      if (a && a.recency != null && a.recency >= 60) {
+        const prod = topProductOf(c.id);
+        items.push({
+          customerId: c.id, name, phone: c.phone || '', reasonType: 'dormido', priority: 3,
+          reason: `Sin comprar hace ${a.recency} días`,
+          message: `Hola ${fn}, ¿cómo va todo? Hace un tiempo no le vemos por ${biz}. Ya tenemos mercancía nueva${prod ? ` y contamos con ${prod} que suele llevar` : ''}. ¡Le esperamos!`,
+        });
+        return;
+      }
+
+      // 3) Recompra prevista: su producto habitual entra en ventana de recompra.
+      if (a && a.freq >= 2) {
+        const top = db.prepare(`
+          SELECT si.product_name AS name, MIN(s.created_at) AS first, MAX(s.created_at) AS last, COUNT(DISTINCT s.id) AS n
+            FROM sale_items si JOIN sales s ON s.id = si.sale_id
+           WHERE s.customer_id = ? AND s.type='factura' AND s.status='completed'
+           GROUP BY COALESCE(si.product_id, si.product_code), si.product_name
+           ORDER BY COUNT(DISTINCT s.id) DESC LIMIT 1
+        `).get(c.id);
+        if (top && top.n >= 2) {
+          const span = (new Date(top.last) - new Date(top.first)) / 86400000;
+          const avg = Math.max(1, Math.round(span / (top.n - 1)));
+          const since = Math.round((now - new Date(String(top.last).replace(' ', 'T'))) / 86400000);
+          if (since >= avg * 0.85 && since <= avg * 2) {
+            items.push({
+              customerId: c.id, name, phone: c.phone || '', reasonType: 'recompra', priority: 2,
+              reason: `Recompra de ${top.name}: cada ~${avg} días, van ${since}`,
+              message: `Hola ${fn}, según nuestro registro pronto le tocaría ${top.name}. Lo tenemos en existencia; si quiere se lo apartamos. ¡Saludos!`,
+            });
+          }
+        }
+      }
+    });
+
+    items.sort((x, y) => x.priority - y.priority);
+    return { generatedAt: new Date().toISOString(), count: items.length, items: items.slice(0, 50) };
+  },
+
+  // ── El cerebro que aprende (F-Aprendizaje) ─────
+  // (A) lo aprendido del negocio (percentiles/ritmos propios) y
+  // (B) el bucle de resultados: ¿los contactos registrados llevaron a compra?
+  // Todo offline y explicable — sin caja negra.
+  learningStats() {
+    // (A) Aprendizaje del negocio
+    const salesCount = db.prepare(
+      `SELECT COUNT(*) n FROM sales WHERE type='factura' AND status='completed'`
+    ).get().n;
+    const customersWithPurchases = db.prepare(
+      `SELECT COUNT(DISTINCT customer_id) n FROM sales WHERE type='factura' AND status='completed' AND customer_id IS NOT NULL`
+    ).get().n;
+
+    // "compra grande" = percentil 75 de los totales
+    let bigTicket = 0;
+    if (salesCount > 0) {
+      bigTicket = db.prepare(
+        `SELECT total FROM sales WHERE type='factura' AND status='completed' ORDER BY total LIMIT 1 OFFSET ?`
+      ).get(Math.floor(salesCount * 0.75))?.total || 0;
+    }
+
+    // ritmo típico = mediana de la brecha promedio entre compras (clientes con 2+)
+    const gaps = db.prepare(`
+      SELECT (julianday(MAX(created_at)) - julianday(MIN(created_at))) / (COUNT(*) - 1) AS gap
+        FROM sales WHERE type='factura' AND status='completed' AND customer_id IS NOT NULL
+       GROUP BY customer_id HAVING COUNT(*) >= 2
+    `).all().map(r => r.gap).filter(g => g != null && g > 0).sort((a, b) => a - b);
+    const medianGapDays = gaps.length ? Math.round(gaps[Math.floor(gaps.length / 2)]) : null;
+
+    const starQty = _crmLearnedStarQty();
+
+    const mrow = db.prepare(`
+      SELECT COALESCE(SUM(si.subtotal),0) rev, COALESCE(SUM(si.unit_cost*si.qty),0) cost
+        FROM sale_items si JOIN sales s ON s.id = si.sale_id
+       WHERE s.type='factura' AND s.status='completed'
+    `).get();
+    const avgMarginPct = (mrow.cost > 0 && mrow.rev > 0) ? ((mrow.rev - mrow.cost) / mrow.rev * 100) : null;
+
+    // (B) Efectividad de contactos: interacción seguida de compra dentro de 30 días
+    const inter = db.prepare(`
+      SELECT ci.reason AS reason,
+             SUM(CASE WHEN EXISTS(
+               SELECT 1 FROM sales s
+                WHERE s.customer_id = ci.customer_id AND s.type='factura' AND s.status='completed'
+                  AND s.created_at > ci.created_at
+                  AND julianday(s.created_at) - julianday(ci.created_at) <= 30
+             ) THEN 1 ELSE 0 END) AS bought,
+             COUNT(*) AS sent
+        FROM customer_interactions ci
+       WHERE ci.kind IN ('whatsapp','llamada','recordatorio')
+       GROUP BY ci.reason
+    `).all();
+    const byReason = inter.map(r => ({
+      reason: r.reason || 'otro', sent: r.sent, bought: r.bought,
+      rate: r.sent ? Math.round(r.bought / r.sent * 100) : 0,
+    })).sort((a, b) => b.rate - a.rate);
+    const totSent = byReason.reduce((a, b) => a + b.sent, 0);
+    const totBought = byReason.reduce((a, b) => a + b.bought, 0);
+
+    return {
+      generatedAt: new Date().toISOString(),
+      business: { salesCount, customersWithPurchases, bigTicket, medianGapDays, starQty, avgMarginPct },
+      effectiveness: { sent: totSent, bought: totBought, rate: totSent ? Math.round(totBought / totSent * 100) : 0, byReason },
+    };
+  },
+};
+
 module.exports = {
   suppliersRepo,
   purchasesRepo,
+  crmRepo,
   initDB,
   initDetachedDB,
   ensureUppercasePersistence,
