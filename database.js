@@ -10862,10 +10862,70 @@ const crmRepo = {
   },
 };
 
+// ── Inventario serializado (VELO SUITE / VELO TECH POS) ─────────────────────
+// Rastrea cada unidad física por IMEI/serial. INERTE para auto-repuestos:
+// ningún flujo existente lo invoca y los productos con serialized=0 siguen
+// usando el campo numérico products.stock. Lo consume VELO TECH POS (R5+).
+const productUnitsRepo = {
+  // Alta de una unidad física de un producto serializado.
+  create(u = {}) {
+    const info = db.prepare(`
+      INSERT INTO product_units
+        (product_id, imei, serial, condition, status, unit_cost, color, capacity, warranty_until, notes)
+      VALUES (@product_id, @imei, @serial, @condition, @status, @unit_cost, @color, @capacity, @warranty_until, @notes)
+    `).run({
+      product_id:     u.product_id,
+      imei:           u.imei || null,
+      serial:         u.serial || null,
+      condition:      u.condition || 'nuevo',
+      status:         u.status || 'en_stock',
+      unit_cost:      Number(u.unit_cost) || 0,
+      color:          u.color || '',
+      capacity:       u.capacity || '',
+      warranty_until: u.warranty_until || null,
+      notes:          u.notes || '',
+    });
+    return info.lastInsertRowid;
+  },
+  // Unidades de un producto (opcionalmente filtradas por estado).
+  listForProduct(productId, status = null) {
+    return status
+      ? db.prepare('SELECT * FROM product_units WHERE product_id=? AND status=? ORDER BY id').all(productId, status)
+      : db.prepare('SELECT * FROM product_units WHERE product_id=? ORDER BY id').all(productId);
+  },
+  // Unidades en stock (base del stock de un producto serializado).
+  countInStock(productId) {
+    return db.prepare("SELECT COUNT(*) n FROM product_units WHERE product_id=? AND status='en_stock'").get(productId).n;
+  },
+  // Buscar una unidad por IMEI o serial (venta/garantía por IMEI, R5/R7).
+  findByImei(imei) {
+    const key = String(imei || '').trim();
+    if (!key) return null;
+    return db.prepare(
+      "SELECT * FROM product_units WHERE UPPER(TRIM(COALESCE(imei,'')))=UPPER(?) OR UPPER(TRIM(COALESCE(serial,'')))=UPPER(?) LIMIT 1"
+    ).get(key, key) || null;
+  },
+  // Marca una unidad como vendida y la enlaza a su venta.
+  markSold(unitId, saleId) {
+    return db.prepare(
+      "UPDATE product_units SET status='vendido', sale_id=?, sold_at=datetime('now','localtime') WHERE id=? AND status IN ('en_stock','reservado')"
+    ).run(saleId, unitId).changes;
+  },
+  // Stock EFECTIVO de un producto: por unidades si es serializado; si no, el
+  // campo numérico actual. Helper central para R5 — hoy nadie lo invoca, así que
+  // auto-repuestos no cambia.
+  effectiveStock(productId) {
+    const p = db.prepare('SELECT stock, COALESCE(serialized,0) AS serialized FROM products WHERE id=?').get(productId);
+    if (!p) return 0;
+    return p.serialized ? this.countInStock(productId) : (p.stock || 0);
+  },
+};
+
 module.exports = {
   suppliersRepo,
   purchasesRepo,
   crmRepo,
+  productUnitsRepo,
   initDB,
   initDetachedDB,
   ensureUppercasePersistence,

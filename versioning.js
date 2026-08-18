@@ -1736,6 +1736,44 @@ const MIGRATIONS = [
       console.log(`[MIGRATION 1.40.3-asiento-numero-factura] Asientos con número de factura corregido: ${fixed}`);
     }
   },
+  {
+    version: '1.41.0-product-units-serialized',
+    description: 'VELO SUITE: inventario serializado (opcional). Agrega products.serialized (default 0) y la tabla product_units para rastrear equipos por IMEI/serial. Aditivo e inerte para auto-repuestos (serialized=0): product_units queda vacía y el flujo de venta no cambia. Lo consume VELO TECH POS (R5).',
+    run(db) {
+      // Flag por producto: 0 = fungible (stock numérico, auto-repuestos);
+      // 1 = serializado (cada unidad se rastrea en product_units, TECH).
+      const cols = db.prepare('PRAGMA table_info(products)').all().map(c => c.name);
+      if (!cols.includes('serialized')) {
+        db.prepare('ALTER TABLE products ADD COLUMN serialized INTEGER DEFAULT 0').run();
+      }
+      // Cada unidad física de un producto serializado. Para auto-repuestos queda
+      // vacía; el stock sigue saliendo del campo numérico products.stock.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS product_units (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          product_id     INTEGER NOT NULL REFERENCES products(id),
+          imei           TEXT,
+          serial         TEXT,
+          condition      TEXT DEFAULT 'nuevo',       -- nuevo | usado | reacondicionado
+          status         TEXT DEFAULT 'en_stock'
+                           CHECK(status IN ('en_stock','reservado','vendido','servicio','devuelto')),
+          unit_cost      REAL DEFAULT 0,             -- cada equipo tiene su propio costo
+          color          TEXT DEFAULT '',
+          capacity       TEXT DEFAULT '',
+          warranty_until TEXT,
+          sale_id        INTEGER REFERENCES sales(id),
+          received_at    TEXT DEFAULT (datetime('now','localtime')),
+          sold_at        TEXT,
+          notes          TEXT DEFAULT ''
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_product_units_imei
+          ON product_units(imei) WHERE imei IS NOT NULL AND TRIM(imei)<>'';
+        CREATE INDEX IF NOT EXISTS idx_product_units_lookup
+          ON product_units(product_id, status);
+      `);
+      console.log('[MIGRATION 1.41.0-product-units-serialized] Inventario serializado listo (apagado por defecto)');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════
