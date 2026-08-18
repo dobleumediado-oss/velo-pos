@@ -59,12 +59,34 @@ function _stopSessionHeartbeat() {
 }
 
 // ── Bootstrap ────────────────────────────────
+// ── VELO SUITE: tema del vertical (override-only) ────────────────────────────
+// El :root de styles.css es la paleta por defecto (auto-repuestos, VELO POS).
+// Un vertical SOLO sobrescribe variables CSS si provee un objeto `theme`; VELO
+// POS provee null → esta función retorna sin mutar nada → apariencia idéntica,
+// byte a byte. La única rama que toca :root exige un theme no vacío (TECH, R4).
+async function applyVerticalTheme() {
+  let theme = null;
+  try { const res = await window.api?.app?.getVertical?.(); if (res && res.ok) theme = res.theme; }
+  catch { return; }
+  if (!theme || typeof theme !== 'object') return;   // sin override → nada cambia
+  const root = document.documentElement;
+  for (const [key, value] of Object.entries(theme)) {
+    if (value == null || value === '') continue;
+    const varName = key.startsWith('--') ? key : `--${key}`;
+    if (/^--[a-z0-9-]+$/i.test(varName)) root.style.setProperty(varName, String(value));
+  }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   // Cargar versión de la app para mostrar en login y config
   try {
     const vr = await window.api.version.getInfo();
     window._appVersion = vr?.ok ? vr.data?.appVersion : '1.4.1';
   } catch { window._appVersion = '1.5.5'; }
+
+  // VELO SUITE: aplicar override de tema del vertical antes de pintar la UI.
+  // En VELO POS (auto-repuestos) es un no-op garantizado.
+  try { await applyVerticalTheme(); } catch { /* jamás bloquear el arranque por tema */ }
 
   // ── Multi-terminal: preflight de servidor en modo CLIENTE ──────────────────
   // Si estamos en modo cliente y el servidor NO responde, mostrar la pantalla de
