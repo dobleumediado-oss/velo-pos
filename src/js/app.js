@@ -59,15 +59,36 @@ function _stopSessionHeartbeat() {
 }
 
 // ── Bootstrap ────────────────────────────────
-// ── VELO SUITE: tema del vertical (override-only) ────────────────────────────
-// El :root de styles.css es la paleta por defecto (auto-repuestos, VELO POS).
-// Un vertical SOLO sobrescribe variables CSS si provee un objeto `theme`; VELO
-// POS provee null → esta función retorna sin mutar nada → apariencia idéntica,
-// byte a byte. La única rama que toca :root exige un theme no vacío (TECH, R4).
+// ── VELO SUITE: vertical activo (tema + terminología, cacheado) ──────────────
+// El vertical se pide UNA vez al arrancar y se cachea. Para VELO POS
+// (auto-repuestos) theme=null y terminology={}, así que ni el tema ni los textos
+// cambian: applyVerticalTheme() es no-op y vterm() siempre devuelve el fallback.
+let _vertical = null;
+async function loadVertical() {
+  if (_vertical) return _vertical;
+  try { const res = await window.api?.app?.getVertical?.(); if (res && res.ok) _vertical = res; } catch {}
+  _vertical = _vertical || { id: 'auto_parts', theme: null, terminology: {}, modules: {}, serialized: false };
+  window._vertical = _vertical;
+  return _vertical;
+}
+
+// Terminología por rubro con FALLBACK al texto actual. auto-repuestos tiene
+// terminology vacío → siempre retorna el fallback → nada cambia hasta que un
+// vertical (TECH, R4) provea sus textos y se adopte vterm() en la UI, label a
+// label. Uso: vterm('product_singular', 'Repuesto').
+function vterm(key, fallback) {
+  const term = (window._vertical && window._vertical.terminology) || {};
+  const v = term[key];
+  return (v != null && v !== '') ? v : (fallback != null ? fallback : key);
+}
+window.vterm = vterm;
+
+// El :root de styles.css es la paleta por defecto; un vertical SOLO sobrescribe
+// variables CSS si provee `theme`. VELO POS → null → sin mutación (byte-idéntico).
+// La única rama que toca :root exige un theme no vacío (TECH, R4).
 async function applyVerticalTheme() {
-  let theme = null;
-  try { const res = await window.api?.app?.getVertical?.(); if (res && res.ok) theme = res.theme; }
-  catch { return; }
+  const v = await loadVertical();
+  const theme = v && v.theme;
   if (!theme || typeof theme !== 'object') return;   // sin override → nada cambia
   const root = document.documentElement;
   for (const [key, value] of Object.entries(theme)) {
