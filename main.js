@@ -961,6 +961,28 @@ ipcMain.handle('app:getTerminalInfo', async () => {
   }
 });
 
+// ── VELO SUITE: vertical (rubro) activo ──────────────────────────────────────
+// El renderer pregunta qué producto de la suite corre (identidad + tema +
+// terminología + módulos + modelo de producto). La AUTORIDAD es el valor
+// COMPILADO en el build (`VELO_VERTICAL`); `settings.business_vertical` es solo
+// un espejo. En VELO POS el vertical es `auto_parts` → comportamiento idéntico.
+ipcMain.handle('app:getVertical', async () => {
+  try {
+    const active = require('./src/verticals').getActiveVertical();
+    return {
+      ok: true,
+      id: active.id,
+      product: active.product || null,
+      serialized: !!active.serialized,
+      theme: active.theme || null,
+      terminology: active.terminology || {},
+      modules: active.modules || {},
+    };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 // ── Conexión multi-terminal — gestión (Fase 3, solo superadmin) ──────────────
 // Handlers ADITIVOS (no tocan los existentes) que alimentan la pantalla
 // "Modo de conexión". La topología es decisión de nivel superadmin.
@@ -7292,6 +7314,10 @@ app.whenReady().then(async () => {
     db = initDB(currentDataDir());
     initVersioning(db, currentDataDir());
     ensureUppercasePersistence();
+    // VELO SUITE: espejar el vertical COMPILADO a settings (autoridad = el build).
+    // Aditivo e idempotente; en VELO POS siempre 'auto_parts'. No altera negocio.
+    try { settingsRepo.set('business_vertical', require('./src/verticals').activeVerticalId()); }
+    catch (e) { logWarn('suite', 'no se pudo fijar business_vertical: ' + e.message); }
     await _configureInstalledServerConsole();
     if (ACTIVE_BUSINESS_ID) {
       logInfo('business', 'Negocio activo al iniciar', {

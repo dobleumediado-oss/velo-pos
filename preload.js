@@ -214,6 +214,7 @@ contextBridge.exposeInMainWorld('api', {
   // ── Terminal / conexión (multi-terminal) ──
   app: {
     getTerminalInfo: () => ipcRenderer.invoke('app:getTerminalInfo'),
+    getVertical:     () => ipcRenderer.invoke('app:getVertical'),
   },
   connection: {
     getInfo:            (data) => ipcRenderer.invoke('connection:getInfo', data),
