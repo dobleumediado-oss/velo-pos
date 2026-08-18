@@ -244,7 +244,12 @@ function _setPosPmode(mode) {
 
 // ── Grid de productos ─────────────────────────
 function _posAvailableStock(product) {
-  return Math.max(0, (Number(product?.stock) || 0) - (Number(product?.reserved_stock) || 0));
+  // Serializado (VELO TECH POS): disponibilidad = unidades en stock. Fungible
+  // (auto-repuestos): campo numérico menos lo reservado en despacho.
+  const base = product && product.serialized
+    ? (Number(product.effective_stock) || 0)
+    : (Number(product?.stock) || 0);
+  return Math.max(0, base - (Number(product?.reserved_stock) || 0));
 }
 
 function renderPOSGrid() {
@@ -431,6 +436,64 @@ function _posHandleScan(code) {
   document.getElementById('pos-search')?.focus();
 }
 
+// Serializado (VELO TECH POS): elegir la UNIDAD (IMEI) a vender. Cada equipo es
+// una línea de 1 con su product_unit_id; el backend valida y descuenta por unidad.
+async function posPickUnitAndAdd(prod) {
+  const inv = currentInv();
+  let units = [];
+  try {
+    const res = await window.api.productUnits.listForProduct({ productId: prod.id, status: 'en_stock' });
+    units = (res && res.ok && Array.isArray(res.data)) ? res.data : [];
+  } catch { units = []; }
+  const inCart = new Set(inv.cart.filter(i => i.product_unit_id).map(i => Number(i.product_unit_id)));
+  const avail = units.filter(u => !inCart.has(Number(u.id)));
+  if (!avail.length) { toast('No hay equipos en stock para vender', 'err'); return; }
+
+  const pm = inv.pmode || 'retail';
+  const price = (pm === 'wholesale' && prod.wholesale > 0) ? prod.wholesale : prod.price;
+  if (!price || price <= 0) { toast(`"${prod.name}" no tiene precio configurado`, 'err'); return; }
+
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const rows = avail.map(u => {
+    const meta = [u.condition, u.color, u.capacity].filter(Boolean).join(' · ');
+    const label = esc(u.imei || u.serial || ('#' + u.id));
+    return `<button class="btn btn-ghost" style="width:100%;display:flex;justify-content:space-between;gap:10px;margin-bottom:6px;text-align:left" onclick="_posPickUnit(${Number(u.id)})"><span style="font-family:var(--mono)">${label}</span><span style="font-size:11px;color:var(--muted2)">${esc(meta)}</span></button>`;
+  }).join('');
+
+  window._posPickUnit = (unitId) => {
+    const u = avail.find(x => Number(x.id) === Number(unitId));
+    if (!u) return;
+    inv.cart.push({
+      pid: prod.id,
+      product_id:   prod.id,
+      product_code: prod.code,
+      product_name: prod.name,
+      name:         `${prod.name} · ${u.imei || u.serial || ('#' + u.id)}`,
+      price,
+      unit_price:   price,
+      unit_cost:    Number(u.unit_cost) || prod.cost || 0,
+      cost:         Number(u.unit_cost) || prod.cost || 0,
+      taxable:      prod.taxable === 0 ? 0 : 1,
+      tax_pct:      parseFloat(prod.tax_pct ?? CFG.itbis ?? 18) || 18,
+      manual_price: false,
+      serialized:   true,
+      product_unit_id: Number(u.id),
+      imei:         u.imei || '',
+      serial:       u.serial || '',
+      qty: 1,
+    });
+    closeModal();
+    renderInvTabs();
+    renderCart();
+  };
+
+  openModal(`
+    <div class="modal-title">Elegir equipo — ${esc(prod.name)}</div>
+    <div style="font-size:12px;color:var(--muted2);margin-bottom:10px">${avail.length} equipo(s) en stock · toca el IMEI a vender</div>
+    <div style="max-height:340px;overflow:auto">${rows}</div>
+  `);
+}
+
 function posAddItem(pid) {
   const inv  = currentInv();
   if (inv.checkoutOrderId) {
@@ -439,6 +502,10 @@ function posAddItem(pid) {
   }
   const prod = DB.products.find(p => p.id === pid);
   if (!prod || _posAvailableStock(prod) <= 0) { toast('Sin disponibilidad', 'err'); return; }
+
+  // Serializado (VELO TECH POS): no se agrega directo — se elige la UNIDAD (IMEI).
+  // Para fungibles (auto-repuestos) esta rama nunca corre y el flujo es idéntico.
+  if (prod.serialized) { posPickUnitAndAdd(prod); return; }
 
   // Animación en la tarjeta del producto
   const card = document.getElementById(`pcard-${pid}`);
@@ -3091,6 +3158,10 @@ async function finalizarVenta() {
     taxable:      _posTaxable(i) ? 1 : 0,
     tax_pct:      _posTaxable(i) ? _posTaxPct(i) : 0,
     qty:          i.qty,
+    // Serializado (VELO TECH POS): pasa la unidad elegida para que el backend la
+    // venda por IMEI. Null/ausente en líneas fungibles → sin efecto.
+    product_unit_id: i.product_unit_id || null,
+    imei:            i.imei || null,
   }));
 
   // Para pago mixto capturar desglose
