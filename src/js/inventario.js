@@ -351,6 +351,7 @@ function renderInvTable() {
           <button class="btn btn-ghost btn-sm" title="Ver kardex" data-action="kardex" data-idx="${idx}">${svg('chart')}</button>
           <button class="btn btn-ghost btn-sm" title="Editar producto" data-action="edit" data-idx="${idx}">${svg('edit')}</button>
           <button class="btn btn-ghost btn-sm" title="Ajustar stock" data-action="ajuste" data-idx="${idx}">${svg('pkg')} Ajuste</button>
+          ${(window._vertical && window._vertical.serialized) ? `<button class="btn btn-ghost btn-sm" title="Registrar equipos (IMEI)" data-action="equipos" data-idx="${idx}">${svg('pkg')} Equipos</button>` : ''}
           <button class="btn btn-ghost btn-sm" style="color:var(--red)" title="Eliminar" data-action="delete" data-idx="${idx}">${svg('trash')}</button>
         </div>
       </td>
@@ -415,6 +416,7 @@ function renderInvTable() {
     if (action === 'kardex') openKardexModal(p);
     else if (action === 'edit')   openProductoModal(p);
     else if (action === 'ajuste') openAjusteModal(p);
+    else if (action === 'equipos') abrirRegistroEquipos(p);
     else if (action === 'delete') confirmModal(
       `¿Eliminar <strong>${p.name}</strong>? El producto quedará inactivo.`,
       () => eliminarProducto(p.id), 'Eliminar'
@@ -423,6 +425,78 @@ function renderInvTable() {
 
   wrap.appendChild(card);
 }
+
+// ── R5c-2 (VELO TECH POS): registrar equipos por IMEI ────────────────────────
+// El botón "Equipos" solo se muestra en el vertical tech (window._vertical.
+// serialized), así que en auto-repuestos esta función jamás se invoca. Registra
+// unidades vía el API ya probado (productUnits.create) y lista las existentes.
+window.abrirRegistroEquipos = async function (p) {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const money = n => (typeof fmt === 'function') ? fmt(Number(n) || 0) : (Number(n) || 0).toFixed(2);
+  const fetchUnits = async () => {
+    try { const r = await window.api.productUnits.listForProduct({ productId: p.id }); return (r && r.ok && Array.isArray(r.data)) ? r.data : []; }
+    catch { return []; }
+  };
+  const badge = st => {
+    const m = { en_stock: ['#E7F3EA', '#2F7D43', 'En stock'], vendido: ['#EDEBE6', '#6A6A64', 'Vendido'], servicio: ['#FBEFD9', '#9A6410', 'En servicio'], reservado: ['#E6EEFC', '#1D4ED8', 'Reservado'], devuelto: ['#FCEBEB', '#A32D2D', 'Devuelto'] };
+    const [bg, fg, txt] = m[st] || m.en_stock;
+    return `<span style="font-size:10.5px;background:${bg};color:${fg};padding:2px 8px;border-radius:100px">${txt}</span>`;
+  };
+  const render = (units) => {
+    const inStock = units.filter(u => u.status === 'en_stock').length;
+    const rows = units.length ? units.map(u => `<tr style="border-top:0.5px solid var(--line2)">
+        <td style="padding:6px;font-family:var(--mono);font-size:11px">${esc(u.imei || u.serial || ('#' + u.id))}</td>
+        <td style="padding:6px">${esc(u.condition || '')}${u.color ? (' · ' + esc(u.color)) : ''}${u.capacity ? (' · ' + esc(u.capacity)) : ''}</td>
+        <td style="padding:6px;text-align:right;font-family:var(--mono)">${money(u.unit_cost)}</td>
+        <td style="padding:6px">${badge(u.status)}</td></tr>`).join('')
+      : `<tr><td colspan="4" style="padding:10px;color:var(--muted2);text-align:center">Sin equipos registrados</td></tr>`;
+    return `
+      <div class="modal-title">Equipos — ${esc(p.name)}</div>
+      <div style="font-size:12px;color:var(--muted2);margin-bottom:10px">${inStock} en stock · ${units.length} registrado(s)</div>
+      <div style="display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:8px;margin-bottom:8px">
+        <input class="inp" id="eq-imei" placeholder="IMEI o serial *" data-uppercase="off" autocomplete="off">
+        <select class="inp" id="eq-cond"><option value="nuevo">Nuevo</option><option value="usado">Usado</option><option value="reacondicionado">Reacondicionado</option></select>
+        <input class="inp" id="eq-cost" type="number" min="0" step="0.01" placeholder="Costo">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;margin-bottom:12px">
+        <input class="inp" id="eq-color" placeholder="Color" data-uppercase="off">
+        <input class="inp" id="eq-cap" placeholder="Capacidad" data-uppercase="off">
+        <button class="btn btn-dark" id="eq-add">Registrar equipo</button>
+      </div>
+      <div style="max-height:260px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="color:var(--muted2);font-size:10.5px"><th style="text-align:left;padding:6px">IMEI / SERIAL</th><th style="text-align:left;padding:6px">DETALLE</th><th style="text-align:right;padding:6px">COSTO</th><th style="text-align:left;padding:6px">ESTADO</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>
+      <div style="display:flex;justify-content:flex-end;margin-top:12px"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>`;
+  };
+  const wire = () => {
+    const addBtn = document.getElementById('eq-add');
+    if (!addBtn) return;
+    addBtn.onclick = async () => {
+      const imei = document.getElementById('eq-imei')?.value.trim();
+      if (!imei) { toast('Ingresa el IMEI o serial', 'w'); return; }
+      addBtn.disabled = true;
+      try {
+        const res = await window.api.productUnits.create({
+          productId: p.id,
+          units: [{
+            imei,
+            condition: document.getElementById('eq-cond')?.value || 'nuevo',
+            unit_cost: Number(document.getElementById('eq-cost')?.value) || 0,
+            color: document.getElementById('eq-color')?.value.trim() || '',
+            capacity: document.getElementById('eq-cap')?.value.trim() || '',
+          }],
+          requestUserId: user?.id,
+        });
+        if (!res?.ok) throw new Error(res?.error || 'No se pudo registrar el equipo');
+        toast('✓ Equipo registrado', 's');
+        openModal(render(await fetchUnits()));
+        wire();
+      } catch (e) { toast(e.message || 'Error al registrar', 'e'); addBtn.disabled = false; }
+    };
+  };
+  openModal(render(await fetchUnits()));
+  wire();
+};
 
 function invHistDateKey() {
   return `${invHistRange}|${invHistFrom || ''}|${invHistTo || ''}`;
