@@ -116,12 +116,14 @@ price.id = 'pf-price';
 assert.strictEqual(shouldFormatMoneyControl(price), true);
 assert.strictEqual(beginMoneyEntry(price), true);
 assert.strictEqual(price.type, 'text');
-assert.strictEqual(price.value, '1,000.00');
-price.value = '50000.00';
+assert.strictEqual(price.value, '1000');
+price.value = '50,000.00';
 price.selectionStart = 5;
 price.selectionEnd = 5;
 normalizeMoneyEntry(price);
-assert.strictEqual(price.value, '50,000.00');
+assert.strictEqual(price.value, '50000.00');
+assert.strictEqual(Number(price.value), 50000,
+  'un monto activo debe seguir siendo legible por todos los cálculos de la aplicación');
 finishMoneyEntry(price);
 assert.strictEqual(price.type, 'number');
 assert.strictEqual(price.value, '50000.00');

@@ -638,6 +638,56 @@ ok(near(db.prepare("SELECT amount FROM cash_movements WHERE type='abono' AND pay
 ok(DB.salesRepo.getById(creditWithInitial.saleId).notes === 'ENTREGA PARCIAL ACORDADA',
   'las notas del POS quedan persistidas en la venta');
 
+const beforeMixedInitial = DB.customersRepo.getById(custId).balance;
+const bankBeforeMixedInitial = DB.financialAccountsRepo.getById(dopBankAccountId).current_balance;
+const mixedCashSessionId = Number(db.prepare(`
+  INSERT INTO cash_sessions(user_id,cajero,open_date,open_time,open_amount,open_bills,status)
+  VALUES(?,?,date('now','localtime'),time('now','localtime'),0,'{}','open')
+`).run(userId, 'Caja pago inicial mixto').lastInsertRowid);
+const creditWithMixedInitial = DB.salesRepo.create({
+  session: { id: mixedCashSessionId },
+  customer: { id: custId, name: 'Taller Pérez' },
+  items: [itemNoTax(1)],
+  payment: {
+    method: 'credito', initialPaymentAmount: 40,
+    initialPaymentMethod: 'mixto', initialPaymentMixCash: 15,
+    initialPaymentMixNoncash: 25, initialPaymentNoncashMethod: 'transferencia',
+    initialPaymentFinancialAccountId: dopBankAccountId,
+    initialPaymentReference: 'MIX-001',
+  },
+  user, type: 'factura',
+});
+ok(near(DB.customersRepo.getById(custId).balance - beforeMixedInitial, 60),
+  'pago inicial mixto deja a crédito exactamente el total menos sus dos partes');
+const mixedInitialMovements = db.prepare(`
+  SELECT method,amount FROM cash_movements
+  WHERE type='abono' AND payment_id=? ORDER BY amount
+`).all(creditWithMixedInitial.initialPaymentId);
+ok(mixedInitialMovements.length === 2 &&
+   mixedInitialMovements.some(row => row.method === 'efectivo' && near(row.amount, 15)) &&
+   mixedInitialMovements.some(row => row.method === 'transferencia' && near(row.amount, 25)),
+  'pago inicial mixto conserva por separado RD$15 efectivo y RD$25 transferencia');
+ok(near(DB.financialAccountsRepo.getById(dopBankAccountId).current_balance - bankBeforeMixedInitial, 25),
+  'solo la parte no efectiva del pago inicial mixto entra a Bancos y Cuentas');
+const balanceBeforeMixedCancel = DB.customersRepo.getById(custId).balance;
+DB.customersRepo.cancelPayment({
+  id: creditWithMixedInitial.initialPaymentId,
+  reason: 'prueba anulación pago mixto', userId, userName: user.name,
+  sessionId: mixedCashSessionId,
+});
+ok(near(DB.customersRepo.getById(custId).balance - balanceBeforeMixedCancel, 40),
+  'anular el pago inicial mixto restaura exactamente su total a la deuda');
+ok(near(DB.financialAccountsRepo.getById(dopBankAccountId).current_balance, bankBeforeMixedInitial),
+  'anular el pago mixto retira de banco únicamente la parte no efectiva');
+const mixedReversals = db.prepare(`
+  SELECT method,amount FROM cash_movements
+  WHERE type='salida' AND payment_id=? ORDER BY amount
+`).all(creditWithMixedInitial.initialPaymentId);
+ok(mixedReversals.length === 2 &&
+   mixedReversals.some(row => row.method === 'efectivo' && near(row.amount, 15)) &&
+   mixedReversals.some(row => row.method === 'transferencia' && near(row.amount, 25)),
+  'la anulación conserva el desglose del pago mixto en sus contramovimientos');
+
 console.log('\n== E2. Anular factura reconcilia el resumen de caja ==');
 let sessionTotals = db.prepare(
   'SELECT sales_total,sales_count FROM cash_sessions WHERE id=?'

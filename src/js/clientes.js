@@ -710,7 +710,7 @@ async function guardarCliente(id) {
   const billingEmail = document.getElementById('cf-billing-email')?.value?.trim() || '';
   const preferredPriceMode = document.getElementById('cf-price-mode')?.value === 'wholesale' ? 'wholesale' : 'retail';
   const notes = document.getElementById('cf-notes')?.value?.trim() || '';
-  const limit   = parseFloat(document.getElementById('cf-limit')?.value)   || 0;
+  const limit   = _cliEntryNumber(document.getElementById('cf-limit'));
   const days    = parseInt(document.getElementById('cf-days')?.value)       || 30;
   const status  = document.getElementById('cf-status')?.value              || 'activo';
 
@@ -1129,6 +1129,15 @@ function abonoOperationId(customerId) {
   return `payment:${customerId}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function _cliEntryNumber(controlOrValue, fallback = 0) {
+  const value = controlOrValue && typeof controlOrValue === 'object'
+    ? controlOrValue.value : controlOrValue;
+  const raw = typeof unformatMoneyEntryValue === 'function'
+    ? unformatMoneyEntryValue(value) : String(value ?? '').replace(/,/g, '');
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function abonoAwaitConfirmation(operation, requestedTimeoutMs = 0) {
   const testTimeout = Number(window.__VELO_TEST_PAYMENT_TIMEOUT_MS || 0);
   const timeoutMs = Number(requestedTimeoutMs) > 0
@@ -1442,7 +1451,7 @@ function abonoMethodChanged() {
 }
 
 function abonoAmountChanged(balance) {
-  const amount = Math.max(0, Number(document.getElementById('ab-amount')?.value || 0));
+  const amount = Math.max(0, _cliEntryNumber(document.getElementById('ab-amount')));
   const invoices = window._abonoPendingInvoices || [];
   if (invoices.length === 1) {
     const row = invoices[0];
@@ -1460,17 +1469,17 @@ function abonoToggleInvoice(saleId, pending, balance) {
   if (!check.checked) {
     input.value = '';
   } else {
-    const total = Number(document.getElementById('ab-amount')?.value || 0);
+    const total = _cliEntryNumber(document.getElementById('ab-amount'));
     const already = [...document.querySelectorAll('.ab-allocation-amount')]
       .filter(el => el !== input && !el.disabled)
-      .reduce((sum, el) => sum + Number(el.value || 0), 0);
+      .reduce((sum, el) => sum + _cliEntryNumber(el), 0);
     input.value = Math.min(Number(pending || 0), Math.max(0, total - already)).toFixed(2);
   }
   abonoAllocationChanged(balance);
 }
 
 function abonoAutoDistribuir(balance) {
-  let remaining = Math.max(0, Number(document.getElementById('ab-amount')?.value || 0));
+  let remaining = Math.max(0, _cliEntryNumber(document.getElementById('ab-amount')));
   document.querySelectorAll('.ab-invoice-check').forEach(check => {
     const pending = Number(check.dataset.pending || 0);
     const saleId = check.dataset.saleId;
@@ -1502,7 +1511,7 @@ function abonoSaldarTodo(balance) {
 }
 
 function abonoAllocationChanged(balance) {
-  const amt   = parseFloat(document.getElementById('ab-amount')?.value) || 0;
+  const amt = Math.max(0, _cliEntryNumber(document.getElementById('ab-amount')));
   const resto = balance - amt;
   const el    = document.getElementById('ab-resto');
   if (el) {
@@ -1513,7 +1522,7 @@ function abonoAllocationChanged(balance) {
   }
   const allocated = [...document.querySelectorAll('.ab-allocation-amount')]
     .filter(input => !input.disabled)
-    .reduce((sum, input) => sum + Number(input.value || 0), 0);
+    .reduce((sum, input) => sum + _cliEntryNumber(input), 0);
   const remaining = Math.round((amt - allocated) * 100) / 100;
   const historicalMax = Number(window._abonoUnallocatedBalance || 0);
   const summary = document.getElementById('ab-allocation-summary');
@@ -1537,7 +1546,7 @@ function abonoAllocationChanged(balance) {
 }
 
 async function registrarAbono(clientId, balanceActual, replacesPaymentId = null) {
-  const amount = parseFloat(document.getElementById('ab-amount')?.value);
+  const amount = _cliEntryNumber(document.getElementById('ab-amount'), NaN);
   const method = document.getElementById('ab-method')?.value  || 'efectivo';
   const note   = document.getElementById('ab-note')?.value?.trim() || '';
   const financialAccountId = Number(document.getElementById('ab-financial-account')?.value) || null;
@@ -1545,12 +1554,12 @@ async function registrarAbono(clientId, balanceActual, replacesPaymentId = null)
     account => Number(account.id) === financialAccountId
   );
   const exchangeRate = selectedAccount?.currency === 'USD'
-    ? Number(document.getElementById('ab-exchange-rate')?.value || 0) : 1;
+    ? _cliEntryNumber(document.getElementById('ab-exchange-rate')) : 1;
   const contactId = Number(document.getElementById('ab-contact')?.value) || null;
   const allocations = [...document.querySelectorAll('.ab-invoice-check:checked')]
     .map(check => ({
       saleId: Number(check.dataset.saleId),
-      amount: Number(document.getElementById(`ab-alloc-${check.dataset.saleId}`)?.value || 0),
+      amount: _cliEntryNumber(document.getElementById(`ab-alloc-${check.dataset.saleId}`)),
     }))
     .filter(row => row.saleId && row.amount > 0);
 

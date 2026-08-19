@@ -485,7 +485,8 @@ function newInvObj(id) {
     printCopies: 0, printAction: '',
     initialPaymentAmount: 0, initialPaymentMethod: 'efectivo',
     initialPaymentFinancialAccountId: null, initialPaymentExchangeRate: 1,
-    initialPaymentReference: '', notes: '',
+    initialPaymentReference: '', initialPaymentMixCash: 0,
+    initialPaymentMixNoncash: 0, initialPaymentNoncashMethod: 'transferencia', notes: '',
     replacesSaleId: null, replacementDocumentNumber: '',
     sourceQuoteId: null, sourceQuoteNumber: '', ncfType: '',
     saleOperationId: '', saleSubmitting: false

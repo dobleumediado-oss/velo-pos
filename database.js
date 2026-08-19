@@ -3775,6 +3775,13 @@ const customersRepo = {
     }
 
     const method = String(payment.method || 'efectivo').trim().toLowerCase();
+    const originalCashParts = method === 'mixto' ? db.prepare(`
+      SELECT method,SUM(amount) amount
+      FROM cash_movements
+      WHERE payment_id=? AND type='abono'
+      GROUP BY method
+      ORDER BY method
+    `).all(id) : [];
     const requiresCashTrace = !['credito', 'descuento'].includes(method);
     let reversalSession = null;
     if (requiresCashTrace) {
@@ -3899,16 +3906,20 @@ const customersRepo = {
       `).run(restoredBalance, restoredDue, payment.customer_id);
 
       if (requiresCashTrace) {
-        db.prepare(`
+        const insertCashReversal = db.prepare(`
           INSERT INTO cash_movements(
             cash_session_id,type,amount,method,reference_id,payment_id,description,user_id
           ) VALUES(?,?,?,?,?,?,?,?)
-        `).run(
-          reversalSession.id, 'salida', Number(payment.amount || 0),
-          method || 'efectivo', id, id,
+        `);
+        const parts = method === 'mixto' && originalCashParts.length
+          ? originalCashParts
+          : [{ method: method || 'efectivo', amount: Number(payment.amount || 0) }];
+        parts.forEach(part => insertCashReversal.run(
+          reversalSession.id, 'salida', Number(part.amount || 0),
+          String(part.method || 'efectivo'), id, id,
           `Anulación de abono ${payment.document_number_fmt || payment.numero_recibo || '#' + id}: ${reason}`,
           userId || null
-        );
+        ));
       }
 
       return {
@@ -4279,6 +4290,9 @@ function saleOperationFingerprint({ customer, items, payment, type }) {
       salespersonId: Number(payment?.salespersonId) || null,
       initialPaymentAmount: round2(Number(payment?.initialPaymentAmount) || 0),
       initialPaymentMethod: String(payment?.initialPaymentMethod || 'efectivo').toLowerCase(),
+      initialPaymentMixCash: round2(Number(payment?.initialPaymentMixCash) || 0),
+      initialPaymentMixNoncash: round2(Number(payment?.initialPaymentMixNoncash) || 0),
+      initialPaymentNoncashMethod: String(payment?.initialPaymentNoncashMethod || 'transferencia').toLowerCase(),
       initialPaymentFinancialAccountId: Number(payment?.initialPaymentFinancialAccountId) || null,
       initialPaymentExchangeRate: round2(Number(payment?.initialPaymentExchangeRate) || 1),
       initialPaymentReference: String(payment?.initialPaymentReference || '').replace(/\s+/g, ' ').trim(),
@@ -4315,6 +4329,18 @@ function saleConfirmationResult(sale, { idempotent = false } = {}) {
       AND COALESCE(status,'active')='active'
     ORDER BY id LIMIT 1
   `).get(sale.id);
+  const initialMovements = initialPayment ? db.prepare(`
+    SELECT method,amount
+    FROM cash_movements
+    WHERE payment_id=? AND type='abono'
+    ORDER BY id
+  `).all(initialPayment.id) : [];
+  const initialPaymentMixCash = round2(initialMovements
+    .filter(row => String(row.method || '').toLowerCase() === 'efectivo')
+    .reduce((sum, row) => sum + Number(row.amount || 0), 0));
+  const initialPaymentMixNoncash = round2(initialMovements
+    .filter(row => String(row.method || '').toLowerCase() !== 'efectivo')
+    .reduce((sum, row) => sum + Number(row.amount || 0), 0));
   return {
     saleId: Number(sale.id),
     total: Number(sale.total || 0),
@@ -4343,6 +4369,11 @@ function saleConfirmationResult(sale, { idempotent = false } = {}) {
     initialPaymentId: initialPayment?.id || null,
     initialPaymentAmount: Number(initialPayment?.amount || 0),
     initialPaymentMethod: initialPayment?.method || '',
+    initialPaymentMixCash,
+    initialPaymentMixNoncash,
+    initialPaymentNoncashMethod: initialMovements.find(
+      row => String(row.method || '').toLowerCase() !== 'efectivo'
+    )?.method || '',
     outstandingBalance: sale.payment_method === 'credito'
       ? Math.max(0, round2(Number(sale.total || 0) - Number(sale.trade_in_amount || 0) - Number(initialPayment?.amount || 0)))
       : 0,
@@ -4660,6 +4691,13 @@ const salesRepo = {
         ? round2(Number(payment.initialPaymentAmount) || 0)
         : 0;
       const initialPaymentMethod = String(payment.initialPaymentMethod || 'efectivo').toLowerCase();
+      const initialPaymentMixCash = initialPaymentMethod === 'mixto'
+        ? round2(Number(payment.initialPaymentMixCash) || 0) : 0;
+      const initialPaymentMixNoncash = initialPaymentMethod === 'mixto'
+        ? round2(Number(payment.initialPaymentMixNoncash) || 0) : 0;
+      const initialPaymentNoncashMethod = initialPaymentMethod === 'mixto'
+        ? String(payment.initialPaymentNoncashMethod || 'transferencia').toLowerCase()
+        : initialPaymentMethod;
       if (initialPaymentAmount < 0 || initialPaymentAmount > amountDue + 0.01) {
         throw new Error('El pago inicial no puede ser negativo ni superar el total de la factura');
       }
@@ -4673,8 +4711,19 @@ const salesRepo = {
         if (initialPaymentAmount > 0 && !session?.id) {
           throw new Error('Abre la caja antes de recibir el pago inicial');
         }
-        if (!['efectivo','transferencia','tarjeta','cheque'].includes(initialPaymentMethod)) {
+        if (!['efectivo','transferencia','tarjeta','cheque','mixto'].includes(initialPaymentMethod)) {
           throw new Error('Método de pago inicial no válido');
+        }
+        if (initialPaymentMethod === 'mixto' && initialPaymentAmount > 0) {
+          if (!(initialPaymentMixCash > 0) || !(initialPaymentMixNoncash > 0)) {
+            throw new Error('El pago inicial mixto requiere una parte en efectivo y otra no efectiva');
+          }
+          if (!['transferencia','tarjeta'].includes(initialPaymentNoncashMethod)) {
+            throw new Error('Método no efectivo del pago inicial mixto no válido');
+          }
+          if (Math.abs(round2(initialPaymentMixCash + initialPaymentMixNoncash) - initialPaymentAmount) > 0.01) {
+            throw new Error('La distribución del pago inicial mixto no coincide con su total');
+          }
         }
       }
 
@@ -4787,12 +4836,16 @@ const salesRepo = {
       let initialPaymentCurrency = 'DOP';
       let initialExchangeRate = 1;
       let initialAccountAmount = 0;
+      const initialBankMethod = initialPaymentMethod === 'mixto'
+        ? initialPaymentNoncashMethod : initialPaymentMethod;
+      const initialBankBaseAmount = initialPaymentMethod === 'mixto'
+        ? initialPaymentMixNoncash : initialPaymentAmount;
       if (type === 'factura' && method === 'credito' && initialPaymentAmount > 0 &&
-          ['transferencia', 'tarjeta', 'cheque'].includes(initialPaymentMethod)) {
+          ['transferencia', 'tarjeta', 'cheque', 'mixto'].includes(initialPaymentMethod)) {
         let initialAccountId = Number(payment.initialPaymentFinancialAccountId) ||
           Number(payment.financialAccountId) || null;
         if (!initialAccountId) {
-          const preferredType = initialPaymentMethod === 'tarjeta' ? 'tarjeta' : 'banco';
+          const preferredType = initialBankMethod === 'tarjeta' ? 'tarjeta' : 'banco';
           initialAccountId = db.prepare(`
             SELECT id FROM financial_accounts
             WHERE active=1 AND type=?
@@ -4805,10 +4858,10 @@ const salesRepo = {
           : null;
         if (!initialFinancialAccount) {
           throw new Error(
-            `Selecciona una cuenta activa para recibir el pago inicial por ${initialPaymentMethod}`
+            `Selecciona una cuenta activa para recibir el pago inicial por ${initialBankMethod}`
           );
         }
-        if (initialPaymentMethod !== 'tarjeta' && initialFinancialAccount.type !== 'banco') {
+        if (initialBankMethod !== 'tarjeta' && initialFinancialAccount.type !== 'banco') {
           throw new Error('Transferencias y cheques deben recibirse en una cuenta bancaria');
         }
         initialPaymentCurrency = String(initialFinancialAccount.currency || 'DOP').toUpperCase();
@@ -4819,8 +4872,8 @@ const salesRepo = {
           throw new Error('Indica una tasa USD válida para el pago inicial');
         }
         initialAccountAmount = initialPaymentCurrency === 'USD'
-          ? round2(initialPaymentAmount / initialExchangeRate)
-          : initialPaymentAmount;
+          ? round2(initialBankBaseAmount / initialExchangeRate)
+          : initialBankBaseAmount;
       }
 
       // Vendedor asignado: selección explícita del POS o vínculo automático con
@@ -5092,14 +5145,33 @@ const salesRepo = {
             initialIssue.sequence_number, initialIssue.formatted_number,
             initialIssue.sequence_number, initialPaymentId
           );
-          cashRepo.addMovement({
-            sessionId: session.id, type: 'abono',
-            amount: initialPaymentAmount, method: initialPaymentMethod,
-            referenceId: initialPaymentId,
-            paymentId: initialPaymentId,
-            description: `Pago inicial ${documentIssue.formatted_number}`,
-            userId: user.id,
-          });
+          if (initialPaymentMethod === 'mixto') {
+            cashRepo.addMovement({
+              sessionId: session.id, type: 'abono',
+              amount: initialPaymentMixCash, method: 'efectivo',
+              referenceId: initialPaymentId,
+              paymentId: initialPaymentId,
+              description: `Pago inicial ${documentIssue.formatted_number} (efectivo)`,
+              userId: user.id,
+            });
+            cashRepo.addMovement({
+              sessionId: session.id, type: 'abono',
+              amount: initialPaymentMixNoncash, method: initialPaymentNoncashMethod,
+              referenceId: initialPaymentId,
+              paymentId: initialPaymentId,
+              description: `Pago inicial ${documentIssue.formatted_number} (${initialPaymentNoncashMethod})`,
+              userId: user.id,
+            });
+          } else {
+            cashRepo.addMovement({
+              sessionId: session.id, type: 'abono',
+              amount: initialPaymentAmount, method: initialPaymentMethod,
+              referenceId: initialPaymentId,
+              paymentId: initialPaymentId,
+              description: `Pago inicial ${documentIssue.formatted_number}`,
+              userId: user.id,
+            });
+          }
           if (initialFinancialAccount && initialAccountAmount > 0.005) {
             financialAccountsRepo.addMovement({
               accountId: initialFinancialAccount.id,
@@ -5108,10 +5180,10 @@ const salesRepo = {
               description: `Pago inicial ${initialIssue.formatted_number}`,
               referenceType: 'payment',
               referenceId: initialPaymentId,
-              method: initialPaymentMethod,
+              method: initialBankMethod,
               userId: user.id,
               notes: initialPaymentCurrency === 'USD'
-                ? `Base RD$${initialPaymentAmount.toFixed(2)} · Tasa ${initialExchangeRate.toFixed(2)}`
+                ? `Base RD$${initialBankBaseAmount.toFixed(2)} · Tasa ${initialExchangeRate.toFixed(2)}`
                 : String(payment.initialPaymentReference || '').trim().slice(0, 300),
             });
           }
@@ -5203,6 +5275,7 @@ const salesRepo = {
         tradeInAmount, tradeInUnitId: tradeIn ? db.prepare('SELECT trade_in_unit_id FROM sales WHERE id=?').get(saleId).trade_in_unit_id : null,
         cardBrand, cardLast4, paymentReference,
         initialPaymentId, initialPaymentAmount, initialPaymentMethod,
+        initialPaymentMixCash, initialPaymentMixNoncash, initialPaymentNoncashMethod,
         outstandingBalance,
         replacesSaleId,
         convertedQuoteId,
@@ -9260,14 +9333,36 @@ const accountingRepo = {
       const getAccId = (key, fallback) => cfg[key]?.account_id || db.prepare("SELECT id FROM accounting_accounts WHERE code=?").get(fallback)?.id;
 
       const method = String(payment.method || 'efectivo').toLowerCase();
-      const cashAccId = ['transferencia', 'tarjeta', 'cheque'].includes(method)
-        ? getAccId('account_bank', '1103')
-        : getAccId('account_cash', '1101');
+      const cashAccId = getAccId('account_cash', '1101');
+      const bankAccId = getAccId('account_bank', '1103');
       const arAccId = getAccId('account_ar', '1104');
 
+      let cashDebit = 0;
+      let bankDebit = 0;
+      if (method === 'mixto') {
+        const parts = db.prepare(`
+          SELECT method,SUM(amount) amount
+          FROM cash_movements
+          WHERE payment_id=? AND type='abono'
+          GROUP BY method
+        `).all(paymentId);
+        cashDebit = round2(parts
+          .filter(row => String(row.method || '').toLowerCase() === 'efectivo')
+          .reduce((sum, row) => sum + Number(row.amount || 0), 0));
+        bankDebit = round2(parts
+          .filter(row => String(row.method || '').toLowerCase() !== 'efectivo')
+          .reduce((sum, row) => sum + Number(row.amount || 0), 0));
+        const unclassified = round2(Number(payment.amount || 0) - cashDebit - bankDebit);
+        if (unclassified > 0) bankDebit = round2(bankDebit + unclassified);
+      } else if (['transferencia', 'tarjeta', 'cheque'].includes(method)) {
+        bankDebit = round2(Number(payment.amount || 0));
+      } else {
+        cashDebit = round2(Number(payment.amount || 0));
+      }
       const lines = [
-        { account_id: cashAccId, debit: payment.amount, credit: 0, description: `Abono cliente #${payment.customer_id}` },
-        { account_id: arAccId,   debit: 0, credit: payment.amount, description: `Abono cliente #${payment.customer_id}` },
+        ...(cashDebit > 0 ? [{ account_id: cashAccId, debit: cashDebit, credit: 0, description: `Abono cliente #${payment.customer_id} · efectivo` }] : []),
+        ...(bankDebit > 0 ? [{ account_id: bankAccId, debit: bankDebit, credit: 0, description: `Abono cliente #${payment.customer_id} · banco/tarjeta` }] : []),
+        { account_id: arAccId, debit: 0, credit: payment.amount, description: `Abono cliente #${payment.customer_id}` },
       ];
 
       return this.createEntry({

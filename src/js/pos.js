@@ -2177,12 +2177,22 @@ function _posAmountDue(inv, total = calcTotals(inv).total) {
   return Math.max(0, Math.round(((Number(total) || 0) - _posTradeInAmount(inv, total)) * 100) / 100);
 }
 
+function _posEntryNumber(controlOrValue, fallback = 0) {
+  const value = controlOrValue && typeof controlOrValue === 'object'
+    ? controlOrValue.value : controlOrValue;
+  const raw = typeof unformatMoneyEntryValue === 'function'
+    ? unformatMoneyEntryValue(value) : String(value ?? '').replace(/,/g, '');
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function openCobroModal(inv) {
   if (!inv || !inv.cart.length) return;
   const { subtotal, itbis, total, discAmt, disc } = calcTotals(inv);
   const isQuote = inv.itype === 'cotizacion';
   const tradeInAmount = isQuote ? 0 : _posTradeInAmount(inv, total);
   const amountDue = isQuote ? total : _posAmountDue(inv, total);
+  const billingType = inv.pmeth === 'credito' ? 'credito' : 'contado';
   window._cbrBaseTotals = { subtotal, itbis, total, amountDue, tradeInAmount, discAmt, chargesTotal: calcTotals(inv).chargesTotal };
 
   openModal(`
@@ -2304,15 +2314,24 @@ function openCobroModal(inv) {
       <div style="font-size:10.5px;color:var(--muted2);margin-top:4px">La factura aparecerá en el historial y los reportes de esta fecha.</div>
     </div>`}
 
-    <div class="fg" style="${isQuote ? 'display:none' : ''}">
-      <label class="lbl">Método de pago</label>
-      <select class="inp" id="cbr-pmeth" onchange="cbrTogglePago(this.value)">
-        <option value="efectivo"      ${inv.pmeth==='efectivo'?'selected':''}>Efectivo</option>
-        <option value="tarjeta"       ${inv.pmeth==='tarjeta'?'selected':''}>Tarjeta</option>
-        <option value="transferencia" ${inv.pmeth==='transferencia'?'selected':''}>Transferencia</option>
-        <option value="mixto"         ${inv.pmeth==='mixto'?'selected':''}>Pago Mixto</option>
-        <option value="credito"       ${inv.pmeth==='credito'?'selected':''}>Crédito</option>
-      </select>
+    <div class="g2" style="${isQuote ? 'display:none' : ''}">
+      <div class="fg">
+        <label class="lbl">Tipo de facturación</label>
+        <select class="inp" id="cbr-billing-type" onchange="cbrToggleBillingType(this.value)">
+          <option value="contado" ${billingType === 'contado' ? 'selected' : ''}>Al contado</option>
+          <option value="credito" ${billingType === 'credito' ? 'selected' : ''}>A crédito</option>
+        </select>
+      </div>
+      <div class="fg" id="cbr-payment-method-wrap" style="display:${billingType === 'contado' ? 'block' : 'none'}">
+        <label class="lbl">Método de pago</label>
+        <select class="inp" id="cbr-pmeth" onchange="cbrTogglePago(this.value)">
+          <option value="efectivo"      ${inv.pmeth==='efectivo'?'selected':''}>Efectivo</option>
+          <option value="tarjeta"       ${inv.pmeth==='tarjeta'?'selected':''}>Tarjeta</option>
+          <option value="transferencia" ${inv.pmeth==='transferencia'?'selected':''}>Transferencia</option>
+          <option value="mixto"         ${inv.pmeth==='mixto'?'selected':''}>Pago mixto</option>
+          <option value="credito" hidden ${inv.pmeth==='credito'?'selected':''}>Crédito</option>
+        </select>
+      </div>
     </div>
 
     <!-- Transferencia: cuenta bancaria receptora + conversión según moneda -->
@@ -2453,6 +2472,7 @@ function openCobroModal(inv) {
             <option value="transferencia" ${inv.initialPaymentMethod === 'transferencia' ? 'selected' : ''}>Transferencia</option>
             <option value="tarjeta" ${inv.initialPaymentMethod === 'tarjeta' ? 'selected' : ''}>Tarjeta</option>
             <option value="cheque" ${inv.initialPaymentMethod === 'cheque' ? 'selected' : ''}>Cheque</option>
+            <option value="mixto" ${inv.initialPaymentMethod === 'mixto' ? 'selected' : ''}>Mixto</option>
           </select>
         </div>
         <div class="fg" id="cbr-initial-account-wrap" style="display:none">
@@ -2463,6 +2483,28 @@ function openCobroModal(inv) {
               ${Number(inv.initialPaymentFinancialAccountId) === Number(account.id) ? 'selected' : ''}>
               ${posEscHtml(account.name)}${account.bank_name ? ` · ${posEscHtml(account.bank_name)}` : ''}${account.currency === 'USD' ? ' · USD' : ''}
             </option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="card" id="cbr-initial-mixed-wrap" style="display:${inv.initialPaymentMethod === 'mixto' ? 'block' : 'none'};background:var(--blue-bg);border-color:var(--blue-line);margin-bottom:10px">
+        <div style="font-weight:700;font-size:12px;color:var(--blue);margin-bottom:9px">Distribución del pago inicial mixto</div>
+        <div class="g2">
+          <div class="fg" style="margin-bottom:0">
+            <label class="lbl">Efectivo</label>
+            <input class="inp" id="cbr-initial-mix-cash" type="number" min="0" step="0.01"
+                   value="${Number(inv.initialPaymentMixCash || 0).toFixed(2)}" oninput="cbrCalcInitialMix()"/>
+          </div>
+          <div class="fg" style="margin-bottom:0">
+            <label class="lbl">Transferencia / tarjeta</label>
+            <input class="inp" id="cbr-initial-mix-noncash" type="number" min="0" step="0.01"
+                   value="${Number(inv.initialPaymentMixNoncash || 0).toFixed(2)}" oninput="cbrCalcInitialMix()"/>
+          </div>
+        </div>
+        <div class="fg" style="margin:9px 0 0">
+          <label class="lbl">Método de la parte no efectiva</label>
+          <select class="inp" id="cbr-initial-noncash-method" onchange="cbrInitialMethodChanged()">
+            <option value="transferencia" ${(inv.initialPaymentNoncashMethod || 'transferencia') === 'transferencia' ? 'selected' : ''}>Transferencia</option>
+            <option value="tarjeta" ${inv.initialPaymentNoncashMethod === 'tarjeta' ? 'selected' : ''}>Tarjeta</option>
           </select>
         </div>
       </div>
@@ -2600,10 +2642,10 @@ function cbrUpdatePaymentCurrency() {
   const account = _cbrBankAccounts().find(a => Number(a.id) === accountId);
   const isUsd = !!account && String(account.currency || 'DOP').toUpperCase() === 'USD';
   const rateInput = document.getElementById('cbr-exchange-rate');
-  if (isUsd && rateInput && !Number(rateInput.value) && Number(window._cbrUsdRate) > 0) {
+  if (isUsd && rateInput && !_posEntryNumber(rateInput) && Number(window._cbrUsdRate) > 0) {
     rateInput.value = Number(window._cbrUsdRate).toFixed(2);
   }
-  const rate = Number(rateInput?.value || 0);
+  const rate = _posEntryNumber(rateInput);
   const validRate = rate >= 20 && rate <= 500;
   const fxWrap = document.getElementById('cbr-fx-wrap');
   if (fxWrap) fxWrap.style.display = isUsd ? 'block' : 'none';
@@ -2634,7 +2676,7 @@ function cbrUpdatePaymentCurrency() {
     if (!isUsd) detail.textContent = '';
     else if (!validRate) detail.textContent = 'Indica una tasa válida para calcular el depósito.';
     else if (method === 'mixto') {
-      const nonCash = Number(document.getElementById('cbr-mix-card')?.value || 0);
+      const nonCash = _posEntryNumber(document.getElementById('cbr-mix-card'));
       detail.textContent = `Parte no efectiva: ${fmt(nonCash)} → ${_cbrMoney(nonCash / rate, 'USD')}`;
     } else {
       const due = Number(totals.amountDue ?? totals.total);
@@ -2643,7 +2685,24 @@ function cbrUpdatePaymentCurrency() {
   }
 }
 
+function cbrToggleBillingType(type) {
+  const method = document.getElementById('cbr-pmeth');
+  if (!method) return;
+  if (type === 'credito') {
+    if (method.value !== 'credito') currentInv().lastCashPaymentMethod = method.value || 'efectivo';
+    method.value = 'credito';
+  } else if (method.value === 'credito') {
+    method.value = currentInv().lastCashPaymentMethod || 'efectivo';
+  }
+  cbrTogglePago(method.value);
+}
+
 function cbrTogglePago(val) {
+  currentInv().pmeth = val;
+  const billing = document.getElementById('cbr-billing-type');
+  const methodWrap = document.getElementById('cbr-payment-method-wrap');
+  if (billing) billing.value = val === 'credito' ? 'credito' : 'contado';
+  if (methodWrap) methodWrap.style.display = val === 'credito' ? 'none' : 'block';
   document.getElementById('cbr-efec').style.display   = val === 'efectivo'  ? 'block' : 'none';
   document.getElementById('cbr-mixto').style.display  = val === 'mixto'     ? 'block' : 'none';
   document.getElementById('cbr-cred').style.display   = val === 'credito'   ? 'block' : 'none';
@@ -2654,10 +2713,10 @@ function cbrTogglePago(val) {
   const transferRef = document.getElementById('cbr-transfer-ref-wrap');
   if (transferRef) transferRef.style.display = val === 'transferencia' ? 'block' : 'none';
   if (val === 'credito') {
-    const received = Number(document.getElementById('cbr-received')?.value || 0);
+    const received = _posEntryNumber(document.getElementById('cbr-received'));
     const total = _posAmountDue(currentInv());
     const initial = document.getElementById('cbr-initial-payment');
-    if (initial && received > 0 && received < total - 0.005 && Number(initial.value || 0) <= 0) {
+    if (initial && received > 0 && received < total - 0.005 && _posEntryNumber(initial) <= 0) {
       initial.value = received.toFixed(2);
     }
     cbrCalcInitial(total);
@@ -2670,8 +2729,8 @@ function cbrTogglePago(val) {
 function cbrToggleCredito(val) { cbrTogglePago(val); }
 
 function cbrCalcMixto(total = _posAmountDue(currentInv())) {
-  const efec = parseFloat(document.getElementById('cbr-mix-efec')?.value) || 0;
-  const card = parseFloat(document.getElementById('cbr-mix-card')?.value) || 0;
+  const efec = _posEntryNumber(document.getElementById('cbr-mix-efec'));
+  const card = _posEntryNumber(document.getElementById('cbr-mix-card'));
   const suma = efec + card;
   const diff = suma - total;
   const el   = document.getElementById('cbr-mix-status');
@@ -2694,7 +2753,7 @@ function cbrCalcMixto(total = _posAmountDue(currentInv())) {
 }
 
 function cbrCalcCambio(total = _posAmountDue(currentInv())) {
-  const rec    = parseFloat(document.getElementById('cbr-received')?.value) || 0;
+  const rec    = _posEntryNumber(document.getElementById('cbr-received'));
   const cambio = rec - total;
   const el     = document.getElementById('cbr-cambio');
   if (!el) return;
@@ -2707,7 +2766,7 @@ function cbrCalcCambio(total = _posAmountDue(currentInv())) {
     window._cbrAutoCreditTimer = setTimeout(() => {
       const method = document.getElementById('cbr-pmeth');
       if (!method || method.value !== 'efectivo') return;
-      const currentReceived = Number(document.getElementById('cbr-received')?.value || 0);
+      const currentReceived = _posEntryNumber(document.getElementById('cbr-received'));
       if (!(currentReceived > 0 && currentReceived < total - 0.005)) return;
       method.value = 'credito';
       const initial = document.getElementById('cbr-initial-payment');
@@ -2721,7 +2780,7 @@ function cbrCalcCambio(total = _posAmountDue(currentInv())) {
 
 function cbrCalcInitial(total = _posAmountDue(currentInv())) {
   const input = document.getElementById('cbr-initial-payment');
-  const paid = Math.max(0, Number(input?.value || 0));
+  const paid = Math.max(0, _posEntryNumber(input));
   const pending = Math.max(0, total - paid);
   currentInv().initialPaymentAmount = paid;
   const el = document.getElementById('cbr-credit-balance');
@@ -2730,13 +2789,41 @@ function cbrCalcInitial(total = _posAmountDue(currentInv())) {
   }
 }
 
+function cbrCalcInitialMix(total = _posAmountDue(currentInv())) {
+  const cash = Math.max(0, _posEntryNumber(document.getElementById('cbr-initial-mix-cash')));
+  const noncash = Math.max(0, _posEntryNumber(document.getElementById('cbr-initial-mix-noncash')));
+  const paid = Math.round((cash + noncash) * 100) / 100;
+  const input = document.getElementById('cbr-initial-payment');
+  if (input) input.value = paid.toFixed(2);
+  currentInv().initialPaymentMixCash = cash;
+  currentInv().initialPaymentMixNoncash = noncash;
+  cbrCalcInitial(total);
+}
+
 function cbrInitialMethodChanged() {
   const method = document.getElementById('cbr-initial-method')?.value || 'efectivo';
-  const bankMethod = ['transferencia','tarjeta','cheque'].includes(method);
+  const mixed = method === 'mixto';
+  const noncashMethod = document.getElementById('cbr-initial-noncash-method')?.value || 'transferencia';
+  const bankMethod = mixed || ['transferencia','tarjeta','cheque'].includes(method);
   const accountWrap = document.getElementById('cbr-initial-account-wrap');
   const detail = document.getElementById('cbr-initial-bank-detail');
   const account = document.getElementById('cbr-initial-account');
+  const initialInput = document.getElementById('cbr-initial-payment');
+  const cashInput = document.getElementById('cbr-initial-mix-cash');
+  const noncashInput = document.getElementById('cbr-initial-mix-noncash');
   const exchangeWrap = document.getElementById('cbr-initial-exchange-wrap');
+  const mixedWrap = document.getElementById('cbr-initial-mixed-wrap');
+  if (mixedWrap) mixedWrap.style.display = mixed ? 'block' : 'none';
+  if (initialInput) initialInput.readOnly = mixed;
+  if (mixed) {
+    const existingTotal = Math.max(0, _posEntryNumber(initialInput));
+    if (_posEntryNumber(cashInput) <= 0 && _posEntryNumber(noncashInput) <= 0 && existingTotal > 0 && cashInput) {
+      cashInput.value = existingTotal.toFixed(2);
+    }
+    cbrCalcInitialMix();
+  } else {
+    cbrCalcInitial();
+  }
   if (accountWrap) accountWrap.style.display = bankMethod ? 'block' : 'none';
   if (detail) detail.style.display = bankMethod ? 'grid' : 'none';
   const selected = account?.options?.[account.selectedIndex];
@@ -2744,6 +2831,7 @@ function cbrInitialMethodChanged() {
     exchangeWrap.style.display =
       bankMethod && selected?.dataset?.currency === 'USD' ? 'block' : 'none';
   }
+  currentInv().initialPaymentNoncashMethod = mixed ? noncashMethod : method;
 }
 
 function cbrRefreshTotals(oldTotal = null) {
@@ -2762,7 +2850,7 @@ function cbrRefreshTotals(oldTotal = null) {
   setText('cbr-summary-charges', fmt(totals.chargesTotal));
   setText('cbr-summary-total', fmt(totals.total));
   const received = document.getElementById('cbr-received');
-  if (received && (!received.value || oldTotal == null || Math.abs(Number(received.value) - Number(oldTotal)) < 0.01)) {
+  if (received && (!received.value || oldTotal == null || Math.abs(_posEntryNumber(received) - Number(oldTotal)) < 0.01)) {
     received.value = amountDue.toFixed(2);
   }
   cbrCalcCambio(amountDue);
@@ -3093,7 +3181,7 @@ async function finalizarVenta() {
   const selectedAccount = _cbrBankAccounts().find(a => Number(a.id) === Number(finAcctId));
   const accountCurrency = String(selectedAccount?.currency || 'DOP').toUpperCase();
   const exchangeRate = accountCurrency === 'USD'
-    ? Number(document.getElementById('cbr-exchange-rate')?.value || 0) : 1;
+    ? _posEntryNumber(document.getElementById('cbr-exchange-rate')) : 1;
   const cardBrand = pmeth === 'tarjeta'
     ? document.getElementById('cbr-card-brand')?.value || '' : '';
   const cardLast4 = pmeth === 'tarjeta'
@@ -3104,19 +3192,29 @@ async function finalizarVenta() {
       ? document.getElementById('cbr-transfer-ref')?.value?.trim() || '' : '');
   const btnConfirmar = document.getElementById('btn-confirmar-venta');
   const salespersonId = parseInt(document.getElementById('cbr-salesperson')?.value) || null;
-  const initialPaymentAmount = pmeth === 'credito'
-    ? Number(document.getElementById('cbr-initial-payment')?.value || 0) : 0;
   const initialPaymentMethod = pmeth === 'credito'
     ? (document.getElementById('cbr-initial-method')?.value || 'efectivo') : 'efectivo';
+  const initialPaymentMixCash = pmeth === 'credito' && initialPaymentMethod === 'mixto'
+    ? Math.max(0, _posEntryNumber(document.getElementById('cbr-initial-mix-cash'))) : 0;
+  const initialPaymentMixNoncash = pmeth === 'credito' && initialPaymentMethod === 'mixto'
+    ? Math.max(0, _posEntryNumber(document.getElementById('cbr-initial-mix-noncash'))) : 0;
+  const initialPaymentNoncashMethod = pmeth === 'credito' && initialPaymentMethod === 'mixto'
+    ? (document.getElementById('cbr-initial-noncash-method')?.value || 'transferencia')
+    : initialPaymentMethod;
+  const initialPaymentAmount = pmeth === 'credito'
+    ? (initialPaymentMethod === 'mixto'
+      ? Math.round((initialPaymentMixCash + initialPaymentMixNoncash) * 100) / 100
+      : Math.max(0, _posEntryNumber(document.getElementById('cbr-initial-payment'))))
+    : 0;
   const initialPaymentFinancialAccountId = pmeth === 'credito' &&
-    ['transferencia','tarjeta','cheque'].includes(initialPaymentMethod)
+    ['transferencia','tarjeta','cheque','mixto'].includes(initialPaymentMethod)
     ? (Number(document.getElementById('cbr-initial-account')?.value) || null)
     : null;
   const initialAccount = _cbrBankAccounts().find(
     account => Number(account.id) === Number(initialPaymentFinancialAccountId)
   );
   const initialPaymentExchangeRate = initialAccount?.currency === 'USD'
-    ? Number(document.getElementById('cbr-initial-exchange-rate')?.value || 0) : 1;
+    ? _posEntryNumber(document.getElementById('cbr-initial-exchange-rate')) : 1;
   const initialPaymentReference =
     document.getElementById('cbr-initial-reference')?.value?.trim() || '';
   const saleNotes = document.getElementById('cbr-notes')?.value?.trim() || '';
@@ -3153,6 +3251,9 @@ async function finalizarVenta() {
   inv.salespersonId = salespersonId;
   inv.initialPaymentAmount = initialPaymentAmount;
   inv.initialPaymentMethod = initialPaymentMethod;
+  inv.initialPaymentMixCash = initialPaymentMixCash;
+  inv.initialPaymentMixNoncash = initialPaymentMixNoncash;
+  inv.initialPaymentNoncashMethod = initialPaymentNoncashMethod;
   inv.initialPaymentFinancialAccountId = initialPaymentFinancialAccountId;
   inv.initialPaymentExchangeRate = initialPaymentExchangeRate;
   inv.initialPaymentReference = initialPaymentReference;
@@ -3188,8 +3289,13 @@ async function finalizarVenta() {
       toast('El pago inicial debe ser menor que el total; si paga todo usa una venta al contado', 'w');
       return;
     }
+    if (initialPaymentAmount > 0 && initialPaymentMethod === 'mixto' &&
+        (!(initialPaymentMixCash > 0) || !(initialPaymentMixNoncash > 0))) {
+      toast('En un pago inicial mixto indica una parte en efectivo y otra por transferencia o tarjeta', 'w');
+      return;
+    }
     if (initialPaymentAmount > 0 &&
-        ['transferencia','tarjeta','cheque'].includes(initialPaymentMethod) &&
+        ['transferencia','tarjeta','cheque','mixto'].includes(initialPaymentMethod) &&
         !initialPaymentFinancialAccountId) {
       toast('Selecciona la cuenta que recibe el pago inicial', 'w');
       return;
@@ -3204,8 +3310,8 @@ async function finalizarVenta() {
   // Validar pago mixto: los montos deben sumar el total
   if (!isQuote && pmeth === 'mixto') {
     const total = currentTotal;
-    const efec = parseFloat(document.getElementById('cbr-mix-efec')?.value) || 0;
-    const card = parseFloat(document.getElementById('cbr-mix-card')?.value) || 0;
+    const efec = _posEntryNumber(document.getElementById('cbr-mix-efec'));
+    const card = _posEntryNumber(document.getElementById('cbr-mix-card'));
     const suma = efec + card;
     if (suma < total - 0.01) {
       toast(`Los montos no cubren el total. Faltan ${fmt(total - suma)}`, 'err');
@@ -3216,7 +3322,7 @@ async function finalizarVenta() {
   // Validar que el efectivo recibido cubra el total
   if (!isQuote && pmeth === 'efectivo') {
     const total = currentTotal;
-    const received = parseFloat(document.getElementById('cbr-received')?.value) || 0;
+    const received = _posEntryNumber(document.getElementById('cbr-received'));
     if (received < total - 0.01) {
       toast(`El monto recibido (${fmt(received)}) no cubre el total (${fmt(total)})`, 'err');
       return;
@@ -3262,8 +3368,8 @@ async function finalizarVenta() {
   // Para pago mixto capturar desglose
   let mixEfec = 0, mixCard = 0;
   if (pmeth === 'mixto') {
-    mixEfec = parseFloat(document.getElementById('cbr-mix-efec')?.value) || 0;
-    mixCard = parseFloat(document.getElementById('cbr-mix-card')?.value) || 0;
+    mixEfec = _posEntryNumber(document.getElementById('cbr-mix-efec'));
+    mixCard = _posEntryNumber(document.getElementById('cbr-mix-card'));
   }
 
   const priceAuthOk = await posEnsureSalePriceAuthorization(
@@ -3321,6 +3427,9 @@ async function finalizarVenta() {
       printAction: inv.printAction || 'print',
       initialPaymentAmount,
       initialPaymentMethod,
+      initialPaymentMixCash,
+      initialPaymentMixNoncash,
+      initialPaymentNoncashMethod,
       initialPaymentFinancialAccountId,
       initialPaymentExchangeRate,
       initialPaymentReference,

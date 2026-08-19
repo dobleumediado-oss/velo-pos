@@ -121,8 +121,12 @@
     control.dataset.moneyEditing = 'true';
     if (String(control.type).toLowerCase() === 'number') control.type = 'text';
     control.inputMode = 'decimal';
-    control.value = formatMoneyEntryValue(before);
-    setMoneySelection(control, mapCaretWithGrouping(control.value, rawPosition));
+    // Durante la edición el valor debe permanecer numérico puro. Varias
+    // pantallas recalculan en `input`/`change` y Number('1,000.00') es NaN,
+    // mientras parseFloat('10,000.00') devuelve 10. Mantener `10000.00` evita
+    // que una mejora visual altere cualquier operación financiera.
+    control.value = unformatMoneyEntryValue(before);
+    setMoneySelection(control, Math.min(rawPosition, control.value.length));
     return true;
   }
 
@@ -141,9 +145,9 @@
     const before = String(control.value ?? '');
     const start = Number.isInteger(control.selectionStart) ? control.selectionStart : before.length;
     const end = Number.isInteger(control.selectionEnd) ? control.selectionEnd : start;
-    const after = formatMoneyEntryValue(before);
+    const after = unformatMoneyEntryValue(before);
     control.value = after;
-    setMoneySelection(control, mapCaretWithGrouping(after, start), mapCaretWithGrouping(after, end));
+    setMoneySelection(control, Math.min(start, after.length), Math.min(end, after.length));
     return after !== before;
   }
 
@@ -261,8 +265,10 @@
       normalizeUppercaseEntry(event.target);
       const control = event.target;
       if (control?.dataset?.moneyEditing === 'true') {
-        const schedule = typeof queueMicrotask === 'function' ? queueMicrotask : (fn => setTimeout(fn, 0));
-        schedule(() => normalizeMoneyEntry(control));
+        // Este listener corre en captura, antes de los `oninput` de cada modal.
+        // Normalizar aquí mismo garantiza que todos esos cálculos reciban el
+        // número limpio incluso cuando el usuario pega un monto con comas.
+        normalizeMoneyEntry(control);
       }
     }, true);
     document.addEventListener('change', event => {

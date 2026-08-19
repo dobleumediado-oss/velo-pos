@@ -103,6 +103,7 @@ renderCart=()=>{__renderCartCalls++};
 this.__posDiscount={
   posDiscConPin,calcTotals,posSetQty,posCommitQty,
   posCommitPriceOnChange,posCommitPriceOnEnter,
+  entryNumber:_posEntryNumber,cbrCalcInitial,cbrToggleBillingType,
   renderCalls:()=>__renderCartCalls
 };
 this.__posCustomers={pvCustomerMatches,pvCustomerOptions,pvFilterCustomers,pvSelectCustomer,posSelectCustomer,_setPosPmode};
@@ -112,6 +113,39 @@ const discount = context.__posDiscount;
 const customers = context.__posCustomers;
 const transfer = context.__posTransfer;
 context.toast = () => {};
+
+assert.strictEqual(discount.entryNumber('10,000.00'), 10000,
+  'los importes agrupados deben convertirse completos, no en 10');
+element('cbr-initial-payment').value = '1,000.00';
+element('cbr-credit-balance');
+state.currentInv().cart = [{ name: 'Factura crédito', price: 5050, qty: 1, taxable: 0 }];
+discount.cbrCalcInitial(5050);
+assert.strictEqual(state.currentInv().initialPaymentAmount, 1000,
+  'el pago inicial RD$1,000 debe guardarse como 1000');
+assert(elements.get('cbr-credit-balance').innerHTML.includes('RD$4,050.00'),
+  'RD$5,050 menos RD$1,000 debe dejar RD$4,050 a crédito');
+console.log('  ✓ importes con separador de miles conservan su valor y saldo exacto');
+state.currentInv().cart = [{ name: 'Artículo', price: 105, qty: 1, taxable: 1, tax_pct: 18 }];
+
+[
+  'cbr-pmeth','cbr-billing-type','cbr-payment-method-wrap','cbr-efec','cbr-mixto','cbr-cred',
+  'cbr-acct-wrap','cbr-card-wrap','cbr-transfer-ref-wrap','cbr-received','cbr-initial-payment',
+  'cbr-initial-method','cbr-initial-noncash-method','cbr-initial-account-wrap',
+  'cbr-initial-bank-detail','cbr-initial-account','cbr-initial-exchange-wrap',
+  'cbr-initial-mixed-wrap','cbr-initial-mix-cash','cbr-initial-mix-noncash',
+].forEach(element);
+elements.get('cbr-pmeth').value = 'efectivo';
+elements.get('cbr-initial-method').value = 'efectivo';
+elements.get('cbr-initial-noncash-method').value = 'transferencia';
+discount.cbrToggleBillingType('credito');
+assert.strictEqual(elements.get('cbr-pmeth').value, 'credito');
+assert.strictEqual(elements.get('cbr-payment-method-wrap').style.display, 'none',
+  'crédito debe ocultar el método de cobro total y mostrar sus opciones propias');
+discount.cbrToggleBillingType('contado');
+assert.strictEqual(elements.get('cbr-pmeth').value, 'efectivo');
+assert.strictEqual(elements.get('cbr-payment-method-wrap').style.display, 'block',
+  'volver a contado debe recuperar el último método utilizado');
+console.log('  ✓ separa tipo de facturación contado/crédito sin perder el método de pago');
 
 const pctInput = { value: '4' };
 discount.posDiscConPin(pctInput, '4');
