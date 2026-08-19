@@ -100,7 +100,11 @@ state.currentInv().cart.push({ name: 'Artículo', price: 105, qty: 1, taxable: 1
 const posSource = fs.readFileSync(path.join(root, 'src/js/pos.js'), 'utf8');
 vm.runInContext(`${posSource}\nlet __renderCartCalls=0;
 renderCart=()=>{__renderCartCalls++};
-this.__posDiscount={posDiscConPin,calcTotals,posSetQty,posCommitQty,renderCalls:()=>__renderCartCalls};
+this.__posDiscount={
+  posDiscConPin,calcTotals,posSetQty,posCommitQty,
+  posCommitPriceOnChange,posCommitPriceOnEnter,
+  renderCalls:()=>__renderCartCalls
+};
 this.__posCustomers={pvCustomerMatches,pvCustomerOptions,pvFilterCustomers,pvSelectCustomer,posSelectCustomer,_setPosPmode};
 this.__posTransfer={posLoadResaleCart};`,
 context, { filename: 'pos.js' });
@@ -146,6 +150,40 @@ assert.strictEqual(state.currentInv().cart[0].qty, 40, 'vaciar temporalmente no 
 discount.posCommitQty(0, qtyInput);
 assert.strictEqual(qtyInput.value, 40, 'al salir de un campo vacío restaura la última cantidad válida');
 console.log('  ✓ permite escribir cantidades de varios dígitos sin perder el foco');
+
+let committedPrice = null;
+vm.runInContext('posSetPrice=(idx,val)=>{this.__priceCommitCount=(this.__priceCommitCount||0)+1;this.__committedPrice={idx,val}}', context);
+const priceEvent = {
+  key: 'Enter', prevented: false, stopped: false,
+  preventDefault() { this.prevented = true; },
+  stopPropagation() { this.stopped = true; },
+};
+const priceInput = {
+  value: '2000.00', defaultValue: '105.00', blurred: false,
+  blur() {
+    this.blurred = true;
+    discount.posCommitPriceOnChange(0, this);
+  },
+};
+discount.posCommitPriceOnEnter(priceEvent, 0, priceInput);
+committedPrice = context.__committedPrice;
+assert.deepStrictEqual({ idx: committedPrice.idx, val: committedPrice.val }, { idx: 0, val: '2000.00' });
+assert.strictEqual(priceInput.blurred, true, 'Enter debe cerrar la edición del precio');
+assert.strictEqual(priceEvent.prevented, true, 'Enter no debe ejecutar otra acción del formulario');
+assert.strictEqual(priceEvent.stopped, true, 'Enter no debe propagarse como lectura de código');
+assert.strictEqual(context.__priceCommitCount, 1, 'Enter debe confirmar el precio una sola vez');
+assert.strictEqual(priceInput._posPriceCommittedWithEnter, false,
+  'el cambio provocado por Enter no debe confirmar el precio una segunda vez');
+const unchangedPriceInput = {
+  value: '105.00', defaultValue: '105.00',
+  blur() { discount.posCommitPriceOnChange(0, this); },
+};
+discount.posCommitPriceOnEnter(priceEvent, 0, unchangedPriceInput);
+assert.strictEqual(context.__priceCommitCount, 1,
+  'Enter no debe marcar como manual un precio que no cambió');
+assert(posSource.includes('data-pos-price="on"'),
+  'el editor de precio debe quedar fuera de la captura del lector de barras');
+console.log('  ✓ Enter confirma el nuevo precio una sola vez sin confundirse con el lector');
 
 state.setCustomers([
   { id: 1, name: 'Consumidor Final', active: 1 },

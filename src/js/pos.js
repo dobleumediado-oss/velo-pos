@@ -156,6 +156,15 @@ async function renderPOS(el) {
         }
         if (e.ctrlKey || e.metaKey || e.altKey) return;
 
+        // El precio final es un campo de edición manual. No conviertas sus
+        // dígitos + Enter en una lectura de código de barras cuando el cajero
+        // escribe rápido.
+        if (document.activeElement?.dataset?.posPrice === 'on') {
+          scanBuf = '';
+          scanLastTs = 0;
+          return;
+        }
+
         const now = Date.now();
         const gap = now - scanLastTs;
         scanLastTs = now;
@@ -627,12 +636,12 @@ function renderCart() {
             <div class="ci-name">${posEscHtml(item.name)}</div>
             <div class="ci-price" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
               <span style="font-size:10px;color:var(--muted2);font-weight:600">Precio final</span>
-              ${checkoutLocked ? `<strong>${fmt(item.price)}</strong>` : `<input type="number" data-money="on" min="0" step="0.01" value="${Number(item.price || 0).toFixed(2)}"
+              ${checkoutLocked ? `<strong>${fmt(item.price)}</strong>` : `<input type="number" data-money="on" data-pos-price="on" min="0" step="0.01" value="${Number(item.price || 0).toFixed(2)}"
                 style="width:92px;text-align:right;font-size:12px;font-weight:700;
                        border:1px solid var(--line);border-radius:4px;padding:2px 5px;
                        font-family:inherit;background:var(--surface)"
-                onchange="posSetPrice(${idx},this.value)"
-                onkeydown="if(event.key==='Enter')this.blur()"
+                onchange="posCommitPriceOnChange(${idx},this)"
+                onkeydown="posCommitPriceOnEnter(event,${idx},this)"
                 onclick="this.select()"/>`}
               ${item.taxable === 0 ? '' : `<span style="font-size:10px;color:var(--blue);font-weight:700">ITBIS incl.</span>`}
             </div>
@@ -1092,6 +1101,26 @@ async function posSetPrice(idx, val) {
   item.manual_price = true;
   renderInvTabs();
   renderCart();
+}
+
+function posCommitPriceOnChange(idx, input) {
+  // El change provocado por Enter se omite porque el propio Enter confirma el
+  // valor. Así no se solicita autorización ni se aplica dos veces.
+  if (input?._posPriceCommittedWithEnter) return;
+  return posSetPrice(idx, input?.value);
+}
+
+function posCommitPriceOnEnter(event, idx, input) {
+  if (event?.key !== 'Enter') return;
+  event.preventDefault();
+  event.stopPropagation();
+  const value = input?.value;
+  const changed = String(value ?? '').trim() === '' || !posMoneyEq(value, input?.defaultValue);
+  input._posPriceCommittedWithEnter = true;
+  input.blur();
+  input._posPriceCommittedWithEnter = false;
+  if (!changed) return;
+  return posSetPrice(idx, value);
 }
 
 function posRemItem(idx) {
