@@ -1,0 +1,110 @@
+'use strict';
+
+const assert = require('assert');
+const crypto = require('crypto');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const {
+  parseLicense,
+  verifyLicense,
+  activateLicense,
+  getLicenseStatus,
+} = require('../license');
+
+let passed = 0;
+function test(name, fn) {
+  fn();
+  passed += 1;
+  console.log(`✓ ${name}`);
+}
+
+const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' });
+const machineId = 'A1B2C3D4E5F6A7B8C9D0E1F2A3B4C5D6';
+
+function sign(parts) {
+  const payload = parts.join('|');
+  const signature = crypto.sign('SHA256', Buffer.from(payload), privateKey).toString('base64');
+  return `${payload}|${signature}`;
+}
+
+const suiteKey = sign(['3', machineId, 'Castillo Tech', 'PERPETUAL', 'velo_pos,velo_tech_pos']);
+const techKey = sign(['3', machineId, 'Castillo Tech', 'PERPETUAL', 'velo_tech_pos']);
+const legacyPosKey = sign(['2', machineId, 'Cliente VELO POS', 'PERPETUAL']);
+const verifyOptions = { publicKeyPem };
+
+test('v3 parsea uno o varios productos canónicos', () => {
+  assert.deepStrictEqual(parseLicense(suiteKey).products, ['velo_pos', 'velo_tech_pos']);
+  assert.strictEqual(parseLicense(sign(['3', machineId, 'X', 'PERPETUAL', 'velo_tech_pos,velo_pos'])), null);
+});
+
+test('una licencia de suite habilita ambos productos', () => {
+  const license = parseLicense(suiteKey);
+  assert.strictEqual(verifyLicense(license, machineId, 'velo_pos', verifyOptions).valid, true);
+  assert.strictEqual(verifyLicense(license, machineId, 'velo_tech_pos', verifyOptions).valid, true);
+});
+
+test('una licencia TECH no habilita VELO POS', () => {
+  const license = parseLicense(techKey);
+  assert.strictEqual(verifyLicense(license, machineId, 'velo_tech_pos', verifyOptions).valid, true);
+  const wrong = verifyLicense(license, machineId, 'velo_pos', verifyOptions);
+  assert.strictEqual(wrong.valid, false);
+  assert.strictEqual(wrong.code, 'PRODUCT_NOT_LICENSED');
+  assert.strictEqual(wrong.graceEligible, false);
+});
+
+test('v2 ECDSA sigue habilitando solo VELO POS', () => {
+  const license = parseLicense(legacyPosKey);
+  assert.strictEqual(verifyLicense(license, machineId, 'velo_pos', verifyOptions).valid, true);
+  assert.strictEqual(verifyLicense(license, machineId, 'velo_tech_pos', verifyOptions).code, 'PRODUCT_NOT_LICENSED');
+});
+
+test('v1 insegura se rechaza aunque tenga formato válido', () => {
+  const legacy = parseLicense(`1|${machineId}|Negocio|PERPETUAL|DEADBEEFDEADBEEF`);
+  assert.strictEqual(verifyLicense(legacy, machineId, 'velo_pos', verifyOptions).code, 'INSECURE_LEGACY_LICENSE');
+});
+
+test('alterar productos invalida la firma', () => {
+  const tampered = parseLicense(suiteKey.replace('velo_pos,velo_tech_pos', 'velo_tech_pos'));
+  assert.strictEqual(verifyLicense(tampered, machineId, 'velo_tech_pos', verifyOptions).code, 'INVALID_SIGNATURE');
+});
+
+test('la activación persiste solo una clave del producto correcto', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'velo-license-'));
+  try {
+    const rejected = activateLicense(dir, techKey, 'velo_pos', { ...verifyOptions, machineId });
+    assert.strictEqual(rejected.ok, false);
+    assert.strictEqual(fs.existsSync(path.join(dir, 'license.key')), false);
+
+    const accepted = activateLicense(dir, suiteKey, 'velo_pos', { ...verifyOptions, machineId });
+    assert.strictEqual(accepted.ok, true);
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'license.key'), 'utf8'), suiteKey);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('producto equivocado queda bloqueado sin período de gracia', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'velo-license-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'license.key'), techKey);
+    const status = getLicenseStatus(dir, 'velo_pos', { ...verifyOptions, machineId });
+    assert.strictEqual(status.blocked, true);
+    assert.strictEqual(status.inGrace, false);
+    assert.strictEqual(status.code, 'PRODUCT_NOT_LICENSED');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('el cliente no expone generación ni rutas de clave privada', () => {
+  const root = path.join(__dirname, '..');
+  for (const rel of ['main.js', 'preload.js', 'src/js/superadmin.js']) {
+    const source = fs.readFileSync(path.join(root, rel), 'utf8');
+    assert.strictEqual(source.includes("license:generate"), false, rel);
+    assert.strictEqual(source.includes('vendor-private.pem'), false, rel);
+  }
+});
+
+console.log(`\nLicencias por producto: ${passed}/9 pruebas correctas.`);

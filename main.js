@@ -20,7 +20,7 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
     'connection:getInfo', 'connection:generateKey', 'connection:test', 'connection:setAllowedTerminal',
     'connection:setTerminalBusinesses',
     'connection:clientPreflight', 'connection:setMode',
-    'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke', 'license:generate',
+    'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke',
     'update:check', 'update:download', 'update:install',
     // Versión = propia de cada máquina (no la del servidor).
     'version:getInfo', 'version:getAppVersion',
@@ -1572,6 +1572,17 @@ ipcMain.handle('productUnits:create', async (_, { productId, units, requestUserI
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
+ipcMain.handle('productUnits:updateWarranty', async (_, { unitId, warrantyUntil, requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) return { ok:false, error:'Sin permisos' };
+    const unit = productUnitsRepo.updateWarranty(unitId, warrantyUntil);
+    audit(reqUser.id, reqUser.name, 'garantia_imei_actualizada', 'product_units', unit.id,
+      `${unit.imei || unit.serial || '#' + unit.id} · ${unit.warranty_until || 'sin garantía'}`);
+    return { ok:true, data:unit };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+
 // ── Órdenes de servicio / reparación (VELO TECH POS R6) ────────────────────
 function _serviceOrdersEnabled() {
   const active = require('./src/verticals').getActiveVertical();
@@ -3095,9 +3106,9 @@ ipcMain.handle('license:revoke', async (_, { requestUserId } = {}) => {
       return { ok: false, error: 'Solo el Super Admin puede revocar licencias' };
     }
     const licensePath   = path.join(DATA_DIR, 'license.key');
-    const installedPath = path.join(DATA_DIR, '.installed');
     if (fs.existsSync(licensePath))   fs.unlinkSync(licensePath);
-    if (fs.existsSync(installedPath)) fs.unlinkSync(installedPath);
+    // Revocar no reinicia la fecha de instalación: de lo contrario se podría
+    // obtener un período de gracia nuevo en cada ciclo de revocación.
     audit(requestUserId, reqUser.name, 'licencia_revocada', 'license', null, '');
     return { ok: true };
   } catch (e) {
@@ -3855,48 +3866,16 @@ ipcMain.handle('backup:getList', async () => {
 
 // ── Licencia ──────────────────────────────────
 
-ipcMain.handle('license:generate', async (_, { machineId, business, expiry, requestUserId } = {}) => {
-  try {
-    // Producción: el POS instalado en el cliente NUNCA debe generar licencias.
-    // Las licencias se generan desde una herramienta separada del vendedor/empresa.
-    if (app.isPackaged) {
-      return { ok: false, error: 'La generación de licencias no está disponible en instalaciones de cliente' };
-    }
-
-    const reqUser = requestUserId ? authRepo.findById(requestUserId) : null;
-    if (!reqUser || reqUser.role !== 'superadmin') {
-      return { ok: false, error: 'Solo el Super Admin puede generar licencias en modo desarrollo/soporte' };
-    }
-
-    if (!machineId || !business || !expiry) {
-      return { ok: false, error: 'machineId, business y expiry son requeridos' };
-    }
-
-    const crypto     = require('crypto');
-    const fs         = require('fs');
-    const path       = require('path');
-    const keyPath    = process.env.VELO_PRIVATE_KEY_PATH
-                       || path.join(app.getPath('userData'), 'vendor-private.pem')
-                       || path.join(__dirname, 'tools', 'vendor-private.pem');
-    if (!fs.existsSync(keyPath)) {
-      return { ok: false, error: 'Clave privada no encontrada en este equipo' };
-    }
-    const keyPem     = fs.readFileSync(keyPath, 'utf8');
-    const privateKey = crypto.createPrivateKey(keyPem);
-    const payload    = `2|${machineId}|${business}|${expiry}`;
-    const signature  = crypto.sign('SHA256', Buffer.from(payload), privateKey);
-    const licKey     = `${payload}|${signature.toString('base64')}`;
-
-    audit(requestUserId, reqUser.name, 'licencia_generada', 'license', null, `Negocio: ${business} | Máquina: ${machineId}`);
-    return { ok: true, licenseKey: licKey };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-});
+// La clave privada y la firma viven fuera del cliente instalado.
+function requiredLicenseProduct() {
+  return require('./src/verticals').activeVerticalId() === 'tech'
+    ? 'velo_tech_pos'
+    : 'velo_pos';
+}
 
 ipcMain.handle('license:getStatus', async () => {
   try {
-    return { ok: true, data: getLicenseStatus(DATA_DIR) };
+    return { ok: true, data: getLicenseStatus(DATA_DIR, requiredLicenseProduct()) };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -3904,7 +3883,7 @@ ipcMain.handle('license:getStatus', async () => {
 
 ipcMain.handle('license:activate', async (_, { licenseKey, requestUserId }) => {
   try {
-    const result = activateLicense(DATA_DIR, licenseKey);
+    const result = activateLicense(DATA_DIR, licenseKey, requiredLicenseProduct());
     if (result.ok) {
       // La activación ya persistió license.key. La auditoría es secundaria:
       // nunca debe hacer fallar la activación. Además user_id tiene FK a
@@ -3913,7 +3892,7 @@ ipcMain.handle('license:activate', async (_, { licenseKey, requestUserId }) => {
         const reqUser = requestUserId ? authRepo.findById(requestUserId) : null;
         audit(reqUser ? requestUserId : null, reqUser?.name || 'sistema',
           'licencia_activada', 'license', null,
-          `Vence: ${result.expiry}`);
+          `Producto: ${result.requiredProduct} | Vence: ${result.expiry}`);
       } catch (auditErr) {
         console.error('[license:activate] auditoría falló (activación ya persistida):', auditErr.message);
       }
@@ -6764,7 +6743,7 @@ ipcMain.handle('system:diagnose', async (_, { requestUserId } = {}) => {
       appRoot: __dirname,
       cashRepo,
       settingsRepo,
-      getLicenseStatus,
+      getLicenseStatus: (dataDir) => getLicenseStatus(dataDir, requiredLicenseProduct()),
       mainWindow,
     });
 
@@ -7356,7 +7335,7 @@ function setupMultiTerminal() {
       // El negocio de una terminal se cambia localmente y el gateway la enruta
       // al worker correcto. Nunca debe reiniciar un worker ni al servicio.
       'business:getAll', 'business:getActive', 'business:selectForLogin', 'business:switch',
-      'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke', 'license:generate',
+      'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke',
       'update:check', 'update:download', 'update:install',
       'print:html', 'print:toPDF', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
     ]);

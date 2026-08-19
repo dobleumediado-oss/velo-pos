@@ -12,9 +12,8 @@
 const crypto = require('crypto');
 const fs     = require('fs');
 const path   = require('path');
-const os     = require('os');
-
-const LICENSE_VERSION = '2';
+const LICENSE_VERSION = '3';
+const ALLOWED_PRODUCTS = ['velo_pos', 'velo_tech_pos'];
 
 // ── Cargar clave privada ──────────────────────
 function loadPrivateKey() {
@@ -49,10 +48,10 @@ function generateKeyPair() {
 }
 
 // ── Generar licencia ──────────────────────────
-function generateLicense(machineId, business, expiryDate) {
+function generateLicense(machineId, business, expiryDate, products) {
   const keyPem     = loadPrivateKey();
   const privateKey = crypto.createPrivateKey(keyPem);
-  const payload    = `${LICENSE_VERSION}|${machineId}|${business}|${expiryDate}`;
+  const payload    = `${LICENSE_VERSION}|${machineId}|${business}|${expiryDate}|${products.join(',')}`;
   const signature  = crypto.sign('SHA256', Buffer.from(payload), privateKey);
   const sigB64     = signature.toString('base64');
   return `${payload}|${sigB64}`;
@@ -66,17 +65,18 @@ if (args.includes('--keygen')) {
   process.exit(0);
 }
 
-// Uso: node generate-license.js <MACHINE_ID> <"Nombre Negocio"> <YYYY-MM-DD|PERPETUAL>
-if (args.length < 3) {
+// Uso: node generate-license.js <MACHINE_ID> <"Negocio"> <EXPIRY> <PRODUCTOS>
+if (args.length < 4) {
   console.log('\nUso:');
-  console.log('  node tools/generate-license.js <MACHINE_ID> <"Nombre Negocio"> <YYYY-MM-DD|PERPETUAL>');
+  console.log('  node tools/generate-license.js <MACHINE_ID> <"Nombre Negocio"> <YYYY-MM-DD|PERPETUAL> <PRODUCTOS>');
   console.log('  node tools/generate-license.js --keygen   (generar par de claves)\n');
+  console.log('Productos: velo_pos | velo_tech_pos | velo_pos,velo_tech_pos');
   console.log('Ejemplo:');
-  console.log('  node tools/generate-license.js A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6 "Auto Parts La Vega" 2026-12-31\n');
+  console.log('  node tools/generate-license.js A1B2C3D4E5F6A7B8C9D0E1F2A3B4C5D6 "Castillo Tech" 2027-12-31 velo_tech_pos\n');
   process.exit(1);
 }
 
-const [machineId, business, expiry] = args;
+const [machineId, business, expiry, productsArg] = args;
 
 // Validar
 if (!/^[A-F0-9]{32}$/.test(machineId) && machineId !== 'UNIVERSAL') {
@@ -87,8 +87,18 @@ if (expiry !== 'PERPETUAL' && !/^\d{4}-\d{2}-\d{2}$/.test(expiry)) {
   console.error('\n❌ Fecha debe ser YYYY-MM-DD o PERPETUAL\n');
   process.exit(1);
 }
+if (String(business).includes('|') || !String(business).trim()) {
+  console.error('\n❌ El nombre del negocio no puede estar vacío ni contener |\n');
+  process.exit(1);
+}
+const requestedProducts = [...new Set(String(productsArg).split(',').map(v => v.trim().toLowerCase()).filter(Boolean))];
+if (!requestedProducts.length || requestedProducts.some(p => !ALLOWED_PRODUCTS.includes(p))) {
+  console.error('\n❌ Productos válidos: velo_pos, velo_tech_pos\n');
+  process.exit(1);
+}
+const products = ALLOWED_PRODUCTS.filter(p => requestedProducts.includes(p));
 
-const licenseKey = generateLicense(machineId, business, expiry);
+const licenseKey = generateLicense(machineId, business.trim(), expiry, products);
 
 console.log('\n✅ Licencia generada:');
 console.log('─'.repeat(80));
@@ -96,4 +106,5 @@ console.log(licenseKey);
 console.log('─'.repeat(80));
 console.log(`\nNegocio:  ${business}`);
 console.log(`Máquina:  ${machineId}`);
-console.log(`Vence:    ${expiry}\n`);
+console.log(`Vence:    ${expiry}`);
+console.log(`Productos: ${products.join(', ')}\n`);

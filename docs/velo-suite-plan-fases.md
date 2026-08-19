@@ -66,6 +66,18 @@ R7  Trade-in + Garantía por IMEI
 R8  Licencia por producto (suite)
 ```
 
+### Estado de ejecución — 2026-08-18
+
+| Fase | Estado | Compuerta principal |
+|---|---|---|
+| R5 · Inventario serializado | ✅ Completa | Alta/venta/búsqueda por IMEI y stock por unidad |
+| R6 · Servicio / Reparación | ✅ Completa | Flujo de estados y entrega convertida en venta fiscal |
+| R7 · Trade-in + Garantía | ✅ Completa | Usado como pago, garantía por IMEI y anulación consistente |
+| R8 · Licencia por producto | ✅ Completa | ECDSA v3 habilita POS, TECH o ambos; vertical no autorizado bloqueado |
+
+La regresión incluye ahora estas cuatro fases dentro de `npm test`, además de
+la compuerta de upgrade sobre una copia de la base real.
+
 ---
 
 ## F0 — Preparación y red de seguridad

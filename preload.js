@@ -53,6 +53,7 @@ contextBridge.exposeInMainWorld('api', {
     findByImei:     (data) => ipcRenderer.invoke('productUnits:findByImei', data),
     setSerialized:  (data) => ipcRenderer.invoke('productUnits:setSerialized', data),
     create:         (data) => ipcRenderer.invoke('productUnits:create', data),
+    updateWarranty: (data) => ipcRenderer.invoke('productUnits:updateWarranty', data),
   },
 
   // ── Servicio / reparación (VELO TECH POS) ────────────────
@@ -244,7 +245,6 @@ contextBridge.exposeInMainWorld('api', {
     activate:    (data)      => ipcRenderer.invoke('license:activate', data),
     getMachineId:()          => ipcRenderer.invoke('license:getMachineId'),
     revoke:      (data)      => ipcRenderer.invoke('license:revoke', data),
-    generate:    (data)      => ipcRenderer.invoke('license:generate', data),
   },
 
   // ── Terminal / conexión (multi-terminal) ──

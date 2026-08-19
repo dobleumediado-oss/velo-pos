@@ -141,6 +141,70 @@ async function applyVerticalTheme() {
   styleEl.textContent = css;
 }
 
+function renderLicenseGate(lic) {
+  const root = document.getElementById('root');
+  const productName = window._vertical?.product?.name ||
+    (lic?.requiredProduct === 'velo_tech_pos' ? 'Velo Tech POS' : 'Velo POS');
+  root.innerHTML = '';
+  root.style.cssText = 'width:100%;height:100%;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--bg)';
+
+  const keyInput = h('textarea', {
+    class: 'inp no-uppercase', rows: '4', 'data-uppercase': 'off',
+    placeholder: '3|ID_MAQUINA|Negocio|PERPETUAL|velo_pos|FIRMA',
+    style: { width: '100%', resize: 'none', fontFamily: 'var(--mono)', fontSize: '11px', marginTop: '12px' },
+  });
+  const message = h('div', { style: { minHeight: '18px', marginTop: '8px', color: 'var(--red)', fontSize: '12px' } });
+  const activateBtn = h('button', {
+    class: 'btn btn-dark btn-fw',
+    onclick: async () => {
+      const licenseKey = keyInput.value.trim().replace(/[\r\n]+/g, '');
+      if (!licenseKey) { message.textContent = 'Pega la clave de licencia.'; return; }
+      activateBtn.disabled = true;
+      activateBtn.textContent = 'Verificando…';
+      const result = await window.api.license.activate({ licenseKey }).catch(e => ({ ok: false, error: e.message }));
+      if (result?.ok) {
+        message.style.color = 'var(--green)';
+        message.textContent = 'Licencia activada. Abriendo…';
+        setTimeout(() => location.reload(), 300);
+        return;
+      }
+      message.textContent = result?.error || 'No se pudo activar la licencia.';
+      activateBtn.disabled = false;
+      activateBtn.textContent = 'Activar licencia';
+    },
+  }, 'Activar licencia');
+
+  root.appendChild(h('div', { class: 'card', style: { width: '100%', maxWidth: '520px', padding: '28px' } },
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' } },
+      h('img', {
+        src: window._vertical?.product?.logo || 'assets/icon.png',
+        style: { width: '52px', height: '52px', borderRadius: '12px', objectFit: 'cover' },
+      }),
+      h('div', null,
+        h('div', { style: { fontSize: '19px', fontWeight: '800' } }, productName),
+        h('div', { style: { color: 'var(--muted2)', fontSize: '12px' } }, 'Activación de producto')
+      )
+    ),
+    h('div', { class: 'alrt r', style: { marginBottom: '12px' } },
+      h('div', { class: 'alrt-dot r' }),
+      h('div', null,
+        h('div', { class: 'alrt-title' }, 'Se requiere una licencia válida'),
+        h('div', { class: 'alrt-sub' }, lic?.reason || 'La licencia no está disponible para este producto.')
+      )
+    ),
+    h('div', { style: { fontSize: '12px', color: 'var(--muted2)' } },
+      'Envía este ID de máquina al proveedor:'),
+    h('button', {
+      class: 'btn-ghost',
+      style: { width: '100%', marginTop: '6px', fontFamily: 'var(--mono)', fontSize: '11px', wordBreak: 'break-all' },
+      onclick: () => navigator.clipboard.writeText(lic?.machineId || ''),
+    }, lic?.machineId || '—'),
+    keyInput,
+    message,
+    activateBtn
+  ));
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   // Cargar versión de la app para mostrar en login y config
   try {
@@ -151,6 +215,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   // VELO SUITE: aplicar override de tema del vertical antes de pintar la UI.
   // En VELO POS (auto-repuestos) es un no-op garantizado.
   try { await applyVerticalTheme(); } catch { /* jamás bloquear el arranque por tema */ }
+
+  // La licencia debe habilitar el producto compilado. Una instalación nueva
+  // puede usar su gracia; una clave alterada o de otro producto no puede hacerlo.
+  try {
+    const licResult = await window.api.license.getStatus();
+    if (licResult?.ok && licResult.data?.blocked) {
+      renderLicenseGate(licResult.data);
+      return;
+    }
+  } catch { /* un fallo de lectura no debe inutilizar soporte/diagnóstico */ }
 
   // ── Multi-terminal: preflight de servidor en modo CLIENTE ──────────────────
   // Si estamos en modo cliente y el servidor NO responde, mostrar la pantalla de
@@ -779,6 +853,7 @@ function buildSidebar() {
     ...(preventaCanAccess() ? [{ key: 'preventa', icon: 'cash', label: 'Preventa y Despacho', badge: window._preventaPendingCount || null }] : []),
     { sep: 'Gestión' },
     { key: 'inventario',icon: 'box',      label: 'Inventario' },
+    ...(window._vertical?.modules?.service_orders ? [{ key:'servicio', icon:'settings', label:'Servicio técnico' }] : []),
     { key: 'compras',   icon: 'truck',    label: 'Compras' },
     { key: 'clientes',  icon: 'users',    label: 'Clientes' },
     ...(_adminPuede('module_crm') ? [{ key: 'crm', icon: 'trend', label: 'CRM Cerebro' }] : []),
@@ -823,6 +898,7 @@ function buildSidebar() {
     { key: 'clientes',  icon: 'users',    label: 'Clientes',
       badge: alertBadge > 0 ? alertBadge : null },
     { key: 'ventas',    icon: 'list',     label: 'Ventas' },
+    ...(window._vertical?.modules?.service_orders ? [{ key:'servicio', icon:'settings', label:'Servicio técnico' }] : []),
     { key: 'caja',      icon: 'cash',     label: 'Caja' },
     ...(_cajeroPuede('module_gastos')     ? [{ key: 'gastos',     icon: 'dollar',  label: 'Gastos' }]      : []),
     ...(_cajeroPuede('module_vendedores') ? [{ key: 'vendedores', icon: 'users',   label: 'Vendedores' }]   : []),
@@ -890,6 +966,7 @@ function buildTopbar() {
     pos:           'Punto de Venta',
     preventa:      'Preventa y Despacho',
     inventario:    'Inventario',
+    servicio:      'Servicio técnico',
     compras:       'Compras',
     clientes:      'Clientes',
     ventas:        'Ventas',
@@ -1372,6 +1449,7 @@ function routeTo(p) {
     case 'pos':          renderPOS(el);            break;
     case 'preventa':     renderPreventa(el);       break;
     case 'inventario':   renderInventario(el);     break;
+    case 'servicio':     renderServicio(el);       break;
     case 'compras':      renderCompras(el);         break;
     case 'clientes':     renderClientes(el);       break;
     case 'crm':          renderCRM(el);            break;

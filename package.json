@@ -49,7 +49,10 @@
     "test:crm": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-crm-cerebro.js",
     "test:product-units": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-product-units.js",
     "test:service-orders": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-service-orders.js",
+    "test:trade-in-warranty": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-trade-in-warranty.js",
+    "test:suite-license": "node scripts/test-suite-license-products.js",
     "test:serialized-sale": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-serialized-sale.js",
+    "test:service-orders": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-service-orders.js",
     "test:server-service": "node scripts/test-server-service.js",
     "test:experience": "node scripts/test-experience-system.js",
     "test:payment-ui": "node scripts/test-payment-ui-resilience.js",
@@ -57,7 +60,7 @@
     "test:system-doctor": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-system-doctor-financial.js",
     "test:ncf": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-ncf-sequences.js",
     "test:data-loader": "node scripts/test-data-loader-resilience.js",
-    "test": "npm run test:url && npm run test:input-normalization && npm run test:login && npm run test:pos && npm run test:data-loader && npm run test:checkout && npm run test:customer-companies && npm run test:business && npm run test:import && npm run test:all-in-one && npm run test:all-in-one-integration && npm run test:financial && npm run test:payment-ui && npm run test:cash-ui && npm run test:printing && npm run test:pending-invoices && npm run test:salespeople && npm run test:documents && npm run test:sales-workflow && npm run test:sale-corrections && npm run test:system-doctor && npm run test:ncf && npm run test:server-service && npm run test:experience"
+    "test": "npm run test:url && npm run test:input-normalization && npm run test:login && npm run test:pos && npm run test:data-loader && npm run test:checkout && npm run test:customer-companies && npm run test:business && npm run test:import && npm run test:all-in-one && npm run test:all-in-one-integration && npm run test:financial && npm run test:payment-ui && npm run test:cash-ui && npm run test:printing && npm run test:pending-invoices && npm run test:salespeople && npm run test:documents && npm run test:sales-workflow && npm run test:sale-corrections && npm run test:system-doctor && npm run test:ncf && npm run test:server-service && npm run test:experience && npm run test:product-units && npm run test:serialized-sale && npm run test:service-orders && npm run test:trade-in-warranty && npm run test:suite-license"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

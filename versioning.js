@@ -1831,6 +1831,30 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.41.0-service-orders] Órdenes de servicio listas (módulo TECH)');
     }
   },
+  {
+    version: '1.41.0-trade-in-warranty',
+    description: 'VELO TECH POS R7: compra de usados como parte de pago y garantía consultable por IMEI.',
+    run(db) {
+      const saleCols = db.prepare('PRAGMA table_info(sales)').all().map(c => c.name);
+      if (!saleCols.includes('trade_in_amount')) db.prepare('ALTER TABLE sales ADD COLUMN trade_in_amount REAL NOT NULL DEFAULT 0').run();
+      if (!saleCols.includes('trade_in_unit_id')) db.prepare('ALTER TABLE sales ADD COLUMN trade_in_unit_id INTEGER REFERENCES product_units(id)').run();
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS trade_ins (
+          id              INTEGER PRIMARY KEY AUTOINCREMENT,
+          sale_id         INTEGER UNIQUE NOT NULL REFERENCES sales(id),
+          customer_id     INTEGER REFERENCES customers(id),
+          product_id      INTEGER NOT NULL REFERENCES products(id),
+          product_unit_id INTEGER UNIQUE NOT NULL REFERENCES product_units(id),
+          allowance       REAL NOT NULL CHECK(allowance > 0),
+          status          TEXT NOT NULL DEFAULT 'aplicado' CHECK(status IN ('aplicado','cancelado')),
+          created_by      INTEGER REFERENCES users(id),
+          created_at      TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_trade_ins_customer ON trade_ins(customer_id, created_at);
+      `);
+      console.log('[MIGRATION 1.41.0-trade-in-warranty] Trade-in y garantía por IMEI listos');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

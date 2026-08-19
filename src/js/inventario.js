@@ -453,8 +453,9 @@ window.abrirRegistroEquipos = async function (p) {
         <td style="padding:6px;font-family:var(--mono);font-size:11px">${esc(u.imei || u.serial || ('#' + u.id))}</td>
         <td style="padding:6px">${esc(u.condition || '')}${u.color ? (' · ' + esc(u.color)) : ''}${u.capacity ? (' · ' + esc(u.capacity)) : ''}</td>
         <td style="padding:6px;text-align:right;font-family:var(--mono)">${money(u.unit_cost)}</td>
+        <td style="padding:6px">${u.warranty_until ? esc(u.warranty_until) : '—'} <button class="btn btn-ghost btn-sm" data-warranty-unit="${u.id}" data-warranty-date="${esc(u.warranty_until||'')}" title="Editar garantía">${svg('edit')}</button></td>
         <td style="padding:6px">${badge(u.status)}</td></tr>`).join('')
-      : `<tr><td colspan="4" style="padding:10px;color:var(--muted2);text-align:center">Sin equipos registrados</td></tr>`;
+      : `<tr><td colspan="5" style="padding:10px;color:var(--muted2);text-align:center">Sin equipos registrados</td></tr>`;
     return `
       <div class="modal-title">Equipos — ${esc(p.name)}</div>
       <div style="font-size:12px;color:var(--muted2);margin-bottom:10px">${inStock} en stock · ${units.length} registrado(s)</div>
@@ -463,13 +464,14 @@ window.abrirRegistroEquipos = async function (p) {
         <select class="inp" id="eq-cond"><option value="nuevo">Nuevo</option><option value="usado">Usado</option><option value="reacondicionado">Reacondicionado</option></select>
         <input class="inp" id="eq-cost" type="number" min="0" step="0.01" placeholder="Costo">
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;margin-bottom:12px">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;margin-bottom:12px">
         <input class="inp" id="eq-color" placeholder="Color" data-uppercase="off">
         <input class="inp" id="eq-cap" placeholder="Capacidad" data-uppercase="off">
+        <input class="inp" id="eq-warranty" type="date" title="Garantía hasta">
         <button class="btn btn-dark" id="eq-add">Registrar equipo</button>
       </div>
       <div style="max-height:260px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
-        <thead><tr style="color:var(--muted2);font-size:10.5px"><th style="text-align:left;padding:6px">IMEI / SERIAL</th><th style="text-align:left;padding:6px">DETALLE</th><th style="text-align:right;padding:6px">COSTO</th><th style="text-align:left;padding:6px">ESTADO</th></tr></thead>
+        <thead><tr style="color:var(--muted2);font-size:10.5px"><th style="text-align:left;padding:6px">IMEI / SERIAL</th><th style="text-align:left;padding:6px">DETALLE</th><th style="text-align:right;padding:6px">COSTO</th><th style="text-align:left;padding:6px">GARANTÍA</th><th style="text-align:left;padding:6px">ESTADO</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
       <div style="display:flex;justify-content:flex-end;margin-top:12px"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>`;
   };
@@ -489,6 +491,7 @@ window.abrirRegistroEquipos = async function (p) {
             unit_cost: Number(document.getElementById('eq-cost')?.value) || 0,
             color: document.getElementById('eq-color')?.value.trim() || '',
             capacity: document.getElementById('eq-cap')?.value.trim() || '',
+            warranty_until: document.getElementById('eq-warranty')?.value || null,
           }],
           requestUserId: user?.id,
         });
@@ -500,6 +503,16 @@ window.abrirRegistroEquipos = async function (p) {
         wire();
       } catch (e) { toast(e.message || 'Error al registrar', 'e'); addBtn.disabled = false; }
     };
+    document.querySelectorAll('[data-warranty-unit]').forEach(btn => {
+      btn.onclick = async () => {
+        const value = prompt('Garantía válida hasta (YYYY-MM-DD). Déjalo vacío para quitarla:', btn.dataset.warrantyDate || '');
+        if (value == null) return;
+        const res = await window.api.productUnits.updateWarranty({ unitId:Number(btn.dataset.warrantyUnit), warrantyUntil:value.trim(), requestUserId:user?.id });
+        if (!res?.ok) { toast(res?.error || 'No se pudo actualizar la garantía', 'err'); return; }
+        toast('✓ Garantía actualizada', 'ok');
+        openModal(render(await fetchUnits())); wire();
+      };
+    });
   };
   openModal(render(await fetchUnits()));
   wire();
@@ -546,6 +559,7 @@ window.openBuscarImeiModal = function () {
             <div><div class="lbl">DETALLE</div><div>${esc([u.condition, u.capacity, u.color].filter(Boolean).join(' · ') || '—')}</div></div>
           </div>
           ${u.sale_id ? `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:12px"><strong>Venta:</strong> ${esc(u.numero_factura || ('#' + u.sale_id))} · ${esc(u.customer_name || 'Consumidor Final')}</div>` : ''}
+          ${u.warranty_until ? `<div style="margin-top:7px;font-size:12px"><strong>Garantía:</strong> ${esc(u.warranty_until)} · ${String(u.warranty_until) >= new Date().toISOString().slice(0,10) ? '<span style="color:var(--green)">Vigente</span>' : '<span style="color:var(--red)">Vencida</span>'}</div>` : '<div style="margin-top:7px;font-size:12px;color:var(--muted2)">Sin garantía registrada</div>'}
         </div>`;
     } catch (e) {
       if (out) out.innerHTML = `<div class="alrt r"><div class="alrt-dot r"></div><div>${esc(e.message || 'Error al consultar')}</div></div>`;
@@ -1251,6 +1265,7 @@ function openProductoModal(p = null) {
 
   const isEdit   = !!p?.id;
   const stockMin = p?.stock_min || 5;
+  const isSerialized = !!(window._vertical?.serialized && (isEdit ? p.serialized : true));
 
   const catOpts = CATS.map(c =>
     `<option value="${c}" ${isEdit && p.category === c ? 'selected' : ''}>${c}</option>`
@@ -1391,22 +1406,22 @@ function openProductoModal(p = null) {
       <div id="pf-price-change-preview" style="font-size:11px;color:var(--muted);margin-top:-4px;margin-bottom:10px"></div>
 
     <hr style="margin:12px 0;border:none;border-top:1px solid var(--line)"/>
-    ${(window._vertical && window._vertical.serialized) ? `
-    <div style="font-weight:700;font-size:12px;margin-bottom:6px">Equipos (IMEI)</div>
-    <div style="font-size:11px;color:var(--muted2);margin-bottom:10px">El stock se lleva por equipos. Registra el primero aquí; agrega más luego con el botón “Equipos”.</div>
-    ${isEdit ? '' : `<div class="g3">
-      <div class="fg"><label class="lbl">IMEI / Serial del primer equipo</label>
-        <input class="inp" id="pf-imei" type="text" placeholder="356000000000000" data-uppercase="off" autocomplete="off"/></div>
-      <div class="fg"><label class="lbl">Capacidad</label>
-        <input class="inp" id="pf-capacity" type="text" placeholder="128GB" data-uppercase="off"/></div>
-      <div class="fg"><label class="lbl">Color</label>
-        <input class="inp" id="pf-color-eq" type="text" placeholder="Negro" data-uppercase="off"/></div>
-    </div>`}
-    <input type="hidden" id="pf-stock" value="0"/>
-    <input type="hidden" id="pf-min" value="0"/>
-    ` : `
-    <div style="font-weight:700;font-size:12px;margin-bottom:10px">Stock</div>
-    <div class="g2">
+    ${window._vertical?.serialized ? `<label style="display:flex;align-items:center;gap:9px;padding:10px 12px;background:var(--surface2);border:1px solid var(--line);border-radius:8px;margin-bottom:10px;cursor:pointer">
+      <input type="checkbox" id="pf-serialized" ${isSerialized ? 'checked' : ''} onchange="pfSerializedToggle()" style="width:16px;height:16px">
+      <span><strong>Controlar cada unidad por IMEI/serial</strong><br><small style="color:var(--muted2)">Actívalo para celulares y equipos; déjalo apagado para accesorios y repuestos.</small></span>
+    </label>
+    <div id="pf-serial-fields" style="display:${isSerialized ? 'block' : 'none'}">
+      <div style="font-weight:700;font-size:12px;margin-bottom:6px">Equipos (IMEI)</div>
+      <div style="font-size:11px;color:var(--muted2);margin-bottom:10px">El stock se lleva por equipos. Registra el primero aquí; agrega más luego con el botón “Equipos”.</div>
+      ${isEdit ? '' : `<div class="g3">
+        <div class="fg"><label class="lbl">IMEI / Serial del primer equipo</label><input class="inp" id="pf-imei" type="text" placeholder="356000000000000" data-uppercase="off" autocomplete="off"/></div>
+        <div class="fg"><label class="lbl">Capacidad</label><input class="inp" id="pf-capacity" type="text" placeholder="128GB" data-uppercase="off"/></div>
+        <div class="fg"><label class="lbl">Color</label><input class="inp" id="pf-color-eq" type="text" placeholder="Negro" data-uppercase="off"/></div>
+      </div>`}
+    </div>` : ''}
+    <div id="pf-stock-fields" style="display:${window._vertical?.serialized && isSerialized ? 'none' : 'block'}">
+      <div style="font-weight:700;font-size:12px;margin-bottom:10px">Stock</div>
+      <div class="g2">
       <div class="fg">
         <label class="lbl">Stock actual ${isEdit ? '(usa Ajuste para cambiar)' : '*'}</label>
         <input class="inp" id="pf-stock" type="number" min="0" placeholder="0"
@@ -1417,8 +1432,8 @@ function openProductoModal(p = null) {
         <input class="inp" id="pf-min" type="number" min="0" placeholder="5"
                value="${stockMin}"/>
       </div>
+      </div>
     </div>
-    `}
 
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
@@ -1437,6 +1452,14 @@ function pfToggleTax() {
   if (!pctEl) return;
   pctEl.disabled = !checked;
   pctEl.style.opacity = checked ? '1' : '.55';
+}
+
+function pfSerializedToggle() {
+  const on = !!document.getElementById('pf-serialized')?.checked;
+  const serial = document.getElementById('pf-serial-fields');
+  const stock = document.getElementById('pf-stock-fields');
+  if (serial) serial.style.display = on ? 'block' : 'none';
+  if (stock) stock.style.display = on ? 'none' : 'block';
 }
 
 function pfCalcMargen() {
@@ -1571,7 +1594,8 @@ async function guardarProducto(id) {
   const wholesale = parseFloat(document.getElementById('pf-wholesale')?.value) || price;
   const taxable   = document.getElementById('pf-taxable')?.checked ? 1 : 0;
   const tax_pct   = taxable ? (parseFloat(document.getElementById('pf-tax-pct')?.value) || 18) : 0;
-  const stock     = parseInt(document.getElementById('pf-stock')?.value)   || 0;
+  const serialized = !!(window._vertical?.serialized && document.getElementById('pf-serialized')?.checked);
+  const stock     = serialized ? 0 : (parseInt(document.getElementById('pf-stock')?.value) || 0);
   const stock_min = parseInt(document.getElementById('pf-min')?.value)     || 5;
 
   if (!name)      { toast('El nombre es requerido', 'err');  return; }
@@ -1585,7 +1609,11 @@ async function guardarProducto(id) {
     toast('El ITBIS debe estar entre 0% y 100%', 'err'); return;
   }
 
-  const data = { code, barcode, name, brand, model, category, description: desc, unit, cost, price, wholesale, taxable, tax_pct, stock, stock_min, condition };
+  const data = {
+    code, barcode, name, brand, model, category, description: desc, unit, cost,
+    price, wholesale, taxable, tax_pct, stock, stock_min, condition,
+    ...(window._vertical?.serialized ? { serialized: serialized ? 1 : 0 } : {}),
+  };
 
   let result;
   if (id) {
@@ -1600,7 +1628,7 @@ async function guardarProducto(id) {
   // capturó un IMEI— se registra el primer equipo. Solo corre en el vertical
   // tech; en VELO POS este bloque no existe (no hay window._vertical.serialized).
   let unitWarning = '';
-  if (!id && window._vertical && window._vertical.serialized && result.id) {
+  if (!id && serialized && result.id) {
     try {
       const serializedResult = await window.api.productUnits.setSerialized({ productId: result.id, on: true, requestUserId: user.id });
       if (!serializedResult?.ok) throw new Error(serializedResult?.error || 'No se pudo activar el inventario por IMEI');
@@ -1628,11 +1656,7 @@ async function guardarProducto(id) {
     unitWarning ? 'w' : 'ok');
   applyInventoryMutation({
     productId: id || result.id,
-    patch: {
-      ...data,
-      id: id || result.id,
-      ...((!id && window._vertical?.serialized) ? { serialized: 1 } : {}),
-    },
+    patch: { ...data, id: id || result.id, ...(window._vertical?.serialized ? { serialized: serialized ? 1 : 0 } : {}) },
     invalidateHistory: !!result.historyId,
   });
 }

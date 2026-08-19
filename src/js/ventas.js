@@ -1844,6 +1844,9 @@ async function openDetalleVentaModal(s) {
       ${Number(detail.additional_charges_total || 0) > 0
         ? `<div class="tr"><span>Cargos adicionales</span><span>${fmt(detail.additional_charges_total)}</span></div>` : ''}
       <div class="tr grand"><span>${adjustedCopy ? 'Total vigente de la operación' : 'Importe / Total'}</span><span>${fmt(detailTotal)}</span></div>
+      ${Number(detail.trade_in_amount || 0) > 0
+        ? `<div class="tr" style="color:var(--blue)"><span>Equipo usado recibido</span><strong>-${fmt(detail.trade_in_amount)}</strong></div>
+           <div class="tr"><span>Pago monetario</span><strong>${fmt(Math.max(0, Number(detailTotal || 0) - Number(detail.trade_in_amount || 0)))}</strong></div>` : ''}
       ${method === 'credito'
         ? `<div class="tr"><span>Pagado por adelantado / abonado</span><strong style="color:var(--green)">${fmt(detail.payment_amount || 0)}</strong></div>
            <div class="tr"><span>Saldo pendiente de esta factura</span><strong style="color:var(--amber)">${fmt(detail.balance_after_payment ?? detailTotal)}</strong></div>`
@@ -2238,6 +2241,7 @@ function ventasPrintPayload(sale) {
     discount_amt: adjustedCopy ? 0 : (sale.discount_amt || 0),
     tax_amt: adjustedCopy ? sale.adjusted_tax_amt : (sale.tax_amt || 0),
     total: adjustedCopy ? sale.operation_total : sale.total,
+    trade_in_amount: adjustedCopy ? 0 : (sale.trade_in_amount || 0),
     payment_method: adjustedCopy && Number(sale.adjustment_addition_total || 0) > 0
       ? 'varios'
       : sale.payment_method,

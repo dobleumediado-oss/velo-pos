@@ -145,57 +145,24 @@ async function renderSuperAdmin(el) {
   }
   el.appendChild(lgCard);
 
-    // ── Generador de licencias ───────────────────
+  // ── Licencia segura de VELO Suite ───────────────────
   const licCard = h('div', { class: 'card', style: { marginBottom: '16px' } });
-
   licCard.innerHTML = `
-    <div class="card-title mb8">Generador de Licencias</div>
-    <div class="g2">
-      <div class="fg">
-        <label class="lbl">ID de máquina del cliente</label>
-        <input class="inp" id="lic-machine" type="text"
-               placeholder="Pega aquí el ID de máquina del cliente"
-               style="font-family:var(--mono);font-size:11px"/>
-        <div style="font-size:10px;color:var(--muted);margin-top:4px">
-          ID de esta instalación: <span style="font-family:var(--mono);color:var(--blue)"
-          onclick="document.getElementById('lic-machine').value='${machineId}'">${machineId}</span>
-          <span style="color:var(--muted2)"> (clic para copiar al campo)</span>
-        </div>
-      </div>
-      <div class="fg">
-        <label class="lbl">Nombre del negocio</label>
-        <input class="inp" id="lic-biz" type="text" placeholder="Castillo Motors"/>
-      </div>
+    <div class="card-title mb8">🛡 Licencia segura de VELO Suite</div>
+    <div style="font-size:12px;color:var(--muted2);margin-bottom:12px">
+      Esta aplicación solo verifica licencias. Las claves se firman en la herramienta privada del proveedor y la clave privada nunca se instala en el cliente.
     </div>
-    <div class="g2">
-      <div class="fg">
-        <label class="lbl">Tipo de licencia</label>
-        <select class="inp" id="lic-type" onchange="saUpdateExpiry()">
-          <option value="1year">1 año</option>
-          <option value="2year">2 años</option>
-          <option value="perpetual">Perpetua</option>
-          <option value="trial">Prueba 30 días</option>
-          <option value="custom">Fecha personalizada</option>
-        </select>
-      </div>
-      <div class="fg" id="lic-expiry-wrap">
-        <label class="lbl">Fecha de vencimiento</label>
-        <input class="inp" id="lic-expiry" type="date"
-               value="${new Date(Date.now() + 365*24*60*60*1000).toISOString().split('T')[0]}"/>
-      </div>
+    <div class="tr" style="font-size:12px;margin-bottom:6px">
+      <span>Producto requerido</span>
+      <span style="font-weight:700">${lic?.requiredProduct === 'velo_tech_pos' ? 'VELO TECH POS' : 'VELO POS'}</span>
     </div>
-    <button class="btn btn-dark" onclick="saGenerarLicencia()" style="margin-bottom:12px">
-      ${svg('check')} Generar clave de licencia
-    </button>
-    <div id="lic-result" style="display:none">
-      <label class="lbl">Clave generada — cópiala y entrégala al cliente</label>
-      <div style="display:flex;gap:8px">
-        <textarea class="inp" id="lic-key-out" readonly rows="3"
-               style="font-family:var(--mono);font-size:11px;flex:1;resize:none;word-break:break-all"></textarea>
-        <button class="btn btn-out" onclick="navigator.clipboard.writeText(document.getElementById('lic-key-out').value);toast('✓ Copiada')">
-          Copiar
-        </button>
-      </div>
+    <div class="tr" style="font-size:12px;margin-bottom:6px">
+      <span>Productos habilitados</span>
+      <span style="font-weight:600">${(lic?.products || []).map(p => p === 'velo_tech_pos' ? 'VELO TECH POS' : 'VELO POS').join(' + ') || '—'}</span>
+    </div>
+    <div class="tr" style="font-size:11px;color:var(--muted)">
+      <span>ID de máquina</span>
+      <button class="btn-ghost" style="font-family:var(--mono);font-size:10px" onclick="navigator.clipboard.writeText('${_saEsc(machineId)}');toast('ID copiado')">${_saEsc(machineId)}</button>
     </div>`;
   el.appendChild(licCard);
 
@@ -763,68 +730,6 @@ async function renderSuperAdmin(el) {
       </button>
     </div>`;
   el.appendChild(dangerCard);
-}
-
-function saUpdateExpiry() {
-  const type     = document.getElementById('lic-type')?.value;
-  const expiryEl = document.getElementById('lic-expiry');
-  const expiryWrap = document.getElementById('lic-expiry-wrap');
-  if (!expiryEl) return;
-
-  if (type === 'perpetual') {
-    if (expiryWrap) expiryWrap.style.display = 'none';
-    expiryEl.value = 'PERPETUAL';
-    return;
-  }
-
-  if (expiryWrap) expiryWrap.style.display = '';
-  const now = new Date();
-  if (type === '1year')  expiryEl.value = new Date(now.setFullYear(now.getFullYear()+1)).toISOString().split('T')[0];
-  if (type === '2year')  expiryEl.value = new Date(now.setFullYear(now.getFullYear()+2)).toISOString().split('T')[0];
-  if (type === 'trial')  expiryEl.value = new Date(now.setDate(now.getDate()+30)).toISOString().split('T')[0];
-  if (type === 'custom') expiryEl.value = '';
-}
-
-async function saGenerarLicencia() {
-  const machineId = document.getElementById('lic-machine')?.value?.trim().toUpperCase();
-  const biz       = document.getElementById('lic-biz')?.value?.trim();
-  const type      = document.getElementById('lic-type')?.value;
-  let   expiry    = document.getElementById('lic-expiry')?.value?.trim();
-
-  if (!machineId) {
-    document.getElementById('lic-machine')?.focus();
-    toast('Ingresa o copia el ID de máquina del cliente', 'err'); return;
-  }
-  if (!biz) {
-    document.getElementById('lic-biz')?.focus();
-    toast('Ingresa el nombre del negocio', 'err'); return;
-  }
-  if (type === 'perpetual') {
-    expiry = 'PERPETUAL';
-  } else if (!expiry) {
-    toast('Selecciona la fecha de vencimiento', 'err'); return;
-  }
-
-  // Generar via IPC con ECDSA v2 (clave privada en main.js)
-  const btn = document.querySelector('button[onclick="saGenerarLicencia()"]');
-  if (btn) { btn.disabled = true; btn.textContent = 'Generando...'; }
-
-  const result = await window.api.license.generate({ machineId, business: biz, expiry, requestUserId: user?.id });
-
-  if (btn) { btn.disabled = false; btn.innerHTML = `${svg('check')} Generar clave de licencia`; }
-
-  if (!result?.ok) {
-    toast(result?.error || 'Error al generar licencia', 'err');
-    if (result?.error?.includes('Clave privada')) {
-      toast('La clave privada vendor-private.pem no está en este equipo', 'err');
-    }
-    return;
-  }
-
-  const licKey = result.licenseKey;
-  document.getElementById('lic-key-out').value = licKey;
-  document.getElementById('lic-result').style.display = 'block';
-  toast(`✓ Licencia ${type === 'perpetual' ? 'Perpetua' : 'hasta ' + expiry} generada`);
 }
 
 async function saExportarDB() {

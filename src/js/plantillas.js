@@ -1172,6 +1172,8 @@ function renderCartaRecibo(sale, cfg, opts) {
         <div class="tr"><span>Descuento</span><span>${displayDiscount > 0 ? '-' : ''}${_n2(displayDiscount)}</span></div>
         ${Number(sale.additional_charges_total || 0) > 0 ? `<div class="tr"><span>Cargos adicionales</span><span>${_n2(sale.additional_charges_total)}</span></div>` : ''}
         <div class="tr grand"><span>Total con impuestos</span><span>${_n2(displayTotal)}</span></div>
+        ${Number(sale.trade_in_amount || 0) > 0 ? `<div class="tr"><span>Equipo usado recibido</span><span>-${_n2(sale.trade_in_amount)}</span></div>
+        <div class="tr"><span>Pago monetario</span><span>${_n2(Math.max(0, displayTotal - Number(sale.trade_in_amount || 0)))}</span></div>` : ''}
         ${!isCotizacion ? `<div class="tr"><span>Su pago</span><span>${_n2(paidAmount)}</span></div>` : ''}
         ${!isCotizacion ? `<div class="tr"><span>Balance después del pago</span><span>${_n2(balanceAfter)}</span></div>` : ''}
       </div>
@@ -1491,6 +1493,8 @@ function renderCartaFormal(sale, cfg, opts) {
     ${displayDiscount > 0 ? `<div class="total-row"><span>Descuento</span><span style="color:#dc2626">-RD$${_n2(displayDiscount)}</span></div>` : ''}
     ${Number(sale.additional_charges_total || 0) > 0 ? `<div class="total-row"><span>Cargos adicionales</span><span>RD$${_n2(sale.additional_charges_total)}</span></div>` : ''}
     <div class="total-row grand-total"><span>Total con impuestos</span><span>RD$${_n2(displayTotal)}</span></div>
+    ${Number(sale.trade_in_amount || 0) > 0 ? `<div class="total-row"><span>Equipo usado recibido</span><span>-RD$${_n2(sale.trade_in_amount)}</span></div>
+    <div class="total-row"><span>Pago monetario</span><strong>RD$${_n2(Math.max(0, displayTotal - Number(sale.trade_in_amount || 0)))}</strong></div>` : ''}
     ${String(sale.display_currency || '').toUpperCase() === 'USD' && Number(sale.display_exchange_rate) > 0
       ? `<div class="total-row"><span>Equivalente USD</span><strong>US$${Number(sale.display_amount || (displayTotal / Number(sale.display_exchange_rate))).toFixed(2)}</strong></div>` : ''}
   </div>

@@ -2140,18 +2140,28 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
   });
 }
 
+function _posTradeInAmount(inv, total = calcTotals(inv).total) {
+  return Math.min(Number(total) || 0, Math.max(0, Number(inv?.tradeIn?.allowance) || 0));
+}
+
+function _posAmountDue(inv, total = calcTotals(inv).total) {
+  return Math.max(0, Math.round(((Number(total) || 0) - _posTradeInAmount(inv, total)) * 100) / 100);
+}
+
 function openCobroModal(inv) {
   if (!inv || !inv.cart.length) return;
   const { subtotal, itbis, total, discAmt, disc } = calcTotals(inv);
   const isQuote = inv.itype === 'cotizacion';
-  window._cbrBaseTotals = { subtotal, itbis, total, discAmt, chargesTotal: calcTotals(inv).chargesTotal };
+  const tradeInAmount = isQuote ? 0 : _posTradeInAmount(inv, total);
+  const amountDue = isQuote ? total : _posAmountDue(inv, total);
+  window._cbrBaseTotals = { subtotal, itbis, total, amountDue, tradeInAmount, discAmt, chargesTotal: calcTotals(inv).chargesTotal };
 
   openModal(`
     <div class="modal-title">${isQuote
       ? 'Crear cotización'
       : (inv.checkoutOrderId ? `Cobrar ${posEscHtml(inv.checkoutOrderNumber || 'orden de despacho')}` : 'Cobrar venta')}</div>
-    <div class="modal-sub">${isQuote ? 'Valor cotizado' : 'Total a cobrar'}:
-      <strong id="cbr-header-total">${fmt(total)}</strong>${inv.checkoutOrderId ? ' · preparada en despacho' : ''}
+    <div class="modal-sub">${isQuote ? 'Valor cotizado' : 'Total de la venta'}:
+      <strong id="cbr-header-total">${fmt(total)}</strong>${!isQuote && tradeInAmount ? ` · A cobrar: <strong>${fmt(amountDue)}</strong>` : ''}${inv.checkoutOrderId ? ' · preparada en despacho' : ''}
     </div>
 
     <div class="card" style="background:var(--surface2);margin-bottom:14px">
@@ -2228,6 +2238,18 @@ function openCobroModal(inv) {
         <div class="alrt-sub">No mueve inventario, caja, crédito ni contabilidad. Podrás convertirlo en factura posteriormente.</div>
       </div>
     </div>` : ''}
+
+    ${!isQuote && window._vertical?.modules?.trade_in ? `
+    <div class="card" style="background:var(--blue-bg);border-color:var(--blue-line);margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:center">
+        <div><div style="font-weight:700;font-size:12px;color:var(--blue)">Equipo usado como parte de pago</div>
+          <div style="font-size:11px;color:var(--muted2)">${inv.tradeIn ? `${posEscHtml(inv.tradeIn.productName || 'Equipo usado')} · ${posEscHtml(inv.tradeIn.imei || inv.tradeIn.serial || '')}` : 'Recibe un usado y aplica su valor sin tratarlo como descuento.'}</div></div>
+        <button class="btn btn-out btn-sm" onclick="cbrOpenTradeIn()">${inv.tradeIn ? 'Editar' : '+ Recibir usado'}</button>
+      </div>
+      ${inv.tradeIn ? `<div style="display:flex;justify-content:space-between;margin-top:9px;padding-top:8px;border-top:1px solid var(--blue-line);font-size:12px"><span>Valor reconocido</span><strong>−${fmt(tradeInAmount)}</strong></div>` : ''}
+    </div>` : ''}
+
+    ${!isQuote && inv.cart.some(i => i.product_unit_id) ? `<div class="fg"><label class="lbl">Garantía para los equipos vendidos</label><select class="inp" id="cbr-warranty-days"><option value="0">Sin garantía</option>${[30,60,90,180,365].map(d=>`<option value="${d}" ${Number(inv.warrantyDays||30)===d?'selected':''}>${d} días</option>`).join('')}</select></div>` : ''}
 
     ${!isQuote && CFG.fiscalEnabled ? `
     <div class="g2">
@@ -2332,8 +2354,8 @@ function openCobroModal(inv) {
         <div class="inp-ic">
           <div class="ic">${svg('dollar')}</div>
           <input class="inp" id="cbr-received" type="number"
-                 placeholder="${fmt(total)}"
-                 value="${total.toFixed(2)}"
+                 placeholder="${fmt(amountDue)}"
+                 value="${amountDue.toFixed(2)}"
                  oninput="cbrCalcCambio()"
                  onfocus="this.select()"/>
         </div>
@@ -2346,7 +2368,7 @@ function openCobroModal(inv) {
     <div id="cbr-mixto" style="display:${!isQuote && inv.pmeth==='mixto' ? 'block' : 'none'}">
       <div class="card" style="background:var(--blue-bg);border-color:var(--blue-line);margin-bottom:10px">
         <div style="font-weight:700;font-size:12px;margin-bottom:10px;color:var(--blue)">
-          Pago Mixto — Total: ${fmt(total)}
+          Pago Mixto — A cobrar: ${fmt(amountDue)}
         </div>
         <div class="g2">
           <div class="fg" style="margin-bottom:0">
@@ -2388,7 +2410,7 @@ function openCobroModal(inv) {
         <label class="lbl">Pago inicial recibido (RD$) <span style="font-weight:400;color:var(--muted)">(opcional)</span></label>
         <div class="inp-ic">
           <div class="ic">${svg('dollar')}</div>
-          <input class="inp" id="cbr-initial-payment" type="number" min="0" max="${total.toFixed(2)}" step="0.01"
+          <input class="inp" id="cbr-initial-payment" type="number" min="0" max="${amountDue.toFixed(2)}" step="0.01"
                  value="${Number(inv.initialPaymentAmount || 0).toFixed(2)}"
                  oninput="cbrCalcInitial()"/>
         </div>
@@ -2444,7 +2466,9 @@ function openCobroModal(inv) {
         ? `<div class="tr"><span>ITBIS (${CFG.itbis}%)</span><span id="cbr-summary-itbis">${fmt(itbis)}</span></div>` : ''}
       ${Number(calcTotals(inv).chargesTotal) > 0
         ? `<div class="tr"><span>Cargos adicionales</span><span id="cbr-summary-charges">${fmt(calcTotals(inv).chargesTotal)}</span></div>` : ''}
+      ${tradeInAmount > 0 ? `<div class="tr" style="color:var(--blue)"><span>Equipo usado recibido</span><span>−${fmt(tradeInAmount)}</span></div>` : ''}
       <div class="tr grand"><span id="cbr-total-label">TOTAL</span><span id="cbr-summary-total">${fmt(total)}</span></div>
+      ${tradeInAmount > 0 ? `<div class="tr grand" style="color:var(--green)"><span>A COBRAR</span><span>${fmt(amountDue)}</span></div>` : ''}
       <div id="cbr-summary-base" style="display:none;text-align:right;font-size:10.5px;color:var(--muted);padding-top:5px"></div>
     </div>
 
@@ -2474,8 +2498,8 @@ function openCobroModal(inv) {
   // Inicializar cambio inmediatamente si método es efectivo
   setTimeout(() => {
     const pmeth = document.getElementById('cbr-pmeth')?.value;
-    if (!pmeth || pmeth === 'efectivo') cbrCalcCambio(total);
-    if (pmeth === 'credito') cbrCalcInitial(total);
+    if (!pmeth || pmeth === 'efectivo') cbrCalcCambio(amountDue);
+    if (pmeth === 'credito') cbrCalcInitial(amountDue);
     if (pmeth === 'credito') cbrInitialMethodChanged();
     cbrUpdatePaymentCurrency();
   }, 50);
@@ -2567,13 +2591,13 @@ function cbrUpdatePaymentCurrency() {
   setText('cbr-summary-charges', money(totals.chargesTotal || 0));
   setText('cbr-summary-total', money(totals.total));
   setText('cbr-header-total', money(totals.total));
-  setText('cbr-total-label', convertSummary ? 'TOTAL A TRANSFERIR (USD)' : 'TOTAL');
+  setText('cbr-total-label', convertSummary ? 'TOTAL FACTURA (USD)' : 'TOTAL');
 
   const base = document.getElementById('cbr-summary-base');
   if (base) {
     base.style.display = convertSummary ? 'block' : 'none';
     base.textContent = convertSummary
-      ? `Equivalente fiscal: ${fmt(totals.total)} · Tasa RD$${rate.toFixed(2)} por US$1`
+      ? `A transferir: ${fmt(totals.amountDue ?? totals.total)} · Tasa RD$${rate.toFixed(2)} por US$1`
       : '';
   }
   const detail = document.getElementById('cbr-fx-detail');
@@ -2584,7 +2608,8 @@ function cbrUpdatePaymentCurrency() {
       const nonCash = Number(document.getElementById('cbr-mix-card')?.value || 0);
       detail.textContent = `Parte no efectiva: ${fmt(nonCash)} → ${_cbrMoney(nonCash / rate, 'USD')}`;
     } else {
-      detail.textContent = `${fmt(totals.total)} → ${_cbrMoney(totals.total / rate, 'USD')}`;
+      const due = Number(totals.amountDue ?? totals.total);
+      detail.textContent = `${fmt(due)} → ${_cbrMoney(due / rate, 'USD')}`;
     }
   }
 }
@@ -2601,7 +2626,7 @@ function cbrTogglePago(val) {
   if (transferRef) transferRef.style.display = val === 'transferencia' ? 'block' : 'none';
   if (val === 'credito') {
     const received = Number(document.getElementById('cbr-received')?.value || 0);
-    const total = calcTotals(currentInv()).total;
+    const total = _posAmountDue(currentInv());
     const initial = document.getElementById('cbr-initial-payment');
     if (initial && received > 0 && received < total - 0.005 && Number(initial.value || 0) <= 0) {
       initial.value = received.toFixed(2);
@@ -2615,7 +2640,7 @@ function cbrTogglePago(val) {
 // Mantener compatibilidad con llamadas existentes
 function cbrToggleCredito(val) { cbrTogglePago(val); }
 
-function cbrCalcMixto(total = calcTotals(currentInv()).total) {
+function cbrCalcMixto(total = _posAmountDue(currentInv())) {
   const efec = parseFloat(document.getElementById('cbr-mix-efec')?.value) || 0;
   const card = parseFloat(document.getElementById('cbr-mix-card')?.value) || 0;
   const suma = efec + card;
@@ -2639,7 +2664,7 @@ function cbrCalcMixto(total = calcTotals(currentInv()).total) {
   cbrUpdatePaymentCurrency();
 }
 
-function cbrCalcCambio(total = calcTotals(currentInv()).total) {
+function cbrCalcCambio(total = _posAmountDue(currentInv())) {
   const rec    = parseFloat(document.getElementById('cbr-received')?.value) || 0;
   const cambio = rec - total;
   const el     = document.getElementById('cbr-cambio');
@@ -2665,7 +2690,7 @@ function cbrCalcCambio(total = calcTotals(currentInv()).total) {
   }
 }
 
-function cbrCalcInitial(total = calcTotals(currentInv()).total) {
+function cbrCalcInitial(total = _posAmountDue(currentInv())) {
   const input = document.getElementById('cbr-initial-payment');
   const paid = Math.max(0, Number(input?.value || 0));
   const pending = Math.max(0, total - paid);
@@ -2694,8 +2719,10 @@ function cbrInitialMethodChanged() {
 
 function cbrRefreshTotals(oldTotal = null) {
   const totals = calcTotals(currentInv());
+  const amountDue = _posAmountDue(currentInv(), totals.total);
   window._cbrBaseTotals = {
     subtotal: totals.subtotal, itbis: totals.itbis, total: totals.total,
+    amountDue, tradeInAmount:_posTradeInAmount(currentInv(), totals.total),
     discAmt: totals.discAmt, chargesTotal: totals.chargesTotal,
   };
   const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
@@ -2707,11 +2734,45 @@ function cbrRefreshTotals(oldTotal = null) {
   setText('cbr-summary-total', fmt(totals.total));
   const received = document.getElementById('cbr-received');
   if (received && (!received.value || oldTotal == null || Math.abs(Number(received.value) - Number(oldTotal)) < 0.01)) {
-    received.value = totals.total.toFixed(2);
+    received.value = amountDue.toFixed(2);
   }
-  cbrCalcCambio(totals.total);
-  cbrCalcMixto(totals.total);
+  cbrCalcCambio(amountDue);
+  cbrCalcMixto(amountDue);
   cbrUpdatePaymentCurrency();
+}
+
+function cbrOpenTradeIn() {
+  const inv = currentInv();
+  if (!(inv.cliId && inv.cliId !== 1)) {
+    toast('Selecciona primero un cliente registrado para recibir el usado', 'w');
+    return;
+  }
+  const products = (DB.products || []).filter(p => p.active !== 0 && p.serialized);
+  if (!products.length) {
+    toast('Crea primero el modelo del equipo usado y activa su control por IMEI', 'w');
+    return;
+  }
+  const cur = inv.tradeIn || {};
+  openModal(`
+    <div class="modal-title">Recibir equipo usado</div>
+    <div class="modal-sub">El valor reconocido entra como inventario y reduce el saldo a cobrar.</div>
+    <div class="fg" style="margin-top:14px"><label class="lbl">Modelo que entrará al inventario *</label><select class="inp" id="trade-product">${products.map(p=>`<option value="${p.id}" ${Number(cur.productId)===Number(p.id)?'selected':''}>${posEscHtml(p.name)} · ${posEscHtml(p.code||'')}</option>`).join('')}</select></div>
+    <div class="g2"><div class="fg"><label class="lbl">IMEI / Serial *</label><input class="inp" id="trade-imei" value="${posEscHtml(cur.imei||cur.serial||'')}" data-uppercase="off"></div><div class="fg"><label class="lbl">Valor reconocido (RD$) *</label><input class="inp" id="trade-allowance" type="number" min="0" value="${Number(cur.allowance)||''}"></div></div>
+    <div class="g2"><div class="fg"><label class="lbl">Capacidad</label><input class="inp" id="trade-capacity" value="${posEscHtml(cur.capacity||'')}" placeholder="128GB"></div><div class="fg"><label class="lbl">Color</label><input class="inp" id="trade-color" value="${posEscHtml(cur.color||'')}" placeholder="Negro"></div></div>
+    <div class="fg"><label class="lbl">Notas de evaluación</label><input class="inp" id="trade-notes" value="${posEscHtml(cur.notes||'')}" placeholder="Estado físico, batería, accesorios…"></div>
+    <div class="modal-foot" style="justify-content:space-between"><div>${cur.productId?'<button class="btn btn-ghost" id="trade-remove" style="color:var(--red)">Quitar usado</button>':''}</div><div class="flex" style="gap:8px"><button class="btn btn-out" id="trade-back">Volver</button><button class="btn btn-dark" id="trade-save">Aplicar como pago</button></div></div>`);
+  document.getElementById('trade-back').onclick=()=>openCobroModal(inv);
+  document.getElementById('trade-remove')?.addEventListener('click',()=>{inv.tradeIn=null;openCobroModal(inv);});
+  document.getElementById('trade-save').onclick=()=>{
+    const productId=Number(document.getElementById('trade-product').value);const product=products.find(p=>Number(p.id)===productId);
+    const imei=document.getElementById('trade-imei').value.trim();const allowance=Math.max(0,Number(document.getElementById('trade-allowance').value)||0);
+    const total=calcTotals(inv).total;
+    if(!imei){toast('Ingresa el IMEI o serial del usado','w');return;}
+    if(!allowance){toast('Ingresa el valor reconocido','w');return;}
+    if(allowance>total+0.005){toast('El valor del usado no puede superar el total de la venta','err');return;}
+    inv.tradeIn={productId,productName:product?.name||'',imei,allowance,capacity:document.getElementById('trade-capacity').value.trim(),color:document.getElementById('trade-color').value.trim(),notes:document.getElementById('trade-notes').value.trim()};
+    openCobroModal(inv);
+  };
 }
 
 function cbrFilterCli(q) {
@@ -3030,6 +3091,7 @@ async function finalizarVenta() {
   const initialPaymentReference =
     document.getElementById('cbr-initial-reference')?.value?.trim() || '';
   const saleNotes = document.getElementById('cbr-notes')?.value?.trim() || '';
+  const warrantyDays = Math.max(0, Number.parseInt(document.getElementById('cbr-warranty-days')?.value, 10) || 0);
 
   // Transferencia sí requiere cuenta; tarjeta requiere la marca utilizada por el
   // cliente y el backend resuelve internamente la cuenta de liquidación.
@@ -3083,7 +3145,11 @@ async function finalizarVenta() {
 
   if (!inv.cart.length) return;
 
-  const currentTotal = calcTotals(inv).total;
+  const currentTotal = _posAmountDue(inv);
+  if (!isQuote && inv.tradeIn && !(inv.cliId && inv.cliId !== 1)) {
+    toast('El equipo usado debe quedar vinculado a un cliente registrado', 'w');
+    return;
+  }
   if (!isQuote && pmeth === 'credito') {
     if (!(inv.cliId && inv.cliId !== 1)) {
       toast('Selecciona un cliente registrado para realizar una venta a crédito', 'w');
@@ -3108,7 +3174,7 @@ async function finalizarVenta() {
 
   // Validar pago mixto: los montos deben sumar el total
   if (!isQuote && pmeth === 'mixto') {
-    const { total } = calcTotals(inv);
+    const total = currentTotal;
     const efec = parseFloat(document.getElementById('cbr-mix-efec')?.value) || 0;
     const card = parseFloat(document.getElementById('cbr-mix-card')?.value) || 0;
     const suma = efec + card;
@@ -3120,7 +3186,7 @@ async function finalizarVenta() {
 
   // Validar que el efectivo recibido cubra el total
   if (!isQuote && pmeth === 'efectivo') {
-    const { total } = calcTotals(inv);
+    const total = currentTotal;
     const received = parseFloat(document.getElementById('cbr-received')?.value) || 0;
     if (received < total - 0.01) {
       toast(`El monto recibido (${fmt(received)}) no cubre el total (${fmt(total)})`, 'err');
@@ -3233,6 +3299,8 @@ async function finalizarVenta() {
       replacesSaleId: inv.replacesSaleId || null,
       sourceQuoteId: inv.sourceQuoteId || null,
       ncfType,
+      warrantyDays,
+      tradeIn: inv.tradeIn || null,
     },
     type: inv.itype || 'factura',
     session: cajaSession,
@@ -3395,7 +3463,10 @@ async function finalizarVenta() {
       customer_phone_type: savedSale?.customer_phone_type || customer.phone_type || 'telefono',
       customer_email:   savedSale?.customer_email || customer.email || '',
       payment_method:  pmeth,
-      payment_amount:  isQuote ? 0 : (pmeth === 'credito' ? result.initialPaymentAmount : result.total),
+      trade_in_amount: result.tradeInAmount || 0,
+      payment_amount:  isQuote ? 0 : (pmeth === 'credito'
+        ? result.initialPaymentAmount
+        : Math.max(0, Number(result.total || 0) - Number(result.tradeInAmount || 0))),
       balance_after_payment: pmeth === 'credito' ? result.outstandingBalance : 0,
       transaction_number: result.documentNumberFmt || result.saleId,
       mix_efec:        mixEfec,

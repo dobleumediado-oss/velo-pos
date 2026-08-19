@@ -570,6 +570,8 @@ function createTables() {
       card_last4      TEXT DEFAULT '',
       payment_reference TEXT DEFAULT '',
       notes           TEXT DEFAULT '',
+      trade_in_amount REAL NOT NULL DEFAULT 0,
+      trade_in_unit_id INTEGER REFERENCES product_units(id),
       print_template_id TEXT DEFAULT '',
       print_printer_type TEXT DEFAULT '',
       print_printer_name TEXT DEFAULT '',
@@ -666,6 +668,20 @@ function createTables() {
     CREATE INDEX IF NOT EXISTS idx_service_orders_status ON service_orders(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_service_orders_imei ON service_orders(imei);
     CREATE INDEX IF NOT EXISTS idx_service_order_items_order ON service_order_items(service_order_id);
+
+    -- ── Equipos usados recibidos como parte de pago (VELO TECH POS R7) ──
+    CREATE TABLE IF NOT EXISTS trade_ins (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      sale_id         INTEGER UNIQUE NOT NULL REFERENCES sales(id),
+      customer_id     INTEGER REFERENCES customers(id),
+      product_id      INTEGER NOT NULL REFERENCES products(id),
+      product_unit_id INTEGER UNIQUE NOT NULL REFERENCES product_units(id),
+      allowance       REAL NOT NULL CHECK(allowance > 0),
+      status          TEXT NOT NULL DEFAULT 'aplicado' CHECK(status IN ('aplicado','cancelado')),
+      created_by      INTEGER REFERENCES users(id),
+      created_at      TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_trade_ins_customer ON trade_ins(customer_id, created_at);
 
     -- ── Pagos / Abonos ──
     CREATE TABLE IF NOT EXISTS payments (
@@ -2813,16 +2829,27 @@ const productsRepo = {
       const before = db.prepare('SELECT * FROM products WHERE id=?').get(id);
       if (!before) throw new Error('Producto no encontrado');
 
+      const changesSerialized = p.serialized !== undefined && p.serialized !== null &&
+        Number(before.serialized || 0) !== (p.serialized ? 1 : 0);
+      if (changesSerialized && !p.serialized && tableExists('product_units')) {
+        const units = db.prepare('SELECT COUNT(*) n FROM product_units WHERE product_id=?').get(id).n;
+        if (units > 0) {
+          throw new Error('No se puede desactivar el serializado: el producto ya tiene unidades registradas');
+        }
+      }
+
       // Igual que en create(): barcode vacío → código del artículo.
       const barcode = String(p.barcode || '').trim() || String(p.code || '').trim();
       db.prepare(`
         UPDATE products SET code=?,barcode=?,name=?,brand=?,category=?,description=?,model=?,
-        cost=?,price=?,wholesale=?,taxable=?,tax_pct=?,stock_min=?,unit=?,condition=?,updated_at=datetime('now')
+        cost=?,price=?,wholesale=?,taxable=?,tax_pct=?,stock_min=?,unit=?,condition=?,
+        serialized=COALESCE(?,serialized),updated_at=datetime('now')
         WHERE id=?
       `).run(p.code,barcode,p.name,p.brand||'',p.category||'',p.description||'',
              p.model||'',p.cost,p.price,p.wholesale||p.price,
              normalizeTaxable(p.taxable, 1), normalizeTaxPct(p.tax_pct, 18),
-             p.stock_min||5,p.unit||'und', p.condition||'nuevo',id);
+             p.stock_min||5,p.unit||'und', p.condition||'nuevo',
+             p.serialized === undefined || p.serialized === null ? null : (p.serialized ? 1 : 0), id);
 
       const after = db.prepare('SELECT * FROM products WHERE id=?').get(id);
       const historyId = recordProductPriceHistory(id, before, after, {
@@ -4192,6 +4219,15 @@ function saleOperationFingerprint({ customer, items, payment, type }) {
         description: String(row?.description || '').replace(/\s+/g, ' ').trim(),
         amount: round2(Number(row?.amount) || 0),
       })),
+      warrantyDays: Math.max(0, Number.parseInt(payment?.warrantyDays, 10) || 0),
+      tradeIn: payment?.tradeIn ? {
+        productId: Number(payment.tradeIn.productId) || null,
+        imei: String(payment.tradeIn.imei || '').trim().toUpperCase(),
+        serial: String(payment.tradeIn.serial || '').trim().toUpperCase(),
+        allowance: round2(Number(payment.tradeIn.allowance) || 0),
+        color: String(payment.tradeIn.color || '').trim(),
+        capacity: String(payment.tradeIn.capacity || '').trim(),
+      } : null,
     },
   };
   return crypto.createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
@@ -4235,8 +4271,10 @@ function saleConfirmationResult(sale, { idempotent = false } = {}) {
     initialPaymentAmount: Number(initialPayment?.amount || 0),
     initialPaymentMethod: initialPayment?.method || '',
     outstandingBalance: sale.payment_method === 'credito'
-      ? Math.max(0, round2(Number(sale.total || 0) - Number(initialPayment?.amount || 0)))
+      ? Math.max(0, round2(Number(sale.total || 0) - Number(sale.trade_in_amount || 0) - Number(initialPayment?.amount || 0)))
       : 0,
+    tradeInAmount: Number(sale.trade_in_amount || 0),
+    tradeInUnitId: sale.trade_in_unit_id || null,
     replacesSaleId: sale.replaces_sale_id || null,
     reusedDocumentNumber: !!sale.replaces_sale_id,
     operationId: sale.operation_id || '',
@@ -4511,18 +4549,44 @@ const salesRepo = {
       const taxAmt = calculated.taxAmt;
       const total = round2(calculated.total + additionalChargesTotal);
       const taxPct = headerTaxPct;
+
+      // R7 · Equipo usado recibido como parte de pago. La factura conserva su
+      // total comercial/fiscal completo; solo el saldo a cobrar se reduce. El
+      // equipo entra a product_units con costo igual al valor reconocido.
+      let tradeIn = null;
+      let tradeInAmount = 0;
+      if (type === 'factura' && payment.tradeIn) {
+        if (customer.id === 1) throw new Error('Selecciona un cliente registrado para recibir un equipo usado');
+        const productId = Number(payment.tradeIn.productId) || 0;
+        const product = db.prepare('SELECT id,name,COALESCE(serialized,0) serialized FROM products WHERE id=? AND active=1').get(productId);
+        if (!product || !product.serialized) throw new Error('Selecciona un modelo serializado válido para el equipo usado');
+        const imei = String(payment.tradeIn.imei || '').trim();
+        const serial = String(payment.tradeIn.serial || '').trim();
+        if (!imei && !serial) throw new Error('Ingresa el IMEI o serial del equipo usado');
+        if (productUnitsRepo.findByImei(imei || serial)) throw new Error('Ese IMEI o serial ya está registrado');
+        tradeInAmount = round2(Number(payment.tradeIn.allowance) || 0);
+        if (tradeInAmount <= 0) throw new Error('El valor reconocido por el usado debe ser mayor a cero');
+        if (tradeInAmount > total + 0.005) throw new Error('El valor del usado no puede superar el total de la venta');
+        tradeIn = {
+          productId, imei, serial,
+          color: String(payment.tradeIn.color || '').trim(),
+          capacity: String(payment.tradeIn.capacity || '').trim(),
+          notes: String(payment.tradeIn.notes || '').trim(),
+        };
+      }
+      const amountDue = round2(total - tradeInAmount);
       const initialPaymentAmount = type === 'factura' && payment.method === 'credito'
         ? round2(Number(payment.initialPaymentAmount) || 0)
         : 0;
       const initialPaymentMethod = String(payment.initialPaymentMethod || 'efectivo').toLowerCase();
-      if (initialPaymentAmount < 0 || initialPaymentAmount > total + 0.01) {
+      if (initialPaymentAmount < 0 || initialPaymentAmount > amountDue + 0.01) {
         throw new Error('El pago inicial no puede ser negativo ni superar el total de la factura');
       }
       if (type === 'factura' && payment.method === 'credito') {
         if (customer.id === 1) {
           throw new Error('Selecciona un cliente registrado para realizar una venta a crédito');
         }
-        if (initialPaymentAmount >= total - 0.005) {
+        if (initialPaymentAmount >= amountDue - 0.005) {
           throw new Error('Si el cliente paga el total, registra la venta como contado');
         }
         if (initialPaymentAmount > 0 && !session?.id) {
@@ -4569,7 +4633,7 @@ const salesRepo = {
         if (cust.credit_limit <= 0) {
           throw new Error('Este cliente no tiene límite de crédito configurado — contacte al administrador');
         }
-        const creditExposure = round2(total - initialPaymentAmount);
+        const creditExposure = round2(amountDue - initialPaymentAmount);
         if (cust.balance + creditExposure > cust.credit_limit) {
           throw new Error(`Límite de crédito excedido. Disponible: ${(cust.credit_limit - cust.balance).toFixed(2)}`);
         }
@@ -4627,7 +4691,7 @@ const salesRepo = {
         ? 0
         : (method === 'mixto'
           ? round2(payment.mixCard || 0)
-          : (method === 'credito' ? 0 : total));
+          : (method === 'credito' ? 0 : amountDue));
       let exchangeRate = 1;
       let accountAmount = round2(baseAccountAmount);
       if (paymentCurrency === 'USD' && baseAccountAmount > 0) {
@@ -4701,7 +4765,7 @@ const salesRepo = {
           payment_currency,exchange_rate,account_amount,card_brand,card_last4,
           additional_charges_total,display_currency,display_exchange_rate,display_amount,
           print_template_id,print_printer_type,print_printer_name,print_profile_id,print_copies,print_action,
-          payment_reference,notes,operation_id,operation_fingerprint,
+          payment_reference,notes,trade_in_amount,trade_in_unit_id,operation_id,operation_fingerprint,
           created_at,original_sale_date,sale_date,updated_at)
         VALUES(
           @cash_session_id,@customer_id,@customer_name,@customer_rnc,
@@ -4714,7 +4778,7 @@ const salesRepo = {
           @payment_currency,@exchange_rate,@account_amount,@card_brand,@card_last4,
           @additional_charges_total,@display_currency,@display_exchange_rate,@display_amount,
           @print_template_id,@print_printer_type,@print_printer_name,@print_profile_id,@print_copies,@print_action,
-          @payment_reference,@notes,@operation_id,@operation_fingerprint,
+          @payment_reference,@notes,@trade_in_amount,@trade_in_unit_id,@operation_id,@operation_fingerprint,
           @created_at,@original_sale_date,@sale_date,@created_at
         )
       `).run({
@@ -4756,6 +4820,8 @@ const salesRepo = {
         print_action: payment.printAction === 'none' ? 'none' : 'print',
         card_brand: cardBrand, card_last4: cardLast4, payment_reference: paymentReference,
         notes: String(payment.notes || '').trim().slice(0, 1000),
+        trade_in_amount: tradeInAmount,
+        trade_in_unit_id: null,
         operation_id: operationId,
         operation_fingerprint: operationFingerprint,
         created_at: db.prepare("SELECT datetime('now','localtime') AS value").get().value,
@@ -4871,6 +4937,8 @@ const salesRepo = {
         if (afectaStock && !item._nonStock) {
           if (item._serialized && item.product_unit_id) {
             productUnitsRepo.markSold(item.product_unit_id, saleId);
+            const warrantyDays = Math.max(0, Math.min(3650, Number.parseInt(payment.warrantyDays, 10) || 0));
+            if (warrantyDays > 0) productUnitsRepo.applySaleWarranty(item.product_unit_id, warrantyDays);
           } else {
             productsRepo.adjustStock(item.product_id, -item.qty, 'salida',
               `Venta #${saleId}`, saleId, user.id);
@@ -4878,14 +4946,30 @@ const salesRepo = {
         }
       }
 
+      // El usado entra solo después de que la venta y sus líneas quedaron
+      // validadas. Sigue dentro de la misma transacción de salesRepo.create.
+      if (tradeIn) {
+        const unitId = productUnitsRepo.create({
+          product_id: tradeIn.productId,
+          imei: tradeIn.imei || null,
+          serial: tradeIn.serial || null,
+          condition: 'usado', status: 'en_stock', unit_cost: tradeInAmount,
+          color: tradeIn.color, capacity: tradeIn.capacity,
+          notes: `Trade-in venta #${saleId}${tradeIn.notes ? ` · ${tradeIn.notes}` : ''}`,
+        });
+        db.prepare('UPDATE sales SET trade_in_unit_id=? WHERE id=?').run(unitId, saleId);
+        db.prepare(`INSERT INTO trade_ins(sale_id,customer_id,product_id,product_unit_id,allowance,created_by) VALUES(?,?,?,?,?,?)`)
+          .run(saleId, customer.id, tradeIn.productId, unitId, tradeInAmount, user.id);
+      }
+
       // 7. Actualizar crédito del cliente
       let initialPaymentId = null;
       let outstandingBalance = 0;
       if (type === 'factura' && payment.method === 'credito') {
         const ci = db.prepare('SELECT balance,credit_days FROM customers WHERE id=?').get(customer.id);
-        const debtBeforeInitial = round2((ci.balance || 0) + total);
+        const debtBeforeInitial = round2((ci.balance || 0) + amountDue);
         const newBalance = round2(debtBeforeInitial - initialPaymentAmount);
-        outstandingBalance = round2(total - initialPaymentAmount);
+        outstandingBalance = round2(amountDue - initialPaymentAmount);
         const dueDate = ci.credit_due && ci.credit_due >= todayStr()
           ? ci.credit_due
           : addDaysStr(todayStr(), ci.credit_days || 30);
@@ -4975,10 +5059,10 @@ const salesRepo = {
               userId: user.id
             });
           }
-        } else {
+        } else if (amountDue > 0.005) {
           cashRepo.addMovement({
             sessionId: session.id, type: 'venta',
-            amount: total, method: payment.method,
+            amount: amountDue, method: payment.method,
             referenceId: saleId,
             description: `Venta #${saleId}`,
             userId: user.id
@@ -5035,6 +5119,7 @@ const salesRepo = {
         financialAccountId: finAcctId,
         paymentCurrency, exchangeRate, accountAmount, salespersonId,
         additionalChargesTotal, displayCurrency, displayExchangeRate, displayAmount,
+        tradeInAmount, tradeInUnitId: tradeIn ? db.prepare('SELECT trade_in_unit_id FROM sales WHERE id=?').get(saleId).trade_in_unit_id : null,
         cardBrand, cardLast4, paymentReference,
         initialPaymentId, initialPaymentAmount, initialPaymentMethod,
         outstandingBalance,
@@ -5855,16 +5940,28 @@ const salesRepo = {
       const items = db.prepare('SELECT * FROM sale_items WHERE sale_id=?').all(id);
       for (const item of items) {
         if (sale.type === 'factura' || sale.payment_method === 'credito') {
-          productsRepo.adjustStock(item.product_id, item.qty, 'devolucion',
-            `Anulación venta #${id}`, id, userId);
+          if (item.product_unit_id) {
+            db.prepare(`UPDATE product_units SET status='en_stock',sale_id=NULL,sold_at=NULL,warranty_until=NULL WHERE id=? AND sale_id=?`)
+              .run(item.product_unit_id, id);
+          } else if (item.product_id) {
+            productsRepo.adjustStock(item.product_id, item.qty, 'devolucion',
+              `Anulación venta #${id}`, id, userId);
+          }
         }
+      }
+
+      // El equipo recibido como pago deja de ser inventario disponible cuando
+      // se anula el negocio que lo originó. Se conserva como evidencia devuelta.
+      if (sale.trade_in_unit_id) {
+        db.prepare("UPDATE product_units SET status='devuelto' WHERE id=?").run(sale.trade_in_unit_id);
+        db.prepare("UPDATE trade_ins SET status='cancelado' WHERE sale_id=?").run(id);
       }
 
       // Si era crédito, revertir balance y calcular overpayment
       let overpayment = 0;
       if (sale.payment_method === 'credito' && sale.customer_id !== 1) {
         const cust = db.prepare('SELECT balance FROM customers WHERE id=?').get(sale.customer_id);
-        const theoretical = (cust?.balance || 0) - sale.total;
+        const theoretical = (cust?.balance || 0) - round2((sale.total || 0) - (sale.trade_in_amount || 0));
         overpayment = Math.max(0, round2(-theoretical));
         const newBal = Math.max(0, round2(theoretical));
         db.prepare('UPDATE customers SET balance=? WHERE id=?').run(newBal, sale.customer_id);
@@ -8966,8 +9063,13 @@ const accountingRepo = {
       else if (method === 'tarjeta')  debitAccId = bankAccId;
       else if (method === 'credito')  debitAccId = arAccId;
 
-      if (debitAccId) {
-        lines.push({ account_id: debitAccId, debit: sale.total, credit: 0, description: `Factura ${invNo}` });
+      const tradeInAmount = round2(Number(sale.trade_in_amount) || 0);
+      const monetaryAmount = round2(Number(sale.total) - tradeInAmount);
+      if (debitAccId && monetaryAmount > 0) {
+        lines.push({ account_id: debitAccId, debit: monetaryAmount, credit: 0, description: `Factura ${invNo}` });
+      }
+      if (invAccId && tradeInAmount > 0) {
+        lines.push({ account_id: invAccId, debit: tradeInAmount, credit: 0, description: `Equipo usado recibido · Factura ${invNo}` });
       }
 
       // Crédito: ingresos (neto sin ITBIS)
@@ -11020,7 +11122,9 @@ const productUnitsRepo = {
       `SELECT pu.*,
               p.code AS product_code, p.name AS product_name, p.brand AS product_brand,
               p.model AS product_model, p.price AS product_price,
-              s.numero_factura, s.customer_id, s.customer_name, s.created_at AS sale_date
+              COALESCE(NULLIF(s.numero_factura_fmt,''), NULLIF(s.document_number_fmt,''),
+                       CAST(s.numero_factura AS TEXT)) AS numero_factura,
+              s.customer_id, s.customer_name, s.created_at AS sale_date
          FROM product_units pu
          JOIN products p ON p.id=pu.product_id
          LEFT JOIN sales s ON s.id=pu.sale_id
@@ -11034,6 +11138,28 @@ const productUnitsRepo = {
     return db.prepare(
       "UPDATE product_units SET status='vendido', sale_id=?, sold_at=datetime('now','localtime') WHERE id=? AND status IN ('en_stock','reservado')"
     ).run(saleId, unitId).changes;
+  },
+  applySaleWarranty(unitId, days) {
+    const safeDays = Math.max(0, Math.min(3650, Number.parseInt(days, 10) || 0));
+    if (!safeDays) return 0;
+    return db.prepare("UPDATE product_units SET warranty_until=date('now','localtime', ?) WHERE id=?")
+      .run(`+${safeDays} days`, Number(unitId)).changes;
+  },
+  updateWarranty(unitId, warrantyUntil) {
+    const value = String(warrantyUntil || '').trim();
+    if (value && !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error('Fecha de garantía no válida');
+    const unit = db.prepare('SELECT id FROM product_units WHERE id=?').get(Number(unitId));
+    if (!unit) throw new Error('Equipo no encontrado');
+    db.prepare('UPDATE product_units SET warranty_until=? WHERE id=?').run(value || null, unit.id);
+    return this.findById(unit.id);
+  },
+  findById(unitId) {
+    return db.prepare(`
+      SELECT pu.*,p.code AS product_code,p.name AS product_name,p.brand AS product_brand,p.model AS product_model,
+             s.numero_factura,s.customer_id,s.customer_name,s.created_at AS sale_date
+      FROM product_units pu JOIN products p ON p.id=pu.product_id
+      LEFT JOIN sales s ON s.id=pu.sale_id WHERE pu.id=?
+    `).get(Number(unitId)) || null;
   },
   // Stock EFECTIVO de un producto: por unidades si es serializado; si no, el
   // campo numérico actual. Helper central para el flujo serializado.

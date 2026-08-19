@@ -978,6 +978,12 @@ async function renderConfiguracion(el) {
       ${lic?.business ? `<div class="tr" style="font-size:12px;margin-bottom:6px">
         <span>Negocio</span><span style="font-weight:600">${_esc(lic.business)}</span>
       </div>` : ''}
+      <div class="tr" style="font-size:12px;margin-bottom:6px">
+        <span>Producto</span><span style="font-weight:600">${lic?.requiredProduct === 'velo_tech_pos' ? 'VELO TECH POS' : 'VELO POS'}</span>
+      </div>
+      ${lic?.products?.length ? `<div class="tr" style="font-size:12px;margin-bottom:6px">
+        <span>Suite habilitada</span><span style="font-weight:600">${lic.products.map(p => p === 'velo_tech_pos' ? 'VELO TECH POS' : 'VELO POS').join(' + ')}</span>
+      </div>` : ''}
       <div class="tr" style="font-size:11px;color:var(--muted);margin-bottom:12px">
         <span>ID de máquina</span>
         <span style="font-family:var(--mono);font-size:10px">${_esc(lic?.machineId||'—')}</span>
@@ -992,7 +998,7 @@ async function renderConfiguracion(el) {
         </div>
         <div class="fg" style="margin-bottom:8px">
           <label class="lbl">Clave de licencia</label>
-          <textarea class="inp no-uppercase" id="lic-key" rows="3" data-uppercase="off" placeholder="2|ABCD...|Negocio|2027-01-01|FIRMA"
+          <textarea class="inp no-uppercase" id="lic-key" rows="3" data-uppercase="off" placeholder="3|ABCD...|Negocio|2027-01-01|velo_pos|FIRMA"
                  style="font-family:var(--mono);font-size:11px;resize:none;white-space:nowrap;overflow-x:auto"
                  onpaste="setTimeout(()=>{this.value=this.value.replace(/[\r\n\s]+/g,'')},0)"></textarea>
         </div>
@@ -1880,7 +1886,7 @@ async function activarLicencia() {
     || document.querySelector('textarea#lic-key')
     || document.querySelector('input[placeholder*="ABCD"]')
     || document.querySelector('input[style*="mono"]');
-  const key = licInput ? (licInput.value || licInput.textContent || '').trim().replace(/[\r\n\s]+/g, '') : '';
+  const key = licInput ? (licInput.value || licInput.textContent || '').trim().replace(/[\r\n]+/g, '') : '';
   if (!key) {
     toast('Ingresa la clave de licencia', 'err');
     return;
