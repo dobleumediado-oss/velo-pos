@@ -193,6 +193,22 @@ function activateLicense(dataDir, licenseKey, requiredProduct = 'velo_pos', opti
   return { ok: true, ...result };
 }
 
+// El desarrollo local necesita poder abrir bases antiguas para migrarlas y
+// probarlas. El bypass exige DOS condiciones: binario no empaquetado y bandera
+// --dev explícita. En una instalación de cliente, --dev nunca desactiva la licencia.
+function withDevelopmentBypass(status, { isPackaged = true, explicitDev = false } = {}) {
+  if (isPackaged || !explicitDev) return status;
+  return {
+    ...status,
+    licensed: true,
+    inGrace: false,
+    blocked: false,
+    warningSoon: false,
+    development: true,
+    reason: 'Modo desarrollo local',
+  };
+}
+
 module.exports = {
   LICENSE_VERSION,
   LICENSE_PRODUCTS,
@@ -203,4 +219,5 @@ module.exports = {
   verifyLicense,
   getLicenseStatus,
   activateLicense,
+  withDevelopmentBypass,
 };

@@ -10,6 +10,7 @@ const {
   verifyLicense,
   activateLicense,
   getLicenseStatus,
+  withDevelopmentBypass,
 } = require('../license');
 
 let passed = 0;
@@ -107,4 +108,14 @@ test('el cliente no expone generación ni rutas de clave privada', () => {
   }
 });
 
-console.log(`\nLicencias por producto: ${passed}/9 pruebas correctas.`);
+test('el bypass de desarrollo es explícito y nunca aplica al instalador', () => {
+  const blocked = { licensed: false, blocked: true, reason: 'Licencia inválida' };
+  assert.strictEqual(withDevelopmentBypass(blocked, { isPackaged: false, explicitDev: false }).blocked, true);
+  assert.strictEqual(withDevelopmentBypass(blocked, { isPackaged: true, explicitDev: true }).blocked, true);
+  const development = withDevelopmentBypass(blocked, { isPackaged: false, explicitDev: true });
+  assert.strictEqual(development.blocked, false);
+  assert.strictEqual(development.licensed, true);
+  assert.strictEqual(development.development, true);
+});
+
+console.log(`\nLicencias por producto: ${passed}/10 pruebas correctas.`);

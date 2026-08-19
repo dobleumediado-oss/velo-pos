@@ -6,6 +6,8 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
+    "dev:pos": "electron . --dev",
+    "dev:tech": "VELO_VERTICAL=tech electron . --dev --velo-root-data-dir=./data-tech",
     "rebuild": "electron-builder install-app-deps",
     "build": "electron-builder",
     "prepare:server-service": "node build/windows-service/prepare-winsw.js",

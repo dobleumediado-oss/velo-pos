@@ -78,6 +78,7 @@ function _runtimeArg(name) {
   return value ? value.slice(prefix.length) : '';
 }
 const RUNTIME = Object.freeze({
+  dev: process.argv.includes('--dev'),
   service: process.argv.includes('--velo-server-service'),
   worker: process.argv.includes('--velo-service-worker'),
   headless: process.argv.includes('--velo-server-service') || process.argv.includes('--velo-service-worker'),
@@ -210,7 +211,7 @@ let { initLogger, logError, logWarn, logInfo } = (() => {
 })();
 
 const {
-  getMachineId, getLicenseStatus, activateLicense
+  getMachineId, getLicenseStatus, activateLicense, withDevelopmentBypass
 } = require('./license');
 
 const { runSystemDoctor } = require('./src/main/system-doctor');
@@ -3875,7 +3876,14 @@ function requiredLicenseProduct() {
 
 ipcMain.handle('license:getStatus', async () => {
   try {
-    return { ok: true, data: getLicenseStatus(DATA_DIR, requiredLicenseProduct()) };
+    const status = getLicenseStatus(DATA_DIR, requiredLicenseProduct());
+    return {
+      ok: true,
+      data: withDevelopmentBypass(status, {
+        isPackaged: app.isPackaged,
+        explicitDev: RUNTIME.dev,
+      }),
+    };
   } catch (e) {
     return { ok: false, error: e.message };
   }

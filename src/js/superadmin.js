@@ -181,7 +181,7 @@ async function renderSuperAdmin(el) {
     <div class="tr" style="font-size:12px;margin-bottom:6px">
       <span>Estado licencia</span>
       <span style="font-weight:700;color:${lic?.licensed?'var(--green)':lic?.inGrace?'var(--amber)':'var(--red)'}">
-        ${lic?.licensed ? 'Activa' : lic?.inGrace ? `Gracia (${lic.graceDaysLeft}d)` : 'Sin licencia'}
+        ${lic?.development ? 'Desarrollo' : lic?.licensed ? 'Activa' : lic?.inGrace ? `Gracia (${lic.graceDaysLeft}d)` : 'Sin licencia'}
       </span>
     </div>
     <div class="tr" style="font-size:12px;margin-bottom:6px">

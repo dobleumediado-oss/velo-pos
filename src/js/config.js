@@ -958,6 +958,7 @@ async function renderConfiguracion(el) {
       lic.inGrace     ? 'var(--amber)' :
       lic.warningSoon ? 'var(--amber)' : 'var(--green)';
     const licLabel = !lic ? 'No disponible' :
+      lic.development  ? 'Modo desarrollo — licencia no requerida' :
       lic.blocked      ? 'Sin licencia — bloqueado' :
       lic.inGrace      ? `Período de gracia — ${lic.graceDaysLeft}d restantes` :
       lic.warningSoon  ? `Vence en ${lic.daysLeft} días` :
@@ -968,7 +969,7 @@ async function renderConfiguracion(el) {
       <div class="fxb mb8">
         <div class="card-title">Licencia del Sistema</div>
         <span class="badge ${lic?.licensed?'g':lic?.inGrace?'a':'r'}" style="font-size:11px">
-          ${lic?.licensed?'Activa':lic?.inGrace?'Gracia':'Sin licencia'}
+          ${lic?.development?'Desarrollo':lic?.licensed?'Activa':lic?.inGrace?'Gracia':'Sin licencia'}
         </span>
       </div>
       <div class="tr" style="font-size:12px;margin-bottom:6px">
