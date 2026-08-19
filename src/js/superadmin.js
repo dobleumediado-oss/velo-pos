@@ -21,6 +21,8 @@ async function renderSuperAdmin(el) {
   const info       = vInfo.ok ? vInfo.data : {};
   const machineId  = lic?.machineId || '';
   const settings   = await window.api.settings.getAll().catch(() => ({}));
+  const accessUsers = (await window.api.users.getAll().catch(() => []))
+    .filter(item => item.active && item.role !== 'superadmin');
   const _saEsc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c]));
@@ -227,7 +229,132 @@ async function renderSuperAdmin(el) {
   el.appendChild(toolsCard);
 
 
-  // ── Módulos activables + permisos por rol ──────────────────────────────
+  // ── Centro de acceso individual por usuario ───────────────────────────
+  const cashiers = accessUsers.filter(item => item.role === 'cajero');
+  const selectedAccessId = Number(window._saAccessUserId) || cashiers[0]?.id || accessUsers[0]?.id;
+  const selectedAccessUser = accessUsers.find(item => Number(item.id) === Number(selectedAccessId)) || null;
+  if (selectedAccessUser) window._saAccessUserId = selectedAccessUser.id;
+
+  const accessCard = document.createElement('div');
+  accessCard.className = 'card';
+  accessCard.style.marginBottom = '16px';
+  accessCard.innerHTML = `
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:12px">
+      <div>
+        <div class="card-title" style="margin-bottom:4px">🛡️ Accesos y límites por usuario</div>
+        <div style="font-size:12px;color:var(--muted2);max-width:760px;line-height:1.5">
+          Personaliza qué módulos puede usar cada cajero sin convertirlo en administrador. Los módulos inactivos continúan bloqueados para todos.
+        </div>
+      </div>
+      <label style="min-width:280px">
+        <span class="lbl">Configurar usuario</span>
+        <select class="inp" data-access-user>
+          ${accessUsers.map(item => `<option value="${item.id}" ${Number(item.id)===Number(selectedAccessId)?'selected':''}>${_saEsc(item.name)} · ${_saEsc(item.role)}</option>`).join('')}
+        </select>
+      </label>
+    </div>
+    <div class="alrt n" style="margin-bottom:14px">
+      <div class="alrt-dot n"></div>
+      <div>
+        <div class="alrt-title">Política en dos niveles</div>
+        <div class="alrt-sub">Primero se activa el módulo para la empresa; después se concede acceso individual. Las operaciones sensibles se validan nuevamente al guardar.</div>
+      </div>
+    </div>
+    <div data-access-grid></div>`;
+
+  const accessSelect = accessCard.querySelector('[data-access-user]');
+  accessSelect?.addEventListener('change', () => {
+    window._saAccessUserId = Number(accessSelect.value);
+    renderSuperAdmin(el);
+  });
+
+  const accessGrid = accessCard.querySelector('[data-access-grid]');
+  if (!selectedAccessUser) {
+    accessGrid.innerHTML = '<div style="padding:18px;text-align:center;color:var(--muted2)">No hay usuarios activos para configurar.</div>';
+  } else if (selectedAccessUser.role === 'admin') {
+    accessGrid.innerHTML = '<div class="alrt g"><div class="alrt-dot g"></div><div><div class="alrt-title">Administrador con acceso completo</div><div class="alrt-sub">Los límites individuales se aplican a usuarios de caja. El administrador conserva control operativo total.</div></div></div>';
+  } else {
+    const visibleCatalog = (window.VELO_MODULE_CATALOG || []).filter(def => !def.techOnly || window._vertical?.id === 'tech');
+    const policy = window.veloParseModulePermissions?.(selectedAccessUser) || {};
+    const groups = [...new Set(visibleCatalog.map(def => def.group))];
+    for (const group of groups) {
+      const section = document.createElement('section');
+      section.style.marginBottom = '16px';
+      section.innerHTML = `<div style="font-size:11px;font-weight:800;color:var(--muted2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">${_saEsc(group)}</div>`;
+      const grid = document.createElement('div');
+      grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:8px';
+      for (const def of visibleCatalog.filter(item => item.group === group)) {
+        const globallyOn = window.veloModuleGloballyEnabled?.(def) !== false;
+        const allowed = !!window.veloCanAccessModule?.(def.key, selectedAccessUser);
+        const explicit = Object.prototype.hasOwnProperty.call(policy, def.key);
+        const row = document.createElement('div');
+        row.style.cssText = `border:1px solid var(--line);border-radius:11px;padding:11px 12px;background:${allowed&&globallyOn?'var(--surface)':'var(--surface2)'};opacity:${globallyOn?'1':'.65'}`;
+        row.innerHTML = `
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
+            <div style="min-width:0">
+              <div style="font-size:12px;font-weight:750;color:var(--ink)">${def.icon} ${_saEsc(def.title)}</div>
+              <div style="font-size:10.5px;color:var(--muted2);line-height:1.4;margin-top:2px">${_saEsc(def.desc)}</div>
+            </div>
+            <label style="display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:10.5px;font-weight:700;color:${allowed?'var(--green)':'var(--muted2)'}">
+              <input type="checkbox" data-user-module="${def.key}" ${allowed?'checked':''} ${globallyOn?'':'disabled'} style="accent-color:var(--green)"/>
+              ${globallyOn ? (allowed ? 'Permitido' : 'Bloqueado') : 'Módulo inactivo'}
+            </label>
+          </div>
+          <div style="font-size:9.5px;color:var(--muted2);margin-top:6px">${explicit ? 'Regla individual' : 'Heredado de la configuración actual'}</div>
+          ${def.key === 'credito' ? `
+            <div style="display:flex;align-items:end;gap:7px;margin-top:9px;padding-top:9px;border-top:1px solid var(--line2)">
+              <label style="flex:1"><span class="lbl">Máximo pendiente por factura (RD$)</span>
+                <input class="inp" type="number" data-credit-limit min="0" step="0.01" data-money="on" value="${Math.max(0,Number(selectedAccessUser.credit_limit_per_sale)||0).toFixed(2)}"/>
+              </label>
+              <button class="btn btn-out btn-sm" data-save-credit>Límite</button>
+            </div>
+            <div style="font-size:9.5px;color:var(--muted2);margin-top:4px">0 significa sin tope por usuario. El límite del cliente siempre se respeta.</div>` : ''}`;
+
+        const toggle = row.querySelector('[data-user-module]');
+        toggle?.addEventListener('change', async () => {
+          toggle.disabled = true;
+          const result = await window.api.users.setModulePolicy({
+            id: selectedAccessUser.id,
+            moduleKey: def.key,
+            enabled: toggle.checked,
+            creditLimit: def.key === 'credito' ? Number(row.querySelector('[data-credit-limit]')?.value)||0 : undefined,
+            requestUserId: window._currentUser?.id,
+          });
+          if (!result?.ok) {
+            toggle.checked = !toggle.checked;
+            toggle.disabled = false;
+            return toast(result?.error || 'No se pudo actualizar el acceso', 'err');
+          }
+          Object.assign(selectedAccessUser, result.data || {});
+          toast(`${def.title}: ${toggle.checked ? 'permitido' : 'bloqueado'} para ${selectedAccessUser.name}`, 's');
+          renderSuperAdmin(el);
+        });
+
+        row.querySelector('[data-save-credit]')?.addEventListener('click', async event => {
+          const button = event.currentTarget;
+          const limit = Math.max(0, Number(row.querySelector('[data-credit-limit]')?.value)||0);
+          button.disabled = true;
+          const result = await window.api.users.setModulePolicy({
+            id: selectedAccessUser.id,
+            moduleKey: 'credito',
+            enabled: !!row.querySelector('[data-user-module]')?.checked,
+            creditLimit: limit,
+            requestUserId: window._currentUser?.id,
+          });
+          button.disabled = false;
+          if (!result?.ok) return toast(result?.error || 'No se pudo guardar el límite', 'err');
+          Object.assign(selectedAccessUser, result.data || {});
+          toast(limit > 0 ? `Límite guardado: RD$${limit.toLocaleString('en-US',{minimumFractionDigits:2})}` : 'Crédito sin tope por usuario', 's');
+        });
+        grid.appendChild(row);
+      }
+      section.appendChild(grid);
+      accessGrid.appendChild(section);
+    }
+  }
+  el.appendChild(accessCard);
+
+  // ── Módulos activables + permisos base por rol ─────────────────────────
   const modsCard = document.createElement('div');
   modsCard.className = 'card';
   modsCard.style.marginBottom = '16px';

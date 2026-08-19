@@ -1965,6 +1965,32 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.44.0-user-operational-permissions] Permisos operativos por usuario listos');
     }
   },
+  {
+    version: '1.45.0-user-module-access-center',
+    description: 'Centro profesional de acceso por usuario para todos los módulos y límites operativos.',
+    run(db) {
+      const columns = new Set(db.prepare('PRAGMA table_info(users)').all().map(column => column.name));
+      if (!columns.has('module_permissions')) {
+        db.exec("ALTER TABLE users ADD COLUMN module_permissions TEXT NOT NULL DEFAULT '{}'");
+      }
+      // Solo migra las excepciones que ya eran individuales. Los demás módulos
+      // continúan heredando su política por rol, evitando cambios inesperados.
+      const rows = db.prepare(`
+        SELECT id,role,can_sell_credit,can_manage_inventory,module_permissions FROM users
+      `).all();
+      const update = db.prepare('UPDATE users SET module_permissions=? WHERE id=?');
+      for (const row of rows) {
+        let policy = {};
+        try { policy = JSON.parse(row.module_permissions || '{}') || {}; } catch { policy = {}; }
+        if (row.role === 'cajero') {
+          if (!Object.prototype.hasOwnProperty.call(policy, 'credito')) policy.credito = row.can_sell_credit !== 0;
+          if (!Object.prototype.hasOwnProperty.call(policy, 'inventario')) policy.inventario = row.can_manage_inventory === 1;
+        }
+        update.run(JSON.stringify(policy), row.id);
+      }
+      console.log('[MIGRATION 1.45.0-user-module-access-center] Políticas modulares por usuario listas');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

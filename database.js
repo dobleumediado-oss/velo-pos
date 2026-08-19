@@ -353,6 +353,7 @@ function createTables() {
       can_sell_credit INTEGER NOT NULL DEFAULT 1,
       credit_limit_per_sale REAL NOT NULL DEFAULT 0,
       can_manage_inventory INTEGER NOT NULL DEFAULT 0,
+      module_permissions TEXT NOT NULL DEFAULT '{}',
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -2597,30 +2598,34 @@ const usersRepo = {
   getAll() {
     return db.prepare(`
       SELECT id,name,email,role,avatar,active,
-             can_sell_credit,credit_limit_per_sale,can_manage_inventory,created_at
+             can_sell_credit,credit_limit_per_sale,can_manage_inventory,
+             module_permissions,created_at
       FROM users ORDER BY name
     `).all();
   },
   create({
     name, email, password, role, avatar = '', can_sell_credit = 0,
-    credit_limit_per_sale = 0, can_manage_inventory = 0,
+    credit_limit_per_sale = 0, can_manage_inventory = 0, module_permissions = '{}',
   }) {
     const hash = bcrypt.hashSync(password, 10);
     const r = db.prepare(`
       INSERT INTO users(
-        name,email,password,role,avatar,can_sell_credit,credit_limit_per_sale,can_manage_inventory
-      ) VALUES(?,?,?,?,?,?,?,?)
+        name,email,password,role,avatar,can_sell_credit,credit_limit_per_sale,
+        can_manage_inventory,module_permissions
+      ) VALUES(?,?,?,?,?,?,?,?,?)
     `).run(
       name, email.toLowerCase(), hash, role, avatar,
       can_sell_credit ? 1 : 0,
       Math.max(0, Number(credit_limit_per_sale) || 0),
       can_manage_inventory ? 1 : 0,
+      typeof module_permissions === 'string' ? module_permissions : JSON.stringify(module_permissions || {}),
     );
     return r.lastInsertRowid;
   },
   update(id, data = {}) {
     const current = db.prepare(`
-      SELECT can_sell_credit,credit_limit_per_sale,can_manage_inventory FROM users WHERE id=?
+      SELECT can_sell_credit,credit_limit_per_sale,can_manage_inventory,module_permissions
+      FROM users WHERE id=?
     `).get(id);
     if (!current) throw new Error('Usuario no encontrado');
     const {
@@ -2628,18 +2633,46 @@ const usersRepo = {
       can_sell_credit = current.can_sell_credit,
       credit_limit_per_sale = current.credit_limit_per_sale,
       can_manage_inventory = current.can_manage_inventory,
+      module_permissions = current.module_permissions,
     } = data;
     db.prepare(`
       UPDATE users SET name=?,email=?,role=?,avatar=?,active=?,
-        can_sell_credit=?,credit_limit_per_sale=?,can_manage_inventory=?,updated_at=datetime('now')
+        can_sell_credit=?,credit_limit_per_sale=?,can_manage_inventory=?,module_permissions=?,updated_at=datetime('now')
       WHERE id=?
     `).run(
       name, email.toLowerCase(), role, avatar, active ? 1 : 0,
       can_sell_credit ? 1 : 0,
       Math.max(0, Number(credit_limit_per_sale) || 0),
       can_manage_inventory ? 1 : 0,
+      typeof module_permissions === 'string' ? module_permissions : JSON.stringify(module_permissions || {}),
       id,
     );
+  },
+  setModulePolicy(id, { moduleKey, enabled, creditLimit }) {
+    const current = db.prepare(`
+      SELECT role,module_permissions,can_sell_credit,credit_limit_per_sale,can_manage_inventory
+      FROM users WHERE id=?
+    `).get(id);
+    if (!current) throw new Error('Usuario no encontrado');
+    if (current.role === 'superadmin') throw new Error('El acceso del superadmin es fijo');
+    const { MANAGED_MODULE_KEYS, parseModulePermissions } = require('./lib/user-operational-permissions');
+    if (!MANAGED_MODULE_KEYS.has(moduleKey)) throw new Error('Módulo no reconocido');
+    const permissions = parseModulePermissions(current);
+    permissions[moduleKey] = !!enabled;
+    const nextCredit = moduleKey === 'credito' ? (enabled ? 1 : 0) : current.can_sell_credit;
+    const nextInventory = moduleKey === 'inventario' ? (enabled ? 1 : 0) : current.can_manage_inventory;
+    const nextLimit = moduleKey === 'credito' && creditLimit !== undefined
+      ? Math.max(0, Math.round((Number(creditLimit) || 0) * 100) / 100)
+      : current.credit_limit_per_sale;
+    db.prepare(`
+      UPDATE users SET module_permissions=?,can_sell_credit=?,credit_limit_per_sale=?,
+        can_manage_inventory=?,updated_at=datetime('now') WHERE id=?
+    `).run(JSON.stringify(permissions), nextCredit, nextLimit, nextInventory, id);
+    return db.prepare(`
+      SELECT id,name,email,role,avatar,active,can_sell_credit,credit_limit_per_sale,
+             can_manage_inventory,module_permissions,created_at
+      FROM users WHERE id=?
+    `).get(id);
   },
   changePassword(id, newPassword) {
     const hash = bcrypt.hashSync(newPassword, 10);
@@ -4803,7 +4836,7 @@ const salesRepo = {
         // inicial. Se valida aquí, dentro de la transacción y con el total
         // recalculado por SQLite, para cubrir POS directo y Preventa/Despacho.
         const creditUser = db.prepare(`
-          SELECT id,role,active,can_sell_credit,credit_limit_per_sale
+          SELECT id,role,active,can_sell_credit,credit_limit_per_sale,module_permissions
           FROM users WHERE id=?
         `).get(user?.id);
         if (!creditUser?.active) throw new Error('El usuario de caja ya no está activo');

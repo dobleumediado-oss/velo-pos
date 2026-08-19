@@ -55,11 +55,16 @@ function _startSessionHeartbeat() {
         // operación con la versión más reciente del usuario.
         window.api.users?.getById?.(user.id).then(result => {
           if (!result?.ok || !result.data) return;
+          const beforePolicy = String(user?.module_permissions || '{}');
           const beforeInventory = Number(user?.can_manage_inventory) === 1;
           user = result.data;
           window._currentUser = user;
           sessionStorage.setItem('vp_user', JSON.stringify(user));
-          if (beforeInventory !== (Number(user.can_manage_inventory) === 1)) buildSidebar();
+          if (beforePolicy !== String(user.module_permissions || '{}') ||
+              beforeInventory !== (Number(user.can_manage_inventory) === 1)) {
+            buildSidebar();
+            if (typeof page !== 'undefined') routeTo(page);
+          }
         }).catch(() => {});
       }
     } catch {}
@@ -912,29 +917,46 @@ function buildSidebar() {
     return CFG[modKey] === '1' && (CFG[modKey + '_roles'] || 'admin').includes('admin');
   }
   function _cajeroPuede(modKey) {
-    return CFG[modKey] === '1' && (CFG[modKey + '_roles'] || 'admin').includes('cajero');
+    const accessKeys = {
+      module_gastos:'gastos', module_vendedores:'vendedores', module_envios:'envios',
+      module_conduce:'conduce', module_sucursales:'sucursales', module_vehiculos:'vehiculos',
+      module_mantenimiento:'mantenimiento', module_preventa:'preventa',
+      module_contabilidad:'contabilidad', module_crm:'crm', barcode_enabled:'impresion',
+    };
+    const accessKey = accessKeys[modKey] || modKey.replace(/^module_/, '');
+    return typeof window.veloCanAccessModule === 'function'
+      ? window.veloCanAccessModule(accessKey, user)
+      : CFG[modKey] === '1' && (CFG[modKey + '_roles'] || 'admin').includes('cajero');
   }
 
   const cajeroNavItems = [
-    { key: 'pos',       icon: 'monitor',  label: 'Punto de Venta' },
+    ...(window.veloCanAccessModule?.('dash', user) ? [{ key:'dash', icon:'grid', label:'Dashboard' }] : []),
+    ...(window.veloCanAccessModule?.('pos', user) !== false ? [{ key: 'pos', icon: 'monitor', label: 'Punto de Venta' }] : []),
     ...(preventaCanAccess() ? [{ key: 'preventa', icon: 'cash', label: 'Preventa y Despacho', badge: window._preventaPendingCount || null }] : []),
-    ...(Number(user?.can_manage_inventory) === 1
+    ...(window.veloCanAccessModule?.('inventario', user)
       ? [{ key: 'inventario', icon: 'box', label: 'Inventario' }]
       : []),
-    { key: 'clientes',  icon: 'users',    label: 'Clientes',
-      badge: alertBadge > 0 ? alertBadge : null },
-    { key: 'ventas',    icon: 'list',     label: 'Ventas' },
-    ...(window._vertical?.modules?.service_orders ? [{ key:'servicio', icon:'settings', label:'Servicio técnico' }] : []),
-    { key: 'caja',      icon: 'cash',     label: 'Caja' },
+    ...(window.veloCanAccessModule?.('servicio', user) ? [{ key:'servicio', icon:'settings', label:'Servicio técnico' }] : []),
+    ...(window.veloCanAccessModule?.('compras', user) ? [{ key:'compras', icon:'truck', label:'Compras' }] : []),
+    ...(window.veloCanAccessModule?.('clientes', user) !== false ? [{ key:'clientes', icon:'users', label:'Clientes', badge:alertBadge > 0 ? alertBadge : null }] : []),
+    ...(window.veloCanAccessModule?.('crm', user) ? [{ key:'crm', icon:'trend', label:'CRM Cerebro' }] : []),
+    ...(window.veloCanAccessModule?.('ventas', user) !== false ? [{ key:'ventas', icon:'list', label:'Ventas' }] : []),
+    ...(window.veloCanAccessModule?.('devoluciones', user) ? [{ key:'devoluciones', icon:'return', label:'Devoluciones' }] : []),
+    ...(window.veloCanAccessModule?.('caja', user) !== false ? [{ key:'caja', icon:'cash', label:'Caja' }] : []),
     ...(_cajeroPuede('module_gastos')     ? [{ key: 'gastos',     icon: 'dollar',  label: 'Gastos' }]      : []),
     ...(_cajeroPuede('module_vendedores') ? [{ key: 'vendedores', icon: 'users',   label: 'Vendedores' }]   : []),
+    ...(window.veloCanAccessModule?.('comisiones', user) ? [{ key:'comisiones', icon:'trend', label:'Comisiones' }] : []),
+    ...(window.veloCanAccessModule?.('nomina', user) ? [{ key:'nomina', icon:'calendar', label:'Nómina' }] : []),
+    ...(window.veloCanAccessModule?.('bancos', user) ? [{ key:'bancos', icon:'bank', label:'Bancos y Cuentas' }] : []),
+    ...(window.veloCanAccessModule?.('contabilidad', user) ? [{ key:'contabilidad', icon:'ledger', label:'Contabilidad' }] : []),
     ...(_cajeroPuede('module_envios')     ? [{ key: 'envios',     icon: 'truck',   label: 'Envíos' }]      : []),
     ...(_cajeroPuede('module_conduce')    ? [{ key: 'conduce',    icon: 'pkg',     label: 'Conduces' }]    : []),
     ...(_cajeroPuede('module_sucursales') ? [{ key: 'sucursales', icon: 'building',label: 'Sucursales' }]  : []),
     ...((_cajeroPuede('module_vehiculos') || _cajeroPuede('module_mantenimiento'))
                                           ? [{ key: 'vehiculos',  icon: 'car',     label: 'Vehículos' }]  : []),
-    ...(window._bcEnabled && (CFG.barcode_enabled_roles || 'admin').includes('cajero')
+    ...(window.veloCanAccessModule?.('impresion', user)
                                           ? [{ key: 'impresion', icon: 'print', label: 'Centro de impresión' }] : []),
+    ...(window.veloCanAccessModule?.('reportes', user) ? [{ key:'reportes', icon:'chart', label:'Reportes' }] : []),
   ];
 
   const items = ['admin','superadmin'].includes(user?.role) ? adminNavItems : cajeroNavItems;
@@ -1433,24 +1455,10 @@ function routeTo(p) {
 
   // Cajero: rutas base + módulos con permiso cajero
   if (user?.role === 'cajero') {
-    const allowed = ['pos', 'clientes', 'ventas', 'caja'];
-    if (Number(user.can_manage_inventory) === 1) allowed.push('inventario');
-    const modRoutes = {
-      gastos:     ['module_gastos'],
-      envios:     ['module_envios'],
-      conduce:    ['module_conduce'],
-      sucursales: ['module_sucursales'],
-      vehiculos:  ['module_vehiculos', 'module_mantenimiento'],
-      impresion:  ['barcode_enabled'],
-      vendedores: ['module_vendedores'],
-      preventa:   ['module_preventa'],
-    };
-    Object.entries(modRoutes).forEach(([route, keys]) => {
-      const active  = keys.some(k => CFG[k] === '1' || (k === 'barcode_enabled' && window._bcEnabled));
-      const permit  = keys.some(k => (CFG[k + '_roles'] || 'admin').includes('cajero'));
-      if (active && permit) allowed.push(route);
-    });
-    if (!allowed.includes(p)) { page = 'pos'; }
+    const allowed = [...new Set((window.VELO_MODULE_CATALOG || [])
+      .filter(def => def.route && window.veloCanAccessModule?.(def.key, user))
+      .map(def => def.route))];
+    if (!allowed.includes(p)) page = window.veloFirstAccessibleRoute?.(user) || 'sin-acceso';
   }
 
   // Actualizar solo el item activo sin reconstruir todo el sidebar
@@ -1504,6 +1512,13 @@ function routeTo(p) {
       _pcActiveTab = 'labels';
       renderPrintingCenter(el); break;
     case 'superadmin':   renderSuperAdmin(el);     break;
+    case 'sin-acceso':
+      el.innerHTML = `<div class="card" style="max-width:620px;margin:60px auto;text-align:center;padding:36px">
+        <div style="font-size:32px;margin-bottom:12px">🔒</div>
+        <div class="sec-title" style="margin-bottom:8px">Sin módulos asignados</div>
+        <div class="sec-sub">Solicita al superadministrador que configure tus accesos desde Módulos del sistema.</div>
+      </div>`;
+      break;
     default:             renderDash(el);
   }
   // Los módulos asíncronos se observan automáticamente; este pase cubre las

@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('api', {
     getById:        (id)       => ipcRenderer.invoke('users:getById', id),
     create:         (data)     => ipcRenderer.invoke('users:create', data),
     update:         (data)     => ipcRenderer.invoke('users:update', data),
+    setModulePolicy:(data)     => ipcRenderer.invoke('users:setModulePolicy', data),
     changePassword: (data)     => ipcRenderer.invoke('users:changePassword', data),
   },
 

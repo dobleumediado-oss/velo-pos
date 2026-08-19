@@ -8,6 +8,9 @@ let _preventaRows = [];
 
 function preventaCanAccess() {
   if (typeof CFG === 'undefined' || CFG.module_preventa !== '1' || !user) return false;
+  if (typeof window.veloCanAccessModule === 'function') {
+    return window.veloCanAccessModule('preventa', user);
+  }
   if (user.role === 'superadmin') return true;
   const roles = String(CFG.module_preventa_roles || 'admin,cajero')
     .split(',').map(role => role.trim()).filter(Boolean);

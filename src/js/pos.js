@@ -2188,6 +2188,9 @@ function _posEntryNumber(controlOrValue, fallback = 0) {
 
 function _posUserCanSellCredit() {
   const current = window._currentUser || user;
+  if (typeof window.veloCanAccessModule === 'function') {
+    return window.veloCanAccessModule('credito', current);
+  }
   if (['admin', 'superadmin'].includes(current?.role)) return true;
   return current?.can_sell_credit === undefined || Number(current.can_sell_credit) === 1;
 }

@@ -19,6 +19,7 @@ try {
   assert(columns.has('can_sell_credit'));
   assert(columns.has('credit_limit_per_sale'));
   assert(columns.has('can_manage_inventory'));
+  assert(columns.has('module_permissions'));
 
   const cashierId = DB.usersRepo.create({
     name: 'Caja limitada', email: 'caja.limitada@prueba.do', password: 'prueba123', role: 'cajero',
@@ -28,6 +29,16 @@ try {
   assert.strictEqual(permissions.canManageInventory(cashier), true);
   assert.strictEqual(permissions.evaluateCreditPermission(cashier, 5000).allowed, true);
   assert.strictEqual(permissions.evaluateCreditPermission(cashier, 5000.01).allowed, false);
+
+  const withoutInventory = DB.usersRepo.setModulePolicy(cashierId, {
+    moduleKey: 'inventario', enabled: false,
+  });
+  assert.strictEqual(permissions.canManageInventory(withoutInventory), false,
+    'la política modular individual prevalece sobre el campo heredado');
+  const withInventory = DB.usersRepo.setModulePolicy(cashierId, {
+    moduleKey: 'inventario', enabled: true,
+  });
+  assert.strictEqual(permissions.canManageInventory(withInventory), true);
 
   const customerId = DB.customersRepo.create({
     name: 'Cliente crédito controlado', credit_limit: 100000, credit_days: 30,
@@ -53,8 +64,8 @@ try {
   assert(accepted.saleId, 'total 6,000 menos inicial 1,000 acepta el límite exacto de 5,000');
   assert.throws(() => makeSale(6000.01), /supera el límite del usuario/);
 
-  DB.usersRepo.update(cashierId, {
-    ...cashier, can_sell_credit: 0, credit_limit_per_sale: 5000, can_manage_inventory: 1,
+  DB.usersRepo.setModulePolicy(cashierId, {
+    moduleKey: 'credito', enabled: false, creditLimit: 5000,
   });
   assert.throws(() => makeSale(1000, 0), /no tiene permiso para realizar ventas a crédito/);
 
@@ -62,7 +73,30 @@ try {
   assert.strictEqual(permissions.canManageInventory(refreshed), true);
   assert.strictEqual(permissions.canSellOnCredit(refreshed), false);
 
-  console.log('✓ Permisos por cajero, límite autoritativo y acceso de inventario verificados');
+  global.window = { _vertical: { id: 'auto_parts' }, _bcEnabled: true };
+  global.CFG = {
+    module_preventa: '1', module_preventa_roles: 'admin,cajero',
+    barcode_enabled_roles: 'admin,cajero',
+  };
+  require('../src/js/module-access');
+  assert(window.VELO_MODULE_CATALOG.length >= 25, 'el catálogo incluye módulos base y opcionales');
+  const uiCashier = {
+    role: 'cajero', can_sell_credit: 1, can_manage_inventory: 0,
+    module_permissions: JSON.stringify({ compras: true, clientes: false }),
+  };
+  assert.strictEqual(window.veloCanAccessModule('pos', uiCashier), true);
+  assert.strictEqual(window.veloCanAccessModule('compras', uiCashier), true);
+  assert.strictEqual(window.veloCanAccessModule('clientes', uiCashier), false);
+  assert.strictEqual(window.veloCanAccessModule('inventario', uiCashier), false);
+  assert.strictEqual(window.veloCanAccessModule('servicio', uiCashier), false,
+    'Servicio técnico no aparece en VELO POS');
+  window._vertical.id = 'tech';
+  assert.strictEqual(window.veloCanAccessModule('servicio', uiCashier), true,
+    'Servicio técnico conserva el acceso inicial en VELO TECH POS');
+  delete global.CFG;
+  delete global.window;
+
+  console.log('✓ Centro modular, permisos por cajero, límite autoritativo y ambos verticales verificados');
   db.close();
 } finally {
   try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}

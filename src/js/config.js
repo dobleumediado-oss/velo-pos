@@ -1043,8 +1043,7 @@ async function renderConfiguracion(el) {
           h('div', { style: `font-size:13px;font-weight:600;color:${u.active?'var(--ink)':'var(--muted)'}` }, u.name),
           h('div', { class: 'ts' }, u.email),
           ...(u.role === 'cajero' ? [h('div', { class: 'ts', style: 'margin-top:2px' },
-            `${u.can_sell_credit ? `Crédito: ${Number(u.credit_limit_per_sale)>0 ? `hasta RD$${Number(u.credit_limit_per_sale).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}` : 'sin tope'}` : 'Crédito desactivado'}` +
-            `${u.can_manage_inventory ? ' · Administra inventario' : ''}`
+            'Accesos y límites administrados desde Módulos del sistema'
           )] : [])
         )
       ));
@@ -1386,26 +1385,6 @@ function openEditarUsuarioModal(u) {
       <div class="fg"><label class="lbl">Iniciales (avatar)</label>
         <input class="inp" id="eu-avatar" type="text" value="${_esc(u.avatar||'')}" maxlength="2"/></div>
     </div>
-    ${u.role === 'cajero' ? `
-    <div style="border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:4px;background:var(--surface2)">
-      <div style="font-size:13px;font-weight:700;margin-bottom:10px">Permisos operativos del cajero</div>
-      <label style="display:flex;gap:9px;align-items:flex-start;margin-bottom:12px;cursor:pointer">
-        <input id="eu-can-credit" type="checkbox" ${u.can_sell_credit ? 'checked' : ''} style="margin-top:3px"/>
-        <span><strong>Puede vender a crédito</strong><br>
-          <small style="color:var(--muted2)">También se valida el límite configurado para cada cliente.</small></span>
-      </label>
-      <div class="fg" style="margin-bottom:12px">
-        <label class="lbl">Máximo que puede dejar a crédito por factura (RD$)</label>
-        <input class="inp" id="eu-credit-limit" type="number" data-money="on" min="0" step="0.01"
-               value="${Math.max(0, Number(u.credit_limit_per_sale)||0).toFixed(2)}"/>
-        <div class="ts" style="margin-top:4px">Escribe 0 para conservar crédito sin tope por usuario.</div>
-      </div>
-      <label style="display:flex;gap:9px;align-items:flex-start;cursor:pointer">
-        <input id="eu-manage-inventory" type="checkbox" ${u.can_manage_inventory ? 'checked' : ''} style="margin-top:3px"/>
-        <span><strong>Puede administrar Inventario</strong><br>
-          <small style="color:var(--muted2)">Crear, editar, ajustar stock, categorías y equipos/IMEI; no obtiene acceso a otras áreas administrativas.</small></span>
-      </label>
-    </div>` : ''}
     <div class="modal-foot">
       <button class="btn btn-out" id="eu-cancel">Cancelar</button>
       <button class="btn btn-green" id="eu-save">${svg('check')} Guardar</button>
@@ -1427,9 +1406,6 @@ async function guardarEdicionUsuario(id) {
   const existing = (window._cachedUsers||[]).find(u=>u.id===id);
   const data = {
     name, email, role: existing?.role||'cajero', avatar: avatar||name[0].toUpperCase(), active: existing?.active??1,
-    can_sell_credit: document.getElementById('eu-can-credit')?.checked ? 1 : 0,
-    credit_limit_per_sale: Math.max(0, Number(document.getElementById('eu-credit-limit')?.value)||0),
-    can_manage_inventory: document.getElementById('eu-manage-inventory')?.checked ? 1 : 0,
   };
   const result = await window.api.users.update({ id, data, requestUserId: _cfgUser().id });
   if (!result.ok) { toast(result.error||'Error', 'err'); return; }
@@ -1514,24 +1490,6 @@ function openNuevoCajeroModal() {
         ${isSA ? '<option value="admin">Administrador</option>' : ''}
       </select>
     </div>
-    <div style="border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--surface2)">
-      <div style="font-size:13px;font-weight:700;margin-bottom:10px">Permisos operativos</div>
-      <label style="display:flex;gap:9px;align-items:flex-start;margin-bottom:12px;cursor:pointer">
-        <input id="uc-can-credit" type="checkbox" style="margin-top:3px"/>
-        <span><strong>Puede vender a crédito</strong><br>
-          <small style="color:var(--muted2)">El límite del cliente seguirá aplicando.</small></span>
-      </label>
-      <div class="fg" style="margin-bottom:12px">
-        <label class="lbl">Máximo a crédito por factura (RD$)</label>
-        <input class="inp" id="uc-credit-limit" type="number" data-money="on" min="0" step="0.01" value="0.00"/>
-        <div class="ts" style="margin-top:4px">0 significa sin tope por usuario.</div>
-      </div>
-      <label style="display:flex;gap:9px;align-items:flex-start;cursor:pointer">
-        <input id="uc-manage-inventory" type="checkbox" style="margin-top:3px"/>
-        <span><strong>Puede administrar Inventario</strong><br>
-          <small style="color:var(--muted2)">No lo convierte en administrador del sistema.</small></span>
-      </label>
-    </div>
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-green" onclick="crearCajero()">${svg('check')} Crear usuario</button>
@@ -1544,17 +1502,11 @@ async function crearCajero() {
   const pass   = document.getElementById('uc-pass')?.value;
   const avatar = document.getElementById('uc-avatar')?.value?.trim().toUpperCase() || '';
   const role   = user?.role==='superadmin' ? (document.getElementById('uc-role')?.value||'cajero') : 'cajero';
-  const canSellCredit = document.getElementById('uc-can-credit')?.checked ? 1 : 0;
-  const creditLimit = Math.max(0, Number(document.getElementById('uc-credit-limit')?.value)||0);
-  const canManageInventory = document.getElementById('uc-manage-inventory')?.checked ? 1 : 0;
   if (!name)  { toast('El nombre es requerido', 'err'); return; }
   if (!email) { toast('El email es requerido', 'err');  return; }
   if (!pass||pass.length<6) { toast('Mínimo 6 caracteres', 'err'); return; }
   const result = await window.api.users.create({ data: {
     name, email, password: pass, role, avatar,
-    can_sell_credit: canSellCredit,
-    credit_limit_per_sale: creditLimit,
-    can_manage_inventory: canManageInventory,
   }, requestUserId: _cfgUser().id });
   if (!result.ok) { toast(result.error||'Error al crear', 'err'); return; }
   window._cachedUsers = await window.api.users.getAll() || [];

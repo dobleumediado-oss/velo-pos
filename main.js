@@ -48,7 +48,7 @@ const { sqliteIdent } = require('./lib/sql-safe');
 const { normalizeFinAcct: _normalizeFinAcct, normalizeFinMov: _normalizeFinMov } = require('./lib/normalize-financial');
 const { isAllowedExternalUrl } = require('./lib/url-safe');
 const { buildWhatsAppUrls } = require('./lib/whatsapp-url');
-const { canManageInventory } = require('./lib/user-operational-permissions');
+const { canManageInventory, modulePermission } = require('./lib/user-operational-permissions');
 const {
   EQUIPARTS_FILES,
   loadEquipartsCsvSet,
@@ -1395,6 +1395,25 @@ ipcMain.handle('users:update', async (_, { id, data, requestUserId }) => {
   }
 });
 
+ipcMain.handle('users:setModulePolicy', async (_, { id, moduleKey, enabled, creditLimit, requestUserId }) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || reqUser.role !== 'superadmin') {
+      return { ok: false, error: 'Solo el superadmin puede modificar accesos por usuario' };
+    }
+    const updated = usersRepo.setModulePolicy(id, { moduleKey, enabled, creditLimit });
+    const limitDetail = moduleKey === 'credito'
+      ? ` | Límite por factura: ${Number(updated.credit_limit_per_sale) > 0 ? `RD$${Number(updated.credit_limit_per_sale).toFixed(2)}` : 'sin tope'}`
+      : '';
+    audit(requestUserId, reqUser.name, 'permiso_modulo_usuario', 'users', id,
+      `${updated.name} | ${moduleKey}: ${enabled ? 'permitido' : 'bloqueado'}${limitDetail}`);
+    const { password: _, ...safe } = updated;
+    return { ok: true, data: safe };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle('users:changePassword', async (_, { id, password, requestUserId }) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
@@ -1419,6 +1438,38 @@ ipcMain.handle('users:changePassword', async (_, { id, password, requestUserId }
 });
 
 // ── Productos ─────────────────────────────────
+const _MODULE_BACKEND_POLICY = {
+  preventa: { setting:'module_preventa', roles:'module_preventa_roles', fallback:'admin,cajero' },
+  servicio: { roles:'module_service_roles', fallback:'admin,cajero' },
+  compras: {}, reportes: {}, devoluciones: {},
+  gastos: { setting:'module_gastos', roles:'module_gastos_roles', fallback:'admin' },
+  bancos: { setting:'module_contabilidad', roles:'module_contabilidad_roles', fallback:'admin' },
+  contabilidad: { setting:'module_contabilidad', roles:'module_contabilidad_roles', fallback:'admin' },
+  vendedores: { setting:'module_vendedores', roles:'module_vendedores_roles', fallback:'admin' },
+  comisiones: { setting:'module_vendedores', roles:'module_vendedores_roles', fallback:'admin' },
+  nomina: { setting:'module_vendedores', roles:'module_vendedores_roles', fallback:'admin' },
+  sucursales: { setting:'module_sucursales', roles:'module_sucursales_roles', fallback:'admin' },
+  vehiculos: { setting:'module_vehiculos', roles:'module_vehiculos_roles', fallback:'admin' },
+  mantenimiento: { setting:'module_mantenimiento', roles:'module_mantenimiento_roles', fallback:'admin' },
+  envios: { setting:'module_envios', roles:'module_envios_roles', fallback:'admin,cajero' },
+  conduce: { setting:'module_conduce', roles:'module_conduce_roles', fallback:'admin' },
+};
+
+function _moduleAuthorizedUser(requestUserId, moduleKey) {
+  const reqUser = authRepo.findById(requestUserId);
+  if (!reqUser || reqUser.active === 0) throw new Error('Usuario no válido');
+  const policy = _MODULE_BACKEND_POLICY[moduleKey] || {};
+  if (policy.setting && settingsRepo.get(policy.setting) !== '1') {
+    throw new Error('Este módulo está desactivado para la empresa');
+  }
+  const roleFallback = String(settingsRepo.get(policy.roles) || policy.fallback || 'admin')
+    .split(',').map(value => value.trim()).includes(reqUser.role);
+  if (!modulePermission(reqUser, moduleKey, roleFallback)) {
+    throw new Error(`Este usuario no tiene acceso al módulo ${moduleKey}`);
+  }
+  return reqUser;
+}
+
 function _inventoryAuthorizedUser(requestUserId) {
   const reqUser = authRepo.findById(requestUserId);
   if (!reqUser || reqUser.active === 0) throw new Error('Usuario no válido');
@@ -1587,11 +1638,7 @@ function _serviceOrdersEnabled() {
   return active.id === 'tech' && active.modules?.service_orders === true;
 }
 function _serviceUser(requestUserId) {
-  const reqUser = authRepo.findById(requestUserId);
-  if (!reqUser) throw new Error('Usuario no válido');
-  const configured = String(settingsRepo.get('module_service_roles') || 'admin,cajero')
-    .split(',').map(role => role.trim()).filter(Boolean);
-  if (reqUser.role !== 'superadmin' && !configured.includes(reqUser.role)) throw new Error('Sin permisos para Servicio');
+  const reqUser = _moduleAuthorizedUser(requestUserId, 'servicio');
   if (!_serviceOrdersEnabled()) throw new Error('Servicio técnico solo está disponible en VELO TECH POS');
   return reqUser;
 }
@@ -2476,17 +2523,7 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
 
 // ── Preventa y despacho: órdenes compartidas entre terminales ─────────────
 function _checkoutAuthorizedUser(requestUserId) {
-  const reqUser = authRepo.findById(requestUserId);
-  if (!reqUser || reqUser.active === 0) throw new Error('Usuario no válido');
-  if ((settingsRepo.get('module_preventa') || '1') !== '1') {
-    throw new Error('El módulo Preventa y Despacho está desactivado');
-  }
-  if (reqUser.role !== 'superadmin') {
-    const roles = String(settingsRepo.get('module_preventa_roles') || 'admin,cajero')
-      .split(',').map(role => role.trim()).filter(Boolean);
-    if (!roles.includes(reqUser.role)) throw new Error('No tienes acceso a Preventa y Despacho');
-  }
-  return reqUser;
+  return _moduleAuthorizedUser(requestUserId, 'preventa');
 }
 
 ipcMain.handle('checkout:create', async (_, { orderData, requestUserId } = {}) => {
@@ -2970,10 +3007,7 @@ ipcMain.handle('reports:summary', async (_, {
   range, dateFrom, dateTo, priceMode, customerType, requestUserId
 }) => {
   try {
-    const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Sin permisos' };
-    }
+    _moduleAuthorizedUser(requestUserId, 'reportes');
     return {
       ok: true,
       data: reportsRepo.summary(range, dateFrom, dateTo, { priceMode, customerType }),
@@ -2985,10 +3019,7 @@ ipcMain.handle('reports:summary', async (_, {
 
 ipcMain.handle('reports:paymentsHistory', async (_, { range, dateFrom, dateTo, requestUserId } = {}) => {
   try {
-    const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Sin permisos' };
-    }
+    _moduleAuthorizedUser(requestUserId, 'reportes');
     return { ok: true, data: reportsRepo.paymentsHistory({ range, dateFrom, dateTo }) };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -2997,10 +3028,7 @@ ipcMain.handle('reports:paymentsHistory', async (_, { range, dateFrom, dateTo, r
 
 ipcMain.handle('reports:priceChanges', async (_, { range, dateFrom, dateTo, limit, requestUserId } = {}) => {
   try {
-    const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Sin permisos' };
-    }
+    _moduleAuthorizedUser(requestUserId, 'reportes');
     return { ok: true, data: reportsRepo.priceChanges({ range, dateFrom, dateTo, limit }) };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -5358,10 +5386,7 @@ ipcMain.handle('suppliers:getAll', async () => {
 });
 ipcMain.handle('suppliers:create', async (_, { data, requestUserId }) => {
   try {
-    const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Solo el administrador puede crear proveedores' };
-    }
+    const reqUser = _moduleAuthorizedUser(requestUserId, 'compras');
     if (!data?.name?.trim()) return { ok: false, error: 'El nombre del proveedor es requerido' };
     const id = suppliersRepo.create(data);
     audit(requestUserId, reqUser.name, 'proveedor_creado', 'suppliers', id, data.name);
@@ -5370,10 +5395,7 @@ ipcMain.handle('suppliers:create', async (_, { data, requestUserId }) => {
 });
 ipcMain.handle('suppliers:update', async (_, { id, data, requestUserId }) => {
   try {
-    const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Solo el administrador puede editar proveedores' };
-    }
+    const reqUser = _moduleAuthorizedUser(requestUserId, 'compras');
     if (!id) return { ok: false, error: 'ID requerido' };
     if (!data?.name?.trim()) return { ok: false, error: 'El nombre del proveedor es requerido' };
     suppliersRepo.update(id, data);
@@ -5383,10 +5405,7 @@ ipcMain.handle('suppliers:update', async (_, { id, data, requestUserId }) => {
 });
 ipcMain.handle('suppliers:delete', async (_, { id, requestUserId }) => {
   try {
-    const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Solo el administrador puede eliminar proveedores' };
-    }
+    const reqUser = _moduleAuthorizedUser(requestUserId, 'compras');
     suppliersRepo.delete(id);
     audit(requestUserId, reqUser.name, 'proveedor_eliminado', 'suppliers', id, '');
     return { ok: true };
@@ -5406,10 +5425,7 @@ ipcMain.handle('purchases:getById', async (_, { id }) => {
 });
 ipcMain.handle('purchases:create', async (_, data) => {
   try {
-    const reqUser = authRepo.findById(data?.userId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Solo el administrador puede crear órdenes de compra' };
-    }
+    const reqUser = _moduleAuthorizedUser(data?.userId, 'compras');
     if (!data?.items?.length) return { ok: false, error: 'La orden debe tener al menos un producto' };
     for (const item of data.items) {
       if (!item.product_name?.trim()) return { ok: false, error: 'Todos los items deben tener nombre' };
@@ -5421,10 +5437,7 @@ ipcMain.handle('purchases:create', async (_, data) => {
 });
 ipcMain.handle('purchases:receive', async (_, { id, items, userId, costs }) => {
   try {
-    const reqUser = authRepo.findById(userId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Solo el administrador puede recibir compras' };
-    }
+    const reqUser = _moduleAuthorizedUser(userId, 'compras');
     const result = purchasesRepo.receive(id, { items, userId, userName: reqUser.name, costs });
     // Contabilidad devengada: valor recibido en ESTA recepción → Déb Inventario
     // (+ITBIS Acreditable proporcional) · Créd Cuentas por Pagar.
@@ -5443,10 +5456,7 @@ ipcMain.handle('purchases:receive', async (_, { id, items, userId, costs }) => {
 });
 ipcMain.handle('purchases:cancel', async (_, { id, userId }) => {
   try {
-    const reqUser = authRepo.findById(userId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Solo el administrador puede cancelar compras' };
-    }
+    const reqUser = _moduleAuthorizedUser(userId, 'compras');
     purchasesRepo.cancel(id, userId, reqUser.name);
     return { ok: true };
   }
@@ -5464,8 +5474,7 @@ ipcMain.handle('branches:getAll', async () => {
 });
 ipcMain.handle('branches:create', async (_, { data, requestUserId }) => {
   try {
-    const u = authRepo.findById(requestUserId);
-    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    const u = _moduleAuthorizedUser(requestUserId, 'sucursales');
     const id = branchesRepo.create(data);
     audit(requestUserId, u.name, 'sucursal_creada', 'branches', id, data.name);
     return { ok:true, id };
@@ -5473,8 +5482,7 @@ ipcMain.handle('branches:create', async (_, { data, requestUserId }) => {
 });
 ipcMain.handle('branches:update', async (_, { id, data, requestUserId }) => {
   try {
-    const u = authRepo.findById(requestUserId);
-    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    const u = _moduleAuthorizedUser(requestUserId, 'sucursales');
     branchesRepo.update(id, data);
     return { ok:true };
   } catch(e) { return { ok:false, error:e.message }; }
@@ -5496,8 +5504,7 @@ ipcMain.handle('vehicles:getAll', async () => {
 });
 ipcMain.handle('vehicles:create', async (_, { data, requestUserId }) => {
   try {
-    const u = authRepo.findById(requestUserId);
-    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    const u = _moduleAuthorizedUser(requestUserId, 'vehiculos');
     data.user_id = requestUserId;
     const id = vehiclesRepo.create(data);
     audit(requestUserId, u.name, 'vehiculo_creado', 'vehicles', id, `${data.brand} ${data.model}`);
@@ -5506,16 +5513,14 @@ ipcMain.handle('vehicles:create', async (_, { data, requestUserId }) => {
 });
 ipcMain.handle('vehicles:update', async (_, { id, data, requestUserId }) => {
   try {
-    const u = authRepo.findById(requestUserId);
-    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    const u = _moduleAuthorizedUser(requestUserId, 'vehiculos');
     vehiclesRepo.update(id, data);
     return { ok:true };
   } catch(e) { return { ok:false, error:e.message }; }
 });
 ipcMain.handle('vehicles:delete', async (_, { id, requestUserId }) => {
   try {
-    const u = authRepo.findById(requestUserId);
-    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    const u = _moduleAuthorizedUser(requestUserId, 'vehiculos');
     vehiclesRepo.delete(id);
     return { ok:true };
   } catch(e) { return { ok:false, error:e.message }; }
@@ -5543,8 +5548,7 @@ ipcMain.handle('maintenance:getPending', async () => {
 });
 ipcMain.handle('maintenance:create', async (_, { data, requestUserId }) => {
   try {
-    const u = authRepo.findById(requestUserId);
-    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    const u = _moduleAuthorizedUser(requestUserId, 'mantenimiento');
     data.user_id = requestUserId;
     const id = maintenanceRepo.create(data);
     // Actualizar odómetro del vehículo si viene
@@ -5606,8 +5610,7 @@ ipcMain.handle('maintenance:create', async (_, { data, requestUserId }) => {
 });
 ipcMain.handle('maintenance:delete', async (_, { id, requestUserId }) => {
   try {
-    const u = authRepo.findById(requestUserId);
-    if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Sin permisos' };
+    const u = _moduleAuthorizedUser(requestUserId, 'mantenimiento');
     // Si el mantenimiento generó un gasto, se anula (devuelve el dinero a caja si
     // aplicó) y se reversan sus asientos — así lo contable no queda descuadrado.
     const m = maintenanceRepo.getById(id);
@@ -6241,8 +6244,7 @@ ipcMain.handle('expenses:getSummary', async (_, filters) => {
 
 ipcMain.handle('expenses:create', async (_, { data, requestUserId }) => {
   try {
-    const u = authRepo.findById(requestUserId);
-    if (!u) return { ok:false, error:'Usuario no válido' };
+    const u = _moduleAuthorizedUser(requestUserId, 'gastos');
 
     // Verificar límite de cajero
     const cfg = expensesRepo.getConfig();
@@ -6424,10 +6426,9 @@ ipcMain.handle('expenses:upsertBudget', async (_, { data, requestUserId }) => {
 // ══════════════════════════════════════════════
 // IPC — VENDEDORES, COMISIONES, VIÁTICOS Y NÓMINA
 // ══════════════════════════════════════════════
-function _salespeopleAdmin(requestUserId) {
-  const u = authRepo.findById(requestUserId);
-  if (!u || !['admin','superadmin'].includes(u.role)) return null;
-  return u;
+function _salespeopleAdmin(requestUserId, moduleKey = 'vendedores') {
+  try { return _moduleAuthorizedUser(requestUserId, moduleKey); }
+  catch { return null; }
 }
 
 ipcMain.handle('salespeople:getAll', async (_, filters) => {
@@ -6481,7 +6482,7 @@ ipcMain.handle('salespeople:previewCommission', async (_, data) => {
   try{return {ok:true,data:salespeopleRepo.previewCommission(data||{})};}catch(e){return {ok:false,error:e.message};}
 });
 ipcMain.handle('salespeople:generateCommission', async (_, { data,requestUserId }) => {
-  try{const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};
+  try{const u=_salespeopleAdmin(requestUserId,'comisiones');if(!u)return {ok:false,error:'Sin permisos'};
     return {ok:true,data:salespeopleRepo.generateCommission(data||{},requestUserId,u.name)};
   }catch(e){return {ok:false,error:e.message};}
 });
@@ -6492,7 +6493,7 @@ ipcMain.handle('salespeople:getCommissionById', async (_, { id }) => {
   try{return {ok:true,data:salespeopleRepo.getCommissionById(id)};}catch(e){return {ok:false,error:e.message};}
 });
 ipcMain.handle('salespeople:approveCommission', async (_, { id,requestUserId }) => {
-  try{const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};
+  try{const u=_salespeopleAdmin(requestUserId,'comisiones');if(!u)return {ok:false,error:'Sin permisos'};
     salespeopleRepo.approveCommission(id,requestUserId,u.name);return {ok:true};
   }catch(e){return {ok:false,error:e.message};}
 });
@@ -6509,7 +6510,7 @@ ipcMain.handle('salespeople:getExpenses', async (_, filters) => {
   try{return {ok:true,data:salespeopleRepo.getSellerExpenses(filters||{})};}catch(e){return {ok:false,error:e.message};}
 });
 ipcMain.handle('salespeople:generatePayroll', async (_, { data,requestUserId }) => {
-  try{const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};
+  try{const u=_salespeopleAdmin(requestUserId,'nomina');if(!u)return {ok:false,error:'Sin permisos'};
     return {ok:true,id:salespeopleRepo.generatePayroll(data||{},requestUserId,u.name)};
   }catch(e){return {ok:false,error:e.message};}
 });
@@ -6520,17 +6521,17 @@ ipcMain.handle('salespeople:getPayrollById', async (_, { id }) => {
   try{return {ok:true,data:salespeopleRepo.getPayrollById(id)};}catch(e){return {ok:false,error:e.message};}
 });
 ipcMain.handle('salespeople:updatePayrollItem', async (_, { id,data,requestUserId }) => {
-  try{const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};
+  try{const u=_salespeopleAdmin(requestUserId,'nomina');if(!u)return {ok:false,error:'Sin permisos'};
     salespeopleRepo.updatePayrollItem(id,data||{});return {ok:true};
   }catch(e){return {ok:false,error:e.message};}
 });
 ipcMain.handle('salespeople:approvePayroll', async (_, { id,requestUserId }) => {
-  try{const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};
+  try{const u=_salespeopleAdmin(requestUserId,'nomina');if(!u)return {ok:false,error:'Sin permisos'};
     salespeopleRepo.approvePayroll(id,requestUserId,u.name);return {ok:true};
   }catch(e){return {ok:false,error:e.message};}
 });
 ipcMain.handle('salespeople:payPayroll', async (_, { id,data,requestUserId }) => {
-  try{const u=_salespeopleAdmin(requestUserId);if(!u)return {ok:false,error:'Sin permisos'};let session=null;
+  try{const u=_salespeopleAdmin(requestUserId,'nomina');if(!u)return {ok:false,error:'Sin permisos'};let session=null;
     if(data?.payment_source==='caja'){session=cashRepo.getOpen(_reqTerminalId());if(!session)return {ok:false,error:'No hay caja abierta'};}
     const refs=salespeopleRepo.payPayroll(id,{...data,cash_session_id:session?.id||null},requestUserId,u.name);
     _acctHook(()=>refs.forEach(ref=>{accountingRepo.generateExpenseAccrualEntry({expenseId:ref.expenseId,userId:requestUserId});accountingRepo.generateExpensePaymentEntry({paymentId:ref.paymentId,userId:requestUserId});}));
@@ -7823,8 +7824,13 @@ ipcMain.handle('shell:showItemInFolder', async (_, { path: filePath } = {}) => {
 // pasan por accountingRepo.* directamente (hooks), no por estos handlers, así que
 // no se ven afectados por esta guarda.
 function _requireAccountingRole(requestUserId) {
-  const u = requestUserId ? authRepo.findById(requestUserId) : null;
-  return (u && u.active && ['admin', 'superadmin'].includes(u.role)) ? u : null;
+  try {
+    const u = _moduleAuthorizedUser(requestUserId, 'bancos');
+    return u;
+  } catch {
+    try { return _moduleAuthorizedUser(requestUserId, 'contabilidad'); }
+    catch { return null; }
+  }
 }
 const _NO_ACCT_ROLE = { ok: false, error: 'Solo administradores pueden modificar contabilidad y bancos' };
 
