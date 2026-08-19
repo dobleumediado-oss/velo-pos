@@ -19,6 +19,8 @@ module.exports = {
   product: {
     appId: 'do.velotechpos.app',
     name:  'Velo Tech POS',
+    tagline: 'Celulares · Tecnología · Servicio',
+    logo:  'assets/velo-tech-logo.svg',
   },
 
   // Modelo serializado: cada equipo se rastrea por unidad (IMEI/serial) en

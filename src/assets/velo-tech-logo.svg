@@ -1,0 +1,5 @@
+<svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Velo Tech POS">
+  <rect width="128" height="128" rx="30" fill="#0B2A6E"/>
+  <path d="M72 20 L40 66 h16 l-2 6 h18 l-4 36 L88 62 H72 l4 -8 H60 z" fill="#3B82F6"/>
+  <path d="M72 20 L40 66 h16 l-2 6 h10 l6 -52 z" fill="#2E6BE6" opacity="0.85"/>
+</svg>

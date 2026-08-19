@@ -124,9 +124,17 @@ async function applyVerticalTheme() {
   const brandDark = (theme && theme.teal) || brand;
   if (brand && /^#[0-9A-Fa-f]{6}$/.test(String(brand))) {
     const p = `[data-vertical="${v.id}"]`;
-    css += `${p} .sb-logo{background:linear-gradient(145deg,${brand},${brandDark})}`;
-    css += `${p} .login-card .btn-dark{background:linear-gradient(135deg,${brand},${brandDark})}`;
-    css += `${p} .login-card .btn-dark:hover{background:linear-gradient(135deg,${brandDark},${brand})}`;
+    const b = brand, bd = brandDark;
+    css += [
+      `${p} .sb-logo{background:linear-gradient(145deg,${b},${bd})}`,           // logo del sidebar
+      `${p} .sb-av{background:linear-gradient(145deg,${b},${bd})}`,             // avatar de usuario
+      `${p} .login-card .btn-dark{background:linear-gradient(135deg,${b},${bd})}`,       // botón Ingresar
+      `${p} .login-card .btn-dark:hover{background:linear-gradient(135deg,${bd},${b})}`,
+      `${p} .nav-item::before{background:${b}}`,                                 // barra del ítem de menú activo
+      `${p} .nav-item.on{background:linear-gradient(90deg,${b}2b,rgba(255,255,255,.07))}`,
+      `${p} .nav-item.on .ni svg{stroke:${b}}`,                                 // ícono del ítem activo
+      `${p} .role-btn.on{border-color:${b};background:${b}1f;box-shadow:0 0 0 1px ${b}33 inset,0 4px 16px ${b}1a}`, // tarjeta de rol seleccionada
+    ].join('');
   }
   let styleEl = document.getElementById('vertical-theme-style');
   if (!styleEl) { styleEl = document.createElement('style'); styleEl.id = 'vertical-theme-style'; document.head.appendChild(styleEl); }
@@ -493,17 +501,17 @@ function renderLogin() {
       // ── Card del formulario ─────────────────
       h('div', { class: 'login-card' },
 
-        // Logo + título
+        // Logo + título (por vertical: VELO POS por defecto, el pack lo sobreescribe)
         h('div', { class: 'login-header' },
           h('div', { class: 'login-logo' },
             h('img', {
-              src: 'assets/icon.png',
+              src: (window._vertical && window._vertical.product && window._vertical.product.logo) || 'assets/icon.png',
               style: { width:'100%', height:'100%', borderRadius:'13px', objectFit:'cover' }
             })
           ),
           h('div', null,
-            h('div', { class: 'login-title' }, 'Velo POS'),
-            h('div', { class: 'login-sub' }, 'Gestión comercial · Inventario · Facturación · RD'),
+            h('div', { class: 'login-title' }, (window._vertical && window._vertical.product && window._vertical.product.name) || 'Velo POS'),
+            h('div', { class: 'login-sub' }, (window._vertical && window._vertical.product && window._vertical.product.tagline) || 'Gestión comercial · Inventario · Facturación · RD'),
             CFG.activeBusinessId
               ? h('div', {
                   style: {
