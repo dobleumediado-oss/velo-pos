@@ -636,14 +636,42 @@ function createTables() {
       number         TEXT UNIQUE NOT NULL,
       customer_id    INTEGER REFERENCES customers(id),
       customer_name  TEXT NOT NULL DEFAULT 'Consumidor Final',
+      product_unit_id INTEGER REFERENCES product_units(id),
+      unit_previous_status TEXT DEFAULT '',
+      parent_order_id INTEGER REFERENCES service_orders(id),
       device_desc    TEXT NOT NULL,
       imei           TEXT DEFAULT '',
+      imei2          TEXT DEFAULT '',
+      serial         TEXT DEFAULT '',
+      brand          TEXT DEFAULT '',
+      model          TEXT DEFAULT '',
+      device_color   TEXT DEFAULT '',
       problem        TEXT NOT NULL,
       diagnosis      TEXT DEFAULT '',
       quote_amount   REAL NOT NULL DEFAULT 0,
       status         TEXT NOT NULL DEFAULT 'recepcion'
                        CHECK(status IN ('recepcion','diagnostico','presupuesto','aprobado','reparando','listo','entregado','cancelado')),
+      workflow_status TEXT NOT NULL DEFAULT 'recepcion',
+      service_type   TEXT NOT NULL DEFAULT 'reparacion',
+      priority       TEXT NOT NULL DEFAULT 'normal',
+      promised_at    TEXT,
+      intake_condition TEXT DEFAULT '',
+      accessories_received TEXT DEFAULT '[]',
+      intake_checklist TEXT DEFAULT '{}',
+      privacy_consent INTEGER NOT NULL DEFAULT 0,
+      approval_version INTEGER NOT NULL DEFAULT 0,
+      approved_amount REAL NOT NULL DEFAULT 0,
+      approval_method TEXT DEFAULT '',
+      approved_by_name TEXT DEFAULT '',
+      approval_notes TEXT DEFAULT '',
+      quality_checklist TEXT DEFAULT '{}',
+      quality_notes TEXT DEFAULT '',
+      quality_checked_by INTEGER REFERENCES users(id),
+      quality_checked_at TEXT,
+      service_warranty_days INTEGER NOT NULL DEFAULT 0,
+      warranty_until TEXT,
       technician_id  INTEGER REFERENCES users(id),
+      service_technician_id INTEGER,
       received_by    INTEGER REFERENCES users(id),
       sale_id        INTEGER REFERENCES sales(id),
       approved_at    TEXT,
@@ -663,11 +691,52 @@ function createTables() {
       unit_cost        REAL NOT NULL DEFAULT 0,
       taxable          INTEGER NOT NULL DEFAULT 1,
       tax_pct          REAL NOT NULL DEFAULT 18,
+      qty_reserved     INTEGER NOT NULL DEFAULT 0,
+      qty_consumed     INTEGER NOT NULL DEFAULT 0,
+      reservation_status TEXT NOT NULL DEFAULT 'none',
+      created_at       TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE TABLE IF NOT EXISTS service_order_events (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      service_order_id INTEGER NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+      event_type       TEXT NOT NULL,
+      from_status      TEXT DEFAULT '',
+      to_status        TEXT DEFAULT '',
+      title            TEXT NOT NULL,
+      detail           TEXT DEFAULT '',
+      user_id          INTEGER REFERENCES users(id),
+      user_name        TEXT DEFAULT '',
+      created_at       TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE TABLE IF NOT EXISTS service_order_estimates (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      service_order_id INTEGER NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+      version          INTEGER NOT NULL,
+      amount           REAL NOT NULL DEFAULT 0,
+      status           TEXT NOT NULL DEFAULT 'pendiente',
+      decision_method  TEXT DEFAULT '',
+      decided_by_name  TEXT DEFAULT '',
+      decision_notes   TEXT DEFAULT '',
+      decided_at       TEXT,
+      snapshot_json    TEXT NOT NULL DEFAULT '{}',
+      created_by       INTEGER REFERENCES users(id),
+      created_at       TEXT DEFAULT (datetime('now','localtime')),
+      UNIQUE(service_order_id, version)
+    );
+    CREATE TABLE IF NOT EXISTS service_technicians (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      name             TEXT NOT NULL,
+      phone            TEXT DEFAULT '',
+      specialty        TEXT DEFAULT '',
+      commission_pct   REAL NOT NULL DEFAULT 0,
+      linked_user_id   INTEGER REFERENCES users(id),
+      active           INTEGER NOT NULL DEFAULT 1,
       created_at       TEXT DEFAULT (datetime('now','localtime'))
     );
     CREATE INDEX IF NOT EXISTS idx_service_orders_status ON service_orders(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_service_orders_imei ON service_orders(imei);
     CREATE INDEX IF NOT EXISTS idx_service_order_items_order ON service_order_items(service_order_id);
+    CREATE INDEX IF NOT EXISTS idx_service_events_order ON service_order_events(service_order_id, created_at);
 
     -- ── Equipos usados recibidos como parte de pago (VELO TECH POS R7) ──
     CREATE TABLE IF NOT EXISTS trade_ins (
@@ -2756,13 +2825,17 @@ const productsRepo = {
     return db.prepare(`
       SELECT p.*,
              ${effectiveStockSelect}
-             COALESCE((
+             (COALESCE((
                SELECT SUM(coi.qty)
                FROM checkout_order_items coi
                JOIN checkout_orders co ON co.id=coi.order_id
                WHERE coi.product_id=p.id AND co.status='pending'
                  AND co.expires_at > datetime('now','localtime')
-             ),0) AS reserved_stock,
+             ),0) + COALESCE((
+               SELECT SUM(soi.qty_reserved)
+               FROM service_order_items soi
+               WHERE soi.product_id=p.id AND soi.reservation_status='reserved'
+             ),0)) AS reserved_stock,
              h.id                    AS last_price_change_id,
              h.cost_before           AS last_cost_before,
              h.cost_after            AS last_cost_after,
@@ -4506,7 +4579,15 @@ const salesRepo = {
                   AND o.expires_at > datetime('now','localtime') AND o.id<>?
               `).get(productId, ownOrderId).qty || 0)
             : 0;
-          const available = Number(prod.stock) - Number(reserved);
+          const ownServiceOrderId = Number(item.service_order_id) || 0;
+          const serviceReserved = tableExists('service_order_items')
+            ? (db.prepare(`
+                SELECT COALESCE(SUM(qty_reserved),0) AS qty
+                FROM service_order_items
+                WHERE product_id=? AND reservation_status='reserved' AND service_order_id<>?
+              `).get(productId, ownServiceOrderId).qty || 0)
+            : 0;
+          const available = Number(prod.stock) - Number(reserved) - Number(serviceReserved);
           if (available < (requestedByProduct.get(productId) || 0)) {
             throw new Error(`Stock disponible insuficiente para "${prod.name}"`);
           }
@@ -11190,27 +11271,78 @@ const productUnitsRepo = {
 };
 
 // ── Servicio / reparación (VELO TECH POS R6) ───────────────────────────────
-const SERVICE_FLOW = ['recepcion','diagnostico','presupuesto','aprobado','reparando','listo','entregado'];
+const SERVICE_TRANSITIONS = {
+  recepcion: ['inspeccion'],
+  inspeccion: ['diagnostico'],
+  diagnostico: ['presupuesto'],
+  presupuesto: ['esperando_aprobacion'],
+  aprobado: ['esperando_pieza', 'reparando'],
+  esperando_pieza: ['reparando'],
+  reparando: ['control_calidad'],
+  control_calidad: ['listo'],
+};
+const SERVICE_TERMINAL = new Set(['entregado','cancelado','rechazado','no_reparable','devuelto_sin_reparar']);
+const SERVICE_LEGACY_STATUS = {
+  recepcion:'recepcion', inspeccion:'recepcion', diagnostico:'diagnostico',
+  presupuesto:'presupuesto', esperando_aprobacion:'presupuesto', rechazado:'presupuesto',
+  aprobado:'aprobado', esperando_pieza:'aprobado', reparando:'reparando',
+  control_calidad:'reparando', listo:'listo', entregado:'entregado',
+  cancelado:'cancelado', no_reparable:'cancelado', devuelto_sin_reparar:'cancelado',
+};
 const serviceOrdersRepo = {
+  _event(orderId, eventType, title, detail = '', user = {}, fromStatus = '', toStatus = '') {
+    db.prepare(`INSERT INTO service_order_events(
+      service_order_id,event_type,from_status,to_status,title,detail,user_id,user_name
+    ) VALUES(?,?,?,?,?,?,?,?)`).run(
+      Number(orderId), eventType, fromStatus || '', toStatus || '', title,
+      String(detail || '').trim(), Number(user.id) || null, String(user.name || '')
+    );
+  },
+
+  _setWorkflow(orderId, workflowStatus) {
+    const legacy = SERVICE_LEGACY_STATUS[workflowStatus] || 'recepcion';
+    db.prepare(`UPDATE service_orders SET workflow_status=?,status=?,updated_at=datetime('now','localtime') WHERE id=?`)
+      .run(workflowStatus, legacy, Number(orderId));
+  },
+
+  _safeJson(value, fallback) {
+    if (value == null || value === '') return JSON.stringify(fallback);
+    if (typeof value === 'string') {
+      try { JSON.parse(value); return value; } catch { return JSON.stringify(fallback); }
+    }
+    return JSON.stringify(value);
+  },
+
+  _restoreUnitStatus(order) {
+    if (!order?.product_unit_id) return;
+    const allowed = new Set(['en_stock', 'reservado', 'vendido', 'devuelto']);
+    const status = allowed.has(order.unit_previous_status) ? order.unit_previous_status : 'vendido';
+    db.prepare('UPDATE product_units SET status=? WHERE id=?').run(status, order.product_unit_id);
+  },
+
   list({ status = '', search = '', limit = 200 } = {}) {
     const where = [];
     const params = [];
-    if (status) { where.push('so.status=?'); params.push(status); }
+    if (status) { where.push('so.workflow_status=?'); params.push(status); }
     const q = String(search || '').trim();
     if (q) {
-      where.push(`(so.number LIKE ? OR so.customer_name LIKE ? OR so.device_desc LIKE ? OR so.imei LIKE ? OR so.problem LIKE ?)`);
+      where.push(`(so.number LIKE ? OR so.customer_name LIKE ? OR so.device_desc LIKE ? OR
+        so.imei LIKE ? OR so.imei2 LIKE ? OR so.serial LIKE ? OR so.problem LIKE ? OR st.name LIKE ?)`);
       const like = `%${q}%`;
-      params.push(like, like, like, like, like);
+      params.push(like, like, like, like, like, like, like, like);
     }
     params.push(Math.max(1, Math.min(1000, Number(limit) || 200)));
     return db.prepare(`
-      SELECT so.*, u.name AS technician_name,
+      SELECT so.*, COALESCE(st.name,u.name) AS technician_name,
              (SELECT COUNT(*) FROM service_order_items i WHERE i.service_order_id=so.id) AS item_count,
-             (SELECT COALESCE(SUM(i.qty*i.unit_price),0) FROM service_order_items i WHERE i.service_order_id=so.id) AS items_total
+             (SELECT COALESCE(SUM(i.qty*i.unit_price),0) FROM service_order_items i WHERE i.service_order_id=so.id) AS items_total,
+             CAST(julianday('now','localtime')-julianday(so.created_at) AS INTEGER) AS age_days
       FROM service_orders so
       LEFT JOIN users u ON u.id=so.technician_id
+      LEFT JOIN service_technicians st ON st.id=so.service_technician_id
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-      ORDER BY CASE so.status WHEN 'listo' THEN 0 WHEN 'reparando' THEN 1 WHEN 'aprobado' THEN 2 ELSE 3 END,
+      ORDER BY CASE so.workflow_status WHEN 'listo' THEN 0 WHEN 'control_calidad' THEN 1
+        WHEN 'reparando' THEN 2 WHEN 'esperando_pieza' THEN 3 WHEN 'esperando_aprobacion' THEN 4 ELSE 5 END,
                so.updated_at DESC, so.id DESC
       LIMIT ?
     `).all(...params);
@@ -11218,14 +11350,23 @@ const serviceOrdersRepo = {
 
   getById(id) {
     const row = db.prepare(`
-      SELECT so.*, u.name AS technician_name, r.name AS received_by_name
+      SELECT so.*, COALESCE(st.name,u.name) AS technician_name, r.name AS received_by_name,
+             c.phone AS customer_phone,c.email AS customer_email,c.address AS customer_address,
+             pu.status AS unit_status,pu.warranty_until AS unit_warranty_until,
+             p.name AS catalog_product_name,p.brand AS catalog_brand,p.model AS catalog_model
       FROM service_orders so
       LEFT JOIN users u ON u.id=so.technician_id
       LEFT JOIN users r ON r.id=so.received_by
+      LEFT JOIN customers c ON c.id=so.customer_id
+      LEFT JOIN service_technicians st ON st.id=so.service_technician_id
+      LEFT JOIN product_units pu ON pu.id=so.product_unit_id
+      LEFT JOIN products p ON p.id=pu.product_id
       WHERE so.id=?
     `).get(Number(id));
     if (!row) return null;
     row.items = db.prepare('SELECT * FROM service_order_items WHERE service_order_id=? ORDER BY id').all(row.id);
+    row.events = db.prepare('SELECT * FROM service_order_events WHERE service_order_id=? ORDER BY id DESC').all(row.id);
+    row.estimates = db.prepare('SELECT * FROM service_order_estimates WHERE service_order_id=? ORDER BY version DESC').all(row.id);
     if (row.sale_id) row.sale = salesRepo.getById(row.sale_id);
     return row;
   },
@@ -11235,33 +11376,75 @@ const serviceOrdersRepo = {
     const problem = String(data.problem || '').trim();
     if (!device) throw new Error('Describe el equipo recibido');
     if (!problem) throw new Error('Describe el problema reportado');
-    const customerId = Number(data.customer_id) || 1;
+    let customerId = Number(data.customer_id) || 1;
     const customer = db.prepare('SELECT id,name FROM customers WHERE id=? AND active=1').get(customerId);
     if (!customer) throw new Error('Cliente no encontrado o inactivo');
     return db.transaction(() => {
+      const identifier = String(data.imei || data.serial || '').trim();
+      let unit = Number(data.product_unit_id)
+        ? db.prepare(`SELECT pu.*,p.name product_name,p.brand product_brand,p.model product_model
+            FROM product_units pu JOIN products p ON p.id=pu.product_id WHERE pu.id=?`).get(Number(data.product_unit_id))
+        : (identifier ? productUnitsRepo.findByImei(identifier) : null);
+      if (unit) {
+        const activeRepair = db.prepare(`SELECT number FROM service_orders
+          WHERE product_unit_id=? AND workflow_status NOT IN ('entregado','cancelado','rechazado','no_reparable','devuelto_sin_reparar') LIMIT 1`).get(unit.id);
+        if (activeRepair) throw new Error(`El equipo ya está en la orden ${activeRepair.number}`);
+      }
       const next = (db.prepare('SELECT COALESCE(MAX(id),0)+1 AS n FROM service_orders').get().n || 1);
       const number = `SRV-${String(next).padStart(6, '0')}`;
       const info = db.prepare(`
-        INSERT INTO service_orders(number,customer_id,customer_name,device_desc,imei,problem,technician_id,received_by,notes)
-        VALUES(?,?,?,?,?,?,?,?,?)
-      `).run(number, customer.id, customer.name, device, String(data.imei || '').trim(), problem,
-             Number(data.technician_id) || null, Number(user.id) || null, String(data.notes || '').trim());
-      return this.getById(info.lastInsertRowid);
+        INSERT INTO service_orders(
+          number,customer_id,customer_name,product_unit_id,unit_previous_status,parent_order_id,device_desc,imei,imei2,serial,
+          brand,model,device_color,problem,workflow_status,service_type,priority,promised_at,
+          intake_condition,accessories_received,intake_checklist,privacy_consent,
+          technician_id,service_technician_id,received_by,service_warranty_days,notes
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'recepcion',?,?,?,?,?,?,?,?,?,?,?,?)
+      `).run(
+        number, customer.id, customer.name, unit?.id || null, String(unit?.status || ''), Number(data.parent_order_id) || null,
+        device, String(data.imei || unit?.imei || '').trim(), String(data.imei2 || '').trim(),
+        String(data.serial || unit?.serial || '').trim(), String(data.brand || unit?.product_brand || '').trim(),
+        String(data.model || unit?.product_model || '').trim(), String(data.device_color || unit?.color || '').trim(), problem,
+        ['reparacion','garantia','diagnostico','instalacion','visita'].includes(data.service_type) ? data.service_type : 'reparacion',
+        ['baja','normal','alta','urgente'].includes(data.priority) ? data.priority : 'normal',
+        String(data.promised_at || '').trim() || null, String(data.intake_condition || '').trim(),
+        this._safeJson(data.accessories_received, []), this._safeJson(data.intake_checklist, {}),
+        data.privacy_consent ? 1 : 0, Number(data.technician_id) || null,
+        Number(data.service_technician_id) || null, Number(user.id) || null,
+        Math.max(0, Math.min(3650, Number.parseInt(data.service_warranty_days, 10) || 0)),
+        String(data.notes || '').trim()
+      );
+      const orderId = Number(info.lastInsertRowid);
+      if (unit) db.prepare("UPDATE product_units SET status='servicio' WHERE id=?").run(unit.id);
+      this._event(orderId, 'recepcion', 'Equipo recibido',
+        `${device}${identifier ? ` · ${identifier}` : ''}`, user, '', 'recepcion');
+      return this.getById(orderId);
     })();
   },
 
   update(id, data = {}) {
     const current = this.getById(id);
     if (!current) throw new Error('Orden de servicio no encontrada');
-    if (['entregado','cancelado'].includes(current.status)) throw new Error('La orden ya no se puede editar');
+    if (SERVICE_TERMINAL.has(current.workflow_status)) throw new Error('La orden ya no se puede editar');
+    const lockedEstimate = ['esperando_aprobacion','aprobado','esperando_pieza','reparando','control_calidad','listo']
+      .includes(current.workflow_status);
+    if (lockedEstimate && (Array.isArray(data.items) || data.diagnosis !== undefined || data.quote_amount !== undefined)) {
+      throw new Error('El presupuesto está bloqueado. Reábrelo y genera una nueva versión antes de cambiar piezas o precios');
+    }
     return db.transaction(() => {
       const diagnosis = data.diagnosis == null ? current.diagnosis : String(data.diagnosis).trim();
       const quoteAmount = data.quote_amount == null ? current.quote_amount : Math.max(0, Number(data.quote_amount) || 0);
       const technicianId = data.technician_id === undefined ? current.technician_id : (Number(data.technician_id) || null);
+      const serviceTechnicianId = data.service_technician_id === undefined
+        ? current.service_technician_id : (Number(data.service_technician_id) || null);
       const notes = data.notes == null ? current.notes : String(data.notes).trim();
-      db.prepare(`UPDATE service_orders SET diagnosis=?,quote_amount=?,technician_id=?,notes=?,updated_at=datetime('now','localtime') WHERE id=?`)
-        .run(diagnosis, quoteAmount, technicianId, notes, current.id);
+      db.prepare(`UPDATE service_orders SET diagnosis=?,quote_amount=?,technician_id=?,service_technician_id=?,
+        promised_at=COALESCE(?,promised_at),priority=COALESCE(?,priority),notes=?,updated_at=datetime('now','localtime') WHERE id=?`)
+        .run(diagnosis, quoteAmount, technicianId, serviceTechnicianId,
+          data.promised_at === undefined ? null : (String(data.promised_at || '').trim() || null),
+          data.priority === undefined ? null : String(data.priority || 'normal'), notes, current.id);
       if (Array.isArray(data.items)) {
+        const reserved = current.items.some(i => i.reservation_status !== 'none' || i.qty_reserved || i.qty_consumed);
+        if (reserved) throw new Error('No se pueden sustituir partidas con piezas reservadas o consumidas');
         db.prepare('DELETE FROM service_order_items WHERE service_order_id=?').run(current.id);
         const insert = db.prepare(`
           INSERT INTO service_order_items(service_order_id,kind,product_id,description,qty,unit_price,unit_cost,taxable,tax_pct)
@@ -11294,6 +11477,7 @@ const serviceOrdersRepo = {
       if (data.quote_amount == null && Array.isArray(data.items)) {
         db.prepare('UPDATE service_orders SET quote_amount=? WHERE id=?').run(round2(total), current.id);
       }
+      this._event(current.id, 'actualizacion', 'Orden actualizada', '', data.user || {});
       return this.getById(current.id);
     })();
   },
@@ -11301,28 +11485,175 @@ const serviceOrdersRepo = {
   advance(id, nextStatus, user = {}) {
     const current = this.getById(id);
     if (!current) throw new Error('Orden de servicio no encontrada');
-    const at = SERVICE_FLOW.indexOf(current.status);
-    const next = SERVICE_FLOW[at + 1];
-    if (!next || nextStatus !== next || nextStatus === 'entregado') {
+    const allowed = SERVICE_TRANSITIONS[current.workflow_status] || [];
+    if (!allowed.includes(nextStatus)) {
       throw new Error('Transición de estado no permitida');
     }
     if (nextStatus === 'presupuesto' && !String(current.diagnosis || '').trim()) {
       throw new Error('Registra el diagnóstico antes de presupuestar');
     }
-    if (nextStatus === 'aprobado' && Number(current.quote_amount) <= 0) {
-      throw new Error('Registra el presupuesto antes de aprobar');
+    if (nextStatus === 'esperando_aprobacion') {
+      if (Number(current.quote_amount) <= 0 || !current.items.length) throw new Error('Agrega el presupuesto y sus partidas antes de enviarlo');
+      return this.submitEstimate(id, user);
     }
-    const approvedAt = nextStatus === 'aprobado' ? "approved_at=datetime('now','localtime')," : '';
-    db.prepare(`UPDATE service_orders SET status=?,${approvedAt}technician_id=COALESCE(technician_id,?),updated_at=datetime('now','localtime') WHERE id=?`)
-      .run(nextStatus, Number(user.id) || null, current.id);
-    return this.getById(current.id);
+    if (nextStatus === 'reparando') {
+      const waiting = current.items.some(i => i.kind === 'parte' && i.reservation_status !== 'reserved');
+      if (waiting) throw new Error('Reserva todas las piezas antes de iniciar la reparación');
+    }
+    if (nextStatus === 'listo' && !current.quality_checked_at) {
+      throw new Error('Completa el control de calidad antes de marcar el equipo listo');
+    }
+    return db.transaction(() => {
+      this._setWorkflow(current.id, nextStatus);
+      this._event(current.id, 'estado', `Estado: ${nextStatus.replaceAll('_',' ')}`, '', user,
+        current.workflow_status, nextStatus);
+      return this.getById(current.id);
+    })();
+  },
+
+  submitEstimate(id, user = {}) {
+    const current = this.getById(id);
+    if (!current) throw new Error('Orden de servicio no encontrada');
+    if (current.workflow_status !== 'presupuesto') throw new Error('La orden debe estar en presupuesto');
+    if (!current.items.length || Number(current.quote_amount) <= 0) throw new Error('El presupuesto está vacío');
+    return db.transaction(() => {
+      const version = Number(current.approval_version || 0) + 1;
+      const snapshot = {
+        diagnosis: current.diagnosis,
+        amount: round2(current.items.reduce((sum, item) => sum + Number(item.qty) * Number(item.unit_price), 0)),
+        items: current.items.map(item => ({
+          kind:item.kind, product_id:item.product_id, description:item.description, qty:item.qty,
+          unit_price:item.unit_price, unit_cost:item.unit_cost, taxable:item.taxable, tax_pct:item.tax_pct,
+        })),
+      };
+      db.prepare(`INSERT INTO service_order_estimates(
+        service_order_id,version,amount,status,snapshot_json,created_by
+      ) VALUES(?,?,?,'pendiente',?,?)`).run(current.id, version, snapshot.amount, JSON.stringify(snapshot), Number(user.id) || null);
+      db.prepare(`UPDATE service_orders SET approval_version=?,quote_amount=?,workflow_status='esperando_aprobacion',
+        status='presupuesto',updated_at=datetime('now','localtime') WHERE id=?`).run(version, snapshot.amount, current.id);
+      this._event(current.id, 'presupuesto', `Presupuesto v${version} enviado`, `RD$${snapshot.amount.toFixed(2)}`,
+        user, current.workflow_status, 'esperando_aprobacion');
+      return this.getById(current.id);
+    })();
+  },
+
+  _reserveParts(orderId) {
+    const current = this.getById(orderId);
+    const shortages = [];
+    const requested = new Map();
+    for (const item of current.items.filter(i => i.kind === 'parte')) {
+      const productId = Number(item.product_id);
+      const row = requested.get(productId) || { productId, qty:0, description:item.description };
+      row.qty += Number(item.qty) || 0;
+      requested.set(productId, row);
+    }
+    for (const request of requested.values()) {
+      const product = db.prepare('SELECT id,name,stock,COALESCE(serialized,0) serialized FROM products WHERE id=?').get(request.productId);
+      if (!product || product.serialized) throw new Error(`La pieza "${request.description}" no está disponible como inventario fungible`);
+      const checkoutReserved = tableExists('checkout_orders') ? (db.prepare(`
+        SELECT COALESCE(SUM(i.qty),0) qty FROM checkout_order_items i
+        JOIN checkout_orders o ON o.id=i.order_id WHERE i.product_id=? AND o.status='pending'
+          AND o.expires_at>datetime('now','localtime')`).get(request.productId).qty || 0) : 0;
+      const serviceReserved = db.prepare(`SELECT COALESCE(SUM(qty_reserved),0) qty FROM service_order_items
+        WHERE product_id=? AND reservation_status='reserved' AND service_order_id<>?`).get(request.productId, current.id).qty || 0;
+      const available = Number(product.stock) - Number(checkoutReserved) - Number(serviceReserved);
+      if (available < request.qty) shortages.push(`${product.name}: faltan ${request.qty - Math.max(0, available)}`);
+    }
+    if (shortages.length) {
+      db.prepare(`UPDATE service_order_items SET reservation_status='waiting',qty_reserved=0
+        WHERE service_order_id=? AND kind='parte'`).run(current.id);
+      return { ok:false, shortages };
+    }
+    db.prepare(`UPDATE service_order_items SET reservation_status='reserved',qty_reserved=qty
+      WHERE service_order_id=? AND kind='parte'`).run(current.id);
+    return { ok:true, shortages:[] };
+  },
+
+  decideEstimate(id, decision = {}, user = {}) {
+    const current = this.getById(id);
+    if (!current) throw new Error('Orden de servicio no encontrada');
+    if (current.workflow_status !== 'esperando_aprobacion') throw new Error('La orden no está esperando aprobación');
+    const approved = decision.approved === true;
+    const method = String(decision.method || '').trim();
+    const customerName = String(decision.customer_name || current.customer_name || '').trim();
+    if (!method) throw new Error('Indica cómo respondió el cliente');
+    if (!customerName) throw new Error('Indica quién respondió');
+    return db.transaction(() => {
+      const estimate = db.prepare(`SELECT * FROM service_order_estimates WHERE service_order_id=? AND version=?`)
+        .get(current.id, current.approval_version);
+      if (!estimate) throw new Error('No se encontró la versión del presupuesto');
+      db.prepare(`UPDATE service_order_estimates SET status=?,decision_method=?,decided_by_name=?,decision_notes=?,
+        decided_at=datetime('now','localtime') WHERE id=?`).run(
+        approved ? 'aprobado' : 'rechazado', method, customerName, String(decision.notes || '').trim(), estimate.id
+      );
+      if (!approved) {
+        this._setWorkflow(current.id, 'rechazado');
+        this._event(current.id, 'aprobacion', `Presupuesto v${estimate.version} rechazado`,
+          `${method} · ${customerName}`, user, current.workflow_status, 'rechazado');
+        return this.getById(current.id);
+      }
+      const reservation = this._reserveParts(current.id);
+      const next = reservation.ok ? 'aprobado' : 'esperando_pieza';
+      db.prepare(`UPDATE service_orders SET approved_amount=?,approval_method=?,approved_by_name=?,approval_notes=?,
+        approved_at=datetime('now','localtime') WHERE id=?`).run(
+        estimate.amount, method, customerName, String(decision.notes || '').trim(), current.id
+      );
+      this._setWorkflow(current.id, next);
+      this._event(current.id, 'aprobacion', `Presupuesto v${estimate.version} aprobado`,
+        reservation.ok ? `${method} · piezas reservadas` : `${method} · ${reservation.shortages.join('; ')}`,
+        user, current.workflow_status, next);
+      return this.getById(current.id);
+    })();
+  },
+
+  retryReservations(id, user = {}) {
+    const current = this.getById(id);
+    if (!current || current.workflow_status !== 'esperando_pieza') throw new Error('La orden no está esperando piezas');
+    return db.transaction(() => {
+      const result = this._reserveParts(current.id);
+      if (!result.ok) throw new Error(`Aún falta inventario: ${result.shortages.join('; ')}`);
+      this._setWorkflow(current.id, 'aprobado');
+      this._event(current.id, 'inventario', 'Piezas reservadas', '', user, current.workflow_status, 'aprobado');
+      return this.getById(current.id);
+    })();
+  },
+
+  reopenEstimate(id, user = {}) {
+    const current = this.getById(id);
+    if (!current || !['rechazado','esperando_aprobacion'].includes(current.workflow_status)) {
+      throw new Error('Este presupuesto no se puede reabrir');
+    }
+    return db.transaction(() => {
+      db.prepare(`UPDATE service_order_estimates SET status='reemplazado' WHERE service_order_id=? AND status='pendiente'`).run(current.id);
+      this._setWorkflow(current.id, 'presupuesto');
+      this._event(current.id, 'presupuesto', 'Presupuesto reabierto para revisión', '', user,
+        current.workflow_status, 'presupuesto');
+      return this.getById(current.id);
+    })();
+  },
+
+  saveQuality(id, data = {}, user = {}) {
+    const current = this.getById(id);
+    if (!current || current.workflow_status !== 'control_calidad') throw new Error('La orden no está en control de calidad');
+    const checklist = data.checklist && typeof data.checklist === 'object' ? data.checklist : {};
+    const entries = Object.entries(checklist);
+    if (entries.length < 3) throw new Error('Completa al menos tres pruebas de calidad');
+    if (entries.some(([,value]) => value !== true)) throw new Error('Todas las pruebas deben aprobar antes de entregar');
+    return db.transaction(() => {
+      db.prepare(`UPDATE service_orders SET quality_checklist=?,quality_notes=?,quality_checked_by=?,
+        quality_checked_at=datetime('now','localtime'),updated_at=datetime('now','localtime') WHERE id=?`).run(
+        JSON.stringify(checklist), String(data.notes || '').trim(), Number(user.id) || null, current.id
+      );
+      this._event(current.id, 'calidad', 'Control de calidad aprobado', String(data.notes || '').trim(), user);
+      return this.getById(current.id);
+    })();
   },
 
   deliver(id, payment = {}, user = {}, session = null) {
     const order = this.getById(id);
     if (!order) throw new Error('Orden de servicio no encontrada');
     if (order.sale_id) return { order, saleResult: salesRepo.getConfirmationById(order.sale_id) };
-    if (order.status !== 'listo') throw new Error('La orden debe estar lista antes de entregarla');
+    if (order.workflow_status !== 'listo') throw new Error('La orden debe estar lista antes de entregarla');
     if (!order.items.length) throw new Error('Agrega piezas o mano de obra antes de entregar');
     const items = order.items.map(item => item.kind === 'parte' ? {
       product_id: item.product_id,
@@ -11333,6 +11664,7 @@ const serviceOrdersRepo = {
       qty: Number(item.qty) || 1,
       taxable: item.taxable,
       tax_pct: item.tax_pct,
+      service_order_id: order.id,
     } : {
       product_id: null,
       product_code: 'SERVICIO',
@@ -11344,6 +11676,7 @@ const serviceOrdersRepo = {
       qty: Number(item.qty) || 1,
       taxable: item.taxable,
       tax_pct: item.tax_pct,
+      service_order_id: order.id,
     });
     const saleResult = salesRepo.create({
       session,
@@ -11359,18 +11692,94 @@ const serviceOrdersRepo = {
       operationId: `service-order-${order.id}`,
     });
     const saleId = saleResult.saleId || saleResult.id;
-    db.prepare(`UPDATE service_orders SET status='entregado',sale_id=?,delivered_at=datetime('now','localtime'),updated_at=datetime('now','localtime') WHERE id=?`)
-      .run(saleId, order.id);
+    db.transaction(() => {
+      db.prepare(`UPDATE service_order_items SET qty_consumed=CASE WHEN kind='parte' THEN qty ELSE 0 END,
+        qty_reserved=0,reservation_status=CASE WHEN kind='parte' THEN 'consumed' ELSE 'none' END WHERE service_order_id=?`).run(order.id);
+      const warrantyDays = Math.max(0, Math.min(3650,
+        Number.parseInt(payment.warrantyDays, 10) || Number(order.service_warranty_days) ||
+        Number(settingsRepo.get('service_default_warranty_days')) || 0));
+      db.prepare(`UPDATE service_orders SET status='entregado',workflow_status='entregado',sale_id=?,
+        service_warranty_days=?,warranty_until=CASE WHEN ?>0 THEN date('now','localtime',?) ELSE NULL END,
+        delivered_at=datetime('now','localtime'),updated_at=datetime('now','localtime') WHERE id=?`)
+        .run(saleId, warrantyDays, warrantyDays, `+${warrantyDays} days`, order.id);
+      this._restoreUnitStatus(order);
+      this._event(order.id, 'entrega', 'Equipo entregado y facturado', `Venta #${saleId} · garantía ${warrantyDays} días`,
+        user, order.workflow_status, 'entregado');
+    })();
     return { order: this.getById(order.id), saleResult };
   },
 
-  cancel(id, reason = '') {
+  cancel(id, reason = '', user = {}) {
     const current = this.getById(id);
     if (!current) throw new Error('Orden de servicio no encontrada');
-    if (['entregado','cancelado'].includes(current.status)) throw new Error('La orden ya no puede cancelarse');
-    db.prepare(`UPDATE service_orders SET status='cancelado',notes=TRIM(COALESCE(notes,'') || ?),updated_at=datetime('now','localtime') WHERE id=?`)
-      .run(reason ? `\nCancelación: ${String(reason).trim()}` : '', current.id);
-    return this.getById(current.id);
+    if (SERVICE_TERMINAL.has(current.workflow_status)) throw new Error('La orden ya no puede cancelarse');
+    const clean = String(reason || '').trim();
+    if (!clean) throw new Error('Indica el motivo de cancelación');
+    return db.transaction(() => {
+      db.prepare(`UPDATE service_order_items SET qty_reserved=0,reservation_status='released'
+        WHERE service_order_id=? AND reservation_status IN ('reserved','waiting')`).run(current.id);
+      db.prepare(`UPDATE service_orders SET status='cancelado',workflow_status='cancelado',
+        notes=TRIM(COALESCE(notes,'') || ?),updated_at=datetime('now','localtime') WHERE id=?`)
+        .run(`\nCancelación: ${clean}`, current.id);
+      this._restoreUnitStatus(current);
+      this._event(current.id, 'cancelacion', 'Orden cancelada', clean, user, current.workflow_status, 'cancelado');
+      return this.getById(current.id);
+    })();
+  },
+
+  createWarrantyReturn(id, problem, user = {}) {
+    const original = this.getById(id);
+    if (!original || original.workflow_status !== 'entregado') throw new Error('La reparación original no está entregada');
+    if (!original.warranty_until || original.warranty_until < db.prepare("SELECT date('now','localtime') d").get().d) {
+      throw new Error('La garantía de esta reparación está vencida o no fue configurada');
+    }
+    return this.create({
+      customer_id: original.customer_id, product_unit_id: original.product_unit_id,
+      parent_order_id: original.id, device_desc: original.device_desc, imei: original.imei,
+      imei2: original.imei2, serial: original.serial, brand: original.brand, model: original.model,
+      device_color: original.device_color, problem: String(problem || '').trim(),
+      service_type: 'garantia', priority: 'alta', privacy_consent: original.privacy_consent,
+      intake_condition: original.intake_condition, accessories_received: [],
+      service_warranty_days: original.service_warranty_days,
+      notes: `Reingreso de garantía de ${original.number}`,
+    }, user);
+  },
+
+  technicians() {
+    return db.prepare('SELECT * FROM service_technicians WHERE active=1 ORDER BY name').all();
+  },
+
+  saveTechnician(data = {}) {
+    const name = String(data.name || '').trim();
+    if (!name) throw new Error('Indica el nombre del técnico');
+    const pct = Math.max(0, Math.min(100, Number(data.commission_pct) || 0));
+    if (Number(data.id)) {
+      db.prepare(`UPDATE service_technicians SET name=?,phone=?,specialty=?,commission_pct=?,active=? WHERE id=?`).run(
+        name, String(data.phone || '').trim(), String(data.specialty || '').trim(), pct,
+        data.active === 0 ? 0 : 1, Number(data.id));
+      return Number(data.id);
+    }
+    return Number(db.prepare(`INSERT INTO service_technicians(name,phone,specialty,commission_pct,linked_user_id)
+      VALUES(?,?,?,?,?)`).run(name, String(data.phone || '').trim(), String(data.specialty || '').trim(), pct,
+        Number(data.linked_user_id) || null).lastInsertRowid);
+  },
+
+  report() {
+    const open = db.prepare(`SELECT COUNT(*) n FROM service_orders WHERE workflow_status NOT IN
+      ('entregado','cancelado','rechazado','no_reparable','devuelto_sin_reparar')`).get().n;
+    const overdue = db.prepare(`SELECT COUNT(*) n FROM service_orders WHERE promised_at IS NOT NULL
+      AND datetime(promised_at)<datetime('now','localtime') AND workflow_status NOT IN
+      ('entregado','cancelado','rechazado','no_reparable','devuelto_sin_reparar')`).get().n;
+    const delivered = db.prepare(`SELECT COUNT(*) n,COALESCE(AVG(julianday(delivered_at)-julianday(created_at)),0) avg_days
+      FROM service_orders WHERE workflow_status='entregado'`).get();
+    const warrantyReturns = db.prepare(`SELECT COUNT(*) n FROM service_orders WHERE service_type='garantia'`).get().n;
+    const byStatus = db.prepare(`SELECT workflow_status status,COUNT(*) count FROM service_orders GROUP BY workflow_status ORDER BY count DESC`).all();
+    const byTechnician = db.prepare(`SELECT COALESCE(st.name,'Sin asignar') technician,COUNT(*) count,
+      COALESCE(SUM(CASE WHEN so.workflow_status='entregado' THEN so.approved_amount ELSE 0 END),0) billed
+      FROM service_orders so LEFT JOIN service_technicians st ON st.id=so.service_technician_id
+      GROUP BY st.id,st.name ORDER BY count DESC`).all();
+    return { open, overdue, delivered:delivered.n, average_days:round2(delivered.avg_days), warranty_returns:warrantyReturns,
+      by_status:byStatus, by_technician:byTechnician };
   },
 };
 

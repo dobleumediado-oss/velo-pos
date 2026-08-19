@@ -65,6 +65,14 @@ contextBridge.exposeInMainWorld('api', {
     advance: (data) => ipcRenderer.invoke('serviceOrders:advance', data),
     deliver: (data) => ipcRenderer.invoke('serviceOrders:deliver', data),
     cancel:  (data) => ipcRenderer.invoke('serviceOrders:cancel', data),
+    decideEstimate: (data) => ipcRenderer.invoke('serviceOrders:decideEstimate', data),
+    reopenEstimate: (data) => ipcRenderer.invoke('serviceOrders:reopenEstimate', data),
+    retryReservations: (data) => ipcRenderer.invoke('serviceOrders:retryReservations', data),
+    saveQuality: (data) => ipcRenderer.invoke('serviceOrders:saveQuality', data),
+    createWarrantyReturn: (data) => ipcRenderer.invoke('serviceOrders:createWarrantyReturn', data),
+    technicians: (data) => ipcRenderer.invoke('serviceOrders:technicians', data),
+    saveTechnician: (data) => ipcRenderer.invoke('serviceOrders:saveTechnician', data),
+    report: (data) => ipcRenderer.invoke('serviceOrders:report', data),
   },
 
   // ── Clientes ──────────────────────────────

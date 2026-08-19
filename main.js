@@ -1592,7 +1592,9 @@ function _serviceOrdersEnabled() {
 function _serviceUser(requestUserId) {
   const reqUser = authRepo.findById(requestUserId);
   if (!reqUser) throw new Error('Usuario no válido');
-  if (!['admin','superadmin','cajero'].includes(reqUser.role)) throw new Error('Sin permisos para Servicio');
+  const configured = String(settingsRepo.get('module_service_roles') || 'admin,cajero')
+    .split(',').map(role => role.trim()).filter(Boolean);
+  if (reqUser.role !== 'superadmin' && !configured.includes(reqUser.role)) throw new Error('Sin permisos para Servicio');
   if (!_serviceOrdersEnabled()) throw new Error('Servicio técnico solo está disponible en VELO TECH POS');
   return reqUser;
 }
@@ -1620,7 +1622,7 @@ ipcMain.handle('serviceOrders:create', async (_, data = {}) => {
 ipcMain.handle('serviceOrders:update', async (_, data = {}) => {
   try {
     const reqUser = _serviceUser(data.requestUserId);
-    const order = serviceOrdersRepo.update(data.id, data.data || {});
+    const order = serviceOrdersRepo.update(data.id, { ...(data.data || {}), user:reqUser });
     audit(reqUser.id, reqUser.name, 'servicio_actualizado', 'service_orders', order.id, order.number);
     return { ok: true, data: order };
   } catch (e) { return { ok: false, error: e.message }; }
@@ -1657,10 +1659,60 @@ ipcMain.handle('serviceOrders:deliver', async (_, data = {}) => {
 ipcMain.handle('serviceOrders:cancel', async (_, data = {}) => {
   try {
     const reqUser = _serviceUser(data.requestUserId);
-    const order = serviceOrdersRepo.cancel(data.id, data.reason || '');
+    const order = serviceOrdersRepo.cancel(data.id, data.reason || '', reqUser);
     audit(reqUser.id, reqUser.name, 'servicio_cancelado', 'service_orders', order.id, `${order.number} · ${data.reason || ''}`);
     return { ok: true, data: order };
   } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('serviceOrders:decideEstimate', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    return { ok:true, data:serviceOrdersRepo.decideEstimate(data.id, data.decision || {}, reqUser) };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:reopenEstimate', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    return { ok:true, data:serviceOrdersRepo.reopenEstimate(data.id, reqUser) };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:retryReservations', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    return { ok:true, data:serviceOrdersRepo.retryReservations(data.id, reqUser) };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:saveQuality', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    return { ok:true, data:serviceOrdersRepo.saveQuality(data.id, data.data || {}, reqUser) };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:createWarrantyReturn', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    const order = serviceOrdersRepo.createWarrantyReturn(data.id, data.problem, reqUser);
+    audit(reqUser.id, reqUser.name, 'servicio_reingreso_garantia', 'service_orders', order.id, order.number);
+    return { ok:true, data:order };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:technicians', async (_, data = {}) => {
+  try { _serviceUser(data.requestUserId); return { ok:true, data:serviceOrdersRepo.technicians() }; }
+  catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:saveTechnician', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    if (!['admin','superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede gestionar técnicos');
+    const id = serviceOrdersRepo.saveTechnician(data.data || {});
+    audit(reqUser.id, reqUser.name, 'servicio_tecnico_guardado', 'service_technicians', id, data.data?.name || '');
+    return { ok:true, id, data:serviceOrdersRepo.technicians() };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:report', async (_, data = {}) => {
+  try { _serviceUser(data.requestUserId); return { ok:true, data:serviceOrdersRepo.report() }; }
+  catch (e) { return { ok:false, error:e.message }; }
 });
 
 ipcMain.handle('products:getMovements', async (_, { productId }) => {

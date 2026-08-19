@@ -1855,6 +1855,87 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.41.0-trade-in-warranty] Trade-in y garantía por IMEI listos');
     }
   },
+  {
+    version: '1.42.0-service-workshop',
+    description: 'VELO TECH POS: taller profesional con recepción del equipo, trazabilidad, presupuestos versionados, reservas de piezas, control de calidad, técnicos y garantía de reparación.',
+    run(db) {
+      const addColumn = (table, name, definition) => {
+        const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+        if (!cols.includes(name)) db.prepare(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`).run();
+      };
+      [
+        ['product_unit_id', 'INTEGER REFERENCES product_units(id)'],
+        ['unit_previous_status', "TEXT DEFAULT ''"],
+        ['parent_order_id', 'INTEGER REFERENCES service_orders(id)'],
+        ['imei2', "TEXT DEFAULT ''"],
+        ['serial', "TEXT DEFAULT ''"],
+        ['brand', "TEXT DEFAULT ''"],
+        ['model', "TEXT DEFAULT ''"],
+        ['device_color', "TEXT DEFAULT ''"],
+        ['workflow_status', "TEXT NOT NULL DEFAULT 'recepcion'"],
+        ['service_type', "TEXT NOT NULL DEFAULT 'reparacion'"],
+        ['priority', "TEXT NOT NULL DEFAULT 'normal'"],
+        ['promised_at', 'TEXT'],
+        ['intake_condition', "TEXT DEFAULT ''"],
+        ['accessories_received', "TEXT DEFAULT '[]'"],
+        ['intake_checklist', "TEXT DEFAULT '{}'"],
+        ['privacy_consent', 'INTEGER NOT NULL DEFAULT 0'],
+        ['approval_version', 'INTEGER NOT NULL DEFAULT 0'],
+        ['approved_amount', 'REAL NOT NULL DEFAULT 0'],
+        ['approval_method', "TEXT DEFAULT ''"],
+        ['approved_by_name', "TEXT DEFAULT ''"],
+        ['approval_notes', "TEXT DEFAULT ''"],
+        ['quality_checklist', "TEXT DEFAULT '{}'"],
+        ['quality_notes', "TEXT DEFAULT ''"],
+        ['quality_checked_by', 'INTEGER REFERENCES users(id)'],
+        ['quality_checked_at', 'TEXT'],
+        ['service_warranty_days', 'INTEGER NOT NULL DEFAULT 0'],
+        ['warranty_until', 'TEXT'],
+        ['service_technician_id', 'INTEGER'],
+      ].forEach(([name, definition]) => addColumn('service_orders', name, definition));
+      [
+        ['qty_reserved', 'INTEGER NOT NULL DEFAULT 0'],
+        ['qty_consumed', 'INTEGER NOT NULL DEFAULT 0'],
+        ['reservation_status', "TEXT NOT NULL DEFAULT 'none'"],
+      ].forEach(([name, definition]) => addColumn('service_order_items', name, definition));
+
+      db.exec(`
+        UPDATE service_orders SET workflow_status=status
+          WHERE workflow_status IS NULL OR TRIM(workflow_status)='';
+        CREATE TABLE IF NOT EXISTS service_order_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          service_order_id INTEGER NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+          event_type TEXT NOT NULL, from_status TEXT DEFAULT '', to_status TEXT DEFAULT '',
+          title TEXT NOT NULL, detail TEXT DEFAULT '', user_id INTEGER REFERENCES users(id),
+          user_name TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE TABLE IF NOT EXISTS service_order_estimates (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          service_order_id INTEGER NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+          version INTEGER NOT NULL, amount REAL NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'pendiente', decision_method TEXT DEFAULT '',
+          decided_by_name TEXT DEFAULT '', decision_notes TEXT DEFAULT '', decided_at TEXT,
+          snapshot_json TEXT NOT NULL DEFAULT '{}', created_by INTEGER REFERENCES users(id),
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          UNIQUE(service_order_id, version)
+        );
+        CREATE TABLE IF NOT EXISTS service_technicians (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, phone TEXT DEFAULT '',
+          specialty TEXT DEFAULT '', commission_pct REAL NOT NULL DEFAULT 0,
+          linked_user_id INTEGER REFERENCES users(id), active INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_service_orders_workflow ON service_orders(workflow_status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_service_events_order ON service_order_events(service_order_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_service_estimates_order ON service_order_estimates(service_order_id, version);
+        CREATE INDEX IF NOT EXISTS idx_service_items_reservation ON service_order_items(product_id, reservation_status);
+      `);
+      const settings = db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');
+      settings.run('module_service_roles', 'admin,cajero');
+      settings.run('service_default_warranty_days', '30');
+      console.log('[MIGRATION 1.42.0-service-workshop] Taller profesional habilitado');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════
