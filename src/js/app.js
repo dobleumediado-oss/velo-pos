@@ -50,6 +50,17 @@ function _startSessionHeartbeat() {
       const tid = _sessionTerminalId();
       if (user && tid && window.api?.auth?.heartbeat) {
         window.api.auth.heartbeat({ userId: user.id, terminalId: tid });
+        // Los permisos operativos pueden cambiar desde otra terminal. Se
+        // refrescan sin cerrar la sesión; la base de datos siempre valida la
+        // operación con la versión más reciente del usuario.
+        window.api.users?.getById?.(user.id).then(result => {
+          if (!result?.ok || !result.data) return;
+          const beforeInventory = Number(user?.can_manage_inventory) === 1;
+          user = result.data;
+          window._currentUser = user;
+          sessionStorage.setItem('vp_user', JSON.stringify(user));
+          if (beforeInventory !== (Number(user.can_manage_inventory) === 1)) buildSidebar();
+        }).catch(() => {});
       }
     } catch {}
   }, 60000);
@@ -250,8 +261,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (saved) {
     try { user = JSON.parse(saved); window._currentUser = user; } catch {}
   }
-  if (user) renderApp();
-  else      renderLogin();
+  if (user && window.api?.users?.getById) {
+    try {
+      const refreshed = await window.api.users.getById(user.id);
+      if (refreshed?.ok && refreshed.data) {
+        user = refreshed.data;
+        window._currentUser = user;
+        sessionStorage.setItem('vp_user', JSON.stringify(user));
+      }
+    } catch {}
+  }
+  if (user) {
+    _startSessionHeartbeat();
+    renderApp();
+  } else renderLogin();
 
   // ── Suscribirse a eventos del updater ──────────────────────────
   // onProgress: progreso de descarga (barra flotante)
@@ -895,6 +918,9 @@ function buildSidebar() {
   const cajeroNavItems = [
     { key: 'pos',       icon: 'monitor',  label: 'Punto de Venta' },
     ...(preventaCanAccess() ? [{ key: 'preventa', icon: 'cash', label: 'Preventa y Despacho', badge: window._preventaPendingCount || null }] : []),
+    ...(Number(user?.can_manage_inventory) === 1
+      ? [{ key: 'inventario', icon: 'box', label: 'Inventario' }]
+      : []),
     { key: 'clientes',  icon: 'users',    label: 'Clientes',
       badge: alertBadge > 0 ? alertBadge : null },
     { key: 'ventas',    icon: 'list',     label: 'Ventas' },
@@ -1408,6 +1434,7 @@ function routeTo(p) {
   // Cajero: rutas base + módulos con permiso cajero
   if (user?.role === 'cajero') {
     const allowed = ['pos', 'clientes', 'ventas', 'caja'];
+    if (Number(user.can_manage_inventory) === 1) allowed.push('inventario');
     const modRoutes = {
       gastos:     ['module_gastos'],
       envios:     ['module_envios'],

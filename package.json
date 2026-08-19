@@ -38,6 +38,7 @@
     "test:business": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-multi-business-detached-db.js",
     "test:url": "node scripts/test-url-safe.js",
     "test:input-normalization": "node scripts/test-input-normalization.js",
+    "test:user-permissions": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-user-operational-permissions.js",
     "test:login": "node scripts/test-login-rate.js",
     "test:pos": "node scripts/test-pos-interactions.js",
     "test:checkout": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-checkout-orders.js",
@@ -62,7 +63,7 @@
     "test:system-doctor": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-system-doctor-financial.js",
     "test:ncf": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-ncf-sequences.js",
     "test:data-loader": "node scripts/test-data-loader-resilience.js",
-    "test": "npm run test:url && npm run test:input-normalization && npm run test:login && npm run test:pos && npm run test:data-loader && npm run test:checkout && npm run test:customer-companies && npm run test:business && npm run test:import && npm run test:all-in-one && npm run test:all-in-one-integration && npm run test:financial && npm run test:payment-ui && npm run test:cash-ui && npm run test:printing && npm run test:pending-invoices && npm run test:salespeople && npm run test:documents && npm run test:sales-workflow && npm run test:sale-corrections && npm run test:system-doctor && npm run test:ncf && npm run test:server-service && npm run test:experience && npm run test:product-units && npm run test:serialized-sale && npm run test:service-orders && npm run test:trade-in-warranty && npm run test:suite-license"
+    "test": "npm run test:url && npm run test:input-normalization && npm run test:user-permissions && npm run test:login && npm run test:pos && npm run test:data-loader && npm run test:checkout && npm run test:customer-companies && npm run test:business && npm run test:import && npm run test:all-in-one && npm run test:all-in-one-integration && npm run test:financial && npm run test:payment-ui && npm run test:cash-ui && npm run test:printing && npm run test:pending-invoices && npm run test:salespeople && npm run test:documents && npm run test:sales-workflow && npm run test:sale-corrections && npm run test:system-doctor && npm run test:ncf && npm run test:server-service && npm run test:experience && npm run test:product-units && npm run test:serialized-sale && npm run test:service-orders && npm run test:trade-in-warranty && npm run test:suite-license"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

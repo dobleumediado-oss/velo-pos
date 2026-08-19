@@ -1964,7 +1964,8 @@ async function confirmarMoverCategoria() {
 // EXPORTAR INVENTARIO PDF
 // ══════════════════════════════════════════════
 function exportInventarioPDF() {
-  const isAdmin  = user?.role === 'admin' || user?.role === 'superadmin';
+  const isAdmin  = user?.role === 'admin' || user?.role === 'superadmin' ||
+    Number(user?.can_manage_inventory) === 1;
   const rows = DB.products.map(p => {
     const stockMin = p.stock_min || 5;
     const isLow    = p.stock > 0 && p.stock <= stockMin;

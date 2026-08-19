@@ -2186,13 +2186,28 @@ function _posEntryNumber(controlOrValue, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function _posUserCanSellCredit() {
+  const current = window._currentUser || user;
+  if (['admin', 'superadmin'].includes(current?.role)) return true;
+  return current?.can_sell_credit === undefined || Number(current.can_sell_credit) === 1;
+}
+
+function _posUserCreditLimit() {
+  const current = window._currentUser || user;
+  if (['admin', 'superadmin'].includes(current?.role)) return 0;
+  return Math.max(0, Number(current?.credit_limit_per_sale) || 0);
+}
+
 function openCobroModal(inv) {
   if (!inv || !inv.cart.length) return;
   const { subtotal, itbis, total, discAmt, disc } = calcTotals(inv);
   const isQuote = inv.itype === 'cotizacion';
   const tradeInAmount = isQuote ? 0 : _posTradeInAmount(inv, total);
   const amountDue = isQuote ? total : _posAmountDue(inv, total);
+  const canSellCredit = _posUserCanSellCredit();
+  if (!canSellCredit && inv.pmeth === 'credito') inv.pmeth = inv.lastCashPaymentMethod || 'efectivo';
   const billingType = inv.pmeth === 'credito' ? 'credito' : 'contado';
+  const userCreditLimit = _posUserCreditLimit();
   window._cbrBaseTotals = { subtotal, itbis, total, amountDue, tradeInAmount, discAmt, chargesTotal: calcTotals(inv).chargesTotal };
 
   openModal(`
@@ -2319,7 +2334,9 @@ function openCobroModal(inv) {
         <label class="lbl">Tipo de facturación</label>
         <select class="inp" id="cbr-billing-type" onchange="cbrToggleBillingType(this.value)">
           <option value="contado" ${billingType === 'contado' ? 'selected' : ''}>Al contado</option>
-          <option value="credito" ${billingType === 'credito' ? 'selected' : ''}>A crédito</option>
+          <option value="credito" ${billingType === 'credito' ? 'selected' : ''} ${canSellCredit ? '' : 'disabled'}>
+            ${canSellCredit ? 'A crédito' : 'A crédito · sin permiso'}
+          </option>
         </select>
       </div>
       <div class="fg" id="cbr-payment-method-wrap" style="display:${billingType === 'contado' ? 'block' : 'none'}">
@@ -2451,7 +2468,9 @@ function openCobroModal(inv) {
         <div class="alrt-dot a"></div>
         <div>
           <div class="alrt-title">Venta a crédito</div>
-          <div class="alrt-sub">Requiere un cliente registrado. El pago inicial entra a Caja como un abono de esta factura.</div>
+          <div class="alrt-sub">Requiere un cliente registrado. El pago inicial entra a Caja como un abono de esta factura.
+            ${userCreditLimit > 0 ? `<br><strong>Tope de este usuario: ${fmt(userCreditLimit)} por factura.</strong>` : ''}
+          </div>
         </div>
       </div>
       <div class="fg">
@@ -2689,6 +2708,12 @@ function cbrToggleBillingType(type) {
   const method = document.getElementById('cbr-pmeth');
   if (!method) return;
   if (type === 'credito') {
+    if (!_posUserCanSellCredit()) {
+      const billing = document.getElementById('cbr-billing-type');
+      if (billing) billing.value = 'contado';
+      toast('Este usuario no tiene permiso para vender a crédito', 'w');
+      return;
+    }
     if (method.value !== 'credito') currentInv().lastCashPaymentMethod = method.value || 'efectivo';
     method.value = 'credito';
   } else if (method.value === 'credito') {
@@ -2763,6 +2788,7 @@ function cbrCalcCambio(total = _posAmountDue(currentInv())) {
   el.style.color = cambio >= 0 ? 'var(--green)' : 'var(--red)';
   clearTimeout(window._cbrAutoCreditTimer);
   if (rec > 0 && rec < total - 0.005) {
+    if (!_posUserCanSellCredit()) return;
     window._cbrAutoCreditTimer = setTimeout(() => {
       const method = document.getElementById('cbr-pmeth');
       if (!method || method.value !== 'efectivo') return;
@@ -2785,7 +2811,10 @@ function cbrCalcInitial(total = _posAmountDue(currentInv())) {
   currentInv().initialPaymentAmount = paid;
   const el = document.getElementById('cbr-credit-balance');
   if (el) {
-    el.innerHTML = `Pago inicial: <strong>${fmt(paid)}</strong> · Quedará a crédito: <strong style="color:var(--amber)">${fmt(pending)}</strong>`;
+    const limit = _posUserCreditLimit();
+    const exceeded = limit > 0 && pending > limit + 0.005;
+    el.innerHTML = `Pago inicial: <strong>${fmt(paid)}</strong> · Quedará a crédito: <strong style="color:${exceeded ? 'var(--red)' : 'var(--amber)'}">${fmt(pending)}</strong>` +
+      (exceeded ? ` · <strong style="color:var(--red)">Supera tu tope de ${fmt(limit)}</strong>` : '');
   }
 }
 
@@ -3281,12 +3310,22 @@ async function finalizarVenta() {
     return;
   }
   if (!isQuote && pmeth === 'credito') {
+    if (!_posUserCanSellCredit()) {
+      toast('Este usuario no tiene permiso para realizar ventas a crédito', 'w');
+      return;
+    }
     if (!(inv.cliId && inv.cliId !== 1)) {
       toast('Selecciona un cliente registrado para realizar una venta a crédito', 'w');
       return;
     }
     if (initialPaymentAmount < 0 || initialPaymentAmount >= currentTotal - 0.005) {
       toast('El pago inicial debe ser menor que el total; si paga todo usa una venta al contado', 'w');
+      return;
+    }
+    const userCreditLimit = _posUserCreditLimit();
+    const pendingCredit = Math.max(0, Math.round((currentTotal - initialPaymentAmount) * 100) / 100);
+    if (userCreditLimit > 0 && pendingCredit > userCreditLimit + 0.005) {
+      toast(`El monto que quedará a crédito (${fmt(pendingCredit)}) supera tu límite de ${fmt(userCreditLimit)}`, 'w');
       return;
     }
     if (initialPaymentAmount > 0 && initialPaymentMethod === 'mixto' &&

@@ -181,6 +181,10 @@ const MIGRATIONS = [
     description: 'Permitir rol superadmin en tabla users',
     run(db) {
       try {
+        const currentSchema = db.prepare(
+          "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
+        ).get()?.sql || '';
+        if (/superadmin/i.test(currentSchema)) return;
         // SQLite no permite ALTER TABLE para cambiar CHECK constraints
         // Se recrea la tabla con la nueva restricción
         db.exec(`
@@ -1934,6 +1938,31 @@ const MIGRATIONS = [
       settings.run('module_service_roles', 'admin,cajero');
       settings.run('service_default_warranty_days', '30');
       console.log('[MIGRATION 1.42.0-service-workshop] Taller profesional habilitado');
+    }
+  },
+  {
+    version: '1.44.0-user-operational-permissions',
+    description: 'Permisos por usuario para límite de ventas a crédito y administración exclusiva de inventario.',
+    run(db) {
+      const columns = new Set(db.prepare('PRAGMA table_info(users)').all().map(column => column.name));
+      if (!columns.has('can_sell_credit')) {
+        // Se mantiene habilitado en usuarios existentes para no bloquear una
+        // operación que ya estaba autorizada antes de esta actualización.
+        db.exec('ALTER TABLE users ADD COLUMN can_sell_credit INTEGER NOT NULL DEFAULT 1');
+      }
+      if (!columns.has('credit_limit_per_sale')) {
+        db.exec('ALTER TABLE users ADD COLUMN credit_limit_per_sale REAL NOT NULL DEFAULT 0');
+      }
+      if (!columns.has('can_manage_inventory')) {
+        db.exec('ALTER TABLE users ADD COLUMN can_manage_inventory INTEGER NOT NULL DEFAULT 0');
+      }
+      db.exec(`
+        UPDATE users
+        SET can_sell_credit=CASE WHEN can_sell_credit=0 THEN 0 ELSE 1 END,
+            credit_limit_per_sale=MAX(0,ROUND(COALESCE(credit_limit_per_sale,0),2)),
+            can_manage_inventory=CASE WHEN can_manage_inventory=1 THEN 1 ELSE 0 END
+      `);
+      console.log('[MIGRATION 1.44.0-user-operational-permissions] Permisos operativos por usuario listos');
     }
   },
 ];

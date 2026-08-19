@@ -48,6 +48,7 @@ const { sqliteIdent } = require('./lib/sql-safe');
 const { normalizeFinAcct: _normalizeFinAcct, normalizeFinMov: _normalizeFinMov } = require('./lib/normalize-financial');
 const { isAllowedExternalUrl } = require('./lib/url-safe');
 const { buildWhatsAppUrls } = require('./lib/whatsapp-url');
+const { canManageInventory } = require('./lib/user-operational-permissions');
 const {
   EQUIPARTS_FILES,
   loadEquipartsCsvSet,
@@ -1367,7 +1368,10 @@ ipcMain.handle('users:create', async (_, { data, requestUserId }) => {
       return { ok: false, error: 'Sin permisos' };
     }
     const id = usersRepo.create(data);
-    audit(requestUserId, reqUser.name, 'usuario_creado', 'users', id, data.name);
+    const permissions = data.role === 'cajero'
+      ? ` | Crédito: ${data.can_sell_credit ? (Number(data.credit_limit_per_sale) > 0 ? `hasta RD$${Number(data.credit_limit_per_sale).toFixed(2)}` : 'sin tope') : 'no'} | Inventario: ${data.can_manage_inventory ? 'sí' : 'no'}`
+      : '';
+    audit(requestUserId, reqUser.name, 'usuario_creado', 'users', id, `${data.name}${permissions}`);
     return { ok: true, id };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -1381,7 +1385,10 @@ ipcMain.handle('users:update', async (_, { id, data, requestUserId }) => {
       return { ok: false, error: 'Sin permisos' };
     }
     usersRepo.update(id, data);
-    audit(requestUserId, reqUser.name, 'usuario_editado', 'users', id, data.name);
+    const permissions = data.role === 'cajero'
+      ? ` | Crédito: ${data.can_sell_credit ? (Number(data.credit_limit_per_sale) > 0 ? `hasta RD$${Number(data.credit_limit_per_sale).toFixed(2)}` : 'sin tope') : 'no'} | Inventario: ${data.can_manage_inventory ? 'sí' : 'no'}`
+      : '';
+    audit(requestUserId, reqUser.name, 'usuario_editado', 'users', id, `${data.name}${permissions}`);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -1412,6 +1419,15 @@ ipcMain.handle('users:changePassword', async (_, { id, password, requestUserId }
 });
 
 // ── Productos ─────────────────────────────────
+function _inventoryAuthorizedUser(requestUserId) {
+  const reqUser = authRepo.findById(requestUserId);
+  if (!reqUser || reqUser.active === 0) throw new Error('Usuario no válido');
+  if (!canManageInventory(reqUser)) {
+    throw new Error('Este usuario no tiene permiso para administrar el inventario');
+  }
+  return reqUser;
+}
+
 ipcMain.handle('products:getAll', async () => {
   return productsRepo.getAll();
 });
@@ -1431,10 +1447,7 @@ ipcMain.handle('products:getModels', async () => {
 
 ipcMain.handle('products:create', async (_, { data, requestUserId }) => {
   try {
-    const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Sin permisos' };
-    }
+    const reqUser = _inventoryAuthorizedUser(requestUserId);
     const id = productsRepo.create(data);
     audit(requestUserId, reqUser.name, 'producto_creado', 'products', id, data.name);
     return { ok: true, id };
@@ -1445,10 +1458,7 @@ ipcMain.handle('products:create', async (_, { data, requestUserId }) => {
 
 ipcMain.handle('products:update', async (_, { id, data, requestUserId, source, reason, stockAtChange }) => {
   try {
-    const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Sin permisos' };
-    }
+    const reqUser = _inventoryAuthorizedUser(requestUserId);
     const before = productsRepo.getById(id);
     const updateResult = productsRepo.update(id, data, {
       userId: requestUserId,
@@ -1489,10 +1499,7 @@ ipcMain.handle('products:update', async (_, { id, data, requestUserId, source, r
 
 ipcMain.handle('products:adjustStock', async (_, { id, qty, type, reason, requestUserId }) => {
   try {
-    const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Solo el administrador puede ajustar stock' };
-    }
+    const reqUser = _inventoryAuthorizedUser(requestUserId);
     const result = productsRepo.adjustStock(id, qty, type, reason, null, requestUserId);
     audit(requestUserId, reqUser.name, 'ajuste_inventario', 'products', id,
           `Tipo: ${type} | Cantidad: ${qty} | Motivo: ${reason}`);
@@ -1504,10 +1511,7 @@ ipcMain.handle('products:adjustStock', async (_, { id, qty, type, reason, reques
 
 ipcMain.handle('products:delete', async (_, { id, requestUserId }) => {
   try {
-    const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Sin permisos' };
-    }
+    const reqUser = _inventoryAuthorizedUser(requestUserId);
     productsRepo.delete(id);
     audit(requestUserId, reqUser.name, 'producto_inactivado', 'products', id, '');
     return { ok: true };
@@ -1542,10 +1546,7 @@ ipcMain.handle('productUnits:findByImei', async (_, { imei } = {}) => {
 
 ipcMain.handle('productUnits:setSerialized', async (_, { productId, on, requestUserId } = {}) => {
   try {
-    const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Solo el administrador puede cambiar el tipo de inventario' };
-    }
+    const reqUser = _inventoryAuthorizedUser(requestUserId);
     const r = productUnitsRepo.setSerialized(productId, !!on);
     audit(requestUserId, reqUser.name, 'producto_serializado', 'products', productId, `serializado=${on ? 1 : 0}`);
     return r;
@@ -1554,10 +1555,7 @@ ipcMain.handle('productUnits:setSerialized', async (_, { productId, on, requestU
 
 ipcMain.handle('productUnits:create', async (_, { productId, units, requestUserId } = {}) => {
   try {
-    const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Solo el administrador puede registrar equipos' };
-    }
+    const reqUser = _inventoryAuthorizedUser(requestUserId);
     const prod = db.prepare('SELECT id,COALESCE(serialized,0) AS serialized FROM products WHERE id=?').get(productId);
     if (!prod) return { ok: false, error: 'Producto no encontrado' };
     // Registrar equipos marca el producto como serializado automáticamente.
@@ -1575,8 +1573,7 @@ ipcMain.handle('productUnits:create', async (_, { productId, units, requestUserI
 
 ipcMain.handle('productUnits:updateWarranty', async (_, { unitId, warrantyUntil, requestUserId } = {}) => {
   try {
-    const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) return { ok:false, error:'Sin permisos' };
+    const reqUser = _inventoryAuthorizedUser(requestUserId);
     const unit = productUnitsRepo.updateWarranty(unitId, warrantyUntil);
     audit(reqUser.id, reqUser.name, 'garantia_imei_actualizada', 'product_units', unit.id,
       `${unit.imei || unit.serial || '#' + unit.id} · ${unit.warranty_until || 'sin garantía'}`);
@@ -3112,10 +3109,7 @@ ipcMain.handle('categories:getAll', async () => {
 ipcMain.handle('categories:create', async (_, { name, requestUserId }) => {
   try {
     if (!name?.trim()) return { ok: false, error: 'El nombre es requerido' };
-    const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Solo el administrador puede crear categorías' };
-    }
+    const reqUser = _inventoryAuthorizedUser(requestUserId);
     const dbInst = require('./database').getDB();
     const r = dbInst.prepare('INSERT INTO categories(name) VALUES(?)').run(name.trim());
     audit(requestUserId, reqUser.name, 'categoria_creada', 'categories', r.lastInsertRowid, name);
@@ -3125,10 +3119,7 @@ ipcMain.handle('categories:create', async (_, { name, requestUserId }) => {
 
 ipcMain.handle('categories:delete', async (_, { id, requestUserId }) => {
   try {
-    const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-      return { ok: false, error: 'Sin permisos' };
-    }
+    const reqUser = _inventoryAuthorizedUser(requestUserId);
     const dbInst = require('./database').getDB();
     dbInst.prepare('DELETE FROM categories WHERE id=?').run(id);
     audit(requestUserId, reqUser.name, 'categoria_eliminada', 'categories', id, '');

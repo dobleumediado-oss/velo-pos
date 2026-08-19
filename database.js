@@ -16,6 +16,7 @@ const { round2 } = require('./lib/money');
 const { getPendingInvoices } = require('./lib/pending-invoices');
 const { reconcileCashSessionTotals } = require('./lib/cash-session-totals');
 const { normalizeCustomerPhone } = require('./lib/customer-phone');
+const { assertCreditPermission } = require('./lib/user-operational-permissions');
 const {
   normalizeLegacyType,
   normalizeLegacySequenceRange,
@@ -349,6 +350,9 @@ function createTables() {
       role       TEXT NOT NULL CHECK(role IN ('admin','cajero','superadmin')),
       avatar     TEXT DEFAULT '',
       active     INTEGER DEFAULT 1,
+      can_sell_credit INTEGER NOT NULL DEFAULT 1,
+      credit_limit_per_sale REAL NOT NULL DEFAULT 0,
+      can_manage_inventory INTEGER NOT NULL DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -2591,20 +2595,51 @@ const settingsRepo = {
 // ── Usuarios ──────────────────────────────────
 const usersRepo = {
   getAll() {
-    return db.prepare('SELECT id,name,email,role,avatar,active,created_at FROM users ORDER BY name').all();
+    return db.prepare(`
+      SELECT id,name,email,role,avatar,active,
+             can_sell_credit,credit_limit_per_sale,can_manage_inventory,created_at
+      FROM users ORDER BY name
+    `).all();
   },
-  create({ name, email, password, role, avatar = '' }) {
+  create({
+    name, email, password, role, avatar = '', can_sell_credit = 0,
+    credit_limit_per_sale = 0, can_manage_inventory = 0,
+  }) {
     const hash = bcrypt.hashSync(password, 10);
     const r = db.prepare(`
-      INSERT INTO users(name,email,password,role,avatar) VALUES(?,?,?,?,?)
-    `).run(name, email.toLowerCase(), hash, role, avatar);
+      INSERT INTO users(
+        name,email,password,role,avatar,can_sell_credit,credit_limit_per_sale,can_manage_inventory
+      ) VALUES(?,?,?,?,?,?,?,?)
+    `).run(
+      name, email.toLowerCase(), hash, role, avatar,
+      can_sell_credit ? 1 : 0,
+      Math.max(0, Number(credit_limit_per_sale) || 0),
+      can_manage_inventory ? 1 : 0,
+    );
     return r.lastInsertRowid;
   },
-  update(id, { name, email, role, avatar, active }) {
+  update(id, data = {}) {
+    const current = db.prepare(`
+      SELECT can_sell_credit,credit_limit_per_sale,can_manage_inventory FROM users WHERE id=?
+    `).get(id);
+    if (!current) throw new Error('Usuario no encontrado');
+    const {
+      name, email, role, avatar, active,
+      can_sell_credit = current.can_sell_credit,
+      credit_limit_per_sale = current.credit_limit_per_sale,
+      can_manage_inventory = current.can_manage_inventory,
+    } = data;
     db.prepare(`
-      UPDATE users SET name=?,email=?,role=?,avatar=?,active=?,updated_at=datetime('now')
+      UPDATE users SET name=?,email=?,role=?,avatar=?,active=?,
+        can_sell_credit=?,credit_limit_per_sale=?,can_manage_inventory=?,updated_at=datetime('now')
       WHERE id=?
-    `).run(name, email.toLowerCase(), role, avatar, active ? 1 : 0, id);
+    `).run(
+      name, email.toLowerCase(), role, avatar, active ? 1 : 0,
+      can_sell_credit ? 1 : 0,
+      Math.max(0, Number(credit_limit_per_sale) || 0),
+      can_manage_inventory ? 1 : 0,
+      id,
+    );
   },
   changePassword(id, newPassword) {
     const hash = bcrypt.hashSync(newPassword, 10);
@@ -4764,6 +4799,15 @@ const salesRepo = {
           throw new Error('Este cliente no tiene límite de crédito configurado — contacte al administrador');
         }
         const creditExposure = round2(amountDue - initialPaymentAmount);
+        // Este es el monto que realmente quedará pendiente después del pago
+        // inicial. Se valida aquí, dentro de la transacción y con el total
+        // recalculado por SQLite, para cubrir POS directo y Preventa/Despacho.
+        const creditUser = db.prepare(`
+          SELECT id,role,active,can_sell_credit,credit_limit_per_sale
+          FROM users WHERE id=?
+        `).get(user?.id);
+        if (!creditUser?.active) throw new Error('El usuario de caja ya no está activo');
+        assertCreditPermission(creditUser, creditExposure);
         if (cust.balance + creditExposure > cust.credit_limit) {
           throw new Error(`Límite de crédito excedido. Disponible: ${(cust.credit_limit - cust.balance).toFixed(2)}`);
         }
