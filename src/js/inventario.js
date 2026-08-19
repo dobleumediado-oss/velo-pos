@@ -110,6 +110,11 @@ function renderInventario(el) {
       )
     ),
     h('div', { class: 'flex', style: { gap: '8px' } },
+      ...((window._vertical && window._vertical.serialized) ? [h('button', {
+        class: 'btn btn-out btn-sm',
+        onclick: openBuscarImeiModal,
+        html: `${svg('search')} Buscar IMEI`
+      })] : []),
       h('button', {
         class: 'btn btn-out btn-sm',
         onclick: exportInventarioPDF,
@@ -128,7 +133,7 @@ function renderInventario(el) {
       h('button', {
         class: 'btn btn-dark',
         onclick: () => openProductoModal(),
-        html: `${svg('plus')} Nuevo Producto`
+        html: `${svg('plus')} ${vterm('new_product', 'Nuevo Producto')}`
       })
     )
   ));
@@ -350,7 +355,7 @@ function renderInvTable() {
         <div class="flex" style="gap:3px">
           <button class="btn btn-ghost btn-sm" title="Ver kardex" data-action="kardex" data-idx="${idx}">${svg('chart')}</button>
           <button class="btn btn-ghost btn-sm" title="Editar producto" data-action="edit" data-idx="${idx}">${svg('edit')}</button>
-          <button class="btn btn-ghost btn-sm" title="Ajustar stock" data-action="ajuste" data-idx="${idx}">${svg('pkg')} Ajuste</button>
+          ${p.serialized ? '' : `<button class="btn btn-ghost btn-sm" title="Ajustar stock" data-action="ajuste" data-idx="${idx}">${svg('pkg')} Ajuste</button>`}
           ${(window._vertical && window._vertical.serialized) ? `<button class="btn btn-ghost btn-sm" title="Registrar equipos (IMEI)" data-action="equipos" data-idx="${idx}">${svg('pkg')} Equipos</button>` : ''}
           <button class="btn btn-ghost btn-sm" style="color:var(--red)" title="Eliminar" data-action="delete" data-idx="${idx}">${svg('trash')}</button>
         </div>
@@ -489,6 +494,8 @@ window.abrirRegistroEquipos = async function (p) {
         });
         if (!res?.ok) throw new Error(res?.error || 'No se pudo registrar el equipo');
         toast('✓ Equipo registrado', 's');
+        await reloadProducts();
+        renderInvCurrentView();
         openModal(render(await fetchUnits()));
         wire();
       } catch (e) { toast(e.message || 'Error al registrar', 'e'); addBtn.disabled = false; }
@@ -496,6 +503,58 @@ window.abrirRegistroEquipos = async function (p) {
   };
   openModal(render(await fetchUnits()));
   wire();
+};
+
+// Búsqueda operacional por IMEI/serial. Además del estado de la unidad muestra
+// el producto y, si ya fue vendido, la factura/cliente enlazados. El botón solo
+// existe en TECH, por lo que VELO POS no cambia visual ni funcionalmente.
+window.openBuscarImeiModal = function () {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  openModal(`
+    <div class="modal-title">Buscar equipo por IMEI</div>
+    <div class="modal-sub">Consulta inventario, venta y cliente usando el IMEI o serial.</div>
+    <div style="display:flex;gap:8px;margin:14px 0">
+      <input class="inp" id="imei-search-value" placeholder="IMEI o serial" data-uppercase="off" autocomplete="off" style="flex:1">
+      <button class="btn btn-dark" id="imei-search-btn">${svg('search')} Buscar</button>
+    </div>
+    <div id="imei-search-result"></div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
+  `);
+
+  const run = async () => {
+    const key = document.getElementById('imei-search-value')?.value?.trim();
+    const out = document.getElementById('imei-search-result');
+    if (!key) { toast('Ingresa el IMEI o serial', 'w'); return; }
+    if (out) out.innerHTML = '<div style="color:var(--muted2);font-size:12px">Buscando…</div>';
+    try {
+      const res = await window.api.productUnits.findByImei({ imei: key });
+      if (!res?.ok) throw new Error(res?.error || 'No se pudo consultar el IMEI');
+      const u = res.data;
+      if (!u) {
+        out.innerHTML = '<div class="alrt a"><div class="alrt-dot a"></div><div><div class="alrt-title">IMEI no encontrado</div><div class="alrt-sub">Verifica el número o registra primero el equipo.</div></div></div>';
+        return;
+      }
+      const statusLabel = { en_stock:'En stock', reservado:'Reservado', vendido:'Vendido', servicio:'En servicio', devuelto:'Devuelto' }[u.status] || u.status;
+      out.innerHTML = `
+        <div class="card" style="padding:14px">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+            <div><div style="font-weight:800">${esc(u.product_name || '')}</div><div style="font-size:11px;color:var(--muted2)">${esc(u.product_code || '')} · ${esc(u.product_brand || '')} ${esc(u.product_model || '')}</div></div>
+            <span class="badge ${u.status === 'en_stock' ? 'g' : u.status === 'vendido' ? 'n' : 'a'}">${esc(statusLabel)}</span>
+          </div>
+          <div class="g2" style="margin-top:12px">
+            <div><div class="lbl">IMEI / SERIAL</div><div style="font-family:var(--mono)">${esc(u.imei || u.serial || '')}</div></div>
+            <div><div class="lbl">DETALLE</div><div>${esc([u.condition, u.capacity, u.color].filter(Boolean).join(' · ') || '—')}</div></div>
+          </div>
+          ${u.sale_id ? `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:12px"><strong>Venta:</strong> ${esc(u.numero_factura || ('#' + u.sale_id))} · ${esc(u.customer_name || 'Consumidor Final')}</div>` : ''}
+        </div>`;
+    } catch (e) {
+      if (out) out.innerHTML = `<div class="alrt r"><div class="alrt-dot r"></div><div>${esc(e.message || 'Error al consultar')}</div></div>`;
+    }
+  };
+  document.getElementById('imei-search-btn').onclick = run;
+  const input = document.getElementById('imei-search-value');
+  input.onkeydown = e => { if (e.key === 'Enter') run(); };
+  setTimeout(() => input?.focus(), 0);
 };
 
 function invHistDateKey() {
@@ -1198,8 +1257,8 @@ function openProductoModal(p = null) {
   ).join('');
 
   openModal(`
-    <div class="modal-title">${isEdit ? 'Editar Producto' : 'Nuevo Producto'}</div>
-    <div class="modal-sub">${isEdit ? p.name : 'Registrar en inventario'}</div>
+    <div class="modal-title">${isEdit ? vterm('edit_product', 'Editar Producto') : vterm('new_product', 'Nuevo Producto')}</div>
+    <div class="modal-sub">${isEdit ? p.name : vterm('register_in_inventory', 'Registrar en inventario')}</div>
 
     <div class="g2">
       <div class="fg">
@@ -1332,6 +1391,20 @@ function openProductoModal(p = null) {
       <div id="pf-price-change-preview" style="font-size:11px;color:var(--muted);margin-top:-4px;margin-bottom:10px"></div>
 
     <hr style="margin:12px 0;border:none;border-top:1px solid var(--line)"/>
+    ${(window._vertical && window._vertical.serialized) ? `
+    <div style="font-weight:700;font-size:12px;margin-bottom:6px">Equipos (IMEI)</div>
+    <div style="font-size:11px;color:var(--muted2);margin-bottom:10px">El stock se lleva por equipos. Registra el primero aquí; agrega más luego con el botón “Equipos”.</div>
+    ${isEdit ? '' : `<div class="g3">
+      <div class="fg"><label class="lbl">IMEI / Serial del primer equipo</label>
+        <input class="inp" id="pf-imei" type="text" placeholder="356000000000000" data-uppercase="off" autocomplete="off"/></div>
+      <div class="fg"><label class="lbl">Capacidad</label>
+        <input class="inp" id="pf-capacity" type="text" placeholder="128GB" data-uppercase="off"/></div>
+      <div class="fg"><label class="lbl">Color</label>
+        <input class="inp" id="pf-color-eq" type="text" placeholder="Negro" data-uppercase="off"/></div>
+    </div>`}
+    <input type="hidden" id="pf-stock" value="0"/>
+    <input type="hidden" id="pf-min" value="0"/>
+    ` : `
     <div style="font-weight:700;font-size:12px;margin-bottom:10px">Stock</div>
     <div class="g2">
       <div class="fg">
@@ -1345,6 +1418,7 @@ function openProductoModal(p = null) {
                value="${stockMin}"/>
       </div>
     </div>
+    `}
 
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
@@ -1522,11 +1596,43 @@ async function guardarProducto(id) {
 
   if (!result.ok) { toast(result.error || 'Error al guardar', 'err'); return; }
 
+  // TECH (serializado): al CREAR, el producto se marca serializado y —si se
+  // capturó un IMEI— se registra el primer equipo. Solo corre en el vertical
+  // tech; en VELO POS este bloque no existe (no hay window._vertical.serialized).
+  let unitWarning = '';
+  if (!id && window._vertical && window._vertical.serialized && result.id) {
+    try {
+      const serializedResult = await window.api.productUnits.setSerialized({ productId: result.id, on: true, requestUserId: user.id });
+      if (!serializedResult?.ok) throw new Error(serializedResult?.error || 'No se pudo activar el inventario por IMEI');
+      const imei = document.getElementById('pf-imei')?.value?.trim();
+      if (imei) {
+        const unitResult = await window.api.productUnits.create({
+          productId: result.id,
+          units: [{
+            imei, condition,
+            unit_cost: cost,
+            capacity: document.getElementById('pf-capacity')?.value?.trim() || '',
+            color:    document.getElementById('pf-color-eq')?.value?.trim() || '',
+          }],
+          requestUserId: user.id,
+        });
+        if (!unitResult?.ok) throw new Error(unitResult?.error || 'No se pudo registrar el primer equipo');
+      }
+    } catch (e) { unitWarning = e.message || 'No se pudo registrar el primer equipo'; }
+  }
+
   closeModal();
-  toast(id ? '✓ Producto actualizado' : '✓ Producto registrado');
+  toast(unitWarning
+    ? `Producto creado, pero revisa Equipos: ${unitWarning}`
+    : (id ? '✓ Producto actualizado' : '✓ Producto registrado'),
+    unitWarning ? 'w' : 'ok');
   applyInventoryMutation({
     productId: id || result.id,
-    patch: { ...data, id: id || result.id },
+    patch: {
+      ...data,
+      id: id || result.id,
+      ...((!id && window._vertical?.serialized) ? { serialized: 1 } : {}),
+    },
     invalidateHistory: !!result.historyId,
   });
 }

@@ -52,6 +52,8 @@ module.exports = {
     code_label:           'IMEI / Serial',
     catalog_title:        'Inventario de equipos',
     new_product:          'Nuevo equipo',
+    edit_product:         'Editar equipo',
+    register_in_inventory:'Registrar equipo en inventario',
     // Ejemplos/placeholders del modal de producto:
     product_name_example: 'iPhone 13 · 128GB · Negro',
     code_example:         'CEL-001',
