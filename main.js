@@ -236,6 +236,10 @@ if (app.isPackaged && fs.existsSync(path.join(process.resourcesPath, 'server-edi
   // La edición Servidor tiene su propio manifiesto `server.yml`; así una
   // actualización nunca sustituye el servicio por el instalador de Terminal.
   autoUpdater.channel = 'server';
+} else if (app.isPackaged && String(require('./package.json').veloVertical || '') === 'tech') {
+  // VELO TECH POS se publica como aplicación separada y consume únicamente
+  // `latest-tech.yml`; nunca debe instalar por error la edición de repuestos.
+  autoUpdater.channel = 'latest-tech';
 }
 
 // ── Estado global del updater (para el panel de Configuración) ──

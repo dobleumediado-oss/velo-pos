@@ -22,6 +22,7 @@ const requiredFiles = [
   '.github/workflows/release.yml',
   'build/entitlements.mac.plist',
   'build/electron-builder-terminal.js',
+  'build/electron-builder-tech.js',
   'build/electron-builder-server.js',
   'build/windows-service/prepare-winsw.js',
   'build/windows-service/install-service.ps1',
@@ -47,6 +48,7 @@ const filesToCheck = [
   ...fs.readdirSync(path.join(root, 'src/js')).filter(f => f.endsWith('.js')).map(f => `src/js/${f}`),
   ...fs.readdirSync(path.join(root, 'scripts')).filter(f => f.endsWith('.js')).map(f => `scripts/${f}`),
   'build/electron-builder-terminal.js',
+  'build/electron-builder-tech.js',
   'build/electron-builder-server.js',
   'build/windows-service/prepare-winsw.js',
 ];
