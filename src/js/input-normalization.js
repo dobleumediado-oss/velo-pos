@@ -121,12 +121,11 @@
     control.dataset.moneyEditing = 'true';
     if (String(control.type).toLowerCase() === 'number') control.type = 'text';
     control.inputMode = 'decimal';
-    // Durante la edición el valor debe permanecer numérico puro. Varias
-    // pantallas recalculan en `input`/`change` y Number('1,000.00') es NaN,
-    // mientras parseFloat('10,000.00') devuelve 10. Mantener `10000.00` evita
-    // que una mejora visual altere cualquier operación financiera.
-    control.value = unformatMoneyEntryValue(before);
-    setMoneySelection(control, Math.min(rawPosition, control.value.length));
+    // El formato visible se conserva al enfocar. Antes de cada cálculo el
+    // listener de `input` lo convierte temporalmente a número puro y solo lo
+    // vuelve a presentar con separadores cuando el navegador va a pintar.
+    control.value = formatMoneyEntryValue(before);
+    setMoneySelection(control, mapCaretWithGrouping(control.value, rawPosition));
     return true;
   }
 
@@ -148,6 +147,21 @@
     const after = unformatMoneyEntryValue(before);
     control.value = after;
     setMoneySelection(control, Math.min(start, after.length), Math.min(end, after.length));
+    return after !== before;
+  }
+
+  function renderMoneyEntry(control) {
+    if (control?.dataset?.moneyEditing !== 'true') return false;
+    const before = String(control.value ?? '');
+    const start = mapCaretWithoutGrouping(
+      before, Number.isInteger(control.selectionStart) ? control.selectionStart : before.length
+    );
+    const end = mapCaretWithoutGrouping(
+      before, Number.isInteger(control.selectionEnd) ? control.selectionEnd : start
+    );
+    const after = formatMoneyEntryValue(before);
+    control.value = after;
+    setMoneySelection(control, mapCaretWithGrouping(after, start), mapCaretWithGrouping(after, end));
     return after !== before;
   }
 
@@ -222,6 +236,7 @@
   globalScope.unformatMoneyEntryValue = unformatMoneyEntryValue;
   globalScope.beginMoneyEntry = beginMoneyEntry;
   globalScope.normalizeMoneyEntry = normalizeMoneyEntry;
+  globalScope.renderMoneyEntry = renderMoneyEntry;
   globalScope.finishMoneyEntry = finishMoneyEntry;
 
   if (typeof document !== 'undefined' && document?.addEventListener) {
@@ -269,6 +284,19 @@
         // Normalizar aquí mismo garantiza que todos esos cálculos reciban el
         // número limpio incluso cuando el usuario pega un monto con comas.
         normalizeMoneyEntry(control);
+        // Los manejadores de cada modal y sus microtareas reciben primero el
+        // valor puro. El formato visual ocurre en el siguiente frame, antes de
+        // pintar, y `beforeinput` volverá a retirarlo antes de la próxima tecla.
+        const scheduleFrame = typeof globalScope.requestAnimationFrame === 'function'
+          ? globalScope.requestAnimationFrame.bind(globalScope)
+          : callback => setTimeout(callback, 0);
+        if (!control._moneyRenderPending) {
+          control._moneyRenderPending = true;
+          scheduleFrame(() => {
+            control._moneyRenderPending = false;
+            renderMoneyEntry(control);
+          });
+        }
       }
     }, true);
     document.addEventListener('change', event => {
@@ -293,6 +321,7 @@
       unformatMoneyEntryValue,
       beginMoneyEntry,
       normalizeMoneyEntry,
+      renderMoneyEntry,
       finishMoneyEntry,
     };
   }

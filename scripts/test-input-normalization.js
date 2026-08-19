@@ -13,6 +13,7 @@ const {
   unformatMoneyEntryValue,
   beginMoneyEntry,
   normalizeMoneyEntry,
+  renderMoneyEntry,
   finishMoneyEntry,
 } = require('../src/js/input-normalization');
 
@@ -116,7 +117,7 @@ price.id = 'pf-price';
 assert.strictEqual(shouldFormatMoneyControl(price), true);
 assert.strictEqual(beginMoneyEntry(price), true);
 assert.strictEqual(price.type, 'text');
-assert.strictEqual(price.value, '1000');
+assert.strictEqual(price.value, '1,000.00');
 price.value = '50,000.00';
 price.selectionStart = 5;
 price.selectionEnd = 5;
@@ -124,9 +125,52 @@ normalizeMoneyEntry(price);
 assert.strictEqual(price.value, '50000.00');
 assert.strictEqual(Number(price.value), 50000,
   'un monto activo debe seguir siendo legible por todos los cálculos de la aplicación');
+renderMoneyEntry(price);
+assert.strictEqual(price.value, '50,000.00',
+  'después del cálculo el mismo monto debe volver a verse con miles y decimales');
+normalizeMoneyEntry(price);
+assert.strictEqual(price.value, '50000.00',
+  'antes de guardar el formato visual debe volver a número puro');
 finishMoneyEntry(price);
 assert.strictEqual(price.type, 'number');
 assert.strictEqual(price.value, '50000.00');
+
+const entryListeners = {};
+const pendingFrames = [];
+const normalizationSource = fs.readFileSync(
+  path.join(__dirname, '..', 'src', 'js', 'input-normalization.js'),
+  'utf8'
+);
+const entryWindow = {
+  requestAnimationFrame(callback) {
+    pendingFrames.push(callback);
+    return pendingFrames.length;
+  },
+};
+const entryContext = vm.createContext({
+  window: entryWindow,
+  document: {
+    addEventListener(type, callback, capture) {
+      (entryListeners[type] ||= []).push({ callback, capture });
+    },
+  },
+  setTimeout,
+  console,
+});
+vm.runInContext(normalizationSource, entryContext, { filename: 'input-normalization.js' });
+const liveAmount = control('INPUT', 'number', '0');
+liveAmount.id = 'ab-amount';
+entryListeners.focus[0].callback({ target: liveAmount });
+liveAmount.value = '10,000.00';
+liveAmount.selectionStart = liveAmount.value.length;
+liveAmount.selectionEnd = liveAmount.value.length;
+entryListeners.input[0].callback({ target: liveAmount });
+assert.strictEqual(liveAmount.value, '10000.00',
+  'durante el evento el cálculo debe recibir el número sin separadores');
+assert.strictEqual(Number(liveAmount.value), 10000);
+pendingFrames.shift()();
+assert.strictEqual(liveAmount.value, '10,000.00',
+  'antes de pintar se deben recuperar la coma de miles y los decimales');
 
 const quantity = control('INPUT', 'number', '1000');
 quantity.id = 'pf-stock';
