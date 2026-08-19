@@ -43,7 +43,9 @@ identificadores directamente en la orden.
 
 La interfaz permite imprimir el documento de servicio, compartir el estado por
 WhatsApp y consultar indicadores de abiertas, atrasadas, entregadas, tiempo
-promedio, reingresos y carga por técnico.
+promedio, reingresos y carga por técnico. El portal público sin nube, sus
+enlaces/QR, aprobaciones y documentos de garantía se explican en
+[Portal de clientes](velo-tech-portal-clientes.md).
 
 ## Seguridad y privacidad
 
@@ -58,3 +60,5 @@ y superadministración gestionan el catálogo de técnicos.
 presupuesto versionado, bloqueo posterior, reserva de piezas, protección frente
 a venta concurrente, control de calidad, entrega idempotente, contabilidad,
 garantía, cancelación, indicadores y los dos flujos visuales que estaban rotos.
+`npm run test:service-portal` valida el recorrido público completo y su
+privacidad.

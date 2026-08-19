@@ -33,7 +33,7 @@ function request(port, route, { body, headers = {} } = {}) {
       res.on('end', () => {
         let data = null;
         try { data = JSON.parse(text); } catch {}
-        resolve({ status: res.statusCode, data });
+        resolve({ status: res.statusCode, data, text });
       });
     });
     req.on('error', reject);
@@ -46,6 +46,15 @@ function launchFakeWorker({ business, port }) {
   child.pid = 10000 + port;
   child.exitCode = null;
   const server = http.createServer((req, res) => {
+    if (req.url.startsWith('/r/')) {
+      const data = Buffer.from(`<html><body>portal ${business.id}</body></html>`);
+      res.writeHead(200, {
+        'Content-Type':'text/html; charset=utf-8', 'Content-Length':data.length,
+        'Cache-Control':'no-store', 'X-Robots-Tag':'noindex, nofollow',
+      });
+      res.end(data);
+      return;
+    }
     if (req.url === '/events') {
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       res.write(':ok\n\n');
@@ -104,16 +113,27 @@ function launchFakeWorker({ business, port }) {
   const service = startServerService({
     rootDataDir: tmp,
     port: 0,
+    publicPort: 0,
     host: '127.0.0.1',
     launchWorker: launchFakeWorker,
   });
   if (!service.server.listening) await new Promise(resolve => service.server.once('listening', resolve));
+  if (!service.portalServer.listening) await new Promise(resolve => service.portalServer.once('listening', resolve));
   await new Promise(resolve => setTimeout(resolve, 80));
   const port = service.server.address().port;
+  const publicPort = service.portalServer.address().port;
 
   const health = await request(port, '/health');
   assert.strictEqual(health.status, 200);
   assert.strictEqual(health.data.service, 'velo-pos-server-service');
+
+  const portalHealth = await request(publicPort, '/health');
+  assert.strictEqual(portalHealth.data.service, 'velo-service-portal');
+  const portal = await request(publicPort, '/r/principal/token.public');
+  assert.strictEqual(portal.status, 200, 'el gateway público debe enrutar al worker correcto');
+  assert.match(portal.text, /portal principal/, 'el gateway debe conservar el HTML del portal');
+  const unknownPortal = await request(publicPort, '/r/no-existe/token.public');
+  assert.strictEqual(unknownPortal.status, 404, 'el portal no revela negocios inexistentes');
 
   const auth = { accessKey, terminalId, businessId: 'principal' };
   const list = await request(port, '/rpc', {

@@ -19,15 +19,20 @@ const requiredFiles = [
   'src/index.html',
   'src/assets/icon.ico',
   'src/assets/icon.png',
+  'src/assets/velo-tech-icon.ico',
+  'src/assets/velo-tech-icon.png',
   '.github/workflows/release.yml',
   'build/entitlements.mac.plist',
   'build/electron-builder-terminal.js',
   'build/electron-builder-tech.js',
   'build/electron-builder-server.js',
+  'build/electron-builder-tech-server.js',
   'build/windows-service/prepare-winsw.js',
   'build/windows-service/install-service.ps1',
   'build/windows-service/installer.nsh',
+  'build/windows-service/installer-tech.nsh',
   'build/windows-service/server-edition.json',
+  'build/windows-service/server-edition-tech.json',
 ];
 
 if (!pkg.version) throw new Error('package.json no tiene version');
@@ -40,6 +45,31 @@ for (const rel of requiredFiles) {
   if (!fs.existsSync(abs)) throw new Error(`Archivo crítico faltante: ${rel}`);
 }
 
+// Las cuatro ediciones deben conservar identidad, artefacto y canal propios.
+// Una colisión aquí puede actualizar clientes con el vertical equivocado.
+const editionExpectations = [
+  ['build/electron-builder-terminal.js', 'do.velopos.app', 'Velo POS', 'latest', 'Velo-POS-Terminal-Setup-${version}.${ext}'],
+  ['build/electron-builder-tech.js', 'do.velotechpos.app', 'Velo Tech POS', 'latest-tech', 'Velo-Tech-POS-Setup-${version}.${ext}'],
+  ['build/electron-builder-server.js', 'do.velopos.app', 'Velo POS', 'server', 'Velo-POS-Server-Setup-${version}.${ext}'],
+  ['build/electron-builder-tech-server.js', 'do.velotechpos.server', 'Velo Tech POS Server', 'server-tech', 'Velo-Tech-POS-Server-Setup-${version}.${ext}'],
+];
+
+const seenChannels = new Set();
+const seenArtifacts = new Set();
+for (const [rel, appId, productName, channel, artifactName] of editionExpectations) {
+  const config = require(path.join(root, rel));
+  const actualAppId = config.appId || pkg.build.appId;
+  const actualProductName = config.productName || pkg.build.productName;
+  if (actualAppId !== appId || actualProductName !== productName
+      || config.publish?.channel !== channel || config.artifactName !== artifactName) {
+    throw new Error(`Identidad de release incorrecta en ${rel}`);
+  }
+  if (seenChannels.has(channel)) throw new Error(`Canal de actualización duplicado: ${channel}`);
+  if (seenArtifacts.has(artifactName)) throw new Error(`Artefacto de release duplicado: ${artifactName}`);
+  seenChannels.add(channel);
+  seenArtifacts.add(artifactName);
+}
+
 const filesToCheck = [
   'main.js', 'preload.js', 'database.js', 'versioning.js', 'license.js',
   ...(fs.existsSync(path.join(root, 'src/main'))
@@ -50,6 +80,7 @@ const filesToCheck = [
   'build/electron-builder-terminal.js',
   'build/electron-builder-tech.js',
   'build/electron-builder-server.js',
+  'build/electron-builder-tech-server.js',
   'build/windows-service/prepare-winsw.js',
 ];
 

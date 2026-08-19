@@ -470,6 +470,12 @@ window.abrirRegistroEquipos = async function (p) {
         <input class="inp" id="eq-warranty" type="date" title="Garantía hasta">
         <button class="btn btn-dark" id="eq-add">Registrar equipo</button>
       </div>
+      <details style="margin-bottom:12px;border:1px solid var(--line);border-radius:10px;padding:10px 12px">
+        <summary style="cursor:pointer;font-weight:700;font-size:12px">Recepción masiva por IMEI / escáner</summary>
+        <div class="ts" style="margin:8px 0">Pega o escanea un IMEI/serial por línea. La condición, costo, color, capacidad y garantía indicados arriba se aplicarán al lote.</div>
+        <textarea class="inp" id="eq-bulk" rows="5" data-uppercase="off" placeholder="359123456789001&#10;359123456789019&#10;SERIAL-LAPTOP-003" style="resize:vertical;font-family:var(--mono)"></textarea>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px"><span class="ts" id="eq-bulk-count">0 equipos detectados</span><button class="btn btn-dark" id="eq-add-bulk">Registrar lote</button></div>
+      </details>
       <div style="max-height:260px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
         <thead><tr style="color:var(--muted2);font-size:10.5px"><th style="text-align:left;padding:6px">IMEI / SERIAL</th><th style="text-align:left;padding:6px">DETALLE</th><th style="text-align:right;padding:6px">COSTO</th><th style="text-align:left;padding:6px">GARANTÍA</th><th style="text-align:left;padding:6px">ESTADO</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
@@ -478,31 +484,45 @@ window.abrirRegistroEquipos = async function (p) {
   const wire = () => {
     const addBtn = document.getElementById('eq-add');
     if (!addBtn) return;
-    addBtn.onclick = async () => {
-      const imei = document.getElementById('eq-imei')?.value.trim();
-      if (!imei) { toast('Ingresa el IMEI o serial', 'w'); return; }
-      addBtn.disabled = true;
+    const sharedUnit = imei => ({
+      imei,
+      condition: document.getElementById('eq-cond')?.value || 'nuevo',
+      unit_cost: Number(document.getElementById('eq-cost')?.value) || 0,
+      color: document.getElementById('eq-color')?.value.trim() || '',
+      capacity: document.getElementById('eq-cap')?.value.trim() || '',
+      warranty_until: document.getElementById('eq-warranty')?.value || null,
+    });
+    const saveUnits = async (identifiers, button) => {
+      const unique = [...new Set(identifiers.map(value => String(value || '').trim()).filter(Boolean))];
+      if (!unique.length) { toast('Ingresa al menos un IMEI o serial', 'w'); return; }
+      button.disabled = true;
       try {
         const res = await window.api.productUnits.create({
           productId: p.id,
-          units: [{
-            imei,
-            condition: document.getElementById('eq-cond')?.value || 'nuevo',
-            unit_cost: Number(document.getElementById('eq-cost')?.value) || 0,
-            color: document.getElementById('eq-color')?.value.trim() || '',
-            capacity: document.getElementById('eq-cap')?.value.trim() || '',
-            warranty_until: document.getElementById('eq-warranty')?.value || null,
-          }],
+          units: unique.map(sharedUnit),
           requestUserId: user?.id,
         });
         if (!res?.ok) throw new Error(res?.error || 'No se pudo registrar el equipo');
-        toast('✓ Equipo registrado', 's');
+        toast(`✓ ${res.created} equipo${res.created === 1 ? '' : 's'} registrado${res.created === 1 ? '' : 's'}`, 's');
         await reloadProducts();
         renderInvCurrentView();
         openModal(render(await fetchUnits()));
         wire();
-      } catch (e) { toast(e.message || 'Error al registrar', 'e'); addBtn.disabled = false; }
+      } catch (e) { toast(e.message || 'Error al registrar', 'e'); button.disabled = false; }
     };
+    addBtn.onclick = () => saveUnits([document.getElementById('eq-imei')?.value], addBtn);
+    const bulkInput = document.getElementById('eq-bulk');
+    const bulkBtn = document.getElementById('eq-add-bulk');
+    const readBulk = () => String(bulkInput?.value || '').split(/[\n,;\t ]+/).map(value => value.trim()).filter(Boolean);
+    bulkInput?.addEventListener('input', () => {
+      const count = new Set(readBulk().map(value => value.toUpperCase())).size;
+      const label = document.getElementById('eq-bulk-count');
+      if (label) label.textContent = `${count} equipo${count === 1 ? '' : 's'} detectado${count === 1 ? '' : 's'}`;
+    });
+    bulkInput?.addEventListener('keydown', event => {
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); saveUnits(readBulk(), bulkBtn); }
+    });
+    bulkBtn.onclick = () => saveUnits(readBulk(), bulkBtn);
     document.querySelectorAll('[data-warranty-unit]').forEach(btn => {
       btn.onclick = async () => {
         const value = prompt('Garantía válida hasta (YYYY-MM-DD). Déjalo vacío para quitarla:', btn.dataset.warrantyDate || '');

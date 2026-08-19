@@ -5,7 +5,7 @@
  * Exit: 0 = OK; 1 = algún fallo.
  */
 'use strict';
-const { isAllowedExternalUrl } = require('../lib/url-safe');
+const { isAllowedExternalUrl, isAllowedPortalBaseUrl } = require('../lib/url-safe');
 const { buildWhatsAppUrls, normalizeWhatsAppPhone } = require('../lib/whatsapp-url');
 
 let pass = 0, fail = 0;
@@ -21,6 +21,7 @@ expect('https://wa.me/18091234567', true);
 expect('https://api.whatsapp.com/send?phone=1809', true);
 expect('https://www.google.com/maps/dir/?api=1&destination=18.48,-69.93', true);
 expect('https://www.waze.com/ul?ll=18.48,-69.93&navigate=yes', true);
+expect('https://velo-servidor.tail123.ts.net/r/principal/token', true);
 // Bloqueadas
 expect('http://wa.me/123', false);                 // http, no https
 expect('https://evil.com', false);                 // host no permitido
@@ -32,6 +33,23 @@ expect(null, false);
 expect('no es una url', false);
 expect('https://sub.wa.me/x', false);              // subdominio no listado
 expect('https://maps.google.com.evil.com/x', false);
+expect('https://ts.net.evil.com/r/principal/token', false);
+expect('http://velo-servidor.tail123.ts.net/r/principal/token', false);
+
+console.log('\n== Base del portal Tailscale Funnel ==');
+function expectPortal(url, allowed, options) {
+  const got = isAllowedPortalBaseUrl(url, options);
+  if (got === allowed) { pass++; console.log(`  ✓ ${allowed ? 'permite ' : 'bloquea '} ${JSON.stringify(url)}`); }
+  else { fail++; console.log(`  ✗ FALLO: ${JSON.stringify(url)} → esperaba ${allowed}, obtuvo ${got}`); }
+}
+expectPortal('https://velo-servidor.tail123.ts.net', true);
+expectPortal('https://velo-servidor.tail123.ts.net:8443', true);
+expectPortal('https://evil.example', false);
+expectPortal('https://velo.tail123.ts.net/r/orden', false);
+expectPortal('https://user@velo.tail123.ts.net', false);
+expectPortal('https://velo.tail123.ts.net:9443', false);
+expectPortal('http://127.0.0.1:8787', false);
+expectPortal('http://127.0.0.1:8787', true, { allowLocal:true });
 
 console.log('\n== Enlaces de WhatsApp Desktop/Web ==');
 try {

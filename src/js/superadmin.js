@@ -274,7 +274,10 @@ async function renderSuperAdmin(el) {
   } else if (selectedAccessUser.role === 'admin') {
     accessGrid.innerHTML = '<div class="alrt g"><div class="alrt-dot g"></div><div><div class="alrt-title">Administrador con acceso completo</div><div class="alrt-sub">Los límites individuales se aplican a usuarios de caja. El administrador conserva control operativo total.</div></div></div>';
   } else {
-    const visibleCatalog = (window.VELO_MODULE_CATALOG || []).filter(def => !def.techOnly || window._vertical?.id === 'tech');
+    const visibleCatalog = (window.VELO_MODULE_CATALOG || []).filter(def =>
+      (!def.techOnly || window._vertical?.id === 'tech')
+      && (!def.autoOnly || window._vertical?.id !== 'tech')
+    );
     const policy = window.veloParseModulePermissions?.(selectedAccessUser) || {};
     const groups = [...new Set(visibleCatalog.map(def => def.group))];
     for (const group of groups) {
@@ -370,8 +373,8 @@ async function renderSuperAdmin(el) {
     { key: 'barcode_enabled',      icon: '🏷️', title: 'Etiquetas / Código de Barras',  desc: 'Diseñador e impresión de etiquetas con códigos de barras.', cajeroCan: true, special: 'barcode' },
     { key: 'module_preventa',      icon: '🧾', title: 'Preventa y Despacho',             desc: 'Prepara órdenes, reserva inventario y las envía a caja para su cobro y entrega.', cajeroCan: true },
     { key: 'module_sucursales',    icon: '🏪', title: 'Sucursales',                     desc: 'Registro de sucursales (sync en Cloud 2026).',            cajeroCan: true  },
-    { key: 'module_vehiculos',     icon: '🚗', title: 'Vehículos',                      desc: 'Registro de vehículos de la empresa.',                    cajeroCan: true  },
-    { key: 'module_mantenimiento', icon: '🔧', title: 'Mantenimiento',                  desc: 'Historial de mantenimiento de vehículos.',                cajeroCan: true  },
+    { key: 'module_vehiculos',     icon: '🚗', title: 'Vehículos',                      desc: 'Registro de vehículos de la empresa.',                    cajeroCan: true, autoOnly:true },
+    { key: 'module_mantenimiento', icon: '🔧', title: 'Mantenimiento',                  desc: 'Historial de mantenimiento de vehículos.',                cajeroCan: true, autoOnly:true },
     { key: 'module_envios',        icon: '📦', title: 'Envíos y Despachos',             desc: 'Control de entregas con cálculo de distancia.',           cajeroCan: true  },
     { key: 'module_conduce',       icon: '🚚', title: 'Conduces / Notas de Entrega',    desc: 'Documento de entrega de mercancía. No fiscal (sin NCF/ITBIS).', cajeroCan: true  },
     { key: 'module_ncf_avanzado',  icon: '📋', title: 'NCF Avanzado',                   desc: 'Gestión de rangos de comprobantes fiscales DGII.',        cajeroCan: false },
@@ -404,7 +407,7 @@ async function renderSuperAdmin(el) {
 
   const accentColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#00d48a';
 
-  modsDefs.forEach(mod => {
+  modsDefs.filter(mod => !mod.autoOnly || window._vertical?.id !== 'tech').forEach(mod => {
     const enabled     = settings[mod.key] === '1' || settings[mod.key] === true || settings[mod.key] === 1;
     const rolesVal    = settings[mod.key + '_roles'] || (['module_envios','module_preventa'].includes(mod.key) ? 'admin,cajero' : 'admin');
     const adminOn     = rolesVal.includes('admin');

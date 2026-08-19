@@ -25,8 +25,8 @@
     { key:'bancos', title:'Bancos y Cuentas', icon:'🏦', group:'Finanzas', route:'bancos', setting:'module_contabilidad', roles:'module_contabilidad_roles', desc:'Cuentas financieras, movimientos y conciliación.' },
     { key:'contabilidad', title:'Contabilidad', icon:'📒', group:'Finanzas', route:'contabilidad', setting:'module_contabilidad', roles:'module_contabilidad_roles', desc:'Catálogo, asientos y estados contables.' },
     { key:'sucursales', title:'Sucursales', icon:'🏪', group:'Operación avanzada', route:'sucursales', setting:'module_sucursales', roles:'module_sucursales_roles', desc:'Registro y administración de sucursales.' },
-    { key:'vehiculos', title:'Vehículos', icon:'🚗', group:'Operación avanzada', route:'vehiculos', setting:'module_vehiculos', roles:'module_vehiculos_roles', desc:'Vehículos de la empresa y su información operativa.' },
-    { key:'mantenimiento', title:'Mantenimiento', icon:'🔧', group:'Operación avanzada', route:'vehiculos', setting:'module_mantenimiento', roles:'module_mantenimiento_roles', desc:'Historial y programación de mantenimiento.' },
+    { key:'vehiculos', title:'Vehículos', icon:'🚗', group:'Operación avanzada', route:'vehiculos', autoOnly:true, setting:'module_vehiculos', roles:'module_vehiculos_roles', desc:'Vehículos de la empresa y su información operativa.' },
+    { key:'mantenimiento', title:'Mantenimiento', icon:'🔧', group:'Operación avanzada', route:'vehiculos', autoOnly:true, setting:'module_mantenimiento', roles:'module_mantenimiento_roles', desc:'Historial y programación de mantenimiento.' },
     { key:'envios', title:'Envíos y Despachos', icon:'📦', group:'Operación avanzada', route:'envios', setting:'module_envios', roles:'module_envios_roles', desc:'Entregas, rutas y seguimiento de despachos.' },
     { key:'conduce', title:'Conduces', icon:'🚛', group:'Operación avanzada', route:'conduce', setting:'module_conduce', roles:'module_conduce_roles', desc:'Notas de entrega sin precios ni efecto fiscal.' },
     { key:'reportes', title:'Reportes', icon:'📊', group:'Análisis', route:'reportes', core:true, cashierDefault:false, desc:'Indicadores, exportaciones y análisis del negocio.' },
@@ -47,6 +47,7 @@
   function globallyEnabled(def) {
     if (!def) return false;
     if (def.techOnly && window._vertical?.id !== 'tech') return false;
+    if (def.autoOnly && window._vertical?.id === 'tech') return false;
     if (def.core || def.capability) return true;
     if (def.setting === 'barcode_enabled') return !!window._bcEnabled;
     return String((typeof CFG !== 'undefined' ? CFG?.[def.setting] : '') || '') === '1';

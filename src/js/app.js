@@ -221,6 +221,10 @@ function renderLicenseGate(lic) {
   ));
 }
 
+function verticalProductName() {
+  return window._vertical?.product?.name || 'Velo POS';
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   // Cargar versión de la app para mostrar en login y config
   try {
@@ -311,7 +315,7 @@ async function selectBusinessFromLogin(bizId, label, opts = {}) {
   const isClientMode = CFG.connectionMode === 'client';
   const restartText = isClientMode
     ? 'solo esta terminal se reiniciará; las demás continuarán trabajando'
-    : 'Velo POS se reiniciará automáticamente';
+    : `${verticalProductName()} se reiniciará automáticamente`;
   if (!confirm(`Abrir "${name}" ahora? ${restartText}.`)) {
     return { ok: false, cancelled: true };
   }
@@ -344,7 +348,7 @@ async function selectBusinessFromLogin(bizId, label, opts = {}) {
     const r = await window.api.business.selectForLogin({ bizId: nextId || null });
     if (r?.ok) {
       if (r.relaunching) {
-        setMsg(isClientMode ? 'Reiniciando esta terminal...' : 'Reiniciando Velo POS...');
+        setMsg(isClientMode ? 'Reiniciando esta terminal...' : `Reiniciando ${verticalProductName()}...`);
       } else {
         setMsg('Negocio activo.');
         location.reload();
@@ -380,7 +384,7 @@ function renderClientOffline(pf) {
     : `Esta PC está en modo Cliente y no logró comunicarse con ${dest}.`;
   const ayuda = unauth
     ? 'En la PC servidor: Config → Conexión → agrega el ID de este terminal a los autorizados, y verifica que la llave sea la misma.'
-    : 'Verifica que la PC servidor esté encendida, con Velo POS abierto en modo Servidor y el puerto permitido en el firewall.';
+    : `Verifica que la PC servidor esté encendida, con ${verticalProductName()} Server activo y el puerto permitido en el firewall.`;
 
   const card = h('div', { style: { maxWidth: '480px', margin: 'auto', textAlign: 'center', padding: '32px',
     background: 'var(--surface, #fff)', border: '1px solid var(--line2, #e5e7eb)', borderRadius: '16px' } },
@@ -690,7 +694,7 @@ function renderLogin() {
 
         // Versión — leída dinámicamente
         h('div', { style: { textAlign:'center', fontSize:'10px', color:'var(--muted2)', marginTop:'16px' } },
-          `Velo POS v${window._appVersion || '1.5.5'}`
+          `${verticalProductName()} v${window._appVersion || '1.5.5'}`
         )
       )
     );
@@ -859,10 +863,13 @@ function buildSidebar() {
 
   // Brand
   const bizName = DB?.settings?.biz_name || CFG?.biz || '';
+  const techLogo = window._vertical?.product?.logo;
   const brand = h('div', { class: 'sb-brand' },
-    h('div', { class: 'sb-logo', html: svg('wrench') }),
+    techLogo
+      ? h('div', { class:'sb-logo' }, h('img', { src:techLogo, alt:verticalProductName(), style:{ width:'100%', height:'100%', borderRadius:'12px', display:'block' } }))
+      : h('div', { class: 'sb-logo', html: svg('wrench') }),
     h('div', { style: { display: 'flex', flexDirection: 'column', gap: '1px', overflow: 'hidden' } },
-      h('div', { class: 'sb-name' }, 'Velo POS'),
+      h('div', { class: 'sb-name' }, verticalProductName()),
       h('div', { class: 'sb-tag', style: { opacity: '.7', fontSize: '10px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } },
         bizName || 'v1.0.0')
     )
@@ -898,7 +905,7 @@ function buildSidebar() {
       { key: 'contabilidad', icon: 'ledger',  label: 'Contabilidad' },
     ] : []),
     ...(_adminPuede('module_sucursales')    ? [{ key: 'sucursales', icon: 'building', label: 'Sucursales'    }] : []),
-    ...((_adminPuede('module_vehiculos') || _adminPuede('module_mantenimiento')) ? [{ key: 'vehiculos', icon: 'car', label: 'Vehículos' }] : []),
+    ...((window._vertical?.modules?.vehicles !== false && (_adminPuede('module_vehiculos') || _adminPuede('module_mantenimiento'))) ? [{ key: 'vehiculos', icon: 'car', label: 'Vehículos' }] : []),
     ...(_adminPuede('module_envios')        ? [{ key: 'envios',     icon: 'truck',    label: 'Envíos'        }] : []),
     ...(_adminPuede('module_conduce')       ? [{ key: 'conduce',    icon: 'pkg',      label: 'Conduces'      }] : []),
     { key: 'reportes',  icon: 'chart',    label: 'Reportes' },
@@ -952,8 +959,10 @@ function buildSidebar() {
     ...(_cajeroPuede('module_envios')     ? [{ key: 'envios',     icon: 'truck',   label: 'Envíos' }]      : []),
     ...(_cajeroPuede('module_conduce')    ? [{ key: 'conduce',    icon: 'pkg',     label: 'Conduces' }]    : []),
     ...(_cajeroPuede('module_sucursales') ? [{ key: 'sucursales', icon: 'building',label: 'Sucursales' }]  : []),
-    ...((_cajeroPuede('module_vehiculos') || _cajeroPuede('module_mantenimiento'))
-                                          ? [{ key: 'vehiculos',  icon: 'car',     label: 'Vehículos' }]  : []),
+                    ...((window._vertical?.modules?.vehicles !== false
+                        && (_cajeroPuede('module_vehiculos') || _cajeroPuede('module_mantenimiento')))
+                        ? [{ key: 'vehiculos', icon: 'car', label: 'Vehículos' }]
+                        : []),
     ...(window.veloCanAccessModule?.('impresion', user)
                                           ? [{ key: 'impresion', icon: 'print', label: 'Centro de impresión' }] : []),
     ...(window.veloCanAccessModule?.('reportes', user) ? [{ key:'reportes', icon:'chart', label:'Reportes' }] : []),

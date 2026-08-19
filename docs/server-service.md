@@ -1,10 +1,11 @@
-# Velo POS Server Service
+# Velo POS Server Service y Velo Tech POS Server Service
 
 [← Volver a CLAUDE.md](../CLAUDE.md) · [Multi-terminal](multi-terminal-sync.md) · [Release](release-process.md)
 
 ## Qué es
 
-Es el motor permanente de Velo POS para instalaciones con varias PC. Windows lo
+Es el motor permanente de Velo POS y Velo Tech POS para instalaciones con varias
+PC. Windows lo
 inicia automáticamente, lo reinicia si falla y lo mantiene activo aunque nadie
 abra la interfaz visible.
 
@@ -12,21 +13,25 @@ No es nube y no sube datos a terceros. La base permanece en la PC Servidor:
 
 ```text
 C:\ProgramData\Velo POS Server\data
+C:\ProgramData\Velo Tech POS Server\data
 ```
 
-El servicio se registra como `VeloPOSServer` y usa WinSW 2.12.0, descargado desde
-su release oficial y validado durante el build con SHA-256.
+Cada vertical tiene identidad y almacenamiento separados: `VeloPOSServer` para
+repuestos y `VeloTechPOSServer` para tecnología. Ambos usan WinSW 2.12.0,
+descargado desde su release oficial y validado durante el build con SHA-256.
 
 ## Instaladores entregables
 
-Un release de Windows genera dos archivos:
+Un release de Windows genera cuatro archivos:
 
 - `Velo-POS-Server-Setup-X.Y.Z.exe`: solo para la PC que conserva los datos.
 - `Velo-POS-Terminal-Setup-X.Y.Z.exe`: para caja, despacho u otras estaciones.
+- `Velo-Tech-POS-Server-Setup-X.Y.Z.exe`: servidor permanente de TECH y portal.
+- `Velo-Tech-POS-Setup-X.Y.Z.exe`: terminal TECH.
 
-Los dos se publican como assets del mismo GitHub Release. Terminal usa
-`latest.yml`; Servidor usa `server.yml`, por lo que cada edición recibe siempre
-su instalador correcto al actualizar.
+Los cuatro se publican como assets del mismo GitHub Release. Sus canales son
+`latest`, `server`, `latest-tech` y `server-tech`, por lo que cada edición recibe
+siempre su instalador correcto al actualizar.
 
 ## Qué hace el instalador Servidor
 
@@ -40,6 +45,12 @@ su instalador correcto al actualizar.
 7. Agrega reglas de firewall para Tailscale y LAN privada.
 8. Inicia el servicio.
 9. La consola visible se autoenlaza por `127.0.0.1`.
+
+La edición Servidor también incluye
+`resources\service\configure-tailscale-funnel.ps1`. Este asistente publica solo
+el portal de clientes de VELO TECH POS en `127.0.0.1:8787`; no publica el puerto
+RPC `8443` ni la base de datos. Véase
+[Portal de clientes](velo-tech-portal-clientes.md).
 
 En actualizaciones posteriores no vuelve a migrar ni sobrescribe la base existente.
 Desinstalar conserva datos, backups y configuración en ProgramData.
@@ -59,11 +70,13 @@ Desinstalar conserva datos, backups y configuración en ProgramData.
 ## Operación y diagnóstico
 
 En `services.msc` debe aparecer **Velo POS Server Service** en estado En ejecución
-y con inicio Automático (inicio retrasado).
+y con inicio Automático (inicio retrasado). Para TECH aparece
+**Velo Tech POS Server Service**.
 
 Rutas:
 
 - Datos: `C:\ProgramData\Velo POS Server\data`
+- Datos TECH: `C:\ProgramData\Velo Tech POS Server\data`
 - Config del gateway: `...\data\server-service.json`
 - Backups previos a migración: `...\backups`
 - Logs de WinSW: `...\logs`
@@ -71,6 +84,9 @@ Rutas:
 
 El endpoint `http://127.0.0.1:8443/health` devuelve el estado general sin datos
 comerciales. Los demás endpoints requieren clave y terminal autorizada.
+
+El endpoint `http://127.0.0.1:8787/health` corresponde exclusivamente al portal
+de reparaciones. Tailscale Funnel debe apuntar a este segundo puerto.
 
 ## Recuperación
 
@@ -90,8 +106,11 @@ supervisor reinicia workers caídos sin reiniciar los demás negocios.
 
 ```bash
 npm run build:win:terminal
+npm run build:win:tech
 npm run build:win:server
+npm run build:win:tech-server
 ```
 
-El build Servidor ejecuta primero `prepare:server-service`, descarga WinSW oficial
-y verifica el hash fijado. El workflow de tags ejecuta pruebas y publica ambos.
+Los builds Servidor ejecutan primero `prepare:server-service`, descargan WinSW
+oficial y verifican el hash fijado. El workflow de tags ejecuta pruebas y publica
+las cuatro ediciones.

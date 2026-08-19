@@ -1,5 +1,8 @@
 {
   "edition": "server",
+  "vertical": "auto_parts",
+  "channel": "server",
   "port": 8443,
+  "portalPort": 8787,
   "dataDirectory": "Velo POS Server"
 }

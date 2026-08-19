@@ -26,9 +26,9 @@ jobs:
         run: npm run release:check
 
       # Pre-crear el release ANTES de compilar evita la race conocida: si no
-      # existe, cada invocación de electron-builder (Terminal, TECH y Server) crea su
+      # existe, cada invocación de electron-builder (Terminal, TECH y servidores) crea su
       # propio release para el mismo tag → assets partidos en dos (o 422
-      # already_exists). Pre-creándolo, las tres ediciones suben al MISMO release.
+      # already_exists). Pre-creándolo, las cuatro ediciones suben al MISMO release.
       - name: Pre-crear release (evita release partido / 422)
         shell: bash   # en pwsh (Windows) el `|| echo` no resetea el exit code y el paso falla
         env:
@@ -49,3 +49,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: npm run release:win:server
+
+      - name: Compilar y publicar VELO TECH POS Server Windows
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: npm run release:win:tech-server

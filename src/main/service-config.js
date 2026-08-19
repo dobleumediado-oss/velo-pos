@@ -68,6 +68,7 @@ function normalizeConfig(raw = {}, legacy = {}) {
     schemaVersion: 1,
     serviceId: String(raw.serviceId || crypto.randomUUID()),
     port: Math.min(65535, Math.max(1024, Number(raw.port) || 8443)),
+    portalPort: Math.min(65535, Math.max(1024, Number(raw.portalPort) || 8787)),
     accessKey: String(raw.accessKey || legacy.connection_access_key || _newAccessKey()),
     allowlist: [...new Set(allowlist)],
     terminalNames,
@@ -115,6 +116,7 @@ function publicConfig(config) {
     schemaVersion: config.schemaVersion,
     serviceId: config.serviceId,
     port: config.port,
+    portalPort: config.portalPort,
     allowlist: config.allowlist.map(terminalId => ({
       terminalId,
       name: config.terminalNames?.[terminalId] || '',

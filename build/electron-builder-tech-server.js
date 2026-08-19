@@ -5,11 +5,15 @@ const pkg = require('../package.json');
 
 module.exports = {
   ...pkg.build,
-  directories: { ...pkg.build.directories, output: 'dist/server' },
-  artifactName: 'Velo-POS-Server-Setup-${version}.${ext}',
+  appId: 'do.velotechpos.server',
+  productName: 'Velo Tech POS Server',
+  copyright: 'Copyright 2026 — Velo Tech POS',
+  directories: { ...pkg.build.directories, output: 'dist/tech-server' },
+  artifactName: 'Velo-Tech-POS-Server-Setup-${version}.${ext}',
+  extraMetadata: { veloVertical: 'tech' },
   extraResources: [
     {
-      from: path.join(__dirname, 'windows-service', 'server-edition.json'),
+      from: path.join(__dirname, 'windows-service', 'server-edition-tech.json'),
       to: 'server-edition.json',
     },
     {
@@ -28,18 +32,21 @@ module.exports = {
   ],
   win: {
     ...pkg.build.win,
-    // La GUI sigue como usuario normal. El instalador se eleva porque es
-    // per-machine y necesita registrar el servicio/firewall.
+    icon: 'src/assets/velo-tech-icon.ico',
     requestedExecutionLevel: 'asInvoker',
   },
   nsis: {
     ...pkg.build.nsis,
     perMachine: true,
     allowElevation: true,
-    include: path.join(__dirname, 'windows-service', 'installer.nsh'),
+    shortcutName: 'Velo Tech POS Server',
+    installerIcon: 'src/assets/velo-tech-icon.ico',
+    uninstallerIcon: 'src/assets/velo-tech-icon.ico',
+    installerHeaderIcon: 'src/assets/velo-tech-icon.ico',
+    include: path.join(__dirname, 'windows-service', 'installer-tech.nsh'),
   },
   publish: {
     ...pkg.build.publish,
-    channel: 'server',
+    channel: 'server-tech',
   },
 };

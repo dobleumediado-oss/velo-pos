@@ -43,7 +43,9 @@ const order = DB.serviceOrdersRepo.create({
 }, admin);
 ok(order.number === 'SRV-000001' && order.workflow_status === 'recepcion', 'crea la recepción profesional con número estable');
 ok(order.product_unit_id === unitId && DB.productUnitsRepo.findById(unitId).status === 'servicio', 'enlaza el IMEI y marca el equipo en servicio');
-ok(order.events.length === 1 && order.intake_condition.includes('Golpe'), 'conserva recepción y primer evento de trazabilidad');
+ok(order.events.some(event => event.event_type === 'recepcion')
+  && order.events.some(event => event.event_type === 'portal')
+  && order.intake_condition.includes('Golpe'), 'conserva recepción, portal y trazabilidad inicial');
 
 let current = DB.serviceOrdersRepo.advance(order.id, 'inspeccion', admin);
 current = DB.serviceOrdersRepo.advance(order.id, 'diagnostico', admin);
@@ -153,6 +155,8 @@ const serviceUi = fs.readFileSync(path.join(__dirname, '../src/js/servicio.js'),
 ok(!serviceUi.includes("prompt('Motivo") && serviceUi.includes("askText('Indica el motivo"), 'la cancelación usa el diálogo compatible de VELO');
 ok(serviceUi.includes('function svcOpenDelivery(order)') && !serviceUi.includes('function svcOpenDelivery(id, save)'), 'la entrega no depende de campos destruidos del modal anterior');
 ok(serviceUi.includes('svcPrintDocument') && serviceUi.includes('svcShareStatus'), 'expone documento operativo y aviso por WhatsApp');
+ok(serviceUi.includes('svcOpenPortal') && serviceUi.includes('svcOpenPortalConfig')
+  && serviceUi.includes('svcQrSvg'), 'expone portal, QR y configuración Tailscale desde el taller');
 
 console.log(`\n== RESULTADO: ${passed} OK, ${failed} fallos ==`);
 process.exit(failed ? 1 : 0);

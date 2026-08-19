@@ -1941,6 +1941,56 @@ const MIGRATIONS = [
     }
   },
   {
+    version: '1.43.0-service-customer-portal',
+    description: 'VELO TECH POS: portal seguro para seguimiento, aprobación de presupuestos, notificaciones y garantía mediante Tailscale Funnel.',
+    run(db) {
+      const addColumn = (table, name, definition) => {
+        const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+        if (!cols.includes(name)) db.prepare(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`).run();
+      };
+      [
+        ['public_code_hash', "TEXT DEFAULT ''"],
+        ['public_code_expires_at', 'TEXT'],
+        ['public_attempts', 'INTEGER NOT NULL DEFAULT 0'],
+        ['public_locked_until', 'TEXT'],
+        ['public_decided_at', 'TEXT'],
+      ].forEach(([name, definition]) => addColumn('service_order_estimates', name, definition));
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS service_public_links (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          service_order_id INTEGER NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+          public_id TEXT UNIQUE NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          expires_at TEXT,
+          access_count INTEGER NOT NULL DEFAULT 0,
+          last_accessed_at TEXT,
+          created_by INTEGER REFERENCES users(id),
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          revoked_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS service_order_notifications (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          service_order_id INTEGER NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+          notification_type TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          channel TEXT NOT NULL DEFAULT 'whatsapp',
+          sent_by INTEGER REFERENCES users(id),
+          sent_at TEXT,
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          UNIQUE(service_order_id, notification_type)
+        );
+        CREATE INDEX IF NOT EXISTS idx_service_public_links_order ON service_public_links(service_order_id, enabled);
+        CREATE INDEX IF NOT EXISTS idx_service_notifications_status ON service_order_notifications(status, created_at);
+      `);
+      const setting = db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');
+      setting.run('service_public_portal_enabled', '1');
+      setting.run('service_public_port', '8787');
+      setting.run('service_public_base_url', '');
+      setting.run('service_public_link_days', '365');
+      console.log('[MIGRATION 1.43.0-service-customer-portal] Portal de clientes listo');
+    }
+  },
+  {
     version: '1.44.0-user-operational-permissions',
     description: 'Permisos por usuario para límite de ventas a crédito y administración exclusiva de inventario.',
     run(db) {

@@ -74,6 +74,14 @@ contextBridge.exposeInMainWorld('api', {
     technicians: (data) => ipcRenderer.invoke('serviceOrders:technicians', data),
     saveTechnician: (data) => ipcRenderer.invoke('serviceOrders:saveTechnician', data),
     report: (data) => ipcRenderer.invoke('serviceOrders:report', data),
+    getPublicAccess: (data) => ipcRenderer.invoke('serviceOrders:getPublicAccess', data),
+    regeneratePublicAccess: (data) => ipcRenderer.invoke('serviceOrders:regeneratePublicAccess', data),
+    revokePublicAccess: (data) => ipcRenderer.invoke('serviceOrders:revokePublicAccess', data),
+    preparePublicApproval: (data) => ipcRenderer.invoke('serviceOrders:preparePublicApproval', data),
+    getSharePayload: (data) => ipcRenderer.invoke('serviceOrders:getSharePayload', data),
+    markNotificationSent: (data) => ipcRenderer.invoke('serviceOrders:markNotificationSent', data),
+    getPortalConfig: (data) => ipcRenderer.invoke('serviceOrders:getPortalConfig', data),
+    savePortalConfig: (data) => ipcRenderer.invoke('serviceOrders:savePortalConfig', data),
   },
 
   // ── Clientes ──────────────────────────────

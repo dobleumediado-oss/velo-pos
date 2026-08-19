@@ -724,6 +724,11 @@ function createTables() {
       decision_notes   TEXT DEFAULT '',
       decided_at       TEXT,
       snapshot_json    TEXT NOT NULL DEFAULT '{}',
+      public_code_hash TEXT DEFAULT '',
+      public_code_expires_at TEXT,
+      public_attempts  INTEGER NOT NULL DEFAULT 0,
+      public_locked_until TEXT,
+      public_decided_at TEXT,
       created_by       INTEGER REFERENCES users(id),
       created_at       TEXT DEFAULT (datetime('now','localtime')),
       UNIQUE(service_order_id, version)
@@ -738,10 +743,35 @@ function createTables() {
       active           INTEGER NOT NULL DEFAULT 1,
       created_at       TEXT DEFAULT (datetime('now','localtime'))
     );
+    CREATE TABLE IF NOT EXISTS service_public_links (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      service_order_id INTEGER NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+      public_id        TEXT UNIQUE NOT NULL,
+      enabled          INTEGER NOT NULL DEFAULT 1,
+      expires_at       TEXT,
+      access_count     INTEGER NOT NULL DEFAULT 0,
+      last_accessed_at TEXT,
+      created_by       INTEGER REFERENCES users(id),
+      created_at       TEXT DEFAULT (datetime('now','localtime')),
+      revoked_at       TEXT
+    );
+    CREATE TABLE IF NOT EXISTS service_order_notifications (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      service_order_id INTEGER NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+      notification_type TEXT NOT NULL,
+      status           TEXT NOT NULL DEFAULT 'pending',
+      channel          TEXT NOT NULL DEFAULT 'whatsapp',
+      sent_by          INTEGER REFERENCES users(id),
+      sent_at          TEXT,
+      created_at       TEXT DEFAULT (datetime('now','localtime')),
+      UNIQUE(service_order_id, notification_type)
+    );
     CREATE INDEX IF NOT EXISTS idx_service_orders_status ON service_orders(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_service_orders_imei ON service_orders(imei);
     CREATE INDEX IF NOT EXISTS idx_service_order_items_order ON service_order_items(service_order_id);
     CREATE INDEX IF NOT EXISTS idx_service_events_order ON service_order_events(service_order_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_service_public_links_order ON service_public_links(service_order_id, enabled);
+    CREATE INDEX IF NOT EXISTS idx_service_notifications_status ON service_order_notifications(status, created_at);
 
     -- ── Equipos usados recibidos como parte de pago (VELO TECH POS R7) ──
     CREATE TABLE IF NOT EXISTS trade_ins (
@@ -11339,14 +11369,19 @@ const crmRepo = {
 const productUnitsRepo = {
   // Alta de una unidad física de un producto serializado.
   create(u = {}) {
+    const imei = String(u.imei || '').trim();
+    const serial = String(u.serial || '').trim();
+    if (!imei && !serial) throw new Error('Cada equipo necesita IMEI o serial');
+    const duplicate = this.findByImei(imei || serial);
+    if (duplicate) throw new Error(`El IMEI o serial ${imei || serial} ya está registrado`);
     const info = db.prepare(`
       INSERT INTO product_units
         (product_id, imei, serial, condition, status, unit_cost, color, capacity, warranty_until, notes)
       VALUES (@product_id, @imei, @serial, @condition, @status, @unit_cost, @color, @capacity, @warranty_until, @notes)
     `).run({
       product_id:     u.product_id,
-      imei:           u.imei || null,
-      serial:         u.serial || null,
+      imei:           imei || null,
+      serial:         serial || null,
       condition:      u.condition || 'nuevo',
       status:         u.status || 'en_stock',
       unit_cost:      Number(u.unit_cost) || 0,
@@ -11356,6 +11391,28 @@ const productUnitsRepo = {
       notes:          u.notes || '',
     });
     return info.lastInsertRowid;
+  },
+  // Recepción masiva atómica: o entra el lote completo o no entra ninguna
+  // unidad. Evita dejar compras/recepciones a medias ante un duplicado.
+  createMany(productId, units = []) {
+    const product = db.prepare('SELECT id FROM products WHERE id=?').get(Number(productId));
+    if (!product) throw new Error('Producto no encontrado');
+    const list = (Array.isArray(units) ? units : [units]).filter(Boolean);
+    if (!list.length) throw new Error('Agrega al menos un IMEI o serial');
+    if (list.length > 1000) throw new Error('El lote no puede superar 1,000 equipos');
+    const seen = new Set();
+    const clean = list.map(unit => {
+      const imei = String(unit.imei || '').trim();
+      const serial = String(unit.serial || '').trim();
+      const identifier = imei || serial;
+      if (!identifier) throw new Error('Cada equipo necesita IMEI o serial');
+      const key = identifier.toUpperCase();
+      if (seen.has(key)) throw new Error(`El IMEI o serial ${identifier} está repetido en el lote`);
+      seen.add(key);
+      if (this.findByImei(identifier)) throw new Error(`El IMEI o serial ${identifier} ya está registrado`);
+      return { ...unit, product_id:Number(productId), imei:imei || null, serial:serial || null };
+    });
+    return db.transaction(rows => rows.map(unit => this.create(unit)))(clean);
   },
   // Unidades de un producto (opcionalmente filtradas por estado).
   listForProduct(productId, status = null) {
@@ -11492,6 +11549,238 @@ const serviceOrdersRepo = {
     db.prepare('UPDATE product_units SET status=? WHERE id=?').run(status, order.product_unit_id);
   },
 
+  _portalSecret() {
+    let secret = String(settingsRepo.get('service_public_portal_secret') || '').trim();
+    if (!/^[a-f0-9]{64}$/i.test(secret)) {
+      secret = crypto.randomBytes(32).toString('hex');
+      settingsRepo.set('service_public_portal_secret', secret);
+    }
+    return secret;
+  },
+
+  _portalEnabled() {
+    return String(settingsRepo.get('service_public_portal_enabled') || '1') === '1';
+  },
+
+  _signPublicLink(orderId, publicId) {
+    return crypto.createHmac('sha256', this._portalSecret())
+      .update(`service:${Number(orderId)}:${publicId}`)
+      .digest('base64url').slice(0, 32);
+  },
+
+  _tokenForLink(link) {
+    return `${link.public_id}.${this._signPublicLink(link.service_order_id, link.public_id)}`;
+  },
+
+  _findPublicLink(token, { touch = false } = {}) {
+    const match = /^([A-Za-z0-9_-]{20,64})\.([A-Za-z0-9_-]{32})$/.exec(String(token || '').trim());
+    if (!match) return null;
+    const link = db.prepare(`SELECT * FROM service_public_links WHERE public_id=? AND enabled=1
+      AND revoked_at IS NULL AND (expires_at IS NULL OR datetime(expires_at)>datetime('now','localtime'))`).get(match[1]);
+    if (!link) return null;
+    const expected = Buffer.from(this._signPublicLink(link.service_order_id, link.public_id));
+    const supplied = Buffer.from(match[2]);
+    if (expected.length !== supplied.length || !crypto.timingSafeEqual(expected, supplied)) return null;
+    if (touch) {
+      db.prepare(`UPDATE service_public_links SET access_count=access_count+1,
+        last_accessed_at=datetime('now','localtime') WHERE id=?`).run(link.id);
+    }
+    return link;
+  },
+
+  _publicUrl(token, businessId = 'principal') {
+    const safeBusiness = /^[A-Za-z0-9_-]{1,80}$/.test(String(businessId || '')) ? String(businessId) : 'principal';
+    const relativePath = `/r/${safeBusiness}/${token}`;
+    const baseUrl = String(settingsRepo.get('service_public_base_url') || '').trim().replace(/\/+$/, '');
+    return { baseUrl, relativePath, url: baseUrl ? `${baseUrl}${relativePath}` : '' };
+  },
+
+  getPublicAccess(id, { businessId = 'principal', regenerate = false } = {}, user = {}) {
+    const order = db.prepare('SELECT id,number FROM service_orders WHERE id=?').get(Number(id));
+    if (!order) throw new Error('Orden de servicio no encontrada');
+    return db.transaction(() => {
+      if (regenerate) {
+        db.prepare(`UPDATE service_public_links SET enabled=0,revoked_at=datetime('now','localtime')
+          WHERE service_order_id=? AND enabled=1`).run(order.id);
+      }
+      let link = db.prepare(`SELECT * FROM service_public_links WHERE service_order_id=? AND enabled=1
+        AND revoked_at IS NULL AND (expires_at IS NULL OR datetime(expires_at)>datetime('now','localtime'))
+        ORDER BY id DESC LIMIT 1`).get(order.id);
+      if (!link) {
+        const days = Math.max(1, Math.min(3650,
+          Number.parseInt(settingsRepo.get('service_public_link_days'), 10) || 365));
+        const publicId = crypto.randomBytes(24).toString('base64url');
+        const info = db.prepare(`INSERT INTO service_public_links(
+          service_order_id,public_id,expires_at,created_by
+        ) VALUES(?,?,datetime('now','localtime',?),?)`).run(
+          order.id, publicId, `+${days} days`, Number(user.id) || null
+        );
+        link = db.prepare('SELECT * FROM service_public_links WHERE id=?').get(Number(info.lastInsertRowid));
+        this._event(order.id, 'portal', regenerate ? 'Enlace público regenerado' : 'Portal de seguimiento habilitado', '', user);
+      }
+      const token = this._tokenForLink(link);
+      return {
+        order_id: order.id,
+        number: order.number,
+        token,
+        expires_at: link.expires_at,
+        access_count: link.access_count,
+        last_accessed_at: link.last_accessed_at,
+        configured: !!String(settingsRepo.get('service_public_base_url') || '').trim(),
+        ...this._publicUrl(token, businessId),
+      };
+    })();
+  },
+
+  revokePublicAccess(id, user = {}) {
+    const order = db.prepare('SELECT id FROM service_orders WHERE id=?').get(Number(id));
+    if (!order) throw new Error('Orden de servicio no encontrada');
+    return db.transaction(() => {
+      const changes = db.prepare(`UPDATE service_public_links SET enabled=0,revoked_at=datetime('now','localtime')
+        WHERE service_order_id=? AND enabled=1`).run(order.id).changes;
+      if (changes) this._event(order.id, 'portal', 'Enlace público revocado', '', user);
+      return { ok:true, revoked:changes };
+    })();
+  },
+
+  _approvalCodeHash(estimateId, code) {
+    return crypto.createHmac('sha256', this._portalSecret())
+      .update(`approval:${Number(estimateId)}:${String(code)}`).digest('hex');
+  },
+
+  _queueNotification(orderId, type) {
+    if (!['presupuesto','listo','entregado','garantia'].includes(type)) return;
+    db.prepare(`INSERT OR IGNORE INTO service_order_notifications(service_order_id,notification_type)
+      VALUES(?,?)`).run(Number(orderId), type);
+  },
+
+  preparePublicApproval(id, { businessId = 'principal' } = {}, user = {}) {
+    const order = this.getById(id);
+    if (!order || order.workflow_status !== 'esperando_aprobacion') {
+      throw new Error('La orden no está esperando aprobación');
+    }
+    return db.transaction(() => {
+      const estimate = db.prepare(`SELECT * FROM service_order_estimates WHERE service_order_id=? AND version=?`)
+        .get(order.id, order.approval_version);
+      if (!estimate || estimate.status !== 'pendiente') throw new Error('El presupuesto vigente no está pendiente');
+      const code = String(crypto.randomInt(100000, 1000000));
+      db.prepare(`UPDATE service_order_estimates SET public_code_hash=?,public_code_expires_at=datetime('now','localtime','+7 days'),
+        public_attempts=0,public_locked_until=NULL WHERE id=?`).run(this._approvalCodeHash(estimate.id, code), estimate.id);
+      const access = this.getPublicAccess(order.id, { businessId }, user);
+      this._queueNotification(order.id, 'presupuesto');
+      this._event(order.id, 'portal', `Código de aprobación generado para presupuesto v${estimate.version}`,
+        'Válido por 7 días', user);
+      const business = String(settingsRepo.get('biz_name') || 'VELO TECH POS');
+      const message = `Hola ${order.customer_name}. ${business} preparó el presupuesto de la orden ${order.number} por RD$${Number(estimate.amount).toFixed(2)}. Revísalo aquí: ${access.url || access.relativePath} Código: ${code}`;
+      return { ...access, code, amount:estimate.amount, version:estimate.version, message };
+    })();
+  },
+
+  publicLookup(token, { touch = true } = {}) {
+    if (!this._portalEnabled()) return null;
+    const link = this._findPublicLink(token, { touch });
+    if (!link) return null;
+    const order = this.getById(link.service_order_id);
+    if (!order) return null;
+    const estimate = order.estimates.find(row => Number(row.version) === Number(order.approval_version)) || null;
+    const identifier = String(order.imei || order.serial || order.imei2 || '');
+    const safeCustomer = String(order.customer_name || 'Cliente').trim().split(/\s+/)[0] || 'Cliente';
+    const visibleEvents = (order.events || []).filter(event =>
+      ['recepcion','estado','presupuesto','aprobacion','calidad','entrega','cancelacion'].includes(event.event_type)
+    ).map(event => ({ title:event.title, to_status:event.to_status, created_at:event.created_at }));
+    return {
+      business: {
+        name:String(settingsRepo.get('biz_name') || 'VELO TECH POS'),
+        phone:String(settingsRepo.get('biz_phone') || ''),
+      },
+      order: {
+        number:order.number, customer_name:safeCustomer, device_desc:order.device_desc,
+        brand:order.brand, model:order.model, device_color:order.device_color,
+        identifier_hint:identifier.length >= 4 ? `••••${identifier.slice(-4)}` : '',
+        problem:order.problem, diagnosis:order.diagnosis, workflow_status:order.workflow_status,
+        priority:order.priority, promised_at:order.promised_at, quote_amount:order.quote_amount,
+        approval_version:order.approval_version, approved_amount:order.approved_amount,
+        approved_at:order.approved_at, quality_checked_at:order.quality_checked_at,
+        service_warranty_days:order.service_warranty_days, warranty_until:order.warranty_until,
+        created_at:order.created_at, delivered_at:order.delivered_at,
+        items:(order.items || []).map(item => ({
+          kind:item.kind, description:item.description, qty:item.qty, unit_price:item.unit_price,
+        })),
+        events:visibleEvents,
+        can_decide:order.workflow_status === 'esperando_aprobacion' && estimate?.status === 'pendiente'
+          && !!estimate.public_code_hash && (!estimate.public_code_expires_at
+            || db.prepare("SELECT datetime(?)>datetime('now','localtime') ok").get(estimate.public_code_expires_at).ok === 1),
+        document_available:order.workflow_status === 'entregado',
+      },
+    };
+  },
+
+  publicDecision(token, decision = {}, requestMeta = {}) {
+    if (!this._portalEnabled()) throw new Error('El portal está deshabilitado');
+    const link = this._findPublicLink(token);
+    if (!link) throw new Error('Enlace inválido o vencido');
+    const order = this.getById(link.service_order_id);
+    if (!order || order.workflow_status !== 'esperando_aprobacion') throw new Error('El presupuesto ya no está pendiente');
+    const estimate = db.prepare(`SELECT * FROM service_order_estimates WHERE service_order_id=? AND version=?`)
+      .get(order.id, order.approval_version);
+    if (!estimate || estimate.status !== 'pendiente') throw new Error('El presupuesto ya fue respondido');
+    if (estimate.public_locked_until && db.prepare("SELECT datetime(?)>datetime('now','localtime') ok").get(estimate.public_locked_until).ok) {
+      throw new Error('Demasiados intentos. Espera 15 minutos');
+    }
+    if (!estimate.public_code_expires_at
+      || !db.prepare("SELECT datetime(?)>datetime('now','localtime') ok").get(estimate.public_code_expires_at).ok) {
+      throw new Error('El código venció. Solicita uno nuevo a la tienda');
+    }
+    const code = String(decision.code || '').trim();
+    const supplied = Buffer.from(this._approvalCodeHash(estimate.id, code));
+    const expected = Buffer.from(String(estimate.public_code_hash || ''));
+    if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {
+      const attempts = Number(estimate.public_attempts || 0) + 1;
+      db.prepare(`UPDATE service_order_estimates SET public_attempts=?,
+        public_locked_until=CASE WHEN ?>=5 THEN datetime('now','localtime','+15 minutes') ELSE NULL END WHERE id=?`)
+        .run(attempts, attempts, estimate.id);
+      throw new Error(attempts >= 5 ? 'Demasiados intentos. Espera 15 minutos' : 'Código incorrecto');
+    }
+    const customerName = String(decision.customer_name || '').trim().slice(0, 100);
+    if (customerName.length < 2) throw new Error('Escribe el nombre de quien responde');
+    if (decision.consent !== true) throw new Error('Confirma que revisaste el presupuesto');
+    const approved = decision.approved === true;
+    const notes = `Portal del cliente · IP ${String(requestMeta.ip || 'no disponible').slice(0, 80)}`;
+    const updated = this.decideEstimate(order.id, {
+      approved, method:'portal_cliente', customer_name:customerName, notes,
+    }, { name:`Portal · ${customerName}` });
+    db.prepare(`UPDATE service_order_estimates SET public_decided_at=datetime('now','localtime'),
+      public_code_hash='',public_attempts=0,public_locked_until=NULL WHERE id=?`).run(estimate.id);
+    return { order:updated, public:this.publicLookup(token, { touch:false }) };
+  },
+
+  getSharePayload(id, type = 'estado', { businessId = 'principal' } = {}, user = {}) {
+    const order = this.getById(id);
+    if (!order) throw new Error('Orden de servicio no encontrada');
+    const access = this.getPublicAccess(order.id, { businessId }, user);
+    const url = access.url || access.relativePath;
+    const status = String(order.workflow_status || '').replaceAll('_', ' ');
+    let message = `Hola ${order.customer_name}. La orden ${order.number} de ${order.device_desc} está: ${status}. Seguimiento: ${url}`;
+    if (type === 'listo') {
+      message = `Hola ${order.customer_name}. Tu equipo ${order.device_desc}, orden ${order.number}, ya está listo para retirar. Consulta los detalles: ${url}`;
+      this._queueNotification(order.id, 'listo');
+    } else if (type === 'entregado') {
+      message = `Hola ${order.customer_name}. Aquí puedes consultar el documento y la garantía de la orden ${order.number}: ${url}`;
+      this._queueNotification(order.id, 'entregado');
+    }
+    return { ...access, type, phone:order.customer_phone || '', customer_name:order.customer_name, message };
+  },
+
+  markNotificationSent(id, type, user = {}) {
+    const notification = db.prepare(`SELECT * FROM service_order_notifications
+      WHERE service_order_id=? AND notification_type=?`).get(Number(id), String(type || ''));
+    if (!notification) return { ok:true, changed:0 };
+    const changed = db.prepare(`UPDATE service_order_notifications SET status='prepared',sent_by=?,
+      sent_at=datetime('now','localtime') WHERE id=?`).run(Number(user.id) || null, notification.id).changes;
+    if (changed) this._event(Number(id), 'notificacion', `Aviso ${type} preparado para WhatsApp`, '', user);
+    return { ok:true, changed };
+  },
+
   list({ status = '', search = '', limit = 200 } = {}) {
     const where = [];
     const params = [];
@@ -11539,6 +11828,7 @@ const serviceOrdersRepo = {
     row.items = db.prepare('SELECT * FROM service_order_items WHERE service_order_id=? ORDER BY id').all(row.id);
     row.events = db.prepare('SELECT * FROM service_order_events WHERE service_order_id=? ORDER BY id DESC').all(row.id);
     row.estimates = db.prepare('SELECT * FROM service_order_estimates WHERE service_order_id=? ORDER BY version DESC').all(row.id);
+    row.notifications = db.prepare('SELECT * FROM service_order_notifications WHERE service_order_id=? ORDER BY id DESC').all(row.id);
     if (row.sale_id) row.sale = salesRepo.getById(row.sale_id);
     return row;
   },
@@ -11589,6 +11879,7 @@ const serviceOrdersRepo = {
       if (unit) db.prepare("UPDATE product_units SET status='servicio' WHERE id=?").run(unit.id);
       this._event(orderId, 'recepcion', 'Equipo recibido',
         `${device}${identifier ? ` · ${identifier}` : ''}`, user, '', 'recepcion');
+      this.getPublicAccess(orderId, {}, user);
       return this.getById(orderId);
     })();
   },
@@ -11679,6 +11970,7 @@ const serviceOrdersRepo = {
       this._setWorkflow(current.id, nextStatus);
       this._event(current.id, 'estado', `Estado: ${nextStatus.replaceAll('_',' ')}`, '', user,
         current.workflow_status, nextStatus);
+      if (nextStatus === 'listo') this._queueNotification(current.id, 'listo');
       return this.getById(current.id);
     })();
   },
@@ -11705,6 +11997,7 @@ const serviceOrdersRepo = {
         status='presupuesto',updated_at=datetime('now','localtime') WHERE id=?`).run(version, snapshot.amount, current.id);
       this._event(current.id, 'presupuesto', `Presupuesto v${version} enviado`, `RD$${snapshot.amount.toFixed(2)}`,
         user, current.workflow_status, 'esperando_aprobacion');
+      this._queueNotification(current.id, 'presupuesto');
       return this.getById(current.id);
     })();
   },
@@ -11877,6 +12170,7 @@ const serviceOrdersRepo = {
       this._restoreUnitStatus(order);
       this._event(order.id, 'entrega', 'Equipo entregado y facturado', `Venta #${saleId} · garantía ${warrantyDays} días`,
         user, order.workflow_status, 'entregado');
+      this._queueNotification(order.id, 'entregado');
     })();
     return { order: this.getById(order.id), saleResult };
   },

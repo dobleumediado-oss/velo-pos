@@ -4,13 +4,22 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$serviceId = 'VeloPOSServer'
-$root = Join-Path $env:ProgramData 'Velo POS Server'
+$isTech = ([System.IO.Path]::GetFileNameWithoutExtension($AppExe) -like '*Tech*')
+$serviceId = if ($isTech) { 'VeloTechPOSServer' } else { 'VeloPOSServer' }
+$rootName = if ($isTech) { 'Velo Tech POS Server' } else { 'Velo POS Server' }
+$serviceName = if ($isTech) { 'Velo Tech POS Server Service' } else { 'Velo POS Server Service' }
+$serviceDescription = if ($isTech) {
+  'Servidor local permanente de Velo Tech POS para terminales, inventario IMEI y portal de clientes.'
+} else {
+  'Servidor local permanente de Velo POS para terminales LAN y Tailscale.'
+}
+$firewallPrefix = if ($isTech) { 'Velo Tech POS Server' } else { 'Velo POS Server' }
+$root = Join-Path $env:ProgramData $rootName
 $dataDir = Join-Path $root 'data'
 $serviceDir = Join-Path $root 'service'
 $backupDir = Join-Path $root 'backups'
-$serviceExe = Join-Path $serviceDir 'VeloPOSServer.exe'
-$serviceXml = Join-Path $serviceDir 'VeloPOSServer.xml'
+$serviceExe = Join-Path $serviceDir "$serviceId.exe"
+$serviceXml = Join-Path $serviceDir "$serviceId.xml"
 $sourceWrapper = Join-Path (Split-Path -Parent $AppExe) 'resources\service\WinSW-x64.exe'
 
 function Stop-And-Remove-Service {
@@ -26,8 +35,8 @@ function Stop-And-Remove-Service {
 
 if ($Action -eq 'Uninstall') {
   Stop-And-Remove-Service
-  Get-NetFirewallRule -DisplayName 'Velo POS Server (Tailscale)' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-  Get-NetFirewallRule -DisplayName 'Velo POS Server (LAN privada)' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+  Get-NetFirewallRule -DisplayName "$firewallPrefix (Tailscale)" -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+  Get-NetFirewallRule -DisplayName "$firewallPrefix (LAN privada)" -ErrorAction SilentlyContinue | Remove-NetFirewallRule
   # Los datos y respaldos se conservan intencionalmente en ProgramData.
   exit 0
 }
@@ -36,10 +45,11 @@ New-Item -ItemType Directory -Force -Path $dataDir, $serviceDir, $backupDir | Ou
 Stop-And-Remove-Service
 
 if (-not (Test-Path (Join-Path $dataDir 'velo.db'))) {
-  $candidates = @(
-    (Join-Path $env:APPDATA 'Velo POS\data'),
-    (Join-Path $env:APPDATA 'velo-pos\data')
-  )
+  $candidates = if ($isTech) {
+    @((Join-Path $env:APPDATA 'Velo Tech POS\data'), (Join-Path $env:APPDATA 'velo-tech-pos\data'))
+  } else {
+    @((Join-Path $env:APPDATA 'Velo POS\data'), (Join-Path $env:APPDATA 'velo-pos\data'))
+  }
   $sourceData = $candidates | Where-Object { Test-Path (Join-Path $_ 'velo.db') } | Select-Object -First 1
   if ($sourceData) {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -50,10 +60,11 @@ if (-not (Test-Path (Join-Path $dataDir 'velo.db'))) {
   }
 }
 
-$aiKeyCandidates = @(
-  (Join-Path $env:APPDATA 'Velo POS\velo-ai.key'),
-  (Join-Path $env:APPDATA 'velo-pos\velo-ai.key')
-)
+$aiKeyCandidates = if ($isTech) {
+  @((Join-Path $env:APPDATA 'Velo Tech POS\velo-ai.key'), (Join-Path $env:APPDATA 'velo-tech-pos\velo-ai.key'))
+} else {
+  @((Join-Path $env:APPDATA 'Velo POS\velo-ai.key'), (Join-Path $env:APPDATA 'velo-pos\velo-ai.key'))
+}
 $aiKey = $aiKeyCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 if ($aiKey -and -not (Test-Path (Join-Path $dataDir 'velo-ai.key'))) {
   Copy-Item -Path $aiKey -Destination (Join-Path $dataDir 'velo-ai.key') -Force
@@ -69,8 +80,8 @@ $escapedData = [System.Security.SecurityElement]::Escape($dataDir)
 $xml = @"
 <service>
   <id>$serviceId</id>
-  <name>Velo POS Server Service</name>
-  <description>Servidor local permanente de Velo POS para terminales LAN y Tailscale.</description>
+  <name>$serviceName</name>
+  <description>$serviceDescription</description>
   <executable>$escapedExe</executable>
   <arguments>--velo-server-service --velo-root-data-dir=&quot;$escapedData&quot; --disable-gpu</arguments>
   <startmode>Automatic</startmode>
@@ -94,11 +105,11 @@ New-Item -ItemType Directory -Force -Path (Join-Path $root 'logs') | Out-Null
 & sc.exe config $serviceId start= delayed-auto | Out-Null
 & sc.exe failure $serviceId reset= 86400 actions= restart/5000/restart/15000/restart/60000 | Out-Null
 
-Get-NetFirewallRule -DisplayName 'Velo POS Server (Tailscale)' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-Get-NetFirewallRule -DisplayName 'Velo POS Server (LAN privada)' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-New-NetFirewallRule -DisplayName 'Velo POS Server (Tailscale)' -Direction Inbound -Action Allow `
+Get-NetFirewallRule -DisplayName "$firewallPrefix (Tailscale)" -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+Get-NetFirewallRule -DisplayName "$firewallPrefix (LAN privada)" -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+New-NetFirewallRule -DisplayName "$firewallPrefix (Tailscale)" -Direction Inbound -Action Allow `
   -Protocol TCP -LocalPort 8443 -RemoteAddress '100.64.0.0/10' -Profile Any | Out-Null
-New-NetFirewallRule -DisplayName 'Velo POS Server (LAN privada)' -Direction Inbound -Action Allow `
+New-NetFirewallRule -DisplayName "$firewallPrefix (LAN privada)" -Direction Inbound -Action Allow `
   -Protocol TCP -LocalPort 8443 -RemoteAddress LocalSubnet -Profile Any | Out-Null
 
 & $serviceExe start $serviceXml

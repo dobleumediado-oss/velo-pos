@@ -23,10 +23,15 @@ function _sendJson(res, status, obj) {
   res.end(body);
 }
 
+function _isLoopback(address) {
+  const remote = String(address || '');
+  return remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
+}
+
 // Arranca el servidor. Retorna { server, port, close() }.
 // Config por funciones para leer siempre el valor vigente (clave/allowlist pueden
 // cambiar en caliente sin reiniciar).
-function startRpcServer({ port = 8443, host = '0.0.0.0', getAccessKey, getAllowlist, dispatch, denyChannel, onLog } = {}) {
+function startRpcServer({ port = 8443, host = '0.0.0.0', getAccessKey, getAllowlist, dispatch, publicHandler, denyChannel, onLog } = {}) {
   const log = (level, msg, extra) => { try { onLog && onLog(level, msg, extra); } catch {} };
 
   // ── Push tiempo real (Fase C): clientes SSE conectados ──────────────────────
@@ -40,6 +45,18 @@ function startRpcServer({ port = 8443, host = '0.0.0.0', getAccessKey, getAllowl
   if (heartbeat.unref) heartbeat.unref();
 
   const server = http.createServer((req, res) => {
+    // El portal del cliente entra exclusivamente desde el supervisor local.
+    // En instalaciones embebidas nunca se expone esta ruta por LAN/Tailscale.
+    if (String(req.url || '').startsWith('/r/')) {
+      if (!_isLoopback(req.socket.remoteAddress) || typeof publicHandler !== 'function') {
+        return _sendJson(res, 403, conn.makeResponse(false, null, conn.RPC_ERRORS.FORBIDDEN));
+      }
+      return Promise.resolve(publicHandler(req, res)).catch(error => {
+        log('error', 'portal público falló', { error:error.message });
+        if (!res.headersSent) _sendJson(res, 500, conn.makeResponse(false, null, conn.RPC_ERRORS.HANDLER_ERROR));
+      });
+    }
+
     if (req.method === 'GET' && req.url === '/health') {
       return _sendJson(res, 200, { ok: true, service: 'velo-pos', v: 1 });
     }

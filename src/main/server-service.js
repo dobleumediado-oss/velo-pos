@@ -182,6 +182,7 @@ function createWorkerManager({ rootDataDir, launchWorker, onLog = () => {} }) {
 function startServerService({
   rootDataDir,
   port,
+  publicPort,
   host = '0.0.0.0',
   launchWorker,
   onLog = () => {},
@@ -263,6 +264,45 @@ function startServerService({
       else res.end();
     });
     req.on('close', () => upstream.destroy());
+  };
+
+  const proxyPublicPortal = (worker, req, res) => {
+    // No confiar en X-Forwarded-For recibido desde Internet. Funnel entra por
+    // este listener local y la limitación principal también incluye el token.
+    const forwardedFor = String(req.socket.remoteAddress || '').trim();
+    const publicHeaders = {
+      Host: req.headers.host || 'localhost',
+      'User-Agent': req.headers['user-agent'] || '',
+      'X-Forwarded-For': forwardedFor,
+      'X-Forwarded-Proto': 'https',
+    };
+    if (req.headers['content-type']) publicHeaders['Content-Type'] = req.headers['content-type'];
+    if (req.headers['content-length']) publicHeaders['Content-Length'] = req.headers['content-length'];
+    if (req.headers.origin) publicHeaders.Origin = req.headers.origin;
+    const upstream = http.request({
+      host: '127.0.0.1',
+      port: worker.port,
+      path: req.url,
+      method: req.method,
+      headers: publicHeaders,
+      timeout: 10000,
+    }, upstreamRes => {
+      const allowedHeaders = {};
+      for (const name of [
+        'content-type','content-length','cache-control','pragma','x-content-type-options',
+        'x-frame-options','x-robots-tag','referrer-policy','permissions-policy','content-security-policy',
+      ]) {
+        if (upstreamRes.headers[name] != null) allowedHeaders[name] = upstreamRes.headers[name];
+      }
+      res.writeHead(upstreamRes.statusCode || 502, allowedHeaders);
+      upstreamRes.pipe(res);
+    });
+    upstream.on('timeout', () => upstream.destroy(new Error('PORTAL_TIMEOUT')));
+    upstream.on('error', error => {
+      log('error', 'portal público no disponible', { businessId:worker.business.id, error:error.message });
+      if (!res.headersSent) _json(res, 503, { ok:false, error:'PORTAL_UNAVAILABLE' });
+    });
+    req.pipe(upstream);
   };
 
   const server = http.createServer(async (req, res) => {
@@ -386,13 +426,42 @@ function startServerService({
     });
   });
 
+  // Puerto separado y solo local: Tailscale Funnel debe apuntar aquí. De esta
+  // manera el portal público nunca comparte listener con RPC, administración o SSE.
+  const portalServer = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/health') {
+      return _json(res, 200, { ok:true, service:'velo-service-portal', workers:manager.list().length });
+    }
+    if (!['GET','POST'].includes(req.method || '')) return _json(res, 405, { ok:false, error:'METHOD_NOT_ALLOWED' });
+    if (Number(req.headers['content-length'] || 0) > 16 * 1024) {
+      return _json(res, 413, { ok:false, error:'PAYLOAD_TOO_LARGE' });
+    }
+    const match = /^\/r\/([A-Za-z0-9_-]{1,80})\//.exec(String(req.url || ''));
+    if (!match) return _json(res, 404, { ok:false, error:'NOT_FOUND' });
+    const worker = manager.get(match[1]);
+    if (!worker) return _json(res, 404, { ok:false, error:'NOT_FOUND' });
+    return proxyPublicPortal(worker, req, res);
+  });
+  const listenPublicPort = publicPort === 0 ? 0 : (Number(publicPort) || config.portalPort || 8787);
+  portalServer.on('error', error => log('error', 'portal gateway error', { error:error.message }));
+  portalServer.listen(listenPublicPort, '127.0.0.1', () => {
+    log('info', 'Portal de clientes listo para Tailscale Funnel', {
+      host:'127.0.0.1', port:listenPublicPort,
+    });
+  });
+
   return {
     server,
+    portalServer,
     manager,
     port: listenPort,
+    publicPort: listenPublicPort,
     close: async () => {
       await manager.close();
-      await new Promise(resolve => server.close(resolve));
+      await Promise.all([
+        new Promise(resolve => server.close(resolve)),
+        new Promise(resolve => portalServer.close(resolve)),
+      ]);
     },
   };
 }

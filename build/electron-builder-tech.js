@@ -23,11 +23,19 @@ module.exports = {
   extraMetadata: { veloVertical: 'tech' },
   win: {
     ...pkg.build.win,
+    icon: 'src/assets/velo-tech-icon.ico',
     requestedExecutionLevel: 'asInvoker',
+  },
+  mac: {
+    ...pkg.build.mac,
+    icon: 'src/assets/velo-tech-icon.png',
   },
   nsis: {
     ...pkg.build.nsis,
     shortcutName: 'Velo Tech POS',
+    installerIcon: 'src/assets/velo-tech-icon.ico',
+    uninstallerIcon: 'src/assets/velo-tech-icon.ico',
+    installerHeaderIcon: 'src/assets/velo-tech-icon.ico',
   },
   publish: {
     ...pkg.build.publish,

@@ -42,11 +42,12 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
 });
 const path = require('path');
 const fs   = require('fs');
+const http = require('http');
 const { spawn } = require('child_process');
 const bcrypt = require('bcryptjs');
 const { sqliteIdent } = require('./lib/sql-safe');
 const { normalizeFinAcct: _normalizeFinAcct, normalizeFinMov: _normalizeFinMov } = require('./lib/normalize-financial');
-const { isAllowedExternalUrl } = require('./lib/url-safe');
+const { isAllowedExternalUrl, isAllowedPortalBaseUrl } = require('./lib/url-safe');
 const { buildWhatsAppUrls } = require('./lib/whatsapp-url');
 const { canManageInventory, modulePermission } = require('./lib/user-operational-permissions');
 const {
@@ -233,13 +234,21 @@ autoUpdater.setFeedURL({
   releaseType: 'release',
 });
 if (app.isPackaged && fs.existsSync(path.join(process.resourcesPath, 'server-edition.json'))) {
-  // La edición Servidor tiene su propio manifiesto `server.yml`; así una
-  // actualización nunca sustituye el servicio por el instalador de Terminal.
-  autoUpdater.channel = 'server';
+  // Cada servidor usa el canal declarado en su marcador. TECH consume
+  // `server-tech.yml`; repuestos conserva `server.yml`.
+  try {
+    const marker = JSON.parse(fs.readFileSync(path.join(process.resourcesPath, 'server-edition.json'), 'utf8'));
+    autoUpdater.channel = marker.channel === 'server-tech' ? 'server-tech' : 'server';
+  } catch { autoUpdater.channel = 'server'; }
 } else if (app.isPackaged && String(require('./package.json').veloVertical || '') === 'tech') {
   // VELO TECH POS se publica como aplicación separada y consume únicamente
   // `latest-tech.yml`; nunca debe instalar por error la edición de repuestos.
   autoUpdater.channel = 'latest-tech';
+}
+
+function _runtimeProductName() {
+  try { return require('./src/verticals').getActiveVertical()?.product?.name || 'Velo POS'; }
+  catch { return 'Velo POS'; }
 }
 
 // ── Estado global del updater (para el panel de Configuración) ──
@@ -276,7 +285,7 @@ function bindAutoUpdaterEvents() {
       type:      'info',
       title:     'Actualización disponible',
       message:   `Nueva versión ${info.version} disponible`,
-      detail:    'Hay una nueva versión de Velo POS. ¿Deseas descargarla ahora?\nLa instalación ocurrirá cuando cierres el programa.',
+      detail:    `Hay una nueva versión de ${_runtimeProductName()}. ¿Deseas descargarla ahora?\nLa instalación ocurrirá cuando cierres el programa.`,
       buttons:   ['Descargar ahora', 'Más tarde'],
       defaultId: 0,
       cancelId:  1,
@@ -324,7 +333,7 @@ function bindAutoUpdaterEvents() {
       type:      'info',
       title:     '¡Actualización lista!',
       message:   `Versión ${info.version} descargada`,
-      detail:    'Se instalará automáticamente cuando cierres Velo POS.\nSi tienes ventas pendientes, termínalas antes de reiniciar.\nTus datos no se verán afectados.',
+      detail:    `Se instalará automáticamente cuando cierres ${_runtimeProductName()}.\nSi tienes operaciones pendientes, termínalas antes de reiniciar.\nTus datos no se verán afectados.`,
       buttons:   ['Instalar y reiniciar ahora', 'Instalar al cerrar'],
       defaultId: 1,   // "Instalar al cerrar" como opción por defecto (más segura)
       cancelId:  1,
@@ -497,12 +506,12 @@ function createWindow() {
     if (isQuitting) return;
     const choice = dialog.showMessageBoxSync(mainWindow, {
       type: 'question',
-      buttons: ['Cancelar', 'Cerrar Velo POS'],
+      buttons: ['Cancelar', `Cerrar ${_runtimeProductName()}`],
       defaultId: 0,
       cancelId: 0,
       noLink: true,
-      title: 'Cerrar Velo POS',
-      message: '¿Seguro que deseas cerrar Velo POS?',
+      title: `Cerrar ${_runtimeProductName()}`,
+      message: `¿Seguro que deseas cerrar ${_runtimeProductName()}?`,
       detail: 'Se cerrará la aplicación. Verifica que no tengas una venta o un cierre de caja en curso.',
     });
     if (choice === 0) {
@@ -1228,7 +1237,7 @@ ipcMain.handle('connection:setAllowedTerminal', async (_, { requestUserId, termi
 ipcMain.handle('connection:setTerminalBusinesses', async (_, { requestUserId, terminalId, businessIds } = {}) => {
   try {
     if (!_connRequireSA(requestUserId)) return { ok: false, error: 'Solo el superadmin' };
-    if (!_installedServiceDataDir()) return { ok: false, error: 'Disponible únicamente con Velo POS Server Service' };
+    if (!_installedServiceDataDir()) return { ok: false, error: `Disponible únicamente con ${_runtimeProductName()} Server Service` };
     return await require('./src/main/ipc-bridge').forwardToServer(
       'serverAdmin:setTerminalBusinesses',
       {
@@ -1615,12 +1624,8 @@ ipcMain.handle('productUnits:create', async (_, { productId, units, requestUserI
     if (!prod) return { ok: false, error: 'Producto no encontrado' };
     // Registrar equipos marca el producto como serializado automáticamente.
     if (!prod.serialized) productUnitsRepo.setSerialized(productId, true);
-    const list = Array.isArray(units) ? units : [units];
-    const created = [];
-    for (const u of list) {
-      if (!u) continue;
-      created.push(productUnitsRepo.create({ ...u, product_id: productId }));
-    }
+    const list = (Array.isArray(units) ? units : [units]).filter(Boolean);
+    const created = productUnitsRepo.createMany(productId, list);
     audit(requestUserId, reqUser.name, 'equipos_registrados', 'products', productId, `${created.length} unidad(es)`);
     return { ok: true, created: created.length, ids: created };
   } catch (e) { return { ok: false, error: e.message }; }
@@ -1761,6 +1766,114 @@ ipcMain.handle('serviceOrders:saveTechnician', async (_, data = {}) => {
 ipcMain.handle('serviceOrders:report', async (_, data = {}) => {
   try { _serviceUser(data.requestUserId); return { ok:true, data:serviceOrdersRepo.report() }; }
   catch (e) { return { ok:false, error:e.message }; }
+});
+
+function _servicePortalBusinessId() {
+  return String(RUNTIME.businessId || currentBusinessId() || 'principal');
+}
+
+function _checkServicePortalHealth(port) {
+  const started = Date.now();
+  return new Promise(resolve => {
+    let finished = false;
+    const finish = (online, detail = '') => {
+      if (finished) return;
+      finished = true;
+      resolve({
+        online,
+        detail,
+        response_ms: Date.now() - started,
+        checked_at: new Date().toISOString(),
+      });
+    };
+    const req = http.get({
+      host:'127.0.0.1', port:Number(port) || 8787, path:'/health', timeout:1500,
+      headers:{ Accept:'application/json' },
+    }, res => {
+      res.resume();
+      res.on('end', () => finish(res.statusCode === 200, `HTTP ${res.statusCode || 0}`));
+    });
+    req.on('timeout', () => req.destroy(new Error('TIMEOUT')));
+    req.on('error', error => finish(false,
+      error.code === 'ECONNREFUSED' ? 'No está escuchando' : error.message));
+  });
+}
+ipcMain.handle('serviceOrders:getPublicAccess', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    return { ok:true, data:serviceOrdersRepo.getPublicAccess(data.id,
+      { businessId:_servicePortalBusinessId() }, reqUser) };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:regeneratePublicAccess', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    const result = serviceOrdersRepo.getPublicAccess(data.id,
+      { businessId:_servicePortalBusinessId(), regenerate:true }, reqUser);
+    audit(reqUser.id, reqUser.name, 'servicio_portal_regenerado', 'service_orders', data.id, result.number);
+    return { ok:true, data:result };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:revokePublicAccess', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    const result = serviceOrdersRepo.revokePublicAccess(data.id, reqUser);
+    audit(reqUser.id, reqUser.name, 'servicio_portal_revocado', 'service_orders', data.id, 'Enlace revocado');
+    return { ok:true, data:result };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:preparePublicApproval', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    return { ok:true, data:serviceOrdersRepo.preparePublicApproval(data.id,
+      { businessId:_servicePortalBusinessId() }, reqUser) };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:getSharePayload', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    return { ok:true, data:serviceOrdersRepo.getSharePayload(data.id, data.type || 'estado',
+      { businessId:_servicePortalBusinessId() }, reqUser) };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:markNotificationSent', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    return { ok:true, data:serviceOrdersRepo.markNotificationSent(data.id, data.type, reqUser) };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:getPortalConfig', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    const portalPort = Number(settingsRepo.get('service_public_port')) || 8787;
+    const localStatus = await _checkServicePortalHealth(portalPort);
+    return { ok:true, data:{
+      enabled:String(settingsRepo.get('service_public_portal_enabled') || '1') === '1',
+      base_url:String(settingsRepo.get('service_public_base_url') || ''),
+      port:portalPort,
+      link_days:Number(settingsRepo.get('service_public_link_days')) || 365,
+      business_id:_servicePortalBusinessId(),
+      can_manage:['admin','superadmin'].includes(reqUser.role),
+      local_status:localStatus,
+      funnel_command:`tailscale funnel --bg ${portalPort}`,
+    }};
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:savePortalConfig', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    if (!['admin','superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede configurar el portal');
+    const baseUrl = String(data.base_url || '').trim().replace(/\/+$/, '');
+    if (baseUrl && !isAllowedPortalBaseUrl(baseUrl, { allowLocal:true })) {
+      throw new Error('Usa la dirección HTTPS entregada por Tailscale Funnel');
+    }
+    const days = Math.max(1, Math.min(3650, Number.parseInt(data.link_days, 10) || 365));
+    settingsRepo.set('service_public_base_url', baseUrl);
+    settingsRepo.set('service_public_link_days', String(days));
+    settingsRepo.set('service_public_portal_enabled', data.enabled === false ? '0' : '1');
+    audit(reqUser.id, reqUser.name, 'servicio_portal_configurado', 'settings', 0, baseUrl || 'sin URL pública');
+    return { ok:true, data:{ base_url:baseUrl,link_days:days,enabled:data.enabled !== false } };
+  } catch (e) { return { ok:false, error:e.message }; }
 });
 
 ipcMain.handle('products:getMovements', async (_, { productId }) => {
@@ -7357,6 +7470,7 @@ ipcMain.handle('ecf:getLog', async (_, { limit = 50, offset = 0, requestUserId }
 let _rpcServer = null;
 let _syncStream = null;
 let _serverService = null;
+let _publicPortalServer = null;
 function setupMultiTerminal() {
   const bridge = require('./src/main/ipc-bridge');
   const conn   = require('./src/main/connection');
@@ -7406,6 +7520,12 @@ function setupMultiTerminal() {
       getAccessKey: () => serviceSecurity()?.accessKey || settingsRepo.get('connection_access_key') || '',
       getAllowlist: () => serviceSecurity()?.allowlist || conn.parseAllowlist(settingsRepo.get('connection_allowlist')),
       dispatch: bridge.dispatch,
+      publicHandler: RUNTIME.worker
+        ? require('./src/main/service-portal').createServicePortalHandler({
+            repo: serviceOrdersRepo,
+            businessId: RUNTIME.businessId || 'principal',
+          })
+        : null,
       denyChannel: (ch) => SERVER_DENY.has(ch),
       onLog: (lvl, msg, extra) => { try { (lvl === 'error' ? logError : lvl === 'warn' ? logWarn : logInfo)('rpc', msg, extra); } catch {} },
     });
@@ -7467,6 +7587,23 @@ function setupMultiTerminal() {
     } catch (e) { logError('multiterminal', 'SSE cliente falló: ' + e.message); }
   } else {
     logInfo('multiterminal', 'Modo de conexión', { mode });
+  }
+
+  // En una instalación TECH local o con servidor embebido, el portal escucha
+  // únicamente en localhost. El listener se mantiene listo y el repositorio
+  // corta el acceso inmediatamente cuando el administrador deshabilita el portal.
+  if (!RUNTIME.worker && mode !== 'client'
+      && require('./src/verticals').activeVerticalId() === 'tech') {
+    try {
+      _publicPortalServer = require('./src/main/service-portal').startServicePortalServer({
+        repo: serviceOrdersRepo,
+        businessId: currentBusinessId() || 'principal',
+        port: Number(settingsRepo.get('service_public_port')) || 8787,
+        onLog: (lvl, msg, extra) => {
+          try { (lvl === 'error' ? logError : logInfo)('service-portal', msg, extra); } catch {}
+        },
+      });
+    } catch (e) { logWarn('service-portal', 'No pudo iniciar: ' + e.message); }
   }
 }
 
@@ -7569,7 +7706,7 @@ app.whenReady().then(async () => {
           try { (lvl === 'error' ? logError : lvl === 'warn' ? logWarn : logInfo)('server-service', msg, extra); } catch {}
         },
       });
-      logInfo('server-service', `Servicio Velo POS iniciado — v${APP_VERSION}`, {
+      logInfo('server-service', `Servicio ${_runtimeProductName()} iniciado — v${APP_VERSION}`, {
         dataDir: DATA_DIR,
         port: _serverService.port,
       });
@@ -7585,7 +7722,7 @@ app.whenReady().then(async () => {
 
   // Logger persistente + manejadores globales de error (Fase 2)
   initLogger(DATA_DIR);
-  logInfo('app', `Velo POS iniciando — v${APP_VERSION}`);
+  logInfo('app', `${_runtimeProductName()} iniciando — v${APP_VERSION}`);
   _bindProcessErrors();
 
   try {
@@ -7608,6 +7745,10 @@ app.whenReady().then(async () => {
     // Aditivo e idempotente; en VELO POS siempre 'auto_parts'. No altera negocio.
     try { settingsRepo.set('business_vertical', require('./src/verticals').activeVerticalId()); }
     catch (e) { logWarn('suite', 'no se pudo fijar business_vertical: ' + e.message); }
+    if (require('./src/verticals').activeVerticalId() === 'tech') {
+      try { require('./lib/tech-catalog').ensureTechInitialCatalog(db, settingsRepo); }
+      catch (e) { logWarn('suite', 'no se pudo preparar el catálogo TECH: ' + e.message); }
+    }
     await _configureInstalledServerConsole();
     if (ACTIVE_BUSINESS_ID) {
       logInfo('business', 'Negocio activo al iniciar', {
@@ -7663,6 +7804,7 @@ app.on('before-quit', () => {
   if (_syncStream) { try { _syncStream.close(); } catch {} _syncStream = null; }
   if (_rpcServer) { try { _rpcServer.close(); } catch {} _rpcServer = null; }
   if (_serverService) { try { _serverService.close(); } catch {} _serverService = null; }
+  if (_publicPortalServer) { try { _publicPortalServer.close(); } catch {} _publicPortalServer = null; }
   const dbInst = require('./database').getDB();
   if (dbInst) dbInst.close();
 });

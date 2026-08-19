@@ -1,6 +1,6 @@
 {
   "name": "velo-pos",
-  "version": "1.41.0",
+  "version": "1.45.0",
   "description": "Sistema POS desktop profesional para comercios, repuestos, sucursales y operaciones empresariales",
   "main": "main.js",
   "scripts": {
@@ -14,13 +14,15 @@
     "build:win:terminal": "electron-builder --config build/electron-builder-terminal.js --win",
     "build:win:server": "npm run prepare:server-service && electron-builder --config build/electron-builder-server.js --win",
     "build:win:tech": "electron-builder --config build/electron-builder-tech.js --win",
-    "build:win": "npm run build:win:terminal && npm run build:win:server",
+    "build:win:tech-server": "npm run prepare:server-service && electron-builder --config build/electron-builder-tech-server.js --win",
+    "build:win": "npm run build:win:terminal && npm run build:win:tech && npm run build:win:server && npm run build:win:tech-server",
     "build:mac": "electron-builder --mac",
     "db:reset": "node scripts/resetDB.js",
     "release:win:terminal": "electron-builder --config build/electron-builder-terminal.js --win --publish always",
     "release:win:server": "npm run prepare:server-service && electron-builder --config build/electron-builder-server.js --win --publish always",
     "release:win:tech": "electron-builder --config build/electron-builder-tech.js --win --publish always",
-    "release:win": "npm run release:win:terminal && npm run release:win:server",
+    "release:win:tech-server": "npm run prepare:server-service && electron-builder --config build/electron-builder-tech-server.js --win --publish always",
+    "release:win": "npm run release:win:terminal && npm run release:win:tech && npm run release:win:server && npm run release:win:tech-server",
     "release:mac": "electron-builder --mac --publish always",
     "verify-version": "node -e \"const v=require('./package.json').version; console.log('Version:',v); if(!v) process.exit(1)\"",
     "release": "npm run release:check && npm run build:win",
@@ -52,10 +54,10 @@
     "test:crm": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-crm-cerebro.js",
     "test:product-units": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-product-units.js",
     "test:service-orders": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-service-orders.js",
+    "test:service-portal": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-service-customer-portal.js",
     "test:trade-in-warranty": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-trade-in-warranty.js",
     "test:suite-license": "node scripts/test-suite-license-products.js",
     "test:serialized-sale": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-serialized-sale.js",
-    "test:service-orders": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-service-orders.js",
     "test:server-service": "node scripts/test-server-service.js",
     "test:experience": "node scripts/test-experience-system.js",
     "test:payment-ui": "node scripts/test-payment-ui-resilience.js",
@@ -63,7 +65,7 @@
     "test:system-doctor": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-system-doctor-financial.js",
     "test:ncf": "ELECTRON_RUN_AS_NODE=1 electron scripts/test-ncf-sequences.js",
     "test:data-loader": "node scripts/test-data-loader-resilience.js",
-    "test": "npm run test:url && npm run test:input-normalization && npm run test:user-permissions && npm run test:login && npm run test:pos && npm run test:data-loader && npm run test:checkout && npm run test:customer-companies && npm run test:business && npm run test:import && npm run test:all-in-one && npm run test:all-in-one-integration && npm run test:financial && npm run test:payment-ui && npm run test:cash-ui && npm run test:printing && npm run test:pending-invoices && npm run test:salespeople && npm run test:documents && npm run test:sales-workflow && npm run test:sale-corrections && npm run test:system-doctor && npm run test:ncf && npm run test:server-service && npm run test:experience && npm run test:product-units && npm run test:serialized-sale && npm run test:service-orders && npm run test:trade-in-warranty && npm run test:suite-license"
+    "test": "npm run test:url && npm run test:input-normalization && npm run test:user-permissions && npm run test:login && npm run test:pos && npm run test:data-loader && npm run test:checkout && npm run test:customer-companies && npm run test:business && npm run test:import && npm run test:all-in-one && npm run test:all-in-one-integration && npm run test:financial && npm run test:payment-ui && npm run test:cash-ui && npm run test:printing && npm run test:pending-invoices && npm run test:salespeople && npm run test:documents && npm run test:sales-workflow && npm run test:sale-corrections && npm run test:system-doctor && npm run test:ncf && npm run test:server-service && npm run test:experience && npm run test:product-units && npm run test:serialized-sale && npm run test:service-orders && npm run test:service-portal && npm run test:trade-in-warranty && npm run test:suite-license"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

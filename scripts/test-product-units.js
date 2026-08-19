@@ -20,6 +20,11 @@ const db = DB.getDB();
 require('../versioning').initVersioning(db, tempDir);
 const repo = DB.productUnitsRepo;
 
+const techCatalog = require('../lib/tech-catalog').ensureTechInitialCatalog(db, DB.settingsRepo);
+ok(techCatalog.changed && techCatalog.categories.includes('Celulares')
+  && techCatalog.categories.includes('Piezas y repuestos técnicos'),
+  'instalación TECH nueva recibe categorías tecnológicas sin tocar catálogos usados');
+
 // Producto fungible (auto-repuestos): NO se toca.
 const fungibleId = DB.productsRepo.create({ code: 'RPT-1', name: 'Filtro de aceite', cost: 100, price: 250, stock: 40, taxable: 1, tax_pct: 18 });
 // Producto que será serializado (equipo TECH).
@@ -63,7 +68,26 @@ ok(repo.effectiveStock(phoneId) === 2, 'tras vender, effectiveStock = 2');
 const ov = repo.overview(phoneId);
 ok(ov.byStatus.vendido === 1 && ov.byStatus.en_stock === 2, 'overview: 1 vendido, 2 en stock');
 
-// 7) No se puede desactivar el serializado con unidades registradas.
+// 7) Recepción masiva: lote completo y rollback ante duplicados.
+const bulkProductId = DB.productsRepo.create({ code:'CEL-LOTE', name:'Smartphone por lote', cost:9000, price:13000, stock:0 });
+repo.setSerialized(bulkProductId, true);
+const bulkIds = repo.createMany(bulkProductId, [
+  { imei:'350000000000101', unit_cost:9000, color:'Azul' },
+  { imei:'350000000000102', unit_cost:9000, color:'Azul' },
+]);
+ok(bulkIds.length === 2 && repo.countInStock(bulkProductId) === 2,
+  'recepción masiva registra el lote completo');
+let atomicBlocked = false;
+try {
+  repo.createMany(bulkProductId, [
+    { imei:'350000000000103' },
+    { imei:'350000000000101' },
+  ]);
+} catch { atomicBlocked = true; }
+ok(atomicBlocked && !repo.findByImei('350000000000103'),
+  'un duplicado cancela todo el lote sin registros parciales');
+
+// 8) No se puede desactivar el serializado con unidades registradas.
 let guard = false;
 try { repo.setSerialized(phoneId, false); } catch { guard = true; }
 ok(guard, 'no se puede desactivar serializado con unidades existentes');
