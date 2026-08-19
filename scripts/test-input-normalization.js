@@ -28,6 +28,10 @@ function control(tagName, type = 'text', value = '', dataset = {}) {
       this.selectionStart = start;
       this.selectionEnd = end;
     },
+    select() {
+      this.selectionStart = 0;
+      this.selectionEnd = String(this.value ?? '').length;
+    },
   };
 }
 
@@ -111,6 +115,11 @@ assert.strictEqual(formatMoneyEntryValue('1000'), '1,000.00');
 assert.strictEqual(formatMoneyEntryValue('50000'), '50,000.00');
 assert.strictEqual(formatMoneyEntryValue('1234.5'), '1,234.50');
 assert.strictEqual(unformatMoneyEntryValue('50,000.00'), '50000.00');
+assert.strictEqual(unformatMoneyEntryValue('RD$ 1.350,50'), '1350.50');
+assert.strictEqual(unformatMoneyEntryValue('1,350.50'), '1350.50');
+assert.strictEqual(unformatMoneyEntryValue('1,350'), '1350');
+assert.strictEqual(unformatMoneyEntryValue('1350.999'), '1350.99');
+assert.strictEqual(unformatMoneyEntryValue('1350.999999,456'), '1350999999.45');
 
 const price = control('INPUT', 'number', '1000');
 price.id = 'pf-price';
@@ -171,6 +180,44 @@ assert.strictEqual(Number(liveAmount.value), 10000);
 pendingFrames.shift()();
 assert.strictEqual(liveAmount.value, '10,000.00',
   'antes de pintar se deben recuperar la coma de miles y los decimales');
+
+function typeMoneyCharacter(control, character) {
+  let prevented = false;
+  entryListeners.beforeinput[0].callback({
+    target: control,
+    data: character,
+    preventDefault() { prevented = true; },
+  });
+  if (!prevented) {
+    const start = control.selectionStart;
+    const end = control.selectionEnd;
+    control.value = `${control.value.slice(0, start)}${character}${control.value.slice(end)}`;
+    control.selectionStart = start + character.length;
+    control.selectionEnd = control.selectionStart;
+    entryListeners.input[0].callback({ target: control });
+    assert.ok(!Number.isNaN(Number(control.value)),
+      'cada cálculo intermedio debe recibir un número puro');
+    pendingFrames.shift()();
+  }
+}
+
+const easyAmount = control('INPUT', 'number', '8750');
+easyAmount.id = 'ab-amount';
+entryListeners.focus[0].callback({ target: easyAmount });
+assert.deepStrictEqual([easyAmount.selectionStart, easyAmount.selectionEnd], [0, 8],
+  'al entrar, el monto completo debe quedar seleccionado para reemplazarlo');
+for (const digit of '1350') typeMoneyCharacter(easyAmount, digit);
+assert.strictEqual(easyAmount.value, '1,350.00',
+  'escribir solo 1350 debe mostrar automáticamente 1,350.00');
+typeMoneyCharacter(easyAmount, ',');
+typeMoneyCharacter(easyAmount, '5');
+typeMoneyCharacter(easyAmount, '9');
+assert.strictEqual(easyAmount.value, '1,350.59',
+  'la coma o el punto deben permitir escribir centavos sin mover manualmente el cursor');
+entryListeners.blur[0].callback({ target: easyAmount });
+assert.strictEqual(easyAmount.type, 'number');
+assert.strictEqual(easyAmount.value, '1350.59',
+  'al guardar, la aplicación debe recibir el monto puro con dos decimales');
 
 const quantity = control('INPUT', 'number', '1000');
 quantity.id = 'pf-stock';

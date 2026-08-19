@@ -67,16 +67,43 @@
     if (!raw) return '';
     const negative = raw.startsWith('-');
     raw = raw.replace(/-/g, '');
-    // La interfaz usa el formato 1,000.00. Si el usuario pega una coma como
-    // separador decimal y no hay punto, también se acepta.
-    if (!raw.includes('.') && /^\d+,\d{1,2}$/.test(raw)) {
-      raw = raw.replace(',', '.');
+    raw = raw.replace(/[^\d.,]/g, '');
+
+    // Acepta sin configuración adicional los dos formatos que normalmente se
+    // pegan o escriben en caja: 1,350.50 y 1.350,50. Con un solo separador, una
+    // cola de uno o dos dígitos se interpreta como decimal; grupos de tres se
+    // interpretan como miles.
+    const lastComma = raw.lastIndexOf(',');
+    const lastDot = raw.lastIndexOf('.');
+    if (lastComma >= 0 && lastDot >= 0) {
+      const decimalSeparator = lastComma > lastDot ? ',' : '.';
+      const groupingSeparator = decimalSeparator === ',' ? '.' : ',';
+      raw = raw.replaceAll(groupingSeparator, '');
+      if (decimalSeparator === ',') {
+        const decimalIndex = raw.lastIndexOf(',');
+        raw = `${raw.slice(0, decimalIndex).replace(/,/g, '')}.${raw.slice(decimalIndex + 1)}`;
+      } else {
+        const decimalIndex = raw.lastIndexOf('.');
+        raw = `${raw.slice(0, decimalIndex).replace(/\./g, '')}.${raw.slice(decimalIndex + 1)}`;
+      }
     } else {
-      raw = raw.replace(/,/g, '');
+      const separator = lastComma >= 0 ? ',' : (lastDot >= 0 ? '.' : '');
+      if (separator) {
+        const pieces = raw.split(separator);
+        const fraction = pieces.at(-1);
+        // Un punto único siempre se conserva como decimal para que un tercer
+        // dígito accidental nunca convierta 1350.999 en 1,350,999. La coma sí
+        // puede representar el agrupador visible de la aplicación (1,350).
+        const isDecimal = pieces.length === 2 && (separator === '.' || fraction.length <= 2);
+        raw = isDecimal ? `${pieces[0]}.${fraction}` : pieces.join('');
+      }
     }
+
     raw = raw.replace(/[^\d.]/g, '');
     const dot = raw.indexOf('.');
-    if (dot >= 0) raw = raw.slice(0, dot + 1) + raw.slice(dot + 1).replace(/\./g, '');
+    if (dot >= 0) {
+      raw = raw.slice(0, dot + 1) + raw.slice(dot + 1).replace(/\./g, '').slice(0, 2);
+    }
     if (raw.startsWith('.')) raw = `0${raw}`;
     return `${negative ? '-' : ''}${raw}`;
   }
