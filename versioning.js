@@ -1785,6 +1785,52 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.41.0-sale-item-unit-link] sale_items.product_unit_id listo');
     }
   },
+  {
+    version: '1.41.0-service-orders',
+    description: 'VELO TECH POS R6: órdenes de servicio y sus partidas. Migración aditiva e inerte para VELO POS.',
+    run(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS service_orders (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          number         TEXT UNIQUE NOT NULL,
+          customer_id    INTEGER REFERENCES customers(id),
+          customer_name  TEXT NOT NULL DEFAULT 'Consumidor Final',
+          device_desc    TEXT NOT NULL,
+          imei           TEXT DEFAULT '',
+          problem        TEXT NOT NULL,
+          diagnosis      TEXT DEFAULT '',
+          quote_amount   REAL NOT NULL DEFAULT 0,
+          status         TEXT NOT NULL DEFAULT 'recepcion'
+                           CHECK(status IN ('recepcion','diagnostico','presupuesto','aprobado','reparando','listo','entregado','cancelado')),
+          technician_id  INTEGER REFERENCES users(id),
+          received_by    INTEGER REFERENCES users(id),
+          sale_id        INTEGER REFERENCES sales(id),
+          approved_at    TEXT,
+          delivered_at   TEXT,
+          notes          TEXT DEFAULT '',
+          created_at     TEXT DEFAULT (datetime('now','localtime')),
+          updated_at     TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE TABLE IF NOT EXISTS service_order_items (
+          id               INTEGER PRIMARY KEY AUTOINCREMENT,
+          service_order_id INTEGER NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+          kind             TEXT NOT NULL CHECK(kind IN ('parte','mano_obra')),
+          product_id       INTEGER REFERENCES products(id),
+          description      TEXT NOT NULL,
+          qty              INTEGER NOT NULL DEFAULT 1,
+          unit_price       REAL NOT NULL DEFAULT 0,
+          unit_cost        REAL NOT NULL DEFAULT 0,
+          taxable          INTEGER NOT NULL DEFAULT 1,
+          tax_pct          REAL NOT NULL DEFAULT 18,
+          created_at       TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_service_orders_status ON service_orders(status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_service_orders_imei ON service_orders(imei);
+        CREATE INDEX IF NOT EXISTS idx_service_order_items_order ON service_order_items(service_order_id);
+      `);
+      console.log('[MIGRATION 1.41.0-service-orders] Órdenes de servicio listas (módulo TECH)');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

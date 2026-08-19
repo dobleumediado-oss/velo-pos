@@ -625,6 +625,48 @@ function createTables() {
       notes          TEXT DEFAULT ''
     );
 
+    -- ── Órdenes de servicio / reparación (VELO TECH POS) ──
+    -- Las tablas existen en el core, pero solo el vertical TECH expone el
+    -- módulo. La entrega enlaza una venta normal para reutilizar fiscalidad,
+    -- inventario, caja y contabilidad.
+    CREATE TABLE IF NOT EXISTS service_orders (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      number         TEXT UNIQUE NOT NULL,
+      customer_id    INTEGER REFERENCES customers(id),
+      customer_name  TEXT NOT NULL DEFAULT 'Consumidor Final',
+      device_desc    TEXT NOT NULL,
+      imei           TEXT DEFAULT '',
+      problem        TEXT NOT NULL,
+      diagnosis      TEXT DEFAULT '',
+      quote_amount   REAL NOT NULL DEFAULT 0,
+      status         TEXT NOT NULL DEFAULT 'recepcion'
+                       CHECK(status IN ('recepcion','diagnostico','presupuesto','aprobado','reparando','listo','entregado','cancelado')),
+      technician_id  INTEGER REFERENCES users(id),
+      received_by    INTEGER REFERENCES users(id),
+      sale_id        INTEGER REFERENCES sales(id),
+      approved_at    TEXT,
+      delivered_at   TEXT,
+      notes          TEXT DEFAULT '',
+      created_at     TEXT DEFAULT (datetime('now','localtime')),
+      updated_at     TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE TABLE IF NOT EXISTS service_order_items (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      service_order_id INTEGER NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+      kind             TEXT NOT NULL CHECK(kind IN ('parte','mano_obra')),
+      product_id       INTEGER REFERENCES products(id),
+      description      TEXT NOT NULL,
+      qty              INTEGER NOT NULL DEFAULT 1,
+      unit_price       REAL NOT NULL DEFAULT 0,
+      unit_cost        REAL NOT NULL DEFAULT 0,
+      taxable          INTEGER NOT NULL DEFAULT 1,
+      tax_pct          REAL NOT NULL DEFAULT 18,
+      created_at       TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_service_orders_status ON service_orders(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_service_orders_imei ON service_orders(imei);
+    CREATE INDEX IF NOT EXISTS idx_service_order_items_order ON service_order_items(service_order_id);
+
     -- ── Pagos / Abonos ──
     CREATE TABLE IF NOT EXISTS payments (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -4368,6 +4410,7 @@ const salesRepo = {
       const requestedByProduct = new Map();
       for (const item of items) {
         const productId = Number(item.product_id);
+        if (!productId) continue;
         requestedByProduct.set(productId,
           (requestedByProduct.get(productId) || 0) + (Number(item.qty) || 0));
       }
@@ -4382,15 +4425,24 @@ const salesRepo = {
 
       // 1. Validar stock y normalizar snapshot de línea. unit_price es precio final.
       for (const item of items) {
-        const prod = db.prepare('SELECT id,stock,name,taxable,tax_pct,COALESCE(serialized,0) AS serialized FROM products WHERE id=?').get(item.product_id);
-        if (!prod) throw new Error(`Producto ID ${item.product_id} no existe`);
+        const nonStockService = item.kind === 'service' || item.non_stock === true;
+        const storedProd = item.product_id
+          ? db.prepare('SELECT id,stock,name,taxable,tax_pct,COALESCE(serialized,0) AS serialized FROM products WHERE id=?').get(item.product_id)
+          : null;
+        if (!storedProd && !nonStockService) throw new Error(`Producto ID ${item.product_id} no existe`);
+        const prod = storedProd || {
+          id: null, stock: 0, name: item.product_name || 'Servicio técnico',
+          taxable: item.taxable == null ? 1 : item.taxable,
+          tax_pct: item.tax_pct == null ? configuredTaxPct() : item.tax_pct,
+          serialized: 0,
+        };
         const productId = Number(item.product_id);
         // Producto SERIALIZADO (VELO TECH POS): se vende una UNIDAD concreta por
         // IMEI/serial; el stock sale de product_units, no del campo numérico. Para
         // productos fungibles (auto-repuestos, serialized=0) nada de esto corre y
         // la validación numérica de abajo es idéntica a la actual.
         let _unitId = null;
-        if (afectaStock && prod.serialized) {
+        if (afectaStock && !nonStockService && prod.serialized) {
           const ref = String(item.imei ?? item.serial ?? '').trim();
           let unit = null;
           if (item.product_unit_id) {
@@ -4405,7 +4457,7 @@ const salesRepo = {
           _unitId = unit.id;
           if (unit.unit_cost != null) item.unit_cost = unit.unit_cost; // costo real de la unidad → asiento correcto
           item.qty = 1;                                                // cada unidad serializada es una línea de 1
-        } else if (afectaStock && !stockValidated.has(productId)) {
+        } else if (afectaStock && !nonStockService && !stockValidated.has(productId)) {
           const ownOrderId = Number(payment.checkoutOrderId) || 0;
           const reserved = tableExists('checkout_orders')
             ? (db.prepare(`
@@ -4437,6 +4489,7 @@ const salesRepo = {
           taxable,
           tax_pct: itemTaxPct,
           _serialized: !!prod.serialized,
+          _nonStock: nonStockService,
           product_unit_id: _unitId,
         });
       }
@@ -4815,7 +4868,7 @@ const salesRepo = {
         // 6. Descontar stock. Serializado: marca la UNIDAD como vendida (el stock
         //    ES el conteo de unidades). Fungible: descuenta el stock numérico como
         //    siempre (auto-repuestos idéntico).
-        if (afectaStock) {
+        if (afectaStock && !item._nonStock) {
           if (item._serialized && item.product_unit_id) {
             productUnitsRepo.markSold(item.product_unit_id, saleId);
           } else {
@@ -10964,7 +11017,16 @@ const productUnitsRepo = {
     const key = String(imei || '').trim();
     if (!key) return null;
     return db.prepare(
-      "SELECT * FROM product_units WHERE UPPER(TRIM(COALESCE(imei,'')))=UPPER(?) OR UPPER(TRIM(COALESCE(serial,'')))=UPPER(?) LIMIT 1"
+      `SELECT pu.*,
+              p.code AS product_code, p.name AS product_name, p.brand AS product_brand,
+              p.model AS product_model, p.price AS product_price,
+              s.numero_factura, s.customer_id, s.customer_name, s.created_at AS sale_date
+         FROM product_units pu
+         JOIN products p ON p.id=pu.product_id
+         LEFT JOIN sales s ON s.id=pu.sale_id
+        WHERE UPPER(TRIM(COALESCE(pu.imei,'')))=UPPER(?)
+           OR UPPER(TRIM(COALESCE(pu.serial,'')))=UPPER(?)
+        LIMIT 1`
     ).get(key, key) || null;
   },
   // Marca una unidad como vendida y la enlaza a su venta.
@@ -11001,11 +11063,197 @@ const productUnitsRepo = {
   },
 };
 
+// ── Servicio / reparación (VELO TECH POS R6) ───────────────────────────────
+const SERVICE_FLOW = ['recepcion','diagnostico','presupuesto','aprobado','reparando','listo','entregado'];
+const serviceOrdersRepo = {
+  list({ status = '', search = '', limit = 200 } = {}) {
+    const where = [];
+    const params = [];
+    if (status) { where.push('so.status=?'); params.push(status); }
+    const q = String(search || '').trim();
+    if (q) {
+      where.push(`(so.number LIKE ? OR so.customer_name LIKE ? OR so.device_desc LIKE ? OR so.imei LIKE ? OR so.problem LIKE ?)`);
+      const like = `%${q}%`;
+      params.push(like, like, like, like, like);
+    }
+    params.push(Math.max(1, Math.min(1000, Number(limit) || 200)));
+    return db.prepare(`
+      SELECT so.*, u.name AS technician_name,
+             (SELECT COUNT(*) FROM service_order_items i WHERE i.service_order_id=so.id) AS item_count,
+             (SELECT COALESCE(SUM(i.qty*i.unit_price),0) FROM service_order_items i WHERE i.service_order_id=so.id) AS items_total
+      FROM service_orders so
+      LEFT JOIN users u ON u.id=so.technician_id
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY CASE so.status WHEN 'listo' THEN 0 WHEN 'reparando' THEN 1 WHEN 'aprobado' THEN 2 ELSE 3 END,
+               so.updated_at DESC, so.id DESC
+      LIMIT ?
+    `).all(...params);
+  },
+
+  getById(id) {
+    const row = db.prepare(`
+      SELECT so.*, u.name AS technician_name, r.name AS received_by_name
+      FROM service_orders so
+      LEFT JOIN users u ON u.id=so.technician_id
+      LEFT JOIN users r ON r.id=so.received_by
+      WHERE so.id=?
+    `).get(Number(id));
+    if (!row) return null;
+    row.items = db.prepare('SELECT * FROM service_order_items WHERE service_order_id=? ORDER BY id').all(row.id);
+    if (row.sale_id) row.sale = salesRepo.getById(row.sale_id);
+    return row;
+  },
+
+  create(data = {}, user = {}) {
+    const device = String(data.device_desc || '').trim();
+    const problem = String(data.problem || '').trim();
+    if (!device) throw new Error('Describe el equipo recibido');
+    if (!problem) throw new Error('Describe el problema reportado');
+    const customerId = Number(data.customer_id) || 1;
+    const customer = db.prepare('SELECT id,name FROM customers WHERE id=? AND active=1').get(customerId);
+    if (!customer) throw new Error('Cliente no encontrado o inactivo');
+    return db.transaction(() => {
+      const next = (db.prepare('SELECT COALESCE(MAX(id),0)+1 AS n FROM service_orders').get().n || 1);
+      const number = `SRV-${String(next).padStart(6, '0')}`;
+      const info = db.prepare(`
+        INSERT INTO service_orders(number,customer_id,customer_name,device_desc,imei,problem,technician_id,received_by,notes)
+        VALUES(?,?,?,?,?,?,?,?,?)
+      `).run(number, customer.id, customer.name, device, String(data.imei || '').trim(), problem,
+             Number(data.technician_id) || null, Number(user.id) || null, String(data.notes || '').trim());
+      return this.getById(info.lastInsertRowid);
+    })();
+  },
+
+  update(id, data = {}) {
+    const current = this.getById(id);
+    if (!current) throw new Error('Orden de servicio no encontrada');
+    if (['entregado','cancelado'].includes(current.status)) throw new Error('La orden ya no se puede editar');
+    return db.transaction(() => {
+      const diagnosis = data.diagnosis == null ? current.diagnosis : String(data.diagnosis).trim();
+      const quoteAmount = data.quote_amount == null ? current.quote_amount : Math.max(0, Number(data.quote_amount) || 0);
+      const technicianId = data.technician_id === undefined ? current.technician_id : (Number(data.technician_id) || null);
+      const notes = data.notes == null ? current.notes : String(data.notes).trim();
+      db.prepare(`UPDATE service_orders SET diagnosis=?,quote_amount=?,technician_id=?,notes=?,updated_at=datetime('now','localtime') WHERE id=?`)
+        .run(diagnosis, quoteAmount, technicianId, notes, current.id);
+      if (Array.isArray(data.items)) {
+        db.prepare('DELETE FROM service_order_items WHERE service_order_id=?').run(current.id);
+        const insert = db.prepare(`
+          INSERT INTO service_order_items(service_order_id,kind,product_id,description,qty,unit_price,unit_cost,taxable,tax_pct)
+          VALUES(?,?,?,?,?,?,?,?,?)
+        `);
+        for (const raw of data.items) {
+          const kind = raw.kind === 'parte' ? 'parte' : 'mano_obra';
+          const qty = Math.max(1, Math.min(99999, Number.parseInt(raw.qty, 10) || 1));
+          const unitPrice = round2(Math.max(0, Number(raw.unit_price) || 0));
+          let productId = null;
+          let description = String(raw.description || '').trim();
+          let unitCost = 0;
+          let taxable = normalizeTaxable(raw.taxable, 1);
+          let taxPct = normalizeTaxPct(raw.tax_pct, configuredTaxPct());
+          if (kind === 'parte') {
+            productId = Number(raw.product_id) || null;
+            const product = productId ? db.prepare('SELECT * FROM products WHERE id=? AND active=1').get(productId) : null;
+            if (!product) throw new Error('Selecciona un repuesto válido');
+            if (product.serialized) throw new Error(`"${product.name}" se controla por IMEI y no puede usarse como repuesto fungible`);
+            description = description || product.name;
+            unitCost = Number(product.cost) || 0;
+            taxable = normalizeTaxable(raw.taxable ?? product.taxable, 1);
+            taxPct = normalizeTaxPct(raw.tax_pct ?? product.tax_pct, configuredTaxPct());
+          }
+          if (!description) throw new Error('Cada partida necesita una descripción');
+          insert.run(current.id, kind, productId, description, qty, unitPrice, unitCost, taxable, taxPct);
+        }
+      }
+      const total = db.prepare('SELECT COALESCE(SUM(qty*unit_price),0) AS n FROM service_order_items WHERE service_order_id=?').get(current.id).n;
+      if (data.quote_amount == null && Array.isArray(data.items)) {
+        db.prepare('UPDATE service_orders SET quote_amount=? WHERE id=?').run(round2(total), current.id);
+      }
+      return this.getById(current.id);
+    })();
+  },
+
+  advance(id, nextStatus, user = {}) {
+    const current = this.getById(id);
+    if (!current) throw new Error('Orden de servicio no encontrada');
+    const at = SERVICE_FLOW.indexOf(current.status);
+    const next = SERVICE_FLOW[at + 1];
+    if (!next || nextStatus !== next || nextStatus === 'entregado') {
+      throw new Error('Transición de estado no permitida');
+    }
+    if (nextStatus === 'presupuesto' && !String(current.diagnosis || '').trim()) {
+      throw new Error('Registra el diagnóstico antes de presupuestar');
+    }
+    if (nextStatus === 'aprobado' && Number(current.quote_amount) <= 0) {
+      throw new Error('Registra el presupuesto antes de aprobar');
+    }
+    const approvedAt = nextStatus === 'aprobado' ? "approved_at=datetime('now','localtime')," : '';
+    db.prepare(`UPDATE service_orders SET status=?,${approvedAt}technician_id=COALESCE(technician_id,?),updated_at=datetime('now','localtime') WHERE id=?`)
+      .run(nextStatus, Number(user.id) || null, current.id);
+    return this.getById(current.id);
+  },
+
+  deliver(id, payment = {}, user = {}, session = null) {
+    const order = this.getById(id);
+    if (!order) throw new Error('Orden de servicio no encontrada');
+    if (order.sale_id) return { order, saleResult: salesRepo.getConfirmationById(order.sale_id) };
+    if (order.status !== 'listo') throw new Error('La orden debe estar lista antes de entregarla');
+    if (!order.items.length) throw new Error('Agrega piezas o mano de obra antes de entregar');
+    const items = order.items.map(item => item.kind === 'parte' ? {
+      product_id: item.product_id,
+      product_code: db.prepare('SELECT code FROM products WHERE id=?').get(item.product_id)?.code || 'PARTE',
+      product_name: item.description,
+      unit_price: Number(item.unit_price) || 0,
+      unit_cost: Number(item.unit_cost) || 0,
+      qty: Number(item.qty) || 1,
+      taxable: item.taxable,
+      tax_pct: item.tax_pct,
+    } : {
+      product_id: null,
+      product_code: 'SERVICIO',
+      product_name: item.description,
+      kind: 'service',
+      non_stock: true,
+      unit_price: Number(item.unit_price) || 0,
+      unit_cost: 0,
+      qty: Number(item.qty) || 1,
+      taxable: item.taxable,
+      tax_pct: item.tax_pct,
+    });
+    const saleResult = salesRepo.create({
+      session,
+      customer: { id: Number(order.customer_id) || 1 },
+      items,
+      payment: {
+        method: String(payment.method || 'efectivo'),
+        ncfType: String(payment.ncfType || ''),
+        notes: `Orden de servicio ${order.number}${payment.notes ? ` · ${payment.notes}` : ''}`,
+      },
+      user,
+      type: 'factura',
+      operationId: `service-order-${order.id}`,
+    });
+    const saleId = saleResult.saleId || saleResult.id;
+    db.prepare(`UPDATE service_orders SET status='entregado',sale_id=?,delivered_at=datetime('now','localtime'),updated_at=datetime('now','localtime') WHERE id=?`)
+      .run(saleId, order.id);
+    return { order: this.getById(order.id), saleResult };
+  },
+
+  cancel(id, reason = '') {
+    const current = this.getById(id);
+    if (!current) throw new Error('Orden de servicio no encontrada');
+    if (['entregado','cancelado'].includes(current.status)) throw new Error('La orden ya no puede cancelarse');
+    db.prepare(`UPDATE service_orders SET status='cancelado',notes=TRIM(COALESCE(notes,'') || ?),updated_at=datetime('now','localtime') WHERE id=?`)
+      .run(reason ? `\nCancelación: ${String(reason).trim()}` : '', current.id);
+    return this.getById(current.id);
+  },
+};
+
 module.exports = {
   suppliersRepo,
   purchasesRepo,
   crmRepo,
   productUnitsRepo,
+  serviceOrdersRepo,
   initDB,
   initDetachedDB,
   ensureUppercasePersistence,

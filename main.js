@@ -190,7 +190,7 @@ const {
   expensesRepo, branchesRepo, vehiclesRepo, maintenanceRepo, deliveriesRepo, ncfRepo,
   financialAccountsRepo, bankReconRepo, accountingRepo, fixedAssetsRepo, conduceRepo, documentNumberRepo, salespeopleRepo,
   checkoutOrdersRepo, saleCorrectionsRepo, ensureUppercasePersistence, crmRepo,
-  productUnitsRepo
+  productUnitsRepo, serviceOrdersRepo
 } = require('./database');
 
 const {
@@ -1569,6 +1569,85 @@ ipcMain.handle('productUnits:create', async (_, { productId, units, requestUserI
     }
     audit(requestUserId, reqUser.name, 'equipos_registrados', 'products', productId, `${created.length} unidad(es)`);
     return { ok: true, created: created.length, ids: created };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// ── Órdenes de servicio / reparación (VELO TECH POS R6) ────────────────────
+function _serviceOrdersEnabled() {
+  const active = require('./src/verticals').getActiveVertical();
+  return active.id === 'tech' && active.modules?.service_orders === true;
+}
+function _serviceUser(requestUserId) {
+  const reqUser = authRepo.findById(requestUserId);
+  if (!reqUser) throw new Error('Usuario no válido');
+  if (!['admin','superadmin','cajero'].includes(reqUser.role)) throw new Error('Sin permisos para Servicio');
+  if (!_serviceOrdersEnabled()) throw new Error('Servicio técnico solo está disponible en VELO TECH POS');
+  return reqUser;
+}
+
+ipcMain.handle('serviceOrders:list', async (_, data = {}) => {
+  try {
+    _serviceUser(data.requestUserId);
+    return { ok: true, data: serviceOrdersRepo.list(data) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('serviceOrders:getById', async (_, data = {}) => {
+  try {
+    _serviceUser(data.requestUserId);
+    return { ok: true, data: serviceOrdersRepo.getById(data.id) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('serviceOrders:create', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    const order = serviceOrdersRepo.create(data.data || {}, reqUser);
+    audit(reqUser.id, reqUser.name, 'servicio_creado', 'service_orders', order.id, `${order.number} · ${order.device_desc}`);
+    return { ok: true, data: order };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('serviceOrders:update', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    const order = serviceOrdersRepo.update(data.id, data.data || {});
+    audit(reqUser.id, reqUser.name, 'servicio_actualizado', 'service_orders', order.id, order.number);
+    return { ok: true, data: order };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('serviceOrders:advance', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    const order = serviceOrdersRepo.advance(data.id, data.status, reqUser);
+    audit(reqUser.id, reqUser.name, `servicio_${order.status}`, 'service_orders', order.id, order.number);
+    return { ok: true, data: order };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('serviceOrders:deliver', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    const method = String(data.payment?.method || 'efectivo');
+    const session = cashRepo.getOpen(_reqTerminalId());
+    if (reqUser.role === 'cajero' && method !== 'credito' && !session) {
+      return { ok: false, error: 'Debes abrir la caja antes de entregar y cobrar' };
+    }
+    const result = serviceOrdersRepo.deliver(data.id, data.payment || {}, reqUser, session);
+    const saleId = result.saleResult?.saleId || result.order?.sale_id;
+    if (saleId && !result.saleResult?.idempotent) {
+      _acctHook(() => accountingRepo.generateSaleEntry({ saleId, userId: reqUser.id }));
+      audit(reqUser.id, reqUser.name, 'servicio_entregado', 'service_orders', result.order.id,
+        `${result.order.number} → venta #${saleId}`);
+    }
+    return { ok: true, data: result.order, sale: saleId ? salesRepo.getById(saleId) : null };
+  } catch (e) {
+    console.error('[serviceOrders:deliver]', e);
+    return { ok: false, error: e.message };
+  }
+});
+ipcMain.handle('serviceOrders:cancel', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    const order = serviceOrdersRepo.cancel(data.id, data.reason || '');
+    audit(reqUser.id, reqUser.name, 'servicio_cancelado', 'service_orders', order.id, `${order.number} · ${data.reason || ''}`);
+    return { ok: true, data: order };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 

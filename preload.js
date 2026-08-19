@@ -55,6 +55,17 @@ contextBridge.exposeInMainWorld('api', {
     create:         (data) => ipcRenderer.invoke('productUnits:create', data),
   },
 
+  // ── Servicio / reparación (VELO TECH POS) ────────────────
+  serviceOrders: {
+    list:    (data) => ipcRenderer.invoke('serviceOrders:list', data),
+    getById: (data) => ipcRenderer.invoke('serviceOrders:getById', data),
+    create:  (data) => ipcRenderer.invoke('serviceOrders:create', data),
+    update:  (data) => ipcRenderer.invoke('serviceOrders:update', data),
+    advance: (data) => ipcRenderer.invoke('serviceOrders:advance', data),
+    deliver: (data) => ipcRenderer.invoke('serviceOrders:deliver', data),
+    cancel:  (data) => ipcRenderer.invoke('serviceOrders:cancel', data),
+  },
+
   // ── Clientes ──────────────────────────────
   customers: {
     getAll:        ()          => ipcRenderer.invoke('customers:getAll'),
