@@ -22,6 +22,12 @@ jobs:
       - name: Instalar dependencias
         run: npm ci
 
+      # npm ci instala better-sqlite3 para el ABI de Node del runner. Las pruebas
+      # y la aplicación usan el ABI de Electron, por lo que debe reconstruirse
+      # antes de ejecutar cualquier flujo que abra la base de datos.
+      - name: Preparar dependencias nativas para Electron
+        run: npm run rebuild
+
       - name: Pruebas y validaciones
         run: npm run test:tech-readiness
 
