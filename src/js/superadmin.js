@@ -21,6 +21,11 @@ async function renderSuperAdmin(el) {
   const info       = vInfo.ok ? vInfo.data : {};
   const machineId  = lic?.machineId || '';
   const settings   = await window.api.settings.getAll().catch(() => ({}));
+  const providerApi = window.api.providerLicenses;
+  const providerResult = providerApi
+    ? await providerApi.getStatus({ requestUserId: user.id }).catch(() => ({ ok: false }))
+    : null;
+  const providerStatus = providerResult?.ok ? providerResult.data : null;
   const accessUsers = (await window.api.users.getAll().catch(() => []))
     .filter(item => item.active && item.role !== 'superadmin');
   const _saEsc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({
@@ -167,6 +172,56 @@ async function renderSuperAdmin(el) {
       <button class="btn-ghost" style="font-family:var(--mono);font-size:10px" onclick="navigator.clipboard.writeText('${_saEsc(machineId)}');toast('ID copiado')">${_saEsc(machineId)}</button>
     </div>`;
   el.appendChild(licCard);
+
+  // Esta tarjeta solo existe en `electron . --dev`. La API no se expone y los
+  // handlers no se registran en ninguna aplicación empaquetada para clientes.
+  if (providerApi) {
+    const providerCard = h('div', { class: 'card', style: { marginBottom: '16px' } });
+    const ready = !!providerStatus?.available;
+    providerCard.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap">
+        <div style="max-width:760px">
+          <div class="card-title mb8">🔐 Administrador privado de licencias</div>
+          <div style="font-size:12px;color:var(--muted2);line-height:1.5">
+            Genera licencias para VELO POS, VELO TECH POS o ambos. Esta herramienta y la llave privada existen únicamente en esta Mac de desarrollo.
+          </div>
+        </div>
+        <button class="btn ${ready ? 'btn-dark' : 'btn-out'}" id="sa-license-manager" ${ready ? '' : 'disabled'}>
+          ${ready ? 'Administrar licencias' : 'Llave no disponible'}
+        </button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;margin-top:14px">
+        <div style="background:var(--surface2);border-radius:9px;padding:10px">
+          <div class="met-label">Llave publicada</div>
+          <div style="font-size:12px;font-weight:750;color:${providerStatus?.keyMatchesApplication ? 'var(--green)' : 'var(--red)'}">
+            ${providerStatus?.keyMatchesApplication ? 'Coincide ✓' : 'No coincide'}
+          </div>
+        </div>
+        <div style="background:var(--surface2);border-radius:9px;padding:10px">
+          <div class="met-label">Huella pública</div>
+          <div style="font-family:var(--mono);font-size:11px;font-weight:700">${_saEsc(providerStatus?.fingerprint || '—')}</div>
+        </div>
+        <div style="background:var(--surface2);border-radius:9px;padding:10px">
+          <div class="met-label">Historial local</div>
+          <div style="font-size:12px;font-weight:750">${Number(providerStatus?.historyCount) || 0} licencia(s)</div>
+        </div>
+      </div>
+      ${providerStatus && !providerStatus.permissionsSecure ? `
+        <div class="alrt w" style="margin-top:12px;margin-bottom:0"><div class="alrt-dot w"></div><div>
+          <div class="alrt-title">Protege los permisos de la llave privada</div>
+          <div class="alrt-sub">La llave coincide, pero otros usuarios locales podrían leerla. Restringe sus permisos a la cuenta propietaria antes de continuar.</div>
+          <button class="btn btn-out btn-sm" id="sa-provider-secure-key" style="margin-top:7px">Proteger llave ahora</button>
+        </div></div>` : ''}
+      ${providerResult && !providerResult.ok ? `<div class="alrt r" style="margin-top:12px;margin-bottom:0"><div class="alrt-dot r"></div><div class="alrt-sub">${_saEsc(providerResult.error || 'No disponible')}</div></div>` : ''}`;
+    providerCard.querySelector('#sa-license-manager')?.addEventListener('click', saOpenLicenseManager);
+    providerCard.querySelector('#sa-provider-secure-key')?.addEventListener('click', async () => {
+      const result = await providerApi.secureKey({ requestUserId: user.id }).catch(error => ({ ok: false, error: error.message }));
+      if (!result?.ok) return toast(result?.error || 'No se pudieron proteger los permisos', 'err');
+      toast('Llave privada protegida para tu cuenta', 'ok');
+      renderSuperAdmin(el);
+    });
+    el.appendChild(providerCard);
+  }
 
   // ── Info del sistema ─────────────────────────
   const infoCard = h('div', { class: 'card', style: { marginBottom: '16px' } });
@@ -860,6 +915,154 @@ async function renderSuperAdmin(el) {
       </button>
     </div>`;
   el.appendChild(dangerCard);
+}
+
+function _saLicenseEsc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[char]));
+}
+
+function _saLicenseProductLabel(products) {
+  return (products || []).map(product => product === 'velo_tech_pos' ? 'TECH' : 'POS').join(' + ');
+}
+
+async function saOpenLicenseManager() {
+  const api = window.api.providerLicenses;
+  if (!api || user?.role !== 'superadmin') {
+    return toast('El administrador de licencias solo está disponible en tu edición local de desarrollo', 'err');
+  }
+
+  const [statusResult, historyResult] = await Promise.all([
+    api.getStatus({ requestUserId: user.id }),
+    api.list({ requestUserId: user.id, limit: 50 }),
+  ]).catch(error => [{ ok: false, error: error.message }, { ok: false, data: [] }]);
+  if (!statusResult?.ok || !statusResult.data?.available) {
+    return toast(statusResult?.error || statusResult?.data?.error || 'La llave privada no está lista', 'err');
+  }
+
+  const history = historyResult?.ok ? historyResult.data : [];
+  const nextYear = new Date();
+  nextYear.setFullYear(nextYear.getFullYear() + 1);
+  const defaultExpiry = nextYear.toISOString().slice(0, 10);
+  const rows = history.length ? history.map(record => `
+    <tr>
+      <td>
+        <div style="font-weight:750;font-size:12px">${_saLicenseEsc(record.business)}</div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--muted2)">${_saLicenseEsc(record.machineId)}</div>
+      </td>
+      <td style="font-size:11px">${_saLicenseEsc(_saLicenseProductLabel(record.products))}</td>
+      <td style="font-size:11px">${record.expiry === 'PERPETUAL' ? 'Permanente' : _saLicenseEsc(record.expiry)}</td>
+      <td><span style="font-size:10px;font-weight:750;color:${record.status === 'cancelled' ? 'var(--red)' : 'var(--green)'}">${record.status === 'cancelled' ? 'Anulada en registro' : 'Activa'}</span></td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-ghost btn-sm" data-provider-copy="${_saLicenseEsc(record.id)}">Copiar</button>
+        ${record.status !== 'cancelled' ? `<button class="btn btn-ghost btn-sm" style="color:var(--red)" data-provider-cancel="${_saLicenseEsc(record.id)}">Anular registro</button>` : ''}
+      </td>
+    </tr>`).join('') : '<tr><td colspan="5" style="text-align:center;padding:16px;color:var(--muted2)">Todavía no has generado licencias desde este administrador.</td></tr>';
+
+  openModal(`
+    <div class="modal-title">🔐 Administrador privado de licencias</div>
+    <div class="modal-sub">Disponible solamente en esta Mac y en modo desarrollo. La llave privada nunca se muestra ni se envía al cliente.</div>
+    <div class="alrt g" style="margin-bottom:16px"><div class="alrt-dot g"></div><div>
+      <div class="alrt-title">Llave verificada · ${_saLicenseEsc(statusResult.data.fingerprint)}</div>
+      <div class="alrt-sub">Cada licencia se comprueba con la misma llave pública de las aplicaciones antes de guardarse.</div>
+    </div></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <label style="grid-column:1/-1"><span class="lbl">ID de máquina del cliente</span>
+        <input class="inp" id="provider-machine" maxlength="40" autocomplete="off" placeholder="32 caracteres enviados por el cliente" style="font-family:var(--mono);text-transform:uppercase"/>
+      </label>
+      <label style="grid-column:1/-1"><span class="lbl">Nombre del negocio</span>
+        <input class="inp" id="provider-business" maxlength="120" autocomplete="off" placeholder="Ej. Castillo Tech"/>
+      </label>
+      <label><span class="lbl">Duración</span>
+        <select class="inp" id="provider-duration"><option value="date">Con vencimiento</option><option value="PERPETUAL">Permanente</option></select>
+      </label>
+      <label id="provider-expiry-wrap"><span class="lbl">Fecha de vencimiento</span>
+        <input class="inp" id="provider-expiry" type="date" value="${defaultExpiry}"/>
+      </label>
+      <fieldset style="grid-column:1/-1;border:1px solid var(--line);border-radius:10px;padding:11px 13px">
+        <legend class="lbl" style="padding:0 5px">Productos vendidos</legend>
+        <div class="flex" style="gap:18px;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700"><input type="checkbox" id="provider-pos" value="velo_pos" style="accent-color:var(--green)"/> VELO POS</label>
+          <label style="display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700"><input type="checkbox" id="provider-tech" value="velo_tech_pos" style="accent-color:var(--green)"/> VELO TECH POS</label>
+        </div>
+      </fieldset>
+    </div>
+    <div id="provider-result" style="display:none;margin-top:14px">
+      <label><span class="lbl">Licencia generada</span><textarea class="inp" id="provider-key" rows="4" readonly style="font-family:var(--mono);font-size:10px;resize:none"></textarea></label>
+      <button class="btn btn-dark" id="provider-copy-new" style="margin-top:8px">Copiar licencia</button>
+    </div>
+    <div class="modal-foot" style="margin-top:16px">
+      <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
+      <button class="btn btn-green" id="provider-generate">Generar y verificar</button>
+    </div>
+    <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--line)">
+      <div class="card-title mb8">Historial local</div>
+      <div class="tw" style="max-height:260px;overflow:auto"><table>
+        <thead><tr><th>Cliente / máquina</th><th>Producto</th><th>Vence</th><th>Estado</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      <div style="font-size:10px;color:var(--muted2);line-height:1.5;margin-top:8px">
+        “Anular registro” solo organiza tu historial local. No desactiva a distancia una licencia offline que el cliente ya recibió.
+      </div>
+    </div>
+  `, 'modal-xxl ux-modal-structured');
+
+  const duration = document.getElementById('provider-duration');
+  const expiryWrap = document.getElementById('provider-expiry-wrap');
+  duration?.addEventListener('change', () => {
+    expiryWrap.style.display = duration.value === 'PERPETUAL' ? 'none' : '';
+  });
+
+  document.getElementById('provider-machine')?.addEventListener('input', event => {
+    const input = event.currentTarget;
+    const cursor = input.selectionStart;
+    input.value = input.value.toUpperCase().replace(/[^A-F0-9\s-]/g, '');
+    try { input.setSelectionRange(cursor, cursor); } catch {}
+  });
+
+  const copyKey = async key => {
+    await navigator.clipboard.writeText(key);
+    toast('Licencia copiada', 'ok');
+  };
+  document.getElementById('provider-copy-new')?.addEventListener('click', () => {
+    const key = document.getElementById('provider-key')?.value;
+    if (key) copyKey(key);
+  });
+  document.querySelectorAll('[data-provider-copy]').forEach(button => button.addEventListener('click', () => {
+    const record = history.find(item => item.id === button.dataset.providerCopy);
+    if (record?.licenseKey) copyKey(record.licenseKey);
+  }));
+  document.querySelectorAll('[data-provider-cancel]').forEach(button => button.addEventListener('click', async () => {
+    if (!confirm('Esto solo marcará la licencia como anulada en tu historial. La clave ya entregada seguirá funcionando. ¿Continuar?')) return;
+    const result = await api.cancel({ requestUserId: user.id, id: button.dataset.providerCancel });
+    if (!result?.ok) return toast(result?.error || 'No se pudo actualizar el historial', 'err');
+    toast('Registro local actualizado', 'ok');
+    saOpenLicenseManager();
+  }));
+
+  document.getElementById('provider-generate')?.addEventListener('click', async event => {
+    const button = event.currentTarget;
+    const products = [
+      document.getElementById('provider-pos')?.checked ? 'velo_pos' : '',
+      document.getElementById('provider-tech')?.checked ? 'velo_tech_pos' : '',
+    ].filter(Boolean);
+    const data = {
+      machineId: document.getElementById('provider-machine')?.value,
+      business: document.getElementById('provider-business')?.value,
+      expiry: duration?.value === 'PERPETUAL' ? 'PERPETUAL' : document.getElementById('provider-expiry')?.value,
+      products,
+    };
+    button.disabled = true;
+    button.textContent = 'Generando…';
+    const result = await api.create({ requestUserId: user.id, data }).catch(error => ({ ok: false, error: error.message }));
+    button.disabled = false;
+    button.textContent = 'Generar y verificar';
+    if (!result?.ok) return toast(result?.error || 'No se pudo generar la licencia', 'err');
+    document.getElementById('provider-key').value = result.data.licenseKey;
+    document.getElementById('provider-result').style.display = 'block';
+    toast('Licencia firmada y verificada correctamente', 'ok');
+  });
 }
 
 async function saExportarDB() {

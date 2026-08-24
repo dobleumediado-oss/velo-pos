@@ -1568,8 +1568,22 @@ async function doLogout() {
 // ══════════════════════════════════════════════
 // MODAL HELPERS (usados por todos los módulos)
 // ══════════════════════════════════════════════
-function openModal(html, cls = '') {
-  closeModal();
+const _modalStack = [];
+
+function openModal(html, cls = '', { replace = false } = {}) {
+  const current = document.getElementById('modal-ov');
+  if (current) {
+    const currentText = String(current.textContent || '').trim();
+    const transient = /(?:cargando|preparando|procesando|consultando)(?:\s|…|\.)/i.test(currentText)
+      || Boolean(current.querySelector('[aria-busy="true"]'));
+    current.remove();
+    current.removeAttribute('id');
+    if (!replace && !transient) {
+      _modalStack.push(current);
+      // Evita conservar una cadena ilimitada de pantallas en sesiones largas.
+      if (_modalStack.length > 8) _modalStack.shift()?.remove();
+    }
+  }
   const ov = h('div', { class: 'ov', id: 'modal-ov',
     // Click en el backdrop: solo cierra si el modal está LIMPIO. Si el usuario
     // ya escribió/cambió algo, NO se cierra (protege su trabajo) y hace un shake.
@@ -1586,6 +1600,29 @@ function openModal(html, cls = '') {
   });
   ov.appendChild(m);
   document.body.appendChild(ov);
+
+  // Los modales abiertos desde otro modal reciben navegación real hacia atrás.
+  // Se conserva el DOM anterior (incluidos campos y listeners), no se reconstruye
+  // desde datos ni se ejecutan consultas otra vez.
+  if (_modalStack.length) {
+    let foot = m.querySelector('.modal-foot');
+    const alreadyHasBack = [...m.querySelectorAll('button')].some(button =>
+      /(?:atr[aá]s|volver)/i.test(button.textContent || '')
+    );
+    if (!alreadyHasBack) {
+      if (!foot) {
+        foot = h('div', { class: 'modal-foot' });
+        m.appendChild(foot);
+      }
+      const back = h('button', {
+        class: 'btn btn-dark',
+        type: 'button',
+        html: '← Atrás',
+        onclick: () => modalBack(),
+      });
+      foot.prepend(back);
+    }
+  }
   _bindModalSafeActions(m);
   // Snapshot del estado inicial de los campos para detectar cambios ("sucio").
   ov._snap = _snapshotForm(m);
@@ -1593,6 +1630,22 @@ function openModal(html, cls = '') {
 
 function closeModal() {
   document.getElementById('modal-ov')?.remove();
+  while (_modalStack.length) _modalStack.pop()?.remove();
+}
+
+function modalBack() {
+  const current = document.getElementById('modal-ov');
+  if (!current || !_modalStack.length) return false;
+  if (_formIsDirty(current._snap)) {
+    _shakeEl(current.querySelector('.modal'));
+    return null;
+  }
+  current.remove();
+  const previous = _modalStack.pop();
+  previous.id = 'modal-ov';
+  document.body.appendChild(previous);
+  requestAnimationFrame(() => previous.querySelector('input:not([type="hidden"]),select,button')?.focus());
+  return true;
 }
 
 // Reemplazo de prompt(): Electron NO implementa window.prompt (lanza error y el
@@ -1835,7 +1888,7 @@ function _openGSearch() {
     class: 'ux-search-overlay',
     style: {
       position: 'fixed', inset: 0, zIndex: 9999,
-      background: 'rgba(0,0,0,.55)', backdropFilter: 'blur(4px)',
+      background: 'rgba(0,0,0,.55)',
       display: 'flex', alignItems: 'flex-start',
       justifyContent: 'center', paddingTop: '80px',
     },
@@ -1863,7 +1916,7 @@ function _openGSearch() {
       border: 'none', borderBottom: '1px solid var(--line)',
       borderRadius: 0, background: 'transparent',
     },
-    oninput: e => _runGSearch(e.target.value, results),
+    oninput: e => _queueGSearch(e.target.value, results),
     onkeydown: e => {
       if (e.key === 'ArrowDown') { e.preventDefault(); _moveGSearch(1); }
       if (e.key === 'ArrowUp') { e.preventDefault(); _moveGSearch(-1); }
@@ -1889,18 +1942,27 @@ function _openGSearch() {
     html: '<span>↵ Abrir</span><span>Esc Cerrar</span><span>⌘K Alternar</span>'
   });
 
-  results.innerHTML = window.VeloExperience?.searchHome?.() || `<div class="ux-search-empty">Empieza a escribir para buscar en todo el sistema</div>`;
+  results.innerHTML = `<div class="ux-search-empty">Empieza a escribir para buscar en todo el sistema</div>`;
 
   box.appendChild(inp);
   box.appendChild(results);
   box.appendChild(footer);
   ov.appendChild(box);
   document.body.appendChild(ov);
-  window.VeloExperience?.bindSearchHome?.(results);
-  setTimeout(() => inp.focus(), 50);
+  inp.focus();
+  // El cuadro aparece primero; favoritos y accesos recientes se completan en el
+  // siguiente frame para que ningún cálculo de inicio retrase el teclado.
+  requestAnimationFrame(() => {
+    if (!document.getElementById('gsearch-ov')) return;
+    if (inp.value.trim()) return;
+    results.innerHTML = window.VeloExperience?.searchHome?.() || `<div class="ux-search-empty">Empieza a escribir para buscar en todo el sistema</div>`;
+    window.VeloExperience?.bindSearchHome?.(results);
+  });
 }
 
 function _closeGSearch() {
+  clearTimeout(_gSearchTimer);
+  ++_gSearchSeq;
   document.getElementById('gsearch-ov')?.remove();
   _gSearchOpen = false;
   _gSearchIndex = -1;
@@ -1908,6 +1970,25 @@ function _closeGSearch() {
 
 let _gSearchSeq = 0;
 let _gSearchIndex = -1;
+let _gSearchTimer = null;
+
+// Evita lanzar una consulta pesada por cada tecla. Los catálogos en memoria se
+// filtran después de una pausa imperceptible y solo la última búsqueda llega al
+// historial completo del servidor.
+function _queueGSearch(q, resultsEl) {
+  clearTimeout(_gSearchTimer);
+  const value = String(q || '');
+  if (value.trim().length < 2) {
+    _runGSearch(value, resultsEl);
+    return;
+  }
+  const requestSeq = ++_gSearchSeq;
+  resultsEl.innerHTML = `<div class="ux-search-empty">Buscando en inventario, ventas y clientes…</div>`;
+  _gSearchTimer = setTimeout(() => {
+    if (requestSeq !== _gSearchSeq) return;
+    _runGSearch(value, resultsEl, requestSeq);
+  }, 100);
+}
 function _moveGSearch(delta) {
   const items = [...document.querySelectorAll('#gsearch-results [data-gsearch-item]')];
   if (!items.length) return;
@@ -1915,7 +1996,7 @@ function _moveGSearch(delta) {
   items.forEach((item,index) => item.classList.toggle('active',index === _gSearchIndex));
   items[_gSearchIndex].scrollIntoView({ block:'nearest' });
 }
-async function _runGSearch(q, resultsEl) {
+async function _runGSearch(q, resultsEl, queuedSeq = null) {
   if (!q || q.trim().length < 2) {
     ++_gSearchSeq;
     _gSearchIndex = -1;
@@ -1926,7 +2007,7 @@ async function _runGSearch(q, resultsEl) {
   const ql = q.trim();
   const qNorm   = searchNorm(ql);
   const qDigits = digitsOf(ql);
-  const seq = ++_gSearchSeq;  // token anti-condición de carrera
+  const seq = queuedSeq == null ? ++_gSearchSeq : queuedSeq;
 
   // ── Comandos operativos — la búsqueda también ejecuta acciones ──
   const commandCatalog = [
@@ -1971,7 +2052,13 @@ async function _runGSearch(q, resultsEl) {
   // Incluye ventas históricas y de importación, no solo las de hoy en memoria.
   let facturas = [];
   try {
-    facturas = await window.api.sales.search({ q: ql, limit: 4 }) || [];
+    facturas = await window.api.sales.search({
+      q: ql,
+      limit: 8,
+      // Si el término ya identificó artículos del catálogo, el backend usa sus
+      // ids indexados en vez de recorrer todos los renglones históricos.
+      productIds: prods.map(product => product.id),
+    }) || [];
   } catch (e) {
     // Respaldo: si el backend no responde, busca en lo que haya en memoria.
     facturas = (DB.sales || []).filter(s =>
@@ -2010,7 +2097,7 @@ async function _runGSearch(q, resultsEl) {
   if (prods.length) {
     sections.push(`<div style="padding:6px 16px 2px;font-size:10px;font-weight:700;
                                color:var(--muted);text-transform:uppercase;letter-spacing:.06em">
-      Productos (${prods.length})</div>`);
+      Inventario (${prods.length})</div>`);
     prods.forEach(p => {
       sections.push(`
         <div class="ux-search-result" data-gsearch-item tabindex="-1" onclick="closeModal&&closeModal();_closeGSearch();routeTo('inventario');setTimeout(()=>openProductoModal(DB.products.find(x=>x.id===${p.id})),300)"
@@ -2039,7 +2126,7 @@ async function _runGSearch(q, resultsEl) {
     sections.push(`<div style="padding:6px 16px 2px;font-size:10px;font-weight:700;
                                color:var(--muted);text-transform:uppercase;letter-spacing:.06em;
                                border-top:1px solid var(--line);margin-top:4px">
-      Facturas (${facturas.length})</div>`);
+      Historial de ventas (${facturas.length})</div>`);
     facturas.forEach(s => {
       const fecha = (s.sale_date||'').split('T')[0].split(' ')[0];
       // Modelos: si la venta trae items los usa; si no, intenta del summary.

@@ -8,8 +8,14 @@ data/
 .env
 .DS_Store
 out/
+output/
 releases/
+tmp/
+data-tech/
 build/windows-service/vendor/
+tools/.license-history.json
+tools/.license-history.json.tmp
+plan_venta_velo_pos.pdf
 
 # Datos de clientes — nunca al repo (nombres, RNC, montos, CxC)
 csv_v2/

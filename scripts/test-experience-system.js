@@ -13,6 +13,8 @@ const app = read('src/js/app.js');
 const icons = read('src/js/icons.js');
 const config = read('src/js/config.js');
 const importer = read('src/js/importar.js');
+const clientes = read('src/js/clientes.js');
+const preload = read('preload.js');
 const main = read('main.js');
 const doctor = read('src/main/system-doctor.js');
 const styles = read('src/css/styles.css');
@@ -43,6 +45,16 @@ assert(app.includes('data-ux-recovery'), 'El topbar debe exponer recuperación')
 assert(app.includes('Operación detenida por conexión'), 'Los fallos de conexión deben ser recuperables');
 assert(app.includes('commandCatalog'), 'La búsqueda global debe incluir comandos operativos');
 assert(app.includes('Centro de impresión'), 'La búsqueda debe conducir al centro de impresión');
+assert(!app.includes("backdropFilter: 'blur(4px)'"), 'El buscador no debe bloquear su apertura aplicando desenfoque');
+assert(app.includes('}, 100);'), 'La búsqueda global debe responder con una pausa corta');
+assert(app.includes('function modalBack()'), 'Los modales secundarios deben poder volver al modal anterior');
+assert(app.includes("html: '← Atrás'"), 'La navegación de modales debe mostrar Atrás');
+assert(styles.includes('.ov{background:rgba(2,6,23,.55);backdrop-filter:none}'),
+  'Los modales no deben aplicar desenfoque costoso al fondo');
+assert(main.includes("customers:getAccountSales"), 'El estado de cuenta debe usar una ruta ligera de ventas');
+assert(preload.includes('getAccountSales:'), 'La ruta ligera del estado de cuenta debe estar disponible en la interfaz');
+assert(clientes.includes('cliSortAscending'), 'Clientes debe ordenar facturas y abonos explícitamente');
+assert(!clientes.includes('Preparando estado de cuenta'), 'El estado de cuenta no debe mostrar una espera con reloj');
 assert(app.includes("id: 'lpass-toggle'"), 'El acceso debe permitir mostrar u ocultar la contraseña');
 assert(app.includes("input.type = showing ? 'password' : 'text'"), 'El ojo debe alternar la visibilidad de la contraseña');
 assert(app.includes("'aria-pressed': 'false'"), 'El ojo de contraseña debe comunicar su estado al lector de pantalla');

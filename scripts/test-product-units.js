@@ -87,7 +87,62 @@ try {
 ok(atomicBlocked && !repo.findByImei('350000000000103'),
   'un duplicado cancela todo el lote sin registros parciales');
 
-// 8) No se puede desactivar el serializado con unidades registradas.
+// 8) Recepción de una orden de compra: crea exactamente las unidades físicas,
+// conserva la trazabilidad a OC/proveedor y no infla products.stock.
+const supplierId = DB.suppliersRepo.create({ name:'Distribuidor TECH' });
+const purchaseProductId = DB.productsRepo.create({ code:'CEL-OC', name:'Teléfono desde compra', cost:10000, price:15000, stock:0 });
+repo.setSerialized(purchaseProductId, true);
+const createdPurchase = DB.purchasesRepo.create({
+  supplierId, supplierName:'Distribuidor TECH', userId:null, cajero:'Prueba',
+  items:[{ product_id:purchaseProductId, product_code:'CEL-OC', product_name:'Teléfono desde compra', unit_cost:10000, qty_ordered:2 }],
+});
+const purchase = DB.purchasesRepo.getById(createdPurchase.poId);
+const received = DB.purchasesRepo.receive(createdPurchase.poId, {
+  userId:null, userName:'Prueba', costs:{ freight:1000 },
+  items:[{
+    id:purchase.items[0].id, qty_received:2,
+    units:[
+      { imei:'350000000000201', color:'Negro', capacity:'128GB', grade:'A', battery_health:100 },
+      { imei:'350000000000202', color:'Azul', capacity:'256GB', supplier_warranty_until:'2027-08-19' },
+    ],
+  }],
+});
+const receivedUnits = repo.listForProduct(purchaseProductId);
+const receivedProduct = db.prepare('SELECT stock,cost FROM products WHERE id=?').get(purchaseProductId);
+ok(received.status === 'recibido' && receivedUnits.length === 2,
+  'la compra serializada crea las 2 unidades y completa la OC');
+ok(receivedProduct.stock === 0 && repo.effectiveStock(purchaseProductId) === 2,
+  'la compra serializada no duplica stock numérico; el stock efectivo sale de los IMEI');
+ok(receivedUnits.every(unit => unit.purchase_order_id === createdPurchase.poId && unit.supplier_id === supplierId),
+  'cada equipo conserva trazabilidad a la OC y al proveedor');
+ok(receivedUnits.every(unit => unit.unit_cost === 10500),
+  'el flete se distribuye y queda guardado como costo real por equipo');
+
+// 9) Si un IMEI del lote está duplicado, también se revierten cantidades,
+// costos, estado de la OC y cualquier unidad válida previa del mismo intento.
+const rollbackProductId = DB.productsRepo.create({ code:'CEL-ROLL', name:'Lote atómico', cost:5000, price:8000, stock:0 });
+repo.setSerialized(rollbackProductId, true);
+const rollbackPurchaseId = DB.purchasesRepo.create({
+  supplierId, supplierName:'Distribuidor TECH', userId:null, cajero:'Prueba',
+  items:[{ product_id:rollbackProductId, product_code:'CEL-ROLL', product_name:'Lote atómico', unit_cost:5000, qty_ordered:2 }],
+}).poId;
+const rollbackLine = DB.purchasesRepo.getById(rollbackPurchaseId).items[0];
+let purchaseRollbackBlocked = false;
+try {
+  DB.purchasesRepo.receive(rollbackPurchaseId, {
+    userId:null, userName:'Prueba', costs:{ freight:300 },
+    items:[{ id:rollbackLine.id, qty_received:2, units:[
+      { imei:'350000000000301' }, { imei:'350000000000201' },
+    ] }],
+  });
+} catch { purchaseRollbackBlocked = true; }
+const rollbackPurchase = DB.purchasesRepo.getById(rollbackPurchaseId);
+ok(purchaseRollbackBlocked && rollbackPurchase.status === 'pendiente' && rollbackPurchase.items[0].qty_received === 0,
+  'un IMEI duplicado revierte toda la recepción de compra');
+ok(!repo.findByImei('350000000000301') && repo.effectiveStock(rollbackProductId) === 0,
+  'el rollback no deja unidades ni existencias fantasma');
+
+// 10) No se puede desactivar el serializado con unidades registradas.
 let guard = false;
 try { repo.setSerialized(phoneId, false); } catch { guard = true; }
 ok(guard, 'no se puede desactivar serializado con unidades existentes');

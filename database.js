@@ -627,6 +627,13 @@ function createTables() {
       capacity       TEXT DEFAULT '',
       warranty_until TEXT,
       sale_id        INTEGER REFERENCES sales(id),
+      purchase_order_id INTEGER REFERENCES purchase_orders(id),
+      purchase_item_id INTEGER REFERENCES purchase_items(id),
+      supplier_id INTEGER REFERENCES suppliers(id),
+      supplier_warranty_until TEXT,
+      grade          TEXT NOT NULL DEFAULT '',
+      battery_health INTEGER,
+      refurb_status  TEXT NOT NULL DEFAULT '',
       received_at    TEXT DEFAULT (datetime('now','localtime')),
       sold_at        TEXT,
       notes          TEXT DEFAULT ''
@@ -763,9 +770,68 @@ function createTables() {
       channel          TEXT NOT NULL DEFAULT 'whatsapp',
       sent_by          INTEGER REFERENCES users(id),
       sent_at          TEXT,
+      provider_message_id TEXT DEFAULT '',
+      provider_status  TEXT DEFAULT '',
+      provider_error   TEXT DEFAULT '',
+      provider_response TEXT DEFAULT '',
       created_at       TEXT DEFAULT (datetime('now','localtime')),
+      updated_at       TEXT DEFAULT (datetime('now','localtime')),
       UNIQUE(service_order_id, notification_type)
     );
+    CREATE TABLE IF NOT EXISTS service_order_evidence (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      service_order_id INTEGER NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+      evidence_type TEXT NOT NULL CHECK(evidence_type IN ('recepcion','diagnostico','proceso','entrega','firma_cliente')),
+      storage_path TEXT NOT NULL, mime_type TEXT NOT NULL, sha256 TEXT NOT NULL,
+      original_name TEXT DEFAULT '', note TEXT DEFAULT '', captured_by INTEGER REFERENCES users(id),
+      created_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE TABLE IF NOT EXISTS service_appointments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      service_order_id INTEGER REFERENCES service_orders(id) ON DELETE SET NULL,
+      customer_id INTEGER REFERENCES customers(id), customer_name TEXT NOT NULL DEFAULT '',
+      customer_phone TEXT DEFAULT '', device_desc TEXT DEFAULT '', reason TEXT NOT NULL DEFAULT '',
+      starts_at TEXT NOT NULL, ends_at TEXT, technician_id INTEGER REFERENCES service_technicians(id),
+      status TEXT NOT NULL DEFAULT 'programada' CHECK(status IN ('programada','confirmada','en_curso','completada','cancelada','no_asistio')),
+      notes TEXT DEFAULT '', created_by INTEGER REFERENCES users(id),
+      created_at TEXT DEFAULT (datetime('now','localtime')), updated_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE TABLE IF NOT EXISTS service_time_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      service_order_id INTEGER NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+      technician_id INTEGER NOT NULL REFERENCES service_technicians(id),
+      started_at TEXT NOT NULL DEFAULT (datetime('now','localtime')), ended_at TEXT,
+      duration_minutes INTEGER NOT NULL DEFAULT 0 CHECK(duration_minutes>=0),
+      status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','stopped','voided')),
+      notes TEXT DEFAULT '', created_by INTEGER REFERENCES users(id),
+      created_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE TABLE IF NOT EXISTS service_procurement_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      service_order_id INTEGER NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+      service_order_item_id INTEGER REFERENCES service_order_items(id) ON DELETE SET NULL,
+      product_id INTEGER REFERENCES products(id), description TEXT NOT NULL,
+      qty_requested INTEGER NOT NULL CHECK(qty_requested>0), qty_received INTEGER NOT NULL DEFAULT 0 CHECK(qty_received>=0),
+      supplier_id INTEGER REFERENCES suppliers(id), purchase_order_id INTEGER REFERENCES purchase_orders(id),
+      purchase_item_id INTEGER REFERENCES purchase_items(id),
+      status TEXT NOT NULL DEFAULT 'solicitada' CHECK(status IN ('solicitada','ordenada','parcial','recibida','cancelada')),
+      requested_by INTEGER REFERENCES users(id), created_at TEXT DEFAULT (datetime('now','localtime')),
+      updated_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_service_time_one_running ON service_time_entries(technician_id) WHERE status='running';
+    CREATE INDEX IF NOT EXISTS idx_service_evidence_order ON service_order_evidence(service_order_id,created_at);
+    CREATE INDEX IF NOT EXISTS idx_service_appointments_start ON service_appointments(starts_at,status);
+    CREATE INDEX IF NOT EXISTS idx_service_procurement_status ON service_procurement_requests(status,created_at);
+    CREATE TABLE IF NOT EXISTS service_message_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      service_order_id INTEGER REFERENCES service_orders(id) ON DELETE CASCADE,
+      appointment_id INTEGER REFERENCES service_appointments(id) ON DELETE CASCADE,
+      message_type TEXT NOT NULL,destination TEXT NOT NULL,message TEXT NOT NULL,scheduled_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','processing','submitted','failed','cancelled')),
+      attempts INTEGER NOT NULL DEFAULT 0,provider_message_id TEXT DEFAULT '',provider_error TEXT DEFAULT '',
+      submitted_at TEXT,updated_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_service_message_due ON service_message_queue(status,scheduled_at);
     CREATE INDEX IF NOT EXISTS idx_service_orders_status ON service_orders(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_service_orders_imei ON service_orders(imei);
     CREATE INDEX IF NOT EXISTS idx_service_order_items_order ON service_order_items(service_order_id);
@@ -882,6 +948,7 @@ function createTables() {
       unit_cost            REAL NOT NULL DEFAULT 0,
       landed_unit_cost     REAL DEFAULT 0,
       allocated_extra_cost REAL DEFAULT 0,
+      service_procurement_request_id INTEGER,
       qty_ordered          INTEGER NOT NULL DEFAULT 0,
       qty_received         INTEGER NOT NULL DEFAULT 0,
       subtotal             REAL DEFAULT 0
@@ -986,6 +1053,23 @@ function createTables() {
       cancel_reason   TEXT,
       created_at      TEXT DEFAULT (datetime('now'))
     );
+
+    -- Retenciones fiscales documentadas. Se mantienen separadas del gasto/venta
+    -- para conservar trazabilidad y soportar conciliaciones IT-1 / IR-17.
+    CREATE TABLE IF NOT EXISTS fiscal_withholdings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      direction TEXT NOT NULL CHECK(direction IN ('received','made')),
+      tax_kind TEXT NOT NULL CHECK(tax_kind IN ('itbis','isr','retribucion_complementaria','other')),
+      source_type TEXT NOT NULL DEFAULT 'manual',
+      source_id INTEGER,
+      party_name TEXT DEFAULT '', party_rnc TEXT DEFAULT '', ncf TEXT DEFAULT '',
+      document_date TEXT NOT NULL, base_amount REAL NOT NULL DEFAULT 0 CHECK(base_amount>=0),
+      rate REAL NOT NULL DEFAULT 0 CHECK(rate>=0), amount REAL NOT NULL CHECK(amount>=0),
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','voided')),
+      notes TEXT DEFAULT '', created_by INTEGER REFERENCES users(id),
+      created_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_fiscal_withholdings_period ON fiscal_withholdings(document_date,tax_kind,status);
 
     -- ── Gastos recurrentes (plantillas) ──
     CREATE TABLE IF NOT EXISTS recurring_expenses (
@@ -1194,11 +1278,13 @@ function createTables() {
     CREATE INDEX IF NOT EXISTS idx_sales_customer    ON sales(customer_id);
     CREATE INDEX IF NOT EXISTS idx_sales_session     ON sales(cash_session_id);
     CREATE INDEX IF NOT EXISTS idx_sale_items_sale   ON sale_items(sale_id);
+    CREATE INDEX IF NOT EXISTS idx_sale_items_product_sale ON sale_items(product_id, sale_id);
     CREATE INDEX IF NOT EXISTS idx_payments_customer ON payments(customer_id);
     CREATE INDEX IF NOT EXISTS idx_payments_sale     ON payments(sale_id);
     CREATE INDEX IF NOT EXISTS idx_audit_user        ON audit_logs(user_id);
     CREATE INDEX IF NOT EXISTS idx_audit_action      ON audit_logs(action);
     CREATE INDEX IF NOT EXISTS idx_inv_product       ON inventory_movements(product_id);
+    CREATE INDEX IF NOT EXISTS idx_inv_product_type_date ON inventory_movements(product_id, type, created_at);
     CREATE INDEX IF NOT EXISTS idx_price_hist_product ON product_price_history(product_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_price_hist_date    ON product_price_history(created_at DESC);
     -- idx_price_hist_accounting se crea en migratePriceHistoryAccountingColumns():
@@ -2560,10 +2646,28 @@ function _deriveSuperAdminPass() {
 // HELPERS
 // ══════════════════════════════════════════════
 function audit(userId, userName, action, entity = '', entityId = null, detail = '') {
-  db.prepare(`
+  const result = db.prepare(`
     INSERT INTO audit_logs(user_id,user_name,action,entity,entity_id,detail)
     VALUES(?,?,?,?,?,?)
   `).run(userId, userName, action, entity, entityId, detail);
+  // En operación multi-sucursal todas las terminales escriben contra la base
+  // central. Este diario inmutable permite demostrar qué operación quedó
+  // confirmada y detectar reintentos sin inventar una peligrosa sincronización
+  // multi-master cuando una terminal está desconectada.
+  try {
+    if (tableExists('branch_sync_journal') && entity) {
+      const terminalId = db.prepare("SELECT value FROM settings WHERE key='terminal_id'").get()?.value || '';
+      const configuredBranch = Number(db.prepare("SELECT value FROM settings WHERE key='terminal_branch_id'").get()?.value) || null;
+      const branchId = configuredBranch && db.prepare('SELECT id FROM branches WHERE id=?').get(configuredBranch)
+        ? configuredBranch : null;
+      const operationId = `audit:${Number(result.lastInsertRowid)}`;
+      const payloadHash = crypto.createHash('sha256').update(JSON.stringify({action,entity,entityId,detail})).digest('hex');
+      db.prepare(`INSERT OR IGNORE INTO branch_sync_journal(branch_id,terminal_id,entity,entity_id,action,operation_id,payload_hash)
+        VALUES(?,?,?,?,?,?,?)`).run(branchId,terminalId,String(entity),String(entityId ?? ''),String(action),operationId,payloadHash);
+    }
+  } catch (error) {
+    console.error('[branch journal]', error.message);
+  }
 }
 
 // Forma corta usada por los handlers de bancos/contabilidad:
@@ -5893,122 +5997,131 @@ const salesRepo = {
    * luego filtra con normalización de tildes/Ñ en JS, igual que el resto
    * del sistema. Limita el resultado para no saturar la UI.
    */
-  search(q, limit = 8) {
+  search(q, limit = 8, productIds = []) {
     const term = String(q || '').trim();
     if (term.length < 2) return [];
 
     const qNorm   = _searchNorm(term);
     const qDigits = _digitsOf(term);
     const idNum   = parseInt(term, 10);
-    // Término solo-dígitos sin '#' ni ceros a la izquierda, para casar
-    // numero_factura (ej. "#02449", "02449" y "2449" → 2449).
     const termNoHash = term.replace(/^#/, '').trim();
     const facNum = parseInt(termNoHash, 10);
-
-    // Candidatos por SQL: por id exacto, o LIKE amplio en los campos de texto
-    // y en los nombres de producto de los items. El LIKE usa el término crudo
-    // en minúsculas; el filtro fino con tildes se hace después en JS.
+    const matchedProductIds = [...new Set((Array.isArray(productIds) ? productIds : [])
+      .map(Number).filter(Number.isInteger).filter(id => id > 0))].slice(0, 20);
     const like = `%${term.toLowerCase()}%`;
     const likeNoHash = `%${termNoHash.toLowerCase()}%`;
+
+    // Primero se resuelven ids candidatos. La implementación anterior unía
+    // cada venta con todos sus artículos por cada tecla y multiplicaba el
+    // trabajo sobre importaciones grandes.
+    const headerIds = db.prepare(`
+      SELECT DISTINCT s.id
+      FROM sales s
+      LEFT JOIN customers c ON c.id=s.customer_id
+      LEFT JOIN salespeople sp ON sp.id=s.salesperson_id
+      WHERE s.status!='cancelled' AND (
+        s.id=? OR s.numero_factura=?
+        OR lower(s.document_number_fmt) LIKE ?
+        OR lower(s.numero_factura_fmt) LIKE ?
+        OR lower(s.ncf) LIKE ?
+        OR lower(s.customer_name) LIKE ?
+        OR lower(s.customer_rnc) LIKE ?
+        OR lower(s.customer_contact_name) LIKE ?
+        OR lower(s.customer_contact_role) LIKE ?
+        OR lower(s.customer_contact_phone) LIKE ?
+        OR lower(s.notes) LIKE ?
+        OR lower(sp.name) LIKE ?
+        OR lower(sp.code) LIKE ?
+        OR lower(c.phone) LIKE ?
+        OR EXISTS (
+          SELECT 1 FROM payments p
+          WHERE COALESCE(p.status,'active')='active'
+            AND CAST(p.numero_recibo AS TEXT) LIKE ?
+            AND (
+              (p.sale_id=s.id AND NOT EXISTS (
+                SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=p.id
+              ))
+              OR EXISTS (
+                SELECT 1 FROM payment_allocations pa
+                WHERE pa.payment_id=p.id AND pa.sale_id=s.id
+              )
+            )
+        )
+      )
+      ORDER BY s.id DESC LIMIT 120
+    `).all(
+      Number.isFinite(idNum) ? idNum : -1,
+      Number.isFinite(facNum) ? facNum : -1,
+      likeNoHash, likeNoHash, like, like, like, like, like, like,
+      like, like, like, like, likeNoHash
+    );
+
+    let itemIds;
+    if (matchedProductIds.length) {
+      const placeholders = matchedProductIds.map(() => '?').join(',');
+      itemIds = db.prepare(`
+        SELECT DISTINCT si.sale_id AS id
+        FROM sale_items si JOIN sales s ON s.id=si.sale_id
+        WHERE s.status!='cancelled' AND si.product_id IN (${placeholders})
+        ORDER BY si.sale_id DESC LIMIT 300
+      `).all(...matchedProductIds);
+    } else {
+      itemIds = db.prepare(`
+        SELECT DISTINCT si.sale_id AS id
+        FROM sale_items si JOIN sales s ON s.id=si.sale_id
+        WHERE s.status!='cancelled'
+          AND (lower(si.product_name) LIKE ? OR lower(si.product_code) LIKE ?)
+        ORDER BY si.sale_id DESC LIMIT 180
+      `).all(like, like);
+    }
+
+    const productSaleIds = new Set(itemIds.map(row => Number(row.id)));
+    const candidateIds = [...new Set([...headerIds, ...itemIds].map(row => Number(row.id)))]
+      .filter(Number.isInteger).sort((a, b) => b - a).slice(0, 300);
+    if (!candidateIds.length) return [];
+
+    const placeholders = candidateIds.map(() => '?').join(',');
     const rows = db.prepare(`
       SELECT s.*,
              sp.name AS salesperson_name,
              sp.code AS salesperson_code,
-             GROUP_CONCAT(si.product_name || ' x' || si.qty, ' | ') as items_summary,
+             GROUP_CONCAT(si.product_name || ' x' || si.qty, ' | ') AS items_summary,
              c.phone AS _cust_phone,
              (
-               SELECT GROUP_CONCAT(p.numero_recibo, ',')
-               FROM payments p
-               WHERE COALESCE(p.status,'active')='active'
-                 AND (
-                   p.sale_id=s.id
-                   AND NOT EXISTS (
-                     SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=p.id
-                   )
-                 )
+               SELECT GROUP_CONCAT(p.numero_recibo, ',') FROM payments p
+               WHERE COALESCE(p.status,'active')='active' AND (
+                 (p.sale_id=s.id AND NOT EXISTS (
+                   SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=p.id
+                 ))
                  OR EXISTS (
                    SELECT 1 FROM payment_allocations pa
                    WHERE pa.payment_id=p.id AND pa.sale_id=s.id
                  )
+               )
              ) AS _recibos
       FROM sales s
-      LEFT JOIN sale_items si ON s.id = si.sale_id
-      LEFT JOIN customers c   ON c.id = s.customer_id
-      LEFT JOIN salespeople sp ON sp.id = s.salesperson_id
-      WHERE s.status != 'cancelled'
-        AND (
-          s.id = ?
-          OR s.numero_factura = ?
-          OR lower(s.document_number_fmt) LIKE ?
-          OR lower(s.numero_factura_fmt) LIKE ?
-          OR lower(s.ncf)           LIKE ?
-          OR lower(s.customer_name) LIKE ?
-          OR lower(s.customer_rnc)  LIKE ?
-          OR lower(s.customer_contact_name) LIKE ?
-          OR lower(s.customer_contact_role) LIKE ?
-          OR lower(s.customer_contact_phone) LIKE ?
-          OR lower(s.notes)         LIKE ?
-          OR lower(sp.name)         LIKE ?
-          OR lower(sp.code)         LIKE ?
-          OR lower(si.product_name) LIKE ?
-          OR lower(si.product_code) LIKE ?
-          OR lower(c.phone)         LIKE ?
-          OR EXISTS (
-            SELECT 1
-            FROM payments p
-            WHERE COALESCE(p.status,'active')='active'
-              AND CAST(p.numero_recibo AS TEXT) LIKE ?
-              AND (
-                  (
-                    p.sale_id=s.id
-                    AND NOT EXISTS (
-                      SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=p.id
-                    )
-                  )
-                  OR EXISTS (
-                    SELECT 1 FROM payment_allocations pa
-                    WHERE pa.payment_id=p.id AND pa.sale_id=s.id
-                  )
-              )
-          )
-        )
-      GROUP BY s.id
-      ORDER BY s.id DESC
-      LIMIT 300
-    `).all(
-      Number.isFinite(idNum) ? idNum : -1,
-      Number.isFinite(facNum) ? facNum : -1,
-      likeNoHash, likeNoHash, like, like, like, like, like, like, like, like, like, like, like, like, likeNoHash
-    );
+      LEFT JOIN sale_items si ON si.sale_id=s.id
+      LEFT JOIN customers c ON c.id=s.customer_id
+      LEFT JOIN salespeople sp ON sp.id=s.salesperson_id
+      WHERE s.id IN (${placeholders})
+      GROUP BY s.id ORDER BY s.id DESC
+    `).all(...candidateIds);
 
-    // Filtro fino con normalización de tildes/Ñ y dígitos con guarda.
-    const matchText   = (hay) => !qNorm   || _searchNorm(hay).includes(qNorm);
+    const matchText   = (hay) => !qNorm || _searchNorm(hay).includes(qNorm);
     const matchDigits = (hay) => !!qDigits && _digitsOf(hay).includes(qDigits);
-
     const filtered = rows.filter(s =>
-      String(s.id) === term ||
-      String(s.id).includes(term) ||
+      String(s.id) === term || String(s.id).includes(term) ||
       (Number.isFinite(facNum) && s.numero_factura === facNum) ||
-      matchText(s.document_number_fmt) ||
-      matchDigits(s.document_number_fmt) ||
-      matchText(s.numero_factura_fmt) ||
-      matchDigits(s.numero_factura_fmt) ||
-      matchText(s.ncf) ||
-      matchText(s.customer_name) ||
-      matchText(s.customer_rnc) ||
-      matchDigits(s.customer_rnc) ||
-      matchText(s.customer_contact_name) ||
-      matchText(s.customer_contact_role) ||
-      matchDigits(s.customer_contact_phone) ||
-      matchDigits(s._cust_phone) ||
-      matchDigits(s._recibos) ||
-      matchText(s.notes) ||
-      matchText(s.salesperson_name) ||
-      matchText(s.salesperson_code) ||
-      matchText(s.items_summary)
+      matchText(s.document_number_fmt) || matchDigits(s.document_number_fmt) ||
+      matchText(s.numero_factura_fmt) || matchDigits(s.numero_factura_fmt) ||
+      matchText(s.ncf) || matchText(s.customer_name) || matchText(s.customer_rnc) ||
+      matchDigits(s.customer_rnc) || matchText(s.customer_contact_name) ||
+      matchText(s.customer_contact_role) || matchDigits(s.customer_contact_phone) ||
+      matchDigits(s._cust_phone) || matchDigits(s._recibos) || matchText(s.notes) ||
+      matchText(s.salesperson_name) || matchText(s.salesperson_code) ||
+      matchText(s.items_summary) || productSaleIds.has(Number(s.id))
     );
 
-    // Limpiar los campos auxiliares antes de devolver
     return filtered.slice(0, limit).map(({ _cust_phone, _recibos, ...rest }) => rest);
   },
 
@@ -7425,13 +7538,54 @@ const purchasesRepo = {
         if (qtyReceived > remaining) {
           throw new Error(`Cantidad recibida supera lo pendiente para ${poItem.product_name}`);
         }
-        receiveRows.push({ ...poItem, qty_received: qtyReceived });
+        receiveRows.push({ ...poItem, qty_received: qtyReceived, units: raw.units });
       }
 
       if (!receiveRows.length) throw new Error('Ingresa al menos una cantidad a recibir');
 
+      // Prevalidar el lote completo antes de tocar compras, stock o costos. En
+      // productos serializados la cantidad física se deriva exclusivamente de
+      // product_units: una recepción sin sus IMEI/seriales nunca es válida.
+      const identifiersInReceipt = new Set();
+      for (const row of receiveRows) {
+        const product = row.product_id
+          ? db.prepare('SELECT * FROM products WHERE id=?').get(Number(row.product_id))
+          : null;
+        if (!product) throw new Error(`Producto no encontrado para ${row.product_name}`);
+        row.product = product;
+        const suppliedUnits = Array.isArray(row.units) ? row.units : [];
+        if (!product.serialized) {
+          if (suppliedUnits.length) throw new Error(`${row.product_name} no está configurado como producto serializado`);
+          row.cleanUnits = [];
+          continue;
+        }
+        if (suppliedUnits.length !== row.qty_received) {
+          throw new Error(`${row.product_name}: debes registrar exactamente ${row.qty_received} IMEI/serial(es)`);
+        }
+        row.cleanUnits = suppliedUnits.map((rawUnit, index) => {
+          const unit = typeof rawUnit === 'string' ? { imei:rawUnit } : (rawUnit || {});
+          const imei = String(unit.imei || '').trim();
+          const serial = String(unit.serial || '').trim();
+          if (!imei && !serial) throw new Error(`${row.product_name}: la unidad ${index + 1} no tiene IMEI ni serial`);
+          for (const identifier of [imei, serial].filter(Boolean)) {
+            const key = identifier.toUpperCase();
+            if (identifiersInReceipt.has(key)) throw new Error(`El IMEI o serial ${identifier} está repetido en la recepción`);
+            identifiersInReceipt.add(key);
+            if (productUnitsRepo.findByImei(identifier)) throw new Error(`El IMEI o serial ${identifier} ya está registrado`);
+          }
+          return {
+            ...unit,
+            product_id:product.id,
+            imei:imei || null,
+            serial:serial || null,
+            condition:unit.condition || product.condition || 'nuevo',
+          };
+        });
+      }
+
       const allocation = allocatePurchaseCosts(receiveRows, costs);
       for (const item of allocation.items) {
+        const sourceRow = receiveRows.find(row => Number(row.id) === Number(item.id));
         // Actualizar item de la orden
         db.prepare(`
           UPDATE purchase_items
@@ -7458,11 +7612,11 @@ const purchasesRepo = {
         // Actualizar stock y costo promedio ponderado
         if (item.product_id) {
           // 1. Leer stock y costo actuales ANTES de ajustar
-          const prodActual = db.prepare(
-            `SELECT * FROM products WHERE id=?`
-          ).get(item.product_id);
+          const prodActual = sourceRow?.product || db.prepare(`SELECT * FROM products WHERE id=?`).get(item.product_id);
 
-          const stockActual   = prodActual?.stock  || 0;
+          const stockActual   = prodActual?.serialized
+            ? productUnitsRepo.countInStock(item.product_id)
+            : (prodActual?.stock || 0);
           const costoActual   = prodActual?.cost   || 0;
           const stockNuevo    = item.qty_received;
           const costoNuevo    = item.landedUnitCost || item.unit_cost;
@@ -7484,13 +7638,27 @@ const purchasesRepo = {
             }
           }
 
-          // 3. Ajustar stock
+          // 3. Crear las unidades o ajustar stock fungible. Nunca se ejecutan
+          // ambos caminos para evitar duplicar existencias.
           const reason = `Recepción OC #${id} | Base: ${item.unit_cost} | Gastos: ${item.allocatedExtra} | Costo real: ${costoNuevo} | Promedio: ${costoPromedio}`;
-          productsRepo.adjustStock(
-            item.product_id, item.qty_received, 'entrada',
-            reason,
-            null, userId
-          );
+          if (prodActual?.serialized) {
+            for (const unit of (sourceRow?.cleanUnits || [])) {
+              productUnitsRepo.create({
+                ...unit,
+                unit_cost:costoNuevo,
+                purchase_order_id:Number(id),
+                purchase_item_id:Number(item.id),
+                supplier_id:Number(po.supplier_id) || null,
+                notes:[unit.notes, `Recibido en OC #${id}`].filter(Boolean).join(' · '),
+              });
+            }
+          } else {
+            productsRepo.adjustStock(
+              item.product_id, item.qty_received, 'entrada',
+              reason,
+              null, userId
+            );
+          }
 
           // 4. Siempre actualizar al costo promedio ponderado
           // Las ventas históricas NO se ven afectadas porque tienen su snapshot en sale_items
@@ -7505,6 +7673,19 @@ const purchasesRepo = {
               reason,
               stockAtChange: stockActual,
             });
+          }
+        }
+
+        // Si la compra nació de una pieza faltante del taller, la recepción
+        // alimenta su estado con la misma transacción.
+        if (item.service_procurement_request_id) {
+          const request = db.prepare('SELECT * FROM service_procurement_requests WHERE id=?')
+            .get(Number(item.service_procurement_request_id));
+          if (request && request.status !== 'cancelada') {
+            const received = Math.min(Number(request.qty_requested), Number(request.qty_received || 0) + Number(item.qty_received));
+            const status = received >= Number(request.qty_requested) ? 'recibida' : 'parcial';
+            db.prepare(`UPDATE service_procurement_requests SET qty_received=?,status=?,updated_at=datetime('now','localtime') WHERE id=?`)
+              .run(received, status, request.id);
           }
         }
       }
@@ -9962,6 +10143,81 @@ const accountingRepo = {
     return { rows, totals };
   },
 
+  saveFiscalWithholding(data = {}, userId = null) {
+    const direction = data.direction === 'received' ? 'received' : 'made';
+    const taxKind = ['itbis','isr','retribucion_complementaria','other'].includes(data.tax_kind) ? data.tax_kind : 'other';
+    const date = String(data.document_date || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Indica una fecha válida');
+    const base = Math.max(0, round2(Number(data.base_amount) || 0));
+    const rate = Math.max(0, round2(Number(data.rate) || 0));
+    const amount = Math.max(0, round2(Number(data.amount) || (base * rate / 100)));
+    if (amount <= 0) throw new Error('El monto retenido debe ser mayor que cero');
+    return Number(db.prepare(`INSERT INTO fiscal_withholdings(direction,tax_kind,source_type,source_id,
+      party_name,party_rnc,ncf,document_date,base_amount,rate,amount,notes,created_by)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(direction,taxKind,String(data.source_type || 'manual'),
+      Number(data.source_id) || null,String(data.party_name || '').trim(),String(data.party_rnc || '').replace(/\D/g,''),
+      String(data.ncf || '').trim().toUpperCase(),date,base,rate,amount,String(data.notes || '').trim(),Number(userId) || null).lastInsertRowid);
+  },
+
+  getFiscalWorkpaper({ from, to } = {}) {
+    const validDate = value => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''));
+    const periodFrom = validDate(from) ? from : `${new Date().toISOString().slice(0,7)}-01`;
+    const periodTo = validDate(to) ? to : new Date().toISOString().slice(0,10);
+    const salesBook = db.prepare(`SELECT s.id,date(s.created_at) document_date,s.customer_name,s.customer_rnc,
+      s.subtotal,s.discount_amt,s.tax_amt,s.total,s.source_balance,s.payment_method,n.ncf,n.type ncf_type,n.issued_at,
+      COALESCE((SELECT SUM(CASE WHEN LOWER(cm.method)='efectivo' THEN cm.amount ELSE 0 END) FROM cash_movements cm WHERE cm.type='venta' AND cm.reference_id=s.id),0) cash_amount,
+      COALESCE((SELECT SUM(CASE WHEN LOWER(cm.method) IN ('transferencia','cheque') THEN cm.amount ELSE 0 END) FROM cash_movements cm WHERE cm.type='venta' AND cm.reference_id=s.id),0) transfer_amount,
+      COALESCE((SELECT SUM(CASE WHEN LOWER(cm.method)='tarjeta' THEN cm.amount ELSE 0 END) FROM cash_movements cm WHERE cm.type='venta' AND cm.reference_id=s.id),0) card_amount
+      FROM sales s LEFT JOIN ncf_log n ON n.id=(SELECT MAX(n2.id) FROM ncf_log n2 WHERE n2.sale_id=s.id)
+      WHERE s.type='factura' AND s.status='completed' AND date(s.created_at) BETWEEN ? AND ?
+      ORDER BY datetime(s.created_at),s.id`).all(periodFrom, periodTo).map(row => {
+        const explicitPaid = round2(Number(row.cash_amount)+Number(row.transfer_amount)+Number(row.card_amount));
+        const credit = row.payment_method === 'credito'
+          ? round2(row.source_balance == null ? row.total : row.source_balance)
+          : Math.max(0, round2(Number(row.total)-explicitPaid));
+        return { ...row, credit_amount:credit,
+          payment_control_difference:round2(Number(row.total)-explicitPaid-credit) };
+      });
+    const purchaseBook = this.get606({ from:periodFrom, to:periodTo });
+    const withholdings = db.prepare(`SELECT * FROM fiscal_withholdings WHERE status='active'
+      AND date(document_date) BETWEEN ? AND ? ORDER BY document_date,id`).all(periodFrom,periodTo);
+    const salesTotals = salesBook.reduce((sum,row) => ({
+      base:round2(sum.base+Number(row.subtotal||0)-Number(row.discount_amt||0)),
+      itbis:round2(sum.itbis+Number(row.tax_amt||0)), total:round2(sum.total+Number(row.total||0)),
+    }), {base:0,itbis:0,total:0});
+    const w = (direction,kind) => round2(withholdings.filter(x=>x.direction===direction&&x.tax_kind===kind).reduce((s,x)=>s+Number(x.amount||0),0));
+    const taxAccount = code => {
+      const account = db.prepare('SELECT id FROM accounting_accounts WHERE code=?').get(code);
+      if (!account) return 0;
+      const row = db.prepare(`SELECT COALESCE(SUM(l.debit-l.credit),0) value FROM accounting_entry_lines l
+        JOIN accounting_entries e ON e.id=l.entry_id WHERE l.account_id=? AND e.status='confirmado'
+        AND e.source_module!='reverso' AND date(e.date) BETWEEN ? AND ?`).get(account.id,periodFrom,periodTo);
+      return round2(Number(row.value||0));
+    };
+    const invalidNcf = salesBook.filter(row => row.ncf && !parseCanonicalLegacyNcf(row.ncf)).map(row => ({sale_id:row.id,ncf:row.ncf,issue:'NCF tradicional inválido'}));
+    const orphanNcf = db.prepare(`SELECT l.id,l.ncf,l.sale_id FROM ncf_log l LEFT JOIN sales s ON s.id=l.sale_id
+      WHERE date(l.issued_at) BETWEEN ? AND ? AND (l.sale_id IS NULL OR s.id IS NULL)`).all(periodFrom,periodTo);
+    const paymentDifferences = salesBook.filter(row=>Math.abs(row.payment_control_difference)>0.01)
+      .map(row=>({sale_id:row.id,difference:row.payment_control_difference}));
+    return {
+      period:{from:periodFrom,to:periodTo}, sales_book:salesBook, purchase_book:purchaseBook.rows,
+      withholdings,
+      totals:{ sales:salesTotals, purchases:purchaseBook.totals },
+      it1_workpaper:{
+        itbis_facturado:salesTotals.itbis, itbis_compras:Number(purchaseBook.totals.itbis||0),
+        itbis_retenido_por_terceros:w('received','itbis'), itbis_retenido_a_terceros:w('made','itbis'),
+        diferencia_antes_de_ajustes:round2(salesTotals.itbis-Number(purchaseBook.totals.itbis||0)-w('received','itbis')),
+      },
+      ir17_workpaper:{ isr_retenido:w('made','isr'), itbis_retenido:w('made','itbis'),
+        retribuciones_complementarias:w('made','retribucion_complementaria'), otras:w('made','other') },
+      accounting_control:{ itbis_por_pagar_movement:round2(-taxAccount('2102')),
+        itbis_acreditable_movement:taxAccount('1106') },
+      reconciliation:{ invalid_ncf:invalidNcf, orphan_ncf:orphanNcf, payment_differences:paymentDifferences,
+        issue_count:invalidNcf.length+orphanNcf.length+paymentDifferences.length },
+      disclaimer:'Hoja de trabajo y conciliación interna. Debe validarse en los formularios oficiales de DGII antes de presentar.',
+    };
+  },
+
   // ── Dashboard contable ────────────────────
   getDashboardStats({ from, to } = {}) {
     const curMonth = new Date().toISOString().slice(0,7);
@@ -10728,6 +10984,7 @@ function _crmLearnedStarQty() {
   return Math.max(5, q[Math.min(q.length - 1, Math.floor(q.length * 0.8))]);
 }
 
+let _crmInventoryCache = null;
 const crmRepo = {
   // Panel de inicio del CRM: totales, conteo por segmento y listas destacadas.
   // Solo lee ventas confirmadas (factura + completed); ignora cotizaciones,
@@ -10926,6 +11183,10 @@ const crmRepo = {
   // Segmenta cada producto activo por demanda/rotación/antigüedad, 100% offline
   // sobre products + sale_items + inventory_movements que ya existen.
   inventoryOverview() {
+    if (_crmInventoryCache && _crmInventoryCache.db === db &&
+        Date.now() - _crmInventoryCache.createdAt < 15000) {
+      return _crmInventoryCache.data;
+    }
     const products = db.prepare(
       `SELECT id, name, code, category, stock, stock_min, cost, price, created_at
          FROM products WHERE active=1`
@@ -10975,7 +11236,7 @@ const crmRepo = {
       };
     });
 
-    return {
+    const result = {
       generatedAt: new Date().toISOString(),
       totalProducts: products.length,
       withStock: products.filter(p => (p.stock || 0) > 0).length,
@@ -10988,6 +11249,8 @@ const crmRepo = {
       starList: enriched.filter(e => e.segment === 'estrella')
         .sort((a, b) => b.qty90 - a.qty90).slice(0, 8),
     };
+    _crmInventoryCache = { db, createdAt: Date.now(), data: result };
+    return result;
   },
 
   // Ficha 360° de un producto: rotación, margen, antigüedad, "se vende junto
@@ -11376,8 +11639,12 @@ const productUnitsRepo = {
     if (duplicate) throw new Error(`El IMEI o serial ${imei || serial} ya está registrado`);
     const info = db.prepare(`
       INSERT INTO product_units
-        (product_id, imei, serial, condition, status, unit_cost, color, capacity, warranty_until, notes)
-      VALUES (@product_id, @imei, @serial, @condition, @status, @unit_cost, @color, @capacity, @warranty_until, @notes)
+        (product_id, imei, serial, condition, status, unit_cost, color, capacity,
+         warranty_until, purchase_order_id, purchase_item_id, supplier_id,
+         supplier_warranty_until, grade, battery_health, refurb_status, notes)
+      VALUES (@product_id, @imei, @serial, @condition, @status, @unit_cost, @color, @capacity,
+              @warranty_until, @purchase_order_id, @purchase_item_id, @supplier_id,
+              @supplier_warranty_until, @grade, @battery_health, @refurb_status, @notes)
     `).run({
       product_id:     u.product_id,
       imei:           imei || null,
@@ -11388,6 +11655,14 @@ const productUnitsRepo = {
       color:          u.color || '',
       capacity:       u.capacity || '',
       warranty_until: u.warranty_until || null,
+      purchase_order_id: Number(u.purchase_order_id) || null,
+      purchase_item_id: Number(u.purchase_item_id) || null,
+      supplier_id: Number(u.supplier_id) || null,
+      supplier_warranty_until: u.supplier_warranty_until || null,
+      grade: String(u.grade || '').trim(),
+      battery_health: u.battery_health === '' || u.battery_health == null
+        ? null : Math.max(0, Math.min(100, Number.parseInt(u.battery_health, 10) || 0)),
+      refurb_status: String(u.refurb_status || '').trim(),
       notes:          u.notes || '',
     });
     return info.lastInsertRowid;
@@ -11649,7 +11924,7 @@ const serviceOrdersRepo = {
   },
 
   _queueNotification(orderId, type) {
-    if (!['presupuesto','listo','entregado','garantia'].includes(type)) return;
+    if (!['estado','presupuesto','listo','entregado','garantia'].includes(type)) return;
     db.prepare(`INSERT OR IGNORE INTO service_order_notifications(service_order_id,notification_type)
       VALUES(?,?)`).run(Number(orderId), type);
   },
@@ -11781,6 +12056,24 @@ const serviceOrdersRepo = {
     return { ok:true, changed };
   },
 
+  recordNotificationProvider(id, type, provider = {}, user = {}) {
+    this._queueNotification(Number(id), String(type || 'estado'));
+    const notification = db.prepare(`SELECT * FROM service_order_notifications
+      WHERE service_order_id=? AND notification_type=?`).get(Number(id), String(type || ''));
+    if (!notification) throw new Error('No se pudo crear el registro de notificación');
+    const status = provider.ok ? 'submitted' : 'failed';
+    db.prepare(`UPDATE service_order_notifications SET status=?,provider_status=?,provider_message_id=?,
+      provider_error=?,provider_response=?,sent_by=?,sent_at=CASE WHEN ? THEN datetime('now','localtime') ELSE sent_at END,
+      updated_at=datetime('now','localtime') WHERE id=?`).run(
+      status, String(provider.status || ''), String(provider.messageId || ''), String(provider.error || '').slice(0,1000),
+      JSON.stringify(provider.response || {}).slice(0,5000), Number(user.id) || null, provider.ok ? 1 : 0, notification.id,
+    );
+    this._event(Number(id), 'notificacion', provider.ok
+      ? `Aviso ${type} aceptado por WhatsApp Cloud`
+      : `Falló el aviso ${type} por WhatsApp Cloud`, provider.ok ? String(provider.messageId || '') : String(provider.error || ''), user);
+    return db.prepare('SELECT * FROM service_order_notifications WHERE id=?').get(notification.id);
+  },
+
   list({ status = '', search = '', limit = 200 } = {}) {
     const where = [];
     const params = [];
@@ -11829,6 +12122,14 @@ const serviceOrdersRepo = {
     row.events = db.prepare('SELECT * FROM service_order_events WHERE service_order_id=? ORDER BY id DESC').all(row.id);
     row.estimates = db.prepare('SELECT * FROM service_order_estimates WHERE service_order_id=? ORDER BY version DESC').all(row.id);
     row.notifications = db.prepare('SELECT * FROM service_order_notifications WHERE service_order_id=? ORDER BY id DESC').all(row.id);
+    row.evidence = db.prepare('SELECT * FROM service_order_evidence WHERE service_order_id=? ORDER BY id DESC').all(row.id);
+    row.time_entries = db.prepare(`SELECT te.*,st.name technician_name FROM service_time_entries te
+      JOIN service_technicians st ON st.id=te.technician_id WHERE te.service_order_id=? ORDER BY te.id DESC`).all(row.id);
+    row.procurement = db.prepare(`SELECT pr.*,po.status purchase_status,s.name supplier_name
+      FROM service_procurement_requests pr
+      LEFT JOIN purchase_orders po ON po.id=pr.purchase_order_id
+      LEFT JOIN suppliers s ON s.id=pr.supplier_id
+      WHERE pr.service_order_id=? ORDER BY pr.id DESC`).all(row.id);
     if (row.sale_id) row.sale = salesRepo.getById(row.sale_id);
     return row;
   },
@@ -12227,7 +12528,194 @@ const serviceOrdersRepo = {
     }
     return Number(db.prepare(`INSERT INTO service_technicians(name,phone,specialty,commission_pct,linked_user_id)
       VALUES(?,?,?,?,?)`).run(name, String(data.phone || '').trim(), String(data.specialty || '').trim(), pct,
-        Number(data.linked_user_id) || null).lastInsertRowid);
+      Number(data.linked_user_id) || null).lastInsertRowid);
+  },
+
+  addEvidenceMetadata(orderId, evidence = {}, user = {}) {
+    const order = db.prepare('SELECT id,number FROM service_orders WHERE id=?').get(Number(orderId));
+    if (!order) throw new Error('Orden de servicio no encontrada');
+    const allowed = new Set(['recepcion','diagnostico','proceso','entrega','firma_cliente']);
+    const type = String(evidence.evidence_type || '').trim();
+    if (!allowed.has(type)) throw new Error('Tipo de evidencia no válido');
+    const info = db.prepare(`INSERT INTO service_order_evidence(
+      service_order_id,evidence_type,storage_path,mime_type,sha256,original_name,note,captured_by
+    ) VALUES(?,?,?,?,?,?,?,?)`).run(
+      order.id, type, String(evidence.storage_path || ''), String(evidence.mime_type || ''),
+      String(evidence.sha256 || ''), String(evidence.original_name || '').slice(0,200),
+      String(evidence.note || '').slice(0,500), Number(user.id) || null,
+    );
+    this._event(order.id, 'evidencia', `Evidencia agregada: ${type}`,
+      String(evidence.note || evidence.original_name || ''), user);
+    return db.prepare('SELECT * FROM service_order_evidence WHERE id=?').get(Number(info.lastInsertRowid));
+  },
+
+  listAppointments({ from = '', to = '' } = {}) {
+    let where = '1=1'; const params = [];
+    if (from) { where += ' AND datetime(sa.starts_at)>=datetime(?)'; params.push(String(from)); }
+    if (to) { where += ' AND datetime(sa.starts_at)<datetime(?)'; params.push(String(to)); }
+    return db.prepare(`SELECT sa.*,st.name technician_name,so.number order_number
+      FROM service_appointments sa
+      LEFT JOIN service_technicians st ON st.id=sa.technician_id
+      LEFT JOIN service_orders so ON so.id=sa.service_order_id
+      WHERE ${where} ORDER BY datetime(sa.starts_at),sa.id`).all(...params);
+  },
+
+  saveAppointment(data = {}, user = {}) {
+    const startsAt = String(data.starts_at || '').trim();
+    const reason = String(data.reason || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}T?\d{2}:\d{2}/.test(startsAt)) throw new Error('Indica una fecha y hora válidas');
+    if (!reason) throw new Error('Indica el motivo de la cita');
+    const status = ['programada','confirmada','en_curso','completada','cancelada','no_asistio'].includes(data.status)
+      ? data.status : 'programada';
+    if (Number(data.id)) {
+      const existing = db.prepare('SELECT id FROM service_appointments WHERE id=?').get(Number(data.id));
+      if (!existing) throw new Error('Cita no encontrada');
+      db.prepare(`UPDATE service_appointments SET service_order_id=?,customer_id=?,customer_name=?,customer_phone=?,
+        device_desc=?,reason=?,starts_at=?,ends_at=?,technician_id=?,status=?,notes=?,updated_at=datetime('now','localtime') WHERE id=?`).run(
+        Number(data.service_order_id) || null, Number(data.customer_id) || null, String(data.customer_name || '').trim(),
+        String(data.customer_phone || '').trim(), String(data.device_desc || '').trim(), reason, startsAt,
+        String(data.ends_at || '').trim() || null, Number(data.technician_id) || null, status,
+        String(data.notes || '').trim(), existing.id,
+      );
+      this._queueAppointmentMessages(existing.id);
+      return existing.id;
+    }
+    const appointmentId = Number(db.prepare(`INSERT INTO service_appointments(service_order_id,customer_id,customer_name,customer_phone,
+      device_desc,reason,starts_at,ends_at,technician_id,status,notes,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      Number(data.service_order_id) || null, Number(data.customer_id) || null, String(data.customer_name || '').trim(),
+      String(data.customer_phone || '').trim(), String(data.device_desc || '').trim(), reason, startsAt,
+      String(data.ends_at || '').trim() || null, Number(data.technician_id) || null, status,
+      String(data.notes || '').trim(), Number(user.id) || null,
+    ).lastInsertRowid);
+    this._queueAppointmentMessages(appointmentId);
+    return appointmentId;
+  },
+
+  _queueAppointmentMessages(appointmentId) {
+    const appointment = db.prepare('SELECT * FROM service_appointments WHERE id=?').get(Number(appointmentId));
+    if (!appointment) return;
+    db.prepare("UPDATE service_message_queue SET status='cancelled',updated_at=datetime('now','localtime') WHERE appointment_id=? AND status='pending'").run(appointment.id);
+    const phone = String(appointment.customer_phone || '').replace(/\D/g,'');
+    if (!phone || ['cancelada','no_asistio'].includes(appointment.status)) return;
+    const biz = db.prepare("SELECT value FROM settings WHERE key='biz_name'").get()?.value || 'VELO TECH POS';
+    const when = String(appointment.starts_at).replace('T',' ');
+    const insert = db.prepare(`INSERT INTO service_message_queue(appointment_id,service_order_id,message_type,destination,message,scheduled_at)
+      VALUES(?,?,?,?,?,?)`);
+    insert.run(appointment.id,appointment.service_order_id||null,'appointment_confirmation',phone,
+      `Hola ${appointment.customer_name || ''}. ${biz} confirma tu cita para ${appointment.reason} el ${when}.`,
+      db.prepare("SELECT datetime('now','localtime') value").get().value);
+    const reminderAt = db.prepare("SELECT datetime(?,'-24 hours') value").get(appointment.starts_at).value;
+    if (reminderAt) insert.run(appointment.id,appointment.service_order_id||null,'appointment_reminder',phone,
+      `Recordatorio de ${biz}: tu cita para ${appointment.reason} es el ${when}.`,reminderAt);
+  },
+
+  startTimer(orderId, technicianId, notes = '', user = {}) {
+    const order = this.getById(orderId);
+    if (!order || SERVICE_TERMINAL.has(order.workflow_status)) throw new Error('La orden no admite registro de tiempo');
+    const technician = db.prepare('SELECT id,name FROM service_technicians WHERE id=? AND active=1').get(Number(technicianId));
+    if (!technician) throw new Error('Selecciona un técnico activo');
+    const running = db.prepare("SELECT service_order_id FROM service_time_entries WHERE technician_id=? AND status='running'").get(technician.id);
+    if (running) throw new Error('Ese técnico ya tiene un trabajo en curso; deténlo antes de iniciar otro');
+    const id = Number(db.prepare(`INSERT INTO service_time_entries(service_order_id,technician_id,notes,created_by)
+      VALUES(?,?,?,?)`).run(order.id, technician.id, String(notes || '').trim(), Number(user.id) || null).lastInsertRowid);
+    this._event(order.id, 'tiempo', `Tiempo iniciado por ${technician.name}`, '', user);
+    return db.prepare('SELECT * FROM service_time_entries WHERE id=?').get(id);
+  },
+
+  stopTimer(entryId, user = {}) {
+    const entry = db.prepare(`SELECT te.*,st.name technician_name FROM service_time_entries te
+      JOIN service_technicians st ON st.id=te.technician_id WHERE te.id=?`).get(Number(entryId));
+    if (!entry || entry.status !== 'running') throw new Error('El contador ya no está activo');
+    db.prepare(`UPDATE service_time_entries SET ended_at=datetime('now','localtime'),status='stopped',
+      duration_minutes=MAX(1,CAST(ROUND((julianday('now','localtime')-julianday(started_at))*1440) AS INTEGER)) WHERE id=?`).run(entry.id);
+    const stopped = db.prepare('SELECT * FROM service_time_entries WHERE id=?').get(entry.id);
+    this._event(entry.service_order_id, 'tiempo', `Tiempo detenido por ${entry.technician_name}`,
+      `${stopped.duration_minutes} minuto(s)`, user);
+    return stopped;
+  },
+
+  requestPart(orderId, itemId, supplierId, user = {}) {
+    return db.transaction(() => {
+      const order = this.getById(orderId);
+      if (!order || SERVICE_TERMINAL.has(order.workflow_status)) throw new Error('La orden no admite solicitudes de piezas');
+      const item = db.prepare(`SELECT * FROM service_order_items WHERE id=? AND service_order_id=? AND kind='parte'`)
+        .get(Number(itemId), order.id);
+      if (!item) throw new Error('Pieza de la orden no encontrada');
+      const needed = Math.max(0, Number(item.qty) - Number(item.qty_reserved || 0));
+      if (!needed) throw new Error('Esa pieza ya está reservada completamente');
+      const active = db.prepare(`SELECT * FROM service_procurement_requests WHERE service_order_item_id=?
+        AND status IN ('solicitada','ordenada','parcial') ORDER BY id DESC LIMIT 1`).get(item.id);
+      if (active) return { request:active, purchaseOrderId:active.purchase_order_id };
+      const requestId = Number(db.prepare(`INSERT INTO service_procurement_requests(
+        service_order_id,service_order_item_id,product_id,description,qty_requested,supplier_id,requested_by
+      ) VALUES(?,?,?,?,?,?,?)`).run(order.id, item.id, item.product_id || null, item.description, needed,
+        Number(supplierId) || null, Number(user.id) || null).lastInsertRowid);
+      let purchaseOrderId = null;
+      if (Number(supplierId)) {
+        const supplier = db.prepare("SELECT * FROM suppliers WHERE id=? AND status='activo'").get(Number(supplierId));
+        if (!supplier) throw new Error('Proveedor no encontrado o inactivo');
+        if (!item.product_id) throw new Error('La pieza debe estar enlazada a un producto para crear la compra');
+        const product = db.prepare('SELECT * FROM products WHERE id=?').get(item.product_id);
+        const purchase = purchasesRepo.create({ supplierId:supplier.id, supplierName:supplier.name,
+          notes:`Solicitud automática para ${order.number}`, userId:Number(user.id) || null, cajero:user.name || '',
+          items:[{ product_id:product.id, product_code:product.code, product_name:product.name,
+            unit_cost:Number(product.cost) || 0, qty_ordered:needed }],
+        });
+        purchaseOrderId = Number(purchase.poId);
+        const purchaseItem = db.prepare('SELECT id FROM purchase_items WHERE purchase_order_id=? ORDER BY id LIMIT 1').get(purchaseOrderId);
+        db.prepare('UPDATE purchase_items SET service_procurement_request_id=? WHERE id=?').run(requestId, purchaseItem.id);
+        db.prepare(`UPDATE service_procurement_requests SET status='ordenada',purchase_order_id=?,purchase_item_id=?,updated_at=datetime('now','localtime') WHERE id=?`)
+          .run(purchaseOrderId, purchaseItem.id, requestId);
+      }
+      this._event(order.id, 'abastecimiento', `Pieza solicitada: ${item.description}`,
+        purchaseOrderId ? `OC #${purchaseOrderId} · ${needed} unidad(es)` : `${needed} unidad(es)`, user);
+      return { request:db.prepare('SELECT * FROM service_procurement_requests WHERE id=?').get(requestId), purchaseOrderId };
+    })();
+  },
+
+  techCatalog() {
+    const models = db.prepare(`SELECT dm.*,
+      (SELECT COUNT(*) FROM tech_product_compatibility pc WHERE pc.device_model_id=dm.id) compatibility_count
+      FROM tech_device_models dm WHERE dm.active=1
+      ORDER BY dm.device_type,dm.brand,dm.model,dm.model_code`).all();
+    const compatibility = db.prepare(`SELECT pc.*,p.name product_name,p.code product_code,
+      dm.device_type,dm.brand,dm.model,dm.model_code
+      FROM tech_product_compatibility pc
+      JOIN products p ON p.id=pc.product_id
+      JOIN tech_device_models dm ON dm.id=pc.device_model_id
+      ORDER BY p.name,dm.brand,dm.model`).all();
+    return { models, compatibility };
+  },
+
+  saveDeviceModel(data = {}) {
+    const deviceType = String(data.device_type || 'otro').trim().toLowerCase();
+    const brand = String(data.brand || '').trim();
+    const model = String(data.model || '').trim();
+    const modelCode = String(data.model_code || '').trim();
+    if (!brand || !model) throw new Error('Marca y modelo son obligatorios');
+    if (Number(data.id)) {
+      const changed = db.prepare(`UPDATE tech_device_models SET device_type=?,brand=?,model=?,model_code=?,active=? WHERE id=?`).run(
+        deviceType, brand, model, modelCode, data.active === 0 ? 0 : 1, Number(data.id));
+      if (!changed.changes) throw new Error('Modelo tecnológico no encontrado');
+      return Number(data.id);
+    }
+    return Number(db.prepare(`INSERT INTO tech_device_models(device_type,brand,model,model_code)
+      VALUES(?,?,?,?) ON CONFLICT(brand,model,model_code) DO UPDATE SET device_type=excluded.device_type,active=1
+      RETURNING id`).get(deviceType, brand, model, modelCode).id);
+  },
+
+  saveCompatibility(data = {}) {
+    const productId = Number(data.product_id);
+    const modelId = Number(data.device_model_id);
+    if (!db.prepare('SELECT id FROM products WHERE id=? AND active=1').get(productId)) throw new Error('Producto no encontrado');
+    if (!db.prepare('SELECT id FROM tech_device_models WHERE id=? AND active=1').get(modelId)) throw new Error('Modelo no encontrado');
+    const compatibilityType = ['compatible','original','alternativo','no_compatible'].includes(data.compatibility_type)
+      ? data.compatibility_type : 'compatible';
+    db.prepare(`INSERT INTO tech_product_compatibility(product_id,device_model_id,compatibility_type,notes)
+      VALUES(?,?,?,?) ON CONFLICT(product_id,device_model_id) DO UPDATE SET
+      compatibility_type=excluded.compatibility_type,notes=excluded.notes`).run(
+      productId, modelId, compatibilityType, String(data.notes || '').trim().slice(0,500));
+    return this.techCatalog();
   },
 
   report() {
@@ -12240,8 +12728,10 @@ const serviceOrdersRepo = {
       FROM service_orders WHERE workflow_status='entregado'`).get();
     const warrantyReturns = db.prepare(`SELECT COUNT(*) n FROM service_orders WHERE service_type='garantia'`).get().n;
     const byStatus = db.prepare(`SELECT workflow_status status,COUNT(*) count FROM service_orders GROUP BY workflow_status ORDER BY count DESC`).all();
-    const byTechnician = db.prepare(`SELECT COALESCE(st.name,'Sin asignar') technician,COUNT(*) count,
-      COALESCE(SUM(CASE WHEN so.workflow_status='entregado' THEN so.approved_amount ELSE 0 END),0) billed
+    const byTechnician = db.prepare(`SELECT COALESCE(st.name,'Sin asignar') technician,COUNT(DISTINCT so.id) count,
+      COALESCE(SUM(CASE WHEN so.workflow_status='entregado' THEN so.approved_amount ELSE 0 END),0) billed,
+      COALESCE((SELECT SUM(te.duration_minutes) FROM service_time_entries te WHERE te.technician_id=st.id AND te.status='stopped'),0) worked_minutes,
+      ROUND(COALESCE(SUM(CASE WHEN so.workflow_status='entregado' THEN so.approved_amount ELSE 0 END),0)*COALESCE(st.commission_pct,0)/100.0,2) commission
       FROM service_orders so LEFT JOIN service_technicians st ON st.id=so.service_technician_id
       GROUP BY st.id,st.name ORDER BY count DESC`).all();
     return { open, overdue, delivered:delivered.n, average_days:round2(delivered.avg_days), warranty_returns:warrantyReturns,

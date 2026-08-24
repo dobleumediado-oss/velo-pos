@@ -35,6 +35,20 @@ function _crmSegBadge(seg) {
   return `<span style="font-size:11px;font-weight:600;color:${cfg.color};border:1px solid ${cfg.color};border-radius:999px;padding:2px 10px">${cfg.label}</span>`;
 }
 
+function _crmRenderLoadError(body, area, error) {
+  const offline = error?.message === 'SERVER_OFFLINE' || error?.offline || error === 'SERVER_OFFLINE';
+  body.innerHTML = `<div class="card" style="max-width:560px;margin:28px auto;padding:22px;text-align:center;border-color:var(--amber,#f59e0b)">
+    <div style="font-size:26px;margin-bottom:8px">${offline ? '🔌' : '⚠️'}</div>
+    <div style="font-size:14px;font-weight:700;color:var(--ink)">No se pudo cargar ${area}</div>
+    <div style="font-size:12px;color:var(--muted2);line-height:1.5;margin:7px 0 14px">
+      ${offline
+        ? 'La terminal no recibió confirmación del servidor. Revisa la conexión; tus datos no fueron modificados.'
+        : 'La consulta no pudo completarse. Puedes intentarlo nuevamente sin cerrar Velo.'}
+    </div>
+    <button class="btn btn-dark" onclick="_crmLoadTab()">Reintentar</button>
+  </div>`;
+}
+
 // ── Render principal (con pestañas) ────────────
 let _crmTab = 'clientes';
 
@@ -86,11 +100,11 @@ async function renderCRMClientes(body) {
   try {
     res = await window.api.crm.overview();
   } catch (e) {
-    body.innerHTML = `<div style="color:var(--red,#ef4444);padding:24px">No se pudo cargar el CRM: ${e.message}</div>`;
+    _crmRenderLoadError(body, 'el análisis de clientes', e);
     return;
   }
   if (!res || !res.ok) {
-    body.innerHTML = `<div style="color:var(--red,#ef4444);padding:24px">No se pudo cargar el CRM: ${res?.error || 'error desconocido'}</div>`;
+    _crmRenderLoadError(body, 'el análisis de clientes', res?.error);
     return;
   }
 
@@ -289,11 +303,11 @@ async function renderCRMInventario(body) {
   try {
     res = await window.api.crm.inventoryOverview();
   } catch (e) {
-    body.innerHTML = `<div style="color:var(--red,#ef4444);padding:24px">No se pudo cargar el inventario: ${e.message}</div>`;
+    _crmRenderLoadError(body, 'el análisis de inventario', e);
     return;
   }
   if (!res || !res.ok) {
-    body.innerHTML = `<div style="color:var(--red,#ef4444);padding:24px">No se pudo cargar el inventario: ${res?.error || 'error'}</div>`;
+    _crmRenderLoadError(body, 'el análisis de inventario', res?.error);
     return;
   }
   const d = res.data;

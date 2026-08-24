@@ -12,15 +12,16 @@
 const crypto = require('crypto');
 const fs     = require('fs');
 const path   = require('path');
-const LICENSE_VERSION = '3';
-const ALLOWED_PRODUCTS = ['velo_pos', 'velo_tech_pos'];
+const { PUBLIC_KEY_PEM } = require('../license');
+const {
+  resolvePrivateKeyPath,
+  normalizeRequest,
+  createProviderLicense,
+} = require('./license-provider');
 
 // ── Cargar clave privada ──────────────────────
 function loadPrivateKey() {
-  const envPath = process.env.VELO_PRIVATE_KEY_PATH;
-  const localPath = path.join(__dirname, 'vendor-private.pem');
-
-  const keyPath = envPath || localPath;
+  const keyPath = resolvePrivateKeyPath();
   if (!fs.existsSync(keyPath)) {
     console.error(`\n❌ Clave privada no encontrada en: ${keyPath}`);
     console.error('   Generar con: node tools/generate-license.js --keygen\n');
@@ -38,8 +39,13 @@ function generateKeyPair() {
   });
   const privPath = path.join(__dirname, 'vendor-private.pem');
   const pubPath  = path.join(__dirname, 'vendor-public.pem');
-  fs.writeFileSync(privPath, privateKey);
-  fs.writeFileSync(pubPath,  publicKey);
+  if (fs.existsSync(privPath) || fs.existsSync(pubPath)) {
+    throw new Error('Ya existe una llave del proveedor. No se reemplazó ningún archivo');
+  }
+  // Nunca reemplazar silenciosamente la identidad criptográfica que ya usan
+  // las aplicaciones publicadas.
+  fs.writeFileSync(privPath, privateKey, { flag: 'wx', mode: 0o600 });
+  fs.writeFileSync(pubPath,  publicKey,  { flag: 'wx', mode: 0o644 });
   console.log(`\n✅ Par de claves generado:`);
   console.log(`   Privada: ${privPath}  ← guardar en lugar seguro, NUNCA subir a git`);
   console.log(`   Pública: ${pubPath}   ← copiar el contenido a license.js del cliente\n`);
@@ -49,12 +55,12 @@ function generateKeyPair() {
 
 // ── Generar licencia ──────────────────────────
 function generateLicense(machineId, business, expiryDate, products) {
-  const keyPem     = loadPrivateKey();
-  const privateKey = crypto.createPrivateKey(keyPem);
-  const payload    = `${LICENSE_VERSION}|${machineId}|${business}|${expiryDate}|${products.join(',')}`;
-  const signature  = crypto.sign('SHA256', Buffer.from(payload), privateKey);
-  const sigB64     = signature.toString('base64');
-  return `${payload}|${sigB64}`;
+  // Mantiene la CLI y el administrador visual sobre una sola lógica validada.
+  loadPrivateKey();
+  return createProviderLicense(
+    { machineId, business, expiry: expiryDate, products },
+    { privateKeyPath: resolvePrivateKeyPath(), expectedPublicKeyPem: PUBLIC_KEY_PEM, allowUniversal: true }
+  ).licenseKey;
 }
 
 // ── CLI ───────────────────────────────────────
@@ -78,33 +84,25 @@ if (args.length < 4) {
 
 const [machineId, business, expiry, productsArg] = args;
 
-// Validar
-if (!/^[A-F0-9]{32}$/.test(machineId) && machineId !== 'UNIVERSAL') {
-  console.error('\n❌ MACHINE_ID debe ser 32 caracteres hexadecimales en mayúsculas\n');
+let normalized;
+try {
+  normalized = normalizeRequest(
+    { machineId, business, expiry, products: productsArg },
+    { allowUniversal: true }
+  );
+} catch (error) {
+  console.error(`\n❌ ${error.message}\n`);
   process.exit(1);
 }
-if (expiry !== 'PERPETUAL' && !/^\d{4}-\d{2}-\d{2}$/.test(expiry)) {
-  console.error('\n❌ Fecha debe ser YYYY-MM-DD o PERPETUAL\n');
-  process.exit(1);
-}
-if (String(business).includes('|') || !String(business).trim()) {
-  console.error('\n❌ El nombre del negocio no puede estar vacío ni contener |\n');
-  process.exit(1);
-}
-const requestedProducts = [...new Set(String(productsArg).split(',').map(v => v.trim().toLowerCase()).filter(Boolean))];
-if (!requestedProducts.length || requestedProducts.some(p => !ALLOWED_PRODUCTS.includes(p))) {
-  console.error('\n❌ Productos válidos: velo_pos, velo_tech_pos\n');
-  process.exit(1);
-}
-const products = ALLOWED_PRODUCTS.filter(p => requestedProducts.includes(p));
+const products = normalized.products;
 
-const licenseKey = generateLicense(machineId, business.trim(), expiry, products);
+const licenseKey = generateLicense(normalized.machineId, normalized.business, normalized.expiry, products);
 
 console.log('\n✅ Licencia generada:');
 console.log('─'.repeat(80));
 console.log(licenseKey);
 console.log('─'.repeat(80));
-console.log(`\nNegocio:  ${business}`);
-console.log(`Máquina:  ${machineId}`);
-console.log(`Vence:    ${expiry}`);
+console.log(`\nNegocio:  ${normalized.business}`);
+console.log(`Máquina:  ${normalized.machineId}`);
+console.log(`Vence:    ${normalized.expiry}`);
 console.log(`Productos: ${products.join(', ')}\n`);

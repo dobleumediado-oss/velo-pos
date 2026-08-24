@@ -122,6 +122,12 @@ function createHarness(addPayment, options = {}) {
     document_number_fmt: 'ABO-000501',
     allocations: [],
   }));
+  const ascending = success.context.cliSortAscending([
+    { id: 3, created_at: '2026-08-24 10:00:00' },
+    { id: 1, created_at: '2024-07-10 09:00:00' },
+    { id: 2, created_at: '2024-08-22 09:00:00' },
+  ]).map(row => row.id).join(',');
+  ok(ascending === '1,2,3', 'ordena facturas y abonos de antiguo a reciente');
   await success.context.registrarAbono(77, 200, null);
   ok(success.printed.length === 1,
     'abre el display del recibo sin esperar las recargas secundarias');

@@ -5,7 +5,9 @@
  * Exit: 0 = OK; 1 = algún fallo.
  */
 'use strict';
-const { isAllowedExternalUrl, isAllowedPortalBaseUrl } = require('../lib/url-safe');
+const { EventEmitter } = require('events');
+const { isAllowedExternalUrl, isAllowedPortalBaseUrl, diagnosePortalBaseUrl } = require('../lib/url-safe');
+const { checkPublicPortalAccess } = require('../lib/portal-public-check');
 const { buildWhatsAppUrls, normalizeWhatsAppPhone } = require('../lib/whatsapp-url');
 
 let pass = 0, fail = 0;
@@ -51,6 +53,22 @@ expectPortal('https://velo.tail123.ts.net:9443', false);
 expectPortal('http://127.0.0.1:8787', false);
 expectPortal('http://127.0.0.1:8787', true, { allowLocal:true });
 
+console.log('\n== Retroalimentación de configuración del portal ==');
+function expectPortalDiagnostic(url, code, phrases = []) {
+  const result = diagnosePortalBaseUrl(url, { allowLocal:true });
+  const explains = phrases.every(phrase => result.error.includes(phrase));
+  if (!result.allowed && result.code === code && result.error && explains) {
+    pass++; console.log(`  ✓ explica ${code} para ${JSON.stringify(url)}`);
+  } else {
+    fail++; console.log(`  ✗ diagnóstico inesperado para ${JSON.stringify(url)}:`, result);
+  }
+}
+expectPortalDiagnostic('https://login.tailscale.com/f/funnel?node=abc123', 'tailscale_enable_link', ['HABILITAR', "tailscale funnel --bg <puerto>", 'https://...ts.net']);
+expectPortalDiagnostic('https://velo.tail123.ts.net/r/principal/token', 'base_only', ['dominio base', 'sin /r']);
+expectPortalDiagnostic('https://velo.tail123.ts.net/otra-ruta', 'base_only');
+expectPortalDiagnostic('https://velo.tail123.ts.net tailscale funnel --bg 8787', 'base_only');
+expectPortalDiagnostic('https://evil.example', 'invalid');
+
 console.log('\n== Enlaces de WhatsApp Desktop/Web ==');
 try {
   const urls = buildWhatsAppUrls({ phone: '+1 (809) 123-4567', message: 'Hola & gracias' });
@@ -82,5 +100,49 @@ try {
   fail++; console.log('  ✗ falló al normalizar el prefijo 1:', e.message);
 }
 
-console.log(`\n== RESULTADO: ${pass} OK, ${fail} fallos ==`);
-process.exit(fail ? 1 : 0);
+async function testPublicPortalCheck() {
+  console.log('\n== Prueba HTTPS pública manual ==');
+  let captured;
+  const requestImpl = (options, callback) => {
+    captured = options;
+    const request = new EventEmitter();
+    request.destroy = error => request.emit('error', error);
+    request.end = () => {
+      const response = new EventEmitter();
+      response.statusCode = 200;
+      response.resume = () => {};
+      callback(response);
+      response.emit('end');
+    };
+    return request;
+  };
+  const result = await checkPublicPortalAccess('https://velo.tail123.ts.net', { requestImpl });
+  if (result.online && result.status_code === 200 && captured.hostname === 'velo.tail123.ts.net'
+      && captured.path === '/health' && captured.protocol === 'https:') {
+    pass++; console.log('  ✓ consulta exclusivamente /health del dominio público HTTPS permitido');
+  } else {
+    fail++; console.log('  ✗ la prueba pública armó una petición inesperada', { result, captured });
+  }
+
+  let called = false;
+  try {
+    await checkPublicPortalAccess('https://evil.example', { requestImpl:() => { called = true; } });
+    fail++; console.log('  ✗ permitió probar un host fuera de la allowlist');
+  } catch (error) {
+    if (!called && /URL pública HTTPS válida/.test(error.message)) {
+      pass++; console.log('  ✓ rechaza hosts fuera de la allowlist antes de abrir la red');
+    } else {
+      fail++; console.log('  ✗ rechazo inesperado de host no permitido:', error.message);
+    }
+  }
+}
+
+testPublicPortalCheck().then(() => {
+  console.log(`\n== RESULTADO: ${pass} OK, ${fail} fallos ==`);
+  process.exit(fail ? 1 : 0);
+}).catch(error => {
+  fail++;
+  console.log('  ✗ prueba pública inesperadamente fallida:', error.message);
+  console.log(`\n== RESULTADO: ${pass} OK, ${fail} fallos ==`);
+  process.exit(1);
+});

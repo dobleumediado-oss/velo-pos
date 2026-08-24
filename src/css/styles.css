@@ -233,7 +233,7 @@ select.inp{cursor:pointer}
 .hr{border:none;border-top:1px solid var(--line);margin:14px 0}
 
 /* ── Modal ── */
-.ov{position:fixed;inset:0;background:rgba(13,15,18,.48);z-index:200;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px)}
+.ov{position:fixed;inset:0;background:rgba(13,15,18,.48);z-index:200;display:flex;align-items:center;justify-content:center;backdrop-filter:none}
 .modal{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:26px;width:540px;max-width:95vw;max-height:88vh;overflow-y:auto;box-shadow:var(--sh-lg)}
 .modal-lg{width:680px}
 .modal-xl{width:780px}
@@ -1175,7 +1175,7 @@ tbody tr:hover td{background:#f7faf8}.tb{font-weight:700}.ts{font-size:10px}.tm{
 .alrt{border-radius:11px;padding:11px 13px}.rep-card{border-radius:15px}.rep-card:hover{border-color:var(--module-accent)}
 
 /* Modales y retroalimentación */
-.ov{background:rgba(2,6,23,.55);backdrop-filter:blur(6px)}
+.ov{background:rgba(2,6,23,.55);backdrop-filter:none}
 .modal{border:0;border-radius:19px;padding:25px;box-shadow:0 30px 80px rgba(2,6,23,.25),0 0 0 1px rgba(255,255,255,.8)}
 .modal-title{font-size:17px;letter-spacing:-.35px}.modal-sub{font-size:11px;margin-bottom:18px}.modal-foot{margin-top:18px}
 .toast{border-radius:12px;box-shadow:0 18px 45px rgba(2,6,23,.24)}
@@ -1443,7 +1443,7 @@ tbody tr:hover td{background:#f7faf8}.tb{font-weight:700}.ts{font-size:10px}.tm{
 .ux-save-permissions{width:100%;justify-content:center;margin-top:11px}
 
 .ux-modal-structured{max-height:min(88vh,900px);scrollbar-gutter:stable}.ux-modal-structured>.modal-title:first-child,.ux-modal-structured>.modal-head:first-child{position:sticky;top:-25px;z-index:8;background:var(--surface);padding-top:3px}
-.ux-modal-structured .modal-foot{position:sticky;bottom:-25px;z-index:8;background:color-mix(in srgb,var(--surface) 94%,transparent);backdrop-filter:blur(8px);box-shadow:0 -1px var(--line2);padding-top:12px}
+.ux-modal-structured .modal-foot{position:sticky;bottom:-25px;z-index:8;background:var(--surface);backdrop-filter:none;box-shadow:0 -1px var(--line2);padding-top:12px}
 [data-ux-status]{border:1px solid transparent!important;font-weight:750!important}[data-ux-status="success"]{background:var(--green-bg)!important;color:var(--green)!important;border-color:var(--green-line)!important}
 [data-ux-status="warning"]{background:var(--amber-bg)!important;color:var(--amber)!important;border-color:var(--amber-line)!important}
 [data-ux-status="danger"]{background:var(--red-bg)!important;color:var(--red)!important;border-color:var(--red-line)!important}

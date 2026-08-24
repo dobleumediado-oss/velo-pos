@@ -333,7 +333,7 @@ async function renderConfiguracion(el) {
 
     const ov = document.createElement('div');
     ov.id = 'modal-estilos-ov';
-    ov.style.cssText = 'position:fixed;inset:0;background:rgba(13,15,18,.5);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(3px)';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(13,15,18,.5);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:none';
     ov.innerHTML = `
       <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:24px;width:100%;max-width:560px;max-height:90vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.15)">
         <div style="font-weight:800;font-size:16px;margin-bottom:3px">✏️ Personalizar — ${plantilla.nombre}</div>
@@ -925,6 +925,17 @@ async function renderConfiguracion(el) {
     h('button', { class: 'btn btn-out btn-fw', onclick: hacerBackupManual, html: `${svg('download')} Crear ahora` }),
     h('button', { class: 'btn btn-ghost btn-fw', style: 'color:var(--amber)', onclick: restaurarBackup, html: `${svg('return')} Restaurar último` })
   ));
+  backupCard.appendChild(h('div', { class: 'alrt', style: 'margin-bottom:10px' },
+    h('div', { class: 'alrt-dot' }),
+    h('div', null,
+      h('div', { class: 'alrt-title' }, 'Continuidad externa cifrada'),
+      h('div', { class: 'alrt-sub' }, 'Crea una copia consistente protegida por clave y permite probar su restauración sin reemplazar los datos activos.')
+    )
+  ));
+  backupCard.appendChild(h('div', { class: 'flex', style: 'gap:8px;margin-bottom:12px' },
+    h('button', { class: 'btn btn-out btn-fw', onclick: abrirBackupCifrado, html: '🔐 Crear copia externa' }),
+    h('button', { class: 'btn btn-out btn-fw', onclick: abrirVerificacionCifrada, html: '✓ Probar una copia' })
+  ));
   if (info.backups?.length) {
     const bList = h('div');
     bList.appendChild(h('div', { style: 'font-size:11px;font-weight:700;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em' }, 'Backups disponibles'));
@@ -1001,7 +1012,7 @@ async function renderConfiguracion(el) {
           <label class="lbl">Clave de licencia</label>
           <textarea class="inp no-uppercase" id="lic-key" rows="3" data-uppercase="off" placeholder="3|ABCD...|Negocio|2027-01-01|velo_pos|FIRMA"
                  style="font-family:var(--mono);font-size:11px;resize:none;white-space:nowrap;overflow-x:auto"
-                 onpaste="setTimeout(()=>{this.value=this.value.replace(/[\r\n\s]+/g,'')},0)"></textarea>
+                 onpaste="setTimeout(()=>{this.value=this.value.replace(/[\r\n]+/g,'')},0)"></textarea>
         </div>
         <button class="btn btn-green btn-fw" onclick="activarLicencia()">
           ${svg('check')} Activar licencia
@@ -1443,6 +1454,16 @@ async function hacerBackupManual() {
   } else {
     toast(result.error||'Error al crear backup', 'err');
   }
+}
+
+function abrirBackupCifrado() {
+  openModal(`<div class="modal-title">Respaldo externo cifrado</div><div class="modal-sub">Seleccionarás una carpeta externa. La clave no se guarda en VELO: consérvala en un lugar seguro.</div><div class="fg" style="margin-top:14px"><label class="lbl">Clave del respaldo *</label><input class="inp" id="continuity-pass" type="password" autocomplete="new-password" placeholder="Mínimo 10 caracteres"></div><div class="fg"><label class="lbl">Confirmar clave *</label><input class="inp" id="continuity-pass2" type="password" autocomplete="new-password"></div><div class="alrt a"><div class="alrt-dot a"></div><div class="alrt-sub">Sin esta clave el archivo no se puede recuperar. El sistema cifra con AES-256-GCM y verifica la copia antes de confirmarla.</div></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="continuity-create">Seleccionar carpeta y crear</button></div>`);
+  document.getElementById('continuity-create').onclick=async event=>{const passphrase=document.getElementById('continuity-pass').value;const confirmation=document.getElementById('continuity-pass2').value;if(passphrase.length<10)return toast('La clave debe tener al menos 10 caracteres','w');if(passphrase!==confirmation)return toast('Las claves no coinciden','w');event.currentTarget.disabled=true;const picked=await window.api.backup.pickExternalDirectory();if(!picked?.ok){event.currentTarget.disabled=false;return picked?.error==='Cancelado'?null:toast(picked?.error||'No se pudo seleccionar la carpeta','err');}const result=await window.api.backup.createEncrypted({requestUserId:_cfgUser().id,passphrase,destinationDir:picked.path});if(!result?.ok){event.currentTarget.disabled=false;return toast(result?.error||'No se pudo crear la copia','err');}closeModal();toast('✓ Respaldo cifrado creado y verificado','ok');};
+}
+
+function abrirVerificacionCifrada() {
+  openModal(`<div class="modal-title">Probar respaldo cifrado</div><div class="modal-sub">La prueba descifra una copia temporal, valida la base completa y la elimina. Los datos activos no se modifican.</div><div class="fg" style="margin-top:14px"><label class="lbl">Clave del respaldo *</label><input class="inp" id="continuity-verify-pass" type="password" autocomplete="current-password"></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="continuity-verify">Seleccionar archivo y probar</button></div>`);
+  document.getElementById('continuity-verify').onclick=async event=>{const passphrase=document.getElementById('continuity-verify-pass').value;if(!passphrase)return toast('Escribe la clave del respaldo','w');event.currentTarget.disabled=true;const picked=await window.api.backup.pickEncryptedFile();if(!picked?.ok){event.currentTarget.disabled=false;return picked?.error==='Cancelado'?null:toast(picked?.error||'No se pudo seleccionar el archivo','err');}const result=await window.api.backup.verifyEncrypted({requestUserId:_cfgUser().id,passphrase,filePath:picked.path});if(!result?.ok){event.currentTarget.disabled=false;return toast(result?.error||'La copia no superó la prueba','err');}closeModal();toast('✓ Copia íntegra y restaurable','ok');};
 }
 
 async function restaurarBackup() {

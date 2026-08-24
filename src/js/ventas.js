@@ -1623,18 +1623,18 @@ async function confirmarConversionCotizacion() {
 }
 
 
-async function openDetalleVentaModal(s) {
-  const sale  = await window.api.sales.getById({ id: s.id });
+async function openDetalleVentaModal(s, options = {}) {
+  // Detalle y stock son lecturas independientes; ejecutarlas en paralelo evita
+  // que abrir una factura histórica espere dos viajes completos al servidor.
+  const [sale] = await Promise.all([
+    window.api.sales.getById({ id: s.id }).catch(() => null),
+    reloadProducts().catch(() => null),
+  ]);
   const detail = sale || s || {};
   const adjustedCopy = ventasHasAdjustedCopy(detail);
   const items = adjustedCopy ? detail.adjusted_items : (sale?.items || []);
   window._ventasDetalleCache = window._ventasDetalleCache || {};
   window._ventasDetalleCache[s.id] = { detail, items };
-
-  // Refrescar productos ANTES de pintar la columna Revender: el stock que se
-  // muestra/valida sale de DB.products, y ese cache es del arranque — tras
-  // ventas, compras o ajustes quedaba viejo y "Revender" no veía el stock real.
-  try { await reloadProducts(); } catch { /* si falla, se usa el cache */ }
 
   const itemsFiscal = items.map(i => ventasLineFiscal(i, detail));
   const saleType = detail.type || 'factura';
@@ -1859,6 +1859,10 @@ async function openDetalleVentaModal(s) {
       <div style="font-size:12px;margin-top:5px;white-space:pre-wrap">${ventasEsc(detail.notes)}</div>
     </div>` : ''}
     <div class="modal-foot">
+      ${Number(options.returnToCustomerId) > 0 ? `
+      <button class="btn btn-dark" onclick="if(modalBack()===false) volverAClienteDesdeFactura(${Number(options.returnToCustomerId)},'${options.returnTab === 'facturas' ? 'facturas' : options.returnTab === 'historial' ? 'historial' : 'cuenta'}')">
+        ← Atrás
+      </button>` : ''}
       <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
       <button class="btn btn-out" onclick="reimprimirVenta(${s.id})">
         ${svg('print')} ${adjustedCopy ? 'Reimprimir factura ajustada' : 'Reimprimir documento'}

@@ -1091,6 +1091,33 @@ ok(legacyHtml.includes('16,152.54'), 'A4 conserva el total histórico ya cobrado
 ok(legacyHtml.includes('.titlebox .t { font-size:9px') &&
   legacyHtml.includes('Factura #') && legacyHtml.includes('00002335'),
   'A4 usa encabezado documental sutil y conserva la numeración histórica');
+const abonoHtml = renderCartaRecibo({
+  id: 5001,
+  document_number_fmt: 'ABO-005001',
+  type: 'abono',
+  status: 'completed',
+  date: '2026-08-24',
+  customer_name: 'CLIENTE DE PRUEBA',
+  payment_method: 'efectivo',
+  subtotal: 17300,
+  total: 17300,
+  paid_amount: 17300,
+  payment_amount: 17300,
+  balance_after: 59955.39,
+  payment_allocations: [{ sale_id: 2358, amount: 1253.38 }, { sale_id: 2320, amount: 16046.62 }],
+  items: [
+    { product_name: 'Abono a #00002358', qty: 1, unit_price: 1253.38, subtotal: 1253.38 },
+    { product_name: 'Abono a #00002320', qty: 1, unit_price: 16046.62, subtotal: 16046.62 },
+  ],
+}, { biz_name: 'EQUIPARTS' }, {
+  logo: false, rnc: true, ncf: true, mensaje: true, cedula: true,
+});
+ok(abonoHtml.includes('Factura / concepto') && abonoHtml.includes('Monto aplicado'),
+  'recibo A4 de abono usa columnas de aplicación, no columnas de venta');
+ok(abonoHtml.includes('Monto del abono') && abonoHtml.includes('Balance después del abono'),
+  'recibo A4 de abono usa resumen financiero de cobro');
+ok(!abonoHtml.includes('Precio venta') && !abonoHtml.includes('Total con impuestos'),
+  'recibo A4 de abono no se presenta como factura al contado');
 const finalUnitSample = {
   id: 2385, numero_factura_fmt: '00002385', type: 'factura', status: 'pending',
   date: '2026-08-12', customer_name: 'CENTRO MULTISERVICIOS NAILAM SRL',

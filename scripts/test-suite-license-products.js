@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const {
   parseLicense,
+  normalizeLicenseKeyInput,
   verifyLicense,
   activateLicense,
   getLicenseStatus,
@@ -86,6 +87,39 @@ test('la activación persiste solo una clave del producto correcto', () => {
   }
 });
 
+test('la activación conserva el caso y los espacios de la licencia firmada', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'velo-license-case-'));
+  try {
+    const cut = suiteKey.indexOf('|', suiteKey.indexOf('|') + 1) + 1;
+    const wrapped = `${suiteKey.slice(0, cut)}\r\n${suiteKey.slice(cut)}`;
+    assert.strictEqual(normalizeLicenseKeyInput(wrapped), suiteKey);
+    assert.ok(normalizeLicenseKeyInput(wrapped).includes('|Castillo Tech|'));
+
+    const accepted = activateLicense(dir, wrapped, 'velo_pos', { ...verifyOptions, machineId });
+    assert.strictEqual(accepted.ok, true);
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'license.key'), 'utf8'), suiteKey);
+
+    const uppercased = activateLicense(dir, suiteKey.toUpperCase(), 'velo_pos', {
+      ...verifyOptions,
+      machineId,
+    });
+    assert.strictEqual(uppercased.ok, false,
+      'convertir la firma Base64 o el producto a mayúsculas debe invalidar la clave');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('los campos visuales de activación excluyen la conversión a mayúsculas', () => {
+  const root = path.join(__dirname, '..');
+  const appSource = fs.readFileSync(path.join(root, 'src/js/app.js'), 'utf8');
+  const configSource = fs.readFileSync(path.join(root, 'src/js/config.js'), 'utf8');
+  assert.match(appSource, /class: 'inp no-uppercase'[\s\S]*?'data-uppercase': 'off'/);
+  assert.match(configSource, /class="inp no-uppercase" id="lic-key"[\s\S]*?data-uppercase="off"/);
+  assert.strictEqual(configSource.includes("replace(/[\\r\\n\\s]+/g,'')"), false,
+    'pegar una licencia no debe borrar espacios firmados del nombre del negocio');
+});
+
 test('producto equivocado queda bloqueado sin período de gracia', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'velo-license-'));
   try {
@@ -99,13 +133,22 @@ test('producto equivocado queda bloqueado sin período de gracia', () => {
   }
 });
 
-test('el cliente no expone generación ni rutas de clave privada', () => {
+test('el cliente no contiene la llave privada y la consola del proveedor exige desarrollo explícito', () => {
   const root = path.join(__dirname, '..');
   for (const rel of ['main.js', 'preload.js', 'src/js/superadmin.js']) {
     const source = fs.readFileSync(path.join(root, rel), 'utf8');
-    assert.strictEqual(source.includes("license:generate"), false, rel);
     assert.strictEqual(source.includes('vendor-private.pem'), false, rel);
+    assert.strictEqual(source.includes('crypto.sign('), false, rel);
   }
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const preload = fs.readFileSync(path.join(root, 'preload.js'), 'utf8');
+  const providerGuard = main.indexOf('if (!app.isPackaged && RUNTIME.dev && !RUNTIME.headless)');
+  const providerHandler = main.indexOf("ipcMain.handle('providerLicenses:create'");
+  assert.ok(providerGuard >= 0 && providerHandler > providerGuard, 'handler de proveedor fuera de guardia dev');
+  assert.ok(main.includes("additionalArguments: (!app.isPackaged && RUNTIME.dev)"));
+  assert.ok(preload.includes("process.argv.includes('--velo-provider-tools')"));
+  const packagedFiles = require(path.join(root, 'package.json')).build.files;
+  assert.strictEqual(packagedFiles.some(item => String(item).startsWith('tools/')), false);
 });
 
 test('el bypass de desarrollo es explícito y nunca aplica al instalador', () => {
@@ -118,4 +161,4 @@ test('el bypass de desarrollo es explícito y nunca aplica al instalador', () =>
   assert.strictEqual(development.development, true);
 });
 
-console.log(`\nLicencias por producto: ${passed}/10 pruebas correctas.`);
+console.log(`\nLicencias por producto: ${passed}/12 pruebas correctas.`);

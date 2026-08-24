@@ -414,26 +414,43 @@ async function recibirOrden(id) {
 
   const itemsHtml = (po.items || [])
     .filter(i => i.qty_received < i.qty_ordered)
-    .map(i => `
+    .map(i => {
+      const product = DB.products.find(p => p.id === i.product_id);
+      const serialized = Number(product?.serialized) === 1;
+      const remaining = i.qty_ordered - i.qty_received;
+      return `
       <tr>
         <td>${i.product_name}<br>
-            <span style="font-size:11px;color:var(--muted2)">${i.product_code}</span></td>
+            <span style="font-size:11px;color:var(--muted2)">${i.product_code}</span>
+            ${serialized ? `
+              <div class="alrt b" style="margin-top:8px;padding:8px;display:block">
+                <b style="font-size:11px">Equipos por IMEI/serial</b>
+                <textarea class="inp recv-units" id="recv-units-${i.id}" rows="4"
+                  placeholder="Pega o escanea uno por línea…"
+                  oninput="actualizarRecepcionSerializada(${i.id},${remaining})"
+                  style="margin-top:6px;width:100%;font-family:monospace;font-size:12px"></textarea>
+                <div id="recv-units-count-${i.id}" style="font-size:11px;margin-top:4px;color:var(--muted2)">
+                  0 de ${remaining} equipos
+                </div>
+              </div>` : ''}
+        </td>
         <td style="text-align:center">${i.qty_ordered}</td>
         <td style="text-align:center">${i.qty_received}</td>
         <td style="text-align:center">
           <input class="inp recv-qty" type="number" min="0"
-                 max="${i.qty_ordered - i.qty_received}"
-                 value="${i.qty_ordered - i.qty_received}"
+                 max="${remaining}"
+                 value="${serialized ? 0 : remaining}"
                  id="recv-${i.id}" data-item-id="${i.id}"
                  oninput="actualizarCostosRecepcion()"
+                 ${serialized ? 'readonly title="La cantidad se calcula con los IMEI/seriales ingresados"' : ''}
                  style="width:70px;text-align:center"/>
         </td>
         <td style="text-align:center;font-size:11px;color:var(--muted2)" id="cost-preview-${i.id}">
           ${(() => {
             const prod      = DB.products.find(p => p.id === i.product_id);
-            const stockAct  = prod ? prod.stock : 0;
+            const stockAct  = prod ? Number(prod.effective_stock ?? prod.stock) : 0;
             const costoAct  = prod ? prod.cost  : 0;
-            const qtyRecib  = i.qty_ordered - i.qty_received;
+            const qtyRecib  = serialized ? 0 : remaining;
             const total     = stockAct + qtyRecib;
             const promedio  = total > 0 && i.unit_cost > 0
               ? Math.round(((stockAct * costoAct) + (qtyRecib * i.unit_cost)) / total * 100) / 100
@@ -444,7 +461,8 @@ async function recibirOrden(id) {
               + '<div style="font-weight:700;color:' + color + '">Prom: ' + fmt(promedio) + '</div>';
           })()}
         </td>
-      </tr>`).join('');
+      </tr>`;
+    }).join('');
 
   openModal(`
     <div class="modal-title">Recibir mercancía</div>
@@ -483,7 +501,7 @@ async function recibirOrden(id) {
 
     <div class="alrt b" style="margin-bottom:12px">
       <div class="alrt-dot b"></div>
-      <div class="alrt-sub">Al confirmar, el stock de cada producto se actualiza automáticamente.</div>
+      <div class="alrt-sub">Los productos normales actualizan su cantidad. Los equipos serializados se cuentan exclusivamente por sus IMEI/seriales para evitar inventario fantasma.</div>
     </div>
 
     <div class="modal-foot">
@@ -498,6 +516,34 @@ async function recibirOrden(id) {
 
 function _recvNum(id) {
   return Math.max(0, parseFloat(document.getElementById(id)?.value || '0') || 0);
+}
+
+function _parseReceiptUnits(itemId) {
+  const value = String(document.getElementById(`recv-units-${itemId}`)?.value || '');
+  return value.split(/[\n,;]+/).map(value => value.trim()).filter(Boolean).map(value => {
+    const parts = value.split('|').map(part => part.trim());
+    const identifier = parts[0] || '';
+    const isImei = /^\d{14,16}$/.test(identifier.replace(/[\s-]/g, ''));
+    return {
+      imei:isImei ? identifier.replace(/[\s-]/g, '') : '',
+      serial:isImei ? (parts[1] || '') : identifier.replace(/^SERIAL\s*:\s*/i, ''),
+      color:parts[2] || '', capacity:parts[3] || '', condition:parts[4] || 'nuevo',
+      grade:parts[5] || '', battery_health:parts[6] || null,
+      supplier_warranty_until:parts[7] || null,
+    };
+  });
+}
+
+function actualizarRecepcionSerializada(itemId, maxUnits) {
+  const units = _parseReceiptUnits(itemId);
+  const quantity = document.getElementById(`recv-${itemId}`);
+  const count = document.getElementById(`recv-units-count-${itemId}`);
+  if (quantity) quantity.value = String(Math.min(units.length, maxUnits));
+  if (count) {
+    count.textContent = `${units.length} de ${maxUnits} equipos${units.length > maxUnits ? ' · elimina los sobrantes' : ''}`;
+    count.style.color = units.length > maxUnits ? 'var(--red)' : (units.length === maxUnits ? 'var(--green)' : 'var(--muted2)');
+  }
+  actualizarCostosRecepcion();
 }
 
 function calcularCostosRecepcion(po) {
@@ -542,7 +588,7 @@ function actualizarCostosRecepcion() {
     if (!el) return;
     const row = byId.get(String(i.id));
     const prod = DB.products.find(p => p.id === i.product_id);
-    const stockAct = prod ? prod.stock : 0;
+    const stockAct = prod ? Number(prod.effective_stock ?? prod.stock) : 0;
     const costoAct = prod ? prod.cost : 0;
     const qtyRecib = row?.qty || 0;
     const unitReal = row?.landedUnit || i.unit_cost || 0;
@@ -581,10 +627,19 @@ async function confirmarRecepcion(poId) {
       product_id:   i.product_id,
       qty_received: parseInt(document.getElementById(`recv-${i.id}`)?.value) || 0,
       unit_cost:    i.unit_cost,
+      units: Number(DB.products.find(p => p.id === i.product_id)?.serialized) === 1
+        ? _parseReceiptUnits(i.id) : [],
     }))
     .filter(i => i.qty_received > 0);
 
   if (!items.length) { toast('Ingresa al menos una cantidad', 'err'); return; }
+  for (const item of items) {
+    const product = DB.products.find(p => p.id === item.product_id);
+    if (Number(product?.serialized) === 1 && item.units.length !== item.qty_received) {
+      toast(`${product.name}: revisa la cantidad de IMEI/seriales`, 'err');
+      return;
+    }
+  }
 
   const costs = {
     freight: _recvNum('recv-freight'),

@@ -2041,6 +2041,195 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.45.0-user-module-access-center] Políticas modulares por usuario listas');
     }
   },
+  {
+    version: '1.46.0-tech-premium-operations',
+    description: 'VELO TECH POS: recepción serializada por compra, taller con evidencias/agenda/tiempos, abastecimiento, mensajería verificable, catálogo avanzado y continuidad operativa.',
+    run(db) {
+      const addColumn = (table, name, definition) => {
+        const columns = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(column => column.name));
+        if (!columns.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+      };
+      [
+        ['purchase_order_id', 'INTEGER REFERENCES purchase_orders(id)'],
+        ['purchase_item_id', 'INTEGER REFERENCES purchase_items(id)'],
+        ['supplier_id', 'INTEGER REFERENCES suppliers(id)'],
+        ['supplier_warranty_until', 'TEXT'],
+        ['grade', "TEXT NOT NULL DEFAULT ''"],
+        ['battery_health', 'INTEGER'],
+        ['refurb_status', "TEXT NOT NULL DEFAULT ''"],
+      ].forEach(([name, definition]) => addColumn('product_units', name, definition));
+      addColumn('purchase_items', 'service_procurement_request_id', 'INTEGER');
+      [
+        ['provider_message_id', "TEXT DEFAULT ''"],
+        ['provider_status', "TEXT DEFAULT ''"],
+        ['provider_error', "TEXT DEFAULT ''"],
+        ['provider_response', "TEXT DEFAULT ''"],
+        ['updated_at', "TEXT DEFAULT (datetime('now','localtime'))"],
+      ].forEach(([name, definition]) => addColumn('service_order_notifications', name, definition));
+
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_product_units_serial
+          ON product_units(serial) WHERE serial IS NOT NULL AND TRIM(serial)<>'';
+        CREATE INDEX IF NOT EXISTS idx_product_units_purchase
+          ON product_units(purchase_order_id,purchase_item_id);
+
+        CREATE TABLE IF NOT EXISTS service_order_evidence (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          service_order_id INTEGER NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+          evidence_type TEXT NOT NULL CHECK(evidence_type IN ('recepcion','diagnostico','proceso','entrega','firma_cliente')),
+          storage_path TEXT NOT NULL,
+          mime_type TEXT NOT NULL,
+          sha256 TEXT NOT NULL,
+          original_name TEXT DEFAULT '',
+          note TEXT DEFAULT '',
+          captured_by INTEGER REFERENCES users(id),
+          created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_service_evidence_order
+          ON service_order_evidence(service_order_id,created_at);
+
+        CREATE TABLE IF NOT EXISTS service_appointments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          service_order_id INTEGER REFERENCES service_orders(id) ON DELETE SET NULL,
+          customer_id INTEGER REFERENCES customers(id),
+          customer_name TEXT NOT NULL DEFAULT '',
+          customer_phone TEXT DEFAULT '',
+          device_desc TEXT DEFAULT '',
+          reason TEXT NOT NULL DEFAULT '',
+          starts_at TEXT NOT NULL,
+          ends_at TEXT,
+          technician_id INTEGER REFERENCES service_technicians(id),
+          status TEXT NOT NULL DEFAULT 'programada' CHECK(status IN ('programada','confirmada','en_curso','completada','cancelada','no_asistio')),
+          notes TEXT DEFAULT '',
+          created_by INTEGER REFERENCES users(id),
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          updated_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_service_appointments_start
+          ON service_appointments(starts_at,status);
+
+        CREATE TABLE IF NOT EXISTS service_time_entries (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          service_order_id INTEGER NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+          technician_id INTEGER NOT NULL REFERENCES service_technicians(id),
+          started_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+          ended_at TEXT,
+          duration_minutes INTEGER NOT NULL DEFAULT 0 CHECK(duration_minutes>=0),
+          status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','stopped','voided')),
+          notes TEXT DEFAULT '',
+          created_by INTEGER REFERENCES users(id),
+          created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_service_time_one_running
+          ON service_time_entries(technician_id) WHERE status='running';
+        CREATE INDEX IF NOT EXISTS idx_service_time_order
+          ON service_time_entries(service_order_id,started_at);
+
+        CREATE TABLE IF NOT EXISTS service_procurement_requests (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          service_order_id INTEGER NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+          service_order_item_id INTEGER REFERENCES service_order_items(id) ON DELETE SET NULL,
+          product_id INTEGER REFERENCES products(id),
+          description TEXT NOT NULL,
+          qty_requested INTEGER NOT NULL CHECK(qty_requested>0),
+          qty_received INTEGER NOT NULL DEFAULT 0 CHECK(qty_received>=0),
+          supplier_id INTEGER REFERENCES suppliers(id),
+          purchase_order_id INTEGER REFERENCES purchase_orders(id),
+          purchase_item_id INTEGER REFERENCES purchase_items(id),
+          status TEXT NOT NULL DEFAULT 'solicitada' CHECK(status IN ('solicitada','ordenada','parcial','recibida','cancelada')),
+          requested_by INTEGER REFERENCES users(id),
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          updated_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_service_procurement_status
+          ON service_procurement_requests(status,created_at);
+
+        CREATE TABLE IF NOT EXISTS tech_device_models (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          device_type TEXT NOT NULL DEFAULT 'otro',
+          brand TEXT NOT NULL,
+          model TEXT NOT NULL,
+          model_code TEXT DEFAULT '',
+          active INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          UNIQUE(brand,model,model_code)
+        );
+        CREATE TABLE IF NOT EXISTS tech_product_compatibility (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+          device_model_id INTEGER NOT NULL REFERENCES tech_device_models(id) ON DELETE CASCADE,
+          compatibility_type TEXT NOT NULL DEFAULT 'compatible',
+          notes TEXT DEFAULT '',
+          UNIQUE(product_id,device_model_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS continuity_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          event_type TEXT NOT NULL,
+          status TEXT NOT NULL,
+          destination TEXT DEFAULT '',
+          checksum TEXT DEFAULT '',
+          detail TEXT DEFAULT '',
+          created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE TABLE IF NOT EXISTS branch_sync_journal (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          branch_id INTEGER REFERENCES branches(id),
+          terminal_id TEXT DEFAULT '',
+          entity TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          action TEXT NOT NULL,
+          operation_id TEXT NOT NULL UNIQUE,
+          payload_hash TEXT NOT NULL,
+          committed_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+
+        CREATE TABLE IF NOT EXISTS fiscal_withholdings (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          direction TEXT NOT NULL CHECK(direction IN ('received','made')),
+          tax_kind TEXT NOT NULL CHECK(tax_kind IN ('itbis','isr','retribucion_complementaria','other')),
+          source_type TEXT NOT NULL DEFAULT 'manual',
+          source_id INTEGER,
+          party_name TEXT DEFAULT '',
+          party_rnc TEXT DEFAULT '',
+          ncf TEXT DEFAULT '',
+          document_date TEXT NOT NULL,
+          base_amount REAL NOT NULL DEFAULT 0 CHECK(base_amount>=0),
+          rate REAL NOT NULL DEFAULT 0 CHECK(rate>=0),
+          amount REAL NOT NULL CHECK(amount>=0),
+          status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','voided')),
+          notes TEXT DEFAULT '',
+          created_by INTEGER REFERENCES users(id),
+          created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_fiscal_withholdings_period ON fiscal_withholdings(document_date,tax_kind,status);
+
+        CREATE TABLE IF NOT EXISTS service_message_queue (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          service_order_id INTEGER REFERENCES service_orders(id) ON DELETE CASCADE,
+          appointment_id INTEGER REFERENCES service_appointments(id) ON DELETE CASCADE,
+          message_type TEXT NOT NULL,
+          destination TEXT NOT NULL,
+          message TEXT NOT NULL,
+          scheduled_at TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','processing','submitted','failed','cancelled')),
+          attempts INTEGER NOT NULL DEFAULT 0,
+          provider_message_id TEXT DEFAULT '', provider_error TEXT DEFAULT '',
+          submitted_at TEXT, updated_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_service_message_due ON service_message_queue(status,scheduled_at);
+      `);
+      const setting = db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');
+      [
+        ['service_messaging_mode','assisted'],
+        ['service_evidence_max_mb','8'],
+        ['continuity_external_backup_enabled','0'],
+        ['continuity_external_backup_path',''],
+        ['continuity_last_restore_test',''],
+      ].forEach(row => setting.run(...row));
+      console.log('[MIGRATION 1.46.0-tech-premium-operations] Operación TECH premium lista');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

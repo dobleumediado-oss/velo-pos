@@ -146,6 +146,13 @@ scarceOrder = DB.serviceOrdersRepo.advance(scarceOrder.id, 'presupuesto', admin)
 scarceOrder = DB.serviceOrdersRepo.advance(scarceOrder.id, 'esperando_aprobacion', admin);
 scarceOrder = DB.serviceOrdersRepo.decideEstimate(scarceOrder.id, { approved:true, method:'llamada', customer_name:'Cliente' }, admin);
 ok(scarceOrder.workflow_status === 'esperando_pieza' && scarceOrder.items.every(item => item.reservation_status === 'waiting'), 'agrupa partidas repetidas y espera pieza si el total supera el stock');
+const partsSupplierId = DB.suppliersRepo.create({name:'Proveedor de taller'});
+const procurement = DB.serviceOrdersRepo.requestPart(scarceOrder.id, scarceOrder.items[0].id, partsSupplierId, admin);
+ok(!!procurement.purchaseOrderId && procurement.request.status === 'ordenada', 'una pieza agotada genera solicitud y orden de compra enlazadas');
+const partsPurchase = DB.purchasesRepo.getById(procurement.purchaseOrderId);
+DB.purchasesRepo.receive(procurement.purchaseOrderId, {userId:admin.id,userName:admin.name,items:[{id:partsPurchase.items[0].id,qty_received:1}]});
+const receivedRequest = db.prepare('SELECT * FROM service_procurement_requests WHERE id=?').get(procurement.request.id);
+ok(receivedRequest.status === 'recibida' && receivedRequest.qty_received === 1, 'recibir la compra actualiza el abastecimiento de la reparación');
 DB.serviceOrdersRepo.cancel(scarceOrder.id, 'Prueba completada', admin);
 
 const report = DB.serviceOrdersRepo.report();

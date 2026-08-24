@@ -1036,7 +1036,7 @@ function renderCartaRecibo(sale, cfg, opts) {
   const showNum   = !isReporte;
 
   // ── Filas de artículos ──────────────────────────────
-  const showCode = _showCode(cfg);
+  const showCode = _showCode(cfg) && !isAbono;
   const rows = (sale.items || []).map((i, idx) => {
     const qty   = Number(i.qty || 1);
     const code  = i.product_code || i.code || i.sku || '—';
@@ -1044,6 +1044,12 @@ function renderCartaRecibo(sale, cfg, opts) {
     const lineNet = showTax ? _lineNet(i, sale) : (qty * unitFinal);
     const lineTax = showTax ? _lineTax(i, sale) : 0;
     const importe = showTax ? _lineImporte(i, sale) : (qty * unitFinal);
+    if (isAbono) {
+      return `<tr>
+        <td class="c-desc">${_esc(i.product_name || i.name || '')}</td>
+        <td class="c-num it-total">${_n2(importe)}</td>
+      </tr>`;
+    }
     return `
     <tr>
       ${showCode ? `<td class="c-code">${_esc(code)}</td>` : ''}
@@ -1122,7 +1128,14 @@ function renderCartaRecibo(sale, cfg, opts) {
   // producto → 40). El RNC/cédula NO va aquí: sale en el bloque CLIENTE.
   const totalUnits = (sale.items || []).filter(i => !i._is_charge)
     .reduce((a, i) => a + (Number(i.qty) || 0), 0);
-  const sumItems = [
+  const sumItems = isAbono ? [
+    ['Moneda', String(sale.display_currency || 'DOP').toUpperCase()],
+    ['Aplicaciones', String((sale.items || []).length)],
+    ['Fecha', _fechaCorta(sale.date)],
+    ['Facturas', String((sale.payment_allocations || []).length || (sale.items || []).length)],
+    ['Pago', _esc(paymentLabel)],
+    ['Página', '<span class="a4-cur">1</span>/<span class="a4-tot">1</span>'],
+  ] : [
     ['Moneda', String(sale.display_currency || 'DOP').toUpperCase()],
     ['Líneas', String((sale.items || []).length)],
     ['Fecha', _fechaCorta(sale.date)],
@@ -1137,7 +1150,7 @@ function renderCartaRecibo(sale, cfg, opts) {
     <div class="legacy-pay">
       <div><b>Representante</b><span>${_esc(sale.salesperson_name || sale.cajero || '')}</span></div>
       <div><b>Forma de pago</b><span>${_esc(paymentLabel)}</span></div>
-      <div><b>Tipo de factura</b><span>${_esc(_tipoFacturacion(sale))}</span></div>
+      <div><b>${isAbono ? 'Tipo de documento' : 'Tipo de factura'}</b><span>${_esc(_tipoFacturacion(sale))}</span></div>
       <div class="lp-wide"><b>Observaciones</b><span>${_esc(sale.notes || cfg.invoice_notes || 'No aceptamos devoluciones. Cambios solamente antes de 24 horas.')}</span></div>
       <div><b>Número transacción</b><span>${_esc(sale.transaction_number || sale.id || '—')}</span></div>
     </div>` : '';
@@ -1164,7 +1177,15 @@ function renderCartaRecibo(sale, cfg, opts) {
   if (cfg.biz_email) bizContact.push(_esc(cfg.biz_email));
 
   // ── Cuadro de totales (compacto) ────────────────────
-  const totalsBox = showMoney ? `
+  const totalsBox = isAbono ? `
+    <div class="foot-wrap">
+      <div class="totals">
+        <div class="tr"><span>Monto distribuido</span><span>${_n2(displaySubtotal)}</span></div>
+        <div class="tr grand"><span>Monto del abono</span><span>${_n2(displayTotal)}</span></div>
+        <div class="tr"><span>Monto recibido</span><span>${_n2(paidAmount)}</span></div>
+        <div class="tr"><span>Balance después del abono</span><span>${_n2(balanceAfter)}</span></div>
+      </div>
+    </div>` : showMoney ? `
     <div class="foot-wrap">
       <div class="totals">
         <div class="tr"><span>Sub Total sin impuestos</span><span>${_n2(displaySubtotal)}</span></div>
@@ -1327,13 +1348,16 @@ function renderCartaRecibo(sale, cfg, opts) {
 
   <table class="items">
     <thead><tr>
+      ${isAbono ? '<th>Factura / concepto</th><th class="c-num">Monto aplicado</th>' : `
       ${showCode ? '<th class="c-code">Código</th>' : ''}
       <th>Nombre artículo</th>
       ${showMoney ? '<th class="c-num">Precio venta</th>' : ''}
       <th class="c-num">Cantidad</th>
-	      ${showMoney ? `<th class="c-num">Monto bruto</th>${showTax ? '<th class="c-num">ITBIS</th>' : ''}<th class="c-num">Importe</th>` : ''}
+	      ${showMoney ? `<th class="c-num">Monto bruto</th>${showTax ? '<th class="c-num">ITBIS</th>' : ''}<th class="c-num">Importe</th>` : ''}`}
     </tr></thead>
-    <tbody>${rows || `<tr>${showCode ? '<td class="c-code"></td>' : ''}<td colspan="${showMoney ? (showTax ? 6 : 5) : 2}" style="color:#9aa0b0">Sin artículos</td></tr>`}</tbody>
+    <tbody>${rows || (isAbono
+      ? '<tr><td colspan="2" style="color:#9aa0b0">Sin aplicaciones</td></tr>'
+      : `<tr>${showCode ? '<td class="c-code"></td>' : ''}<td colspan="${showMoney ? (showTax ? 6 : 5) : 2}" style="color:#9aa0b0">Sin artículos</td></tr>`)}</tbody>
   </table>
 
   ${totalsBox}

@@ -1659,6 +1659,7 @@ async function registrarAbono(clientId, balanceActual, replacesPaymentId = null)
     DB.payments = [payment, ...(DB.payments || []).filter(
       row => Number(row.id) !== Number(payment.id)
     )];
+    window._cliAccountCache = null;
 
     closeModal();
     toast(result.idempotent
@@ -1894,9 +1895,101 @@ function abonoWhatsApp(paymentId) {
 // ══════════════════════════════════════════════
 // ESTADO DE CUENTA COMPLETO
 // ══════════════════════════════════════════════
+function cliIsCreditSale(sale) {
+  return ['credito', 'crédito', 'credit'].includes(
+    String(sale?.payment_method || sale?.pay || '').trim().toLowerCase()
+  );
+}
+
+function cliAccountMath(ventas, pagos, pendingResult, customerBalance) {
+  const invoices = (ventas || []).filter(sale =>
+    sale.status !== 'cancelled' && sale.type !== 'cotizacion' && sale.type !== 'devolucion'
+  );
+  const creditInvoices = invoices.filter(cliIsCreditSale);
+  const cashInvoices = invoices.filter(sale => !cliIsCreditSale(sale));
+  const activePayments = (pagos || []).filter(payment =>
+    String(payment.status || 'active').toLowerCase() !== 'cancelled'
+  );
+  const discounts = activePayments.filter(payment =>
+    String(payment.method || '').toLowerCase() === 'descuento'
+  );
+  const payments = activePayments.filter(payment =>
+    String(payment.method || '').toLowerCase() !== 'descuento'
+  );
+  const historicalPayments = payments.filter(isImportedRecord);
+  const veloPayments = payments.filter(payment => !isImportedRecord(payment));
+  const pendingBySale = new Map((pendingResult?.facturas || []).map(invoice =>
+    [Number(invoice.id), Number(invoice.pendiente || 0)]
+  ));
+  const sum = (rows, field = 'total') => rows.reduce(
+    (total, row) => total + Number(row?.[field] || 0), 0
+  );
+  return {
+    invoices,
+    creditInvoices,
+    cashInvoices,
+    payments,
+    discounts,
+    pendingBySale,
+    pendingAvailable: pendingResult?.ok !== false,
+    totalCompras: sum(invoices),
+    totalContado: sum(cashInvoices),
+    totalCredito: sum(creditInvoices),
+    totalAbonado: sum(payments, 'amount'),
+    totalAbonadoHistorico: sum(historicalPayments, 'amount'),
+    totalAbonadoVelo: sum(veloPayments, 'amount'),
+    totalDescuentos: sum(discounts, 'amount'),
+    balance: Number(customerBalance || 0),
+  };
+}
+
+function cliSortAscending(rows) {
+  return [...(rows || [])].sort((left, right) => {
+    const leftDate = String(left?.sale_date || left?.created_at || left?.date || '');
+    const rightDate = String(right?.sale_date || right?.created_at || right?.date || '');
+    const byDate = leftDate.localeCompare(rightDate);
+    if (byDate) return byDate;
+    const leftNumber = Number(left?.document_number || left?.numero_factura || left?.id || 0);
+    const rightNumber = Number(right?.document_number || right?.numero_factura || right?.id || 0);
+    return leftNumber - rightNumber;
+  });
+}
+
+async function cliLoadAccountPayload(c, includeItems = false) {
+  const now = Date.now();
+  let cache = window._cliAccountCache;
+  if (!cache || Number(cache.customerId) !== Number(c.id) || now - cache.loadedAt > 15000) {
+    const accountSales = typeof window.api.customers.getAccountSales === 'function'
+      ? window.api.customers.getAccountSales({ customerId: c.id })
+      : window.api.sales.getAll({ customerId: c.id, range: 'all', limit: 9999 });
+    const [payments, sales, pending] = await Promise.all([
+      window.api.customers.getPayments({ customerId: c.id }),
+      accountSales,
+      window.api.customers.getFacturasPendientes({ customerId: c.id }),
+    ]);
+    cache = {
+      customerId: c.id,
+      loadedAt: now,
+      payments: cliSortAscending(payments),
+      sales: cliSortAscending((sales || []).filter(row => row.status !== 'cancelled')),
+      pending,
+      items: null,
+    };
+    window._cliAccountCache = cache;
+  }
+  if (includeItems && !cache.items) {
+    const result = await window.api.customers.getItemsForCustomer({ customerId: c.id })
+      .catch(() => ({ items: [] }));
+    cache.items = result?.items || [];
+  }
+  return [cache.payments, cache.sales, cache.pending, includeItems ? { items: cache.items || [] } : null];
+}
+
 async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
   // Guardar tab activa para re-render al cambiar
   window._cliModalTab = activeTab;
+  const requestToken = `${c.id}:${activeTab}:${Date.now()}`;
+  window._cliModalRequest = requestToken;
   const balance     = Number(c.balance || 0);
   const creditLimit = Number(c.credit_limit || 0);
   const creditDue   = c.credit_due || null;
@@ -1905,30 +1998,70 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
   const usedPct     = creditLimit > 0
     ? Math.min((balance / creditLimit) * 100, 100) : 0;
 
-  // Cargar pagos e historial desde backend (range='all' para incluir histórico)
-  const pagos  = await window.api.customers.getPayments({ customerId: c.id }) || [];
-  const ventasRaw = await window.api.sales.getAll({ customerId: c.id, range: 'all', limit: 9999 }) || [];
-  const ventas = ventasRaw.filter(s => s.status !== 'cancelled').reverse();
+  const cached = window._cliAccountCache;
+  const cacheReady = cached && Number(cached.customerId) === Number(c.id)
+    && Date.now() - cached.loadedAt <= 15000
+    && (activeTab !== 'historial' || cached.items);
+  if (!cacheReady) {
+    openModal(`
+      <div class="modal-title">${cliEsc(c.name)}</div>
+      <div style="display:grid;gap:10px;padding:18px 2px" aria-label="Cargando estado de cuenta">
+        <div style="height:38px;border-radius:8px;background:var(--surface2);border:1px solid var(--line)"></div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:9px">
+          ${Array.from({ length:4 }, () => '<div style="height:64px;border-radius:9px;background:var(--surface2);border:1px solid var(--line)"></div>').join('')}
+        </div>
+        <div style="height:150px;border-radius:9px;background:var(--surface2);border:1px solid var(--line)"></div>
+      </div>
+      <div class="modal-foot"><button class="btn btn-out" onclick="window._cliModalRequest=null;closeModal()">Cerrar</button></div>
+    `, 'modal-xl');
+  }
+
+  // Consulta ligera con caché breve: cambiar de pestaña no vuelve a recorrer el
+  // historial completo y nunca se muestra una pantalla intermedia con reloj.
+  let payload;
+  try {
+    payload = await cliLoadAccountPayload(c, activeTab === 'historial');
+  } catch (error) {
+    if (window._cliModalRequest !== requestToken || page !== 'clientes') return;
+    const offline = error?.message === 'SERVER_OFFLINE' || error?.offline;
+    openModal(`
+      <div class="modal-title">${cliEsc(c.name)}</div>
+      <div class="card" style="margin:20px;padding:22px;text-align:center;border-color:var(--amber)">
+        <div style="font-size:25px;margin-bottom:8px">${offline ? '🔌' : '⚠️'}</div>
+        <div style="font-weight:700">No se pudo preparar la información</div>
+        <div style="font-size:12px;color:var(--muted2);margin:7px 0 14px">${offline
+          ? 'La terminal no recibió confirmación del servidor. Ningún saldo fue modificado.'
+          : 'La consulta no pudo completarse. Puedes intentarlo otra vez.'}</div>
+        <button class="btn btn-dark" onclick="openEstadoCuentaModal(DB.customers.find(x=>x.id===${c.id}),'${activeTab}')">Reintentar</button>
+      </div>
+      <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
+    `, 'modal-lg', { replace: true });
+    return;
+  }
+  if (window._cliModalRequest !== requestToken || page !== 'clientes') return;
+  const [pagosRes, ventasRes, pendingRes, itemsRes] = payload;
+  const pagos = cliSortAscending(pagosRes);
+  const ventas = cliSortAscending(ventasRes);
   // Guardar ventas del cliente en window para que filtrarHistorialCliente las use
   window._cliModalVentas = ventas;
   // Cargar items reales de todas las ventas del cliente (para Buscar por Artículo).
   // Se hace una sola vez al abrir el modal; la búsqueda filtra en memoria.
-  try {
-    const itemsRes = await window.api.customers.getItemsForCustomer({ customerId: c.id });
-    window._cliModalItems = (itemsRes && itemsRes.items) ? itemsRes.items : [];
-  } catch { window._cliModalItems = []; }
+  window._cliModalItems = (itemsRes && itemsRes.items) ? itemsRes.items : [];
 
-  const totalCompras = ventas.reduce((a, s) => a + s.total, 0);
+  const account = cliAccountMath(ventas, pagos, pendingRes, balance);
+  const {
+    totalCompras, totalContado, totalCredito, totalAbonado,
+    totalAbonadoHistorico, totalAbonadoVelo, totalDescuentos: totalDesc,
+    pendingBySale,
+  } = account;
   // Los descuentos llegan como pagos con method='descuento' (migración Equiparts).
   // NO son efectivo: cierran factura sin que entre dinero. Se totalizan aparte
   // para que la caja no se infle y el gerente vea de dónde sale la diferencia
   // entre lo comprado y lo abonado.
   const esDescuento  = p => String(p.method || '').toLowerCase() === 'descuento';
   const esVigente = p => String(p.status || 'active').toLowerCase() !== 'cancelled';
-  const abonosReales = pagos.filter(p => esVigente(p) && !esDescuento(p));
+  const abonosReales = account.payments;
   const descuentos   = pagos.filter(p => esVigente(p) && esDescuento(p));
-  const totalAbonado = abonosReales.reduce((a, p) => a + p.amount, 0);
-  const totalDesc    = descuentos.reduce((a, p) => a + p.amount, 0);
 
   const ventasRows = ventas.length === 0
     ? `<tr><td colspan="5" style="text-align:center;color:var(--muted2);padding:14px;font-size:12px">
@@ -1955,15 +2088,12 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
   const pagosRows = pagos.length === 0
     ? `<tr><td colspan="4" style="text-align:center;color:var(--muted2);padding:14px;font-size:12px">
          Sin abonos registrados</td></tr>`
-    : [...pagos].reverse().map(p => {
+    : pagos.map(p => {
         const fecha = (p.created_at || '').split('T')[0].split(' ')[0];
         // Vincular al sale_id si existe
         const facturaRef = p.sale_id
           ? `<span style="font-size:10px;color:var(--blue);cursor:pointer;margin-left:4px"
-               onclick="closeModal();setTimeout(()=>{
-                 const s=DB.sales.find(x=>x.id===${p.sale_id})||window._cliModalVentas?.find(x=>x.id===${p.sale_id});
-                 if(s)openDetalleVentaModal(s);
-               },100)">${facturaLabel(p)} ↗</span>`
+               onclick="openClienteFacturaDetalle(${p.sale_id},${c.id},'cuenta')">${facturaLabel(p)} ↗</span>`
           : '';
         const esDesc = String(p.method || '').toLowerCase() === 'descuento';
         const cancelled = String(p.status || 'active').toLowerCase() === 'cancelled';
@@ -2020,11 +2150,31 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
     <div id="cli-modal-body">
 
     <!-- Métricas -->
-    <div class="metrics" style="grid-template-columns:repeat(${totalDesc > 0 ? 5 : 4},1fr);margin-bottom:14px">
+    <div class="metrics" style="grid-template-columns:repeat(auto-fit,minmax(135px,1fr));margin-bottom:14px">
       <div class="metric">
         <div class="met-label">Balance Pendiente</div>
         <div class="met-val" style="color:${balance>0?'var(--red)':'var(--green)'}">
           ${fmt(balance)}</div>
+      </div>
+      <div class="metric">
+        <div class="met-label">Pagado al contado</div>
+        <div class="met-val" style="font-size:14px;color:var(--green)">${fmt(totalContado)}</div>
+        <div style="font-size:10px;color:var(--muted2)">${account.cashInvoices.length} factura${account.cashInvoices.length!==1?'s':''} sin CxC</div>
+      </div>
+      <div class="metric">
+        <div class="met-label">Facturado a crédito</div>
+        <div class="met-val" style="font-size:14px;color:var(--amber)">${fmt(totalCredito)}</div>
+        <div style="font-size:10px;color:var(--muted2)">${account.creditInvoices.length} factura${account.creditInvoices.length!==1?'s':''} a crédito</div>
+      </div>
+      <div class="metric">
+        <div class="met-label">Abonos a crédito</div>
+        <div class="met-val" style="font-size:14px;color:var(--green)">${fmt(totalAbonado)}</div>
+        <div style="font-size:10px;color:var(--muted2)">${fmt(totalAbonadoHistorico)} históricos · ${fmt(totalAbonadoVelo)} en Velo</div>
+      </div>
+      <div class="metric">
+        <div class="met-label">Total comprado</div>
+        <div class="met-val" style="font-size:14px">${fmt(totalCompras)}</div>
+        <div style="font-size:10px;color:var(--muted2)">Contado + crédito</div>
       </div>
       <div class="metric">
         <div class="met-label">Límite / Disponible</div>
@@ -2032,21 +2182,29 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
         <div style="font-size:10px;color:${disponible<creditLimit*0.1?'var(--red)':'var(--green)'}">
           Disp: ${fmt(disponible)}</div>
       </div>
-      <div class="metric">
-        <div class="met-label">Total Comprado</div>
-        <div class="met-val" style="font-size:14px">${fmt(totalCompras)}</div>
-      </div>
-      <div class="metric">
-        <div class="met-label">Total Abonado</div>
-        <div class="met-val" style="font-size:14px;color:var(--green)">${fmt(totalAbonado)}</div>
-        <div style="font-size:10px;color:var(--muted2)">${abonosReales.length} abono${abonosReales.length!==1?'s':''}</div>
-      </div>
       ${totalDesc > 0 ? `
       <div class="metric">
         <div class="met-label">Descuentos</div>
         <div class="met-val" style="font-size:14px;color:var(--amber)">${fmt(totalDesc)}</div>
         <div style="font-size:10px;color:var(--muted2)">${descuentos.length} aplicado${descuentos.length!==1?'s':''}</div>
       </div>` : ''}
+    </div>
+
+    ${pendingRes?.ok === false ? `<div class="alrt w" style="margin-bottom:12px">
+      <div><div class="alrt-title">El saldo por factura no pudo confirmarse</div>
+      <div class="alrt-sub">El balance general se conserva, pero no se atribuye a facturas específicas hasta reintentar la consulta.</div></div>
+    </div>` : ''}
+
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px;
+                background:var(--surface2);border:1px solid var(--line);
+                border-radius:7px;padding:9px 12px;margin-bottom:12px;color:var(--muted)">
+      <strong style="color:var(--text)">Lectura financiera:</strong>
+      <span>contado ${fmt(totalContado)} no genera CxC</span>
+      <span>· crédito ${fmt(totalCredito)}</span>
+      <span>· abonos ${fmt(totalAbonado)}</span>
+      <span>· saldo vigente ${fmt(balance)}</span>
+      ${account.invoices.some(isImportedRecord)
+        ? `<span class="badge a">Incluye historial importado</span>` : ''}
     </div>
 
     ${totalDesc > 0 ? `
@@ -2083,24 +2241,32 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
           : ventas.map((s, idx) => {
               const fecha = (s.sale_date||s.date||'').split('T')[0].split(' ')[0];
               const tipo  = s.type==='devolucion'?'Devolución':s.type==='cotizacion'?'Cotización':'Factura';
-              const metColor = (s.payment_method||s.pay)==='credito'?'var(--amber)':s.type==='devolucion'?'var(--red)':'var(--green)';
+              const isCredit = cliIsCreditSale(s);
+              const pending = isCredit && account.pendingAvailable ? Number(pendingBySale.get(Number(s.id)) || 0) : 0;
+              const covered = Math.max(0, Number(s.total || 0) - pending);
+              const imported = isImportedRecord(s);
+              const metColor = isCredit?'var(--amber)':s.type==='devolucion'?'var(--red)':'var(--green)';
               return `
                 <div style="border-bottom:1px solid var(--line)">
-                  <div onclick="toggleVentaDetalle(${idx},${s.id},this)"
+                  <div onclick="toggleVentaDetalle(${idx},${s.id},this,${c.id})"
                        style="display:flex;justify-content:space-between;align-items:center;
                               padding:8px 12px;cursor:pointer;background:var(--surface2)">
                     <div>
                       <span style="font-weight:700;font-size:12px">${facturaLabel(s)}</span>
                       <span style="font-size:10px;color:var(--muted);margin-left:6px">${tipo}</span>
                       <span style="font-size:10px;color:var(--muted2);margin-left:6px">${fdate(fecha)}</span>
+                      ${imported ? '<span class="badge a" style="margin-left:5px">Histórica importada</span>' : ''}
                       ${cliRepresentativeLine(s)}
                     </div>
                     <div style="display:flex;align-items:center;gap:8px">
                       <span style="font-size:10px;font-weight:600;color:${metColor};
                                    background:${metColor}18;padding:2px 6px;border-radius:4px">
-                        ${s.payment_method||s.pay||'—'}
+                        ${isCredit ? 'Crédito' : 'Contado'}
                       </span>
                       <span style="font-weight:800;font-size:12px">${fmt(s.total)}</span>
+                      ${isCredit ? account.pendingAvailable
+                        ? `<span style="font-size:10px;color:var(--muted2)">cubierto ${fmt(covered)} · saldo ${fmt(pending)}</span>`
+                        : '<span style="font-size:10px;color:var(--amber)">saldo no confirmado</span>' : ''}
                       <span style="color:var(--muted2);font-size:10px">▼</span>
                     </div>
                   </div>
@@ -2146,10 +2312,10 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
 
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
-      <button class="btn btn-out"
-              onclick="exportClientCreditPDF(DB.customers.find(x=>x.id===${c.id}))">
-        ${svg('pdf')} PDF
-      </button>
+      ${activeTab !== 'historial' ? `<button class="btn btn-out"
+              onclick="exportClientModalPDF(DB.customers.find(x=>x.id===${c.id}),'${activeTab}')">
+        ${svg('pdf')} ${activeTab === 'facturas' ? 'PDF Facturas Pendientes' : 'PDF Estado de Cuenta'}
+      </button>` : ''}
       ${['admin','superadmin','cajero'].includes(user?.role) ? `
         <button class="btn btn-ghost"
                 onclick="closeModal();openClienteModal(DB.customers.find(x=>x.id===${c.id}))">
@@ -2161,11 +2327,11 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
           ${svg('dollar')} Abonar
         </button>` : ''}
     </div>
-  `, 'modal-xl');
+  `, 'modal-xl', { replace: true });
 
   // Si tab es facturas → cargar facturas pendientes async
   if (activeTab === 'facturas') {
-    window.api.customers.getFacturasPendientes({ customerId: c.id }).then(res => {
+    Promise.resolve(pendingRes).then(res => {
       const body = document.getElementById('cli-facturas-body');
       if (!body) return;
       if (!res?.ok) {
@@ -2176,7 +2342,7 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
         </div>`;
         return;
       }
-      const facturas = res?.facturas || [];
+      const facturas = cliSortAscending(res?.facturas || []);
       const saldoSinFactura = Number(res?.unallocatedBalance || 0);
       if (!facturas.length) {
         body.innerHTML = saldoSinFactura > 0.005
@@ -2199,18 +2365,22 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
         const fecha = (f.created_at||'').split('T')[0].split(' ')[0];
         const diasD = Math.floor((Date.now()-new Date(fecha).getTime())/86400000);
         const ref   = facturaLabel(f, f.notes?.match(/import_ref:([^\s|]+)/)?.[1]);
+        const imported = isImportedRecord(f);
+        const covered = Math.max(0, Number(f.total || 0) - Number(f.pendiente || 0));
         return `<div style="border:1px solid var(--line);border-radius:8px;margin-bottom:8px;overflow:hidden">
           <div style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;
-                      cursor:pointer;background:var(--surface2)" onclick="toggleFacturaDetalle(${idx},${f.id},this)">
+                      cursor:pointer;background:var(--surface2)" onclick="toggleFacturaDetalle(${idx},${f.id},this,${c.id})">
             <div>
               <span style="font-weight:700">${ref}</span>
               <span style="font-size:11px;color:var(--muted);margin-left:8px">${fdate(fecha)}</span>
               <span class="badge ${diasD>30?'r':'a'}" style="margin-left:6px">${diasD}d</span>
+              ${imported ? '<span class="badge a" style="margin-left:5px">Histórica importada</span>' : ''}
               ${cliRepresentativeLine(f)}
             </div>
             <div style="text-align:right">
               <div style="font-weight:800;color:var(--red)">${fmt(f.pendiente)}</div>
-              <div style="font-size:10px;color:var(--muted2)">de ${fmt(f.total)}</div>
+              <div style="font-size:10px;color:var(--muted2)">Total ${fmt(f.total)} · cubierto ${fmt(covered)}</div>
+              ${f.source_balance != null ? `<div style="font-size:10px;color:var(--muted2)">Saldo al importar ${fmt(f.source_balance)}</div>` : ''}
             </div>
           </div>
           <div id="fac-detail-${idx}" style="display:none">
@@ -2222,6 +2392,83 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
       }).join('');
     });
   }
+}
+
+// ══════════════════════════════════════════════
+// PDF CONTEXTUAL DEL MODAL DE CLIENTE
+// ══════════════════════════════════════════════
+function exportClientModalPDF(c, activeTab) {
+  return activeTab === 'facturas'
+    ? exportPendingInvoicesPDF(c)
+    : exportClientCreditPDF(c);
+}
+
+async function exportPendingInvoicesPDF(c) {
+  if (!c) { toast('Cliente no encontrado', 'err'); return; }
+  let result;
+  try {
+    result = await window.api.customers.getFacturasPendientes({ customerId: c.id });
+  } catch (error) {
+    toast(error?.message === 'SERVER_OFFLINE'
+      ? 'No se pudo confirmar el reporte: revisa la conexión con el servidor'
+      : 'No se pudieron cargar las facturas pendientes', 'err');
+    return;
+  }
+  if (!result?.ok) {
+    toast(result?.error || 'No se pudieron cargar las facturas pendientes', 'err');
+    return;
+  }
+
+  const invoices = cliSortAscending(result.facturas || []);
+  const unallocated = Number(result.unallocatedBalance || 0);
+  const totalOriginal = invoices.reduce((sum, invoice) => sum + Number(invoice.total || 0), 0);
+  const totalPending = invoices.reduce((sum, invoice) => sum + Number(invoice.pendiente || 0), 0) + unallocated;
+  const totalCovered = invoices.reduce((sum, invoice) =>
+    sum + Math.max(0, Number(invoice.total || 0) - Number(invoice.pendiente || 0)), 0);
+  const importedCount = invoices.filter(isImportedRecord).length;
+  const e = value => String(value || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const rows = invoices.map(invoice => {
+    const date = String(invoice.created_at || '').split('T')[0].split(' ')[0];
+    const parsedDate = new Date(`${date}T00:00:00`);
+    const age = Number.isNaN(parsedDate.getTime()) ? '—' : `${Math.max(0, Math.floor((Date.now() - parsedDate.getTime()) / 86400000))} días`;
+    const covered = Math.max(0, Number(invoice.total || 0) - Number(invoice.pendiente || 0));
+    return `<tr>
+      <td>${e(facturaLabel(invoice, invoice.notes?.match(/import_ref:([^\s|]+)/)?.[1]))}</td>
+      <td>${date ? fdate(date) : '—'}</td>
+      <td>${isImportedRecord(invoice) ? 'Histórica importada' : 'Velo'}</td>
+      <td style="text-align:right">${fmt(invoice.total)}</td>
+      <td style="text-align:right;color:#15803d">${fmt(covered)}</td>
+      <td style="text-align:right;font-weight:700;color:#dc2626">${fmt(invoice.pendiente)}</td>
+      <td style="text-align:right">${age}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="7" style="text-align:center;color:#6b7280;padding:18px">Sin facturas a crédito pendientes</td></tr>`;
+
+  const html = `<!doctype html><html><head><meta charset="UTF-8"><title>Facturas pendientes: ${e(c.name)}</title>
+  <style>
+    body{font-family:Arial,sans-serif;color:#111827;font-size:11px;padding:24px;max-width:900px;margin:auto}
+    h1{font-size:19px;margin:0 0 3px}.sub{color:#6b7280;margin-bottom:16px}
+    .metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
+    .metric{border:1px solid #e5e7eb;border-radius:8px;padding:10px;background:#f9fafb}
+    .label{font-size:9px;text-transform:uppercase;font-weight:700;color:#6b7280}.value{font-size:16px;font-weight:800;margin-top:4px}
+    table{width:100%;border-collapse:collapse}th{background:#f3f4f6;text-align:left;padding:7px;font-size:9px;text-transform:uppercase;color:#6b7280}td{padding:7px;border-bottom:1px solid #e5e7eb}
+    .note{margin-top:14px;border:1px solid #fde68a;background:#fffbeb;border-radius:7px;padding:9px;color:#92400e}
+    .foot{margin-top:24px;border-top:1px solid #e5e7eb;padding-top:9px;color:#6b7280;display:flex;justify-content:space-between}
+    .no-print{text-align:right;margin-bottom:14px}@media print{.no-print{display:none}}
+  </style></head><body>
+    <div class="no-print"><button onclick="window.print()" style="padding:8px 16px;background:#111827;color:white;border:0;border-radius:6px;font-weight:700">Imprimir / Guardar PDF</button></div>
+    <h1>Facturas pendientes</h1>
+    <div class="sub">${e(c.name)} · ${e(c.rnc || 'Sin RNC')} · Generado ${fdate(today())} ${nowt()}</div>
+    <div class="metrics">
+      <div class="metric"><div class="label">Total original listado</div><div class="value">${fmt(totalOriginal)}</div></div>
+      <div class="metric"><div class="label">Cubierto / abonado</div><div class="value" style="color:#15803d">${fmt(totalCovered)}</div></div>
+      <div class="metric"><div class="label">Saldo pendiente</div><div class="value" style="color:#dc2626">${fmt(totalPending)}</div></div>
+    </div>
+    <table><thead><tr><th>Factura</th><th>Fecha</th><th>Origen</th><th style="text-align:right">Total</th><th style="text-align:right">Cubierto</th><th style="text-align:right">Pendiente</th><th style="text-align:right">Antigüedad</th></tr></thead><tbody>${rows}</tbody></table>
+    ${unallocated > 0.005 ? `<div class="note">Saldo sin factura asociada: <strong>${fmt(unallocated)}</strong>. Se muestra aparte para no atribuirlo incorrectamente a una factura.</div>` : ''}
+    ${importedCount ? `<div class="note">${importedCount} factura${importedCount!==1?'s':''} proviene${importedCount!==1?'n':''} de la importación histórica. El saldo pendiente respeta el saldo de origen y los abonos posteriores registrados en Velo.</div>` : ''}
+    <div class="foot"><span>${e(CFG.biz || '')} · ${e(CFG.rnc || '')}</span><span>${invoices.length} factura${invoices.length!==1?'s':''} pendiente${invoices.length!==1?'s':''}</span></div>
+  </body></html>`;
+  printHTML(html, 'reporte');
 }
 
 // ══════════════════════════════════════════════
@@ -2237,44 +2484,53 @@ async function exportClientCreditPDF(c) {
   const disponible  = Math.max(0, creditLimit - balance);
   const usedPct     = creditLimit > 0 ? Math.min((balance / creditLimit) * 100, 100) : 0;
 
-  const pagos  = await window.api.customers.getPayments({ customerId: c.id }) || [];
-  const ventasRaw = await window.api.sales.getAll({ customerId: c.id, range: 'all', limit: 9999 }) || [];
-  const ventas = ventasRaw.filter(s => s.status !== 'cancelled').reverse();
+  const [pagosRaw, ventasRaw, pendingResult] = await cliLoadAccountPayload(c, false)
+    .catch(() => [[], [], { ok:false, facturas:[] }]);
+  const pagos = cliSortAscending(pagosRaw);
+  const ventas = cliSortAscending(ventasRaw);
 
-  const totalCompras = ventas.reduce((a, s) => a + s.total, 0);
+  const account = cliAccountMath(ventas, pagos, pendingResult, balance);
+  const { totalCompras, totalContado, totalCredito, totalAbonado,
+    totalAbonadoHistorico, totalAbonadoVelo, pendingBySale } = account;
   // Descuentos aparte del efectivo — ver nota en openEstadoCuentaModal.
   const esDescuento  = p => String(p.method || '').toLowerCase() === 'descuento';
   const esVigente = p => String(p.status || 'active').toLowerCase() !== 'cancelled';
-  const abonosReales = pagos.filter(p => esVigente(p) && !esDescuento(p));
+  const abonosReales = account.payments;
   const descuentos   = pagos.filter(p => esVigente(p) && esDescuento(p));
-  const totalAbonado = abonosReales.reduce((a, p) => a + p.amount, 0);
-  const totalDesc    = descuentos.reduce((a, p) => a + p.amount, 0);
+  const totalDesc    = account.totalDescuentos;
 
   const _e = t => String(t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
   const ventasRows = ventas.length === 0
-    ? `<tr><td colspan="5" style="text-align:center;color:#9ca3af;padding:12px">Sin compras registradas</td></tr>`
+    ? `<tr><td colspan="7" style="text-align:center;color:#9ca3af;padding:12px">Sin compras registradas</td></tr>`
     : ventas.map(s => {
         const fecha = (s.sale_date || s.date || '').split('T')[0].split(' ')[0];
         const tipo  = s.type === 'devolucion' ? 'Devolución' :
                       s.type === 'cotizacion' ? 'Cotización' : 'Factura';
         const estado = s.status === 'returned' ? 'Devuelta' :
                        s.status === 'cancelled' ? 'Anulada' : 'OK';
-        const metodoBadge = (s.payment_method || s.pay || '—');
+        const isCredit = cliIsCreditSale(s);
+        const pendingKnown = !isCredit || account.pendingAvailable;
+        const pending = isCredit && pendingKnown ? Number(pendingBySale.get(Number(s.id)) || 0) : 0;
+        const covered = isCredit && pendingKnown ? Math.max(0, Number(s.total || 0) - pending) : Number(s.total || 0);
+        const metodoBadge = isCredit ? 'Crédito' : 'Contado';
         return `<tr>
           <td>${fdate(fecha)}</td>
           <td>${facturaLabel(s)} <span style="color:#9ca3af;font-size:10px">${tipo}</span>
+            ${isImportedRecord(s) ? '<div style="color:#b45309;font-size:9px">Histórica importada</div>' : ''}
             ${s.customer_contact_name ? `<div style="color:#2563eb;font-size:9px;margin-top:2px">Solicitado por: <strong>${_e(s.customer_contact_name)}</strong>${s.customer_contact_role ? ` · ${_e(s.customer_contact_role)}` : ''}</div>` : ''}
           </td>
           <td style="text-align:right;font-weight:700">${fmt(s.total)}</td>
           <td>${_e(metodoBadge)}</td>
+          <td style="text-align:right;color:#15803d">${pendingKnown ? fmt(covered) : 'No confirmado'}</td>
+          <td style="text-align:right;color:${pending>0?'#dc2626':'#6b7280'};font-weight:${pending>0?'700':'400'}">${pendingKnown ? fmt(pending) : 'No confirmado'}</td>
           <td><span style="color:${s.status==='returned'||s.status==='cancelled'?'#dc2626':'#16a34a'};font-weight:600">${estado}</span></td>
         </tr>`;
       }).join('');
 
   const pagosRows = pagos.length === 0
     ? `<tr><td colspan="4" style="text-align:center;color:#9ca3af;padding:12px">Sin abonos registrados</td></tr>`
-    : [...pagos].reverse().map(p => {
+    : pagos.map(p => {
         const fecha  = (p.created_at || '').split('T')[0].split(' ')[0];
         const esDesc = esDescuento(p);
         const cancelled = !esVigente(p);
@@ -2295,7 +2551,7 @@ async function exportClientCreditPDF(c) {
   body{font-family:Arial,sans-serif;font-size:11px;color:#111;padding:24px;max-width:800px;margin:0 auto}
   h2{font-size:17px;margin-bottom:2px}
   .sub{color:#6b7280;font-size:11px;margin-bottom:18px}
-  .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
+  .metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
   .met{background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px}
   .met-l{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#9ca3af;margin-bottom:4px}
   .met-v{font-size:16px;font-weight:800}
@@ -2335,26 +2591,36 @@ async function exportClientCreditPDF(c) {
     ${_e(CFG.biz || '')}
   </div>
 
-  <div class="metrics"${totalDesc > 0 ? ' style="grid-template-columns:repeat(5,1fr)"' : ''}>
+  <div class="metrics">
     <div class="met" style="border-color:${balance>0?'#fecaca':'#bbf7d0'};background:${balance>0?'#fef2f2':'#f0fdf4'}">
       <div class="met-l">Balance Pendiente</div>
       <div class="met-v" style="color:${balance>0?'#dc2626':'#16a34a'}">${fmt(balance)}</div>
+    </div>
+    <div class="met">
+      <div class="met-l">Pagado al contado</div>
+      <div class="met-v" style="color:#16a34a">${fmt(totalContado)}</div>
+      <div class="met-s">${account.cashInvoices.length} factura${account.cashInvoices.length!==1?'s':''} sin CxC</div>
+    </div>
+    <div class="met">
+      <div class="met-l">Facturado a crédito</div>
+      <div class="met-v" style="color:#b45309">${fmt(totalCredito)}</div>
+      <div class="met-s">${account.creditInvoices.length} factura${account.creditInvoices.length!==1?'s':''} a crédito</div>
+    </div>
+    <div class="met">
+      <div class="met-l">Abonos a crédito</div>
+      <div class="met-v" style="color:#16a34a">${fmt(totalAbonado)}</div>
+      <div class="met-s">${fmt(totalAbonadoHistorico)} históricos · ${fmt(totalAbonadoVelo)} en Velo</div>
+    </div>
+    <div class="met">
+      <div class="met-l">Total Comprado</div>
+      <div class="met-v">${fmt(totalCompras)}</div>
+      <div class="met-s">Contado + crédito</div>
     </div>
     <div class="met">
       <div class="met-l">Límite / Disponible</div>
       <div class="met-v">${fmt(creditLimit)}</div>
       <div class="met-s" style="color:${disponible<creditLimit*0.1?'#dc2626':'#16a34a'}">Disp: ${fmt(disponible)}</div>
       ${creditLimit>0?`<div class="prog"><div class="prog-f" style="width:${usedPct}%;background:${usedPct>90?'#dc2626':usedPct>60?'#f59e0b':'#16a34a'}"></div></div>`:''}
-    </div>
-    <div class="met">
-      <div class="met-l">Total Comprado</div>
-      <div class="met-v">${fmt(totalCompras)}</div>
-      <div class="met-s">${ventas.length} factura${ventas.length!==1?'s':''}</div>
-    </div>
-    <div class="met">
-      <div class="met-l">Total Abonado</div>
-      <div class="met-v" style="color:#16a34a">${fmt(totalAbonado)}</div>
-      <div class="met-s">${abonosReales.length} abono${abonosReales.length!==1?'s':''}</div>
     </div>
     ${totalDesc > 0 ? `
     <div class="met" style="border-color:#fde68a;background:#fffbeb">
@@ -2381,7 +2647,8 @@ async function exportClientCreditPDF(c) {
     <thead><tr>
       <th>Fecha</th><th>Factura</th>
       <th style="text-align:right">Total</th>
-      <th>Método</th><th>Estado</th>
+      <th>Condición</th><th style="text-align:right">Cubierto</th>
+      <th style="text-align:right">Saldo</th><th>Estado</th>
     </tr></thead>
     <tbody>${ventasRows}</tbody>
   </table>
@@ -2466,7 +2733,7 @@ function filtrarHistorialCliente(customerId, q) {
         </tr></thead>
         <tbody>
           ${matches.map(m => `
-            <tr style="cursor:pointer" onclick="closeModal();setTimeout(()=>openDetalleVentaModal(DB.sales.find(s=>s.id===${m.saleId})),100)">
+            <tr style="cursor:pointer" onclick="openClienteFacturaDetalle(${m.saleId},${customerId},'historial')">
               <td style="font-size:11px;white-space:nowrap">${fdate(m.fecha)}</td>
               <td>
                 <div style="font-weight:500;font-size:12px">${m.item.product_name||m.item.name||'—'}</div>
@@ -2492,7 +2759,28 @@ function filtrarHistorialCliente(customerId, q) {
 // TOGGLE DETALLE DE FACTURA (expandir artículos)
 // Llamado desde la pestaña Facturas del modal
 // ══════════════════════════════════════════════
-async function toggleVentaDetalle(idx, saleId, rowEl) {
+async function openClienteFacturaDetalle(saleId, customerId, returnTab = 'cuenta') {
+  let sale = (window._cliModalVentas || []).find(row => Number(row.id) === Number(saleId))
+    || (DB.sales || []).find(row => Number(row.id) === Number(saleId));
+  if (!sale) {
+    try { sale = await window.api.sales.getById({ id: saleId }); } catch { sale = null; }
+  }
+  if (!sale) { toast('No se pudo cargar la factura', 'err'); return; }
+  return openDetalleVentaModal(sale, { returnToCustomerId: customerId, returnTab });
+}
+
+async function volverAClienteDesdeFactura(customerId, returnTab = 'cuenta') {
+  closeModal();
+  let customer = (DB.customers || []).find(row => Number(row.id) === Number(customerId));
+  if (!customer) {
+    try { await reloadCustomers(); } catch {}
+    customer = (DB.customers || []).find(row => Number(row.id) === Number(customerId));
+  }
+  if (!customer) { toast('No se pudo volver al cliente', 'err'); return; }
+  openEstadoCuentaModal(customer, returnTab);
+}
+
+async function toggleVentaDetalle(idx, saleId, rowEl, customerId) {
   const detailDiv  = document.getElementById(`vta-det-${idx}`);
   const detailBody = document.getElementById(`vta-det-body-${idx}`);
   if (!detailDiv) return;
@@ -2541,12 +2829,15 @@ async function toggleVentaDetalle(idx, saleId, rowEl) {
           <td colspan="4" style="padding:4px 8px;text-align:right;font-size:10px;color:var(--muted)">Total:</td>
           <td style="padding:4px 8px;text-align:right;font-weight:800">${fmt(total)}</td>
         </tr></tfoot>
-      </table>`;
+      </table>
+      <div style="display:flex;justify-content:flex-end;margin-top:8px">
+        <button class="btn btn-out btn-sm" onclick="openClienteFacturaDetalle(${saleId},${customerId},'cuenta')">Ver factura completa →</button>
+      </div>`;
   }
   detailBody.dataset.loaded = 'true';
 }
 
-async function toggleFacturaDetalle(idx, saleId, rowEl) {
+async function toggleFacturaDetalle(idx, saleId, rowEl, customerId) {
   const detailRow  = document.getElementById(`fac-detail-${idx}`);
   const detailBody = document.getElementById(`fac-detail-body-${idx}`);
   if (!detailRow) return;
@@ -2588,7 +2879,10 @@ async function toggleFacturaDetalle(idx, saleId, rowEl) {
           <td colspan="4" style="padding:5px 8px;text-align:right;font-size:11px;color:var(--muted)">Total artículos:</td>
           <td style="padding:5px 8px;text-align:right;font-weight:800;color:var(--red)">${fmt(total)}</td>
         </tr></tfoot>
-      </table>`;
+      </table>
+      <div style="display:flex;justify-content:flex-end;margin-top:9px">
+        <button class="btn btn-dark btn-sm" onclick="openClienteFacturaDetalle(${saleId},${customerId},'facturas')">Ver factura completa →</button>
+      </div>`;
   }
   detailBody.dataset.loaded = 'true';
 }

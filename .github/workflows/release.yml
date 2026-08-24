@@ -23,7 +23,7 @@ jobs:
         run: npm ci
 
       - name: Pruebas y validaciones
-        run: npm run release:check
+        run: npm run test:tech-readiness
 
       # Pre-crear el release ANTES de compilar evita la race conocida: si no
       # existe, cada invocación de electron-builder (Terminal, TECH y servidores) crea su

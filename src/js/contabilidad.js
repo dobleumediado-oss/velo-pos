@@ -48,6 +48,7 @@ async function renderContabilidad(el) {
     { key: 'activos',      label: 'Activos' },
     { key: 'cuadres',      label: 'Cuadres' },
     { key: 'fiscal606',    label: '606' },
+    { key: 'fiscalAvanzado',label: 'Fiscal avanzado' },
     { key: 'periodos',     label: 'Períodos' },
     { key: 'configuracion',label: 'Configuración' },
   ].forEach(t => {
@@ -87,6 +88,7 @@ async function _contRenderBody(body) {
       case 'activos':       await _contRenderActivos(c);      break;
       case 'cuadres':       await _contRenderCuadres(c);      break;
       case 'fiscal606':     await _contRender606(c);          break;
+      case 'fiscalAvanzado':await _contRenderFiscalAdvanced(c);break;
       case 'periodos':      await _contRenderPeriodos(c);     break;
       case 'configuracion': await _contRenderConfig(c);       break;
     }
@@ -1594,6 +1596,48 @@ function _print606(rows, totals, from, to) {
   <td style="text-align:right">${fmt(totals.itbis)}</td><td style="text-align:right">${fmt(totals.total)}</td></tr></tfoot>
   </table></body></html>`;
   printHTML(html, 'contabilidad');
+}
+
+async function _contRenderFiscalAdvanced(el) {
+  const from = _contFrom || _isoDate(-30), to = _contTo || _isoDate(0);
+  const controls=h('div',{style:{display:'flex',gap:'8px',alignItems:'flex-end',marginBottom:'14px',flexWrap:'wrap'}},
+    h('div',null,h('label',{class:'lbl'},'Desde'),h('input',{class:'inp',type:'date',id:'fiscal-adv-from',value:from})),
+    h('div',null,h('label',{class:'lbl'},'Hasta'),h('input',{class:'inp',type:'date',id:'fiscal-adv-to',value:to})),
+    h('button',{class:'btn',onclick:()=>{_contFrom=document.getElementById('fiscal-adv-from').value;_contTo=document.getElementById('fiscal-adv-to').value;_contRenderFiscalAdvanced((el.innerHTML='',el));}},'Aplicar'),
+    h('button',{class:'btn btn-out',onclick:()=>_openFiscalWithholding(el,from,to)},'+ Registrar retención'));
+  el.appendChild(controls);
+  const res=await window.api.accounting.getFiscalWorkpaper({from,to});
+  if(!res?.ok){el.appendChild(h('div',{class:'alrt r'},h('div',{class:'alrt-dot r'}),h('div',null,res?.error||'No se pudo preparar la conciliación')));return;}
+  const d=res.data,issues=Number(d.reconciliation?.issue_count||0);
+  el.appendChild(h('div',{class:`alrt ${issues?'a':'g'}`,style:{marginBottom:'12px'}},h('div',{class:`alrt-dot ${issues?'a':'g'}`}),h('div',null,
+    h('div',{class:'alrt-title'},issues?`${issues} diferencia(s) requieren revisión`:'Fuentes conciliadas sin diferencias automáticas'),
+    h('div',{class:'alrt-sub'},d.disclaimer))));
+  const it1=d.it1_workpaper||{},ir17=d.ir17_workpaper||{};
+  el.appendChild(h('div',{class:'metrics',style:{gridTemplateColumns:'repeat(4,1fr)',marginBottom:'14px'}},
+    h('div',{class:'metric'},h('div',{class:'met-label'},'ITBIS ventas'),h('div',{class:'met-val'},fmt(it1.itbis_facturado||0))),
+    h('div',{class:'metric'},h('div',{class:'met-label'},'ITBIS compras'),h('div',{class:'met-val'},fmt(it1.itbis_compras||0))),
+    h('div',{class:'metric'},h('div',{class:'met-label'},'Diferencia antes ajustes'),h('div',{class:'met-val'},fmt(it1.diferencia_antes_de_ajustes||0))),
+    h('div',{class:'metric'},h('div',{class:'met-label'},'Retenciones IR-17'),h('div',{class:'met-val'},fmt(Number(ir17.isr_retenido||0)+Number(ir17.itbis_retenido||0)+Number(ir17.retribuciones_complementarias||0)+Number(ir17.otras||0))))));
+  const cards=h('div',{class:'g2'});
+  const itCard=h('div',{class:'card',style:'padding:12px'},h('div',{class:'card-title'},'Hoja de trabajo IT-1'),
+    ...[['ITBIS facturado',it1.itbis_facturado],['ITBIS acreditable en compras',it1.itbis_compras],['Retenido por terceros',it1.itbis_retenido_por_terceros],['Retenido a terceros',it1.itbis_retenido_a_terceros],['Diferencia antes de ajustes',it1.diferencia_antes_de_ajustes]].map(([label,value])=>h('div',{class:'tr',style:'font-size:12px'},h('span',null,label),h('strong',null,fmt(value||0)))));
+  const irCard=h('div',{class:'card',style:'padding:12px'},h('div',{class:'card-title'},'Hoja de trabajo IR-17'),
+    ...[['ISR retenido',ir17.isr_retenido],['ITBIS retenido',ir17.itbis_retenido],['Retribuciones complementarias',ir17.retribuciones_complementarias],['Otras retenciones',ir17.otras]].map(([label,value])=>h('div',{class:'tr',style:'font-size:12px'},h('span',null,label),h('strong',null,fmt(value||0)))));
+  cards.append(itCard,irCard);el.appendChild(cards);
+  const control=d.accounting_control||{},sales=d.totals?.sales||{},purchases=d.totals?.purchases||{};
+  el.appendChild(h('div',{class:'card',style:'padding:12px;margin-top:12px'},h('div',{class:'card-title'},'Control contabilidad ↔ libros auxiliares'),
+    h('div',{class:'g2',style:'margin-top:8px'},
+      h('div',{class:'alrt b'},h('div',{class:'alrt-dot b'}),h('div',null,h('div',{class:'alrt-title'},'Ventas y 607'),h('div',{class:'alrt-sub'},`${d.sales_book.length} facturas · Base ${fmt(sales.base||0)} · ITBIS ${fmt(sales.itbis||0)} · Movimiento 2102 ${fmt(control.itbis_por_pagar_movement||0)}`))),
+      h('div',{class:'alrt b'},h('div',{class:'alrt-dot b'}),h('div',null,h('div',{class:'alrt-title'},'Compras y 606'),h('div',{class:'alrt-sub'},`${d.purchase_book.length} documentos · Base ${fmt(purchases.base||0)} · ITBIS ${fmt(purchases.itbis||0)} · Movimiento 1106 ${fmt(control.itbis_acreditable_movement||0)}`))))));
+  const issueRows=[...(d.reconciliation.invalid_ncf||[]).map(x=>({type:'NCF inválido',ref:`Venta #${x.sale_id}`,detail:x.ncf})),...(d.reconciliation.orphan_ncf||[]).map(x=>({type:'NCF huérfano',ref:`Registro #${x.id}`,detail:x.ncf})),...(d.reconciliation.payment_differences||[]).map(x=>({type:'Cobro no cuadra',ref:`Venta #${x.sale_id}`,detail:fmt(x.difference)}))];
+  el.appendChild(h('div',{class:'card',style:'padding:12px;margin-top:12px'},h('div',{class:'card-title'},'Excepciones para revisar'),issueRows.length?h('div',{class:'tw',style:'margin-top:8px'},h('table',{class:'ledger-tbl'},h('thead',null,h('tr',null,h('th',null,'Tipo'),h('th',null,'Referencia'),h('th',null,'Detalle'))),h('tbody',null,...issueRows.map(x=>h('tr',null,h('td',null,x.type),h('td',null,x.ref),h('td',null,x.detail)))))):h('div',{class:'ts',style:'margin-top:8px'},'No se detectaron excepciones automáticas en este período.')));
+  const salesTable=h('table',{class:'ledger-tbl',style:{width:'100%'}},h('thead',null,h('tr',null,h('th',null,'Fecha'),h('th',null,'NCF'),h('th',null,'Cliente'),h('th',{class:'num'},'Base'),h('th',{class:'num'},'ITBIS'),h('th',{class:'num'},'Total'),h('th',null,'Forma'))),h('tbody',null,...d.sales_book.map(row=>h('tr',null,h('td',null,row.document_date),h('td',null,row.ncf||'Sin comprobante'),h('td',null,row.customer_name),h('td',{class:'num'},fmt(Number(row.subtotal||0)-Number(row.discount_amt||0))),h('td',{class:'num'},fmt(row.tax_amt||0)),h('td',{class:'num'},fmt(row.total||0)),h('td',null,row.payment_method)))));
+  el.appendChild(h('div',{class:'card',style:'padding:12px;margin-top:12px'},h('div',{class:'fxb'},h('div',{class:'card-title'},`Libro formal de ventas (${d.sales_book.length})`),h('span',{class:'ts'},'Base interna para 607')),h('div',{class:'tw',style:'max-height:340px;margin-top:8px'},salesTable)));
+}
+
+function _openFiscalWithholding(el,from,to){
+  openModal(`<div class="modal-title">Registrar retención fiscal</div><div class="modal-sub">Registra el soporte recibido o emitido; no sustituye el comprobante ni la presentación ante DGII.</div><div class="g2" style="margin-top:14px"><div class="fg"><label class="lbl">Dirección</label><select class="inp" id="fw-direction"><option value="made">Retenida por el negocio a un tercero</option><option value="received">Retenida al negocio por un tercero</option></select></div><div class="fg"><label class="lbl">Impuesto</label><select class="inp" id="fw-kind"><option value="isr">ISR</option><option value="itbis">ITBIS</option><option value="retribucion_complementaria">Retribución complementaria</option><option value="other">Otra</option></select></div></div><div class="g2"><div class="fg"><label class="lbl">Tercero</label><input class="inp" id="fw-party"></div><div class="fg"><label class="lbl">RNC / Cédula</label><input class="inp" id="fw-rnc"></div></div><div class="g2"><div class="fg"><label class="lbl">NCF / soporte</label><input class="inp" id="fw-ncf"></div><div class="fg"><label class="lbl">Fecha *</label><input class="inp" id="fw-date" type="date" value="${to}"></div></div><div class="g3"><div class="fg"><label class="lbl">Base</label><input class="inp" id="fw-base" type="number" min="0" step="0.01"></div><div class="fg"><label class="lbl">Tasa %</label><input class="inp" id="fw-rate" type="number" min="0" step="0.01"></div><div class="fg"><label class="lbl">Monto retenido *</label><input class="inp" id="fw-amount" type="number" min="0" step="0.01"></div></div><div class="fg"><label class="lbl">Notas</label><input class="inp" id="fw-notes"></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="fw-save">Guardar soporte</button></div>`);
+  document.getElementById('fw-save').onclick=async()=>{const data={direction:document.getElementById('fw-direction').value,tax_kind:document.getElementById('fw-kind').value,party_name:document.getElementById('fw-party').value,party_rnc:document.getElementById('fw-rnc').value,ncf:document.getElementById('fw-ncf').value,document_date:document.getElementById('fw-date').value,base_amount:Number(document.getElementById('fw-base').value)||0,rate:Number(document.getElementById('fw-rate').value)||0,amount:Number(document.getElementById('fw-amount').value)||0,notes:document.getElementById('fw-notes').value};const res=await window.api.accounting.saveFiscalWithholding({requestUserId:user.id,data,range:{from,to}});if(!res?.ok)return toast(res?.error||'No se pudo guardar','e');closeModal();toast('Retención registrada','s');el.innerHTML='';_contRenderFiscalAdvanced(el);};
 }
 
 // ══════════════════════════════════════════════

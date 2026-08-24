@@ -7,7 +7,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 // ── API expuesta al renderer ──────────────────
-contextBridge.exposeInMainWorld('api', {
+const api = {
 
   // ── Auth ──────────────────────────────────
   auth: {
@@ -74,6 +74,16 @@ contextBridge.exposeInMainWorld('api', {
     technicians: (data) => ipcRenderer.invoke('serviceOrders:technicians', data),
     saveTechnician: (data) => ipcRenderer.invoke('serviceOrders:saveTechnician', data),
     report: (data) => ipcRenderer.invoke('serviceOrders:report', data),
+    addEvidence: (data) => ipcRenderer.invoke('serviceOrders:addEvidence', data),
+    getEvidenceData: (data) => ipcRenderer.invoke('serviceOrders:getEvidenceData', data),
+    appointments: (data) => ipcRenderer.invoke('serviceOrders:appointments', data),
+    saveAppointment: (data) => ipcRenderer.invoke('serviceOrders:saveAppointment', data),
+    startTimer: (data) => ipcRenderer.invoke('serviceOrders:startTimer', data),
+    stopTimer: (data) => ipcRenderer.invoke('serviceOrders:stopTimer', data),
+    requestPart: (data) => ipcRenderer.invoke('serviceOrders:requestPart', data),
+    techCatalog: (data) => ipcRenderer.invoke('serviceOrders:techCatalog', data),
+    saveDeviceModel: (data) => ipcRenderer.invoke('serviceOrders:saveDeviceModel', data),
+    saveCompatibility: (data) => ipcRenderer.invoke('serviceOrders:saveCompatibility', data),
     getPublicAccess: (data) => ipcRenderer.invoke('serviceOrders:getPublicAccess', data),
     regeneratePublicAccess: (data) => ipcRenderer.invoke('serviceOrders:regeneratePublicAccess', data),
     revokePublicAccess: (data) => ipcRenderer.invoke('serviceOrders:revokePublicAccess', data),
@@ -81,7 +91,11 @@ contextBridge.exposeInMainWorld('api', {
     getSharePayload: (data) => ipcRenderer.invoke('serviceOrders:getSharePayload', data),
     markNotificationSent: (data) => ipcRenderer.invoke('serviceOrders:markNotificationSent', data),
     getPortalConfig: (data) => ipcRenderer.invoke('serviceOrders:getPortalConfig', data),
+    testPublicAccess: (data) => ipcRenderer.invoke('serviceOrders:testPublicAccess', data),
     savePortalConfig: (data) => ipcRenderer.invoke('serviceOrders:savePortalConfig', data),
+    getMessagingConfig: (data) => ipcRenderer.invoke('serviceOrders:getMessagingConfig', data),
+    saveMessagingConfig: (data) => ipcRenderer.invoke('serviceOrders:saveMessagingConfig', data),
+    sendNotification: (data) => ipcRenderer.invoke('serviceOrders:sendNotification', data),
   },
 
   // ── Clientes ──────────────────────────────
@@ -104,6 +118,7 @@ contextBridge.exposeInMainWorld('api', {
     getPaymentStatus: (data) => ipcRenderer.invoke('customers:getPaymentStatus', data),
     cancelPayment: (data)      => ipcRenderer.invoke('customers:cancelPayment', data),
     getPayments:   (data)      => ipcRenderer.invoke('customers:getPayments', data),
+    getAccountSales: (data)    => ipcRenderer.invoke('customers:getAccountSales', data),
     getAllPayments: (data)      => ipcRenderer.invoke('customers:getAllPayments', data),
     getHistory:             (data) => ipcRenderer.invoke('customers:getHistory',             data),
     getSaleItems:           (data) => ipcRenderer.invoke('customers:getSaleItems',           data),
@@ -248,6 +263,11 @@ contextBridge.exposeInMainWorld('api', {
     create:  (data)          => ipcRenderer.invoke('backup:create', data),
     restore: (data)          => ipcRenderer.invoke('backup:restore', data),
     getList: ()              => ipcRenderer.invoke('backup:getList'),
+    pickExternalDirectory:()=> ipcRenderer.invoke('backup:pickExternalDirectory'),
+    pickEncryptedFile:()    => ipcRenderer.invoke('backup:pickEncryptedFile'),
+    createEncrypted: (data)  => ipcRenderer.invoke('backup:createEncrypted', data),
+    verifyEncrypted: (data)  => ipcRenderer.invoke('backup:verifyEncrypted', data),
+    getContinuityStatus:(data)=> ipcRenderer.invoke('backup:getContinuityStatus', data),
   },
 
   // ── Version ───────────────────────────────
@@ -523,6 +543,8 @@ contextBridge.exposeInMainWorld('api', {
     getReconciliation:  ()  => ipcRenderer.invoke('accounting:getReconciliation'),
     initializeReconciliation:(d) => ipcRenderer.invoke('accounting:initializeReconciliation', d),
     get606:             (d) => ipcRenderer.invoke('accounting:get606',             d),
+    getFiscalWorkpaper: (d) => ipcRenderer.invoke('accounting:getFiscalWorkpaper', d),
+    saveFiscalWithholding:(d)=> ipcRenderer.invoke('accounting:saveFiscalWithholding', d),
     getCashFlow:        (d) => ipcRenderer.invoke('accounting:getCashFlow',        d),
   },
 
@@ -541,4 +563,19 @@ contextBridge.exposeInMainWorld('api', {
     error: (tag, message, extra) => ipcRenderer.invoke('log:error', { tag, message, extra }),
   },
 
-});
+};
+
+// Esta señal solo la añade BrowserWindow desde el proceso principal cuando se
+// cumplen a la vez: app no empaquetada + --dev explícito. Así funciona igual en
+// todas las versiones de Electron sin depender de process.defaultApp.
+if (process.argv.includes('--velo-provider-tools')) {
+  api.providerLicenses = {
+    getStatus: (data) => ipcRenderer.invoke('providerLicenses:getStatus', data),
+    list:      (data) => ipcRenderer.invoke('providerLicenses:list', data),
+    create:    (data) => ipcRenderer.invoke('providerLicenses:create', data),
+    cancel:    (data) => ipcRenderer.invoke('providerLicenses:cancel', data),
+    secureKey: (data) => ipcRenderer.invoke('providerLicenses:secureKey', data),
+  };
+}
+
+contextBridge.exposeInMainWorld('api', api);

@@ -41,6 +41,20 @@ function rpcTimeoutFor(channel) {
   // grande puede superar el timeout interactivo normal sin que el servidor se
   // haya desconectado.
   if (channel === 'ncf:recoverMalformedDocuments') return 2 * 60 * 1000;
+  // Una base grande puede tardar varios minutos en crear el snapshot,
+  // cifrarlo o ejecutar integrity_check. No reportar SERVER_OFFLINE mientras
+  // el Servidor continúa trabajando y podría completar el archivo.
+  if (channel === 'backup:createEncrypted' || channel === 'backup:verifyEncrypted') return 10 * 60 * 1000;
+  // La prueba pública es manual y su timeout HTTPS es de 8 s; dejar margen al
+  // transporte RPC evita convertir una demora DNS normal en SERVER_OFFLINE.
+  if (channel === 'serviceOrders:testPublicAccess') return 15 * 1000;
+  // Lecturas analíticas recorren historiales grandes en instalaciones que
+  // vienen de importaciones. Ocho segundos convertía una consulta aún activa
+  // en un falso SERVER_OFFLINE y dejaba el módulo en blanco.
+  if (channel === 'crm:inventoryOverview' || channel === 'crm:overview' ||
+      channel === 'sales:search' || channel === 'customers:getFacturasPendientes') {
+    return 30 * 1000;
+  }
   return 8000;
 }
 function configureBridge({ mode, client } = {}) {

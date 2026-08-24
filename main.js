@@ -21,6 +21,10 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
     'connection:setTerminalBusinesses',
     'connection:clientPreflight', 'connection:setMode',
     'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke',
+    // Herramienta privada: aun en desarrollo siempre opera en esta Mac y nunca
+    // se reenvía a otra terminal o al servicio servidor.
+    'providerLicenses:getStatus', 'providerLicenses:list',
+    'providerLicenses:create', 'providerLicenses:cancel', 'providerLicenses:secureKey',
     'update:check', 'update:download', 'update:install',
     // Versión = propia de cada máquina (no la del servidor).
     'version:getInfo', 'version:getAppVersion',
@@ -35,6 +39,10 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
     // (print:onServer NO va aquí: es la opción explícita de imprimir en el servidor.)
     'print:html', 'print:toPDF', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
     'shell:openExternal', 'shell:openWhatsApp', 'shell:showItemInFolder',
+    // Los selectores de archivo/carpeta pertenecen a la PC que muestra la
+    // ventana. La creación/verificación se mantiene mode-aware para operar
+    // sobre la base central cuando esta es la consola del Servidor.
+    'backup:pickExternalDirectory', 'backup:pickEncryptedFile',
     // Diagnóstico local: NUNCA reenviar (si se reenvía y el servidor cae, el propio
     // logger de errores falla → cascada). El log de cada terminal es local.
     'log:error',
@@ -42,13 +50,17 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
 });
 const path = require('path');
 const fs   = require('fs');
+const crypto = require('crypto');
 const http = require('http');
+const https = require('https');
 const { spawn } = require('child_process');
 const bcrypt = require('bcryptjs');
 const { sqliteIdent } = require('./lib/sql-safe');
 const { normalizeFinAcct: _normalizeFinAcct, normalizeFinMov: _normalizeFinMov } = require('./lib/normalize-financial');
-const { isAllowedExternalUrl, isAllowedPortalBaseUrl } = require('./lib/url-safe');
+const { isAllowedExternalUrl, diagnosePortalBaseUrl } = require('./lib/url-safe');
+const { checkPublicPortalAccess } = require('./lib/portal-public-check');
 const { buildWhatsAppUrls } = require('./lib/whatsapp-url');
+const { createEncryptedBackup, verifyEncryptedBackup } = require('./lib/continuity-backup');
 const { canManageInventory, modulePermission } = require('./lib/user-operational-permissions');
 const {
   EQUIPARTS_FILES,
@@ -213,7 +225,7 @@ let { initLogger, logError, logWarn, logInfo } = (() => {
 })();
 
 const {
-  getMachineId, getLicenseStatus, activateLicense, withDevelopmentBypass
+  PUBLIC_KEY_PEM, getMachineId, getLicenseStatus, activateLicense, withDevelopmentBypass
 } = require('./license');
 
 const { runSystemDoctor } = require('./src/main/system-doctor');
@@ -472,6 +484,12 @@ function createWindow() {
       webSecurity:        true,
       allowRunningInsecureContent: false,
       preload: path.join(__dirname, 'preload.js'),
+      // Señal creada exclusivamente por el proceso principal. El preload no
+      // debe inferir app.isPackaged: Electron no expone process.defaultApp de
+      // forma consistente en todas sus versiones/contextos.
+      additionalArguments: (!app.isPackaged && RUNTIME.dev)
+        ? ['--velo-provider-tools']
+        : [],
     },
     // icon: path.join(__dirname, 'src/assets/icon.png')
   });
@@ -1768,6 +1786,117 @@ ipcMain.handle('serviceOrders:report', async (_, data = {}) => {
   catch (e) { return { ok:false, error:e.message }; }
 });
 
+ipcMain.handle('serviceOrders:addEvidence', async (_, data = {}) => {
+  let temporaryPath = '';
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    const match = String(data.data_url || '').match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/);
+    if (!match) throw new Error('La evidencia debe ser una imagen JPG, PNG o WEBP');
+    const bytes = Buffer.from(match[2], 'base64');
+    const maxBytes = Math.max(1, Math.min(25, Number(settingsRepo.get('service_evidence_max_mb')) || 8)) * 1024 * 1024;
+    if (!bytes.length || bytes.length > maxBytes) throw new Error(`La imagen supera el límite de ${Math.round(maxBytes / 1024 / 1024)} MB`);
+    const order = serviceOrdersRepo.getById(data.id);
+    if (!order) throw new Error('Orden de servicio no encontrada');
+    const extension = { 'image/jpeg':'jpg', 'image/png':'png', 'image/webp':'webp' }[match[1]];
+    const folder = path.join(DATA_DIR, 'service-evidence', String(order.id));
+    fs.mkdirSync(folder, { recursive:true });
+    const fileName = `${Date.now()}-${crypto.randomUUID()}.${extension}`;
+    const finalPath = path.join(folder, fileName);
+    temporaryPath = `${finalPath}.tmp`;
+    fs.writeFileSync(temporaryPath, bytes, { flag:'wx', mode:0o600 });
+    fs.renameSync(temporaryPath, finalPath);
+    temporaryPath = finalPath;
+    const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+    const evidence = serviceOrdersRepo.addEvidenceMetadata(order.id, {
+      evidence_type:data.evidence_type,
+      storage_path:path.relative(DATA_DIR, finalPath),
+      mime_type:match[1], sha256,
+      original_name:data.original_name,
+      note:data.note,
+    }, reqUser);
+    temporaryPath = '';
+    audit(reqUser.id, reqUser.name, 'servicio_evidencia_agregada', 'service_orders', order.id,
+      `${evidence.evidence_type} · ${sha256.slice(0,12)}`);
+    return { ok:true, data:evidence };
+  } catch (e) {
+    if (temporaryPath) { try { fs.unlinkSync(temporaryPath); } catch {} }
+    return { ok:false, error:e.message };
+  }
+});
+ipcMain.handle('serviceOrders:getEvidenceData', async (_, data = {}) => {
+  try {
+    _serviceUser(data.requestUserId);
+    const order = serviceOrdersRepo.getById(data.id);
+    const evidence = order?.evidence?.find(item => Number(item.id) === Number(data.evidence_id));
+    if (!evidence) throw new Error('Evidencia no encontrada');
+    const root = path.resolve(DATA_DIR, 'service-evidence');
+    const filePath = path.resolve(DATA_DIR, evidence.storage_path);
+    if (!filePath.startsWith(`${root}${path.sep}`)) throw new Error('Ruta de evidencia no válida');
+    const bytes = fs.readFileSync(filePath);
+    const checksum = crypto.createHash('sha256').update(bytes).digest('hex');
+    if (checksum !== evidence.sha256) throw new Error('La evidencia no superó la verificación de integridad');
+    return { ok:true, data_url:`data:${evidence.mime_type};base64,${bytes.toString('base64')}` };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+
+ipcMain.handle('serviceOrders:appointments', async (_, data = {}) => {
+  try { _serviceUser(data.requestUserId); return { ok:true, data:serviceOrdersRepo.listAppointments(data) }; }
+  catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:saveAppointment', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    const id = serviceOrdersRepo.saveAppointment(data.data || {}, reqUser);
+    audit(reqUser.id, reqUser.name, 'servicio_cita_guardada', 'service_appointments', id, '');
+    return { ok:true, id, data:serviceOrdersRepo.listAppointments(data.range || {}) };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:startTimer', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    return { ok:true, data:serviceOrdersRepo.startTimer(data.id, data.technician_id, data.notes, reqUser) };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:stopTimer', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    return { ok:true, data:serviceOrdersRepo.stopTimer(data.entry_id, reqUser) };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:requestPart', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    const result = serviceOrdersRepo.requestPart(data.id, data.item_id, data.supplier_id, reqUser);
+    audit(reqUser.id, reqUser.name, 'servicio_pieza_solicitada', 'service_orders', data.id,
+      result.purchaseOrderId ? `OC #${result.purchaseOrderId}` : 'Solicitud pendiente');
+    return { ok:true, data:result };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:techCatalog', async (_, data = {}) => {
+  try { _serviceUser(data.requestUserId); return { ok:true, data:serviceOrdersRepo.techCatalog() }; }
+  catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:saveDeviceModel', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    if (!['admin','superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede gestionar el catálogo tecnológico');
+    const id = serviceOrdersRepo.saveDeviceModel(data.data || {});
+    audit(reqUser.id, reqUser.name, 'modelo_tecnologico_guardado', 'tech_device_models', id,
+      `${data.data?.brand || ''} ${data.data?.model || ''}`.trim());
+    return { ok:true, id, data:serviceOrdersRepo.techCatalog() };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:saveCompatibility', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    if (!['admin','superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede gestionar compatibilidades');
+    const result = serviceOrdersRepo.saveCompatibility(data.data || {});
+    audit(reqUser.id, reqUser.name, 'compatibilidad_tecnologica_guardada', 'tech_product_compatibility', null,
+      `producto=${data.data?.product_id || ''} modelo=${data.data?.device_model_id || ''}`);
+    return { ok:true, data:result };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+
 function _servicePortalBusinessId() {
   return String(RUNTIME.businessId || currentBusinessId() || 'principal');
 }
@@ -1859,20 +1988,122 @@ ipcMain.handle('serviceOrders:getPortalConfig', async (_, data = {}) => {
     }};
   } catch (e) { return { ok:false, error:e.message }; }
 });
+ipcMain.handle('serviceOrders:testPublicAccess', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    if (!['admin','superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede probar el acceso público');
+    const baseUrl = String(settingsRepo.get('service_public_base_url') || '').trim().replace(/\/+$/, '');
+    const validation = diagnosePortalBaseUrl(baseUrl);
+    if (!validation.allowed) throw new Error(validation.error || 'Configura primero la URL pública de Tailscale Funnel');
+    const result = await checkPublicPortalAccess(baseUrl);
+    audit(reqUser.id, reqUser.name, 'servicio_portal_publico_probado', 'settings', 0,
+      `${baseUrl} · ${result.detail} · ${result.response_ms} ms`);
+    return { ok:true, data:result };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
 ipcMain.handle('serviceOrders:savePortalConfig', async (_, data = {}) => {
   try {
     const reqUser = _serviceUser(data.requestUserId);
     if (!['admin','superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede configurar el portal');
-    const baseUrl = String(data.base_url || '').trim().replace(/\/+$/, '');
-    if (baseUrl && !isAllowedPortalBaseUrl(baseUrl, { allowLocal:true })) {
-      throw new Error('Usa la dirección HTTPS entregada por Tailscale Funnel');
+    const submittedBaseUrl = String(data.base_url || '').trim();
+    const validation = diagnosePortalBaseUrl(submittedBaseUrl, { allowLocal:true });
+    if (submittedBaseUrl && !validation.allowed) {
+      throw new Error(validation.error || 'Usa la dirección HTTPS entregada por Tailscale Funnel');
     }
+    const baseUrl = submittedBaseUrl.replace(/\/+$/, '');
     const days = Math.max(1, Math.min(3650, Number.parseInt(data.link_days, 10) || 365));
     settingsRepo.set('service_public_base_url', baseUrl);
     settingsRepo.set('service_public_link_days', String(days));
     settingsRepo.set('service_public_portal_enabled', data.enabled === false ? '0' : '1');
     audit(reqUser.id, reqUser.name, 'servicio_portal_configurado', 'settings', 0, baseUrl || 'sin URL pública');
     return { ok:true, data:{ base_url:baseUrl,link_days:days,enabled:data.enabled !== false } };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+
+function _whatsAppTokenPath() {
+  return path.join(currentDataDir(), 'whatsapp-cloud.token');
+}
+
+function _sendWhatsAppCloud({ version, phoneNumberId, token, to, message }) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({
+      messaging_product:'whatsapp', recipient_type:'individual', to,
+      type:'text', text:{ preview_url:true, body:message },
+    });
+    const request = https.request({
+      hostname:'graph.facebook.com', port:443, method:'POST',
+      path:`/${encodeURIComponent(version)}/${encodeURIComponent(phoneNumberId)}/messages`,
+      headers:{ Authorization:`Bearer ${token}`, 'Content-Type':'application/json', 'Content-Length':Buffer.byteLength(body) },
+      timeout:15000,
+    }, response => {
+      let raw=''; response.setEncoding('utf8'); response.on('data', chunk => { raw += chunk; });
+      response.on('end', () => {
+        let parsed={}; try { parsed=JSON.parse(raw || '{}'); } catch { parsed={ raw:raw.slice(0,2000) }; }
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          resolve({ ok:true, status:String(response.statusCode), messageId:parsed.messages?.[0]?.id || '', response:parsed });
+        } else {
+          resolve({ ok:false, status:String(response.statusCode), error:parsed.error?.message || `Meta respondió ${response.statusCode}`, response:parsed });
+        }
+      });
+    });
+    request.on('timeout', () => request.destroy(new Error('WhatsApp Cloud no respondió a tiempo')));
+    request.on('error', reject); request.end(body);
+  });
+}
+
+ipcMain.handle('serviceOrders:getMessagingConfig', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    return { ok:true, data:{
+      mode:String(settingsRepo.get('service_messaging_mode') || 'assisted'),
+      phone_number_id:String(settingsRepo.get('service_whatsapp_phone_number_id') || ''),
+      graph_version:String(settingsRepo.get('service_whatsapp_graph_version') || ''),
+      has_token:fs.existsSync(_whatsAppTokenPath()),
+      can_manage:['admin','superadmin'].includes(reqUser.role),
+    } };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:saveMessagingConfig', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    if (!['admin','superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede configurar mensajería');
+    const mode = data.mode === 'whatsapp_cloud' ? 'whatsapp_cloud' : 'assisted';
+    const phoneNumberId = String(data.phone_number_id || '').trim();
+    const graphVersion = String(data.graph_version || '').trim();
+    const token = String(data.access_token || '').trim();
+    if (mode === 'whatsapp_cloud') {
+      if (!/^\d{5,30}$/.test(phoneNumberId)) throw new Error('Phone Number ID de Meta no válido');
+      if (!/^v\d{1,2}\.\d$/.test(graphVersion)) throw new Error('Indica la versión Graph provista por Meta, por ejemplo v23.0');
+      if (!token && !fs.existsSync(_whatsAppTokenPath())) throw new Error('Falta el token permanente de WhatsApp Cloud');
+    }
+    if (token) fs.writeFileSync(_whatsAppTokenPath(), token, { mode:0o600 });
+    settingsRepo.set('service_messaging_mode', mode);
+    settingsRepo.set('service_whatsapp_phone_number_id', phoneNumberId);
+    settingsRepo.set('service_whatsapp_graph_version', graphVersion);
+    audit(reqUser.id, reqUser.name, 'servicio_mensajeria_configurada', 'settings', 0, mode);
+    return { ok:true };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:sendNotification', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    if (String(settingsRepo.get('service_messaging_mode') || 'assisted') !== 'whatsapp_cloud') {
+      throw new Error('WhatsApp Cloud no está activado; usa el envío asistido');
+    }
+    const phone = String(data.phone || '').replace(/\D/g,'');
+    const normalizedPhone = phone.length === 10 ? `1${phone}` : phone;
+    if (normalizedPhone.length < 11 || normalizedPhone.length > 15) throw new Error('Teléfono de WhatsApp no válido');
+    const message = String(data.message || '').trim();
+    if (!message || message.length > 4096) throw new Error('Mensaje vacío o demasiado largo');
+    const token = fs.readFileSync(_whatsAppTokenPath(), 'utf8').trim();
+    const provider = await _sendWhatsAppCloud({
+      version:String(settingsRepo.get('service_whatsapp_graph_version') || ''),
+      phoneNumberId:String(settingsRepo.get('service_whatsapp_phone_number_id') || ''),
+      token, to:normalizedPhone, message,
+    }).catch(error => ({ ok:false,status:'network_error',error:error.message,response:{} }));
+    const notification = serviceOrdersRepo.recordNotificationProvider(data.id, data.type, provider, reqUser);
+    if (!provider.ok) return { ok:false, error:provider.error, data:notification };
+    return { ok:true, data:notification };
   } catch (e) { return { ok:false, error:e.message }; }
 });
 
@@ -2301,6 +2532,24 @@ ipcMain.handle('customers:getPayments', async (_, {
     }
   }
   return customersRepo.getPayments(customerId, { includeCancelled: includeCancelled === true });
+});
+
+// Ruta ligera para estado de cuenta. `sales:getAll` arma resúmenes de artículos
+// y totales correlacionados que son útiles en Ventas, pero innecesarios para el
+// modal del cliente y muy costosos con importaciones históricas grandes.
+ipcMain.handle('customers:getAccountSales', async (_, { customerId }) => {
+  if (!customerId || customerId === 0) return [];
+  const db = require('./database').getDB();
+  return db.prepare(`
+    SELECT s.*,
+           sp.name AS salesperson_name,
+           sp.code AS salesperson_code
+    FROM sales s
+    LEFT JOIN salespeople sp ON sp.id = s.salesperson_id
+    WHERE s.customer_id = ?
+      AND COALESCE(s.status, '') != 'cancelled'
+    ORDER BY COALESCE(NULLIF(s.sale_date, ''), s.created_at) ASC, s.id ASC
+  `).all(customerId);
 });
 
 ipcMain.handle('customers:getAllPayments', async (_, {
@@ -2813,9 +3062,9 @@ ipcMain.handle('log:error', async (_, { tag, message, extra } = {}) => {
   return true;
 });
 
-ipcMain.handle('sales:search', async (_, { q, limit } = {}) => {
+ipcMain.handle('sales:search', async (_, { q, limit, productIds } = {}) => {
   try {
-    return salesRepo.search(q, limit || 8);
+    return salesRepo.search(q, limit || 8, productIds || []);
   } catch (e) {
     console.error('[sales:search]', e);
     return [];
@@ -4053,6 +4302,92 @@ ipcMain.handle('backup:getList', async () => {
   }
 });
 
+function _canPickContinuityFilesHere() {
+  const mode = require('./src/main/ipc-bridge').getMode();
+  // Una terminal cliente normal no puede elegir una carpeta del Servidor: la
+  // ruta elegida pertenecería a otra PC. La edición Servidor sí usa técnicamente
+  // modo cliente, pero su consola y el servicio viven en la misma máquina.
+  return mode !== 'client' || !!_serverEditionMarker();
+}
+
+ipcMain.handle('backup:pickExternalDirectory', async () => {
+  try {
+    if (!_canPickContinuityFilesHere()) {
+      return { ok:false, error:'Crea la copia externa desde la PC Servidor; una terminal no puede seleccionar unidades conectadas a otra computadora.' };
+    }
+    const selected = await dialog.showOpenDialog(mainWindow, {
+      title:'Seleccionar carpeta externa para el respaldo cifrado',
+      properties:['openDirectory','createDirectory'],
+    });
+    if (!selected.filePaths?.length) return { ok:false, error:'Cancelado' };
+    return { ok:true, path:selected.filePaths[0] };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+
+ipcMain.handle('backup:pickEncryptedFile', async () => {
+  try {
+    if (!_canPickContinuityFilesHere()) {
+      return { ok:false, error:'Prueba la copia desde la PC Servidor; el archivo debe estar disponible en esa computadora.' };
+    }
+    const selected = await dialog.showOpenDialog(mainWindow, {
+      title:'Seleccionar respaldo cifrado',
+      filters:[{name:'Respaldo cifrado VELO',extensions:['veloenc']}],
+      properties:['openFile'],
+    });
+    if (!selected.filePaths?.length) return { ok:false, error:'Cancelado' };
+    return { ok:true, path:selected.filePaths[0] };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+
+ipcMain.handle('backup:createEncrypted', async (_, { requestUserId, passphrase, destinationDir } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede crear respaldos externos');
+    if (!path.isAbsolute(String(destinationDir || ''))) throw new Error('Selecciona una carpeta externa válida desde la PC Servidor');
+    const biz = currentBusinessLabel();
+    const result = await createEncryptedBackup({ db, destinationDir, passphrase,
+      businessId:biz.id, businessName:biz.name });
+    db.prepare(`INSERT INTO continuity_events(event_type,status,destination,checksum,detail) VALUES('encrypted_backup','verified',?,?,?)`)
+      .run(result.path, result.checksum, `Snapshot consistente · ${result.bytes} bytes`);
+    settingsRepo.set('continuity_external_backup_path', destinationDir);
+    audit(reqUser.id, reqUser.name, 'backup_externo_cifrado', 'continuity_events', null, result.path);
+    return { ok:true, data:result };
+  } catch (e) {
+    try { db.prepare(`INSERT INTO continuity_events(event_type,status,detail) VALUES('encrypted_backup','failed',?)`).run(String(e.message)); } catch {}
+    return { ok:false, error:e.message };
+  }
+});
+
+ipcMain.handle('backup:verifyEncrypted', async (_, { requestUserId, passphrase, filePath } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede verificar respaldos');
+    if (!path.isAbsolute(String(filePath || ''))) throw new Error('Selecciona un respaldo válido desde la PC Servidor');
+    const result = verifyEncryptedBackup({ filePath, passphrase });
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO continuity_events(event_type,status,destination,checksum,detail) VALUES('restore_test','verified',?,?,?)`)
+      .run(filePath, result.checksum, 'Descifrado, integrity_check y foreign_key_check aprobados');
+    settingsRepo.set('continuity_last_restore_test', now);
+    audit(reqUser.id, reqUser.name, 'backup_externo_verificado', 'continuity_events', null, filePath);
+    return { ok:true, data:{...result,verified_at:now} };
+  } catch (e) {
+    try { db.prepare(`INSERT INTO continuity_events(event_type,status,detail) VALUES('restore_test','failed',?)`).run(String(e.message)); } catch {}
+    return { ok:false, error:e.message };
+  }
+});
+
+ipcMain.handle('backup:getContinuityStatus', async (_, { requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) throw new Error('Acceso restringido');
+    return { ok:true, data:{
+      destination:settingsRepo.get('continuity_external_backup_path') || '',
+      last_restore_test:settingsRepo.get('continuity_last_restore_test') || '',
+      events:db.prepare('SELECT * FROM continuity_events ORDER BY id DESC LIMIT 10').all(),
+    }};
+  } catch (e) { return { ok:false,error:e.message }; }
+});
+
 // ── Licencia ──────────────────────────────────
 
 // La clave privada y la firma viven fuera del cliente instalado.
@@ -4106,6 +4441,66 @@ ipcMain.handle('license:getMachineId', async () => {
     return { ok: false, error: e.message };
   }
 });
+
+// ── Administrador privado de licencias (solo desarrollo local) ──────────────
+// `tools/` no está incluido en build.files. Además, los handlers ni siquiera se
+// registran en una app empaquetada: el cliente conserva únicamente verificación.
+if (!app.isPackaged && RUNTIME.dev && !RUNTIME.headless) {
+  const providerLicenses = require(path.join(__dirname, 'tools', 'license-provider.js'));
+  const providerOptions = {
+    privateKeyPath: providerLicenses.resolvePrivateKeyPath(),
+    historyPath: providerLicenses.resolveHistoryPath(),
+    expectedPublicKeyPem: PUBLIC_KEY_PEM,
+  };
+  const requireProviderUser = (requestUserId) => {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || reqUser.role !== 'superadmin') {
+      throw new Error('Solo el superadministrador local puede gestionar licencias');
+    }
+    return reqUser;
+  };
+
+  ipcMain.handle('providerLicenses:getStatus', async (_, { requestUserId } = {}) => {
+    try {
+      requireProviderUser(requestUserId);
+      return { ok: true, data: providerLicenses.getProviderStatus(providerOptions) };
+    } catch (error) { return { ok: false, error: error.message }; }
+  });
+
+  ipcMain.handle('providerLicenses:list', async (_, { requestUserId, limit } = {}) => {
+    try {
+      requireProviderUser(requestUserId);
+      return { ok: true, data: providerLicenses.listProviderLicenses({ ...providerOptions, limit }) };
+    } catch (error) { return { ok: false, error: error.message }; }
+  });
+
+  ipcMain.handle('providerLicenses:create', async (_, { requestUserId, data } = {}) => {
+    try {
+      const reqUser = requireProviderUser(requestUserId);
+      const record = providerLicenses.createProviderLicense(data, providerOptions);
+      audit(requestUserId, reqUser.name, 'licencia_proveedor_generada', 'license', null,
+        `Negocio: ${record.business} | Productos: ${record.products.join(',')} | Vence: ${record.expiry}`);
+      return { ok: true, data: record };
+    } catch (error) { return { ok: false, error: error.message }; }
+  });
+
+  ipcMain.handle('providerLicenses:cancel', async (_, { requestUserId, id } = {}) => {
+    try {
+      const reqUser = requireProviderUser(requestUserId);
+      const record = providerLicenses.markProviderLicenseCancelled(id, providerOptions);
+      audit(requestUserId, reqUser.name, 'licencia_proveedor_anulada_registro', 'license', null,
+        `Negocio: ${record.business} | Solo historial local`);
+      return { ok: true, data: record };
+    } catch (error) { return { ok: false, error: error.message }; }
+  });
+
+  ipcMain.handle('providerLicenses:secureKey', async (_, { requestUserId } = {}) => {
+    try {
+      requireProviderUser(requestUserId);
+      return { ok: true, data: providerLicenses.securePrivateKey(providerOptions) };
+    } catch (error) { return { ok: false, error: error.message }; }
+  });
+}
 
 // ══════════════════════════════════════════════
 // APP LIFECYCLE
@@ -7508,6 +7903,7 @@ function setupMultiTerminal() {
       'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke',
       'update:check', 'update:download', 'update:install',
       'print:html', 'print:toPDF', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
+      'backup:pickExternalDirectory', 'backup:pickEncryptedFile',
     ]);
     const serviceSecurity = () => {
       if (!RUNTIME.worker) return null;
@@ -7653,6 +8049,32 @@ function _scheduleAutoBackups() {
   setInterval(runAutoBackup, 6 * 60 * 60 * 1000);
 }
 
+function _scheduleServiceMessaging() {
+  const processDue = async () => {
+    try {
+      if (String(settingsRepo.get('service_messaging_mode') || 'assisted') !== 'whatsapp_cloud') return;
+      if (!fs.existsSync(_whatsAppTokenPath())) return;
+      const row = db.prepare(`SELECT * FROM service_message_queue WHERE status IN ('pending','failed')
+        AND attempts<5 AND datetime(scheduled_at)<=datetime('now','localtime') ORDER BY scheduled_at,id LIMIT 1`).get();
+      if (!row) return;
+      db.prepare("UPDATE service_message_queue SET status='processing',attempts=attempts+1,updated_at=datetime('now','localtime') WHERE id=?").run(row.id);
+      const rawPhone = String(row.destination || '').replace(/\D/g,'');
+      const phone = rawPhone.length===10 ? `1${rawPhone}` : rawPhone;
+      const provider = await _sendWhatsAppCloud({
+        version:String(settingsRepo.get('service_whatsapp_graph_version') || ''),
+        phoneNumberId:String(settingsRepo.get('service_whatsapp_phone_number_id') || ''),
+        token:fs.readFileSync(_whatsAppTokenPath(),'utf8').trim(),to:phone,message:row.message,
+      }).catch(error=>({ok:false,error:error.message,status:'network_error'}));
+      db.prepare(`UPDATE service_message_queue SET status=?,provider_message_id=?,provider_error=?,
+        submitted_at=CASE WHEN ? THEN datetime('now','localtime') ELSE submitted_at END,
+        updated_at=datetime('now','localtime') WHERE id=?`).run(provider.ok?'submitted':'failed',
+        String(provider.messageId||''),String(provider.error||'').slice(0,1000),provider.ok?1:0,row.id);
+    } catch (e) { logWarn('service-messaging','Cola automática: '+e.message); }
+  };
+  const initial=setTimeout(processDue,45000); initial.unref?.();
+  const interval=setInterval(processDue,60000); interval.unref?.();
+}
+
 async function _configureInstalledServerConsole() {
   if (!app.isPackaged || RUNTIME.headless) return;
   const marker = path.join(process.resourcesPath, 'server-edition.json');
@@ -7774,6 +8196,7 @@ app.whenReady().then(async () => {
       dataDir: currentDataDir(),
     });
     _scheduleAutoBackups();
+    _scheduleServiceMessaging();
     return;
   }
   createWindow();
@@ -7786,6 +8209,7 @@ app.whenReady().then(async () => {
   // (tras 30s para no competir con la carga inicial) y luego cada 6 horas.
   // Cualquier fallo se registra pero nunca interrumpe la operación del POS.
   _scheduleAutoBackups();
+  _scheduleServiceMessaging();
 });
 
 app.on('window-all-closed', () => {
@@ -8351,6 +8775,20 @@ ipcMain.handle('accounting:get606', async (_, { from, to } = {}) => {
   try {
     return { ok: true, data: accountingRepo.get606({ from, to }) };
   } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('accounting:getFiscalWorkpaper', async (_, data = {}) => {
+  try { return { ok:true, data:accountingRepo.getFiscalWorkpaper(data) }; }
+  catch (e) { return { ok:false,error:e.message }; }
+});
+ipcMain.handle('accounting:saveFiscalWithholding', async (_, data = {}) => {
+  try {
+    const reqUser = authRepo.findById(data.requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede registrar retenciones');
+    const id = accountingRepo.saveFiscalWithholding(data.data || {}, reqUser.id);
+    audit(reqUser.id,reqUser.name,'retencion_fiscal_registrada','fiscal_withholdings',id,
+      `${data.data?.tax_kind || ''} · ${data.data?.amount || ''}`);
+    return { ok:true,id,data:accountingRepo.getFiscalWorkpaper(data.range || {}) };
+  } catch (e) { return { ok:false,error:e.message }; }
 });
 
 // Estado de flujo de efectivo (método directo).

@@ -38,6 +38,14 @@ function normalizeProducts(value) {
   return LICENSE_PRODUCTS.filter(product => unique.includes(product));
 }
 
+// Las firmas ECDSA se codifican en Base64 y distinguen mayúsculas de
+// minúsculas. Solo retiramos saltos de línea que puedan aparecer al copiar una
+// licencia desde una pantalla estrecha; los espacios internos (por ejemplo en
+// el nombre del negocio) forman parte de la licencia firmada y se conservan.
+function normalizeLicenseKeyInput(value) {
+  return String(value || '').trim().replace(/[\r\n]+/g, '');
+}
+
 // v3: 3|MACHINE_ID|BUSINESS|EXPIRY|velo_pos,velo_tech_pos|BASE64_SIGNATURE
 // v2: 2|MACHINE_ID|BUSINESS|EXPIRY|BASE64_SIGNATURE (legacy VELO POS)
 function parseLicense(content) {
@@ -182,7 +190,7 @@ function getLicenseStatus(dataDir, requiredProduct = 'velo_pos', options = {}) {
 
 function activateLicense(dataDir, licenseKey, requiredProduct = 'velo_pos', options = {}) {
   const machineId = options.machineId || getMachineId();
-  const parsed = parseLicense(String(licenseKey || '').trim());
+  const parsed = parseLicense(normalizeLicenseKeyInput(licenseKey));
   if (!parsed) return { ok: false, error: 'Formato de licencia inválido' };
 
   const result = verifyLicense(parsed, machineId, requiredProduct, options);
@@ -210,10 +218,12 @@ function withDevelopmentBypass(status, { isPackaged = true, explicitDev = false 
 }
 
 module.exports = {
+  PUBLIC_KEY_PEM,
   LICENSE_VERSION,
   LICENSE_PRODUCTS,
   getMachineId,
   normalizeProducts,
+  normalizeLicenseKeyInput,
   parseLicense,
   verifySignature,
   verifyLicense,
