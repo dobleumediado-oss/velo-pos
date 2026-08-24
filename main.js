@@ -12,7 +12,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 // Ver docs/multi-terminal-sync.md
 require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
   localOnly: new Set([
-    'app:getTerminalInfo',
+    'app:getTerminalInfo', 'app:respondToClose',
     // Login NO se reenvía en automático: el handler decide (superadmin/DEV validan
     // SIEMPRE en local = puerta de soporte/config a prueba de bloqueos; los usuarios
     // normales se reenvían al servidor DENTRO del handler, con el error capturado).
@@ -58,6 +58,7 @@ const bcrypt = require('bcryptjs');
 const { sqliteIdent } = require('./lib/sql-safe');
 const { normalizeFinAcct: _normalizeFinAcct, normalizeFinMov: _normalizeFinMov } = require('./lib/normalize-financial');
 const { isAllowedExternalUrl, diagnosePortalBaseUrl } = require('./lib/url-safe');
+const { roleRequiresOpenCash } = require('./src/js/cash-close-policy');
 const { checkPublicPortalAccess } = require('./lib/portal-public-check');
 const { buildWhatsAppUrls } = require('./lib/whatsapp-url');
 const { createEncryptedBackup, verifyEncryptedBackup } = require('./lib/continuity-backup');
@@ -457,6 +458,34 @@ let mainWindow;
 // Cierre programático (update, relaunch, quit por menú): NO debe pedir
 // confirmación. Solo el cierre iniciado por el usuario (X / Alt+F4) pregunta.
 let isQuitting = false;
+let closeRequestPending = false;
+let closeRequestTimer = null;
+
+function _clearCloseRequest() {
+  closeRequestPending = false;
+  if (closeRequestTimer) clearTimeout(closeRequestTimer);
+  closeRequestTimer = null;
+}
+
+function _confirmUserClose() {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  const choice = dialog.showMessageBoxSync(mainWindow, {
+    type: 'question',
+    buttons: ['Cancelar', `Cerrar ${_runtimeProductName()}`],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+    title: `Cerrar ${_runtimeProductName()}`,
+    message: `¿Seguro que deseas cerrar ${_runtimeProductName()}?`,
+    detail: 'Se cerrará la aplicación. Verifica que no tengas una venta o un cierre de caja en curso.',
+  });
+  if (choice === 0) return false;
+  isQuitting = true;
+  setImmediate(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+  });
+  return true;
+}
 
 // ── Seguridad de navegación externa ─────────────────────────────
 // El renderer solo debe cargar archivos locales de la app. Cualquier link externo
@@ -517,26 +546,28 @@ function createWindow() {
     mainWindow.maximize();
   });
 
-  // Confirmar antes de cerrar por la X / Alt+F4 (evita cierres accidentales que
-  // podrían interrumpir una venta o un cierre de caja en curso). No aplica a
-  // cierres programáticos (updates, relaunch): esos marcan isQuitting=true.
+  // El renderer conoce el usuario, el horario del negocio y la caja de ESTA
+  // terminal (también en modo cliente). Antes de confirmar el cierre le pedimos
+  // evaluar esa política. No aplica a updates/relaunch programáticos.
   mainWindow.on('close', (e) => {
     if (isQuitting) return;
-    const choice = dialog.showMessageBoxSync(mainWindow, {
-      type: 'question',
-      buttons: ['Cancelar', `Cerrar ${_runtimeProductName()}`],
-      defaultId: 0,
-      cancelId: 0,
-      noLink: true,
-      title: `Cerrar ${_runtimeProductName()}`,
-      message: `¿Seguro que deseas cerrar ${_runtimeProductName()}?`,
-      detail: 'Se cerrará la aplicación. Verifica que no tengas una venta o un cierre de caja en curso.',
-    });
-    if (choice === 0) {
-      e.preventDefault(); // Cancelar: la ventana permanece abierta
-    } else {
-      isQuitting = true;  // Confirmado: permitir el cierre real
-    }
+    e.preventDefault();
+    if (closeRequestPending) return;
+    closeRequestPending = true;
+    mainWindow.webContents.send('app:close-requested');
+    closeRequestTimer = setTimeout(() => {
+      if (!closeRequestPending || !mainWindow || mainWindow.isDestroyed()) return;
+      _clearCloseRequest();
+      dialog.showMessageBoxSync(mainWindow, {
+        type: 'warning',
+        buttons: ['Entendido'],
+        defaultId: 0,
+        noLink: true,
+        title: 'No se pudo verificar la caja',
+        message: 'VELO no pudo confirmar si esta caja está cerrada.',
+        detail: 'La aplicación permanecerá abierta. Revisa la conexión y vuelve a intentarlo.',
+      });
+    }, 8000);
   });
 
   // En producción no abrir DevTools
@@ -923,6 +954,12 @@ ipcMain.handle('settings:set', async (_, { key, value, requestUserId }) => {
   if (key === 'pos_price_change_password_hash') {
     return { ok: false, error: 'Usa el panel de clave especial para actualizar este valor' };
   }
+  if (key === 'business_close_time' && value !== '' && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(value || ''))) {
+    return { ok: false, error: 'La hora de cierre debe tener formato HH:MM' };
+  }
+  if (key === 'cash_close_required_after_hours' && !['0', '1'].includes(String(value))) {
+    return { ok: false, error: 'La política de cierre de caja debe estar activada o desactivada' };
+  }
 
   const needsSA    = SUPERADMIN_KEYS.test(key);
   // Defensa por defecto: toda clave desconocida requiere administrador. Las
@@ -1016,6 +1053,16 @@ ipcMain.handle('app:getVertical', async () => {
   } catch (e) {
     return { ok: false, error: e.message };
   }
+});
+
+// Respuesta del renderer a la solicitud iniciada por X / Alt+F4. El proceso
+// principal conserva la autoridad final para cerrar; el renderer solo informa
+// si la política operativa bloquea la salida.
+ipcMain.handle('app:respondToClose', async (_, { allow = false } = {}) => {
+  if (!closeRequestPending) return { ok: false, error: 'No hay una solicitud de cierre activa' };
+  _clearCloseRequest();
+  if (!allow) return { ok: true, blocked: true };
+  return { ok: true, closed: _confirmUserClose() };
 });
 
 // ── Conexión multi-terminal — gestión (Fase 3, solo superadmin) ──────────────
@@ -2801,12 +2848,13 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
 
     // Verificar caja abierta. Todo cobro real necesita una sesión, incluido el
     // pago inicial de una factura a crédito.
-    if (reqUser.role === 'cajero' && (saleData?.type || 'factura') === 'factura') {
+    if (roleRequiresOpenCash(reqUser.role) && (saleData?.type || 'factura') === 'factura') {
       const session = cashRepo.getOpen(_reqTerminalId());
       if (!session) return { ok: false, error: 'Debes abrir la caja antes de vender' };
       saleData.session = session;
     }
-    if ((saleData?.type || 'factura') === 'factura' &&
+    if (reqUser.role !== 'superadmin' &&
+        (saleData?.type || 'factura') === 'factura' &&
         saleData?.payment?.method === 'credito' &&
         Number(saleData?.payment?.initialPaymentAmount || 0) > 0) {
       const session = cashRepo.getOpen(_reqTerminalId());

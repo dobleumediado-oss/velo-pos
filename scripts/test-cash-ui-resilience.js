@@ -12,6 +12,8 @@ const dataSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'js', 'data
 const importerSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'js', 'importar.js'), 'utf8');
 const mainSource = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 const preloadSource = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
+const posSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'js', 'pos.js'), 'utf8');
+const configSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'js', 'config.js'), 'utf8');
 const context = {
   console, Promise, setTimeout, clearTimeout,
   sessionStorage: { getItem: () => null },
@@ -69,6 +71,17 @@ vm.runInContext(source, context, { filename: 'caja.js' });
   assert.ok(mainSource.includes("ipcMain.handle('cash:closePending'")
     && mainSource.includes('_sessionActiveElsewhere(pending.user_id, currentTerminalId)'));
   console.log('  ✓ un administrador puede conciliar la sesión huérfana solo si la otra terminal ya no está conectada');
+
+  assert.ok(posSource.includes('roleRequiresOpenCash(user?.role)'));
+  assert.ok(mainSource.includes('roleRequiresOpenCash(reqUser.role)'));
+  assert.ok(mainSource.includes("if (reqUser.role !== 'superadmin' &&"));
+  console.log('  ✓ VELO POS y VELO TECH exigen caja al Administrador tanto en pantalla como en backend');
+
+  assert.ok(preloadSource.includes("ipcRenderer.on('app:close-requested'"));
+  assert.ok(mainSource.includes("ipcMain.handle('app:respondToClose'"));
+  assert.ok(appSource.includes('_cashCloseExitBlocked') && appSource.includes('_refreshCashForExit'));
+  assert.ok(configSource.includes('business_close_time') && configSource.includes('cash_close_required_after_hours'));
+  console.log('  ✓ el cierre de app/sesión consulta la caja real y respeta el horario configurado');
 
   console.log('\nResiliencia visual de Caja verificada.');
 })().catch(error => {

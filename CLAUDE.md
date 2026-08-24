@@ -42,6 +42,7 @@ Cada tema tiene su archivo dedicado en [`docs/`](docs/). Todos enlazan de vuelta
 - **[Clientes empresa y representantes](docs/clientes-empresas.md)** — cuentas personales/empresariales, contactos operativos, crédito consolidado y snapshots documentales.
 - **[Velo POS Server Service](docs/server-service.md)** — instalación permanente sin nube, migración segura, dos instaladores y operación por Tailscale.
 - **[Multi-terminal](docs/multi-terminal-sync.md)** — gateway, workers por negocio, autorización por caja y sincronización en tiempo real.
+- **[Apertura, cierre y cuadre de Caja](docs/cash-operations.md)** — reglas de VELO POS y VELO TECH por terminal, horario, protección de salida y roadmap.
 - **[Proceso de Release](docs/release-process.md)** — ⚠️ empujar un tag `v*` = deploy en vivo a clientes reales vía electron-updater. **Confirmar siempre con el usuario antes de tag.**
 
 ## Antes de trabajar

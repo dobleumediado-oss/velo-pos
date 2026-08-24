@@ -225,7 +225,168 @@ function verticalProductName() {
   return window._vertical?.product?.name || 'Velo POS';
 }
 
+// ══════════════════════════════════════════════
+// CIERRE OPERATIVO DE CAJA
+// ══════════════════════════════════════════════
+// La caja es por terminal. Esta política vive en el renderer porque también
+// funciona en modo Cliente: chkCaja() consulta al servidor usando el terminalId
+// actual antes de permitir cerrar la app o terminar la sesión.
+let _cashCloseMonitor = null;
+let _cashCloseUnsubscribe = null;
+
+function _cashCloseRole() {
+  if (user?.role) return user.role;
+  try { return JSON.parse(sessionStorage.getItem('vp_user') || 'null')?.role || ''; }
+  catch { return ''; }
+}
+
+function _cashCloseSnapshot(role = _cashCloseRole()) {
+  return window.VeloCashClosePolicy?.evaluate?.({
+    role,
+    cashOpen: Boolean(cajaOpen),
+    enabled: CFG?.cashCloseRequiredAfterHours,
+    closeTime: CFG?.businessCloseTime,
+  }) || { configured: false, remind: false, blockExit: false };
+}
+
+async function _refreshCashForExit() {
+  let timeoutId;
+  try {
+    await Promise.race([
+      chkCaja(),
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('No se pudo verificar la caja a tiempo')), 4500);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+function _cashCloseTimeLabel() {
+  const raw = String(CFG?.businessCloseTime || '');
+  const parts = raw.match(/^(\d{2}):(\d{2})$/);
+  if (!parts) return raw;
+  const hour = Number(parts[1]);
+  return `${hour % 12 || 12}:${parts[2]} ${hour >= 12 ? 'p. m.' : 'a. m.'}`;
+}
+
+function _goToCashFromNotice(id) {
+  document.getElementById(id)?.remove();
+  if (user && typeof routeTo === 'function') routeTo('caja');
+}
+
+function _showCashCloseReminder() {
+  if (document.getElementById('velo-cash-close-reminder')) return;
+  const banner = document.createElement('div');
+  banner.id = 'velo-cash-close-reminder';
+  banner.setAttribute('role', 'status');
+  banner.style.cssText = 'position:fixed;right:22px;bottom:22px;z-index:2147483000;width:min(420px,calc(100vw - 44px));padding:16px 18px;background:#111827;color:#fff;border:1px solid rgba(255,255,255,.15);border-radius:14px;box-shadow:0 18px 55px rgba(0,0,0,.32);font-family:var(--font,inherit)';
+  banner.innerHTML = `<div style="font-size:14px;font-weight:800;margin-bottom:5px">⏰ Cierre de caja próximo</div>
+    <div style="font-size:12px;line-height:1.5;color:rgba(255,255,255,.75)">El negocio cierra a las ${_cashCloseTimeLabel()}. Recuerda cerrar y cuadrar esta caja antes de salir.</div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
+      <button type="button" data-action="dismiss" style="border:1px solid rgba(255,255,255,.22);background:transparent;color:#fff;border-radius:8px;padding:7px 11px;cursor:pointer">Entendido</button>
+      <button type="button" data-action="cash" style="border:0;background:#10b981;color:#06251b;font-weight:800;border-radius:8px;padding:7px 11px;cursor:pointer">Ir a Caja</button>
+    </div>`;
+  banner.querySelector('[data-action="dismiss"]').addEventListener('click', () => banner.remove());
+  banner.querySelector('[data-action="cash"]').addEventListener('click', () => _goToCashFromNotice(banner.id));
+  document.body.appendChild(banner);
+}
+
+function _showCashCloseBlock() {
+  if (document.getElementById('velo-cash-close-block')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'velo-cash-close-block';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483640;background:rgba(15,23,42,.58);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML = `<div style="width:min(510px,100%);background:var(--surface,#fff);color:var(--ink,#111827);border:1px solid var(--line,#e5e7eb);border-radius:16px;padding:24px;box-shadow:0 24px 80px rgba(0,0,0,.3)">
+    <div style="font-size:19px;font-weight:850;margin-bottom:8px">Debes cerrar y cuadrar la caja</div>
+    <div style="font-size:13px;line-height:1.55;color:var(--muted2,#64748b)">El horario de cierre (${_cashCloseTimeLabel()}) ya pasó y esta terminal todavía tiene una caja abierta. Cierra la caja y genera el cuadre antes de salir de ${verticalProductName()}.</div>
+    <div style="font-size:11px;line-height:1.45;color:var(--muted2,#64748b);margin-top:10px">El reporte del cierre quedará disponible desde Caja; no se imprimirá automáticamente.</div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px">
+      <button type="button" data-action="dismiss" class="btn btn-out">Entendido</button>
+      <button type="button" data-action="cash" class="btn btn-dark">Ir a Caja</button>
+    </div>
+  </div>`;
+  overlay.querySelector('[data-action="dismiss"]').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('[data-action="cash"]').addEventListener('click', () => _goToCashFromNotice(overlay.id));
+  document.body.appendChild(overlay);
+}
+
+async function _cashCloseExitBlocked({ show = true } = {}) {
+  const role = _cashCloseRole();
+  if (!window.VeloCashClosePolicy?.roleRequiresOpenCash?.(role)) return false;
+  const initial = _cashCloseSnapshot(role);
+  if (!initial.configured) return false;
+
+  try {
+    await _refreshCashForExit();
+  } catch (error) {
+    // Si el horario ya venció y no podemos confirmar el estado real, se conserva
+    // el último estado abierto y se falla de forma segura: la app sigue abierta.
+    const cached = _cashCloseSnapshot(role);
+    if (cached.blockExit) {
+      if (show) _showCashCloseBlock();
+      return true;
+    }
+    throw error;
+  }
+
+  const current = _cashCloseSnapshot(role);
+  if (current.blockExit && show) _showCashCloseBlock();
+  return current.blockExit;
+}
+
+function _checkCashCloseReminder() {
+  const state = _cashCloseSnapshot();
+  if (!state.remind) {
+    document.getElementById('velo-cash-close-reminder')?.remove();
+    return;
+  }
+  const key = `velo_cash_close_reminder:${_sessionTerminalId() || 'local'}:${state.dateKey}`;
+  try {
+    if (sessionStorage.getItem(key)) return;
+    sessionStorage.setItem(key, '1');
+  } catch {}
+  _showCashCloseReminder();
+}
+
+function _startCashCloseMonitor() {
+  if (_cashCloseMonitor) clearInterval(_cashCloseMonitor);
+  _cashCloseMonitor = null;
+  _checkCashCloseReminder();
+  if (_cashCloseSnapshot().configured) {
+    _cashCloseMonitor = setInterval(_checkCashCloseReminder, 30000);
+  }
+}
+
+function _stopCashCloseMonitor() {
+  if (_cashCloseMonitor) clearInterval(_cashCloseMonitor);
+  _cashCloseMonitor = null;
+  document.getElementById('velo-cash-close-reminder')?.remove();
+}
+
+function _installCashCloseProtection() {
+  if (_cashCloseUnsubscribe || !window.api?.app?.onCloseRequested) return;
+  _cashCloseUnsubscribe = window.api.app.onCloseRequested(async () => {
+    let allow = true;
+    try {
+      allow = !(await _cashCloseExitBlocked({ show: true }));
+    } catch (error) {
+      const cached = _cashCloseSnapshot();
+      allow = !cached.blockExit;
+      if (!allow) _showCashCloseBlock();
+      window.api?.log?.error?.('cash-close-policy', error?.message || String(error))?.catch?.(() => {});
+    }
+    await window.api.app.respondToClose({ allow }).catch(() => {});
+  });
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
+  // Se instala antes de cualquier espera de red/licencia para que toda solicitud
+  // de cierre iniciada por el usuario reciba siempre una respuesta.
+  _installCashCloseProtection();
   // Cargar versión de la app para mostrar en login y config
   try {
     const vr = await window.api.version.getInfo();
@@ -850,6 +1011,7 @@ function renderApp() {
   if (typeof preventaConfigureMonitor === 'function') preventaConfigureMonitor();
   window.VeloExperience?.mount();
   window.VeloTour?.maybeOffer?.();
+  _startCashCloseMonitor();
 }
 
 // ══════════════════════════════════════════════
@@ -1540,6 +1702,14 @@ function routeTo(p) {
 // LOGOUT
 // ══════════════════════════════════════════════
 async function doLogout() {
+  // Después del horario configurado, cerrar sesión también sería una vía para
+  // abandonar una caja abierta. Se valida en vivo antes de limpiar la sesión.
+  try {
+    if (await _cashCloseExitBlocked({ show: true })) return;
+  } catch (error) {
+    toast(error?.message || 'No se pudo verificar el estado de la caja', 'e');
+    return;
+  }
   if (window._preventaBadgeTimer) {
     clearInterval(window._preventaBadgeTimer);
     window._preventaBadgeTimer = null;
@@ -1550,6 +1720,7 @@ async function doLogout() {
     window._dashRefreshInterval = null;
   }
   _stopSessionHeartbeat();
+  _stopCashCloseMonitor();
   if (user) {
     try {
       await window.api.auth.logout({ userId: user.id, userName: user.name, terminalId: _sessionTerminalId() });

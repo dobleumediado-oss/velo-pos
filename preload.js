@@ -288,6 +288,12 @@ const api = {
   app: {
     getTerminalInfo: () => ipcRenderer.invoke('app:getTerminalInfo'),
     getVertical:     () => ipcRenderer.invoke('app:getVertical'),
+    respondToClose:  (data) => ipcRenderer.invoke('app:respondToClose', data),
+    onCloseRequested:(cb) => {
+      const listener = () => cb();
+      ipcRenderer.on('app:close-requested', listener);
+      return () => ipcRenderer.removeListener('app:close-requested', listener);
+    },
   },
   connection: {
     getInfo:            (data) => ipcRenderer.invoke('connection:getInfo', data),

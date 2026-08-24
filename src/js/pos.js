@@ -22,7 +22,7 @@ async function renderPOS(el) {
     el.style.padding  = '0';
     el.style.overflow = 'hidden';
 
-    if (!cajaOpen && user?.role === 'cajero') {
+    if (!cajaOpen && window.VeloCashClosePolicy?.roleRequiresOpenCash(user?.role)) {
       el.innerHTML = `
         <div style="text-align:center;padding:70px 20px">
           <div style="width:56px;height:56px;background:var(--amber-bg);border-radius:13px;

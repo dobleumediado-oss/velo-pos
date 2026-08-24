@@ -174,6 +174,8 @@ let CFG = {
   activeBusinessId:        '',
   activeBusinessName:      '',
   connectionMode:          'local',
+  businessCloseTime:       '',
+  cashCloseRequiredAfterHours: '0',
 };
 
 // ── Denominaciones de billetes RD$ ────────────
@@ -253,6 +255,8 @@ async function loadAppData() {
       CFG.activeBusinessId     = DB.activeBusiness?.id || '';
       CFG.activeBusinessName   = DB.activeBusiness?.name || (CFG.activeBusinessId ? CFG.biz : '');
       CFG.connectionMode       = settings.connection_mode || CFG.connectionMode || 'local';
+      CFG.businessCloseTime    = settings.business_close_time || '';
+      CFG.cashCloseRequiredAfterHours = settings.cash_close_required_after_hours || '0';
       // Combustibles a mostrar en el banner del topbar (JSON array de grados).
       // Vacío/ausente → el banner cae al default (premium) y su localStorage.
       CFG.banner_fuels         = settings.banner_fuels || '';

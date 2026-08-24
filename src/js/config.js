@@ -580,6 +580,47 @@ async function renderConfiguracion(el) {
     </div>` : ''}`;
   colLeft.appendChild(bizCard);
 
+  // ── Horario y cierre obligatorio de caja ────────────────────────────────
+  // Es opt-in para no cambiar el comportamiento de instalaciones existentes.
+  // La regla se aplica por terminal a Administrador y Cajero; Superadmin queda
+  // exento para conservar la capacidad de soporte y recuperación.
+  if (isAdmin) {
+    const closeRequired = settings.cash_close_required_after_hours === '1';
+    const closeCard = h('div', { class: 'card' });
+    closeCard.innerHTML = `
+      <div class="fxb mb8">
+        <div>
+          <div class="card-title">🕔 Horario y cierre de caja</div>
+          <div style="font-size:11px;color:var(--muted2);margin-top:3px">
+            Recuerda y exige el cuadre de esta terminal al finalizar la jornada.
+          </div>
+        </div>
+        <label style="display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;cursor:pointer">
+          <input type="checkbox" id="cfg-cash-close-required" ${closeRequired ? 'checked' : ''}
+            onchange="document.getElementById('cfg-business-close-time').disabled=!this.checked"/>
+          Activar
+        </label>
+      </div>
+      <div class="fg" style="margin-top:12px">
+        <label class="lbl">Hora de cierre del negocio</label>
+        <input class="inp no-uppercase" id="cfg-business-close-time" type="time" data-uppercase="off"
+          value="${_esc(settings.business_close_time || '')}" ${closeRequired ? '' : 'disabled'}/>
+      </div>
+      <div class="alrt b" style="margin-top:10px">
+        <div class="alrt-dot b"></div>
+        <div>
+          <div class="alrt-title">Cómo funciona</div>
+          <div class="alrt-sub" style="line-height:1.5">
+            Cinco minutos antes se muestra solo un recordatorio. Desde la hora indicada, Administrador y Cajero no podrán cerrar sesión ni salir de ${verticalProductName()} mientras la caja de esta terminal siga abierta. Superadmin está exento.
+          </div>
+        </div>
+      </div>
+      <div style="font-size:10px;color:var(--muted2);margin-top:9px;line-height:1.45">
+        Al cerrar caja se genera el cuadre y el reporte queda disponible en Caja. No se imprime automáticamente.
+      </div>`;
+    colLeft.appendChild(closeCard);
+  }
+
   // ── Combustibles del banner (topbar) ─────────────────────────────────────
   // Permite elegir CUÁLES combustibles se muestran en la barra superior. Cada
   // uno seleccionado agrega su propio chip (dos o más precios lado a lado).
@@ -1187,6 +1228,24 @@ async function renderConfiguracion(el) {
 // ══════════════════════════════════════════════
 async function guardarConfiguracion() {
   const uid = user?.id;
+  const closeRequiredEl = document.getElementById('cfg-cash-close-required');
+  const closeTimeEl = document.getElementById('cfg-business-close-time');
+  if (closeRequiredEl) {
+    const enabled = closeRequiredEl.checked;
+    const closeTime = closeTimeEl?.value?.trim() || '';
+    if (enabled && !/^([01]\d|2[0-3]):[0-5]\d$/.test(closeTime)) {
+      toast('Selecciona una hora válida para el cierre del negocio', 'e');
+      closeTimeEl?.focus();
+      return;
+    }
+    for (const [key, value] of [
+      ['business_close_time', closeTime],
+      ['cash_close_required_after_hours', enabled ? '1' : '0'],
+    ]) {
+      const r = await window.api.settings.set({ key, value, requestUserId: uid });
+      if (r && !r.ok) { toast(r.error || 'No se pudo guardar el horario de cierre', 'e'); return; }
+    }
+  }
   const fields = [
     ['biz_name',    'cfg-biz-name'],
     ['biz_addr',    'cfg-biz-addr'],
@@ -1225,6 +1284,10 @@ async function guardarConfiguracion() {
   CFG.phone        = s.biz_phone     || CFG.phone;
   CFG.fiscalEnabled = s.fiscal_enabled === '1';
   CFG.itbis        = parseFloat(s.tax_pct) || 18;
+  CFG.businessCloseTime = s.business_close_time || '';
+  CFG.cashCloseRequiredAfterHours = s.cash_close_required_after_hours || '0';
+  DB.settings = s;
+  if (typeof _startCashCloseMonitor === 'function') _startCashCloseMonitor();
   toast('✓ Configuración guardada');
 }
 
