@@ -1,5 +1,39 @@
 # Historial de versiones
 
+## 1.47.3 — 2026-08-26
+
+### Controles configurables para el cajero
+
+- Administrador y superadministrador pueden definir desde Configuración el
+  descuento máximo que un cajero aplica sin contraseña.
+- El cambio manual de precios puede habilitarse o deshabilitarse para cajeros y
+  admite una reducción máxima en pesos por unidad antes de solicitar autorización.
+- Estas restricciones no limitan al administrador ni al superadministrador; ambos
+  conservan control total y pueden autorizar al cajero cuando exceda los límites.
+
+### Facturas, cotizaciones y cargos de servicio
+
+- «Agregar envío u otro cargo» suma correctamente obra, envío o cualquier cargo
+  adicional y lo guarda como un artículo de servicio dentro del documento.
+- Los cargos están disponibles tanto en facturas como en cotizaciones y también
+  se conservan cuando una orden compartida llega al Punto de Venta.
+- Una devolución de estos artículos de servicio no modifica las existencias del
+  inventario.
+
+### Carrito y conduces desde el Punto de Venta
+
+- El panel del carrito se puede ampliar o reducir arrastrando su división; el
+  tamaño elegido queda guardado para la próxima vez que se abra el sistema.
+- El carrito incorpora el tipo «Conduce» para guardar una entrega no fiscal sin
+  cobrar, generar impuestos ni descontar inventario.
+- Los conduces creados en el POS aparecen en Conduces y administrador o
+  superadministrador pueden anularlos conservando su historial.
+
+### Guía actualizada
+
+- Los recorridos interactivos explican los nuevos tipos de documento, los cargos,
+  el carrito ajustable, los controles del cajero y la gestión de conduces.
+
 ## 1.40.0 — 2026-08-15
 
 ### Cotizaciones integradas al punto de venta

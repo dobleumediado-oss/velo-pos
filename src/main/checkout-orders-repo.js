@@ -377,10 +377,28 @@ function createCheckoutOrdersRepo({ getDb, salesRepo, audit }) {
       };
       const effectiveDiscount = payment?.disc !== undefined
         ? Number(payment.disc) || 0 : Number(order.discount_pct) || 0;
+      // Caja puede agregar envío/instalación al momento del cobro. Se normaliza
+      // aquí como una línea de servicio real: se imprime con los artículos y
+      // nunca participa en reservas ni descuentos de inventario.
+      const serviceItems = (Array.isArray(payment?.serviceItems) ? payment.serviceItems : [])
+        .map(row => ({
+          product_id: null,
+          product_code: 'SERVICIO',
+          product_name: String(row?.product_name || row?.name || '').replace(/\s+/g, ' ').trim().slice(0, 120),
+          unit_cost: 0,
+          unit_price: round2(Number(row?.unit_price ?? row?.price) || 0),
+          qty: Math.max(1, Math.min(999, Math.floor(Number(row?.qty) || 1))),
+          taxable: 0,
+          tax_pct: 0,
+          kind: 'service',
+          non_stock: true,
+        }))
+        .filter(row => row.product_name && row.unit_price > 0 && row.unit_price <= 9999999)
+        .slice(0, 20);
       const saleResult = salesRepo.create({
         session,
         customer,
-        items,
+        items: [...items, ...serviceItems],
         payment: {
           ...(payment || {}),
           disc: effectiveDiscount,

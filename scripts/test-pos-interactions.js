@@ -53,6 +53,7 @@ vm.runInContext(`${dataSource}\nthis.__posState={
   setActive(v){activeInvoice=v},
   setUser(v){user=v},
   setTax(v){CFG.itbis=v},
+  setSettings(v){DB.settings=v||{}},
   setCustomers(v){DB.customers=v},
   setProducts(v){DB.products=v},
   setPreventaConfig(enabled,roles){CFG.module_preventa=enabled;CFG.module_preventa_roles=roles},
@@ -95,13 +96,14 @@ console.log('  ✓ reutiliza números libres y al cerrar todos vuelve a Factura 
 state.resetInvoices();
 state.setUser({ id: 1, role: 'admin' });
 state.setTax(18);
+state.setSettings({ pos_discount_auth_limit_pct: '100' });
 state.currentInv().cart.push({ name: 'Artículo', price: 105, qty: 1, taxable: 1, tax_pct: 18 });
 
 const posSource = fs.readFileSync(path.join(root, 'src/js/pos.js'), 'utf8');
 vm.runInContext(`${posSource}\nlet __renderCartCalls=0;
 renderCart=()=>{__renderCartCalls++};
 this.__posDiscount={
-  posDiscConPin,calcTotals,posSetQty,posCommitQty,
+  posDiscConPin,calcTotals,posSetQty,posCommitQty,posSaveCharge,
   posCommitPriceOnChange,posCommitPriceOnEnter,
   entryNumber:_posEntryNumber,cbrCalcInitial,cbrToggleBillingType,
   renderCalls:()=>__renderCartCalls
@@ -156,15 +158,56 @@ assert.strictEqual(discount.renderCalls(), 0, 'escribir descuento no debe reempl
 assert.strictEqual(elements.get('pos-total-value').textContent, 'RD$63.00');
 console.log('  ✓ permite escribir 40% seguido sin perder el foco');
 
+context.openModal = html => { context.__lastModal = html; };
+context.closeModal = () => {};
+element('pos-charge-description').value = 'Envío a domicilio';
+element('pos-charge-amount').value = '250';
+state.currentInv().itype = 'factura';
+state.currentInv().disc = 0;
+state.currentInv().cart = [{ name: 'Artículo', price: 1000, qty: 1, taxable: 0 }];
+discount.posSaveCharge();
+assert.strictEqual(state.currentInv().cart.length, 2,
+  'el cargo debe agregarse como otro artículo de la factura');
+assert.strictEqual(state.currentInv().cart[1].kind, 'service');
+assert.strictEqual(state.currentInv().cart[1].non_stock, true);
+assert.strictEqual(discount.calcTotals(state.currentInv()).total, 1250,
+  'el artículo de servicio debe sumarse al total de la factura');
+state.currentInv().itype = 'cotizacion';
+element('pos-charge-description').value = 'Instalación';
+element('pos-charge-amount').value = '300';
+discount.posSaveCharge();
+assert.strictEqual(discount.calcTotals(state.currentInv()).total, 1550,
+  'el artículo de servicio también debe sumarse a la cotización');
+console.log('  ✓ envío u otro cargo se guarda como artículo y suma en factura y cotización');
+
+state.currentInv().itype = 'factura';
+state.currentInv().cart = [{ name: 'Artículo', price: 105, qty: 1, taxable: 1, tax_pct: 18 }];
+state.setSettings({ pos_discount_auth_limit_pct: '15' });
+state.currentInv().disc = 0;
+const protectedDiscountInput = { value: '16' };
+discount.posDiscConPin(protectedDiscountInput, '16');
+assert.strictEqual(state.currentInv().disc, 16,
+  'un administrador no debe quedar restringido por el límite del cajero');
+state.setUser({ id: 2, role: 'cajero' });
+state.currentInv().disc = 0;
+discount.posDiscConPin(protectedDiscountInput, '16');
+assert.strictEqual(state.currentInv().disc, 0,
+  'el cajero debe requerir autorización al superar el límite');
+assert(String(context.__lastModal || '').includes('mayores al 15%'),
+  'al superar 15% el cajero debe recibir la solicitud de contraseña');
+console.log('  ✓ el límite configurable restringe solo al cajero');
+
 state.currentInv().discMode = 'amt';
 state.currentInv().disc = 0;
 state.currentInv().discAmtInput = 0;
+state.setSettings({ pos_discount_auth_limit_pct: '100' });
+const amountRenderBaseline = discount.renderCalls();
 const amountInput = { value: '4' };
 discount.posDiscConPin(amountInput, '4');
 amountInput.value = '40';
 discount.posDiscConPin(amountInput, '40');
 assert.strictEqual(state.currentInv().discAmtInput, 40);
-assert.strictEqual(discount.renderCalls(), 0, 'escribir RD$ no debe reemplazar el carrito');
+assert.strictEqual(discount.renderCalls(), amountRenderBaseline, 'escribir RD$ no debe reemplazar el carrito');
 assert.strictEqual(elements.get('pos-total-value').textContent, 'RD$65.00');
 console.log('  ✓ permite escribir RD$40 seguido sin perder el foco');
 
@@ -172,12 +215,13 @@ state.setProducts([{ id: 100, price: 10, wholesale: 9, stock: 100, active: 1 }])
 state.currentInv().discMode = 'pct';
 state.currentInv().disc = 0;
 state.currentInv().cart = [{ pid:100, product_id:100, name:'Cantidad', price:10, qty:1, taxable:0 }];
+const qtyRenderBaseline = discount.renderCalls();
 const qtyInput = { value:'4' };
 discount.posSetQty(0, qtyInput);
 qtyInput.value = '40';
 discount.posSetQty(0, qtyInput);
 assert.strictEqual(state.currentInv().cart[0].qty, 40);
-assert.strictEqual(discount.renderCalls(), 0, 'escribir cantidad no debe reemplazar el campo activo');
+assert.strictEqual(discount.renderCalls(), qtyRenderBaseline, 'escribir cantidad no debe reemplazar el campo activo');
 qtyInput.value = '';
 discount.posSetQty(0, qtyInput);
 assert.strictEqual(state.currentInv().cart[0].qty, 40, 'vaciar temporalmente no debe forzar cantidad 1');
@@ -321,6 +365,17 @@ assert(conversionFlow.includes("routeTo('pos')"));
 assert(!conversionFlow.includes('ventasCreateSaleWithRecovery'));
 assert(!conversionFlow.includes('deleteQuote'));
 console.log('  ✓ Ventas no cobra ni elimina la cotización antes de abrir el POS');
+
+assert(posSource.includes("['factura', 'cotizacion', ...(posConduceCanAccess() ? ['conduce'] : [])]"),
+  'el POS debe ofrecer Conduce como tipo documental cuando el módulo está autorizado');
+assert(posSource.includes('posCreateConduceFromCart()'),
+  'el POS debe exponer el botón que guarda el conduce');
+assert(posSource.includes('POS_CART_WIDTH_STORAGE_KEY') && posSource.includes('localStorage?.setItem'),
+  'el ancho del carrito debe persistirse entre aperturas');
+const conduceSource = fs.readFileSync(path.join(root, 'src/js/conduce.js'), 'utf8');
+assert(conduceSource.includes('data-cancel='),
+  'el listado de conduces debe mostrar la anulación permitida sin ocultarla en el detalle');
+console.log('  ✓ el POS ofrece conduce, guarda el ancho del carrito y hace visible Anular');
 
 context.__sidebarRenderCalls = 0;
 context.buildSidebar = () => { context.__sidebarRenderCalls += 1; };

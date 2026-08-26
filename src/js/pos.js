@@ -9,6 +9,92 @@
 
 let posSearch = '';
 
+const POS_CART_WIDTH_STORAGE_KEY = 'velo.pos.cartWidthPx';
+
+function _posCartWidthBounds(wrap) {
+  const available = Number(wrap?.clientWidth || window.innerWidth || 0);
+  const min = 300;
+  // Conserva espacio suficiente para buscar y seleccionar productos.
+  const max = Math.max(min, Math.min(720, available - 360));
+  return { min, max };
+}
+
+function _posStoredCartWidth() {
+  try {
+    const value = Number(window.localStorage?.getItem(POS_CART_WIDTH_STORAGE_KEY));
+    return Number.isFinite(value) && value > 0 ? value : 382;
+  } catch { return 382; }
+}
+
+function _posApplyCartWidth(wrap, side, requestedWidth) {
+  const { min, max } = _posCartWidthBounds(wrap);
+  const width = Math.max(min, Math.min(max, Number(requestedWidth) || 382));
+  side.style.width = `${Math.round(width)}px`;
+  side.style.minWidth = `${Math.round(width)}px`;
+  return width;
+}
+
+function _posSetupCartResize(wrap, side, handle) {
+  if (!wrap || !side || !handle) return;
+  let preferredWidth = _posStoredCartWidth();
+  _posApplyCartWidth(wrap, side, preferredWidth);
+
+  const save = () => {
+    try { window.localStorage?.setItem(POS_CART_WIDTH_STORAGE_KEY, String(Math.round(preferredWidth))); }
+    catch { /* la preferencia visual nunca bloquea el POS */ }
+  };
+  const setFromPointer = event => {
+    preferredWidth = wrap.getBoundingClientRect().right - event.clientX;
+    _posApplyCartWidth(wrap, side, preferredWidth);
+  };
+  handle.addEventListener('pointerdown', event => {
+    event.preventDefault();
+    handle.classList.add('dragging');
+    handle.setPointerCapture?.(event.pointerId);
+    setFromPointer(event);
+  });
+  handle.addEventListener('pointermove', event => {
+    if (!handle.classList.contains('dragging')) return;
+    setFromPointer(event);
+  });
+  const finish = event => {
+    if (!handle.classList.contains('dragging')) return;
+    handle.classList.remove('dragging');
+    handle.releasePointerCapture?.(event.pointerId);
+    save();
+  };
+  handle.addEventListener('pointerup', finish);
+  handle.addEventListener('pointercancel', finish);
+  handle.addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home'].includes(event.key)) return;
+    event.preventDefault();
+    const { min } = _posCartWidthBounds(wrap);
+    preferredWidth = event.key === 'Home'
+      ? 382
+      : preferredWidth + (event.key === 'ArrowLeft' ? 20 : -20);
+    preferredWidth = Math.max(min, preferredWidth);
+    _posApplyCartWidth(wrap, side, preferredWidth);
+    save();
+  });
+
+  window._posCartResizeObserver?.disconnect?.();
+  if (typeof ResizeObserver !== 'undefined') {
+    window._posCartResizeObserver = new ResizeObserver(() => {
+      _posApplyCartWidth(wrap, side, preferredWidth);
+    });
+    window._posCartResizeObserver.observe(wrap);
+  }
+}
+
+function posConduceCanAccess() {
+  if (!window.api?.conduce?.create) return false;
+  if (typeof window.veloCanAccessModule === 'function') {
+    return window.veloCanAccessModule('conduce', user);
+  }
+  const roles = String(CFG?.module_conduce_roles || 'admin').split(',').map(role => role.trim());
+  return CFG?.module_conduce === '1' && (user?.role === 'superadmin' || roles.includes(user?.role));
+}
+
 async function renderPOS(el) {
   try {
     await chkCaja();
@@ -110,9 +196,16 @@ async function renderPOS(el) {
       style: 'display:flex;flex-direction:column;flex:1;overflow:hidden' });
     right.appendChild(cartEl);
 
+    const cartResizer = h('div', {
+      class: 'pos-cart-resizer', role: 'separator', tabindex: '0',
+      title: 'Arrastra para cambiar el ancho del carrito',
+      'aria-label': 'Cambiar ancho del carrito', 'aria-orientation': 'vertical'
+    });
     wrap.appendChild(left);
+    wrap.appendChild(cartResizer);
     wrap.appendChild(right);
     el.appendChild(wrap);
+    _posSetupCartResize(wrap, right, cartResizer);
 
     setTimeout(() => {
       const si = document.getElementById('pos-search');
@@ -580,12 +673,17 @@ function renderCart() {
   const inv = currentInv();
   const checkoutLocked = !!inv.checkoutOrderId;
   const { subtotal, itbis, total, disc, discAmt, chargesTotal } = calcTotals(inv);
+  const documentLabels = { factura: 'Factura', cotizacion: 'Cotización', conduce: 'Conduce' };
+  const availableTypes = (inv.replacesSaleId || inv.sourceQuoteId)
+    ? ['factura']
+    : ['factura', 'cotizacion', ...(posConduceCanAccess() ? ['conduce'] : [])];
+  const documentLabel = documentLabels[inv.itype] || 'Factura';
 
   let html = `
     <div class="cart-hdr">
       <div class="fxb">
         <div>
-          <span style="font-weight:700;font-size:13px">${checkoutLocked ? `Orden ${posEscHtml(inv.checkoutOrderNumber || '')}` : `Factura #${inv.id}`}</span>
+          <span style="font-weight:700;font-size:13px">${checkoutLocked ? `Orden ${posEscHtml(inv.checkoutOrderNumber || '')}` : `${documentLabel} #${inv.id}`}</span>
           <span style="font-size:10px;color:var(--muted);margin-left:8px">
             ${inv.cart.length} artículo${inv.cart.length !== 1 ? 's' : ''}
           </span>
@@ -594,12 +692,12 @@ function renderCart() {
           ${checkoutLocked ? 'Cerrar orden' : `${svg('trash')} Limpiar`}
         </button>
       </div>
-      ${checkoutLocked ? `<div class="alrt g" style="margin-top:8px;padding:7px 9px"><div><div class="alrt-title">Lista para cobrar</div><div class="alrt-sub">Los articulos y precios estan bloqueados porque vienen de despacho.</div></div></div>` : `<div class="flex" style="margin-top:8px;gap:5px">
-        ${(inv.replacesSaleId || inv.sourceQuoteId ? ['factura'] : ['factura','cotizacion']).map(t => `
+      ${checkoutLocked ? `<div class="alrt g" style="margin-top:8px;padding:7px 9px"><div><div class="alrt-title">Lista para cobrar</div><div class="alrt-sub">Los articulos y precios estan bloqueados porque vienen de despacho.</div></div></div>` : `<div class="flex" id="pos-document-types" style="margin-top:8px;gap:5px">
+        ${availableTypes.map(t => `
           <button class="btn btn-sm ${inv.itype === t ? 'btn-dark' : 'btn-out'}"
                   style="font-size:10px;padding:3px 9px"
                   onclick="posSetType('${t}')">
-            ${t === 'factura' ? 'Factura' : 'Cotización'}
+            ${documentLabels[t]}
           </button>`).join('')}
       </div>`}
       ${inv.replacesSaleId ? `
@@ -636,9 +734,11 @@ function renderCart() {
         <div class="cart-item">
           <div class="ci-info">
             <div class="ci-name">${posEscHtml(item.name)}</div>
+            ${inv.itype === 'conduce' ? `
+            <div class="ci-price" style="font-size:10px;color:var(--muted2);font-weight:600">Artículo para entrega</div>` : `
             <div class="ci-price" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
               <span style="font-size:10px;color:var(--muted2);font-weight:600">Precio final</span>
-              ${checkoutLocked ? `<strong>${fmt(item.price)}</strong>` : `<input type="number" data-money="on" data-pos-price="on" min="0" step="0.01" value="${Number(item.price || 0).toFixed(2)}"
+              ${checkoutLocked || (DB?.settings?.pos_price_change_enabled === '0' && !['admin', 'superadmin'].includes(user?.role)) ? `<strong>${fmt(item.price)}</strong>` : `<input type="number" data-money="on" data-pos-price="on" min="0" step="0.01" value="${Number(item.price || 0).toFixed(2)}"
                 style="width:92px;text-align:right;font-size:12px;font-weight:700;
                        border:1px solid var(--line);border-radius:4px;padding:2px 5px;
                        font-family:inherit;background:var(--surface)"
@@ -646,7 +746,7 @@ function renderCart() {
                 onkeydown="posCommitPriceOnEnter(event,${idx},this)"
                 onclick="this.select()"/>`}
               ${item.taxable === 0 ? '' : `<span style="font-size:10px;color:var(--blue);font-weight:700">ITBIS incl.</span>`}
-            </div>
+            </div>`}
             ${item.resale_source?.saleId ? `
               <div style="font-size:10px;color:var(--green);font-weight:700;margin-top:3px">
                 ${inv.replacesSaleId ? 'Línea de factura anulada' : 'Reventa de venta'} #${String(item.resale_source.saleId).padStart(5,'0')}
@@ -668,13 +768,33 @@ function renderCart() {
               onclick="this.select()"/>
             <button class="qb" onclick="posQty(${idx},1)">+</button>
           </div>`}
-          <div class="ci-total">${fmt(item.price * item.qty)}</div>
+          ${inv.itype === 'conduce' ? '' : `<div class="ci-total">${fmt(item.price * item.qty)}</div>`}
           ${checkoutLocked ? '' : `<button class="qb" style="margin-left:4px;color:var(--red)"
                   onclick="posRemItem(${idx})">×</button>`}
         </div>`;
     });
   }
   html += `</div>`;
+
+  if (inv.itype === 'conduce') {
+    html += `
+      <div class="cart-foot">
+        <div class="alrt b" style="margin-bottom:10px;padding:9px 11px">
+          <div>
+            <div class="alrt-title">Documento no fiscal</div>
+            <div class="alrt-sub">Guarda la entrega en Conduces. No cobra, no genera impuestos y no mueve inventario.</div>
+          </div>
+        </div>
+        <button class="btn btn-green btn-fw btn-lg" id="pos-conduce-btn"
+                style="font-size:14px;opacity:${inv.cart.length ? '1' : '.4'}"
+                ${inv.cart.length && !inv.conduceSubmitting ? '' : 'disabled'}
+                onclick="posCreateConduceFromCart()">
+          ${inv.conduceSubmitting ? `${svg('clock')} Guardando...` : `${svg('pkg')} Generar conduce`}
+        </button>
+      </div>`;
+    wrap.innerHTML = html;
+    return;
+  }
 
   html += `
     <div class="cart-foot">
@@ -696,16 +816,16 @@ function renderCart() {
                onfocus="this.select()"
                oninput="posDiscConPin(this, this.value)"/>
       </div>
-      ${inv.itype === 'factura' ? `
+      ${['factura', 'cotizacion'].includes(inv.itype) ? `
       <div style="border-top:1px solid var(--line2);padding-top:7px;margin-top:4px">
-        ${(inv.charges || []).map((charge, idx) => `
+        ${inv.itype === 'factura' ? (inv.charges || []).map((charge, idx) => `
           <div class="tr" style="font-size:11px">
             <span>${posEscHtml(charge.description)}
               <button class="btn btn-ghost btn-sm" style="padding:0 4px;color:var(--red)" onclick="posRemoveCharge(${idx})">×</button>
             </span>
             <span>${fmt(charge.amount)}</span>
-          </div>`).join('')}
-        <button class="btn btn-out btn-sm btn-fw" type="button" onclick="openPosChargeModal()"
+          </div>`).join('') : ''}
+        <button class="btn btn-out btn-sm btn-fw" id="pos-add-charge-btn" type="button" onclick="openPosChargeModal()"
                 style="margin:3px 0 7px">${svg('plus')} Agregar envío u otro cargo</button>
       </div>` : ''}
       <div class="tr"><span>Subtotal sin ITBIS</span><span id="pos-subtotal-value">${fmt(subtotal)}</span></div>
@@ -769,6 +889,11 @@ function posLimpiar() {
 
 function posSetType(t) {
   if (currentInv().checkoutOrderId) return;
+  if (!['factura', 'cotizacion', 'conduce'].includes(t)) return;
+  if (t === 'conduce' && !posConduceCanAccess()) {
+    toast('El módulo de Conduces está desactivado o no tienes acceso', 'w');
+    return;
+  }
   if (currentInv().replacesSaleId && t !== 'factura') {
     toast('El reemplazo controlado debe registrarse como factura', 'w');
     return;
@@ -790,10 +915,11 @@ function posCloseCheckoutOrder() {
 
 function openPosChargeModal() {
   const inv = currentInv();
-  if (!inv || inv.itype !== 'factura') return;
+  if (!inv || !['factura', 'cotizacion'].includes(inv.itype)) return;
+  const label = inv.itype === 'cotizacion' ? 'cotización' : 'factura';
   openModal(`
-    <div class="modal-title">Agregar cargo a la factura</div>
-    <div class="modal-sub">Para envío, instalación, transporte u otro servicio asociado a esta venta.</div>
+    <div class="modal-title">Agregar artículo de servicio</div>
+    <div class="modal-sub">Se sumará como un artículo de la ${label}: envío, instalación, transporte u otro servicio.</div>
     <div class="fg">
       <label class="lbl">Concepto *</label>
       <input class="inp" id="pos-charge-description" maxlength="120" placeholder="Ej: Envío a domicilio"/>
@@ -812,13 +938,31 @@ function openPosChargeModal() {
 
 function posSaveCharge() {
   const inv = currentInv();
+  if (!inv || !['factura', 'cotizacion'].includes(inv.itype)) return;
   const description = document.getElementById('pos-charge-description')?.value?.replace(/\s+/g, ' ').trim() || '';
   const amount = _posRound2(document.getElementById('pos-charge-amount')?.value);
   if (!description) return toast('Indica el concepto del cargo', 'w');
   if (!(amount > 0) || amount > 9999999) return toast('Indica un monto válido', 'w');
-  inv.charges = Array.isArray(inv.charges) ? inv.charges : [];
-  if (inv.charges.length >= 20) return toast('La factura alcanzó el máximo de cargos adicionales', 'w');
-  inv.charges.push({ description, amount });
+  const serviceCount = (inv.cart || []).filter(item => item.service_charge === true).length;
+  if (serviceCount >= 20) return toast('El documento alcanzó el máximo de artículos de servicio', 'w');
+  inv.cart.push({
+    pid: `service:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+    product_id: null,
+    product_code: 'SERVICIO',
+    product_name: description,
+    name: description,
+    price: amount,
+    unit_price: amount,
+    unit_cost: 0,
+    cost: 0,
+    taxable: 0,
+    tax_pct: 0,
+    qty: 1,
+    kind: 'service',
+    non_stock: true,
+    service_charge: true,
+    manual_price: true,
+  });
   closeModal();
   renderInvTabs();
   renderCart();
@@ -830,6 +974,61 @@ function posRemoveCharge(index) {
   inv.charges.splice(index, 1);
   renderInvTabs();
   renderCart();
+}
+
+async function posCreateConduceFromCart() {
+  const inv = currentInv();
+  if (!inv || inv.itype !== 'conduce' || inv.conduceSubmitting) return;
+  if (!posConduceCanAccess()) {
+    toast('El módulo de Conduces está desactivado o no tienes acceso', 'w');
+    return;
+  }
+  if (!inv.cart?.length) return toast('Agrega al menos un producto al conduce', 'w');
+  if (inv.cart.some(item => item.kind === 'service' || item.non_stock === true || !Number(item.product_id || item.pid))) {
+    toast('El conduce solo admite productos de inventario. Retira los cargos o servicios antes de guardarlo.', 'w');
+    return;
+  }
+
+  const customer = (DB.customers || []).find(row => Number(row.id) === Number(inv.cliId));
+  const items = inv.cart.map(item => ({
+    product_id: Number(item.product_id || item.pid),
+    product_code: item.product_code || item.code || '',
+    sku: item.product_code || item.code || '',
+    description: item.product_name || item.name || '',
+    unit: 'und',
+    qty: Math.max(1, Number(item.qty) || 1),
+  }));
+  const header = {
+    customer_id: Number(inv.cliId) || 1,
+    customer_name: inv.cliName || customer?.name || 'Consumidor Final',
+    customer_rnc: inv.cliCedula || customer?.rnc || '',
+    customer_contact_id: inv.cliContactId || null,
+    customer_branch_id: inv.cliBranchId || null,
+    delivery_address: inv.cliBranchAddress || customer?.address || '',
+    notes: inv.notes || '',
+    source_type: 'manual',
+  };
+
+  inv.conduceSubmitting = true;
+  renderCart();
+  try {
+    const result = await posAwaitSaleAction(window.api.conduce.create({
+      header, items, requestUserId: user?.id,
+    }));
+    if (!result?.ok || !result.data) {
+      throw new Error(result?.error || 'No se pudo guardar el conduce');
+    }
+    toast(`✓ Conduce ${result.data.number} guardado en Conduces`);
+    removeInvoice(activeInvoice);
+    renderInvTabs();
+    renderCart();
+    renderPOSGrid();
+    renderPOSCustomerSelection();
+  } catch (error) {
+    inv.conduceSubmitting = false;
+    renderCart();
+    toast(error?.message || 'No se pudo guardar el conduce', 'err');
+  }
 }
 
 async function posToggleUsd() {
@@ -955,8 +1154,33 @@ function posFindPriceOverrides(items) {
     const unitPrice = Math.round((Number(item?.unit_price ?? item?.price) || 0) * 100) / 100;
     const catalogPrices = posLineCatalogPrices(item);
     if (!catalogPrices.length || catalogPrices.some(p => posMoneyEq(p.value, unitPrice))) return null;
-    return { item, unitPrice, catalogPrices };
+    const catalogFloor = Math.min(...catalogPrices.map(price => Number(price.value) || 0));
+    return {
+      item,
+      unitPrice,
+      catalogPrices,
+      reductionAmount: Math.max(0, catalogFloor - unitPrice),
+    };
   }).filter(Boolean);
+}
+
+function posDiscountAuthLimit() {
+  const value = Number(DB?.settings?.pos_discount_auth_limit_pct);
+  return Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 10;
+}
+
+function posPriceChangePolicy() {
+  const amount = Number(DB?.settings?.pos_price_max_reduction_amount);
+  return {
+    enabled: DB?.settings?.pos_price_change_enabled !== '0',
+    maxReductionAmount: Number.isFinite(amount) ? Math.max(0, amount) : 0,
+  };
+}
+
+function posPriceChangesRequiringAuth(changes, maxReductionAmount) {
+  return (changes || []).filter(change =>
+    Number(change.reductionAmount || 0) > Number(maxReductionAmount || 0) + 0.0049
+  );
 }
 
 function posAuthStillValid(holder) {
@@ -983,6 +1207,7 @@ async function posPromptPriceChangeAuth(changes, contextLabel = 'Cambio de preci
     .map(p => `${p.label}: ${fmt(p.value)}`)
     .join(' · ');
   const detail = `${itemName}: ${catalogText || 'precio de catálogo'} -> ${fmt(first?.unitPrice || 0)}`;
+  const limit = posPriceChangePolicy().maxReductionAmount;
 
   return new Promise(resolve => {
     let done = false;
@@ -995,7 +1220,7 @@ async function posPromptPriceChangeAuth(changes, contextLabel = 'Cambio de preci
     openModal(`
       <div class="modal-title">Autorizar cambio de precio</div>
       <div class="modal-sub">
-        Esta operación requiere la clave especial de cambio de precio.
+        La reducción supera el límite permitido de ${fmt(limit)} por unidad.
       </div>
       <div class="alrt a" style="margin-bottom:14px">
         <div class="alrt-dot a"></div>
@@ -1062,17 +1287,24 @@ async function posPromptPriceChangeAuth(changes, contextLabel = 'Cambio de preci
 async function posEnsureSalePriceAuthorization(holder, items, contextLabel) {
   const changes = posFindPriceOverrides(items);
   if (!changes.length) return true;
+  if (['admin', 'superadmin'].includes(user?.role)) return true;
+  const policy = posPriceChangePolicy();
+  if (!policy.enabled) {
+    toast('El cambio manual de precio está desactivado en Configuración', 'err');
+    return false;
+  }
   // Las ordenes compartidas son inmutables y el backend ya valido/aprobo sus
   // precios al enviarlas desde despacho.
   if (holder?.checkoutOrderId) return true;
-  if (['admin', 'superadmin'].includes(user?.role)) return true;
+  const protectedChanges = posPriceChangesRequiringAuth(changes, policy.maxReductionAmount);
+  if (!protectedChanges.length) return true;
   if (posAuthStillValid(holder)) return true;
-  if (DB?.settings?.pos_price_change_password_set === '0') {
+  if (DB?.settings?.pos_price_change_password_set !== '1') {
     toast('Configura primero la clave especial de cambio de precio en Configuración', 'err');
     return false;
   }
 
-  const auth = await posPromptPriceChangeAuth(changes, contextLabel);
+  const auth = await posPromptPriceChangeAuth(protectedChanges, contextLabel);
   if (!auth) return false;
   posStorePriceAuth(holder, auth);
   return true;
@@ -1083,6 +1315,11 @@ async function posSetPrice(idx, val) {
   if (inv.checkoutOrderId) return;
   const item = inv.cart[idx];
   if (!item) return;
+  if (!['admin', 'superadmin'].includes(user?.role) && !posPriceChangePolicy().enabled) {
+    toast('El cambio manual de precio está desactivado en Configuración', 'err');
+    renderCart();
+    return;
+  }
   const price = Math.round(Math.max(0, parseFloat(val) || 0) * 100) / 100;
   if (price <= 0) {
     toast('El precio final debe ser mayor a 0', 'err');
@@ -1322,11 +1559,11 @@ function posDiscMode(m) {
   renderCart();
 }
 
-// Descuento con PIN para valores mayores al límite
-const DISC_LIMIT = 10; // % máximo sin autorización del admin
+// Descuento con contraseña para valores mayores al límite configurable.
 function posDiscConPin(input, val) {
   const inv  = currentInv();
   const mode = inv.discMode || 'pct';
+  const discountLimit = posDiscountAuthLimit();
   let pct, amt = 0;
   if (mode === 'amt') {
     const gross = _posRound2(inv.cart.reduce((a, i) => a + ((Number(i.price) || 0) * (Number(i.qty) || 0)), 0));
@@ -1345,8 +1582,9 @@ function posDiscConPin(input, val) {
 
   const aplicar = () => { if (mode === 'amt') inv.discAmtInput = amt; posDisc(pct); };
 
-  // Admin y superadmin no necesitan PIN; sin restricción bajo el límite
-  if (['admin', 'superadmin'].includes(user?.role) || pct <= DISC_LIMIT) { aplicar(); return; }
+  // Administrador y superadministrador configuran la regla pero no están
+  // sujetos a ella. El límite y la autorización aplican únicamente al cajero.
+  if (['admin', 'superadmin'].includes(user?.role) || pct <= discountLimit) { aplicar(); return; }
 
   // Revertir el input visualmente y pedir autorización
   input.value = mode === 'amt' ? (inv.discAmtInput || 0) : (inv.disc || 0);
@@ -1354,7 +1592,7 @@ function posDiscConPin(input, val) {
   openModal(`
     <div class="modal-title">Descuento requiere autorización</div>
     <div class="modal-sub">
-      Los descuentos mayores al ${DISC_LIMIT}% requieren aprobación de un admin o superadmin.
+      Los descuentos mayores al ${discountLimit}% requieren aprobación de un admin o superadmin.
     </div>
     <div class="alrt a" style="margin-bottom:14px">
       <div class="alrt-dot a"></div>
@@ -1430,6 +1668,9 @@ function _posTaxable(item) {
 }
 
 function calcTotals(inv) {
+  if (inv?.itype === 'conduce') {
+    return { subtotal:0, grossSubtotal:0, discAmt:0, itbis:0, itemsTotal:0, chargesTotal:0, total:0, disc:0 };
+  }
   const disc = Math.min(100, Math.max(0, parseFloat(inv.disc) || 0));
   const grossSubtotal = _posRound2(inv.cart.reduce((a, i) => a + ((Number(i.price) || 0) * (Number(i.qty) || 0)), 0));
   const discAmt = _posRound2(grossSubtotal * (disc / 100));
@@ -1812,6 +2053,10 @@ async function openCheckoutSendModal(inv) {
   if (!inv || !inv.cart.length || inv.checkoutOrderId) return;
   if (inv.itype !== 'factura') {
     toast('Solo las facturas pueden enviarse a caja', 'w');
+    return;
+  }
+  if (inv.cart.some(item => item.kind === 'service' || item.non_stock === true)) {
+    toast('Los artículos de servicio deben facturarse directamente; no pueden enviarse a la cola de caja.', 'w');
     return;
   }
   // Esta pantalla también puede abrirse inmediatamente después de iniciar sesión.
@@ -3395,7 +3640,7 @@ async function finalizarVenta() {
 
   // Preparar items con snapshot de precios
   const items = inv.cart.map(i => ({
-    product_id:   i.product_id || i.pid,
+    product_id:   (i.kind === 'service' || i.non_stock === true) ? null : (i.product_id || i.pid),
     product_code: i.product_code || i.code || '',
     product_name: i.product_name || i.name,
     unit_cost:    i.unit_cost || i.cost || 0,
@@ -3403,6 +3648,8 @@ async function finalizarVenta() {
     taxable:      _posTaxable(i) ? 1 : 0,
     tax_pct:      _posTaxable(i) ? _posTaxPct(i) : 0,
     qty:          i.qty,
+    kind:         i.kind || '',
+    non_stock:    i.non_stock === true,
     // Serializado (VELO TECH POS): pasa la unidad elegida para que el backend la
     // venda por IMEI. Null/ausente en líneas fungibles → sin efecto.
     product_unit_id: i.product_unit_id || null,
@@ -3460,6 +3707,7 @@ async function finalizarVenta() {
       reference: paymentReference,
       salespersonId,
       charges: inv.charges || [],
+      serviceItems: items.filter(item => item.kind === 'service' || item.non_stock === true),
       displayCurrency: inv.displayCurrency || 'DOP',
       displayExchangeRate: inv.displayCurrency === 'USD' ? Number(inv.displayExchangeRate) : 1,
       saleDate,

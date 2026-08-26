@@ -70,9 +70,17 @@ ok(!!direct.saleId && DB.productsRepo.getById(productId).stock === 3,
 
 console.log('\n== C. Cobro atomico en caja ==');
 const paid = DB.checkoutOrdersRepo.pay({
-  id:first.id, payment:{ method:'efectivo' }, session:null, user, terminalId:'caja-1'
+  id:first.id,
+  payment:{
+    method:'efectivo',
+    serviceItems:[{ product_name:'Envío a domicilio', unit_price:250, qty:1, kind:'service', non_stock:true }],
+  },
+  session:null, user, terminalId:'caja-1'
 });
 ok(!!paid.saleId && paid.order.status === 'paid', 'el cobro convierte la orden en venta');
+const paidSale = DB.salesRepo.getById(paid.saleId);
+ok(paidSale.total === 604 && paidSale.items.some(row => row.product_id == null && row.product_name === 'Envío a domicilio'),
+  'el cargo agregado en caja se guarda y suma como artículo de servicio');
 ok(DB.productsRepo.getById(productId).stock === 0, 'descuenta el stock una sola vez al cobrar');
 ok(paid.order.paid_terminal_id === 'caja-1' && paid.order.origin_terminal_id === 'despacho-1',
   'conserva terminal de origen y terminal de cobro');

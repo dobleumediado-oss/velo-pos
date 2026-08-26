@@ -49,6 +49,15 @@ los rangos autorizados en `ncf_sequences`.
   correlativo Velo (`FAC-000004`); las migradas se identifican como
   `Importada de FAPRO` y priorizan su número histórico.
 - Las cotizaciones nuevas no mueven inventario, caja, crédito ni contabilidad.
+- En el Punto de Venta, “Agregar envío u otro cargo” crea un artículo de servicio
+  sin inventario. El renglón se suma y se guarda dentro de factura o cotización;
+  una cotización continúa sin mover inventario, caja, crédito ni contabilidad.
+- El selector **Conduce** del POS guarda directamente una nota de entrega en
+  `delivery_notes`. No cobra, no calcula impuestos y no mueve inventario. Solo
+  admite productos vinculados al inventario para que puedan facturarse después.
+- Administrador y superadministrador pueden anular un conduce desde el listado o
+  desde su detalle. El motivo es obligatorio, el documento permanece almacenado
+  y su número `CON-` no vuelve a utilizarse.
 - Eliminar una cotización la retira inmediatamente de la operación y conserva
   solo su correlativo y el evento de auditoría.
 

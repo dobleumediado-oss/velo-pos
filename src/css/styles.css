@@ -310,6 +310,9 @@ select.inp{cursor:pointer}
 .pos-wrap{display:flex;height:calc(100vh - 58px);overflow:hidden}
 .pos-cat{flex:1;display:flex;flex-direction:column;padding:18px 20px;background:var(--bg);overflow:hidden}
 .pos-side{width:370px;background:var(--surface);border-left:1px solid var(--line);display:flex;flex-direction:column;flex-shrink:0}
+.pos-cart-resizer{width:8px;margin-right:-4px;position:relative;z-index:4;flex:0 0 8px;cursor:col-resize;touch-action:none;outline:none}
+.pos-cart-resizer::after{content:'';position:absolute;top:0;bottom:0;left:3px;width:2px;background:transparent;transition:background .12s,box-shadow .12s}
+.pos-cart-resizer:hover::after,.pos-cart-resizer:focus-visible::after,.pos-cart-resizer.dragging::after{background:var(--green);box-shadow:0 0 0 2px color-mix(in srgb,var(--green) 14%,transparent)}
 
 /* Tabs de facturas múltiples */
 .invoice-tabs{display:flex;align-items:center;gap:4px;padding:10px 13px 0;border-bottom:1px solid var(--line);background:var(--surface2);overflow-x:auto;flex-shrink:0}

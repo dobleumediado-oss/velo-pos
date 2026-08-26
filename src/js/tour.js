@@ -5,7 +5,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 (function () {
-  const GUIDE_REV = 'experience-3.3';
+  const GUIDE_REV = 'experience-3.4';
   const STORAGE_PREFIX = 'vp_guided_tours_v2';
   let active = null;
   let renderToken = 0;
@@ -52,8 +52,8 @@
   const TOURS = {
     upgrade: {
       title:'Novedades de la experiencia',
-      subtitle:'Centro de mando, tableros, alertas y operación visual',
-      icon:'trend', duration:'3 min', roles:['admin','superadmin','cajero'],
+      subtitle:'Documentos, cargos, carrito flexible y controles de caja',
+      icon:'trend', duration:'4 min', roles:['admin','superadmin','cajero'],
       steps:[
         { title:'Bienvenido a la nueva experiencia', icon:'trend',
           text:'Velo POS ahora te ayuda a encontrar, priorizar y actuar. Este recorrido presenta las herramientas nuevas sin modificar ninguna información.' },
@@ -67,6 +67,12 @@
           text:'Las alertas de inventario, créditos, caja, gastos y nómina te llevan directamente al lugar donde se resuelven.' },
         { title:'Tu forma de trabajar', icon:'half', selector:'[aria-label="Cambiar apariencia y densidad"]',
           text:'Cambia tema, densidad y movimiento. Las preferencias quedan guardadas en esta terminal.' },
+        { title:'Factura, cotización o conduce', icon:'pkg', route:'pos', requires:'pos', selector:'#pos-document-types', wait:2200,
+          text:'Elige el documento desde el carrito. Factura cobra, Cotización conserva la propuesta y Conduce guarda una entrega no fiscal cuando el módulo está habilitado.' },
+        { title:'Cargos como artículos', icon:'plus', route:'pos', requires:'pos', selector:'#pos-add-charge-btn', wait:1800,
+          text:'Agrega envío, obra u otro cargo. Queda sumado y guardado como artículo de servicio tanto en facturas como en cotizaciones.' },
+        { title:'Carrito a tu medida', icon:'monitor', route:'pos', requires:'pos', selector:'.pos-cart-resizer', wait:1800,
+          text:'Arrastra esta división para ampliar o reducir el carrito. Velo recuerda el ancho elegido al cerrar y volver a abrir el sistema.' },
         { title:'Pulso ejecutivo', icon:'grid', route:'dash', selector:'.ux-exec-strip', wait:2400,
           text:'El Dashboard resume salud, caja y asuntos pendientes para comenzar el día con una lectura rápida.' },
         { title:'Un tablero a tu medida', icon:'settings', route:'dash', selector:'.dash-personalize-btn', wait:2200,
@@ -94,6 +100,10 @@
         { title:'Gastos y obligaciones', icon:'dollar', selector:'.nav-item[data-key="gastos"]', requires:'gastos', text:'Registra gastos, viáticos, nómina y cuentas por pagar para reflejarlos correctamente en la operación.' },
         { title:'Contabilidad integrada', icon:'ledger', selector:'.nav-item[data-key="contabilidad"]', requires:'contabilidad', text:'Los módulos de origen alimentan los asientos y estados financieros sin exigir doble digitación.' },
         { title:'Reportes para decidir', icon:'chart', selector:'.nav-item[data-key="reportes"]', requires:'reportes', text:'Convierte los movimientos del sistema en indicadores comerciales y financieros para el dueño.' },
+        { title:'Controles del cajero', icon:'lock', route:'configuracion', requires:'configuracion', selector:'#cfg-pos-controls-card', wait:2400,
+          text:'Configura el descuento máximo sin clave, permite o bloquea cambios de precio y define cuánto puede reducirse cada unidad. Estas restricciones solo aplican al cajero.' },
+        { title:'Conduces controlados', icon:'pkg', selector:'.nav-item[data-key="conduce"]', requires:'conduce',
+          text:'Los conduces creados desde el POS quedan en este módulo. Administrador y superadministrador pueden abrirlos y anularlos conservando su historial.' },
         { title:'Todo bajo control', icon:'check', selector:'.ux-command-trigger', text:'El centro de mando reúne las prioridades. Puedes volver a esta guía cuando quieras desde el botón de ayuda.' },
       ],
     },
@@ -104,6 +114,10 @@
       steps:[
         { title:'Tu recorrido operativo', icon:'cash', text:'Esta guía presenta el flujo cotidiano sin abrir formularios ni crear movimientos.' },
         { title:'Punto de Venta', icon:'monitor', selector:'.nav-item[data-key="pos"]', requires:'pos', text:'Busca artículos, prepara varias facturas y cobra con los métodos habilitados por el negocio.' },
+        { title:'Documentos desde el carrito', icon:'pkg', route:'pos', selector:'#pos-document-types', requires:'pos', wait:2200,
+          text:'Desde aquí preparas una factura, una cotización o un conduce. Los cargos de envío, obra u otros servicios se agregan debajo del descuento y se suman al documento.' },
+        { title:'Más espacio cuando lo necesites', icon:'monitor', route:'pos', selector:'.pos-cart-resizer', requires:'pos', wait:1800,
+          text:'Arrastra la división lateral para cambiar el ancho del carrito. El tamaño queda guardado para tu próxima sesión.' },
         { title:'Clientes y crédito', icon:'users', selector:'.nav-item[data-key="clientes"]', requires:'clientes', text:'Consulta clientes, balances y abonos sin salir del entorno de trabajo.' },
         { title:'Historial de ventas', icon:'list', selector:'.nav-item[data-key="ventas"]', requires:'ventas', text:'Revisa facturas vigentes y abre sus detalles. Las devoluciones procesadas no permanecen como ventas activas.' },
         { title:'Caja por sesión', icon:'cash', selector:'.nav-item[data-key="caja"]', requires:'caja', text:'La apertura, movimientos y cierre permiten cuadrar lo cobrado por esta terminal.' },
@@ -149,7 +163,7 @@
 
   function inviteMarkup() {
     return `<div class="ux-tour-invite" id="ux-tour-invite" role="status"><button class="ux-tour-invite-close" aria-label="Cerrar invitación">×</button>
-      <div class="ux-tour-orbit"><span>${icon('trend')}</span><i></i><i></i></div><div><small>NUEVA EXPERIENCIA</small><strong>¿Quieres conocer las mejoras?</strong><p>Un recorrido animado de dos minutos.</p><div><button data-tour-later>Después</button><button data-tour-now>Ver guía</button></div></div></div>`;
+      <div class="ux-tour-orbit"><span>${icon('trend')}</span><i></i><i></i></div><div><small>NUEVA EXPERIENCIA</small><strong>¿Quieres conocer las mejoras?</strong><p>Un recorrido breve por las novedades.</p><div><button data-tour-later>Después</button><button data-tour-now>Ver guía</button></div></div></div>`;
   }
 
   function maybeOffer() {

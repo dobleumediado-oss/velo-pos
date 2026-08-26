@@ -494,7 +494,7 @@ function newInvObj(id) {
     initialPaymentMixNoncash: 0, initialPaymentNoncashMethod: 'transferencia', notes: '',
     replacesSaleId: null, replacementDocumentNumber: '',
     sourceQuoteId: null, sourceQuoteNumber: '', ncfType: '',
-    saleOperationId: '', saleSubmitting: false
+    saleOperationId: '', saleSubmitting: false, conduceSubmitting: false
   };
 }
 

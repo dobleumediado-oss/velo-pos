@@ -3591,6 +3591,7 @@ async function procesarDevolucion(originalSale, items) {
     const qtyEl = document.getElementById(`dev-qty-${originalSale.id}-${idx}`);
     if (chk?.checked) {
         returnItems.push({
+          sale_item_id: item.id,
           product_id:   item.product_id,
           product_code: item.product_code || '',
           product_name: item.product_name || item.name,

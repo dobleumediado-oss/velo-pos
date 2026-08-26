@@ -127,6 +127,7 @@ function _cndRenderRows() {
     return;
   }
   const origen = { manual: 'Manual', cotizacion: 'Cotización', factura: 'Factura' };
+  const isAdmin = _cndIsAdmin();
   tbody.innerHTML = rows.map(c => `
     <tr style="cursor:pointer" data-id="${c.id}">
       <td class="tm" style="font-weight:700">${c.number}</td>
@@ -138,11 +139,31 @@ function _cndRenderRows() {
       <td style="font-size:11px;color:var(--muted2)">${origen[c.source_type] || c.source_type}${c.source_id ? ' #' + c.source_id : ''}</td>
       <td style="text-align:center">${c.item_count || 0}</td>
       <td>${_cndBadge(c.status)}</td>
-      <td style="text-align:right"><button class="btn btn-ghost btn-sm" data-view="${c.id}">${svg('eye')} Ver</button></td>
+      <td style="text-align:right;white-space:nowrap">
+        <button class="btn btn-ghost btn-sm" data-view="${c.id}">${svg('eye')} Ver</button>
+        ${isAdmin && !['anulado', 'facturado'].includes(c.status)
+          ? `<button class="btn btn-ghost btn-sm" style="color:var(--red)" data-cancel="${c.id}">${svg('xmark')} Anular</button>`
+          : ''}
+      </td>
     </tr>`).join('');
 
   tbody.querySelectorAll('[data-id]').forEach(tr => {
-    tr.addEventListener('click', () => _cndOpenDetail(Number(tr.dataset.id)));
+    tr.addEventListener('click', event => {
+      if (event.target.closest('button')) return;
+      _cndOpenDetail(Number(tr.dataset.id));
+    });
+  });
+  tbody.querySelectorAll('[data-view]').forEach(button => {
+    button.addEventListener('click', event => {
+      event.stopPropagation();
+      _cndOpenDetail(Number(button.dataset.view));
+    });
+  });
+  tbody.querySelectorAll('[data-cancel]').forEach(button => {
+    button.addEventListener('click', event => {
+      event.stopPropagation();
+      _cndCancel(Number(button.dataset.cancel));
+    });
   });
 }
 

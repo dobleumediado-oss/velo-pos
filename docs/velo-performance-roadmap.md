@@ -71,3 +71,26 @@ Si una operación supera el límite, se registra qué consulta o render fue lent
 - Los modales secundarios ofrecen “Atrás” y restauran la pantalla anterior.
 - El recibo de abono dice “Monto aplicado”, “Monto del abono” y “Balance después del abono”; no “Precio venta” ni “Total con impuestos”.
 - Facturas pendientes, facturas del cliente e historial de abonos aparecen de antiguo a reciente en pantalla y PDF.
+
+## Ronda documental del POS — 26 de agosto de 2026
+
+### Problema y resultado esperado
+
+- “Agregar envío u otro cargo” sumaba en factura como un total separado y no estaba disponible en cotización. Debe crear un renglón de servicio visible, sumable e imprimible en ambos documentos, sin afectar inventario.
+- El carrito tenía ancho fijo. Debe poder ajustarse entre un tamaño compacto y uno amplio, y recordar la preferencia al reiniciar la aplicación.
+- Generar conduce estaba oculto dentro del cobro de una factura. El POS debe permitir preparar un conduce directamente como documento no fiscal, guardarlo en el módulo Conduces y no mover inventario, caja, impuestos ni contabilidad.
+- La anulación existía únicamente dentro del detalle del conduce. Administrador y superadministrador deben verla también en el listado, con motivo obligatorio y auditoría.
+
+### Ruta mínima aplicada
+
+- El cargo nuevo se representa con una línea `service`/`non_stock` en el carrito y reutiliza la ruta transaccional existente de ventas y cotizaciones. Los cargos históricos conservan su lectura anterior.
+- El ancho del panel se conserva como preferencia local de interfaz; no se escribe en SQLite ni se modifica información comercial.
+- El botón Conduce reutiliza `conduce:create`, su secuencia `CON-`, sus validaciones de cliente y su tabla de artículos. No reutiliza `sales:create`.
+- Anular desde el listado reutiliza `conduce:cancel`; no elimina el registro ni libera el correlativo.
+
+### Verificación y reversión
+
+- Verificado: interacción del POS; matemática y persistencia de artículos de servicio en factura, cotización y cola de caja; devolución de servicios sin inventario; creación/anulación de conduce; núcleo financiero; correcciones de venta; seguridad de actualización; integridad SQLite y sintaxis.
+- Todas las pruebas usan una base temporal. La preferencia de ancho se prueba como almacenamiento local y nunca abre la base real.
+- La prueba de actualización comparó la base real antes y después usando una copia temporal: ventas, facturación, clientes, productos, existencias y débitos/créditos permanecieron idénticos; `integrity_check` quedó en `ok` y no hubo violaciones de claves foráneas.
+- Reversión: retirar el selector Conduce y el divisor visual no cambia documentos guardados; las líneas de servicio ya emitidas siguen siendo `sale_items` válidos y los conduces anulados conservan su trazabilidad.

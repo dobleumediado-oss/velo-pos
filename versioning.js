@@ -2351,6 +2351,19 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.48.1-external-commission-expenses] Comisiones externas listas');
     }
   },
+  {
+    version: '1.48.2-pos-authorization-controls',
+    description: 'POS: límites configurables para autorizar descuentos y reducciones manuales de precio.',
+    run(db) {
+      const setting = db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');
+      [
+        ['pos_discount_auth_limit_pct', '10'],
+        ['pos_price_change_enabled', '1'],
+        ['pos_price_max_reduction_amount', '0'],
+      ].forEach(row => setting.run(...row));
+      console.log('[MIGRATION 1.48.2-pos-authorization-controls] Controles de autorización del POS listos');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

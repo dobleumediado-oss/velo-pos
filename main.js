@@ -215,6 +215,12 @@ const {
   checkoutOrdersRepo, saleCorrectionsRepo, ensureUppercasePersistence, crmRepo,
   productUnitsRepo, serviceOrdersRepo, techPrivatePurchasesRepo, techDescriptionTemplatesRepo
 } = require('./database');
+const {
+  discountAuthLimit,
+  priceChangePolicy,
+  priceOverrideReduction,
+  priceOverridesRequiringAuth,
+} = require('./lib/pos-authorization-policy');
 
 const {
   APP_VERSION, initVersioning, seedAccountingCatalog,
@@ -966,6 +972,23 @@ ipcMain.handle('settings:set', async (_, { key, value, requestUserId }) => {
   }
   if (key === 'cash_close_required_after_hours' && !['0', '1'].includes(String(value))) {
     return { ok: false, error: 'La política de cierre de caja debe estar activada o desactivada' };
+  }
+  if (key === 'pos_discount_auth_limit_pct') {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+      return { ok: false, error: 'El límite de descuento debe estar entre 0% y 100%' };
+    }
+    value = String(Math.round(parsed * 100) / 100);
+  }
+  if (key === 'pos_price_max_reduction_amount') {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 99999999) {
+      return { ok: false, error: 'El límite de reducción de precio debe ser un monto válido mayor o igual a cero' };
+    }
+    value = String(Math.round(parsed * 100) / 100);
+  }
+  if (key === 'pos_price_change_enabled' && !['0', '1'].includes(String(value))) {
+    return { ok: false, error: 'La política de cambio de precio debe estar activada o desactivada' };
   }
 
   const needsSA    = SUPERADMIN_KEYS.test(key);
@@ -2786,13 +2809,15 @@ function _salePriceOverrides(saleData) {
     const allowed = sameMoney(retail, wholesale) ? [retail] : [retail, wholesale];
 
     if (!allowed.some(p => sameMoney(unitPrice, p))) {
-      out.push({
+      const override = {
         productId: prod.id,
         productName: item.product_name || prod.name || `Producto ${prod.id}`,
         unitPrice,
         retail,
         wholesale,
-      });
+      };
+      override.reductionAmount = priceOverrideReduction(override);
+      out.push(override);
     }
   }
 
@@ -2810,7 +2835,8 @@ function _priceOverrideDetail(overrides) {
 
 function _resolveDiscountApproval(reqUser, discountPct, token) {
   const pct = Math.max(0, Math.min(100, Number(discountPct) || 0));
-  if (pct <= 10) return null;
+  const limit = discountAuthLimit(settingsRepo.get('pos_discount_auth_limit_pct'));
+  if (pct <= limit) return null;
   if (['admin', 'superadmin'].includes(reqUser.role)) {
     return { userId: reqUser.id, name: reqUser.name, role: reqUser.role, token: null };
   }
@@ -2818,9 +2844,52 @@ function _resolveDiscountApproval(reqUser, discountPct, token) {
     token, 'pos_discount_override', ['admin', 'superadmin'], reqUser.id
   );
   if (!auth) {
-    throw new Error('Los descuentos mayores al 10% requieren autorización de un administrador');
+    throw new Error(`Los descuentos mayores al ${limit}% requieren la contraseña de un administrador o superadministrador`);
   }
   return { userId: auth.userId, name: auth.name, role: auth.role, token };
+}
+
+function _resolvePriceChangeApproval(reqUser, overrides, token) {
+  if (!overrides?.length) return null;
+  const policy = priceChangePolicy(settingsRepo.getAll());
+  if (['admin', 'superadmin'].includes(reqUser.role)) {
+    return {
+      userId: reqUser.id,
+      name: reqUser.name,
+      role: reqUser.role,
+      token: null,
+      protectedOverrides: [],
+    };
+  }
+  if (!policy.enabled) {
+    throw new Error('El cambio manual de precio está desactivado en Configuración');
+  }
+
+  const protectedOverrides = priceOverridesRequiringAuth(overrides, policy.maxReductionAmount);
+  if (!protectedOverrides.length) {
+    return {
+      userId: reqUser.id,
+      name: reqUser.name,
+      role: reqUser.role,
+      token: null,
+      protectedOverrides,
+    };
+  }
+
+  const auth = _getPrivilegedToken(token, 'pos_price_change', null, reqUser.id);
+  if (!auth) {
+    const amount = policy.maxReductionAmount.toFixed(2);
+    throw new Error(
+      `Reducir un precio más de RD$${amount} por unidad requiere la clave especial configurada`
+    );
+  }
+  return {
+    userId: auth.userId,
+    name: auth.name,
+    role: auth.role,
+    token,
+    protectedOverrides,
+  };
 }
 
 ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
@@ -2907,18 +2976,14 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
       };
     }
     if (priceOverrides.length) {
-      if (['admin', 'superadmin'].includes(reqUser.role)) {
-        priceApproval = { userId: reqUser.id, name: reqUser.name, role: reqUser.role };
-      } else {
-        const token = saleData?.payment?.priceChangeAuthToken;
-        const auth = _getPrivilegedToken(token, 'pos_price_change', null, reqUser.id);
-        if (!auth) {
-          return {
-            ok: false,
-            error: 'Cambiar el precio de venta requiere la clave especial configurada',
-          };
-        }
-        priceApproval = { userId: auth.userId, name: auth.name, role: auth.role };
+      try {
+        priceApproval = _resolvePriceChangeApproval(
+          reqUser,
+          priceOverrides,
+          saleData?.payment?.priceChangeAuthToken
+        );
+      } catch (e) {
+        return { ok: false, error: e.message };
       }
       saleData.payment = {
         ...(saleData.payment || {}),
@@ -2927,9 +2992,7 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
     }
 
     const result = salesRepo.create({ ...saleData, user: reqUser });
-    if (!result.idempotent && priceOverrides.length && !['admin', 'superadmin'].includes(reqUser.role)) {
-      _privAuthTokens.delete(saleData?.payment?.priceChangeAuthToken);
-    }
+    if (!result.idempotent && priceApproval?.token) _privAuthTokens.delete(priceApproval.token);
     if (!result.idempotent && discountApproval?.token) _privAuthTokens.delete(discountApproval.token);
     if (!result.idempotent && priceOverrides.length) {
       audit(requestUserId, reqUser.name, 'precio_venta_autorizado', 'sales', result.saleId,
@@ -2973,6 +3036,7 @@ ipcMain.handle('checkout:create', async (_, { orderData, requestUserId } = {}) =
 
     const overrides = _salePriceOverrides({ items: orderData.items });
     let priceApprovedBy = null;
+    let priceApproval = null;
     let discountApproval = null;
     try {
       discountApproval = _resolveDiscountApproval(
@@ -2982,15 +3046,15 @@ ipcMain.handle('checkout:create', async (_, { orderData, requestUserId } = {}) =
       return { ok: false, error: e.message };
     }
     if (overrides.length) {
-      if (['admin', 'superadmin'].includes(reqUser.role)) {
-        priceApprovedBy = reqUser.id;
-      } else {
-        const token = orderData.priceChangeAuthToken;
-        const auth = _getPrivilegedToken(token, 'pos_price_change', null, reqUser.id);
-        if (!auth) {
-          return { ok: false, error: 'El precio modificado requiere la clave especial configurada' };
-        }
-        priceApprovedBy = auth.userId;
+      try {
+        priceApproval = _resolvePriceChangeApproval(
+          reqUser,
+          overrides,
+          orderData.priceChangeAuthToken
+        );
+        priceApprovedBy = priceApproval.userId;
+      } catch (e) {
+        return { ok: false, error: e.message };
       }
     }
 
@@ -3003,9 +3067,7 @@ ipcMain.handle('checkout:create', async (_, { orderData, requestUserId } = {}) =
       discountApprovedBy: discountApproval?.userId || null,
       reservationMinutes: Number(settingsRepo.get('checkout_reservation_minutes')) || 30,
     });
-    if (overrides.length && !['admin', 'superadmin'].includes(reqUser.role)) {
-      _privAuthTokens.delete(orderData.priceChangeAuthToken);
-    }
+    if (priceApproval?.token) _privAuthTokens.delete(priceApproval.token);
     if (discountApproval?.token) _privAuthTokens.delete(discountApproval.token);
     return { ok: true, data: order };
   } catch (e) {

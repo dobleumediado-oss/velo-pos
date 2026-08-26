@@ -2617,6 +2617,9 @@ function seedIfEmpty() {
     ['receipt_msg',    '¡Gracias por su compra!'],
     ['password_changed','0'],
     ['pos_price_change_password_hash',''],
+    ['pos_discount_auth_limit_pct','10'],
+    ['pos_price_change_enabled','1'],
+    ['pos_price_max_reduction_amount','0'],
     ['ncf_counter',    '0'],
     ['barcode_enabled','0'],
     ['barcode_printer',''],
@@ -5589,7 +5592,12 @@ const salesRepo = {
           WHERE ret.type='devolucion'
             AND ret.original_sale_id=si.sale_id
             AND ret.status!='cancelled'
-            AND rsi.product_id=si.product_id
+            AND (
+              (si.product_id IS NOT NULL AND rsi.product_id=si.product_id)
+              OR
+              (si.product_id IS NULL AND rsi.product_id IS NULL
+                AND rsi.product_code=si.product_code AND rsi.product_name=si.product_name)
+            )
         ),0) AS returned_qty
       FROM sale_items si WHERE si.sale_id=?
     `).all(id).map(item => ({
@@ -7004,6 +7012,12 @@ const reportsRepo = {
 // ══════════════════════════════════════════════
 // DEVOLUCIONES
 // ══════════════════════════════════════════════
+function _returnLineKey(row) {
+  const productId = Number(row?.product_id) || 0;
+  if (productId) return `product:${productId}`;
+  return `service:${String(row?.product_code || '').trim()}|${String(row?.product_name || row?.name || '').trim()}`;
+}
+
 const returnsRepo = {
   /**
    * Procesa una devolución parcial o total de una venta.
@@ -7044,14 +7058,14 @@ const returnsRepo = {
       // Suma las cantidades de TODAS las devoluciones previas de esta factura
       // para impedir devolver más de lo realmente vendido en varias tandas.
       const prevReturns = db.prepare(`
-        SELECT si.product_id, COALESCE(SUM(si.qty),0) AS devuelto
+        SELECT si.product_id,si.product_code,si.product_name,COALESCE(SUM(si.qty),0) AS devuelto
         FROM sales s
         JOIN sale_items si ON si.sale_id = s.id
         WHERE s.type='devolucion' AND s.original_sale_id=? AND s.status != 'cancelled'
-        GROUP BY si.product_id
+        GROUP BY si.product_id,si.product_code,si.product_name
       `).all(originalSaleId);
-      const yaDevuelto = {};
-      prevReturns.forEach(r => { yaDevuelto[r.product_id] = r.devuelto || 0; });
+      const yaDevuelto = new Map();
+      prevReturns.forEach(r => { yaDevuelto.set(_returnLineKey(r), r.devuelto || 0); });
 
       const preparedReturnItems = [];
       if (!isMonetaryCredit) {
@@ -7062,9 +7076,13 @@ const returnsRepo = {
           if (!Number.isInteger(Number(item.qty)) || Number(item.qty) <= 0) {
             throw new Error('La cantidad a devolver debe ser un número entero mayor que cero');
           }
-          const orig = originalItems.find(oi => oi.product_id === item.product_id);
+          const requestedSaleItemId = Number(item.sale_item_id || item.original_sale_item_id) || 0;
+          const orig = requestedSaleItemId
+            ? originalItems.find(oi => Number(oi.id) === requestedSaleItemId)
+            : originalItems.find(oi => _returnLineKey(oi) === _returnLineKey(item));
           if (!orig) throw new Error(`Producto ID ${item.product_id} no pertenece a esta venta`);
-          const yaDev = yaDevuelto[item.product_id] || 0;
+          const lineKey = _returnLineKey(orig);
+          const yaDev = yaDevuelto.get(lineKey) || 0;
           const disponible = orig.qty - yaDev;
           if (Number(item.qty) > disponible) {
             throw new Error(
@@ -7131,7 +7149,7 @@ const returnsRepo = {
         subtotal = 0;
         taxAmt = 0;
         for (const item of preparedReturnItems) {
-          const orig = originalItems.find(oi => oi.product_id === item.product_id);
+          const orig = originalItems.find(oi => _returnLineKey(oi) === _returnLineKey(item));
           const ratio = orig?.qty ? item.qty / orig.qty : 0;
           item.net_subtotal = round2((orig?.net_subtotal || 0) * ratio);
           item.tax_amt = round2((orig?.tax_amt || 0) * ratio);
@@ -7238,7 +7256,7 @@ const returnsRepo = {
 
         // Una nota monetaria documenta un descuento/error de importe: nunca crea
         // una entrada ficticia de mercancía. Solo las devoluciones físicas reponen.
-        if (!isMonetaryCredit) {
+        if (!isMonetaryCredit && item.product_id) {
           productsRepo.adjustStock(
             item.product_id, +item.qty, 'devolucion',
             `Devolución de venta #${originalSaleId}`, returnId, user.id
@@ -7323,10 +7341,14 @@ const returnsRepo = {
       // Antes solo miraba los items de la tanda actual, así que devoluciones parciales
       // en varias tandas nunca marcaban la venta como devuelta.
       if (!isMonetaryCredit) {
-        const currentReturn = {};
-        for (const i of preparedReturnItems) currentReturn[i.product_id] = (currentReturn[i.product_id] || 0) + i.qty;
+        const currentReturn = new Map();
+        for (const i of preparedReturnItems) {
+          const key = _returnLineKey(i);
+          currentReturn.set(key, (currentReturn.get(key) || 0) + i.qty);
+        }
         const allReturned = originalItems.every(oi => {
-          const totalDevuelto = (yaDevuelto[oi.product_id] || 0) + (currentReturn[oi.product_id] || 0);
+          const key = _returnLineKey(oi);
+          const totalDevuelto = (yaDevuelto.get(key) || 0) + (currentReturn.get(key) || 0);
           return totalDevuelto >= oi.qty;
         });
         if (allReturned) {
@@ -7422,6 +7444,7 @@ const returnsRepo = {
       const isMonetaryCredit = ret.correction_kind === 'monetary_credit';
       if (!isMonetaryCredit) {
         for (const item of items) {
+          if (!item.product_id) continue;
           const product = db.prepare('SELECT stock,name FROM products WHERE id=?').get(item.product_id);
           if (!product) throw new Error(`Producto ID ${item.product_id} no existe`);
           if ((product.stock || 0) < (item.qty || 0)) {
@@ -7436,6 +7459,7 @@ const returnsRepo = {
       // La devolución repuso existencias; al anularla se retiran nuevamente.
       if (!isMonetaryCredit) {
         for (const item of items) {
+          if (!item.product_id) continue;
           productsRepo.adjustStock(
             item.product_id, -item.qty, 'salida',
             `Anulación devolución #${returnId} de venta #${ret.original_sale_id}`,
@@ -7480,16 +7504,16 @@ const returnsRepo = {
 
       // Recalcular si la factura original sigue totalmente devuelta por otras notas
       // de crédito vigentes. Si no, vuelve a estar disponible en Devoluciones.
-      const originalItems = db.prepare('SELECT product_id,qty FROM sale_items WHERE sale_id=?').all(original.id);
+      const originalItems = db.prepare('SELECT product_id,product_code,product_name,qty FROM sale_items WHERE sale_id=?').all(original.id);
       const activeReturned = db.prepare(`
-        SELECT si.product_id,COALESCE(SUM(si.qty),0) qty
+        SELECT si.product_id,si.product_code,si.product_name,COALESCE(SUM(si.qty),0) qty
         FROM sales s JOIN sale_items si ON si.sale_id=s.id
         WHERE s.type='devolucion' AND s.original_sale_id=? AND s.status!='cancelled'
-        GROUP BY si.product_id
+        GROUP BY si.product_id,si.product_code,si.product_name
       `).all(original.id);
-      const returnedByProduct = new Map(activeReturned.map(r => [r.product_id, r.qty || 0]));
+      const returnedByProduct = new Map(activeReturned.map(r => [_returnLineKey(r), r.qty || 0]));
       const stillFullyReturned = originalItems.length > 0 && originalItems.every(i =>
-        (returnedByProduct.get(i.product_id) || 0) >= i.qty
+        (returnedByProduct.get(_returnLineKey(i)) || 0) >= i.qty
       );
       db.prepare('UPDATE sales SET status=? WHERE id=?')
         .run(stillFullyReturned ? 'returned' : 'completed', original.id);

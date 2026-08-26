@@ -188,6 +188,68 @@ try {
 }
 ok(registeredCustomerBlocked, 'una factura de cliente registrado no reutiliza su correlativo');
 
+console.log('\n== Artículos de servicio en factura y cotización ==');
+const stockBeforeServiceDocs = DB.productsRepo.getById(productId).stock;
+const serviceLine = {
+  product_id: null,
+  product_code: 'SERVICIO',
+  product_name: 'Envío a domicilio',
+  unit_cost: 0,
+  unit_price: 250,
+  qty: 1,
+  taxable: 0,
+  tax_pct: 0,
+  kind: 'service',
+  non_stock: true,
+};
+const invoiceWithService = DB.salesRepo.create({
+  session: null,
+  customer: { id: customerId },
+  items: [line(1), serviceLine],
+  payment: { method: 'efectivo' },
+  user: admin,
+  type: 'factura',
+});
+const invoiceServiceRow = DB.salesRepo.getById(invoiceWithService.saleId);
+ok(invoiceServiceRow.total === 368 && invoiceServiceRow.items.length === 2,
+  'factura suma el envío como artículo independiente');
+ok(invoiceServiceRow.items.some(item => item.product_id == null && item.product_name === 'Envío a domicilio'),
+  'el artículo de servicio queda guardado sin producto de inventario');
+ok(DB.productsRepo.getById(productId).stock === stockBeforeServiceDocs - 1,
+  'la factura descuenta solo el producto físico, no el servicio');
+const invoiceServiceItem = invoiceServiceRow.items.find(item => item.product_id == null);
+const serviceReturn = DB.returnsRepo.create({
+  originalSaleId: invoiceWithService.saleId,
+  items: [{
+    sale_item_id: invoiceServiceItem.id,
+    product_id: null,
+    product_code: invoiceServiceItem.product_code,
+    product_name: invoiceServiceItem.product_name,
+    qty: 1,
+  }],
+  session: null,
+  user: admin,
+  reason: 'Reembolso del envío',
+});
+ok(serviceReturn.total === 250 && DB.productsRepo.getById(productId).stock === stockBeforeServiceDocs - 1,
+  'devolver un servicio reembolsa su importe sin crear inventario');
+DB.returnsRepo.cancel(serviceReturn.returnId, 'Reverso de prueba', admin.id, admin.name);
+ok(DB.productsRepo.getById(productId).stock === stockBeforeServiceDocs - 1,
+  'anular la devolución del servicio tampoco altera inventario');
+const quoteWithService = DB.salesRepo.create({
+  session: null,
+  customer: { id: customerId },
+  items: [line(1), serviceLine],
+  payment: { method: 'cotizacion' },
+  user: admin,
+  type: 'cotizacion',
+});
+const quoteServiceRow = DB.salesRepo.getById(quoteWithService.saleId);
+ok(quoteServiceRow.total === 368 && quoteServiceRow.items.length === 2,
+  'cotización suma y conserva el artículo de servicio');
+ok(DB.productsRepo.getById(productId).stock === stockBeforeServiceDocs - 1,
+  'cotizar productos y servicios no mueve inventario');
+
 console.log('\n== Abono, conduce y reporte ==');
 const payment = DB.customersRepo.addPayment({
   customerId, amount: 18, method: 'efectivo',
@@ -200,6 +262,9 @@ const noteId = DB.conduceRepo.create({
   userId: admin.id,
 });
 ok(DB.conduceRepo.getById(noteId).number === 'CON-000001', 'conduce usa su secuencia CON');
+const cancelledNote = DB.conduceRepo.cancel(noteId, { userId: admin.id, reason: 'Documento de prueba' });
+ok(cancelledNote.status === 'anulado' && cancelledNote.cancellation_reason === 'Documento de prueba',
+  'anular conduce conserva el documento, su número y el motivo');
 const report = DB.documentNumberRepo.issue('reporte', 'print_job', 'test-report');
 ok(report.formatted_number === 'REP-000001', 'reporte usa su secuencia REP');
 const expenseId = DB.expensesRepo.create({

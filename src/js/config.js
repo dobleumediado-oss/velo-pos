@@ -1120,6 +1120,52 @@ async function renderConfiguracion(el) {
   }
   colRight.appendChild(usersCard);
 
+  // ── Controles de autorización del POS ───────────────────────────
+  if (isAdmin) {
+    const discountLimit = Number.isFinite(Number(settings.pos_discount_auth_limit_pct))
+      ? Math.min(100, Math.max(0, Number(settings.pos_discount_auth_limit_pct))) : 10;
+    const priceChangeEnabled = settings.pos_price_change_enabled !== '0';
+    const priceReductionLimit = Number.isFinite(Number(settings.pos_price_max_reduction_amount))
+      ? Math.max(0, Number(settings.pos_price_max_reduction_amount)) : 0;
+    const policyCard = h('div', { class: 'card', id: 'cfg-pos-controls-card' });
+    policyCard.innerHTML = `
+      <div class="card-title">Controles del Punto de Venta</div>
+      <div style="font-size:11px;color:var(--muted2);margin:4px 0 14px">
+        Define cuándo el POS debe solicitar autorización para descuentos y cambios manuales de precio.
+      </div>
+
+      <div class="fg">
+        <label class="lbl">Descuento máximo sin contraseña (%)</label>
+        <input class="inp" id="cfg-discount-auth-limit" type="number" min="0" max="100" step="0.01"
+               value="${discountLimit}"/>
+        <div style="font-size:10px;color:var(--muted2);margin-top:4px;line-height:1.45">
+          Aplica únicamente al cajero. Si colocas 15, podrá aplicar hasta 15%; al colocar 16% deberá ingresar la contraseña de un administrador o superadministrador.
+        </div>
+      </div>
+
+      <div style="border-top:1px solid var(--line2);margin:14px 0 12px"></div>
+      <label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer">
+        <input type="checkbox" id="cfg-price-change-enabled" ${priceChangeEnabled ? 'checked' : ''}
+               onchange="document.getElementById('cfg-price-reduction-limit').disabled=!this.checked"/>
+        <span>
+          <strong style="font-size:12px">Permitir al cajero cambiar precios</strong>
+          <span style="display:block;font-size:10px;color:var(--muted2);margin-top:2px">
+            Al desactivarlo, el cajero solo podrá usar Detalle o Mayorista. Administrador y superadministrador conservan acceso libre.
+          </span>
+        </span>
+      </label>
+
+      <div class="fg" style="margin-top:12px">
+        <label class="lbl">Reducción máxima sin clave (RD$ por unidad)</label>
+        <input class="inp" id="cfg-price-reduction-limit" type="number" min="0" max="99999999" step="0.01"
+               value="${priceReductionLimit}" ${priceChangeEnabled ? '' : 'disabled'}/>
+        <div style="font-size:10px;color:var(--muted2);margin-top:4px;line-height:1.45">
+          Aplica únicamente al cajero y se mide desde el menor precio válido entre Detalle y Mayorista. Cero exige la clave para cualquier precio inferior al catálogo; aumentar el precio no consume este límite.
+        </div>
+      </div>`;
+    colRight.appendChild(policyCard);
+  }
+
   // ── Clave especial para cambio de precio en POS ─────────────────
   if (isAdmin) {
     const priceKeyConfigured = settings.pos_price_change_password_set === '1';
@@ -1136,7 +1182,7 @@ async function renderConfiguracion(el) {
         <div>
           <div class="alrt-title">Clave especial del POS</div>
           <div class="alrt-sub">
-            Los cajeros la necesitarán para cambiar el precio final de un producto.
+            El cajero la necesitará cuando una reducción supere el monto permitido por la política anterior.
             No es la contraseña de login del administrador.
           </div>
         </div>
@@ -1244,6 +1290,31 @@ async function guardarConfiguracion() {
     ]) {
       const r = await window.api.settings.set({ key, value, requestUserId: uid });
       if (r && !r.ok) { toast(r.error || 'No se pudo guardar el horario de cierre', 'e'); return; }
+    }
+  }
+  const discountLimitEl = document.getElementById('cfg-discount-auth-limit');
+  if (discountLimitEl) {
+    const discountLimit = Number(discountLimitEl.value);
+    const priceEnabled = document.getElementById('cfg-price-change-enabled')?.checked !== false;
+    const reductionEl = document.getElementById('cfg-price-reduction-limit');
+    const reductionLimit = Number(reductionEl?.value);
+    if (!Number.isFinite(discountLimit) || discountLimit < 0 || discountLimit > 100) {
+      toast('El límite de descuento debe estar entre 0% y 100%', 'e');
+      discountLimitEl.focus();
+      return;
+    }
+    if (!Number.isFinite(reductionLimit) || reductionLimit < 0) {
+      toast('La reducción de precio debe ser un monto válido mayor o igual a cero', 'e');
+      reductionEl?.focus();
+      return;
+    }
+    for (const [key, value] of [
+      ['pos_discount_auth_limit_pct', String(Math.round(discountLimit * 100) / 100)],
+      ['pos_price_change_enabled', priceEnabled ? '1' : '0'],
+      ['pos_price_max_reduction_amount', String(Math.round(reductionLimit * 100) / 100)],
+    ]) {
+      const r = await window.api.settings.set({ key, value, requestUserId: uid });
+      if (r && !r.ok) { toast(r.error || 'No se pudo guardar el control del POS', 'e'); return; }
     }
   }
   const fields = [
