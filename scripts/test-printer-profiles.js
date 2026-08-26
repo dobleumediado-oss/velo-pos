@@ -281,6 +281,15 @@ test('el despacho de etiquetas valida contenido y conserva el alto calculado', (
   assert.ok(source.includes("printerHeight: heightMm ? `${Number(heightMm)}mm` : undefined"));
 });
 
+test('la etiqueta de servicio usa el canal de etiquetas y tamaño 62×40 mm', () => {
+  const printSource = fs.readFileSync(path.join(__dirname, '../src/js/print.js'), 'utf8');
+  const serviceSource = fs.readFileSync(path.join(__dirname, '../src/js/servicio.js'), 'utf8');
+  assert.ok(printSource.includes("servicio_etiqueta: 'etiquetas'"));
+  assert.ok(printSource.includes("category === 'servicio_etiqueta' ? '62mm'"));
+  assert.ok(printSource.includes("category === 'servicio_etiqueta' ? '40mm'"));
+  assert.ok(serviceSource.includes("printHTML(html,'servicio_etiqueta')"));
+});
+
 test('el asistente conserva calibraciones independientes por impresora', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/js/barcode.js'), 'utf8');
   assert.ok(source.includes("function _bcCalibrationKey(printerName)"));

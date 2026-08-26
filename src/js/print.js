@@ -126,6 +126,7 @@ const PRINT_CATEGORIES = {
   caja:         { label: 'Caja, arqueos y cierres',    autoPrintDefault: false, previewDefault: true,  media: 'sheet' },
   inventario:   { label: 'Inventario y etiquetas de anaquel', autoPrintDefault: false, previewDefault: true, media: 'sheet' },
   compras:      { label: 'Compras y recepciones',      autoPrintDefault: false, previewDefault: true,  media: 'sheet' },
+  servicio_etiqueta: { label: 'Etiquetas de servicio técnico', autoPrintDefault: false, previewDefault: true, media: 'label' },
   contabilidad: { label: 'Contabilidad',               autoPrintDefault: false, previewDefault: true,  media: 'sheet' },
   bancos:       { label: 'Bancos',                     autoPrintDefault: false, previewDefault: true,  media: 'sheet' },
   reporte:      { label: 'Reportes',                   autoPrintDefault: false, previewDefault: true,  media: 'sheet' },
@@ -148,6 +149,7 @@ const _DEFAULT_PRINT_CHANNEL = {
   conduce: 'almacen',
   inventario: 'almacen',
   compras: 'almacen',
+  servicio_etiqueta: 'etiquetas',
   contabilidad: 'oficina',
   bancos: 'oficina',
   reporte: 'oficina',
@@ -157,7 +159,7 @@ const _DEFAULT_PRINT_CHANNEL = {
 const _JOB_TYPE_CATEGORY = {
   ticket: 'ticket', factura: 'ticket', test: 'ticket', prueba_plantilla: 'ticket',
   cotizacion: 'cotizacion', conduce: 'conduce',
-  abono: 'pago', pago_proveedor: 'pago',
+  abono: 'pago', pago_proveedor: 'pago', pago_gasto_externo: 'pago',
   cierre: 'caja',
 };
 function _categoryForJobType(jobType) {
@@ -619,6 +621,26 @@ function printReceipt(sale, isReprint = false) {
       const noteBlock = `<div style="margin:8px 0;padding:7px 9px;border:1px solid #e5e7eb;border-radius:5px;font-family:Arial,sans-serif;font-size:10px"><strong>Notas:</strong> ${_escHtml(saleForPlant.notes)}</div>`;
       html = html.includes('</body>') ? html.replace('</body>', noteBlock + '</body>') : html + noteBlock;
     }
+    if ((saleForPlant.type === 'pago_gasto_externo' || saleForPlant.type === 'pago_proveedor') &&
+        templateId !== 'carta_recibo') {
+      const external = saleForPlant.type === 'pago_gasto_externo';
+      const expenseBlock = `<div style="margin:10px 0;padding:9px 11px;border:1px solid #d7dae3;border-radius:6px;font-family:Arial,sans-serif;font-size:10px;break-inside:avoid">
+        <div style="display:flex;justify-content:space-between;gap:12px"><span>Total del gasto</span><strong>${fmt(saleForPlant.expense_total || 0)}</strong></div>
+        <div style="display:flex;justify-content:space-between;gap:12px;margin-top:4px"><span>Balance anterior</span><strong>${fmt(saleForPlant.balance_before || 0)}</strong></div>
+        <div style="display:flex;justify-content:space-between;gap:12px;margin-top:4px"><span>Monto pagado</span><strong>${fmt(saleForPlant.payment_amount || saleForPlant.total || 0)}</strong></div>
+        <div style="display:flex;justify-content:space-between;gap:12px;margin-top:4px;padding-top:4px;border-top:1px solid #d7dae3"><span>Balance pendiente</span><strong>${fmt(saleForPlant.balance_after_payment || 0)}</strong></div>
+        <div style="text-align:center;color:#687080;margin-top:7px">Comprobante interno de pago${external ? ' · No sustituye comprobante fiscal' : ''}</div>
+      </div>`;
+      html = html.includes('</body>') ? html.replace('</body>', expenseBlock + '</body>') : html + expenseBlock;
+    }
+    if (saleForPlant.requires_recipient_signature) {
+      const signatureBlock = `<div style="margin:34px 0 8px;text-align:center;font-family:Arial,sans-serif;font-size:10px;break-inside:avoid">
+        <div style="width:72%;max-width:320px;margin:0 auto;border-top:1px solid #222;padding-top:5px">Firma de quien recibe</div>
+        <strong>${_escHtml(saleForPlant.recipient_signature_name || '')}</strong>
+        ${saleForPlant.recipient_signature_document ? `<div>${_escHtml(saleForPlant.recipient_signature_document)}</div>` : ''}
+      </div>`;
+      html = html.includes('</body>') ? html.replace('</body>', signatureBlock + '</body>') : html + signatureBlock;
+    }
     _openPrintWindow(html, jobType, sale.id, isReprint, {
       printerName: sale.print_printer_name || '',
       profileId: sale.print_profile_id || '',
@@ -1057,47 +1079,80 @@ function printAbono({ payment, customer, cajero, isReprint = false }) {
 }
 
 // ══════════════════════════════════════════════
-// RECIBO DE PAGO A PROVEEDOR 80MM
+// RECIBO DE PAGO DE GASTO 80MM
 // ══════════════════════════════════════════════
-function printPagoProveedor({ payment, expense, cajero }) {
+function printPagoProveedor({ payment, expense, cajero, isReprint = false }) {
   if (!payment || !expense) return;
 
-  const lines = [];
-  lines.push(tCenter(CFG.biz));
-  if (CFG.rnc)   lines.push(tCenter(`RNC: ${CFG.rnc}`));
-  if (CFG.phone) lines.push(tCenter(`Tel: ${CFG.phone}`));
-  lines.push(tline());
-  lines.push(tCenter('*** PAGO A PROVEEDOR ***'));
-  lines.push(tline());
+  const beneficiaryName = String(
+    payment.beneficiary_name || expense.beneficiary_name || ''
+  ).trim();
+  const beneficiaryDocument = String(
+    payment.beneficiary_document || expense.beneficiary_document || ''
+  ).trim();
+  const beneficiaryPhone = String(
+    payment.beneficiary_phone || expense.beneficiary_phone || ''
+  ).trim();
+  const isExternal = payment.document_kind === 'pago_gasto_externo' || !!beneficiaryName;
+  const prefix = isExternal ? 'RGE' : 'PPR';
   const paymentNumber = payment.document_number_fmt
-    || (payment.document_number ? `PPR-${String(payment.document_number).padStart(6, '0')}` : '')
-    || `PPR-${String(payment.id).padStart(6,'0')}`;
-  lines.push(tRow(`No.: ${paymentNumber}`,
-    `Fecha: ${(payment.created_at || today()).split('T')[0].split(' ')[0]}`));
-  lines.push(tRow('Cajero:', (cajero || '').split(' ')[0]));
-  lines.push(tline());
-  lines.push(tRow('Proveedor:', (expense.supplier_name || 'N/A').slice(0, 28)));
-  if (expense.supplier_rnc) lines.push(tRow('RNC:', expense.supplier_rnc));
-  lines.push(tRow('Concepto:', (expense.description || '').slice(0, 28)));
-  if (expense.invoice_number) lines.push(tRow('Factura No.:', expense.invoice_number));
-  lines.push(tline());
-  lines.push(tRow('Total del gasto:', fmt(expense.total || 0)));
-  lines.push(tRow('Balance anterior:', fmt(payment.balance_before || 0)));
-  lines.push(tRow('Monto pagado:', fmt(payment.amount || 0)));
-  lines.push(tlineD());
-  lines.push(tRow('BALANCE PENDIENTE:', fmt(payment.balance_after || 0)));
-  lines.push(tlineD());
-  lines.push('');
-  lines.push(tRow('Método:', (payment.method || 'efectivo').toUpperCase()));
-  if (payment.reference) lines.push(tRow('Referencia:', payment.reference.slice(0, 28)));
-  if (payment.notes)     lines.push(tRow('Nota:', payment.notes.slice(0, 30)));
-  lines.push('');
-  lines.push(tCenter('Comprobante interno de pago'));
-  lines.push(tline());
-  lines.push('');
-  lines.push('');
+    || (payment.document_number ? `${prefix}-${String(payment.document_number).padStart(6, '0')}` : '')
+    || `${prefix}-${String(payment.id).padStart(6,'0')}`;
+  const created = String(payment.created_at || '').replace(' ', 'T');
+  const date = created ? created.slice(0, 10) : today();
+  const time = created && created.length >= 16 ? created.slice(11, 16) : nowt();
+  const partyName = isExternal ? beneficiaryName : String(expense.supplier_name || 'N/A');
+  const partyDocument = isExternal ? beneficiaryDocument : String(expense.supplier_rnc || '');
+  const ticketRoute = _getCategoryConfig('ticket');
+  const amount = Number(payment.amount || 0);
 
-  _sendToPrinter(lines, 'pago_proveedor', payment.id);
+  return printReceipt({
+    id: payment.id,
+    type: isExternal ? 'pago_gasto_externo' : 'pago_proveedor',
+    document_kind: isExternal ? 'pago_gasto_externo' : 'pago_proveedor',
+    document_number: payment.document_number,
+    document_number_fmt: paymentNumber,
+    date,
+    time,
+    cajero: cajero || '',
+    customer_name: partyName,
+    customer_rnc: partyDocument,
+    customer_phone: isExternal ? beneficiaryPhone : String(expense.supplier_phone || ''),
+    items: [{
+      product_code: '',
+      product_name: expense.description || 'Pago de gasto',
+      qty: 1,
+      unit_price: amount,
+      subtotal: amount,
+      taxable: 0,
+      tax_pct: 0,
+      tax_amt: 0,
+      net_subtotal: amount,
+    }],
+    subtotal: amount,
+    tax_pct: 0,
+    tax_amt: 0,
+    total: amount,
+    expense_total: Number(expense.total || amount),
+    payment_amount: amount,
+    paid_amount: amount,
+    balance_before: Number(payment.balance_before || 0),
+    balance_after: Number(payment.balance_after || 0),
+    balance_after_payment: Number(payment.balance_after || 0),
+    payment_method: payment.method || payment.payment_method || expense.payment_method || 'efectivo',
+    payment_reference: payment.reference || '',
+    transaction_number: paymentNumber,
+    notes: [expense.invoice_number ? `Factura del proveedor: ${expense.invoice_number}` : '', payment.notes || '']
+      .filter(Boolean).join(' · '),
+    requires_recipient_signature: isExternal,
+    recipient_signature_name: beneficiaryName,
+    recipient_signature_document: beneficiaryDocument,
+    print_template_id: ticketRoute.template || DB?.settings?.print_template || 'termica_80_clasica',
+    print_printer_name: ticketRoute.printer || DB?.settings?.printer || '',
+    print_profile_id: ticketRoute.profileId || '',
+    print_copies: ticketRoute.copies || 1,
+    print_preview: true,
+  }, isReprint);
 }
 
 // ══════════════════════════════════════════════
@@ -1861,6 +1916,8 @@ function _dispatchPrintHTML(html, category = 'reporte') {
     _printDispatch({
       html,
       printerName: catCfg.printer || (catCfg.bindingConfigured ? '' : _getSavedPrinter()) || undefined,
+      printerWidth: category === 'servicio_etiqueta' ? '62mm' : undefined,
+      printerHeight: category === 'servicio_etiqueta' ? '40mm' : undefined,
       jobType: category,
       referenceId: null,
       userId: user?.id,

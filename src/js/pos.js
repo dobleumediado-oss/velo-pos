@@ -464,7 +464,9 @@ async function posPickUnitAndAdd(prod) {
 
   const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const rows = avail.map(u => {
-    const meta = [u.condition, u.color, u.capacity].filter(Boolean).join(' · ');
+    const meta = [u.condition, u.color, u.capacity,
+      u.battery_health == null ? '' : `Batería ${Number(u.battery_health)}%`,
+      u.sale_description || ''].filter(Boolean).join(' · ');
     const label = esc(u.imei || u.serial || ('#' + u.id));
     return `<button class="btn btn-ghost" style="width:100%;display:flex;justify-content:space-between;gap:10px;margin-bottom:6px;text-align:left" onclick="_posPickUnit(${Number(u.id)})"><span style="font-family:var(--mono)">${label}</span><span style="font-size:11px;color:var(--muted2)">${esc(meta)}</span></button>`;
   }).join('');
@@ -476,7 +478,7 @@ async function posPickUnitAndAdd(prod) {
       pid: prod.id,
       product_id:   prod.id,
       product_code: prod.code,
-      product_name: prod.name,
+      product_name: u.sale_description ? `${prod.name} — ${u.sale_description}` : prod.name,
       name:         `${prod.name} · ${u.imei || u.serial || ('#' + u.id)}`,
       price,
       unit_price:   price,

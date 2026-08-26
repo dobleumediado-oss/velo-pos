@@ -13,6 +13,8 @@ let invCat    = '';
 let invModel  = '';
 let invSort   = 'name';
 let invTab    = 'todos'; // todos | bajo | sin_stock | por_modelo | historial
+let invPage   = 1;
+let invPageSize = 80;
 let invHistSearch = '';
 let invHistRange = 'month';
 let invHistFrom = '';
@@ -114,6 +116,10 @@ function renderInventario(el) {
         class: 'btn btn-out btn-sm',
         onclick: openBuscarImeiModal,
         html: `${svg('search')} Buscar IMEI`
+      }), h('button', {
+        class: 'btn btn-out btn-sm',
+        onclick: openTechDescriptionTemplates,
+        html: `${svg('edit')} Descripciones`
       })] : []),
       h('button', {
         class: 'btn btn-out btn-sm',
@@ -181,6 +187,7 @@ function renderInventario(el) {
           'data-tab': t.k,
           onclick: () => {
             invTab = t.k;
+            invPage = 1;
             // Mover el resaltado 'on' al tab activo sin redibujar todo
             const tabsEl = document.getElementById('inv-tabs');
             if (tabsEl) tabsEl.querySelectorAll('button[data-tab]').forEach(b =>
@@ -200,13 +207,13 @@ function renderInventario(el) {
           class: 'inp', type: 'text',
           placeholder: 'Buscar por nombre, código, marca...',
           value: invSearch,
-          oninput: e => { invSearch = e.target.value; scheduleInvTableRender(); }
+          oninput: e => { invSearch = e.target.value; invPage = 1; scheduleInvTableRender(); }
         })
       ),
       (() => {
         const sel = h('select', {
           class: 'inp', style: { width: '160px' },
-          onchange: e => { invCat = e.target.value; renderInvTable(); }
+          onchange: e => { invCat = e.target.value; invPage = 1; renderInvTable(); }
         });
         [{ v:'', l:'Todas las categorías' }, ...CATS.map(c => ({ v:c, l:c }))].forEach(o => {
           const op = document.createElement('option');
@@ -218,7 +225,7 @@ function renderInventario(el) {
       (() => {
         const sel = h('select', {
           class: 'inp', style: { width: '130px' },
-          onchange: e => { invSort = e.target.value; renderInvTable(); }
+          onchange: e => { invSort = e.target.value; invPage = 1; renderInvTable(); }
         });
         [
           { v:'name',       l:'Nombre A-Z'    },
@@ -363,18 +370,43 @@ function renderInvTable() {
     </tr>`;
   };
 
-  // ── Renderizado incremental ──────────────────────────────────────
-  // Con 1200+ productos, pintar todas las filas de golpe congela la UI un
-  // par de segundos. Pintamos un lote inicial al instante y cargamos el
-  // resto a medida que el usuario hace scroll. Los índices se mantienen
-  // contra el array `prods` completo, así la delegación de eventos no cambia.
-  const BATCH = 80;
-  let rendered = Math.min(BATCH, prods.length);
-  const firstRows = prods.slice(0, rendered).map((p, i) => rowHTML(p, i)).join('');
+  // ── Paginación visible ───────────────────────────────────────────
+  // Todos los productos ya están disponibles en memoria. Mostramos páginas
+  // para que el usuario pueda recorrer el inventario completo sin llenar el
+  // DOM de golpe; "Todos" queda disponible como decisión explícita.
+  const totalRows = prods.length;
+  const showAll = invPageSize === 'all';
+  const pageSize = showAll ? totalRows : Math.max(1, Number(invPageSize) || 80);
+  const totalPages = showAll ? 1 : Math.max(1, Math.ceil(totalRows / pageSize));
+  invPage = Math.max(1, Math.min(Number(invPage) || 1, totalPages));
+  const start = showAll ? 0 : (invPage - 1) * pageSize;
+  const end = showAll ? totalRows : Math.min(start + pageSize, totalRows);
+  const pageRows = prods.slice(start, end)
+    .map((p, i) => rowHTML(p, start + i)).join('');
+
+  const pageSizeOptions = [50, 80, 100, 200].map(n =>
+    `<option value="${n}" ${String(invPageSize) === String(n) ? 'selected' : ''}>${n}</option>`
+  ).join('') + `<option value="all" ${showAll ? 'selected' : ''}>Todos</option>`;
+
+  const pagerButtons = showAll ? '' : `
+    <button class="btn btn-out btn-sm" data-page-action="first" ${invPage <= 1 ? 'disabled' : ''} title="Primera página">«</button>
+    <button class="btn btn-out btn-sm" data-page-action="prev" ${invPage <= 1 ? 'disabled' : ''}>Anterior</button>
+    <span style="font-size:12px;color:var(--muted);padding:0 4px">Página <strong>${invPage}</strong> de ${totalPages}</span>
+    <button class="btn btn-out btn-sm" data-page-action="next" ${invPage >= totalPages ? 'disabled' : ''}>Siguiente</button>
+    <button class="btn btn-out btn-sm" data-page-action="last" ${invPage >= totalPages ? 'disabled' : ''} title="Última página">»</button>`;
 
   const card = document.createElement('div');
   card.className = 'card';
   card.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid var(--line)">
+      <div style="font-size:12px;color:var(--muted)">
+        Mostrando <strong>${start + 1}–${end}</strong> de <strong>${totalRows}</strong> productos
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <label for="inv-page-size" style="font-size:12px;color:var(--muted2)">Productos por página</label>
+        <select id="inv-page-size" class="inp" style="width:92px;padding:7px 9px">${pageSizeOptions}</select>
+      </div>
+    </div>
     <div class="tw">
       <table>
         <thead><tr>
@@ -382,33 +414,31 @@ function renderInvTable() {
           <th>Stock</th><th>Mín</th><th>Precio</th>
           <th>Mayorista</th><th>Costo</th><th>Último cambio</th><th></th>
         </tr></thead>
-        <tbody>${firstRows}</tbody>
+        <tbody>${pageRows}</tbody>
       </table>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:${showAll ? 'flex-end' : 'space-between'};gap:10px;flex-wrap:wrap;padding:12px 16px;border-top:1px solid var(--line)">
+      ${showAll ? '<span style="font-size:12px;color:var(--muted)">Inventario completo visible</span>' : `<span style="font-size:12px;color:var(--muted2)">${end - start} productos en esta página</span>`}
+      <div style="display:flex;align-items:center;gap:6px">${pagerButtons}</div>
     </div>`;
 
-  // Cargar más filas al acercarse al final del scroll
-  if (rendered < prods.length) {
-    const scroller = card.querySelector('.tw');
-    const tbody    = card.querySelector('tbody');
-    const loadMore = () => {
-      if (rendered >= prods.length) return;
-      const next = prods.slice(rendered, rendered + BATCH)
-        .map((p, i) => rowHTML(p, rendered + i)).join('');
-      tbody.insertAdjacentHTML('beforeend', next);
-      rendered += BATCH;
-    };
-    // Scroll dentro del contenedor de la tabla y de la ventana (por si el
-    // contenedor no tiene scroll propio y scrollea la página).
-    scroller.addEventListener('scroll', () => {
-      if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 300) loadMore();
-    });
-    window.addEventListener('scroll', function _wsc() {
-      // Si el card ya no está en el DOM, quitar el listener para no acumular.
-      if (!document.body.contains(card)) { window.removeEventListener('scroll', _wsc); return; }
-      const rect = card.getBoundingClientRect();
-      if (rect.bottom <= window.innerHeight + 400) loadMore();
-    });
-  }
+  card.querySelector('#inv-page-size')?.addEventListener('change', e => {
+    invPageSize = e.target.value === 'all' ? 'all' : Number(e.target.value);
+    invPage = 1;
+    renderInvTable();
+  });
+
+  card.addEventListener('click', e => {
+    const pager = e.target.closest('[data-page-action]');
+    if (!pager || pager.disabled) return;
+    const action = pager.dataset.pageAction;
+    if (action === 'first') invPage = 1;
+    else if (action === 'prev') invPage = Math.max(1, invPage - 1);
+    else if (action === 'next') invPage = Math.min(totalPages, invPage + 1);
+    else if (action === 'last') invPage = totalPages;
+    renderInvTable();
+    document.getElementById('inv-product-filters')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 
   // Delegación de eventos: 1 listener en la tabla en vez de N botones
   card.addEventListener('click', e => {
@@ -451,9 +481,9 @@ window.abrirRegistroEquipos = async function (p) {
     const inStock = units.filter(u => u.status === 'en_stock').length;
     const rows = units.length ? units.map(u => `<tr style="border-top:0.5px solid var(--line2)">
         <td style="padding:6px;font-family:var(--mono);font-size:11px">${esc(u.imei || u.serial || ('#' + u.id))}</td>
-        <td style="padding:6px">${esc(u.condition || '')}${u.color ? (' · ' + esc(u.color)) : ''}${u.capacity ? (' · ' + esc(u.capacity)) : ''}</td>
+        <td style="padding:6px">${esc(u.condition || '')}${u.color ? (' · ' + esc(u.color)) : ''}${u.capacity ? (' · ' + esc(u.capacity)) : ''}${u.battery_health!=null?` · Batería ${Number(u.battery_health)}%`:''}${u.battery_capacity_mah?` · ${Number(u.battery_capacity_mah)} mAh`:''}<div class="ts">${esc(u.sale_description||'')}</div></td>
         <td style="padding:6px;text-align:right;font-family:var(--mono)">${money(u.unit_cost)}</td>
-        <td style="padding:6px">${u.warranty_until ? esc(u.warranty_until) : '—'} <button class="btn btn-ghost btn-sm" data-warranty-unit="${u.id}" data-warranty-date="${esc(u.warranty_until||'')}" title="Editar garantía">${svg('edit')}</button></td>
+        <td style="padding:6px">${u.warranty_until ? esc(u.warranty_until) : '—'} <button class="btn btn-ghost btn-sm" data-warranty-unit="${u.id}" data-warranty-date="${esc(u.warranty_until||'')}" title="Editar garantía">${svg('edit')}</button> <button class="btn btn-ghost btn-sm" data-detail-unit="${u.id}" title="Editar datos del equipo">Detalles</button></td>
         <td style="padding:6px">${badge(u.status)}</td></tr>`).join('')
       : `<tr><td colspan="5" style="padding:10px;color:var(--muted2);text-align:center">Sin equipos registrados</td></tr>`;
     return `
@@ -470,6 +500,11 @@ window.abrirRegistroEquipos = async function (p) {
         <input class="inp" id="eq-warranty" type="date" title="Garantía hasta">
         <button class="btn btn-dark" id="eq-add">Registrar equipo</button>
       </div>
+      <div style="display:grid;grid-template-columns:.7fr .8fr 1.8fr;gap:8px;margin-bottom:12px">
+        <input class="inp" id="eq-health" type="number" min="0" max="100" placeholder="Batería %">
+        <input class="inp" id="eq-battery-mah" type="number" min="0" max="100000" placeholder="Capacidad mAh">
+        <input class="inp" id="eq-description" list="eq-description-list" placeholder="Descripción que saldrá en la factura"><datalist id="eq-description-list"></datalist>
+      </div>
       <details style="margin-bottom:12px;border:1px solid var(--line);border-radius:10px;padding:10px 12px">
         <summary style="cursor:pointer;font-weight:700;font-size:12px">Recepción masiva por IMEI / escáner</summary>
         <div class="ts" style="margin:8px 0">Pega o escanea un IMEI/serial por línea. La condición, costo, color, capacidad y garantía indicados arriba se aplicarán al lote.</div>
@@ -481,7 +516,7 @@ window.abrirRegistroEquipos = async function (p) {
         <tbody>${rows}</tbody></table></div>
       <div style="display:flex;justify-content:flex-end;margin-top:12px"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>`;
   };
-  const wire = () => {
+  const wire = (units = []) => {
     const addBtn = document.getElementById('eq-add');
     if (!addBtn) return;
     const sharedUnit = imei => ({
@@ -491,6 +526,9 @@ window.abrirRegistroEquipos = async function (p) {
       color: document.getElementById('eq-color')?.value.trim() || '',
       capacity: document.getElementById('eq-cap')?.value.trim() || '',
       warranty_until: document.getElementById('eq-warranty')?.value || null,
+      battery_health: document.getElementById('eq-health')?.value || null,
+      battery_capacity_mah: document.getElementById('eq-battery-mah')?.value || null,
+      sale_description: document.getElementById('eq-description')?.value.trim() || '',
     });
     const saveUnits = async (identifiers, button) => {
       const unique = [...new Set(identifiers.map(value => String(value || '').trim()).filter(Boolean))];
@@ -506,8 +544,8 @@ window.abrirRegistroEquipos = async function (p) {
         toast(`✓ ${res.created} equipo${res.created === 1 ? '' : 's'} registrado${res.created === 1 ? '' : 's'}`, 's');
         await reloadProducts();
         renderInvCurrentView();
-        openModal(render(await fetchUnits()));
-        wire();
+        const refreshed=await fetchUnits();openModal(render(refreshed));
+        wire(refreshed);
       } catch (e) { toast(e.message || 'Error al registrar', 'e'); button.disabled = false; }
     };
     addBtn.onclick = () => saveUnits([document.getElementById('eq-imei')?.value], addBtn);
@@ -530,12 +568,34 @@ window.abrirRegistroEquipos = async function (p) {
         const res = await window.api.productUnits.updateWarranty({ unitId:Number(btn.dataset.warrantyUnit), warrantyUntil:value.trim(), requestUserId:user?.id });
         if (!res?.ok) { toast(res?.error || 'No se pudo actualizar la garantía', 'err'); return; }
         toast('✓ Garantía actualizada', 'ok');
-        openModal(render(await fetchUnits())); wire();
+        const refreshed=await fetchUnits();openModal(render(refreshed)); wire(refreshed);
+      };
+    });
+    window.api.techDescriptions?.list({requestUserId:user?.id}).then(res=>{
+      const list=document.getElementById('eq-description-list');
+      if(list&&res?.ok)list.innerHTML=(res.data||[]).map(row=>`<option value="${esc(row.description)}">${esc(row.name)}</option>`).join('');
+    }).catch(()=>{});
+    document.querySelectorAll('[data-detail-unit]').forEach(btn=>{
+      btn.onclick=()=>{
+        const unit=units.find(row=>Number(row.id)===Number(btn.dataset.detailUnit));
+        if(!unit)return;
+        openModal(`<div class="modal-title">Datos comerciales del equipo</div><div class="modal-sub">${esc(unit.imei||unit.serial||'#'+unit.id)}</div><div class="g2"><div class="fg"><label class="lbl">Color</label><input class="inp" id="eqd-color" value="${esc(unit.color||'')}"></div><div class="fg"><label class="lbl">Capacidad</label><input class="inp" id="eqd-capacity" value="${esc(unit.capacity||'')}"></div></div><div class="g2"><div class="fg"><label class="lbl">Condición batería (%)</label><input class="inp" id="eqd-health" type="number" min="0" max="100" value="${unit.battery_health??''}"></div><div class="fg"><label class="lbl">Capacidad batería (mAh)</label><input class="inp" id="eqd-mah" type="number" min="0" max="100000" value="${unit.battery_capacity_mah??''}"></div></div><div class="fg"><label class="lbl">Descripción para la factura</label><textarea class="inp" id="eqd-description" rows="3">${esc(unit.sale_description||'')}</textarea></div><div class="fg"><label class="lbl">Notas internas</label><textarea class="inp" id="eqd-notes" rows="2">${esc(unit.notes||'')}</textarea></div><div class="modal-foot"><button class="btn btn-out" onclick="abrirRegistroEquipos(DB.products.find(p=>Number(p.id)===${Number(p.id)}))">Atrás</button><button class="btn btn-dark" id="eqd-save">Guardar</button></div>`);
+        document.getElementById('eqd-save').onclick=async()=>{const saved=await window.api.productUnits.updateDetails({unitId:unit.id,requestUserId:user?.id,data:{color:document.getElementById('eqd-color').value,capacity:document.getElementById('eqd-capacity').value,battery_health:document.getElementById('eqd-health').value,battery_capacity_mah:document.getElementById('eqd-mah').value,sale_description:document.getElementById('eqd-description').value,notes:document.getElementById('eqd-notes').value}});if(!saved?.ok)return toast(saved?.error||'No se pudo guardar','err');toast('✓ Equipo actualizado','ok');abrirRegistroEquipos(p);};
       };
     });
   };
-  openModal(render(await fetchUnits()));
-  wire();
+  const initialUnits=await fetchUnits();openModal(render(initialUnits));
+  wire(initialUnits);
+};
+
+window.openTechDescriptionTemplates = async function () {
+  const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const res=await window.api.techDescriptions.list({requestUserId:user?.id});
+  if(!res?.ok)return toast(res?.error||'No se pudieron cargar las descripciones','err');
+  const rows=res.data||[];
+  openModal(`<div class="modal-title">Descripciones guardadas</div><div class="modal-sub">Úsalas en equipos usados. La descripción elegida se imprime en la factura cuando se venda esa unidad.</div><div style="display:grid;gap:7px;margin:14px 0;max-height:240px;overflow:auto">${rows.map(row=>`<div class="card" style="padding:10px;display:flex;justify-content:space-between;gap:12px"><div><div class="tb">${esc(row.name)}</div><div class="ts">${esc(row.description)}</div></div><button class="btn btn-ghost btn-sm" data-desc-delete="${row.id}" style="color:var(--red)">${svg('trash')}</button></div>`).join('')||'<div class="ts">Todavía no hay descripciones guardadas.</div>'}</div><div class="fg"><label class="lbl">Nombre corto *</label><input class="inp" id="desc-name" placeholder="IPHONE USADO GRADO A"></div><div class="fg"><label class="lbl">Descripción que verá el cliente *</label><textarea class="inp" id="desc-text" rows="3" placeholder="EQUIPO USADO PROBADO, DESBLOQUEADO Y EN BUEN ESTADO..."></textarea></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button><button class="btn btn-dark" id="desc-save">Guardar descripción</button></div>`);
+  document.getElementById('desc-save').onclick=async()=>{const saved=await window.api.techDescriptions.save({requestUserId:user?.id,data:{name:document.getElementById('desc-name').value.trim(),description:document.getElementById('desc-text').value.trim()}});if(!saved?.ok)return toast(saved?.error||'No se pudo guardar','err');toast('✓ Descripción guardada','ok');openTechDescriptionTemplates();};
+  document.querySelectorAll('[data-desc-delete]').forEach(button=>button.onclick=async()=>{const removed=await window.api.techDescriptions.delete({requestUserId:user?.id,id:Number(button.dataset.descDelete)});if(!removed?.ok)return toast(removed?.error||'No se pudo eliminar','err');openTechDescriptionTemplates();});
 };
 
 // Búsqueda operacional por IMEI/serial. Además del estado de la unidad muestra
@@ -1437,7 +1497,7 @@ function openProductoModal(p = null) {
         <div class="fg"><label class="lbl">IMEI / Serial del primer equipo</label><input class="inp" id="pf-imei" type="text" placeholder="356000000000000" data-uppercase="off" autocomplete="off"/></div>
         <div class="fg"><label class="lbl">Capacidad</label><input class="inp" id="pf-capacity" type="text" placeholder="128GB" data-uppercase="off"/></div>
         <div class="fg"><label class="lbl">Color</label><input class="inp" id="pf-color-eq" type="text" placeholder="Negro" data-uppercase="off"/></div>
-      </div>`}
+      </div><div class="g3"><div class="fg"><label class="lbl">Condición batería (%)</label><input class="inp" id="pf-battery-health" type="number" min="0" max="100" placeholder="86"></div><div class="fg"><label class="lbl">Capacidad batería (mAh)</label><input class="inp" id="pf-battery-mah" type="number" min="0" max="100000" placeholder="3279"></div><div class="fg"><label class="lbl">Descripción para factura</label><input class="inp" id="pf-sale-description" placeholder="Estado del equipo usado"></div></div>`}
     </div>` : ''}
     <div id="pf-stock-fields" style="display:${window._vertical?.serialized && isSerialized ? 'none' : 'block'}">
       <div style="font-weight:700;font-size:12px;margin-bottom:10px">Stock</div>
@@ -1661,6 +1721,9 @@ async function guardarProducto(id) {
             unit_cost: cost,
             capacity: document.getElementById('pf-capacity')?.value?.trim() || '',
             color:    document.getElementById('pf-color-eq')?.value?.trim() || '',
+            battery_health: document.getElementById('pf-battery-health')?.value || null,
+            battery_capacity_mah: document.getElementById('pf-battery-mah')?.value || null,
+            sale_description: document.getElementById('pf-sale-description')?.value?.trim() || '',
           }],
           requestUserId: user.id,
         });

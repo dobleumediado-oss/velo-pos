@@ -206,7 +206,7 @@ const {
   expensesRepo, branchesRepo, vehiclesRepo, maintenanceRepo, deliveriesRepo, ncfRepo,
   financialAccountsRepo, bankReconRepo, accountingRepo, fixedAssetsRepo, conduceRepo, documentNumberRepo, salespeopleRepo,
   checkoutOrdersRepo, saleCorrectionsRepo, ensureUppercasePersistence, crmRepo,
-  productUnitsRepo, serviceOrdersRepo
+  productUnitsRepo, serviceOrdersRepo, techPrivatePurchasesRepo, techDescriptionTemplatesRepo
 } = require('./database');
 
 const {
@@ -1706,6 +1706,16 @@ ipcMain.handle('productUnits:updateWarranty', async (_, { unitId, warrantyUntil,
   } catch (e) { return { ok:false, error:e.message }; }
 });
 
+ipcMain.handle('productUnits:updateDetails', async (_, { unitId, data, requestUserId } = {}) => {
+  try {
+    const reqUser = _inventoryAuthorizedUser(requestUserId);
+    const unit = productUnitsRepo.updateDetails(unitId, data || {});
+    audit(reqUser.id, reqUser.name, 'equipo_detalle_actualizado', 'product_units', unit.id,
+      `${unit.imei || unit.serial || '#' + unit.id} · batería ${unit.battery_health ?? 'N/D'}%`);
+    return { ok:true, data:unit };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+
 // ── Órdenes de servicio / reparación (VELO TECH POS R6) ────────────────────
 function _serviceOrdersEnabled() {
   const active = require('./src/verticals').getActiveVertical();
@@ -1722,6 +1732,15 @@ ipcMain.handle('serviceOrders:list', async (_, data = {}) => {
     _serviceUser(data.requestUserId);
     return { ok: true, data: serviceOrdersRepo.list(data) };
   } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('serviceOrders:getIntakeConfig', async (_, data = {}) => {
+  try {
+    _serviceUser(data.requestUserId);
+    return { ok:true,data:{
+      default_warranty_days:Math.max(0, Math.min(3650,
+        Number(settingsRepo.get('service_default_warranty_days')) || 0)),
+    }};
+  } catch (e) { return { ok:false,error:e.message }; }
 });
 ipcMain.handle('serviceOrders:getById', async (_, data = {}) => {
   try {
@@ -6023,6 +6042,79 @@ ipcMain.handle('purchases:cancel', async (_, { id, userId }) => {
   catch(e) { return { ok: false, error: e.message }; }
 });
 
+function _techPurchasesUser(requestUserId) {
+  const active = require('./src/verticals').getActiveVertical();
+  if (active.id !== 'tech') throw new Error('Esta función solo está disponible en VELO TECH POS');
+  return _moduleAuthorizedUser(requestUserId, 'compras');
+}
+
+ipcMain.handle('techPrivatePurchases:list', async (_, data = {}) => {
+  try { _techPurchasesUser(data.requestUserId); return { ok:true,data:techPrivatePurchasesRepo.list(data) }; }
+  catch (e) { return { ok:false,error:e.message }; }
+});
+ipcMain.handle('techPrivatePurchases:getById', async (_, data = {}) => {
+  try { _techPurchasesUser(data.requestUserId); return { ok:true,data:techPrivatePurchasesRepo.getById(data.id) }; }
+  catch (e) { return { ok:false,error:e.message }; }
+});
+ipcMain.handle('techPrivatePurchases:create', async (_, data = {}) => {
+  try {
+    const reqUser = _techPurchasesUser(data.requestUserId);
+    const result = techPrivatePurchasesRepo.create(data.data || {}, reqUser, cashRepo.getOpen(_reqTerminalId()));
+    return { ok:true,...result };
+  } catch (e) { return { ok:false,error:e.message }; }
+});
+ipcMain.handle('techPrivatePurchases:getConfig', async (_, data = {}) => {
+  try {
+    const reqUser = _techPurchasesUser(data.requestUserId);
+    return { ok:true,data:{
+      terms:String(settingsRepo.get('tech_private_purchase_terms') || ''),
+      default_warranty_days:Number(settingsRepo.get('service_default_warranty_days')) || 30,
+      descriptions:techDescriptionTemplatesRepo.list(),
+      can_manage:['admin','superadmin'].includes(reqUser.role),
+    }};
+  } catch (e) { return { ok:false,error:e.message }; }
+});
+ipcMain.handle('techPrivatePurchases:saveConfig', async (_, data = {}) => {
+  try {
+    const reqUser = _techPurchasesUser(data.requestUserId);
+    if (!['admin','superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede cambiar estos términos');
+    const terms = String(data.terms || '').trim();
+    if (terms.length < 80) throw new Error('Los términos deben explicar claramente la compra y la procedencia del equipo');
+    settingsRepo.set('tech_private_purchase_terms', terms.slice(0,10000));
+    settingsRepo.set('service_default_warranty_days', String(Math.max(0,Math.min(3650,Number(data.default_warranty_days)||0))));
+    audit(reqUser.id,reqUser.name,'tech_terminos_actualizados','settings',0,'Términos de compra y garantía predeterminada');
+    return { ok:true };
+  } catch (e) { return { ok:false,error:e.message }; }
+});
+ipcMain.handle('techDescriptions:save', async (_, data = {}) => {
+  try {
+    const reqUser = _inventoryAuthorizedUser(data.requestUserId);
+    const active = require('./src/verticals').getActiveVertical();
+    if (active.id !== 'tech') throw new Error('Esta función solo está disponible en VELO TECH POS');
+    const id = techDescriptionTemplatesRepo.save(data.data || {}, reqUser.id);
+    audit(reqUser.id,reqUser.name,'descripcion_equipo_guardada','tech_description_templates',id,data.data?.name||'');
+    return { ok:true,id,data:techDescriptionTemplatesRepo.list() };
+  } catch (e) { return { ok:false,error:e.message }; }
+});
+ipcMain.handle('techDescriptions:list', async (_, data = {}) => {
+  try {
+    _inventoryAuthorizedUser(data.requestUserId);
+    const active = require('./src/verticals').getActiveVertical();
+    if (active.id !== 'tech') throw new Error('Esta función solo está disponible en VELO TECH POS');
+    return { ok:true,data:techDescriptionTemplatesRepo.list() };
+  } catch (e) { return { ok:false,error:e.message }; }
+});
+ipcMain.handle('techDescriptions:delete', async (_, data = {}) => {
+  try {
+    const reqUser = _inventoryAuthorizedUser(data.requestUserId);
+    const active = require('./src/verticals').getActiveVertical();
+    if (active.id !== 'tech') throw new Error('Esta función solo está disponible en VELO TECH POS');
+    techDescriptionTemplatesRepo.remove(data.id);
+    audit(reqUser.id,reqUser.name,'descripcion_equipo_eliminada','tech_description_templates',data.id,'');
+    return { ok:true,data:techDescriptionTemplatesRepo.list() };
+  } catch (e) { return { ok:false,error:e.message }; }
+});
+
 
 
 
@@ -6806,6 +6898,18 @@ ipcMain.handle('expenses:create', async (_, { data, requestUserId }) => {
   try {
     const u = _moduleAuthorizedUser(requestUserId, 'gastos');
 
+    const beneficiaryName = String(data.beneficiary_name || '').trim();
+    const beneficiaryDocument = String(data.beneficiary_document || '').trim();
+    if (beneficiaryName && !beneficiaryDocument) {
+      return { ok:false, error:'La cédula o pasaporte del beneficiario externo es obligatorio' };
+    }
+    if (beneficiaryDocument && !beneficiaryName) {
+      return { ok:false, error:'El nombre del beneficiario externo es obligatorio' };
+    }
+    data.beneficiary_name = beneficiaryName;
+    data.beneficiary_document = beneficiaryDocument;
+    data.beneficiary_phone = String(data.beneficiary_phone || '').trim();
+
     // Verificar límite de cajero
     const cfg = expensesRepo.getConfig();
     const cajeroLimit = parseFloat(cfg.cajero_limit || 1500);
@@ -6866,7 +6970,17 @@ ipcMain.handle('expenses:create', async (_, { data, requestUserId }) => {
       accountingRepo.generateExpenseAccrualEntry({ expenseId: id, userId: requestUserId });
       if (autoPay?.paymentId) accountingRepo.generateExpensePaymentEntry({ paymentId: autoPay.paymentId, userId: requestUserId });
     });
-    return { ok:true, id, status: autoPay?.newStatus || status, paid: !!autoPay, payWarning };
+    return {
+      ok:true,
+      id,
+      status: autoPay?.newStatus || status,
+      paid: !!autoPay,
+      payWarning,
+      paymentId: autoPay?.paymentId || null,
+      documentKind: autoPay?.documentKind || '',
+      documentNumber: autoPay?.documentNumber || null,
+      documentNumberFmt: autoPay?.documentNumberFmt || '',
+    };
   } catch(e) { return { ok:false, error:e.message }; }
 });
 

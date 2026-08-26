@@ -55,11 +55,13 @@ const api = {
     setSerialized:  (data) => ipcRenderer.invoke('productUnits:setSerialized', data),
     create:         (data) => ipcRenderer.invoke('productUnits:create', data),
     updateWarranty: (data) => ipcRenderer.invoke('productUnits:updateWarranty', data),
+    updateDetails:  (data) => ipcRenderer.invoke('productUnits:updateDetails', data),
   },
 
   // ── Servicio / reparación (VELO TECH POS) ────────────────
   serviceOrders: {
     list:    (data) => ipcRenderer.invoke('serviceOrders:list', data),
+    getIntakeConfig: (data) => ipcRenderer.invoke('serviceOrders:getIntakeConfig', data),
     getById: (data) => ipcRenderer.invoke('serviceOrders:getById', data),
     create:  (data) => ipcRenderer.invoke('serviceOrders:create', data),
     update:  (data) => ipcRenderer.invoke('serviceOrders:update', data),
@@ -367,6 +369,19 @@ const api = {
     create:   (data)      => ipcRenderer.invoke('purchases:create', data),
     receive:  (data)      => ipcRenderer.invoke('purchases:receive', data),
     cancel:   (data)      => ipcRenderer.invoke('purchases:cancel', data),
+  },
+
+  techPrivatePurchases: {
+    list:       (data) => ipcRenderer.invoke('techPrivatePurchases:list', data),
+    getById:    (data) => ipcRenderer.invoke('techPrivatePurchases:getById', data),
+    create:     (data) => ipcRenderer.invoke('techPrivatePurchases:create', data),
+    getConfig:  (data) => ipcRenderer.invoke('techPrivatePurchases:getConfig', data),
+    saveConfig: (data) => ipcRenderer.invoke('techPrivatePurchases:saveConfig', data),
+  },
+  techDescriptions: {
+    list:   (data) => ipcRenderer.invoke('techDescriptions:list', data),
+    save:   (data) => ipcRenderer.invoke('techDescriptions:save', data),
+    delete: (data) => ipcRenderer.invoke('techDescriptions:delete', data),
   },
 
   // ── Diagnóstico del sistema ───────────────

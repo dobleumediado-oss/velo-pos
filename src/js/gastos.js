@@ -244,7 +244,7 @@ async function renderListaGastos(el, user) {
   // Filtros
   el.innerHTML = `
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
-      <input id="gf-search" class="inp" placeholder="Buscar descripción..." style="width:180px;font-size:12px">
+      <input id="gf-search" class="inp" placeholder="Buscar descripción o beneficiario..." style="width:230px;font-size:12px">
       <input id="gf-from" type="date" class="inp" style="width:130px;font-size:12px" value="${_gThisMonth()}-01">
       <input id="gf-to"   type="date" class="inp" style="width:130px;font-size:12px" value="${_gToday()}">
       <select id="gf-status" class="inp" style="width:160px;font-size:12px">
@@ -279,7 +279,8 @@ async function renderListaGastos(el, user) {
       if (!res.ok) throw new Error(res.error);
       let data = res.data;
       if (search) data = data.filter(e => matchText(e.description, search) ||
-        matchText(e.supplier_name, search));
+        matchText(e.supplier_name, search) || matchText(e.beneficiary_name, search) ||
+        matchText(e.beneficiary_document, search));
 
       if (!data.length) {
         wrap.innerHTML = `<div style="text-align:center;padding:40px;color:var(--muted2)">
@@ -295,7 +296,7 @@ async function renderListaGastos(el, user) {
                 <th style="padding:8px">Fecha</th>
                 <th style="padding:8px">Descripción</th>
                 <th style="padding:8px">Categoría</th>
-                <th style="padding:8px">Proveedor</th>
+                <th style="padding:8px">Proveedor / beneficiario</th>
                 <th style="padding:8px;text-align:right">Total</th>
                 <th style="padding:8px;text-align:right">Pagado</th>
                 <th style="padding:8px;text-align:right">Saldo</th>
@@ -309,7 +310,7 @@ async function renderListaGastos(el, user) {
                   <td style="padding:8px;color:var(--muted2)">${_gFmtDate(e.issue_date)}</td>
                   <td style="padding:8px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.description}</td>
                   <td style="padding:8px;color:var(--muted2)">${e.category_name||'—'}</td>
-                  <td style="padding:8px;color:var(--muted2)">${e.supplier_name||'—'}</td>
+                  <td style="padding:8px;color:var(--muted2)">${e.beneficiary_name||e.supplier_name||'—'}</td>
                   <td style="padding:8px;text-align:right;font-weight:600">${_gFmt(e.total)}</td>
                   <td style="padding:8px;text-align:right;color:var(--green,#00c07a)">${_gFmt(e.paid_amount)}</td>
                   <td style="padding:8px;text-align:right;color:${e.total-e.paid_amount>0?'var(--amber,#f59e0b)':'var(--muted2)'}">${_gFmt(e.total-e.paid_amount)}</td>
@@ -323,6 +324,9 @@ async function renderListaGastos(el, user) {
                       ` : ''}
                       ${['admin','superadmin'].includes(user.role) && ['pendiente_pago','parcialmente_pagado','aprobado','pendiente_aprobacion'].includes(e.status) ? `
                         <button class="btn btn-ghost btn-sm" style="color:var(--blue)" onclick="pagarGasto(${e.id},${e.total-e.paid_amount})" title="Pagar (aprueba automáticamente)">${svg('dollar')}</button>
+                      ` : ''}
+                      ${Number(e.paid_amount || 0) > 0 ? `
+                        <button class="btn btn-ghost btn-sm" onclick="imprimirGasto(${e.id})" title="Imprimir último recibo">${svg('print')}</button>
                       ` : ''}
                       ${['admin','superadmin'].includes(user.role) && !['anulado','rechazado'].includes(e.status) ? `
                         <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="anularGasto(${e.id})" title="Anular">${svg('xmark')}</button>
@@ -716,7 +720,9 @@ function abrirModal(titulo, contenidoHTML, onConfirm, confirmLabel='Guardar') {
 
 function modalNuevoGasto(parentEl, user) {
   const padres = _categorias.filter(c => !c.parent_id);
-  const proveedores = [];
+  const externalCommission = _categorias.find(c =>
+    String(c.name || '').toLocaleLowerCase('es') === 'comisiones externas'
+  );
   window.api.suppliers.getAll().then(res => {
     const sel  = document.getElementById('gasto-supplier');
     const list = res?.ok ? (res.data || []) : [];
@@ -742,8 +748,28 @@ function modalNuevoGasto(parentEl, user) {
           return `<optgroup label="${p.name}">${subs.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</optgroup>`;
         }).join('')}
       </select></div>
-    <div class="fg"><label class="lbl">Proveedor</label>
+    <div class="fg"><label class="lbl">¿A quién se paga? *</label>
+      <select class="inp" id="gasto-beneficiary-type">
+        <option value="proveedor">Proveedor registrado</option>
+        <option value="persona_externa">Persona externa (comisión u honorario)</option>
+        <option value="ninguno">Sin beneficiario</option>
+      </select>
+      <div style="font-size:11px;color:var(--muted2);margin-top:4px">Una persona externa no se registra como empleado ni vendedor.</div>
+    </div>
+    <div class="fg" id="gasto-supplier-wrap"><label class="lbl">Proveedor</label>
       <select class="inp" id="gasto-supplier"><option value="">— Sin proveedor —</option></select></div>
+    <div id="gasto-external-wrap" style="display:none;background:var(--surface,#f8fafc);border:1px solid var(--line2,#e5e7eb);border-radius:10px;padding:12px;margin-bottom:12px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:9px">Datos de la persona que recibe</div>
+      <div class="fg"><label class="lbl">Nombre completo *</label>
+        <input class="inp" id="gasto-beneficiary-name" maxlength="120" placeholder="Ej: JUAN PÉREZ"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="fg"><label class="lbl">Cédula o pasaporte *</label>
+          <input class="inp" id="gasto-beneficiary-document" maxlength="40" placeholder="Documento de identidad"></div>
+        <div class="fg"><label class="lbl">Teléfono</label>
+          <input class="inp" id="gasto-beneficiary-phone" maxlength="40" placeholder="809-000-0000"></div>
+      </div>
+      <div style="font-size:11px;color:var(--muted2)">Estos datos aparecerán en el recibo de pago firmable.</div>
+    </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div class="fg"><label class="lbl">Monto total *</label>
         <input class="inp" id="gasto-amount" type="number" min="0" step="0.01" placeholder="0.00"></div>
@@ -770,19 +796,31 @@ function modalNuevoGasto(parentEl, user) {
         <b>Pagar ahora</b> — se registra como <b>pagado</b> (si no lo marcas, queda como cuenta por pagar)
       </label>
     </div>
-    <div class="fg"><label class="lbl">No. Factura del proveedor</label>
-      <input class="inp" id="gasto-invoice" placeholder="Ej: FAC-00123"></div>
-    <div class="fg"><label class="lbl">NCF</label>
-      <input class="inp" id="gasto-ncf" placeholder="Ej: B0100000001"></div>
+    <div id="gasto-supplier-docs-wrap">
+      <div class="fg"><label class="lbl">No. Factura del proveedor</label>
+        <input class="inp" id="gasto-invoice" placeholder="Ej: FAC-00123"></div>
+      <div class="fg"><label class="lbl">NCF</label>
+        <input class="inp" id="gasto-ncf" placeholder="Ej: B0100000001"></div>
+    </div>
     <div class="fg"><label class="lbl">Notas internas</label>
       <textarea class="inp" id="gasto-notes" rows="2" placeholder="Observaciones..."></textarea></div>`;
 
-  abrirModal('Registrar gasto', html, async (overlay) => {
+  const modal = abrirModal('Registrar gasto', html, async (overlay) => {
     const desc   = overlay.querySelector('#gasto-desc')?.value.trim();
     const amount = parseFloat(overlay.querySelector('#gasto-amount')?.value);
     const tax    = parseFloat(overlay.querySelector('#gasto-tax')?.value||'0');
+    const beneficiaryType = overlay.querySelector('#gasto-beneficiary-type')?.value || 'proveedor';
+    const beneficiaryName = overlay.querySelector('#gasto-beneficiary-name')?.value.trim() || '';
+    const beneficiaryDocument = overlay.querySelector('#gasto-beneficiary-document')?.value.trim() || '';
+    const beneficiaryPhone = overlay.querySelector('#gasto-beneficiary-phone')?.value.trim() || '';
     if (!desc) throw new Error('La descripción es obligatoria');
     if (!amount || amount <= 0) throw new Error('El monto debe ser mayor a cero');
+    if (beneficiaryType === 'persona_externa' && !beneficiaryName) {
+      throw new Error('El nombre de la persona externa es obligatorio');
+    }
+    if (beneficiaryType === 'persona_externa' && !beneficiaryDocument) {
+      throw new Error('La cédula o pasaporte de la persona externa es obligatorio');
+    }
 
     const method = overlay.querySelector('#gasto-method')?.value;
     const payNow = method !== 'credito' && !!overlay.querySelector('#gasto-paynow')?.checked;
@@ -791,12 +829,17 @@ function modalNuevoGasto(parentEl, user) {
         type:           overlay.querySelector('#gasto-type')?.value,
         description:    desc,
         category_id:    overlay.querySelector('#gasto-cat')?.value || null,
-        supplier_id:    overlay.querySelector('#gasto-supplier')?.value || null,
+        supplier_id:    beneficiaryType === 'proveedor'
+          ? (overlay.querySelector('#gasto-supplier')?.value || null)
+          : null,
+        beneficiary_name: beneficiaryType === 'persona_externa' ? beneficiaryName : '',
+        beneficiary_document: beneficiaryType === 'persona_externa' ? beneficiaryDocument : '',
+        beneficiary_phone: beneficiaryType === 'persona_externa' ? beneficiaryPhone : '',
         amount,
         tax_amount:     isNaN(tax) ? 0 : tax,
         total:          amount,
         payment_method: method,
-        payment_source: method === 'credito' ? 'pendiente' : 'caja',
+        payment_source: method === 'credito' ? 'pendiente' : (method === 'efectivo' ? 'caja' : 'banco'),
         pay_now:        payNow,
         issue_date:     overlay.querySelector('#gasto-date')?.value,
         due_date:       overlay.querySelector('#gasto-due')?.value || null,
@@ -811,8 +854,54 @@ function modalNuevoGasto(parentEl, user) {
       ? '✓ Gasto registrado y pagado'
       : `✓ Gasto registrado${res.status==='pendiente_aprobacion'?' — pendiente de aprobación':' — como cuenta por pagar'}${res.payWarning ? ' (no se pudo pagar: '+res.payWarning+')' : ''}`,
       res.payWarning ? 'w' : 's');
+
+    // El pago inmediato también genera su comprobante; antes solo se imprimían
+    // los pagos registrados posteriormente desde Cuentas por Pagar.
+    if (res.paid && res.paymentId && typeof printPagoProveedor === 'function') {
+      try {
+        const expRes = await window.api.expenses.getById({ id: res.id });
+        if (expRes?.ok && expRes.data) {
+          printPagoProveedor({
+            payment: {
+              id: res.paymentId,
+              document_kind: res.documentKind,
+              document_number: res.documentNumber,
+              document_number_fmt: res.documentNumberFmt,
+              amount,
+              method,
+              balance_before: amount,
+              balance_after: 0,
+              created_at: new Date().toISOString(),
+            },
+            expense: expRes.data,
+            cajero: user.name,
+          });
+        }
+      } catch (error) {
+        console.error('[gastos] error al imprimir pago inmediato', error);
+      }
+    }
     renderGastos(parentEl.closest('#main-content') || parentEl);
   }, 'Registrar gasto');
+
+  const beneficiaryType = modal?.querySelector('#gasto-beneficiary-type');
+  const syncBeneficiaryFields = () => {
+    const value = beneficiaryType?.value || 'proveedor';
+    const isSupplier = value === 'proveedor';
+    const isExternal = value === 'persona_externa';
+    const supplierWrap = modal?.querySelector('#gasto-supplier-wrap');
+    const externalWrap = modal?.querySelector('#gasto-external-wrap');
+    const supplierDocs = modal?.querySelector('#gasto-supplier-docs-wrap');
+    if (supplierWrap) supplierWrap.style.display = isSupplier ? '' : 'none';
+    if (externalWrap) externalWrap.style.display = isExternal ? '' : 'none';
+    if (supplierDocs) supplierDocs.style.display = isSupplier ? '' : 'none';
+    if (isExternal && externalCommission?.id) {
+      const category = modal?.querySelector('#gasto-cat');
+      if (category) category.value = String(externalCommission.id);
+    }
+  };
+  beneficiaryType?.addEventListener('change', syncBeneficiaryFields);
+  syncBeneficiaryFields();
 }
 
 function modalRetiro(parentEl, user) {
@@ -961,7 +1050,10 @@ window.verDetalleGasto = async (id) => {
       <td style="padding:6px">${p.payment_method}</td>
       <td style="padding:6px;color:var(--muted2)">${p.user_name||'—'}</td>
       <td style="padding:6px">${badge(p.status)}</td>
-    </tr>`).join('') || '<tr><td colspan="5" style="padding:10px;text-align:center;color:var(--muted2)">Sin pagos registrados</td></tr>';
+      <td style="padding:6px">${p.status === 'pagado'
+        ? `<button class="btn btn-ghost btn-sm" onclick="imprimirPagoGasto(${e.id},${p.id})" title="Reimprimir recibo">${svg('print')}</button>`
+        : '—'}</td>
+    </tr>`).join('') || '<tr><td colspan="6" style="padding:10px;text-align:center;color:var(--muted2)">Sin pagos registrados</td></tr>';
 
   abrirModal(`Detalle — ${e.description}`, `
     <div style="font-size:12px;color:var(--muted2);margin-bottom:12px">Registrado por: <strong>${e.user_name||'—'}</strong> · ${_gFmtDate(e.issue_date)}</div>
@@ -972,6 +1064,9 @@ window.verDetalleGasto = async (id) => {
       <div><span style="font-size:11px;color:var(--muted2)">Estado</span><div style="margin-top:2px">${badge(e.status)}</div></div>
     </div>
     ${e.supplier_name?`<div style="font-size:12px;margin-bottom:4px"><strong>Proveedor:</strong> ${e.supplier_name}</div>`:''}
+    ${e.beneficiary_name?`<div style="font-size:12px;margin-bottom:4px"><strong>Beneficiario externo:</strong> ${e.beneficiary_name}</div>`:''}
+    ${e.beneficiary_document?`<div style="font-size:12px;margin-bottom:4px"><strong>Cédula / pasaporte:</strong> ${e.beneficiary_document}</div>`:''}
+    ${e.beneficiary_phone?`<div style="font-size:12px;margin-bottom:4px"><strong>Teléfono:</strong> ${e.beneficiary_phone}</div>`:''}
     ${e.category_name?`<div style="font-size:12px;margin-bottom:4px"><strong>Categoría:</strong> ${e.category_name}</div>`:''}
     ${e.invoice_number?`<div style="font-size:12px;margin-bottom:4px"><strong>No. Factura:</strong> ${e.invoice_number}</div>`:''}
     ${e.ncf?`<div style="font-size:12px;margin-bottom:4px"><strong>NCF:</strong> ${e.ncf}</div>`:''}
@@ -982,10 +1077,47 @@ window.verDetalleGasto = async (id) => {
       <thead><tr style="color:var(--muted2);font-size:11px">
         <th style="padding:6px;text-align:left">Fecha</th><th style="padding:6px;text-align:left">Monto</th>
         <th style="padding:6px;text-align:left">Método</th><th style="padding:6px;text-align:left">Usuario</th>
-        <th style="padding:6px;text-align:left">Estado</th>
+        <th style="padding:6px;text-align:left">Estado</th><th style="padding:6px;text-align:left">Imprimir</th>
       </tr></thead>
       <tbody>${histPagos}</tbody>
     </table>`, () => {}, 'Cerrar');
+};
+
+async function _imprimirPagoDeGasto(expenseId, paymentId = null) {
+  const res = await window.api.expenses.getById({ id: expenseId });
+  if (!res?.ok || !res.data) throw new Error(res?.error || 'No se pudo cargar el gasto');
+  const expense = res.data;
+  const payments = (expense.payments || []).filter(payment => payment.status === 'pagado');
+  const payment = paymentId
+    ? payments.find(row => Number(row.id) === Number(paymentId))
+    : payments[payments.length - 1];
+  if (!payment) throw new Error('Este gasto no tiene un pago vigente para imprimir');
+  if (typeof printPagoProveedor !== 'function') throw new Error('El sistema de impresión no está disponible');
+  const paymentIndex = payments.findIndex(row => Number(row.id) === Number(payment.id));
+  const paidBefore = payments.slice(0, Math.max(0, paymentIndex))
+    .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const balanceBefore = Math.max(0, Number(expense.total || 0) - paidBefore);
+  printPagoProveedor({
+    payment: {
+      ...payment,
+      method: payment.payment_method,
+      balance_before: balanceBefore,
+      balance_after: Math.max(0, balanceBefore - Number(payment.amount || 0)),
+    },
+    expense,
+    cajero: payment.user_name || _getUser()?.name || '',
+    isReprint: true,
+  });
+}
+
+window.imprimirGasto = async (expenseId) => {
+  try { await _imprimirPagoDeGasto(expenseId); }
+  catch (error) { toast(error.message, 'err'); }
+};
+
+window.imprimirPagoGasto = async (expenseId, paymentId) => {
+  try { await _imprimirPagoDeGasto(expenseId, paymentId); }
+  catch (error) { toast(error.message, 'err'); }
 };
 
 window.pagarGasto = (id, saldo) => {

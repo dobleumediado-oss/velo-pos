@@ -103,10 +103,17 @@ function ensureUppercasePersistence() {
     customer_branches: ['name', 'code', 'address', 'manager'],
     products: ['code', 'barcode', 'name', 'brand', 'category', 'description', 'model'],
     suppliers: ['name', 'contact', 'address', 'notes'],
-    expenses: ['description', 'notes'],
+    expenses: ['description', 'beneficiary_name', 'notes'],
     vehicles: ['brand', 'model', 'plate', 'color', 'notes'],
     delivery_notes: ['customer_name', 'delivery_address', 'driver_name', 'vehicle_plate', 'notes'],
     purchase_orders: ['supplier_name', 'notes'],
+    product_units: ['sale_description', 'notes'],
+    tech_description_templates: ['name', 'description'],
+    tech_private_purchases: [
+      'seller_name', 'seller_address', 'device_name', 'brand', 'model', 'color',
+      'physical_condition', 'sale_description', 'seller_signature_name',
+      'business_signature_name'
+    ],
     sales: [
       'customer_name', 'customer_trade_name', 'customer_address',
       'customer_contact_name', 'customer_contact_role',
@@ -633,6 +640,8 @@ function createTables() {
       supplier_warranty_until TEXT,
       grade          TEXT NOT NULL DEFAULT '',
       battery_health INTEGER,
+      battery_capacity_mah INTEGER,
+      sale_description TEXT NOT NULL DEFAULT '',
       refurb_status  TEXT NOT NULL DEFAULT '',
       received_at    TEXT DEFAULT (datetime('now','localtime')),
       sold_at        TEXT,
@@ -658,6 +667,8 @@ function createTables() {
       brand          TEXT DEFAULT '',
       model          TEXT DEFAULT '',
       device_color   TEXT DEFAULT '',
+      battery_health INTEGER,
+      battery_capacity_mah INTEGER,
       problem        TEXT NOT NULL,
       diagnosis      TEXT DEFAULT '',
       quote_amount   REAL NOT NULL DEFAULT 0,
@@ -853,6 +864,55 @@ function createTables() {
     );
     CREATE INDEX IF NOT EXISTS idx_trade_ins_customer ON trade_ins(customer_id, created_at);
 
+    -- ── Descripciones reutilizables y compras de usados a particulares (TECH) ──
+    CREATE TABLE IF NOT EXISTS tech_description_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_by INTEGER REFERENCES users(id),
+      created_at TEXT DEFAULT (datetime('now','localtime')),
+      updated_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE TABLE IF NOT EXISTS tech_private_purchases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      number TEXT UNIQUE NOT NULL,
+      seller_name TEXT NOT NULL,
+      seller_document TEXT NOT NULL,
+      seller_phone TEXT NOT NULL,
+      seller_address TEXT NOT NULL DEFAULT '',
+      seller_email TEXT NOT NULL DEFAULT '',
+      product_id INTEGER NOT NULL REFERENCES products(id),
+      product_unit_id INTEGER UNIQUE NOT NULL REFERENCES product_units(id),
+      device_name TEXT NOT NULL,
+      brand TEXT NOT NULL DEFAULT '',
+      model TEXT NOT NULL DEFAULT '',
+      imei TEXT NOT NULL DEFAULT '',
+      serial TEXT NOT NULL DEFAULT '',
+      color TEXT NOT NULL DEFAULT '',
+      capacity TEXT NOT NULL DEFAULT '',
+      battery_health INTEGER,
+      battery_capacity_mah INTEGER,
+      physical_condition TEXT NOT NULL,
+      sale_description TEXT NOT NULL DEFAULT '',
+      accessories TEXT NOT NULL DEFAULT '[]',
+      amount REAL NOT NULL CHECK(amount > 0),
+      payment_method TEXT NOT NULL DEFAULT 'efectivo',
+      payment_reference TEXT NOT NULL DEFAULT '',
+      financial_account_id INTEGER REFERENCES financial_accounts(id),
+      cash_session_id INTEGER REFERENCES cash_sessions(id),
+      terms_snapshot TEXT NOT NULL,
+      ownership_declared INTEGER NOT NULL DEFAULT 0,
+      lawful_origin_declared INTEGER NOT NULL DEFAULT 0,
+      seller_signature_name TEXT NOT NULL,
+      business_signature_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'completada' CHECK(status IN ('completada','anulada')),
+      created_by INTEGER REFERENCES users(id),
+      created_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_tech_private_purchases_created
+      ON tech_private_purchases(created_at, status);
+
     -- ── Pagos / Abonos ──
     CREATE TABLE IF NOT EXISTS payments (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1005,6 +1065,9 @@ function createTables() {
       category_id     INTEGER REFERENCES expense_categories(id),
       description     TEXT NOT NULL,
       supplier_id     INTEGER REFERENCES suppliers(id),
+      beneficiary_name TEXT NOT NULL DEFAULT '',
+      beneficiary_document TEXT NOT NULL DEFAULT '',
+      beneficiary_phone TEXT NOT NULL DEFAULT '',
       amount          REAL NOT NULL DEFAULT 0,
       tax_amount      REAL DEFAULT 0,
       discount        REAL DEFAULT 0,
@@ -1047,6 +1110,9 @@ function createTables() {
       cash_movement_id INTEGER REFERENCES cash_movements(id),
       reference       TEXT,
       notes           TEXT,
+      beneficiary_name TEXT NOT NULL DEFAULT '',
+      beneficiary_document TEXT NOT NULL DEFAULT '',
+      beneficiary_phone TEXT NOT NULL DEFAULT '',
       user_id         INTEGER REFERENCES users(id),
       status          TEXT DEFAULT 'pagado' CHECK(status IN ('pagado','anulado')),
       cancelled_by    INTEGER REFERENCES users(id),
@@ -1845,6 +1911,7 @@ const DOCUMENT_SEQUENCE_DEFAULTS = {
   abono:           { prefix: 'ABO', pad: 6 },
   recibo:          { prefix: 'REC', pad: 6 },
   pago_proveedor:  { prefix: 'PPR', pad: 6 },
+  pago_gasto_externo: { prefix: 'RGE', pad: 6 },
   conduce:         { prefix: 'CON', pad: 6 },
   reporte:         { prefix: 'REP', pad: 6 },
 };
@@ -2485,6 +2552,9 @@ function migrateExpensesColumns() {
     { col: 'currency',         def: "TEXT DEFAULT 'DOP'" },
     { col: 'due_date',         def: 'TEXT' },
     { col: 'notes',            def: 'TEXT' },
+    { col: 'beneficiary_name', def: "TEXT NOT NULL DEFAULT ''" },
+    { col: 'beneficiary_document', def: "TEXT NOT NULL DEFAULT ''" },
+    { col: 'beneficiary_phone', def: "TEXT NOT NULL DEFAULT ''" },
     { col: 'updated_at',       def: "TEXT DEFAULT (datetime('now'))" },
   ];
   expensesCols.forEach(({ col, def }) => {
@@ -2502,6 +2572,9 @@ function migrateExpensesColumns() {
     { col: 'cancel_reason',    def: 'TEXT' },
     { col: 'status',           def: "TEXT DEFAULT 'pagado'" },
     { col: 'payment_source',   def: "TEXT DEFAULT 'caja'" },
+    { col: 'beneficiary_name', def: "TEXT NOT NULL DEFAULT ''" },
+    { col: 'beneficiary_document', def: "TEXT NOT NULL DEFAULT ''" },
+    { col: 'beneficiary_phone', def: "TEXT NOT NULL DEFAULT ''" },
   ];
   payCols.forEach(({ col, def }) => {
     try {
@@ -4800,6 +4873,9 @@ const salesRepo = {
           usedUnits.add(unit.id);
           _unitId = unit.id;
           if (unit.unit_cost != null) item.unit_cost = unit.unit_cost; // costo real de la unidad → asiento correcto
+          if (String(unit.sale_description || '').trim()) {
+            item.product_name = `${prod.name} — ${String(unit.sale_description).trim()}`.slice(0, 1000);
+          }
           item.qty = 1;                                                // cada unidad serializada es una línea de 1
         } else if (afectaStock && !nonStockService && !stockValidated.has(productId)) {
           const ownOrderId = Number(payment.checkoutOrderId) || 0;
@@ -7735,6 +7811,138 @@ const purchasesRepo = {
   },
 };
 
+// ══════════════════════════════════════════════
+// VELO TECH POS · Descripciones y compra directa de equipos usados
+// ══════════════════════════════════════════════
+const techDescriptionTemplatesRepo = {
+  list() {
+    return db.prepare(`SELECT * FROM tech_description_templates WHERE active=1 ORDER BY name,id`).all();
+  },
+  save(data = {}, userId = null) {
+    const name = String(data.name || '').trim().slice(0,120);
+    const description = String(data.description || '').trim().slice(0,1000);
+    if (!name || !description) throw new Error('Nombre y descripción son obligatorios');
+    if (Number(data.id)) {
+      const result = db.prepare(`UPDATE tech_description_templates SET name=?,description=?,
+        updated_at=datetime('now','localtime') WHERE id=? AND active=1`).run(name, description, Number(data.id));
+      if (!result.changes) throw new Error('Descripción guardada no encontrada');
+      return Number(data.id);
+    }
+    return Number(db.prepare(`INSERT INTO tech_description_templates(name,description,created_by)
+      VALUES(?,?,?)`).run(name, description, Number(userId) || null).lastInsertRowid);
+  },
+  remove(id) {
+    const result = db.prepare(`UPDATE tech_description_templates SET active=0,
+      updated_at=datetime('now','localtime') WHERE id=?`).run(Number(id));
+    if (!result.changes) throw new Error('Descripción guardada no encontrada');
+    return { ok:true };
+  },
+};
+
+const techPrivatePurchasesRepo = {
+  list({ limit = 200 } = {}) {
+    return db.prepare(`SELECT tp.*,p.code product_code,p.name product_name,u.status unit_status
+      FROM tech_private_purchases tp
+      JOIN products p ON p.id=tp.product_id
+      JOIN product_units u ON u.id=tp.product_unit_id
+      ORDER BY tp.id DESC LIMIT ?`).all(Math.max(1,Math.min(1000,Number(limit)||200)));
+  },
+  getById(id) {
+    return db.prepare(`SELECT tp.*,p.code product_code,p.name product_name,u.status unit_status,
+      u.warranty_until,u.notes unit_notes,fa.name financial_account_name,cs.cajero cash_session_user
+      FROM tech_private_purchases tp
+      JOIN products p ON p.id=tp.product_id
+      JOIN product_units u ON u.id=tp.product_unit_id
+      LEFT JOIN financial_accounts fa ON fa.id=tp.financial_account_id
+      LEFT JOIN cash_sessions cs ON cs.id=tp.cash_session_id
+      WHERE tp.id=?`).get(Number(id)) || null;
+  },
+  create(data = {}, user = {}, cashSession = null) {
+    const sellerName = String(data.seller_name || '').trim();
+    const sellerDocument = String(data.seller_document || '').trim();
+    const sellerPhone = String(data.seller_phone || '').trim();
+    const sellerAddress = String(data.seller_address || '').trim();
+    const physicalCondition = String(data.physical_condition || '').trim();
+    const sellerSignature = String(data.seller_signature_name || '').trim();
+    const businessSignature = String(data.business_signature_name || '').trim();
+    const imei = String(data.imei || '').trim();
+    const serial = String(data.serial || '').trim();
+    const amount = round2(Number(data.amount) || 0);
+    if (!sellerName || !sellerDocument || !sellerPhone || !sellerAddress) {
+      throw new Error('Nombre, documento, teléfono y dirección del vendedor son obligatorios');
+    }
+    if (!imei && !serial) throw new Error('El equipo necesita IMEI o serial');
+    if (!physicalCondition) throw new Error('Documenta la condición física del equipo');
+    if (amount <= 0) throw new Error('El precio de compra debe ser mayor a cero');
+    if (!data.ownership_declared || !data.lawful_origin_declared) {
+      throw new Error('El vendedor debe aceptar las declaraciones de propiedad y procedencia');
+    }
+    if (!sellerSignature || !businessSignature) throw new Error('Registra los nombres de ambas firmas');
+    const product = db.prepare(`SELECT * FROM products WHERE id=? AND active=1`).get(Number(data.product_id));
+    if (!product) throw new Error('Producto o modelo no encontrado');
+    if (!product.serialized) throw new Error('El producto debe estar controlado por IMEI/serial');
+    if (productUnitsRepo.findByImei(imei || serial)) throw new Error('Ese IMEI o serial ya está registrado');
+    const paymentMethod = ['efectivo','transferencia','cheque'].includes(String(data.payment_method))
+      ? String(data.payment_method) : 'efectivo';
+    let account = null;
+    if (paymentMethod === 'efectivo') {
+      if (!cashSession?.id || cashSession.status !== 'open') throw new Error('Abre la caja antes de pagar una compra en efectivo');
+    } else {
+      account = db.prepare(`SELECT * FROM financial_accounts WHERE id=? AND active=1`).get(Number(data.financial_account_id));
+      if (!account || account.type !== 'banco') throw new Error('Selecciona una cuenta bancaria activa para realizar el pago');
+    }
+    const terms = String(data.terms_snapshot || settingsRepo.get('tech_private_purchase_terms') || '').trim();
+    if (!terms) throw new Error('Configura los términos de compra a particulares');
+    const result = db.transaction(() => {
+      const unitId = Number(productUnitsRepo.create({
+        product_id:product.id, imei:imei || null, serial:serial || null,
+        condition:'usado', status:'en_stock', unit_cost:amount,
+        color:String(data.color || '').trim(), capacity:String(data.capacity || '').trim(),
+        battery_health:data.battery_health, battery_capacity_mah:data.battery_capacity_mah,
+        sale_description:String(data.sale_description || '').trim(),
+        notes:`COMPRA DIRECTA A ${sellerName} · DOC. ${sellerDocument}`,
+      }));
+      const next = Number(db.prepare('SELECT COALESCE(MAX(id),0)+1 n FROM tech_private_purchases').get().n || 1);
+      const number = `CPU-${String(next).padStart(6,'0')}`;
+      const info = db.prepare(`INSERT INTO tech_private_purchases(
+        number,seller_name,seller_document,seller_phone,seller_address,seller_email,
+        product_id,product_unit_id,device_name,brand,model,imei,serial,color,capacity,
+        battery_health,battery_capacity_mah,physical_condition,sale_description,accessories,
+        amount,payment_method,payment_reference,financial_account_id,cash_session_id,terms_snapshot,
+        ownership_declared,lawful_origin_declared,seller_signature_name,business_signature_name,created_by
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        number,sellerName,sellerDocument,sellerPhone,sellerAddress,String(data.seller_email||'').trim(),
+        product.id,unitId,String(data.device_name||product.name).trim(),String(data.brand||product.brand||'').trim(),
+        String(data.model||product.model||'').trim(),imei,serial,String(data.color||'').trim(),String(data.capacity||'').trim(),
+        data.battery_health===''||data.battery_health==null?null:Math.max(0,Math.min(100,Number.parseInt(data.battery_health,10)||0)),
+        data.battery_capacity_mah===''||data.battery_capacity_mah==null?null:Math.max(0,Math.min(100000,Number.parseInt(data.battery_capacity_mah,10)||0)),
+        physicalCondition,String(data.sale_description||'').trim(),
+        JSON.stringify(Array.isArray(data.accessories)?data.accessories:[]),amount,paymentMethod,
+        String(data.payment_reference||'').trim(),account?.id||null,cashSession?.id||null,terms,1,1,
+        sellerSignature,businessSignature,Number(user.id)||null
+      );
+      const purchaseId = Number(info.lastInsertRowid);
+      db.prepare(`UPDATE product_units SET notes=notes||? WHERE id=?`).run(` · ${number}`,unitId);
+      if (paymentMethod === 'efectivo') {
+        cashRepo.addMovement({ sessionId:cashSession.id,type:'salida',amount,method:'efectivo',
+          referenceId:purchaseId,description:`Compra equipo usado ${number}`,userId:user.id });
+        db.prepare('UPDATE cash_sessions SET expected=expected-? WHERE id=?').run(amount,cashSession.id);
+      } else {
+        // Reutiliza el tipo financiero canónico de salida para no ampliar el
+        // CHECK histórico. reference_type mantiene la naturaleza exacta.
+        financialAccountsRepo.addMovement({ accountId:account.id,type:'pago_proveedor',amount:-amount,
+          description:`Compra equipo usado ${number}`,referenceType:'tech_private_purchase',
+          referenceId:purchaseId,method:paymentMethod,notes:String(data.payment_reference||''),userId:user.id });
+      }
+      audit(user.id,user.name,'compra_equipo_usado','tech_private_purchases',purchaseId,
+        `${number} · ${imei||serial} · RD$${amount.toFixed(2)}`);
+      return { purchaseId, unitId, number };
+    })();
+    accountingRepo.generatePrivatePurchaseEntry({ purchaseId:result.purchaseId, userId:user.id });
+    return { ...result, data:this.getById(result.purchaseId) };
+  },
+};
+
 
 
 function seedMaintenanceTypes() {
@@ -7792,7 +8000,7 @@ function seedExpenseCategories() {
     'Tecnología':           ['Software','Licencias','Equipos','Reparaciones'],
     'Finanzas':             ['Comisiones bancarias','Intereses','Cargos por tarjeta'],
     'Impuestos y permisos': ['Impuestos','Licencias','Renovaciones'],
-    'Servicios profesionales': ['Contabilidad','Abogados','Consultorías'],
+    'Servicios profesionales': ['Contabilidad','Abogados','Consultorías','Comisiones externas'],
     'Activos fijos':        ['Computadoras','Impresoras','Mobiliario','Equipos'],
     'Otros':                ['Imprevistos','Gastos extraordinarios'],
   };
@@ -7902,7 +8110,7 @@ const expensesRepo = {
     WHERE e.id=?`).get(id);
     if (!e) return null;
     e.payments = db.prepare(`SELECT ep.*, u.name as user_name FROM expense_payments ep
-      LEFT JOIN users u ON ep.user_id=u.id WHERE ep.expense_id=? ORDER BY ep.created_at`).all(id);
+      LEFT JOIN users u ON ep.user_id=u.id WHERE ep.expense_id=? ORDER BY ep.created_at,ep.id`).all(id);
     return e;
   },
 
@@ -7923,22 +8131,31 @@ const expensesRepo = {
       paid:        value(`SELECT COALESCE(SUM(paid_amount),0) as v FROM expenses e WHERE ${baseWhere}`),
       pending:     value(`SELECT COALESCE(SUM(total-paid_amount),0) as v FROM expenses e WHERE ${baseWhere} AND e.status!='pagado'`),
       overdue:     value(`SELECT COALESCE(SUM(total-paid_amount),0) as v FROM expenses e WHERE ${baseWhere} AND e.status!='pagado' AND e.due_date < date('now')`),
-      from_cash:   value(`SELECT COALESCE(SUM(paid_amount),0) as v FROM expenses e WHERE ${baseWhere} AND e.payment_source='caja'`),
+      from_cash:   value(`SELECT COALESCE(SUM(ep.amount),0) as v
+        FROM expense_payments ep
+        JOIN expenses e ON e.id=ep.expense_id
+        WHERE ${baseWhere} AND ep.status='pagado' AND ep.payment_source='caja'`),
       count:       value(`SELECT COUNT(*) as v FROM expenses e WHERE ${baseWhere}`),
       by_category: db.prepare(`SELECT ec.name, COALESCE(SUM(e.total),0) as total FROM expenses e LEFT JOIN expense_categories ec ON e.category_id=ec.id WHERE ${baseWhere} GROUP BY e.category_id ORDER BY total DESC LIMIT 8`).all(...params),
     };
   },
 
   // ── Crear gasto ──────────────────────────
-  create({ type, category_id, description, supplier_id, amount, tax_amount, discount, total,
+  create({ type, category_id, description, supplier_id, beneficiary_name, beneficiary_document,
+           beneficiary_phone, amount, tax_amount, discount, total,
            currency, payment_method, payment_source, cash_session_id, issue_date, due_date,
            invoice_number, ncf, supplier_rnc, notes, user_id, status }) {
+    const beneficiaryName = String(beneficiary_name || '').trim().slice(0, 120);
+    const beneficiaryDocument = String(beneficiary_document || '').trim().slice(0, 40);
+    const beneficiaryPhone = String(beneficiary_phone || '').trim().slice(0, 40);
     const r = db.prepare(`
-      INSERT INTO expenses(type,category_id,description,supplier_id,amount,tax_amount,discount,total,
+      INSERT INTO expenses(type,category_id,description,supplier_id,beneficiary_name,beneficiary_document,
+        beneficiary_phone,amount,tax_amount,discount,total,
         currency,payment_method,payment_source,cash_session_id,issue_date,due_date,
         invoice_number,ncf,supplier_rnc,notes,user_id,status)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(type||'gasto', category_id||null, description, supplier_id||null,
+           beneficiaryName, beneficiaryDocument, beneficiaryPhone,
            amount||0, tax_amount||0, discount||0, total||amount||0,
            currency||'DOP', payment_method||'efectivo', payment_source||'pendiente',
            cash_session_id||null, issue_date||todayStr(), due_date||null,
@@ -7971,17 +8188,23 @@ const expensesRepo = {
       }
 
       // Registrar pago
+      const beneficiaryName = String(expense.beneficiary_name || '').trim();
+      const beneficiaryDocument = String(expense.beneficiary_document || '').trim();
+      const beneficiaryPhone = String(expense.beneficiary_phone || '').trim();
       const payRow = db.prepare(`INSERT INTO expense_payments(expense_id,amount,payment_method,payment_source,
-        cash_session_id,cash_movement_id,reference,notes,user_id)
-        VALUES(?,?,?,?,?,?,?,?,?)`).run(expenseId, amount, payment_method||'efectivo',
-        payment_source||'caja', cash_session_id||null, cashMovementId, reference||null, notes||null, userId);
+        cash_session_id,cash_movement_id,reference,notes,beneficiary_name,beneficiary_document,
+        beneficiary_phone,user_id)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(expenseId, amount, payment_method||'efectivo',
+        payment_source||'caja', cash_session_id||null, cashMovementId, reference||null, notes||null,
+        beneficiaryName, beneficiaryDocument, beneficiaryPhone, userId);
       const paymentId = payRow.lastInsertRowid;
-      const documentIssue = _issueDocumentNumber('pago_proveedor', 'expense_payment', paymentId);
+      const documentKind = beneficiaryName ? 'pago_gasto_externo' : 'pago_proveedor';
+      const documentIssue = _issueDocumentNumber(documentKind, 'expense_payment', paymentId);
       db.prepare(`
         UPDATE expense_payments
-        SET document_kind='pago_proveedor',document_number=?,document_number_fmt=?
+        SET document_kind=?,document_number=?,document_number_fmt=?
         WHERE id=?
-      `).run(documentIssue.sequence_number, documentIssue.formatted_number, paymentId);
+      `).run(documentKind, documentIssue.sequence_number, documentIssue.formatted_number, paymentId);
 
       // Actualizar gasto
       const newPaid = expense.paid_amount + amount;
@@ -7991,14 +8214,17 @@ const expensesRepo = {
       // tenía aprobador. Elimina el paso previo de "Aprobar" para poder pagar.
       db.prepare(`UPDATE expenses SET paid_amount=?,status=?,
         approved_by=COALESCE(approved_by,?), approved_at=COALESCE(approved_at,datetime('now')),
-        updated_at=datetime('now'),cash_session_id=?,cash_movement_id=? WHERE id=?`)
-        .run(newPaid, newStatus, userId||null, cash_session_id||expense.cash_session_id, cashMovementId||expense.cash_movement_id, expenseId);
+        updated_at=datetime('now'),payment_method=?,payment_source=?,
+        cash_session_id=?,cash_movement_id=? WHERE id=?`)
+        .run(newPaid, newStatus, userId||null, payment_method||expense.payment_method,
+          payment_source||expense.payment_source, cash_session_id||expense.cash_session_id,
+          cashMovementId||expense.cash_movement_id, expenseId);
 
       audit(userId, userName||'', 'gasto_pagado', 'expenses', expenseId,
         `Pago: RD$${amount} | Método: ${payment_method} | Estado: ${newStatus}${expense.approved_by ? '' : ' | Aprobado al pagar'}`);
       return {
         ok: true, newStatus, newPaid, cashMovementId, paymentId,
-        documentKind: 'pago_proveedor',
+        documentKind,
         documentNumber: documentIssue.sequence_number,
         documentNumberFmt: documentIssue.formatted_number,
       };
@@ -9925,6 +10151,31 @@ const accountingRepo = {
     } catch (e) { console.error('[accounting] generatePurchaseEntry:', e.message); return null; }
   },
 
+  generatePrivatePurchaseEntry({ purchaseId, userId } = {}) {
+    try {
+      if (settingsRepo.get('module_contabilidad') !== '1') return null;
+      const purchase = db.prepare('SELECT * FROM tech_private_purchases WHERE id=?').get(Number(purchaseId));
+      if (!purchase || purchase.status !== 'completada') return null;
+      if (db.prepare("SELECT id FROM accounting_entries WHERE source_module='compra_usado' AND source_id=?").get(purchase.id)) return null;
+      const cfg = this.getConfig();
+      const getAccId = (key, fallback) => cfg[key]?.account_id || db.prepare('SELECT id FROM accounting_accounts WHERE code=?').get(fallback)?.id;
+      const inventoryId = getAccId('account_inventory','1105');
+      const paymentId = purchase.payment_method === 'efectivo'
+        ? getAccId('account_cash','1101') : getAccId('account_bank','1103');
+      if (!inventoryId || !paymentId) return null;
+      return this.createEntry({
+        date:String(purchase.created_at || '').slice(0,10),
+        concept:`Compra de equipo usado ${purchase.number} — ${purchase.seller_name}`,
+        reference:purchase.number,
+        source_module:'compra_usado',source_id:purchase.id,userId,status:'confirmado',
+        lines:[
+          { account_id:inventoryId,debit:purchase.amount,credit:0,description:`Equipo ${purchase.imei||purchase.serial}` },
+          { account_id:paymentId,debit:0,credit:purchase.amount,description:`Pago ${purchase.number}` },
+        ],
+      });
+    } catch (e) { console.error('[accounting] generatePrivatePurchaseEntry:', e.message); return null; }
+  },
+
   // ── Ajuste de valorización de inventario por cambio manual de costo ───────
   // Las compras ya debitan Inventario con el valor recibido. Este asiento cubre
   // solamente cambios de costo que revalorizan stock existente (edición manual,
@@ -11641,10 +11892,12 @@ const productUnitsRepo = {
       INSERT INTO product_units
         (product_id, imei, serial, condition, status, unit_cost, color, capacity,
          warranty_until, purchase_order_id, purchase_item_id, supplier_id,
-         supplier_warranty_until, grade, battery_health, refurb_status, notes)
+         supplier_warranty_until, grade, battery_health, battery_capacity_mah,
+         sale_description, refurb_status, notes)
       VALUES (@product_id, @imei, @serial, @condition, @status, @unit_cost, @color, @capacity,
               @warranty_until, @purchase_order_id, @purchase_item_id, @supplier_id,
-              @supplier_warranty_until, @grade, @battery_health, @refurb_status, @notes)
+              @supplier_warranty_until, @grade, @battery_health, @battery_capacity_mah,
+              @sale_description, @refurb_status, @notes)
     `).run({
       product_id:     u.product_id,
       imei:           imei || null,
@@ -11662,6 +11915,9 @@ const productUnitsRepo = {
       grade: String(u.grade || '').trim(),
       battery_health: u.battery_health === '' || u.battery_health == null
         ? null : Math.max(0, Math.min(100, Number.parseInt(u.battery_health, 10) || 0)),
+      battery_capacity_mah: u.battery_capacity_mah === '' || u.battery_capacity_mah == null
+        ? null : Math.max(0, Math.min(100000, Number.parseInt(u.battery_capacity_mah, 10) || 0)),
+      sale_description: String(u.sale_description || '').trim().slice(0, 1000),
       refurb_status: String(u.refurb_status || '').trim(),
       notes:          u.notes || '',
     });
@@ -11736,6 +11992,21 @@ const productUnitsRepo = {
     const unit = db.prepare('SELECT id FROM product_units WHERE id=?').get(Number(unitId));
     if (!unit) throw new Error('Equipo no encontrado');
     db.prepare('UPDATE product_units SET warranty_until=? WHERE id=?').run(value || null, unit.id);
+    return this.findById(unit.id);
+  },
+  updateDetails(unitId, data = {}) {
+    const unit = db.prepare('SELECT id FROM product_units WHERE id=?').get(Number(unitId));
+    if (!unit) throw new Error('Equipo no encontrado');
+    const health = data.battery_health === '' || data.battery_health == null
+      ? null : Math.max(0, Math.min(100, Number.parseInt(data.battery_health, 10) || 0));
+    const capacityMah = data.battery_capacity_mah === '' || data.battery_capacity_mah == null
+      ? null : Math.max(0, Math.min(100000, Number.parseInt(data.battery_capacity_mah, 10) || 0));
+    db.prepare(`UPDATE product_units SET color=?,capacity=?,battery_health=?,battery_capacity_mah=?,
+      sale_description=?,notes=? WHERE id=?`).run(
+      String(data.color || '').trim(), String(data.capacity || '').trim(), health, capacityMah,
+      String(data.sale_description || '').trim().slice(0,1000),
+      String(data.notes || '').trim().slice(0,2000), unit.id
+    );
     return this.findById(unit.id);
   },
   findById(unitId) {
@@ -12158,22 +12429,29 @@ const serviceOrdersRepo = {
       const info = db.prepare(`
         INSERT INTO service_orders(
           number,customer_id,customer_name,product_unit_id,unit_previous_status,parent_order_id,device_desc,imei,imei2,serial,
-          brand,model,device_color,problem,workflow_status,service_type,priority,promised_at,
+          brand,model,device_color,battery_health,battery_capacity_mah,problem,workflow_status,service_type,priority,promised_at,
           intake_condition,accessories_received,intake_checklist,privacy_consent,
           technician_id,service_technician_id,received_by,service_warranty_days,notes
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'recepcion',?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'recepcion',?,?,?,?,?,?,?,?,?,?,?,?)
       `).run(
         number, customer.id, customer.name, unit?.id || null, String(unit?.status || ''), Number(data.parent_order_id) || null,
         device, String(data.imei || unit?.imei || '').trim(), String(data.imei2 || '').trim(),
         String(data.serial || unit?.serial || '').trim(), String(data.brand || unit?.product_brand || '').trim(),
-        String(data.model || unit?.product_model || '').trim(), String(data.device_color || unit?.color || '').trim(), problem,
+        String(data.model || unit?.product_model || '').trim(), String(data.device_color || unit?.color || '').trim(),
+        data.battery_health === '' || data.battery_health == null
+          ? (unit?.battery_health ?? null) : Math.max(0, Math.min(100, Number.parseInt(data.battery_health,10) || 0)),
+        data.battery_capacity_mah === '' || data.battery_capacity_mah == null
+          ? (unit?.battery_capacity_mah ?? null) : Math.max(0, Math.min(100000, Number.parseInt(data.battery_capacity_mah,10) || 0)),
+        problem,
         ['reparacion','garantia','diagnostico','instalacion','visita'].includes(data.service_type) ? data.service_type : 'reparacion',
         ['baja','normal','alta','urgente'].includes(data.priority) ? data.priority : 'normal',
         String(data.promised_at || '').trim() || null, String(data.intake_condition || '').trim(),
         this._safeJson(data.accessories_received, []), this._safeJson(data.intake_checklist, {}),
         data.privacy_consent ? 1 : 0, Number(data.technician_id) || null,
         Number(data.service_technician_id) || null, Number(user.id) || null,
-        Math.max(0, Math.min(3650, Number.parseInt(data.service_warranty_days, 10) || 0)),
+        Math.max(0, Math.min(3650, Number.parseInt(
+          data.service_warranty_days ?? settingsRepo.get('service_default_warranty_days'), 10
+        ) || 0)),
         String(data.notes || '').trim()
       );
       const orderId = Number(info.lastInsertRowid);
@@ -12742,6 +13020,8 @@ const serviceOrdersRepo = {
 module.exports = {
   suppliersRepo,
   purchasesRepo,
+  techPrivatePurchasesRepo,
+  techDescriptionTemplatesRepo,
   crmRepo,
   productUnitsRepo,
   serviceOrdersRepo,

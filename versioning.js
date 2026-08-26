@@ -2230,6 +2230,127 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.46.0-tech-premium-operations] Operación TECH premium lista');
     }
   },
+  {
+    version: '1.48.0-tech-device-lifecycle',
+    description: 'VELO TECH POS: batería y descripción por unidad, garantía en recepción, compra documentada de equipos usados a particulares y contrato configurable.',
+    run(db) {
+      const addColumn = (table, name, definition) => {
+        const columns = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(column => column.name));
+        if (!columns.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+      };
+      addColumn('product_units', 'battery_capacity_mah', 'INTEGER');
+      addColumn('product_units', 'sale_description', "TEXT NOT NULL DEFAULT ''");
+      addColumn('service_orders', 'battery_health', 'INTEGER');
+      addColumn('service_orders', 'battery_capacity_mah', 'INTEGER');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS tech_description_templates (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          description TEXT NOT NULL,
+          active INTEGER NOT NULL DEFAULT 1,
+          created_by INTEGER REFERENCES users(id),
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          updated_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE TABLE IF NOT EXISTS tech_private_purchases (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          number TEXT UNIQUE NOT NULL,
+          seller_name TEXT NOT NULL,
+          seller_document TEXT NOT NULL,
+          seller_phone TEXT NOT NULL,
+          seller_address TEXT NOT NULL DEFAULT '',
+          seller_email TEXT NOT NULL DEFAULT '',
+          product_id INTEGER NOT NULL REFERENCES products(id),
+          product_unit_id INTEGER UNIQUE NOT NULL REFERENCES product_units(id),
+          device_name TEXT NOT NULL,
+          brand TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '',
+          imei TEXT NOT NULL DEFAULT '', serial TEXT NOT NULL DEFAULT '',
+          color TEXT NOT NULL DEFAULT '', capacity TEXT NOT NULL DEFAULT '',
+          battery_health INTEGER, battery_capacity_mah INTEGER,
+          physical_condition TEXT NOT NULL,
+          sale_description TEXT NOT NULL DEFAULT '', accessories TEXT NOT NULL DEFAULT '[]',
+          amount REAL NOT NULL CHECK(amount > 0),
+          payment_method TEXT NOT NULL DEFAULT 'efectivo', payment_reference TEXT NOT NULL DEFAULT '',
+          financial_account_id INTEGER REFERENCES financial_accounts(id),
+          cash_session_id INTEGER REFERENCES cash_sessions(id),
+          terms_snapshot TEXT NOT NULL,
+          ownership_declared INTEGER NOT NULL DEFAULT 0,
+          lawful_origin_declared INTEGER NOT NULL DEFAULT 0,
+          seller_signature_name TEXT NOT NULL,
+          business_signature_name TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'completada' CHECK(status IN ('completada','anulada')),
+          created_by INTEGER REFERENCES users(id),
+          created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_tech_private_purchases_created
+          ON tech_private_purchases(created_at,status);
+      `);
+      const setting = db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');
+      setting.run('tech_private_purchase_terms', 'EL VENDEDOR DECLARA SER PROPIETARIO LEGÍTIMO DEL EQUIPO, QUE SU PROCEDENCIA ES LÍCITA, QUE LOS DATOS E IDENTIFICADORES ENTREGADOS SON CORRECTOS Y QUE EL EQUIPO NO ESTÁ REPORTADO, BLOQUEADO, FINANCIADO NI SUJETO A RECLAMACIÓN DE TERCEROS. AUTORIZA AL NEGOCIO A VERIFICAR, REVISAR, REPARAR, REACONDICIONAR Y REVENDER EL EQUIPO. SI LA DECLARACIÓN RESULTA FALSA, EL VENDEDOR RESPONDERÁ POR LOS DAÑOS Y RECLAMACIONES QUE CORRESPONDAN. EL ESTADO FÍSICO, ACCESORIOS, PRECIO Y FORMA DE PAGO CONSTAN EN ESTE DOCUMENTO.');
+      setting.run('service_default_warranty_days', '30');
+      console.log('[MIGRATION 1.48.0-tech-device-lifecycle] Ciclo de equipos TECH listo');
+    }
+  },
+  {
+    version: '1.48.1-external-commission-expenses',
+    description: 'Gastos: comisiones a personas externas con beneficiario identificado y recibo independiente.',
+    run(db) {
+      const addColumn = (table, name, definition) => {
+        const exists = db.prepare(
+          "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?"
+        ).get(table);
+        if (!exists) return;
+        const columns = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(column => column.name));
+        if (!columns.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+      };
+      for (const table of ['expenses', 'expense_payments']) {
+        addColumn(table, 'beneficiary_name', "TEXT NOT NULL DEFAULT ''");
+        addColumn(table, 'beneficiary_document', "TEXT NOT NULL DEFAULT ''");
+        addColumn(table, 'beneficiary_phone', "TEXT NOT NULL DEFAULT ''");
+      }
+
+      const hasDocumentSequences = db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='document_sequences'"
+      ).get();
+      if (hasDocumentSequences) {
+        db.prepare(`
+          INSERT INTO document_sequences(kind,prefix,current,pad_length)
+          VALUES('pago_gasto_externo','RGE',0,6)
+          ON CONFLICT(kind) DO NOTHING
+        `).run();
+      }
+
+      const categoryTable = db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='expense_categories'"
+      ).get();
+      if (categoryTable) {
+        let parent = db.prepare(`
+          SELECT id FROM expense_categories
+          WHERE name='Servicios profesionales' COLLATE NOCASE AND parent_id IS NULL
+          LIMIT 1
+        `).get();
+        if (!parent) {
+          const inserted = db.prepare(`
+            INSERT INTO expense_categories(name,parent_id,affects_profit,requires_approval,active)
+            VALUES('Servicios profesionales',NULL,1,0,1)
+          `).run();
+          parent = { id: inserted.lastInsertRowid };
+        }
+        const commission = db.prepare(`
+          SELECT id FROM expense_categories
+          WHERE name='Comisiones externas' COLLATE NOCASE AND parent_id=?
+          LIMIT 1
+        `).get(parent.id);
+        if (!commission) {
+          db.prepare(`
+            INSERT INTO expense_categories(name,parent_id,affects_profit,requires_approval,active)
+            VALUES('Comisiones externas',?,1,0,1)
+          `).run(parent.id);
+        }
+      }
+      console.log('[MIGRATION 1.48.1-external-commission-expenses] Comisiones externas listas');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

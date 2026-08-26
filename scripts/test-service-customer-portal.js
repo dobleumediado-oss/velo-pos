@@ -72,6 +72,10 @@ function request(port, route, { method = 'GET', form } = {}) {
   assert.match(response.headers['x-robots-tag'], /noindex/);
   assert.ok(response.text.includes('••••1234'), 'muestra solo pista del IMEI');
   assert.ok(!response.text.includes('359999999991234'), 'no expone el IMEI completo');
+  ['Equipo recibido y en evaluación','Presupuesto y autorización','Trabajo en proceso','Listo / entregado']
+    .forEach(stage => assert.ok(response.text.includes(stage), `muestra etapa pública compacta: ${stage}`));
+  assert.ok(!response.text.includes('<b>Inspección inicial</b>'),
+    'los estados internos no se duplican como pasos públicos');
   DB.settingsRepo.set('service_public_portal_enabled', '0');
   response = await request(port, route);
   assert.strictEqual(response.status, 404, 'deshabilitar el portal corta el acceso sin reiniciar');

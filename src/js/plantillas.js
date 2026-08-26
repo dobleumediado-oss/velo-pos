@@ -225,7 +225,21 @@ function _getNcf(sale) {
 }
 
 // Etiqueta del tipo de documento
+function _isExpensePayment(sale) {
+  const type = String(sale?.type || sale?.document_kind || '').toLowerCase();
+  return type === 'pago_gasto_externo' || type === 'pago_proveedor';
+}
+
+function _partyLabel(sale, uppercase = false) {
+  let label = 'Cliente';
+  if (String(sale?.type || '') === 'pago_gasto_externo') label = 'Beneficiario';
+  else if (String(sale?.type || '') === 'pago_proveedor') label = 'Proveedor';
+  return uppercase ? label.toUpperCase() : label;
+}
+
 function _docLabel(sale) {
+  if (sale.type === 'pago_gasto_externo') return 'RECIBO DE PAGO DE GASTO';
+  if (sale.type === 'pago_proveedor') return 'RECIBO DE PAGO A PROVEEDOR';
   if (sale.type === 'cotizacion') return 'COTIZACIÓN';
   if (sale.type === 'devolucion') return 'NOTA DE CRÉDITO';
   if (sale.type === 'factura' && sale.adjusted_copy) return 'FACTURA AJUSTADA';
@@ -692,6 +706,8 @@ function _docKind(doc) {
 
 // Tipo de facturación: Contado / Crédito / Abono
 function _tipoFacturacion(sale) {
+  if (sale.type === 'pago_gasto_externo') return 'Gasto · Persona externa';
+  if (sale.type === 'pago_proveedor') return 'Gasto · Proveedor';
   if (sale.type === 'abono') return 'Abono';
   if (sale.adjusted_copy) {
     return (sale.payment_method || '').toLowerCase() === 'credito'
@@ -705,6 +721,8 @@ function _tipoFacturacion(sale) {
 // Título dinámico del documento A4
 function _a4DocTitle(sale) {
   switch (sale.type) {
+    case 'pago_gasto_externo': return 'RECIBO DE PAGO DE GASTO';
+    case 'pago_proveedor': return 'RECIBO DE PAGO A PROVEEDOR';
     case 'cotizacion': return 'COTIZACIÓN';
     case 'devolucion': return 'NOTA DE CRÉDITO';
     case 'abono':      return 'RECIBO DE ABONO';
@@ -829,7 +847,7 @@ function renderTermica(sale, cfg, opts, widthMm = 76) {
   </div>
   ${sale.salesperson_name ? `<div style="display:flex;justify-content:space-between"><span>Vendedor:</span><span>${_esc((sale.salesperson_code ? sale.salesperson_code + ' · ' : '') + sale.salesperson_name)}</span></div>` : ''}
   <div style="display:flex;justify-content:space-between">
-    <span>Cliente:</span>
+    <span>${_partyLabel(sale)}:</span>
     <span>${_esc(sale.customer_name||'Consumidor Final')}</span>
   </div>
   ${opts.cedula && sale.customer_rnc ? `<div style="display:flex;justify-content:space-between"><span>Cédula/RNC:</span><span>${_esc(sale.customer_rnc)}</span></div>` : ''}
@@ -916,7 +934,7 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
   <hr class="sep"/>
   <div class="row"><span>No.:</span><span style="font-weight:700">${facturaLabel(sale)}</span></div>
   <div class="row"><span>Fecha:</span><span>${sale.date} ${sale.time}</span></div>
-  <div class="row"><span>Cliente:</span><span>${_esc(sale.customer_name||'Consumidor Final')}</span></div>
+  <div class="row"><span>${_partyLabel(sale)}:</span><span>${_esc(sale.customer_name||'Consumidor Final')}</span></div>
   ${sale.customer_phone ? `<div class="row"><span>${_customerPhoneLabel(sale).split(':')[0]}:</span><span>${_esc(sale.customer_phone)}</span></div>` : ''}
   ${sale.customer_contact_name ? `<div class="row"><span>Solicitado por:</span><span>${_esc(sale.customer_contact_name)}${sale.customer_contact_role ? ` · ${_esc(sale.customer_contact_role)}` : ''}</span></div>` : ''}
   ${sale.customer_branch_name ? `<div class="row"><span>Entregar en:</span><span>${_esc(sale.customer_branch_name)}${sale.customer_branch_address ? ` · ${_esc(sale.customer_branch_address)}` : ''}</span></div>` : ''}
@@ -966,6 +984,7 @@ function renderTermicaMinimal(sale, cfg, opts, widthMm = 76) {
          font-size:10.5px; line-height:1.4; color:#000; }
 </style></head><body>
   <div style="text-align:center;font-size:12px;font-weight:700;margin-bottom:2px">${_esc(cfg.biz_name||'Mi Negocio')}</div>
+  ${_isExpensePayment(sale) ? `<div style="text-align:center;font-weight:700">${_docLabel(sale)}</div>` : ''}
   ${sale.adjusted_copy ? `<div style="text-align:center;font-weight:700">${_docLabel(sale)}</div>${_adjustedCopyNotice(sale)}` : ''}
   <div style="text-align:center;font-size:9px;margin-bottom:4px">${sale.date} ${sale.time} · ${facturaLabel(sale)}</div>
   ${sale.customer_phone ? `<div style="text-align:center;font-size:9px;margin-bottom:3px">${_customerPhoneLabel(sale)}</div>` : ''}
@@ -1013,6 +1032,7 @@ function renderCartaRecibo(sale, cfg, opts) {
   const isAbono      = sale.type === 'abono';
   const isConduce    = sale.type === 'conduce';
   const isReporte    = sale.type === 'reporte';
+  const isExpensePayment = _isExpensePayment(sale);
 
   const ncf       = _getNcf(sale);
   const method    = (sale.payment_method || 'efectivo').toLowerCase();
@@ -1036,7 +1056,7 @@ function renderCartaRecibo(sale, cfg, opts) {
   const showNum   = !isReporte;
 
   // ── Filas de artículos ──────────────────────────────
-  const showCode = _showCode(cfg) && !isAbono;
+  const showCode = _showCode(cfg) && !isAbono && !isExpensePayment;
   const rows = (sale.items || []).map((i, idx) => {
     const qty   = Number(i.qty || 1);
     const code  = i.product_code || i.code || i.sku || '—';
@@ -1044,7 +1064,7 @@ function renderCartaRecibo(sale, cfg, opts) {
     const lineNet = showTax ? _lineNet(i, sale) : (qty * unitFinal);
     const lineTax = showTax ? _lineTax(i, sale) : 0;
     const importe = showTax ? _lineImporte(i, sale) : (qty * unitFinal);
-    if (isAbono) {
+    if (isAbono || isExpensePayment) {
       return `<tr>
         <td class="c-desc">${_esc(i.product_name || i.name || '')}</td>
         <td class="c-num it-total">${_n2(importe)}</td>
@@ -1068,7 +1088,7 @@ function renderCartaRecibo(sale, cfg, opts) {
     cells.push(`<div class="cell"><span class="ic">${_a4ic('doc')}</span><div><div class="k">Comprobante fiscal</div><div class="v">${_esc(_tipoComprobante(ncf))}</div><div class="v" style="margin-top:2px"><small>NCF: ${_esc(ncf)}</small></div></div></div>`);
   }
   if (showMoney && !isCotizacion) {
-    cells.push(`<div class="cell"><span class="ic">${_a4ic('card')}</span><div><div class="k">Tipo de facturación</div><div class="v">${_tipoFacturacion(sale)}</div></div></div>`);
+    cells.push(`<div class="cell"><span class="ic">${_a4ic('card')}</span><div><div class="k">${isExpensePayment ? 'Tipo de documento' : 'Tipo de facturación'}</div><div class="v">${_tipoFacturacion(sale)}</div></div></div>`);
   }
   if (method === 'credito' && sale.due_date) {
     cells.push(`<div class="cell"><span class="ic">${_a4ic('cal')}</span><div><div class="k">Vencimiento</div><div class="v">${_fechaCorta(sale.due_date)}</div></div></div>`);
@@ -1128,11 +1148,13 @@ function renderCartaRecibo(sale, cfg, opts) {
   // producto → 40). El RNC/cédula NO va aquí: sale en el bloque CLIENTE.
   const totalUnits = (sale.items || []).filter(i => !i._is_charge)
     .reduce((a, i) => a + (Number(i.qty) || 0), 0);
-  const sumItems = isAbono ? [
+  const sumItems = (isAbono || isExpensePayment) ? [
     ['Moneda', String(sale.display_currency || 'DOP').toUpperCase()],
-    ['Aplicaciones', String((sale.items || []).length)],
+    [isExpensePayment ? 'Conceptos' : 'Aplicaciones', String((sale.items || []).length)],
     ['Fecha', _fechaCorta(sale.date)],
-    ['Facturas', String((sale.payment_allocations || []).length || (sale.items || []).length)],
+    [isExpensePayment ? _partyLabel(sale) : 'Facturas', isExpensePayment
+      ? _esc(sale.customer_name || '—')
+      : String((sale.payment_allocations || []).length || (sale.items || []).length)],
     ['Pago', _esc(paymentLabel)],
     ['Página', '<span class="a4-cur">1</span>/<span class="a4-tot">1</span>'],
   ] : [
@@ -1150,7 +1172,7 @@ function renderCartaRecibo(sale, cfg, opts) {
     <div class="legacy-pay">
       <div><b>Representante</b><span>${_esc(sale.salesperson_name || sale.cajero || '')}</span></div>
       <div><b>Forma de pago</b><span>${_esc(paymentLabel)}</span></div>
-      <div><b>${isAbono ? 'Tipo de documento' : 'Tipo de factura'}</b><span>${_esc(_tipoFacturacion(sale))}</span></div>
+      <div><b>${isAbono || isExpensePayment ? 'Tipo de documento' : 'Tipo de factura'}</b><span>${_esc(_tipoFacturacion(sale))}</span></div>
       <div class="lp-wide"><b>Observaciones</b><span>${_esc(sale.notes || cfg.invoice_notes || 'No aceptamos devoluciones. Cambios solamente antes de 24 horas.')}</span></div>
       <div><b>Número transacción</b><span>${_esc(sale.transaction_number || sale.id || '—')}</span></div>
     </div>` : '';
@@ -1177,7 +1199,15 @@ function renderCartaRecibo(sale, cfg, opts) {
   if (cfg.biz_email) bizContact.push(_esc(cfg.biz_email));
 
   // ── Cuadro de totales (compacto) ────────────────────
-  const totalsBox = isAbono ? `
+  const totalsBox = isExpensePayment ? `
+    <div class="foot-wrap">
+      <div class="totals">
+        <div class="tr"><span>Total del gasto</span><span>${_n2(sale.expense_total || displayTotal)}</span></div>
+        <div class="tr"><span>Balance anterior</span><span>${_n2(sale.balance_before || 0)}</span></div>
+        <div class="tr grand"><span>Monto pagado</span><span>${_n2(paidAmount)}</span></div>
+        <div class="tr"><span>Balance pendiente</span><span>${_n2(balanceAfter)}</span></div>
+      </div>
+    </div>` : isAbono ? `
     <div class="foot-wrap">
       <div class="totals">
         <div class="tr"><span>Monto distribuido</span><span>${_n2(displaySubtotal)}</span></div>
@@ -1335,7 +1365,7 @@ function renderCartaRecibo(sale, cfg, opts) {
       <div class="datebox"><b>Fecha:</b> <span>${_fechaLarga(sale.date)}</span></div>
       ${!isReporte ? `
       <div class="client">
-        <div class="cl-lbl">CLIENTE</div>
+        <div class="cl-lbl">${_partyLabel(sale, true)}</div>
         <div class="cl-name">${_esc(sale.customer_name || 'Consumidor Final')}</div>
         ${cliLines.map(l => `<div class="cl-line">${l}</div>`).join('')}
       </div>` : ''}
@@ -1348,14 +1378,15 @@ function renderCartaRecibo(sale, cfg, opts) {
 
   <table class="items">
     <thead><tr>
-      ${isAbono ? '<th>Factura / concepto</th><th class="c-num">Monto aplicado</th>' : `
+      ${isExpensePayment ? '<th>Concepto del gasto</th><th class="c-num">Monto pagado</th>'
+        : isAbono ? '<th>Factura / concepto</th><th class="c-num">Monto aplicado</th>' : `
       ${showCode ? '<th class="c-code">Código</th>' : ''}
       <th>Nombre artículo</th>
       ${showMoney ? '<th class="c-num">Precio venta</th>' : ''}
       <th class="c-num">Cantidad</th>
 	      ${showMoney ? `<th class="c-num">Monto bruto</th>${showTax ? '<th class="c-num">ITBIS</th>' : ''}<th class="c-num">Importe</th>` : ''}`}
     </tr></thead>
-    <tbody>${rows || (isAbono
+    <tbody>${rows || (isAbono || isExpensePayment
       ? '<tr><td colspan="2" style="color:#9aa0b0">Sin aplicaciones</td></tr>'
       : `<tr>${showCode ? '<td class="c-code"></td>' : ''}<td colspan="${showMoney ? (showTax ? 6 : 5) : 2}" style="color:#9aa0b0">Sin artículos</td></tr>`)}</tbody>
   </table>
@@ -1415,6 +1446,7 @@ function renderCartaFormal(sale, cfg, opts) {
   const isFactura    = sale.type === 'factura';
   const isCotizacion = sale.type === 'cotizacion';
   const isDevolucion = sale.type === 'devolucion';
+  const isExpensePayment = _isExpensePayment(sale);
   const ncf = _getNcf(sale);
   const showTax = _showItbis(sale);
   const displaySubtotal = _displaySubtotal(sale);
@@ -1428,6 +1460,12 @@ function renderCartaFormal(sale, cfg, opts) {
     const lineNet = showTax ? _lineNet(i, sale) : (qty * unitFinal);
     const lineTax = showTax ? _lineTax(i, sale) : 0;
     const importe = showTax ? _lineImporte(i, sale) : (qty * unitFinal);
+    if (isExpensePayment) {
+      return `<tr style="${idx%2===0?'background:#f9fafb':''}">
+        <td style="padding:8px 8px">${_esc(i.product_name||i.name)}</td>
+        <td style="text-align:right;padding:8px;font-weight:600">RD$${_n2(importe)}</td>
+      </tr>`;
+    }
     return `
     <tr style="${idx%2===0?'background:#f9fafb':''}">
       ${showCode ? `<td style="padding:8px 8px;font-family:'Courier New',monospace;font-size:10px;color:#555">${_esc(i.product_code || i.code || '—')}</td>` : ''}
@@ -1482,7 +1520,7 @@ function renderCartaFormal(sale, cfg, opts) {
   ${_adjustedCopyNotice(sale)}
   <div class="info-grid">
     <div class="info-box">
-      <label>Cliente</label>
+      <label>${_partyLabel(sale)}</label>
       <strong>${_esc(sale.customer_name||'Consumidor Final')}</strong>
       ${opts.cedula && sale.customer_rnc ? `<br/><span style="font-size:11px;color:#666">RNC/Cédula: ${_esc(sale.customer_rnc)}</span>` : ''}
       ${sale.customer_phone ? `<br/><span style="font-size:11px;color:#666">${_customerPhoneLabel(sale)}</span>` : ''}
@@ -1500,18 +1538,25 @@ function renderCartaFormal(sale, cfg, opts) {
 
   <table>
     <thead><tr>
+      ${isExpensePayment ? '<th>Concepto del gasto</th><th style="text-align:right">Monto pagado</th>' : `
       ${showCode ? '<th>Código</th>' : ''}
       <th>Nombre artículo</th>
       <th style="text-align:center">Cant.</th>
       <th style="text-align:right">Precio Unit.</th>
       <th style="text-align:right">Monto bruto</th>
       ${showTax ? '<th style="text-align:right">ITBIS</th>' : ''}
-      <th style="text-align:right">Importe</th>
+      <th style="text-align:right">Importe</th>`}
     </tr></thead>
     <tbody>${rows}</tbody>
   </table>
 
   <div class="totals-box">
+    ${isExpensePayment ? `
+    <div class="total-row"><span>Total del gasto</span><span>RD$${_n2(sale.expense_total || displayTotal)}</span></div>
+    <div class="total-row"><span>Balance anterior</span><span>RD$${_n2(sale.balance_before || 0)}</span></div>
+    <div class="total-row grand-total"><span>Monto pagado</span><span>RD$${_n2(sale.payment_amount || displayTotal)}</span></div>
+    <div class="total-row"><span>Balance pendiente</span><span>RD$${_n2(sale.balance_after_payment || 0)}</span></div>
+    ` : `
     <div class="total-row"><span>Sub Total sin impuestos</span><span>RD$${_n2(displaySubtotal)}</span></div>
     ${showTax ? `<div class="total-row"><span>Total ITBIS</span><span>RD$${_n2(displayTax)}</span></div>` : ''}
     ${displayDiscount > 0 ? `<div class="total-row"><span>Descuento</span><span style="color:#dc2626">-RD$${_n2(displayDiscount)}</span></div>` : ''}
@@ -1520,7 +1565,7 @@ function renderCartaFormal(sale, cfg, opts) {
     ${Number(sale.trade_in_amount || 0) > 0 ? `<div class="total-row"><span>Equipo usado recibido</span><span>-RD$${_n2(sale.trade_in_amount)}</span></div>
     <div class="total-row"><span>Pago monetario</span><strong>RD$${_n2(Math.max(0, displayTotal - Number(sale.trade_in_amount || 0)))}</strong></div>` : ''}
     ${String(sale.display_currency || '').toUpperCase() === 'USD' && Number(sale.display_exchange_rate) > 0
-      ? `<div class="total-row"><span>Equivalente USD</span><strong>US$${Number(sale.display_amount || (displayTotal / Number(sale.display_exchange_rate))).toFixed(2)}</strong></div>` : ''}
+      ? `<div class="total-row"><span>Equivalente USD</span><strong>US$${Number(sale.display_amount || (displayTotal / Number(sale.display_exchange_rate))).toFixed(2)}</strong></div>` : ''}`}
   </div>
 
   ${isDevolucion && sale.original_sale_id ? `<div style="margin-top:8px;font-size:11px;color:#555">Ref. venta original: ${facturaLabelOriginal(sale)}</div>` : ''}
@@ -1541,6 +1586,7 @@ function renderCartaNCF(sale, cfg, opts) {
   const isFactura    = sale.type === 'factura';
   const isCotizacion = sale.type === 'cotizacion';
   const isDevolucion = sale.type === 'devolucion';
+  const isExpensePayment = _isExpensePayment(sale);
   const ncf = _getNcf(sale);
   const showTax = _showItbis(sale);
   const displaySubtotal = _displaySubtotal(sale);
@@ -1554,6 +1600,12 @@ function renderCartaNCF(sale, cfg, opts) {
     const lineNet = showTax ? _lineNet(i, sale) : (qty * unitFinal);
     const lineTax = showTax ? _lineTax(i, sale) : 0;
     const importe = showTax ? _lineImporte(i, sale) : (qty * unitFinal);
+    if (isExpensePayment) {
+      return `<tr>
+        <td style="padding:7px 6px">${_esc(i.product_name||i.name)}</td>
+        <td style="text-align:right;padding:7px 6px;font-weight:700">RD$${_n2(importe)}</td>
+      </tr>`;
+    }
     return `
     <tr>
       ${showCode ? `<td style="padding:7px 6px;font-family:'Courier New',monospace;font-size:10px">${_esc(i.product_code || i.code || '—')}</td>` : ''}
@@ -1585,7 +1637,12 @@ function renderCartaNCF(sale, cfg, opts) {
   .grand { font-size:15px; font-weight:700; border-top:2px solid #000; padding-top:5px; }
   img { display:block; max-height:50px; max-width:180px; }
 </style></head><body>
-  ${sale.adjusted_copy
+  ${isExpensePayment
+    ? `<div style="border:2px solid #1a1a1a;border-radius:6px;padding:8px 14px;text-align:center;margin-bottom:10px">
+         <div style="font-size:13px;font-weight:800">${_docLabel(sale)}</div>
+         <div style="font-size:9px;color:#666;text-transform:uppercase">Comprobante interno · Sin valor fiscal</div>
+       </div>`
+    : sale.adjusted_copy
     ? `<div style="border:2px solid #1a1a1a;border-radius:6px;padding:8px 14px;text-align:center;margin-bottom:10px">
          <div style="font-size:13px;font-weight:800">FACTURA AJUSTADA</div>
          <div style="font-size:9px;text-transform:uppercase">Reimpresión consolidada · Sin valor fiscal independiente</div>
@@ -1611,7 +1668,7 @@ function renderCartaNCF(sale, cfg, opts) {
       ${_esc(cfg.biz_addr||'')}<br/>Tel: ${_esc(cfg.biz_phone||'')}
     </div>
     <div style="text-align:right">
-      <div style="font-size:11px;color:#666">Factura No.</div>
+      <div style="font-size:11px;color:#666">${isExpensePayment ? 'Recibo No.' : 'Factura No.'}</div>
       <div style="font-size:20px;font-weight:700">${facturaLabel(sale)}</div>
       <div>Cajero: ${_esc(sale.cajero||'')}</div>
       ${sale.salesperson_name ? `<div>Vendedor: ${_esc((sale.salesperson_code ? sale.salesperson_code + ' · ' : '') + sale.salesperson_name)}</div>` : ''}
@@ -1620,7 +1677,7 @@ function renderCartaNCF(sale, cfg, opts) {
   </div>
 
   <div style="background:#f3f4f6;padding:7px 12px;border-radius:4px;margin-bottom:8px">
-    <strong>Cliente:</strong> ${_esc(sale.customer_name||'Consumidor Final')}
+    <strong>${_partyLabel(sale)}:</strong> ${_esc(sale.customer_name||'Consumidor Final')}
     ${opts.cedula && sale.customer_rnc ? ` &nbsp;|&nbsp; <strong>RNC/Cédula:</strong> ${_esc(sale.customer_rnc)}` : ''}
     ${sale.customer_phone ? `<br/><strong>${_customerPhoneLabel(sale).split(':')[0]}:</strong> ${_esc(sale.customer_phone)}` : ''}
     ${sale.customer_contact_name ? `<br/><strong>Solicitado por:</strong> ${_esc(sale.customer_contact_name)}${sale.customer_contact_role ? ` · ${_esc(sale.customer_contact_role)}` : ''}` : ''}
@@ -1629,29 +1686,38 @@ function renderCartaNCF(sale, cfg, opts) {
 
   <table>
     <thead><tr>
+      ${isExpensePayment ? '<th>Concepto del gasto</th><th style="text-align:right">Monto pagado</th>' : `
       ${showCode ? '<th>Código</th>' : ''}<th>Nombre artículo</th><th style="text-align:center">Cant.</th>
       <th style="text-align:right">Precio</th><th style="text-align:right">Monto bruto</th>
       ${showTax ? '<th style="text-align:right">ITBIS</th>' : ''}
-      <th style="text-align:right">Importe</th>
+      <th style="text-align:right">Importe</th>`}
     </tr></thead>
     <tbody>${rows}</tbody>
   </table>
 
   <div class="total-section">
     <table class="total-table">
+      ${isExpensePayment ? `
+      <tr><td>Total del gasto</td><td style="text-align:right">RD$${_n2(sale.expense_total || displayTotal)}</td></tr>
+      <tr><td>Balance anterior</td><td style="text-align:right">RD$${_n2(sale.balance_before || 0)}</td></tr>
+      <tr class="grand"><td>Monto pagado</td><td style="text-align:right">RD$${_n2(sale.payment_amount || displayTotal)}</td></tr>
+      <tr><td>Balance pendiente</td><td style="text-align:right">RD$${_n2(sale.balance_after_payment || 0)}</td></tr>
+      ` : `
       <tr><td>Sub Total sin impuestos</td><td style="text-align:right">RD$${_n2(displaySubtotal)}</td></tr>
       ${showTax ? `<tr><td>Total ITBIS</td><td style="text-align:right">RD$${_n2(displayTax)}</td></tr>` : ''}
       ${displayDiscount > 0 ? `<tr><td>Descuento</td><td style="text-align:right;color:red">-RD$${_n2(displayDiscount)}</td></tr>` : ''}
       ${Number(sale.additional_charges_total || 0) > 0 ? `<tr><td>Cargos adicionales</td><td style="text-align:right">RD$${_n2(sale.additional_charges_total)}</td></tr>` : ''}
       <tr class="grand"><td>Total con impuestos</td><td style="text-align:right">RD$${_n2(displayTotal)}</td></tr>
       ${String(sale.display_currency || '').toUpperCase() === 'USD' && Number(sale.display_exchange_rate) > 0
-        ? `<tr><td>Equivalente USD</td><td style="text-align:right"><strong>US$${Number(sale.display_amount || (displayTotal / Number(sale.display_exchange_rate))).toFixed(2)}</strong></td></tr>` : ''}
+        ? `<tr><td>Equivalente USD</td><td style="text-align:right"><strong>US$${Number(sale.display_amount || (displayTotal / Number(sale.display_exchange_rate))).toFixed(2)}</strong></td></tr>` : ''}`}
     </table>
   </div>
 
   ${isDevolucion && sale.original_sale_id ? `<div style="margin-top:6px;font-size:11px;color:#555">Ref. venta original: ${facturaLabelOriginal(sale)}</div>` : ''}
   <div style="margin-top:10px;font-size:10px;color:#666;text-align:center;border-top:1px solid #ddd;padding-top:8px">
-    ${isCotizacion
+    ${isExpensePayment
+      ? 'Este documento es un comprobante interno de pago y no sustituye un comprobante fiscal.'
+      : isCotizacion
       ? 'Esta cotización no tiene valor fiscal.'
       : `Este documento es un Comprobante Fiscal válido ante la DGII · ${cfg.receipt_msg||''}`}
   </div>
@@ -1698,7 +1764,7 @@ function renderMediaCarta(sale, cfg, opts) {
   </div>
   ${_adjustedCopyNotice(sale)}
   <div style="background:#f3f4f6;padding:4px 8px;margin-bottom:6px;border-radius:3px;font-size:10px">
-    Cliente: <strong>${_esc(sale.customer_name||'Consumidor Final')}</strong>
+    ${_partyLabel(sale)}: <strong>${_esc(sale.customer_name||'Consumidor Final')}</strong>
     ${sale.customer_phone ? ` · ${_customerPhoneLabel(sale)}` : ''}
     ${sale.customer_contact_name ? ` · Solicitado por: <strong>${_esc(sale.customer_contact_name)}</strong>` : ''}
     ${sale.customer_branch_name ? ` · Entregar en: <strong>${_esc(sale.customer_branch_name)}</strong>` : ''}

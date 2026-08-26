@@ -11,7 +11,12 @@ const STATUS_LABELS = {
   rechazado:'Presupuesto rechazado', cancelado:'Orden cancelada', no_reparable:'No reparable',
   devuelto_sin_reparar:'Devuelto sin reparar',
 };
-const STAGES = ['recepcion','inspeccion','diagnostico','presupuesto','esperando_aprobacion','aprobado','reparando','control_calidad','listo','entregado'];
+const PUBLIC_STAGES = [
+  { key:'recibido', label:'Equipo recibido y en evaluación', statuses:['recepcion','inspeccion','diagnostico'] },
+  { key:'autorizacion', label:'Presupuesto y autorización', statuses:['presupuesto','esperando_aprobacion','aprobado'] },
+  { key:'trabajo', label:'Trabajo en proceso', statuses:['esperando_pieza','reparando','control_calidad'] },
+  { key:'final', label:'Listo / entregado', statuses:['listo','entregado'] },
+];
 
 function esc(value) {
   return String(value == null ? '' : value)
@@ -62,9 +67,8 @@ function timeline(order) {
   if (['rechazado','cancelado','no_reparable','devuelto_sin_reparar'].includes(current)) {
     return `<div class="notice error"><strong>${esc(STATUS_LABELS[current])}</strong><br>Comunícate con la tienda si necesitas más información.</div>`;
   }
-  const normalizedCurrent = current === 'esperando_pieza' ? 'aprobado' : current;
-  const index = STAGES.indexOf(normalizedCurrent);
-  return `<div class="timeline">${STAGES.map((status, i) => `<div class="step ${i < index ? 'done' : i === index ? 'current' : ''}"><div class="dot"></div><div><b>${esc(STATUS_LABELS[status])}</b>${i === index ? `<small>Estado actual</small>` : ''}</div></div>`).join('')}</div>`;
+  const index = Math.max(0, PUBLIC_STAGES.findIndex(stage => stage.statuses.includes(current)));
+  return `<div class="timeline">${PUBLIC_STAGES.map((stage, i) => `<div class="step ${i < index ? 'done' : i === index ? 'current' : ''}"><div class="dot"></div><div><b>${esc(stage.label)}</b>${i === index ? `<small>${esc(STATUS_LABELS[current] || 'Estado actual')}</small>` : ''}</div></div>`).join('')}</div>`;
 }
 
 function itemsTable(order) {

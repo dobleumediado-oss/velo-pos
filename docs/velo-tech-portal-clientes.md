@@ -109,6 +109,11 @@ primera vez. Documentación oficial:
 5. Al quedar listo, VELO prepara el aviso con el mismo enlace.
 6. Al entregar, el portal habilita el documento y la garantía.
 
+El cliente ve un recorrido compacto de cuatro etapas: **recibido y en
+evaluación**, **presupuesto y autorización**, **trabajo en proceso** y
+**listo/entregado**. El taller conserva internamente todos sus estados detallados
+para control y auditoría; la simplificación solo afecta la presentación pública.
+
 ## Lista de continuidad para la PC permanente
 
 - UPS dimensionada para PC, router y equipo de Internet.

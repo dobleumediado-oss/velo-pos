@@ -16,7 +16,8 @@ identificadores directamente en la orden.
 ## Controles operativos
 
 - La recepción conserva condición física, accesorios, pruebas iniciales,
-  prioridad, fecha prometida y consentimiento.
+  salud/capacidad de batería, prioridad, fecha prometida, garantía propuesta y
+  consentimiento.
 - El IMEI/serial enlazado cambia a `servicio` mientras la orden está abierta y
   al cerrar la orden recupera su estado anterior (`vendido`, `en_stock`,
   `reservado` o `devuelto`).
@@ -41,7 +42,8 @@ identificadores directamente en la orden.
 - `service_order_estimates`: versiones y evidencia de la decisión del cliente.
 - `service_technicians`: técnicos, especialidad y comisión de referencia.
 
-La interfaz permite imprimir el documento de servicio, compartir el estado por
+La interfaz permite imprimir por separado el recibo de servicio y una etiqueta
+62 × 40 mm para el dispositivo, compartir el estado por
 WhatsApp y consultar indicadores de abiertas, atrasadas, entregadas, tiempo
 promedio, reingresos y carga por técnico. El portal público sin nube, sus
 enlaces/QR, aprobaciones y documentos de garantía se explican en

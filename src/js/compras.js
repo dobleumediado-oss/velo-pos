@@ -3,7 +3,7 @@
 // ══════════════════════════════════════════════
 
 // ── Estado ────────────────────────────────────
-let comprasTab   = 'ordenes'; // 'ordenes' | 'proveedores'
+let comprasTab   = 'ordenes'; // 'ordenes' | 'proveedores' | 'particulares' (TECH)
 let comprasRange = 'all';
 let newPOItems   = [];        // items de la orden en construcción
 
@@ -19,9 +19,10 @@ async function renderCompras(el) {
     ),
     h('button', {
       class: 'btn btn-dark btn-sm',
-      onclick: () => comprasTab === 'ordenes' ? abrirNuevaOrden() : abrirFormProveedor(null),
-      html: comprasTab === 'ordenes'
-        ? `${svg('plus')} Nueva orden`
+      onclick: () => comprasTab === 'ordenes' ? abrirNuevaOrden()
+        : comprasTab === 'particulares' ? abrirCompraParticular() : abrirFormProveedor(null),
+      html: comprasTab === 'ordenes' ? `${svg('plus')} Nueva orden`
+        : comprasTab === 'particulares' ? `${svg('plus')} Comprar equipo usado`
         : `${svg('plus')} Nuevo proveedor`
     })
   ));
@@ -31,14 +32,15 @@ async function renderCompras(el) {
   [
     { v: 'ordenes',     l: 'Órdenes de compra' },
     { v: 'proveedores', l: 'Proveedores' },
+    ...((window._vertical?.id==='tech')?[{v:'particulares',l:'Equipos comprados a personas'}]:[]),
   ].forEach(o => {
     tabs.appendChild(h('button', {
       class: `tab ${comprasTab === o.v ? 'on' : ''}`,
       onclick: async () => {
         comprasTab = o.v;
-        tabs.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
-        event.currentTarget.classList.add('on');
-        await renderComprasContenido(el);
+        // Volver a dibujar también el encabezado: su botón principal cambia de
+        // acción según la pestaña (OC, proveedor o compra de equipo usado).
+        await renderCompras(el);
       }
     }, o.l));
   });
@@ -53,8 +55,10 @@ async function renderComprasContenido(el) {
 
   if (comprasTab === 'ordenes') {
     await renderOrdenes(el);
-  } else {
+  } else if (comprasTab === 'proveedores') {
     await renderProveedores(el);
+  } else {
+    await renderComprasParticulares(el);
   }
 }
 
@@ -798,3 +802,57 @@ async function eliminarProveedor(id) {
   toast('Proveedor eliminado');
   renderCompras(document.getElementById('page'));
 }
+
+// ══════════════════════════════════════════════
+// VELO TECH POS · Compra documentada a particulares
+// ══════════════════════════════════════════════
+const techPurchaseEsc=value=>String(value==null?'':value).replace(/[&<>"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[char]));
+
+async function renderComprasParticulares(el){
+  const res=await window.api.techPrivatePurchases.list({requestUserId:user?.id});
+  if(!res?.ok){el.appendChild(h('div',{class:'alrt r'},res?.error||'No se pudieron cargar las compras'));return;}
+  const rows=res.data||[];
+  const total=rows.filter(row=>row.status==='completada').reduce((sum,row)=>sum+Number(row.amount||0),0);
+  const summary=h('div',{class:'metrics',style:{gridTemplateColumns:'repeat(3,1fr)',marginBottom:'18px'}});
+  summary.innerHTML=`<div class="metric"><div class="met-label">Equipos adquiridos</div><div class="met-val">${rows.length}</div></div><div class="metric"><div class="met-label">En inventario</div><div class="met-val">${rows.filter(row=>row.unit_status==='en_stock').length}</div></div><div class="metric"><div class="met-label">Valor comprado</div><div class="met-val">${fmt(total)}</div></div>`;
+  el.appendChild(summary);
+  if(['admin','superadmin'].includes(user?.role))el.appendChild(h('div',{class:'flex',style:{justifyContent:'flex-end',marginBottom:'10px'}},h('button',{class:'btn btn-out btn-sm',onclick:abrirConfigCompraParticular},'Términos y garantía')));
+  if(!rows.length){el.appendChild(h('div',{class:'empty-state'},h('div',{style:{fontSize:'32px'}},'📱'),h('div',{class:'empty-title'},'Sin equipos comprados a particulares'),h('div',{class:'empty-sub'},'Registra la identidad, procedencia, estado, pago y firmas en una sola operación.')));return;}
+  const card=h('div',{class:'card'});card.innerHTML=`<div class="tw"><table><thead><tr><th>Documento</th><th>Vendedor</th><th>Equipo / IMEI</th><th>Compra</th><th>Inventario</th><th></th></tr></thead><tbody>${rows.map(row=>`<tr><td><b>${techPurchaseEsc(row.number)}</b><div class="ts">${fdate(String(row.created_at||'').slice(0,10))}</div></td><td>${techPurchaseEsc(row.seller_name)}<div class="ts">${techPurchaseEsc(row.seller_document)}</div></td><td>${techPurchaseEsc(row.product_name)}<div class="ts">${techPurchaseEsc(row.imei||row.serial)}</div></td><td><b>${fmt(row.amount)}</b><div class="ts">${techPurchaseEsc(row.payment_method)}</div></td><td><span class="badge ${row.unit_status==='en_stock'?'g':'n'}">${techPurchaseEsc(row.unit_status)}</span></td><td><button class="btn btn-ghost btn-sm" data-private-purchase="${row.id}">${svg('eye')} Abrir</button></td></tr>`).join('')}</tbody></table></div>`;
+  card.querySelectorAll('[data-private-purchase]').forEach(button=>button.onclick=()=>verCompraParticular(Number(button.dataset.privatePurchase)));
+  el.appendChild(card);
+}
+
+async function abrirCompraParticular(){
+  const [configRes,accountsRes]=await Promise.all([window.api.techPrivatePurchases.getConfig({requestUserId:user?.id}),window.api.financial.getAll()]);
+  if(!configRes?.ok)return toast(configRes?.error||'No se pudo preparar el contrato','err');
+  const products=(DB.products||[]).filter(product=>product.active!==0&&product.serialized);
+  if(!products.length)return toast('Primero registra el modelo como producto controlado por IMEI/serial','w');
+  const descriptions=configRes.data.descriptions||[],accounts=(accountsRes?.data||[]).filter(account=>account.active&&account.type==='banco');
+  openModal(`<div class="modal-title">Compra de equipo usado a una persona</div><div class="modal-sub">La operación crea el equipo en inventario y conserva las declaraciones y términos firmados.</div><div class="tb" style="margin:14px 0 8px">1. Identidad del vendedor</div><div class="g3"><div class="fg"><label class="lbl">Nombre completo *</label><input class="inp" id="tpp-name"></div><div class="fg"><label class="lbl">Cédula / pasaporte *</label><input class="inp" id="tpp-document" data-uppercase="off"></div><div class="fg"><label class="lbl">Teléfono *</label><input class="inp" id="tpp-phone" data-uppercase="off"></div></div><div class="g2"><div class="fg"><label class="lbl">Dirección *</label><input class="inp" id="tpp-address"></div><div class="fg"><label class="lbl">Correo</label><input class="inp no-uppercase" id="tpp-email" data-uppercase="off" type="email"></div></div><div class="tb" style="margin:12px 0 8px">2. Equipo y evaluación</div><div class="g2"><div class="fg"><label class="lbl">Producto / modelo *</label><select class="inp" id="tpp-product">${products.map(product=>`<option value="${product.id}">${techPurchaseEsc(product.name)} · ${techPurchaseEsc(product.code)}</option>`).join('')}</select></div><div class="fg"><label class="lbl">Nombre del equipo</label><input class="inp" id="tpp-device" placeholder="IPHONE 13 128GB"></div></div><div class="g3"><div class="fg"><label class="lbl">IMEI *</label><input class="inp" id="tpp-imei" data-uppercase="off"></div><div class="fg"><label class="lbl">Serial</label><input class="inp" id="tpp-serial" data-uppercase="off"></div><div class="fg"><label class="lbl">Color</label><input class="inp" id="tpp-color"></div></div><div class="g3"><div class="fg"><label class="lbl">Capacidad</label><input class="inp" id="tpp-capacity" placeholder="128GB"></div><div class="fg"><label class="lbl">Condición batería (%)</label><input class="inp" id="tpp-health" type="number" min="0" max="100"></div><div class="fg"><label class="lbl">Capacidad batería (mAh)</label><input class="inp" id="tpp-mah" type="number" min="0" max="100000"></div></div><div class="fg"><label class="lbl">Condición física y pruebas *</label><textarea class="inp" id="tpp-condition" rows="2" placeholder="PANTALLA, CARCASA, CÁMARAS, CARGA, BLOQUEOS, HUMEDAD..."></textarea></div><div class="fg"><label class="lbl">Descripción que saldrá en la factura al venderlo</label><input class="inp" id="tpp-description" list="tpp-description-list"><datalist id="tpp-description-list">${descriptions.map(row=>`<option value="${techPurchaseEsc(row.description)}">${techPurchaseEsc(row.name)}</option>`).join('')}</datalist></div><div class="tb" style="margin:12px 0 8px">3. Pago y firmas</div><div class="g3"><div class="fg"><label class="lbl">Precio de compra *</label><input class="inp" id="tpp-amount" type="number" min="0.01" step="0.01"></div><div class="fg"><label class="lbl">Forma de pago</label><select class="inp" id="tpp-method"><option value="efectivo">Efectivo desde caja</option><option value="transferencia">Transferencia</option><option value="cheque">Cheque</option></select></div><div class="fg" id="tpp-account-wrap" style="display:none"><label class="lbl">Cuenta bancaria</label><select class="inp" id="tpp-account"><option value="">Seleccionar…</option>${accounts.map(account=>`<option value="${account.id}">${techPurchaseEsc(account.name)} · ${techPurchaseEsc(account.currency)}</option>`).join('')}</select></div></div><div class="fg"><label class="lbl">Referencia del pago</label><input class="inp" id="tpp-reference"></div><div class="g2"><div class="fg"><label class="lbl">Nombre que firma como vendedor *</label><input class="inp" id="tpp-seller-sign"></div><div class="fg"><label class="lbl">Encargado del negocio que firma *</label><input class="inp" id="tpp-business-sign" value="${techPurchaseEsc(user?.name||'')}"></div></div><label style="display:flex;gap:8px;margin:8px 0"><input type="checkbox" id="tpp-owner"> El vendedor declara que es propietario legítimo del equipo.</label><label style="display:flex;gap:8px;margin:8px 0"><input type="checkbox" id="tpp-origin"> El vendedor declara que el equipo tiene procedencia lícita y no está reportado, bloqueado, financiado ni reclamado por terceros.</label><details style="margin-top:10px"><summary class="tb">Ver términos que quedarán congelados en este contrato</summary><div class="ts" style="white-space:pre-wrap;padding:10px">${techPurchaseEsc(configRes.data.terms)}</div></details><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="tpp-save">Registrar compra y equipo</button></div>`,'modal-xl');
+  document.getElementById('tpp-method').onchange=event=>document.getElementById('tpp-account-wrap').style.display=event.target.value==='efectivo'?'none':'block';
+  const descriptionField=document.getElementById('tpp-description')?.closest('.fg');
+  descriptionField?.insertAdjacentHTML('beforebegin',`<div class="fg"><label class="lbl">Accesorios entregados</label><div style="display:flex;gap:14px;flex-wrap:wrap;padding:9px;border:1px solid var(--line);border-radius:8px"><label><input type="checkbox" class="tpp-accessory" value="CARGADOR"> Cargador</label><label><input type="checkbox" class="tpp-accessory" value="CABLE"> Cable</label><label><input type="checkbox" class="tpp-accessory" value="CAJA"> Caja</label><label><input type="checkbox" class="tpp-accessory" value="FUNDA"> Funda</label><input class="inp" id="tpp-accessory-other" placeholder="OTRO ACCESORIO" style="min-width:180px;flex:1"></div></div>`);
+  document.getElementById('tpp-save').onclick=async event=>{
+    event.currentTarget.disabled=true;
+    const product=products.find(row=>Number(row.id)===Number(document.getElementById('tpp-product').value));
+    const accessories=[...document.querySelectorAll('.tpp-accessory:checked')].map(input=>input.value);
+    const otherAccessory=document.getElementById('tpp-accessory-other')?.value?.trim();
+    if(otherAccessory)accessories.push(otherAccessory);
+    const data={seller_name:document.getElementById('tpp-name').value,seller_document:document.getElementById('tpp-document').value,seller_phone:document.getElementById('tpp-phone').value,seller_address:document.getElementById('tpp-address').value,seller_email:document.getElementById('tpp-email').value,product_id:product?.id,device_name:document.getElementById('tpp-device').value||product?.name,brand:product?.brand,model:product?.model,imei:document.getElementById('tpp-imei').value,serial:document.getElementById('tpp-serial').value,color:document.getElementById('tpp-color').value,capacity:document.getElementById('tpp-capacity').value,battery_health:document.getElementById('tpp-health').value,battery_capacity_mah:document.getElementById('tpp-mah').value,physical_condition:document.getElementById('tpp-condition').value,sale_description:document.getElementById('tpp-description').value,accessories,amount:Number(document.getElementById('tpp-amount').value),payment_method:document.getElementById('tpp-method').value,financial_account_id:Number(document.getElementById('tpp-account').value)||null,payment_reference:document.getElementById('tpp-reference').value,ownership_declared:document.getElementById('tpp-owner').checked,lawful_origin_declared:document.getElementById('tpp-origin').checked,seller_signature_name:document.getElementById('tpp-seller-sign').value,business_signature_name:document.getElementById('tpp-business-sign').value,terms_snapshot:configRes.data.terms};
+    const saved=await window.api.techPrivatePurchases.create({requestUserId:user?.id,data});
+    if(!saved?.ok){event.currentTarget.disabled=false;return toast(saved?.error||'No se pudo registrar','err');}
+    toast(`✓ ${saved.number} registrada y equipo agregado al inventario`,'ok');
+    await reloadProducts();
+    verCompraParticular(saved.purchaseId);
+  };
+}
+
+function techPrivatePurchaseDocument(row){
+  const accessories=(()=>{try{return JSON.parse(row.accessories||'[]')}catch{return[]}})();
+  return `<!doctype html><html><head><meta charset="utf-8"><style>@page{size:A4;margin:14mm}body{font-family:Arial;color:#172033;font-size:11px;line-height:1.45}h1{font-size:21px;margin:0}.head{display:flex;justify-content:space-between;border-bottom:2px solid #245fd1;padding-bottom:10px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:14px 0}.box{border:1px solid #d8dee8;border-radius:8px;padding:9px}.label{font-size:9px;color:#667085;text-transform:uppercase}.value{font-weight:700}.terms{white-space:pre-wrap;text-align:justify}.sign{display:grid;grid-template-columns:1fr 1fr;gap:50px;margin-top:55px}.line{border-top:1px solid #222;text-align:center;padding-top:5px}.page-break{break-before:page;page-break-before:always}</style></head><body><div class="head"><div><h1>${techPurchaseEsc(DB?.settings?.biz_name||CFG.biz||'VELO TECH POS')}</h1><div>Contrato de compra de equipo usado a particular</div></div><div><b>${techPurchaseEsc(row.number)}</b><br>${techPurchaseEsc(String(row.created_at||'').slice(0,16))}</div></div><div class="grid"><div class="box"><div class="label">Vendedor</div><div class="value">${techPurchaseEsc(row.seller_name)}</div>${techPurchaseEsc(row.seller_document)}<br>${techPurchaseEsc(row.seller_phone)}<br>${techPurchaseEsc(row.seller_address)}</div><div class="box"><div class="label">Equipo adquirido</div><div class="value">${techPurchaseEsc(row.device_name||row.product_name)}</div>${techPurchaseEsc([row.brand,row.model,row.capacity,row.color].filter(Boolean).join(' · '))}<br>IMEI: ${techPurchaseEsc(row.imei||'—')} · SERIAL: ${techPurchaseEsc(row.serial||'—')}</div><div class="box"><div class="label">Evaluación</div>${techPurchaseEsc(row.physical_condition)}<br>Batería: ${row.battery_health==null?'No medida':`${Number(row.battery_health)}%`}${row.battery_capacity_mah?` · ${Number(row.battery_capacity_mah)} mAh`:''}<br>Accesorios: ${techPurchaseEsc(accessories.join(', ')||'Ninguno')}</div><div class="box"><div class="label">Pago</div><div class="value">${fmt(row.amount)}</div>${techPurchaseEsc(row.payment_method)} ${row.payment_reference?`· ${techPurchaseEsc(row.payment_reference)}`:''}</div></div><div class="box"><div class="label">Descripción comercial para una futura venta</div>${techPurchaseEsc(row.sale_description||'Sin descripción adicional')}</div><div class="sign"><div class="line">${techPurchaseEsc(row.seller_signature_name)}<br>Vendedor</div><div class="line">${techPurchaseEsc(row.business_signature_name)}<br>Representante del negocio</div></div><div class="page-break"><h1>Declaraciones, garantía de procedencia y condiciones</h1><p class="terms">${techPurchaseEsc(row.terms_snapshot)}</p><div class="box"><b>Declaraciones aceptadas:</b><br>✓ Propiedad legítima del vendedor.<br>✓ Procedencia lícita y ausencia de reporte, bloqueo, financiamiento o reclamación de terceros.<br>✓ Autorización para revisar, reparar, reacondicionar y revender el equipo.</div><div class="sign"><div class="line">${techPurchaseEsc(row.seller_signature_name)}<br>Vendedor</div><div class="line">${techPurchaseEsc(row.business_signature_name)}<br>Representante del negocio</div></div></div></body></html>`;
+}
+
+async function verCompraParticular(id){const res=await window.api.techPrivatePurchases.getById({id,requestUserId:user?.id});if(!res?.ok||!res.data)return toast(res?.error||'Compra no encontrada','err');const row=res.data;openModal(`<div class="modal-title">${techPurchaseEsc(row.number)}</div><div class="modal-sub">Contrato y entrada de inventario vinculados · unidad #${row.product_unit_id}</div><div class="g2" style="margin-top:14px"><div class="card" style="padding:12px"><div class="tb">Vendedor</div><div>${techPurchaseEsc(row.seller_name)}</div><div class="ts">${techPurchaseEsc(row.seller_document)} · ${techPurchaseEsc(row.seller_phone)}</div></div><div class="card" style="padding:12px"><div class="tb">Equipo</div><div>${techPurchaseEsc(row.product_name)}</div><div class="ts">${techPurchaseEsc(row.imei||row.serial)} · ${techPurchaseEsc(row.unit_status)}</div></div></div><div class="alrt b"><div class="alrt-dot b"></div><div class="alrt-sub">Se generan dos páginas con las mismas condiciones congeladas y espacios de firma para ambas partes.</div></div><div class="modal-foot"><button class="btn btn-out" onclick="renderCompras(document.getElementById('page'))">Atrás</button><button class="btn btn-dark" id="tpp-print">${svg('printer')} Imprimir contrato (2 hojas)</button></div>`);document.getElementById('tpp-print').onclick=()=>printHTML(techPrivatePurchaseDocument(row),'reporte');}
+
+async function abrirConfigCompraParticular(){const res=await window.api.techPrivatePurchases.getConfig({requestUserId:user?.id});if(!res?.ok)return toast(res?.error,'err');openModal(`<div class="modal-title">Términos de compra y garantía del taller</div><div class="modal-sub">Los contratos nuevos guardan una copia inmutable de estos términos. Los anteriores no cambian.</div><div class="fg" style="margin-top:14px"><label class="lbl">Términos predeterminados para compra a particulares</label><textarea class="inp" id="tpp-terms" rows="10">${techPurchaseEsc(res.data.terms)}</textarea></div><div class="fg"><label class="lbl">Garantía predeterminada del servicio técnico (días)</label><input class="inp" id="tpp-warranty-default" type="number" min="0" max="3650" value="${Number(res.data.default_warranty_days)||30}"></div><div class="alrt a"><div class="alrt-dot a"></div><div class="alrt-sub">Estos términos son una base operativa y no sustituyen la revisión de un abogado según las políticas del negocio y la legislación aplicable.</div></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="tpp-config-save">Guardar</button></div>`,'modal-lg');document.getElementById('tpp-config-save').onclick=async()=>{const saved=await window.api.techPrivatePurchases.saveConfig({requestUserId:user?.id,terms:document.getElementById('tpp-terms').value,default_warranty_days:Number(document.getElementById('tpp-warranty-default').value)||0});if(!saved?.ok)return toast(saved?.error||'No se pudo guardar','err');toast('✓ Términos actualizados para contratos futuros','ok');closeModal();};}

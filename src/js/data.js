@@ -59,6 +59,7 @@ function documentTypeLabel(o) {
     abono: 'Abono',
     recibo: 'Recibo',
     pago_proveedor: 'Pago a proveedor',
+    pago_gasto_externo: 'Pago de gasto a persona externa',
     conduce: 'Conduce',
     reporte: 'Reporte',
   };
