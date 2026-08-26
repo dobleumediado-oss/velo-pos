@@ -3912,7 +3912,7 @@ function previsualizarFactura(sale) {
     '  Array.prototype.slice.call(clone.querySelectorAll(".no-print,script")).forEach(function(el){el.remove();});',
     '  var html="<!DOCTYPE html>"+clone.outerHTML;',
     '  if(window.opener&&window.opener.api&&window.opener.api.print&&window.opener.api.print.toPDF){',
-    '    window.opener.api.print.toPDF({html:html,suggestedName:suggestedName}).then(function(r){',
+    '    window.opener.api.print.toPDF({html:html,suggestedName:suggestedName,open:true}).then(function(r){',
     '      if(!r||(!r.ok&&!r.canceled)) alert((r&&r.error)||"No se pudo guardar el PDF");',
     '    });',
     '    return;',

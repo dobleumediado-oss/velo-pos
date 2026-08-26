@@ -1444,8 +1444,9 @@ async function _guardarPDF(html, suggestedName) {
     toast('El documento no tiene contenido para guardar', 'err');
     return { ok: false, error: 'Documento vacío' };
   }
-  const r = await window.api.print.toPDF({ html, suggestedName });
-  if (r?.ok) toast('✓ PDF guardado');
+  const r = await window.api.print.toPDF({ html, suggestedName, open: true });
+  if (r?.ok && r?.openError) toast(`PDF guardado, pero no pudo abrirse: ${r.openError}`, 'warn');
+  else if (r?.ok) toast('✓ PDF guardado y abierto');
   else if (!r?.canceled) toast(r?.error || 'No se pudo guardar el PDF', 'err');
   return r;
 }

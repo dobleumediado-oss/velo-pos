@@ -62,6 +62,13 @@ const { roleRequiresOpenCash } = require('./src/js/cash-close-policy');
 const { checkPublicPortalAccess } = require('./lib/portal-public-check');
 const { buildWhatsAppUrls } = require('./lib/whatsapp-url');
 const { createEncryptedBackup, verifyEncryptedBackup } = require('./lib/continuity-backup');
+const {
+  buildPdfOptions,
+  waitForPdfDocument,
+  validatePdfBuffer,
+  writePdfFile,
+  cleanupStaleGeneratedFiles,
+} = require('./src/main/pdf-document');
 const { canManageInventory, modulePermission } = require('./lib/user-operational-permissions');
 const {
   EQUIPARTS_FILES,
@@ -3898,6 +3905,7 @@ ipcMain.handle('print:toPDF', async (_, { html, suggestedName, open, temporary }
   try {
     if (!html || !String(html).trim()) return { ok: false, error: 'Sin contenido para el PDF' };
     const os = require('os');
+    cleanupStaleGeneratedFiles(os.tmpdir(), /^velo_pdf_[\w.-]+\.html$/i);
     const tmpFile = path.join(os.tmpdir(), `velo_pdf_${Date.now()}_${Math.random().toString(36).slice(2)}.html`);
     fs.writeFileSync(tmpFile, html, 'utf8');
     const win = new BrowserWindow({ show: false, paintWhenInitiallyHidden: true, width: 816, height: 1056,
@@ -3912,47 +3920,12 @@ ipcMain.handle('print:toPDF', async (_, { html, suggestedName, open, temporary }
         win.webContents.once('did-fail-load', (_, __, e) => { clearTimeout(t); reject(new Error(e || 'No se pudo cargar')); });
         win.loadFile(tmpFile);
       });
-      const renderInfo = await win.webContents.executeJavaScript(`
-        (async () => {
-          const waitFrame = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-          await waitFrame();
-          try {
-            if (document.fonts && document.fonts.ready) await document.fonts.ready;
-          } catch (_) {}
-          const imgs = Array.from(document.images || []);
-          await Promise.all(imgs.map(img => img.complete
-            ? Promise.resolve()
-            : new Promise(resolve => {
-                const done = () => resolve();
-                img.addEventListener('load', done, { once: true });
-                img.addEventListener('error', done, { once: true });
-                setTimeout(done, 3000);
-              })));
-          await waitFrame();
-          const body = document.body;
-          const de = document.documentElement;
-          const rect = body ? body.getBoundingClientRect() : { width: 0, height: 0 };
-          const text = body ? String(body.innerText || '').trim() : '';
-          return {
-            textLen: text.length,
-            imgCount: imgs.length,
-            w: Math.ceil(Math.max(
-              de ? de.scrollWidth : 0,
-              body ? body.scrollWidth : 0,
-              rect.width || 0,
-              302
-            )),
-            h: Math.ceil(Math.max(
-              de ? de.scrollHeight : 0,
-              body ? body.scrollHeight : 0,
-              rect.height || 0,
-              800
-            )),
-          };
-        })()
-      `);
-      if (!renderInfo?.textLen && !renderInfo?.imgCount) {
+      const renderInfo = await waitForPdfDocument(win.webContents);
+      if (!renderInfo?.textLen && !renderInfo?.imageCount && !renderInfo?.svgCount && !renderInfo?.canvasCount) {
         throw new Error('El documento no generó contenido visible para el PDF');
+      }
+      if (renderInfo?.brokenImages) {
+        throw new Error(`El documento contiene ${renderInfo.brokenImages} imagen(es) que no pudieron cargarse`);
       }
       let visualInfo = { sampled: 0, nonWhite: 0 };
       try {
@@ -3970,26 +3943,20 @@ ipcMain.handle('print:toPDF', async (_, { html, suggestedName, open, temporary }
       if (visualInfo.sampled > 0 && visualInfo.nonWhite < 3) {
         throw new Error('La vista del PDF quedó en blanco. Intenta guardar de nuevo.');
       }
-      // Página a la medida del contenido (documento compacto, sin hojas en blanco).
-      const dims = {
-        w: Math.max(302, renderInfo?.w || 302),
-        h: Math.max(800, renderInfo?.h || 800),
-      };
-      const micron = px => Math.max(20000, Math.round((px || 0) * 264.583));
-      const pageRule = String(html).match(/@page[\s\S]{0,240}?size\s*:\s*([^;}{]+)/i);
-      const cssSize = (pageRule?.[1] || '').trim().toLowerCase();
-      const useCssPage = /\bletter\b|\ba4\b|\blegal\b|5\.5in|half-letter/.test(cssSize);
-      const pdfOptions = useCssPage
-        ? { printBackground: true, preferCSSPageSize: true }
-        : {
-            printBackground: true,
-            pageSize: { width: micron(dims.w) + 4000, height: micron(dims.h) + 4000 },
-            margins: { top: 0, bottom: 0, left: 0, right: 0 },
-          };
-      pdfBuf = await win.webContents.printToPDF(pdfOptions);
-      if (!pdfBuf || pdfBuf.length < 1500) {
-        throw new Error('El PDF generado no contiene datos suficientes');
-      }
+      const pdfLayout = buildPdfOptions(html, renderInfo);
+      pdfBuf = await win.webContents.printToPDF(pdfLayout.options);
+      const validation = validatePdfBuffer(pdfBuf);
+      logInfo('pdf', 'Documento PDF generado', {
+        profile: pdfLayout.profile,
+        cssSize: pdfLayout.cssSize || 'default',
+        paginated: pdfLayout.paginated,
+        bytes: validation.bytes,
+        pages: validation.pageCount,
+        contentWidthPx: renderInfo.contentWidthPx,
+        contentHeightPx: renderInfo.contentHeightPx,
+        images: renderInfo.imageCount,
+        vectors: renderInfo.svgCount,
+      });
     } finally {
       try { win.destroy(); } catch {}
       try { fs.unlinkSync(tmpFile); } catch {}
@@ -3999,13 +3966,14 @@ ipcMain.handle('print:toPDF', async (_, { html, suggestedName, open, temporary }
     if (temporary) {
       const shareDir = path.join(app.getPath('temp'), 'velo-pos-whatsapp');
       fs.mkdirSync(shareDir, { recursive: true });
+      cleanupStaleGeneratedFiles(shareDir, /^[^/\\]+\.pdf$/i);
       const base = safeName.toLowerCase().endsWith('.pdf') ? safeName : safeName + '.pdf';
       // El número documental ya hace único el nombre. Mantenerlo exacto permite
       // que, al guardarlo desde WhatsApp, conserve cliente/empresa + documento
       // en vez de terminar con un timestamp técnico incomprensible.
       const filePath = path.join(shareDir, base);
-      fs.writeFileSync(filePath, pdfBuf);
-      return { ok: true, path: filePath, name: base, temporary: true };
+      const saved = writePdfFile(filePath, pdfBuf);
+      return { ok: true, path: filePath, name: base, temporary: true, pages: saved.pageCount };
     }
     const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
       title: 'Guardar PDF',
@@ -4013,10 +3981,16 @@ ipcMain.handle('print:toPDF', async (_, { html, suggestedName, open, temporary }
       filters: [{ name: 'PDF', extensions: ['pdf'] }],
     });
     if (canceled || !filePath) return { ok: false, canceled: true };
-    fs.writeFileSync(filePath, pdfBuf);
-    if (open) { try { shell.openPath(filePath); } catch {} }
-    return { ok: true, path: filePath };
+    const saved = writePdfFile(filePath, pdfBuf);
+    let openError = '';
+    if (open) {
+      try { openError = await shell.openPath(filePath); }
+      catch (error) { openError = error?.message || 'No se pudo abrir el PDF'; }
+      if (openError) logWarn('pdf', 'El PDF se guardó pero no pudo abrirse', { error: openError });
+    }
+    return { ok: true, path: filePath, pages: saved.pageCount, openError: openError || undefined };
   } catch (e) {
+    logError('pdf', 'No se pudo generar, validar o guardar el PDF', { error: e.message });
     console.error('[print:toPDF]', e.message);
     return { ok: false, error: e.message };
   }

@@ -19,6 +19,12 @@ const {
   normalizeLabelText,
   buildLabelRenderModel,
 } = require('../src/js/printer-profiles');
+const {
+  buildPdfOptions,
+  extractCssPageSize,
+  extractCssPageVerticalMarginInches,
+  cleanupStaleGeneratedFiles,
+} = require('../src/main/pdf-document');
 
 let passed = 0;
 function test(name, fn) {
@@ -28,6 +34,59 @@ function test(name, fn) {
 }
 
 console.log('\nPerfiles universales de impresión');
+
+test('PDF térmico convierte 80 mm a pulgadas para Electron 41', () => {
+  const layout = buildPdfOptions(
+    '<style>@page{size:80mm auto;margin:2mm 2mm 4mm}</style>',
+    { contentHeightPx: 800 }
+  );
+  assert.strictEqual(layout.profile, 'thermal-roll');
+  assert.ok(Math.abs(layout.options.pageSize.width - (80 / 25.4)) < 0.01);
+  assert.ok(layout.options.pageSize.width < 4);
+  assert.ok(layout.options.pageSize.height <= 36);
+  assert.ok(extractCssPageVerticalMarginInches('<style>@page{margin:2mm 1mm 4mm}</style>') > 0.23);
+});
+
+test('PDF respeta A4, Carta y etiquetas fijas mediante CSS', () => {
+  for (const size of ['A4', 'letter', '62mm 40mm', '108mm 27mm']) {
+    const html = `<style>@page { size:${size}; margin:0 }</style>`;
+    const layout = buildPdfOptions(html, { contentHeightPx: 5000 });
+    assert.strictEqual(layout.profile, 'css-fixed');
+    assert.strictEqual(layout.options.preferCSSPageSize, true);
+    assert.strictEqual(extractCssPageSize(html), size.toLowerCase());
+  }
+});
+
+test('PDF térmico largo pagina sin crear hojas gigantes', () => {
+  const layout = buildPdfOptions(
+    '<style>@page{size:58mm auto;margin:2mm}</style>',
+    { contentHeightPx: 12000 }
+  );
+  assert.strictEqual(layout.paginated, true);
+  assert.strictEqual(layout.options.pageSize.height, 36);
+  assert.ok(layout.options.pageSize.width < 3);
+});
+
+test('limpia únicamente temporales PDF antiguos generados por VELO', () => {
+  const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'velo-pdf-cleanup-'));
+  try {
+    const oldPdf = path.join(dir, 'documento.pdf');
+    const recentPdf = path.join(dir, 'reciente.pdf');
+    const unrelated = path.join(dir, 'conservar.txt');
+    fs.writeFileSync(oldPdf, 'old');
+    fs.writeFileSync(recentPdf, 'new');
+    fs.writeFileSync(unrelated, 'keep');
+    const old = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    fs.utimesSync(oldPdf, old, old);
+    assert.strictEqual(cleanupStaleGeneratedFiles(dir, /^[^/\\]+\.pdf$/i), 1);
+    assert.strictEqual(fs.existsSync(oldPdf), false);
+    assert.strictEqual(fs.existsSync(recentPdf), true);
+    assert.strictEqual(fs.existsSync(unrelated), true);
+  } finally {
+    for (const name of fs.readdirSync(dir)) fs.unlinkSync(path.join(dir, name));
+    fs.rmdirSync(dir);
+  }
+});
 
 test('detecta la 2Connect 2C-LP427B aunque el driver varíe el separador', () => {
   assert.strictEqual(inferPrinterProfileId('2Connect 2C-LP427B', 'ticket'), 'label_2connect_108');
