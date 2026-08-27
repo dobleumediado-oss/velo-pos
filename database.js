@@ -2620,6 +2620,8 @@ function seedIfEmpty() {
     ['pos_discount_auth_limit_pct','10'],
     ['pos_price_change_enabled','1'],
     ['pos_price_max_reduction_amount','0'],
+    ['pos_price_max_increase_amount','0'],
+    ['pos_cashier_auto_credit_limit_amount','0'],
     ['ncf_counter',    '0'],
     ['barcode_enabled','0'],
     ['barcode_printer',''],
@@ -4549,6 +4551,7 @@ function saleOperationFingerprint({ customer, items, payment, type }) {
     },
     items: (items || []).map(item => ({
       productId: Number(item.product_id),
+      sourceConduceItemId: Number(item.sourceConduceItemId ?? item.source_conduce_item_id) || null,
       qty: Number(item.qty),
       unitPrice: round2(Number(item.unit_price)),
       taxable: item.taxable === 0 || item.taxable === false || item.taxable === '0' ? 0 : 1,
@@ -4576,6 +4579,7 @@ function saleOperationFingerprint({ customer, items, payment, type }) {
       initialPaymentReference: String(payment?.initialPaymentReference || '').replace(/\s+/g, ' ').trim(),
       replacesSaleId: Number(payment?.replacesSaleId) || null,
       sourceQuoteId: Number(payment?.sourceQuoteId) || null,
+      sourceConduceId: Number(payment?.sourceConduceId) || null,
       saleDate: String(payment?.saleDate || '').trim(),
       notes: String(payment?.notes || '').replace(/\s+/g, ' ').trim(),
       displayCurrency: String(payment?.displayCurrency || 'DOP').toUpperCase(),
@@ -4619,6 +4623,15 @@ function saleConfirmationResult(sale, { idempotent = false } = {}) {
   const initialPaymentMixNoncash = round2(initialMovements
     .filter(row => String(row.method || '').toLowerCase() !== 'efectivo')
     .reduce((sum, row) => sum + Number(row.amount || 0), 0));
+  const convertedConduce = tableExists('delivery_note_invoice_links')
+    ? db.prepare(`
+        SELECT dn.id,dn.number
+        FROM delivery_note_invoice_links l
+        JOIN delivery_notes dn ON dn.id=l.delivery_note_id
+        WHERE l.invoice_id=?
+        ORDER BY l.id LIMIT 1
+      `).get(sale.id)
+    : null;
   return {
     saleId: Number(sale.id),
     total: Number(sale.total || 0),
@@ -4658,6 +4671,8 @@ function saleConfirmationResult(sale, { idempotent = false } = {}) {
     tradeInAmount: Number(sale.trade_in_amount || 0),
     tradeInUnitId: sale.trade_in_unit_id || null,
     replacesSaleId: sale.replaces_sale_id || null,
+    convertedConduceId: convertedConduce?.id || null,
+    convertedConduceNumber: convertedConduce?.number || '',
     reusedDocumentNumber: !!sale.replaces_sale_id,
     operationId: sale.operation_id || '',
     idempotent,
@@ -4722,6 +4737,23 @@ const salesRepo = {
         : null;
       if (sourceQuoteId && (!sourceQuote || sourceQuote.type !== 'cotizacion')) {
         throw new Error('La cotización de origen ya no está disponible');
+      }
+      const sourceConduceId = type === 'factura'
+        ? (Number(payment.sourceConduceId) || null)
+        : null;
+      const sourceConduce = sourceConduceId
+        ? db.prepare('SELECT * FROM delivery_notes WHERE id=?').get(sourceConduceId)
+        : null;
+      if (sourceConduceId && (!sourceConduce || !['despachado', 'entregado', 'parcial', 'facturado'].includes(sourceConduce.status))) {
+        throw new Error('El conduce de origen ya no está disponible para convertirlo en venta');
+      }
+      if (sourceConduce && tableExists('delivery_note_charges')) {
+        // El servidor es la autoridad: los cargos pendientes viajan una sola
+        // vez, aunque el renderer sea recargado o la venta sea parcial.
+        payment.charges = db.prepare(`
+          SELECT description,amount FROM delivery_note_charges
+          WHERE delivery_note_id=? AND invoice_id IS NULL ORDER BY id
+        `).all(sourceConduceId);
       }
 
       // Para clientes registrados, la base de datos es la autoridad. El renderer
@@ -4925,6 +4957,34 @@ const salesRepo = {
         });
       }
 
+      let sourceConduceLines = [];
+      if (sourceConduce) {
+        const availableById = new Map(
+          conduceRepo.invoiceableLines(sourceConduceId).map(line => [Number(line.id), line])
+        );
+        const usedSourceLines = new Set();
+        sourceConduceLines = saleItems.flatMap(item => {
+          const itemId = Number(item.sourceConduceItemId ?? item.source_conduce_item_id) || null;
+          if (!itemId) return [];
+          if (usedSourceLines.has(itemId)) throw new Error('Una línea del conduce está repetida en la venta');
+          usedSourceLines.add(itemId);
+          const sourceLine = availableById.get(itemId);
+          if (!sourceLine || sourceLine.invoiceable <= 0) {
+            throw new Error('Una línea del conduce ya fue facturada o dejó de estar disponible');
+          }
+          if (Number(sourceLine.product_id) !== Number(item.product_id)) {
+            throw new Error(`El producto de "${sourceLine.description}" no coincide con el conduce`);
+          }
+          if (Number(item.qty) > Number(sourceLine.invoiceable) + 1e-9) {
+            throw new Error(`No puedes vender ${item.qty} de "${sourceLine.description}" — pendiente en el conduce: ${sourceLine.invoiceable}`);
+          }
+          return [{ sourceLine, item }];
+        });
+        if (!sourceConduceLines.length) {
+          throw new Error('La venta debe conservar al menos una línea pendiente del conduce');
+        }
+      }
+
       // 2. Calcular totales con precio final: neto + ITBIS incluido = total.
       const discPct = payment.disc || 0;
       const calculated = calcIncludedTaxTotals(saleItems, { type, discPct });
@@ -4935,7 +4995,7 @@ const salesRepo = {
         }))
         .filter(row => row.description && row.amount > 0 && row.amount <= 9999999)
         .slice(0, 20);
-      const additionalChargesTotal = type === 'factura'
+      const additionalChargesTotal = ['factura', 'cotizacion'].includes(type)
         ? round2(charges.reduce((sum, row) => sum + row.amount, 0)) : 0;
       const subtotal = calculated.subtotal;
       const discAmt = calculated.discAmt;
@@ -5032,6 +5092,7 @@ const salesRepo = {
       }
 
       // 3. Validar crédito
+      let autoCreditLimitAssigned = 0;
       if (type === 'factura' && payment.method === 'credito') {
         const cust = db.prepare('SELECT balance,credit_limit,status FROM customers WHERE id=?').get(customer.id);
         if (!cust) throw new Error('Cliente no encontrado');
@@ -5040,9 +5101,6 @@ const salesRepo = {
         }
         if (cust.status === 'moroso') {
           throw new Error('Cliente marcado como moroso — no puede comprar a crédito');
-        }
-        if (cust.credit_limit <= 0) {
-          throw new Error('Este cliente no tiene límite de crédito configurado — contacte al administrador');
         }
         const creditExposure = round2(amountDue - initialPaymentAmount);
         // Este es el monto que realmente quedará pendiente después del pago
@@ -5054,6 +5112,28 @@ const salesRepo = {
         `).get(user?.id);
         if (!creditUser?.active) throw new Error('El usuario de caja ya no está activo');
         assertCreditPermission(creditUser, creditExposure);
+        if (cust.credit_limit <= 0) {
+          const requiredLimit = round2(Math.max(0, Number(cust.balance) || 0) + creditExposure);
+          const cashierThreshold = Math.max(0,
+            Number(settingsRepo.get('pos_cashier_auto_credit_limit_amount')) || 0
+          );
+          const isPrivileged = ['admin', 'superadmin'].includes(creditUser.role);
+          const approvedBy = Number(payment.creditLimitApprovedBy) || null;
+          const approvedMax = Math.max(0, Number(payment.creditLimitApprovedMaxAmount) || 0);
+          if (!isPrivileged && requiredLimit > cashierThreshold + 0.005
+              && (!approvedBy || requiredLimit > approvedMax + 0.005)) {
+            throw new Error(
+              `Asignar ${requiredLimit.toFixed(2)} de límite a este cliente supera el máximo automático del cajero (${cashierThreshold.toFixed(2)})`
+            );
+          }
+          db.prepare(`
+            UPDATE customers
+            SET credit_limit=?,updated_at=datetime('now')
+            WHERE id=? AND COALESCE(credit_limit,0)<=0
+          `).run(requiredLimit, customer.id);
+          cust.credit_limit = requiredLimit;
+          autoCreditLimitAssigned = requiredLimit;
+        }
         if (cust.balance + creditExposure > cust.credit_limit) {
           throw new Error(`Límite de crédito excedido. Disponible: ${(cust.credit_limit - cust.balance).toFixed(2)}`);
         }
@@ -5552,6 +5632,37 @@ const salesRepo = {
           `${convertedQuoteNumber || '#' + sourceQuoteId} → ${documentIssue.formatted_number}`);
       }
 
+      let convertedConduceId = null;
+      let convertedConduceNumber = '';
+      if (sourceConduce) {
+        const insertLink = db.prepare(`
+          INSERT INTO delivery_note_invoice_links
+            (delivery_note_id,delivery_note_item_id,invoice_id,product_id,qty_linked)
+          VALUES(?,?,?,?,?)
+        `);
+        sourceConduceLines.forEach(({ sourceLine, item }) => {
+          insertLink.run(sourceConduceId, sourceLine.id, saleId, item.product_id, item.qty);
+        });
+        if (tableExists('delivery_note_charges')) {
+          db.prepare(`
+            UPDATE delivery_note_charges
+            SET invoice_id=?,updated_at=datetime('now','localtime')
+            WHERE delivery_note_id=? AND invoice_id IS NULL
+          `).run(saleId, sourceConduceId);
+        }
+        const fullyInvoiced = conduceRepo.invoiceableLines(sourceConduceId)
+          .every(line => line.invoiceable <= 1e-9);
+        db.prepare(`
+          UPDATE delivery_notes
+          SET invoice_id=?,status=?,updated_at=datetime('now','localtime')
+          WHERE id=?
+        `).run(saleId, fullyInvoiced ? 'facturado' : sourceConduce.status, sourceConduceId);
+        convertedConduceId = sourceConduceId;
+        convertedConduceNumber = sourceConduce.number || '';
+        audit(user.id, user.name, 'conduce_convertido', 'delivery_notes', sourceConduceId,
+          `${convertedConduceNumber || '#' + sourceConduceId} → ${documentIssue.formatted_number}`);
+      }
+
       return {
         saleId, total, subtotal, taxAmt, discAmt, taxPct, ncf,
         documentKind,
@@ -5567,9 +5678,12 @@ const salesRepo = {
         initialPaymentId, initialPaymentAmount, initialPaymentMethod,
         initialPaymentMixCash, initialPaymentMixNoncash, initialPaymentNoncashMethod,
         outstandingBalance,
+        autoCreditLimitAssigned,
         replacesSaleId,
         convertedQuoteId,
         convertedQuoteNumber,
+        convertedConduceId,
+        convertedConduceNumber,
         reusedDocumentNumber: !!documentIssue.reused,
         operationId,
         idempotent: false,
@@ -6450,6 +6564,40 @@ const salesRepo = {
       // corregir también cualquier desfase previo de esa misma sesión.
       if (sale.cash_session_id) {
         reconcileCashSessionTotals(db, { sessionId: sale.cash_session_id });
+      }
+
+      // Si la factura nació de un conduce, su anulación libera exactamente las
+      // cantidades y cargos enlazados por esa factura. Los demás enlaces de una
+      // conversión parcial permanecen intactos.
+      if (tableExists('delivery_note_invoice_links')) {
+        const affectedNotes = db.prepare(`
+          SELECT DISTINCT delivery_note_id AS id
+          FROM delivery_note_invoice_links WHERE invoice_id=?
+        `).all(id);
+        db.prepare('DELETE FROM delivery_note_invoice_links WHERE invoice_id=?').run(id);
+        if (tableExists('delivery_note_charges')) {
+          db.prepare(`
+            UPDATE delivery_note_charges
+            SET invoice_id=NULL,updated_at=datetime('now','localtime')
+            WHERE invoice_id=?
+          `).run(id);
+        }
+        for (const note of affectedNotes) {
+          const dn = db.prepare('SELECT * FROM delivery_notes WHERE id=?').get(note.id);
+          if (!dn || ['anulado', 'devuelto'].includes(dn.status)) continue;
+          const lastInvoice = db.prepare(`
+            SELECT invoice_id FROM delivery_note_invoice_links
+            WHERE delivery_note_id=? ORDER BY id DESC LIMIT 1
+          `).get(note.id)?.invoice_id || null;
+          const fallbackStatus = dn.received_date
+            ? 'entregado'
+            : (dn.dispatch_date ? 'despachado' : 'borrador');
+          db.prepare(`
+            UPDATE delivery_notes
+            SET invoice_id=?,status=?,updated_at=datetime('now','localtime')
+            WHERE id=?
+          `).run(lastInvoice, fallbackStatus, note.id);
+        }
       }
 
       audit(userId, userName, 'venta_anulada', 'sales', id, `Motivo: ${reason}`);
@@ -10762,7 +10910,23 @@ const conduceRepo = {
     }
   },
 
-  create({ header = {}, items = [], userId = null, trustedSnapshot = false }) {
+  _insertCharges(noteId, charges) {
+    if (!tableExists('delivery_note_charges')) return;
+    const ins = db.prepare(`
+      INSERT INTO delivery_note_charges
+        (delivery_note_id,description,amount,invoice_id)
+      VALUES(?,?,?,?)
+    `);
+    (Array.isArray(charges) ? charges : []).map(row => ({
+      description: String(row?.description || '').replace(/\s+/g, ' ').trim().slice(0, 120),
+      amount: round2(Number(row?.amount) || 0),
+      invoice_id: Number(row?.invoice_id) || null,
+    })).filter(row => row.description && row.amount > 0 && row.amount <= 9999999)
+      .slice(0, 20)
+      .forEach(row => ins.run(noteId, row.description, row.amount, row.invoice_id));
+  },
+
+  create({ header = {}, items = [], charges = [], userId = null, trustedSnapshot = false }) {
     const tx = db.transaction(() => {
       this._syncSequence();
       const pendingKey = `pending:${Date.now()}:${Math.random().toString(36).slice(2)}`;
@@ -10838,6 +11002,7 @@ const conduceRepo = {
         WHERE kind='conduce' AND source_type='delivery_note_pending' AND source_id=?
       `).run(String(id), pendingKey);
       this._insertItems(id, items);
+      this._insertCharges(id, charges);
       return id;
     });
     return tx();
@@ -10867,10 +11032,13 @@ const conduceRepo = {
     if (!dn) return null;
     dn.items         = db.prepare('SELECT * FROM delivery_note_items WHERE delivery_note_id=? ORDER BY id').all(id);
     dn.invoice_links = db.prepare('SELECT * FROM delivery_note_invoice_links WHERE delivery_note_id=? ORDER BY id').all(id);
+    dn.charges       = tableExists('delivery_note_charges')
+      ? db.prepare('SELECT * FROM delivery_note_charges WHERE delivery_note_id=? ORDER BY id').all(id)
+      : [];
     return dn;
   },
 
-  update(id, { header = {}, items = null }) {
+  update(id, { header = {}, items = null, charges = null }) {
     const dn = db.prepare('SELECT * FROM delivery_notes WHERE id=?').get(id);
     if (!dn) throw new Error('Conduce no encontrado');
     if (dn.status !== 'borrador') throw new Error('Solo se puede editar un conduce en BORRADOR');
@@ -10921,6 +11089,10 @@ const conduceRepo = {
       if (Array.isArray(items)) {
         db.prepare('DELETE FROM delivery_note_items WHERE delivery_note_id=?').run(id);
         this._insertItems(id, items);
+      }
+      if (Array.isArray(charges) && tableExists('delivery_note_charges')) {
+        db.prepare('DELETE FROM delivery_note_charges WHERE delivery_note_id=?').run(id);
+        this._insertCharges(id, charges);
       }
     });
     tx();
@@ -11050,29 +11222,18 @@ const conduceRepo = {
       items: toInvoice.map(t => ({
         product_id: t.prod.id, product_code: t.prod.code, product_name: t.prod.name,
         unit_cost: t.prod.cost, unit_price: t.price, qty: t.qty,
+        sourceConduceItemId: t.item.id,
       })),
-      payment: { method: payment.method || 'efectivo', disc: payment.disc || 0, priceMode },
+      payment: {
+        ...payment,
+        method: payment.method || 'efectivo', disc: payment.disc || 0, priceMode,
+        sourceConduceId: conduceId,
+      },
       user,
       type: 'factura',
       trustedCustomerSnapshot: true,
     });
     const saleId = saleRes.saleId;
-
-    // 2) Registrar enlaces + actualizar estado del conduce
-    const linkTx = db.transaction(() => {
-      const insLink = db.prepare(`
-        INSERT INTO delivery_note_invoice_links
-          (delivery_note_id, delivery_note_item_id, invoice_id, product_id, qty_linked)
-        VALUES(?,?,?,?,?)
-      `);
-      for (const t of toInvoice) insLink.run(conduceId, t.item.id, saleId, t.prod.id, t.qty);
-      const after = this.invoiceableLines(conduceId);
-      const fully = after.every(a => a.invoiceable <= 1e-9);
-      db.prepare(`
-        UPDATE delivery_notes SET invoice_id=?, status=?, updated_at=datetime('now','localtime') WHERE id=?
-      `).run(saleId, fully ? 'facturado' : dn.status, conduceId);
-    });
-    linkTx();
 
     return {
       saleId,
@@ -11102,6 +11263,9 @@ const conduceRepo = {
     if (existing) return this.getById(existing.id);
     const items = db.prepare('SELECT * FROM sale_items WHERE sale_id=?').all(saleId);
     if (!items.length) throw new Error('La venta no tiene líneas');
+    const sourceCharges = tableExists('sale_charges')
+      ? db.prepare('SELECT description,amount FROM sale_charges WHERE sale_id=? ORDER BY id').all(saleId)
+      : [];
 
     const id = this.create({
       header: {
@@ -11122,6 +11286,10 @@ const conduceRepo = {
       items: items.map(it => ({
         product_id: it.product_id, product_code: it.product_code,
         description: it.product_name, unit: 'und', qty: it.qty,
+      })),
+      charges: sourceCharges.map(row => ({
+        ...row,
+        invoice_id: sale.type === 'factura' ? saleId : null,
       })),
       userId,
       trustedSnapshot: true,

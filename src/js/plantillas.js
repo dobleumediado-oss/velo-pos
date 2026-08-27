@@ -220,7 +220,6 @@ function getSampleSale(cfg) {
 // comprobante fiscal que no existe en el sistema.
 function _getNcf(sale) {
   if (sale.type !== 'factura') return '';
-  if (sale.adjusted_copy) return '';
   return (sale.ncf && sale.ncf.trim()) ? sale.ncf.trim() : '';
 }
 
@@ -242,25 +241,14 @@ function _docLabel(sale) {
   if (sale.type === 'pago_proveedor') return 'RECIBO DE PAGO A PROVEEDOR';
   if (sale.type === 'cotizacion') return 'COTIZACIÓN';
   if (sale.type === 'devolucion') return 'NOTA DE CRÉDITO';
-  if (sale.type === 'factura' && sale.adjusted_copy) return 'FACTURA AJUSTADA';
   if (sale.type === 'factura')    return 'FACTURA';
   return 'RECIBO DE COMPRA';
 }
 
 function _adjustedCopyNotice(sale) {
-  if (!sale?.adjusted_copy) return '';
-  const refs = Array.isArray(sale.related_documents) && sale.related_documents.length
-    ? `<div>Documentos relacionados: ${_esc(sale.related_documents.join(', '))}</div>`
-    : '';
-  const ncf = sale.adjusted_reference_ncf
-    ? `<div>Referencia NCF original: ${_esc(sale.adjusted_reference_ncf)}</div>`
-    : '';
-  return `<div style="margin:5px 0;padding:5px 7px;border:1px solid #111;text-align:center;font-size:9px;line-height:1.35">
-    <strong>REIMPRESIÓN CONSOLIDADA</strong>
-    <div>Estado vigente de la operación · No sustituye los comprobantes fiscales emitidos.</div>
-    ${sale.adjusted_reference ? `<div>Referencia: ${_esc(sale.adjusted_reference)}</div>` : ''}
-    ${ncf}${refs}
-  </div>`;
+  // La trazabilidad de correcciones pertenece al historial interno. La copia
+  // entregada al cliente conserva la presentación normal de su factura.
+  return '';
 }
 
 function _lineGross(i) {
@@ -652,6 +640,29 @@ function renderInvoiceBranding(cfg, sale, variant, widthMm) {
   </div>`;
 }
 
+function renderCreditSignatures(sale, variant) {
+  if (sale?.type !== 'factura' || String(sale?.payment_method || '').toLowerCase() !== 'credito') return '';
+  const thermal = variant === 'termica';
+  const marginTop = thermal ? '18px' : '34px';
+  const gap = thermal ? '12px' : '44px';
+  const fontSize = thermal ? '8.5px' : '10px';
+  const lineColor = thermal ? '#000' : '#9ca3af';
+  const cashier = _esc(sale.cajero || '—');
+  const customer = _esc(sale.customer_name || 'Consumidor Final');
+  return `<div data-credit-signatures="1" style="display:flex;gap:${gap};margin-top:${marginTop};break-inside:avoid;page-break-inside:avoid;font-weight:400">
+    <div style="flex:1;text-align:center;font-size:${fontSize};min-width:0">
+      <div style="border-top:1px solid ${lineColor};margin-bottom:5px"></div>
+      <div style="font-weight:700">Entregado por</div>
+      <div style="margin-top:2px;overflow-wrap:anywhere">${cashier}</div>
+    </div>
+    <div style="flex:1;text-align:center;font-size:${fontSize};min-width:0">
+      <div style="border-top:1px solid ${lineColor};margin-bottom:5px"></div>
+      <div style="font-weight:700">Recibido por</div>
+      <div style="margin-top:2px;overflow-wrap:anywhere">${customer}</div>
+    </div>
+  </div>`;
+}
+
 // Inserta el bloque promocional al final REAL del documento, una sola vez.
 // Si existe el <script> de paginación (plantilla A4 moderna) lo coloca ANTES,
 // para que el cálculo de páginas (scrollHeight) incluya la firma; en el resto,
@@ -660,7 +671,7 @@ function _injectBranding(html, cfg, sale, variant, widthMm) {
   // Blindaje total: la firma es opcional y NUNCA debe impedir imprimir. Cualquier
   // fallo inesperado devuelve el documento original intacto (la factura sale igual).
   try {
-    const block = renderInvoiceBranding(cfg, sale, variant, widthMm);
+    const block = `${renderCreditSignatures(sale, variant)}${renderInvoiceBranding(cfg, sale, variant, widthMm)}`;
     if (!block) return html;
     const bodyEnd = html.lastIndexOf('</body>');
     if (bodyEnd === -1) return html + block;
@@ -709,11 +720,6 @@ function _tipoFacturacion(sale) {
   if (sale.type === 'pago_gasto_externo') return 'Gasto · Persona externa';
   if (sale.type === 'pago_proveedor') return 'Gasto · Proveedor';
   if (sale.type === 'abono') return 'Abono';
-  if (sale.adjusted_copy) {
-    return (sale.payment_method || '').toLowerCase() === 'credito'
-      ? 'Factura ajustada · Crédito'
-      : 'Factura ajustada';
-  }
   if ((sale.payment_method || '').toLowerCase() === 'credito') return 'Crédito';
   return 'Contado';
 }
@@ -728,7 +734,7 @@ function _a4DocTitle(sale) {
     case 'abono':      return 'RECIBO DE ABONO';
     case 'conduce':    return 'CONDUCE';
     case 'reporte':    return 'REPORTE';
-    case 'factura':    return sale.adjusted_copy ? 'FACTURA AJUSTADA' : 'FACTURA';
+    case 'factura':    return 'FACTURA';
     default:           return 'RECIBO';
   }
 }
@@ -985,7 +991,7 @@ function renderTermicaMinimal(sale, cfg, opts, widthMm = 76) {
 </style></head><body>
   <div style="text-align:center;font-size:12px;font-weight:700;margin-bottom:2px">${_esc(cfg.biz_name||'Mi Negocio')}</div>
   ${_isExpensePayment(sale) ? `<div style="text-align:center;font-weight:700">${_docLabel(sale)}</div>` : ''}
-  ${sale.adjusted_copy ? `<div style="text-align:center;font-weight:700">${_docLabel(sale)}</div>${_adjustedCopyNotice(sale)}` : ''}
+  ${sale.adjusted_copy ? `<div style="text-align:center;font-weight:700">${_docLabel(sale)}</div>` : ''}
   <div style="text-align:center;font-size:9px;margin-bottom:4px">${sale.date} ${sale.time} · ${facturaLabel(sale)}</div>
   ${sale.customer_phone ? `<div style="text-align:center;font-size:9px;margin-bottom:3px">${_customerPhoneLabel(sale)}</div>` : ''}
   <div style="border-top:1px dashed #000;margin:3px 0"></div>
@@ -1173,7 +1179,7 @@ function renderCartaRecibo(sale, cfg, opts) {
       <div><b>Representante</b><span>${_esc(sale.salesperson_name || sale.cajero || '')}</span></div>
       <div><b>Forma de pago</b><span>${_esc(paymentLabel)}</span></div>
       <div><b>${isAbono || isExpensePayment ? 'Tipo de documento' : 'Tipo de factura'}</b><span>${_esc(_tipoFacturacion(sale))}</span></div>
-      <div class="lp-wide"><b>Observaciones</b><span>${_esc(sale.notes || cfg.invoice_notes || 'No aceptamos devoluciones. Cambios solamente antes de 24 horas.')}</span></div>
+      <div class="lp-wide"><b>Observaciones</b><span>${_esc((sale.adjusted_copy ? '' : sale.notes) || cfg.invoice_notes || 'No aceptamos devoluciones. Cambios solamente antes de 24 horas.')}</span></div>
       <div><b>Número transacción</b><span>${_esc(sale.transaction_number || sale.id || '—')}</span></div>
     </div>` : '';
 
@@ -1641,11 +1647,6 @@ function renderCartaNCF(sale, cfg, opts) {
     ? `<div style="border:2px solid #1a1a1a;border-radius:6px;padding:8px 14px;text-align:center;margin-bottom:10px">
          <div style="font-size:13px;font-weight:800">${_docLabel(sale)}</div>
          <div style="font-size:9px;color:#666;text-transform:uppercase">Comprobante interno · Sin valor fiscal</div>
-       </div>`
-    : sale.adjusted_copy
-    ? `<div style="border:2px solid #1a1a1a;border-radius:6px;padding:8px 14px;text-align:center;margin-bottom:10px">
-         <div style="font-size:13px;font-weight:800">FACTURA AJUSTADA</div>
-         <div style="font-size:9px;text-transform:uppercase">Reimpresión consolidada · Sin valor fiscal independiente</div>
        </div>`
     : isCotizacion
     ? `<div style="border:2px dashed #aaa;border-radius:6px;padding:8px 14px;text-align:center;margin-bottom:10px">

@@ -76,21 +76,108 @@ Si una operación supera el límite, se registra qué consulta o render fue lent
 
 ### Problema y resultado esperado
 
-- “Agregar envío u otro cargo” sumaba en factura como un total separado y no estaba disponible en cotización. Debe crear un renglón de servicio visible, sumable e imprimible en ambos documentos, sin afectar inventario.
+- “Agregar envío u otro cargo” debe conservarse separado de los artículos del carrito, pero estar disponible, sumarse, guardarse e imprimirse tanto en factura como en cotización, sin afectar inventario.
 - El carrito tenía ancho fijo. Debe poder ajustarse entre un tamaño compacto y uno amplio, y recordar la preferencia al reiniciar la aplicación.
 - Generar conduce estaba oculto dentro del cobro de una factura. El POS debe permitir preparar un conduce directamente como documento no fiscal, guardarlo en el módulo Conduces y no mover inventario, caja, impuestos ni contabilidad.
 - La anulación existía únicamente dentro del detalle del conduce. Administrador y superadministrador deben verla también en el listado, con motivo obligatorio y auditoría.
 
 ### Ruta mínima aplicada
 
-- El cargo nuevo se representa con una línea `service`/`non_stock` en el carrito y reutiliza la ruta transaccional existente de ventas y cotizaciones. Los cargos históricos conservan su lectura anterior.
+- El cargo se conserva en `inv.charges` y se persiste en `sale_charges`; no crea una línea en el carrito ni en `sale_items`. La misma ruta admite factura, cotización y cobro de órdenes enviadas a caja.
 - El ancho del panel se conserva como preferencia local de interfaz; no se escribe en SQLite ni se modifica información comercial.
 - El botón Conduce reutiliza `conduce:create`, su secuencia `CON-`, sus validaciones de cliente y su tabla de artículos. No reutiliza `sales:create`.
 - Anular desde el listado reutiliza `conduce:cancel`; no elimina el registro ni libera el correlativo.
 
 ### Verificación y reversión
 
-- Verificado: interacción del POS; matemática y persistencia de artículos de servicio en factura, cotización y cola de caja; devolución de servicios sin inventario; creación/anulación de conduce; núcleo financiero; correcciones de venta; seguridad de actualización; integridad SQLite y sintaxis.
+- Verificado: interacción del POS; matemática y persistencia de cargos separados en factura, cotización y cola de caja; creación/anulación de conduce; núcleo financiero; correcciones de venta; seguridad de actualización; integridad SQLite y sintaxis.
 - Todas las pruebas usan una base temporal. La preferencia de ancho se prueba como almacenamiento local y nunca abre la base real.
 - La prueba de actualización comparó la base real antes y después usando una copia temporal: ventas, facturación, clientes, productos, existencias y débitos/créditos permanecieron idénticos; `integrity_check` quedó en `ok` y no hubo violaciones de claves foráneas.
-- Reversión: retirar el selector Conduce y el divisor visual no cambia documentos guardados; las líneas de servicio ya emitidas siguen siendo `sale_items` válidos y los conduces anulados conservan su trazabilidad.
+- Reversión: retirar el selector Conduce y el divisor visual no cambia documentos guardados; los cargos emitidos permanecen en `sale_charges`, las líneas de servicio creadas por versiones anteriores siguen siendo `sale_items` válidos y los conduces anulados conservan su trazabilidad.
+
+## Conversión de conduces y cargos — 27 de agosto de 2026
+
+### Problema y resultado esperado
+
+- El cargo de envío, obra u otro concepto debía poder registrarse también en un
+  conduce, mantenerse separado de los productos y acompañarlo al imprimirlo y
+  convertirlo.
+- “Facturar” desde Conduces creaba la venta directamente, sin pasar por las
+  opciones completas de cobro del Punto de Venta. El flujo debe cargar el
+  documento en el POS como hace una cotización y confirmar allí método de pago,
+  comprobante y demás datos.
+
+### Ruta mínima aplicada
+
+- `delivery_note_charges` conserva los cargos del conduce y la factura que los
+  consumió. Un cargo pendiente viaja una sola vez, incluso cuando se factura por
+  partes.
+- La conversión conserva el conduce y carga en el POS cliente, representante,
+  sucursal, líneas pendientes, precios y cargos. Cada artículo mantiene el id de
+  su línea documental para validar en servidor producto y cantidad.
+- La factura, los enlaces por línea, el consumo del cargo y el estado del conduce
+  se confirman en una sola transacción. Los reintentos usan la misma protección
+  contra duplicados del cobro normal.
+- Anular una factura vinculada repone inventario y libera solo sus enlaces del
+  conduce; cualquier factura parcial anterior permanece registrada.
+
+### Verificación y reversión
+
+- Verificado con base temporal: creación sin movimiento de inventario,
+  conversión parcial y total, cargo aplicado una vez, reintento idempotente y
+  reapertura correcta al anular la factura vinculada.
+- Reversión: ocultar la acción de conversión no altera conduces ni facturas ya
+  confirmadas. La tabla de cargos es aditiva y los enlaces existentes conservan
+  la trazabilidad documental.
+
+## Ronda de continuidad, crédito y reimpresión — 26 de agosto de 2026
+
+### Problema y resultado esperado
+
+- Un apagón podía eliminar varios tickets todavía no confirmados. Deben
+  recuperarse en la misma terminal sin convertir el respaldo local en una venta
+  ni conservar autorizaciones sensibles.
+- El cajero necesitaba márgenes distintos para subir y bajar temporalmente el
+  precio de una unidad. El cambio debe seguir siendo precio de esa venta, nunca
+  un descuento contable, y solo pedir clave al sobrepasar el monto configurado.
+- Un cliente sin límite obligaba a abandonar el cobro a crédito. Velo debe poder
+  asignar el monto necesario al finalizar, con un máximo configurable por
+  cliente para el cajero y autorización administrativa al excederlo.
+- Las copias reajustadas exponían referencias internas y podían cambiar una
+  factura a crédito a “Pagada”. El cliente debe recibir una factura normal con
+  su NCF y condición de crédito originales; la auditoría completa permanece en
+  Ventas.
+- Los detalles de factura, cotización y conduce deben conservar encabezado y
+  acciones visibles, usando el desplazamiento para el contenido y los artículos.
+
+### Ruta mínima aplicada
+
+- El espacio de trabajo del POS se serializa en almacenamiento local por usuario
+  y terminal, con límite de 20 tickets y vencimiento de 30 días. Se excluyen
+  tokens, operaciones en curso y órdenes ya enviadas a caja.
+- La política del POS calcula por unidad la diferencia contra el menor y el
+  mayor precio de catálogo. `pos_price_max_reduction_amount` y
+  `pos_price_max_increase_amount` se validan también en el proceso principal.
+- `pos_cashier_auto_credit_limit_amount` controla la primera asignación de
+  crédito. La base vuelve a calcular balance más exposición dentro de la misma
+  transacción y solo acepta una autorización temporal ligada al cajero, cliente
+  y monto máximo.
+- La impresión conserva el método original y omite de todas las plantillas las
+  notas y relaciones técnicas del reajuste. Las facturas a crédito reciben las
+  líneas **Entregado por** y **Recibido por**.
+- Los modales comparten un contenedor de altura controlada, encabezado y pie
+  fijos, tabla desplazable y botones compactos.
+
+### Verificación y reversión
+
+- Pruebas aisladas cubren restauración de varios tickets y eliminación de
+  autorizaciones; umbrales de aumento/rebaja; crédito automático dentro y fuera
+  del máximo; persistencia financiera; correcciones y las nueve plantillas de
+  impresión.
+- La asignación de límite y la venta se confirman en una sola transacción. Un
+  error revierte ambas; el respaldo local nunca escribe clientes, inventario,
+  caja ni ventas.
+- Reversión: desactivar los límites deja los valores en cero y vuelve a exigir
+  autorización al cajero. Retirar la restauración local no modifica tickets ya
+  facturados. Las facturas y límites previamente confirmados permanecen como
+  registros comerciales auditables.

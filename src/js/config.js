@@ -1127,6 +1127,10 @@ async function renderConfiguracion(el) {
     const priceChangeEnabled = settings.pos_price_change_enabled !== '0';
     const priceReductionLimit = Number.isFinite(Number(settings.pos_price_max_reduction_amount))
       ? Math.max(0, Number(settings.pos_price_max_reduction_amount)) : 0;
+    const priceIncreaseLimit = Number.isFinite(Number(settings.pos_price_max_increase_amount))
+      ? Math.max(0, Number(settings.pos_price_max_increase_amount)) : 0;
+    const cashierAutoCreditLimit = Number.isFinite(Number(settings.pos_cashier_auto_credit_limit_amount))
+      ? Math.max(0, Number(settings.pos_cashier_auto_credit_limit_amount)) : 0;
     const policyCard = h('div', { class: 'card', id: 'cfg-pos-controls-card' });
     policyCard.innerHTML = `
       <div class="card-title">Controles del Punto de Venta</div>
@@ -1146,7 +1150,7 @@ async function renderConfiguracion(el) {
       <div style="border-top:1px solid var(--line2);margin:14px 0 12px"></div>
       <label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer">
         <input type="checkbox" id="cfg-price-change-enabled" ${priceChangeEnabled ? 'checked' : ''}
-               onchange="document.getElementById('cfg-price-reduction-limit').disabled=!this.checked"/>
+               onchange="document.getElementById('cfg-price-reduction-limit').disabled=!this.checked;document.getElementById('cfg-price-increase-limit').disabled=!this.checked"/>
         <span>
           <strong style="font-size:12px">Permitir al cajero cambiar precios</strong>
           <span style="display:block;font-size:10px;color:var(--muted2);margin-top:2px">
@@ -1160,7 +1164,26 @@ async function renderConfiguracion(el) {
         <input class="inp" id="cfg-price-reduction-limit" type="number" min="0" max="99999999" step="0.01"
                value="${priceReductionLimit}" ${priceChangeEnabled ? '' : 'disabled'}/>
         <div style="font-size:10px;color:var(--muted2);margin-top:4px;line-height:1.45">
-          Aplica únicamente al cajero y se mide desde el menor precio válido entre Detalle y Mayorista. Cero exige la clave para cualquier precio inferior al catálogo; aumentar el precio no consume este límite.
+          Aplica únicamente al cajero y se mide desde el menor precio válido entre Detalle y Mayorista. Cero exige la clave para cualquier precio inferior al catálogo.
+        </div>
+      </div>
+
+      <div class="fg" style="margin-top:12px">
+        <label class="lbl">Aumento máximo sin clave (RD$ por unidad)</label>
+        <input class="inp" id="cfg-price-increase-limit" type="number" min="0" max="99999999" step="0.01"
+               value="${priceIncreaseLimit}" ${priceChangeEnabled ? '' : 'disabled'}/>
+        <div style="font-size:10px;color:var(--muted2);margin-top:4px;line-height:1.45">
+          Se mide desde el mayor precio válido entre Detalle y Mayorista. El aumento queda registrado como precio especial de esa venta y nunca como descuento.
+        </div>
+      </div>
+
+      <div style="border-top:1px solid var(--line2);margin:14px 0 12px"></div>
+      <div class="fg" style="margin-bottom:0">
+        <label class="lbl">Crédito automático máximo por cliente sin límite (RD$)</label>
+        <input class="inp" id="cfg-cashier-auto-credit-limit" type="number" min="0" max="999999999" step="0.01"
+               value="${cashierAutoCreditLimit}"/>
+        <div style="font-size:10px;color:var(--muted2);margin-top:4px;line-height:1.45">
+          Si un cliente no tiene límite, el cajero puede asignarle automáticamente hasta este monto al cerrar su primera venta a crédito. Cero exige autorización para cualquier monto. Administrador y superadministrador no quedan restringidos.
         </div>
       </div>`;
     colRight.appendChild(policyCard);
@@ -1182,7 +1205,7 @@ async function renderConfiguracion(el) {
         <div>
           <div class="alrt-title">Clave especial del POS</div>
           <div class="alrt-sub">
-            El cajero la necesitará cuando una reducción supere el monto permitido por la política anterior.
+            El cajero la necesitará cuando una reducción o un aumento supere el monto permitido por la política anterior.
             No es la contraseña de login del administrador.
           </div>
         </div>
@@ -1298,6 +1321,10 @@ async function guardarConfiguracion() {
     const priceEnabled = document.getElementById('cfg-price-change-enabled')?.checked !== false;
     const reductionEl = document.getElementById('cfg-price-reduction-limit');
     const reductionLimit = Number(reductionEl?.value);
+    const increaseEl = document.getElementById('cfg-price-increase-limit');
+    const increaseLimit = Number(increaseEl?.value);
+    const autoCreditEl = document.getElementById('cfg-cashier-auto-credit-limit');
+    const autoCreditLimit = Number(autoCreditEl?.value);
     if (!Number.isFinite(discountLimit) || discountLimit < 0 || discountLimit > 100) {
       toast('El límite de descuento debe estar entre 0% y 100%', 'e');
       discountLimitEl.focus();
@@ -1308,10 +1335,22 @@ async function guardarConfiguracion() {
       reductionEl?.focus();
       return;
     }
+    if (!Number.isFinite(increaseLimit) || increaseLimit < 0) {
+      toast('El aumento de precio debe ser un monto válido mayor o igual a cero', 'e');
+      increaseEl?.focus();
+      return;
+    }
+    if (!Number.isFinite(autoCreditLimit) || autoCreditLimit < 0) {
+      toast('El límite automático de crédito debe ser un monto válido mayor o igual a cero', 'e');
+      autoCreditEl?.focus();
+      return;
+    }
     for (const [key, value] of [
       ['pos_discount_auth_limit_pct', String(Math.round(discountLimit * 100) / 100)],
       ['pos_price_change_enabled', priceEnabled ? '1' : '0'],
       ['pos_price_max_reduction_amount', String(Math.round(reductionLimit * 100) / 100)],
+      ['pos_price_max_increase_amount', String(Math.round(increaseLimit * 100) / 100)],
+      ['pos_cashier_auto_credit_limit_amount', String(Math.round(autoCreditLimit * 100) / 100)],
     ]) {
       const r = await window.api.settings.set({ key, value, requestUserId: uid });
       if (r && !r.ok) { toast(r.error || 'No se pudo guardar el control del POS', 'e'); return; }

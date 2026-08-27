@@ -8,6 +8,7 @@ const vm = require('vm');
 
 const root = path.resolve(__dirname, '..');
 const elements = new Map();
+const localValues = new Map();
 const element = id => {
   if (!elements.has(id)) {
     const classes = new Set();
@@ -38,7 +39,14 @@ const context = vm.createContext({
   AbortController,
   svg() { return ''; },
   toast() {},
-  window: { api: { sync: { onChanged() {} } } },
+  window: {
+    api: { sync: { onChanged() {} } },
+    localStorage: {
+      getItem(key) { return localValues.has(key) ? localValues.get(key) : null; },
+      setItem(key, value) { localValues.set(key, String(value)); },
+      removeItem(key) { localValues.delete(key); },
+    },
+  },
   document: {
     getElementById(id) {
       if (id === 'inv-tabs') return null;
@@ -57,7 +65,10 @@ vm.runInContext(`${dataSource}\nthis.__posState={
   setCustomers(v){DB.customers=v},
   setProducts(v){DB.products=v},
   setPreventaConfig(enabled,roles){CFG.module_preventa=enabled;CFG.module_preventa_roles=roles},
-  snapshot(){return {activeInvoice,invCounter,invoices:invoices.map(i=>({id:i.id,cart:[...i.cart]}))}}
+  persistWorkspace:posPersistWorkspaceNow,
+  restoreWorkspace:posRestoreWorkspace,
+  resetRecoveryAttempt(){_posWorkspaceRecoveryUser=''},
+  snapshot(){return {activeInvoice,invCounter,invoices:invoices.map(i=>({id:i.id,cart:[...i.cart],charges:[...(i.charges||[])],cliId:i.cliId,disc:i.disc,itype:i.itype,priceChangeAuthToken:i.priceChangeAuthToken,creditLimitAuthToken:i.creditLimitAuthToken}))}}
 };`, context, { filename: 'data.js' });
 
 const state = context.__posState;
@@ -90,6 +101,36 @@ assert.strictEqual(state.snapshot().invCounter, 1, 'el contador debe reiniciarse
 state.addInvoice();
 assert.strictEqual(state.currentInv().id, 2, 'después del reinicio el botón + debe crear #2');
 console.log('  ✓ reutiliza números libres y al cerrar todos vuelve a Factura #1');
+
+state.resetInvoices();
+state.setUser({ id: 77, role: 'cajero' });
+state.currentInv().cart.push({ product_id: 9, name: 'Ticket recuperable', price: 1250, qty: 2 });
+state.currentInv().charges.push({ description: 'Envío', amount: 200 });
+state.currentInv().cliId = 14;
+state.currentInv().disc = 5;
+state.currentInv().priceChangeAuthToken = 'no-restaurar-precio';
+state.currentInv().creditLimitAuthToken = 'no-restaurar-credito';
+state.addInvoice();
+state.currentInv().itype = 'cotizacion';
+state.currentInv().cart.push({ product_id: 10, name: 'Segunda pestaña', price: 500, qty: 1 });
+assert.strictEqual(state.persistWorkspace(), true, 'debe guardar el espacio de trabajo local');
+state.resetInvoices();
+state.resetRecoveryAttempt();
+assert.strictEqual(state.restoreWorkspace(), 2, 'debe recuperar todas las pestañas con contenido');
+const recoveredWorkspace = state.snapshot();
+assert.strictEqual(recoveredWorkspace.invoices.length, 2);
+assert.strictEqual(recoveredWorkspace.activeInvoice, 1,
+  'debe conservar como activa la pestaña que estaba seleccionada');
+assert.strictEqual(recoveredWorkspace.invoices[0].cart[0].name, 'Ticket recuperable');
+assert.strictEqual(recoveredWorkspace.invoices[0].charges[0].amount, 200);
+assert.strictEqual(recoveredWorkspace.invoices[0].cliId, 14);
+assert.strictEqual(recoveredWorkspace.invoices[0].disc, 5);
+assert.strictEqual(recoveredWorkspace.invoices[1].itype, 'cotizacion');
+assert.strictEqual(recoveredWorkspace.invoices[0].priceChangeAuthToken, null,
+  'las autorizaciones de precio no deben sobrevivir un reinicio');
+assert.strictEqual(recoveredWorkspace.invoices[0].creditLimitAuthToken, '',
+  'las autorizaciones de crédito no deben sobrevivir un reinicio');
+console.log('  ✓ recupera tickets abiertos sin restaurar autorizaciones sensibles');
 
 ['pos-subtotal-value','pos-itbis-value','pos-discount-row','pos-discount-value',
  'pos-total-value','pos-charge-btn'].forEach(element);
@@ -166,22 +207,34 @@ state.currentInv().itype = 'factura';
 state.currentInv().disc = 0;
 state.currentInv().cart = [{ name: 'Artículo', price: 1000, qty: 1, taxable: 0 }];
 discount.posSaveCharge();
-assert.strictEqual(state.currentInv().cart.length, 2,
-  'el cargo debe agregarse como otro artículo de la factura');
-assert.strictEqual(state.currentInv().cart[1].kind, 'service');
-assert.strictEqual(state.currentInv().cart[1].non_stock, true);
+assert.strictEqual(state.currentInv().cart.length, 1,
+  'el cargo no debe agregarse como artículo al carrito');
+assert.strictEqual(state.currentInv().charges.length, 1);
+assert.strictEqual(state.currentInv().charges[0].description, 'Envío a domicilio');
+assert.strictEqual(state.currentInv().charges[0].amount, 250);
 assert.strictEqual(discount.calcTotals(state.currentInv()).total, 1250,
-  'el artículo de servicio debe sumarse al total de la factura');
+  'el cargo independiente debe sumarse al total de la factura');
 state.currentInv().itype = 'cotizacion';
 element('pos-charge-description').value = 'Instalación';
 element('pos-charge-amount').value = '300';
 discount.posSaveCharge();
+assert.strictEqual(state.currentInv().cart.length, 1,
+  'los cargos de cotización tampoco deben aparecer como artículos');
 assert.strictEqual(discount.calcTotals(state.currentInv()).total, 1550,
-  'el artículo de servicio también debe sumarse a la cotización');
-console.log('  ✓ envío u otro cargo se guarda como artículo y suma en factura y cotización');
+  'el cargo independiente también debe sumarse a la cotización');
+state.currentInv().itype = 'conduce';
+element('pos-charge-description').value = 'Obra del conduce';
+element('pos-charge-amount').value = '400';
+discount.posSaveCharge();
+assert.strictEqual(state.currentInv().charges.at(-1).description, 'Obra del conduce',
+  'el conduce debe admitir el mismo cargo separado de los artículos');
+assert.strictEqual(discount.calcTotals(state.currentInv()).chargesTotal, 950,
+  'los cargos del conduce deben conservar su total de referencia');
+console.log('  ✓ envío u otro cargo queda separado del carrito y funciona en factura, cotización y conduce');
 
 state.currentInv().itype = 'factura';
 state.currentInv().cart = [{ name: 'Artículo', price: 105, qty: 1, taxable: 1, tax_pct: 18 }];
+state.currentInv().charges = [];
 state.setSettings({ pos_discount_auth_limit_pct: '15' });
 state.currentInv().disc = 0;
 const protectedDiscountInput = { value: '16' };
@@ -337,6 +390,7 @@ const quoteLoaded = transfer.posLoadResaleCart({
   ncfType: 'B01',
   notes: 'Conservar estas observaciones',
   salespersonId: 7,
+  charges: [{ description: 'Envío cotizado', amount: 250 }],
   customer: {
     id: 9, name: 'Motores del Caribe, SRL', rnc: '130123456',
     contactId: 91, contactName: 'Ana Pérez', branchId: 3, branchName: 'Sucursal Norte',
@@ -352,9 +406,38 @@ assert.strictEqual(state.currentInv().cart[0].qty, 3, 'debe conservar la cantida
 assert.strictEqual(state.currentInv().cliContactId, 91, 'debe conservar el representante del cliente');
 assert.strictEqual(state.currentInv().cliBranchId, 3, 'debe conservar la sucursal de entrega');
 assert.strictEqual(state.currentInv().disc, 5, 'debe conservar el descuento de la cotización');
+assert.strictEqual(state.currentInv().charges[0].description, 'Envío cotizado',
+  'debe conservar el concepto del cargo cotizado');
+assert.strictEqual(state.currentInv().charges[0].amount, 250,
+  'debe conservar el monto del cargo cotizado');
+assert.strictEqual(discount.calcTotals(state.currentInv()).total, 549.25,
+  'debe sumar el cargo al convertir la cotización en factura');
 assert.strictEqual(state.currentInv().notes, 'Conservar estas observaciones',
   'debe conservar las observaciones para el cobro');
 console.log('  ✓ Confirmar venta envía la cotización completa al Punto de Venta');
+
+const conduceLoaded = transfer.posLoadResaleCart({
+  sourceConduceId: 72,
+  sourceConduceNumber: 'CON-000072',
+  priceMode: 'retail',
+  charges: [{ description: 'Envío del conduce', amount: 250 }],
+  customer: { id: 9, name: 'Motores del Caribe, SRL', rnc: '130123456' },
+  items: [{
+    product_id: 100, product_code: 'P-100', product_name: 'Producto entregado',
+    unit_price: 118, taxable: 1, tax_pct: 18, qty: 2,
+    max_qty: 2, source_conduce_item_id: 702,
+  }],
+});
+assert.strictEqual(conduceLoaded, true, 'debe cargar el conduce en el POS');
+assert.strictEqual(state.currentInv().itype, 'factura', 'el conduce debe abrirse como factura');
+assert.strictEqual(state.currentInv().sourceConduceId, 72, 'debe conservar el conduce de origen');
+assert.strictEqual(state.currentInv().cart[0].conduce_source.itemId, 702,
+  'cada artículo debe conservar la línea exacta del conduce');
+assert.strictEqual(state.currentInv().charges[0].amount, 250,
+  'debe cargar el cargo pendiente del conduce');
+assert.strictEqual(discount.calcTotals(state.currentInv()).total, 486,
+  'el POS debe sumar productos y cargo al convertir el conduce');
+console.log('  ✓ el conduce carga artículos, cliente y cargos en Punto de Venta');
 
 const ventasSource = fs.readFileSync(path.join(root, 'src/js/ventas.js'), 'utf8');
 const conversionStart = ventasSource.indexOf('async function confirmarConversionCotizacion()');
@@ -375,6 +458,8 @@ assert(posSource.includes('POS_CART_WIDTH_STORAGE_KEY') && posSource.includes('l
 const conduceSource = fs.readFileSync(path.join(root, 'src/js/conduce.js'), 'utf8');
 assert(conduceSource.includes('data-cancel='),
   'el listado de conduces debe mostrar la anulación permitida sin ocultarla en el detalle');
+assert(conduceSource.includes("routeTo('pos')") && conduceSource.includes('sourceConduceId'),
+  'la conversión del conduce debe redirigir al POS conservando su referencia');
 console.log('  ✓ el POS ofrece conduce, guarda el ancho del carrito y hace visible Anular');
 
 context.__sidebarRenderCalls = 0;

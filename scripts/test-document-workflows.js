@@ -188,67 +188,41 @@ try {
 }
 ok(registeredCustomerBlocked, 'una factura de cliente registrado no reutiliza su correlativo');
 
-console.log('\n== Artículos de servicio en factura y cotización ==');
-const stockBeforeServiceDocs = DB.productsRepo.getById(productId).stock;
-const serviceLine = {
-  product_id: null,
-  product_code: 'SERVICIO',
-  product_name: 'Envío a domicilio',
-  unit_cost: 0,
-  unit_price: 250,
-  qty: 1,
-  taxable: 0,
-  tax_pct: 0,
-  kind: 'service',
-  non_stock: true,
-};
-const invoiceWithService = DB.salesRepo.create({
+console.log('\n== Cargos adicionales en factura y cotización ==');
+const stockBeforeChargeDocs = DB.productsRepo.getById(productId).stock;
+const extraCharge = { description: 'Envío a domicilio', amount: 250 };
+const invoiceWithCharge = DB.salesRepo.create({
   session: null,
   customer: { id: customerId },
-  items: [line(1), serviceLine],
-  payment: { method: 'efectivo' },
+  items: [line(1)],
+  payment: { method: 'efectivo', charges: [extraCharge] },
   user: admin,
   type: 'factura',
 });
-const invoiceServiceRow = DB.salesRepo.getById(invoiceWithService.saleId);
-ok(invoiceServiceRow.total === 368 && invoiceServiceRow.items.length === 2,
-  'factura suma el envío como artículo independiente');
-ok(invoiceServiceRow.items.some(item => item.product_id == null && item.product_name === 'Envío a domicilio'),
-  'el artículo de servicio queda guardado sin producto de inventario');
-ok(DB.productsRepo.getById(productId).stock === stockBeforeServiceDocs - 1,
-  'la factura descuenta solo el producto físico, no el servicio');
-const invoiceServiceItem = invoiceServiceRow.items.find(item => item.product_id == null);
-const serviceReturn = DB.returnsRepo.create({
-  originalSaleId: invoiceWithService.saleId,
-  items: [{
-    sale_item_id: invoiceServiceItem.id,
-    product_id: null,
-    product_code: invoiceServiceItem.product_code,
-    product_name: invoiceServiceItem.product_name,
-    qty: 1,
-  }],
-  session: null,
-  user: admin,
-  reason: 'Reembolso del envío',
-});
-ok(serviceReturn.total === 250 && DB.productsRepo.getById(productId).stock === stockBeforeServiceDocs - 1,
-  'devolver un servicio reembolsa su importe sin crear inventario');
-DB.returnsRepo.cancel(serviceReturn.returnId, 'Reverso de prueba', admin.id, admin.name);
-ok(DB.productsRepo.getById(productId).stock === stockBeforeServiceDocs - 1,
-  'anular la devolución del servicio tampoco altera inventario');
-const quoteWithService = DB.salesRepo.create({
+const invoiceChargeRow = DB.salesRepo.getById(invoiceWithCharge.saleId);
+ok(invoiceChargeRow.total === 368 && invoiceChargeRow.items.length === 1
+  && invoiceChargeRow.additional_charges_total === 250,
+  'factura suma el cargo sin convertirlo en artículo');
+ok(invoiceChargeRow.charges.some(row => row.description === 'Envío a domicilio' && row.amount === 250),
+  'el cargo de factura queda guardado en su sección independiente');
+ok(DB.productsRepo.getById(productId).stock === stockBeforeChargeDocs - 1,
+  'la factura descuenta únicamente el producto físico');
+const quoteWithCharge = DB.salesRepo.create({
   session: null,
   customer: { id: customerId },
-  items: [line(1), serviceLine],
-  payment: { method: 'cotizacion' },
+  items: [line(1)],
+  payment: { method: 'cotizacion', charges: [extraCharge] },
   user: admin,
   type: 'cotizacion',
 });
-const quoteServiceRow = DB.salesRepo.getById(quoteWithService.saleId);
-ok(quoteServiceRow.total === 368 && quoteServiceRow.items.length === 2,
-  'cotización suma y conserva el artículo de servicio');
-ok(DB.productsRepo.getById(productId).stock === stockBeforeServiceDocs - 1,
-  'cotizar productos y servicios no mueve inventario');
+const quoteChargeRow = DB.salesRepo.getById(quoteWithCharge.saleId);
+ok(quoteChargeRow.total === 368 && quoteChargeRow.items.length === 1
+  && quoteChargeRow.additional_charges_total === 250,
+  'cotización suma el cargo sin convertirlo en artículo');
+ok(quoteChargeRow.charges.some(row => row.description === 'Envío a domicilio' && row.amount === 250),
+  'el cargo de cotización queda guardado y disponible para convertirla');
+ok(DB.productsRepo.getById(productId).stock === stockBeforeChargeDocs - 1,
+  'cotizar con cargos no mueve inventario');
 
 console.log('\n== Abono, conduce y reporte ==');
 const payment = DB.customersRepo.addPayment({
@@ -265,6 +239,73 @@ ok(DB.conduceRepo.getById(noteId).number === 'CON-000001', 'conduce usa su secue
 const cancelledNote = DB.conduceRepo.cancel(noteId, { userId: admin.id, reason: 'Documento de prueba' });
 ok(cancelledNote.status === 'anulado' && cancelledNote.cancellation_reason === 'Documento de prueba',
   'anular conduce conserva el documento, su número y el motivo');
+
+const stockBeforeConduce = DB.productsRepo.getById(productId).stock;
+const chargedNoteId = DB.conduceRepo.create({
+  header: { customer_id: customerId },
+  items: [{ product_id: productId, description: 'Producto documental', qty: 2 }],
+  charges: [{ description: 'Envío del conduce', amount: 250 }],
+  userId: admin.id,
+});
+const chargedNote = DB.conduceRepo.getById(chargedNoteId);
+ok(chargedNote.charges.length === 1 && chargedNote.charges[0].amount === 250,
+  'el conduce guarda el cargo separado de sus artículos');
+ok(DB.productsRepo.getById(productId).stock === stockBeforeConduce,
+  'crear el conduce con cargo no mueve inventario');
+DB.conduceRepo.setStatus(chargedNoteId, 'despachado', { userId: admin.id });
+const sourceLine = DB.conduceRepo.invoiceableLines(chargedNoteId)[0];
+const firstConduceSale = DB.salesRepo.create({
+  operationId: 'test:conduce:partial:1',
+  session: null,
+  customer: { id: customerId },
+  items: [{ ...line(1), sourceConduceItemId: sourceLine.id }],
+  payment: {
+    method: 'efectivo', sourceConduceId: chargedNoteId,
+    charges: [{ description: 'Envío del conduce', amount: 250 }],
+  },
+  user: admin,
+  type: 'factura',
+});
+const partiallyConverted = DB.conduceRepo.getById(chargedNoteId);
+ok(firstConduceSale.total === 368 && firstConduceSale.additionalChargesTotal === 250,
+  'la primera venta del conduce suma su cargo pendiente al total');
+ok(partiallyConverted.status === 'despachado' && partiallyConverted.invoice_links.length === 1,
+  'la conversión parcial enlaza la factura sin cerrar cantidades pendientes');
+ok(partiallyConverted.charges[0].invoice_id === firstConduceSale.saleId,
+  'el cargo queda consumido por una sola factura del conduce');
+const retriedConduceSale = DB.salesRepo.create({
+  operationId: 'test:conduce:partial:1',
+  session: null,
+  customer: { id: customerId },
+  items: [{ ...line(1), sourceConduceItemId: sourceLine.id }],
+  payment: {
+    method: 'efectivo', sourceConduceId: chargedNoteId,
+    charges: [{ description: 'Envío del conduce', amount: 250 }],
+  },
+  user: admin,
+  type: 'factura',
+});
+ok(retriedConduceSale.saleId === firstConduceSale.saleId && retriedConduceSale.idempotent,
+  'reintentar la confirmación no duplica la venta ni el cargo del conduce');
+const secondConduceSale = DB.salesRepo.create({
+  session: null,
+  customer: { id: customerId },
+  items: [{ ...line(1), sourceConduceItemId: sourceLine.id }],
+  payment: { method: 'efectivo', sourceConduceId: chargedNoteId, charges: [] },
+  user: admin,
+  type: 'factura',
+});
+const fullyConverted = DB.conduceRepo.getById(chargedNoteId);
+ok(secondConduceSale.total === 118 && secondConduceSale.additionalChargesTotal === 0,
+  'la venta final no vuelve a sumar el cargo ya facturado');
+ok(fullyConverted.status === 'facturado' && fullyConverted.invoice_links.length === 2,
+  'al completar las cantidades el conduce queda facturado y conserva ambos enlaces');
+DB.salesRepo.cancel(secondConduceSale.saleId, 'Corrección de prueba', admin.id, admin.name);
+const reopenedConduce = DB.conduceRepo.getById(chargedNoteId);
+ok(reopenedConduce.status === 'despachado' && reopenedConduce.invoice_links.length === 1,
+  'anular una factura reabre solo la cantidad de conduce enlazada a esa factura');
+ok(reopenedConduce.charges[0].invoice_id === firstConduceSale.saleId,
+  'anular una factura parcial posterior no libera un cargo usado por la primera venta');
 const report = DB.documentNumberRepo.issue('reporte', 'print_job', 'test-report');
 ok(report.formatted_number === 'REP-000001', 'reporte usa su secuencia REP');
 const expenseId = DB.expensesRepo.create({

@@ -98,6 +98,7 @@ function posConduceCanAccess() {
 async function renderPOS(el) {
   try {
     await chkCaja();
+    const recoveredTickets = typeof posRestoreWorkspace === 'function' ? posRestoreWorkspace() : 0;
     if (CFG.module_vendedores === '1' && window.api?.salespeople?.getAll) {
       try {
         const sellers = await window.api.salespeople.getAll({ status: 'activo' });
@@ -298,6 +299,9 @@ async function renderPOS(el) {
     renderInvTabs();
     renderCart();
     renderPOSCustomerSelection();
+    if (recoveredTickets > 0) {
+      toast(`Recuperamos ${recoveredTickets} ticket${recoveredTickets === 1 ? '' : 's'} abierto${recoveredTickets === 1 ? '' : 's'} de esta terminal`);
+    }
     if (window._pendingPOSResaleCart) {
       const pending = window._pendingPOSResaleCart;
       window._pendingPOSResaleCart = null;
@@ -322,7 +326,7 @@ function _setPosPmode(mode) {
   inv.pmode = mode;
   if (!inv.checkoutOrderId) {
     inv.cart.forEach(item => {
-      if (item.resale_source || item.quote_source || item.manual_price) return;
+      if (item.resale_source || item.quote_source || item.conduce_source || item.manual_price) return;
       const product = DB.products.find(p => Number(p.id) === Number(item.pid || item.product_id));
       if (!product) return;
       const price = mode === 'wholesale' && Number(product.wholesale) > 0
@@ -636,6 +640,7 @@ function posAddItem(pid) {
     i.pid === pid &&
     !i.resale_source &&
     !i.quote_source &&
+    !i.conduce_source &&
     posMoneyEq(i.price, price)
   );
 
@@ -669,12 +674,13 @@ function posAddItem(pid) {
 function renderCart() {
   const wrap = document.getElementById('cart-wrap');
   if (!wrap) return;
+  if (typeof posScheduleWorkspaceSave === 'function') posScheduleWorkspaceSave();
 
   const inv = currentInv();
   const checkoutLocked = !!inv.checkoutOrderId;
   const { subtotal, itbis, total, disc, discAmt, chargesTotal } = calcTotals(inv);
   const documentLabels = { factura: 'Factura', cotizacion: 'Cotización', conduce: 'Conduce' };
-  const availableTypes = (inv.replacesSaleId || inv.sourceQuoteId)
+  const availableTypes = (inv.replacesSaleId || inv.sourceQuoteId || inv.sourceConduceId)
     ? ['factura']
     : ['factura', 'cotizacion', ...(posConduceCanAccess() ? ['conduce'] : [])];
   const documentLabel = documentLabels[inv.itype] || 'Factura';
@@ -711,6 +717,12 @@ function renderCart() {
                     border-radius:7px;background:var(--green-bg);font-size:10.5px;color:var(--muted2)">
           <strong style="color:var(--text)">Cotización ${posEscHtml(inv.sourceQuoteNumber || '#' + inv.sourceQuoteId)} cargada</strong>
           <span> — puedes modificarla con las herramientas del POS; se eliminará solo cuando confirmes la venta.</span>
+        </div>` : ''}
+      ${inv.sourceConduceId ? `
+        <div style="margin-top:8px;padding:7px 9px;border:1px solid var(--green-line);
+                    border-radius:7px;background:var(--green-bg);font-size:10.5px;color:var(--muted2)">
+          <strong style="color:var(--text)">Conduce ${posEscHtml(inv.sourceConduceNumber || '#' + inv.sourceConduceId)} cargado</strong>
+          <span> — se marcará facturado únicamente cuando confirmes esta venta.</span>
         </div>` : ''}
     </div>`;
 
@@ -755,6 +767,10 @@ function renderCart() {
               <div style="font-size:10px;color:var(--green);font-weight:700;margin-top:3px">
                 Cotización ${posEscHtml(item.quote_source.number || '#' + item.quote_source.quoteId)}
               </div>` : ''}
+            ${item.conduce_source?.conduceId ? `
+              <div style="font-size:10px;color:var(--green);font-weight:700;margin-top:3px">
+                Conduce ${posEscHtml(item.conduce_source.number || '#' + item.conduce_source.conduceId)}
+              </div>` : ''}
           </div>
           ${checkoutLocked ? `<div class="qc"><strong>x${item.qty}</strong></div>` : `<div class="qc">
             <button class="qb" onclick="posQty(${idx},-1)">−</button>
@@ -784,6 +800,18 @@ function renderCart() {
             <div class="alrt-title">Documento no fiscal</div>
             <div class="alrt-sub">Guarda la entrega en Conduces. No cobra, no genera impuestos y no mueve inventario.</div>
           </div>
+        </div>
+        <div style="border-top:1px solid var(--line2);padding-top:7px;margin:4px 0 10px">
+          ${(inv.charges || []).map((charge, idx) => `
+            <div class="tr" style="font-size:11px">
+              <span>${posEscHtml(charge.description)}
+                <button class="btn btn-ghost btn-sm" style="padding:0 4px;color:var(--red)" onclick="posRemoveCharge(${idx})">×</button>
+              </span><strong>${fmt(charge.amount)}</strong>
+            </div>`).join('')}
+          <button class="btn btn-out btn-fw btn-sm" style="margin-top:5px" onclick="openPosChargeModal()">
+            ${svg('plus')} Agregar envío u otro cargo
+          </button>
+          ${(inv.charges || []).length ? `<div class="tr" style="margin-top:6px"><span>Total cargos</span><strong>${fmt(chargesTotal)}</strong></div>` : ''}
         </div>
         <button class="btn btn-green btn-fw btn-lg" id="pos-conduce-btn"
                 style="font-size:14px;opacity:${inv.cart.length ? '1' : '.4'}"
@@ -818,13 +846,13 @@ function renderCart() {
       </div>
       ${['factura', 'cotizacion'].includes(inv.itype) ? `
       <div style="border-top:1px solid var(--line2);padding-top:7px;margin-top:4px">
-        ${inv.itype === 'factura' ? (inv.charges || []).map((charge, idx) => `
+        ${(inv.charges || []).map((charge, idx) => `
           <div class="tr" style="font-size:11px">
             <span>${posEscHtml(charge.description)}
               <button class="btn btn-ghost btn-sm" style="padding:0 4px;color:var(--red)" onclick="posRemoveCharge(${idx})">×</button>
             </span>
             <span>${fmt(charge.amount)}</span>
-          </div>`).join('') : ''}
+          </div>`).join('')}
         <button class="btn btn-out btn-sm btn-fw" id="pos-add-charge-btn" type="button" onclick="openPosChargeModal()"
                 style="margin:3px 0 7px">${svg('plus')} Agregar envío u otro cargo</button>
       </div>` : ''}
@@ -883,6 +911,8 @@ function posLimpiar() {
   inv.replacementDocumentNumber = '';
   inv.sourceQuoteId = null;
   inv.sourceQuoteNumber = '';
+  inv.sourceConduceId = null;
+  inv.sourceConduceNumber = '';
   renderInvTabs();
   renderCart();
 }
@@ -902,6 +932,10 @@ function posSetType(t) {
     toast('La cotización cargada debe completarse como factura', 'w');
     return;
   }
+  if (currentInv().sourceConduceId && t !== 'factura') {
+    toast('El conduce cargado debe completarse como factura', 'w');
+    return;
+  }
   currentInv().itype = t;
   renderCart();
 }
@@ -915,11 +949,11 @@ function posCloseCheckoutOrder() {
 
 function openPosChargeModal() {
   const inv = currentInv();
-  if (!inv || !['factura', 'cotizacion'].includes(inv.itype)) return;
-  const label = inv.itype === 'cotizacion' ? 'cotización' : 'factura';
+  if (!inv || !['factura', 'cotizacion', 'conduce'].includes(inv.itype)) return;
+  const label = inv.itype === 'cotizacion' ? 'cotización' : (inv.itype === 'conduce' ? 'conduce' : 'factura');
   openModal(`
-    <div class="modal-title">Agregar artículo de servicio</div>
-    <div class="modal-sub">Se sumará como un artículo de la ${label}: envío, instalación, transporte u otro servicio.</div>
+    <div class="modal-title">Agregar cargo a la ${label}</div>
+    <div class="modal-sub">Se mostrará separado de los artículos y se sumará al total de la ${label}: envío, instalación, transporte u otro cargo.</div>
     <div class="fg">
       <label class="lbl">Concepto *</label>
       <input class="inp" id="pos-charge-description" maxlength="120" placeholder="Ej: Envío a domicilio"/>
@@ -938,31 +972,14 @@ function openPosChargeModal() {
 
 function posSaveCharge() {
   const inv = currentInv();
-  if (!inv || !['factura', 'cotizacion'].includes(inv.itype)) return;
+  if (!inv || !['factura', 'cotizacion', 'conduce'].includes(inv.itype)) return;
   const description = document.getElementById('pos-charge-description')?.value?.replace(/\s+/g, ' ').trim() || '';
   const amount = _posRound2(document.getElementById('pos-charge-amount')?.value);
   if (!description) return toast('Indica el concepto del cargo', 'w');
   if (!(amount > 0) || amount > 9999999) return toast('Indica un monto válido', 'w');
-  const serviceCount = (inv.cart || []).filter(item => item.service_charge === true).length;
-  if (serviceCount >= 20) return toast('El documento alcanzó el máximo de artículos de servicio', 'w');
-  inv.cart.push({
-    pid: `service:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
-    product_id: null,
-    product_code: 'SERVICIO',
-    product_name: description,
-    name: description,
-    price: amount,
-    unit_price: amount,
-    unit_cost: 0,
-    cost: 0,
-    taxable: 0,
-    tax_pct: 0,
-    qty: 1,
-    kind: 'service',
-    non_stock: true,
-    service_charge: true,
-    manual_price: true,
-  });
+  inv.charges = Array.isArray(inv.charges) ? inv.charges : [];
+  if (inv.charges.length >= 20) return toast('El documento alcanzó el máximo de cargos adicionales', 'w');
+  inv.charges.push({ description, amount });
   closeModal();
   renderInvTabs();
   renderCart();
@@ -1013,7 +1030,7 @@ async function posCreateConduceFromCart() {
   renderCart();
   try {
     const result = await posAwaitSaleAction(window.api.conduce.create({
-      header, items, requestUserId: user?.id,
+      header, items, charges: inv.charges || [], requestUserId: user?.id,
     }));
     if (!result?.ok || !result.data) {
       throw new Error(result?.error || 'No se pudo guardar el conduce');
@@ -1078,7 +1095,9 @@ function posQty(idx, delta) {
   const item = inv.cart[idx];
   if (!item) return;
   const prod = DB.products.find(p => p.id === item.pid);
-  const maxForLine = Math.max(0, (prod ? _posAvailableStock(prod) : 999) - posCartQtyForProduct(prod?.id || item.product_id || item.pid, idx));
+  const stockMax = Math.max(0, (prod ? _posAvailableStock(prod) : 999) - posCartQtyForProduct(prod?.id || item.product_id || item.pid, idx));
+  const maxForLine = item.conduce_source?.maxQty
+    ? Math.min(stockMax, Number(item.conduce_source.maxQty)) : stockMax;
   item.qty += delta;
   if (delta > 0 && item.qty > maxForLine) {
     item.qty = maxForLine;
@@ -1099,7 +1118,9 @@ function posSetQty(idx, input) {
   // instante. No lo conviertas prematuramente a 1 ni redibujes el carrito.
   if (String(raw).trim() === '') return;
   const prod = DB.products.find(p => p.id === item.pid);
-  const maxForLine = Math.max(0, (prod ? _posAvailableStock(prod) : 999) - posCartQtyForProduct(prod?.id || item.product_id || item.pid, idx));
+  const stockMax = Math.max(0, (prod ? _posAvailableStock(prod) : 999) - posCartQtyForProduct(prod?.id || item.product_id || item.pid, idx));
+  const maxForLine = item.conduce_source?.maxQty
+    ? Math.min(stockMax, Number(item.conduce_source.maxQty)) : stockMax;
   if (maxForLine <= 0) {
     inv.cart.splice(idx, 1);
     toast('Sin stock disponible para esa línea', 'w');
@@ -1155,11 +1176,13 @@ function posFindPriceOverrides(items) {
     const catalogPrices = posLineCatalogPrices(item);
     if (!catalogPrices.length || catalogPrices.some(p => posMoneyEq(p.value, unitPrice))) return null;
     const catalogFloor = Math.min(...catalogPrices.map(price => Number(price.value) || 0));
+    const catalogCeiling = Math.max(...catalogPrices.map(price => Number(price.value) || 0));
     return {
       item,
       unitPrice,
       catalogPrices,
       reductionAmount: Math.max(0, catalogFloor - unitPrice),
+      increaseAmount: Math.max(0, unitPrice - catalogCeiling),
     };
   }).filter(Boolean);
 }
@@ -1170,16 +1193,19 @@ function posDiscountAuthLimit() {
 }
 
 function posPriceChangePolicy() {
-  const amount = Number(DB?.settings?.pos_price_max_reduction_amount);
+  const reduction = Number(DB?.settings?.pos_price_max_reduction_amount);
+  const increase = Number(DB?.settings?.pos_price_max_increase_amount);
   return {
     enabled: DB?.settings?.pos_price_change_enabled !== '0',
-    maxReductionAmount: Number.isFinite(amount) ? Math.max(0, amount) : 0,
+    maxReductionAmount: Number.isFinite(reduction) ? Math.max(0, reduction) : 0,
+    maxIncreaseAmount: Number.isFinite(increase) ? Math.max(0, increase) : 0,
   };
 }
 
-function posPriceChangesRequiringAuth(changes, maxReductionAmount) {
+function posPriceChangesRequiringAuth(changes, policy = posPriceChangePolicy()) {
   return (changes || []).filter(change =>
-    Number(change.reductionAmount || 0) > Number(maxReductionAmount || 0) + 0.0049
+    Number(change.reductionAmount || 0) > Number(policy.maxReductionAmount || 0) + 0.0049 ||
+    Number(change.increaseAmount || 0) > Number(policy.maxIncreaseAmount || 0) + 0.0049
   );
 }
 
@@ -1207,7 +1233,7 @@ async function posPromptPriceChangeAuth(changes, contextLabel = 'Cambio de preci
     .map(p => `${p.label}: ${fmt(p.value)}`)
     .join(' · ');
   const detail = `${itemName}: ${catalogText || 'precio de catálogo'} -> ${fmt(first?.unitPrice || 0)}`;
-  const limit = posPriceChangePolicy().maxReductionAmount;
+  const policy = posPriceChangePolicy();
 
   return new Promise(resolve => {
     let done = false;
@@ -1220,7 +1246,7 @@ async function posPromptPriceChangeAuth(changes, contextLabel = 'Cambio de preci
     openModal(`
       <div class="modal-title">Autorizar cambio de precio</div>
       <div class="modal-sub">
-        La reducción supera el límite permitido de ${fmt(limit)} por unidad.
+        El cambio supera el límite permitido por unidad: bajar ${fmt(policy.maxReductionAmount)} o subir ${fmt(policy.maxIncreaseAmount)}.
       </div>
       <div class="alrt a" style="margin-bottom:14px">
         <div class="alrt-dot a"></div>
@@ -1296,7 +1322,7 @@ async function posEnsureSalePriceAuthorization(holder, items, contextLabel) {
   // Las ordenes compartidas son inmutables y el backend ya valido/aprobo sus
   // precios al enviarlas desde despacho.
   if (holder?.checkoutOrderId) return true;
-  const protectedChanges = posPriceChangesRequiringAuth(changes, policy.maxReductionAmount);
+  const protectedChanges = posPriceChangesRequiringAuth(changes, policy);
   if (!protectedChanges.length) return true;
   if (posAuthStillValid(holder)) return true;
   if (DB?.settings?.pos_price_change_password_set !== '1') {
@@ -1376,6 +1402,7 @@ function posLoadResaleCart(payload = {}) {
   }
   const rawItems = Array.isArray(payload.items) ? payload.items : [];
   const sourceQuoteId = Number(payload.sourceQuoteId) || null;
+  const sourceConduceId = Number(payload.sourceConduceId) || null;
   if (!rawItems.length) { toast('No hay artículos para cargar en el POS', 'w'); return false; }
 
   const reserved = new Map();
@@ -1419,7 +1446,7 @@ function posLoadResaleCart(payload = {}) {
       taxable,
       tax_pct:      taxPct,
       qty,
-      resale_source: sourceQuoteId ? null : {
+      resale_source: (sourceQuoteId || sourceConduceId) ? null : {
         saleId: src.source_sale_id || null,
         itemId: src.source_item_id || null,
       },
@@ -1427,6 +1454,12 @@ function posLoadResaleCart(payload = {}) {
         quoteId: sourceQuoteId,
         number: String(payload.sourceQuoteNumber || ''),
         itemId: src.source_item_id || null,
+      } : null,
+      conduce_source: sourceConduceId ? {
+        conduceId: sourceConduceId,
+        number: String(payload.sourceConduceNumber || ''),
+        itemId: Number(src.source_conduce_item_id ?? src.source_item_id) || null,
+        maxQty: Number(src.max_qty ?? src.qty) || qty,
       } : null,
     });
   });
@@ -1460,6 +1493,8 @@ function posLoadResaleCart(payload = {}) {
   inv.replacementDocumentNumber = String(payload.replacementDocumentNumber || '');
   inv.sourceQuoteId = sourceQuoteId;
   inv.sourceQuoteNumber = String(payload.sourceQuoteNumber || '');
+  inv.sourceConduceId = sourceConduceId;
+  inv.sourceConduceNumber = String(payload.sourceConduceNumber || '');
   inv.ncfType = String(payload.ncfType || '');
   inv.salespersonId = Number(payload.salespersonId) || null;
   inv.saleDate = /^\d{4}-\d{2}-\d{2}$/.test(String(payload.saleDate || ''))
@@ -1488,9 +1523,11 @@ function posLoadResaleCart(payload = {}) {
   renderInvTabs();
   renderCart();
   renderPOSGrid();
-  if (!sourceQuoteId && typeof window.ventasClearResaleCart === 'function') window.ventasClearResaleCart(true);
+  if (!sourceQuoteId && !sourceConduceId && typeof window.ventasClearResaleCart === 'function') window.ventasClearResaleCart(true);
   toast(sourceQuoteId
     ? `✓ Cotización ${inv.sourceQuoteNumber || '#' + sourceQuoteId} cargada en el Punto de Venta`
+    : sourceConduceId
+    ? `✓ Conduce ${inv.sourceConduceNumber || '#' + sourceConduceId} cargado en el Punto de Venta`
     : inv.replacesSaleId
     ? `✓ ${inv.replacementDocumentNumber || 'Factura anulada'} lista para corregir y registrar nuevamente`
     : `✓ Reventa cargada en factura #${inv.id}${skipped.length ? ` · ${skipped.length} línea(s) omitida(s)` : ''}`);
@@ -1510,6 +1547,7 @@ function posDisc(val) {
 function posRefreshCartTotals() {
   const inv = currentInv();
   if (!inv) return;
+  if (typeof posScheduleWorkspaceSave === 'function') posScheduleWorkspaceSave();
   const { subtotal, itbis, total, disc, discAmt, chargesTotal } = calcTotals(inv);
   const setText = (id, value) => {
     const el = document.getElementById(id);
@@ -1669,13 +1707,15 @@ function _posTaxable(item) {
 
 function calcTotals(inv) {
   if (inv?.itype === 'conduce') {
-    return { subtotal:0, grossSubtotal:0, discAmt:0, itbis:0, itemsTotal:0, chargesTotal:0, total:0, disc:0 };
+    const chargesTotal = _posRound2((inv.charges || [])
+      .reduce((sum, row) => sum + (Number(row.amount) || 0), 0));
+    return { subtotal:0, grossSubtotal:0, discAmt:0, itbis:0, itemsTotal:0, chargesTotal, total:chargesTotal, disc:0 };
   }
   const disc = Math.min(100, Math.max(0, parseFloat(inv.disc) || 0));
   const grossSubtotal = _posRound2(inv.cart.reduce((a, i) => a + ((Number(i.price) || 0) * (Number(i.qty) || 0)), 0));
   const discAmt = _posRound2(grossSubtotal * (disc / 100));
   const itemsTotal = _posRound2(grossSubtotal - discAmt);
-  const chargesTotal = inv.itype === 'factura'
+  const chargesTotal = ['factura', 'cotizacion'].includes(inv.itype)
     ? _posRound2((inv.charges || []).reduce((sum, row) => sum + (Number(row.amount) || 0), 0))
     : 0;
   const total = _posRound2(itemsTotal + chargesTotal);
@@ -1804,6 +1844,7 @@ function posSelectBranch(branchId) {
   inv.cliBranchAddress = branch?.address || '';
   inv.cliBranchPhone = branch?.phone || '';
   renderPOSCustomerSelection();
+  if (typeof posScheduleWorkspaceSave === 'function') posScheduleWorkspaceSave();
 }
 
 function posFilterCustomers(query, showAll = false) {
@@ -2448,6 +2489,88 @@ function _posUserCreditLimit() {
   return Math.max(0, Number(current?.credit_limit_per_sale) || 0);
 }
 
+function _posCashierAutoCreditLimit() {
+  const value = Number(DB?.settings?.pos_cashier_auto_credit_limit_amount);
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+async function posEnsureAutoCreditLimitAuthorization(inv, customer, requestedLimit) {
+  if (!customer || Number(customer.credit_limit || 0) > 0) return true;
+  if (['admin', 'superadmin'].includes(user?.role)) return true;
+  const threshold = _posCashierAutoCreditLimit();
+  if (requestedLimit <= threshold + 0.005) return true;
+  if (inv.creditLimitAuthToken && Number(inv.creditLimitAuthExpiresAt) > Date.now() + 5000
+      && Number(inv.creditLimitAuthCustomerId) === Number(customer.id)
+      && requestedLimit <= Number(inv.creditLimitAuthAmount || 0) + 0.005) return true;
+
+  return new Promise(resolve => {
+    let done = false;
+    const finish = value => {
+      if (done) return;
+      done = true;
+      resolve(value);
+    };
+    openModal(`
+      <div class="modal-title">Autorizar límite de crédito</div>
+      <div class="modal-sub">El cliente todavía no tiene un límite configurado.</div>
+      <div class="alrt a" style="margin-bottom:14px">
+        <div class="alrt-dot a"></div>
+        <div>
+          <div class="alrt-title">Nuevo límite solicitado: ${fmt(requestedLimit)}</div>
+          <div class="alrt-sub">El máximo automático del cajero es ${fmt(threshold)} por cliente. Esta venta requiere aprobación administrativa.</div>
+        </div>
+      </div>
+      <div class="fg">
+        <label class="lbl">Contraseña de admin o superadmin</label>
+        <div class="inp-ic"><div class="ic">${svg('lock')}</div>
+          <input class="inp" id="credit-limit-auth-pass" type="password" placeholder="Contraseña de autorización"/>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-out" id="credit-limit-auth-cancel">Cancelar</button>
+        <button class="btn btn-dark" id="credit-limit-auth-ok">${svg('check')} Autorizar crédito</button>
+      </div>
+    `);
+    const passEl = document.getElementById('credit-limit-auth-pass');
+    const okBtn = document.getElementById('credit-limit-auth-ok');
+    const submit = async () => {
+      const password = passEl?.value?.trim();
+      if (!password) return toast('Ingresa la contraseña', 'err');
+      if (okBtn) { okBtn.disabled = true; okBtn.innerHTML = `${svg('clock')} Validando...`; }
+      const res = await window.api.auth.authorizePrivilegedAction({
+        action: 'pos_credit_limit_override',
+        password,
+        requestUserId: user.id,
+        detail: `${customer.name || 'Cliente'} · nuevo límite ${fmt(requestedLimit)}`,
+        scope: { customerId: Number(customer.id) || 0, maxAmount: requestedLimit },
+      }).catch(error => ({ ok:false, error:error?.message || 'No se pudo validar' }));
+      if (!res?.ok) {
+        toast(res?.error || 'Contraseña incorrecta', 'err');
+        if (okBtn) { okBtn.disabled = false; okBtn.innerHTML = `${svg('check')} Autorizar crédito`; }
+        passEl?.select();
+        return;
+      }
+      inv.creditLimitAuthToken = res.token || '';
+      inv.creditLimitAuthExpiresAt = res.expiresAt || 0;
+      inv.creditLimitApprovedBy = res.approvedBy?.id || null;
+      inv.creditLimitAuthCustomerId = Number(customer.id) || null;
+      inv.creditLimitAuthAmount = requestedLimit;
+      closeModal();
+      finish(true);
+    };
+    okBtn?.addEventListener('click', submit);
+    document.getElementById('credit-limit-auth-cancel')?.addEventListener('click', () => {
+      closeModal();
+      finish(false);
+    });
+    passEl?.addEventListener('keydown', event => {
+      if (event.key === 'Enter') submit();
+      if (event.key === 'Escape') { closeModal(); finish(false); }
+    });
+    setTimeout(() => passEl?.focus(), 80);
+  });
+}
+
 function openCobroModal(inv) {
   if (!inv || !inv.cart.length) return;
   const { subtotal, itbis, total, discAmt, disc } = calcTotals(inv);
@@ -2458,6 +2581,7 @@ function openCobroModal(inv) {
   if (!canSellCredit && inv.pmeth === 'credito') inv.pmeth = inv.lastCashPaymentMethod || 'efectivo';
   const billingType = inv.pmeth === 'credito' ? 'credito' : 'contado';
   const userCreditLimit = _posUserCreditLimit();
+  const cashierAutoCreditLimit = _posCashierAutoCreditLimit();
   window._cbrBaseTotals = { subtotal, itbis, total, amountDue, tradeInAmount, discAmt, chargesTotal: calcTotals(inv).chargesTotal };
 
   openModal(`
@@ -2720,6 +2844,7 @@ function openCobroModal(inv) {
           <div class="alrt-title">Venta a crédito</div>
           <div class="alrt-sub">Requiere un cliente registrado. El pago inicial entra a Caja como un abono de esta factura.
             ${userCreditLimit > 0 ? `<br><strong>Tope de este usuario: ${fmt(userCreditLimit)} por factura.</strong>` : ''}
+            ${user?.role === 'cajero' ? `<br>Si el cliente no tiene límite, puedes asignarle hasta <strong>${fmt(cashierAutoCreditLimit)}</strong> sin autorización.` : '<br>Si el cliente no tiene límite, se asignará automáticamente el saldo de esta venta.'}
           </div>
         </div>
       </div>
@@ -3578,6 +3703,17 @@ async function finalizarVenta() {
       toast(`El monto que quedará a crédito (${fmt(pendingCredit)}) supera tu límite de ${fmt(userCreditLimit)}`, 'w');
       return;
     }
+    const creditCustomer = (DB.customers || []).find(customer => Number(customer.id) === Number(inv.cliId));
+    const requestedCustomerLimit = Math.round(
+      ((Number(creditCustomer?.balance) || 0) + pendingCredit) * 100
+    ) / 100;
+    const creditAuthorized = await posEnsureAutoCreditLimitAuthorization(
+      inv, creditCustomer, requestedCustomerLimit
+    );
+    if (!creditAuthorized) {
+      openCobroModal(inv);
+      return;
+    }
     if (initialPaymentAmount > 0 && initialPaymentMethod === 'mixto' &&
         (!(initialPaymentMixCash > 0) || !(initialPaymentMixNoncash > 0))) {
       toast('En un pago inicial mixto indica una parte en efectivo y otra por transferencia o tarjeta', 'w');
@@ -3654,6 +3790,7 @@ async function finalizarVenta() {
     // venda por IMEI. Null/ausente en líneas fungibles → sin efecto.
     product_unit_id: i.product_unit_id || null,
     imei:            i.imei || null,
+    sourceConduceItemId: i.conduce_source?.itemId || null,
   }));
 
   // Para pago mixto capturar desglose
@@ -3698,6 +3835,7 @@ async function finalizarVenta() {
       discountAuthToken: inv.discAuthToken || null,
       priceMode:      inv.pmode || 'retail',
       priceChangeAuthToken: inv.priceChangeAuthToken || null,
+      creditLimitAuthToken: inv.creditLimitAuthToken || null,
       mixEfec,
       mixCard,
       financialAccountId: finAcctId,
@@ -3707,7 +3845,6 @@ async function finalizarVenta() {
       reference: paymentReference,
       salespersonId,
       charges: inv.charges || [],
-      serviceItems: items.filter(item => item.kind === 'service' || item.non_stock === true),
       displayCurrency: inv.displayCurrency || 'DOP',
       displayExchangeRate: inv.displayCurrency === 'USD' ? Number(inv.displayExchangeRate) : 1,
       saleDate,
@@ -3728,6 +3865,7 @@ async function finalizarVenta() {
       notes: saleNotes,
       replacesSaleId: inv.replacesSaleId || null,
       sourceQuoteId: inv.sourceQuoteId || null,
+      sourceConduceId: inv.sourceConduceId || null,
       ncfType,
       warrantyDays,
       tradeIn: inv.tradeIn || null,
@@ -3738,6 +3876,8 @@ async function finalizarVenta() {
 
   const sourceQuoteId = !isQuote ? (Number(inv.sourceQuoteId) || null) : null;
   const sourceQuoteNumber = String(inv.sourceQuoteNumber || '');
+  const sourceConduceId = !isQuote ? (Number(inv.sourceConduceId) || null) : null;
+  const sourceConduceNumber = String(inv.sourceConduceNumber || '');
   let saleCommitted = false;
   try {
     const result = await posConfirmSaleWithRecovery(inv, saleData, user.id);
@@ -3760,6 +3900,8 @@ async function finalizarVenta() {
     const savedDocumentLabel = result.documentNumberFmt || `#${result.saleId}`;
     toast(sourceQuoteId
       ? `✓ Cotización ${sourceQuoteNumber || '#' + sourceQuoteId} convertida → ${savedDocumentLabel}`
+      : sourceConduceId
+      ? `✓ Conduce ${sourceConduceNumber || '#' + sourceConduceId} convertido → ${savedDocumentLabel}`
       : result.recovered
       ? `✓ ${savedDocumentLabel} recuperada; no se duplicó el cobro`
       : isQuote

@@ -1447,6 +1447,16 @@ tbody tr:hover td{background:#f7faf8}.tb{font-weight:700}.ts{font-size:10px}.tm{
 
 .ux-modal-structured{max-height:min(88vh,900px);scrollbar-gutter:stable}.ux-modal-structured>.modal-title:first-child,.ux-modal-structured>.modal-head:first-child{position:sticky;top:-25px;z-index:8;background:var(--surface);padding-top:3px}
 .ux-modal-structured .modal-foot{position:sticky;bottom:-25px;z-index:8;background:var(--surface);backdrop-filter:none;box-shadow:0 -1px var(--line2);padding-top:12px}
+.sale-detail-modal{width:min(980px,94vw)!important;height:min(84vh,820px);max-height:min(84vh,820px)!important;padding:0!important;overflow:hidden!important;display:flex;flex-direction:column}
+.sale-detail-head{flex:0 0 auto;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:16px 20px 12px;border-bottom:1px solid var(--line2);background:var(--surface);box-shadow:0 5px 16px rgba(15,23,42,.04);z-index:2}
+.sale-detail-head .modal-title{font-size:15px;margin:0}.sale-detail-head .modal-sub{font-size:10.5px;margin:3px 0 0}
+.sale-detail-close{font-size:22px!important;line-height:1!important;padding:2px 7px!important;color:var(--muted)!important}
+.sale-detail-body{flex:1;min-height:0;overflow-y:auto;padding:14px 20px;scrollbar-gutter:stable}
+.sale-detail-items-scroll{max-height:clamp(220px,42vh,430px);overflow:auto;scrollbar-gutter:stable;border:1px solid var(--line);border-radius:10px}
+.sale-detail-items-scroll table{margin:0}.sale-detail-items-scroll thead{position:sticky;top:0;z-index:2;background:var(--surface2)}
+.sale-detail-actions{flex:0 0 auto;margin:0!important;padding:10px 14px!important;border-top:1px solid var(--line)!important;background:var(--surface);box-shadow:0 -5px 16px rgba(15,23,42,.04);gap:6px!important;max-height:104px;overflow-y:auto}
+.sale-detail-actions .btn{min-height:31px;padding:6px 9px!important;border-radius:8px;font-size:10.5px;white-space:nowrap}
+.sale-detail-actions .btn svg{width:12px;height:12px}
 [data-ux-status]{border:1px solid transparent!important;font-weight:750!important}[data-ux-status="success"]{background:var(--green-bg)!important;color:var(--green)!important;border-color:var(--green-line)!important}
 [data-ux-status="warning"]{background:var(--amber-bg)!important;color:var(--amber)!important;border-color:var(--amber-line)!important}
 [data-ux-status="danger"]{background:var(--red-bg)!important;color:var(--red)!important;border-color:var(--red-line)!important}

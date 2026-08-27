@@ -49,17 +49,57 @@ los rangos autorizados en `ncf_sequences`.
   correlativo Velo (`FAC-000004`); las migradas se identifican como
   `Importada de FAPRO` y priorizan su número histórico.
 - Las cotizaciones nuevas no mueven inventario, caja, crédito ni contabilidad.
-- En el Punto de Venta, “Agregar envío u otro cargo” crea un artículo de servicio
-  sin inventario. El renglón se suma y se guarda dentro de factura o cotización;
-  una cotización continúa sin mover inventario, caja, crédito ni contabilidad.
+- En el Punto de Venta, “Agregar envío u otro cargo” se mantiene separado de los
+  artículos del carrito. El concepto aparece en **Cargos adicionales**, se suma
+  al total y se guarda e imprime en factura, cotización y conduce; una
+  cotización o un conduce continúan sin mover inventario, caja, crédito ni
+  contabilidad.
 - El selector **Conduce** del POS guarda directamente una nota de entrega en
   `delivery_notes`. No cobra, no calcula impuestos y no mueve inventario. Solo
   admite productos vinculados al inventario para que puedan facturarse después.
+- Desde el detalle del conduce, **Convertir a venta** permite escoger cantidades
+  pendientes y abre Punto de Venta con el cliente, artículos, precios y cargos
+  del conduce. El documento conserva su estado hasta confirmar la factura.
+- Las conversiones parciales se enlazan por línea. El cargo pendiente se aplica
+  una sola vez, en la primera factura confirmada; los intentos repetidos no
+  duplican venta, inventario ni cargo. Al completar todas las cantidades, el
+  conduce cambia a `facturado`. Si se anula una factura vinculada, se liberan
+  únicamente sus cantidades y cargos para mantener la trazabilidad.
 - Administrador y superadministrador pueden anular un conduce desde el listado o
   desde su detalle. El motivo es obligatorio, el documento permanece almacenado
   y su número `CON-` no vuelve a utilizarse.
 - Eliminar una cotización la retira inmediatamente de la operación y conserva
   solo su correlativo y el evento de auditoría.
+
+## Facturas reajustadas y crédito
+
+- Una factura corregida conserva en Ventas toda la trazabilidad: motivo,
+  documentos compensatorios, fechas y referencias relacionadas. Esa información
+  es interna y no se imprime ni se muestra como observación en la copia del
+  cliente.
+- La reimpresión conserva el tipo de pago y el NCF originales. Por eso, una
+  factura que nació a crédito no cambia a “varios” ni aparece como pagada solo
+  por haber sido reajustada.
+- Toda plantilla de factura a crédito incluye dos espacios de firma:
+  **Entregado por**, con el nombre del usuario que atendió la venta, y
+  **Recibido por**, con el nombre del cliente.
+- Cuando un cliente registrado todavía no tiene límite de crédito, Velo puede
+  asignarle al confirmar la venta un límite igual a su balance existente más el
+  nuevo monto financiado. Para cajeros esta asignación está limitada por
+  `pos_cashier_auto_credit_limit_amount`; al excederla se requiere una clave de
+  administrador o superadministrador. Esos dos roles no tienen la restricción.
+
+## Continuidad de tickets del POS
+
+- Los tickets abiertos se guardan automáticamente por usuario en la terminal y
+  se reconstruyen después de cerrar inesperadamente o perder energía.
+- La recuperación conserva artículos, cantidades, precios de la venta, cliente,
+  descuento, cargos, tipo de documento y pestaña activa.
+- No se recuperan órdenes ya enviadas a caja ni estados de una operación en
+  curso. Tampoco se guardan claves, tokens o autorizaciones temporales: cualquier
+  excepción de descuento, precio o crédito debe autorizarse nuevamente.
+- El respaldo local expira a los 30 días, admite hasta 20 tickets y no altera la
+  base comercial hasta que el usuario confirme el documento.
 
 ## PDF por WhatsApp
 

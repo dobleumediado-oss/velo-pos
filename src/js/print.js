@@ -456,6 +456,16 @@ function _injectThermalDensity(html) {
   return style + html;
 }
 
+// Los bloques financieros y las observaciones deben quedar antes del área de
+// firmas de crédito. Las plantillas insertan esa firma al final del documento;
+// este helper conserva ese orden aunque printReceipt agregue información común.
+function _insertBeforeCreditSignatures(html, block) {
+  const marker = '<div data-credit-signatures="1"';
+  const signatureAt = String(html || '').indexOf(marker);
+  if (signatureAt >= 0) return html.slice(0, signatureAt) + block + html.slice(signatureAt);
+  return html.includes('</body>') ? html.replace('</body>', block + '</body>') : html + block;
+}
+
 // ══════════════════════════════════════════════
 // TICKET DE VENTA 80MM
 // ══════════════════════════════════════════════
@@ -581,7 +591,10 @@ function printReceipt(sale, isReprint = false) {
       receipt_number: sale.receipt_number || sale.last_receipt_number || sale.numero_recibo || '',
       receipt_numbers: sale.receipt_numbers || sale._recibos || '',
       transaction_number: sale.transaction_number || sale.transaction_id || sale.id || '',
-      notes: sale.notes || '',
+      // La explicación y las referencias de una corrección pertenecen al
+      // historial interno. La copia que recibe el cliente conserva solo las
+      // observaciones comerciales de una factura normal.
+      notes: sale.adjusted_copy ? '' : (sale.notes || ''),
       // NCF real de la venta — nunca inventar uno
       ncf:           sale.ncf || '',
       // Pago mixto
@@ -615,11 +628,11 @@ function printReceipt(sale, isReprint = false) {
         <div style="display:flex;justify-content:space-between;gap:12px"><span>Pago inicial recibido</span><strong>RD$${paid.toLocaleString('es-DO',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div>
         <div style="display:flex;justify-content:space-between;gap:12px;margin-top:4px"><span>Balance a crédito</span><strong>RD$${balance.toLocaleString('es-DO',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div>
       </div>`;
-      html = html.includes('</body>') ? html.replace('</body>', paymentBlock + '</body>') : html + paymentBlock;
+      html = _insertBeforeCreditSignatures(html, paymentBlock);
     }
-    if (templateId !== 'carta_recibo' && saleForPlant.notes) {
+    if (templateId !== 'carta_recibo' && saleForPlant.notes && !saleForPlant.adjusted_copy) {
       const noteBlock = `<div style="margin:8px 0;padding:7px 9px;border:1px solid #e5e7eb;border-radius:5px;font-family:Arial,sans-serif;font-size:10px"><strong>Notas:</strong> ${_escHtml(saleForPlant.notes)}</div>`;
-      html = html.includes('</body>') ? html.replace('</body>', noteBlock + '</body>') : html + noteBlock;
+      html = _insertBeforeCreditSignatures(html, noteBlock);
     }
     if ((saleForPlant.type === 'pago_gasto_externo' || saleForPlant.type === 'pago_proveedor') &&
         templateId !== 'carta_recibo') {
@@ -664,22 +677,13 @@ function printReceipt(sale, isReprint = false) {
   lines.push(tline());
 
   let docLabel = '*** RECIBO DE COMPRA ***';
-  if (isFactura)    docLabel = sale.adjusted_copy ? '*** FACTURA AJUSTADA ***' : '*** FACTURA ***';
+  if (isFactura)    docLabel = '*** FACTURA ***';
   if (isCotizacion) docLabel = '*** COTIZACIÓN ***';
   if (isDevolucion) docLabel = '*** NOTA DE CRÉDITO ***';
   lines.push(tCenter(docLabel));
   if (isReprint)    lines.push(tCenter('--- REIMPRESIÓN ---'));
-  if (sale.adjusted_copy) {
-    lines.push(tCenter('--- COPIA CONSOLIDADA ---'));
-    lines.push(tCenter('No sustituye comprobantes fiscales'));
-    if (sale.adjusted_reference) lines.push(tCenter(`Ref.: ${sale.adjusted_reference}`));
-    if (sale.adjusted_reference_ncf) {
-      lines.push(tCenter(`Ref. NCF original: ${sale.adjusted_reference_ncf}`));
-    }
-    if (Array.isArray(sale.related_documents) && sale.related_documents.length) {
-      lines.push(tCenter(`Docs.: ${sale.related_documents.join(', ')}`));
-    }
-  }
+  // Los datos de ajuste y documentos relacionados se consultan únicamente en
+  // Ventas. No se exponen en el comprobante entregado al cliente.
 
   lines.push(tline());
   lines.push(tRow(`No.: ${facturaLabel(sale)}`, `Fecha: ${sale.date || today()}`));
@@ -762,14 +766,14 @@ function printReceipt(sale, isReprint = false) {
     lines.push(tRow('Tasa USD:', `RD$${Number(sale.exchange_rate || 0).toFixed(2)}`));
     lines.push(tRow('Base factura:', fmt(total)));
   }
-  if (sale.notes) {
+  if (sale.notes && !sale.adjusted_copy) {
     lines.push('');
     lines.push('NOTA:');
     String(sale.notes).match(new RegExp(`.{1,${Math.max(12, THERMAL.cols - 2)}}`, 'g'))
       ?.forEach(line => lines.push(line));
   }
 
-  if (isFactura && !isDevolucion && !sale.adjusted_copy && sale.ncf && sale.ncf.trim()) {
+  if (isFactura && !isDevolucion && sale.ncf && sale.ncf.trim()) {
     // Usar el NCF real guardado en la venta — nunca fabricar uno.
     // El NCF real se asigna y registra en ncf_log al crear la venta;
     // si no está guardado, no se imprime ninguno.
@@ -796,6 +800,19 @@ function printReceipt(sale, isReprint = false) {
       lines.push('');
       lines.push(tCenter(`Ref. venta original: ${facturaLabelOriginal(sale)}`));
     }
+  }
+
+  if (isFactura && String(sale.payment_method || sale.pay || '').toLowerCase() === 'credito') {
+    const cashierName = String(sale.cajero || user?.name || '—');
+    const customerName = String(sale.customer_name || sale.clientName || 'Consumidor Final');
+    lines.push('');
+    lines.push(tCenter('____________________________'));
+    lines.push(tCenter('Entregado por'));
+    lines.push(tCenter(cashierName.slice(0, THERMAL.cols)));
+    lines.push('');
+    lines.push(tCenter('____________________________'));
+    lines.push(tCenter('Recibido por'));
+    lines.push(tCenter(customerName.slice(0, THERMAL.cols)));
   }
 
   lines.push('');
@@ -861,6 +878,12 @@ function printConduce(sale) {
   lines.push(tline());
   const totalUnid = items.reduce((a, i) => a + (i.qty || 1), 0);
   lines.push(tRow('Total de artículos:', String(totalUnid)));
+  const charges = (sale.charges || []).filter(row => row.description && Number(row.amount) > 0);
+  if (charges.length) {
+    lines.push(tline('-'));
+    charges.forEach(row => lines.push(tRow(String(row.description).slice(0, 24), fmt(Number(row.amount) || 0))));
+    lines.push(tRow('Total cargos:', fmt(charges.reduce((sum, row) => sum + Number(row.amount || 0), 0))));
+  }
   lines.push('');
   lines.push('');
   lines.push(tCenter('___________________________'));
@@ -904,6 +927,8 @@ function printConduceDoc(dn) {
       <td style="text-align:center">${esc(it.unit || 'und')}</td>
       ${showPrices ? `<td style="text-align:right">—</td>` : ''}
     </tr>`).join('');
+  const charges = (dn.charges || []).filter(row => row.description && Number(row.amount) > 0);
+  const chargesTotal = charges.reduce((sum, row) => sum + Number(row.amount || 0), 0);
 
   const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
 <title>Conduce ${esc(dn.number || '')}</title>
@@ -929,6 +954,9 @@ function printConduceDoc(dn) {
   table.items td { padding:6px 8px; border-bottom:1px solid #eee; vertical-align:top; }
   .obs { color:#777; font-size:10px; }
   .notes { min-height:54px; border:1px solid #d1d5db; border-radius:5px; padding:7px 9px; margin:0 0 16px; }
+  .charges { margin:4px 0 12px auto; width:52%; border:1px solid #d1d5db; border-radius:5px; padding:6px 9px; }
+  .charge-row { display:flex; justify-content:space-between; gap:12px; padding:3px 0; }
+  .charge-total { border-top:1px solid #d1d5db; margin-top:3px; padding-top:5px; font-weight:800; }
   .notes .k { color:#555; font-size:11px; }
   .notes .text { margin-top:5px; font-size:11px; font-weight:600; line-height:1.35; white-space:pre-wrap; }
   .signs { display:flex; gap:40px; margin-top:28px; }
@@ -977,6 +1005,12 @@ function printConduceDoc(dn) {
     </tr></thead>
     <tbody>${itemsRows || `<tr><td colspan="${showPrices ? 6 : 5}" style="text-align:center;color:#888;padding:16px">Sin artículos</td></tr>`}</tbody>
   </table>
+
+  ${charges.length ? `<div class="charges">
+    <div class="muted" style="font-weight:700;margin-bottom:3px">Cargos adicionales</div>
+    ${charges.map(row => `<div class="charge-row"><span>${esc(row.description)}</span><strong>${fmt(Number(row.amount) || 0)}</strong></div>`).join('')}
+    <div class="charge-row charge-total"><span>Total cargos</span><span>${fmt(chargesTotal)}</span></div>
+  </div>` : ''}
 
   <div class="notes">
     <div class="k">Observaciones:</div>

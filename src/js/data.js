@@ -493,7 +493,11 @@ function newInvObj(id) {
     initialPaymentReference: '', initialPaymentMixCash: 0,
     initialPaymentMixNoncash: 0, initialPaymentNoncashMethod: 'transferencia', notes: '',
     replacesSaleId: null, replacementDocumentNumber: '',
-    sourceQuoteId: null, sourceQuoteNumber: '', ncfType: '',
+    sourceQuoteId: null, sourceQuoteNumber: '',
+    sourceConduceId: null, sourceConduceNumber: '', ncfType: '',
+    creditLimitAuthToken: '', creditLimitAuthExpiresAt: 0,
+    creditLimitApprovedBy: null, creditLimitAuthCustomerId: null,
+    creditLimitAuthAmount: 0,
     saleOperationId: '', saleSubmitting: false, conduceSubmitting: false
   };
 }
@@ -501,6 +505,117 @@ function newInvObj(id) {
 let invoices      = [newInvObj(1)];
 let activeInvoice = 0;
 let invCounter    = 1;
+
+const POS_WORKSPACE_RECOVERY_PREFIX = 'velo.pos.workspace.v1';
+let _posWorkspaceRecoveryUser = '';
+let _posWorkspaceSaveTimer = null;
+
+function _posWorkspaceUserKey() {
+  const id = Number((window._currentUser || user)?.id) || 0;
+  const businessId = String(
+    CFG?.activeBusinessId || CFG?.business_id || DB?.settings?.active_business_id || 'principal'
+  ).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 60) || 'principal';
+  return id ? `${POS_WORKSPACE_RECOVERY_PREFIX}:business:${businessId}:user:${id}` : '';
+}
+
+function _posWorkspaceCleanInvoice(source, id) {
+  const raw = source && typeof source === 'object' ? source : {};
+  const clean = {
+    ...newInvObj(id),
+    ...raw,
+    id,
+    cart: (Array.isArray(raw.cart) ? raw.cart : []).slice(0, 100).map(item => ({ ...item })),
+    charges: (Array.isArray(raw.charges) ? raw.charges : []).slice(0, 20).map(charge => ({
+      description: String(charge?.description || '').slice(0, 120),
+      amount: Math.max(0, Number(charge?.amount) || 0),
+    })).filter(charge => charge.description && charge.amount > 0),
+    saleOperationId: '',
+    saleSubmitting: false,
+    conduceSubmitting: false,
+    discAuthToken: null,
+    discApprovedBy: null,
+    priceChangeAuthToken: null,
+    priceChangeAuthExpiresAt: 0,
+    priceChangeApprovedBy: null,
+    creditLimitAuthToken: '',
+    creditLimitAuthExpiresAt: 0,
+    creditLimitApprovedBy: null,
+    creditLimitAuthCustomerId: null,
+    creditLimitAuthAmount: 0,
+  };
+  delete clean.checkoutOrderId;
+  delete clean.checkoutOrderNumber;
+  delete clean.checkoutLocked;
+  return clean;
+}
+
+function posPersistWorkspaceNow(expectedKey = '') {
+  const currentKey = _posWorkspaceUserKey();
+  if (expectedKey && expectedKey !== currentKey) return false;
+  const key = expectedKey || currentKey;
+  if (!key || !window.localStorage) return false;
+  try {
+    const activeSource = invoices[activeInvoice];
+    const recoverableSources = (invoices || [])
+      .filter(inv => !inv?.checkoutOrderId && ((inv?.cart || []).length || (inv?.charges || []).length))
+      .slice(0, 20);
+    const activeRecovered = Math.max(0, recoverableSources.findIndex(inv => inv === activeSource));
+    const recoverable = recoverableSources
+      .map((inv, index) => _posWorkspaceCleanInvoice(inv, index + 1));
+    if (!recoverable.length) {
+      window.localStorage.removeItem(key);
+      return true;
+    }
+    window.localStorage.setItem(key, JSON.stringify({
+      version: 1,
+      savedAt: Date.now(),
+      activeInvoice: activeRecovered,
+      invoices: recoverable,
+    }));
+    return true;
+  } catch (error) {
+    console.warn('[POS] No se pudo guardar la recuperación de tickets:', error?.message || error);
+    return false;
+  }
+}
+
+function posScheduleWorkspaceSave() {
+  clearTimeout(_posWorkspaceSaveTimer);
+  const key = _posWorkspaceUserKey();
+  _posWorkspaceSaveTimer = setTimeout(() => posPersistWorkspaceNow(key), 80);
+}
+
+function posRestoreWorkspace() {
+  const key = _posWorkspaceUserKey();
+  if (!key || !window.localStorage || _posWorkspaceRecoveryUser === key) return 0;
+  _posWorkspaceRecoveryUser = key;
+  try {
+    const payload = JSON.parse(window.localStorage.getItem(key) || 'null');
+    const age = Date.now() - Number(payload?.savedAt || 0);
+    if (!payload || payload.version !== 1 || age < 0 || age > 30 * 24 * 60 * 60 * 1000) {
+      if (payload) window.localStorage.removeItem(key);
+      return 0;
+    }
+    const restored = (Array.isArray(payload.invoices) ? payload.invoices : [])
+      .filter(inv => !inv?.checkoutOrderId && ((inv?.cart || []).length || (inv?.charges || []).length))
+      .slice(0, 20)
+      .map((inv, index) => _posWorkspaceCleanInvoice(inv, index + 1));
+    if (!restored.length) {
+      window.localStorage.removeItem(key);
+      return 0;
+    }
+    invoices = restored;
+    invCounter = invoices.length;
+    activeInvoice = Math.max(0, Math.min(invoices.length - 1, Number(payload.activeInvoice) || 0));
+    return restored.length;
+  } catch (error) {
+    console.warn('[POS] Recuperación de tickets descartada:', error?.message || error);
+    try { window.localStorage.removeItem(key); } catch {}
+    return 0;
+  }
+}
+
+window.addEventListener?.('beforeunload', posPersistWorkspaceNow);
 
 function currentInv() {
   return invoices[activeInvoice] || invoices[0];

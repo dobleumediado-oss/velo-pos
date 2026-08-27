@@ -6,6 +6,7 @@ const {
   discountAuthLimit,
   priceChangePolicy,
   priceOverrideReduction,
+  priceOverrideIncrease,
   priceOverridesRequiringAuth,
 } = require('../lib/pos-authorization-policy');
 
@@ -17,6 +18,7 @@ assert.strictEqual(discountAuthLimit('-2'), 0);
 assert.deepStrictEqual(priceChangePolicy({}), {
   enabled: true,
   maxReductionAmount: 0,
+  maxIncreaseAmount: 0,
 });
 assert.deepStrictEqual(priceChangePolicy({
   pos_price_change_enabled: '0',
@@ -24,6 +26,7 @@ assert.deepStrictEqual(priceChangePolicy({
 }), {
   enabled: false,
   maxReductionAmount: 250.5,
+  maxIncreaseAmount: 0,
 });
 
 const withinLimit = { retail: 1000, wholesale: 900, unitPrice: 850 };
@@ -31,8 +34,21 @@ const aboveLimit = { retail: 1000, wholesale: 900, unitPrice: 849.99 };
 const increase = { retail: 1000, wholesale: 900, unitPrice: 1100 };
 assert.strictEqual(priceOverrideReduction(withinLimit), 50);
 assert.strictEqual(priceOverrideReduction(increase), 0);
-assert.deepStrictEqual(priceOverridesRequiringAuth([withinLimit, aboveLimit, increase], 50), [aboveLimit]);
+assert.strictEqual(priceOverrideIncrease(increase), 100);
+assert.deepStrictEqual(
+  priceOverridesRequiringAuth([withinLimit, aboveLimit, increase], {
+    maxReductionAmount: 50, maxIncreaseAmount: 100,
+  }),
+  [aboveLimit]
+);
+assert.deepStrictEqual(
+  priceOverridesRequiringAuth([withinLimit, aboveLimit, increase], {
+    maxReductionAmount: 50, maxIncreaseAmount: 99.99,
+  }),
+  [aboveLimit, increase]
+);
 
 console.log('  ✓ límite porcentual de descuento configurable');
 console.log('  ✓ política de cambio manual de precio normalizada');
 console.log('  ✓ reducción en RD$ calculada desde el menor precio de catálogo');
+console.log('  ✓ aumento en RD$ controlado desde el mayor precio de catálogo');

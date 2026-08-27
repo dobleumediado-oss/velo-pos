@@ -1,5 +1,41 @@
 # Historial de versiones
 
+## 1.47.4 — 2026-08-27
+
+### Continuidad y control del Punto de Venta
+
+- Los tickets abiertos del carrito se recuperan después de cerrar inesperadamente
+  el sistema o perder la energía, incluyendo cliente, artículos, descuentos,
+  cargos y tipo de documento.
+- El administrador y el superadministrador configuran los límites que aplican al
+  cajero para descuentos, cambios de precio y asignación inicial de crédito; sus
+  propias operaciones continúan sin esas restricciones.
+- Los cambios manuales de precio pueden aumentar o reducir el valor únicamente
+  para la venta actual y solicitan autorización al superar el monto configurado.
+
+### Facturas, crédito y documentos
+
+- Las facturas a crédito incluyen las líneas de firma «Entregado por» y «Recibido
+  por», con el cajero y el cliente correspondientes, en todas las plantillas.
+- Corregir o reajustar una factura conserva internamente su trazabilidad, estado
+  de crédito y comprobante, sin imprimir al cliente observaciones técnicas.
+- Las vistas de factura, cotización y conduce utilizan encabezado y acciones
+  fijas, contenido desplazable y botones más compactos.
+- El cálculo de productos con ITBIS incluido mantiene separados la base imponible
+  y el impuesto sin alterar el precio final mostrado ni el total cobrado.
+
+### Cargos y conduces
+
+- Envío, obra y otros cargos permanecen separados de los artículos, pero se
+  guardan, imprimen y suman al total de facturas y cotizaciones.
+- Los conduces también admiten cargos adicionales como referencia separada, sin
+  convertir sus productos en una venta fiscal ni descontar inventario al crearlos.
+- Un conduce puede convertirse total o parcialmente en venta desde el Punto de
+  Venta, conservando cliente, artículos, notas y cargos pendientes, con protección
+  contra duplicados y reapertura correcta si la factura vinculada se anula.
+- Se actualizaron la guía interactiva, la documentación de flujos y el roadmap
+  para reflejar el comportamiento completo de esta versión.
+
 ## 1.47.3 — 2026-08-26
 
 ### Controles configurables para el cajero

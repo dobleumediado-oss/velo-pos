@@ -99,4 +99,4 @@ La cuarta capa lleva los componentes visuales a decisiones y flujos operativos r
 
 El tablero se persiste bajo `velo:dashboard-layout:v1:{negocio}:{usuario}`. Las nuevas vistas son presentaciones de datos existentes y respetan las mismas validaciones, permisos, auditoría e integración contable de los módulos de origen.
 
-La revisión `experience-3.4` de la guía animada presenta también los tipos de documento del POS, los cargos convertidos en artículos de servicio, el carrito ajustable, la creación y anulación de conduces y los controles que el administrador configura para el cajero. Al cambiar la revisión, cada usuario recibe una única invitación para conocer estas novedades.
+La revisión `experience-3.6` de la guía animada presenta también los tipos de documento del POS, los cargos separados de los artículos, el carrito ajustable, la creación, conversión y anulación de conduces y los controles que el administrador configura para el cajero. Al cambiar la revisión, cada usuario recibe una única invitación para conocer estas novedades.

@@ -1761,14 +1761,20 @@ async function openDetalleVentaModal(s, options = {}) {
     </div>` : '';
 
   openModal(`
-    <div class="modal-title">${documentTypeLabel(detail)} ${ventasEsc(ventasHistoryReference(detail))}</div>
-    <div class="modal-sub">
-      ${detail.import_source
-        ? `${ventasEsc(ventasImportSourceLabel(detail.import_source))} · `
-        : (detail.document_number_fmt ? `Documento Velo ${ventasEsc(detail.document_number_fmt)} · ` : '')}
-      ${fdate(fecha)} · Cajero: ${detail.cajero || '—'}
-      ${detail.salesperson_name ? ` · Vendedor: ${ventasEsc(detail.salesperson_code ? detail.salesperson_code + ' · ' : '')}${ventasEsc(detail.salesperson_name)}` : ''}
+    <div class="sale-detail-head">
+      <div>
+        <div class="modal-title">${documentTypeLabel(detail)} ${ventasEsc(ventasHistoryReference(detail))}</div>
+        <div class="modal-sub">
+          ${detail.import_source
+            ? `${ventasEsc(ventasImportSourceLabel(detail.import_source))} · `
+            : (detail.document_number_fmt ? `Documento Velo ${ventasEsc(detail.document_number_fmt)} · ` : '')}
+          ${fdate(fecha)} · Cajero: ${detail.cajero || '—'}
+          ${detail.salesperson_name ? ` · Vendedor: ${ventasEsc(detail.salesperson_code ? detail.salesperson_code + ' · ' : '')}${ventasEsc(detail.salesperson_name)}` : ''}
+        </div>
+      </div>
+      <button class="btn btn-ghost btn-sm sale-detail-close" type="button" onclick="closeModal()" title="Cerrar">×</button>
     </div>
+    <div class="sale-detail-body">
     <div class="card" style="background:var(--surface2);margin-bottom:12px">
       <div class="g3">
         <div><div class="lbl">Fecha original</div><strong>${fdate(detail.original_sale_date || fecha)}</strong></div>
@@ -1812,7 +1818,7 @@ async function openDetalleVentaModal(s, options = {}) {
         <div class="alrt-sub">Aquí aparecen las cantidades vigentes. Las notas de crédito y documentos de aumento permanecen únicamente en el historial de auditoría.</div></div>
       </div>` : ''}
     ${ecfSection}
-    <div class="tw" style="margin-bottom:12px">
+    <div class="tw sale-detail-items-scroll" style="margin-bottom:12px">
       <table>
         <thead><tr>
           <th>Código</th>
@@ -1858,7 +1864,8 @@ async function openDetalleVentaModal(s, options = {}) {
       <div class="lbl">Notas de la venta</div>
       <div style="font-size:12px;margin-top:5px;white-space:pre-wrap">${ventasEsc(detail.notes)}</div>
     </div>` : ''}
-    <div class="modal-foot">
+    </div>
+    <div class="modal-foot sale-detail-actions">
       ${Number(options.returnToCustomerId) > 0 ? `
       <button class="btn btn-dark" onclick="if(modalBack()===false) volverAClienteDesdeFactura(${Number(options.returnToCustomerId)},'${options.returnTab === 'facturas' ? 'facturas' : options.returnTab === 'historial' ? 'historial' : 'cuenta'}')">
         ← Atrás
@@ -2246,17 +2253,15 @@ function ventasPrintPayload(sale) {
     tax_amt: adjustedCopy ? sale.adjusted_tax_amt : (sale.tax_amt || 0),
     total: adjustedCopy ? sale.operation_total : sale.total,
     trade_in_amount: adjustedCopy ? 0 : (sale.trade_in_amount || 0),
-    payment_method: adjustedCopy && Number(sale.adjustment_addition_total || 0) > 0
-      ? 'varios'
-      : sale.payment_method,
+    // La corrección no cambia la forma de pago original. Una factura a crédito
+    // debe continuar identificándose como crédito y pendiente en la copia del cliente.
+    payment_method: sale.payment_method,
     payment_amount: sale.payment_amount, balance_after_payment: sale.balance_after_payment,
     receipt_number: sale.last_receipt_number, receipt_numbers: sale.receipt_numbers,
-    transaction_number: adjustedCopy
-      ? `${ventasHistoryReference(sale)} · ${sale.document_number_fmt || ''}`.trim()
-      : (sale.document_number_fmt || sale.id),
-    notes: adjustedCopy
-      ? `Copia consolidada de la operación ajustada. ${relatedDocuments.length ? `Documentos relacionados: ${relatedDocuments.join(', ')}.` : ''}`
-      : (sale.notes || ''),
+    transaction_number: sale.document_number_fmt || sale.id,
+    // La explicación de correcciones y los documentos relacionados quedan en
+    // el historial interno; no se imprimen como observaciones al cliente.
+    notes: adjustedCopy ? '' : (sale.notes || ''),
     cajero: sale.cajero, ncf: sale.ncf || '', tax_pct: sale.tax_pct, modifies_ncf: sale.modifies_ncf || '',
     salesperson_id: sale.salesperson_id || null,
     salesperson_name: sale.salesperson_name || '',

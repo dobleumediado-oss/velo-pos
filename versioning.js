@@ -2364,6 +2364,40 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.48.2-pos-authorization-controls] Controles de autorización del POS listos');
     }
   },
+  {
+    version: '1.48.3-pos-resilience-credit-controls',
+    description: 'POS: umbrales de aumento de precio, asignación controlada de crédito y base para recuperación de tickets.',
+    run(db) {
+      const setting = db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');
+      [
+        ['pos_price_max_increase_amount', '0'],
+        ['pos_cashier_auto_credit_limit_amount', '0'],
+      ].forEach(row => setting.run(...row));
+      console.log('[MIGRATION 1.48.3-pos-resilience-credit-controls] Umbrales ampliados del POS listos');
+    }
+  },
+  {
+    version: '1.48.4-conduce-charges-pos-conversion',
+    description: 'Conduces: cargos adicionales persistentes y conversión trazable desde Punto de Venta.',
+    run(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS delivery_note_charges (
+          id               INTEGER PRIMARY KEY AUTOINCREMENT,
+          delivery_note_id INTEGER NOT NULL REFERENCES delivery_notes(id),
+          description      TEXT NOT NULL,
+          amount           REAL NOT NULL DEFAULT 0,
+          invoice_id       INTEGER REFERENCES sales(id),
+          created_at       TEXT DEFAULT (datetime('now','localtime')),
+          updated_at       TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_dnc_note
+          ON delivery_note_charges(delivery_note_id);
+        CREATE INDEX IF NOT EXISTS idx_dnc_invoice
+          ON delivery_note_charges(invoice_id);
+      `);
+      console.log('[MIGRATION 1.48.4-conduce-charges-pos-conversion] Cargos y conversión de conduces listos');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

@@ -32,6 +32,7 @@ const _cndBadge   = s => `<span class="badge ${_CND_ST[s]?.badge || ''}">${_cndS
 let _cndFilterStatus = '';
 let _cndSearch       = '';
 let _cndFormItems    = [];   // líneas del formulario en edición
+let _cndFormCharges  = [];   // cargos separados; nunca se convierten en productos
 
 // ── Render principal (listado) ────────────────
 async function renderConduce(el) {
@@ -188,14 +189,18 @@ async function _cndOpenDetail(id) {
     </tr>`).join('');
 
   const facturadas = (dn.invoice_links || []).length;
+  const charges = Array.isArray(dn.charges) ? dn.charges : [];
+  const chargesTotal = charges.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
 
   openModal(`
-    <div class="fxb mb8">
+    <div class="sale-detail-head">
       <div>
         <div class="modal-title">${dn.number} ${_cndBadge(dn.status)}</div>
         <div class="modal-sub">${_cndEsc(dn.customer_name)} · ${fdate(dn.issue_date)}</div>
       </div>
+      <button class="btn btn-ghost btn-sm sale-detail-close" type="button" onclick="closeModal()" title="Cerrar">×</button>
     </div>
+    <div class="sale-detail-body">
 
     <div class="card" style="background:var(--surface2);margin-bottom:12px;font-size:12px">
       ${dn.customer_rnc ? `<div class="tr"><span>RNC/Céd.</span><span>${_cndEsc(dn.customer_rnc)}</span></div>` : ''}
@@ -208,18 +213,20 @@ async function _cndOpenDetail(id) {
       ${dn.invoice_id ? `<div class="tr"><span>Factura</span><span>#${dn.invoice_id}</span></div>` : ''}
       ${dn.status === 'anulado' ? `<div class="tr"><span style="color:var(--red)">Anulado</span><span>${_cndEsc(dn.cancellation_reason)}</span></div>` : ''}
       ${dn.notes ? `<div class="tr"><span>Notas</span><span>${_cndEsc(dn.notes)}</span></div>` : ''}
+      ${charges.map(row => `<div class="tr"><span>${_cndEsc(row.description)}</span><span>${fmt(Number(row.amount) || 0)}${row.invoice_id ? ' · facturado' : ' · pendiente'}</span></div>`).join('')}
+      ${chargesTotal > 0 ? `<div class="tr"><strong>Total cargos adicionales</strong><strong>${fmt(chargesTotal)}</strong></div>` : ''}
     </div>
 
-    <div class="tw" style="max-height:34vh;overflow:auto;margin-bottom:12px">
+    <div class="tw sale-detail-items-scroll" style="margin-bottom:12px">
       <table>
         <thead><tr><th>SKU</th><th>Descripción</th><th>Solic.</th><th>Entreg.</th><th>Pend.</th><th>Unid.</th></tr></thead>
         <tbody>${itemsRows}</tbody>
       </table>
     </div>
     ${facturadas ? `<div style="font-size:11px;color:var(--muted2);margin-bottom:8px">Enlaces a factura: ${facturadas}</div>` : ''}
-
-    <div class="modal-foot" style="flex-wrap:wrap;gap:6px" id="cnd-detail-actions"></div>
-  `, 'modal-lg');
+    </div>
+    <div class="modal-foot sale-detail-actions" id="cnd-detail-actions"></div>
+  `, 'modal-lg sale-detail-modal conduce-detail-modal');
 
   _cndRenderActions(dn);
 }
@@ -246,10 +253,10 @@ function _cndRenderActions(dn) {
   }
   if (dn.status === 'despachado' || dn.status === 'parcial') {
     btns.push(`<button class="btn btn-dark btn-sm" onclick="_cndDeliver(${dn.id})">${svg('check')} Confirmar entrega</button>`);
-    btns.push(`<button class="btn btn-green btn-sm" onclick="_cndInvoice(${dn.id})">${svg('receipt')} Facturar</button>`);
+    btns.push(`<button class="btn btn-green btn-sm" onclick="_cndInvoice(${dn.id})">${svg('receipt')} Convertir a venta</button>`);
   }
   if (dn.status === 'entregado') {
-    btns.push(`<button class="btn btn-green btn-sm" onclick="_cndInvoice(${dn.id})">${svg('receipt')} Facturar</button>`);
+    btns.push(`<button class="btn btn-green btn-sm" onclick="_cndInvoice(${dn.id})">${svg('receipt')} Convertir a venta</button>`);
   }
   // Anular: solo admin y si no está anulado/facturado
   if (isAdmin && !['anulado', 'facturado'].includes(dn.status)) {
@@ -333,10 +340,15 @@ async function _cndDoCancel(id) {
   renderConduce(document.getElementById('page'));
 }
 
-// ── Facturar desde conduce ────────────────────
+// ── Convertir conduce a venta desde el POS ─────────────────────
 async function _cndInvoice(id) {
-  const res = await window.api.conduce.invoiceable({ id });
+  const [res, detail] = await Promise.all([
+    window.api.conduce.invoiceable({ id }),
+    window.api.conduce.getById({ id }),
+  ]);
   const lines = (res?.data || []).filter(l => l.invoiceable > 0);
+  const dn = detail?.data;
+  if (!dn) { toast('Conduce no encontrado', 'err'); return; }
   if (!lines.length) { toast('No hay cantidades pendientes por facturar', 'err'); return; }
 
   const rows = lines.map(l => `
@@ -350,21 +362,13 @@ async function _cndInvoice(id) {
     </tr>`).join('');
 
   openModal(`
-    <div class="modal-title">Facturar conduce</div>
-    <div class="modal-sub">Se creará una <strong>factura</strong> (descuenta inventario). Puedes ajustar cantidades para facturar parcialmente.</div>
+    <div class="modal-title">Convertir ${_cndEsc(dn.number)} en venta</div>
+    <div class="modal-sub">Los artículos, el cliente y los cargos pendientes se cargarán en Punto de Venta. El conduce no cambia hasta que confirmes la factura.</div>
     <div class="tw" style="max-height:34vh;overflow:auto;margin:10px 0">
       <table>
         <thead><tr><th>Descripción</th><th>Disponible</th><th>A facturar</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
-    </div>
-    <div class="fg"><label class="lbl">Método de pago</label>
-      <select class="inp" id="cnd-inv-pay">
-        <option value="efectivo">Efectivo</option>
-        <option value="tarjeta">Tarjeta</option>
-        <option value="transferencia">Transferencia</option>
-        <option value="credito">Crédito</option>
-      </select>
     </div>
     <div class="fg"><label class="lbl">Precio</label>
       <select class="inp" id="cnd-inv-price">
@@ -374,7 +378,7 @@ async function _cndInvoice(id) {
     </div>
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-green" onclick="_cndDoInvoice(${id})">${svg('receipt')} Generar factura</button>
+      <button class="btn btn-green" onclick="_cndDoInvoice(${id})">${svg('receipt')} Abrir en Punto de Venta</button>
     </div>
   `, 'modal-lg');
 }
@@ -383,28 +387,87 @@ async function _cndDoInvoice(id) {
     .map(inp => ({ itemId: Number(inp.dataset.item), qty: parseFloat(inp.value) || 0 }))
     .filter(l => l.qty > 0);
   if (!lines.length) { toast('Indica al menos una cantidad a facturar', 'err'); return; }
-  const u = _cndUser();
-  const r = await window.api.conduce.invoice({
-    id, lines,
-    payment:   { method: document.getElementById('cnd-inv-pay')?.value || 'efectivo' },
-    priceMode: document.getElementById('cnd-inv-price')?.value || 'retail',
-    requestUserId: u?.id,
-  });
-  if (!r.ok) { toast(r.error || 'No se pudo facturar', 'err'); return; }
-  toast(`✓ ${r.documentNumberFmt || 'Factura #' + r.saleId} generada${r.ncf ? ' · NCF ' + r.ncf : ''}`);
+  const detail = await window.api.conduce.getById({ id });
+  const dn = detail?.data;
+  if (!dn) { toast('Conduce no encontrado', 'err'); return; }
+  const priceMode = document.getElementById('cnd-inv-price')?.value === 'wholesale' ? 'wholesale' : 'retail';
+  const items = lines.map(selected => {
+    const source = (dn.items || []).find(row => Number(row.id) === Number(selected.itemId));
+    const product = (DB.products || []).find(row => Number(row.id) === Number(source?.product_id));
+    if (!source || !product) return null;
+    const unitPrice = priceMode === 'wholesale' && Number(product.wholesale) > 0
+      ? Number(product.wholesale) : Number(product.price);
+    return {
+      product_id: product.id,
+      product_code: product.code || source.sku || '',
+      product_name: product.name || source.description,
+      unit_cost: Number(product.cost) || 0,
+      unit_price: unitPrice,
+      taxable: product.taxable === 0 ? 0 : 1,
+      tax_pct: product.taxable === 0 ? 0 : (Number(product.tax_pct ?? CFG.itbis) || 18),
+      qty: selected.qty,
+      max_qty: selected.qty,
+      source_conduce_item_id: source.id,
+    };
+  }).filter(Boolean);
+  if (items.length !== lines.length || items.some(item => item.unit_price <= 0)) {
+    toast('Uno de los productos del conduce ya no existe o no tiene precio', 'err');
+    return;
+  }
+  const customer = (DB.customers || []).find(row => Number(row.id) === Number(dn.customer_id));
+  const payload = {
+    sourceConduceId: Number(dn.id),
+    sourceConduceNumber: dn.number || '',
+    priceMode,
+    paymentMethod: 'efectivo',
+    charges: (dn.charges || []).filter(row => !row.invoice_id).map(row => ({
+      description: row.description,
+      amount: Number(row.amount) || 0,
+    })),
+    notes: dn.notes || '',
+    saleDate: new Date().toISOString().slice(0, 10),
+    customer: {
+      id: customer?.id || dn.customer_id || 1,
+      name: customer?.name || dn.customer_name || 'Consumidor Final',
+      rnc: customer?.rnc || dn.customer_rnc || '',
+      phone: customer?.phone || '',
+      phoneType: 'telefono',
+      contactId: dn.customer_contact_id || null,
+      contactName: dn.customer_contact_name || '',
+      contactRole: dn.customer_contact_role || '',
+      contactPhone: dn.customer_contact_phone || '',
+      branchId: dn.customer_branch_id || null,
+      branchName: dn.customer_branch_name || '',
+      branchCode: dn.customer_branch_code || '',
+      branchAddress: dn.customer_branch_address || '',
+      branchPhone: dn.customer_branch_phone || '',
+    },
+    items,
+  };
+  window._pendingPOSResaleCart = payload;
   closeModal();
-  renderConduce(document.getElementById('page'));
+  routeTo('pos');
+  setTimeout(() => {
+    if (window._pendingPOSResaleCart === payload && typeof window.posLoadResaleCart === 'function' && document.getElementById('cart-wrap')) {
+      window._pendingPOSResaleCart = null;
+      window.posLoadResaleCart(payload);
+    }
+  }, 180);
 }
 
 // ── Formulario (crear / editar borrador) ──────
 function _cndOpenForm(id = null) {
   _cndFormItems = [];
+  _cndFormCharges = [];
   const doRender = (dn) => {
     const selectedCompany = dn ? (DB.customers || []).find(c => Number(c.id) === Number(dn.customer_id)) : null;
     if (dn) {
       _cndFormItems = (dn.items || []).map(it => ({
         product_id: it.product_id, sku: it.sku, description: it.description,
         unit: it.unit, qty: it.requested_qty,
+      }));
+      _cndFormCharges = (dn.charges || []).map(row => ({
+        description: row.description || '', amount: Number(row.amount) || 0,
       }));
     }
     openModal(`
@@ -458,6 +521,14 @@ function _cndOpenForm(id = null) {
           <tbody id="cnd-items-body"></tbody></table>
       </div>
 
+      <div style="font-weight:700;font-size:12px;margin:10px 0 6px">Envío u otro cargo</div>
+      <div class="g2" style="grid-template-columns:1fr 130px auto;align-items:end">
+        <div class="fg"><label class="lbl">Concepto</label><input class="inp" id="cnd-charge-desc" placeholder="Ej. Envío, obra, instalación"/></div>
+        <div class="fg"><label class="lbl">Monto RD$</label><input class="inp" id="cnd-charge-amount" type="number" min="0" step="0.01"/></div>
+        <button class="btn btn-out" type="button" style="margin-bottom:10px" onclick="_cndAddCharge()">${svg('plus')} Agregar</button>
+      </div>
+      <div id="cnd-charges-body" style="margin-bottom:8px"></div>
+
       <div class="fg"><label class="lbl">Notas</label>
         <textarea class="inp" id="cnd-f-notes" rows="2" placeholder="Observaciones">${dn ? _cndEsc(dn.notes || '') : ''}</textarea></div>
 
@@ -467,6 +538,7 @@ function _cndOpenForm(id = null) {
       </div>
     `, 'modal-lg');
     _cndRenderFormItems();
+    _cndRenderFormCharges();
   };
 
   if (id) {
@@ -582,6 +654,27 @@ function _cndRenderFormItems() {
 function _cndSetQty(i, v) { if (_cndFormItems[i]) _cndFormItems[i].qty = parseFloat(v) || 0; }
 function _cndDelItem(i) { _cndFormItems.splice(i, 1); _cndRenderFormItems(); }
 
+function _cndAddCharge() {
+  const description = document.getElementById('cnd-charge-desc')?.value?.trim() || '';
+  const amount = Math.round((Number(document.getElementById('cnd-charge-amount')?.value) || 0) * 100) / 100;
+  if (!description || amount <= 0) { toast('Indica el concepto y un monto mayor que cero', 'w'); return; }
+  _cndFormCharges.push({ description, amount });
+  document.getElementById('cnd-charge-desc').value = '';
+  document.getElementById('cnd-charge-amount').value = '';
+  _cndRenderFormCharges();
+}
+function _cndRenderFormCharges() {
+  const box = document.getElementById('cnd-charges-body');
+  if (!box) return;
+  if (!_cndFormCharges.length) { box.innerHTML = '<div style="font-size:11px;color:var(--muted2)">Sin cargos adicionales</div>'; return; }
+  box.innerHTML = _cndFormCharges.map((row, i) => `
+    <div class="tr" style="padding:6px 8px;border:1px solid var(--line);border-radius:7px;margin-top:5px">
+      <span>${_cndEsc(row.description)}</span><span><strong>${fmt(row.amount)}</strong>
+        <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="_cndDelCharge(${i})">${svg('trash')}</button></span>
+    </div>`).join('');
+}
+function _cndDelCharge(i) { _cndFormCharges.splice(i, 1); _cndRenderFormCharges(); }
+
 async function _cndSave(id) {
   const items = _cndFormItems.filter(i => (i.qty || 0) > 0)
     .map(i => ({ product_id: i.product_id, product_code: i.sku, description: i.description, unit: i.unit, qty: i.qty }));
@@ -612,9 +705,11 @@ async function _cndSave(id) {
     header.customer_branch_phone = branch.phone || '';
   }
   const u = _cndUser();
+  const charges = _cndFormCharges.filter(row => row.description && Number(row.amount) > 0)
+    .map(row => ({ description: row.description, amount: Number(row.amount) }));
   let r;
-  if (id) r = await window.api.conduce.update({ id, header, items, requestUserId: u?.id });
-  else    r = await window.api.conduce.create({ header, items, requestUserId: u?.id });
+  if (id) r = await window.api.conduce.update({ id, header, items, charges, requestUserId: u?.id });
+  else    r = await window.api.conduce.create({ header, items, charges, requestUserId: u?.id });
   if (!r.ok) { toast(r.error || 'No se pudo guardar', 'err'); return; }
   toast(id ? '✓ Conduce actualizado' : `✓ Conduce ${r.data?.number || ''} creado`);
   closeModal();
@@ -693,6 +788,7 @@ function _cndDoc(id, save) {
           customer_branch_name: dn.customer_branch_name,
           customer_branch_code: dn.customer_branch_code,
           items: (dn.items || []).map(it => ({ name: it.description, qty: it.requested_qty })),
+          charges: dn.charges || [],
         });
       }
     };
@@ -732,6 +828,7 @@ async function _cndWhatsAppPDF(id) {
       customer_branch_name: dn.customer_branch_name,
       customer_branch_code: dn.customer_branch_code,
       items: (dn.items || []).map(it => ({ name: it.description, qty: it.requested_qty })),
+      charges: dn.charges || [],
     });
   };
   enviarDocumentoPDFWhatsApp(

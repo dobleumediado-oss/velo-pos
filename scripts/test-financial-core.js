@@ -1182,6 +1182,13 @@ const optsSample = { logo: false, rnc: true, ncf: true, mensaje: true, cedula: t
 });
 const adjustedSample = {
   ...documentSample,
+  payment_method: 'credito',
+  payment_amount: 0,
+  balance_after_payment: 600,
+  cajero: 'María Pérez',
+  customer_name: 'Taller El Progreso',
+  ncf: 'B0200000407',
+  notes: 'Copia consolidada de la operación ajustada. Uso interno.',
   adjusted_copy: true,
   adjusted_reference: '#2499',
   adjusted_reference_ncf: 'B0200000407',
@@ -1189,14 +1196,24 @@ const adjustedSample = {
 };
 const adjustedFormats = [
   'termica_58_basica', 'termica_80_clasica', 'termica_80_moderna', 'termica_80_minimal',
-  'carta_recibo', 'carta_formal', 'carta_ncf', 'media_carta',
+  'termica_72_clasica', 'carta_recibo', 'carta_formal', 'carta_ncf', 'media_carta',
 ].map(id => getPlantilla(id).render(adjustedSample, cfgSample, optsSample));
-ok(adjustedFormats.every(html => html.includes('FACTURA AJUSTADA')),
-  'todas las plantillas identifican la reimpresión como FACTURA AJUSTADA');
-ok(adjustedFormats.every(html => html.includes('No sustituye los comprobantes fiscales')),
-  'todas las plantillas aclaran que la copia consolidada no sustituye documentos fiscales');
-ok(adjustedFormats.every(html => html.includes('#2499') && html.includes('B0200000407')),
-  'todas las plantillas conservan referencia operativa y NCF original');
+ok(adjustedFormats.every(html => !html.includes('FACTURA AJUSTADA')
+    && !html.includes('COPIA CONSOLIDADA')
+    && !html.includes('No sustituye los comprobantes fiscales')
+    && !html.includes('#2499')
+    && !html.includes('NCR-000001')
+    && !html.includes('Uso interno')),
+  'ninguna plantilla expone al cliente la trazabilidad interna del reajuste');
+ok(adjustedFormats.every(html => html.includes('B0200000407')),
+  'todas las plantillas conservan el NCF real de la factura reajustada');
+ok(adjustedFormats.every(html => html.includes('Entregado por')
+    && html.includes('María Pérez')
+    && html.includes('Recibido por')
+    && html.includes('Taller El Progreso')),
+  'todas las plantillas de crédito incluyen las dos firmas y sus nombres');
+ok(adjustedFormats.every(html => !html.includes('Pagada')),
+  'una factura reajustada que nació a crédito no se presenta como pagada');
 
 console.log('\n== I. Normalización de búsqueda (lib/text-normalize) ==');
 const { searchNorm, digitsOf } = require('../lib/text-normalize');

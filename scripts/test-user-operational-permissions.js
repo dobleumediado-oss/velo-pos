@@ -65,6 +65,45 @@ try {
   assert.throws(() => makeSale(6000.01), /supera el límite del usuario/);
 
   DB.usersRepo.setModulePolicy(cashierId, {
+    moduleKey: 'credito', enabled: true, creditLimit: 20000,
+  });
+  const cashierWithMoreCredit = DB.authRepo.findById(cashierId);
+  DB.settingsRepo.set('pos_cashier_auto_credit_limit_amount', '10000');
+  const autoCreditProductId = DB.productsRepo.create({
+    code: 'AUTO-CRED-001', name: 'Producto crédito automático', cost: 1000,
+    price: 12000, stock: 3, taxable: 1, tax_pct: 18,
+  });
+  const autoCreditSale = (customerId, amount, approval = {}) => DB.salesRepo.create({
+    customer: { id: customerId },
+    items: [{
+      product_id: autoCreditProductId, product_code: 'AUTO-CRED-001',
+      product_name: 'Producto crédito automático', unit_cost: 1000,
+      unit_price: amount, qty: 1, taxable: 1, tax_pct: 18,
+    }],
+    payment: { method: 'credito', ...approval },
+    session: { id: sessionId }, user: cashierWithMoreCredit, type: 'factura',
+  });
+  const customerWithoutLimit = DB.customersRepo.create({
+    name: 'Cliente sin límite inicial', credit_limit: 0, credit_days: 30,
+  });
+  const autoAssigned = autoCreditSale(customerWithoutLimit, 7500);
+  assert.strictEqual(autoAssigned.autoCreditLimitAssigned, 7500);
+  assert.strictEqual(DB.customersRepo.getById(customerWithoutLimit).credit_limit, 7500,
+    'la primera venta asigna al cliente el mismo monto que queda a crédito');
+
+  const customerAboveCashierLimit = DB.customersRepo.create({
+    name: 'Cliente requiere autorización', credit_limit: 0, credit_days: 30,
+  });
+  assert.throws(() => autoCreditSale(customerAboveCashierLimit, 12000),
+    /supera el máximo automático del cajero/);
+  const approvedAutoCredit = autoCreditSale(customerAboveCashierLimit, 12000, {
+    creditLimitApprovedBy: 1,
+    creditLimitApprovedMaxAmount: 12000,
+  });
+  assert.strictEqual(approvedAutoCredit.autoCreditLimitAssigned, 12000,
+    'la autorización administrativa permite superar el umbral configurado');
+
+  DB.usersRepo.setModulePolicy(cashierId, {
     moduleKey: 'credito', enabled: false, creditLimit: 5000,
   });
   assert.throws(() => makeSale(1000, 0), /no tiene permiso para realizar ventas a crédito/);

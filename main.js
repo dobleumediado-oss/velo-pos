@@ -219,6 +219,7 @@ const {
   discountAuthLimit,
   priceChangePolicy,
   priceOverrideReduction,
+  priceOverrideIncrease,
   priceOverridesRequiringAuth,
 } = require('./lib/pos-authorization-policy');
 
@@ -622,6 +623,10 @@ const PRIV_ACTIONS = {
     roles: ['admin', 'superadmin'],
     label: 'Descuento especial en POS',
   },
+  pos_credit_limit_override: {
+    roles: ['admin', 'superadmin'],
+    label: 'Asignación especial de límite de crédito en POS',
+  },
 };
 const _privAuthTokens = new Map();
 
@@ -670,7 +675,7 @@ function _verifySpecialPassword(settingKey, password) {
   }
 }
 
-function _issuePrivilegedToken({ action, approver, requestUserId, special = false }) {
+function _issuePrivilegedToken({ action, approver, requestUserId, special = false, scope = null }) {
   const crypto = require('crypto');
   const token = crypto.randomBytes(24).toString('hex');
   const expiresAt = Date.now() + PRIV_AUTH_TTL_MS;
@@ -682,6 +687,7 @@ function _issuePrivilegedToken({ action, approver, requestUserId, special = fals
     requestUserId,
     expiresAt,
     special,
+    scope: scope && typeof scope === 'object' ? { ...scope } : null,
   });
   return { token, expiresAt };
 }
@@ -721,7 +727,7 @@ function _hasActionPermission(user, key, fallback) {
   return !!user?.active && _actionRoles(key, fallback).includes(user.role);
 }
 
-ipcMain.handle('auth:authorizePrivilegedAction', async (_, { action, password, requestUserId, detail } = {}) => {
+ipcMain.handle('auth:authorizePrivilegedAction', async (_, { action, password, requestUserId, detail, scope } = {}) => {
   try {
     const spec = PRIV_ACTIONS[action];
     if (!spec) return { ok: false, error: 'Acción no autorizable' };
@@ -757,7 +763,15 @@ ipcMain.handle('auth:authorizePrivilegedAction', async (_, { action, password, r
     }
 
     _clearLoginRate(rateKey);
-    const issued = _issuePrivilegedToken({ action, approver, requestUserId: reqUser.id, special });
+    const safeScope = action === 'pos_credit_limit_override'
+      ? {
+          customerId: Math.max(0, Number(scope?.customerId) || 0),
+          maxAmount: Math.max(0, Math.min(999999999, Number(scope?.maxAmount) || 0)),
+        }
+      : null;
+    const issued = _issuePrivilegedToken({
+      action, approver, requestUserId: reqUser.id, special, scope: safeScope,
+    });
     audit(reqUser.id, reqUser.name, 'autorizacion_privilegiada', special ? 'settings' : 'users', approver.id || null,
           `${spec.label} autorizado con ${approver.name}${detail ? ' | ' + String(detail).slice(0, 200) : ''}`);
     return {
@@ -984,6 +998,20 @@ ipcMain.handle('settings:set', async (_, { key, value, requestUserId }) => {
     const parsed = Number(value);
     if (!Number.isFinite(parsed) || parsed < 0 || parsed > 99999999) {
       return { ok: false, error: 'El límite de reducción de precio debe ser un monto válido mayor o igual a cero' };
+    }
+    value = String(Math.round(parsed * 100) / 100);
+  }
+  if (key === 'pos_price_max_increase_amount') {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 99999999) {
+      return { ok: false, error: 'El límite de aumento de precio debe ser un monto válido mayor o igual a cero' };
+    }
+    value = String(Math.round(parsed * 100) / 100);
+  }
+  if (key === 'pos_cashier_auto_credit_limit_amount') {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 999999999) {
+      return { ok: false, error: 'El límite automático de crédito debe ser un monto válido mayor o igual a cero' };
     }
     value = String(Math.round(parsed * 100) / 100);
   }
@@ -2817,6 +2845,7 @@ function _salePriceOverrides(saleData) {
         wholesale,
       };
       override.reductionAmount = priceOverrideReduction(override);
+      override.increaseAmount = priceOverrideIncrease(override);
       out.push(override);
     }
   }
@@ -2849,6 +2878,24 @@ function _resolveDiscountApproval(reqUser, discountPct, token) {
   return { userId: auth.userId, name: auth.name, role: auth.role, token };
 }
 
+function _resolveCreditLimitApproval(reqUser, token, customerId) {
+  if (!token) return null;
+  const auth = _getPrivilegedToken(
+    token, 'pos_credit_limit_override', ['admin', 'superadmin'], reqUser.id
+  );
+  if (!auth) {
+    throw new Error('La asignación del límite de crédito requiere la contraseña de un administrador o superadministrador');
+  }
+  if (Number(auth.scope?.customerId || 0) !== Number(customerId || 0)
+      || !(Number(auth.scope?.maxAmount || 0) > 0)) {
+    throw new Error('La autorización de crédito no corresponde a este cliente o monto');
+  }
+  return {
+    userId: auth.userId, name: auth.name, role: auth.role, token,
+    maxAmount: Number(auth.scope.maxAmount),
+  };
+}
+
 function _resolvePriceChangeApproval(reqUser, overrides, token) {
   if (!overrides?.length) return null;
   const policy = priceChangePolicy(settingsRepo.getAll());
@@ -2865,7 +2912,7 @@ function _resolvePriceChangeApproval(reqUser, overrides, token) {
     throw new Error('El cambio manual de precio está desactivado en Configuración');
   }
 
-  const protectedOverrides = priceOverridesRequiringAuth(overrides, policy.maxReductionAmount);
+  const protectedOverrides = priceOverridesRequiringAuth(overrides, policy);
   if (!protectedOverrides.length) {
     return {
       userId: reqUser.id,
@@ -2878,9 +2925,10 @@ function _resolvePriceChangeApproval(reqUser, overrides, token) {
 
   const auth = _getPrivilegedToken(token, 'pos_price_change', null, reqUser.id);
   if (!auth) {
-    const amount = policy.maxReductionAmount.toFixed(2);
+    const reduction = policy.maxReductionAmount.toFixed(2);
+    const increase = policy.maxIncreaseAmount.toFixed(2);
     throw new Error(
-      `Reducir un precio más de RD$${amount} por unidad requiere la clave especial configurada`
+      `Cambiar un precio fuera de los límites por unidad (bajar RD$${reduction} / subir RD$${increase}) requiere la clave especial configurada`
     );
   }
   return {
@@ -2960,6 +3008,7 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
     const priceOverrides = _salePriceOverrides(saleData);
     let priceApproval = null;
     let discountApproval = null;
+    let creditLimitApproval = null;
     try {
       discountApproval = _resolveDiscountApproval(
         reqUser,
@@ -2975,6 +3024,18 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
         discApprovedBy: discountApproval.userId,
       };
     }
+    try {
+      creditLimitApproval = _resolveCreditLimitApproval(
+        reqUser, saleData?.payment?.creditLimitAuthToken, saleData?.customer?.id
+      );
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+    saleData.payment = {
+      ...(saleData.payment || {}),
+      creditLimitApprovedBy: creditLimitApproval?.userId || null,
+      creditLimitApprovedMaxAmount: creditLimitApproval?.maxAmount || 0,
+    };
     if (priceOverrides.length) {
       try {
         priceApproval = _resolvePriceChangeApproval(
@@ -2994,6 +3055,7 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
     const result = salesRepo.create({ ...saleData, user: reqUser });
     if (!result.idempotent && priceApproval?.token) _privAuthTokens.delete(priceApproval.token);
     if (!result.idempotent && discountApproval?.token) _privAuthTokens.delete(discountApproval.token);
+    if (!result.idempotent && creditLimitApproval?.token) _privAuthTokens.delete(creditLimitApproval.token);
     if (!result.idempotent && priceOverrides.length) {
       audit(requestUserId, reqUser.name, 'precio_venta_autorizado', 'sales', result.saleId,
             `Autorizado por ${priceApproval.name} (${priceApproval.role}) | ${_priceOverrideDetail(priceOverrides)}`);
@@ -3001,6 +3063,10 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
     if (!result.idempotent && discountApproval) {
       audit(requestUserId, reqUser.name, 'descuento_venta_autorizado', 'sales', result.saleId,
             `${Number(saleData.payment.disc).toFixed(2)}% autorizado por ${discountApproval.name}`);
+    }
+    if (!result.idempotent && Number(result.autoCreditLimitAssigned || 0) > 0) {
+      audit(requestUserId, reqUser.name, 'limite_credito_asignado_desde_pos', 'customers', saleData?.customer?.id,
+            `Límite RD$${Number(result.autoCreditLimitAssigned).toFixed(2)}${creditLimitApproval ? ` autorizado por ${creditLimitApproval.name}` : ''}`);
     }
     // Contabilidad en vivo: asiento de venta (Débito Caja/Banco/CxC · Crédito
     // Ingresos + ITBIS · Costo/Inventario). Se auto-guarda por tipo/idempotencia.
@@ -3015,6 +3081,10 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
         _acctHook(() => accountingRepo.generatePaymentEntry({
           paymentId: result.initialPaymentId, userId: requestUserId,
         }));
+      }
+      if (result.convertedConduceId) {
+        audit(requestUserId, reqUser.name, 'conduce_facturado_desde_pos', 'delivery_notes', result.convertedConduceId,
+          `${result.convertedConduceNumber || '#' + result.convertedConduceId} → ${result.documentNumberFmt || '#' + result.saleId}`);
       }
     }
     return { ok: true, ...result, sale: salesRepo.getById(result.saleId) };
@@ -3139,6 +3209,7 @@ ipcMain.handle('checkout:pay', async (_, { id, payment, requestUserId } = {}) =>
       && Math.abs(requestedDiscount - Number(pendingOrder.discount_pct || 0)) < 0.0001
       && Number(pendingOrder.discount_approved_by || 0) > 0;
     let discountApproval = null;
+    let creditLimitApproval = null;
     if (!keepsAuthorizedDiscount) {
       try {
         discountApproval = _resolveDiscountApproval(
@@ -3148,6 +3219,18 @@ ipcMain.handle('checkout:pay', async (_, { id, payment, requestUserId } = {}) =>
         return { ok: false, error: e.message };
       }
     }
+    try {
+      creditLimitApproval = _resolveCreditLimitApproval(
+        reqUser, payment?.creditLimitAuthToken, pendingOrder.customer_id
+      );
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+    payment = {
+      ...(payment || {}),
+      creditLimitApprovedBy: creditLimitApproval?.userId || null,
+      creditLimitApprovedMaxAmount: creditLimitApproval?.maxAmount || 0,
+    };
     if (reqUser.role === 'cajero' && !session) {
       return { ok: false, error: 'Debes abrir la caja de esta terminal antes de cobrar' };
     }
@@ -3158,9 +3241,14 @@ ipcMain.handle('checkout:pay', async (_, { id, payment, requestUserId } = {}) =>
       id, payment: payment || {}, session, user: reqUser, terminalId,
     });
     if (discountApproval?.token) _privAuthTokens.delete(discountApproval.token);
+    if (creditLimitApproval?.token) _privAuthTokens.delete(creditLimitApproval.token);
     if (discountApproval) {
       audit(requestUserId, reqUser.name, 'descuento_orden_autorizado', 'sales', result.saleId,
             `${requestedDiscount.toFixed(2)}% autorizado por ${discountApproval.name}`);
+    }
+    if (Number(result.autoCreditLimitAssigned || 0) > 0) {
+      audit(requestUserId, reqUser.name, 'limite_credito_asignado_desde_pos', 'customers', pendingOrder.customer_id,
+            `Límite RD$${Number(result.autoCreditLimitAssigned).toFixed(2)}${creditLimitApproval ? ` autorizado por ${creditLimitApproval.name}` : ''}`);
     }
     _acctHook(() => accountingRepo.generateSaleEntry({ saleId: result.saleId, userId: requestUserId }));
     if (result.initialPaymentId) {
@@ -6600,23 +6688,23 @@ ipcMain.handle('conduce:generateNumber', async () => {
   try { return { ok: true, number: conduceRepo.generateNumber() }; }
   catch (e) { return { ok: false, error: e.message }; }
 });
-ipcMain.handle('conduce:create', async (_, { header = {}, items = [], requestUserId } = {}) => {
+ipcMain.handle('conduce:create', async (_, { header = {}, items = [], charges = [], requestUserId } = {}) => {
   try {
     const u = authRepo.findById(requestUserId);
     if (!u) return { ok: false, error: 'Sin sesión' };
     if (!Array.isArray(items) || items.length === 0) return { ok: false, error: 'El conduce debe tener al menos un producto' };
-    const id = conduceRepo.create({ header, items, userId: requestUserId });
+    const id = conduceRepo.create({ header, items, charges, userId: requestUserId });
     const dn = conduceRepo.getById(id);
     audit(requestUserId, u.name, 'conduce_creado', 'delivery_notes', id,
       `${dn.number} · ${dn.customer_name} · ${items.length} líneas`);
     return { ok: true, id, data: dn };
   } catch (e) { return { ok: false, error: e.message }; }
 });
-ipcMain.handle('conduce:update', async (_, { id, header = {}, items = null, requestUserId } = {}) => {
+ipcMain.handle('conduce:update', async (_, { id, header = {}, items = null, charges = null, requestUserId } = {}) => {
   try {
     const u = authRepo.findById(requestUserId);
     if (!u) return { ok: false, error: 'Sin sesión' };
-    const dn = conduceRepo.update(id, { header, items });
+    const dn = conduceRepo.update(id, { header, items, charges });
     audit(requestUserId, u.name, 'conduce_editado', 'delivery_notes', id, dn.number);
     return { ok: true, data: dn };
   } catch (e) { return { ok: false, error: e.message }; }
