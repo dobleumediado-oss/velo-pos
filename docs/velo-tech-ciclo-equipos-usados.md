@@ -34,8 +34,9 @@ abierta y forma parte del cuadre; transferencia y cheque quedan ligados a la
 cuenta bancaria elegida. Si Contabilidad está activa, se registra débito a
 Inventario y crédito a Caja o Banco.
 
-El contrato se imprime en dos páginas: compraventa/equipo y
-términos/declaraciones. Ambas contienen espacios para las dos firmas.
+El contrato se imprime como una hoja A4 completa: reúne datos del vendedor,
+identificación y evaluación del equipo, pago, términos y declaraciones, y deja
+espacios amplios al pie para las firmas de ambas partes.
 
 ### Inventario y factura posterior
 
@@ -53,6 +54,37 @@ términos/declaraciones. Ambas contienen espacios para las dos firmas.
   Inventario.
 - Las pruebas se ejecutan sobre bases temporales con `npm run
   test:tech-lifecycle`.
+
+## Operación profesional del taller
+
+El módulo **Servicio técnico** incorpora además estas diez capacidades:
+
+1. Recepción de una persona ocasional sin crearla en el directorio de clientes,
+   conservando nombre, documento, teléfono, dirección y correo en la orden.
+2. Documento de recepción A4 con estado físico, accesorios, pruebas,
+   autorizaciones, firma manuscrita, evidencias y QR privado.
+3. Plantillas de pruebas según la falla: señal, carga, pantalla, batería, audio,
+   cámaras, conectividad, líquido o equipo que no enciende.
+4. Anticipos trazables, recibo independiente, devolución controlada y aplicación
+   automática al restante de la factura final.
+5. Consentimientos obligatorios para diagnóstico, manejo de datos y condición
+   de entrada, congelados en el documento con sus casillas marcadas.
+6. Garantía individual por pieza o mano de obra y reingreso enlazado a la línea
+   cubierta.
+7. Seguimiento de equipos listos no retirados: fecha límite, días de gracia,
+   cargo diario configurable, avisos y marca de no reclamado sujeta a revisión
+   legal.
+8. Identificación de la persona que retira, relación con el titular,
+   autorización, notas y firma de entrega.
+9. Historial unificado por IMEI o serial con compras, inventario, ventas,
+   trade-ins y reparaciones.
+10. Indicadores de ingresos, piezas, mano de obra, beneficio bruto, margen,
+    anticipos, tiempos de ciclo y equipos pendientes de retiro.
+
+La entrega conserva el total fiscal de la reparación, separa el anticipo ya
+pagado del monto cobrado al final y cancela la cuenta contable de anticipos. El
+portal del cliente refleja presupuesto, avances, garantía por partida y estado
+de retiro sin exponer IMEI o serial completos.
 
 ## Siguientes mejoras recomendadas
 

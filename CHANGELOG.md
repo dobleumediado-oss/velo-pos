@@ -1,5 +1,52 @@
 # Historial de versiones
 
+## 1.48.0 — 2026-08-27
+
+### Taller profesional de VELO TECH POS
+
+- La recepción admite clientes registrados o personas ocasionales sin agregarlas
+  permanentemente al directorio, conservando identidad, contacto y firma en la
+  orden concreta.
+- El documento de recepción ocupa una hoja A4 completa y muestra con casillas
+  marcadas la condición física, los accesorios, las pruebas y autorizaciones
+  aceptadas por el cliente.
+- Las pruebas de entrada y control de calidad se adaptan a fallas de señal,
+  carga, pantalla, batería, audio, cámaras, conectividad, líquido y equipos que
+  no encienden.
+- Los anticipos generan recibo, pueden devolverse con trazabilidad y se aplican
+  automáticamente al restante de la factura final sin alterar su total fiscal.
+- Cada pieza o mano de obra conserva su propia garantía y puede originar un
+  reingreso enlazado a la cobertura correspondiente.
+- La entrega identifica y firma a quien retira el equipo; los equipos listos no
+  retirados conservan fecha límite, avisos, días de gracia y cargos configurables.
+- El taller incorpora historial unificado por IMEI/serial e indicadores de
+  ingresos, costo de piezas, mano de obra, beneficio, margen y tiempo de ciclo.
+- El portal privado del cliente refleja presupuesto, anticipos, restante,
+  garantía por partida y estado de retiro sin revelar identificadores completos.
+
+### Equipos usados, inventario y documentos
+
+- La compra de equipos usados a particulares registra identidad, procedencia,
+  evaluación, pago y firmas en un contrato A4, y crea la unidad serializada en
+  inventario sin cantidades ambiguas.
+- La búsqueda por IMEI reconoce correctamente las unidades recibidas y conserva
+  batería, capacidad, color, costo, descripción comercial y estado individual.
+- Recibir un equipo usado como parte de pago permite identificar a una persona
+  solo para esa operación, reflejar la tasación, el motivo y el restante cobrado
+  en la factura.
+- VELO TECH POS mantiene fuera de su navegación el conduce, documento reservado
+  para el flujo comercial de VELO POS.
+
+### Punto de Venta y continuidad
+
+- Las pestañas abiertas muestran el cliente seleccionado y el tipo de documento
+  para distinguir rápidamente facturas, cotizaciones y conduces.
+- Facturas, cotizaciones y conduces pueden guardarse como borradores desde el
+  carrito o al cerrar una pestaña, y recuperarse sin límite de tiempo hasta que
+  se conviertan, eliminen o finalicen.
+- La impresión de facturas y recibos detalla los anticipos, equipos recibidos,
+  descuentos aplicados y la razón del monto restante.
+
 ## 1.47.4 — 2026-08-27
 
 ### Continuidad y control del Punto de Venta

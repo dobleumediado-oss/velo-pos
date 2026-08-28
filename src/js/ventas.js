@@ -1851,8 +1851,9 @@ async function openDetalleVentaModal(s, options = {}) {
         ? `<div class="tr"><span>Cargos adicionales</span><span>${fmt(detail.additional_charges_total)}</span></div>` : ''}
       <div class="tr grand"><span>${adjustedCopy ? 'Total vigente de la operación' : 'Importe / Total'}</span><span>${fmt(detailTotal)}</span></div>
       ${Number(detail.trade_in_amount || 0) > 0
-        ? `<div class="tr" style="color:var(--blue)"><span>Equipo usado recibido</span><strong>-${fmt(detail.trade_in_amount)}</strong></div>
-           <div class="tr"><span>Pago monetario</span><strong>${fmt(Math.max(0, Number(detailTotal || 0) - Number(detail.trade_in_amount || 0)))}</strong></div>` : ''}
+        ? `<div class="tr" style="color:var(--blue)"><span>Parte de pago · ${ventasEsc(detail.trade_in_product_name || 'equipo usado')}</span><strong>-${fmt(detail.trade_in_amount)}</strong></div>
+           <div class="tr"><span>Restante a pagar</span><strong>${fmt(Math.max(0, Number(detailTotal || 0) - Number(detail.trade_in_amount || 0)))}</strong></div>
+           <div style="font-size:11px;color:var(--muted2);padding-top:7px"><strong>Motivo:</strong> total de factura menos el valor reconocido por el equipo${detail.trade_in_imei ? ` · IMEI/serial ${ventasEsc(detail.trade_in_imei)}` : ''}.${detail.trade_in_seller_name ? `<br>Entregado por ${ventasEsc(detail.trade_in_seller_name)} · Documento ${ventasEsc(detail.trade_in_seller_document || '—')} · Tel. ${ventasEsc(detail.trade_in_seller_phone || '—')}` : ''}${detail.trade_in_seller_address ? `<br>Dirección: ${ventasEsc(detail.trade_in_seller_address)}` : ''}${detail.trade_in_ownership_declared && detail.trade_in_lawful_origin_declared ? '<br>Declaró propiedad legítima y procedencia lícita/no bloqueada.' : ''}</div>` : ''}
       ${method === 'credito'
         ? `<div class="tr"><span>Pagado por adelantado / abonado</span><strong style="color:var(--green)">${fmt(detail.payment_amount || 0)}</strong></div>
            <div class="tr"><span>Saldo pendiente de esta factura</span><strong style="color:var(--amber)">${fmt(detail.balance_after_payment ?? detailTotal)}</strong></div>`

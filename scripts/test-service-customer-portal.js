@@ -133,7 +133,12 @@ function request(port, route, { method = 'GET', form } = {}) {
   DB.serviceOrdersRepo.markNotificationSent(order.id, 'listo', admin);
   assert.ok(DB.serviceOrdersRepo.getById(order.id).notifications.some(item => item.notification_type === 'listo' && item.status === 'prepared'));
 
-  order = DB.serviceOrdersRepo.deliver(order.id, { method:'efectivo', warrantyDays:30 }, admin, null).order;
+  order = DB.serviceOrdersRepo.deliver(order.id, {
+    method:'efectivo', warrantyDays:30,
+    pickupPersonName:'Cliente Portal', pickupPersonDocument:'00112345678',
+    pickupPersonPhone:'8095551212', pickupRelationship:'Titular',
+    pickupAuthorizedBy:'Cliente Portal', pickupConsent:true,
+  }, admin, null).order;
   response = await request(port, `${route}/document`);
   assert.strictEqual(response.status, 200);
   assert.ok(response.text.includes('Entrega y garantía') && response.text.includes(order.warranty_until));

@@ -67,6 +67,7 @@ function initDB(customDataDir) {
 
   migrateProductsModel();
   createTables();
+  migrateTradeInSellerSnapshots();
   migratePriceHistoryAccountingColumns();
   migrateVehiclesModule();
   migratePurchaseColumns();
@@ -79,6 +80,7 @@ function initDB(customDataDir) {
   migrateDocumentNumbering();   // Secuencias internas independientes por tipo documental
   migrateCustomerCompanies();   // Personas, empresas, representantes y snapshots
   migrateSalesWorkflowEnhancements(); // Teléfonos múltiples, cargos, USD y fecha documental
+  migrateServiceWorkshopEnhancements(); // Taller: ocasionales, anticipos, retiro, abandono y garantías por partida
   ensureUppercasePersistence(); // Defensa backend para datos capturados por formularios
   ensureCheckoutOrdersSchema(db);
   backupBeforeSaleCorrectionsMigration();
@@ -858,6 +860,14 @@ function createTables() {
       product_id      INTEGER NOT NULL REFERENCES products(id),
       product_unit_id INTEGER UNIQUE NOT NULL REFERENCES product_units(id),
       allowance       REAL NOT NULL CHECK(allowance > 0),
+      seller_name     TEXT NOT NULL DEFAULT '',
+      seller_document TEXT NOT NULL DEFAULT '',
+      seller_phone    TEXT NOT NULL DEFAULT '',
+      seller_phone_type TEXT NOT NULL DEFAULT 'telefono',
+      seller_address  TEXT NOT NULL DEFAULT '',
+      seller_email    TEXT NOT NULL DEFAULT '',
+      ownership_declared INTEGER NOT NULL DEFAULT 0,
+      lawful_origin_declared INTEGER NOT NULL DEFAULT 0,
       status          TEXT NOT NULL DEFAULT 'aplicado' CHECK(status IN ('aplicado','cancelado')),
       created_by      INTEGER REFERENCES users(id),
       created_at      TEXT DEFAULT (datetime('now','localtime'))
@@ -1392,6 +1402,33 @@ function tableExists(name) {
   return !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name);
 }
 
+// La persona que entrega un equipo como parte de pago no tiene que convertirse
+// en cliente habitual. Estos campos conservan su identidad solo en la operación
+// y permiten que customer_id sea NULL cuando la factura es a Consumidor Final.
+function migrateTradeInSellerSnapshots() {
+  if (!tableExists('trade_ins')) return;
+  const columns = [
+    ['seller_name', "TEXT NOT NULL DEFAULT ''"],
+    ['seller_document', "TEXT NOT NULL DEFAULT ''"],
+    ['seller_phone', "TEXT NOT NULL DEFAULT ''"],
+    ['seller_phone_type', "TEXT NOT NULL DEFAULT 'telefono'"],
+    ['seller_address', "TEXT NOT NULL DEFAULT ''"],
+    ['seller_email', "TEXT NOT NULL DEFAULT ''"],
+    ['ownership_declared', 'INTEGER NOT NULL DEFAULT 0'],
+    ['lawful_origin_declared', 'INTEGER NOT NULL DEFAULT 0'],
+  ];
+  const existing = new Set(db.prepare('PRAGMA table_info(trade_ins)').all().map(column => column.name));
+  for (const [name, definition] of columns) {
+    if (!existing.has(name)) db.prepare(`ALTER TABLE trade_ins ADD COLUMN ${name} ${definition}`).run();
+  }
+  db.prepare(`
+    UPDATE trade_ins
+       SET seller_name=COALESCE(NULLIF(seller_name,''),(SELECT name FROM customers WHERE id=trade_ins.customer_id),''),
+           seller_document=COALESCE(NULLIF(seller_document,''),(SELECT rnc FROM customers WHERE id=trade_ins.customer_id),''),
+           seller_phone=COALESCE(NULLIF(seller_phone,''),(SELECT phone FROM customers WHERE id=trade_ins.customer_id),'')
+  `).run();
+}
+
 // Clientes empresariales: migración idempotente para instalaciones existentes.
 // Todos los registros previos permanecen como persona hasta que el usuario los
 // cambie explícitamente; no inferimos el tipo solo por la longitud del documento.
@@ -1640,6 +1677,76 @@ function migrateSalesWorkflowEnhancements() {
         SELECT 1 FROM customer_phones p
         WHERE p.customer_id=c.id AND p.active=1
       )
+  `).run();
+}
+
+// Taller profesional R7. Esta migración corre siempre y es idempotente para
+// completar también instalaciones que ya tenían órdenes de servicio creadas.
+function migrateServiceWorkshopEnhancements() {
+  if (!tableExists('service_orders')) return;
+  const addCol = (table, col, def) => {
+    if (!tableExists(table)) return;
+    const cols = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name));
+    if (!cols.has(col)) db.prepare(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`).run();
+  };
+  [
+    ['customer_document', "TEXT NOT NULL DEFAULT ''"],
+    ['customer_phone', "TEXT NOT NULL DEFAULT ''"],
+    ['customer_address', "TEXT NOT NULL DEFAULT ''"],
+    ['customer_email', "TEXT NOT NULL DEFAULT ''"],
+    ['customer_is_occasional', 'INTEGER NOT NULL DEFAULT 0'],
+    ['failure_category', "TEXT NOT NULL DEFAULT 'otro'"],
+    ['intake_signed_name', "TEXT NOT NULL DEFAULT ''"],
+    ['intake_signed_at', 'TEXT'],
+    ['ready_at', 'TEXT'],
+    ['pickup_due_at', 'TEXT'],
+    ['storage_grace_days', 'INTEGER NOT NULL DEFAULT 0'],
+    ['storage_fee_per_day', 'REAL NOT NULL DEFAULT 0'],
+    ['pickup_notice_count', 'INTEGER NOT NULL DEFAULT 0'],
+    ['last_pickup_notice_at', 'TEXT'],
+    ['abandoned_at', 'TEXT'],
+    ['pickup_person_name', "TEXT NOT NULL DEFAULT ''"],
+    ['pickup_person_document', "TEXT NOT NULL DEFAULT ''"],
+    ['pickup_person_phone', "TEXT NOT NULL DEFAULT ''"],
+    ['pickup_relationship', "TEXT NOT NULL DEFAULT ''"],
+    ['pickup_authorized_by', "TEXT NOT NULL DEFAULT ''"],
+    ['pickup_notes', "TEXT NOT NULL DEFAULT ''"],
+    ['pickup_signed_at', 'TEXT'],
+  ].forEach(([col, def]) => addCol('service_orders', col, def));
+  addCol('service_order_items', 'warranty_days', 'INTEGER NOT NULL DEFAULT 0');
+  addCol('service_order_items', 'warranty_until', 'TEXT');
+  addCol('sales', 'prepaid_amount', 'REAL NOT NULL DEFAULT 0');
+  addCol('sales', 'prepaid_reference', "TEXT NOT NULL DEFAULT ''");
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS service_order_deposits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      service_order_id INTEGER NOT NULL REFERENCES service_orders(id) ON DELETE CASCADE,
+      amount REAL NOT NULL CHECK(amount>0),
+      method TEXT NOT NULL DEFAULT 'efectivo',
+      reference TEXT NOT NULL DEFAULT '',
+      financial_account_id INTEGER REFERENCES financial_accounts(id),
+      cash_session_id INTEGER REFERENCES cash_sessions(id),
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','applied','refunded')),
+      applied_sale_id INTEGER REFERENCES sales(id),
+      received_by INTEGER REFERENCES users(id),
+      received_by_name TEXT NOT NULL DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now','localtime')),
+      applied_at TEXT,
+      refunded_at TEXT,
+      refund_reason TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_service_deposits_order ON service_order_deposits(service_order_id,status);
+    CREATE INDEX IF NOT EXISTS idx_service_ready_pickup ON service_orders(workflow_status,ready_at,pickup_due_at);
+    CREATE INDEX IF NOT EXISTS idx_service_imei_history ON service_orders(imei,imei2,serial,created_at);
+  `);
+
+  // Los datos del cliente registrado se copian como snapshot una sola vez.
+  db.prepare(`UPDATE service_orders SET
+    customer_document=COALESCE(NULLIF(customer_document,''),(SELECT rnc FROM customers WHERE id=service_orders.customer_id),''),
+    customer_phone=COALESCE(NULLIF(customer_phone,''),(SELECT phone FROM customers WHERE id=service_orders.customer_id),''),
+    customer_address=COALESCE(NULLIF(customer_address,''),(SELECT address FROM customers WHERE id=service_orders.customer_id),''),
+    customer_email=COALESCE(NULLIF(customer_email,''),(SELECT email FROM customers WHERE id=service_orders.customer_id),'')
   `).run();
 }
 
@@ -3102,9 +3209,20 @@ const productsRepo = {
                THEN COALESCE((SELECT COUNT(*) FROM product_units pu WHERE pu.product_id=p.id AND pu.status='en_stock'),0)
                ELSE p.stock END      AS effective_stock,`
       : `p.stock AS effective_stock,`;
+    // En equipos serializados el costo pertenece a cada IMEI/serial. El modelo
+    // puede conservar costo 0 porque cada unidad entra con un valor diferente.
+    const effectiveCostSelect = tableExists('product_units')
+      ? `CASE WHEN COALESCE(p.serialized,0)=1
+               THEN COALESCE((SELECT AVG(pu.unit_cost) FROM product_units pu WHERE pu.product_id=p.id AND pu.status='en_stock'),p.cost)
+               ELSE p.cost END       AS effective_cost,
+         CASE WHEN COALESCE(p.serialized,0)=1
+               THEN COALESCE((SELECT SUM(pu.unit_cost) FROM product_units pu WHERE pu.product_id=p.id AND pu.status='en_stock'),0)
+               ELSE p.stock*p.cost END AS effective_inventory_value,`
+      : `p.cost AS effective_cost, p.stock*p.cost AS effective_inventory_value,`;
     return db.prepare(`
       SELECT p.*,
              ${effectiveStockSelect}
+             ${effectiveCostSelect}
              (COALESCE((
                SELECT SUM(coi.qty)
                FROM checkout_order_items coi
@@ -4577,6 +4695,7 @@ function saleOperationFingerprint({ customer, items, payment, type }) {
       initialPaymentFinancialAccountId: Number(payment?.initialPaymentFinancialAccountId) || null,
       initialPaymentExchangeRate: round2(Number(payment?.initialPaymentExchangeRate) || 1),
       initialPaymentReference: String(payment?.initialPaymentReference || '').replace(/\s+/g, ' ').trim(),
+      prepaidServiceOrderId: Number(payment?.prepaidServiceOrderId) || null,
       replacesSaleId: Number(payment?.replacesSaleId) || null,
       sourceQuoteId: Number(payment?.sourceQuoteId) || null,
       sourceConduceId: Number(payment?.sourceConduceId) || null,
@@ -4596,6 +4715,14 @@ function saleOperationFingerprint({ customer, items, payment, type }) {
         allowance: round2(Number(payment.tradeIn.allowance) || 0),
         color: String(payment.tradeIn.color || '').trim(),
         capacity: String(payment.tradeIn.capacity || '').trim(),
+        sellerName: String(payment.tradeIn.sellerName || '').replace(/\s+/g, ' ').trim(),
+        sellerDocument: String(payment.tradeIn.sellerDocument || '').trim(),
+        sellerPhone: String(payment.tradeIn.sellerPhone || '').trim(),
+        sellerPhoneType: String(payment.tradeIn.sellerPhoneType || 'telefono').trim(),
+        sellerAddress: String(payment.tradeIn.sellerAddress || '').replace(/\s+/g, ' ').trim(),
+        sellerEmail: String(payment.tradeIn.sellerEmail || '').trim().toLowerCase(),
+        ownershipDeclared: payment.tradeIn.ownershipDeclared ? 1 : 0,
+        lawfulOriginDeclared: payment.tradeIn.lawfulOriginDeclared ? 1 : 0,
       } : null,
     },
   };
@@ -4669,6 +4796,8 @@ function saleConfirmationResult(sale, { idempotent = false } = {}) {
       ? Math.max(0, round2(Number(sale.total || 0) - Number(sale.trade_in_amount || 0) - Number(initialPayment?.amount || 0)))
       : 0,
     tradeInAmount: Number(sale.trade_in_amount || 0),
+    prepaidAmount: Number(sale.prepaid_amount || 0),
+    prepaidReference: sale.prepaid_reference || '',
     tradeInUnitId: sale.trade_in_unit_id || null,
     replacesSaleId: sale.replaces_sale_id || null,
     convertedConduceId: convertedConduce?.id || null,
@@ -5009,7 +5138,6 @@ const salesRepo = {
       let tradeIn = null;
       let tradeInAmount = 0;
       if (type === 'factura' && payment.tradeIn) {
-        if (customer.id === 1) throw new Error('Selecciona un cliente registrado para recibir un equipo usado');
         const productId = Number(payment.tradeIn.productId) || 0;
         const product = db.prepare('SELECT id,name,COALESCE(serialized,0) serialized FROM products WHERE id=? AND active=1').get(productId);
         if (!product || !product.serialized) throw new Error('Selecciona un modelo serializado válido para el equipo usado');
@@ -5020,14 +5148,54 @@ const salesRepo = {
         tradeInAmount = round2(Number(payment.tradeIn.allowance) || 0);
         if (tradeInAmount <= 0) throw new Error('El valor reconocido por el usado debe ser mayor a cero');
         if (tradeInAmount > total + 0.005) throw new Error('El valor del usado no puede superar el total de la venta');
+        const oneTimeSeller = customer.id === 1;
+        const sellerName = String(oneTimeSeller ? payment.tradeIn.sellerName : customer.name || '').replace(/\s+/g, ' ').trim();
+        const sellerDocument = String(oneTimeSeller ? payment.tradeIn.sellerDocument : customer.rnc || '').trim();
+        const sellerPhone = String(oneTimeSeller ? payment.tradeIn.sellerPhone : customer.phone || '').trim();
+        const sellerPhoneType = ['telefono','celular','flota'].includes(String(payment.tradeIn.sellerPhoneType || '').toLowerCase())
+          ? String(payment.tradeIn.sellerPhoneType).toLowerCase() : selectedCustomerPhoneType;
+        const sellerAddress = String(oneTimeSeller ? payment.tradeIn.sellerAddress : customer.address || '').replace(/\s+/g, ' ').trim();
+        const sellerEmail = String(oneTimeSeller ? payment.tradeIn.sellerEmail : customer.email || '').trim().toLowerCase();
+        const ownershipDeclared = payment.tradeIn.ownershipDeclared ? 1 : 0;
+        const lawfulOriginDeclared = payment.tradeIn.lawfulOriginDeclared ? 1 : 0;
+        if (oneTimeSeller && !sellerName) throw new Error('Identifica a la persona que entrega el equipo usado');
+        if (oneTimeSeller && sellerDocument.replace(/[^a-zA-Z0-9]/g, '').length < 5) {
+          throw new Error('Indica una cédula, pasaporte o documento válido para quien entrega el usado');
+        }
+        if (oneTimeSeller && sellerPhone.replace(/\D/g, '').length < 7) {
+          throw new Error('Indica un teléfono válido para quien entrega el usado');
+        }
+        if (oneTimeSeller && !sellerAddress) throw new Error('Indica la dirección de quien entrega el usado');
+        if (!ownershipDeclared) throw new Error('La persona debe declarar que es propietaria legítima del equipo');
+        if (!lawfulOriginDeclared) throw new Error('La persona debe declarar la procedencia lícita del equipo');
         tradeIn = {
           productId, imei, serial,
           color: String(payment.tradeIn.color || '').trim(),
           capacity: String(payment.tradeIn.capacity || '').trim(),
           notes: String(payment.tradeIn.notes || '').trim(),
+          sellerName, sellerDocument, sellerPhone, sellerPhoneType,
+          sellerAddress, sellerEmail, ownershipDeclared, lawfulOriginDeclared,
+          customerId: oneTimeSeller ? null : customer.id,
         };
       }
-      const amountDue = round2(total - tradeInAmount);
+      // Anticipos del taller: solo se aceptan desde una orden real y únicamente
+      // por el total todavía activo en service_order_deposits. La factura conserva
+      // su total fiscal; caja cobra solamente el restante.
+      const prepaidServiceOrderId = type === 'factura'
+        ? (Number(payment.prepaidServiceOrderId) || 0) : 0;
+      let prepaidAmount = 0;
+      let prepaidReference = '';
+      if (prepaidServiceOrderId) {
+        if (!tableExists('service_order_deposits')) throw new Error('Los anticipos de servicio no están disponibles');
+        const depositSummary = db.prepare(`SELECT COALESCE(SUM(amount),0) amount,COUNT(*) count
+          FROM service_order_deposits WHERE service_order_id=? AND status='active'`).get(prepaidServiceOrderId);
+        prepaidAmount = round2(Number(depositSummary.amount) || 0);
+        if (prepaidAmount > total + 0.005) throw new Error('Los anticipos activos superan el total de la reparación');
+        prepaidReference = depositSummary.count
+          ? `Anticipo(s) orden ${db.prepare('SELECT number FROM service_orders WHERE id=?').get(prepaidServiceOrderId)?.number || prepaidServiceOrderId}`
+          : '';
+      }
+      const amountDue = round2(total - tradeInAmount - prepaidAmount);
       const initialPaymentAmount = type === 'factura' && payment.method === 'credito'
         ? round2(Number(payment.initialPaymentAmount) || 0)
         : 0;
@@ -5269,7 +5437,7 @@ const salesRepo = {
           payment_currency,exchange_rate,account_amount,card_brand,card_last4,
           additional_charges_total,display_currency,display_exchange_rate,display_amount,
           print_template_id,print_printer_type,print_printer_name,print_profile_id,print_copies,print_action,
-          payment_reference,notes,trade_in_amount,trade_in_unit_id,operation_id,operation_fingerprint,
+          payment_reference,notes,trade_in_amount,trade_in_unit_id,prepaid_amount,prepaid_reference,operation_id,operation_fingerprint,
           created_at,original_sale_date,sale_date,updated_at)
         VALUES(
           @cash_session_id,@customer_id,@customer_name,@customer_rnc,
@@ -5282,7 +5450,7 @@ const salesRepo = {
           @payment_currency,@exchange_rate,@account_amount,@card_brand,@card_last4,
           @additional_charges_total,@display_currency,@display_exchange_rate,@display_amount,
           @print_template_id,@print_printer_type,@print_printer_name,@print_profile_id,@print_copies,@print_action,
-          @payment_reference,@notes,@trade_in_amount,@trade_in_unit_id,@operation_id,@operation_fingerprint,
+          @payment_reference,@notes,@trade_in_amount,@trade_in_unit_id,@prepaid_amount,@prepaid_reference,@operation_id,@operation_fingerprint,
           @created_at,@original_sale_date,@sale_date,@created_at
         )
       `).run({
@@ -5326,6 +5494,8 @@ const salesRepo = {
         notes: String(payment.notes || '').trim().slice(0, 1000),
         trade_in_amount: tradeInAmount,
         trade_in_unit_id: null,
+        prepaid_amount: prepaidAmount,
+        prepaid_reference: prepaidReference,
         operation_id: operationId,
         operation_fingerprint: operationFingerprint,
         created_at: db.prepare("SELECT datetime('now','localtime') AS value").get().value,
@@ -5462,8 +5632,16 @@ const salesRepo = {
           notes: `Trade-in venta #${saleId}${tradeIn.notes ? ` · ${tradeIn.notes}` : ''}`,
         });
         db.prepare('UPDATE sales SET trade_in_unit_id=? WHERE id=?').run(unitId, saleId);
-        db.prepare(`INSERT INTO trade_ins(sale_id,customer_id,product_id,product_unit_id,allowance,created_by) VALUES(?,?,?,?,?,?)`)
-          .run(saleId, customer.id, tradeIn.productId, unitId, tradeInAmount, user.id);
+        db.prepare(`INSERT INTO trade_ins(
+          sale_id,customer_id,product_id,product_unit_id,allowance,
+          seller_name,seller_document,seller_phone,seller_phone_type,
+          seller_address,seller_email,ownership_declared,lawful_origin_declared,created_by
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+          saleId, tradeIn.customerId, tradeIn.productId, unitId, tradeInAmount,
+          tradeIn.sellerName, tradeIn.sellerDocument, tradeIn.sellerPhone,
+          tradeIn.sellerPhoneType, tradeIn.sellerAddress, tradeIn.sellerEmail,
+          tradeIn.ownershipDeclared, tradeIn.lawfulOriginDeclared, user.id
+        );
       }
 
       // 7. Actualizar crédito del cliente
@@ -5674,6 +5852,7 @@ const salesRepo = {
         paymentCurrency, exchangeRate, accountAmount, salespersonId,
         additionalChargesTotal, displayCurrency, displayExchangeRate, displayAmount,
         tradeInAmount, tradeInUnitId: tradeIn ? db.prepare('SELECT trade_in_unit_id FROM sales WHERE id=?').get(saleId).trade_in_unit_id : null,
+        prepaidAmount, prepaidReference,
         cardBrand, cardLast4, paymentReference,
         initialPaymentId, initialPaymentAmount, initialPaymentMethod,
         initialPaymentMixCash, initialPaymentMixNoncash, initialPaymentNoncashMethod,
@@ -5721,6 +5900,25 @@ const salesRepo = {
     sale.charges = tableExists('sale_charges')
       ? db.prepare('SELECT id,description,amount FROM sale_charges WHERE sale_id=? ORDER BY id').all(id)
       : [];
+    sale.trade_in = Number(sale.trade_in_amount || 0) > 0 && tableExists('trade_ins')
+      ? db.prepare(`
+          SELECT ti.*,pu.imei,pu.serial,p.name AS product_name,p.code AS product_code
+          FROM trade_ins ti
+          JOIN product_units pu ON pu.id=ti.product_unit_id
+          JOIN products p ON p.id=ti.product_id
+          WHERE ti.sale_id=?
+        `).get(id) || null
+      : null;
+    if (sale.trade_in) {
+      sale.trade_in_seller_name = sale.trade_in.seller_name || '';
+      sale.trade_in_seller_document = sale.trade_in.seller_document || '';
+      sale.trade_in_seller_phone = sale.trade_in.seller_phone || '';
+      sale.trade_in_seller_address = sale.trade_in.seller_address || '';
+      sale.trade_in_ownership_declared = Number(sale.trade_in.ownership_declared) || 0;
+      sale.trade_in_lawful_origin_declared = Number(sale.trade_in.lawful_origin_declared) || 0;
+      sale.trade_in_product_name = sale.trade_in.product_name || '';
+      sale.trade_in_imei = sale.trade_in.imei || sale.trade_in.serial || '';
+    }
     const payments = db.prepare(`
       SELECT p.id,p.document_kind,p.document_number,p.document_number_fmt,p.numero_recibo,
              COALESCE((
@@ -9886,6 +10084,20 @@ const accountingRepo = {
       const taxAccId   = getAccId('account_tax_payable','2102');
       const cogsAccId  = getAccId('account_cogs',       '5101');
       const invAccId   = getAccId('account_inventory',  '1105');
+      let advancesAcc = db.prepare("SELECT id FROM accounting_accounts WHERE code='2103'").get();
+      if (!advancesAcc) {
+        const parent = db.prepare("SELECT id FROM accounting_accounts WHERE code='21'").get();
+        const created = db.prepare(`INSERT INTO accounting_accounts(code,name,type,subtype,parent_id,description,is_summary,active)
+          VALUES('2103','Anticipos de Clientes','pasivo','anticipo',?,'Pagos recibidos antes de facturar',0,1)`).run(parent?.id || null);
+        advancesAcc = { id:Number(created.lastInsertRowid) };
+      }
+
+      // Si el anticipo se recibió antes de activar Contabilidad, lo reconoce
+      // ahora antes de aplicarlo. La función es idempotente.
+      if (Number(sale.prepaid_amount || 0) > 0 && tableExists('service_order_deposits')) {
+        const deposits = db.prepare("SELECT id FROM service_order_deposits WHERE applied_sale_id=? AND status='applied'").all(saleId);
+        deposits.forEach(deposit => this.generateServiceDepositEntry({ depositId:deposit.id, userId }));
+      }
 
       const lines = [];
       const method = sale.payment_method || 'efectivo';
@@ -9904,12 +10116,16 @@ const accountingRepo = {
       else if (method === 'credito')  debitAccId = arAccId;
 
       const tradeInAmount = round2(Number(sale.trade_in_amount) || 0);
-      const monetaryAmount = round2(Number(sale.total) - tradeInAmount);
+      const prepaidAmount = round2(Number(sale.prepaid_amount) || 0);
+      const monetaryAmount = round2(Number(sale.total) - tradeInAmount - prepaidAmount);
       if (debitAccId && monetaryAmount > 0) {
         lines.push({ account_id: debitAccId, debit: monetaryAmount, credit: 0, description: `Factura ${invNo}` });
       }
       if (invAccId && tradeInAmount > 0) {
         lines.push({ account_id: invAccId, debit: tradeInAmount, credit: 0, description: `Equipo usado recibido · Factura ${invNo}` });
+      }
+      if (advancesAcc?.id && prepaidAmount > 0) {
+        lines.push({ account_id: advancesAcc.id, debit: prepaidAmount, credit: 0, description: `Anticipo aplicado · Factura ${invNo}` });
       }
 
       // Crédito: ingresos (neto sin ITBIS)
@@ -9946,6 +10162,33 @@ const accountingRepo = {
       console.error('[accounting] Error generando asiento de venta:', e.message);
       return null;
     }
+  },
+
+  generateServiceDepositEntry({ depositId, userId } = {}) {
+    try {
+      const modEnabled = db.prepare("SELECT value FROM settings WHERE key='module_contabilidad'").get()?.value;
+      if (modEnabled !== '1' || !tableExists('service_order_deposits')) return null;
+      const deposit = db.prepare(`SELECT d.*,so.number FROM service_order_deposits d
+        JOIN service_orders so ON so.id=d.service_order_id WHERE d.id=?`).get(Number(depositId));
+      if (!deposit || deposit.status === 'refunded') return null;
+      if (db.prepare("SELECT id FROM accounting_entries WHERE source_module='servicio_anticipo' AND source_id=? AND status='confirmado'").get(deposit.id)) return null;
+      const cfg = this.getConfig();
+      const getAccId = (key, fallback) => cfg[key]?.account_id || db.prepare('SELECT id FROM accounting_accounts WHERE code=?').get(fallback)?.id;
+      const receivedAccId = deposit.method === 'efectivo' ? getAccId('account_cash','1101') : getAccId('account_bank','1103');
+      let advances = db.prepare("SELECT id FROM accounting_accounts WHERE code='2103'").get();
+      if (!advances) {
+        const parent = db.prepare("SELECT id FROM accounting_accounts WHERE code='21'").get();
+        advances = { id:Number(db.prepare(`INSERT INTO accounting_accounts(code,name,type,subtype,parent_id,description,is_summary,active)
+          VALUES('2103','Anticipos de Clientes','pasivo','anticipo',?,'Pagos recibidos antes de facturar',0,1)`).run(parent?.id || null).lastInsertRowid) };
+      }
+      if (!receivedAccId || !advances.id) return null;
+      return this.createEntry({ date:String(deposit.created_at || '').slice(0,10), concept:`Anticipo de servicio ${deposit.number}`,
+        reference:`SAD-${deposit.id}`, source_module:'servicio_anticipo', source_id:deposit.id, userId,
+        lines:[
+          {account_id:receivedAccId,debit:deposit.amount,credit:0,description:`Anticipo ${deposit.number}`},
+          {account_id:advances.id,debit:0,credit:deposit.amount,description:`Anticipo pendiente ${deposit.number}`},
+        ], status:'confirmado' });
+    } catch (e) { console.error('[accounting] generateServiceDepositEntry:', e.message); return null; }
   },
 
   // ── Asiento para gasto ────────────────────
@@ -12157,10 +12400,16 @@ const productUnitsRepo = {
               p.model AS product_model, p.price AS product_price,
               COALESCE(NULLIF(s.numero_factura_fmt,''), NULLIF(s.document_number_fmt,''),
                        CAST(s.numero_factura AS TEXT)) AS numero_factura,
-              s.customer_id, s.customer_name, s.created_at AS sale_date
+              s.customer_id, s.customer_name, s.created_at AS sale_date,
+              ti.id AS trade_in_id, ti.sale_id AS trade_in_sale_id,
+              ti.seller_name AS origin_seller_name,
+              ti.seller_document AS origin_seller_document,
+              ti.seller_phone AS origin_seller_phone,
+              ti.seller_address AS origin_seller_address
          FROM product_units pu
          JOIN products p ON p.id=pu.product_id
          LEFT JOIN sales s ON s.id=pu.sale_id
+         LEFT JOIN trade_ins ti ON ti.product_unit_id=pu.id
         WHERE UPPER(TRIM(COALESCE(pu.imei,'')))=UPPER(?)
            OR UPPER(TRIM(COALESCE(pu.serial,'')))=UPPER(?)
         LIMIT 1`
@@ -12443,7 +12692,11 @@ const serviceOrdersRepo = {
         created_at:order.created_at, delivered_at:order.delivered_at,
         items:(order.items || []).map(item => ({
           kind:item.kind, description:item.description, qty:item.qty, unit_price:item.unit_price,
+          warranty_days:item.warranty_days,warranty_until:item.warranty_until,
         })),
+        deposit_total:order.deposit_total,deposit_active:order.deposit_active,
+        pickup_due_at:order.pickup_due_at,pickup_notice_count:order.pickup_notice_count,
+        pickup_person_name:order.pickup_person_name,pickup_relationship:order.pickup_relationship,
         events:visibleEvents,
         can_decide:order.workflow_status === 'esperando_aprobacion' && estimate?.status === 'pendiente'
           && !!estimate.public_code_hash && (!estimate.public_code_expires_at
@@ -12568,7 +12821,7 @@ const serviceOrdersRepo = {
   getById(id) {
     const row = db.prepare(`
       SELECT so.*, COALESCE(st.name,u.name) AS technician_name, r.name AS received_by_name,
-             c.phone AS customer_phone,c.email AS customer_email,c.address AS customer_address,
+             c.phone AS registered_customer_phone,c.email AS registered_customer_email,c.address AS registered_customer_address,
              pu.status AS unit_status,pu.warranty_until AS unit_warranty_until,
              p.name AS catalog_product_name,p.brand AS catalog_brand,p.model AS catalog_model
       FROM service_orders so
@@ -12593,6 +12846,17 @@ const serviceOrdersRepo = {
       LEFT JOIN purchase_orders po ON po.id=pr.purchase_order_id
       LEFT JOIN suppliers s ON s.id=pr.supplier_id
       WHERE pr.service_order_id=? ORDER BY pr.id DESC`).all(row.id);
+    row.deposits = db.prepare(`SELECT d.*,fa.name financial_account_name
+      FROM service_order_deposits d LEFT JOIN financial_accounts fa ON fa.id=d.financial_account_id
+      WHERE d.service_order_id=? ORDER BY d.id`).all(row.id);
+    row.deposit_total = round2(row.deposits.filter(deposit => deposit.status !== 'refunded')
+      .reduce((sum, deposit) => sum + Number(deposit.amount || 0), 0));
+    row.deposit_active = round2(row.deposits.filter(deposit => deposit.status === 'active')
+      .reduce((sum, deposit) => sum + Number(deposit.amount || 0), 0));
+    const readySince = row.ready_at || (row.workflow_status === 'listo' ? row.updated_at : null);
+    row.storage_days = readySince ? Math.max(0, Number(db.prepare(`SELECT CAST(MAX(0,julianday('now','localtime')-julianday(?)-?) AS INTEGER) days`)
+      .get(readySince, Number(row.storage_grace_days) || 0).days || 0)) : 0;
+    row.storage_fee_accrued = round2(row.storage_days * Math.max(0, Number(row.storage_fee_per_day) || 0));
     if (row.sale_id) row.sale = salesRepo.getById(row.sale_id);
     return row;
   },
@@ -12602,9 +12866,20 @@ const serviceOrdersRepo = {
     const problem = String(data.problem || '').trim();
     if (!device) throw new Error('Describe el equipo recibido');
     if (!problem) throw new Error('Describe el problema reportado');
-    let customerId = Number(data.customer_id) || 1;
-    const customer = db.prepare('SELECT id,name FROM customers WHERE id=? AND active=1').get(customerId);
+    const occasional = data.customer_is_occasional === true || data.customer_is_occasional === 1;
+    let customerId = occasional ? 1 : (Number(data.customer_id) || 1);
+    const customer = db.prepare('SELECT * FROM customers WHERE id=? AND active=1').get(customerId);
     if (!customer) throw new Error('Cliente no encontrado o inactivo');
+    const customerName = String(occasional ? data.customer_name : customer.name || '').replace(/\s+/g,' ').trim();
+    const customerDocument = String(occasional ? data.customer_document : customer.rnc || '').trim();
+    const customerPhone = String(occasional ? data.customer_phone : customer.phone || '').trim();
+    const customerAddress = String(occasional ? data.customer_address : customer.address || '').replace(/\s+/g,' ').trim();
+    const customerEmail = String(occasional ? data.customer_email : customer.email || '').trim().toLowerCase();
+    if (occasional && customerName.length < 3) throw new Error('Indica el nombre de la persona que entrega el equipo');
+    if (occasional && customerDocument.replace(/[^A-Za-z0-9]/g,'').length < 5) throw new Error('Indica su cédula, pasaporte o documento');
+    if (occasional && customerPhone.replace(/\D/g,'').length < 7) throw new Error('Indica un teléfono válido');
+    if (occasional && !data.privacy_consent) throw new Error('La persona debe autorizar el diagnóstico y manejo del equipo');
+    if (occasional && !data.intake_signed) throw new Error('La recepción ocasional requiere la firma de la persona');
     return db.transaction(() => {
       const identifier = String(data.imei || data.serial || '').trim();
       let unit = Number(data.product_unit_id)
@@ -12620,13 +12895,15 @@ const serviceOrdersRepo = {
       const number = `SRV-${String(next).padStart(6, '0')}`;
       const info = db.prepare(`
         INSERT INTO service_orders(
-          number,customer_id,customer_name,product_unit_id,unit_previous_status,parent_order_id,device_desc,imei,imei2,serial,
+          number,customer_id,customer_name,customer_document,customer_phone,customer_address,customer_email,customer_is_occasional,
+          product_unit_id,unit_previous_status,parent_order_id,device_desc,imei,imei2,serial,
           brand,model,device_color,battery_health,battery_capacity_mah,problem,workflow_status,service_type,priority,promised_at,
-          intake_condition,accessories_received,intake_checklist,privacy_consent,
+          failure_category,intake_condition,accessories_received,intake_checklist,privacy_consent,intake_signed_name,intake_signed_at,
           technician_id,service_technician_id,received_by,service_warranty_days,notes
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'recepcion',?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'recepcion',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       `).run(
-        number, customer.id, customer.name, unit?.id || null, String(unit?.status || ''), Number(data.parent_order_id) || null,
+        number, customer.id, customerName, customerDocument, customerPhone, customerAddress, customerEmail, occasional ? 1 : 0,
+        unit?.id || null, String(unit?.status || ''), Number(data.parent_order_id) || null,
         device, String(data.imei || unit?.imei || '').trim(), String(data.imei2 || '').trim(),
         String(data.serial || unit?.serial || '').trim(), String(data.brand || unit?.product_brand || '').trim(),
         String(data.model || unit?.product_model || '').trim(), String(data.device_color || unit?.color || '').trim(),
@@ -12637,9 +12914,14 @@ const serviceOrdersRepo = {
         problem,
         ['reparacion','garantia','diagnostico','instalacion','visita'].includes(data.service_type) ? data.service_type : 'reparacion',
         ['baja','normal','alta','urgente'].includes(data.priority) ? data.priority : 'normal',
-        String(data.promised_at || '').trim() || null, String(data.intake_condition || '').trim(),
+        String(data.promised_at || '').trim() || null,
+        ['senal','carga','pantalla','bateria','audio','camaras','conectividad','liquido','no_enciende','otro'].includes(data.failure_category)
+          ? data.failure_category : 'otro',
+        String(data.intake_condition || '').trim(),
         this._safeJson(data.accessories_received, []), this._safeJson(data.intake_checklist, {}),
-        data.privacy_consent ? 1 : 0, Number(data.technician_id) || null,
+        data.privacy_consent ? 1 : 0, String(data.intake_signed_name || customerName).trim(),
+        data.intake_signed ? db.prepare("SELECT datetime('now','localtime') value").get().value : null,
+        Number(data.technician_id) || null,
         Number(data.service_technician_id) || null, Number(user.id) || null,
         Math.max(0, Math.min(3650, Number.parseInt(
           data.service_warranty_days ?? settingsRepo.get('service_default_warranty_days'), 10
@@ -12681,8 +12963,8 @@ const serviceOrdersRepo = {
         if (reserved) throw new Error('No se pueden sustituir partidas con piezas reservadas o consumidas');
         db.prepare('DELETE FROM service_order_items WHERE service_order_id=?').run(current.id);
         const insert = db.prepare(`
-          INSERT INTO service_order_items(service_order_id,kind,product_id,description,qty,unit_price,unit_cost,taxable,tax_pct)
-          VALUES(?,?,?,?,?,?,?,?,?)
+          INSERT INTO service_order_items(service_order_id,kind,product_id,description,qty,unit_price,unit_cost,taxable,tax_pct,warranty_days)
+          VALUES(?,?,?,?,?,?,?,?,?,?)
         `);
         for (const raw of data.items) {
           const kind = raw.kind === 'parte' ? 'parte' : 'mano_obra';
@@ -12704,7 +12986,8 @@ const serviceOrdersRepo = {
             taxPct = normalizeTaxPct(raw.tax_pct ?? product.tax_pct, configuredTaxPct());
           }
           if (!description) throw new Error('Cada partida necesita una descripción');
-          insert.run(current.id, kind, productId, description, qty, unitPrice, unitCost, taxable, taxPct);
+          const warrantyDays = Math.max(0, Math.min(3650, Number.parseInt(raw.warranty_days,10) || 0));
+          insert.run(current.id, kind, productId, description, qty, unitPrice, unitCost, taxable, taxPct, warrantyDays);
         }
       }
       const total = db.prepare('SELECT COALESCE(SUM(qty*unit_price),0) AS n FROM service_order_items WHERE service_order_id=?').get(current.id).n;
@@ -12741,7 +13024,13 @@ const serviceOrdersRepo = {
       this._setWorkflow(current.id, nextStatus);
       this._event(current.id, 'estado', `Estado: ${nextStatus.replaceAll('_',' ')}`, '', user,
         current.workflow_status, nextStatus);
-      if (nextStatus === 'listo') this._queueNotification(current.id, 'listo');
+      if (nextStatus === 'listo') {
+        const graceDays = Math.max(0, Math.min(3650, Number(settingsRepo.get('service_pickup_grace_days')) || 7));
+        const fee = round2(Math.max(0, Number(settingsRepo.get('service_storage_fee_per_day')) || 0));
+        db.prepare(`UPDATE service_orders SET ready_at=datetime('now','localtime'),pickup_due_at=date('now','localtime',?),
+          storage_grace_days=?,storage_fee_per_day=? WHERE id=?`).run(`+${graceDays} days`, graceDays, fee, current.id);
+        this._queueNotification(current.id, 'listo');
+      }
       return this.getById(current.id);
     })();
   },
@@ -12759,6 +13048,7 @@ const serviceOrdersRepo = {
         items: current.items.map(item => ({
           kind:item.kind, product_id:item.product_id, description:item.description, qty:item.qty,
           unit_price:item.unit_price, unit_cost:item.unit_cost, taxable:item.taxable, tax_pct:item.tax_pct,
+          warranty_days:item.warranty_days,
         })),
       };
       db.prepare(`INSERT INTO service_order_estimates(
@@ -12885,12 +13175,109 @@ const serviceOrdersRepo = {
     })();
   },
 
+  addDeposit(id, data = {}, user = {}, session = null) {
+    const order = this.getById(id);
+    if (!order || SERVICE_TERMINAL.has(order.workflow_status)) throw new Error('La orden no admite anticipos');
+    const amount = round2(Number(data.amount) || 0);
+    const quoted = Math.max(Number(order.approved_amount) || 0, Number(order.quote_amount) || 0);
+    if (amount <= 0) throw new Error('El anticipo debe ser mayor a cero');
+    if (quoted > 0 && round2(Number(order.deposit_active || 0) + amount) > quoted + 0.005) {
+      throw new Error('El anticipo supera el total pendiente de la reparación');
+    }
+    const method = String(data.method || 'efectivo').toLowerCase();
+    if (!['efectivo','transferencia','tarjeta','cheque'].includes(method)) throw new Error('Forma de pago no válida');
+    if (method === 'efectivo' && !session?.id) throw new Error('Abre la caja antes de recibir efectivo');
+    let account = null;
+    if (method !== 'efectivo') {
+      account = db.prepare('SELECT * FROM financial_accounts WHERE id=? AND active=1').get(Number(data.financial_account_id));
+      if (!account) throw new Error('Selecciona la cuenta que recibió el anticipo');
+    }
+    return db.transaction(() => {
+      const info = db.prepare(`INSERT INTO service_order_deposits(
+        service_order_id,amount,method,reference,financial_account_id,cash_session_id,received_by,received_by_name
+      ) VALUES(?,?,?,?,?,?,?,?)`).run(order.id, amount, method, String(data.reference || '').trim().slice(0,120),
+        account?.id || null, session?.id || null, Number(user.id) || null, String(user.name || ''));
+      const depositId = Number(info.lastInsertRowid);
+      if (session?.id) cashRepo.addMovement({ sessionId:session.id, type:'entrada', amount, method,
+        referenceId:depositId, description:`Anticipo ${order.number}`, userId:Number(user.id) || null });
+      if (account) financialAccountsRepo.addMovement({ accountId:account.id, type:'deposito', amount,
+        description:`Anticipo ${order.number}`, referenceType:'service_order_deposit', referenceId:depositId,
+        method, notes:String(data.reference || '').trim(), userId:Number(user.id) || null });
+      this._event(order.id, 'anticipo', `Anticipo recibido: RD$${amount.toFixed(2)}`,
+        `${method}${data.reference ? ` · ${String(data.reference).trim()}` : ''}`, user);
+      return this.getById(order.id);
+    })();
+  },
+
+  refundDeposit(id, depositId, reason = '', user = {}, session = null) {
+    const order = this.getById(id);
+    const deposit = order?.deposits?.find(row => Number(row.id) === Number(depositId));
+    if (!order || !deposit || deposit.status !== 'active') throw new Error('El anticipo ya no está disponible para devolución');
+    const cleanReason = String(reason || '').trim();
+    if (!cleanReason) throw new Error('Indica el motivo de la devolución');
+    if (deposit.method === 'efectivo' && !session?.id) throw new Error('Abre la caja antes de devolver efectivo');
+    return db.transaction(() => {
+      if (session?.id) cashRepo.addMovement({ sessionId:session.id, type:'salida', amount:deposit.amount,
+        method:deposit.method, referenceId:deposit.id, description:`Devolución anticipo ${order.number}`, userId:Number(user.id) || null });
+      if (deposit.financial_account_id) financialAccountsRepo.addMovement({ accountId:deposit.financial_account_id,
+        type:'retiro', amount:-Number(deposit.amount), description:`Devolución anticipo ${order.number}`,
+        referenceType:'service_order_deposit_refund', referenceId:deposit.id, method:deposit.method,
+        notes:cleanReason, userId:Number(user.id) || null });
+      db.prepare(`UPDATE service_order_deposits SET status='refunded',refunded_at=datetime('now','localtime'),refund_reason=? WHERE id=?`).run(cleanReason, deposit.id);
+      this._event(order.id, 'anticipo_devuelto', `Anticipo devuelto: RD$${Number(deposit.amount).toFixed(2)}`, cleanReason, user);
+      return this.getById(order.id);
+    })();
+  },
+
+  registerPickupNotice(id, data = {}, user = {}) {
+    const order = this.getById(id);
+    if (!order || order.workflow_status !== 'listo') throw new Error('La orden no está pendiente de retiro');
+    const channel = String(data.channel || 'whatsapp').trim();
+    db.prepare(`UPDATE service_orders SET pickup_notice_count=pickup_notice_count+1,
+      last_pickup_notice_at=datetime('now','localtime'),updated_at=datetime('now','localtime') WHERE id=?`).run(order.id);
+    this._event(order.id, 'aviso_retiro', 'Aviso de retiro registrado', channel, user);
+    return this.getById(order.id);
+  },
+
+  markAbandoned(id, data = {}, user = {}) {
+    const order = this.getById(id);
+    if (!order || order.workflow_status !== 'listo') throw new Error('Solo un equipo listo puede marcarse como no reclamado');
+    if (Number(order.pickup_notice_count || 0) < 1) throw new Error('Registra al menos un aviso al cliente antes de continuar');
+    const acknowledgment = String(data.acknowledgment || '');
+    if (acknowledgment !== 'CONFIRMO REVISION LEGAL') throw new Error('Confirma que el negocio revisó sus términos y la normativa aplicable');
+    db.prepare(`UPDATE service_orders SET abandoned_at=datetime('now','localtime'),updated_at=datetime('now','localtime') WHERE id=?`).run(order.id);
+    this._event(order.id, 'no_reclamado', 'Equipo marcado como no reclamado', String(data.notes || '').trim(), user);
+    return this.getById(order.id);
+  },
+
+  identifierHistory(identifier) {
+    const value = String(identifier || '').trim();
+    if (!value) throw new Error('Escribe un IMEI o serial');
+    const unit = productUnitsRepo.findByImei(value);
+    const services = db.prepare(`SELECT id,number,customer_name,device_desc,problem,workflow_status,sale_id,created_at,delivered_at
+      FROM service_orders WHERE imei=? OR imei2=? OR serial=? ORDER BY id DESC`).all(value,value,value);
+    const sales = db.prepare(`SELECT s.id,s.document_number_fmt,s.customer_name,s.total,s.created_at,si.product_name
+      FROM sale_items si JOIN sales s ON s.id=si.sale_id
+      WHERE si.product_unit_id=? AND s.status!='cancelled' ORDER BY s.id DESC`).all(unit?.id || -1);
+    const purchases = unit ? db.prepare(`SELECT po.id,('OC-' || printf('%04d',po.id)) number,po.supplier_name,po.created_at,pu.unit_cost
+      FROM product_units pu LEFT JOIN purchase_orders po ON po.id=pu.purchase_order_id WHERE pu.id=?`).all(unit.id) : [];
+    const tradeIns = unit && tableExists('trade_ins') ? db.prepare(`SELECT ti.*,s.document_number_fmt
+      FROM trade_ins ti LEFT JOIN sales s ON s.id=ti.sale_id WHERE ti.product_unit_id=? ORDER BY ti.id DESC`).all(unit.id) : [];
+    return { identifier:value, unit:unit || null, services, sales, purchases, trade_ins:tradeIns };
+  },
+
   deliver(id, payment = {}, user = {}, session = null) {
     const order = this.getById(id);
     if (!order) throw new Error('Orden de servicio no encontrada');
     if (order.sale_id) return { order, saleResult: salesRepo.getConfirmationById(order.sale_id) };
     if (order.workflow_status !== 'listo') throw new Error('La orden debe estar lista antes de entregarla');
     if (!order.items.length) throw new Error('Agrega piezas o mano de obra antes de entregar');
+    const pickupName = String(payment.pickupPersonName || '').replace(/\s+/g,' ').trim();
+    const pickupDocument = String(payment.pickupPersonDocument || '').trim();
+    const pickupPhone = String(payment.pickupPersonPhone || '').trim();
+    if (pickupName.length < 3) throw new Error('Identifica a la persona que retira el equipo');
+    if (pickupDocument.replace(/[^A-Za-z0-9]/g,'').length < 5) throw new Error('Indica el documento de quien retira');
+    if (!payment.pickupConsent) throw new Error('La persona debe confirmar la recepción del equipo');
     const items = order.items.map(item => item.kind === 'parte' ? {
       product_id: item.product_id,
       product_code: db.prepare('SELECT code FROM products WHERE id=?').get(item.product_id)?.code || 'PARTE',
@@ -12916,14 +13303,26 @@ const serviceOrdersRepo = {
     });
     const saleResult = salesRepo.create({
       session,
-      customer: { id: Number(order.customer_id) || 1 },
+      customer: {
+        id: Number(order.customer_id) || 1,
+        name: order.customer_name || 'Consumidor Final',
+        rnc: order.customer_document || '',
+        phone: order.customer_phone || '',
+        address: order.customer_address || '',
+        email: order.customer_email || '',
+        preserve_customer_snapshot: Number(order.customer_id) !== 1,
+      },
       items,
       payment: {
         method: String(payment.method || 'efectivo'),
         ncfType: String(payment.ncfType || ''),
+        financialAccountId: Number(payment.financialAccountId) || null,
+        reference: String(payment.reference || '').trim(),
         notes: `Orden de servicio ${order.number}${payment.notes ? ` · ${payment.notes}` : ''}`,
+        prepaidServiceOrderId: order.id,
       },
       user,
+      trustedCustomerSnapshot: true,
       type: 'factura',
       operationId: `service-order-${order.id}`,
     });
@@ -12936,8 +13335,16 @@ const serviceOrdersRepo = {
         Number(settingsRepo.get('service_default_warranty_days')) || 0));
       db.prepare(`UPDATE service_orders SET status='entregado',workflow_status='entregado',sale_id=?,
         service_warranty_days=?,warranty_until=CASE WHEN ?>0 THEN date('now','localtime',?) ELSE NULL END,
+        pickup_person_name=?,pickup_person_document=?,pickup_person_phone=?,pickup_relationship=?,pickup_authorized_by=?,
+        pickup_notes=?,pickup_signed_at=datetime('now','localtime'),
         delivered_at=datetime('now','localtime'),updated_at=datetime('now','localtime') WHERE id=?`)
-        .run(saleId, warrantyDays, warrantyDays, `+${warrantyDays} days`, order.id);
+        .run(saleId, warrantyDays, warrantyDays, `+${warrantyDays} days`, pickupName, pickupDocument, pickupPhone,
+          String(payment.pickupRelationship || '').trim(), String(payment.pickupAuthorizedBy || order.customer_name || '').trim(),
+          String(payment.pickupNotes || '').trim(), order.id);
+      db.prepare(`UPDATE service_order_items SET warranty_until=CASE WHEN warranty_days>0
+        THEN date('now','localtime','+' || warranty_days || ' days') ELSE NULL END WHERE service_order_id=?`).run(order.id);
+      db.prepare(`UPDATE service_order_deposits SET status='applied',applied_sale_id=?,applied_at=datetime('now','localtime')
+        WHERE service_order_id=? AND status='active'`).run(saleId, order.id);
       this._restoreUnitStatus(order);
       this._event(order.id, 'entrega', 'Equipo entregado y facturado', `Venta #${saleId} · garantía ${warrantyDays} días`,
         user, order.workflow_status, 'entregado');
@@ -12952,6 +13359,7 @@ const serviceOrdersRepo = {
     if (SERVICE_TERMINAL.has(current.workflow_status)) throw new Error('La orden ya no puede cancelarse');
     const clean = String(reason || '').trim();
     if (!clean) throw new Error('Indica el motivo de cancelación');
+    if (Number(current.deposit_active || 0) > 0) throw new Error('Devuelve o aplica los anticipos activos antes de cancelar la orden');
     return db.transaction(() => {
       db.prepare(`UPDATE service_order_items SET qty_reserved=0,reservation_status='released'
         WHERE service_order_id=? AND reservation_status IN ('reserved','waiting')`).run(current.id);
@@ -12964,21 +13372,29 @@ const serviceOrdersRepo = {
     })();
   },
 
-  createWarrantyReturn(id, problem, user = {}) {
+  createWarrantyReturn(id, problem, user = {}, itemId = null) {
     const original = this.getById(id);
     if (!original || original.workflow_status !== 'entregado') throw new Error('La reparación original no está entregada');
-    if (!original.warranty_until || original.warranty_until < db.prepare("SELECT date('now','localtime') d").get().d) {
+    const today = db.prepare("SELECT date('now','localtime') d").get().d;
+    const selectedItem = Number(itemId) ? original.items.find(item => Number(item.id) === Number(itemId)) : null;
+    if (Number(itemId) && !selectedItem) throw new Error('La cobertura seleccionada no pertenece a esta reparación');
+    const warrantyUntil = selectedItem?.warranty_until || original.warranty_until;
+    if (!warrantyUntil || warrantyUntil < today) {
       throw new Error('La garantía de esta reparación está vencida o no fue configurada');
     }
     return this.create({
       customer_id: original.customer_id, product_unit_id: original.product_unit_id,
+      customer_is_occasional: original.customer_is_occasional,
+      customer_name: original.customer_name, customer_document: original.customer_document,
+      customer_phone: original.customer_phone, customer_address: original.customer_address, customer_email: original.customer_email,
       parent_order_id: original.id, device_desc: original.device_desc, imei: original.imei,
       imei2: original.imei2, serial: original.serial, brand: original.brand, model: original.model,
       device_color: original.device_color, problem: String(problem || '').trim(),
       service_type: 'garantia', priority: 'alta', privacy_consent: original.privacy_consent,
       intake_condition: original.intake_condition, accessories_received: [],
       service_warranty_days: original.service_warranty_days,
-      notes: `Reingreso de garantía de ${original.number}`,
+      failure_category: original.failure_category,
+      notes: `Reingreso de garantía de ${original.number}${selectedItem ? ` · ${selectedItem.description}` : ''}`,
     }, user);
   },
 
@@ -13204,8 +13620,23 @@ const serviceOrdersRepo = {
       ROUND(COALESCE(SUM(CASE WHEN so.workflow_status='entregado' THEN so.approved_amount ELSE 0 END),0)*COALESCE(st.commission_pct,0)/100.0,2) commission
       FROM service_orders so LEFT JOIN service_technicians st ON st.id=so.service_technician_id
       GROUP BY st.id,st.name ORDER BY count DESC`).all();
+    const profitability = db.prepare(`SELECT
+      COALESCE(SUM(CASE WHEN so.workflow_status='entregado' THEN i.qty*i.unit_price ELSE 0 END),0) revenue,
+      COALESCE(SUM(CASE WHEN so.workflow_status='entregado' THEN i.qty*i.unit_cost ELSE 0 END),0) parts_cost,
+      COALESCE(SUM(CASE WHEN so.workflow_status='entregado' AND i.kind='mano_obra' THEN i.qty*i.unit_price ELSE 0 END),0) labor_revenue,
+      COALESCE(AVG(CASE WHEN so.workflow_status='entregado' THEN julianday(so.delivered_at)-julianday(so.created_at) END),0) cycle_days
+      FROM service_orders so LEFT JOIN service_order_items i ON i.service_order_id=so.id`).get();
+    profitability.gross_profit = round2(Number(profitability.revenue) - Number(profitability.parts_cost));
+    profitability.margin_pct = Number(profitability.revenue) > 0
+      ? round2(profitability.gross_profit / Number(profitability.revenue) * 100) : 0;
+    const deposits = db.prepare(`SELECT COALESCE(SUM(CASE WHEN status!='refunded' THEN amount ELSE 0 END),0) received,
+      COALESCE(SUM(CASE WHEN status='active' THEN amount ELSE 0 END),0) pending_application
+      FROM service_order_deposits`).get();
+    const unclaimed = db.prepare(`SELECT COUNT(*) count,COALESCE(SUM(MAX(0,
+      CAST(julianday('now','localtime')-julianday(COALESCE(ready_at,updated_at))-storage_grace_days AS INTEGER))*storage_fee_per_day),0) fees
+      FROM service_orders WHERE workflow_status='listo'`).get();
     return { open, overdue, delivered:delivered.n, average_days:round2(delivered.avg_days), warranty_returns:warrantyReturns,
-      by_status:byStatus, by_technician:byTechnician };
+      by_status:byStatus, by_technician:byTechnician, profitability, deposits, unclaimed };
   },
 };
 

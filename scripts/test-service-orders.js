@@ -38,7 +38,8 @@ const technicianId = DB.serviceOrdersRepo.saveTechnician({
 const order = DB.serviceOrdersRepo.create({
   customer_id:1, product_unit_id:unitId, device_desc:'iPhone 13', imei:'359999999999999',
   problem:'Pantalla rota', intake_condition:'Golpe en esquina superior',
-  accessories_received:['Funda'], intake_checklist:{ power:'funciona', charge:'funciona' },
+  accessories_received:['Funda'], intake_checklist:{ power:'funciona', charge:'funciona',
+    physical:['body_marks'], authorizations:{ diagnosis:true, disassembly:true, data_risk:true, no_password:true } },
   privacy_consent:true, notes:'Recibido sin cargador', service_technician_id:technicianId,
 }, admin);
 ok(order.number === 'SRV-000001' && order.workflow_status === 'recepcion', 'crea la recepción profesional con número estable');
@@ -46,6 +47,9 @@ ok(order.product_unit_id === unitId && DB.productUnitsRepo.findById(unitId).stat
 ok(order.events.some(event => event.event_type === 'recepcion')
   && order.events.some(event => event.event_type === 'portal')
   && order.intake_condition.includes('Golpe'), 'conserva recepción, portal y trazabilidad inicial');
+const intakeSnapshot = JSON.parse(order.intake_checklist || '{}');
+ok(intakeSnapshot.physical.includes('body_marks') && intakeSnapshot.authorizations.disassembly === true,
+  'conserva casillas de condición y autorizaciones exactamente como fueron marcadas');
 
 let current = DB.serviceOrdersRepo.advance(order.id, 'inspeccion', admin);
 current = DB.serviceOrdersRepo.advance(order.id, 'diagnostico', admin);
@@ -60,7 +64,7 @@ current = DB.serviceOrdersRepo.update(order.id, {
   service_technician_id:technicianId,
   items:[
     { kind:'parte', product_id:partId, description:'Pantalla OLED', qty:1, unit_price:4500 },
-    { kind:'mano_obra', description:'Instalación y pruebas', qty:1, unit_price:1200, taxable:1, tax_pct:18 },
+    { kind:'mano_obra', description:'Instalación y pruebas', qty:1, unit_price:1200, taxable:1, tax_pct:18, warranty_days:45 },
   ],
 });
 ok(current.items.length === 2 && Number(current.quote_amount) === 5700, 'guarda piezas, mano de obra y total del presupuesto');
@@ -97,23 +101,43 @@ current = DB.serviceOrdersRepo.saveQuality(order.id, {
 }, admin);
 current = DB.serviceOrdersRepo.advance(order.id, 'listo', admin);
 ok(current.workflow_status === 'listo' && !!current.quality_checked_at, 'aprueba calidad y deja el equipo listo');
+ok(!!current.ready_at && !!current.pickup_due_at, 'inicia automáticamente el control de retiro y almacenamiento');
+current = DB.serviceOrdersRepo.registerPickupNotice(order.id, {channel:'whatsapp'}, admin);
+ok(current.pickup_notice_count === 1 && !!current.last_pickup_notice_at, 'conserva los avisos enviados para retirar el equipo');
+
+const cashSessionId = DB.cashRepo.open({ userId:admin.id, cajero:admin.name, openAmount:1000, openBills:{}, terminalId:'SERVICE-TEST' });
+const cashSession = db.prepare('SELECT * FROM cash_sessions WHERE id=?').get(cashSessionId);
+current = DB.serviceOrdersRepo.addDeposit(order.id, { amount:1000, method:'efectivo', reference:'ANT-TEST' }, admin, cashSession);
+ok(current.deposit_active === 1000 && current.deposits.length === 1, 'registra un anticipo trazable antes de la entrega');
 
 const stockBefore = DB.productsRepo.getById(partId).stock;
-const delivered = DB.serviceOrdersRepo.deliver(order.id, { method:'efectivo', warrantyDays:45 }, admin, null);
+const delivered = DB.serviceOrdersRepo.deliver(order.id, { method:'efectivo', warrantyDays:45,
+  pickupPersonName:'Juan Pérez', pickupPersonDocument:'00112345678', pickupPersonPhone:'8095551212',
+  pickupRelationship:'Titular', pickupAuthorizedBy:'Juan Pérez', pickupConsent:true,
+}, admin, cashSession);
 current = delivered.order;
 ok(current.workflow_status === 'entregado' && !!current.sale_id && !!current.delivered_at, 'entrega enlazada a una venta real');
 const sale = DB.salesRepo.getById(current.sale_id);
 ok(sale.items.length === 2 && sale.items.some(i => i.product_id == null && i.product_code === 'SERVICIO'), 'factura contiene pieza y mano de obra no inventariable');
 ok(Number(sale.total) === 5700, 'la factura conserva el total del presupuesto');
+ok(Number(sale.prepaid_amount) === 1000 && Number(delivered.saleResult.prepaidAmount) === 1000,
+  'la factura resta el anticipo sin reducir su total comercial o fiscal');
+ok(current.deposits[0].status === 'applied' && current.pickup_person_document === '00112345678',
+  'aplica el anticipo y conserva la identidad de quien retira');
 ok(DB.productsRepo.getById(partId).stock === stockBefore - 1, 'la pieza descuenta inventario una sola vez');
 ok(current.items[0].reservation_status === 'consumed' && DB.productUnitsRepo.findById(unitId).status === 'vendido', 'consume la reserva y devuelve el equipo a estado vendido');
 ok(current.service_warranty_days === 45 && !!current.warranty_until, 'emite garantía propia de la reparación');
+ok(current.items.find(item => item.kind === 'mano_obra').warranty_days === 45
+  && !!current.items.find(item => item.kind === 'mano_obra').warranty_until,
+  'conserva garantía independiente para la mano de obra');
 
 DB.settingsRepo.set('module_contabilidad', '1');
 DB.accountingRepo.generateSaleEntry({ saleId:current.sale_id, userId:admin.id });
 const entry = db.prepare("SELECT id FROM accounting_entries WHERE source_module='venta' AND source_id=?").get(current.sale_id);
 const balance = entry ? db.prepare('SELECT ROUND(SUM(debit),2) debit,ROUND(SUM(credit),2) credit FROM accounting_entry_lines WHERE entry_id=?').get(entry.id) : null;
 ok(balance && Number(balance.debit) === Number(balance.credit), 'la venta de servicio genera asiento contable cuadrado');
+const advancesBalance = db.prepare("SELECT ROUND(balance,2) balance FROM accounting_accounts WHERE code='2103'").get();
+ok(advancesBalance && Number(advancesBalance.balance) === 0, 'la entrega cancela contablemente el anticipo aplicado');
 
 const salesCount = db.prepare('SELECT COUNT(*) n FROM sales').get().n;
 const repeated = DB.serviceOrdersRepo.deliver(order.id, { method:'efectivo' }, admin, null);
@@ -133,6 +157,26 @@ const internalOrder = DB.serviceOrdersRepo.create({
 }, admin);
 DB.serviceOrdersRepo.cancel(internalOrder.id, 'Prueba interna completada', admin);
 ok(DB.productUnitsRepo.findById(stockUnitId).status === 'en_stock', 'una cancelación devuelve al inventario un equipo que estaba en stock');
+
+const occasional = DB.serviceOrdersRepo.create({ customer_is_occasional:true, customer_name:'María de Prueba',
+  customer_document:'40212345678', customer_phone:'8295551010', customer_address:'Santo Domingo',
+  device_desc:'Samsung A54', imei:'351111111111111', failure_category:'senal', problem:'Pierde señal',
+  intake_condition:'Sin golpes', privacy_consent:true, intake_signed:true,
+  intake_checklist:{specialized:{test_0:{label:'Detecta SIM',value:'falla'}}},
+}, admin);
+ok(occasional.customer_is_occasional === 1 && occasional.customer_name === 'María de Prueba'
+  && occasional.customer_document === '40212345678', 'recibe una persona solo para esta reparación sin crearla como cliente');
+const identifierHistory = DB.serviceOrdersRepo.identifierHistory('351111111111111');
+ok(identifierHistory.services.some(service => service.id === occasional.id), 'unifica el historial de servicio al buscar el IMEI');
+let occasionalWithDeposit = DB.serviceOrdersRepo.addDeposit(occasional.id, {amount:100,method:'efectivo'}, admin, cashSession);
+let cancelBlockedByDeposit = false;
+try { DB.serviceOrdersRepo.cancel(occasional.id, 'No continuará', admin); } catch { cancelBlockedByDeposit = true; }
+ok(cancelBlockedByDeposit, 'impide cancelar una orden mientras conserve anticipos activos');
+occasionalWithDeposit = DB.serviceOrdersRepo.refundDeposit(occasional.id, occasionalWithDeposit.deposits.at(-1).id,
+  'Cliente no continuará', admin, cashSession);
+ok(occasionalWithDeposit.deposit_active === 0 && occasionalWithDeposit.deposits.at(-1).status === 'refunded',
+  'devuelve el anticipo con trazabilidad antes de cancelar');
+DB.serviceOrdersRepo.cancel(occasional.id, 'Fin de prueba', admin);
 
 const scarcePartId = DB.productsRepo.create({ code:'REP-ESCASA', name:'Pieza escasa', cost:100, price:200, stock:1, taxable:1, tax_pct:18 });
 let scarceOrder = DB.serviceOrdersRepo.create({ customer_id:1, device_desc:'Laptop', problem:'No enciende', intake_condition:'Completa' }, admin);
@@ -156,12 +200,19 @@ ok(receivedRequest.status === 'recibida' && receivedRequest.qty_received === 1, 
 DB.serviceOrdersRepo.cancel(scarceOrder.id, 'Prueba completada', admin);
 
 const report = DB.serviceOrdersRepo.report();
-ok(report.delivered === 1 && report.warranty_returns === 1 && report.by_technician.length >= 1, 'genera indicadores operativos del taller');
+ok(report.delivered === 1 && report.warranty_returns === 1 && report.by_technician.length >= 1
+  && Number(report.profitability.gross_profit) > 0 && Number(report.deposits.received) === 1000,
+  'genera indicadores operativos, anticipos y rentabilidad del taller');
 
 const serviceUi = fs.readFileSync(path.join(__dirname, '../src/js/servicio.js'), 'utf8');
 ok(!serviceUi.includes("prompt('Motivo") && serviceUi.includes("askText('Indica el motivo"), 'la cancelación usa el diálogo compatible de VELO');
 ok(serviceUi.includes('function svcOpenDelivery(order)') && !serviceUi.includes('function svcOpenDelivery(id, save)'), 'la entrega no depende de campos destruidos del modal anterior');
 ok(serviceUi.includes('svcPrintDocument') && serviceUi.includes('svcShareStatus'), 'expone documento operativo y aviso por WhatsApp');
+ok(serviceUi.includes('function svcReceiptCheck') && serviceUi.includes("checked?'✓':''")
+  && serviceUi.includes('SVC_INTAKE_PHYSICAL.map') && serviceUi.includes('SVC_INTAKE_AUTHORIZATIONS.map'),
+  'el recibo imprime casillas visibles y marca únicamente las opciones seleccionadas');
+ok(serviceUi.includes("if(!document.getElementById('svc-consent').checked)"),
+  'la recepción exige autorización de diagnóstico antes de crear la orden');
 ok(serviceUi.includes('svcOpenPortal') && serviceUi.includes('svcOpenPortalConfig')
   && serviceUi.includes('svcQrSvg'), 'expone portal, QR y configuración Tailscale desde el taller');
 

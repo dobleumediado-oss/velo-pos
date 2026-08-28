@@ -47,6 +47,11 @@ ok(!!u1 && !!u2 && !!u3, 'se registran 3 equipos por IMEI');
 ok(repo.effectiveStock(phoneId) === 3, 'equipo serializado: effectiveStock = 3 unidades en stock');
 ok(repo.countInStock(phoneId) === 3, 'countInStock = 3');
 ok(repo.listForProduct(phoneId).length === 3, 'listForProduct devuelve 3');
+let phoneView = DB.productsRepo.getAll().find(product => product.id === phoneId);
+ok(Number(phoneView.effective_stock) === 3
+  && Math.abs(Number(phoneView.effective_cost) - (32500 / 3)) < 0.01
+  && Number(phoneView.effective_inventory_value) === 32500,
+  'listado de inventario usa cantidad, costo promedio y valor de las unidades por IMEI');
 
 // 4) Buscar por IMEI (y por serial vacío no rompe).
 const found = repo.findByImei('350000000000002');
@@ -65,6 +70,10 @@ const saleId = db.prepare('INSERT INTO sales(subtotal,total) VALUES(0,0)').run()
 const sold = repo.markSold(u2, saleId);
 ok(sold === 1, 'markSold marca la unidad como vendida');
 ok(repo.effectiveStock(phoneId) === 2, 'tras vender, effectiveStock = 2');
+phoneView = DB.productsRepo.getAll().find(product => product.id === phoneId);
+ok(Number(phoneView.effective_stock) === 2 && Number(phoneView.effective_cost) === 10000
+  && Number(phoneView.effective_inventory_value) === 20000,
+  'al vender un IMEI, el listado recalcula existencia y valor sin usar products.stock');
 const ov = repo.overview(phoneId);
 ok(ov.byStatus.vendido === 1 && ov.byStatus.en_stock === 2, 'overview: 1 vendido, 2 en stock');
 

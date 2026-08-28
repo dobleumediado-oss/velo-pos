@@ -87,6 +87,7 @@ function _posSetupCartResize(wrap, side, handle) {
 }
 
 function posConduceCanAccess() {
+  if (window._vertical?.id === 'tech') return false;
   if (!window.api?.conduce?.create) return false;
   if (typeof window.veloCanAccessModule === 'function') {
     return window.veloCanAccessModule('conduce', user);
@@ -447,6 +448,129 @@ function renderPOSGrid() {
 }
 
 // ── Tabs de facturas ──────────────────────────
+function posDocumentLabel(inv, lowercase = false) {
+  const labels = { factura:'Factura', cotizacion:'Cotización', conduce:'Conduce' };
+  const label = labels[inv?.itype] || 'Factura';
+  return lowercase ? label.toLowerCase() : label;
+}
+
+function posRegisteredCustomerName(inv) {
+  return Number(inv?.cliId) !== 1 && String(inv?.cliName || '').trim()
+    ? String(inv.cliName).trim() : '';
+}
+
+function posTicketTitle(inv, { tab = false } = {}) {
+  const customerName = posRegisteredCustomerName(inv);
+  if (customerName) return tab ? customerName : `${posDocumentLabel(inv)} · ${customerName}`;
+  return `${posDocumentLabel(inv)} #${inv?.id || 1}`;
+}
+
+function posSaveCurrentDraft(closeAfter = false) {
+  const inv = currentInv();
+  const row = posSaveDraft(inv);
+  if (!row) { toast('Agrega artículos o cargos antes de guardar el borrador', 'w'); return false; }
+  toast(`✓ Borrador de ${posDocumentLabel(inv, true)} guardado`);
+  if (closeAfter) {
+    inv.draftId = '';
+    removeInvoice(activeInvoice);
+    renderInvTabs(); renderCart(); renderPOSGrid(); renderPOSCustomerSelection();
+  } else {
+    renderInvTabs(); renderCart();
+  }
+  return true;
+}
+
+function posCloseTabNow(idx) {
+  removeInvoice(idx);
+  renderInvTabs();
+  renderCart();
+  renderPOSGrid();
+  renderPOSCustomerSelection();
+}
+
+function posCloseTabWithoutSaving(idx, deleteSaved = false) {
+  const inv = invoices[idx];
+  if (deleteSaved && inv?.draftId) posDeleteDraft(inv.draftId);
+  closeModal();
+  posCloseTabNow(idx);
+}
+
+function posPromptCloseTab(idx) {
+  const inv = invoices[idx];
+  if (!inv || (!(inv.cart || []).length && !(inv.charges || []).length)) {
+    posCloseTabNow(idx);
+    return;
+  }
+  const saved = !!inv.draftId;
+  openModal(`
+    <div class="modal-title">¿Qué deseas hacer con este ${posDocumentLabel(inv, true)}?</div>
+    <div class="modal-sub">${posEscHtml(posTicketTitle(inv))} · ${(inv.cart || []).length} artículo(s) · ${fmt(calcTotals(inv).total)}</div>
+    <div class="alrt a" style="margin-top:14px"><div class="alrt-dot a"></div><div><div class="alrt-title">Todavía no es un documento confirmado</div><div class="alrt-sub">Guardarlo como borrador no cobra, no mueve inventario y no genera numeración fiscal.</div></div></div>
+    <div class="modal-foot" style="justify-content:space-between;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost" onclick="closeModal()">Cancelar</button><div class="flex" style="gap:8px;flex-wrap:wrap">${saved ? `<button class="btn btn-out" style="color:var(--red)" onclick="posCloseTabWithoutSaving(${idx},true)">Eliminar borrador y cerrar</button><button class="btn btn-out" onclick="posCloseTabWithoutSaving(${idx},false)">Cerrar sin actualizar</button>` : `<button class="btn btn-out" style="color:var(--red)" onclick="posCloseTabWithoutSaving(${idx},false)">Cerrar sin guardar</button>`}<button class="btn btn-dark" onclick="closeModal();activeInvoice=${idx};posSaveCurrentDraft(true)">${saved ? 'Actualizar borrador y cerrar' : 'Guardar borrador y cerrar'}</button></div></div>`);
+}
+
+function posOpenDrafts() {
+  const conduceAvailable = posConduceCanAccess();
+  const drafts = posListDrafts().filter(row => conduceAvailable || row?.invoice?.itype !== 'conduce');
+  const documentScope = conduceAvailable
+    ? 'Facturas, cotizaciones y conduces'
+    : 'Facturas y cotizaciones';
+  openModal(`
+    <div class="modal-title">Borradores del Punto de Venta</div>
+    <div class="modal-sub">${documentScope} guardados en este equipo para continuar después.</div>
+    <div style="margin-top:14px;max-height:55vh;overflow:auto">${drafts.length ? drafts.map(row => {
+      const inv = row.invoice || {};
+      const total = calcTotals(inv).total;
+      const customer = posRegisteredCustomerName(inv) || inv.cliName || 'Consumidor Final';
+      const date = new Date(Number(row.updatedAt || row.createdAt || Date.now())).toLocaleString('es-DO',{dateStyle:'short',timeStyle:'short'});
+      return `<div class="card" style="padding:11px 12px;margin-bottom:8px"><div class="fxb" style="gap:10px"><div style="min-width:0"><div style="font-weight:700;font-size:12px">${posEscHtml(posDocumentLabel(inv))} · ${posEscHtml(customer)}</div><div style="font-size:10.5px;color:var(--muted2);margin-top:3px">${(inv.cart||[]).length} artículo(s) · ${fmt(total)} · Actualizado ${posEscHtml(date)}</div></div><div class="flex" style="gap:6px;flex-shrink:0"><button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="posRemoveSavedDraft('${row.id}')">Eliminar</button><button class="btn btn-dark btn-sm" onclick="posRestoreDraft('${row.id}')">Abrir</button></div></div></div>`;
+    }).join('') : '<div class="cart-empty" style="min-height:180px"><p>No hay borradores guardados</p><span style="font-size:11px;color:var(--muted2)">Usa “Guardar borrador” desde el carrito.</span></div>'}</div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>`,'modal-lg');
+}
+
+function posRestoreDraft(draftId) {
+  const row = posListDrafts().find(item => item.id === String(draftId));
+  if (!row) { toast('El borrador ya no está disponible', 'w'); posOpenDrafts(); return; }
+  if (row?.invoice?.itype === 'conduce' && !posConduceCanAccess()) {
+    toast('Los conduces no están disponibles en esta edición', 'w');
+    return;
+  }
+  const alreadyOpen = invoices.findIndex(inv => inv.draftId === row.id);
+  if (alreadyOpen >= 0) {
+    closeModal(); posSetTab(alreadyOpen); toast('Ese borrador ya estaba abierto'); return;
+  }
+  const current = currentInv();
+  const replaceCurrent = !(current.cart || []).length && !(current.charges || []).length;
+  if (!replaceCurrent && invoices.length >= 20) { toast('Cierra una pestaña antes de abrir otro borrador', 'w'); return; }
+  const targetId = replaceCurrent ? current.id : invoices.length + 1;
+  const restored = _posWorkspaceCleanInvoice(row.invoice, targetId);
+  restored.draftId = row.id;
+  restored.draftCreatedAt = Number(row.createdAt) || Date.now();
+  restored.draftSavedAt = Number(row.updatedAt) || Date.now();
+  if (replaceCurrent) invoices[activeInvoice] = restored;
+  else { invoices.push(restored); activeInvoice = invoices.length - 1; renumberInvoices(); }
+  closeModal();
+  renderInvTabs(); renderCart(); renderPOSGrid(); renderPOSCustomerSelection();
+  toast(`✓ Borrador de ${posDocumentLabel(restored, true)} abierto`);
+}
+
+function posRemoveSavedDraft(draftId) {
+  if (!posDeleteDraft(draftId)) return;
+  invoices.forEach(inv => { if (inv.draftId === draftId) { inv.draftId=''; inv.draftSavedAt=0; } });
+  toast('Borrador eliminado');
+  posOpenDrafts();
+  renderInvTabs();
+}
+
+function posDiscardLinkedDraft(inv) {
+  if (!inv?.draftId) return false;
+  const deleted = posDeleteDraft(inv.draftId);
+  inv.draftId = '';
+  inv.draftCreatedAt = 0;
+  inv.draftSavedAt = 0;
+  return deleted;
+}
+
 function renderInvTabs() {
   const wrap = document.getElementById('inv-tabs');
   if (!wrap) return;
@@ -456,8 +580,9 @@ function renderInvTabs() {
     const total = calcTotals(inv).total;
     const tab   = document.createElement('div');
     tab.className = `inv-tab ${idx === activeInvoice ? 'on' : ''}`;
+    tab.title = `${posDocumentLabel(inv)} #${inv.id}${posRegisteredCustomerName(inv) ? ` · ${posRegisteredCustomerName(inv)}` : ''}${inv.draftId ? ' · Borrador guardado' : ''}`;
     tab.innerHTML = `
-      <span>#${inv.id}${total > 0 ? ' ' + fmt(total) : ''}</span>
+      <span>${posEscHtml(posTicketTitle(inv,{tab:true}))}${total > 0 ? ' ' + fmt(total) : ''}${inv.draftId ? ' · ●' : ''}</span>
       <span class="inv-tab-close"
             onclick="event.stopPropagation();posRemoveTab(${idx})">×</span>`;
     tab.addEventListener('click', () => posSetTab(idx));
@@ -470,6 +595,13 @@ function renderInvTabs() {
   addBtn.textContent = '+';
   addBtn.onclick     = () => { addInvoice(); renderInvTabs(); renderCart(); renderPOSGrid(); renderPOSCustomerSelection(); };
   wrap.appendChild(addBtn);
+  const drafts = posListDrafts();
+  const draftBtn = document.createElement('button');
+  draftBtn.className = 'inv-tab-add';
+  draftBtn.title = `${drafts.length} borrador(es) guardado(s)`;
+  draftBtn.textContent = drafts.length ? `B${drafts.length}` : 'B';
+  draftBtn.onclick = posOpenDrafts;
+  wrap.appendChild(draftBtn);
 }
 
 function posSetTab(idx) {
@@ -481,11 +613,7 @@ function posSetTab(idx) {
 }
 
 function posRemoveTab(idx) {
-  removeInvoice(idx);
-  renderInvTabs();
-  renderCart();
-  renderPOSGrid();
-  renderPOSCustomerSelection();
+  posPromptCloseTab(idx);
 }
 
 // ── Agregar al carrito ────────────────────────
@@ -684,12 +812,13 @@ function renderCart() {
     ? ['factura']
     : ['factura', 'cotizacion', ...(posConduceCanAccess() ? ['conduce'] : [])];
   const documentLabel = documentLabels[inv.itype] || 'Factura';
+  const draftCount = posListDrafts().length;
 
   let html = `
     <div class="cart-hdr">
       <div class="fxb">
         <div>
-          <span style="font-weight:700;font-size:13px">${checkoutLocked ? `Orden ${posEscHtml(inv.checkoutOrderNumber || '')}` : `${documentLabel} #${inv.id}`}</span>
+          <span style="font-weight:700;font-size:13px">${checkoutLocked ? `Orden ${posEscHtml(inv.checkoutOrderNumber || '')}` : posEscHtml(posTicketTitle(inv))}</span>
           <span style="font-size:10px;color:var(--muted);margin-left:8px">
             ${inv.cart.length} artículo${inv.cart.length !== 1 ? 's' : ''}
           </span>
@@ -705,6 +834,10 @@ function renderCart() {
                   onclick="posSetType('${t}')">
             ${documentLabels[t]}
           </button>`).join('')}
+      </div>
+      <div class="flex" style="margin-top:7px;gap:5px;flex-wrap:wrap">
+        <button class="btn btn-out btn-sm" style="font-size:10px;padding:3px 9px" onclick="posSaveCurrentDraft(false)">Guardar borrador</button>
+        <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:3px 9px" onclick="posOpenDrafts()">Borradores${draftCount ? ` (${draftCount})` : ''}</button>
       </div>`}
       ${inv.replacesSaleId ? `
         <div style="margin-top:8px;padding:7px 9px;border:1px solid var(--amber-line);
@@ -937,6 +1070,7 @@ function posSetType(t) {
     return;
   }
   currentInv().itype = t;
+  renderInvTabs();
   renderCart();
 }
 
@@ -1036,6 +1170,7 @@ async function posCreateConduceFromCart() {
       throw new Error(result?.error || 'No se pudo guardar el conduce');
     }
     toast(`✓ Conduce ${result.data.number} guardado en Conduces`);
+    posDiscardLinkedDraft(inv);
     removeInvoice(activeInvoice);
     renderInvTabs();
     renderCart();
@@ -2004,6 +2139,8 @@ function pvFilterCustomers(query, showAll = false) {
       inv.cliCedula = '';
       const rnc = document.getElementById('pv-customer-rnc');
       if (rnc) rnc.value = '';
+      renderInvTabs();
+      renderCart();
     }
     pvUpdateCustomerState(null, inv.cliName);
   } else {
@@ -2064,6 +2201,8 @@ function pvSelectCustomer(id, contactId = null) {
     if (rncInput) rncInput.value = '';
     pvUpdateCustomerState();
     dd?.classList.remove('show');
+    renderInvTabs();
+    renderCart();
     return;
   }
 
@@ -2084,6 +2223,8 @@ function pvSelectCustomer(id, contactId = null) {
   if (rncInput) rncInput.value = customer.rnc || '';
   pvUpdateCustomerState(customer, '', contact);
   dd?.classList.remove('show');
+  renderInvTabs();
+  renderCart();
 }
 
 async function openCheckoutSendModal(inv) {
@@ -2241,6 +2382,7 @@ async function posSubmitCheckoutOrder() {
     if (typeof buildSidebar === 'function') buildSidebar();
     toast(`✓ ${res.data.number} enviada a caja — ${fmt(res.data.total)}`);
     await reloadProducts().catch(() => {});
+    posDiscardLinkedDraft(inv);
     removeInvoice(activeInvoice);
     renderPOS(document.getElementById('page'));
   } catch (e) {
@@ -2671,7 +2813,7 @@ function openCobroModal(inv) {
     <div class="card" style="background:var(--blue-bg);border-color:var(--blue-line);margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:center">
         <div><div style="font-weight:700;font-size:12px;color:var(--blue)">Equipo usado como parte de pago</div>
-          <div style="font-size:11px;color:var(--muted2)">${inv.tradeIn ? `${posEscHtml(inv.tradeIn.productName || 'Equipo usado')} · ${posEscHtml(inv.tradeIn.imei || inv.tradeIn.serial || '')}` : 'Recibe un usado y aplica su valor sin tratarlo como descuento.'}</div></div>
+          <div style="font-size:11px;color:var(--muted2)">${inv.tradeIn ? `${posEscHtml(inv.tradeIn.productName || 'Equipo usado')} · ${posEscHtml(inv.tradeIn.imei || inv.tradeIn.serial || '')}${inv.tradeIn.sellerName ? ` · Entrega: ${posEscHtml(inv.tradeIn.sellerName)} (ocasional)` : ''}` : 'Recibe un usado y aplica su valor sin tratarlo como descuento.'}</div></div>
         <button class="btn btn-out btn-sm" onclick="cbrOpenTradeIn()">${inv.tradeIn ? 'Editar' : '+ Recibir usado'}</button>
       </div>
       ${inv.tradeIn ? `<div style="display:flex;justify-content:space-between;margin-top:9px;padding-top:8px;border-top:1px solid var(--blue-line);font-size:12px"><span>Valor reconocido</span><strong>−${fmt(tradeInAmount)}</strong></div>` : ''}
@@ -2931,9 +3073,9 @@ function openCobroModal(inv) {
         ? `<div class="tr"><span>ITBIS (${CFG.itbis}%)</span><span id="cbr-summary-itbis">${fmt(itbis)}</span></div>` : ''}
       ${Number(calcTotals(inv).chargesTotal) > 0
         ? `<div class="tr"><span>Cargos adicionales</span><span id="cbr-summary-charges">${fmt(calcTotals(inv).chargesTotal)}</span></div>` : ''}
-      ${tradeInAmount > 0 ? `<div class="tr" style="color:var(--blue)"><span>Equipo usado recibido</span><span>−${fmt(tradeInAmount)}</span></div>` : ''}
+      ${tradeInAmount > 0 ? `<div class="tr" style="color:var(--blue)"><span>Parte de pago: ${posEscHtml(inv.tradeIn?.productName || 'equipo usado')}</span><span>−${fmt(tradeInAmount)}</span></div>` : ''}
       <div class="tr grand"><span id="cbr-total-label">TOTAL</span><span id="cbr-summary-total">${fmt(total)}</span></div>
-      ${tradeInAmount > 0 ? `<div class="tr grand" style="color:var(--green)"><span>A COBRAR</span><span>${fmt(amountDue)}</span></div>` : ''}
+      ${tradeInAmount > 0 ? `<div class="tr grand" style="color:var(--green)"><span>RESTANTE A PAGAR</span><span>${fmt(amountDue)}</span></div><div style="font-size:10.5px;color:var(--muted2);padding-top:7px;text-align:right">Motivo: se restaron ${fmt(tradeInAmount)} por ${posEscHtml(inv.tradeIn?.productName || 'el equipo usado')} · ${posEscHtml(inv.tradeIn?.imei || inv.tradeIn?.serial || '')}</div>` : ''}
       <div id="cbr-summary-base" style="display:none;text-align:right;font-size:10.5px;color:var(--muted);padding-top:5px"></div>
     </div>
 
@@ -3262,10 +3404,173 @@ function cbrRefreshTotals(oldTotal = null) {
   cbrUpdatePaymentCurrency();
 }
 
+function cbrCaptureCustomerDraft(inv = currentInv()) {
+  if (!inv) return inv;
+  const name = document.getElementById('cbr-name')?.value?.trim();
+  const cedula = document.getElementById('cbr-cedula')?.value?.trim();
+  const phone = document.getElementById('cbr-phone')?.value?.trim();
+  const phoneType = document.getElementById('cbr-phone-type')?.value;
+  if (name != null) inv.cliName = name || 'Consumidor Final';
+  if (cedula != null) inv.cliCedula = cedula;
+  if (phone != null) inv.cliPhone = phone;
+  if (phoneType) inv.cliPhoneType = phoneType;
+  return inv;
+}
+
+function cbrOpenQuickCustomerForTradeIn(inv = currentInv()) {
+  cbrCaptureCustomerDraft(inv);
+  const name = searchNorm(inv.cliName) === 'consumidor final' ? '' : (inv.cliName || '');
+  openModal(`
+    <div class="modal-title">Identificar a quien entrega el usado</div>
+    <div class="modal-sub">Completa los datos de esta operación. Registrar a la persona como cliente es opcional.</div>
+    <div class="alrt b" style="margin-top:14px;margin-bottom:14px">
+      <div class="alrt-dot b"></div>
+      <div>
+        <div class="alrt-title">Identidad solo para la procedencia del equipo</div>
+        <div class="alrt-sub">Puedes guardarla únicamente con esta venta y el IMEI, sin agregar la persona al listado de Clientes.</div>
+      </div>
+    </div>
+    <div class="fg"><label class="lbl">Nombre completo *</label><input class="inp" id="trade-cli-name" value="${posEscHtml(name)}" autocomplete="off" placeholder="Nombre y apellidos"></div>
+    <div class="fg"><label class="lbl">Cédula / pasaporte *</label><input class="inp" id="trade-cli-doc" value="${posEscHtml(inv.cliCedula || '')}" placeholder="Documento de identidad"><div style="font-size:10.5px;color:var(--muted2);margin-top:4px">Estos datos quedarán en la procedencia del equipo y no crearán una cuenta por cobrar.</div></div>
+    <div class="g2">
+      <div class="fg"><label class="lbl">Tipo de número</label><select class="inp" id="trade-cli-phone-type"><option value="telefono" ${inv.cliPhoneType==='telefono'?'selected':''}>Teléfono</option><option value="celular" ${inv.cliPhoneType==='celular'?'selected':''}>Celular</option><option value="flota" ${inv.cliPhoneType==='flota'?'selected':''}>Flota</option></select></div>
+      <div class="fg"><label class="lbl">Número de contacto *</label><input class="inp" id="trade-cli-phone" type="tel" maxlength="40" value="${posEscHtml(inv.cliPhone || '')}" placeholder="809-555-0000"></div>
+    </div>
+    <div class="fg"><label class="lbl">Dirección *</label><input class="inp" id="trade-cli-address" maxlength="300" value="${posEscHtml(inv.tradeInSeller?.address || '')}" placeholder="Sector, calle, número y ciudad"></div>
+    <div class="fg"><label class="lbl">Correo electrónico <span style="font-weight:400;color:var(--muted)">(opcional)</span></label><input class="inp" id="trade-cli-email" type="email" maxlength="160" value="${posEscHtml(inv.tradeInSeller?.email || '')}" placeholder="correo@ejemplo.com"></div>
+    <div class="card" style="padding:10px 12px;background:var(--surface2);margin-bottom:14px">
+      <label style="display:flex;gap:9px;align-items:flex-start;font-size:12px;margin-bottom:9px"><input type="checkbox" id="trade-cli-owner" ${inv.tradeInSeller?.ownershipDeclared?'checked':''} style="margin-top:2px"><span>Declaro que soy propietario legítimo del dispositivo entregado.</span></label>
+      <label style="display:flex;gap:9px;align-items:flex-start;font-size:12px"><input type="checkbox" id="trade-cli-origin" ${inv.tradeInSeller?.lawfulOriginDeclared?'checked':''} style="margin-top:2px"><span>Declaro que el equipo tiene procedencia lícita y no está reportado, bloqueado, financiado ni reclamado por terceros.</span></label>
+    </div>
+    <div class="modal-foot" style="justify-content:space-between;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost" type="button" onclick="modalBack(true)">Volver</button><div class="flex" style="gap:8px;flex-wrap:wrap"><button class="btn btn-out" type="button" id="trade-cli-register" onclick="cbrSaveQuickCustomerForTradeIn()">Registrar como cliente</button><button class="btn btn-dark" type="button" id="trade-cli-once" onclick="cbrUseOneTimeSellerForTradeIn()">Usar solo en esta operación</button></div></div>`);
+  setTimeout(() => document.getElementById(name ? 'trade-cli-doc' : 'trade-cli-name')?.focus(), 60);
+}
+
+function cbrReadTradeInSellerDraft() {
+  const nameEl = document.getElementById('trade-cli-name');
+  const docEl = document.getElementById('trade-cli-doc');
+  const phoneEl = document.getElementById('trade-cli-phone');
+  const typeEl = document.getElementById('trade-cli-phone-type');
+  const addressEl = document.getElementById('trade-cli-address');
+  const emailEl = document.getElementById('trade-cli-email');
+  const ownerEl = document.getElementById('trade-cli-owner');
+  const originEl = document.getElementById('trade-cli-origin');
+  const seller = {
+    name: nameEl?.value?.replace(/\s+/g, ' ').trim() || '',
+    document: docEl?.value?.trim() || '',
+    phone: phoneEl?.value?.trim() || '',
+    phoneType: ['telefono','celular','flota'].includes(typeEl?.value) ? typeEl.value : 'celular',
+    address: addressEl?.value?.replace(/\s+/g, ' ').trim() || '',
+    email: emailEl?.value?.trim().toLowerCase() || '',
+    ownershipDeclared: !!ownerEl?.checked,
+    lawfulOriginDeclared: !!originEl?.checked,
+  };
+  if (!seller.name) { toast('Escribe el nombre completo de la persona', 'w'); nameEl?.focus(); return null; }
+  if (seller.document.replace(/[^a-zA-Z0-9]/g, '').length < 5) { toast('Escribe una cédula, pasaporte o documento válido', 'w'); docEl?.focus(); return null; }
+  if (digitsOf(seller.phone).length < 7) { toast('Escribe un teléfono válido', 'w'); phoneEl?.focus(); return null; }
+  if (!seller.address) { toast('Escribe la dirección de la persona', 'w'); addressEl?.focus(); return null; }
+  if (seller.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(seller.email)) { toast('Revisa el correo electrónico', 'w'); emailEl?.focus(); return null; }
+  if (!seller.ownershipDeclared) { toast('Confirma que la persona es propietaria legítima del equipo', 'w'); ownerEl?.focus(); return null; }
+  if (!seller.lawfulOriginDeclared) { toast('Confirma la declaración de procedencia lícita', 'w'); originEl?.focus(); return null; }
+  return seller;
+}
+
+function cbrUseOneTimeSellerForTradeIn() {
+  const seller = cbrReadTradeInSellerDraft();
+  if (!seller) return;
+  const inv = currentInv();
+  inv.tradeInSeller = seller;
+  inv.cliId = 1;
+  inv.cliName = seller.name;
+  inv.cliCedula = seller.document;
+  inv.cliPhone = seller.phone;
+  inv.cliPhoneType = seller.phoneType;
+  const restored = modalBack(true);
+  if (restored !== true) openCobroModal(inv);
+  toast('✓ Identidad guardada solo para esta operación');
+  cbrOpenTradeIn();
+}
+
+function cbrContinueTradeInWithCustomer(customerId, message) {
+  const inv = currentInv();
+  inv.tradeInSeller = null;
+  const restored = modalBack(true);
+  if (restored !== true) openCobroModal(inv);
+  cbrSelectCli(Number(customerId));
+  if (message) toast(message);
+  cbrOpenTradeIn();
+}
+
+async function cbrSaveQuickCustomerForTradeIn() {
+  const inv = currentInv();
+  const seller = cbrReadTradeInSellerDraft();
+  if (!seller) return;
+  const button = document.getElementById('trade-cli-register');
+  const name = seller.name;
+  const rnc = seller.document;
+  const docKey = rnc.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+  const phone = seller.phone;
+  const phoneType = seller.phoneType;
+
+  const existing = (DB.customers || []).find(customer =>
+    customer?.active !== 0 && Number(customer.id) !== 1 && docKey &&
+    String(customer.rnc || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase() === docKey
+  );
+  if (existing) {
+    cbrContinueTradeInWithCustomer(existing.id, `✓ ${existing.name} ya estaba registrado y fue seleccionado`);
+    return;
+  }
+
+  if (button) { button.disabled = true; button.textContent = 'Registrando…'; }
+  try {
+    const result = await window.api.customers.create({
+      data: {
+        name,
+        customer_type: 'person',
+        rnc,
+        phone,
+        phones: [{ phone_type: phoneType, phone, is_primary: true }],
+        address: seller.address,
+        email: seller.email,
+        preferred_price_mode: 'retail',
+        credit_limit: 0,
+        credit_days: 30,
+      },
+      requestUserId: user.id,
+    });
+    if (!result?.ok) throw new Error(result?.error || 'No se pudo registrar el cliente');
+    await reloadCustomers();
+    inv.cliName = name;
+    inv.cliCedula = rnc;
+    inv.cliPhone = phone;
+    inv.cliPhoneType = phoneType;
+    cbrContinueTradeInWithCustomer(result.id, `✓ ${name} fue registrado`);
+  } catch (error) {
+    toast(error?.message || 'No se pudo registrar el cliente', 'err');
+    if (button) { button.disabled = false; button.textContent = 'Registrar como cliente'; }
+  }
+}
+
+function cbrUpdateTradeInPreview() {
+  const inv = currentInv();
+  const total = calcTotals(inv).total;
+  const allowance = Math.max(0, Number(document.getElementById('trade-allowance')?.value) || 0);
+  const remaining = Math.max(0, total - Math.min(total, allowance));
+  const imei = document.getElementById('trade-imei')?.value?.trim() || 'IMEI pendiente';
+  const product = (DB.products || []).find(row => Number(row.id) === Number(document.getElementById('trade-product')?.value));
+  const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+  setText('trade-preview-total', fmt(total));
+  setText('trade-preview-allowance', `−${fmt(allowance)}`);
+  setText('trade-preview-remaining', fmt(remaining));
+  setText('trade-preview-reason', `Parte de pago por ${product?.name || 'equipo usado'} · ${imei}`);
+}
+
 function cbrOpenTradeIn() {
   const inv = currentInv();
-  if (!(inv.cliId && inv.cliId !== 1)) {
-    toast('Selecciona primero un cliente registrado para recibir el usado', 'w');
+  const hasRegisteredCustomer = inv.cliId && inv.cliId !== 1;
+  const hasOneTimeSeller = inv.tradeInSeller?.name && inv.tradeInSeller?.document && inv.tradeInSeller?.phone;
+  if (!hasRegisteredCustomer && !hasOneTimeSeller) {
+    cbrOpenQuickCustomerForTradeIn(inv);
     return;
   }
   const products = (DB.products || []).filter(p => p.active !== 0 && p.serialized);
@@ -3276,13 +3581,17 @@ function cbrOpenTradeIn() {
   const cur = inv.tradeIn || {};
   openModal(`
     <div class="modal-title">Recibir equipo usado</div>
-    <div class="modal-sub">El valor reconocido entra como inventario y reduce el saldo a cobrar.</div>
-    <div class="fg" style="margin-top:14px"><label class="lbl">Modelo que entrará al inventario *</label><select class="inp" id="trade-product">${products.map(p=>`<option value="${p.id}" ${Number(cur.productId)===Number(p.id)?'selected':''}>${posEscHtml(p.name)} · ${posEscHtml(p.code||'')}</option>`).join('')}</select></div>
-    <div class="g2"><div class="fg"><label class="lbl">IMEI / Serial *</label><input class="inp" id="trade-imei" value="${posEscHtml(cur.imei||cur.serial||'')}" data-uppercase="off"></div><div class="fg"><label class="lbl">Valor reconocido (RD$) *</label><input class="inp" id="trade-allowance" type="number" min="0" value="${Number(cur.allowance)||''}"></div></div>
+    <div class="modal-sub">El valor reconocido entra como inventario y reduce el saldo a cobrar.${!hasRegisteredCustomer ? ` · Entrega: ${posEscHtml(inv.tradeInSeller.name)} (solo esta operación)` : ''}</div>
+    ${!hasRegisteredCustomer ? `<div class="card" style="padding:11px 12px;margin-top:12px;background:var(--surface2)"><div style="font-weight:700;font-size:12px">Persona que entrega</div><div style="font-size:12px;margin-top:4px">${posEscHtml(inv.tradeInSeller.name)} · ${posEscHtml(inv.tradeInSeller.document)}</div><div style="font-size:11px;color:var(--muted2);margin-top:2px">${posEscHtml(inv.tradeInSeller.phone)} · ${posEscHtml(inv.tradeInSeller.address)}</div></div>` : ''}
+    <div class="fg" style="margin-top:14px"><label class="lbl">Modelo que entrará al inventario *</label><select class="inp" id="trade-product" onchange="cbrUpdateTradeInPreview()">${products.map(p=>`<option value="${p.id}" ${Number(cur.productId)===Number(p.id)?'selected':''}>${posEscHtml(p.name)} · ${posEscHtml(p.code||'')}</option>`).join('')}</select></div>
+    <div class="g2"><div class="fg"><label class="lbl">IMEI / Serial *</label><input class="inp" id="trade-imei" value="${posEscHtml(cur.imei||cur.serial||'')}" data-uppercase="off" oninput="cbrUpdateTradeInPreview()"></div><div class="fg"><label class="lbl">Valor reconocido (RD$) *</label><input class="inp" id="trade-allowance" type="number" min="0" value="${Number(cur.allowance)||''}" oninput="cbrUpdateTradeInPreview()"></div></div>
     <div class="g2"><div class="fg"><label class="lbl">Capacidad</label><input class="inp" id="trade-capacity" value="${posEscHtml(cur.capacity||'')}" placeholder="128GB"></div><div class="fg"><label class="lbl">Color</label><input class="inp" id="trade-color" value="${posEscHtml(cur.color||'')}" placeholder="Negro"></div></div>
     <div class="fg"><label class="lbl">Notas de evaluación</label><input class="inp" id="trade-notes" value="${posEscHtml(cur.notes||'')}" placeholder="Estado físico, batería, accesorios…"></div>
+    ${hasRegisteredCustomer ? `<div class="card" style="padding:10px 12px;background:var(--surface2);margin-bottom:14px"><label style="display:flex;gap:9px;align-items:flex-start;font-size:12px;margin-bottom:9px"><input type="checkbox" id="trade-owner" ${cur.ownershipDeclared?'checked':''} style="margin-top:2px"><span>La persona declara que es propietaria legítima del dispositivo.</span></label><label style="display:flex;gap:9px;align-items:flex-start;font-size:12px"><input type="checkbox" id="trade-origin" ${cur.lawfulOriginDeclared?'checked':''} style="margin-top:2px"><span>La persona declara que el equipo tiene procedencia lícita y no está reportado, bloqueado, financiado ni reclamado por terceros.</span></label></div>` : ''}
+    <div class="card" style="background:var(--blue-bg);border-color:var(--blue-line);padding:12px;margin-bottom:14px"><div style="font-weight:700;font-size:12px;color:var(--blue);margin-bottom:7px">Cómo se aplicará a la factura</div><div class="tr"><span>Total de la factura</span><strong id="trade-preview-total"></strong></div><div class="tr"><span>Valor del equipo usado</span><strong id="trade-preview-allowance" style="color:var(--blue)"></strong></div><div class="tr grand" style="color:var(--green)"><span>Restante a pagar</span><strong id="trade-preview-remaining"></strong></div><div id="trade-preview-reason" style="font-size:10.5px;color:var(--muted2);padding-top:7px;border-top:1px solid var(--blue-line)"></div></div>
     <div class="modal-foot" style="justify-content:space-between"><div>${cur.productId?'<button class="btn btn-ghost" id="trade-remove" style="color:var(--red)">Quitar usado</button>':''}</div><div class="flex" style="gap:8px"><button class="btn btn-out" id="trade-back">Volver</button><button class="btn btn-dark" id="trade-save">Aplicar como pago</button></div></div>`);
   document.getElementById('trade-back').onclick=()=>openCobroModal(inv);
+  cbrUpdateTradeInPreview();
   document.getElementById('trade-remove')?.addEventListener('click',()=>{inv.tradeIn=null;openCobroModal(inv);});
   document.getElementById('trade-save').onclick=()=>{
     const productId=Number(document.getElementById('trade-product').value);const product=products.find(p=>Number(p.id)===productId);
@@ -3291,7 +3600,12 @@ function cbrOpenTradeIn() {
     if(!imei){toast('Ingresa el IMEI o serial del usado','w');return;}
     if(!allowance){toast('Ingresa el valor reconocido','w');return;}
     if(allowance>total+0.005){toast('El valor del usado no puede superar el total de la venta','err');return;}
-    inv.tradeIn={productId,productName:product?.name||'',imei,allowance,capacity:document.getElementById('trade-capacity').value.trim(),color:document.getElementById('trade-color').value.trim(),notes:document.getElementById('trade-notes').value.trim()};
+    const seller = hasRegisteredCustomer ? null : inv.tradeInSeller;
+    const ownershipDeclared = hasRegisteredCustomer ? !!document.getElementById('trade-owner')?.checked : !!seller?.ownershipDeclared;
+    const lawfulOriginDeclared = hasRegisteredCustomer ? !!document.getElementById('trade-origin')?.checked : !!seller?.lawfulOriginDeclared;
+    if(!ownershipDeclared){toast('Confirma la declaración de propiedad legítima','w');return;}
+    if(!lawfulOriginDeclared){toast('Confirma la declaración de procedencia lícita','w');return;}
+    inv.tradeIn={productId,productName:product?.name||'',imei,allowance,capacity:document.getElementById('trade-capacity').value.trim(),color:document.getElementById('trade-color').value.trim(),notes:document.getElementById('trade-notes').value.trim(),sellerName:seller?.name||'',sellerDocument:seller?.document||'',sellerPhone:seller?.phone||'',sellerPhoneType:seller?.phoneType||'telefono',sellerAddress:seller?.address||'',sellerEmail:seller?.email||'',ownershipDeclared,lawfulOriginDeclared};
     openCobroModal(inv);
   };
 }
@@ -3680,8 +3994,10 @@ async function finalizarVenta() {
   if (!inv.cart.length) return;
 
   const currentTotal = _posAmountDue(inv);
-  if (!isQuote && inv.tradeIn && !(inv.cliId && inv.cliId !== 1)) {
-    toast('El equipo usado debe quedar vinculado a un cliente registrado', 'w');
+  if (!isQuote && inv.tradeIn && !(inv.cliId && inv.cliId !== 1) &&
+      !(inv.tradeIn.sellerName && inv.tradeIn.sellerDocument && inv.tradeIn.sellerPhone &&
+        inv.tradeIn.sellerAddress && inv.tradeIn.ownershipDeclared && inv.tradeIn.lawfulOriginDeclared)) {
+    toast('Identifica a la persona que entrega el equipo usado', 'w');
     return;
   }
   if (!isQuote && pmeth === 'credito') {
@@ -3995,6 +4311,15 @@ async function finalizarVenta() {
       payment_reference: result.paymentReference || paymentReference,
       salesperson_id: result.salespersonId || salespersonId,
       salesperson_name: (DB.salespeople||[]).find(s=>Number(s.id)===Number(result.salespersonId||salespersonId))?.name || '',
+      trade_in_amount: result.tradeInAmount || savedSale?.trade_in_amount || 0,
+      trade_in_product_name: savedSale?.trade_in_product_name || inv.tradeIn?.productName || '',
+      trade_in_imei: savedSale?.trade_in_imei || inv.tradeIn?.imei || inv.tradeIn?.serial || '',
+      trade_in_seller_name: savedSale?.trade_in_seller_name || inv.tradeIn?.sellerName || customer.name || '',
+      trade_in_seller_document: savedSale?.trade_in_seller_document || inv.tradeIn?.sellerDocument || customer.rnc || '',
+      trade_in_seller_phone: savedSale?.trade_in_seller_phone || inv.tradeIn?.sellerPhone || customer.phone || '',
+      trade_in_seller_address: savedSale?.trade_in_seller_address || inv.tradeIn?.sellerAddress || customer.address || '',
+      trade_in_ownership_declared: savedSale?.trade_in_ownership_declared ?? (inv.tradeIn?.ownershipDeclared ? 1 : 0),
+      trade_in_lawful_origin_declared: savedSale?.trade_in_lawful_origin_declared ?? (inv.tradeIn?.lawfulOriginDeclared ? 1 : 0),
       notes: savedSale?.notes || saleNotes,
     };
 
@@ -4072,6 +4397,7 @@ async function finalizarVenta() {
 
     const returnToPreventa = !!inv.checkoutOrderId;
     // Limpiar factura y refrescar POS
+    posDiscardLinkedDraft(inv);
     removeInvoice(activeInvoice);
     renderPOS(document.getElementById('page'));
 
@@ -4091,6 +4417,7 @@ async function finalizarVenta() {
       : 'Error inesperado al procesar la venta', saleCommitted ? 'w' : 'err');
     if (saleCommitted) {
       closeModal();
+      posDiscardLinkedDraft(inv);
       removeInvoice(activeInvoice);
       renderPOS(document.getElementById('page'));
       return;

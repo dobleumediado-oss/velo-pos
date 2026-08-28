@@ -1724,10 +1724,12 @@ ipcMain.handle('productUnits:overview', async (_, { productId } = {}) => {
 ipcMain.handle('productUnits:findByImei', async (_, { imei } = {}) => {
   try {
     const unit = productUnitsRepo.findByImei(imei);
-    if (!unit) return { ok: true, found: false };
+    if (!unit) return { ok: true, found: false, data: null };
     const product = productsRepo && unit.product_id
       ? db.prepare('SELECT id,name,code FROM products WHERE id=?').get(unit.product_id) : null;
-    return { ok: true, found: true, unit, product };
+    // `data` es la forma canónica que consumen las vistas. Se conservan `unit`
+    // y `product` para compatibilidad con terminales de versiones anteriores.
+    return { ok: true, found: true, data: unit, unit, product };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
@@ -1835,7 +1837,10 @@ ipcMain.handle('serviceOrders:deliver', async (_, data = {}) => {
     const reqUser = _serviceUser(data.requestUserId);
     const method = String(data.payment?.method || 'efectivo');
     const session = cashRepo.getOpen(_reqTerminalId());
-    if (reqUser.role === 'cajero' && method !== 'credito' && !session) {
+    const pendingOrder = serviceOrdersRepo.getById(data.id);
+    const serviceTotal = (pendingOrder?.items || []).reduce((sum, item) => sum + Number(item.qty || 0) * Number(item.unit_price || 0), 0);
+    const remainingToCollect = Math.max(0, serviceTotal - Number(pendingOrder?.deposit_active || 0));
+    if (reqUser.role === 'cajero' && method !== 'credito' && remainingToCollect > 0.005 && !session) {
       return { ok: false, error: 'Debes abrir la caja antes de entregar y cobrar' };
     }
     const result = serviceOrdersRepo.deliver(data.id, data.payment || {}, reqUser, session);
@@ -1884,10 +1889,52 @@ ipcMain.handle('serviceOrders:saveQuality', async (_, data = {}) => {
     return { ok:true, data:serviceOrdersRepo.saveQuality(data.id, data.data || {}, reqUser) };
   } catch (e) { return { ok:false, error:e.message }; }
 });
+ipcMain.handle('serviceOrders:addDeposit', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    const session = cashRepo.getOpen(_reqTerminalId());
+    const order = serviceOrdersRepo.addDeposit(data.id, data.data || {}, reqUser, session);
+    const depositId = order.deposits?.[order.deposits.length - 1]?.id;
+    if (depositId) _acctHook(() => accountingRepo.generateServiceDepositEntry({ depositId, userId:reqUser.id }));
+    audit(reqUser.id, reqUser.name, 'servicio_anticipo', 'service_orders', order.id,
+      `${order.number} · RD$${Number(data.data?.amount || 0).toFixed(2)}`);
+    return { ok:true, data:order };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:refundDeposit', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    if (!['admin','superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede devolver anticipos');
+    const session = cashRepo.getOpen(_reqTerminalId());
+    const order = serviceOrdersRepo.refundDeposit(data.id, data.deposit_id, data.reason, reqUser, session);
+    _acctHook(() => accountingRepo.reverseSourceEntry('servicio_anticipo', data.deposit_id, reqUser.id, data.reason));
+    audit(reqUser.id, reqUser.name, 'servicio_anticipo_devuelto', 'service_orders', order.id, data.reason || '');
+    return { ok:true, data:order };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:registerPickupNotice', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    return { ok:true, data:serviceOrdersRepo.registerPickupNotice(data.id, data.data || {}, reqUser) };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:markAbandoned', async (_, data = {}) => {
+  try {
+    const reqUser = _serviceUser(data.requestUserId);
+    if (!['admin','superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede marcar equipos no reclamados');
+    return { ok:true, data:serviceOrdersRepo.markAbandoned(data.id, data.data || {}, reqUser) };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+ipcMain.handle('serviceOrders:identifierHistory', async (_, data = {}) => {
+  try {
+    _serviceUser(data.requestUserId);
+    return { ok:true, data:serviceOrdersRepo.identifierHistory(data.identifier) };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
 ipcMain.handle('serviceOrders:createWarrantyReturn', async (_, data = {}) => {
   try {
     const reqUser = _serviceUser(data.requestUserId);
-    const order = serviceOrdersRepo.createWarrantyReturn(data.id, data.problem, reqUser);
+    const order = serviceOrdersRepo.createWarrantyReturn(data.id, data.problem, reqUser, data.item_id);
     audit(reqUser.id, reqUser.name, 'servicio_reingreso_garantia', 'service_orders', order.id, order.number);
     return { ok:true, data:order };
   } catch (e) { return { ok:false, error:e.message }; }
@@ -2105,6 +2152,9 @@ ipcMain.handle('serviceOrders:getPortalConfig', async (_, data = {}) => {
       base_url:String(settingsRepo.get('service_public_base_url') || ''),
       port:portalPort,
       link_days:Number(settingsRepo.get('service_public_link_days')) || 365,
+      pickup_grace_days:Number(settingsRepo.get('service_pickup_grace_days')) || 7,
+      storage_fee_per_day:Number(settingsRepo.get('service_storage_fee_per_day')) || 0,
+      unclaimed_terms:String(settingsRepo.get('service_unclaimed_terms') || 'El cliente debe retirar el equipo dentro del plazo indicado. Cualquier cargo de almacenamiento o disposición posterior se aplicará únicamente conforme a los términos firmados y la normativa vigente.'),
       business_id:_servicePortalBusinessId(),
       can_manage:['admin','superadmin'].includes(reqUser.role),
       local_status:localStatus,
@@ -2136,9 +2186,15 @@ ipcMain.handle('serviceOrders:savePortalConfig', async (_, data = {}) => {
     }
     const baseUrl = submittedBaseUrl.replace(/\/+$/, '');
     const days = Math.max(1, Math.min(3650, Number.parseInt(data.link_days, 10) || 365));
+    const pickupGraceDays = Math.max(0, Math.min(3650, Number.parseInt(data.pickup_grace_days,10) || 0));
+    const storageFeePerDay = Math.max(0, Math.min(999999, Number(data.storage_fee_per_day) || 0));
+    const unclaimedTerms = String(data.unclaimed_terms || '').trim().slice(0,3000);
     settingsRepo.set('service_public_base_url', baseUrl);
     settingsRepo.set('service_public_link_days', String(days));
     settingsRepo.set('service_public_portal_enabled', data.enabled === false ? '0' : '1');
+    settingsRepo.set('service_pickup_grace_days', String(pickupGraceDays));
+    settingsRepo.set('service_storage_fee_per_day', String(storageFeePerDay));
+    settingsRepo.set('service_unclaimed_terms', unclaimedTerms);
     audit(reqUser.id, reqUser.name, 'servicio_portal_configurado', 'settings', 0, baseUrl || 'sin URL pública');
     return { ok:true, data:{ base_url:baseUrl,link_days:days,enabled:data.enabled !== false } };
   } catch (e) { return { ok:false, error:e.message }; }

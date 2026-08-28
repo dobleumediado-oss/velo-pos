@@ -834,25 +834,127 @@ async function abrirCompraParticular(){
   const descriptionField=document.getElementById('tpp-description')?.closest('.fg');
   descriptionField?.insertAdjacentHTML('beforebegin',`<div class="fg"><label class="lbl">Accesorios entregados</label><div style="display:flex;gap:14px;flex-wrap:wrap;padding:9px;border:1px solid var(--line);border-radius:8px"><label><input type="checkbox" class="tpp-accessory" value="CARGADOR"> Cargador</label><label><input type="checkbox" class="tpp-accessory" value="CABLE"> Cable</label><label><input type="checkbox" class="tpp-accessory" value="CAJA"> Caja</label><label><input type="checkbox" class="tpp-accessory" value="FUNDA"> Funda</label><input class="inp" id="tpp-accessory-other" placeholder="OTRO ACCESORIO" style="min-width:180px;flex:1"></div></div>`);
   document.getElementById('tpp-save').onclick=async event=>{
-    event.currentTarget.disabled=true;
+    const button=event.currentTarget;
+    if(button.disabled)return;
+    const field=id=>document.getElementById(id);
+    const requireValue=(id,message)=>{
+      const element=field(id);
+      if(String(element?.value||'').trim())return true;
+      if(element){element.style.outline='2px solid #dc2626';element.style.outlineOffset='1px';element.scrollIntoView({block:'center',behavior:'smooth'});element.focus();element.addEventListener('input',()=>{element.style.outline='';element.style.outlineOffset='';},{once:true});}
+      toast(message,'w');
+      return false;
+    };
+    const requiredFields=[
+      ['tpp-name','Escribe el nombre completo del vendedor'],
+      ['tpp-document','Escribe la cédula o pasaporte del vendedor'],
+      ['tpp-phone','Escribe el teléfono del vendedor'],
+      ['tpp-address','Escribe la dirección del vendedor'],
+      ['tpp-condition','Documenta la condición física y las pruebas realizadas'],
+      ['tpp-seller-sign','Escribe el nombre de quien firma como vendedor'],
+      ['tpp-business-sign','Escribe el nombre del representante del negocio'],
+    ];
+    for(const [id,message] of requiredFields)if(!requireValue(id,message))return;
+    if(!String(field('tpp-imei')?.value||'').trim()&&!String(field('tpp-serial')?.value||'').trim()){
+      toast('Escribe el IMEI o el número de serie del equipo','w');field('tpp-imei')?.scrollIntoView({block:'center',behavior:'smooth'});field('tpp-imei')?.focus();return;
+    }
+    if(!(Number(field('tpp-amount')?.value)>0)){toast('El precio de compra debe ser mayor a cero','w');field('tpp-amount')?.focus();return;}
+    if(!field('tpp-owner')?.checked||!field('tpp-origin')?.checked){toast('El vendedor debe aceptar las dos declaraciones de propiedad y procedencia','w');field('tpp-owner')?.scrollIntoView({block:'center',behavior:'smooth'});return;}
+    const paymentMethod=field('tpp-method')?.value;
+    if(paymentMethod!=='efectivo'&&!Number(field('tpp-account')?.value)){toast('Selecciona la cuenta bancaria usada para el pago','w');field('tpp-account')?.focus();return;}
     const product=products.find(row=>Number(row.id)===Number(document.getElementById('tpp-product').value));
     const accessories=[...document.querySelectorAll('.tpp-accessory:checked')].map(input=>input.value);
     const otherAccessory=document.getElementById('tpp-accessory-other')?.value?.trim();
     if(otherAccessory)accessories.push(otherAccessory);
     const data={seller_name:document.getElementById('tpp-name').value,seller_document:document.getElementById('tpp-document').value,seller_phone:document.getElementById('tpp-phone').value,seller_address:document.getElementById('tpp-address').value,seller_email:document.getElementById('tpp-email').value,product_id:product?.id,device_name:document.getElementById('tpp-device').value||product?.name,brand:product?.brand,model:product?.model,imei:document.getElementById('tpp-imei').value,serial:document.getElementById('tpp-serial').value,color:document.getElementById('tpp-color').value,capacity:document.getElementById('tpp-capacity').value,battery_health:document.getElementById('tpp-health').value,battery_capacity_mah:document.getElementById('tpp-mah').value,physical_condition:document.getElementById('tpp-condition').value,sale_description:document.getElementById('tpp-description').value,accessories,amount:Number(document.getElementById('tpp-amount').value),payment_method:document.getElementById('tpp-method').value,financial_account_id:Number(document.getElementById('tpp-account').value)||null,payment_reference:document.getElementById('tpp-reference').value,ownership_declared:document.getElementById('tpp-owner').checked,lawful_origin_declared:document.getElementById('tpp-origin').checked,seller_signature_name:document.getElementById('tpp-seller-sign').value,business_signature_name:document.getElementById('tpp-business-sign').value,terms_snapshot:configRes.data.terms};
-    const saved=await window.api.techPrivatePurchases.create({requestUserId:user?.id,data});
-    if(!saved?.ok){event.currentTarget.disabled=false;return toast(saved?.error||'No se pudo registrar','err');}
-    toast(`✓ ${saved.number} registrada y equipo agregado al inventario`,'ok');
-    await reloadProducts();
-    verCompraParticular(saved.purchaseId);
+    const originalLabel=button.innerHTML;
+    button.disabled=true;
+    button.textContent='Registrando compra…';
+    let completed=false;
+    try{
+      const saved=await window.api.techPrivatePurchases.create({requestUserId:user?.id,data});
+      if(!saved?.ok)throw new Error(saved?.error||'No se pudo registrar la compra');
+      completed=true;
+      toast(`✓ ${saved.number} registrada y equipo agregado al inventario`,'ok');
+      try{await reloadProducts();}catch(error){console.warn('[TECH PURCHASE] La compra se registró, pero no se recargó el inventario:',error);}
+      await verCompraParticular(saved.purchaseId);
+    }catch(error){
+      toast(error?.message||'No se pudo registrar la compra; vuelve a intentarlo','err');
+    }finally{
+      if(!completed&&document.body.contains(button)){button.disabled=false;button.innerHTML=originalLabel;}
+    }
   };
 }
 
 function techPrivatePurchaseDocument(row){
   const accessories=(()=>{try{return JSON.parse(row.accessories||'[]')}catch{return[]}})();
-  return `<!doctype html><html><head><meta charset="utf-8"><style>@page{size:A4;margin:14mm}body{font-family:Arial;color:#172033;font-size:11px;line-height:1.45}h1{font-size:21px;margin:0}.head{display:flex;justify-content:space-between;border-bottom:2px solid #245fd1;padding-bottom:10px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:14px 0}.box{border:1px solid #d8dee8;border-radius:8px;padding:9px}.label{font-size:9px;color:#667085;text-transform:uppercase}.value{font-weight:700}.terms{white-space:pre-wrap;text-align:justify}.sign{display:grid;grid-template-columns:1fr 1fr;gap:50px;margin-top:55px}.line{border-top:1px solid #222;text-align:center;padding-top:5px}.page-break{break-before:page;page-break-before:always}</style></head><body><div class="head"><div><h1>${techPurchaseEsc(DB?.settings?.biz_name||CFG.biz||'VELO TECH POS')}</h1><div>Contrato de compra de equipo usado a particular</div></div><div><b>${techPurchaseEsc(row.number)}</b><br>${techPurchaseEsc(String(row.created_at||'').slice(0,16))}</div></div><div class="grid"><div class="box"><div class="label">Vendedor</div><div class="value">${techPurchaseEsc(row.seller_name)}</div>${techPurchaseEsc(row.seller_document)}<br>${techPurchaseEsc(row.seller_phone)}<br>${techPurchaseEsc(row.seller_address)}</div><div class="box"><div class="label">Equipo adquirido</div><div class="value">${techPurchaseEsc(row.device_name||row.product_name)}</div>${techPurchaseEsc([row.brand,row.model,row.capacity,row.color].filter(Boolean).join(' · '))}<br>IMEI: ${techPurchaseEsc(row.imei||'—')} · SERIAL: ${techPurchaseEsc(row.serial||'—')}</div><div class="box"><div class="label">Evaluación</div>${techPurchaseEsc(row.physical_condition)}<br>Batería: ${row.battery_health==null?'No medida':`${Number(row.battery_health)}%`}${row.battery_capacity_mah?` · ${Number(row.battery_capacity_mah)} mAh`:''}<br>Accesorios: ${techPurchaseEsc(accessories.join(', ')||'Ninguno')}</div><div class="box"><div class="label">Pago</div><div class="value">${fmt(row.amount)}</div>${techPurchaseEsc(row.payment_method)} ${row.payment_reference?`· ${techPurchaseEsc(row.payment_reference)}`:''}</div></div><div class="box"><div class="label">Descripción comercial para una futura venta</div>${techPurchaseEsc(row.sale_description||'Sin descripción adicional')}</div><div class="sign"><div class="line">${techPurchaseEsc(row.seller_signature_name)}<br>Vendedor</div><div class="line">${techPurchaseEsc(row.business_signature_name)}<br>Representante del negocio</div></div><div class="page-break"><h1>Declaraciones, garantía de procedencia y condiciones</h1><p class="terms">${techPurchaseEsc(row.terms_snapshot)}</p><div class="box"><b>Declaraciones aceptadas:</b><br>✓ Propiedad legítima del vendedor.<br>✓ Procedencia lícita y ausencia de reporte, bloqueo, financiamiento o reclamación de terceros.<br>✓ Autorización para revisar, reparar, reacondicionar y revender el equipo.</div><div class="sign"><div class="line">${techPurchaseEsc(row.seller_signature_name)}<br>Vendedor</div><div class="line">${techPurchaseEsc(row.business_signature_name)}<br>Representante del negocio</div></div></div></body></html>`;
+  const createdAt=techPurchaseEsc(String(row.created_at||'').replace('T',' ').slice(0,16));
+  const deviceDetails=techPurchaseEsc([row.brand,row.model,row.capacity,row.color].filter(Boolean).join(' · ')||'No especificado');
+  const battery=row.battery_health==null?'No medida':`${Number(row.battery_health)}%${row.battery_capacity_mah?` · ${Number(row.battery_capacity_mah)} mAh`:''}`;
+  const paymentDetails=[row.payment_method,row.financial_account_name,row.payment_reference].filter(Boolean).join(' · ');
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+    @page{size:A4 portrait;margin:12mm}
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0}
+    body{font-family:Arial,sans-serif;color:#172033;font-size:10.5px;line-height:1.35;background:#fff}
+    .sheet{min-height:273mm;display:flex;flex-direction:column}
+    .head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;border-bottom:2.5px solid #245fd1;padding-bottom:9px;margin-bottom:10px}
+    h1{font-size:22px;line-height:1.1;margin:0 0 3px}.subtitle{font-size:12px;font-weight:700}.muted{color:#667085}
+    .document{text-align:right;white-space:nowrap}.document strong{font-size:14px;color:#245fd1}
+    .section{margin-top:9px;break-inside:avoid}.section-title{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.55px;color:#245fd1;margin-bottom:5px}
+    .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}.span-2{grid-column:span 2}.span-3{grid-column:span 3}.span-4{grid-column:1/-1}
+    .field{border:1px solid #cfd6e2;border-radius:5px;padding:6px 7px;min-height:34px}.field.tall{min-height:49px}
+    .label{font-size:8px;color:#667085;text-transform:uppercase;letter-spacing:.35px;margin-bottom:2px}.value{font-size:10.5px;font-weight:700;overflow-wrap:anywhere}.normal{font-weight:400}
+    .payment{display:grid;grid-template-columns:1.15fr 2fr;gap:6px}.amount{border:1.5px solid #245fd1;background:#f3f7ff}.amount .value{font-size:17px;color:#174fb5}
+    .terms{border:1px solid #cfd6e2;border-radius:5px;padding:8px 9px;white-space:pre-wrap;text-align:justify;font-size:9.3px;line-height:1.35;overflow-wrap:anywhere}
+    .declarations{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:6px}.declaration{border:1px solid #cfd6e2;border-radius:5px;padding:6px;font-size:8.7px}.check{font-size:12px;color:#16794b;font-weight:800;margin-right:3px}
+    .acceptance{margin:9px 1px 0;text-align:justify;font-size:9.3px}
+    .signatures{display:grid;grid-template-columns:1fr 1fr;gap:20mm;margin-top:auto;padding-top:19mm;break-inside:avoid}
+    .signature{text-align:center;border-top:1px solid #172033;padding-top:5px;min-height:21mm}.signature strong{font-size:10.5px}.signature .role{font-size:9px;color:#667085;margin-top:2px}.signature .id{font-size:8.5px;margin-top:5px}
+    .footer{display:flex;justify-content:space-between;border-top:1px solid #d8dee8;margin-top:7px;padding-top:5px;font-size:7.8px;color:#667085}
+  </style></head><body><main class="sheet">
+    <header class="head"><div><h1>${techPurchaseEsc(DB?.settings?.biz_name||CFG.biz||'VELO TECH POS')}</h1><div class="subtitle">Contrato de compra de equipo usado a particular</div><div class="muted">Recepción, evaluación, pago y declaración de procedencia</div></div><div class="document"><strong>${techPurchaseEsc(row.number)}</strong><br>${createdAt}</div></header>
+
+    <section class="section"><div class="section-title">1. Datos del vendedor</div><div class="grid">
+      <div class="field span-2"><div class="label">Nombre completo</div><div class="value">${techPurchaseEsc(row.seller_name)}</div></div>
+      <div class="field"><div class="label">Cédula / pasaporte</div><div class="value">${techPurchaseEsc(row.seller_document)}</div></div>
+      <div class="field"><div class="label">Teléfono</div><div class="value">${techPurchaseEsc(row.seller_phone)}</div></div>
+      <div class="field span-3"><div class="label">Dirección</div><div class="value normal">${techPurchaseEsc(row.seller_address)}</div></div>
+      <div class="field"><div class="label">Correo electrónico</div><div class="value normal">${techPurchaseEsc(row.seller_email||'No indicado')}</div></div>
+    </div></section>
+
+    <section class="section"><div class="section-title">2. Identificación del dispositivo</div><div class="grid">
+      <div class="field span-2"><div class="label">Equipo / producto</div><div class="value">${techPurchaseEsc(row.device_name||row.product_name)}</div></div>
+      <div class="field span-2"><div class="label">Marca · modelo · capacidad · color</div><div class="value">${deviceDetails}</div></div>
+      <div class="field span-2"><div class="label">IMEI</div><div class="value">${techPurchaseEsc(row.imei||'No indicado')}</div></div>
+      <div class="field span-2"><div class="label">Número de serie</div><div class="value">${techPurchaseEsc(row.serial||'No indicado')}</div></div>
+    </div></section>
+
+    <section class="section"><div class="section-title">3. Evaluación y accesorios recibidos</div><div class="grid">
+      <div class="field tall span-3"><div class="label">Condición física y pruebas realizadas</div><div class="value normal">${techPurchaseEsc(row.physical_condition)}</div></div>
+      <div class="field tall"><div class="label">Batería</div><div class="value">${techPurchaseEsc(battery)}</div></div>
+      <div class="field span-2"><div class="label">Accesorios entregados</div><div class="value normal">${techPurchaseEsc(accessories.join(', ')||'Ninguno')}</div></div>
+      <div class="field span-2"><div class="label">Descripción comercial registrada</div><div class="value normal">${techPurchaseEsc(row.sale_description||'Sin descripción adicional')}</div></div>
+    </div></section>
+
+    <section class="section"><div class="section-title">4. Precio y forma de pago</div><div class="payment">
+      <div class="field amount"><div class="label">Precio acordado</div><div class="value">${fmt(row.amount)}</div></div>
+      <div class="field"><div class="label">Forma de pago · cuenta · referencia</div><div class="value">${techPurchaseEsc(paymentDetails||'No especificada')}</div></div>
+    </div></section>
+
+    <section class="section"><div class="section-title">5. Declaraciones y condiciones aceptadas</div>
+      <div class="terms">${techPurchaseEsc(row.terms_snapshot)}</div>
+      <div class="declarations"><div class="declaration"><span class="check">✓</span>Declara ser propietario legítimo del dispositivo.</div><div class="declaration"><span class="check">✓</span>Declara procedencia lícita y ausencia de reclamaciones.</div><div class="declaration"><span class="check">✓</span>Autoriza la revisión, reparación, reacondicionamiento y reventa.</div></div>
+      <p class="acceptance">Las partes confirman que los datos, el estado físico, los accesorios y el precio indicados en este documento son correctos. Firman voluntariamente en señal de conformidad y cada parte puede conservar una copia.</p>
+    </section>
+
+    <section class="signatures">
+      <div class="signature"><strong>${techPurchaseEsc(row.seller_signature_name)}</strong><div class="role">Firma del vendedor</div><div class="id">Documento: ${techPurchaseEsc(row.seller_document)}</div></div>
+      <div class="signature"><strong>${techPurchaseEsc(row.business_signature_name)}</strong><div class="role">Firma del representante del negocio</div><div class="id">Documento: ${techPurchaseEsc(row.number)}</div></div>
+    </section>
+    <footer class="footer"><span>Contrato de adquisición de dispositivo usado</span><span>${techPurchaseEsc(row.number)} · Página 1 de 1</span></footer>
+  </main></body></html>`;
 }
 
-async function verCompraParticular(id){const res=await window.api.techPrivatePurchases.getById({id,requestUserId:user?.id});if(!res?.ok||!res.data)return toast(res?.error||'Compra no encontrada','err');const row=res.data;openModal(`<div class="modal-title">${techPurchaseEsc(row.number)}</div><div class="modal-sub">Contrato y entrada de inventario vinculados · unidad #${row.product_unit_id}</div><div class="g2" style="margin-top:14px"><div class="card" style="padding:12px"><div class="tb">Vendedor</div><div>${techPurchaseEsc(row.seller_name)}</div><div class="ts">${techPurchaseEsc(row.seller_document)} · ${techPurchaseEsc(row.seller_phone)}</div></div><div class="card" style="padding:12px"><div class="tb">Equipo</div><div>${techPurchaseEsc(row.product_name)}</div><div class="ts">${techPurchaseEsc(row.imei||row.serial)} · ${techPurchaseEsc(row.unit_status)}</div></div></div><div class="alrt b"><div class="alrt-dot b"></div><div class="alrt-sub">Se generan dos páginas con las mismas condiciones congeladas y espacios de firma para ambas partes.</div></div><div class="modal-foot"><button class="btn btn-out" onclick="renderCompras(document.getElementById('page'))">Atrás</button><button class="btn btn-dark" id="tpp-print">${svg('printer')} Imprimir contrato (2 hojas)</button></div>`);document.getElementById('tpp-print').onclick=()=>printHTML(techPrivatePurchaseDocument(row),'reporte');}
+async function verCompraParticular(id){const res=await window.api.techPrivatePurchases.getById({id,requestUserId:user?.id});if(!res?.ok||!res.data)return toast(res?.error||'Compra no encontrada','err');const row=res.data;openModal(`<div class="modal-title">${techPurchaseEsc(row.number)}</div><div class="modal-sub">Contrato y entrada de inventario vinculados · unidad #${row.product_unit_id}</div><div class="g2" style="margin-top:14px"><div class="card" style="padding:12px"><div class="tb">Vendedor</div><div>${techPurchaseEsc(row.seller_name)}</div><div class="ts">${techPurchaseEsc(row.seller_document)} · ${techPurchaseEsc(row.seller_phone)}</div></div><div class="card" style="padding:12px"><div class="tb">Equipo</div><div>${techPurchaseEsc(row.product_name)}</div><div class="ts">${techPurchaseEsc(row.imei||row.serial)} · ${techPurchaseEsc(row.unit_status)}</div></div></div><div class="alrt b"><div class="alrt-dot b"></div><div class="alrt-sub">El contrato utiliza una hoja A4 completa con datos, condiciones y espacios amplios para las firmas de ambas partes.</div></div><div class="modal-foot"><button class="btn btn-out" onclick="renderCompras(document.getElementById('page'))">Atrás</button><button class="btn btn-dark" id="tpp-print">${svg('printer')} Imprimir contrato A4</button></div>`);document.getElementById('tpp-print').onclick=()=>printHTML(techPrivatePurchaseDocument(row),'reporte');}
 
 async function abrirConfigCompraParticular(){const res=await window.api.techPrivatePurchases.getConfig({requestUserId:user?.id});if(!res?.ok)return toast(res?.error,'err');openModal(`<div class="modal-title">Términos de compra y garantía del taller</div><div class="modal-sub">Los contratos nuevos guardan una copia inmutable de estos términos. Los anteriores no cambian.</div><div class="fg" style="margin-top:14px"><label class="lbl">Términos predeterminados para compra a particulares</label><textarea class="inp" id="tpp-terms" rows="10">${techPurchaseEsc(res.data.terms)}</textarea></div><div class="fg"><label class="lbl">Garantía predeterminada del servicio técnico (días)</label><input class="inp" id="tpp-warranty-default" type="number" min="0" max="3650" value="${Number(res.data.default_warranty_days)||30}"></div><div class="alrt a"><div class="alrt-dot a"></div><div class="alrt-sub">Estos términos son una base operativa y no sustituyen la revisión de un abogado según las políticas del negocio y la legislación aplicable.</div></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="tpp-config-save">Guardar</button></div>`,'modal-lg');document.getElementById('tpp-config-save').onclick=async()=>{const saved=await window.api.techPrivatePurchases.saveConfig({requestUserId:user?.id,terms:document.getElementById('tpp-terms').value,default_warranty_days:Number(document.getElementById('tpp-warranty-default').value)||0});if(!saved?.ok)return toast(saved?.error||'No se pudo guardar','err');toast('✓ Términos actualizados para contratos futuros','ok');closeModal();};}

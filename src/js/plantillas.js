@@ -1229,8 +1229,13 @@ function renderCartaRecibo(sale, cfg, opts) {
         <div class="tr"><span>Descuento</span><span>${displayDiscount > 0 ? '-' : ''}${_n2(displayDiscount)}</span></div>
         ${Number(sale.additional_charges_total || 0) > 0 ? `<div class="tr"><span>Cargos adicionales</span><span>${_n2(sale.additional_charges_total)}</span></div>` : ''}
         <div class="tr grand"><span>Total con impuestos</span><span>${_n2(displayTotal)}</span></div>
-        ${Number(sale.trade_in_amount || 0) > 0 ? `<div class="tr"><span>Equipo usado recibido</span><span>-${_n2(sale.trade_in_amount)}</span></div>
-        <div class="tr"><span>Pago monetario</span><span>${_n2(Math.max(0, displayTotal - Number(sale.trade_in_amount || 0)))}</span></div>` : ''}
+        ${Number(sale.trade_in_amount || 0) > 0 ? `<div class="tr"><span>Parte de pago · equipo usado</span><span>-${_n2(sale.trade_in_amount)}</span></div>
+        <div style="font-size:9px;color:#555;margin:2px 0 4px">${_esc(sale.trade_in_product_name || 'Equipo usado')}${sale.trade_in_imei ? ` · IMEI/serial: ${_esc(sale.trade_in_imei)}` : ''}${sale.trade_in_seller_name ? ` · Entregado por: ${_esc(sale.trade_in_seller_name)}` : ''}${sale.trade_in_seller_document ? ` · Doc.: ${_esc(sale.trade_in_seller_document)}` : ''}</div>
+        ${sale.trade_in_seller_address ? `<div style="font-size:9px;color:#555;margin-bottom:3px">Dirección: ${_esc(sale.trade_in_seller_address)}</div>` : ''}
+        ${sale.trade_in_ownership_declared && sale.trade_in_lawful_origin_declared ? `<div style="font-size:9px;color:#555;margin-bottom:3px">Declara propiedad legítima y procedencia lícita/no bloqueada.</div>` : ''}
+        <div class="tr"><span>Restante a pagar</span><strong>${_n2(Math.max(0, displayTotal - Number(sale.trade_in_amount || 0)))}</strong></div>
+        <div style="font-size:9px;color:#555">Motivo: total de factura menos el valor reconocido por el equipo recibido.</div>` : ''}
+        ${Number(sale.prepaid_amount || 0) > 0 ? `<div class="tr"><span>Anticipo de servicio aplicado</span><span>-${_n2(sale.prepaid_amount)}</span></div><div class="tr"><span>Restante cobrado</span><strong>${_n2(Math.max(0,displayTotal-Number(sale.trade_in_amount||0)-Number(sale.prepaid_amount||0)))}</strong></div><div style="font-size:9px;color:#555">Motivo: ${_esc(sale.prepaid_reference||'anticipo recibido antes de la entrega')}.</div>` : ''}
         ${!isCotizacion ? `<div class="tr"><span>Su pago</span><span>${_n2(paidAmount)}</span></div>` : ''}
         ${!isCotizacion ? `<div class="tr"><span>Balance después del pago</span><span>${_n2(balanceAfter)}</span></div>` : ''}
       </div>
@@ -1568,11 +1573,15 @@ function renderCartaFormal(sale, cfg, opts) {
     ${displayDiscount > 0 ? `<div class="total-row"><span>Descuento</span><span style="color:#dc2626">-RD$${_n2(displayDiscount)}</span></div>` : ''}
     ${Number(sale.additional_charges_total || 0) > 0 ? `<div class="total-row"><span>Cargos adicionales</span><span>RD$${_n2(sale.additional_charges_total)}</span></div>` : ''}
     <div class="total-row grand-total"><span>Total con impuestos</span><span>RD$${_n2(displayTotal)}</span></div>
-    ${Number(sale.trade_in_amount || 0) > 0 ? `<div class="total-row"><span>Equipo usado recibido</span><span>-RD$${_n2(sale.trade_in_amount)}</span></div>
-    <div class="total-row"><span>Pago monetario</span><strong>RD$${_n2(Math.max(0, displayTotal - Number(sale.trade_in_amount || 0)))}</strong></div>` : ''}
+    ${Number(sale.trade_in_amount || 0) > 0 ? `<div class="total-row"><span>Parte de pago · equipo usado</span><span>-RD$${_n2(sale.trade_in_amount)}</span></div>
+    <div class="total-row"><span>Restante a pagar</span><strong>RD$${_n2(Math.max(0, displayTotal - Number(sale.trade_in_amount || 0)))}</strong></div>` : ''}
+    ${Number(sale.prepaid_amount || 0) > 0 ? `<div class="total-row"><span>Anticipo de servicio aplicado</span><span>-RD$${_n2(sale.prepaid_amount)}</span></div><div class="total-row"><span>Restante cobrado</span><strong>RD$${_n2(Math.max(0,displayTotal-Number(sale.trade_in_amount||0)-Number(sale.prepaid_amount||0)))}</strong></div>` : ''}
     ${String(sale.display_currency || '').toUpperCase() === 'USD' && Number(sale.display_exchange_rate) > 0
       ? `<div class="total-row"><span>Equivalente USD</span><strong>US$${Number(sale.display_amount || (displayTotal / Number(sale.display_exchange_rate))).toFixed(2)}</strong></div>` : ''}`}
   </div>
+
+  ${Number(sale.trade_in_amount || 0) > 0 ? `<div style="margin-top:8px;font-size:10px;color:#444;background:#f3f4f6;padding:7px 9px;border-radius:4px"><strong>Razón del restante:</strong> se aplicaron RD$${_n2(sale.trade_in_amount)} como parte de pago por ${_esc(sale.trade_in_product_name || 'equipo usado')}${sale.trade_in_imei ? ` · IMEI/serial ${_esc(sale.trade_in_imei)}` : ''}.${sale.trade_in_seller_name ? `<br>Entregado por: ${_esc(sale.trade_in_seller_name)}${sale.trade_in_seller_document ? ` · Documento ${_esc(sale.trade_in_seller_document)}` : ''}${sale.trade_in_seller_phone ? ` · Tel. ${_esc(sale.trade_in_seller_phone)}` : ''}${sale.trade_in_seller_address ? `<br>Dirección: ${_esc(sale.trade_in_seller_address)}` : ''}` : ''}${sale.trade_in_ownership_declared && sale.trade_in_lawful_origin_declared ? '<br>La persona declara propiedad legítima y procedencia lícita; equipo no reportado, bloqueado, financiado ni reclamado por terceros.' : ''}</div>` : ''}
+  ${Number(sale.prepaid_amount || 0) > 0 ? `<div style="margin-top:8px;font-size:10px;color:#444;background:#eff6ff;padding:7px 9px;border-radius:4px"><strong>Anticipo aplicado:</strong> RD$${_n2(sale.prepaid_amount)} recibido previamente. ${_esc(sale.prepaid_reference||'')}</div>` : ''}
 
   ${isDevolucion && sale.original_sale_id ? `<div style="margin-top:8px;font-size:11px;color:#555">Ref. venta original: ${facturaLabelOriginal(sale)}</div>` : ''}
   ${_showNcf(sale, opts) ? `<div style="margin-top:10px;font-size:11px;background:#fef9c3;padding:6px 10px;border-radius:4px">NCF: <strong>${ncf}</strong> · Documento con validez fiscal</div>` : ''}

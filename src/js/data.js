@@ -485,6 +485,8 @@ function newInvObj(id) {
     cliPhone: '', cliPhoneType: 'celular', cliPhoneId: null,
     cliContactId: null, cliContactName: '', cliContactRole: '', cliContactPhone: '',
     salespersonId: null, disc: 0, discApprovedBy: null, discAuthToken: null, charges: [],
+    tradeIn: null, tradeInSeller: null,
+    draftId: '', draftCreatedAt: 0, draftSavedAt: 0,
     displayCurrency: 'DOP', displayExchangeRate: 0, saleDate: new Date().toISOString().split('T')[0],
     printPrinterName: '', printProfileId: '', printTemplateId: '',
     printCopies: 0, printAction: '',
@@ -507,6 +509,7 @@ let activeInvoice = 0;
 let invCounter    = 1;
 
 const POS_WORKSPACE_RECOVERY_PREFIX = 'velo.pos.workspace.v1';
+const POS_DRAFTS_PREFIX = 'velo.pos.drafts.v1';
 let _posWorkspaceRecoveryUser = '';
 let _posWorkspaceSaveTimer = null;
 
@@ -516,6 +519,64 @@ function _posWorkspaceUserKey() {
     CFG?.activeBusinessId || CFG?.business_id || DB?.settings?.active_business_id || 'principal'
   ).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 60) || 'principal';
   return id ? `${POS_WORKSPACE_RECOVERY_PREFIX}:business:${businessId}:user:${id}` : '';
+}
+
+function _posDraftsUserKey() {
+  const workspaceKey = _posWorkspaceUserKey();
+  return workspaceKey ? workspaceKey.replace(POS_WORKSPACE_RECOVERY_PREFIX, POS_DRAFTS_PREFIX) : '';
+}
+
+function posListDrafts() {
+  const key = _posDraftsUserKey();
+  if (!key || !window.localStorage) return [];
+  try {
+    const rows = JSON.parse(window.localStorage.getItem(key) || '[]');
+    return (Array.isArray(rows) ? rows : [])
+      .filter(row => row?.id && row?.invoice)
+      .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+  } catch { return []; }
+}
+
+function posSaveDraft(inv) {
+  if (!inv || (!(inv.cart || []).length && !(inv.charges || []).length)) return null;
+  const key = _posDraftsUserKey();
+  if (!key || !window.localStorage) return null;
+  try {
+    const rows = posListDrafts();
+    const draftId = String(inv.draftId || `draft-${Date.now()}-${Math.random().toString(36).slice(2,8)}`);
+    const now = Date.now();
+    const invoice = _posWorkspaceCleanInvoice(inv, 1);
+    invoice.draftId = draftId;
+    invoice.draftSavedAt = now;
+    const row = { id: draftId, createdAt: Number(inv.draftCreatedAt) || now, updatedAt: now, invoice };
+    const index = rows.findIndex(item => item.id === draftId);
+    if (index >= 0) rows[index] = row;
+    else rows.unshift(row);
+    window.localStorage.setItem(key, JSON.stringify(rows.slice(0, 50)));
+    inv.draftId = draftId;
+    inv.draftCreatedAt = row.createdAt;
+    inv.draftSavedAt = now;
+    return row;
+  } catch (error) {
+    console.warn('[POS] No se pudo guardar el borrador:', error?.message || error);
+    return null;
+  }
+}
+
+function posDeleteDraft(draftId) {
+  const key = _posDraftsUserKey();
+  if (!key || !draftId || !window.localStorage) return false;
+  try {
+    const rows = posListDrafts();
+    const next = rows.filter(row => row.id !== String(draftId));
+    if (next.length === rows.length) return false;
+    if (next.length) window.localStorage.setItem(key, JSON.stringify(next));
+    else window.localStorage.removeItem(key);
+    return true;
+  } catch (error) {
+    console.warn('[POS] No se pudo eliminar el borrador:', error?.message || error);
+    return false;
+  }
 }
 
 function _posWorkspaceCleanInvoice(source, id) {

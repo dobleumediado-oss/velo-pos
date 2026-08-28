@@ -65,10 +65,14 @@ vm.runInContext(`${dataSource}\nthis.__posState={
   setCustomers(v){DB.customers=v},
   setProducts(v){DB.products=v},
   setPreventaConfig(enabled,roles){CFG.module_preventa=enabled;CFG.module_preventa_roles=roles},
+  setConduceConfig(enabled,roles){CFG.module_conduce=enabled;CFG.module_conduce_roles=roles},
   persistWorkspace:posPersistWorkspaceNow,
   restoreWorkspace:posRestoreWorkspace,
+  listDrafts:posListDrafts,
+  saveDraft:posSaveDraft,
+  deleteDraft:posDeleteDraft,
   resetRecoveryAttempt(){_posWorkspaceRecoveryUser=''},
-  snapshot(){return {activeInvoice,invCounter,invoices:invoices.map(i=>({id:i.id,cart:[...i.cart],charges:[...(i.charges||[])],cliId:i.cliId,disc:i.disc,itype:i.itype,priceChangeAuthToken:i.priceChangeAuthToken,creditLimitAuthToken:i.creditLimitAuthToken}))}}
+  snapshot(){return {activeInvoice,invCounter,invoices:invoices.map(i=>({id:i.id,cart:[...i.cart],charges:[...(i.charges||[])],cliId:i.cliId,cliName:i.cliName,disc:i.disc,itype:i.itype,draftId:i.draftId,priceChangeAuthToken:i.priceChangeAuthToken,creditLimitAuthToken:i.creditLimitAuthToken}))}}
 };`, context, { filename: 'data.js' });
 
 const state = context.__posState;
@@ -132,6 +136,28 @@ assert.strictEqual(recoveredWorkspace.invoices[0].creditLimitAuthToken, '',
   'las autorizaciones de crédito no deben sobrevivir un reinicio');
 console.log('  ✓ recupera tickets abiertos sin restaurar autorizaciones sensibles');
 
+state.resetInvoices();
+state.setUser({ id: 88, role: 'cajero' });
+state.currentInv().itype = 'cotizacion';
+state.currentInv().cliId = 7;
+state.currentInv().cliName = 'José Peña';
+state.currentInv().cart.push({ product_id: 9, name: 'Equipo reservado', price: 25000, qty: 1 });
+const savedDraft = state.saveDraft(state.currentInv());
+assert(savedDraft?.id, 'guardar borrador debe generar un identificador local');
+assert.strictEqual(state.listDrafts().length, 1);
+assert.strictEqual(state.listDrafts()[0].invoice.itype, 'cotizacion');
+assert.strictEqual(state.listDrafts()[0].invoice.cliName, 'José Peña');
+assert.strictEqual(state.currentInv().draftId, savedDraft.id,
+  'el ticket abierto debe quedar vinculado a su borrador');
+state.currentInv().cart[0].qty = 2;
+state.saveDraft(state.currentInv());
+assert.strictEqual(state.listDrafts().length, 1,
+  'guardar de nuevo debe actualizar y no duplicar el borrador');
+assert.strictEqual(state.listDrafts()[0].invoice.cart[0].qty, 2);
+assert.strictEqual(state.deleteDraft(savedDraft.id), true);
+assert.strictEqual(state.listDrafts().length, 0);
+console.log('  ✓ guarda, actualiza y elimina borradores separados de los documentos confirmados');
+
 ['pos-subtotal-value','pos-itbis-value','pos-discount-row','pos-discount-value',
  'pos-total-value','pos-charge-btn'].forEach(element);
 state.resetInvoices();
@@ -149,7 +175,7 @@ this.__posDiscount={
   entryNumber:_posEntryNumber,cbrCalcInitial,cbrToggleBillingType,
   renderCalls:()=>__renderCartCalls
 };
-this.__posCustomers={pvCustomerMatches,pvCustomerOptions,pvFilterCustomers,pvSelectCustomer,posSelectCustomer,_setPosPmode};
+this.__posCustomers={pvCustomerMatches,pvCustomerOptions,pvFilterCustomers,pvSelectCustomer,posSelectCustomer,_setPosPmode,cbrCaptureCustomerDraft,cbrOpenTradeIn,posTicketTitle,posConduceCanAccess};
 this.__posTransfer={posLoadResaleCart};`,
 context, { filename: 'pos.js' });
 const discount = context.__posDiscount;
@@ -324,6 +350,31 @@ state.setCustomers([
     contacts:[{ id:91, name:'Ana Pérez', role:'Compras', phone:'809-555-2000', document:'00100000001', active:1 }] },
   { id: 8, name: 'Cliente inactivo', rnc: '101010101', phone: '8090000000', active: 0 },
 ]);
+state.setUser({ id: 1, role: 'admin' });
+state.setConduceConfig('1', 'admin');
+context.window.api.conduce = { create() {} };
+context.window._vertical = { id:'auto_parts' };
+assert.strictEqual(customers.posConduceCanAccess(), true,
+  'VELO POS debe conservar Conduce cuando el módulo está activo y autorizado');
+context.window._vertical = { id:'tech' };
+assert.strictEqual(customers.posConduceCanAccess(), false,
+  'VELO TECH POS nunca debe ofrecer Conduce aunque una configuración antigua lo active');
+delete context.window._vertical;
+console.log('  ✓ Conduce permanece exclusivo de VELO POS');
+state.resetInvoices();
+state.currentInv().cliId = 7;
+state.currentInv().cliName = 'José Peña';
+state.currentInv().itype = 'factura';
+assert.strictEqual(customers.posTicketTitle(state.currentInv()), 'Factura · José Peña');
+assert.strictEqual(customers.posTicketTitle(state.currentInv(), { tab:true }), 'José Peña');
+state.currentInv().itype = 'cotizacion';
+assert.strictEqual(customers.posTicketTitle(state.currentInv()), 'Cotización · José Peña');
+state.currentInv().itype = 'conduce';
+assert.strictEqual(customers.posTicketTitle(state.currentInv()), 'Conduce · José Peña');
+state.currentInv().cliId = 1;
+state.currentInv().cliName = 'Consumidor Final';
+assert.strictEqual(customers.posTicketTitle(state.currentInv()), 'Conduce #1');
+console.log('  ✓ el ticket muestra el cliente registrado en factura, cotización y conduce');
 assert(customers.pvCustomerMatches({ id: 7, name: 'José Peña', active: 1 }, 'jose pena'),
   'la búsqueda debe ignorar tildes');
 assert(customers.pvCustomerMatches({ id: 7, name: 'José Peña', rnc: '1-31-45678-9', active: 1 }, '131456789'),
@@ -356,6 +407,25 @@ assert.strictEqual(state.currentInv().pmode, 'wholesale', 'aplica el precio pref
 console.log('  ✓ busca clientes por nombre, RNC o teléfono y vincula el registro correcto');
 console.log('  ✓ busca representantes y usa la cuenta, contacto y precio de su empresa');
 console.log('  ✓ evita mezclar el ID de un cliente con el nombre o RNC de otro');
+
+['cbr-name', 'cbr-cedula', 'cbr-phone', 'cbr-phone-type'].forEach(element);
+elements.get('cbr-name').value = 'Pedro Ramírez';
+elements.get('cbr-cedula').value = '001-0000000-1';
+elements.get('cbr-phone').value = '809-555-0101';
+elements.get('cbr-phone-type').value = 'celular';
+state.currentInv().cliId = 1;
+customers.cbrOpenTradeIn();
+assert.strictEqual(state.currentInv().cliName, 'Pedro Ramírez',
+  'debe reutilizar el nombre que ya fue escrito en el cobro');
+assert.strictEqual(state.currentInv().cliCedula, '001-0000000-1');
+assert.strictEqual(state.currentInv().cliPhone, '809-555-0101');
+assert(String(context.__lastModal || '').includes('Identificar a quien entrega el usado'),
+  'si no hay cliente registrado debe solicitar solo la identidad de procedencia');
+assert(String(context.__lastModal || '').includes('Usar solo en esta operación'),
+  'debe permitir recibir el usado sin convertir a la persona en cliente habitual');
+assert(String(context.__lastModal || '').includes('Registrar como cliente'),
+  'el alta como cliente debe permanecer como una opción explícita');
+console.log('  ✓ separa la identidad ocasional del alta voluntaria como cliente');
 
 ['pos-customer-search', 'pos-customer-dd', 'pos-customer-state'].forEach(element);
 state.setProducts([{ id:100, price:118, wholesale:100, active:1 }]);
@@ -455,7 +525,21 @@ assert(posSource.includes('posCreateConduceFromCart()'),
   'el POS debe exponer el botón que guarda el conduce');
 assert(posSource.includes('POS_CART_WIDTH_STORAGE_KEY') && posSource.includes('localStorage?.setItem'),
   'el ancho del carrito debe persistirse entre aperturas');
+assert(posSource.includes('Guardar borrador') && posSource.includes('Borradores del Punto de Venta'),
+  'el carrito debe permitir guardar y recuperar borradores');
+assert(posSource.includes('Guardar borrador y cerrar') && posSource.includes('Cerrar sin guardar'),
+  'la X debe ofrecer guardar el ticket antes de cerrarlo');
 const conduceSource = fs.readFileSync(path.join(root, 'src/js/conduce.js'), 'utf8');
+const moduleAccessSource = fs.readFileSync(path.join(root, 'src/js/module-access.js'), 'utf8');
+const appSource = fs.readFileSync(path.join(root, 'src/js/app.js'), 'utf8');
+const superadminSource = fs.readFileSync(path.join(root, 'src/js/superadmin.js'), 'utf8');
+assert(moduleAccessSource.includes("{ key:'conduce'") && moduleAccessSource.includes("route:'conduce', autoOnly:true"),
+  'Conduce debe estar marcado como exclusivo de VELO POS en la política central');
+assert(appSource.includes("window._vertical?.id !== 'tech' && _adminPuede('module_conduce')")
+  && appSource.includes("p === 'conduce' && window._vertical?.id === 'tech'"),
+  'navegación y rutas deben ocultar Conduce en TECH');
+assert(superadminSource.includes("key: 'module_conduce'") && superadminSource.includes('cajeroCan: true, autoOnly:true'),
+  'TECH tampoco debe mostrar el interruptor de Conduce en configuración');
 assert(conduceSource.includes('data-cancel='),
   'el listado de conduces debe mostrar la anulación permitida sin ocultarla en el detalle');
 assert(conduceSource.includes("routeTo('pos')") && conduceSource.includes('sourceConduceId'),

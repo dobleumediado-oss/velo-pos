@@ -28,7 +28,7 @@
     { key:'vehiculos', title:'Vehículos', icon:'🚗', group:'Operación avanzada', route:'vehiculos', autoOnly:true, setting:'module_vehiculos', roles:'module_vehiculos_roles', desc:'Vehículos de la empresa y su información operativa.' },
     { key:'mantenimiento', title:'Mantenimiento', icon:'🔧', group:'Operación avanzada', route:'vehiculos', autoOnly:true, setting:'module_mantenimiento', roles:'module_mantenimiento_roles', desc:'Historial y programación de mantenimiento.' },
     { key:'envios', title:'Envíos y Despachos', icon:'📦', group:'Operación avanzada', route:'envios', setting:'module_envios', roles:'module_envios_roles', desc:'Entregas, rutas y seguimiento de despachos.' },
-    { key:'conduce', title:'Conduces', icon:'🚛', group:'Operación avanzada', route:'conduce', setting:'module_conduce', roles:'module_conduce_roles', desc:'Notas de entrega sin precios ni efecto fiscal.' },
+    { key:'conduce', title:'Conduces', icon:'🚛', group:'Operación avanzada', route:'conduce', autoOnly:true, setting:'module_conduce', roles:'module_conduce_roles', desc:'Notas de entrega sin precios ni efecto fiscal.' },
     { key:'reportes', title:'Reportes', icon:'📊', group:'Análisis', route:'reportes', core:true, cashierDefault:false, desc:'Indicadores, exportaciones y análisis del negocio.' },
     { key:'impresion', title:'Centro de impresión', icon:'🖨️', group:'Sistema', route:'impresion', setting:'barcode_enabled', roles:'barcode_enabled_roles', desc:'Documentos, impresoras y etiquetas de código de barras.' },
   ];

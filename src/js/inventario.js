@@ -33,6 +33,21 @@ const invEsc = s => String(s || '')
   .replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;');
 
+// Los artículos fungibles usan products.stock/cost. En equipos serializados la
+// existencia y el valor reales salen de las unidades físicas por IMEI/serial.
+function invProductStock(product) {
+  return Math.max(0, Number(product?.effective_stock ?? product?.stock) || 0);
+}
+
+function invProductCost(product) {
+  return Math.max(0, Number(product?.effective_cost ?? product?.cost) || 0);
+}
+
+function invProductValue(product) {
+  const stored = Number(product?.effective_inventory_value);
+  return Number.isFinite(stored) ? Math.max(0, stored) : invProductStock(product) * invProductCost(product);
+}
+
 const invIdle = (fn) => {
   if (typeof window !== 'undefined' && window.requestIdleCallback) {
     return window.requestIdleCallback(fn, { timeout: 250 });
@@ -97,10 +112,10 @@ function renderInventario(el) {
   el.innerHTML = '';
 
   const prods    = DB.products;
-  const lowStock = prods.filter(p => p.stock > 0 && p.stock <= (p.stock_min || 5));
-  const outStock = prods.filter(p => p.stock === 0);
+  const lowStock = prods.filter(p => invProductStock(p) > 0 && invProductStock(p) <= (p.stock_min || 5));
+  const outStock = prods.filter(p => invProductStock(p) === 0);
   const changedProducts = prods.filter(p => p.last_price_change_id);
-  const totalVal = prods.reduce((a, p) => a + p.stock * p.cost, 0);
+  const totalVal = prods.reduce((a, p) => a + invProductValue(p), 0);
 
   // ── Header ──────────────────────────────────
   el.appendChild(h('div', { class: 'sec-hdr' },
@@ -266,8 +281,9 @@ function renderInvTable() {
 
   let prods = DB.products.filter(p => {
     const stockMin = p.stock_min || 5;
-    if (invTab === 'bajo'      && !(p.stock > 0 && p.stock <= stockMin)) return false;
-    if (invTab === 'sin_stock' && p.stock !== 0) return false;
+    const stock = invProductStock(p);
+    if (invTab === 'bajo'      && !(stock > 0 && stock <= stockMin)) return false;
+    if (invTab === 'sin_stock' && stock !== 0) return false;
     if (invTab === 'por_modelo' && !p.model) return false;
     const mCat = !invCat || p.category === invCat;
     const mQ   = !qNorm ||
@@ -280,8 +296,8 @@ function renderInvTable() {
   }).sort((a, b) => {
     if (invSort === 'name')       return a.name.localeCompare(b.name);
     if (invSort === 'name-desc')  return b.name.localeCompare(a.name);
-    if (invSort === 'stock')      return a.stock - b.stock;
-    if (invSort === 'stock-desc') return b.stock - a.stock;
+    if (invSort === 'stock')      return invProductStock(a) - invProductStock(b);
+    if (invSort === 'stock-desc') return invProductStock(b) - invProductStock(a);
     if (invSort === 'price')      return b.price - a.price;
     if (invSort === 'price-asc')  return a.price - b.price;
     if (invSort === 'cat')        return (a.category||'').localeCompare(b.category||'');
@@ -310,9 +326,11 @@ function renderInvTable() {
   // Función que genera el HTML de una fila (índice = posición en prods)
   const rowHTML = (p, idx) => {
     const stockMin = p.stock_min || 5;
-    const isLow    = p.stock > 0 && p.stock <= stockMin;
-    const isOut    = p.stock === 0;
-    const margin   = p.price > 0 ? Math.round(((p.price - p.cost) / p.price) * 100) : 0;
+    const stock    = invProductStock(p);
+    const cost     = invProductCost(p);
+    const isLow    = stock > 0 && stock <= stockMin;
+    const isOut    = stock === 0;
+    const margin   = p.price > 0 ? Math.round(((p.price - cost) / p.price) * 100) : 0;
     const stockColor = isOut ? 'var(--red)' : isLow ? 'var(--amber)' : 'var(--green)';
     const condBadge = p.condition && p.condition !== 'nuevo'
       ? `<span class="badge a" style="margin-left:4px;font-size:10px">${
@@ -347,7 +365,7 @@ function renderInvTable() {
         <span class="badge n">${esc(p.category||'—')}</span>${condBadge}
       </td>
       <td>
-        <div style="font-weight:700;font-size:14px;color:${stockColor}">${p.stock}</div>
+        <div style="font-weight:700;font-size:14px;color:${stockColor}">${stock}</div>
         <div style="font-size:10px;color:var(--muted2)">${esc(p.unit||'und')}</div>
       </td>
       <td style="color:var(--muted);font-size:12px">${stockMin}</td>
@@ -356,7 +374,7 @@ function renderInvTable() {
         <div style="font-size:10px;color:var(--muted2)">${margin}% margen</div>
       </td>
       <td style="font-size:12px;color:var(--muted)">${fmt(p.wholesale)}</td>
-      <td style="font-size:12px;color:var(--muted)">${fmt(p.cost)}</td>
+      <td style="font-size:12px;color:var(--muted)">${fmt(cost)}</td>
       <td>${changeCell}</td>
       <td>
         <div class="flex" style="gap:3px">
@@ -622,7 +640,9 @@ window.openBuscarImeiModal = function () {
     try {
       const res = await window.api.productUnits.findByImei({ imei: key });
       if (!res?.ok) throw new Error(res?.error || 'No se pudo consultar el IMEI');
-      const u = res.data;
+      // Servidores anteriores devolvían `unit`; la forma vigente usa `data`.
+      // Aceptar ambas evita un falso “no encontrado” durante una actualización.
+      const u = res.data || res.unit || null;
       if (!u) {
         out.innerHTML = '<div class="alrt a"><div class="alrt-dot a"></div><div><div class="alrt-title">IMEI no encontrado</div><div class="alrt-sub">Verifica el número o registra primero el equipo.</div></div></div>';
         return;
@@ -639,6 +659,7 @@ window.openBuscarImeiModal = function () {
             <div><div class="lbl">DETALLE</div><div>${esc([u.condition, u.capacity, u.color].filter(Boolean).join(' · ') || '—')}</div></div>
           </div>
           ${u.sale_id ? `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:12px"><strong>Venta:</strong> ${esc(u.numero_factura || ('#' + u.sale_id))} · ${esc(u.customer_name || 'Consumidor Final')}</div>` : ''}
+          ${u.trade_in_id ? `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:12px"><strong>Procedencia:</strong> Recibido como parte de pago · ${esc(u.origin_seller_name || 'Persona identificada')}<div style="font-size:11px;color:var(--muted2);margin-top:3px">Documento: ${esc(u.origin_seller_document || '—')} · Tel.: ${esc(u.origin_seller_phone || '—')}</div>${u.origin_seller_address ? `<div style="font-size:11px;color:var(--muted2);margin-top:2px">Dirección: ${esc(u.origin_seller_address)}</div>` : ''}</div>` : ''}
           ${u.warranty_until ? `<div style="margin-top:7px;font-size:12px"><strong>Garantía:</strong> ${esc(u.warranty_until)} · ${String(u.warranty_until) >= new Date().toISOString().slice(0,10) ? '<span style="color:var(--green)">Vigente</span>' : '<span style="color:var(--red)">Vencida</span>'}</div>` : '<div style="margin-top:7px;font-size:12px;color:var(--muted2)">Sin garantía registrada</div>'}
         </div>`;
     } catch (e) {
@@ -975,6 +996,7 @@ async function renderInvPriceHistory(wrap) {
 // KARDEX — Historial de movimientos por producto
 // ══════════════════════════════════════════════
 async function openKardexModal(p) {
+  const effectiveStock = invProductStock(p);
   // Cargar movimientos desde SQLite
   const [movs, priceHist] = await Promise.all([
     window.api.products.getMovements({ productId: p.id }),
@@ -1072,14 +1094,14 @@ async function openKardexModal(p) {
   openModal(`
     <div class="modal-title">Kardex — ${p.name}</div>
     <div class="modal-sub">
-      ${p.code} · Stock actual: <strong>${p.stock} ${p.unit || 'und'}</strong>
+      ${p.code} · Stock actual: <strong>${effectiveStock} ${p.unit || 'und'}</strong>
     </div>
 
     <div class="metrics" style="grid-template-columns:repeat(3,1fr);margin-bottom:14px">
       <div class="metric">
         <div class="met-label">Stock actual</div>
-        <div class="met-val" style="color:${p.stock > 0 ? 'var(--green)' : 'var(--red)'}">
-          ${p.stock}
+        <div class="met-val" style="color:${effectiveStock > 0 ? 'var(--green)' : 'var(--red)'}">
+          ${effectiveStock}
         </div>
       </div>
       <div class="metric">
@@ -1131,11 +1153,11 @@ async function openKardexModal(p) {
 
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
-      <button class="btn btn-dark" onclick="closeModal();openAjusteModal(
+      ${p.serialized ? `<button class="btn btn-dark" onclick="abrirRegistroEquipos(DB.products.find(x=>x.id===${p.id}))">${svg('pkg')} Abrir equipos</button>` : `<button class="btn btn-dark" onclick="closeModal();openAjusteModal(
         DB.products.find(x=>x.id===${p.id})||{id:${p.id},name:'${p.name.replace(/'/g,"\\'")}',stock:${p.stock},unit:'${p.unit||'und'}',stock_min:${p.stock_min||5}}
       )">
         ${svg('pkg')} Ajustar stock
-      </button>
+      </button>`}
     </div>
   `, 'modal-xxl mtw');
 }
@@ -1145,13 +1167,14 @@ async function openKardexModal(p) {
 // ══════════════════════════════════════════════
 function openEntradaMercanciaModal() {
   const prodOpts = DB.products
+    .filter(p => !p.serialized)
     .sort((a,b) => a.name.localeCompare(b.name))
-    .map(p => `<option value="${p.id}">[${p.code}] ${p.name} — Stock: ${p.stock}</option>`)
+    .map(p => `<option value="${p.id}">[${p.code}] ${p.name} — Stock: ${invProductStock(p)}</option>`)
     .join('');
 
   openModal(`
     <div class="modal-title">Entrada de Mercancía</div>
-    <div class="modal-sub">Registrar compra o reposición de inventario</div>
+    <div class="modal-sub">Registrar compra o reposición de accesorios y repuestos. Los equipos por IMEI se reciben desde “Equipos” u Órdenes de compra.</div>
 
     <div class="fg">
       <label class="lbl">Producto *</label>
@@ -2051,8 +2074,11 @@ function exportInventarioPDF() {
     Number(user?.can_manage_inventory) === 1;
   const rows = DB.products.map(p => {
     const stockMin = p.stock_min || 5;
-    const isLow    = p.stock > 0 && p.stock <= stockMin;
-    const isOut    = p.stock === 0;
+    const stock    = invProductStock(p);
+    const cost     = invProductCost(p);
+    const value    = invProductValue(p);
+    const isLow    = stock > 0 && stock <= stockMin;
+    const isOut    = stock === 0;
     return `
       <tr style="${isOut ? 'background:#fef2f2' : isLow ? 'background:#fffbeb' : ''}">
         <td style="font-family:monospace;font-size:11px">${_esc(p.code)}</td>
@@ -2060,21 +2086,21 @@ function exportInventarioPDF() {
         <td>${_esc(p.category) || '&#8212;'}</td>
         <td style="text-align:center;font-weight:700;
             color:${isOut ? '#DC2626' : isLow ? '#D97706' : '#16A34A'}">
-          ${p.stock} ${p.unit||'und'}
+          ${stock} ${p.unit||'und'}
         </td>
         <td style="text-align:center;color:#6b7280">${p.stock_min||5}</td>
         <td style="text-align:right">RD$${p.price.toLocaleString('es-DO')}</td>
         ${isAdmin ? `
-          <td style="text-align:right;color:#6b7280">RD$${p.cost.toLocaleString('es-DO')}</td>
+          <td style="text-align:right;color:#6b7280">RD$${cost.toLocaleString('es-DO')}</td>
           <td style="text-align:right;font-weight:600">
-            RD$${(p.stock*p.cost).toLocaleString('es-DO')}
+            RD$${value.toLocaleString('es-DO')}
           </td>` : '<td colspan="2"></td>'}
       </tr>`;
   }).join('');
 
-  const totalVal = DB.products.reduce((a, p) => a + p.stock * p.cost, 0);
-  const lowCount = DB.products.filter(p => p.stock > 0 && p.stock <= (p.stock_min||5)).length;
-  const outCount = DB.products.filter(p => p.stock === 0).length;
+  const totalVal = DB.products.reduce((a, p) => a + invProductValue(p), 0);
+  const lowCount = DB.products.filter(p => invProductStock(p) > 0 && invProductStock(p) <= (p.stock_min||5)).length;
+  const outCount = DB.products.filter(p => invProductStock(p) === 0).length;
 
   const html = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"/>

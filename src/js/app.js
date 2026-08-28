@@ -1069,7 +1069,7 @@ function buildSidebar() {
     ...(_adminPuede('module_sucursales')    ? [{ key: 'sucursales', icon: 'building', label: 'Sucursales'    }] : []),
     ...((window._vertical?.modules?.vehicles !== false && (_adminPuede('module_vehiculos') || _adminPuede('module_mantenimiento'))) ? [{ key: 'vehiculos', icon: 'car', label: 'Vehículos' }] : []),
     ...(_adminPuede('module_envios')        ? [{ key: 'envios',     icon: 'truck',    label: 'Envíos'        }] : []),
-    ...(_adminPuede('module_conduce')       ? [{ key: 'conduce',    icon: 'pkg',      label: 'Conduces'      }] : []),
+    ...(window._vertical?.id !== 'tech' && _adminPuede('module_conduce') ? [{ key: 'conduce', icon: 'pkg', label: 'Conduces' }] : []),
     { key: 'reportes',  icon: 'chart',    label: 'Reportes' },
     { sep: 'Sistema' },
     { key: 'impresion', icon: 'print', label: 'Centro de impresión' },
@@ -1119,7 +1119,7 @@ function buildSidebar() {
     ...(window.veloCanAccessModule?.('bancos', user) ? [{ key:'bancos', icon:'bank', label:'Bancos y Cuentas' }] : []),
     ...(window.veloCanAccessModule?.('contabilidad', user) ? [{ key:'contabilidad', icon:'ledger', label:'Contabilidad' }] : []),
     ...(_cajeroPuede('module_envios')     ? [{ key: 'envios',     icon: 'truck',   label: 'Envíos' }]      : []),
-    ...(_cajeroPuede('module_conduce')    ? [{ key: 'conduce',    icon: 'pkg',     label: 'Conduces' }]    : []),
+    ...(window._vertical?.id !== 'tech' && _cajeroPuede('module_conduce') ? [{ key: 'conduce', icon: 'pkg', label: 'Conduces' }] : []),
     ...(_cajeroPuede('module_sucursales') ? [{ key: 'sucursales', icon: 'building',label: 'Sucursales' }]  : []),
                     ...((window._vertical?.modules?.vehicles !== false
                         && (_cajeroPuede('module_vehiculos') || _cajeroPuede('module_mantenimiento')))
@@ -1591,6 +1591,9 @@ function routeTo(p) {
   if (p === 'preventa' && !preventaCanAccess()) {
     p = user?.role === 'cajero' ? 'pos' : 'dash';
   }
+  if (p === 'conduce' && window._vertical?.id === 'tech') {
+    p = user?.role === 'cajero' ? 'pos' : 'dash';
+  }
   if (p === 'impresion' && page !== 'impresion' && ['admin','superadmin'].includes(user?.role)) {
     if (!window._pcPreserveTabOnce) _pcActiveTab = 'devices';
     window._pcPreserveTabOnce = false;
@@ -1804,10 +1807,10 @@ function closeModal() {
   while (_modalStack.length) _modalStack.pop()?.remove();
 }
 
-function modalBack() {
+function modalBack(force = false) {
   const current = document.getElementById('modal-ov');
   if (!current || !_modalStack.length) return false;
-  if (_formIsDirty(current._snap)) {
+  if (!force && _formIsDirty(current._snap)) {
     _shakeEl(current.querySelector('.modal'));
     return null;
   }
