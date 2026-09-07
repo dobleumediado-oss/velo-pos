@@ -93,6 +93,10 @@ const businessCtx = require('./src/main/business-context');
 const {
   inferPrinterProfileId,
 } = require('./src/js/printer-profiles');
+const {
+  validateLocalPrintReference,
+  validatePrintReferenceForMode,
+} = require('./src/main/print-reference');
 
 function _runtimeArg(name) {
   const prefix = `--${name}=`;
@@ -3980,6 +3984,12 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, printerHeigh
   }
 }
 
+// La validación documental NO es local-only: en una terminal cliente debe
+// ejecutarse en el worker del negocio, dueño de la base central.
+ipcMain.handle('print:validateReference', async (_, payload = {}) => {
+  return validateLocalPrintReference(require('./database').getDB(), payload);
+});
+
 ipcMain.handle('print:html', async (_, {
   html, printerName, printerWidth, printerHeight, jobType, referenceId,
   userId, pageHint, copies, userConfirmed = false
@@ -3988,21 +3998,13 @@ ipcMain.handle('print:html', async (_, {
     if (userConfirmed !== true) {
       throw new Error('La impresión requiere confirmación explícita desde la vista previa');
     }
-    const reqUser = userId ? authRepo.findById(userId) : null;
-    if (userId && (!reqUser || reqUser.active === 0)) {
-      throw new Error('Usuario no válido para imprimir');
-    }
-    if (jobType === 'abono' && referenceId) {
-      const payment = require('./database').getDB().prepare(
-        "SELECT status,document_number_fmt FROM payments WHERE id=?"
-      ).get(Number(referenceId));
-      if (!payment) throw new Error('El abono ya no existe');
-      if (String(payment.status || 'active').toLowerCase() !== 'active') {
-        throw new Error(
-          `El abono ${payment.document_number_fmt || '#' + referenceId} está anulado y no puede reimprimirse como vigente`
-        );
-      }
-    }
+    const bridge = require('./src/main/ipc-bridge');
+    await validatePrintReferenceForMode({
+      mode: bridge.getMode(),
+      forwardToServer: bridge.forwardToServer,
+      getDB: () => require('./database').getDB(),
+      payload: { jobType, referenceId, userId },
+    });
     if (jobType === 'barcode_labels' && !String(printerName || '').trim()) {
       throw new Error(
         'Selecciona una impresora de etiquetas; este trabajo no puede usar la impresora de documentos'
@@ -4075,6 +4077,9 @@ ipcMain.handle('print:onServer', async (_, {
     if (userConfirmed !== true) {
       throw new Error('La impresión requiere confirmación explícita del usuario');
     }
+    validateLocalPrintReference(require('./database').getDB(), {
+      jobType, referenceId, userId,
+    });
     let bindings = {}, profiles = {};
     try { bindings = JSON.parse(settingsRepo.get('printer_channel_bindings') || '{}') || {}; } catch {}
     try { profiles = JSON.parse(settingsRepo.get('printer_channel_profiles') || '{}') || {}; } catch {}

@@ -1,5 +1,16 @@
 # Historial de versiones
 
+## 1.48.2 — 2026-09-07
+
+### Impresión de abonos desde terminales conectadas
+
+- La impresión permanece en la impresora de la terminal, mientras la existencia,
+  vigencia y autorización del abono se validan contra el negocio central.
+- Se elimina el falso mensaje «El abono ya no existe» que aparecía después de
+  registrar correctamente un pago desde la consola o una terminal del Servidor.
+- Los abonos anulados y los usuarios inactivos continúan bloqueados antes de
+  enviar el documento a la impresora.
+
 ## 1.48.1 — 2026-09-07
 
 ### Estabilidad de cobros en Servidor Windows
