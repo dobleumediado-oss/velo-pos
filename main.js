@@ -2560,6 +2560,7 @@ function _auditAfterCommit(args, context = {}) {
 
 ipcMain.handle('customers:addPayment', async (_, { data, requestUserId }) => {
   const startedAt = Date.now();
+  let stage = 'validar_usuario';
   try {
     const reqUser = authRepo.findById(requestUserId);
     if (!reqUser) return { ok: false, error: 'Usuario no válido' };
@@ -2568,10 +2569,12 @@ ipcMain.handle('customers:addPayment', async (_, { data, requestUserId }) => {
       return { ok: false, error: 'El monto del abono debe ser mayor a cero' };
     }
     // Obtener sesión de caja activa
+    stage = 'consultar_caja';
     const session = cashRepo.getOpen(_reqTerminalId());
     if (!session && String(data?.method || 'efectivo').toLowerCase() !== 'descuento') {
       return { ok: false, error: 'Abre la caja antes de registrar un abono' };
     }
+    stage = 'guardar_abono';
     const result  = customersRepo.addPayment({
       ...data,
       cajero:    reqUser?.name,
@@ -2581,6 +2584,7 @@ ipcMain.handle('customers:addPayment', async (_, { data, requestUserId }) => {
     // El abono ya fue confirmado atómicamente. Un fallo secundario de auditoría
     // no puede convertir una operación cobrada en un "error" para la interfaz,
     // porque el cajero podría reintentar y duplicarla.
+    stage = 'tareas_posteriores';
     if (!result.idempotent) {
       _auditAfterCommit([
         requestUserId, reqUser?.name || '', 'abono_registrado', 'customers',
@@ -2602,7 +2606,11 @@ ipcMain.handle('customers:addPayment', async (_, { data, requestUserId }) => {
   } catch (e) {
     try { logError('payments', 'no se pudo confirmar el abono', {
       operationId: data?.operationId || '', customerId: data?.customerId || null,
-      durationMs: Date.now() - startedAt, error: e.message,
+      durationMs: Date.now() - startedAt, stage,
+      businessId: currentBusinessId() || RUNTIME.businessId || 'principal',
+      dataDir: currentDataDir(),
+      error: e.message, code: e.code || '', errno: e.errno ?? null,
+      stack: e.stack || '',
     }); } catch {}
     return { ok: false, error: e.message };
   }

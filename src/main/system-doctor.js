@@ -105,6 +105,21 @@ function diagnoseDatabase({ db, dataDir }) {
   const integrity = db.prepare('PRAGMA integrity_check').get();
   const integrityOk = integrity?.integrity_check === 'ok';
   const fkRows = db.prepare('PRAGMA foreign_key_check').all();
+  const tempStore = Number(db.pragma('temp_store', { simple: true })) || 0;
+  let writeProbeOk = false;
+  let writeProbeError = '';
+  try {
+    db.exec('SAVEPOINT velo_doctor_write_probe');
+    db.exec('CREATE TABLE __velo_doctor_write_probe(id INTEGER)');
+    db.prepare('INSERT INTO __velo_doctor_write_probe(id) VALUES(1)').run();
+    db.exec('ROLLBACK TO velo_doctor_write_probe');
+    db.exec('RELEASE velo_doctor_write_probe');
+    writeProbeOk = true;
+  } catch (error) {
+    writeProbeError = error?.message || String(error);
+    try { db.exec('ROLLBACK TO velo_doctor_write_probe'); } catch {}
+    try { db.exec('RELEASE velo_doctor_write_probe'); } catch {}
+  }
   const dbPath = path.join(dataDir, 'velo.db');
   const stat = fs.existsSync(dbPath) ? fs.statSync(dbPath) : null;
   const walPath = `${dbPath}-wal`;
@@ -120,23 +135,40 @@ function diagnoseDatabase({ db, dataDir }) {
   const customers = tableExists(db, 'customers')
     ? count(db, "SELECT COUNT(*) c FROM customers WHERE active=1")
     : 0;
-  const status = statusFrom(!integrityOk || fkRows.length > 0, walSizeMB > 200);
+  const status = statusFrom(
+    !integrityOk || fkRows.length > 0 || !writeProbeOk,
+    walSizeMB > 200 || tempStore !== 2
+  );
 
   return result('db', 'Base de datos', status,
-    integrityOk && fkRows.length === 0
-      ? `Integra | ${dbSizeMB} MB | WAL ${walSizeMB} MB | ${sales} ventas | ${products} productos | ${customers} clientes`
+    integrityOk && fkRows.length === 0 && writeProbeOk
+      ? `Integra y escribible | ${dbSizeMB} MB | WAL ${walSizeMB} MB | ${sales} ventas | ${products} productos | ${customers} clientes`
+      : integrityOk && fkRows.length === 0
+        ? `Lectura OK, escritura fallo: ${writeProbeError || 'error desconocido'}`
       : `Integridad: ${integrity?.integrity_check || 'desconocida'} | FK rotas: ${fkRows.length}`,
     {
       category: 'nucleo',
       impact: status === 'ok'
         ? 'La base principal responde y conserva sus relaciones.'
+        : !writeProbeOk
+          ? 'La base puede leerse, pero no admite operaciones como ventas o abonos.'
         : 'Puede haber datos huerfanos o una DB danada; ventas, caja y reportes pueden fallar.',
-      fix: fkRows.length
+      fix: !writeProbeOk
+        ? `Revisar el servicio y el almacenamiento SQLite antes de operar: ${writeProbeError || 'escritura no disponible'}.`
+        : fkRows.length
         ? 'Crear backup, revisar las filas huerfanas y reparar relaciones antes de seguir operando.'
         : walSizeMB > 200
           ? 'Ejecutar mantenimiento/VACUUM fuera de horario para compactar.'
           : 'Sin accion requerida.',
-      value: { integrity: integrity?.integrity_check, foreignKeys: fkRows.length, dbSizeMB, walSizeMB },
+      value: {
+        integrity: integrity?.integrity_check,
+        foreignKeys: fkRows.length,
+        dbSizeMB,
+        walSizeMB,
+        writeProbeOk,
+        writeProbeError,
+        tempStore,
+      },
     }
   );
 }

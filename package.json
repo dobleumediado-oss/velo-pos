@@ -1,6 +1,6 @@
 {
   "name": "velo-pos",
-  "version": "1.48.0",
+  "version": "1.48.1",
   "description": "Sistema POS desktop profesional para comercios, repuestos, sucursales y operaciones empresariales",
   "main": "main.js",
   "scripts": {
@@ -50,6 +50,7 @@
     "test:printing": "node scripts/test-printer-profiles.js",
     "test:pdf-compatibility": "electron --no-sandbox scripts/test-pdf-compatibility.js",
     "test:pending-invoices": "node scripts/run-electron-node.js scripts/test-pending-invoices.js",
+    "test:sqlite-runtime": "node scripts/run-electron-node.js scripts/test-sqlite-runtime-policy.js",
     "test:salespeople": "node scripts/run-electron-node.js scripts/test-salespeople.js",
     "test:documents": "node scripts/run-electron-node.js scripts/test-document-workflows.js",
     "test:sales-workflow": "node scripts/run-electron-node.js scripts/test-sales-workflow-enhancements.js",
@@ -59,7 +60,7 @@
     "test:service-orders": "node scripts/run-electron-node.js scripts/test-service-orders.js",
     "test:tech-premium": "node scripts/run-electron-node.js scripts/test-tech-premium-operations.js",
     "test:tech-lifecycle": "node scripts/run-electron-node.js scripts/test-tech-device-lifecycle.js",
-    "test:tech-readiness": "npm run release:check && npm run test:suite-invariants && npm run test:printing && npm run test:pdf-compatibility && npm run test:product-units && npm run test:service-orders && npm run test:service-portal && npm run test:trade-in-warranty && npm run test:suite-license && npm run test:server-service && npm run test:tech-premium && npm run test:tech-lifecycle",
+    "test:tech-readiness": "npm run release:check && npm run test:sqlite-runtime && npm run test:suite-invariants && npm run test:printing && npm run test:pdf-compatibility && npm run test:product-units && npm run test:service-orders && npm run test:service-portal && npm run test:trade-in-warranty && npm run test:suite-license && npm run test:server-service && npm run test:tech-premium && npm run test:tech-lifecycle",
     "test:service-portal": "node scripts/run-electron-node.js scripts/test-service-customer-portal.js",
     "test:trade-in-warranty": "node scripts/run-electron-node.js scripts/test-trade-in-warranty.js",
     "test:suite-license": "node scripts/test-suite-license-products.js && node scripts/test-provider-license-manager.js",
@@ -72,7 +73,7 @@
     "test:system-doctor": "node scripts/run-electron-node.js scripts/test-system-doctor-financial.js",
     "test:ncf": "node scripts/run-electron-node.js scripts/test-ncf-sequences.js",
     "test:data-loader": "node scripts/test-data-loader-resilience.js",
-    "test": "npm run test:url && npm run test:input-normalization && npm run test:user-permissions && npm run test:login && npm run test:pos && npm run test:pos-policy && npm run test:data-loader && npm run test:checkout && npm run test:customer-companies && npm run test:business && npm run test:import && npm run test:all-in-one && npm run test:all-in-one-integration && npm run test:financial && npm run test:external-expenses && npm run test:payment-ui && npm run test:cash-ui && npm run test:cash-policy && npm run test:printing && npm run test:pdf-compatibility && npm run test:pending-invoices && npm run test:salespeople && npm run test:documents && npm run test:sales-workflow && npm run test:sale-corrections && npm run test:system-doctor && npm run test:ncf && npm run test:server-service && npm run test:experience && npm run test:product-units && npm run test:serialized-sale && npm run test:service-orders && npm run test:service-portal && npm run test:trade-in-warranty && npm run test:suite-license && npm run test:tech-lifecycle"
+    "test": "npm run test:url && npm run test:input-normalization && npm run test:user-permissions && npm run test:login && npm run test:pos && npm run test:pos-policy && npm run test:data-loader && npm run test:checkout && npm run test:customer-companies && npm run test:business && npm run test:import && npm run test:all-in-one && npm run test:all-in-one-integration && npm run test:financial && npm run test:external-expenses && npm run test:payment-ui && npm run test:cash-ui && npm run test:cash-policy && npm run test:printing && npm run test:pdf-compatibility && npm run test:pending-invoices && npm run test:sqlite-runtime && npm run test:salespeople && npm run test:documents && npm run test:sales-workflow && npm run test:sale-corrections && npm run test:system-doctor && npm run test:ncf && npm run test:server-service && npm run test:experience && npm run test:product-units && npm run test:serialized-sale && npm run test:service-orders && npm run test:service-portal && npm run test:trade-in-warranty && npm run test:suite-license && npm run test:tech-lifecycle"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

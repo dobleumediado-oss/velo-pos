@@ -1,5 +1,19 @@
 # Historial de versiones
 
+## 1.48.1 — 2026-09-07
+
+### Estabilidad de cobros en Servidor Windows
+
+- SQLite mantiene en memoria sus estructuras temporales para que los servicios
+  ejecutados como Sistema local puedan registrar abonos aunque Windows no exponga
+  una carpeta temporal utilizable.
+- El cálculo de facturas pendientes utiliza un índice específico por cliente,
+  tipo, estado y fecha para reducir trabajo temporal durante la distribución.
+- El diagnóstico comprueba que la base real no solo pueda leerse, sino también
+  abrir una escritura reversible sin alterar los datos del negocio.
+- Los fallos de abonos registran la etapa, el código SQLite, el negocio y la ruta
+  activa para facilitar una recuperación segura sin reintentos ambiguos.
+
 ## 1.48.0 — 2026-08-27
 
 ### Taller profesional de VELO TECH POS

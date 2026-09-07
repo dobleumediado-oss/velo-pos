@@ -51,7 +51,12 @@ function ok(condition, message) {
   });
 
   const healthy = await diagnose();
+  const healthyDb = healthy.results.find(row => row.id === 'db');
   const healthySales = healthy.results.find(row => row.id === 'sales_logic');
+  ok(healthyDb && healthyDb.value.writeProbeOk === true,
+    'el diagnóstico comprueba una escritura reversible en la base real');
+  ok(healthyDb && healthyDb.value.tempStore === 2,
+    'el diagnóstico confirma temporales SQLite en memoria');
   ok(healthySales && healthySales.value.currentMismatch.length === 0,
     'el diagnóstico entiende que el precio ya incluye ITBIS, descuento y cargos');
   ok(healthySales && healthySales.value.duplicateOperations.length === 0,

@@ -61,6 +61,11 @@ function initDB(customDataDir) {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   db.pragma('synchronous = NORMAL');
+  // Los procesos Windows que corren como LocalSystem pueden no disponer de
+  // una carpeta TEMP utilizable. Algunas consultas de CxC/abonos necesitan
+  // estructuras temporales para ordenar o agrupar; mantenerlas en memoria
+  // evita SQLITE_CANTOPEN sin cambiar ni copiar la base principal.
+  db.pragma('temp_store = MEMORY');
   // Si una escritura encuentra la base ocupada, reintenta hasta 5s en vez de
   // fallar de inmediato. Protege operaciones concurrentes (venta + backup, etc).
   db.pragma('busy_timeout = 5000');
@@ -1352,6 +1357,10 @@ function createTables() {
     -- ── Índices ──
     CREATE INDEX IF NOT EXISTS idx_sales_date        ON sales(created_at);
     CREATE INDEX IF NOT EXISTS idx_sales_customer    ON sales(customer_id);
+    -- CxC consulta las facturas de un cliente por tipo/estado y fecha. Este
+    -- índice evita crear un árbol temporal grande al distribuir un abono.
+    CREATE INDEX IF NOT EXISTS idx_sales_customer_type_status_created
+      ON sales(customer_id,type,status,created_at,id);
     CREATE INDEX IF NOT EXISTS idx_sales_session     ON sales(cash_session_id);
     CREATE INDEX IF NOT EXISTS idx_sale_items_sale   ON sale_items(sale_id);
     CREATE INDEX IF NOT EXISTS idx_sale_items_product_sale ON sale_items(product_id, sale_id);
