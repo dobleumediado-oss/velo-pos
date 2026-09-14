@@ -544,6 +544,38 @@ function createTables() {
       created_at      TEXT DEFAULT (datetime('now'))
     );
 
+    -- Recibos de ingresos no asociados a una venta o abono de cliente.
+    CREATE TABLE IF NOT EXISTS cash_income_receipts (
+      id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+      document_number          INTEGER,
+      document_number_fmt      TEXT DEFAULT '',
+      cash_session_id          INTEGER NOT NULL REFERENCES cash_sessions(id),
+      payer_name               TEXT NOT NULL,
+      payer_document           TEXT DEFAULT '',
+      concept                  TEXT NOT NULL,
+      income_type              TEXT NOT NULL DEFAULT 'otro_ingreso'
+                               CHECK(income_type IN ('otro_ingreso','aporte_capital','prestamo','reembolso')),
+      amount                   REAL NOT NULL,
+      method                   TEXT NOT NULL DEFAULT 'efectivo'
+                               CHECK(method IN ('efectivo','transferencia','tarjeta','cheque')),
+      financial_account_id     INTEGER REFERENCES financial_accounts(id),
+      reference                TEXT DEFAULT '',
+      notes                    TEXT DEFAULT '',
+      status                   TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','cancelled')),
+      cash_movement_id         INTEGER REFERENCES cash_movements(id),
+      cancel_cash_movement_id  INTEGER REFERENCES cash_movements(id),
+      financial_movement_id    INTEGER REFERENCES financial_movements(id),
+      accounting_entry_id      INTEGER REFERENCES accounting_entries(id),
+      user_id                  INTEGER REFERENCES users(id),
+      user_name                TEXT DEFAULT '',
+      cancelled_by             INTEGER REFERENCES users(id),
+      cancel_reason            TEXT DEFAULT '',
+      cancelled_at             TEXT,
+      created_at               TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_cash_income_session_status
+      ON cash_income_receipts(cash_session_id,status,created_at,id);
+
     -- ── Ventas ──
     CREATE TABLE IF NOT EXISTS sales (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2026,6 +2058,7 @@ const DOCUMENT_SEQUENCE_DEFAULTS = {
   nota_credito:    { prefix: 'NCR', pad: 6 },
   abono:           { prefix: 'ABO', pad: 6 },
   recibo:          { prefix: 'REC', pad: 6 },
+  recibo_ingreso:  { prefix: 'RIN', pad: 6 },
   pago_proveedor:  { prefix: 'PPR', pad: 6 },
   pago_gasto_externo: { prefix: 'RGE', pad: 6 },
   conduce:         { prefix: 'CON', pad: 6 },
@@ -4523,7 +4556,7 @@ const cashRepo = {
     sessionId, type, amount, method, referenceId, paymentId = null,
     description, userId
   }) {
-    db.prepare(`
+    const result = db.prepare(`
       INSERT INTO cash_movements(
         cash_session_id,type,amount,method,reference_id,payment_id,description,user_id
       ) VALUES(?,?,?,?,?,?,?,?)
@@ -4531,6 +4564,104 @@ const cashRepo = {
       sessionId, type, amount, method || 'efectivo', referenceId,
       paymentId || null, description || '', userId
     );
+    return Number(result.lastInsertRowid);
+  },
+  createIncomeReceipt(data = {}, actor = {}) {
+    const amount = round2(Number(data.amount) || 0);
+    const payerName = String(data.payer_name || '').trim();
+    const concept = String(data.concept || '').trim();
+    const incomeType = String(data.income_type || 'otro_ingreso');
+    const method = String(data.method || 'efectivo').toLowerCase();
+    if (amount <= 0) throw new Error('El monto del ingreso debe ser mayor a cero');
+    if (!payerName) throw new Error('Indica quién entrega el dinero');
+    if (!concept) throw new Error('Indica el concepto del ingreso');
+    if (!['otro_ingreso','aporte_capital','prestamo','reembolso'].includes(incomeType)) throw new Error('Tipo de ingreso no válido');
+    if (!['efectivo','transferencia','tarjeta','cheque'].includes(method)) throw new Error('Método de ingreso no válido');
+    const session = db.prepare("SELECT * FROM cash_sessions WHERE id=? AND status='open'").get(Number(data.cash_session_id));
+    if (!session) throw new Error('Abre la caja antes de registrar un ingreso');
+    let financialAccount = null;
+    if (method !== 'efectivo') {
+      financialAccount = db.prepare('SELECT * FROM financial_accounts WHERE id=? AND active=1').get(Number(data.financial_account_id));
+      if (!financialAccount) throw new Error('Selecciona la cuenta que recibió el ingreso');
+    }
+    return db.transaction(() => {
+      const inserted = db.prepare(`INSERT INTO cash_income_receipts(
+        cash_session_id,payer_name,payer_document,concept,income_type,amount,method,
+        financial_account_id,reference,notes,user_id,user_name
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        session.id, payerName, String(data.payer_document || '').trim(), concept, incomeType,
+        amount, method, financialAccount?.id || null, String(data.reference || '').trim(),
+        String(data.notes || '').trim(), Number(actor.id) || null, String(actor.name || '')
+      );
+      const id = Number(inserted.lastInsertRowid);
+      const issued = _issueDocumentNumber('recibo_ingreso', 'cash_income_receipt', id);
+      db.prepare('UPDATE cash_income_receipts SET document_number=?,document_number_fmt=? WHERE id=?')
+        .run(issued.sequence_number, issued.formatted_number, id);
+      let cashMovementId = null;
+      let financialMovementId = null;
+      if (method === 'efectivo') {
+        cashMovementId = this.addMovement({ sessionId:session.id, type:'entrada', amount, method,
+          referenceId:id, description:`Ingreso ${issued.formatted_number} · ${concept}`, userId:Number(actor.id) || null });
+      } else {
+        financialMovementId = financialAccountsRepo.addMovement({ accountId:financialAccount.id, type:'deposito', amount,
+          description:`Ingreso ${issued.formatted_number} · ${concept}`, referenceType:'cash_income_receipt', referenceId:id,
+          method, notes:String(data.reference || '').trim(), userId:Number(actor.id) || null }).movementId;
+      }
+      let accountingEntryId = null;
+      if (db.prepare("SELECT value FROM settings WHERE key='module_contabilidad'").get()?.value === '1') {
+        const cfg = accountingRepo.getConfig();
+        const getAccId = (key, fallback) => cfg[key]?.account_id || db.prepare('SELECT id FROM accounting_accounts WHERE code=?').get(fallback)?.id;
+        const debitId = method === 'efectivo' ? getAccId('account_cash','1101') : getAccId('account_bank','1103');
+        const creditCode = incomeType === 'aporte_capital' ? '3102' : incomeType === 'prestamo' ? '2201' : '4104';
+        const creditId = db.prepare('SELECT id FROM accounting_accounts WHERE code=?').get(creditCode)?.id || getAccId('account_other_rev','4104');
+        if (debitId && creditId) {
+          accountingEntryId = accountingRepo.createEntry({ date:todayStr(), concept:`Ingreso ${issued.formatted_number} · ${concept}`,
+            reference:issued.formatted_number, source_module:'recibo_ingreso', source_id:id,
+            lines:[
+              { account_id:debitId, debit:amount, credit:0, description:concept },
+              { account_id:creditId, debit:0, credit:amount, description:concept },
+            ], notes:String(data.notes || '').trim(), userId:Number(actor.id) || null, status:'confirmado' }).entryId;
+        }
+      }
+      db.prepare(`UPDATE cash_income_receipts SET cash_movement_id=?,financial_movement_id=?,accounting_entry_id=? WHERE id=?`)
+        .run(cashMovementId, financialMovementId, accountingEntryId, id);
+      audit(Number(actor.id) || null, String(actor.name || ''), 'recibo_ingreso_creado', 'cash_income_receipts', id,
+        `${issued.formatted_number} | ${concept} | RD$${amount.toFixed(2)}`);
+      return this.getIncomeReceipt(id);
+    })();
+  },
+  getIncomeReceipt(id) {
+    return db.prepare(`SELECT r.*,fa.name financial_account_name FROM cash_income_receipts r
+      LEFT JOIN financial_accounts fa ON fa.id=r.financial_account_id WHERE r.id=?`).get(Number(id)) || null;
+  },
+  getIncomeReceipts(sessionId, { includeCancelled = false } = {}) {
+    return db.prepare(`SELECT r.*,fa.name financial_account_name FROM cash_income_receipts r
+      LEFT JOIN financial_accounts fa ON fa.id=r.financial_account_id
+      WHERE r.cash_session_id=? ${includeCancelled ? '' : "AND r.status='active'"}
+      ORDER BY r.created_at DESC,r.id DESC`).all(Number(sessionId));
+  },
+  cancelIncomeReceipt(id, reason, actor = {}, currentSessionId = null) {
+    const cleanReason = String(reason || '').trim();
+    if (!cleanReason) throw new Error('Indica el motivo de la anulación');
+    const receipt = this.getIncomeReceipt(id);
+    if (!receipt || receipt.status !== 'active') throw new Error('El recibo ya no está vigente');
+    return db.transaction(() => {
+      let cancelCashMovementId = null;
+      if (receipt.method === 'efectivo') {
+        const session = db.prepare("SELECT id FROM cash_sessions WHERE id=? AND status='open'").get(Number(currentSessionId));
+        if (!session) throw new Error('Abre la caja antes de devolver este ingreso en efectivo');
+        cancelCashMovementId = this.addMovement({ sessionId:session.id, type:'salida', amount:receipt.amount, method:'efectivo',
+          referenceId:receipt.id, description:`Anulación ${receipt.document_number_fmt} · ${cleanReason}`, userId:Number(actor.id) || null });
+      }
+      if (receipt.financial_movement_id) financialAccountsRepo.cancelMovement(receipt.financial_movement_id, Number(actor.id) || null, cleanReason);
+      accountingRepo.reverseSourceEntry('recibo_ingreso', receipt.id, Number(actor.id) || null, cleanReason);
+      db.prepare(`UPDATE cash_income_receipts SET status='cancelled',cancel_cash_movement_id=?,cancelled_by=?,
+        cancel_reason=?,cancelled_at=datetime('now','localtime') WHERE id=?`).run(
+        cancelCashMovementId, Number(actor.id) || null, cleanReason, receipt.id);
+      documentNumberRepo.markStatus('recibo_ingreso','cash_income_receipt',receipt.id,'cancelled');
+      audit(Number(actor.id) || null, String(actor.name || ''), 'recibo_ingreso_anulado', 'cash_income_receipts', receipt.id, cleanReason);
+      return { ok:true, id:receipt.id };
+    })();
   },
   getSessions(limit = 30) {
     return db.prepare(`
@@ -4678,6 +4809,7 @@ const cashRepo = {
       WHERE cash_session_id=?
       ORDER BY created_at,id
     `).all(sessionId);
+    const incomeReceipts = this.getIncomeReceipts(sessionId);
     const summary = this.getSessionCashSummary(sessionId);
     const invoices = sales.filter(sale => sale.type === 'factura');
     const returns = sales.filter(sale => sale.type === 'devolucion');
@@ -4690,12 +4822,14 @@ const cashRepo = {
       session,
       sales,
       payments,
+      incomeReceipts,
       movements,
       summary,
       totals: {
         sales: round2(invoices.reduce((sum, sale) => sum + Number(sale.total || 0), 0)),
         returns: round2(returns.reduce((sum, sale) => sum + Number(sale.total || 0), 0)),
         payments: round2(payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0)),
+        incomeReceipts: round2(incomeReceipts.reduce((sum, receipt) => sum + Number(receipt.amount || 0), 0)),
         salesCount: invoices.length,
         returnCount: returns.length,
         paymentCount: payments.length,

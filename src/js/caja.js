@@ -31,6 +31,25 @@ function cajaTerminalId() {
     || (typeof CFG !== 'undefined' && CFG.terminalId) || undefined;
 }
 
+let _cajaIncomeState = { sessionId:null, rows:[], loading:false };
+function _cajaEsc(value) {
+  return String(value == null ? '' : value).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+}
+function _cajaIncomeType(value) {
+  return ({ otro_ingreso:'Otro ingreso', aporte_capital:'Aporte de capital', prestamo:'Préstamo recibido', reembolso:'Reembolso / recuperación' })[value] || 'Otro ingreso';
+}
+function cajaLoadIncomeReceipts(sessionId, el) {
+  if (!sessionId || _cajaIncomeState.loading || Number(_cajaIncomeState.sessionId) === Number(sessionId)) return;
+  _cajaIncomeState = { sessionId:Number(sessionId), rows:[], loading:true };
+  window.api.cash.getIncomeReceipts({ sessionId }).then(result => {
+    if (Number(_cajaIncomeState.sessionId) !== Number(sessionId)) return;
+    _cajaIncomeState.rows = result?.ok ? (result.data || []) : [];
+    _cajaIncomeState.loading = false;
+    if (document.body.contains(el) && typeof page !== 'undefined' && page === 'caja') renderCaja(el);
+  }).catch(() => { _cajaIncomeState.loading = false; });
+}
+
 async function cajaOpenWithRecovery(payload) {
   try {
     return await cajaAwaitAction(window.api.cash.open(payload));
@@ -69,6 +88,7 @@ function renderCaja(el) {
   const otherOpenSessions = (DB.caja || []).filter(session =>
     session.status === 'open' && Number(session.id) !== Number(cajaSession?.id)
   );
+  if (cajaOpen && cajaSession?.id) cajaLoadIncomeReceipts(cajaSession.id, el);
 
   // ── Header ───────────────────────────────────
   el.appendChild(h('div', { class: 'sec-hdr' },
@@ -93,6 +113,11 @@ function renderCaja(el) {
             class: 'btn btn-out',
             onclick: () => guardarDocumentoExcel(imprimirReporteDia, 'Reporte-Caja-Diario', 'Reporte de caja'),
             html: `${svg('download')} Excel`
+          }),
+          h('button', {
+            class: 'btn btn-green',
+            onclick: openIncomeReceiptModal,
+            html: `${svg('plus')} Recibo de ingreso`
           }),
           h('button', {
             class: 'btn btn-red',
@@ -166,14 +191,18 @@ function renderCaja(el) {
     const tdPayments = tdPaymentsAll.filter(
       p => String(p.status || 'active').toLowerCase() !== 'cancelled'
     );
+    const tdIncomeReceipts = Number(_cajaIncomeState.sessionId) === Number(sesId) ? _cajaIncomeState.rows : [];
     const tdRev  = tdS.reduce((a, s) => a + s.total, 0);
     const tdDev  = tdDevs.reduce((a, s) => a + s.total, 0);
     const tdEfec = tdS.filter(s => (s.payment_method || s.pay) === 'efectivo').reduce((a, s) => a + s.total, 0)
-      + tdPayments.filter(p => (p.method || 'efectivo') === 'efectivo').reduce((a,p)=>a+Number(p.amount||0),0);
+      + tdPayments.filter(p => (p.method || 'efectivo') === 'efectivo').reduce((a,p)=>a+Number(p.amount||0),0)
+      + tdIncomeReceipts.filter(r => r.method === 'efectivo').reduce((a,r)=>a+Number(r.amount||0),0);
     const tdCard = tdS.filter(s => (s.payment_method || s.pay) === 'tarjeta').reduce((a, s) => a + s.total, 0)
-      + tdPayments.filter(p => p.method === 'tarjeta').reduce((a,p)=>a+Number(p.amount||0),0);
+      + tdPayments.filter(p => p.method === 'tarjeta').reduce((a,p)=>a+Number(p.amount||0),0)
+      + tdIncomeReceipts.filter(r => r.method === 'tarjeta').reduce((a,r)=>a+Number(r.amount||0),0);
     const tdTrans= tdS.filter(s => (s.payment_method || s.pay) === 'transferencia').reduce((a, s) => a + s.total, 0)
-      + tdPayments.filter(p => ['transferencia','cheque'].includes(p.method)).reduce((a,p)=>a+Number(p.amount||0),0);
+      + tdPayments.filter(p => ['transferencia','cheque'].includes(p.method)).reduce((a,p)=>a+Number(p.amount||0),0)
+      + tdIncomeReceipts.filter(r => ['transferencia','cheque'].includes(r.method)).reduce((a,r)=>a+Number(r.amount||0),0);
     const tdCred = tdS.filter(s => (s.payment_method || s.pay) === 'credito')
       .reduce((a, s) => a + Number(s.balance_after_payment ?? s.total ?? 0), 0);
     const tdNet  = tdRev - tdDev;
@@ -262,6 +291,31 @@ function renderCaja(el) {
     }
     el.appendChild(payCard);
 
+    const incomeCard = h('div', { class:'card mb20' });
+    incomeCard.appendChild(h('div',{class:'fxb mb8'},
+      h('div',null,h('div',{class:'card-title'},`Recibos de ingreso (${tdIncomeReceipts.length})`),
+        h('div',{class:'ts'},'Entradas de dinero no asociadas a ventas ni abonos')),
+      h('button',{class:'btn btn-green btn-sm',onclick:openIncomeReceiptModal,html:`${svg('plus')} Nuevo ingreso`})));
+    if (_cajaIncomeState.loading) {
+      incomeCard.appendChild(h('div',{class:'empty',style:{padding:'18px'}},h('p',null,'Cargando ingresos…')));
+    } else if (!tdIncomeReceipts.length) {
+      incomeCard.appendChild(h('div',{class:'empty',style:{padding:'18px'}},h('p',null,'Sin recibos de ingreso en esta sesión')));
+    } else {
+      const rows = tdIncomeReceipts.map(r => h('tr',null,
+        h('td',{class:'tm'},r.document_number_fmt || `RIN-${r.id}`),
+        h('td',null,h('div',{class:'tb'},r.payer_name),h('div',{class:'ts'},_cajaIncomeType(r.income_type))),
+        h('td',null,r.concept),
+        h('td',null,h('span',{class:`badge ${r.method==='efectivo'?'g':'b'}`},r.method)),
+        h('td',{style:{fontWeight:800,color:'var(--green)'}},fmt(r.amount)),
+        h('td',null,h('div',{class:'flex',style:{gap:'3px'}},
+          h('button',{class:'btn btn-ghost btn-sm',onclick:()=>printIncomeReceipt(r),html:svg('print')}),
+          ['admin','superadmin'].includes(_cajaUser()?.role) ? h('button',{class:'btn btn-ghost btn-sm',onclick:()=>openCancelIncomeReceiptModal(r),html:svg('x')}) : null
+        ))));
+      incomeCard.appendChild(h('div',{class:'tw'},h('table',null,
+        h('thead',null,h('tr',null,...['Recibo','Recibido de','Concepto','Método','Monto',''].map(x=>h('th',null,x)))),h('tbody',null,...rows))));
+    }
+    el.appendChild(incomeCard);
+
     // Devoluciones de esta sesión (visibilidad para el cajero) ─────────
     if (tdDevs.length) {
       const devCard = h('div', { class: 'card mb20' });
@@ -333,6 +387,85 @@ function renderCaja(el) {
     histCard.appendChild(tw);
   }
   el.appendChild(histCard);
+}
+
+async function openIncomeReceiptModal() {
+  if (!cajaOpen || !cajaSession?.id) { toast('Abre la caja antes de registrar un ingreso','w'); return; }
+  let accounts = [];
+  try {
+    const result = await window.api.financial.getAll();
+    accounts = (result?.ok ? result.data : []).filter(a => a.active && ['banco','tarjeta'].includes(a.type));
+  } catch {}
+  openModal(`<div class="modal-title">Nuevo recibo de ingreso</div><div class="modal-sub">Registra dinero recibido fuera de una venta o abono de cliente.</div>
+    <div class="g2"><div class="fg"><label class="lbl">Recibido de *</label><input class="inp" id="cash-income-payer" placeholder="Nombre de la persona o empresa"/></div><div class="fg"><label class="lbl">Cédula / RNC</label><input class="inp" id="cash-income-document" placeholder="Opcional"/></div></div>
+    <div class="fg"><label class="lbl">Concepto *</label><input class="inp" id="cash-income-concept" placeholder="Motivo por el que se recibe el dinero"/></div>
+    <div class="g2"><div class="fg"><label class="lbl">Tipo de ingreso</label><select class="inp" id="cash-income-type"><option value="otro_ingreso">Otro ingreso</option><option value="aporte_capital">Aporte de capital</option><option value="prestamo">Préstamo recibido</option><option value="reembolso">Reembolso / recuperación</option></select></div><div class="fg"><label class="lbl">Monto (RD$) *</label><input class="inp" id="cash-income-amount" type="number" min="0.01" step="0.01"/></div></div>
+    <div class="g2"><div class="fg"><label class="lbl">Método</label><select class="inp" id="cash-income-method" onchange="cajaIncomeMethodChanged()"><option value="efectivo">Efectivo</option><option value="transferencia">Transferencia</option><option value="tarjeta">Tarjeta</option><option value="cheque">Cheque</option></select></div><div class="fg" id="cash-income-account-wrap" style="display:none"><label class="lbl">Cuenta receptora *</label><select class="inp" id="cash-income-account"><option value="">Seleccionar cuenta…</option>${accounts.map(a=>`<option value="${a.id}">${_cajaEsc(a.name)}${a.account_number?` · ${_cajaEsc(a.account_number)}`:''}</option>`).join('')}</select></div></div>
+    <div class="fg"><label class="lbl">Referencia</label><input class="inp" id="cash-income-reference" placeholder="Transferencia, cheque o referencia interna"/></div>
+    <div class="fg"><label class="lbl">Notas para el recibo</label><textarea class="inp" id="cash-income-notes" rows="3" placeholder="Opcional"></textarea></div>
+    <div class="ven-callout">El efectivo aumenta el cuadre de esta caja. Transferencias, tarjetas y cheques aumentan la cuenta financiera seleccionada.</div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-green" id="cash-income-save" onclick="confirmIncomeReceipt()">${svg('check')} Registrar e imprimir</button></div>`, 'modal-lg');
+}
+
+function cajaIncomeMethodChanged() {
+  const method = document.getElementById('cash-income-method')?.value || 'efectivo';
+  const wrap = document.getElementById('cash-income-account-wrap');
+  if (wrap) wrap.style.display = method === 'efectivo' ? 'none' : '';
+}
+
+async function confirmIncomeReceipt() {
+  const actor = _cajaUser();
+  const button = document.getElementById('cash-income-save');
+  if (button) button.disabled = true;
+  const data = {
+    cash_session_id:cajaSession?.id,
+    payer_name:document.getElementById('cash-income-payer')?.value,
+    payer_document:document.getElementById('cash-income-document')?.value,
+    concept:document.getElementById('cash-income-concept')?.value,
+    income_type:document.getElementById('cash-income-type')?.value,
+    amount:document.getElementById('cash-income-amount')?.value,
+    method:document.getElementById('cash-income-method')?.value,
+    financial_account_id:document.getElementById('cash-income-account')?.value || null,
+    reference:document.getElementById('cash-income-reference')?.value,
+    notes:document.getElementById('cash-income-notes')?.value,
+  };
+  try {
+    const result = await window.api.cash.createIncomeReceipt({ data, requestUserId:actor?.id });
+    if (!result?.ok) { toast(result?.error || 'No se pudo registrar el ingreso','err'); if(button)button.disabled=false; return; }
+    closeModal();
+    _cajaIncomeState.sessionId = Number(cajaSession.id);
+    _cajaIncomeState.rows = [result.data, ..._cajaIncomeState.rows.filter(r=>Number(r.id)!==Number(result.data.id))];
+    toast(`✓ Ingreso registrado · ${result.data.document_number_fmt}`);
+    printIncomeReceipt(result.data);
+    renderCaja(document.getElementById('page'));
+  } catch (e) {
+    toast(e?.message || 'No se pudo registrar el ingreso','err');
+    if (button) button.disabled = false;
+  }
+}
+
+function printIncomeReceipt(receipt) {
+  if (!receipt) return;
+  const logo = typeof buildLogoHeader === 'function' ? buildLogoHeader(CFG.biz_logo,CFG.biz_logo_2,{unit:'px',maxH:62,maxW:190,align:'left'}) : '';
+  const date = String(receipt.created_at || today()).slice(0,10);
+  const html = `<!doctype html><html><head><meta charset="UTF-8"><title>${_cajaEsc(receipt.document_number_fmt||'Recibo de ingreso')}</title><style>
+    @page{size:letter;margin:16mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#172033;margin:0;font-size:12px}.page{min-height:240mm;position:relative}.head{display:flex;justify-content:space-between;gap:24px;border-bottom:3px solid #0f766e;padding-bottom:13px}.brand h1{font-size:20px;margin:5px 0}.muted{color:#64748b}.doc{text-align:right}.doc strong{display:block;color:#0f766e;font-size:18px}.title{text-align:center;font-size:19px;margin:28px 0 20px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 28px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:9px;padding:15px}.amount{margin:22px 0;padding:18px;border:2px solid #0f766e;border-radius:10px;text-align:center}.amount span{display:block;color:#64748b;text-transform:uppercase;font-size:10px}.amount strong{display:block;font-size:28px;color:#0f766e;margin-top:5px}.concept{padding:14px;border-left:4px solid #0f766e;background:#f8fafc;white-space:pre-wrap}.note{margin-top:14px;padding:12px;border:1px solid #e2e8f0;white-space:pre-wrap}.signatures{display:grid;grid-template-columns:1fr 1fr;gap:70px;margin-top:75px}.sign{border-top:1px solid #334155;text-align:center;padding-top:7px}.foot{position:absolute;bottom:0;left:0;right:0;border-top:1px solid #cbd5e1;padding-top:8px;color:#64748b;font-size:10px;display:flex;justify-content:space-between}</style></head><body><section class="page"><header class="head"><div class="brand">${logo}<h1>${_cajaEsc(CFG.biz||'VELO POS')}</h1><div class="muted">${_cajaEsc([CFG.rnc&&`RNC ${CFG.rnc}`,CFG.phone,CFG.addr].filter(Boolean).join(' · '))}</div></div><div class="doc"><strong>RECIBO DE INGRESO</strong><span>${_cajaEsc(receipt.document_number_fmt||'')}</span></div></header><h2 class="title">Constancia de dinero recibido</h2><div class="grid"><div><span class="muted">Recibido de</span><br><strong>${_cajaEsc(receipt.payer_name)}</strong></div><div><span class="muted">Cédula / RNC</span><br><strong>${_cajaEsc(receipt.payer_document||'—')}</strong></div><div><span class="muted">Fecha</span><br><strong>${_cajaEsc(typeof fdate==='function'?fdate(date):date)}</strong></div><div><span class="muted">Método</span><br><strong>${_cajaEsc(receipt.method||'efectivo')}</strong></div><div><span class="muted">Tipo</span><br><strong>${_cajaEsc(_cajaIncomeType(receipt.income_type))}</strong></div><div><span class="muted">Referencia</span><br><strong>${_cajaEsc(receipt.reference||'—')}</strong></div></div><div class="amount"><span>Monto recibido</span><strong>${fmt(receipt.amount)}</strong></div><div class="concept"><strong>Concepto</strong><br>${_cajaEsc(receipt.concept)}</div>${receipt.notes?`<div class="note"><strong>Notas</strong><br>${_cajaEsc(receipt.notes)}</div>`:''}<div class="signatures"><div class="sign">Entregado por<br><span class="muted">${_cajaEsc(receipt.payer_name)}</span></div><div class="sign">Recibido por<br><span class="muted">${_cajaEsc(receipt.user_name||'')}</span></div></div><footer class="foot"><span>${_cajaEsc(CFG.biz||'')}</span><span>Documento interno · No sustituye comprobante fiscal</span></footer></section></body></html>`;
+  printHTML(html,'recibo_ingreso');
+}
+
+function openCancelIncomeReceiptModal(receipt) {
+  openModal(`<div class="modal-title">Anular ${_cajaEsc(receipt.document_number_fmt)}</div><div class="modal-sub">El ingreso desaparecerá de la vista operativa y se revertirá su impacto financiero.</div><div class="alrt r" style="margin:14px 0"><div><div class="alrt-title">Monto a revertir: ${fmt(receipt.amount)}</div><div class="alrt-sub">Esta acción queda registrada en auditoría.</div></div></div><div class="fg"><label class="lbl">Motivo *</label><textarea class="inp" id="cash-income-cancel-reason" rows="3"></textarea></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" onclick="confirmCancelIncomeReceipt(${Number(receipt.id)})">${svg('x')} Anular ingreso</button></div>`);
+}
+
+async function confirmCancelIncomeReceipt(id) {
+  const reason = document.getElementById('cash-income-cancel-reason')?.value || '';
+  const actor = _cajaUser();
+  const result = await window.api.cash.cancelIncomeReceipt({ id, reason, cashSessionId:cajaSession?.id, requestUserId:actor?.id });
+  if (!result?.ok) { toast(result?.error || 'No se pudo anular el ingreso','err'); return; }
+  closeModal();
+  _cajaIncomeState.rows = _cajaIncomeState.rows.filter(row=>Number(row.id)!==Number(id));
+  toast('✓ Ingreso anulado y retirado de Caja');
+  renderCaja(document.getElementById('page'));
 }
 
 // ══════════════════════════════════════════════
@@ -787,6 +920,7 @@ async function imprimirReporteDia() {
   const totalTrans = Number(byMethod.transferencia || 0);
   const totalCred  = Number(byMethod.credito || 0);
   const totalAbonos = Number(report.totals?.payments || 0);
+  const totalIngresos = Number(report.totals?.incomeReceipts || 0);
   const totalDevolucion = Number(report.totals?.returns || 0);
   const totalVentas = Number(report.totals?.sales || 0);
 
@@ -823,6 +957,7 @@ async function imprimirReporteDia() {
     totalTrans,
     totalCred,
     totalAbonos,
+    totalIngresos,
     totalDevolucion,
     expected,
     counted,
@@ -938,6 +1073,8 @@ async function printResumen(cajaId) {
   const totalVentas = Number(report.totals?.sales || 0);
   const totalDevs = Number(report.totals?.returns || 0);
   const totalAbonos = Number(report.totals?.payments || 0);
+  const totalIngresos = Number(report.totals?.incomeReceipts || 0);
+  const incomeReceipts = report.incomeReceipts || [];
   const totalNeto   = totalVentas - totalDevs;
   const expected = Number(report.summary?.expected || 0);
 
@@ -1062,6 +1199,8 @@ async function printResumen(cajaId) {
         <td style="text-align:right;color:#DC2626">−${fmt(totalDevs)}</td><td></td></tr>` : ''}
       ${totalAbonos > 0 ? `<tr><td>Abonos vigentes</td>
         <td style="text-align:right">${fmt(totalAbonos)}</td><td></td></tr>` : ''}
+      ${totalIngresos > 0 ? `<tr><td>Otros ingresos recibidos</td>
+        <td style="text-align:right">${fmt(totalIngresos)}</td><td></td></tr>` : ''}
       <tr class="total-row" style="border-top:2px solid #e5e7eb">
         <td>NETO</td>
         <td style="text-align:right">${fmt(totalNeto)}</td>
@@ -1069,6 +1208,8 @@ async function printResumen(cajaId) {
       </tr>
     </tbody>
   </table>
+
+  ${incomeReceipts.length ? `<h3>Recibos de ingreso (${incomeReceipts.length})</h3><table><thead><tr><th>Recibo</th><th>Recibido de</th><th>Concepto</th><th>Método</th><th style="text-align:right">Monto</th></tr></thead><tbody>${incomeReceipts.map(r=>`<tr><td>${_cajaEsc(r.document_number_fmt)}</td><td>${_cajaEsc(r.payer_name)}</td><td>${_cajaEsc(r.concept)}</td><td>${_cajaEsc(r.method)}</td><td style="text-align:right">${fmt(r.amount)}</td></tr>`).join('')}</tbody></table>`:''}
 
   <h3>Detalle de Ventas (${sesVentas.length})</h3>
   <table>

@@ -2889,6 +2889,31 @@ ipcMain.handle('cash:getSessionReport', async (_, { sessionId }) => {
   }
 });
 
+ipcMain.handle('cash:getIncomeReceipts', async (_, { sessionId, includeCancelled = false } = {}) => {
+  try {
+    return { ok: true, data: cashRepo.getIncomeReceipts(sessionId, { includeCancelled }) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('cash:createIncomeReceipt', async (_, { data, requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser) return { ok: false, error: 'Usuario no válido' };
+    const receipt = cashRepo.createIncomeReceipt(data, { id:reqUser.id, name:reqUser.name });
+    return { ok: true, data: receipt };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('cash:cancelIncomeReceipt', async (_, { id, reason, cashSessionId, requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Solo un administrador puede anular recibos de ingreso' };
+    }
+    return cashRepo.cancelIncomeReceipt(id, reason, { id:reqUser.id, name:reqUser.name }, cashSessionId);
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
 // ── Ventas ────────────────────────────────────
 function _salePriceOverrides(saleData) {
   const out = [];

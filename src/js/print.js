@@ -123,6 +123,7 @@ const PRINT_CATEGORIES = {
   cotizacion:   { label: 'Cotizaciones',               autoPrintDefault: false, previewDefault: true,  media: 'any'   },
   pago:         { label: 'Pagos y abonos',             autoPrintDefault: false, previewDefault: true,  media: 'any'   },
   nomina:       { label: 'Recibos de nómina',          autoPrintDefault: false, previewDefault: true,  media: 'any'   },
+  ingreso:      { label: 'Recibos de ingreso',         autoPrintDefault: false, previewDefault: true,  media: 'sheet' },
   conduce:      { label: 'Conduces y entregas',        autoPrintDefault: false, previewDefault: true,  media: 'any'   },
   caja:         { label: 'Caja, arqueos y cierres',    autoPrintDefault: false, previewDefault: true,  media: 'sheet' },
   inventario:   { label: 'Inventario y etiquetas de anaquel', autoPrintDefault: false, previewDefault: true, media: 'sheet' },
@@ -147,6 +148,7 @@ const _DEFAULT_PRINT_CHANNEL = {
   cotizacion: 'ventas',
   pago: 'pagos',
   nomina: 'oficina',
+  ingreso: 'caja',
   caja: 'caja',
   conduce: 'almacen',
   inventario: 'almacen',
@@ -163,6 +165,7 @@ const _JOB_TYPE_CATEGORY = {
   cotizacion: 'cotizacion', conduce: 'conduce',
   abono: 'pago', pago_proveedor: 'pago', pago_gasto_externo: 'pago',
   recibo_nomina: 'nomina',
+  recibo_ingreso: 'ingreso',
   cierre: 'caja',
 };
 function _categoryForJobType(jobType) {
@@ -1202,7 +1205,7 @@ function printCierreCaja(data) {
   const {
     cajero, openDate, openTime, closeTime,
     openAmount, totalEfec, totalCard, totalTrans,
-    totalCred, totalAbonos, totalDevolucion,
+    totalCred, totalAbonos, totalIngresos, totalDevolucion,
     expected, counted, diff,
     salesCount, salesTotal,
   } = data;
@@ -1228,6 +1231,8 @@ function printCierreCaja(data) {
   lines.push(tRow('Ventas crédito:', fmt(totalCred || 0)));
   if (totalAbonos > 0)
     lines.push(tRow('Abonos recibidos:', fmt(totalAbonos)));
+  if (totalIngresos > 0)
+    lines.push(tRow('Otros ingresos:', fmt(totalIngresos)));
   if (totalDevolucion > 0)
     lines.push(tRow('Devoluciones:', `-${fmt(totalDevolucion)}`));
   lines.push(tline());

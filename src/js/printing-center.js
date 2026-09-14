@@ -130,6 +130,7 @@ function pcTemplatesForCategory(category) {
       { id: 'nomina_termica_80', nombre: 'Nómina térmica · 80 mm' },
     ];
   }
+  if (category === 'ingreso') return [];
   const definition = PRINT_CATEGORIES[category] || {};
   const all = (typeof PLANTILLAS !== 'undefined' ? PLANTILLAS : [])
     .filter(template => template && template.tipo !== 'etiqueta');
@@ -137,7 +138,8 @@ function pcTemplatesForCategory(category) {
 }
 
 function pcTemplateOptions(category, current) {
-  const emptyLabel = category === 'nomina' ? 'Nómina profesional · Carta (predeterminada)' : 'Usar plantilla general';
+  const emptyLabel = category === 'nomina' ? 'Nómina profesional · Carta (predeterminada)'
+    : category === 'ingreso' ? 'Diseño profesional integrado' : 'Usar plantilla general';
   return `<option value="">${emptyLabel}</option>
     ${pcTemplatesForCategory(category).map(template =>
       `<option value="${pcEsc(template.id)}" ${template.id === current ? 'selected' : ''}>${pcEsc(template.nombre)}</option>`

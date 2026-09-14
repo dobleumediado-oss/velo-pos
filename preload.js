@@ -159,6 +159,9 @@ const api = {
     getSessionSales: (data)  => ipcRenderer.invoke('cash:getSessionSales', data),
     getSessionCashSummary: (data) => ipcRenderer.invoke('cash:getSessionCashSummary', data),
     getSessionReport: (data) => ipcRenderer.invoke('cash:getSessionReport', data),
+    getIncomeReceipts: (data) => ipcRenderer.invoke('cash:getIncomeReceipts', data),
+    createIncomeReceipt: (data) => ipcRenderer.invoke('cash:createIncomeReceipt', data),
+    cancelIncomeReceipt: (data) => ipcRenderer.invoke('cash:cancelIncomeReceipt', data),
   },
 
   // ── Ventas ────────────────────────────────
