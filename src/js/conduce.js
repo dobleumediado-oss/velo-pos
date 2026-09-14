@@ -762,7 +762,12 @@ async function _cndReports() {
       { h: 'Cantidad', f: x => x.qty, style: 'text-align:center' },
       { h: 'Conduces', f: x => x.conduces, style: 'text-align:center' }]))}
 
-    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
+      <button class="btn btn-out" onclick="exportarTablasExcel(document.querySelector('#modal-ov .modal'),'Reporte-Conduces','Reportes de Conduce')">
+        ${svg('download')} Excel
+      </button>
+    </div>
   `, 'modal-lg');
 }
 

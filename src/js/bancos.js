@@ -830,7 +830,9 @@ async function _renderBancosResumen(el) {
 
   // Botón imprimir
   el.appendChild(h('div', { style: { marginTop: '16px' } },
-    h('button', { class: 'print-btn', onclick: _printBancosResumen }, '🖨 Imprimir resumen')
+    h('button', { class: 'print-btn', onclick: _printBancosResumen }, '🖨 Imprimir resumen'),
+    h('button', { class: 'print-btn', style: { marginLeft: '8px' },
+      onclick: () => guardarDocumentoExcel(_printBancosResumen, 'Resumen-Bancos-y-Cuentas', 'Bancos y cuentas') }, 'Excel')
   ));
 }
 

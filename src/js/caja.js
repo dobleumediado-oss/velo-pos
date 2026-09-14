@@ -90,6 +90,11 @@ function renderCaja(el) {
             html: `${svg('print')} Reporte del día`
           }),
           h('button', {
+            class: 'btn btn-out',
+            onclick: () => guardarDocumentoExcel(imprimirReporteDia, 'Reporte-Caja-Diario', 'Reporte de caja'),
+            html: `${svg('download')} Excel`
+          }),
+          h('button', {
             class: 'btn btn-red',
             onclick: openCierreCajaModal,
             html: `${svg('lock')} Cerrar Caja`
@@ -904,6 +909,9 @@ function openResumenModal(raw) {
       <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
       <button class="btn btn-dark" onclick="printResumen(${s.id})">
         ${svg('print')} Imprimir Reporte
+      </button>
+      <button class="btn btn-out" onclick="guardarDocumentoExcel(()=>printResumen(${s.id}),'Reporte-Caja-${s.id}','Reporte de caja')">
+        ${svg('download')} Excel
       </button>
     </div>
   `, 'modal-lg');

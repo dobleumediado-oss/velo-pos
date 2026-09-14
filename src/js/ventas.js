@@ -448,11 +448,18 @@ function renderVentas(el) {
       h('div', { class: 'sec-title' }, 'Historial de Ventas'),
       h('div', { class: 'sec-sub' }, 'Todas las transacciones registradas')
     ),
-    h('button', {
-      class: 'btn btn-out btn-sm',
-      onclick: exportVentasPDF,
-      html: `${svg('pdf')} Exportar`
-    })
+    h('div', { class: 'flex', style: { gap: '8px' } },
+      h('button', {
+        class: 'btn btn-out btn-sm',
+        onclick: () => guardarDocumentoExcel(exportVentasPDF, 'Historial-de-Ventas', 'Historial de ventas'),
+        html: `${svg('download')} Excel`
+      }),
+      h('button', {
+        class: 'btn btn-out btn-sm',
+        onclick: exportVentasPDF,
+        html: `${svg('pdf')} PDF`
+      })
+    )
   ));
 
   // ── Tabs ──────────────────────────────────────

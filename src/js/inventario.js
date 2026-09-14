@@ -139,7 +139,12 @@ function renderInventario(el) {
       h('button', {
         class: 'btn btn-out btn-sm',
         onclick: exportInventarioPDF,
-        html: `${svg('pdf')} Exportar`
+        html: `${svg('pdf')} PDF`
+      }),
+      h('button', {
+        class: 'btn btn-out btn-sm',
+        onclick: () => guardarDocumentoExcel(exportInventarioPDF, 'Inventario', 'Inventario'),
+        html: `${svg('download')} Excel`
       }),
       h('button', {
         class: 'btn btn-out btn-sm',

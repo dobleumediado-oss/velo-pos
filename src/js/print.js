@@ -1683,6 +1683,11 @@ function _printTargetHere() {
 }
 
 function _openPrintWindow(html, jobType = '', referenceId = null, isReprint = false, printOptions = {}) {
+  if (window._excelSaveRequest && typeof _excelConsumeHTML === 'function') {
+    const request = window._excelSaveRequest;
+    _excelConsumeHTML(html, request);
+    return;
+  }
   if (window._pdfWhatsAppRequest) {
     const request = window._pdfWhatsAppRequest;
     window._pdfWhatsAppRequest = null;
@@ -1916,6 +1921,11 @@ function _printViaIframe(html) {
 // ══════════════════════════════════════════════
 function printHTML(html, category = 'reporte') {
   html = _ensureUtf8HTML(html);
+  if (window._excelSaveRequest && typeof _excelConsumeHTML === 'function') {
+    const request = window._excelSaveRequest;
+    _excelConsumeHTML(html, request);
+    return;
+  }
   if (window._pdfWhatsAppRequest) {
     const request = window._pdfWhatsAppRequest;
     window._pdfWhatsAppRequest = null;

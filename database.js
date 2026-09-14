@@ -5466,10 +5466,10 @@ const salesRepo = {
       // el usuario que factura. Un ambulante puede existir sin usuario del sistema.
       let salespersonId = Number(payment.salespersonId) || null;
       if (!salespersonId) {
-        salespersonId = db.prepare("SELECT id FROM salespeople WHERE linked_user_id=? AND status='activo'").get(user.id)?.id || null;
+        salespersonId = db.prepare("SELECT id FROM salespeople WHERE linked_user_id=? AND status='activo' AND COALESCE(employee_role,'ventas')='ventas'").get(user.id)?.id || null;
       }
       if (salespersonId) {
-        const validSeller = db.prepare("SELECT id FROM salespeople WHERE id=? AND status='activo'").get(salespersonId);
+        const validSeller = db.prepare("SELECT id FROM salespeople WHERE id=? AND status='activo' AND COALESCE(employee_role,'ventas')='ventas'").get(salespersonId);
         if (!validSeller) throw new Error('El vendedor seleccionado no existe o está inactivo');
       }
 

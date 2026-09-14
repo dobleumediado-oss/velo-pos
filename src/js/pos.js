@@ -102,7 +102,7 @@ async function renderPOS(el) {
     const recoveredTickets = typeof posRestoreWorkspace === 'function' ? posRestoreWorkspace() : 0;
     if (CFG.module_vendedores === '1' && window.api?.salespeople?.getAll) {
       try {
-        const sellers = await window.api.salespeople.getAll({ status: 'activo' });
+        const sellers = await window.api.salespeople.getAll({ status: 'activo', commercialOnly: true });
         DB.salespeople = Array.isArray(sellers) ? sellers : (sellers?.data || []);
       } catch { /* el POS sigue disponible si el módulo auxiliar no responde */ }
     }

@@ -21,7 +21,7 @@ async function renderComisiones(el){
   if(!['admin','superadmin'].includes(user?.role)){routeTo('dash');return;}
   el.innerHTML=`<div class="com-shell"><section class="ven-panel">${_comEmpty('clock','Preparando Comisiones','Calculando reglas, ventas y liquidaciones…')}</section></div>`;
   const [sellers,runs,dashboard]=await Promise.all([
-    window.api.salespeople.getAll({}),window.api.salespeople.getCommissionRuns({}),window.api.salespeople.getDashboard({from:_comMonthStart(),to:_comToday()}),
+    window.api.salespeople.getAll({commercialOnly:true}),window.api.salespeople.getCommissionRuns({}),window.api.salespeople.getDashboard({from:_comMonthStart(),to:_comToday()}),
   ]);
   _comState={sellers:sellers?.data||[],runs:runs?.data||[],dashboard:dashboard?.data||null};_comRender(el);
 }

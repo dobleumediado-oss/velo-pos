@@ -422,7 +422,7 @@ async function renderSuperAdmin(el) {
     { key: 'fiscal_enabled',       icon: '📄', title: 'Módulo Fiscal NCF/DGII',       desc: 'Activa NCF, ITBIS 18% y comprobantes fiscales.',          cajeroCan: false, special: 'fiscal' },
     { key: 'module_gastos',        icon: '💰', title: 'Gastos y Egresos',               desc: 'Registro de gastos, categorías y reportes de egresos.',  cajeroCan: true  },
     { key: 'module_contabilidad',  icon: '📒', title: 'Contabilidad y Bancos',          desc: 'Bancos, catálogo de cuentas, asientos y reportes.',       cajeroCan: false },
-    { key: 'module_vendedores',    icon: '🧑‍💼', title: 'Vendedores + Nómina', desc: 'Activa dos áreas conectadas: operación comercial y liquidaciones financieras.', cajeroCan: false },
+    { key: 'module_vendedores',    icon: '🧑‍💼', title: 'Colaboradores + Nómina', desc: 'Activa personal, operación comercial, comisiones y pagos de nómina.', cajeroCan: false },
     { key: 'module_crm',           icon: '🧠', title: 'CRM Cerebro',                 desc: 'Inteligencia offline sobre clientes e inventario: segmentación, alertas y contacto.', cajeroCan: false },
     // Módulos operativos
     { key: 'barcode_enabled',      icon: '🏷️', title: 'Etiquetas / Código de Barras',  desc: 'Diseñador e impresión de etiquetas con códigos de barras.', cajeroCan: true, special: 'barcode' },

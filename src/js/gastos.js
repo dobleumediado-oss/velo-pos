@@ -477,6 +477,7 @@ async function renderProveedoresGastos(el, user) {
             <div style="margin-top:8px;display:flex;gap:6px;align-items:center">
               <span style="font-size:10px;padding:2px 8px;border-radius:100px;background:${s.status==='activo'?'var(--green,#00c07a)':'var(--red,#ef4444)'}22;color:${s.status==='activo'?'var(--green,#00c07a)':'var(--red,#ef4444)'};font-weight:600">${s.status||'activo'}</span>
               <button class="btn btn-ghost btn-sm" style="margin-left:auto;font-size:11px;padding:3px 8px" onclick="imprimirEstadoCuentaProveedor(${s.id})" title="Imprimir estado de cuenta">${svg('print')} Estado de cuenta</button>
+              <button class="btn btn-ghost btn-sm" style="font-size:11px;padding:3px 8px" onclick="guardarDocumentoExcel(()=>imprimirEstadoCuentaProveedor(${s.id}),'Proveedor-${s.id}-Estado-Cuenta','Estado de cuenta del proveedor')" title="Exportar estado de cuenta a Excel">Excel</button>
             </div>
           </div>`).join('')}
       </div>`;

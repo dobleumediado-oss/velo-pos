@@ -59,6 +59,11 @@ function renderClientes(el) {
       )
     ),
     h('div', { class: 'flex', style: { gap: '8px' } },
+      h('button', {
+        class: 'btn btn-out',
+        onclick: () => exportarTablasExcel(document.getElementById('page'), 'Clientes', 'Directorio de clientes'),
+        html: `${svg('download')} Excel`
+      }),
       isAdmin && clientes.length > 0
         ? h('button', {
             class: 'btn btn-out',
@@ -2327,6 +2332,10 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
       ${activeTab !== 'historial' ? `<button class="btn btn-out"
               onclick="exportClientModalPDF(DB.customers.find(x=>x.id===${c.id}),'${activeTab}')">
         ${svg('pdf')} ${activeTab === 'facturas' ? 'PDF Facturas Pendientes' : 'PDF Estado de Cuenta'}
+      </button>` : ''}
+      ${activeTab !== 'historial' ? `<button class="btn btn-out"
+              onclick="guardarDocumentoExcel(()=>exportClientModalPDF(DB.customers.find(x=>x.id===${c.id}),'${activeTab}'),'Cliente-${c.id}-${activeTab}','${activeTab === 'facturas' ? 'Facturas pendientes' : 'Estado de cuenta'}')">
+        ${svg('download')} Excel
       </button>` : ''}
       ${['admin','superadmin','cajero'].includes(user?.role) ? `
         <button class="btn btn-ghost"

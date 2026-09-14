@@ -37,7 +37,7 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
     'business:getAll', 'business:getActive', 'business:selectForLogin', 'business:switch',
     // Impresión = operación de dispositivo: cada terminal imprime en SU impresora.
     // (print:onServer NO va aquí: es la opción explícita de imprimir en el servidor.)
-    'print:html', 'print:toPDF', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
+    'print:html', 'print:toPDF', 'excel:saveReport', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
     'shell:openExternal', 'shell:openWhatsApp', 'shell:showItemInFolder',
     // Los selectores de archivo/carpeta pertenecen a la PC que muestra la
     // ventana. La creación/verificación se mantiene mode-aware para operar
@@ -69,6 +69,7 @@ const {
   writePdfFile,
   cleanupStaleGeneratedFiles,
 } = require('./src/main/pdf-document');
+const { createExcelReportBuffer } = require('./src/main/excel-report');
 const { canManageInventory, modulePermission } = require('./lib/user-operational-permissions');
 const {
   EQUIPARTS_FILES,
@@ -4215,6 +4216,33 @@ ipcMain.handle('print:toPDF', async (_, { html, suggestedName, open, temporary }
   }
 });
 
+// Exportación local a XLSX. Los datos del reporte pueden venir del servidor,
+// pero el archivo siempre se construye y guarda en la terminal que lo solicita.
+ipcMain.handle('excel:saveReport', async (_, payload = {}) => {
+  try {
+    const safeName = String(payload.suggestedName || payload.title || 'Reporte')
+      .replace(/[^\w\-. ]/g, '_').slice(0, 120) || 'Reporte';
+    const defaultPath = safeName.toLowerCase().endsWith('.xlsx') ? safeName : `${safeName}.xlsx`;
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+      title: 'Guardar reporte en Excel',
+      defaultPath,
+      filters: [{ name: 'Libro de Excel', extensions: ['xlsx'] }],
+    });
+    if (canceled || !filePath) return { ok: false, canceled: true };
+    const buffer = await createExcelReportBuffer(payload);
+    fs.writeFileSync(filePath, buffer);
+    let openError = '';
+    try { openError = await shell.openPath(filePath); }
+    catch (error) { openError = error?.message || 'No se pudo abrir el archivo'; }
+    if (openError) logWarn('excel', 'El Excel se guardó pero no pudo abrirse', { error: openError });
+    else logInfo('excel', 'Reporte Excel generado', { bytes: buffer.length, sheets: payload.sheets?.length || 0 });
+    return { ok: true, path: filePath, openError: openError || undefined };
+  } catch (error) {
+    logError('excel', 'No se pudo generar el reporte Excel', { error: error.message });
+    return { ok: false, error: error.message || 'No se pudo generar el Excel' };
+  }
+});
+
 /**
  * Lista las impresoras instaladas en el sistema.
  * En Windows incluye la AOKIA USB si está instalada.
@@ -7405,6 +7433,14 @@ ipcMain.handle('salespeople:payPayroll', async (_, { id,data,requestUserId }) =>
     return {ok:true,paid:refs.length};
   }catch(e){return {ok:false,error:e.message};}
 });
+ipcMain.handle('salespeople:quickPayPayroll', async (_, { data,requestUserId }) => {
+  try{const u=_salespeopleAdmin(requestUserId,'nomina');if(!u)return {ok:false,error:'Sin permisos'};let session=null;
+    if(data?.payment_source==='caja'){session=cashRepo.getOpen(_reqTerminalId());if(!session)return {ok:false,error:'No hay caja abierta'};}
+    const result=salespeopleRepo.quickPayPayroll({...data,cash_session_id:session?.id||null},requestUserId,u.name);
+    _acctHook(()=>result.refs.forEach(ref=>{accountingRepo.generateExpenseAccrualEntry({expenseId:ref.expenseId,userId:requestUserId});accountingRepo.generateExpensePaymentEntry({paymentId:ref.paymentId,userId:requestUserId});}));
+    return {ok:true,id:result.id,paid:result.refs.length};
+  }catch(e){return {ok:false,error:e.message};}
+});
 
 
 // ══════════════════════════════════════════════
@@ -8257,7 +8293,7 @@ function setupMultiTerminal() {
       'business:getAll', 'business:getActive', 'business:selectForLogin', 'business:switch',
       'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke',
       'update:check', 'update:download', 'update:install',
-      'print:html', 'print:toPDF', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
+      'print:html', 'print:toPDF', 'excel:saveReport', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
       'backup:pickExternalDirectory', 'backup:pickEncryptedFile',
     ]);
     const serviceSecurity = () => {

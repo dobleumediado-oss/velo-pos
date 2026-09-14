@@ -227,6 +227,7 @@ const api = {
     updatePayrollItem:  (d) => ipcRenderer.invoke('salespeople:updatePayrollItem', d),
     approvePayroll:     (d) => ipcRenderer.invoke('salespeople:approvePayroll', d),
     payPayroll:         (d) => ipcRenderer.invoke('salespeople:payPayroll', d),
+    quickPayPayroll:    (d) => ipcRenderer.invoke('salespeople:quickPayPayroll', d),
   },
 
   // ── Reportes ──────────────────────────────
@@ -263,6 +264,10 @@ const api = {
     savePrinter:  (data)      => ipcRenderer.invoke('print:savePrinter', data),
     saveConfig:   (data)      => ipcRenderer.invoke('print:saveConfig', data),
     getJobs:      (data)      => ipcRenderer.invoke('print:getJobs', data),
+  },
+
+  excel: {
+    saveReport:   (data)      => ipcRenderer.invoke('excel:saveReport', data),
   },
 
   // ── Backup ────────────────────────────────

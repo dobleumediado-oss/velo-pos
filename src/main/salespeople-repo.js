@@ -32,6 +32,7 @@ function ensureSalespeopleSchema(db) {
       location_updated_at  TEXT,
       payroll_frequency    TEXT NOT NULL DEFAULT 'mensual'
                              CHECK(payroll_frequency IN ('semanal','quincenal','mensual')),
+      employee_role        TEXT NOT NULL DEFAULT 'ventas',
       status               TEXT NOT NULL DEFAULT 'activo' CHECK(status IN ('activo','inactivo')),
       notes                TEXT DEFAULT '',
       created_by           INTEGER REFERENCES users(id),
@@ -144,6 +145,11 @@ function ensureSalespeopleSchema(db) {
       deduction_total REAL NOT NULL DEFAULT 0,
       net_total      REAL NOT NULL DEFAULT 0,
       notes          TEXT DEFAULT '',
+      receipt_notes  TEXT DEFAULT '',
+      payment_method TEXT DEFAULT '',
+      payment_source TEXT DEFAULT '',
+      payment_reference TEXT DEFAULT '',
+      scope_key      TEXT NOT NULL DEFAULT 'all',
       approved_by    INTEGER REFERENCES users(id),
       approved_at    TEXT,
       paid_by        INTEGER REFERENCES users(id),
@@ -182,8 +188,15 @@ function ensureSalespeopleSchema(db) {
   if (!sellerCols.includes('map_lng')) db.exec('ALTER TABLE salespeople ADD COLUMN map_lng REAL');
   if (!sellerCols.includes('coverage_address')) db.exec("ALTER TABLE salespeople ADD COLUMN coverage_address TEXT DEFAULT ''");
   if (!sellerCols.includes('location_updated_at')) db.exec('ALTER TABLE salespeople ADD COLUMN location_updated_at TEXT');
+  if (!sellerCols.includes('employee_role')) db.exec("ALTER TABLE salespeople ADD COLUMN employee_role TEXT NOT NULL DEFAULT 'ventas'");
+  if (!payrollCols.includes('receipt_notes')) db.exec("ALTER TABLE payroll_runs ADD COLUMN receipt_notes TEXT DEFAULT ''");
+  if (!payrollCols.includes('payment_method')) db.exec("ALTER TABLE payroll_runs ADD COLUMN payment_method TEXT DEFAULT ''");
+  if (!payrollCols.includes('payment_source')) db.exec("ALTER TABLE payroll_runs ADD COLUMN payment_source TEXT DEFAULT ''");
+  if (!payrollCols.includes('payment_reference')) db.exec("ALTER TABLE payroll_runs ADD COLUMN payment_reference TEXT DEFAULT ''");
+  if (!payrollCols.includes('scope_key')) db.exec("ALTER TABLE payroll_runs ADD COLUMN scope_key TEXT NOT NULL DEFAULT 'all'");
   db.exec('CREATE INDEX IF NOT EXISTS idx_sales_salesperson_date ON sales(salesperson_id,created_at,status)');
-  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_payroll_unique_period ON payroll_runs(date_from,date_to,frequency) WHERE status!='anulado'");
+  db.exec('DROP INDEX IF EXISTS idx_payroll_unique_period');
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_payroll_unique_scope ON payroll_runs(date_from,date_to,frequency,scope_key) WHERE status!='anulado'");
 }
 
 function isoDate(value) {
@@ -219,6 +232,7 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
   const db = () => getDb();
   const money = n => round2(Math.max(0, Number(n) || 0));
   const text = (v, max = 250) => String(v || '').trim().slice(0, max);
+  const employeeRole = value => ['ventas','mecanica','administracion','otro'].includes(value) ? value : 'ventas';
   const coordinate = (value, min, max) => {
     if (value === '' || value == null) return null;
     const number = Number(value);
@@ -260,6 +274,7 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
   }
 
   function calculateCommission(seller, from, to) {
+    if ((seller.employee_role || 'ventas') !== 'ventas') throw new Error('Las comisiones solo aplican a colaboradores del área de Ventas');
     const sources = commissionSources(seller, from, to).map(row => {
       const saleAmount = money(row.sale_amount);
       const costAmount = Math.min(saleAmount, money(row.cost_amount));
@@ -299,11 +314,13 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
   }
 
   return {
-    getAll({ status, type } = {}) {
+    getAll({ status, type, role, commercialOnly } = {}) {
       let where = 'WHERE 1=1';
       const args = [];
       if (status) { where += ' AND sp.status=?'; args.push(status); }
       if (type) { where += ' AND sp.seller_type=?'; args.push(type); }
+      if (role) { where += ' AND sp.employee_role=?'; args.push(employeeRole(role)); }
+      if (commercialOnly) where += " AND sp.employee_role='ventas'";
       return db().prepare(`SELECT sp.*,u.name linked_user_name,
         (SELECT COUNT(*) FROM sales s WHERE s.salesperson_id=sp.id AND s.status!='cancelled') internal_sales_count,
         (SELECT COUNT(*) FROM seller_external_sales es WHERE es.salesperson_id=sp.id AND es.status='registrada') external_sales_count
@@ -312,42 +329,44 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
     getById(id) { return requireSeller(id); },
     create(data, userId, userName) {
       const name = text(data.name, 120);
-      if (!name) throw new Error('El nombre del vendedor es obligatorio');
-      const code = text(data.code, 30) || `VEN-${String((db().prepare('SELECT COALESCE(MAX(id),0)+1 n FROM salespeople').get().n)).padStart(4, '0')}`;
+      if (!name) throw new Error('El nombre del colaborador es obligatorio');
+      const role = employeeRole(data.employee_role);
+      const code = text(data.code, 30) || `COL-${String((db().prepare('SELECT COALESCE(MAX(id),0)+1 n FROM salespeople').get().n)).padStart(4, '0')}`;
       const r = db().prepare(`INSERT INTO salespeople(code,name,seller_type,linked_user_id,document,phone,email,address,zone,route,
-        booklet_code,hire_date,commission_mode,commission_rate,commission_fixed,commission_frequency,salary_amount,sales_goal,map_lat,map_lng,coverage_address,location_updated_at,payroll_frequency,notes,created_by)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(code,name,data.seller_type==='ambulante'?'ambulante':'fijo',
-        Number(data.linked_user_id)||null,text(data.document,30),text(data.phone,30),text(data.email,120),text(data.address,250),
+        booklet_code,hire_date,commission_mode,commission_rate,commission_fixed,commission_frequency,salary_amount,sales_goal,map_lat,map_lng,coverage_address,location_updated_at,payroll_frequency,employee_role,notes,created_by)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(code,name,data.seller_type==='ambulante'?'ambulante':'fijo',
+        role==='ventas'?(Number(data.linked_user_id)||null):null,text(data.document,30),text(data.phone,30),text(data.email,120),text(data.address,250),
         text(data.zone,100),text(data.route,120),'',data.hire_date||null,
-        ['none','percent_sales','percent_margin','fixed_sale'].includes(data.commission_mode)?data.commission_mode:'percent_sales',
-        money(data.commission_rate),money(data.commission_fixed),
+        role==='ventas'&&['none','percent_sales','percent_margin','fixed_sale'].includes(data.commission_mode)?data.commission_mode:'none',
+        role==='ventas'?money(data.commission_rate):0,role==='ventas'?money(data.commission_fixed):0,
         ['semanal','quincenal','mensual'].includes(data.commission_frequency)?data.commission_frequency:'mensual',
         money(data.salary_amount),money(data.sales_goal),coordinate(data.map_lat,-90,90),coordinate(data.map_lng,-180,180),
         text(data.coverage_address,250),(data.map_lat!==''&&data.map_lat!=null&&data.map_lng!==''&&data.map_lng!=null)?new Date().toISOString():null,
         ['semanal','quincenal','mensual'].includes(data.payroll_frequency)?data.payroll_frequency:'mensual',
-        text(data.notes,500),userId||null);
-      audit(userId||0,userName||'','vendedor_creado','salespeople',r.lastInsertRowid,`${code} · ${name}`);
+        role,text(data.notes,500),userId||null);
+      audit(userId||0,userName||'','colaborador_creado','salespeople',r.lastInsertRowid,`${code} · ${name}`);
       return r.lastInsertRowid;
     },
     update(id, data, userId, userName) {
       const current = requireSeller(id);
       const name = text(data.name,120);
-      if (!name) throw new Error('El nombre del vendedor es obligatorio');
+      if (!name) throw new Error('El nombre del colaborador es obligatorio');
+      const role = employeeRole(data.employee_role || current.employee_role);
       const nextLat = coordinate(data.map_lat,-90,90);
       const nextLng = coordinate(data.map_lng,-180,180);
       const locationChanged = nextLat !== current.map_lat || nextLng !== current.map_lng;
       db().prepare(`UPDATE salespeople SET code=?,name=?,seller_type=?,linked_user_id=?,document=?,phone=?,email=?,address=?,zone=?,route=?,
         booklet_code=?,hire_date=?,commission_mode=?,commission_rate=?,commission_fixed=?,commission_frequency=?,salary_amount=?,sales_goal=?,map_lat=?,map_lng=?,coverage_address=?,
-        location_updated_at=CASE WHEN ?=1 THEN datetime('now','localtime') ELSE location_updated_at END,payroll_frequency=?,
+        location_updated_at=CASE WHEN ?=1 THEN datetime('now','localtime') ELSE location_updated_at END,payroll_frequency=?,employee_role=?,
         notes=?,updated_at=datetime('now','localtime') WHERE id=?`).run(text(data.code,30)||current.code,name,
-        data.seller_type==='ambulante'?'ambulante':'fijo',Number(data.linked_user_id)||null,text(data.document,30),text(data.phone,30),
+        data.seller_type==='ambulante'?'ambulante':'fijo',role==='ventas'?(Number(data.linked_user_id)||null):null,text(data.document,30),text(data.phone,30),
         text(data.email,120),text(data.address,250),text(data.zone,100),text(data.route,120),'',data.hire_date||current.hire_date,
-        ['none','percent_sales','percent_margin','fixed_sale'].includes(data.commission_mode)?data.commission_mode:'percent_sales',
-        money(data.commission_rate),money(data.commission_fixed),
+        role==='ventas'&&['none','percent_sales','percent_margin','fixed_sale'].includes(data.commission_mode)?data.commission_mode:'none',
+        role==='ventas'?money(data.commission_rate):0,role==='ventas'?money(data.commission_fixed):0,
         ['semanal','quincenal','mensual'].includes(data.commission_frequency)?data.commission_frequency:'mensual',money(data.salary_amount),money(data.sales_goal),
         nextLat,nextLng,text(data.coverage_address,250),locationChanged?1:0,
-        ['semanal','quincenal','mensual'].includes(data.payroll_frequency)?data.payroll_frequency:'mensual',text(data.notes,500),id);
-      audit(userId||0,userName||'','vendedor_actualizado','salespeople',id,name);
+        ['semanal','quincenal','mensual'].includes(data.payroll_frequency)?data.payroll_frequency:'mensual',role,text(data.notes,500),id);
+      audit(userId||0,userName||'','colaborador_actualizado','salespeople',id,name);
       return true;
     },
     updateLocation(id, data, userId, userName) {
@@ -371,7 +390,7 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
       const dateTo = to ? isoDate(to) : new Date().toISOString().slice(0,10);
       const d = new Date(`${dateTo}T12:00:00`); d.setDate(1);
       const dateFrom = from ? isoDate(from) : d.toISOString().slice(0,10);
-      const sellers = this.getAll({ status:'activo' });
+      const sellers = this.getAll({ status:'activo', commercialOnly:true });
       const rows = sellers.map(seller => {
         const calc = calculateCommission(seller,dateFrom,dateTo);
         const expenses = db().prepare(`SELECT COALESCE(SUM(e.total),0) total FROM seller_expense_links l JOIN expenses e ON e.id=l.expense_id
@@ -386,6 +405,7 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
     createExternalSale(data, userId, userName) {
       return db().transaction(() => {
         const seller = requireSeller(data.salesperson_id);
+        if ((seller.employee_role || 'ventas') !== 'ventas') throw new Error('Las ventas externas solo aplican a colaboradores del área de Ventas');
         if (seller.seller_type !== 'ambulante') throw new Error('Las ventas externas solo aplican a vendedores ambulantes');
         const receipt = text(data.receipt_number,50) || `EXT-${String(db().prepare('SELECT COALESCE(MAX(id),0)+1 n FROM seller_external_sales').get().n).padStart(6,'0')}`;
         if (db().prepare('SELECT id FROM seller_external_sales WHERE salesperson_id=? AND receipt_number=? LIMIT 1').get(seller.id,receipt)) {
@@ -540,16 +560,23 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
       return db().prepare(`SELECT l.*,e.description,e.issue_date,e.total,e.paid_amount,e.status,e.payment_method,e.payment_source,sp.name salesperson_name
         FROM seller_expense_links l JOIN expenses e ON e.id=l.expense_id JOIN salespeople sp ON sp.id=l.salesperson_id ${where} ORDER BY e.issue_date DESC,e.id DESC`).all(...args);
     },
-    generatePayroll({from,to,frequency,notes},userId,userName){
+    generatePayroll({from,to,frequency,notes,receiptNotes,salespersonId},userId,userName){
       const dateFrom=isoDate(from),dateTo=isoDate(to);if(dateFrom>dateTo)throw new Error('El período de nómina es inválido');
       const payrollFrequency=['semanal','quincenal','mensual'].includes(frequency)?frequency:'mensual';
-      const duplicate=db().prepare("SELECT id FROM payroll_runs WHERE date_from=? AND date_to=? AND frequency=? AND status!='anulado'").get(dateFrom,dateTo,payrollFrequency);
-      if(duplicate)throw new Error('Ya existe una nómina activa para este período y frecuencia');
-      const sellers=db().prepare("SELECT * FROM salespeople WHERE status='activo' AND ((salary_amount>0 AND payroll_frequency=?) OR id IN (SELECT salesperson_id FROM seller_commission_runs WHERE status='aprobado' AND payroll_run_id IS NULL AND frequency=? AND date_to BETWEEN ? AND ?)) ORDER BY name").all(payrollFrequency,payrollFrequency,dateFrom,dateTo);
-      if(!sellers.length)throw new Error('No hay vendedores con salario o comisiones aprobadas para el período');
+      const collaboratorId=Number(salespersonId)||null;
+      const duplicate=collaboratorId
+        ? db().prepare("SELECT r.id FROM payroll_runs r JOIN payroll_items i ON i.payroll_run_id=r.id WHERE r.date_from<=? AND r.date_to>=? AND r.frequency=? AND r.status!='anulado' AND i.salesperson_id=?").get(dateTo,dateFrom,payrollFrequency,collaboratorId)
+        : db().prepare("SELECT id FROM payroll_runs WHERE date_from<=? AND date_to>=? AND frequency=? AND status!='anulado'").get(dateTo,dateFrom,payrollFrequency);
+      if(duplicate)throw new Error(collaboratorId?'Este colaborador ya está incluido en una nómina activa que cruza el período':'Ya existe una nómina activa que cruza este período y frecuencia');
+      const sellerSql="SELECT * FROM salespeople WHERE status='activo' AND ((salary_amount>0 AND payroll_frequency=?) OR id IN (SELECT salesperson_id FROM seller_commission_runs WHERE status='aprobado' AND payroll_run_id IS NULL AND frequency=? AND date_to BETWEEN ? AND ?))";
+      const sellers=collaboratorId
+        ? db().prepare(`${sellerSql} AND id=? ORDER BY name`).all(payrollFrequency,payrollFrequency,dateFrom,dateTo,collaboratorId)
+        : db().prepare(`${sellerSql} ORDER BY name`).all(payrollFrequency,payrollFrequency,dateFrom,dateTo);
+      if(!sellers.length)throw new Error(collaboratorId?'El colaborador no tiene salario o comisiones disponibles para este período':'No hay colaboradores con salario o comisiones aprobadas para el período');
       return db().transaction(()=>{
         const next=db().prepare('SELECT COALESCE(MAX(id),0)+1 n FROM payroll_runs').get().n;const number=`NOM-${dateFrom.replace(/-/g,'')}-${String(next).padStart(4,'0')}`;
-        const rr=db().prepare('INSERT INTO payroll_runs(number,date_from,date_to,frequency,notes,created_by) VALUES(?,?,?,?,?,?)').run(number,dateFrom,dateTo,payrollFrequency,text(notes,500),userId||null);
+        const scopeKey=collaboratorId?`colaborador:${collaboratorId}`:'all';
+        const rr=db().prepare('INSERT INTO payroll_runs(number,date_from,date_to,frequency,notes,receipt_notes,scope_key,created_by) VALUES(?,?,?,?,?,?,?,?)').run(number,dateFrom,dateTo,payrollFrequency,text(notes,500),text(receiptNotes,500),scopeKey,userId||null);
         const ins=db().prepare(`INSERT INTO payroll_items(payroll_run_id,salesperson_id,base_salary,commission_amount,net_amount) VALUES(?,?,?,?,?)`);
         sellers.forEach(s=>{const cr=db().prepare("SELECT COALESCE(SUM(commission_total),0) total FROM seller_commission_runs WHERE salesperson_id=? AND status='aprobado' AND payroll_run_id IS NULL AND frequency=? AND date_to BETWEEN ? AND ?").get(s.id,payrollFrequency,dateFrom,dateTo);
           const base=money(s.salary_amount),commission=money(cr.total),net=money(base+commission);if(net>0)ins.run(rr.lastInsertRowid,s.id,base,commission,net);});
@@ -557,13 +584,24 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
       })();
     },
     getPayrollRuns(){return db().prepare(`SELECT r.*,(SELECT COUNT(*) FROM payroll_items i WHERE i.payroll_run_id=r.id) employee_count FROM payroll_runs r ORDER BY r.date_to DESC,r.id DESC`).all();},
-    getPayrollById(id){const run=db().prepare('SELECT * FROM payroll_runs WHERE id=?').get(id);if(!run)return null;run.items=db().prepare(`SELECT i.*,sp.name salesperson_name,sp.code,sp.seller_type FROM payroll_items i JOIN salespeople sp ON sp.id=i.salesperson_id WHERE i.payroll_run_id=? ORDER BY sp.name`).all(id);return run;},
+    getPayrollById(id){const run=db().prepare('SELECT * FROM payroll_runs WHERE id=?').get(id);if(!run)return null;run.items=db().prepare(`SELECT i.*,sp.name salesperson_name,sp.code,sp.seller_type,sp.employee_role,sp.document,sp.phone FROM payroll_items i JOIN salespeople sp ON sp.id=i.salesperson_id WHERE i.payroll_run_id=? ORDER BY sp.name`).all(id);return run;},
     updatePayrollItem(id,{bonusAmount,deductionAmount,notes}){const item=db().prepare('SELECT * FROM payroll_items WHERE id=?').get(id);if(!item)throw new Error('Detalle de nómina no encontrado');const run=db().prepare('SELECT * FROM payroll_runs WHERE id=?').get(item.payroll_run_id);if(run.status!=='borrador')throw new Error('Solo se modifica una nómina en borrador');const bonus=money(bonusAmount),deduction=money(deductionAmount),net=money(item.base_salary+item.commission_amount+bonus-deduction);db().prepare('UPDATE payroll_items SET bonus_amount=?,deduction_amount=?,net_amount=?,notes=? WHERE id=?').run(bonus,deduction,net,text(notes,300),id);recalcPayroll(item.payroll_run_id);return true;},
     approvePayroll(id,userId,userName){const run=this.getPayrollById(id);if(!run)throw new Error('Nómina no encontrada');if(run.status!=='borrador')throw new Error('Solo se aprueba una nómina en borrador');if(run.net_total<=0)throw new Error('La nómina no tiene monto pagable');db().prepare("UPDATE payroll_runs SET status='aprobado',approved_by=?,approved_at=datetime('now','localtime') WHERE id=?").run(userId,id);db().prepare("UPDATE seller_commission_runs SET payroll_run_id=? WHERE status='aprobado' AND payroll_run_id IS NULL AND frequency=? AND salesperson_id IN (SELECT salesperson_id FROM payroll_items WHERE payroll_run_id=?) AND date_to BETWEEN ? AND ?").run(id,run.frequency||'mensual',id,run.date_from,run.date_to);audit(userId||0,userName||'','nomina_aprobada','payroll_runs',id,run.number);return true;},
     payPayroll(id,data,userId,userName){
       const run=this.getPayrollById(id);if(!run)throw new Error('Nómina no encontrada');if(run.status!=='aprobado')throw new Error('La nómina debe estar aprobada antes de pagar');
       return db().transaction(()=>{const refs=[];const catId=expensesRepo.ensureCategory('Pago de nómina','Personal');for(const item of run.items){if(item.net_amount<=0)continue;const expenseId=expensesRepo.create({type:'gasto',category_id:catId,description:`Nómina ${run.number} · ${item.salesperson_name}`,amount:item.net_amount,total:item.net_amount,payment_method:data.payment_method||'efectivo',payment_source:data.payment_source||'caja_chica',cash_session_id:data.cash_session_id||null,issue_date:isoDate(data.payment_date),notes:`Salario RD$${item.base_salary}; comisión RD$${item.commission_amount}; bonos RD$${item.bonus_amount}; deducciones RD$${item.deduction_amount}`,user_id:userId,status:'pendiente_pago'});db().prepare("INSERT INTO seller_expense_links(salesperson_id,expense_id,expense_kind) VALUES(?,?,'nomina')").run(item.salesperson_id,expenseId);const pay=expensesRepo.pay({expenseId,amount:item.net_amount,payment_method:data.payment_method||'efectivo',payment_source:data.payment_source||'caja_chica',cash_session_id:data.cash_session_id||null,reference:data.reference||run.number,userId,userName});db().prepare('UPDATE payroll_items SET expense_id=? WHERE id=?').run(expenseId,item.id);refs.push({expenseId,paymentId:pay.paymentId});}
-        db().prepare("UPDATE payroll_runs SET status='pagado',payment_date=?,paid_by=?,paid_at=datetime('now','localtime') WHERE id=?").run(isoDate(data.payment_date),userId,id);db().prepare("UPDATE seller_commission_runs SET status='pagado' WHERE payroll_run_id=? AND status='aprobado'").run(id);audit(userId||0,userName||'','nomina_pagada','payroll_runs',id,`${run.number} · RD$${run.net_total}`);return refs;})();
+        db().prepare("UPDATE payroll_runs SET status='pagado',payment_date=?,payment_method=?,payment_source=?,payment_reference=?,receipt_notes=CASE WHEN ?!='' THEN ? ELSE receipt_notes END,paid_by=?,paid_at=datetime('now','localtime') WHERE id=?").run(isoDate(data.payment_date),text(data.payment_method,40),text(data.payment_source,40),text(data.reference,120),text(data.receipt_notes,500),text(data.receipt_notes,500),userId,id);db().prepare("UPDATE seller_commission_runs SET status='pagado' WHERE payroll_run_id=? AND status='aprobado'").run(id);audit(userId||0,userName||'','nomina_pagada','payroll_runs',id,`${run.number} · RD$${run.net_total}`);return refs;})();
+    },
+    quickPayPayroll(data,userId,userName){
+      return db().transaction(()=>{
+        const id=this.generatePayroll({from:data.from,to:data.to,frequency:data.frequency,notes:data.internal_notes,receiptNotes:data.receipt_notes,salespersonId:data.salesperson_id},userId,userName);
+        const run=this.getPayrollById(id),item=run?.items?.[0];
+        if(!item)throw new Error('No se pudo preparar el pago del colaborador');
+        this.updatePayrollItem(item.id,{bonusAmount:data.bonus_amount,deductionAmount:data.deduction_amount,notes:data.item_notes});
+        this.approvePayroll(id,userId,userName);
+        const refs=this.payPayroll(id,{payment_date:data.payment_date,payment_method:data.payment_method,payment_source:data.payment_source,cash_session_id:data.cash_session_id,reference:data.reference,receipt_notes:data.receipt_notes},userId,userName);
+        return {id,refs};
+      })();
     },
   };
 }

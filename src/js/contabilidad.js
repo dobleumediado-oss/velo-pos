@@ -191,6 +191,8 @@ async function _contRenderCuentas(el) {
     h('div', null),
     h('div', { style: { display: 'flex', gap: '8px' } },
       h('button', { class: 'print-btn', onclick: () => _printCatalogo(cuentas) }, '🖨 Imprimir'),
+      h('button', { class: 'print-btn', onclick: () => guardarDocumentoExcel(
+        () => _printCatalogo(cuentas), 'Catalogo-de-Cuentas', 'Catálogo de cuentas') }, 'Excel'),
       h('button', { class: 'btn', onclick: () => _openCuentaModal(null, cuentas) }, '+ Nueva cuenta')
     )
   );
@@ -679,6 +681,8 @@ async function _contRenderMayor(el) {
   controls.appendChild(h('div', null, h('label', { class: 'lbl', style: { display: 'block', marginBottom: '3px' } }, 'Hasta'), toIn));
   controls.appendChild(h('button', { class: 'print-btn', style: { alignSelf: 'flex-end' },
     onclick: () => _printMayor(selAcct) }, '🖨 Imprimir'));
+  controls.appendChild(h('button', { class: 'print-btn', style: { alignSelf: 'flex-end' },
+    onclick: () => guardarDocumentoExcel(() => _printMayor(selAcct), 'Libro-Mayor', 'Libro mayor') }, 'Excel'));
   el.appendChild(controls);
 
   const body = h('div', { id: 'mayor-body' });
@@ -777,7 +781,11 @@ async function _contRenderBalance(el) {
         }
       })
     ),
-    h('button', { class: 'print-btn', onclick: () => _printTrialBalance() }, '🖨 Imprimir')
+    h('div', { style: { display: 'flex', gap: '8px' } },
+      h('button', { class: 'print-btn', onclick: () => guardarDocumentoExcel(
+        _printTrialBalance, 'Balanza-de-Comprobacion', 'Balanza de comprobación') }, 'Excel'),
+      h('button', { class: 'print-btn', onclick: () => _printTrialBalance() }, '🖨 Imprimir')
+    )
   );
   el.appendChild(hdr);
   const body = h('div', { id: 'tb-body' });
@@ -866,7 +874,11 @@ async function _contRenderResultados(el) {
       h('input', { type: 'date', id: 'er-to', value: _contTo, class: 'inp', style: { maxWidth: '150px' },
         onchange: async e => { _contTo = e.target.value; await _reloadResultados(); } })
     ),
-    h('button', { class: 'print-btn', onclick: _printResultados }, '🖨 Imprimir')
+    h('div', { style: { display: 'flex', gap: '8px' } },
+      h('button', { class: 'print-btn', onclick: () => guardarDocumentoExcel(
+        _printResultados, 'Estado-de-Resultados', 'Estado de resultados') }, 'Excel'),
+      h('button', { class: 'print-btn', onclick: _printResultados }, '🖨 Imprimir')
+    )
   );
   el.appendChild(controls);
   const body = h('div', { id: 'er-body' });
@@ -970,7 +982,11 @@ async function _contRenderGeneral(el) {
       h('input', { type: 'date', id: 'bg-asof', value: _contTo, class: 'inp', style: { maxWidth: '150px' },
         onchange: async e => { _contTo = e.target.value; await _reloadGeneral(); } })
     ),
-    h('button', { class: 'print-btn', onclick: _printGeneral }, '🖨 Imprimir')
+    h('div', { style: { display: 'flex', gap: '8px' } },
+      h('button', { class: 'print-btn', onclick: () => guardarDocumentoExcel(
+        _printGeneral, 'Balance-General', 'Balance general') }, 'Excel'),
+      h('button', { class: 'print-btn', onclick: _printGeneral }, '🖨 Imprimir')
+    )
   );
   el.appendChild(controls);
   const body = h('div', { id: 'bg-body' });
@@ -1065,7 +1081,11 @@ async function _contRenderFlujo(el) {
       h('input', { type: 'date', id: 'fl-to', value: _contTo, class: 'inp', style: { maxWidth: '150px' },
         onchange: async e => { _contTo = e.target.value; await _reloadFlujo(); } })
     ),
-    h('button', { class: 'print-btn', onclick: _printFlujo }, '🖨 Imprimir')
+    h('div', { style: { display: 'flex', gap: '8px' } },
+      h('button', { class: 'print-btn', onclick: () => guardarDocumentoExcel(
+        _printFlujo, 'Flujo-de-Efectivo', 'Flujo de efectivo') }, 'Excel'),
+      h('button', { class: 'print-btn', onclick: _printFlujo }, '🖨 Imprimir')
+    )
   );
   el.appendChild(controls);
   const body = h('div', { id: 'fl-body' });
@@ -1159,6 +1179,8 @@ async function _contRenderCxC(el) {
     h('div', { style: { fontSize: '13px', fontWeight: '600', color: 'var(--ink)' } }, `Clientes con saldo pendiente (${withCredit.length})`),
     h('div', { style: { display: 'flex', gap: '8px' } },
       h('button', { class: 'print-btn', onclick: () => _printCxC(withCredit) }, '🖨 Imprimir'),
+      h('button', { class: 'print-btn', onclick: () => guardarDocumentoExcel(
+        () => _printCxC(withCredit), 'Cuentas-por-Cobrar', 'Cuentas por cobrar') }, 'Excel'),
       h('button', { class: 'btn-ghost', onclick: () => routeTo('clientes') }, 'Ir a Clientes')
     )
   );
@@ -1235,7 +1257,11 @@ async function _contRenderCxP(el) {
 
   const hdr = h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' } },
     h('div', { style: { fontSize: '13px', fontWeight: '600', color: 'var(--ink)' } }, `Obligaciones pendientes (${payable.length})`),
-    h('button', { class: 'print-btn', onclick: () => _printCxP(payable) }, '🖨 Imprimir')
+    h('div', { style: { display: 'flex', gap: '8px' } },
+      h('button', { class: 'print-btn', onclick: () => guardarDocumentoExcel(
+        () => _printCxP(payable), 'Cuentas-por-Pagar', 'Cuentas por pagar') }, 'Excel'),
+      h('button', { class: 'print-btn', onclick: () => _printCxP(payable) }, '🖨 Imprimir')
+    )
   );
   el.appendChild(hdr);
 
@@ -1535,7 +1561,11 @@ async function _contRender606(el) {
 
   el.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' } },
     h('div', { style: { fontSize: '13px', fontWeight: '600' } }, `Compras con comprobante (${rows.length})`),
-    h('button', { class: 'print-btn', onclick: () => _print606(rows, totals, from, to) }, '🖨 Imprimir')
+    h('div', { style: { display: 'flex', gap: '8px' } },
+      h('button', { class: 'print-btn', onclick: () => guardarDocumentoExcel(
+        () => _print606(rows, totals, from, to), 'Reporte-606', 'Reporte 606') }, 'Excel'),
+      h('button', { class: 'print-btn', onclick: () => _print606(rows, totals, from, to) }, '🖨 Imprimir')
+    )
   ));
 
   if (!rows.length) {

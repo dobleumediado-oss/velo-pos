@@ -46,6 +46,14 @@ function _nomBadge(status) {
 function _nomFrequency(value) {
   return value === 'semanal' ? 'Semanal' : value === 'quincenal' ? 'Quincenal' : 'Mensual';
 }
+function _nomRole(value) {
+  return ({ ventas:'Ventas', mecanica:'Mecánica', administracion:'Administración', otro:'Otra área' })[value] || 'Ventas';
+}
+function _nomPrintDate(value) {
+  if (!value) return '—';
+  const d = new Date(`${String(value).slice(0,10)}T12:00:00`);
+  return Number.isNaN(d.getTime()) ? _nomEsc(value) : d.toLocaleDateString('es-DO',{day:'2-digit',month:'long',year:'numeric'});
+}
 function _nomEmpty(icon, title, text, actionLabel = '', action = '') {
   return `<div class="ven-empty"><div class="ven-empty-icon">${svg(icon)}</div><h3>${_nomEsc(title)}</h3><p>${_nomEsc(text)}</p>
     ${actionLabel ? `<button class="btn btn-green btn-sm" onclick="${action}">${svg('plus')} ${_nomEsc(actionLabel)}</button>` : ''}</div>`;
@@ -65,6 +73,11 @@ async function renderNomina(el) {
     payroll: payroll?.data || [],
   };
   _nomRender(el);
+  if (window._nomQuickPayAfterLoad) {
+    const collaboratorId = window._nomQuickPayAfterLoad;
+    window._nomQuickPayAfterLoad = null;
+    nominaOpenQuickPay(collaboratorId);
+  }
 }
 
 function _nomSetTab(tab) {
@@ -86,7 +99,7 @@ function _nomRender(el = document.getElementById('page')) {
     <section class="nom-hero">
       <div class="nom-hero-main"><div><div class="nom-eyebrow"><span></span> Salarios y pagos del equipo</div>
         <h1>Nómina</h1><p>Administra salarios base, bonos, deducciones, períodos y pagos; recibe comisiones únicamente después de su aprobación.</p></div>
-        <div class="nom-actions"><button class="btn btn-out" onclick="routeTo('comisiones')">${svg('trend')} Ir a Comisiones</button><button class="btn btn-green" onclick="nominaOpenPayroll()">${svg('plus')} Generar nómina</button></div>
+        <div class="nom-actions"><button class="btn btn-out" onclick="nominaOpenQuickPay()">${svg('cash')} Pago rápido</button><button class="btn btn-green" onclick="nominaOpenPayroll()">${svg('plus')} Generar nómina</button></div>
       </div>
       <div class="nom-hero-foot"><span>${svg('check')} Las comisiones entran únicamente después de ser aprobadas</span><span>${svg('receipt')} Cada pago genera sus gastos y registros contables</span></div>
     </section>
@@ -144,13 +157,13 @@ function _nomRenderCompensation(el) {
   const sellers = _nomState.sellers.filter(s=>s.status==='activo' && (!_nomQuery || `${s.name} ${s.code} ${s.seller_type}`.toLowerCase().includes(_nomQuery.toLowerCase())));
   const cards = sellers.map(s=>{
     const commission = _nomState.commissions.filter(x=>Number(x.salesperson_id)===Number(s.id) && x.status==='aprobado' && !x.payroll_run_id).reduce((sum,x)=>sum+Number(x.commission_total||0),0);
-    return `<article class="nom-person-card"><div class="nom-person-head"><div class="ven-person"><div class="ven-avatar ${s.seller_type==='ambulante'?'street':''}">${_nomInitials(s.name)}</div><div><div class="ven-person-name">${_nomEsc(s.name)}</div><div class="ven-person-meta">${_nomEsc(s.code)} · ${s.seller_type==='ambulante'?'Ambulante':'Fijo'}</div></div></div><span class="badge g">Activo</span></div>
+    return `<article class="nom-person-card"><div class="nom-person-head"><div class="ven-person"><div class="ven-avatar ${s.seller_type==='ambulante'?'street':''}">${_nomInitials(s.name)}</div><div><div class="ven-person-name">${_nomEsc(s.name)}</div><div class="ven-person-meta">${_nomEsc(s.code)} · ${_nomRole(s.employee_role)}</div></div></div><span class="badge g">Activo</span></div>
       <div class="nom-person-values"><div><label>Salario por período</label><strong>${_nomMoney(s.salary_amount)}</strong></div><div><label>Frecuencia de pago</label><strong>${_nomFrequency(s.payroll_frequency)}</strong></div><div><label>Comisión aprobada</label><strong class="green">${_nomMoney(commission)}</strong></div></div>
-      <div class="nom-person-foot"><span>${Number(s.salary_amount||0)>0?`${svg('check')} Salario configurado`:`${svg('alert')} Sin salario base`}</span><button class="btn btn-out btn-sm" onclick="nominaOpenCompensation(${s.id})">${svg('edit')} Configurar</button></div></article>`;
+      <div class="nom-person-foot"><span>${Number(s.salary_amount||0)>0?`${svg('check')} Salario configurado`:`${svg('alert')} Sin salario base`}</span><div class="flex"><button class="btn btn-green btn-sm" onclick="nominaOpenQuickPay(${s.id})">${svg('cash')} Pagar</button><button class="btn btn-out btn-sm" onclick="nominaOpenCompensation(${s.id})">${svg('edit')} Configurar</button></div></div></article>`;
   }).join('');
   el.innerHTML = `<section class="ven-panel"><div class="ven-panel-head"><div><div class="ven-panel-title">${svg('users')} Salarios base del equipo</div><div class="ven-panel-sub">Aquí se configura el salario; las reglas comerciales pertenecen a Comisiones.</div></div><button class="btn btn-out btn-sm" onclick="routeTo('comisiones')">Administrar comisiones</button></div>
     <div class="ven-panel-body"><div class="ven-toolbar"><div class="ven-search">${svg('search')}<input value="${_nomEsc(_nomQuery)}" oninput="_nomQuery=this.value;_nomRenderCompensation(document.getElementById('nom-content'))" placeholder="Buscar persona…"/></div><span class="badge b">${sellers.length} personas</span></div>
-      <div class="nom-person-grid">${cards || _nomEmpty('users','No hay vendedores activos','Crea o activa un vendedor desde el módulo comercial.')}</div></div>
+      <div class="nom-person-grid">${cards || _nomEmpty('users','No hay colaboradores activos','Crea o activa un colaborador desde el módulo Colaboradores.')}</div></div>
   </section>`;
 }
 
@@ -169,7 +182,7 @@ function nominaOpenCompensation(id) {
   const seller = _nomState.sellers.find(x=>Number(x.id)===Number(id));
   if (!seller) return;
   openModal(`<div class="modal-title">Salario base de ${_nomEsc(seller.name)}</div><div class="modal-sub">Define únicamente el monto periódico. Las reglas y liquidaciones se administran en Comisiones.</div>
-    <div class="nom-comp-preview"><div class="ven-avatar ${seller.seller_type==='ambulante'?'street':''}">${_nomInitials(seller.name)}</div><div><strong>${_nomEsc(seller.code)} · ${seller.seller_type==='ambulante'?'Ambulante':'Fijo'}</strong><span>La comisión aprobada se sumará automáticamente cuando coincida la frecuencia.</span></div></div>
+    <div class="nom-comp-preview"><div class="ven-avatar ${seller.seller_type==='ambulante'?'street':''}">${_nomInitials(seller.name)}</div><div><strong>${_nomEsc(seller.code)} · ${_nomRole(seller.employee_role)}</strong><span>${seller.employee_role==='ventas'?'La comisión aprobada se sumará automáticamente cuando coincida la frecuencia.':'Este colaborador recibe salario, bonos y deducciones sin pasos comerciales.'}</span></div></div>
     <div class="g2"><div class="fg"><label class="lbl">Salario por período</label><input class="inp" id="nom-salary" type="number" min="0" step="0.01" value="${Number(seller.salary_amount||0)}"/><small class="ven-field-help">Usa 0 si trabaja únicamente por comisión.</small></div><div class="fg"><label class="lbl">Frecuencia de pago</label><select class="inp" id="nom-frequency">${['semanal','quincenal','mensual'].map(x=>`<option value="${x}" ${seller.payroll_frequency===x?'selected':''}>${_nomFrequency(x)}</option>`).join('')}</select></div></div>
     <div class="ven-callout">Los viáticos no se descuentan del salario: se registran como gastos operativos separados y conservan su propia trazabilidad.</div>
     <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-green" onclick="nominaSaveCompensation(${seller.id})">${svg('check')} Guardar salario</button></div>`);
@@ -190,7 +203,8 @@ function nominaOpenPayroll() {
     <div class="fg"><label class="lbl">Frecuencia</label><select class="inp" id="nom-pay-frequency" onchange="nominaPayrollPeriodChange()"><option value="semanal">Semanal</option><option value="quincenal">Quincenal</option><option value="mensual" selected>Mensual</option></select></div>
     <div class="g2"><div class="fg"><label class="lbl">Desde</label><input class="inp" id="nom-pay-from" type="date" value="${period.from}"/></div><div class="fg"><label class="lbl">Hasta</label><input class="inp" id="nom-pay-to" type="date" value="${period.to}"/></div></div>
     <div class="nom-rule-box"><strong>${svg('trend')} Automatización incluida</strong><span>Se suman las comisiones aprobadas de la misma frecuencia y se evita duplicar un período ya generado.</span></div>
-    <div class="fg"><label class="lbl">Notas internas</label><textarea class="inp" id="nom-pay-notes" rows="2" placeholder="Observaciones opcionales…"></textarea></div>
+    <div class="fg"><label class="lbl">Notas internas</label><textarea class="inp" id="nom-pay-notes" rows="2" placeholder="Solo para administración; no aparecen en el recibo."></textarea></div>
+    <div class="fg"><label class="lbl">Nota para los recibos</label><textarea class="inp" id="nom-pay-receipt-notes" rows="2" placeholder="Mensaje u observación visible para los colaboradores."></textarea></div>
     <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-green" onclick="nominaGeneratePayroll()">${svg('plus')} Generar borrador</button></div>`);
 }
 
@@ -201,10 +215,79 @@ function nominaPayrollPeriodChange() {
 }
 
 async function nominaGeneratePayroll() {
-  const data = { frequency:document.getElementById('nom-pay-frequency').value, from:document.getElementById('nom-pay-from').value, to:document.getElementById('nom-pay-to').value, notes:document.getElementById('nom-pay-notes').value };
+  const data = { frequency:document.getElementById('nom-pay-frequency').value, from:document.getElementById('nom-pay-from').value, to:document.getElementById('nom-pay-to').value, notes:document.getElementById('nom-pay-notes').value, receiptNotes:document.getElementById('nom-pay-receipt-notes').value };
   const result = await window.api.salespeople.generatePayroll({ data, requestUserId:user.id });
   if (!result?.ok) { toast(result?.error || 'No se pudo generar la nómina','err'); return; }
   closeModal(); toast('✓ Borrador de nómina generado'); _nomTab='periodos'; await renderNomina(document.getElementById('page'));
+}
+
+function nominaOpenQuickPay(selectedId = null) {
+  const active = _nomState.sellers.filter(s=>s.status==='activo');
+  if (!active.length) { toast('Primero registra un colaborador activo','w'); return; }
+  const selected = active.find(s=>Number(s.id)===Number(selectedId)) || active[0];
+  const period = _nomPeriod(selected.payroll_frequency || 'mensual');
+  openModal(`<div class="modal-title">Pago rápido de nómina</div><div class="modal-sub">Colaborador → pago → registro contable → recibo</div>
+    <div class="fg"><label class="lbl">Colaborador</label><select class="inp" id="nom-quick-person" onchange="nominaQuickPersonChanged()">${active.map(s=>`<option value="${s.id}" ${s.id===selected.id?'selected':''}>${_nomEsc(s.code)} · ${_nomEsc(s.name)} · ${_nomRole(s.employee_role)}</option>`).join('')}</select></div>
+    <div class="nom-rule-box" id="nom-quick-summary"><strong>${_nomEsc(selected.name)} · ${_nomFrequency(selected.payroll_frequency)}</strong><span>Salario por período: ${_nomMoney(selected.salary_amount)}</span></div>
+    <div class="g2"><div class="fg"><label class="lbl">Desde</label><input class="inp" id="nom-quick-from" type="date" value="${period.from}"/></div><div class="fg"><label class="lbl">Hasta</label><input class="inp" id="nom-quick-to" type="date" value="${period.to}"/></div></div>
+    <div class="g2"><div class="fg"><label class="lbl">Bonificación</label><input class="inp" id="nom-quick-bonus" type="number" min="0" step="0.01" value="0"/></div><div class="fg"><label class="lbl">Deducción</label><input class="inp" id="nom-quick-deduction" type="number" min="0" step="0.01" value="0"/></div></div>
+    <div class="g2"><div class="fg"><label class="lbl">Fecha de pago</label><input class="inp" id="nom-quick-date" type="date" value="${_nomToday()}"/></div><div class="fg"><label class="lbl">Método</label><select class="inp" id="nom-quick-method">${['efectivo','transferencia','cheque','otro'].map(x=>`<option value="${x}">${x[0].toUpperCase()+x.slice(1)}</option>`).join('')}</select></div></div>
+    <div class="fg"><label class="lbl">Origen del pago</label><select class="inp" id="nom-quick-source"><option value="caja_chica">Caja chica</option><option value="caja">Caja abierta</option><option value="banco">Banco</option></select></div>
+    <div class="fg"><label class="lbl">Referencia</label><input class="inp" id="nom-quick-reference" placeholder="Transferencia, cheque o referencia interna"/></div>
+    <div class="fg"><label class="lbl">Nota visible en el recibo</label><textarea class="inp" id="nom-quick-receipt-notes" rows="2" placeholder="Opcional"></textarea></div>
+    <div class="fg"><label class="lbl">Nota interna</label><textarea class="inp" id="nom-quick-internal-notes" rows="2" placeholder="No se imprime"></textarea></div>
+    <div class="ven-callout">Al confirmar se registra el gasto, el pago y la contabilidad; luego se abre el recibo listo para imprimir.</div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-green" onclick="nominaConfirmQuickPay()">${svg('check')} Pagar e imprimir recibo</button></div>`, 'modal-lg');
+}
+
+function nominaQuickPersonChanged() {
+  const seller = _nomState.sellers.find(s=>Number(s.id)===Number(document.getElementById('nom-quick-person')?.value));
+  if (!seller) return;
+  const period = _nomPeriod(seller.payroll_frequency || 'mensual');
+  document.getElementById('nom-quick-from').value = period.from;
+  document.getElementById('nom-quick-to').value = period.to;
+  document.getElementById('nom-quick-summary').innerHTML = `<strong>${_nomEsc(seller.name)} · ${_nomFrequency(seller.payroll_frequency)}</strong><span>Salario por período: ${_nomMoney(seller.salary_amount)}</span>`;
+}
+
+async function nominaConfirmQuickPay() {
+  const seller = _nomState.sellers.find(s=>Number(s.id)===Number(document.getElementById('nom-quick-person')?.value));
+  if (!seller) return;
+  const data = { salesperson_id:seller.id, frequency:seller.payroll_frequency, from:document.getElementById('nom-quick-from').value, to:document.getElementById('nom-quick-to').value, bonus_amount:document.getElementById('nom-quick-bonus').value, deduction_amount:document.getElementById('nom-quick-deduction').value, payment_date:document.getElementById('nom-quick-date').value, payment_method:document.getElementById('nom-quick-method').value, payment_source:document.getElementById('nom-quick-source').value, reference:document.getElementById('nom-quick-reference').value, receipt_notes:document.getElementById('nom-quick-receipt-notes').value, internal_notes:document.getElementById('nom-quick-internal-notes').value };
+  const result = await window.api.salespeople.quickPayPayroll({ data, requestUserId:user.id });
+  if (!result?.ok) { toast(result?.error || 'No se pudo completar el pago','err'); return; }
+  closeModal();
+  const detail = await window.api.salespeople.getPayrollById({ id:result.id });
+  toast('✓ Pago registrado; recibo listo para imprimir');
+  if (detail?.ok && detail.data?.items?.[0]) nominaPrintReceipts(detail.data, detail.data.items[0].id);
+  await renderNomina(document.getElementById('page'));
+}
+
+function _nomDocumentShell(title, body) {
+  return `<!doctype html><html><head><meta charset="UTF-8"><title>${_nomEsc(title)}</title><style>
+    @page{size:letter;margin:14mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#172033;margin:0;font-size:12px}.page{min-height:245mm;position:relative;page-break-after:always}.page:last-child{page-break-after:auto}.head{display:flex;justify-content:space-between;gap:24px;align-items:flex-start;border-bottom:3px solid #0f766e;padding-bottom:13px;margin-bottom:18px}.brand h1{font-size:20px;margin:5px 0 3px}.muted{color:#64748b}.doc{text-align:right}.doc strong{display:block;font-size:18px;color:#0f766e}.title{font-size:17px;margin:0 0 14px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 28px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:13px;margin-bottom:16px}.row{display:flex;justify-content:space-between;gap:20px;padding:9px 0;border-bottom:1px solid #e2e8f0}.row.total{font-size:16px;border-top:2px solid #0f766e;border-bottom:0;margin-top:5px}.note{margin-top:16px;padding:12px;background:#f8fafc;border-left:4px solid #0f766e;white-space:pre-wrap}.signatures{display:grid;grid-template-columns:1fr 1fr;gap:65px;margin-top:70px}.sign{border-top:1px solid #334155;text-align:center;padding-top:7px}.ack{margin-top:20px;line-height:1.55}table{width:100%;border-collapse:collapse}th{background:#0f766e;color:#fff;text-align:left;padding:8px 7px;font-size:10px;text-transform:uppercase}td{padding:8px 7px;border-bottom:1px solid #e2e8f0}td.num,th.num{text-align:right}tfoot td{font-weight:bold;background:#f1f5f9}.foot{position:absolute;bottom:0;left:0;right:0;border-top:1px solid #cbd5e1;padding-top:7px;color:#64748b;font-size:10px;display:flex;justify-content:space-between}
+  </style></head><body>${body}</body></html>`;
+}
+
+function _nomDocumentHeader(run, label) {
+  const logo = typeof buildLogoHeader === 'function' ? buildLogoHeader(CFG.biz_logo,CFG.biz_logo_2,{unit:'px',maxH:62,maxW:190,align:'left'}) : '';
+  return `<header class="head"><div class="brand">${logo}<h1>${_nomEsc(CFG.biz||'Velo POS')}</h1><div class="muted">${_nomEsc([CFG.rnc&&`RNC ${CFG.rnc}`,CFG.phone,CFG.addr].filter(Boolean).join(' · '))}</div></div><div class="doc"><strong>${_nomEsc(label)}</strong><span>${_nomEsc(run.number)}</span></div></header>`;
+}
+
+async function nominaPrintPayrollReport(runOrId) {
+  const run = typeof runOrId === 'object' ? runOrId : (await window.api.salespeople.getPayrollById({id:runOrId}))?.data;
+  if (!run) { toast('Nómina no encontrada','err'); return; }
+  const rows = (run.items||[]).map(item=>`<tr><td>${_nomEsc(item.code)}</td><td>${_nomEsc(item.salesperson_name)}<div class="muted">${_nomRole(item.employee_role)}</div></td><td class="num">${_nomMoney(item.base_salary)}</td><td class="num">${_nomMoney(item.commission_amount)}</td><td class="num">${_nomMoney(item.bonus_amount)}</td><td class="num">${_nomMoney(item.deduction_amount)}</td><td class="num"><strong>${_nomMoney(item.net_amount)}</strong></td></tr>`).join('');
+  const body = `<section class="page">${_nomDocumentHeader(run,'REPORTE DE NÓMINA')}<h2 class="title">Nómina ${_nomFrequency(run.frequency)}</h2><div class="grid"><div><span class="muted">Período</span><br><strong>${_nomPrintDate(run.date_from)} al ${_nomPrintDate(run.date_to)}</strong></div><div><span class="muted">Estado</span><br><strong>${_nomEsc(String(run.status).toUpperCase())}</strong></div><div><span class="muted">Fecha de pago</span><br><strong>${_nomPrintDate(run.payment_date)}</strong></div><div><span class="muted">Método / referencia</span><br><strong>${_nomEsc([run.payment_method,run.payment_reference].filter(Boolean).join(' · ')||'—')}</strong></div></div><table><thead><tr><th>Código</th><th>Colaborador</th><th class="num">Salario</th><th class="num">Comisión</th><th class="num">Bonos</th><th class="num">Deducciones</th><th class="num">Neto</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><td colspan="2">TOTALES</td><td class="num">${_nomMoney(run.base_total)}</td><td class="num">${_nomMoney(run.commission_total)}</td><td class="num">${_nomMoney(run.bonus_total)}</td><td class="num">${_nomMoney(run.deduction_total)}</td><td class="num">${_nomMoney(run.net_total)}</td></tr></tfoot></table>${run.notes?`<div class="note"><strong>Notas internas</strong><br>${_nomEsc(run.notes)}</div>`:''}<div class="signatures"><div class="sign">Preparado por</div><div class="sign">Autorizado por</div></div><footer class="foot"><span>${_nomEsc(CFG.biz||'')}</span><span>Reporte administrativo · ${_nomEsc(run.number)}</span></footer></section>`;
+  printHTML(_nomDocumentShell(`Reporte ${run.number}`,body),'reporte');
+}
+
+async function nominaPrintReceipts(runOrId, itemId = null) {
+  const run = typeof runOrId === 'object' ? runOrId : (await window.api.salespeople.getPayrollById({id:runOrId}))?.data;
+  if (!run) { toast('Nómina no encontrada','err'); return; }
+  const items = (run.items||[]).filter(item=>!itemId||Number(item.id)===Number(itemId));
+  if (!items.length) { toast('No hay colaboradores en esta nómina','w'); return; }
+  const pages = items.map(item=>`<section class="page">${_nomDocumentHeader(run,'RECIBO DE PAGO DE NÓMINA')}<h2 class="title">Constancia individual de pago</h2><div class="grid"><div><span class="muted">Colaborador</span><br><strong>${_nomEsc(item.salesperson_name)}</strong></div><div><span class="muted">Código / área</span><br><strong>${_nomEsc(item.code)} · ${_nomRole(item.employee_role)}</strong></div><div><span class="muted">Período ${_nomFrequency(run.frequency).toLowerCase()}</span><br><strong>${_nomPrintDate(run.date_from)} al ${_nomPrintDate(run.date_to)}</strong></div><div><span class="muted">Fecha de pago</span><br><strong>${_nomPrintDate(run.payment_date)}</strong></div><div><span class="muted">Método</span><br><strong>${_nomEsc(String(run.payment_method||'—').replaceAll('_',' '))}</strong></div><div><span class="muted">Referencia</span><br><strong>${_nomEsc(run.payment_reference||run.number)}</strong></div></div><div class="row"><span>Salario base</span><strong>${_nomMoney(item.base_salary)}</strong></div><div class="row"><span>Comisiones</span><strong>${_nomMoney(item.commission_amount)}</strong></div><div class="row"><span>Bonificaciones</span><strong>${_nomMoney(item.bonus_amount)}</strong></div><div class="row"><span>Deducciones</span><strong>− ${_nomMoney(item.deduction_amount)}</strong></div><div class="row total"><span>NETO PAGADO</span><strong>${_nomMoney(item.net_amount)}</strong></div>${run.receipt_notes?`<div class="note"><strong>Nota</strong><br>${_nomEsc(run.receipt_notes)}</div>`:''}<p class="ack">Declaro haber recibido el monto neto indicado por concepto de pago de nómina correspondiente al período descrito.</p><div class="signatures"><div class="sign">Firma del colaborador<br><span class="muted">${_nomEsc(item.salesperson_name)}</span></div><div class="sign">Firma autorizada</div></div><footer class="foot"><span>${_nomEsc(CFG.biz||'')}</span><span>${_nomEsc(run.number)} · Recibo individual</span></footer></section>`).join('');
+  printHTML(_nomDocumentShell(`Recibos ${run.number}`,pages),'pago');
 }
 
 async function nominaViewPayroll(id) {
@@ -213,11 +296,11 @@ async function nominaViewPayroll(id) {
   const run = result.data, items = run.items || [];
   openModal(`<div class="modal-title">Detalle de ${_nomEsc(run.number)}</div><div class="modal-sub">${_nomEsc(run.date_from)} al ${_nomEsc(run.date_to)} · ${_nomFrequency(run.frequency)} · ${_nomBadge(run.status)}</div>
     <div class="nom-detail-metrics"><div><label>Salario base</label><strong>${_nomMoney(run.base_total)}</strong></div><div><label>Comisiones</label><strong class="purple">${_nomMoney(run.commission_total)}</strong></div><div><label>Ajustes netos</label><strong>${_nomMoney(Number(run.bonus_total||0)-Number(run.deduction_total||0))}</strong></div><div><label>Total a pagar</label><strong class="green">${_nomMoney(run.net_total)}</strong></div></div>
-    <div class="ven-panel" style="box-shadow:none"><div class="tw"><table><thead><tr><th>Persona</th><th style="text-align:right">Salario</th><th style="text-align:right">Comisión</th><th style="text-align:right">Bono</th><th style="text-align:right">Deducción</th><th style="text-align:right">Neto</th></tr></thead><tbody>
-      ${items.map(item=>`<tr><td><div class="ven-person"><div class="ven-avatar ${item.seller_type==='ambulante'?'street':''}">${_nomInitials(item.salesperson_name)}</div><div><div class="ven-person-name">${_nomEsc(item.salesperson_name)}</div><div class="ven-person-meta">${_nomEsc(item.code)} · ${_nomEsc(item.seller_type)}</div></div></div></td><td style="text-align:right" class="ven-money">${_nomMoney(item.base_salary)}</td><td style="text-align:right" class="ven-money">${_nomMoney(item.commission_amount)}</td><td style="text-align:right">${run.status==='borrador'?`<input class="inp" data-nom-bonus="${item.id}" type="number" min="0" step="0.01" value="${item.bonus_amount}" style="width:100px;text-align:right">`:_nomMoney(item.bonus_amount)}</td><td style="text-align:right">${run.status==='borrador'?`<input class="inp" data-nom-deduction="${item.id}" type="number" min="0" step="0.01" value="${item.deduction_amount}" style="width:100px;text-align:right">`:_nomMoney(item.deduction_amount)}</td><td style="text-align:right;font-weight:850;color:var(--green)" class="ven-money">${_nomMoney(item.net_amount)}</td></tr>`).join('')}
+    <div class="ven-panel" style="box-shadow:none"><div class="tw"><table><thead><tr><th>Colaborador</th><th style="text-align:right">Salario</th><th style="text-align:right">Comisión</th><th style="text-align:right">Bono</th><th style="text-align:right">Deducción</th><th style="text-align:right">Neto</th>${run.status==='pagado'?'<th></th>':''}</tr></thead><tbody>
+      ${items.map(item=>`<tr><td><div class="ven-person"><div class="ven-avatar ${item.seller_type==='ambulante'?'street':''}">${_nomInitials(item.salesperson_name)}</div><div><div class="ven-person-name">${_nomEsc(item.salesperson_name)}</div><div class="ven-person-meta">${_nomEsc(item.code)} · ${_nomRole(item.employee_role)}</div></div></div></td><td style="text-align:right" class="ven-money">${_nomMoney(item.base_salary)}</td><td style="text-align:right" class="ven-money">${_nomMoney(item.commission_amount)}</td><td style="text-align:right">${run.status==='borrador'?`<input class="inp" data-nom-bonus="${item.id}" type="number" min="0" step="0.01" value="${item.bonus_amount}" style="width:100px;text-align:right">`:_nomMoney(item.bonus_amount)}</td><td style="text-align:right">${run.status==='borrador'?`<input class="inp" data-nom-deduction="${item.id}" type="number" min="0" step="0.01" value="${item.deduction_amount}" style="width:100px;text-align:right">`:_nomMoney(item.deduction_amount)}</td><td style="text-align:right;font-weight:850;color:var(--green)" class="ven-money">${_nomMoney(item.net_amount)}</td>${run.status==='pagado'?`<td><button class="btn btn-out btn-sm" onclick="nominaPrintReceipts(${run.id},${item.id})">${svg('print')} Recibo</button></td>`:''}</tr>`).join('')}
     </tbody></table></div></div>
     ${run.status==='borrador'?'<div class="ven-callout" style="margin-top:12px">Puedes ajustar bonos y deducciones. El total se recalculará al guardar.</div>':''}
-    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button>${run.status==='borrador'?`<button class="btn btn-green" onclick="nominaSavePayrollItems(${run.id})">${svg('check')} Guardar ajustes</button>`:''}</div>`, 'modal-lg');
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button><button class="btn btn-out" onclick="nominaPrintPayrollReport(${run.id})">${svg('print')} Reporte</button>${typeof guardarDocumentoExcel==='function'?`<button class="btn btn-out" onclick="guardarDocumentoExcel(()=>nominaPrintPayrollReport(${run.id}),'Nomina-${_nomEsc(run.number)}','Reporte de nómina')">Excel</button>`:''}${run.status==='pagado'?`<button class="btn btn-out" onclick="nominaPrintReceipts(${run.id})">${svg('receipt')} Todos los recibos</button>`:''}${run.status==='borrador'?`<button class="btn btn-green" onclick="nominaSavePayrollItems(${run.id})">${svg('check')} Guardar ajustes</button>`:''}</div>`, 'modal-lg');
 }
 
 async function nominaSavePayrollItems() {
@@ -242,13 +325,18 @@ function nominaPayPayroll(id) {
     <div class="g2"><div class="fg"><label class="lbl">Fecha de pago</label><input class="inp" id="nom-payment-date" type="date" value="${_nomToday()}"/></div><div class="fg"><label class="lbl">Método</label><select class="inp" id="nom-payment-method">${['efectivo','transferencia','cheque','otro'].map(x=>`<option value="${x}">${x[0].toUpperCase()+x.slice(1)}</option>`).join('')}</select></div></div>
     <div class="fg"><label class="lbl">Origen del pago</label><select class="inp" id="nom-payment-source"><option value="caja_chica">Caja chica</option><option value="caja">Caja abierta</option><option value="banco">Banco</option></select></div>
     <div class="fg"><label class="lbl">Referencia</label><input class="inp" id="nom-payment-reference" placeholder="Transferencia, cheque u observación…"/></div>
+    <div class="fg"><label class="lbl">Nota visible en los recibos</label><textarea class="inp" id="nom-payment-receipt-notes" rows="2" placeholder="Opcional"></textarea></div>
+    <label style="display:flex;gap:8px;align-items:center"><input id="nom-payment-print" type="checkbox" checked/> Imprimir los recibos individuales al finalizar</label>
     <div class="ven-callout">Esta acción cierra el período. Los pagos quedarán visibles en Gastos y Contabilidad.</div>
     <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-green" onclick="nominaConfirmPayrollPay(${id})">${svg('check')} Confirmar pago</button></div>`);
 }
 
 async function nominaConfirmPayrollPay(id) {
-  const data = { payment_date:document.getElementById('nom-payment-date').value, payment_method:document.getElementById('nom-payment-method').value, payment_source:document.getElementById('nom-payment-source').value, reference:document.getElementById('nom-payment-reference').value };
+  const shouldPrint = document.getElementById('nom-payment-print')?.checked;
+  const data = { payment_date:document.getElementById('nom-payment-date').value, payment_method:document.getElementById('nom-payment-method').value, payment_source:document.getElementById('nom-payment-source').value, reference:document.getElementById('nom-payment-reference').value, receipt_notes:document.getElementById('nom-payment-receipt-notes').value };
   const result = await window.api.salespeople.payPayroll({ id, data, requestUserId:user.id });
   if (!result?.ok) { toast(result?.error || 'No se pudo completar el pago','err'); return; }
-  closeModal(); toast(`✓ Nómina pagada · ${result.paid} gasto(s) generado(s)`); await renderNomina(document.getElementById('page'));
+  closeModal(); toast(`✓ Nómina pagada · ${result.paid} gasto(s) generado(s)`);
+  if (shouldPrint) nominaPrintReceipts(id);
+  await renderNomina(document.getElementById('page'));
 }

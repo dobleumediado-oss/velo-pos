@@ -17,7 +17,7 @@
     { key:'crm', title:'CRM Cerebro', icon:'🧠', group:'Gestión', route:'crm', setting:'module_crm', roles:'module_crm_roles', desc:'Segmentación, alertas y seguimiento comercial.' },
     { key:'ventas', title:'Ventas y facturas', icon:'🧮', group:'Gestión', route:'ventas', core:true, cashierDefault:true, desc:'Historial de facturas, cotizaciones y documentos.' },
     { key:'devoluciones', title:'Devoluciones', icon:'↩️', group:'Gestión', route:'devoluciones', core:true, cashierDefault:false, desc:'Registrar devoluciones y notas de crédito.' },
-    { key:'vendedores', title:'Vendedores', icon:'🧑‍💼', group:'Equipo', route:'vendedores', setting:'module_vendedores', roles:'module_vendedores_roles', desc:'Vendedores, metas y rendimiento.' },
+    { key:'vendedores', title:'Colaboradores', icon:'🧑‍💼', group:'Equipo', route:'vendedores', setting:'module_vendedores', roles:'module_vendedores_roles', desc:'Vendedores, mecánicos, administración y demás personal.' },
     { key:'comisiones', title:'Comisiones', icon:'📈', group:'Equipo', route:'comisiones', setting:'module_vendedores', roles:'module_vendedores_roles', desc:'Cálculo y liquidación de comisiones.' },
     { key:'nomina', title:'Nómina', icon:'📅', group:'Equipo', route:'nomina', setting:'module_vendedores', roles:'module_vendedores_roles', desc:'Pagos, viáticos y liquidaciones del personal.' },
     { key:'caja', title:'Caja', icon:'💵', group:'Finanzas', route:'caja', core:true, cashierDefault:true, desc:'Apertura, movimientos, arqueo y cierre de caja.' },

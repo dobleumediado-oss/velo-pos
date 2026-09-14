@@ -29,7 +29,7 @@
     dash:{ label:'Dashboard', icon:'grid', group:'Resumen' }, pos:{ label:'Punto de Venta', icon:'monitor', group:'Operación' },
     inventario:{ label:'Inventario', icon:'box', group:'Gestión' }, compras:{ label:'Compras', icon:'truck', group:'Gestión' },
     clientes:{ label:'Clientes', icon:'users', group:'Gestión' }, ventas:{ label:'Ventas', icon:'list', group:'Gestión' },
-    devoluciones:{ label:'Devoluciones', icon:'return', group:'Gestión' }, vendedores:{ label:'Vendedores', icon:'users', group:'Equipo' },
+    devoluciones:{ label:'Devoluciones', icon:'return', group:'Gestión' }, vendedores:{ label:'Colaboradores', icon:'users', group:'Equipo' },
     comisiones:{ label:'Comisiones', icon:'trend', group:'Equipo' }, nomina:{ label:'Nómina', icon:'calendar', group:'Finanzas' },
     caja:{ label:'Caja', icon:'cash', group:'Finanzas' }, gastos:{ label:'Gastos', icon:'dollar', group:'Finanzas' },
     bancos:{ label:'Bancos y Cuentas', icon:'bank', group:'Finanzas' }, contabilidad:{ label:'Contabilidad', icon:'ledger', group:'Finanzas' },
@@ -606,7 +606,7 @@
       { key:'product', icon:'box', title:'Nuevo producto', sub:'Registrar en inventario', show:admin },
       { key:'customer', icon:'users', title:'Nuevo cliente', sub:'Crear perfil y crédito', show:true },
       { key:'expense', icon:'dollar', title:'Registrar gasto', sub:'Egreso o cuenta por pagar', show:cfg.module_gastos === '1' },
-      { key:'seller', icon:'user', title:'Nuevo vendedor', sub:'Fijo o ambulante', show:admin && cfg.module_vendedores === '1' },
+      { key:'seller', icon:'user', title:'Nuevo colaborador', sub:'Ventas, mecánica o administración', show:admin && cfg.module_vendedores === '1' },
       { key:'shipment', icon:'truck', title:'Nuevo envío', sub:'Crear despacho', show:cfg.module_envios === '1' },
       { key:'delivery', icon:'pkg', title:'Nuevo conduce', sub:'Nota de entrega', show:cfg.module_conduce === '1' },
     ].filter(x => x.show);

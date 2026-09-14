@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════════════════════════
-// vendedores.js — Operación comercial de vendedores fijos y ambulantes
+// vendedores.js — Colaboradores y operación comercial
 // ════════════════════════════════════════════════════════════════════════════
 
 let _venTab = 'resumen';
@@ -27,9 +27,10 @@ function _venBadge(status) {
   return `<span class="badge ${cls}">${_venEsc(String(status||'').replaceAll('_',' '))}</span>`;
 }
 function _venSellerOptions(selected, activeOnly=true) {
-  return _venState.sellers.filter(s=>!activeOnly||s.status==='activo').map(s=>
+  return _venState.sellers.filter(s=>(!activeOnly||s.status==='activo')&&(s.employee_role||'ventas')==='ventas').map(s=>
     `<option value="${s.id}" ${Number(selected)===Number(s.id)?'selected':''}>${_venEsc(s.code)} · ${_venEsc(s.name)} (${s.seller_type})</option>`).join('');
 }
+function _venRole(value) { return ({ventas:'Ventas',mecanica:'Mecánica',administracion:'Administración',otro:'Otra área'})[value] || 'Ventas'; }
 function _venModeLabel(s) {
   if(s.commission_mode==='percent_sales')return `${s.commission_rate}% venta neta`;
   if(s.commission_mode==='percent_margin')return `${s.commission_rate}% margen`;
@@ -123,8 +124,8 @@ async function renderVendedores(el) {
   if (_venTab === 'comisiones') _venTab = 'resumen';
   if (!_venRange.from) _venRange = { from: _venMonthStart(), to: _venToday() };
   el.innerHTML = `<div class="ven-shell"><div class="ven-panel"><div class="ven-empty">
-    <div class="ven-empty-icon">${svg('clock')}</div><h3>Preparando el centro de vendedores</h3>
-    <p>Conectando perfiles, ventas externas, rutas y viáticos…</p></div></div></div>`;
+    <div class="ven-empty-icon">${svg('clock')}</div><h3>Preparando Colaboradores</h3>
+    <p>Conectando personal, nómina y operación comercial…</p></div></div></div>`;
   const canManageFinance = ['admin','superadmin'].includes(user?.role);
   const [sellers,dashboard,external,commissions,expenses] = await Promise.all([
     window.api.salespeople.getAll({}),
@@ -137,7 +138,7 @@ async function renderVendedores(el) {
     sellers:sellers?.data||[], dashboard:dashboard?.data||null, external:external?.data||[],
     commissions:commissions?.data||[], expenses:expenses?.data||[],
   };
-  DB.salespeople = _venState.sellers.filter(s=>s.status==='activo');
+  DB.salespeople = _venState.sellers.filter(s=>s.status==='activo'&&(s.employee_role||'ventas')==='ventas');
   _venRender(el);
 }
 
@@ -145,23 +146,23 @@ function _venRender(el=document.getElementById('page')) {
   if(!el)return;
   const tabs=[
     ['resumen','grid','Centro de control',''],
-    ['vendedores','users','Vendedores',_venState.sellers.length],
+    ['vendedores','users','Colaboradores',_venState.sellers.length],
     ['externas','receipt','Ventas externas',_venState.external.length],
     ['viaticos','cash','Viáticos',_venState.expenses.length],
     ['agenda','calendar','Agenda',''],
-    ['mapa','map-pin','Cobertura',_venState.sellers.filter(s=>s.status==='activo'&&s.seller_type==='ambulante').length],
+    ['mapa','map-pin','Cobertura',_venState.sellers.filter(s=>s.status==='activo'&&(s.employee_role||'ventas')==='ventas'&&s.seller_type==='ambulante').length],
   ];
   el.innerHTML=`
     <div class="ven-shell">
       <section class="ven-hero">
         <div class="ven-hero-main">
-          <div><div class="ven-eyebrow"><span class="dot"></span> Operación y dirección comercial</div>
-            <h1>Vendedores</h1>
-            <p>Administra perfiles, rutas, cobertura, ventas externas y viáticos de vendedores fijos y ambulantes.</p>
+          <div><div class="ven-eyebrow"><span class="dot"></span> Equipo, nómina y operación comercial</div>
+            <h1>Colaboradores</h1>
+            <p>Administra vendedores, mecánicos y personal administrativo desde un solo directorio.</p>
           </div>
           <div class="ven-actions">
             <button class="btn btn-out" onclick="vendedoresOpenExternalSale()">${svg('receipt')} Registrar venta externa</button>
-            <button class="btn btn-green" onclick="vendedoresOpenSeller()">${svg('plus')} Nuevo vendedor</button>
+            <button class="btn btn-green" onclick="vendedoresOpenSeller()">${svg('plus')} Nuevo colaborador</button>
           </div>
         </div>
         <div class="ven-hero-bottom">
@@ -190,7 +191,7 @@ function _venRender(el=document.getElementById('page')) {
 function _venRenderSummary(el) {
   const d=_venState.dashboard||{rows:[],activeCount:0,salesTotal:0,commissionTotal:0,expenseTotal:0};
   const rows=d.rows||[];
-  const activeStreet=_venState.sellers.filter(s=>s.status==='activo'&&s.seller_type==='ambulante').length;
+  const activeStreet=_venState.sellers.filter(s=>s.status==='activo'&&(s.employee_role||'ventas')==='ventas'&&s.seller_type==='ambulante').length;
   const drafts=_venState.commissions.filter(x=>x.status==='borrador');
   const approved=_venState.commissions.filter(x=>x.status==='aprobado');
   const maxSales=Math.max(1,...rows.map(r=>Number(r.sales)||0));
@@ -226,18 +227,23 @@ function _venRenderSummary(el) {
 function _venRenderSellers(el) {
   const all=_venState.sellers;
   const sellers=all.filter(s=>{
-    const filterOk=_venListFilter==='todos'||_venListFilter===s.seller_type||_venListFilter===s.status;
-    return filterOk&&_venMatches(s.code,s.name,s.phone,s.document,s.zone,s.route);
+    const filterOk=_venListFilter==='todos'||_venListFilter===s.employee_role||_venListFilter===s.status;
+    return filterOk&&_venMatches(s.code,s.name,s.phone,s.document,s.zone,s.route,_venRole(s.employee_role));
   });
-  const filter=`<select class="ven-filter" onchange="_venSetListFilter(this.value)"><option value="todos">Todos los perfiles</option><option value="fijo" ${_venListFilter==='fijo'?'selected':''}>Fijos</option><option value="ambulante" ${_venListFilter==='ambulante'?'selected':''}>Ambulantes</option><option value="activo" ${_venListFilter==='activo'?'selected':''}>Activos</option><option value="inactivo" ${_venListFilter==='inactivo'?'selected':''}>Inactivos</option></select>`;
+  const filter=`<select class="ven-filter" onchange="_venSetListFilter(this.value)"><option value="todos">Todas las áreas</option><option value="ventas" ${_venListFilter==='ventas'?'selected':''}>Ventas</option><option value="mecanica" ${_venListFilter==='mecanica'?'selected':''}>Mecánica</option><option value="administracion" ${_venListFilter==='administracion'?'selected':''}>Administración</option><option value="otro" ${_venListFilter==='otro'?'selected':''}>Otra área</option><option value="activo" ${_venListFilter==='activo'?'selected':''}>Activos</option><option value="inactivo" ${_venListFilter==='inactivo'?'selected':''}>Inactivos</option></select>`;
   const cards=sellers.length?sellers.map(s=>`<article class="ven-seller-card ${s.status!=='activo'?'inactive':''}">
-    <div class="ven-seller-head"><div class="ven-seller-id"><div class="ven-avatar ${s.seller_type==='ambulante'?'street':''}">${_venInitials(s.name)}</div><div style="min-width:0"><h3>${_venEsc(s.name)}</h3><p>${_venEsc(s.code)} · ${s.seller_type==='ambulante'?'AMBULANTE':'FIJO'}</p></div></div>${_venBadge(s.status)}</div>
-    <div class="ven-seller-data"><div><label>Operación</label><strong>${s.seller_type==='ambulante'?'Venta externa':'Punto de venta'}</strong></div><div><label>Ventas registradas</label><strong>${Number(s.internal_sales_count||0)+Number(s.external_sales_count||0)}</strong></div><div><label>Zona / Ruta</label><strong>${_venEsc([s.zone,s.route].filter(Boolean).join(' · ')||'Sin asignar')}</strong></div><div><label>Meta comercial</label><strong>${Number(s.sales_goal||0)>0?_venMoney(s.sales_goal):'Sin meta'}</strong></div></div>
-    <div class="ven-seller-foot"><div class="ven-seller-contact">${svg('phone')} ${_venEsc(s.phone||s.document||'Sin contacto')}</div><div class="flex"><button class="btn btn-out btn-sm" onclick="vendedoresOpenProfile(${s.id})">${svg('eye')} Perfil</button><button class="btn btn-out btn-sm" onclick="vendedoresOpenSeller(${s.id})">${svg('edit')} Editar</button><button class="btn btn-ghost btn-sm" title="${s.status==='activo'?'Desactivar':'Activar'}" onclick="vendedoresToggle(${s.id},${s.status!=='activo'})">${s.status==='activo'?svg('lock'):svg('unlock')}</button></div></div>
-  </article>`).join(''):_venEmpty('users',all.length?'No encontramos coincidencias':'Construye tu equipo comercial',all.length?'Cambia la búsqueda o el filtro seleccionado.':'Registra vendedores fijos o ambulantes. Los ambulantes no necesitan acceso al POS.','Nuevo vendedor','vendedoresOpenSeller()');
-  el.innerHTML=`<section class="ven-panel"><div class="ven-panel-head"><div><div class="ven-panel-title">${svg('users')} Directorio comercial</div><div class="ven-panel-sub">Perfiles, contacto, tipo de operación, rutas y cobertura del equipo</div></div><span class="badge g">${all.filter(s=>s.status==='activo').length} activos</span></div>
-    <div class="ven-summary-strip"><span class="ven-summary-item">Fijos <strong>${all.filter(s=>s.seller_type==='fijo').length}</strong></span><span class="ven-summary-item">Ambulantes <strong>${all.filter(s=>s.seller_type==='ambulante').length}</strong></span><span class="ven-summary-item">Sin usuario POS <strong>${all.filter(s=>!s.linked_user_id).length}</strong></span></div>
-    <div class="ven-panel-body">${_venToolbar({placeholder:'Buscar por nombre, código, zona o teléfono…',filters:filter,action:`<button class="btn btn-green btn-sm" onclick="vendedoresOpenSeller()">${svg('plus')} Agregar</button>`})}<div class="ven-seller-grid" style="margin-top:14px">${cards}</div></div></section>`;
+    <div class="ven-seller-head"><div class="ven-seller-id"><div class="ven-avatar ${s.seller_type==='ambulante'?'street':''}">${_venInitials(s.name)}</div><div style="min-width:0"><h3>${_venEsc(s.name)}</h3><p>${_venEsc(s.code)} · ${_venRole(s.employee_role).toUpperCase()}</p></div></div>${_venBadge(s.status)}</div>
+    <div class="ven-seller-data"><div><label>Área</label><strong>${_venRole(s.employee_role)}</strong></div><div><label>Frecuencia</label><strong>${({semanal:'Semanal',quincenal:'Quincenal',mensual:'Mensual'})[s.payroll_frequency]||'Mensual'}</strong></div><div><label>Salario por período</label><strong>${_venMoney(s.salary_amount)}</strong></div><div><label>${s.employee_role==='ventas'?'Perfil comercial':'Fecha de ingreso'}</label><strong>${s.employee_role==='ventas'?(s.seller_type==='ambulante'?'Ambulante':'Fijo'):_venEsc(s.hire_date||'Sin registrar')}</strong></div></div>
+    <div class="ven-seller-foot"><div class="ven-seller-contact">${svg('phone')} ${_venEsc(s.phone||s.document||'Sin contacto')}</div><div class="flex">${s.employee_role==='ventas'?`<button class="btn btn-out btn-sm" onclick="vendedoresOpenProfile(${s.id})">${svg('eye')} Perfil</button>`:''}${['admin','superadmin'].includes(user?.role)&&s.status==='activo'?`<button class="btn btn-green btn-sm" onclick="vendedoresOpenPayroll(${s.id})">${svg('cash')} Pagar</button>`:''}<button class="btn btn-out btn-sm" onclick="vendedoresOpenSeller(${s.id})">${svg('edit')} Editar</button><button class="btn btn-ghost btn-sm" title="${s.status==='activo'?'Desactivar':'Activar'}" onclick="vendedoresToggle(${s.id},${s.status!=='activo'})">${s.status==='activo'?svg('lock'):svg('unlock')}</button></div></div>
+  </article>`).join(''):_venEmpty('users',all.length?'No encontramos coincidencias':'Construye tu equipo',all.length?'Cambia la búsqueda o el filtro seleccionado.':'Registra vendedores, mecánicos y personal administrativo.','Nuevo colaborador','vendedoresOpenSeller()');
+  el.innerHTML=`<section class="ven-panel"><div class="ven-panel-head"><div><div class="ven-panel-title">${svg('users')} Directorio de colaboradores</div><div class="ven-panel-sub">Personal, contacto, función y acceso directo a su nómina</div></div><span class="badge g">${all.filter(s=>s.status==='activo').length} activos</span></div>
+    <div class="ven-summary-strip"><span class="ven-summary-item">Ventas <strong>${all.filter(s=>(s.employee_role||'ventas')==='ventas').length}</strong></span><span class="ven-summary-item">Mecánica <strong>${all.filter(s=>s.employee_role==='mecanica').length}</strong></span><span class="ven-summary-item">Administración <strong>${all.filter(s=>s.employee_role==='administracion').length}</strong></span></div>
+    <div class="ven-panel-body">${_venToolbar({placeholder:'Buscar por nombre, código, área o teléfono…',filters:filter,action:`<button class="btn btn-green btn-sm" onclick="vendedoresOpenSeller()">${svg('plus')} Agregar</button>`})}<div class="ven-seller-grid" style="margin-top:14px">${cards}</div></div></section>`;
+}
+
+function vendedoresOpenPayroll(id) {
+  window._nomQuickPayAfterLoad = Number(id);
+  routeTo('nomina');
 }
 
 function _venRenderExternal(el) {
@@ -296,7 +302,7 @@ function _venRenderCalendar(el) {
 }
 
 function _venRenderMap(el) {
-  const sellers=_venState.sellers.filter(s=>s.status==='activo'&&s.seller_type==='ambulante');
+  const sellers=_venState.sellers.filter(s=>s.status==='activo'&&(s.employee_role||'ventas')==='ventas'&&s.seller_type==='ambulante');
   if(!sellers.length){el.innerHTML=`<section class="ven-panel">${_venEmpty('map-pin','Aún no hay cobertura ambulante','Registra un vendedor ambulante y asigna su zona y ruta para construir la cobertura.','Crear ambulante','vendedoresOpenSeller()')}</section>`;return;}
   const configured=sellers.filter(s=>Number.isFinite(Number(s.map_lat))&&Number.isFinite(Number(s.map_lng)));
   const list=sellers.map(s=>{const perf=_venSellerPerformance(s.id),pct=_venGoalPercent(s,perf.sales),located=configured.some(x=>Number(x.id)===Number(s.id));return `<article class="ven-map-seller ${located?'located':'pending'}" data-coverage-seller="${s.id}"><button class="ven-map-seller-main" onclick="${located?`_venFocusCoverage(${s.id})`:`vendedoresOpenSeller(${s.id})`}"><span class="ven-avatar street">${_venInitials(s.name)}</span><div><strong>${_venEsc(s.name)}</strong><small>${_venEsc([s.zone,s.route].filter(Boolean).join(' · ')||'Sin ruta asignada')}</small><em>${located?`Punto actualizado ${_venEsc(_venRelativeTime(s.location_updated_at))}`:'Ubicación pendiente'}</em><div class="ven-progress"><i style="width:${Math.min(100,pct)}%"></i></div></div><b>${Number(s.sales_goal||0)>0?pct.toFixed(0)+'%':_venMoney(perf.sales)}</b></button><div class="ven-map-seller-actions"><button onclick="_venLocateSeller(${s.id})">${svg('map-pin')} ${located?'Actualizar':'Ubicar'}</button>${located?`<button onclick="_venOpenNavigation(${s.id},'google')">Google Maps</button><button onclick="_venOpenNavigation(${s.id},'waze')">Waze</button>`:''}</div></article>`}).join('');
@@ -370,25 +376,29 @@ function vendedoresOpenProfile(id) {
 function vendedoresOpenSeller(id=null) {
   const s=_venState.sellers.find(x=>Number(x.id)===Number(id))||{};
   const users=window._cachedUsers||[];
-  openModal(`<div class="modal-title">${id?'Editar perfil comercial':'Crear vendedor'}</div>
-    <div class="modal-sub">Datos comerciales esenciales. El salario y los pagos se configuran desde el módulo Nómina.</div>
-    <input type="hidden" id="ven-code" value="${_venEsc(s.code||'')}"/><input type="hidden" id="ven-lat" value="${s.map_lat??''}"/><input type="hidden" id="ven-lng" value="${s.map_lng??''}"/><input type="hidden" id="ven-salary" value="${s.salary_amount||0}"/><input type="hidden" id="ven-pfreq" value="${_venEsc(s.payroll_frequency||'mensual')}"/><input type="hidden" id="ven-cmode" value="${_venEsc(s.commission_mode||'none')}"/><input type="hidden" id="ven-rate" value="${Number(s.commission_rate||0)}"/><input type="hidden" id="ven-fixed" value="${Number(s.commission_fixed||0)}"/><input type="hidden" id="ven-cfreq" value="${_venEsc(s.commission_frequency||'mensual')}"/>
+  openModal(`<div class="modal-title">${id?'Editar colaborador':'Crear colaborador'}</div>
+    <div class="modal-sub">Registra su función y datos básicos; el salario y los pagos se administran desde Nómina.</div>
+    <input type="hidden" id="ven-code" value="${_venEsc(s.code||'')}"/><input type="hidden" id="ven-lat" value="${s.map_lat??''}"/><input type="hidden" id="ven-lng" value="${s.map_lng??''}"/><input type="hidden" id="ven-cmode" value="${_venEsc(s.commission_mode||'none')}"/><input type="hidden" id="ven-rate" value="${Number(s.commission_rate||0)}"/><input type="hidden" id="ven-fixed" value="${Number(s.commission_fixed||0)}"/><input type="hidden" id="ven-cfreq" value="${_venEsc(s.commission_frequency||'mensual')}"/>
     <div class="ven-modal-section"><div class="ven-modal-section-title"><span>1</span> Identidad básica</div>
-      <div class="g2"><div class="fg"><label class="lbl">Nombre completo *</label><input class="inp" id="ven-name" value="${_venEsc(s.name||'')}" placeholder="Nombre del vendedor"/></div><div class="fg"><label class="lbl">Tipo de vendedor *</label><select class="inp" id="ven-type" onchange="vendedoresSellerTypeChanged()"><option value="fijo" ${s.seller_type!=='ambulante'?'selected':''}>Fijo / interno</option><option value="ambulante" ${s.seller_type==='ambulante'?'selected':''}>Ambulante / externo</option></select></div></div>
+      <div class="g2"><div class="fg"><label class="lbl">Nombre completo *</label><input class="inp" id="ven-name" value="${_venEsc(s.name||'')}" placeholder="Nombre del colaborador"/></div><div class="fg"><label class="lbl">Área o función *</label><select class="inp" id="ven-role" onchange="vendedoresSellerTypeChanged()"><option value="ventas" ${(s.employee_role||'ventas')==='ventas'?'selected':''}>Ventas</option><option value="mecanica" ${s.employee_role==='mecanica'?'selected':''}>Mecánica / taller</option><option value="administracion" ${s.employee_role==='administracion'?'selected':''}>Administración</option><option value="otro" ${s.employee_role==='otro'?'selected':''}>Otra área</option></select></div></div>
       <div class="g2"><div class="fg"><label class="lbl">Teléfono</label><input class="inp" id="ven-phone" value="${_venEsc(s.phone||'')}" placeholder="Contacto principal"/></div><div class="fg"><label class="lbl">Documento</label><input class="inp" id="ven-doc" value="${_venEsc(s.document||'')}" placeholder="Cédula o identificación"/></div></div>
       <details class="ven-optional"><summary>Información adicional opcional</summary><div class="g2"><div class="fg"><label class="lbl">Correo</label><input class="inp" id="ven-email" type="email" value="${_venEsc(s.email||'')}"/></div><div class="fg"><label class="lbl">Dirección</label><input class="inp" id="ven-address" value="${_venEsc(s.address||'')}"/></div></div><div class="fg"><label class="lbl">Notas internas</label><textarea class="inp" id="ven-notes" rows="2">${_venEsc(s.notes||'')}</textarea></div></details>
     </div>
-    <div class="ven-modal-section"><div class="ven-modal-section-title"><span>2</span> Operación comercial</div>
+    <div class="ven-modal-section"><div class="ven-modal-section-title"><span>2</span> Nómina</div>
+      <div class="g2"><div class="fg"><label class="lbl">Salario por período</label><input class="inp" id="ven-salary" type="number" min="0" step="0.01" value="${Number(s.salary_amount||0)}" placeholder="0.00"/><small class="ven-field-help">Usa 0 si cobra únicamente comisiones.</small></div><div class="fg"><label class="lbl">Frecuencia de pago</label><select class="inp" id="ven-pfreq"><option value="semanal" ${s.payroll_frequency==='semanal'?'selected':''}>Semanal</option><option value="quincenal" ${s.payroll_frequency==='quincenal'?'selected':''}>Quincenal</option><option value="mensual" ${!s.payroll_frequency||s.payroll_frequency==='mensual'?'selected':''}>Mensual</option></select></div></div>
+    </div>
+    <div class="ven-modal-section" data-commercial><div class="ven-modal-section-title"><span>3</span> Operación comercial</div>
+      <div class="fg"><label class="lbl">Tipo de vendedor *</label><select class="inp" id="ven-type" onchange="vendedoresSellerTypeChanged()"><option value="fijo" ${s.seller_type!=='ambulante'?'selected':''}>Fijo / interno</option><option value="ambulante" ${s.seller_type==='ambulante'?'selected':''}>Ambulante / externo</option></select></div>
       <div data-seller-fixed><div class="fg"><label class="lbl">Usuario POS vinculado</label><select class="inp" id="ven-user"><option value="">Sin usuario — asignación administrativa</option>${users.filter(u=>u.active!==0).map(u=>`<option value="${u.id}" ${Number(s.linked_user_id)===Number(u.id)?'selected':''}>${_venEsc(u.name)}</option>`).join('')}</select><small class="ven-field-help">Sus ventas del POS se asignarán automáticamente.</small></div></div>
       <div data-seller-street><div class="g2"><div class="fg"><label class="lbl">Zona</label><input class="inp" id="ven-zone" value="${_venEsc(s.zone||'')}" placeholder="Ej. Santo Domingo Norte"/></div><div class="fg"><label class="lbl">Ruta o cartera</label><input class="inp" id="ven-route" value="${_venEsc(s.route||'')}" placeholder="Ruta comercial"/></div></div><div class="fg"><label class="lbl">Punto base de cobertura</label><div class="ven-location-input"><input class="inp" id="ven-coverage-address" value="${_venEsc(s.coverage_address||'')}" placeholder="Dirección, sector o avenida para ubicar en el mapa"/><button class="btn btn-out" type="button" onclick="vendedoresGeocodeSellerForm()">${svg('map-pin')} Buscar en mapa</button></div><small class="ven-field-help" id="ven-location-status">${s.map_lat!=null&&s.map_lng!=null?`Ubicación guardada · ${_venEsc(_venRelativeTime(s.location_updated_at))}`:'Todavía no se ha guardado una ubicación geográfica.'}</small></div><div class="ven-callout">El mapa usa este punto para representar la cobertura. Se actualiza inmediatamente al guardar; no rastrea el teléfono del vendedor.</div></div>
       <div class="g2"><div class="fg"><label class="lbl">Meta de ventas del período</label><input class="inp" id="ven-goal" type="number" min="0" step="0.01" value="${s.sales_goal||0}" placeholder="0.00"/></div><div class="fg"><label class="lbl">Fecha de ingreso</label><input class="inp" id="ven-hire" type="date" value="${_venEsc(s.hire_date||_venToday())}"/></div></div>
     </div>
-    <div class="ven-callout">Las reglas y liquidaciones se configuran en el módulo independiente <strong>Comisiones</strong>. El salario y los pagos se administran en <strong>Nómina</strong>.</div>
-    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-green" onclick="vendedoresSaveSeller(${id||'null'})">${svg('check')} Guardar vendedor</button></div>`, 'modal-lg');
+    <div class="ven-callout">Solo el personal de Ventas usa metas, rutas y comisiones. Todos los colaboradores pueden recibir pagos de Nómina.</div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-green" onclick="vendedoresSaveSeller(${id||'null'})">${svg('check')} Guardar colaborador</button></div>`, 'modal-lg');
   vendedoresSellerTypeChanged();
 }
 
-function vendedoresSellerTypeChanged(){const street=document.getElementById('ven-type')?.value==='ambulante';document.querySelectorAll('[data-seller-fixed]').forEach(x=>x.hidden=street);document.querySelectorAll('[data-seller-street]').forEach(x=>x.hidden=!street);}
+function vendedoresSellerTypeChanged(){const commercial=(document.getElementById('ven-role')?.value||'ventas')==='ventas',street=commercial&&document.getElementById('ven-type')?.value==='ambulante';document.querySelectorAll('[data-commercial]').forEach(x=>x.hidden=!commercial);document.querySelectorAll('[data-seller-fixed]').forEach(x=>x.hidden=!commercial||street);document.querySelectorAll('[data-seller-street]').forEach(x=>x.hidden=!commercial||!street);}
 async function vendedoresGeocodeSellerForm(){
   const input=document.getElementById('ven-coverage-address'),status=document.getElementById('ven-location-status');
   const address=input?.value.trim()||document.getElementById('ven-zone')?.value.trim();if(!address){toast('Escribe una dirección o una zona','w');return;}
@@ -399,15 +409,15 @@ async function vendedoresGeocodeSellerForm(){
 }
 
 async function vendedoresSaveSeller(id) {
-  const type=document.getElementById('ven-type').value,mode=document.getElementById('ven-cmode').value;
-  const data={code:document.getElementById('ven-code').value,name:document.getElementById('ven-name').value,seller_type:type,linked_user_id:type==='fijo'?document.getElementById('ven-user').value:'',document:document.getElementById('ven-doc').value,phone:document.getElementById('ven-phone').value,email:document.getElementById('ven-email').value,address:document.getElementById('ven-address').value,zone:type==='ambulante'?document.getElementById('ven-zone').value:'',route:type==='ambulante'?document.getElementById('ven-route').value:'',coverage_address:type==='ambulante'?document.getElementById('ven-coverage-address').value:'',sales_goal:document.getElementById('ven-goal').value,map_lat:document.getElementById('ven-lat').value,map_lng:document.getElementById('ven-lng').value,hire_date:document.getElementById('ven-hire').value,commission_mode:mode,commission_rate:['percent_sales','percent_margin'].includes(mode)?document.getElementById('ven-rate').value:0,commission_fixed:mode==='fixed_sale'?document.getElementById('ven-fixed').value:0,commission_frequency:document.getElementById('ven-cfreq').value,salary_amount:document.getElementById('ven-salary').value,payroll_frequency:document.getElementById('ven-pfreq').value,notes:document.getElementById('ven-notes').value};
+  const role=document.getElementById('ven-role').value,type=document.getElementById('ven-type').value,mode=role==='ventas'?document.getElementById('ven-cmode').value:'none';
+  const data={code:document.getElementById('ven-code').value,name:document.getElementById('ven-name').value,employee_role:role,seller_type:type,linked_user_id:role==='ventas'&&type==='fijo'?document.getElementById('ven-user').value:'',document:document.getElementById('ven-doc').value,phone:document.getElementById('ven-phone').value,email:document.getElementById('ven-email').value,address:document.getElementById('ven-address').value,zone:role==='ventas'&&type==='ambulante'?document.getElementById('ven-zone').value:'',route:role==='ventas'&&type==='ambulante'?document.getElementById('ven-route').value:'',coverage_address:role==='ventas'&&type==='ambulante'?document.getElementById('ven-coverage-address').value:'',sales_goal:role==='ventas'?document.getElementById('ven-goal').value:0,map_lat:role==='ventas'?document.getElementById('ven-lat').value:'',map_lng:role==='ventas'?document.getElementById('ven-lng').value:'',hire_date:document.getElementById('ven-hire').value,commission_mode:mode,commission_rate:role==='ventas'&&['percent_sales','percent_margin'].includes(mode)?document.getElementById('ven-rate').value:0,commission_fixed:role==='ventas'&&mode==='fixed_sale'?document.getElementById('ven-fixed').value:0,commission_frequency:document.getElementById('ven-cfreq').value,salary_amount:document.getElementById('ven-salary').value,payroll_frequency:document.getElementById('ven-pfreq').value,notes:document.getElementById('ven-notes').value};
   const r=id?await window.api.salespeople.update({id,data,requestUserId:user.id}):await window.api.salespeople.create({data,requestUserId:user.id});
-  if(!r?.ok){toast(r?.error||'No se pudo guardar','err');return;}closeModal();toast('✓ Vendedor guardado');renderVendedores(document.getElementById('page'));
+  if(!r?.ok){toast(r?.error||'No se pudo guardar','err');return;}closeModal();toast('✓ Colaborador guardado');renderVendedores(document.getElementById('page'));
 }
 async function vendedoresToggle(id,active){const r=await window.api.salespeople.toggle({id,active,requestUserId:user.id});if(!r?.ok){toast(r.error,'err');return;}renderVendedores(document.getElementById('page'));}
 
 function vendedoresOpenExternalSale(){
-  const ambulantes=_venState.sellers.filter(s=>s.status==='activo'&&s.seller_type==='ambulante');
+  const ambulantes=_venState.sellers.filter(s=>s.status==='activo'&&(s.employee_role||'ventas')==='ventas'&&s.seller_type==='ambulante');
   if(!ambulantes.length){toast('Primero registra un vendedor ambulante','w');return;}
   window._vexProducts=(DB.products||[]).filter(p=>p.active!==0);
   const sellers=ambulantes.map(s=>`<option value="${s.id}">${_venEsc(s.code)} · ${_venEsc(s.name)}</option>`).join('');

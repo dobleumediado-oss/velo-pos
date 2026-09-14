@@ -300,7 +300,7 @@ async function loadAppData() {
         ? window.api.customers.getAllPayments().catch(() => [])
         : Promise.resolve([]),
       window.api.salespeople?.getAll
-        ? window.api.salespeople.getAll({ status:'activo' }).catch(() => ({ok:false,data:[]}))
+        ? window.api.salespeople.getAll({ status:'activo', commercialOnly:true }).catch(() => ({ok:false,data:[]}))
         : Promise.resolve({ok:false,data:[]}),
     ]).then(results => {
       if (loadGeneration !== appDataLoadGeneration) return;

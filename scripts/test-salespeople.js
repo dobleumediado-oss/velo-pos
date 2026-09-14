@@ -40,6 +40,11 @@ ok(DB.salespeopleRepo.getById(streetId).coverage_address==='Av. Hermanas Mirabal
 DB.salespeopleRepo.updateLocation(streetId,{lat:18.5201,lng:-69.9001,coverage_address:'Santo Domingo Norte'},...auditArgs);
 ok(near(DB.salespeopleRepo.getById(streetId).map_lat,18.5201)&&DB.salespeopleRepo.getById(streetId).coverage_address==='Santo Domingo Norte','actualiza el punto geográfico del ambulante de forma independiente');
 ok(periodFor('quincenal','2026-07-20').from==='2026-07-16'&&periodFor('quincenal','2026-07-20').to==='2026-07-31','sugiere automáticamente segunda quincena');
+const mechanicId=DB.salespeopleRepo.create({name:'Carlos Mecánico',employee_role:'mecanica',salary_amount:800,payroll_frequency:'semanal',commission_mode:'percent_sales',commission_rate:99},...auditArgs);
+const mechanic=DB.salespeopleRepo.getById(mechanicId);
+ok(mechanic.employee_role==='mecanica'&&mechanic.commission_mode==='none','registra mecánicos como colaboradores sin activar comisiones');
+ok(!DB.salespeopleRepo.getAll({commercialOnly:true}).some(x=>x.id===mechanicId),'excluye personal no comercial de ventas y comisiones');
+throws(()=>DB.salespeopleRepo.previewCommission({salespersonId:mechanicId,from:today,to:today}),'impide calcular comisiones a personal no comercial');
 
 console.log('\n== B. Venta interna y comprobante externo con productos ==');
 const internal=DB.salesRepo.create({customer:{id:customerId,name:'Cliente vendedor'},items:[{product_id:productId,product_code:'VEN-P1',product_name:'Producto vendedor',unit_cost:50,unit_price:118,taxable:1,tax_pct:18,qty:1}],payment:{method:'efectivo'},user,type:'factura'});
@@ -99,6 +104,13 @@ throws(()=>DB.salespeopleRepo.generatePayroll({from:today,to:today,frequency:'qu
 DB.salespeopleRepo.approvePayroll(streetPayrollId,...auditArgs);
 DB.salespeopleRepo.payPayroll(streetPayrollId,{payment_date:today,payment_method:'efectivo',payment_source:'caja_chica',reference:'TEST-Q'},...auditArgs);
 ok(DB.salespeopleRepo.getCommissionRuns({salespersonId:streetId})[0].status==='pagado','comisión pasa a pagada junto con la nómina correcta');
+
+const weekly=periodFor('semanal',today);
+const quick=DB.salespeopleRepo.quickPayPayroll({salesperson_id:mechanicId,frequency:'semanal',from:weekly.from,to:weekly.to,bonus_amount:75,deduction_amount:25,payment_date:today,payment_method:'transferencia',payment_source:'banco',reference:'NOM-FAST-01',receipt_notes:'Excelente trabajo en el taller'},...auditArgs);
+const quickPayroll=DB.salespeopleRepo.getPayrollById(quick.id);
+ok(quickPayroll.status==='pagado'&&quickPayroll.items.length===1&&quickPayroll.items[0].employee_role==='mecanica','pago rápido liquida un solo colaborador y conserva su área');
+ok(near(quickPayroll.net_total,850)&&quickPayroll.payment_method==='transferencia'&&quickPayroll.payment_reference==='NOM-FAST-01','pago rápido guarda ajustes, método y referencia del recibo');
+ok(quickPayroll.receipt_notes==='Excelente trabajo en el taller'&&quick.refs.length===1,'recibo conserva la nota visible y el pago contable');
 
 try{DB.getDB().close();}catch{}
 try{fs.rmSync(tmpDir,{recursive:true,force:true});}catch{}

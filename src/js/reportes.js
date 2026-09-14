@@ -18,6 +18,13 @@ let repTab      = 'financiero'; // 'financiero' | 'abonos' | 'inventario'
 let repPriceMode = 'all';
 let repCustomerType = 'all';
 
+function exportReporteActualPDF() {
+  if (repTab === 'inventario') {
+    return exportInventarioValorizadoPDF(DB.products.filter(product => product.active !== 0));
+  }
+  return exportReportePDF();
+}
+
 function _repEsc(v) {
   return String(v == null ? '' : v)
     .replace(/&/g, '&amp;')
@@ -44,13 +51,20 @@ async function renderReportes(el) {
       h('div', { class: 'sec-title' }, 'Reportes'),
       h('div', { class: 'sec-sub' }, 'Análisis financiero del negocio')
     ),
-    h('button', {
-      class: 'btn btn-out btn-sm',
-      onclick: () => (typeof guardarDocumentoPDF === 'function')
-        ? guardarDocumentoPDF(exportReportePDF, 'Reporte-General')
-        : exportReportePDF(),
-      html: `${svg('pdf')} Guardar PDF`
-    })
+    h('div', { class: 'flex', style: { gap: '8px' } },
+      h('button', {
+        class: 'btn btn-out btn-sm',
+        onclick: () => guardarDocumentoExcel(exportReporteActualPDF, `Reporte-${repTab}`, 'Reportes'),
+        html: `${svg('download')} Excel`
+      }),
+      h('button', {
+        class: 'btn btn-out btn-sm',
+        onclick: () => (typeof guardarDocumentoPDF === 'function')
+          ? guardarDocumentoPDF(exportReporteActualPDF, `Reporte-${repTab}`)
+          : exportReporteActualPDF(),
+        html: `${svg('pdf')} Guardar PDF`
+      })
+    )
   ));
 
   // ── Pestañas principales ─────────────────────
@@ -529,13 +543,20 @@ function renderReporteContenido(el, d) {
   const creditCard = h('div', { class: 'card' });
   creditCard.appendChild(h('div', { class: 'fxb mb8' },
     h('div', { class: 'card-title' }, 'Cuentas por Cobrar'),
-    h('button', {
-      class: 'btn btn-ghost btn-sm',
-      onclick: () => (typeof guardarDocumentoPDF === 'function')
-        ? guardarDocumentoPDF(exportReporteCreditoPDF, 'Reporte-Creditos-CxC')
-        : exportReporteCreditoPDF(),
-      html: `${svg('pdf')} Guardar PDF`
-    })
+    h('div', { class: 'flex', style: { gap: '6px' } },
+      h('button', {
+        class: 'btn btn-ghost btn-sm',
+        onclick: () => guardarDocumentoExcel(exportReporteCreditoPDF, 'Reporte-Creditos-CxC', 'Cuentas por cobrar'),
+        html: `${svg('download')} Excel`
+      }),
+      h('button', {
+        class: 'btn btn-ghost btn-sm',
+        onclick: () => (typeof guardarDocumentoPDF === 'function')
+          ? guardarDocumentoPDF(exportReporteCreditoPDF, 'Reporte-Creditos-CxC')
+          : exportReporteCreditoPDF(),
+        html: `${svg('pdf')} Guardar PDF`
+      })
+    )
   ));
 
   creditCard.appendChild(
@@ -964,9 +985,7 @@ function exportAbonosPDF() {
   </table>
 </body></html>`;
 
-  const w = window.open('', '_blank');
-  w.document.write(html);
-  w.document.close();
+  printHTML(html, 'reporte');
 }
 
 // ══════════════════════════════════════════════
@@ -1336,6 +1355,15 @@ async function _renderReporteInventario(el) {
     onclick: () => (typeof guardarDocumentoPDF === 'function')
       ? guardarDocumentoPDF(() => exportInventarioValorizadoPDF(prods), 'Reporte-Inventario')
       : exportInventarioValorizadoPDF(prods)
+  }));
+  filterRow.appendChild(h('button', {
+    class: 'btn btn-out btn-sm',
+    html: `${svg('download')} Excel`,
+    onclick: () => guardarDocumentoExcel(
+      () => exportInventarioValorizadoPDF(prods),
+      'Reporte-Inventario',
+      'Inventario valorizado'
+    )
   }));
   card.appendChild(filterRow);
 

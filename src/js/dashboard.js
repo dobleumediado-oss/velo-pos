@@ -342,6 +342,15 @@ async function renderDash(el) {
           class: 'btn btn-out btn-sm',
           onclick: () => exportCreditAlertsPDF(creditAlerts),
           html: `${svg('pdf')} PDF`
+        }),
+        h('button', {
+          class: 'btn btn-out btn-sm',
+          onclick: () => guardarDocumentoExcel(
+            () => exportCreditAlertsPDF(creditAlerts),
+            'Alertas-de-Credito',
+            'Alertas de crédito'
+          ),
+          html: `${svg('download')} Excel`
         })
       )
     ));

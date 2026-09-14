@@ -819,6 +819,7 @@ function modalReporteNCF() {
         <div class="fg" style="margin:0"><label class="lbl">Hasta</label><input class="inp" type="date" id="rep-to" value="${last}"></div>
         <button class="btn btn-dark" id="rep-gen">Generar</button>
         <button class="btn btn-ghost" id="rep-print" disabled>🖨️ Imprimir</button>
+        <button class="btn btn-ghost" id="rep-excel" disabled>Excel</button>
       </div>
       <div id="rep-body" style="padding:16px 20px;overflow:auto;flex:1">
         <div style="text-align:center;color:var(--muted2);padding:24px;font-size:13px">Elige el reporte y el período, luego pulsa <strong>Generar</strong>.</div>
@@ -831,7 +832,14 @@ function modalReporteNCF() {
 
   let printableHtml = '';
   const printBtn = overlay.querySelector('#rep-print');
+  const excelBtn = overlay.querySelector('#rep-excel');
   printBtn.onclick = () => { if (printableHtml && typeof printHTML==='function') printHTML(printableHtml, 'reporte'); };
+  excelBtn.onclick = () => {
+    if (printableHtml) _exportHTMLToExcel(printableHtml, {
+      suggestedName: `Reporte-${overlay.querySelector('#rep-tipo').value}`,
+      title: 'Reporte de comprobantes fiscales',
+    });
+  };
 
   overlay.querySelector('#rep-gen').onclick = async () => {
     const tipo = overlay.querySelector('#rep-tipo').value;
@@ -840,7 +848,7 @@ function modalReporteNCF() {
     const body = overlay.querySelector('#rep-body');
     const is608 = tipo === '608';
     body.innerHTML = '<div style="text-align:center;color:var(--muted2);padding:24px">Cargando…</div>';
-    printBtn.disabled = true; printableHtml = '';
+    printBtn.disabled = true; excelBtn.disabled = true; printableHtml = '';
 
     const res = is608
       ? await window.api.ncf.getVoided({ from, to })
@@ -888,6 +896,7 @@ function modalReporteNCF() {
     if (invalidRows.length) {
       printableHtml = '';
       printBtn.disabled = true;
+      excelBtn.disabled = true;
       return;
     }
 
@@ -914,6 +923,7 @@ function modalReporteNCF() {
       <div style="margin-top:16px;font-size:9px;color:#9ca3af">Generado ${new Date().toLocaleString('es-DO')} · Reporte interno de apoyo — no sustituye el envío del formato 607/608 a la DGII.</div>
       </body></html>`;
     printBtn.disabled = false;
+    excelBtn.disabled = false;
   };
 }
 
