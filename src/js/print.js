@@ -122,6 +122,7 @@ const PRINT_CATEGORIES = {
   ticket:       { label: 'Facturas y ventas',         autoPrintDefault: false, previewDefault: true,  media: 'any'   },
   cotizacion:   { label: 'Cotizaciones',               autoPrintDefault: false, previewDefault: true,  media: 'any'   },
   pago:         { label: 'Pagos y abonos',             autoPrintDefault: false, previewDefault: true,  media: 'any'   },
+  nomina:       { label: 'Recibos de nómina',          autoPrintDefault: false, previewDefault: true,  media: 'any'   },
   conduce:      { label: 'Conduces y entregas',        autoPrintDefault: false, previewDefault: true,  media: 'any'   },
   caja:         { label: 'Caja, arqueos y cierres',    autoPrintDefault: false, previewDefault: true,  media: 'sheet' },
   inventario:   { label: 'Inventario y etiquetas de anaquel', autoPrintDefault: false, previewDefault: true, media: 'sheet' },
@@ -145,6 +146,7 @@ const _DEFAULT_PRINT_CHANNEL = {
   ticket: 'ventas',
   cotizacion: 'ventas',
   pago: 'pagos',
+  nomina: 'oficina',
   caja: 'caja',
   conduce: 'almacen',
   inventario: 'almacen',
@@ -160,6 +162,7 @@ const _JOB_TYPE_CATEGORY = {
   ticket: 'ticket', factura: 'ticket', test: 'ticket', prueba_plantilla: 'ticket',
   cotizacion: 'cotizacion', conduce: 'conduce',
   abono: 'pago', pago_proveedor: 'pago', pago_gasto_externo: 'pago',
+  recibo_nomina: 'nomina',
   cierre: 'caja',
 };
 function _categoryForJobType(jobType) {
@@ -215,6 +218,7 @@ function _getCategoryConfig(category) {
     // desde el Centro nuevo queda reemplazada por channel + binding local.
     printer:   String(hasExplicitBinding ? bindings[channel] : (cat.printer || bindings[channel] || '')).trim(),
     template:  (cat.template || '').trim(),
+    options:   cat.options && typeof cat.options === 'object' && !Array.isArray(cat.options) ? cat.options : {},
     profileId: String(cat.profileId || profiles[channel] || '').trim(),
     copies:    Math.max(1, Math.min(9, parseInt(cat.copies, 10) || 1)),
     preview: true,

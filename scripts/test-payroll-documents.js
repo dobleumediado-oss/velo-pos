@@ -40,11 +40,18 @@ function ok(condition, message) {
 
 (async () => {
   await context.nominaPrintReceipts(run, 91);
-  ok(category==='pago' && printed.includes('RECIBO DE PAGO DE NÓMINA'),'genera un recibo individual imprimible');
+  ok(category==='recibo_nomina' && printed.includes('RECIBO DE PAGO DE NÓMINA'),'genera un recibo individual en su categoría propia');
   ok(printed.includes('Carlos Mecánico')&&printed.includes('Mecánica')&&printed.includes('RD$10250.00'),'incluye colaborador, área y neto pagado');
   ok(printed.includes('TRX-009')&&printed.includes('Gracias por tu excelente trabajo.'),'incluye referencia y nota visible');
   ok(!printed.includes('NOTA INTERNA CONFIDENCIAL'),'no filtra notas internas al recibo del colaborador');
   ok(printed.includes('Firma del colaborador')&&printed.includes('Firma autorizada'),'incluye constancia y espacios de firma');
+
+  const thermal = context._nomPayrollReceiptHTML(run, run.items, {
+    template:'nomina_termica_80',
+    options:{showLogo:false,showBusinessDetails:false,showNotes:false,showSignatures:false},
+  });
+  ok(thermal.includes('size:80mm auto')&&!thermal.includes('Firma del colaborador'),'adapta el recibo a 80 mm y permite ocultar firmas');
+  ok(!thermal.includes('Gracias por tu excelente trabajo.')&&!thermal.includes('Taller Velo'),'respeta la visibilidad de nota y datos del negocio');
 
   printed=''; category='';
   await context.nominaPrintPayrollReport(run);

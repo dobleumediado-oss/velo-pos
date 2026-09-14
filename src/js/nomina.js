@@ -262,15 +262,35 @@ async function nominaConfirmQuickPay() {
   await renderNomina(document.getElementById('page'));
 }
 
-function _nomDocumentShell(title, body) {
+function _nomReceiptSettings(override = null) {
+  const route = typeof _getCategoryConfig === 'function' ? _getCategoryConfig('nomina') : {};
+  const selected = override || {};
+  const options = { ...(route.options || {}), ...(selected.options || {}) };
+  return {
+    template: selected.template || route.template || 'nomina_carta_profesional',
+    showLogo: options.showLogo !== false,
+    showBusinessDetails: options.showBusinessDetails !== false,
+    showNotes: options.showNotes !== false,
+    showSignatures: options.showSignatures !== false,
+  };
+}
+
+function _nomDocumentShell(title, body, receiptSettings = null) {
+  const thermal = receiptSettings?.template === 'nomina_termica_80';
+  const compact = receiptSettings?.template === 'nomina_carta_compacta';
+  const pageRule = thermal ? 'size:80mm auto;margin:4mm' : compact ? 'size:letter landscape;margin:10mm' : 'size:letter;margin:14mm';
+  const bodySize = thermal ? '10px' : compact ? '10.5px' : '12px';
+  const pageMin = thermal ? '0' : compact ? '118mm' : '245mm';
   return `<!doctype html><html><head><meta charset="UTF-8"><title>${_nomEsc(title)}</title><style>
-    @page{size:letter;margin:14mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#172033;margin:0;font-size:12px}.page{min-height:245mm;position:relative;page-break-after:always}.page:last-child{page-break-after:auto}.head{display:flex;justify-content:space-between;gap:24px;align-items:flex-start;border-bottom:3px solid #0f766e;padding-bottom:13px;margin-bottom:18px}.brand h1{font-size:20px;margin:5px 0 3px}.muted{color:#64748b}.doc{text-align:right}.doc strong{display:block;font-size:18px;color:#0f766e}.title{font-size:17px;margin:0 0 14px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 28px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:13px;margin-bottom:16px}.row{display:flex;justify-content:space-between;gap:20px;padding:9px 0;border-bottom:1px solid #e2e8f0}.row.total{font-size:16px;border-top:2px solid #0f766e;border-bottom:0;margin-top:5px}.note{margin-top:16px;padding:12px;background:#f8fafc;border-left:4px solid #0f766e;white-space:pre-wrap}.signatures{display:grid;grid-template-columns:1fr 1fr;gap:65px;margin-top:70px}.sign{border-top:1px solid #334155;text-align:center;padding-top:7px}.ack{margin-top:20px;line-height:1.55}table{width:100%;border-collapse:collapse}th{background:#0f766e;color:#fff;text-align:left;padding:8px 7px;font-size:10px;text-transform:uppercase}td{padding:8px 7px;border-bottom:1px solid #e2e8f0}td.num,th.num{text-align:right}tfoot td{font-weight:bold;background:#f1f5f9}.foot{position:absolute;bottom:0;left:0;right:0;border-top:1px solid #cbd5e1;padding-top:7px;color:#64748b;font-size:10px;display:flex;justify-content:space-between}
+    @page{${pageRule}}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#172033;margin:0;font-size:${bodySize};${thermal?'width:72mm;':''}}.page{min-height:${pageMin};position:relative;page-break-after:always}.page:last-child{page-break-after:auto}.head{display:flex;justify-content:space-between;gap:${thermal?'8px':'24px'};align-items:flex-start;border-bottom:${thermal?'2px':'3px'} solid #0f766e;padding-bottom:${thermal?'7px':'13px'};margin-bottom:${thermal?'10px':'18px'}}.brand h1{font-size:${thermal?'14px':'20px'};margin:5px 0 3px}.brand img{max-width:${thermal?'42mm':'190px'} !important;max-height:${thermal?'16mm':'62px'} !important}.muted{color:#64748b}.doc{text-align:right}.doc strong{display:block;font-size:${thermal?'11px':'18px'};color:#0f766e}.title{font-size:${thermal?'12px':'17px'};margin:0 0 ${thermal?'8px':'14px'}}.grid{display:grid;grid-template-columns:${thermal?'1fr':'1fr 1fr'};gap:${thermal?'5px':'8px 28px'};background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:${thermal?'8px':'13px'};margin-bottom:${thermal?'8px':'16px'}}.row{display:flex;justify-content:space-between;gap:10px;padding:${thermal?'6px':'9px'} 0;border-bottom:1px solid #e2e8f0}.row.total{font-size:${thermal?'13px':'16px'};border-top:2px solid #0f766e;border-bottom:0;margin-top:5px}.note{margin-top:${thermal?'9px':'16px'};padding:${thermal?'8px':'12px'};background:#f8fafc;border-left:4px solid #0f766e;white-space:pre-wrap}.signatures{display:grid;grid-template-columns:1fr 1fr;gap:${thermal?'16px':'65px'};margin-top:${thermal?'42px':'70px'}}.sign{border-top:1px solid #334155;text-align:center;padding-top:7px}.ack{margin-top:${thermal?'10px':'20px'};line-height:1.55}table{width:100%;border-collapse:collapse}th{background:#0f766e;color:#fff;text-align:left;padding:8px 7px;font-size:10px;text-transform:uppercase}td{padding:8px 7px;border-bottom:1px solid #e2e8f0}td.num,th.num{text-align:right}tfoot td{font-weight:bold;background:#f1f5f9}.foot{${thermal?'margin-top:18px':'position:absolute;bottom:0;left:0;right:0'};border-top:1px solid #cbd5e1;padding-top:7px;color:#64748b;font-size:${thermal?'8px':'10px'};display:flex;justify-content:space-between;gap:8px}
   </style></head><body>${body}</body></html>`;
 }
 
-function _nomDocumentHeader(run, label) {
-  const logo = typeof buildLogoHeader === 'function' ? buildLogoHeader(CFG.biz_logo,CFG.biz_logo_2,{unit:'px',maxH:62,maxW:190,align:'left'}) : '';
-  return `<header class="head"><div class="brand">${logo}<h1>${_nomEsc(CFG.biz||'Velo POS')}</h1><div class="muted">${_nomEsc([CFG.rnc&&`RNC ${CFG.rnc}`,CFG.phone,CFG.addr].filter(Boolean).join(' · '))}</div></div><div class="doc"><strong>${_nomEsc(label)}</strong><span>${_nomEsc(run.number)}</span></div></header>`;
+function _nomDocumentHeader(run, label, settings = null) {
+  const showLogo = settings?.showLogo !== false;
+  const showBusiness = settings?.showBusinessDetails !== false;
+  const logo = showLogo && typeof buildLogoHeader === 'function' ? buildLogoHeader(CFG.biz_logo,CFG.biz_logo_2,{unit:'px',maxH:62,maxW:190,align:'left'}) : '';
+  return `<header class="head"><div class="brand">${logo}${showBusiness?`<h1>${_nomEsc(CFG.biz||'Velo POS')}</h1><div class="muted">${_nomEsc([CFG.rnc&&`RNC ${CFG.rnc}`,CFG.phone,CFG.addr].filter(Boolean).join(' · '))}</div>`:''}</div><div class="doc"><strong>${_nomEsc(label)}</strong><span>${_nomEsc(run.number)}</span></div></header>`;
 }
 
 async function nominaPrintPayrollReport(runOrId) {
@@ -286,8 +306,19 @@ async function nominaPrintReceipts(runOrId, itemId = null) {
   if (!run) { toast('Nómina no encontrada','err'); return; }
   const items = (run.items||[]).filter(item=>!itemId||Number(item.id)===Number(itemId));
   if (!items.length) { toast('No hay colaboradores en esta nómina','w'); return; }
-  const pages = items.map(item=>`<section class="page">${_nomDocumentHeader(run,'RECIBO DE PAGO DE NÓMINA')}<h2 class="title">Constancia individual de pago</h2><div class="grid"><div><span class="muted">Colaborador</span><br><strong>${_nomEsc(item.salesperson_name)}</strong></div><div><span class="muted">Código / área</span><br><strong>${_nomEsc(item.code)} · ${_nomRole(item.employee_role)}</strong></div><div><span class="muted">Período ${_nomFrequency(run.frequency).toLowerCase()}</span><br><strong>${_nomPrintDate(run.date_from)} al ${_nomPrintDate(run.date_to)}</strong></div><div><span class="muted">Fecha de pago</span><br><strong>${_nomPrintDate(run.payment_date)}</strong></div><div><span class="muted">Método</span><br><strong>${_nomEsc(String(run.payment_method||'—').replaceAll('_',' '))}</strong></div><div><span class="muted">Referencia</span><br><strong>${_nomEsc(run.payment_reference||run.number)}</strong></div></div><div class="row"><span>Salario base</span><strong>${_nomMoney(item.base_salary)}</strong></div><div class="row"><span>Comisiones</span><strong>${_nomMoney(item.commission_amount)}</strong></div><div class="row"><span>Bonificaciones</span><strong>${_nomMoney(item.bonus_amount)}</strong></div><div class="row"><span>Deducciones</span><strong>− ${_nomMoney(item.deduction_amount)}</strong></div><div class="row total"><span>NETO PAGADO</span><strong>${_nomMoney(item.net_amount)}</strong></div>${run.receipt_notes?`<div class="note"><strong>Nota</strong><br>${_nomEsc(run.receipt_notes)}</div>`:''}<p class="ack">Declaro haber recibido el monto neto indicado por concepto de pago de nómina correspondiente al período descrito.</p><div class="signatures"><div class="sign">Firma del colaborador<br><span class="muted">${_nomEsc(item.salesperson_name)}</span></div><div class="sign">Firma autorizada</div></div><footer class="foot"><span>${_nomEsc(CFG.biz||'')}</span><span>${_nomEsc(run.number)} · Recibo individual</span></footer></section>`).join('');
-  printHTML(_nomDocumentShell(`Recibos ${run.number}`,pages),'pago');
+  printHTML(_nomPayrollReceiptHTML(run, items),'recibo_nomina');
+}
+
+function _nomPayrollReceiptHTML(run, items, override = null) {
+  const settings = _nomReceiptSettings(override);
+  const pages = items.map(item=>`<section class="page">${_nomDocumentHeader(run,'RECIBO DE PAGO DE NÓMINA',settings)}<h2 class="title">Constancia individual de pago</h2><div class="grid"><div><span class="muted">Colaborador</span><br><strong>${_nomEsc(item.salesperson_name)}</strong></div><div><span class="muted">Código / área</span><br><strong>${_nomEsc(item.code)} · ${_nomRole(item.employee_role)}</strong></div><div><span class="muted">Período ${_nomFrequency(run.frequency).toLowerCase()}</span><br><strong>${_nomPrintDate(run.date_from)} al ${_nomPrintDate(run.date_to)}</strong></div><div><span class="muted">Fecha de pago</span><br><strong>${_nomPrintDate(run.payment_date)}</strong></div><div><span class="muted">Método</span><br><strong>${_nomEsc(String(run.payment_method||'—').replaceAll('_',' '))}</strong></div><div><span class="muted">Referencia</span><br><strong>${_nomEsc(run.payment_reference||run.number)}</strong></div></div><div class="row"><span>Salario base</span><strong>${_nomMoney(item.base_salary)}</strong></div><div class="row"><span>Comisiones</span><strong>${_nomMoney(item.commission_amount)}</strong></div><div class="row"><span>Bonificaciones</span><strong>${_nomMoney(item.bonus_amount)}</strong></div><div class="row"><span>Deducciones</span><strong>− ${_nomMoney(item.deduction_amount)}</strong></div><div class="row total"><span>NETO PAGADO</span><strong>${_nomMoney(item.net_amount)}</strong></div>${settings.showNotes&&run.receipt_notes?`<div class="note"><strong>Nota</strong><br>${_nomEsc(run.receipt_notes)}</div>`:''}<p class="ack">Declaro haber recibido el monto neto indicado por concepto de pago de nómina correspondiente al período descrito.</p>${settings.showSignatures?`<div class="signatures"><div class="sign">Firma del colaborador<br><span class="muted">${_nomEsc(item.salesperson_name)}</span></div><div class="sign">Firma autorizada</div></div>`:''}<footer class="foot"><span>${settings.showBusinessDetails?_nomEsc(CFG.biz||''):''}</span><span>${_nomEsc(run.number)} · Recibo individual</span></footer></section>`).join('');
+  return _nomDocumentShell(`Recibos ${run.number}`,pages,settings);
+}
+
+function nominaPreviewReceipt(settings = null) {
+  const run = { number:'NOM-EJEMPLO', frequency:'quincenal', date_from:'2026-09-01', date_to:'2026-09-15', payment_date:_nomToday(), payment_method:'transferencia', payment_reference:'TRX-001', receipt_notes:'Pago recibido conforme. Nota editable desde el proceso de nómina.' };
+  const items = [{ code:'COL-001', salesperson_name:'COLABORADOR DE EJEMPLO', employee_role:'administracion', base_salary:18000, commission_amount:0, bonus_amount:1500, deduction_amount:500, net_amount:19000 }];
+  _openPrintPreview(_nomPayrollReceiptHTML(run,items,settings), { jobType:'recibo_nomina', mode:'print', source:'html', suggestedName:'Recibo-nomina-ejemplo' });
 }
 
 async function nominaViewPayroll(id) {

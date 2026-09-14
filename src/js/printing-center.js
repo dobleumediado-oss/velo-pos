@@ -123,6 +123,13 @@ function pcChannelOptions(current) {
 }
 
 function pcTemplatesForCategory(category) {
+  if (category === 'nomina') {
+    return [
+      { id: 'nomina_carta_profesional', nombre: 'Nómina profesional · Carta' },
+      { id: 'nomina_carta_compacta', nombre: 'Nómina compacta · Carta horizontal' },
+      { id: 'nomina_termica_80', nombre: 'Nómina térmica · 80 mm' },
+    ];
+  }
   const definition = PRINT_CATEGORIES[category] || {};
   const all = (typeof PLANTILLAS !== 'undefined' ? PLANTILLAS : [])
     .filter(template => template && template.tipo !== 'etiqueta');
@@ -130,7 +137,8 @@ function pcTemplatesForCategory(category) {
 }
 
 function pcTemplateOptions(category, current) {
-  return `<option value="">Usar plantilla general</option>
+  const emptyLabel = category === 'nomina' ? 'Nómina profesional · Carta (predeterminada)' : 'Usar plantilla general';
+  return `<option value="">${emptyLabel}</option>
     ${pcTemplatesForCategory(category).map(template =>
       `<option value="${pcEsc(template.id)}" ${template.id === current ? 'selected' : ''}>${pcEsc(template.nombre)}</option>`
     ).join('')}`;
@@ -381,7 +389,8 @@ function pcRenderRoutes() {
         ${assigned ? `${available ? '✓' : '⚠'} ${pcEsc(assigned)}` : 'Sin impresora: abrirá el diálogo'}
       </div></td>
       <td><select class="inp pc-route-channel" onchange="pcRouteChannelChanged(this)">${pcChannelOptions(channel)}</select></td>
-      <td><select class="inp pc-route-template">${pcTemplateOptions(category, config.template || '')}</select></td>
+      <td><select class="inp pc-route-template">${pcTemplateOptions(category, config.template || '')}</select>
+        ${category === 'nomina' ? `<button class="btn btn-out btn-sm" style="margin-top:6px" onclick="pcOpenPayrollReceiptSettings()">${svg('edit')} Personalizar recibo</button>` : ''}</td>
       <td style="width:80px"><input class="inp pc-route-copies" type="number" min="1" max="9" value="${copies}"/></td>
       <td style="text-align:center"><span class="badge g">Vista previa</span></td>
     </tr>`;
@@ -398,6 +407,61 @@ function pcRenderRoutes() {
     </table></div>
     <div style="font-size:10.5px;color:var(--muted2);margin-top:10px">Todo documento abre su display. Solo se envía a la impresora al pulsar Imprimir.</div>
   </div>`;
+}
+
+function pcPayrollReceiptOptions(source = _pcState?.printConfig?.nomina?.options) {
+  const options = source && typeof source === 'object' ? source : {};
+  return {
+    showLogo: options.showLogo !== false,
+    showBusinessDetails: options.showBusinessDetails !== false,
+    showNotes: options.showNotes !== false,
+    showSignatures: options.showSignatures !== false,
+  };
+}
+
+function pcOpenPayrollReceiptSettings() {
+  const config = _pcState?.printConfig?.nomina || {};
+  const rowTemplate = _pcState?.root?.querySelector('tr[data-category="nomina"] .pc-route-template')?.value;
+  const template = rowTemplate || config.template || 'nomina_carta_profesional';
+  const options = pcPayrollReceiptOptions(config.options);
+  openModal(`<div class="modal-title">Plantilla del recibo de nómina</div>
+    <div class="modal-sub">Estos cambios solo afectan los comprobantes entregados a colaboradores.</div>
+    <div class="fg"><label class="lbl">Formato</label><select class="inp" id="pc-payroll-template">${pcTemplateOptions('nomina', template)}</select></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px">
+      <label class="inp" style="display:flex;align-items:center;gap:9px;cursor:pointer"><input id="pc-payroll-logo" type="checkbox" ${options.showLogo?'checked':''}/> Mostrar logo</label>
+      <label class="inp" style="display:flex;align-items:center;gap:9px;cursor:pointer"><input id="pc-payroll-business" type="checkbox" ${options.showBusinessDetails?'checked':''}/> Datos del negocio</label>
+      <label class="inp" style="display:flex;align-items:center;gap:9px;cursor:pointer"><input id="pc-payroll-notes" type="checkbox" ${options.showNotes?'checked':''}/> Nota del recibo</label>
+      <label class="inp" style="display:flex;align-items:center;gap:9px;cursor:pointer"><input id="pc-payroll-signatures" type="checkbox" ${options.showSignatures?'checked':''}/> Líneas de firma</label>
+    </div>
+    <div class="alrt a" style="margin-top:13px"><div><div class="alrt-title">Vista previa segura</div><div class="alrt-sub">Usa datos de ejemplo y nunca registra ni imprime un pago real.</div></div></div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-out" onclick="pcPreviewPayrollReceipt()">${svg('check')} Vista previa</button><button class="btn btn-dark" onclick="pcSavePayrollReceiptSettings()">${svg('check')} Guardar plantilla</button></div>`, 'modal-lg');
+}
+
+function pcReadPayrollReceiptSettings() {
+  return {
+    template: document.getElementById('pc-payroll-template')?.value || 'nomina_carta_profesional',
+    options: {
+      showLogo: !!document.getElementById('pc-payroll-logo')?.checked,
+      showBusinessDetails: !!document.getElementById('pc-payroll-business')?.checked,
+      showNotes: !!document.getElementById('pc-payroll-notes')?.checked,
+      showSignatures: !!document.getElementById('pc-payroll-signatures')?.checked,
+    },
+  };
+}
+
+function pcPreviewPayrollReceipt() {
+  const settings = pcReadPayrollReceiptSettings();
+  if (typeof nominaPreviewReceipt !== 'function') return toast('La vista previa de nómina no está disponible', 'err');
+  nominaPreviewReceipt(settings);
+}
+
+async function pcSavePayrollReceiptSettings() {
+  const settings = pcReadPayrollReceiptSettings();
+  _pcState.printConfig.nomina = { ...(_pcState.printConfig.nomina || {}), ...settings };
+  const select = _pcState.root?.querySelector('tr[data-category="nomina"] .pc-route-template');
+  if (select) select.value = settings.template;
+  closeModal();
+  await pcSaveRoutes();
 }
 
 function pcRouteChannelChanged(select) {
@@ -964,12 +1028,14 @@ async function pcSaveGeneral() {
 async function pcSaveRoutes() {
   const next = {};
   _pcState.root.querySelectorAll('#pc-route-rows tr[data-category]').forEach(row => {
+    const existing = _pcState.printConfig[row.dataset.category] || {};
     next[row.dataset.category] = {
       channel: row.querySelector('.pc-route-channel')?.value || _DEFAULT_PRINT_CHANNEL[row.dataset.category] || 'oficina',
       template: row.querySelector('.pc-route-template')?.value || '',
       copies: Math.max(1, Math.min(9, parseInt(row.querySelector('.pc-route-copies')?.value, 10) || 1)),
       autoPrint: false,
       preview: true,
+      ...(row.dataset.category === 'nomina' ? { options: pcPayrollReceiptOptions(existing.options) } : {}),
     };
   });
   const result = await window.api.print.saveConfig({ config: next, requestUserId: user?.id });

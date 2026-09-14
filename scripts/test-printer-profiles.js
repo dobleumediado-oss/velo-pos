@@ -392,6 +392,10 @@ test('el Centro de impresión centraliza rutas y mantiene etiquetas separadas', 
   assert.ok(printSource.includes('const PRINT_CHANNELS'));
   assert.ok(printSource.includes('print_route_config'));
   assert.ok(printSource.includes('printer_channel_profiles'));
+  assert.ok(printSource.includes("nomina:       { label: 'Recibos de nómina'"));
+  assert.ok(printSource.includes("recibo_nomina: 'nomina'"));
+  assert.ok(centerSource.includes('function pcOpenPayrollReceiptSettings'));
+  assert.ok(centerSource.includes('function pcPreviewPayrollReceipt'));
   assert.ok(businessContextSource.includes("'printer_channel_bindings'"));
   assert.ok(businessContextSource.includes("'printer_channel_profiles'"));
   const mainSource = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
