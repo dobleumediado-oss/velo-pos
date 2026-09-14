@@ -2861,6 +2861,7 @@ function openCobroModal(inv) {
           <option value="efectivo"      ${inv.pmeth==='efectivo'?'selected':''}>Efectivo</option>
           <option value="tarjeta"       ${inv.pmeth==='tarjeta'?'selected':''}>Tarjeta</option>
           <option value="transferencia" ${inv.pmeth==='transferencia'?'selected':''}>Transferencia</option>
+          <option value="cheque"        ${inv.pmeth==='cheque'?'selected':''}>Cheque</option>
           <option value="mixto"         ${inv.pmeth==='mixto'?'selected':''}>Pago mixto</option>
           <option value="credito" hidden ${inv.pmeth==='credito'?'selected':''}>Crédito</option>
         </select>
@@ -2891,8 +2892,8 @@ function openCobroModal(inv) {
           <div id="cbr-fx-detail" style="font-size:11px;color:var(--blue);padding-bottom:8px"></div>
         </div>
       </div>
-      <div id="cbr-transfer-ref-wrap" style="display:${inv.pmeth === 'transferencia' ? 'block' : 'none'};margin-top:9px">
-        <label class="lbl">Referencia de transferencia <span style="font-weight:400;color:var(--muted)">(opcional)</span></label>
+      <div id="cbr-transfer-ref-wrap" style="display:${['transferencia','cheque'].includes(inv.pmeth) ? 'block' : 'none'};margin-top:9px">
+        <label class="lbl">Referencia del pago <span style="font-weight:400;color:var(--muted)">(opcional)</span></label>
         <input class="inp" id="cbr-transfer-ref" maxlength="80" value="${posEscHtml(inv.paymentReference || '')}"
                placeholder="Número o referencia bancaria"/>
       </div>
@@ -2994,7 +2995,7 @@ function openCobroModal(inv) {
         <label class="lbl">Pago inicial recibido (RD$) <span style="font-weight:400;color:var(--muted)">(opcional)</span></label>
         <div class="inp-ic">
           <div class="ic">${svg('dollar')}</div>
-          <input class="inp" id="cbr-initial-payment" type="number" min="0" max="${amountDue.toFixed(2)}" step="0.01"
+          <input class="inp" id="cbr-initial-payment" type="number" min="0" step="0.01"
                  value="${Number(inv.initialPaymentAmount || 0).toFixed(2)}"
                  oninput="cbrCalcInitial()"/>
         </div>
@@ -3160,7 +3161,7 @@ function _cbrBankAccounts() {
 // Transferencia y mixto necesitan destino; tarjeta se vincula automáticamente
 // en el backend a una cuenta tipo Tarjeta cuando exista.
 function _cbrNeedsAccount(pmeth) {
-  return pmeth === 'transferencia' || pmeth === 'mixto';
+  return pmeth === 'transferencia' || pmeth === 'cheque' || pmeth === 'mixto';
 }
 
 function _cbrMoney(amount, currency = 'DOP') {
@@ -3253,7 +3254,7 @@ function cbrTogglePago(val) {
   const cardWrap = document.getElementById('cbr-card-wrap');
   if (cardWrap) cardWrap.style.display = val === 'tarjeta' ? 'block' : 'none';
   const transferRef = document.getElementById('cbr-transfer-ref-wrap');
-  if (transferRef) transferRef.style.display = val === 'transferencia' ? 'block' : 'none';
+  if (transferRef) transferRef.style.display = ['transferencia','cheque'].includes(val) ? 'block' : 'none';
   if (val === 'credito') {
     const received = _posEntryNumber(document.getElementById('cbr-received'));
     const total = _posAmountDue(currentInv());
@@ -3330,9 +3331,75 @@ function cbrCalcInitial(total = _posAmountDue(currentInv())) {
   if (el) {
     const limit = _posUserCreditLimit();
     const exceeded = limit > 0 && pending > limit + 0.005;
-    el.innerHTML = `Pago inicial: <strong>${fmt(paid)}</strong> · Quedará a crédito: <strong style="color:${exceeded ? 'var(--red)' : 'var(--amber)'}">${fmt(pending)}</strong>` +
-      (exceeded ? ` · <strong style="color:var(--red)">Supera tu tope de ${fmt(limit)}</strong>` : '');
+    const covered = paid >= total - 0.005;
+    const change = Math.max(0, Math.round((paid - total) * 100) / 100);
+    el.innerHTML = covered
+      ? `Pago recibido: <strong>${fmt(paid)}</strong> · Se registrará al contado${change > 0 ? ` · Cambio: <strong style="color:var(--green)">${fmt(change)}</strong>` : ''}`
+      : `Pago inicial: <strong>${fmt(paid)}</strong> · Quedará a crédito: <strong style="color:${exceeded ? 'var(--red)' : 'var(--amber)'}">${fmt(pending)}</strong>` +
+        (exceeded ? ` · <strong style="color:var(--red)">Supera tu tope de ${fmt(limit)}</strong>` : '');
   }
+}
+
+// Si el cliente termina cubriendo la factura desde el formulario de crédito,
+// convertir el cobro sin obligar al cajero a borrar el monto y empezar de nuevo.
+// Los pagos parciales permanecen a crédito. Un excedente solo puede devolverse
+// como cambio cuando existe efectivo suficiente para cubrirlo.
+function cbrConvertCoveredCreditToCash(total = _posAmountDue(currentInv())) {
+  const paid = Math.max(0, _posEntryNumber(document.getElementById('cbr-initial-payment')));
+  if (paid < total - 0.005) return { method: 'credito', converted: false };
+
+  const initialMethod = document.getElementById('cbr-initial-method')?.value || 'efectivo';
+  const change = Math.max(0, Math.round((paid - total) * 100) / 100);
+  const cashPart = initialMethod === 'mixto'
+    ? Math.max(0, _posEntryNumber(document.getElementById('cbr-initial-mix-cash')))
+    : (initialMethod === 'efectivo' ? paid : 0);
+  if (change > cashPart + 0.005) {
+    toast('El monto no efectivo no puede superar el total; el cambio solo se devuelve de efectivo', 'w');
+    return { method: 'credito', converted: false, error: true };
+  }
+
+  const method = initialMethod;
+  const paymentMethod = document.getElementById('cbr-pmeth');
+  const billing = document.getElementById('cbr-billing-type');
+  if (paymentMethod) paymentMethod.value = method;
+  if (billing) billing.value = 'contado';
+  currentInv().lastCashPaymentMethod = method;
+
+  if (method === 'efectivo') {
+    const received = document.getElementById('cbr-received');
+    if (received) received.value = paid.toFixed(2);
+  } else if (method === 'mixto') {
+    const mixCash = document.getElementById('cbr-mix-efec');
+    const mixNoncash = document.getElementById('cbr-mix-card');
+    const noncash = Math.max(0, _posEntryNumber(document.getElementById('cbr-initial-mix-noncash')));
+    if (mixCash) mixCash.value = Math.max(0, cashPart - change).toFixed(2);
+    if (mixNoncash) mixNoncash.value = noncash.toFixed(2);
+  }
+
+  if (['transferencia','cheque','mixto'].includes(method)) {
+    const account = document.getElementById('cbr-account');
+    const initialAccount = document.getElementById('cbr-initial-account');
+    const reference = document.getElementById('cbr-transfer-ref');
+    const initialReference = document.getElementById('cbr-initial-reference');
+    const rate = document.getElementById('cbr-exchange-rate');
+    const initialRate = document.getElementById('cbr-initial-exchange-rate');
+    if (account && initialAccount) account.value = initialAccount.value;
+    if (reference && initialReference) reference.value = initialReference.value;
+    if (rate && initialRate) rate.value = initialRate.value;
+  }
+  if (method === 'tarjeta') {
+    const cardReference = document.getElementById('cbr-card-ref');
+    const initialReference = document.getElementById('cbr-initial-reference');
+    if (cardReference && initialReference) cardReference.value = initialReference.value;
+  }
+
+  cbrTogglePago(method);
+  if (method === 'efectivo') cbrCalcCambio(total);
+  if (method === 'mixto') cbrCalcMixto(total);
+  toast(change > 0
+    ? `Pago completo: venta al contado y cambio de ${fmt(change)}`
+    : 'Pago completo: la venta se registrará al contado', 'ok');
+  return { method, converted: true, change };
 }
 
 function cbrCalcInitialMix(total = _posAmountDue(currentInv())) {
@@ -3864,9 +3931,15 @@ async function posConfirmSaleWithRecovery(inv, saleData, requestUserId) {
 async function finalizarVenta() {
   const inv       = currentInv();
   const isQuote   = inv.itype === 'cotizacion';
-  const pmeth     = isQuote
+  let pmeth       = isQuote
     ? 'cotizacion'
     : (document.getElementById('cbr-pmeth')?.value || 'efectivo');
+  const currentTotal = _posAmountDue(inv);
+  if (!isQuote && pmeth === 'credito') {
+    const resolvedPayment = cbrConvertCoveredCreditToCash(currentTotal);
+    if (resolvedPayment.error) return;
+    pmeth = resolvedPayment.method;
+  }
   const cliName   = document.getElementById('cbr-name')?.value?.trim()   || 'Consumidor Final';
   const cliCedula = document.getElementById('cbr-cedula')?.value?.trim() || '';
   const cliPhone = document.getElementById('cbr-phone')?.value?.trim() || '';
@@ -3906,7 +3979,7 @@ async function finalizarVenta() {
     ? String(document.getElementById('cbr-card-last4')?.value || '').replace(/\D/g, '').slice(-4) : '';
   const paymentReference = pmeth === 'tarjeta'
     ? document.getElementById('cbr-card-ref')?.value?.trim() || ''
-    : (pmeth === 'transferencia'
+    : (['transferencia','cheque'].includes(pmeth)
       ? document.getElementById('cbr-transfer-ref')?.value?.trim() || '' : '');
   const btnConfirmar = document.getElementById('btn-confirmar-venta');
   const salespersonId = parseInt(document.getElementById('cbr-salesperson')?.value) || null;
@@ -3993,7 +4066,6 @@ async function finalizarVenta() {
 
   if (!inv.cart.length) return;
 
-  const currentTotal = _posAmountDue(inv);
   if (!isQuote && inv.tradeIn && !(inv.cliId && inv.cliId !== 1) &&
       !(inv.tradeIn.sellerName && inv.tradeIn.sellerDocument && inv.tradeIn.sellerPhone &&
         inv.tradeIn.sellerAddress && inv.tradeIn.ownershipDeclared && inv.tradeIn.lawfulOriginDeclared)) {

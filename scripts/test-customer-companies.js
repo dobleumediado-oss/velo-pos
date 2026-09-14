@@ -76,8 +76,8 @@ const changedCompany = DB.customersRepo.getById(companyId);
 DB.customersRepo.update(companyId, { ...changedCompany, name:'Motores del Caribe Renovado, SRL', address:'Dirección nueva' });
 DB.customersRepo.updateContact(contactId, { ...company.contacts[0], name:'Ana Pérez Actualizada' });
 const historicalSale = DB.salesRepo.getById(sale.saleId);
-ok(historicalSale.customer_name === 'MOTORES DEL CARIBE, SRL' && historicalSale.customer_address === 'AV. PRINCIPAL 10',
-  'editar la empresa no cambia una factura anterior');
+ok(historicalSale.customer_name === 'MOTORES DEL CARIBE RENOVADO, SRL' && historicalSale.customer_address === 'DIRECCIÓN NUEVA',
+  'editar la empresa actualiza su identidad en una factura anterior');
 ok(historicalSale.customer_contact_name === 'ANA PÉREZ',
   'editar el representante no cambia una factura anterior');
 
@@ -99,8 +99,8 @@ const paid = DB.checkoutOrdersRepo.pay({
 const paidSale = DB.salesRepo.getById(paid.saleId);
 ok(paidSale.customer_contact_name === 'ANA PÉREZ ACTUALIZADA',
   'caja factura con el snapshot de la orden aunque el contacto cambie después');
-ok(paidSale.customer_address === 'DIRECCIÓN NUEVA',
-  'caja conserva los datos empresariales de la orden aunque la cuenta cambie después');
+ok(paidSale.customer_address === 'DIRECCIÓN POSTERIOR A LA ORDEN',
+  'caja usa los datos empresariales actualizados también en la orden pendiente');
 ok(paid.order.customer_contact_id === contactId && paid.order.status === 'paid',
   'la trazabilidad conecta orden, representante y venta');
 
@@ -169,14 +169,26 @@ ok(DB.deliveriesRepo.getById(receivingDeliveryId).customer_contact_name === 'SOL
   'un contacto autorizado para recibir sí puede vincularse al envío');
 
 const saleConduce = DB.conduceRepo.createFromSale(sale.saleId, { userId:admin.id });
-ok(saleConduce.customer_name === 'MOTORES DEL CARIBE, SRL' && saleConduce.customer_contact_name === 'ANA PÉREZ',
-  'un conduce generado desde factura conserva el snapshot histórico de la factura');
+ok(saleConduce.customer_name === 'MOTORES DEL CARIBE RENOVADO, SRL' && saleConduce.customer_contact_name === 'ANA PÉREZ',
+  'un conduce generado desde factura usa la identidad actualizada y conserva el representante histórico');
 
 DB.customersRepo.deleteContact(contactId);
 ok(!DB.customersRepo.getContacts(companyId).some(contact => contact.id === contactId),
   'desactivar un representante lo retira de operaciones nuevas sin borrar el historial');
 ok(DB.salesRepo.getById(sale.saleId).customer_contact_name === 'ANA PÉREZ',
   'el historial sobrevive a la desactivación del representante');
+
+const finalCompany = DB.customersRepo.getById(companyId);
+DB.customersRepo.update(companyId, {
+  ...finalCompany, name:'Motores del Caribe Final, SRL', rnc:'130999999',
+  phone:'809-555-9090', address:'Dirección final', email:'final@motocaribe.do',
+});
+ok(DB.salesRepo.getById(sale.saleId).customer_name === 'MOTORES DEL CARIBE FINAL, SRL'
+  && DB.salesRepo.getById(sale.saleId).customer_rnc === '130999999',
+  'nombre y documento actualizados se propagan a todas las facturas del cliente');
+ok(String(DB.conduceRepo.getById(conduceId).customer_name).toUpperCase() === 'MOTORES DEL CARIBE FINAL, SRL'
+  && String(DB.deliveriesRepo.getById(deliveryId).customer_name).toUpperCase() === 'MOTORES DEL CARIBE FINAL, SRL',
+  'la identidad actualizada se propaga también a conduces y envíos históricos');
 
 db.close();
 try { fs.rmSync(tempDir, { recursive:true, force:true }); } catch {}

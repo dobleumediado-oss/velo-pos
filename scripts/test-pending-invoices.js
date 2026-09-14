@@ -89,11 +89,17 @@ linkedDb.exec(`
     (1,20,20,'','Cajero'),
     (2,21,60,'','Cajero');
 `);
+linkedDb.exec(`
+  ALTER TABLE sales ADD COLUMN sale_date TEXT;
+  UPDATE sales SET sale_date=CASE id WHEN 20 THEN '2030-01-15' ELSE '2020-05-10' END;
+`);
 const linked = getPendingInvoices(linkedDb, 1);
 ok(near(linked.facturas.find(f => f.id === 20)?.pendiente, 80),
   'resta de source_balance los abonos posteriores a la migración');
 ok(near(linked.facturas.find(f => f.id === 21)?.pendiente, 40),
   'resta de una factura nativa únicamente sus pagos vinculados');
+ok(linked.facturas.map(f => f.id).join(',') === '20,21',
+  'muestra primero la factura con fecha documental más reciente, incluso si es futura');
 linkedDb.close();
 
 const partial = allocatePendingInvoices([

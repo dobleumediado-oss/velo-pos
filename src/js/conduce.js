@@ -64,13 +64,12 @@ function _cndRenderList(el, list) {
   // Métricas por estado
   const counts = {};
   list.forEach(c => { counts[c.status] = (counts[c.status] || 0) + 1; });
-  const metrics = h('div', { class: 'metrics metrics-five' });
+  const metrics = h('div', { class: 'metrics', style: { gridTemplateColumns: 'repeat(4,1fr)' } });
   [
     { k: '',           l: 'Total',       v: list.length },
     { k: 'despachado', l: 'Despachados', v: counts.despachado || 0 },
     { k: 'entregado',  l: 'Entregados',  v: counts.entregado || 0 },
     { k: 'facturado',  l: 'Facturados',  v: counts.facturado || 0 },
-    { k: 'anulado',    l: 'Anulados',    v: counts.anulado || 0 },
   ].forEach(m => {
     metrics.appendChild(h('div', {
       class: 'metric', style: { cursor: 'pointer', outline: _cndFilterStatus === m.k ? '2px solid var(--accent)' : 'none' },
@@ -744,8 +743,8 @@ async function _cndReports() {
     <div class="modal-title">${svg('chart')} Reportes de Conduce</div>
     <div class="modal-sub">Estados, pendientes, por vendedor/cliente y más despachados</div>
 
-    <div class="metrics" style="grid-template-columns:repeat(4,1fr);margin:10px 0 4px">
-      ${['despachado','entregado','facturado','anulado'].map(st => {
+    <div class="metrics" style="grid-template-columns:repeat(3,1fr);margin:10px 0 4px">
+      ${['despachado','entregado','facturado'].map(st => {
         const c = (r.byStatus.find(b => b.status === st) || {}).c || 0;
         return `<div class="metric"><div class="met-label">${_cndStLabel(st)}</div><div class="met-val">${c}</div></div>`;
       }).join('')}
@@ -754,7 +753,6 @@ async function _cndReports() {
     ${section('Pendientes de facturar', r.pendientesFacturar.length, miniTable(r.pendientesFacturar, docCols))}
     ${section('Despachados no entregados', r.despachadosNoEntregados.length, miniTable(r.despachadosNoEntregados, docCols))}
     ${section('Entregados no facturados', r.entregadosNoFacturados.length, miniTable(r.entregadosNoFacturados, docCols))}
-    ${section('Anulados', r.anulados.length, miniTable(r.anulados, docCols))}
     ${section('Por vendedor', null, miniTable(r.porVendedor, [
       { h: 'Vendedor', f: x => _cndEsc(x.vendedor) }, { h: 'Conduces', f: x => x.c, style: 'text-align:center' }]))}
     ${section('Por cliente', null, miniTable(r.porCliente, [

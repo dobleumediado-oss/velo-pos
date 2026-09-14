@@ -1248,7 +1248,7 @@ async function openAbonoModal(c, prefill = null) {
     const result = await window.api.customers.getFacturasPendientes({ customerId: c.id });
     if (result?.ok) pending = result;
   } catch {}
-  const invoices = pending.facturas || [];
+  const invoices = cliSortLatestFirst(pending.facturas || []);
   const operationId = String(prefill?.operationId || abonoOperationId(c.id));
   window._abonoPendingInvoices = invoices;
   window._abonoUnallocatedBalance = Number(pending.unallocatedBalance || 0);
@@ -1480,9 +1480,11 @@ function abonoToggleInvoice(saleId, pending, balance) {
 
 function abonoAutoDistribuir(balance) {
   let remaining = Math.max(0, _cliEntryNumber(document.getElementById('ab-amount')));
-  document.querySelectorAll('.ab-invoice-check').forEach(check => {
-    const pending = Number(check.dataset.pending || 0);
-    const saleId = check.dataset.saleId;
+  abonoInvoicesOldestFirst(window._abonoPendingInvoices || []).forEach(invoice => {
+    const saleId = Number(invoice.id);
+    const check = document.querySelector(`.ab-invoice-check[data-sale-id="${saleId}"]`);
+    if (!check) return;
+    const pending = Number(invoice.pendiente || check.dataset.pending || 0);
     const applied = Math.min(pending, remaining);
     check.checked = applied > 0;
     const input = document.getElementById(`ab-alloc-${saleId}`);
@@ -1943,15 +1945,25 @@ function cliAccountMath(ventas, pagos, pendingResult, customerBalance) {
   };
 }
 
-function cliSortAscending(rows) {
+function cliSortLatestFirst(rows) {
+  return [...(rows || [])].sort((left, right) => {
+    const leftDate = String(left?.sale_date || left?.created_at || left?.date || '');
+    const rightDate = String(right?.sale_date || right?.created_at || right?.date || '');
+    const byDate = rightDate.localeCompare(leftDate);
+    if (byDate) return byDate;
+    const leftNumber = Number(left?.document_number || left?.numero_factura || left?.id || 0);
+    const rightNumber = Number(right?.document_number || right?.numero_factura || right?.id || 0);
+    return rightNumber - leftNumber;
+  });
+}
+
+function abonoInvoicesOldestFirst(rows) {
   return [...(rows || [])].sort((left, right) => {
     const leftDate = String(left?.sale_date || left?.created_at || left?.date || '');
     const rightDate = String(right?.sale_date || right?.created_at || right?.date || '');
     const byDate = leftDate.localeCompare(rightDate);
     if (byDate) return byDate;
-    const leftNumber = Number(left?.document_number || left?.numero_factura || left?.id || 0);
-    const rightNumber = Number(right?.document_number || right?.numero_factura || right?.id || 0);
-    return leftNumber - rightNumber;
+    return Number(left?.id || 0) - Number(right?.id || 0);
   });
 }
 
@@ -1970,8 +1982,8 @@ async function cliLoadAccountPayload(c, includeItems = false) {
     cache = {
       customerId: c.id,
       loadedAt: now,
-      payments: cliSortAscending(payments),
-      sales: cliSortAscending((sales || []).filter(row => row.status !== 'cancelled')),
+      payments: cliSortLatestFirst(payments),
+      sales: cliSortLatestFirst((sales || []).filter(row => row.status !== 'cancelled')),
       pending,
       items: null,
     };
@@ -2040,8 +2052,8 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
   }
   if (window._cliModalRequest !== requestToken || page !== 'clientes') return;
   const [pagosRes, ventasRes, pendingRes, itemsRes] = payload;
-  const pagos = cliSortAscending(pagosRes);
-  const ventas = cliSortAscending(ventasRes);
+  const pagos = cliSortLatestFirst(pagosRes);
+  const ventas = cliSortLatestFirst(ventasRes);
   // Guardar ventas del cliente en window para que filtrarHistorialCliente las use
   window._cliModalVentas = ventas;
   // Cargar items reales de todas las ventas del cliente (para Buscar por Artículo).
@@ -2342,7 +2354,7 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
         </div>`;
         return;
       }
-      const facturas = cliSortAscending(res?.facturas || []);
+      const facturas = cliSortLatestFirst(res?.facturas || []);
       const saldoSinFactura = Number(res?.unallocatedBalance || 0);
       if (!facturas.length) {
         body.innerHTML = saldoSinFactura > 0.005
@@ -2419,7 +2431,7 @@ async function exportPendingInvoicesPDF(c) {
     return;
   }
 
-  const invoices = cliSortAscending(result.facturas || []);
+  const invoices = cliSortLatestFirst(result.facturas || []);
   const unallocated = Number(result.unallocatedBalance || 0);
   const totalOriginal = invoices.reduce((sum, invoice) => sum + Number(invoice.total || 0), 0);
   const totalPending = invoices.reduce((sum, invoice) => sum + Number(invoice.pendiente || 0), 0) + unallocated;
@@ -2486,8 +2498,8 @@ async function exportClientCreditPDF(c) {
 
   const [pagosRaw, ventasRaw, pendingResult] = await cliLoadAccountPayload(c, false)
     .catch(() => [[], [], { ok:false, facturas:[] }]);
-  const pagos = cliSortAscending(pagosRaw);
-  const ventas = cliSortAscending(ventasRaw);
+  const pagos = cliSortLatestFirst(pagosRaw);
+  const ventas = cliSortLatestFirst(ventasRaw);
 
   const account = cliAccountMath(ventas, pagos, pendingResult, balance);
   const { totalCompras, totalContado, totalCredito, totalAbonado,

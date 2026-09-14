@@ -3662,22 +3662,61 @@ const customersRepo = {
     if (!name) throw new Error('El nombre del cliente es requerido');
     assertUniqueCustomerDocument(c.rnc, id);
     const customerType = normalizeCustomerType(c.customer_type);
-    db.prepare(`
-      UPDATE customers SET name=?,customer_type=?,trade_name=?,rnc=?,phone=?,address=?,email=?,
-      billing_email=?,preferred_price_mode=?,notes=?,credit_limit=?,credit_days=?,status=?,updated_at=datetime('now')
-      WHERE id=?
-    `).run(
-      name, customerType, customerType === 'company' ? String(c.trade_name || '').trim() : '',
-      String(c.rnc || '').trim(), String(c.phone || '').trim(), String(c.address || '').trim(),
-      String(c.email || '').trim(), customerType === 'company' ? String(c.billing_email || '').trim() : '',
-      c.preferred_price_mode === 'wholesale' ? 'wholesale' : 'retail', String(c.notes || '').trim(),
-      Number(c.credit_limit) || 0, Math.max(1, Number(c.credit_days) || 30), c.status || 'activo', id
-    );
-    if (customerType !== 'company') {
-      db.prepare("UPDATE customer_contacts SET active=0,updated_at=datetime('now','localtime') WHERE customer_id=? AND active=1").run(id);
-      db.prepare("UPDATE customer_branches SET active=0,is_primary=0,updated_at=datetime('now','localtime') WHERE customer_id=? AND active=1").run(id);
-    }
-    replaceCustomerPhones(id, c.phones, c.phone);
+    const rnc = String(c.rnc || '').trim();
+    const phone = String(c.phone || '').trim();
+    const address = String(c.address || '').trim();
+    const email = String(c.email || '').trim();
+    const tradeName = customerType === 'company' ? String(c.trade_name || '').trim() : '';
+    const billingEmail = customerType === 'company' ? String(c.billing_email || '').trim() : '';
+    const snapshotEmail = billingEmail || email;
+    const updateSnapshots = (table, values) => {
+      if (!tableExists(table)) return;
+      const columns = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(column => column.name));
+      if (!columns.has('customer_id')) return;
+      const entries = Object.entries(values).filter(([column]) => columns.has(column));
+      if (!entries.length) return;
+      db.prepare(`UPDATE ${table} SET ${entries.map(([column]) => `${column}=?`).join(',')} WHERE customer_id=?`)
+        .run(...entries.map(([, value]) => value), id);
+    };
+    db.transaction(() => {
+      db.prepare(`
+        UPDATE customers SET name=?,customer_type=?,trade_name=?,rnc=?,phone=?,address=?,email=?,
+        billing_email=?,preferred_price_mode=?,notes=?,credit_limit=?,credit_days=?,status=?,updated_at=datetime('now')
+        WHERE id=?
+      `).run(
+        name, customerType, tradeName, rnc, phone, address, email, billingEmail,
+        c.preferred_price_mode === 'wholesale' ? 'wholesale' : 'retail', String(c.notes || '').trim(),
+        Number(c.credit_limit) || 0, Math.max(1, Number(c.credit_days) || 30), c.status || 'activo', id
+      );
+
+      // La ficha del cliente es la autoridad para su identidad. Mantener sus
+      // encabezados vinculados sincronizados en ambos verticales y en todo el
+      // historial consultable.
+      const fullSnapshot = {
+        customer_name: name, customer_rnc: rnc, customer_type: customerType,
+        customer_trade_name: tradeName, customer_address: address,
+        customer_phone: phone, customer_email: snapshotEmail,
+      };
+      updateSnapshots('sales', fullSnapshot);
+      updateSnapshots('checkout_orders', fullSnapshot);
+      updateSnapshots('delivery_notes', fullSnapshot);
+      updateSnapshots('deliveries', { customer_name: name });
+      updateSnapshots('service_orders', {
+        customer_name: name, customer_document: rnc, customer_phone: phone,
+        customer_address: address, customer_email: email,
+      });
+      updateSnapshots('service_appointments', { customer_name: name, customer_phone: phone });
+      if (tableExists('ncf_log')) {
+        db.prepare('UPDATE ncf_log SET customer_rnc=? WHERE sale_id IN (SELECT id FROM sales WHERE customer_id=?)')
+          .run(rnc, id);
+      }
+
+      if (customerType !== 'company') {
+        db.prepare("UPDATE customer_contacts SET active=0,updated_at=datetime('now','localtime') WHERE customer_id=? AND active=1").run(id);
+        db.prepare("UPDATE customer_branches SET active=0,is_primary=0,updated_at=datetime('now','localtime') WHERE customer_id=? AND active=1").run(id);
+      }
+      replaceCustomerPhones(id, c.phones, c.phone);
+    })();
   },
   getContacts(customerId) {
     return contactsForCustomer(customerId);
@@ -11261,7 +11300,7 @@ const conduceRepo = {
   },
 
   getAll(filters = {}) {
-    const where = [], params = [];
+    const where = ["dn.status!='anulado'"], params = [];
     if (filters.status)      { where.push('dn.status = ?');      params.push(filters.status); }
     if (filters.customer_id) { where.push('dn.customer_id = ?'); params.push(filters.customer_id); }
     if (filters.source_type) { where.push('dn.source_type = ?'); params.push(filters.source_type); }
@@ -11274,7 +11313,7 @@ const conduceRepo = {
       FROM delivery_notes dn
       LEFT JOIN users u ON dn.created_by = u.id
       ${w}
-      ORDER BY dn.id DESC
+      ORDER BY dn.issue_date DESC, dn.id DESC
       LIMIT ${Number(filters.limit) || 500}
     `).all(...params);
   },
@@ -11567,7 +11606,7 @@ const conduceRepo = {
   // ── Reportes ─────────────────────────────────────────────────
   // Agregaciones de solo lectura. Filtros opcionales: { from, to } por issue_date.
   reports(filters = {}) {
-    const cond = [], p = [];
+    const cond = ["status!='anulado'"], p = [];
     if (filters.from) { cond.push('issue_date >= ?'); p.push(filters.from); }
     if (filters.to)   { cond.push('issue_date <= ?'); p.push(filters.to); }
     const w = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
@@ -11583,7 +11622,6 @@ const conduceRepo = {
       pendientesFacturar:    list(`dn.status IN ('despachado','entregado','parcial')`),
       despachadosNoEntregados: list(`dn.status='despachado'`),
       entregadosNoFacturados:  list(`dn.status='entregado'`),
-      anulados:                list(`dn.status='anulado'`),
       porVendedor: db.prepare(`
         SELECT COALESCE(u.name,'—') AS vendedor, COUNT(*) c
         FROM delivery_notes dn LEFT JOIN users u ON dn.created_by=u.id

@@ -53,7 +53,7 @@ assert(styles.includes('.ov{background:rgba(2,6,23,.55);backdrop-filter:none}'),
   'Los modales no deben aplicar desenfoque costoso al fondo');
 assert(main.includes("customers:getAccountSales"), 'El estado de cuenta debe usar una ruta ligera de ventas');
 assert(preload.includes('getAccountSales:'), 'La ruta ligera del estado de cuenta debe estar disponible en la interfaz');
-assert(clientes.includes('cliSortAscending'), 'Clientes debe ordenar facturas y abonos explícitamente');
+assert(clientes.includes('cliSortLatestFirst'), 'Clientes debe ordenar facturas y abonos explícitamente');
 assert(!clientes.includes('Preparando estado de cuenta'), 'El estado de cuenta no debe mostrar una espera con reloj');
 assert(app.includes("id: 'lpass-toggle'"), 'El acceso debe permitir mostrar u ocultar la contraseña');
 assert(app.includes("input.type = showing ? 'password' : 'text'"), 'El ojo debe alternar la visibilidad de la contraseña');

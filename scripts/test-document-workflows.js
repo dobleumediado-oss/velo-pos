@@ -239,6 +239,8 @@ ok(DB.conduceRepo.getById(noteId).number === 'CON-000001', 'conduce usa su secue
 const cancelledNote = DB.conduceRepo.cancel(noteId, { userId: admin.id, reason: 'Documento de prueba' });
 ok(cancelledNote.status === 'anulado' && cancelledNote.cancellation_reason === 'Documento de prueba',
   'anular conduce conserva el documento, su número y el motivo');
+ok(!DB.conduceRepo.getAll().some(note => Number(note.id) === Number(noteId)),
+  'un conduce anulado desaparece del listado operativo');
 
 const stockBeforeConduce = DB.productsRepo.getById(productId).stock;
 const chargedNoteId = DB.conduceRepo.create({

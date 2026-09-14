@@ -172,7 +172,7 @@ renderCart=()=>{__renderCartCalls++};
 this.__posDiscount={
   posDiscConPin,calcTotals,posSetQty,posCommitQty,posSaveCharge,
   posCommitPriceOnChange,posCommitPriceOnEnter,
-  entryNumber:_posEntryNumber,cbrCalcInitial,cbrToggleBillingType,
+  entryNumber:_posEntryNumber,cbrCalcInitial,cbrToggleBillingType,cbrConvertCoveredCreditToCash,
   renderCalls:()=>__renderCartCalls
 };
 this.__posCustomers={pvCustomerMatches,pvCustomerOptions,pvFilterCustomers,pvSelectCustomer,posSelectCustomer,_setPosPmode,cbrCaptureCustomerDraft,cbrOpenTradeIn,posTicketTitle,posConduceCanAccess};
@@ -202,6 +202,9 @@ state.currentInv().cart = [{ name: 'Artículo', price: 105, qty: 1, taxable: 1, 
   'cbr-initial-method','cbr-initial-noncash-method','cbr-initial-account-wrap',
   'cbr-initial-bank-detail','cbr-initial-account','cbr-initial-exchange-wrap',
   'cbr-initial-mixed-wrap','cbr-initial-mix-cash','cbr-initial-mix-noncash',
+  'cbr-mix-efec','cbr-mix-card','cbr-account','cbr-transfer-ref',
+  'cbr-initial-reference','cbr-exchange-rate','cbr-initial-exchange-rate','cbr-cambio',
+  'cbr-card-ref',
 ].forEach(element);
 elements.get('cbr-pmeth').value = 'efectivo';
 elements.get('cbr-initial-method').value = 'efectivo';
@@ -215,6 +218,32 @@ assert.strictEqual(elements.get('cbr-pmeth').value, 'efectivo');
 assert.strictEqual(elements.get('cbr-payment-method-wrap').style.display, 'block',
   'volver a contado debe recuperar el último método utilizado');
 console.log('  ✓ separa tipo de facturación contado/crédito sin perder el método de pago');
+
+elements.get('cbr-pmeth').value = 'credito';
+elements.get('cbr-billing-type').value = 'credito';
+elements.get('cbr-initial-method').value = 'efectivo';
+elements.get('cbr-initial-payment').value = '3000';
+let coveredPayment = discount.cbrConvertCoveredCreditToCash(6800);
+assert.strictEqual(coveredPayment.converted, false);
+assert.strictEqual(elements.get('cbr-pmeth').value, 'credito',
+  'un pago menor debe conservar la venta a crédito');
+
+elements.get('cbr-initial-payment').value = '6800';
+coveredPayment = discount.cbrConvertCoveredCreditToCash(6800);
+assert.strictEqual(coveredPayment.method, 'efectivo');
+assert.strictEqual(elements.get('cbr-billing-type').value, 'contado');
+assert.strictEqual(elements.get('cbr-received').value, '6800.00',
+  'un pago igual al total debe convertirse en venta al contado');
+
+elements.get('cbr-pmeth').value = 'credito';
+elements.get('cbr-billing-type').value = 'credito';
+elements.get('cbr-initial-payment').value = '7000';
+coveredPayment = discount.cbrConvertCoveredCreditToCash(6800);
+assert.strictEqual(coveredPayment.change, 200);
+assert.strictEqual(elements.get('cbr-received').value, '7000.00');
+assert(elements.get('cbr-cambio').textContent.includes('RD$200.00'),
+  'un pago mayor debe convertirse a contado y mostrar el cambio');
+console.log('  ✓ pago inicial menor conserva crédito; igual o mayor pasa a contado y calcula cambio');
 
 const pctInput = { value: '4' };
 discount.posDiscConPin(pctInput, '4');
