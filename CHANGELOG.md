@@ -1,5 +1,20 @@
 # Historial de versiones
 
+## 1.49.2 — 2026-09-15
+
+### Correcciones de crédito y rendimiento
+
+- Las facturas a crédito pendientes, sin abonos ni comprobante fiscal, permiten
+  corregir cantidades, productos y precios sobre el mismo documento, ajustando
+  inventario y cuenta por cobrar sin crear devoluciones ni refacturaciones.
+- Las operaciones con cobros, NCF/e-CF u otros efectos comprometidos conservan
+  el flujo compensatorio y toda su trazabilidad.
+- Ventas pagina el historial antes de calcular sus resúmenes y Devoluciones usa
+  una consulta independiente; ambas pantallas permanecen rápidas con miles de
+  documentos.
+- Se añadió protección contra respuestas obsoletas y doble confirmación, además
+  de pruebas de regresión para balances, inventario, contabilidad y rendimiento.
+
 ## 1.48.2 — 2026-09-07
 
 ### Impresión de abonos desde terminales conectadas
