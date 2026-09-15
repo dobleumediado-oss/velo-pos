@@ -1966,8 +1966,10 @@ async function renderConexionCard(container) {
       <div style="font-weight:700;font-size:12px;margin:10px 0 4px">Terminales autorizadas (${(res.allowlist||[]).length})</div>
       ${rows}
       <div style="display:flex;gap:6px;margin-top:8px">
-        <input class="inp" id="conn-add-id" placeholder="ID de terminal a autorizar" style="flex:2;font-size:11px"/>
-        <input class="inp" id="conn-add-name" placeholder="Nombre" style="flex:1;font-size:11px"/>
+        <input class="inp no-uppercase" id="conn-add-id" data-uppercase="off" autocomplete="off"
+          placeholder="ID de terminal a autorizar" style="flex:2;font-size:11px"/>
+        <input class="inp no-uppercase" id="conn-add-name" data-uppercase="off" autocomplete="off"
+          placeholder="Nombre" style="flex:1;font-size:11px"/>
         <button class="btn btn-green btn-sm" onclick="agregarTerminalAllow()">Añadir</button>
       </div>`;
   } else { // client

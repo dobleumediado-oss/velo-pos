@@ -65,6 +65,8 @@ assert.strictEqual(mixedCasePassword.value, 'ClaveMixta123');
 for (const [sourceFile, fieldId] of [
   ['config.js', 'cfg-price-key'],
   ['config.js', 'cfg-price-key-confirm'],
+  ['config.js', 'conn-add-id'],
+  ['config.js', 'conn-add-name'],
   ['pos.js', 'price-auth-pass'],
 ]) {
   const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'js', sourceFile), 'utf8');

@@ -1,5 +1,14 @@
 # Historial de versiones
 
+## 1.49.5 — 2026-09-15
+
+### Identidad exacta de terminales
+
+- El ID y el nombre escritos al autorizar una terminal conservan exactamente
+  sus mayúsculas y minúsculas; el normalizador general ya no los transforma.
+- Esto evita que un ID sensible al uso de mayúsculas deje de coincidir con la
+  identidad real enviada por la terminal.
+
 ## 1.49.4 — 2026-09-15
 
 ### Resultado claro al corregir créditos pendientes
