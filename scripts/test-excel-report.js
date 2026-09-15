@@ -2,10 +2,15 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 const ExcelJS = require('exceljs');
 const { createExcelReportBuffer, safeSheetName } = require('../src/main/excel-report');
 
 (async () => {
+  const rendererSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'js', 'excel.js'), 'utf8');
+  assert.ok(!rendererSource.includes('subtree: true'),
+    'el exportador no debe observar cada mutación interna de la pantalla');
   const used = new Set();
   assert.strictEqual(safeSheetName('Ventas/Detalle', used), 'Ventas Detalle');
   assert.strictEqual(safeSheetName('Ventas/Detalle', used), 'Ventas Detalle 2');

@@ -1908,6 +1908,47 @@ function cliIsCreditSale(sale) {
   );
 }
 
+function cliConsolidateAdjustedSales(rows) {
+  const sales = [...(rows || [])];
+  const invoiceRoot = new Map();
+  sales.forEach(sale => {
+    if (sale.type !== 'factura') return;
+    invoiceRoot.set(Number(sale.id), sale.correction_kind === 'product_addition' && sale.original_sale_id
+      ? Number(sale.original_sale_id) : Number(sale.id));
+  });
+  const additions = new Map();
+  const credits = new Map();
+  sales.forEach(sale => {
+    if (sale.type === 'factura' && sale.correction_kind === 'product_addition' && sale.original_sale_id) {
+      const rootId = Number(sale.original_sale_id);
+      additions.set(rootId, (additions.get(rootId) || 0) + Number(sale.total || 0));
+    } else if (sale.type === 'devolucion' && sale.original_sale_id) {
+      const sourceId = Number(sale.original_sale_id);
+      const rootId = invoiceRoot.get(sourceId) || sourceId;
+      credits.set(rootId, (credits.get(rootId) || 0) + Number(sale.total || 0));
+    }
+  });
+  return sales
+    .filter(sale => !(sale.type === 'factura' && sale.correction_kind === 'product_addition' && sale.original_sale_id))
+    .map(sale => {
+      if (sale.type !== 'factura') return sale;
+      const addition = Number(additions.get(Number(sale.id)) || 0);
+      const credit = Number(credits.get(Number(sale.id)) || 0);
+      if (!addition && !credit) return sale;
+      return {
+        ...sale,
+        adjustment_addition_total: addition,
+        operation_credit_total: credit,
+        operation_total: Math.round((Number(sale.total || 0) + addition - credit) * 100) / 100,
+        has_product_correction: 1,
+      };
+    });
+}
+
+function cliInvoiceAmount(sale) {
+  return Number(sale?.operation_total ?? sale?.total ?? 0);
+}
+
 function cliAccountMath(ventas, pagos, pendingResult, customerBalance) {
   const invoices = (ventas || []).filter(sale =>
     sale.status !== 'cancelled' && sale.type !== 'cotizacion' && sale.type !== 'devolucion'
@@ -1925,9 +1966,12 @@ function cliAccountMath(ventas, pagos, pendingResult, customerBalance) {
   );
   const historicalPayments = payments.filter(isImportedRecord);
   const veloPayments = payments.filter(payment => !isImportedRecord(payment));
-  const pendingBySale = new Map((pendingResult?.facturas || []).map(invoice =>
-    [Number(invoice.id), Number(invoice.pendiente || 0)]
-  ));
+  const pendingBySale = new Map();
+  (pendingResult?.facturas || []).forEach(invoice => {
+    const saleId = invoice.correction_kind === 'product_addition' && invoice.original_sale_id
+      ? Number(invoice.original_sale_id) : Number(invoice.id);
+    pendingBySale.set(saleId, (pendingBySale.get(saleId) || 0) + Number(invoice.pendiente || 0));
+  });
   const sum = (rows, field = 'total') => rows.reduce(
     (total, row) => total + Number(row?.[field] || 0), 0
   );
@@ -1939,9 +1983,9 @@ function cliAccountMath(ventas, pagos, pendingResult, customerBalance) {
     discounts,
     pendingBySale,
     pendingAvailable: pendingResult?.ok !== false,
-    totalCompras: sum(invoices),
-    totalContado: sum(cashInvoices),
-    totalCredito: sum(creditInvoices),
+    totalCompras: invoices.reduce((total, sale) => total + cliInvoiceAmount(sale), 0),
+    totalContado: cashInvoices.reduce((total, sale) => total + cliInvoiceAmount(sale), 0),
+    totalCredito: creditInvoices.reduce((total, sale) => total + cliInvoiceAmount(sale), 0),
     totalAbonado: sum(payments, 'amount'),
     totalAbonadoHistorico: sum(historicalPayments, 'amount'),
     totalAbonadoVelo: sum(veloPayments, 'amount'),
@@ -1988,7 +2032,9 @@ async function cliLoadAccountPayload(c, includeItems = false) {
       customerId: c.id,
       loadedAt: now,
       payments: cliSortLatestFirst(payments),
-      sales: cliSortLatestFirst((sales || []).filter(row => row.status !== 'cancelled')),
+      sales: cliSortLatestFirst(cliConsolidateAdjustedSales(
+        (sales || []).filter(row => row.status !== 'cancelled')
+      )),
       pending,
       items: null,
     };
@@ -2091,7 +2137,7 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
           <tr>
             <td style="font-size:11px;color:var(--muted)">${fdate(fecha)}</td>
             <td style="font-size:12px">${facturaLabel(s)} <span style="font-size:10px;color:var(--muted)">${tipo}</span>${cliRepresentativeLine(s)}</td>
-            <td style="text-align:right;font-weight:600">${fmt(s.total)}</td>
+            <td style="text-align:right;font-weight:600">${fmt(cliInvoiceAmount(s))}</td>
             <td><span class="badge ${
               (s.payment_method||s.pay)==='credito' ? 'a' :
               s.type === 'devolucion' ? 'r' : 'g'
@@ -2260,7 +2306,8 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
               const tipo  = s.type==='devolucion'?'Devolución':s.type==='cotizacion'?'Cotización':'Factura';
               const isCredit = cliIsCreditSale(s);
               const pending = isCredit && account.pendingAvailable ? Number(pendingBySale.get(Number(s.id)) || 0) : 0;
-              const covered = Math.max(0, Number(s.total || 0) - pending);
+              const operationAmount = cliInvoiceAmount(s);
+              const covered = Math.max(0, operationAmount - pending);
               const imported = isImportedRecord(s);
               const metColor = isCredit?'var(--amber)':s.type==='devolucion'?'var(--red)':'var(--green)';
               return `
@@ -2280,7 +2327,8 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
                                    background:${metColor}18;padding:2px 6px;border-radius:4px">
                         ${isCredit ? 'Crédito' : 'Contado'}
                       </span>
-                      <span style="font-weight:800;font-size:12px">${fmt(s.total)}</span>
+                      <span style="font-weight:800;font-size:12px">${fmt(operationAmount)}</span>
+                      ${s.has_product_correction ? '<span class="badge a">Ajustada</span>' : ''}
                       ${isCredit ? account.pendingAvailable
                         ? `<span style="font-size:10px;color:var(--muted2)">cubierto ${fmt(covered)} · saldo ${fmt(pending)}</span>`
                         : '<span style="font-size:10px;color:var(--amber)">saldo no confirmado</span>' : ''}
@@ -2533,7 +2581,8 @@ async function exportClientCreditPDF(c) {
         const isCredit = cliIsCreditSale(s);
         const pendingKnown = !isCredit || account.pendingAvailable;
         const pending = isCredit && pendingKnown ? Number(pendingBySale.get(Number(s.id)) || 0) : 0;
-        const covered = isCredit && pendingKnown ? Math.max(0, Number(s.total || 0) - pending) : Number(s.total || 0);
+        const operationAmount = cliInvoiceAmount(s);
+        const covered = isCredit && pendingKnown ? Math.max(0, operationAmount - pending) : operationAmount;
         const metodoBadge = isCredit ? 'Crédito' : 'Contado';
         return `<tr>
           <td>${fdate(fecha)}</td>
@@ -2541,7 +2590,7 @@ async function exportClientCreditPDF(c) {
             ${isImportedRecord(s) ? '<div style="color:#b45309;font-size:9px">Histórica importada</div>' : ''}
             ${s.customer_contact_name ? `<div style="color:#2563eb;font-size:9px;margin-top:2px">Solicitado por: <strong>${_e(s.customer_contact_name)}</strong>${s.customer_contact_role ? ` · ${_e(s.customer_contact_role)}` : ''}</div>` : ''}
           </td>
-          <td style="text-align:right;font-weight:700">${fmt(s.total)}</td>
+          <td style="text-align:right;font-weight:700">${fmt(operationAmount)}</td>
           <td>${_e(metodoBadge)}</td>
           <td style="text-align:right;color:#15803d">${pendingKnown ? fmt(covered) : 'No confirmado'}</td>
           <td style="text-align:right;color:${pending>0?'#dc2626':'#6b7280'};font-weight:${pending>0?'700':'400'}">${pendingKnown ? fmt(pending) : 'No confirmado'}</td>

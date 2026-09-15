@@ -13,6 +13,7 @@ app.whenReady().then(async () => {
     await win.loadURL('data:text/html;charset=utf-8,<html><body><div id="root"></div></body></html>');
     stage = 'bootstrap';
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'js', 'excel.js'), 'utf8');
+    assert.ok(!source.includes('subtree: true'), 'el exportador no debe observar cada mutación interna de la pantalla');
     await win.webContents.executeJavaScript(`
       window.CFG = { biz: 'Empresa Demo' };
       window.today = () => '2026-09-14';

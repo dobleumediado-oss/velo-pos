@@ -2556,6 +2556,38 @@ function ventasProductCorrectionSummary() {
   };
 }
 
+function ventasProductCorrectionIntent() {
+  return document.getElementById('vpc-intent')?.value ||
+    window._ventaProductCorrection?.intent || 'reduction_only';
+}
+
+function ventasProductCorrectionIntentChanged() {
+  const state = window._ventaProductCorrection;
+  if (!state?.model) return;
+  const intent = ventasProductCorrectionIntent();
+  state.intent = intent;
+  state.model.lines.forEach((line, index) => {
+    const input = document.getElementById(`vpc-line-${index}`);
+    if (!input) return;
+    const current = Number(line.current_qty || 0);
+    const value = Math.max(0, Number.parseInt(input.value, 10) || 0);
+    if (intent === 'reduction_only' && value > current) input.value = current;
+    if (intent === 'addition_only' && value < current) input.value = current;
+    input.min = intent === 'addition_only' ? String(current) : '0';
+    input.max = intent === 'reduction_only' ? String(current) : '999999';
+  });
+  if (intent === 'reduction_only') state.addedItems = [];
+  document.querySelectorAll('[data-vpc-direction="reduce"]').forEach(button => {
+    button.disabled = intent === 'addition_only';
+  });
+  document.querySelectorAll('[data-vpc-direction="increase"]').forEach(button => {
+    button.disabled = intent === 'reduction_only';
+  });
+  const addCard = document.getElementById('vpc-add-card');
+  if (addCard) addCard.style.display = intent === 'reduction_only' ? 'none' : '';
+  ventasRenderAddedCorrectionItems();
+}
+
 function ventasRefreshProductCorrectionSummary() {
   const summary = ventasProductCorrectionSummary();
   const target = document.getElementById('vpc-summary');
@@ -2581,9 +2613,30 @@ function ventasRefreshProductCorrectionSummary() {
 }
 
 function ventasAdjustProductCorrectionQty(index, delta) {
+  const intent = ventasProductCorrectionIntent();
+  if (Number(delta) > 0 && intent === 'reduction_only') {
+    return toast('Selecciona “Aumentar” o “Cambio mixto” para agregar unidades', 'w');
+  }
+  if (Number(delta) < 0 && intent === 'addition_only') {
+    return toast('Selecciona “Reducir” o “Cambio mixto” para quitar unidades', 'w');
+  }
   const input = document.getElementById(`vpc-line-${index}`);
   if (!input) return;
   input.value = Math.max(0, (Number.parseInt(input.value, 10) || 0) + Number(delta || 0));
+  ventasRefreshProductCorrectionSummary();
+}
+
+function ventasProductCorrectionQtyChanged(index) {
+  const state = window._ventaProductCorrection;
+  const line = state?.model?.lines?.[index];
+  const input = document.getElementById(`vpc-line-${index}`);
+  if (!line || !input) return;
+  const current = Number(line.current_qty || 0);
+  let value = Math.max(0, Number.parseInt(input.value, 10) || 0);
+  const intent = ventasProductCorrectionIntent();
+  if (intent === 'reduction_only') value = Math.min(value, current);
+  if (intent === 'addition_only') value = Math.max(value, current);
+  input.value = value;
   ventasRefreshProductCorrectionSummary();
 }
 
@@ -2607,6 +2660,9 @@ function ventasRenderAddedCorrectionItems() {
 
 function ventasAddCorrectionProduct() {
   const state = window._ventaProductCorrection;
+  if (ventasProductCorrectionIntent() === 'reduction_only') {
+    return toast('Selecciona “Aumentar” o “Cambio mixto” para agregar productos', 'w');
+  }
   const search = document.getElementById('vpc-product-search');
   const typed = String(search?.value || '').trim();
   const productId = Number(typed.match(/^(\d+)\s+·/)?.[1] || 0);
@@ -2653,6 +2709,7 @@ async function openVentaProductCorrection(saleId) {
   window._ventaProductCorrection = {
     model,
     addedItems: [],
+    intent: 'reduction_only',
     idempotencyKey: ventasCorrectionKey('products', model.root.id),
   };
   const defaultMethod = ['efectivo','tarjeta','transferencia','credito'].includes(model.root.payment_method)
@@ -2679,11 +2736,11 @@ async function openVentaProductCorrection(saleId) {
               <div class="ts">Importe unitario final (ITBIS incluido): ${fmt(ventasProductLineUnitTotal(line))}</div>
             </div>
             <div class="vpc-qty">
-              <button type="button" class="btn btn-out" onclick="ventasAdjustProductCorrectionQty(${index},-1)">−</button>
-              <input class="inp" id="vpc-line-${index}" type="number" min="0" max="999999"
+              <button type="button" class="btn btn-out" data-vpc-direction="reduce" onclick="ventasAdjustProductCorrectionQty(${index},-1)">−</button>
+              <input class="inp" id="vpc-line-${index}" type="number" min="0" max="${Number(line.current_qty || 0)}"
                 value="${Number(line.current_qty || 0)}" aria-label="Cantidad corregida"
-                oninput="ventasRefreshProductCorrectionSummary()"/>
-              <button type="button" class="btn btn-out" onclick="ventasAdjustProductCorrectionQty(${index},1)">+</button>
+                oninput="ventasProductCorrectionQtyChanged(${index})"/>
+              <button type="button" class="btn btn-out" data-vpc-direction="increase" disabled onclick="ventasAdjustProductCorrectionQty(${index},1)">+</button>
             </div>
             <div class="ts vpc-qty-help">
               Facturado: <strong>${Number(line.current_qty || 0)}</strong><br/>
@@ -2721,11 +2778,19 @@ async function openVentaProductCorrection(saleId) {
         <div class="alrt ${warning.severity === 'high' ? 'r' : 'a'}" style="margin-bottom:8px">
           <div><div class="alrt-title">${ventasEsc(warningTitles[warning.code] || 'Aviso importante')}</div><div class="alrt-sub">${ventasEsc(warning.message)}</div></div>
         </div>`).join('')}
+      <div class="fg" style="margin-bottom:12px">
+        <label class="lbl">Qué necesitas hacer *</label>
+        <select class="inp" id="vpc-intent" onchange="ventasProductCorrectionIntentChanged()">
+          <option value="reduction_only">Reducir o quitar productos — nunca crea otra factura</option>
+          <option value="addition_only">Aumentar o agregar productos</option>
+          <option value="mixed">Cambio mixto — reducir y agregar</option>
+        </select>
+      </div>
       <div class="card vpc-current" style="margin-bottom:12px">
         <div class="lbl" style="margin-bottom:7px">Documentos y productos vigentes</div>
         ${existingRows || '<div class="ts">Todos los productos originales fueron retirados. Puedes agregar otros nuevos.</div>'}
       </div>
-      <div class="card" style="margin-bottom:12px">
+      <div class="card" id="vpc-add-card" style="margin-bottom:12px;display:none">
         <div class="lbl" style="margin-bottom:7px">Agregar otro producto</div>
         <div style="display:grid;grid-template-columns:1fr auto;gap:7px">
           <input class="inp" id="vpc-product-search" list="vpc-products-list"
@@ -2759,6 +2824,7 @@ async function openVentaProductCorrection(saleId) {
     </div>
   `, 'modal-xxl vpc-modal');
   ventasRenderAddedCorrectionItems();
+  ventasProductCorrectionIntentChanged();
 }
 
 function ventasConfirmProductCorrection() {
@@ -2780,6 +2846,7 @@ function ventasConfirmProductCorrection() {
     qty: Math.max(0, Number.parseInt(document.getElementById(`vpc-added-qty-${index}`)?.value, 10) || row.qty || 0),
     unitPrice: Math.max(0, Number.parseFloat(document.getElementById(`vpc-added-price-${index}`)?.value) || 0),
   })).filter(row => row.qty > 0);
+  state.pendingIntent = ventasProductCorrectionIntent();
   confirmModal(
     `<strong>Resultado de la corrección</strong><br/><br/>
      Nota de crédito: <strong>${fmt(summary.credit)}</strong><br/>
@@ -2801,6 +2868,7 @@ async function ventasSubmitProductCorrection() {
     addedItems: state.pendingAddedItems || [],
     reason: state.pendingReason,
     additionPaymentMethod: state.pendingPaymentMethod,
+    correctionIntent: state.pendingIntent || 'reduction_only',
     expectedRevision: Number(state.model.root.revision || 0),
     idempotencyKey: state.idempotencyKey,
     requestUserId: user.id,

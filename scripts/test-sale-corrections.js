@@ -327,6 +327,22 @@ ok(reducedAgain.idempotent && reducedAgain.correctionId === reduced.correctionId
 
 const increaseModel = DB.saleCorrectionsRepo.productCorrectionModel(productSource.saleId, admin.id);
 const stockBeforeIncrease = db.prepare('SELECT stock FROM products WHERE id=?').get(productId).stock;
+expectThrow(() => DB.saleCorrectionsRepo.correctProducts({
+  saleId: productSource.saleId,
+  lines: increaseModel.lines.map((line, index) => ({
+    sourceSaleId: line.source_sale_id,
+    productId: line.product_id,
+    targetQty: index === 0 ? line.current_qty + 1 : line.current_qty,
+  })),
+  addedItems: [],
+  reason: 'Prueba de protección de reducción',
+  userId: admin.id,
+  expectedRevision: increaseModel.root.revision,
+  idempotencyKey: `products-reduction-guard-${productSource.saleId}-${Date.now()}`,
+  session: { id: cashId },
+  additionPaymentMethod: 'efectivo',
+}), /reducción.*no puede generar aumentos/i,
+  'una corrección de reducción nunca puede refacturar ni crear aumentos');
 const increased = DB.saleCorrectionsRepo.correctProducts({
   saleId: productSource.saleId,
   lines: increaseModel.lines.map((line, index) => ({
@@ -341,6 +357,7 @@ const increased = DB.saleCorrectionsRepo.correctProducts({
   idempotencyKey: `products-increase-${productSource.saleId}-${Date.now()}`,
   session: { id: cashId },
   additionPaymentMethod: 'efectivo',
+  correctionIntent: 'addition_only',
 });
 const supplement = DB.salesRepo.getById(increased.additionSaleId);
 ok(!increased.returnIds.length && supplement.correction_kind === 'product_addition' &&
@@ -371,6 +388,7 @@ const mixed = DB.saleCorrectionsRepo.correctProducts({
   idempotencyKey: `products-mixed-${productSource.saleId}-${Date.now()}`,
   session: { id: cashId },
   additionPaymentMethod: 'efectivo',
+  correctionIntent: 'mixed',
 });
 ok(mixed.returnIds.length === 1 && mixed.additionSaleId,
   'una corrección mixta genera crédito y factura complementaria en una operación');
@@ -426,6 +444,7 @@ expectThrow(() => DB.saleCorrectionsRepo.correctProducts({
   idempotencyKey: `products-rollback-${rollbackSource.saleId}-${Date.now()}`,
   session: { id: cashId },
   additionPaymentMethod: 'efectivo',
+  correctionIntent: 'mixed',
 }), /stock disponible insuficiente/i,
   'si falla un producto agregado se revierte también la nota de crédito');
 ok(db.prepare('SELECT stock FROM products WHERE id=?').get(productId).stock === rollbackStockOriginal &&

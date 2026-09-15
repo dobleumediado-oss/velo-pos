@@ -954,6 +954,7 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
   function correctProducts({
     saleId, lines, addedItems, reason, userId, expectedRevision,
     idempotencyKey, terminalId, session, additionPaymentMethod,
+    correctionIntent = 'reduction_only',
   }) {
     if (!salesRepo || !returnsRepo) throw new Error('El servicio de corrección de productos no está disponible');
     const requester = userById(userId);
@@ -963,6 +964,10 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
     if (cleanReason.length < 5) throw new Error('El motivo es obligatorio y debe ser específico');
     const key = String(idempotencyKey || '').trim().slice(0, 120);
     if (key.length < 12) throw new Error('Clave de idempotencia inválida');
+    const intent = String(correctionIntent || 'reduction_only').trim().toLowerCase();
+    if (!['reduction_only', 'addition_only', 'mixed'].includes(intent)) {
+      throw new Error('Tipo de corrección de productos inválido');
+    }
 
     const selectedForKey = db().prepare(`
       SELECT id,original_sale_id,correction_kind FROM sales WHERE id=?
@@ -1056,6 +1061,15 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
         unit_price: Math.round(unitPrice * 100) / 100,
         price_source: 'current_or_authorized',
       });
+    }
+
+    // Una reducción jamás debe crear otra factura. El operador debe escoger
+    // explícitamente aumento o cambio mixto antes de generar un complemento.
+    if (intent === 'reduction_only' && additionRows.length) {
+      throw new Error('Esta corrección es una reducción y no puede generar aumentos ni otra factura');
+    }
+    if (intent === 'addition_only' && reductionsBySale.size) {
+      throw new Error('Esta corrección es un aumento y no puede reducir productos');
     }
 
     if (!reductionsBySale.size && !additionRows.length) {
@@ -1239,6 +1253,7 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
         overpayment,
         netDifference: Math.round((additionTotal - creditTotal) * 100) / 100,
         paymentMethod: additionRows.length ? method : null,
+        correctionIntent: intent,
         originalFiscalDocumentPreserved: true,
       };
       const correction = db().prepare(`

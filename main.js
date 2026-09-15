@@ -3496,6 +3496,7 @@ ipcMain.handle('sales:corrections:correctProducts', async (_, data = {}) => {
       terminalId: data.terminalId || _reqTerminalId(),
       session,
       additionPaymentMethod: data.additionPaymentMethod,
+      correctionIntent: data.correctionIntent,
     });
     for (const returnId of result.returnIds || []) {
       _acctHook(() => accountingRepo.generateReturnEntry({

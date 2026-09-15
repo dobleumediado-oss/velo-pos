@@ -244,15 +244,22 @@ function _excelEnhanceCurrentPage() {
 }
 
 let _excelEnhanceTimer = null;
+let _excelEnhanceObserver = null;
 function _excelScheduleEnhance() {
   clearTimeout(_excelEnhanceTimer);
-  _excelEnhanceTimer = setTimeout(_excelEnhanceCurrentPage, 80);
+  _excelEnhanceTimer = setTimeout(_excelEnhanceCurrentPage, 180);
 }
 
 function _excelStartEnhancer() {
   _excelScheduleEnhance();
-  const root = document.getElementById('root') || document.body;
-  new MutationObserver(_excelScheduleEnhance).observe(root, { childList: true, subtree: true });
+  // Las rutas reemplazan el contenido directo de #page. Observar todo el
+  // subárbol hacía que cada fila, modal, reloj o refresco disparara un nuevo
+  // recorrido completo de la interfaz y degradaba equipos modestos.
+  const pageEl = document.getElementById('page');
+  if (!pageEl || typeof MutationObserver !== 'function') return;
+  if (_excelEnhanceObserver) _excelEnhanceObserver.disconnect();
+  _excelEnhanceObserver = new MutationObserver(_excelScheduleEnhance);
+  _excelEnhanceObserver.observe(pageEl, { childList: true });
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _excelStartEnhancer, { once: true });
