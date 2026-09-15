@@ -175,6 +175,39 @@ Si una operación supera el límite, se registra qué consulta o render fue lent
 - El cambio de rendimiento añade un filtro de vista y un índice compuesto; no
   incorpora cachés, procesos residentes ni sincronización adicional.
 
+## Ronda Permisos y clave operativa — 15 de septiembre de 2026
+
+### Problema confirmado
+
+- Permitir el módulo Clientes a un cajero no habilitaba de forma coherente todas
+  sus operaciones: podía entrar al módulo, pero no actualizar información,
+  contactos, sucursales o el límite de crédito del cliente.
+- La clave especial para cambiar precios debía conservar exactamente las letras
+  mayúsculas y minúsculas escritas al configurarla y al usarla en el POS.
+
+### Ruta mínima aplicada
+
+- El permiso Clientes es ahora la autoridad para administrar la ficha completa,
+  representantes, sucursales y límite de crédito. La eliminación total del
+  cliente permanece reservada al administrador y superadministrador.
+- Los dos campos de configuración y el campo de autorización del POS quedan
+  explícitamente fuera de la normalización a mayúsculas. El servidor conserva
+  la comparación segura existente y distingue, por ejemplo, `Clave123` de
+  `clave123`.
+- No se añadieron roles, permisos, tablas ni migraciones. Se corrigieron las
+  validaciones existentes y se documentó el comportamiento en la propia pantalla.
+
+### Verificación y reversión
+
+- Las pruebas de permisos cubren lectura y edición completa de Clientes para el
+  cajero autorizado, rechazo cuando el módulo está bloqueado y eliminación solo
+  administrativa.
+- La prueba de normalización verifica que los tres campos de clave preserven el
+  caso exacto. La revisión de publicación mantiene intactos inventario, ventas,
+  clientes y documentos existentes.
+- Reversión: retirar las excepciones de captura y las validaciones de permiso
+  restaura la conducta anterior; no hay datos que convertir ni reparar.
+
 ## Ronda documental del POS — 26 de agosto de 2026
 
 ### Problema y resultado esperado

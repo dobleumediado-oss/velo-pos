@@ -1212,13 +1212,18 @@ async function renderConfiguracion(el) {
       </div>
       <div class="fg">
         <label class="lbl">Nueva clave especial</label>
-        <input class="inp" id="cfg-price-key" type="password" autocomplete="new-password"
+        <input class="inp no-uppercase" id="cfg-price-key" type="password" data-uppercase="off"
+               autocomplete="new-password" autocapitalize="none" spellcheck="false"
                placeholder="Mínimo 6 caracteres"/>
       </div>
       <div class="fg">
         <label class="lbl">Confirmar clave</label>
-        <input class="inp" id="cfg-price-key-confirm" type="password" autocomplete="new-password"
+        <input class="inp no-uppercase" id="cfg-price-key-confirm" type="password" data-uppercase="off"
+               autocomplete="new-password" autocapitalize="none" spellcheck="false"
                placeholder="Repite la clave"/>
+        <div style="font-size:10px;color:var(--muted2);margin-top:4px">
+          Admite mayúsculas y minúsculas y distingue entre ambas.
+        </div>
       </div>
       <button class="btn btn-dark btn-fw" id="btn-save-price-key">
         ${svg('lock')} Guardar clave especial

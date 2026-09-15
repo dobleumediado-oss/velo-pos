@@ -11,6 +11,8 @@
 - Un cajero con el módulo Clientes permitido puede administrar los datos del
   cliente, sus representantes, sucursales y límite de crédito. La eliminación
   completa de clientes continúa reservada al administrador.
+- La clave especial para cambiar precios admite mayúsculas y minúsculas tanto
+  al configurarla como al autorizarla en el POS, y distingue entre ambas.
 
 ## 1.49.3 — 2026-09-15
 

@@ -1394,7 +1394,8 @@ async function posPromptPriceChangeAuth(changes, contextLabel = 'Cambio de preci
         <label class="lbl">Clave especial de cambio de precio</label>
         <div class="inp-ic">
           <div class="ic">${svg('lock')}</div>
-          <input class="inp" id="price-auth-pass" type="password"
+          <input class="inp no-uppercase" id="price-auth-pass" type="password" data-uppercase="off"
+                 autocomplete="current-password" autocapitalize="none" spellcheck="false"
                  placeholder="Clave especial"/>
         </div>
       </div>

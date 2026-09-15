@@ -57,6 +57,24 @@ for (const type of ['email', 'password', 'url', 'search']) {
 const explicit = control('INPUT', 'text', 'Mezcla', { uppercase: 'off' });
 assert.strictEqual(shouldUppercaseEntryControl(explicit), false);
 
+const mixedCasePassword = control('INPUT', 'password', 'ClaveMixta123', { uppercase: 'off' });
+assert.strictEqual(shouldUppercaseEntryControl(mixedCasePassword), false);
+assert.strictEqual(normalizeUppercaseEntry(mixedCasePassword), false);
+assert.strictEqual(mixedCasePassword.value, 'ClaveMixta123');
+
+for (const [sourceFile, fieldId] of [
+  ['config.js', 'cfg-price-key'],
+  ['config.js', 'cfg-price-key-confirm'],
+  ['pos.js', 'price-auth-pass'],
+]) {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'js', sourceFile), 'utf8');
+  assert.match(
+    source,
+    new RegExp(`id="${fieldId}"[^>]*data-uppercase="off"`),
+    `${fieldId} debe conservar exactamente sus mayúsculas y minúsculas`
+  );
+}
+
 // Los motivos de auditoría son narrativos. Deben conservar la escritura del
 // usuario y, sobre todo, no reescribirse durante una entrada remota o por IME.
 const auditReason = control('TEXTAREA', '', 'Continuar desde el sistema anterior', { uppercase: 'off' });
