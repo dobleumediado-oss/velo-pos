@@ -6219,6 +6219,20 @@ const salesRepo = {
         sale.operation_credit_total
       );
 
+      // La CxC de una corrección compensatoria queda repartida entre la factura
+      // raíz y sus documentos internos de aumento. En el detalle operativo se
+      // presenta como una sola factura, por lo que el saldo debe consolidarse
+      // igual que el total y los artículos.
+      if ((sale.payment_method || '').toLowerCase() === 'credito' && sale.customer_id) {
+        const pending = getPendingInvoices(db, sale.customer_id);
+        sale.balance_after_payment = round2((pending.facturas || [])
+          .filter(invoice => Number(invoice.id) === Number(sale.id) || (
+            invoice.correction_kind === 'product_addition' &&
+            Number(invoice.original_sale_id) === Number(sale.id)
+          ))
+          .reduce((sum, invoice) => sum + Number(invoice.pendiente || 0), 0));
+      }
+
       // Copia consolidada para consulta/reimpresión de la factura ajustada.
       // Los documentos compensatorios permanecen inmutables en la base, pero el
       // cliente ve las cantidades actualmente vigentes en una sola operación.
@@ -6411,7 +6425,15 @@ const salesRepo = {
     } else if (view === 'quotes') {
       where += ` AND s.type='cotizacion'`;
     } else if (view === 'returns') {
-      where += ` AND s.type='devolucion'`;
+      where += ` AND s.type='devolucion'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM sale_correction_documents scd
+          JOIN sale_corrections sc ON sc.id=scd.correction_id
+          WHERE scd.sale_id=s.id
+            AND sc.action='correct_products'
+            AND scd.document_role='credit'
+        )`;
     }
     // Ventas y reportes comerciales usan la fecha operativa. created_at queda
     // reservado para auditoría técnica y jamás se refecha.
@@ -6585,7 +6607,15 @@ const salesRepo = {
     } else if (view === 'quotes') {
       where += ` AND type='cotizacion'`;
     } else if (view === 'returns') {
-      where += ` AND type='devolucion'`;
+      where += ` AND type='devolucion'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM sale_correction_documents scd
+          JOIN sale_corrections sc ON sc.id=scd.correction_id
+          WHERE scd.sale_id=sales.id
+            AND sc.action='correct_products'
+            AND scd.document_role='credit'
+        )`;
     }
     // Coherente con getAll: fecha operativa, no fecha técnica de creación.
     if (range === 'today') {

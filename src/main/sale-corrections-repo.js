@@ -1101,6 +1101,8 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
     const reductionsBySale = new Map();
     const additionRows = [];
     let hasPriceChange = false;
+    let hasQuantityReduction = false;
+    let hasQuantityAddition = false;
     for (const current of beforeModel.lines) {
       const lineKey = `${current.source_sale_id}:${current.product_id}`;
       const requested = requestedLines.get(lineKey);
@@ -1113,15 +1115,40 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
       const historicalUnitPrice = originalQty > 0 && snapshotTotal >= 0
         ? round2(snapshotTotal / originalQty)
         : round2(current.unit_price || 0);
-      if (requested?.targetUnitPrice != null &&
-          Math.abs(requested.targetUnitPrice - historicalUnitPrice) > 0.005) {
+      const priceChanged = requested?.targetUnitPrice != null &&
+        Math.abs(requested.targetUnitPrice - historicalUnitPrice) > 0.005;
+      if (priceChanged) {
         hasPriceChange = true;
+        // Un comprobante fiscal o una operación ya comprometida no se puede
+        // reescribir. Sustituir su precio requiere acreditar la línea vigente
+        // completa y respaldar la cantidad final al precio corregido. El efecto
+        // neto de inventario sigue siendo únicamente targetQty-currentQty.
+        if (Number(current.current_qty) > 0) {
+          const group = reductionsBySale.get(Number(current.source_sale_id)) || [];
+          group.push({ product_id: Number(current.product_id), qty: Number(current.current_qty) });
+          reductionsBySale.set(Number(current.source_sale_id), group);
+        }
+        if (targetQty > 0) {
+          additionRows.push({
+            product_id: Number(current.product_id),
+            qty: targetQty,
+            unit_price: requested.targetUnitPrice,
+            taxable: current.taxable,
+            tax_pct: current.tax_pct,
+            price_source: 'corrected',
+            existing_line: true,
+            price_replacement: true,
+          });
+        }
+        continue;
       }
       if (delta < 0) {
+        hasQuantityReduction = true;
         const group = reductionsBySale.get(Number(current.source_sale_id)) || [];
         group.push({ product_id: Number(current.product_id), qty: Math.abs(delta) });
         reductionsBySale.set(Number(current.source_sale_id), group);
       } else if (delta > 0) {
+        hasQuantityAddition = true;
         additionRows.push({
           product_id: Number(current.product_id),
           qty: delta,
@@ -1151,14 +1178,16 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
         price_source: 'current_or_authorized',
         existing_line: false,
       });
+      hasQuantityAddition = true;
     }
 
-    // Una reducción jamás debe crear otra factura. El operador debe escoger
-    // explícitamente aumento o cambio mixto antes de generar un complemento.
-    if (intent === 'reduction_only' && additionRows.length) {
+    // La intención controla cambios reales de cantidad. Una sustitución técnica
+    // por cambio de precio puede necesitar ambos respaldos sin convertirse en
+    // una adición o devolución comercial para el cliente.
+    if (intent === 'reduction_only' && hasQuantityAddition) {
       throw new Error('Esta corrección es una reducción y no puede generar aumentos ni otra factura');
     }
-    if (intent === 'addition_only' && reductionsBySale.size) {
+    if (intent === 'addition_only' && hasQuantityReduction) {
       throw new Error('Esta corrección es un aumento y no puede reducir productos');
     }
 

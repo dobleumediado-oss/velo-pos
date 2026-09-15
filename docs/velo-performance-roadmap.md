@@ -208,6 +208,37 @@ Si una operación supera el límite, se registra qué consulta o render fue lent
 - Reversión: retirar las excepciones de captura y las validaciones de permiso
   restaura la conducta anterior; no hay datos que convertir ni reparar.
 
+## Ronda Conciliación de correcciones heredadas — 15 de septiembre de 2026
+
+### Alcance multiempresa
+
+- La solución no contiene nombres de clientes, números de factura ni reglas para
+  un negocio concreto. Cada base identifica sus propias notas de crédito y
+  facturas de aumento mediante `sale_correction_documents` y `sale_corrections`.
+- La actualización no borra, anula ni reescribe NCF/e-CF. Los documentos de
+  respaldo permanecen inmutables y consultables desde Auditoría.
+
+### Resultado operativo
+
+- Clientes, Facturas pendientes y el detalle de la venta presentan una sola
+  operación: artículos finales, total neto y suma del saldo repartido entre la
+  factura raíz y los aumentos internos.
+- Las notas creadas exclusivamente por el flujo anterior de corrección dejan de
+  aparecer como devoluciones comerciales. Las devoluciones reales e independientes
+  permanecen visibles y no se confunden con una corrección.
+- No hay migración ni escritura al instalar. La conciliación se calcula al leer
+  los vínculos existentes, por lo que funciona igual en VELO POS y VELO TECH POS
+  y no modifica inventario, caja, CxC, contabilidad ni correlativos.
+
+### Verificación
+
+- La regresión reproduce una factura fiscal a crédito cuyo precio cambia de
+  RD$118.00 a RD$100.00 mediante los documentos del flujo anterior. Comprueba
+  una sola línea vigente, total y saldo RD$100.00, ausencia de la nota en
+  Devoluciones y conservación completa en Auditoría.
+- La cuenta del cliente verifica además el caso RD$306,600.00 + RD$166,040.00 −
+  RD$185,600.00 = RD$287,040.00 sin depender del cliente que originó el reporte.
+
 ## Ronda documental del POS — 26 de agosto de 2026
 
 ### Problema y resultado esperado

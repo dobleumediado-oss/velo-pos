@@ -13,6 +13,13 @@
   completa de clientes continúa reservada al administrador.
 - La clave especial para cambiar precios admite mayúsculas y minúsculas tanto
   al configurarla como al autorizarla en el POS, y distingue entre ambas.
+- Las correcciones compensatorias creadas por versiones anteriores se reconocen
+  en cualquier negocio por sus vínculos internos: la cuenta del cliente muestra
+  una sola factura con artículos, total y saldo vigentes, mientras sus notas y
+  aumentos quedan exclusivamente en Auditoría.
+- Una modificación exclusiva del precio también genera correctamente su respaldo
+  cuando la factura tiene NCF o efectos comprometidos, tanto al reducir como al
+  aumentar, y se presenta al cliente como una sola operación al precio final.
 
 ## 1.49.3 — 2026-09-15
 

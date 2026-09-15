@@ -1936,7 +1936,9 @@ function cliConsolidateAdjustedSales(rows) {
     }
   });
   return sales
-    .filter(sale => !(sale.type === 'factura' && sale.correction_kind === 'product_addition' && sale.original_sale_id))
+    .filter(sale => !sale.correction_artifact && !(
+      sale.type === 'factura' && sale.correction_kind === 'product_addition' && sale.original_sale_id
+    ))
     .map(sale => {
       if (sale.type !== 'factura') return sale;
       const addition = Number(additions.get(Number(sale.id)) || 0);
@@ -1954,6 +1956,31 @@ function cliConsolidateAdjustedSales(rows) {
 
 function cliInvoiceAmount(sale) {
   return Number(sale?.operation_total ?? sale?.total ?? 0);
+}
+
+function cliConsolidatePendingInvoices(rows, consolidatedSales) {
+  const salesById = new Map((consolidatedSales || [])
+    .filter(sale => sale.type === 'factura')
+    .map(sale => [Number(sale.id), sale]));
+  const grouped = new Map();
+  for (const invoice of rows || []) {
+    const rootId = invoice.correction_kind === 'product_addition' && invoice.original_sale_id
+      ? Number(invoice.original_sale_id) : Number(invoice.id);
+    if (!grouped.has(rootId)) {
+      const rootSale = salesById.get(rootId);
+      grouped.set(rootId, {
+        ...(rootSale || invoice),
+        id: rootId,
+        pendiente: 0,
+        total: rootSale ? cliInvoiceAmount(rootSale) : Number(invoice.total || 0),
+      });
+    }
+    grouped.get(rootId).pendiente += Number(invoice.pendiente || 0);
+  }
+  return [...grouped.values()].map(invoice => ({
+    ...invoice,
+    pendiente: Math.round(Number(invoice.pendiente || 0) * 100) / 100,
+  }));
 }
 
 function cliAccountMath(ventas, pagos, pendingResult, customerBalance) {
@@ -2035,14 +2062,18 @@ async function cliLoadAccountPayload(c, includeItems = false) {
       accountSales,
       window.api.customers.getFacturasPendientes({ customerId: c.id }),
     ]);
+    const consolidatedSales = cliSortLatestFirst(cliConsolidateAdjustedSales(
+      (sales || []).filter(row => row.status !== 'cancelled')
+    ));
     cache = {
       customerId: c.id,
       loadedAt: now,
       payments: cliSortLatestFirst(payments),
-      sales: cliSortLatestFirst(cliConsolidateAdjustedSales(
-        (sales || []).filter(row => row.status !== 'cancelled')
-      )),
-      pending,
+      sales: consolidatedSales,
+      pending: {
+        ...(pending || {}),
+        facturas: cliConsolidatePendingInvoices(pending?.facturas || [], consolidatedSales),
+      },
       items: null,
     };
     window._cliAccountCache = cache;
@@ -2483,7 +2514,8 @@ async function exportPendingInvoicesPDF(c) {
   if (!c) { toast('Cliente no encontrado', 'err'); return; }
   let result;
   try {
-    result = await window.api.customers.getFacturasPendientes({ customerId: c.id });
+    const payload = await cliLoadAccountPayload(c, false);
+    result = payload[2];
   } catch (error) {
     toast(error?.message === 'SERVER_OFFLINE'
       ? 'No se pudo confirmar el reporte: revisa la conexión con el servidor'

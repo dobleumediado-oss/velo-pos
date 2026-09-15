@@ -421,10 +421,76 @@ ok(groupedDetail.operation_total === Math.round((
 ok(groupedDetail.adjusted_items.some(item => item.product_id === addedProductId && item.qty === 2) &&
   groupedDetail.adjusted_items.some(item => item.product_id === productId && item.qty === 1),
   'la reimpresión ajustada recibe las cantidades vigentes en una sola factura');
+const pendingForGrouped = require('../lib/pending-invoices').getPendingInvoices(db, customerId).facturas
+  .filter(invoice => Number(invoice.id) === Number(productSource.saleId) ||
+    Number(invoice.original_sale_id) === Number(productSource.saleId))
+  .reduce((sum, invoice) => sum + Number(invoice.pendiente || 0), 0);
+if (groupedDetail.payment_method === 'credito') {
+  ok(groupedDetail.balance_after_payment === Math.round(pendingForGrouped * 100) / 100,
+    'el detalle consolida el saldo de la factura raíz y sus aumentos internos');
+}
 expectThrow(() => db.prepare(
   'DELETE FROM sale_correction_documents WHERE correction_id=?'
 ).run(mixed.correctionId), /inmutables/i,
   'impide borrar la relación auditada entre corrección y documentos');
+
+const legacyCredit = createSale({ date: '2025-07-11', method: 'credito', qty: 1 });
+const legacyModel = DB.saleCorrectionsRepo.productCorrectionModel(legacyCredit.saleId, admin.id);
+const legacyAdjusted = DB.saleCorrectionsRepo.correctProducts({
+  saleId: legacyCredit.saleId,
+  lines: legacyModel.lines.map(line => ({
+    sourceSaleId: line.source_sale_id,
+    productId: line.product_id,
+    targetQty: line.current_qty,
+    targetUnitPrice: 100,
+  })),
+  addedItems: [],
+  reason: 'Corregir precio antes del nuevo flujo directo',
+  userId: admin.id,
+  expectedRevision: legacyModel.root.revision,
+  idempotencyKey: `legacy-credit-price-${legacyCredit.saleId}-${Date.now()}`,
+  session: { id: cashId },
+  additionPaymentMethod: 'credito',
+  correctionIntent: 'reduction_only',
+});
+const legacyDetail = DB.salesRepo.getById(legacyCredit.saleId);
+ok(legacyAdjusted.returnIds.length === 1 && legacyAdjusted.additionSaleId,
+  'simula una corrección heredada respaldada por nota y aumento enlazados');
+ok(legacyDetail.adjusted_items.length === 1 &&
+  legacyDetail.adjusted_items[0].qty === 1 &&
+  legacyDetail.adjusted_items[0].unit_price === 100 &&
+  legacyDetail.operation_total === 100,
+  'la factura consolidada muestra el artículo y precio final, no la línea sustituida');
+ok(legacyDetail.balance_after_payment === 100,
+  'la factura consolidada muestra el saldo completo de su operación');
+const operationalReturns = DB.salesRepo.getAll({ range: 'all', view: 'returns', limit: 500 });
+ok(!operationalReturns.some(row => legacyAdjusted.returnIds.includes(Number(row.id))),
+  'las notas creadas por corrección permanecen en auditoría y no en Devoluciones');
+ok(DB.saleCorrectionsRepo.history(legacyCredit.saleId, admin.id).relatedDocuments
+  .some(row => legacyAdjusted.returnIds.includes(Number(row.id))),
+  'la evidencia de la corrección continúa disponible en Auditoría');
+
+const legacyIncrease = createSale({ date: '2025-07-11', method: 'credito', qty: 1 });
+const legacyIncreaseModel = DB.saleCorrectionsRepo.productCorrectionModel(legacyIncrease.saleId, admin.id);
+const legacyIncreaseResult = DB.saleCorrectionsRepo.correctProducts({
+  saleId: legacyIncrease.saleId,
+  lines: legacyIncreaseModel.lines.map(line => ({
+    sourceSaleId: line.source_sale_id,
+    productId: line.product_id,
+    targetQty: line.current_qty,
+    targetUnitPrice: 130,
+  })),
+  addedItems: [], reason: 'Corregir precio aumentado con respaldo fiscal',
+  userId: admin.id, expectedRevision: legacyIncreaseModel.root.revision,
+  idempotencyKey: `legacy-credit-price-up-${legacyIncrease.saleId}-${Date.now()}`,
+  session: { id: cashId }, additionPaymentMethod: 'credito', correctionIntent: 'addition_only',
+});
+const legacyIncreaseDetail = DB.salesRepo.getById(legacyIncrease.saleId);
+ok(legacyIncreaseResult.returnIds.length === 1 && legacyIncreaseResult.additionSaleId &&
+  legacyIncreaseDetail.adjusted_items.length === 1 &&
+  legacyIncreaseDetail.adjusted_items[0].unit_price === 130 &&
+  legacyIncreaseDetail.operation_total === 130,
+  'aumentar solo el precio fiscal también conserva una única operación al valor final');
 
 const rollbackSource = createSale({ date: '2025-07-12', method: 'efectivo', qty: 2 });
 const rollbackModel = DB.saleCorrectionsRepo.productCorrectionModel(rollbackSource.saleId, admin.id);

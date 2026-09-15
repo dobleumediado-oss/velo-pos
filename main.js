@@ -2732,7 +2732,13 @@ ipcMain.handle('customers:getAccountSales', async (_, { customerId }) => {
   return db.prepare(`
     SELECT s.*,
            sp.name AS salesperson_name,
-           sp.code AS salesperson_code
+           sp.code AS salesperson_code,
+           EXISTS(
+             SELECT 1
+             FROM sale_correction_documents scd
+             JOIN sale_corrections sc ON sc.id=scd.correction_id
+             WHERE scd.sale_id=s.id AND sc.action='correct_products'
+           ) AS correction_artifact
     FROM sales s
     LEFT JOIN salespeople sp ON sp.id = s.salesperson_id
     WHERE s.customer_id = ?
