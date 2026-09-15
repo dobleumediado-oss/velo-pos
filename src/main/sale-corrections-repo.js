@@ -357,7 +357,7 @@ function _snapshot(sale) {
   };
 }
 
-function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo, accountingRepo }) {
+function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
   const db = () => getDb();
   const round2 = value => Math.round((Number(value) || 0) * 100) / 100;
 
@@ -383,7 +383,7 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo, accountingRe
     `).get(saleId, saleId, saleId);
   }
 
-  function directCreditAmendmentEligibility(root, sourceSales, fiscal) {
+  function directCreditAmendmentEligibility(root, fiscal) {
     const reasons = [];
     if (String(root.payment_method || '').toLowerCase() !== 'credito') reasons.push('NOT_CREDIT');
     const paid = paymentSummary(root.id);
@@ -396,7 +396,6 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo, accountingRe
       if (cash?.status === 'closed') reasons.push('CLOSED_CASH');
     }
     if (closedPeriodForDate(root.sale_date)) reasons.push('CLOSED_ACCOUNTING_PERIOD');
-    if (sourceSales.length !== 1) reasons.push('HAS_SUPPLEMENT');
     const related = db().prepare(`
       SELECT COUNT(*) count FROM sales
       WHERE original_sale_id=? AND status!='cancelled'
@@ -406,7 +405,9 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo, accountingRe
     const serialized = db().prepare(`
       SELECT COUNT(*) count FROM sale_items si
       LEFT JOIN products p ON p.id=si.product_id
-      WHERE si.sale_id=? AND (si.product_unit_id IS NOT NULL OR COALESCE(p.serialized,0)=1)
+      WHERE si.sale_id=? AND (
+        si.product_id IS NULL OR si.product_unit_id IS NOT NULL OR COALESCE(p.serialized,0)=1
+      )
     `).get(root.id);
     if (Number(serialized?.count || 0) > 0) reasons.push('HAS_SERIALIZED_UNITS');
     if (_tableExists(db(), 'delivery_note_invoice_links')) {
@@ -417,7 +418,6 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo, accountingRe
     return {
       eligible: reasons.length === 0,
       reasons,
-      paymentAmount: round2(paid.total),
     };
   }
 
@@ -982,7 +982,7 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo, accountingRe
       FROM products WHERE active=1 ORDER BY name,id
     `).all();
     const fiscal = ecfState(root.id);
-    const directAmendment = directCreditAmendmentEligibility(root, sourceSales, fiscal);
+    const directAmendment = directCreditAmendmentEligibility(root, fiscal);
     const warnings = [];
     if (fiscal) {
       warnings.push({
@@ -1189,9 +1189,6 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo, accountingRe
         }
         const stillEligible = directCreditAmendmentEligibility(
           lockedRoot,
-          db().prepare(`SELECT * FROM sales WHERE id=? OR (
-            original_sale_id=? AND type='factura' AND correction_kind='product_addition' AND status!='cancelled'
-          )`).all(lockedRoot.id, lockedRoot.id),
           ecfState(lockedRoot.id)
         );
         if (!stillEligible.eligible) {
@@ -1284,10 +1281,11 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo, accountingRe
         }
 
         const movementIds = [];
+        const newQty = new Map(prepared.map(row => [row.product_id, row.qty]));
         const allProductIds = new Set([...oldQty.keys(), ...prepared.map(row => row.product_id)]);
         for (const productId of allProductIds) {
           const beforeQty = Number(oldQty.get(productId) || 0);
-          const afterQty = Number(prepared.find(row => row.product_id === productId)?.qty || 0);
+          const afterQty = Number(newQty.get(productId) || 0);
           const stockDelta = beforeQty - afterQty;
           if (!stockDelta) continue;
           const product = db().prepare('SELECT stock FROM products WHERE id=?').get(productId);

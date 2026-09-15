@@ -131,7 +131,7 @@ Si una operación supera el límite, se registra qué consulta o render fue lent
 ### Ruta segura aplicada
 
 - Una factura a crédito sin abonos, NCF/e-CF, equipos serializados, conduce,
-  anticipo, trade-in, comisión liquidada ni documentos compensatorios se puede
+  anticipo, trade-in, corte de comisión ni documentos compensatorios se puede
   corregir directamente. Conserva número y fecha; actualiza cantidades, precios,
   ITBIS, total, inventario y CxC dentro de una sola transacción y registra la
   corrección en auditoría.
@@ -159,6 +159,21 @@ Si una operación supera el límite, se registra qué consulta o render fue lent
 - No se eliminan automáticamente documentos históricos ya emitidos por versiones
   anteriores. Cualquier reparación de esos casos requiere identificar la factura
   exacta y validar primero pagos, inventario, fiscalidad y contabilidad.
+
+### Revisión de alcance y sobreingeniería
+
+- Se descartó crear un nuevo módulo, tabla, estado documental o migración de
+  datos. La solución reutiliza `sales`, `sale_items`, `inventory_movements`,
+  `sale_corrections` y la contabilidad ya existentes.
+- Solo existen dos caminos: edición directa para crédito pendiente elegible y el
+  flujo compensatorio existente para el resto. La selección se resuelve en el
+  repositorio; la interfaz únicamente muestra el modo recibido.
+- Se retiraron parámetros y comprobaciones duplicadas detectadas en la revisión.
+  Los bloqueos restantes corresponden a efectos reales que no pueden reescribirse
+  con seguridad: cobros, fiscalidad, seriales, conduces, cierres, importaciones y
+  comisiones.
+- El cambio de rendimiento añade un filtro de vista y un índice compuesto; no
+  incorpora cachés, procesos residentes ni sincronización adicional.
 
 ## Ronda documental del POS — 26 de agosto de 2026
 
