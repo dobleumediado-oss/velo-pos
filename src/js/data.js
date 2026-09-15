@@ -363,6 +363,7 @@ async function reloadPayments() {
   return DB.payments;
 }
 
+let salesLoadGeneration = 0;
 async function reloadSales(filters = {}) {
   // Para el historial completo (range:'all') subimos el límite por defecto:
   // antes se cortaba en 200 y el usuario no veía todas sus ventas. El render
@@ -370,9 +371,10 @@ async function reloadSales(filters = {}) {
   // El backend soporta offset para paginar más allá de este tope si hiciera falta.
   const f = { ...filters };
   if ((f.range === 'all' || !f.range) && f.limit == null) f.limit = 1000;
+  const generation = ++salesLoadGeneration;
   const sales = await window.api.sales.getAll(f) || [];
   // Normalizar campos SQLite → compatibilidad con módulos
-  DB.sales = sales.map(s => ({
+  const normalized = sales.map(s => ({
     ...s,
     // Aliases para compatibilidad
     clientId:     s.customer_id    || s.clientId,
@@ -393,8 +395,14 @@ async function reloadSales(filters = {}) {
     items: s.items || [],
   }));
 
+  // Si el usuario cambió de período mientras esperaba, la respuesta anterior
+  // no puede sobrescribir la página más reciente ni provocar un repintado doble.
+  if (generation !== salesLoadGeneration) return DB.sales;
+  DB.sales = normalized;
+
   // Sincronizar con compat
   if (window._syncDB) window._syncDB({ sales: DB.sales });
+  return DB.sales;
 }
 
 // ══════════════════════════════════════════════

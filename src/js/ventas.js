@@ -10,6 +10,9 @@ let ventasSearch = '';
 let ventasRange  = 'today';
 let ventasPay    = '';
 let ventasTab    = 'facturas'; // 'facturas' | 'cotizaciones' | 'abonos'
+let ventasPage   = 1;
+let ventasTotal  = 0;
+const VENTAS_PAGE_SIZE = 100;
 
 function ventasRound2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
@@ -466,15 +469,15 @@ function renderVentas(el) {
   el.appendChild(h('div', { class: 'tabs', style: { marginBottom: '12px' } },
     h('button', {
       class: `tab ${ventasTab === 'facturas' ? 'on' : ''}`,
-      onclick: () => { ventasTab = 'facturas'; renderVentas(el); }
+      onclick: () => { ventasTab = 'facturas'; ventasPage = 1; renderVentas(el); }
     }, 'Facturas / Recibos'),
     h('button', {
       class: `tab ${ventasTab === 'cotizaciones' ? 'on' : ''}`,
-      onclick: () => { ventasTab = 'cotizaciones'; renderVentas(el); }
+      onclick: () => { ventasTab = 'cotizaciones'; ventasPage = 1; renderVentas(el); }
     }, 'Cotizaciones'),
     h('button', {
       class: `tab ${ventasTab === 'abonos' ? 'on' : ''}`,
-      onclick: () => { ventasTab = 'abonos'; renderVentas(el); }
+      onclick: () => { ventasTab = 'abonos'; ventasPage = 1; renderVentas(el); }
     }, 'Abonos')
   ));
 
@@ -489,6 +492,7 @@ function renderVentas(el) {
           value: ventasSearch,
           oninput: e => {
             ventasSearch = e.target.value;
+            ventasPage = 1;
             clearTimeout(window._ventasSearchTimer);
             window._ventasSearchTimer = setTimeout(() => refreshVentas(el), 150);
           }
@@ -497,7 +501,7 @@ function renderVentas(el) {
       (() => {
         const sel = h('select', {
           class: 'inp', style: { width: '130px' },
-          onchange: e => { ventasRange = e.target.value; refreshVentas(el); }
+          onchange: e => { ventasRange = e.target.value; ventasPage = 1; refreshVentas(el); }
         });
         [
           { v: 'today',  l: 'Hoy'         },
@@ -515,7 +519,7 @@ function renderVentas(el) {
       ventasTab === 'facturas' ? (() => {
         const sel = h('select', {
           class: 'inp', style: { width: '130px' },
-          onchange: e => { ventasPay = e.target.value; refreshVentas(el); }
+          onchange: e => { ventasPay = e.target.value; ventasPage = 1; refreshVentas(el); }
         });
         [
           { v: '',              l: 'Todos'         },
@@ -549,10 +553,38 @@ async function refreshVentas(el) {
     renderVentasTable();
     return;
   }
-  // La vista de Ventas excluye anuladas y notas de crédito, pero conserva la
-  // factura original cuando está ajustada para que nunca "desaparezca".
-  await reloadSales({ range: ventasRange, view: 'sales' });
+  const request = (window._ventasRefreshGeneration || 0) + 1;
+  window._ventasRefreshGeneration = request;
+  const filters = {
+    range: ventasRange,
+    view: ventasTab === 'cotizaciones' ? 'quotes' : 'sales',
+    q: ventasSearch.trim(),
+    limit: VENTAS_PAGE_SIZE,
+    offset: (ventasPage - 1) * VENTAS_PAGE_SIZE,
+    ...(ventasTab === 'facturas' && ventasPay ? { method: ventasPay } : {}),
+  };
+  // La base pagina antes de unir artículos y calcular ajustes. Así “Todas” no
+  // bloquea el proceso principal ni obliga al navegador a crear miles de filas.
+  const [, total] = await Promise.all([
+    reloadSales(filters),
+    window.api.sales.count(filters),
+  ]);
+  if (window._ventasRefreshGeneration !== request) return;
+  ventasTotal = Math.max(0, Number(total || 0));
+  const lastPage = Math.max(1, Math.ceil(ventasTotal / VENTAS_PAGE_SIZE));
+  if (ventasPage > lastPage) {
+    ventasPage = lastPage;
+    return refreshVentas(el);
+  }
   renderVentasTable();
+}
+
+function ventasGoToPage(pageNumber) {
+  const lastPage = Math.max(1, Math.ceil(ventasTotal / VENTAS_PAGE_SIZE));
+  const next = Math.max(1, Math.min(lastPage, Number(pageNumber) || 1));
+  if (next === ventasPage) return;
+  ventasPage = next;
+  refreshVentas(document.getElementById('page'));
 }
 
 function ventasEffectiveTotal(sale) {
@@ -672,8 +704,8 @@ function renderVentasTable() {
       { icon: 'clock',  color: 'a', label: 'Pendientes hoy', val: sales.filter(s => (s.sale_date||'').slice(0,10) === today()).length },
       { icon: 'check',  color: 'b', label: 'Convertibles',   val: sales.filter(s => s.status !== 'cancelled').length },
     ] : [
-      { icon: 'list',  color: 'b', label: 'Documentos', val: sales.length },
-      { icon: 'dollar',color: 'g', label: 'Total neto documentos', val: fmt(total) },
+      { icon: 'list',  color: 'b', label: 'Documentos', val: ventasTotal },
+      { icon: 'dollar',color: 'g', label: 'Total neto de esta página', val: fmt(total) },
       { icon: 'cash',  color: 'g', label: 'Efectivo neto', val: fmt(sales.filter(s => (s.payment_method||s.pay) === 'efectivo').reduce((a,s)=>a+ventasEffectiveTotal(s),0)) },
       { icon: 'card',  color: 'p', label: 'Tarj/Trans neto', val: fmt(sales.filter(s => ['tarjeta','transferencia'].includes(s.payment_method||s.pay||'')).reduce((a,s)=>a+ventasEffectiveTotal(s),0)) },
     ];
@@ -918,6 +950,30 @@ function renderVentasTable() {
   tw.appendChild(tbl);
   card.appendChild(tw);
   tableWrap.appendChild(card);
+  const totalPages = Math.max(1, Math.ceil(ventasTotal / VENTAS_PAGE_SIZE));
+  if (ventasTotal > VENTAS_PAGE_SIZE) {
+    const first = ((ventasPage - 1) * VENTAS_PAGE_SIZE) + 1;
+    const last = Math.min(ventasTotal, ventasPage * VENTAS_PAGE_SIZE);
+    tableWrap.appendChild(h('div', {
+      class: 'fxb',
+      style: { marginTop:'12px', gap:'10px', flexWrap:'wrap' },
+    },
+      h('div', { class:'ts' }, `Mostrando ${first}–${last} de ${ventasTotal} documentos`),
+      h('div', { class:'flex', style:{ gap:'6px' } },
+        h('button', {
+          class:'btn btn-out btn-sm',
+          ...(ventasPage <= 1 ? { disabled:'disabled' } : {}),
+          onclick: () => ventasGoToPage(ventasPage - 1),
+        }, 'Anterior'),
+        h('span', { class:'badge b' }, `Página ${ventasPage} de ${totalPages}`),
+        h('button', {
+          class:'btn btn-out btn-sm',
+          ...(ventasPage >= totalPages ? { disabled:'disabled' } : {}),
+          onclick: () => ventasGoToPage(ventasPage + 1),
+        }, 'Siguiente')
+      )
+    ));
+  }
 }
 
 function ventasPaymentInRange(payment) {
@@ -3403,16 +3459,39 @@ async function ventaWhatsAppPDF(saleId) {
   );
 }
 
-// ── Exportar PDF ventas ───────────────────────
-function exportVentasPDF() {
+async function ventasRowsForExport() {
+  if (ventasTab === 'abonos') return [];
+  const filters = {
+    range: ventasRange,
+    view: ventasTab === 'cotizaciones' ? 'quotes' : 'sales',
+    q: ventasSearch.trim(),
+    ...(ventasTab === 'facturas' && ventasPay ? { method: ventasPay } : {}),
+  };
+  const pageSize = 500;
+  const rows = [];
+  let offset = 0;
+  while (true) {
+    const batch = await window.api.sales.getAll({ ...filters, limit:pageSize, offset }) || [];
+    rows.push(...batch);
+    if (batch.length < pageSize) break;
+    offset += batch.length;
+  }
+  return rows;
+}
+
+// ── Exportar PDF/Excel ventas ─────────────────
+async function exportVentasPDF() {
   const rangeLabels = {
     today: 'Hoy', week: 'Esta semana', month: 'Este mes', all: 'Todas'
   };
 
-  const sales = DB.sales.filter(s => s.status !== 'cancelled');
-  const total = sales.reduce((a, s) => a + (s.total || 0), 0);
+  const sales = await ventasRowsForExport();
+  const total = sales.reduce((a, s) => a + ventasEffectiveTotal(s), 0);
 
-  const rows = [...sales].sort((a, b) => (b.id || 0) - (a.id || 0)).map(s => {
+  const rows = [...sales].sort((a, b) =>
+    String(b.sale_date || b.created_at || '').localeCompare(String(a.sale_date || a.created_at || '')) ||
+    Number(b.id || 0) - Number(a.id || 0)
+  ).map(s => {
     const fecha  = (s.sale_date || s.date || '').split('T')[0].split(' ')[0];
     const method = s.payment_method || s.pay || '';
     const name   = s.customer_name  || 'Consumidor Final';
@@ -3422,7 +3501,7 @@ function exportVentasPDF() {
         <td>${fdate(fecha)}</td>
         <td>${_esc(name)}</td>
         <td style="text-transform:capitalize">${_esc(method)}</td>
-        <td style="text-align:right">${fmt(s.total)}</td>
+        <td style="text-align:right">${fmt(ventasEffectiveTotal(s))}</td>
       </tr>`;
   }).join('');
 
@@ -3437,7 +3516,7 @@ function exportVentasPDF() {
   .total{font-weight:700;font-size:14px;margin-top:10px;text-align:right}
   .foot{margin-top:14px;font-size:10px;color:#9ca3af}
 </style></head><body>
-  <h2>Historial de Ventas — ${_esc(CFG.biz)}</h2>
+  <h2>${ventasTab === 'cotizaciones' ? 'Historial de Cotizaciones' : 'Historial de Ventas'} — ${_esc(CFG.biz)}</h2>
   <div class="sub">
     Período: ${rangeLabels[ventasRange]||ventasRange} ·
     ${sales.length} transacciones · ${fdate(today())}

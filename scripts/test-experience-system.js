@@ -47,7 +47,7 @@ assert(app.includes('commandCatalog'), 'La búsqueda global debe incluir comando
 assert(app.includes('Centro de impresión'), 'La búsqueda debe conducir al centro de impresión');
 assert(!app.includes("backdropFilter: 'blur(4px)'"), 'El buscador no debe bloquear su apertura aplicando desenfoque');
 assert(app.includes('}, 100);'), 'La búsqueda global debe responder con una pausa corta');
-assert(app.includes('function modalBack()'), 'Los modales secundarios deben poder volver al modal anterior');
+assert(/function\s+modalBack\s*\(/.test(app), 'Los modales secundarios deben poder volver al modal anterior');
 assert(app.includes("html: '← Atrás'"), 'La navegación de modales debe mostrar Atrás');
 assert(styles.includes('.ov{background:rgba(2,6,23,.55);backdrop-filter:none}'),
   'Los modales no deben aplicar desenfoque costoso al fondo');

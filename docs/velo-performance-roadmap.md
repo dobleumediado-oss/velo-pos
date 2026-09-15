@@ -72,6 +72,50 @@ Si una operación supera el límite, se registra qué consulta o render fue lent
 - El recibo de abono dice “Monto aplicado”, “Monto del abono” y “Balance después del abono”; no “Precio venta” ni “Total con impuestos”.
 - Facturas pendientes, facturas del cliente e historial de abonos aparecen de antiguo a reciente en pantalla y PDF.
 
+## Ronda Ventas y Caja — 15 de septiembre de 2026
+
+### Problema confirmado
+
+- “Ver todas” limitaba el resultado después de ejecutar las uniones y los
+  cálculos de ajustes, devoluciones y pagos sobre todo el historial. En una
+  copia representativa con 2,523 ventas activas, pedir solo 100 filas tardaba
+  entre 2.9 y 3.3 segundos porque la base procesaba primero todos los documentos.
+- La pantalla intentaba construir el historial recibido completo y una respuesta
+  lenta podía llegar después de que el usuario eligiera otro período.
+- El recibo de ingreso estaba implementado en Caja, pero su prueba específica no
+  formaba parte del comando general de pruebas y podía quedar fuera de una
+  revisión de publicación.
+
+### Ruta mínima aplicada
+
+- Ventas selecciona primero una página de 100 identificadores por `sale_date` e
+  `id`; únicamente después calcula el detalle financiero de esos documentos.
+- “Hoy”, “Este mes”, “Todas”, método, facturas/cotizaciones y búsqueda se aplican
+  en SQLite antes de paginar. La búsqueda sigue recorriendo el historial
+  completo, incluidos nombre y código de artículos, aunque el resultado esté en
+  una página antigua.
+- La interfaz muestra Anterior/Siguiente y descarta respuestas obsoletas cuando
+  el usuario cambia de filtro antes de que termine una consulta anterior.
+- La prueba de Recibo de ingreso quedó registrada en la suite general: cubre
+  efectivo, transferencia, cuadre, cuenta financiera, contabilidad, anulación,
+  desaparición de la vista operativa e impresión del comprobante interno.
+
+### Medición y seguridad
+
+- Copia de la base representativa: “Este mes” quedó entre 16.6 y 24.4 ms; “Ver
+  todas”, página de 100, quedó entre 214 y 236 ms. El conteo y la suma de las
+  2,524 filas totales permanecieron idénticos antes y después de todas las
+  consultas: 2,524 documentos y RD$133,930,366.62.
+- Prueba sintética con 2,500 facturas, de las cuales más de 1,250 pertenecen al
+  mes actual: “Ver todas” en 412.3 ms y “Este mes” en 437.1 ms, contador completo
+  correcto, búsqueda profunda por cliente/producto y cero cambios en ventas,
+  totales o artículos.
+- La medición abrió exclusivamente copias temporales. No escribió ni corrigió la
+  base original.
+- Reversión: retirar los controles de página devuelve la presentación anterior;
+  no existe migración de datos que revertir porque el cambio solo modifica cómo
+  se consultan y muestran documentos ya existentes.
+
 ## Ronda documental del POS — 26 de agosto de 2026
 
 ### Problema y resultado esperado

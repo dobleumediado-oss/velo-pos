@@ -6394,35 +6394,68 @@ const salesRepo = {
     return sale;
   },
 
-  getAll({ range = 'today', customerId, method, view, limit = 200, offset = 0 } = {}) {
+  getAll({ range = 'today', customerId, method, view, q = '', limit = 200, offset = 0 } = {}) {
     let where = "WHERE s.status != 'cancelled'";
     const params = [];
     // Ventas conserva visible la factura original aunque tenga ajustes. Las notas
     // de crédito viven además en Devoluciones, pero nunca "reemplazan" ni hacen
     // desaparecer el documento que modifican.
     if (view === 'sales') {
-      where += ` AND s.status IN ('completed','returned') AND s.type!='devolucion'
+      where += ` AND s.status IN ('completed','returned')
+        AND s.type!='cotizacion' AND s.type!='devolucion'
         AND NOT (
           s.type='factura'
           AND s.correction_kind='product_addition'
           AND s.original_sale_id IS NOT NULL
         )`;
+    } else if (view === 'quotes') {
+      where += ` AND s.type='cotizacion'`;
     }
     // Ventas y reportes comerciales usan la fecha operativa. created_at queda
     // reservado para auditoría técnica y jamás se refecha.
     if (range === 'today') {
       where += ` AND s.sale_date=date('now','localtime')`;
     } else if (range === 'week') {
-      where += ` AND s.sale_date>=date('now','-7 days','localtime')`;
+      where += ` AND s.sale_date>=date('now','localtime','-7 days')`;
     } else if (range === 'month') {
-      where += ` AND strftime('%Y-%m',s.sale_date)=strftime('%Y-%m','now','localtime')`;
+      where += ` AND s.sale_date>=date('now','localtime','start of month')
+                 AND s.sale_date<date('now','localtime','start of month','+1 month')`;
     }
     if (customerId) { where += ' AND s.customer_id=?'; params.push(customerId); }
     if (method)     { where += ' AND s.payment_method=?'; params.push(method); }
+    const search = String(q || '').trim().toLowerCase();
+    if (search) {
+      const like = `%${search}%`;
+      where += ` AND (
+        CAST(s.id AS TEXT) LIKE ?
+        OR lower(COALESCE(s.document_number_fmt,'')) LIKE ?
+        OR lower(COALESCE(s.numero_factura_fmt,'')) LIKE ?
+        OR lower(COALESCE(s.ncf,'')) LIKE ?
+        OR lower(COALESCE(s.customer_name,'')) LIKE ?
+        OR lower(COALESCE(s.customer_rnc,'')) LIKE ?
+        OR lower(COALESCE(s.customer_phone,'')) LIKE ?
+        OR EXISTS (
+          SELECT 1 FROM sale_items search_item
+          WHERE search_item.sale_id=s.id
+            AND (
+              lower(COALESCE(search_item.product_name,'')) LIKE ?
+              OR lower(COALESCE(search_item.product_code,'')) LIKE ?
+            )
+        )
+      )`;
+      params.push(like, like, like, like, like, like, like, like, like);
+    }
     // Paginación real: LIMIT + OFFSET. offset=0 por defecto mantiene el
     // comportamiento anterior (primera página) sin romper llamadas existentes.
     params.push(limit, offset);
     return db.prepare(`
+      WITH page_sales AS MATERIALIZED (
+        SELECT s.id
+        FROM sales s
+        ${where}
+        ORDER BY s.sale_date DESC, s.id DESC
+        LIMIT ? OFFSET ?
+      )
       SELECT s.*,
              sp.name AS salesperson_name,
              sp.code AS salesperson_code,
@@ -6522,14 +6555,13 @@ const salesRepo = {
              orig.numero_factura_fmt AS original_numero_factura_fmt,
              orig.old_id_factura     AS original_old_id_factura,
              orig.import_source      AS original_import_source
-      FROM sales s
+      FROM page_sales page
+      JOIN sales s ON s.id=page.id
       LEFT JOIN sale_items si ON s.id = si.sale_id
       LEFT JOIN sales orig    ON orig.id = s.original_sale_id
       LEFT JOIN salespeople sp ON sp.id = s.salesperson_id
-      ${where}
       GROUP BY s.id
       ORDER BY s.sale_date DESC, s.id DESC
-      LIMIT ? OFFSET ?
     `).all(...params);
   },
 
@@ -6537,27 +6569,53 @@ const salesRepo = {
    * Cuenta el total de ventas que coinciden con un filtro (sin traer filas).
    * Permite al frontend saber cuántas páginas hay para la paginación real.
    */
-  countAll({ range = 'today', customerId, method, view } = {}) {
+  countAll({ range = 'today', customerId, method, view, q = '' } = {}) {
     let where = "WHERE status != 'cancelled'";
     const params = [];
     if (view === 'sales') {
-      where += ` AND status IN ('completed','returned') AND type!='devolucion'
+      where += ` AND status IN ('completed','returned')
+        AND type!='cotizacion' AND type!='devolucion'
         AND NOT (
           type='factura'
           AND correction_kind='product_addition'
           AND original_sale_id IS NOT NULL
         )`;
+    } else if (view === 'quotes') {
+      where += ` AND type='cotizacion'`;
     }
     // Coherente con getAll: fecha operativa, no fecha técnica de creación.
     if (range === 'today') {
       where += ` AND sale_date=date('now','localtime')`;
     } else if (range === 'week') {
-      where += ` AND sale_date>=date('now','-7 days','localtime')`;
+      where += ` AND sale_date>=date('now','localtime','-7 days')`;
     } else if (range === 'month') {
-      where += ` AND strftime('%Y-%m',sale_date)=strftime('%Y-%m','now','localtime')`;
+      where += ` AND sale_date>=date('now','localtime','start of month')
+                 AND sale_date<date('now','localtime','start of month','+1 month')`;
     }
     if (customerId) { where += ' AND customer_id=?'; params.push(customerId); }
     if (method)     { where += ' AND payment_method=?'; params.push(method); }
+    const search = String(q || '').trim().toLowerCase();
+    if (search) {
+      const like = `%${search}%`;
+      where += ` AND (
+        CAST(id AS TEXT) LIKE ?
+        OR lower(COALESCE(document_number_fmt,'')) LIKE ?
+        OR lower(COALESCE(numero_factura_fmt,'')) LIKE ?
+        OR lower(COALESCE(ncf,'')) LIKE ?
+        OR lower(COALESCE(customer_name,'')) LIKE ?
+        OR lower(COALESCE(customer_rnc,'')) LIKE ?
+        OR lower(COALESCE(customer_phone,'')) LIKE ?
+        OR EXISTS (
+          SELECT 1 FROM sale_items search_item
+          WHERE search_item.sale_id=sales.id
+            AND (
+              lower(COALESCE(search_item.product_name,'')) LIKE ?
+              OR lower(COALESCE(search_item.product_code,'')) LIKE ?
+            )
+        )
+      )`;
+      params.push(like, like, like, like, like, like, like, like, like);
+    }
     const row = db.prepare(`SELECT COUNT(*) AS n FROM sales ${where}`).get(...params);
     return row ? row.n : 0;
   },
