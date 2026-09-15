@@ -640,6 +640,54 @@ ok(firstChange.correctionId > 0 && db.prepare(
   "SELECT COUNT(*) count FROM audit_logs WHERE entity='sales' AND entity_id=? AND action='fecha_operativa_venta_cambiada'"
 ).get(original.id).count >= 1, 'registra auditoría completa dentro de la transacción');
 
+console.log('\n== I. Interfaz de corrección ==');
+const salesUiSource = fs.readFileSync(path.join(__dirname, '../src/js/ventas.js'), 'utf8');
+const summaryFunctionStart = salesUiSource.indexOf('function ventasProductCorrectionSummary()');
+const refreshFunctionStart = salesUiSource.indexOf('function ventasRefreshProductCorrectionSummary()');
+const nextFunctionStart = salesUiSource.indexOf('function ventasAdjustProductCorrectionQty(', refreshFunctionStart);
+const confirmFunctionStart = salesUiSource.indexOf('function ventasConfirmProductCorrection()');
+const submitFunctionStart = salesUiSource.indexOf('async function ventasSubmitProductCorrection()', confirmFunctionStart);
+const uiElements = {
+  'vpc-line-0': { value: '1' },
+  'vpc-price-0': { value: '40000' },
+  'vpc-summary': { innerHTML: '' },
+  'vpc-payment-wrap': { style: {} },
+  'vpc-save': { disabled: true },
+  'vpc-reason': { value: 'Precio corregido' },
+  'vpc-intent': { value: 'reduction_only' },
+};
+const uiContext = {
+  window: {
+    _ventaProductCorrection: {
+      model: {
+        correctionMode: 'direct_unpaid_credit',
+        lines: [{ current_qty: 2, unit_price: 40000, tax_pct: 0 }],
+      },
+      addedItems: [],
+    },
+  },
+  document: { getElementById: id => uiElements[id] || null },
+  ventasProductLineUnitTotal: line => Number(line.unit_price || 0),
+  ventasRound2: value => Math.round(Number(value || 0) * 100) / 100,
+  ventasEsc: value => String(value),
+  fmt: value => `RD$${Number(value || 0).toFixed(2)}`,
+  confirmModal() {},
+};
+require('vm').runInNewContext(
+  `${salesUiSource.slice(summaryFunctionStart, refreshFunctionStart)}\n` +
+  salesUiSource.slice(refreshFunctionStart, nextFunctionStart) +
+  salesUiSource.slice(confirmFunctionStart, submitFunctionStart) +
+  '\nventasRefreshProductCorrectionSummary();',
+  uiContext
+);
+ok(uiElements['vpc-save'].disabled === false,
+  'habilita Revisar y aplicar cuando cambia la cantidad de una factura');
+uiElements['vpc-line-0'].value = '2';
+uiElements['vpc-price-0'].value = '0';
+require('vm').runInNewContext('ventasConfirmProductCorrection();', uiContext);
+ok(uiContext.window._ventaProductCorrection.pendingLines[0].targetUnitPrice === 0,
+  'conserva un precio corregido a cero al revisar y enviar la corrección');
+
 try { db.close(); } catch {}
 try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
 console.log(`\n== RESULTADO: ${pass} OK, ${fail} fallos ==`);

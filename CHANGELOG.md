@@ -1,5 +1,16 @@
 # Historial de versiones
 
+## 1.49.3 — 2026-09-15
+
+### Botón de corrección de facturas
+
+- «Revisar y aplicar» vuelve a habilitarse inmediatamente al cambiar una
+  cantidad o precio en la corrección de una factura.
+- La confirmación conserva exactamente el precio revisado, incluido RD$0.00,
+  sin sustituirlo silenciosamente por el precio anterior.
+- Se agregó una prueba de interfaz para evitar que un error durante el recálculo
+  deje el botón deshabilitado ante un cambio válido.
+
 ## 1.49.2 — 2026-09-15
 
 ### Correcciones de crédito y rendimiento

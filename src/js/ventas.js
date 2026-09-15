@@ -2589,8 +2589,9 @@ function ventasProductCorrectionSummary() {
     const current = Number(line.current_qty || 0);
     const originalUnit = ventasProductLineUnitTotal(line);
     const priceInput = document.getElementById(`vpc-price-${index}`);
+    const parsedUnit = Number.parseFloat(priceInput?.value);
     const unit = priceInput
-      ? Math.max(0, Number.parseFloat(priceInput.value) || 0)
+      ? (Number.isFinite(parsedUnit) ? Math.max(0, parsedUnit) : originalUnit)
       : originalUnit;
     if (Math.abs(unit - originalUnit) > 0.005) changed = true;
     const lineDifference = (target * unit) - (current * originalUnit);
@@ -2647,6 +2648,8 @@ function ventasProductCorrectionIntentChanged() {
 }
 
 function ventasRefreshProductCorrectionSummary() {
+  const state = window._ventaProductCorrection;
+  if (!state?.model) return;
   const summary = ventasProductCorrectionSummary();
   const target = document.getElementById('vpc-summary');
   if (!target) return;
@@ -2905,12 +2908,17 @@ function ventasConfirmProductCorrection() {
   if (!summary.changed) return toast('No hay cambios de productos', 'w');
   state.pendingReason = reason;
   state.pendingPaymentMethod = document.getElementById('vpc-payment-method')?.value || 'efectivo';
-  state.pendingLines = state.model.lines.map((line, index) => ({
-    sourceSaleId: Number(line.source_sale_id),
-    productId: Number(line.product_id),
-    targetQty: Math.max(0, Number.parseInt(document.getElementById(`vpc-line-${index}`)?.value, 10) || 0),
-    targetUnitPrice: Math.max(0, Number.parseFloat(document.getElementById(`vpc-price-${index}`)?.value) || ventasProductLineUnitTotal(line)),
-  }));
+  state.pendingLines = state.model.lines.map((line, index) => {
+    const parsedPrice = Number.parseFloat(document.getElementById(`vpc-price-${index}`)?.value);
+    return {
+      sourceSaleId: Number(line.source_sale_id),
+      productId: Number(line.product_id),
+      targetQty: Math.max(0, Number.parseInt(document.getElementById(`vpc-line-${index}`)?.value, 10) || 0),
+      targetUnitPrice: Number.isFinite(parsedPrice)
+        ? Math.max(0, parsedPrice)
+        : ventasProductLineUnitTotal(line),
+    };
+  });
   state.pendingAddedItems = (state.addedItems || []).map((row, index) => ({
     productId: Number(row.product.id),
     qty: Math.max(0, Number.parseInt(document.getElementById(`vpc-added-qty-${index}`)?.value, 10) || row.qty || 0),
