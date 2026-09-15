@@ -2587,14 +2587,16 @@ function ventasProductCorrectionSummary() {
     const input = document.getElementById(`vpc-line-${index}`);
     const target = Math.max(0, Number.parseInt(input?.value, 10) || 0);
     const current = Number(line.current_qty || 0);
-    const unit = ventasProductLineUnitTotal(line);
-    if (target < current) {
-      credit += (current - target) * unit;
-      changed = true;
-    } else if (target > current) {
-      addition += (target - current) * unit;
-      changed = true;
-    }
+    const originalUnit = ventasProductLineUnitTotal(line);
+    const priceInput = document.getElementById(`vpc-price-${index}`);
+    const unit = priceInput
+      ? Math.max(0, Number.parseFloat(priceInput.value) || 0)
+      : originalUnit;
+    if (Math.abs(unit - originalUnit) > 0.005) changed = true;
+    const lineDifference = (target * unit) - (current * originalUnit);
+    if (lineDifference < -0.005) credit += Math.abs(lineDifference);
+    if (lineDifference > 0.005) addition += lineDifference;
+    if (target !== current) changed = true;
   });
   (state.addedItems || []).forEach((row, index) => {
     const qty = Math.max(0, Number.parseInt(document.getElementById(`vpc-added-qty-${index}`)?.value, 10) || row.qty || 0);
@@ -2660,10 +2662,13 @@ function ventasRefreshProductCorrectionSummary() {
       <div><span class="lbl">Resultado</span><strong>${ventasEsc(netLabel)}</strong></div>
     </div>
     <div class="ts" style="margin-top:7px">
-      Velo conservará el documento original, aplicará los respaldos internos necesarios y mostrará una sola factura Ajustada en Ventas.
+      ${state.model.correctionMode === 'direct_unpaid_credit'
+        ? 'Se actualizarán esta misma factura pendiente, su balance y el inventario; no se crearán devoluciones ni facturas adicionales.'
+        : 'Velo conservará el documento original, aplicará los respaldos internos necesarios y mostrará una sola factura Ajustada en Ventas.'}
     </div>`;
   const paymentWrap = document.getElementById('vpc-payment-wrap');
-  if (paymentWrap) paymentWrap.style.display = summary.addition > 0 ? '' : 'none';
+  if (paymentWrap) paymentWrap.style.display =
+    state.model.correctionMode === 'direct_unpaid_credit' ? 'none' : (summary.addition > 0 ? '' : 'none');
   const save = document.getElementById('vpc-save');
   if (save) save.disabled = !summary.changed;
 }
@@ -2762,6 +2767,7 @@ async function openVentaProductCorrection(saleId) {
   });
   if (!response?.ok) return toast(response?.error || 'No se pudo preparar la corrección', 'err');
   const model = response.data;
+  const directAmendment = model.correctionMode === 'direct_unpaid_credit';
   window._ventaProductCorrection = {
     model,
     addedItems: [],
@@ -2789,7 +2795,12 @@ async function openVentaProductCorrection(saleId) {
             <div class="vpc-product-info">
               <strong>${ventasEsc(ventasDisplayProductName(line.product_name))}</strong>
               <div class="ts">${ventasEsc(line.product_code || '')}</div>
-              <div class="ts">Importe unitario final (ITBIS incluido): ${fmt(ventasProductLineUnitTotal(line))}</div>
+              ${directAmendment ? `
+                <label class="lbl" style="margin-top:6px">Precio unitario final (ITBIS incluido)</label>
+                <input class="inp" id="vpc-price-${index}" type="number" min="0" step="0.01"
+                  value="${ventasProductLineUnitTotal(line).toFixed(2)}" aria-label="Precio unitario corregido"
+                  oninput="ventasRefreshProductCorrectionSummary()"/>
+              ` : `<div class="ts">Importe unitario final (ITBIS incluido): ${fmt(ventasProductLineUnitTotal(line))}</div>`}
             </div>
             <div class="vpc-qty">
               <button type="button" class="btn btn-out" data-vpc-direction="reduce" onclick="ventasAdjustProductCorrectionQty(${index},-1)">−</button>
@@ -2826,9 +2837,11 @@ async function openVentaProductCorrection(saleId) {
       <div class="modal-sub">${facturaLabel(model.root)} · ajusta cantidades o agrega productos.</div>
     </div>
     <div class="vpc-scroll">
-      <div class="alrt a" style="margin-bottom:12px">
-        <div><div class="alrt-title">La factura original no se modifica</div>
-        <div class="alrt-sub">Reducir crea una nota de crédito; aumentar crea un respaldo interno vinculado. En Ventas se mantendrá una sola factura Ajustada.${fiscalWarning ? ` ${ventasEsc(fiscalWarning.message)}` : ''}</div></div>
+      <div class="alrt ${directAmendment ? 'g' : 'a'}" style="margin-bottom:12px">
+        <div><div class="alrt-title">${directAmendment ? 'Corrección directa de crédito pendiente' : 'La factura original no se modifica'}</div>
+        <div class="alrt-sub">${directAmendment
+          ? 'Como no tiene abonos ni comprobante fiscal, cantidades y precios se actualizarán en esta misma factura. El inventario y la cuenta por cobrar se ajustarán en una sola operación, sin generar devolución ni otra factura.'
+          : `Reducir crea una nota de crédito; aumentar crea un respaldo interno vinculado. En Ventas se mantendrá una sola factura Ajustada.${fiscalWarning ? ` ${ventasEsc(fiscalWarning.message)}` : ''}`}</div></div>
       </div>
       ${visibleWarnings.map(warning => `
         <div class="alrt ${warning.severity === 'high' ? 'r' : 'a'}" style="margin-bottom:8px">
@@ -2896,6 +2909,7 @@ function ventasConfirmProductCorrection() {
     sourceSaleId: Number(line.source_sale_id),
     productId: Number(line.product_id),
     targetQty: Math.max(0, Number.parseInt(document.getElementById(`vpc-line-${index}`)?.value, 10) || 0),
+    targetUnitPrice: Math.max(0, Number.parseFloat(document.getElementById(`vpc-price-${index}`)?.value) || ventasProductLineUnitTotal(line)),
   }));
   state.pendingAddedItems = (state.addedItems || []).map((row, index) => ({
     productId: Number(row.product.id),
@@ -2905,10 +2919,12 @@ function ventasConfirmProductCorrection() {
   state.pendingIntent = ventasProductCorrectionIntent();
   confirmModal(
     `<strong>Resultado de la corrección</strong><br/><br/>
-     Nota de crédito: <strong>${fmt(summary.credit)}</strong><br/>
-     Aumento aplicado: <strong>${fmt(summary.addition)}</strong><br/>
+     ${state.model.correctionMode === 'direct_unpaid_credit' ? 'Reducción del saldo' : 'Nota de crédito'}: <strong>${fmt(summary.credit)}</strong><br/>
+     ${state.model.correctionMode === 'direct_unpaid_credit' ? 'Aumento del saldo' : 'Aumento aplicado'}: <strong>${fmt(summary.addition)}</strong><br/>
      Diferencia neta: <strong>${fmt(summary.net)}</strong><br/><br/>
-     <span style="font-size:11px;color:var(--muted)">En Ventas permanecerá una sola factura marcada como Ajustada, lista para reimprimir con su estado vigente.</span>`,
+     <span style="font-size:11px;color:var(--muted)">${state.model.correctionMode === 'direct_unpaid_credit'
+       ? 'Se modificará esta misma factura pendiente y quedará una trazabilidad interna de la corrección.'
+       : 'En Ventas permanecerá una sola factura marcada como Ajustada, lista para reimprimir con su estado vigente.'}</span>`,
     () => ventasSubmitProductCorrection(),
     'Aplicar corrección',
     'btn-dark'
@@ -2931,7 +2947,9 @@ async function ventasSubmitProductCorrection() {
   });
   if (!result?.ok) return toast(result?.error || 'No se pudo aplicar la corrección', 'err');
   ventasOpenProductCorrectionResult(result, state.model.root.id);
-  toast('✓ Corrección aplicada y documentos listos para imprimir');
+  toast(result.directAmendment
+    ? '✓ Factura pendiente, inventario y balance actualizados'
+    : '✓ Corrección aplicada y documentos listos para imprimir');
   ventasRefreshAfterMutation({
     range: 'all', view: null, products: true, customers: true,
     onDone: () => {
@@ -2957,11 +2975,12 @@ function ventasOpenOriginalAfterCorrection(saleId) {
 
 function ventasOpenProductCorrectionResult(result, originalSaleId) {
   const isMonetaryCredit = result.creditKind === 'monetary';
+  const isDirect = result.directAmendment === true;
   openModal(`
-    <div class="modal-title">${isMonetaryCredit ? 'Nota de crédito emitida' : 'Corrección aplicada'}</div>
-    <div class="modal-sub">En Ventas permanece una sola factura y ahora aparece marcada como Ajustada.</div>
+    <div class="modal-title">${isMonetaryCredit ? 'Nota de crédito emitida' : isDirect ? 'Factura pendiente actualizada' : 'Corrección aplicada'}</div>
+    <div class="modal-sub">${isDirect ? 'Se conservó el mismo número de factura y no se generaron documentos comerciales adicionales.' : 'En Ventas permanece una sola factura y ahora aparece marcada como Ajustada.'}</div>
     <div class="alrt g" style="margin-bottom:12px">
-      <div><div class="alrt-title">Documentos creados correctamente</div>
+      <div><div class="alrt-title">${isDirect ? 'Corrección aplicada sin devolución ni refacturación' : 'Documentos creados correctamente'}</div>
       <div class="alrt-sub">
         Crédito: ${fmt(result.creditTotal || 0)} · Cargos agregados: ${fmt(result.additionTotal || 0)} ·
         Diferencia: ${fmt(result.netDifference || 0)}${isMonetaryCredit ? ' · Inventario sin cambios' : ''}
@@ -2988,7 +3007,9 @@ function ventasOpenProductCorrectionResult(result, originalSaleId) {
     </div>
     <div class="alrt a">
       <div><div class="alrt-title">Sin ventas duplicadas</div>
-      <div class="alrt-sub">Las notas de crédito y aumentos vinculados quedan disponibles en el historial de auditoría, pero no aparecen como ventas independientes.</div></div>
+      <div class="alrt-sub">${isDirect
+        ? 'La corrección quedó registrada en auditoría y los movimientos de inventario fueron identificados como ajustes de la factura.'
+        : 'Las notas de crédito y aumentos vinculados quedan disponibles en el historial de auditoría, pero no aparecen como ventas independientes.'}</div></div>
     </div>
     <div class="modal-foot">
       <button class="btn btn-out" onclick="ventasOpenOriginalAfterCorrection(${originalSaleId})">${svg('eye')} Ver factura ajustada</button>
@@ -3539,10 +3560,26 @@ async function exportVentasPDF() {
 // DEVOLUCIONES
 // ══════════════════════════════════════════════
 async function renderDevoluciones(el) {
-  // Devoluciones tiene su propia carga completa. No reutiliza la colección
-  // filtrada de Ventas, porque allí las notas de crédito se excluyen adrede.
+  // Consulta exclusiva y paginada: esta pantalla no debe cargar ni reemplazar
+  // el historial global de Ventas para encontrar sus notas de crédito.
   el.innerHTML = '<div class="empty"><p>Cargando devoluciones...</p></div>';
-  await reloadSales({ range: 'all' });
+  let devs = [];
+  let devCount = 0;
+  try {
+    [devs, devCount] = await Promise.all([
+      window.api.sales.getAll({ range: 'all', view: 'returns', limit: 100, offset: 0 }),
+      window.api.sales.count({ range: 'all', view: 'returns' }),
+    ]);
+  } catch (error) {
+    if (page !== 'devoluciones' || !el.isConnected) return;
+    el.innerHTML = '';
+    el.appendChild(h('div', { class: 'empty' },
+      h('p', null, 'No se pudo cargar el historial de devoluciones.'),
+      h('button', { class: 'btn btn-dark', onclick: () => renderDevoluciones(el) }, 'Reintentar')
+    ));
+    window.api?.log?.error?.('devoluciones:carga', error?.message || String(error));
+    return;
+  }
   if (page !== 'devoluciones' || !el.isConnected) return;
   el.innerHTML = '';
 
@@ -3592,10 +3629,9 @@ async function renderDevoluciones(el) {
   }
 
   // Historial devoluciones
-  const devs = DB.sales.filter(s => s.type === 'devolucion');
   const histCard = h('div', { class: 'card' });
   histCard.appendChild(h('div', { class: 'fxb mb8' },
-        h('div', { class: 'card-title' }, `Historial de créditos (${devs.length})`)
+        h('div', { class: 'card-title' }, `Historial de créditos (${Number(devCount) || 0})`)
   ));
 
   if (!devs.length) {
@@ -3613,7 +3649,7 @@ async function renderDevoluciones(el) {
       )
     );
     const tbody = h('tbody', null);
-    [...devs].reverse().forEach(d => {
+    devs.forEach(d => {
       const fecha = (d.sale_date || d.date || '').split('T')[0].split(' ')[0];
       tbody.appendChild(h('tr', { style: { background: 'var(--red-bg)' } },
         h('td', { class: 'tm' }, facturaLabel(d)),
@@ -3638,6 +3674,11 @@ async function renderDevoluciones(el) {
     tbl.appendChild(tbody);
     tw.appendChild(tbl);
     histCard.appendChild(tw);
+    if (Number(devCount) > devs.length) {
+      histCard.appendChild(h('div', { class: 'ts', style: { paddingTop: '10px' } },
+        `Mostrando las ${devs.length} devoluciones más recientes de ${devCount}. Usa la búsqueda para localizar una factura específica.`
+      ));
+    }
   }
   el.appendChild(histCard);
 }
@@ -3648,36 +3689,16 @@ async function buscarFacturaDevolucion() {
   if (!result) return;
   result.innerHTML = '<div style="color:var(--muted);font-size:12px">Buscando...</div>';
 
-  await reloadSales({ range: 'all' });
-
-  const qNum    = parseInt(q) || null;
-  const qNorm   = searchNorm(q);
-  const qDigits = digitsOf(q);
-  const matches = DB.sales.filter(s => {
-    if (s.type === 'devolucion' || s.status === 'cancelled' || s.status === 'returned') return false;
-    if (!q) return true;
-    // Cliente de la venta (para teléfono)
-    const cli = DB.customers.find(c => c.id === (s.customer_id || s.clientId));
-    return (
-      (qNum && s.id === qNum) ||
-      String(s.id).padStart(5, '0').includes(q) ||
-      String(s.id).includes(q) ||
-      matchText(s.customer_name, qNorm) ||
-      matchText(s.customer_rnc, qNorm) ||
-      matchText(s.customer_contact_name, qNorm) ||
-      matchDigits(s.customer_rnc, qDigits) ||
-      matchDigits(s.customer_contact_phone, qDigits) ||
-      matchDigits(cli?.phone, qDigits) ||
-      // Producto dentro de la factura: items[] si está cargado, si no items_summary
-      (s.items && s.items.length
-        ? s.items.some(i =>
-            matchText(i.product_name || i.name, qNorm) ||
-            matchText(i.product_code || i.code, qNorm) ||
-            matchText(DB.products.find(p => p.id === i.product_id)?.model, qNorm)
-          )
-        : matchText(s.items_summary, qNorm))
-    );
-  });
+  let matches = [];
+  try {
+    matches = await window.api.sales.getAll({
+      range: 'all', view: 'sales', q: q || '', limit: 30, offset: 0,
+    });
+  } catch (error) {
+    result.innerHTML = '<div class="alrt r"><div><div class="alrt-title">No se pudo completar la búsqueda</div><div class="alrt-sub">Intenta nuevamente; ninguna factura fue modificada.</div></div></div>';
+    window.api?.log?.error?.('devoluciones:busqueda', error?.message || String(error));
+    return;
+  }
 
   result.innerHTML = '';
 
@@ -3696,8 +3717,11 @@ async function buscarFacturaDevolucion() {
     return;
   }
 
-  for (const s of matches) {
-    const saleCompleto = await window.api.sales.getById({ id: s.id });
+  const completeMatches = await Promise.all(matches.map(async s => ({
+    summary: s,
+    detail: await window.api.sales.getById({ id: s.id }),
+  })));
+  for (const { summary: s, detail: saleCompleto } of completeMatches) {
     const items = (saleCompleto?.items || []).filter(i =>
       Number(i.returnable_qty ?? i.qty) > 0
     );

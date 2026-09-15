@@ -6410,6 +6410,8 @@ const salesRepo = {
         )`;
     } else if (view === 'quotes') {
       where += ` AND s.type='cotizacion'`;
+    } else if (view === 'returns') {
+      where += ` AND s.type='devolucion'`;
     }
     // Ventas y reportes comerciales usan la fecha operativa. created_at queda
     // reservado para auditoría técnica y jamás se refecha.
@@ -6582,6 +6584,8 @@ const salesRepo = {
         )`;
     } else if (view === 'quotes') {
       where += ` AND type='cotizacion'`;
+    } else if (view === 'returns') {
+      where += ` AND type='devolucion'`;
     }
     // Coherente con getAll: fecha operativa, no fecha técnica de creación.
     if (range === 'today') {
@@ -10312,7 +10316,7 @@ const accountingRepo = {
       // devoluciones (van por generateReturnEntry) y ventas anuladas.
       if (['cotizacion', 'devolucion'].includes(sale.type)) return null;
       if (sale.status === 'cancelled') return null;
-      if (db.prepare("SELECT id FROM accounting_entries WHERE source_module='venta' AND source_id=?").get(saleId)) return null;
+      if (db.prepare("SELECT id FROM accounting_entries WHERE source_module='venta' AND source_id=? AND status='confirmado'").get(saleId)) return null;
 
       const cfg = this.getConfig();
       const getAccId = (key, fallback) => cfg[key]?.account_id || (fallback ? db.prepare("SELECT id FROM accounting_accounts WHERE code=?").get(fallback)?.id : null);
@@ -10402,6 +10406,21 @@ const accountingRepo = {
       console.error('[accounting] Error generando asiento de venta:', e.message);
       return null;
     }
+  },
+
+  // Una factura a crédito aún no cobrada puede corregirse sobre el mismo
+  // documento. Su asiento anterior se anula y se crea el vigente con los
+  // nuevos importes; ambos quedan en la auditoría contable.
+  regenerateSaleEntry({ saleId, userId, reason } = {}) {
+    const modEnabled = db.prepare("SELECT value FROM settings WHERE key='module_contabilidad'").get()?.value;
+    if (modEnabled !== '1') return { enabled: false, reversed: 0, entry: null };
+    const reversed = this.reverseSourceEntries(
+      'venta', saleId, userId,
+      reason || 'Corrección directa de factura a crédito pendiente'
+    );
+    const entry = this.generateSaleEntry({ saleId, userId });
+    if (!entry) throw new Error('No se pudo regenerar el asiento contable de la factura corregida');
+    return { enabled: true, reversed, entry };
   },
 
   generateServiceDepositEntry({ depositId, userId } = {}) {

@@ -128,6 +128,8 @@ function ensureSaleCorrectionsSchema(db) {
 
     CREATE INDEX IF NOT EXISTS idx_sales_sale_date
       ON sales(sale_date);
+    CREATE INDEX IF NOT EXISTS idx_sales_original_type_status
+      ON sales(original_sale_id,type,status);
     CREATE INDEX IF NOT EXISTS idx_sales_fiscal_issued
       ON sales(fiscal_issued_at);
     CREATE INDEX IF NOT EXISTS idx_sale_corrections_sale
@@ -355,8 +357,69 @@ function _snapshot(sale) {
   };
 }
 
-function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
+function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo, accountingRepo }) {
   const db = () => getDb();
+  const round2 = value => Math.round((Number(value) || 0) * 100) / 100;
+
+  function paymentSummary(saleId) {
+    return db().prepare(`
+      SELECT COUNT(*) count,COALESCE(SUM(
+        CASE WHEN EXISTS(
+          SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=payments.id
+        ) THEN COALESCE((
+          SELECT SUM(pa.amount) FROM payment_allocations pa
+          WHERE pa.payment_id=payments.id AND pa.sale_id=?
+        ),0) ELSE amount END
+      ),0) total
+      FROM payments
+      WHERE COALESCE(status,'active')='active' AND (
+        (sale_id=? AND NOT EXISTS(
+          SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=payments.id
+        )) OR EXISTS(
+          SELECT 1 FROM payment_allocations pa
+          WHERE pa.payment_id=payments.id AND pa.sale_id=?
+        )
+      )
+    `).get(saleId, saleId, saleId);
+  }
+
+  function directCreditAmendmentEligibility(root, sourceSales, fiscal) {
+    const reasons = [];
+    if (String(root.payment_method || '').toLowerCase() !== 'credito') reasons.push('NOT_CREDIT');
+    const paid = paymentSummary(root.id);
+    if (Number(paid.count || 0) > 0 || Number(paid.total || 0) > 0.005) reasons.push('HAS_PAYMENT');
+    if (String(root.ncf || '').trim() || fiscal || root.fiscal_issued_at) reasons.push('FISCAL_ISSUED');
+    if (Number(root.trade_in_amount || 0) > 0 || Number(root.prepaid_amount || 0) > 0) reasons.push('HAS_PREPAYMENT');
+    if (String(root.import_source || '').trim() || root.source_balance != null) reasons.push('HISTORICAL_IMPORT');
+    if (root.cash_session_id) {
+      const cash = db().prepare('SELECT status FROM cash_sessions WHERE id=?').get(root.cash_session_id);
+      if (cash?.status === 'closed') reasons.push('CLOSED_CASH');
+    }
+    if (closedPeriodForDate(root.sale_date)) reasons.push('CLOSED_ACCOUNTING_PERIOD');
+    if (sourceSales.length !== 1) reasons.push('HAS_SUPPLEMENT');
+    const related = db().prepare(`
+      SELECT COUNT(*) count FROM sales
+      WHERE original_sale_id=? AND status!='cancelled'
+        AND (type='devolucion' OR correction_kind='product_addition')
+    `).get(root.id);
+    if (Number(related?.count || 0) > 0) reasons.push('HAS_COMPENSATING_DOCUMENT');
+    const serialized = db().prepare(`
+      SELECT COUNT(*) count FROM sale_items si
+      LEFT JOIN products p ON p.id=si.product_id
+      WHERE si.sale_id=? AND (si.product_unit_id IS NOT NULL OR COALESCE(p.serialized,0)=1)
+    `).get(root.id);
+    if (Number(serialized?.count || 0) > 0) reasons.push('HAS_SERIALIZED_UNITS');
+    if (_tableExists(db(), 'delivery_note_invoice_links')) {
+      const linked = db().prepare('SELECT COUNT(*) count FROM delivery_note_invoice_links WHERE invoice_id=?').get(root.id);
+      if (Number(linked?.count || 0) > 0) reasons.push('HAS_DELIVERY_NOTE');
+    }
+    if (commissionLinks(root.id).length) reasons.push('HAS_COMMISSION_RUN');
+    return {
+      eligible: reasons.length === 0,
+      reasons,
+      paymentAmount: round2(paid.total),
+    };
+  }
 
   function userById(userId) {
     return db().prepare('SELECT id,name,role,active FROM users WHERE id=?').get(Number(userId));
@@ -919,6 +982,7 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
       FROM products WHERE active=1 ORDER BY name,id
     `).all();
     const fiscal = ecfState(root.id);
+    const directAmendment = directCreditAmendmentEligibility(root, sourceSales, fiscal);
     const warnings = [];
     if (fiscal) {
       warnings.push({
@@ -940,6 +1004,13 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
         message: 'Para los aumentos debes escoger un método simple; las reducciones conservan la trazabilidad del pago original.',
       });
     }
+    if (directAmendment.eligible) {
+      warnings.unshift({
+        code: 'DIRECT_UNPAID_CREDIT_AMENDMENT',
+        severity: 'info',
+        message: 'Esta factura a crédito no tiene abonos ni comprobante fiscal: se corregirá directamente, sin crear otra factura ni una devolución.',
+      });
+    }
 
     return {
       root: { ...root, administrative_data: _json(root.administrative_data, {}) },
@@ -947,6 +1018,8 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
       lines,
       products,
       warnings,
+      correctionMode: directAmendment.eligible ? 'direct_unpaid_credit' : 'compensating_documents',
+      directAmendment,
       permissions: SALE_CORRECTION_PERMISSIONS.filter(permission => hasPermission(user, permission)),
     };
   }
@@ -1007,40 +1080,56 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
       const sourceSaleId = Number(row?.sourceSaleId);
       const productId = Number(row?.productId);
       const targetQty = Number(row?.targetQty);
+      const targetUnitPrice = row?.targetUnitPrice == null || row?.targetUnitPrice === ''
+        ? null : Number(row.targetUnitPrice);
       if (!Number.isInteger(sourceSaleId) || !Number.isInteger(productId) ||
           !Number.isInteger(targetQty) || targetQty < 0 || targetQty > 999999) {
         throw new Error('Hay una cantidad de producto inválida');
       }
+      if (targetUnitPrice != null &&
+          (!Number.isFinite(targetUnitPrice) || targetUnitPrice < 0 || targetUnitPrice > 999999999)) {
+        throw new Error('Hay un precio de producto inválido');
+      }
       const lineKey = `${sourceSaleId}:${productId}`;
       if (requestedLines.has(lineKey)) throw new Error('Hay una línea de producto duplicada');
-      requestedLines.set(lineKey, targetQty);
+      requestedLines.set(lineKey, {
+        targetQty,
+        targetUnitPrice: targetUnitPrice == null ? null : round2(targetUnitPrice),
+      });
     }
 
     const reductionsBySale = new Map();
     const additionRows = [];
+    let hasPriceChange = false;
     for (const current of beforeModel.lines) {
       const lineKey = `${current.source_sale_id}:${current.product_id}`;
-      const targetQty = requestedLines.has(lineKey)
-        ? requestedLines.get(lineKey)
+      const requested = requestedLines.get(lineKey);
+      const targetQty = requested
+        ? requested.targetQty
         : Number(current.current_qty);
       const delta = targetQty - Number(current.current_qty);
+      const originalQty = Number(current.original_qty || 0);
+      const snapshotTotal = Number(current.net_subtotal || 0) + Number(current.tax_amt || 0);
+      const historicalUnitPrice = originalQty > 0 && snapshotTotal >= 0
+        ? round2(snapshotTotal / originalQty)
+        : round2(current.unit_price || 0);
+      if (requested?.targetUnitPrice != null &&
+          Math.abs(requested.targetUnitPrice - historicalUnitPrice) > 0.005) {
+        hasPriceChange = true;
+      }
       if (delta < 0) {
         const group = reductionsBySale.get(Number(current.source_sale_id)) || [];
         group.push({ product_id: Number(current.product_id), qty: Math.abs(delta) });
         reductionsBySale.set(Number(current.source_sale_id), group);
       } else if (delta > 0) {
-        const originalQty = Number(current.original_qty || 0);
-        const snapshotTotal = Number(current.net_subtotal || 0) + Number(current.tax_amt || 0);
-        const historicalUnitPrice = originalQty > 0 && snapshotTotal > 0
-          ? Math.round((snapshotTotal / originalQty) * 100) / 100
-          : Number(current.unit_price || 0);
         additionRows.push({
           product_id: Number(current.product_id),
           qty: delta,
-          unit_price: historicalUnitPrice,
+          unit_price: requested?.targetUnitPrice ?? historicalUnitPrice,
           taxable: current.taxable,
           tax_pct: current.tax_pct,
           price_source: 'historical',
+          existing_line: true,
         });
       }
     }
@@ -1060,6 +1149,7 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
         qty,
         unit_price: Math.round(unitPrice * 100) / 100,
         price_source: 'current_or_authorized',
+        existing_line: false,
       });
     }
 
@@ -1072,8 +1162,217 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
       throw new Error('Esta corrección es un aumento y no puede reducir productos');
     }
 
-    if (!reductionsBySale.size && !additionRows.length) {
+    if (!reductionsBySale.size && !additionRows.length && !hasPriceChange) {
       throw new Error('No hay cambios de productos para aplicar');
+    }
+
+    if (beforeModel.directAmendment?.eligible) {
+      return db().transaction(() => {
+        const duplicate = db().prepare('SELECT * FROM sale_corrections WHERE idempotency_key=?').get(key);
+        if (duplicate) {
+          const metadata = _json(duplicate.metadata, {});
+          return {
+            idempotent: true,
+            correctionId: duplicate.id,
+            directAmendment: true,
+            returnIds: [], additionSaleId: null,
+            creditTotal: metadata.creditTotal || 0,
+            additionTotal: metadata.additionTotal || 0,
+            netDifference: metadata.netDifference || 0,
+          };
+        }
+        const lockedRoot = db().prepare('SELECT * FROM sales WHERE id=?').get(beforeRoot.id);
+        if (!lockedRoot || Number(lockedRoot.revision || 0) !== Number(beforeRoot.revision || 0)) {
+          const error = new Error('La factura fue modificada por otro usuario. Recarga la corrección antes de continuar.');
+          error.code = 'CONFLICT';
+          throw error;
+        }
+        const stillEligible = directCreditAmendmentEligibility(
+          lockedRoot,
+          db().prepare(`SELECT * FROM sales WHERE id=? OR (
+            original_sale_id=? AND type='factura' AND correction_kind='product_addition' AND status!='cancelled'
+          )`).all(lockedRoot.id, lockedRoot.id),
+          ecfState(lockedRoot.id)
+        );
+        if (!stillEligible.eligible) {
+          const error = new Error('La factura recibió un pago, documento fiscal o vínculo mientras se corregía. Recarga antes de continuar.');
+          error.code = 'CONFLICT';
+          throw error;
+        }
+
+        const discountPct = Math.max(0, Math.min(99.99, Number(lockedRoot.discount_pct || 0)));
+        const discountFactor = 1 - (discountPct / 100);
+        const desiredByProduct = new Map();
+        for (const current of beforeModel.lines) {
+          const lineKey = `${current.source_sale_id}:${current.product_id}`;
+          const requested = requestedLines.get(lineKey);
+          const qty = requested ? requested.targetQty : Number(current.current_qty || 0);
+          if (!qty) continue;
+          const originalQty = Number(current.original_qty || 0);
+          const originalFinal = originalQty > 0
+            ? round2((Number(current.net_subtotal || 0) + Number(current.tax_amt || 0)) / originalQty)
+            : round2(current.unit_price || 0);
+          desiredByProduct.set(Number(current.product_id), {
+            product_id: Number(current.product_id), qty,
+            final_price: requested?.targetUnitPrice ?? originalFinal,
+            taxable: Number(current.taxable) === 0 ? 0 : 1,
+            tax_pct: Math.max(0, Number(current.tax_pct || 0)),
+          });
+        }
+        for (const row of additionRows) {
+          if (row.existing_line) continue;
+          if (desiredByProduct.has(Number(row.product_id))) {
+            const current = desiredByProduct.get(Number(row.product_id));
+            current.qty += Number(row.qty || 0);
+            current.final_price = round2(row.unit_price);
+          } else {
+            desiredByProduct.set(Number(row.product_id), {
+              product_id: Number(row.product_id), qty: Number(row.qty),
+              final_price: round2(row.unit_price), taxable: row.taxable, tax_pct: row.tax_pct,
+            });
+          }
+        }
+        const desired = [...desiredByProduct.values()];
+        if (!desired.length) throw new Error('La factura debe conservar al menos un producto');
+
+        const oldItems = db().prepare('SELECT * FROM sale_items WHERE sale_id=? ORDER BY id').all(lockedRoot.id);
+        const oldQty = new Map();
+        oldItems.forEach(item => oldQty.set(Number(item.product_id),
+          (oldQty.get(Number(item.product_id)) || 0) + Number(item.qty || 0)));
+        const prepared = desired.map(row => {
+          const product = db().prepare(`
+            SELECT id,code,name,cost,taxable,tax_pct,stock,active,COALESCE(serialized,0) serialized
+            FROM products WHERE id=?
+          `).get(row.product_id);
+          if (!product || product.active !== 1 || product.serialized) {
+            throw new Error('Uno de los productos no está disponible para corrección directa');
+          }
+          const addedQty = Number(row.qty) - Number(oldQty.get(product.id) || 0);
+          if (addedQty > Number(product.stock || 0)) {
+            throw new Error(`Stock disponible insuficiente para "${product.name}"`);
+          }
+          const finalPrice = round2(row.final_price);
+          const storedPrice = round2(finalPrice / discountFactor);
+          const lineFinal = round2(finalPrice * row.qty);
+          const taxable = row.taxable == null ? (Number(product.taxable) === 0 ? 0 : 1) : (Number(row.taxable) === 0 ? 0 : 1);
+          const taxPct = taxable ? Math.max(0, Math.min(100, Number(row.tax_pct ?? product.tax_pct) || 0)) : 0;
+          const net = taxable && taxPct > 0 ? round2(lineFinal / (1 + taxPct / 100)) : lineFinal;
+          return {
+            product_id: product.id, product_code: product.code, product_name: product.name,
+            unit_cost: round2(product.cost), unit_price: storedPrice, qty: Number(row.qty),
+            subtotal: round2(storedPrice * row.qty), taxable, tax_pct: taxPct,
+            tax_amt: round2(lineFinal - net), net_subtotal: net, line_final: lineFinal,
+          };
+        });
+
+        const itemTotal = round2(prepared.reduce((sum, row) => sum + row.line_final, 0));
+        const taxAmt = round2(prepared.reduce((sum, row) => sum + row.tax_amt, 0));
+        const grossSubtotal = round2(prepared.reduce((sum, row) => sum + row.subtotal, 0));
+        const discountAmt = round2(grossSubtotal - itemTotal);
+        const charges = round2(lockedRoot.additional_charges_total || 0);
+        const newTotal = round2(itemTotal + charges);
+        const newSubtotal = round2(itemTotal - taxAmt);
+        const delta = round2(newTotal - Number(lockedRoot.total || 0));
+
+        const customer = db().prepare('SELECT balance,credit_limit FROM customers WHERE id=?').get(lockedRoot.customer_id);
+        if (!customer) throw new Error('Cliente no encontrado');
+        const newBalance = round2(Number(customer.balance || 0) + delta);
+        if (newBalance < -0.005) throw new Error('La corrección produciría un balance de cliente inconsistente');
+        if (delta > 0.005 && Number(customer.credit_limit || 0) > 0 &&
+            newBalance > Number(customer.credit_limit) + 0.005) {
+          throw new Error('La corrección supera el límite de crédito disponible del cliente');
+        }
+
+        const movementIds = [];
+        const allProductIds = new Set([...oldQty.keys(), ...prepared.map(row => row.product_id)]);
+        for (const productId of allProductIds) {
+          const beforeQty = Number(oldQty.get(productId) || 0);
+          const afterQty = Number(prepared.find(row => row.product_id === productId)?.qty || 0);
+          const stockDelta = beforeQty - afterQty;
+          if (!stockDelta) continue;
+          const product = db().prepare('SELECT stock FROM products WHERE id=?').get(productId);
+          const stockBefore = Number(product?.stock || 0);
+          const stockAfter = stockBefore + stockDelta;
+          if (stockAfter < 0) throw new Error('Stock insuficiente para aplicar la corrección');
+          db().prepare("UPDATE products SET stock=?,updated_at=datetime('now','localtime') WHERE id=?")
+            .run(stockAfter, productId);
+          const movement = db().prepare(`
+            INSERT INTO inventory_movements(
+              product_id,type,qty,qty_before,qty_after,reason,sale_id,user_id,operational_sale_date
+            ) VALUES(?,'ajuste',?,?,?,?,?,?,?)
+          `).run(productId, stockDelta, stockBefore, stockAfter,
+            `Corrección directa de factura a crédito ${lockedRoot.document_number_fmt || '#' + lockedRoot.id}: ${cleanReason}`,
+            lockedRoot.id, requester.id, lockedRoot.sale_date);
+          movementIds.push(Number(movement.lastInsertRowid));
+        }
+
+        db().prepare('DELETE FROM sale_items WHERE sale_id=?').run(lockedRoot.id);
+        const insertItem = db().prepare(`
+          INSERT INTO sale_items(
+            sale_id,product_id,product_code,product_name,unit_cost,unit_price,qty,subtotal,
+            taxable,tax_pct,tax_amt,net_subtotal,product_unit_id
+          ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,NULL)
+        `);
+        prepared.forEach(row => insertItem.run(
+          lockedRoot.id,row.product_id,row.product_code,row.product_name,row.unit_cost,row.unit_price,
+          row.qty,row.subtotal,row.taxable,row.tax_pct,row.tax_amt,row.net_subtotal
+        ));
+        const changed = db().prepare(`
+          UPDATE sales SET subtotal=?,discount_amt=?,tax_amt=?,total=?,
+            revision=revision+1,updated_at=datetime('now','localtime')
+          WHERE id=? AND revision=?
+        `).run(newSubtotal, discountAmt, taxAmt, newTotal, lockedRoot.id, lockedRoot.revision || 0);
+        if (changed.changes !== 1) {
+          const error = new Error('La factura fue modificada por otro usuario. Recarga la corrección antes de continuar.');
+          error.code = 'CONFLICT';
+          throw error;
+        }
+        db().prepare("UPDATE customers SET balance=?,updated_at=datetime('now','localtime') WHERE id=?")
+          .run(Math.max(0, newBalance), lockedRoot.customer_id);
+        if (lockedRoot.cash_session_id) {
+          db().prepare('UPDATE cash_sessions SET sales_total=MAX(0,ROUND(sales_total+?,2)) WHERE id=?')
+            .run(delta, lockedRoot.cash_session_id);
+        }
+
+        const afterModel = productCorrectionModel(lockedRoot.id, requester.id);
+        const creditTotal = delta < 0 ? Math.abs(delta) : 0;
+        const additionTotal = delta > 0 ? delta : 0;
+        const metadata = {
+          directAmendment: true, returnIds: [], additionSaleId: null,
+          creditTotal, additionTotal, overpayment: 0, netDifference: delta,
+          correctionIntent: intent, previousTotal: Number(lockedRoot.total || 0), newTotal,
+          priceChanged: hasPriceChange, originalFiscalDocumentPreserved: false,
+        };
+        const correction = db().prepare(`
+          INSERT INTO sale_corrections(
+            sale_id,action,status,reason,requested_by,authorized_by,cash_session_id,
+            terminal_id,idempotency_key,before_data,after_data,affected_modules,metadata
+          ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+        `).run(
+          lockedRoot.id,'correct_products','applied',cleanReason,requester.id,requester.id,
+          session?.id || lockedRoot.cash_session_id || null,String(terminalId || '').slice(0,120),key,
+          _serialize({ sale:_snapshot(lockedRoot), items:oldItems }),
+          _serialize({ sale:_snapshot(afterModel.root), items:prepared }),
+          _serialize(['sales','inventory','accounts_receivable','accounting','reports']),
+          _serialize(metadata)
+        );
+        const correctionId = Number(correction.lastInsertRowid);
+        if (movementIds.length) {
+          const placeholders = movementIds.map(() => '?').join(',');
+          db().prepare(`UPDATE inventory_movements SET correction_id=? WHERE id IN (${placeholders})`)
+            .run(correctionId, ...movementIds);
+        }
+        const now = db().prepare("SELECT datetime('now','localtime') value").get().value;
+        db().prepare(`
+          INSERT INTO audit_logs(user_id,user_name,action,entity,entity_id,detail,created_at)
+          VALUES(?,?,?,?,?,?,?)
+        `).run(requester.id,requester.name,'factura_credito_pendiente_corregida','sales',lockedRoot.id,
+          _serialize({ correctionId,reason:cleanReason,...metadata }),now);
+        return {
+          idempotent:false,correctionId,directAmendment:true,returnIds:[],additionSaleId:null,
+          creditTotal,additionTotal,overpayment:0,netDifference:delta,data:afterModel.root,
+        };
+      })();
     }
     if (reductionsBySale.size) {
       requirePermission(requester, 'sales.request_return');

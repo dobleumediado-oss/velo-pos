@@ -54,6 +54,15 @@ try {
       'efectivo', 'COT-0000001', '', '2026-09-15', '2026-09-15', '2026-09-15 12:00:00'
     );
     insertItem.run(quote.lastInsertRowid, 'COT-SKU', 'PRODUCTO COTIZADO', 25, 50, 1, 50);
+    for (let i = 1; i <= 300; i += 1) {
+      const day = String((i % 28) + 1).padStart(2, '0');
+      const result = insertSale.run(
+        `CLIENTE DEVOLUCION ${i}`, `DEV-${i}`, 'devolucion', 'completed', 25, 29.50,
+        'efectivo', `NCR-${String(i).padStart(7, '0')}`, '',
+        `${currentMonth}-${day}`, `${currentMonth}-${day}`, `${currentMonth}-${day} 14:00:00`
+      );
+      insertItem.run(result.lastInsertRowid, `DEV-SKU-${i}`, `DEVUELTO ${i}`, 10, 29.50, 1, 29.50);
+    }
   });
   seed();
 
@@ -102,6 +111,15 @@ try {
   const quotes = DB.salesRepo.getAll({ range:'all', view:'quotes', limit:100, offset:0 });
   ok(quotes.length === 1 && quotes[0].type === 'cotizacion',
     'Cotizaciones usa el mismo paginado sin mezclarse con facturas');
+
+  const returnsStarted = process.hrtime.bigint();
+  const returnsPage = DB.salesRepo.getAll({ range:'all', view:'returns', limit:100, offset:0 });
+  const returnsElapsedMs = Number(process.hrtime.bigint() - returnsStarted) / 1e6;
+  ok(returnsPage.length === 100 && returnsPage.every(row => row.type === 'devolucion') &&
+    DB.salesRepo.countAll({ range:'all', view:'returns' }) === 300,
+    'Devoluciones carga solo su primera página y conserva el contador completo');
+  ok(returnsElapsedMs < 1000,
+    `Devoluciones queda bajo 1 s con historial abundante (${returnsElapsedMs.toFixed(1)} ms)`);
 
   const plan = db.prepare(`
     EXPLAIN QUERY PLAN

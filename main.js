@@ -3510,6 +3510,13 @@ ipcMain.handle('sales:corrections:correctProducts', async (_, data = {}) => {
         userId: data.requestUserId,
       }));
     }
+    if (result.directAmendment && !result.idempotent) {
+      _acctHook(() => accountingRepo.regenerateSaleEntry({
+        saleId: result.data?.id || data.id,
+        userId: data.requestUserId,
+        reason: `Corrección directa: ${String(data.reason || '').trim()}`,
+      }));
+    }
     return { ok: true, ...result };
   } catch (e) {
     console.error('[sales:corrections:correctProducts]', e);

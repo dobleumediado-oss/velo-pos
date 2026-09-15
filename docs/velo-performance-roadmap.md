@@ -116,6 +116,50 @@ Si una operación supera el límite, se registra qué consulta o render fue lent
   no existe migración de datos que revertir porque el cambio solo modifica cómo
   se consultan y muestran documentos ya existentes.
 
+## Ronda Corrección de crédito y Devoluciones — 15 de septiembre de 2026
+
+### Problema confirmado
+
+- Corregir una factura a crédito todavía sin abonos podía crear una factura
+  complementaria al aumentar o una devolución/nota de crédito al reducir. Eso
+  duplicaba documentos comerciales para corregir un error antes de cobrar.
+- Devoluciones cargaba el historial completo de Ventas antes de pintar su
+  pantalla. Además, las subconsultas de ajustes repetían recorridos de las notas
+  de crédito: con 2,500 facturas y 300 devoluciones la primera página llegó a
+  20.3 segundos.
+
+### Ruta segura aplicada
+
+- Una factura a crédito sin abonos, NCF/e-CF, equipos serializados, conduce,
+  anticipo, trade-in, comisión liquidada ni documentos compensatorios se puede
+  corregir directamente. Conserva número y fecha; actualiza cantidades, precios,
+  ITBIS, total, inventario y CxC dentro de una sola transacción y registra la
+  corrección en auditoría.
+- Si ya hubo cobro o compromiso documental/fiscal, Velo mantiene la ruta de nota
+  de crédito y complemento. Una corrección nunca se disfraza de devolución en
+  la ruta directa; sus movimientos de inventario se identifican como `ajuste`.
+- El asiento de la factura corregida se retira de los libros vigentes y se genera
+  nuevamente con el total y costo actuales, conservando el asiento anterior
+  anulado para auditoría.
+- Devoluciones usa `view: returns`, primera página de 100 y contador independiente.
+  Buscar facturas consulta SQLite directamente y ya no reemplaza `DB.sales`.
+- Se agregó el índice `sales(original_sale_id,type,status)` para que los ajustes
+  relacionados no obliguen a recorrer todo el historial por cada factura.
+
+### Medición y seguridad
+
+- Prueba sintética: “Ver todas” bajó de 20.3 s a 10.8 ms y Devoluciones quedó en
+  5.9 ms con 2,500 facturas y 300 devoluciones. Las consultas no cambiaron ventas,
+  totales ni líneas.
+- 84 pruebas de correcciones verifican ahora edición directa de cantidad, precio
+  y producto, balance, inventario, contabilidad, idempotencia y retorno automático
+  a documentos compensatorios después de un abono.
+- Las suites financiera (199), POS (29), flujo comercial (17), serializados (10),
+  recibos de ingreso (13), clientes, caja y carga resiliente permanecen verdes.
+- No se eliminan automáticamente documentos históricos ya emitidos por versiones
+  anteriores. Cualquier reparación de esos casos requiere identificar la factura
+  exacta y validar primero pagos, inventario, fiscalidad y contabilidad.
+
 ## Ronda documental del POS — 26 de agosto de 2026
 
 ### Problema y resultado esperado

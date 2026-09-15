@@ -457,6 +457,79 @@ ok(db.prepare(`
   DB.salesRepo.getById(rollbackSource.saleId).revision === rollbackModel.root.revision,
   'un fallo mixto no deja documentos parciales ni avanza la revisión');
 
+console.log('\n== F2. Corrección directa de crédito pendiente ==');
+const directSource = DB.salesRepo.create({
+  customer: { id: customerId },
+  items: [{
+    product_id: productId, product_code: 'COR-001', product_name: 'Producto corrección',
+    unit_cost: 60, unit_price: 118, taxable: 1, tax_pct: 18, qty: 3,
+  }],
+  payment: { method: 'credito', saleDate: '2025-07-13', ncfType: '' },
+  session: { id: cashId }, user: admin, type: 'factura',
+});
+const directBefore = DB.salesRepo.getById(directSource.saleId);
+const directBalanceBefore = db.prepare('SELECT balance FROM customers WHERE id=?').get(customerId).balance;
+const directStockBefore = db.prepare('SELECT stock FROM products WHERE id=?').get(productId).stock;
+const directAddedStockBefore = db.prepare('SELECT stock FROM products WHERE id=?').get(addedProductId).stock;
+const directModel = DB.saleCorrectionsRepo.productCorrectionModel(directSource.saleId, admin.id);
+ok(directModel.correctionMode === 'direct_unpaid_credit' && directModel.directAmendment.eligible,
+  'detecta crédito sin abonos ni comprobante para corrección directa');
+const directEntryBefore = DB.accountingRepo.generateSaleEntry({ saleId: directSource.saleId, userId: admin.id });
+const directKey = `products-direct-credit-${directSource.saleId}-${Date.now()}`;
+const directResult = DB.saleCorrectionsRepo.correctProducts({
+  saleId: directSource.saleId,
+  lines: directModel.lines.map(line => ({
+    sourceSaleId: line.source_sale_id,
+    productId: line.product_id,
+    targetQty: 2,
+    targetUnitPrice: 100,
+  })),
+  addedItems: [{ productId: addedProductId, qty: 1, unitPrice: 59 }],
+  reason: 'Corregir cantidad precio y producto pendiente',
+  userId: admin.id,
+  expectedRevision: directModel.root.revision,
+  idempotencyKey: directKey,
+  session: { id: cashId },
+  additionPaymentMethod: 'credito',
+  correctionIntent: 'mixed',
+});
+const directAfter = DB.salesRepo.getById(directSource.saleId);
+ok(directResult.directAmendment && directResult.returnIds.length === 0 && !directResult.additionSaleId,
+  'corrige sobre la misma factura sin devolución ni factura complementaria');
+ok(directAfter.id === directBefore.id && directAfter.total === 259 &&
+  directAfter.items.some(item => item.product_id === productId && item.qty === 2 && item.unit_price === 100) &&
+  directAfter.items.some(item => item.product_id === addedProductId && item.qty === 1 && item.unit_price === 59),
+  'actualiza cantidad, producto y precio final conservando el número de factura');
+ok(db.prepare('SELECT stock FROM products WHERE id=?').get(productId).stock === directStockBefore + 1 &&
+  db.prepare('SELECT stock FROM products WHERE id=?').get(addedProductId).stock === directAddedStockBefore - 1,
+  'restaura y descuenta solo las diferencias de inventario');
+ok(db.prepare('SELECT balance FROM customers WHERE id=?').get(customerId).balance ===
+  Math.round((directBalanceBefore + directAfter.total - directBefore.total) * 100) / 100,
+  'ajusta la cuenta por cobrar por la diferencia neta exacta');
+ok(db.prepare(`SELECT COUNT(*) count FROM sales WHERE original_sale_id=? AND status!='cancelled'`).get(directSource.saleId).count === 0 &&
+  db.prepare(`SELECT COUNT(*) count FROM inventory_movements WHERE sale_id=? AND type='ajuste' AND correction_id=?`).get(directSource.saleId, directResult.correctionId).count === 2,
+  'no contamina Devoluciones y deja movimientos de ajuste auditados');
+const regenerated = DB.accountingRepo.regenerateSaleEntry({
+  saleId: directSource.saleId, userId: admin.id, reason: 'Prueba corrección directa',
+});
+ok(!directEntryBefore || (regenerated.enabled && regenerated.reversed === 1 &&
+  db.prepare("SELECT COUNT(*) count FROM accounting_entries WHERE source_module='venta' AND source_id=? AND status='confirmado'").get(directSource.saleId).count === 1),
+  'reversa el asiento anterior y conserva un solo asiento contable vigente');
+const directAgain = DB.saleCorrectionsRepo.correctProducts({
+  saleId: directSource.saleId, lines: [], addedItems: [],
+  reason: 'Corregir cantidad precio y producto pendiente', userId: admin.id,
+  expectedRevision: directModel.root.revision, idempotencyKey: directKey,
+  session: { id: cashId }, correctionIntent: 'mixed',
+});
+ok(directAgain.idempotent && directAgain.correctionId === directResult.correctionId,
+  'doble confirmación directa no duplica inventario ni modificaciones');
+db.prepare(`INSERT INTO payments(customer_id,sale_id,amount,method,note,cajero,user_id,cash_session_id)
+  VALUES(?,?,?,?,?,?,?,?)`).run(customerId,directSource.saleId,10,'transferencia','Abono posterior',admin.name,admin.id,cashId);
+const directAfterPayment = DB.saleCorrectionsRepo.productCorrectionModel(directSource.saleId, admin.id);
+ok(directAfterPayment.correctionMode === 'compensating_documents' &&
+  directAfterPayment.directAmendment.reasons.includes('HAS_PAYMENT'),
+  'si ya existe un abono bloquea la mutación directa y exige documentos compensatorios');
+
 console.log('\n== G. Nota de crédito monetaria sin devolución física ==');
 const monetarySource = createSale({ date: '2025-07-15', method: 'efectivo', qty: 2 });
 const monetaryModel = DB.saleCorrectionsRepo.monetaryCreditModel(monetarySource.saleId, admin.id);
