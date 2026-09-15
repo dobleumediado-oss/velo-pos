@@ -682,6 +682,21 @@ require('vm').runInNewContext(
 );
 ok(uiElements['vpc-save'].disabled === false,
   'habilita Revisar y aplicar cuando cambia la cantidad de una factura');
+ok(uiElements['vpc-summary'].innerHTML.includes('Saldo pendiente disminuye RD$40000.00'),
+  'reducir cantidad explica que disminuye el saldo pendiente, sin prometer reembolso');
+uiElements['vpc-line-0'].value = '3';
+require('vm').runInNewContext('ventasRefreshProductCorrectionSummary();', uiContext);
+ok(uiElements['vpc-summary'].innerHTML.includes('Saldo pendiente aumenta RD$40000.00'),
+  'aumentar cantidad explica que aumenta el saldo pendiente');
+uiElements['vpc-line-0'].value = '2';
+uiElements['vpc-price-0'].value = '35000';
+require('vm').runInNewContext('ventasRefreshProductCorrectionSummary();', uiContext);
+ok(uiElements['vpc-summary'].innerHTML.includes('Saldo pendiente disminuye RD$10000.00'),
+  'disminuir precio explica la reducción exacta del saldo pendiente');
+uiElements['vpc-price-0'].value = '45000';
+require('vm').runInNewContext('ventasRefreshProductCorrectionSummary();', uiContext);
+ok(uiElements['vpc-summary'].innerHTML.includes('Saldo pendiente aumenta RD$10000.00'),
+  'aumentar precio explica el incremento exacto del saldo pendiente');
 uiElements['vpc-line-0'].value = '2';
 uiElements['vpc-price-0'].value = '0';
 require('vm').runInNewContext('ventasConfirmProductCorrection();', uiContext);

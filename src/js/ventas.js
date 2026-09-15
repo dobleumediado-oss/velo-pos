@@ -2653,25 +2653,32 @@ function ventasRefreshProductCorrectionSummary() {
   const summary = ventasProductCorrectionSummary();
   const target = document.getElementById('vpc-summary');
   if (!target) return;
-  const netLabel = summary.net > 0
-    ? `Cliente paga ${fmt(summary.net)} más`
-    : summary.net < 0
-      ? `Cliente recibe crédito/reembolso de ${fmt(Math.abs(summary.net))}`
-      : 'La diferencia neta es cero';
+  const directAmendment = state.model.correctionMode === 'direct_unpaid_credit';
+  const netLabel = directAmendment
+    ? (summary.net > 0
+        ? `Saldo pendiente aumenta ${fmt(summary.net)}`
+        : summary.net < 0
+          ? `Saldo pendiente disminuye ${fmt(Math.abs(summary.net))}`
+          : 'El saldo pendiente no cambia')
+    : (summary.net > 0
+        ? `Cliente paga ${fmt(summary.net)} más`
+        : summary.net < 0
+          ? `Cliente recibe crédito/reembolso de ${fmt(Math.abs(summary.net))}`
+          : 'La diferencia neta es cero');
   target.innerHTML = `
     <div class="g3">
-      <div><span class="lbl">A favor del cliente</span><strong style="color:var(--red)">-${fmt(summary.credit)}</strong></div>
-      <div><span class="lbl">Productos agregados</span><strong style="color:var(--green)">${fmt(summary.addition)}</strong></div>
+      <div><span class="lbl">${directAmendment ? 'Disminución del saldo' : 'A favor del cliente'}</span><strong style="color:var(--red)">-${fmt(summary.credit)}</strong></div>
+      <div><span class="lbl">${directAmendment ? 'Aumento del saldo' : 'Productos agregados'}</span><strong style="color:var(--green)">${fmt(summary.addition)}</strong></div>
       <div><span class="lbl">Resultado</span><strong>${ventasEsc(netLabel)}</strong></div>
     </div>
     <div class="ts" style="margin-top:7px">
-      ${state.model.correctionMode === 'direct_unpaid_credit'
+      ${directAmendment
         ? 'Se actualizarán esta misma factura pendiente, su balance y el inventario; no se crearán devoluciones ni facturas adicionales.'
         : 'Velo conservará el documento original, aplicará los respaldos internos necesarios y mostrará una sola factura Ajustada en Ventas.'}
     </div>`;
   const paymentWrap = document.getElementById('vpc-payment-wrap');
   if (paymentWrap) paymentWrap.style.display =
-    state.model.correctionMode === 'direct_unpaid_credit' ? 'none' : (summary.addition > 0 ? '' : 'none');
+    directAmendment ? 'none' : (summary.addition > 0 ? '' : 'none');
   const save = document.getElementById('vpc-save');
   if (save) save.disabled = !summary.changed;
 }

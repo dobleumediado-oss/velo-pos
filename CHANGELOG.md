@@ -1,5 +1,14 @@
 # Historial de versiones
 
+## 1.49.4 — 2026-09-15
+
+### Resultado claro al corregir créditos pendientes
+
+- Al reducir cantidades o precios, el resumen indica cuánto disminuye el saldo
+  pendiente; al aumentarlos, indica cuánto aumenta.
+- La corrección directa deja de hablar de reembolso o productos agregados cuando
+  únicamente se está ajustando el valor de la misma factura a crédito.
+
 ## 1.49.3 — 2026-09-15
 
 ### Botón de corrección de facturas
