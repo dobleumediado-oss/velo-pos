@@ -70,7 +70,7 @@ const {
   cleanupStaleGeneratedFiles,
 } = require('./src/main/pdf-document');
 const { createExcelReportBuffer } = require('./src/main/excel-report');
-const { canManageInventory, modulePermission } = require('./lib/user-operational-permissions');
+const { canManageInventory, canManageCustomers, modulePermission } = require('./lib/user-operational-permissions');
 const {
   EQUIPARTS_FILES,
   loadEquipartsCsvSet,
@@ -2310,14 +2310,10 @@ ipcMain.handle('customers:create', async (_, { data, requestUserId }) => {
     const reqUser = authRepo.findById(requestUserId);
     if (!reqUser) return { ok: false, error: 'Usuario no válido' };
 
-    // Cajeros pueden crear clientes (necesario en el flujo de venta),
-    // pero NO pueden fijar límite de crédito — eso es potestad del admin.
-    const isAdmin = ['admin', 'superadmin'].includes(reqUser.role);
+    // Un cajero sin acceso al módulo aún puede registrar el cliente mínimo
+    // requerido por el POS, pero no asignarle crédito ni administrarlo.
     const safeData = { ...data };
-    if (!isAdmin) {
-      // Forzar credit_limit a 0 para cajeros — el admin lo ajusta después
-      safeData.credit_limit = 0;
-    }
+    if (!canManageCustomers(reqUser)) safeData.credit_limit = 0;
 
     const id = customersRepo.create(safeData);
     audit(requestUserId, reqUser.name, 'cliente_creado', 'customers', id, data.name);
@@ -2330,7 +2326,7 @@ ipcMain.handle('customers:create', async (_, { data, requestUserId }) => {
 ipcMain.handle('customers:update', async (_, { id, data, requestUserId }) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
-    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+    if (!canManageCustomers(reqUser)) {
       return { ok: false, error: 'Sin permisos' };
     }
     customersRepo.update(id, data);
@@ -2462,17 +2458,17 @@ ipcMain.handle('crm:learningStats', async () => {
   }
 });
 
-function _customerContactAdmin(requestUserId) {
+function _customerManager(requestUserId) {
   const reqUser = authRepo.findById(requestUserId);
-  if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
-    throw new Error('Solo un administrador puede gestionar representantes');
+  if (!canManageCustomers(reqUser)) {
+    throw new Error('Este usuario no tiene permiso para administrar clientes');
   }
   return reqUser;
 }
 
 ipcMain.handle('customers:createContact', async (_, { customerId, data, requestUserId }) => {
   try {
-    const reqUser = _customerContactAdmin(requestUserId);
+    const reqUser = _customerManager(requestUserId);
     const id = customersRepo.createContact(customerId, data || {});
     audit(reqUser.id, reqUser.name, 'representante_creado', 'customer_contacts', id, data?.name || '');
     return { ok: true, id, contacts: customersRepo.getContacts(customerId) };
@@ -2483,7 +2479,7 @@ ipcMain.handle('customers:createContact', async (_, { customerId, data, requestU
 
 ipcMain.handle('customers:updateContact', async (_, { id, data, requestUserId }) => {
   try {
-    const reqUser = _customerContactAdmin(requestUserId);
+    const reqUser = _customerManager(requestUserId);
     const contacts = customersRepo.updateContact(id, data || {});
     audit(reqUser.id, reqUser.name, 'representante_editado', 'customer_contacts', id, data?.name || '');
     return { ok: true, contacts };
@@ -2494,7 +2490,7 @@ ipcMain.handle('customers:updateContact', async (_, { id, data, requestUserId })
 
 ipcMain.handle('customers:deleteContact', async (_, { id, requestUserId }) => {
   try {
-    const reqUser = _customerContactAdmin(requestUserId);
+    const reqUser = _customerManager(requestUserId);
     const result = customersRepo.deleteContact(id);
     audit(reqUser.id, reqUser.name, 'representante_desactivado', 'customer_contacts', id, result.name);
     return { ok: true, ...result };
@@ -2510,7 +2506,7 @@ ipcMain.handle('customers:getBranches', async (_, { customerId }) => {
 
 ipcMain.handle('customers:createBranch', async (_, { customerId, data, requestUserId }) => {
   try {
-    const reqUser = _customerContactAdmin(requestUserId);
+    const reqUser = _customerManager(requestUserId);
     const id = customersRepo.createBranch(customerId, data || {});
     audit(reqUser.id, reqUser.name, 'sucursal_cliente_creada', 'customer_branches', id, data?.name || '');
     return { ok: true, id, branches: customersRepo.getBranches(customerId) };
@@ -2521,7 +2517,7 @@ ipcMain.handle('customers:createBranch', async (_, { customerId, data, requestUs
 
 ipcMain.handle('customers:updateBranch', async (_, { id, data, requestUserId }) => {
   try {
-    const reqUser = _customerContactAdmin(requestUserId);
+    const reqUser = _customerManager(requestUserId);
     const branches = customersRepo.updateBranch(id, data || {});
     audit(reqUser.id, reqUser.name, 'sucursal_cliente_editada', 'customer_branches', id, data?.name || '');
     return { ok: true, branches };
@@ -2532,7 +2528,7 @@ ipcMain.handle('customers:updateBranch', async (_, { id, data, requestUserId }) 
 
 ipcMain.handle('customers:deleteBranch', async (_, { id, requestUserId }) => {
   try {
-    const reqUser = _customerContactAdmin(requestUserId);
+    const reqUser = _customerManager(requestUserId);
     const result = customersRepo.deleteBranch(id);
     audit(reqUser.id, reqUser.name, 'sucursal_cliente_desactivada', 'customer_branches', id, result.name);
     return { ok: true, ...result };

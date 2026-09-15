@@ -27,6 +27,8 @@ try {
   });
   const cashier = DB.authRepo.findById(cashierId);
   assert.strictEqual(permissions.canManageInventory(cashier), true);
+  assert.strictEqual(permissions.canManageCustomers(cashier), true,
+    'Clientes conserva acceso operativo predeterminado para el cajero');
   assert.strictEqual(permissions.evaluateCreditPermission(cashier, 5000).allowed, true);
   assert.strictEqual(permissions.evaluateCreditPermission(cashier, 5000.01).allowed, false);
 
@@ -39,6 +41,17 @@ try {
     moduleKey: 'inventario', enabled: true,
   });
   assert.strictEqual(permissions.canManageInventory(withInventory), true);
+
+  const withoutCustomers = DB.usersRepo.setModulePolicy(cashierId, {
+    moduleKey: 'clientes', enabled: false,
+  });
+  assert.strictEqual(permissions.canManageCustomers(withoutCustomers), false,
+    'bloquear Clientes impide su administración');
+  const withCustomers = DB.usersRepo.setModulePolicy(cashierId, {
+    moduleKey: 'clientes', enabled: true,
+  });
+  assert.strictEqual(permissions.canManageCustomers(withCustomers), true,
+    'permitir Clientes concede su administración completa al cajero');
 
   const customerId = DB.customersRepo.create({
     name: 'Cliente crédito controlado', credit_limit: 100000, credit_days: 30,

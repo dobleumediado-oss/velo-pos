@@ -18,6 +18,13 @@ function cliEsc(value) {
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+function cliCanManageCustomers() {
+  if (['admin', 'superadmin'].includes(user?.role)) return true;
+  return typeof window.veloCanAccessModule === 'function'
+    ? window.veloCanAccessModule('clientes', user)
+    : user?.role === 'cajero';
+}
+
 function cliRepresentativeLine(record, prefix = 'Solicitado por') {
   if (!record?.customer_contact_name) return '';
   return `<div style="font-size:10px;color:var(--blue);margin-top:2px">
@@ -341,7 +348,7 @@ function renderCliTable() {
           c.customer_type === 'company'
             ? h('button', {
                 class: 'btn btn-ghost btn-sm',
-                title: ['admin','superadmin'].includes(user?.role) ? 'Gestionar representantes' : 'Ver representantes',
+                title: cliCanManageCustomers() ? 'Gestionar representantes' : 'Ver representantes',
                 onclick: () => openRepresentantesModal(c.id),
                 html: `${svg('users')} Representantes`
               })
@@ -349,7 +356,7 @@ function renderCliTable() {
           c.customer_type === 'company'
             ? h('button', {
                 class: 'btn btn-ghost btn-sm',
-                title: ['admin','superadmin'].includes(user?.role) ? 'Gestionar sucursales' : 'Ver sucursales',
+                title: cliCanManageCustomers() ? 'Gestionar sucursales' : 'Ver sucursales',
                 onclick: () => openSucursalesModal(c.id),
                 html: `${svg('map-pin')} Sucursales`
               })
@@ -751,7 +758,7 @@ function openRepresentantesModal(customerId) {
     return;
   }
   const contacts = (company.contacts || []).filter(c => c.active !== 0);
-  const canManage = ['admin','superadmin'].includes(user?.role);
+  const canManage = cliCanManageCustomers();
   openModal(`
     <div class="modal-title">Representantes</div>
     <div class="modal-sub">${cliEsc(company.name)}${company.rnc ? ` · ${cliEsc(company.rnc)}` : ''}</div>
@@ -922,7 +929,7 @@ function openSucursalesModal(customerId) {
     return;
   }
   const branches = (company.branches || []).filter(b => b.active !== 0);
-  const canManage = ['admin','superadmin'].includes(user?.role);
+  const canManage = cliCanManageCustomers();
   openModal(`
     <div class="modal-title">Sucursales</div>
     <div class="modal-sub">${cliEsc(company.name)}${company.rnc ? ` · ${cliEsc(company.rnc)}` : ''}</div>

@@ -8,6 +8,9 @@
   pendiente; al aumentarlos, indica cuánto aumenta.
 - La corrección directa deja de hablar de reembolso o productos agregados cuando
   únicamente se está ajustando el valor de la misma factura a crédito.
+- Un cajero con el módulo Clientes permitido puede administrar los datos del
+  cliente, sus representantes, sucursales y límite de crédito. La eliminación
+  completa de clientes continúa reservada al administrador.
 
 ## 1.49.3 — 2026-09-15
 
