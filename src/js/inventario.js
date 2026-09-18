@@ -15,6 +15,11 @@ let invSort   = 'name';
 let invTab    = 'todos'; // todos | bajo | sin_stock | por_modelo | historial
 let invPage   = 1;
 let invPageSize = 80;
+// Producto recién guardado: la tabla salta a su página y lo resalta unos
+// segundos. Sin esto, un alta queda invisible hasta buscarla a mano, porque el
+// listado se ordena por nombre y se pagina de 80 en 80.
+let invFocusProductId = null;
+let invFocusTimer = null;
 let invHistSearch = '';
 let invHistRange = 'month';
 let invHistFrom = '';
@@ -74,9 +79,44 @@ function removeInvProductLocal(id) {
   DB.products = DB.products.filter(p => Number(p.id) !== Number(id));
 }
 
+// Mismo criterio de visibilidad para la tabla y para decidir si un producto
+// recién guardado quedaría escondido tras los filtros activos.
+function invMatchesFilters(p, qNorm = searchNorm(invSearch)) {
+  const stockMin = p.stock_min || 5;
+  const stock = invProductStock(p);
+  if (invTab === 'bajo'      && !(stock > 0 && stock <= stockMin)) return false;
+  if (invTab === 'sin_stock' && stock !== 0) return false;
+  if (invTab === 'por_modelo' && !p.model) return false;
+  const mCat = !invCat || p.category === invCat;
+  const mQ   = !qNorm ||
+    matchText(p.name, qNorm)    ||
+    matchText(p.code, qNorm)    ||
+    matchText(p.brand, qNorm)   ||
+    matchText(p.model, qNorm)   ||
+    matchText(p.barcode, qNorm);
+  return mCat && mQ;
+}
+
+function invHeaderStatsText() {
+  const prods = DB.products || [];
+  const low = prods.filter(p => invProductStock(p) > 0 && invProductStock(p) <= (p.stock_min || 5));
+  const out = prods.filter(p => invProductStock(p) === 0);
+  const totalVal = prods.reduce((a, p) => a + invProductValue(p), 0);
+  return `${prods.length} productos · Valor costo: ${fmt(totalVal)} · ` +
+    `${low.length} bajo mínimo · ${out.length} sin stock`;
+}
+
+// Las cifras de la cabecera cambian con cada alta, baja o ajuste. Se actualizan
+// solas para no obligar a salir y volver a entrar al módulo.
+function refreshInvHeaderStats() {
+  const target = document.getElementById('inv-header-stats');
+  if (target) target.textContent = invHeaderStatsText();
+}
+
 function renderInvCurrentView() {
   if (document.getElementById('inv-table-wrap')) {
     renderInvTable();
+    refreshInvHeaderStats();
     return;
   }
   const page = document.getElementById('page');
@@ -100,12 +140,40 @@ async function refreshInventoryDataDeferred({ invalidateHistory = false } = {}) 
   }
 }
 
-function applyInventoryMutation({ productId, patch, remove = false, invalidateHistory = false } = {}) {
+function applyInventoryMutation({
+  productId, patch, remove = false, invalidateHistory = false, focus = false,
+} = {}) {
   if (invalidateHistory) invalidateInvHistoryCache();
   if (remove) removeInvProductLocal(productId);
   else if (productId && patch) patchInvProductLocal(productId, patch);
-  renderInvCurrentView();
+  let filtersCleared = false;
+  if (focus && productId && !remove) {
+    invFocusProduct(productId);
+    const product = (DB.products || []).find(row => Number(row.id) === Number(productId));
+    // El usuario acaba de pedir justamente ese registro: si los filtros activos
+    // lo dejarían fuera de la vista, se limpian en lugar de esconderlo.
+    if (product && !invMatchesFilters(product)) {
+      invTab = 'todos'; invCat = ''; invSearch = '';
+      filtersCleared = true;
+    }
+  }
+  if (filtersCleared) {
+    const page = document.getElementById('page');
+    if (page) renderInventario(page);
+  } else {
+    renderInvCurrentView();
+  }
   refreshInventoryDataDeferred({ invalidateHistory });
+}
+
+function invFocusProduct(productId) {
+  invFocusProductId = Number(productId) || null;
+  if (invFocusTimer) clearTimeout(invFocusTimer);
+  invFocusTimer = setTimeout(() => {
+    invFocusProductId = null;
+    invFocusTimer = null;
+    if (document.getElementById('inv-table-wrap')) renderInvTable();
+  }, 4000);
 }
 
 function renderInventario(el) {
@@ -121,10 +189,7 @@ function renderInventario(el) {
   el.appendChild(h('div', { class: 'sec-hdr' },
     h('div', null,
       h('div', { class: 'sec-title' }, 'Inventario'),
-      h('div', { class: 'sec-sub' },
-        `${prods.length} productos · Valor costo: ${fmt(totalVal)} · ` +
-        `${lowStock.length} bajo mínimo · ${outStock.length} sin stock`
-      )
+      h('div', { class: 'sec-sub', id: 'inv-header-stats' }, invHeaderStatsText())
     ),
     h('div', { class: 'flex', style: { gap: '8px' } },
       ...((window._vertical && window._vertical.serialized) ? [h('button', {
@@ -284,21 +349,7 @@ function renderInvTable() {
 
   const qNorm = searchNorm(invSearch);
 
-  let prods = DB.products.filter(p => {
-    const stockMin = p.stock_min || 5;
-    const stock = invProductStock(p);
-    if (invTab === 'bajo'      && !(stock > 0 && stock <= stockMin)) return false;
-    if (invTab === 'sin_stock' && stock !== 0) return false;
-    if (invTab === 'por_modelo' && !p.model) return false;
-    const mCat = !invCat || p.category === invCat;
-    const mQ   = !qNorm ||
-      matchText(p.name, qNorm)    ||
-      matchText(p.code, qNorm)    ||
-      matchText(p.brand, qNorm)   ||
-      matchText(p.model, qNorm)   ||
-      matchText(p.barcode, qNorm);
-    return mCat && mQ;
-  }).sort((a, b) => {
+  let prods = DB.products.filter(p => invMatchesFilters(p, qNorm)).sort((a, b) => {
     if (invSort === 'name')       return a.name.localeCompare(b.name);
     if (invSort === 'name-desc')  return b.name.localeCompare(a.name);
     if (invSort === 'stock')      return invProductStock(a) - invProductStock(b);
@@ -357,7 +408,8 @@ function renderInvTable() {
            <div style="color:var(--muted2);font-size:10px">${changeDate}</div>
          </div>`
       : `<span style="font-size:11px;color:var(--muted2)">—</span>`;
-    return `<tr data-idx="${idx}">
+    const focused = invFocusProductId && Number(p.id) === Number(invFocusProductId);
+    return `<tr data-idx="${idx}"${focused ? ' class="inv-row-focus"' : ''}>
       <td class="tm" style="font-size:11px">${esc(p.code)}</td>
       <td>
         <div class="tb">${esc(p.name)}</div>
@@ -400,6 +452,10 @@ function renderInvTable() {
   const totalRows = prods.length;
   const showAll = invPageSize === 'all';
   const pageSize = showAll ? totalRows : Math.max(1, Number(invPageSize) || 80);
+  if (invFocusProductId && !showAll) {
+    const focusIdx = prods.findIndex(row => Number(row.id) === Number(invFocusProductId));
+    if (focusIdx >= 0) invPage = Math.floor(focusIdx / pageSize) + 1;
+  }
   const totalPages = showAll ? 1 : Math.max(1, Math.ceil(totalRows / pageSize));
   invPage = Math.max(1, Math.min(Number(invPage) || 1, totalPages));
   const start = showAll ? 0 : (invPage - 1) * pageSize;
@@ -1769,6 +1825,7 @@ async function guardarProducto(id) {
     productId: id || result.id,
     patch: { ...data, id: id || result.id, ...(window._vertical?.serialized ? { serialized: serialized ? 1 : 0 } : {}) },
     invalidateHistory: !!result.historyId,
+    focus: true,
   });
 }
 

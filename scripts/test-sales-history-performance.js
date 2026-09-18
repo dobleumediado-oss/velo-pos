@@ -20,6 +20,9 @@ const tempDir = path.join(os.tmpdir(), `velo_sales_history_${Date.now()}`);
 const DB = require('../database');
 DB.initDB(tempDir);
 const db = DB.getDB();
+// El esquema completo (cuentas financieras, aplicaciones de abono) vive en las
+// migraciones: sin ellas, insertar un abono falla por su clave foránea.
+require('../versioning').initVersioning(db, tempDir);
 
 try {
   console.log('\n== Historial paginado de Ventas ==');
@@ -139,11 +142,64 @@ try {
   ok(JSON.stringify(after) === JSON.stringify(before),
     'consultar, contar y buscar no modifica ventas, totales ni artículos');
 
+  console.log('\n== Abonos sin consulta por fila (N+1) ==');
+  const customerId = db.prepare("INSERT INTO customers(name,rnc,active) VALUES('CLIENTE ABONOS','101',1)")
+    .run().lastInsertRowid;
+  const insertPayment = db.prepare(`
+    INSERT INTO payments(customer_id,sale_id,amount,method,balance_before,balance_after,created_at)
+    VALUES(?,?,?,'efectivo',0,0,?)
+  `);
+  const insertAllocation = db.prepare(`
+    INSERT INTO payment_allocations(payment_id,sale_id,amount,invoice_balance_before,invoice_balance_after)
+    VALUES(?,?,?,0,0)
+  `);
+  const anySaleId = db.prepare("SELECT id FROM sales ORDER BY id LIMIT 1").get().id;
+  const PAYMENT_ROWS = 400;
+  db.transaction(() => {
+    for (let i = 0; i < PAYMENT_ROWS; i += 1) {
+      const paymentId = insertPayment.run(customerId, anySaleId, 100, `2026-01-01 10:00:0${i % 10}`).lastInsertRowid;
+      insertAllocation.run(paymentId, anySaleId, 100);
+    }
+  })();
+
+  // Una consulta por abono era el costo real: crecía con el historial y
+  // congelaba el proceso principal, que es síncrono.
+  const originalPrepare = db.prepare.bind(db);
+  let prepareCalls = 0;
+  db.prepare = (sql) => { prepareCalls += 1; return originalPrepare(sql); };
+  let payments;
+  try {
+    payments = DB.customersRepo.getAllPayments();
+  } finally {
+    db.prepare = originalPrepare;
+  }
+  ok(payments.length >= PAYMENT_ROWS, 'devuelve todos los abonos del historial');
+  ok(prepareCalls <= 5,
+    `resuelve las aplicaciones en consultas fijas, no una por abono (usó ${prepareCalls} para ${payments.length} abonos)`);
+  const allocated = Math.round(payments.reduce((sum, row) => sum + Number(row.allocated_amount || 0), 0) * 100) / 100;
+  const expected = db.prepare(`
+    SELECT ROUND(COALESCE(SUM(pa.amount),0),2) total FROM payment_allocations pa
+    JOIN sales s ON s.id=pa.sale_id
+    JOIN payments p ON p.id=pa.payment_id
+    WHERE COALESCE(p.status,'active')='active'
+  `).get().total;
+  ok(Math.abs(allocated - expected) < 0.01,
+    'la agrupación conserva exactamente el monto aplicado de cada abono');
+  ok(payments.every(row => Array.isArray(row.allocations) && row.allocation_count === row.allocations.length),
+    'cada abono conserva su lista de aplicaciones y su conteo');
+
   const ui = fs.readFileSync(path.join(__dirname, '../src/js/ventas.js'), 'utf8');
   ok(ui.includes('const VENTAS_PAGE_SIZE = 100') && ui.includes('ventasGoToPage'),
     'la pantalla limita el render a 100 documentos y ofrece navegación');
   ok(ui.includes('async function ventasRowsForExport') && ui.includes('const pageSize = 500'),
     'PDF y Excel reúnen el filtro completo por lotes sin repintar miles de filas');
+
+  const inv = fs.readFileSync(path.join(__dirname, '../src/js/inventario.js'), 'utf8');
+  ok(inv.includes('function invMatchesFilters') && inv.includes('invFocusProductId') &&
+    inv.includes('invPage = Math.floor(focusIdx / pageSize) + 1'),
+    'Inventario salta a la página del producto guardado en vez de esconderlo');
+  ok(inv.includes('function refreshInvHeaderStats') && inv.includes("id: 'inv-header-stats'"),
+    'las cifras de la cabecera se actualizan sin salir y volver al módulo');
   console.log(`\n== RESULTADO: ${passed} OK · ${elapsedMs.toFixed(1)} ms ==`);
 } finally {
   try { db.close(); } catch {}

@@ -1505,3 +1505,8 @@ tbody tr:hover td{background:#f7faf8}.tb{font-weight:700}.ts{font-size:10px}.tm{
 .pv-empty{display:flex;min-height:190px;flex-direction:column;align-items:center;justify-content:center;gap:7px;border:1px dashed var(--line);border-radius:14px}.pv-empty svg{width:28px;height:28px;color:var(--green)}.pv-empty strong{color:var(--ink)}
 @media(max-width:980px){.pv-workbar{align-items:stretch;flex-wrap:wrap}.pv-view-tabs{width:100%;overflow-x:auto}.pv-search{margin-left:0;min-width:220px}.pv-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:780px){.pv-hero{align-items:flex-start;flex-direction:column}.pv-metrics{grid-template-columns:1fr}.pv-grid{grid-template-columns:1fr}.pv-order-foot{align-items:flex-start;flex-direction:column}.pv-actions{justify-content:flex-start}.pv-search{width:100%;max-width:none}.pv-workbar>.btn{flex:1}}
+
+/* Producto recién guardado: se resalta unos segundos para que el usuario lo
+   ubique sin buscarlo, ya que el listado se ordena por nombre y se pagina. */
+.inv-row-focus>td{background:var(--green-bg);animation:invFocusPulse 1.1s ease-in-out 2}
+@keyframes invFocusPulse{0%,100%{background:var(--green-bg)}50%{background:transparent}}

@@ -3523,16 +3523,40 @@ function ensurePrimaryCustomerBranch(customerId) {
   return first?.id || null;
 }
 
-function hydratePaymentAllocations(payment) {
+const PAYMENT_ALLOCATION_COLUMNS = `
+  pa.id,pa.payment_id,pa.sale_id,pa.amount,
+  pa.invoice_balance_before,pa.invoice_balance_after,
+  s.status AS sale_status,s.correction_kind,s.original_sale_id,
+  s.document_number_fmt,s.numero_factura,s.numero_factura_fmt,s.ncf,
+  s.sale_date,s.total AS sale_total`;
+
+// Todas las aplicaciones agrupadas por abono en UNA consulta. Resolverlas fila
+// por fila hacía que cargar el historial creciera con cada abono registrado.
+function paymentAllocationsByPayment() {
+  const grouped = new Map();
+  if (!tableExists('payment_allocations')) return grouped;
+  const rows = db.prepare(`
+    SELECT ${PAYMENT_ALLOCATION_COLUMNS}
+    FROM payment_allocations pa
+    JOIN sales s ON s.id=pa.sale_id
+    ORDER BY pa.id
+  `).all();
+  for (const row of rows) {
+    const list = grouped.get(row.payment_id);
+    if (list) list.push(row);
+    else grouped.set(row.payment_id, [row]);
+  }
+  return grouped;
+}
+
+function hydratePaymentAllocations(payment, preloadedAllocations = null) {
   if (!payment) return payment;
   let allocations = [];
-  if (tableExists('payment_allocations')) {
+  if (preloadedAllocations) {
+    allocations = preloadedAllocations;
+  } else if (tableExists('payment_allocations')) {
     allocations = db.prepare(`
-      SELECT pa.id,pa.payment_id,pa.sale_id,pa.amount,
-             pa.invoice_balance_before,pa.invoice_balance_after,
-             s.status AS sale_status,s.correction_kind,s.original_sale_id,
-             s.document_number_fmt,s.numero_factura,s.numero_factura_fmt,s.ncf,
-             s.sale_date,s.total AS sale_total
+      SELECT ${PAYMENT_ALLOCATION_COLUMNS}
       FROM payment_allocations pa
       JOIN sales s ON s.id=pa.sale_id
       WHERE pa.payment_id=?
@@ -4450,7 +4474,7 @@ const customersRepo = {
     `).all(customerId).map(hydratePaymentAllocations);
   },
   getAllPayments({ includeCancelled = false } = {}) {
-    return db.prepare(`
+    const rows = db.prepare(`
       SELECT p.*,
              c.name AS customer_name,c.rnc AS customer_rnc,c.phone AS customer_phone,
              s.document_number_fmt AS sale_document_number_fmt,
@@ -4467,7 +4491,12 @@ const customersRepo = {
       LEFT JOIN sales s ON s.id=p.sale_id
       ${includeCancelled ? '' : "WHERE COALESCE(p.status,'active')='active'"}
       ORDER BY p.created_at DESC,p.id DESC
-    `).all().map(hydratePaymentAllocations);
+    `).all();
+    if (!rows.length) return rows;
+    const grouped = paymentAllocationsByPayment();
+    // Un arreglo vacío SÍ es respuesta: significa "este abono no tiene
+    // aplicaciones", y evita volver a consultarlo fila por fila.
+    return rows.map(payment => hydratePaymentAllocations(payment, grouped.get(payment.id) || []));
   },
   delete(id) {
     if (Number(id) === 1) throw new Error('No se puede eliminar el cliente "Consumidor Final"');

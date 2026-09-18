@@ -9,6 +9,24 @@
 - Esto evita que un ID sensible al uso de mayúsculas deje de coincidir con la
   identidad real enviada por la terminal.
 
+### Velocidad al cargar abonos
+
+- Cargar el historial de abonos ejecutaba una consulta por cada abono, así que
+  el tiempo crecía con el historial y congelaba el resto de la aplicación
+  mientras duraba. Ahora se resuelven todos en una sola consulta agrupada.
+- En una base con 2,710 abonos el tiempo pasó de 269 ms a 53 ms, y deja de
+  crecer al mismo ritmo. Afecta a Clientes, Caja y Ventas.
+
+### Producto nuevo visible al instante
+
+- Al guardar un producto, Inventario salta a la página donde quedó y lo resalta
+  unos segundos. Antes se perdía entre las páginas del listado, ordenado por
+  nombre, y había que buscarlo o cambiar de pantalla.
+- Si los filtros activos lo dejarían fuera de la vista, se limpian en lugar de
+  esconder el registro recién creado.
+- Las cifras de la cabecera —productos, valor de costo, bajo mínimo y sin
+  stock— se actualizan en el momento, sin salir y volver al módulo.
+
 ### Recibos de ingreso en dólares
 
 - Un recibo de ingreso puede recibirse en dólares. La tasa se propone desde la
