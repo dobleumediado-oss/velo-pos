@@ -123,7 +123,7 @@ const PRINT_CATEGORIES = {
   cotizacion:   { label: 'Cotizaciones',               autoPrintDefault: false, previewDefault: true,  media: 'any'   },
   pago:         { label: 'Pagos y abonos',             autoPrintDefault: false, previewDefault: true,  media: 'any'   },
   nomina:       { label: 'Recibos de nómina',          autoPrintDefault: false, previewDefault: true,  media: 'any'   },
-  ingreso:      { label: 'Recibos de ingreso',         autoPrintDefault: false, previewDefault: true,  media: 'sheet' },
+  ingreso:      { label: 'Recibos de ingreso',         autoPrintDefault: false, previewDefault: true,  media: 'any'   },
   conduce:      { label: 'Conduces y entregas',        autoPrintDefault: false, previewDefault: true,  media: 'any'   },
   caja:         { label: 'Caja, arqueos y cierres',    autoPrintDefault: false, previewDefault: true,  media: 'sheet' },
   inventario:   { label: 'Inventario y etiquetas de anaquel', autoPrintDefault: false, previewDefault: true, media: 'sheet' },

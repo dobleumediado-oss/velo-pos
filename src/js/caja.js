@@ -444,13 +444,102 @@ async function confirmIncomeReceipt() {
   }
 }
 
-function printIncomeReceipt(receipt) {
+// El recibo de ingreso usa la plantilla elegida en el Centro de impresión:
+// carta profesional, carta compacta o térmica de 80 mm. Sin selección explícita
+// conserva el diseño de carta que ya usaban los negocios.
+function _cajaIncomeReceiptSettings(override = null) {
+  const route = typeof _getCategoryConfig === 'function' ? _getCategoryConfig('ingreso') : {};
+  const selected = override || {};
+  const options = { ...(route.options || {}), ...(selected.options || {}) };
+  return {
+    template: selected.template || route.template || 'ingreso_carta_profesional',
+    showLogo: options.showLogo !== false,
+    showBusinessDetails: options.showBusinessDetails !== false,
+    showNotes: options.showNotes !== false,
+    showSignatures: options.showSignatures !== false,
+  };
+}
+
+function buildIncomeReceiptHTML(receipt, override = null) {
+  const settings = _cajaIncomeReceiptSettings(override);
+  const thermal = settings.template === 'ingreso_termica_80';
+  const compact = settings.template === 'ingreso_carta_compacta';
+  const logo = settings.showLogo && typeof buildLogoHeader === 'function'
+    ? buildLogoHeader(CFG.biz_logo, CFG.biz_logo_2, {
+        unit: 'px', maxH: thermal ? 40 : 62, maxW: thermal ? 150 : 190, align: 'left',
+      })
+    : '';
+  const date = String(receipt.created_at || today()).slice(0, 10);
+  const pageRule = thermal ? 'size:80mm auto;margin:4mm'
+    : compact ? 'size:letter;margin:10mm' : 'size:letter;margin:16mm';
+  const bodySize = thermal ? '10px' : compact ? '11px' : '12px';
+  const pageMin = thermal ? '0' : compact ? '120mm' : '240mm';
+  const businessBlock = settings.showBusinessDetails
+    ? `<h1>${_cajaEsc(CFG.biz || 'VELO POS')}</h1><div class="muted">${_cajaEsc([CFG.rnc && `RNC ${CFG.rnc}`, CFG.phone, CFG.addr].filter(Boolean).join(' · '))}</div>`
+    : '';
+  const notesBlock = settings.showNotes && receipt.notes
+    ? `<div class="note"><strong>Notas</strong><br>${_cajaEsc(receipt.notes)}</div>` : '';
+  const signaturesBlock = settings.showSignatures
+    ? `<div class="signatures"><div class="sign">Entregado por<br><span class="muted">${_cajaEsc(receipt.payer_name)}</span></div><div class="sign">Recibido por<br><span class="muted">${_cajaEsc(receipt.user_name || '')}</span></div></div>`
+    : '';
+  const style = `@page{${pageRule}}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#172033;margin:0;font-size:${bodySize};${thermal ? 'width:72mm;' : ''}}`
+    + `.page{min-height:${pageMin};position:relative}`
+    + `.head{display:flex;justify-content:space-between;gap:${thermal ? '8px' : '24px'};border-bottom:${thermal ? '2px' : '3px'} solid #0f766e;padding-bottom:${thermal ? '7px' : '13px'}}`
+    + `.brand h1{font-size:${thermal ? '14px' : '20px'};margin:5px 0}.brand img{max-width:${thermal ? '42mm' : '190px'} !important;max-height:${thermal ? '16mm' : '62px'} !important}`
+    + `.muted{color:#64748b}.doc{text-align:right}.doc strong{display:block;color:#0f766e;font-size:${thermal ? '11px' : '18px'}}`
+    + `.title{text-align:center;font-size:${thermal ? '12px' : compact ? '17px' : '19px'};margin:${thermal ? '12px 0 10px' : compact ? '18px 0 14px' : '28px 0 20px'}}`
+    + `.grid{display:grid;grid-template-columns:${thermal ? '1fr' : '1fr 1fr'};gap:${thermal ? '5px' : '10px 28px'};background:#f8fafc;border:1px solid #e2e8f0;border-radius:9px;padding:${thermal ? '8px' : '15px'}}`
+    + `.amount{margin:${thermal ? '12px 0' : '22px 0'};padding:${thermal ? '10px' : '18px'};border:2px solid #0f766e;border-radius:10px;text-align:center}`
+    + `.amount span{display:block;color:#64748b;text-transform:uppercase;font-size:${thermal ? '9px' : '10px'}}.amount strong{display:block;font-size:${thermal ? '18px' : '28px'};color:#0f766e;margin-top:5px}`
+    + `.concept{padding:${thermal ? '9px' : '14px'};border-left:4px solid #0f766e;background:#f8fafc;white-space:pre-wrap}`
+    + `.note{margin-top:${thermal ? '9px' : '14px'};padding:${thermal ? '9px' : '12px'};border:1px solid #e2e8f0;white-space:pre-wrap}`
+    + `.signatures{display:grid;grid-template-columns:${thermal ? '1fr' : '1fr 1fr'};gap:${thermal ? '26px' : '70px'};margin-top:${thermal ? '34px' : compact ? '45px' : '75px'}}`
+    + `.sign{border-top:1px solid #334155;text-align:center;padding-top:7px}`
+    + `.foot{${thermal ? 'margin-top:16px' : 'position:absolute;bottom:0;left:0;right:0'};border-top:1px solid #cbd5e1;padding-top:8px;color:#64748b;font-size:${thermal ? '8px' : '10px'};display:flex;justify-content:space-between;gap:8px}`;
+  return `<!doctype html><html><head><meta charset="UTF-8"><title>${_cajaEsc(receipt.document_number_fmt || 'Recibo de ingreso')}</title><style>${style}</style></head><body><section class="page">`
+    + `<header class="head"><div class="brand">${logo}${businessBlock}</div><div class="doc"><strong>RECIBO DE INGRESO</strong><span>${_cajaEsc(receipt.document_number_fmt || '')}</span></div></header>`
+    + `<h2 class="title">Constancia de dinero recibido</h2>`
+    + `<div class="grid"><div><span class="muted">Recibido de</span><br><strong>${_cajaEsc(receipt.payer_name)}</strong></div>`
+    + `<div><span class="muted">Cédula / RNC</span><br><strong>${_cajaEsc(receipt.payer_document || '—')}</strong></div>`
+    + `<div><span class="muted">Fecha</span><br><strong>${_cajaEsc(typeof fdate === 'function' ? fdate(date) : date)}</strong></div>`
+    + `<div><span class="muted">Método</span><br><strong>${_cajaEsc(receipt.method || 'efectivo')}</strong></div>`
+    + `<div><span class="muted">Tipo</span><br><strong>${_cajaEsc(_cajaIncomeType(receipt.income_type))}</strong></div>`
+    + `<div><span class="muted">Referencia</span><br><strong>${_cajaEsc(receipt.reference || '—')}</strong></div></div>`
+    + `<div class="amount"><span>Monto recibido</span><strong>${fmt(receipt.amount)}</strong></div>`
+    + `<div class="concept"><strong>Concepto</strong><br>${_cajaEsc(receipt.concept)}</div>${notesBlock}${signaturesBlock}`
+    + `<footer class="foot"><span>${_cajaEsc(CFG.biz || '')}</span><span>Documento interno · No sustituye comprobante fiscal</span></footer>`
+    + `</section></body></html>`;
+}
+
+function printIncomeReceipt(receipt, override = null) {
   if (!receipt) return;
-  const logo = typeof buildLogoHeader === 'function' ? buildLogoHeader(CFG.biz_logo,CFG.biz_logo_2,{unit:'px',maxH:62,maxW:190,align:'left'}) : '';
-  const date = String(receipt.created_at || today()).slice(0,10);
-  const html = `<!doctype html><html><head><meta charset="UTF-8"><title>${_cajaEsc(receipt.document_number_fmt||'Recibo de ingreso')}</title><style>
-    @page{size:letter;margin:16mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#172033;margin:0;font-size:12px}.page{min-height:240mm;position:relative}.head{display:flex;justify-content:space-between;gap:24px;border-bottom:3px solid #0f766e;padding-bottom:13px}.brand h1{font-size:20px;margin:5px 0}.muted{color:#64748b}.doc{text-align:right}.doc strong{display:block;color:#0f766e;font-size:18px}.title{text-align:center;font-size:19px;margin:28px 0 20px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 28px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:9px;padding:15px}.amount{margin:22px 0;padding:18px;border:2px solid #0f766e;border-radius:10px;text-align:center}.amount span{display:block;color:#64748b;text-transform:uppercase;font-size:10px}.amount strong{display:block;font-size:28px;color:#0f766e;margin-top:5px}.concept{padding:14px;border-left:4px solid #0f766e;background:#f8fafc;white-space:pre-wrap}.note{margin-top:14px;padding:12px;border:1px solid #e2e8f0;white-space:pre-wrap}.signatures{display:grid;grid-template-columns:1fr 1fr;gap:70px;margin-top:75px}.sign{border-top:1px solid #334155;text-align:center;padding-top:7px}.foot{position:absolute;bottom:0;left:0;right:0;border-top:1px solid #cbd5e1;padding-top:8px;color:#64748b;font-size:10px;display:flex;justify-content:space-between}</style></head><body><section class="page"><header class="head"><div class="brand">${logo}<h1>${_cajaEsc(CFG.biz||'VELO POS')}</h1><div class="muted">${_cajaEsc([CFG.rnc&&`RNC ${CFG.rnc}`,CFG.phone,CFG.addr].filter(Boolean).join(' · '))}</div></div><div class="doc"><strong>RECIBO DE INGRESO</strong><span>${_cajaEsc(receipt.document_number_fmt||'')}</span></div></header><h2 class="title">Constancia de dinero recibido</h2><div class="grid"><div><span class="muted">Recibido de</span><br><strong>${_cajaEsc(receipt.payer_name)}</strong></div><div><span class="muted">Cédula / RNC</span><br><strong>${_cajaEsc(receipt.payer_document||'—')}</strong></div><div><span class="muted">Fecha</span><br><strong>${_cajaEsc(typeof fdate==='function'?fdate(date):date)}</strong></div><div><span class="muted">Método</span><br><strong>${_cajaEsc(receipt.method||'efectivo')}</strong></div><div><span class="muted">Tipo</span><br><strong>${_cajaEsc(_cajaIncomeType(receipt.income_type))}</strong></div><div><span class="muted">Referencia</span><br><strong>${_cajaEsc(receipt.reference||'—')}</strong></div></div><div class="amount"><span>Monto recibido</span><strong>${fmt(receipt.amount)}</strong></div><div class="concept"><strong>Concepto</strong><br>${_cajaEsc(receipt.concept)}</div>${receipt.notes?`<div class="note"><strong>Notas</strong><br>${_cajaEsc(receipt.notes)}</div>`:''}<div class="signatures"><div class="sign">Entregado por<br><span class="muted">${_cajaEsc(receipt.payer_name)}</span></div><div class="sign">Recibido por<br><span class="muted">${_cajaEsc(receipt.user_name||'')}</span></div></div><footer class="foot"><span>${_cajaEsc(CFG.biz||'')}</span><span>Documento interno · No sustituye comprobante fiscal</span></footer></section></body></html>`;
-  printHTML(html,'recibo_ingreso');
+  printHTML(buildIncomeReceiptHTML(receipt, override), 'recibo_ingreso');
+}
+
+// Vista previa del Centro de impresión: datos de ejemplo, nunca un ingreso real.
+function cajaPreviewIncomeReceipt(settings = null) {
+  const sample = {
+    document_number_fmt: 'RIN-000123',
+    payer_name: 'PERSONA O EMPRESA DE EJEMPLO',
+    payer_document: '001-0000000-1',
+    created_at: today(),
+    method: 'efectivo',
+    income_type: 'otro_ingreso',
+    reference: 'REF-EJEMPLO',
+    amount: 15000,
+    concept: 'Ejemplo de dinero recibido fuera de una venta o abono.',
+    notes: 'Nota editable al registrar el ingreso.',
+    user_name: (typeof user !== 'undefined' && user?.name) || 'Administrador',
+  };
+  const html = buildIncomeReceiptHTML(sample, settings);
+  if (typeof _openPrintPreview === 'function') {
+    _openPrintPreview(html, {
+      jobType: 'recibo_ingreso', mode: 'print', source: 'html',
+      suggestedName: 'Recibo-ingreso-ejemplo',
+    });
+    return;
+  }
+  printHTML(html, 'recibo_ingreso');
 }
 
 function openCancelIncomeReceiptModal(receipt) {

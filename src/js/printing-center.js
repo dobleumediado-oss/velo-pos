@@ -130,7 +130,13 @@ function pcTemplatesForCategory(category) {
       { id: 'nomina_termica_80', nombre: 'Nómina térmica · 80 mm' },
     ];
   }
-  if (category === 'ingreso') return [];
+  if (category === 'ingreso') {
+    return [
+      { id: 'ingreso_carta_profesional', nombre: 'Recibo de ingreso · Carta' },
+      { id: 'ingreso_carta_compacta', nombre: 'Recibo de ingreso compacto · Carta' },
+      { id: 'ingreso_termica_80', nombre: 'Recibo de ingreso térmico · 80 mm' },
+    ];
+  }
   const definition = PRINT_CATEGORIES[category] || {};
   const all = (typeof PLANTILLAS !== 'undefined' ? PLANTILLAS : [])
     .filter(template => template && template.tipo !== 'etiqueta');
@@ -139,7 +145,7 @@ function pcTemplatesForCategory(category) {
 
 function pcTemplateOptions(category, current) {
   const emptyLabel = category === 'nomina' ? 'Nómina profesional · Carta (predeterminada)'
-    : category === 'ingreso' ? 'Diseño profesional integrado' : 'Usar plantilla general';
+    : category === 'ingreso' ? 'Recibo de ingreso · Carta (predeterminada)' : 'Usar plantilla general';
   return `<option value="">${emptyLabel}</option>
     ${pcTemplatesForCategory(category).map(template =>
       `<option value="${pcEsc(template.id)}" ${template.id === current ? 'selected' : ''}>${pcEsc(template.nombre)}</option>`
@@ -392,7 +398,8 @@ function pcRenderRoutes() {
       </div></td>
       <td><select class="inp pc-route-channel" onchange="pcRouteChannelChanged(this)">${pcChannelOptions(channel)}</select></td>
       <td><select class="inp pc-route-template">${pcTemplateOptions(category, config.template || '')}</select>
-        ${category === 'nomina' ? `<button class="btn btn-out btn-sm" style="margin-top:6px" onclick="pcOpenPayrollReceiptSettings()">${svg('edit')} Personalizar recibo</button>` : ''}</td>
+        ${category === 'nomina' ? `<button class="btn btn-out btn-sm" style="margin-top:6px" onclick="pcOpenPayrollReceiptSettings()">${svg('edit')} Personalizar recibo</button>` : ''}
+        ${category === 'ingreso' ? `<button class="btn btn-out btn-sm" style="margin-top:6px" onclick="pcOpenIncomeReceiptSettings()">${svg('edit')} Personalizar recibo</button>` : ''}</td>
       <td style="width:80px"><input class="inp pc-route-copies" type="number" min="1" max="9" value="${copies}"/></td>
       <td style="text-align:center"><span class="badge g">Vista previa</span></td>
     </tr>`;
@@ -461,6 +468,61 @@ async function pcSavePayrollReceiptSettings() {
   const settings = pcReadPayrollReceiptSettings();
   _pcState.printConfig.nomina = { ...(_pcState.printConfig.nomina || {}), ...settings };
   const select = _pcState.root?.querySelector('tr[data-category="nomina"] .pc-route-template');
+  if (select) select.value = settings.template;
+  closeModal();
+  await pcSaveRoutes();
+}
+
+function pcIncomeReceiptOptions(source = _pcState?.printConfig?.ingreso?.options) {
+  const options = source && typeof source === 'object' ? source : {};
+  return {
+    showLogo: options.showLogo !== false,
+    showBusinessDetails: options.showBusinessDetails !== false,
+    showNotes: options.showNotes !== false,
+    showSignatures: options.showSignatures !== false,
+  };
+}
+
+function pcOpenIncomeReceiptSettings() {
+  const config = _pcState?.printConfig?.ingreso || {};
+  const rowTemplate = _pcState?.root?.querySelector('tr[data-category="ingreso"] .pc-route-template')?.value;
+  const template = rowTemplate || config.template || 'ingreso_carta_profesional';
+  const options = pcIncomeReceiptOptions(config.options);
+  openModal(`<div class="modal-title">Plantilla del recibo de ingreso</div>
+    <div class="modal-sub">Estos cambios solo afectan el comprobante del dinero recibido fuera de una venta o abono.</div>
+    <div class="fg"><label class="lbl">Formato</label><select class="inp" id="pc-income-template">${pcTemplateOptions('ingreso', template)}</select></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px">
+      <label class="inp" style="display:flex;align-items:center;gap:9px;cursor:pointer"><input id="pc-income-logo" type="checkbox" ${options.showLogo ? 'checked' : ''}/> Mostrar logo</label>
+      <label class="inp" style="display:flex;align-items:center;gap:9px;cursor:pointer"><input id="pc-income-business" type="checkbox" ${options.showBusinessDetails ? 'checked' : ''}/> Datos del negocio</label>
+      <label class="inp" style="display:flex;align-items:center;gap:9px;cursor:pointer"><input id="pc-income-notes" type="checkbox" ${options.showNotes ? 'checked' : ''}/> Notas del recibo</label>
+      <label class="inp" style="display:flex;align-items:center;gap:9px;cursor:pointer"><input id="pc-income-signatures" type="checkbox" ${options.showSignatures ? 'checked' : ''}/> Líneas de firma</label>
+    </div>
+    <div class="alrt a" style="margin-top:13px"><div><div class="alrt-title">Vista previa segura</div><div class="alrt-sub">Usa datos de ejemplo y nunca registra ni imprime un ingreso real.</div></div></div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-out" onclick="pcPreviewIncomeReceipt()">${svg('check')} Vista previa</button><button class="btn btn-dark" onclick="pcSaveIncomeReceiptSettings()">${svg('check')} Guardar plantilla</button></div>`, 'modal-lg');
+}
+
+function pcReadIncomeReceiptSettings() {
+  return {
+    template: document.getElementById('pc-income-template')?.value || 'ingreso_carta_profesional',
+    options: {
+      showLogo: !!document.getElementById('pc-income-logo')?.checked,
+      showBusinessDetails: !!document.getElementById('pc-income-business')?.checked,
+      showNotes: !!document.getElementById('pc-income-notes')?.checked,
+      showSignatures: !!document.getElementById('pc-income-signatures')?.checked,
+    },
+  };
+}
+
+function pcPreviewIncomeReceipt() {
+  const settings = pcReadIncomeReceiptSettings();
+  if (typeof cajaPreviewIncomeReceipt !== 'function') return toast('La vista previa del recibo de ingreso no está disponible', 'err');
+  cajaPreviewIncomeReceipt(settings);
+}
+
+async function pcSaveIncomeReceiptSettings() {
+  const settings = pcReadIncomeReceiptSettings();
+  _pcState.printConfig.ingreso = { ...(_pcState.printConfig.ingreso || {}), ...settings };
+  const select = _pcState.root?.querySelector('tr[data-category="ingreso"] .pc-route-template');
   if (select) select.value = settings.template;
   closeModal();
   await pcSaveRoutes();
@@ -1038,6 +1100,7 @@ async function pcSaveRoutes() {
       autoPrint: false,
       preview: true,
       ...(row.dataset.category === 'nomina' ? { options: pcPayrollReceiptOptions(existing.options) } : {}),
+      ...(row.dataset.category === 'ingreso' ? { options: pcIncomeReceiptOptions(existing.options) } : {}),
     };
   });
   const result = await window.api.print.saveConfig({ config: next, requestUserId: user?.id });

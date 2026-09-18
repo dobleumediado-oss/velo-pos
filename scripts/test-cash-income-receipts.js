@@ -49,7 +49,9 @@ try {
   ok(DB.financialAccountsRepo.getById(accountId).current_balance===0,'anular revierte la cuenta financiera');
 
   const ui = fs.readFileSync(path.join(__dirname,'../src/js/caja.js'),'utf8');
-  ok(ui.includes('Nuevo recibo de ingreso')&&ui.includes("printHTML(html,'recibo_ingreso')"),'Caja incluye captura e impresión del recibo');
+  ok(ui.includes('Nuevo recibo de ingreso')&&ui.includes("printHTML(buildIncomeReceiptHTML(receipt, override), 'recibo_ingreso')"),'Caja incluye captura e impresión del recibo');
+  ok(ui.includes('function _cajaIncomeReceiptSettings')&&ui.includes("_getCategoryConfig('ingreso')")&&
+    ui.includes("settings.template === 'ingreso_termica_80'"),'el recibo respeta la plantilla configurada en el Centro de impresión');
   ok(ui.includes('Registrar e imprimir')&&ui.includes('Documento interno · No sustituye comprobante fiscal'),'el flujo termina en un comprobante interno identificado');
 
   console.log(`\n== RESULTADO: ${passed} OK ==`);

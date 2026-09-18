@@ -4330,13 +4330,25 @@ ipcMain.handle('print:saveConfig', async (_, { config, requestUserId }) => {
       return { ok: false, error: 'Solo administradores pueden modificar la configuración de impresión' };
     }
     const allowedCategories = new Set([
-      'ticket', 'cotizacion', 'pago', 'conduce', 'caja', 'inventario',
-      'compras', 'contabilidad', 'bancos', 'reporte',
+      'ticket', 'cotizacion', 'pago', 'nomina', 'ingreso', 'conduce', 'caja',
+      'inventario', 'compras', 'contabilidad', 'bancos', 'reporte',
     ]);
     const allowedChannels = new Set(['ventas', 'pagos', 'caja', 'oficina', 'almacen']);
+    // Los recibos de nómina e ingreso guardan además qué bloques se imprimen.
+    // Solo se aceptan interruptores conocidos y siempre como booleanos.
+    const RECEIPT_OPTION_KEYS = ['showLogo', 'showBusinessDetails', 'showNotes', 'showSignatures'];
+    const safeReceiptOptions = (value) => {
+      if (!value || typeof value !== 'object') return null;
+      const options = {};
+      RECEIPT_OPTION_KEYS.forEach(key => {
+        if (Object.prototype.hasOwnProperty.call(value, key)) options[key] = value[key] !== false;
+      });
+      return Object.keys(options).length ? options : null;
+    };
     const safeConfig = {};
     Object.entries(config || {}).forEach(([category, value]) => {
       if (!allowedCategories.has(category) || !value || typeof value !== 'object') return;
+      const options = safeReceiptOptions(value.options);
       safeConfig[category] = {
         channel: allowedChannels.has(value.channel) ? value.channel : '',
         // Solo para migración de configuraciones anteriores; el Centro nuevo no
@@ -4347,6 +4359,7 @@ ipcMain.handle('print:saveConfig', async (_, { config, requestUserId }) => {
         copies: Math.max(1, Math.min(9, parseInt(value.copies, 10) || 1)),
         preview: true,
         autoPrint: false,
+        ...(options ? { options } : {}),
       };
     });
     // Política global del negocio. Los nombres físicos de impresora viven en

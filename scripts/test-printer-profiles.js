@@ -459,4 +459,70 @@ test('monitorea impresoras y vuelve a validarlas inmediatamente antes del envío
   assert.ok(mainSource.includes("firstErr?.code === 'PRINTER_UNAVAILABLE'"));
 });
 
+test('el recibo de ingreso cambia de formato con la plantilla elegida', () => {
+  const cajaSource = fs.readFileSync(path.join(__dirname, '../src/js/caja.js'), 'utf8');
+  const from = cajaSource.indexOf('function _cajaIncomeReceiptSettings(');
+  const to = cajaSource.indexOf('function printIncomeReceipt(');
+  assert.ok(from > 0 && to > from, 'el constructor del recibo de ingreso sigue en caja.js');
+
+  const build = (route, override) => {
+    const context = {
+      _getCategoryConfig: () => route || {},
+      CFG: { biz: 'NEGOCIO', rnc: '101', phone: '809', addr: 'RD', biz_logo: 'x', biz_logo_2: '' },
+      today: () => '2026-09-18',
+      fmt: value => `RD$${Number(value || 0).toFixed(2)}`,
+      fdate: value => value,
+      _cajaEsc: value => String(value == null ? '' : value),
+      _cajaIncomeType: value => String(value || ''),
+      buildLogoHeader: () => '<img src="logo.png"/>',
+    };
+    require('vm').runInNewContext(
+      `${cajaSource.slice(from, to)}\nthis.html = buildIncomeReceiptHTML(receipt, override);`,
+      Object.assign(context, {
+        receipt: {
+          document_number_fmt: 'RIN-000001', payer_name: 'JUAN', payer_document: '001',
+          created_at: '2026-09-18', method: 'efectivo', income_type: 'otro_ingreso',
+          reference: 'REF', amount: 1500, concept: 'Concepto', notes: 'Nota',
+          user_name: 'Cajero',
+        },
+        override: override || null,
+      })
+    );
+    return context.html;
+  };
+
+  assert.ok(build(null, null).includes('@page{size:letter;margin:16mm}'),
+    'sin configuración conserva el diseño de carta anterior');
+  assert.ok(build({ template: 'ingreso_termica_80' }, null).includes('@page{size:80mm auto;margin:4mm}'),
+    'la ruta guardada en el Centro de impresión aplica la plantilla térmica');
+  assert.ok(build(null, { template: 'ingreso_carta_compacta' }).includes('@page{size:letter;margin:10mm}'),
+    'la vista previa puede forzar un formato sin guardarlo');
+
+  const full = build(null, null);
+  const stripped = build(null, {
+    template: 'ingreso_carta_profesional',
+    options: { showLogo: false, showBusinessDetails: false, showNotes: false, showSignatures: false },
+  });
+  assert.ok(full.includes('<img src="logo.png"/>') && !stripped.includes('<img src="logo.png"/>'));
+  assert.ok(full.includes('Recibido por') && !stripped.includes('Recibido por'));
+  assert.ok(full.includes('Nota') && !stripped.includes('<strong>Notas</strong>'));
+});
+
+test('la configuración de impresión guarda nómina, ingreso y sus opciones', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
+  const centerSource = fs.readFileSync(path.join(__dirname, '../src/js/printing-center.js'), 'utf8');
+  const whitelist = mainSource.slice(
+    mainSource.indexOf('const allowedCategories = new Set(['),
+    mainSource.indexOf('const allowedChannels = new Set([')
+  );
+  assert.ok(/'nomina'/.test(whitelist) && /'ingreso'/.test(whitelist),
+    'el handler ya no descarta en silencio la plantilla de estos recibos');
+  assert.ok(mainSource.includes('const RECEIPT_OPTION_KEYS') &&
+    mainSource.includes('...(options ? { options } : {})'),
+    'las opciones del recibo sobreviven al guardado');
+  assert.ok(centerSource.includes("pcOpenIncomeReceiptSettings()") &&
+    centerSource.includes("id: 'ingreso_termica_80'"),
+    'el Centro de impresión ofrece los formatos del recibo de ingreso');
+});
+
 console.log(`\n${passed} pruebas de impresión aprobadas.`);

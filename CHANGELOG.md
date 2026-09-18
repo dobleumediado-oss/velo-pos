@@ -9,6 +9,15 @@
 - Esto evita que un ID sensible al uso de mayúsculas deje de coincidir con la
   identidad real enviada por la terminal.
 
+### Plantilla del recibo de ingreso
+
+- El Centro de impresión ya permite elegir el formato del recibo de ingreso:
+  carta, carta compacta o térmico de 80 mm, con logo, datos del negocio, notas
+  y firmas opcionales, y vista previa con datos de ejemplo.
+- Se corrigió la causa de fondo: al guardar las rutas, la configuración de los
+  recibos de ingreso y de nómina se descartaba en silencio, junto con sus
+  opciones. Ahora se conserva.
+
 ### Corregir una factura modifica esa misma factura
 
 - Una factura sin comprobante fiscal ya no genera otra factura ni un recibo al
