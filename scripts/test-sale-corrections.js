@@ -708,6 +708,28 @@ ok(firstChange.correctionId > 0 && db.prepare(
 
 console.log('\n== I. Interfaz de corrección ==');
 const salesUiSource = fs.readFileSync(path.join(__dirname, '../src/js/ventas.js'), 'utf8');
+const operationTotalStart = salesUiSource.indexOf('function ventasOperationTotal(');
+const operationTotalEnd = salesUiSource.indexOf('function ventasHasAdjustedCopy(', operationTotalStart);
+const operationTotalsContext = {};
+require('vm').runInNewContext(`
+  function ventasRound2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+  ${salesUiSource.slice(operationTotalStart, operationTotalEnd)}
+  this.operationTotal = ventasOperationTotal;
+  this.operationAdjustment = ventasOperationAdjustment;
+`, operationTotalsContext);
+const inheritedCorrectionExample = {
+  total: 306600,
+  adjustment_addition_total: 332080,
+  operation_credit_total: 351640,
+};
+ok(operationTotalsContext.operationTotal(inheritedCorrectionExample) === 287040 &&
+  operationTotalsContext.operationAdjustment(inheritedCorrectionExample) === -19560,
+  'el resumen convierte respaldos acumulados en un único ajuste neto comprensible');
+ok(salesUiSource.includes('Resultado vigente después de correcciones') &&
+  salesUiSource.includes('Total anterior') && salesUiSource.includes('Ajuste neto') &&
+  salesUiSource.includes('Total vigente') &&
+  !salesUiSource.includes('Operación: original ${fmt(s.total)} + aumentos'),
+  'Ventas deja de presentar al cliente los totales técnicos intermedios');
 const summaryFunctionStart = salesUiSource.indexOf('function ventasProductCorrectionSummary()');
 const refreshFunctionStart = salesUiSource.indexOf('function ventasRefreshProductCorrectionSummary()');
 const nextFunctionStart = salesUiSource.indexOf('function ventasAdjustProductCorrectionQty(', refreshFunctionStart);

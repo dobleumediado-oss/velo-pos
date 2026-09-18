@@ -9,6 +9,13 @@
 - Esto evita que un ID sensible al uso de mayúsculas deje de coincidir con la
   identidad real enviada por la terminal.
 
+### Ajuste neto claro en facturas corregidas
+
+- El detalle y el resumen imprimible de una factura corregida presentan ahora
+  el total anterior, un único ajuste neto y el total vigente.
+- Los aumentos y créditos técnicos acumulados dejan de mostrarse al cliente
+  como cifras sueltas: quedan reservados para Auditoría.
+
 ## 1.49.4 — 2026-09-15
 
 ### Resultado claro al corregir créditos pendientes

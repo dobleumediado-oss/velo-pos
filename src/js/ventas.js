@@ -611,6 +611,10 @@ function ventasOperationTotal(sale) {
   ));
 }
 
+function ventasOperationAdjustment(sale) {
+  return ventasRound2(ventasOperationTotal(sale) - Number(sale?.total || 0));
+}
+
 function ventasHasAdjustedCopy(sale) {
   return sale?.type === 'factura' &&
     sale?.correction_kind !== 'product_addition' &&
@@ -791,6 +795,7 @@ function renderVentasTable() {
     const isSupplement = s.correction_kind === 'product_addition' && s.original_sale_id;
     const effectiveTotal = ventasEffectiveTotal(s);
     const operationTotal = !isSupplement && adjusted ? ventasOperationTotal(s) : effectiveTotal;
+    const operationAdjustment = adjusted ? ventasOperationAdjustment(s) : 0;
 
     // Un Bxx es un NCF tradicional, no un e-CF pendiente. Separar ambos evita
     // emitir un segundo comprobante fiscal sobre la misma venta.
@@ -885,7 +890,9 @@ function renderVentasTable() {
           h('span', { style: { fontWeight: 700, fontSize: '14px' } }, fmt(operationTotal)),
           !isSupplement && adjusted
             ? h('div', { class: 'ts' },
-                `Operación: original ${fmt(s.total)} + aumentos ${fmt(s.adjustment_addition_total || 0)} − créditos ${fmt(s.operation_credit_total || 0)}`)
+                Math.abs(operationAdjustment) <= 0.005
+                  ? `Sin cambio neto · antes ${fmt(s.total)}`
+                  : `Ajuste neto ${operationAdjustment > 0 ? '+' : '−'}${fmt(Math.abs(operationAdjustment))} · antes ${fmt(s.total)}`)
             : isSupplement
               ? h('div', { class: 'ts' }, `Documento relacionado · ${fmt(effectiveTotal)}`)
               : null
@@ -1778,19 +1785,29 @@ async function openDetalleVentaModal(s, options = {}) {
     Number(detail.adjustment_addition_total || 0) > 0.005 ||
     Number(detail.operation_credit_total || 0) > 0.005
   );
+  const operationTotal = ventasOperationTotal(detail);
+  const operationAdjustment = ventasOperationAdjustment(detail);
+  const operationAdjustmentLabel = Math.abs(operationAdjustment) <= 0.005
+    ? 'Sin cambio neto'
+    : operationAdjustment > 0 ? 'Aumento neto' : 'Reducción neta';
+  const operationAdjustmentText = Math.abs(operationAdjustment) <= 0.005
+    ? fmt(0)
+    : `${operationAdjustment > 0 ? '+' : '−'}${fmt(Math.abs(operationAdjustment))}`;
+  const operationAdjustmentColor = operationAdjustment > 0
+    ? 'var(--green)' : operationAdjustment < 0 ? 'var(--red)' : 'inherit';
   const relatedOperationSection = isSupplement ? `
     <div class="alrt a" style="margin-bottom:12px">
       <div><div class="alrt-title">Documento interno de aumento</div>
       <div class="alrt-sub">Este documento agrega productos o cantidades a ${ventasEsc(ventasOriginalHistoryReference(detail))}. No reemplaza la factura original.</div></div>
     </div>` : hasOperationAdjustments ? `
     <div class="card sale-operation-summary" style="background:var(--surface2);margin-bottom:12px">
-      <div class="lbl" style="margin-bottom:8px">Operación completa después de correcciones</div>
+      <div class="lbl" style="margin-bottom:8px">Resultado vigente después de correcciones</div>
       <div class="g3">
-        <div><span class="lbl">Factura original</span><strong>${fmt(detail.total || 0)}</strong></div>
-        <div><span class="lbl">Aumentos</span><strong style="color:var(--green)">+${fmt(detail.adjustment_addition_total || 0)}</strong></div>
-        <div><span class="lbl">Notas de crédito</span><strong style="color:var(--red)">-${fmt(detail.operation_credit_total || 0)}</strong></div>
+        <div><span class="lbl">Total anterior</span><strong>${fmt(detail.total || 0)}</strong></div>
+        <div><span class="lbl">${operationAdjustmentLabel}</span><strong style="color:${operationAdjustmentColor}">${operationAdjustmentText}</strong></div>
+        <div><span class="lbl">Total vigente</span><strong>${fmt(operationTotal)}</strong></div>
       </div>
-      <div class="tr grand" style="margin-top:8px"><span>Total neto de la operación</span><span>${fmt(detail.operation_total || detail.total || 0)}</span></div>
+      <div class="ts" style="margin-top:8px">El ajuste compara el total anterior con el total vigente. Los documentos técnicos intermedios permanecen únicamente en Auditoría.</div>
     </div>` : '';
 
   // Sección fiscal: NCF tradicional y e-CF son documentos distintos.
@@ -3355,6 +3372,7 @@ async function imprimirVentaResumenActualizado(saleId) {
     .filter(document => document.document_role === 'supplemental_invoice' && document.status !== 'cancelled')
     .reduce((sum, document) => sum + Number(document.total || 0), 0);
   const netTotal = Math.max(0, Number(sale.total || 0) - creditTotal + debitTotal);
+  const netAdjustment = ventasRound2(netTotal - Number(sale.total || 0));
   const paymentTotal = (data.payments || []).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const paymentState = creditTotal > 0 || debitTotal > 0
     ? 'Distribuido entre la factura original y sus documentos relacionados'
@@ -3375,10 +3393,9 @@ async function imprimirVentaResumenActualizado(saleId) {
     <h1>Resumen actualizado de operación</h1>
     <div class="muted">${ventasEsc(facturaLabel(sale))}${sale.ncf ? ` · NCF ${ventasEsc(sale.ncf)}` : ''} · ${ventasEsc(sale.customer_name || 'Consumidor Final')}</div>
     <div class="grid">
-      <div class="box"><span>Total original</span><strong>${fmt(sale.total)}</strong></div>
-      <div class="box"><span>Notas de crédito / devoluciones</span><strong>-${fmt(creditTotal)}</strong></div>
-      <div class="box"><span>Aumentos vinculados</span><strong>+${fmt(debitTotal)}</strong></div>
-      <div class="box"><span>Total neto comercial</span><strong>${fmt(netTotal)}</strong></div>
+      <div class="box"><span>Total anterior</span><strong>${fmt(sale.total)}</strong></div>
+      <div class="box"><span>Ajuste neto</span><strong>${Math.abs(netAdjustment) <= 0.005 ? fmt(0) : `${netAdjustment > 0 ? '+' : '−'}${fmt(Math.abs(netAdjustment))}`}</strong></div>
+      <div class="box"><span>Total vigente</span><strong>${fmt(netTotal)}</strong></div>
       <div class="box"><span>Fecha original</span><strong>${fdate(sale.original_sale_date)}</strong></div>
       <div class="box"><span>Fecha operativa actual</span><strong>${fdate(sale.sale_date)}</strong></div>
       <div class="box"><span>Fecha fiscal</span><strong>${sale.fiscal_issued_at ? fdate(String(sale.fiscal_issued_at).slice(0,10)) : 'No aplica'}</strong></div>
