@@ -1,5 +1,7 @@
 # Corrección controlada de facturas emitidas
 
+[← Volver a CLAUDE.md](../CLAUDE.md) · Relacionados: [Flujos y numeración documental](document-workflows.md) · [Apertura y cierre de Caja](cash-operations.md)
+
 ## Alcance implementado
 
 El módulo reemplaza el cambio destructivo de `sales.created_at` por un flujo
@@ -167,7 +169,7 @@ soportado permanecen bloqueadas con una explicación explícita.
 
 ## Pruebas
 
-`npm run test:sale-corrections` cubre 74 aserciones de integración:
+`npm run test:sale-corrections` cubre 106 aserciones de integración:
 
 - facturas pagadas y a crédito;
 - mismo mes, otro mes/año, fecha anterior y futura;
@@ -187,6 +189,47 @@ soportado permanecen bloqueadas con una explicación explícita.
   idempotencia, CxC, anulación y ausencia total de movimientos de inventario.
 - agrupación visual con números documentales reales y total neto de la operación.
 - operación única en Ventas y cantidades vigentes para la reimpresión ajustada.
+- corrección sobre la misma factura en venta a crédito y en venta de contado ya
+  cobrada, sin crear filas de `sales` ni consumir otro número documental;
+- cobro y devolución de la diferencia por caja, abono previo que no obliga a
+  documentos, y rechazo de reducir por debajo de lo ya cobrado;
+- factura con NCF que conserva el flujo compensatorio (`FISCAL_ISSUED`).
 
-`npm run test:financial` cubre además 128 aserciones, incluidas las ocho
-plantillas de impresión de la factura ajustada.
+`npm run test:financial` cubre además 199 aserciones, incluidas las plantillas de
+impresión de la factura ajustada.
+
+## Pendientes — siguiente cola de corrección
+
+Orden por impacto real observado en bases de clientes. Cada punto indica el
+bloqueo concreto y dónde está.
+
+1. **El aumento sobre una factura con NCF todavía consume la numeración
+   comercial.** En el flujo compensatorio, la factura complementaria nace con
+   `salesRepo.create({type:'factura'})` y toma el siguiente número de
+   `factura_contado` / `factura_credito` / `factura_historica`
+   (`documentKindForSale` en `database.js`). En un negocio con numeración
+   importada ese documento interno ocupa un número de la secuencia real del
+   cliente. Salida propuesta: secuencia propia (`AJU`) para el documento de
+   aumento, excluida del rebarrido que renumera facturas hacia
+   `factura_historica`, revisando antes los consumidores de `document_kind`
+   (`src/js/data.js`, `src/js/ventas.js`, `src/js/plantillas.js`).
+2. **Pago mixto.** `MIXED_PAYMENT` manda la corrección al flujo compensatorio.
+   Para resolverlo hay que repartir la diferencia entre efectivo y cuenta
+   financiera en la proporción del cobro original; la devolución ya calcula esa
+   proporción y sirve de referencia.
+3. **Cobro en moneda extranjera.** `FOREIGN_CURRENCY` bloquea la corrección en
+   sitio porque `account_amount` exige la tasa histórica del cobro.
+4. **Unidades serializadas.** `HAS_SERIALIZED_UNITS` impide corregir en sitio una
+   factura con IMEI/serial. Es el caso normal de VELO TECH: sin esto, el vertical
+   sigue dependiendo de documentos compensatorios.
+5. **Crédito con abonos mayores al nuevo total.** Hoy se rechaza con el monto
+   mínimo permitido. Falta la ruta que reduzca o reembolse el abono excedente
+   dentro de la misma transacción.
+6. **Período contable cerrado.** No hay override: el asiento no podría
+   regenerarse y la factura quedaría con un total distinto al contabilizado.
+7. **Conduce enlazado y corte de comisión emitido.** Bloqueados a propósito;
+   decidir si se permiten con recálculo explícito o siguen exigiendo documentos.
+
+Los documentos internos emitidos por versiones anteriores **no se renumeran**: el
+historial es inmutable y su número ya está consumido. Se reconocen por
+`correction_kind='product_addition'` y solo viven en Auditoría.
