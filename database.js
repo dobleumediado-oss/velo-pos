@@ -51,6 +51,7 @@ function initDB(customDataDir) {
 
   DB_PATH = path.join(dataDir, 'velo.db');
   db = new Database(DB_PATH);
+  clearTableExistsCache();
   // SQLite UPPER() solo transforma ASCII. VELO_UPPER conserva acentos y Ñ,
   // por lo que "Pérez" se guarda correctamente como "PÉREZ".
   db.function('VELO_UPPER', { deterministic: true }, value =>
@@ -1445,8 +1446,17 @@ function migrateProductsModel() {
   } catch { /* ya existe */ }
 }
 
+// Se consultaba sqlite_master en cada llamada, y varias caen dentro de bucles
+// por fila. Solo se cachea el resultado POSITIVO: una tabla que ya existe no
+// desaparece, mientras que un "todavía no existe" se vuelve a consultar, de
+// modo que una tabla creada por una migración se detecta de inmediato.
+let _existingTables = new Set();
+function clearTableExistsCache() { _existingTables = new Set(); }
 function tableExists(name) {
-  return !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name);
+  if (_existingTables.has(name)) return true;
+  const found = !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name);
+  if (found) _existingTables.add(name);
+  return found;
 }
 
 // La persona que entrega un equipo como parte de pago no tiene que convertirse
@@ -3532,21 +3542,46 @@ const PAYMENT_ALLOCATION_COLUMNS = `
 
 // Todas las aplicaciones agrupadas por abono en UNA consulta. Resolverlas fila
 // por fila hacía que cargar el historial creciera con cada abono registrado.
-function paymentAllocationsByPayment() {
+function paymentAllocationsByPayment(paymentIds = null) {
   const grouped = new Map();
   if (!tableExists('payment_allocations')) return grouped;
-  const rows = db.prepare(`
-    SELECT ${PAYMENT_ALLOCATION_COLUMNS}
-    FROM payment_allocations pa
-    JOIN sales s ON s.id=pa.sale_id
-    ORDER BY pa.id
-  `).all();
+  const rows = [];
+  if (paymentIds) {
+    const ids = [...new Set(paymentIds.map(Number).filter(Boolean))];
+    if (!ids.length) return grouped;
+    // Se trocea para no chocar con el límite de variables de SQLite.
+    for (let i = 0; i < ids.length; i += 400) {
+      const chunk = ids.slice(i, i + 400);
+      rows.push(...db.prepare(`
+        SELECT ${PAYMENT_ALLOCATION_COLUMNS}
+        FROM payment_allocations pa
+        JOIN sales s ON s.id=pa.sale_id
+        WHERE pa.payment_id IN (${chunk.map(() => '?').join(',')})
+        ORDER BY pa.id
+      `).all(...chunk));
+    }
+  } else {
+    rows.push(...db.prepare(`
+      SELECT ${PAYMENT_ALLOCATION_COLUMNS}
+      FROM payment_allocations pa
+      JOIN sales s ON s.id=pa.sale_id
+      ORDER BY pa.id
+    `).all());
+  }
   for (const row of rows) {
     const list = grouped.get(row.payment_id);
     if (list) list.push(row);
     else grouped.set(row.payment_id, [row]);
   }
   return grouped;
+}
+
+// Aplica el agrupador a una lista ya consultada de abonos. Un arreglo vacío SÍ
+// es respuesta ("este abono no tiene aplicaciones") y evita volver a la base.
+function hydratePaymentRows(rows) {
+  if (!rows.length) return rows;
+  const grouped = paymentAllocationsByPayment(rows.map(row => row.id));
+  return rows.map(payment => hydratePaymentAllocations(payment, grouped.get(payment.id) || []));
 }
 
 function hydratePaymentAllocations(payment, preloadedAllocations = null) {
@@ -3681,15 +3716,47 @@ function findPaymentByOperationId(operationId, customerId = null) {
   `).get(...params) || null;
 }
 
+// Agrupar por cliente en una sola pasada. Resolverlo cliente por cliente
+// costaba cinco consultas por fila (contactos, sucursales y teléfonos, más sus
+// comprobaciones de tabla) y el precio subía con cada cliente registrado.
+function groupByCustomer(rows) {
+  const grouped = new Map();
+  for (const row of rows) {
+    const list = grouped.get(row.customer_id);
+    if (list) list.push(row);
+    else grouped.set(row.customer_id, [row]);
+  }
+  return grouped;
+}
+
+function customerRelationsIndex() {
+  const contacts = groupByCustomer(db.prepare(`
+    SELECT * FROM customer_contacts WHERE active=1
+    ORDER BY customer_id,is_primary DESC,name COLLATE NOCASE
+  `).all());
+  const branches = tableExists('customer_branches') ? groupByCustomer(db.prepare(`
+    SELECT * FROM customer_branches WHERE active=1
+    ORDER BY customer_id,is_primary DESC,name COLLATE NOCASE
+  `).all()) : new Map();
+  const phones = tableExists('customer_phones') ? groupByCustomer(db.prepare(`
+    SELECT id,customer_id,phone_type,phone,is_primary,active
+    FROM customer_phones WHERE active=1
+    ORDER BY customer_id,is_primary DESC,id
+  `).all()) : new Map();
+  return { contacts, branches, phones };
+}
+
 const customersRepo = {
   getAll() {
-    return db.prepare('SELECT * FROM customers WHERE active=1 ORDER BY name').all()
-      .map(customer => ({
-        ...customer,
-        contacts: contactsForCustomer(customer.id),
-        branches: branchesForCustomer(customer.id),
-        phones: phonesForCustomer(customer.id),
-      }));
+    const rows = db.prepare('SELECT * FROM customers WHERE active=1 ORDER BY name').all();
+    if (!rows.length) return rows;
+    const index = customerRelationsIndex();
+    return rows.map(customer => ({
+      ...customer,
+      contacts: index.contacts.get(customer.id) || [],
+      branches: index.branches.get(customer.id) || [],
+      phones: index.phones.get(customer.id) || [],
+    }));
   },
   getById(id) {
     const customer = db.prepare('SELECT * FROM customers WHERE id=?').get(id);
@@ -4455,7 +4522,7 @@ const customersRepo = {
     // LEFT JOIN a sales para que la referencia de factura en el historial de
     // abonos muestre el número real (numero_factura_fmt), no el id interno.
     // Alias con prefijo sale_ para no colisionar con columnas de payments.
-    return db.prepare(`
+    return hydratePaymentRows(db.prepare(`
       SELECT p.*,
              s.document_number_fmt AS sale_document_number_fmt,
              s.numero_factura     AS sale_numero_factura,
@@ -4471,7 +4538,7 @@ const customersRepo = {
       WHERE p.customer_id=?
         ${includeCancelled ? '' : "AND COALESCE(p.status,'active')='active'"}
       ORDER BY p.created_at DESC
-    `).all(customerId).map(hydratePaymentAllocations);
+    `).all(customerId));
   },
   getAllPayments({ includeCancelled = false } = {}) {
     const rows = db.prepare(`
@@ -5010,7 +5077,7 @@ const cashRepo = {
     const session = db.prepare('SELECT * FROM cash_sessions WHERE id=?').get(sessionId);
     if (!session) return null;
     const sales = this.getSessionSales(sessionId);
-    const payments = db.prepare(`
+    const payments = hydratePaymentRows(db.prepare(`
       SELECT p.*,c.name customer_name,c.rnc customer_rnc
       FROM payments p
       LEFT JOIN customers c ON c.id=p.customer_id
@@ -5018,7 +5085,7 @@ const cashRepo = {
         AND COALESCE(p.status,'active')='active'
         AND COALESCE(p.import_source,'')=''
       ORDER BY p.created_at,p.id
-    `).all(sessionId).map(hydratePaymentAllocations);
+    `).all(sessionId));
     const movements = db.prepare(`
       SELECT * FROM cash_movements
       WHERE cash_session_id=?
@@ -7702,7 +7769,7 @@ const reportsRepo = {
       AND COALESCE(p.status,'active')='active'
       AND COALESCE(p.note,'') != 'Saldo inicial importado'`;
 
-    const rows = db.prepare(`
+    const rows = hydratePaymentRows(db.prepare(`
       SELECT p.*,
              c.name AS customer_name,
              c.rnc  AS customer_rnc,
@@ -7723,7 +7790,7 @@ const reportsRepo = {
       WHERE ${baseWhere}
       ORDER BY p.created_at DESC, p.id DESC
       LIMIT 5000
-    `).all(...f.params).map(hydratePaymentAllocations);
+    `).all(...f.params));
 
     const byDay = db.prepare(`
       SELECT date(p.created_at) AS day,
@@ -14169,6 +14236,8 @@ module.exports = {
   reportsRepo,
   audit,
   getDB: () => db,
+  // Expuesta para que las pruebas verifiquen que su caché no congela ausencias.
+  tableExists,
   // Exportada para auth:login y auth:getSuperPass en main.js
   // Genera la contraseña superadmin per-máquina sin depender de .env
   _deriveSuperAdminPass,

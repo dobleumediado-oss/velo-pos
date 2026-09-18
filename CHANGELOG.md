@@ -9,6 +9,17 @@
 - Esto evita que un ID sensible al uso de mayúsculas deje de coincidir con la
   identidad real enviada por la terminal.
 
+### Velocidad al cargar clientes y abonos (fase 1)
+
+- Cargar clientes ejecutaba cinco consultas por cada cliente para traer sus
+  contactos, sucursales y teléfonos. Ahora se agrupan en tres consultas fijas:
+  de 56.5 ms a 3.9 ms en una base con 317 clientes.
+- Las aplicaciones de abonos ya no se resuelven fila por fila en el estado de
+  cuenta del cliente, el cierre de caja ni el historial por rango.
+- La comprobación de existencia de tablas deja de consultar el catálogo de
+  SQLite en cada llamada. Solo se recuerda el resultado positivo, de modo que
+  una tabla creada por una migración posterior se sigue detectando.
+
 ### Velocidad al cargar abonos
 
 - Cargar el historial de abonos ejecutaba una consulta por cada abono, así que

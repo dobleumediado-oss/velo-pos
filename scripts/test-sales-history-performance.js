@@ -188,6 +188,43 @@ try {
   ok(payments.every(row => Array.isArray(row.allocations) && row.allocation_count === row.allocations.length),
     'cada abono conserva su lista de aplicaciones y su conteo');
 
+  console.log('\n== Clientes sin consulta por fila ==');
+  const insertCustomer = db.prepare("INSERT INTO customers(name,rnc,active) VALUES(?,?,1)");
+  const insertPhone = db.prepare(
+    "INSERT INTO customer_phones(customer_id,phone_type,phone,is_primary,active) VALUES(?,'celular',?,1,1)"
+  );
+  db.transaction(() => {
+    for (let i = 0; i < 120; i += 1) {
+      const id = insertCustomer.run(`CLIENTE ${i}`, `RNC${i}`).lastInsertRowid;
+      insertPhone.run(id, `809000${String(i).padStart(4, '0')}`);
+    }
+  })();
+  let customerPrepareCalls = 0;
+  const prepareBeforeCustomers = db.prepare.bind(db);
+  db.prepare = (sql) => { customerPrepareCalls += 1; return prepareBeforeCustomers(sql); };
+  let customers;
+  try {
+    customers = DB.customersRepo.getAll();
+  } finally {
+    db.prepare = prepareBeforeCustomers;
+  }
+  ok(customers.length >= 120, 'devuelve todos los clientes activos');
+  ok(customerPrepareCalls <= 6,
+    `resuelve contactos, sucursales y teléfonos en consultas fijas (usó ${customerPrepareCalls} para ${customers.length} clientes)`);
+  const phonesInDb = db.prepare('SELECT COUNT(*) n FROM customer_phones WHERE active=1').get().n;
+  const phonesInRepo = customers.reduce((sum, row) => sum + row.phones.length, 0);
+  ok(phonesInDb === phonesInRepo && customers.every(row =>
+    Array.isArray(row.contacts) && Array.isArray(row.branches) && Array.isArray(row.phones)),
+    'cada cliente conserva sus contactos, sucursales y teléfonos');
+
+  // Una tabla creada DESPUÉS de la primera consulta debe detectarse igual: solo
+  // se cachea el resultado positivo, nunca la ausencia.
+  const beforeCreate = DB.tableExists ? DB.tableExists('velo_cache_probe') : null;
+  db.exec('CREATE TABLE IF NOT EXISTS velo_cache_probe(id INTEGER PRIMARY KEY)');
+  const afterCreate = DB.tableExists ? DB.tableExists('velo_cache_probe') : null;
+  ok(beforeCreate === false && afterCreate === true,
+    'la caché de tablas no congela un "no existe": una migración posterior se detecta');
+
   const ui = fs.readFileSync(path.join(__dirname, '../src/js/ventas.js'), 'utf8');
   ok(ui.includes('const VENTAS_PAGE_SIZE = 100') && ui.includes('ventasGoToPage'),
     'la pantalla limita el render a 100 documentos y ofrece navegación');
