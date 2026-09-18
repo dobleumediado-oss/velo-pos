@@ -108,6 +108,7 @@ function cajaRenderIncomeHistoryBody() {
       <td><div class="flex" style="gap:3px">
         <button class="btn btn-ghost btn-sm" title="Ver detalle" onclick="cajaOpenIncomeHistoryDetail(${Number(r.id)})">${svg('eye')}</button>
         <button class="btn btn-ghost btn-sm" title="Reimprimir" onclick="cajaReprintIncomeReceipt(${Number(r.id)})">${svg('print')}</button>
+        ${isAdmin && !cancelled ? `<button class="btn btn-ghost btn-sm" title="Modificar" onclick="cajaEditIncomeFromHistory(${Number(r.id)})">${svg('edit')}</button>` : ''}
         ${isAdmin && !cancelled ? `<button class="btn btn-ghost btn-sm" title="Anular" onclick="cajaCancelIncomeFromHistory(${Number(r.id)})">${svg('x')}</button>` : ''}
       </div></td>
     </tr>`;
@@ -466,7 +467,8 @@ function renderCaja(el) {
         h('td',{style:{fontWeight:800,color:'var(--green)'}},fmt(r.amount)),
         h('td',null,h('div',{class:'flex',style:{gap:'3px'}},
           h('button',{class:'btn btn-ghost btn-sm',onclick:()=>printIncomeReceipt(r),html:svg('print')}),
-          ['admin','superadmin'].includes(_cajaUser()?.role) ? h('button',{class:'btn btn-ghost btn-sm',onclick:()=>openCancelIncomeReceiptModal(r),html:svg('x')}) : null
+          ['admin','superadmin'].includes(_cajaUser()?.role) ? h('button',{class:'btn btn-ghost btn-sm',title:'Modificar',onclick:()=>openEditIncomeReceiptModal(r),html:svg('edit')}) : null,
+          ['admin','superadmin'].includes(_cajaUser()?.role) ? h('button',{class:'btn btn-ghost btn-sm',title:'Anular',onclick:()=>openCancelIncomeReceiptModal(r),html:svg('x')}) : null
         ))));
       incomeCard.appendChild(h('div',{class:'tw'},h('table',null,
         h('thead',null,h('tr',null,...['Recibo','Recibido de','Concepto','Método','Monto',''].map(x=>h('th',null,x)))),h('tbody',null,...rows))));
@@ -703,6 +705,85 @@ function cajaPreviewIncomeReceipt(settings = null) {
     return;
   }
   printHTML(html, 'recibo_ingreso');
+}
+
+// Modificar un recibo conserva su número: se corrige el mismo documento y solo
+// se mueve la diferencia real de dinero.
+async function openEditIncomeReceiptModal(receipt) {
+  if (!receipt) return toast('Recibo no encontrado','err');
+  if (receipt.status === 'cancelled') return toast('Un recibo anulado no se puede modificar','w');
+  let accounts = [];
+  try {
+    const result = await window.api.financial.getAll();
+    accounts = (result?.ok ? result.data : []).filter(a => a.active && ['banco','tarjeta'].includes(a.type));
+  } catch {}
+  const sel = (value, current) => value === current ? ' selected' : '';
+  const method = String(receipt.method || 'efectivo');
+  openModal(`<div class="modal-title">Modificar ${_cajaEsc(receipt.document_number_fmt || `RIN-${receipt.id}`)}</div>
+    <div class="modal-sub">El recibo conserva su número. Solo se ajusta la diferencia de dinero que realmente cambie.</div>
+    <div class="g2"><div class="fg"><label class="lbl">Recibido de *</label><input class="inp" id="cash-income-edit-payer" value="${_cajaEsc(receipt.payer_name)}"/></div>
+      <div class="fg"><label class="lbl">Cédula / RNC</label><input class="inp" id="cash-income-edit-document" value="${_cajaEsc(receipt.payer_document || '')}"/></div></div>
+    <div class="fg"><label class="lbl">Concepto *</label><input class="inp" id="cash-income-edit-concept" value="${_cajaEsc(receipt.concept)}"/></div>
+    <div class="g2"><div class="fg"><label class="lbl">Tipo de ingreso</label><select class="inp" id="cash-income-edit-type">
+      <option value="otro_ingreso"${sel('otro_ingreso',receipt.income_type)}>Otro ingreso</option>
+      <option value="aporte_capital"${sel('aporte_capital',receipt.income_type)}>Aporte de capital</option>
+      <option value="prestamo"${sel('prestamo',receipt.income_type)}>Préstamo recibido</option>
+      <option value="reembolso"${sel('reembolso',receipt.income_type)}>Reembolso / recuperación</option></select></div>
+      <div class="fg"><label class="lbl">Monto (RD$) *</label><input class="inp" id="cash-income-edit-amount" type="number" min="0.01" step="0.01" value="${Number(receipt.amount || 0)}"/></div></div>
+    <div class="g2"><div class="fg"><label class="lbl">Método</label><select class="inp" id="cash-income-edit-method" onchange="cajaEditIncomeMethodChanged()">
+      <option value="efectivo"${sel('efectivo',method)}>Efectivo</option>
+      <option value="transferencia"${sel('transferencia',method)}>Transferencia</option>
+      <option value="tarjeta"${sel('tarjeta',method)}>Tarjeta</option>
+      <option value="cheque"${sel('cheque',method)}>Cheque</option></select></div>
+      <div class="fg" id="cash-income-edit-account-wrap" style="display:${method === 'efectivo' ? 'none' : ''}"><label class="lbl">Cuenta receptora *</label>
+        <select class="inp" id="cash-income-edit-account"><option value="">Seleccionar cuenta…</option>
+        ${accounts.map(a => `<option value="${a.id}"${Number(a.id) === Number(receipt.financial_account_id) ? ' selected' : ''}>${_cajaEsc(a.name)}${a.account_number ? ` · ${_cajaEsc(a.account_number)}` : ''}</option>`).join('')}</select></div></div>
+    <div class="fg"><label class="lbl">Referencia</label><input class="inp" id="cash-income-edit-reference" value="${_cajaEsc(receipt.reference || '')}"/></div>
+    <div class="fg"><label class="lbl">Notas para el recibo</label><textarea class="inp" id="cash-income-edit-notes" rows="2">${_cajaEsc(receipt.notes || '')}</textarea></div>
+    <div class="fg"><label class="lbl">Motivo de la modificación *</label><input class="inp" id="cash-income-edit-reason" placeholder="Por qué se corrige este recibo"/></div>
+    <div class="ven-callout">Si cambia el monto o el método, la diferencia entra o sale por la caja abierta y la cuenta afectada. El asiento contable se regenera.</div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-green" id="cash-income-edit-save" onclick="confirmEditIncomeReceipt(${Number(receipt.id)})">${svg('check')} Guardar cambios</button></div>`, 'modal-lg');
+}
+
+function cajaEditIncomeMethodChanged() {
+  const method = document.getElementById('cash-income-edit-method')?.value || 'efectivo';
+  const wrap = document.getElementById('cash-income-edit-account-wrap');
+  if (wrap) wrap.style.display = method === 'efectivo' ? 'none' : '';
+}
+
+async function confirmEditIncomeReceipt(id) {
+  const actor = _cajaUser();
+  const button = document.getElementById('cash-income-edit-save');
+  if (button) button.disabled = true;
+  const data = {
+    payer_name: document.getElementById('cash-income-edit-payer')?.value,
+    payer_document: document.getElementById('cash-income-edit-document')?.value,
+    concept: document.getElementById('cash-income-edit-concept')?.value,
+    income_type: document.getElementById('cash-income-edit-type')?.value,
+    amount: document.getElementById('cash-income-edit-amount')?.value,
+    method: document.getElementById('cash-income-edit-method')?.value,
+    financial_account_id: document.getElementById('cash-income-edit-account')?.value || null,
+    reference: document.getElementById('cash-income-edit-reference')?.value,
+    notes: document.getElementById('cash-income-edit-notes')?.value,
+    reason: document.getElementById('cash-income-edit-reason')?.value,
+  };
+  const result = await window.api.cash.updateIncomeReceipt({
+    id, data, cashSessionId:cajaSession?.id, requestUserId:actor?.id,
+  });
+  if (!result?.ok) { toast(result?.error || 'No se pudo modificar el recibo','err'); if (button) button.disabled = false; return; }
+  closeModal();
+  _cajaIncomeState.rows = _cajaIncomeState.rows.map(row =>
+    Number(row.id) === Number(id) ? result.data : row);
+  cajaIncomeHistoryInvalidate();
+  toast(`✓ ${result.data.document_number_fmt} actualizado`);
+  renderCaja(document.getElementById('page'));
+}
+
+function cajaEditIncomeFromHistory(id) {
+  const receipt = cajaIncomeHistoryRow(id);
+  if (!receipt) return toast('Recibo no encontrado','err');
+  openEditIncomeReceiptModal(receipt);
 }
 
 function openCancelIncomeReceiptModal(receipt) {

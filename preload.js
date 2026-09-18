@@ -162,6 +162,7 @@ const api = {
     getIncomeReceipts: (data) => ipcRenderer.invoke('cash:getIncomeReceipts', data),
     searchIncomeReceipts: (data) => ipcRenderer.invoke('cash:searchIncomeReceipts', data),
     createIncomeReceipt: (data) => ipcRenderer.invoke('cash:createIncomeReceipt', data),
+    updateIncomeReceipt: (data) => ipcRenderer.invoke('cash:updateIncomeReceipt', data),
     cancelIncomeReceipt: (data) => ipcRenderer.invoke('cash:cancelIncomeReceipt', data),
   },
 

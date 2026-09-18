@@ -48,6 +48,58 @@ try {
   DB.cashRepo.cancelIncomeReceipt(bankReceipt.id,'Transferencia rechazada',actor,sessionId);
   ok(DB.financialAccountsRepo.getById(accountId).current_balance===0,'anular revierte la cuenta financiera');
 
+  console.log('\n== Modificación del recibo conservando su número ==');
+  const editable = DB.cashRepo.createIncomeReceipt({ cash_session_id:sessionId, payer_name:'Pagador inicial',
+    concept:'Concepto inicial', income_type:'otro_ingreso', amount:1000, method:'efectivo',
+    reference:'REF-1' }, actor);
+  const expectedAfterCreate = DB.cashRepo.getSessionCashSummary(sessionId).expected;
+  const textOnly = DB.cashRepo.updateIncomeReceipt(editable.id,
+    { payer_name:'Pagador corregido', concept:'Concepto corregido', reference:'REF-2', reason:'Nombre mal escrito' },
+    actor, sessionId);
+  ok(textOnly.document_number_fmt === editable.document_number_fmt &&
+    textOnly.payer_name === 'Pagador corregido' && textOnly.concept === 'Concepto corregido',
+    'corregir datos conserva el mismo número de recibo');
+  ok(DB.cashRepo.getSessionCashSummary(sessionId).expected === expectedAfterCreate,
+    'una corrección de texto no toca el efectivo de la caja');
+
+  DB.cashRepo.updateIncomeReceipt(editable.id, { amount:1500, reason:'Se recibieron RD$500 adicionales' }, actor, sessionId);
+  ok(DB.cashRepo.getSessionCashSummary(sessionId).expected === expectedAfterCreate + 500,
+    'subir el monto solo mueve la diferencia hacia la caja');
+  DB.cashRepo.updateIncomeReceipt(editable.id, { amount:700, reason:'Se devolvio parte del dinero' }, actor, sessionId);
+  ok(DB.cashRepo.getSessionCashSummary(sessionId).expected === expectedAfterCreate - 300,
+    'bajar el monto retira exactamente la diferencia');
+
+  const balanceBeforeSwitch = DB.financialAccountsRepo.getById(accountId).current_balance;
+  DB.cashRepo.updateIncomeReceipt(editable.id,
+    { method:'transferencia', financial_account_id:accountId, reason:'El pago entro por transferencia' }, actor, sessionId);
+  ok(DB.cashRepo.getSessionCashSummary(sessionId).expected === expectedAfterCreate - 1000 &&
+    DB.financialAccountsRepo.getById(accountId).current_balance === balanceBeforeSwitch + 700,
+    'cambiar de efectivo a transferencia saca el dinero de caja y lo deposita en la cuenta');
+
+  const correctedEntry = db.prepare(`SELECT l.credit,a.code FROM accounting_entry_lines l
+    JOIN accounting_accounts a ON a.id=l.account_id
+    WHERE l.entry_id=? AND l.credit>0`).get(DB.cashRepo.getIncomeReceipt(editable.id).accounting_entry_id);
+  DB.cashRepo.updateIncomeReceipt(editable.id, { income_type:'prestamo', reason:'Era un prestamo, no otro ingreso' }, actor, sessionId);
+  const afterType = DB.cashRepo.getIncomeReceipt(editable.id);
+  const reclassified = db.prepare(`SELECT l.credit,a.code FROM accounting_entry_lines l
+    JOIN accounting_accounts a ON a.id=l.account_id
+    WHERE l.entry_id=? AND l.credit>0`).get(afterType.accounting_entry_id);
+  ok(correctedEntry?.code === '4104' && reclassified?.code === '2201' && reclassified.credit === 700,
+    'reclasificar el tipo regenera el asiento con la cuenta correcta');
+  ok(db.prepare("SELECT COUNT(*) c FROM audit_logs WHERE action='recibo_ingreso_corregido' AND entity_id=?")
+    .get(editable.id).c === 5, 'cada corrección queda en auditoría con su motivo');
+
+  let editErrors = [];
+  const expectError = (fn) => { try { fn(); editErrors.push(''); } catch (e) { editErrors.push(e.message); } };
+  expectError(() => DB.cashRepo.updateIncomeReceipt(editable.id, { amount:900 }, actor, sessionId));
+  expectError(() => DB.cashRepo.updateIncomeReceipt(editable.id, { amount:0, reason:'Monto invalido' }, actor, sessionId));
+  expectError(() => DB.cashRepo.updateIncomeReceipt(editable.id, { reason:'Sin cambios reales' }, actor, sessionId));
+  ok(/motivo/i.test(editErrors[0]) && /mayor a cero/i.test(editErrors[1]) && /cambios/i.test(editErrors[2]),
+    'exige motivo, monto válido y un cambio real');
+  DB.cashRepo.cancelIncomeReceipt(editable.id,'Fin de la prueba',actor,sessionId);
+  expectError(() => DB.cashRepo.updateIncomeReceipt(editable.id, { amount:100, reason:'Ya esta anulado' }, actor, sessionId));
+  ok(/anulado/i.test(editErrors[3]), 'un recibo anulado ya no se puede modificar');
+
   console.log('\n== Historial consultable y reimprimible ==');
   const keptReceipt = DB.cashRepo.createIncomeReceipt({ cash_session_id:sessionId, payer_name:'Arrendatario del local',
     concept:'Alquiler de vitrina', income_type:'otro_ingreso', amount:2500, method:'efectivo',
@@ -80,6 +132,8 @@ try {
   const ui = fs.readFileSync(path.join(__dirname,'../src/js/caja.js'),'utf8');
   ok(ui.includes('Historial de recibos de ingreso')&&ui.includes('function cajaSearchIncomeHistory')&&
     ui.includes('function cajaReprintIncomeReceipt'),'Caja muestra el historial con reimpresión');
+  ok(ui.includes('async function openEditIncomeReceiptModal')&&ui.includes('Motivo de la modificación')&&
+    ui.includes('function cajaEditIncomeFromHistory'),'Caja permite modificar el recibo desde la sesión y el historial');
   ok(ui.includes('Nuevo recibo de ingreso')&&ui.includes("printHTML(buildIncomeReceiptHTML(receipt, override), 'recibo_ingreso')"),'Caja incluye captura e impresión del recibo');
   ok(ui.includes('function _cajaIncomeReceiptSettings')&&ui.includes("_getCategoryConfig('ingreso')")&&
     ui.includes("settings.template === 'ingreso_termica_80'"),'el recibo respeta la plantilla configurada en el Centro de impresión');

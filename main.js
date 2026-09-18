@@ -2915,6 +2915,17 @@ ipcMain.handle('cash:createIncomeReceipt', async (_, { data, requestUserId } = {
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
+ipcMain.handle('cash:updateIncomeReceipt', async (_, { id, data, cashSessionId, requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) {
+      return { ok: false, error: 'Solo un administrador puede modificar recibos de ingreso' };
+    }
+    const receipt = cashRepo.updateIncomeReceipt(id, data, { id:reqUser.id, name:reqUser.name }, cashSessionId);
+    return { ok: true, data: receipt };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
 ipcMain.handle('cash:cancelIncomeReceipt', async (_, { id, reason, cashSessionId, requestUserId } = {}) => {
   try {
     const reqUser = authRepo.findById(requestUserId);

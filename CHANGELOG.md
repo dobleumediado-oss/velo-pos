@@ -9,6 +9,17 @@
 - Esto evita que un ID sensible al uso de mayúsculas deje de coincidir con la
   identidad real enviada por la terminal.
 
+### Modificar un recibo de ingreso
+
+- Un recibo de ingreso se puede corregir conservando su número: persona,
+  documento, concepto, tipo, monto, método, cuenta, referencia y notas.
+- Solo se mueve la diferencia real: subir o bajar el monto ajusta la caja por
+  esa diferencia, y cambiar de efectivo a banco retira el efectivo y deposita
+  en la cuenta elegida. El asiento contable se reversa y se regenera con la
+  clasificación correcta.
+- Exige motivo, queda en auditoría con el antes y el después, y está reservado
+  a administradores. Un recibo anulado ya no se modifica.
+
 ### Historial de recibos de ingreso
 
 - Caja incorpora un historial propio de recibos de ingreso que ya no depende de

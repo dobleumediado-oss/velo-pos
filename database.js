@@ -4607,27 +4607,138 @@ const cashRepo = {
           description:`Ingreso ${issued.formatted_number} · ${concept}`, referenceType:'cash_income_receipt', referenceId:id,
           method, notes:String(data.reference || '').trim(), userId:Number(actor.id) || null }).movementId;
       }
-      let accountingEntryId = null;
-      if (db.prepare("SELECT value FROM settings WHERE key='module_contabilidad'").get()?.value === '1') {
-        const cfg = accountingRepo.getConfig();
-        const getAccId = (key, fallback) => cfg[key]?.account_id || db.prepare('SELECT id FROM accounting_accounts WHERE code=?').get(fallback)?.id;
-        const debitId = method === 'efectivo' ? getAccId('account_cash','1101') : getAccId('account_bank','1103');
-        const creditCode = incomeType === 'aporte_capital' ? '3102' : incomeType === 'prestamo' ? '2201' : '4104';
-        const creditId = db.prepare('SELECT id FROM accounting_accounts WHERE code=?').get(creditCode)?.id || getAccId('account_other_rev','4104');
-        if (debitId && creditId) {
-          accountingEntryId = accountingRepo.createEntry({ date:todayStr(), concept:`Ingreso ${issued.formatted_number} · ${concept}`,
-            reference:issued.formatted_number, source_module:'recibo_ingreso', source_id:id,
-            lines:[
-              { account_id:debitId, debit:amount, credit:0, description:concept },
-              { account_id:creditId, debit:0, credit:amount, description:concept },
-            ], notes:String(data.notes || '').trim(), userId:Number(actor.id) || null, status:'confirmado' }).entryId;
-        }
-      }
+      const accountingEntryId = this._postIncomeReceiptEntry({
+        receiptId:id, formattedNumber:issued.formatted_number, concept, amount, method,
+        incomeType, notes:String(data.notes || '').trim(), userId:Number(actor.id) || null,
+      });
       db.prepare(`UPDATE cash_income_receipts SET cash_movement_id=?,financial_movement_id=?,accounting_entry_id=? WHERE id=?`)
         .run(cashMovementId, financialMovementId, accountingEntryId, id);
       audit(Number(actor.id) || null, String(actor.name || ''), 'recibo_ingreso_creado', 'cash_income_receipts', id,
         `${issued.formatted_number} | ${concept} | RD$${amount.toFixed(2)}`);
       return this.getIncomeReceipt(id);
+    })();
+  },
+  // El asiento se arma igual al crear y al corregir: una sola fuente impide que
+  // una corrección clasifique el ingreso distinto que el documento original.
+  _postIncomeReceiptEntry({ receiptId, formattedNumber, concept, amount, method, incomeType, notes, userId }) {
+    if (db.prepare("SELECT value FROM settings WHERE key='module_contabilidad'").get()?.value !== '1') return null;
+    const cfg = accountingRepo.getConfig();
+    const getAccId = (key, fallback) => cfg[key]?.account_id || db.prepare('SELECT id FROM accounting_accounts WHERE code=?').get(fallback)?.id;
+    const debitId = method === 'efectivo' ? getAccId('account_cash','1101') : getAccId('account_bank','1103');
+    const creditCode = incomeType === 'aporte_capital' ? '3102' : incomeType === 'prestamo' ? '2201' : '4104';
+    const creditId = db.prepare('SELECT id FROM accounting_accounts WHERE code=?').get(creditCode)?.id || getAccId('account_other_rev','4104');
+    if (!debitId || !creditId) return null;
+    return accountingRepo.createEntry({
+      date:todayStr(), concept:`Ingreso ${formattedNumber} · ${concept}`,
+      reference:formattedNumber, source_module:'recibo_ingreso', source_id:receiptId,
+      lines:[
+        { account_id:debitId, debit:amount, credit:0, description:concept },
+        { account_id:creditId, debit:0, credit:amount, description:concept },
+      ], notes:String(notes || ''), userId:userId || null, status:'confirmado',
+    }).entryId;
+  },
+  // Corregir un recibo de ingreso conserva su número: se ajusta el mismo
+  // documento y solo se mueve la diferencia real de dinero.
+  updateIncomeReceipt(id, data = {}, actor = {}, currentSessionId = null) {
+    const receipt = this.getIncomeReceipt(id);
+    if (!receipt) throw new Error('Recibo no encontrado');
+    if (receipt.status !== 'active') throw new Error('Un recibo anulado no se puede modificar');
+    const pick = (key) => (data[key] === undefined || data[key] === null ? receipt[key] : data[key]);
+    const amount = round2(Number(pick('amount')) || 0);
+    const payerName = String(pick('payer_name') || '').trim();
+    const payerDocument = String(pick('payer_document') || '').trim();
+    const concept = String(pick('concept') || '').trim();
+    const incomeType = String(pick('income_type') || 'otro_ingreso');
+    const method = String(pick('method') || 'efectivo').toLowerCase();
+    const reference = String(pick('reference') || '').trim();
+    const notes = String(pick('notes') || '').trim();
+    const reason = String(data.reason || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+    if (amount <= 0) throw new Error('El monto del ingreso debe ser mayor a cero');
+    if (!payerName) throw new Error('Indica quién entrega el dinero');
+    if (!concept) throw new Error('Indica el concepto del ingreso');
+    if (reason.length < 5) throw new Error('Indica el motivo de la modificación');
+    if (!['otro_ingreso','aporte_capital','prestamo','reembolso'].includes(incomeType)) throw new Error('Tipo de ingreso no válido');
+    if (!['efectivo','transferencia','tarjeta','cheque'].includes(method)) throw new Error('Método de ingreso no válido');
+    let financialAccount = null;
+    if (method !== 'efectivo') {
+      financialAccount = db.prepare('SELECT * FROM financial_accounts WHERE id=? AND active=1')
+        .get(Number(pick('financial_account_id')));
+      if (!financialAccount) throw new Error('Selecciona la cuenta que recibió el ingreso');
+    }
+    const wasCash = receipt.method === 'efectivo';
+    const isCash = method === 'efectivo';
+    const amountChanged = Math.abs(amount - Number(receipt.amount || 0)) > 0.005;
+    const methodChanged = method !== receipt.method;
+    const accountChanged = Number(financialAccount?.id || 0) !== Number(receipt.financial_account_id || 0);
+    const movesCash = (wasCash || isCash) && (amountChanged || methodChanged);
+    // La caja original se reutiliza mientras siga abierta; si ya cerró, la
+    // diferencia entra o sale por la caja abierta de hoy.
+    const originalSession = db.prepare('SELECT id,status FROM cash_sessions WHERE id=?').get(receipt.cash_session_id);
+    const settlementSessionId = originalSession?.status === 'open'
+      ? Number(originalSession.id)
+      : (db.prepare("SELECT id FROM cash_sessions WHERE id=? AND status='open'").get(Number(currentSessionId))?.id || null);
+    if (movesCash && !settlementSessionId) {
+      throw new Error('Abre la caja para ajustar el efectivo de este recibo');
+    }
+    const changed = amountChanged || methodChanged || accountChanged ||
+      payerName !== receipt.payer_name || payerDocument !== (receipt.payer_document || '') ||
+      concept !== receipt.concept || incomeType !== receipt.income_type ||
+      reference !== (receipt.reference || '') || notes !== (receipt.notes || '');
+    if (!changed) throw new Error('No hay cambios que aplicar en este recibo');
+    const actorId = Number(actor.id) || null;
+    const number = receipt.document_number_fmt || `RIN-${receipt.id}`;
+    return db.transaction(() => {
+      let cashMovementId = receipt.cash_movement_id;
+      let financialMovementId = receipt.financial_movement_id;
+      if (wasCash && isCash && amountChanged) {
+        const diff = round2(amount - Number(receipt.amount || 0));
+        this.addMovement({ sessionId:settlementSessionId, type:diff > 0 ? 'entrada' : 'salida',
+          amount:Math.abs(diff), method:'efectivo', referenceId:receipt.id,
+          description:`Corrección ${number} · ${reason}`, userId:actorId });
+      } else if (wasCash && !isCash) {
+        this.addMovement({ sessionId:settlementSessionId, type:'salida', amount:Number(receipt.amount || 0),
+          method:'efectivo', referenceId:receipt.id,
+          description:`Corrección ${number} · el ingreso deja de ser en efectivo · ${reason}`, userId:actorId });
+        financialMovementId = financialAccountsRepo.addMovement({ accountId:financialAccount.id, type:'deposito',
+          amount, description:`Ingreso ${number} · ${concept}`, referenceType:'cash_income_receipt',
+          referenceId:receipt.id, method, notes:reference, userId:actorId }).movementId;
+      } else if (!wasCash && isCash) {
+        if (receipt.financial_movement_id) {
+          financialAccountsRepo.cancelMovement(receipt.financial_movement_id, actorId, `Corrección ${number}: ${reason}`);
+        }
+        cashMovementId = this.addMovement({ sessionId:settlementSessionId, type:'entrada', amount, method:'efectivo',
+          referenceId:receipt.id, description:`Ingreso ${number} · ${concept}`, userId:actorId });
+      } else if (!wasCash && !isCash && (amountChanged || accountChanged)) {
+        if (receipt.financial_movement_id) {
+          financialAccountsRepo.cancelMovement(receipt.financial_movement_id, actorId, `Corrección ${number}: ${reason}`);
+        }
+        financialMovementId = financialAccountsRepo.addMovement({ accountId:financialAccount.id, type:'deposito',
+          amount, description:`Ingreso ${number} · ${concept}`, referenceType:'cash_income_receipt',
+          referenceId:receipt.id, method, notes:reference, userId:actorId }).movementId;
+      }
+      let accountingEntryId = receipt.accounting_entry_id;
+      const entryAffected = amountChanged || methodChanged || concept !== receipt.concept ||
+        incomeType !== receipt.income_type;
+      if (entryAffected) {
+        accountingRepo.reverseSourceEntry('recibo_ingreso', receipt.id, actorId, `Corrección ${number}: ${reason}`);
+        accountingEntryId = this._postIncomeReceiptEntry({
+          receiptId:receipt.id, formattedNumber:number, concept, amount, method, incomeType, notes, userId:actorId,
+        });
+      }
+      db.prepare(`UPDATE cash_income_receipts SET payer_name=?,payer_document=?,concept=?,income_type=?,
+        amount=?,method=?,financial_account_id=?,reference=?,notes=?,
+        cash_movement_id=?,financial_movement_id=?,accounting_entry_id=? WHERE id=?`).run(
+        payerName, payerDocument, concept, incomeType, amount, method,
+        financialAccount?.id || null, reference, notes,
+        cashMovementId, financialMovementId, accountingEntryId, receipt.id);
+      audit(actorId, String(actor.name || ''), 'recibo_ingreso_corregido', 'cash_income_receipts', receipt.id,
+        JSON.stringify({ number, reason,
+          antes:{ payer_name:receipt.payer_name, concept:receipt.concept, income_type:receipt.income_type,
+            amount:Number(receipt.amount || 0), method:receipt.method, financial_account_id:receipt.financial_account_id,
+            reference:receipt.reference || '', notes:receipt.notes || '' },
+          despues:{ payer_name:payerName, concept, income_type:incomeType, amount, method,
+            financial_account_id:financialAccount?.id || null, reference, notes } }));
+      return this.getIncomeReceipt(receipt.id);
     })();
   },
   getIncomeReceipt(id) {
