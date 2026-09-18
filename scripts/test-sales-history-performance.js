@@ -277,7 +277,6 @@ try {
       return ventasContext.reloadPayments().then(() => {
         ok(ventasContext.counters().paymentCalls === 1,
           'en Ventas los abonos se recargan de inmediato, sin diferir');
-        console.log(`\n== RESULTADO: ${passed} OK · ${elapsedMs.toFixed(1)} ms ==`);
       });
     })
     .catch(error => { console.error('  ✗', error.message); process.exitCode = 1; });
@@ -314,6 +313,58 @@ try {
   ok(!/(?<!veloRepaint\(\(\) => )renderCaja\(document\.getElementById\('page'\)\)/.test(cajaSource) &&
     !/(?<!veloRepaint\(\(\) => )renderVentas\(document\.getElementById\('page'\)\)/.test(ventasSource),
     'Caja y Ventas repintan siempre a través del helper que conserva la posición');
+
+  console.log('\n== Aviso de cambio sin trabajo duplicado ==');
+  const trackFrom = dataSource.indexOf('const _reloadInFlight = new Map();');
+  const trackTo = dataSource.indexOf('async function reloadPayments(');
+  const syncFrom = dataSource.indexOf('let _syncPending = new Set();');
+  const syncTo = dataSource.indexOf('  if (window.api && window.api.sync', syncFrom) - 'try {\n'.length;
+  ok(trackFrom > 0 && syncFrom > trackFrom && syncTo > syncFrom,
+    'el seguimiento de ámbitos y el manejador de avisos siguen en data.js');
+
+  let productReloads = 0;
+  const syncContext = {
+    page: 'inventario',
+    console,
+    reloadProducts: async () => { productReloads += 1; },
+    reloadCustomers: async () => {},
+    reloadPayments: async () => {},
+    reloadSales: async () => {},
+    renderInvTable: () => {},
+    setTimeout: (fn) => { syncContext.scheduled = fn; return 1; },
+    counters: () => ({ productReloads }),
+  };
+  require('vm').runInNewContext(
+    `${dataSource.slice(trackFrom, trackTo)}
+     ${dataSource.slice(syncFrom, syncTo)}
+     this.markRefreshed = (scope) => _scopeRefreshedAt.set(scope, Date.now());
+     this.markStale = (scope) => _scopeRefreshedAt.set(scope, Date.now() - 5000);
+     this.onRemoteSync = _onRemoteSync;
+     this.applyRemoteSync = _applyRemoteSync;`,
+    syncContext
+  );
+
+  syncContext.markRefreshed('products');
+  syncContext.onRemoteSync({ scopes: ['products'], local: true });
+  ok(typeof syncContext.scheduled === 'function', 'el aviso se agenda con su ventana de agrupación');
+  syncContext.scheduled();
+  setTimeout(() => {
+    ok(syncContext.counters().productReloads === 0,
+      'el aviso que llega justo después de la propia recarga no vuelve a consultar');
+    syncContext.markStale('products');
+    syncContext.onRemoteSync({ scopes: ['products'], local: true });
+    syncContext.scheduled();
+    setTimeout(() => {
+      ok(syncContext.counters().productReloads === 1,
+        'un cambio que la pantalla no había refrescado sí se recupera');
+      const mainSource = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
+      ok(mainSource.includes("send('sync:changed', { scopes, local: true })"),
+        'en modo local el proceso principal también avisa a su propio renderer');
+      ok(dataSource.includes('data && data.local ? 120 : 250'),
+        'un aviso local se atiende antes que uno que atravesó la red');
+      console.log(`\n== RESULTADO: ${passed} OK · ${elapsedMs.toFixed(1)} ms ==`);
+    }, 5);
+  }, 5);
 
   const ui = fs.readFileSync(path.join(__dirname, '../src/js/ventas.js'), 'utf8');
   ok(ui.includes('const VENTAS_PAGE_SIZE = 100') && ui.includes('ventasGoToPage'),

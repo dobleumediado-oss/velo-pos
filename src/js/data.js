@@ -406,10 +406,21 @@ function veloRepaint(render) {
 // Varias acciones seguidas disparaban la MISMA recarga en paralelo. Una
 // consulta ya en vuelo se comparte en vez de repetirse contra la base.
 const _reloadInFlight = new Map();
+// Cuándo se refrescó por última vez cada ámbito. El aviso de mutación en modo
+// local llega justo después de que la propia acción ya recargó lo suyo; sin
+// esta marca, cada acción costaría el doble.
+const _scopeRefreshedAt = new Map();
+const SYNC_ECHO_WINDOW_MS = 700;
+function _scopeJustRefreshed(scope) {
+  const at = _scopeRefreshedAt.get(scope);
+  return !!at && (Date.now() - at) < SYNC_ECHO_WINDOW_MS;
+}
 function _coalesceReload(key, run) {
   const pending = _reloadInFlight.get(key);
   if (pending) return pending;
-  const promise = Promise.resolve().then(run).finally(() => _reloadInFlight.delete(key));
+  const promise = Promise.resolve().then(run)
+    .then(value => { _scopeRefreshedAt.set(key, Date.now()); return value; })
+    .finally(() => _reloadInFlight.delete(key));
   _reloadInFlight.set(key, promise);
   return promise;
 }
@@ -477,6 +488,7 @@ async function reloadSales(filters = {}) {
   // no puede sobrescribir la página más reciente ni provocar un repintado doble.
   if (generation !== salesLoadGeneration) return DB.sales;
   DB.sales = normalized;
+  _scopeRefreshedAt.set('sales', Date.now());
 
   // Sincronizar con compat
   if (window._syncDB) window._syncDB({ sales: DB.sales });
@@ -496,6 +508,12 @@ let _syncTimer = null;
 async function _applyRemoteSync() {
   const s = _syncPending; _syncPending = new Set(); _syncTimer = null;
   const at = (typeof page !== 'undefined') ? page : null;
+  // Eco de la propia acción: si el ámbito se refrescó hace un instante por la
+  // ruta explícita del módulo, volver a consultarlo sería trabajo duplicado.
+  ['products', 'customers', 'sales'].forEach(scope => {
+    if (s.has(scope) && _scopeJustRefreshed(scope)) s.delete(scope);
+  });
+  if (!s.size) return;
   try {
     if (s.has('products')) {
       await reloadProducts();
@@ -521,7 +539,9 @@ function _onRemoteSync(data) {
   if (!scopes || !scopes.length) return;
   scopes.forEach(sc => _syncPending.add(sc));
   if (_syncTimer) return;
-  _syncTimer = setTimeout(_applyRemoteSync, 250);
+  // Un aviso local no atravesó la red y puede atenderse antes; el de otra
+  // terminal conserva su ventana para agrupar la ráfaga en un solo refresco.
+  _syncTimer = setTimeout(_applyRemoteSync, data && data.local ? 120 : 250);
 }
 try {
   if (window.api && window.api.sync && typeof window.api.sync.onChanged === 'function') {

@@ -9,6 +9,15 @@
 - Esto evita que un ID sensible al uso de mayúsculas deje de coincidir con la
   identidad real enviada por la terminal.
 
+### Cambios en vivo también con una sola terminal (fase 4)
+
+- Hasta ahora, el aviso interno de "estos datos cambiaron" solo existía con
+  varias terminales. Con una sola instalación, cada pantalla dependía de que la
+  acción acordara repintarla. Ahora el aviso también funciona en modo local.
+- El refresco no se duplica: si la propia acción acaba de recargar ese dato, el
+  aviso se descarta en lugar de repetir la consulta.
+- Un aviso local se atiende en 120 ms en vez de 250, porque no atravesó la red.
+
 ### El repintado ya no descoloca la pantalla (fase 3)
 
 - Al confirmar una acción, el módulo se repintaba completo y la vista volvía al

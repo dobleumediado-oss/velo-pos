@@ -8441,6 +8441,18 @@ function setupMultiTerminal() {
       logInfo('multiterminal', 'Cliente SSE iniciado', cfg);
     } catch (e) { logError('multiterminal', 'SSE cliente falló: ' + e.message); }
   } else {
+    // Modo local: no hay red que avisar, pero el propio renderer sí gana con el
+    // aviso. Un cambio hecho desde un módulo llega a los demás sin depender de
+    // que cada acción acuerde repintar la pantalla ajena. El renderer descarta
+    // los avisos de lo que acaba de refrescar, así que no duplica trabajo.
+    try {
+      const { scopesForChannel } = require('./src/main/sync-events');
+      bridge.setAfterMutation((channel) => {
+        const scopes = scopesForChannel(channel);
+        if (!scopes) return;
+        try { mainWindow && mainWindow.webContents.send('sync:changed', { scopes, local: true }); } catch {}
+      });
+    } catch (e) { logWarn('multiterminal', 'Aviso local no disponible: ' + e.message); }
     logInfo('multiterminal', 'Modo de conexión', { mode });
   }
 
