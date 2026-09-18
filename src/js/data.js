@@ -362,6 +362,47 @@ async function reloadCustomers() {
   });
 }
 
+// Un repintado completo del módulo devolvía la vista al tope y perdía el foco
+// del campo activo: una acción en el medio de una tabla larga descolocaba al
+// usuario aunque el dato ya estuviera correcto. Se conserva la posición y el
+// foco alrededor del repintado. No aplica a navegar entre módulos: ahí empezar
+// arriba es lo correcto.
+function veloRepaint(render) {
+  const page = document.getElementById('page');
+  const scrollTop = page ? page.scrollTop : 0;
+  const scrollLeft = page ? page.scrollLeft : 0;
+  const active = document.activeElement;
+  const activeId = active && active.id ? active.id : '';
+  const selectionStart = activeId && typeof active.selectionStart === 'number'
+    ? active.selectionStart : null;
+  const restore = () => {
+    const target = document.getElementById('page');
+    if (target && (scrollTop || scrollLeft)) {
+      // El contenedor anima su scroll; restaurar debe ser instantáneo.
+      const previous = target.style.scrollBehavior;
+      target.style.scrollBehavior = 'auto';
+      target.scrollTop = scrollTop;
+      target.scrollLeft = scrollLeft;
+      target.style.scrollBehavior = previous;
+    }
+    if (!activeId) return;
+    const again = document.getElementById(activeId);
+    if (!again || typeof again.focus !== 'function') return;
+    again.focus();
+    if (selectionStart != null && typeof again.setSelectionRange === 'function') {
+      try { again.setSelectionRange(selectionStart, selectionStart); } catch {}
+    }
+  };
+  let result;
+  try {
+    result = render();
+  } finally {
+    if (result && typeof result.then === 'function') result.then(restore).catch(restore);
+    else restore();
+  }
+  return result;
+}
+
 // Varias acciones seguidas disparaban la MISMA recarga en paralelo. Una
 // consulta ya en vuelo se comparte en vez de repetirse contra la base.
 const _reloadInFlight = new Map();
@@ -464,7 +505,7 @@ async function _applyRemoteSync() {
     if (s.has('customers')) {
       await Promise.all([reloadCustomers(), reloadPayments()]);
       if (at === 'clientes' && typeof renderCliTable === 'function') renderCliTable();
-      if (at === 'caja' && typeof renderCaja === 'function') renderCaja(document.getElementById('page'));
+      if (at === 'caja' && typeof renderCaja === 'function') veloRepaint(() => renderCaja(document.getElementById('page')));
     }
     if (s.has('sales')) {
       await reloadSales({ range: (typeof ventasRange !== 'undefined' ? ventasRange : 'today') });

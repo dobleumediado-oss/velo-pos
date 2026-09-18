@@ -9,6 +9,13 @@
 - Esto evita que un ID sensible al uso de mayúsculas deje de coincidir con la
   identidad real enviada por la terminal.
 
+### El repintado ya no descoloca la pantalla (fase 3)
+
+- Al confirmar una acción, el módulo se repintaba completo y la vista volvía al
+  tope perdiendo el campo enfocado. Ahora Caja, Ventas y Clientes conservan la
+  posición del listado, el campo activo y la posición del cursor.
+- Navegar entre módulos sigue empezando desde arriba, como corresponde.
+
 ### Menos trabajo repetido al refrescar (fase 2)
 
 - Varias acciones seguidas disparaban la misma recarga en paralelo. Ahora una

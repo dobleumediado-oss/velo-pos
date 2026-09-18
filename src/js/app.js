@@ -1665,7 +1665,7 @@ function routeTo(p) {
       if (!target) return;
       if (routedPage === 'ventas' && typeof renderVentasTable === 'function') renderVentasTable();
       else if (routedPage === 'clientes' && typeof renderCliTable === 'function') renderCliTable();
-      else if (routedPage === 'caja' && typeof renderCaja === 'function') renderCaja(target);
+      else if (routedPage === 'caja' && typeof renderCaja === 'function') veloRepaint(() => renderCaja(target));
     }).catch(() => {});
   }
 

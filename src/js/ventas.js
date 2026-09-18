@@ -2056,7 +2056,7 @@ function openPaymentsForSale(saleId) {
   closeModal();
   ventasTab = 'abonos';
   ventasSearch = sale ? facturaLabel(sale) : '';
-  renderVentas(document.getElementById('page'));
+  veloRepaint(() => renderVentas(document.getElementById('page')));
 }
 
 function ventaPuedeReutilizarNumero(sale) {
@@ -2237,7 +2237,7 @@ async function confirmarAnulacion(saleId, registerAgain = false) {
     return;
   }
   if (result.isReturn) renderDevoluciones(document.getElementById('page'));
-  else renderVentas(document.getElementById('page'));
+  else veloRepaint(() => renderVentas(document.getElementById('page')));
   ventasRefreshAfterMutation({
     range: result.isReturn ? 'all' : ventasRange,
     view: result.isReturn ? null : 'sales', products: true,
@@ -2247,7 +2247,7 @@ async function confirmarAnulacion(saleId, registerAgain = false) {
       if (result.isReturn && page === 'devoluciones') {
         renderDevoluciones(document.getElementById('page'));
       } else if (!result.isReturn && page === 'ventas') {
-        renderVentas(document.getElementById('page'));
+        veloRepaint(() => renderVentas(document.getElementById('page')));
       }
     },
   });
@@ -2581,7 +2581,7 @@ async function ventasSubmitMonetaryCredit() {
     range: 'all', view: null, products: true, customers: true,
     onDone: () => {
       if (typeof page !== 'undefined' && page === 'ventas') {
-        renderVentas(document.getElementById('page'));
+        veloRepaint(() => renderVentas(document.getElementById('page')));
       }
     },
   });
@@ -3002,7 +3002,7 @@ async function ventasSubmitProductCorrection() {
     range: 'all', view: null, products: true, customers: true,
     onDone: () => {
       if (typeof page !== 'undefined' && page === 'ventas') {
-        renderVentas(document.getElementById('page'));
+        veloRepaint(() => renderVentas(document.getElementById('page')));
       }
     },
   });
@@ -3216,7 +3216,7 @@ async function guardarVentaDate(saleId) {
     range: ventasRange, view: ventasTab === 'cotizaciones' ? null : 'sales',
     onDone: () => {
       if (typeof page !== 'undefined' && page === 'ventas') {
-        renderVentas(document.getElementById('page'));
+        veloRepaint(() => renderVentas(document.getElementById('page')));
       }
     },
   });
@@ -3281,7 +3281,7 @@ async function guardarVentaAdmin(saleId) {
     range: ventasRange, view: 'sales',
     onDone: () => {
       if (typeof page !== 'undefined' && page === 'ventas') {
-        renderVentas(document.getElementById('page'));
+        veloRepaint(() => renderVentas(document.getElementById('page')));
       }
     },
   });

@@ -685,7 +685,7 @@ async function confirmIncomeReceipt() {
     cajaIncomeHistoryInvalidate();
     toast(`✓ Ingreso registrado · ${result.data.document_number_fmt}`);
     printIncomeReceipt(result.data);
-    renderCaja(document.getElementById('page'));
+    veloRepaint(() => renderCaja(document.getElementById('page')));
   } catch (e) {
     toast(e?.message || 'No se pudo registrar el ingreso','err');
     if (button) button.disabled = false;
@@ -874,7 +874,7 @@ async function confirmEditIncomeReceipt(id) {
     Number(row.id) === Number(id) ? result.data : row);
   cajaIncomeHistoryInvalidate();
   toast(`✓ ${result.data.document_number_fmt} actualizado`);
-  renderCaja(document.getElementById('page'));
+  veloRepaint(() => renderCaja(document.getElementById('page')));
 }
 
 function cajaEditIncomeFromHistory(id) {
@@ -896,7 +896,7 @@ async function confirmCancelIncomeReceipt(id) {
   _cajaIncomeState.rows = _cajaIncomeState.rows.filter(row=>Number(row.id)!==Number(id));
   cajaIncomeHistoryInvalidate();
   toast('✓ Ingreso anulado y retirado de Caja');
-  renderCaja(document.getElementById('page'));
+  veloRepaint(() => renderCaja(document.getElementById('page')));
 }
 
 // ══════════════════════════════════════════════
@@ -1026,11 +1026,11 @@ async function confirmarApertura() {
   };
   closeModal();
   toast(result.recovered ? '✓ Caja abierta y confirmada' : '✓ Caja abierta');
-  renderCaja(document.getElementById('page'));
+  veloRepaint(() => renderCaja(document.getElementById('page')));
   buildTopbar();
   buildSidebar();
   Promise.resolve(chkCaja()).then(() => {
-    if (typeof page !== 'undefined' && page === 'caja') renderCaja(document.getElementById('page'));
+    if (typeof page !== 'undefined' && page === 'caja') veloRepaint(() => renderCaja(document.getElementById('page')));
     buildTopbar();
   }).catch(() => {});
 }
@@ -1323,14 +1323,14 @@ async function confirmarCierre(expected) {
   closeModal();
 
   toast(result.recovered ? '✓ Caja cerrada y confirmada' : '✓ Caja cerrada');
-  renderCaja(document.getElementById('page'));
+  veloRepaint(() => renderCaja(document.getElementById('page')));
   buildTopbar();
   buildSidebar();
   // El reporte queda disponible bajo demanda. Cerrar caja nunca abre ni envía
   // una impresión automáticamente.
   window.api.cash.getSessions().then(sessions => {
     DB.caja = sessions || [];
-    if (typeof page !== 'undefined' && page === 'caja') renderCaja(document.getElementById('page'));
+    if (typeof page !== 'undefined' && page === 'caja') veloRepaint(() => renderCaja(document.getElementById('page')));
   }).catch(() => {});
 }
 

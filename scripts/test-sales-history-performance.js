@@ -282,6 +282,39 @@ try {
     })
     .catch(error => { console.error('  ✗', error.message); process.exitCode = 1; });
 
+  console.log('\n== Repintado que conserva la posición ==');
+  const repaintFrom = dataSource.indexOf('function veloRepaint(');
+  const repaintTo = dataSource.indexOf('// Varias acciones seguidas disparaban');
+  ok(repaintFrom > 0 && repaintTo > repaintFrom, 'veloRepaint vive en data.js');
+  const pageEl = {
+    scrollTop: 420, scrollLeft: 0, style: {},
+    focus() {},
+  };
+  const focusable = { id: 'campo', focus() { focusable.focused = true; }, selectionStart: 3,
+    setSelectionRange() { focusable.restoredCaret = true; } };
+  const repaintContext = {
+    document: {
+      activeElement: focusable,
+      getElementById: (id) => (id === 'page' ? pageEl : (id === 'campo' ? focusable : null)),
+    },
+    repainted: false,
+  };
+  require('vm').runInNewContext(
+    `${dataSource.slice(repaintFrom, repaintTo)}
+     veloRepaint(() => { this.repainted = true; document.getElementById('page').scrollTop = 0; });`,
+    repaintContext
+  );
+  ok(repaintContext.repainted && pageEl.scrollTop === 420,
+    'un repintado completo devuelve la vista a donde estaba, no al tope');
+  ok(focusable.focused && focusable.restoredCaret,
+    'el campo enfocado y la posición del cursor sobreviven al repintado');
+
+  const cajaSource = fs.readFileSync(path.join(__dirname, '../src/js/caja.js'), 'utf8');
+  const ventasSource = fs.readFileSync(path.join(__dirname, '../src/js/ventas.js'), 'utf8');
+  ok(!/(?<!veloRepaint\(\(\) => )renderCaja\(document\.getElementById\('page'\)\)/.test(cajaSource) &&
+    !/(?<!veloRepaint\(\(\) => )renderVentas\(document\.getElementById\('page'\)\)/.test(ventasSource),
+    'Caja y Ventas repintan siempre a través del helper que conserva la posición');
+
   const ui = fs.readFileSync(path.join(__dirname, '../src/js/ventas.js'), 'utf8');
   ok(ui.includes('const VENTAS_PAGE_SIZE = 100') && ui.includes('ventasGoToPage'),
     'la pantalla limita el render a 100 documentos y ofrece navegación');

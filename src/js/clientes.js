@@ -744,7 +744,7 @@ async function guardarCliente(id) {
   await reloadCustomers();
   closeModal();
   toast(id ? '✓ Cliente actualizado' : '✓ Cliente registrado');
-  renderClientes(document.getElementById('page'));
+  veloRepaint(() => renderClientes(document.getElementById('page')));
   buildSidebar();
 }
 
@@ -1045,7 +1045,7 @@ async function eliminarCliente(id) {
   toast(result.balance > 0
     ? `✓ Cliente eliminado · ${fmt(result.balance)} removido de Cuentas por Cobrar`
     : '✓ Cliente eliminado');
-  renderClientes(document.getElementById('page'));
+  veloRepaint(() => renderClientes(document.getElementById('page')));
   buildSidebar();
 }
 
@@ -1076,7 +1076,7 @@ async function eliminarTodosClientes() {
   toast(result.totalBalance > 0
     ? `✓ ${plural} · ${fmt(result.totalBalance)} removido de Cuentas por Cobrar`
     : `✓ ${plural}`);
-  renderClientes(document.getElementById('page'));
+  veloRepaint(() => renderClientes(document.getElementById('page')));
   buildSidebar();
 }
 
@@ -1099,7 +1099,7 @@ async function toggleEstadoCliente(c) {
       if (!result.ok) { toast(result.error || 'Error', 'err'); return; }
       await reloadCustomers();
       toast(`✓ Cliente ${nuevoEstado === 'bloqueado' ? 'bloqueado' : 'activado'}`);
-      renderClientes(document.getElementById('page'));
+      veloRepaint(() => renderClientes(document.getElementById('page')));
     },
     nuevoEstado === 'bloqueado' ? 'Bloquear' : 'Activar',
     nuevoEstado === 'bloqueado' ? 'btn-red' : 'btn-green'
@@ -1719,13 +1719,13 @@ async function registrarAbono(clientId, balanceActual, replacesPaymentId = null)
         });
       }
       if (typeof page !== 'undefined' && page === 'clientes') {
-        renderClientes(document.getElementById('page'));
+        veloRepaint(() => renderClientes(document.getElementById('page')));
       } else if (typeof page !== 'undefined' && page === 'ventas'
           && typeof renderVentasTable === 'function') {
         renderVentasTable();
       } else if (typeof page !== 'undefined' && page === 'caja'
           && typeof renderCaja === 'function') {
-        renderCaja(document.getElementById('page'));
+        veloRepaint(() => renderCaja(document.getElementById('page')));
       }
       buildSidebar();
     }).catch(() => {});
