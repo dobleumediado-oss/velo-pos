@@ -357,7 +357,9 @@ function _snapshot(sale) {
   };
 }
 
-function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
+function createSaleCorrectionsRepo({
+  getDb, salesRepo, returnsRepo, cashRepo, financialAccountsRepo,
+}) {
   const db = () => getDb();
   const round2 = value => Math.round((Number(value) || 0) * 100) / 100;
 
@@ -383,17 +385,28 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
     `).get(saleId, saleId, saleId);
   }
 
-  function directCreditAmendmentEligibility(root, fiscal) {
+  // Corregir una factura es modificar esa misma factura. Solo un impedimento
+  // real lo impide: un comprobante fiscal ya emitido (la DGII no permite
+  // alterarlo), una operación con efectos que no se pueden rehacer en sitio o
+  // un cierre contable. Todo lo demás se ajusta sobre el documento original sin
+  // emitir ningún documento nuevo.
+  function directAmendmentEligibility(root, fiscal, user) {
     const reasons = [];
-    if (String(root.payment_method || '').toLowerCase() !== 'credito') reasons.push('NOT_CREDIT');
-    const paid = paymentSummary(root.id);
-    if (Number(paid.count || 0) > 0 || Number(paid.total || 0) > 0.005) reasons.push('HAS_PAYMENT');
+    const method = String(root.payment_method || '').toLowerCase();
+    if (method === 'mixto') reasons.push('MIXED_PAYMENT');
     if (String(root.ncf || '').trim() || fiscal || root.fiscal_issued_at) reasons.push('FISCAL_ISSUED');
     if (Number(root.trade_in_amount || 0) > 0 || Number(root.prepaid_amount || 0) > 0) reasons.push('HAS_PREPAYMENT');
     if (String(root.import_source || '').trim() || root.source_balance != null) reasons.push('HISTORICAL_IMPORT');
+    // Una diferencia en moneda extranjera exigiría recalcular la tasa histórica
+    // del cobro; esa corrección sigue el flujo compensatorio.
+    if (String(root.payment_currency || 'DOP').toUpperCase() !== 'DOP') reasons.push('FOREIGN_CURRENCY');
     if (root.cash_session_id) {
       const cash = db().prepare('SELECT status FROM cash_sessions WHERE id=?').get(root.cash_session_id);
-      if (cash?.status === 'closed') reasons.push('CLOSED_CASH');
+      // La caja del día ya cuadrada no se reescribe: la diferencia se cobra o
+      // se devuelve en la caja abierta, y eso exige permiso de administrador.
+      if (cash?.status === 'closed' && !hasPermission(user, 'sales.override_closed_cash')) {
+        reasons.push('CLOSED_CASH');
+      }
     }
     if (closedPeriodForDate(root.sale_date)) reasons.push('CLOSED_ACCOUNTING_PERIOD');
     const related = db().prepare(`
@@ -982,7 +995,7 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
       FROM products WHERE active=1 ORDER BY name,id
     `).all();
     const fiscal = ecfState(root.id);
-    const directAmendment = directCreditAmendmentEligibility(root, fiscal);
+    const directAmendment = directAmendmentEligibility(root, fiscal, user);
     const warnings = [];
     if (fiscal) {
       warnings.push({
@@ -1005,10 +1018,13 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
       });
     }
     if (directAmendment.eligible) {
+      const settlement = String(root.payment_method || '').toLowerCase() === 'credito'
+        ? 'El saldo pendiente del cliente se ajusta por la diferencia.'
+        : 'La diferencia se cobra o se devuelve por caja, sin emitir otro recibo.';
       warnings.unshift({
-        code: 'DIRECT_UNPAID_CREDIT_AMENDMENT',
+        code: 'DIRECT_AMENDMENT',
         severity: 'info',
-        message: 'Esta factura a crédito no tiene abonos ni comprobante fiscal: se corregirá directamente, sin crear otra factura ni una devolución.',
+        message: `Esta factura no tiene comprobante fiscal: se corregirá sobre sí misma, sin crear otra factura ni una devolución. ${settlement}`.trim(),
       });
     }
 
@@ -1018,7 +1034,7 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
       lines,
       products,
       warnings,
-      correctionMode: directAmendment.eligible ? 'direct_unpaid_credit' : 'compensating_documents',
+      correctionMode: directAmendment.eligible ? 'direct_amendment' : 'compensating_documents',
       directAmendment,
       permissions: SALE_CORRECTION_PERMISSIONS.filter(permission => hasPermission(user, permission)),
     };
@@ -1216,9 +1232,10 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
           error.code = 'CONFLICT';
           throw error;
         }
-        const stillEligible = directCreditAmendmentEligibility(
+        const stillEligible = directAmendmentEligibility(
           lockedRoot,
-          ecfState(lockedRoot.id)
+          ecfState(lockedRoot.id),
+          requester
         );
         if (!stillEligible.eligible) {
           const error = new Error('La factura recibió un pago, documento fiscal o vínculo mientras se corregía. Recarga antes de continuar.');
@@ -1300,13 +1317,46 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
         const newSubtotal = round2(itemTotal - taxAmt);
         const delta = round2(newTotal - Number(lockedRoot.total || 0));
 
-        const customer = db().prepare('SELECT balance,credit_limit FROM customers WHERE id=?').get(lockedRoot.customer_id);
-        if (!customer) throw new Error('Cliente no encontrado');
-        const newBalance = round2(Number(customer.balance || 0) + delta);
-        if (newBalance < -0.005) throw new Error('La corrección produciría un balance de cliente inconsistente');
-        if (delta > 0.005 && Number(customer.credit_limit || 0) > 0 &&
-            newBalance > Number(customer.credit_limit) + 0.005) {
-          throw new Error('La corrección supera el límite de crédito disponible del cliente');
+        // El dinero sigue al método real de la factura: el crédito mueve el saldo
+        // del cliente y un cobro ya recibido mueve la caja. En ningún caso se
+        // emite un documento nuevo por la diferencia.
+        const method = String(lockedRoot.payment_method || '').toLowerCase();
+        const isCredit = method === 'credito';
+        const paidTotal = round2(Number(paymentSummary(lockedRoot.id).total || 0));
+        let newBalance = null;
+        if (isCredit) {
+          const customer = db().prepare('SELECT balance,credit_limit FROM customers WHERE id=?').get(lockedRoot.customer_id);
+          if (!customer) throw new Error('Cliente no encontrado');
+          if (paidTotal > 0.005 && newTotal < paidTotal - 0.005) {
+            throw new Error(
+              `Esta factura ya tiene RD$${paidTotal.toFixed(2)} cobrados en abonos. ` +
+              'Puedes reducirla hasta ese monto; para bajar más, primero devuelve el excedente al cliente.'
+            );
+          }
+          newBalance = round2(Number(customer.balance || 0) + delta);
+          if (newBalance < -0.005) throw new Error('La corrección produciría un balance de cliente inconsistente');
+          if (delta > 0.005 && Number(customer.credit_limit || 0) > 0 &&
+              newBalance > Number(customer.credit_limit) + 0.005) {
+            throw new Error('La corrección supera el límite de crédito disponible del cliente');
+          }
+        }
+        const originalSession = lockedRoot.cash_session_id
+          ? db().prepare('SELECT id,status FROM cash_sessions WHERE id=?').get(lockedRoot.cash_session_id)
+          : null;
+        const originalSessionOpen = !!originalSession && originalSession.status !== 'closed';
+        // La caja del día original se reutiliza mientras siga abierta; si ya
+        // cerró, la diferencia entra o sale por la caja abierta de hoy.
+        const settlementSessionId = originalSessionOpen
+          ? Number(originalSession.id)
+          : (session?.id ? Number(session.id) : null);
+        const settlesCash = !isCredit && Math.abs(delta) > 0.005;
+        // Sacar dinero de la caja sigue siendo un reembolso aunque no se emita
+        // ningún documento por él.
+        if (settlesCash && delta < 0) requirePermission(requester, 'sales.refund');
+        if (settlesCash && !settlementSessionId) {
+          throw new Error(delta > 0
+            ? 'Debes abrir la caja para cobrar la diferencia de esta corrección'
+            : 'Debes abrir la caja para devolver la diferencia de esta corrección');
         }
 
         const movementIds = [];
@@ -1328,7 +1378,7 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
               product_id,type,qty,qty_before,qty_after,reason,sale_id,user_id,operational_sale_date
             ) VALUES(?,'ajuste',?,?,?,?,?,?,?)
           `).run(productId, stockDelta, stockBefore, stockAfter,
-            `Corrección directa de factura a crédito ${lockedRoot.document_number_fmt || '#' + lockedRoot.id}: ${cleanReason}`,
+            `Corrección de factura ${lockedRoot.document_number_fmt || '#' + lockedRoot.id}: ${cleanReason}`,
             lockedRoot.id, requester.id, lockedRoot.sale_date);
           movementIds.push(Number(movement.lastInsertRowid));
         }
@@ -1354,11 +1404,47 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
           error.code = 'CONFLICT';
           throw error;
         }
-        db().prepare("UPDATE customers SET balance=?,updated_at=datetime('now','localtime') WHERE id=?")
-          .run(Math.max(0, newBalance), lockedRoot.customer_id);
-        if (lockedRoot.cash_session_id) {
+        if (isCredit) {
+          db().prepare("UPDATE customers SET balance=?,updated_at=datetime('now','localtime') WHERE id=?")
+            .run(Math.max(0, newBalance), lockedRoot.customer_id);
+        }
+        const totalsSessionId = originalSessionOpen
+          ? Number(originalSession.id)
+          : (settlesCash ? settlementSessionId : null);
+        if (totalsSessionId) {
           db().prepare('UPDATE cash_sessions SET sales_total=MAX(0,ROUND(sales_total+?,2)) WHERE id=?')
-            .run(delta, lockedRoot.cash_session_id);
+            .run(delta, totalsSessionId);
+        }
+        let cashMovementId = null;
+        if (settlesCash) {
+          const reference = lockedRoot.document_number_fmt || `#${lockedRoot.id}`;
+          cashMovementId = cashRepo.addMovement({
+            sessionId: settlementSessionId,
+            type: delta > 0 ? 'venta' : 'devolucion',
+            amount: delta,
+            method,
+            referenceId: lockedRoot.id,
+            description: delta > 0
+              ? `Corrección factura ${reference} · cobro adicional`
+              : `Corrección factura ${reference} · devolución al cliente`,
+            userId: requester.id,
+          });
+          // El cobro que entró por una cuenta bancaria o de tarjeta se corrige
+          // en esa misma cuenta, nunca en efectivo.
+          if (lockedRoot.financial_account_id && method !== 'efectivo' && financialAccountsRepo) {
+            financialAccountsRepo.addMovement({
+              accountId: lockedRoot.financial_account_id,
+              type: delta > 0 ? 'venta' : 'retiro',
+              amount: delta,
+              description: `Corrección factura ${reference}`,
+              referenceType: 'sale',
+              referenceId: lockedRoot.id,
+              method,
+              userId: requester.id,
+            });
+            db().prepare('UPDATE sales SET account_amount=ROUND(COALESCE(account_amount,0)+?,2) WHERE id=?')
+              .run(delta, lockedRoot.id);
+          }
         }
 
         const afterModel = productCorrectionModel(lockedRoot.id, requester.id);
@@ -1369,6 +1455,9 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
           creditTotal, additionTotal, overpayment: 0, netDifference: delta,
           correctionIntent: intent, previousTotal: Number(lockedRoot.total || 0), newTotal,
           priceChanged: hasPriceChange, originalFiscalDocumentPreserved: false,
+          paymentMethod: method, settledInCash: settlesCash,
+          cashMovementId, cashSessionId: settlementSessionId,
+          previousPaidTotal: paidTotal,
         };
         const correction = db().prepare(`
           INSERT INTO sale_corrections(
@@ -1393,7 +1482,7 @@ function createSaleCorrectionsRepo({ getDb, salesRepo, returnsRepo }) {
         db().prepare(`
           INSERT INTO audit_logs(user_id,user_name,action,entity,entity_id,detail,created_at)
           VALUES(?,?,?,?,?,?,?)
-        `).run(requester.id,requester.name,'factura_credito_pendiente_corregida','sales',lockedRoot.id,
+        `).run(requester.id,requester.name,'factura_corregida_en_sitio','sales',lockedRoot.id,
           _serialize({ correctionId,reason:cleanReason,...metadata }),now);
         return {
           idempotent:false,correctionId,directAmendment:true,returnIds:[],additionSaleId:null,

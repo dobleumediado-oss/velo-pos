@@ -2664,34 +2664,47 @@ function ventasProductCorrectionIntentChanged() {
   ventasRenderAddedCorrectionItems();
 }
 
+function ventasCorrectionIsCredit(model) {
+  return String(model?.root?.payment_method || '').toLowerCase() === 'credito';
+}
+
 function ventasRefreshProductCorrectionSummary() {
   const state = window._ventaProductCorrection;
   if (!state?.model) return;
   const summary = ventasProductCorrectionSummary();
   const target = document.getElementById('vpc-summary');
   if (!target) return;
-  const directAmendment = state.model.correctionMode === 'direct_unpaid_credit';
-  const netLabel = directAmendment
+  const directAmendment = state.model.correctionMode === 'direct_amendment';
+  const directCredit = directAmendment && ventasCorrectionIsCredit(state.model);
+  const netLabel = directCredit
     ? (summary.net > 0
         ? `Saldo pendiente aumenta ${fmt(summary.net)}`
         : summary.net < 0
           ? `Saldo pendiente disminuye ${fmt(Math.abs(summary.net))}`
           : 'El saldo pendiente no cambia')
-    : (summary.net > 0
-        ? `Cliente paga ${fmt(summary.net)} más`
-        : summary.net < 0
-          ? `Cliente recibe crédito/reembolso de ${fmt(Math.abs(summary.net))}`
-          : 'La diferencia neta es cero');
+    : directAmendment
+      ? (summary.net > 0
+          ? `Cliente paga ${fmt(summary.net)} más en caja`
+          : summary.net < 0
+            ? `Se devuelven ${fmt(Math.abs(summary.net))} al cliente`
+            : 'La diferencia neta es cero')
+      : (summary.net > 0
+          ? `Cliente paga ${fmt(summary.net)} más`
+          : summary.net < 0
+            ? `Cliente recibe crédito/reembolso de ${fmt(Math.abs(summary.net))}`
+            : 'La diferencia neta es cero');
   target.innerHTML = `
     <div class="g3">
-      <div><span class="lbl">${directAmendment ? 'Disminución del saldo' : 'A favor del cliente'}</span><strong style="color:var(--red)">-${fmt(summary.credit)}</strong></div>
-      <div><span class="lbl">${directAmendment ? 'Aumento del saldo' : 'Productos agregados'}</span><strong style="color:var(--green)">${fmt(summary.addition)}</strong></div>
+      <div><span class="lbl">${directCredit ? 'Disminución del saldo' : directAmendment ? 'Se resta de la factura' : 'A favor del cliente'}</span><strong style="color:var(--red)">-${fmt(summary.credit)}</strong></div>
+      <div><span class="lbl">${directCredit ? 'Aumento del saldo' : directAmendment ? 'Se agrega a la factura' : 'Productos agregados'}</span><strong style="color:var(--green)">${fmt(summary.addition)}</strong></div>
       <div><span class="lbl">Resultado</span><strong>${ventasEsc(netLabel)}</strong></div>
     </div>
     <div class="ts" style="margin-top:7px">
-      ${directAmendment
-        ? 'Se actualizarán esta misma factura pendiente, su balance y el inventario; no se crearán devoluciones ni facturas adicionales.'
-        : 'Velo conservará el documento original, aplicará los respaldos internos necesarios y mostrará una sola factura Ajustada en Ventas.'}
+      ${directCredit
+        ? 'Se actualizan esta misma factura, el saldo del cliente y el inventario; no se crean devoluciones ni facturas adicionales.'
+        : directAmendment
+          ? 'Se actualizan esta misma factura y el inventario. La diferencia se cobra o se devuelve por caja, sin emitir otro recibo ni otra factura.'
+          : 'Velo conservará el documento original, aplicará los respaldos internos necesarios y mostrará una sola factura Ajustada en Ventas.'}
     </div>`;
   const paymentWrap = document.getElementById('vpc-payment-wrap');
   if (paymentWrap) paymentWrap.style.display =
@@ -2794,7 +2807,8 @@ async function openVentaProductCorrection(saleId) {
   });
   if (!response?.ok) return toast(response?.error || 'No se pudo preparar la corrección', 'err');
   const model = response.data;
-  const directAmendment = model.correctionMode === 'direct_unpaid_credit';
+  const directAmendment = model.correctionMode === 'direct_amendment';
+  const directCredit = directAmendment && ventasCorrectionIsCredit(model);
   window._ventaProductCorrection = {
     model,
     addedItems: [],
@@ -2865,10 +2879,12 @@ async function openVentaProductCorrection(saleId) {
     </div>
     <div class="vpc-scroll">
       <div class="alrt ${directAmendment ? 'g' : 'a'}" style="margin-bottom:12px">
-        <div><div class="alrt-title">${directAmendment ? 'Corrección directa de crédito pendiente' : 'La factura original no se modifica'}</div>
-        <div class="alrt-sub">${directAmendment
-          ? 'Como no tiene abonos ni comprobante fiscal, cantidades y precios se actualizarán en esta misma factura. El inventario y la cuenta por cobrar se ajustarán en una sola operación, sin generar devolución ni otra factura.'
-          : `Reducir crea una nota de crédito; aumentar crea un respaldo interno vinculado. En Ventas se mantendrá una sola factura Ajustada.${fiscalWarning ? ` ${ventasEsc(fiscalWarning.message)}` : ''}`}</div></div>
+        <div><div class="alrt-title">${directAmendment ? 'Se corrige esta misma factura' : 'La factura original no se modifica'}</div>
+        <div class="alrt-sub">${directCredit
+          ? 'Como no tiene comprobante fiscal, cantidades y precios se actualizan en esta misma factura. El inventario y el saldo del cliente se ajustan en una sola operación, sin generar devolución ni otra factura.'
+          : directAmendment
+            ? 'Como no tiene comprobante fiscal, cantidades y precios se actualizan en esta misma factura. El inventario se ajusta y la diferencia se cobra o se devuelve por caja, sin emitir otro recibo ni otra factura.'
+            : `Reducir crea una nota de crédito; aumentar crea un respaldo interno vinculado. En Ventas se mantendrá una sola factura Ajustada.${fiscalWarning ? ` ${ventasEsc(fiscalWarning.message)}` : ''}`}</div></div>
       </div>
       ${visibleWarnings.map(warning => `
         <div class="alrt ${warning.severity === 'high' ? 'r' : 'a'}" style="margin-bottom:8px">
@@ -2951,11 +2967,11 @@ function ventasConfirmProductCorrection() {
   state.pendingIntent = ventasProductCorrectionIntent();
   confirmModal(
     `<strong>Resultado de la corrección</strong><br/><br/>
-     ${state.model.correctionMode === 'direct_unpaid_credit' ? 'Reducción del saldo' : 'Nota de crédito'}: <strong>${fmt(summary.credit)}</strong><br/>
-     ${state.model.correctionMode === 'direct_unpaid_credit' ? 'Aumento del saldo' : 'Aumento aplicado'}: <strong>${fmt(summary.addition)}</strong><br/>
+     ${state.model.correctionMode === 'direct_amendment' ? 'Se resta de la factura' : 'Nota de crédito'}: <strong>${fmt(summary.credit)}</strong><br/>
+     ${state.model.correctionMode === 'direct_amendment' ? 'Se agrega a la factura' : 'Aumento aplicado'}: <strong>${fmt(summary.addition)}</strong><br/>
      Diferencia neta: <strong>${fmt(summary.net)}</strong><br/><br/>
-     <span style="font-size:11px;color:var(--muted)">${state.model.correctionMode === 'direct_unpaid_credit'
-       ? 'Se modificará esta misma factura pendiente y quedará una trazabilidad interna de la corrección.'
+     <span style="font-size:11px;color:var(--muted)">${state.model.correctionMode === 'direct_amendment'
+       ? 'Se modificará esta misma factura, con su número intacto, y quedará la trazabilidad completa en Auditoría.'
        : 'En Ventas permanecerá una sola factura marcada como Ajustada, lista para reimprimir con su estado vigente.'}</span>`,
     () => ventasSubmitProductCorrection(),
     'Aplicar corrección',
@@ -2980,7 +2996,7 @@ async function ventasSubmitProductCorrection() {
   if (!result?.ok) return toast(result?.error || 'No se pudo aplicar la corrección', 'err');
   ventasOpenProductCorrectionResult(result, state.model.root.id);
   toast(result.directAmendment
-    ? '✓ Factura pendiente, inventario y balance actualizados'
+    ? '✓ Factura corregida: inventario y cobro actualizados'
     : '✓ Corrección aplicada y documentos listos para imprimir');
   ventasRefreshAfterMutation({
     range: 'all', view: null, products: true, customers: true,
@@ -3009,8 +3025,8 @@ function ventasOpenProductCorrectionResult(result, originalSaleId) {
   const isMonetaryCredit = result.creditKind === 'monetary';
   const isDirect = result.directAmendment === true;
   openModal(`
-    <div class="modal-title">${isMonetaryCredit ? 'Nota de crédito emitida' : isDirect ? 'Factura pendiente actualizada' : 'Corrección aplicada'}</div>
-    <div class="modal-sub">${isDirect ? 'Se conservó el mismo número de factura y no se generaron documentos comerciales adicionales.' : 'En Ventas permanece una sola factura y ahora aparece marcada como Ajustada.'}</div>
+    <div class="modal-title">${isMonetaryCredit ? 'Nota de crédito emitida' : isDirect ? 'Factura corregida' : 'Corrección aplicada'}</div>
+    <div class="modal-sub">${isDirect ? 'Se conservó el mismo número de factura y no se generó ningún documento adicional.' : 'En Ventas permanece una sola factura y ahora aparece marcada como Ajustada.'}</div>
     <div class="alrt g" style="margin-bottom:12px">
       <div><div class="alrt-title">${isDirect ? 'Corrección aplicada sin devolución ni refacturación' : 'Documentos creados correctamente'}</div>
       <div class="alrt-sub">

@@ -9,6 +9,22 @@
 - Esto evita que un ID sensible al uso de mayúsculas deje de coincidir con la
   identidad real enviada por la terminal.
 
+### Corregir una factura modifica esa misma factura
+
+- Una factura sin comprobante fiscal ya no genera otra factura ni un recibo al
+  corregirla: cantidades, precios y total se actualizan sobre el documento
+  original y su número no cambia.
+- El inventario sigue la corrección: lo que se agrega se descuenta del stock y
+  lo que se retira vuelve a él.
+- La diferencia se liquida donde corresponde. En una venta a crédito ajusta el
+  saldo del cliente; en una venta cobrada entra o sale por la caja abierta y,
+  si el cobro fue a una cuenta bancaria, también en esa cuenta.
+- Si la caja del día original ya cerró, la diferencia se mueve en la caja
+  abierta y se exige permiso de administrador; devolver dinero exige el permiso
+  de reembolso.
+- Una factura con NCF o e-CF conserva el flujo anterior de nota de crédito y
+  documento relacionado: la DGII no permite alterar un comprobante emitido.
+
 ### Ajuste neto claro en facturas corregidas
 
 - El detalle y el resumen imprimible de una factura corregida presentan ahora

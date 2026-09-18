@@ -11891,6 +11891,10 @@ const saleCorrectionsRepo = createSaleCorrectionsRepo({
   getDb: () => db,
   salesRepo,
   returnsRepo,
+  // La corrección en sitio liquida la diferencia por caja o por la cuenta
+  // bancaria del cobro original, sin emitir ningún documento nuevo.
+  cashRepo,
+  financialAccountsRepo,
 });
 
 // ══════════════════════════════════════════════

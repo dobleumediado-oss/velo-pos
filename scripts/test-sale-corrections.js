@@ -523,7 +523,7 @@ ok(db.prepare(`
   DB.salesRepo.getById(rollbackSource.saleId).revision === rollbackModel.root.revision,
   'un fallo mixto no deja documentos parciales ni avanza la revisión');
 
-console.log('\n== F2. Corrección directa de crédito pendiente ==');
+console.log('\n== F2. Corrección sobre la misma factura ==');
 const directSource = DB.salesRepo.create({
   customer: { id: customerId },
   items: [{
@@ -538,8 +538,8 @@ const directBalanceBefore = db.prepare('SELECT balance FROM customers WHERE id=?
 const directStockBefore = db.prepare('SELECT stock FROM products WHERE id=?').get(productId).stock;
 const directAddedStockBefore = db.prepare('SELECT stock FROM products WHERE id=?').get(addedProductId).stock;
 const directModel = DB.saleCorrectionsRepo.productCorrectionModel(directSource.saleId, admin.id);
-ok(directModel.correctionMode === 'direct_unpaid_credit' && directModel.directAmendment.eligible,
-  'detecta crédito sin abonos ni comprobante para corrección directa');
+ok(directModel.correctionMode === 'direct_amendment' && directModel.directAmendment.eligible,
+  'una factura sin comprobante fiscal se corrige sobre sí misma');
 const directEntryBefore = DB.accountingRepo.generateSaleEntry({ saleId: directSource.saleId, userId: admin.id });
 const directKey = `products-direct-credit-${directSource.saleId}-${Date.now()}`;
 const directResult = DB.saleCorrectionsRepo.correctProducts({
@@ -590,11 +590,110 @@ const directAgain = DB.saleCorrectionsRepo.correctProducts({
 ok(directAgain.idempotent && directAgain.correctionId === directResult.correctionId,
   'doble confirmación directa no duplica inventario ni modificaciones');
 db.prepare(`INSERT INTO payments(customer_id,sale_id,amount,method,note,cajero,user_id,cash_session_id)
-  VALUES(?,?,?,?,?,?,?,?)`).run(customerId,directSource.saleId,10,'transferencia','Abono posterior',admin.name,admin.id,cashId);
+  VALUES(?,?,?,?,?,?,?,?)`).run(customerId,directSource.saleId,250,'transferencia','Abono posterior',admin.name,admin.id,cashId);
 const directAfterPayment = DB.saleCorrectionsRepo.productCorrectionModel(directSource.saleId, admin.id);
-ok(directAfterPayment.correctionMode === 'compensating_documents' &&
-  directAfterPayment.directAmendment.reasons.includes('HAS_PAYMENT'),
-  'si ya existe un abono bloquea la mutación directa y exige documentos compensatorios');
+ok(directAfterPayment.correctionMode === 'direct_amendment' && directAfterPayment.directAmendment.eligible,
+  'un abono ya aplicado no obliga a crear documentos: la factura se sigue corrigiendo sobre sí misma');
+let belowPaidError = '';
+try {
+  DB.saleCorrectionsRepo.correctProducts({
+    saleId: directSource.saleId,
+    lines: directAfterPayment.lines.map(line => ({
+      sourceSaleId: line.source_sale_id,
+      productId: line.product_id,
+      targetQty: line.product_id === productId ? 1 : 0,
+    })),
+    addedItems: [],
+    reason: 'Reducir por debajo de lo ya cobrado',
+    userId: admin.id,
+    expectedRevision: directAfterPayment.root.revision,
+    idempotencyKey: `products-below-paid-${directSource.saleId}-${Date.now()}`,
+    session: { id: cashId },
+    correctionIntent: 'reduction_only',
+  });
+} catch (error) { belowPaidError = error.message; }
+ok(/ya tiene RD\$250\.00 cobrados/.test(belowPaidError),
+  'no deja reducir una factura por debajo de lo ya cobrado en abonos');
+
+// Una venta de contado ya cobrada es el caso real más común: corregirla no debe
+// emitir otra factura ni otro recibo, solo mover caja por la diferencia.
+const cashSource = DB.salesRepo.create({
+  customer: { id: customerId },
+  items: [{
+    product_id: productId, product_code: 'COR-001', product_name: 'Producto corrección',
+    unit_cost: 60, unit_price: 118, taxable: 1, tax_pct: 18, qty: 2,
+  }],
+  payment: { method: 'efectivo', saleDate: '2025-07-14', ncfType: '' },
+  session: { id: cashId }, user: admin, type: 'factura',
+});
+const cashBefore = DB.salesRepo.getById(cashSource.saleId);
+const cashSalesRowsBefore = db.prepare("SELECT COUNT(*) count FROM sales WHERE type='factura'").get().count;
+const cashDocIssuesBefore = db.prepare('SELECT COUNT(*) count FROM document_issues').get().count;
+const cashStockBefore = db.prepare('SELECT stock FROM products WHERE id=?').get(productId).stock;
+const cashModel = DB.saleCorrectionsRepo.productCorrectionModel(cashSource.saleId, admin.id);
+ok(cashModel.correctionMode === 'direct_amendment',
+  'una venta de contado ya cobrada y sin NCF también se corrige sobre sí misma');
+const cashResult = DB.saleCorrectionsRepo.correctProducts({
+  saleId: cashSource.saleId,
+  lines: cashModel.lines.map(line => ({
+    sourceSaleId: line.source_sale_id,
+    productId: line.product_id,
+    targetQty: 3,
+  })),
+  addedItems: [],
+  reason: 'Faltó una unidad en la factura de contado',
+  userId: admin.id,
+  expectedRevision: cashModel.root.revision,
+  idempotencyKey: `products-cash-direct-${cashSource.saleId}-${Date.now()}`,
+  session: { id: cashId },
+  correctionIntent: 'addition_only',
+});
+const cashAfter = DB.salesRepo.getById(cashSource.saleId);
+ok(cashResult.directAmendment && !cashResult.additionSaleId &&
+  cashAfter.document_number_fmt === cashBefore.document_number_fmt &&
+  db.prepare("SELECT COUNT(*) count FROM sales WHERE type='factura'").get().count === cashSalesRowsBefore &&
+  db.prepare('SELECT COUNT(*) count FROM document_issues').get().count === cashDocIssuesBefore,
+  'aumentar una venta de contado no crea otra factura ni consume otro número');
+ok(cashAfter.total === 354 && cashAfter.items[0].qty === 3 &&
+  db.prepare('SELECT stock FROM products WHERE id=?').get(productId).stock === cashStockBefore - 1,
+  'la misma factura queda con la cantidad corregida y el inventario descontado');
+const cashMovement = db.prepare(`
+  SELECT type,amount,method FROM cash_movements
+  WHERE reference_id=? AND cash_session_id=? ORDER BY id DESC LIMIT 1
+`).get(cashSource.saleId, cashId);
+ok(cashMovement.type === 'venta' && cashMovement.method === 'efectivo' &&
+  Math.round(cashMovement.amount * 100) / 100 === 118,
+  'la diferencia entra a la caja abierta como cobro adicional, sin emitir recibo');
+const cashReduction = DB.saleCorrectionsRepo.correctProducts({
+  saleId: cashSource.saleId,
+  lines: DB.saleCorrectionsRepo.productCorrectionModel(cashSource.saleId, admin.id).lines.map(line => ({
+    sourceSaleId: line.source_sale_id,
+    productId: line.product_id,
+    targetQty: 1,
+  })),
+  addedItems: [],
+  reason: 'El cliente devolvió dos unidades de contado',
+  userId: admin.id,
+  expectedRevision: DB.salesRepo.getById(cashSource.saleId).revision,
+  idempotencyKey: `products-cash-reduce-${cashSource.saleId}-${Date.now()}`,
+  session: { id: cashId },
+  correctionIntent: 'reduction_only',
+});
+const refundMovement = db.prepare(`
+  SELECT type,amount FROM cash_movements
+  WHERE reference_id=? AND cash_session_id=? ORDER BY id DESC LIMIT 1
+`).get(cashSource.saleId, cashId);
+ok(cashReduction.directAmendment && cashReduction.returnIds.length === 0 &&
+  refundMovement.type === 'devolucion' && Math.round(refundMovement.amount * 100) / 100 === -236 &&
+  db.prepare(`SELECT COUNT(*) count FROM sales WHERE original_sale_id=?`).get(cashSource.saleId).count === 0,
+  'reducirla devuelve el efectivo por caja sin crear nota de crédito ni documento nuevo');
+
+// Con NCF emitido el original es inmutable: la DGII exige documentos aparte.
+const fiscalSource = createSale({ date: '2025-07-16', method: 'efectivo', qty: 2 });
+const fiscalModel = DB.saleCorrectionsRepo.productCorrectionModel(fiscalSource.saleId, admin.id);
+ok(fiscalModel.correctionMode === 'compensating_documents' &&
+  fiscalModel.directAmendment.reasons.includes('FISCAL_ISSUED'),
+  'una factura con NCF conserva el flujo compensatorio y nunca se altera en sitio');
 
 console.log('\n== G. Nota de crédito monetaria sin devolución física ==');
 const monetarySource = createSale({ date: '2025-07-15', method: 'efectivo', qty: 2 });
@@ -748,7 +847,8 @@ const uiContext = {
   window: {
     _ventaProductCorrection: {
       model: {
-        correctionMode: 'direct_unpaid_credit',
+        correctionMode: 'direct_amendment',
+        root: { payment_method: 'credito' },
         lines: [{ current_qty: 2, unit_price: 40000, tax_pct: 0 }],
       },
       addedItems: [],
@@ -785,6 +885,15 @@ uiElements['vpc-price-0'].value = '45000';
 require('vm').runInNewContext('ventasRefreshProductCorrectionSummary();', uiContext);
 ok(uiElements['vpc-summary'].innerHTML.includes('Saldo pendiente aumenta RD$10000.00'),
   'aumentar precio explica el incremento exacto del saldo pendiente');
+// La misma corrección sobre una venta cobrada habla de caja, no de saldo.
+uiContext.window._ventaProductCorrection.model.root.payment_method = 'efectivo';
+uiElements['vpc-price-0'].value = '40000';
+uiElements['vpc-line-0'].value = '3';
+require('vm').runInNewContext('ventasRefreshProductCorrectionSummary();', uiContext);
+ok(uiElements['vpc-summary'].innerHTML.includes('Cliente paga RD$40000.00 más en caja') &&
+  uiElements['vpc-summary'].innerHTML.includes('sin emitir otro recibo ni otra factura'),
+  'en una venta cobrada la corrección anuncia el cobro por caja y ningún documento nuevo');
+uiContext.window._ventaProductCorrection.model.root.payment_method = 'credito';
 uiElements['vpc-line-0'].value = '2';
 uiElements['vpc-price-0'].value = '0';
 require('vm').runInNewContext('ventasConfirmProductCorrection();', uiContext);

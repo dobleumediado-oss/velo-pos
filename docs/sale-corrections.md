@@ -102,8 +102,39 @@ NCF original, e imprime los artículos vigentes. Todas las plantillas muestran
 **FACTURA AJUSTADA**, los documentos relacionados y el aviso de que no sustituye
 los comprobantes fiscales emitidos.
 
-Los cambios de productos/cantidades y las notas de crédito usan el flujo
-compensatorio. El usuario trabaja desde un solo asistente:
+## Corrección sobre la misma factura
+
+Corregir una factura es modificar esa misma factura. Cuando el documento **no
+tiene NCF ni e-CF**, Velo actualiza artículos, cantidades, precios y total sobre
+el original y **no emite ningún documento nuevo**: ni nota de crédito, ni
+factura complementaria, ni recibo. La numeración comercial no avanza.
+
+El efecto se reparte en una sola transacción:
+
+- inventario: la diferencia se descuenta o se restituye por producto;
+- crédito: el saldo del cliente sube o baja por la diferencia neta;
+- contado/tarjeta/transferencia: la diferencia se cobra o se devuelve por caja
+  (`cash_movements`) y, si el cobro entró a una cuenta bancaria, en esa misma
+  cuenta. Devolver dinero exige `sales.refund`;
+- contabilidad: el asiento de la venta se reversa y se regenera;
+- auditoría: `sale_corrections` guarda el snapshot anterior/posterior y el
+  movimiento de caja aplicado.
+
+Si la caja que registró la venta ya cerró, la diferencia entra o sale por la
+caja abierta del día y se exige `sales.override_closed_cash`.
+
+La corrección en sitio queda descartada, y se usa el flujo compensatorio, cuando
+existe un impedimento real: comprobante fiscal emitido (`FISCAL_ISSUED`), pago
+mixto, anticipo o trade-in, factura importada, cobro en moneda extranjera,
+período contable cerrado, documentos compensatorios previos, unidades
+serializadas, conduce enlazado o corte de comisión ya emitido. Una factura a
+crédito tampoco puede reducirse por debajo de lo ya cobrado en abonos.
+
+## Flujo compensatorio (documento fiscal emitido)
+
+Los cambios de productos/cantidades y las notas de crédito sobre una factura con
+comprobante fiscal usan el flujo compensatorio. El usuario trabaja desde un solo
+asistente:
 
 - reducir una cantidad o llevarla a cero crea una devolución/nota de crédito;
 - aumentar una línea conserva su precio histórico y crea una factura
@@ -126,7 +157,8 @@ usan un flujo separado:
 - el sistema limita el crédito al total original menos notas vigentes anteriores.
 
 La factura complementaria recibe su propio número y, cuando corresponde, su
-propio NCF autorizado. En e-CF no se simula una nota de débito electrónica: el
+propio NCF autorizado. Este documento solo existe en el flujo compensatorio: una
+factura sin comprobante fiscal se corrige sobre sí misma y nunca lo genera. En e-CF no se simula una nota de débito electrónica: el
 original permanece intacto y el aumento se documenta como factura relacionada
 hasta disponer de un emisor e33 certificado.
 
