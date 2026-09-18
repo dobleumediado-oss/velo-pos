@@ -9,6 +9,14 @@
 - Esto evita que un ID sensible al uso de mayúsculas deje de coincidir con la
   identidad real enviada por la terminal.
 
+### Historial de recibos de ingreso
+
+- Caja incorpora un historial propio de recibos de ingreso que ya no depende de
+  la sesión abierta: filtra por fechas, busca por recibo, persona, concepto o
+  referencia, y muestra los anulados marcados como tales.
+- Desde ahí se puede ver el detalle completo de un recibo, reimprimirlo y
+  anularlo, incluso si la caja que lo emitió ya cerró.
+
 ### Plantilla del recibo de ingreso
 
 - El Centro de impresión ya permite elegir el formato del recibo de ingreso:

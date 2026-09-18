@@ -2897,6 +2897,15 @@ ipcMain.handle('cash:getIncomeReceipts', async (_, { sessionId, includeCancelled
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
+// Historial de recibos de ingreso por fecha, independiente de la caja abierta.
+ipcMain.handle('cash:searchIncomeReceipts', async (_, options = {}) => {
+  try {
+    const reqUser = authRepo.findById(options.requestUserId);
+    if (!reqUser) return { ok: false, error: 'Usuario no válido' };
+    return { ok: true, data: cashRepo.searchIncomeReceipts(options) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
 ipcMain.handle('cash:createIncomeReceipt', async (_, { data, requestUserId } = {}) => {
   try {
     const reqUser = authRepo.findById(requestUserId);

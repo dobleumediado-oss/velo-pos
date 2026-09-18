@@ -39,6 +39,163 @@ function _cajaEsc(value) {
 function _cajaIncomeType(value) {
   return ({ otro_ingreso:'Otro ingreso', aporte_capital:'Aporte de capital', prestamo:'Préstamo recibido', reembolso:'Reembolso / recuperación' })[value] || 'Otro ingreso';
 }
+// El historial vive aparte de la caja abierta: un recibo sigue siendo un
+// documento consultable y reimprimible después de cerrar la sesión.
+let _cajaIncomeHistory = {
+  loaded:false, loading:false, rows:[], truncated:false,
+  totals:{ active:0, cancelled:0 },
+  filters:{ from:'', to:'', query:'', includeCancelled:true },
+};
+
+function _cajaDefaultHistoryRange() {
+  const to = typeof today === 'function' ? today() : new Date().toISOString().slice(0,10);
+  return { from:`${String(to).slice(0,7)}-01`, to };
+}
+
+function cajaIncomeHistoryInvalidate() {
+  _cajaIncomeHistory.loaded = false;
+}
+
+function cajaIncomeHistoryCard() {
+  if (!_cajaIncomeHistory.filters.from) {
+    Object.assign(_cajaIncomeHistory.filters, _cajaDefaultHistoryRange());
+  }
+  const f = _cajaIncomeHistory.filters;
+  const card = h('div', { class:'card mb20', id:'caja-income-history' });
+  card.innerHTML = `
+    <div class="fxb mb8">
+      <div><div class="card-title">Historial de recibos de ingreso</div>
+        <div class="ts">Todas las sesiones, abiertas y cerradas. Desde aquí se consulta y se reimprime.</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:13px;margin-bottom:10px">
+      <div class="fg"><label class="lbl">Desde</label><input class="inp" id="caja-income-from" type="date" value="${_cajaEsc(f.from)}"/></div>
+      <div class="fg"><label class="lbl">Hasta</label><input class="inp" id="caja-income-to" type="date" value="${_cajaEsc(f.to)}"/></div>
+      <div class="fg"><label class="lbl">Buscar</label><input class="inp" id="caja-income-query" placeholder="Recibo, persona, concepto o referencia" value="${_cajaEsc(f.query)}"/></div>
+      <div class="fg"><label class="lbl">&nbsp;</label>
+        <button class="btn btn-dark" style="width:100%" onclick="cajaSearchIncomeHistory()">${svg('search')} Buscar</button></div>
+    </div>
+    <label class="ts" style="display:flex;align-items:center;gap:7px;cursor:pointer;margin-bottom:10px">
+      <input id="caja-income-cancelled" type="checkbox" ${f.includeCancelled ? 'checked' : ''} onchange="cajaSearchIncomeHistory()"/>
+      Incluir recibos anulados
+    </label>
+    <div id="caja-income-history-body"></div>`;
+  return card;
+}
+
+function cajaRenderIncomeHistoryBody() {
+  const body = document.getElementById('caja-income-history-body');
+  if (!body) return;
+  const state = _cajaIncomeHistory;
+  if (state.loading) {
+    body.innerHTML = `<div class="empty" style="padding:18px"><p>Cargando historial…</p></div>`;
+    return;
+  }
+  if (!state.rows.length) {
+    body.innerHTML = `<div class="empty" style="padding:18px"><p>Sin recibos de ingreso en el período seleccionado</p></div>`;
+    return;
+  }
+  const isAdmin = ['admin','superadmin'].includes(_cajaUser()?.role);
+  const rows = state.rows.map(r => {
+    const cancelled = r.status === 'cancelled';
+    return `<tr${cancelled ? ' style="opacity:.62"' : ''}>
+      <td class="tm">${_cajaEsc(r.document_number_fmt || `RIN-${r.id}`)}</td>
+      <td class="ts">${_cajaEsc(typeof fdate === 'function' ? fdate(String(r.created_at || '').slice(0,10)) : String(r.created_at || '').slice(0,10))}</td>
+      <td><div class="tb">${_cajaEsc(r.payer_name)}</div><div class="ts">${_cajaEsc(_cajaIncomeType(r.income_type))}</div></td>
+      <td>${_cajaEsc(r.concept)}</td>
+      <td><span class="badge ${r.method === 'efectivo' ? 'g' : 'b'}">${_cajaEsc(r.method)}</span></td>
+      <td style="font-weight:800;color:${cancelled ? 'var(--muted)' : 'var(--green)'}">${cancelled ? '−' : ''}${fmt(r.amount)}</td>
+      <td><span class="badge ${cancelled ? 'r' : 'g'}">${cancelled ? 'Anulado' : 'Vigente'}</span></td>
+      <td><div class="flex" style="gap:3px">
+        <button class="btn btn-ghost btn-sm" title="Ver detalle" onclick="cajaOpenIncomeHistoryDetail(${Number(r.id)})">${svg('eye')}</button>
+        <button class="btn btn-ghost btn-sm" title="Reimprimir" onclick="cajaReprintIncomeReceipt(${Number(r.id)})">${svg('print')}</button>
+        ${isAdmin && !cancelled ? `<button class="btn btn-ghost btn-sm" title="Anular" onclick="cajaCancelIncomeFromHistory(${Number(r.id)})">${svg('x')}</button>` : ''}
+      </div></td>
+    </tr>`;
+  }).join('');
+  body.innerHTML = `<div class="tw"><table>
+      <thead><tr>${['Recibo','Fecha','Recibido de','Concepto','Método','Monto','Estado',''].map(t => `<th>${t}</th>`).join('')}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <div class="ts" style="margin-top:9px;display:flex;gap:16px;flex-wrap:wrap">
+      <span>Vigentes: <strong style="color:var(--green)">${fmt(state.totals.active || 0)}</strong></span>
+      ${state.totals.cancelled ? `<span>Anulados: <strong>${fmt(state.totals.cancelled)}</strong></span>` : ''}
+      <span>${state.rows.length} recibo${state.rows.length === 1 ? '' : 's'}</span>
+      ${state.truncated ? '<span style="color:var(--red)">Se muestran los más recientes: acota el período para ver el resto.</span>' : ''}
+    </div>`;
+}
+
+async function cajaSearchIncomeHistory() {
+  const state = _cajaIncomeHistory;
+  state.filters = {
+    from: document.getElementById('caja-income-from')?.value || state.filters.from,
+    to: document.getElementById('caja-income-to')?.value || state.filters.to,
+    query: document.getElementById('caja-income-query')?.value || '',
+    includeCancelled: document.getElementById('caja-income-cancelled')
+      ? !!document.getElementById('caja-income-cancelled').checked : state.filters.includeCancelled,
+  };
+  state.loading = true;
+  state.loaded = true;
+  cajaRenderIncomeHistoryBody();
+  try {
+    const result = await window.api.cash.searchIncomeReceipts({
+      ...state.filters, requestUserId:_cajaUser()?.id,
+    });
+    if (!result?.ok) throw new Error(result?.error || 'No se pudo cargar el historial');
+    state.rows = result.data?.rows || [];
+    state.truncated = !!result.data?.truncated;
+    state.totals = result.data?.totals || { active:0, cancelled:0 };
+  } catch (error) {
+    state.rows = []; state.truncated = false; state.totals = { active:0, cancelled:0 };
+    toast(error?.message || 'No se pudo cargar el historial','err');
+  }
+  state.loading = false;
+  cajaRenderIncomeHistoryBody();
+}
+
+function cajaIncomeHistoryRow(id) {
+  return _cajaIncomeHistory.rows.find(row => Number(row.id) === Number(id)) || null;
+}
+
+function cajaReprintIncomeReceipt(id) {
+  const receipt = cajaIncomeHistoryRow(id);
+  if (!receipt) return toast('Recibo no encontrado','err');
+  printIncomeReceipt(receipt);
+}
+
+function cajaCancelIncomeFromHistory(id) {
+  const receipt = cajaIncomeHistoryRow(id);
+  if (!receipt) return toast('Recibo no encontrado','err');
+  openCancelIncomeReceiptModal(receipt);
+}
+
+function cajaOpenIncomeHistoryDetail(id) {
+  const r = cajaIncomeHistoryRow(id);
+  if (!r) return toast('Recibo no encontrado','err');
+  const cancelled = r.status === 'cancelled';
+  const field = (label, value) => `<div><span class="lbl">${label}</span><div class="tb">${_cajaEsc(value || '—')}</div></div>`;
+  openModal(`<div class="modal-title">${_cajaEsc(r.document_number_fmt || `RIN-${r.id}`)}</div>
+    <div class="modal-sub">${_cajaEsc(_cajaIncomeType(r.income_type))} · ${cancelled ? 'Anulado' : 'Vigente'}</div>
+    <div class="alrt ${cancelled ? 'r' : 'g'}" style="margin:12px 0"><div>
+      <div class="alrt-title">${cancelled ? 'Recibo anulado' : 'Monto recibido'}: ${fmt(r.amount)}</div>
+      <div class="alrt-sub">${cancelled
+        ? `Motivo: ${_cajaEsc(r.cancel_reason || 'sin motivo registrado')}`
+        : 'Documento interno · No sustituye comprobante fiscal'}</div></div></div>
+    <div class="g2" style="gap:11px">
+      ${field('Recibido de', r.payer_name)}
+      ${field('Cédula / RNC', r.payer_document)}
+      ${field('Fecha', typeof fdate === 'function' ? fdate(String(r.created_at || '').slice(0,10)) : r.created_at)}
+      ${field('Método', r.method)}
+      ${field('Cuenta receptora', r.financial_account_name)}
+      ${field('Referencia', r.reference)}
+      ${field('Registrado por', r.user_name)}
+      ${field('Caja', [r.cash_session_cajero, r.cash_session_open_date].filter(Boolean).join(' · '))}
+    </div>
+    <div class="fg" style="margin-top:12px"><label class="lbl">Concepto</label><div class="tb">${_cajaEsc(r.concept)}</div></div>
+    ${r.notes ? `<div class="fg"><label class="lbl">Notas</label><div class="ts">${_cajaEsc(r.notes)}</div></div>` : ''}
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button>
+      <button class="btn btn-dark" onclick="cajaReprintIncomeReceipt(${Number(r.id)})">${svg('print')} Reimprimir</button></div>`, 'modal-lg');
+}
+
 function cajaLoadIncomeReceipts(sessionId, el) {
   if (!sessionId || _cajaIncomeState.loading || Number(_cajaIncomeState.sessionId) === Number(sessionId)) return;
   _cajaIncomeState = { sessionId:Number(sessionId), rows:[], loading:true };
@@ -344,6 +501,11 @@ function renderCaja(el) {
     }
   }
 
+  // ── Historial de recibos de ingreso ───────────
+  el.appendChild(cajaIncomeHistoryCard());
+  if (!_cajaIncomeHistory.loaded) cajaSearchIncomeHistory();
+  else cajaRenderIncomeHistoryBody();
+
   // ── Historial ─────────────────────────────────
   const histCard = h('div', { class: 'card' });
   histCard.appendChild(h('div', { class: 'fxb mb8' },
@@ -435,6 +597,7 @@ async function confirmIncomeReceipt() {
     closeModal();
     _cajaIncomeState.sessionId = Number(cajaSession.id);
     _cajaIncomeState.rows = [result.data, ..._cajaIncomeState.rows.filter(r=>Number(r.id)!==Number(result.data.id))];
+    cajaIncomeHistoryInvalidate();
     toast(`✓ Ingreso registrado · ${result.data.document_number_fmt}`);
     printIncomeReceipt(result.data);
     renderCaja(document.getElementById('page'));
@@ -553,6 +716,7 @@ async function confirmCancelIncomeReceipt(id) {
   if (!result?.ok) { toast(result?.error || 'No se pudo anular el ingreso','err'); return; }
   closeModal();
   _cajaIncomeState.rows = _cajaIncomeState.rows.filter(row=>Number(row.id)!==Number(id));
+  cajaIncomeHistoryInvalidate();
   toast('✓ Ingreso anulado y retirado de Caja');
   renderCaja(document.getElementById('page'));
 }

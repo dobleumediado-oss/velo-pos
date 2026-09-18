@@ -48,7 +48,38 @@ try {
   DB.cashRepo.cancelIncomeReceipt(bankReceipt.id,'Transferencia rechazada',actor,sessionId);
   ok(DB.financialAccountsRepo.getById(accountId).current_balance===0,'anular revierte la cuenta financiera');
 
+  console.log('\n== Historial consultable y reimprimible ==');
+  const keptReceipt = DB.cashRepo.createIncomeReceipt({ cash_session_id:sessionId, payer_name:'Arrendatario del local',
+    concept:'Alquiler de vitrina', income_type:'otro_ingreso', amount:2500, method:'efectivo',
+    reference:'ALQ-09' }, actor);
+  DB.cashRepo.close({ sessionId, closeAmount:DB.cashRepo.getSessionCashSummary(sessionId).expected,
+    closeBills:{}, notes:'', userId:admin.id });
+  ok(db.prepare('SELECT status FROM cash_sessions WHERE id=?').get(sessionId).status==='closed',
+    'la caja queda cerrada para probar el historial');
+
+  const history = DB.cashRepo.searchIncomeReceipts({});
+  ok(history.rows.some(row => Number(row.id) === Number(keptReceipt.id)),
+    'un recibo sigue consultable después de cerrar la caja que lo emitió');
+  ok(history.rows.every(row => row.document_number_fmt && row.payer_name && row.concept),
+    'el historial devuelve los datos completos para reimprimir el documento');
+  ok(history.rows.some(row => row.status === 'cancelled') && history.totals.active === 2500,
+    'separa el monto vigente de los recibos anulados');
+
+  const activeOnly = DB.cashRepo.searchIncomeReceipts({ includeCancelled:false });
+  ok(activeOnly.rows.length === 1 && Number(activeOnly.rows[0].id) === Number(keptReceipt.id),
+    'permite ocultar los anulados sin perderlos de la base');
+  ok(DB.cashRepo.searchIncomeReceipts({ query:'ALQ-09' }).rows.length === 1 &&
+    DB.cashRepo.searchIncomeReceipts({ query:'Arrendatario' }).rows.length === 1 &&
+    DB.cashRepo.searchIncomeReceipts({ query:'Vitrina' }).rows.length === 1,
+    'busca por referencia, persona y concepto');
+  ok(DB.cashRepo.searchIncomeReceipts({ from:'1990-01-01', to:'1990-12-31' }).rows.length === 0,
+    'el rango de fechas acota el historial');
+  ok(DB.cashRepo.searchIncomeReceipts({ limit:1 }).truncated === true,
+    'avisa cuando el período devuelve más recibos de los mostrados');
+
   const ui = fs.readFileSync(path.join(__dirname,'../src/js/caja.js'),'utf8');
+  ok(ui.includes('Historial de recibos de ingreso')&&ui.includes('function cajaSearchIncomeHistory')&&
+    ui.includes('function cajaReprintIncomeReceipt'),'Caja muestra el historial con reimpresión');
   ok(ui.includes('Nuevo recibo de ingreso')&&ui.includes("printHTML(buildIncomeReceiptHTML(receipt, override), 'recibo_ingreso')"),'Caja incluye captura e impresión del recibo');
   ok(ui.includes('function _cajaIncomeReceiptSettings')&&ui.includes("_getCategoryConfig('ingreso')")&&
     ui.includes("settings.template === 'ingreso_termica_80'"),'el recibo respeta la plantilla configurada en el Centro de impresión');

@@ -4640,6 +4640,46 @@ const cashRepo = {
       WHERE r.cash_session_id=? ${includeCancelled ? '' : "AND r.status='active'"}
       ORDER BY r.created_at DESC,r.id DESC`).all(Number(sessionId));
   },
+  // Historial independiente de la caja abierta: la tarjeta de Caja solo ve la
+  // sesión en curso, y un recibo sigue siendo un documento consultable y
+  // reimprimible después del cierre.
+  searchIncomeReceipts(options = {}) {
+    const dateOf = value => (/^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) ? String(value) : '');
+    const from = dateOf(options.from);
+    const to = dateOf(options.to);
+    const term = String(options.query || '').trim().slice(0, 80);
+    const includeCancelled = options.includeCancelled !== false;
+    const limit = Math.max(1, Math.min(1000, parseInt(options.limit, 10) || 300));
+    const clauses = [];
+    const params = [];
+    if (from) { clauses.push('date(r.created_at)>=?'); params.push(from); }
+    if (to) { clauses.push('date(r.created_at)<=?'); params.push(to); }
+    if (!includeCancelled) clauses.push("r.status='active'");
+    if (term) {
+      clauses.push(`(r.document_number_fmt LIKE ? OR r.payer_name LIKE ? OR r.payer_document LIKE ?
+        OR r.concept LIKE ? OR r.reference LIKE ?)`);
+      const like = `%${term}%`;
+      params.push(like, like, like, like, like);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const rows = db.prepare(`
+      SELECT r.*,fa.name financial_account_name,
+             cs.status cash_session_status,cs.cajero cash_session_cajero,
+             cs.open_date cash_session_open_date
+      FROM cash_income_receipts r
+      LEFT JOIN financial_accounts fa ON fa.id=r.financial_account_id
+      LEFT JOIN cash_sessions cs ON cs.id=r.cash_session_id
+      ${where}
+      ORDER BY r.created_at DESC,r.id DESC
+      LIMIT ?
+    `).all(...params, limit + 1);
+    const totals = rows.slice(0, limit).reduce((acc, row) => {
+      if (row.status === 'active') acc.active = round2(acc.active + Number(row.amount || 0));
+      else acc.cancelled = round2(acc.cancelled + Number(row.amount || 0));
+      return acc;
+    }, { active: 0, cancelled: 0 });
+    return { rows: rows.slice(0, limit), truncated: rows.length > limit, totals };
+  },
   cancelIncomeReceipt(id, reason, actor = {}, currentSessionId = null) {
     const cleanReason = String(reason || '').trim();
     if (!cleanReason) throw new Error('Indica el motivo de la anulación');
