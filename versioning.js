@@ -2398,6 +2398,34 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.48.4-conduce-charges-pos-conversion] Cargos y conversión de conduces listos');
     }
   },
+  {
+    version: '1.49.5-income-receipt-currency',
+    description: 'Recibos de ingreso: dinero recibido en dólares con su tasa, conservando el equivalente en pesos.',
+    run(db) {
+      const addColumn = (table, name, definition) => {
+        const exists = db.prepare(
+          "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?"
+        ).get(table);
+        if (!exists) return;
+        const columns = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(column => column.name));
+        if (!columns.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+      };
+      addColumn('cash_income_receipts', 'payment_currency', "TEXT NOT NULL DEFAULT 'DOP'");
+      addColumn('cash_income_receipts', 'exchange_rate', 'REAL NOT NULL DEFAULT 1');
+      addColumn('cash_income_receipts', 'currency_amount', 'REAL NOT NULL DEFAULT 0');
+      const hasTable = db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cash_income_receipts'"
+      ).get();
+      if (hasTable) {
+        // Los recibos anteriores se cobraron en pesos: su monto en moneda es el
+        // mismo importe y la tasa es 1. Nunca se reinterpreta un histórico.
+        db.prepare(`UPDATE cash_income_receipts
+          SET payment_currency='DOP',exchange_rate=1,currency_amount=amount
+          WHERE COALESCE(currency_amount,0)=0`).run();
+      }
+      console.log('[MIGRATION 1.49.5-income-receipt-currency] Recibos de ingreso en dólares listos');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

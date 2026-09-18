@@ -556,6 +556,12 @@ function createTables() {
       income_type              TEXT NOT NULL DEFAULT 'otro_ingreso'
                                CHECK(income_type IN ('otro_ingreso','aporte_capital','prestamo','reembolso')),
       amount                   REAL NOT NULL,
+      -- El dinero puede recibirse en dólares: la columna amount conserva SIEMPRE
+      -- el equivalente en pesos (caja, bancos y contabilidad trabajan en DOP) y
+      -- estas columnas guardan lo que el cliente entregó realmente.
+      payment_currency         TEXT NOT NULL DEFAULT 'DOP' CHECK(payment_currency IN ('DOP','USD')),
+      exchange_rate            REAL NOT NULL DEFAULT 1,
+      currency_amount          REAL NOT NULL DEFAULT 0,
       method                   TEXT NOT NULL DEFAULT 'efectivo'
                                CHECK(method IN ('efectivo','transferencia','tarjeta','cheque')),
       financial_account_id     INTEGER REFERENCES financial_accounts(id),
@@ -4566,13 +4572,32 @@ const cashRepo = {
     );
     return Number(result.lastInsertRowid);
   },
+  // El monto que se captura es SIEMPRE en la moneda del recibo. De aquí salen
+  // las tres cifras que conviven: lo que entregó el cliente, la tasa aplicada y
+  // el equivalente en pesos con el que operan caja, bancos y contabilidad.
+  _incomeReceiptAmounts(data = {}, current = null) {
+    const currency = String(data.payment_currency ?? current?.payment_currency ?? 'DOP').toUpperCase();
+    if (!['DOP','USD'].includes(currency)) throw new Error('Moneda del ingreso no válida');
+    const sameCurrency = !current || currency === String(current.payment_currency || 'DOP').toUpperCase();
+    const rawRate = data.exchange_rate ?? (sameCurrency ? current?.exchange_rate : null);
+    const rate = currency === 'USD' ? round2(Number(rawRate) || 0) : 1;
+    if (currency === 'USD' && !(rate >= 20 && rate <= 500)) {
+      throw new Error('Indica la tasa de cambio aplicada al ingreso en dólares');
+    }
+    const fallbackAmount = current && sameCurrency
+      ? Number(current.currency_amount || current.amount || 0) : null;
+    const raw = data.amount === undefined || data.amount === null || data.amount === ''
+      ? fallbackAmount : data.amount;
+    const currencyAmount = round2(Number(raw) || 0);
+    if (currencyAmount <= 0) throw new Error('El monto del ingreso debe ser mayor a cero');
+    return { currency, rate, currencyAmount, amount: round2(currencyAmount * rate) };
+  },
   createIncomeReceipt(data = {}, actor = {}) {
-    const amount = round2(Number(data.amount) || 0);
+    const { currency, rate, currencyAmount, amount } = this._incomeReceiptAmounts(data);
     const payerName = String(data.payer_name || '').trim();
     const concept = String(data.concept || '').trim();
     const incomeType = String(data.income_type || 'otro_ingreso');
     const method = String(data.method || 'efectivo').toLowerCase();
-    if (amount <= 0) throw new Error('El monto del ingreso debe ser mayor a cero');
     if (!payerName) throw new Error('Indica quién entrega el dinero');
     if (!concept) throw new Error('Indica el concepto del ingreso');
     if (!['otro_ingreso','aporte_capital','prestamo','reembolso'].includes(incomeType)) throw new Error('Tipo de ingreso no válido');
@@ -4586,11 +4611,13 @@ const cashRepo = {
     }
     return db.transaction(() => {
       const inserted = db.prepare(`INSERT INTO cash_income_receipts(
-        cash_session_id,payer_name,payer_document,concept,income_type,amount,method,
+        cash_session_id,payer_name,payer_document,concept,income_type,amount,
+        payment_currency,exchange_rate,currency_amount,method,
         financial_account_id,reference,notes,user_id,user_name
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
         session.id, payerName, String(data.payer_document || '').trim(), concept, incomeType,
-        amount, method, financialAccount?.id || null, String(data.reference || '').trim(),
+        amount, currency, rate, currencyAmount, method,
+        financialAccount?.id || null, String(data.reference || '').trim(),
         String(data.notes || '').trim(), Number(actor.id) || null, String(actor.name || '')
       );
       const id = Number(inserted.lastInsertRowid);
@@ -4644,7 +4671,7 @@ const cashRepo = {
     if (!receipt) throw new Error('Recibo no encontrado');
     if (receipt.status !== 'active') throw new Error('Un recibo anulado no se puede modificar');
     const pick = (key) => (data[key] === undefined || data[key] === null ? receipt[key] : data[key]);
-    const amount = round2(Number(pick('amount')) || 0);
+    const { currency, rate, currencyAmount, amount } = this._incomeReceiptAmounts(data, receipt);
     const payerName = String(pick('payer_name') || '').trim();
     const payerDocument = String(pick('payer_document') || '').trim();
     const concept = String(pick('concept') || '').trim();
@@ -4653,7 +4680,6 @@ const cashRepo = {
     const reference = String(pick('reference') || '').trim();
     const notes = String(pick('notes') || '').trim();
     const reason = String(data.reason || '').trim().replace(/\s+/g, ' ').slice(0, 300);
-    if (amount <= 0) throw new Error('El monto del ingreso debe ser mayor a cero');
     if (!payerName) throw new Error('Indica quién entrega el dinero');
     if (!concept) throw new Error('Indica el concepto del ingreso');
     if (reason.length < 5) throw new Error('Indica el motivo de la modificación');
@@ -4680,7 +4706,12 @@ const cashRepo = {
     if (movesCash && !settlementSessionId) {
       throw new Error('Abre la caja para ajustar el efectivo de este recibo');
     }
-    const changed = amountChanged || methodChanged || accountChanged ||
+    // La moneda y la tasa pueden corregirse aunque el equivalente en pesos no
+    // cambie: el recibo debe reflejar lo que el cliente entregó de verdad.
+    const currencyChanged = currency !== String(receipt.payment_currency || 'DOP').toUpperCase() ||
+      Math.abs(rate - Number(receipt.exchange_rate || 1)) > 0.0005 ||
+      Math.abs(currencyAmount - Number(receipt.currency_amount || 0)) > 0.005;
+    const changed = amountChanged || methodChanged || accountChanged || currencyChanged ||
       payerName !== receipt.payer_name || payerDocument !== (receipt.payer_document || '') ||
       concept !== receipt.concept || incomeType !== receipt.income_type ||
       reference !== (receipt.reference || '') || notes !== (receipt.notes || '');
@@ -4726,17 +4757,21 @@ const cashRepo = {
         });
       }
       db.prepare(`UPDATE cash_income_receipts SET payer_name=?,payer_document=?,concept=?,income_type=?,
-        amount=?,method=?,financial_account_id=?,reference=?,notes=?,
+        amount=?,payment_currency=?,exchange_rate=?,currency_amount=?,method=?,
+        financial_account_id=?,reference=?,notes=?,
         cash_movement_id=?,financial_movement_id=?,accounting_entry_id=? WHERE id=?`).run(
-        payerName, payerDocument, concept, incomeType, amount, method,
+        payerName, payerDocument, concept, incomeType, amount, currency, rate, currencyAmount, method,
         financialAccount?.id || null, reference, notes,
         cashMovementId, financialMovementId, accountingEntryId, receipt.id);
       audit(actorId, String(actor.name || ''), 'recibo_ingreso_corregido', 'cash_income_receipts', receipt.id,
         JSON.stringify({ number, reason,
           antes:{ payer_name:receipt.payer_name, concept:receipt.concept, income_type:receipt.income_type,
-            amount:Number(receipt.amount || 0), method:receipt.method, financial_account_id:receipt.financial_account_id,
+            amount:Number(receipt.amount || 0), payment_currency:receipt.payment_currency || 'DOP',
+            exchange_rate:Number(receipt.exchange_rate || 1), currency_amount:Number(receipt.currency_amount || 0),
+            method:receipt.method, financial_account_id:receipt.financial_account_id,
             reference:receipt.reference || '', notes:receipt.notes || '' },
-          despues:{ payer_name:payerName, concept, income_type:incomeType, amount, method,
+          despues:{ payer_name:payerName, concept, income_type:incomeType, amount,
+            payment_currency:currency, exchange_rate:rate, currency_amount:currencyAmount, method,
             financial_account_id:financialAccount?.id || null, reference, notes } }));
       return this.getIncomeReceipt(receipt.id);
     })();

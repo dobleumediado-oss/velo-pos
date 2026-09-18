@@ -36,6 +36,11 @@ function _cajaEsc(value) {
   return String(value == null ? '' : value).replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
 }
+function _cajaUsd(value) {
+  return 'US$' + Number(value || 0).toLocaleString('es-DO', {
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  });
+}
 function _cajaIncomeType(value) {
   return ({ otro_ingreso:'Otro ingreso', aporte_capital:'Aporte de capital', prestamo:'Préstamo recibido', reembolso:'Reembolso / recuperación' })[value] || 'Otro ingreso';
 }
@@ -103,7 +108,10 @@ function cajaRenderIncomeHistoryBody() {
       <td><div class="tb">${_cajaEsc(r.payer_name)}</div><div class="ts">${_cajaEsc(_cajaIncomeType(r.income_type))}</div></td>
       <td>${_cajaEsc(r.concept)}</td>
       <td><span class="badge ${r.method === 'efectivo' ? 'g' : 'b'}">${_cajaEsc(r.method)}</span></td>
-      <td style="font-weight:800;color:${cancelled ? 'var(--muted)' : 'var(--green)'}">${cancelled ? '−' : ''}${fmt(r.amount)}</td>
+      <td style="font-weight:800;color:${cancelled ? 'var(--muted)' : 'var(--green)'}">${cancelled ? '−' : ''}${fmt(r.amount)}
+        ${String(r.payment_currency || 'DOP').toUpperCase() === 'USD'
+          ? `<div class="ts" style="font-weight:600">${_cajaUsd(r.currency_amount || 0)} · Tasa ${Number(r.exchange_rate || 0).toFixed(2)}</div>`
+          : ''}</td>
       <td><span class="badge ${cancelled ? 'r' : 'g'}">${cancelled ? 'Anulado' : 'Vigente'}</span></td>
       <td><div class="flex" style="gap:3px">
         <button class="btn btn-ghost btn-sm" title="Ver detalle" onclick="cajaOpenIncomeHistoryDetail(${Number(r.id)})">${svg('eye')}</button>
@@ -186,6 +194,9 @@ function cajaOpenIncomeHistoryDetail(id) {
       ${field('Cédula / RNC', r.payer_document)}
       ${field('Fecha', typeof fdate === 'function' ? fdate(String(r.created_at || '').slice(0,10)) : r.created_at)}
       ${field('Método', r.method)}
+      ${field('Moneda recibida', String(r.payment_currency || 'DOP').toUpperCase() === 'USD'
+        ? `${_cajaUsd(r.currency_amount || 0)} · Tasa ${Number(r.exchange_rate || 0).toFixed(2)}`
+        : 'Pesos (RD$)')}
       ${field('Cuenta receptora', r.financial_account_name)}
       ${field('Referencia', r.reference)}
       ${field('Registrado por', r.user_name)}
@@ -563,12 +574,82 @@ async function openIncomeReceiptModal() {
   openModal(`<div class="modal-title">Nuevo recibo de ingreso</div><div class="modal-sub">Registra dinero recibido fuera de una venta o abono de cliente.</div>
     <div class="g2"><div class="fg"><label class="lbl">Recibido de *</label><input class="inp" id="cash-income-payer" placeholder="Nombre de la persona o empresa"/></div><div class="fg"><label class="lbl">Cédula / RNC</label><input class="inp" id="cash-income-document" placeholder="Opcional"/></div></div>
     <div class="fg"><label class="lbl">Concepto *</label><input class="inp" id="cash-income-concept" placeholder="Motivo por el que se recibe el dinero"/></div>
-    <div class="g2"><div class="fg"><label class="lbl">Tipo de ingreso</label><select class="inp" id="cash-income-type"><option value="otro_ingreso">Otro ingreso</option><option value="aporte_capital">Aporte de capital</option><option value="prestamo">Préstamo recibido</option><option value="reembolso">Reembolso / recuperación</option></select></div><div class="fg"><label class="lbl">Monto (RD$) *</label><input class="inp" id="cash-income-amount" type="number" min="0.01" step="0.01"/></div></div>
+    <div class="g2"><div class="fg"><label class="lbl">Tipo de ingreso</label><select class="inp" id="cash-income-type"><option value="otro_ingreso">Otro ingreso</option><option value="aporte_capital">Aporte de capital</option><option value="prestamo">Préstamo recibido</option><option value="reembolso">Reembolso / recuperación</option></select></div>${cajaIncomeCurrencySelect('cash-income')}</div>
+    ${cajaIncomeCurrencyFields('cash-income')}
     <div class="g2"><div class="fg"><label class="lbl">Método</label><select class="inp" id="cash-income-method" onchange="cajaIncomeMethodChanged()"><option value="efectivo">Efectivo</option><option value="transferencia">Transferencia</option><option value="tarjeta">Tarjeta</option><option value="cheque">Cheque</option></select></div><div class="fg" id="cash-income-account-wrap" style="display:none"><label class="lbl">Cuenta receptora *</label><select class="inp" id="cash-income-account"><option value="">Seleccionar cuenta…</option>${accounts.map(a=>`<option value="${a.id}">${_cajaEsc(a.name)}${a.account_number?` · ${_cajaEsc(a.account_number)}`:''}</option>`).join('')}</select></div></div>
     <div class="fg"><label class="lbl">Referencia</label><input class="inp" id="cash-income-reference" placeholder="Transferencia, cheque o referencia interna"/></div>
     <div class="fg"><label class="lbl">Notas para el recibo</label><textarea class="inp" id="cash-income-notes" rows="3" placeholder="Opcional"></textarea></div>
     <div class="ven-callout">El efectivo aumenta el cuadre de esta caja. Transferencias, tarjetas y cheques aumentan la cuenta financiera seleccionada.</div>
     <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-green" id="cash-income-save" onclick="confirmIncomeReceipt()">${svg('check')} Registrar e imprimir</button></div>`, 'modal-lg');
+}
+
+// La tasa se propone desde la del día que ya muestra la barra superior y queda
+// editable: el recibo debe registrar la tasa realmente acordada.
+function cajaCurrentUsdRate() {
+  const rate = Number((typeof _ratesData !== 'undefined' && _ratesData?.usd?.venta?.value) || 0);
+  return rate > 0 ? Math.round(rate * 100) / 100 : 0;
+}
+
+function cajaIncomeCurrencyFields(prefix, current = {}) {
+  const currency = String(current.payment_currency || 'DOP').toUpperCase();
+  const rate = Number(current.exchange_rate || 0);
+  const amount = Number(current.currency_amount || current.amount || 0);
+  return `<div class="g2">
+      <div class="fg"><label class="lbl" id="${prefix}-amount-label">Monto (${currency === 'USD' ? 'US$' : 'RD$'}) *</label>
+        <input class="inp" id="${prefix}-amount" type="number" min="0.01" step="0.01"
+          value="${amount > 0 ? amount : ''}" oninput="cajaIncomeRecalcEquivalent('${prefix}')"/></div>
+      <div class="fg" id="${prefix}-rate-wrap" style="display:${currency === 'USD' ? '' : 'none'}">
+        <label class="lbl">Tasa aplicada *</label>
+        <input class="inp" id="${prefix}-rate" type="number" min="20" max="500" step="0.01"
+          value="${currency === 'USD' && rate > 0 ? rate.toFixed(2) : ''}" placeholder="Tasa del día"
+          oninput="cajaIncomeRecalcEquivalent('${prefix}')"/></div>
+    </div>
+    <div class="ts" id="${prefix}-equivalent" style="margin:-3px 0 10px"></div>`;
+}
+
+function cajaIncomeCurrencySelect(prefix, current = 'DOP') {
+  const currency = String(current || 'DOP').toUpperCase();
+  return `<div class="fg"><label class="lbl">Moneda recibida</label>
+    <select class="inp" id="${prefix}-currency" onchange="cajaIncomeCurrencyChanged('${prefix}')">
+      <option value="DOP"${currency === 'DOP' ? ' selected' : ''}>Pesos (RD$)</option>
+      <option value="USD"${currency === 'USD' ? ' selected' : ''}>Dólares (US$)</option>
+    </select></div>`;
+}
+
+function cajaIncomeCurrencyChanged(prefix) {
+  const currency = document.getElementById(`${prefix}-currency`)?.value || 'DOP';
+  const wrap = document.getElementById(`${prefix}-rate-wrap`);
+  const label = document.getElementById(`${prefix}-amount-label`);
+  const rateInput = document.getElementById(`${prefix}-rate`);
+  if (wrap) wrap.style.display = currency === 'USD' ? '' : 'none';
+  if (label) label.textContent = currency === 'USD' ? 'Monto (US$) *' : 'Monto (RD$) *';
+  if (currency === 'USD' && rateInput && !Number(rateInput.value)) {
+    const cached = cajaCurrentUsdRate();
+    if (cached > 0) rateInput.value = cached.toFixed(2);
+    else {
+      window.api?.banner?.getRates?.().then(result => {
+        const live = Number(result?.data?.usd?.venta?.value || 0);
+        const input = document.getElementById(`${prefix}-rate`);
+        if (live > 0 && input && !Number(input.value)) {
+          input.value = live.toFixed(2);
+          cajaIncomeRecalcEquivalent(prefix);
+        }
+      }).catch(() => {});
+    }
+  }
+  cajaIncomeRecalcEquivalent(prefix);
+}
+
+function cajaIncomeRecalcEquivalent(prefix) {
+  const target = document.getElementById(`${prefix}-equivalent`);
+  if (!target) return;
+  const currency = document.getElementById(`${prefix}-currency`)?.value || 'DOP';
+  if (currency !== 'USD') { target.textContent = ''; return; }
+  const amount = Number(document.getElementById(`${prefix}-amount`)?.value) || 0;
+  const rate = Number(document.getElementById(`${prefix}-rate`)?.value) || 0;
+  target.innerHTML = amount > 0 && rate > 0
+    ? `Equivalente en pesos: <strong>${fmt(Math.round(amount * rate * 100) / 100)}</strong> · Tasa ${rate.toFixed(2)}`
+    : 'Indica el monto en dólares y la tasa aplicada.';
 }
 
 function cajaIncomeMethodChanged() {
@@ -588,6 +669,8 @@ async function confirmIncomeReceipt() {
     concept:document.getElementById('cash-income-concept')?.value,
     income_type:document.getElementById('cash-income-type')?.value,
     amount:document.getElementById('cash-income-amount')?.value,
+    payment_currency:document.getElementById('cash-income-currency')?.value || 'DOP',
+    exchange_rate:document.getElementById('cash-income-rate')?.value || 1,
     method:document.getElementById('cash-income-method')?.value,
     financial_account_id:document.getElementById('cash-income-account')?.value || null,
     reference:document.getElementById('cash-income-reference')?.value,
@@ -639,6 +722,15 @@ function buildIncomeReceiptHTML(receipt, override = null) {
     : compact ? 'size:letter;margin:10mm' : 'size:letter;margin:16mm';
   const bodySize = thermal ? '10px' : compact ? '11px' : '12px';
   const pageMin = thermal ? '0' : compact ? '120mm' : '240mm';
+  const isUsd = String(receipt.payment_currency || 'DOP').toUpperCase() === 'USD';
+  const rate = Number(receipt.exchange_rate || 0);
+  const currencyAmount = Number(receipt.currency_amount || receipt.amount || 0);
+  // El recibo presenta la tasa como un dato más del cobro. Nunca indica si se
+  // ajustó respecto a la referencia del día: solo su número.
+  const amountBlock = isUsd
+    ? `<div class="amount"><span>Monto recibido</span><strong>${_cajaUsd(currencyAmount)}</strong>
+        <div class="fx">Tasa ${rate.toFixed(2)} · Equivalente ${fmt(receipt.amount)}</div></div>`
+    : `<div class="amount"><span>Monto recibido</span><strong>${fmt(receipt.amount)}</strong></div>`;
   const businessBlock = settings.showBusinessDetails
     ? `<h1>${_cajaEsc(CFG.biz || 'VELO POS')}</h1><div class="muted">${_cajaEsc([CFG.rnc && `RNC ${CFG.rnc}`, CFG.phone, CFG.addr].filter(Boolean).join(' · '))}</div>`
     : '';
@@ -656,6 +748,7 @@ function buildIncomeReceiptHTML(receipt, override = null) {
     + `.grid{display:grid;grid-template-columns:${thermal ? '1fr' : '1fr 1fr'};gap:${thermal ? '5px' : '10px 28px'};background:#f8fafc;border:1px solid #e2e8f0;border-radius:9px;padding:${thermal ? '8px' : '15px'}}`
     + `.amount{margin:${thermal ? '12px 0' : '22px 0'};padding:${thermal ? '10px' : '18px'};border:2px solid #0f766e;border-radius:10px;text-align:center}`
     + `.amount span{display:block;color:#64748b;text-transform:uppercase;font-size:${thermal ? '9px' : '10px'}}.amount strong{display:block;font-size:${thermal ? '18px' : '28px'};color:#0f766e;margin-top:5px}`
+    + `.amount .fx{margin-top:5px;color:#334155;font-size:${thermal ? '9px' : '11px'}}`
     + `.concept{padding:${thermal ? '9px' : '14px'};border-left:4px solid #0f766e;background:#f8fafc;white-space:pre-wrap}`
     + `.note{margin-top:${thermal ? '9px' : '14px'};padding:${thermal ? '9px' : '12px'};border:1px solid #e2e8f0;white-space:pre-wrap}`
     + `.signatures{display:grid;grid-template-columns:${thermal ? '1fr' : '1fr 1fr'};gap:${thermal ? '26px' : '70px'};margin-top:${thermal ? '34px' : compact ? '45px' : '75px'}}`
@@ -670,7 +763,7 @@ function buildIncomeReceiptHTML(receipt, override = null) {
     + `<div><span class="muted">Método</span><br><strong>${_cajaEsc(receipt.method || 'efectivo')}</strong></div>`
     + `<div><span class="muted">Tipo</span><br><strong>${_cajaEsc(_cajaIncomeType(receipt.income_type))}</strong></div>`
     + `<div><span class="muted">Referencia</span><br><strong>${_cajaEsc(receipt.reference || '—')}</strong></div></div>`
-    + `<div class="amount"><span>Monto recibido</span><strong>${fmt(receipt.amount)}</strong></div>`
+    + amountBlock
     + `<div class="concept"><strong>Concepto</strong><br>${_cajaEsc(receipt.concept)}</div>${notesBlock}${signaturesBlock}`
     + `<footer class="foot"><span>${_cajaEsc(CFG.biz || '')}</span><span>Documento interno · No sustituye comprobante fiscal</span></footer>`
     + `</section></body></html>`;
@@ -729,7 +822,8 @@ async function openEditIncomeReceiptModal(receipt) {
       <option value="aporte_capital"${sel('aporte_capital',receipt.income_type)}>Aporte de capital</option>
       <option value="prestamo"${sel('prestamo',receipt.income_type)}>Préstamo recibido</option>
       <option value="reembolso"${sel('reembolso',receipt.income_type)}>Reembolso / recuperación</option></select></div>
-      <div class="fg"><label class="lbl">Monto (RD$) *</label><input class="inp" id="cash-income-edit-amount" type="number" min="0.01" step="0.01" value="${Number(receipt.amount || 0)}"/></div></div>
+      ${cajaIncomeCurrencySelect('cash-income-edit', receipt.payment_currency)}</div>
+    ${cajaIncomeCurrencyFields('cash-income-edit', receipt)}
     <div class="g2"><div class="fg"><label class="lbl">Método</label><select class="inp" id="cash-income-edit-method" onchange="cajaEditIncomeMethodChanged()">
       <option value="efectivo"${sel('efectivo',method)}>Efectivo</option>
       <option value="transferencia"${sel('transferencia',method)}>Transferencia</option>
@@ -744,6 +838,7 @@ async function openEditIncomeReceiptModal(receipt) {
     <div class="ven-callout">Si cambia el monto o el método, la diferencia entra o sale por la caja abierta y la cuenta afectada. El asiento contable se regenera.</div>
     <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-green" id="cash-income-edit-save" onclick="confirmEditIncomeReceipt(${Number(receipt.id)})">${svg('check')} Guardar cambios</button></div>`, 'modal-lg');
+  cajaIncomeRecalcEquivalent('cash-income-edit');
 }
 
 function cajaEditIncomeMethodChanged() {
@@ -762,6 +857,8 @@ async function confirmEditIncomeReceipt(id) {
     concept: document.getElementById('cash-income-edit-concept')?.value,
     income_type: document.getElementById('cash-income-edit-type')?.value,
     amount: document.getElementById('cash-income-edit-amount')?.value,
+    payment_currency: document.getElementById('cash-income-edit-currency')?.value || 'DOP',
+    exchange_rate: document.getElementById('cash-income-edit-rate')?.value || 1,
     method: document.getElementById('cash-income-edit-method')?.value,
     financial_account_id: document.getElementById('cash-income-edit-account')?.value || null,
     reference: document.getElementById('cash-income-edit-reference')?.value,

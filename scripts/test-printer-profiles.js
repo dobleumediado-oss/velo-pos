@@ -465,7 +465,7 @@ test('el recibo de ingreso cambia de formato con la plantilla elegida', () => {
   const to = cajaSource.indexOf('function printIncomeReceipt(');
   assert.ok(from > 0 && to > from, 'el constructor del recibo de ingreso sigue en caja.js');
 
-  const build = (route, override) => {
+  const build = (route, override, receiptOverride) => {
     const context = {
       _getCategoryConfig: () => route || {},
       CFG: { biz: 'NEGOCIO', rnc: '101', phone: '809', addr: 'RD', biz_logo: 'x', biz_logo_2: '' },
@@ -474,17 +474,18 @@ test('el recibo de ingreso cambia de formato con la plantilla elegida', () => {
       fdate: value => value,
       _cajaEsc: value => String(value == null ? '' : value),
       _cajaIncomeType: value => String(value || ''),
+      _cajaUsd: value => `US$${Number(value || 0).toFixed(2)}`,
       buildLogoHeader: () => '<img src="logo.png"/>',
     };
     require('vm').runInNewContext(
       `${cajaSource.slice(from, to)}\nthis.html = buildIncomeReceiptHTML(receipt, override);`,
       Object.assign(context, {
-        receipt: {
+        receipt: Object.assign({
           document_number_fmt: 'RIN-000001', payer_name: 'JUAN', payer_document: '001',
           created_at: '2026-09-18', method: 'efectivo', income_type: 'otro_ingreso',
           reference: 'REF', amount: 1500, concept: 'Concepto', notes: 'Nota',
           user_name: 'Cajero',
-        },
+        }, receiptOverride || {}),
         override: override || null,
       })
     );
@@ -506,6 +507,19 @@ test('el recibo de ingreso cambia de formato con la plantilla elegida', () => {
   assert.ok(full.includes('<img src="logo.png"/>') && !stripped.includes('<img src="logo.png"/>'));
   assert.ok(full.includes('Recibido por') && !stripped.includes('Recibido por'));
   assert.ok(full.includes('Nota') && !stripped.includes('<strong>Notas</strong>'));
+
+  // Un ingreso en dólares muestra la divisa, el número de la tasa y el
+  // equivalente en pesos. Nunca declara si esa tasa se ajustó.
+  const usd = build(null, null, {
+    payment_currency: 'USD', exchange_rate: 63.5, currency_amount: 100, amount: 6350,
+  });
+  assert.ok(usd.includes('US$100.00'), 'imprime lo que el cliente entregó en dólares');
+  assert.ok(usd.includes('Tasa 63.50'), 'imprime el número de la tasa aplicada');
+  assert.ok(usd.includes('RD$6350.00'), 'imprime el equivalente en pesos');
+  assert.ok(!/modificad|ajustad|editad|original/i.test(usd),
+    'el recibo impreso jamás declara que la tasa fue modificada');
+  assert.ok(build(null, null).includes('RD$1500.00') && !build(null, null).includes('Tasa '),
+    'un recibo en pesos no menciona tasa alguna');
 });
 
 test('la configuración de impresión guarda nómina, ingreso y sus opciones', () => {

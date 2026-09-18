@@ -48,6 +48,35 @@ try {
   DB.cashRepo.cancelIncomeReceipt(bankReceipt.id,'Transferencia rechazada',actor,sessionId);
   ok(DB.financialAccountsRepo.getById(accountId).current_balance===0,'anular revierte la cuenta financiera');
 
+  console.log('\n== Ingreso recibido en dólares ==');
+  const usdExpectedBefore = DB.cashRepo.getSessionCashSummary(sessionId).expected;
+  const usdReceipt = DB.cashRepo.createIncomeReceipt({ cash_session_id:sessionId, payer_name:'Cliente extranjero',
+    concept:'Adelanto en divisas', income_type:'otro_ingreso', amount:100, payment_currency:'USD',
+    exchange_rate:63.5, method:'efectivo' }, actor);
+  ok(usdReceipt.payment_currency==='USD'&&usdReceipt.currency_amount===100&&usdReceipt.exchange_rate===63.5,
+    'conserva lo que el cliente entregó y la tasa aplicada');
+  ok(usdReceipt.amount===6350,'convierte a pesos con la tasa indicada');
+  ok(DB.cashRepo.getSessionCashSummary(sessionId).expected===usdExpectedBefore+6350,
+    'la caja recibe el equivalente en pesos, no el monto en dólares');
+
+  let usdErrors = [];
+  const expectUsdError = (fn) => { try { fn(); usdErrors.push(''); } catch (e) { usdErrors.push(e.message); } };
+  expectUsdError(() => DB.cashRepo.createIncomeReceipt({ cash_session_id:sessionId, payer_name:'X',
+    concept:'Sin tasa', amount:50, payment_currency:'USD', method:'efectivo' }, actor));
+  expectUsdError(() => DB.cashRepo.createIncomeReceipt({ cash_session_id:sessionId, payer_name:'X',
+    concept:'Tasa absurda', amount:50, payment_currency:'USD', exchange_rate:2, method:'efectivo' }, actor));
+  ok(/tasa/i.test(usdErrors[0])&&/tasa/i.test(usdErrors[1]),'exige una tasa de cambio dentro de un rango razonable');
+
+  const reRated = DB.cashRepo.updateIncomeReceipt(usdReceipt.id,
+    { exchange_rate:62, reason:'La tasa acordada fue 62' }, actor, sessionId);
+  ok(reRated.exchange_rate===62&&reRated.currency_amount===100&&reRated.amount===6200,
+    'corregir la tasa recalcula el equivalente conservando los dólares recibidos');
+  ok(DB.cashRepo.getSessionCashSummary(sessionId).expected===usdExpectedBefore+6200,
+    'la caja se ajusta solo por la diferencia que produjo la nueva tasa');
+  DB.cashRepo.cancelIncomeReceipt(usdReceipt.id,'Fin de la prueba en divisas',actor,sessionId);
+  ok(DB.cashRepo.getSessionCashSummary(sessionId).expected===usdExpectedBefore,
+    'anular un recibo en dólares devuelve exactamente su equivalente en pesos');
+
   console.log('\n== Modificación del recibo conservando su número ==');
   const editable = DB.cashRepo.createIncomeReceipt({ cash_session_id:sessionId, payer_name:'Pagador inicial',
     concept:'Concepto inicial', income_type:'otro_ingreso', amount:1000, method:'efectivo',

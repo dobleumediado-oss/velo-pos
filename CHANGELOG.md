@@ -9,6 +9,17 @@
 - Esto evita que un ID sensible al uso de mayúsculas deje de coincidir con la
   identidad real enviada por la terminal.
 
+### Recibos de ingreso en dólares
+
+- Un recibo de ingreso puede recibirse en dólares. La tasa se propone desde la
+  del día que muestra la barra superior y queda editable para registrar la
+  realmente acordada.
+- El recibo guarda las tres cifras: los dólares que entregó el cliente, la tasa
+  aplicada y el equivalente en pesos. Caja, Bancos y Contabilidad siguen
+  operando sobre el equivalente en pesos.
+- El documento impreso muestra el monto en dólares, el número de la tasa y el
+  equivalente en pesos. Nunca indica si la tasa fue ajustada.
+
 ### Modificar un recibo de ingreso
 
 - Un recibo de ingreso se puede corregir conservando su número: persona,
