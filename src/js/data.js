@@ -339,7 +339,10 @@ async function loadAppData() {
 }
 
 async function reloadProducts() {
-  DB.products = await window.api.products.getAll() || [];
+  return _coalesceReload('products', async () => {
+    DB.products = await window.api.products.getAll() || [];
+    return DB.products;
+  });
 }
 
 // Cuentas financieras (Bancos y Cuentas) — cacheadas para el cobro (selección de
@@ -353,14 +356,48 @@ async function reloadFinancialAccounts() {
 }
 
 async function reloadCustomers() {
-  DB.customers = await window.api.customers.getAll() || [];
+  return _coalesceReload('customers', async () => {
+    DB.customers = await window.api.customers.getAll() || [];
+    return DB.customers;
+  });
 }
 
-async function reloadPayments() {
-  DB.payments = window.api.customers.getAllPayments
-    ? (await window.api.customers.getAllPayments() || [])
-    : [];
-  return DB.payments;
+// Varias acciones seguidas disparaban la MISMA recarga en paralelo. Una
+// consulta ya en vuelo se comparte en vez de repetirse contra la base.
+const _reloadInFlight = new Map();
+function _coalesceReload(key, run) {
+  const pending = _reloadInFlight.get(key);
+  if (pending) return pending;
+  const promise = Promise.resolve().then(run).finally(() => _reloadInFlight.delete(key));
+  _reloadInFlight.set(key, promise);
+  return promise;
+}
+
+// Solo Ventas, Clientes y Caja muestran abonos. Recargar los de todo el
+// historial cuando ninguna de esas pantallas está abierta bloqueaba el proceso
+// principal sin que nadie viera el resultado; se marca pendiente y se recupera
+// al entrar a una pantalla que sí los use.
+const PAYMENT_SCREENS = new Set(['ventas', 'clientes', 'caja']);
+let _paymentsStale = false;
+async function reloadPayments({ force = false } = {}) {
+  const active = (typeof page !== 'undefined') ? page : null;
+  if (!force && active && !PAYMENT_SCREENS.has(active)) {
+    _paymentsStale = true;
+    return DB.payments || [];
+  }
+  return _coalesceReload('payments', async () => {
+    DB.payments = window.api.customers.getAllPayments
+      ? (await window.api.customers.getAllPayments() || [])
+      : [];
+    _paymentsStale = false;
+    return DB.payments;
+  });
+}
+
+// La llama el router antes de pintar una pantalla que muestra abonos.
+async function ensurePaymentsFresh() {
+  if (!_paymentsStale) return DB.payments || [];
+  return reloadPayments({ force: true });
 }
 
 let salesLoadGeneration = 0;

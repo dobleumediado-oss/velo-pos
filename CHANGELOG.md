@@ -9,6 +9,15 @@
 - Esto evita que un ID sensible al uso de mayúsculas deje de coincidir con la
   identidad real enviada por la terminal.
 
+### Menos trabajo repetido al refrescar (fase 2)
+
+- Varias acciones seguidas disparaban la misma recarga en paralelo. Ahora una
+  consulta ya en vuelo se comparte en lugar de repetirse contra la base.
+- Los abonos de todo el historial solo se recargan para las pantallas que los
+  muestran —Ventas, Clientes y Caja—. Trabajando en el POS o en Inventario esa
+  consulta deja de ejecutarse, y queda pendiente para recuperarse al entrar a
+  una pantalla que sí los use.
+
 ### Velocidad al cargar clientes y abonos (fase 1)
 
 - Cargar clientes ejecutaba cinco consultas por cada cliente para traer sus

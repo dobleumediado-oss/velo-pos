@@ -1653,6 +1653,22 @@ function routeTo(p) {
   // Sin esto, todos los módulos que vienen después del POS pierden su padding
   el.style.cssText = '';
 
+  // Los abonos solo se recargan para las pantallas que los muestran. Si
+  // quedaron pendientes mientras el usuario estaba en otro módulo, se recuperan
+  // aquí y la pantalla se vuelve a pintar con el dato ya fresco.
+  if (typeof ensurePaymentsFresh === 'function' &&
+      ['ventas', 'clientes', 'caja'].includes(page)) {
+    const routedPage = page;
+    ensurePaymentsFresh().then(() => {
+      if (page !== routedPage) return;
+      const target = document.getElementById('page');
+      if (!target) return;
+      if (routedPage === 'ventas' && typeof renderVentasTable === 'function') renderVentasTable();
+      else if (routedPage === 'clientes' && typeof renderCliTable === 'function') renderCliTable();
+      else if (routedPage === 'caja' && typeof renderCaja === 'function') renderCaja(target);
+    }).catch(() => {});
+  }
+
   switch (page) {
     case 'dash':         renderDash(el);          break;
     case 'pos':          renderPOS(el);            break;

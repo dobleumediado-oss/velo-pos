@@ -225,6 +225,63 @@ try {
   ok(beforeCreate === false && afterCreate === true,
     'la caché de tablas no congela un "no existe": una migración posterior se detecta');
 
+  console.log('\n== Recargas coalescidas y abonos diferidos ==');
+  const dataSource = fs.readFileSync(path.join(__dirname, '../src/js/data.js'), 'utf8');
+  const sliceFrom = dataSource.indexOf('async function reloadProducts()');
+  const sliceTo = dataSource.indexOf('let salesLoadGeneration');
+  ok(sliceFrom > 0 && sliceTo > sliceFrom, 'las recargas siguen agrupadas en data.js');
+
+  const buildDataContext = (activePage) => {
+    let productCalls = 0;
+    let paymentCalls = 0;
+    const context = {
+      DB: { products: [], customers: [], payments: [] },
+      page: activePage,
+      window: {
+        api: {
+          products: { getAll: async () => { productCalls += 1; return [{ id: 1 }]; } },
+          customers: {
+            getAll: async () => [{ id: 1 }],
+            getAllPayments: async () => { paymentCalls += 1; return [{ id: 7 }]; },
+          },
+        },
+      },
+      counters: () => ({ productCalls, paymentCalls }),
+    };
+    require('vm').runInNewContext(
+      `${dataSource.slice(sliceFrom, sliceTo)}
+       this.reloadProducts = reloadProducts;
+       this.reloadPayments = reloadPayments;
+       this.ensurePaymentsFresh = ensurePaymentsFresh;`,
+      context
+    );
+    return context;
+  };
+
+  const posContext = buildDataContext('pos');
+  Promise.all([posContext.reloadProducts(), posContext.reloadProducts(), posContext.reloadProducts()])
+    .then(() => posContext.reloadPayments())
+    .then(() => {
+      const first = posContext.counters();
+      ok(first.productCalls === 1,
+        `tres recargas simultáneas de productos consultan una sola vez (fueron ${first.productCalls})`);
+      ok(first.paymentCalls === 0,
+        'estando en el POS no se recargan los abonos de todo el historial');
+      return posContext.ensurePaymentsFresh();
+    })
+    .then(() => {
+      const after = posContext.counters();
+      ok(after.paymentCalls === 1,
+        'al entrar a una pantalla que sí los muestra, los abonos pendientes se recuperan');
+      const ventasContext = buildDataContext('ventas');
+      return ventasContext.reloadPayments().then(() => {
+        ok(ventasContext.counters().paymentCalls === 1,
+          'en Ventas los abonos se recargan de inmediato, sin diferir');
+        console.log(`\n== RESULTADO: ${passed} OK · ${elapsedMs.toFixed(1)} ms ==`);
+      });
+    })
+    .catch(error => { console.error('  ✗', error.message); process.exitCode = 1; });
+
   const ui = fs.readFileSync(path.join(__dirname, '../src/js/ventas.js'), 'utf8');
   ok(ui.includes('const VENTAS_PAGE_SIZE = 100') && ui.includes('ventasGoToPage'),
     'la pantalla limita el render a 100 documentos y ofrece navegación');
@@ -237,7 +294,6 @@ try {
     'Inventario salta a la página del producto guardado en vez de esconderlo');
   ok(inv.includes('function refreshInvHeaderStats') && inv.includes("id: 'inv-header-stats'"),
     'las cifras de la cabecera se actualizan sin salir y volver al módulo');
-  console.log(`\n== RESULTADO: ${passed} OK · ${elapsedMs.toFixed(1)} ms ==`);
 } finally {
   try { db.close(); } catch {}
   fs.rmSync(tempDir, { recursive:true, force:true });
