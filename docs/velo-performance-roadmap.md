@@ -1,5 +1,7 @@
 # Roadmap de velocidad y estabilidad de Velo Suite
 
+[← Volver a CLAUDE.md](../CLAUDE.md) · Relacionados: [Multi-terminal](multi-terminal-sync.md) · [Corrección de facturas](sale-corrections.md)
+
 ## Objetivo
 
 Mantener Velo rápido sin alterar saldos, documentos históricos ni funciones que ya están correctas. Cada mejora de rendimiento debe ser medible, reversible y cubierta por pruebas.
@@ -207,6 +209,80 @@ Si una operación supera el límite, se registra qué consulta o render fue lent
   clientes y documentos existentes.
 - Reversión: retirar las excepciones de captura y las validaciones de permiso
   restaura la conducta anterior; no hay datos que convertir ni reparar.
+
+## Ronda de latencia y refresco — 18 de septiembre de 2026
+
+Diagnóstico medido sobre una copia de una base real (2,524 facturas, 2,710
+abonos, 1,246 productos, 317 clientes) ejecutando los repositorios bajo el
+runtime de Electron. Cinco fases, cada una con su commit y su regresión.
+
+### Fase 1 — Consultas por fila (N+1)
+
+- `customersRepo.getAll` resolvía contactos, sucursales y teléfonos con cinco
+  consultas **por cliente**: ~1,585 consultas y **56.5 ms**. Agrupadas en tres
+  consultas fijas: **3.9 ms**.
+- `hydratePaymentAllocations` consultaba las aplicaciones **por abono**. Ya
+  corregido en `getAllPayments` (**269 ms → 53 ms**), esta ronda cierra los tres
+  puntos restantes: estado de cuenta del cliente, cierre de caja e historial por
+  rango.
+- `tableExists` consultaba `sqlite_master` en cada llamada —58 usos, varios
+  dentro de bucles—. Se cachea **solo el resultado positivo**: una ausencia
+  nunca se guarda, de modo que una tabla creada por una migración posterior se
+  sigue detectando.
+
+### Fase 2 — Trabajo repetido en el refresco
+
+- Una misma recarga se disparaba varias veces en paralelo al encadenar acciones.
+  Productos, clientes y abonos comparten ahora la consulta ya en vuelo.
+- Los abonos solo se recargan para las pantallas que los muestran —Ventas,
+  Clientes y Caja—. Fuera de ellas queda pendiente y el router lo recupera al
+  entrar a una que sí los use.
+
+### Fase 3 — Repintado que descolocaba
+
+- Caja, Ventas y Clientes reconstruían todo el DOM del módulo tras cada acción.
+  Como `.page` es el contenedor que scrollea, la vista saltaba al tope y el
+  campo enfocado se perdía: buena parte de lo que se percibe como lentitud.
+- `veloRepaint` conserva posición de scroll, campo activo y posición del cursor.
+  Navegar entre módulos no pasa por el helper: ahí empezar arriba es correcto.
+
+### Fase 4 — Reactividad en modo local
+
+- `setAfterMutation` solo se registraba en modo servidor, así que una
+  instalación de una sola terminal nunca recibía `sync:changed`.
+- El modo local registra su propio sink, que avisa únicamente a su renderer. El
+  eco de la propia acción se descarta dentro de una ventana de 700 ms para no
+  duplicar consultas; un aviso local se atiende en 120 ms en vez de 250.
+
+### Fase 5 — Memoria acotada
+
+- `DB.payments` sostenía todo el historial y crecía sin techo. Ahora se sostiene
+  una ventana de los 3,000 más recientes, que cubre Caja y el detalle de un
+  cliente; la pestaña de Abonos pide el historial completo antes de filtrar.
+
+### Verificación
+
+- `npm run test:sales-history-performance` pasó de 14 a **43 aserciones**. Entre
+  ellas, tres cuentan consultas reales interceptando `db.prepare`: **3 para 400
+  abonos** y **5 para 122 clientes** —una regresión al patrón N+1 falla la
+  prueba—. Otras comprueban que la caché de tablas no congela una ausencia, que
+  el repintado restaura scroll y foco, que el eco del aviso no duplica trabajo y
+  que la ventana de abonos empieza por el más reciente.
+- Sin cambios de comportamiento: `test:financial` (199), `test:sale-corrections`
+  (106), `test:cash-income` (40), `test:customer-companies` (31), `test:business`
+  (29), `test:documents` (43), `test:checkout` (24), `test:payment-ui` (16),
+  `test:client-account`, `test:pending-invoices`, `test:pos`, `test:cash-ui`,
+  `test:data-loader`, `test:experience`, `test:server-service` y
+  `verify:integrity`.
+
+### Pendiente de esta línea
+
+- Repintado por fila en los módulos restantes: quedan ~78 puntos que reconstruyen
+  el módulo completo; esta ronda solo los hizo inocuos, no los eliminó.
+- Productos y clientes siguen cargándose completos en memoria. Con 1,246 y 317
+  no molesta; conviene paginarlos antes de las ~20,000 referencias.
+- El costo restante de un refresco tras mutación es ~91 ms cuando la pantalla
+  necesita ventas, productos y clientes a la vez.
 
 ## Ronda Conciliación de correcciones heredadas — 15 de septiembre de 2026
 
