@@ -149,6 +149,73 @@ try {
   ok(r2(corrected.tax_amt) === r2(18 + (1180 - 1180 / 1.18)),
     'la corrección no le quita al cargo su ITBIS', `itbis=${corrected.tax_amt}`);
 
+  console.log('\n== El carrito muestra lo mismo que se guarda ==');
+  const vm = require('vm');
+  const posSource = fs.readFileSync(path.join(__dirname, '../src/js/pos.js'), 'utf8');
+  const totalsFrom = posSource.indexOf('function _posRound2(');
+  const totalsTo = posSource.indexOf('function invTotal(');
+  ok(totalsFrom > 0 && totalsTo > totalsFrom, 'el cálculo del carrito sigue en pos.js');
+  const cartTotals = (chargesTaxable, charges, itype = 'factura') => {
+    const context = { CFG: { itbis: 18, charges_taxable: chargesTaxable } };
+    vm.runInNewContext(`${posSource.slice(totalsFrom, totalsTo)}\nthis.calcTotals = calcTotals;`, context);
+    return context.calcTotals({
+      itype, disc: 0, charges,
+      cart: [{ price: 118, qty: 1, taxable: 1, tax_pct: 18 }],
+    });
+  };
+  const cartTaxed = cartTotals(true, [{ description: 'Instalación', amount: 500 }]);
+  ok(r2(cartTaxed.subtotal) === r2(taxed.subtotal) && r2(cartTaxed.itbis) === r2(taxed.tax_amt) &&
+    r2(cartTaxed.total) === r2(taxed.total),
+    'con cargo gravado, el carrito da al centavo lo que guarda el backend',
+    `carrito ${cartTaxed.subtotal}+${cartTaxed.itbis}=${cartTaxed.total} · backend ${taxed.subtotal}+${taxed.tax_amt}=${taxed.total}`);
+  const cartExempt = cartTotals(false, [{ description: 'Envío a domicilio', amount: 500 }]);
+  ok(r2(cartExempt.subtotal) === r2(exempt.subtotal) && r2(cartExempt.itbis) === r2(exempt.tax_amt) &&
+    r2(cartExempt.total) === r2(exempt.total),
+    'con cargo exento, el carrito también coincide con el backend',
+    `carrito ${cartExempt.subtotal}+${cartExempt.itbis} · backend ${exempt.subtotal}+${exempt.tax_amt}`);
+  const cartQuote = cartTotals(true, [{ description: 'Envío', amount: 200 }], 'cotizacion');
+  ok(r2(cartQuote.itbis) === 0 && r2(cartQuote.subtotal + cartQuote.itbis) === r2(cartQuote.total),
+    'en una cotización el cargo nunca fija ITBIS, aunque el negocio los grave');
+
+  console.log('\n== La impresión no duplica el cargo ==');
+  const printSource = fs.readFileSync(path.join(__dirname, '../src/js/print.js'), 'utf8');
+  const linesFrom = printSource.indexOf('function _printChargesAsLines(');
+  const linesTo = printSource.indexOf('function printReceipt(');
+  const printContext = {};
+  vm.runInNewContext(`${printSource.slice(linesFrom, linesTo)}\nthis.asLines = _printChargesAsLines;`, printContext);
+  const current = printContext.asLines({
+    charges_in_subtotal: 1, additional_charges_total: 500,
+    items: [{ product_name: 'Producto', qty: 1, unit_price: 118 }],
+    charges: [{ description: 'Instalación', amount: 500, taxable: 1, tax_pct: 18, net_subtotal: 423.73, tax_amt: 76.27 }],
+  });
+  ok(current.items.length === 2 && current.items[1].product_name === 'Instalación' &&
+    current.items[1].is_charge === true,
+    'en la convención vigente el cargo se imprime como una línea más');
+  ok(current.additional_charges_total === 0,
+    'y no se repite como fila debajo del ITBIS en ninguna de las plantillas');
+  ok(printContext.asLines(current).items.length === 2,
+    'normalizar dos veces no lo inyecta dos veces');
+  const legacyPrint = printContext.asLines({
+    charges_in_subtotal: 0, additional_charges_total: 300,
+    items: [{ product_name: 'Producto' }], charges: [{ description: 'Flete antiguo', amount: 300 }],
+  });
+  ok(legacyPrint.items.length === 1 && legacyPrint.additional_charges_total === 300,
+    'una factura vieja se reimprime exactamente como se emitió, con su fila aparte');
+
+  console.log('\n== Redacción y pantallas ==');
+  const allUi = ['pos.js', 'conduce.js', 'ventas.js', 'tour.js']
+    .map(file => fs.readFileSync(path.join(__dirname, '../src/js', file), 'utf8')).join('\n');
+  ok(!allUi.includes('Agregar envío u otro cargo') && !allUi.includes('Agregar cargo a la ${label}'),
+    'la interfaz dice "cargos adicionales" en todos lados');
+  ok(!posSource.includes('id="cbr-summary-charges"') && posSource.includes('Incluye cargos adicionales por'),
+    'el cobro informa los cargos sin mostrarlos como fila que se suma');
+  const ventasSource = fs.readFileSync(path.join(__dirname, '../src/js/ventas.js'), 'utf8');
+  ok(ventasSource.includes("Number(detail.charges_in_subtotal) !== 1"),
+    'el detalle de Ventas solo muestra la fila aparte en facturas de la convención anterior');
+  const configSource = fs.readFileSync(path.join(__dirname, '../src/js/config.js'), 'utf8');
+  ok(configSource.includes('id="cfg-charges-taxable"') && configSource.includes("key: 'charges_taxable'"),
+    'Configuración ofrece la regla del negocio, junto al porcentaje de ITBIS');
+
   console.log(`\n== RESULTADO: ${passed} OK ==`);
 } finally {
   try { db.close(); } catch {}

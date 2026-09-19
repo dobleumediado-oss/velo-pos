@@ -1020,6 +1020,9 @@ ipcMain.handle('settings:set', async (_, { key, value, requestUserId }) => {
     }
     value = String(Math.round(parsed * 100) / 100);
   }
+  if (key === 'charges_taxable' && !['0', '1'].includes(String(value))) {
+    return { ok: false, error: 'La regla de ITBIS de los cargos adicionales debe estar activada o desactivada' };
+  }
   if (key === 'pos_price_change_enabled' && !['0', '1'].includes(String(value))) {
     return { ok: false, error: 'La política de cambio de precio debe estar activada o desactivada' };
   }

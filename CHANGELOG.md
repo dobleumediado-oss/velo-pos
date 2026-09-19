@@ -1,5 +1,25 @@
 # Historial de versiones
 
+## 1.49.6 — 2026-09-19
+
+### Cargos adicionales como una línea más
+
+- Un cargo adicional —envío, instalación, transporte, mano de obra— aparece en
+  el carrito y en la factura como una línea más, igual que un artículo, sin
+  cantidad ni precio editable porque no es inventario.
+- El monto que se escribe es exactamente lo que se suma al total.
+- El desglose vuelve a cuadrar: Subtotal + ITBIS = Total. Antes el cargo solo
+  se sumaba al total y la factura mostraba, por ejemplo, 100 + 18 = 618.
+- Configuración incorpora la regla "Los cargos adicionales llevan ITBIS". La
+  decide el dueño con su contador; el cajero nunca elige. Si está activa, el
+  monto escrito ya incluye el ITBIS del porcentaje del negocio, como el precio
+  de un producto. Arranca apagada: ningún negocio cambia al actualizar.
+- Contabilidad registra los cargos en la nueva cuenta 4105 Ingresos por
+  Servicios y Fletes, separados de Ventas de Mercancía.
+- Las facturas ya emitidas no cambian: se reimprimen exactamente como se
+  entregaron, con su fila de cargos aparte.
+- La interfaz dice "Cargos adicionales" en todos los puntos.
+
 ## 1.49.5 — 2026-09-15
 
 ### Identidad exacta de terminales

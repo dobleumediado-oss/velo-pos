@@ -1927,9 +1927,10 @@ async function openDetalleVentaModal(s, options = {}) {
     </div>
     ${(detail.charges || []).length ? `
       <div class="card" style="margin-bottom:12px">
-        <div class="lbl" style="margin-bottom:6px">Cargos agregados a la factura</div>
+        <div class="lbl" style="margin-bottom:6px">Cargos adicionales</div>
         ${(detail.charges || []).map(charge => `
-          <div class="tr"><span>${ventasEsc(charge.description || 'Cargo adicional')}</span><span>${fmt(charge.amount)}</span></div>
+          <div class="tr"><span>${ventasEsc(charge.description || 'Cargo adicional')}${Number(charge.taxable) === 1
+            ? ' <span style="font-size:10px;color:var(--blue);font-weight:700">ITBIS incl.</span>' : ''}</span><span>${fmt(charge.amount)}</span></div>
         `).join('')}
       </div>` : ''}
     <div class="card" style="background:var(--surface2)">
@@ -1939,7 +1940,7 @@ async function openDetalleVentaModal(s, options = {}) {
            <span>-${fmt(discAmt)}</span></div>` : ''}
         ${taxAmt > 0
           ? `<div class="tr"><span>ITBIS (${detail.tax_pct || CFG.itbis || 18}%)</span><span>${fmt(taxAmt)}</span></div>` : ''}
-      ${Number(detail.additional_charges_total || 0) > 0
+      ${Number(detail.additional_charges_total || 0) > 0 && Number(detail.charges_in_subtotal) !== 1
         ? `<div class="tr"><span>Cargos adicionales</span><span>${fmt(detail.additional_charges_total)}</span></div>` : ''}
       <div class="tr grand"><span>${adjustedCopy ? 'Total vigente de la operación' : 'Importe / Total'}</span><span>${fmt(detailTotal)}</span></div>
       ${Number(detail.trade_in_amount || 0) > 0
@@ -2337,6 +2338,8 @@ function ventasPrintPayload(sale) {
 	    })),
     charges: sale.charges || [],
     additional_charges_total: sale.additional_charges_total || 0,
+    // La reimpresión conserva la convención con la que se emitió la factura.
+    charges_in_subtotal: Number(sale.charges_in_subtotal) === 1 ? 1 : 0,
     display_currency: sale.display_currency || 'DOP',
     display_exchange_rate: sale.display_exchange_rate || 1,
     display_amount: sale.display_amount || 0,

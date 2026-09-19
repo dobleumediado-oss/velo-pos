@@ -923,6 +923,26 @@ function renderCart() {
         </div>`;
     });
   }
+  // Los cargos adicionales se muestran como una línea más del carrito, igual
+  // que un artículo, pero sin cantidad ni precio editable: no son inventario.
+  if (['factura', 'cotizacion'].includes(inv.itype) && (inv.charges || []).length) {
+    const chargeCarriesTax = inv.itype === 'factura' && CFG.charges_taxable === true;
+    (inv.charges || []).forEach((charge, idx) => {
+      html += `
+        <div class="cart-item cart-item-charge">
+          <div class="ci-info">
+            <div class="ci-name">${posEscHtml(charge.description)}</div>
+            <div class="ci-price" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <span style="font-size:10px;color:var(--muted2);font-weight:600">Cargo adicional</span>
+              ${chargeCarriesTax ? `<span style="font-size:10px;color:var(--blue);font-weight:700">ITBIS incl.</span>` : ''}
+            </div>
+          </div>
+          <div class="ci-total">${fmt(charge.amount)}</div>
+          ${checkoutLocked ? '' : `<button class="qb" style="margin-left:4px;color:var(--red)"
+                  title="Quitar cargo" onclick="posRemoveCharge(${idx})">×</button>`}
+        </div>`;
+    });
+  }
   html += `</div>`;
 
   if (inv.itype === 'conduce') {
@@ -942,7 +962,7 @@ function renderCart() {
               </span><strong>${fmt(charge.amount)}</strong>
             </div>`).join('')}
           <button class="btn btn-out btn-fw btn-sm" style="margin-top:5px" onclick="openPosChargeModal()">
-            ${svg('plus')} Agregar envío u otro cargo
+            ${svg('plus')} Cargos adicionales
           </button>
           ${(inv.charges || []).length ? `<div class="tr" style="margin-top:6px"><span>Total cargos</span><strong>${fmt(chargesTotal)}</strong></div>` : ''}
         </div>
@@ -979,24 +999,14 @@ function renderCart() {
       </div>
       ${['factura', 'cotizacion'].includes(inv.itype) ? `
       <div style="border-top:1px solid var(--line2);padding-top:7px;margin-top:4px">
-        ${(inv.charges || []).map((charge, idx) => `
-          <div class="tr" style="font-size:11px">
-            <span>${posEscHtml(charge.description)}
-              <button class="btn btn-ghost btn-sm" style="padding:0 4px;color:var(--red)" onclick="posRemoveCharge(${idx})">×</button>
-            </span>
-            <span>${fmt(charge.amount)}</span>
-          </div>`).join('')}
         <button class="btn btn-out btn-sm btn-fw" id="pos-add-charge-btn" type="button" onclick="openPosChargeModal()"
-                style="margin:3px 0 7px">${svg('plus')} Agregar envío u otro cargo</button>
+                style="margin:3px 0 7px">${svg('plus')} Cargos adicionales</button>
       </div>` : ''}
       <div class="tr"><span>Subtotal sin ITBIS</span><span id="pos-subtotal-value">${fmt(subtotal)}</span></div>
       ${inv.itype === 'factura' && itbis > 0
         ? `<div class="tr"><span>ITBIS (${CFG.itbis}%)</span><span id="pos-itbis-value">${fmt(itbis)}</span></div>` : ''}
       <div class="tr" id="pos-discount-row" style="${disc > 0 ? '' : 'display:none'}">
         <span>Descuento</span><span id="pos-discount-value">−${fmt(discAmt)}</span>
-      </div>
-      <div class="tr" id="pos-charges-row" style="${chargesTotal > 0 ? '' : 'display:none'}">
-        <span>Cargos adicionales</span><span id="pos-charges-value">${fmt(chargesTotal)}</span>
       </div>
       <div class="tr grand"><span>TOTAL</span><span id="pos-total-value">${fmt(total)}</span></div>
       <div style="margin-top:7px">
@@ -1086,8 +1096,8 @@ function openPosChargeModal() {
   if (!inv || !['factura', 'cotizacion', 'conduce'].includes(inv.itype)) return;
   const label = inv.itype === 'cotizacion' ? 'cotización' : (inv.itype === 'conduce' ? 'conduce' : 'factura');
   openModal(`
-    <div class="modal-title">Agregar cargo a la ${label}</div>
-    <div class="modal-sub">Se mostrará separado de los artículos y se sumará al total de la ${label}: envío, instalación, transporte u otro cargo.</div>
+    <div class="modal-title">Agregar cargo adicional</div>
+    <div class="modal-sub">Aparece como una línea más de la ${label} y su monto se suma tal cual al total: envío, instalación, transporte, mano de obra u otro servicio.</div>
     <div class="fg">
       <label class="lbl">Concepto *</label>
       <input class="inp" id="pos-charge-description" maxlength="120" placeholder="Ej: Envío a domicilio"/>
@@ -1867,8 +1877,26 @@ function calcTotals(inv) {
     taxAcc += (lineAfterDiscount - net);
   });
 
-  const itbis = inv.itype === 'factura' ? _posRound2(taxAcc) : 0;
-  const subtotal = _posRound2(itemsTotal - itbis);
+  // Espejo exacto del motor del backend, incluido el orden de redondeo: el
+  // carrito debe mostrar al centavo el desglose que se guardará. El cargo es
+  // una línea más —neto al subtotal, ITBIS al impuesto— y el importe escrito es
+  // el que se suma. Si lleva ITBIS lo decide el negocio, nunca el cajero.
+  const chargesTaxable = inv.itype === 'factura' && CFG.charges_taxable === true;
+  const chargePct = chargesTaxable ? _posTaxPct({}) : 0;
+  let chargesNet = 0;
+  let chargesTax = 0;
+  if (['factura', 'cotizacion'].includes(inv.itype)) {
+    (inv.charges || []).forEach(row => {
+      const amount = Number(row.amount) || 0;
+      const net = chargePct > 0 ? amount / (1 + (chargePct / 100)) : amount;
+      chargesNet += net;
+      chargesTax += amount - net;
+    });
+  }
+  const itemTax = inv.itype === 'factura' ? _posRound2(taxAcc) : 0;
+  const itemSubtotal = _posRound2(itemsTotal - itemTax);
+  const itbis = inv.itype === 'factura' ? _posRound2(itemTax + chargesTax) : 0;
+  const subtotal = _posRound2(itemSubtotal + chargesNet);
   return { subtotal, grossSubtotal, discAmt, itbis, itemsTotal, chargesTotal, total, disc };
 }
 
@@ -3073,10 +3101,10 @@ function openCobroModal(inv) {
            <span id="cbr-summary-discount">−${fmt(discAmt)}</span></div>` : ''}
       ${inv.itype === 'factura' && itbis > 0
         ? `<div class="tr"><span>ITBIS (${CFG.itbis}%)</span><span id="cbr-summary-itbis">${fmt(itbis)}</span></div>` : ''}
-      ${Number(calcTotals(inv).chargesTotal) > 0
-        ? `<div class="tr"><span>Cargos adicionales</span><span id="cbr-summary-charges">${fmt(calcTotals(inv).chargesTotal)}</span></div>` : ''}
       ${tradeInAmount > 0 ? `<div class="tr" style="color:var(--blue)"><span>Parte de pago: ${posEscHtml(inv.tradeIn?.productName || 'equipo usado')}</span><span>−${fmt(tradeInAmount)}</span></div>` : ''}
       <div class="tr grand"><span id="cbr-total-label">TOTAL</span><span id="cbr-summary-total">${fmt(total)}</span></div>
+      ${Number(calcTotals(inv).chargesTotal) > 0
+        ? `<div style="font-size:10.5px;color:var(--muted);text-align:right;padding-top:3px">Incluye cargos adicionales por ${fmt(calcTotals(inv).chargesTotal)}</div>` : ''}
       ${tradeInAmount > 0 ? `<div class="tr grand" style="color:var(--green)"><span>RESTANTE A PAGAR</span><span>${fmt(amountDue)}</span></div><div style="font-size:10.5px;color:var(--muted2);padding-top:7px;text-align:right">Motivo: se restaron ${fmt(tradeInAmount)} por ${posEscHtml(inv.tradeIn?.productName || 'el equipo usado')} · ${posEscHtml(inv.tradeIn?.imei || inv.tradeIn?.serial || '')}</div>` : ''}
       <div id="cbr-summary-base" style="display:none;text-align:right;font-size:10.5px;color:var(--muted);padding-top:5px"></div>
     </div>
@@ -4363,6 +4391,8 @@ async function finalizarVenta() {
 	      items:        printItems,
       charges:      savedSale?.charges || inv.charges || [],
       additional_charges_total: savedSale?.additional_charges_total || result.additionalChargesTotal || 0,
+      // Una venta recién creada siempre sigue la convención vigente.
+      charges_in_subtotal: savedSale ? (Number(savedSale.charges_in_subtotal) === 1 ? 1 : 0) : 1,
       subtotal:  result.subtotal,
       disc:      inv.disc || 0,
       discAmt:   result.discAmt || 0,

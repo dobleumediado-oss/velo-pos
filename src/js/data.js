@@ -276,6 +276,9 @@ async function loadAppData() {
       CFG.module_ncf_avanzado_roles  = settings.module_ncf_avanzado_roles  || 'admin';
       CFG.fiscal_enabled_roles       = settings.fiscal_enabled_roles       || 'admin';
       CFG.itbis = parseFloat(settings.tax_pct) || 18;
+      // Regla del negocio, no del cajero: el carrito la usa para mostrar el
+      // mismo desglose que se guardará en la factura.
+      CFG.charges_taxable = settings.charges_taxable === '1';
       window._bcEnabled = settings.barcode_enabled === '1' || settings.barcode_enabled === true;
 
       // Carga GENÉRICA de módulos: copia a CFG CUALQUIER setting 'module_*'

@@ -520,7 +520,7 @@ function _cndOpenForm(id = null) {
           <tbody id="cnd-items-body"></tbody></table>
       </div>
 
-      <div style="font-weight:700;font-size:12px;margin:10px 0 6px">Envío u otro cargo</div>
+      <div style="font-weight:700;font-size:12px;margin:10px 0 6px">Cargos adicionales</div>
       <div class="g2" style="grid-template-columns:1fr 130px auto;align-items:end">
         <div class="fg"><label class="lbl">Concepto</label><input class="inp" id="cnd-charge-desc" placeholder="Ej. Envío, obra, instalación"/></div>
         <div class="fg"><label class="lbl">Monto RD$</label><input class="inp" id="cnd-charge-amount" type="number" min="0" step="0.01"/></div>

@@ -572,6 +572,19 @@ async function renderConfiguracion(el) {
           Se aplica solo a facturas. Las cotizaciones nunca llevan ITBIS.
         </div>
       </div>
+      <label class="fg" style="display:flex;align-items:flex-start;gap:9px;cursor:pointer">
+        <input type="checkbox" id="cfg-charges-taxable" style="width:16px;height:16px;margin-top:2px"
+               ${settings.charges_taxable === '1' ? 'checked' : ''}/>
+        <span>
+          <span class="lbl" style="display:block;margin-bottom:2px">Los cargos adicionales llevan ITBIS</span>
+          <span style="font-size:10px;color:var(--muted2);display:block;line-height:1.5">
+            Envío, instalación, transporte o mano de obra. El monto escrito se suma tal cual al
+            total; si esta opción está activa, ese monto ya incluye el ITBIS del porcentaje de
+            arriba. Decídelo con tu contador: el cajero nunca elige. Las facturas ya emitidas
+            no cambian.
+          </span>
+        </span>
+      </label>
     </div>
 
     ${!isSA && !fiscalActivo ? `
@@ -1391,6 +1404,12 @@ async function guardarConfiguracion() {
   if (rncEl) await window.api.settings.set({ key: 'biz_rnc', value: rncEl.value.trim(), requestUserId: uid });
   const taxEl = document.getElementById('cfg-tax');
   if (taxEl) await window.api.settings.set({ key: 'tax_pct', value: taxEl.value.trim(), requestUserId: uid });
+  const chargesTaxEl = document.getElementById('cfg-charges-taxable');
+  if (chargesTaxEl) {
+    await window.api.settings.set({
+      key: 'charges_taxable', value: chargesTaxEl.checked ? '1' : '0', requestUserId: uid,
+    });
+  }
 
   const s = await window.api.settings.getAll();
   CFG.biz          = s.biz_name      || CFG.biz;
@@ -1399,6 +1418,7 @@ async function guardarConfiguracion() {
   CFG.phone        = s.biz_phone     || CFG.phone;
   CFG.fiscalEnabled = s.fiscal_enabled === '1';
   CFG.itbis        = parseFloat(s.tax_pct) || 18;
+  CFG.charges_taxable = s.charges_taxable === '1';
   CFG.businessCloseTime = s.business_close_time || '';
   CFG.cashCloseRequiredAfterHours = s.cash_close_required_after_hours || '0';
   DB.settings = s;

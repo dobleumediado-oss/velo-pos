@@ -70,7 +70,7 @@
         { title:'Factura, cotización o conduce', icon:'pkg', route:'pos', requires:'pos', selector:'#pos-document-types', wait:2200,
           text:'Elige el documento desde el carrito. Factura cobra, Cotización conserva la propuesta y Conduce guarda una entrega no fiscal cuando el módulo está habilitado.' },
         { title:'Cargos separados del carrito', icon:'plus', route:'pos', requires:'pos', selector:'#pos-add-charge-btn', wait:1800,
-          text:'Agrega envío, obra u otro cargo sin convertirlo en artículo. Aparece en Cargos adicionales, se suma y se guarda tanto en facturas como en cotizaciones.' },
+          text:'Agrega envío, instalación, mano de obra u otro servicio. Aparece como una línea más de la factura o la cotización y su monto se suma tal cual al total.' },
         { title:'Carrito a tu medida', icon:'monitor', route:'pos', requires:'pos', selector:'.pos-cart-resizer', wait:1800,
           text:'Arrastra esta división para ampliar o reducir el carrito. Velo recuerda el ancho elegido al cerrar y volver a abrir el sistema.' },
         { title:'Tus tickets sobreviven un apagón', icon:'monitor', route:'pos', requires:'pos', selector:'#inv-tabs', wait:1800,

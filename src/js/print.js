@@ -476,8 +476,46 @@ function _insertBeforeCreditSignatures(html, block) {
 // ══════════════════════════════════════════════
 // TICKET DE VENTA 80MM
 // ══════════════════════════════════════════════
+// Dos convenciones conviven y cada documento se imprime con la suya:
+// · Vigente (charges_in_subtotal=1): el cargo adicional es una línea más. Su
+//   neto ya está en el subtotal y su ITBIS en el impuesto, así que se pinta
+//   entre los artículos y NO se repite como fila debajo del ITBIS.
+// · Anterior (0): el subtotal excluye los cargos y se suman en su propia fila.
+// Normalizar aquí, en el embudo común, cubre de una vez todas las plantillas y
+// el ticket térmico.
+function _printChargesAsLines(sale) {
+  if (!sale || sale._chargesAsLines) return sale;
+  if (Number(sale.charges_in_subtotal) !== 1) return sale;
+  const charges = (Array.isArray(sale.charges) ? sale.charges : [])
+    .filter(row => row && String(row.description || '').trim() && Number(row.amount) > 0);
+  if (!charges.length) return sale;
+  const chargeLines = charges.map(row => {
+    const amount = Number(row.amount) || 0;
+    const net = Number(row.net_subtotal);
+    return {
+      product_code: '',
+      product_name: String(row.description || '').trim(),
+      qty: 1,
+      unit_price: amount,
+      subtotal: amount,
+      taxable: Number(row.taxable) === 1 ? 1 : 0,
+      tax_pct: Number(row.tax_pct) || 0,
+      tax_amt: Number(row.tax_amt) || 0,
+      net_subtotal: Number.isFinite(net) && net > 0 ? net : amount,
+      is_charge: true,
+    };
+  });
+  return {
+    ...sale,
+    items: [...(Array.isArray(sale.items) ? sale.items : []), ...chargeLines],
+    additional_charges_total: 0,
+    _chargesAsLines: true,
+  };
+}
+
 function printReceipt(sale, isReprint = false) {
   if (!sale) return;
+  sale = _printChargesAsLines(sale);
 
   // ── Usar sistema de plantillas si está configurado ──
   const jobType = sale.type === 'cotizacion'
@@ -574,10 +612,11 @@ function printReceipt(sale, isReprint = false) {
 	        tax_amt:      i.tax_amt,
 	        net_subtotal: i.net_subtotal,
 	      })),
-      // Los cargos NO se inyectan como líneas de producto: cada plantilla los
-      // muestra en su fila "Cargos adicionales" (a partir de additional_charges_total).
-      // Inyectarlos aquí los duplicaba (línea + fila de totales) y descuadraba
-      // el subtotal mostrado contra las líneas listadas.
+      // Los cargos no se inyectan aquí: _printChargesAsLines ya decidió al
+      // entrar a printReceipt. En la convención vigente llegan como líneas y
+      // additional_charges_total viene en 0; en la anterior, cada plantilla los
+      // muestra en su fila "Cargos adicionales". Inyectarlos dos veces los
+      // duplicaría (línea + fila) y descuadraría el subtotal contra las líneas.
       subtotal:      sale.subtotal     || 0,
       discount_pct:  sale.discount_pct || sale.disc    || 0,
       discount_amt:  sale.discount_amt || sale.discAmt || 0,
@@ -588,6 +627,7 @@ function printReceipt(sale, isReprint = false) {
       total:         sale.total        || 0,
       charges:       Array.isArray(sale.charges) ? sale.charges : [],
       additional_charges_total: sale.additional_charges_total || 0,
+      charges_in_subtotal: Number(sale.charges_in_subtotal) === 1 ? 1 : 0,
       display_currency: sale.display_currency || 'DOP',
       display_exchange_rate: sale.display_exchange_rate || 1,
       display_amount: sale.display_amount || 0,
