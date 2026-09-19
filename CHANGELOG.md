@@ -2,6 +2,18 @@
 
 ## 1.49.6 — 2026-09-19
 
+### Texto íntegro entre el servidor y las terminales
+
+- La Ñ y las tildes ya no se dañan al viajar entre el servidor y las terminales.
+  La red entrega los datos en pedazos. Cuando un corte caía justo en una Ñ, esa
+  letra llegaba como "��". Así falló la migración ALL IN ONE en un servidor
+  Windows: "Factura 211802: customer_name cambia entre líneas del CSV".
+- Afectaba a los mensajes grandes en los dos sentidos. La terminal podía mostrar
+  un nombre dañado, y el servidor podía recibir un nombre dañado y guardarlo.
+- Una operación larga —migración, backup cifrado, recuperación NCF— ya no se
+  da por fallida a los 12 s mientras el servidor sigue trabajando.
+- Hay que actualizar el Servidor y también las terminales.
+
 ### Cargos adicionales como una línea más
 
 - Un cargo adicional —envío, instalación, transporte, mano de obra— aparece en

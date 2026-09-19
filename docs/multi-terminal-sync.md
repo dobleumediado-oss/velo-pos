@@ -50,6 +50,21 @@ automáticamente el primer negocio autorizado.
 - RPC reutiliza conexiones HTTP con keep-alive.
 - SSE envía avisos de cambio y la terminal vuelve a consultar solo los datos
   necesarios; no se transmite ni renderiza la base completa.
+- **El texto se decodifica una sola vez, con todos los bytes.** La red entrega
+  un mensaje en pedazos que pueden cortar una Ñ o una tilde por la mitad. Hasta
+  la 1.49.6, el worker (`net-server.js`) y la terminal (`net-client.js`)
+  decodificaban cada pedazo por separado, y ese carácter llegaba como "��". La
+  migración ALL IN ONE falló así en un servidor Windows ("customer_name cambia
+  entre líneas del CSV"). Una prueba con pedazos del tamaño de una red real dañó
+  6 de 10 envíos y 10 de 10 respuestas; uno de los envíos dañados pasó la
+  validación. Ahora el servidor junta los bytes y decodifica al final, y la
+  terminal usa el decodificador del stream (`setEncoding('utf8')`).
+  `test:server-service` repite el caso con un proxy que trocea el flujo en ambos
+  sentidos.
+- El gateway espera a cada operación lo mismo que la terminal
+  (`rpcTimeoutFor`), nunca menos de 12 s. Antes cortaba todo a los 12 s: una
+  migración o un backup largo aparecían como fallidos mientras el negocio
+  seguía trabajando.
 
 No se admite venta offline en una terminal desconectada. Es una decisión de
 integridad para evitar duplicar NCF, correlativos, caja o inventario.
@@ -86,3 +101,5 @@ nuevas con varias terminales deben usar el instalador **Velo POS Server**.
 4. Reiniciar Windows y confirmar inicio automático del servicio.
 5. Cortar/reponer Tailscale y verificar recuperación del SSE.
 6. Venta, NCF, caja, preventa, impresión y respaldo.
+7. Desde una terminal, abrir un cliente y un producto con Ñ o tildes y
+   comprobar que el nombre llega intacto.
