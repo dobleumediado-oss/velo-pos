@@ -1,6 +1,6 @@
 # Historial de versiones
 
-## 1.49.6 — 2026-09-19
+## 1.50.0 — 2026-09-19
 
 ### Texto íntegro entre el servidor y las terminales
 
@@ -57,8 +57,6 @@ dato ni indicador.
   línea en vez de ensanchar la tabla para todos los clientes.
 - Las 16 pestañas de Contabilidad bajan a una segunda fila en vez de quedar
   fuera de la vista.
-
-## 1.49.5 — 2026-09-15
 
 ### Identidad exacta de terminales
 
