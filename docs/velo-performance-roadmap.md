@@ -214,7 +214,8 @@ Si una operación supera el límite, se registra qué consulta o render fue lent
 
 Diagnóstico medido sobre una copia de una base real (2,524 facturas, 2,710
 abonos, 1,246 productos, 317 clientes) ejecutando los repositorios bajo el
-runtime de Electron. Nueve fases, cada una con su commit y su regresión.
+runtime de Electron. Nueve fases, cada una con su commit y su regresión, más una ronda final de
+cobertura sobre los recorridos que antes solo se comprobaban a mano.
 
 ### Fase 1 — Consultas por fila (N+1)
 
@@ -317,9 +318,23 @@ runtime de Electron. Nueve fases, cada una con su commit y su regresión.
   exige el encabezado de `lib/text-normalize.js`; ahora una prueba lo verifica.
   La tabla se vacía al llegar a 20,000 entradas.
 
+### Cobertura de los recorridos completos
+
+Cinco recorridos solo podían comprobarse usando la aplicación. Ahora cada uno
+tiene su prueba de extremo a extremo; no eran defectos, eran huecos.
+
+| Recorrido | Dónde | Qué fija |
+|---|---|---|
+| Ciclo de caja con las fuentes nuevas | `test:cash-income` | Abrir, vender de contado y a crédito, cobrar un abono, cuadrar, cerrar y **volver a consultar la sesión cerrada** |
+| Recibo en dólares de punta a punta | `test:cash-income` | Crear, corregir la tasa sin perder el número, efecto exacto en caja, hallarlo en el historial y tras el cierre |
+| Corrección sin comprobante fiscal | `test:sale-corrections` | El efectivo esperado refleja **exactamente** la diferencia |
+| Producto recién guardado | `test:sales-history-performance` | Su página en los bordes y que los filtros lo esconderían |
+| Cambio de rol en el acceso | `test:experience` | Identificador y foco del campo, error limpiado, vuelta a Cajero |
+
 ### Verificación
 
-- `npm run test:sales-history-performance` pasó de 14 a **51 aserciones**. Entre
+- `npm run test:sales-history-performance` pasó de 14 a **59 aserciones**;
+  `test:cash-income` de 14 a **59** y `test:sale-corrections` de 98 a **108**. Entre
   ellas, tres cuentan consultas reales interceptando `db.prepare`: **3 para 400
   abonos** y **5 para 122 clientes** —una regresión al patrón N+1 falla la
   prueba—. Otras comprueban que la caché de tablas no congela una ausencia, que
