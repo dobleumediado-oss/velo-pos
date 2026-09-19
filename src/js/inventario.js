@@ -483,7 +483,7 @@ function renderInvTable() {
   const card = document.createElement('div');
   card.className = 'card';
   card.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid var(--line)">
+    <div class="inv-pager" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid var(--line)">
       <div style="font-size:12px;color:var(--muted)">
         Mostrando <strong>${start + 1}–${end}</strong> de <strong>${totalRows}</strong> productos
       </div>
@@ -493,7 +493,7 @@ function renderInvTable() {
       </div>
     </div>
     <div class="tw">
-      <table>
+      <table class="velo-sticky-actions">
         <thead><tr>
           <th>Código</th><th>Producto</th><th>Modelo</th><th>Categoría</th>
           <th>Stock</th><th>Mín</th><th>Precio</th>
@@ -502,7 +502,7 @@ function renderInvTable() {
         <tbody>${pageRows}</tbody>
       </table>
     </div>
-    <div style="display:flex;align-items:center;justify-content:${showAll ? 'flex-end' : 'space-between'};gap:10px;flex-wrap:wrap;padding:12px 16px;border-top:1px solid var(--line)">
+    <div class="inv-pager" style="display:flex;align-items:center;justify-content:${showAll ? 'flex-end' : 'space-between'};gap:10px;flex-wrap:wrap;padding:12px 16px;border-top:1px solid var(--line)">
       ${showAll ? '<span style="font-size:12px;color:var(--muted)">Inventario completo visible</span>' : `<span style="font-size:12px;color:var(--muted2)">${end - start} productos en esta página</span>`}
       <div style="display:flex;align-items:center;gap:6px">${pagerButtons}</div>
     </div>`;

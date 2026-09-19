@@ -203,7 +203,7 @@ async function renderNCFAvanzado(el) {
     const wrap = document.createElement('div');
     wrap.style.cssText = 'overflow-x:auto';
     wrap.innerHTML = `
-      <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <table class="velo-sticky-actions" style="width:100%;border-collapse:collapse;font-size:12px">
         <thead>
           <tr style="border-bottom:1px solid var(--line2);color:var(--muted2)">
             <th style="padding:8px;text-align:left">Tipo</th>

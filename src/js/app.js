@@ -1272,7 +1272,8 @@ function buildTopbar() {
     style: { display: 'flex', alignItems: 'center', gap: '8px' }
   });
   const centerWrap = h('div', {
-    style: { display: 'flex', alignItems: 'center', gap: '16px', justifyContent: 'center', flex: '1', minWidth: '0' }
+    id: 'tb-center',
+    style: { display: 'flex', alignItems: 'center', gap: '16px', justifyContent: 'safe center', flex: '1', minWidth: '0' }
   });
   centerWrap.appendChild(clockWrap);
   centerWrap.appendChild(ratesWrap);
@@ -1294,7 +1295,7 @@ function buildTopbar() {
   const cashPill = cajaOpen
     ? {
         className: 'open',
-        html: `${svg('check')} Caja Abierta`,
+        html: `${svg('check')} Caja<span class="tb-pill-detail"> Abierta</span>`,
         title: otherOpenCashSessions.length
           ? `Caja abierta en esta terminal y ${otherOpenCashSessions.length} en otra terminal`
           : 'Caja abierta en esta terminal',
@@ -1307,7 +1308,7 @@ function buildTopbar() {
         }
       : {
           className: 'closed',
-          html: `${svg('xmark')} Caja Cerrada`,
+          html: `${svg('xmark')} Caja<span class="tb-pill-detail"> Cerrada</span>`,
           title: 'No hay caja abierta en esta terminal',
         };
   right.appendChild(h('div', {
@@ -1333,7 +1334,7 @@ function buildTopbar() {
     style: { fontSize: '12px', padding: '5px 10px', gap: '5px',
              border: '1px solid var(--line)', borderRadius: '8px' },
     onclick: _openGSearch,
-    html: `${svg('search')} <span style="font-size:11px;color:var(--muted)">⌘K</span>`
+    html: `${svg('search')} <span class="tb-search-hint" style="font-size:11px;color:var(--muted)">⌘K</span>`
   }));
 
   right.appendChild(h('button', {
@@ -1387,7 +1388,37 @@ function buildTopbar() {
   // Iniciar/reiniciar el ticker del reloj y el banner de tasas
   _startTopbarClock();
   _startTopbarRates();
+  fitTopbar();
 }
+
+// La barra superior se mide sola y se compacta por pasos hasta caber, sin
+// ocultar nunca un indicador. Un corte fijo por ancho no sirve: cada negocio
+// elige cuántos combustibles mostrar, puede sumar la etiqueta de su empresa, y
+// sin internet Windows cae a su fuente del sistema, que tiene otros anchos.
+// Por eso se compara lo que realmente se pintó contra el espacio disponible.
+const TOPBAR_FIT_LEVELS = 5;
+function fitTopbar() {
+  const bar = document.getElementById('topbar');
+  const center = document.getElementById('tb-center');
+  if (!bar || !center) return;
+  for (let level = 1; level <= TOPBAR_FIT_LEVELS; level += 1) bar.classList.remove(`tb-fit-${level}`);
+  const overflows = () => center.scrollWidth > center.clientWidth + 1;
+  for (let level = 1; level <= TOPBAR_FIT_LEVELS && overflows(); level += 1) {
+    bar.classList.add(`tb-fit-${level}`);
+  }
+}
+
+let _topbarFitFrame = 0;
+function scheduleTopbarFit() {
+  if (_topbarFitFrame) cancelAnimationFrame(_topbarFitFrame);
+  _topbarFitFrame = requestAnimationFrame(() => { _topbarFitFrame = 0; fitTopbar(); });
+}
+window.addEventListener('resize', scheduleTopbarFit);
+// Al terminar de cargar la fuente cambian los anchos: se vuelve a medir.
+try {
+  document.fonts?.ready?.then(scheduleTopbarFit);
+  document.fonts?.addEventListener?.('loadingdone', scheduleTopbarFit);
+} catch {}
 
 // ── Banner de tasas del topbar ────────────────
 // Dólar Banreservas (compra/venta) + un combustible a elegir (clic para
@@ -1423,20 +1454,18 @@ function _renderTopbarRates() {
   const d = _ratesData;
   if (!d) { wrap.innerHTML = ''; return; }
 
-  const chipStyle = 'display:flex;flex-direction:column;justify-content:center;padding:4px 10px;' +
-    'background:var(--surface2,var(--bg2));border:1px solid var(--line,var(--line2));border-radius:8px;' +
-    'font-size:11px;line-height:1.35;white-space:nowrap';
+  // El estilo vive en CSS (.tb-rate-chip) para que la barra pueda compactarlo
+  // por pasos cuando no cabe. Ningún indicador se oculta.
   const parts = [];
 
   // ── Dólar Banreservas: compra y venta, cada una con su flecha ──
   if (d.usd?.compra && d.usd?.venta) {
     parts.push(`
-      <div style="${chipStyle}" title="Tasa del dólar — Banreservas (${d.usd.source})">
-        <div style="font-size:9px;font-weight:700;color:var(--muted2);letter-spacing:.04em">💵 US$ BANRESERVAS</div>
-        <div style="color:var(--ink)">
-          <b>C:</b> ${_bannerNum(d.usd.compra.value)}${_bannerArrow(d.usd.compra.delta)}
-          <span style="color:var(--muted2)"> · </span>
-          <b>V:</b> ${_bannerNum(d.usd.venta.value)}${_bannerArrow(d.usd.venta.delta)}
+      <div class="tb-rate-chip" title="Tasa del dólar — Banreservas (${d.usd.source})">
+        <div class="tb-rate-label">💵 US$ BANRESERVAS</div>
+        <div class="tb-rate-value">
+          <span class="tb-rate-pair"><b>C:</b> ${_bannerNum(d.usd.compra.value)}${_bannerArrow(d.usd.compra.delta)}</span><span
+            class="tb-rate-dot"> · </span><span class="tb-rate-pair"><b>V:</b> ${_bannerNum(d.usd.venta.value)}${_bannerArrow(d.usd.venta.delta)}</span>
         </div>
       </div>`);
   }
@@ -1460,13 +1489,15 @@ function _renderTopbarRates() {
     if (!f) return;
     const clickable = legacyMode; // en modo legacy el chip rota; configurado no
     parts.push(`
-      <div ${clickable ? 'id="tb-rate-fuel"' : `data-fuel-chip="${grade}"`} style="${chipStyle}${clickable ? ';cursor:pointer' : ''}" title="${clickable ? 'Clic para cambiar de combustible · ' : ''}RD$/galón">
-        <div style="font-size:9px;font-weight:700;color:var(--muted2);letter-spacing:.04em">⛽ ${_BANNER_FUEL_LABEL[grade] || grade}</div>
-        <div style="color:var(--ink)"><b>RD$${_bannerNum(f.value)}</b>${_bannerArrow(f.delta)}</div>
+      <div ${clickable ? 'id="tb-rate-fuel"' : `data-fuel-chip="${grade}"`} class="tb-rate-chip" style="${clickable ? 'cursor:pointer' : ''}" title="${clickable ? 'Clic para cambiar de combustible · ' : ''}RD$/galón">
+        <div class="tb-rate-label">⛽ ${_BANNER_FUEL_LABEL[grade] || grade}</div>
+        <div class="tb-rate-value"><b>RD$${_bannerNum(f.value)}</b>${_bannerArrow(f.delta)}</div>
       </div>`);
   });
 
   wrap.innerHTML = parts.join('');
+  // Los indicadores llegan después de construir la barra: se vuelve a medir.
+  fitTopbar();
 
   // Modo legacy: clic en el chip único → rotar al siguiente disponible
   document.getElementById('tb-rate-fuel')?.addEventListener('click', () => {
@@ -1536,7 +1567,7 @@ function _startTopbarClock() {
 
     timeEl.innerHTML =
       `${hh}<span class="tb-clock-sep">:</span>${mm}` +
-      `<span class="tb-clock-sep">:</span>` +
+      `<span class="tb-clock-sep tb-clock-sep-sec">:</span>` +
       `<span class="tb-clock-sec">${ss}</span>` +
       `<span class="tb-clock-ampm">${ampm}</span>`;
     dateEl.textContent = `${dia} ${d} ${mes}`;

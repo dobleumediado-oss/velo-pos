@@ -312,72 +312,77 @@ function renderCliTable() {
       h('td', null, dueBadge ||
         h('span', { style: { color: 'var(--muted2)', fontSize: '12px' } }, '—')),
       h('td', null, estadoBadge),
+      // Dos grupos: los botones de toda fila y, aparte, los de empresa. Cada
+      // grupo no se parte, pero el de empresa puede bajar a otra línea; así una
+      // empresa no ensancha la columna para todos los clientes (a 1366 px la
+      // tabla se salía de la pantalla y ocultaba los botones).
       h('td', null,
-        h('div', { class: 'flex', style: { gap: '4px' } },
-          h('button', {
-            class: 'btn btn-ghost btn-sm',
-            title: 'Ver estado de cuenta',
-            onclick: () => openEstadoCuentaModal(c),
-            html: `${svg('eye')} Ver`
-          }),
-          balance > 0
-            ? h('button', {
-                class: 'btn btn-green btn-sm',
-                title: 'Registrar abono',
-                onclick: () => openAbonoModal(c),
-                html: `${svg('dollar')} Abonar`
-              })
-            : null,
-          c.phone
-            ? h('button', {
-                class: 'btn btn-ghost btn-sm',
-                title: 'Enviar mensaje por WhatsApp',
-                style: { color: '#25D366' },
-                onclick: () => clienteWhatsApp(c),
-                html: `<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" style="flex-shrink:0"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.124.557 4.118 1.529 5.847L0 24l6.335-1.501A11.934 11.934 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.801 9.801 0 01-5.002-1.367l-.359-.214-3.72.881.896-3.614-.234-.371A9.818 9.818 0 012.182 12C2.182 6.575 6.575 2.182 12 2.182S21.818 6.575 21.818 12 17.425 21.818 12 21.818z"/></svg>`
-              })
-            : null,
-          ['admin','superadmin','cajero'].includes(user?.role)
-            ? h('button', {
-                class: 'btn btn-ghost btn-sm',
-                title: 'Editar cliente',
-                onclick: () => openClienteModal(c),
-                html: `${svg('edit')} Editar`
-              })
-            : null,
+        h('div', { class: 'cli-row-actions' },
+          h('div', { class: 'flex', style: { gap: '4px' } },
+            h('button', {
+              class: 'btn btn-ghost btn-sm',
+              title: 'Ver estado de cuenta',
+              onclick: () => openEstadoCuentaModal(c),
+              html: `${svg('eye')} Ver`
+            }),
+            balance > 0
+              ? h('button', {
+                  class: 'btn btn-green btn-sm',
+                  title: 'Registrar abono',
+                  onclick: () => openAbonoModal(c),
+                  html: `${svg('dollar')} Abonar`
+                })
+              : null,
+            c.phone
+              ? h('button', {
+                  class: 'btn btn-ghost btn-sm',
+                  title: 'Enviar mensaje por WhatsApp',
+                  style: { color: '#25D366' },
+                  onclick: () => clienteWhatsApp(c),
+                  html: `<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" style="flex-shrink:0"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 0C5.373 0 0 5.373 0 12c0 2.124.557 4.118 1.529 5.847L0 24l6.335-1.501A11.934 11.934 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.801 9.801 0 01-5.002-1.367l-.359-.214-3.72.881.896-3.614-.234-.371A9.818 9.818 0 012.182 12C2.182 6.575 6.575 2.182 12 2.182S21.818 6.575 21.818 12 17.425 21.818 12 21.818z"/></svg>`
+                })
+              : null,
+            ['admin','superadmin','cajero'].includes(user?.role)
+              ? h('button', {
+                  class: 'btn btn-ghost btn-sm',
+                  title: 'Editar cliente',
+                  onclick: () => openClienteModal(c),
+                  html: `${svg('edit')} Editar`
+                })
+              : null,
+            ['admin','superadmin','cajero'].includes(user?.role)
+              ? h('button', {
+                  class: 'btn btn-ghost btn-sm',
+                  title: `${c.status === 'bloqueado' ? 'Activar' : 'Bloquear'} cliente`,
+                  style: { color: c.status === 'bloqueado' ? 'var(--green)' : 'var(--amber)' },
+                  onclick: () => toggleEstadoCliente(c),
+                  html: c.status === 'bloqueado' ? svg('check') : svg('lock')
+                })
+              : null,
+            ['admin','superadmin'].includes(user?.role)
+              ? h('button', {
+                  class: 'btn btn-ghost btn-sm',
+                  title: 'Eliminar cliente',
+                  style: { color: 'var(--red)' },
+                  onclick: () => confirmEliminarCliente(c),
+                  html: svg('trash')
+                })
+              : null
+          ),
           c.customer_type === 'company'
-            ? h('button', {
-                class: 'btn btn-ghost btn-sm',
-                title: cliCanManageCustomers() ? 'Gestionar representantes' : 'Ver representantes',
-                onclick: () => openRepresentantesModal(c.id),
-                html: `${svg('users')} Representantes`
-              })
-            : null,
-          c.customer_type === 'company'
-            ? h('button', {
-                class: 'btn btn-ghost btn-sm',
-                title: cliCanManageCustomers() ? 'Gestionar sucursales' : 'Ver sucursales',
-                onclick: () => openSucursalesModal(c.id),
-                html: `${svg('map-pin')} Sucursales`
-              })
-            : null,
-          ['admin','superadmin','cajero'].includes(user?.role)
-            ? h('button', {
-                class: 'btn btn-ghost btn-sm',
-                title: `${c.status === 'bloqueado' ? 'Activar' : 'Bloquear'} cliente`,
-                style: { color: c.status === 'bloqueado' ? 'var(--green)' : 'var(--amber)' },
-                onclick: () => toggleEstadoCliente(c),
-                html: c.status === 'bloqueado' ? svg('check') : svg('lock')
-              })
-            : null,
-          ['admin','superadmin'].includes(user?.role)
-            ? h('button', {
-                class: 'btn btn-ghost btn-sm',
-                title: 'Eliminar cliente',
-                style: { color: 'var(--red)' },
-                onclick: () => confirmEliminarCliente(c),
-                html: svg('trash')
-              })
+            ? h('div', { class: 'flex', style: { gap: '4px' } },
+                h('button', {
+                  class: 'btn btn-ghost btn-sm',
+                  title: cliCanManageCustomers() ? 'Gestionar representantes' : 'Ver representantes',
+                  onclick: () => openRepresentantesModal(c.id),
+                  html: `${svg('users')} Representantes`
+                }),
+                h('button', {
+                  class: 'btn btn-ghost btn-sm',
+                  title: cliCanManageCustomers() ? 'Gestionar sucursales' : 'Ver sucursales',
+                  onclick: () => openSucursalesModal(c.id),
+                  html: `${svg('map-pin')} Sucursales`
+                }))
             : null
         )
       )

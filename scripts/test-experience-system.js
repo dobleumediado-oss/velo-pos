@@ -180,4 +180,69 @@ assert(doctor.includes('Canales de impresión'), 'El diagnóstico debe comunicar
     'el reloj arranca en el mismo cuadro en que se pinta el acceso');
 }
 
+// Pantallas de 1366×768 (portátiles de clientes). Las medidas se tomaron en la
+// app real; aquí se protege que las reglas que las resuelven sigan en su sitio.
+{
+  const inventario = read('src/js/inventario.js');
+  const sucursales = read('src/js/sucursales.js');
+
+  // Barra superior: se compacta por niveles, nunca ocultando indicadores.
+  const fitFrom = app.indexOf('const TOPBAR_FIT_LEVELS');
+  const fitTo = app.indexOf('let _topbarFitFrame');
+  assert(fitFrom > 0 && fitTo > fitFrom, 'fitTopbar vive en app.js');
+  const makeBar = (natural, savings) => {
+    const classes = new Set(['topbar', 'tb-fit-4']);
+    const bar = { classList: {
+      add: c => classes.add(c), remove: c => classes.delete(c), contains: c => classes.has(c) } };
+    const center = { clientWidth: 400,
+      get scrollWidth() { return natural - savings.filter((_, i) => classes.has(`tb-fit-${i + 1}`)).reduce((a, b) => a + b, 0); } };
+    const context = { document: { getElementById: id => ({ topbar: bar, 'tb-center': center }[id]) } };
+    vm.runInNewContext(`${app.slice(fitFrom, fitTo)}\nfitTopbar();`, context);
+    return [...classes].filter(c => c.startsWith('tb-fit-')).sort();
+  };
+  assert.deepStrictEqual(makeBar(380, [40, 40, 40, 40, 40]), [],
+    'con espacio de sobra la barra no se compacta y suelta niveles de una medición anterior');
+  assert.deepStrictEqual(makeBar(470, [40, 40, 40, 40, 40]), ['tb-fit-1', 'tb-fit-2'],
+    'la barra suma niveles solo hasta que cabe');
+  assert.deepStrictEqual(makeBar(900, [10, 10, 10, 10, 10]).length, 5,
+    'nunca pasa del último nivel aunque siga sin caber');
+  // Solo el separador "·" (.tb-rate-dot) puede ocultarse, cuando compra y venta se apilan.
+  const fitRules = styles.split('\n').filter(line => line.includes('.topbar.tb-fit-') && line.includes('display:none'));
+  assert(fitRules.length > 0 &&
+    fitRules.every(line => !/#tb-rates|\.tb-rate-(chip|label|value|pair)/.test(line)),
+    'ningún nivel de la barra oculta la tasa del dólar ni los combustibles');
+  assert(!/\.tb-rate-chip\s*\{[^}]*display:\s*none/.test(styles),
+    'los indicadores de la barra no se ocultan en ninguna regla');
+
+  // POS y cobro: el panel no pasa del alto real y el botón de confirmar se ve.
+  assert(styles.includes('.pos-wrap{display:flex;height:100%;overflow:hidden}') &&
+    !styles.includes('.pos-wrap{display:flex;height:calc(100vh - 58px)'),
+    'el POS usa el alto de su área, no un cálculo fijo que desbordaba 6 px');
+  assert(/\.modal > \.modal-foot\{\s*position:sticky;/.test(styles),
+    'los botones del pie de un modal quedan fijos al fondo mientras el contenido se desplaza');
+
+  // Tablas: densidad a 1440 px o menos, acciones siempre a la vista.
+  assert(/@media \(max-width: 1440px\) \{\s*thead th,\.ui-compact thead th\{padding-left:9px;padding-right:9px\}\s*tbody td,\.ui-compact tbody td\{padding-left:9px;padding-right:9px\}/.test(styles),
+    'a 1440 px o menos las celdas reducen solo su relleno lateral, también en modo compacto');
+  assert(styles.includes('.velo-sticky-actions > tbody > tr > td:last-child{position:sticky;right:0}') &&
+    styles.includes('animation-timeline:scroll(nearest inline)'),
+    'la columna de acciones queda fija y su sombra depende del desplazamiento real');
+  assert(inventario.includes('<table class="velo-sticky-actions">'),
+    'la tabla de Inventario usa la columna de acciones fija');
+  assert(sucursales.includes('<table class="velo-sticky-actions"'),
+    'la tabla de secuencias NCF usa la columna de acciones fija');
+  const rowActions = clientes.indexOf("h('div', { class: 'cli-row-actions' }");
+  const deleteButton = clientes.indexOf('confirmEliminarCliente(c)', rowActions);
+  const companyButton = clientes.indexOf("html: `${svg('users')} Representantes`", rowActions);
+  assert(rowActions > 0 && deleteButton > rowActions && companyButton > deleteButton,
+    'los botones de empresa van en su propio grupo, después de los de toda fila');
+  assert(styles.includes('.cli-row-actions{display:flex;flex-wrap:wrap;gap:4px}'),
+    'el grupo de empresa baja de línea en vez de ensanchar la tabla de Clientes');
+  assert(/@media \(max-width: 1440px\) \{[\s\S]*?\.mod-tabs\{flex-wrap:wrap\}/.test(styles),
+    'las 16 pestañas de Contabilidad bajan de fila en vez de quedar fuera de vista');
+  assert(inventario.includes('<div class="inv-pager" style=') &&
+    styles.includes('.inv-pager{padding-top:8px!important;padding-bottom:8px!important}'),
+    'la paginación de Inventario se compacta en pantallas bajas');
+}
+
 console.log('✓ Experiencia transversal, recuperación, permisos y salud del sistema verificados');

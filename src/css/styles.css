@@ -307,7 +307,11 @@ select.inp{cursor:pointer}
 .prog-f{height:100%;border-radius:3px;transition:width .4s}
 
 /* ── POS ── */
-.pos-wrap{display:flex;height:calc(100vh - 58px);overflow:hidden}
+/* Alto real del contenedor, no una resta fija: antes restaba 58 px de la
+   barra superior, que luego pasó a medir 64, y el POS quedaba 6 px más alto que
+   la ventana en cualquier pantalla. En 1366×768 eso sacaba de la vista el borde
+   inferior del carrito. */
+.pos-wrap{display:flex;height:100%;overflow:hidden}
 .pos-cat{flex:1;display:flex;flex-direction:column;padding:18px 20px;background:var(--bg);overflow:hidden}
 .pos-side{width:370px;background:var(--surface);border-left:1px solid var(--line);display:flex;flex-direction:column;flex-shrink:0}
 .pos-cart-resizer{width:8px;margin-right:-4px;position:relative;z-index:4;flex:0 0 8px;cursor:col-resize;touch-action:none;outline:none}
@@ -1205,7 +1209,7 @@ tbody tr:hover td{background:#f7faf8}.tb{font-weight:700}.ts{font-size:10px}.tm{
   .module-page>.sec-hdr,.module-page>.module-canvas>.sec-hdr,.module-page>.module-workspace>.sec-hdr{padding:20px;min-height:0}
   .module-page>.sec-hdr .sec-title,.module-page>.module-canvas>.sec-hdr .sec-title,
   .module-page>.module-workspace>.sec-hdr .sec-title,.module-page>.sec-hdr h2{font-size:19px!important}.ui-card-grid{grid-template-columns:1fr}
-  .modal{padding:20px}.pos-side{width:315px}
+  .modal{padding:20px;--modal-pad:20px}.pos-side{width:315px}
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -1510,3 +1514,131 @@ tbody tr:hover td{background:#f7faf8}.tb{font-weight:700}.ts{font-size:10px}.tm{
    ubique sin buscarlo, ya que el listado se ordena por nombre y se pagina. */
 .inv-row-focus>td{background:var(--green-bg);animation:invFocusPulse 1.1s ease-in-out 2}
 @keyframes invFocusPulse{0%,100%{background:var(--green-bg)}50%{background:transparent}}
+
+/* Los botones de un modal quedan siempre a la vista. En una pantalla baja el
+   formulario de cobro mide más que la ventana, y confirmar una venta no debe
+   exigir desplazarse hasta encontrar el botón: el pie se pega al borde inferior
+   del modal y el contenido pasa por detrás. --modal-pad sigue el relleno real
+   del modal para que el pie llegue justo hasta el borde. */
+.modal > .modal-foot{
+  position:sticky;
+  bottom:calc(-1 * var(--modal-pad, 25px));
+  margin-bottom:calc(-1 * var(--modal-pad, 25px));
+  padding-bottom:var(--modal-pad, 25px);
+  background:var(--surface);
+  box-shadow:0 -10px 14px -12px rgba(15,23,42,.18);
+  z-index:3;
+}
+
+/* Pantallas bajas (laptops de 1366×768 y similares). El panel del carrito se
+   diseñó para pantallas altas: su pie ocupaba la mitad de la altura, dejaba ver
+   solo dos artículos y empujaba Cobrar hasta el borde. Aquí se aprieta el
+   espaciado —sin quitar nada— para que Cobrar quede con margen y el carrito
+   muestre más líneas. En pantallas altas no cambia nada. */
+@media (max-height: 780px) {
+  .pos-side .cart-foot{padding:8px 13px}
+  .pos-side .cart-foot .tr{margin-bottom:3px}
+  .pos-side .cart-foot .tr.grand{font-size:16px;padding-top:6px;margin-top:2px}
+  .pos-side .cart-foot .btn-sm{min-height:26px;padding:4px 10px}
+  .pos-side .cart-foot .btn-lg{min-height:38px;padding:9px 18px}
+  .pos-side .cart-foot > div[style*="margin-top:7px"]{margin-top:3px!important}
+  .pos-side .cart-foot #pos-add-charge-btn{margin:2px 0 4px!important}
+  .pos-side .cart-foot .flex[style*="margin-bottom:8px"]{margin-bottom:5px!important}
+  .pos-side .cart-foot #pos-send-checkout-btn{margin-top:5px!important;min-height:32px}
+  .pos-side .cart-foot #pos-charge-btn{margin-top:6px!important}
+  .pos-side .btn-sm{min-height:26px}
+  .pos-side .cart-item{padding-top:7px;padding-bottom:7px}
+}
+
+/* Indicadores de la barra superior (antes en estilos en línea). */
+.tb-rate-chip{display:flex;flex-direction:column;justify-content:center;padding:4px 10px;
+  background:var(--surface2,var(--bg2));border:1px solid var(--line,var(--line2));border-radius:8px;
+  font-size:11px;line-height:1.35;white-space:nowrap}
+.tb-rate-label{font-size:9px;font-weight:700;color:var(--muted2);letter-spacing:.04em}
+.tb-rate-value{color:var(--ink)}
+.tb-rate-dot{color:var(--muted2)}
+
+/* La barra se compacta por pasos (fitTopbar) solo cuando no cabe. Cada nivel
+   se suma al anterior y ninguno oculta un indicador: se ahorra espacio en
+   adornos antes que en información.
+   1 · reloj sin segundos, conexión y buscador solo con ícono
+   2 · indicadores y separaciones más ajustados; estado de caja con ícono y color
+   3 · compra y venta del dólar apiladas en vez de en una línea
+   4 · el título del módulo se recorta con "…" antes que chocar con el reloj
+   5 · último recurso: se retiran "Crear rápidamente" (sigue en Ctrl+J) y la guía,
+       lo mismo que la app ya hace por diseño bajo 1180 px */
+.topbar.tb-fit-1 .tb-left{min-width:0}
+.topbar.tb-fit-1 .tb-clock-sec,.topbar.tb-fit-1 .tb-clock-sep-sec{display:none}
+.topbar.tb-fit-1 .ux-connection-chip span{display:none}
+.topbar.tb-fit-1 .ux-connection-chip{width:28px;justify-content:center;padding:0}
+.topbar.tb-fit-1 .tb-search-hint{display:none}
+.topbar.tb-fit-2 #tb-center{gap:10px}
+.topbar.tb-fit-2 #tb-rates{gap:6px!important}
+.topbar.tb-fit-2 .tb-rate-chip{padding:3px 7px}
+.topbar.tb-fit-2 .tb-rate-value{font-size:10.5px}
+.topbar.tb-fit-2 .tb-pill-detail{display:none}
+.topbar.tb-fit-3 .tb-rate-pair{display:block;line-height:1.25}
+.topbar.tb-fit-3 .tb-rate-dot{display:none}
+.topbar.tb-fit-4 .tb-title{display:block;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.topbar.tb-fit-5 .ux-top-action,.topbar.tb-fit-5 .ux-guide-trigger{display:none}
+
+/* Módulos en pantallas bajas. El encabezado "Centro de operaciones" tenía un
+   alto mínimo de 112 px y, sumado a las métricas, en 1366×768 (689 px útiles)
+   la primera fila de Inventario empezaba en y=666: no se veía ningún producto.
+   Se usan las mismas medidas del modo compacto que la app ya ofrece como
+   preferencia (.ui-compact), así la densidad es coherente. */
+@media (max-height: 780px) {
+  .module-page>.sec-hdr,
+  .module-page>.module-canvas>.sec-hdr,
+  .module-page>.module-workspace>.sec-hdr{min-height:0;padding:13px 20px;margin-bottom:12px;border-radius:15px}
+  .module-page>.sec-hdr>div:first-child::before,
+  .module-page>.module-canvas>.sec-hdr>div:first-child::before,
+  .module-page>.module-workspace>.sec-hdr>div:first-child::before{margin-bottom:3px}
+  .module-page>.sec-hdr .sec-title,.module-page>.module-canvas>.sec-hdr .sec-title,
+  .module-page>.module-workspace>.sec-hdr .sec-title,.module-page>.sec-hdr h2,
+  .module-page>.module-workspace>.sec-hdr h2{font-size:18px!important}
+  .module-page{padding-top:16px}
+  .metric{padding:12px 14px}
+  .met-val{font-size:18px}
+  .met-top{margin-bottom:6px}
+  .met-icon{width:28px;height:28px}
+  .metrics{margin-bottom:12px}
+  /* Barras sobre la tabla: paginación de Inventario (relleno en línea) y registros. */
+  .inv-pager{padding-top:8px!important;padding-bottom:8px!important}
+  .ux-table-bar{min-height:30px;padding-top:3px;padding-bottom:3px}
+}
+
+/* Tablas en pantallas de hasta 1440 px de ancho (portátiles de 1366×768). Ahí
+   una tabla tiene unos 1037 px útiles: con 13 px de relleno lateral por celda,
+   Inventario (11 columnas) pedía 1150 px y su columna de acciones quedaba fuera
+   de vista; Clientes se pasaba 49 px. Solo se ajusta el relleno lateral: no se
+   oculta ninguna columna. */
+@media (max-width: 1440px) {
+  thead th,.ui-compact thead th{padding-left:9px;padding-right:9px}
+  tbody td,.ui-compact tbody td{padding-left:9px;padding-right:9px}
+  .ux-smart-table th.ux-sortable{padding-right:17px}
+  .ux-smart-table th.ux-sortable::after{right:5px}
+  td .btn-sm{padding-left:7px;padding-right:7px}
+  /* Un modelo o categoría largos bajan de línea en vez de ensanchar la tabla. */
+  #inv-table-wrap td .badge{white-space:normal}
+  /* Contabilidad tiene 16 pestañas: en una sola fila las últimas quedaban fuera. */
+  .mod-tabs{flex-wrap:wrap}
+}
+
+/* Grupos de botones de Clientes: el de empresa baja de línea cuando no cabe. */
+.cli-row-actions{display:flex;flex-wrap:wrap;gap:4px}
+
+/* Columna de acciones fija a la derecha (se activa con .velo-sticky-actions).
+   Si aun así la tabla no cabe —montos de 7 cifras, modelos largos—, los botones
+   siguen a la vista y el resto se desplaza por debajo. La sombra de borde solo
+   aparece cuando de verdad hay contenido debajo: la mueve el desplazamiento
+   horizontal de la propia tabla, y sin desplazamiento no se muestra. */
+.velo-sticky-actions > thead > tr > th:last-child,
+.velo-sticky-actions > tbody > tr > td:last-child{position:sticky;right:0}
+.velo-sticky-actions > thead > tr > th:last-child{z-index:3}
+:where(.velo-sticky-actions > tbody > tr > td:last-child){background:var(--surface);z-index:1}
+.velo-sticky-actions > thead > tr > th:last-child::before,
+.velo-sticky-actions > tbody > tr > td:last-child::before{content:'';position:absolute;top:0;bottom:0;left:-12px;
+  width:12px;pointer-events:none;background:linear-gradient(to left,rgba(15,23,42,.13),transparent);opacity:0;
+  animation:veloStickyActionsEdge linear both;animation-timeline:scroll(nearest inline)}
+@keyframes veloStickyActionsEdge{from{opacity:1}to{opacity:0}}
