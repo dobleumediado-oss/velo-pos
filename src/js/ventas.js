@@ -549,7 +549,10 @@ function renderVentas(el) {
 
 async function refreshVentas(el) {
   if (ventasTab === 'abonos') {
-    if (typeof reloadPayments === 'function') await reloadPayments();
+    // La pestaña de Abonos puede filtrar cualquier fecha, así que aquí sí se
+    // necesita el historial completo, no la ventana reciente.
+    if (typeof ensurePaymentsComplete === 'function') await ensurePaymentsComplete();
+    else if (typeof reloadPayments === 'function') await reloadPayments();
     renderVentasTable();
     return;
   }

@@ -142,6 +142,7 @@ try {
   ok(JSON.stringify(after) === JSON.stringify(before),
     'consultar, contar y buscar no modifica ventas, totales ni artículos');
 
+  const dataSourceForWindow = fs.readFileSync(path.join(__dirname, '../src/js/data.js'), 'utf8');
   console.log('\n== Abonos sin consulta por fila (N+1) ==');
   const customerId = db.prepare("INSERT INTO customers(name,rnc,active) VALUES('CLIENTE ABONOS','101',1)")
     .run().lastInsertRowid;
@@ -187,6 +188,20 @@ try {
     'la agrupación conserva exactamente el monto aplicado de cada abono');
   ok(payments.every(row => Array.isArray(row.allocations) && row.allocation_count === row.allocations.length),
     'cada abono conserva su lista de aplicaciones y su conteo');
+
+  const windowed = DB.customersRepo.getAllPayments({ limit: 50 });
+  ok(windowed.length === 50, 'la ventana acota la consulta a los abonos pedidos');
+  ok(windowed.every(row => Array.isArray(row.allocations)) &&
+    windowed.some(row => row.allocation_count > 0),
+    'la ventana conserva las aplicaciones de cada abono');
+  const newestAll = DB.customersRepo.getAllPayments()[0];
+  ok(Number(windowed[0].id) === Number(newestAll.id),
+    'la ventana empieza por el abono más reciente, no por el más viejo');
+  ok(dataSourceForWindow.includes('const PAYMENTS_WINDOW = 3000') &&
+    dataSourceForWindow.includes('async function ensurePaymentsComplete') &&
+    fs.readFileSync(path.join(__dirname, '../src/js/ventas.js'), 'utf8')
+      .includes('await ensurePaymentsComplete()'),
+    'la pestaña de Abonos pide el historial completo antes de filtrar por fecha');
 
   console.log('\n== Clientes sin consulta por fila ==');
   const insertCustomer = db.prepare("INSERT INTO customers(name,rnc,active) VALUES(?,?,1)");

@@ -9,6 +9,15 @@
 - Esto evita que un ID sensible al uso de mayúsculas deje de coincidir con la
   identidad real enviada por la terminal.
 
+### El historial de abonos deja de cargarse entero (fase 5)
+
+- En memoria se sostiene solo una ventana con los abonos más recientes. Caja y
+  el detalle de un cliente trabajan siempre dentro de esa ventana.
+- La pestaña de Abonos de Ventas, que puede filtrar cualquier fecha, pide el
+  historial completo antes de filtrar y lo conserva cargado.
+- El arranque de la aplicación también usa la ventana, así que abrir Velo deja
+  de depender de cuántos abonos acumule el negocio.
+
 ### Cambios en vivo también con una sola terminal (fase 4)
 
 - Hasta ahora, el aviso interno de "estos datos cambiaron" solo existía con

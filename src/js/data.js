@@ -297,7 +297,7 @@ async function loadAppData() {
       window.api.cash.getSessions(),
       window.api.users.getAll(),
       window.api.customers.getAllPayments
-        ? window.api.customers.getAllPayments().catch(() => [])
+        ? window.api.customers.getAllPayments({ limit: PAYMENTS_WINDOW }).catch(() => [])
         : Promise.resolve([]),
       window.api.salespeople?.getAll
         ? window.api.salespeople.getAll({ status:'activo', commercialOnly:true }).catch(() => ({ok:false,data:[]}))
@@ -308,7 +308,10 @@ async function loadAppData() {
       if (users.status === 'fulfilled') window._cachedUsers = users.value || [];
       if (customers.status === 'fulfilled') DB.customers = customers.value || [];
       if (sessions.status === 'fulfilled') DB.caja = sessions.value || [];
-      if (payments.status === 'fulfilled') DB.payments = payments.value || [];
+      if (payments.status === 'fulfilled') {
+        DB.payments = payments.value || [];
+        DB.paymentsComplete = DB.payments.length < PAYMENTS_WINDOW;
+      }
       if (sellers.status === 'fulfilled') DB.salespeople = sellers.value?.data || [];
       const rejected = results.filter(item => item.status === 'rejected');
       if (rejected.length) {
@@ -430,17 +433,27 @@ function _coalesceReload(key, run) {
 // principal sin que nadie viera el resultado; se marca pendiente y se recupera
 // al entrar a una pantalla que sí los use.
 const PAYMENT_SCREENS = new Set(['ventas', 'clientes', 'caja']);
+// El historial de abonos crece para siempre. En memoria se sostiene solo una
+// ventana de los más recientes, que cubre lo que miran Caja (la sesión abierta)
+// y el detalle de un cliente. El historial completo se pide únicamente cuando
+// una pantalla lo necesita de verdad, y ahí queda cargado.
+const PAYMENTS_WINDOW = 3000;
 let _paymentsStale = false;
-async function reloadPayments({ force = false } = {}) {
+async function reloadPayments({ force = false, complete = false } = {}) {
   const active = (typeof page !== 'undefined') ? page : null;
-  if (!force && active && !PAYMENT_SCREENS.has(active)) {
+  if (!force && !complete && active && !PAYMENT_SCREENS.has(active)) {
     _paymentsStale = true;
     return DB.payments || [];
   }
-  return _coalesceReload('payments', async () => {
-    DB.payments = window.api.customers.getAllPayments
-      ? (await window.api.customers.getAllPayments() || [])
+  const wantComplete = complete || DB.paymentsComplete === true;
+  return _coalesceReload(wantComplete ? 'payments-all' : 'payments', async () => {
+    const limit = wantComplete ? 0 : PAYMENTS_WINDOW;
+    const rows = window.api.customers.getAllPayments
+      ? (await window.api.customers.getAllPayments({ limit }) || [])
       : [];
+    DB.payments = rows;
+    // Si la ventana no se llenó, ya es el historial completo.
+    DB.paymentsComplete = wantComplete || rows.length < PAYMENTS_WINDOW;
     _paymentsStale = false;
     return DB.payments;
   });
@@ -450,6 +463,12 @@ async function reloadPayments({ force = false } = {}) {
 async function ensurePaymentsFresh() {
   if (!_paymentsStale) return DB.payments || [];
   return reloadPayments({ force: true });
+}
+
+// La llaman las pantallas que pueden consultar cualquier fecha del historial.
+async function ensurePaymentsComplete() {
+  if (DB.paymentsComplete === true && !_paymentsStale) return DB.payments || [];
+  return reloadPayments({ force: true, complete: true });
 }
 
 let salesLoadGeneration = 0;

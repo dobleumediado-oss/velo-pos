@@ -4540,7 +4540,11 @@ const customersRepo = {
       ORDER BY p.created_at DESC
     `).all(customerId));
   },
-  getAllPayments({ includeCancelled = false } = {}) {
+  // `limit` acota la consulta a los abonos más recientes. El renderer sostiene
+  // esa ventana en memoria y solo pide el historial completo cuando una pantalla
+  // lo necesita de verdad, en vez de cargarlo entero en cada arranque.
+  getAllPayments({ includeCancelled = false, limit = 0 } = {}) {
+    const windowSize = Math.max(0, Math.min(100000, parseInt(limit, 10) || 0));
     const rows = db.prepare(`
       SELECT p.*,
              c.name AS customer_name,c.rnc AS customer_rnc,c.phone AS customer_phone,
@@ -4558,9 +4562,10 @@ const customersRepo = {
       LEFT JOIN sales s ON s.id=p.sale_id
       ${includeCancelled ? '' : "WHERE COALESCE(p.status,'active')='active'"}
       ORDER BY p.created_at DESC,p.id DESC
+      ${windowSize ? 'LIMIT ' + windowSize : ''}
     `).all();
     if (!rows.length) return rows;
-    const grouped = paymentAllocationsByPayment();
+    const grouped = paymentAllocationsByPayment(windowSize ? rows.map(row => row.id) : null);
     // Un arreglo vacío SÍ es respuesta: significa "este abono no tiene
     // aplicaciones", y evita volver a consultarlo fila por fila.
     return rows.map(payment => hydratePaymentAllocations(payment, grouped.get(payment.id) || []));

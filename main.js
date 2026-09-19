@@ -2748,7 +2748,7 @@ ipcMain.handle('customers:getAccountSales', async (_, { customerId }) => {
 });
 
 ipcMain.handle('customers:getAllPayments', async (_, {
-  includeCancelled = false, requestUserId = null
+  includeCancelled = false, requestUserId = null, limit = 0
 } = {}) => {
   if (includeCancelled === true) {
     const reqUser = authRepo.findById(requestUserId);
@@ -2756,7 +2756,7 @@ ipcMain.handle('customers:getAllPayments', async (_, {
       throw new Error('Solo administradores pueden consultar abonos anulados');
     }
   }
-  return customersRepo.getAllPayments({ includeCancelled: includeCancelled === true });
+  return customersRepo.getAllPayments({ includeCancelled: includeCancelled === true, limit });
 });
 
 ipcMain.handle('customers:getHistory', async (_, { customerId }) => {
