@@ -7,7 +7,11 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const { EventEmitter } = require('events');
+const net = require('net');
 const { startServerService } = require('../src/main/server-service');
+const { startRpcServer } = require('../src/main/net-server');
+const { rpcCall } = require('../src/main/net-client');
+const { rpcTimeoutFor } = require('../src/main/ipc-bridge');
 const { loadServiceConfig, saveServiceConfig } = require('../src/main/service-config');
 const { listLocalAddresses } = require('../lib/network-addresses');
 
@@ -178,8 +182,66 @@ function launchFakeWorker({ business, port }) {
   assert.strictEqual(remoteAdmin.data.data.businessId, 'principal');
 
   await service.close();
+
+  // ── Texto con tildes y Ñ íntegro por la red ────────────────────────────────
+  // Un proxy reparte el flujo en pedazos irregulares, como una red real: si un
+  // extremo decodifica cada pedazo por separado, la Ñ que cae en el corte llega
+  // como "��" (así falló la migración de un cliente con "customer_name cambia").
+  const texto = Array.from({ length: 6000 }, (_, i) =>
+    `${i},"ROMÁN VILLAFAÑA PEÑA","GÜIRA ¿Sí? ¡Año nuevo! €${i}","Ñandú 🚗"`).join('\n');
+  const rpcPort = 19880 + Math.floor(Math.random() * 60);
+  const rpc = startRpcServer({
+    port: rpcPort, host: '127.0.0.1',
+    getAccessKey: () => accessKey, getAllowlist: () => [terminalId],
+    dispatch: async (channel, args) => (channel === 'prueba:eco'
+      ? { llegoIgual: args.texto === texto, texto }
+      : { __unknown: true }),
+  });
+  if (!rpc.server.listening) await new Promise(resolve => rpc.server.once('listening', resolve));
+  const trocear = (from, to) => {
+    let cola = Promise.resolve();
+    from.on('data', buf => {
+      cola = cola.then(async () => {
+        for (let i = 0; i < buf.length;) {
+          const n = 97 + Math.floor(Math.random() * 1400);
+          to.write(buf.subarray(i, i + n));
+          i += n;
+          await new Promise(resolve => setImmediate(resolve));
+        }
+      });
+    });
+    from.on('end', () => cola.then(() => to.end()));
+  };
+  const proxy = net.createServer(cliente => {
+    const destino = net.connect(rpcPort, '127.0.0.1');
+    cliente.setNoDelay(true); destino.setNoDelay(true);
+    trocear(cliente, destino); trocear(destino, cliente);
+    cliente.on('error', () => destino.destroy()); destino.on('error', () => cliente.destroy());
+  }).listen(0, '127.0.0.1');
+  await new Promise(resolve => proxy.once('listening', resolve));
+  for (let vuelta = 0; vuelta < 3; vuelta += 1) {
+    const eco = await rpcCall({
+      host: '127.0.0.1', port: proxy.address().port, accessKey, terminalId, businessId: '',
+      channel: 'prueba:eco', args: { texto }, timeoutMs: 30000,
+    });
+    assert.strictEqual(eco.ok, true, 'la llamada por el proxy debe completarse');
+    assert.strictEqual(eco.data.llegoIgual, true, 'el servidor recibe el texto con tildes y Ñ intacto');
+    assert.strictEqual(eco.data.texto, texto, 'la terminal recibe el texto con tildes y Ñ intacto');
+  }
+  await new Promise(resolve => proxy.close(resolve));
+  await rpc.close();
+
+  // El gateway espera a una operación larga lo mismo que la terminal: con 12 s
+  // fijos cortaba la migración y la pantalla la daba por fallida.
+  const gateway = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'server-service.js'), 'utf8');
+  assert(gateway.includes('proxyRpc(worker, body, res, rpcTimeoutFor(parsed.channel))') &&
+    gateway.includes('timeout: Math.max(12000, Number(timeoutMs) || 0)'),
+    'el gateway usa el límite de cada canal y nunca menos de 12 s');
+  assert(rpcTimeoutFor('importar:allInOneEquiparts') > 12000,
+    'la migración tiene más de 12 s también al pasar por el gateway');
+
   fs.rmSync(tmp, { recursive: true, force: true });
-  console.log('✓ Server Service: auth, aislamiento por negocio y routing verificados');
+  console.log('✓ Server Service: auth, aislamiento por negocio, routing y texto íntegro por la red verificados');
 })().catch(async error => {
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
   console.error(error);

@@ -34,6 +34,9 @@ function rpcCall({ host, port, accessKey, terminalId, businessId, channel, args,
       headers: { 'Content-Type': 'application/json', 'Content-Length': payload.length },
       timeout: timeoutMs,
     }, (res) => {
+      // Decodificador UTF-8 del stream: une una Ñ o una tilde que la red parta
+      // entre dos pedazos. Sin él, cada pedazo se decodificaba solo y llegaba "��".
+      res.setEncoding('utf8');
       let body = '';
       res.on('data', (c) => body += c);
       res.on('end', () => {
@@ -53,6 +56,7 @@ function healthCheck({ host, port, timeoutMs = 5000 }) {
   return new Promise((resolve) => {
     const started = Date.now();
     const req = http.get({ host, port, path: '/health', timeout: timeoutMs }, (res) => {
+      res.setEncoding('utf8');
       let body = '';
       res.on('data', (c) => body += c);
       res.on('end', () => {
@@ -80,6 +84,7 @@ function localBootstrap({ port = 8443, terminalId, name = 'Servidor local', time
       headers: { 'Content-Type': 'application/json', 'Content-Length': payload.length },
       timeout: timeoutMs,
     }, res => {
+      res.setEncoding('utf8');
       let body = '';
       res.on('data', chunk => { body += chunk; });
       res.on('end', () => {

@@ -88,15 +88,23 @@ function startRpcServer({ port = 8443, host = '0.0.0.0', getAccessKey, getAllowl
       return _sendJson(res, 404, conn.makeResponse(false, null, conn.RPC_ERRORS.BAD_REQUEST));
     }
 
-    let body = '';
+    // El cuerpo se junta como bytes y se decodifica una sola vez al final. Sumar
+    // cada pedazo como texto decodificaba por separado una Ñ o una tilde que la
+    // red partía entre dos pedazos y llegaba "��": la migración de un cliente
+    // falló con "customer_name cambia entre líneas" por eso.
+    const chunks = [];
+    let size = 0;
     let aborted = false;
     req.on('data', (chunk) => {
-      body += chunk;
-      if (body.length > MAX_BODY) { aborted = true; res.destroy(); }
+      if (aborted) return;
+      size += chunk.length;
+      if (size > MAX_BODY) { aborted = true; res.destroy(); return; }
+      chunks.push(chunk);
     });
     req.on('error', () => { aborted = true; });
     req.on('end', async () => {
       if (aborted) return;
+      const body = Buffer.concat(chunks).toString('utf8');
       let parsed;
       try { parsed = JSON.parse(body); }
       catch { return _sendJson(res, 400, conn.makeResponse(false, null, conn.RPC_ERRORS.BAD_REQUEST)); }

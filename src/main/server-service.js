@@ -5,6 +5,7 @@ const path = require('path');
 const http = require('http');
 const businessCtx = require('./business-context');
 const conn = require('./connection');
+const { rpcTimeoutFor } = require('./ipc-bridge');
 const {
   loadServiceConfig,
   saveServiceConfig,
@@ -204,7 +205,10 @@ function startServerService({
     return null;
   };
 
-  const proxyRpc = (worker, body, res) => {
+  // El límite es el mismo que espera la terminal para ese canal. Con 12 s fijos,
+  // una migración, un backup o una recuperación NCF más largos se cortaban aquí
+  // y la pantalla decía que falló mientras el negocio seguía trabajando.
+  const proxyRpc = (worker, body, res, timeoutMs = 12000) => {
     const upstream = http.request({
       host: '127.0.0.1',
       port: worker.port,
@@ -214,7 +218,7 @@ function startServerService({
         'Content-Type': 'application/json',
         'Content-Length': body.length,
       },
-      timeout: 12000,
+      timeout: Math.max(12000, Number(timeoutMs) || 0),
     }, upstreamRes => {
       const chunks = [];
       upstreamRes.on('data', chunk => chunks.push(chunk));
@@ -411,7 +415,7 @@ function startServerService({
 
     const worker = manager.get(serverAdminChannel ? 'principal' : requestedBusinessId);
     if (!worker) return _json(res, 503, conn.makeResponse(false, null, 'BUSINESS_UNAVAILABLE'));
-    return proxyRpc(worker, body, res);
+    return proxyRpc(worker, body, res, rpcTimeoutFor(parsed.channel));
   });
 
   const config = loadServiceConfig(rootDataDir);
