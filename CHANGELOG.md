@@ -20,6 +20,32 @@
   entregaron, con su fila de cargos aparte.
 - La interfaz dice "Cargos adicionales" en todos los puntos.
 
+### Pantallas de 1366×768
+
+Medido en la aplicación real con los datos de un negocio, en 1366×689 px (lo
+que queda útil en 1366×768 con la barra de Windows 11). No se oculta ningún
+dato ni indicador.
+
+- El botón Confirmar del cobro queda siempre a la vista: el pie de los
+  formularios se fija al borde y el contenido pasa por detrás. Antes quedaba
+  casi 400 px por debajo de la pantalla.
+- El POS ya no se pasa 6 px del alto de la ventana, en ninguna pantalla. En
+  pantallas bajas el pie de cobro se compacta y la lista del carrito gana 65 px.
+- La barra superior se compacta por pasos solo cuando no cabe: primero el
+  reloj sin segundos y los indicadores más ajustados, luego compra y venta
+  apiladas. La tasa del dólar y los combustibles nunca se ocultan, y el
+  título ya no choca con el reloj.
+- Los encabezados de los módulos son más bajos en pantallas de poca altura:
+  Inventario, que no mostraba ningún producto completo, muestra el primero.
+- Las tablas reducen su relleno lateral a 1440 px de ancho o menos. Inventario
+  y Clientes caben sin desplazarse hacia los lados.
+- En Inventario y en las secuencias NCF, la columna de acciones queda fija a
+  la derecha si una página trae montos muy largos: los botones siempre se ven.
+- En Clientes, Representantes y Sucursales de una empresa bajan a una segunda
+  línea en vez de ensanchar la tabla para todos los clientes.
+- Las 16 pestañas de Contabilidad bajan a una segunda fila en vez de quedar
+  fuera de la vista.
+
 ## 1.49.5 — 2026-09-15
 
 ### Identidad exacta de terminales

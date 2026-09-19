@@ -378,6 +378,101 @@ optimizar antes de tiempo ni descubrirlo tarde.
   es una prueba diferencial sobre el catálogo real —prefijos, tildes, Ñ, códigos
   y códigos de barras— que exija coincidencia total antes de cambiar nada.*
 
+## Ronda Pantallas de 1366×768 — 19 de septiembre de 2026
+
+Un cliente trabaja en un portátil HP con Windows 11 a 1366×768. Descontando la
+barra de tareas y el marco quedan **1366×689 px** útiles. Todo se midió en la app
+real —posiciones del DOM, no a ojo— con una copia de los datos de ese negocio
+(1,246 productos, 317 clientes); nunca sobre la base de producción.
+
+Regla de la ronda, decidida por el dueño: se gana espacio en relleno y adornos,
+**nunca ocultando datos ni indicadores**. Los combustibles de la barra no se
+ocultan en pantallas angostas.
+
+### Problema confirmado
+
+| Pantalla | Antes (1366×698) | Causa |
+|---|---|---|
+| Cobro | Confirmar en y=1085: fuera de la pantalla | el formulario mide 1,108 px en una caja de 638 |
+| POS | la página se pasaba 6 px del alto, en **cualquier** pantalla | `.pos-wrap` restaba 58 px y la barra mide 64 |
+| Barra superior | título y reloj montados 53 px; los indicadores pedían 441 px y había 366 | zona central centrada que se derramaba a ambos lados |
+| Inventario | primera fila en y=666, ningún producto completo; la tabla pedía 1,150 px y había 1,037, con las acciones fuera de vista | encabezado de 117 px más métricas; 13 px de relleno por celda |
+| Clientes | tabla 49 px más ancha que su espacio; con una empresa en la lista, 287 px | los botones de empresa en la misma fila que el resto |
+| Contabilidad | 3 de las 16 pestañas fuera de vista (273 px) | pestañas en una sola fila con desplazamiento lateral |
+| Configuración | tabla de secuencias NCF 159 px más ancha que su columna | 9 columnas en una columna de 609 px |
+
+### Ruta mínima aplicada
+
+1. **Pie de modal fijo** — los botones quedan pegados al borde inferior del modal
+   y el contenido pasa por detrás.
+2. **POS** — `.pos-wrap` toma el alto de su área (`height:100%`); con 780 px de
+   alto o menos, el pie de cobro se compacta.
+3. **Barra superior** — `fitTopbar()` mide y suma niveles solo mientras no cabe
+   (5 niveles acumulativos). Ninguno oculta la tasa ni los combustibles; el
+   último retira "Crear rápidamente" (sigue en Ctrl+J) y la guía, igual que la
+   app ya hacía bajo 1180 px.
+4. **Módulos en pantallas bajas** — encabezado, métricas, paginación de
+   Inventario y barra de registros con las medidas del modo compacto (`.ui-compact`).
+5. **Tablas a 1440 px o menos** — relleno lateral de 13 a 9 px y botones de fila
+   más ajustados; en Inventario, modelos y categorías largos bajan de línea.
+6. **Columna de acciones fija** (`.velo-sticky-actions`) en Inventario y NCF. Si
+   una página aún no cabe —montos de 7 cifras, datos largos—, los botones siguen
+   a la vista. La sombra de borde la mueve el desplazamiento real de la tabla
+   (`animation-timeline: scroll()`), así que no aparece cuando la tabla cabe.
+7. **Clientes** — los botones de empresa van en su propio grupo, que baja de línea.
+8. **Pestañas de módulo** (`.mod-tabs`) — bajan de fila a 1440 px o menos.
+
+### Medición y seguridad
+
+| Pantalla | Después (1366×689) |
+|---|---|
+| Cobro | Confirmar en y=606–640, visible |
+| POS | Cobrar termina en 681 (8 px de margen) y la página no se desplaza; la lista del carrito pasa de 130 a 195 px (1366×698) |
+| Barra | título y reloj separados 21 px; 3/3 indicadores en los 6 escenarios: 1920, 1440, 1366, 1280 y fuente ancha a 1366 y 1280 |
+| Inventario | primera fila completa (y=578–674); la tabla cabe (0 px de desborde) |
+| Inventario, peor caso | montos de 7 cifras más un modelo largo: 37 px de desborde, acciones a la vista, sombra solo mientras hay contenido debajo |
+| Clientes | cabe; ninguna fila normal partida; la empresa en dos líneas |
+| Contabilidad | 16 de 16 pestañas visibles, en dos filas |
+| NCF | "Administrar" siempre visible; la barra de desplazamiento queda justo debajo |
+
+A 1920×1000 lo único visible es que, en Clientes, la fila de una empresa lleva
+sus dos botones propios en una segunda línea. Sin errores de consola en ningún
+tamaño.
+
+- `test:experience` protege las reglas. Ejecuta `fitTopbar()` sobre una barra
+  simulada: suelta niveles viejos, se detiene al caber y no pasa del 5. Además
+  comprueba que ningún nivel oculte indicadores. Cuatro roturas deliberadas
+  —ocultar combustibles, quitar la columna fija, no soltar niveles, juntar los
+  botones de empresa— hacen fallar la prueba.
+- Sin cambios de comportamiento: `test:sales-history-performance` (60),
+  `test:financial` (199), `test:customer-companies` (31),
+  `test:additional-charges` (33), `test:payment-ui` (16), `test:ncf`,
+  `test:printing`, `test:pos`, `test:cash-ui`, `test:client-account`,
+  `test:input-normalization`, `test:suite-invariants` y `verify:integrity`.
+- `test:sales-history-performance` tenía una verificación de texto desactualizada
+  desde `04626dc`: buscaba una línea que ese commit movió a `invPageForFocus`. Se
+  corrigió para apuntar al código actual; el comportamiento ya lo cubrían las
+  pruebas de esa función.
+- `verify:marker` falla también sobre `HEAD` limpio desde `4fe59ee` (v1.46.0):
+  confunde una nota en pantalla de Clientes con el marcador histórico. No lo
+  causa esta ronda; queda como tarea aparte.
+
+### Pendiente de esta línea, con su disparador
+
+- **Fuente DM Sans desde internet** — se descarga de Google Fonts; sin conexión,
+  Windows usa `system-ui` (Segoe UI). La barra se probó con Verdana, que aquí
+  ocupa más que DM Sans: a 1366 px usa los niveles 1 a 3 y todo cabe. *Disparador: textos cortados
+  en un equipo sin internet; entonces se empaqueta la fuente con la app.*
+- **Ventana restaurada de 1280×800** — la app abre maximizada, pero si el
+  usuario la restaura en una pantalla de 768 px, el borde inferior queda fuera.
+  *Disparador: un cliente que trabaje sin maximizar; entonces el tamaño inicial
+  se ajusta al área de trabajo de la pantalla.*
+- **Avisos sobre el botón Cobrar** — los avisos salen abajo a la derecha y, en el
+  POS, tapan el botón mientras duran. *Disparador: un cajero que lo reporte;
+  entonces se mueven arriba en el POS.*
+- **Recorrido completo a 1280×720** — la barra está probada ahí y las tablas
+  usan la misma densidad, pero no se midieron todos los módulos a ese tamaño.
+
 ## Ronda Conciliación de correcciones heredadas — 15 de septiembre de 2026
 
 ### Alcance multiempresa
