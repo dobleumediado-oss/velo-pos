@@ -129,6 +129,30 @@ try {
   expectError(() => DB.cashRepo.updateIncomeReceipt(editable.id, { amount:100, reason:'Ya esta anulado' }, actor, sessionId));
   ok(/anulado/i.test(editErrors[3]), 'un recibo anulado ya no se puede modificar');
 
+  console.log('\n== Caja lee su propia sesión ==');
+  const sessionPayments = DB.cashRepo.getSessionPayments(sessionId);
+  ok(Array.isArray(sessionPayments) &&
+    sessionPayments.every(row => Number(row.cash_session_id) === Number(sessionId)),
+    'los abonos de la caja se consultan por su sesión, no filtrando el historial completo');
+  ok(sessionPayments.every(row => Array.isArray(row.allocations)),
+    'cada abono de la sesión llega con sus aplicaciones resueltas');
+  const otherSession = DB.cashRepo.getSessionPayments(999999);
+  ok(Array.isArray(otherSession) && otherSession.length === 0,
+    'una sesión sin abonos devuelve una lista vacía, no el historial del negocio');
+  const sessionSales = DB.cashRepo.getSessionSales(sessionId);
+  ok(Array.isArray(sessionSales) &&
+    sessionSales.every(row => Number(row.cash_session_id) === Number(sessionId)),
+    'las ventas de la caja también salen de su propia consulta');
+
+  const cajaUi = fs.readFileSync(path.join(__dirname,'../src/js/caja.js'),'utf8');
+  ok(cajaUi.includes('function cajaFetchSessionPayments') &&
+    cajaUi.includes('function cajaFetchSessionSales') &&
+    !/const tdAbonos = DB\.payments/.test(cajaUi),
+    'Caja dejó de depender de las colecciones compartidas para cuadrar');
+  const dashUi = fs.readFileSync(path.join(__dirname,'../src/js/dashboard.js'),'utf8');
+  ok(!/DB\.sales[.[]/.test(dashUi) && dashUi.includes('const dashSales'),
+    'el panel calcula sus indicadores con las ventas del día que él mismo pide');
+
   console.log('\n== Historial consultable y reimprimible ==');
   const keptReceipt = DB.cashRepo.createIncomeReceipt({ cash_session_id:sessionId, payer_name:'Arrendatario del local',
     concept:'Alquiler de vitrina', income_type:'otro_ingreso', amount:2500, method:'efectivo',

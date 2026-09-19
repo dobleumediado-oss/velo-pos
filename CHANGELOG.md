@@ -9,6 +9,19 @@
 - Esto evita que un ID sensible al uso de mayúsculas deje de coincidir con la
   identidad real enviada por la terminal.
 
+### Cada pantalla con su propia fuente (fase 7)
+
+- Caja leía las ventas y los abonos de su sesión desde las mismas colecciones
+  que pagina Ventas: quien las cargara de último decidía lo que Caja mostraba.
+  Ahora Caja consulta lo suyo por el identificador de la sesión.
+- El resumen de una caja ya cerrada casi nunca encontraba sus ventas en memoria.
+  Ahora las consulta y las presenta completas.
+- El panel calcula sus indicadores del día con las ventas que él mismo pide, sin
+  depender del período que hubiera dejado cargado otra pantalla.
+- Con eso, refrescar tras una acción en Ventas pasó de traer 1,000 documentos a
+  traer la página visible: el refresco completo bajó de ~90 ms a ~27 ms, y Caja
+  resuelve lo suyo en menos de 1 ms.
+
 ### Acceso y módulos sin saltos (fase 6)
 
 - Cambiar entre Cajero y Supervisor en la pantalla de acceso reconstruía toda la

@@ -157,6 +157,7 @@ const api = {
     closePending:    (data)  => ipcRenderer.invoke('cash:closePending', data),
     getSessions:     ()      => ipcRenderer.invoke('cash:getSessions'),
     getSessionSales: (data)  => ipcRenderer.invoke('cash:getSessionSales', data),
+    getSessionPayments: (data) => ipcRenderer.invoke('cash:getSessionPayments', data),
     getSessionCashSummary: (data) => ipcRenderer.invoke('cash:getSessionCashSummary', data),
     getSessionReport: (data) => ipcRenderer.invoke('cash:getSessionReport', data),
     getIncomeReceipts: (data) => ipcRenderer.invoke('cash:getIncomeReceipts', data),

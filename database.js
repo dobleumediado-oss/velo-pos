@@ -4972,6 +4972,19 @@ const cashRepo = {
       ORDER BY cs.id DESC LIMIT ?
     `).all(limit);
   },
+  // Los abonos de UNA sesión. Caja los filtraba desde la colección global de
+  // abonos, que crece con el historial completo del negocio.
+  getSessionPayments(sessionId, { includeCancelled = false } = {}) {
+    return hydratePaymentRows(db.prepare(`
+      SELECT p.*,c.name customer_name,c.rnc customer_rnc
+      FROM payments p
+      LEFT JOIN customers c ON c.id=p.customer_id
+      WHERE p.cash_session_id=?
+        ${includeCancelled ? '' : "AND COALESCE(p.status,'active')='active'"}
+        AND COALESCE(p.import_source,'')=''
+      ORDER BY p.created_at,p.id
+    `).all(Number(sessionId)));
+  },
   getSessionSales(sessionId) {
     return db.prepare(`
       SELECT s.*,

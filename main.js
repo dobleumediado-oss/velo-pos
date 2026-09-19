@@ -2873,6 +2873,12 @@ ipcMain.handle('cash:getSessionSales', async (_, { sessionId }) => {
   return cashRepo.getSessionSales(sessionId);
 });
 
+ipcMain.handle('cash:getSessionPayments', async (_, { sessionId, includeCancelled = false } = {}) => {
+  try {
+    return { ok: true, data: cashRepo.getSessionPayments(sessionId, { includeCancelled }) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
 ipcMain.handle('cash:getSessionCashSummary', async (_, { sessionId }) => {
   try {
     return cashRepo.getSessionCashSummary(sessionId);

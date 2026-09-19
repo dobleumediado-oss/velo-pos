@@ -71,7 +71,16 @@ function ventasRefreshAfterMutation({
   range = ventasRange, view = 'sales', products = false,
   customers = false, payments = false, onDone = null,
 } = {}) {
-  const tasks = [reloadSales({ range, ...(view ? { view } : {}) })];
+  // Se recargaban 1,000 ventas aunque la pantalla muestre 100: DB.sales era una
+  // colección compartida y nadie podía acotarla. Ahora Caja y el panel consultan
+  // lo suyo, así que aquí basta con la página que el usuario está viendo.
+  const tasks = [reloadSales({
+    range,
+    ...(view ? { view } : {}),
+    q: ventasSearch.trim(),
+    limit: VENTAS_PAGE_SIZE,
+    offset: Math.max(0, (ventasPage - 1) * VENTAS_PAGE_SIZE),
+  })];
   if (products) tasks.push(reloadProducts());
   if (customers) tasks.push(reloadCustomers());
   if (payments && typeof reloadPayments === 'function') tasks.push(reloadPayments());

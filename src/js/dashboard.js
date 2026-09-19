@@ -131,13 +131,17 @@ async function renderDash(el) {
     }
   }, 60000);
 
-  // Recargar datos frescos
-  const [,,,versionInfo] = await Promise.all([
+  // Recargar datos frescos. Las ventas del día son propias del panel: pedirlas
+  // a DB.sales lo dejaba a merced del período o la página que hubiera cargado
+  // otra pantalla.
+  const [,, dashSalesRaw, versionInfo] = await Promise.all([
     reloadProducts(),
     reloadCustomers(),
-    reloadSales({ range: 'today' }),
+    window.api.sales.getAll({ range: 'today' }).catch(() => []),
     window.api.version.getInfo().then(r => r?.data || null).catch(() => null),
   ]);
+  const dashSales = (dashSalesRaw || []).map(row =>
+    typeof normalizeSaleRow === 'function' ? normalizeSaleRow(row) : row);
 
   // ── Datos de Gastos (si módulo activo) ──────────────────────────────────────
   let gastosData = null;
@@ -174,14 +178,14 @@ async function renderDash(el) {
     } catch(e) { console.warn('[Dash] ncf:', e.message); }
   }
 
-  const sales  = DB.sales.filter(s =>
+  const sales  = dashSales.filter(s =>
     s.status !== 'cancelled' && s.status !== 'returned' && s.type !== 'devolucion');
   const rev    = sales.reduce((a, s) => a + (s.total || 0), 0);
   const itbis  = sales.reduce((a, s) => a + (s.tax_amt || s.itbis || 0), 0);
 
   // Calcular ganancia bruta del día (precio - costo desde sale_items en memoria)
   const todaySalesIds = new Set(sales.map(s => s.id));
-  const cost = DB.sales
+  const cost = dashSales
     .filter(s => todaySalesIds.has(s.id))
     .reduce((a, s) => a + (s.cost_total || 0), 0);
   const profit    = rev - itbis - cost;
@@ -900,7 +904,7 @@ async function renderDash(el) {
     })
   ));
 
-  const last5 = [...DB.sales]
+  const last5 = [...dashSales]
     .filter(s => s.status !== 'cancelled' && s.status !== 'returned' && s.type !== 'devolucion')
     .reverse().slice(0, 5);
 

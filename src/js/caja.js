@@ -208,6 +208,77 @@ function cajaOpenIncomeHistoryDetail(id) {
       <button class="btn btn-dark" onclick="cajaReprintIncomeReceipt(${Number(r.id)})">${svg('print')} Reimprimir</button></div>`, 'modal-lg');
 }
 
+// Caja leía las ventas de su sesión desde DB.sales, la misma colección que
+// pagina Ventas. Quien la cargara de último decidía lo que veía Caja, y el
+// resumen de una sesión ya cerrada casi nunca encontraba sus ventas ahí. Ahora
+// Caja consulta las suyas y DB.sales queda libre para seguir la página abierta.
+let _cajaSessionSales = { sessionId:null, rows:[], loading:false };
+
+async function cajaFetchSessionSales(sessionId) {
+  const rows = await window.api.cash.getSessionSales({ sessionId });
+  return (rows || []).map(row =>
+    typeof normalizeSaleRow === 'function' ? normalizeSaleRow(row) : row);
+}
+
+function cajaLoadSessionSales(sessionId, el) {
+  if (!sessionId || _cajaSessionSales.loading ||
+      Number(_cajaSessionSales.sessionId) === Number(sessionId)) return;
+  _cajaSessionSales = { sessionId:Number(sessionId), rows:[], loading:true };
+  cajaFetchSessionSales(sessionId).then(rows => {
+    if (Number(_cajaSessionSales.sessionId) !== Number(sessionId)) return;
+    _cajaSessionSales.rows = rows;
+    _cajaSessionSales.loading = false;
+    if (document.body.contains(el) && typeof page !== 'undefined' && page === 'caja') {
+      veloRepaint(() => renderCaja(el));
+    }
+  }).catch(() => { _cajaSessionSales.loading = false; });
+}
+
+let _cajaSessionPayments = { sessionId:null, rows:[], loading:false };
+
+async function cajaFetchSessionPayments(sessionId) {
+  const result = await window.api.cash.getSessionPayments({ sessionId });
+  if (result && result.ok === false) throw new Error(result.error || 'No se pudieron leer los abonos de la caja');
+  return (result && Array.isArray(result.data) ? result.data : (Array.isArray(result) ? result : []));
+}
+
+function cajaLoadSessionPayments(sessionId, el) {
+  if (!sessionId || _cajaSessionPayments.loading ||
+      Number(_cajaSessionPayments.sessionId) === Number(sessionId)) return;
+  _cajaSessionPayments = { sessionId:Number(sessionId), rows:[], loading:true };
+  cajaFetchSessionPayments(sessionId).then(rows => {
+    if (Number(_cajaSessionPayments.sessionId) !== Number(sessionId)) return;
+    _cajaSessionPayments.rows = rows;
+    _cajaSessionPayments.loading = false;
+    if (document.body.contains(el) && typeof page !== 'undefined' && page === 'caja') {
+      veloRepaint(() => renderCaja(el));
+    }
+  }).catch(() => { _cajaSessionPayments.loading = false; });
+}
+
+function cajaPaymentsForSession(sessionId) {
+  if (Number(_cajaSessionPayments.sessionId) === Number(sessionId) && !_cajaSessionPayments.loading) {
+    return _cajaSessionPayments.rows;
+  }
+  return (DB.payments || []).filter(row =>
+    Number(row.cash_session_id) === Number(sessionId) && !isImportedRecord(row));
+}
+
+function cajaInvalidateSessionSales() {
+  _cajaSessionSales = { sessionId:null, rows:[], loading:false };
+  _cajaSessionPayments = { sessionId:null, rows:[], loading:false };
+}
+
+// Mientras llega la consulta propia se usa lo que haya en memoria: nunca peor
+// que el comportamiento anterior, y exacto en cuanto responde.
+function cajaSalesForSession(sessionId) {
+  if (Number(_cajaSessionSales.sessionId) === Number(sessionId) && !_cajaSessionSales.loading) {
+    return _cajaSessionSales.rows;
+  }
+  return (DB.sales || []).filter(row =>
+    Number(row.cash_session_id || row.cajaId) === Number(sessionId));
+}
+
 function cajaLoadIncomeReceipts(sessionId, el) {
   if (!sessionId || _cajaIncomeState.loading || Number(_cajaIncomeState.sessionId) === Number(sessionId)) return;
   _cajaIncomeState = { sessionId:Number(sessionId), rows:[], loading:true };
@@ -257,7 +328,11 @@ function renderCaja(el) {
   const otherOpenSessions = (DB.caja || []).filter(session =>
     session.status === 'open' && Number(session.id) !== Number(cajaSession?.id)
   );
-  if (cajaOpen && cajaSession?.id) cajaLoadIncomeReceipts(cajaSession.id, el);
+  if (cajaOpen && cajaSession?.id) {
+    cajaLoadIncomeReceipts(cajaSession.id, el);
+    cajaLoadSessionSales(cajaSession.id, el);
+    cajaLoadSessionPayments(cajaSession.id, el);
+  }
 
   // ── Header ───────────────────────────────────
   el.appendChild(h('div', { class: 'sec-hdr' },
@@ -352,11 +427,11 @@ function renderCaja(el) {
   // ── Estado actual ─────────────────────────────
   if (cajaOpen && cajaSession) {
     const sesId  = cajaSession.id;
-    const tdS    = DB.sales.filter(s =>
-      (s.cash_session_id || s.cajaId) === sesId && s.type !== 'devolucion' && s.status !== 'returned' && s.status !== 'cancelled');
-    const tdDevs = DB.sales.filter(s => (s.cash_session_id || s.cajaId) === cajaSession.id && s.type === 'devolucion');
-    const tdPaymentsAll = (DB.payments || []).filter(p =>
-      Number(p.cash_session_id) === Number(sesId) && !isImportedRecord(p));
+    const sesSales = cajaSalesForSession(sesId);
+    const tdS    = sesSales.filter(s =>
+      s.type !== 'devolucion' && s.status !== 'returned' && s.status !== 'cancelled');
+    const tdDevs = sesSales.filter(s => s.type === 'devolucion');
+    const tdPaymentsAll = cajaPaymentsForSession(sesId).filter(p => !isImportedRecord(p));
     const tdPayments = tdPaymentsAll.filter(
       p => String(p.status || 'active').toLowerCase() !== 'cancelled'
     );
@@ -683,6 +758,7 @@ async function confirmIncomeReceipt() {
     _cajaIncomeState.sessionId = Number(cajaSession.id);
     _cajaIncomeState.rows = [result.data, ..._cajaIncomeState.rows.filter(r=>Number(r.id)!==Number(result.data.id))];
     cajaIncomeHistoryInvalidate();
+    cajaInvalidateSessionSales();
     toast(`✓ Ingreso registrado · ${result.data.document_number_fmt}`);
     printIncomeReceipt(result.data);
     veloRepaint(() => renderCaja(document.getElementById('page')));
@@ -1110,8 +1186,12 @@ function _normCaja(s) {
 async function openCierreCajaModal() {
   if (!cajaSession) return;
 
-  const tdS    = DB.sales.filter(s => (s.cash_session_id || s.cajaId) === cajaSession.id && s.type !== 'devolucion' && s.status !== 'cancelled');
-  const tdDevs = DB.sales.filter(s => (s.cash_session_id || s.cajaId) === cajaSession.id && s.type === 'devolucion');
+  // El cuadre no puede depender de lo que otra pantalla dejó en memoria.
+  let sesSales;
+  try { sesSales = await cajaFetchSessionSales(cajaSession.id); }
+  catch { sesSales = cajaSalesForSession(cajaSession.id); }
+  const tdS    = sesSales.filter(s => s.type !== 'devolucion' && s.status !== 'cancelled');
+  const tdDevs = sesSales.filter(s => s.type === 'devolucion');
   const tdEfec = tdS.filter(s => (s.payment_method || s.pay) === 'efectivo').reduce((a, s) => a + s.total, 0);
   const tdCard = tdS.filter(s => (s.payment_method || s.pay) === 'tarjeta').reduce((a, s) => a + s.total, 0);
   const tdTrans= tdS.filter(s => (s.payment_method || s.pay) === 'transferencia').reduce((a, s) => a + s.total, 0);
@@ -1122,9 +1202,11 @@ async function openCierreCajaModal() {
   // Solo cuenta abonos en efectivo vinculados a esta caja y que no sean
   // de la importación histórica. Los abonos importados de la migración
   // nunca tienen cash_session_id ni method que aplique a caja física.
-  const tdAbonos = DB.payments
+  let sesPayments;
+  try { sesPayments = await cajaFetchSessionPayments(cajaSession.id); }
+  catch { sesPayments = cajaPaymentsForSession(cajaSession.id); }
+  const tdAbonos = sesPayments
     .filter(p =>
-      p.cash_session_id === cajaSession.id &&
       (p.method || 'efectivo') === 'efectivo' &&
       String(p.status || 'active').toLowerCase() !== 'cancelled' &&
       !isImportedRecord(p)
@@ -1405,12 +1487,15 @@ async function imprimirReporteDia() {
 // ══════════════════════════════════════════════
 // MODAL RESUMEN
 // ══════════════════════════════════════════════
-function openResumenModal(raw) {
+async function openResumenModal(raw) {
   const s = _normCaja(raw);
-  const sesVentas = DB.sales.filter(v =>
-    v.cajaId === s.id && v.type !== 'devolucion' && v.status !== 'cancelled');
-  const sesDevs   = DB.sales.filter(v =>
-    v.cajaId === s.id && v.type === 'devolucion' && v.status !== 'cancelled');
+  // Una sesión cerrada rara vez tiene sus ventas en la memoria del historial:
+  // se consultan por su identificador, que es la fuente exacta.
+  let sesSales;
+  try { sesSales = await cajaFetchSessionSales(s.id); }
+  catch { sesSales = cajaSalesForSession(s.id); }
+  const sesVentas = sesSales.filter(v => v.type !== 'devolucion' && v.status !== 'cancelled');
+  const sesDevs   = sesSales.filter(v => v.type === 'devolucion' && v.status !== 'cancelled');
   const byMethod  = {};
   sesVentas.forEach(v => { byMethod[v.pay] = (byMethod[v.pay] || 0) + v.total; });
 

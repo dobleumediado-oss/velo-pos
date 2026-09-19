@@ -197,11 +197,15 @@ try {
   const newestAll = DB.customersRepo.getAllPayments()[0];
   ok(Number(windowed[0].id) === Number(newestAll.id),
     'la ventana empieza por el abono más reciente, no por el más viejo');
-  ok(dataSourceForWindow.includes('const PAYMENTS_WINDOW = 3000') &&
+  ok(dataSourceForWindow.includes('const PAYMENTS_WINDOW = 500') &&
     dataSourceForWindow.includes('async function ensurePaymentsComplete') &&
     fs.readFileSync(path.join(__dirname, '../src/js/ventas.js'), 'utf8')
       .includes('await ensurePaymentsComplete()'),
     'la pestaña de Abonos pide el historial completo antes de filtrar por fecha');
+
+  const ventasRefreshSource = fs.readFileSync(path.join(__dirname, '../src/js/ventas.js'), 'utf8');
+  ok(/const tasks = \[reloadSales\(\{[\s\S]{0,260}limit: VENTAS_PAGE_SIZE/.test(ventasRefreshSource),
+    'tras una mutación Ventas recarga su página, no mil filas de la colección compartida');
 
   console.log('\n== Clientes sin consulta por fila ==');
   const insertCustomer = db.prepare("INSERT INTO customers(name,rnc,active) VALUES(?,?,1)");

@@ -434,10 +434,11 @@ function _coalesceReload(key, run) {
 // al entrar a una pantalla que sí los use.
 const PAYMENT_SCREENS = new Set(['ventas', 'clientes', 'caja']);
 // El historial de abonos crece para siempre. En memoria se sostiene solo una
-// ventana de los más recientes, que cubre lo que miran Caja (la sesión abierta)
-// y el detalle de un cliente. El historial completo se pide únicamente cuando
+// ventana de los más recientes. Caja ya no depende de ella —consulta los abonos
+// de su sesión— y el detalle de un cliente tiene su propia consulta, así que la
+// ventana solo cubre búsquedas puntuales. El historial completo se pide cuando
 // una pantalla lo necesita de verdad, y ahí queda cargado.
-const PAYMENTS_WINDOW = 3000;
+const PAYMENTS_WINDOW = 500;
 let _paymentsStale = false;
 async function reloadPayments({ force = false, complete = false } = {}) {
   const active = (typeof page !== 'undefined') ? page : null;
@@ -471,20 +472,12 @@ async function ensurePaymentsComplete() {
   return reloadPayments({ force: true, complete: true });
 }
 
-let salesLoadGeneration = 0;
-async function reloadSales(filters = {}) {
-  // Para el historial completo (range:'all') subimos el límite por defecto:
-  // antes se cortaba en 200 y el usuario no veía todas sus ventas. El render
-  // incremental del frontend evita que traer más filas congele la UI.
-  // El backend soporta offset para paginar más allá de este tope si hiciera falta.
-  const f = { ...filters };
-  if ((f.range === 'all' || !f.range) && f.limit == null) f.limit = 1000;
-  const generation = ++salesLoadGeneration;
-  const sales = await window.api.sales.getAll(f) || [];
-  // Normalizar campos SQLite → compatibilidad con módulos
-  const normalized = sales.map(s => ({
+// Alias de compatibilidad que espera el resto de los módulos. Vive aparte
+// porque Caja y Dashboard consultan sus propias ventas y tienen que verlas
+// exactamente igual que el historial de Ventas.
+function normalizeSaleRow(s) {
+  return {
     ...s,
-    // Aliases para compatibilidad
     clientId:     s.customer_id    || s.clientId,
     clientName:   s.customer_name  || s.clientName  || 'Consumidor Final',
     clientCedula: s.customer_rnc   || s.clientCedula || '',
@@ -498,10 +491,23 @@ async function reloadSales(filters = {}) {
     disc:         s.discount_pct   || s.disc         || 0,
     discAmt:      s.discount_amt   || s.discAmt      || 0,
     cajaId:       s.cash_session_id|| s.cajaId,
-    // items_summary viene como "Producto x2 | Otro x1"
-    // lo parseamos a array básico si no hay items cargados
+    // items_summary viene como "Producto x2 | Otro x1"; se conserva el arreglo
+    // real cuando el backend ya lo trajo.
     items: s.items || [],
-  }));
+  };
+}
+
+let salesLoadGeneration = 0;
+async function reloadSales(filters = {}) {
+  // Para el historial completo (range:'all') subimos el límite por defecto:
+  // antes se cortaba en 200 y el usuario no veía todas sus ventas. El render
+  // incremental del frontend evita que traer más filas congele la UI.
+  // El backend soporta offset para paginar más allá de este tope si hiciera falta.
+  const f = { ...filters };
+  if ((f.range === 'all' || !f.range) && f.limit == null) f.limit = 1000;
+  const generation = ++salesLoadGeneration;
+  const sales = await window.api.sales.getAll(f) || [];
+  const normalized = sales.map(normalizeSaleRow);
 
   // Si el usuario cambió de período mientras esperaba, la respuesta anterior
   // no puede sobrescribir la página más reciente ni provocar un repintado doble.
