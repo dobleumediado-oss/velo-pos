@@ -1604,7 +1604,7 @@ async function guardarEdicionUsuario(id) {
   window._cachedUsers = await window.api.users.getAll() || [];
   closeModal();
   toast(`✓ Usuario ${name} actualizado`);
-  renderConfiguracion(document.getElementById('page'));
+  veloRepaint(() => renderConfiguracion(document.getElementById('page')));
 }
 
 async function toggleUsuario(u) {
@@ -1614,7 +1614,7 @@ async function toggleUsuario(u) {
       if (!result.ok) { toast(result.error||'Error', 'err'); return; }
       window._cachedUsers = await window.api.users.getAll() || [];
       toast(`✓ Usuario ${u.active?'desactivado':'activado'}`);
-      renderConfiguracion(document.getElementById('page'));
+      veloRepaint(() => renderConfiguracion(document.getElementById('page')));
     },
     u.active ? 'Desactivar' : 'Activar',
     u.active ? 'btn-red' : 'btn-green'
@@ -1628,7 +1628,7 @@ async function hacerBackupManual() {
   const result = await window.api.backup.create({ requestUserId: _cfgUser().id });
   if (result.ok) {
     toast(`✓ Backup creado`);
-    renderConfiguracion(document.getElementById('page'));
+    veloRepaint(() => renderConfiguracion(document.getElementById('page')));
   } else {
     toast(result.error||'Error al crear backup', 'err');
   }
@@ -1711,7 +1711,7 @@ async function crearCajero() {
   window._cachedUsers = await window.api.users.getAll() || [];
   closeModal();
   toast(`✓ ${role==='admin'?'Administrador':'Cajero'} ${name} creado`);
-  renderConfiguracion(document.getElementById('page'));
+  veloRepaint(() => renderConfiguracion(document.getElementById('page')));
 }
 
 // ══════════════════════════════════════════════
@@ -1864,7 +1864,7 @@ function previewLogo(input, slot = '') {
 // registró su hook lo usa; si no, cae a re-renderizar Configuración.
 function _appearanceHostRefresh() {
   if (typeof window._appearanceRefresh === 'function') { window._appearanceRefresh(); return; }
-  renderConfiguracion(document.getElementById('page'));
+  veloRepaint(() => renderConfiguracion(document.getElementById('page')));
 }
 
 async function guardarLogo(slot = '') {
@@ -2103,7 +2103,7 @@ async function activarLicencia() {
   const result = await window.api.license.activate({ licenseKey: key, requestUserId: user?.id });
   if (result.ok) {
     toast('✓ Licencia activada correctamente');
-    renderConfiguracion(document.getElementById('page'));
+    veloRepaint(() => renderConfiguracion(document.getElementById('page')));
   } else {
     toast(result.error || 'Licencia inválida', 'err');
   }

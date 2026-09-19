@@ -406,7 +406,7 @@ async function guardarOrdenCompra() {
 
   closeModal();
   toast(`✓ OC-${String(result.poId).padStart(4,'0')} creada`, 'ok');
-  renderCompras(document.getElementById('page'));
+  veloRepaint(() => renderCompras(document.getElementById('page')));
 }
 
 // ── Recibir mercancía ─────────────────────────
@@ -658,7 +658,7 @@ async function confirmarRecepcion(poId) {
   closeModal();
   const extraMsg = recvResult.landedCost ? ` · Gastos: ${fmt(recvResult.landedCost)}` : '';
   toast(`✓ Mercancía recibida${extraMsg} — OC ${recvResult.status === 'recibido' ? 'completada' : 'parcial'}`, 'ok');
-  renderCompras(document.getElementById('page'));
+  veloRepaint(() => renderCompras(document.getElementById('page')));
 }
 
 async function cancelarOrden(id) {
@@ -666,7 +666,7 @@ async function cancelarOrden(id) {
   if (!r.ok) { toast(r.error || 'Error', 'err'); return; }
   closeModal();
   toast('Orden cancelada');
-  renderCompras(document.getElementById('page'));
+  veloRepaint(() => renderCompras(document.getElementById('page')));
 }
 
 // ══════════════════════════════════════════════
@@ -792,7 +792,7 @@ async function guardarProveedor(id) {
 
   closeModal();
   toast(id ? '✓ Proveedor actualizado' : '✓ Proveedor registrado', 'ok');
-  renderCompras(document.getElementById('page'));
+  veloRepaint(() => renderCompras(document.getElementById('page')));
 }
 
 async function eliminarProveedor(id) {
@@ -800,7 +800,7 @@ async function eliminarProveedor(id) {
   if (!result.ok) { toast(result.error || 'Error', 'err'); return; }
   closeModal();
   toast('Proveedor eliminado');
-  renderCompras(document.getElementById('page'));
+  veloRepaint(() => renderCompras(document.getElementById('page')));
 }
 
 // ══════════════════════════════════════════════
@@ -955,6 +955,6 @@ function techPrivatePurchaseDocument(row){
   </main></body></html>`;
 }
 
-async function verCompraParticular(id){const res=await window.api.techPrivatePurchases.getById({id,requestUserId:user?.id});if(!res?.ok||!res.data)return toast(res?.error||'Compra no encontrada','err');const row=res.data;openModal(`<div class="modal-title">${techPurchaseEsc(row.number)}</div><div class="modal-sub">Contrato y entrada de inventario vinculados · unidad #${row.product_unit_id}</div><div class="g2" style="margin-top:14px"><div class="card" style="padding:12px"><div class="tb">Vendedor</div><div>${techPurchaseEsc(row.seller_name)}</div><div class="ts">${techPurchaseEsc(row.seller_document)} · ${techPurchaseEsc(row.seller_phone)}</div></div><div class="card" style="padding:12px"><div class="tb">Equipo</div><div>${techPurchaseEsc(row.product_name)}</div><div class="ts">${techPurchaseEsc(row.imei||row.serial)} · ${techPurchaseEsc(row.unit_status)}</div></div></div><div class="alrt b"><div class="alrt-dot b"></div><div class="alrt-sub">El contrato utiliza una hoja A4 completa con datos, condiciones y espacios amplios para las firmas de ambas partes.</div></div><div class="modal-foot"><button class="btn btn-out" onclick="renderCompras(document.getElementById('page'))">Atrás</button><button class="btn btn-dark" id="tpp-print">${svg('printer')} Imprimir contrato A4</button></div>`);document.getElementById('tpp-print').onclick=()=>printHTML(techPrivatePurchaseDocument(row),'reporte');}
+async function verCompraParticular(id){const res=await window.api.techPrivatePurchases.getById({id,requestUserId:user?.id});if(!res?.ok||!res.data)return toast(res?.error||'Compra no encontrada','err');const row=res.data;openModal(`<div class="modal-title">${techPurchaseEsc(row.number)}</div><div class="modal-sub">Contrato y entrada de inventario vinculados · unidad #${row.product_unit_id}</div><div class="g2" style="margin-top:14px"><div class="card" style="padding:12px"><div class="tb">Vendedor</div><div>${techPurchaseEsc(row.seller_name)}</div><div class="ts">${techPurchaseEsc(row.seller_document)} · ${techPurchaseEsc(row.seller_phone)}</div></div><div class="card" style="padding:12px"><div class="tb">Equipo</div><div>${techPurchaseEsc(row.product_name)}</div><div class="ts">${techPurchaseEsc(row.imei||row.serial)} · ${techPurchaseEsc(row.unit_status)}</div></div></div><div class="alrt b"><div class="alrt-dot b"></div><div class="alrt-sub">El contrato utiliza una hoja A4 completa con datos, condiciones y espacios amplios para las firmas de ambas partes.</div></div><div class="modal-foot"><button class="btn btn-out" onclick="veloRepaint(() => renderCompras(document.getElementById('page')))">Atrás</button><button class="btn btn-dark" id="tpp-print">${svg('printer')} Imprimir contrato A4</button></div>`);document.getElementById('tpp-print').onclick=()=>printHTML(techPrivatePurchaseDocument(row),'reporte');}
 
 async function abrirConfigCompraParticular(){const res=await window.api.techPrivatePurchases.getConfig({requestUserId:user?.id});if(!res?.ok)return toast(res?.error,'err');openModal(`<div class="modal-title">Términos de compra y garantía del taller</div><div class="modal-sub">Los contratos nuevos guardan una copia inmutable de estos términos. Los anteriores no cambian.</div><div class="fg" style="margin-top:14px"><label class="lbl">Términos predeterminados para compra a particulares</label><textarea class="inp" id="tpp-terms" rows="10">${techPurchaseEsc(res.data.terms)}</textarea></div><div class="fg"><label class="lbl">Garantía predeterminada del servicio técnico (días)</label><input class="inp" id="tpp-warranty-default" type="number" min="0" max="3650" value="${Number(res.data.default_warranty_days)||30}"></div><div class="alrt a"><div class="alrt-dot a"></div><div class="alrt-sub">Estos términos son una base operativa y no sustituyen la revisión de un abogado según las políticas del negocio y la legislación aplicable.</div></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="tpp-config-save">Guardar</button></div>`,'modal-lg');document.getElementById('tpp-config-save').onclick=async()=>{const saved=await window.api.techPrivatePurchases.saveConfig({requestUserId:user?.id,terms:document.getElementById('tpp-terms').value,default_warranty_days:Number(document.getElementById('tpp-warranty-default').value)||0});if(!saved?.ok)return toast(saved?.error||'No se pudo guardar','err');toast('✓ Términos actualizados para contratos futuros','ok');closeModal();};}

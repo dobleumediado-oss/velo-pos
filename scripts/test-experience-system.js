@@ -84,4 +84,83 @@ assert(doctor.includes('Canales de impresión'), 'El diagnóstico debe comunicar
   '.login-pass-toggle',
 ].forEach(selector => assert(styles.includes(selector), `Falta estilo global: ${selector}`));
 
+// ── Cambio de rol en el acceso, sin reconstruir la vista ──────────────────────
+// Reconstruir toda la pantalla para marcar un botón devolvía el reloj a
+// 00:00:00 y vaciaba la fecha, lo que cambiaba la altura del bloque y movía la
+// tarjeta entera: el salto que se veía al pulsar Supervisor.
+{
+  const from = app.indexOf('function buildLoginUserField()');
+  const to = app.indexOf('  function build() {', from);
+  assert(from > 0 && to > from, 'el cambio de rol del acceso sigue en app.js');
+
+  const nodes = new Map();
+  const makeNode = (id) => {
+    const node = {
+      id, className: '', textContent: '', innerHTML: '', style: {}, children: [],
+      focused: false,
+      classList: {
+        toggle(name, on) {
+          const has = node.className.split(' ').includes(name);
+          if (on === true && !has) node.className = `${node.className} ${name}`.trim();
+          if (on === false && has) {
+            node.className = node.className.split(' ').filter(c => c !== name).join(' ');
+          }
+        },
+      },
+      appendChild(child) { node.children.push(child); return child; },
+      replaceChild(next, prev) {
+        const at = node.children.indexOf(prev);
+        if (at >= 0) node.children[at] = next; else node.children.push(next);
+        nodes.set('luser', next);
+        return prev;
+      },
+      focus() { node.focused = true; },
+    };
+    nodes.set(id, node);
+    return node;
+  };
+
+  ['lrole-cajero', 'lrole-admin', 'luser-label', 'luser-slot', 'lerr', 'login-clock-time']
+    .forEach(makeNode);
+  const firstField = makeNode('luser');
+  nodes.get('luser-slot').children.push(firstField);
+  nodes.get('lrole-cajero').className = 'role-btn on';
+  nodes.get('lrole-admin').className = 'role-btn';
+  nodes.get('login-clock-time').innerHTML = '04<span>:</span>04';
+
+  const context = {
+    selRole: 'cajero',
+    window: { _cachedUsers: [] },
+    document: { getElementById: (id) => nodes.get(id) || null },
+    h: (tag, attrs) => {
+      const node = makeNode(attrs && attrs.id ? attrs.id : `${tag}-nuevo`);
+      node.tag = tag;
+      return node;
+    },
+    currentRole: () => context.selRole,
+  };
+  vm.runInNewContext(
+    `${app.slice(from, to)}
+     this.setLoginRole = setLoginRole;
+     this.currentRole = () => selRole;`,
+    context
+  );
+
+  context.setLoginRole('admin');
+  assert(context.currentRole() === 'admin', 'el rol seleccionado cambia a Supervisor');
+  assert(nodes.get('lrole-admin').className.includes('on') &&
+    !nodes.get('lrole-cajero').className.includes('on'),
+    'el botón activo se traslada sin reconstruir la vista');
+  assert(nodes.get('luser-label').textContent === 'Email',
+    'la etiqueta del campo pasa a Email');
+  assert(nodes.get('luser').tag === 'input',
+    'el selector de cajeros se sustituye por el campo de correo');
+  assert(nodes.get('login-clock-time').innerHTML === '04<span>:</span>04',
+    'el reloj sobrevive al cambio de rol: no vuelve a 00:00:00 ni mueve la tarjeta');
+  assert(!app.includes("onclick: () => { selRole = 'admin'; build(); }"),
+    'el cambio de rol ya no reconstruye toda la pantalla de acceso');
+  assert(app.includes('_startLoginClock();\n    document.getElementById(\'lpass\')?.focus();'),
+    'el reloj arranca en el mismo cuadro en que se pinta el acceso');
+}
+
 console.log('✓ Experiencia transversal, recuperación, permisos y salud del sistema verificados');

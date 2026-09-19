@@ -73,7 +73,7 @@ function _cndRenderList(el, list) {
   ].forEach(m => {
     metrics.appendChild(h('div', {
       class: 'metric', style: { cursor: 'pointer', outline: _cndFilterStatus === m.k ? '2px solid var(--accent)' : 'none' },
-      onclick: () => { _cndFilterStatus = m.k; renderConduce(document.getElementById('page')); }
+      onclick: () => { _cndFilterStatus = m.k; veloRepaint(() => renderConduce(document.getElementById('page'))); }
     },
       h('div', { class: 'met-label' }, m.l),
       h('div', { class: 'met-val' }, String(m.v))
@@ -271,7 +271,7 @@ async function _cndTransition(id, status, data = {}) {
   if (!r.ok) { toast(r.error || 'No se pudo cambiar el estado', 'err'); return; }
   toast(`✓ Conduce ${_cndStLabel(status)}`);
   closeModal();
-  renderConduce(document.getElementById('page'));
+  veloRepaint(() => renderConduce(document.getElementById('page')));
 }
 
 function _cndDispatch(id) {
@@ -336,7 +336,7 @@ async function _cndDoCancel(id) {
   if (!r.ok) { toast(r.error || 'No se pudo anular', 'err'); return; }
   toast('✓ Conduce anulado');
   closeModal();
-  renderConduce(document.getElementById('page'));
+  veloRepaint(() => renderConduce(document.getElementById('page')));
 }
 
 // ── Convertir conduce a venta desde el POS ─────────────────────
@@ -712,7 +712,7 @@ async function _cndSave(id) {
   if (!r.ok) { toast(r.error || 'No se pudo guardar', 'err'); return; }
   toast(id ? '✓ Conduce actualizado' : `✓ Conduce ${r.data?.number || ''} creado`);
   closeModal();
-  await renderConduce(document.getElementById('page'));
+  await veloRepaint(() => renderConduce(document.getElementById('page')));
   // Al crear, abrir inmediatamente el documento final para imprimir, guardar o
   // preparar el PDF para WhatsApp sin obligar al usuario a buscarlo en la lista.
   if (!id && r.data?.id) _cndOpenDetail(r.data.id);

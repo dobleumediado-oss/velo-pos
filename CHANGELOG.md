@@ -9,6 +9,17 @@
 - Esto evita que un ID sensible al uso de mayúsculas deje de coincidir con la
   identidad real enviada por la terminal.
 
+### Acceso y módulos sin saltos (fase 6)
+
+- Cambiar entre Cajero y Supervisor en la pantalla de acceso reconstruía toda la
+  vista: el reloj volvía a 00:00:00, la fecha desaparecía y la tarjeta se movía.
+  Ahora solo cambian el botón activo, la etiqueta y el campo de usuario.
+- El reloj del acceso pinta su hora real en el mismo cuadro en que aparece, sin
+  el parpadeo previo.
+- El resto de los módulos —Bancos, Compras, Contabilidad, Vendedores, Comisiones,
+  Nómina, Conduces, Configuración, Reportes y Super Admin— también conservan la
+  posición del listado y el campo enfocado al repintarse.
+
 ### El historial de abonos deja de cargarse entero (fase 5)
 
 - En memoria se sostiene solo una ventana con los abonos más recientes. Caja y

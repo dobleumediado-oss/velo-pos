@@ -513,7 +513,7 @@ async function _renderBancosConcil(el) {
 
   const selRow = h('div', { style: { display: 'flex', gap: '10px', marginBottom: '14px', flexWrap: 'wrap', alignItems: 'flex-end' } });
   const sel = h('select', { class: 'inp', style: { maxWidth: '260px' },
-    onchange: (e) => { _bancosAcct = parseInt(e.target.value) || null; renderBancos(document.getElementById('page')); }
+    onchange: (e) => { _bancosAcct = parseInt(e.target.value) || null; veloRepaint(() => renderBancos(document.getElementById('page'))); }
   }, h('option', { value: '' }, '— Selecciona cuenta bancaria —'),
   ...cuentas.map(c => h('option', { value: c.id, ...(c.id === _bancosAcct ? { selected: true } : {}) }, c.name)));
   selRow.appendChild(h('div', null, h('label', { class: 'lbl', style: { marginBottom: '4px', display: 'block' } }, 'Cuenta'), sel));
@@ -523,7 +523,7 @@ async function _renderBancosConcil(el) {
     selRow.appendChild(h('button', { class: 'btn-ghost', onclick: async () => {
       const r = await window.api.bank.autoMatch({ accountId: _bancosAcct, requestUserId: user.id });
       toast(r?.ok ? `${r.matched} conciliados automáticamente` : (r?.error || 'Error'), r?.ok ? 's' : 'e');
-      renderBancos(document.getElementById('page'));
+      veloRepaint(() => renderBancos(document.getElementById('page')));
     } }, '🔗 Auto-conciliar'));
   }
   el.appendChild(selRow);
@@ -605,15 +605,15 @@ function _concilLineActions(l) {
   const box = h('div', { style: { display: 'flex', gap: '4px' } });
   if (l.status === 'conciliado') {
     box.appendChild(h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '3px 8px' },
-      onclick: async () => { const r = await window.api.bank.unmatch({ lineId: l.id, requestUserId: user.id }); r?.ok ? renderBancos(document.getElementById('page')) : toast(r?.error || 'Error', 'e'); } }, 'Desvincular'));
+      onclick: async () => { const r = await window.api.bank.unmatch({ lineId: l.id, requestUserId: user.id }); r?.ok ? veloRepaint(() => renderBancos(document.getElementById('page'))) : toast(r?.error || 'Error', 'e'); } }, 'Desvincular'));
   } else if (l.status === 'pendiente') {
     box.appendChild(h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '3px 8px' },
       onclick: () => _openManualMatchModal(l) }, 'Conciliar'));
     box.appendChild(h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '3px 8px', color: 'var(--muted2)' },
-      onclick: async () => { const r = await window.api.bank.ignoreLine({ lineId: l.id, ignore: true, requestUserId: user.id }); r?.ok ? renderBancos(document.getElementById('page')) : toast(r?.error || 'Error', 'e'); } }, 'Ignorar'));
+      onclick: async () => { const r = await window.api.bank.ignoreLine({ lineId: l.id, ignore: true, requestUserId: user.id }); r?.ok ? veloRepaint(() => renderBancos(document.getElementById('page'))) : toast(r?.error || 'Error', 'e'); } }, 'Ignorar'));
   } else if (l.status === 'ignorado') {
     box.appendChild(h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '3px 8px' },
-      onclick: async () => { const r = await window.api.bank.ignoreLine({ lineId: l.id, ignore: false, requestUserId: user.id }); r?.ok ? renderBancos(document.getElementById('page')) : toast(r?.error || 'Error', 'e'); } }, 'Restaurar'));
+      onclick: async () => { const r = await window.api.bank.ignoreLine({ lineId: l.id, ignore: false, requestUserId: user.id }); r?.ok ? veloRepaint(() => renderBancos(document.getElementById('page'))) : toast(r?.error || 'Error', 'e'); } }, 'Restaurar'));
   }
   return box;
 }
@@ -644,7 +644,7 @@ async function _openManualMatchModal(line) {
     const movementId = parseInt(document.getElementById('mm-mov').value) || null;
     if (!movementId) { toast('Selecciona un movimiento', 'e'); return; }
     const r = await window.api.bank.manualMatch({ lineId: line.id, movementId, requestUserId: user.id });
-    if (r?.ok) { toast('Conciliado', 's'); closeModal(); renderBancos(document.getElementById('page')); }
+    if (r?.ok) { toast('Conciliado', 's'); closeModal(); veloRepaint(() => renderBancos(document.getElementById('page'))); }
     else toast(r?.error || 'Error', 'e');
   };
 }
@@ -769,7 +769,7 @@ function _renderExtractoMapeo(parsed, accountId, getParsed) {
     if (res?.ok) {
       toast(`${res.inserted} líneas importadas${res.skipped ? ` · ${res.skipped} duplicadas/omitidas` : ''}`, 's');
       closeModal();
-      renderBancos(document.getElementById('page'));
+      veloRepaint(() => renderBancos(document.getElementById('page')));
     } else toast(res?.error || 'Error al importar', 'e');
   };
 }

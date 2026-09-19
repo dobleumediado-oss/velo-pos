@@ -1141,7 +1141,7 @@ async function saVacuum() {
   const result = await window.api.db.vacuum({ requestUserId: user?.id }).catch(() => ({ ok: false }));
   if (result?.ok) {
     toast('✓ Base de datos compactada correctamente');
-    renderSuperAdmin(document.getElementById('page'));
+    veloRepaint(() => renderSuperAdmin(document.getElementById('page')));
   } else {
     toast(result?.error || 'Error al ejecutar VACUUM', 'err');
   }
@@ -1190,7 +1190,7 @@ function saRevocarLicencia() {
         .catch(() => ({ ok: false }));
       if (result?.ok) {
         toast('✓ Licencia revocada — el sistema entrará en período de gracia');
-        renderSuperAdmin(document.getElementById('page'));
+        veloRepaint(() => renderSuperAdmin(document.getElementById('page')));
       } else {
         toast('Función disponible en próxima versión', 'w');
       }

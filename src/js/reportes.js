@@ -825,7 +825,7 @@ function renderAbonosContenido(el, d) {
           last.setMonth(last.getMonth() + 1);
           last.setDate(0);
           repDateTo = last.toISOString().split('T')[0];
-          await renderReportes(document.getElementById('page'));
+          await veloRepaint(() => renderReportes(document.getElementById('page')));
         }
       },
         h('div', { class: 'fxb', style: { marginBottom: '4px' } },

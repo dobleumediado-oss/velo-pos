@@ -194,7 +194,7 @@ async function nominaSaveCompensation(id) {
   const data = { ...seller, salary_amount:document.getElementById('nom-salary').value, payroll_frequency:document.getElementById('nom-frequency').value };
   const result = await window.api.salespeople.update({ id, data, requestUserId:user.id });
   if (!result?.ok) { toast(result?.error || 'No se pudo guardar la compensación','err'); return; }
-  closeModal(); toast('✓ Salario base actualizado'); await renderNomina(document.getElementById('page'));
+  closeModal(); toast('✓ Salario base actualizado'); await veloRepaint(() => renderNomina(document.getElementById('page')));
 }
 
 function nominaOpenPayroll() {
@@ -218,7 +218,7 @@ async function nominaGeneratePayroll() {
   const data = { frequency:document.getElementById('nom-pay-frequency').value, from:document.getElementById('nom-pay-from').value, to:document.getElementById('nom-pay-to').value, notes:document.getElementById('nom-pay-notes').value, receiptNotes:document.getElementById('nom-pay-receipt-notes').value };
   const result = await window.api.salespeople.generatePayroll({ data, requestUserId:user.id });
   if (!result?.ok) { toast(result?.error || 'No se pudo generar la nómina','err'); return; }
-  closeModal(); toast('✓ Borrador de nómina generado'); _nomTab='periodos'; await renderNomina(document.getElementById('page'));
+  closeModal(); toast('✓ Borrador de nómina generado'); _nomTab='periodos'; await veloRepaint(() => renderNomina(document.getElementById('page')));
 }
 
 function nominaOpenQuickPay(selectedId = null) {
@@ -259,7 +259,7 @@ async function nominaConfirmQuickPay() {
   const detail = await window.api.salespeople.getPayrollById({ id:result.id });
   toast('✓ Pago registrado; recibo listo para imprimir');
   if (detail?.ok && detail.data?.items?.[0]) nominaPrintReceipts(detail.data, detail.data.items[0].id);
-  await renderNomina(document.getElementById('page'));
+  await veloRepaint(() => renderNomina(document.getElementById('page')));
 }
 
 function _nomReceiptSettings(override = null) {
@@ -342,13 +342,13 @@ async function nominaSavePayrollItems() {
     const result = await window.api.salespeople.updatePayrollItem({ id, data:{ bonusAmount:input.value, deductionAmount:deduction?.value||0 }, requestUserId:user.id });
     if (!result?.ok) { toast(result?.error || 'No se pudieron guardar los ajustes','err'); return; }
   }
-  closeModal(); toast('✓ Ajustes guardados'); await renderNomina(document.getElementById('page'));
+  closeModal(); toast('✓ Ajustes guardados'); await veloRepaint(() => renderNomina(document.getElementById('page')));
 }
 
 async function nominaApprovePayroll(id) {
   const result = await window.api.salespeople.approvePayroll({ id, requestUserId:user.id });
   if (!result?.ok) { toast(result?.error || 'No se pudo aprobar la nómina','err'); return; }
-  toast('✓ Nómina aprobada y lista para pagar'); await renderNomina(document.getElementById('page'));
+  toast('✓ Nómina aprobada y lista para pagar'); await veloRepaint(() => renderNomina(document.getElementById('page')));
 }
 
 function nominaPayPayroll(id) {
@@ -369,5 +369,5 @@ async function nominaConfirmPayrollPay(id) {
   if (!result?.ok) { toast(result?.error || 'No se pudo completar el pago','err'); return; }
   closeModal(); toast(`✓ Nómina pagada · ${result.paid} gasto(s) generado(s)`);
   if (shouldPrint) nominaPrintReceipts(id);
-  await renderNomina(document.getElementById('page'));
+  await veloRepaint(() => renderNomina(document.getElementById('page')));
 }

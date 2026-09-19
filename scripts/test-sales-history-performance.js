@@ -325,9 +325,19 @@ try {
 
   const cajaSource = fs.readFileSync(path.join(__dirname, '../src/js/caja.js'), 'utf8');
   const ventasSource = fs.readFileSync(path.join(__dirname, '../src/js/ventas.js'), 'utf8');
-  ok(!/(?<!veloRepaint\(\(\) => )renderCaja\(document\.getElementById\('page'\)\)/.test(cajaSource) &&
-    !/(?<!veloRepaint\(\(\) => )renderVentas\(document\.getElementById\('page'\)\)/.test(ventasSource),
-    'Caja y Ventas repintan siempre a través del helper que conserva la posición');
+  // Todo módulo que reconstruye su pantalla debe pasar por el helper. El POS y
+  // el asistente quedan fuera a propósito: manejan su propio foco.
+  const repaintExceptions = new Set(['pos.js', 'wizard.js', 'data.js']);
+  const jsDir = path.join(__dirname, '../src/js');
+  const unwrapped = fs.readdirSync(jsDir)
+    .filter(file => file.endsWith('.js') && !repaintExceptions.has(file))
+    .filter(file => /(?<!veloRepaint\(\(\) => )render[A-Z][a-zA-Z]*\(document\.getElementById\('page'\)\)/
+      .test(fs.readFileSync(path.join(jsDir, file), 'utf8')));
+  ok(unwrapped.length === 0,
+    `todos los módulos repintan a través del helper que conserva la posición${unwrapped.length ? ' · faltan: ' + unwrapped.join(', ') : ''}`);
+  ok(cajaSource.includes('veloRepaint(() => renderCaja') &&
+    ventasSource.includes('veloRepaint(() => renderVentas'),
+    'Caja y Ventas conservan scroll y foco al confirmar una acción');
 
   console.log('\n== Aviso de cambio sin trabajo duplicado ==');
   const trackFrom = dataSource.indexOf('const _reloadInFlight = new Map();');

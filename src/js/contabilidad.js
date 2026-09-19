@@ -133,9 +133,9 @@ async function _contRenderDash(el) {
 
   // Accesos rápidos
   el.appendChild(h('div', { style: { display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '8px' } },
-    h('button', { class: 'btn', onclick: () => { _contTab = 'asientos'; renderContabilidad(document.getElementById('page')); } }, '+ Nuevo asiento'),
-    h('button', { class: 'btn-ghost', onclick: () => { _contTab = 'resultados'; renderContabilidad(document.getElementById('page')); } }, 'Estado de Resultados'),
-    h('button', { class: 'btn-ghost', onclick: () => { _contTab = 'general'; renderContabilidad(document.getElementById('page')); } }, 'Balance General'),
+    h('button', { class: 'btn', onclick: () => { _contTab = 'asientos'; veloRepaint(() => renderContabilidad(document.getElementById('page'))); } }, '+ Nuevo asiento'),
+    h('button', { class: 'btn-ghost', onclick: () => { _contTab = 'resultados'; veloRepaint(() => renderContabilidad(document.getElementById('page'))); } }, 'Estado de Resultados'),
+    h('button', { class: 'btn-ghost', onclick: () => { _contTab = 'general'; veloRepaint(() => renderContabilidad(document.getElementById('page'))); } }, 'Balance General'),
     h('button', { class: 'btn-ghost',
       onclick: async () => {
         const r = await window.api.accounting.syncHistorical({ requestUserId: user.id });
@@ -172,7 +172,7 @@ async function _contRenderDash(el) {
         h('div', { style: { textAlign: 'right', flexShrink: 0 } },
           h('div', { style: { fontSize: '12px', fontWeight: 800, color: 'var(--accent)' } }, fmt(e.total_debit || 0)),
           h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '3px 8px', marginTop: '4px' },
-            onclick: () => { _contTab = 'asientos'; renderContabilidad(document.getElementById('page')); } }, 'Ver asiento')
+            onclick: () => { _contTab = 'asientos'; veloRepaint(() => renderContabilidad(document.getElementById('page'))); } }, 'Ver asiento')
         )
       ));
     });
@@ -1428,7 +1428,7 @@ function _openActivoModal() {
     if (!(data.cost > 0)) { toast('El costo debe ser mayor a cero', 'e'); return; }
     if (data.salvage_value >= data.cost) { toast('El valor residual debe ser menor al costo', 'e'); return; }
     const r = await window.api.assets.create({ data, requestUserId: user.id });
-    if (r?.ok) { toast('Activo registrado', 's'); closeModal(); renderContabilidad(document.getElementById('page')); }
+    if (r?.ok) { toast('Activo registrado', 's'); closeModal(); veloRepaint(() => renderContabilidad(document.getElementById('page'))); }
     else toast(r?.error || 'Error', 'e');
   };
 }
@@ -1457,7 +1457,7 @@ function _openDepreciarModal() {
     const r = await window.api.assets.runDepreciation({ period, requestUserId: user.id });
     if (r?.ok) {
       toast(`${r.posted} activos depreciados (RD$${fmt(r.total)})${r.failed ? ` · ${r.failed} fallidos` : ''}`, r.failed ? 'w' : 's');
-      closeModal(); renderContabilidad(document.getElementById('page'));
+      closeModal(); veloRepaint(() => renderContabilidad(document.getElementById('page')));
     } else toast(r?.error || 'Error', 'e');
   };
 }
@@ -1467,7 +1467,7 @@ async function _bajaActivo(a) {
   if (reason === null) return;
   if (!reason.trim()) { toast('El motivo es obligatorio', 'e'); return; }
   const r = await window.api.assets.dispose({ id: a.id, reason, requestUserId: user.id });
-  if (r?.ok) { toast('Activo dado de baja', 's'); renderContabilidad(document.getElementById('page')); }
+  if (r?.ok) { toast('Activo dado de baja', 's'); veloRepaint(() => renderContabilidad(document.getElementById('page'))); }
   else toast(r?.error || 'Error', 'e');
 }
 

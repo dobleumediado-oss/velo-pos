@@ -2239,7 +2239,7 @@ async function confirmarAnulacion(saleId, registerAgain = false) {
     routeTo('pos');
     return;
   }
-  if (result.isReturn) renderDevoluciones(document.getElementById('page'));
+  if (result.isReturn) veloRepaint(() => renderDevoluciones(document.getElementById('page')));
   else veloRepaint(() => renderVentas(document.getElementById('page')));
   ventasRefreshAfterMutation({
     range: result.isReturn ? 'all' : ventasRange,
@@ -2248,7 +2248,7 @@ async function confirmarAnulacion(saleId, registerAgain = false) {
     onDone: () => {
       if (typeof page === 'undefined') return;
       if (result.isReturn && page === 'devoluciones') {
-        renderDevoluciones(document.getElementById('page'));
+        veloRepaint(() => renderDevoluciones(document.getElementById('page')));
       } else if (!result.isReturn && page === 'ventas') {
         veloRepaint(() => renderVentas(document.getElementById('page')));
       }
@@ -3898,7 +3898,7 @@ async function procesarDevolucion(originalSale, items) {
         toast(`⚠ El cliente ya había pagado de más por esta factura — excedente de ${fmt(result.overpayment)} a revisar manualmente (reembolso o crédito)`, 'w');
       }
       closeModal();
-      renderDevoluciones(document.getElementById('page'));
+      veloRepaint(() => renderDevoluciones(document.getElementById('page')));
     },
     'Confirmar Devolución',
     'btn-red'

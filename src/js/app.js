@@ -755,6 +755,60 @@ function renderLogin() {
     );
   }
 
+  // Cambiar de rol solo afecta a tres cosas: qué botón está activo, la etiqueta
+  // del campo y el propio campo de usuario. Reconstruir toda la vista por eso
+  // destruía el reloj —que volvía a 00:00:00 y perdía la fecha, moviendo la
+  // card— y obligaba al navegador a rasterizar de nuevo el desenfoque de la
+  // tarjeta. Ese era el salto al pulsar Supervisor.
+  function buildLoginUserField() {
+    if (selRole !== 'cajero') {
+      return h('input', { class: 'inp', id: 'luser', type: 'email', placeholder: 'supervisor@velopos.do' });
+    }
+    const cajeros = (window._cachedUsers || []).filter(u => u.role === 'cajero' && u.active);
+    const sel = h('select', { class: 'inp', id: 'luser' });
+    if (!cajeros.length) {
+      const op = document.createElement('option');
+      op.value = 'caja@velopos.do';
+      op.textContent = 'Cajero';
+      sel.appendChild(op);
+    } else {
+      cajeros.forEach(u => {
+        const op = document.createElement('option');
+        op.value = u.email;
+        op.textContent = u.name;
+        sel.appendChild(op);
+      });
+    }
+    return sel;
+  }
+
+  function setLoginRole(role) {
+    if (selRole === role) return;
+    selRole = role;
+    const cajeroBtn = document.getElementById('lrole-cajero');
+    const adminBtn = document.getElementById('lrole-admin');
+    if (cajeroBtn) {
+      cajeroBtn.classList.toggle('on', role === 'cajero');
+      cajeroBtn.style.opacity = role === 'cajero' ? '' : '0.55';
+    }
+    if (adminBtn) {
+      adminBtn.classList.toggle('on', role === 'admin');
+      adminBtn.style.opacity = role === 'admin' ? '' : '0.55';
+    }
+    const label = document.getElementById('luser-label');
+    if (label) label.textContent = role === 'cajero' ? 'Usuario' : 'Email';
+    const slot = document.getElementById('luser-slot');
+    if (slot) {
+      const previous = document.getElementById('luser');
+      const field = buildLoginUserField();
+      if (previous) slot.replaceChild(field, previous);
+      else slot.appendChild(field);
+      if (typeof field.focus === 'function') field.focus();
+    }
+    const error = document.getElementById('lerr');
+    if (error) error.innerHTML = '';
+  }
+
   function build() {
     root.innerHTML = '';
     const wrap = h('div', { class: 'login-wrap', style: { width:'100%', height:'100%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:'20px' } },
@@ -795,17 +849,20 @@ function renderLogin() {
         // Selector de rol
         h('div', { class: 'role-row', style: { marginBottom: '16px', marginTop: '16px' } },
           h('div', {
+            id: 'lrole-cajero',
             class: `role-btn ${selRole === 'cajero' ? 'on' : ''}`,
-            onclick: () => { selRole = 'cajero'; build(); }
+            style: { opacity: selRole === 'cajero' ? '' : '0.55' },
+            onclick: () => setLoginRole('cajero')
           },
             h('div', { class: 'role-icon', style: { background: 'var(--blue)' }, html: svg('cash') }),
             h('div', { class: 'role-lbl' }, 'Cajero'),
             h('div', { class: 'role-sub' }, 'Punto de venta')
           ),
           h('div', {
+            id: 'lrole-admin',
             class: `role-btn ${selRole === 'admin' ? 'on' : ''}`,
-            style: { opacity: '0.55' },
-            onclick: () => { selRole = 'admin'; build(); }
+            style: { opacity: selRole === 'admin' ? '' : '0.55' },
+            onclick: () => setLoginRole('admin')
           },
             h('div', { class: 'role-icon', style: { background: 'var(--ink3)' }, html: svg('settings') }),
             h('div', { class: 'role-lbl', style: { fontSize: '11px', color: 'var(--muted)' } }, 'Supervisor'),
@@ -816,31 +873,12 @@ function renderLogin() {
         // Error placeholder
         h('div', { id: 'lerr' }),
 
-        // Campo usuario
+        // Campo usuario — la ranura se conserva y solo cambia su contenido
         h('div', { class: 'fg' },
-          h('label', { class: 'lbl' }, selRole === 'cajero' ? 'Usuario' : 'Email'),
-          h('div', { class: 'inp-ic' },
+          h('label', { class: 'lbl', id: 'luser-label' }, selRole === 'cajero' ? 'Usuario' : 'Email'),
+          h('div', { class: 'inp-ic', id: 'luser-slot' },
             h('div', { class: 'ic', html: svg('user') }),
-            selRole === 'cajero'
-              ? (() => {
-                  const cajeros = (window._cachedUsers || []).filter(u => u.role === 'cajero' && u.active);
-                  const sel = h('select', { class: 'inp', id: 'luser' });
-                  if (!cajeros.length) {
-                    const op = document.createElement('option');
-                    op.value = 'caja@velopos.do';
-                    op.textContent = 'Cajero';
-                    sel.appendChild(op);
-                  } else {
-                    cajeros.forEach(u => {
-                      const op = document.createElement('option');
-                      op.value = u.email;
-                      op.textContent = u.name;
-                      sel.appendChild(op);
-                    });
-                  }
-                  return sel;
-                })()
-              : h('input', { class: 'inp', id: 'luser', type: 'email', placeholder: 'supervisor@velopos.do' })
+            buildLoginUserField()
           )
         ),
 
@@ -860,10 +898,10 @@ function renderLogin() {
       )
     );
     root.appendChild(wrap);
-    setTimeout(() => {
-      document.getElementById('lpass')?.focus();
-      _startLoginClock();
-    }, 50);
+    // Sin esperar: el reloj pinta su valor real en el mismo cuadro, así no se
+    // ve 00:00:00 ni desaparece la fecha, que es lo que movía la tarjeta.
+    _startLoginClock();
+    document.getElementById('lpass')?.focus();
   }
 
   // Control de intentos de login
