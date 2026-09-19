@@ -492,8 +492,10 @@ try {
     'PDF y Excel reúnen el filtro completo por lotes sin repintar miles de filas');
 
   const inv = fs.readFileSync(path.join(__dirname, '../src/js/inventario.js'), 'utf8');
+  // El cálculo vive en invPageForFocus (probado arriba con un catálogo de 200);
+  // aquí solo se confirma que la tabla lo usa al pintar.
   ok(inv.includes('function invMatchesFilters') && inv.includes('invFocusProductId') &&
-    inv.includes('invPage = Math.floor(focusIdx / pageSize) + 1'),
+    inv.includes('invPage = invPageForFocus(prods, pageSize, invFocusProductId, invPage)'),
     'Inventario salta a la página del producto guardado en vez de esconderlo');
   ok(inv.includes('function refreshInvHeaderStats') && inv.includes("id: 'inv-header-stats'"),
     'las cifras de la cabecera se actualizan sin salir y volver al módulo');
