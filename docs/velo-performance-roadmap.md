@@ -214,7 +214,7 @@ Si una operación supera el límite, se registra qué consulta o render fue lent
 
 Diagnóstico medido sobre una copia de una base real (2,524 facturas, 2,710
 abonos, 1,246 productos, 317 clientes) ejecutando los repositorios bajo el
-runtime de Electron. Seis fases, cada una con su commit y su regresión.
+runtime de Electron. Ocho fases, cada una con su commit y su regresión.
 
 ### Fase 1 — Consultas por fila (N+1)
 
@@ -272,9 +272,38 @@ runtime de Electron. Seis fases, cada una con su commit y su regresión.
 - Los 51 repintados de módulo restantes pasan por `veloRepaint`. El POS y el
   asistente quedan fuera a propósito: manejan su propio foco.
 
+### Fase 7 — Cada pantalla con su propia fuente
+
+- `DB.sales` y `DB.payments` eran cachés compartidas con cuatro consumidores de
+  necesidades distintas: la página de Ventas, la sesión de Caja, el día del panel
+  y algunas búsquedas. **Quien las cargara de último decidía lo que veían los
+  demás**, y por eso no se podían acotar. El resumen de una caja ya cerrada casi
+  nunca encontraba sus ventas ahí.
+- Caja consulta ahora sus ventas y sus abonos por el identificador de la sesión
+  (`getSessionSales` y el nuevo `getSessionPayments`), y el panel pide las ventas
+  del día. Mientras llega su consulta ambos usan lo que haya en memoria: nunca
+  peor que antes, exacto en cuanto responde.
+- Con las cachés libres, el refresco tras una mutación en Ventas trae la página
+  visible en vez de 1,000 documentos, y la ventana de abonos baja a 500.
+
+| Medición | Antes | Después |
+|---|---:|---:|
+| Refresco completo tras una mutación | ~90 ms | **~27 ms** |
+| Ventas que necesita Caja | dependía de otra pantalla | **0.3 ms** |
+| Abonos que necesita Caja | filtrado de 2,710 en memoria | **0.3 ms** |
+
+### Fase 8 — Configuración y la excepción del POS
+
+- Activar una licencia, guardar o eliminar el logo repintaba Configuración desde
+  el principio. Esos tres puntos vivían en `wizard.js` y quedaron fuera de la
+  fase 6 por el nombre del archivo, pero no son pasos de un asistente.
+- El Punto de Venta se mantiene fuera del helper **por una razón verificada**:
+  tras cobrar limpia la factura y `renderPOS` devuelve el foco al buscador para
+  el siguiente escaneo. Restaurar el foco anterior desde afuera pelearía con eso.
+
 ### Verificación
 
-- `npm run test:sales-history-performance` pasó de 14 a **44 aserciones**. Entre
+- `npm run test:sales-history-performance` pasó de 14 a **45 aserciones**. Entre
   ellas, tres cuentan consultas reales interceptando `db.prepare`: **3 para 400
   abonos** y **5 para 122 clientes** —una regresión al patrón N+1 falla la
   prueba—. Otras comprueban que la caché de tablas no congela una ausencia, que
@@ -293,17 +322,26 @@ runtime de Electron. Seis fases, cada una con su commit y su regresión.
   botón activo se traslada, que el campo pasa a correo y que el reloj **no**
   vuelve a `00:00:00`.
 
-### Pendiente de esta línea
+- `test:cash-income` comprueba que Caja consulta su sesión y que el panel no
+  depende de la colección compartida; una regresión a `DB.sales`/`DB.payments`
+  para cuadrar falla la prueba.
 
-- Repintado por fila: los módulos siguen reconstruyendo su pantalla completa;
-  esta línea los hizo inocuos —sin salto ni pérdida de foco— pero no eliminó el
-  trabajo de DOM. Inventario ya es la excepción: parchea la fila.
-- El POS y el asistente de configuración quedan fuera del helper por manejar su
-  propio foco; si alguna vez saltan, hay que resolverlo con su propia lógica.
-- Productos y clientes siguen cargándose completos en memoria. Con 1,246 y 317
-  no molesta; conviene paginarlos antes de las ~20,000 referencias.
-- El costo restante de un refresco tras mutación es ~91 ms cuando la pantalla
-  necesita ventas, productos y clientes a la vez.
+### Pendiente de esta línea, con su disparador
+
+Ninguno de estos es urgente hoy. Se anota **cuándo** dejarán de serlo, para no
+optimizar antes de tiempo ni descubrirlo tarde.
+
+- **Catálogo y clientes completos en memoria** — 8.8 ms y 3.4 ms medidos con
+  1,246 productos y 317 clientes. El POS busca sobre el catálogo en memoria, así
+  que paginarlo exige primero mover esa búsqueda al backend. *Disparador:
+  ~20,000 referencias, o si `products.getAll` pasa de 50 ms.*
+- **Repintado por fila** — los módulos siguen reconstruyendo su pantalla; la
+  línea los hizo inocuos —sin salto ni pérdida de foco— pero no eliminó el
+  trabajo de DOM. Con 100 filas por página ese trabajo no se percibe. Inventario
+  es la excepción: parchea la fila. *Disparador: una tabla que supere las ~300
+  filas visibles o un repintado que se note al confirmar.*
+- **Búsqueda en memoria de Inventario** — filtra el catálogo completo por
+  teclazo. Aceptable hoy; misma frontera que el punto anterior.
 
 ## Ronda Conciliación de correcciones heredadas — 15 de septiembre de 2026
 
