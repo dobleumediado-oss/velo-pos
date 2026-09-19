@@ -2426,6 +2426,47 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.49.5-income-receipt-currency] Recibos de ingreso en dólares listos');
     }
   },
+  {
+    version: '1.49.6-additional-charges-tax',
+    description: 'Cargos adicionales: ITBIS configurable del negocio y cuenta propia de ingresos por servicios.',
+    run(db) {
+      const addColumn = (table, name, definition) => {
+        const exists = db.prepare(
+          "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?"
+        ).get(table);
+        if (!exists) return;
+        const columns = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(column => column.name));
+        if (!columns.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+      };
+      addColumn('sale_charges', 'taxable', 'INTEGER NOT NULL DEFAULT 0');
+      addColumn('sale_charges', 'tax_pct', 'REAL NOT NULL DEFAULT 0');
+      addColumn('sale_charges', 'net_subtotal', 'REAL NOT NULL DEFAULT 0');
+      addColumn('sale_charges', 'tax_amt', 'REAL NOT NULL DEFAULT 0');
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sale_charges'").get()) {
+        // Un cargo ya emitido NO se reinterpreta: conserva su importe completo
+        // como neto exento. Reinterpretarlo cambiaría el ITBIS de un documento
+        // que ya se declaró.
+        db.prepare(`UPDATE sale_charges
+          SET taxable=0,tax_pct=0,net_subtotal=amount,tax_amt=0
+          WHERE COALESCE(net_subtotal,0)=0`).run();
+      }
+      // Apagado por defecto: ninguna instalación existente cambia de conducta
+      // al actualizar. Cada dueño lo enciende cuando lo decide con su contador.
+      db.prepare("INSERT OR IGNORE INTO settings(key,value) VALUES('charges_taxable','0')").run();
+
+      // Cuenta propia: un flete o una instalación no son venta de mercancía y
+      // no deben ensuciar ese renglón del estado de resultados.
+      const exists = db.prepare("SELECT id FROM accounting_accounts WHERE code='4105'").get();
+      if (!exists && db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='accounting_accounts'").get()) {
+        const parent = db.prepare("SELECT id FROM accounting_accounts WHERE code='41'").get();
+        db.prepare(`INSERT INTO accounting_accounts(code,name,type,subtype,parent_id,description,is_summary,active)
+          VALUES('4105','Ingresos por Servicios y Fletes','ingreso','operacional',?,
+                 'Cargos adicionales facturados: envío, instalación, transporte y mano de obra',0,1)`)
+          .run(parent?.id || null);
+      }
+      console.log('[MIGRATION 1.49.6-additional-charges-tax] Cargos adicionales con ITBIS configurable listos');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

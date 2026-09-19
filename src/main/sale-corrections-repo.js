@@ -1312,9 +1312,21 @@ function createSaleCorrectionsRepo({
         const taxAmt = round2(prepared.reduce((sum, row) => sum + row.tax_amt, 0));
         const grossSubtotal = round2(prepared.reduce((sum, row) => sum + row.subtotal, 0));
         const discountAmt = round2(grossSubtotal - itemTotal);
-        const charges = round2(lockedRoot.additional_charges_total || 0);
+        // Los cargos adicionales no cambian al corregir artículos, pero forman
+        // parte del desglose: su neto va al subtotal y su ITBIS al impuesto, o
+        // el documento corregido dejaría de cumplir subtotal + ITBIS = total.
+        const chargeParts = _tableExists(db(), 'sale_charges')
+          ? db().prepare(`SELECT COALESCE(SUM(amount),0) amount,
+              COALESCE(SUM(CASE WHEN COALESCE(net_subtotal,0)>0 THEN net_subtotal ELSE amount END),0) net,
+              COALESCE(SUM(tax_amt),0) tax
+              FROM sale_charges WHERE sale_id=?`).get(lockedRoot.id)
+          : null;
+        const charges = round2(chargeParts ? chargeParts.amount : (lockedRoot.additional_charges_total || 0));
+        const chargesNet = round2(chargeParts ? chargeParts.net : charges);
+        const chargesTax = round2(chargeParts ? chargeParts.tax : 0);
         const newTotal = round2(itemTotal + charges);
-        const newSubtotal = round2(itemTotal - taxAmt);
+        const newSubtotal = round2(itemTotal - taxAmt + chargesNet);
+        const newTaxAmt = round2(taxAmt + chargesTax);
         const delta = round2(newTotal - Number(lockedRoot.total || 0));
 
         // El dinero sigue al método real de la factura: el crédito mueve el saldo
@@ -1395,10 +1407,10 @@ function createSaleCorrectionsRepo({
           row.qty,row.subtotal,row.taxable,row.tax_pct,row.tax_amt,row.net_subtotal
         ));
         const changed = db().prepare(`
-          UPDATE sales SET subtotal=?,discount_amt=?,tax_amt=?,total=?,
+          UPDATE sales SET subtotal=?,discount_amt=?,tax_amt=?,total=?,charges_in_subtotal=1,
             revision=revision+1,updated_at=datetime('now','localtime')
           WHERE id=? AND revision=?
-        `).run(newSubtotal, discountAmt, taxAmt, newTotal, lockedRoot.id, lockedRoot.revision || 0);
+        `).run(newSubtotal, discountAmt, newTaxAmt, newTotal, lockedRoot.id, lockedRoot.revision || 0);
         if (changed.changes !== 1) {
           const error = new Error('La factura fue modificada por otro usuario. Recarga la corrección antes de continuar.');
           error.code = 'CONFLICT';

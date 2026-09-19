@@ -1705,7 +1705,14 @@ function migrateSalesWorkflowEnhancements() {
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       sale_id     INTEGER NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
       description TEXT NOT NULL,
+      -- amount es SIEMPRE lo que se escribió: lo que se suma al total. Cuando el
+      -- cargo lleva ITBIS, ese importe ya lo incluye y aquí queda descompuesto,
+      -- igual que el precio de un artículo.
       amount      REAL NOT NULL CHECK(amount >= 0),
+      taxable     INTEGER NOT NULL DEFAULT 0,
+      tax_pct     REAL NOT NULL DEFAULT 0,
+      net_subtotal REAL NOT NULL DEFAULT 0,
+      tax_amt     REAL NOT NULL DEFAULT 0,
       created_at  TEXT DEFAULT (datetime('now','localtime'))
     );
     CREATE INDEX IF NOT EXISTS idx_sale_charges_sale ON sale_charges(sale_id);
@@ -1713,6 +1720,16 @@ function migrateSalesWorkflowEnhancements() {
 
   addCol('sales', 'customer_phone_type', "TEXT DEFAULT 'telefono'");
   addCol('sales', 'additional_charges_total', 'REAL DEFAULT 0');
+  // Descomposición fiscal del cargo, igual que la de un artículo.
+  addCol('sale_charges', 'taxable', 'INTEGER NOT NULL DEFAULT 0');
+  addCol('sale_charges', 'tax_pct', 'REAL NOT NULL DEFAULT 0');
+  addCol('sale_charges', 'net_subtotal', 'REAL NOT NULL DEFAULT 0');
+  addCol('sale_charges', 'tax_amt', 'REAL NOT NULL DEFAULT 0');
+  // Qué convención sigue el documento. 0 = anterior: el subtotal excluye los
+  // cargos y estos se suman aparte. 1 = vigente: el cargo es una línea más y
+  // subtotal + ITBIS = total. Las facturas emitidas conservan la suya; nunca se
+  // reinterpreta un documento ya entregado.
+  addCol('sales', 'charges_in_subtotal', 'INTEGER NOT NULL DEFAULT 0');
   addCol('sales', 'display_currency', "TEXT DEFAULT 'DOP'");
   addCol('sales', 'display_exchange_rate', 'REAL DEFAULT 1');
   addCol('sales', 'display_amount', 'REAL DEFAULT 0');
@@ -3069,6 +3086,13 @@ function normalizeTaxPct(value, fallback = 18) {
   const n = Number.parseFloat(value);
   const picked = Number.isFinite(n) ? n : (Number.isFinite(f) ? f : 18);
   return Math.max(0, Math.min(100, picked));
+}
+
+// ¿Los cargos adicionales de este negocio llevan ITBIS? Es una regla del
+// negocio —la decide el dueño con su contador—, nunca el cajero en el mostrador.
+function configuredChargesTaxable() {
+  const row = db.prepare("SELECT value FROM settings WHERE key='charges_taxable'").get();
+  return String(row?.value || '0') === '1';
 }
 
 function configuredTaxPct() {
@@ -5608,9 +5632,27 @@ const salesRepo = {
         .slice(0, 20);
       const additionalChargesTotal = ['factura', 'cotizacion'].includes(type)
         ? round2(charges.reduce((sum, row) => sum + row.amount, 0)) : 0;
-      const subtotal = calculated.subtotal;
+      // El cargo adicional se comporta como una línea más: el importe escrito es
+      // el que se suma al total, y cuando el negocio los tiene gravados ese
+      // importe ya incluye el ITBIS, igual que el precio de un artículo. Así el
+      // desglose vuelve a cumplir subtotal + ITBIS = total.
+      const chargesTaxable = type === 'factura' && configuredChargesTaxable();
+      const chargeTaxPct = chargesTaxable ? configuredTaxPct() : 0;
+      let chargesNet = 0;
+      let chargesTax = 0;
+      for (const row of charges) {
+        const net = chargeTaxPct > 0 ? row.amount / (1 + (chargeTaxPct / 100)) : row.amount;
+        row.taxable = chargesTaxable ? 1 : 0;
+        row.tax_pct = chargeTaxPct;
+        row.net_subtotal = round2(net);
+        row.tax_amt = round2(row.amount - net);
+        chargesNet += net;
+        chargesTax += row.amount - net;
+      }
+      if (!['factura', 'cotizacion'].includes(type)) { chargesNet = 0; chargesTax = 0; }
+      const subtotal = round2(calculated.subtotal + chargesNet);
       const discAmt = calculated.discAmt;
-      const taxAmt = calculated.taxAmt;
+      const taxAmt = round2(calculated.taxAmt + chargesTax);
       const total = round2(calculated.total + additionalChargesTotal);
       const taxPct = headerTaxPct;
 
@@ -5986,11 +6028,17 @@ const salesRepo = {
       });
       const saleId = saleR.lastInsertRowid;
       if (charges.length) {
-        const insertCharge = db.prepare(
-          'INSERT INTO sale_charges(sale_id,description,amount) VALUES(?,?,?)'
-        );
-        charges.forEach(row => insertCharge.run(saleId, row.description, row.amount));
+        const insertCharge = db.prepare(`INSERT INTO sale_charges(
+          sale_id,description,amount,taxable,tax_pct,net_subtotal,tax_amt
+        ) VALUES(?,?,?,?,?,?,?)`);
+        charges.forEach(row => insertCharge.run(
+          saleId, row.description, row.amount,
+          row.taxable || 0, row.tax_pct || 0,
+          row.net_subtotal == null ? row.amount : row.net_subtotal,
+          row.tax_amt || 0
+        ));
       }
+      db.prepare('UPDATE sales SET charges_in_subtotal=1 WHERE id=?').run(saleId);
       const replacesSaleId = type === 'factura'
         ? (Number(payment.replacesSaleId) || null)
         : null;
@@ -6380,7 +6428,10 @@ const salesRepo = {
       returnable_qty: Math.max(0, (item.qty || 0) - (item.returned_qty || 0)),
     }));
     sale.charges = tableExists('sale_charges')
-      ? db.prepare('SELECT id,description,amount FROM sale_charges WHERE sale_id=? ORDER BY id').all(id)
+      ? db.prepare(`SELECT id,description,amount,taxable,tax_pct,
+          CASE WHEN COALESCE(net_subtotal,0)>0 THEN net_subtotal ELSE amount END AS net_subtotal,
+          COALESCE(tax_amt,0) AS tax_amt
+          FROM sale_charges WHERE sale_id=? ORDER BY id`).all(id)
       : [];
     sale.trade_in = Number(sale.trade_in_amount || 0) > 0 && tableExists('trade_ins')
       ? db.prepare(`
@@ -10702,10 +10753,23 @@ const accountingRepo = {
         lines.push({ account_id: advancesAcc.id, debit: prepaidAmount, credit: 0, description: `Anticipo aplicado · Factura ${invNo}` });
       }
 
-      // Crédito: ingresos (neto sin ITBIS)
-      const netSale = sale.total - (sale.tax_amt || 0);
-      if (revAccId && netSale > 0) {
-        lines.push({ account_id: revAccId, debit: 0, credit: netSale, description: `Factura ${invNo}` });
+      // Crédito: ingresos (neto sin ITBIS). Un flete o una instalación no son
+      // venta de mercancía: van a su propia cuenta para no ensuciar ese renglón
+      // del estado de resultados.
+      const servicesAccId = getAccId('account_services_revenue', '4105');
+      const chargesNet = tableExists('sale_charges')
+        ? round2(db.prepare(
+            `SELECT COALESCE(SUM(CASE WHEN COALESCE(net_subtotal,0)>0 THEN net_subtotal ELSE amount END),0) n
+             FROM sale_charges WHERE sale_id=?`
+          ).get(saleId).n)
+        : 0;
+      const netSale = round2(sale.total - (sale.tax_amt || 0));
+      const merchandiseNet = round2(netSale - (servicesAccId ? chargesNet : 0));
+      if (revAccId && merchandiseNet > 0) {
+        lines.push({ account_id: revAccId, debit: 0, credit: merchandiseNet, description: `Factura ${invNo}` });
+      }
+      if (servicesAccId && chargesNet > 0) {
+        lines.push({ account_id: servicesAccId, debit: 0, credit: chargesNet, description: `Cargos adicionales · Factura ${invNo}` });
       }
       // Crédito: ITBIS por pagar
       if (taxAccId && (sale.tax_amt || 0) > 0) {

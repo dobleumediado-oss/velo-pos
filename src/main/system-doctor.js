@@ -293,6 +293,11 @@ function diagnoseSales({ db }) {
   const rows = db.prepare(`
     SELECT s.id, s.type, s.status, s.subtotal, s.discount_pct, s.discount_amt,
            s.tax_pct, s.tax_amt, s.total,s.additional_charges_total,
+           COALESCE(s.charges_in_subtotal,0) AS charges_in_subtotal,
+           (SELECT COALESCE(SUM(CASE WHEN COALESCE(c.net_subtotal,0)>0 THEN c.net_subtotal ELSE c.amount END),0)
+              FROM sale_charges c WHERE c.sale_id=s.id) AS charges_net,
+           (SELECT COALESCE(SUM(COALESCE(c.tax_amt,0)),0)
+              FROM sale_charges c WHERE c.sale_id=s.id) AS charges_tax,
            s.cajero, s.notes,
            COUNT(si.id) AS item_count,
            COALESCE(SUM(si.unit_price * si.qty),0) AS item_gross,
@@ -326,13 +331,23 @@ function diagnoseSales({ db }) {
     const itemGross = round2(sale.item_gross);
     const discount = round2(sale.discount_amt || 0);
     const grossAfterDiscount = round2(itemGross - discount);
-    const expectedTax = sale.type === 'factura' ? round2(sale.item_tax) : 0;
-    const expectedSubtotal = round2(grossAfterDiscount - expectedTax);
-    const charges = sale.type === 'factura'
-      ? round2(sale.additional_charges_total || 0) : 0;
+    const itemTax = sale.type === 'factura' ? round2(sale.item_tax) : 0;
+    // Facturas y cotizaciones admiten cargos adicionales.
+    const carriesCharges = ['factura', 'cotizacion'].includes(sale.type);
+    const charges = carriesCharges ? round2(sale.additional_charges_total || 0) : 0;
+    // Cada documento se valida con la convención con la que se emitió. En la
+    // vigente el cargo es una línea más —neto al subtotal, ITBIS al impuesto— y
+    // subtotal + ITBIS = total. En la anterior el cargo se sumaba aparte.
+    const currentConvention = Number(sale.charges_in_subtotal || 0) === 1;
+    const chargesNet = carriesCharges && currentConvention ? round2(sale.charges_net) : 0;
+    const chargesTax = carriesCharges && currentConvention ? round2(sale.charges_tax) : 0;
+    const expectedTax = round2(itemTax + chargesTax);
+    const expectedSubtotal = round2(grossAfterDiscount - itemTax + chargesNet);
     const expectedTotal = round2(grossAfterDiscount + charges);
     const netTotal = round2(grossAfterDiscount);
-    const storedTotal = round2((sale.subtotal || 0) + (sale.tax_amt || 0) + charges);
+    const storedTotal = currentConvention
+      ? round2((sale.subtotal || 0) + (sale.tax_amt || 0))
+      : round2((sale.subtotal || 0) + (sale.tax_amt || 0) + charges);
 
     if (isHistorical) {
       const matchesNetItems = absDiff(sale.total, netTotal) <= 1;
@@ -1151,4 +1166,6 @@ async function runSystemDoctor({ db, dataDir, appRoot, cashRepo, settingsRepo, g
   };
 }
 
-module.exports = { runSystemDoctor };
+// diagnoseSales se expone para que las pruebas validen el invariante de cada
+// convención de cargos sin montar el diagnóstico completo.
+module.exports = { runSystemDoctor, diagnoseSales };
