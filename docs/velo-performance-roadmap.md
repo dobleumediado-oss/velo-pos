@@ -214,7 +214,7 @@ Si una operación supera el límite, se registra qué consulta o render fue lent
 
 Diagnóstico medido sobre una copia de una base real (2,524 facturas, 2,710
 abonos, 1,246 productos, 317 clientes) ejecutando los repositorios bajo el
-runtime de Electron. Cinco fases, cada una con su commit y su regresión.
+runtime de Electron. Seis fases, cada una con su commit y su regresión.
 
 ### Fase 1 — Consultas por fila (N+1)
 
@@ -260,9 +260,21 @@ runtime de Electron. Cinco fases, cada una con su commit y su regresión.
   una ventana de los 3,000 más recientes, que cubre Caja y el detalle de un
   cliente; la pestaña de Abonos pide el historial completo antes de filtrar.
 
+### Fase 6 — Acceso y módulos restantes
+
+- En la pantalla de acceso, marcar **Supervisor** llamaba a `build()`, que hacía
+  `root.innerHTML = ''` y reconstruía toda la vista. El reloj volvía a su
+  marcador `00:00:00` con la fecha vacía hasta 50 ms después: el bloque cambiaba
+  de altura y empujaba la tarjeta, el navegador rasterizaba de nuevo el
+  `backdrop-filter` de la card y el foco se perdía y volvía. Ese era el salto.
+- Cambiar de rol solo afecta al botón activo, la etiqueta y el campo de usuario;
+  ahora se actualizan esos tres nodos. El reloj arranca en el mismo cuadro.
+- Los 51 repintados de módulo restantes pasan por `veloRepaint`. El POS y el
+  asistente quedan fuera a propósito: manejan su propio foco.
+
 ### Verificación
 
-- `npm run test:sales-history-performance` pasó de 14 a **43 aserciones**. Entre
+- `npm run test:sales-history-performance` pasó de 14 a **44 aserciones**. Entre
   ellas, tres cuentan consultas reales interceptando `db.prepare`: **3 para 400
   abonos** y **5 para 122 clientes** —una regresión al patrón N+1 falla la
   prueba—. Otras comprueban que la caché de tablas no congela una ausencia, que
@@ -275,10 +287,19 @@ runtime de Electron. Cinco fases, cada una con su commit y su regresión.
   `test:data-loader`, `test:experience`, `test:server-service` y
   `verify:integrity`.
 
+- Una prueba recorre `src/js` y falla nombrando cualquier módulo que reconstruya
+  su pantalla sin pasar por el helper, así que la regla no se erosiona.
+- El cambio de rol del acceso se ejercita en `test:experience`: comprueba que el
+  botón activo se traslada, que el campo pasa a correo y que el reloj **no**
+  vuelve a `00:00:00`.
+
 ### Pendiente de esta línea
 
-- Repintado por fila en los módulos restantes: quedan ~78 puntos que reconstruyen
-  el módulo completo; esta ronda solo los hizo inocuos, no los eliminó.
+- Repintado por fila: los módulos siguen reconstruyendo su pantalla completa;
+  esta línea los hizo inocuos —sin salto ni pérdida de foco— pero no eliminó el
+  trabajo de DOM. Inventario ya es la excepción: parchea la fila.
+- El POS y el asistente de configuración quedan fuera del helper por manejar su
+  propio foco; si alguna vez saltan, hay que resolverlo con su propia lógica.
 - Productos y clientes siguen cargándose completos en memoria. Con 1,246 y 317
   no molesta; conviene paginarlos antes de las ~20,000 referencias.
 - El costo restante de un refresco tras mutación es ~91 ms cuando la pantalla
