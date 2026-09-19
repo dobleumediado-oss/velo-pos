@@ -214,7 +214,7 @@ Si una operación supera el límite, se registra qué consulta o render fue lent
 
 Diagnóstico medido sobre una copia de una base real (2,524 facturas, 2,710
 abonos, 1,246 productos, 317 clientes) ejecutando los repositorios bajo el
-runtime de Electron. Ocho fases, cada una con su commit y su regresión.
+runtime de Electron. Nueve fases, cada una con su commit y su regresión.
 
 ### Fase 1 — Consultas por fila (N+1)
 
@@ -301,9 +301,25 @@ runtime de Electron. Ocho fases, cada una con su commit y su regresión.
   tras cobrar limpia la factura y `renderPOS` devuelve el foco al buscador para
   el siguiente escaneo. Restaurar el foco anterior desde afuera pelearía con eso.
 
+### Fase 9 — La búsqueda deja de recalcular lo mismo
+
+- `searchNorm` descompone el texto en Unicode y le aplica una expresión regular.
+  El POS y el Inventario la invocaban por cada campo de cada producto en cada
+  tecla: con 1,246 productos son **6,230 limpiezas por pulsación**, siempre sobre
+  textos que no cambiaron desde la pulsación anterior.
+- Ahora recuerda lo ya calculado. **No es una reescritura**: es la misma función
+  con memoria, así que el resultado es idéntico por construcción y ningún
+  producto puede dejar de aparecer. Por eso no necesitó prueba diferencial contra
+  otra implementación, solo contra sí misma.
+- **1.81 ms → 0.35 ms por tecla.** Alcanza a los 65 puntos de búsqueda de la
+  aplicación y al buscador global del proceso principal.
+- Las dos copias —renderer y proceso principal— se mantienen en paridad, como
+  exige el encabezado de `lib/text-normalize.js`; ahora una prueba lo verifica.
+  La tabla se vacía al llegar a 20,000 entradas.
+
 ### Verificación
 
-- `npm run test:sales-history-performance` pasó de 14 a **45 aserciones**. Entre
+- `npm run test:sales-history-performance` pasó de 14 a **51 aserciones**. Entre
   ellas, tres cuentan consultas reales interceptando `db.prepare`: **3 para 400
   abonos** y **5 para 122 clientes** —una regresión al patrón N+1 falla la
   prueba—. Otras comprueban que la caché de tablas no congela una ausencia, que
@@ -340,8 +356,12 @@ optimizar antes de tiempo ni descubrirlo tarde.
   trabajo de DOM. Con 100 filas por página ese trabajo no se percibe. Inventario
   es la excepción: parchea la fila. *Disparador: una tabla que supere las ~300
   filas visibles o un repintado que se note al confirmar.*
-- **Búsqueda en memoria de Inventario** — filtra el catálogo completo por
-  teclazo. Aceptable hoy; misma frontera que el punto anterior.
+- **Búsqueda en memoria del catálogo** — el POS y el Inventario siguen filtrando
+  en memoria, ahora a 0.35 ms por tecla. Llevarla al backend exigiría reescribir
+  la comparación en SQL, donde `LIKE` no quita tildes ni maneja la Ñ igual: eso
+  sí puede hacer que un producto no aparezca. *Si algún día se hace, el requisito
+  es una prueba diferencial sobre el catálogo real —prefijos, tildes, Ñ, códigos
+  y códigos de barras— que exija coincidencia total antes de cambiar nada.*
 
 ## Ronda Conciliación de correcciones heredadas — 15 de septiembre de 2026
 
