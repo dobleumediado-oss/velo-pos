@@ -52,3 +52,34 @@ Módulo completo de contabilidad + bancos, agregado en las migraciones v1.6.x.
 - El usuario, motivo y fecha permanecen en `audit_logs`; el módulo contable no muestra documentos anulados.
 - Los asientos automáticos se anulan desde su módulo de origen (Ventas, Gastos, Devoluciones, etc.); Contabilidad solo permite anular directamente asientos manuales, ajustes, apertura y cierre.
 - La migración `1.21.2` elimina los reversos históricos y reconstruye el balance cacheado del catálogo desde asientos vigentes.
+
+## Cargos adicionales (v1.49.6)
+
+Un cargo adicional —envío, instalación, transporte, mano de obra— es una línea
+más de la factura. El monto escrito es exactamente lo que se suma al total.
+
+- **Regla del negocio, no del cajero.** `settings.charges_taxable` (`'0'`/`'1'`)
+  decide si llevan ITBIS, con el `tax_pct` del negocio. Arranca en `'0'`.
+- **Descomposición.** Si está activa, el monto ya incluye el ITBIS: un cargo de
+  RD$500 al 18% son RD$423.73 netos + RD$76.27. Se guarda por cargo en
+  `sale_charges.net_subtotal` y `sale_charges.tax_amt`.
+- **Asiento.** El neto del cargo acredita **4105 Ingresos por Servicios y
+  Fletes**; su ITBIS, 2102. La mercancía conserva su renglón en 4101.
+
+### Dos convenciones conviven
+
+`sales.charges_in_subtotal` registra con cuál se emitió cada documento:
+
+| Valor | Subtotal | Cargos | Invariante |
+|---|---|---|---|
+| `1` vigente | incluye el neto del cargo | una línea más | `subtotal + tax_amt = total` |
+| `0` anterior | solo artículos | fila aparte | `subtotal + tax_amt + cargos = total` |
+
+Toda venta nueva nace en `1`. **Ningún documento emitido se reinterpreta**: se
+reimprime exactamente como se entregó, y el Doctor del sistema valida cada uno
+con su propia regla. `printReceipt` normaliza la convención una sola vez, lo que
+cubre todas las plantillas y el ticket térmico.
+
+Cobertura: `npm run test:additional-charges` (33 aserciones), que compara al
+centavo el carrito contra el backend y comprueba que el Doctor no marque ni las
+facturas viejas ni las nuevas.
