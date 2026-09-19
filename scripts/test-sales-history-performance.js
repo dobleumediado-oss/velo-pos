@@ -331,7 +331,9 @@ try {
   const ventasSource = fs.readFileSync(path.join(__dirname, '../src/js/ventas.js'), 'utf8');
   // Todo módulo que reconstruye su pantalla debe pasar por el helper. El POS y
   // el asistente quedan fuera a propósito: manejan su propio foco.
-  const repaintExceptions = new Set(['pos.js', 'wizard.js', 'data.js']);
+  // El POS queda fuera a propósito: tras cobrar limpia la factura y renderPOS
+  // devuelve el foco al buscador para el siguiente escaneo, que es lo correcto.
+  const repaintExceptions = new Set(['pos.js', 'data.js']);
   const jsDir = path.join(__dirname, '../src/js');
   const unwrapped = fs.readdirSync(jsDir)
     .filter(file => file.endsWith('.js') && !repaintExceptions.has(file))

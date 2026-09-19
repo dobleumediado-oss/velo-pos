@@ -9,6 +9,13 @@
 - Esto evita que un ID sensible al uso de mayúsculas deje de coincidir con la
   identidad real enviada por la terminal.
 
+### Configuración conserva su posición (fase 8)
+
+- Activar una licencia, guardar o eliminar el logo repintaba Configuración desde
+  el principio y devolvía la vista al tope. Ahora conserva la posición.
+- El Punto de Venta se mantiene fuera de esa regla a propósito: tras cobrar
+  limpia la factura y devuelve el foco al buscador para el siguiente escaneo.
+
 ### Cada pantalla con su propia fuente (fase 7)
 
 - Caja leía las ventas y los abonos de su sesión desde las mismas colecciones

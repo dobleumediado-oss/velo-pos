@@ -191,7 +191,7 @@ async function activarLicencia() {
   }
 
   toast(`✓ Licencia activada — ${result.business || ''} · Vence: ${result.expiry}`);
-  renderConfiguracion(document.getElementById('page'));
+  veloRepaint(() => renderConfiguracion(document.getElementById('page')));
 }
 
 // ══════════════════════════════════════════════
@@ -633,7 +633,7 @@ async function guardarLogo() {
 
   window._logoB64Temp = null;
   toast('✓ Logo guardado — aparecerá en todos los tickets');
-  renderConfiguracion(document.getElementById('page'));
+  veloRepaint(() => renderConfiguracion(document.getElementById('page')));
 }
 
 async function eliminarLogo() {
@@ -644,7 +644,7 @@ async function eliminarLogo() {
       if (typeof CFG !== 'undefined') CFG.biz_logo = '';
       if (DB?.settings) DB.settings.biz_logo = '';
       toast('Logo eliminado');
-      renderConfiguracion(document.getElementById('page'));
+      veloRepaint(() => renderConfiguracion(document.getElementById('page')));
     },
     'Eliminar', 'btn-red'
   );
