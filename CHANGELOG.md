@@ -9,6 +9,17 @@
 - Esto evita que un ID sensible al uso de mayúsculas deje de coincidir con la
   identidad real enviada por la terminal.
 
+### Cobertura de los recorridos completos
+
+- Se añadieron pruebas de extremo a extremo para los cinco recorridos que hasta
+  ahora solo podían comprobarse usando la aplicación: el cambio de rol en el
+  acceso, el producto recién guardado, el recibo de ingreso en dólares desde su
+  creación hasta su reimpresión, la corrección de una factura sin comprobante
+  fiscal y el ciclo completo de caja con las fuentes nuevas.
+- Entre ellas queda verificado que una caja ya cerrada sigue devolviendo sus
+  ventas y abonos, y que tras corregir una factura el efectivo esperado de la
+  caja refleja exactamente la diferencia.
+
 ### Búsqueda más ágil en todos los buscadores (fase 9)
 
 - Escribir en el buscador del POS o de Inventario volvía a limpiar los mismos

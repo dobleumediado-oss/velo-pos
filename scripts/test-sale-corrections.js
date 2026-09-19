@@ -657,6 +657,7 @@ ok(cashResult.directAmendment && !cashResult.additionSaleId &&
 ok(cashAfter.total === 354 && cashAfter.items[0].qty === 3 &&
   db.prepare('SELECT stock FROM products WHERE id=?').get(productId).stock === cashStockBefore - 1,
   'la misma factura queda con la cantidad corregida y el inventario descontado');
+const cashExpectedBefore = DB.cashRepo.getSessionCashSummary(cashId).expected;
 const cashMovement = db.prepare(`
   SELECT type,amount,method FROM cash_movements
   WHERE reference_id=? AND cash_session_id=? ORDER BY id DESC LIMIT 1
@@ -687,6 +688,14 @@ ok(cashReduction.directAmendment && cashReduction.returnIds.length === 0 &&
   refundMovement.type === 'devolucion' && Math.round(refundMovement.amount * 100) / 100 === -236 &&
   db.prepare(`SELECT COUNT(*) count FROM sales WHERE original_sale_id=?`).get(cashSource.saleId).count === 0,
   'reducirla devuelve el efectivo por caja sin crear nota de crédito ni documento nuevo');
+// El punto que solo se comprobaba a ojo: que el cuadre de la caja siga exacto.
+const cashExpectedAfter = DB.cashRepo.getSessionCashSummary(cashId).expected;
+ok(Math.round((cashExpectedAfter - cashExpectedBefore) * 100) / 100 === -236,
+  'tras corregir, el efectivo esperado de la caja refleja exactamente la diferencia');
+const cashFinal = DB.salesRepo.getById(cashSource.saleId);
+ok(Math.round(cashFinal.total * 100) / 100 === 118 &&
+  DB.cashRepo.getSessionSales(cashId).some(row => Number(row.id) === Number(cashSource.saleId)),
+  'la factura corregida conserva su total vigente y sigue siendo de esta caja');
 
 // Con NCF emitido el original es inmutable: la DGII exige documentos aparte.
 const fiscalSource = createSale({ date: '2025-07-16', method: 'efectivo', qty: 2 });

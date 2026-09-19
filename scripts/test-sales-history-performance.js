@@ -289,6 +289,49 @@ try {
   ok(beforeCreate === false && afterCreate === true,
     'la caché de tablas no congela un "no existe": una migración posterior se detecta');
 
+  console.log('\n== Inventario lleva al producto guardado ==');
+  const invSource = fs.readFileSync(path.join(__dirname, '../src/js/inventario.js'), 'utf8');
+  const focusFrom = invSource.indexOf('function invPageForFocus(');
+  const focusTo = invSource.indexOf('function invHeaderStatsText(');
+  ok(focusFrom > 0 && focusTo > focusFrom, 'el cálculo de la página vive aparte en inventario.js');
+  const focusContext = {};
+  require('vm').runInNewContext(
+    `${invSource.slice(focusFrom, focusTo)}\nthis.invPageForFocus = invPageForFocus;`,
+    focusContext
+  );
+  const catalogo = Array.from({ length: 200 }, (_, i) => ({ id: i + 1 }));
+  ok(focusContext.invPageForFocus(catalogo, 80, 1, 1) === 1,
+    'un producto que quedó primero no mueve la página');
+  ok(focusContext.invPageForFocus(catalogo, 80, 80, 3) === 1,
+    'el último de la primera página sigue en la página 1');
+  ok(focusContext.invPageForFocus(catalogo, 80, 81, 1) === 2,
+    'el primero de la segunda página lleva a la página 2');
+  ok(focusContext.invPageForFocus(catalogo, 80, 200, 1) === 3,
+    'un producto al final del catálogo lleva a su página, no lo esconde');
+  ok(focusContext.invPageForFocus(catalogo, 80, 9999, 2) === 2,
+    'si el producto no está en la vista, la página no cambia sola');
+  ok(focusContext.invPageForFocus(catalogo, 80, null, 2) === 2,
+    'sin producto recién guardado, la paginación se respeta tal cual');
+
+  // Los filtros activos no pueden esconder un alta: el asistente los limpia.
+  const matchFrom = invSource.indexOf('function invMatchesFilters(');
+  const matchTo = invSource.indexOf('function invPageForFocus(');
+  const matchContext = {
+    invTab: 'sin_stock', invCat: '', invSearch: '',
+    invProductStock: (p) => Number(p.stock || 0),
+    searchNorm: (v) => String(v || '').toLowerCase(),
+    matchText: (hay, q) => !q || String(hay || '').toLowerCase().includes(q),
+  };
+  require('vm').runInNewContext(
+    `${invSource.slice(matchFrom, matchTo)}\nthis.invMatchesFilters = invMatchesFilters;`,
+    matchContext
+  );
+  const nuevo = { id: 7, name: 'PRODUCTO NUEVO', stock: 10, stock_min: 5, category: '' };
+  ok(matchContext.invMatchesFilters(nuevo) === false,
+    'con la pestaña "sin stock" activa, un alta con existencia quedaría escondida');
+  ok(invSource.includes("invTab = 'todos'; invCat = ''; invSearch = '';"),
+    'por eso la mutación limpia los filtros antes de pintar el producto guardado');
+
   console.log('\n== Recargas coalescidas y abonos diferidos ==');
   const dataSource = fs.readFileSync(path.join(__dirname, '../src/js/data.js'), 'utf8');
   const sliceFrom = dataSource.indexOf('async function reloadProducts()');

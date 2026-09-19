@@ -97,6 +97,15 @@ function invMatchesFilters(p, qNorm = searchNorm(invSearch)) {
   return mCat && mQ;
 }
 
+// Página en la que quedó un producto dentro del listado ya filtrado y ordenado.
+// Aparte para poder comprobarla sin montar la tabla entera.
+function invPageForFocus(rows, pageSize, focusId, currentPage) {
+  const size = Math.max(1, Number(pageSize) || 0);
+  if (!focusId || !Array.isArray(rows)) return currentPage;
+  const at = rows.findIndex(row => Number(row.id) === Number(focusId));
+  return at >= 0 ? Math.floor(at / size) + 1 : currentPage;
+}
+
 function invHeaderStatsText() {
   const prods = DB.products || [];
   const low = prods.filter(p => invProductStock(p) > 0 && invProductStock(p) <= (p.stock_min || 5));
@@ -452,10 +461,7 @@ function renderInvTable() {
   const totalRows = prods.length;
   const showAll = invPageSize === 'all';
   const pageSize = showAll ? totalRows : Math.max(1, Number(invPageSize) || 80);
-  if (invFocusProductId && !showAll) {
-    const focusIdx = prods.findIndex(row => Number(row.id) === Number(invFocusProductId));
-    if (focusIdx >= 0) invPage = Math.floor(focusIdx / pageSize) + 1;
-  }
+  if (!showAll) invPage = invPageForFocus(prods, pageSize, invFocusProductId, invPage);
   const totalPages = showAll ? 1 : Math.max(1, Math.ceil(totalRows / pageSize));
   invPage = Math.max(1, Math.min(Number(invPage) || 1, totalPages));
   const start = showAll ? 0 : (invPage - 1) * pageSize;

@@ -131,7 +131,11 @@ assert(doctor.includes('Canales de impresión'), 'El diagnóstico debe comunicar
   const context = {
     selRole: 'cajero',
     window: { _cachedUsers: [] },
-    document: { getElementById: (id) => nodes.get(id) || null },
+    document: {
+      getElementById: (id) => nodes.get(id) || null,
+      // El campo de Cajero es un <select> que se arma con opciones reales.
+      createElement: (tag) => ({ tag, value: '', textContent: '' }),
+    },
     h: (tag, attrs) => {
       const node = makeNode(attrs && attrs.id ? attrs.id : `${tag}-nuevo`);
       node.tag = tag;
@@ -157,6 +161,19 @@ assert(doctor.includes('Canales de impresión'), 'El diagnóstico debe comunicar
     'el selector de cajeros se sustituye por el campo de correo');
   assert(nodes.get('login-clock-time').innerHTML === '04<span>:</span>04',
     'el reloj sobrevive al cambio de rol: no vuelve a 00:00:00 ni mueve la tarjeta');
+  assert(nodes.get('luser').id === 'luser',
+    'el campo sustituido conserva el identificador que lee el ingreso');
+  assert(nodes.get('luser').focused === true,
+    'al cambiar de rol el foco queda en el campo de usuario, listo para escribir');
+  assert(nodes.get('lerr').innerHTML === '',
+    'un error de intento anterior no queda colgando tras cambiar de rol');
+  // Y de vuelta a Cajero: el campo debe volver a ser el selector de cajeros.
+  context.setLoginRole('cajero');
+  assert(context.currentRole() === 'cajero' && nodes.get('luser').tag === 'select',
+    'volver a Cajero repone el selector de usuarios, no deja el campo de correo');
+  assert(nodes.get('lrole-cajero').className.includes('on') &&
+    !nodes.get('lrole-admin').className.includes('on'),
+    'el botón activo vuelve a Cajero');
   assert(!app.includes("onclick: () => { selRole = 'admin'; build(); }"),
     'el cambio de rol ya no reconstruye toda la pantalla de acceso');
   assert(app.includes('_startLoginClock();\n    document.getElementById(\'lpass\')?.focus();'),

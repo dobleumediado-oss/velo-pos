@@ -153,6 +153,68 @@ try {
   ok(!/DB\.sales[.[]/.test(dashUi) && dashUi.includes('const dashSales'),
     'el panel calcula sus indicadores con las ventas del día que él mismo pide');
 
+  console.log('\n== Ciclo completo de caja con las fuentes nuevas ==');
+  // Este es el recorrido que antes solo se podía comprobar a mano: abrir caja,
+  // vender, cobrar un abono, cerrar y volver a consultar la sesión ya cerrada.
+  const cicloProduct = db.prepare(
+    "INSERT INTO products(code,name,price,cost,stock,active,taxable,tax_pct) VALUES('CIC-1','Producto ciclo',118,60,50,1,1,18)"
+  ).run().lastInsertRowid;
+  const cicloCustomer = db.prepare(
+    "INSERT INTO customers(name,rnc,active,credit_limit) VALUES('CLIENTE CICLO','131',1,50000)"
+  ).run().lastInsertRowid;
+  const cicloSession = DB.cashRepo.open({
+    userId:admin.id, cajero:admin.name, openAmount:2000, openBills:{}, terminalId:'CICLO-QA',
+  });
+  const cicloSale = DB.salesRepo.create({
+    customer:{ id:cicloCustomer },
+    items:[{ product_id:cicloProduct, product_code:'CIC-1', product_name:'Producto ciclo',
+      unit_cost:60, unit_price:118, taxable:1, tax_pct:18, qty:2 }],
+    payment:{ method:'efectivo', saleDate:'2026-09-18', ncfType:'' },
+    session:{ id:cicloSession }, user:admin, type:'factura',
+  });
+  const cicloCredit = DB.salesRepo.create({
+    customer:{ id:cicloCustomer },
+    items:[{ product_id:cicloProduct, product_code:'CIC-1', product_name:'Producto ciclo',
+      unit_cost:60, unit_price:118, taxable:1, tax_pct:18, qty:1 }],
+    payment:{ method:'credito', saleDate:'2026-09-18', ncfType:'' },
+    session:{ id:cicloSession }, user:admin, type:'factura',
+  });
+  DB.customersRepo.addPayment({
+    customerId:cicloCustomer, saleId:cicloCredit.saleId, amount:50, method:'efectivo',
+    note:'Abono del ciclo', userId:admin.id, cajero:admin.name, sessionId:cicloSession,
+  });
+
+  const cicloSalesAbierta = DB.cashRepo.getSessionSales(cicloSession);
+  ok(cicloSalesAbierta.length === 2 &&
+    cicloSalesAbierta.every(row => Number(row.cash_session_id) === Number(cicloSession)),
+    'con la caja abierta, sus ventas salen de su propia consulta');
+  const cicloPagosAbierta = DB.cashRepo.getSessionPayments(cicloSession);
+  ok(cicloPagosAbierta.length === 1 && Number(cicloPagosAbierta[0].amount) === 50,
+    'el abono cobrado en esta caja aparece en su propia consulta');
+
+  const cicloResumen = DB.cashRepo.getSessionCashSummary(cicloSession);
+  ok(Math.round(cicloResumen.expected * 100) / 100 === 2000 + 236 + 50,
+    'el cuadre suma fondo, venta de contado y abono en efectivo');
+
+  DB.cashRepo.close({
+    sessionId:cicloSession, closeAmount:cicloResumen.expected, closeBills:{},
+    notes:'Cierre del ciclo', userId:admin.id, cajero:admin.name,
+  });
+  ok(db.prepare('SELECT status FROM cash_sessions WHERE id=?').get(cicloSession).status === 'closed',
+    'la caja cierra sin diferencia con el cuadre canónico');
+
+  // El fallo que se corrigió: una caja cerrada no encontraba sus ventas porque
+  // se filtraba la colección en memoria del historial de Ventas.
+  const cicloSalesCerrada = DB.cashRepo.getSessionSales(cicloSession);
+  ok(cicloSalesCerrada.length === 2,
+    'una caja YA CERRADA sigue devolviendo sus ventas para el resumen');
+  ok(DB.cashRepo.getSessionPayments(cicloSession).length === 1,
+    'una caja ya cerrada sigue devolviendo sus abonos');
+  const cicloReporte = DB.cashRepo.getSessionReport(cicloSession);
+  ok(cicloReporte && (cicloReporte.sales || []).length === 2 &&
+    (cicloReporte.payments || []).length === 1,
+    'el reporte imprimible de la sesión cerrada reúne ventas y abonos');
+
   console.log('\n== Historial consultable y reimprimible ==');
   const keptReceipt = DB.cashRepo.createIncomeReceipt({ cash_session_id:sessionId, payer_name:'Arrendatario del local',
     concept:'Alquiler de vitrina', income_type:'otro_ingreso', amount:2500, method:'efectivo',
@@ -181,6 +243,45 @@ try {
     'el rango de fechas acota el historial');
   ok(DB.cashRepo.searchIncomeReceipts({ limit:1 }).truncated === true,
     'avisa cuando el período devuelve más recibos de los mostrados');
+
+  console.log('\n== Recorrido completo de un recibo en dólares ==');
+  // Crear en divisas, corregir la tasa, encontrarlo en el historial y tener
+  // todo lo que la reimpresión necesita: el recorrido que se probaba a mano.
+  const viajeSession = DB.cashRepo.open({
+    userId:admin.id, cajero:admin.name, openAmount:1000, openBills:{}, terminalId:'VIAJE-QA',
+  });
+  const viaje = DB.cashRepo.createIncomeReceipt({
+    cash_session_id:viajeSession, payer_name:'VISITANTE EXTRANJERO',
+    payer_document:'P-99887', concept:'Adelanto en divisas', income_type:'otro_ingreso',
+    amount:200, payment_currency:'USD', exchange_rate:63.5, method:'efectivo',
+    reference:'USD-01', notes:'Recibido en billetes',
+  }, actor);
+  ok(viaje.amount === 12700 && viaje.currency_amount === 200 && viaje.exchange_rate === 63.5,
+    'el recibo en dólares guarda divisa, tasa y equivalente en pesos');
+
+  const viajeCorregido = DB.cashRepo.updateIncomeReceipt(viaje.id,
+    { exchange_rate:62, reason:'La tasa acordada fue 62' }, actor, viajeSession);
+  ok(viajeCorregido.document_number_fmt === viaje.document_number_fmt &&
+    viajeCorregido.amount === 12400 && viajeCorregido.currency_amount === 200,
+    'corregir la tasa conserva el número y recalcula solo el equivalente');
+  ok(Math.round(DB.cashRepo.getSessionCashSummary(viajeSession).expected * 100) / 100 === 1000 + 12400,
+    'la caja refleja el equivalente corregido, no el original');
+
+  const viajeHistorial = DB.cashRepo.searchIncomeReceipts({ query:'USD-01' });
+  const viajeFila = viajeHistorial.rows.find(row => Number(row.id) === Number(viaje.id));
+  ok(!!viajeFila && viajeFila.payment_currency === 'USD' &&
+    Number(viajeFila.exchange_rate) === 62 && Number(viajeFila.currency_amount) === 200,
+    'el historial encuentra el recibo y trae divisa, tasa y monto para reimprimirlo');
+  ok(!!viajeFila.payer_name && !!viajeFila.concept && !!viajeFila.document_number_fmt &&
+    viajeFila.user_name !== undefined,
+    'la fila del historial trae todo lo que el documento impreso necesita');
+  DB.cashRepo.close({
+    sessionId:viajeSession, closeAmount:DB.cashRepo.getSessionCashSummary(viajeSession).expected,
+    closeBills:{}, notes:'', userId:admin.id, cajero:admin.name,
+  });
+  const viajeTrasCierre = DB.cashRepo.searchIncomeReceipts({ query:'USD-01' });
+  ok(viajeTrasCierre.rows.some(row => Number(row.id) === Number(viaje.id)),
+    'cerrada la caja, el recibo sigue consultable y reimprimible desde el historial');
 
   const ui = fs.readFileSync(path.join(__dirname,'../src/js/caja.js'),'utf8');
   ok(ui.includes('Historial de recibos de ingreso')&&ui.includes('function cajaSearchIncomeHistory')&&
