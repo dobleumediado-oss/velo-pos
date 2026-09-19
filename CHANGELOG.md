@@ -9,6 +9,17 @@
 - Esto evita que un ID sensible al uso de mayúsculas deje de coincidir con la
   identidad real enviada por la terminal.
 
+### Búsqueda más ágil en todos los buscadores (fase 9)
+
+- Escribir en el buscador del POS o de Inventario volvía a limpiar los mismos
+  textos del catálogo con cada tecla, aunque no hubieran cambiado. Ahora el
+  resultado ya calculado se recuerda: la misma comparación, sin repetir trabajo.
+- Medido con 1,246 productos: de 1.81 ms a 0.35 ms por tecla. Alcanza a los 65
+  puntos de búsqueda de la aplicación —POS, Inventario, Ventas, Clientes,
+  Compras y Gastos— y al buscador global.
+- Los resultados no cambian: una prueba compara el valor recordado contra el
+  recalculado sobre tildes, Ñ, vacíos, nulos y números.
+
 ### Configuración conserva su posición (fase 8)
 
 - Activar una licencia, guardar o eliminar el logo repintaba Configuración desde

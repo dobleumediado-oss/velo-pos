@@ -864,12 +864,26 @@ const fmt = n =>
 // "FAÑA" → "fana", "José" → "jose", "ESCAÑO" → "escano".
 // Así "faña", "fana", "FAÑA" se encuentran entre sí. Maneja Ñ/Ç/tildes
 // que SQLite lower() y un toLowerCase() crudo no equiparan.
-const searchNorm = (s) =>
-  String(s == null ? '' : s)
+// Se llama miles de veces por teclazo sobre los MISMOS textos: el nombre de un
+// producto no cambia entre una letra y la siguiente, pero se volvía a descomponer
+// en Unicode cada vez. Se recuerda lo ya calculado —misma función, mismo valor,
+// sin repetir el trabajo— y la tabla se vacía al llegar al tope para no crecer
+// sin techo si algún día se usara con textos siempre distintos.
+const SEARCH_NORM_CACHE_LIMIT = 20000;
+const _searchNormCache = new Map();
+const searchNorm = (s) => {
+  const key = String(s == null ? '' : s);
+  const remembered = _searchNormCache.get(key);
+  if (remembered !== undefined) return remembered;
+  const value = key
     .normalize('NFD')              // separa letra + acento
     .replace(/[\u0300-\u036f]/g, '') // elimina los acentos
     .toLowerCase()
     .trim();
+  if (_searchNormCache.size >= SEARCH_NORM_CACHE_LIMIT) _searchNormCache.clear();
+  _searchNormCache.set(key, value);
+  return value;
+};
 
 // Extrae solo dígitos de una cadena (para teléfonos/RNC con guiones).
 // "809-555-1234" → "8095551234". Devuelve '' si no hay dígitos.

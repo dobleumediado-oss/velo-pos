@@ -207,6 +207,51 @@ try {
   ok(/const tasks = \[reloadSales\(\{[\s\S]{0,260}limit: VENTAS_PAGE_SIZE/.test(ventasRefreshSource),
     'tras una mutación Ventas recarga su página, no mil filas de la colección compartida');
 
+  console.log('\n== Normalización de búsqueda con memoria ==');
+  // La promesa de este cambio es que el resultado no cambia NUNCA: se compara
+  // contra una implementación de referencia sin memoria, sobre un corpus que
+  // incluye tildes, Ñ, vacíos, nulos y números.
+  const referenceNorm = (value) => String(value == null ? '' : value)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  const { searchNorm: libNorm } = require('../lib/text-normalize');
+
+  const normFrom = dataSourceForWindow.indexOf('const SEARCH_NORM_CACHE_LIMIT');
+  const normTo = dataSourceForWindow.indexOf('// Extrae solo dígitos', normFrom);
+  ok(normFrom > 0 && normTo > normFrom, 'la normalización con memoria vive en data.js');
+  const normContext = {};
+  require('vm').runInNewContext(
+    `${dataSourceForWindow.slice(normFrom, normTo)}
+     this.searchNorm = searchNorm;
+     this.cacheSize = () => _searchNormCache.size;
+     this.limit = SEARCH_NORM_CACHE_LIMIT;`,
+    normContext
+  );
+
+  const corpus = [
+    'Ñoño', 'ÑOÑO', '  José García  ', 'FAÑA', 'Filtro de Aceite NISSAN',
+    'ESCAÑO', 'Água', 'CAFÉ', 'ç cedilla', '', '   ', 'ABC-123', '8095551234',
+    null, undefined, 0, 42, 'MISMO TEXTO', 'MISMO TEXTO', 'mismo texto',
+  ];
+  const divergent = corpus.filter(value =>
+    normContext.searchNorm(value) !== referenceNorm(value) ||
+    libNorm(value) !== referenceNorm(value));
+  ok(divergent.length === 0,
+    `recordar el resultado no cambia ni un caso del corpus${divergent.length ? ' · difieren: ' + divergent.length : ''}`);
+
+  // Segunda pasada: el valor servido desde la memoria es el mismo que el recién calculado.
+  ok(corpus.every(value => normContext.searchNorm(value) === referenceNorm(value)),
+    'el valor recordado coincide con el recalculado en una segunda llamada');
+  ok(normContext.searchNorm('Ñoño') === 'nono' && libNorm('Ñoño') === 'nono' &&
+    normContext.searchNorm(null) === '' && libNorm(null) === '',
+    'frontend y proceso principal siguen normalizando igual');
+
+  // El tope existe para que la memoria no crezca sin techo.
+  for (let i = 0; i < normContext.limit + 50; i += 1) normContext.searchNorm(`texto-único-${i}`);
+  ok(normContext.cacheSize() <= normContext.limit,
+    `la memoria se vacía al llegar al tope y no crece sin control (${normContext.cacheSize()} ≤ ${normContext.limit})`);
+  ok(normContext.searchNorm('Ñoño') === 'nono',
+    'después de vaciarse sigue devolviendo el resultado correcto');
+
   console.log('\n== Clientes sin consulta por fila ==');
   const insertCustomer = db.prepare("INSERT INTO customers(name,rnc,active) VALUES(?,?,1)");
   const insertPhone = db.prepare(
