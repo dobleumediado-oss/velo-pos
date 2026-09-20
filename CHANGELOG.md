@@ -1,6 +1,6 @@
 # Historial de versiones
 
-## 1.51.0 — 2026-09-19
+## 1.50.1 — 2026-09-19
 
 ### Entrar eligiendo quién eres
 
