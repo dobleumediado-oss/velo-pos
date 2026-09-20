@@ -1,5 +1,19 @@
 # Historial de versiones
 
+## 1.51.0 — 2026-09-19
+
+### Entrar eligiendo quién eres
+
+- Supervisor ya no obliga a escribir el correo completo: muestra la lista de
+  administradores registrados del negocio y solo pides la contraseña, igual que
+  Cajero.
+- Quien no aparezca en la lista —el superadministrador, soporte— elige "Otro
+  correo…" y escribe el suyo, con un enlace para volver a la lista.
+- El desplegable de Cajero mostraba un correo de ejemplo cuando la aplicación
+  acababa de abrirse, porque se pintaba antes de que cargaran los usuarios.
+  Ahora espera la lista real del negocio y el cajero puede entrar de una vez.
+- La lista que llega tarde nunca borra el correo que ya estabas escribiendo.
+
 ## 1.50.0 — 2026-09-19
 
 ### Texto íntegro entre el servidor y las terminales
