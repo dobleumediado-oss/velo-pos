@@ -88,16 +88,28 @@ assert(doctor.includes('Canales de impresión'), 'El diagnóstico debe comunicar
 // Reconstruir toda la pantalla para marcar un botón devolvía el reloj a
 // 00:00:00 y vaciaba la fecha, lo que cambiaba la altura del bloque y movía la
 // tarjeta entera: el salto que se veía al pulsar Supervisor.
+let accesoArnes = null;
 {
-  const from = app.indexOf('function buildLoginUserField()');
+  const from = app.indexOf('  const OTRO_CORREO');
   const to = app.indexOf('  function build() {', from);
   assert(from > 0 && to > from, 'el cambio de rol del acceso sigue en app.js');
 
+  const usuariosDelServidor = [
+    { name: 'Administrador', email: 'admin@mipos.do', role: 'admin', active: 1 },
+    { name: 'Dueña', email: 'due\u00f1a@mipos.do', role: 'admin', active: 1 },
+    { name: 'Admin viejo', email: 'viejo@mipos.do', role: 'admin', active: 0 },
+    { name: 'Cajero', email: 'caja@mipos.do', role: 'cajero', active: 1 },
+    { name: 'Super Admin', email: 'dev@sistema.do', role: 'superadmin', active: 1 },
+  ];
   const nodes = new Map();
   const makeNode = (id) => {
     const node = {
-      id, className: '', textContent: '', innerHTML: '', style: {}, children: [],
+      id, className: '', textContent: '', style: {}, children: [],
       focused: false,
+      _innerHTML: '',
+      // Vaciar innerHTML retira los hijos, igual que en el navegador.
+      get innerHTML() { return node._innerHTML; },
+      set innerHTML(value) { node._innerHTML = value; if (value === '') node.children = []; },
       classList: {
         toggle(name, on) {
           const has = node.className.split(' ').includes(name);
@@ -114,13 +126,18 @@ assert(doctor.includes('Canales de impresión'), 'El diagnóstico debe comunicar
         nodes.set('luser', next);
         return prev;
       },
-      focus() { node.focused = true; },
+      focus() { node.focused = true; context.document.activeElement = node; },
+      addEventListener(type, handler) { (node.handlers[type] = node.handlers[type] || []).push(handler); },
+      emit(type) { (node.handlers[type] || []).forEach(handler => handler()); },
+      handlers: {},
+      get tagName() { return String(node.tag || '').toUpperCase(); },
+      get options() { return node.children.filter(child => child.tag === 'option'); },
     };
     nodes.set(id, node);
     return node;
   };
 
-  ['lrole-cajero', 'lrole-admin', 'luser-label', 'luser-slot', 'lerr', 'login-clock-time']
+  ['lrole-cajero', 'lrole-admin', 'luser-label', 'luser-slot', 'luser-hint', 'lerr', 'login-clock-time']
     .forEach(makeNode);
   const firstField = makeNode('luser');
   nodes.get('luser-slot').children.push(firstField);
@@ -130,15 +147,18 @@ assert(doctor.includes('Canales de impresión'), 'El diagnóstico debe comunicar
 
   const context = {
     selRole: 'cajero',
-    window: { _cachedUsers: [] },
+    window: { _cachedUsers: [], api: { users: { getAll: async () => usuariosDelServidor } } },
     document: {
+      activeElement: null,
       getElementById: (id) => nodes.get(id) || null,
       // El campo de Cajero es un <select> que se arma con opciones reales.
       createElement: (tag) => ({ tag, value: '', textContent: '' }),
     },
-    h: (tag, attrs) => {
+    h: (tag, attrs, ...children) => {
       const node = makeNode(attrs && attrs.id ? attrs.id : `${tag}-nuevo`);
       node.tag = tag;
+      if (attrs && attrs.onclick) node.onclick = attrs.onclick;
+      node.textContent = children.filter(child => typeof child === 'string').join('');
       return node;
     },
     currentRole: () => context.selRole,
@@ -146,6 +166,8 @@ assert(doctor.includes('Canales de impresión'), 'El diagnóstico debe comunicar
   vm.runInNewContext(
     `${app.slice(from, to)}
      this.setLoginRole = setLoginRole;
+     this.ensureLoginUsers = ensureLoginUsers;
+     this.refreshLoginUserField = refreshLoginUserField;
      this.currentRole = () => selRole;`,
     context
   );
@@ -178,6 +200,7 @@ assert(doctor.includes('Canales de impresión'), 'El diagnóstico debe comunicar
     'el cambio de rol ya no reconstruye toda la pantalla de acceso');
   assert(app.includes('_startLoginClock();\n    document.getElementById(\'lpass\')?.focus();'),
     'el reloj arranca en el mismo cuadro en que se pinta el acceso');
+  accesoArnes = { context, nodes };
 }
 
 // Pantallas de 1366×768 (portátiles de clientes). Las medidas se tomaron en la
@@ -245,4 +268,43 @@ assert(doctor.includes('Canales de impresión'), 'El diagnóstico debe comunicar
     'la paginación de Inventario se compacta en pantallas bajas');
 }
 
-console.log('✓ Experiencia transversal, recuperación, permisos y salud del sistema verificados');
+// ── Elegir quién entra, sin escribir el correo ───────────────────────────────
+// La lista de usuarios llega después de pintar el acceso. Antes el desplegable
+// de Cajero se quedaba con el correo de ejemplo y Supervisor solo dejaba
+// escribir el correo completo.
+(async () => {
+  const { context, nodes } = accesoArnes;
+  const campo = () => nodes.get('luser');
+  const textos = () => campo().options.map(option => option.textContent);
+  await context.ensureLoginUsers();
+
+  assert.strictEqual(campo().tagName, 'SELECT', 'Cajero conserva su desplegable');
+  assert.deepStrictEqual(textos(), ['Cajero'], 'la lista que llega tarde reemplaza al cajero de ejemplo');
+  assert.strictEqual(campo().options[0].value, 'caja@mipos.do',
+    'el desplegable de Cajero usa el correo registrado del negocio');
+
+  context.setLoginRole('admin');
+  assert.deepStrictEqual(textos(), ['Administrador', 'Due\u00f1a', 'Otro correo…'],
+    'Supervisor lista los administradores activos y deja escribir otro correo');
+  assert(!textos().includes('Super Admin'), 'el superadministrador no se anuncia en el acceso');
+  assert(!textos().includes('Admin viejo'), 'un administrador inactivo no aparece en la lista');
+  assert.strictEqual(nodes.get('luser-label').textContent, 'Usuario', 'la etiqueta acompaña al desplegable');
+
+  const selector = campo();
+  selector.value = '__otro__';
+  selector.emit('change');
+  assert.strictEqual(campo().tagName, 'INPUT', '"Otro correo…" abre el campo libre');
+  assert.strictEqual(nodes.get('luser-label').textContent, 'Email', 'la etiqueta vuelve a Email');
+  assert.strictEqual(nodes.get('luser-hint').children.length, 1, 'se ofrece volver a la lista');
+
+  campo().value = 'dev@sistema.do';
+  context.refreshLoginUserField();
+  assert.strictEqual(campo().value, 'dev@sistema.do',
+    'una recarga de la lista no borra el correo que la persona escribió');
+
+  nodes.get('luser-hint').children[0].onclick();
+  assert.strictEqual(campo().tagName, 'SELECT', 'volver a la lista repone el desplegable');
+  assert.strictEqual(nodes.get('luser-hint').children.length, 0, 'la pista desaparece al volver a la lista');
+
+  console.log('✓ Experiencia transversal, recuperación, permisos y salud del sistema verificados');
+})().catch(error => { console.error(error); process.exit(1); });

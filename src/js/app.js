@@ -760,26 +760,105 @@ function renderLogin() {
   // destruía el reloj —que volvía a 00:00:00 y perdía la fecha, moviendo la
   // card— y obligaba al navegador a rasterizar de nuevo el desenfoque de la
   // tarjeta. Ese era el salto al pulsar Supervisor.
+  // Los usuarios se piden aquí mismo: la pantalla de acceso se pinta antes de
+  // que termine la carga general, así que el desplegable se quedaba con el
+  // correo de ejemplo aunque el negocio tuviera su propio cajero.
+  const OTRO_CORREO = '__otro__';
+  let loginUsers = Array.isArray(window._cachedUsers) ? window._cachedUsers : [];
+  let loginUsersAsked = false;
+  let adminManualEmail = false;
+
+  function loginUsersByRole(role) {
+    return loginUsers.filter(u => u && u.role === role && u.active && u.email);
+  }
+
+  async function ensureLoginUsers() {
+    if (loginUsersAsked) return;
+    loginUsersAsked = true;
+    try {
+      const list = await window.api.users?.getAll?.();
+      if (!Array.isArray(list) || !list.length) return;
+      loginUsers = list;
+      window._cachedUsers = list;
+      refreshLoginUserField();
+    } catch { /* sin lista, el campo se queda como está: siempre se puede escribir */ }
+  }
+
   function buildLoginUserField() {
-    if (selRole !== 'cajero') {
+    const role = selRole === 'cajero' ? 'cajero' : 'admin';
+    const gente = loginUsersByRole(role);
+    // Supervisor sin lista, o quien no aparece en ella (superadmin, soporte):
+    // escribe su correo. Esa puerta nunca se cierra.
+    if (role === 'admin' && (adminManualEmail || !gente.length)) {
       return h('input', { class: 'inp', id: 'luser', type: 'email', placeholder: 'supervisor@velopos.do' });
     }
-    const cajeros = (window._cachedUsers || []).filter(u => u.role === 'cajero' && u.active);
     const sel = h('select', { class: 'inp', id: 'luser' });
-    if (!cajeros.length) {
+    if (!gente.length) {
       const op = document.createElement('option');
       op.value = 'caja@velopos.do';
       op.textContent = 'Cajero';
       sel.appendChild(op);
-    } else {
-      cajeros.forEach(u => {
-        const op = document.createElement('option');
-        op.value = u.email;
-        op.textContent = u.name;
-        sel.appendChild(op);
+      return sel;
+    }
+    gente.forEach(u => {
+      const op = document.createElement('option');
+      op.value = u.email;
+      op.textContent = u.name;
+      sel.appendChild(op);
+    });
+    if (role === 'admin') {
+      const otro = document.createElement('option');
+      otro.value = OTRO_CORREO;
+      otro.textContent = 'Otro correo…';
+      sel.appendChild(otro);
+      sel.addEventListener('change', () => {
+        if (sel.value !== OTRO_CORREO) return;
+        adminManualEmail = true;
+        refreshLoginUserField({ force: true });
+        document.getElementById('luser')?.focus();
       });
     }
     return sel;
+  }
+
+  // Repinta solo el campo. Nunca pisa lo que la persona escribió ni le quita el
+  // foco: si está escribiendo su correo, la lista que llega tarde no lo borra.
+  function refreshLoginUserField({ force = false } = {}) {
+    const slot = document.getElementById('luser-slot');
+    const previous = document.getElementById('luser');
+    if (!slot || !previous) return null;
+    // Solo cuenta como "escrito" lo tecleado: un desplegable siempre trae valor
+    // y con esa condición el de Cajero se quedaba con el correo de ejemplo.
+    const escribiendo = previous.tagName === 'INPUT'
+      && (document.activeElement === previous || String(previous.value || '').trim() !== '');
+    if (!force && escribiendo) return null;
+    const elegido = previous.tagName === 'SELECT' ? previous.value : '';
+    const field = buildLoginUserField();
+    slot.replaceChild(field, previous);
+    if (elegido && field.tagName === 'SELECT'
+      && [...field.options].some(option => option.value === elegido)) field.value = elegido;
+    syncLoginUserField();
+    return field;
+  }
+
+  function syncLoginUserField() {
+    const field = document.getElementById('luser');
+    const label = document.getElementById('luser-label');
+    if (label && field) label.textContent = field.tagName === 'SELECT' ? 'Usuario' : 'Email';
+    const hint = document.getElementById('luser-hint');
+    if (!hint) return;
+    hint.innerHTML = '';
+    if (selRole === 'admin' && adminManualEmail && loginUsersByRole('admin').length) {
+      hint.appendChild(h('button', {
+        type: 'button',
+        class: 'login-hint-btn',
+        onclick: () => {
+          adminManualEmail = false;
+          const field2 = refreshLoginUserField({ force: true });
+          if (field2 && typeof field2.focus === 'function') field2.focus();
+        },
+      }, '← Elegir de la lista'));
+    }
   }
 
   function setLoginRole(role) {
@@ -795,16 +874,9 @@ function renderLogin() {
       adminBtn.classList.toggle('on', role === 'admin');
       adminBtn.style.opacity = role === 'admin' ? '' : '0.55';
     }
-    const label = document.getElementById('luser-label');
-    if (label) label.textContent = role === 'cajero' ? 'Usuario' : 'Email';
-    const slot = document.getElementById('luser-slot');
-    if (slot) {
-      const previous = document.getElementById('luser');
-      const field = buildLoginUserField();
-      if (previous) slot.replaceChild(field, previous);
-      else slot.appendChild(field);
-      if (typeof field.focus === 'function') field.focus();
-    }
+    adminManualEmail = false;
+    const field = refreshLoginUserField({ force: true });
+    if (field && typeof field.focus === 'function') field.focus();
     const error = document.getElementById('lerr');
     if (error) error.innerHTML = '';
   }
@@ -879,7 +951,8 @@ function renderLogin() {
           h('div', { class: 'inp-ic', id: 'luser-slot' },
             h('div', { class: 'ic', html: svg('user') }),
             buildLoginUserField()
-          )
+          ),
+          h('div', { id: 'luser-hint' })
         ),
 
         // Contraseña
@@ -902,6 +975,8 @@ function renderLogin() {
     // ve 00:00:00 ni desaparece la fecha, que es lo que movía la tarjeta.
     _startLoginClock();
     document.getElementById('lpass')?.focus();
+    syncLoginUserField();
+    ensureLoginUsers();
   }
 
   // Control de intentos de login

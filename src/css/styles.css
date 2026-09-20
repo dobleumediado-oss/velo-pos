@@ -440,6 +440,11 @@ select.inp{cursor:pointer}
 .login-card .inp::placeholder{color:rgba(255,255,255,.2)}
 .login-card .inp option{background:#1a1a2e;color:#fff}
 .login-card .inp-ic .ic{color:rgba(255,255,255,.3)}
+/* Vuelta a la lista de supervisores cuando se eligió "Otro correo…". */
+.login-hint-btn{margin-top:6px;padding:0;border:0;background:transparent;cursor:pointer;
+  font:inherit;font-size:10.5px;color:rgba(255,255,255,.45);transition:color .15s}
+.login-hint-btn:hover{color:rgba(255,255,255,.8)}
+.login-hint-btn:focus-visible{outline:2px solid rgba(74,222,128,.75);outline-offset:2px;border-radius:4px}
 .login-card .login-pass-field .inp{padding-right:44px}
 .login-pass-toggle{
   position:absolute;right:5px;top:50%;transform:translateY(-50%);z-index:2;
