@@ -32,3 +32,35 @@ No re-litigar esto salvo que el usuario plantee una necesidad concreta — fue u
 
 ## Brecha conocida
 No se hizo QA interactivo en vivo (sin impresora real en el entorno de dev, sin automatización de UI). Solo `node --check` + smoke tests de arranque antes de enviar v1.7.0. Si aparecen bugs de impresión en campo, revisar primero la tab Proveedores y los nuevos paneles "Impresión por módulo" / "Impresiones fallidas" en Configuración — es el código menos probado en campo.
+
+## Área imprimible térmica y firma VELO POS (septiembre 2026)
+
+- **Ticket centrado en el papel.** Un rollo de 80 mm imprime unos 72 mm
+  centrados (4–76 mm); uno de 58 mm, unos 48 mm (5–53 mm). El ticket empezaba a
+  2 mm del borde y la impresora cortaba el costado izquierdo. Ahora el cuerpo se
+  centra (`margin:0 auto`) y su ancho es el de la plantilla menos sus márgenes
+  (`_thermalBodyWidth`).
+
+  Medido sobre el PDF, con página del ancho del rollo y márgenes 0, como la
+  impresión física:
+
+  | Plantilla | Antes | Ahora |
+  |---|---|---|
+  | 80 mm | 2.1–77.9 mm | 4.2–76.1 mm |
+  | 72 mm | 2.1–77.9 mm | 8.1–72.2 mm |
+  | 58 mm | — | 5.3–53.1 mm |
+
+- **El margen configurado estrecha el ticket.** El margen de cada plantilla
+  (Configuración → estilo) descuenta ancho en lugar de empujar el contenido
+  fuera del papel. Un valor sin unidad se ignora y se usan 2 mm.
+- **Las separadoras no se salen.** Las líneas de guiones (42 caracteres) medían
+  76.7 mm, más que el ticket de 72 mm. Ahora se recortan al ancho (`.sep`).
+- **La firma no agrega hojas.** En las plantillas Carta (Moderna, Formal y NCF)
+  la firma ocupa el espacio libre a la izquierda de los totales
+  (`<!--velo-branding-slot-->`). Al pie sumaba ~58 px: con solo 54 px libres en
+  una factura corta, mandaba el QR solo a una segunda hoja. Media Carta y las
+  térmicas la mantienen al final.
+- **Totales de la Formal.** El recuadro de totales crece con el monto; a 240 px
+  fijos cortaba un total de seis cifras.
+- `test:financial` (bloque K2) protege el centrado, el recorte de las
+  separadoras, el hueco de la firma y el recuadro de totales.

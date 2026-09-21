@@ -1,5 +1,21 @@
 # Historial de versiones
 
+## 1.50.2 — 2026-09-21
+
+### Impresión sin cortes ni hojas de más
+
+- El ticket térmico ya no se corta del lado izquierdo. Un rollo de 80 mm solo
+  imprime unos 72 mm centrados, y el ticket empezaba a 2 mm del borde. Ahora va
+  centrado en el papel, con el mismo resultado en las plantillas de 80, 72 y
+  58 mm.
+- Las líneas de guiones del ticket clásico ya no se salen por la derecha.
+- El margen que se configura en cada plantilla térmica ahora sí funciona:
+  estrecha el ticket en vez de empujarlo fuera del papel.
+- En las facturas Carta (Moderna, Formal y NCF), el QR de VELO POS pasa al
+  espacio libre junto a los totales. Ya no agrega altura, así que una factura
+  corta vuelve a salir en una sola hoja.
+- En la factura Formal, un total grande ya no se corta dentro de su recuadro.
+
 ## 1.50.1 — 2026-09-19
 
 ### Entrar eligiendo quién eres
