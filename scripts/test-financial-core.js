@@ -1215,6 +1215,54 @@ ok(adjustedFormats.every(html => html.includes('Entregado por')
 ok(adjustedFormats.every(html => !html.includes('Pagada')),
   'una factura reajustada que nació a crédito no se presenta como pagada');
 
+console.log('\n== K2. Plantillas: ticket dentro del área imprimible y firma sin hoja extra ==');
+// La firma VELO POS iba al pie del documento y sumaba ~58 px: en una factura
+// corta bastaba para mandar el QR solo a una segunda hoja. En las plantillas
+// Carta ahora ocupa el espacio libre a la izquierda de los totales.
+const officialSample = { ...documentSample, type: 'factura', status: 'completed', payment_method: 'efectivo' };
+const firma = 'Solicita tu demostración';
+const cuenta = (html, text) => html.split(text).length - 1;
+[
+  ['carta_recibo', 'Sub Total sin impuestos'],
+  ['carta_formal', 'Sub Total sin impuestos'],
+  ['carta_ncf', 'Sub Total sin impuestos'],
+].forEach(([id, totales]) => {
+  const html = getPlantilla(id).render(officialSample, cfgSample, optsSample);
+  ok(cuenta(html, firma) === 1 && !html.includes('velo-branding-slot'),
+    `${id}: la firma aparece una vez y no deja el marcador`);
+  ok(html.indexOf(firma) < html.indexOf(totales),
+    `${id}: la firma va junto a los totales, no al pie donde agregaba una hoja`);
+  const sinFirma = getPlantilla(id).render(officialSample, { ...cfgSample, invoice_branding_enabled: '0' }, optsSample);
+  ok(!sinFirma.includes(firma) && !sinFirma.includes('velo-branding-slot'),
+    `${id}: con la firma apagada no queda rastro del hueco`);
+});
+const mediaCarta = getPlantilla('media_carta').render(officialSample, cfgSample, optsSample);
+ok(cuenta(mediaCarta, firma) === 1, 'Media Carta conserva su firma compacta al pie');
+const cotizacionA4 = getPlantilla('carta_recibo').render({ ...officialSample, type: 'cotizacion' }, cfgSample, optsSample);
+ok(!cotizacionA4.includes(firma) && !cotizacionA4.includes('velo-branding-slot'),
+  'una cotización no lleva firma ni deja el marcador');
+const formalCss = getPlantilla('carta_formal').render(officialSample, cfgSample, optsSample);
+ok(/\.totals-box \{ margin-left:auto; min-width:240px;/.test(formalCss) && formalCss.includes('.total-row > :last-child { white-space:nowrap; }'),
+  'el recuadro de totales de la Formal crece con el monto en vez de cortarlo');
+
+// Un rollo de 80 mm imprime ~72 mm centrados: el ticket debe ir centrado en el
+// papel y su ancho descontar los márgenes, o la impresora corta un costado.
+['termica_58_basica', 'termica_80_clasica', 'termica_80_moderna', 'termica_80_minimal', 'termica_72_clasica']
+  .forEach(id => {
+    const html = getPlantilla(id).render(officialSample, cfgSample, optsSample);
+    ok(/body \{ width:calc\(\d+mm - 2mm - 2mm\); max-width:100%; margin:0 auto;/.test(html),
+      `${id}: el ticket se centra en el papel y descuenta sus márgenes`);
+  });
+const clasica = getPlantilla('termica_80_clasica').render(officialSample, cfgSample, optsSample);
+ok(!clasica.includes('<div style="text-align:center">─') && clasica.includes('.sep { text-align:center; white-space:nowrap; overflow:hidden; }'),
+  'las líneas separadoras no se salen del ancho del ticket');
+const conMargen = getPlantilla('termica_80_clasica').render(officialSample, cfgSample,
+  { ...optsSample, _estilos: { marginLeft: '6mm', marginRight: '5mm' } });
+ok(conMargen.includes('width:calc(76mm - 6mm - 5mm)'),
+  'subir el margen estrecha el ticket en lugar de empujarlo fuera del papel');
+ok(_thermalBodyWidth(76, '6', 'abc') === 'calc(76mm - 2mm - 2mm)',
+  'un margen escrito sin unidad no rompe el ancho del ticket');
+
 console.log('\n== I. Normalización de búsqueda (lib/text-normalize) ==');
 const { searchNorm, digitsOf } = require('../lib/text-normalize');
 ok(searchNorm('Ñoño') === 'nono', "searchNorm quita tildes/Ñ: 'Ñoño'→'nono'");

@@ -591,7 +591,7 @@ function _veloQrSvg(url) {
 // Devuelve el HTML del bloque promocional, o '' si está desactivado, si el
 // documento no es factura oficial, o si no hay URL válida.
 //  variant: 'a4' (hoja) | 'termica'   ·   widthMm: ancho útil térmico.
-function renderInvoiceBranding(cfg, sale, variant, widthMm) {
+function renderInvoiceBranding(cfg, sale, variant, widthMm, { inline = false } = {}) {
   const s = _brandingSettings(cfg);
   if (!s.enabled) return '';
   if (!_esFacturaOficial(sale)) return '';
@@ -630,7 +630,12 @@ function renderInvoiceBranding(cfg, sale, variant, widthMm) {
   // negrita (regla b,strong de _boostWeights) no toque la firma. El contenedor
   // fija font-weight:400 para aislar también el texto heredado.
   const textHtml = _esc(s.text).replace('VELO POS', '<span style="font-weight:700">VELO POS</span>');
-  return `<div style="margin-top:${mtop}px;display:flex;align-items:center;gap:${gap}px;max-width:330px;color:#4b5263;font-weight:400;break-inside:avoid;page-break-inside:avoid;-webkit-print-color-adjust:exact;print-color-adjust:exact">
+  // inline: la firma ocupa el espacio libre a la izquierda de los totales, al
+  // pie de ese recuadro, y no agrega altura al documento.
+  const place = inline
+    ? 'margin:0 auto 0 0;align-self:flex-end;flex:0 1 auto;min-width:0;'
+    : `margin-top:${mtop}px;`;
+  return `<div style="${place}display:flex;align-items:center;gap:${gap}px;max-width:330px;color:#4b5263;font-weight:400;break-inside:avoid;page-break-inside:avoid;-webkit-print-color-adjust:exact;print-color-adjust:exact">
     ${qr ? `<div style="width:${qrPx}px;height:${qrPx}px;flex:0 0 auto">${qr}</div>` : ''}
     <div style="line-height:1.3">
       <div style="font-size:${mainPt};font-weight:600">${textHtml}</div>
@@ -667,17 +672,29 @@ function renderCreditSignatures(sale, variant) {
 // Si existe el <script> de paginación (plantilla A4 moderna) lo coloca ANTES,
 // para que el cálculo de páginas (scrollHeight) incluya la firma; en el resto,
 // justo antes de </body>. Nunca duplica ni reordena el contenido existente.
+// Hueco que las plantillas Carta dejan a la izquierda de sus totales. Al pie
+// del documento la firma sumaba ~58 px, y en una factura corta eso bastaba para
+// mandar el QR solo a una segunda hoja.
+const BRANDING_SLOT = '<!--velo-branding-slot-->';
+
 function _injectBranding(html, cfg, sale, variant, widthMm) {
   // Blindaje total: la firma es opcional y NUNCA debe impedir imprimir. Cualquier
   // fallo inesperado devuelve el documento original intacto (la factura sale igual).
   try {
-    const block = `${renderCreditSignatures(sale, variant)}${renderInvoiceBranding(cfg, sale, variant, widthMm)}`;
-    if (!block) return html;
-    const bodyEnd = html.lastIndexOf('</body>');
-    if (bodyEnd === -1) return html + block;
-    const scriptAt = html.lastIndexOf('<script', bodyEnd);
+    let out = html;
+    let branding = '';
+    if (variant === 'a4' && out.includes(BRANDING_SLOT)) {
+      out = out.replace(BRANDING_SLOT, renderInvoiceBranding(cfg, sale, variant, widthMm, { inline: true }));
+    } else {
+      branding = renderInvoiceBranding(cfg, sale, variant, widthMm);
+    }
+    const block = `${renderCreditSignatures(sale, variant)}${branding}`;
+    if (!block) return out;
+    const bodyEnd = out.lastIndexOf('</body>');
+    if (bodyEnd === -1) return out + block;
+    const scriptAt = out.lastIndexOf('<script', bodyEnd);
     const pos = scriptAt !== -1 ? scriptAt : bodyEnd;
-    return html.slice(0, pos) + block + html.slice(pos);
+    return out.slice(0, pos) + block + out.slice(pos);
   } catch (_e) {
     return html;
   }
@@ -790,7 +807,7 @@ function _termicaHeader(cfg, opts, widthMm) {
   if (opts.rnc && cfg.biz_rnc) lines.push(`<div style="text-align:center">RNC: ${_esc(cfg.biz_rnc)}</div>`);
   if (cfg.biz_addr) lines.push(`<div style="text-align:center">${_esc(cfg.biz_addr)}</div>`);
   if (cfg.biz_phone) lines.push(`<div style="text-align:center">Tel: ${_esc(cfg.biz_phone)}</div>`);
-  lines.push(`<div style="text-align:center">${sep}</div>`);
+  lines.push(`<div class="sep">${sep}</div>`);
   return lines.join('');
 }
 
@@ -812,6 +829,15 @@ function _termicaItems(items, widthMm) {
 }
 
 // Plantilla 1 — Térmica Básica/Clásica
+// Ancho del ticket térmico: el de la plantilla menos sus márgenes, y centrado en
+// el papel. Un rollo de 80 mm imprime unos 72 mm centrados; el ticket empezaba a
+// 2 mm del borde y la impresora cortaba ese costado. Si alguien sube el margen,
+// el contenido se estrecha en lugar de salirse por el lado contrario.
+function _thermalBodyWidth(widthMm, marginLeft, marginRight) {
+  const safe = value => (/^\d+(\.\d+)?(mm|cm|in|px|pt)$/.test(String(value || '').trim()) ? String(value).trim() : '2mm');
+  return `calc(${widthMm}mm - ${safe(marginLeft)} - ${safe(marginRight)})`;
+}
+
 function renderTermica(sale, cfg, opts, widthMm = 76) {
   const cols    = widthMm <= 52 ? 32 : 42;
   const sep     = '─'.repeat(cols);
@@ -833,16 +859,19 @@ function renderTermica(sale, cfg, opts, widthMm = 76) {
 <style>
   @page { size: ${widthMm}mm auto; margin: ${mt} ${mr} ${mb} ${ml}; }
   * { margin:0; padding:0; box-sizing:border-box; }
-  body { width:${widthMm-4}mm; font-family:'Courier New',monospace;
+  body { width:${_thermalBodyWidth(widthMm, ml, mr)}; max-width:100%; margin:0 auto;
+         font-family:'Courier New',monospace;
          font-size:${fs}; line-height:${lh}; color:#000; }
   img { display:block; margin:0 auto; }
+  /* Las líneas de guiones medían más que el ticket y se salían por la derecha. */
+  .sep { text-align:center; white-space:nowrap; overflow:hidden; }
 </style></head><body>
   ${_termicaHeader(cfg, opts, widthMm)}
   <div style="text-align:center;font-weight:700">*** ${_docLabel(sale)} ***</div>
   ${sale.isReprint ? '<div style="text-align:center">--- REIMPRESIÓN ---</div>' : ''}
   ${_adjustedCopyNotice(sale)}
   ${isDevolucion && sale.original_sale_id ? `<div style="text-align:center">Ref. venta ${facturaLabelOriginal(sale)}</div>` : ''}
-  <div style="text-align:center">${sep}</div>
+  <div class="sep">${sep}</div>
   <div style="display:flex;justify-content:space-between">
     <span>No.: ${facturaLabel(sale)}</span>
     <span>Fecha: ${sale.date}</span>
@@ -860,40 +889,40 @@ function renderTermica(sale, cfg, opts, widthMm = 76) {
   ${sale.customer_phone ? `<div style="display:flex;justify-content:space-between"><span>${_customerPhoneLabel(sale).split(':')[0]}:</span><span>${_esc(sale.customer_phone)}</span></div>` : ''}
   ${sale.customer_contact_name ? `<div style="display:flex;justify-content:space-between"><span>Solicitado por:</span><span>${_esc(sale.customer_contact_name)}${sale.customer_contact_role ? ` · ${_esc(sale.customer_contact_role)}` : ''}</span></div>` : ''}
   ${sale.customer_branch_name ? `<div style="display:flex;justify-content:space-between"><span>Entregar en:</span><span>${_esc(sale.customer_branch_name)}${sale.customer_branch_address ? ` · ${_esc(sale.customer_branch_address)}` : ''}</span></div>` : ''}
-  <div style="text-align:center">${sep}</div>
+  <div class="sep">${sep}</div>
   <div style="display:flex;justify-content:space-between;font-weight:700">
     <span>DESCRIPCIÓN</span><span>TOTAL</span>
   </div>
-  <div style="text-align:center">${sep}</div>
+  <div class="sep">${sep}</div>
   ${_termicaItems(sale.items||[], widthMm)}
-  <div style="text-align:center">${sep}</div>
+  <div class="sep">${sep}</div>
   <div style="display:flex;justify-content:space-between">
     <span>Subtotal:</span><span>RD$${Number(sale.subtotal||0).toLocaleString('es-DO')}</span>
   </div>
   ${sale.discount_amt > 0 ? `<div style="display:flex;justify-content:space-between"><span>Descuento (${Math.round((sale.discount_pct||0)*100)/100}%):</span><span>-RD$${Number(sale.discount_amt).toLocaleString('es-DO')}</span></div>` : ''}
   ${_showItbis(sale) ? `<div style="display:flex;justify-content:space-between"><span>ITBIS (${sale.tax_pct||18}%):</span><span>RD$${(Math.round(_displayTaxAmt(sale)*100)/100).toLocaleString('es-DO')}</span></div>` : ''}
   ${Number(sale.additional_charges_total || 0) > 0 ? `<div style="display:flex;justify-content:space-between"><span>Cargos adicionales:</span><span>RD$${Number(sale.additional_charges_total).toLocaleString('es-DO')}</span></div>` : ''}
-  <div style="text-align:center">${sepD}</div>
+  <div class="sep">${sepD}</div>
   <div style="display:flex;justify-content:space-between;font-weight:700;font-size:${widthMm<=52?'12px':'13px'}">
     <span>TOTAL:</span><span>RD$${Number(sale.total||0).toLocaleString('es-DO')}</span>
   </div>
   ${String(sale.display_currency || '').toUpperCase() === 'USD' && Number(sale.display_exchange_rate) > 0
     ? `<div style="display:flex;justify-content:space-between"><span>Equivalente USD:</span><strong>US$${Number(sale.display_amount || (Number(sale.total || 0) / Number(sale.display_exchange_rate))).toFixed(2)}</strong></div>` : ''}
-  <div style="text-align:center">${sepD}</div>
+  <div class="sep">${sepD}</div>
   ${sale.payment_method === 'mixto' ? `
   <div style="display:flex;justify-content:space-between"><span>Método:</span><span>MIXTO</span></div>
   ${sale.mix_efec > 0 ? `<div style="display:flex;justify-content:space-between"><span>  Efectivo:</span><span>RD$${Number(sale.mix_efec).toLocaleString('es-DO')}</span></div>` : ''}
   ${sale.mix_card > 0 ? `<div style="display:flex;justify-content:space-between"><span>  Tarjeta/Trans.:</span><span>RD$${Number(sale.mix_card).toLocaleString('es-DO')}</span></div>` : ''}
   ` : `<div style="display:flex;justify-content:space-between"><span>Método de pago:</span><span>${_esc(_pagoResumenTexto(sale))}</span></div>`}
   ${_showNcf(sale, opts) ? `
-  <div style="text-align:center">${sep}</div>
+  <div class="sep">${sep}</div>
   <div style="text-align:center">Documento con validez fiscal</div>
   <div style="text-align:center;font-weight:700">NCF: ${ncf}</div>` : ''}
   ${opts.mensaje && cfg.receipt_msg ? `
-  <div style="text-align:center">${sep}</div>
+  <div class="sep">${sep}</div>
   <div style="text-align:center">${cfg.receipt_msg}</div>
   <div style="text-align:center">Conserve su comprobante</div>` : ''}
-  <div style="text-align:center">${sep}</div>
+  <div class="sep">${sep}</div>
 </body></html>`;
 }
 
@@ -915,7 +944,8 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
 <style>
   @page { size: ${widthMm}mm auto; margin: ${_mt2} ${_mr2} ${_mb2} ${_ml2}; }
   * { margin:0; padding:0; box-sizing:border-box; }
-  body { width:${widthMm-4}mm; font-family:'Courier New',monospace;
+  body { width:${_thermalBodyWidth(widthMm, _ml2, _mr2)}; max-width:100%; margin:0 auto;
+         font-family:'Courier New',monospace;
          font-size:${_fs2}; line-height:${_lh2}; color:#000; }
   .title { text-align:center; font-size:15px; font-weight:900;
            letter-spacing:2px; margin:4px 0; }
@@ -986,7 +1016,8 @@ function renderTermicaMinimal(sale, cfg, opts, widthMm = 76) {
 <style>
   @page { size: ${widthMm}mm auto; margin: 1mm 2mm 3mm 2mm; }
   * { margin:0; padding:0; box-sizing:border-box; }
-  body { width:${widthMm-4}mm; font-family:'Courier New',monospace;
+  body { width:${_thermalBodyWidth(widthMm, '2mm', '2mm')}; max-width:100%; margin:0 auto;
+         font-family:'Courier New',monospace;
          font-size:10.5px; line-height:1.4; color:#000; }
 </style></head><body>
   <div style="text-align:center;font-size:12px;font-weight:700;margin-bottom:2px">${_esc(cfg.biz_name||'Mi Negocio')}</div>
@@ -1223,6 +1254,7 @@ function renderCartaRecibo(sale, cfg, opts) {
       </div>
     </div>` : showMoney ? `
     <div class="foot-wrap">
+      <!--velo-branding-slot-->
       <div class="totals">
         <div class="tr"><span>Sub Total sin impuestos</span><span>${_n2(displaySubtotal)}</span></div>
         ${showTax ? `<div class="tr"><span>Total ITBIS</span><span>${_n2(displayTax)}</span></div>` : ''}
@@ -1507,9 +1539,11 @@ function renderCartaFormal(sale, cfg, opts) {
   thead tr { background:#0d0f12; color:#fff; }
   th { padding:9px 12px; text-align:left; font-size:11px; font-weight:600; }
   td { padding:8px 12px; border-bottom:1px solid #e5e7eb; }
-  .totals-box { margin-left:auto; width:240px; background:#f9fafb;
+  /* Crece con el monto: a 240 px fijos, un total de seis cifras se salía del recuadro. */
+  .totals-box { margin-left:auto; min-width:240px; max-width:340px; background:#f9fafb;
                 border-radius:6px; padding:10px 14px; }
-  .total-row { display:flex; justify-content:space-between; padding:3px 0; }
+  .total-row { display:flex; justify-content:space-between; gap:12px; padding:3px 0; }
+  .total-row > :last-child { white-space:nowrap; }
   .grand-total { font-size:16px; font-weight:700; border-top:2px solid #000;
                  padding-top:6px; margin-top:4px; }
   img { display:block; max-height:45px; max-width:160px; }
@@ -1561,6 +1595,8 @@ function renderCartaFormal(sale, cfg, opts) {
     <tbody>${rows}</tbody>
   </table>
 
+  <div style="display:flex;align-items:flex-end;gap:16px">
+  <!--velo-branding-slot-->
   <div class="totals-box">
     ${isExpensePayment ? `
     <div class="total-row"><span>Total del gasto</span><span>RD$${_n2(sale.expense_total || displayTotal)}</span></div>
@@ -1578,6 +1614,7 @@ function renderCartaFormal(sale, cfg, opts) {
     ${Number(sale.prepaid_amount || 0) > 0 ? `<div class="total-row"><span>Anticipo de servicio aplicado</span><span>-RD$${_n2(sale.prepaid_amount)}</span></div><div class="total-row"><span>Restante cobrado</span><strong>RD$${_n2(Math.max(0,displayTotal-Number(sale.trade_in_amount||0)-Number(sale.prepaid_amount||0)))}</strong></div>` : ''}
     ${String(sale.display_currency || '').toUpperCase() === 'USD' && Number(sale.display_exchange_rate) > 0
       ? `<div class="total-row"><span>Equivalente USD</span><strong>US$${Number(sale.display_amount || (displayTotal / Number(sale.display_exchange_rate))).toFixed(2)}</strong></div>` : ''}`}
+  </div>
   </div>
 
   ${Number(sale.trade_in_amount || 0) > 0 ? `<div style="margin-top:8px;font-size:10px;color:#444;background:#f3f4f6;padding:7px 9px;border-radius:4px"><strong>Razón del restante:</strong> se aplicaron RD$${_n2(sale.trade_in_amount)} como parte de pago por ${_esc(sale.trade_in_product_name || 'equipo usado')}${sale.trade_in_imei ? ` · IMEI/serial ${_esc(sale.trade_in_imei)}` : ''}.${sale.trade_in_seller_name ? `<br>Entregado por: ${_esc(sale.trade_in_seller_name)}${sale.trade_in_seller_document ? ` · Documento ${_esc(sale.trade_in_seller_document)}` : ''}${sale.trade_in_seller_phone ? ` · Tel. ${_esc(sale.trade_in_seller_phone)}` : ''}${sale.trade_in_seller_address ? `<br>Dirección: ${_esc(sale.trade_in_seller_address)}` : ''}` : ''}${sale.trade_in_ownership_declared && sale.trade_in_lawful_origin_declared ? '<br>La persona declara propiedad legítima y procedencia lícita; equipo no reportado, bloqueado, financiado ni reclamado por terceros.' : ''}</div>` : ''}
@@ -1706,6 +1743,7 @@ function renderCartaNCF(sale, cfg, opts) {
   </table>
 
   <div class="total-section">
+    <!--velo-branding-slot-->
     <table class="total-table">
       ${isExpensePayment ? `
       <tr><td>Total del gasto</td><td style="text-align:right">RD$${_n2(sale.expense_total || displayTotal)}</td></tr>
