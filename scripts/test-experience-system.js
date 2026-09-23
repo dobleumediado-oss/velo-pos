@@ -268,6 +268,37 @@ let accesoArnes = null;
     'la paginación de Inventario se compacta en pantallas bajas');
 }
 
+// ── Comprobantes para la contable, fuera de Configuración ────────────────────
+// Los reportes 607/608 vivían dentro de Configuración, que solo abre un
+// administrador, y no había forma de sacar copias de las facturas en lote.
+{
+  const reportes = read('src/js/reportes.js');
+  const sucursales = read('src/js/sucursales.js');
+  const print = read('src/js/print.js');
+
+  assert(reportes.includes("{ v: 'comprobantes', l: 'Comprobantes fiscales' }") &&
+    reportes.includes('function _renderReporteComprobantes('),
+    'Reportes tiene su pestaña de comprobantes fiscales');
+  assert(!sucursales.includes('id="btn-rep-ncf"') &&
+    sucursales.includes('Los reportes 607/608 están en Reportes → Comprobantes fiscales'),
+    'Configuración ya no guarda los reportes 607/608 y dice dónde están');
+  assert(reportes.includes("if (typeof modalReporteNCF === 'function') modalReporteNCF();"),
+    'la pestaña abre el mismo reporte 607/608, sin duplicar su código');
+
+  assert(reportes.includes('function _repFacturasConComprobante(') &&
+    reportes.includes("pagina.filter(venta => String(venta.ncf || '').trim())") &&
+    reportes.includes("range: 'custom', dateFrom: desde, dateTo: hasta"),
+    'las copias toman las facturas con comprobante del período elegido');
+  assert(reportes.includes('print_html_only: true') && print.includes('if (sale.print_html_only) return html;'),
+    'el lote reutiliza la misma plantilla de impresión sin abrir una ventana por factura');
+  assert(/\.replace\(\/<script\[\\s\\S\]\*\?<\\\/script>\/gi, ''\)/.test(reportes),
+    'cada copia entra sin su script de autoajuste, que mediría el lote entero');
+  assert(reportes.includes('.velo-copia { break-after: page; page-break-after: always; }'),
+    'cada factura del lote sale en su propia página');
+  assert(reportes.includes('function _repPlantillasDeHoja(') && reportes.includes("p.tipo === 'carta'"),
+    'solo se ofrecen plantillas de hoja: una térmica no sirve para archivar');
+}
+
 // ── Elegir quién entra, sin escribir el correo ───────────────────────────────
 // La lista de usuarios llega después de pintar el acceso. Antes el desplegable
 // de Cajero se quedaba con el correo de ejemplo y Supervisor solo dejaba

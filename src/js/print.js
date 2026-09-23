@@ -701,6 +701,9 @@ function printReceipt(sale, isReprint = false) {
       </div>`;
       html = html.includes('</body>') ? html.replace('</body>', signatureBlock + '</body>') : html + signatureBlock;
     }
+    // Copias en lote (Reportes → Comprobantes): quien llama arma un solo
+    // documento con muchas facturas, así que aquí solo se devuelve el HTML.
+    if (sale.print_html_only) return html;
     _openPrintWindow(html, jobType, sale.id, isReprint, {
       printerName: sale.print_printer_name || '',
       profileId: sale.print_profile_id || '',

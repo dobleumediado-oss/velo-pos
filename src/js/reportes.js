@@ -14,7 +14,7 @@ let repRange   = 'month';
 let repDateFrom = '';
 let repDateTo   = '';
 let repData     = null;
-let repTab      = 'financiero'; // 'financiero' | 'abonos' | 'inventario'
+let repTab      = 'financiero'; // 'financiero' | 'abonos' | 'inventario' | 'comprobantes'
 let repPriceMode = 'all';
 let repCustomerType = 'all';
 
@@ -73,6 +73,9 @@ async function renderReportes(el) {
     { v: 'financiero', l: 'Financiero' },
     { v: 'abonos',     l: 'Abonos CxC' },
     { v: 'inventario', l: 'Inventario valorizado' },
+    // Los reportes de comprobantes vivían dentro de Configuración, que solo abre
+    // un administrador. Aquí los usa quien tenga acceso a Reportes.
+    { v: 'comprobantes', l: 'Comprobantes fiscales' },
   ];
   mainDefs.forEach(t => {
     mainTabs.appendChild(h('button', {
@@ -95,6 +98,11 @@ async function renderReportes(el) {
   // Si pestaña inventario, renderizar y salir
   if (repTab === 'inventario') {
     await _renderReporteInventario(el);
+    return;
+  }
+
+  if (repTab === 'comprobantes') {
+    _renderReporteComprobantes(el);
     return;
   }
 
@@ -1522,4 +1530,162 @@ function exportInventarioValorizadoPDF(prods) {
   </body></html>`;
 
   printHTML(html);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// COMPROBANTES FISCALES — reportes 607/608 y copias de facturas
+// ══════════════════════════════════════════════════════════════════════
+// Los reportes vivían dentro de Configuración, que solo abre un administrador;
+// la asistente que arma el envío a la contable no podía entrar. Aquí dependen
+// del acceso a Reportes, que el dueño concede por rol desde Módulos.
+// Las copias resuelven lo otro: con 100 facturas al mes, guardarlas una por una
+// era el trabajo de una tarde.
+
+function _repMesActual() {
+  const hoy = new Date();
+  const dos = n => String(n).padStart(2, '0');
+  const primero = `${hoy.getFullYear()}-${dos(hoy.getMonth() + 1)}-01`;
+  const ultimo = `${hoy.getFullYear()}-${dos(hoy.getMonth() + 1)}-${dos(new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0).getDate())}`;
+  return { primero, ultimo };
+}
+
+// Plantillas de hoja (Carta/A4). Una térmica no sirve para archivar ni enviar
+// a la contable, así que no se ofrecen aquí.
+function _repPlantillasDeHoja() {
+  const todas = (typeof PLANTILLAS !== 'undefined' && Array.isArray(PLANTILLAS)) ? PLANTILLAS : [];
+  return todas.filter(p => p.tipo === 'carta');
+}
+
+function _repPlantillaPorDefecto() {
+  const hojas = _repPlantillasDeHoja();
+  const configurada = DB?.settings?.print_template || '';
+  if (hojas.some(p => p.id === configurada)) return configurada;
+  return hojas.length ? hojas[0].id : 'carta_recibo';
+}
+
+// Facturas con comprobante fiscal del período, en páginas para no pedir miles
+// de filas de una vez.
+async function _repFacturasConComprobante(desde, hasta) {
+  const encontradas = [];
+  const pageSize = 500;
+  for (let offset = 0; offset < 20000; offset += pageSize) {
+    const pagina = await window.api.sales.getAll({
+      range: 'custom', dateFrom: desde, dateTo: hasta,
+      view: 'sales', limit: pageSize, offset,
+    }) || [];
+    encontradas.push(...pagina.filter(venta => String(venta.ncf || '').trim()));
+    if (pagina.length < pageSize) break;
+  }
+  return encontradas.sort((a, b) =>
+    String(a.sale_date || '').localeCompare(String(b.sale_date || '')) || Number(a.id || 0) - Number(b.id || 0));
+}
+
+// Un solo documento con todas las facturas, una por página. Se reutiliza la
+// misma plantilla con que se imprime una factura suelta: la copia que recibe
+// la contable es idéntica a la que recibió el cliente.
+async function _repCopiasHTML(ventas, templateId, onProgress) {
+  let cabeza = '';
+  const cuerpos = [];
+  for (let i = 0; i < ventas.length; i += 1) {
+    const completa = await window.api.sales.getById({ id: ventas[i].id });
+    if (!completa) continue;
+    const payload = {
+      ...(typeof ventasPrintPayload === 'function' ? ventasPrintPayload(completa) : completa),
+      print_template_id: templateId,
+      print_html_only: true,
+    };
+    const html = printReceipt(payload, true);
+    if (typeof html !== 'string' || !html.trim()) continue;
+    if (!cabeza) cabeza = (html.match(/<head[^>]*>([\s\S]*?)<\/head>/i) || ['', ''])[1];
+    // El script de autoajuste mide UNA factura; en el lote mediría el documento
+    // entero y encogería todo, así que se retira de cada copia.
+    const cuerpo = (html.match(/<body[^>]*>([\s\S]*?)<\/body>/i) || ['', ''])[1]
+      .replace(/<script[\s\S]*?<\/script>/gi, '');
+    cuerpos.push(`<div class="velo-copia">${cuerpo}</div>`);
+    if (typeof onProgress === 'function') onProgress(i + 1, ventas.length);
+  }
+  if (!cuerpos.length) return '';
+  return `<!DOCTYPE html><html><head>${cabeza}
+<style>
+  .velo-copia { break-after: page; page-break-after: always; }
+  .velo-copia:last-child { break-after: auto; page-break-after: auto; }
+</style></head><body>${cuerpos.join('')}</body></html>`;
+}
+
+async function _repGenerarCopias(modo) {
+  const desde = document.getElementById('rep-cmp-from')?.value || '';
+  const hasta = document.getElementById('rep-cmp-to')?.value || '';
+  const templateId = document.getElementById('rep-cmp-tpl')?.value || _repPlantillaPorDefecto();
+  if (!desde || !hasta) { toast('Elige el desde y el hasta', 'w'); return; }
+  const estado = document.getElementById('rep-cmp-estado');
+  const botones = [...document.querySelectorAll('[data-rep-cmp-btn]')];
+  botones.forEach(b => { b.disabled = true; b.style.opacity = '.6'; });
+  const liberar = () => botones.forEach(b => { b.disabled = false; b.style.opacity = ''; });
+  try {
+    if (estado) estado.textContent = 'Buscando facturas con comprobante…';
+    const ventas = await _repFacturasConComprobante(desde, hasta);
+    if (!ventas.length) {
+      if (estado) estado.textContent = 'No hay facturas con comprobante en ese período.';
+      toast('No hay facturas con comprobante en ese período', 'w');
+      return;
+    }
+    const armar = async () => _repCopiasHTML(ventas, templateId, (hechas, total) => {
+      if (estado) estado.textContent = `Preparando copia ${hechas} de ${total}…`;
+    });
+    if (modo === 'imprimir') {
+      const html = await armar();
+      if (!html) { toast('No se pudo preparar el documento', 'err'); return; }
+      printHTML(html, 'reporte');
+    } else {
+      guardarDocumentoPDF(armar, `Facturas-con-comprobante-${desde}_a_${hasta}`);
+    }
+    if (estado) estado.textContent = `${ventas.length} factura(s) con comprobante · una por página.`;
+  } catch (error) {
+    console.error('[reportes:copias]', error);
+    if (estado) estado.textContent = 'No se pudieron preparar las copias.';
+    toast(error?.message || 'No se pudieron preparar las copias', 'err');
+  } finally {
+    liberar();
+  }
+}
+
+function _renderReporteComprobantes(el) {
+  const { primero, ultimo } = _repMesActual();
+  const hojas = _repPlantillasDeHoja();
+  const porDefecto = _repPlantillaPorDefecto();
+  const card = h('div', { class: 'card' });
+  card.innerHTML = `
+    <div class="card-title">Reportes 607 / 608</div>
+    <div class="ts" style="margin:4px 0 12px">
+      Comprobantes emitidos y anulados del período, para el envío mensual a la DGII.
+    </div>
+    <button class="btn btn-out btn-sm" id="rep-cmp-607">📄 Abrir reportes 607 / 608</button>
+
+    <div style="border-top:1px solid var(--line2);margin:18px 0 14px"></div>
+
+    <div class="card-title">Copias de facturas con comprobante</div>
+    <div class="ts" style="margin:4px 0 12px">
+      Un solo PDF con todas las facturas del período que llevan comprobante fiscal,
+      una por página, con la misma plantilla con que se imprimen.
+    </div>
+    <div class="flex" style="gap:10px;align-items:flex-end;flex-wrap:wrap">
+      <div class="fg" style="margin:0"><label class="lbl">Desde</label>
+        <input class="inp" type="date" id="rep-cmp-from" value="${primero}"></div>
+      <div class="fg" style="margin:0"><label class="lbl">Hasta</label>
+        <input class="inp" type="date" id="rep-cmp-to" value="${ultimo}"></div>
+      <div class="fg" style="margin:0;min-width:210px"><label class="lbl">Plantilla</label>
+        <select class="inp" id="rep-cmp-tpl">
+          ${hojas.map(p => `<option value="${p.id}" ${p.id === porDefecto ? 'selected' : ''}>${p.nombre}</option>`).join('')}
+        </select></div>
+      <button class="btn btn-dark" data-rep-cmp-btn id="rep-cmp-pdf">${svg('pdf')} Descargar PDF con todas</button>
+      <button class="btn btn-out" data-rep-cmp-btn id="rep-cmp-print">${svg('print')} Imprimir todas</button>
+    </div>
+    <div class="ts" id="rep-cmp-estado" style="margin-top:10px">&nbsp;</div>`;
+  card.querySelector('#rep-cmp-607').onclick = () => {
+    if (typeof modalReporteNCF === 'function') modalReporteNCF();
+    else toast('El módulo de comprobantes no está disponible', 'err');
+  };
+  card.querySelector('#rep-cmp-pdf').onclick = () => _repGenerarCopias('pdf');
+  card.querySelector('#rep-cmp-print').onclick = () => _repGenerarCopias('imprimir');
+  el.appendChild(card);
 }

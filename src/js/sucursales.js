@@ -187,8 +187,8 @@ async function renderNCFAvanzado(el) {
   hdr.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:14px';
   hdr.innerHTML = `
     <div style="font-size:14px;font-weight:600;color:var(--ink)">Secuencias de comprobantes NCF</div>
-    <div style="display:flex;gap:8px">
-      <button class="btn btn-ghost btn-sm" id="btn-rep-ncf">📄 Reportes 607/608</button>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span class="ts">Los reportes 607/608 están en Reportes → Comprobantes fiscales</span>
       <button class="btn btn-ghost btn-sm" id="btn-validar-rnc">🔍 Validar RNC</button>
       <button class="btn btn-dark btn-sm" id="btn-nueva-seq">+ Nueva secuencia</button>
     </div>`;
