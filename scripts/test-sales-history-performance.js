@@ -100,6 +100,26 @@ try {
     '“Este mes” también pagina un período con más de mil facturas');
   ok(monthElapsedMs < 1000, `“Este mes” queda bajo 1 s (${monthElapsedMs.toFixed(1)} ms)`);
 
+  // ── Rango personalizado (desde/hasta) ──────────────────────────────────────
+  // Ventas solo ofrecía Hoy / Semana / Mes / Todas: para revisar un rango
+  // concreto había que exportar todo y filtrar fuera de la aplicación.
+  const rango = { range:'custom', view:'sales', dateFrom:'2025-03-01', dateTo:'2025-03-31', limit:500, offset:0 };
+  const enRango = DB.salesRepo.getAll(rango);
+  ok(enRango.length > 0 && enRango.every(row => row.sale_date >= '2025-03-01' && row.sale_date <= '2025-03-31'),
+    'el rango personalizado devuelve solo las ventas de esas fechas, ambos extremos incluidos');
+  ok(DB.salesRepo.countAll({ range:'custom', view:'sales', dateFrom:'2025-03-01', dateTo:'2025-03-31' }) === enRango.length,
+    'el conteo del rango personalizado coincide con las filas devueltas');
+  const alReves = DB.salesRepo.getAll({ ...rango, dateFrom:'2025-03-31', dateTo:'2025-03-01' });
+  ok(alReves.length === enRango.length,
+    'si las fechas vienen al revés se ordenan en lugar de no devolver nada');
+  const soloDesde = DB.salesRepo.getAll({ ...rango, dateFrom:'2025-03-01', dateTo:null });
+  ok(soloDesde.length >= enRango.length && soloDesde.every(row => row.sale_date >= '2025-03-01'),
+    'con solo "desde" no hay límite por el otro lado');
+  const basura = DB.salesRepo.getAll({ ...rango, dateFrom:'ayer', dateTo:'31/03/2025' });
+  const todas = DB.salesRepo.getAll({ range:'all', view:'sales', limit:500, offset:0 });
+  ok(basura.length === todas.length,
+    'una fecha inválida se descarta: nunca filtra mal ni deja la pantalla vacía');
+
   const deepByCustomer = DB.salesRepo.getAll({
     range:'all', view:'sales', q:'BUSQUEDA PROFUNDA', limit:100, offset:0,
   });
@@ -490,6 +510,17 @@ try {
     'la pantalla limita el render a 100 documentos y ofrece navegación');
   ok(ui.includes('async function ventasRowsForExport') && ui.includes('const pageSize = 500'),
     'PDF y Excel reúnen el filtro completo por lotes sin repintar miles de filas');
+
+  const ven = fs.readFileSync(path.join(__dirname, '../src/js/ventas.js'), 'utf8');
+  ok(ven.includes("...['Documento','Fecha','Cliente','Método','ITBIS','Total','Estado','']") &&
+    ven.includes('function ventasEstadoPago('),
+    'la lista de Ventas muestra si la factura está PAGADA o PENDIENTE');
+  ok(ven.includes('const ncfNumero = tieneNcf'),
+    'la lista muestra el número del comprobante, no solo la etiqueta NCF');
+  ok(/<th>#<\/th><th>Comprobante<\/th>[\s\S]*?<th style="text-align:right">ITBIS<\/th>[\s\S]*?<th>Estado<\/th>/.test(ven),
+    'el resumen que se exporta lleva comprobante, ITBIS y estado');
+  ok(ven.includes('function ventasRangeFilters(') && !ven.includes('range: ventasRange,'),
+    'todas las consultas de Ventas llevan el rango elegido, incluido el personalizado');
 
   const inv = fs.readFileSync(path.join(__dirname, '../src/js/inventario.js'), 'utf8');
   // El cálculo vive en invPageForFocus (probado arriba con un catálogo de 200);

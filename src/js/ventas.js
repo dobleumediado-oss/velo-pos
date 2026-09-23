@@ -8,6 +8,10 @@
 
 let ventasSearch = '';
 let ventasRange  = 'today';
+// Rango libre "Personalizado" (desde/hasta). Vacíos significan sin límite por
+// ese lado; la consulta valida el formato y descarta lo que no sea AAAA-MM-DD.
+let ventasDateFrom = '';
+let ventasDateTo   = '';
 let ventasPay    = '';
 let ventasTab    = 'facturas'; // 'facturas' | 'cotizaciones' | 'abonos'
 let ventasPage   = 1;
@@ -67,6 +71,40 @@ function ventasIsElectronicNcf(value) {
   return /^E(?:31|32|33|34|41|43|44|45|46|47)\d{10}$/.test(String(value || '').trim().toUpperCase());
 }
 
+// Filtro de período que va a la base: el rango elegido y, si es personalizado,
+// sus fechas. Todas las consultas de Ventas pasan por aquí para no quedarse con
+// un rango a medias tras cualquier acción.
+// ITBIS de una venta, con la misma regla que la fila y el detalle: si la
+// factura importada no lo trae en cabecera, se extrae del total.
+function ventasItbisDe(sale) {
+  let tax = Number(sale?.tax_amt || sale?.itbis || 0);
+  if (!tax && String(sale?.type || 'factura') === 'factura'
+      && Number(sale?.tax_pct) > 0 && Number(sale?.total) > 0) {
+    tax = ventasRound2(Number(sale.total) - Number(sale.total) / (1 + Number(sale.tax_pct) / 100));
+  }
+  return tax;
+}
+
+// PENDIENTE o PAGADA con la misma regla que el detalle de la factura: queda
+// pendiente lo que el cliente todavía debe de ese documento. Una cotización no
+// tiene estado de pago.
+function ventasEstadoPago(sale, total) {
+  const tipo = String(sale?.type || sale?.itype || 'factura').toLowerCase();
+  if (tipo === 'cotizacion') return null;
+  const neto = Number(total != null ? total : (sale?.total || 0));
+  const pendiente = sale?.balance_after_payment != null
+    ? Number(sale.balance_after_payment)
+    : Math.max(0, neto - Number(sale?.payment_amount || 0));
+  const pagada = !(pendiente > 0.009);
+  return { pagada, pendiente: Math.max(0, pendiente), label: pagada ? 'PAGADA' : 'PENDIENTE' };
+}
+
+function ventasRangeFilters(range = ventasRange) {
+  return range === 'custom'
+    ? { range, dateFrom: ventasDateFrom || null, dateTo: ventasDateTo || null }
+    : { range };
+}
+
 function ventasRefreshAfterMutation({
   range = ventasRange, view = 'sales', products = false,
   customers = false, payments = false, onDone = null,
@@ -75,7 +113,7 @@ function ventasRefreshAfterMutation({
   // colección compartida y nadie podía acotarla. Ahora Caja y el panel consultan
   // lo suyo, así que aquí basta con la página que el usuario está viendo.
   const tasks = [reloadSales({
-    range,
+    ...ventasRangeFilters(range),
     ...(view ? { view } : {}),
     q: ventasSearch.trim(),
     limit: VENTAS_PAGE_SIZE,
@@ -510,13 +548,24 @@ function renderVentas(el) {
       (() => {
         const sel = h('select', {
           class: 'inp', style: { width: '130px' },
-          onchange: e => { ventasRange = e.target.value; ventasPage = 1; refreshVentas(el); }
+          onchange: e => {
+            ventasRange = e.target.value;
+            ventasPage = 1;
+            // Al entrar o salir de "Personalizado" aparecen o se van los dos
+            // campos de fecha, así que se repinta la pantalla completa.
+            if (e.target.value === 'custom' || document.getElementById('ventas-date-from')) {
+              veloRepaint(() => renderVentas(document.getElementById('page')));
+              return;
+            }
+            refreshVentas(el);
+          }
         });
         [
-          { v: 'today',  l: 'Hoy'         },
-          { v: 'week',   l: 'Esta semana' },
-          { v: 'month',  l: 'Este mes'    },
-          { v: 'all',    l: 'Todas'       },
+          { v: 'today',  l: 'Hoy'          },
+          { v: 'week',   l: 'Esta semana'  },
+          { v: 'month',  l: 'Este mes'     },
+          { v: 'all',    l: 'Todas'        },
+          { v: 'custom', l: 'Personalizado' },
         ].forEach(o => {
           const op = document.createElement('option');
           op.value = o.v; op.textContent = o.l;
@@ -525,6 +574,22 @@ function renderVentas(el) {
         });
         return sel;
       })(),
+      // Rango libre: ambos extremos incluidos y cualquiera puede quedar vacío.
+      ...(ventasRange === 'custom' ? [
+        h('div', { class: 'flex', style: { gap: '6px', alignItems: 'center' } },
+          h('span', { class: 'ts' }, 'Desde'),
+          h('input', {
+            class: 'inp', id: 'ventas-date-from', type: 'date', style: { width: '148px' },
+            value: ventasDateFrom,
+            onchange: e => { ventasDateFrom = e.target.value; ventasPage = 1; refreshVentas(el); },
+          }),
+          h('span', { class: 'ts' }, 'hasta'),
+          h('input', {
+            class: 'inp', id: 'ventas-date-to', type: 'date', style: { width: '148px' },
+            value: ventasDateTo,
+            onchange: e => { ventasDateTo = e.target.value; ventasPage = 1; refreshVentas(el); },
+          })),
+      ] : []),
       ventasTab === 'facturas' ? (() => {
         const sel = h('select', {
           class: 'inp', style: { width: '130px' },
@@ -568,7 +633,7 @@ async function refreshVentas(el) {
   const request = (window._ventasRefreshGeneration || 0) + 1;
   window._ventasRefreshGeneration = request;
   const filters = {
-    range: ventasRange,
+    ...ventasRangeFilters(),
     view: ventasTab === 'cotizaciones' ? 'quotes' : 'sales',
     q: ventasSearch.trim(),
     limit: VENTAS_PAGE_SIZE,
@@ -755,7 +820,7 @@ function renderVentasTable() {
   const tbl   = h('table', null,
     h('thead', null,
       h('tr', null,
-        ...['Documento','Fecha','Cliente','Método','ITBIS','Total',''].map(t =>
+        ...['Documento','Fecha','Cliente','Método','ITBIS','Total','Estado',''].map(t =>
           h('th', null, t)
         )
       )
@@ -793,10 +858,7 @@ function renderVentasTable() {
       : (s.time || '');
     // Legacy/importada sin ITBIS en cabecera: extraerlo del total (precio final
     // con impuesto incluido), igual que el detalle y la impresión.
-    let taxAmt = s.tax_amt || s.itbis || 0;
-    if (!taxAmt && (s.type || 'factura') === 'factura' && Number(s.tax_pct) > 0 && Number(s.total) > 0) {
-      taxAmt = ventasRound2(s.total - s.total / (1 + Number(s.tax_pct) / 100));
-    }
+    const taxAmt = ventasItbisDe(s);
     const tieneNcf  = !!(s.ncf);
     const ncfTradicional = ventasIsTraditionalNcf(s.ncf);
     const ncfTradicionalMalformado = ventasLooksLikeMalformedTraditionalNcf(s.ncf);
@@ -811,16 +873,21 @@ function renderVentasTable() {
 
     // Un Bxx es un NCF tradicional, no un e-CF pendiente. Separar ambos evita
     // emitir un segundo comprobante fiscal sobre la misma venta.
+    // El número del comprobante va junto a la etiqueta: la lista solo decía
+    // "NCF" y había que abrir la factura para leerlo.
+    const ncfNumero = tieneNcf
+      ? `<span class="tm" style="font-size:10px;margin-left:4px">${ventasEsc(String(s.ncf).trim().toUpperCase())}</span>`
+      : '';
     const ecfBadge = tieneNcf
       ? h('div', {
           style: { fontSize: '9px', marginTop: '2px' },
-          html: ncfTradicionalMalformado
+          html: (ncfTradicionalMalformado
             ? `<span class="badge r" style="font-size:9px;padding:1px 5px">NCF a recuperar</span>`
             : ncfTradicional
               ? `<span class="badge n" style="font-size:9px;padding:1px 5px">NCF</span>`
               : ncfElectronico && ecfOk
                 ? `<span class="badge g" style="font-size:9px;padding:1px 5px">e-CF ✓</span>`
-                : `<span class="badge n" style="font-size:9px;padding:1px 5px">e-CF</span>`
+                : `<span class="badge n" style="font-size:9px;padding:1px 5px">e-CF</span>`) + ncfNumero
         })
       : null;
 
@@ -909,6 +976,12 @@ function renderVentasTable() {
               ? h('div', { class: 'ts' }, `Documento relacionado · ${fmt(effectiveTotal)}`)
               : null
         ),
+        h('td', null, (() => {
+          const estado = ventasEstadoPago(s, operationTotal);
+          return estado
+            ? h('span', { class: `badge ${estado.pagada ? 'g' : 'a'}`, style: { fontSize: '10px' } }, estado.label)
+            : h('span', { class: 'ts' }, '—');
+        })()),
         h('td', null,
           h('div', { class: 'flex', style: { gap: '3px' } },
             h('button', {
@@ -998,6 +1071,13 @@ function renderVentasTable() {
 function ventasPaymentInRange(payment) {
   const date = String(payment.created_at || '').slice(0, 10);
   if (!date || ventasRange === 'all') return true;
+  if (ventasRange === 'custom') {
+    const desde = ventasDateFrom && ventasDateTo && ventasDateFrom > ventasDateTo ? ventasDateTo : ventasDateFrom;
+    const hasta = ventasDateFrom && ventasDateTo && ventasDateFrom > ventasDateTo ? ventasDateFrom : ventasDateTo;
+    if (desde && date < desde) return false;
+    if (hasta && date > hasta) return false;
+    return true;
+  }
   const now = new Date();
   const todayText = now.toISOString().slice(0, 10);
   if (ventasRange === 'today') return date === todayText;
@@ -1261,7 +1341,7 @@ async function confirmarAnulacionAbono(paymentId) {
     Promise.allSettled([
       reloadPayments(),
       reloadCustomers(),
-      reloadSales({ range: ventasRange, view: 'sales' }),
+      reloadSales({ ...ventasRangeFilters(), view: 'sales' }),
     ]).then(() => {
       if (typeof page !== 'undefined' && page === 'ventas') renderVentasTable();
       buildSidebar();
@@ -1329,7 +1409,7 @@ async function enviarEcf(saleId) {
       closeModal();
 
       // Recargar para reflejar el nuevo ecf_status
-      await reloadSales({ range: ventasRange, view: 'sales' });
+      await reloadSales({ ...ventasRangeFilters(), view: 'sales' });
       renderVentasTable();
 
       // Toast de éxito con QR si está disponible
@@ -3228,7 +3308,7 @@ async function guardarVentaDate(saleId) {
   );
   toast('✓ Fecha operativa corregida');
   ventasRefreshAfterMutation({
-    range: ventasRange, view: ventasTab === 'cotizaciones' ? null : 'sales',
+    ...ventasRangeFilters(), view: ventasTab === 'cotizaciones' ? null : 'sales',
     onDone: () => {
       if (typeof page !== 'undefined' && page === 'ventas') {
         veloRepaint(() => renderVentas(document.getElementById('page')));
@@ -3293,7 +3373,7 @@ async function guardarVentaAdmin(saleId) {
   ventasOpenSimpleCorrectionResult(saleId, 'Información administrativa guardada con auditoría.');
   toast('✓ Información administrativa corregida');
   ventasRefreshAfterMutation({
-    range: ventasRange, view: 'sales',
+    ...ventasRangeFilters(), view: 'sales',
     onDone: () => {
       if (typeof page !== 'undefined' && page === 'ventas') {
         veloRepaint(() => renderVentas(document.getElementById('page')));
@@ -3546,7 +3626,7 @@ async function ventaWhatsAppPDF(saleId) {
 async function ventasRowsForExport() {
   if (ventasTab === 'abonos') return [];
   const filters = {
-    range: ventasRange,
+    ...ventasRangeFilters(),
     view: ventasTab === 'cotizaciones' ? 'quotes' : 'sales',
     q: ventasSearch.trim(),
     ...(ventasTab === 'facturas' && ventasPay ? { method: ventasPay } : {}),
@@ -3579,13 +3659,20 @@ async function exportVentasPDF() {
     const fecha  = (s.sale_date || s.date || '').split('T')[0].split(' ')[0];
     const method = s.payment_method || s.pay || '';
     const name   = s.customer_name  || 'Consumidor Final';
+    // El resumen que se manda a la contable llevaba solo el total: sin el
+    // comprobante, el ITBIS ni el estado había que abrir factura por factura.
+    const totalNeto = ventasEffectiveTotal(s);
+    const estado = ventasEstadoPago(s, totalNeto);
     return `
       <tr>
         <td>${facturaLabel(s)}</td>
+        <td>${_esc(String(s.ncf || '').trim().toUpperCase() || '—')}</td>
         <td>${fdate(fecha)}</td>
         <td>${_esc(name)}</td>
         <td style="text-transform:capitalize">${_esc(method)}</td>
-        <td style="text-align:right">${fmt(ventasEffectiveTotal(s))}</td>
+        <td style="text-align:right">${fmt(ventasItbisDe(s))}</td>
+        <td style="text-align:right">${fmt(totalNeto)}</td>
+        <td>${estado ? estado.label : '—'}</td>
       </tr>`;
   }).join('');
 
@@ -3607,8 +3694,9 @@ async function exportVentasPDF() {
   </div>
   <table>
     <thead><tr>
-      <th>#</th><th>Fecha</th><th>Cliente</th>
-      <th>Método</th><th style="text-align:right">Total</th>
+      <th>#</th><th>Comprobante</th><th>Fecha</th><th>Cliente</th>
+      <th>Método</th><th style="text-align:right">ITBIS</th>
+      <th style="text-align:right">Total</th><th>Estado</th>
     </tr></thead>
     <tbody>${rows}</tbody>
   </table>

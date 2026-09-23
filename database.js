@@ -5330,6 +5330,16 @@ function findConfirmedSaleOperation({ operationId = '', customer, items, payment
 }
 
 // ── Ventas ────────────────────────────────────
+// Rango libre de Ventas (desde/hasta, ambos incluidos). Solo AAAA-MM-DD; si
+// llegan al revés se ordenan, y lo inválido se descarta en lugar de filtrar mal.
+function _salesCustomRange(dateFrom, dateTo) {
+  const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+  let from = DATE_RE.test(String(dateFrom || '')) ? String(dateFrom) : null;
+  let to   = DATE_RE.test(String(dateTo   || '')) ? String(dateTo)   : null;
+  if (from && to && from > to) { const swap = from; from = to; to = swap; }
+  return { from, to };
+}
+
 const salesRepo = {
   getConfirmationById(id, { idempotent = true } = {}) {
     const sale = db.prepare('SELECT * FROM sales WHERE id=?').get(Number(id));
@@ -6759,7 +6769,7 @@ const salesRepo = {
     return sale;
   },
 
-  getAll({ range = 'today', customerId, method, view, q = '', limit = 200, offset = 0 } = {}) {
+  getAll({ range = 'today', dateFrom = null, dateTo = null, customerId, method, view, q = '', limit = 200, offset = 0 } = {}) {
     let where = "WHERE s.status != 'cancelled'";
     const params = [];
     // Ventas conserva visible la factura original aunque tenga ajustes. Las notas
@@ -6795,6 +6805,12 @@ const salesRepo = {
     } else if (range === 'month') {
       where += ` AND s.sale_date>=date('now','localtime','start of month')
                  AND s.sale_date<date('now','localtime','start of month','+1 month')`;
+    } else if (range === 'custom') {
+      // Rango elegido por el usuario (desde/hasta, ambos incluidos). Solo se
+      // acepta AAAA-MM-DD; cualquier otra cosa se ignora y no filtra por fecha.
+      const custom = _salesCustomRange(dateFrom, dateTo);
+      if (custom.from) { where += ' AND s.sale_date>=?'; params.push(custom.from); }
+      if (custom.to)   { where += ' AND s.sale_date<=?'; params.push(custom.to); }
     }
     if (customerId) { where += ' AND s.customer_id=?'; params.push(customerId); }
     if (method)     { where += ' AND s.payment_method=?'; params.push(method); }
@@ -6944,7 +6960,7 @@ const salesRepo = {
    * Cuenta el total de ventas que coinciden con un filtro (sin traer filas).
    * Permite al frontend saber cuántas páginas hay para la paginación real.
    */
-  countAll({ range = 'today', customerId, method, view, q = '' } = {}) {
+  countAll({ range = 'today', dateFrom = null, dateTo = null, customerId, method, view, q = '' } = {}) {
     let where = "WHERE status != 'cancelled'";
     const params = [];
     if (view === 'sales') {
@@ -6976,6 +6992,10 @@ const salesRepo = {
     } else if (range === 'month') {
       where += ` AND sale_date>=date('now','localtime','start of month')
                  AND sale_date<date('now','localtime','start of month','+1 month')`;
+    } else if (range === 'custom') {
+      const custom = _salesCustomRange(dateFrom, dateTo);
+      if (custom.from) { where += ' AND sale_date>=?'; params.push(custom.from); }
+      if (custom.to)   { where += ' AND sale_date<=?'; params.push(custom.to); }
     }
     if (customerId) { where += ' AND customer_id=?'; params.push(customerId); }
     if (method)     { where += ' AND payment_method=?'; params.push(method); }
