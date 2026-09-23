@@ -647,7 +647,14 @@ async function openIncomeReceiptModal() {
     accounts = (result?.ok ? result.data : []).filter(a => a.active && ['banco','tarjeta'].includes(a.type));
   } catch {}
   openModal(`<div class="modal-title">Nuevo recibo de ingreso</div><div class="modal-sub">Registra dinero recibido fuera de una venta o abono de cliente.</div>
-    <div class="g2"><div class="fg"><label class="lbl">Recibido de *</label><input class="inp" id="cash-income-payer" placeholder="Nombre de la persona o empresa"/></div><div class="fg"><label class="lbl">Cédula / RNC</label><input class="inp" id="cash-income-document" placeholder="Opcional"/></div></div>
+    <div class="g2"><div class="fg" style="position:relative"><label class="lbl">Recibido de *</label>
+      <input class="inp" id="cash-income-payer" autocomplete="off" placeholder="Escribe y elige un cliente, o un nombre nuevo"
+             oninput="cajaIncomeFilterPayer(this.value)"
+             onblur="setTimeout(() => document.getElementById('cash-income-payer-dd')?.classList.remove('show'), 180)"/>
+      <input type="hidden" id="cash-income-customer"/>
+      <div id="cash-income-payer-dd" class="cli-dropdown"></div>
+      <div class="ts" id="cash-income-payer-hint" style="margin-top:4px">&nbsp;</div>
+    </div><div class="fg"><label class="lbl">Cédula / RNC</label><input class="inp" id="cash-income-document" placeholder="Opcional"/></div></div>
     <div class="fg"><label class="lbl">Concepto *</label><input class="inp" id="cash-income-concept" placeholder="Motivo por el que se recibe el dinero"/></div>
     <div class="g2"><div class="fg"><label class="lbl">Tipo de ingreso</label><select class="inp" id="cash-income-type"><option value="otro_ingreso">Otro ingreso</option><option value="aporte_capital">Aporte de capital</option><option value="prestamo">Préstamo recibido</option><option value="reembolso">Reembolso / recuperación</option></select></div>${cajaIncomeCurrencySelect('cash-income')}</div>
     ${cajaIncomeCurrencyFields('cash-income')}
@@ -741,6 +748,7 @@ async function confirmIncomeReceipt() {
     cash_session_id:cajaSession?.id,
     payer_name:document.getElementById('cash-income-payer')?.value,
     payer_document:document.getElementById('cash-income-document')?.value,
+    customer_id:Number(document.getElementById('cash-income-customer')?.value) || null,
     concept:document.getElementById('cash-income-concept')?.value,
     income_type:document.getElementById('cash-income-type')?.value,
     amount:document.getElementById('cash-income-amount')?.value,
@@ -1779,4 +1787,60 @@ async function printResumen(cajaId) {
 </body></html>`;
 
   printHTML(html, 'caja');
+}
+
+// ── Recibo de ingreso: a quién se le recibe ──────────────────────────────────
+// El campo era texto libre, así que un cliente registrado quedaba escrito a
+// mano y el recibo no se podía relacionar con él. Ahora sugiere mientras se
+// escribe; quien no esté registrado se sigue escribiendo igual.
+function cajaIncomeFilterPayer(texto) {
+  const dd = document.getElementById('cash-income-payer-dd');
+  const hint = document.getElementById('cash-income-payer-hint');
+  const oculto = document.getElementById('cash-income-customer');
+  if (!dd) return;
+  const consulta = String(texto || '').trim();
+  // Si se edita el nombre, el recibo deja de estar enlazado a ese cliente.
+  if (oculto && oculto.value) {
+    const elegido = (DB.customers || []).find(c => Number(c.id) === Number(oculto.value));
+    if (!elegido || searchNorm(elegido.name) !== searchNorm(consulta)) {
+      oculto.value = '';
+      if (hint) hint.innerHTML = '&nbsp;';
+    }
+  }
+  if (consulta.length < 2) { dd.classList.remove('show'); return; }
+  const buscado = searchNorm(consulta);
+  const digitos = consulta.replace(/\D/g, '');
+  const encontrados = (DB.customers || []).filter(c => c.active !== 0 && (
+    searchNorm(c.name).includes(buscado) ||
+    (digitos.length >= 3 && String(c.rnc || '').replace(/\D/g, '').includes(digitos))
+  )).slice(0, 8);
+  if (!encontrados.length) {
+    dd.innerHTML = `<div class="cli-opt" style="cursor:default">
+      <div class="cli-opt-name" style="color:var(--muted);font-style:italic">"${_escHtml(consulta)}" — no registrado</div>
+      <div class="cli-opt-meta" style="color:var(--muted2)">Se guardará con ese nombre, sin enlazarlo a un cliente</div>
+    </div>`;
+    dd.classList.add('show');
+    return;
+  }
+  dd.innerHTML = encontrados.map(c => `
+    <div class="cli-opt" onclick="cajaIncomeSelectPayer(${c.id})">
+      <div class="cli-opt-name">${_escHtml(c.name)}</div>
+      <div class="cli-opt-meta">${_escHtml(c.rnc || 'Sin RNC/Cédula')}${Number(c.balance) > 0 ? ` · Balance ${fmt(c.balance)}` : ''}</div>
+    </div>`).join('');
+  dd.classList.add('show');
+}
+
+function cajaIncomeSelectPayer(id) {
+  const cliente = (DB.customers || []).find(c => Number(c.id) === Number(id));
+  if (!cliente) return;
+  const nombre = document.getElementById('cash-income-payer');
+  const documento = document.getElementById('cash-income-document');
+  const oculto = document.getElementById('cash-income-customer');
+  const hint = document.getElementById('cash-income-payer-hint');
+  const dd = document.getElementById('cash-income-payer-dd');
+  if (nombre) nombre.value = cliente.name || '';
+  if (documento && !documento.value.trim()) documento.value = cliente.rnc || '';
+  if (oculto) oculto.value = String(cliente.id);
+  if (hint) hint.textContent = `Recibo enlazado al cliente registrado${cliente.rnc ? ` · ${cliente.rnc}` : ''}`;
+  if (dd) dd.classList.remove('show');
 }

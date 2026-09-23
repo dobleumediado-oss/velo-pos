@@ -293,6 +293,45 @@ try {
     ui.includes("settings.template === 'ingreso_termica_80'"),'el recibo respeta la plantilla configurada en el Centro de impresión');
   ok(ui.includes('Registrar e imprimir')&&ui.includes('Documento interno · No sustituye comprobante fiscal'),'el flujo termina en un comprobante interno identificado');
 
+  console.log('\n== Recibo enlazado a un cliente registrado ==');
+  // El campo "Recibido de" era texto libre: un cliente registrado quedaba
+  // escrito a mano y el recibo no se podía relacionar con él.
+  // Las pruebas anteriores cerraron la caja; este bloque abre la suya.
+  const sesionRecibos = DB.cashRepo.open({
+    userId: admin.id, cajero: admin.name, openAmount: 0, openBills: {}, terminalId: 'RECIBO-QA',
+  });
+  const clienteId = db.prepare(
+    "INSERT INTO customers(name,rnc,active) VALUES('CLIENTE DEL RECIBO','130123456',1)"
+  ).run().lastInsertRowid;
+  const enlazado = DB.cashRepo.createIncomeReceipt({
+    cash_session_id: sesionRecibos, payer_name: 'CLIENTE DEL RECIBO', payer_document: '130123456',
+    customer_id: clienteId, concept: 'Alquiler de equipo', income_type: 'otro_ingreso',
+    amount: 300, method: 'efectivo',
+  }, { id: admin.id, name: admin.name });
+  ok(Number(enlazado.customer_id) === Number(clienteId), 'el recibo queda enlazado al cliente elegido');
+  ok(enlazado.payer_name === 'CLIENTE DEL RECIBO',
+    'conserva igual el nombre y el documento como copia del momento');
+  const suelto = DB.cashRepo.createIncomeReceipt({
+    cash_session_id: sesionRecibos, payer_name: 'VECINO DE LA ESQUINA', concept: 'Venta de chatarra',
+    income_type: 'otro_ingreso', amount: 120, method: 'efectivo',
+  }, { id: admin.id, name: admin.name });
+  ok(suelto.customer_id == null, 'un pagador no registrado se guarda sin enlace, como siempre');
+  const inventado = DB.cashRepo.createIncomeReceipt({
+    cash_session_id: sesionRecibos, payer_name: 'FANTASMA', customer_id: 999999,
+    concept: 'Cliente inexistente', income_type: 'otro_ingreso', amount: 50, method: 'efectivo',
+  }, { id: admin.id, name: admin.name });
+  ok(inventado.customer_id == null, 'un cliente que no existe no se guarda como enlace');
+
+  const caja = fs.readFileSync(path.join(__dirname, '..', 'src', 'js', 'caja.js'), 'utf8');
+  ok(caja.includes('function cajaIncomeFilterPayer(') && caja.includes('function cajaIncomeSelectPayer('),
+    'el recibo sugiere clientes mientras se escribe el nombre');
+  const config = fs.readFileSync(path.join(__dirname, '..', 'src', 'js', 'config.js'), 'utf8');
+  const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(config.includes("id=\"cfg-module-preventa\"") && config.includes('async function togglePreventaModule('),
+    'Configuración enciende y apaga Preventa y Despacho');
+  ok(mainSrc.includes("const ADMIN_MODULE_KEYS = new Set(['module_preventa']);"),
+    'el administrador puede cambiar ese módulo sin ser superadmin');
+
   console.log(`\n== RESULTADO: ${passed} OK ==`);
 } finally {
   try { db.close(); } catch {}

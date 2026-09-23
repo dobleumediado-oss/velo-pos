@@ -597,6 +597,39 @@ async function renderConfiguracion(el) {
   // Es opt-in para no cambiar el comportamiento de instalaciones existentes.
   // La regla se aplica por terminal a Administrador y Cajero; Superadmin queda
   // exento para conservar la capacidad de soporte y recuperación.
+  // ── Preventa y Despacho (opcional) ───────────────────────────
+  // El dueño decide si su negocio prepara órdenes y las envía a caja. Al
+  // apagarlo desaparecen el módulo y el botón "Enviar a caja" del POS.
+  if (isAdmin) {
+    const preventaActiva = settings.module_preventa === '1';
+    const preventaCard = h('div', { class: 'card' });
+    preventaCard.innerHTML = `
+      <div class="fxb mb8">
+        <div>
+          <div class="card-title">🧾 Preventa y Despacho</div>
+          <div style="font-size:11px;color:var(--muted2);margin-top:3px">
+            Prepara órdenes, reserva inventario y las envía a caja para cobrarlas y entregarlas.
+            Al apagarlo se ocultan el módulo y el botón “Enviar a caja” del Punto de Venta.
+          </div>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;flex-shrink:0;margin-left:16px">
+          <div style="position:relative;width:40px;height:22px">
+            <input type="checkbox" id="cfg-module-preventa" ${preventaActiva ? 'checked' : ''}
+              style="opacity:0;width:0;height:0;position:absolute"
+              onchange="togglePreventaModule(this.checked)"/>
+            <div id="preventa-track" style="position:absolute;inset:0;border-radius:11px;transition:background .2s;
+              background:${preventaActiva ? 'var(--accent)' : 'var(--line)'};cursor:pointer"
+              onclick="document.getElementById('cfg-module-preventa').click()">
+              <div id="preventa-thumb" style="position:absolute;top:3px;width:16px;height:16px;border-radius:50%;
+                background:#fff;transition:left .2s;left:${preventaActiva ? '21px' : '3px'}"></div>
+            </div>
+          </div>
+          <span id="preventa-estado" style="font-size:12px;color:var(--muted2)">${preventaActiva ? 'Activo' : 'Inactivo'}</span>
+        </label>
+      </div>`;
+    colLeft.appendChild(preventaCard);
+  }
+
   if (isAdmin) {
     const closeRequired = settings.cash_close_required_after_hours === '1';
     const closeCard = h('div', { class: 'card' });
@@ -2228,4 +2261,37 @@ async function renderECFConfig(container) {
       msg.textContent = `⚠ Error: ${e.message}`;
     }
   });
+}
+
+// Encender o apagar Preventa y Despacho desde Configuración. Escribe la misma
+// clave que Super Admin y refresca lo que depende de ella: el menú, el monitor
+// de órdenes y el botón "Enviar a caja" del POS.
+async function togglePreventaModule(activo) {
+  const usuario = window._currentUser;
+  if (!usuario || !['admin', 'superadmin'].includes(usuario.role)) {
+    toast('Solo un administrador puede cambiar este módulo', 'err');
+    return;
+  }
+  const res = await window.api.settings.set({
+    key: 'module_preventa', value: activo ? '1' : '0', requestUserId: usuario.id,
+  });
+  if (!res?.ok) {
+    toast(res?.error || 'No se pudo guardar', 'err');
+    const casilla = document.getElementById('cfg-module-preventa');
+    if (casilla) casilla.checked = !activo;
+    return;
+  }
+  if (typeof CFG !== 'undefined') CFG.module_preventa = activo ? '1' : '0';
+  if (DB?.settings) DB.settings.module_preventa = activo ? '1' : '0';
+  const track = document.getElementById('preventa-track');
+  const thumb = document.getElementById('preventa-thumb');
+  const estado = document.getElementById('preventa-estado');
+  if (track) track.style.background = activo ? 'var(--accent)' : 'var(--line)';
+  if (thumb) thumb.style.left = activo ? '21px' : '3px';
+  if (estado) estado.textContent = activo ? 'Activo' : 'Inactivo';
+  if (typeof loadAppData === 'function') await loadAppData();
+  if (typeof buildSidebar === 'function') buildSidebar();
+  if (typeof preventaConfigureMonitor === 'function') preventaConfigureMonitor();
+  if (!activo && typeof page !== 'undefined' && page === 'preventa' && typeof routeTo === 'function') routeTo('dash');
+  toast(activo ? '✓ Preventa y Despacho activado' : '✗ Preventa y Despacho desactivado', 'ok');
 }

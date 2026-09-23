@@ -1027,7 +1027,10 @@ ipcMain.handle('settings:set', async (_, { key, value, requestUserId }) => {
     return { ok: false, error: 'La política de cambio de precio debe estar activada o desactivada' };
   }
 
-  const needsSA    = SUPERADMIN_KEYS.test(key);
+  // Encender o apagar Preventa y Despacho es una decisión operativa del
+  // negocio, no del proveedor: su dueño la toma desde Configuración.
+  const ADMIN_MODULE_KEYS = new Set(['module_preventa']);
+  const needsSA    = SUPERADMIN_KEYS.test(key) && !ADMIN_MODULE_KEYS.has(key);
   // Defensa por defecto: toda clave desconocida requiere administrador. Las
   // configuraciones no son un almacén libre escribible desde el renderer.
   const needsAdmin = !needsSA;

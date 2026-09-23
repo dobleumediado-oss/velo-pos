@@ -4735,15 +4735,20 @@ const cashRepo = {
       if (!financialAccount) throw new Error('Selecciona la cuenta que recibió el ingreso');
     }
     return db.transaction(() => {
+      // Cliente registrado, si se eligió uno: el recibo queda enlazado además
+      // de guardar su nombre y documento como copia del momento.
+      const customerId = Number(data.customer_id) > 0
+        && db.prepare('SELECT id FROM customers WHERE id=?').get(Number(data.customer_id))
+        ? Number(data.customer_id) : null;
       const inserted = db.prepare(`INSERT INTO cash_income_receipts(
         cash_session_id,payer_name,payer_document,concept,income_type,amount,
         payment_currency,exchange_rate,currency_amount,method,
-        financial_account_id,reference,notes,user_id,user_name
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        financial_account_id,reference,notes,user_id,user_name,customer_id
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
         session.id, payerName, String(data.payer_document || '').trim(), concept, incomeType,
         amount, currency, rate, currencyAmount, method,
         financialAccount?.id || null, String(data.reference || '').trim(),
-        String(data.notes || '').trim(), Number(actor.id) || null, String(actor.name || '')
+        String(data.notes || '').trim(), Number(actor.id) || null, String(actor.name || ''), customerId
       );
       const id = Number(inserted.lastInsertRowid);
       const issued = _issueDocumentNumber('recibo_ingreso', 'cash_income_receipt', id);

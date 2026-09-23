@@ -2467,6 +2467,21 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.49.6-additional-charges-tax] Cargos adicionales con ITBIS configurable listos');
     }
   },
+  {
+    version: '1.50.3-income-receipt-customer',
+    description: 'Recibo de ingreso: queda enlazado al cliente registrado cuando se elige uno.',
+    run(db) {
+      const exists = db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cash_income_receipts'"
+      ).get();
+      if (!exists) return;
+      const columns = new Set(db.prepare('PRAGMA table_info(cash_income_receipts)').all().map(c => c.name));
+      // Sin clave foránea a propósito: el recibo conserva nombre y documento
+      // como copia, y no debe bloquear ni arrastrar la baja de un cliente.
+      if (!columns.has('customer_id')) db.exec('ALTER TABLE cash_income_receipts ADD COLUMN customer_id INTEGER');
+      console.log('[MIGRATION 1.50.3-income-receipt-customer] Recibos de ingreso enlazables a un cliente');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════
