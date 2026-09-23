@@ -1,5 +1,20 @@
 # Historial de versiones
 
+## 1.52.1 — 2026-09-23
+
+### Anular una factura abierta desde la cuenta del cliente
+
+- Al abrir una factura desde el estado de cuenta del cliente —o desde el
+  buscador global— y pulsar **Anular**, VELO respondía *"Documento no
+  encontrado"* y no dejaba seguir. Buscaba la factura en la lista de Ventas, que
+  solo tiene el período que está en pantalla, así que una factura de 2021 nunca
+  aparecía. Ahora la busca por su número en la base de datos.
+- El mismo tropiezo afectaba al botón "Eliminar cotización".
+- Comprobado con una factura importada de 2021 con 7 abonos por RD$144,000: el
+  modal de anulación abre y reconoce los abonos.
+- No venía de la 1.52.0: el botón se comportaba así desde junio. Se notó ahora
+  porque antes una factura con abonos no se podía anular de ninguna forma.
+
 ## 1.52.0 — 2026-09-23
 
 Las tres mejoras que quedaron pendientes en 1.51.0, más correcciones de

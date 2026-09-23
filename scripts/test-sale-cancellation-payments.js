@@ -303,6 +303,26 @@ ok(db.prepare(`
   'la resolución conserva que el dinero provenía del historial importado');
 ok(confirmedEntriesBalanced(), 'la contabilidad continúa cuadrada tras la anulación histórica');
 
+// ── La factura abierta fuera de Ventas también se puede anular ──
+// El botón Anular del detalle buscaba la venta en la caché DB.sales, que solo
+// tiene el rango abierto en Ventas. Abierta desde el estado de cuenta del
+// cliente o desde el buscador global, llegaba undefined y respondía
+// "Documento no encontrado" sin dejar anular una factura de 2021 con abonos.
+const ventasSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'js', 'ventas.js'), 'utf8');
+ok(/onclick="closeModal\(\);openAnulacionModal\(\$\{s\.id\}\)"/.test(ventasSrc),
+  'el botón Anular del detalle pasa el id, no el resultado de buscar en la caché');
+ok(/onclick="closeModal\(\);eliminarCotizacion\(\$\{s\.id\}\)"/.test(ventasSrc),
+  'eliminar cotización tampoco depende de la caché de Ventas');
+ok(!/openAnulacionModal\(DB\.sales\.find/.test(ventasSrc) &&
+   !/eliminarCotizacion\(DB\.sales\.find/.test(ventasSrc),
+  'ningún botón del detalle resuelve el documento contra DB.sales');
+ok(/async function ventasResolveSale\(ref\)[\s\S]{0,400}window\.api\.sales\.getById/.test(ventasSrc),
+  'ventasResolveSale cae al proceso main cuando la venta no está en la caché');
+ok(/async function openAnulacionModal\(ref\)[\s\S]{0,120}await ventasResolveSale\(ref\)/.test(ventasSrc),
+  'openAnulacionModal resuelve la venta antes de decidir si existe');
+ok(/const targetSale = \(DB\.sales \|\| \[\]\)[\s\S]{0,200}_ventasAnulacionSale/.test(ventasSrc),
+  'la confirmación reconoce la nota de crédito aunque la venta no esté cacheada');
+
 try { db.close(); } catch {}
 try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
 console.log(`\n== RESULTADO: ${pass} OK, ${fail} fallos ==`);

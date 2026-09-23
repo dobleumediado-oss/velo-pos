@@ -2080,12 +2080,12 @@ async function openDetalleVentaModal(s, options = {}) {
            </button>`
         : ''}
       ${s.status === 'completed' && s.type === 'cotizacion'
-        ? `<button class="btn btn-red" onclick="closeModal();eliminarCotizacion(DB.sales.find(x=>x.id===${s.id}))">
+        ? `<button class="btn btn-red" onclick="closeModal();eliminarCotizacion(${s.id})">
              ${svg('trash')} Eliminar cotización
            </button>`
         : ''}
       ${['admin','superadmin'].includes(user?.role) && s.status === 'completed' && s.type !== 'cotizacion'
-        ? `<button class="btn btn-red" onclick="closeModal();openAnulacionModal(DB.sales.find(x=>x.id===${s.id}))">
+        ? `<button class="btn btn-red" onclick="closeModal();openAnulacionModal(${s.id})">
              ${s.type === 'devolucion' ? 'Anular devolución' : 'Anular'}
            </button>`
         : ''}
@@ -2103,7 +2103,21 @@ async function openDetalleVentaModal(s, options = {}) {
   }, 0);
 }
 
-function eliminarCotizacion(s) {
+// DB.sales solo tiene el rango abierto en Ventas. Cuando el detalle de un
+// documento se abre desde otra pantalla —el estado de cuenta del cliente, por
+// ejemplo— la venta no está en esa caché y los botones se quedaban en
+// "Documento no encontrado". Por eso se resuelve por id contra el proceso main.
+async function ventasResolveSale(ref) {
+  if (ref && typeof ref === 'object') return ref;
+  const id = Number(ref);
+  if (!id) return null;
+  const enCache = (DB.sales || []).find(row => Number(row.id) === id);
+  if (enCache) return enCache;
+  try { return (await window.api.sales.getById({ id })) || null; } catch { return null; }
+}
+
+async function eliminarCotizacion(ref) {
+  const s = await ventasResolveSale(ref);
   if (!s || s.type !== 'cotizacion') {
     toast('Cotización no encontrada', 'err');
     return;
@@ -2166,8 +2180,12 @@ function ventaPuedeReutilizarNumero(sale) {
     Number(sale.operation_credit_total || 0) === 0;
 }
 
-async function openAnulacionModal(s) {
+let _ventasAnulacionSale = null;
+
+async function openAnulacionModal(ref) {
+  const s = await ventasResolveSale(ref);
   if (!s) { toast('Documento no encontrado', 'err'); return; }
+  _ventasAnulacionSale = s;
   const isReturn = s.type === 'devolucion';
   const isMonetaryCredit = isReturn && s.correction_kind === 'monetary_credit';
   let cancellationOptions = null;
@@ -2281,7 +2299,8 @@ async function openAnulacionModal(s) {
 
 async function confirmarAnulacion(saleId, registerAgain = false) {
   if (window._veloSaleCancellationPending) return;
-  const targetSale = (DB.sales || []).find(row => Number(row.id) === Number(saleId));
+  const targetSale = (DB.sales || []).find(row => Number(row.id) === Number(saleId))
+    || (Number(_ventasAnulacionSale?.id) === Number(saleId) ? _ventasAnulacionSale : null);
   const isMonetaryCredit = targetSale?.type === 'devolucion' &&
     targetSale?.correction_kind === 'monetary_credit';
   const reason = document.getElementById('anul-reason')?.value?.trim();
