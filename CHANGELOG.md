@@ -1,5 +1,49 @@
 # Historial de versiones
 
+## 1.51.0 — 2026-09-22
+
+Nueve de las doce mejoras pedidas. Las tres que faltan quedaron anotadas en
+[Mejoras pendientes](docs/mejoras-pendientes.md).
+
+### Ventas: el comprobante, el ITBIS y si está pagada, sin abrir la factura
+
+- La lista muestra el número del comprobante junto a la etiqueta NCF. Antes
+  decía solo "NCF" y había que abrir la factura para leer el B0200000407.
+- Columna **Estado**: PAGADA o PENDIENTE, con la misma regla del detalle de la
+  factura (una venta a crédito con abonos parciales sigue PENDIENTE).
+- El resumen que se exporta o imprime suma comprobante, ITBIS y estado; antes
+  llevaba solo número, fecha, cliente, método y total.
+- Período **Personalizado** con desde y hasta. La consulta valida las fechas,
+  las ordena si se escriben al revés y descarta lo que no sea una fecha.
+
+### Comprobantes fiscales: fuera de Configuración y en lote
+
+- Los reportes 607 y 608 pasaron a **Reportes → Comprobantes fiscales**. La
+  asistente los usa con su propio usuario; antes vivían dentro de
+  Configuración, solo para administrador. Configuración indica dónde quedaron.
+- Botón nuevo: **un solo PDF con todas las facturas con comprobante** del
+  período, una por página, con la misma plantilla con la que se imprime una
+  factura suelta. También se pueden mandar todas a la impresora de una vez. Cien
+  facturas al mes ya no se guardan una por una.
+
+### Punto de venta
+
+- **Cobrar** se habilita con artículos **o** cargos adicionales: un taller puede
+  cobrar solo mano de obra y una tienda solo un flete. Antes exigía al menos un
+  producto, tanto en pantalla como al guardar.
+- Al elegir el tipo de comprobante en el cobro se ve el número que se va a
+  emitir (B0200000402) y la próxima factura (00002388).
+
+### Caja y módulos
+
+- En el recibo de ingreso, **Recibido de** sugiere los clientes registrados
+  mientras se escribe: al elegir uno se llenan nombre y documento y el recibo
+  queda enlazado a ese cliente. Quien no esté registrado se escribe igual que
+  antes y se guarda sin enlace.
+- **Preventa y Despacho** se enciende y se apaga desde Configuración, sin pedir
+  al superadministrador. Apagado, desaparecen el módulo del menú y el botón
+  "Enviar a caja" del punto de venta.
+
 ## 1.50.2 — 2026-09-21
 
 ### Impresión sin cortes ni hojas de más

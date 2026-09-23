@@ -44,6 +44,7 @@ Cada tema tiene su archivo dedicado en [`docs/`](docs/). Todos enlazan de vuelta
 - **[Multi-terminal](docs/multi-terminal-sync.md)** — gateway, workers por negocio, autorización por caja y sincronización en tiempo real.
 - **[Apertura, cierre y cuadre de Caja](docs/cash-operations.md)** — reglas de VELO POS y VELO TECH por terminal, horario, protección de salida y roadmap.
 - **[Rendimiento y latencia](docs/velo-performance-roadmap.md)** — presupuesto de experiencia, rondas medidas y lo que queda: N+1, refresco dirigido, repintado y memoria.
+- **[Mejoras pendientes](docs/mejoras-pendientes.md)** — las tres mejoras de la lista de doce que faltan (anular con abonos, buscador global, regalo en el carrito): decisiones tomadas, código a tocar y preguntas abiertas.
 - **[Proceso de Release](docs/release-process.md)** — ⚠️ empujar un tag `v*` = deploy en vivo a clientes reales vía electron-updater. **Confirmar siempre con el usuario antes de tag.**
 
 ## Antes de trabajar
