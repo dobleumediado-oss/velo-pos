@@ -1,5 +1,52 @@
 # Historial de versiones
 
+## 1.52.0 — 2026-09-23
+
+Las tres mejoras que quedaron pendientes en 1.51.0, más correcciones de
+reportes fiscales, captura de descuentos y estabilidad financiera.
+
+### Anular facturas con abonos sin perder el destino del dinero
+
+- Al anular una factura con abonos, VELO pregunta si se aplicarán a otra factura
+  pendiente, quedarán anotados a favor del cliente o se anularán junto con la
+  factura.
+- Caja, cuenta del cliente, contabilidad, inventario y auditoría se actualizan en
+  una sola operación idempotente. Un reintento no duplica movimientos.
+- Los turnos cerrados permanecen intactos: el contramovimiento se registra en la
+  caja actual. Los abonos históricos no inventan salidas de efectivo.
+
+### Buscador global correcto y rápido
+
+- Encuentra facturas por número con o sin ceros, NCF, nombre con Ñ o tildes y
+  fragmentos del cliente.
+- Solo ejecuta la última consulta mientras se escribe y responde después de una
+  pausa de 50 ms.
+
+### Oferta sin cobrar el regalo dos veces
+
+- El artículo marcado aparece en RD$0 y con la etiqueta **OFERTA** en el carrito
+  y la factura.
+- Los demás artículos conservan exactamente su precio de lista. El total suma
+  solo las líneas cobradas: el regalo sale gratis de verdad.
+- VELO conserva por línea el precio regular del regalo y qué artículos incluyen
+  ese valor, sin alterar el inventario: el regalo también sale de existencia.
+- En el ticket térmico la marca va junto al precio, porque el nombre se recorta
+  al ancho del rollo y se comía la palabra.
+- Si después se devuelve mercancía, la devolución usa el importe registrado en
+  cada línea: el regalo devuelve RD$0 y el artículo cobrado devuelve lo suyo.
+- El ITBIS y el asiento contable se calculan sobre el importe realmente cobrado.
+
+### Reportes fiscales y operación diaria
+
+- Los reportes 607/608 filtran por la fecha correcta, muestran ITBIS e incluyen
+  comprobantes históricos que solo estaban registrados en la factura.
+- Descargar o imprimir todas las facturas con comprobante respeta exactamente el
+  período seleccionado.
+- Los descuentos aceptan punto, coma y separadores de miles en terminales con
+  distintas configuraciones regionales.
+- La anulación general de ventas, devoluciones, abonos y recibos de ingreso queda
+  cubierta por pruebas de caja, bancos, contabilidad, NCF e inventario.
+
 ## 1.51.0 — 2026-09-22
 
 Nueve de las doce mejoras pedidas. Las tres que faltan quedaron anotadas en
