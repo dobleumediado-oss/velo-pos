@@ -194,6 +194,7 @@ const api = {
   documents: {
     issue: (data)            => ipcRenderer.invoke('documents:issue', data),
     getSequences: (data)     => ipcRenderer.invoke('documents:getSequences', data),
+    peekNextInvoice: ()      => ipcRenderer.invoke('documents:peekNextInvoice'),
     updateSequence: (data)   => ipcRenderer.invoke('documents:updateSequence', data),
   },
 

@@ -3096,8 +3096,13 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
     }
 
     // ── Validación básica de integridad (segunda línea de defensa tras el renderer) ──
-    if (!saleData?.items?.length) {
-      return { ok: false, error: 'La venta debe tener al menos un producto' };
+    // Un taller puede cobrar solo mano de obra o un flete: la venta vale si
+    // tiene artículos O cargos adicionales.
+    // El POS los manda dentro de payment; otras rutas los pasan en la raíz.
+    const _cargosVenta = Array.isArray(saleData?.payment?.charges) ? saleData.payment.charges
+      : Array.isArray(saleData?.charges) ? saleData.charges : [];
+    if (!saleData?.items?.length && !_cargosVenta.length) {
+      return { ok: false, error: 'La venta debe tener al menos un producto o un cargo adicional' };
     }
     for (const item of saleData.items) {
       if (!item.qty || item.qty <= 0) {
@@ -3676,6 +3681,20 @@ ipcMain.handle('documents:getSequences', async (_, { requestUserId } = {}) => {
       data: documentNumberRepo.getSequences(),
       activeInvoiceKind: documentNumberRepo.activeInvoiceKind(),
     };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// Próximo número de factura, solo lectura. El cajero necesita verlo en el POS
+// antes de cobrar y no puede abrir Configuración; este número aparecerá impreso
+// en su propia factura, así que no revela nada que no vaya a ver igual.
+ipcMain.handle('documents:peekNextInvoice', async () => {
+  try {
+    const kind = documentNumberRepo.activeInvoiceKind();
+    const sequence = documentNumberRepo.getSequences().find(row => row.kind === kind) || {};
+    const next = Number(sequence.current || 0) + 1;
+    const pad = Math.max(1, Math.min(12, Number(sequence.pad_length || 8)));
+    const prefix = String(sequence.prefix || '');
+    return { ok: true, kind, number: next, formatted: `${prefix}${String(next).padStart(pad, '0')}` };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 

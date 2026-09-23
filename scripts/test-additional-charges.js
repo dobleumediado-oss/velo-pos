@@ -54,6 +54,15 @@ try {
       },
       session: { id: sessionId }, user: admin, type,
     }).saleId);
+  // Un taller puede cobrar solo mano de obra: la venta vale sin artículos.
+  const sellOnlyCharges = (charges) =>
+    DB.salesRepo.getById(DB.salesRepo.create({
+      customer: { id: customerId },
+      items: [],
+      payment: { method: 'efectivo', saleDate: '2026-09-19', ncfType: '', charges },
+      session: { id: sessionId }, user: admin, type: 'factura',
+    }).saleId);
+
   const entryLines = (saleId) => {
     DB.accountingRepo.generateSaleEntry({ saleId, userId: admin.id });
     const entry = db.prepare(`
@@ -216,7 +225,36 @@ try {
   ok(configSource.includes('id="cfg-charges-taxable"') && configSource.includes("key: 'charges_taxable'"),
     'Configuración ofrece la regla del negocio, junto al porcentaje de ITBIS');
 
+  console.log('\n== Venta de solo cargos (mano de obra, flete) ==');
+  // Con la regla apagada (como arranca todo negocio) el cargo va sin ITBIS.
+  db.prepare("INSERT INTO settings(key,value) VALUES('charges_taxable','0') ON CONFLICT(key) DO UPDATE SET value='0'").run();
+  const soloCargo = sellOnlyCharges([{ description: 'MANO DE OBRA', amount: 1500 }]);
+  ok(r2(soloCargo.tax_amt) === 0, 'sin la regla de ITBIS, el cargo no genera impuesto', `itbis=${soloCargo.tax_amt}`);
+  ok(r2(soloCargo.total) === 1500, 'el total es exactamente el cargo escrito', `total=${soloCargo.total}`);
+  ok(r2(soloCargo.subtotal + soloCargo.tax_amt) === r2(soloCargo.total),
+    'el desglose cuadra sin artículos', `${soloCargo.subtotal}+${soloCargo.tax_amt}`);
+  ok((soloCargo.items || []).length === 0 && (soloCargo.charges || []).length === 1,
+    'la venta queda sin artículos y con su cargo');
+  ok(r2(soloCargo.additional_charges_total) === 1500,
+    'el cargo queda registrado como tal', `cargos=${soloCargo.additional_charges_total}`);
+  const lineasSoloCargo = entryLines(soloCargo.id);
+  const cuenta4105 = lineasSoloCargo.filter(l => l.code === '4105');
+  ok(cuenta4105.length === 1 && r2(cuenta4105[0].credit) === 1500,
+    'contabilidad lleva el cargo a la 4105 aunque no haya mercancía',
+    JSON.stringify(lineasSoloCargo.map(l => `${l.code}:${l.debit || 0}/${l.credit || 0}`)));
+  const ventasMercancia = lineasSoloCargo.filter(l => l.code === '4101');
+  ok(ventasMercancia.length === 0, 'no se inventa una venta de mercancía que no existió');
+
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  ok(main.includes("Array.isArray(saleData?.payment?.charges) ? saleData.payment.charges") &&
+    main.includes('La venta debe tener al menos un producto o un cargo adicional'),
+    'el backend acepta una venta de solo cargos y rechaza la que no trae nada');
+  const pos = fs.readFileSync(path.join(__dirname, '..', 'src', 'js', 'pos.js'), 'utf8');
+  ok(pos.includes('function posTieneQueCobrar(') && !pos.includes('if (!inv || !inv.cart.length) return;'),
+    'el botón Cobrar y la confirmación miran artículos y cargos');
+
   console.log(`\n== RESULTADO: ${passed} OK ==`);
+
 } finally {
   try { db.close(); } catch {}
   fs.rmSync(tempDir, { recursive: true, force: true });

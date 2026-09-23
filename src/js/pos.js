@@ -864,9 +864,11 @@ function renderCart() {
     html += `
       <div class="cart-empty">
         <div>${svg('box')}</div>
-        <p>Carrito vacío</p>
+        <p>${(inv.charges || []).length ? 'Sin artículos · solo cargos adicionales' : 'Carrito vacío'}</p>
         <span style="font-size:11px;color:var(--muted2)">
-          Selecciona productos del panel izquierdo
+          ${(inv.charges || []).length
+            ? 'Puedes cobrar así, o agregar productos del panel izquierdo'
+            : 'Selecciona productos del panel izquierdo'}
         </span>
       </div>`;
   } else {
@@ -1033,8 +1035,8 @@ function renderCart() {
         ${svg('send')} Enviar a caja
       </button>` : ''}
       <button class="btn btn-green btn-fw btn-lg" id="pos-charge-btn"
-              style="margin-top:12px;font-size:14px;opacity:${inv.cart.length ? '1' : '.4'}"
-              ${inv.cart.length ? '' : 'disabled'}
+              style="margin-top:12px;font-size:14px;opacity:${posTieneQueCobrar(inv) ? '1' : '.4'}"
+              ${posTieneQueCobrar(inv) ? '' : 'disabled'}
               onclick="openCobroModal(invoices[activeInvoice])">
         ${inv.itype === 'cotizacion'
           ? `${svg('receipt')} Cotizar ${fmt(total)}`
@@ -1718,8 +1720,9 @@ function posRefreshCartTotals() {
 
   const chargeBtn = document.getElementById('pos-charge-btn');
   if (chargeBtn) {
-    chargeBtn.disabled = !inv.cart.length;
-    chargeBtn.style.opacity = inv.cart.length ? '1' : '.4';
+    const hayQueCobrar = posTieneQueCobrar(inv);
+    chargeBtn.disabled = !hayQueCobrar;
+    chargeBtn.style.opacity = hayQueCobrar ? '1' : '.4';
     chargeBtn.innerHTML = inv.itype === 'cotizacion'
       ? `${svg('receipt')} Cotizar ${fmt(total)}`
       : `${svg('cash')} Cobrar ${fmt(total)}`;
@@ -2742,8 +2745,14 @@ async function posEnsureAutoCreditLimitAuthorization(inv, customer, requestedLim
   });
 }
 
+// Un taller puede cobrar solo mano de obra, y una tienda solo un flete: hay
+// algo que cobrar si el documento tiene artículos O cargos adicionales.
+function posTieneQueCobrar(inv) {
+  return !!inv && (((inv.cart || []).length > 0) || ((inv.charges || []).length > 0));
+}
+
 function openCobroModal(inv) {
-  if (!inv || !inv.cart.length) return;
+  if (!posTieneQueCobrar(inv)) return;
   const { subtotal, itbis, total, discAmt, disc } = calcTotals(inv);
   const isQuote = inv.itype === 'cotizacion';
   const tradeInAmount = isQuote ? 0 : _posTradeInAmount(inv, total);
@@ -3169,14 +3178,27 @@ function openCobroModal(inv) {
   // del NCF que se emitirá). Se cachea en window._ncfAvail; si falla, se asume
   // "desconocido" y el preview no advierte de secuencias faltantes.
   window._ncfAvail = null;
+  // Número que se emitirá: el cajero lo pedía para anotarlo antes de cobrar.
+  window._ncfProximo = {};
+  window._proximaFactura = '';
   if (inv.itype === 'factura' && CFG.fiscalEnabled && window.api?.ncf?.getSequences) {
     window.api.ncf.getSequences().then(seqs => {
       const avail = new Set();
-      (seqs?.data || []).forEach(s => { if (s.active && s.current < s.to_num) avail.add(s.type); });
+      const proximo = {};
+      (seqs?.data || []).forEach(s => {
+        if (s.active && s.current < s.to_num) avail.add(s.type);
+        if (s.active && s.next_issue_ncf && !proximo[s.type]) proximo[s.type] = s.next_issue_ncf;
+      });
       window._ncfAvail = avail;
+      window._ncfProximo = proximo;
       cbrPopulateNcfTypes(avail);
       cbrDocHint();
     }).catch(() => { window._ncfAvail = new Set(); cbrDocHint(); });
+  }
+  if (inv.itype === 'factura' && window.api?.documents?.peekNextInvoice) {
+    window.api.documents.peekNextInvoice().then(res => {
+      if (res?.ok && res.formatted) { window._proximaFactura = res.formatted; cbrDocHint(); }
+    }).catch(() => {});
   }
   setTimeout(cbrDocHint, 40);
 }
@@ -3858,12 +3880,17 @@ function cbrDocHint() {
       if (window._ncfAvail instanceof Set && !window._ncfAvail.has(tipo)) {
         compLine = `${label}: ⚠ sin secuencia ${tipo} registrada → saldrá SIN NCF`;
       } else {
-        compLine = `Comprobante a emitir: ${label}`;
+        const numero = (window._ncfProximo || {})[tipo] || '';
+        compLine = `Comprobante a emitir: ${label}${numero ? ` · ${numero}` : ''}`;
       }
     }
   }
 
-  hint.textContent = [docLine, compLine].filter(Boolean).join('  ·  ');
+  // Número de factura que se usará, venga o no con comprobante fiscal.
+  const facturaLine = (inv.itype === 'factura' && window._proximaFactura)
+    ? `Próxima factura: ${window._proximaFactura}` : '';
+
+  hint.textContent = [docLine, compLine, facturaLine].filter(Boolean).join('  ·  ');
   hint.style.color = compLine.includes('SIN NCF') ? 'var(--amber)' : 'var(--muted2)';
 }
 
@@ -4093,7 +4120,8 @@ async function finalizarVenta() {
   inv.printAction = chosenPrintAction;
   inv.printCopies = chosenPrintCopies;
 
-  if (!inv.cart.length) return;
+  // Una venta puede ser solo de cargos adicionales (mano de obra, flete).
+  if (!posTieneQueCobrar(inv)) return;
 
   if (!isQuote && inv.tradeIn && !(inv.cliId && inv.cliId !== 1) &&
       !(inv.tradeIn.sellerName && inv.tradeIn.sellerDocument && inv.tradeIn.sellerPhone &&

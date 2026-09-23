@@ -621,4 +621,28 @@ assert(context.__preventaBadge._pvMatchesSearch(flowRows[0], '131456789'),
 console.log('  ✓ separa automáticamente las colas de caja, entrega e historial');
 console.log('  ✓ búsqueda operativa encuentra orden, cliente, documento y artículos');
 
+// ── Qué comprobante y qué factura saldrán (se pedía anotarlo antes de cobrar) ──
+{
+  const mainSource = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const preloadSource = fs.readFileSync(path.join(root, 'preload.js'), 'utf8');
+  assert(posSource.includes('window._ncfProximo = {}') &&
+    posSource.includes('proximo[s.type] = s.next_issue_ncf'),
+    'el cobro guarda el próximo comprobante de cada tipo');
+  assert(posSource.includes('compLine = `Comprobante a emitir: ${label}${numero ? ` · ${numero}` : \'\'}`;'),
+    'al elegir el tipo se muestra el número que se emitirá');
+  assert(posSource.includes('window.api.documents.peekNextInvoice()') &&
+    posSource.includes('Próxima factura: ${window._proximaFactura}'),
+    'el cobro también muestra el número de factura que sigue');
+  assert(mainSource.includes("ipcMain.handle('documents:peekNextInvoice'") &&
+    preloadSource.includes('peekNextInvoice:'),
+    'existe una consulta de solo lectura del próximo número de factura');
+  const peekBlock = mainSource.slice(
+    mainSource.indexOf("ipcMain.handle('documents:peekNextInvoice'"),
+    mainSource.indexOf("ipcMain.handle('documents:updateSequence'")
+  );
+  assert(!peekBlock.includes("['admin', 'superadmin']"),
+    'el cajero puede consultarlo: es el número que saldrá impreso en su propia factura');
+  console.log('  ✓ el cobro anticipa el comprobante y el número de factura que se emitirán');
+}
+
 console.log('\nInteracciones del POS verificadas correctamente.');
