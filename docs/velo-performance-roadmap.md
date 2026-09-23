@@ -613,3 +613,41 @@ tamaño.
   autorización al cajero. Retirar la restauración local no modifica tickets ya
   facturados. Las facturas y límites previamente confirmados permanecen como
   registros comerciales auditables.
+
+## Ronda del buscador global — 23 de septiembre de 2026
+
+### Problema confirmado
+
+- La consulta de ventas usaba `lower()` para encontrar clientes. SQLite solo
+  transforma de forma nativa las letras ASCII, por lo que nombres almacenados
+  en mayúsculas con tildes o Ñ no llegaban al filtrado normalizado final.
+- Una factura directa por número o NCF recorría también `sale_items`, aunque el
+  identificador ya era suficiente. La interfaz esperaba además 100 ms después
+  de la última tecla antes de iniciar cualquier consulta.
+- Con 6,000 facturas sintéticas, número y NCF tardaban entre 113.4 y 136.1 ms;
+  `José Peña Núñez`, `Jose Pena` y `pena` tardaban entre 117.3 y 133.0 ms y no
+  devolvían la factura esperada.
+
+### Ruta mínima aplicada
+
+- La conexión SQLite registra `VELO_SEARCH_NORM`, que comparte la misma función
+  pura del proceso principal y no modifica datos. Solo los campos de texto
+  humano de la búsqueda de ventas la usan para comparar sin mayúsculas, tildes
+  ni Ñ.
+- Los números de factura y NCF inequívocos omiten la consulta de artículos
+  cuando el catálogo local no encontró un producto coincidente. El resto de las
+  búsquedas conserva productos, clientes, vendedores, notas y recibos.
+- El debounce baja de 100 a 50 ms; se conserva la cancelación por secuencia y el
+  mismo overlay, teclado y presentación visual.
+
+### Medición y seguridad
+
+- Sobre la misma base temporal, `00002388`, `2388` y `B0200000407` quedaron
+  entre 73.5 y 88.0 ms con dos consultas (`cabeceras → detalle`). Los tres
+  nombres quedaron entre 80.9 y 84.1 ms con tres consultas y devolvieron la
+  factura correcta.
+- `scripts/test-global-search.js` mide desde la tecla hasta el pintado, informa
+  las consultas y cubre los seis casos. Falla con la comparación anterior y
+  pasa con la normalización nueva.
+- La prueba crea y elimina su propia base temporal. No abre ni escribe
+  `data/velo.db`; no hay migración ni información que revertir.

@@ -57,6 +57,11 @@ function initDB(customDataDir) {
   db.function('VELO_UPPER', { deterministic: true }, value =>
     String(value ?? '').trim().toLocaleUpperCase('es-DO')
   );
+  // Búsqueda equivalente a la del renderer: ignora mayúsculas, tildes y Ñ.
+  // Se registra en cada conexión; no modifica ni migra ningún dato guardado.
+  db.function('VELO_SEARCH_NORM', { deterministic: true }, value =>
+    _searchNorm(value)
+  );
 
   // Rendimiento y seguridad
   db.pragma('journal_mode = WAL');
@@ -7055,7 +7060,9 @@ const salesRepo = {
     const matchedProductIds = [...new Set((Array.isArray(productIds) ? productIds : [])
       .map(Number).filter(Number.isInteger).filter(id => id > 0))].slice(0, 20);
     const like = `%${term.toLowerCase()}%`;
+    const likeNorm = `%${qNorm}%`;
     const likeNoHash = `%${termNoHash.toLowerCase()}%`;
+    const isDirectDocumentLookup = /^\d+$/.test(termNoHash) || /^[be]\d{10,12}$/i.test(term);
 
     // Primero se resuelven ids candidatos. La implementación anterior unía
     // cada venta con todos sus artículos por cada tecla y multiplicaba el
@@ -7070,13 +7077,13 @@ const salesRepo = {
         OR lower(s.document_number_fmt) LIKE ?
         OR lower(s.numero_factura_fmt) LIKE ?
         OR lower(s.ncf) LIKE ?
-        OR lower(s.customer_name) LIKE ?
+        OR VELO_SEARCH_NORM(s.customer_name) LIKE ?
         OR lower(s.customer_rnc) LIKE ?
-        OR lower(s.customer_contact_name) LIKE ?
-        OR lower(s.customer_contact_role) LIKE ?
+        OR VELO_SEARCH_NORM(s.customer_contact_name) LIKE ?
+        OR VELO_SEARCH_NORM(s.customer_contact_role) LIKE ?
         OR lower(s.customer_contact_phone) LIKE ?
-        OR lower(s.notes) LIKE ?
-        OR lower(sp.name) LIKE ?
+        OR VELO_SEARCH_NORM(s.notes) LIKE ?
+        OR VELO_SEARCH_NORM(sp.name) LIKE ?
         OR lower(sp.code) LIKE ?
         OR lower(c.phone) LIKE ?
         OR EXISTS (
@@ -7098,8 +7105,8 @@ const salesRepo = {
     `).all(
       Number.isFinite(idNum) ? idNum : -1,
       Number.isFinite(facNum) ? facNum : -1,
-      likeNoHash, likeNoHash, like, like, like, like, like, like,
-      like, like, like, like, likeNoHash
+      likeNoHash, likeNoHash, like, likeNorm, like, likeNorm, likeNorm, like,
+      likeNorm, likeNorm, like, like, likeNoHash
     );
 
     let itemIds;
@@ -7111,14 +7118,17 @@ const salesRepo = {
         WHERE s.status!='cancelled' AND si.product_id IN (${placeholders})
         ORDER BY si.sale_id DESC LIMIT 300
       `).all(...matchedProductIds);
-    } else {
+    } else if (!isDirectDocumentLookup) {
       itemIds = db.prepare(`
         SELECT DISTINCT si.sale_id AS id
         FROM sale_items si JOIN sales s ON s.id=si.sale_id
         WHERE s.status!='cancelled'
-          AND (lower(si.product_name) LIKE ? OR lower(si.product_code) LIKE ?)
+          AND (VELO_SEARCH_NORM(si.product_name) LIKE ? OR lower(si.product_code) LIKE ?)
         ORDER BY si.sale_id DESC LIMIT 180
-      `).all(like, like);
+      `).all(likeNorm, like);
+    } else {
+      // Un número de factura o NCF inequívoco no necesita recorrer artículos.
+      itemIds = [];
     }
 
     const productSaleIds = new Set(itemIds.map(row => Number(row.id)));

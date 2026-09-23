@@ -2307,7 +2307,7 @@ let _gSearchIndex = -1;
 let _gSearchTimer = null;
 
 // Evita lanzar una consulta pesada por cada tecla. Los catálogos en memoria se
-// filtran después de una pausa imperceptible y solo la última búsqueda llega al
+// filtran después de una pausa breve y solo la última búsqueda llega al
 // historial completo del servidor.
 function _queueGSearch(q, resultsEl) {
   clearTimeout(_gSearchTimer);
@@ -2321,7 +2321,7 @@ function _queueGSearch(q, resultsEl) {
   _gSearchTimer = setTimeout(() => {
     if (requestSeq !== _gSearchSeq) return;
     _runGSearch(value, resultsEl, requestSeq);
-  }, 100);
+  }, 50);
 }
 function _moveGSearch(delta) {
   const items = [...document.querySelectorAll('#gsearch-results [data-gsearch-item]')];
