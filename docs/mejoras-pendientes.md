@@ -3,9 +3,10 @@
 [← Volver a CLAUDE.md](../CLAUDE.md) · Relacionados: [Flujos y numeración documental](document-workflows.md) · [Corrección controlada de facturas](sale-corrections.md) · [Rendimiento y latencia](velo-performance-roadmap.md)
 
 El 2026-09-21 el dueño pidió doce mejoras. **Nueve salieron en la 1.51.0**
-(ver [CHANGELOG](../CHANGELOG.md)). Aquí quedan las **tres** que faltan, con lo
-que ya está decidido, dónde vive el código y qué hay que resolver antes de
-escribir una línea. El orden es el de la lista original, no el de prioridad.
+(ver [CHANGELOG](../CHANGELOG.md)) y el **punto 5** lo resolvió Codex el
+2026-09-23 (commit `2b5de45`, sin publicar todavía). Quedan **dos**, con lo que
+ya está decidido, dónde vive el código y qué hay que resolver antes de escribir
+una línea. El orden es el de la lista original, no el de prioridad.
 
 > Las citas `archivo:línea` se verificaron contra el código en la 1.51.0.
 > Compruébalas otra vez antes de afirmarlas: el archivo se mueve.
@@ -29,32 +30,49 @@ escribir una línea. El orden es el de la lista original, no el de prioridad.
 - Si el cliente había pagado **de más**, la anulación deja el balance en 0 y solo
   avisa: *"excedente … a revisar manualmente (reembolso o crédito)"*
   ([`src/js/ventas.js:2301`](../src/js/ventas.js), cálculo en
-  [`database.js:7380-7388`](../database.js)). Ese excedente sin destino es lo
+  [`database.js:7390-7398`](../database.js)). Ese excedente sin destino es lo
   que el dueño llama "crédito a favor automático".
 
-### Qué falta decidir con el dueño (preguntar, no asumir)
-1. **Aplicar a otra deuda**: ¿el usuario elige la factura pendiente a mano, o
-   VELO propone la más antigua? ¿Puede repartirse entre varias?
-2. **Devolver el dinero**: ¿sale de caja en efectivo? Si sí, ¿exige caja abierta,
-   genera egreso y recibo, y qué pasa si se anula en otro turno?
-3. **Crédito a favor**: hoy no existe como saldo real (el balance se corta en 0).
-   ¿Se quiere un saldo negativo del cliente, o un documento de nota de crédito?
-4. **Con NCF**: una factura con comprobante entregado no se anula sin más; le
-   toca nota de crédito B04 (ver [Corrección controlada](sale-corrections.md)).
-   ¿La pregunta del abono aplica igual en ese caso?
-5. **Permiso y rastro**: ¿quién puede elegir el destino del abono y qué queda en
-   la auditoría?
+### Qué decidió el dueño (2026-09-23)
+Al anular una factura con abonos, VELO **pregunta** en vez de bloquear, con tres
+salidas:
+
+1. **Aplicarlo a otra factura pendiente del mismo cliente**, que el usuario elige
+   de una lista con los saldos a la vista. Una sola factura: repartir entre
+   varias no entra por ahora.
+2. **Dejarlo anotado a favor del cliente** sin tocar el balance ni inventar un
+   saldo a favor. El registro debe quedar fijo en la cuenta del cliente y en la
+   auditoría: un aviso que desaparece es plata que se olvida.
+3. **Anular todo, incluido el abono**, revirtiendo el dinero como si nunca
+   hubiera entrado. Es el caso más común: se anula por errores de digitación, se
+   rehace la factura y se vuelve a cobrar.
+
+Además:
+- **De la anulación no sale efectivo.** Entregar billetes es un egreso
+  deliberado desde Caja, como hoy.
+- **Las facturas con NCF preguntan lo mismo**: la pregunta es por el dinero
+  recibido; el camino fiscal del comprobante (nota de crédito, 608) no cambia.
+- **Permiso**: el mismo que ya exige anular (`sales.cancel`).
+
+### Lo único sin decidir
+Qué pasa cuando el abono pertenece a un **turno de caja ya cerrado**. Hay que
+averiguar qué hace hoy el código, explicárselo al dueño y proponerle, sin
+cambiar el comportamiento de un turno cerrado por cuenta propia.
 
 ### Dónde tocar
 `openAnulacionModal` en [`src/js/ventas.js:2169`](../src/js/ventas.js) ·
 `confirmarAnulacion` en [`src/js/ventas.js:2246`](../src/js/ventas.js) ·
 handler `sales:cancel` en [`main.js:3610`](../main.js) · `salesRepo.cancel` en
-[`database.js:7380`](../database.js) · pruebas en
+[`database.js:7243`](../database.js) · pruebas en
 `scripts/test-sale-corrections.js` y `scripts/test-pending-invoices.js`.
 
 ---
 
 ## Punto 5 — El buscador global no encuentra y se siente lento
+
+> **Hecho por Codex el 2026-09-23** (`2b5de45`: `database.js`, `src/js/app.js`
+> y `scripts/test-global-search.js`, enganchada a `test:tech-readiness`).
+> Falta probarlo en vivo con el dueño y publicarlo en una versión.
 
 ### Qué pidió el dueño
 > "Arreglar el buscador general: no encuentra las facturas correctas y va lento."
