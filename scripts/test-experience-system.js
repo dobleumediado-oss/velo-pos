@@ -46,7 +46,9 @@ assert(app.includes('Operación detenida por conexión'), 'Los fallos de conexi�
 assert(app.includes('commandCatalog'), 'La búsqueda global debe incluir comandos operativos');
 assert(app.includes('Centro de impresión'), 'La búsqueda debe conducir al centro de impresión');
 assert(!app.includes("backdropFilter: 'blur(4px)'"), 'El buscador no debe bloquear su apertura aplicando desenfoque');
-assert(app.includes('}, 100);'), 'La búsqueda global debe responder con una pausa corta');
+const globalSearchDelay = app.match(/_gSearchTimer\s*=\s*setTimeout\([\s\S]*?\},\s*(\d+)\s*\);/);
+assert(globalSearchDelay && Number(globalSearchDelay[1]) > 0 && Number(globalSearchDelay[1]) <= 100,
+  'La búsqueda global debe responder con una pausa corta de hasta 100 ms');
 assert(/function\s+modalBack\s*\(/.test(app), 'Los modales secundarios deben poder volver al modal anterior');
 assert(app.includes("html: '← Atrás'"), 'La navegación de modales debe mostrar Atrás');
 assert(styles.includes('.ov{background:rgba(2,6,23,.55);backdrop-filter:none}'),
@@ -284,6 +286,13 @@ let accesoArnes = null;
     'Configuración ya no guarda los reportes 607/608 y dice dónde están');
   assert(reportes.includes("if (typeof modalReporteNCF === 'function') modalReporteNCF();"),
     'la pestaña abre el mismo reporte 607/608, sin duplicar su código');
+  assert(sucursales.includes('requestUserId: user?.id') &&
+    main.includes("_moduleAuthorizedUser(requestUserId, 'reportes')"),
+    '607/608 exige el permiso de Reportes también en el proceso principal');
+  assert(sucursales.includes("'ITBIS','Monto'") &&
+    sucursales.includes('const itbisSum = rows.reduce') &&
+    sucursales.includes('fmt(itbisSum)'),
+    'el modal, la impresión y el Excel 607/608 presentan el ITBIS del período');
 
   assert(reportes.includes('function _repFacturasConComprobante(') &&
     reportes.includes("pagina.filter(venta => String(venta.ncf || '').trim())") &&

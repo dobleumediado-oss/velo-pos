@@ -2729,6 +2729,11 @@ ipcMain.handle('customers:getPayments', async (_, {
   return customersRepo.getPayments(customerId, { includeCancelled: includeCancelled === true });
 });
 
+ipcMain.handle('customers:getCancellationCredits', async (_, { customerId } = {}) => {
+  if (!customerId || Number(customerId) === 1) return [];
+  return customersRepo.getCancellationCredits(customerId);
+});
+
 // Ruta ligera para estado de cuenta. `sales:getAll` arma resúmenes de artículos
 // y totales correlacionados que son útiles en Ventas, pero innecesarios para el
 // modal del cliente y muy costosos con importaciones históricas grandes.
@@ -3607,7 +3612,21 @@ ipcMain.handle('sales:corrections:getHistory', async (_, { id, requestUserId } =
   }
 });
 
-ipcMain.handle('sales:cancel', async (_, { id, reason, requestUserId, reuseNcf }) => {
+ipcMain.handle('sales:getCancellationOptions', async (_, { id, requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !saleCorrectionsRepo.hasPermission(reqUser, 'sales.cancel')) {
+      return { ok: false, error: 'Permiso requerido: sales.cancel' };
+    }
+    return { ok: true, data: salesRepo.getCancellationOptions(id) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('sales:cancel', async (_, {
+  id, reason, requestUserId, reuseNcf, paymentDisposition, targetSaleId, operationId
+}) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
     if (!reqUser || !saleCorrectionsRepo.hasPermission(reqUser, 'sales.cancel')) {
@@ -3618,12 +3637,36 @@ ipcMain.handle('sales:cancel', async (_, { id, reason, requestUserId, reuseNcf }
     // Reintento seguro: si la BD confirmó la anulación pero la respuesta IPC se
     // perdió, no se repite inventario, caja ni contabilidad.
     if (sale.status === 'cancelled') {
+      const resolution = salesRepo.getCancellationResolution(id);
+      if (resolution && operationId && resolution.operationId !== operationId) {
+        return { ok: false, error: 'Esta factura ya fue anulada con otra operación' };
+      }
+      if (resolution && paymentDisposition && resolution.disposition !== paymentDisposition) {
+        return { ok: false, error: 'La clave de operación ya fue usada con otra decisión sobre los abonos' };
+      }
+      if (resolution && paymentDisposition === 'reapply' &&
+          Number(resolution.targetSaleId || 0) !== Number(targetSaleId || 0)) {
+        return { ok: false, error: 'La clave de operación ya fue usada con otra factura de destino' };
+      }
+      // Recuperación tras cierre inesperado: ambos hooks son idempotentes. Si
+      // la venta se confirmó pero la app cerró antes del asiento, el reintento
+      // termina la contabilidad sin volver a tocar caja, balance o inventario.
+      if (resolution?.resolutionId) {
+        _acctHook(() => accountingRepo.generateSaleCancellationPaymentEntry({
+          resolutionId: resolution.resolutionId,
+          userId: requestUserId,
+        }));
+      }
+      _acctHook(() => accountingRepo.reverseSourceEntry(
+        'venta', id, requestUserId, 'Venta anulada: ' + (reason || '')
+      ));
       return {
         ok: true,
         idempotent: true,
         isReturn: sale.type === 'devolucion',
         originalSaleId: sale.original_sale_id || null,
         overpayment: 0,
+        ...(resolution || {}),
       };
     }
 
@@ -3637,10 +3680,23 @@ ipcMain.handle('sales:cancel', async (_, { id, reason, requestUserId, reuseNcf }
       return { ok: true, isReturn: true, originalSaleId: result.originalSaleId, overpayment: 0 };
     }
 
-    const cancelResult = salesRepo.cancel(id, reason, requestUserId, reqUser.name, { reuseNcf: !!reuseNcf });
+    const session = cashRepo.getOpen(_reqTerminalId());
+    const cancelResult = salesRepo.cancel(id, reason, requestUserId, reqUser.name, {
+      reuseNcf: !!reuseNcf,
+      paymentDisposition,
+      targetSaleId,
+      operationId,
+      reversalSessionId: session?.id || null,
+    });
+    if (cancelResult?.resolutionId) {
+      _acctHook(() => accountingRepo.generateSaleCancellationPaymentEntry({
+        resolutionId: cancelResult.resolutionId,
+        userId: requestUserId,
+      }));
+    }
     // Contabilidad en vivo: reversar el asiento de la venta anulada.
     _acctHook(() => accountingRepo.reverseSourceEntry('venta', id, requestUserId, 'Venta anulada: ' + (reason || '')));
-    return { ok: true, overpayment: cancelResult?.overpayment || 0 };
+    return { ok: true, ...(cancelResult || {}), overpayment: cancelResult?.overpayment || 0 };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -7077,11 +7133,17 @@ ipcMain.handle('ncf:getAlerts', async () => {
   try { return { ok:true, data: ncfRepo.getAlerts() }; } catch(e) { return { ok:false, error:e.message }; }
 });
 // Log de comprobantes — base de los reportes 607 (emitidos) y 608 (anulados).
-ipcMain.handle('ncf:getLog', async (_, { from, to, status, type } = {}) => {
-  try { return { ok:true, data: ncfRepo.getLog({ from, to, status, type }) }; } catch(e) { return { ok:false, error:e.message }; }
+ipcMain.handle('ncf:getLog', async (_, { from, to, status, type, requestUserId } = {}) => {
+  try {
+    _moduleAuthorizedUser(requestUserId, 'reportes');
+    return { ok:true, data: ncfRepo.getLog({ from, to, status, type }) };
+  } catch(e) { return { ok:false, error:e.message }; }
 });
-ipcMain.handle('ncf:getVoided', async (_, { from, to } = {}) => {
-  try { return { ok:true, data: ncfRepo.getVoided({ from, to }) }; } catch(e) { return { ok:false, error:e.message }; }
+ipcMain.handle('ncf:getVoided', async (_, { from, to, requestUserId } = {}) => {
+  try {
+    _moduleAuthorizedUser(requestUserId, 'reportes');
+    return { ok:true, data: ncfRepo.getVoided({ from, to }) };
+  } catch(e) { return { ok:false, error:e.message }; }
 });
 ipcMain.handle('ncf:validateRnc', async (_, { rnc }) => {
   try {

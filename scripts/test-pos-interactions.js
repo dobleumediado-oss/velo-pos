@@ -167,6 +167,9 @@ state.setSettings({ pos_discount_auth_limit_pct: '100' });
 state.currentInv().cart.push({ name: 'Artículo', price: 105, qty: 1, taxable: 1, tax_pct: 18 });
 
 const posSource = fs.readFileSync(path.join(root, 'src/js/pos.js'), 'utf8');
+assert.match(posSource,
+  /<input type="text" data-uppercase="off" pattern="\[0-9\.,\]\*" data-money="\$\{inv\.discMode/,
+  'el descuento debe aceptar punto o coma sin depender del locale de type=number');
 vm.runInContext(`${posSource}\nlet __renderCartCalls=0;
 renderCart=()=>{__renderCartCalls++};
 this.__posDiscount={
@@ -318,6 +321,20 @@ assert.strictEqual(state.currentInv().discAmtInput, 40);
 assert.strictEqual(discount.renderCalls(), amountRenderBaseline, 'escribir RD$ no debe reemplazar el carrito');
 assert.strictEqual(elements.get('pos-total-value').textContent, 'RD$65.00');
 console.log('  ✓ permite escribir RD$40 seguido sin perder el foco');
+
+state.currentInv().cart = [{ name: 'Artículo regional', price: 2000, qty: 1, taxable: 0 }];
+state.currentInv().discMode = 'amt';
+const regionalAmountInput = { value: '1.350,50' };
+discount.posDiscConPin(regionalAmountInput, regionalAmountInput.value);
+assert.strictEqual(state.currentInv().discAmtInput, 1350.5,
+  'RD$1.350,50 debe interpretarse como mil trescientos cincuenta con 50');
+assert.strictEqual(state.currentInv().disc, 67.525);
+state.currentInv().discMode = 'pct';
+const regionalPercentInput = { value: '10,5' };
+discount.posDiscConPin(regionalPercentInput, regionalPercentInput.value);
+assert.strictEqual(state.currentInv().disc, 10.5,
+  '10,5 debe funcionar como 10.5% en teclados con coma decimal');
+console.log('  ✓ descuento RD$ y porcentaje aceptan punto, coma y separadores regionales');
 
 state.setProducts([{ id: 100, price: 10, wholesale: 9, stock: 100, active: 1 }]);
 state.currentInv().discMode = 'pct';

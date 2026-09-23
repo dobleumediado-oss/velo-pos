@@ -1,8 +1,9 @@
 // Reparto determinista de ofertas del POS.
 //
-// El navegador y el proceso main usan exactamente este mismo motor. Trabaja en
-// centavos para que el último centavo nunca se pierda y solo reparte dentro del
-// mismo grupo fiscal (exento, o gravado con la misma tasa).
+// El navegador y el proceso main usan exactamente este mismo motor. El artículo
+// marcado se cobra en cero; los demás conservan su precio porque ese precio ya
+// incluye comercialmente el regalo. El reparto solo deja trazabilidad interna,
+// en centavos y dentro del mismo grupo fiscal, sin inflar ninguna línea.
 (function initOfferAllocation(root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -104,7 +105,7 @@
     if (allocated !== giftTotal) return invalid('No se pudo cuadrar el reparto de la oferta al centavo.');
 
     const output = rows.map(row => {
-      const effectiveCents = row.gift ? 0 : row.cents + row.absorbed;
+      const effectiveCents = row.gift ? 0 : row.cents;
       const qty = Number(items[row.index]?.qty) || 1;
       return {
         ...items[row.index],
@@ -118,8 +119,9 @@
     const adjustedTotalCents = output.reduce(
       (sum, row) => sum + toCents(row.effective_line_total), 0
     );
-    if (adjustedTotalCents !== originalTotalCents) {
-      return invalid('El reparto de la oferta cambiaría el total de la factura.');
+    const expectedTotalCents = originalTotalCents - giftTotal;
+    if (adjustedTotalCents !== expectedTotalCents) {
+      return invalid('No se pudo descontar correctamente el artículo en oferta.');
     }
 
     return {

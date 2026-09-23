@@ -95,6 +95,17 @@ function reconcileCancelledPaymentAccounting(db) {
     return { voidedEntries: 0, rebuiltAccounts: 0 };
   }
 
+  const resolutionGuard = has('sale_cancellation_payment_lines') &&
+    has('sale_cancellation_payment_resolutions') ? `
+      AND NOT EXISTS(
+        SELECT 1
+        FROM sale_cancellation_payment_lines l
+        JOIN sale_cancellation_payment_resolutions r ON r.id=l.resolution_id
+        JOIN accounting_entries ae
+          ON ae.source_module='anulacion_abono_factura'
+         AND ae.source_id=r.id AND ae.status='confirmado'
+        WHERE l.payment_id=p.id
+      )` : '';
   const stale = db.prepare(`
     SELECT e.id,e.source_id,p.document_number_fmt,p.numero_recibo
     FROM accounting_entries e
@@ -102,6 +113,7 @@ function reconcileCancelledPaymentAccounting(db) {
     WHERE e.source_module='abono'
       AND e.status='confirmado'
       AND COALESCE(p.status,'active')='cancelled'
+      ${resolutionGuard}
   `).all();
 
   const voidEntry = db.prepare(`
@@ -2501,6 +2513,59 @@ const MIGRATIONS = [
         db.exec('ALTER TABLE sale_items ADD COLUMN offer_absorbed_amount REAL NOT NULL DEFAULT 0');
       }
       console.log('[MIGRATION 1.50.4-sale-offers] Trazabilidad de ofertas por línea lista');
+    }
+  },
+  {
+    version: '1.51.1-sale-cancellation-payments',
+    description: 'Destino trazable de abonos al anular facturas.',
+    run(db) {
+      const has = table => !!db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?"
+      ).get(table);
+      const addColumn = (table, name, definition) => {
+        if (!has(table)) return;
+        const columns = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name));
+        if (!columns.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+      };
+      addColumn('payments', 'original_amount', 'REAL DEFAULT NULL');
+      addColumn('payments', 'original_account_amount', 'REAL DEFAULT NULL');
+      addColumn('cash_movements', 'sale_cancellation_resolution_id', 'INTEGER DEFAULT NULL');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS sale_cancellation_payment_resolutions (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          operation_id   TEXT NOT NULL UNIQUE,
+          sale_id        INTEGER NOT NULL UNIQUE REFERENCES sales(id),
+          customer_id    INTEGER NOT NULL REFERENCES customers(id),
+          disposition    TEXT NOT NULL CHECK(disposition IN ('reapply','favor','void')),
+          amount         REAL NOT NULL CHECK(amount > 0),
+          target_sale_id INTEGER REFERENCES sales(id),
+          reason         TEXT NOT NULL DEFAULT '',
+          user_id        INTEGER REFERENCES users(id),
+          user_name      TEXT NOT NULL DEFAULT '',
+          detail         TEXT NOT NULL DEFAULT '',
+          created_at     TEXT DEFAULT (datetime('now','localtime'))
+        );
+        CREATE TABLE IF NOT EXISTS sale_cancellation_payment_lines (
+          id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+          resolution_id         INTEGER NOT NULL REFERENCES sale_cancellation_payment_resolutions(id),
+          payment_id            INTEGER NOT NULL REFERENCES payments(id),
+          amount                REAL NOT NULL CHECK(amount > 0),
+          payment_amount_before REAL NOT NULL DEFAULT 0,
+          payment_amount_after  REAL NOT NULL DEFAULT 0,
+          target_sale_id        INTEGER REFERENCES sales(id),
+          cash_session_id       INTEGER REFERENCES cash_sessions(id),
+          cash_breakdown        TEXT NOT NULL DEFAULT '[]',
+          created_at            TEXT DEFAULT (datetime('now','localtime')),
+          UNIQUE(resolution_id,payment_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_sale_cancel_resolution_customer
+          ON sale_cancellation_payment_resolutions(customer_id,created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_sale_cancel_lines_payment
+          ON sale_cancellation_payment_lines(payment_id);
+        CREATE INDEX IF NOT EXISTS idx_cash_movements_sale_cancel_resolution
+          ON cash_movements(sale_cancellation_resolution_id);
+      `);
+      console.log('[MIGRATION 1.51.1-sale-cancellation-payments] Destino de abonos trazable listo');
     }
   },
 ];

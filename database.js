@@ -1007,6 +1007,8 @@ function createTables() {
       exchange_rate REAL DEFAULT 1,
       account_amount REAL DEFAULT 0,
       payment_reference TEXT DEFAULT '',
+      original_amount REAL DEFAULT NULL,
+      original_account_amount REAL DEFAULT NULL,
       operation_id    TEXT DEFAULT '',
       created_at      TEXT DEFAULT (datetime('now','localtime'))
     );
@@ -1027,6 +1029,41 @@ function createTables() {
       ON payment_allocations(payment_id);
     CREATE INDEX IF NOT EXISTS idx_payment_allocations_sale
       ON payment_allocations(sale_id);
+
+    -- Decisión tomada sobre los abonos al anular una factura. La cabecera es
+    -- única por venta y por operación para que un reintento IPC no duplique
+    -- caja, inventario ni movimientos financieros.
+    CREATE TABLE IF NOT EXISTS sale_cancellation_payment_resolutions (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      operation_id   TEXT NOT NULL UNIQUE,
+      sale_id        INTEGER NOT NULL UNIQUE REFERENCES sales(id),
+      customer_id    INTEGER NOT NULL REFERENCES customers(id),
+      disposition    TEXT NOT NULL CHECK(disposition IN ('reapply','favor','void')),
+      amount         REAL NOT NULL CHECK(amount > 0),
+      target_sale_id INTEGER REFERENCES sales(id),
+      reason         TEXT NOT NULL DEFAULT '',
+      user_id        INTEGER REFERENCES users(id),
+      user_name      TEXT NOT NULL DEFAULT '',
+      detail         TEXT NOT NULL DEFAULT '',
+      created_at     TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE TABLE IF NOT EXISTS sale_cancellation_payment_lines (
+      id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+      resolution_id         INTEGER NOT NULL REFERENCES sale_cancellation_payment_resolutions(id),
+      payment_id            INTEGER NOT NULL REFERENCES payments(id),
+      amount                REAL NOT NULL CHECK(amount > 0),
+      payment_amount_before REAL NOT NULL DEFAULT 0,
+      payment_amount_after  REAL NOT NULL DEFAULT 0,
+      target_sale_id        INTEGER REFERENCES sales(id),
+      cash_session_id       INTEGER REFERENCES cash_sessions(id),
+      cash_breakdown        TEXT NOT NULL DEFAULT '[]',
+      created_at            TEXT DEFAULT (datetime('now','localtime')),
+      UNIQUE(resolution_id,payment_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_sale_cancel_resolution_customer
+      ON sale_cancellation_payment_resolutions(customer_id,created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sale_cancel_lines_payment
+      ON sale_cancellation_payment_lines(payment_id);
 
     -- ── Proveedores / compras ──
     CREATE TABLE IF NOT EXISTS suppliers (
@@ -4576,6 +4613,17 @@ const customersRepo = {
       ORDER BY p.created_at DESC
     `).all(customerId));
   },
+  getCancellationCredits(customerId) {
+    if (!tableExists('sale_cancellation_payment_resolutions')) return [];
+    return db.prepare(`
+      SELECT r.id,r.sale_id,r.amount,r.reason,r.user_name,r.created_at,
+             s.document_number_fmt,s.numero_factura_fmt,s.ncf
+      FROM sale_cancellation_payment_resolutions r
+      LEFT JOIN sales s ON s.id=r.sale_id
+      WHERE r.customer_id=? AND r.disposition='favor'
+      ORDER BY r.created_at DESC,r.id DESC
+    `).all(Number(customerId));
+  },
   // `limit` acota la consulta a los abonos más recientes. El renderer sostiene
   // esa ventana en memoria y solo pide el historial completo cuando una pantalla
   // lo necesita de verdad, en vez de cargarlo entero en cada arranque.
@@ -5358,6 +5406,105 @@ function _salesCustomRange(dateFrom, dateTo) {
   return { from, to };
 }
 
+function saleCancellationResolutionResult(resolution, { idempotent = false } = {}) {
+  if (!resolution) return null;
+  return {
+    resolutionId: Number(resolution.id),
+    disposition: resolution.disposition || '',
+    paymentAmount: Number(resolution.amount || 0),
+    targetSaleId: resolution.target_sale_id ? Number(resolution.target_sale_id) : null,
+    operationId: resolution.operation_id || '',
+    idempotent,
+  };
+}
+
+function salePaymentApplications(saleId) {
+  const rows = [];
+  if (tableExists('payment_allocations')) {
+    rows.push(...db.prepare(`
+      SELECT p.*,pa.id AS allocation_id,pa.amount AS applied_amount,
+             cs.status AS original_cash_session_status
+      FROM payment_allocations pa
+      JOIN payments p ON p.id=pa.payment_id
+      LEFT JOIN cash_sessions cs ON cs.id=p.cash_session_id
+      WHERE pa.sale_id=? AND COALESCE(p.status,'active')='active'
+      ORDER BY p.created_at,p.id
+    `).all(Number(saleId)));
+  }
+  rows.push(...db.prepare(`
+    SELECT p.*,NULL AS allocation_id,p.amount AS applied_amount,
+           cs.status AS original_cash_session_status
+    FROM payments p
+    LEFT JOIN cash_sessions cs ON cs.id=p.cash_session_id
+    WHERE p.sale_id=? AND COALESCE(p.status,'active')='active'
+      ${tableExists('payment_allocations')
+        ? 'AND NOT EXISTS (SELECT 1 FROM payment_allocations pa WHERE pa.payment_id=p.id)'
+        : ''}
+    ORDER BY p.created_at,p.id
+  `).all(Number(saleId)));
+  return rows.map(row => ({
+    ...row,
+    applied_amount: round2(Number(row.applied_amount || 0)),
+    other_allocated: tableExists('payment_allocations')
+      ? round2(Number(db.prepare(`
+          SELECT COALESCE(SUM(amount),0) amount
+          FROM payment_allocations WHERE payment_id=? AND sale_id!=?
+        `).get(row.id, Number(saleId))?.amount || 0))
+      : 0,
+    imported: !!(
+      String(row.import_source || '').trim() ||
+      String(row.cajero || '').trim() === 'Importación histórica' ||
+      String(row.note || '').trim() === 'Saldo inicial importado'
+    ),
+  })).filter(row => row.applied_amount > 0.005);
+}
+
+function splitCancellationCash(payment, amount) {
+  const method = String(payment.method || 'efectivo').trim().toLowerCase();
+  if (['credito', 'descuento'].includes(method)) return [];
+  if (method !== 'mixto') return [{ method: method || 'efectivo', amount: round2(amount) }];
+
+  const received = db.prepare(`
+    SELECT LOWER(COALESCE(method,'efectivo')) method,ROUND(COALESCE(SUM(amount),0),2) amount
+    FROM cash_movements WHERE payment_id=? AND type='abono'
+    GROUP BY LOWER(COALESCE(method,'efectivo')) ORDER BY method
+  `).all(payment.id);
+  const reversed = tableExists('sale_cancellation_payment_resolutions')
+    ? db.prepare(`
+        SELECT LOWER(COALESCE(method,'efectivo')) method,ROUND(COALESCE(SUM(amount),0),2) amount
+        FROM cash_movements
+        WHERE payment_id=? AND type='salida' AND sale_cancellation_resolution_id IS NOT NULL
+        GROUP BY LOWER(COALESCE(method,'efectivo'))
+      `).all(payment.id)
+    : [];
+  const reversedByMethod = new Map(reversed.map(row => [row.method, Number(row.amount || 0)]));
+  const available = received.map(row => ({
+    method: row.method,
+    amount: Math.max(0, round2(Number(row.amount || 0) - Number(reversedByMethod.get(row.method) || 0))),
+  })).filter(row => row.amount > 0.005);
+  const totalAvailable = round2(available.reduce((sum, row) => sum + row.amount, 0));
+  if (totalAvailable + 0.01 < amount || !available.length) {
+    throw new Error('No se pudo reconstruir el desglose del abono mixto para su reverso');
+  }
+  let remaining = Math.round(round2(amount) * 100);
+  return available.map((row, index) => {
+    const cents = index === available.length - 1
+      ? remaining
+      : Math.min(remaining, Math.round((amount * row.amount / totalAvailable) * 100));
+    remaining -= cents;
+    return { method: row.method, amount: cents / 100 };
+  }).filter(row => row.amount > 0);
+}
+
+function refreshPaymentPrimarySale(paymentId) {
+  if (!tableExists('payment_allocations')) return;
+  const linked = db.prepare(
+    'SELECT sale_id FROM payment_allocations WHERE payment_id=? ORDER BY id'
+  ).all(paymentId);
+  db.prepare('UPDATE payments SET sale_id=? WHERE id=?')
+    .run(linked.length === 1 ? Number(linked[0].sale_id) : null, paymentId);
+}
+
 const salesRepo = {
   getConfirmationById(id, { idempotent = true } = {}) {
     const sale = db.prepare('SELECT * FROM sales WHERE id=?').get(Number(id));
@@ -5365,6 +5512,50 @@ const salesRepo = {
   },
   getConfirmedOperation({ operationId = '', customer, items, payment, type = 'factura' }) {
     return findConfirmedSaleOperation({ operationId, customer, items, payment, type });
+  },
+  getCancellationOptions(id) {
+    const sale = db.prepare('SELECT * FROM sales WHERE id=?').get(Number(id));
+    if (!sale) throw new Error('Venta no encontrada');
+    const applications = salePaymentApplications(sale.id);
+    const paymentAmount = round2(applications.reduce(
+      (sum, row) => sum + Number(row.applied_amount || 0), 0
+    ));
+    const pending = sale.customer_id && sale.customer_id !== 1
+      ? getPendingInvoices(db, sale.customer_id)
+      : { facturas: [] };
+    return {
+      saleId: Number(sale.id),
+      customerId: Number(sale.customer_id || 0),
+      paymentAmount,
+      payments: applications.map(row => ({
+        id: Number(row.id),
+        documentNumber: row.document_number_fmt || row.numero_recibo || `#${row.id}`,
+        amount: Number(row.applied_amount || 0),
+        method: row.method || 'efectivo',
+        imported: row.imported,
+        shared: Number(row.other_allocated || 0) > 0.005,
+        originalCashSessionClosed: row.original_cash_session_status === 'closed',
+      })),
+      targets: (pending.facturas || [])
+        .filter(row => Number(row.id) !== Number(sale.id))
+        .map(row => ({
+          id: Number(row.id),
+          documentNumber: row.document_number_fmt || row.numero_factura_fmt || `#${row.id}`,
+          date: row.sale_date || row.created_at || '',
+          pending: Number(row.pendiente || 0),
+          canReceiveAll: Number(row.pendiente || 0) + 0.005 >= paymentAmount,
+        })),
+      hasClosedCashSession: applications.some(row => row.original_cash_session_status === 'closed'),
+      hasImportedPayments: applications.some(row => row.imported),
+      canVoidAll: true,
+    };
+  },
+  getCancellationResolution(id) {
+    if (!tableExists('sale_cancellation_payment_resolutions')) return null;
+    const resolution = db.prepare(`
+      SELECT * FROM sale_cancellation_payment_resolutions WHERE sale_id=?
+    `).get(Number(id));
+    return saleCancellationResolutionResult(resolution, { idempotent: true });
   },
   // Transacción completa de venta
   create({
@@ -7273,38 +7464,233 @@ const salesRepo = {
     // Por defecto es false: el NCF se conserva ANULADO y aparece en el 608, que es
     // el comportamiento fiscalmente correcto. Nunca se produce un NCF duplicado.
     const reuseNcf = !!options.reuseNcf;
+    const operationId = normalizeOperationId(options.operationId || '');
+    const disposition = String(options.paymentDisposition || '').trim().toLowerCase();
+    const targetSaleId = Number(options.targetSaleId) || null;
+    const reversalSessionId = Number(options.reversalSessionId) || null;
+    const previousResolution = tableExists('sale_cancellation_payment_resolutions')
+      ? db.prepare('SELECT * FROM sale_cancellation_payment_resolutions WHERE sale_id=? OR operation_id=?')
+        .get(Number(id), operationId || '__sin_operacion__')
+      : null;
+    if (previousResolution) {
+      if (Number(previousResolution.sale_id) !== Number(id)) {
+        throw new Error('La clave de operación ya fue usada para anular otra factura');
+      }
+      if (operationId && previousResolution.operation_id !== operationId) {
+        throw new Error('Esta factura ya fue anulada con otra decisión sobre sus abonos');
+      }
+      if (disposition && previousResolution.disposition !== disposition) {
+        throw new Error('La clave de operación ya fue usada con otra decisión sobre los abonos');
+      }
+      if (disposition === 'reapply' &&
+          Number(previousResolution.target_sale_id || 0) !== Number(targetSaleId || 0)) {
+        throw new Error('La clave de operación ya fue usada con otra factura de destino');
+      }
+      return saleCancellationResolutionResult(previousResolution, { idempotent: true });
+    }
     const sale = db.prepare('SELECT * FROM sales WHERE id=?').get(id);
     if (!sale) throw new Error('Venta no encontrada');
     if (sale.status === 'cancelled') throw new Error('Venta ya está cancelada');
     if (sale.status === 'returned')  throw new Error('No se puede anular una venta con devolución procesada');
     // SEGURIDAD: solo facturas y ventas de crédito pueden anularse
     if (sale.type === 'cotizacion') throw new Error('Las cotizaciones no se anulan — elimínalas directamente');
-    const legacyApplied = db.prepare(`
-      SELECT COALESCE(SUM(p.amount),0) total
-      FROM payments p
-      WHERE p.sale_id=?
-        AND COALESCE(p.status,'active')='active'
-        ${tableExists('payment_allocations')
-          ? 'AND NOT EXISTS (SELECT 1 FROM payment_allocations pa WHERE pa.payment_id=p.id)'
-          : ''}
-    `).get(id)?.total || 0;
-    const distributedApplied = tableExists('payment_allocations')
-      ? db.prepare(`
-          SELECT COALESCE(SUM(pa.amount),0) total
-          FROM payment_allocations pa
-          JOIN payments p ON p.id=pa.payment_id
-          WHERE pa.sale_id=? AND COALESCE(p.status,'active')='active'
-        `).get(id)?.total || 0
-      : 0;
-    const appliedTotal = round2(Number(legacyApplied) + Number(distributedApplied));
+    const applications = salePaymentApplications(id);
+    const appliedTotal = round2(applications.reduce(
+      (sum, row) => sum + Number(row.applied_amount || 0), 0
+    ));
     if (appliedTotal > 0.005) {
-      throw new Error(
-        `Esta factura tiene ${appliedTotal.toFixed(2)} en abonos aplicados. ` +
-        'No puede anularse hasta procesar formalmente el reembolso o reverso de esos cobros'
-      );
+      if (!operationId) throw new Error('La anulación con abonos requiere una clave de operación');
+      if (!['reapply', 'favor', 'void'].includes(disposition)) {
+        throw new Error('Indica qué hacer con los abonos de esta factura');
+      }
+      if (disposition === 'void') {
+        const needsCash = applications.some(row =>
+          !row.imported &&
+          !['credito', 'descuento'].includes(String(row.method || '').trim().toLowerCase())
+        );
+        const reversalSession = reversalSessionId
+          ? db.prepare("SELECT id,status FROM cash_sessions WHERE id=?").get(reversalSessionId)
+          : null;
+        if (needsCash && (!reversalSession || reversalSession.status !== 'open')) {
+          throw new Error('Abre la caja antes de anular los abonos de esta factura');
+        }
+      }
+      if (disposition === 'reapply') {
+        const target = targetSaleId ? db.prepare(`
+          SELECT * FROM sales
+          WHERE id=? AND customer_id=? AND type='factura' AND status!='cancelled'
+            AND LOWER(TRIM(payment_method)) IN ('credito','crédito','credit')
+        `).get(targetSaleId, sale.customer_id) : null;
+        if (!target || Number(target.id) === Number(id)) {
+          throw new Error('Selecciona otra factura pendiente del mismo cliente');
+        }
+        const pendingTarget = getPendingInvoices(db, sale.customer_id).facturas
+          .find(row => Number(row.id) === Number(target.id));
+        if (!pendingTarget || Number(pendingTarget.pendiente || 0) + 0.005 < appliedTotal) {
+          throw new Error('La factura seleccionada no tiene saldo suficiente para recibir todo el abono');
+        }
+      }
     }
 
     const cancelTx = db.transaction(() => {
+      let resolution = null;
+      if (appliedTotal > 0.005) {
+        const inserted = db.prepare(`
+          INSERT INTO sale_cancellation_payment_resolutions(
+            operation_id,sale_id,customer_id,disposition,amount,target_sale_id,
+            reason,user_id,user_name,detail
+          ) VALUES(?,?,?,?,?,?,?,?,?,?)
+        `).run(
+          operationId, Number(id), Number(sale.customer_id), disposition, appliedTotal,
+          disposition === 'reapply' ? targetSaleId : null,
+          String(reason || '').trim(), userId || null, String(userName || '').trim(),
+          JSON.stringify({
+            payments: applications.map(row => ({
+              paymentId: Number(row.id), amount: Number(row.applied_amount || 0),
+              document: row.document_number_fmt || row.numero_recibo || '',
+              shared: Number(row.other_allocated || 0) > 0.005,
+              originalCashSessionClosed: row.original_cash_session_status === 'closed',
+            })),
+          })
+        );
+        resolution = db.prepare('SELECT * FROM sale_cancellation_payment_resolutions WHERE id=?')
+          .get(Number(inserted.lastInsertRowid));
+
+        const addLine = db.prepare(`
+          INSERT INTO sale_cancellation_payment_lines(
+            resolution_id,payment_id,amount,payment_amount_before,payment_amount_after,
+            target_sale_id,cash_session_id,cash_breakdown
+          ) VALUES(?,?,?,?,?,?,?,?)
+        `);
+
+        for (const application of applications) {
+          const applied = round2(Number(application.applied_amount || 0));
+          const amountBefore = round2(Number(application.amount || 0));
+          let amountAfter = amountBefore;
+          // Un abono importado no entró por una caja ni por una cuenta de VELO.
+          // El marcador viaja hasta Contabilidad para que su reverso documental
+          // no invente una salida de efectivo o banco.
+          let cashBreakdown = application.imported
+            ? [{ method: 'historico', amount: applied }]
+            : [];
+
+          if (disposition === 'reapply') {
+            if (application.allocation_id) {
+              const existingTarget = db.prepare(`
+                SELECT id,amount FROM payment_allocations
+                WHERE payment_id=? AND sale_id=?
+              `).get(application.id, targetSaleId);
+              if (existingTarget) {
+                db.prepare('UPDATE payment_allocations SET amount=? WHERE id=?')
+                  .run(round2(Number(existingTarget.amount || 0) + applied), existingTarget.id);
+                db.prepare('DELETE FROM payment_allocations WHERE id=?').run(application.allocation_id);
+              } else {
+                db.prepare(`
+                  UPDATE payment_allocations
+                  SET sale_id=?,invoice_balance_before=?,invoice_balance_after=?
+                  WHERE id=?
+                `).run(targetSaleId, 0, 0, application.allocation_id);
+              }
+              refreshPaymentPrimarySale(application.id);
+            } else {
+              db.prepare('UPDATE payments SET sale_id=? WHERE id=?').run(targetSaleId, application.id);
+            }
+          } else {
+            if (application.allocation_id) {
+              db.prepare('DELETE FROM payment_allocations WHERE id=?').run(application.allocation_id);
+            } else {
+              db.prepare('UPDATE payments SET sale_id=NULL WHERE id=?').run(application.id);
+            }
+            refreshPaymentPrimarySale(application.id);
+
+            if (disposition === 'void') {
+              amountAfter = Math.max(0, round2(amountBefore - applied));
+              if (!application.imported) {
+                cashBreakdown = splitCancellationCash(application, applied);
+              }
+              for (const part of cashBreakdown) {
+                if (String(part.method || '').toLowerCase() === 'historico') continue;
+                db.prepare(`
+                  INSERT INTO cash_movements(
+                    cash_session_id,type,amount,method,reference_id,payment_id,
+                    sale_cancellation_resolution_id,description,user_id
+                  ) VALUES(?,'salida',?,?,?,?,?,?,?)
+                `).run(
+                  reversalSessionId, part.amount, part.method, application.id,
+                  application.id, resolution.id,
+                  `Reverso de abono por anulación de factura ${sale.document_number_fmt || '#' + id}`,
+                  userId || null
+                );
+              }
+
+              const accountAmountBefore = round2(Number(application.account_amount || 0));
+              const accountPart = application.financial_account_id && accountAmountBefore > 0.005
+                ? (amountAfter <= 0.005
+                  ? accountAmountBefore
+                  : Math.min(accountAmountBefore, round2(accountAmountBefore * applied / amountBefore)))
+                : 0;
+              if (!application.imported && application.financial_account_id && accountPart > 0.005) {
+                financialAccountsRepo.addMovement({
+                  accountId: application.financial_account_id,
+                  type: 'retiro', amount: -accountPart,
+                  description: `Reverso parcial ${application.document_number_fmt || '#' + application.id}`,
+                  referenceType: 'sale_cancellation_payment', referenceId: resolution.id,
+                  method: application.method, userId,
+                  notes: `Factura anulada ${sale.document_number_fmt || '#' + id}`,
+                });
+              }
+
+              if (amountAfter > 0.005) {
+                db.prepare(`
+                  UPDATE payments
+                  SET original_amount=COALESCE(original_amount,amount),
+                      original_account_amount=COALESCE(original_account_amount,account_amount),
+                      amount=?,account_amount=?,balance_after=ROUND(balance_after+?,2)
+                  WHERE id=?
+                `).run(
+                  amountAfter, Math.max(0, round2(accountAmountBefore - accountPart)),
+                  applied, application.id
+                );
+              } else {
+                db.prepare(`
+                  UPDATE payments
+                  SET original_amount=COALESCE(original_amount,amount),
+                      original_account_amount=COALESCE(original_account_amount,account_amount),
+                      status='cancelled',voided_at=datetime('now','localtime'),void_reason=?,
+                      voided_by=?,voided_by_name=?,void_cash_session_id=?
+                  WHERE id=?
+                `).run(
+                  `Factura anulada: ${String(reason || '').trim()}`.slice(0, 500),
+                  userId || null, String(userName || '').trim(),
+                  application.imported ? null : (reversalSessionId || null),
+                  application.id
+                );
+                db.prepare(`
+                  UPDATE document_issues SET status='cancelled'
+                  WHERE kind='abono' AND source_type='payment' AND source_id=?
+                `).run(String(application.id));
+                if (tableExists('print_jobs')) {
+                  db.prepare(`
+                    UPDATE print_jobs
+                    SET invalidated_at=datetime('now','localtime'),
+                        invalidation_reason='Abono anulado junto con factura'
+                    WHERE type IN ('abono','payment','ticket') AND reference_id=?
+                      AND invalidated_at IS NULL
+                  `).run(application.id);
+                }
+              }
+            }
+          }
+
+          addLine.run(
+            resolution.id, application.id, applied, amountBefore, amountAfter,
+            disposition === 'reapply' ? targetSaleId : null,
+            disposition === 'void' && !application.imported ? reversalSessionId : null,
+            JSON.stringify(cashBreakdown)
+          );
+        }
+      }
+
       db.prepare(`
         UPDATE sales SET status='cancelled',cancelled_at=datetime('now'),cancel_reason=? WHERE id=?
       `).run(reason, id);
@@ -7414,14 +7800,29 @@ const salesRepo = {
         db.prepare("UPDATE trade_ins SET status='cancelado' WHERE sale_id=?").run(id);
       }
 
-      // Si era crédito, revertir balance y calcular overpayment
+      // Si era crédito, retirar la factura de CxC. Cuando el dinero se anuló o
+      // quedó anotado a favor, primero deja de reducir CxC; si fue reaplicado,
+      // ya sigue cubriendo otra factura y no se resta ni suma otra vez.
       let overpayment = 0;
       if (sale.payment_method === 'credito' && sale.customer_id !== 1) {
         const cust = db.prepare('SELECT balance FROM customers WHERE id=?').get(sale.customer_id);
-        const theoretical = (cust?.balance || 0) - round2((sale.total || 0) - (sale.trade_in_amount || 0));
-        overpayment = Math.max(0, round2(-theoretical));
-        const newBal = Math.max(0, round2(theoretical));
-        db.prepare('UPDATE customers SET balance=? WHERE id=?').run(newBal, sale.customer_id);
+        const restoredPayment = appliedTotal > 0.005 && ['favor', 'void'].includes(disposition)
+          ? appliedTotal : 0;
+        const theoretical = round2(
+          Number(cust?.balance || 0) + restoredPayment -
+          round2((sale.total || 0) - (sale.trade_in_amount || 0))
+        );
+        if (appliedTotal > 0.005 && theoretical < -0.005) {
+          throw new Error('La anulación produciría un balance negativo; actualiza la cuenta del cliente y reintenta');
+        }
+        overpayment = appliedTotal > 0.005 ? 0 : Math.max(0, round2(-theoretical));
+        const newBal = Math.max(0, theoretical);
+        db.prepare(`
+          UPDATE customers
+          SET balance=?,credit_due=CASE WHEN ?>0 THEN credit_due ELSE NULL END,
+              updated_at=datetime('now','localtime')
+          WHERE id=?
+        `).run(newBal, newBal, sale.customer_id);
       }
 
       // Revertir el ingreso reflejado en la cuenta bancaria/tarjeta (si lo hubo):
@@ -7485,8 +7886,23 @@ const salesRepo = {
         }
       }
 
+      if (resolution) {
+        const destination = disposition === 'reapply'
+          ? `factura #${targetSaleId}`
+          : disposition === 'favor'
+            ? 'anotado a favor del cliente (sin alterar balance)'
+            : `abono anulado; reverso en caja #${reversalSessionId || 'no aplica'}`;
+        audit(
+          userId, userName, `venta_anulada_abonos_${disposition}`,
+          'sales', id,
+          `Monto RD$${appliedTotal.toFixed(2)} · Destino: ${destination} · Motivo: ${reason}`
+        );
+      }
       audit(userId, userName, 'venta_anulada', 'sales', id, `Motivo: ${reason}`);
-      return { overpayment };
+      return {
+        overpayment,
+        ...saleCancellationResolutionResult(resolution),
+      };
     });
 
     return cancelTx();
@@ -10023,17 +10439,39 @@ const ncfRepo = {
       .sort((a, b) => a.remaining - b.remaining);
   },
   // ── Log de comprobantes (base para reportes 607/608) ──────────────────────
-  // status: 'emitido' (default) | 'anulado'. Filtros de fecha sobre issued_at.
+  // status: 'emitido' (default) | 'anulado'. El 607 usa la fecha de emisión;
+  // el 608 usa la fecha en que el comprobante fue anulado. El fallback a
+  // issued_at conserva visibles registros antiguos que no tengan voided_at.
+  //
+  // Las instalaciones anteriores a ncf_log ya guardaban el NCF directamente
+  // en sales. Ese NCF sigue siendo fiscalmente relevante: el reporte no puede
+  // quedar vacío solo porque todavía no exista su fila auxiliar en ncf_log.
+  // El UNION lo presenta sin modificar ni "reparar" silenciosamente la base.
   getLog({ from, to, status, type } = {}) {
     const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-    let q = `SELECT l.*, s.total, s.customer_name FROM ncf_log l
-             LEFT JOIN sales s ON l.sale_id = s.id WHERE 1=1`;
+    const reportDate = status === 'anulado' ? 'COALESCE(voided_at,issued_at)' : 'issued_at';
+    let q = `WITH comprobantes AS (
+      SELECT l.id,l.ncf,l.type,l.sale_id,l.customer_rnc,l.issued_at,
+             l.modifies_ncf,COALESCE(l.status,'emitido') AS status,l.voided_at,
+             s.total,s.customer_name,COALESCE(s.tax_amt,0) AS tax_amt
+        FROM ncf_log l
+        LEFT JOIN sales s ON s.id=l.sale_id
+      UNION ALL
+      SELECT NULL AS id,s.ncf,UPPER(SUBSTR(TRIM(s.ncf),1,3)) AS type,s.id AS sale_id,
+             s.customer_rnc,COALESCE(NULLIF(s.sale_date,''),date(s.created_at)) AS issued_at,
+             NULL AS modifies_ncf,
+             CASE WHEN s.status='cancelled' THEN 'anulado' ELSE 'emitido' END AS status,
+             s.cancelled_at,s.total,s.customer_name,COALESCE(s.tax_amt,0) AS tax_amt
+        FROM sales s
+       WHERE TRIM(COALESCE(s.ncf,''))<>''
+         AND NOT EXISTS (SELECT 1 FROM ncf_log l WHERE l.sale_id=s.id)
+    ) SELECT * FROM comprobantes WHERE 1=1`;
     const p = [];
-    if (from && DATE_RE.test(from)) { q += ` AND date(l.issued_at) >= ?`; p.push(from); }
-    if (to   && DATE_RE.test(to))   { q += ` AND date(l.issued_at) <= ?`; p.push(to); }
-    if (status)                     { q += ` AND COALESCE(l.status,'emitido') = ?`; p.push(status); }
-    if (type)                       { q += ` AND l.type = ?`; p.push(type); }
-    q += ` ORDER BY l.issued_at DESC, l.id DESC`;
+    if (from && DATE_RE.test(from)) { q += ` AND date(${reportDate}) >= ?`; p.push(from); }
+    if (to   && DATE_RE.test(to))   { q += ` AND date(${reportDate}) <= ?`; p.push(to); }
+    if (status)                     { q += ` AND status = ?`; p.push(status); }
+    if (type)                       { q += ` AND type = ?`; p.push(type); }
+    q += ` ORDER BY ${reportDate} DESC, sale_id DESC, id DESC`;
     return db.prepare(q).all(...p).map(row => {
       const parsed = parseCanonicalLegacyNcf(row.ncf);
       return {
@@ -11021,6 +11459,114 @@ const accountingRepo = {
       });
     } catch(e) {
       console.error('[accounting] Error generando asiento de abono:', e.message);
+      return null;
+    }
+  },
+
+  // Reclasifica o revierte el dinero de los abonos resueltos junto con una
+  // factura anulada. La caja operativa ya quedó registrada por la transacción;
+  // este asiento solo conserva CxC y libros generales cuadrados.
+  generateSaleCancellationPaymentEntry({ resolutionId, userId } = {}) {
+    try {
+      const modEnabled = db.prepare("SELECT value FROM settings WHERE key='module_contabilidad'").get()?.value;
+      if (modEnabled !== '1' || !tableExists('sale_cancellation_payment_resolutions')) return null;
+      const resolution = db.prepare(`
+        SELECT * FROM sale_cancellation_payment_resolutions WHERE id=?
+      `).get(Number(resolutionId));
+      if (!resolution || resolution.disposition === 'reapply') return null;
+      const existing = db.prepare(`
+        SELECT id FROM accounting_entries
+        WHERE source_module='anulacion_abono_factura' AND source_id=? AND status='confirmado'
+      `).get(Number(resolution.id));
+      if (existing) return this.getEntryById(existing.id);
+
+      const cfg = this.getConfig();
+      const getAccId = (key, fallback) => cfg[key]?.account_id ||
+        db.prepare('SELECT id FROM accounting_accounts WHERE code=?').get(fallback)?.id;
+      const arAccId = getAccId('account_ar', '1104');
+      const cashAccId = getAccId('account_cash', '1101');
+      const bankAccId = getAccId('account_bank', '1103');
+      if (!arAccId) throw new Error('Configura la cuenta de Cuentas por Cobrar');
+
+      const storedLines = db.prepare(`
+        SELECT payment_id,amount,cash_breakdown
+        FROM sale_cancellation_payment_lines WHERE resolution_id=? ORDER BY id
+      `).all(Number(resolution.id));
+      let historicalAmount = 0;
+      for (const row of storedLines) {
+        let parts = [];
+        try { parts = JSON.parse(row.cash_breakdown || '[]'); } catch {}
+        historicalAmount = round2(historicalAmount + parts
+          .filter(part => String(part.method || '').toLowerCase() === 'historico')
+          .reduce((sum, part) => sum + Number(part.amount || 0), 0));
+      }
+      // Los abonos importados no generaron un asiento ni una entrada a caja en
+      // VELO. Solo la parte cobrada dentro del sistema se reclasifica/revierte.
+      const ledgerAmount = Math.max(0, round2(Number(resolution.amount || 0) - historicalAmount));
+      if (ledgerAmount <= 0.005) return null;
+      const lines = [{
+        account_id: arAccId, debit: ledgerAmount, credit: 0,
+        description: `Abonos liberados de factura anulada #${resolution.sale_id}`,
+      }];
+      if (resolution.disposition === 'favor') {
+        let advances = db.prepare("SELECT id FROM accounting_accounts WHERE code='2103'").get();
+        if (!advances) {
+          const parent = db.prepare("SELECT id FROM accounting_accounts WHERE code='21'").get();
+          advances = { id: Number(db.prepare(`
+            INSERT INTO accounting_accounts(code,name,type,subtype,parent_id,description,is_summary,active)
+            VALUES('2103','Anticipos de Clientes','pasivo','anticipo',?,
+                   'Dinero de clientes pendiente de aplicar o devolver',0,1)
+          `).run(parent?.id || null).lastInsertRowid) };
+        }
+        lines.push({
+          account_id: advances.id, debit: 0, credit: ledgerAmount,
+          description: `Dinero anotado a favor · Cliente #${resolution.customer_id}`,
+        });
+      } else {
+        let cashCredit = 0;
+        let bankCredit = 0;
+        for (const row of storedLines) {
+          let parts = [];
+          try { parts = JSON.parse(row.cash_breakdown || '[]'); } catch {}
+          if (!parts.length) {
+            const payment = db.prepare('SELECT method FROM payments WHERE id=?').get(row.payment_id);
+            const method = String(payment?.method || 'efectivo').toLowerCase();
+            parts = [{ method, amount: Number(row.amount || 0) }];
+          }
+          for (const part of parts) {
+            const partMethod = String(part.method || '').toLowerCase();
+            if (partMethod === 'historico') continue;
+            if (partMethod === 'efectivo') {
+              cashCredit = round2(cashCredit + Number(part.amount || 0));
+            } else {
+              bankCredit = round2(bankCredit + Number(part.amount || 0));
+            }
+          }
+        }
+        const unclassified = round2(ledgerAmount - cashCredit - bankCredit);
+        if (unclassified > 0.005) bankCredit = round2(bankCredit + unclassified);
+        if (cashCredit > 0.005) lines.push({
+          account_id: cashAccId, debit: 0, credit: cashCredit,
+          description: `Reverso de abono en caja · Factura #${resolution.sale_id}`,
+        });
+        if (bankCredit > 0.005) lines.push({
+          account_id: bankAccId, debit: 0, credit: bankCredit,
+          description: `Reverso de abono bancario · Factura #${resolution.sale_id}`,
+        });
+      }
+      return this.createEntry({
+        date: String(resolution.created_at || new Date().toISOString()).slice(0, 10),
+        concept: `Destino de abonos al anular factura #${resolution.sale_id}`,
+        reference: `ANU-AB-${resolution.id}`,
+        source_module: 'anulacion_abono_factura',
+        source_id: Number(resolution.id),
+        lines,
+        notes: resolution.reason || '',
+        userId,
+        status: 'confirmado',
+      });
+    } catch (e) {
+      console.error('[accounting] Destino de abonos al anular factura:', e.message);
       return null;
     }
   },

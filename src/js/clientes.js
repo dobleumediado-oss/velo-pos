@@ -2062,10 +2062,11 @@ async function cliLoadAccountPayload(c, includeItems = false) {
     const accountSales = typeof window.api.customers.getAccountSales === 'function'
       ? window.api.customers.getAccountSales({ customerId: c.id })
       : window.api.sales.getAll({ customerId: c.id, range: 'all', limit: 9999 });
-    const [payments, sales, pending] = await Promise.all([
+    const [payments, sales, pending, cancellationCredits] = await Promise.all([
       window.api.customers.getPayments({ customerId: c.id }),
       accountSales,
       window.api.customers.getFacturasPendientes({ customerId: c.id }),
+      window.api.customers.getCancellationCredits({ customerId: c.id }),
     ]);
     const consolidatedSales = cliSortLatestFirst(cliConsolidateAdjustedSales(
       (sales || []).filter(row => row.status !== 'cancelled')
@@ -2079,6 +2080,7 @@ async function cliLoadAccountPayload(c, includeItems = false) {
         ...(pending || {}),
         facturas: cliConsolidatePendingInvoices(pending?.facturas || [], consolidatedSales),
       },
+      cancellationCredits: cancellationCredits || [],
       items: null,
     };
     window._cliAccountCache = cache;
@@ -2088,7 +2090,13 @@ async function cliLoadAccountPayload(c, includeItems = false) {
       .catch(() => ({ items: [] }));
     cache.items = result?.items || [];
   }
-  return [cache.payments, cache.sales, cache.pending, includeItems ? { items: cache.items || [] } : null];
+  return [
+    cache.payments,
+    cache.sales,
+    cache.pending,
+    includeItems ? { items: cache.items || [] } : null,
+    cache.cancellationCredits || [],
+  ];
 }
 
 async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
@@ -2145,7 +2153,7 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
     return;
   }
   if (window._cliModalRequest !== requestToken || page !== 'clientes') return;
-  const [pagosRes, ventasRes, pendingRes, itemsRes] = payload;
+  const [pagosRes, ventasRes, pendingRes, itemsRes, cancellationCredits] = payload;
   const pagos = cliSortLatestFirst(pagosRes);
   const ventas = cliSortLatestFirst(ventasRes);
   // Guardar ventas del cliente en window para que filtrarHistorialCliente las use
@@ -2300,6 +2308,19 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
       <div><div class="alrt-title">El saldo por factura no pudo confirmarse</div>
       <div class="alrt-sub">El balance general se conserva, pero no se atribuye a facturas específicas hasta reintentar la consulta.</div></div>
     </div>` : ''}
+
+    ${(cancellationCredits || []).length ? `
+      <div class="alrt w" style="margin-bottom:12px">
+        <div style="width:100%">
+          <div class="alrt-title">Dinero anotado a favor — registro informativo</div>
+          <div class="alrt-sub" style="margin-bottom:7px">No modifica el balance ni el crédito disponible. Debe gestionarse deliberadamente.</div>
+          ${(cancellationCredits || []).map(row => `
+            <div style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-top:1px solid var(--line);font-size:11px">
+              <span>${cliEsc(row.document_number_fmt || row.numero_factura_fmt || `Factura #${row.sale_id}`)} · ${fdate(String(row.created_at || '').slice(0,10))}${row.reason ? ` · ${cliEsc(row.reason)}` : ''}</span>
+              <strong style="white-space:nowrap">${fmt(row.amount)}</strong>
+            </div>`).join('')}
+        </div>
+      </div>` : ''}
 
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px;
                 background:var(--surface2);border:1px solid var(--line);

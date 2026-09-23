@@ -823,12 +823,15 @@ function _termicaItems(items, widthMm) {
   let html = '';
   items.forEach(i => {
     const qty = Number(i.qty || 1) || 1;
-    const name  = _esc(_lineName(i).slice(0, nameW));
+    // El nombre se recorta al ancho del rollo, así que la marca de regalo no
+    // puede ir pegada a él: se perdería en el corte. Va en la línea del precio.
+    const gift  = Number(i?.offer_is_gift) === 1;
+    const name  = _esc(String(i?.product_name || i?.name || '').slice(0, nameW));
     const price = `RD$${(_lineGross(i) / qty).toLocaleString('es-DO')}`;
     const total = `RD$${_lineGross(i).toLocaleString('es-DO')}`;
     html += `<div>${name}</div>`;
     html += `<div style="display:flex;justify-content:space-between;padding-left:8px;color:#555">
-      <span>${i.qty} x ${price}</span><span>${total}</span>
+      <span>${i.qty} x ${price}${gift ? ' · OFERTA' : ''}</span><span>${total}</span>
     </div>`;
   });
   return html;

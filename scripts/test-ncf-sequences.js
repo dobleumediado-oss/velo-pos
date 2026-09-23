@@ -330,6 +330,50 @@ const b01AfterGap = DB.ncfRepo.getSequences().find(row => Number(row.id) === Num
 ok(b01AfterGap.next_issue_ncf === 'B0100000854' && b01AfterGap.available_gap_count === 0,
   'tras usar el salto, VELO continúa automáticamente con 854');
 
+console.log('\n== Filtros por fecha e ITBIS de comprobantes ==');
+appDb.prepare("UPDATE sales SET sale_date='2026-09-10' WHERE id=?").run(saleResult.saleId);
+appDb.prepare("UPDATE ncf_log SET issued_at='2026-09-10 09:00:00' WHERE sale_id=?")
+  .run(saleResult.saleId);
+appDb.prepare("UPDATE sales SET sale_date='2026-09-11' WHERE id=?").run(gapSale.saleId);
+appDb.prepare("UPDATE ncf_log SET issued_at='2026-09-11 09:00:00' WHERE sale_id=?")
+  .run(gapSale.saleId);
+
+const emittedOn10 = DB.ncfRepo.getLog({
+  from:'2026-09-10', to:'2026-09-10', status:'emitido',
+});
+ok(emittedOn10.length === 1 && Number(emittedOn10[0].sale_id) === Number(saleResult.saleId),
+  'el 607 incluye únicamente comprobantes emitidos en la fecha seleccionada');
+ok(Math.round(Number(emittedOn10[0].tax_amt) * 100) === 1800,
+  'el 607 entrega el ITBIS de la factura para mostrarlo en el modal y la descarga');
+
+const batchOn10 = DB.salesRepo.getAll({
+  range:'custom', dateFrom:'2026-09-10', dateTo:'2026-09-10',
+  view:'sales', limit:500, offset:0,
+}).filter(sale => String(sale.ncf || '').trim());
+ok(batchOn10.length === 1 && Number(batchOn10[0].id) === Number(saleResult.saleId),
+  'Descargar todas recibe solo las facturas con comprobante de la fecha seleccionada');
+
+// Bases anteriores a ncf_log conservan comprobantes válidos solo en sales.
+// El PDF ya los encontraba; el modal 607 también debe hacerlo, sin migrar ni
+// reescribir documentos fiscales históricos al consultar.
+appDb.prepare('DELETE FROM ncf_log WHERE sale_id=?').run(saleResult.saleId);
+const legacyIssuedOn10 = DB.ncfRepo.getLog({
+  from:'2026-09-10', to:'2026-09-10', status:'emitido',
+});
+ok(legacyIssuedOn10.length === 1 && Number(legacyIssuedOn10[0].sale_id) === Number(saleResult.saleId),
+  'el 607 incluye facturas históricas cuyo NCF existe en sales aunque falte en ncf_log');
+ok(Math.round(Number(legacyIssuedOn10[0].tax_amt) * 100) === 1800,
+  'el comprobante histórico conserva su ITBIS en el modal 607');
+
+appDb.prepare(`UPDATE ncf_log
+  SET status='anulado',voided_at='2026-09-15 12:00:00' WHERE sale_id=?`).run(gapSale.saleId);
+const voidedOn15 = DB.ncfRepo.getVoided({ from:'2026-09-15', to:'2026-09-15' });
+const voidedOnIssueDate = DB.ncfRepo.getVoided({ from:'2026-09-11', to:'2026-09-11' });
+ok(voidedOn15.length === 1 && Number(voidedOn15[0].sale_id) === Number(gapSale.saleId),
+  'el 608 filtra por la fecha real de anulación');
+ok(voidedOnIssueDate.length === 0,
+  'el 608 no confunde la fecha de emisión con la fecha de anulación');
+
 appDb.close();
 fs.rmSync(appDir, { recursive: true, force: true });
 

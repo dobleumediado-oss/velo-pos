@@ -611,6 +611,10 @@ function printReceipt(sale, isReprint = false) {
 	        tax_pct:      i.tax_pct,
 	        tax_amt:      i.tax_amt,
 	        net_subtotal: i.net_subtotal,
+	        // Sin esto la plantilla no sabe que la línea es un regalo y el
+	        // artículo sale en RD$0 sin explicación en la factura del cliente.
+	        offer_is_gift:         Number(i.offer_is_gift) === 1 ? 1 : 0,
+	        offer_original_amount: Number(i.offer_original_amount) || 0,
 	      })),
       // Los cargos no se inyectan aquí: _printChargesAsLines ya decidió al
       // entrar a printReceipt. En la convención vigente llegan como líneas y

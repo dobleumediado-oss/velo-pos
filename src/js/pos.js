@@ -889,7 +889,7 @@ function renderCart() {
             <div class="ci-price" style="font-size:10px;color:var(--muted2);font-weight:600">Artículo para entrega</div>` : `
             <div class="ci-price" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
               <span style="font-size:10px;color:var(--muted2);font-weight:600">Precio final</span>
-              ${checkoutLocked || (DB?.settings?.pos_price_change_enabled === '0' && !['admin', 'superadmin'].includes(user?.role)) ? `<strong>${fmt(item.price)}</strong>` : `<input type="number" data-money="on" data-pos-price="on" min="0" step="0.01" value="${Number(item.price || 0).toFixed(2)}"
+              ${isGift ? `<strong style="color:var(--green)">${fmt(0)}</strong><span style="font-size:10px;color:var(--muted2)">antes ${fmt(item.price)}</span>` : checkoutLocked || (DB?.settings?.pos_price_change_enabled === '0' && !['admin', 'superadmin'].includes(user?.role)) ? `<strong>${fmt(item.price)}</strong>` : `<input type="number" data-money="on" data-pos-price="on" min="0" step="0.01" value="${Number(item.price || 0).toFixed(2)}"
                 style="width:92px;text-align:right;font-size:12px;font-weight:700;
                        border:1px solid var(--line);border-radius:4px;padding:2px 5px;
                        font-family:inherit;background:var(--surface)"
@@ -898,8 +898,8 @@ function renderCart() {
                 onclick="this.select()"/>`}
               ${item.taxable === 0 ? '' : `<span style="font-size:10px;color:var(--blue);font-weight:700">ITBIS incl.</span>`}
             </div>`}
-            ${isGift ? `<div style="font-size:10px;color:var(--green);font-weight:700;margin-top:3px">Regalo · valor distribuido ${fmt(offerItem?.offer_original_amount || 0)}</div>` : ''}
-            ${!isGift && Number(offerItem?.offer_absorbed_amount) > 0 ? `<div style="font-size:10px;color:var(--muted2);font-weight:700;margin-top:3px">Absorbe ${fmt(offerItem.offer_absorbed_amount)} de la oferta</div>` : ''}
+            ${isGift ? `<div style="font-size:10px;color:var(--green);font-weight:700;margin-top:3px">Regalo incluido en la promoción · precio regular ${fmt(offerItem?.offer_original_amount || 0)}</div>` : ''}
+            ${!isGift && Number(offerItem?.offer_absorbed_amount) > 0 ? `<div style="font-size:10px;color:var(--muted2);font-weight:700;margin-top:3px">Incluye el valor de la oferta: ${fmt(offerItem.offer_absorbed_amount)} · precio sin cambio</div>` : ''}
             ${item.resale_source?.saleId ? `
               <div style="font-size:10px;color:var(--green);font-weight:700;margin-top:3px">
                 ${inv.replacesSaleId ? 'Línea de factura anulada' : 'Reventa de venta'} #${String(item.resale_source.saleId).padStart(5,'0')}
@@ -925,7 +925,7 @@ function renderCart() {
               onclick="this.select()"/>
             <button class="qb" onclick="posQty(${idx},1)">+</button>
           </div>`}
-          ${inv.itype === 'conduce' ? '' : `<div class="ci-total">${fmt(offerItem?.effective_line_total ?? (item.price * item.qty))}</div>`}
+          ${inv.itype === 'conduce' ? '' : `<div class="ci-total">${fmt(isGift ? 0 : (item.price * item.qty))}</div>`}
           ${checkoutLocked ? '' : `<button class="qb" style="margin-left:4px;color:var(--red)"
                   onclick="posRemItem(${idx})">×</button>`}
         </div>`;
@@ -998,7 +998,7 @@ function renderCart() {
           <option value="pct" ${(inv.discMode || 'pct') !== 'amt' ? 'selected' : ''}>%</option>
           <option value="amt" ${inv.discMode === 'amt' ? 'selected' : ''}>RD$</option>
         </select>
-        <input type="number" min="0" data-money="${inv.discMode === 'amt' ? 'on' : 'off'}" ${inv.discMode === 'amt' ? 'step="0.01"' : 'max="100"'}
+        <input type="text" data-uppercase="off" pattern="[0-9.,]*" data-money="${inv.discMode === 'amt' ? 'on' : 'off'}"
                value="${inv.discMode === 'amt' ? (inv.discAmtInput || 0) : (inv.disc || 0)}"
                id="pos-discount-input" inputmode="decimal" autocomplete="off"
                class="inp" style="width:72px;padding:4px 7px;font-size:12px;text-align:right"
@@ -1083,7 +1083,7 @@ function openPosOfferModal() {
     return;
   }
   if (inv.cart.length < 2) {
-    toast('Agrega al menos dos artículos: uno será la oferta y otro absorberá su valor', 'w');
+    toast('Agrega al menos dos artículos: uno será la oferta y otro incluirá su valor', 'w');
     return;
   }
   const rows = inv.cart.map((item, idx) => `
@@ -1097,10 +1097,10 @@ function openPosOfferModal() {
     </label>`).join('');
   openModal(`
     <div class="modal-title">Oferta</div>
-    <div class="modal-sub">Marca la cantidad completa del artículo que se entregará como regalo.</div>
+    <div class="modal-sub">Marca la cantidad completa del artículo que se entregará como regalo. Se mostrará en RD$0 y los demás conservarán su precio.</div>
     <div class="alrt b" style="margin-bottom:10px;padding:9px 11px"><div>
-      <div class="alrt-title">El total y el ITBIS no cambian</div>
-      <div class="alrt-sub">El valor se reparte entre artículos con el mismo tratamiento fiscal.</div>
+      <div class="alrt-title">El regalo no se cobra dos veces</div>
+      <div class="alrt-sub">Su valor ya está incluido en los artículos no marcados. VELO lo registra internamente sin sumarlo otra vez.</div>
     </div></div>
     <div>${rows}</div>
     <div class="modal-foot">
@@ -1123,7 +1123,7 @@ function posApplyOffer() {
   closeModal();
   renderInvTabs();
   renderCart();
-  toast(selected.size ? 'Oferta aplicada sin cambiar el total ni el ITBIS' : 'Oferta retirada');
+  toast(selected.size ? 'Oferta aplicada: el regalo quedó en RD$0' : 'Oferta retirada');
 }
 
 function _posKeepOfferValid(inv) {
@@ -1764,7 +1764,7 @@ function posLoadResaleCart(payload = {}) {
 window.posLoadResaleCart = posLoadResaleCart;
 
 function posDisc(val) {
-  currentInv().disc = Math.min(100, Math.max(0, parseFloat(val) || 0));
+  currentInv().disc = Math.min(100, Math.max(0, _posEntryNumber(val)));
   posRefreshCartTotals();
 }
 
@@ -1833,12 +1833,14 @@ function posDiscConPin(input, val) {
   let pct, amt = 0;
   if (mode === 'amt') {
     const gross = _posRound2(inv.cart.reduce((a, i) => a + ((Number(i.price) || 0) * (Number(i.qty) || 0)), 0));
-    amt = Math.max(0, parseFloat(val) || 0);
+    amt = Math.max(0, _posEntryNumber(val));
     if (gross <= 0) { input.value = 0; return; }
     if (amt > gross) { amt = gross; input.value = amt; }
     pct = (amt / gross) * 100;
   } else {
-    pct = Math.min(100, Math.max(0, parseFloat(val) || 0));
+    const requestedPct = Math.max(0, _posEntryNumber(val));
+    pct = Math.min(100, requestedPct);
+    if (requestedPct > 100) input.value = 100;
   }
 
   // Cualquier cambio invalida una autorización previa — debe re-autorizarse
@@ -2742,8 +2744,28 @@ function _posAmountDue(inv, total = calcTotals(inv).total) {
 function _posEntryNumber(controlOrValue, fallback = 0) {
   const value = controlOrValue && typeof controlOrValue === 'object'
     ? controlOrValue.value : controlOrValue;
-  const raw = typeof unformatMoneyEntryValue === 'function'
-    ? unformatMoneyEntryValue(value) : String(value ?? '').replace(/,/g, '');
+  let raw;
+  if (typeof unformatMoneyEntryValue === 'function') {
+    raw = unformatMoneyEntryValue(value);
+  } else {
+    // Respaldo independiente del locale. Normalmente input-normalization.js
+    // hace esto en captura, pero el cálculo no debe depender de que otro
+    // listener haya corrido primero (terminal antigua, teclado remoto o IME).
+    raw = String(value ?? '').trim().replace(/\s|RD\$|US\$/gi, '').replace(/[^\d.,-]/g, '');
+    const comma = raw.lastIndexOf(',');
+    const dot = raw.lastIndexOf('.');
+    if (comma >= 0 && dot >= 0) {
+      const decimal = comma > dot ? ',' : '.';
+      const group = decimal === ',' ? /\./g : /,/g;
+      raw = raw.replace(group, '');
+      if (decimal === ',') raw = raw.replace(/,/g, '.');
+    } else if (comma >= 0) {
+      const parts = raw.split(',');
+      raw = parts.length === 2 && parts[1].length <= 2
+        ? `${parts[0]}.${parts[1]}`
+        : parts.join('');
+    }
+  }
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : fallback;
 }

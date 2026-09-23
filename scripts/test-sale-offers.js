@@ -59,19 +59,33 @@ try {
   const beforeSnapshot = JSON.stringify(input.map(item => ({ ...item, offer_is_gift:0 })));
   const plan = calculate(input);
   ok(plan.ok, 'acepta varias líneas de regalo con grupos fiscales compatibles', plan.error);
-  ok(r2(plan.originalTotal) === r2(plan.adjustedTotal),
-    '1. el total permanece idéntico al centavo', `${plan.originalTotal} vs ${plan.adjustedTotal}`);
+  const giftTotal = r2(plan.items.filter(item => item.offer_is_gift)
+    .reduce((sum, item) => sum + item.offer_original_amount, 0));
+  ok(r2(plan.originalTotal - giftTotal) === r2(plan.adjustedTotal),
+    '1. el total descuenta exactamente las líneas marcadas como regalo',
+    `${plan.originalTotal} - ${giftTotal} = ${plan.adjustedTotal}`);
   const adjustedCents = plan.items.reduce((sum, item) => sum + Math.round(item.effective_line_total * 100), 0);
-  ok(adjustedCents === Math.round(plan.originalTotal * 100),
-    'los centavos se reparten sin residuo ni centavo perdido');
+  ok(adjustedCents === Math.round(plan.adjustedTotal * 100),
+    'el total ajustado conserva todos los centavos cobrados');
   ok(plan.items[0].offer_is_gift === 1 && plan.items[0].effective_line_total === 0 &&
     plan.items[0].offer_original_amount === 119.98,
     'la oferta cubre toda la cantidad de la línea marcada');
+  ok(r2((input[0].price * input[0].qty) - plan.items[0].effective_line_total) === 119.98 &&
+    plan.items[0].offer_absorbed_amount === 0,
+    'el importe se resta de la línea marcada; nunca se le suma ni absorbe su propia oferta');
   ok(plan.items[1].offer_absorbed_amount === 39.99 && plan.items[2].offer_absorbed_amount === 79.99,
     'el redondeo proporcional asigna el último centavo de forma determinista',
     `${plan.items[1].offer_absorbed_amount} + ${plan.items[2].offer_absorbed_amount}`);
+  ok(plan.items[1].effective_line_total === input[1].price * input[1].qty &&
+    plan.items[2].effective_line_total === input[2].price * input[2].qty,
+    'las líneas que incluyen la oferta conservan exactamente su precio');
   ok(plan.items[4].offer_absorbed_amount === 10.01,
     'un regalo exento solo se reparte sobre una línea exenta');
+  ok(r2(plan.items.filter(item => !item.offer_is_gift)
+    .reduce((sum, item) => sum + item.offer_absorbed_amount, 0)) ===
+    r2(plan.items.filter(item => item.offer_is_gift)
+      .reduce((sum, item) => sum + item.offer_original_amount, 0)),
+  'solo las líneas no marcadas absorben exactamente todo el importe restado');
   const restored = input.map(item => ({ ...item, offer_is_gift:0 }));
   const restoredPlan = calculate(restored);
   ok(restoredPlan.ok && JSON.stringify(restored) === beforeSnapshot &&
@@ -85,6 +99,20 @@ try {
   ]);
   ok(!incompatible.ok && /mismo ITBIS/i.test(incompatible.error),
     'si no existe receptor fiscal compatible, informa y no aplica la oferta');
+  const reportedCase = calculate([
+    { price:1050, qty:1, taxable:1, tax_pct:18, offer_is_gift:1 },
+    { price:2950, qty:1, taxable:1, tax_pct:18, offer_is_gift:0 },
+  ]);
+  ok(reportedCase.ok && reportedCase.items[0].effective_line_total === 0 &&
+    reportedCase.items[1].effective_line_total === 2950 &&
+    reportedCase.items[1].offer_absorbed_amount === 1050 &&
+    reportedCase.adjustedTotal === 2950,
+    'caso reportado: RD$1,050 queda en cero y RD$2,950 no cambia');
+  const posSource = fs.readFileSync(path.join(__dirname, '../src/js/pos.js'), 'utf8');
+  ok(posSource.includes('Se mostrará en RD$0 y los demás conservarán su precio.') &&
+    posSource.includes('<strong style="color:var(--green)">${fmt(0)}</strong>') &&
+    posSource.includes('fmt(isGift ? 0 : (item.price * item.qty))'),
+  'el carrito muestra el regalo en cero y mantiene intacto el precio de quien lo incluye');
 
   function createSale(withOffer) {
     return DB.salesRepo.getById(DB.salesRepo.create({
@@ -105,12 +133,14 @@ try {
     product.id, db.prepare('SELECT stock FROM products WHERE id=?').get(product.id).stock,
   ]));
   const offered = createSale(true);
-  ok(r2(offered.total) === r2(baseline.total),
-    '1. con descuento previo, la factura cobra exactamente el mismo total',
-    `${baseline.total} vs ${offered.total}`);
-  ok(r2(offered.tax_amt) === r2(baseline.tax_amt),
-    '2. el ITBIS total permanece idéntico en mezcla gravada y exenta',
-    `${baseline.tax_amt} vs ${offered.tax_amt}`);
+  const expectedOfferGross = r2(plan.adjustedTotal * 0.925);
+  ok(r2(offered.total) === expectedOfferGross,
+    '1. con descuento previo, la factura cobra solo las líneas no regaladas',
+    `${expectedOfferGross} vs ${offered.total}`);
+  ok(r2(offered.tax_amt) < r2(baseline.tax_amt) &&
+    r2(offered.subtotal + offered.tax_amt) === r2(offered.total),
+    '2. el ITBIS se recalcula sobre el total realmente cobrado y queda cuadrado',
+    `${offered.subtotal} + ${offered.tax_amt} = ${offered.total}`);
   const storedGift = offered.items.find(item => item.product_code === 'OF-G1');
   const storedReceiver = offered.items.find(item => item.product_code === 'OF-A1');
   ok(Number(storedGift.offer_is_gift) === 1 && r2(storedGift.offer_original_amount) === 119.98 &&
@@ -140,8 +170,8 @@ try {
   const baselineAccounting = accounting(baseline);
   const offeredAccounting = accounting(offered);
   ok(offeredAccounting.debit === offeredAccounting.credit &&
-    offeredAccounting.revenue === baselineAccounting.revenue,
-    '7. el asiento queda cuadrado y reconoce el mismo ingreso total',
+    offeredAccounting.revenue < baselineAccounting.revenue,
+    '7. el asiento queda cuadrado y reconoce solo el ingreso realmente cobrado',
     JSON.stringify({ baseline:baselineAccounting, offered:offeredAccounting }));
 
   console.log('\n== Impresión ==');

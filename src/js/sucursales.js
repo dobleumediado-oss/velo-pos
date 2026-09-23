@@ -850,23 +850,26 @@ function modalReporteNCF() {
     body.innerHTML = '<div style="text-align:center;color:var(--muted2);padding:24px">Cargando…</div>';
     printBtn.disabled = true; excelBtn.disabled = true; printableHtml = '';
 
+    const requestUserId = user?.id;
     const res = is608
-      ? await window.api.ncf.getVoided({ from, to })
-      : await window.api.ncf.getLog({ from, to, status: 'emitido' });
+      ? await window.api.ncf.getVoided({ from, to, requestUserId })
+      : await window.api.ncf.getLog({ from, to, status: 'emitido', requestUserId });
     if (!res?.ok) { body.innerHTML = `<div style="color:#ef4444;padding:16px">${esc(res?.error||'Error al generar')}</div>`; return; }
 
     const rows = res.data || [];
     const invalidRows = rows.filter(row => row.ncf_valid === false);
     const totalSum = rows.reduce((a,r)=>a+(r.total||0),0);
+    const itbisSum = rows.reduce((a,r)=>a+(r.tax_amt||0),0);
     const title = is608 ? '608 — Comprobantes Anulados' : '607 — Comprobantes Emitidos';
     const fdt = (v) => (v||'').split('T')[0].split(' ')[0];
 
     const headCols = is608
-      ? ['NCF','Tipo','Emitido','Anulado','RNC/Céd.','Cliente','Monto']
-      : ['NCF','Tipo','Fecha','RNC/Céd.','Cliente','Modifica NCF','Monto'];
+      ? ['NCF','Tipo','Emitido','Anulado','RNC/Céd.','Cliente','ITBIS','Monto']
+      : ['NCF','Tipo','Fecha','RNC/Céd.','Cliente','Modifica NCF','ITBIS','Monto'];
     const rowCells = (r) => is608
-      ? [r.ncf, (TIPO_LBL[r.type]||r.type), fdt(r.issued_at), fdt(r.voided_at), r.customer_rnc||'—', r.customer_name||'—', fmt(r.total||0)]
-      : [r.ncf, (TIPO_LBL[r.type]||r.type), fdt(r.issued_at), r.customer_rnc||'—', r.customer_name||'—', r.modifies_ncf||'—', fmt(r.total||0)];
+      ? [r.ncf, (TIPO_LBL[r.type]||r.type), fdt(r.issued_at), fdt(r.voided_at), r.customer_rnc||'—', r.customer_name||'—', fmt(r.tax_amt||0), fmt(r.total||0)]
+      : [r.ncf, (TIPO_LBL[r.type]||r.type), fdt(r.issued_at), r.customer_rnc||'—', r.customer_name||'—', r.modifies_ncf||'—', fmt(r.tax_amt||0), fmt(r.total||0)];
+    const isMoneyColumn = (index) => index >= headCols.length - 2;
 
     if (!rows.length) {
       body.innerHTML = `<div style="text-align:center;color:var(--muted2);padding:24px;font-size:13px">Sin comprobantes ${is608?'anulados':'emitidos'} en el período.</div>`;
@@ -880,15 +883,15 @@ function modalReporteNCF() {
       </div>` : ''}
       <div style="display:flex;justify-content:space-between;margin-bottom:10px;font-size:12px">
         <div><strong>${rows.length}</strong> comprobante(s)</div>
-        <div>Total: <strong>${fmt(totalSum)}</strong></div>
+        <div>ITBIS: <strong>${fmt(itbisSum)}</strong> · Total: <strong>${fmt(totalSum)}</strong></div>
       </div>
       <table style="width:100%;border-collapse:collapse;font-size:11.5px">
         <thead><tr style="border-bottom:1px solid var(--line2);color:var(--muted2)">
-          ${headCols.map((c,i)=>`<th style="padding:6px 8px;text-align:${i===headCols.length-1?'right':'left'}">${c}</th>`).join('')}
+          ${headCols.map((c,i)=>`<th style="padding:6px 8px;text-align:${isMoneyColumn(i)?'right':'left'}">${c}</th>`).join('')}
         </tr></thead>
         <tbody>
           ${rows.map(r=>`<tr style="border-bottom:0.5px solid var(--line2);${r.ncf_valid === false ? 'background:#fef2f2;color:#991b1b' : ''}">
-            ${rowCells(r).map((c,i)=>`<td style="padding:6px 8px;${i===0?'font-family:monospace;':''}text-align:${i===headCols.length-1?'right':'left'}">${esc(c)}</td>`).join('')}
+            ${rowCells(r).map((c,i)=>`<td style="padding:6px 8px;${i===0?'font-family:monospace;':''}text-align:${isMoneyColumn(i)?'right':'left'}">${esc(c)}</td>`).join('')}
           </tr>`).join('')}
         </tbody>
       </table>`;
@@ -914,10 +917,10 @@ function modalReporteNCF() {
       <h2>${esc(biz)} — ${title}</h2>
       <div class="sub">${rnc?`RNC: ${esc(rnc)} · `:''}Período: ${esc(from)} a ${esc(to)} · ${rows.length} comprobante(s)</div>
       <table>
-        <thead><tr>${headCols.map((c,i)=>`<th class="${i===headCols.length-1?'r':''}">${c}</th>`).join('')}</tr></thead>
+        <thead><tr>${headCols.map((c,i)=>`<th class="${isMoneyColumn(i)?'r':''}">${c}</th>`).join('')}</tr></thead>
         <tbody>
-          ${rows.map(r=>`<tr>${rowCells(r).map((c,i)=>`<td class="${i===0?'mono':''} ${i===headCols.length-1?'r':''}">${esc(c)}</td>`).join('')}</tr>`).join('')}
-          <tr class="tot"><td colspan="${headCols.length-1}">TOTAL</td><td class="r">${fmt(totalSum)}</td></tr>
+          ${rows.map(r=>`<tr>${rowCells(r).map((c,i)=>`<td class="${i===0?'mono':''} ${isMoneyColumn(i)?'r':''}">${esc(c)}</td>`).join('')}</tr>`).join('')}
+          <tr class="tot"><td colspan="${headCols.length-2}">TOTAL</td><td class="r">${fmt(itbisSum)}</td><td class="r">${fmt(totalSum)}</td></tr>
         </tbody>
       </table>
       <div style="margin-top:16px;font-size:9px;color:#9ca3af">Generado ${new Date().toLocaleString('es-DO')} · Reporte interno de apoyo — no sustituye el envío del formato 607/608 a la DGII.</div>
