@@ -2482,6 +2482,27 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.50.3-income-receipt-customer] Recibos de ingreso enlazables a un cliente');
     }
   },
+  {
+    version: '1.50.4-sale-offers',
+    description: 'Oferta en ventas: conserva por línea el regalo y el valor absorbido.',
+    run(db) {
+      const exists = db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sale_items'"
+      ).get();
+      if (!exists) return;
+      const columns = new Set(db.prepare('PRAGMA table_info(sale_items)').all().map(column => column.name));
+      if (!columns.has('offer_is_gift')) {
+        db.exec('ALTER TABLE sale_items ADD COLUMN offer_is_gift INTEGER NOT NULL DEFAULT 0');
+      }
+      if (!columns.has('offer_original_amount')) {
+        db.exec('ALTER TABLE sale_items ADD COLUMN offer_original_amount REAL NOT NULL DEFAULT 0');
+      }
+      if (!columns.has('offer_absorbed_amount')) {
+        db.exec('ALTER TABLE sale_items ADD COLUMN offer_absorbed_amount REAL NOT NULL DEFAULT 0');
+      }
+      console.log('[MIGRATION 1.50.4-sale-offers] Trazabilidad de ofertas por línea lista');
+    }
+  },
 ];
 
 // ══════════════════════════════════════════════

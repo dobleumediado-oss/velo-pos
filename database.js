@@ -13,6 +13,7 @@ const { app }  = require('electron');
 const { todayStr, nowStr, addDaysStr } = require('./lib/dates');
 const { searchNorm: _searchNorm, digitsOf: _digitsOf } = require('./lib/text-normalize');
 const { round2 } = require('./lib/money');
+const { calculate: calculateOfferAllocation } = require('./src/js/offer-allocation');
 const { getPendingInvoices } = require('./lib/pending-invoices');
 const { reconcileCashSessionTotals } = require('./lib/cash-session-totals');
 const { normalizeCustomerPhone } = require('./lib/customer-phone');
@@ -666,6 +667,9 @@ function createTables() {
       tax_pct     REAL DEFAULT NULL,
       tax_amt     REAL DEFAULT NULL,
       net_subtotal REAL DEFAULT NULL,
+      offer_is_gift INTEGER NOT NULL DEFAULT 0,
+      offer_original_amount REAL NOT NULL DEFAULT 0,
+      offer_absorbed_amount REAL NOT NULL DEFAULT 0,
       product_unit_id INTEGER REFERENCES product_units(id)
     );
 
@@ -3110,7 +3114,8 @@ function calcIncludedTaxTotals(items, { type = 'factura', discPct = 0 } = {}) {
   const grossSubtotal = round2(items.reduce((a, i) => {
     const qty = Number.parseFloat(i.qty) || 0;
     const price = Number.parseFloat(i.unit_price) || 0;
-    return a + (price * qty);
+    const authoritative = Number.parseFloat(i._effective_line_total);
+    return a + (Number.isFinite(authoritative) ? authoritative : (price * qty));
   }, 0));
   const discountFactor = 1 - (discountPct / 100);
   const discAmt = round2(grossSubtotal * (discountPct / 100));
@@ -3121,7 +3126,8 @@ function calcIncludedTaxTotals(items, { type = 'factura', discPct = 0 } = {}) {
   for (const item of items) {
     const qty = Number.parseFloat(item.qty) || 0;
     const price = Number.parseFloat(item.unit_price) || 0;
-    const lineGross = price * qty;
+    const authoritative = Number.parseFloat(item._effective_line_total);
+    const lineGross = Number.isFinite(authoritative) ? authoritative : (price * qty);
     const lineAfterDiscount = lineGross * discountFactor;
     const taxable = type === 'factura' && normalizeTaxable(item.taxable, 1) === 1;
     const taxPct = taxable ? normalizeTaxPct(item.tax_pct, 18) : 0;
@@ -3133,6 +3139,7 @@ function calcIncludedTaxTotals(items, { type = 'factura', discPct = 0 } = {}) {
     item.tax_amt = round2(lineTax);
     item.taxable = taxable ? 1 : 0;
     item.tax_pct = taxPct;
+    item.subtotal = round2(lineGross);
     netAcc += lineNet;
     taxAcc += lineTax;
   }
@@ -5190,6 +5197,7 @@ function saleOperationFingerprint({ customer, items, payment, type }) {
       unitPrice: round2(Number(item.unit_price)),
       taxable: item.taxable === 0 || item.taxable === false || item.taxable === '0' ? 0 : 1,
       taxPct: round2(Number(item.tax_pct) || 0),
+      offerIsGift: item.offer_is_gift === true || Number(item.offer_is_gift) === 1 ? 1 : 0,
     })),
     payment: {
       method: String(payment?.method || 'efectivo').toLowerCase(),
@@ -5639,6 +5647,23 @@ const salesRepo = {
           throw new Error('La venta debe conservar al menos una línea pendiente del conduce');
         }
       }
+
+      const requestedOffer = saleItems.some(item => Number(item.offer_is_gift) === 1);
+      if (requestedOffer && type !== 'factura') {
+        throw new Error('Las ofertas solo se pueden aplicar a una factura');
+      }
+      const offerPlan = calculateOfferAllocation(
+        saleItems.map(item => ({ ...item, price:item.unit_price }))
+      );
+      if (!offerPlan.ok) throw new Error(offerPlan.error);
+      offerPlan.items.forEach((allocated, index) => {
+        const item = saleItems[index];
+        item.offer_is_gift = allocated.offer_is_gift;
+        item.offer_original_amount = round2(allocated.offer_original_amount);
+        item.offer_absorbed_amount = round2(allocated.offer_absorbed_amount);
+        item._effective_line_total = round2(allocated.effective_line_total);
+        item.unit_price = Number(allocated.effective_unit_price) || 0;
+      });
 
       // 2. Calcular totales con precio final: neto + ITBIS incluido = total.
       const discPct = payment.disc || 0;
@@ -6147,12 +6172,14 @@ const salesRepo = {
         db.prepare(`
           INSERT INTO sale_items(
             sale_id,product_id,product_code,product_name,unit_cost,unit_price,qty,subtotal,
-            taxable,tax_pct,tax_amt,net_subtotal,product_unit_id
+            taxable,tax_pct,tax_amt,net_subtotal,offer_is_gift,offer_original_amount,
+            offer_absorbed_amount,product_unit_id
           )
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         `).run(saleId, item.product_id, item.product_code, item.product_name,
-               item.unit_cost, item.unit_price, item.qty, round2(item.unit_price * item.qty),
+               item.unit_cost, item.unit_price, item.qty, item.subtotal,
                item.taxable, item.tax_pct, item.tax_amt, item.net_subtotal,
+               item.offer_is_gift, item.offer_original_amount, item.offer_absorbed_amount,
                item.product_unit_id || null);
 
         // 6. Descontar stock. Serializado: marca la UNIDAD como vendida (el stock

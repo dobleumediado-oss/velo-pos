@@ -3,8 +3,8 @@
 [← Volver a CLAUDE.md](../CLAUDE.md) · Relacionados: [Flujos y numeración documental](document-workflows.md) · [Corrección controlada de facturas](sale-corrections.md) · [Rendimiento y latencia](velo-performance-roadmap.md)
 
 El 2026-09-21 el dueño pidió doce mejoras. **Nueve salieron en la 1.51.0**
-(ver [CHANGELOG](../CHANGELOG.md)) y el **punto 5** lo resolvió Codex el
-2026-09-23 (commit `2b5de45`, sin publicar todavía). Quedan **dos**, con lo que
+(ver [CHANGELOG](../CHANGELOG.md)) y los **puntos 5 y 9** los resolvió Codex el
+2026-09-23 (sin publicar todavía el punto 9). Queda **uno**, con lo que
 ya está decidido, dónde vive el código y qué hay que resolver antes de escribir
 una línea. El orden es el de la lista original, no el de prioridad.
 
@@ -126,6 +126,10 @@ pintado de resultados; las ventas se listan cerca de
 
 ## Punto 9 — Regalo ("Oferta") dentro del carrito
 
+> **Hecho por Codex el 2026-09-23** en la rama `feat/regalo-oferta`. El reparto
+> vive en un motor compartido por renderer y main, y su prueba
+> `scripts/test-sale-offers.js` quedó enganchada a `test:tech-readiness`.
+
 ### Qué pidió el dueño
 > "Poner un botón de Oferta en el carrito que abra un modal con los artículos.
 > Al presionar uno, su valor se reparte entre los artículos **no** seleccionados,
@@ -136,12 +140,14 @@ Decisión ya tomada por el dueño: **el total no cambia**. El cliente ve el rega
 en 0 y paga lo mismo; por dentro debe quedar registrado cuánto absorbió cada
 línea.
 
-### Qué hay que resolver al implementarlo
+### Cómo quedó resuelto
 - **Reparto y centavos**: repartir proporcional al importe de cada línea y
   cuadrar el último centavo contra el total original, que no puede moverse.
+- **Selección**: se regala la cantidad completa de cada línea y se permiten
+  varias líneas de oferta en una misma factura.
 - **ITBIS**: si el regalo es gravado y las líneas que lo absorben no lo son (o al
-  revés), la base imponible cambia aunque el total no. Hay que decidir si el
-  reparto se hace solo entre líneas del mismo trato fiscal.
+  revés), el reparto se limita a líneas del mismo trato fiscal y la interfaz
+  informa si no existe una compatible.
 - **Un solo artículo en el carrito**: no hay entre quién repartir. El modal debe
   impedirlo y explicar por qué.
 - **Rastro interno**: guardar por línea el valor regalado y el absorbido
@@ -149,8 +155,10 @@ línea.
   costo de la promoción no mientan en los reportes.
 - **Impresión**: la línea del regalo va en 0 con su etiqueta; los totales salen
   igual que hoy.
-- **Devoluciones y correcciones**: qué pasa si se devuelve el artículo que
-  absorbió el valor del regalo.
+- **Devoluciones y correcciones**: queda pendiente una política promocional
+  específica. Por ahora, una devolución usa el importe registrado en la línea:
+  el regalo devuelve RD$0 y una línea que absorbió valor devuelve su importe
+  ajustado. No se redistribuye la promoción automáticamente.
 
 ### Dónde tocar
 Carrito y `renderCart` en [`src/js/pos.js`](../src/js/pos.js) (el modelo de línea

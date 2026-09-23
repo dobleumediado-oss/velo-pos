@@ -806,7 +806,7 @@ function renderCart() {
 
   const inv = currentInv();
   const checkoutLocked = !!inv.checkoutOrderId;
-  const { subtotal, itbis, total, disc, discAmt, chargesTotal } = calcTotals(inv);
+  const { subtotal, itbis, total, disc, discAmt, chargesTotal, offerPlan } = calcTotals(inv);
   const documentLabels = { factura: 'Factura', cotizacion: 'Cotización', conduce: 'Conduce' };
   const availableTypes = (inv.replacesSaleId || inv.sourceQuoteId || inv.sourceConduceId)
     ? ['factura']
@@ -838,6 +838,8 @@ function renderCart() {
       <div class="flex" style="margin-top:7px;gap:5px;flex-wrap:wrap">
         <button class="btn btn-out btn-sm" style="font-size:10px;padding:3px 9px" onclick="posSaveCurrentDraft(false)">Guardar borrador</button>
         <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:3px 9px" onclick="posOpenDrafts()">Borradores${draftCount ? ` (${draftCount})` : ''}</button>
+        ${inv.itype === 'factura' ? `<button class="btn btn-out btn-sm" style="font-size:10px;padding:3px 9px"
+          ${inv.cart.length < 2 ? 'disabled' : ''} onclick="openPosOfferModal()">Oferta</button>` : ''}
       </div>`}
       ${inv.replacesSaleId ? `
         <div style="margin-top:8px;padding:7px 9px;border:1px solid var(--amber-line);
@@ -877,10 +879,12 @@ function renderCart() {
     // los índices `idx` que usan los controles de cada línea: solo se invierte
     // el recorrido de renderizado.
     inv.cart.map((item, idx) => ({ item, idx })).reverse().forEach(({ item, idx }) => {
+      const offerItem = offerPlan?.ok ? offerPlan.items[idx] : null;
+      const isGift = Number(item.offer_is_gift) === 1;
       html += `
         <div class="cart-item">
           <div class="ci-info">
-            <div class="ci-name">${posEscHtml(item.name)}</div>
+            <div class="ci-name">${posEscHtml(item.name)}${isGift ? ' · <span style="color:var(--green);font-weight:800">OFERTA</span>' : ''}</div>
             ${inv.itype === 'conduce' ? `
             <div class="ci-price" style="font-size:10px;color:var(--muted2);font-weight:600">Artículo para entrega</div>` : `
             <div class="ci-price" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
@@ -894,6 +898,8 @@ function renderCart() {
                 onclick="this.select()"/>`}
               ${item.taxable === 0 ? '' : `<span style="font-size:10px;color:var(--blue);font-weight:700">ITBIS incl.</span>`}
             </div>`}
+            ${isGift ? `<div style="font-size:10px;color:var(--green);font-weight:700;margin-top:3px">Regalo · valor distribuido ${fmt(offerItem?.offer_original_amount || 0)}</div>` : ''}
+            ${!isGift && Number(offerItem?.offer_absorbed_amount) > 0 ? `<div style="font-size:10px;color:var(--muted2);font-weight:700;margin-top:3px">Absorbe ${fmt(offerItem.offer_absorbed_amount)} de la oferta</div>` : ''}
             ${item.resale_source?.saleId ? `
               <div style="font-size:10px;color:var(--green);font-weight:700;margin-top:3px">
                 ${inv.replacesSaleId ? 'Línea de factura anulada' : 'Reventa de venta'} #${String(item.resale_source.saleId).padStart(5,'0')}
@@ -919,7 +925,7 @@ function renderCart() {
               onclick="this.select()"/>
             <button class="qb" onclick="posQty(${idx},1)">+</button>
           </div>`}
-          ${inv.itype === 'conduce' ? '' : `<div class="ci-total">${fmt(item.price * item.qty)}</div>`}
+          ${inv.itype === 'conduce' ? '' : `<div class="ci-total">${fmt(offerItem?.effective_line_total ?? (item.price * item.qty))}</div>`}
           ${checkoutLocked ? '' : `<button class="qb" style="margin-left:4px;color:var(--red)"
                   onclick="posRemItem(${idx})">×</button>`}
         </div>`;
@@ -1062,6 +1068,72 @@ function posLimpiar() {
   renderCart();
 }
 
+function _posOfferPlan(inv, cart = inv?.cart || []) {
+  if (typeof VeloOffer === 'undefined' || typeof VeloOffer.calculate !== 'function') {
+    return { ok:false, error:'No se pudo cargar el reparto de ofertas.', items:[] };
+  }
+  return VeloOffer.calculate(cart);
+}
+
+function openPosOfferModal() {
+  const inv = currentInv();
+  if (inv.checkoutOrderId) return;
+  if (inv.itype !== 'factura') {
+    toast('Las ofertas se aplican al preparar una factura', 'w');
+    return;
+  }
+  if (inv.cart.length < 2) {
+    toast('Agrega al menos dos artículos: uno será la oferta y otro absorberá su valor', 'w');
+    return;
+  }
+  const rows = inv.cart.map((item, idx) => `
+    <label style="display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid var(--line2);cursor:pointer">
+      <input type="checkbox" data-offer-index="${idx}" ${Number(item.offer_is_gift) === 1 ? 'checked' : ''}/>
+      <span style="flex:1">
+        <strong style="display:block;font-size:12px">${posEscHtml(item.name || item.product_name || '')}</strong>
+        <span style="font-size:10px;color:var(--muted)">${item.qty} × ${fmt(item.price)} · ${_posTaxable(item) ? `ITBIS ${_posTaxPct(item)}%` : 'Exento'}</span>
+      </span>
+      <strong>${fmt((Number(item.price) || 0) * (Number(item.qty) || 0))}</strong>
+    </label>`).join('');
+  openModal(`
+    <div class="modal-title">Oferta</div>
+    <div class="modal-sub">Marca la cantidad completa del artículo que se entregará como regalo.</div>
+    <div class="alrt b" style="margin-bottom:10px;padding:9px 11px"><div>
+      <div class="alrt-title">El total y el ITBIS no cambian</div>
+      <div class="alrt-sub">El valor se reparte entre artículos con el mismo tratamiento fiscal.</div>
+    </div></div>
+    <div>${rows}</div>
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-dark" onclick="posApplyOffer()">Aplicar oferta</button>
+    </div>`);
+}
+
+function posApplyOffer() {
+  const inv = currentInv();
+  const selected = new Set(Array.from(document.querySelectorAll('[data-offer-index]:checked'))
+    .map(input => Number(input.dataset.offerIndex)));
+  const candidate = inv.cart.map((item, idx) => ({ ...item, offer_is_gift:selected.has(idx) ? 1 : 0 }));
+  const plan = _posOfferPlan(inv, candidate);
+  if (!plan.ok) {
+    toast(plan.error, 'err');
+    return;
+  }
+  inv.cart.forEach((item, idx) => { item.offer_is_gift = selected.has(idx) ? 1 : 0; });
+  closeModal();
+  renderInvTabs();
+  renderCart();
+  toast(selected.size ? 'Oferta aplicada sin cambiar el total ni el ITBIS' : 'Oferta retirada');
+}
+
+function _posKeepOfferValid(inv) {
+  if (!(inv?.cart || []).some(item => Number(item.offer_is_gift) === 1)) return;
+  const plan = _posOfferPlan(inv);
+  if (plan.ok) return;
+  inv.cart.forEach(item => { item.offer_is_gift = 0; });
+  toast(`La oferta se retiró: ${plan.error}`, 'w');
+}
+
 function posSetType(t) {
   if (currentInv().checkoutOrderId) return;
   if (!['factura', 'cotizacion', 'conduce'].includes(t)) return;
@@ -1081,6 +1153,7 @@ function posSetType(t) {
     toast('El conduce cargado debe completarse como factura', 'w');
     return;
   }
+  if (t !== 'factura') currentInv().cart.forEach(item => { item.offer_is_gift = 0; });
   currentInv().itype = t;
   renderInvTabs();
   renderCart();
@@ -1251,6 +1324,7 @@ function posQty(idx, delta) {
     toast('Sin más stock', 'w');
   }
   if (item.qty <= 0) inv.cart.splice(idx, 1);
+  _posKeepOfferValid(inv);
   renderInvTabs();
   renderCart();
 }
@@ -1292,6 +1366,8 @@ function posCommitQty(idx, input) {
     return;
   }
   posSetQty(idx, input);
+  _posKeepOfferValid(currentInv());
+  renderCart();
 }
 
 function posEscHtml(v) {
@@ -1512,6 +1588,7 @@ async function posSetPrice(idx, val) {
   item.price = price;
   item.unit_price = price;
   item.manual_price = true;
+  _posKeepOfferValid(inv);
   renderInvTabs();
   renderCart();
 }
@@ -1538,7 +1615,9 @@ function posCommitPriceOnEnter(event, idx, input) {
 
 function posRemItem(idx) {
   if (currentInv().checkoutOrderId) return;
-  currentInv().cart.splice(idx, 1);
+  const inv = currentInv();
+  inv.cart.splice(idx, 1);
+  _posKeepOfferValid(inv);
   renderInvTabs();
   renderCart();
 }
@@ -1854,14 +1933,35 @@ function _posTaxable(item) {
   return item?.taxable !== 0 && item?.taxable !== false && item?.taxable !== '0';
 }
 
+function _posTotalsOfferPlan(inv) {
+  if (typeof VeloOffer !== 'undefined' && typeof VeloOffer.calculate === 'function') {
+    return VeloOffer.calculate(inv?.cart || []);
+  }
+  const items = (inv?.cart || []).map(item => ({
+    ...item,
+    effective_line_total:(Number(item.price) || 0) * (Number(item.qty) || 0),
+    offer_original_amount:0,
+    offer_absorbed_amount:0,
+  }));
+  const hasOffer = items.some(item => Number(item.offer_is_gift) === 1);
+  return hasOffer
+    ? { ok:false, error:'No se pudo cargar el reparto de ofertas.', items:[] }
+    : { ok:true, hasOffer:false, items };
+}
+
 function calcTotals(inv) {
   if (inv?.itype === 'conduce') {
     const chargesTotal = _posRound2((inv.charges || [])
       .reduce((sum, row) => sum + (Number(row.amount) || 0), 0));
-    return { subtotal:0, grossSubtotal:0, discAmt:0, itbis:0, itemsTotal:0, chargesTotal, total:chargesTotal, disc:0 };
+    return { subtotal:0, grossSubtotal:0, discAmt:0, itbis:0, itemsTotal:0, chargesTotal, total:chargesTotal, disc:0, offerPlan:null };
   }
+  const requestedOfferPlan = _posTotalsOfferPlan(inv);
+  const offerPlan = requestedOfferPlan.ok
+    ? requestedOfferPlan
+    : _posTotalsOfferPlan({ ...inv, cart:(inv.cart || []).map(item => ({ ...item, offer_is_gift:0 })) });
+  const effectiveItems = offerPlan.items;
   const disc = Math.min(100, Math.max(0, parseFloat(inv.disc) || 0));
-  const grossSubtotal = _posRound2(inv.cart.reduce((a, i) => a + ((Number(i.price) || 0) * (Number(i.qty) || 0)), 0));
+  const grossSubtotal = _posRound2(effectiveItems.reduce((sum, item) => sum + Number(item.effective_line_total || 0), 0));
   const discAmt = _posRound2(grossSubtotal * (disc / 100));
   const itemsTotal = _posRound2(grossSubtotal - discAmt);
   const chargesTotal = ['factura', 'cotizacion'].includes(inv.itype)
@@ -1871,8 +1971,8 @@ function calcTotals(inv) {
   const factor = 1 - (disc / 100);
 
   let taxAcc = 0;
-  inv.cart.forEach(item => {
-    const lineAfterDiscount = ((Number(item.price) || 0) * (Number(item.qty) || 0)) * factor;
+  effectiveItems.forEach(item => {
+    const lineAfterDiscount = (Number(item.effective_line_total) || 0) * factor;
     if (inv.itype !== 'factura' || !_posTaxable(item)) return;
     const pct = _posTaxPct(item);
     if (pct <= 0) return;
@@ -1900,7 +2000,7 @@ function calcTotals(inv) {
   const itemSubtotal = _posRound2(itemsTotal - itemTax);
   const itbis = inv.itype === 'factura' ? _posRound2(itemTax + chargesTax) : 0;
   const subtotal = _posRound2(itemSubtotal + chargesNet);
-  return { subtotal, grossSubtotal, discAmt, itbis, itemsTotal, chargesTotal, total, disc };
+  return { subtotal, grossSubtotal, discAmt, itbis, itemsTotal, chargesTotal, total, disc, offerPlan:requestedOfferPlan };
 }
 
 function invTotal(inv) { return calcTotals(inv).total; }
@@ -4123,6 +4223,12 @@ async function finalizarVenta() {
   // Una venta puede ser solo de cargos adicionales (mano de obra, flete).
   if (!posTieneQueCobrar(inv)) return;
 
+  const offerPlan = _posOfferPlan(inv);
+  if (!offerPlan.ok) {
+    toast(offerPlan.error, 'err');
+    return;
+  }
+
   if (!isQuote && inv.tradeIn && !(inv.cliId && inv.cliId !== 1) &&
       !(inv.tradeIn.sellerName && inv.tradeIn.sellerDocument && inv.tradeIn.sellerPhone &&
         inv.tradeIn.sellerAddress && inv.tradeIn.ownershipDeclared && inv.tradeIn.lawfulOriginDeclared)) {
@@ -4229,6 +4335,7 @@ async function finalizarVenta() {
     taxable:      _posTaxable(i) ? 1 : 0,
     tax_pct:      _posTaxable(i) ? _posTaxPct(i) : 0,
     qty:          i.qty,
+    offer_is_gift: Number(i.offer_is_gift) === 1 ? 1 : 0,
     kind:         i.kind || '',
     non_stock:    i.non_stock === true,
     // Serializado (VELO TECH POS): pasa la unidad elegida para que el backend la
@@ -4373,6 +4480,9 @@ async function finalizarVenta() {
 	          tax_pct:       i.tax_pct,
 	          tax_amt:       i.tax_amt,
 	          net_subtotal:  i.net_subtotal,
+	          offer_is_gift: i.offer_is_gift,
+	          offer_original_amount: i.offer_original_amount,
+	          offer_absorbed_amount: i.offer_absorbed_amount,
 	        }))
 	      : inv.cart.map(i => ({
 	          product_code: i.product_code || i.code || '',
@@ -4383,6 +4493,7 @@ async function finalizarVenta() {
 	          unit_price: i.price,
 	          cost:  i.cost || 0,
 	          unit_cost: i.cost || 0,
+	          offer_is_gift: i.offer_is_gift,
 	        }));
 
 	    // Reconstruir sale para previsualización

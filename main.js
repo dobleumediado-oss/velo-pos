@@ -8128,7 +8128,7 @@ ipcMain.handle('ecf:emit', async (_, { saleId, requestUserId } = {}) => {
       return {
         NumeroLinea:          String(idx + 1),
         IndicadorFacturacion: itbis > 0 ? '1' : '3', // 1=ITBIS, 3=exento
-        NombreItem:           item.product_name || item.name || `Producto ${idx+1}`,
+        NombreItem:           `${item.product_name || item.name || `Producto ${idx+1}`}${Number(item.offer_is_gift) === 1 ? ' · OFERTA' : ''}`,
         CantidadItem:         String(cantidad),
         UnidadMedida:         'UN',
         PrecioUnitarioItem:   precioUnit.toFixed(2),

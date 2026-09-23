@@ -257,6 +257,11 @@ function _lineGross(i) {
   return Number(i.unit_price || i.price || 0) * qty;
 }
 
+function _lineName(i) {
+  const name = String(i?.product_name || i?.name || '');
+  return Number(i?.offer_is_gift) === 1 ? `${name} · OFERTA` : name;
+}
+
 function _lineTax(i, sale) {
   if (i.tax_amt !== undefined && i.tax_amt !== null) return Number(i.tax_amt || 0);
   if (i.taxable === 0 || i.taxable === false || i.taxable === '0') return 0;
@@ -817,9 +822,10 @@ function _termicaItems(items, widthMm) {
   const nameW  = cols - priceW - 2;
   let html = '';
   items.forEach(i => {
-    const name  = _esc((i.product_name || i.name || '').slice(0, nameW));
-    const price = `RD$${Number(i.unit_price||0).toLocaleString('es-DO')}`;
-    const total = `RD$${(Number(i.unit_price||0)*Number(i.qty||1)).toLocaleString('es-DO')}`;
+    const qty = Number(i.qty || 1) || 1;
+    const name  = _esc(_lineName(i).slice(0, nameW));
+    const price = `RD$${(_lineGross(i) / qty).toLocaleString('es-DO')}`;
+    const total = `RD$${_lineGross(i).toLocaleString('es-DO')}`;
     html += `<div>${name}</div>`;
     html += `<div style="display:flex;justify-content:space-between;padding-left:8px;color:#555">
       <span>${i.qty} x ${price}</span><span>${total}</span>
@@ -978,10 +984,10 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
   ${sale.salesperson_name ? `<div class="row"><span>Vendedor:</span><span>${_esc((sale.salesperson_code ? sale.salesperson_code + ' · ' : '') + sale.salesperson_name)}</span></div>` : ''}
   <hr class="sep-d"/>
   ${(sale.items||[]).map(i => `
-    <div style="font-weight:600">${_esc(i.product_name||i.name)}</div>
+    <div style="font-weight:600">${_esc(_lineName(i))}</div>
     <div class="row" style="padding-left:6px;color:#333;font-size:10.5px">
-      <span>${i.qty} × RD$${Number(i.unit_price||0).toLocaleString('es-DO')}</span>
-      <span>RD$${(Number(i.unit_price||0)*Number(i.qty||1)).toLocaleString('es-DO')}</span>
+      <span>${i.qty} × RD$${(_lineGross(i) / (Number(i.qty)||1)).toLocaleString('es-DO')}</span>
+      <span>RD$${_lineGross(i).toLocaleString('es-DO')}</span>
     </div>`).join('')}
   <hr class="sep"/>
   <div class="row"><span>Subtotal</span><span>RD$${Number(sale.subtotal||0).toLocaleString('es-DO')}</span></div>
@@ -1028,8 +1034,8 @@ function renderTermicaMinimal(sale, cfg, opts, widthMm = 76) {
   <div style="border-top:1px dashed #000;margin:3px 0"></div>
   ${(sale.items||[]).map(i => `
     <div style="display:flex;justify-content:space-between">
-      <span>${_esc(i.product_name||i.name)} x${i.qty}</span>
-      <span>RD$${(Number(i.unit_price||0)*Number(i.qty||1)).toLocaleString('es-DO')}</span>
+      <span>${_esc(_lineName(i))} x${i.qty}</span>
+      <span>RD$${_lineGross(i).toLocaleString('es-DO')}</span>
     </div>`).join('')}
   <div style="border-top:1px dashed #000;margin:3px 0"></div>
   <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700">
@@ -1103,14 +1109,14 @@ function renderCartaRecibo(sale, cfg, opts) {
     const importe = showTax ? _lineImporte(i, sale) : (qty * unitFinal);
     if (isAbono || isExpensePayment) {
       return `<tr>
-        <td class="c-desc">${_esc(i.product_name || i.name || '')}</td>
+        <td class="c-desc">${_esc(_lineName(i))}</td>
         <td class="c-num it-total">${_n2(importe)}</td>
       </tr>`;
     }
     return `
     <tr>
       ${showCode ? `<td class="c-code">${_esc(code)}</td>` : ''}
-      <td class="c-desc">${_esc(i.product_name || i.name || '')}</td>
+      <td class="c-desc">${_esc(_lineName(i))}</td>
       ${showMoney ? `<td class="c-num">${_n2(unitFinal)}</td>` : ''}
       <td class="c-num">${qty.toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
       ${showMoney ? `<td class="c-num">${_n2(lineNet)}</td>
@@ -1505,14 +1511,14 @@ function renderCartaFormal(sale, cfg, opts) {
     const importe = showTax ? _lineImporte(i, sale) : (qty * unitFinal);
     if (isExpensePayment) {
       return `<tr style="${idx%2===0?'background:#f9fafb':''}">
-        <td style="padding:8px 8px">${_esc(i.product_name||i.name)}</td>
+        <td style="padding:8px 8px">${_esc(_lineName(i))}</td>
         <td style="text-align:right;padding:8px;font-weight:600">RD$${_n2(importe)}</td>
       </tr>`;
     }
     return `
     <tr style="${idx%2===0?'background:#f9fafb':''}">
       ${showCode ? `<td style="padding:8px 8px;font-family:'Courier New',monospace;font-size:10px;color:#555">${_esc(i.product_code || i.code || '—')}</td>` : ''}
-      <td style="padding:8px 8px">${_esc(i.product_name||i.name)}</td>
+      <td style="padding:8px 8px">${_esc(_lineName(i))}</td>
       <td style="text-align:center;padding:8px">${i.qty}</td>
       <td style="text-align:right;padding:8px">RD$${_n2(unitFinal)}</td>
       <td style="text-align:right;padding:8px">RD$${_n2(lineNet)}</td>
@@ -1654,14 +1660,14 @@ function renderCartaNCF(sale, cfg, opts) {
     const importe = showTax ? _lineImporte(i, sale) : (qty * unitFinal);
     if (isExpensePayment) {
       return `<tr>
-        <td style="padding:7px 6px">${_esc(i.product_name||i.name)}</td>
+        <td style="padding:7px 6px">${_esc(_lineName(i))}</td>
         <td style="text-align:right;padding:7px 6px;font-weight:700">RD$${_n2(importe)}</td>
       </tr>`;
     }
     return `
     <tr>
       ${showCode ? `<td style="padding:7px 6px;font-family:'Courier New',monospace;font-size:10px">${_esc(i.product_code || i.code || '—')}</td>` : ''}
-      <td style="padding:7px 6px">${_esc(i.product_name||i.name)}</td>
+      <td style="padding:7px 6px">${_esc(_lineName(i))}</td>
       <td style="text-align:center;padding:7px">${i.qty}</td>
       <td style="text-align:right;padding:7px 6px">RD$${_n2(unitFinal)}</td>
       <td style="text-align:right;padding:7px 6px">RD$${_n2(lineNet)}</td>
@@ -1780,9 +1786,9 @@ function renderMediaCarta(sale, cfg, opts) {
   const ncf = _getNcf(sale);
   const rows = (sale.items||[]).map(i => `
     <tr>
-      <td style="padding:5px 8px;font-size:10px">${_esc(i.product_name||i.name)}</td>
+      <td style="padding:5px 8px;font-size:10px">${_esc(_lineName(i))}</td>
       <td style="text-align:center;padding:5px;font-size:10px">${i.qty}</td>
-      <td style="text-align:right;padding:5px 8px;font-size:10px">RD$${(Number(i.unit_price||0)*Number(i.qty||1)).toLocaleString('es-DO')}</td>
+      <td style="text-align:right;padding:5px 8px;font-size:10px">RD$${_lineGross(i).toLocaleString('es-DO')}</td>
     </tr>`).join('');
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
