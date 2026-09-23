@@ -74,6 +74,36 @@ pintado de resultados; las ventas se listan cerca de
 [`database.js:7046`](../database.js) · presupuesto de latencia en
 [Rendimiento](velo-performance-roadmap.md).
 
+### Prompt de entrega (copiar y pegar a otro agente)
+
+> En el repositorio Velo POS (POS de escritorio en Electron, sin frameworks), el
+> buscador global —la lupa de la barra superior, o ⌘K / Ctrl+K— no
+> encuentra las facturas correctas y se siente lento al escribir. Arréglalo.
+>
+> Antes de cambiar nada, **mide**: instrumenta cuánto tarda cada tecla desde que
+> se escribe hasta que se pintan los resultados, y qué consulta se ejecuta.
+> Prueba al menos estos textos: el número de factura completo con ceros
+> (`00002388`), el número sin ceros (`2388`), un NCF (`B0200000407`), un nombre
+> de cliente con Ñ o tilde, y un fragmento del nombre. Anota qué se esperaba y
+> qué devolvió cada uno. Pídele al dueño un ejemplo real que le haya fallado: es
+> el camino más corto al bug.
+>
+> El código: `_openGSearch` en `src/js/app.js:2216` (overlay, teclado y pintado;
+> las ventas se listan cerca de `src/js/app.js:2471`), el handler `sales:search`
+> en `main.js:3422` y `salesRepo.search` en `database.js:7046`. Verifica esas
+> líneas: se mueven.
+>
+> Reglas del repositorio, en `AGENTS.md`, y en particular: la base de datos se
+> toca solo desde el proceso main vía IPC, nunca desde `src/js/`; no escribas en
+> `data/velo.db` (datos de clientes reales, trabaja sobre una copia y bórrala);
+> no uses `git add -A` ni `git commit -a`, porque el árbol tiene cambios ajenos
+> sin commitear; y **no empujes ningún tag `v*`**, que eso publica la
+> actualización a los clientes.
+>
+> Terminado significa: las búsquedas de la lista devuelven lo correcto, tienes
+> el antes y el después en milisegundos, hay una prueba nueva en `scripts/` que
+> falla con el código viejo, y `npm run test:tech-readiness` queda en verde.
+
 ---
 
 ## Punto 9 — Regalo ("Oferta") dentro del carrito

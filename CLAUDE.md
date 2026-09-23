@@ -48,5 +48,6 @@ Cada tema tiene su archivo dedicado en [`docs/`](docs/). Todos enlazan de vuelta
 - **[Proceso de Release](docs/release-process.md)** — ⚠️ empujar un tag `v*` = deploy en vivo a clientes reales vía electron-updater. **Confirmar siempre con el usuario antes de tag.**
 
 ## Antes de trabajar
+- **Reglas duras para cualquier agente** (Codex incluido): [`AGENTS.md`](AGENTS.md) — no empujar tags `v*`, no `git add -A` (hay cambios ajenos sin commitear), no escribir en `data/velo.db`.
 - La documentación son observaciones puntuales; **verifica citas file:line contra el código actual** antes de afirmarlas como hecho.
 - Antes de empujar un tag de release, lee el [Proceso de Release](docs/release-process.md) y confirma con el usuario.
