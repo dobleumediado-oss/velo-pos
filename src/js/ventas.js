@@ -2599,6 +2599,7 @@ function ventasPrintPayload(sale) {
     salesperson_name: sale.salesperson_name || '',
     salesperson_code: sale.salesperson_code || '',
     original_sale_id: sale.original_sale_id || null,
+    correction_kind: sale.correction_kind || '',
     original_document_number_fmt: sale.original_document_number_fmt || '',
     original_numero_factura: sale.original_numero_factura,
     original_numero_factura_fmt: sale.original_numero_factura_fmt,
@@ -2640,6 +2641,8 @@ async function openFacturaCorreccion(saleId) {
   const canCancel = perms.has('sales.cancel') && active;
   const canAudit = perms.has('sales.view_audit');
   const fiscalLocked = !!ctx.fiscal;
+  const canDebit = canCorrect && active && !fiscalLocked &&
+    perms.has('sales.issue_debit_note') && sale.correction_kind !== 'debit_note';
   const canChangeMethod = canCorrect && active &&
     ['efectivo', 'tarjeta', 'transferencia'].includes(String(sale.payment_method || '').toLowerCase());
 
@@ -2710,9 +2713,13 @@ async function openFacturaCorreccion(saleId) {
       ${ventasCorrectionAction({
         icon: 'plus', title: 'Nota de débito / cargo posterior',
         description: fiscalLocked
-          ? 'Bloqueado para e-CF emitido: debe emitirse un documento fiscal de cargo en el proveedor fiscal.'
-          : 'No se altera el total original; emite una nueva factura vinculada desde el POS.',
-        enabled: false,
+          ? 'Bloqueado para e-CF emitido: la nota de débito electrónica (e33) se emite en el proveedor fiscal.'
+          : canDebit
+            ? 'Cobra flete, intereses o una diferencia sin tocar la factura: emite una nota de débito (B03 si la factura tiene NCF).'
+            : 'Requiere una factura activa y el permiso sales.issue_debit_note.',
+        enabled: canDebit,
+        onclick: `closeModal();openVentaDebitNote(${sale.id})`,
+        tone: 'var(--amber)',
       })}
       ${ventasCorrectionAction({
         icon: 'xmark', title: 'Anular factura',
@@ -2859,6 +2866,119 @@ async function ventasSubmitPaymentMethodChange() {
   toast(`✓ Método de pago cambiado a ${VENTAS_METHOD_LABELS[result.newMethod] || result.newMethod}`);
   ventasRefreshAfterMutation({
     range: 'all', view: null, products: false, customers: false,
+    onDone: () => {
+      if (typeof page !== 'undefined' && page === 'ventas') {
+        veloRepaint(() => renderVentas(document.getElementById('page')));
+      }
+    },
+  });
+}
+
+async function openVentaDebitNote(saleId) {
+  const response = await window.api.sales.corrections.getDebitNoteModel({ id: saleId, requestUserId: user.id });
+  if (!response?.ok) return toast(response?.error || 'No se pudo preparar la nota de débito', 'err');
+  const model = response.data;
+  const root = model.root;
+  window._ventaDebitNote = { model, idempotencyKey: ventasCorrectionKey('debit-note', root.id) };
+  const settlementLabels = { credito: 'A la cuenta del cliente (crédito)', ...VENTAS_METHOD_LABELS };
+  const settlements = model.settlements.filter(row => row !== 'credito' || model.canUseCredit)
+    .map(row => `<option value="${row}">${ventasEsc(settlementLabels[row] || row)}</option>`).join('');
+  const bankOptions = model.accounts.filter(row => row.type === 'banco')
+    .map(row => `<option value="${row.id}">${ventasEsc(row.name)}${row.bank_name ? ` · ${ventasEsc(row.bank_name)}` : ''}</option>`).join('');
+  openModal(`
+    <div class="modal-title">Nota de débito / cargo posterior</div>
+    <div class="modal-sub">${facturaLabel(root)} · ${ventasEsc(root.ncf || 'Sin NCF')} · ${ventasEsc(root.customer_name || 'Consumidor Final')}</div>
+    <div class="alrt ${model.fiscal.willIssueNcf || !root.ncf ? 'b' : 'a'}" style="margin-bottom:12px"><div>
+      <div class="alrt-title">La factura original no cambia</div>
+      <div class="alrt-sub">${ventasEsc(model.fiscal.message)} El cargo nace como un documento propio (NDB) vinculado a esta factura.</div>
+    </div></div>
+    ${model.previous.length ? `<div class="ts" style="margin-bottom:10px">Notas de débito anteriores: ${model.previous.map(row => `${ventasEsc(row.document_number_fmt || '#' + row.id)} (${fmt(row.total)})`).join(', ')}</div>` : ''}
+    <div class="g2">
+      <div class="fg"><label class="lbl">Concepto *</label>
+        <input class="inp" id="vdn-concept" maxlength="120" placeholder="Ej.: Flete, intereses por mora, diferencia de precio"/>
+      </div>
+      <div class="fg"><label class="lbl">Importe final (RD$) *</label>
+        <input class="inp" id="vdn-amount" type="number" min="0.01" step="0.01" placeholder="0.00"/>
+      </div>
+      <div class="fg"><label class="lbl">ITBIS</label>
+        <select class="inp" id="vdn-taxable">
+          <option value="1">Incluye ITBIS ${Number(model.defaultTaxPct || 18)}%</option>
+          <option value="0">Exento</option>
+        </select>
+      </div>
+      <div class="fg"><label class="lbl">Cómo se cobra *</label>
+        <select class="inp" id="vdn-settlement" onchange="ventasDebitNoteToggle()">${settlements}</select>
+      </div>
+      <div class="fg" id="vdn-bank-wrap"><label class="lbl">Cuenta bancaria *</label>
+        <select class="inp" id="vdn-bank"><option value="">Selecciona…</option>${bankOptions}</select>
+      </div>
+      <div class="fg" id="vdn-card-wrap"><label class="lbl">Marca de la tarjeta *</label>
+        <input class="inp" id="vdn-card-brand" maxlength="40" placeholder="Visa, Mastercard…"/>
+      </div>
+    </div>
+    <div class="fg"><label class="lbl">Motivo específico *</label>
+      <input class="inp" id="vdn-reason" maxlength="500" placeholder="Ej.: flete acordado con el cliente después de facturar"/>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-dark" onclick="ventasConfirmDebitNote()">${svg('check')} Emitir nota de débito</button>
+    </div>
+  `);
+  ventasDebitNoteToggle();
+}
+
+function ventasDebitNoteToggle() {
+  const settlement = document.getElementById('vdn-settlement')?.value || '';
+  const show = (id, visible) => { const el = document.getElementById(id); if (el) el.style.display = visible ? '' : 'none'; };
+  show('vdn-bank-wrap', settlement === 'transferencia');
+  show('vdn-card-wrap', settlement === 'tarjeta');
+}
+
+function ventasConfirmDebitNote() {
+  const state = window._ventaDebitNote;
+  if (!state?.model) return;
+  const settlement = document.getElementById('vdn-settlement')?.value || '';
+  const request = {
+    concept: document.getElementById('vdn-concept')?.value?.trim() || '',
+    amount: ventasRound2(Number(document.getElementById('vdn-amount')?.value || 0)),
+    taxable: document.getElementById('vdn-taxable')?.value !== '0',
+    settlement,
+    financialAccountId: settlement === 'transferencia' ? Number(document.getElementById('vdn-bank')?.value) || null : null,
+    cardBrand: settlement === 'tarjeta' ? document.getElementById('vdn-card-brand')?.value?.trim() || '' : '',
+    reason: document.getElementById('vdn-reason')?.value?.trim() || '',
+  };
+  if (request.concept.length < 3) return toast('Indica el concepto del cargo', 'w');
+  if (!(request.amount > 0)) return toast('Escribe un importe mayor que cero', 'w');
+  if (settlement === 'transferencia' && !request.financialAccountId) return toast('Selecciona la cuenta bancaria', 'w');
+  if (settlement === 'tarjeta' && !request.cardBrand) return toast('Indica la marca de la tarjeta', 'w');
+  if (request.reason.length < 5) return toast('Escribe un motivo específico', 'w');
+  state.request = request;
+  confirmModal(
+    `<strong>Emitir nota de débito</strong><br/><br/>
+     ${facturaLabel(state.model.root)} · ${ventasEsc(request.concept)}<br/>
+     Importe: <strong>${fmt(request.amount)}</strong> ${request.taxable ? '(incluye ITBIS)' : '(exento)'}<br/>
+     Cobro: <strong>${ventasEsc(settlement === 'credito' ? 'a la cuenta del cliente' : (VENTAS_METHOD_LABELS[settlement] || settlement))}</strong><br/>
+     Motivo: <strong>${ventasEsc(request.reason)}</strong>`,
+    () => ventasSubmitDebitNote(),
+    'Emitir nota de débito',
+    'btn-dark'
+  );
+}
+
+async function ventasSubmitDebitNote() {
+  const state = window._ventaDebitNote;
+  if (!state?.model || !state.request) return;
+  const result = await window.api.sales.corrections.createDebitNote({
+    id: state.model.root.id,
+    ...state.request,
+    idempotencyKey: state.idempotencyKey,
+    requestUserId: user.id,
+  });
+  if (!result?.ok) return toast(result?.error || 'No se pudo emitir la nota de débito', 'err');
+  window._ventaDebitNote = null;
+  toast(`✓ Nota de débito ${result.debitNoteNumber || ''}${result.debitNoteNcf ? ` · ${result.debitNoteNcf}` : ''} emitida`);
+  ventasRefreshAfterMutation({
+    range: 'all', view: null, products: false, customers: true,
     onDone: () => {
       if (typeof page !== 'undefined' && page === 'ventas') {
         veloRepaint(() => renderVentas(document.getElementById('page')));
@@ -3688,6 +3808,10 @@ function ventasCorrectionHistoryEntry(correction) {
     create_monetary_credit: () => ({
       title: 'Nota de crédito monetaria',
       detail: `Crédito: ${fmt(meta.creditTotal || 0)} · inventario sin movimiento · ${correction.reason}`,
+    }),
+    create_debit_note: () => ({
+      title: 'Nota de débito emitida',
+      detail: `${meta.debitNoteNumber || ''}${meta.debitNoteNcf ? ` · ${meta.debitNoteNcf}` : ''} · ${fmt(meta.debitTotal || 0)} · ${meta.concept || ''} · ${correction.reason}`,
     }),
     change_payment_method: () => ({
       title: 'Método de pago cambiado',

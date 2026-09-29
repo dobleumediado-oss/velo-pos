@@ -20,6 +20,7 @@ function expectThrow(fn, pattern, message) {
   }
 }
 
+const round2 = value => Math.round((Number(value) || 0) * 100) / 100;
 const tmpDir = path.join(os.tmpdir(), `velo_sale_corrections_${Date.now()}`);
 const DB = require('../database');
 DB.initDB(tmpDir);
@@ -906,6 +907,109 @@ ok(db.prepare("SELECT method FROM cash_movements WHERE type='venta' AND referenc
 ok(DB.salesRepo.getById(pmClosed.id).payment_method === 'transferencia' && bankBalance(pmBankId) === 118,
   'con la caja cerrada igual se corrigen la factura y el banco');
 
+console.log('\n== G3. Nota de débito / cargo posterior (B03) ==');
+db.prepare(`
+  INSERT INTO ncf_sequences(type,prefix,from_num,to_num,current,active,alert_at)
+  VALUES('B03','B03',1,9999,0,1,10)
+`).run();
+const dnRoot = DB.salesRepo.getById(createSale({ date: today, method: 'efectivo', qty: 1 }).saleId);
+const dnModel = DB.saleCorrectionsRepo.debitNoteModel(dnRoot.id, admin.id);
+ok(dnModel.fiscal.willIssueNcf && dnModel.fiscal.ncfType === 'B03' && dnModel.defaultTaxPct === 18,
+  'con un rango B03 vigente el modelo anuncia un B03 con el ITBIS de la factura');
+const invoiceSeqBefore = db.prepare("SELECT current FROM document_sequences WHERE kind='factura_contado'").get()?.current;
+const balanceBeforeDebit = db.prepare('SELECT balance FROM customers WHERE id=?').get(customerId).balance;
+const dnKey = `debit-note-${dnRoot.id}-credit-test`;
+const issueDebit = () => DB.saleCorrectionsRepo.createDebitNote({
+  saleId: dnRoot.id, amount: 590, concept: 'Flete a domicilio', taxable: true, settlement: 'credito',
+  reason: 'El flete se acordó después de facturar', userId: admin.id, idempotencyKey: dnKey,
+  terminalId: 'test', session: { id: cashId },
+});
+const debit = issueDebit();
+const dnNote = DB.salesRepo.getById(debit.debitNoteId);
+const dnLog = db.prepare('SELECT type,modifies_ncf FROM ncf_log WHERE sale_id=?').get(dnNote.id);
+ok(dnNote.correction_kind === 'debit_note' && dnNote.original_sale_id === dnRoot.id &&
+  dnNote.document_kind === 'nota_debito' && /^NDB-\d{6}$/.test(dnNote.document_number_fmt),
+  'la nota de débito es un documento propio NDB vinculado a la factura');
+ok(/^B03\d{8}$/.test(dnNote.ncf) && dnLog.type === 'B03' && dnLog.modifies_ncf === dnRoot.ncf,
+  'lleva un B03 que referencia el NCF de la factura original (607)');
+ok(db.prepare("SELECT current FROM document_sequences WHERE kind='factura_contado'").get()?.current === invoiceSeqBefore,
+  'no consume la numeración comercial de facturas');
+ok(dnNote.total === 590 && dnNote.tax_amt === 90 && dnNote.payment_method === 'credito',
+  'el importe incluye su ITBIS: 500 de base y 90 de ITBIS');
+ok(round2(db.prepare('SELECT balance FROM customers WHERE id=?').get(customerId).balance - balanceBeforeDebit) === 590,
+  'a crédito el cargo sube la cuenta por cobrar del cliente');
+const dnRootAfter = DB.salesRepo.getById(dnRoot.id);
+ok(dnRootAfter.total === dnRoot.total && dnRootAfter.ncf === dnRoot.ncf,
+  'la factura original y su NCF no cambian');
+ok(issueDebit().idempotent === true &&
+  db.prepare("SELECT COUNT(*) c FROM sales WHERE original_sale_id=? AND correction_kind='debit_note'").get(dnRoot.id).c === 1,
+  'repetir la operación no emite una segunda nota de débito');
+ok(db.prepare("SELECT COUNT(*) c FROM audit_logs WHERE entity='sales' AND entity_id=? AND action='nota_debito_emitida'").get(dnRoot.id).c === 1,
+  'la emisión queda en la auditoría de la factura');
+DB.accountingRepo.generateSaleEntry({ saleId: dnNote.id, userId: admin.id });
+ok(!!db.prepare("SELECT id FROM accounting_entries WHERE source_module='venta' AND source_id=? AND status='confirmado'").get(dnNote.id),
+  'la nota de débito genera su asiento de ingreso e ITBIS');
+expectThrow(() => DB.salesRepo.cancel(dnRoot.id, 'Intento con nota viva', admin.id, admin.name),
+  /Anula primero la nota de débito/, 'no se anula la factura mientras tenga una nota de débito vigente');
+
+const debitCashBefore = db.prepare("SELECT COUNT(*) c FROM cash_movements WHERE type='venta'").get().c;
+const exemptDebit = DB.saleCorrectionsRepo.createDebitNote({
+  saleId: dnRoot.id, amount: 300, concept: 'Intereses por mora', taxable: false, settlement: 'efectivo',
+  reason: 'Intereses cobrados en caja', userId: admin.id,
+  idempotencyKey: `debit-note-${dnRoot.id}-cash-test`, session: { id: cashId },
+});
+const exemptNote = DB.salesRepo.getById(exemptDebit.debitNoteId);
+ok(exemptNote.tax_amt === 0 && exemptNote.payment_method === 'efectivo' &&
+  db.prepare("SELECT COUNT(*) c FROM cash_movements WHERE type='venta'").get().c === debitCashBefore + 1,
+  'un cargo exento cobrado en efectivo entra a la caja sin ITBIS');
+expectThrow(() => DB.saleCorrectionsRepo.createDebitNote({
+  saleId: dnNote.id, amount: 10, concept: 'Sobre nota', settlement: 'efectivo', reason: 'Nota sobre nota',
+  userId: admin.id, idempotencyKey: `debit-note-${dnNote.id}-nested-test`, session: { id: cashId },
+}), /otra nota de débito/, 'no se emite una nota de débito sobre otra nota de débito');
+expectThrow(() => DB.saleCorrectionsRepo.createDebitNote({
+  saleId: dnRoot.id, amount: 10, concept: 'Cargo', settlement: 'efectivo', reason: 'Cajero sin permiso',
+  userId: cashier.id, idempotencyKey: `debit-note-${dnRoot.id}-cashier-test`, session: { id: cashId },
+}), /Permiso requerido/, 'un cajero sin permiso no emite notas de débito');
+const walkIn = DB.salesRepo.getById(DB.salesRepo.create({
+  customer: { id: 1 },
+  items: [{ product_id: productId, product_code: 'COR-001', product_name: 'Producto corrección',
+    unit_cost: 60, unit_price: 118, taxable: 1, tax_pct: 18, qty: 1 }],
+  payment: { method: 'efectivo', saleDate: today }, session: { id: cashId }, user: admin, type: 'factura',
+}).saleId);
+const walkInModel = DB.saleCorrectionsRepo.debitNoteModel(walkIn.id, admin.id);
+ok(!walkInModel.canUseCredit && !walkInModel.fiscal.willIssueNcf,
+  'a Consumidor Final sin NCF: sin crédito y nota interna sin comprobante');
+expectThrow(() => DB.saleCorrectionsRepo.createDebitNote({
+  saleId: walkIn.id, amount: 50, concept: 'Cargo', settlement: 'credito', reason: 'Consumidor final a crédito',
+  userId: admin.id, idempotencyKey: `debit-note-${walkIn.id}-walkin-test`, session: { id: cashId },
+}), /Consumidor Final no tiene cuenta por cobrar/, 'Consumidor Final no puede llevar la nota a crédito');
+const internalNote = DB.salesRepo.getById(DB.saleCorrectionsRepo.createDebitNote({
+  saleId: walkIn.id, amount: 50, concept: 'Cargo de empaque', settlement: 'efectivo', reason: 'Empaque especial',
+  userId: admin.id, idempotencyKey: `debit-note-${walkIn.id}-internal-test`, session: { id: cashId },
+}).debitNoteId);
+ok(!internalNote.ncf && internalNote.document_kind === 'nota_debito',
+  'sobre una factura sin NCF la nota de débito sale como documento interno');
+const dnTemplateContext = {
+  facturaLabel: sale => sale.document_number_fmt || `#${sale.id}`,
+  facturaLabelOriginal: sale => `#${sale.original_sale_id || ''}`,
+};
+require('vm').runInNewContext(
+  `${fs.readFileSync(path.join(__dirname, '../src/js/plantillas.js'), 'utf8')}\n` +
+  'this.__render = { renderCartaRecibo, renderCartaNCF, renderTermica };',
+  dnTemplateContext
+);
+const dnPrintable = { ...DB.salesRepo.getById(dnNote.id), date: today };
+const dnCfg = { biz_name: 'Negocio QA', biz_rnc: '101010101', biz_addr: 'Santo Domingo', biz_phone: '8090000000' };
+const dnOpts = { logo: false, rnc: true, ncf: true, mensaje: false };
+const dnA4 = dnTemplateContext.__render.renderCartaRecibo(dnPrintable, dnCfg, dnOpts);
+const dnNcfSheet = dnTemplateContext.__render.renderCartaNCF(dnPrintable, dnCfg, dnOpts);
+const dnTicket = dnTemplateContext.__render.renderTermica(dnPrintable, dnCfg, dnOpts);
+ok(dnPrintable.modifies_ncf === dnRoot.ncf &&
+  dnA4.includes('NOTA DE DÉBITO') && dnA4.includes(`Modifica NCF: ${dnRoot.ncf}`) &&
+  dnNcfSheet.includes('Nota de Débito') && dnNcfSheet.includes(`Modifica NCF ${dnRoot.ncf}`) &&
+  dnTicket.includes('NOTA DE DÉBITO') && dnTicket.includes(`Modifica NCF: ${dnRoot.ncf}`),
+  'la nota de débito se imprime como tal, con su B03 y el NCF que modifica');
+
 console.log('\n== H. Integridad global ==');
 ok(db.prepare('SELECT COUNT(*) count FROM sales WHERE id=?').get(original.id).count === 1,
   'cambiar fecha no duplica la venta');
@@ -1053,6 +1157,39 @@ require('vm').runInNewContext('ventasConfirmPaymentMethodChange();', pmUiContext
 ok(pmSent && pmSent.id === 77 && pmSent.newMethod === 'transferencia' && pmSent.financialAccountId === 9 &&
   pmSent.expectedRevision === 2 && pmSent.idempotencyKey === 'payment-method:77:ui-test' && pmSent.cardBrand === '',
   'el formulario envía el método, la cuenta, la revisión y la clave de idempotencia');
+
+const dnUiStart = salesUiSource.indexOf('async function openVentaDebitNote(');
+const dnUiEnd = salesUiSource.indexOf('async function openVentaMonetaryCredit(', dnUiStart);
+const dnUiElements = {
+  'vdn-concept': { value: 'Flete' },
+  'vdn-amount': { value: '0' },
+  'vdn-taxable': { value: '1' },
+  'vdn-settlement': { value: 'credito' },
+  'vdn-bank': { value: '' },
+  'vdn-card-brand': { value: '' },
+  'vdn-reason': { value: 'Flete acordado luego' },
+};
+let dnToast = '';
+let dnSent = null;
+const dnUiContext = {
+  ...pmUiContext,
+  window: {
+    _ventaDebitNote: { model: { root: { id: 91 } }, idempotencyKey: 'debit-note:91:ui-test' },
+    api: { sales: { corrections: { createDebitNote: data => { dnSent = data; return new Promise(() => {}); } } } },
+  },
+  document: { getElementById: id => dnUiElements[id] || null },
+  toast: message => { dnToast = message; },
+  ventasRound2: value => Math.round(Number(value || 0) * 100) / 100,
+};
+require('vm').runInNewContext(
+  `const VENTAS_METHOD_LABELS = {};\n${salesUiSource.slice(dnUiStart, dnUiEnd)}\nventasConfirmDebitNote();`, dnUiContext
+);
+ok(/importe mayor que cero/i.test(dnToast) && dnSent === null, 'la nota de débito exige un importe');
+dnUiElements['vdn-amount'].value = '590';
+require('vm').runInNewContext('ventasConfirmDebitNote();', dnUiContext);
+ok(dnSent && dnSent.id === 91 && dnSent.amount === 590 && dnSent.taxable === true &&
+  dnSent.settlement === 'credito' && dnSent.concept === 'Flete' && dnSent.idempotencyKey === 'debit-note:91:ui-test',
+  'el formulario envía concepto, importe, ITBIS, forma de cobro y clave de idempotencia');
 
 try { db.close(); } catch {}
 try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}

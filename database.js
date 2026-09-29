@@ -2135,6 +2135,7 @@ const DOCUMENT_SEQUENCE_DEFAULTS = {
   factura_historica: { prefix: '', pad: 8 },
   cotizacion:      { prefix: 'COT', pad: 6 },
   nota_credito:    { prefix: 'NCR', pad: 6 },
+  nota_debito:     { prefix: 'NDB', pad: 6 },
   abono:           { prefix: 'ABO', pad: 6 },
   recibo:          { prefix: 'REC', pad: 6 },
   recibo_ingreso:  { prefix: 'RIN', pad: 6 },
@@ -5560,7 +5561,9 @@ const salesRepo = {
   // Transacción completa de venta
   create({
     session, customer, items, payment, user, type = 'factura',
-    trustedCustomerSnapshot = false, operationId = ''
+    trustedCustomerSnapshot = false, operationId = '',
+    // Solo lo usa el repositorio de correcciones; el IPC de ventas lo descarta.
+    debitNote = null,
   }) {
     operationId = normalizeOperationId(operationId);
     const operationFingerprint = operationId
@@ -5602,6 +5605,19 @@ const salesRepo = {
         : null;
       if (editQuoteId && (!editQuote || editQuote.type !== 'cotizacion')) {
         throw new Error('La cotización que estás modificando ya no existe o ya fue convertida en venta');
+      }
+      // Nota de débito: un cargo posterior sobre una factura emitida. Numera en
+      // su propia secuencia (NDB) y, si la factura tiene NCF, lleva un B03 que
+      // referencia ese comprobante.
+      const debitNoteOriginal = debitNote
+        ? db.prepare('SELECT * FROM sales WHERE id=?').get(Number(debitNote.originalSaleId))
+        : null;
+      if (debitNote) {
+        if (type !== 'factura') throw new Error('La nota de débito solo aplica a facturas');
+        if (!debitNoteOriginal || debitNoteOriginal.type !== 'factura' || debitNoteOriginal.status !== 'completed' ||
+            debitNoteOriginal.correction_kind === 'debit_note') {
+          throw new Error('La factura original no admite una nota de débito');
+        }
       }
       const sourceConduceId = type === 'factura'
         ? (Number(payment.sourceConduceId) || null)
@@ -6349,7 +6365,8 @@ const salesRepo = {
       const replacementSource = replacesSaleId
         ? db.prepare('SELECT document_kind FROM sales WHERE id=?').get(replacesSaleId)
         : null;
-      const documentKind = replacementSource?.document_kind || editQuote?.document_kind ||
+      const documentKind = debitNote ? 'nota_debito'
+        : replacementSource?.document_kind || editQuote?.document_kind ||
         documentKindForSale(type, method);
       const documentIssue = editQuote
         ? { sequence_number: editQuote.document_number, formatted_number: editQuote.document_number_fmt || '' }
@@ -6391,7 +6408,9 @@ const salesRepo = {
       // (nunca aparenta un comprobante inexistente).
       let ncf = '';
       const requestedNcfType = String(payment.ncfType || '').trim().toUpperCase();
-      const ncfType = /^B(01|02|04|14|15|16|17)$/.test(requestedNcfType) ? requestedNcfType : '';
+      const ncfType = debitNote
+        ? (String(debitNoteOriginal.ncf || '').trim() ? 'B03' : '')
+        : (/^B(01|02|04|14|15|16|17)$/.test(requestedNcfType) ? requestedNcfType : '');
       if (type === 'factura' && ncfType) {
         const fiscalOn = db.prepare("SELECT value FROM settings WHERE key='fiscal_enabled'").get()?.value === '1';
         if (fiscalOn) {
@@ -6409,8 +6428,8 @@ const salesRepo = {
           if (hasSequence) {
             const allocation = allocateNextNcfNumber(ncfType, saleId);
             ncf = allocation.ncf;
-            db.prepare("INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc) VALUES(?,?,?,?)")
-              .run(ncf, ncfType, saleId, customer.rnc || '');
+            db.prepare("INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc,modifies_ncf) VALUES(?,?,?,?,?)")
+              .run(ncf, ncfType, saleId, customer.rnc || '', debitNote ? String(debitNoteOriginal.ncf || '').trim() || null : null);
             if (allocation.remaining <= 50) {
               console.log('[NCF] ALERTA: quedan ' + allocation.remaining + ' comprobantes tipo ' + ncfType);
             }
@@ -6425,6 +6444,11 @@ const salesRepo = {
               ' — factura #' + saleId + ' sale sin NCF. Registra el rango en el Panel NCF.');
           }
         }
+      }
+      if (debitNote) {
+        db.prepare(`
+          UPDATE sales SET correction_kind='debit_note',original_sale_id=? WHERE id=?
+        `).run(debitNoteOriginal.id, saleId);
       }
 
       // 5. Insertar items con snapshot (product_unit_id enlaza la unidad vendida
@@ -6824,7 +6848,9 @@ const salesRepo = {
                old_id_factura,import_source
         FROM sales WHERE id=?
       `).get(sale.original_sale_id);
-      if (sale.type === 'devolucion') sale.modifies_ncf = (orig && orig.ncf) ? orig.ncf : '';
+      if (sale.type === 'devolucion' || sale.correction_kind === 'debit_note') {
+        sale.modifies_ncf = (orig && orig.ncf) ? orig.ncf : '';
+      }
       sale.original_document_number_fmt = orig ? orig.document_number_fmt : '';
       sale.original_document_kind       = orig ? orig.document_kind       : '';
       sale.original_numero_factura     = orig ? orig.numero_factura     : null;
@@ -7567,6 +7593,13 @@ const salesRepo = {
     if (sale.status === 'returned')  throw new Error('No se puede anular una venta con devolución procesada');
     // SEGURIDAD: solo facturas y ventas de crédito pueden anularse
     if (sale.type === 'cotizacion') throw new Error('Las cotizaciones no se anulan — elimínalas directamente');
+    const activeDebitNote = db.prepare(`
+      SELECT document_number_fmt FROM sales
+      WHERE original_sale_id=? AND correction_kind='debit_note' AND status!='cancelled' LIMIT 1
+    `).get(id);
+    if (activeDebitNote) {
+      throw new Error(`Anula primero la nota de débito ${activeDebitNote.document_number_fmt || ''} de esta factura`.trim());
+    }
     const applications = salePaymentApplications(id);
     const appliedTotal = round2(applications.reduce(
       (sum, row) => sum + Number(row.applied_amount || 0), 0

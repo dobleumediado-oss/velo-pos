@@ -50,12 +50,14 @@ function facturaLabel(o, fallbackRef) {
 
 function documentTypeLabel(o) {
   if (o?.correction_kind === 'product_addition') return 'Documento de aumento';
+  if (o?.correction_kind === 'debit_note') return 'Nota de débito';
   const kind = o?.document_kind || '';
   const byKind = {
     factura_contado: 'Factura al contado',
     factura_credito: 'Factura a crédito',
     cotizacion: 'Cotización',
     nota_credito: 'Nota de crédito',
+    nota_debito: 'Nota de débito',
     abono: 'Abono',
     recibo: 'Recibo',
     pago_proveedor: 'Pago a proveedor',

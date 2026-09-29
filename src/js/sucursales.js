@@ -555,6 +555,7 @@ function modalNuevaSecuencia(parentEl) {
   const tipos = [
     { code:'B01', label:'B01 — Crédito Fiscal' },
     { code:'B02', label:'B02 — Consumidor Final' },
+    { code:'B03', label:'B03 — Nota de Débito (cargos posteriores)' },
     { code:'B04', label:'B04 — Nota de Crédito (devoluciones)' },
     { code:'B14', label:'B14 — Régimen Especial' },
     { code:'B15', label:'B15 — Gubernamental' },
@@ -792,7 +793,7 @@ function modalValidarRNC() {
 // imprimible en tamaño carta (vía printHTML, que ya maneja el formato de reporte).
 function modalReporteNCF() {
   const esc = (v) => String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  const TIPO_LBL = { B01:'Crédito Fiscal', B02:'Consumidor Final', B04:'Nota de Crédito',
+  const TIPO_LBL = { B01:'Crédito Fiscal', B02:'Consumidor Final', B03:'Nota de Débito', B04:'Nota de Crédito',
                      B14:'Régimen Especial', B15:'Gubernamental', B16:'Exportación' };
   const now = new Date(), y = now.getFullYear(), mo = now.getMonth();
   const pad = n => String(n).padStart(2,'0');

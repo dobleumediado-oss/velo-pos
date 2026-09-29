@@ -412,7 +412,7 @@ function createSaleCorrectionsRepo({
     const related = db().prepare(`
       SELECT COUNT(*) count FROM sales
       WHERE original_sale_id=? AND status!='cancelled'
-        AND (type='devolucion' OR correction_kind='product_addition')
+        AND (type='devolucion' OR correction_kind IN ('product_addition','debit_note'))
     `).get(root.id);
     if (Number(related?.count || 0) > 0) reasons.push('HAS_COMPENSATING_DOCUMENT');
     const serialized = db().prepare(`
@@ -2162,6 +2162,182 @@ function createSaleCorrectionsRepo({
     })();
   }
 
+  // ── Nota de débito / cargo posterior ─────────────────────────────────────
+  // Cobra un monto adicional sobre una factura emitida sin alterarla: nace un
+  // documento propio (NDB) con B03 cuando la factura tiene NCF, que se cobra al
+  // momento o queda en la cuenta del cliente.
+  const DEBIT_SETTLEMENTS = ['credito', 'efectivo', 'tarjeta', 'transferencia'];
+
+  function _debitNoteFiscal(root) {
+    if (!String(root.ncf || '').trim()) {
+      return { ncfType: '', willIssueNcf: false, message: 'La factura no tiene NCF: la nota de débito saldrá como documento interno.' };
+    }
+    const fiscalOn = db().prepare("SELECT value FROM settings WHERE key='fiscal_enabled'").get()?.value === '1';
+    const hasSequence = fiscalOn && _tableExists(db(), 'ncf_sequences') && !!db().prepare(`
+      SELECT 1 FROM ncf_sequences
+      WHERE type='B03' AND active=1 AND current<to_num
+        AND (expiry_date IS NULL OR TRIM(expiry_date)='' OR date(expiry_date)>=date('now','localtime'))
+      LIMIT 1
+    `).get();
+    return hasSequence
+      ? { ncfType: 'B03', willIssueNcf: true, message: `Se emitirá un B03 que modifica el NCF ${root.ncf}.` }
+      : { ncfType: 'B03', willIssueNcf: false, message: 'No hay un rango B03 vigente en el Panel NCF: la nota saldrá sin NCF. Registra el rango antes de emitirla si el cliente necesita el comprobante.' };
+  }
+
+  function debitNoteModel(saleId, userId) {
+    const user = userById(userId);
+    if (!user) throw new Error('Usuario no encontrado');
+    requirePermission(user, 'sales.correct');
+    requirePermission(user, 'sales.issue_debit_note');
+    const root = db().prepare('SELECT * FROM sales WHERE id=?').get(Number(saleId));
+    if (!root) throw new Error('Factura no encontrada');
+    if (root.type !== 'factura' || root.status !== 'completed') {
+      throw new Error('La nota de débito solo se emite sobre una factura activa');
+    }
+    if (root.correction_kind === 'debit_note') throw new Error('No se emite una nota de débito sobre otra nota de débito');
+    if (ecfState(root.id)) {
+      throw new Error('Esta factura es un e-CF: la nota de débito electrónica (e33) debe emitirse desde el proveedor fiscal');
+    }
+    const previous = db().prepare(`
+      SELECT id,document_number_fmt,ncf,total,created_at FROM sales
+      WHERE original_sale_id=? AND correction_kind='debit_note' AND status!='cancelled'
+      ORDER BY id
+    `).all(root.id);
+    const accounts = _tableExists(db(), 'financial_accounts')
+      ? db().prepare(`
+          SELECT id,name,type,bank_name,currency FROM financial_accounts
+          WHERE active=1 AND type IN ('banco','tarjeta') AND UPPER(COALESCE(currency,'DOP'))='DOP'
+          ORDER BY type,name
+        `).all()
+      : [];
+    const defaultTaxPct = Number(db().prepare(`
+      SELECT COALESCE(MAX(tax_pct),0) pct FROM sale_items WHERE sale_id=? AND COALESCE(taxable,1)=1
+    `).get(root.id)?.pct || 0);
+    return {
+      root: { ...root, administrative_data: _json(root.administrative_data, {}) },
+      fiscal: _debitNoteFiscal(root),
+      previous,
+      accounts,
+      defaultTaxPct,
+      canUseCredit: Number(root.customer_id || 1) !== 1,
+      settlements: DEBIT_SETTLEMENTS,
+    };
+  }
+
+  function createDebitNote({
+    saleId, amount, concept, taxable = true, settlement, financialAccountId,
+    cardBrand, cardLast4, reference, reason, userId, idempotencyKey, terminalId, session,
+  }) {
+    if (!salesRepo) throw new Error('El servicio de ventas no está disponible');
+    const requester = userById(userId);
+    if (!requester) throw new Error('Usuario no encontrado');
+    requirePermission(requester, 'sales.correct');
+    requirePermission(requester, 'sales.issue_debit_note');
+    const cleanReason = String(reason || '').trim().replace(/\s+/g, ' ').slice(0, 500);
+    if (cleanReason.length < 5) throw new Error('El motivo es obligatorio y debe ser específico');
+    const cleanConcept = String(concept || '').trim().replace(/\s+/g, ' ').slice(0, 120);
+    if (cleanConcept.length < 3) throw new Error('Indica el concepto del cargo');
+    const debitAmount = round2(amount);
+    if (!(debitAmount > 0) || debitAmount > 99999999) throw new Error('El importe de la nota de débito debe ser mayor que cero');
+    const method = String(settlement || '').toLowerCase();
+    if (!DEBIT_SETTLEMENTS.includes(method)) throw new Error('Indica cómo se cobra la nota de débito');
+    const key = String(idempotencyKey || '').trim().slice(0, 120);
+    if (key.length < 12) throw new Error('Clave de idempotencia inválida');
+
+    const previousResult = row => ({ idempotent: true, correctionId: row.id, ..._json(row.metadata, {}) });
+    const earlier = db().prepare('SELECT * FROM sale_corrections WHERE idempotency_key=?').get(key);
+    if (earlier) {
+      if (earlier.action !== 'create_debit_note' || Number(earlier.sale_id) !== Number(saleId)) {
+        throw new Error('La clave de idempotencia ya fue utilizada para otra operación');
+      }
+      return previousResult(earlier);
+    }
+
+    const model = debitNoteModel(saleId, requester.id);
+    const root = model.root;
+    if (method === 'credito' && !model.canUseCredit) {
+      throw new Error('Consumidor Final no tiene cuenta por cobrar: cobra la nota de débito al momento');
+    }
+    if (method !== 'credito' && !session?.id) throw new Error('Abre la caja antes de cobrar la nota de débito');
+    const taxPct = taxable ? (model.defaultTaxPct > 0 ? model.defaultTaxPct : 18) : 0;
+
+    return db().transaction(() => {
+      const duplicate = db().prepare('SELECT * FROM sale_corrections WHERE idempotency_key=?').get(key);
+      if (duplicate) return previousResult(duplicate);
+
+      const created = salesRepo.create({
+        session: method === 'credito' ? (session || null) : session,
+        customer: {
+          id: root.customer_id || 1,
+          name: root.customer_name, rnc: root.customer_rnc || '',
+          phone: root.customer_phone || '', phone_type: root.customer_phone_type || 'telefono',
+          address: root.customer_address || '', email: root.customer_email || '',
+        },
+        items: [{
+          kind: 'service', non_stock: true, product_id: null,
+          product_code: 'ND', product_name: `Nota de débito · ${cleanConcept}`,
+          unit_cost: 0, unit_price: debitAmount, qty: 1,
+          taxable: taxPct > 0 ? 1 : 0, tax_pct: taxPct,
+        }],
+        payment: {
+          method,
+          financialAccountId: method === 'transferencia' ? financialAccountId : null,
+          cardBrand: method === 'tarjeta' ? String(cardBrand || '').trim() : '',
+          cardLast4: method === 'tarjeta' ? String(cardLast4 || '').replace(/\D/g, '').slice(-4) : '',
+          reference: String(reference || '').trim().slice(0, 120),
+          notes: `Nota de débito de ${root.document_number_fmt || root.numero_factura_fmt || '#' + root.id}: ${cleanReason}`,
+          salespersonId: root.salesperson_id || null,
+          priceMode: root.price_mode || 'retail',
+        },
+        user: { id: requester.id, name: requester.name, role: requester.role },
+        type: 'factura',
+        debitNote: { originalSaleId: root.id },
+      });
+
+      const note = db().prepare('SELECT * FROM sales WHERE id=?').get(created.saleId);
+      db().prepare(`
+        UPDATE sales SET revision=revision+1,updated_at=datetime('now','localtime') WHERE id=?
+      `).run(root.id);
+      const updated = db().prepare('SELECT * FROM sales WHERE id=?').get(root.id);
+      const metadata = {
+        debitNoteId: Number(note.id),
+        debitNoteNumber: note.document_number_fmt || '',
+        debitNoteNcf: note.ncf || '',
+        debitTotal: Number(note.total || debitAmount),
+        taxAmount: Number(note.tax_amt || 0),
+        settlement: method,
+        concept: cleanConcept,
+        originalFiscalDocumentPreserved: true,
+      };
+      const correction = db().prepare(`
+        INSERT INTO sale_corrections(
+          sale_id,action,status,reason,requested_by,authorized_by,cash_session_id,
+          terminal_id,idempotency_key,before_data,after_data,affected_modules,metadata
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+      `).run(
+        root.id, 'create_debit_note', 'applied', cleanReason,
+        requester.id, requester.id, session?.id || null,
+        String(terminalId || '').slice(0, 120), key,
+        _serialize(_snapshot(root)), _serialize(_snapshot(updated)),
+        _serialize(['sales', method === 'credito' ? 'accounts_receivable' : 'cash', 'accounting', 'fiscal', 'reports']),
+        _serialize(metadata)
+      );
+      const correctionId = Number(correction.lastInsertRowid);
+      db().prepare(`
+        INSERT INTO sale_correction_documents(correction_id,sale_id,document_role)
+        VALUES(?,?,'supplemental_invoice')
+      `).run(correctionId, note.id);
+      db().prepare(`
+        INSERT INTO audit_logs(user_id,user_name,action,entity,entity_id,detail,created_at)
+        VALUES(?,?,?,?,?,?,datetime('now','localtime'))
+      `).run(
+        requester.id, requester.name, 'nota_debito_emitida', 'sales', root.id,
+        _serialize({ correctionId, reason: cleanReason, ...metadata })
+      );
+      return { idempotent: false, correctionId, ...metadata, sale: created };
+    })();
+  }
+
   function history(saleId, userId) {
     const user = userById(userId);
     if (!user) throw new Error('Usuario no encontrado');
@@ -2274,6 +2450,8 @@ function createSaleCorrectionsRepo({
     createMonetaryCredit,
     paymentMethodChangeModel,
     changePaymentMethod,
+    debitNoteModel,
+    createDebitNote,
     history,
   };
 }

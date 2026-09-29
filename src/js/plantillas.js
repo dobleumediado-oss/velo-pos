@@ -223,6 +223,12 @@ function _getNcf(sale) {
   return (sale.ncf && sale.ncf.trim()) ? sale.ncf.trim() : '';
 }
 
+// Una nota de débito (B03) debe mostrar el NCF de la factura que modifica.
+function _modNcfSuffix(sale) {
+  const modified = String(sale?.modifies_ncf || '').trim();
+  return sale?.correction_kind === 'debit_note' && modified ? ` · Modifica NCF: ${_esc(modified)}` : '';
+}
+
 // Etiqueta del tipo de documento
 function _isExpensePayment(sale) {
   const type = String(sale?.type || sale?.document_kind || '').toLowerCase();
@@ -241,6 +247,7 @@ function _docLabel(sale) {
   if (sale.type === 'pago_proveedor') return 'RECIBO DE PAGO A PROVEEDOR';
   if (sale.type === 'cotizacion') return 'COTIZACIÓN';
   if (sale.type === 'devolucion') return 'NOTA DE CRÉDITO';
+  if (sale.correction_kind === 'debit_note') return 'NOTA DE DÉBITO';
   if (sale.type === 'factura')    return 'FACTURA';
   return 'RECIBO DE COMPRA';
 }
@@ -748,6 +755,7 @@ function _tipoFacturacion(sale) {
 
 // Título dinámico del documento A4
 function _a4DocTitle(sale) {
+  if (sale.correction_kind === 'debit_note') return 'NOTA DE DÉBITO';
   switch (sale.type) {
     case 'pago_gasto_externo': return 'RECIBO DE PAGO DE GASTO';
     case 'pago_proveedor': return 'RECIBO DE PAGO A PROVEEDOR';
@@ -926,7 +934,7 @@ function renderTermica(sale, cfg, opts, widthMm = 76) {
   ${_showNcf(sale, opts) ? `
   <div class="sep">${sep}</div>
   <div style="text-align:center">Documento con validez fiscal</div>
-  <div style="text-align:center;font-weight:700">NCF: ${ncf}</div>` : ''}
+  <div style="text-align:center;font-weight:700">NCF: ${ncf}${_modNcfSuffix(sale)}</div>` : ''}
   ${opts.mensaje && cfg.receipt_msg ? `
   <div class="sep">${sep}</div>
   <div style="text-align:center">${cfg.receipt_msg}</div>
@@ -1010,7 +1018,7 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
   ${sale.mix_efec > 0 ? `<div class="row"><span style="padding-left:8px">Efectivo:</span><span>RD$${Number(sale.mix_efec).toLocaleString('es-DO')}</span></div>` : ''}
   ${sale.mix_card > 0 ? `<div class="row"><span style="padding-left:8px">Tarjeta/Trans.:</span><span>RD$${Number(sale.mix_card).toLocaleString('es-DO')}</span></div>` : ''}
   ` : `<div class="row"><span>Forma de pago:</span><span>${_esc(_pagoResumenTexto(sale))}</span></div>`}
-  ${_showNcf(sale, opts) ? `<hr class="sep"/><div class="center" style="font-size:10px">Documento con validez fiscal</div><div class="center" style="font-size:10px;font-weight:700">NCF: ${ncf}</div>` : ''}
+  ${_showNcf(sale, opts) ? `<hr class="sep"/><div class="center" style="font-size:10px">Documento con validez fiscal</div><div class="center" style="font-size:10px;font-weight:700">NCF: ${ncf}${_modNcfSuffix(sale)}</div>` : ''}
   ${opts.mensaje && cfg.receipt_msg && !isCotizacion ? `<hr class="sep"/><div class="center">${cfg.receipt_msg}</div>` : ''}
   <hr class="sep"/>
 </body></html>`;
@@ -1047,7 +1055,7 @@ function renderTermicaMinimal(sale, cfg, opts, widthMm = 76) {
   </div>
   ${String(sale.display_currency || '').toUpperCase() === 'USD' && Number(sale.display_exchange_rate) > 0
     ? `<div style="display:flex;justify-content:space-between;font-size:9px"><span>Equiv. USD</span><strong>US$${Number(sale.display_amount || (Number(sale.total || 0) / Number(sale.display_exchange_rate))).toFixed(2)}</strong></div>` : ''}
-  ${_showNcf(sale, opts) ? `<div style="border-top:1px dashed #000;margin:3px 0"></div><div style="text-align:center;font-size:9px">NCF: ${ncf}</div>` : ''}
+  ${_showNcf(sale, opts) ? `<div style="border-top:1px dashed #000;margin:3px 0"></div><div style="text-align:center;font-size:9px">NCF: ${ncf}${_modNcfSuffix(sale)}</div>` : ''}
   <div style="text-align:center;font-size:9px;margin-top:3px">${_esc(_pagoResumenTexto(sale))} · ${isCotizacion ? 'Cotización sin valor fiscal' : 'Gracias'}</div>
 </body></html>`;
 }
@@ -1131,7 +1139,7 @@ function renderCartaRecibo(sale, cfg, opts) {
   // ── Franja modular de campos condicionales ──────────
   const cells = [];
   if (_showNcf(sale, opts)) {
-    cells.push(`<div class="cell"><span class="ic">${_a4ic('doc')}</span><div><div class="k">Comprobante fiscal</div><div class="v">${_esc(_tipoComprobante(ncf))}</div><div class="v" style="margin-top:2px"><small>NCF: ${_esc(ncf)}</small></div></div></div>`);
+    cells.push(`<div class="cell"><span class="ic">${_a4ic('doc')}</span><div><div class="k">Comprobante fiscal</div><div class="v">${_esc(_tipoComprobante(ncf))}</div><div class="v" style="margin-top:2px"><small>NCF: ${_esc(ncf)}${_modNcfSuffix(sale)}</small></div></div></div>`);
   }
   if (showMoney && !isCotizacion) {
     cells.push(`<div class="cell"><span class="ic">${_a4ic('card')}</span><div><div class="k">${isExpensePayment ? 'Tipo de documento' : 'Tipo de facturación'}</div><div class="v">${_tipoFacturacion(sale)}</div></div></div>`);
@@ -1630,7 +1638,7 @@ function renderCartaFormal(sale, cfg, opts) {
   ${Number(sale.prepaid_amount || 0) > 0 ? `<div style="margin-top:8px;font-size:10px;color:#444;background:#eff6ff;padding:7px 9px;border-radius:4px"><strong>Anticipo aplicado:</strong> RD$${_n2(sale.prepaid_amount)} recibido previamente. ${_esc(sale.prepaid_reference||'')}</div>` : ''}
 
   ${isDevolucion && sale.original_sale_id ? `<div style="margin-top:8px;font-size:11px;color:#555">Ref. venta original: ${facturaLabelOriginal(sale)}</div>` : ''}
-  ${_showNcf(sale, opts) ? `<div style="margin-top:10px;font-size:11px;background:#fef9c3;padding:6px 10px;border-radius:4px">NCF: <strong>${ncf}</strong> · Documento con validez fiscal</div>` : ''}
+  ${_showNcf(sale, opts) ? `<div style="margin-top:10px;font-size:11px;background:#fef9c3;padding:6px 10px;border-radius:4px">NCF: <strong>${ncf}</strong>${_modNcfSuffix(sale)} · Documento con validez fiscal</div>` : ''}
   ${isCotizacion ? `<div style="margin-top:8px;font-size:11px;color:#888;font-style:italic;padding:6px 10px;background:#f9fafb;border-radius:4px">Esta cotización no tiene valor fiscal.</div>` : ''}
   ${opts.mensaje && cfg.receipt_msg && !isCotizacion ? `<div style="margin-top:12px;text-align:center;font-size:11px;color:#666">${cfg.receipt_msg}</div>` : ''}
 </body></html>`;
@@ -1709,9 +1717,9 @@ function renderCartaNCF(sale, cfg, opts) {
          <div style="font-size:9px;color:#888;text-transform:uppercase">Sin valor fiscal · ${sale.date}</div>
        </div>`
     : `<div class="ncf-box">
-         <div class="ncf-label">${isDevolucion ? 'Nota de Crédito' : 'Número de Comprobante Fiscal'}</div>
+         <div class="ncf-label">${isDevolucion ? 'Nota de Crédito' : sale.correction_kind === 'debit_note' ? 'Nota de Débito' : 'Número de Comprobante Fiscal'}</div>
          <div class="ncf-num">${ncf || '—'}</div>
-         <div class="ncf-label">Factura con Valor Fiscal · ${sale.date}</div>
+         <div class="ncf-label">${sale.correction_kind === 'debit_note' ? `Modifica NCF ${_esc(sale.modifies_ncf || '—')}` : 'Factura con Valor Fiscal'} · ${sale.date}</div>
        </div>`
   }
 
@@ -1841,7 +1849,7 @@ function renderMediaCarta(sale, cfg, opts) {
     ${String(sale.display_currency || '').toUpperCase() === 'USD' && Number(sale.display_exchange_rate) > 0
       ? `<tr><td style="padding:3px">Equiv. USD</td><td style="text-align:right;padding:3px"><strong>US$${Number(sale.display_amount || (Number(sale.total || 0) / Number(sale.display_exchange_rate))).toFixed(2)}</strong></td></tr>` : ''}
   </table>
-  ${_showNcf(sale, opts) ? `<div style="font-size:9px;color:#555;margin-top:4px">NCF: ${ncf}</div>` : ''}
+  ${_showNcf(sale, opts) ? `<div style="font-size:9px;color:#555;margin-top:4px">NCF: ${ncf}${_modNcfSuffix(sale)}</div>` : ''}
   ${isCotizacion ? `<div style="font-size:9px;color:#888;font-style:italic;margin-top:2px">Sin valor fiscal</div>` : ''}
   <div style="text-align:center;font-size:9px;color:#666;margin-top:6px">
     ${_esc(_pagoResumenTexto(sale))} · ${opts.mensaje && cfg.receipt_msg && !isCotizacion ? cfg.receipt_msg : 'Gracias por su compra'}

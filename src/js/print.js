@@ -648,6 +648,9 @@ function printReceipt(sale, isReprint = false) {
       notes: sale.adjusted_copy ? '' : (sale.notes || ''),
       // NCF real de la venta — nunca inventar uno
       ncf:           sale.ncf || '',
+      // Nota de crédito/débito: el NCF que modifica y el tipo de documento.
+      modifies_ncf:    sale.modifies_ncf || '',
+      correction_kind: sale.correction_kind || '',
       // Pago mixto
       mix_efec:      sale.mix_efec || 0,
       mix_card:      sale.mix_card || 0,
@@ -734,6 +737,7 @@ function printReceipt(sale, isReprint = false) {
   if (isFactura)    docLabel = '*** FACTURA ***';
   if (isCotizacion) docLabel = '*** COTIZACIÓN ***';
   if (isDevolucion) docLabel = '*** NOTA DE CRÉDITO ***';
+  if (sale.correction_kind === 'debit_note') docLabel = '*** NOTA DE DÉBITO ***';
   lines.push(tCenter(docLabel));
   if (isReprint)    lines.push(tCenter('--- REIMPRESIÓN ---'));
   // Los datos de ajuste y documentos relacionados se consultan únicamente en
@@ -834,6 +838,9 @@ function printReceipt(sale, isReprint = false) {
     lines.push('');
     lines.push(tCenter('Documento con validez fiscal'));
     lines.push(tCenter(`NCF: ${sale.ncf}`));
+    if (sale.correction_kind === 'debit_note' && sale.modifies_ncf) {
+      lines.push(tCenter(`Modifica NCF: ${sale.modifies_ncf}`));
+    }
   }
 
   if (isDevolucion) {

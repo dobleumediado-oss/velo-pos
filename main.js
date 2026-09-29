@@ -3190,7 +3190,9 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
       };
     }
 
-    const result = salesRepo.create({ ...saleData, user: reqUser });
+    // La nota de débito solo nace del flujo de correcciones, con sus permisos.
+    const { debitNote: _ignoredDebitNote, ...posSaleData } = saleData || {};
+    const result = salesRepo.create({ ...posSaleData, user: reqUser });
     if (!result.idempotent && priceApproval?.token) _privAuthTokens.delete(priceApproval.token);
     if (!result.idempotent && discountApproval?.token) _privAuthTokens.delete(discountApproval.token);
     if (!result.idempotent && creditLimitApproval?.token) _privAuthTokens.delete(creditLimitApproval.token);
@@ -3639,6 +3641,48 @@ ipcMain.handle('sales:corrections:changePaymentMethod', async (_, data = {}) => 
     return { ok: true, ...result };
   } catch (e) {
     console.error('[sales:corrections:changePaymentMethod]', e);
+    return { ok: false, error: e.message, code: e.code || 'VALIDATION_ERROR' };
+  }
+});
+
+ipcMain.handle('sales:corrections:getDebitNoteModel', async (_, { id, requestUserId } = {}) => {
+  try {
+    return { ok: true, data: saleCorrectionsRepo.debitNoteModel(id, requestUserId) };
+  } catch (e) {
+    return { ok: false, error: e.message, code: e.code || 'VALIDATION_ERROR' };
+  }
+});
+
+ipcMain.handle('sales:corrections:createDebitNote', async (_, data = {}) => {
+  try {
+    const reqUser = authRepo.findById(data.requestUserId);
+    if (!reqUser) return { ok: false, error: 'Usuario no válido' };
+    const session = cashRepo.getOpen(_reqTerminalId());
+    const result = saleCorrectionsRepo.createDebitNote({
+      saleId: data.id,
+      amount: data.amount,
+      concept: data.concept,
+      taxable: data.taxable !== false,
+      settlement: data.settlement,
+      financialAccountId: data.financialAccountId,
+      cardBrand: data.cardBrand,
+      cardLast4: data.cardLast4,
+      reference: data.reference,
+      reason: data.reason,
+      userId: data.requestUserId,
+      idempotencyKey: data.idempotencyKey,
+      terminalId: data.terminalId || _reqTerminalId(),
+      session,
+    });
+    if (!result.idempotent && result.debitNoteId) {
+      _acctHook(() => accountingRepo.generateSaleEntry({
+        saleId: result.debitNoteId,
+        userId: data.requestUserId,
+      }));
+    }
+    return { ok: true, ...result };
+  } catch (e) {
+    console.error('[sales:corrections:createDebitNote]', e);
     return { ok: false, error: e.message, code: e.code || 'VALIDATION_ERROR' };
   }
 });
