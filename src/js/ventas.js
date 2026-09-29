@@ -2279,6 +2279,9 @@ async function openAnulacionModal(ref) {
   }
   const activePayments = cancellationOptions?.payments || [];
   const canRegisterAgain = !isReturn && ventaPuedeReutilizarNumero(s);
+  // Con NCF (no e-CF) también puede rehacerse, conservando su comprobante.
+  const canReissueWithNcf = !isReturn && s.type === 'factura' && !!String(s.ncf || '').trim() &&
+    !String(s.ecf_status || '').trim() && ['admin', 'superadmin'].includes(user?.role);
   const paidAmount = Number(cancellationOptions?.paymentAmount || 0);
   const cancellationOperationId = activePayments.length
     ? ventasCorrectionKey('cancel-payments', s.id) : '';
@@ -2371,11 +2374,16 @@ async function openAnulacionModal(ref) {
           >
           ${svg('receipt')} Anular y registrar nuevamente
         </button>` : ''}
+      ${canReissueWithNcf ? `
+        <button class="btn btn-dark" onclick="confirmarAnulacion(${s.id},false,true)"
+          title="Anula la factura y la abre en el POS para corregirla con su mismo comprobante ${ventasEsc(s.ncf)}">
+          ${svg('return')} Anular y registrar con el mismo NCF
+        </button>` : ''}
     </div>
   `);
 }
 
-async function confirmarAnulacion(saleId, registerAgain = false) {
+async function confirmarAnulacion(saleId, registerAgain = false, reissueWithNcf = false) {
   if (window._veloSaleCancellationPending) return;
   const targetSale = (DB.sales || []).find(row => Number(row.id) === Number(saleId))
     || (Number(_ventasAnulacionSale?.id) === Number(saleId) ? _ventasAnulacionSale : null);
@@ -2407,6 +2415,10 @@ async function confirmarAnulacion(saleId, registerAgain = false) {
 
   // Reutilizar el NCF solo si el operador lo confirmó (comprobante no entregado/reportado).
   const reuseNcf = !!document.getElementById('anul-reuse-ncf')?.checked;
+  if (reissueWithNcf && reuseNcf) {
+    toast('Para registrarla con el mismo NCF, desmarca "Reutilizar el comprobante": ese NCF lo tomará la factura corregida', 'w');
+    return;
+  }
 
   window._veloSaleCancellationPending = true;
   const modalButtons = [...document.querySelectorAll('.modal-foot button')];
@@ -2460,6 +2472,21 @@ async function confirmarAnulacion(saleId, registerAgain = false) {
         ? 'anotado a favor del cliente'
         : 'anulado junto con el recibo';
     toast(`✓ ${fmt(result.paymentAmount)} ${destination}`);
+  }
+  if (reissueWithNcf && !result.isReturn) {
+    ventasRefreshAfterMutation({
+      range: ventasRange, view: 'sales', products: true,
+      customers: Number(result.paymentAmount || 0) > 0,
+      payments: Number(result.paymentAmount || 0) > 0,
+    });
+    const reissue = await window.api.sales.reuseNcfModel({ id: saleId, requestUserId: user.id }).catch(() => null);
+    if (reissue?.ok && reissue.data?.eligible) {
+      ventasOpenReuseNcfInPOS(reissue.data, reason);
+    } else {
+      toast(reissue?.data?.reasons?.[0] || reissue?.error ||
+        'La factura quedó anulada, pero no se pudo abrir con su NCF', 'w');
+    }
+    return;
   }
   if (registerAgain && replacementSource) {
     window._pendingPOSResaleCart = {
@@ -2934,7 +2961,13 @@ function ventasStartReuseNcf() {
   if (!state?.model) return;
   const reason = document.getElementById('vrn-reason')?.value?.trim() || '';
   if (reason.length < 5) return toast('Escribe un motivo específico', 'w');
-  const model = state.model;
+  window._ventaReuseNcf = null;
+  closeModal();
+  ventasOpenReuseNcfInPOS(state.model, reason);
+}
+
+// Abre en el POS una factura anulada para emitirla otra vez con su mismo NCF.
+function ventasOpenReuseNcfInPOS(model, reason) {
   const sale = model.sale;
   const account = DB.customers.find(c => c.id === sale.customer_id);
   const payload = {
@@ -2978,9 +3011,7 @@ function ventasStartReuseNcf() {
       };
     }),
   };
-  window._ventaReuseNcf = null;
   window._pendingPOSResaleCart = payload;
-  closeModal();
   routeTo('pos');
   setTimeout(() => {
     if (window._pendingPOSResaleCart === payload && typeof window.posLoadResaleCart === 'function' &&

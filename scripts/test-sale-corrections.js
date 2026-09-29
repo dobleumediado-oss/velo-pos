@@ -1392,6 +1392,32 @@ ok(dnSent && dnSent.id === 91 && dnSent.amount === 590 && dnSent.taxable === tru
   dnSent.settlement === 'credito' && dnSent.concept === 'Flete' && dnSent.idempotencyKey === 'debit-note:91:ui-test',
   'el formulario envía concepto, importe, ITBIS, forma de cobro y clave de idempotencia');
 
+const reissueStart = salesUiSource.indexOf('function ventasOpenReuseNcfInPOS(');
+const reissueEnd = salesUiSource.indexOf('\n}\n', reissueStart) + 3;
+let reissueRoute = '';
+const reissueContext = {
+  window: {}, DB: { customers: [{ id: 6, name: 'JULIAN GARCIA ESCAÑO', rnc: '05600449689' }] },
+  facturaLabel: sale => sale.numero_factura_fmt, today: () => '2026-09-29',
+  ventasRound2: value => Math.round(Number(value || 0) * 100) / 100,
+  ventasTaxable: () => true, ventasTaxPct: () => 18,
+  routeTo: page => { reissueRoute = page; }, setTimeout: () => {}, document: { getElementById: () => null },
+};
+require('vm').runInNewContext(`${salesUiSource.slice(reissueStart, reissueEnd)}
+ventasOpenReuseNcfInPOS({
+  sale: { id: 2132, customer_id: 6, numero_factura_fmt: '00000041', payment_method: 'credito', sale_date: '2025-07-21', discount_pct: 0 },
+  ncf: 'B0200000041', ncfType: 'B02', favorAmount: 200000, charges: [],
+  items: [{ product_id: 5, product_name: 'Repuesto', unit_price: 1000, qty: 2 }],
+}, 'Error de tasa');`, reissueContext);
+const reissuePayload = reissueContext.window._pendingPOSResaleCart;
+ok(reissueRoute === 'pos' && reissuePayload.reuseNcfOfSaleId === 2132 && reissuePayload.reuseNcf === 'B0200000041' &&
+  reissuePayload.ncfType === 'B02' && reissuePayload.reuseNcfReason === 'Error de tasa' &&
+  reissuePayload.saleDate === '2025-07-21' && reissuePayload.paymentMethod === 'credito' &&
+  reissuePayload.customer.id === 6 && reissuePayload.items[0].qty === 2,
+  'anular y registrar con el mismo NCF abre el POS con la misma factura, cliente, fecha y comprobante');
+ok(salesUiSource.includes('Anular y registrar con el mismo NCF') &&
+  salesUiSource.includes('confirmarAnulacion(${s.id},false,true)'),
+  'la ventana de anulación ofrece el botón para facturas con NCF');
+
 try { db.close(); } catch {}
 try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
 console.log(`\n== RESULTADO: ${pass} OK, ${fail} fallos ==`);
