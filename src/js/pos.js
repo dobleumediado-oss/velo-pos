@@ -813,7 +813,7 @@ function renderCart() {
 
   const inv = currentInv();
   const checkoutLocked = !!inv.checkoutOrderId;
-  const { subtotal, itbis, total, disc, discAmt, chargesTotal, offerPlan } = calcTotals(inv);
+  const { subtotal, itbis, total, disc, discAmt, chargesTotal, offerPlan, grossSubtotal } = calcTotals(inv);
   const documentLabels = { factura: 'Factura', cotizacion: 'Cotización', conduce: 'Conduce' };
   const editingType = posEditingDocumentType(inv);
   const availableTypes = editingType
@@ -1043,12 +1043,15 @@ function renderCart() {
         <button class="btn btn-out btn-sm btn-fw" id="pos-add-charge-btn" type="button" onclick="openPosChargeModal()"
                 style="margin:3px 0 7px">${svg('plus')} Cargos adicionales</button>
       </div>` : ''}
-      <div class="tr"><span>Subtotal sin ITBIS</span><span id="pos-subtotal-value">${fmt(subtotal)}</span></div>
-      ${inv.itype === 'factura' && itbis > 0
-        ? `<div class="tr"><span>ITBIS (${CFG.itbis}%)</span><span id="pos-itbis-value">${fmt(itbis)}</span></div>` : ''}
+      <div class="tr" id="pos-gross-row" style="${disc > 0 ? '' : 'display:none'}">
+        <span>Subtotal (ITBIS incl.)</span><span id="pos-gross-value">${fmt(grossSubtotal)}</span>
+      </div>
       <div class="tr" id="pos-discount-row" style="${disc > 0 ? '' : 'display:none'}">
         <span>Descuento</span><span id="pos-discount-value">−${fmt(discAmt)}</span>
       </div>
+      <div class="tr"><span>Subtotal sin ITBIS</span><span id="pos-subtotal-value">${fmt(subtotal)}</span></div>
+      ${inv.itype === 'factura' && itbis > 0
+        ? `<div class="tr"><span>ITBIS (${CFG.itbis}%)</span><span id="pos-itbis-value">${fmt(itbis)}</span></div>` : ''}
       <div class="tr grand"><span>TOTAL</span><span id="pos-total-value">${fmt(total)}</span></div>
       <div style="margin-top:7px">
         <button class="btn btn-ghost btn-sm btn-fw" type="button" onclick="posToggleUsd()">
@@ -1926,7 +1929,7 @@ function posRefreshCartTotals() {
   const inv = currentInv();
   if (!inv) return;
   if (typeof posScheduleWorkspaceSave === 'function') posScheduleWorkspaceSave();
-  const { subtotal, itbis, total, disc, discAmt, chargesTotal } = calcTotals(inv);
+  const { subtotal, itbis, total, disc, discAmt, chargesTotal, grossSubtotal } = calcTotals(inv);
   const setText = (id, value) => {
     const el = document.getElementById(id);
     if (el) el.textContent = value;
@@ -1934,11 +1937,14 @@ function posRefreshCartTotals() {
   setText('pos-subtotal-value', fmt(subtotal));
   setText('pos-itbis-value', fmt(itbis));
   setText('pos-discount-value', `−${fmt(discAmt)}`);
+  setText('pos-gross-value', fmt(grossSubtotal));
   setText('pos-total-value', fmt(total));
   setText('pos-charges-value', fmt(chargesTotal));
 
   const discRow = document.getElementById('pos-discount-row');
   if (discRow) discRow.style.display = disc > 0 ? '' : 'none';
+  const grossRow = document.getElementById('pos-gross-row');
+  if (grossRow) grossRow.style.display = disc > 0 ? '' : 'none';
   const chargesRow = document.getElementById('pos-charges-row');
   if (chargesRow) chargesRow.style.display = chargesTotal > 0 ? '' : 'none';
   const usdTotal = document.getElementById('pos-usd-total');
@@ -2584,7 +2590,7 @@ async function openCheckoutSendModal(inv) {
     <div class="fg"><label class="lbl">Nota para caja / despacho <span style="font-weight:400;color:var(--muted)">(opcional)</span></label>
       <textarea class="inp" id="pv-notes" rows="2" maxlength="500" placeholder="Ej: Cliente espera en mostrador 2"></textarea></div>
     <div class="card" style="background:var(--surface2)">
-      <div class="tr"><span>${inv.cart.length} articulo(s)</span><span>${fmt(totals.subtotal)}</span></div>
+      <div class="tr"><span>${inv.cart.length} articulo(s)</span><span>${fmt(totals.grossSubtotal)}</span></div>
       ${totals.discAmt > 0 ? `<div class="tr"><span>Descuento</span><span>−${fmt(totals.discAmt)}</span></div>` : ''}
       <div class="tr"><span>ITBIS incluido</span><span>${fmt(totals.itbis)}</span></div>
       <div class="tr grand"><span>TOTAL</span><span>${fmt(totals.total)}</span></div>
@@ -3026,7 +3032,7 @@ function posTieneQueCobrar(inv) {
 
 function openCobroModal(inv) {
   if (!posTieneQueCobrar(inv)) return;
-  const { subtotal, itbis, total, discAmt, disc } = calcTotals(inv);
+  const { subtotal, itbis, total, discAmt, disc, grossSubtotal } = calcTotals(inv);
   const isQuote = inv.itype === 'cotizacion';
   const tradeInAmount = isQuote ? 0 : _posTradeInAmount(inv, total);
   const amountDue = isQuote ? total : _posAmountDue(inv, total);
@@ -3035,7 +3041,7 @@ function openCobroModal(inv) {
   const billingType = inv.pmeth === 'credito' ? 'credito' : 'contado';
   const userCreditLimit = _posUserCreditLimit();
   const cashierAutoCreditLimit = _posCashierAutoCreditLimit();
-  window._cbrBaseTotals = { subtotal, itbis, total, amountDue, tradeInAmount, discAmt, chargesTotal: calcTotals(inv).chargesTotal };
+  window._cbrBaseTotals = { subtotal, itbis, total, amountDue, tradeInAmount, discAmt, grossSubtotal, chargesTotal: calcTotals(inv).chargesTotal };
 
   openModal(`
     <div class="modal-title">${isQuote
@@ -3379,10 +3385,11 @@ function openCobroModal(inv) {
     </div>
 
     <div class="card" style="background:var(--surface2);margin-top:10px">
-        <div class="tr"><span>Subtotal sin ITBIS</span><span id="cbr-summary-subtotal">${fmt(subtotal)}</span></div>
       ${disc > 0
-        ? `<div class="tr"><span>Descuento (${Math.round(disc*100)/100}%)</span>
+        ? `<div class="tr"><span>Subtotal (ITBIS incl.)</span><span id="cbr-summary-gross">${fmt(grossSubtotal)}</span></div>
+           <div class="tr"><span>Descuento (${Math.round(disc*100)/100}%)</span>
            <span id="cbr-summary-discount">−${fmt(discAmt)}</span></div>` : ''}
+        <div class="tr"><span>Subtotal sin ITBIS</span><span id="cbr-summary-subtotal">${fmt(subtotal)}</span></div>
       ${inv.itype === 'factura' && itbis > 0
         ? `<div class="tr"><span>ITBIS (${CFG.itbis}%)</span><span id="cbr-summary-itbis">${fmt(itbis)}</span></div>` : ''}
       ${tradeInAmount > 0 ? `<div class="tr" style="color:var(--blue)"><span>Parte de pago: ${posEscHtml(inv.tradeIn?.productName || 'equipo usado')}</span><span>−${fmt(tradeInAmount)}</span></div>` : ''}
@@ -3522,6 +3529,7 @@ function cbrUpdatePaymentCurrency() {
   setText('cbr-summary-subtotal', money(totals.subtotal));
   setText('cbr-summary-itbis', money(totals.itbis));
   setText('cbr-summary-discount', `−${money(totals.discAmt)}`);
+  setText('cbr-summary-gross', money(totals.grossSubtotal || 0));
   setText('cbr-summary-charges', money(totals.chargesTotal || 0));
   setText('cbr-summary-total', money(totals.total));
   setText('cbr-header-total', money(totals.total));
@@ -3779,12 +3787,13 @@ function cbrRefreshTotals(oldTotal = null) {
   window._cbrBaseTotals = {
     subtotal: totals.subtotal, itbis: totals.itbis, total: totals.total,
     amountDue, tradeInAmount:_posTradeInAmount(currentInv(), totals.total),
-    discAmt: totals.discAmt, chargesTotal: totals.chargesTotal,
+    discAmt: totals.discAmt, chargesTotal: totals.chargesTotal, grossSubtotal: totals.grossSubtotal,
   };
   const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
   setText('cbr-header-total', fmt(totals.total));
   setText('cbr-summary-subtotal', fmt(totals.subtotal));
   setText('cbr-summary-discount', `−${fmt(totals.discAmt)}`);
+  setText('cbr-summary-gross', fmt(totals.grossSubtotal || 0));
   setText('cbr-summary-itbis', fmt(totals.itbis));
   setText('cbr-summary-charges', fmt(totals.chargesTotal));
   setText('cbr-summary-total', fmt(totals.total));

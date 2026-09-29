@@ -159,7 +159,7 @@ assert.strictEqual(state.listDrafts().length, 0);
 console.log('  ✓ guarda, actualiza y elimina borradores separados de los documentos confirmados');
 
 ['pos-subtotal-value','pos-itbis-value','pos-discount-row','pos-discount-value',
- 'pos-total-value','pos-charge-btn'].forEach(element);
+ 'pos-total-value','pos-charge-btn','pos-gross-row','pos-gross-value'].forEach(element);
 state.resetInvoices();
 state.setUser({ id: 1, role: 'admin' });
 state.setTax(18);
@@ -307,6 +307,11 @@ assert.strictEqual(Math.round((amountDiscountTotals.subtotal + amountDiscountTot
   'subtotal sin ITBIS + ITBIS debe cuadrar con el total');
 state.currentInv().discMode = 'pct';
 state.currentInv().disc = 0;
+assert.strictEqual(elements.get('pos-gross-value').textContent, 'RD$1,625.00',
+  'el resumen muestra primero el subtotal con ITBIS antes del descuento');
+assert.strictEqual(elements.get('pos-discount-value').textContent, '−RD$100.00');
+assert.strictEqual(elements.get('pos-gross-row').style.display, '', 'la línea de subtotal aparece al haber descuento');
+assert.strictEqual(elements.get('pos-total-value').textContent, 'RD$1,525.00');
 console.log('  ✓ un descuento en RD$ se descuenta completo y el ITBIS se recalcula sobre lo cobrado');
 
 state.currentInv().cart = [{ name: 'Artículo', price: 105, qty: 1, taxable: 1, tax_pct: 18 }];
