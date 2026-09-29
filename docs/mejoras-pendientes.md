@@ -180,8 +180,9 @@ RD$2,950 cobrados = total RD$2,950, no RD$4,000.
 - **Selección**: se regala la cantidad completa de cada línea y se permiten
   varias líneas de oferta en una misma factura.
 - **ITBIS**: se recalcula sobre el importe realmente cobrado. La trazabilidad se
-  limita a líneas del mismo trato fiscal y la interfaz informa si no existe una
-  compatible.
+  prefiere líneas del mismo trato fiscal; si no hay ninguna (p. ej. los gravados
+  son el regalo y solo queda un exento cobrado), la anotan las demás líneas
+  cobradas. Es solo una nota: no cambia precios ni ITBIS, así que ya no bloquea.
 - **Un solo artículo en el carrito**: no hay entre quién repartir. El modal debe
   impedirlo y explicar por qué.
 - **Rastro interno**: guardar por línea el valor regalado y el absorbido

@@ -3,7 +3,8 @@
 // El navegador y el proceso main usan exactamente este mismo motor. El artículo
 // marcado se cobra en cero; los demás conservan su precio porque ese precio ya
 // incluye comercialmente el regalo. El reparto solo deja trazabilidad interna,
-// en centavos y dentro del mismo grupo fiscal, sin inflar ninguna línea.
+// en centavos, preferiblemente dentro del mismo grupo fiscal, sin inflar
+// ninguna línea.
 (function initOfferAllocation(root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -77,10 +78,14 @@
     const keys = [...new Set(gifts.map(row => row.key))];
     for (const key of keys) {
       const groupGifts = gifts.filter(row => row.key === key);
-      const receivers = rows.filter(row => !row.gift && row.key === key && row.cents > 0);
+      // El reparto es solo trazabilidad: el regalo ya sale en cero y el ITBIS
+      // se calcula sobre lo cobrado. Se prefiere el mismo grupo fiscal; si no
+      // existe (p. ej. solo queda un artículo exento), lo anotan los demás.
+      const charged = rows.filter(row => !row.gift && row.cents > 0);
+      const sameGroup = charged.filter(row => row.key === key);
+      const receivers = sameGroup.length ? sameGroup : charged;
       if (!receivers.length) {
-        const kind = key === 'exento' ? 'exento' : 'con el mismo ITBIS';
-        return invalid(`La oferta necesita otro artículo ${kind} que pueda absorber su valor.`);
+        return invalid('Debe quedar al menos un artículo cobrado para absorber la oferta.');
       }
 
       const giftCents = groupGifts.reduce((sum, row) => sum + row.cents, 0);

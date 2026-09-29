@@ -97,8 +97,19 @@ try {
     { price:118, qty:1, taxable:1, tax_pct:18, offer_is_gift:1 },
     { price:100, qty:1, taxable:0, tax_pct:0, offer_is_gift:0 },
   ]);
-  ok(!incompatible.ok && /mismo ITBIS/i.test(incompatible.error),
-    'si no existe receptor fiscal compatible, informa y no aplica la oferta');
+  ok(incompatible.ok && incompatible.adjustedTotal === 100 &&
+    incompatible.items[0].effective_line_total === 0 &&
+    incompatible.items[1].effective_line_total === 100 &&
+    incompatible.items[1].offer_absorbed_amount === 118,
+    'regalo gravado con solo un exento cobrado: se aplica, el total baja y el exento no cambia');
+  const mixed = calculate([
+    { price:259560, qty:1, taxable:0, tax_pct:0, offer_is_gift:0 },
+    { price:456, qty:10, taxable:1, tax_pct:18, offer_is_gift:1 },
+    { price:15975, qty:1, taxable:1, tax_pct:18, offer_is_gift:1 },
+  ]);
+  ok(mixed.ok && mixed.adjustedTotal === 259560 &&
+    mixed.items[0].offer_absorbed_amount === 20535,
+    'caso reportado: dos gravados de regalo con un exento cobrado ya no se bloquea');
   const reportedCase = calculate([
     { price:1050, qty:1, taxable:1, tax_pct:18, offer_is_gift:1 },
     { price:2950, qty:1, taxable:1, tax_pct:18, offer_is_gift:0 },
