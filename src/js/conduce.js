@@ -422,6 +422,7 @@ async function _cndDoInvoice(id) {
     charges: (dn.charges || []).filter(row => !row.invoice_id).map(row => ({
       description: row.description,
       amount: Number(row.amount) || 0,
+      source_conduce_charge_id: Number(row.id) || null,
     })),
     notes: dn.notes || '',
     saleDate: new Date().toISOString().slice(0, 10),

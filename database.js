@@ -5601,13 +5601,38 @@ const salesRepo = {
       if (sourceConduceId && (!sourceConduce || !['despachado', 'entregado', 'parcial', 'facturado'].includes(sourceConduce.status))) {
         throw new Error('El conduce de origen ya no está disponible para convertirlo en venta');
       }
+      // Cargos del conduce: el servidor es la autoridad sobre su importe y cada
+      // uno viaja una sola vez. Los cargos que el cajero agregó en el POS se
+      // suman aparte; así la factura guarda exactamente el total que se cobró.
+      let sourceConduceChargeIds = [];
       if (sourceConduce && tableExists('delivery_note_charges')) {
-        // El servidor es la autoridad: los cargos pendientes viajan una sola
-        // vez, aunque el renderer sea recargado o la venta sea parcial.
-        payment.charges = db.prepare(`
-          SELECT description,amount FROM delivery_note_charges
+        const pendingCharges = db.prepare(`
+          SELECT id,description,amount FROM delivery_note_charges
           WHERE delivery_note_id=? AND invoice_id IS NULL ORDER BY id
         `).all(sourceConduceId);
+        const pendingById = new Map(pendingCharges.map(row => [Number(row.id), row]));
+        const sameText = (a, b) => String(a || '').replace(/\s+/g, ' ').trim().toUpperCase() ===
+          String(b || '').replace(/\s+/g, ' ').trim().toUpperCase();
+        const usedChargeIds = new Set();
+        payment.charges = (Array.isArray(payment.charges) ? payment.charges : []).map(row => {
+          let chargeId = Number(row?.source_conduce_charge_id ?? row?.sourceConduceChargeId) || 0;
+          if (chargeId && !pendingById.has(chargeId)) {
+            throw new Error('Un cargo del conduce ya fue facturado o dejó de estar disponible');
+          }
+          if (!chargeId) {
+            // Carritos cargados antes de marcar los cargos del conduce.
+            const match = pendingCharges.find(pending => !usedChargeIds.has(Number(pending.id)) &&
+              sameText(pending.description, row?.description) &&
+              Math.abs(Number(pending.amount) - Number(row?.amount)) < 0.005);
+            chargeId = match ? Number(match.id) : 0;
+          }
+          if (!chargeId) return row;
+          if (usedChargeIds.has(chargeId)) throw new Error('Un cargo del conduce está repetido en la venta');
+          usedChargeIds.add(chargeId);
+          const pending = pendingById.get(chargeId);
+          return { description: pending.description, amount: pending.amount };
+        });
+        sourceConduceChargeIds = [...usedChargeIds];
       }
 
       // Para clientes registrados, la base de datos es la autoridad. El renderer
@@ -6589,12 +6614,13 @@ const salesRepo = {
         sourceConduceLines.forEach(({ sourceLine, item }) => {
           insertLink.run(sourceConduceId, sourceLine.id, saleId, item.product_id, item.qty);
         });
-        if (tableExists('delivery_note_charges')) {
-          db.prepare(`
+        if (tableExists('delivery_note_charges') && sourceConduceChargeIds.length) {
+          const markCharge = db.prepare(`
             UPDATE delivery_note_charges
             SET invoice_id=?,updated_at=datetime('now','localtime')
-            WHERE delivery_note_id=? AND invoice_id IS NULL
-          `).run(saleId, sourceConduceId);
+            WHERE id=? AND delivery_note_id=? AND invoice_id IS NULL
+          `);
+          sourceConduceChargeIds.forEach(chargeId => markCharge.run(saleId, chargeId, sourceConduceId));
         }
         const fullyInvoiced = conduceRepo.invoiceableLines(sourceConduceId)
           .every(line => line.invoiceable <= 1e-9);
@@ -12732,6 +12758,13 @@ const conduceRepo = {
         ...payment,
         method: payment.method || 'efectivo', disc: payment.disc || 0, priceMode,
         sourceConduceId: conduceId,
+        // Sin carrito de por medio, la factura lleva todos los cargos pendientes.
+        charges: tableExists('delivery_note_charges')
+          ? db.prepare(`
+              SELECT id AS source_conduce_charge_id,description,amount FROM delivery_note_charges
+              WHERE delivery_note_id=? AND invoice_id IS NULL ORDER BY id
+            `).all(conduceId)
+          : [],
       },
       user,
       type: 'factura',

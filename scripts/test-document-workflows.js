@@ -308,6 +308,62 @@ ok(reopenedConduce.status === 'despachado' && reopenedConduce.invoice_links.leng
   'anular una factura reabre solo la cantidad de conduce enlazada a esa factura');
 ok(reopenedConduce.charges[0].invoice_id === firstConduceSale.saleId,
   'anular una factura parcial posterior no libera un cargo usado por la primera venta');
+
+// Caso reportado: factura desde conduce, a crédito con pago inicial, y un cargo
+// adicional agregado en el POS. Antes el servidor descartaba ese cargo y
+// rechazaba el pago inicial por "superar el total".
+const extraNoteId = DB.conduceRepo.create({
+  header: { customer_id: customerId },
+  items: [{ product_id: productId, description: 'Producto documental', qty: 2 }],
+  charges: [{ description: 'Envío del conduce', amount: 250 }, { description: 'Montaje', amount: 100 }],
+  userId: admin.id,
+});
+DB.conduceRepo.setStatus(extraNoteId, 'despachado', { userId: admin.id });
+const extraNote = DB.conduceRepo.getById(extraNoteId);
+const extraLine = DB.conduceRepo.invoiceableLines(extraNoteId)[0];
+const creditSession = DB.cashRepo.open({
+  userId: admin.id, cajero: admin.name, openAmount: 0, openBills: {}, terminalId: 'CONDUCE-CARGOS',
+});
+const extraSale = DB.salesRepo.create({
+  session: { id: creditSession },
+  customer: { id: customerId },
+  items: [{ ...line(2), sourceConduceItemId: extraLine.id }],
+  payment: {
+    method: 'credito', sourceConduceId: extraNoteId,
+    initialPaymentAmount: 20000, initialPaymentMethod: 'efectivo',
+    charges: [
+      { description: 'Envío del conduce', amount: 250, source_conduce_charge_id: extraNote.charges[0].id },
+      { description: 'CAJA DE MUERTO USADA', amount: 20000 },
+    ],
+  },
+  user: admin,
+  type: 'factura',
+});
+const extraAfter = DB.conduceRepo.getById(extraNoteId);
+ok(extraSale.total === 20486 && extraSale.additionalChargesTotal === 20250,
+  'el cargo agregado en el POS se suma al del conduce y el total coincide con la pantalla',
+  `${extraSale.total} / ${extraSale.additionalChargesTotal}`);
+ok(extraSale.initialPaymentAmount === 20000 && extraSale.outstandingBalance === 486,
+  'a crédito, el pago inicial se acepta y el saldo es el total menos lo recibido');
+ok(extraAfter.charges.find(row => row.description === 'Envío del conduce').invoice_id === extraSale.saleId &&
+  extraAfter.charges.find(row => row.description === 'Montaje').invoice_id == null,
+  'solo se consume el cargo del conduce que iba en la factura; el quitado queda pendiente');
+let staleChargeError = '';
+try {
+  DB.salesRepo.create({
+    session: null,
+    customer: { id: customerId },
+    items: [{ ...line(1), sourceConduceItemId: extraLine.id }],
+    payment: {
+      method: 'efectivo', sourceConduceId: extraNoteId,
+      charges: [{ description: 'Envío del conduce', amount: 250, source_conduce_charge_id: extraNote.charges[0].id }],
+    },
+    user: admin,
+    type: 'factura',
+  });
+} catch (e) { staleChargeError = e.message; }
+ok(/ya fue facturado/i.test(staleChargeError),
+  'un cargo del conduce ya facturado no se puede cobrar dos veces', staleChargeError);
 const report = DB.documentNumberRepo.issue('reporte', 'print_job', 'test-report');
 ok(report.formatted_number === 'REP-000001', 'reporte usa su secuencia REP');
 const expenseId = DB.expensesRepo.create({

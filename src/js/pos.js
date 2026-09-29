@@ -1713,6 +1713,7 @@ function posLoadResaleCart(payload = {}) {
     ? payload.charges.map(row => ({
         description: String(row.description || ''),
         amount: Number(row.amount || 0),
+        source_conduce_charge_id: Number(row.source_conduce_charge_id) || null,
       })).filter(row => row.description && row.amount > 0)
     : [];
   inv.notes = String(payload.notes || '');
