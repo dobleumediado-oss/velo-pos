@@ -1911,7 +1911,11 @@ function posLoadResaleCart(payload = {}) {
 window.posLoadResaleCart = posLoadResaleCart;
 
 function posDisc(val) {
-  currentInv().disc = Math.min(100, Math.max(0, _posEntryNumber(val)));
+  // Un porcentaje ya calculado (descuento en RD$ convertido) se usa completo:
+  // pasarlo por el limpiador de montos lo cortaba a 2 decimales y RD$100 de
+  // descuento sobre RD$1,625 quedaba en RD$99.94.
+  const pct = typeof val === 'number' && Number.isFinite(val) ? val : _posEntryNumber(val);
+  currentInv().disc = Math.min(100, Math.max(0, pct));
   posRefreshCartTotals();
 }
 

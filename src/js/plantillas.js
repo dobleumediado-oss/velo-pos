@@ -1002,7 +1002,7 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
     </div>`).join('')}
   <hr class="sep"/>
   <div class="row"><span>Subtotal</span><span>RD$${Number(sale.subtotal||0).toLocaleString('es-DO')}</span></div>
-  ${sale.discount_amt > 0 ? `<div class="row"><span>Descuento ${sale.discount_pct}%</span><span style="color:#e00">-RD$${Number(sale.discount_amt).toLocaleString('es-DO')}</span></div>` : ''}
+  ${sale.discount_amt > 0 ? `<div class="row"><span>Descuento ${Math.round((sale.discount_pct||0)*100)/100}%</span><span style="color:#e00">-RD$${Number(sale.discount_amt).toLocaleString('es-DO')}</span></div>` : ''}
   ${_showItbis(sale) ? `<div class="row"><span>ITBIS (${sale.tax_pct||18}%)</span><span>RD$${(Math.round(_displayTaxAmt(sale)*100)/100).toLocaleString('es-DO')}</span></div>` : ''}
   ${Number(sale.additional_charges_total || 0) > 0 ? `<div class="row"><span>Cargos adicionales</span><span>RD$${Number(sale.additional_charges_total).toLocaleString('es-DO')}</span></div>` : ''}
   <hr class="sep-d"/>

@@ -2082,7 +2082,7 @@ async function openDetalleVentaModal(s, options = {}) {
     <div class="card" style="background:var(--surface2)">
         <div class="tr"><span>Subtotal sin ITBIS</span><span>${fmt(netShown)}</span></div>
       ${discPct > 0
-        ? `<div class="tr"><span>Descuento (${discPct}%)</span>
+        ? `<div class="tr"><span>Descuento (${Math.round(Number(discPct) * 100) / 100}%)</span>
            <span>-${fmt(discAmt)}</span></div>` : ''}
         ${taxAmt > 0
           ? `<div class="tr"><span>ITBIS (${detail.tax_pct || CFG.itbis || 18}%)</span><span>${fmt(taxAmt)}</span></div>` : ''}

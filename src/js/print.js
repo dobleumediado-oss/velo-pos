@@ -780,7 +780,8 @@ function printReceipt(sale, isReprint = false) {
   lines.push(tline());
   const subtotal = sale.subtotal   || 0;
   const discAmt  = sale.discount_amt || sale.discAmt || 0;
-  const discPct  = sale.discount_pct || sale.disc    || 0;
+  // Un descuento en RD$ guarda el porcentaje exacto; se muestra con 2 decimales.
+  const discPct  = Math.round(Number(sale.discount_pct || sale.disc || 0) * 100) / 100;
   const itbis    = sale.tax_amt    || sale.itbis     || 0;
   const total    = sale.total      || 0;
 

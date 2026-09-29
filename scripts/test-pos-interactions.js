@@ -291,8 +291,25 @@ assert.strictEqual(discount.calcTotals(state.currentInv()).chargesTotal, 950,
 console.log('  ✓ envío u otro cargo queda separado del carrito y funciona en factura, cotización y conduce');
 
 state.currentInv().itype = 'factura';
-state.currentInv().cart = [{ name: 'Artículo', price: 105, qty: 1, taxable: 1, tax_pct: 18 }];
 state.currentInv().charges = [];
+state.currentInv().cart = [
+  { name: 'Aletas cono grande', price: 470, qty: 1, taxable: 1, tax_pct: 18 },
+  { name: 'Ajustador eje', price: 105, qty: 1, taxable: 1, tax_pct: 18 },
+  { name: 'Acoplamiento de bomba', price: 1050, qty: 1, taxable: 1, tax_pct: 18 },
+];
+state.currentInv().discMode = 'amt';
+discount.posDiscConPin({ value: '100.00' }, '100.00');
+const amountDiscountTotals = discount.calcTotals(state.currentInv());
+assert.strictEqual(amountDiscountTotals.discAmt, 100,
+  'RD$100 de descuento sobre RD$1,625 deben descontar exactamente RD$100.00, no RD$99.94');
+assert.strictEqual(amountDiscountTotals.total, 1525, 'el total debe quedar en RD$1,525.00');
+assert.strictEqual(Math.round((amountDiscountTotals.subtotal + amountDiscountTotals.itbis) * 100) / 100, 1525,
+  'subtotal sin ITBIS + ITBIS debe cuadrar con el total');
+state.currentInv().discMode = 'pct';
+state.currentInv().disc = 0;
+console.log('  ✓ un descuento en RD$ se descuenta completo y el ITBIS se recalcula sobre lo cobrado');
+
+state.currentInv().cart = [{ name: 'Artículo', price: 105, qty: 1, taxable: 1, tax_pct: 18 }];
 state.setSettings({ pos_discount_auth_limit_pct: '15' });
 state.currentInv().disc = 0;
 const protectedDiscountInput = { value: '16' };
