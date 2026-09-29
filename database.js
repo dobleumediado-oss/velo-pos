@@ -5517,6 +5517,19 @@ function splitCancellationCash(payment, amount) {
   }).filter(row => row.amount > 0);
 }
 
+// Dinero que la anulación de una factura dejó a favor y todavía no se aplicó.
+function _cancellationFavorRemaining(saleId, customerId = null) {
+  if (!tableExists('sale_cancellation_payment_resolutions')) return 0;
+  const row = db.prepare(`
+    SELECT r.amount - COALESCE((
+      SELECT SUM(a.amount) FROM sale_cancellation_favor_applications a WHERE a.resolution_id=r.id
+    ),0) remaining
+    FROM sale_cancellation_payment_resolutions r
+    WHERE r.sale_id=? AND r.disposition='favor' ${customerId == null ? '' : 'AND r.customer_id=?'}
+  `).get(...(customerId == null ? [Number(saleId)] : [Number(saleId), Number(customerId)]));
+  return Math.max(0, round2(Number(row?.remaining || 0)));
+}
+
 // Por qué una factura anulada no puede recuperar su NCF (vacío = sí puede).
 function _ncfReuseBlockers(original) {
   const reasons = [];
@@ -5731,7 +5744,7 @@ const salesRepo = {
       ncf: String(original.ncf || '').trim().toUpperCase(),
       ncfType: String(original.ncf || '').trim().toUpperCase().slice(0, 3),
       fiscalDate: String(original.fiscal_issued_at || original.sale_date || original.created_at || '').slice(0, 10),
-      favorAmount: resolution?.disposition === 'favor' ? Number(resolution.paymentAmount || 0) : 0,
+      favorAmount: resolution?.disposition === 'favor' ? _cancellationFavorRemaining(original.id) : 0,
       items,
       charges,
     };
@@ -6276,7 +6289,11 @@ const salesRepo = {
         if (cust.status === 'moroso') {
           throw new Error('Cliente marcado como moroso — no puede comprar a crédito');
         }
-        const creditExposure = round2(amountDue - initialPaymentAmount);
+        // Al registrar con el mismo NCF, el dinero a favor de la anulada se
+        // aplica en esta misma operación: no cuenta contra el límite de crédito.
+        const reuseFavorCredit = reuseNcfOriginal
+          ? _cancellationFavorRemaining(reuseNcfOriginal.id, customer.id) : 0;
+        const creditExposure = Math.max(0, round2(amountDue - initialPaymentAmount - reuseFavorCredit));
         // Este es el monto que realmente quedará pendiente después del pago
         // inicial. Se valida aquí, dentro de la transacción y con el total
         // recalculado por SQLite, para cubrir POS directo y Preventa/Despacho.

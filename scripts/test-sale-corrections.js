@@ -1207,6 +1207,31 @@ ok(favorEntryLines.some(row => row.code === '2103' && row.debit === 150) &&
   favorEntryLines.some(row => row.code === '1104' && row.credit === 150),
   'contabilidad: sale de Anticipos de Clientes y cancela la cuenta por cobrar');
 
+// Caso reportado: el dinero a favor cubre la factura, pero el límite de crédito
+// disponible es menor que su total. No debe rechazarse por límite.
+const tightCustomerId = DB.customersRepo.create({ name: 'Cliente Límite Justo', rnc: '131000009', credit_days: 30 });
+db.prepare('UPDATE customers SET credit_limit=500 WHERE id=?').run(tightCustomerId);
+const tightSale = (qty, extra = {}) => DB.salesRepo.getById(DB.salesRepo.create({
+  customer: { id: tightCustomerId }, items: [subLine(qty)],
+  payment: { method: 'credito', saleDate: '2025-07-21', ncfType: 'B02', ...extra },
+  session: { id: cashId }, user: admin, type: 'factura',
+}).saleId);
+const tightOriginal = tightSale(3);
+DB.customersRepo.addPayment({
+  customerId: tightCustomerId, amount: 354, saleId: tightOriginal.id, method: 'efectivo', note: 'Pago completo',
+  cajero: admin.name, userId: admin.id, sessionId: cashId, operationId: `tight-abono-${tightOriginal.id}`,
+});
+DB.salesRepo.cancel(tightOriginal.id, 'Error de tasa', admin.id, admin.name, {
+  operationId: `annul-tight-${tightOriginal.id}`, paymentDisposition: 'favor', reversalSessionId: cashId,
+});
+tightSale(2);
+ok(round2(db.prepare('SELECT balance FROM customers WHERE id=?').get(tightCustomerId).balance) === 236,
+  'el cliente tiene RD$236 de deuda y solo RD$264 disponibles de un límite de RD$500');
+const tightReused = tightSale(3, { reuseNcfOfSaleId: tightOriginal.id });
+ok(tightReused.ncf === tightOriginal.ncf &&
+  round2(db.prepare('SELECT balance FROM customers WHERE id=?').get(tightCustomerId).balance) === 236,
+  'la factura de RD$354 se registra aunque supere lo disponible: los RD$354 a favor la cubren en la misma operación');
+
 const stillActive = reuseSale('B02', subCustomerId, 1);
 expectThrow(() => reuseSale('B02', subCustomerId, 1, { reuseNcfOfSaleId: stillActive.id }),
   /Solo una factura anulada/, 'no se reutiliza el NCF de una factura vigente');

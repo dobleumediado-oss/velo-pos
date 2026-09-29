@@ -3659,17 +3659,20 @@ function cbrCalcCambio(total = _posAmountDue(currentInv())) {
 function cbrCalcInitial(total = _posAmountDue(currentInv())) {
   const input = document.getElementById('cbr-initial-payment');
   const paid = Math.max(0, _posEntryNumber(input));
-  const pending = Math.max(0, total - paid);
-  currentInv().initialPaymentAmount = paid;
+  const inv = currentInv();
+  const favor = inv.reuseNcfOfSaleId ? Math.max(0, Number(inv.reuseNcfFavor) || 0) : 0;
+  const pending = Math.max(0, Math.round((total - paid - favor) * 100) / 100);
+  inv.initialPaymentAmount = paid;
   const el = document.getElementById('cbr-credit-balance');
   if (el) {
     const limit = _posUserCreditLimit();
     const exceeded = limit > 0 && pending > limit + 0.005;
     const covered = paid >= total - 0.005;
     const change = Math.max(0, Math.round((paid - total) * 100) / 100);
+    const favorText = favor > 0 ? ` · Dinero a favor aplicado: <strong style="color:var(--green)">${fmt(Math.min(favor, total - paid))}</strong>` : '';
     el.innerHTML = covered
       ? `Pago recibido: <strong>${fmt(paid)}</strong> · Se registrará al contado${change > 0 ? ` · Cambio: <strong style="color:var(--green)">${fmt(change)}</strong>` : ''}`
-      : `Pago inicial: <strong>${fmt(paid)}</strong> · Quedará a crédito: <strong style="color:${exceeded ? 'var(--red)' : 'var(--amber)'}">${fmt(pending)}</strong>` +
+      : `Pago inicial: <strong>${fmt(paid)}</strong>${favorText} · Quedará a crédito: <strong style="color:${exceeded ? 'var(--red)' : 'var(--amber)'}">${fmt(pending)}</strong>` +
         (exceeded ? ` · <strong style="color:var(--red)">Supera tu tope de ${fmt(limit)}</strong>` : '');
   }
 }
@@ -4443,7 +4446,10 @@ async function finalizarVenta() {
       return;
     }
     const userCreditLimit = _posUserCreditLimit();
-    const pendingCredit = Math.max(0, Math.round((currentTotal - initialPaymentAmount) * 100) / 100);
+    // El dinero a favor de una factura registrada con su mismo NCF se aplica al
+    // confirmar: lo que realmente queda a crédito es el total menos ese dinero.
+    const reuseFavor = inv.reuseNcfOfSaleId ? Math.max(0, Number(inv.reuseNcfFavor) || 0) : 0;
+    const pendingCredit = Math.max(0, Math.round((currentTotal - initialPaymentAmount - reuseFavor) * 100) / 100);
     if (userCreditLimit > 0 && pendingCredit > userCreditLimit + 0.005) {
       toast(`El monto que quedará a crédito (${fmt(pendingCredit)}) supera tu límite de ${fmt(userCreditLimit)}`, 'w');
       return;
