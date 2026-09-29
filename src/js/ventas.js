@@ -2641,6 +2641,8 @@ async function openFacturaCorreccion(saleId) {
   const canCancel = perms.has('sales.cancel') && active;
   const canAudit = perms.has('sales.view_audit');
   const fiscalLocked = !!ctx.fiscal;
+  const canReplace = canCorrect && active && !fiscalLocked && perms.has('sales.replace_invoice') &&
+    !['debit_note', 'product_addition'].includes(sale.correction_kind);
   const canDebit = canCorrect && active && !fiscalLocked &&
     perms.has('sales.issue_debit_note') && sale.correction_kind !== 'debit_note';
   const canChangeMethod = canCorrect && active &&
@@ -2730,8 +2732,12 @@ async function openFacturaCorreccion(saleId) {
       })}
       ${ventasCorrectionAction({
         icon: 'edit', title: 'Sustituir factura',
-        description: 'Bloqueado en edición directa: primero debe compensarse la factura original y luego emitirse una nueva con el cliente/comprobante correcto.',
-        enabled: false,
+        description: canReplace
+          ? 'Rehace la factura con otro cliente, RNC o comprobante: nota de crédito por la original y factura nueva desde el POS; el dinero ya recibido pasa a la nueva.'
+          : 'Requiere una factura activa y el permiso sales.replace_invoice.',
+        enabled: canReplace,
+        onclick: `closeModal();openVentaReplacement(${sale.id})`,
+        tone: 'var(--amber)',
       })}
       ${ventasCorrectionAction({
         icon: 'list', title: 'Ver historial de cambios',
@@ -2872,6 +2878,108 @@ async function ventasSubmitPaymentMethodChange() {
       }
     },
   });
+}
+
+async function openVentaReplacement(saleId) {
+  const response = await window.api.sales.corrections.getReplacementModel({ id: saleId, requestUserId: user.id });
+  if (!response?.ok) return toast(response?.error || 'No se pudo preparar la sustitución', 'err');
+  const model = response.data;
+  const root = model.root;
+  const method = String(root.payment_method || '').toLowerCase();
+  if (!model.eligible) {
+    openModal(`
+      <div class="modal-title">Sustituir factura</div>
+      <div class="modal-sub">${facturaLabel(root)} · ${ventasEsc(root.ncf || 'Sin NCF')}</div>
+      <div class="alrt r" style="margin-bottom:12px"><div>
+        <div class="alrt-title">Esta factura no se puede sustituir</div>
+        <div class="alrt-sub">${model.reasons.map(row => ventasEsc(row.message)).join('<br/>')}</div>
+      </div></div>
+      <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
+    `);
+    return;
+  }
+  window._ventaReplacement = { model };
+  openModal(`
+    <div class="modal-title">Sustituir factura</div>
+    <div class="modal-sub">${facturaLabel(root)} · ${ventasEsc(root.ncf || 'Sin NCF')} · ${ventasEsc(root.customer_name || 'Consumidor Final')} · ${fmt(root.total)}</div>
+    <div class="alrt a" style="margin-bottom:12px"><div>
+      <div class="alrt-title">Qué va a pasar</div>
+      <div class="alrt-sub">
+        1. Se abre el POS con los mismos artículos: corrige cliente, RNC, comprobante o lo que haga falta.<br/>
+        2. Al confirmar, en una sola operación: se emite una nota de crédito${model.creditNoteWillBeFiscal ? ' B04' : ''} por toda la factura original (los artículos vuelven al inventario) y la factura nueva.<br/>
+        3. ${method === 'credito'
+          ? `La original se descuenta de la cuenta del cliente${model.paidApplied > 0 ? ` y sus abonos (${fmt(model.paidApplied)}) pasan a la factura nueva` : ''}.`
+          : `El cobro se aplica a la nueva: cóbrala por ${ventasEsc(VENTAS_METHOD_LABELS[method] || method)}; en caja o banco solo se mueve la diferencia.`}
+      </div>
+    </div></div>
+    <div class="fg"><label class="lbl">Motivo específico *</label>
+      <input class="inp" id="vrp-reason" maxlength="500" placeholder="Ej.: el cliente necesita la factura a nombre de su empresa con B01"/>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-dark" onclick="ventasStartReplacement()">${svg('edit')} Abrir en el POS</button>
+    </div>
+  `);
+}
+
+function ventasStartReplacement() {
+  const state = window._ventaReplacement;
+  if (!state?.model) return;
+  const reason = document.getElementById('vrp-reason')?.value?.trim() || '';
+  if (reason.length < 5) return toast('Escribe un motivo específico', 'w');
+  const root = state.model.root;
+  const account = DB.customers.find(c => c.id === root.customer_id);
+  const payload = {
+    substitutesSaleId: Number(root.id),
+    substitutesNumber: facturaLabel(root),
+    substitutionReason: reason,
+    priceMode: root.price_mode || 'retail',
+    discountPct: Number(root.discount_pct) || 0,
+    paymentMethod: String(root.payment_method || 'efectivo').toLowerCase(),
+    financialAccountId: root.financial_account_id || null,
+    charges: state.model.charges || [],
+    notes: root.notes || '',
+    salespersonId: root.salesperson_id || null,
+    saleDate: today(),
+    customer: {
+      id: account?.id || root.customer_id || 1,
+      name: account?.name || root.customer_name || 'Consumidor Final',
+      rnc: account?.rnc || root.customer_rnc || '',
+      phone: root.customer_phone || account?.phone || '',
+      phoneType: root.customer_phone_type || 'telefono',
+      contactId: root.customer_contact_id || null,
+      contactName: root.customer_contact_name || '',
+      branchId: root.customer_branch_id || null,
+      branchName: root.customer_branch_name || '',
+    },
+    items: (state.model.items || []).map(i => {
+      // La línea regalada se guardó en RD$0: vuelve con su precio regular y
+      // marcada como regalo para que la oferta se conserve.
+      const gift = Number(i.offer_is_gift) === 1 && Number(i.offer_original_amount) > 0;
+      return {
+        product_id: i.product_id,
+        product_code: i.product_code || '',
+        product_name: i.product_name,
+        unit_cost: i.unit_cost || 0,
+        unit_price: gift ? ventasRound2(Number(i.offer_original_amount) / (Number(i.qty) || 1)) : i.unit_price,
+        offer_is_gift: gift ? 1 : 0,
+        taxable: ventasTaxable(i) ? 1 : 0,
+        tax_pct: ventasTaxable(i) ? ventasTaxPct(i) : 0,
+        qty: i.qty,
+      };
+    }),
+  };
+  window._ventaReplacement = null;
+  window._pendingPOSResaleCart = payload;
+  closeModal();
+  routeTo('pos');
+  setTimeout(() => {
+    if (window._pendingPOSResaleCart === payload && typeof window.posLoadResaleCart === 'function' &&
+        document.getElementById('cart-wrap')) {
+      window._pendingPOSResaleCart = null;
+      window.posLoadResaleCart(payload);
+    }
+  }, 180);
 }
 
 async function openVentaDebitNote(saleId) {
@@ -3808,6 +3916,10 @@ function ventasCorrectionHistoryEntry(correction) {
     create_monetary_credit: () => ({
       title: 'Nota de crédito monetaria',
       detail: `Crédito: ${fmt(meta.creditTotal || 0)} · inventario sin movimiento · ${correction.reason}`,
+    }),
+    replace_invoice: () => ({
+      title: 'Factura sustituida',
+      detail: `Nueva: ${meta.replacementNumber || ''}${meta.replacementNcf ? ` · ${meta.replacementNcf}` : ''} (${fmt(meta.replacementTotal || 0)}) · nota de crédito ${(meta.creditNotes || []).map(row => row.ncf || row.number).join(', ')}${meta.paymentsMoved ? ` · abonos trasladados ${fmt(meta.paymentsMoved)}` : ''} · ${correction.reason}`,
     }),
     create_debit_note: () => ({
       title: 'Nota de débito emitida',

@@ -290,8 +290,8 @@ function ensureSaleCorrectionsSchema(db) {
     'sales.view', 'sales.correct', 'sales.change_date',
     'sales.edit_internal_data', 'sales.request_return',
     'sales.approve_return', 'sales.issue_credit_note',
-    'sales.issue_debit_note', 'sales.cancel', 'sales.refund', 'sales.override_closed_cash',
-    'sales.view_audit',
+    'sales.issue_debit_note', 'sales.cancel', 'sales.replace_invoice', 'sales.refund',
+    'sales.override_closed_cash', 'sales.view_audit',
   ];
   const cashier = ['sales.view', 'sales.request_return'];
   SALE_CORRECTION_PERMISSIONS.forEach(permission => grant.run('superadmin', permission));
@@ -2338,6 +2338,238 @@ function createSaleCorrectionsRepo({
     })();
   }
 
+  // ── Sustituir factura ─────────────────────────────────────────────────────
+  // Rehace una factura con otro cliente, RNC o comprobante. En una sola
+  // transacción: se emite la factura nueva desde el POS, una nota de crédito
+  // (B04 si la original tenía NCF) devuelve toda la original al inventario y
+  // el dinero ya recibido pasa a la factura nueva.
+  //   · Contado: la nota reembolsa por el método original y la nueva se cobra
+  //     por el mismo método; en caja o banco solo se mueve la diferencia.
+  //   · Crédito: la nota baja la cuenta por cobrar, la nueva la sube y los
+  //     abonos se trasladan a la factura nueva.
+  const REPLACEMENT_REASON_TEXT = {
+    NOT_ACTIVE: 'La factura no está activa.',
+    DERIVED_DOCUMENT: 'Esta factura es un documento derivado (nota de débito o documento de aumento).',
+    HAS_CREDIT_NOTE: 'La factura ya tiene devoluciones o notas de crédito.',
+    HAS_DEBIT_NOTE: 'La factura tiene una nota de débito vigente.',
+    MIXED_PAYMENT: 'La factura se cobró con pago mixto.',
+    FOREIGN_CURRENCY: 'La factura se cobró en moneda extranjera.',
+    HAS_PREPAYMENT: 'La factura tiene un equipo usado o un anticipo aplicado.',
+    ECF_ISSUED: 'La factura es un e-CF emitido.',
+    CLOSED_ACCOUNTING_PERIOD: 'El período contable de la factura está cerrado.',
+    HAS_SERIALIZED_UNITS: 'La factura tiene equipos con IMEI o serial.',
+    HAS_DELIVERY_NOTE: 'La factura está enlazada a un conduce.',
+    NO_ITEMS: 'La factura no tiene artículos que devolver.',
+  };
+
+  function _replacementState(root) {
+    const reasons = [];
+    const method = String(root.payment_method || '').toLowerCase();
+    if (root.type !== 'factura' || root.status !== 'completed') reasons.push('NOT_ACTIVE');
+    if (['debit_note', 'product_addition'].includes(root.correction_kind)) reasons.push('DERIVED_DOCUMENT');
+    const related = db().prepare(`
+      SELECT
+        SUM(CASE WHEN type='devolucion' THEN 1 ELSE 0 END) credits,
+        SUM(CASE WHEN correction_kind='debit_note' THEN 1 ELSE 0 END) debits
+      FROM sales WHERE original_sale_id=? AND status!='cancelled'
+    `).get(root.id);
+    if (Number(related?.credits || 0) > 0) reasons.push('HAS_CREDIT_NOTE');
+    if (Number(related?.debits || 0) > 0) reasons.push('HAS_DEBIT_NOTE');
+    if (method === 'mixto') reasons.push('MIXED_PAYMENT');
+    if (String(root.payment_currency || 'DOP').toUpperCase() !== 'DOP') reasons.push('FOREIGN_CURRENCY');
+    if (Number(root.trade_in_amount || 0) > 0 || Number(root.prepaid_amount || 0) > 0) reasons.push('HAS_PREPAYMENT');
+    if (ecfState(root.id)) reasons.push('ECF_ISSUED');
+    if (closedPeriodForDate(root.sale_date)) reasons.push('CLOSED_ACCOUNTING_PERIOD');
+    const lines = db().prepare(`
+      SELECT si.*,COALESCE(p.serialized,0) serialized FROM sale_items si
+      LEFT JOIN products p ON p.id=si.product_id WHERE si.sale_id=? ORDER BY si.id
+    `).all(root.id);
+    if (lines.some(line => line.product_unit_id || Number(line.serialized) === 1)) reasons.push('HAS_SERIALIZED_UNITS');
+    if (!lines.length) reasons.push('NO_ITEMS');
+    if (_tableExists(db(), 'delivery_note_invoice_links')) {
+      const linked = db().prepare('SELECT COUNT(*) count FROM delivery_note_invoice_links WHERE invoice_id=?').get(root.id);
+      if (Number(linked?.count || 0) > 0) reasons.push('HAS_DELIVERY_NOTE');
+    }
+    return { reasons, method, lines };
+  }
+
+  function replacementModel(saleId, userId) {
+    const user = userById(userId);
+    if (!user) throw new Error('Usuario no encontrado');
+    requirePermission(user, 'sales.correct');
+    requirePermission(user, 'sales.replace_invoice');
+    const root = db().prepare('SELECT * FROM sales WHERE id=?').get(Number(saleId));
+    if (!root) throw new Error('Factura no encontrada');
+    const state = _replacementState(root);
+    const charges = _tableExists(db(), 'sale_charges')
+      ? db().prepare('SELECT description,amount FROM sale_charges WHERE sale_id=? ORDER BY id').all(root.id)
+      : [];
+    return {
+      root: { ...root, administrative_data: _json(root.administrative_data, {}) },
+      eligible: state.reasons.length === 0,
+      reasons: state.reasons.map(code => ({ code, message: REPLACEMENT_REASON_TEXT[code] || code })),
+      items: state.lines,
+      charges,
+      paidApplied: salesRepo.paymentApplicationsTotal(root.id),
+      creditNoteWillBeFiscal: !!String(root.ncf || '').trim(),
+    };
+  }
+
+  function substituteInvoice({ originalSaleId, reason, saleData, userId, terminalId }) {
+    const requester = userById(userId);
+    if (!requester) throw new Error('Usuario no encontrado');
+    requirePermission(requester, 'sales.correct');
+    requirePermission(requester, 'sales.replace_invoice');
+    const cleanReason = String(reason || '').trim().replace(/\s+/g, ' ').slice(0, 500);
+    if (cleanReason.length < 5) throw new Error('El motivo de la sustitución es obligatorio y debe ser específico');
+    const operationId = String(saleData?.operationId || '').trim();
+    if (operationId.length < 8) throw new Error('La sustitución requiere una clave de operación');
+    const key = `replace-invoice:${Number(originalSaleId)}:${operationId}`.slice(0, 120);
+
+    return db().transaction(() => {
+      const earlier = db().prepare('SELECT * FROM sale_corrections WHERE idempotency_key=?').get(key);
+      if (earlier) {
+        const metadata = _json(earlier.metadata, {});
+        const confirmation = salesRepo.getConfirmationById(metadata.replacementSaleId, { idempotent: true });
+        return { ...confirmation, idempotent: true, substitution: metadata };
+      }
+      const root = db().prepare('SELECT * FROM sales WHERE id=?').get(Number(originalSaleId));
+      if (!root) throw new Error('La factura a sustituir no existe');
+      const state = _replacementState(root);
+      if (state.reasons.length) {
+        throw new Error(REPLACEMENT_REASON_TEXT[state.reasons[0]] || 'Esta factura no se puede sustituir');
+      }
+      const payment = { ...(saleData.payment || {}) };
+      const newMethod = String(payment.method || '').toLowerCase();
+      if (state.method === 'credito' && newMethod !== 'credito') {
+        throw new Error('Una factura a crédito se sustituye por otra factura a crédito');
+      }
+      if (state.method !== 'credito' && newMethod !== state.method) {
+        throw new Error(`Cobra la factura nueva por el mismo método de la original (${state.method}) para que el dinero ya recibido se aplique`);
+      }
+      if (state.method === 'transferencia' &&
+          Number(payment.financialAccountId || 0) !== Number(root.financial_account_id || 0)) {
+        throw new Error('Usa la misma cuenta bancaria de la factura original');
+      }
+      if (state.method === 'efectivo' && !saleData.session?.id) {
+        throw new Error('Abre la caja antes de sustituir una factura cobrada en efectivo');
+      }
+      // La factura nueva no combina la sustitución con otros flujos documentales.
+      const mixedFlow = ['replacesSaleId', 'sourceQuoteId', 'sourceConduceId', 'checkoutOrderId', 'prepaidServiceOrderId']
+        .some(field => Number(payment[field] || 0) > 0) || !!payment.tradeIn;
+      if (mixedFlow) throw new Error('La sustitución no se combina con cotizaciones, conduces, anticipos ni equipos usados');
+      if (Number(payment.initialPaymentAmount || 0) > 0) {
+        throw new Error('La sustitución traslada los abonos de la factura original; no registres un pago inicial');
+      }
+
+      const paidApplied = salesRepo.paymentApplicationsTotal(root.id);
+      const customerId = Number(root.customer_id || 1);
+      const sameCustomer = Number(saleData.customer?.id || 1) === customerId;
+      if (state.method === 'credito' && !sameCustomer && paidApplied > 0.005) {
+        throw new Error('Los abonos pertenecen al cliente original: para cambiar de cliente, primero anula o reaplica esos abonos');
+      }
+      const balanceBefore = state.method === 'credito' && customerId !== 1 && sameCustomer
+        ? round2(db().prepare('SELECT balance FROM customers WHERE id=?').get(customerId)?.balance || 0)
+        : null;
+
+      // 1. Nota de crédito por toda la factura original: los artículos vuelven
+      //    al inventario (la factura nueva puede volver a venderlos) y, si quedan
+      //    cargos o redondeos, un ajuste monetario acredita el remanente.
+      const creditIds = [];
+      const creditUser = { id: requester.id, name: requester.name, role: requester.role };
+      const creditReason = `Sustitución de ${root.document_number_fmt || '#' + root.id}: ${cleanReason}`;
+      const itemCredit = returnsRepo.create({
+        originalSaleId: root.id,
+        items: state.lines.map(line => ({ sale_item_id: line.id, product_id: line.product_id, qty: line.qty })),
+        session: saleData.session || null,
+        user: creditUser,
+        reason: creditReason,
+      });
+      creditIds.push(Number(itemCredit.returnId));
+      const remainder = round2(Number(root.total || 0) - Number(itemCredit.total || 0));
+      if (remainder > 0.005) {
+        const chargeCredit = returnsRepo.create({
+          originalSaleId: root.id,
+          items: [],
+          monetaryAmount: remainder,
+          monetaryLabel: 'Cargos adicionales de la factura sustituida',
+          session: saleData.session || null,
+          user: creditUser,
+          reason: creditReason,
+        });
+        creditIds.push(Number(chargeCredit.returnId));
+      }
+
+      // 2. Factura nueva, con las mismas validaciones y autorizaciones del POS.
+      const created = salesRepo.create({
+        ...saleData,
+        payment,
+        type: 'factura',
+        user: { id: requester.id, name: requester.name, role: requester.role },
+      });
+      const replacement = db().prepare('SELECT * FROM sales WHERE id=?').get(created.saleId);
+      if (state.method === 'credito' && paidApplied > Number(replacement.total || 0) + 0.005) {
+        throw new Error(`La factura nueva (RD$${Number(replacement.total).toFixed(2)}) no puede ser menor que lo ya abonado (RD$${paidApplied.toFixed(2)})`);
+      }
+      // 3. La nota de crédito no deja el saldo por debajo de cero; con abonos
+      //    eso perdería lo pagado. El saldo final es exacto: anterior − original + nueva.
+      if (balanceBefore !== null) {
+        const expected = round2(balanceBefore - Number(root.total || 0) + Number(replacement.total || 0));
+        db().prepare("UPDATE customers SET balance=?,updated_at=datetime('now') WHERE id=?")
+          .run(Math.max(0, expected), customerId);
+      }
+
+      const moved = state.method === 'credito'
+        ? salesRepo.movePaymentApplications(root.id, replacement.id)
+        : { count: 0, total: 0, paymentIds: [] };
+
+      db().prepare(`
+        UPDATE sales SET revision=revision+1,updated_at=datetime('now','localtime') WHERE id=?
+      `).run(root.id);
+      const updated = db().prepare('SELECT * FROM sales WHERE id=?').get(root.id);
+      const creditDocs = creditIds.map(id => db().prepare('SELECT id,document_number_fmt,ncf,total FROM sales WHERE id=?').get(id));
+      const metadata = {
+        replacementSaleId: Number(replacement.id),
+        replacementNumber: replacement.document_number_fmt || '',
+        replacementNcf: replacement.ncf || '',
+        replacementTotal: Number(replacement.total || 0),
+        creditNoteIds: creditIds,
+        creditNotes: creditDocs.map(doc => ({ id: doc.id, number: doc.document_number_fmt || '', ncf: doc.ncf || '', total: doc.total })),
+        creditTotal: round2(creditDocs.reduce((sum, doc) => sum + Number(doc.total || 0), 0)),
+        paymentsMoved: moved.total,
+        settlement: state.method,
+      };
+      const correction = db().prepare(`
+        INSERT INTO sale_corrections(
+          sale_id,action,status,reason,requested_by,authorized_by,cash_session_id,
+          terminal_id,idempotency_key,before_data,after_data,affected_modules,metadata
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+      `).run(
+        root.id, 'replace_invoice', 'applied', cleanReason,
+        requester.id, requester.id, saleData.session?.id || null,
+        String(terminalId || '').slice(0, 120), key,
+        _serialize(_snapshot(root)), _serialize(_snapshot(updated)),
+        _serialize(['sales', 'inventory', state.method === 'credito' ? 'accounts_receivable' : 'cash', 'accounting', 'fiscal', 'reports']),
+        _serialize(metadata)
+      );
+      const correctionId = Number(correction.lastInsertRowid);
+      const addDocument = db().prepare(`
+        INSERT INTO sale_correction_documents(correction_id,sale_id,document_role) VALUES(?,?,?)
+      `);
+      creditIds.forEach(id => addDocument.run(correctionId, id, 'credit'));
+      addDocument.run(correctionId, replacement.id, 'supplemental_invoice');
+      const addAudit = db().prepare(`
+        INSERT INTO audit_logs(user_id,user_name,action,entity,entity_id,detail,created_at)
+        VALUES(?,?,?,?,?,?,datetime('now','localtime'))
+      `);
+      addAudit.run(requester.id, requester.name, 'factura_sustituida', 'sales', root.id,
+        _serialize({ correctionId, reason: cleanReason, ...metadata }));
+      addAudit.run(requester.id, requester.name, 'factura_sustituta_emitida', 'sales', replacement.id,
+        _serialize({ correctionId, substitutes: root.document_number_fmt || root.id, reason: cleanReason }));
+      return { ...created, idempotent: false, correctionId, substitution: metadata };
+    })();
+  }
+
   function history(saleId, userId) {
     const user = userById(userId);
     if (!user) throw new Error('Usuario no encontrado');
@@ -2452,6 +2684,8 @@ function createSaleCorrectionsRepo({
     changePaymentMethod,
     debitNoteModel,
     createDebitNote,
+    replacementModel,
+    substituteInvoice,
     history,
   };
 }

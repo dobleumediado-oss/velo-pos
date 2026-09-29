@@ -167,6 +167,61 @@ hasta disponer de un emisor e33 certificado.
 Operaciones que requerirían sobrescribir pagos o emitir un documento fiscal no
 soportado permanecen bloqueadas con una explicación explícita.
 
+## Cambiar método de pago (entre medios de contado)
+
+`saleCorrectionsRepo.changePaymentMethod` corrige efectivo ↔ tarjeta ↔
+transferencia sin tocar total, NCF ni la fecha real del cobro.
+
+- Caja de la venta **abierta**: se cambia el `method` de sus `cash_movements`
+  para que el cuadre espere lo real. Caja **cerrada**: su cuadre y movimientos
+  no se tocan y se exige `sales.override_closed_cash`.
+- Bancos: `cancelMovement` anula el cobro en la cuenta anterior y
+  `addMovement` lo registra en la nueva (tarjeta elige la cuenta como el POS).
+- Contabilidad: `regenerateSaleEntry` reversa y regenera el asiento.
+- Bloqueado: pago mixto o crédito, moneda extranjera, e-CF, notas de crédito
+  vigentes, abonos, cobro conciliado, período cerrado.
+- Acción `change_payment_method` en `sale_corrections`, auditoría
+  `metodo_pago_cambiado`, idempotencia y control de `revision`.
+
+## Nota de débito / cargo posterior (B03)
+
+`saleCorrectionsRepo.createDebitNote` emite un documento propio vía
+`salesRepo.create({ debitNote })` (el IPC `sales:create` descarta ese parámetro:
+una B03 solo nace aquí, con `sales.issue_debit_note`).
+
+- Secuencia propia `nota_debito` (NDB): no consume la numeración de facturas.
+- `correction_kind='debit_note'` y `original_sale_id` = factura original.
+- Con NCF en la original y rango B03 vigente: B03 con `ncf_log.modifies_ncf`
+  (607). Sin NCF, o sin rango B03, sale como documento interno y se avisa antes.
+- Se cobra a crédito (CxC) o al contado (caja/banco); genera asiento de venta.
+- La factura no se anula mientras tenga una nota de débito vigente.
+- Impresión: título NOTA DE DÉBITO y "Modifica NCF" en térmica y A4.
+- e-CF: bloqueado (la e33 se emite en el proveedor fiscal).
+
+## Sustituir factura
+
+`saleCorrectionsRepo.substituteInvoice` se llama desde `sales:create` cuando el
+POS envía `payment.substitutesSaleId` (permiso `sales.replace_invoice`). En una
+sola transacción y en este orden:
+
+1. Nota de crédito (B04 si la original tenía NCF) por todos los artículos: el
+   inventario vuelve antes de vender otra vez. Si quedan cargos o redondeos,
+   una segunda nota monetaria acredita el remanente: se acredita el total exacto.
+2. Factura nueva con `salesRepo.create` (mismas validaciones y autorizaciones).
+3. Dinero ya recibido:
+   - Contado: la nota reembolsa por el método original y la nueva se cobra por
+     el **mismo** método (y cuenta, en transferencias); solo se mueve la diferencia.
+   - Crédito: los abonos pasan a la factura nueva (`movePaymentApplications`) y el
+     saldo del cliente se fija exacto (anterior − original + nueva), porque la
+     nota de crédito no deja el saldo bajo cero. La nueva no puede ser menor que
+     lo abonado, y con abonos no se cambia de cliente.
+
+La factura nueva **no** usa `original_sale_id` (muchas consultas lo interpretan
+como nota o aumento): el vínculo vive en `sale_corrections` (`replace_invoice`),
+`sale_correction_documents` y la auditoría de ambas facturas. Bloqueado con
+devoluciones previas, nota de débito, pago mixto, moneda extranjera, anticipo o
+equipo usado, e-CF, período cerrado, unidades serializadas o conduce enlazado.
+
 ## Pruebas
 
 `npm run test:sale-corrections` cubre 106 aserciones de integración:

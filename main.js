@@ -3192,7 +3192,26 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
 
     // La nota de débito solo nace del flujo de correcciones, con sus permisos.
     const { debitNote: _ignoredDebitNote, ...posSaleData } = saleData || {};
-    const result = salesRepo.create({ ...posSaleData, user: reqUser });
+    // Sustituir factura: la factura nueva y la nota de crédito de la original
+    // se registran juntas en el repositorio de correcciones.
+    const substitutesSaleId = Number(posSaleData?.payment?.substitutesSaleId || 0);
+    if (substitutesSaleId && (posSaleData?.type || 'factura') !== 'factura') {
+      return { ok: false, error: 'La sustitución debe emitirse como factura' };
+    }
+    const result = substitutesSaleId
+      ? saleCorrectionsRepo.substituteInvoice({
+          originalSaleId: substitutesSaleId,
+          reason: posSaleData.payment.substitutionReason,
+          saleData: posSaleData,
+          userId: reqUser.id,
+          terminalId: _reqTerminalId(),
+        })
+      : salesRepo.create({ ...posSaleData, user: reqUser });
+    if (substitutesSaleId && !result.idempotent) {
+      for (const returnId of result.substitution?.creditNoteIds || []) {
+        _acctHook(() => accountingRepo.generateReturnEntry({ returnSaleId: returnId, userId: requestUserId }));
+      }
+    }
     if (!result.idempotent && priceApproval?.token) _privAuthTokens.delete(priceApproval.token);
     if (!result.idempotent && discountApproval?.token) _privAuthTokens.delete(discountApproval.token);
     if (!result.idempotent && creditLimitApproval?.token) _privAuthTokens.delete(creditLimitApproval.token);
@@ -3683,6 +3702,14 @@ ipcMain.handle('sales:corrections:createDebitNote', async (_, data = {}) => {
     return { ok: true, ...result };
   } catch (e) {
     console.error('[sales:corrections:createDebitNote]', e);
+    return { ok: false, error: e.message, code: e.code || 'VALIDATION_ERROR' };
+  }
+});
+
+ipcMain.handle('sales:corrections:getReplacementModel', async (_, { id, requestUserId } = {}) => {
+  try {
+    return { ok: true, data: saleCorrectionsRepo.replacementModel(id, requestUserId) };
+  } catch (e) {
     return { ok: false, error: e.message, code: e.code || 'VALIDATION_ERROR' };
   }
 });

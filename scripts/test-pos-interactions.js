@@ -581,6 +581,35 @@ assert.strictEqual(transfer.posQuoteActionLabel(state.currentInv()), 'Crear coti
 console.log('  ✓ la cotización se abre en el POS para modificarla y guardarla con su mismo número');
 
 state.resetInvoices();
+const substitutionLoaded = transfer.posLoadResaleCart({
+  substitutesSaleId: 88,
+  substitutesNumber: 'FAC-000088',
+  substitutionReason: 'Factura a nombre de la empresa',
+  paymentMethod: 'transferencia',
+  financialAccountId: 4,
+  customer: { id: 9, name: 'Motores del Caribe, SRL', rnc: '130123456' },
+  items: [
+    { product_id: 100, product_code: 'P-100', product_name: 'Producto cotizado', unit_price: 118, qty: 15 },
+    { product_id: 100, product_code: 'P-100', product_name: 'Producto cotizado', unit_price: 118, qty: 1, offer_is_gift: 1 },
+  ],
+});
+assert.strictEqual(substitutionLoaded, true, 'debe abrir la factura para sustituirla');
+assert.strictEqual(state.currentInv().itype, 'factura');
+assert.strictEqual(state.currentInv().substitutesSaleId, 88);
+assert.strictEqual(state.currentInv().substitutesMethod, 'transferencia');
+assert.strictEqual(state.currentInv().substitutesAccountId, 4);
+assert.strictEqual(state.currentInv().cart[0].qty, 15,
+  'las unidades de la original vuelven al inventario: la cantidad no se recorta');
+assert.strictEqual(state.currentInv().cart[1].offer_is_gift, 1, 'el regalo de la oferta se conserva');
+assert.strictEqual(state.currentInv().substitutesStockCredit[100], 16);
+transfer.posSetType('cotizacion');
+assert.strictEqual(state.currentInv().itype, 'factura', 'la sustitución solo se emite como factura');
+transfer.posLimpiar();
+assert.strictEqual(state.currentInv().substitutesSaleId, null, 'Limpiar cancela la sustitución');
+assert.strictEqual(state.currentInv().substitutesStockCredit, null);
+console.log('  ✓ la sustitución abre la factura en el POS con su método, sus existencias y su oferta');
+
+state.resetInvoices();
 const conduceEditLoaded = transfer.posLoadResaleCart({
   editConduceId: 73,
   editConduceNumber: 'CON-000073',

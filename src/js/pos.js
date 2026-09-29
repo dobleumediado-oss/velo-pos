@@ -350,6 +350,13 @@ function _setPosPmode(mode) {
 }
 
 // ── Grid de productos ─────────────────────────
+// En una sustitución, las unidades de la factura original vuelven al
+// inventario dentro de la misma operación: cuentan como disponibles.
+function posSubstitutionStock(productId) {
+  const credit = currentInv()?.substitutesStockCredit || {};
+  return Number(credit[Number(productId)] || 0);
+}
+
 function _posAvailableStock(product) {
   // Serializado (VELO TECH POS): disponibilidad = unidades en stock. Fungible
   // (auto-repuestos): campo numérico menos lo reservado en despacho.
@@ -737,7 +744,7 @@ function posAddItem(pid) {
     return;
   }
   const prod = DB.products.find(p => p.id === pid);
-  if (!prod || _posAvailableStock(prod) <= 0) { toast('Sin disponibilidad', 'err'); return; }
+  if (!prod || _posAvailableStock(prod) + posSubstitutionStock(prod.id) <= 0) { toast('Sin disponibilidad', 'err'); return; }
 
   // Serializado (VELO TECH POS): no se agrega directo — se elige la UNIDAD (IMEI).
   // Para fungibles (auto-repuestos) esta rama nunca corre y el flujo es idéntico.
@@ -774,7 +781,7 @@ function posAddItem(pid) {
 
   if (exist) {
     const idx = inv.cart.indexOf(exist);
-    const maxForLine = Math.max(0, _posAvailableStock(prod) - posCartQtyForProduct(pid, idx));
+    const maxForLine = Math.max(0, _posAvailableStock(prod) + posSubstitutionStock(pid) - posCartQtyForProduct(pid, idx));
     if (exist.qty >= maxForLine) { toast('No hay más stock', 'err'); return; }
     exist.qty++;
   } else {
@@ -811,7 +818,7 @@ function renderCart() {
   const editingType = posEditingDocumentType(inv);
   const availableTypes = editingType
     ? [editingType]
-    : (inv.replacesSaleId || inv.sourceQuoteId || inv.sourceConduceId)
+    : (inv.replacesSaleId || inv.sourceQuoteId || inv.sourceConduceId || inv.substitutesSaleId)
     ? ['factura']
     : ['factura', 'cotizacion', ...(posConduceCanAccess() ? ['conduce'] : [])];
   const documentLabel = documentLabels[inv.itype] || 'Factura';
@@ -861,6 +868,13 @@ function renderCart() {
                     border-radius:7px;background:var(--green-bg);font-size:10.5px;color:var(--muted2)">
           <strong style="color:var(--text)">Conduce ${posEscHtml(inv.sourceConduceNumber || '#' + inv.sourceConduceId)} cargado</strong>
           <span> — se marcará facturado únicamente cuando confirmes esta venta.</span>
+        </div>` : ''}
+      ${inv.substitutesSaleId ? `
+        <div class="alrt a" style="margin-top:8px;padding:7px 9px">
+          <div>
+            <div class="alrt-title">Sustituyendo ${posEscHtml(inv.substitutesNumber || '#' + inv.substitutesSaleId)}</div>
+            <div class="alrt-sub">Corrige cliente, comprobante o artículos. Al confirmar se emite una nota de crédito por toda la factura original y el dinero ya recibido pasa a esta factura${inv.substitutesMethod && inv.substitutesMethod !== 'credito' ? ` (cóbrala por ${posEscHtml(inv.substitutesMethod)})` : ''}. Limpiar cancela la sustitución.</div>
+          </div>
         </div>` : ''}
       ${editingType ? `
         <div class="alrt b" style="margin-top:8px;padding:7px 9px">
@@ -1088,6 +1102,12 @@ function posClearDocumentEdit(inv) {
   inv.editConduceId = null;
   inv.editConduceNumber = '';
   inv.editConduceHeader = null;
+  inv.substitutesSaleId = null;
+  inv.substitutesNumber = '';
+  inv.substitutionReason = '';
+  inv.substitutesMethod = '';
+  inv.substitutesAccountId = null;
+  inv.substitutesStockCredit = null;
 }
 
 function posQuoteActionLabel(inv) {
@@ -1183,6 +1203,10 @@ function posSetType(t) {
   }
   if (currentInv().sourceConduceId && t !== 'factura') {
     toast('El conduce cargado debe completarse como factura', 'w');
+    return;
+  }
+  if (currentInv().substitutesSaleId && t !== 'factura') {
+    toast('La sustitución debe emitirse como factura', 'w');
     return;
   }
   const editingType = posEditingDocumentType(currentInv());
@@ -1364,7 +1388,7 @@ function posQty(idx, delta) {
   const item = inv.cart[idx];
   if (!item) return;
   const prod = DB.products.find(p => p.id === item.pid);
-  const stockMax = Math.max(0, (prod ? _posAvailableStock(prod) : 999) - posCartQtyForProduct(prod?.id || item.product_id || item.pid, idx));
+  const stockMax = Math.max(0, (prod ? _posAvailableStock(prod) + posSubstitutionStock(prod.id) : 999) - posCartQtyForProduct(prod?.id || item.product_id || item.pid, idx));
   const maxForLine = item.conduce_source?.maxQty
     ? Math.min(stockMax, Number(item.conduce_source.maxQty)) : stockMax;
   item.qty += delta;
@@ -1388,7 +1412,7 @@ function posSetQty(idx, input) {
   // instante. No lo conviertas prematuramente a 1 ni redibujes el carrito.
   if (String(raw).trim() === '') return;
   const prod = DB.products.find(p => p.id === item.pid);
-  const stockMax = Math.max(0, (prod ? _posAvailableStock(prod) : 999) - posCartQtyForProduct(prod?.id || item.product_id || item.pid, idx));
+  const stockMax = Math.max(0, (prod ? _posAvailableStock(prod) + posSubstitutionStock(prod.id) : 999) - posCartQtyForProduct(prod?.id || item.product_id || item.pid, idx));
   const maxForLine = item.conduce_source?.maxQty
     ? Math.min(stockMax, Number(item.conduce_source.maxQty)) : stockMax;
   if (maxForLine <= 0) {
@@ -1683,7 +1707,10 @@ function posLoadResaleCart(payload = {}) {
   // cantidades del documento tal cual, sin recortarlas por existencia.
   const editQuoteId = Number(payload.editQuoteId) || null;
   const editConduceId = !editQuoteId ? (Number(payload.editConduceId) || null) : null;
-  const editingDocument = !!(editQuoteId || editConduceId);
+  const substitutesSaleId = !editQuoteId && !editConduceId ? (Number(payload.substitutesSaleId) || null) : null;
+  // En una sustitución los artículos de la original vuelven al inventario en
+  // la misma operación: tampoco se recortan por existencia.
+  const editingDocument = !!(editQuoteId || editConduceId || substitutesSaleId);
   if (!rawItems.length) { toast('No hay artículos para cargar en el POS', 'w'); return false; }
 
   const reserved = new Map();
@@ -1728,6 +1755,7 @@ function posLoadResaleCart(payload = {}) {
       taxable,
       tax_pct:      taxPct,
       qty,
+      offer_is_gift: Number(src.offer_is_gift) === 1 ? 1 : 0,
       resale_source: (sourceQuoteId || sourceConduceId) ? null : {
         saleId: src.source_sale_id || null,
         itemId: src.source_item_id || null,
@@ -1776,6 +1804,17 @@ function posLoadResaleCart(payload = {}) {
     // Datos del conduce que el POS no muestra y que el guardado debe conservar.
     inv.editConduceHeader = payload.conduceHeader && typeof payload.conduceHeader === 'object'
       ? { ...payload.conduceHeader } : null;
+  } else if (substitutesSaleId) {
+    inv.substitutesSaleId = substitutesSaleId;
+    inv.substitutesNumber = String(payload.substitutesNumber || '');
+    inv.substitutionReason = String(payload.substitutionReason || '');
+    inv.substitutesMethod = String(payload.paymentMethod || '').toLowerCase();
+    inv.substitutesAccountId = Number(payload.financialAccountId) || null;
+    inv.substitutesStockCredit = {};
+    rawItems.forEach(src => {
+      const pid = Number(src.product_id) || 0;
+      if (pid) inv.substitutesStockCredit[pid] = (inv.substitutesStockCredit[pid] || 0) + (Number(src.qty) || 0);
+    });
   }
   inv.pmode = payload.priceMode === 'wholesale' ? 'wholesale' : 'retail';
   inv.pmeth = ['efectivo','tarjeta','transferencia','mixto','credito'].includes(payload.paymentMethod)
@@ -1825,7 +1864,9 @@ function posLoadResaleCart(payload = {}) {
   renderCart();
   renderPOSGrid();
   if (!sourceQuoteId && !sourceConduceId && !editingDocument && typeof window.ventasClearResaleCart === 'function') window.ventasClearResaleCart(true);
-  toast(editQuoteId
+  toast(substitutesSaleId
+    ? `✓ ${inv.substitutesNumber || 'Factura'} lista para sustituir`
+    : editQuoteId
     ? `✓ Cotización ${inv.editQuoteNumber || '#' + editQuoteId} lista para modificar`
     : editConduceId
     ? `✓ Conduce ${inv.editConduceNumber || '#' + editConduceId} listo para modificar`
@@ -4476,6 +4517,21 @@ async function finalizarVenta() {
     btnConfirmar.innerHTML  = `${svg('clock')} Procesando...`;
   }
 
+  if (inv.substitutesSaleId && !isQuote) {
+    const requiredMethod = inv.substitutesMethod || '';
+    if (requiredMethod && pmeth !== requiredMethod) {
+      toast(requiredMethod === 'credito'
+        ? 'La factura original era a crédito: la sustituta también debe ser a crédito'
+        : `Cobra la factura sustituta por ${requiredMethod}, igual que la original, para aplicar el dinero ya recibido`, 'w');
+      return;
+    }
+    if (requiredMethod === 'transferencia' && inv.substitutesAccountId &&
+        Number(finAcctId || 0) !== Number(inv.substitutesAccountId)) {
+      toast('Usa la misma cuenta bancaria de la factura original', 'w');
+      return;
+    }
+  }
+
   const saleData = {
     operationId: inv.saleOperationId,
     customer,
@@ -4519,6 +4575,8 @@ async function finalizarVenta() {
       sourceQuoteId: inv.sourceQuoteId || null,
       sourceConduceId: inv.sourceConduceId || null,
       editQuoteId: isQuote ? (inv.editQuoteId || null) : null,
+      substitutesSaleId: !isQuote ? (inv.substitutesSaleId || null) : null,
+      substitutionReason: !isQuote ? (inv.substitutionReason || '') : '',
       ncfType,
       warrantyDays,
       tradeIn: inv.tradeIn || null,
@@ -4551,7 +4609,9 @@ async function finalizarVenta() {
     // Venta exitosa
     closeModal();
     const savedDocumentLabel = result.documentNumberFmt || `#${result.saleId}`;
-    toast(sourceQuoteId
+    toast(result.substitution
+      ? `✓ ${inv.substitutesNumber || 'Factura'} sustituida por ${savedDocumentLabel}${result.substitution.creditNotes?.length ? ` · nota de crédito ${result.substitution.creditNotes.map(row => row.ncf || row.number).join(', ')}` : ''}`
+      : sourceQuoteId
       ? `✓ Cotización ${sourceQuoteNumber || '#' + sourceQuoteId} convertida → ${savedDocumentLabel}`
       : sourceConduceId
       ? `✓ Conduce ${sourceConduceNumber || '#' + sourceConduceId} convertido → ${savedDocumentLabel}`

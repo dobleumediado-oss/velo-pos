@@ -5507,6 +5507,43 @@ function refreshPaymentPrimarySale(paymentId) {
 }
 
 const salesRepo = {
+  // Traslada a otra factura los abonos aplicados a una factura. Lo usa la
+  // sustitución: el dinero que el cliente ya pagó pasa a la factura nueva sin
+  // crear ni borrar pagos. Debe llamarse dentro de una transacción.
+  movePaymentApplications(fromSaleId, toSaleId) {
+    const applications = salePaymentApplications(fromSaleId);
+    for (const application of applications) {
+      const applied = round2(Number(application.applied_amount || 0));
+      if (application.allocation_id) {
+        const existingTarget = db.prepare(`
+          SELECT id,amount FROM payment_allocations WHERE payment_id=? AND sale_id=?
+        `).get(application.id, toSaleId);
+        if (existingTarget) {
+          db.prepare('UPDATE payment_allocations SET amount=? WHERE id=?')
+            .run(round2(Number(existingTarget.amount || 0) + applied), existingTarget.id);
+          db.prepare('DELETE FROM payment_allocations WHERE id=?').run(application.allocation_id);
+        } else {
+          db.prepare(`
+            UPDATE payment_allocations
+            SET sale_id=?,invoice_balance_before=?,invoice_balance_after=?
+            WHERE id=?
+          `).run(toSaleId, 0, 0, application.allocation_id);
+        }
+        refreshPaymentPrimarySale(application.id);
+      } else {
+        db.prepare('UPDATE payments SET sale_id=? WHERE id=?').run(toSaleId, application.id);
+      }
+    }
+    return {
+      count: applications.length,
+      total: round2(applications.reduce((sum, row) => sum + Number(row.applied_amount || 0), 0)),
+      paymentIds: applications.map(row => Number(row.id)),
+    };
+  },
+  paymentApplicationsTotal(saleId) {
+    return round2(salePaymentApplications(saleId)
+      .reduce((sum, row) => sum + Number(row.applied_amount || 0), 0));
+  },
   getConfirmationById(id, { idempotent = true } = {}) {
     const sale = db.prepare('SELECT * FROM sales WHERE id=?').get(Number(id));
     return sale ? saleConfirmationResult(sale, { idempotent }) : null;

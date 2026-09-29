@@ -1010,6 +1010,121 @@ ok(dnPrintable.modifies_ncf === dnRoot.ncf &&
   dnTicket.includes('NOTA DE DÉBITO') && dnTicket.includes(`Modifica NCF: ${dnRoot.ncf}`),
   'la nota de débito se imprime como tal, con su B03 y el NCF que modifica');
 
+console.log('\n== G4. Sustituir factura: nota de crédito + factura nueva ==');
+db.prepare(`
+  INSERT INTO ncf_sequences(type,prefix,from_num,to_num,current,active,alert_at)
+  VALUES('B01','B01',1,9999,0,1,10)
+`).run();
+const subCustomerId = DB.customersRepo.create({ name: 'Cliente Sustitución', rnc: '131000001', credit_days: 30 });
+db.prepare('UPDATE customers SET credit_limit=100000 WHERE id=?').run(subCustomerId);
+const subLine = qty => ({
+  product_id: productId, product_code: 'COR-001', product_name: 'Producto corrección',
+  unit_cost: 60, unit_price: 118, taxable: 1, tax_pct: 18, qty,
+});
+const subOriginal = DB.salesRepo.getById(DB.salesRepo.create({
+  customer: { id: subCustomerId }, items: [subLine(2)],
+  payment: { method: 'credito', saleDate: today, ncfType: 'B02' }, session: { id: cashId }, user: admin, type: 'factura',
+}).saleId);
+DB.customersRepo.addPayment({
+  customerId: subCustomerId, amount: 100, saleId: subOriginal.id, method: 'efectivo', note: 'Abono previo',
+  cajero: admin.name, userId: admin.id, sessionId: cashId, operationId: `sub-abono-${subOriginal.id}`,
+});
+const subBalanceBefore = db.prepare('SELECT balance FROM customers WHERE id=?').get(subCustomerId).balance;
+const subStockBefore = db.prepare('SELECT stock FROM products WHERE id=?').get(productId).stock;
+const subModel = DB.saleCorrectionsRepo.replacementModel(subOriginal.id, admin.id);
+ok(subModel.eligible && subModel.paidApplied === 100 && subModel.creditNoteWillBeFiscal,
+  'una factura a crédito con abono puede sustituirse y el modelo informa lo abonado');
+const subSaleData = {
+  operationId: `sub-op-${subOriginal.id}-0001`,
+  customer: { id: subCustomerId }, items: [subLine(3)],
+  payment: { method: 'credito', saleDate: today, ncfType: 'B01', substitutesSaleId: subOriginal.id },
+  session: { id: cashId }, type: 'factura',
+};
+const substitute = () => DB.saleCorrectionsRepo.substituteInvoice({
+  originalSaleId: subOriginal.id, reason: 'El cliente necesita crédito fiscal B01',
+  saleData: subSaleData, userId: admin.id, terminalId: 'test',
+});
+const subResult = substitute();
+const subNew = DB.salesRepo.getById(subResult.saleId);
+const subCredits = subResult.substitution.creditNoteIds.map(id => DB.salesRepo.getById(id));
+ok(subNew.type === 'factura' && /^B01\d{8}$/.test(subNew.ncf) && subNew.total === 354,
+  'la factura nueva sale con el comprobante correcto (B01) y sus artículos');
+ok(subCredits.length === 1 && subCredits[0].type === 'devolucion' && /^B04\d{8}$/.test(subCredits[0].ncf) &&
+  subCredits[0].total === subOriginal.total && subCredits[0].modifies_ncf === subOriginal.ncf,
+  'una nota de crédito B04 acredita toda la factura original y referencia su NCF');
+ok(DB.salesRepo.getById(subOriginal.id).status === 'returned' && DB.salesRepo.getById(subOriginal.id).ncf === subOriginal.ncf,
+  'la factura original queda acreditada y conserva su NCF');
+ok(db.prepare('SELECT stock FROM products WHERE id=?').get(productId).stock === subStockBefore + 2 - 3,
+  'el inventario recibe lo devuelto y descuenta lo nuevo: sin doble descuento');
+ok(DB.salesRepo.paymentApplicationsTotal(subNew.id) === 100 && DB.salesRepo.paymentApplicationsTotal(subOriginal.id) === 0,
+  'el abono ya recibido pasa a la factura nueva');
+ok(round2(db.prepare('SELECT balance FROM customers WHERE id=?').get(subCustomerId).balance) ===
+  round2(subBalanceBefore - subOriginal.total + subNew.total),
+  'el saldo del cliente queda exacto: anterior − original + nueva (sin perder el abono)');
+const subPending = require('../lib/pending-invoices').getPendingInvoices(db, subCustomerId).facturas;
+ok(round2(subPending.find(row => Number(row.id) === subNew.id)?.pendiente) === 254 &&
+  !subPending.some(row => Number(row.id) === subOriginal.id),
+  'en facturas pendientes la nueva debe 254 (354 − 100 abonado) y la original ya no aparece');
+const subAgain = substitute();
+ok(subAgain.idempotent === true && subAgain.saleId === subNew.id &&
+  db.prepare("SELECT COUNT(*) c FROM sales WHERE original_sale_id=? AND type='devolucion'").get(subOriginal.id).c === 1,
+  'reintentar la misma operación no emite otra factura ni otra nota de crédito');
+ok(db.prepare("SELECT COUNT(*) c FROM sale_corrections WHERE sale_id=? AND action='replace_invoice'").get(subOriginal.id).c === 1 &&
+  db.prepare("SELECT COUNT(*) c FROM audit_logs WHERE entity='sales' AND entity_id=? AND action='factura_sustituta_emitida'").get(subNew.id).c === 1,
+  'la sustitución queda en el historial de la original y en la auditoría de la nueva');
+ok(!DB.saleCorrectionsRepo.replacementModel(subOriginal.id, admin.id).eligible,
+  'una factura ya sustituida no se vuelve a sustituir');
+
+const walkInCharged = DB.salesRepo.getById(DB.salesRepo.create({
+  customer: { id: 1 }, items: [subLine(1)],
+  payment: { method: 'efectivo', saleDate: today, charges: [{ description: 'Instalación', amount: 200 }] },
+  session: { id: cashId }, user: admin, type: 'factura',
+}).saleId);
+expectThrow(() => DB.saleCorrectionsRepo.substituteInvoice({
+  originalSaleId: walkInCharged.id, reason: 'Cambiar a tarjeta al sustituir',
+  saleData: { operationId: `sub-op-${walkInCharged.id}-card`, customer: { id: subCustomerId }, items: [subLine(1)],
+    payment: { method: 'tarjeta', cardBrand: 'Visa', saleDate: today }, session: { id: cashId }, type: 'factura' },
+  userId: admin.id,
+}), /mismo método de la original/, 'al contado la factura nueva se cobra por el mismo método de la original');
+const cashNetBefore = db.prepare("SELECT COALESCE(SUM(amount),0) s FROM cash_movements WHERE cash_session_id=? AND method='efectivo'").get(cashId).s;
+const walkInSub = DB.saleCorrectionsRepo.substituteInvoice({
+  originalSaleId: walkInCharged.id, reason: 'La factura era para la empresa del cliente',
+  saleData: { operationId: `sub-op-${walkInCharged.id}-cash`, customer: { id: subCustomerId }, items: [subLine(1)],
+    payment: { method: 'efectivo', saleDate: today, ncfType: 'B01', charges: [{ description: 'Instalación', amount: 200 }] },
+    session: { id: cashId }, type: 'factura' },
+  userId: admin.id,
+});
+const walkInCredits = walkInSub.substitution.creditNoteIds.map(id => DB.salesRepo.getById(id));
+ok(walkInCredits.length === 2 && round2(walkInCredits.reduce((sum, row) => sum + row.total, 0)) === walkInCharged.total,
+  'los cargos adicionales se acreditan con un ajuste por el remanente: se acredita el total exacto');
+ok(DB.salesRepo.getById(walkInSub.saleId).customer_id === subCustomerId &&
+  round2(db.prepare("SELECT COALESCE(SUM(amount),0) s FROM cash_movements WHERE cash_session_id=? AND method='efectivo'").get(cashId).s - cashNetBefore) === 0,
+  'al contado cambia el cliente y en caja solo se mueve la diferencia (aquí cero)');
+
+const abonoOtherCustomer = DB.salesRepo.getById(DB.salesRepo.create({
+  customer: { id: subCustomerId }, items: [subLine(1)],
+  payment: { method: 'credito', saleDate: today }, session: { id: cashId }, user: admin, type: 'factura',
+}).saleId);
+DB.customersRepo.addPayment({
+  customerId: subCustomerId, amount: 50, saleId: abonoOtherCustomer.id, method: 'efectivo', note: 'Abono',
+  cajero: admin.name, userId: admin.id, sessionId: cashId, operationId: `sub-abono-${abonoOtherCustomer.id}`,
+});
+expectThrow(() => DB.saleCorrectionsRepo.substituteInvoice({
+  originalSaleId: abonoOtherCustomer.id, reason: 'Cambiar de cliente con abonos',
+  saleData: { operationId: `sub-op-${abonoOtherCustomer.id}-other`, customer: { id: customerId }, items: [subLine(1)],
+    payment: { method: 'credito', saleDate: today }, session: { id: cashId }, type: 'factura' },
+  userId: admin.id,
+}), /Los abonos pertenecen al cliente original/, 'con abonos no se cambia el cliente de una factura a crédito');
+expectThrow(() => DB.saleCorrectionsRepo.substituteInvoice({
+  originalSaleId: abonoOtherCustomer.id, reason: 'Cajero sin permiso',
+  saleData: { operationId: `sub-op-${abonoOtherCustomer.id}-cashier`, customer: { id: subCustomerId }, items: [subLine(1)],
+    payment: { method: 'credito', saleDate: today }, session: { id: cashId }, type: 'factura' },
+  userId: cashier.id,
+}), /Permiso requerido/, 'un cajero sin permiso no sustituye facturas');
+ok(DB.salesRepo.getById(abonoOtherCustomer.id).status === 'completed' &&
+  DB.salesRepo.paymentApplicationsTotal(abonoOtherCustomer.id) === 50,
+  'un intento rechazado no deja nada a medias: la factura y su abono siguen intactos');
+
 console.log('\n== H. Integridad global ==');
 ok(db.prepare('SELECT COUNT(*) count FROM sales WHERE id=?').get(original.id).count === 1,
   'cambiar fecha no duplica la venta');
