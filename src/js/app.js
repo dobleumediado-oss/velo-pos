@@ -23,6 +23,14 @@ window.addEventListener('unhandledrejection', (e) => {
       });
       return;
     }
+    // La terminal es más nueva que el Velo POS Server: el servidor todavía no
+    // conoce la función. Sin este aviso el botón parecía no hacer nada.
+    // Electron entrega el error envuelto: "Error invoking remote method '…': Error: UNKNOWN_CHANNEL".
+    if (/UNKNOWN_CHANNEL/.test(String(r?.message || r || ''))) {
+      if (typeof toast === 'function') {
+        toast('El Velo POS Server tiene una versión anterior a esta terminal. Actualiza el servidor para usar esta función.', 'err');
+      }
+    }
     if (/impres|printer|whatsapp|pdf|network|conexi/i.test(String(r?.message || r || ''))) {
       window.VeloExperience?.rememberFailure?.({
         label:/impres|printer/i.test(String(r?.message || r || '')) ? 'Impresión no completada' : 'Comunicación no completada',
