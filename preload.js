@@ -185,6 +185,8 @@ const api = {
       correctProducts:      (data) => ipcRenderer.invoke('sales:corrections:correctProducts', data),
       getMonetaryCreditModel: (data) => ipcRenderer.invoke('sales:corrections:getMonetaryCreditModel', data),
       createMonetaryCredit:   (data) => ipcRenderer.invoke('sales:corrections:createMonetaryCredit', data),
+      getPaymentMethodModel: (data) => ipcRenderer.invoke('sales:corrections:getPaymentMethodModel', data),
+      changePaymentMethod:   (data) => ipcRenderer.invoke('sales:corrections:changePaymentMethod', data),
       getHistory:           (data) => ipcRenderer.invoke('sales:corrections:getHistory', data),
     },
     getCancellationOptions: (data) => ipcRenderer.invoke('sales:getCancellationOptions', data),

@@ -801,6 +801,111 @@ ok(db.prepare('SELECT stock FROM products WHERE id=?').get(productId).stock === 
   DB.salesRepo.getById(creditAccountNote.returnIds[0]).status === 'cancelled',
   'anular la nota monetaria conserva el inventario y deja rastro cancelado');
 
+console.log('\n== G2. Cambiar el método de pago entre medios de contado ==');
+const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+const pmBankId = Number(DB.financialAccountsRepo.create({
+  name: 'Banco método', type: 'banco', bank_name: 'Banreservas', currency: 'DOP', initial_balance: 0, userId: admin.id,
+}));
+const pmCardId = Number(DB.financialAccountsRepo.create({
+  name: 'Tarjetas Visa', type: 'tarjeta', bank_name: 'Visanet', currency: 'DOP', initial_balance: 0, userId: admin.id,
+}));
+const bankBalance = id => db.prepare('SELECT current_balance b FROM financial_accounts WHERE id=?').get(id).b;
+const pmSale = DB.salesRepo.getById(createSale({ date: today, method: 'efectivo', qty: 1 }).saleId);
+const pmModel = DB.saleCorrectionsRepo.paymentMethodChangeModel(pmSale.id, admin.id);
+ok(pmModel.eligible && pmModel.amount === 118 && !pmModel.cashClosed,
+  'una factura de contado con la caja abierta puede cambiar de método');
+const pmKey = `payment-method-${pmSale.id}-transfer-test`;
+const pmChange = () => DB.saleCorrectionsRepo.changePaymentMethod({
+  saleId: pmSale.id, newMethod: 'transferencia', financialAccountId: pmBankId,
+  reference: 'TRX-778', reason: 'El cliente pagó por transferencia',
+  userId: admin.id, expectedRevision: pmSale.revision, idempotencyKey: pmKey, terminalId: 'test',
+});
+const toTransfer = pmChange();
+const afterTransfer = DB.salesRepo.getById(pmSale.id);
+ok(afterTransfer.payment_method === 'transferencia' && afterTransfer.financial_account_id === pmBankId &&
+  afterTransfer.total === pmSale.total && afterTransfer.ncf === pmSale.ncf,
+  'la factura cambia de método sin alterar total ni NCF');
+ok(db.prepare("SELECT method FROM cash_movements WHERE type='venta' AND reference_id=?").get(pmSale.id).method === 'transferencia',
+  'con la caja abierta, el cuadre espera el método correcto');
+ok(bankBalance(pmBankId) === 118 && toTransfer.newBankMovementId > 0,
+  'el cobro entra a la cuenta bancaria elegida');
+ok(pmChange().idempotent === true && bankBalance(pmBankId) === 118,
+  'repetir la misma operación no duplica el cobro en el banco');
+DB.accountingRepo.regenerateSaleEntry({ saleId: pmSale.id, userId: admin.id, reason: 'Cambio de método' });
+const bankAccountingId = db.prepare("SELECT id FROM accounting_accounts WHERE code='1103'").get()?.id;
+const pmEntry = db.prepare(`
+  SELECT l.account_id,l.debit FROM accounting_entries e
+  JOIN accounting_entry_lines l ON l.entry_id=e.id
+  WHERE e.source_module='venta' AND e.source_id=? AND e.status='confirmado' AND l.debit>0
+  ORDER BY l.id LIMIT 1
+`).get(pmSale.id);
+ok(pmEntry && pmEntry.account_id === bankAccountingId && pmEntry.debit === 118,
+  'el asiento se rehace cargando el banco en lugar de la caja');
+
+const toCard = DB.saleCorrectionsRepo.changePaymentMethod({
+  saleId: pmSale.id, newMethod: 'tarjeta', cardBrand: 'Visa', cardLast4: '4242',
+  reason: 'Fue con tarjeta, no transferencia', userId: admin.id,
+  expectedRevision: afterTransfer.revision, idempotencyKey: `payment-method-${pmSale.id}-card-test`,
+});
+const afterCard = DB.salesRepo.getById(pmSale.id);
+ok(afterCard.payment_method === 'tarjeta' && afterCard.financial_account_id === pmCardId &&
+  afterCard.card_last4 === '4242' && toCard.cancelledBankMovements.length === 1,
+  'a tarjeta usa la cuenta de tarjeta y anula el cobro de la transferencia');
+ok(bankBalance(pmBankId) === 0 && bankBalance(pmCardId) === 118,
+  'el dinero sale del banco anterior y entra a la cuenta de tarjeta');
+DB.saleCorrectionsRepo.changePaymentMethod({
+  saleId: pmSale.id, newMethod: 'efectivo', reason: 'Finalmente pagó en efectivo', userId: admin.id,
+  expectedRevision: afterCard.revision, idempotencyKey: `payment-method-${pmSale.id}-cash-test`,
+});
+const backToCash = DB.salesRepo.getById(pmSale.id);
+ok(backToCash.payment_method === 'efectivo' && backToCash.financial_account_id == null &&
+  bankBalance(pmCardId) === 0 && backToCash.card_last4 === '',
+  'volver a efectivo deja la factura sin cuenta bancaria ni datos de tarjeta');
+ok(db.prepare("SELECT COUNT(*) c FROM sale_corrections WHERE sale_id=? AND action='change_payment_method'").get(pmSale.id).c === 3 &&
+  db.prepare("SELECT COUNT(*) c FROM audit_logs WHERE entity='sales' AND entity_id=? AND action='metodo_pago_cambiado'").get(pmSale.id).c === 3,
+  'cada cambio queda en el historial inmutable y en la auditoría');
+expectThrow(() => DB.saleCorrectionsRepo.changePaymentMethod({
+  saleId: pmSale.id, newMethod: 'tarjeta', cardBrand: 'Visa', reason: 'Revisión desactualizada',
+  userId: admin.id, expectedRevision: pmSale.revision, idempotencyKey: `payment-method-${pmSale.id}-stale-test`,
+}), /modificada por otro usuario/, 'una revisión desactualizada no sobrescribe el cambio de otro usuario');
+expectThrow(() => DB.saleCorrectionsRepo.changePaymentMethod({
+  saleId: pmSale.id, newMethod: 'tarjeta', cardBrand: 'Visa', reason: 'Cajero sin permiso',
+  userId: cashier.id, idempotencyKey: `payment-method-${pmSale.id}-cashier-test`,
+}), /Permiso requerido: sales.correct/, 'un cajero sin permiso no puede cambiar el método');
+const pmCredit = DB.salesRepo.getById(createSale({ date: today, method: 'credito', qty: 1 }).saleId);
+ok(!DB.saleCorrectionsRepo.paymentMethodChangeModel(pmCredit.id, admin.id).eligible,
+  'una factura a crédito no entra en el cambio entre medios de contado');
+expectThrow(() => DB.saleCorrectionsRepo.changePaymentMethod({
+  saleId: pmCredit.id, newMethod: 'efectivo', reason: 'Intento sobre crédito', userId: admin.id,
+  idempotencyKey: `payment-method-${pmCredit.id}-credit-test`,
+}), /Solo se cambia entre efectivo, tarjeta y transferencia/, 'el servidor rechaza cambiar una factura a crédito');
+
+const closedTerminalCash = DB.cashRepo.open({
+  userId: admin.id, cajero: admin.name, openAmount: 0, openBills: {}, terminalId: 'payment-method-closed',
+});
+const pmClosed = DB.salesRepo.getById(DB.salesRepo.create({
+  customer: { id: customerId },
+  items: [{ product_id: productId, product_code: 'COR-001', product_name: 'Producto corrección',
+    unit_cost: 60, unit_price: 118, taxable: 1, tax_pct: 18, qty: 1 }],
+  payment: { method: 'efectivo', saleDate: today, ncfType: 'B02' },
+  session: { id: closedTerminalCash }, user: admin, type: 'factura',
+}).saleId);
+DB.cashRepo.close({
+  sessionId: closedTerminalCash, closeAmount: DB.cashRepo.getSessionCashSummary(closedTerminalCash).expected,
+  closeBills: {}, notes: '', userId: admin.id, cajero: admin.name,
+});
+const closedSnapshot = db.prepare('SELECT expected,difference FROM cash_sessions WHERE id=?').get(closedTerminalCash);
+DB.saleCorrectionsRepo.changePaymentMethod({
+  saleId: pmClosed.id, newMethod: 'transferencia', financialAccountId: pmBankId,
+  reason: 'Transferencia registrada como efectivo ayer', userId: admin.id,
+  expectedRevision: pmClosed.revision, idempotencyKey: `payment-method-${pmClosed.id}-closed-test`,
+});
+ok(db.prepare("SELECT method FROM cash_movements WHERE type='venta' AND reference_id=?").get(pmClosed.id).method === 'efectivo' &&
+  JSON.stringify(db.prepare('SELECT expected,difference FROM cash_sessions WHERE id=?').get(closedTerminalCash)) === JSON.stringify(closedSnapshot),
+  'con la caja ya cerrada su cuadre y sus movimientos no se alteran');
+ok(DB.salesRepo.getById(pmClosed.id).payment_method === 'transferencia' && bankBalance(pmBankId) === 118,
+  'con la caja cerrada igual se corrigen la factura y el banco');
+
 console.log('\n== H. Integridad global ==');
 ok(db.prepare('SELECT COUNT(*) count FROM sales WHERE id=?').get(original.id).count === 1,
   'cambiar fecha no duplica la venta');
@@ -908,6 +1013,46 @@ uiElements['vpc-price-0'].value = '0';
 require('vm').runInNewContext('ventasConfirmProductCorrection();', uiContext);
 ok(uiContext.window._ventaProductCorrection.pendingLines[0].targetUnitPrice === 0,
   'conserva un precio corregido a cero al revisar y enviar la corrección');
+
+const pmUiStart = salesUiSource.indexOf('const VENTAS_METHOD_LABELS');
+const pmUiEnd = salesUiSource.indexOf('async function openVentaMonetaryCredit(', pmUiStart);
+const pmUiElements = {
+  'vpm-method': { value: 'transferencia' },
+  'vpm-bank': { value: '' },
+  'vpm-card-brand': { value: '' },
+  'vpm-card-last4': { value: '' },
+  'vpm-reference': { value: 'TRX-1' },
+  'vpm-reason': { value: 'Pagó por transferencia' },
+};
+let pmToast = '';
+let pmSent = null;
+const pmUiContext = {
+  window: {
+    _ventaPaymentMethodChange: {
+      model: { sale: { id: 77, revision: 2, payment_method: 'efectivo' }, amount: 118 },
+      idempotencyKey: 'payment-method:77:ui-test',
+    },
+    api: { sales: { corrections: { changePaymentMethod: data => { pmSent = data; return new Promise(() => {}); } } } },
+  },
+  user: { id: 5 },
+  document: { getElementById: id => pmUiElements[id] || null },
+  toast: message => { pmToast = message; },
+  confirmModal: (html, onConfirm) => onConfirm(),
+  facturaLabel: () => 'FAC-000077',
+  ventasEsc: value => String(value),
+  fmt: value => `RD$${Number(value || 0).toFixed(2)}`,
+  svg: () => '',
+};
+require('vm').runInNewContext(
+  `${salesUiSource.slice(pmUiStart, pmUiEnd)}\nventasConfirmPaymentMethodChange();`, pmUiContext
+);
+ok(/cuenta bancaria/i.test(pmToast) && pmSent === null,
+  'a transferencia exige elegir la cuenta bancaria antes de enviar');
+pmUiElements['vpm-bank'].value = '9';
+require('vm').runInNewContext('ventasConfirmPaymentMethodChange();', pmUiContext);
+ok(pmSent && pmSent.id === 77 && pmSent.newMethod === 'transferencia' && pmSent.financialAccountId === 9 &&
+  pmSent.expectedRevision === 2 && pmSent.idempotencyKey === 'payment-method:77:ui-test' && pmSent.cardBrand === '',
+  'el formulario envía el método, la cuenta, la revisión y la clave de idempotencia');
 
 try { db.close(); } catch {}
 try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}

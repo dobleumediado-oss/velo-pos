@@ -3604,6 +3604,45 @@ ipcMain.handle('sales:corrections:createMonetaryCredit', async (_, data = {}) =>
   }
 });
 
+ipcMain.handle('sales:corrections:getPaymentMethodModel', async (_, { id, requestUserId } = {}) => {
+  try {
+    return { ok: true, data: saleCorrectionsRepo.paymentMethodChangeModel(id, requestUserId) };
+  } catch (e) {
+    return { ok: false, error: e.message, code: e.code || 'VALIDATION_ERROR' };
+  }
+});
+
+ipcMain.handle('sales:corrections:changePaymentMethod', async (_, data = {}) => {
+  try {
+    const reqUser = authRepo.findById(data.requestUserId);
+    if (!reqUser) return { ok: false, error: 'Usuario no válido' };
+    const result = saleCorrectionsRepo.changePaymentMethod({
+      saleId: data.id,
+      newMethod: data.newMethod,
+      financialAccountId: data.financialAccountId,
+      cardBrand: data.cardBrand,
+      cardLast4: data.cardLast4,
+      reference: data.reference,
+      reason: data.reason,
+      userId: data.requestUserId,
+      expectedRevision: data.expectedRevision,
+      idempotencyKey: data.idempotencyKey,
+      terminalId: data.terminalId || _reqTerminalId(),
+    });
+    if (!result.idempotent) {
+      _acctHook(() => accountingRepo.regenerateSaleEntry({
+        saleId: data.id,
+        userId: data.requestUserId,
+        reason: `Cambio de método de pago: ${String(data.reason || '').trim()}`,
+      }));
+    }
+    return { ok: true, ...result };
+  } catch (e) {
+    console.error('[sales:corrections:changePaymentMethod]', e);
+    return { ok: false, error: e.message, code: e.code || 'VALIDATION_ERROR' };
+  }
+});
+
 ipcMain.handle('sales:corrections:getHistory', async (_, { id, requestUserId } = {}) => {
   try {
     return { ok: true, data: saleCorrectionsRepo.history(id, requestUserId) };

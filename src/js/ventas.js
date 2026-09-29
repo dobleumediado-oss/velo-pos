@@ -2640,6 +2640,8 @@ async function openFacturaCorreccion(saleId) {
   const canCancel = perms.has('sales.cancel') && active;
   const canAudit = perms.has('sales.view_audit');
   const fiscalLocked = !!ctx.fiscal;
+  const canChangeMethod = canCorrect && active &&
+    ['efectivo', 'tarjeta', 'transferencia'].includes(String(sale.payment_method || '').toLowerCase());
 
   openModal(`
     <div class="modal-title">Corregir / ajustar factura</div>
@@ -2692,8 +2694,11 @@ async function openFacturaCorreccion(saleId) {
       })}
       ${ventasCorrectionAction({
         icon: 'card', title: 'Cambiar método de pago',
-        description: 'Bloqueado: los pagos emitidos conservan su fecha y método real; debe hacerse mediante un proceso de reembolso y nuevo cobro.',
-        enabled: false,
+        description: canChangeMethod
+          ? 'Corrige efectivo, tarjeta o transferencia: mueve el cobro entre caja y banco y rehace el asiento. La fecha del cobro no cambia.'
+          : 'Solo para facturas activas cobradas al contado en efectivo, tarjeta o transferencia.',
+        enabled: canChangeMethod,
+        onclick: `closeModal();openVentaPaymentMethodChange(${sale.id})`,
       })}
       ${ventasCorrectionAction({
         icon: 'list', title: 'Registrar nota de crédito',
@@ -2730,6 +2735,136 @@ async function openFacturaCorreccion(saleId) {
     </div>
     <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
   `, 'modal-xl');
+}
+
+const VENTAS_METHOD_LABELS = { efectivo: 'Efectivo', tarjeta: 'Tarjeta', transferencia: 'Transferencia' };
+
+async function openVentaPaymentMethodChange(saleId) {
+  const response = await window.api.sales.corrections.getPaymentMethodModel({
+    id: saleId,
+    requestUserId: user.id,
+  });
+  if (!response?.ok) return toast(response?.error || 'No se pudo preparar el cambio', 'err');
+  const model = response.data;
+  const sale = model.sale;
+  const current = String(sale.payment_method || '').toLowerCase();
+  if (!model.eligible) {
+    openModal(`
+      <div class="modal-title">Cambiar método de pago</div>
+      <div class="modal-sub">${facturaLabel(sale)} · ${ventasEsc(VENTAS_METHOD_LABELS[current] || current)}</div>
+      <div class="alrt r" style="margin-bottom:12px"><div>
+        <div class="alrt-title">No se puede cambiar el método de esta factura</div>
+        <div class="alrt-sub">${model.reasons.map(row => ventasEsc(row.message)).join('<br/>')}</div>
+      </div></div>
+      <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
+    `);
+    return;
+  }
+  window._ventaPaymentMethodChange = {
+    model,
+    idempotencyKey: ventasCorrectionKey('payment-method', sale.id),
+  };
+  const options = model.methods.filter(method => method !== current)
+    .map(method => `<option value="${method}">${VENTAS_METHOD_LABELS[method]}</option>`).join('');
+  const accountOptions = type => model.accounts.filter(row => row.type === type)
+    .map(row => `<option value="${row.id}">${ventasEsc(row.name)}${row.bank_name ? ` · ${ventasEsc(row.bank_name)}` : ''}</option>`).join('');
+  openModal(`
+    <div class="modal-title">Cambiar método de pago</div>
+    <div class="modal-sub">${facturaLabel(sale)} · cobrado en ${ventasEsc(VENTAS_METHOD_LABELS[current] || current)} · ${fmt(model.amount)}</div>
+    <div class="alrt a" style="margin-bottom:12px"><div>
+      <div class="alrt-title">El total, el comprobante y la fecha del cobro no cambian</div>
+      <div class="alrt-sub">${model.cashClosed
+        ? 'La caja de esta venta ya cerró: su cuadre se conserva tal cual. Se corrigen el banco y la contabilidad.'
+        : 'La caja de esta venta sigue abierta: su cuadre esperará el método correcto.'}
+        Se anula el cobro en la cuenta anterior, se registra en la nueva y se rehace el asiento.</div>
+    </div></div>
+    <div class="g2">
+      <div class="fg"><label class="lbl">Método correcto *</label>
+        <select class="inp" id="vpm-method" onchange="ventasPaymentMethodToggle()">${options}</select>
+      </div>
+      <div class="fg" id="vpm-bank-wrap"><label class="lbl">Cuenta bancaria que recibió *</label>
+        <select class="inp" id="vpm-bank"><option value="">Selecciona…</option>${accountOptions('banco')}</select>
+      </div>
+      <div class="fg" id="vpm-card-wrap"><label class="lbl">Marca de la tarjeta *</label>
+        <input class="inp" id="vpm-card-brand" maxlength="40" placeholder="Visa, Mastercard…"/>
+      </div>
+      <div class="fg" id="vpm-last4-wrap"><label class="lbl">Últimos 4 dígitos</label>
+        <input class="inp" id="vpm-card-last4" maxlength="4" inputmode="numeric"/>
+      </div>
+      <div class="fg" id="vpm-ref-wrap"><label class="lbl">Referencia</label>
+        <input class="inp" id="vpm-reference" maxlength="120" placeholder="Número de transferencia o aprobación"/>
+      </div>
+    </div>
+    <div class="fg"><label class="lbl">Motivo específico *</label>
+      <input class="inp" id="vpm-reason" maxlength="500" placeholder="Ej.: el cliente pagó por transferencia y se registró como efectivo"/>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-dark" onclick="ventasConfirmPaymentMethodChange()">${svg('check')} Cambiar método</button>
+    </div>
+  `);
+  ventasPaymentMethodToggle();
+}
+
+function ventasPaymentMethodToggle() {
+  const method = document.getElementById('vpm-method')?.value || '';
+  const show = (id, visible) => { const el = document.getElementById(id); if (el) el.style.display = visible ? '' : 'none'; };
+  show('vpm-bank-wrap', method === 'transferencia');
+  show('vpm-card-wrap', method === 'tarjeta');
+  show('vpm-last4-wrap', method === 'tarjeta');
+  show('vpm-ref-wrap', method !== 'efectivo');
+}
+
+function ventasConfirmPaymentMethodChange() {
+  const state = window._ventaPaymentMethodChange;
+  if (!state?.model) return;
+  const method = document.getElementById('vpm-method')?.value || '';
+  const request = {
+    newMethod: method,
+    financialAccountId: method === 'transferencia' ? Number(document.getElementById('vpm-bank')?.value) || null : null,
+    cardBrand: method === 'tarjeta' ? document.getElementById('vpm-card-brand')?.value?.trim() || '' : '',
+    cardLast4: method === 'tarjeta' ? document.getElementById('vpm-card-last4')?.value?.trim() || '' : '',
+    reference: method !== 'efectivo' ? document.getElementById('vpm-reference')?.value?.trim() || '' : '',
+    reason: document.getElementById('vpm-reason')?.value?.trim() || '',
+  };
+  if (method === 'transferencia' && !request.financialAccountId) return toast('Selecciona la cuenta bancaria', 'w');
+  if (method === 'tarjeta' && !request.cardBrand) return toast('Indica la marca de la tarjeta', 'w');
+  if (request.reason.length < 5) return toast('Escribe un motivo específico', 'w');
+  state.request = request;
+  const current = String(state.model.sale.payment_method || '').toLowerCase();
+  confirmModal(
+    `<strong>Cambiar método de pago</strong><br/><br/>
+     ${facturaLabel(state.model.sale)} · ${fmt(state.model.amount)}<br/>
+     De <strong>${ventasEsc(VENTAS_METHOD_LABELS[current] || current)}</strong>
+     a <strong>${ventasEsc(VENTAS_METHOD_LABELS[method] || method)}</strong><br/>
+     Motivo: <strong>${ventasEsc(request.reason)}</strong>`,
+    () => ventasSubmitPaymentMethodChange(),
+    'Cambiar método',
+    'btn-dark'
+  );
+}
+
+async function ventasSubmitPaymentMethodChange() {
+  const state = window._ventaPaymentMethodChange;
+  if (!state?.model || !state.request) return;
+  const result = await window.api.sales.corrections.changePaymentMethod({
+    id: state.model.sale.id,
+    ...state.request,
+    expectedRevision: Number(state.model.sale.revision || 0),
+    idempotencyKey: state.idempotencyKey,
+    requestUserId: user.id,
+  });
+  if (!result?.ok) return toast(result?.error || 'No se pudo cambiar el método de pago', 'err');
+  window._ventaPaymentMethodChange = null;
+  toast(`✓ Método de pago cambiado a ${VENTAS_METHOD_LABELS[result.newMethod] || result.newMethod}`);
+  ventasRefreshAfterMutation({
+    range: 'all', view: null, products: false, customers: false,
+    onDone: () => {
+      if (typeof page !== 'undefined' && page === 'ventas') {
+        veloRepaint(() => renderVentas(document.getElementById('page')));
+      }
+    },
+  });
 }
 
 async function openVentaMonetaryCredit(saleId) {
@@ -3538,6 +3673,33 @@ async function guardarVentaAdmin(saleId) {
   });
 }
 
+function ventasCorrectionHistoryEntry(correction) {
+  const meta = correction.metadata || {};
+  const methodLabel = method => VENTAS_METHOD_LABELS[method] || method || '—';
+  const entries = {
+    change_sale_date: () => ({
+      title: 'Fecha operativa modificada',
+      detail: `${fdate(correction.before_data.sale_date)} → ${fdate(correction.after_data.sale_date)} · ${correction.reason} · Autorizó: ${correction.authorized_by_name || '—'}`,
+    }),
+    correct_products: () => ({
+      title: 'Productos corregidos',
+      detail: `Crédito: ${fmt(meta.creditTotal || 0)} · agregado: ${fmt(meta.additionTotal || 0)} · ${correction.reason}`,
+    }),
+    create_monetary_credit: () => ({
+      title: 'Nota de crédito monetaria',
+      detail: `Crédito: ${fmt(meta.creditTotal || 0)} · inventario sin movimiento · ${correction.reason}`,
+    }),
+    change_payment_method: () => ({
+      title: 'Método de pago cambiado',
+      detail: `${methodLabel(meta.previousMethod)} → ${methodLabel(meta.newMethod)} · ${fmt(meta.amount || 0)}${meta.cashSessionClosed ? ' · caja cerrada conservada' : ''} · ${correction.reason}`,
+    }),
+  };
+  return (entries[correction.action] || (() => ({
+    title: 'Información administrativa modificada',
+    detail: `${correction.reason} · ${(correction.affected_modules || []).join(', ')}`,
+  })))();
+}
+
 async function openVentaCorrectionsHistory(saleId) {
   const result = await window.api.sales.corrections.getHistory({ id: saleId, requestUserId: user.id });
   if (!result?.ok) return toast(result?.error || 'No se pudo cargar el historial', 'err');
@@ -3556,20 +3718,7 @@ async function openVentaCorrectionsHistory(saleId) {
     })),
     ...(data.corrections || []).map(correction => ({
       date: correction.created_at,
-      title: correction.action === 'change_sale_date'
-        ? 'Fecha operativa modificada'
-        : correction.action === 'correct_products'
-          ? 'Productos corregidos'
-          : correction.action === 'create_monetary_credit'
-            ? 'Nota de crédito monetaria'
-            : 'Información administrativa modificada',
-      detail: correction.action === 'change_sale_date'
-        ? `${fdate(correction.before_data.sale_date)} → ${fdate(correction.after_data.sale_date)} · ${correction.reason} · Autorizó: ${correction.authorized_by_name || '—'}`
-        : correction.action === 'correct_products'
-          ? `Crédito: ${fmt(correction.metadata.creditTotal || 0)} · agregado: ${fmt(correction.metadata.additionTotal || 0)} · ${correction.reason}`
-          : correction.action === 'create_monetary_credit'
-            ? `Crédito: ${fmt(correction.metadata.creditTotal || 0)} · inventario sin movimiento · ${correction.reason}`
-            : `${correction.reason} · ${correction.affected_modules.join(', ')}`,
+      ...ventasCorrectionHistoryEntry(correction),
     })),
     ...(data.relatedDocuments || []).map(document => ({
       date: document.created_at,

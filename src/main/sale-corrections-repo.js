@@ -1931,6 +1931,237 @@ function createSaleCorrectionsRepo({
     })();
   }
 
+  // ── Cambiar el método de pago entre medios de contado ─────────────────────
+  // Corrige cómo se cobró una factura (efectivo, tarjeta o transferencia) sin
+  // alterar su total, su comprobante ni la fecha real del cobro. La caja ya
+  // cuadrada no se reescribe: solo se corrige el movimiento mientras la caja de
+  // la venta sigue abierta.
+  const CASH_METHODS = ['efectivo', 'tarjeta', 'transferencia'];
+
+  function _paymentMethodChangeState(sale, user) {
+    const reasons = [];
+    const method = String(sale.payment_method || '').toLowerCase();
+    if (sale.type !== 'factura' || sale.status !== 'completed') reasons.push('NOT_ACTIVE');
+    if (!CASH_METHODS.includes(method)) reasons.push('NOT_CASH_METHOD');
+    if (String(sale.payment_currency || 'DOP').toUpperCase() !== 'DOP') reasons.push('FOREIGN_CURRENCY');
+    if (ecfState(sale.id)) reasons.push('ECF_ISSUED');
+    const credits = db().prepare(`
+      SELECT COUNT(*) count FROM sales
+      WHERE original_sale_id=? AND type='devolucion' AND status!='cancelled'
+    `).get(sale.id);
+    if (Number(credits?.count || 0) > 0) reasons.push('HAS_CREDIT_NOTE');
+    if (Number(paymentSummary(sale.id)?.count || 0) > 0) reasons.push('HAS_PAYMENTS');
+    if (closedPeriodForDate(sale.sale_date)) reasons.push('CLOSED_ACCOUNTING_PERIOD');
+    const bankMovements = _saleBankMovements(sale.id);
+    if (bankMovements.some(row => Number(row.reconciled || 0) === 1)) reasons.push('RECONCILED');
+    const cash = sale.cash_session_id
+      ? db().prepare('SELECT id,status FROM cash_sessions WHERE id=?').get(sale.cash_session_id)
+      : null;
+    const cashClosed = cash?.status === 'closed';
+    if (cashClosed && !hasPermission(user, 'sales.override_closed_cash')) reasons.push('CLOSED_CASH');
+    return { reasons, method, cash, cashClosed, bankMovements };
+  }
+
+  function _saleBankMovements(saleId) {
+    if (!_tableExists(db(), 'financial_movements')) return [];
+    return db().prepare(`
+      SELECT * FROM financial_movements
+      WHERE reference_type='sale' AND reference_id=? AND type='venta'
+        AND COALESCE(status,'activo')!='anulado'
+      ORDER BY id
+    `).all(saleId);
+  }
+
+  const PAYMENT_CHANGE_REASON_TEXT = {
+    NOT_ACTIVE: 'La factura no está activa.',
+    NOT_CASH_METHOD: 'Solo se cambia entre efectivo, tarjeta y transferencia; el pago mixto y el crédito no aplican.',
+    FOREIGN_CURRENCY: 'El cobro se hizo en moneda extranjera.',
+    ECF_ISSUED: 'El e-CF ya fue emitido con su forma de pago.',
+    HAS_CREDIT_NOTE: 'La factura tiene notas de crédito o devoluciones reembolsadas por el método original.',
+    HAS_PAYMENTS: 'La factura tiene abonos registrados.',
+    CLOSED_ACCOUNTING_PERIOD: 'El período contable de la factura está cerrado.',
+    RECONCILED: 'El cobro ya fue conciliado en el banco.',
+    CLOSED_CASH: 'La caja de la venta ya cerró; requiere el permiso sales.override_closed_cash.',
+  };
+
+  function paymentMethodChangeModel(saleId, userId) {
+    const user = userById(userId);
+    if (!user) throw new Error('Usuario no encontrado');
+    requirePermission(user, 'sales.correct');
+    const sale = db().prepare('SELECT * FROM sales WHERE id=?').get(Number(saleId));
+    if (!sale) throw new Error('Factura no encontrada');
+    const state = _paymentMethodChangeState(sale, user);
+    const accounts = _tableExists(db(), 'financial_accounts')
+      ? db().prepare(`
+          SELECT id,name,type,bank_name,currency FROM financial_accounts
+          WHERE active=1 AND type IN ('banco','tarjeta') AND UPPER(COALESCE(currency,'DOP'))='DOP'
+          ORDER BY type,name
+        `).all()
+      : [];
+    return {
+      sale: { ...sale, administrative_data: _json(sale.administrative_data, {}) },
+      amount: round2(Number(sale.total || 0) - Number(sale.trade_in_amount || 0) - Number(sale.prepaid_amount || 0)),
+      eligible: state.reasons.length === 0,
+      reasons: state.reasons.map(code => ({ code, message: PAYMENT_CHANGE_REASON_TEXT[code] || code })),
+      cashClosed: state.cashClosed,
+      accounts,
+      methods: CASH_METHODS,
+    };
+  }
+
+  function changePaymentMethod({
+    saleId, newMethod, financialAccountId, cardBrand, cardLast4, reference,
+    reason, userId, expectedRevision, idempotencyKey, terminalId,
+  }) {
+    const requester = userById(userId);
+    if (!requester) throw new Error('Usuario no encontrado');
+    requirePermission(requester, 'sales.correct');
+    const cleanReason = String(reason || '').trim().replace(/\s+/g, ' ').slice(0, 500);
+    if (cleanReason.length < 5) throw new Error('El motivo es obligatorio y debe ser específico');
+    const key = String(idempotencyKey || '').trim().slice(0, 120);
+    if (key.length < 12) throw new Error('Clave de idempotencia inválida');
+    const target = String(newMethod || '').toLowerCase();
+    if (!CASH_METHODS.includes(target)) throw new Error('Método de pago no válido');
+    const brand = String(cardBrand || '').trim().slice(0, 40);
+    const last4 = String(cardLast4 || '').replace(/\D/g, '').slice(-4);
+    const cleanReference = String(reference || '').trim().slice(0, 120);
+    if (target === 'tarjeta' && !brand) throw new Error('Indica la marca de la tarjeta');
+
+    const previousResult = row => {
+      const metadata = _json(row.metadata, {});
+      return { idempotent: true, correctionId: row.id, ...metadata };
+    };
+
+    return db().transaction(() => {
+      const duplicate = db().prepare('SELECT * FROM sale_corrections WHERE idempotency_key=?').get(key);
+      if (duplicate) {
+        if (duplicate.action !== 'change_payment_method' || Number(duplicate.sale_id) !== Number(saleId)) {
+          throw new Error('La clave de idempotencia ya fue utilizada para otra operación');
+        }
+        return previousResult(duplicate);
+      }
+      const sale = db().prepare('SELECT * FROM sales WHERE id=?').get(Number(saleId));
+      if (!sale) throw new Error('Factura no encontrada');
+      if (expectedRevision != null && Number(expectedRevision) !== Number(sale.revision || 0)) {
+        const error = new Error('La factura fue modificada por otro usuario. Recarga la corrección antes de continuar.');
+        error.code = 'CONFLICT';
+        throw error;
+      }
+      const state = _paymentMethodChangeState(sale, requester);
+      if (state.reasons.length) {
+        throw new Error(PAYMENT_CHANGE_REASON_TEXT[state.reasons[0]] || 'Esta factura no admite cambiar el método de pago');
+      }
+
+      let account = null;
+      if (target === 'transferencia') {
+        account = db().prepare('SELECT * FROM financial_accounts WHERE id=?').get(Number(financialAccountId));
+        if (!account || !account.active || account.type !== 'banco') {
+          throw new Error('Selecciona la cuenta bancaria que recibió la transferencia');
+        }
+      } else if (target === 'tarjeta') {
+        account = financialAccountId
+          ? db().prepare('SELECT * FROM financial_accounts WHERE id=?').get(Number(financialAccountId))
+          : null;
+        if (financialAccountId && (!account || !account.active || !['tarjeta', 'banco'].includes(account.type))) {
+          throw new Error('La cuenta que recibe el pago con tarjeta no existe o está inactiva');
+        }
+        if (!account) {
+          const cards = db().prepare(`
+            SELECT * FROM financial_accounts
+            WHERE active=1 AND type='tarjeta' AND UPPER(COALESCE(currency,'DOP'))='DOP' ORDER BY id
+          `).all();
+          const needle = brand.toLowerCase();
+          account = cards.find(row => `${row.name || ''} ${row.bank_name || ''}`.toLowerCase().includes(needle)) || cards[0] || null;
+        }
+      }
+      if (account && String(account.currency || 'DOP').toUpperCase() !== 'DOP') {
+        throw new Error('La cuenta debe estar en pesos dominicanos');
+      }
+      const sameAccount = Number(account?.id || 0) === Number(sale.financial_account_id || 0);
+      if (target === state.method && sameAccount) {
+        throw new Error('La factura ya tiene ese método de pago');
+      }
+
+      const amount = round2(Number(sale.total || 0) - Number(sale.trade_in_amount || 0) - Number(sale.prepaid_amount || 0));
+      const label = sale.document_number_fmt || sale.numero_factura_fmt || `#${sale.id}`;
+
+      // Caja: con la caja abierta se corrige el movimiento para que el cuadre
+      // de hoy espere el método real. Una caja cerrada conserva su cuadre.
+      let cashMovementsUpdated = 0;
+      if (state.cash && !state.cashClosed) {
+        cashMovementsUpdated = db().prepare(`
+          UPDATE cash_movements SET method=?
+          WHERE type='venta' AND reference_id=? AND cash_session_id=?
+        `).run(target, sale.id, state.cash.id).changes;
+      }
+
+      // Bancos: se anula el cobro en la cuenta anterior y se registra en la nueva.
+      const cancelledMovements = [];
+      for (const movement of state.bankMovements) {
+        financialAccountsRepo.cancelMovement(movement.id, requester.id,
+          `Cambio de método de pago ${label}: ${cleanReason}`);
+        cancelledMovements.push(Number(movement.id));
+      }
+      let newMovementId = null;
+      if (account && amount > 0.005) {
+        newMovementId = Number(financialAccountsRepo.addMovement({
+          accountId: account.id, type: 'venta', amount,
+          description: `Venta ${label}${brand ? ` · ${brand}` : ''} (corrección de método)`,
+          referenceType: 'sale', referenceId: sale.id,
+          method: target, userId: requester.id, notes: cleanReference,
+        }).movementId);
+      }
+
+      db().prepare(`
+        UPDATE sales SET
+          payment_method=?,financial_account_id=?,account_amount=?,exchange_rate=1,payment_currency='DOP',
+          card_brand=?,card_last4=?,payment_reference=?,
+          revision=revision+1,updated_at=datetime('now','localtime')
+        WHERE id=? AND revision=?
+      `).run(
+        target, account?.id || null, account ? amount : 0,
+        target === 'tarjeta' ? brand : '', target === 'tarjeta' ? last4 : '',
+        cleanReference || (target === 'efectivo' ? '' : sale.payment_reference || ''),
+        sale.id, sale.revision || 0
+      );
+      const updated = db().prepare('SELECT * FROM sales WHERE id=?').get(sale.id);
+      const metadata = {
+        previousMethod: state.method,
+        newMethod: target,
+        previousAccountId: sale.financial_account_id || null,
+        newAccountId: account?.id || null,
+        amount,
+        cashSessionId: state.cash?.id || null,
+        cashSessionClosed: state.cashClosed,
+        cashMovementsUpdated,
+        cancelledBankMovements: cancelledMovements,
+        newBankMovementId: newMovementId,
+      };
+      const correction = db().prepare(`
+        INSERT INTO sale_corrections(
+          sale_id,action,status,reason,requested_by,authorized_by,cash_session_id,
+          terminal_id,idempotency_key,before_data,after_data,affected_modules,metadata
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+      `).run(
+        sale.id, 'change_payment_method', 'applied', cleanReason,
+        requester.id, requester.id, state.cash?.id || null,
+        String(terminalId || '').slice(0, 120), key,
+        _serialize(_snapshot(sale)), _serialize(_snapshot(updated)),
+        _serialize(['sales', 'cash', 'banks', 'accounting', 'reports']),
+        _serialize(metadata)
+      );
+      const correctionId = Number(correction.lastInsertRowid);
+      db().prepare(`
+        INSERT INTO audit_logs(user_id,user_name,action,entity,entity_id,detail,created_at)
+        VALUES(?,?,?,?,?,?,datetime('now','localtime'))
+      `).run(
+        requester.id, requester.name, 'metodo_pago_cambiado', 'sales', sale.id,
+        _serialize({ correctionId, reason: cleanReason, ...metadata })
+      );
+      return { idempotent: false, correctionId, ...metadata, data: updated };
+    })();
+  }
+
   function history(saleId, userId) {
     const user = userById(userId);
     if (!user) throw new Error('Usuario no encontrado');
@@ -2041,6 +2272,8 @@ function createSaleCorrectionsRepo({
     correctProducts,
     monetaryCreditModel,
     createMonetaryCredit,
+    paymentMethodChangeModel,
+    changePaymentMethod,
     history,
   };
 }
