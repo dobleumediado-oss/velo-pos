@@ -78,7 +78,10 @@ function ventasIsElectronicNcf(value) {
 // factura importada no lo trae en cabecera, se extrae del total.
 function ventasItbisDe(sale) {
   let tax = Number(sale?.tax_amt || sale?.itbis || 0);
+  // Solo una factura IMPORTADA puede venir sin ITBIS en cabecera; una factura de
+  // VELO con ITBIS 0 es exenta de verdad y no se le inventa un impuesto.
   if (!tax && String(sale?.type || 'factura') === 'factura'
+      && String(sale?.import_source || '').trim()
       && Number(sale?.tax_pct) > 0 && Number(sale?.total) > 0) {
     tax = ventasRound2(Number(sale.total) - Number(sale.total) / (1 + Number(sale.tax_pct) / 100));
   }
@@ -2475,7 +2478,7 @@ async function confirmarAnulacion(saleId, registerAgain = false, reissueWithNcf 
   }
   if (reissueWithNcf && !result.isReturn) {
     ventasRefreshAfterMutation({
-      range: ventasRange, view: 'sales', products: true,
+      view: 'sales', products: true,
       customers: Number(result.paymentAmount || 0) > 0,
       payments: Number(result.paymentAmount || 0) > 0,
     });

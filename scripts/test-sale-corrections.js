@@ -1392,6 +1392,15 @@ ok(dnSent && dnSent.id === 91 && dnSent.amount === 590 && dnSent.taxable === tru
   dnSent.settlement === 'credito' && dnSent.concept === 'Flete' && dnSent.idempotencyKey === 'debit-note:91:ui-test',
   'el formulario envía concepto, importe, ITBIS, forma de cobro y clave de idempotencia');
 
+const itbisStart = salesUiSource.indexOf('function ventasItbisDe(');
+const itbisEnd = salesUiSource.indexOf('\n}\n', itbisStart) + 3;
+const itbisContext = { ventasRound2: value => Math.round(Number(value || 0) * 100) / 100 };
+require('vm').runInNewContext(`${salesUiSource.slice(itbisStart, itbisEnd)}\nthis.itbis = ventasItbisDe;`, itbisContext);
+ok(itbisContext.itbis({ type: 'factura', total: 329450, tax_amt: 0, tax_pct: 18 }) === 0,
+  'una factura de VELO exenta (ITBIS 0) no muestra un ITBIS inventado en la lista');
+ok(itbisContext.itbis({ type: 'factura', total: 118, tax_amt: 0, tax_pct: 18, import_source: 'equiparts_bak' }) === 18,
+  'una factura importada sin ITBIS en cabecera sigue calculándolo desde el total');
+
 const reissueStart = salesUiSource.indexOf('function ventasOpenReuseNcfInPOS(');
 const reissueEnd = salesUiSource.indexOf('\n}\n', reissueStart) + 3;
 let reissueRoute = '';
