@@ -242,8 +242,11 @@ function _cndRenderActions(dn) {
   btns.push(`<button class="btn btn-out btn-sm" style="color:#128C7E;border-color:#25D366"
     onclick="_cndWhatsAppPDF(${dn.id})">${svg('pdf')} PDF por WhatsApp</button>`);
 
-  if (dn.status === 'borrador') {
+  if (dn.status === 'borrador' || dn.status === 'preparado') {
     btns.push(`<button class="btn btn-out btn-sm" onclick="_cndOpenForm(${dn.id})">${svg('edit')} Editar</button>`);
+    btns.push(`<button class="btn btn-out btn-sm" onclick="_cndEditInPOS(${dn.id})">${svg('edit')} Modificar en POS</button>`);
+  }
+  if (dn.status === 'borrador') {
     btns.push(`<button class="btn btn-dark btn-sm" onclick="_cndTransition(${dn.id},'preparado')">Preparar</button>`);
     btns.push(`<button class="btn btn-green btn-sm" onclick="_cndDispatch(${dn.id})">${svg('truck')} Despachar</button>`);
   }
@@ -443,6 +446,73 @@ async function _cndDoInvoice(id) {
       branchPhone: dn.customer_branch_phone || '',
     },
     items,
+  };
+  window._pendingPOSResaleCart = payload;
+  closeModal();
+  routeTo('pos');
+  setTimeout(() => {
+    if (window._pendingPOSResaleCart === payload && typeof window.posLoadResaleCart === 'function' && document.getElementById('cart-wrap')) {
+      window._pendingPOSResaleCart = null;
+      window.posLoadResaleCart(payload);
+    }
+  }, 180);
+}
+
+// Abre el conduce en el POS para cambiar artículos, cantidades y cargos. Al
+// guardar se actualiza el mismo conduce (mismo número); no se factura.
+async function _cndEditInPOS(id) {
+  const detail = await window.api.conduce.getById({ id });
+  const dn = detail?.data;
+  if (!dn) { toast('Conduce no encontrado', 'err'); return; }
+  if (!['borrador', 'preparado'].includes(dn.status)) {
+    toast('Solo se puede modificar un conduce en borrador o preparado', 'w');
+    return;
+  }
+  const withoutProduct = (dn.items || []).filter(row => !row.product_id);
+  if (withoutProduct.length) {
+    toast('Este conduce tiene líneas sin producto de inventario; modifícalo con Editar', 'w');
+    return;
+  }
+  const customer = (DB.customers || []).find(row => Number(row.id) === Number(dn.customer_id));
+  const payload = {
+    editConduceId: Number(dn.id),
+    editConduceNumber: dn.number || '',
+    conduceHeader: {
+      delivery_address: dn.delivery_address || '',
+      driver_name: dn.driver_name || '',
+      vehicle_plate: dn.vehicle_plate || '',
+      branch_id: dn.branch_id || null,
+    },
+    priceMode: 'retail',
+    charges: (dn.charges || []).map(row => ({ description: row.description, amount: Number(row.amount) || 0 })),
+    notes: dn.notes || '',
+    customer: {
+      id: customer?.id || dn.customer_id || 1,
+      name: customer?.name || dn.customer_name || 'Consumidor Final',
+      rnc: customer?.rnc || dn.customer_rnc || '',
+      phone: customer?.phone || '',
+      phoneType: 'telefono',
+      contactId: dn.customer_contact_id || null,
+      contactName: dn.customer_contact_name || '',
+      contactRole: dn.customer_contact_role || '',
+      contactPhone: dn.customer_contact_phone || '',
+      branchId: dn.customer_branch_id || null,
+      branchName: dn.customer_branch_name || '',
+      branchCode: dn.customer_branch_code || '',
+      branchAddress: dn.customer_branch_address || '',
+      branchPhone: dn.customer_branch_phone || '',
+    },
+    items: (dn.items || []).map(row => {
+      const product = (DB.products || []).find(p => Number(p.id) === Number(row.product_id));
+      return {
+        product_id: row.product_id,
+        product_code: product?.code || row.sku || '',
+        product_name: product?.name || row.description,
+        unit_cost: Number(product?.cost) || 0,
+        unit_price: Number(product?.price) || 0,
+        qty: Number(row.requested_qty) || 1,
+      };
+    }),
   };
   window._pendingPOSResaleCart = payload;
   closeModal();

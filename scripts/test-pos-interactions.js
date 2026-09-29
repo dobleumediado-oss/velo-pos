@@ -179,7 +179,7 @@ this.__posDiscount={
   renderCalls:()=>__renderCartCalls
 };
 this.__posCustomers={pvCustomerMatches,pvCustomerOptions,pvFilterCustomers,pvSelectCustomer,posSelectCustomer,_setPosPmode,cbrCaptureCustomerDraft,cbrOpenTradeIn,posTicketTitle,posConduceCanAccess};
-this.__posTransfer={posLoadResaleCart};`,
+this.__posTransfer={posLoadResaleCart,posSetType,posLimpiar,posCreateConduceFromCart,posQuoteActionLabel};`,
 context, { filename: 'pos.js' });
 const discount = context.__posDiscount;
 const customers = context.__posCustomers;
@@ -554,6 +554,69 @@ assert.strictEqual(state.currentInv().charges[0].amount, 250,
 assert.strictEqual(discount.calcTotals(state.currentInv()).total, 486,
   'el POS debe sumar productos y cargo al convertir el conduce');
 console.log('  ✓ el conduce carga artículos, cliente y cargos en Punto de Venta');
+
+state.resetInvoices();
+const quoteEditLoaded = transfer.posLoadResaleCart({
+  editQuoteId: 45,
+  editQuoteNumber: 'COT-000045',
+  discountPct: 0,
+  charges: [{ description: 'Instalación', amount: 500 }],
+  customer: { id: 9, name: 'Motores del Caribe, SRL', rnc: '130123456' },
+  items: [{ product_id: 100, product_code: 'P-100', product_name: 'Producto cotizado',
+    unit_price: 118, taxable: 1, tax_pct: 18, qty: 20 }],
+});
+assert.strictEqual(quoteEditLoaded, true, 'debe abrir la cotización para modificarla');
+assert.strictEqual(state.currentInv().itype, 'cotizacion', 'se modifica como cotización, no como factura');
+assert.strictEqual(state.currentInv().editQuoteId, 45);
+assert.strictEqual(state.currentInv().sourceQuoteId, null, 'modificar no es convertir en venta');
+assert.strictEqual(state.currentInv().cart[0].qty, 20,
+  'modificar no recorta la cantidad cotizada por las existencias');
+assert.strictEqual(transfer.posQuoteActionLabel(state.currentInv()), 'Guardar cambios');
+transfer.posSetType('factura');
+assert.strictEqual(state.currentInv().itype, 'cotizacion',
+  'mientras se modifica no se puede cambiar a otro tipo de documento');
+transfer.posLimpiar();
+assert.strictEqual(state.currentInv().editQuoteId, null, 'Limpiar cancela la modificación');
+assert.strictEqual(transfer.posQuoteActionLabel(state.currentInv()), 'Crear cotización');
+console.log('  ✓ la cotización se abre en el POS para modificarla y guardarla con su mismo número');
+
+state.resetInvoices();
+const conduceEditLoaded = transfer.posLoadResaleCart({
+  editConduceId: 73,
+  editConduceNumber: 'CON-000073',
+  conduceHeader: { delivery_address: 'Km 9', driver_name: 'Chofer', vehicle_plate: 'A123', branch_id: null },
+  charges: [{ description: 'Flete', amount: 750 }],
+  notes: 'Entregar en la tarde',
+  customer: { id: 9, name: 'Motores del Caribe, SRL', rnc: '130123456' },
+  items: [{ product_id: 100, product_code: 'P-100', product_name: 'Producto entregado', unit_price: 118, qty: 15 }],
+});
+assert.strictEqual(conduceEditLoaded, true, 'debe abrir el conduce para modificarlo');
+assert.strictEqual(state.currentInv().itype, 'conduce');
+assert.strictEqual(state.currentInv().cart[0].qty, 15, 'el conduce no mueve inventario: no se recorta');
+let conduceUpdateCall = null;
+context.window.api.conduce = {
+  update: async data => { conduceUpdateCall = data; return { ok: true, data: { number: 'CON-000073' } }; },
+  create: async () => { throw new Error('modificar no debe crear otro conduce'); },
+};
+const previousModuleAccess = context.window.veloCanAccessModule;
+context.window.veloCanAccessModule = () => true;
+const stubbedRenders = ['renderInvTabs', 'renderPOSGrid', 'renderPOSCustomerSelection'];
+const previousRenders = stubbedRenders.map(name => context[name]);
+stubbedRenders.forEach(name => { context[name] = () => {}; });
+state.currentInv().charges.push({ description: 'Montaje', amount: 200 });
+const conduceSave = transfer.posCreateConduceFromCart();
+conduceSave.catch(error => { console.error(error); process.exitCode = 1; });
+assert(conduceUpdateCall, 'guardar debe actualizar el conduce existente');
+assert.strictEqual(conduceUpdateCall.id, 73);
+assert.strictEqual(conduceUpdateCall.items[0].qty, 15);
+assert.deepStrictEqual(conduceUpdateCall.charges.map(row => row.amount), [750, 200],
+  'los cargos agregados en el POS viajan con el conduce');
+assert.strictEqual(conduceUpdateCall.header.driver_name, 'Chofer',
+  'guardar desde el POS conserva chofer y placa del conduce');
+assert.strictEqual(conduceUpdateCall.header.delivery_address, 'Km 9');
+context.window.veloCanAccessModule = previousModuleAccess;
+stubbedRenders.forEach((name, index) => { context[name] = previousRenders[index]; });
+console.log('  ✓ el conduce se modifica en el POS, admite cargos y se guarda sobre el mismo documento');
 
 const ventasSource = fs.readFileSync(path.join(root, 'src/js/ventas.js'), 'utf8');
 const conversionStart = ventasSource.indexOf('async function confirmarConversionCotizacion()');

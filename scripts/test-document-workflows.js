@@ -388,6 +388,71 @@ const supplierPayment = DB.expensesRepo.pay({
 ok(supplierPayment.documentNumberFmt === 'PPR-000001',
   'pago a proveedor usa su secuencia PPR');
 
+console.log('\n== Modificar cotización y conduce desde el POS ==');
+const editableQuote = DB.salesRepo.create({
+  session: null, customer: { id: customerId }, items: [line(1)],
+  payment: { method: 'cotizacion', charges: [{ description: 'Instalación', amount: 500 }] },
+  user: admin, type: 'cotizacion',
+});
+const quoteBefore = DB.salesRepo.getById(editableQuote.saleId);
+const quoteSeqBefore = db.prepare("SELECT current FROM document_sequences WHERE kind='cotizacion'").get().current;
+const edited = DB.salesRepo.create({
+  session: null, customer: { id: customerId }, items: [line(3), { ...line(2), unit_price: 100 }],
+  payment: {
+    method: 'cotizacion', editQuoteId: editableQuote.saleId,
+    charges: [{ description: 'Envío', amount: 300 }, { description: 'Montaje', amount: 200 }],
+  },
+  user: admin, type: 'cotizacion',
+});
+const quoteAfter = DB.salesRepo.getById(editableQuote.saleId);
+ok(edited.saleId === editableQuote.saleId &&
+  quoteAfter.document_number_fmt === quoteBefore.document_number_fmt,
+  'modificar la cotización guarda sobre el mismo documento y conserva su número');
+ok(db.prepare("SELECT current FROM document_sequences WHERE kind='cotizacion'").get().current === quoteSeqBefore,
+  'modificar no consume otro número de cotización');
+ok(quoteAfter.items.length === 2 && quoteAfter.charges.length === 2 &&
+  quoteAfter.total === 354 + 200 + 500 && quoteAfter.additional_charges_total === 500,
+  'la cotización queda con los artículos, cantidades, precios y cargos nuevos');
+ok(quoteAfter.created_at === quoteBefore.created_at && quoteAfter.user_id === quoteBefore.user_id,
+  'la cotización conserva quién la creó y cuándo');
+ok(db.prepare("SELECT COUNT(*) c FROM audit_logs WHERE action='cotizacion_modificada' AND entity_id=?")
+  .get(editableQuote.saleId).c === 1,
+  'la modificación queda en la auditoría');
+let notAQuoteError = '';
+try {
+  DB.salesRepo.create({
+    session: null, customer: { id: customerId }, items: [line(1)],
+    payment: { method: 'cotizacion', editQuoteId: cash.saleId }, user: admin, type: 'cotizacion',
+  });
+} catch (e) { notAQuoteError = e.message; }
+ok(/ya no existe o ya fue convertida/i.test(notAQuoteError) &&
+  DB.salesRepo.getById(cash.saleId).type === 'factura',
+  'no se puede usar la modificación de cotización para alterar una factura');
+
+const editableNoteId = DB.conduceRepo.create({
+  header: { customer_id: customerId, driver_name: 'Chofer', vehicle_plate: 'A123' },
+  items: [{ product_id: productId, description: 'Producto documental', qty: 1 }],
+  userId: admin.id,
+});
+DB.conduceRepo.setStatus(editableNoteId, 'preparado', { userId: admin.id });
+const editedNote = DB.conduceRepo.update(editableNoteId, {
+  header: { customer_id: customerId, driver_name: 'Chofer', vehicle_plate: 'A123' },
+  items: [{ product_id: productId, description: 'Producto documental', qty: 4 }],
+  charges: [{ description: 'Flete', amount: 750 }],
+});
+ok(editedNote.status === 'preparado' && editedNote.items[0].requested_qty === 4 &&
+  editedNote.charges.length === 1 && editedNote.charges[0].amount === 750 &&
+  editedNote.driver_name === 'Chofer',
+  'un conduce preparado se puede modificar, con cargos, sin perder chofer ni estado');
+DB.conduceRepo.setStatus(editableNoteId, 'despachado', { userId: admin.id });
+let dispatchedEditError = '';
+try {
+  DB.conduceRepo.update(editableNoteId, { header: { customer_id: customerId }, items: [], charges: [] });
+} catch (e) { dispatchedEditError = e.message; }
+ok(/BORRADOR o PREPARADO/.test(dispatchedEditError) &&
+  DB.conduceRepo.getById(editableNoteId).items[0].requested_qty === 4,
+  'un conduce despachado ya no se puede modificar');
+
 console.log('\n== Continuidad de numeración histórica importada ==');
 db.prepare(`
   INSERT INTO sales(

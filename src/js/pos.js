@@ -808,7 +808,10 @@ function renderCart() {
   const checkoutLocked = !!inv.checkoutOrderId;
   const { subtotal, itbis, total, disc, discAmt, chargesTotal, offerPlan } = calcTotals(inv);
   const documentLabels = { factura: 'Factura', cotizacion: 'Cotización', conduce: 'Conduce' };
-  const availableTypes = (inv.replacesSaleId || inv.sourceQuoteId || inv.sourceConduceId)
+  const editingType = posEditingDocumentType(inv);
+  const availableTypes = editingType
+    ? [editingType]
+    : (inv.replacesSaleId || inv.sourceQuoteId || inv.sourceConduceId)
     ? ['factura']
     : ['factura', 'cotizacion', ...(posConduceCanAccess() ? ['conduce'] : [])];
   const documentLabel = documentLabels[inv.itype] || 'Factura';
@@ -858,6 +861,15 @@ function renderCart() {
                     border-radius:7px;background:var(--green-bg);font-size:10.5px;color:var(--muted2)">
           <strong style="color:var(--text)">Conduce ${posEscHtml(inv.sourceConduceNumber || '#' + inv.sourceConduceId)} cargado</strong>
           <span> — se marcará facturado únicamente cuando confirmes esta venta.</span>
+        </div>` : ''}
+      ${editingType ? `
+        <div class="alrt b" style="margin-top:8px;padding:7px 9px">
+          <div>
+            <div class="alrt-title">Modificando ${editingType === 'cotizacion'
+              ? `cotización ${posEscHtml(inv.editQuoteNumber || '#' + inv.editQuoteId)}`
+              : `conduce ${posEscHtml(inv.editConduceNumber || '#' + inv.editConduceId)}`}</div>
+            <div class="alrt-sub">Al guardar se actualiza el mismo documento y conserva su número. Limpiar cancela la modificación.</div>
+          </div>
         </div>` : ''}
     </div>`;
 
@@ -978,7 +990,7 @@ function renderCart() {
                 style="font-size:14px;opacity:${inv.cart.length ? '1' : '.4'}"
                 ${inv.cart.length && !inv.conduceSubmitting ? '' : 'disabled'}
                 onclick="posCreateConduceFromCart()">
-          ${inv.conduceSubmitting ? `${svg('clock')} Guardando...` : `${svg('pkg')} Generar conduce`}
+          ${inv.conduceSubmitting ? `${svg('clock')} Guardando...` : `${svg('pkg')} ${inv.editConduceId ? 'Guardar cambios del conduce' : 'Generar conduce'}`}
         </button>
       </div>`;
     wrap.innerHTML = html;
@@ -1064,8 +1076,28 @@ function posLimpiar() {
   inv.sourceQuoteNumber = '';
   inv.sourceConduceId = null;
   inv.sourceConduceNumber = '';
+  posClearDocumentEdit(inv);
   renderInvTabs();
   renderCart();
+}
+
+// Modificar una cotización o un conduce existente desde el POS.
+function posClearDocumentEdit(inv) {
+  inv.editQuoteId = null;
+  inv.editQuoteNumber = '';
+  inv.editConduceId = null;
+  inv.editConduceNumber = '';
+  inv.editConduceHeader = null;
+}
+
+function posQuoteActionLabel(inv) {
+  return inv?.editQuoteId ? 'Guardar cambios' : 'Crear cotización';
+}
+
+function posEditingDocumentType(inv) {
+  if (inv?.editQuoteId) return 'cotizacion';
+  if (inv?.editConduceId) return 'conduce';
+  return '';
 }
 
 function _posOfferPlan(inv, cart = inv?.cart || []) {
@@ -1151,6 +1183,11 @@ function posSetType(t) {
   }
   if (currentInv().sourceConduceId && t !== 'factura') {
     toast('El conduce cargado debe completarse como factura', 'w');
+    return;
+  }
+  const editingType = posEditingDocumentType(currentInv());
+  if (editingType && t !== editingType) {
+    toast(`Estás modificando ${editingType === 'cotizacion' ? 'una cotización' : 'un conduce'}; guárdalo o limpia el carrito para cambiar de documento`, 'w');
     return;
   }
   if (t !== 'factura') currentInv().cart.forEach(item => { item.offer_is_gift = 0; });
@@ -1244,17 +1281,29 @@ async function posCreateConduceFromCart() {
     notes: inv.notes || '',
     source_type: 'manual',
   };
+  const editConduceId = Number(inv.editConduceId) || null;
+  if (editConduceId) {
+    // El POS no muestra chofer, placa ni dirección de entrega: se conservan.
+    const kept = inv.editConduceHeader || {};
+    header.delivery_address = kept.delivery_address || header.delivery_address;
+    header.driver_name = kept.driver_name || '';
+    header.vehicle_plate = kept.vehicle_plate || '';
+    header.branch_id = kept.branch_id || null;
+  }
+  const charges = (inv.charges || []).map(row => ({ description: row.description, amount: row.amount }));
 
   inv.conduceSubmitting = true;
   renderCart();
   try {
-    const result = await posAwaitSaleAction(window.api.conduce.create({
-      header, items, charges: inv.charges || [], requestUserId: user?.id,
-    }));
+    const result = await posAwaitSaleAction(editConduceId
+      ? window.api.conduce.update({ id: editConduceId, header, items, charges, requestUserId: user?.id })
+      : window.api.conduce.create({ header, items, charges, requestUserId: user?.id }));
     if (!result?.ok || !result.data) {
       throw new Error(result?.error || 'No se pudo guardar el conduce');
     }
-    toast(`✓ Conduce ${result.data.number} guardado en Conduces`);
+    toast(editConduceId
+      ? `✓ Conduce ${result.data.number} actualizado`
+      : `✓ Conduce ${result.data.number} guardado en Conduces`);
     posDiscardLinkedDraft(inv);
     removeInvoice(activeInvoice);
     renderInvTabs();
@@ -1630,6 +1679,11 @@ function posLoadResaleCart(payload = {}) {
   const rawItems = Array.isArray(payload.items) ? payload.items : [];
   const sourceQuoteId = Number(payload.sourceQuoteId) || null;
   const sourceConduceId = Number(payload.sourceConduceId) || null;
+  // Modificar una cotización o un conduce no mueve inventario: se cargan las
+  // cantidades del documento tal cual, sin recortarlas por existencia.
+  const editQuoteId = Number(payload.editQuoteId) || null;
+  const editConduceId = !editQuoteId ? (Number(payload.editConduceId) || null) : null;
+  const editingDocument = !!(editQuoteId || editConduceId);
   if (!rawItems.length) { toast('No hay artículos para cargar en el POS', 'w'); return false; }
 
   const reserved = new Map();
@@ -1647,10 +1701,11 @@ function posLoadResaleCart(payload = {}) {
 
     const used = reserved.get(prod.id) || 0;
     const available = Math.max(0, _posAvailableStock(prod) - used);
-    const qty = Math.min(Math.max(1, Number.parseInt(src.qty, 10) || 1), available);
-    const price = Math.round((Number(src.unit_price || src.price) || 0) * 100) / 100;
+    const requestedQty = Math.max(1, Number(src.qty) || 1);
+    const qty = editingDocument ? requestedQty : Math.min(Math.max(1, Number.parseInt(src.qty, 10) || 1), available);
+    const price = Math.round((Number(src.unit_price || src.price || (editConduceId ? prod.price : 0)) || 0) * 100) / 100;
     if (qty <= 0) { skipped.push(prod.name); return; }
-    if (price <= 0) { skipped.push(`${prod.name} sin precio`); return; }
+    if (price <= 0 && !editConduceId) { skipped.push(`${prod.name} sin precio`); return; }
 
     const taxable = src.taxable === undefined || src.taxable === null
       ? (prod.taxable === 0 ? 0 : 1)
@@ -1692,7 +1747,14 @@ function posLoadResaleCart(payload = {}) {
   });
 
   if (!cart.length) {
-    toast('No se pudo cargar: los artículos no tienen stock disponible', 'err');
+    toast(editingDocument
+      ? 'No se pudo cargar: los productos del documento ya no existen o están inactivos'
+      : 'No se pudo cargar: los artículos no tienen stock disponible', 'err');
+    return false;
+  }
+  if (editingDocument && skipped.length) {
+    // Modificar con líneas perdidas guardaría el documento sin ellas.
+    toast(`No se puede modificar: ${skipped.join(', ')} ya no existe o está inactivo en Inventario`, 'err');
     return false;
   }
 
@@ -1703,7 +1765,18 @@ function posLoadResaleCart(payload = {}) {
   }
 
   inv.cart = cart;
-  inv.itype = 'factura';
+  inv.itype = editQuoteId ? 'cotizacion' : (editConduceId ? 'conduce' : 'factura');
+  posClearDocumentEdit(inv);
+  if (editQuoteId) {
+    inv.editQuoteId = editQuoteId;
+    inv.editQuoteNumber = String(payload.editQuoteNumber || '');
+  } else if (editConduceId) {
+    inv.editConduceId = editConduceId;
+    inv.editConduceNumber = String(payload.editConduceNumber || '');
+    // Datos del conduce que el POS no muestra y que el guardado debe conservar.
+    inv.editConduceHeader = payload.conduceHeader && typeof payload.conduceHeader === 'object'
+      ? { ...payload.conduceHeader } : null;
+  }
   inv.pmode = payload.priceMode === 'wholesale' ? 'wholesale' : 'retail';
   inv.pmeth = ['efectivo','tarjeta','transferencia','mixto','credito'].includes(payload.paymentMethod)
     ? payload.paymentMethod : 'efectivo';
@@ -1751,8 +1824,12 @@ function posLoadResaleCart(payload = {}) {
   renderInvTabs();
   renderCart();
   renderPOSGrid();
-  if (!sourceQuoteId && !sourceConduceId && typeof window.ventasClearResaleCart === 'function') window.ventasClearResaleCart(true);
-  toast(sourceQuoteId
+  if (!sourceQuoteId && !sourceConduceId && !editingDocument && typeof window.ventasClearResaleCart === 'function') window.ventasClearResaleCart(true);
+  toast(editQuoteId
+    ? `✓ Cotización ${inv.editQuoteNumber || '#' + editQuoteId} lista para modificar`
+    : editConduceId
+    ? `✓ Conduce ${inv.editConduceNumber || '#' + editConduceId} listo para modificar`
+    : sourceQuoteId
     ? `✓ Cotización ${inv.sourceQuoteNumber || '#' + sourceQuoteId} cargada en el Punto de Venta`
     : sourceConduceId
     ? `✓ Conduce ${inv.sourceConduceNumber || '#' + sourceConduceId} cargado en el Punto de Venta`
@@ -2889,7 +2966,7 @@ function openCobroModal(inv) {
 
   openModal(`
     <div class="modal-title">${isQuote
-      ? 'Crear cotización'
+      ? (inv.editQuoteId ? `Modificar cotización ${posEscHtml(inv.editQuoteNumber || '')}` : 'Crear cotización')
       : (inv.checkoutOrderId ? `Cobrar ${posEscHtml(inv.checkoutOrderNumber || 'orden de despacho')}` : 'Cobrar venta')}</div>
     <div class="modal-sub">${isQuote ? 'Valor cotizado' : 'Total de la venta'}:
       <strong id="cbr-header-total">${fmt(total)}</strong>${!isQuote && tradeInAmount ? ` · A cobrar: <strong>${fmt(amountDue)}</strong>` : ''}${inv.checkoutOrderId ? ' · preparada en despacho' : ''}
@@ -3259,7 +3336,7 @@ function openCobroModal(inv) {
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-green" id="btn-confirmar-venta"
               onclick="finalizarVenta()">
-        ${svg('check')} ${isQuote ? 'Crear cotización' : 'Confirmar y cobrar'}
+        ${svg('check')} ${isQuote ? posQuoteActionLabel(inv) : 'Confirmar y cobrar'}
       </button>
     </div>
   `, 'modal-lg pos-cobro');
@@ -4441,6 +4518,7 @@ async function finalizarVenta() {
       replacesSaleId: inv.replacesSaleId || null,
       sourceQuoteId: inv.sourceQuoteId || null,
       sourceConduceId: inv.sourceConduceId || null,
+      editQuoteId: isQuote ? (inv.editQuoteId || null) : null,
       ncfType,
       warrantyDays,
       tradeIn: inv.tradeIn || null,
@@ -4462,7 +4540,7 @@ async function finalizarVenta() {
       toast(result.error || 'Error al registrar la venta', 'err');
       if (btnConfirmar?.isConnected) {
         btnConfirmar.disabled  = false;
-        btnConfirmar.innerHTML = `${svg('check')} ${isQuote ? 'Crear cotización' : 'Confirmar y cobrar'}`;
+        btnConfirmar.innerHTML = `${svg('check')} ${isQuote ? posQuoteActionLabel(inv) : 'Confirmar y cobrar'}`;
       } else {
         openCobroModal(inv);
       }
@@ -4479,6 +4557,8 @@ async function finalizarVenta() {
       ? `✓ Conduce ${sourceConduceNumber || '#' + sourceConduceId} convertido → ${savedDocumentLabel}`
       : result.recovered
       ? `✓ ${savedDocumentLabel} recuperada; no se duplicó el cobro`
+      : isQuote && inv.editQuoteId
+      ? `✓ Cotización ${savedDocumentLabel} actualizada — ${fmt(result.total)}`
       : isQuote
       ? `✓ Cotización ${savedDocumentLabel} creada — ${fmt(result.total)}`
       : (inv.checkoutOrderId
@@ -4689,7 +4769,7 @@ async function finalizarVenta() {
     }
     if (btnConfirmar?.isConnected) {
       btnConfirmar.disabled  = false;
-      btnConfirmar.innerHTML = `${svg('check')} ${isQuote ? 'Crear cotización' : 'Confirmar y cobrar'}`;
+      btnConfirmar.innerHTML = `${svg('check')} ${isQuote ? posQuoteActionLabel(inv) : 'Confirmar y cobrar'}`;
     } else {
       openCobroModal(inv);
     }

@@ -5592,6 +5592,17 @@ const salesRepo = {
       if (sourceQuoteId && (!sourceQuote || sourceQuote.type !== 'cotizacion')) {
         throw new Error('La cotización de origen ya no está disponible');
       }
+      // Modificar una cotización existente: se recalcula igual que una nueva,
+      // pero se guarda sobre la misma fila y conserva su número y su creación.
+      const editQuoteId = type === 'cotizacion'
+        ? (Number(payment.editQuoteId) || null)
+        : null;
+      const editQuote = editQuoteId
+        ? db.prepare('SELECT * FROM sales WHERE id=?').get(editQuoteId)
+        : null;
+      if (editQuoteId && (!editQuote || editQuote.type !== 'cotizacion')) {
+        throw new Error('La cotización que estás modificando ya no existe o ya fue convertida en venta');
+      }
       const sourceConduceId = type === 'factura'
         ? (Number(payment.sourceConduceId) || null)
         : null;
@@ -6211,7 +6222,7 @@ const salesRepo = {
       }
 
       // Crear venta
-      const saleR = db.prepare(`
+      const insertSaleSql = `
         INSERT INTO sales(cash_session_id,customer_id,customer_name,customer_rnc,
           customer_type,customer_trade_name,customer_address,customer_phone,customer_phone_type,customer_email,
           customer_contact_id,customer_contact_name,customer_contact_document,
@@ -6238,7 +6249,8 @@ const salesRepo = {
           @payment_reference,@notes,@trade_in_amount,@trade_in_unit_id,@prepaid_amount,@prepaid_reference,@operation_id,@operation_fingerprint,
           @created_at,@original_sale_date,@sale_date,@created_at
         )
-      `).run({
+      `;
+      const saleRow = {
         cash_session_id: session?.id || null,
         customer_id: customer.id,
         customer_name: customer.name || 'Consumidor Final',
@@ -6286,8 +6298,39 @@ const salesRepo = {
         created_at: db.prepare("SELECT datetime('now','localtime') AS value").get().value,
         original_sale_date: requestedSaleDate || db.prepare("SELECT date('now','localtime') AS value").get().value,
         sale_date: requestedSaleDate || db.prepare("SELECT date('now','localtime') AS value").get().value,
-      });
-      const saleId = saleR.lastInsertRowid;
+      };
+      let saleId;
+      if (editQuote) {
+        // Conserva quién la creó, cuándo y su fecha original; el resto se
+        // reemplaza con lo que quedó en el POS.
+        db.prepare(`
+          UPDATE sales SET
+            customer_id=@customer_id,customer_name=@customer_name,customer_rnc=@customer_rnc,
+            customer_type=@customer_type,customer_trade_name=@customer_trade_name,customer_address=@customer_address,
+            customer_phone=@customer_phone,customer_phone_type=@customer_phone_type,customer_email=@customer_email,
+            customer_contact_id=@customer_contact_id,customer_contact_name=@customer_contact_name,
+            customer_contact_document=@customer_contact_document,customer_contact_role=@customer_contact_role,
+            customer_contact_phone=@customer_contact_phone,customer_contact_email=@customer_contact_email,
+            customer_branch_id=@customer_branch_id,customer_branch_name=@customer_branch_name,
+            customer_branch_code=@customer_branch_code,customer_branch_address=@customer_branch_address,
+            customer_branch_phone=@customer_branch_phone,
+            subtotal=@subtotal,discount_pct=@discount_pct,discount_amt=@discount_amt,tax_pct=@tax_pct,
+            tax_amt=@tax_amt,total=@total,price_mode=@price_mode,salesperson_id=@salesperson_id,
+            additional_charges_total=@additional_charges_total,display_currency=@display_currency,
+            display_exchange_rate=@display_exchange_rate,display_amount=@display_amount,
+            print_template_id=@print_template_id,print_printer_type=@print_printer_type,
+            print_printer_name=@print_printer_name,print_profile_id=@print_profile_id,
+            print_copies=@print_copies,print_action=@print_action,notes=@notes,
+            operation_id=@operation_id,operation_fingerprint=@operation_fingerprint,
+            sale_date=@sale_date,updated_at=datetime('now','localtime')
+          WHERE id=@edit_id AND type='cotizacion'
+        `).run({ ...saleRow, edit_id: editQuoteId });
+        db.prepare('DELETE FROM sale_charges WHERE sale_id=?').run(editQuoteId);
+        db.prepare('DELETE FROM sale_items WHERE sale_id=?').run(editQuoteId);
+        saleId = editQuoteId;
+      } else {
+        saleId = db.prepare(insertSaleSql).run(saleRow).lastInsertRowid;
+      }
       if (charges.length) {
         const insertCharge = db.prepare(`INSERT INTO sale_charges(
           sale_id,description,amount,taxable,tax_pct,net_subtotal,tax_amt
@@ -6306,9 +6349,11 @@ const salesRepo = {
       const replacementSource = replacesSaleId
         ? db.prepare('SELECT document_kind FROM sales WHERE id=?').get(replacesSaleId)
         : null;
-      const documentKind = replacementSource?.document_kind ||
+      const documentKind = replacementSource?.document_kind || editQuote?.document_kind ||
         documentKindForSale(type, method);
-      const documentIssue = replacesSaleId
+      const documentIssue = editQuote
+        ? { sequence_number: editQuote.document_number, formatted_number: editQuote.document_number_fmt || '' }
+        : replacesSaleId
         ? _reuseCancelledConsumerFinalNumber(
             replacesSaleId, saleId, documentKind, user.id
           )
@@ -6316,7 +6361,7 @@ const salesRepo = {
       const receiptIssue = type === 'factura' && method !== 'credito'
         ? _issueDocumentNumber('recibo', 'sale_receipt', saleId)
         : null;
-      db.prepare(`
+      if (!editQuote) db.prepare(`
         UPDATE sales
         SET document_kind=?,document_number=?,document_number_fmt=?,
             receipt_document_number=?,receipt_document_number_fmt=?,
@@ -6590,7 +6635,9 @@ const salesRepo = {
       }
 
       // 10. Auditoría
-      audit(user.id, user.name, type === 'cotizacion' ? 'cotizacion_creada' : 'venta_creada', 'sales', saleId,
+      audit(user.id, user.name,
+            editQuote ? 'cotizacion_modificada' : (type === 'cotizacion' ? 'cotizacion_creada' : 'venta_creada'),
+            'sales', saleId,
             `Documento: ${documentIssue.formatted_number} | Total: ${total} | Método: ${method} | Moneda cuenta: ${paymentCurrency} | Monto cuenta: ${accountAmount} | Items: ${items.length}`);
 
       let convertedQuoteId = null;
@@ -12571,7 +12618,11 @@ const conduceRepo = {
   update(id, { header = {}, items = null, charges = null }) {
     const dn = db.prepare('SELECT * FROM delivery_notes WHERE id=?').get(id);
     if (!dn) throw new Error('Conduce no encontrado');
-    if (dn.status !== 'borrador') throw new Error('Solo se puede editar un conduce en BORRADOR');
+    // Antes de despachar el conduce es solo un plan de entrega. Después refleja
+    // mercancía que salió y se corrige anulándolo y creando otro.
+    if (!['borrador', 'preparado'].includes(dn.status)) {
+      throw new Error('Solo se puede modificar un conduce en BORRADOR o PREPARADO');
+    }
     const tx = db.transaction(() => {
       let account = null;
       let contact = null;

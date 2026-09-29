@@ -101,6 +101,23 @@ los rangos autorizados en `ncf_sequences`.
 - El respaldo local expira a los 30 días, admite hasta 20 tickets y no altera la
   base comercial hasta que el usuario confirme el documento.
 
+## Modificar una cotización o un conduce en el POS
+
+- **Cotización**: el botón *Modificar en POS* (detalle o lista de Ventas) la
+  abre como cotización. Se pueden cambiar artículos, cantidades, precios,
+  descuento y cargos adicionales. Al guardar, `salesRepo.create` recibe
+  `payment.editQuoteId` y reescribe la misma fila: conserva id, número COT,
+  creador y fecha de creación, no consume otro número y audita
+  `cotizacion_modificada`. No revisa existencias porque no es una venta.
+- **Conduce**: *Modificar en POS* solo en **borrador** o **preparado**. Después
+  de despachar refleja mercancía que salió y se corrige anulándolo y creando
+  otro. Guarda con `conduce:update` sobre el mismo número y conserva chofer,
+  placa y dirección de entrega, que el POS no muestra.
+- **Facturar un conduce**: cada cargo del conduce viaja con
+  `source_conduce_charge_id`. El servidor toma su importe de la base, suma los
+  cargos agregados en el POS y marca facturados solo los cargos del conduce que
+  iban en la factura. Un cargo quitado del carrito queda pendiente en el conduce.
+
 ## PDF por WhatsApp
 
 Facturas, cotizaciones y conduces generan el PDF desde la misma plantilla usada

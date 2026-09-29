@@ -1015,6 +1015,14 @@ function renderVentasTable() {
               : null,
             s.status === 'completed' && s.type === 'cotizacion'
               ? h('button', {
+                  class: 'btn btn-out btn-sm',
+                  title: 'Modificar la cotización en el POS; conserva el mismo número',
+                  onclick: () => modificarCotizacionEnPOS(s.id),
+                  html: `${svg('edit')} Modificar`
+                })
+              : null,
+            s.status === 'completed' && s.type === 'cotizacion'
+              ? h('button', {
                   class: 'btn btn-ghost btn-sm',
                   style: { color: 'var(--red)' },
                   title: 'Eliminar cotización',
@@ -1784,6 +1792,64 @@ async function confirmarConversionCotizacion() {
   }, 180);
 }
 
+// Abre la cotización en el POS para cambiar artículos, cantidades, precios y
+// cargos. Al guardar se actualiza la misma cotización (mismo número); no es una
+// venta, así que no revisa existencias.
+async function modificarCotizacionEnPOS(cotizId) {
+  const sale = await window.api.sales.getById({ id: cotizId });
+  if (!sale || sale.type !== 'cotizacion') { toast('Cotización no encontrada', 'err'); return; }
+  await reloadProducts();
+  const account = DB.customers.find(c => c.id === sale.customer_id);
+  const payload = {
+    editQuoteId: Number(cotizId),
+    editQuoteNumber: facturaLabel(sale),
+    priceMode: sale.price_mode || 'retail',
+    discountPct: Number(sale.discount_pct) || 0,
+    charges: Array.isArray(sale.charges) ? sale.charges : [],
+    notes: sale.notes || '',
+    salespersonId: sale.salesperson_id || null,
+    saleDate: sale.sale_date || today(),
+    customer: {
+      id: account?.id || sale.customer_id || 1,
+      name: account?.name || sale.customer_name || 'Consumidor Final',
+      rnc: account?.rnc || sale.customer_rnc || '',
+      phone: sale.customer_phone || account?.phone || '',
+      phoneType: sale.customer_phone_type || 'telefono',
+      contactId: sale.customer_contact_id || null,
+      contactName: sale.customer_contact_name || '',
+      contactRole: sale.customer_contact_role || '',
+      contactPhone: sale.customer_contact_phone || '',
+      branchId: sale.customer_branch_id || null,
+      branchName: sale.customer_branch_name || '',
+      branchCode: sale.customer_branch_code || '',
+      branchAddress: sale.customer_branch_address || '',
+      branchPhone: sale.customer_branch_phone || '',
+    },
+    items: (sale.items || []).map(i => ({
+      product_id: i.product_id,
+      product_code: i.product_code || '',
+      product_name: i.product_name,
+      unit_cost: i.unit_cost || 0,
+      unit_price: i.unit_price,
+      taxable: ventasTaxable(i) ? 1 : 0,
+      tax_pct: ventasTaxable(i) ? ventasTaxPct(i) : 0,
+      qty: i.qty,
+    })),
+  };
+  window._pendingPOSResaleCart = payload;
+  routeTo('pos');
+  setTimeout(() => {
+    if (
+      window._pendingPOSResaleCart === payload &&
+      typeof window.posLoadResaleCart === 'function' &&
+      document.getElementById('cart-wrap')
+    ) {
+      window._pendingPOSResaleCart = null;
+      window.posLoadResaleCart(payload);
+    }
+  }, 180);
+}
+
 
 async function openDetalleVentaModal(s, options = {}) {
   // Detalle y stock son lecturas independientes; ejecutarlas en paralelo evita
@@ -2077,6 +2143,12 @@ async function openDetalleVentaModal(s, options = {}) {
       ${s.type === 'factura' && s.status === 'completed'
         ? `<button class="btn btn-amber" onclick="closeModal();iniciarDevolucionDesdeVenta(${s.id})">
              ${svg('return')} Devolver
+           </button>`
+        : ''}
+      ${s.status === 'completed' && s.type === 'cotizacion'
+        ? `<button class="btn btn-out" onclick="closeModal();modificarCotizacionEnPOS(${s.id})"
+                   title="Cambiar artículos, cantidades, precios y cargos; conserva el mismo número">
+             ${svg('edit')} Modificar en POS
            </button>`
         : ''}
       ${s.status === 'completed' && s.type === 'cotizacion'
