@@ -1125,6 +1125,92 @@ ok(DB.salesRepo.getById(abonoOtherCustomer.id).status === 'completed' &&
   DB.salesRepo.paymentApplicationsTotal(abonoOtherCustomer.id) === 50,
   'un intento rechazado no deja nada a medias: la factura y su abono siguen intactos');
 
+console.log('\n== G5. Registrar nuevamente con el mismo NCF de una factura anulada ==');
+const reuseSale = (ncfType, customer = subCustomerId, qty = 1, extra = {}) => DB.salesRepo.getById(DB.salesRepo.create({
+  customer: { id: customer }, items: [subLine(qty)],
+  payment: { method: 'credito', saleDate: '2025-07-21', ncfType, ...extra },
+  session: { id: cashId }, user: admin, type: 'factura',
+}).saleId);
+const toAnnul = reuseSale('B02', subCustomerId, 2);
+db.prepare("UPDATE sales SET import_source='equiparts_bak' WHERE id=?").run(toAnnul.id);
+DB.salesRepo.cancel(toAnnul.id, 'Error de tasa', admin.id, admin.name, { operationId: `annul-${toAnnul.id}` });
+const annulled = DB.salesRepo.getById(toAnnul.id);
+ok(annulled.status === 'cancelled' && annulled.ncf === toAnnul.ncf &&
+  db.prepare('SELECT status FROM ncf_log WHERE sale_id=?').get(toAnnul.id).status === 'anulado',
+  'una factura importada anulada conserva su NCF como anulado (608)');
+const reuseModel = DB.salesRepo.reuseNcfModel(toAnnul.id);
+ok(reuseModel.eligible && reuseModel.ncf === toAnnul.ncf && reuseModel.ncfType === 'B02' && reuseModel.items.length === 1,
+  'el modelo permite registrarla nuevamente con su mismo NCF');
+const b02Before = db.prepare("SELECT current FROM ncf_sequences WHERE type='B02'").get().current;
+const reused = reuseSale('B02', subCustomerId, 3, { reuseNcfOfSaleId: toAnnul.id, reuseNcfReason: 'Error de tasa corregido' });
+const reusedLog = db.prepare('SELECT sale_id,status,issued_at FROM ncf_log WHERE ncf=?').all(toAnnul.ncf);
+ok(reused.ncf === toAnnul.ncf && DB.salesRepo.getById(toAnnul.id).ncf === '',
+  'la factura nueva recupera el mismo NCF y la anulada deja de tenerlo');
+ok(db.prepare("SELECT current FROM ncf_sequences WHERE type='B02'").get().current === b02Before,
+  'no consume otro comprobante de la secuencia');
+ok(reusedLog.length === 1 && reusedLog[0].sale_id === reused.id && reusedLog[0].status === 'emitido' &&
+  String(reused.fiscal_issued_at).slice(0, 10) === String(toAnnul.fiscal_issued_at).slice(0, 10),
+  'el comprobante vuelve a estar vigente con su fecha fiscal original, sin duplicarse');
+const voidedNow = DB.ncfRepo.getVoided({}).map(row => row.ncf);
+const issuedNow = DB.ncfRepo.getLog({ status: 'emitido' }).filter(row => row.ncf === toAnnul.ncf);
+ok(!voidedNow.includes(toAnnul.ncf) && issuedNow.length === 1 && issuedNow[0].total === reused.total,
+  'sale del 608 y aparece una sola vez en el 607 con el monto corregido');
+ok(db.prepare("SELECT COUNT(*) c FROM audit_logs WHERE entity_id IN (?,?) AND action IN ('ncf_reutilizado_desde_anulada','ncf_cedido_a_nueva_factura')")
+  .get(reused.id, toAnnul.id).c === 2, 'queda en la auditoría de ambas facturas');
+expectThrow(() => reuseSale('B02', subCustomerId, 1, { reuseNcfOfSaleId: toAnnul.id }),
+  /no tiene NCF o su NCF ya fue reutilizado/, 'el NCF solo se recupera una vez');
+
+const otherAnnul = reuseSale('B02', subCustomerId, 1);
+DB.salesRepo.cancel(otherAnnul.id, 'Otro error', admin.id, admin.name, { operationId: `annul-${otherAnnul.id}` });
+expectThrow(() => reuseSale('B02', customerId, 1, { reuseNcfOfSaleId: otherAnnul.id }),
+  /mismo cliente/, 'no se puede pasar el NCF a otro cliente');
+expectThrow(() => reuseSale('B01', subCustomerId, 1, { reuseNcfOfSaleId: otherAnnul.id }),
+  /debe seguir siendo B02/, 'no se puede cambiar el tipo de comprobante');
+ok(DB.salesRepo.getById(otherAnnul.id).ncf === otherAnnul.ncf,
+  'un intento rechazado deja el NCF en la factura anulada');
+const favorOriginal = reuseSale('B02', subCustomerId, 2);
+DB.customersRepo.addPayment({
+  customerId: subCustomerId, amount: 150, saleId: favorOriginal.id, method: 'efectivo', note: 'Abono antes del error',
+  cajero: admin.name, userId: admin.id, sessionId: cashId, operationId: `favor-abono-${favorOriginal.id}`,
+});
+const favorCancel = DB.salesRepo.cancel(favorOriginal.id, 'Error de tasa', admin.id, admin.name, {
+  operationId: `annul-favor-${favorOriginal.id}`, paymentDisposition: 'favor', reversalSessionId: cashId,
+});
+DB.accountingRepo.generateSaleCancellationPaymentEntry({ resolutionId: favorCancel.resolutionId, userId: admin.id });
+ok(DB.customersRepo.getCancellationCredits(subCustomerId).some(row => row.sale_id === favorOriginal.id && row.amount === 150),
+  'la anulación deja RD$150 anotados a favor');
+const balanceBeforeFavorReuse = db.prepare('SELECT balance FROM customers WHERE id=?').get(subCustomerId).balance;
+const favorModel = DB.salesRepo.reuseNcfModel(favorOriginal.id);
+ok(favorModel.eligible && favorModel.favorAmount === 150, 'el modelo avisa del dinero a favor');
+const favorReused = DB.salesRepo.create({
+  customer: { id: subCustomerId }, items: [subLine(3)],
+  payment: { method: 'credito', saleDate: '2025-07-21', ncfType: 'B02', reuseNcfOfSaleId: favorOriginal.id },
+  session: { id: cashId }, user: admin, type: 'factura',
+});
+const favorNew = DB.salesRepo.getById(favorReused.saleId);
+ok(favorNew.ncf === favorOriginal.ncf && favorReused.favorApplication?.applied === 150,
+  'al registrarla con su NCF se aplican automáticamente los RD$150 a favor');
+ok(DB.salesRepo.paymentApplicationsTotal(favorNew.id) === 150 &&
+  round2(db.prepare('SELECT balance FROM customers WHERE id=?').get(subCustomerId).balance) ===
+    round2(balanceBeforeFavorReuse + favorNew.total - 150),
+  'el abono queda asignado a la factura nueva y el saldo baja lo aplicado');
+ok(!DB.customersRepo.getCancellationCredits(subCustomerId).some(row => row.sale_id === favorOriginal.id),
+  'el aviso de dinero a favor desaparece de la cuenta del cliente al aplicarse');
+favorReused.favorApplication.applicationIds.forEach(applicationId =>
+  DB.accountingRepo.generateFavorApplicationEntry({ applicationId, userId: admin.id }));
+const favorEntryLines = db.prepare(`
+  SELECT a.code,l.debit,l.credit FROM accounting_entries e
+  JOIN accounting_entry_lines l ON l.entry_id=e.id JOIN accounting_accounts a ON a.id=l.account_id
+  WHERE e.source_module='aplicacion_dinero_favor' AND e.status='confirmado'
+`).all();
+ok(favorEntryLines.some(row => row.code === '2103' && row.debit === 150) &&
+  favorEntryLines.some(row => row.code === '1104' && row.credit === 150),
+  'contabilidad: sale de Anticipos de Clientes y cancela la cuenta por cobrar');
+
+const stillActive = reuseSale('B02', subCustomerId, 1);
+expectThrow(() => reuseSale('B02', subCustomerId, 1, { reuseNcfOfSaleId: stillActive.id }),
+  /Solo una factura anulada/, 'no se reutiliza el NCF de una factura vigente');
+
 console.log('\n== H. Integridad global ==');
 ok(db.prepare('SELECT COUNT(*) count FROM sales WHERE id=?').get(original.id).count === 1,
   'cambiar fecha no duplica la venta');

@@ -818,7 +818,7 @@ function renderCart() {
   const editingType = posEditingDocumentType(inv);
   const availableTypes = editingType
     ? [editingType]
-    : (inv.replacesSaleId || inv.sourceQuoteId || inv.sourceConduceId || inv.substitutesSaleId)
+    : (inv.replacesSaleId || inv.sourceQuoteId || inv.sourceConduceId || inv.substitutesSaleId || inv.reuseNcfOfSaleId)
     ? ['factura']
     : ['factura', 'cotizacion', ...(posConduceCanAccess() ? ['conduce'] : [])];
   const documentLabel = documentLabels[inv.itype] || 'Factura';
@@ -868,6 +868,13 @@ function renderCart() {
                     border-radius:7px;background:var(--green-bg);font-size:10.5px;color:var(--muted2)">
           <strong style="color:var(--text)">Conduce ${posEscHtml(inv.sourceConduceNumber || '#' + inv.sourceConduceId)} cargado</strong>
           <span> — se marcará facturado únicamente cuando confirmes esta venta.</span>
+        </div>` : ''}
+      ${inv.reuseNcfOfSaleId ? `
+        <div class="alrt b" style="margin-top:8px;padding:7px 9px">
+          <div>
+            <div class="alrt-title">Registrando ${posEscHtml(inv.reuseNcfNumber || '#' + inv.reuseNcfOfSaleId)} con el mismo NCF ${posEscHtml(inv.reuseNcf)}</div>
+            <div class="alrt-sub">Corrige artículos, cantidades o precios. Mismo cliente y comprobante ${posEscHtml(inv.reuseNcfType)}; conserva la fecha fiscal original.${Number(inv.reuseNcfFavor) > 0 ? ` Los ${fmt(inv.reuseNcfFavor)} anotados a favor se aplican solos si la factura es a crédito.` : ''} Limpiar cancela el registro.</div>
+          </div>
         </div>` : ''}
       ${inv.substitutesSaleId ? `
         <div class="alrt a" style="margin-top:8px;padding:7px 9px">
@@ -1108,6 +1115,12 @@ function posClearDocumentEdit(inv) {
   inv.substitutesMethod = '';
   inv.substitutesAccountId = null;
   inv.substitutesStockCredit = null;
+  inv.reuseNcfOfSaleId = null;
+  inv.reuseNcf = '';
+  inv.reuseNcfType = '';
+  inv.reuseNcfReason = '';
+  inv.reuseNcfNumber = '';
+  inv.reuseNcfFavor = 0;
 }
 
 function posQuoteActionLabel(inv) {
@@ -1203,6 +1216,10 @@ function posSetType(t) {
   }
   if (currentInv().sourceConduceId && t !== 'factura') {
     toast('El conduce cargado debe completarse como factura', 'w');
+    return;
+  }
+  if (currentInv().reuseNcfOfSaleId && t !== 'factura') {
+    toast('El registro con el mismo NCF debe emitirse como factura', 'w');
     return;
   }
   if (currentInv().substitutesSaleId && t !== 'factura') {
@@ -1708,6 +1725,8 @@ function posLoadResaleCart(payload = {}) {
   const editQuoteId = Number(payload.editQuoteId) || null;
   const editConduceId = !editQuoteId ? (Number(payload.editConduceId) || null) : null;
   const substitutesSaleId = !editQuoteId && !editConduceId ? (Number(payload.substitutesSaleId) || null) : null;
+  const reuseNcfOfSaleId = !editQuoteId && !editConduceId && !substitutesSaleId
+    ? (Number(payload.reuseNcfOfSaleId) || null) : null;
   // En una sustitución los artículos de la original vuelven al inventario en
   // la misma operación: tampoco se recortan por existencia.
   const editingDocument = !!(editQuoteId || editConduceId || substitutesSaleId);
@@ -1804,6 +1823,13 @@ function posLoadResaleCart(payload = {}) {
     // Datos del conduce que el POS no muestra y que el guardado debe conservar.
     inv.editConduceHeader = payload.conduceHeader && typeof payload.conduceHeader === 'object'
       ? { ...payload.conduceHeader } : null;
+  } else if (reuseNcfOfSaleId) {
+    inv.reuseNcfOfSaleId = reuseNcfOfSaleId;
+    inv.reuseNcf = String(payload.reuseNcf || '');
+    inv.reuseNcfType = String(payload.reuseNcfType || '');
+    inv.reuseNcfReason = String(payload.reuseNcfReason || '');
+    inv.reuseNcfNumber = String(payload.reuseNcfNumber || '');
+    inv.reuseNcfFavor = Number(payload.reuseNcfFavor) || 0;
   } else if (substitutesSaleId) {
     inv.substitutesSaleId = substitutesSaleId;
     inv.substitutesNumber = String(payload.substitutesNumber || '');
@@ -1864,7 +1890,9 @@ function posLoadResaleCart(payload = {}) {
   renderCart();
   renderPOSGrid();
   if (!sourceQuoteId && !sourceConduceId && !editingDocument && typeof window.ventasClearResaleCart === 'function') window.ventasClearResaleCart(true);
-  toast(substitutesSaleId
+  toast(reuseNcfOfSaleId
+    ? `✓ ${inv.reuseNcfNumber || 'Factura'} lista para registrar con ${inv.reuseNcf}`
+    : substitutesSaleId
     ? `✓ ${inv.substitutesNumber || 'Factura'} lista para sustituir`
     : editQuoteId
     ? `✓ Cotización ${inv.editQuoteNumber || '#' + editQuoteId} lista para modificar`
@@ -3110,7 +3138,9 @@ function openCobroModal(inv) {
       <div class="fg" id="cbr-ncf-wrap" style="margin-bottom:0">
         <label class="lbl">Tipo de comprobante fiscal</label>
         <select class="inp" id="cbr-ncf-type" onchange="cbrDocHint()">
-          <option value="" ${inv.ncfType ? '' : 'selected'}>Sin comprobante</option>
+          ${inv.reuseNcfType
+            ? `<option value="${posEscHtml(inv.reuseNcfType)}" selected>${posEscHtml(NCF_TYPE_LABELS[inv.reuseNcfType] || inv.reuseNcfType)} · ${posEscHtml(inv.reuseNcf)}</option>`
+            : `<option value="" ${inv.ncfType ? '' : 'selected'}>Sin comprobante</option>`}
         </select>
       </div>
     </div>
@@ -4074,6 +4104,14 @@ function cbrPopulateNcfTypes(availSet) {
   const sel = document.getElementById('cbr-ncf-type');
   if (!sel) return;
   const avail = availSet instanceof Set ? availSet : new Set();
+  const reuseType = currentInv()?.reuseNcfType || '';
+  if (reuseType) {
+    // El comprobante ya existe: no depende de que la secuencia tenga números.
+    sel.innerHTML = `<option value="${posEscHtml(reuseType)}">${posEscHtml(NCF_TYPE_LABELS[reuseType] || reuseType)} · ${posEscHtml(currentInv().reuseNcf)}</option>`;
+    sel.value = reuseType;
+    sel.disabled = true;
+    return;
+  }
   const prev = sel.value || currentInv()?.ncfType || '';
   const opts = ['<option value="">Sin comprobante</option>'];
   ['B01', 'B02', 'B14', 'B15', 'B16'].forEach(t => {
@@ -4114,7 +4152,9 @@ function cbrDocHint() {
   if (inv.itype === 'factura' && CFG.fiscalEnabled) {
     const sel  = document.getElementById('cbr-ncf-type');
     const tipo = sel ? sel.value : '';
-    if (!tipo) {
+    if (inv.reuseNcf) {
+      compLine = `Comprobante a emitir: ${NCF_TYPE_LABELS[inv.reuseNcfType] || inv.reuseNcfType} · ${inv.reuseNcf} (el mismo de la factura anulada)`;
+    } else if (!tipo) {
       compLine = 'Sin comprobante fiscal';
     } else {
       const label = NCF_TYPE_LABELS[tipo] || tipo;
@@ -4243,7 +4283,7 @@ async function finalizarVenta() {
   const cliPhoneType = document.getElementById('cbr-phone-type')?.value || 'telefono';
   const saleDate = document.getElementById('cbr-sale-date')?.value || new Date().toISOString().slice(0,10);
   // Tipo de comprobante fiscal elegido en el cobro (por defecto vacío = sin comprobante).
-  const ncfType = isQuote ? '' : (document.getElementById('cbr-ncf-type')?.value || '');
+  const ncfType = isQuote ? '' : (inv.reuseNcfType || document.getElementById('cbr-ncf-type')?.value || '');
   const checkoutPrintRoute = typeof _getCategoryConfig === 'function'
     ? _getCategoryConfig(isQuote ? 'cotizacion' : 'ticket')
     : { printer: '', template: '', profileId: '', copies: 1, autoPrint: false };
@@ -4576,6 +4616,8 @@ async function finalizarVenta() {
       sourceConduceId: inv.sourceConduceId || null,
       editQuoteId: isQuote ? (inv.editQuoteId || null) : null,
       substitutesSaleId: !isQuote ? (inv.substitutesSaleId || null) : null,
+      reuseNcfOfSaleId: !isQuote ? (inv.reuseNcfOfSaleId || null) : null,
+      reuseNcfReason: !isQuote ? (inv.reuseNcfReason || '') : '',
       substitutionReason: !isQuote ? (inv.substitutionReason || '') : '',
       ncfType,
       warrantyDays,
@@ -4609,7 +4651,9 @@ async function finalizarVenta() {
     // Venta exitosa
     closeModal();
     const savedDocumentLabel = result.documentNumberFmt || `#${result.saleId}`;
-    toast(result.substitution
+    toast(inv.reuseNcfOfSaleId && result.ncf
+      ? `✓ ${savedDocumentLabel} registrada con el NCF ${result.ncf} de ${inv.reuseNcfNumber || 'la factura anulada'}${Number(result.favorApplication?.applied) > 0 ? ` · ${fmt(result.favorApplication.applied)} a favor aplicados` : ''}`
+      : result.substitution
       ? `✓ ${inv.substitutesNumber || 'Factura'} sustituida por ${savedDocumentLabel}${result.substitution.creditNotes?.length ? ` · nota de crédito ${result.substitution.creditNotes.map(row => row.ncf || row.number).join(', ')}` : ''}`
       : sourceQuoteId
       ? `✓ Cotización ${sourceQuoteNumber || '#' + sourceQuoteId} convertida → ${savedDocumentLabel}`

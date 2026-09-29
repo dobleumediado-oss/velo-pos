@@ -638,6 +638,8 @@ function newInvObj(id) {
     editConduceId: null, editConduceNumber: '', editConduceHeader: null,
     substitutesSaleId: null, substitutesNumber: '', substitutionReason: '',
     substitutesMethod: '', substitutesAccountId: null, substitutesStockCredit: null,
+    reuseNcfOfSaleId: null, reuseNcf: '', reuseNcfType: '', reuseNcfReason: '',
+    reuseNcfNumber: '', reuseNcfFavor: 0,
     creditLimitAuthToken: '', creditLimitAuthExpiresAt: 0,
     creditLimitApprovedBy: null, creditLimitAuthCustomerId: null,
     creditLimitAuthAmount: 0,

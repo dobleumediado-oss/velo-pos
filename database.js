@@ -1064,6 +1064,20 @@ function createTables() {
       ON sale_cancellation_payment_resolutions(customer_id,created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_sale_cancel_lines_payment
       ON sale_cancellation_payment_lines(payment_id);
+    -- Dinero anotado a favor que luego se aplicó a otra factura del cliente.
+    CREATE TABLE IF NOT EXISTS sale_cancellation_favor_applications (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      resolution_id  INTEGER NOT NULL REFERENCES sale_cancellation_payment_resolutions(id),
+      payment_id     INTEGER NOT NULL REFERENCES payments(id),
+      target_sale_id INTEGER NOT NULL REFERENCES sales(id),
+      amount         REAL NOT NULL CHECK(amount > 0),
+      ledger_amount  REAL NOT NULL DEFAULT 0,
+      user_id        INTEGER REFERENCES users(id),
+      user_name      TEXT NOT NULL DEFAULT '',
+      created_at     TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_sale_cancel_favor_apps_resolution
+      ON sale_cancellation_favor_applications(resolution_id);
 
     -- ── Proveedores / compras ──
     CREATE TABLE IF NOT EXISTS suppliers (
@@ -4617,12 +4631,18 @@ const customersRepo = {
   getCancellationCredits(customerId) {
     if (!tableExists('sale_cancellation_payment_resolutions')) return [];
     return db.prepare(`
-      SELECT r.id,r.sale_id,r.amount,r.reason,r.user_name,r.created_at,
-             s.document_number_fmt,s.numero_factura_fmt,s.ncf
-      FROM sale_cancellation_payment_resolutions r
-      LEFT JOIN sales s ON s.id=r.sale_id
-      WHERE r.customer_id=? AND r.disposition='favor'
-      ORDER BY r.created_at DESC,r.id DESC
+      SELECT * FROM (
+        SELECT r.id,r.sale_id,
+               ROUND(r.amount-COALESCE((
+                 SELECT SUM(a.amount) FROM sale_cancellation_favor_applications a WHERE a.resolution_id=r.id
+               ),0),2) amount,
+               r.amount original_amount,r.reason,r.user_name,r.created_at,
+               s.document_number_fmt,s.numero_factura_fmt,s.ncf
+        FROM sale_cancellation_payment_resolutions r
+        LEFT JOIN sales s ON s.id=r.sale_id
+        WHERE r.customer_id=? AND r.disposition='favor'
+      ) WHERE amount>0.005
+      ORDER BY created_at DESC,id DESC
     `).all(Number(customerId));
   },
   // `limit` acota la consulta a los abonos más recientes. El renderer sostiene
@@ -5497,6 +5517,27 @@ function splitCancellationCash(payment, amount) {
   }).filter(row => row.amount > 0);
 }
 
+// Por qué una factura anulada no puede recuperar su NCF (vacío = sí puede).
+function _ncfReuseBlockers(original) {
+  const reasons = [];
+  const ncf = String(original?.ncf || '').trim().toUpperCase();
+  if (!original || original.type !== 'factura' || original.status !== 'cancelled') {
+    reasons.push('Solo una factura anulada puede registrarse nuevamente con su NCF');
+  }
+  if (!ncf) reasons.push('La factura no tiene NCF o su NCF ya fue reutilizado');
+  if (String(original?.ecf_status || '').trim() ||
+      (tableExists('ecf_log') && db.prepare('SELECT 1 FROM ecf_log WHERE sale_id=? LIMIT 1').get(original?.id))) {
+    reasons.push('Un e-CF no se reutiliza: su anulación se gestiona en el proveedor fiscal');
+  }
+  if (ncf && !parseCanonicalLegacyNcf(ncf)) reasons.push(`El NCF ${ncf} no tiene un formato válido`);
+  if (ncf && db.prepare(`
+    SELECT 1 FROM sales WHERE UPPER(TRIM(COALESCE(ncf,'')))=? AND id!=? AND status!='cancelled' LIMIT 1
+  `).get(ncf, original.id)) {
+    reasons.push(`El NCF ${ncf} ya está en otra factura vigente`);
+  }
+  return reasons;
+}
+
 function refreshPaymentPrimarySale(paymentId) {
   if (!tableExists('payment_allocations')) return;
   const linked = db.prepare(
@@ -5595,6 +5636,106 @@ const salesRepo = {
     `).get(Number(id));
     return saleCancellationResolutionResult(resolution, { idempotent: true });
   },
+  // Aplica a otra factura a crédito del mismo cliente el dinero que una
+  // anulación dejó anotado a favor. Los abonos quedan asignados a esa factura,
+  // el saldo del cliente baja y cada aplicación queda registrada. Debe correr
+  // dentro de una transacción.
+  applyCancellationFavor({ saleId, targetSaleId, maxAmount = null, userId = null, userName = '' }) {
+    if (!tableExists('sale_cancellation_payment_resolutions')) return { applied: 0, applicationIds: [] };
+    const resolution = db.prepare(`
+      SELECT * FROM sale_cancellation_payment_resolutions WHERE sale_id=? AND disposition='favor'
+    `).get(Number(saleId));
+    if (!resolution) return { applied: 0, applicationIds: [] };
+    const target = db.prepare('SELECT * FROM sales WHERE id=?').get(Number(targetSaleId));
+    if (!target || target.type !== 'factura' || target.status !== 'completed' ||
+        String(target.payment_method || '').toLowerCase() !== 'credito') {
+      throw new Error('El dinero a favor solo se aplica a una factura a crédito vigente');
+    }
+    if (Number(target.customer_id) !== Number(resolution.customer_id)) {
+      throw new Error('El dinero a favor solo se aplica a facturas del mismo cliente');
+    }
+    const pending = round2(Number(getPendingInvoices(db, target.customer_id).facturas
+      .find(row => Number(row.id) === Number(target.id))?.pendiente || 0));
+    let left = round2(Math.min(
+      pending,
+      maxAmount == null ? Infinity : Math.max(0, Number(maxAmount) || 0)
+    ));
+    const lines = db.prepare(`
+      SELECT l.*,COALESCE((
+        SELECT SUM(a.amount) FROM sale_cancellation_favor_applications a
+        WHERE a.resolution_id=l.resolution_id AND a.payment_id=l.payment_id
+      ),0) already_applied
+      FROM sale_cancellation_payment_lines l WHERE l.resolution_id=? ORDER BY l.id
+    `).all(resolution.id);
+    const applicationIds = [];
+    let applied = 0;
+    let ledger = 0;
+    for (const line of lines) {
+      if (left <= 0.005) break;
+      const available = round2(Number(line.amount || 0) - Number(line.already_applied || 0));
+      const take = round2(Math.min(available, left));
+      if (take <= 0.005) continue;
+      let historical = 0;
+      try {
+        historical = JSON.parse(line.cash_breakdown || '[]')
+          .filter(part => String(part.method || '').toLowerCase() === 'historico')
+          .reduce((sum, part) => sum + Number(part.amount || 0), 0);
+      } catch {}
+      // Solo la parte cobrada dentro de VELO pasó a Anticipos; esa se reclasifica.
+      const ledgerTake = round2(take * Math.max(0, 1 - historical / Number(line.amount || 1)));
+      const existing = db.prepare('SELECT id,amount FROM payment_allocations WHERE payment_id=? AND sale_id=?')
+        .get(line.payment_id, target.id);
+      if (existing) {
+        db.prepare('UPDATE payment_allocations SET amount=? WHERE id=?')
+          .run(round2(Number(existing.amount) + take), existing.id);
+      } else {
+        db.prepare(`
+          INSERT INTO payment_allocations(payment_id,sale_id,amount,invoice_balance_before,invoice_balance_after)
+          VALUES(?,?,?,?,?)
+        `).run(line.payment_id, target.id, take, round2(pending - applied), round2(pending - applied - take));
+      }
+      refreshPaymentPrimarySale(line.payment_id);
+      applicationIds.push(Number(db.prepare(`
+        INSERT INTO sale_cancellation_favor_applications(
+          resolution_id,payment_id,target_sale_id,amount,ledger_amount,user_id,user_name
+        ) VALUES(?,?,?,?,?,?,?)
+      `).run(resolution.id, line.payment_id, target.id, take, ledgerTake, userId || null, String(userName || '')).lastInsertRowid));
+      applied = round2(applied + take);
+      ledger = round2(ledger + ledgerTake);
+      left = round2(left - take);
+    }
+    if (applied > 0.005) {
+      db.prepare(`
+        UPDATE customers SET balance=MAX(0,ROUND(balance-?,2)),updated_at=datetime('now') WHERE id=?
+      `).run(applied, target.customer_id);
+      audit(userId, userName, 'dinero_a_favor_aplicado', 'sales', target.id,
+        `RD$${applied.toFixed(2)} anotados a favor por la anulación de la factura #${resolution.sale_id}`);
+    }
+    return { applied, ledgerAmount: ledger, applicationIds };
+  },
+  // Registrar nuevamente una factura anulada con su MISMO NCF. Cada factura
+  // recupera solo su propio comprobante, una vez, para el mismo cliente y tipo.
+  reuseNcfModel(id) {
+    const original = db.prepare('SELECT * FROM sales WHERE id=?').get(Number(id));
+    if (!original) throw new Error('Factura no encontrada');
+    const reasons = _ncfReuseBlockers(original);
+    const resolution = this.getCancellationResolution(original.id);
+    const items = db.prepare('SELECT * FROM sale_items WHERE sale_id=? ORDER BY id').all(original.id);
+    const charges = tableExists('sale_charges')
+      ? db.prepare('SELECT description,amount FROM sale_charges WHERE sale_id=? ORDER BY id').all(original.id)
+      : [];
+    return {
+      sale: original,
+      eligible: reasons.length === 0,
+      reasons,
+      ncf: String(original.ncf || '').trim().toUpperCase(),
+      ncfType: String(original.ncf || '').trim().toUpperCase().slice(0, 3),
+      fiscalDate: String(original.fiscal_issued_at || original.sale_date || original.created_at || '').slice(0, 10),
+      favorAmount: resolution?.disposition === 'favor' ? Number(resolution.paymentAmount || 0) : 0,
+      items,
+      charges,
+    };
+  },
   // Transacción completa de venta
   create({
     session, customer, items, payment, user, type = 'factura',
@@ -5642,6 +5783,22 @@ const salesRepo = {
         : null;
       if (editQuoteId && (!editQuote || editQuote.type !== 'cotizacion')) {
         throw new Error('La cotización que estás modificando ya no existe o ya fue convertida en venta');
+      }
+      // Registrar nuevamente con el mismo NCF de una factura anulada.
+      const reuseNcfOfId = type === 'factura' && !debitNote
+        ? (Number(payment.reuseNcfOfSaleId) || null) : null;
+      const reuseNcfOriginal = reuseNcfOfId
+        ? db.prepare('SELECT * FROM sales WHERE id=?').get(reuseNcfOfId)
+        : null;
+      if (reuseNcfOfId) {
+        if (!reuseNcfOriginal) throw new Error('La factura anulada no existe');
+        const blockers = _ncfReuseBlockers(reuseNcfOriginal);
+        if (blockers.length) throw new Error(blockers[0]);
+        const requested = String(payment.ncfType || '').trim().toUpperCase();
+        const originalType = String(reuseNcfOriginal.ncf).trim().toUpperCase().slice(0, 3);
+        if (requested && requested !== originalType) {
+          throw new Error(`Para reutilizar ${reuseNcfOriginal.ncf} el comprobante debe seguir siendo ${originalType}`);
+        }
       }
       // Nota de débito: un cargo posterior sobre una factura emitida. Numera en
       // su propia secuencia (NDB) y, si la factura tiene NCF, lleva un B03 que
@@ -6274,6 +6431,15 @@ const salesRepo = {
         if (!validSeller) throw new Error('El vendedor seleccionado no existe o está inactivo');
       }
 
+      if (reuseNcfOriginal) {
+        const originalCustomerId = Number(reuseNcfOriginal.customer_id || 1);
+        const digits = value => String(value || '').replace(/\D/g, '');
+        if (Number(customer.id || 1) !== originalCustomerId ||
+            (originalCustomerId === 1 && digits(customer.rnc) !== digits(reuseNcfOriginal.customer_rnc))) {
+          throw new Error(`El NCF ${reuseNcfOriginal.ncf} solo puede volver a usarse para el mismo cliente de la factura anulada`);
+        }
+      }
+
       // Crear venta
       const insertSaleSql = `
         INSERT INTO sales(cash_session_id,customer_id,customer_name,customer_rnc,
@@ -6448,7 +6614,31 @@ const salesRepo = {
       const ncfType = debitNote
         ? (String(debitNoteOriginal.ncf || '').trim() ? 'B03' : '')
         : (/^B(01|02|04|14|15|16|17)$/.test(requestedNcfType) ? requestedNcfType : '');
-      if (type === 'factura' && ncfType) {
+      if (reuseNcfOriginal) {
+        // El comprobante vuelve a estar vigente con su fecha fiscal original: sale
+        // del 608 y en el 607 queda en su mes, ahora con el monto corregido. La
+        // factura anulada deja de tenerlo para que nunca haya dos documentos con él.
+        ncf = String(reuseNcfOriginal.ncf).trim().toUpperCase();
+        const fiscalDate = reuseNcfOriginal.fiscal_issued_at || reuseNcfOriginal.created_at ||
+          db.prepare("SELECT datetime('now','localtime') v").get().v;
+        const logged = db.prepare(`
+          UPDATE ncf_log SET sale_id=?,status='emitido',voided_at=NULL,customer_rnc=?
+          WHERE sale_id=? AND UPPER(TRIM(COALESCE(ncf,'')))=?
+        `).run(saleId, customer.rnc || '', reuseNcfOriginal.id, ncf).changes;
+        if (!logged) {
+          db.prepare('INSERT INTO ncf_log(ncf,type,sale_id,customer_rnc,issued_at) VALUES(?,?,?,?,?)')
+            .run(ncf, ncf.slice(0, 3), saleId, customer.rnc || '', fiscalDate);
+        }
+        db.prepare("UPDATE sales SET ncf='',updated_at=datetime('now','localtime') WHERE id=?").run(reuseNcfOriginal.id);
+        db.prepare(`
+          UPDATE sales SET ncf=?,fiscal_issued_at=?,updated_at=datetime('now','localtime') WHERE id=?
+        `).run(ncf, fiscalDate, saleId);
+        const reuseReason = String(payment.reuseNcfReason || '').trim().slice(0, 500);
+        audit(user.id, user.name, 'ncf_reutilizado_desde_anulada', 'sales', saleId,
+          `NCF ${ncf} de la factura anulada ${reuseNcfOriginal.document_number_fmt || reuseNcfOriginal.numero_factura_fmt || '#' + reuseNcfOriginal.id} · fecha fiscal ${String(fiscalDate).slice(0, 10)}${reuseReason ? ` · ${reuseReason}` : ''}`);
+        audit(user.id, user.name, 'ncf_cedido_a_nueva_factura', 'sales', reuseNcfOriginal.id,
+          `NCF ${ncf} pasa a la factura #${saleId}${reuseReason ? ` · ${reuseReason}` : ''}`);
+      } else if (type === 'factura' && ncfType) {
         const fiscalOn = db.prepare("SELECT value FROM settings WHERE key='fiscal_enabled'").get()?.value === '1';
         if (fiscalOn) {
           ensureNcfAvailableNumbersTable();
@@ -6695,6 +6885,14 @@ const salesRepo = {
         cashRepo.updateTotals(session.id, total);
       }
 
+      // 9b. Al registrar nuevamente con el mismo NCF, el dinero que la anulación
+      //     dejó anotado a favor se aplica a la factura nueva si es a crédito.
+      const favorApplication = reuseNcfOriginal && method === 'credito'
+        ? salesRepo.applyCancellationFavor({
+            saleId: reuseNcfOriginal.id, targetSaleId: saleId, userId: user.id, userName: user.name,
+          })
+        : null;
+
       // 10. Auditoría
       audit(user.id, user.name,
             editQuote ? 'cotizacion_modificada' : (type === 'cotizacion' ? 'cotizacion_creada' : 'venta_creada'),
@@ -6761,6 +6959,7 @@ const salesRepo = {
         outstandingBalance,
         autoCreditLimitAssigned,
         replacesSaleId,
+        favorApplication,
         convertedQuoteId,
         convertedQuoteNumber,
         convertedConduceId,
@@ -11710,6 +11909,43 @@ const accountingRepo = {
       });
     } catch (e) {
       console.error('[accounting] Destino de abonos al anular factura:', e.message);
+      return null;
+    }
+  },
+
+  // Dinero anotado a favor aplicado a otra factura: sale de Anticipos de
+  // Clientes y cancela la cuenta por cobrar. Solo la parte que entró en VELO.
+  generateFavorApplicationEntry({ applicationId, userId } = {}) {
+    try {
+      const modEnabled = db.prepare("SELECT value FROM settings WHERE key='module_contabilidad'").get()?.value;
+      if (modEnabled !== '1' || !tableExists('sale_cancellation_favor_applications')) return null;
+      const application = db.prepare('SELECT * FROM sale_cancellation_favor_applications WHERE id=?').get(Number(applicationId));
+      if (!application || Number(application.ledger_amount || 0) <= 0.005) return null;
+      const existing = db.prepare(`
+        SELECT id FROM accounting_entries
+        WHERE source_module='aplicacion_dinero_favor' AND source_id=? AND status='confirmado'
+      `).get(Number(application.id));
+      if (existing) return this.getEntryById(existing.id);
+      const cfg = this.getConfig();
+      const arAccId = cfg.account_ar?.account_id || db.prepare("SELECT id FROM accounting_accounts WHERE code='1104'").get()?.id;
+      const advances = db.prepare("SELECT id FROM accounting_accounts WHERE code='2103'").get();
+      if (!arAccId || !advances?.id) return null;
+      const amount = round2(application.ledger_amount);
+      return this.createEntry({
+        date: String(application.created_at || new Date().toISOString()).slice(0, 10),
+        concept: `Dinero a favor aplicado a la factura #${application.target_sale_id}`,
+        reference: `FAV-AP-${application.id}`,
+        source_module: 'aplicacion_dinero_favor',
+        source_id: Number(application.id),
+        lines: [
+          { account_id: advances.id, debit: amount, credit: 0, description: `Anticipo aplicado · Factura #${application.target_sale_id}` },
+          { account_id: arAccId, debit: 0, credit: amount, description: `Cobro con dinero a favor · Factura #${application.target_sale_id}` },
+        ],
+        userId,
+        status: 'confirmado',
+      });
+    } catch (e) {
+      console.error('[accounting] Aplicación de dinero a favor:', e.message);
       return null;
     }
   },

@@ -288,3 +288,26 @@ bloqueo concreto y dónde está.
 Los documentos internos emitidos por versiones anteriores **no se renumeran**: el
 historial es inmutable y su número ya está consumido. Se reconocen por
 `correction_kind='product_addition'` y solo viven en Auditoría.
+
+## Registrar nuevamente con el mismo NCF
+
+Una factura **anulada** con NCF (importada o de Velo, no e-CF) puede volver a
+emitirse con su propio comprobante: botón en su detalle de Ventas y en el
+bloque "Dinero anotado a favor" de la cuenta del cliente (solo administradores).
+
+- `salesRepo.reuseNcfModel(id)` valida (`_ncfReuseBlockers`): anulada, con NCF
+  válido, sin e-CF y sin otra factura vigente con ese NCF.
+- El POS envía `payment.reuseNcfOfSaleId`; `salesRepo.create` exige el mismo
+  cliente (o el mismo RNC en Consumidor Final) y el mismo tipo de comprobante.
+  `sales:create` pide `sales.replace_invoice`.
+- El comprobante pasa a la factura nueva con su `fiscal_issued_at` original: la
+  fila de `ncf_log` se reasigna (`emitido`, sin `voided_at`), la anulada queda
+  con `ncf=''`. Sale del 608 y aparece una sola vez en el 607 de su mes, con el
+  monto corregido. No consume la secuencia. Solo una vez por factura.
+- Si la anulación dejó dinero **a favor** y la factura nueva es a crédito,
+  `salesRepo.applyCancellationFavor` asigna esos abonos a la factura nueva,
+  baja el saldo del cliente y registra cada aplicación en
+  `sale_cancellation_favor_applications` (el aviso de la cuenta muestra solo lo
+  que falta). Asiento `aplicacion_dinero_favor`: Anticipos 2103 → CxC, solo por
+  la parte que entró en Velo (los abonos históricos no tuvieron asiento).
+- Si el 607 de ese mes ya se envió, la pantalla avisa que habrá que rectificarlo.

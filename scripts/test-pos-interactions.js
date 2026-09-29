@@ -610,6 +610,33 @@ assert.strictEqual(state.currentInv().substitutesStockCredit, null);
 console.log('  ✓ la sustitución abre la factura en el POS con su método, sus existencias y su oferta');
 
 state.resetInvoices();
+const reuseLoaded = transfer.posLoadResaleCart({
+  reuseNcfOfSaleId: 2132,
+  reuseNcf: 'B0200000041',
+  reuseNcfType: 'B02',
+  reuseNcfReason: 'Error de tasa',
+  reuseNcfNumber: '00000041',
+  reuseNcfFavor: 200000,
+  ncfType: 'B02',
+  saleDate: '2025-07-21',
+  paymentMethod: 'credito',
+  customer: { id: 9, name: 'Motores del Caribe, SRL', rnc: '130123456' },
+  items: [{ product_id: 100, product_code: 'P-100', product_name: 'Producto cotizado', unit_price: 118, qty: 2 }],
+});
+assert.strictEqual(reuseLoaded, true, 'debe abrir la factura anulada para registrarla con su NCF');
+assert.strictEqual(state.currentInv().itype, 'factura');
+assert.strictEqual(state.currentInv().reuseNcfOfSaleId, 2132);
+assert.strictEqual(state.currentInv().reuseNcf, 'B0200000041');
+assert.strictEqual(state.currentInv().ncfType, 'B02');
+assert.strictEqual(state.currentInv().saleDate, '2025-07-21', 'conserva la fecha de la factura');
+transfer.posSetType('cotizacion');
+assert.strictEqual(state.currentInv().itype, 'factura', 'solo se emite como factura');
+transfer.posLimpiar();
+assert.strictEqual(state.currentInv().reuseNcfOfSaleId, null, 'Limpiar cancela el registro con el mismo NCF');
+assert.strictEqual(state.currentInv().reuseNcf, '');
+console.log('  ✓ la factura anulada se abre en el POS para registrarla con su mismo NCF');
+
+state.resetInvoices();
 const conduceEditLoaded = transfer.posLoadResaleCart({
   editConduceId: 73,
   editConduceNumber: 'CON-000073',

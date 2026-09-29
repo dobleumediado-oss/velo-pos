@@ -177,6 +177,7 @@ const api = {
     count:   (data)          => ipcRenderer.invoke('sales:count', data),
     search:  (data)          => ipcRenderer.invoke('sales:search', data),
     updateDate: (data)       => ipcRenderer.invoke('sales:updateDate', data),
+    reuseNcfModel: (data) => ipcRenderer.invoke('sales:reuseNcfModel', data),
     corrections: {
       getImpact:            (data) => ipcRenderer.invoke('sales:corrections:getImpact', data),
       changeDate:           (data) => ipcRenderer.invoke('sales:corrections:changeDate', data),

@@ -2317,7 +2317,13 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
           ${(cancellationCredits || []).map(row => `
             <div style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-top:1px solid var(--line);font-size:11px">
               <span>${cliEsc(row.document_number_fmt || row.numero_factura_fmt || `Factura #${row.sale_id}`)} · ${fdate(String(row.created_at || '').slice(0,10))}${row.reason ? ` · ${cliEsc(row.reason)}` : ''}</span>
-              <strong style="white-space:nowrap">${fmt(row.amount)}</strong>
+              <span style="display:flex;align-items:center;gap:8px">
+                ${row.ncf && ['admin','superadmin'].includes(user?.role) && typeof openVentaReuseNcf === 'function'
+                  ? `<button class="btn btn-out btn-sm" style="font-size:10px;padding:2px 8px"
+                       title="Rehacer esta factura anulada con su mismo comprobante ${cliEsc(row.ncf)}"
+                       onclick="closeModal();openVentaReuseNcf(${Number(row.sale_id)})">Registrar con ${cliEsc(row.ncf)}</button>` : ''}
+                <strong style="white-space:nowrap">${fmt(row.amount)}</strong>
+              </span>
             </div>`).join('')}
         </div>
       </div>` : ''}

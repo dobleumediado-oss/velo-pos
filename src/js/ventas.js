@@ -2145,6 +2145,12 @@ async function openDetalleVentaModal(s, options = {}) {
              ${svg('return')} Devolver
            </button>`
         : ''}
+      ${s.type === 'factura' && s.status === 'cancelled' && s.ncf && ['admin','superadmin'].includes(user?.role)
+        ? `<button class="btn btn-out" onclick="closeModal();openVentaReuseNcf(${s.id})"
+                   title="Rehacer esta factura con su mismo comprobante fiscal">
+             ${svg('return')} Registrar nuevamente con el mismo NCF
+           </button>`
+        : ''}
       ${s.status === 'completed' && s.type === 'cotizacion'
         ? `<button class="btn btn-out" onclick="closeModal();modificarCotizacionEnPOS(${s.id})"
                    title="Cambiar artículos, cantidades, precios y cargos; conserva el mismo número">
@@ -2878,6 +2884,111 @@ async function ventasSubmitPaymentMethodChange() {
       }
     },
   });
+}
+
+async function openVentaReuseNcf(saleId) {
+  const response = await window.api.sales.reuseNcfModel({ id: saleId, requestUserId: user.id });
+  if (!response?.ok) return toast(response?.error || 'No se pudo preparar el registro', 'err');
+  const model = response.data;
+  const sale = model.sale;
+  if (!model.eligible) {
+    openModal(`
+      <div class="modal-title">Registrar nuevamente con el mismo NCF</div>
+      <div class="modal-sub">${facturaLabel(sale)} · ${ventasEsc(sale.ncf || 'Sin NCF')}</div>
+      <div class="alrt r" style="margin-bottom:12px"><div>
+        <div class="alrt-title">No se puede reutilizar este comprobante</div>
+        <div class="alrt-sub">${model.reasons.map(ventasEsc).join('<br/>')}</div>
+      </div></div>
+      <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
+    `);
+    return;
+  }
+  window._ventaReuseNcf = { model };
+  openModal(`
+    <div class="modal-title">Registrar nuevamente con el mismo NCF</div>
+    <div class="modal-sub">${facturaLabel(sale)} anulada · ${ventasEsc(sale.customer_name || 'Consumidor Final')} · ${fmt(sale.total)}</div>
+    <div class="alrt b" style="margin-bottom:10px"><div>
+      <div class="alrt-title">La factura nueva llevará el ${ventasEsc(model.ncf)}</div>
+      <div class="alrt-sub">Se abre el POS con sus artículos para corregir cantidades, precios o tasa. Mismo cliente y mismo tipo (${ventasEsc(model.ncfType)}). El comprobante conserva su fecha fiscal (${fdate(model.fiscalDate)}), sale del 608 y vuelve al 607 de ese mes con el monto corregido. Solo se puede hacer una vez.</div>
+    </div></div>
+    <div class="alrt a" style="margin-bottom:10px"><div>
+      <div class="alrt-title">Si el 607 de ${ventasEsc(String(model.fiscalDate).slice(0, 7))} ya se envió a la DGII</div>
+      <div class="alrt-sub">El monto de este comprobante cambia respecto a lo reportado: habrá que rectificar ese mes.</div>
+    </div></div>
+    ${model.favorAmount > 0 ? `<div class="alrt w" style="margin-bottom:10px"><div>
+      <div class="alrt-title">La anulación dejó ${fmt(model.favorAmount)} anotado a favor del cliente</div>
+      <div class="alrt-sub">Si la factura nueva es a crédito, ese dinero se aplica automáticamente a ella: sus abonos quedan asignados y el saldo baja. Al contado, el dinero sigue anotado a favor.</div>
+    </div></div>` : ''}
+    <div class="fg"><label class="lbl">Motivo específico *</label>
+      <input class="inp" id="vrn-reason" maxlength="500" placeholder="Ej.: se facturó con una tasa equivocada"/>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-dark" onclick="ventasStartReuseNcf()">${svg('return')} Abrir en el POS</button>
+    </div>
+  `);
+}
+
+function ventasStartReuseNcf() {
+  const state = window._ventaReuseNcf;
+  if (!state?.model) return;
+  const reason = document.getElementById('vrn-reason')?.value?.trim() || '';
+  if (reason.length < 5) return toast('Escribe un motivo específico', 'w');
+  const model = state.model;
+  const sale = model.sale;
+  const account = DB.customers.find(c => c.id === sale.customer_id);
+  const payload = {
+    reuseNcfOfSaleId: Number(sale.id),
+    reuseNcf: model.ncf,
+    reuseNcfType: model.ncfType,
+    reuseNcfReason: reason,
+    reuseNcfNumber: facturaLabel(sale),
+    reuseNcfFavor: Number(model.favorAmount || 0),
+    ncfType: model.ncfType,
+    priceMode: sale.price_mode || 'retail',
+    discountPct: Number(sale.discount_pct) || 0,
+    paymentMethod: String(sale.payment_method || 'efectivo').toLowerCase(),
+    charges: model.charges || [],
+    notes: sale.notes || '',
+    salespersonId: sale.salesperson_id || null,
+    saleDate: sale.sale_date || today(),
+    customer: {
+      id: account?.id || sale.customer_id || 1,
+      name: account?.name || sale.customer_name || 'Consumidor Final',
+      rnc: account?.rnc || sale.customer_rnc || '',
+      phone: sale.customer_phone || account?.phone || '',
+      phoneType: sale.customer_phone_type || 'telefono',
+      contactId: sale.customer_contact_id || null,
+      contactName: sale.customer_contact_name || '',
+      branchId: sale.customer_branch_id || null,
+      branchName: sale.customer_branch_name || '',
+    },
+    items: (model.items || []).map(i => {
+      const gift = Number(i.offer_is_gift) === 1 && Number(i.offer_original_amount) > 0;
+      return {
+        product_id: i.product_id,
+        product_code: i.product_code || '',
+        product_name: i.product_name,
+        unit_cost: i.unit_cost || 0,
+        unit_price: gift ? ventasRound2(Number(i.offer_original_amount) / (Number(i.qty) || 1)) : i.unit_price,
+        offer_is_gift: gift ? 1 : 0,
+        taxable: ventasTaxable(i) ? 1 : 0,
+        tax_pct: ventasTaxable(i) ? ventasTaxPct(i) : 0,
+        qty: i.qty,
+      };
+    }),
+  };
+  window._ventaReuseNcf = null;
+  window._pendingPOSResaleCart = payload;
+  closeModal();
+  routeTo('pos');
+  setTimeout(() => {
+    if (window._pendingPOSResaleCart === payload && typeof window.posLoadResaleCart === 'function' &&
+        document.getElementById('cart-wrap')) {
+      window._pendingPOSResaleCart = null;
+      window.posLoadResaleCart(payload);
+    }
+  }, 180);
 }
 
 async function openVentaReplacement(saleId) {

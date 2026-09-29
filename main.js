@@ -3089,6 +3089,10 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
     if (!['factura', 'cotizacion'].includes(saleData?.type || 'factura')) {
       return { ok: false, error: 'Tipo de documento no soportado' };
     }
+    if (Number(saleData?.payment?.reuseNcfOfSaleId || 0) &&
+        !saleCorrectionsRepo.hasPermission(reqUser, 'sales.replace_invoice')) {
+      return { ok: false, error: 'Permiso requerido para registrar una factura con el NCF de otra anulada' };
+    }
 
     // Resolver reintentos ANTES de volver a exigir tokens de autorización que
     // ya fueron consumidos por la primera confirmación.
@@ -3207,6 +3211,11 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
           terminalId: _reqTerminalId(),
         })
       : salesRepo.create({ ...posSaleData, user: reqUser });
+    if (!result.idempotent) {
+      for (const applicationId of result.favorApplication?.applicationIds || []) {
+        _acctHook(() => accountingRepo.generateFavorApplicationEntry({ applicationId, userId: requestUserId }));
+      }
+    }
     if (substitutesSaleId && !result.idempotent) {
       for (const returnId of result.substitution?.creditNoteIds || []) {
         _acctHook(() => accountingRepo.generateReturnEntry({ returnSaleId: returnId, userId: requestUserId }));
@@ -3711,6 +3720,18 @@ ipcMain.handle('sales:corrections:getReplacementModel', async (_, { id, requestU
     return { ok: true, data: saleCorrectionsRepo.replacementModel(id, requestUserId) };
   } catch (e) {
     return { ok: false, error: e.message, code: e.code || 'VALIDATION_ERROR' };
+  }
+});
+
+ipcMain.handle('sales:reuseNcfModel', async (_, { id, requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !saleCorrectionsRepo.hasPermission(reqUser, 'sales.replace_invoice')) {
+      return { ok: false, error: 'Permiso requerido: sales.replace_invoice' };
+    }
+    return { ok: true, data: salesRepo.reuseNcfModel(id) };
+  } catch (e) {
+    return { ok: false, error: e.message };
   }
 });
 
