@@ -290,7 +290,20 @@ function cleanupStaleGeneratedFiles(directory, matcher, maxAgeMs = 24 * 60 * 60 
   return removed;
 }
 
+// Papel que un documento pide EXPLÍCITAMENTE para la impresión física, con
+// <meta name="velo-page-size" content="a4 landscape">. Solo los documentos que
+// lo declaran cambian de papel u orientación; el resto sigue en Carta vertical.
+function explicitSheetPage(html) {
+  const content = String(html || '').match(/<meta\s+name=["']velo-page-size["']\s+content=["']([^"']+)["']/i)?.[1] || '';
+  const value = content.trim().toLowerCase();
+  if (!value) return null;
+  const pageSize = /\ba4\b/.test(value) ? 'A4' : /\blegal\b/.test(value) ? 'Legal' : /\bletter\b/.test(value) ? 'Letter' : null;
+  if (!pageSize) return null;
+  return { pageSize, landscape: /\blandscape\b/.test(value) };
+}
+
 module.exports = {
+  explicitSheetPage,
   MAX_COMPATIBLE_PAGE_INCHES,
   MAX_THERMAL_PAGE_HEIGHT_INCHES,
   extractCssPageSize,

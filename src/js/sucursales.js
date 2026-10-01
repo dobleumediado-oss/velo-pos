@@ -804,6 +804,26 @@ function modalReporteNCF() {
   const phone = (typeof CFG!=='undefined' && CFG.phone) || '';
   const addr = (typeof CFG!=='undefined' && CFG.addr) || '';
 
+  // Papel y plantilla de impresión. Se recuerdan por equipo; el papel viaja en
+  // el documento (@page + velo-page-size) para que PDF e impresora lo respeten.
+  const REP_PAPERS = {
+    'letter portrait':  { label: 'Carta vertical',   w: 215.9, h: 279.4 },
+    'letter landscape': { label: 'Carta horizontal', w: 279.4, h: 215.9 },
+    'A4 portrait':      { label: 'A4 vertical',      w: 210,   h: 297 },
+    'A4 landscape':     { label: 'A4 horizontal',    w: 297,   h: 210 },
+  };
+  const REP_LAYOUTS = {
+    completo: 'Completa · resumen y detalle',
+    detalle:  'Solo detalle · para la contable',
+    resumen:  'Solo resumen · totales',
+  };
+  const readPref = (key, allowed, fallback) => {
+    try { const v = localStorage.getItem(key); return v && allowed[v] ? v : fallback; } catch { return fallback; }
+  };
+  const savePref = (key, value) => { try { localStorage.setItem(key, value); } catch {} };
+  const savedPaper = readPref('velo.rep607.paper', REP_PAPERS, 'letter portrait');
+  const savedLayout = readPref('velo.rep607.layout', REP_LAYOUTS, 'completo');
+
   const overlay = document.createElement('div');
   // Debajo de los modales de la app (z-index 200): la vista previa de impresión
   // se abre encima del reporte y, al cerrarla, el reporte sigue donde estaba.
@@ -822,6 +842,10 @@ function modalReporteNCF() {
           </select></div>
         <div class="fg" style="margin:0"><label class="lbl">Desde</label><input class="inp" type="date" id="rep-from" value="${first}"></div>
         <div class="fg" style="margin:0"><label class="lbl">Hasta</label><input class="inp" type="date" id="rep-to" value="${last}"></div>
+        <div class="fg" style="margin:0;min-width:150px"><label class="lbl">Papel</label>
+          <select class="inp" id="rep-paper">${Object.entries(REP_PAPERS).map(([v, p]) => `<option value="${v}" ${v === savedPaper ? 'selected' : ''}>${p.label}</option>`).join('')}</select></div>
+        <div class="fg" style="margin:0;min-width:190px"><label class="lbl">Plantilla</label>
+          <select class="inp" id="rep-layout">${Object.entries(REP_LAYOUTS).map(([v, l]) => `<option value="${v}" ${v === savedLayout ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
         <button class="btn btn-dark" id="rep-gen">Generar</button>
         <button class="btn btn-ghost" id="rep-print" disabled>🖨️ Imprimir</button>
         <button class="btn btn-ghost" id="rep-excel" disabled>Excel</button>
@@ -835,12 +859,16 @@ function modalReporteNCF() {
   overlay.querySelector('#rep-close').onclick = close;
   overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
 
-  let printableHtml = '';
+  // El documento se arma al imprimir con el papel y la plantilla elegidos en
+  // ese momento: cambiarlos no obliga a volver a generar el reporte.
+  let buildPrintable = null;
   const printBtn = overlay.querySelector('#rep-print');
   const excelBtn = overlay.querySelector('#rep-excel');
-  printBtn.onclick = () => { if (printableHtml && typeof printHTML==='function') printHTML(printableHtml, 'reporte'); };
+  overlay.querySelector('#rep-paper').onchange = (e) => savePref('velo.rep607.paper', e.target.value);
+  overlay.querySelector('#rep-layout').onchange = (e) => savePref('velo.rep607.layout', e.target.value);
+  printBtn.onclick = () => { if (buildPrintable && typeof printHTML==='function') printHTML(buildPrintable(), 'reporte'); };
   excelBtn.onclick = () => {
-    if (printableHtml) _exportHTMLToExcel(printableHtml, {
+    if (buildPrintable) _exportHTMLToExcel(buildPrintable(), {
       suggestedName: `Reporte-${overlay.querySelector('#rep-tipo').value}`,
       title: 'Reporte de comprobantes fiscales',
     });
@@ -853,7 +881,7 @@ function modalReporteNCF() {
     const body = overlay.querySelector('#rep-body');
     const is608 = tipo === '608';
     body.innerHTML = '<div style="text-align:center;color:var(--muted2);padding:24px">Cargando…</div>';
-    printBtn.disabled = true; excelBtn.disabled = true; printableHtml = '';
+    printBtn.disabled = true; excelBtn.disabled = true; buildPrintable = null;
 
     const requestUserId = user?.id;
     const res = is608
@@ -937,7 +965,7 @@ function modalReporteNCF() {
       </table>`;
 
     if (invalidRows.length) {
-      printableHtml = '';
+      buildPrintable = null;
       printBtn.disabled = true;
       excelBtn.disabled = true;
       return;
@@ -973,63 +1001,94 @@ function modalReporteNCF() {
         <thead><tr><th>Tipo</th><th>Descripción</th><th class="c">Cant.</th><th class="r">ITBIS</th><th class="r">Monto</th></tr></thead>
         <tbody>${byType.map(g => `<tr><td class="mono">${esc(g.type)}</td><td>${esc(TIPO_LBL[g.type] || '—')}${g.type === 'B04' && !is608 ? ' <span class="muted">(resta)</span>' : ''}</td><td class="c">${g.count}</td><td class="r">${fmt(g.tax)}</td><td class="r">${fmt(g.total)}</td></tr>`).join('')}</tbody>
       </table></div>`;
+    buildPrintable = () => {
+    const paperKey = overlay.querySelector('#rep-paper')?.value || 'letter portrait';
+    const paper = REP_PAPERS[paperKey] || REP_PAPERS['letter portrait'];
+    const layout = REP_LAYOUTS[overlay.querySelector('#rep-layout')?.value] ? overlay.querySelector('#rep-layout').value : 'completo';
+    const wide = paper.w > paper.h;
+    const showSummary = layout !== 'detalle', showDetail = layout !== 'resumen';
+    // En vertical caben las mismas columnas con letra más pequeña; nada se oculta.
+    const z = wide
+      ? { td: '9.5px', th: '8px', pad: '4px 6px', metV: '13.5px', grid: is608 ? '1fr' : '1.15fr 1fr' }
+      : { td: '8.4px', th: '7.2px', pad: '3px 4px', metV: '12px', grid: '1fr' };
     const generated = new Date().toLocaleString('es-DO', { dateStyle: 'medium', timeStyle: 'short' });
-    printableHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>Reporte ${is608 ? '608' : '607'} — ${esc(biz)}</title>
+    return `<!DOCTYPE html><html><head><meta charset="UTF-8"/><meta name="velo-page-size" content="${paperKey.toLowerCase()}"/>
+      <title>Reporte ${is608 ? '608' : '607'} — ${esc(biz)}</title>
       <style>
-        @page{size:letter landscape;margin:10mm 11mm}
+        @page{size:${paperKey};margin:10mm}
         *{box-sizing:border-box}
         body{font-family:Arial,Helvetica,sans-serif;font-size:10px;color:#111827;margin:0}
-        .head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;border-bottom:3px solid #111827;padding-bottom:8px;margin-bottom:11px}
-        .biz{font-size:15px;font-weight:800}
-        .biz-sub,.sub{color:#4b5563;font-size:10px;margin-top:3px}
+        @media screen{html{background:#e5e7eb}body{padding:14px 0}
+          .sheet{width:${paper.w}mm;min-height:${paper.h}mm;padding:10mm;margin:0 auto;background:#fff;box-shadow:0 2px 12px rgba(15,23,42,.18)}}
+        @media print{.sheet{width:auto;min-height:0;padding:0;margin:0;box-shadow:none}}
+        .head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;border-bottom:3px solid #111827;padding-bottom:8px;margin-bottom:11px}
+        .biz{font-size:${wide ? '15px' : '13.5px'};font-weight:800}
+        .biz-sub,.sub{color:#4b5563;font-size:${wide ? '10px' : '9px'};margin-top:3px}
         .doc{text-align:right}
-        h2{font-size:15px;font-weight:800;margin:0;letter-spacing:.01em}
-        .metrics{display:grid;grid-template-columns:repeat(${is608 ? 3 : 5},1fr);gap:8px;margin-bottom:10px}
-        .met{border:1px solid #e5e7eb;border-radius:6px;padding:7px 9px;background:#f9fafb}
-        .met-l{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#6b7280}
-        .met-v{font-size:13.5px;font-weight:800;margin-top:3px}
-        .met-s{font-size:8.5px;color:#6b7280;margin-top:2px}
-        .grid2{display:grid;grid-template-columns:${is608 ? '1fr' : '1.15fr 1fr'};gap:16px}
-        h3{font-size:9.5px;text-transform:uppercase;letter-spacing:.07em;color:#374151;margin:10px 0 5px;border-bottom:1.5px solid #e5e7eb;padding-bottom:3px}
+        h2{font-size:${wide ? '15px' : '13.5px'};font-weight:800;margin:0;letter-spacing:.01em}
+        .metrics{display:grid;grid-template-columns:repeat(${is608 ? 3 : 5},1fr);gap:${wide ? '8px' : '6px'};margin-bottom:10px}
+        .met{border:1px solid #e5e7eb;border-radius:6px;padding:${wide ? '7px 9px' : '6px 7px'};background:#f9fafb}
+        .met-l{font-size:7.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#6b7280}
+        .met-v{font-size:${z.metV};font-weight:800;margin-top:3px;white-space:nowrap}
+        .met-s{font-size:8px;color:#6b7280;margin-top:2px}
+        .grid2{display:grid;grid-template-columns:${z.grid};gap:${wide ? '16px' : '4px'}}
+        h3{font-size:9px;text-transform:uppercase;letter-spacing:.07em;color:#374151;margin:10px 0 5px;border-bottom:1.5px solid #e5e7eb;padding-bottom:3px}
         table{width:100%;border-collapse:collapse}
         thead{display:table-header-group}
         tfoot{display:table-row-group}
         tr{page-break-inside:avoid}
-        th{background:#f3f4f6;padding:5px 6px;text-align:left;font-size:8px;text-transform:uppercase;letter-spacing:.05em;color:#374151;border-bottom:1px solid #d1d5db;white-space:nowrap}
-        td{padding:4px 6px;border-bottom:1px solid #eef0f3;font-size:9.5px;vertical-align:top}
+        th{background:#f3f4f6;padding:${z.pad};text-align:left;font-size:${z.th};text-transform:uppercase;letter-spacing:.04em;color:#374151;border-bottom:1px solid #d1d5db;white-space:nowrap}
+        td{padding:${z.pad};border-bottom:1px solid #eef0f3;font-size:${z.td};vertical-align:top}
         .r{text-align:right;white-space:nowrap} .c{text-align:center} .muted{color:#6b7280}
         .mono{font-family:Consolas,Menlo,'Courier New',monospace;font-weight:700;color:#111827;letter-spacing:.02em;white-space:nowrap}
         th.r{text-align:right} th.c{text-align:center}
-        .st{display:inline-block;padding:1px 6px;border-radius:9px;font-size:7.5px;font-weight:700;letter-spacing:.04em;border:1px solid;white-space:nowrap}
+        .st{display:inline-block;padding:1px ${wide ? '6px' : '4px'};border-radius:9px;font-size:7px;font-weight:700;letter-spacing:.03em;border:1px solid;white-space:nowrap}
         .st-pagada{color:#166534;border-color:#86efac;background:#f0fdf4}
         .st-parcial{color:#1e40af;border-color:#93c5fd;background:#eff6ff}
         .st-pendiente{color:#92400e;border-color:#fcd34d;background:#fffbeb}
         .st-anulada{color:#991b1b;border-color:#fca5a5;background:#fef2f2}
         .st-devuelta,.st-aplicada,.st-sin_documento{color:#374151;border-color:#d1d5db;background:#f9fafb}
         tfoot td{font-weight:700;background:#f9fafb;border-top:1px solid #d1d5db}
-        tfoot tr.net td{font-size:10.5px;background:#f3f4f6;border-top:2px solid #111827}
-        .note{margin-top:9px;font-size:8.5px;color:#6b7280;line-height:1.5}
-        .foot{margin-top:10px;padding-top:6px;border-top:1px solid #e5e7eb;font-size:8.5px;color:#9ca3af;display:flex;justify-content:space-between;gap:12px}
-      </style></head><body>
+        tfoot tr.net td{font-size:${wide ? '10.5px' : '9.2px'};background:#f3f4f6;border-top:2px solid #111827}
+        .note{margin-top:9px;font-size:8px;color:#6b7280;line-height:1.5}
+        .foot{margin-top:10px;padding-top:6px;border-top:1px solid #e5e7eb;font-size:8px;color:#9ca3af;display:flex;justify-content:space-between;gap:12px}
+      </style></head><body><div class="sheet">
       <div class="head">
         <div><div class="biz">${esc(biz)}</div>
           <div class="biz-sub">${[rnc && `RNC ${esc(rnc)}`, phone && esc(phone), addr && esc(addr)].filter(Boolean).join(' · ')}</div></div>
         <div class="doc"><h2>Reporte ${title}</h2>
           <div class="sub">Período: del ${ddmm(from)} al ${ddmm(to)} · ${rows.length} comprobante(s) · orden cronológico</div></div>
       </div>
-      <div class="metrics">${metrics}</div>
-      <div class="grid2">${stateTable}${typeTable}</div>
-      <h3>Detalle de comprobantes ${is608 ? 'anulados' : 'emitidos'}</h3>
+      ${showSummary ? `<div class="metrics">${metrics}</div><div class="grid2">${stateTable}${typeTable}</div>` : ''}
+      ${showDetail ? `<h3>Detalle de comprobantes ${is608 ? 'anulados' : 'emitidos'}</h3>
       <table>
         <thead><tr>${headCols.map((c,i)=>`<th class="${moneyCols.includes(i) ? 'r' : (i === 0 || (!is608 && i === headCols.length - 1)) ? 'c' : ''}">${c}</th>`).join('')}</tr></thead>
         <tbody>${rows.map((r, n)=>`<tr>${rowCells(r, n).map(cell).join('')}</tr>`).join('')}</tbody>
         <tfoot>${footRows}</tfoot>
-      </table>
+      </table>` : ''}
       <div class="note">${is608
         ? 'Comprobantes anulados ordenados por la fecha de anulación y luego por NCF.'
         : 'Ordenado por fecha de emisión y luego por NCF. El estado de cobro y el pendiente se calculan igual que en Ventas, a la fecha de este reporte. Las notas de crédito (B04) se muestran en positivo, como se declaran, y restan en el total neto.'}</div>
-      <div class="foot"><span>${esc(biz)}${rnc ? ` · RNC ${esc(rnc)}` : ''}</span><span>Generado el ${esc(generated)} · Reporte interno de apoyo; no sustituye el envío del formato ${is608 ? '608' : '607'} a la DGII.</span></div>
+      <div class="foot"><span>${esc(biz)}${rnc ? ` · RNC ${esc(rnc)}` : ''} · ${esc(paper.label)}</span><span>Generado el ${esc(generated)} · Reporte interno de apoyo; no sustituye el envío del formato ${is608 ? '608' : '607'} a la DGII.</span></div>
+      </div>
+      <script>
+        // Solo en la vista previa (dentro del marco): la hoja se reduce para
+        // verse completa. Al imprimir o guardar PDF no corre y no escala nada.
+        (function () {
+          if (!window.frameElement) return;
+          function fit() {
+            var sheet = document.querySelector('.sheet');
+            if (!sheet) return;
+            document.body.style.zoom = '';
+            var scale = Math.min(1, (document.documentElement.clientWidth - 16) / sheet.getBoundingClientRect().width);
+            if (scale < 1) document.body.style.zoom = String(scale);
+          }
+          if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fit); else fit();
+          window.addEventListener('resize', fit);
+        })();
+      </script>
       </body></html>`;
+    };
     printBtn.disabled = false;
     excelBtn.disabled = false;
   };

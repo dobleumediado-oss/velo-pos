@@ -64,6 +64,7 @@ const { buildWhatsAppUrls } = require('./lib/whatsapp-url');
 const { createEncryptedBackup, verifyEncryptedBackup } = require('./lib/continuity-backup');
 const {
   buildPdfOptions,
+  explicitSheetPage,
   waitForPdfDocument,
   validatePdfBuffer,
   writePdfFile,
@@ -4223,6 +4224,8 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, printerHeigh
     } catch {}
 
     const fixedHeight = printerHeight ? toMicrons(printerHeight, thermalHeight) : 0;
+    // Papel elegido por el usuario en documentos que lo declaran (p. ej. 607/608).
+    const sheetPage = isThermal ? null : explicitSheetPage(html);
     const printOptions = {
       // Imprime DIRECTO (sin diálogo) siempre que haya una impresora elegida —
       // aplica tanto a térmica como a carta/láser. El diálogo solo aparece si no
@@ -4238,12 +4241,13 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, printerHeigh
         ? { width: paperWidth, height: fixedHeight || thermalHeight }
         : pageHint === 'half-letter'
           ? { width: 139700, height: 107950 }
-          : 'Letter',
+          : (sheetPage?.pageSize || 'Letter'),
       copies: Math.max(1, Math.min(9, parseInt(copies, 10) || 1)),
     };
+    if (!isThermal && pageHint !== 'half-letter' && sheetPage?.landscape) printOptions.landscape = true;
     if (printerName) printOptions.deviceName = printerName;
 
-    logInfo('print', `Imprimiendo`, { printer: printerName || '(dialogo)', thermal: isThermal, paperWidth, height: isThermal ? thermalHeight : 'letter' });
+    logInfo('print', `Imprimiendo`, { printer: printerName || '(dialogo)', thermal: isThermal, paperWidth, height: isThermal ? thermalHeight : (sheetPage ? `${sheetPage.pageSize}${sheetPage.landscape ? ' horizontal' : ''}` : 'letter') });
 
     await new Promise((resolve, reject) => {
       printWin.webContents.print(printOptions, (success, errType) => {

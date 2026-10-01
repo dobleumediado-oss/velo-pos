@@ -23,6 +23,7 @@ const {
   buildPdfOptions,
   extractCssPageSize,
   extractCssPageVerticalMarginInches,
+  explicitSheetPage,
   cleanupStaleGeneratedFiles,
 } = require('../src/main/pdf-document');
 
@@ -55,6 +56,16 @@ test('PDF respeta A4, Carta y etiquetas fijas mediante CSS', () => {
     assert.strictEqual(layout.options.preferCSSPageSize, true);
     assert.strictEqual(extractCssPageSize(html), size.toLowerCase());
   }
+});
+
+test('la impresión física usa el papel que el documento pide explícitamente', () => {
+  assert.deepStrictEqual(explicitSheetPage('<meta name="velo-page-size" content="A4 landscape">'), { pageSize: 'A4', landscape: true });
+  assert.deepStrictEqual(explicitSheetPage('<meta name="velo-page-size" content="letter portrait">'), { pageSize: 'Letter', landscape: false });
+  assert.deepStrictEqual(explicitSheetPage('<meta name="velo-page-size" content="letter landscape">'), { pageSize: 'Letter', landscape: true });
+  // Sin la etiqueta, nada cambia: Compras y Servicio declaran A4 en CSS y
+  // siguen saliendo en Carta como hasta ahora.
+  assert.strictEqual(explicitSheetPage('<style>@page{size:A4 portrait}</style>'), null);
+  assert.strictEqual(explicitSheetPage('<meta name="velo-page-size" content="80mm auto">'), null);
 });
 
 test('PDF térmico largo pagina sin crear hojas gigantes', () => {
