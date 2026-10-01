@@ -374,6 +374,40 @@ ok(voidedOn15.length === 1 && Number(voidedOn15[0].sale_id) === Number(gapSale.s
 ok(voidedOnIssueDate.length === 0,
   'el 608 no confunde la fecha de emisión con la fecha de anulación');
 
+console.log('\n== Estado de cobro en el 607 ==');
+const payerId = DB.customersRepo.create({ name: 'CLIENTE COBROS', rnc: '101010101', credit_days: 30 });
+appDb.prepare('UPDATE customers SET credit_limit=100000 WHERE id=?').run(payerId);
+const sellFiscal = method => DB.salesRepo.create({
+  customer: { id: payerId },
+  items: [{ product_id: productId, product_code: 'NCF-001', product_name: 'PRODUCTO FISCAL',
+    unit_cost: 50, unit_price: 118, qty: 1, taxable: 1, tax_pct: 18 }],
+  payment: { method, ncfType: 'B01' }, session: null, user: admin, type: 'factura',
+}).saleId;
+const cashSaleId = sellFiscal('efectivo');
+const unpaidSaleId = sellFiscal('credito');
+const partialSaleId = sellFiscal('credito');
+const settledSaleId = sellFiscal('credito');
+DB.customersRepo.addPayment({ customerId: payerId, amount: 50, method: 'efectivo', saleId: partialSaleId, userId: admin.id, cajero: admin.name });
+DB.customersRepo.addPayment({ customerId: payerId, amount: 118, method: 'efectivo', saleId: settledSaleId, userId: admin.id, cajero: admin.name });
+for (const id of [cashSaleId, unpaidSaleId, partialSaleId, settledSaleId]) {
+  appDb.prepare("UPDATE sales SET sale_date='2026-09-20' WHERE id=?").run(id);
+  appDb.prepare("UPDATE ncf_log SET issued_at='2026-09-20 10:00:00' WHERE sale_id=?").run(id);
+}
+const stateRows = DB.ncfRepo.getLog({ from: '2026-09-20', to: '2026-09-20', status: 'emitido' });
+const stateOf = id => stateRows.find(row => Number(row.sale_id) === Number(id)) || {};
+ok(stateRows.length === 4, 'el 607 del día trae las cuatro facturas fiscales');
+ok(stateOf(cashSaleId).payment_label === 'PAGADA' && stateOf(cashSaleId).pending_amount === 0,
+  'una factura de contado sale PAGADA');
+ok(stateOf(unpaidSaleId).payment_label === 'PENDIENTE' && Math.round(stateOf(unpaidSaleId).pending_amount * 100) === 11800,
+  'una factura a crédito sin abonos sale PENDIENTE por su total');
+ok(stateOf(partialSaleId).payment_label === 'PARCIAL' && Math.round(stateOf(partialSaleId).pending_amount * 100) === 6800,
+  'una factura a crédito con abono sale PARCIAL con lo que falta (118 − 50 = 68)');
+ok(stateOf(settledSaleId).payment_label === 'PAGADA' && stateOf(settledSaleId).pending_amount === 0,
+  'una factura a crédito saldada sale PAGADA');
+const detailPending = DB.salesRepo.getById(partialSaleId).balance_after_payment;
+ok(Math.round(Number(detailPending) * 100) === Math.round(stateOf(partialSaleId).pending_amount * 100),
+  'el pendiente del 607 coincide con el del detalle de la factura en Ventas');
+
 appDb.close();
 fs.rmSync(appDir, { recursive: true, force: true });
 

@@ -801,11 +801,15 @@ function modalReporteNCF() {
   const last  = `${y}-${pad(mo+1)}-${pad(new Date(y, mo+1, 0).getDate())}`;
   const biz = (typeof CFG!=='undefined' && CFG.biz) || 'Mi Negocio';
   const rnc = (typeof CFG!=='undefined' && CFG.rnc) || '';
+  const phone = (typeof CFG!=='undefined' && CFG.phone) || '';
+  const addr = (typeof CFG!=='undefined' && CFG.addr) || '';
 
   const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;background:#0008;z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  // Debajo de los modales de la app (z-index 200): la vista previa de impresión
+  // se abre encima del reporte y, al cerrarla, el reporte sigue donde estaba.
+  overlay.style.cssText = 'position:fixed;inset:0;background:#0008;z-index:190;display:flex;align-items:center;justify-content:center;padding:16px';
   overlay.innerHTML = `
-    <div style="background:var(--bg);border-radius:14px;width:100%;max-width:840px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 8px 40px #0004">
+    <div style="background:var(--bg);border-radius:14px;width:100%;max-width:1080px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 8px 40px #0004">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line2)">
         <div style="font-size:15px;font-weight:600">📄 Reportes de comprobantes · 607 / 608</div>
         <button id="rep-close" style="background:none;border:none;cursor:pointer;color:var(--muted2);font-size:18px">✕</button>
@@ -857,42 +861,77 @@ function modalReporteNCF() {
       : await window.api.ncf.getLog({ from, to, status: 'emitido', requestUserId });
     if (!res?.ok) { body.innerHTML = `<div style="color:#ef4444;padding:16px">${esc(res?.error||'Error al generar')}</div>`; return; }
 
-    const rows = res.data || [];
+    // Orden de impresión: cronológico (lo emitido primero arriba) y, dentro del
+    // mismo día, por NCF. Así la secuencia de cada tipo se lee de corrido.
+    const reportDay = (r) => String((is608 ? (r.voided_at || r.issued_at) : r.issued_at) || '').split('T')[0].split(' ')[0];
+    const rows = (res.data || []).slice().sort((a, b) =>
+      reportDay(a).localeCompare(reportDay(b)) || String(a.ncf || '').localeCompare(String(b.ncf || '')) ||
+      Number(a.sale_id || 0) - Number(b.sale_id || 0));
     const invalidRows = rows.filter(row => row.ncf_valid === false);
-    const totalSum = rows.reduce((a,r)=>a+(r.total||0),0);
-    const itbisSum = rows.reduce((a,r)=>a+(r.tax_amt||0),0);
-    const title = is608 ? '608 — Comprobantes Anulados' : '607 — Comprobantes Emitidos';
     const fdt = (v) => (v||'').split('T')[0].split(' ')[0];
+    const ddmm = (v) => { const d = fdt(v); return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d.split('-').reverse().join('/') : (d || '—'); };
+    const amount = (r) => Math.abs(Number(r.total || 0));
+    const tax = (r) => Math.abs(Number(r.tax_amt || 0));
+    const isCredit = (r) => String(r.type || '').toUpperCase() === 'B04';
+    const sum = (list, fn) => list.reduce((a, r) => a + fn(r), 0);
+    // Las notas de crédito (B04) restan: el neto es lo facturado menos lo devuelto.
+    const sales = rows.filter(r => !isCredit(r)), credits = rows.filter(isCredit);
+    const salesTotal = sum(sales, amount), salesTax = sum(sales, tax);
+    const creditTotal = sum(credits, amount), creditTax = sum(credits, tax);
+    const netTotal = salesTotal - creditTotal, netTax = salesTax - creditTax;
+    const pendingTotal = sum(rows, r => Number(r.pending_amount || 0));
+    const title = is608 ? '608 — Comprobantes Anulados' : '607 — Comprobantes Emitidos';
+    const STATE_ORDER = ['PAGADA','PARCIAL','PENDIENTE','DEVUELTA','APLICADA','ANULADA','SIN DOCUMENTO'];
+    const STATE_HINT = { PAGADA:'Cobrada completa', PARCIAL:'Con abono, falta cobrar', PENDIENTE:'Sin cobrar',
+      DEVUELTA:'Devuelta con nota de crédito', APLICADA:'Nota de crédito aplicada', ANULADA:'Anulada', 'SIN DOCUMENTO':'Sin factura vinculada' };
+    const stateKey = (label) => String(label || '').toLowerCase().replace(/\s+/g, '_');
+    const byState = STATE_ORDER.map(label => {
+      const list = rows.filter(r => (r.payment_label || 'SIN DOCUMENTO') === label);
+      return { label, count: list.length, total: sum(list, amount), pending: sum(list, r => Number(r.pending_amount || 0)) };
+    }).filter(g => g.count);
+    const byType = [...new Set(rows.map(r => String(r.type || '').toUpperCase()))].sort().map(type => {
+      const list = rows.filter(r => String(r.type || '').toUpperCase() === type);
+      return { type, count: list.length, tax: sum(list, tax), total: sum(list, amount) };
+    });
+    const collected = sales.filter(r => r.payment_label === 'PAGADA').length;
 
     const headCols = is608
-      ? ['NCF','Tipo','Emitido','Anulado','RNC/Céd.','Cliente','ITBIS','Monto']
-      : ['NCF','Tipo','Fecha','RNC/Céd.','Cliente','Modifica NCF','ITBIS','Monto'];
-    const rowCells = (r) => is608
-      ? [r.ncf, (TIPO_LBL[r.type]||r.type), fdt(r.issued_at), fdt(r.voided_at), r.customer_rnc||'—', r.customer_name||'—', fmt(r.tax_amt||0), fmt(r.total||0)]
-      : [r.ncf, (TIPO_LBL[r.type]||r.type), fdt(r.issued_at), r.customer_rnc||'—', r.customer_name||'—', r.modifies_ncf||'—', fmt(r.tax_amt||0), fmt(r.total||0)];
-    const isMoneyColumn = (index) => index >= headCols.length - 2;
+      ? ['#','NCF','Tipo','Emitido','Anulado','RNC / Cédula','Cliente','ITBIS','Monto']
+      : ['#','Fecha','NCF','Tipo','RNC / Cédula','Cliente','Modifica NCF','ITBIS','Total','Pendiente','Estado'];
+    const moneyCols = is608 ? [7, 8] : [7, 8, 9];
+    const rowCells = (r, i) => is608
+      ? [i + 1, r.ncf, (TIPO_LBL[r.type]||r.type), ddmm(r.issued_at), ddmm(r.voided_at), r.customer_rnc||'—', r.customer_name||'—', fmt(tax(r)), fmt(amount(r))]
+      : [i + 1, ddmm(r.issued_at), r.ncf, (TIPO_LBL[r.type]||r.type), r.customer_rnc||'—', r.customer_name||'—', r.modifies_ncf||'—',
+         fmt(tax(r)), fmt(amount(r)), Number(r.pending_amount || 0) > 0 ? fmt(r.pending_amount) : '—', r.payment_label || '—'];
+    const align = (i) => moneyCols.includes(i) ? 'right' : (i === 0 ? 'center' : 'left');
 
     if (!rows.length) {
       body.innerHTML = `<div style="text-align:center;color:var(--muted2);padding:24px;font-size:13px">Sin comprobantes ${is608?'anulados':'emitidos'} en el período.</div>`;
       return;
     }
 
+    const SCREEN_BADGE = { PAGADA:'g', PARCIAL:'b', PENDIENTE:'a', ANULADA:'r' };
+    const screenCell = (r, c, i) => (!is608 && i === headCols.length - 1)
+      ? `<span class="badge ${SCREEN_BADGE[c] || 'n'}" style="font-size:10px">${esc(c)}</span>`
+      : esc(c);
     body.innerHTML = `
       ${invalidRows.length ? `<div style="padding:11px 13px;margin-bottom:11px;border-radius:9px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;font-size:11px;line-height:1.45">
         <strong>Reporte bloqueado: ${invalidRows.length} NCF inválido(s).</strong><br>
         No imprimas ni utilices este reporte para la DGII. Recupera primero los documentos desde <em>Administrar secuencia</em>.
       </div>` : ''}
-      <div style="display:flex;justify-content:space-between;margin-bottom:10px;font-size:12px">
-        <div><strong>${rows.length}</strong> comprobante(s)</div>
-        <div>ITBIS: <strong>${fmt(itbisSum)}</strong> · Total: <strong>${fmt(totalSum)}</strong></div>
+      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;font-size:12px">
+        <div><strong>${rows.length}</strong> comprobante(s) · del más antiguo al más reciente</div>
+        <div>ITBIS neto: <strong>${fmt(netTax)}</strong> · Total neto: <strong>${fmt(netTotal)}</strong>${is608 ? '' : ` · Pendiente de cobro: <strong>${fmt(pendingTotal)}</strong>`}</div>
       </div>
+      ${is608 ? '' : `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${byState.map(g =>
+        `<span class="badge ${SCREEN_BADGE[g.label] || 'n'}" style="font-size:10.5px">${esc(g.label)} · ${g.count}${g.pending > 0 ? ` · ${fmt(g.pending)} pendiente` : ''}</span>`).join('')}</div>`}
       <table style="width:100%;border-collapse:collapse;font-size:11.5px">
         <thead><tr style="border-bottom:1px solid var(--line2);color:var(--muted2)">
-          ${headCols.map((c,i)=>`<th style="padding:6px 8px;text-align:${isMoneyColumn(i)?'right':'left'}">${c}</th>`).join('')}
+          ${headCols.map((c,i)=>`<th style="padding:6px 8px;text-align:${align(i)};white-space:nowrap">${c}</th>`).join('')}
         </tr></thead>
         <tbody>
-          ${rows.map(r=>`<tr style="border-bottom:0.5px solid var(--line2);${r.ncf_valid === false ? 'background:#fef2f2;color:#991b1b' : ''}">
-            ${rowCells(r).map((c,i)=>`<td style="padding:6px 8px;${i===0?'font-family:monospace;':''}text-align:${isMoneyColumn(i)?'right':'left'}">${esc(c)}</td>`).join('')}
+          ${rows.map((r, n)=>`<tr style="border-bottom:0.5px solid var(--line2);${r.ncf_valid === false ? 'background:#fef2f2;color:#991b1b' : ''}">
+            ${rowCells(r, n).map((c,i)=>`<td style="padding:6px 8px;${(is608 ? i === 1 : i === 2)?'font-family:monospace;':''}text-align:${align(i)}">${screenCell(r, c, i)}</td>`).join('')}
           </tr>`).join('')}
         </tbody>
       </table>`;
@@ -904,27 +943,92 @@ function modalReporteNCF() {
       return;
     }
 
-    printableHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
+    const cell = (c, i) => {
+      const isNcf = is608 ? i === 1 : i === 2;
+      if (!is608 && i === headCols.length - 1) return `<td class="c"><span class="st st-${stateKey(c)}">${esc(c)}</span></td>`;
+      return `<td class="${moneyCols.includes(i) ? 'r' : i === 0 ? 'c muted' : ''}${isNcf ? ' mono' : ''}">${esc(c)}</td>`;
+    };
+    const lead = is608 ? 7 : 7;
+    const tail = is608 ? '' : '<td></td><td></td>';
+    const footRows = is608
+      ? `<tr class="net"><td colspan="${lead}">TOTAL ANULADO (${rows.length})</td><td class="r">${fmt(salesTax + creditTax)}</td><td class="r">${fmt(salesTotal + creditTotal)}</td></tr>`
+      : `<tr><td colspan="${lead}">Facturas y notas de débito (${sales.length})</td><td class="r">${fmt(salesTax)}</td><td class="r">${fmt(salesTotal)}</td><td class="r">${fmt(pendingTotal)}</td><td></td></tr>
+         ${credits.length ? `<tr><td colspan="${lead}">Menos notas de crédito B04 (${credits.length})</td><td class="r">−${fmt(creditTax)}</td><td class="r">−${fmt(creditTotal)}</td>${tail}</tr>` : ''}
+         <tr class="net"><td colspan="${lead}">TOTAL NETO DEL PERÍODO</td><td class="r">${fmt(netTax)}</td><td class="r">${fmt(netTotal)}</td><td class="r">${fmt(pendingTotal)}</td><td></td></tr>`;
+    const metric = (label, value, note) => `<div class="met"><div class="met-l">${label}</div><div class="met-v">${value}</div><div class="met-s">${note}</div></div>`;
+    const metrics = is608
+      ? metric('Comprobantes anulados', rows.length, `${byType.length} tipo(s) de comprobante`)
+        + metric('ITBIS anulado', fmt(salesTax + creditTax), 'Impuesto de los comprobantes anulados')
+        + metric('Monto anulado', fmt(salesTotal + creditTotal), `Del ${ddmm(from)} al ${ddmm(to)}`)
+      : metric('Comprobantes', rows.length, `${sales.length} factura(s)${credits.length ? ` · ${credits.length} nota(s) de crédito` : ''}`)
+        + metric('ITBIS neto', fmt(netTax), credits.length ? `Facturado ${fmt(salesTax)} − NC ${fmt(creditTax)}` : 'ITBIS facturado')
+        + metric('Total neto', fmt(netTotal), credits.length ? `Facturado ${fmt(salesTotal)} − NC ${fmt(creditTotal)}` : 'Total facturado')
+        + metric('Cobradas', `${collected} de ${sales.length}`, 'Facturas pagadas completas')
+        + metric('Pendiente de cobro', fmt(pendingTotal), `${sales.filter(r => Number(r.pending_amount || 0) > 0).length} factura(s) con saldo`);
+    const stateTable = is608 ? '' : `<div><h3>Resumen por estado de cobro</h3><table>
+        <thead><tr><th>Estado</th><th>Significado</th><th class="c">Cant.</th><th class="r">Monto</th><th class="r">Pendiente</th></tr></thead>
+        <tbody>${byState.map(g => `<tr><td><span class="st st-${stateKey(g.label)}">${esc(g.label)}</span></td><td class="muted">${esc(STATE_HINT[g.label] || '')}</td><td class="c">${g.count}</td><td class="r">${fmt(g.total)}</td><td class="r">${g.pending > 0 ? fmt(g.pending) : '—'}</td></tr>`).join('')}</tbody>
+      </table></div>`;
+    const typeTable = `<div><h3>Resumen por tipo de comprobante</h3><table>
+        <thead><tr><th>Tipo</th><th>Descripción</th><th class="c">Cant.</th><th class="r">ITBIS</th><th class="r">Monto</th></tr></thead>
+        <tbody>${byType.map(g => `<tr><td class="mono">${esc(g.type)}</td><td>${esc(TIPO_LBL[g.type] || '—')}${g.type === 'B04' && !is608 ? ' <span class="muted">(resta)</span>' : ''}</td><td class="c">${g.count}</td><td class="r">${fmt(g.tax)}</td><td class="r">${fmt(g.total)}</td></tr>`).join('')}</tbody>
+      </table></div>`;
+    const generated = new Date().toLocaleString('es-DO', { dateStyle: 'medium', timeStyle: 'short' });
+    printableHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>Reporte ${is608 ? '608' : '607'} — ${esc(biz)}</title>
       <style>
-        body{font-family:Arial,sans-serif;font-size:11px;color:#111;padding:20px}
-        h2{margin:0 0 2px;font-size:16px} .sub{color:#666;font-size:11px;margin-bottom:12px}
+        @page{size:letter landscape;margin:10mm 11mm}
+        *{box-sizing:border-box}
+        body{font-family:Arial,Helvetica,sans-serif;font-size:10px;color:#111827;margin:0}
+        .head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;border-bottom:3px solid #111827;padding-bottom:8px;margin-bottom:11px}
+        .biz{font-size:15px;font-weight:800}
+        .biz-sub,.sub{color:#4b5563;font-size:10px;margin-top:3px}
+        .doc{text-align:right}
+        h2{font-size:15px;font-weight:800;margin:0;letter-spacing:.01em}
+        .metrics{display:grid;grid-template-columns:repeat(${is608 ? 3 : 5},1fr);gap:8px;margin-bottom:10px}
+        .met{border:1px solid #e5e7eb;border-radius:6px;padding:7px 9px;background:#f9fafb}
+        .met-l{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#6b7280}
+        .met-v{font-size:13.5px;font-weight:800;margin-top:3px}
+        .met-s{font-size:8.5px;color:#6b7280;margin-top:2px}
+        .grid2{display:grid;grid-template-columns:${is608 ? '1fr' : '1.15fr 1fr'};gap:16px}
+        h3{font-size:9.5px;text-transform:uppercase;letter-spacing:.07em;color:#374151;margin:10px 0 5px;border-bottom:1.5px solid #e5e7eb;padding-bottom:3px}
         table{width:100%;border-collapse:collapse}
-        th{background:#f3f4f6;padding:6px 8px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid #d1d5db}
-        td{padding:5px 8px;border-bottom:1px solid #eee;font-size:11px} .r{text-align:right} .mono{font-family:'Courier New',monospace}
-        .tot{font-weight:700;background:#f0f0f0;border-top:2px solid #111}
-        .no-print{margin-bottom:12px;text-align:right} @media print{.no-print{display:none}}
+        thead{display:table-header-group}
+        tfoot{display:table-row-group}
+        tr{page-break-inside:avoid}
+        th{background:#f3f4f6;padding:5px 6px;text-align:left;font-size:8px;text-transform:uppercase;letter-spacing:.05em;color:#374151;border-bottom:1px solid #d1d5db;white-space:nowrap}
+        td{padding:4px 6px;border-bottom:1px solid #eef0f3;font-size:9.5px;vertical-align:top}
+        .r{text-align:right;white-space:nowrap} .c{text-align:center} .muted{color:#6b7280}
+        .mono{font-family:Consolas,Menlo,'Courier New',monospace;font-weight:700;color:#111827;letter-spacing:.02em;white-space:nowrap}
+        th.r{text-align:right} th.c{text-align:center}
+        .st{display:inline-block;padding:1px 6px;border-radius:9px;font-size:7.5px;font-weight:700;letter-spacing:.04em;border:1px solid;white-space:nowrap}
+        .st-pagada{color:#166534;border-color:#86efac;background:#f0fdf4}
+        .st-parcial{color:#1e40af;border-color:#93c5fd;background:#eff6ff}
+        .st-pendiente{color:#92400e;border-color:#fcd34d;background:#fffbeb}
+        .st-anulada{color:#991b1b;border-color:#fca5a5;background:#fef2f2}
+        .st-devuelta,.st-aplicada,.st-sin_documento{color:#374151;border-color:#d1d5db;background:#f9fafb}
+        tfoot td{font-weight:700;background:#f9fafb;border-top:1px solid #d1d5db}
+        tfoot tr.net td{font-size:10.5px;background:#f3f4f6;border-top:2px solid #111827}
+        .note{margin-top:9px;font-size:8.5px;color:#6b7280;line-height:1.5}
+        .foot{margin-top:10px;padding-top:6px;border-top:1px solid #e5e7eb;font-size:8.5px;color:#9ca3af;display:flex;justify-content:space-between;gap:12px}
       </style></head><body>
-      <div class="no-print"><button onclick="window.print()" style="background:#0D0F12;color:#fff;border:none;padding:8px 16px;border-radius:6px;font-size:12px;cursor:pointer;font-weight:700">🖨️ Imprimir</button></div>
-      <h2>${esc(biz)} — ${title}</h2>
-      <div class="sub">${rnc?`RNC: ${esc(rnc)} · `:''}Período: ${esc(from)} a ${esc(to)} · ${rows.length} comprobante(s)</div>
+      <div class="head">
+        <div><div class="biz">${esc(biz)}</div>
+          <div class="biz-sub">${[rnc && `RNC ${esc(rnc)}`, phone && esc(phone), addr && esc(addr)].filter(Boolean).join(' · ')}</div></div>
+        <div class="doc"><h2>Reporte ${title}</h2>
+          <div class="sub">Período: del ${ddmm(from)} al ${ddmm(to)} · ${rows.length} comprobante(s) · orden cronológico</div></div>
+      </div>
+      <div class="metrics">${metrics}</div>
+      <div class="grid2">${stateTable}${typeTable}</div>
+      <h3>Detalle de comprobantes ${is608 ? 'anulados' : 'emitidos'}</h3>
       <table>
-        <thead><tr>${headCols.map((c,i)=>`<th class="${isMoneyColumn(i)?'r':''}">${c}</th>`).join('')}</tr></thead>
-        <tbody>
-          ${rows.map(r=>`<tr>${rowCells(r).map((c,i)=>`<td class="${i===0?'mono':''} ${isMoneyColumn(i)?'r':''}">${esc(c)}</td>`).join('')}</tr>`).join('')}
-          <tr class="tot"><td colspan="${headCols.length-2}">TOTAL</td><td class="r">${fmt(itbisSum)}</td><td class="r">${fmt(totalSum)}</td></tr>
-        </tbody>
+        <thead><tr>${headCols.map((c,i)=>`<th class="${moneyCols.includes(i) ? 'r' : (i === 0 || (!is608 && i === headCols.length - 1)) ? 'c' : ''}">${c}</th>`).join('')}</tr></thead>
+        <tbody>${rows.map((r, n)=>`<tr>${rowCells(r, n).map(cell).join('')}</tr>`).join('')}</tbody>
+        <tfoot>${footRows}</tfoot>
       </table>
-      <div style="margin-top:16px;font-size:9px;color:#9ca3af">Generado ${new Date().toLocaleString('es-DO')} · Reporte interno de apoyo — no sustituye el envío del formato 607/608 a la DGII.</div>
+      <div class="note">${is608
+        ? 'Comprobantes anulados ordenados por la fecha de anulación y luego por NCF.'
+        : 'Ordenado por fecha de emisión y luego por NCF. El estado de cobro y el pendiente se calculan igual que en Ventas, a la fecha de este reporte. Las notas de crédito (B04) se muestran en positivo, como se declaran, y restan en el total neto.'}</div>
+      <div class="foot"><span>${esc(biz)}${rnc ? ` · RNC ${esc(rnc)}` : ''}</span><span>Generado el ${esc(generated)} · Reporte interno de apoyo; no sustituye el envío del formato ${is608 ? '608' : '607'} a la DGII.</span></div>
       </body></html>`;
     printBtn.disabled = false;
     excelBtn.disabled = false;

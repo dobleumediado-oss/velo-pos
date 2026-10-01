@@ -10547,6 +10547,50 @@ function previewMalformedNcfRecovery(sequenceId) {
   return preview;
 }
 
+// Estado de cobro de cada comprobante del 607 con la misma regla que el detalle
+// de la factura en Ventas: lo pendiente sale del saldo FIFO del cliente, así
+// que un abono o una nota de crédito se reflejan igual en los dos lugares.
+function ncfPaymentStateResolver() {
+  const byCustomer = new Map();
+  const pendingOf = (customerId, saleId) => {
+    if (!byCustomer.has(customerId)) {
+      let invoices = null;
+      try { invoices = getPendingInvoices(db, customerId).facturas || []; } catch { invoices = null; }
+      byCustomer.set(customerId, invoices);
+    }
+    const invoices = byCustomer.get(customerId);
+    if (!invoices) return null;
+    // Una factura corregida reparte su saldo con sus documentos de aumento.
+    return round2(invoices
+      .filter(f => Number(f.id) === Number(saleId) || (
+        f.correction_kind === 'product_addition' && Number(f.original_sale_id) === Number(saleId)))
+      .reduce((sum, f) => sum + Number(f.pendiente || 0), 0));
+  };
+  const paidOf = saleId => round2(db.prepare(`
+    SELECT COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.sale_id=?
+        AND COALESCE(p.status,'active')='active'
+        AND NOT EXISTS (SELECT 1 FROM payment_allocations pa0 WHERE pa0.payment_id=p.id)),0)
+      + COALESCE((SELECT SUM(pa.amount) FROM payment_allocations pa JOIN payments ap ON ap.id=pa.payment_id
+        WHERE pa.sale_id=? AND COALESCE(ap.status,'active')='active'),0) AS paid`).get(saleId, saleId)?.paid || 0);
+  const state = (code, label, pending = 0) => ({ payment_state: code, payment_label: label, pending_amount: round2(Math.max(0, pending)) });
+  return row => {
+    if (row.status === 'anulado' || row.sale_status === 'cancelled') return state('anulada', 'ANULADA');
+    if (!row.sale_id || !row.sale_type) return state('sin_documento', 'SIN DOCUMENTO');
+    if (row.sale_type === 'devolucion') return state('aplicada', 'APLICADA');
+    const total = Math.abs(Number(row.total || 0));
+    const returned = Number(row.return_total || 0);
+    if (row.sale_status === 'returned' || (returned > 0 && returned >= total - 0.009)) return state('devuelta', 'DEVUELTA');
+    const credit = ['credito', 'crédito', 'credit'].includes(String(row.payment_method || '').trim().toLowerCase());
+    if (!credit) return state('pagada', 'PAGADA');
+    const net = Math.max(0, round2(total - returned));
+    let pending = row.customer_id ? pendingOf(row.customer_id, row.sale_id) : null;
+    if (pending == null) pending = Math.max(0, round2(net - paidOf(row.sale_id)));
+    if (pending <= 0.009) return state('pagada', 'PAGADA');
+    if (pending >= net - 0.009) return state('pendiente', 'PENDIENTE', pending);
+    return state('parcial', 'PARCIAL', pending);
+  };
+}
+
 const ncfRepo = {
   getSequences() {
     ensureNcfAvailableNumbersTable();
@@ -10809,10 +10853,14 @@ const ncfRepo = {
   getLog({ from, to, status, type } = {}) {
     const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
     const reportDate = status === 'anulado' ? 'COALESCE(voided_at,issued_at)' : 'issued_at';
+    const returnTotal = `COALESCE((SELECT SUM(ABS(r.total)) FROM sales r
+             WHERE r.type='devolucion' AND r.original_sale_id=s.id AND r.status!='cancelled'),0)`;
     let q = `WITH comprobantes AS (
       SELECT l.id,l.ncf,l.type,l.sale_id,l.customer_rnc,l.issued_at,
              l.modifies_ncf,COALESCE(l.status,'emitido') AS status,l.voided_at,
-             s.total,s.customer_name,COALESCE(s.tax_amt,0) AS tax_amt
+             s.total,s.customer_name,COALESCE(s.tax_amt,0) AS tax_amt,
+             s.type AS sale_type,s.status AS sale_status,s.payment_method,s.customer_id,
+             ${returnTotal} AS return_total
         FROM ncf_log l
         LEFT JOIN sales s ON s.id=l.sale_id
       UNION ALL
@@ -10820,7 +10868,9 @@ const ncfRepo = {
              s.customer_rnc,COALESCE(NULLIF(s.sale_date,''),date(s.created_at)) AS issued_at,
              NULL AS modifies_ncf,
              CASE WHEN s.status='cancelled' THEN 'anulado' ELSE 'emitido' END AS status,
-             s.cancelled_at,s.total,s.customer_name,COALESCE(s.tax_amt,0) AS tax_amt
+             s.cancelled_at,s.total,s.customer_name,COALESCE(s.tax_amt,0) AS tax_amt,
+             s.type AS sale_type,s.status AS sale_status,s.payment_method,s.customer_id,
+             ${returnTotal} AS return_total
         FROM sales s
        WHERE TRIM(COALESCE(s.ncf,''))<>''
          AND NOT EXISTS (SELECT 1 FROM ncf_log l WHERE l.sale_id=s.id)
@@ -10831,10 +10881,12 @@ const ncfRepo = {
     if (status)                     { q += ` AND status = ?`; p.push(status); }
     if (type)                       { q += ` AND type = ?`; p.push(type); }
     q += ` ORDER BY ${reportDate} DESC, sale_id DESC, id DESC`;
+    const paymentState = ncfPaymentStateResolver();
     return db.prepare(q).all(...p).map(row => {
       const parsed = parseCanonicalLegacyNcf(row.ncf);
       return {
         ...row,
+        ...paymentState(row),
         ncf_valid: !!parsed && parsed.type === row.type,
         ncf_issue: parsed && parsed.type === row.type
           ? ''

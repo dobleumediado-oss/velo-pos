@@ -290,9 +290,13 @@ let accesoArnes = null;
     main.includes("_moduleAuthorizedUser(requestUserId, 'reportes')"),
     '607/608 exige el permiso de Reportes también en el proceso principal');
   assert(sucursales.includes("'ITBIS','Monto'") &&
-    sucursales.includes('const itbisSum = rows.reduce') &&
-    sucursales.includes('fmt(itbisSum)'),
+    sucursales.includes('salesTax = sum(sales, tax)') &&
+    sucursales.includes('ITBIS neto: <strong>${fmt(netTax)}</strong>') &&
+    sucursales.includes('<td class="r">${fmt(netTax)}</td>'),
     'el modal, la impresión y el Excel 607/608 presentan el ITBIS del período');
+  assert(sucursales.includes("'Pendiente','Estado'") && sucursales.includes('r.payment_label') &&
+    sucursales.includes('reportDay(a).localeCompare(reportDay(b))'),
+    'el 607 muestra el estado de cobro y se imprime en orden cronológico');
 
   assert(reportes.includes('function _repFacturasConComprobante(') &&
     reportes.includes("pagina.filter(venta => String(venta.ncf || '').trim())") &&
