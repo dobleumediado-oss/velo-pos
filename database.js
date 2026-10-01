@@ -10083,7 +10083,11 @@ const expensesRepo = {
   },
 
   // ── Anular gasto ─────────────────────────
-  cancel(expenseId, userId, userName, reason) {
+  // returnCashSessionId: caja abierta que recibe el dinero cuando el gasto se
+  // pagó desde una caja que ya se cerró. La caja cerrada no se toca (su cuadre
+  // ya se hizo); la devolución es un hecho de hoy y entra a la caja de hoy.
+  // requireCashReturn: exige esa caja en vez de dejar el reverso sin registrar.
+  cancel(expenseId, userId, userName, reason, { returnCashSessionId = null, requireCashReturn = false } = {}) {
     return db.transaction(() => {
       const e = db.prepare('SELECT * FROM expenses WHERE id=?').get(expenseId);
       if (!e) throw new Error('Gasto no encontrado');
@@ -10093,11 +10097,22 @@ const expensesRepo = {
       // Contramovimiento en caja si afectó caja
       if (e.cash_session_id && e.paid_amount > 0) {
         const session = db.prepare("SELECT * FROM cash_sessions WHERE id=?").get(e.cash_session_id);
+        let targetId = null;
+        let description = `Anulación gasto: ${e.description}`;
         if (session?.status === 'open') {
+          targetId = e.cash_session_id;
+        } else if (returnCashSessionId &&
+            db.prepare("SELECT 1 FROM cash_sessions WHERE id=? AND status='open'").get(returnCashSessionId)) {
+          targetId = returnCashSessionId;
+          description = `Devolución por anulación (pagado en caja #${e.cash_session_id}, ya cerrada): ${e.description}`;
+        } else if (requireCashReturn) {
+          throw new Error(`Este pago de RD$${Number(e.paid_amount).toLocaleString('es-DO', { minimumFractionDigits: 2 })} salió de una caja que ya se cerró. Abre la caja para registrar la devolución del dinero.`);
+        }
+        if (targetId) {
           db.prepare(`INSERT INTO cash_movements(cash_session_id,type,amount,method,reference_id,description,user_id)
-            VALUES(?,?,?,?,?,?,?)`).run(e.cash_session_id, 'entrada', e.paid_amount, e.payment_method,
-            expenseId, `Anulación gasto: ${e.description}`, userId);
-          db.prepare('UPDATE cash_sessions SET expected=expected+? WHERE id=?').run(e.paid_amount, e.cash_session_id);
+            VALUES(?,?,?,?,?,?,?)`).run(targetId, 'entrada', e.paid_amount, e.payment_method,
+            expenseId, description, userId);
+          db.prepare('UPDATE cash_sessions SET expected=expected+? WHERE id=?').run(e.paid_amount, targetId);
         }
       }
       // Anular pagos activos

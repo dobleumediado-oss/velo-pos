@@ -15,6 +15,8 @@ const tmpDir=path.join(os.tmpdir(),`velo_sellertest_${Date.now()}`);
 const DB=require('../database');
 DB.initDB(tmpDir);
 const db=DB.getDB();
+// Migraciones completas: las cajas por terminal necesitan sus columnas.
+require('../versioning').initVersioning(db,tmpDir);
 const userRow=db.prepare("SELECT * FROM users WHERE role='admin' ORDER BY id LIMIT 1").get();
 const user={id:userRow.id,name:userRow.name};
 // Las ventas usan `datetime('now','localtime')` en SQLite. Tomar la fecha del
@@ -164,6 +166,36 @@ ok(DB.salespeopleRepo.getCommissionById(paidCommission.id).payroll_run_id===rege
 DB.salespeopleRepo.reopenPayroll(regenerated,'Falta un bono',...auditArgs);
 ok(DB.salespeopleRepo.getPayrollById(regenerated).status==='borrador'&&DB.salespeopleRepo.getCommissionById(paidCommission.id).payroll_run_id==null,'devolver a borrador suelta la comisión hasta volver a aprobar');
 throws(()=>DB.salespeopleRepo.reopenPayroll(quick.id,'',...auditArgs),'una nómina pagada no vuelve a borrador');
+
+console.log('\n== F2. Pago desde caja: corregir y anular aunque la caja ya cerró ==');
+const cashierId=DB.salespeopleRepo.create({name:'Luis Caja',employee_role:'administracion',salary_amount:25000,payroll_frequency:'mensual'},...auditArgs);
+DB.cashRepo.open({userId:user.id,cajero:user.name,openAmount:50000});
+const sessionA=DB.cashRepo.getOpen();
+const expectedOf=id=>Number(db.prepare('SELECT expected FROM cash_sessions WHERE id=?').get(id).expected);
+const startA=expectedOf(sessionA.id);
+const cashPay=DB.salespeopleRepo.quickPayPayroll({salesperson_id:cashierId,frequency:'mensual',from:'2031-01-01',to:'2031-01-31',payment_date:today,payment_method:'efectivo',payment_source:'caja',cash_session_id:sessionA.id},...auditArgs);
+ok(near(expectedOf(sessionA.id),startA-25000),'el pago desde caja descuenta 25,000 de la caja');
+const cashItem=DB.salespeopleRepo.getPayrollById(cashPay.id).items[0];
+DB.salespeopleRepo.modifyPayroll(cashPay.id,{items:[{id:cashItem.id,base_salary:30000}],reason:'El sueldo era 30,000',cash_session_id:sessionA.id,return_cash_session_id:sessionA.id},...auditArgs);
+ok(near(expectedOf(sessionA.id),startA-30000),'corregir con la caja abierta deja en caja solo la diferencia (−30,000 en total)');
+DB.cashRepo.close({sessionId:sessionA.id,closeAmount:expectedOf(sessionA.id),expected:expectedOf(sessionA.id),userId:user.id,cajero:user.name});
+const closedA=expectedOf(sessionA.id);
+throws(()=>DB.salespeopleRepo.cancelPayroll(cashPay.id,'Sin caja abierta',...auditArgs),'sin caja abierta no deja anular un pago que salió de una caja cerrada');
+ok(DB.salespeopleRepo.getPayrollById(cashPay.id).status==='pagado','la nómina sigue intacta si no se pudo anular');
+DB.cashRepo.open({userId:user.id,cajero:user.name,openAmount:10000});
+const sessionB=DB.cashRepo.getOpen();
+const startB=expectedOf(sessionB.id);
+const fixItem=DB.salespeopleRepo.getPayrollById(cashPay.id).items[0];
+DB.salespeopleRepo.modifyPayroll(cashPay.id,{items:[{id:fixItem.id,base_salary:32000}],reason:'Faltaban 2,000',payment_source:'caja',cash_session_id:sessionB.id,return_cash_session_id:sessionB.id},...auditArgs);
+ok(near(expectedOf(sessionB.id),startB-2000),'otro día: la caja de hoy recibe el reverso y paga el correcto; solo sale la diferencia (2,000)');
+ok(near(expectedOf(sessionA.id),closedA),'la caja cerrada no se toca');
+const returnMove=db.prepare("SELECT * FROM cash_movements WHERE cash_session_id=? AND type='entrada' ORDER BY id DESC LIMIT 1").get(sessionB.id);
+ok(returnMove&&near(returnMove.amount,30000)&&/ya cerrada/i.test(returnMove.description),'la entrada dice que el pago original salió de una caja ya cerrada');
+const beforeCancelB=expectedOf(sessionB.id);
+DB.salespeopleRepo.cancelPayroll(cashPay.id,'Se registró por error',...auditArgs,{returnCashSessionId:sessionB.id});
+ok(near(expectedOf(sessionB.id),beforeCancelB+32000),'anular devuelve el pago vigente a la caja abierta');
+DB.salespeopleRepo.remove(cashierId,...auditArgs);
+DB.cashRepo.close({sessionId:sessionB.id,closeAmount:expectedOf(sessionB.id),expected:expectedOf(sessionB.id),userId:user.id,cajero:user.name});
 
 console.log('\n== G. Eliminar colaboradores ==');
 const newbieId=DB.salespeopleRepo.create({name:'Temporal Sin Historial',employee_role:'administracion',salary_amount:0},...auditArgs);

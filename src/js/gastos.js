@@ -1218,7 +1218,7 @@ window.anularGasto = (id) => {
   abrirModal('Anular gasto', `
     <div style="display:flex;gap:10px;align-items:flex-start;background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;line-height:1.45">
       ${_gSvg('alert', 18)}
-      <div>Esta acción no se puede deshacer. Si el gasto afectó la caja, se creará un contramovimiento.</div>
+      <div>Esta acción no se puede deshacer. Si el gasto se pagó desde la caja, el dinero vuelve a la caja abierta: a la misma si sigue abierta o, si ya se cerró, a la caja abierta de hoy.</div>
     </div>
     <div class="fg"><label class="lbl">Motivo de anulación *</label>
       <textarea class="inp" id="cancel-reason" rows="3" placeholder="Indica el motivo..."></textarea></div>`,

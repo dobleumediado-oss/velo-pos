@@ -7548,7 +7548,9 @@ ipcMain.handle('expenses:cancel', async (_, { expenseId, reason, requestUserId }
     const u = authRepo.findById(requestUserId);
     if (!u || !['admin','superadmin'].includes(u.role)) return { ok:false, error:'Solo el administrador puede anular gastos' };
     if (!reason?.trim()) return { ok:false, error:'El motivo de anulación es obligatorio' };
-    const r = expensesRepo.cancel(expenseId, requestUserId, u.name, reason);
+    const openSession = cashRepo.getOpen(_reqTerminalId());
+    const r = expensesRepo.cancel(expenseId, requestUserId, u.name, reason,
+      { returnCashSessionId: openSession?.id || null, requireCashReturn: true });
     // Contabilidad en vivo: reversar TODOS los asientos del gasto anulado
     // (legacy caja + devengo + pagos).
     _acctHook(() => {
@@ -7757,9 +7759,12 @@ ipcMain.handle('salespeople:reopenPayroll', async (_, { id,reason,requestUserId 
   }catch(e){return {ok:false,error:e.message};}
 });
 ipcMain.handle('salespeople:modifyPayroll', async (_, { id,data,requestUserId }) => {
-  try{const u=_salespeopleAdmin(requestUserId,'nomina');if(!u||!['admin','superadmin'].includes(u.role))return {ok:false,error:'Solo un administrador puede corregir una nómina pagada'};let session=null;
-    if(data?.payment_source==='caja'){session=cashRepo.getOpen(_reqTerminalId());if(!session)return {ok:false,error:'No hay caja abierta'};}
-    const result=salespeopleRepo.modifyPayroll(id,{...data,cash_session_id:session?.id||null},requestUserId,u.name);
+  try{const u=_salespeopleAdmin(requestUserId,'nomina');if(!u||!['admin','superadmin'].includes(u.role))return {ok:false,error:'Solo un administrador puede corregir una nómina pagada'};
+    const session=cashRepo.getOpen(_reqTerminalId());
+    if(data?.payment_source==='caja'&&!session)return {ok:false,error:'No hay caja abierta'};
+    // La caja abierta paga el monto correcto y recibe el reverso del pago malo
+    // aunque este haya salido de una caja ya cerrada: en caja queda la diferencia.
+    const result=salespeopleRepo.modifyPayroll(id,{...data,cash_session_id:data?.payment_source==='caja'?session.id:null,return_cash_session_id:session?.id||null},requestUserId,u.name);
     _reversePayrollExpenses(result.cancelledExpenseIds,requestUserId,`Nómina corregida: ${data?.reason||''}`);
     _acctHook(()=>result.refs.forEach(ref=>{accountingRepo.generateExpenseAccrualEntry({expenseId:ref.expenseId,userId:requestUserId});accountingRepo.generateExpensePaymentEntry({paymentId:ref.paymentId,userId:requestUserId});}));
     return {ok:true,reissued:result.refs.length,cancelled:result.cancelledExpenseIds.length};
@@ -7767,7 +7772,8 @@ ipcMain.handle('salespeople:modifyPayroll', async (_, { id,data,requestUserId })
 });
 ipcMain.handle('salespeople:cancelPayroll', async (_, { id,reason,requestUserId }) => {
   try{const u=_salespeopleAdmin(requestUserId,'nomina');if(!u||!['admin','superadmin'].includes(u.role))return {ok:false,error:'Solo un administrador puede anular una nómina'};
-    const result=salespeopleRepo.cancelPayroll(id,reason,requestUserId,u.name);
+    const session=cashRepo.getOpen(_reqTerminalId());
+    const result=salespeopleRepo.cancelPayroll(id,reason,requestUserId,u.name,{returnCashSessionId:session?.id||null});
     _reversePayrollExpenses(result.cancelledExpenseIds,requestUserId,`Nómina anulada: ${reason||''}`);
     return {ok:true,...result};
   }catch(e){return {ok:false,error:e.message};}

@@ -423,9 +423,10 @@ function nominaOpenCancel(id) {
   const paid = run.status === 'pagado';
   openModal(`<div class="modal-title">Anular ${_nomEsc(run.number||'nómina')}</div><div class="modal-sub">${_nomEsc(run.date_from||'')} al ${_nomEsc(run.date_to||'')} · ${_nomMoney(run.net_total)} · ${_nomBadge(run.status)}</div>
     <div class="ven-callout" style="border-color:var(--red-line);background:var(--red-bg);color:#991b1b">${paid
-      ? 'Esta nómina ya se pagó. Al anularla se anulan sus gastos en Gastos y se reversan sus asientos en Contabilidad. Si se pagó desde una caja que sigue abierta, el dinero vuelve a esa caja; si la caja ya cerró, recuerda registrar la devolución del dinero.'
+      ? 'Esta nómina ya se pagó. Al anularla se anulan sus gastos y se reversan sus asientos en Contabilidad. Si se pagó desde la caja, el dinero vuelve a la caja abierta: a la misma si sigue abierta o, si ya se cerró, a la caja abierta de hoy (la cerrada no se toca).'
       : 'Esta nómina todavía no se ha pagado: al anularla no se mueve dinero.'}
       Las comisiones incluidas vuelven a quedar aprobadas para pagarse en otra nómina, y el período queda libre para generarse de nuevo.</div>
+    ${paid ? `<div class="ven-callout" style="margin-top:8px"><strong>¿El monto estaba mal?</strong> Usa <a href="#" onclick="event.preventDefault();nominaOpenModify(${Number(id)})">Corregir</a>: anula el pago malo y registra el correcto en un solo paso, conserva el número de la nómina y reimprime el recibo. En caja solo se mueve la diferencia.</div>` : ''}
     <div class="fg"><label class="lbl">Motivo de la anulación *</label><input class="inp" id="nom-cancel-reason" placeholder="Ej. se pagó al colaborador equivocado"/></div>
     <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Volver</button><button class="btn btn-red" onclick="nominaConfirmCancel(${Number(id)})">Anular nómina</button></div>`);
   setTimeout(() => document.getElementById('nom-cancel-reason')?.focus(), 60);

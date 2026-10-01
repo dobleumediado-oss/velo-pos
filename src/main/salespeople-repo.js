@@ -358,13 +358,14 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
 
   // Anula los gastos de nómina todavía vivos. Si alguien ya anuló uno desde
   // Gastos, se respeta y no se vuelve a tocar.
-  function cancelPayrollExpenses(run, reason, userId, userName) {
+  function cancelPayrollExpenses(run, reason, userId, userName, returnCashSessionId = null) {
     const cancelled = [];
     for (const item of run.items) {
       if (!item.expense_id) continue;
       const expense = db().prepare('SELECT id,status FROM expenses WHERE id=?').get(item.expense_id);
       if (!expense || expense.status === 'anulado') continue;
-      expensesRepo.cancel(expense.id, userId, userName, reason);
+      // Si salió de una caja ya cerrada, el dinero regresa a la caja abierta.
+      expensesRepo.cancel(expense.id, userId, userName, reason, { returnCashSessionId, requireCashReturn: true });
       cancelled.push(expense.id);
     }
     return cancelled;
@@ -774,7 +775,7 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
           // montos solo a los colaboradores corregidos. Los demás no se tocan.
           const affected = item => paymentChanged || changedIds.has(Number(item.id));
           cancelledExpenseIds = cancelPayrollExpenses({ ...run, items: run.items.filter(affected) },
-            `Corrección de nómina ${run.number}: ${reason}`, userId, userName);
+            `Corrección de nómina ${run.number}: ${reason}`, userId, userName, data.return_cash_session_id || data.cash_session_id || null);
           const update = db().prepare('UPDATE payroll_items SET base_salary=?,bonus_amount=?,deduction_amount=?,net_amount=?,expense_id=NULL WHERE id=?');
           nextItems.filter(affected).forEach(item => update.run(item.base_salary, item.bonus_amount, item.deduction_amount, item.net_amount, item.id));
           recalcPayroll(id);
@@ -795,7 +796,7 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
     // Anula una nómina en cualquier estado. Si estaba pagada, sus gastos se
     // anulan (la caja abierta recibe el reverso) y las comisiones vuelven a
     // quedar aprobadas para pagarse en otra nómina.
-    cancelPayroll(id, reason, userId, userName) {
+    cancelPayroll(id, reason, userId, userName, { returnCashSessionId = null } = {}) {
       const motive = text(reason, 300);
       if (!motive) throw new Error('Indica el motivo de la anulación');
       return db().transaction(() => {
@@ -804,7 +805,7 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
         if (run.status === 'anulado') throw new Error('Esta nómina ya está anulada');
         const before = payrollSnapshot(run);
         const cancelledExpenseIds = run.status === 'pagado'
-          ? cancelPayrollExpenses(run, `Nómina ${run.number} anulada: ${motive}`, userId, userName)
+          ? cancelPayrollExpenses(run, `Nómina ${run.number} anulada: ${motive}`, userId, userName, returnCashSessionId)
           : [];
         db().prepare("UPDATE seller_commission_runs SET status='aprobado',payroll_run_id=NULL WHERE payroll_run_id=? AND status IN ('aprobado','pagado')").run(id);
         db().prepare("UPDATE payroll_runs SET status='anulado',cancel_reason=?,cancelled_by=?,cancelled_at=datetime('now','localtime') WHERE id=?")
