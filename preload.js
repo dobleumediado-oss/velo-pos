@@ -243,6 +243,10 @@ const api = {
     approvePayroll:     (d) => ipcRenderer.invoke('salespeople:approvePayroll', d),
     payPayroll:         (d) => ipcRenderer.invoke('salespeople:payPayroll', d),
     quickPayPayroll:    (d) => ipcRenderer.invoke('salespeople:quickPayPayroll', d),
+    reopenPayroll:      (d) => ipcRenderer.invoke('salespeople:reopenPayroll', d),
+    modifyPayroll:      (d) => ipcRenderer.invoke('salespeople:modifyPayroll', d),
+    cancelPayroll:      (d) => ipcRenderer.invoke('salespeople:cancelPayroll', d),
+    remove:             (d) => ipcRenderer.invoke('salespeople:remove', d),
   },
 
   // ── Reportes ──────────────────────────────

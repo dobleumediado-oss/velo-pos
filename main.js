@@ -7646,6 +7646,11 @@ ipcMain.handle('salespeople:toggle', async (_, { id,active,requestUserId }) => {
     salespeopleRepo.toggle(id,!!active,requestUserId,u.name);return {ok:true};
   } catch(e){return {ok:false,error:e.message};}
 });
+ipcMain.handle('salespeople:remove', async (_, { id,requestUserId }) => {
+  try { const u=_salespeopleAdmin(requestUserId);if(!u||!['admin','superadmin'].includes(u.role))return {ok:false,error:'Solo un administrador puede eliminar colaboradores'};
+    return {ok:true,...salespeopleRepo.remove(id,requestUserId,u.name)};
+  } catch(e){return {ok:false,error:e.message};}
+});
 ipcMain.handle('salespeople:getExternalSales', async (_, filters) => {
   try{return {ok:true,data:salespeopleRepo.getExternalSales(filters||{})};}catch(e){return {ok:false,error:e.message};}
 });
@@ -7731,6 +7736,36 @@ ipcMain.handle('salespeople:quickPayPayroll', async (_, { data,requestUserId }) 
     const result=salespeopleRepo.quickPayPayroll({...data,cash_session_id:session?.id||null},requestUserId,u.name);
     _acctHook(()=>result.refs.forEach(ref=>{accountingRepo.generateExpenseAccrualEntry({expenseId:ref.expenseId,userId:requestUserId});accountingRepo.generateExpensePaymentEntry({paymentId:ref.paymentId,userId:requestUserId});}));
     return {ok:true,id:result.id,paid:result.refs.length};
+  }catch(e){return {ok:false,error:e.message};}
+});
+// Reverso contable de los gastos de nómina anulados: el mismo que hace Gastos
+// al anular un gasto (devengo, pago y el asiento antiguo de caja).
+function _reversePayrollExpenses(expenseIds, userId, reason) {
+  _acctHook(()=>(expenseIds||[]).forEach(expenseId=>{
+    accountingRepo.reverseSourceEntries('gasto',expenseId,userId,reason);
+    accountingRepo.reverseSourceEntries('gasto_dev',expenseId,userId,reason);
+    accountingRepo.reverseSourceEntries('gasto_pago',expenseId,userId,reason);
+  }));
+}
+ipcMain.handle('salespeople:reopenPayroll', async (_, { id,reason,requestUserId }) => {
+  try{const u=_salespeopleAdmin(requestUserId,'nomina');if(!u)return {ok:false,error:'Sin permisos'};
+    salespeopleRepo.reopenPayroll(id,reason,requestUserId,u.name);return {ok:true};
+  }catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:modifyPayroll', async (_, { id,data,requestUserId }) => {
+  try{const u=_salespeopleAdmin(requestUserId,'nomina');if(!u||!['admin','superadmin'].includes(u.role))return {ok:false,error:'Solo un administrador puede corregir una nómina pagada'};let session=null;
+    if(data?.payment_source==='caja'){session=cashRepo.getOpen(_reqTerminalId());if(!session)return {ok:false,error:'No hay caja abierta'};}
+    const result=salespeopleRepo.modifyPayroll(id,{...data,cash_session_id:session?.id||null},requestUserId,u.name);
+    _reversePayrollExpenses(result.cancelledExpenseIds,requestUserId,`Nómina corregida: ${data?.reason||''}`);
+    _acctHook(()=>result.refs.forEach(ref=>{accountingRepo.generateExpenseAccrualEntry({expenseId:ref.expenseId,userId:requestUserId});accountingRepo.generateExpensePaymentEntry({paymentId:ref.paymentId,userId:requestUserId});}));
+    return {ok:true,reissued:result.refs.length,cancelled:result.cancelledExpenseIds.length};
+  }catch(e){return {ok:false,error:e.message};}
+});
+ipcMain.handle('salespeople:cancelPayroll', async (_, { id,reason,requestUserId }) => {
+  try{const u=_salespeopleAdmin(requestUserId,'nomina');if(!u||!['admin','superadmin'].includes(u.role))return {ok:false,error:'Solo un administrador puede anular una nómina'};
+    const result=salespeopleRepo.cancelPayroll(id,reason,requestUserId,u.name);
+    _reversePayrollExpenses(result.cancelledExpenseIds,requestUserId,`Nómina anulada: ${reason||''}`);
+    return {ok:true,...result};
   }catch(e){return {ok:false,error:e.message};}
 });
 

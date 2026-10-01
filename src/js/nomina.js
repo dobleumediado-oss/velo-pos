@@ -40,7 +40,7 @@ function _nomInitials(name) {
 }
 function _nomBadge(status) {
   const normalized = String(status || '');
-  const cls = ['activo','aprobado','pagado'].includes(normalized) ? 'g' : normalized === 'borrador' ? 'a' : 'n';
+  const cls = ['activo','aprobado','pagado'].includes(normalized) ? 'g' : normalized === 'borrador' ? 'a' : normalized === 'anulado' ? 'r' : 'n';
   return `<span class="badge ${cls}">${_nomEsc(normalized.replaceAll('_',' '))}</span>`;
 }
 function _nomFrequency(value) {
@@ -117,7 +117,7 @@ function _nomRenderSummary(el) {
   const active = _nomState.sellers.filter(x=>x.status==='activo');
   const compensated = active.filter(x=>Number(x.salary_amount||0)>0);
   const approvedCommissions = _nomState.commissions.filter(x=>x.status==='aprobado' && !x.payroll_run_id);
-  const openRuns = _nomState.payroll.filter(x=>x.status!=='pagado');
+  const openRuns = _nomState.payroll.filter(x=>!['pagado','anulado'].includes(x.status));
   const paid = _nomState.payroll.filter(x=>x.status==='pagado');
   const pendingCommissionTotal = approvedCommissions.reduce((sum,x)=>sum+Number(x.commission_total||0),0);
   const openTotal = openRuns.reduce((sum,x)=>sum+Number(x.net_total||0),0);
@@ -142,13 +142,24 @@ function _nomRenderSummary(el) {
 
 function _nomPayrollTable(rows, showActions = true) {
   return `<div class="tw"><table><thead><tr><th>Número / período</th><th>Frecuencia</th><th style="text-align:right">Salario</th><th style="text-align:right">Comisiones</th><th style="text-align:right">Neto</th><th>Estado</th>${showActions?'<th></th>':''}</tr></thead><tbody>
-    ${rows.map(run=>`<tr class="ven-click-row" onclick="nominaViewPayroll(${run.id})"><td><strong>${_nomEsc(run.number)}</strong><div class="txt-xs muted">${_nomEsc(run.date_from)} al ${_nomEsc(run.date_to)}</div></td><td>${_nomFrequency(run.frequency)}</td><td style="text-align:right" class="ven-money">${_nomMoney(run.base_total)}</td><td style="text-align:right" class="ven-money">${_nomMoney(run.commission_total)}</td><td style="text-align:right;font-weight:850" class="ven-money">${_nomMoney(run.net_total)}</td><td>${_nomBadge(run.status)}</td>${showActions?`<td onclick="event.stopPropagation()"><div class="flex">${run.status==='borrador'?`<button class="btn btn-out btn-sm" onclick="nominaApprovePayroll(${run.id})">Aprobar</button>`:''}${run.status==='aprobado'?`<button class="btn btn-green btn-sm" onclick="nominaPayPayroll(${run.id})">Pagar</button>`:''}<button class="btn btn-ghost btn-sm" onclick="nominaViewPayroll(${run.id})">${svg('eye')}</button></div></td>`:''}</tr>`).join('')}
+    ${rows.map(run=>`<tr class="ven-click-row" onclick="nominaViewPayroll(${run.id})" ${run.status==='anulado'?'style="opacity:.62"':''}><td><strong ${run.status==='anulado'?'style="text-decoration:line-through"':''}>${_nomEsc(run.number)}</strong><div class="txt-xs muted">${_nomEsc(run.date_from)} al ${_nomEsc(run.date_to)}${Number(run.revision||0)>0?` · corregida ${run.revision} ${Number(run.revision)===1?'vez':'veces'}`:''}</div></td><td>${_nomFrequency(run.frequency)}</td><td style="text-align:right" class="ven-money">${_nomMoney(run.base_total)}</td><td style="text-align:right" class="ven-money">${_nomMoney(run.commission_total)}</td><td style="text-align:right;font-weight:850" class="ven-money">${_nomMoney(run.net_total)}</td><td>${_nomBadge(run.status)}</td>${showActions?`<td onclick="event.stopPropagation()"><div class="flex">${_nomRunActions(run)}<button class="btn btn-ghost btn-sm" title="Ver detalle" onclick="nominaViewPayroll(${run.id})">${svg('eye')}</button></div></td>`:''}</tr>`).join('')}
   </tbody></table></div>`;
+}
+
+// Acciones según el estado: una pagada se corrige o se anula; una aprobada se
+// paga, vuelve a borrador o se anula; un borrador se aprueba o se anula.
+function _nomRunActions(run) {
+  const isAdmin = ['admin','superadmin'].includes(user?.role);
+  const cancel = isAdmin ? `<button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="nominaOpenCancel(${run.id})">Anular</button>` : '';
+  if (run.status === 'borrador') return `<button class="btn btn-out btn-sm" onclick="nominaApprovePayroll(${run.id})">Aprobar</button>${cancel}`;
+  if (run.status === 'aprobado') return `<button class="btn btn-green btn-sm" onclick="nominaPayPayroll(${run.id})">Pagar</button><button class="btn btn-out btn-sm" onclick="nominaReopenPayroll(${run.id})">A borrador</button>${cancel}`;
+  if (run.status === 'pagado' && isAdmin) return `<button class="btn btn-out btn-sm" onclick="nominaOpenModify(${run.id})">${svg('edit')} Corregir</button>${cancel}`;
+  return '';
 }
 
 function _nomRenderPeriods(el) {
   el.innerHTML = `<section class="ven-panel"><div class="ven-panel-head"><div><div class="ven-panel-title">${svg('calendar')} Períodos de nómina</div><div class="ven-panel-sub">Borradores, aprobaciones y pagos del equipo</div></div><button class="btn btn-green btn-sm" onclick="nominaOpenPayroll()">${svg('plus')} Generar</button></div>
-    <div class="nom-summary-strip"><span><b>${_nomState.payroll.filter(x=>x.status==='borrador').length}</b> borradores</span><span><b>${_nomState.payroll.filter(x=>x.status==='aprobado').length}</b> listos para pagar</span><span><b>${_nomState.payroll.filter(x=>x.status==='pagado').length}</b> pagados</span></div>
+    <div class="nom-summary-strip"><span><b>${_nomState.payroll.filter(x=>x.status==='borrador').length}</b> borradores</span><span><b>${_nomState.payroll.filter(x=>x.status==='aprobado').length}</b> listos para pagar</span><span><b>${_nomState.payroll.filter(x=>x.status==='pagado').length}</b> pagados</span><span><b>${_nomState.payroll.filter(x=>x.status==='anulado').length}</b> anulados</span></div>
     ${_nomState.payroll.length ? _nomPayrollTable(_nomState.payroll) : _nomEmpty('calendar','No existen nóminas todavía','Genera un borrador semanal, quincenal o mensual.','Generar nómina','nominaOpenPayroll()')}
   </section>`;
 }
@@ -297,7 +308,7 @@ async function nominaPrintPayrollReport(runOrId) {
   const run = typeof runOrId === 'object' ? runOrId : (await window.api.salespeople.getPayrollById({id:runOrId}))?.data;
   if (!run) { toast('Nómina no encontrada','err'); return; }
   const rows = (run.items||[]).map(item=>`<tr><td>${_nomEsc(item.code)}</td><td>${_nomEsc(item.salesperson_name)}<div class="muted">${_nomRole(item.employee_role)}</div></td><td class="num">${_nomMoney(item.base_salary)}</td><td class="num">${_nomMoney(item.commission_amount)}</td><td class="num">${_nomMoney(item.bonus_amount)}</td><td class="num">${_nomMoney(item.deduction_amount)}</td><td class="num"><strong>${_nomMoney(item.net_amount)}</strong></td></tr>`).join('');
-  const body = `<section class="page">${_nomDocumentHeader(run,'REPORTE DE NÓMINA')}<h2 class="title">Nómina ${_nomFrequency(run.frequency)}</h2><div class="grid"><div><span class="muted">Período</span><br><strong>${_nomPrintDate(run.date_from)} al ${_nomPrintDate(run.date_to)}</strong></div><div><span class="muted">Estado</span><br><strong>${_nomEsc(String(run.status).toUpperCase())}</strong></div><div><span class="muted">Fecha de pago</span><br><strong>${_nomPrintDate(run.payment_date)}</strong></div><div><span class="muted">Método / referencia</span><br><strong>${_nomEsc([run.payment_method,run.payment_reference].filter(Boolean).join(' · ')||'—')}</strong></div></div><table><thead><tr><th>Código</th><th>Colaborador</th><th class="num">Salario</th><th class="num">Comisión</th><th class="num">Bonos</th><th class="num">Deducciones</th><th class="num">Neto</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><td colspan="2">TOTALES</td><td class="num">${_nomMoney(run.base_total)}</td><td class="num">${_nomMoney(run.commission_total)}</td><td class="num">${_nomMoney(run.bonus_total)}</td><td class="num">${_nomMoney(run.deduction_total)}</td><td class="num">${_nomMoney(run.net_total)}</td></tr></tfoot></table>${run.notes?`<div class="note"><strong>Notas internas</strong><br>${_nomEsc(run.notes)}</div>`:''}<div class="signatures"><div class="sign">Preparado por</div><div class="sign">Autorizado por</div></div><footer class="foot"><span>${_nomEsc(CFG.biz||'')}</span><span>Reporte administrativo · ${_nomEsc(run.number)}</span></footer></section>`;
+  const body = `<section class="page">${_nomDocumentHeader(run,'REPORTE DE NÓMINA')}<h2 class="title">Nómina ${_nomFrequency(run.frequency)}</h2><div class="grid"><div><span class="muted">Período</span><br><strong>${_nomPrintDate(run.date_from)} al ${_nomPrintDate(run.date_to)}</strong></div><div><span class="muted">Estado</span><br><strong>${_nomEsc(String(run.status).toUpperCase())}</strong></div><div><span class="muted">Fecha de pago</span><br><strong>${_nomPrintDate(run.payment_date)}</strong></div><div><span class="muted">Método / referencia</span><br><strong>${_nomEsc([run.payment_method,run.payment_reference].filter(Boolean).join(' · ')||'—')}</strong></div></div><table><thead><tr><th>Código</th><th>Colaborador</th><th class="num">Salario</th><th class="num">Comisión</th><th class="num">Bonos</th><th class="num">Deducciones</th><th class="num">Neto</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><td colspan="2">TOTALES</td><td class="num">${_nomMoney(run.base_total)}</td><td class="num">${_nomMoney(run.commission_total)}</td><td class="num">${_nomMoney(run.bonus_total)}</td><td class="num">${_nomMoney(run.deduction_total)}</td><td class="num">${_nomMoney(run.net_total)}</td></tr></tfoot></table>${run.notes?`<div class="note"><strong>Notas internas</strong><br>${_nomEsc(run.notes)}</div>`:''}${run.status==='anulado'?`<div class="note" style="border-left-color:#b91c1c"><strong>NÓMINA ANULADA</strong> ${_nomEsc(run.cancelled_at||'')}<br>Motivo: ${_nomEsc(run.cancel_reason||'—')}</div>`:''}${Number(run.revision||0)>0?`<div class="note"><strong>Pago corregido ${run.revision} ${Number(run.revision)===1?'vez':'veces'}</strong><br>Los montos de este reporte son los vigentes; el detalle de cada corrección está en el historial de la nómina.</div>`:''}<div class="signatures"><div class="sign">Preparado por</div><div class="sign">Autorizado por</div></div><footer class="foot"><span>${_nomEsc(CFG.biz||'')}</span><span>Reporte administrativo · ${_nomEsc(run.number)}</span></footer></section>`;
   printHTML(_nomDocumentShell(`Reporte ${run.number}`,body),'reporte');
 }
 
@@ -311,7 +322,7 @@ async function nominaPrintReceipts(runOrId, itemId = null) {
 
 function _nomPayrollReceiptHTML(run, items, override = null) {
   const settings = _nomReceiptSettings(override);
-  const pages = items.map(item=>`<section class="page">${_nomDocumentHeader(run,'RECIBO DE PAGO DE NÓMINA',settings)}<h2 class="title">Constancia individual de pago</h2><div class="grid"><div><span class="muted">Colaborador</span><br><strong>${_nomEsc(item.salesperson_name)}</strong></div><div><span class="muted">Código / área</span><br><strong>${_nomEsc(item.code)} · ${_nomRole(item.employee_role)}</strong></div><div><span class="muted">Período ${_nomFrequency(run.frequency).toLowerCase()}</span><br><strong>${_nomPrintDate(run.date_from)} al ${_nomPrintDate(run.date_to)}</strong></div><div><span class="muted">Fecha de pago</span><br><strong>${_nomPrintDate(run.payment_date)}</strong></div><div><span class="muted">Método</span><br><strong>${_nomEsc(String(run.payment_method||'—').replaceAll('_',' '))}</strong></div><div><span class="muted">Referencia</span><br><strong>${_nomEsc(run.payment_reference||run.number)}</strong></div></div><div class="row"><span>Salario base</span><strong>${_nomMoney(item.base_salary)}</strong></div><div class="row"><span>Comisiones</span><strong>${_nomMoney(item.commission_amount)}</strong></div><div class="row"><span>Bonificaciones</span><strong>${_nomMoney(item.bonus_amount)}</strong></div><div class="row"><span>Deducciones</span><strong>− ${_nomMoney(item.deduction_amount)}</strong></div><div class="row total"><span>NETO PAGADO</span><strong>${_nomMoney(item.net_amount)}</strong></div>${settings.showNotes&&run.receipt_notes?`<div class="note"><strong>Nota</strong><br>${_nomEsc(run.receipt_notes)}</div>`:''}<p class="ack">Declaro haber recibido el monto neto indicado por concepto de pago de nómina correspondiente al período descrito.</p>${settings.showSignatures?`<div class="signatures"><div class="sign">Firma del colaborador<br><span class="muted">${_nomEsc(item.salesperson_name)}</span></div><div class="sign">Firma autorizada</div></div>`:''}<footer class="foot"><span>${settings.showBusinessDetails?_nomEsc(CFG.biz||''):''}</span><span>${_nomEsc(run.number)} · Recibo individual</span></footer></section>`).join('');
+  const pages = items.map(item=>`<section class="page">${_nomDocumentHeader(run,'RECIBO DE PAGO DE NÓMINA',settings)}<h2 class="title">Constancia individual de pago</h2><div class="grid"><div><span class="muted">Colaborador</span><br><strong>${_nomEsc(item.salesperson_name)}</strong></div><div><span class="muted">Código / área</span><br><strong>${_nomEsc(item.code)} · ${_nomRole(item.employee_role)}</strong></div><div><span class="muted">Período ${_nomFrequency(run.frequency).toLowerCase()}</span><br><strong>${_nomPrintDate(run.date_from)} al ${_nomPrintDate(run.date_to)}</strong></div><div><span class="muted">Fecha de pago</span><br><strong>${_nomPrintDate(run.payment_date)}</strong></div><div><span class="muted">Método</span><br><strong>${_nomEsc(String(run.payment_method||'—').replaceAll('_',' '))}</strong></div><div><span class="muted">Referencia</span><br><strong>${_nomEsc(run.payment_reference||run.number)}</strong></div></div><div class="row"><span>Salario base</span><strong>${_nomMoney(item.base_salary)}</strong></div><div class="row"><span>Comisiones</span><strong>${_nomMoney(item.commission_amount)}</strong></div><div class="row"><span>Bonificaciones</span><strong>${_nomMoney(item.bonus_amount)}</strong></div><div class="row"><span>Deducciones</span><strong>− ${_nomMoney(item.deduction_amount)}</strong></div><div class="row total"><span>NETO PAGADO</span><strong>${_nomMoney(item.net_amount)}</strong></div>${settings.showNotes&&run.receipt_notes?`<div class="note"><strong>Nota</strong><br>${_nomEsc(run.receipt_notes)}</div>`:''}<p class="ack">Declaro haber recibido el monto neto indicado por concepto de pago de nómina correspondiente al período descrito.</p>${settings.showSignatures?`<div class="signatures"><div class="sign">Firma del colaborador<br><span class="muted">${_nomEsc(item.salesperson_name)}</span></div><div class="sign">Firma autorizada</div></div>`:''}<footer class="foot"><span>${settings.showBusinessDetails?_nomEsc(CFG.biz||''):''}</span><span>${_nomEsc(run.number)} · Recibo individual${Number(run.revision||0)>0?` · Corrección ${_nomEsc(run.revision)}`:''}</span></footer></section>`).join('');
   return _nomDocumentShell(`Recibos ${run.number}`,pages,settings);
 }
 
@@ -331,7 +342,113 @@ async function nominaViewPayroll(id) {
       ${items.map(item=>`<tr><td><div class="ven-person"><div class="ven-avatar ${item.seller_type==='ambulante'?'street':''}">${_nomInitials(item.salesperson_name)}</div><div><div class="ven-person-name">${_nomEsc(item.salesperson_name)}</div><div class="ven-person-meta">${_nomEsc(item.code)} · ${_nomRole(item.employee_role)}</div></div></div></td><td style="text-align:right" class="ven-money">${_nomMoney(item.base_salary)}</td><td style="text-align:right" class="ven-money">${_nomMoney(item.commission_amount)}</td><td style="text-align:right">${run.status==='borrador'?`<input class="inp" data-nom-bonus="${item.id}" type="number" min="0" step="0.01" value="${item.bonus_amount}" style="width:100px;text-align:right">`:_nomMoney(item.bonus_amount)}</td><td style="text-align:right">${run.status==='borrador'?`<input class="inp" data-nom-deduction="${item.id}" type="number" min="0" step="0.01" value="${item.deduction_amount}" style="width:100px;text-align:right">`:_nomMoney(item.deduction_amount)}</td><td style="text-align:right;font-weight:850;color:var(--green)" class="ven-money">${_nomMoney(item.net_amount)}</td>${run.status==='pagado'?`<td><button class="btn btn-out btn-sm" onclick="nominaPrintReceipts(${run.id},${item.id})">${svg('print')} Recibo</button></td>`:''}</tr>`).join('')}
     </tbody></table></div></div>
     ${run.status==='borrador'?'<div class="ven-callout" style="margin-top:12px">Puedes ajustar bonos y deducciones. El total se recalculará al guardar.</div>':''}
-    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button><button class="btn btn-out" onclick="nominaPrintPayrollReport(${run.id})">${svg('print')} Reporte</button>${typeof guardarDocumentoExcel==='function'?`<button class="btn btn-out" onclick="guardarDocumentoExcel(()=>nominaPrintPayrollReport(${run.id}),'Nomina-${_nomEsc(run.number)}','Reporte de nómina')">Excel</button>`:''}${run.status==='pagado'?`<button class="btn btn-out" onclick="nominaPrintReceipts(${run.id})">${svg('receipt')} Todos los recibos</button>`:''}${run.status==='borrador'?`<button class="btn btn-green" onclick="nominaSavePayrollItems(${run.id})">${svg('check')} Guardar ajustes</button>`:''}</div>`, 'modal-lg');
+    ${run.status==='anulado'?`<div class="ven-callout" style="margin-top:12px;border-color:var(--red-line);background:var(--red-bg);color:var(--red)"><strong>Nómina anulada</strong> ${_nomEsc(run.cancelled_at||'')}<br>Motivo: ${_nomEsc(run.cancel_reason||'—')}</div>`:''}
+    ${_nomChangesHTML(run)}
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button>${run.status==='borrador'?`<button class="btn btn-ghost" style="color:var(--red)" onclick="nominaOpenCancel(${run.id})">Anular</button>`:['aprobado','pagado'].includes(run.status)?_nomRunActions(run).replace(/ btn-sm/g,''):''}<button class="btn btn-out" onclick="nominaPrintPayrollReport(${run.id})">${svg('print')} Reporte</button>${typeof guardarDocumentoExcel==='function'?`<button class="btn btn-out" onclick="guardarDocumentoExcel(()=>nominaPrintPayrollReport(${run.id}),'Nomina-${_nomEsc(run.number)}','Reporte de nómina')">Excel</button>`:''}${run.status==='pagado'?`<button class="btn btn-out" onclick="nominaPrintReceipts(${run.id})">${svg('receipt')} Todos los recibos</button>`:''}${run.status==='borrador'?`<button class="btn btn-green" onclick="nominaSavePayrollItems(${run.id})">${svg('check')} Guardar ajustes</button>`:''}</div>`, 'modal-xl');
+}
+
+function _nomChangesHTML(run) {
+  const changes = run.changes || [];
+  if (!changes.length) return '';
+  const label = { corregida:'Corrección', reabierta:'Devuelta a borrador', anulada:'Anulación' };
+  const parse = text => { try { return JSON.parse(text || '{}'); } catch { return {}; } };
+  return `<div class="ven-panel" style="box-shadow:none;margin-top:12px"><div class="ven-panel-head"><div><div class="ven-panel-title">Historial de cambios</div><div class="ven-panel-sub">Registro permanente; no se puede editar ni borrar</div></div></div><div class="tw"><table><thead><tr><th>Fecha</th><th>Cambio</th><th>Usuario</th><th style="text-align:right">Antes</th><th style="text-align:right">Después</th><th>Motivo</th></tr></thead><tbody>
+    ${changes.map(change=>{const before=parse(change.before_json),after=parse(change.after_json);return `<tr><td>${_nomEsc(change.created_at)}</td><td><strong>${label[change.action]||_nomEsc(change.action)}</strong></td><td>${_nomEsc(change.user_name||'—')}</td><td style="text-align:right" class="ven-money">${_nomMoney(before.net_total)}</td><td style="text-align:right" class="ven-money">${change.action==='anulada'?'Anulada':_nomMoney(after.net_total)}</td><td>${_nomEsc(change.reason)}</td></tr>`;}).join('')}
+  </tbody></table></div></div>`;
+}
+
+function _nomPaymentFields(prefix, run = {}) {
+  const method = run.payment_method || 'efectivo', source = run.payment_source || 'caja_chica';
+  return `<div class="g2"><div class="fg"><label class="lbl">Fecha de pago</label><input class="inp" id="${prefix}-date" type="date" value="${_nomEsc(run.payment_date||_nomToday())}"/></div><div class="fg"><label class="lbl">Método</label><select class="inp" id="${prefix}-method">${['efectivo','transferencia','cheque','otro'].map(x=>`<option value="${x}" ${method===x?'selected':''}>${x[0].toUpperCase()+x.slice(1)}</option>`).join('')}</select></div></div>
+    <div class="g2"><div class="fg"><label class="lbl">Origen del pago</label><select class="inp" id="${prefix}-source">${[['caja_chica','Caja chica'],['caja','Caja abierta'],['banco','Banco']].map(([v,l])=>`<option value="${v}" ${source===v?'selected':''}>${l}</option>`).join('')}</select></div><div class="fg"><label class="lbl">Referencia</label><input class="inp" id="${prefix}-reference" value="${_nomEsc(run.payment_reference||'')}" placeholder="Transferencia, cheque o referencia interna"/></div></div>`;
+}
+
+// Corregir una nómina pagada. Cambiar montos, fecha, método u origen anula el
+// pago anterior con su reverso y registra el correcto; la referencia y la nota
+// del recibo se corrigen sin mover dinero.
+async function nominaOpenModify(id) {
+  const result = await window.api.salespeople.getPayrollById({ id });
+  const run = result?.data;
+  if (!result?.ok || !run) { toast(result?.error || 'Nómina no encontrada','err'); return; }
+  if (run.status !== 'pagado') { toast('Solo se corrige una nómina pagada','w'); return; }
+  const input = (attr, itemId, value) => `<input class="inp" data-nom-mod-${attr}="${itemId}" type="number" min="0" step="0.01" value="${Number(value||0)}" oninput="nominaModifyRecalc()" style="width:92px;text-align:right;padding-left:6px;padding-right:6px">`;
+  openModal(`<div class="modal-title">Corregir pago de ${_nomEsc(run.number)}</div><div class="modal-sub">${_nomEsc(run.date_from)} al ${_nomEsc(run.date_to)} · pagada el ${_nomEsc(run.payment_date||'—')} · ${_nomMoney(run.net_total)}</div>
+    <div class="ven-panel" style="box-shadow:none"><div class="tw"><table><thead><tr><th>Colaborador</th><th style="text-align:right">Salario</th><th style="text-align:right">Comisión</th><th style="text-align:right">Bono</th><th style="text-align:right">Deducción</th><th style="text-align:right">Neto</th></tr></thead><tbody>
+      ${(run.items||[]).map(item=>`<tr data-nom-mod-row="${item.id}" data-commission="${Number(item.commission_amount||0)}"><td><div class="ven-person-name">${_nomEsc(item.salesperson_name)}</div><div class="ven-person-meta">${_nomEsc(item.code)} · antes ${_nomMoney(item.net_amount)}</div></td><td style="text-align:right">${input('base',item.id,item.base_salary)}</td><td style="text-align:right" class="ven-money" title="La comisión viene de su liquidación aprobada">${_nomMoney(item.commission_amount)}</td><td style="text-align:right">${input('bonus',item.id,item.bonus_amount)}</td><td style="text-align:right">${input('deduction',item.id,item.deduction_amount)}</td><td style="text-align:right;font-weight:850" class="ven-money" data-nom-mod-net="${item.id}">${_nomMoney(item.net_amount)}</td></tr>`).join('')}
+    </tbody><tfoot><tr><td colspan="5" style="font-weight:800;padding:10px 12px">Total corregido <span class="muted" style="font-weight:400">(antes ${_nomMoney(run.net_total)})</span></td><td style="text-align:right;font-weight:900;padding:10px 12px" class="ven-money" id="nom-mod-total">${_nomMoney(run.net_total)}</td></tr></tfoot></table></div></div>
+    ${_nomPaymentFields('nom-mod', run)}
+    <div class="fg"><label class="lbl">Nota visible en el recibo</label><textarea class="inp" id="nom-mod-receipt-notes" rows="2">${_nomEsc(run.receipt_notes||'')}</textarea></div>
+    <div class="fg"><label class="lbl">Motivo de la corrección *</label><input class="inp" id="nom-mod-reason" placeholder="Ej. el bono era RD$1,000, no RD$500"/></div>
+    <div class="ven-callout">Si cambias montos, fecha, método u origen, el pago anterior se anula con su reverso en Gastos, Caja y Contabilidad, y se registra el pago correcto. Si solo cambias la referencia o la nota, no se mueve dinero. Todo queda en el historial de la nómina.</div>
+    <label style="display:flex;gap:8px;align-items:center;margin-top:10px"><input id="nom-mod-print" type="checkbox" checked/> Imprimir los recibos corregidos al guardar</label>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-green" onclick="nominaSaveModify(${run.id})">${svg('check')} Guardar corrección</button></div>`, 'modal-xl');
+}
+
+function nominaModifyRecalc() {
+  let total = 0;
+  document.querySelectorAll('[data-nom-mod-row]').forEach(row => {
+    const id = row.dataset.nomModRow;
+    const value = attr => Math.max(0, Number(document.querySelector(`[data-nom-mod-${attr}="${id}"]`)?.value) || 0);
+    const net = value('base') + Number(row.dataset.commission || 0) + value('bonus') - value('deduction');
+    total += net;
+    const cell = document.querySelector(`[data-nom-mod-net="${id}"]`);
+    if (cell) { cell.textContent = _nomMoney(net); cell.style.color = net < 0 ? 'var(--red)' : ''; }
+  });
+  const totalCell = document.getElementById('nom-mod-total');
+  if (totalCell) totalCell.textContent = _nomMoney(total);
+}
+
+async function nominaSaveModify(id) {
+  const reason = document.getElementById('nom-mod-reason')?.value.trim();
+  if (!reason) { toast('Indica el motivo de la corrección','w'); document.getElementById('nom-mod-reason')?.focus(); return; }
+  const items = [...document.querySelectorAll('[data-nom-mod-row]')].map(row => {
+    const itemId = row.dataset.nomModRow;
+    const value = attr => document.querySelector(`[data-nom-mod-${attr}="${itemId}"]`)?.value;
+    return { id:Number(itemId), base_salary:value('base'), bonus_amount:value('bonus'), deduction_amount:value('deduction') };
+  });
+  const shouldPrint = document.getElementById('nom-mod-print')?.checked;
+  const data = { items, reason, payment_date:document.getElementById('nom-mod-date').value, payment_method:document.getElementById('nom-mod-method').value,
+    payment_source:document.getElementById('nom-mod-source').value, reference:document.getElementById('nom-mod-reference').value,
+    receipt_notes:document.getElementById('nom-mod-receipt-notes').value };
+  const result = await window.api.salespeople.modifyPayroll({ id, data, requestUserId:user.id });
+  if (!result?.ok) { toast(result?.error || 'No se pudo corregir la nómina','err'); return; }
+  closeModal();
+  toast(result.reissued ? `✓ Pago corregido · ${result.cancelled} anulado(s) y ${result.reissued} registrado(s) de nuevo` : '✓ Datos del recibo corregidos');
+  if (shouldPrint) nominaPrintReceipts(id);
+  await veloRepaint(() => renderNomina(document.getElementById('page')));
+}
+
+function nominaOpenCancel(id) {
+  const run = _nomState.payroll.find(x => Number(x.id) === Number(id)) || {};
+  const paid = run.status === 'pagado';
+  openModal(`<div class="modal-title">Anular ${_nomEsc(run.number||'nómina')}</div><div class="modal-sub">${_nomEsc(run.date_from||'')} al ${_nomEsc(run.date_to||'')} · ${_nomMoney(run.net_total)} · ${_nomBadge(run.status)}</div>
+    <div class="ven-callout" style="border-color:var(--red-line);background:var(--red-bg);color:#991b1b">${paid
+      ? 'Esta nómina ya se pagó. Al anularla se anulan sus gastos en Gastos y se reversan sus asientos en Contabilidad. Si se pagó desde una caja que sigue abierta, el dinero vuelve a esa caja; si la caja ya cerró, recuerda registrar la devolución del dinero.'
+      : 'Esta nómina todavía no se ha pagado: al anularla no se mueve dinero.'}
+      Las comisiones incluidas vuelven a quedar aprobadas para pagarse en otra nómina, y el período queda libre para generarse de nuevo.</div>
+    <div class="fg"><label class="lbl">Motivo de la anulación *</label><input class="inp" id="nom-cancel-reason" placeholder="Ej. se pagó al colaborador equivocado"/></div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Volver</button><button class="btn btn-red" onclick="nominaConfirmCancel(${Number(id)})">Anular nómina</button></div>`);
+  setTimeout(() => document.getElementById('nom-cancel-reason')?.focus(), 60);
+}
+
+async function nominaConfirmCancel(id) {
+  const reason = document.getElementById('nom-cancel-reason')?.value.trim();
+  if (!reason) { toast('Indica el motivo de la anulación','w'); document.getElementById('nom-cancel-reason')?.focus(); return; }
+  const result = await window.api.salespeople.cancelPayroll({ id, reason, requestUserId:user.id });
+  if (!result?.ok) { toast(result?.error || 'No se pudo anular la nómina','err'); return; }
+  closeModal();
+  toast(result.wasPaid ? `✓ Nómina anulada · ${result.cancelledExpenseIds?.length||0} pago(s) reversado(s)` : '✓ Nómina anulada');
+  await veloRepaint(() => renderNomina(document.getElementById('page')));
+}
+
+async function nominaReopenPayroll(id) {
+  const reason = await askText('La nómina vuelve a borrador para ajustar bonos, deducciones o salarios. Tendrás que aprobarla otra vez antes de pagar.', { title:'Devolver a borrador', placeholder:'Motivo (opcional)' });
+  if (reason == null) return;
+  const result = await window.api.salespeople.reopenPayroll({ id, reason, requestUserId:user.id });
+  if (!result?.ok) { toast(result?.error || 'No se pudo devolver a borrador','err'); return; }
+  closeModal();
+  toast('✓ Nómina devuelta a borrador');
+  await veloRepaint(() => renderNomina(document.getElementById('page')));
 }
 
 async function nominaSavePayrollItems() {

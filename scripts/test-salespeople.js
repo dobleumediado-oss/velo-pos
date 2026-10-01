@@ -112,6 +112,76 @@ ok(quickPayroll.status==='pagado'&&quickPayroll.items.length===1&&quickPayroll.i
 ok(near(quickPayroll.net_total,850)&&quickPayroll.payment_method==='transferencia'&&quickPayroll.payment_reference==='NOM-FAST-01','pago rápido guarda ajustes, método y referencia del recibo');
 ok(quickPayroll.receipt_notes==='Excelente trabajo en el taller'&&quick.refs.length===1,'recibo conserva la nota visible y el pago contable');
 
+console.log('\n== F. Corregir, reabrir y anular pagos de nómina ==');
+const expenseStatus=id=>DB.expensesRepo.getById(id)?.status;
+const quickBefore=DB.salespeopleRepo.getPayrollById(quick.id);
+const oldQuickExpense=quickBefore.items[0].expense_id;
+throws(()=>DB.salespeopleRepo.modifyPayroll(quick.id,{items:[],reason:'Sin cambios'},...auditArgs),'rechaza una corrección que no cambia nada');
+throws(()=>DB.salespeopleRepo.modifyPayroll(quick.id,{items:[{id:quickBefore.items[0].id,bonus_amount:500}]},...auditArgs),'exige el motivo de la corrección');
+throws(()=>DB.salespeopleRepo.modifyPayroll(quick.id,{items:[{id:quickBefore.items[0].id,deduction_amount:99999}],reason:'Deducción imposible'},...auditArgs),'impide que la deducción supere lo que recibe');
+DB.salespeopleRepo.modifyPayroll(quick.id,{reference:'NOM-FAST-02',reason:'Referencia equivocada'},...auditArgs);
+let quickAfter=DB.salespeopleRepo.getPayrollById(quick.id);
+ok(quickAfter.payment_reference==='NOM-FAST-02'&&quickAfter.items[0].expense_id===oldQuickExpense&&expenseStatus(oldQuickExpense)==='pagado','corregir solo la referencia no anula ni vuelve a pagar');
+const reissue=DB.salespeopleRepo.modifyPayroll(quick.id,{items:[{id:quickBefore.items[0].id,bonus_amount:275}],reason:'El bono era mayor'},...auditArgs);
+quickAfter=DB.salespeopleRepo.getPayrollById(quick.id);
+ok(near(quickAfter.net_total,1050)&&quickAfter.status==='pagado'&&quickAfter.revision===1,'corregir el bono recalcula el neto 800+275-25=1050');
+ok(reissue.cancelledExpenseIds[0]===oldQuickExpense&&expenseStatus(oldQuickExpense)==='anulado','el gasto del pago anterior queda anulado');
+const newQuickExpense=DB.expensesRepo.getById(quickAfter.items[0].expense_id);
+ok(newQuickExpense&&newQuickExpense.status==='pagado'&&near(newQuickExpense.total,1050)&&/corrección 1/i.test(newQuickExpense.description),'el pago corregido crea un gasto nuevo pagado por el monto correcto');
+ok(quickAfter.changes.length===2&&quickAfter.changes.every(c=>c.action==='corregida'),'cada corrección queda en el historial inmutable');
+ok(near(JSON.parse(quickAfter.changes[0].before_json).net_total,850)&&near(JSON.parse(quickAfter.changes[0].after_json).net_total,1050),'el historial guarda el antes y el después');
+throws(()=>DB.salespeopleRepo.modifyPayroll(quick.id,{payment_source:'caja',reason:'Pagado desde caja'},...auditArgs),'no registra un pago en caja sin una caja abierta');
+
+const helperId=DB.salespeopleRepo.create({name:'Rosa Caja',employee_role:'administracion',salary_amount:500,payroll_frequency:'mensual'},...auditArgs);
+const groupId=DB.salespeopleRepo.generatePayroll({from:'2030-01-01',to:'2030-01-31',frequency:'mensual'},...auditArgs);
+DB.salespeopleRepo.approvePayroll(groupId,...auditArgs);
+DB.salespeopleRepo.payPayroll(groupId,{payment_date:today,payment_method:'efectivo',payment_source:'caja_chica'},...auditArgs);
+let group=DB.salespeopleRepo.getPayrollById(groupId);
+const rosaItem=group.items.find(i=>i.salesperson_id===helperId),anaItem=group.items.find(i=>i.salesperson_id===fixedId);
+ok(group.items.length===2&&rosaItem&&anaItem,'nómina de grupo con dos colaboradores pagada');
+const groupFix=DB.salespeopleRepo.modifyPayroll(groupId,{items:[{id:rosaItem.id,bonus_amount:100}],reason:'Bono de Rosa'},...auditArgs);
+group=DB.salespeopleRepo.getPayrollById(groupId);
+ok(groupFix.cancelledExpenseIds.length===1&&groupFix.cancelledExpenseIds[0]===rosaItem.expense_id&&groupFix.refs.length===1,'corregir a un colaborador solo re-emite su pago');
+ok(group.items.find(i=>i.id===anaItem.id).expense_id===anaItem.expense_id&&expenseStatus(anaItem.expense_id)==='pagado','el pago de los demás queda intacto');
+ok(near(group.net_total,1600),'el total de la nómina refleja la corrección 1000+600=1600');
+const methodFix=DB.salespeopleRepo.modifyPayroll(groupId,{payment_method:'transferencia',payment_source:'banco',reason:'Fue por transferencia'},...auditArgs);
+ok(methodFix.cancelledExpenseIds.length===2&&methodFix.refs.length===2,'cambiar el método re-emite el pago de todos');
+DB.salespeopleRepo.cancelPayroll(groupId,'Período de prueba',...auditArgs);
+DB.salespeopleRepo.remove(helperId,...auditArgs);
+
+const paidCommission=DB.salespeopleRepo.getCommissionRuns({salespersonId:streetId})[0];
+const cancelResult=DB.salespeopleRepo.cancelPayroll(streetPayrollId,'Se pagó con el período equivocado',...auditArgs);
+const cancelledStreet=DB.salespeopleRepo.getPayrollById(streetPayrollId);
+ok(cancelledStreet.status==='anulado'&&cancelledStreet.cancel_reason==='Se pagó con el período equivocado','anular guarda estado y motivo');
+ok(cancelResult.wasPaid&&cancelResult.cancelledExpenseIds.every(id=>expenseStatus(id)==='anulado'),'anular una nómina pagada anula sus gastos');
+const releasedCommission=DB.salespeopleRepo.getCommissionById(paidCommission.id);
+ok(releasedCommission.status==='aprobado'&&releasedCommission.payroll_run_id==null,'la comisión vuelve a quedar aprobada para otra nómina');
+throws(()=>DB.salespeopleRepo.cancelPayroll(streetPayrollId,'Otra vez',...auditArgs),'no anula dos veces la misma nómina');
+const regenerated=DB.salespeopleRepo.generatePayroll({from:today,to:today,frequency:'quincenal'},...auditArgs);
+ok(near(DB.salespeopleRepo.getPayrollById(regenerated).commission_total,30),'el período anulado se puede generar de nuevo con la misma comisión');
+DB.salespeopleRepo.approvePayroll(regenerated,...auditArgs);
+ok(DB.salespeopleRepo.getCommissionById(paidCommission.id).payroll_run_id===regenerated,'al aprobar, la comisión se enlaza a la nómina nueva');
+DB.salespeopleRepo.reopenPayroll(regenerated,'Falta un bono',...auditArgs);
+ok(DB.salespeopleRepo.getPayrollById(regenerated).status==='borrador'&&DB.salespeopleRepo.getCommissionById(paidCommission.id).payroll_run_id==null,'devolver a borrador suelta la comisión hasta volver a aprobar');
+throws(()=>DB.salespeopleRepo.reopenPayroll(quick.id,'',...auditArgs),'una nómina pagada no vuelve a borrador');
+
+console.log('\n== G. Eliminar colaboradores ==');
+const newbieId=DB.salespeopleRepo.create({name:'Temporal Sin Historial',employee_role:'administracion',salary_amount:0},...auditArgs);
+ok(DB.salespeopleRepo.remove(newbieId,...auditArgs).mode==='deleted'&&!db.prepare('SELECT id FROM salespeople WHERE id=?').get(newbieId),'sin movimientos se borra por completo');
+throws(()=>DB.salespeopleRepo.remove(streetId,...auditArgs),'no elimina a quien está en una nómina sin pagar');
+DB.salespeopleRepo.cancelPayroll(regenerated,'Prueba de eliminación',...auditArgs);
+throws(()=>DB.salespeopleRepo.remove(streetId,...auditArgs),'no elimina a quien tiene comisiones aprobadas sin pagar');
+const removal=DB.salespeopleRepo.remove(mechanicId,...auditArgs);
+const archived=db.prepare('SELECT * FROM salespeople WHERE id=?').get(mechanicId);
+ok(removal.mode==='archived'&&archived.deleted_at&&archived.status==='inactivo','con historial se archiva en vez de borrarse');
+ok(!DB.salespeopleRepo.getAll({}).some(x=>x.id===mechanicId)&&DB.salespeopleRepo.getAll({includeDeleted:true}).some(x=>x.id===mechanicId),'el archivado sale de las listas pero sigue existiendo');
+ok(DB.salespeopleRepo.getPayrollById(quick.id).items[0].salesperson_name==='Carlos Mecánico','sus nóminas anteriores conservan el nombre');
+throws(()=>DB.salespeopleRepo.remove(mechanicId,...auditArgs),'no elimina dos veces');
+DB.salespeopleRepo.remove(fixedId,...auditArgs);
+ok(db.prepare('SELECT linked_user_id FROM salespeople WHERE id=?').get(fixedId).linked_user_id==null,'archivar libera el usuario del POS vinculado');
+const saleAfterRemoval=DB.salesRepo.create({customer:{id:customerId,name:'Cliente vendedor'},items:[{product_id:productId,product_code:'VEN-P1',product_name:'Producto vendedor',unit_cost:50,unit_price:118,taxable:1,tax_pct:18,qty:1}],payment:{method:'efectivo'},user,type:'factura'});
+ok(!saleAfterRemoval.salespersonId,'las ventas nuevas ya no se asignan al colaborador eliminado');
+
 try{DB.getDB().close();}catch{}
 try{fs.rmSync(tmpDir,{recursive:true,force:true});}catch{}
 console.log(`\n== RESULTADO: ${pass} OK, ${fail} fallos ==`);

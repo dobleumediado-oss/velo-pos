@@ -194,6 +194,27 @@ function ensureSalespeopleSchema(db) {
   if (!payrollCols.includes('payment_source')) db.exec("ALTER TABLE payroll_runs ADD COLUMN payment_source TEXT DEFAULT ''");
   if (!payrollCols.includes('payment_reference')) db.exec("ALTER TABLE payroll_runs ADD COLUMN payment_reference TEXT DEFAULT ''");
   if (!payrollCols.includes('scope_key')) db.exec("ALTER TABLE payroll_runs ADD COLUMN scope_key TEXT NOT NULL DEFAULT 'all'");
+  // Un colaborador con historial no se borra: se archiva para que sus recibos,
+  // nóminas y comisiones sigan mostrando su nombre.
+  if (!sellerCols.includes('deleted_at')) db.exec('ALTER TABLE salespeople ADD COLUMN deleted_at TEXT');
+  if (!payrollCols.includes('cancel_reason')) db.exec("ALTER TABLE payroll_runs ADD COLUMN cancel_reason TEXT DEFAULT ''");
+  if (!payrollCols.includes('cancelled_by')) db.exec('ALTER TABLE payroll_runs ADD COLUMN cancelled_by INTEGER REFERENCES users(id)');
+  if (!payrollCols.includes('cancelled_at')) db.exec('ALTER TABLE payroll_runs ADD COLUMN cancelled_at TEXT');
+  if (!payrollCols.includes('revision')) db.exec('ALTER TABLE payroll_runs ADD COLUMN revision INTEGER NOT NULL DEFAULT 0');
+  // Bitácora inmutable: cada corrección, reapertura o anulación de una nómina
+  // guarda cómo estaba antes y cómo quedó, con su motivo.
+  db.exec(`CREATE TABLE IF NOT EXISTS payroll_run_changes (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    payroll_run_id  INTEGER NOT NULL REFERENCES payroll_runs(id),
+    action          TEXT NOT NULL CHECK(action IN ('corregida','reabierta','anulada')),
+    reason          TEXT NOT NULL DEFAULT '',
+    before_json     TEXT NOT NULL DEFAULT '{}',
+    after_json      TEXT NOT NULL DEFAULT '{}',
+    user_id         INTEGER REFERENCES users(id),
+    user_name       TEXT DEFAULT '',
+    created_at      TEXT DEFAULT (datetime('now','localtime'))
+  )`);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_payroll_run_changes_run ON payroll_run_changes(payroll_run_id,id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_sales_salesperson_date ON sales(salesperson_id,created_at,status)');
   db.exec('DROP INDEX IF EXISTS idx_payroll_unique_period');
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_payroll_unique_scope ON payroll_runs(date_from,date_to,frequency,scope_key) WHERE status!='anulado'");
@@ -313,9 +334,61 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
     return totals;
   }
 
+  // Un gasto por colaborador, pagado en el acto. Lo usan el pago normal y la
+  // corrección de una nómina ya pagada.
+  function issuePayrollPayments(run, data, userId, userName) {
+    const refs = [];
+    const catId = expensesRepo.ensureCategory('Pago de nómina', 'Personal');
+    const label = Number(run.revision || 0) > 0 ? `Nómina ${run.number} (corrección ${run.revision})` : `Nómina ${run.number}`;
+    for (const item of run.items) {
+      if (item.net_amount <= 0) continue;
+      const expenseId = expensesRepo.create({type:'gasto',category_id:catId,description:`${label} · ${item.salesperson_name}`,
+        amount:item.net_amount,total:item.net_amount,payment_method:data.payment_method||'efectivo',payment_source:data.payment_source||'caja_chica',
+        cash_session_id:data.cash_session_id||null,issue_date:isoDate(data.payment_date),
+        notes:`Salario RD$${item.base_salary}; comisión RD$${item.commission_amount}; bonos RD$${item.bonus_amount}; deducciones RD$${item.deduction_amount}`,
+        user_id:userId,status:'pendiente_pago'});
+      db().prepare("INSERT INTO seller_expense_links(salesperson_id,expense_id,expense_kind) VALUES(?,?,'nomina')").run(item.salesperson_id,expenseId);
+      const pay = expensesRepo.pay({expenseId,amount:item.net_amount,payment_method:data.payment_method||'efectivo',payment_source:data.payment_source||'caja_chica',
+        cash_session_id:data.cash_session_id||null,reference:data.reference||run.number,userId,userName});
+      db().prepare('UPDATE payroll_items SET expense_id=? WHERE id=?').run(expenseId,item.id);
+      refs.push({expenseId,paymentId:pay.paymentId});
+    }
+    return refs;
+  }
+
+  // Anula los gastos de nómina todavía vivos. Si alguien ya anuló uno desde
+  // Gastos, se respeta y no se vuelve a tocar.
+  function cancelPayrollExpenses(run, reason, userId, userName) {
+    const cancelled = [];
+    for (const item of run.items) {
+      if (!item.expense_id) continue;
+      const expense = db().prepare('SELECT id,status FROM expenses WHERE id=?').get(item.expense_id);
+      if (!expense || expense.status === 'anulado') continue;
+      expensesRepo.cancel(expense.id, userId, userName, reason);
+      cancelled.push(expense.id);
+    }
+    return cancelled;
+  }
+
+  function payrollSnapshot(run) {
+    return {
+      status: run.status, payment_date: run.payment_date || '', payment_method: run.payment_method || '',
+      payment_source: run.payment_source || '', payment_reference: run.payment_reference || '',
+      receipt_notes: run.receipt_notes || '', net_total: run.net_total,
+      items: (run.items || []).map(item => ({ id: item.id, salesperson_id: item.salesperson_id, name: item.salesperson_name,
+        base_salary: item.base_salary, commission_amount: item.commission_amount, bonus_amount: item.bonus_amount,
+        deduction_amount: item.deduction_amount, net_amount: item.net_amount, expense_id: item.expense_id || null })),
+    };
+  }
+
+  function logPayrollChange(runId, action, reason, before, after, userId, userName) {
+    db().prepare(`INSERT INTO payroll_run_changes(payroll_run_id,action,reason,before_json,after_json,user_id,user_name)
+      VALUES(?,?,?,?,?,?,?)`).run(runId, action, reason, JSON.stringify(before || {}), JSON.stringify(after || {}), userId || null, userName || '');
+  }
+
   return {
-    getAll({ status, type, role, commercialOnly } = {}) {
-      let where = 'WHERE 1=1';
+    getAll({ status, type, role, commercialOnly, includeDeleted } = {}) {
+      let where = includeDeleted ? 'WHERE 1=1' : 'WHERE sp.deleted_at IS NULL';
       const args = [];
       if (status) { where += ' AND sp.status=?'; args.push(status); }
       if (type) { where += ' AND sp.seller_type=?'; args.push(type); }
@@ -385,6 +458,45 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
         .run(active ? 'activo' : 'inactivo',id);
       audit(userId||0,userName||'','vendedor_estado','salespeople',id,`${seller.name}: ${active?'activo':'inactivo'}`);
       return true;
+    },
+    // Sin movimientos se borra por completo. Con historial se archiva: sale de
+    // listas y selectores, pero sus documentos siguen mostrando su nombre.
+    remove(id, userId, userName) {
+      return db().transaction(() => {
+        const seller = requireSeller(id);
+        if (seller.deleted_at) throw new Error('Este colaborador ya fue eliminado');
+        const openPayroll = db().prepare(`SELECT r.number FROM payroll_items i JOIN payroll_runs r ON r.id=i.payroll_run_id
+          WHERE i.salesperson_id=? AND r.status IN ('borrador','aprobado') ORDER BY r.id LIMIT 1`).get(seller.id);
+        if (openPayroll) throw new Error(`${seller.name} está en la nómina ${openPayroll.number}, que todavía no se ha pagado. Págala o anúlala antes de eliminarlo.`);
+        const owed = db().prepare(`SELECT COUNT(*) n,COALESCE(SUM(commission_total),0) total FROM seller_commission_runs
+          WHERE salesperson_id=? AND status='aprobado'`).get(seller.id);
+        if (owed.n) throw new Error(`${seller.name} tiene comisiones aprobadas por RD$${money(owed.total).toFixed(2)} sin pagar. Págalas desde Nómina antes de eliminarlo.`);
+        const count = sql => { try { return db().prepare(sql).get(seller.id)?.n || 0; } catch { return 0; } };
+        const history = count('SELECT COUNT(*) n FROM sales WHERE salesperson_id=?')
+          + count('SELECT COUNT(*) n FROM seller_external_sales WHERE salesperson_id=?')
+          + count('SELECT COUNT(*) n FROM seller_commission_runs WHERE salesperson_id=?')
+          + count('SELECT COUNT(*) n FROM seller_expense_links WHERE salesperson_id=?')
+          + count('SELECT COUNT(*) n FROM payroll_items WHERE salesperson_id=?')
+          + count('SELECT COUNT(*) n FROM checkout_orders WHERE salesperson_id=?')
+          + count('SELECT COUNT(*) n FROM sale_corrections WHERE salesperson_id=?');
+        if (!history) {
+          try {
+            db().prepare('DELETE FROM salespeople WHERE id=?').run(seller.id);
+            audit(userId||0,userName||'','colaborador_eliminado','salespeople',seller.id,`${seller.code} · ${seller.name}`);
+            return { mode:'deleted' };
+          } catch (error) {
+            // Una referencia que no conocemos: se archiva en vez de romperla.
+            if (!/FOREIGN KEY/i.test(String(error?.message || ''))) throw error;
+          }
+        }
+        // Un borrador de comisión es solo un cálculo: sin el colaborador no se aprobará nunca.
+        const drafts = db().prepare("UPDATE seller_commission_runs SET status='anulado' WHERE salesperson_id=? AND status='borrador'").run(seller.id).changes;
+        db().prepare(`UPDATE salespeople SET status='inactivo',linked_user_id=NULL,deleted_at=datetime('now','localtime'),
+          updated_at=datetime('now','localtime') WHERE id=?`).run(seller.id);
+        audit(userId||0,userName||'','colaborador_archivado','salespeople',seller.id,
+          `${seller.code} · ${seller.name}${drafts ? ` · ${drafts} borrador(es) de comisión anulado(s)` : ''}`);
+        return { mode:'archived', draftsCancelled: drafts };
+      })();
     },
     getDashboard({ from, to } = {}) {
       const dateTo = to ? isoDate(to) : new Date().toISOString().slice(0,10);
@@ -584,12 +696,12 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
       })();
     },
     getPayrollRuns(){return db().prepare(`SELECT r.*,(SELECT COUNT(*) FROM payroll_items i WHERE i.payroll_run_id=r.id) employee_count FROM payroll_runs r ORDER BY r.date_to DESC,r.id DESC`).all();},
-    getPayrollById(id){const run=db().prepare('SELECT * FROM payroll_runs WHERE id=?').get(id);if(!run)return null;run.items=db().prepare(`SELECT i.*,sp.name salesperson_name,sp.code,sp.seller_type,sp.employee_role,sp.document,sp.phone FROM payroll_items i JOIN salespeople sp ON sp.id=i.salesperson_id WHERE i.payroll_run_id=? ORDER BY sp.name`).all(id);return run;},
-    updatePayrollItem(id,{bonusAmount,deductionAmount,notes}){const item=db().prepare('SELECT * FROM payroll_items WHERE id=?').get(id);if(!item)throw new Error('Detalle de nómina no encontrado');const run=db().prepare('SELECT * FROM payroll_runs WHERE id=?').get(item.payroll_run_id);if(run.status!=='borrador')throw new Error('Solo se modifica una nómina en borrador');const bonus=money(bonusAmount),deduction=money(deductionAmount),net=money(item.base_salary+item.commission_amount+bonus-deduction);db().prepare('UPDATE payroll_items SET bonus_amount=?,deduction_amount=?,net_amount=?,notes=? WHERE id=?').run(bonus,deduction,net,text(notes,300),id);recalcPayroll(item.payroll_run_id);return true;},
+    getPayrollById(id){const run=db().prepare('SELECT * FROM payroll_runs WHERE id=?').get(id);if(!run)return null;run.items=db().prepare(`SELECT i.*,sp.name salesperson_name,sp.code,sp.seller_type,sp.employee_role,sp.document,sp.phone FROM payroll_items i JOIN salespeople sp ON sp.id=i.salesperson_id WHERE i.payroll_run_id=? ORDER BY sp.name`).all(id);run.changes=db().prepare('SELECT id,action,reason,before_json,after_json,user_name,created_at FROM payroll_run_changes WHERE payroll_run_id=? ORDER BY id DESC').all(id);return run;},
+    updatePayrollItem(id,{baseSalary,bonusAmount,deductionAmount,notes}){const item=db().prepare('SELECT * FROM payroll_items WHERE id=?').get(id);if(!item)throw new Error('Detalle de nómina no encontrado');const run=db().prepare('SELECT * FROM payroll_runs WHERE id=?').get(item.payroll_run_id);if(run.status!=='borrador')throw new Error('Solo se modifica una nómina en borrador');const base=baseSalary==null||baseSalary===''?item.base_salary:money(baseSalary),bonus=money(bonusAmount),deduction=money(deductionAmount),net=money(base+item.commission_amount+bonus-deduction);db().prepare('UPDATE payroll_items SET base_salary=?,bonus_amount=?,deduction_amount=?,net_amount=?,notes=? WHERE id=?').run(base,bonus,deduction,net,text(notes,300),id);recalcPayroll(item.payroll_run_id);return true;},
     approvePayroll(id,userId,userName){const run=this.getPayrollById(id);if(!run)throw new Error('Nómina no encontrada');if(run.status!=='borrador')throw new Error('Solo se aprueba una nómina en borrador');if(run.net_total<=0)throw new Error('La nómina no tiene monto pagable');db().prepare("UPDATE payroll_runs SET status='aprobado',approved_by=?,approved_at=datetime('now','localtime') WHERE id=?").run(userId,id);db().prepare("UPDATE seller_commission_runs SET payroll_run_id=? WHERE status='aprobado' AND payroll_run_id IS NULL AND frequency=? AND salesperson_id IN (SELECT salesperson_id FROM payroll_items WHERE payroll_run_id=?) AND date_to BETWEEN ? AND ?").run(id,run.frequency||'mensual',id,run.date_from,run.date_to);audit(userId||0,userName||'','nomina_aprobada','payroll_runs',id,run.number);return true;},
     payPayroll(id,data,userId,userName){
       const run=this.getPayrollById(id);if(!run)throw new Error('Nómina no encontrada');if(run.status!=='aprobado')throw new Error('La nómina debe estar aprobada antes de pagar');
-      return db().transaction(()=>{const refs=[];const catId=expensesRepo.ensureCategory('Pago de nómina','Personal');for(const item of run.items){if(item.net_amount<=0)continue;const expenseId=expensesRepo.create({type:'gasto',category_id:catId,description:`Nómina ${run.number} · ${item.salesperson_name}`,amount:item.net_amount,total:item.net_amount,payment_method:data.payment_method||'efectivo',payment_source:data.payment_source||'caja_chica',cash_session_id:data.cash_session_id||null,issue_date:isoDate(data.payment_date),notes:`Salario RD$${item.base_salary}; comisión RD$${item.commission_amount}; bonos RD$${item.bonus_amount}; deducciones RD$${item.deduction_amount}`,user_id:userId,status:'pendiente_pago'});db().prepare("INSERT INTO seller_expense_links(salesperson_id,expense_id,expense_kind) VALUES(?,?,'nomina')").run(item.salesperson_id,expenseId);const pay=expensesRepo.pay({expenseId,amount:item.net_amount,payment_method:data.payment_method||'efectivo',payment_source:data.payment_source||'caja_chica',cash_session_id:data.cash_session_id||null,reference:data.reference||run.number,userId,userName});db().prepare('UPDATE payroll_items SET expense_id=? WHERE id=?').run(expenseId,item.id);refs.push({expenseId,paymentId:pay.paymentId});}
+      return db().transaction(()=>{const refs=issuePayrollPayments(run,data,userId,userName);
         db().prepare("UPDATE payroll_runs SET status='pagado',payment_date=?,payment_method=?,payment_source=?,payment_reference=?,receipt_notes=CASE WHEN ?!='' THEN ? ELSE receipt_notes END,paid_by=?,paid_at=datetime('now','localtime') WHERE id=?").run(isoDate(data.payment_date),text(data.payment_method,40),text(data.payment_source,40),text(data.reference,120),text(data.receipt_notes,500),text(data.receipt_notes,500),userId,id);db().prepare("UPDATE seller_commission_runs SET status='pagado' WHERE payroll_run_id=? AND status='aprobado'").run(id);audit(userId||0,userName||'','nomina_pagada','payroll_runs',id,`${run.number} · RD$${run.net_total}`);return refs;})();
     },
     quickPayPayroll(data,userId,userName){
@@ -601,6 +713,105 @@ function createSalespeopleRepo({ getDb, expensesRepo, audit }) {
         this.approvePayroll(id,userId,userName);
         const refs=this.payPayroll(id,{payment_date:data.payment_date,payment_method:data.payment_method,payment_source:data.payment_source,cash_session_id:data.cash_session_id,reference:data.reference,receipt_notes:data.receipt_notes},userId,userName);
         return {id,refs};
+      })();
+    },
+    // Aprobada pero sin pagar: vuelve a borrador para poder ajustarla. Las
+    // comisiones se sueltan y se vuelven a enlazar al aprobar de nuevo.
+    reopenPayroll(id, reason, userId, userName) {
+      return db().transaction(() => {
+        const run = this.getPayrollById(id);
+        if (!run) throw new Error('Nómina no encontrada');
+        if (run.status !== 'aprobado') throw new Error('Solo se devuelve a borrador una nómina aprobada que todavía no se ha pagado');
+        const before = payrollSnapshot(run);
+        db().prepare("UPDATE payroll_runs SET status='borrador',approved_by=NULL,approved_at=NULL WHERE id=?").run(id);
+        db().prepare("UPDATE seller_commission_runs SET payroll_run_id=NULL WHERE payroll_run_id=? AND status='aprobado'").run(id);
+        logPayrollChange(id, 'reabierta', text(reason,300) || 'Devuelta a borrador para ajustes', before, payrollSnapshot(this.getPayrollById(id)), userId, userName);
+        audit(userId||0,userName||'','nomina_reabierta','payroll_runs',id,run.number);
+        return true;
+      })();
+    },
+    // Corrige una nómina ya pagada. Si cambian montos, fecha, método u origen,
+    // el pago anterior se anula (con su reverso) y se emite el correcto; si solo
+    // cambia la referencia o la nota del recibo, se actualiza sin mover dinero.
+    modifyPayroll(id, data, userId, userName) {
+      const reason = text(data?.reason, 300);
+      if (!reason) throw new Error('Indica el motivo de la corrección');
+      return db().transaction(() => {
+        const run = this.getPayrollById(id);
+        if (!run) throw new Error('Nómina no encontrada');
+        if (run.status !== 'pagado') throw new Error('Solo se corrige así una nómina pagada');
+        const changes = Array.isArray(data.items) ? data.items : [];
+        const nextItems = run.items.map(item => {
+          const change = changes.find(x => Number(x.id) === Number(item.id)) || {};
+          const base = change.base_salary == null || change.base_salary === '' ? item.base_salary : money(change.base_salary);
+          const bonus = change.bonus_amount == null || change.bonus_amount === '' ? item.bonus_amount : money(change.bonus_amount);
+          const deduction = change.deduction_amount == null || change.deduction_amount === '' ? item.deduction_amount : money(change.deduction_amount);
+          const net = round2(base + Number(item.commission_amount || 0) + bonus - deduction);
+          if (net < 0) throw new Error(`${item.salesperson_name}: la deducción es mayor que lo que recibe`);
+          return { ...item, base_salary: base, bonus_amount: bonus, deduction_amount: deduction, net_amount: net };
+        });
+        const paymentDate = data.payment_date ? isoDate(data.payment_date) : run.payment_date;
+        const method = text(data.payment_method, 40) || run.payment_method || 'efectivo';
+        const source = text(data.payment_source, 40) || run.payment_source || 'caja_chica';
+        const reference = data.reference == null ? (run.payment_reference || '') : text(data.reference, 120);
+        const receiptNotes = data.receipt_notes == null ? (run.receipt_notes || '') : text(data.receipt_notes, 500);
+        const changedIds = new Set(nextItems.filter((item, index) => ['base_salary','bonus_amount','deduction_amount']
+          .some(key => Math.abs(Number(item[key]) - Number(run.items[index][key])) > 0.004)).map(item => Number(item.id)));
+        const amountsChanged = changedIds.size > 0;
+        const paymentChanged = paymentDate !== run.payment_date || method !== (run.payment_method || '') || source !== (run.payment_source || '');
+        if (!amountsChanged && !paymentChanged && reference === (run.payment_reference || '') && receiptNotes === (run.receipt_notes || '')) {
+          throw new Error('No hay cambios para guardar');
+        }
+        const before = payrollSnapshot(run);
+        let cancelledExpenseIds = [];
+        let refs = [];
+        if (amountsChanged || paymentChanged) {
+          if (round2(nextItems.reduce((sum, item) => sum + item.net_amount, 0)) <= 0) {
+            throw new Error('La nómina corregida quedaría en cero. Anúlala en vez de corregirla.');
+          }
+          if (source === 'caja' && !data.cash_session_id) throw new Error('No hay caja abierta para registrar el pago corregido');
+          // Cambiar fecha, método u origen afecta a todos los pagos; cambiar
+          // montos solo a los colaboradores corregidos. Los demás no se tocan.
+          const affected = item => paymentChanged || changedIds.has(Number(item.id));
+          cancelledExpenseIds = cancelPayrollExpenses({ ...run, items: run.items.filter(affected) },
+            `Corrección de nómina ${run.number}: ${reason}`, userId, userName);
+          const update = db().prepare('UPDATE payroll_items SET base_salary=?,bonus_amount=?,deduction_amount=?,net_amount=?,expense_id=NULL WHERE id=?');
+          nextItems.filter(affected).forEach(item => update.run(item.base_salary, item.bonus_amount, item.deduction_amount, item.net_amount, item.id));
+          recalcPayroll(id);
+          db().prepare('UPDATE payroll_runs SET revision=revision+1 WHERE id=?').run(id);
+          const fresh = this.getPayrollById(id);
+          refs = issuePayrollPayments({ ...fresh, items: fresh.items.filter(affected) }, { payment_date: paymentDate, payment_method: method,
+            payment_source: source, cash_session_id: data.cash_session_id || null, reference: reference || run.number }, userId, userName);
+        }
+        db().prepare(`UPDATE payroll_runs SET payment_date=?,payment_method=?,payment_source=?,payment_reference=?,receipt_notes=? WHERE id=?`)
+          .run(paymentDate, method, source, reference, receiptNotes, id);
+        const after = this.getPayrollById(id);
+        logPayrollChange(id, 'corregida', reason, before, payrollSnapshot(after), userId, userName);
+        audit(userId||0,userName||'','nomina_corregida','payroll_runs',id,
+          `${run.number} · RD$${run.net_total} → RD$${after.net_total} · ${reason}`);
+        return { cancelledExpenseIds, refs };
+      })();
+    },
+    // Anula una nómina en cualquier estado. Si estaba pagada, sus gastos se
+    // anulan (la caja abierta recibe el reverso) y las comisiones vuelven a
+    // quedar aprobadas para pagarse en otra nómina.
+    cancelPayroll(id, reason, userId, userName) {
+      const motive = text(reason, 300);
+      if (!motive) throw new Error('Indica el motivo de la anulación');
+      return db().transaction(() => {
+        const run = this.getPayrollById(id);
+        if (!run) throw new Error('Nómina no encontrada');
+        if (run.status === 'anulado') throw new Error('Esta nómina ya está anulada');
+        const before = payrollSnapshot(run);
+        const cancelledExpenseIds = run.status === 'pagado'
+          ? cancelPayrollExpenses(run, `Nómina ${run.number} anulada: ${motive}`, userId, userName)
+          : [];
+        db().prepare("UPDATE seller_commission_runs SET status='aprobado',payroll_run_id=NULL WHERE payroll_run_id=? AND status IN ('aprobado','pagado')").run(id);
+        db().prepare("UPDATE payroll_runs SET status='anulado',cancel_reason=?,cancelled_by=?,cancelled_at=datetime('now','localtime') WHERE id=?")
+          .run(motive, userId || null, id);
+        logPayrollChange(id, 'anulada', motive, before, payrollSnapshot(this.getPayrollById(id)), userId, userName);
+        audit(userId||0,userName||'','nomina_anulada','payroll_runs',id,`${run.number} · RD$${run.net_total} · ${motive}`);
+        return { cancelledExpenseIds, wasPaid: run.status === 'pagado' };
       })();
     },
   };
