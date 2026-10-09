@@ -401,7 +401,7 @@
     const stockRisk = products.filter(x => Number(x.stock || 0) <= Number(x.stock_min || 5)).length;
     const sales = (db.sales || []).filter(x => x.status !== 'cancelled' && x.type !== 'devolucion' && x.type !== 'cotizacion');
     const salesTotal = sales.reduce((sum,x) => sum + Number(x.total || 0), 0);
-    const receivable = (db.customers || []).reduce((sum,x) => sum + Math.max(0,Number(x.balance || 0)), 0);
+    const receivable = [...(db.customers || []), ...(db.walkInPurchases || [])].reduce((sum,x) => sum + Math.max(0,Number(x.balance || 0)), 0);
     const severe = items.filter(x => x.priority === 1).length;
     const medium = items.filter(x => x.priority === 2).length;
     const score = Math.max(35, Math.min(100, 100 - severe * 12 - medium * 5 - Math.min(stockRisk,10)));

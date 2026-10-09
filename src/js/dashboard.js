@@ -234,7 +234,7 @@ async function renderDash(el) {
     return true;
   });
   const creditAlerts = getCreditAlerts();
-  const pendCredit = DB.customers.reduce((a, c) =>
+  const pendCredit = [...DB.customers, ...(DB.walkInPurchases || [])].reduce((a, c) =>
     a + (c.id !== 1 ? (c.balance || 0) : 0), 0);
   const totalClients = DB.customers.filter(c => c.id !== 1 && c.active !== 0).length;
 

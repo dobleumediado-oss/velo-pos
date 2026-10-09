@@ -2568,6 +2568,11 @@ const MIGRATIONS = [
       console.log('[MIGRATION 1.51.1-sale-cancellation-payments] Destino de abonos trazable listo');
     }
   },
+  {
+    version: '1.54.2-walk-in-credit',
+    description: 'Compras de paso con abono y saldo exclusivo por factura',
+    run(db) { require('./lib/walk-in-credit').ensureWalkInCreditSchema(db); },
+  },
 ];
 
 // ══════════════════════════════════════════════

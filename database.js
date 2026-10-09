@@ -90,6 +90,7 @@ function initDB(customDataDir) {
   migrateV2IdentityColumns();   // Fase 1 migración v2 (identidad real Equiparts)
   backupBeforeHistoricalNumberContinuation();
   migrateDocumentNumbering();   // Secuencias internas independientes por tipo documental
+  require('./lib/walk-in-credit').ensureWalkInCreditSchema(db);
   migrateCustomerCompanies();   // Personas, empresas, representantes y snapshots
   migrateSalesWorkflowEnhancements(); // Teléfonos múltiples, cargos, USD y fecha documental
   migrateServiceWorkshopEnhancements(); // Taller: ocasionales, anticipos, retiro, abandono y garantías por partida
@@ -3534,7 +3535,7 @@ function normalizeCustomerType(value) {
 function assertUniqueCustomerDocument(rnc, excludeId = null) {
   const digits = String(rnc || '').replace(/\D/g, '');
   if (!digits) return;
-  const rows = db.prepare(`SELECT id,rnc,name FROM customers WHERE active=1 AND (? IS NULL OR id<>?)`).all(excludeId, excludeId);
+  const rows = db.prepare(`SELECT id,rnc,name FROM customers WHERE active=1 AND is_walk_in=0 AND (? IS NULL OR id<>?)`).all(excludeId, excludeId);
   const duplicate = rows.find(row => String(row.rnc || '').replace(/\D/g, '') === digits);
   if (duplicate) throw new Error(`Ese RNC/Cédula ya pertenece a ${duplicate.name}`);
 }
@@ -3835,8 +3836,25 @@ function customerRelationsIndex() {
 }
 
 const customersRepo = {
+  getWalkInPurchases() {
+    return db.prepare(`
+      SELECT c.*,s.id AS sale_id,s.document_number_fmt,s.numero_factura_fmt,
+             s.total,s.created_at AS sale_created_at,s.status AS sale_status,s.walk_in_due_date
+      FROM customers c JOIN sales s ON s.customer_id=c.id
+      WHERE c.is_walk_in=1 AND c.active=1 AND s.is_walk_in_credit=1
+      ORDER BY s.id DESC
+    `).all();
+  },
+  promoteWalkIn(id) {
+    const customer = this.getById(id);
+    if (!customer || !customer.is_walk_in) throw new Error('Compra de paso no encontrada');
+    assertUniqueCustomerDocument(customer.rnc, id);
+    // Convertir el contacto no le concede una línea de crédito para compras nuevas.
+    db.prepare('UPDATE customers SET is_walk_in=0,credit_limit=0 WHERE id=?').run(id);
+    return this.getById(id);
+  },
   getAll() {
-    const rows = db.prepare('SELECT * FROM customers WHERE active=1 ORDER BY name').all();
+    const rows = db.prepare('SELECT * FROM customers WHERE active=1 AND is_walk_in=0 ORDER BY name').all();
     if (!rows.length) return rows;
     const index = customerRelationsIndex();
     return rows.map(customer => ({
@@ -4412,7 +4430,7 @@ const customersRepo = {
     }
 
     const customer = db.prepare(
-      'SELECT id,balance,credit_due,credit_days FROM customers WHERE id=?'
+      'SELECT id,balance,credit_due,credit_days,is_walk_in FROM customers WHERE id=?'
     ).get(payment.customer_id);
     if (!customer) throw new Error('El cliente del abono ya no existe');
 
@@ -4463,7 +4481,10 @@ const customersRepo = {
     let restoredBalance = round2(currentBalance + Number(payment.amount || 0));
     let reconciledFromDocuments = false;
     let restoredDue = customer.credit_due || null;
-    if (!restoredDue && relatedSaleIds.length) {
+    if (customer.is_walk_in) {
+      restoredDue = db.prepare('SELECT walk_in_due_date FROM sales WHERE customer_id=? AND is_walk_in_credit=1 ORDER BY id LIMIT 1').get(customer.id)?.walk_in_due_date || null;
+    }
+    if (!customer.is_walk_in && !restoredDue && relatedSaleIds.length) {
       const placeholders = relatedSaleIds.map(() => '?').join(',');
       const oldest = db.prepare(`
         SELECT COALESCE(s.sale_date,date(s.created_at)) AS sale_date
@@ -4687,12 +4708,12 @@ const customersRepo = {
     return { id, name: cust.name, balance: cust.balance || 0 };
   },
   deleteAll() {
-    const rows = db.prepare(`SELECT id,balance FROM customers WHERE active=1 AND id != 1`).all();
+    const rows = db.prepare(`SELECT id,balance FROM customers WHERE active=1 AND id != 1 AND is_walk_in=0`).all();
     const totalBalance = rows.reduce((s, r) => s + (r.balance || 0), 0);
     db.transaction(() => {
-      db.prepare(`UPDATE customer_contacts SET active=0,is_primary=0,updated_at=datetime('now','localtime') WHERE customer_id IN (SELECT id FROM customers WHERE active=1 AND id != 1)`).run();
-      db.prepare(`UPDATE customer_phones SET active=0,is_primary=0,updated_at=datetime('now','localtime') WHERE customer_id IN (SELECT id FROM customers WHERE active=1 AND id != 1)`).run();
-      db.prepare(`UPDATE customers SET active=0,updated_at=datetime('now') WHERE active=1 AND id != 1`).run();
+      db.prepare(`UPDATE customer_contacts SET active=0,is_primary=0,updated_at=datetime('now','localtime') WHERE customer_id IN (SELECT id FROM customers WHERE active=1 AND id != 1 AND is_walk_in=0)`).run();
+      db.prepare(`UPDATE customer_phones SET active=0,is_primary=0,updated_at=datetime('now','localtime') WHERE customer_id IN (SELECT id FROM customers WHERE active=1 AND id != 1 AND is_walk_in=0)`).run();
+      db.prepare(`UPDATE customers SET active=0,updated_at=datetime('now') WHERE active=1 AND id != 1 AND is_walk_in=0`).run();
     })();
     return { count: rows.length, totalBalance };
   },
@@ -5319,6 +5340,10 @@ function saleOperationFingerprint({ customer, items, payment, type }) {
       } : null,
     },
   };
+  if (payment?.walkInCredit) canonical.walkInCredit = {
+    enabled: true, dueDate: String(payment.walkInDueDate || ''),
+    phone: String(customer?.phone || '').trim(),
+  };
   return crypto.createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
 }
 
@@ -5354,6 +5379,7 @@ function saleConfirmationResult(sale, { idempotent = false } = {}) {
     : null;
   return {
     saleId: Number(sale.id),
+    customerId: Number(sale.customer_id),
     total: Number(sale.total || 0),
     subtotal: Number(sale.subtotal || 0),
     taxAmt: Number(sale.tax_amt || 0),
@@ -5770,6 +5796,7 @@ const salesRepo = {
         throw new Error('Tipo de documento de venta no soportado');
       }
       payment = { ...(payment || {}) };
+      const walkInCredit = require('./lib/walk-in-credit').validateWalkInCredit(customer, payment, type);
       // Una cotización es un documento comercial: no cobra, no crea CxC, no
       // utiliza una cuenta financiera y no depende del estado de la caja.
       if (type === 'cotizacion') payment.method = 'cotizacion';
@@ -5879,6 +5906,7 @@ const salesRepo = {
       if (requestedCustomerId !== 1) {
         const account = db.prepare('SELECT * FROM customers WHERE id=? AND active=1').get(requestedCustomerId);
         if (!account) throw new Error('Cliente no encontrado o inactivo');
+        if (account.is_walk_in) throw new Error('Esta cuenta solo admite abonos a su compra de paso; no puede usarse para otra venta');
         const contactId = Number(requestedCustomer.contact_id || requestedCustomer.contact?.id) || null;
         if (contactId) {
           const storedContact = db.prepare(`
@@ -5963,6 +5991,13 @@ const salesRepo = {
         };
         selectedCustomerPhoneType = ['telefono','celular','flota'].includes(selectedCustomerPhoneType)
           ? selectedCustomerPhoneType : 'telefono';
+      }
+
+      if (walkInCredit) {
+        // Nace dentro de la venta: un fallo revierte también esta cuenta mínima.
+        const result = db.prepare(`INSERT INTO customers(name,phone,rnc,is_walk_in,credit_limit)
+          VALUES(?,?,?,1,0)`).run(customer.name, customer.phone.slice(0,80), customer.rnc);
+        customer.id = Number(result.lastInsertRowid);
       }
 
       // ¿Esta venta afecta inventario? (descuenta stock). Una sola fuente de
@@ -6303,7 +6338,9 @@ const salesRepo = {
         `).get(user?.id);
         if (!creditUser?.active) throw new Error('El usuario de caja ya no está activo');
         assertCreditPermission(creditUser, creditExposure);
-        if (cust.credit_limit <= 0) {
+        // Una compra de paso no abre ni aumenta una línea de crédito general.
+        // Su único saldo válido es el pendiente de esta factura.
+        if (!walkInCredit && cust.credit_limit <= 0) {
           const requiredLimit = round2(Math.max(0, Number(cust.balance) || 0) + creditExposure);
           const cashierThreshold = Math.max(0,
             Number(settingsRepo.get('pos_cashier_auto_credit_limit_amount')) || 0
@@ -6325,7 +6362,7 @@ const salesRepo = {
           cust.credit_limit = requiredLimit;
           autoCreditLimitAssigned = requiredLimit;
         }
-        if (cust.balance + creditExposure > cust.credit_limit) {
+        if (!walkInCredit && cust.balance + creditExposure > cust.credit_limit) {
           throw new Error(`Límite de crédito excedido. Disponible: ${(cust.credit_limit - cust.balance).toFixed(2)}`);
         }
       }
@@ -6750,6 +6787,10 @@ const salesRepo = {
         );
       }
 
+      if (walkInCredit) {
+        db.prepare('UPDATE sales SET is_walk_in_credit=1,walk_in_due_date=? WHERE id=?')
+          .run(payment.walkInDueDate || null, saleId);
+      }
       // 7. Actualizar crédito del cliente
       let initialPaymentId = null;
       let outstandingBalance = 0;
@@ -6758,7 +6799,7 @@ const salesRepo = {
         const debtBeforeInitial = round2((ci.balance || 0) + amountDue);
         const newBalance = round2(debtBeforeInitial - initialPaymentAmount);
         outstandingBalance = round2(amountDue - initialPaymentAmount);
-        const dueDate = ci.credit_due && ci.credit_due >= todayStr()
+        const dueDate = walkInCredit ? (payment.walkInDueDate || null) : ci.credit_due && ci.credit_due >= todayStr()
           ? ci.credit_due
           : addDaysStr(todayStr(), ci.credit_days || 30);
         db.prepare(`
@@ -6959,7 +7000,7 @@ const salesRepo = {
       }
 
       return {
-        saleId, total, subtotal, taxAmt, discAmt, taxPct, ncf,
+        saleId, customerId: customer.id, total, subtotal, taxAmt, discAmt, taxPct, ncf,
         documentKind,
         documentNumber: documentIssue.sequence_number,
         documentNumberFmt: documentIssue.formatted_number,
@@ -13416,7 +13457,7 @@ const crmRepo = {
   overview() {
     const customers = db.prepare(
       `SELECT id, name, trade_name, customer_type, balance, credit_limit, status
-         FROM customers WHERE active=1`
+         FROM customers WHERE active=1 AND is_walk_in=0`
     ).all();
 
     const agg = db.prepare(`
@@ -13899,7 +13940,7 @@ const crmRepo = {
     const now = Date.now();
     const customers = db.prepare(
       `SELECT id, name, trade_name, customer_type, phone, balance, credit_due, status
-         FROM customers WHERE active=1`
+         FROM customers WHERE active=1 AND is_walk_in=0`
     ).all();
     const agg = db.prepare(`
       SELECT customer_id AS id, COUNT(*) AS freq, MAX(created_at) AS last_sale,

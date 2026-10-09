@@ -122,6 +122,17 @@ function createHarness(addPayment, options = {}) {
     document_number_fmt: 'ABO-000501',
     allocations: [],
   }));
+  const walkIn = createHarness(async () => ({
+    ok:true,paymentId:900,amount:100,before:200,after:100,document_number_fmt:'ABO-000900',allocations:[],
+  }));
+  walkIn.context.DB.customers = [];
+  walkIn.context._walkInPaymentCustomer = {id:77,name:'COMPRADOR DE PASO',phone:'8095550000',balance:200,is_walk_in:1};
+  await walkIn.context.registrarAbono(77,200,null);
+  ok(walkIn.printed.length === 1 && walkIn.printed[0].customer.name === 'COMPRADOR DE PASO',
+    'el abono de paso imprime el comprador sin agregarlo al directorio habitual');
+  ok(walkIn.context._walkInPaymentCustomer.balance === 100 && walkIn.context.DB.customers.length === 0,
+    'el abono actualiza solo la cuenta de la compra de paso');
+
   const latestFirst = success.context.cliSortLatestFirst([
     { id: 3, created_at: '2026-08-24 10:00:00' },
     { id: 1, created_at: '2024-07-10 09:00:00' },

@@ -3300,11 +3300,20 @@ function openCobroModal(inv) {
 
     <!-- Crédito -->
     <div id="cbr-cred" style="display:${!isQuote && inv.pmeth==='credito' ? 'block' : 'none'}">
+      ${!(inv.cliId && inv.cliId !== 1) && !inv.checkoutOrderId && !inv.substitutesSaleId && !inv.reuseNcfOfSaleId ? `
+      <label class="lbl" style="margin:10px 0"><input type="checkbox" id="cbr-walk-in"
+        ${inv.walkInCredit ? 'checked' : ''} onchange="currentInv().walkInCredit=this.checked"/>
+        Saldo pendiente de esta compra (comprador de paso)</label>
+      <div class="ts">Escribe el nombre del comprador arriba. El teléfono es opcional. No se agrega al directorio de clientes habituales.</div>
+      <label class="lbl" style="margin-top:8px">Fecha acordada de pago (opcional)</label>
+      <input class="inp" id="cbr-walk-in-due" type="date" value="${posEscHtml(inv.walkInDueDate || '')}"
+        onchange="currentInv().walkInDueDate=this.value"/>
+      ` : ''}
       <div class="alrt a" style="margin-bottom:10px">
         <div class="alrt-dot a"></div>
         <div>
           <div class="alrt-title">Venta a crédito</div>
-          <div class="alrt-sub">Requiere un cliente registrado. El pago inicial entra a Caja como un abono de esta factura.
+          <div class="alrt-sub">Selecciona un cliente habitual o activa el saldo de compra de paso. El pago inicial entra a Caja como un abono de esta factura.
             ${userCreditLimit > 0 ? `<br><strong>Tope de este usuario: ${fmt(userCreditLimit)} por factura.</strong>` : ''}
             ${user?.role === 'cajero' ? `<br>Si el cliente no tiene límite, puedes asignarle hasta <strong>${fmt(cashierAutoCreditLimit)}</strong> sin autorización.` : '<br>Si el cliente no tiene límite, se asignará automáticamente el saldo de esta venta.'}
           </div>
@@ -4288,6 +4297,8 @@ async function finalizarVenta() {
     ? 'cotizacion'
     : (document.getElementById('cbr-pmeth')?.value || 'efectivo');
   const currentTotal = _posAmountDue(inv);
+  const walkInCredit = !isQuote && pmeth === 'credito' && !!document.getElementById('cbr-walk-in')?.checked;
+  const walkInDueDate = document.getElementById('cbr-walk-in-due')?.value || '';
   if (!isQuote && pmeth === 'credito') {
     const resolvedPayment = cbrConvertCoveredCreditToCash(currentTotal);
     if (resolvedPayment.error) return;
@@ -4437,12 +4448,16 @@ async function finalizarVenta() {
       toast('Este usuario no tiene permiso para realizar ventas a crédito', 'w');
       return;
     }
-    if (!(inv.cliId && inv.cliId !== 1)) {
+    if (!walkInCredit && !(inv.cliId && inv.cliId !== 1)) {
       toast('Selecciona un cliente registrado para realizar una venta a crédito', 'w');
       return;
     }
     if (initialPaymentAmount < 0 || initialPaymentAmount >= currentTotal - 0.005) {
       toast('El pago inicial debe ser menor que el total; si paga todo usa una venta al contado', 'w');
+      return;
+    }
+    if (walkInCredit && (!cliName || /^consumidor final$/i.test(cliName) || !(initialPaymentAmount > 0))) {
+      toast('Escribe el nombre del comprador y un abono inicial mayor a cero', 'w');
       return;
     }
     const userCreditLimit = _posUserCreditLimit();
@@ -4454,7 +4469,8 @@ async function finalizarVenta() {
       toast(`El monto que quedará a crédito (${fmt(pendingCredit)}) supera tu límite de ${fmt(userCreditLimit)}`, 'w');
       return;
     }
-    const creditCustomer = (DB.customers || []).find(customer => Number(customer.id) === Number(inv.cliId));
+    const creditCustomer = walkInCredit ? { id: 1, name: cliName, credit_limit: 0, balance: 0 }
+      : (DB.customers || []).find(customer => Number(customer.id) === Number(inv.cliId));
     const requestedCustomerLimit = Math.round(
       ((Number(creditCustomer?.balance) || 0) + pendingCredit) * 100
     ) / 100;
@@ -4597,6 +4613,8 @@ async function finalizarVenta() {
     items,
     payment: {
       method:         pmeth,
+      walkInCredit: pmeth === 'credito' && walkInCredit,
+      walkInDueDate: pmeth === 'credito' && walkInCredit ? walkInDueDate : '',
       disc:           inv.disc || 0,
       discApprovedBy: inv.discApprovedBy || null,
       discountAuthToken: inv.discAuthToken || null,
@@ -4735,7 +4753,7 @@ async function finalizarVenta() {
       time:         new Date().toLocaleTimeString('es-DO',
                       { hour: '2-digit', minute: '2-digit' }),
       type:         inv.itype,
-      clientId:     customer.id,
+      clientId:     result.customerId || customer.id,
       clientName:   savedSale?.customer_name || customer.name || cliName,
       clientCedula: savedSale?.customer_rnc || customer.rnc || cliCedula,
 	      customer_type: savedSale?.customer_type || 'person',
@@ -4820,7 +4838,7 @@ async function finalizarVenta() {
       ...saleForPrint,
       id:              result.saleId,
       type:            inv.itype,
-      customer_id:      customer.id,
+      customer_id:      result.customerId || customer.id,
       customer_name:   savedSale?.customer_name || customer.name || cliName,
       customer_rnc:    savedSale?.customer_rnc || customer.rnc || cliCedula,
       customer_address: savedSale?.customer_address || customer.address || '',

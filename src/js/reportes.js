@@ -542,7 +542,7 @@ function renderReporteContenido(el, d) {
   grid.appendChild(priceCard);
 
   // ── Créditos pendientes ──────────────────────
-  const creditClients = DB.customers.filter(c => c.balance > 0 && c.id !== 1);
+  const creditClients = [...DB.customers, ...(DB.walkInPurchases || [])].filter(c => c.balance > 0 && c.id !== 1);
   const totalCredit   = creditClients.reduce((a, c) => a + c.balance, 0);
   const alerts        = getCreditAlerts();
   const alertMap      = {};
@@ -1210,7 +1210,7 @@ function exportReportePDF() {
 
 // ── Exportar PDF créditos ─────────────────────
 function exportReporteCreditoPDF() {
-  const clients  = DB.customers.filter(c => c.balance > 0 && c.id !== 1)
+  const clients  = [...DB.customers, ...(DB.walkInPurchases || [])].filter(c => c.balance > 0 && c.id !== 1)
     .sort((a, b) => b.balance - a.balance);
   const total    = clients.reduce((a, c) => a + (c.balance || 0), 0);
   const alerts   = getCreditAlerts();

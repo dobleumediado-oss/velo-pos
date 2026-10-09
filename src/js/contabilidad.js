@@ -1172,7 +1172,7 @@ async function _printFlujo() {
 // CUENTAS POR COBRAR (CxC)
 // ══════════════════════════════════════════════
 async function _contRenderCxC(el) {
-  const customers = DB.customers || [];
+  const customers = [...(DB.customers || []), ...(DB.walkInPurchases || [])];
   const withCredit = customers.filter(c => (c.balance || 0) > 0);
 
   const hdr = h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' } },
@@ -1206,12 +1206,12 @@ async function _contRenderCxC(el) {
     )),
     h('tbody', null, ...withCredit.map(c =>
       h('tr', null,
-        h('td', null, c.name),
+        h('td', null, c.is_walk_in ? `${c.name} · Compra de paso ${c.document_number_fmt || ''}` : c.name),
         h('td', null, c.phone || '—'),
-        h('td', null, c.credit_limit > 0 ? fmt(c.credit_limit) : 'Sin límite'),
+        h('td', null, c.is_walk_in ? 'Solo esta factura' : (c.credit_limit > 0 ? fmt(c.credit_limit) : 'Sin límite')),
         h('td', { class: 'num', style: { color: '#ef4444', fontWeight: '600' } }, fmt(c.balance)),
         h('td', null, h('button', { class: 'btn-ghost', style: { fontSize: '11px', padding: '3px 8px' },
-          onclick: () => routeTo('clientes') }, 'Ver'))
+          onclick: () => { if (c.is_walk_in) window._cliTabInicial = 'paso'; routeTo('clientes'); } }, 'Ver'))
       )
     )),
     h('tfoot', null, h('tr', null,
@@ -1229,7 +1229,7 @@ async function _printCxC(customers) {
   const today = new Date().toLocaleDateString('es-DO');
   const total = customers.reduce((s, c) => s + (c.balance||0), 0);
   const rows  = customers.map(c =>
-    `<tr><td>${_esc(c.name)}</td><td>${_esc(c.phone)||'—'}</td><td>${c.credit_limit>0?fmt(c.credit_limit):'—'}</td><td style="text-align:right">${fmt(c.balance)}</td></tr>`
+    `<tr><td>${_esc(c.name)}${c.is_walk_in ? ' · Compra de paso '+_esc(c.document_number_fmt || '') : ''}</td><td>${_esc(c.phone)||'—'}</td><td>${c.is_walk_in?'Solo esta factura':(c.credit_limit>0?fmt(c.credit_limit):'—')}</td><td style="text-align:right">${fmt(c.balance)}</td></tr>`
   ).join('');
   const html = `<html><head><meta charset="UTF-8">
   <style>body{font-family:Arial;font-size:11px;margin:20px}h1{font-size:14px}table{width:100%;border-collapse:collapse}

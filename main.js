@@ -2308,6 +2308,17 @@ ipcMain.handle('products:getPriceHistory', async (_, { productId, limit } = {}) 
 });
 
 // ── Clientes ──────────────────────────────────
+ipcMain.handle('customers:getWalkInPurchases', async () => customersRepo.getWalkInPurchases());
+ipcMain.handle('customers:promoteWalkIn', async (_, { id, requestUserId }) => {
+  try {
+    const actor = authRepo.findById(requestUserId);
+    if (!canManageCustomers(actor)) return { ok: false, error: 'Sin permisos para registrar clientes' };
+    const customer = customersRepo.promoteWalkIn(id);
+    audit(actor.id, actor.name, 'compra_paso_convertida_cliente', 'customers', id, customer.name);
+    return { ok: true, customer };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
 ipcMain.handle('customers:getAll', async () => {
   return customersRepo.getAll();
 });
@@ -3234,7 +3245,7 @@ ipcMain.handle('sales:create', async (_, { saleData, requestUserId }) => {
             `${Number(saleData.payment.disc).toFixed(2)}% autorizado por ${discountApproval.name}`);
     }
     if (!result.idempotent && Number(result.autoCreditLimitAssigned || 0) > 0) {
-      audit(requestUserId, reqUser.name, 'limite_credito_asignado_desde_pos', 'customers', saleData?.customer?.id,
+      audit(requestUserId, reqUser.name, 'limite_credito_asignado_desde_pos', 'customers', result.customerId || saleData?.customer?.id,
             `Límite RD$${Number(result.autoCreditLimitAssigned).toFixed(2)}${creditLimitApproval ? ` autorizado por ${creditLimitApproval.name}` : ''}`);
     }
     // Contabilidad en vivo: asiento de venta (Débito Caja/Banco/CxC · Crédito

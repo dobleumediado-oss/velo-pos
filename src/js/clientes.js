@@ -93,7 +93,7 @@ function renderClientes(el) {
     style: { gridTemplateColumns: 'repeat(4,1fr)', marginBottom: '16px' } });
   [
     { icon: 'users',  color: 'b', label: 'Clientes',      val: clientes.length },
-    { icon: 'dollar', color: 'r', label: 'Total por cobrar', val: fmt(totalDeuda) },
+    { icon: 'dollar', color: 'r', label: 'Por cobrar a habituales', val: fmt(totalDeuda) },
     { icon: 'alert',  color: 'a', label: 'Por vencer',    val: alerts.filter(a=>a.status==='soon').length },
     { icon: 'lock',   color: 'r', label: 'Vencidos',      val: alerts.filter(a=>a.status==='overdue').length },
   ].forEach(m => {
@@ -130,6 +130,7 @@ function renderClientes(el) {
           { k: 'todos',   l: 'Todos' },
           { k: 'personas', l: `Personas (${personas.length})` },
           { k: 'empresas', l: `Empresas (${empresas.length})` },
+          { k: 'paso', l: 'Compras de paso' },
           { k: 'credito', l: `Con Crédito (${conDeuda.length})` },
           { k: 'alertas', l: alerts.length ? `Alertas (${alerts.length})` : 'Alertas' },
         ].map(t => h('button', {
@@ -167,6 +168,7 @@ function renderCliTable() {
   const wrap = document.getElementById('cli-table-wrap');
   if (!wrap) return;
   wrap.innerHTML = '';
+  if (cliTab === 'paso') { renderWalkInPurchases(wrap); return; }
 
   const alerts   = getCreditAlerts();
   const alertMap = {};
@@ -1254,6 +1256,7 @@ async function abonoConfirmWithRecovery(request) {
 }
 
 async function openAbonoModal(c, prefill = null) {
+  window._walkInPaymentCustomer = c.is_walk_in ? c : null;
   const balance   = Number(c.balance || 0);
   const creditDue = c.credit_due || null;
   const contacts  = c.customer_type === 'company'
@@ -1272,7 +1275,7 @@ async function openAbonoModal(c, prefill = null) {
 
   openModal(`
     <div class="modal-title">${prefill ? 'Registrar abono corregido' : 'Registrar Abono'}</div>
-    <div class="modal-sub">${c.name} · Balance: <strong style="color:var(--red)">${fmt(balance)}</strong></div>
+    <div class="modal-sub">${cliEsc(c.name)} · Balance: <strong style="color:var(--red)">${fmt(balance)}</strong></div>
     ${prefill ? `<div class="alrt b" style="margin-bottom:14px">
       <div class="alrt-dot b"></div>
       <div>
@@ -1638,7 +1641,8 @@ async function registrarAbono(clientId, balanceActual, replacesPaymentId = null)
     // El backend ya confirmó el dinero. Reflejarlo inmediatamente en memoria y
     // abrir el display ANTES de cualquier recarga de red: una consulta secundaria
     // lenta nunca debe ocultar el recibo ni dejar al cajero en "Procesando".
-    const customer = DB.customers.find(c => Number(c.id) === Number(clientId));
+    const customer = DB.customers.find(c => Number(c.id) === Number(clientId))
+      || (Number(window._walkInPaymentCustomer?.id) === Number(clientId) ? window._walkInPaymentCustomer : null);
     const payment = {
       id:             result.paymentId || 0,
       customer_id:    clientId,
@@ -1724,6 +1728,7 @@ async function registrarAbono(clientId, balanceActual, replacesPaymentId = null)
         });
       }
       if (typeof page !== 'undefined' && page === 'clientes') {
+        if (customer?.is_walk_in) window._cliTabInicial = 'paso';
         veloRepaint(() => renderClientes(document.getElementById('page')));
       } else if (typeof page !== 'undefined' && page === 'ventas'
           && typeof renderVentasTable === 'function') {
@@ -3026,4 +3031,72 @@ async function toggleFacturaDetalle(idx, saleId, rowEl, customerId) {
       </div>`;
   }
   detailBody.dataset.loaded = 'true';
+}
+
+
+// Cada fila corresponde a una factura, incluso si el comprador repite su nombre.
+let walkInShowHistory = false;
+let walkInRenderRequest = 0;
+async function renderWalkInPurchases(wrap) {
+  const request = ++walkInRenderRequest;
+  wrap.textContent = 'Consultando compras de paso...';
+  try {
+    const rows = await window.api.customers.getWalkInPurchases();
+    if (request !== walkInRenderRequest || !wrap.isConnected || cliTab !== 'paso') return;
+    if (!Array.isArray(rows)) throw new Error('No se pudieron consultar las compras');
+    DB.walkInPurchases = rows;
+    const pending = rows.filter(c => Number(c.balance) > 0.005);
+    const q = searchNorm(cliSearch.trim());
+    const visible = rows.filter(c => (walkInShowHistory || Number(c.balance) > 0.005) &&
+      (!q || matchText([c.name,c.phone,c.document_number_fmt,c.numero_factura_fmt].join(' '), q)));
+    wrap.innerHTML = '';
+    wrap.appendChild(h('div', { class: 'flex', style: { gap:'12px', marginBottom:'14px' } },
+      h('div', { class:'ts' }, `${pending.length} compras pendientes · Por cobrar: ${fmt(pending.reduce((sum,c)=>sum+Number(c.balance),0))}`),
+      h('button', { class:'btn btn-out', onclick:()=>{walkInShowHistory=!walkInShowHistory;renderCliTable();} },
+        walkInShowHistory ? 'Ver solo pendientes' : 'Ver también historial'),
+      h('button', { class:'btn btn-out', onclick:()=>renderCliTable() }, 'Actualizar')));
+    if (!visible.length) { wrap.appendChild(h('div',{class:'ts'},'No hay compras de paso para este filtro.')); return; }
+    const table = h('table', { class:'tbl' });
+    table.appendChild(h('thead', {}, h('tr', {}, ...['Factura / comprador','Total','Pendiente','Fecha acordada','Acciones'].map(t=>h('th',{},t)))));
+    const body = h('tbody');
+    for (const c of visible) {
+      const invoice = { id:c.sale_id,document_number_fmt:c.document_number_fmt,numero_factura_fmt:c.numero_factura_fmt };
+      body.appendChild(h('tr', {},
+        h('td', {}, h('div',{},facturaLabel(invoice)),h('div',{},c.name),h('div',{class:'ts'},c.phone || 'Sin teléfono')),
+        h('td',{},fmt(c.total)),h('td',{},Number(c.balance)>0.005?fmt(c.balance):(c.sale_status==='cancelled'?'Anulada':'Saldada')),
+        h('td',{},c.walk_in_due_date || 'Sin fecha'),
+        h('td',{},h('div',{class:'flex',style:{gap:'6px',flexWrap:'wrap'}},
+          Number(c.balance)>0.005 ? h('button',{class:'btn btn-dark',onclick:()=>openAbonoModal(c)},'Abonar') : null,
+          h('button',{class:'btn btn-out',onclick:()=>openDetalleVentaModal({id:c.sale_id})},'Factura'),
+          h('button',{class:'btn btn-out',onclick:()=>walkInPaymentHistory(c)},'Abonos'),
+          ['admin','superadmin'].includes(user?.role) ? h('button',{class:'btn btn-out',onclick:()=>walkInPromote(c)},'Registrar como cliente') : null))));
+    }
+    table.appendChild(body);wrap.appendChild(h('div',{style:{overflowX:'auto'}},table));
+  } catch(e) {
+    if (request !== walkInRenderRequest || !wrap.isConnected || cliTab !== 'paso') return;
+    wrap.textContent = e.message || 'No se pudieron consultar las compras de paso';
+    wrap.appendChild(h('button',{class:'btn',onclick:()=>renderCliTable()},'Reintentar'));
+  }
+}
+async function walkInPaymentHistory(c) {
+  try {
+    const payments = await window.api.customers.getPayments({customerId:c.id});
+    window._cliAbonoData = {customer:c,pagos:payments};
+    openModal(`<div class="modal-title">Abonos de ${cliEsc(c.name)}</div>
+      <div class="modal-sub">${cliEsc(facturaLabel({id:c.sale_id,document_number_fmt:c.document_number_fmt,numero_factura_fmt:c.numero_factura_fmt}))}</div>
+      ${payments.map(p=>`<div class="flex" style="justify-content:space-between;margin:12px 0">
+        <span>${cliEsc(reciboLabel(p))} · ${fmt(p.amount)} · ${cliEsc(p.method)}</span>
+        <button class="btn btn-out" onclick="reimprimirAbono(${Number(p.id)})">Ver recibo</button></div>`).join('') || '<div class="ts">Sin abonos.</div>'}
+      <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>`);
+  } catch(e) { toast(e.message || 'No se pudo consultar el historial','err'); }
+}
+async function walkInPromote(c) {
+  if (!confirm(`¿Agregar a ${c.name} al directorio habitual? Se conserva la factura y sus abonos; no se concede crédito adicional.`)) return;
+  try {
+    const r = await window.api.customers.promoteWalkIn({id:c.id,requestUserId:user.id});
+    if (!r?.ok) throw new Error(r?.error || 'No se pudo registrar el cliente');
+    await reloadCustomers();
+    renderClientes(document.getElementById('page'));
+    openClienteModal(r.customer);
+  } catch(e) { toast(e.message,'err'); }
 }

@@ -107,6 +107,8 @@ const api = {
 
   // ── Clientes ──────────────────────────────
   customers: {
+    getWalkInPurchases: () => ipcRenderer.invoke('customers:getWalkInPurchases'),
+    promoteWalkIn: (data) => ipcRenderer.invoke('customers:promoteWalkIn', data),
     getAll:        ()          => ipcRenderer.invoke('customers:getAll'),
     create:        (data)      => ipcRenderer.invoke('customers:create', data),
     update:        (data)      => ipcRenderer.invoke('customers:update', data),

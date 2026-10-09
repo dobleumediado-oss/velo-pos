@@ -307,11 +307,13 @@ async function loadAppData() {
       window.api.salespeople?.getAll
         ? window.api.salespeople.getAll({ status:'activo', commercialOnly:true }).catch(() => ({ok:false,data:[]}))
         : Promise.resolve({ok:false,data:[]}),
+      window.api.customers.getWalkInPurchases?.() || Promise.resolve([]),
     ]).then(results => {
       if (loadGeneration !== appDataLoadGeneration) return;
-      const [customers, sessions, users, payments, sellers] = results;
+      const [customers, sessions, users, payments, sellers, walkIn] = results;
       if (users.status === 'fulfilled') window._cachedUsers = users.value || [];
       if (customers.status === 'fulfilled') DB.customers = customers.value || [];
+      if (walkIn.status === 'fulfilled') DB.walkInPurchases = walkIn.value || [];
       if (sessions.status === 'fulfilled') DB.caja = sessions.value || [];
       if (payments.status === 'fulfilled') {
         DB.payments = payments.value || [];
@@ -365,7 +367,12 @@ async function reloadFinancialAccounts() {
 
 async function reloadCustomers() {
   return _coalesceReload('customers', async () => {
-    DB.customers = await window.api.customers.getAll() || [];
+    const [customers, walkIn] = await Promise.all([
+      window.api.customers.getAll(),
+      window.api.customers.getWalkInPurchases?.() || Promise.resolve([]),
+    ]);
+    DB.customers = customers || [];
+    DB.walkInPurchases = walkIn || [];
     return DB.customers;
   });
 }
