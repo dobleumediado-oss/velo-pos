@@ -2573,6 +2573,11 @@ const MIGRATIONS = [
     description: 'Compras de paso con abono y saldo exclusivo por factura',
     run(db) { require('./lib/walk-in-credit').ensureWalkInCreditSchema(db); },
   },
+  {
+    version: '1.55.0-inventory-count',
+    description: 'Conteo físico masivo en borrador con confirmación por producto e IMEI',
+    run(db) { require('./lib/inventory-count').ensureInventoryCountSchema(db); },
+  },
 ];
 
 // ══════════════════════════════════════════════

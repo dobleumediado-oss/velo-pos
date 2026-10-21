@@ -72,6 +72,7 @@ const {
 } = require('./src/main/pdf-document');
 const { createExcelReportBuffer } = require('./src/main/excel-report');
 const { canManageInventory, canManageCustomers, modulePermission } = require('./lib/user-operational-permissions');
+const inventoryCount = require('./lib/inventory-count');
 const {
   EQUIPARTS_FILES,
   loadEquipartsCsvSet,
@@ -1706,6 +1707,57 @@ ipcMain.handle('products:adjustStock', async (_, { id, qty, type, reason, reques
   } catch (e) {
     return { ok: false, error: e.message };
   }
+});
+
+// Conteo físico: los datos confirmados permanecen en borrador hasta que se
+// valida y aplica el lote completo en una transacción del proceso principal.
+ipcMain.handle('inventoryCount:getDraft', async (_, { requestUserId } = {}) => {
+  try {
+    _inventoryAuthorizedUser(requestUserId);
+    return { ok: true, data: inventoryCount.getDraft(db) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('inventoryCount:start', async (_, { requestUserId } = {}) => {
+  try {
+    _inventoryAuthorizedUser(requestUserId);
+    return { ok: true, data: inventoryCount.startCount(db, requestUserId) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('inventoryCount:confirmLine', async (_, data = {}) => {
+  try {
+    _inventoryAuthorizedUser(data.requestUserId);
+    return { ok: true, data: inventoryCount.confirmLine(db, { ...data, userId: data.requestUserId }) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('inventoryCount:refresh', async (_, { countId, requestUserId } = {}) => {
+  try {
+    _inventoryAuthorizedUser(requestUserId);
+    return { ok: true, data: inventoryCount.refreshCount(db, countId) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('inventoryCount:cancel', async (_, { countId, requestUserId } = {}) => {
+  try {
+    const reqUser = _inventoryAuthorizedUser(requestUserId);
+    const result = db.transaction(() => {
+      const cancelled = inventoryCount.cancelCount(db, countId);
+      audit(requestUserId, reqUser.name, 'conteo_inventario_descartado', 'inventory_counts', countId, 'Borrador descartado');
+      return cancelled;
+    })();
+    return { ok: true, data: result };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('inventoryCount:apply', async (_, { countId, reason, requestUserId } = {}) => {
+  try {
+    const reqUser = _inventoryAuthorizedUser(requestUserId);
+    return { ok: true, data: inventoryCount.applyCount(db, {
+      countId, reason, userId: requestUserId, userName: reqUser.name, audit, accountingRepo,
+    }) };
+  } catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('products:delete', async (_, { id, requestUserId }) => {

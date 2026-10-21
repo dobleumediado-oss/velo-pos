@@ -3339,6 +3339,9 @@ function buildDateFilter(column, { range = 'month', dateFrom = null, dateTo = nu
 const productsRepo = {
   getAll() {
     const hasAccountingEntries = tableExists('accounting_entries');
+    const availableUnit = tableExists('inventory_unit_missing')
+      ? ' AND NOT EXISTS (SELECT 1 FROM inventory_unit_missing im WHERE im.unit_id=pu.id AND im.active=1)'
+      : '';
     const accountingSelect = hasAccountingEntries
       ? `h.accounting_entry_id   AS last_price_change_accounting_entry_id,
              ae.number               AS last_price_change_accounting_number,
@@ -3353,17 +3356,17 @@ const productsRepo = {
     // unidades en stock; para fungibles (auto-repuestos) es el campo numérico.
     const effectiveStockSelect = tableExists('product_units')
       ? `CASE WHEN COALESCE(p.serialized,0)=1
-               THEN COALESCE((SELECT COUNT(*) FROM product_units pu WHERE pu.product_id=p.id AND pu.status='en_stock'),0)
+               THEN COALESCE((SELECT COUNT(*) FROM product_units pu WHERE pu.product_id=p.id AND pu.status='en_stock'${availableUnit}),0)
                ELSE p.stock END      AS effective_stock,`
       : `p.stock AS effective_stock,`;
     // En equipos serializados el costo pertenece a cada IMEI/serial. El modelo
     // puede conservar costo 0 porque cada unidad entra con un valor diferente.
     const effectiveCostSelect = tableExists('product_units')
       ? `CASE WHEN COALESCE(p.serialized,0)=1
-               THEN COALESCE((SELECT AVG(pu.unit_cost) FROM product_units pu WHERE pu.product_id=p.id AND pu.status='en_stock'),p.cost)
+               THEN COALESCE((SELECT AVG(pu.unit_cost) FROM product_units pu WHERE pu.product_id=p.id AND pu.status='en_stock'${availableUnit}),p.cost)
                ELSE p.cost END       AS effective_cost,
          CASE WHEN COALESCE(p.serialized,0)=1
-               THEN COALESCE((SELECT SUM(pu.unit_cost) FROM product_units pu WHERE pu.product_id=p.id AND pu.status='en_stock'),0)
+               THEN COALESCE((SELECT SUM(pu.unit_cost) FROM product_units pu WHERE pu.product_id=p.id AND pu.status='en_stock'${availableUnit}),0)
                ELSE p.stock*p.cost END AS effective_inventory_value,`
       : `p.cost AS effective_cost, p.stock*p.cost AS effective_inventory_value,`;
     return db.prepare(`
@@ -6052,6 +6055,9 @@ const salesRepo = {
           }
           if (!unit) throw new Error(`Selecciona el equipo (IMEI) a vender para "${prod.name}"`);
           if (unit.status !== 'en_stock') throw new Error(`El equipo ${unit.imei || unit.serial || ('#' + unit.id)} ya no está disponible`);
+          if (tableExists('inventory_unit_missing') && db.prepare(
+            'SELECT 1 FROM inventory_unit_missing WHERE unit_id=? AND active=1'
+          ).get(unit.id)) throw new Error(`El equipo ${unit.imei || unit.serial || ('#' + unit.id)} está marcado como faltante`);
           if (usedUnits.has(unit.id)) throw new Error(`El equipo ${unit.imei || unit.serial || ('#' + unit.id)} está repetido en la venta`);
           usedUnits.add(unit.id);
           _unitId = unit.id;
@@ -14161,13 +14167,23 @@ const productUnitsRepo = {
   },
   // Unidades de un producto (opcionalmente filtradas por estado).
   listForProduct(productId, status = null) {
+    const hasMissing = tableExists('inventory_unit_missing');
+    const missing = hasMissing
+      ? 'COALESCE((SELECT active FROM inventory_unit_missing m WHERE m.unit_id=product_units.id),0) AS inventory_missing'
+      : '0 AS inventory_missing';
+    const availableOnly = status === 'en_stock' && hasMissing
+      ? ' AND NOT EXISTS (SELECT 1 FROM inventory_unit_missing m WHERE m.unit_id=product_units.id AND m.active=1)'
+      : '';
     return status
-      ? db.prepare('SELECT * FROM product_units WHERE product_id=? AND status=? ORDER BY id').all(productId, status)
-      : db.prepare('SELECT * FROM product_units WHERE product_id=? ORDER BY id').all(productId);
+      ? db.prepare(`SELECT *,${missing} FROM product_units WHERE product_id=? AND status=?${availableOnly} ORDER BY id`).all(productId, status)
+      : db.prepare(`SELECT *,${missing} FROM product_units WHERE product_id=? ORDER BY id`).all(productId);
   },
   // Unidades en stock (base del stock de un producto serializado).
   countInStock(productId) {
-    return db.prepare("SELECT COUNT(*) n FROM product_units WHERE product_id=? AND status='en_stock'").get(productId).n;
+    const missing = tableExists('inventory_unit_missing')
+      ? ' AND NOT EXISTS (SELECT 1 FROM inventory_unit_missing m WHERE m.unit_id=product_units.id AND m.active=1)'
+      : '';
+    return db.prepare(`SELECT COUNT(*) n FROM product_units WHERE product_id=? AND status='en_stock'${missing}`).get(productId).n;
   },
   // Buscar una unidad por IMEI o serial (venta/garantía por IMEI, R5/R7).
   findByImei(imei) {
@@ -14196,8 +14212,11 @@ const productUnitsRepo = {
   },
   // Marca una unidad como vendida y la enlaza a su venta.
   markSold(unitId, saleId) {
+    const missing = tableExists('inventory_unit_missing')
+      ? ' AND NOT EXISTS (SELECT 1 FROM inventory_unit_missing m WHERE m.unit_id=product_units.id AND m.active=1)'
+      : '';
     return db.prepare(
-      "UPDATE product_units SET status='vendido', sale_id=?, sold_at=datetime('now','localtime') WHERE id=? AND status IN ('en_stock','reservado')"
+      `UPDATE product_units SET status='vendido', sale_id=?, sold_at=datetime('now','localtime') WHERE id=? AND status IN ('en_stock','reservado')${missing}`
     ).run(saleId, unitId).changes;
   },
   applySaleWarranty(unitId, days) {
@@ -14251,7 +14270,11 @@ const productUnitsRepo = {
     ).all(productId);
     const byStatus = { en_stock: 0, reservado: 0, vendido: 0, servicio: 0, devuelto: 0 };
     rows.forEach(r => { byStatus[r.status] = r.n; });
-    return { productId, byStatus, inStock: byStatus.en_stock };
+    const missing = tableExists('inventory_unit_missing')
+      ? db.prepare(`SELECT COUNT(*) n FROM product_units pu JOIN inventory_unit_missing m ON m.unit_id=pu.id
+          WHERE pu.product_id=? AND pu.status='en_stock' AND m.active=1`).get(productId).n
+      : 0;
+    return { productId, byStatus: { ...byStatus, en_stock: byStatus.en_stock - missing, faltante: missing }, inStock: byStatus.en_stock - missing };
   },
   // Marca (o desmarca) un producto como serializado. Solo permite apagarlo si no
   // tiene unidades registradas, para no dejar equipos huérfanos.

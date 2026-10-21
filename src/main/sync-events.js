@@ -29,6 +29,7 @@ const CHANNEL_SCOPES = {
   'products:update':     ['products'],
   'products:delete':     ['products'],
   'products:adjustStock':['products'],
+  'inventoryCount:apply':['products'],
   'purchases:receive':   ['products'],
   // Clientes / cuentas por cobrar.
   'customers:promoteWalkIn': ['customers', 'sales'],

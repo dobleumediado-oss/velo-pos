@@ -12,7 +12,7 @@ let invSearch = '';
 let invCat    = '';
 let invModel  = '';
 let invSort   = 'name';
-let invTab    = 'todos'; // todos | bajo | sin_stock | por_modelo | historial
+let invTab    = 'todos'; // todos | bajo | sin_stock | por_modelo | historial | conteo
 let invPage   = 1;
 let invPageSize = 80;
 // Producto recién guardado: la tabla salta a su página y lo resalta unos
@@ -31,8 +31,14 @@ let invHistLoadedKey = '';
 let invHistToken = 0;
 let invRenderTimer = null;
 let invProductReloadToken = 0;
+let invCountState = null;
+let invCountSearch = '';
+let invCountPage = 1;
+let invCountLoadToken = 0;
+const invCountEdits = new Map();
+let invCountContextKey = '';
 
-const invEsc = s => String(s || '')
+const invEsc = s => String(s ?? '')
   .replace(/&/g, '&amp;')
   .replace(/</g, '&lt;')
   .replace(/>/g, '&gt;')
@@ -186,6 +192,12 @@ function invFocusProduct(productId) {
 }
 
 function renderInventario(el) {
+  const contextKey = `${CFG?.activeBusinessId || CFG?.biz || 'principal'}:${user?.id || ''}`;
+  if (invCountContextKey !== contextKey) {
+    invCountContextKey = contextKey;
+    invCountState = null; invCountEdits.clear(); invCountSearch = ''; invCountPage = 1;
+    if (invTab === 'conteo') invTab = 'todos';
+  }
   el.innerHTML = '';
 
   const prods    = DB.products;
@@ -224,6 +236,20 @@ function renderInventario(el) {
         class: 'btn btn-out btn-sm',
         onclick: openEntradaMercanciaModal,
         html: `${svg('download')} Entrada`
+      }),
+      h('button', {
+        class: 'btn btn-out btn-sm',
+        onclick: () => {
+          if (invTab === 'conteo') return;
+          if (invCountEdits.size) {
+            toast('Confirma las filas editadas antes de abrir otro conteo', 'w');
+            return;
+          }
+          invTab = 'conteo'; invCountState = null; invCountEdits.clear();
+          const page = document.getElementById('page');
+          if (page) renderInventario(page);
+        },
+        html: `${svg('check')} Conteo masivo`
       }),
       h('button', {
         class: 'btn btn-out btn-sm',
@@ -276,10 +302,18 @@ function renderInventario(el) {
           { k: 'sin_stock',  l: `Sin stock (${outStock.length})` },
           { k: 'por_modelo', l: 'Por Modelo' },
           { k: 'historial',  l: `Historial (${changedProducts.length})` },
+          { k: 'conteo',     l: 'Conteo físico' },
         ].map(t => h('button', {
           class: `tab ${invTab === t.k ? 'on' : ''}`,
           'data-tab': t.k,
           onclick: () => {
+            if (invTab === 'conteo' && invCountEdits.size && t.k !== 'conteo') {
+              toast('Confirma o descarta las filas editadas antes de salir del conteo', 'w');
+              return;
+            }
+            if (t.k === 'conteo' && invTab !== 'conteo') {
+              invCountState = null; invCountEdits.clear(); invCountPage = 1;
+            }
             invTab = t.k;
             invPage = 1;
             // Mover el resaltado 'on' al tab activo sin redibujar todo
@@ -349,7 +383,12 @@ function renderInvTable() {
   if (!wrap) return;
   wrap.innerHTML = '';
   const productFilters = document.getElementById('inv-product-filters');
-  if (productFilters) productFilters.style.display = invTab === 'historial' ? 'none' : 'flex';
+  if (productFilters) productFilters.style.display = (invTab === 'historial' || invTab === 'conteo') ? 'none' : 'flex';
+
+  if (invTab === 'conteo') {
+    renderInvCount(wrap);
+    return;
+  }
 
   if (invTab === 'historial') {
     renderInvPriceHistory(wrap);
@@ -546,6 +585,230 @@ function renderInvTable() {
   wrap.appendChild(card);
 }
 
+// ══════════════════════════════════════════════
+// CONTEO FÍSICO MASIVO — BORRADOR SEPARADO DEL STOCK OPERATIVO
+// ══════════════════════════════════════════════
+async function invCountCall(method, data) {
+  try { return await window.api.inventoryCount[method](data); }
+  catch (error) {
+    return { ok: false, error: error?.message === 'SERVER_OFFLINE'
+      ? 'No se pudo confirmar la respuesta del servidor. Recarga Inventario para verificar el estado del conteo antes de intentarlo otra vez.'
+      : (error?.message || 'No se pudo completar la operación') };
+  }
+}
+
+async function renderInvCount(wrap) {
+  if (invCountState === null) {
+    const token = ++invCountLoadToken;
+    wrap.innerHTML = '<div class="card" style="padding:24px">Cargando conteo físico…</div>';
+    const result = await invCountCall('getDraft', { requestUserId: user.id });
+    if (token !== invCountLoadToken || invTab !== 'conteo') return;
+    if (!result.ok) {
+      wrap.innerHTML = `<div class="card" style="padding:24px;color:var(--red)">${invEsc(result.error || 'No se pudo cargar el conteo')}</div>`;
+      return;
+    }
+    invCountState = result.data || { session: null, lines: [] };
+  }
+  paintInvCount(wrap);
+}
+
+function paintInvCount(wrap = document.getElementById('inv-table-wrap')) {
+  if (!wrap || invTab !== 'conteo') return;
+  const session = invCountState?.session;
+  if (!session) {
+    wrap.innerHTML = `<div class="card" style="padding:24px">
+      <h3 style="margin:0 0 8px">Conteo físico masivo</h3>
+      <p style="color:var(--muted);max-width:680px;line-height:1.5">Revisa cada producto y cada IMEI, confirma su cantidad y costo, y aplica todo al finalizar. Mientras el conteo esté en borrador, las ventas y el inventario siguen funcionando normalmente.</p>
+      <button class="btn btn-dark" id="inv-count-start">Iniciar conteo</button>
+    </div>`;
+    wrap.querySelector('#inv-count-start')?.addEventListener('click', async e => {
+      e.currentTarget.disabled = true;
+      const result = await invCountCall('start', { requestUserId: user.id });
+      if (!result.ok) { e.currentTarget.disabled = false; toast(result.error || 'No se pudo iniciar', 'err'); return; }
+      invCountState = result.data; invCountPage = 1; invCountEdits.clear();
+      paintInvCount(wrap);
+    });
+    return;
+  }
+
+  const lines = invCountState.lines || [];
+  const confirmed = lines.filter(line => line.confirmed).length;
+  const changed = lines.filter(line => line.confirmed && (
+    line.unit_id
+      ? Number(line.present) !== (line.snapshot_missing ? 0 : 1) ||
+        (line.present && Number(line.counted_cost) !== Number(line.snapshot_cost))
+      : Number(line.counted_qty) !== Number(line.snapshot_qty) ||
+        Number(line.counted_cost) !== Number(line.snapshot_cost)
+  )).length;
+  const query = searchNorm(invCountSearch);
+  const filtered = lines.filter(line => !query || [
+    line.product_code, line.product_name, line.imei, line.serial,
+  ].some(value => matchText(value || '', query)));
+  const pageSize = 50;
+  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  invCountPage = Math.min(Math.max(1, invCountPage), pages);
+  const start = (invCountPage - 1) * pageSize;
+  const shown = filtered.slice(start, start + pageSize);
+
+  wrap.innerHTML = `<div class="card" style="padding:18px;margin-bottom:14px">
+    <div class="flex" style="justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:start">
+      <div>
+        <h3 style="margin:0 0 5px">Conteo físico #${session.id}</h3>
+        <div style="font-size:12px;color:var(--muted)">${confirmed} de ${lines.length} confirmados · ${changed} con cambios · ${invCountEdits.size} editados sin confirmar</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:7px">Cada fila se guarda al pulsar Confirmar. Si hubo ventas o compras durante el conteo, actualiza y vuelve a confirmar solo las filas que cambiaron.</div>
+      </div>
+      <div class="flex" style="gap:8px;flex-wrap:wrap">
+        <button class="btn btn-out btn-sm" id="inv-count-refresh">Actualizar cambios externos</button>
+        <button class="btn btn-out btn-sm" id="inv-count-discard">Descartar borrador</button>
+        <button class="btn btn-dark btn-sm" id="inv-count-apply" ${confirmed !== lines.length || invCountEdits.size ? 'disabled' : ''}>Aplicar conteo completo</button>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <div style="padding:14px 16px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <input class="inp" id="inv-count-search" style="flex:1;min-width:230px" placeholder="Buscar producto, código o IMEI…" value="${invEsc(invCountSearch)}">
+      <span style="font-size:12px;color:var(--muted)">${filtered.length} fila(s) · Página ${invCountPage} de ${pages}</span>
+      <button class="btn btn-out btn-sm" id="inv-count-prev" ${invCountPage <= 1 ? 'disabled' : ''}>Anterior</button>
+      <button class="btn btn-out btn-sm" id="inv-count-next" ${invCountPage >= pages ? 'disabled' : ''}>Siguiente</button>
+    </div>
+    <div class="tw"><table><thead><tr>
+      <th>Producto / IMEI</th><th>Existencia actual</th><th>Existencia contada</th>
+      <th>Costo unitario</th><th>Valor confirmado</th><th>Estado</th><th></th>
+    </tr></thead><tbody>${shown.map(line => {
+      const edit = invCountEdits.get(line.id);
+      const qty = edit ? edit.qty : line.counted_qty;
+      const cost = edit ? edit.cost : line.counted_cost;
+      const present = edit ? edit.present : !!line.present;
+      const unit = !!line.unit_id;
+      const emptySerial = line.kind === 'empty_serial';
+      const value = Number(cost || 0) * (unit ? (present ? 1 : 0) : Number(qty || 0));
+      const currentQty = unit ? (line.snapshot_missing ? 0 : 1) : line.snapshot_qty;
+      return `<tr data-count-line="${line.id}">
+        <td><strong>${invEsc(line.product_name)}</strong><div style="font-size:11px;color:var(--muted)">${invEsc(line.product_code)}${unit ? ` · IMEI/serial: ${invEsc(line.imei || line.serial || '#' + line.unit_id)}` : ''}</div></td>
+        <td>${currentQty} ${unit ? 'equipo' : invEsc(line.product_unit || 'und')}<div style="font-size:11px;color:var(--muted)">RD$${Number(line.snapshot_cost).toFixed(2)} c/u</div></td>
+        <td>${emptySerial ? '0 · sin equipos en stock' : unit
+          ? `<label style="display:flex;gap:7px;align-items:center"><input type="checkbox" data-count-field="present" ${present ? 'checked' : ''}> ${present ? 'Encontrado' : 'Faltante'}</label>`
+          : `<input class="inp" type="number" min="0" max="100000000" step="1" data-count-field="qty" value="${invEsc(qty)}" style="width:110px">`}</td>
+        <td>${emptySerial ? '—' : `<input class="inp" type="number" min="0" max="1000000000" step="0.01" data-count-field="cost" value="${invEsc(cost)}" ${unit && !present ? 'disabled' : ''} style="width:120px">`}</td>
+        <td>RD$${Number.isFinite(value) ? value.toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}</td>
+        <td>${edit ? '<span class="badge a">Sin confirmar</span>' : line.confirmed ? '<span class="badge g">Confirmado</span>' : '<span class="badge n">Pendiente</span>'}</td>
+        <td><button class="btn btn-out btn-sm" data-count-action="confirm">${line.confirmed ? 'Actualizar' : 'Confirmar'}</button></td>
+      </tr>`;
+    }).join('')}</tbody></table></div>
+  </div>`;
+
+  wrap.querySelector('#inv-count-search')?.addEventListener('input', e => {
+    const position = e.target.selectionStart;
+    invCountSearch = e.target.value; invCountPage = 1;
+    paintInvCount(wrap);
+    const input = wrap.querySelector('#inv-count-search');
+    input?.focus(); input?.setSelectionRange(position, position);
+  });
+  wrap.querySelector('#inv-count-prev')?.addEventListener('click', () => { invCountPage--; paintInvCount(wrap); });
+  wrap.querySelector('#inv-count-next')?.addEventListener('click', () => { invCountPage++; paintInvCount(wrap); });
+  wrap.querySelector('#inv-count-refresh')?.addEventListener('click', async e => {
+    if (invCountEdits.size) { toast('Confirma primero las filas editadas sin guardar', 'w'); return; }
+    const button = e.currentTarget;
+    button.disabled = true;
+    const result = await invCountCall('refresh', { countId: session.id, requestUserId: user.id });
+    if (!result.ok) { button.disabled = false; toast(result.error || 'No se pudo actualizar', 'err'); return; }
+    invCountState = result.data;
+    paintInvCount(wrap);
+    toast(result.data.refreshed
+      ? `${result.data.refreshed} fila(s) requieren nueva confirmación`
+      : 'No hubo cambios externos');
+  });
+  wrap.querySelector('#inv-count-discard')?.addEventListener('click', () => confirmModal(
+    '¿Descartar este conteo? Las existencias y costos seguirán como están.', async () => {
+      const result = await invCountCall('cancel', { countId: session.id, requestUserId: user.id });
+      if (!result.ok) { toast(result.error || 'No se pudo descartar', 'err'); return; }
+      invCountState = { session: null, lines: [] }; invCountEdits.clear(); paintInvCount(wrap);
+      toast('Borrador descartado');
+    }, 'Descartar'
+  ));
+  wrap.querySelector('#inv-count-apply')?.addEventListener('click', openInvCountApplyModal);
+
+  const rememberEdit = row => {
+    const id = Number(row.dataset.countLine);
+    const line = lines.find(item => item.id === id);
+    if (!line) return;
+    const present = line.unit_id ? !!row.querySelector('[data-count-field="present"]')?.checked : true;
+    const qty = line.unit_id ? 1 : row.querySelector('[data-count-field="qty"]')?.value;
+    const cost = present ? row.querySelector('[data-count-field="cost"]')?.value : line.snapshot_cost;
+    invCountEdits.set(id, { qty, cost, present });
+    const badge = row.querySelector('.badge');
+    if (badge) { badge.className = 'badge a'; badge.textContent = 'Sin confirmar'; }
+    const cell = row.children[4];
+    const value = Number(cost) * (line.unit_id ? (present ? 1 : 0) : Number(qty));
+    if (cell) cell.textContent = Number.isFinite(value) && value >= 0
+      ? `RD$${value.toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : 'Valor no válido';
+    const apply = wrap.querySelector('#inv-count-apply');
+    if (apply) apply.disabled = true;
+  };
+  wrap.querySelectorAll('[data-count-line]').forEach(row => {
+    row.querySelectorAll('input').forEach(input => input.addEventListener('input', () => rememberEdit(row)));
+    row.querySelectorAll('input').forEach(input => input.addEventListener('keydown', event => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        row.querySelector('[data-count-action="confirm"]')?.click();
+      }
+    }));
+    row.querySelector('[data-count-field="present"]')?.addEventListener('change', () => {
+      const present = row.querySelector('[data-count-field="present"]').checked;
+      const cost = row.querySelector('[data-count-field="cost"]');
+      if (cost) cost.disabled = !present;
+      const label = row.querySelector('[data-count-field="present"]')?.parentElement;
+      if (label) label.lastChild.textContent = present ? ' Encontrado' : ' Faltante';
+      rememberEdit(row);
+    });
+    row.querySelector('[data-count-action="confirm"]')?.addEventListener('click', async e => {
+      const button = e.currentTarget;
+      if (button.disabled) return;
+      const id = Number(row.dataset.countLine);
+      const line = lines.find(item => item.id === id);
+      const edit = invCountEdits.get(id) || {
+        qty: line.counted_qty, cost: line.counted_cost, present: !!line.present,
+      };
+      button.disabled = true;
+      const result = await invCountCall('confirmLine', {
+        countId: session.id, lineId: id, qty: edit.qty, cost: edit.cost,
+        present: edit.present, requestUserId: user.id,
+      });
+      if (!result.ok) { button.disabled = false; toast(result.error || 'No se pudo confirmar', 'err'); return; }
+      Object.assign(line, result.data);
+      invCountEdits.delete(id);
+      paintInvCount(wrap);
+    });
+  });
+}
+
+function openInvCountApplyModal() {
+  const session = invCountState?.session;
+  if (!session || invCountEdits.size || invCountState.lines.some(line => !line.confirmed)) return;
+  openModal(`<div class="modal-title">Aplicar conteo físico #${session.id}</div>
+    <div class="modal-sub">Se cambiarán las existencias y costos confirmados. Las facturas anteriores no se modificarán.</div>
+    <div class="fg"><label class="lbl">Motivo del conteo *</label>
+      <textarea class="inp" id="inv-count-reason" rows="3" maxlength="500" placeholder="Ej.: Inventario físico de cierre de mes"></textarea></div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-dark" id="inv-count-final-confirm">Aplicar todo</button></div>`);
+  document.getElementById('inv-count-final-confirm')?.addEventListener('click', async e => {
+    const button = e.currentTarget;
+    if (button.disabled) return;
+    button.disabled = true;
+    const reason = document.getElementById('inv-count-reason')?.value.trim();
+    const result = await invCountCall('apply', { countId: session.id, reason, requestUserId: user.id });
+    if (!result.ok) { button.disabled = false; toast(result.error || 'No se pudo aplicar el conteo', 'err'); return; }
+    closeModal();
+    invCountState = null; invCountEdits.clear(); invTab = 'todos';
+    try { await reloadProducts(); }
+    catch (error) { toast('Conteo aplicado. Recarga Inventario para ver las cifras nuevas', 'w'); }
+    const page = document.getElementById('page');
+    if (page) renderInventario(page);
+    toast(`Conteo aplicado: ${result.data.changed} cambio(s)`);
+  });
+}
+
 // ── R5c-2 (VELO TECH POS): registrar equipos por IMEI ────────────────────────
 // El botón "Equipos" solo se muestra en el vertical tech (window._vertical.
 // serialized), así que en auto-repuestos esta función jamás se invoca. Registra
@@ -557,19 +820,20 @@ window.abrirRegistroEquipos = async function (p) {
     try { const r = await window.api.productUnits.listForProduct({ productId: p.id }); return (r && r.ok && Array.isArray(r.data)) ? r.data : []; }
     catch { return []; }
   };
-  const badge = st => {
+  const badge = (st, missing) => {
+    if (missing) return '<span style="font-size:10.5px;background:#FCEBEB;color:#A32D2D;padding:2px 8px;border-radius:100px">Faltante</span>';
     const m = { en_stock: ['#E7F3EA', '#2F7D43', 'En stock'], vendido: ['#EDEBE6', '#6A6A64', 'Vendido'], servicio: ['#FBEFD9', '#9A6410', 'En servicio'], reservado: ['#E6EEFC', '#1D4ED8', 'Reservado'], devuelto: ['#FCEBEB', '#A32D2D', 'Devuelto'] };
     const [bg, fg, txt] = m[st] || m.en_stock;
     return `<span style="font-size:10.5px;background:${bg};color:${fg};padding:2px 8px;border-radius:100px">${txt}</span>`;
   };
   const render = (units) => {
-    const inStock = units.filter(u => u.status === 'en_stock').length;
+    const inStock = units.filter(u => u.status === 'en_stock' && !u.inventory_missing).length;
     const rows = units.length ? units.map(u => `<tr style="border-top:0.5px solid var(--line2)">
         <td style="padding:6px;font-family:var(--mono);font-size:11px">${esc(u.imei || u.serial || ('#' + u.id))}</td>
         <td style="padding:6px">${esc(u.condition || '')}${u.color ? (' · ' + esc(u.color)) : ''}${u.capacity ? (' · ' + esc(u.capacity)) : ''}${u.battery_health!=null?` · Batería ${Number(u.battery_health)}%`:''}${u.battery_capacity_mah?` · ${Number(u.battery_capacity_mah)} mAh`:''}<div class="ts">${esc(u.sale_description||'')}</div></td>
         <td style="padding:6px;text-align:right;font-family:var(--mono)">${money(u.unit_cost)}</td>
         <td style="padding:6px">${u.warranty_until ? esc(u.warranty_until) : '—'} <button class="btn btn-ghost btn-sm" data-warranty-unit="${u.id}" data-warranty-date="${esc(u.warranty_until||'')}" title="Editar garantía">${svg('edit')}</button> <button class="btn btn-ghost btn-sm" data-detail-unit="${u.id}" title="Editar datos del equipo">Detalles</button></td>
-        <td style="padding:6px">${badge(u.status)}</td></tr>`).join('')
+        <td style="padding:6px">${badge(u.status, u.inventory_missing)}</td></tr>`).join('')
       : `<tr><td colspan="5" style="padding:10px;color:var(--muted2);text-align:center">Sin equipos registrados</td></tr>`;
     return `
       <div class="modal-title">Equipos — ${esc(p.name)}</div>

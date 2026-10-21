@@ -47,6 +47,15 @@ const api = {
     getPriceHistory: (data)  => ipcRenderer.invoke('products:getPriceHistory', data),
   },
 
+  inventoryCount: {
+    getDraft:    (data) => ipcRenderer.invoke('inventoryCount:getDraft', data),
+    start:       (data) => ipcRenderer.invoke('inventoryCount:start', data),
+    confirmLine: (data) => ipcRenderer.invoke('inventoryCount:confirmLine', data),
+    refresh:     (data) => ipcRenderer.invoke('inventoryCount:refresh', data),
+    cancel:      (data) => ipcRenderer.invoke('inventoryCount:cancel', data),
+    apply:       (data) => ipcRenderer.invoke('inventoryCount:apply', data),
+  },
+
   // ── Inventario serializado (VELO TECH POS) ────────────────
   productUnits: {
     listForProduct: (data) => ipcRenderer.invoke('productUnits:listForProduct', data),

@@ -45,6 +45,10 @@ function rpcTimeoutFor(channel) {
   // cifrarlo o ejecutar integrity_check. No reportar SERVER_OFFLINE mientras
   // el Servidor continúa trabajando y podría completar el archivo.
   if (channel === 'backup:createEncrypted' || channel === 'backup:verifyEncrypted') return 10 * 60 * 1000;
+  // El conteo completo revisa todos los artículos e IMEI antes de aplicar una
+  // única transacción; en catálogos grandes puede superar los 8 s generales.
+  if (channel === 'inventoryCount:start' || channel === 'inventoryCount:refresh' ||
+      channel === 'inventoryCount:apply' || channel === 'inventoryCount:getDraft') return 2 * 60 * 1000;
   // La prueba pública es manual y su timeout HTTPS es de 8 s; dejar margen al
   // transporte RPC evita convertir una demora DNS normal en SERVER_OFFLINE.
   if (channel === 'serviceOrders:testPublicAccess') return 15 * 1000;
