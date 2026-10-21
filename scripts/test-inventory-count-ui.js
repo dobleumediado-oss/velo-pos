@@ -36,7 +36,15 @@ app.whenReady().then(async () => {
     `);
     const source = fs.readFileSync(path.join(__dirname, '..', 'src/js/inventario.js'), 'utf8');
     await win.webContents.executeJavaScript(`${source}\n;true;`);
+    const posCopy = await win.webContents.executeJavaScript(`(() => {
+      window._vertical = { serialized: false };
+      invTab = 'conteo'; invCountState = { session: null, lines: [] };
+      paintInvCount();
+      return document.getElementById('inv-table-wrap').textContent;
+    })()`);
+    assert.equal(posCopy.includes('IMEI'), false, 'el conteo de VELO POS no debe mencionar IMEI');
     const result = await win.webContents.executeJavaScript(`(async () => {
+      window._vertical = { serialized: true };
       invTab = 'conteo';
       invCountState = { session: { id: 7 }, lines: [
         { id: 1, kind: 'product', product_id: 1, product_code: 'A', product_name: 'Aceite',

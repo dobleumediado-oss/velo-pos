@@ -614,11 +614,12 @@ async function renderInvCount(wrap) {
 
 function paintInvCount(wrap = document.getElementById('inv-table-wrap')) {
   if (!wrap || invTab !== 'conteo') return;
+  const countHasImei = !!window._vertical?.serialized;
   const session = invCountState?.session;
   if (!session) {
     wrap.innerHTML = `<div class="card" style="padding:24px">
       <h3 style="margin:0 0 8px">Conteo físico masivo</h3>
-      <p style="color:var(--muted);max-width:680px;line-height:1.5">Revisa cada producto y cada IMEI, confirma su cantidad y costo, y aplica todo al finalizar. Mientras el conteo esté en borrador, las ventas y el inventario siguen funcionando normalmente.</p>
+      <p style="color:var(--muted);max-width:680px;line-height:1.5">${countHasImei ? 'Revisa cada producto y cada IMEI' : 'Revisa cada producto'}, confirma su cantidad y costo, y aplica todo al finalizar. Mientras el conteo esté en borrador, las ventas y el inventario siguen funcionando normalmente.</p>
       <button class="btn btn-dark" id="inv-count-start">Iniciar conteo</button>
     </div>`;
     wrap.querySelector('#inv-count-start')?.addEventListener('click', async e => {
@@ -666,13 +667,13 @@ function paintInvCount(wrap = document.getElementById('inv-table-wrap')) {
   </div>
   <div class="card">
     <div style="padding:14px 16px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <input class="inp" id="inv-count-search" style="flex:1;min-width:230px" placeholder="Buscar producto, código o IMEI…" value="${invEsc(invCountSearch)}">
+      <input class="inp" id="inv-count-search" style="flex:1;min-width:230px" placeholder="${countHasImei ? 'Buscar producto, código o IMEI…' : 'Buscar producto o código…'}" value="${invEsc(invCountSearch)}">
       <span style="font-size:12px;color:var(--muted)">${filtered.length} fila(s) · Página ${invCountPage} de ${pages}</span>
       <button class="btn btn-out btn-sm" id="inv-count-prev" ${invCountPage <= 1 ? 'disabled' : ''}>Anterior</button>
       <button class="btn btn-out btn-sm" id="inv-count-next" ${invCountPage >= pages ? 'disabled' : ''}>Siguiente</button>
     </div>
     <div class="tw"><table><thead><tr>
-      <th>Producto / IMEI</th><th>Existencia actual</th><th>Existencia contada</th>
+      <th>${countHasImei ? 'Producto / IMEI' : 'Producto'}</th><th>Existencia actual</th><th>Existencia contada</th>
       <th>Costo unitario</th><th>Valor confirmado</th><th>Estado</th><th></th>
     </tr></thead><tbody>${shown.map(line => {
       const edit = invCountEdits.get(line.id);
@@ -1505,7 +1506,7 @@ function openEntradaMercanciaModal() {
 
   openModal(`
     <div class="modal-title">Entrada de Mercancía</div>
-    <div class="modal-sub">Registrar compra o reposición de accesorios y repuestos. Los equipos por IMEI se reciben desde “Equipos” u Órdenes de compra.</div>
+    <div class="modal-sub">${window._vertical?.serialized ? 'Registrar compra o reposición de accesorios y repuestos. Los equipos por IMEI se reciben desde “Equipos” u Órdenes de compra.' : 'Registrar compra o reposición de productos en inventario.'}</div>
 
     <div class="fg">
       <label class="lbl">Producto *</label>

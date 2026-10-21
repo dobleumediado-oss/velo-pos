@@ -505,7 +505,7 @@ async function recibirOrden(id) {
 
     <div class="alrt b" style="margin-bottom:12px">
       <div class="alrt-dot b"></div>
-      <div class="alrt-sub">Los productos normales actualizan su cantidad. Los equipos serializados se cuentan exclusivamente por sus IMEI/seriales para evitar inventario fantasma.</div>
+      <div class="alrt-sub">${window._vertical?.serialized ? 'Los productos normales actualizan su cantidad. Los equipos serializados se cuentan exclusivamente por sus IMEI/seriales para evitar inventario fantasma.' : 'La cantidad recibida actualiza las existencias del inventario.'}</div>
     </div>
 
     <div class="modal-foot">
