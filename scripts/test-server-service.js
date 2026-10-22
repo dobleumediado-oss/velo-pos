@@ -86,6 +86,7 @@ function launchFakeWorker({ business, port }) {
 }
 
 (async () => {
+  await require('./test-server-console-recovery')();
   const addresses = listLocalAddresses({
     Ethernet: [{ family: 'IPv4', internal: false, address: '10.211.55.3' }],
     WiFi: [{ family: 'IPv4', internal: false, address: '192.168.1.20' }],

@@ -545,7 +545,8 @@ function renderClientOffline(pf) {
   root.style.cssText = 'width:100%;height:100%;display:flex;';
   const dest = `${(pf && pf.host) || 'servidor'}${pf && pf.port ? ':' + pf.port : ''}`;
   // Dos causas distintas: servidor inalcanzable vs servidor OK pero terminal no autorizado.
-  const unauth = pf && pf.reachable && !pf.authorized;
+  const unauth = pf && pf.reachable && !pf.authorized &&
+    ['UNAUTHORIZED', 'FORBIDDEN', 'unauthorized'].includes(pf.reason);
   const titulo = unauth ? 'Este terminal no está autorizado' : 'No se pudo conectar al servidor';
   const icono  = unauth ? '🔒' : '📡';
   const detalle = unauth
@@ -576,15 +577,38 @@ function renderClientOffline(pf) {
   );
   root.appendChild(h('div', { style: { width: '100%', height: '100%', display: 'flex' } }, card));
 
-  document.getElementById('co-retry').onclick = async () => {
+  let retryTimer = null;
+  let checking = false;
+  const retry = async () => {
+    if (checking || !root.contains(card)) return;
+    clearTimeout(retryTimer);
+    checking = true;
+    const button = document.getElementById('co-retry');
+    button.disabled = true;
     const msg = document.getElementById('co-msg');
-    msg.textContent = 'Reintentando…';
+    msg.textContent = 'Intentando conectar con el servidor…';
+    let recovered = false;
     try {
       const r = await window.api.connection.clientPreflight();
-      if (r && r.reachable) { location.reload(); return; }
-      msg.textContent = 'El servidor sigue sin responder. Revisa la conexión e intenta de nuevo.';
-    } catch { msg.textContent = 'El servidor sigue sin responder.'; }
+      if (!root.contains(card)) return;
+      if (r && r.reachable && r.authorized) {
+        recovered = true;
+        location.reload();
+        return;
+      }
+      msg.textContent = r?.reachable && ['UNAUTHORIZED', 'FORBIDDEN', 'unauthorized'].includes(r.reason)
+        ? 'El servidor respondió, pero falta autorizar esta terminal o revisar su clave de acceso.'
+        : 'Esperando que el servidor esté disponible. Volveremos a intentar automáticamente.';
+    } catch { msg.textContent = 'No se pudo conectar. Volveremos a intentar automáticamente.'; }
+    finally {
+      checking = false;
+      button.disabled = false;
+      if (!recovered && root.contains(card)) retryTimer = setTimeout(retry, 5000);
+    }
   };
+  document.getElementById('co-retry').onclick = retry;
+  document.getElementById('co-msg').textContent = 'Volveremos a intentar conectar automáticamente.';
+  retryTimer = setTimeout(retry, 5000);
   // Volver a modo local es una acción seria (la PC queda con datos propios,
   // separados del servidor) → siempre modal de confirmación, y si el dev
   // configuró contraseña de modo local (panel dev del servidor), se exige aquí.

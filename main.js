@@ -1234,6 +1234,20 @@ ipcMain.handle('connection:clientPreflight', async () => {
     const mode = settingsRepo.get('connection_mode') || 'local';
     const terminalId = settingsRepo.get('terminal_id') || '';
     if (mode !== 'client') return { ok: true, mode, reachable: true, authorized: true, terminalId };
+    // Si Windows inició el servicio después de abrir la consola, recuperar el
+    // enlace aquí también. Recargar la ventana no repite el arranque del main.
+    let previousConnection = ['connection_access_key', 'connection_server_port', 'connection_business_id']
+      .map(key => settingsRepo.get(key)).join('|');
+    await _configureInstalledServerConsole({ attempts: 1 });
+    const refreshClientStream = () => {
+      const currentConnection = ['connection_access_key', 'connection_server_port', 'connection_business_id']
+        .map(key => settingsRepo.get(key)).join('|');
+      if (currentConnection !== previousConnection) {
+        setupMultiTerminal();
+        previousConnection = currentConnection;
+      }
+    };
+    refreshClientStream();
     const host = settingsRepo.get('connection_server_ip') || '';
     const port = Number(settingsRepo.get('connection_server_port')) || 8443;
     if (!host) return { ok: true, mode, reachable: false, authorized: false, host: '', port, terminalId, reason: 'no-ip', localGuard: localGuard() };
@@ -1267,6 +1281,7 @@ ipcMain.handle('connection:clientPreflight', async () => {
         });
       }
     }
+    refreshClientStream();
     const authorized = !!(ping && ping.ok === true);
     const reason = authorized ? 'ok' : ((ping && ping.error) || 'unauthorized');
 
@@ -8731,6 +8746,8 @@ function setupMultiTerminal() {
 
     logInfo('multiterminal', 'Servidor RPC iniciado', { port: _rpcServer.port, canales: bridge.channelCount() });
   } else if (mode === 'client') {
+    // Al recuperar el enlace o cambiar de negocio, usar credenciales actuales.
+    if (_syncStream) { try { _syncStream.close(); } catch {} _syncStream = null; }
     // Cliente: abre el stream SSE del servidor y reenvía cada aviso al renderer.
     // Robusto ante servidor caído (reintenta solo); nunca bloquea el arranque.
     try {
@@ -8878,7 +8895,7 @@ function _scheduleServiceMessaging() {
   const interval=setInterval(processDue,60000); interval.unref?.();
 }
 
-async function _configureInstalledServerConsole() {
+async function _configureInstalledServerConsole({ attempts = 10 } = {}) {
   if (!app.isPackaged || RUNTIME.headless) return;
   const marker = path.join(process.resourcesPath, 'server-edition.json');
   if (!fs.existsSync(marker)) return;
@@ -8902,7 +8919,7 @@ async function _configureInstalledServerConsole() {
   settingsRepo.set('connection_business_id', settingsRepo.get('connection_business_id') || 'principal');
 
   const { localBootstrap } = require('./src/main/net-client');
-  for (let attempt = 1; attempt <= 10; attempt++) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
     const result = await localBootstrap({ port, terminalId, name: 'Consola del servidor', timeoutMs: 2500 });
     if (result?.ok && result.data?.accessKey) {
       settingsRepo.set('connection_access_key', result.data.accessKey);
@@ -8911,9 +8928,9 @@ async function _configureInstalledServerConsole() {
       return;
     }
     if (!result?.offline && result?.error === 'FORBIDDEN' && settingsRepo.get('connection_access_key')) return;
-    await new Promise(resolve => setTimeout(resolve, 500));
+    if (attempt < attempts) await new Promise(resolve => setTimeout(resolve, 500));
   }
-  logWarn('server-service', 'La consola quedó en modo cliente pero el bootstrap local aún no respondió', { port });
+  if (attempts > 1) logWarn('server-service', 'La consola quedó en modo cliente pero el bootstrap local aún no respondió', { port });
 }
 
 app.whenReady().then(async () => {

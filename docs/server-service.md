@@ -88,6 +88,14 @@ comerciales. Los demás endpoints requieren clave y terminal autorizada.
 El endpoint `http://127.0.0.1:8787/health` corresponde exclusivamente al portal
 de reparaciones. Tailscale Funnel debe apuntar a este segundo puerto.
 
+Si la consola abre antes de que el servicio o el negocio estén listos, la
+pantalla de conexión vuelve a comprobar cada cinco segundos. En la edición
+Servidor también recupera el enlace local y actualiza la conexión de avisos si
+cambió la clave. Entra automáticamente cuando el negocio responde y autoriza
+la terminal; no hace falta cerrar la aplicación. «Reintentar» hace la misma
+comprobación de inmediato. Que `/health` responda todavía no garantiza que el
+negocio haya terminado de arrancar.
+
 ## Recuperación
 
 Si el servicio no inicia:
