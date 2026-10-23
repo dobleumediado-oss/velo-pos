@@ -200,7 +200,7 @@ let accesoArnes = null;
     'el botón activo vuelve a Cajero');
   assert(!app.includes("onclick: () => { selRole = 'admin'; build(); }"),
     'el cambio de rol ya no reconstruye toda la pantalla de acceso');
-  assert(app.includes('_startLoginClock();\n    document.getElementById(\'lpass\')?.focus();'),
+  assert(/_startLoginClock\(\);\r?\n\s+document\.getElementById\('lpass'\)\?\.focus\(\);/.test(app),
     'el reloj arranca en el mismo cuadro en que se pinta el acceso');
   accesoArnes = { context, nodes };
 }
