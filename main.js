@@ -5115,7 +5115,7 @@ ipcMain.handle('backup:verifyEncrypted', async (_, { requestUserId, passphrase, 
     const reqUser = authRepo.findById(requestUserId);
     if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede verificar respaldos');
     if (!path.isAbsolute(String(filePath || ''))) throw new Error('Selecciona un respaldo válido desde la PC Servidor');
-    const result = await verifyEncryptedBackup({ filePath, passphrase });
+    const result = await verifyEncryptedBackup({ filePath, passphrase, workDir: DATA_DIR });
     const now = new Date().toISOString();
     db.prepare(`INSERT INTO continuity_events(event_type,status,destination,checksum,detail) VALUES('restore_test','verified',?,?,?)`)
       .run(filePath, result.checksum, 'Descifrado, integrity_check y foreign_key_check aprobados');
@@ -5135,7 +5135,8 @@ ipcMain.handle('backup:recoverComplete', async (_, { requestUserId, passphrase, 
     if (!_canPickContinuityFilesHere() || !path.isAbsolute(String(filePath || '')) ||
         !path.isAbsolute(String(destinationDir || ''))) throw new Error('Selecciona el archivo y la carpeta desde la PC Servidor');
     const recoveryDir = path.join(destinationDir, `velo-recuperado-${crypto.randomUUID()}`);
-    const result = await restoreCompleteBackupToEmptyDirectory({ filePath, passphrase, destinationDir: recoveryDir });
+    const result = await restoreCompleteBackupToEmptyDirectory({ filePath, passphrase,
+      destinationDir: recoveryDir, workDir: DATA_DIR });
     audit(reqUser.id, reqUser.name, 'backup_recuperado_en_carpeta', 'backup', null,
       `Negocio: ${result.businessId} | Carpeta: ${recoveryDir}`);
     return { ok:true, data:result };
