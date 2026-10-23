@@ -353,7 +353,9 @@ try {
     'por eso la mutación limpia los filtros antes de pintar el producto guardado');
 
   console.log('\n== Recargas coalescidas y abonos diferidos ==');
-  const dataSource = fs.readFileSync(path.join(__dirname, '../src/js/data.js'), 'utf8');
+  // La extracción de fragmentos usa offsets de texto: normalizar CRLF de Windows
+  // evita dejar caracteres sueltos al calcular el final del bloque.
+  const dataSource = fs.readFileSync(path.join(__dirname, '../src/js/data.js'), 'utf8').replace(/\r\n/g, '\n');
   const sliceFrom = dataSource.indexOf('async function reloadProducts()');
   const sliceTo = dataSource.indexOf('let salesLoadGeneration');
   ok(sliceFrom > 0 && sliceTo > sliceFrom, 'las recargas siguen agrupadas en data.js');
