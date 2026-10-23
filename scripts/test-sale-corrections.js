@@ -1250,7 +1250,9 @@ ok(firstChange.correctionId > 0 && db.prepare(
 ).get(original.id).count >= 1, 'registra auditoría completa dentro de la transacción');
 
 console.log('\n== I. Interfaz de corrección ==');
-const salesUiSource = fs.readFileSync(path.join(__dirname, '../src/js/ventas.js'), 'utf8');
+// Git convierte los saltos de línea a CRLF en Windows. Normalizarlos aquí mantiene
+// las extracciones de funciones iguales en las pruebas de macOS y Windows.
+const salesUiSource = fs.readFileSync(path.join(__dirname, '../src/js/ventas.js'), 'utf8').replace(/\r\n/g, '\n');
 const operationTotalStart = salesUiSource.indexOf('function ventasOperationTotal(');
 const operationTotalEnd = salesUiSource.indexOf('function ventasHasAdjustedCopy(', operationTotalStart);
 const operationTotalsContext = {};
