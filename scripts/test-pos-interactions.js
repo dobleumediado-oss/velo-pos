@@ -168,13 +168,17 @@ state.currentInv().cart.push({ name: 'Artículo', price: 105, qty: 1, taxable: 1
 
 const posSource = fs.readFileSync(path.join(root, 'src/js/pos.js'), 'utf8');
 assert.match(posSource,
-  /<input type="text" data-uppercase="off" pattern="\[0-9\.,\]\*" data-money="\$\{inv\.discMode/,
-  'el descuento debe aceptar punto o coma sin depender del locale de type=number');
+  /<input type="text" data-uppercase="off" data-money="off" pattern="\[0-9\.,\]\*"/,
+  'el descuento admite punto o coma sin que el formato monetario interrumpa la edición');
+assert.match(posSource, /\? 'onchange="posDiscConPin\(this, this\.value\)"'/,
+  'el descuento fijo se confirma al terminar de escribir, antes de pedir autorización');
 vm.runInContext(`${posSource}\nlet __renderCartCalls=0;
 renderCart=()=>{__renderCartCalls++};
 this.__posDiscount={
   posDiscConPin,calcTotals,posSetQty,posCommitQty,posSaveCharge,
   posCommitPriceOnChange,posCommitPriceOnEnter,
+  isManualNumericEntry:_posIsManualNumericEntry,
+  barcodeKeydown:_posBarcodeKeydown,
   entryNumber:_posEntryNumber,cbrCalcInitial,cbrToggleBillingType,cbrConvertCoveredCreditToCash,
   renderCalls:()=>__renderCartCalls
 };
@@ -185,6 +189,32 @@ const discount = context.__posDiscount;
 const customers = context.__posCustomers;
 const transfer = context.__posTransfer;
 context.toast = () => {};
+
+assert.strictEqual(discount.isManualNumericEntry({ id: 'pos-discount-input', dataset: {} }), true,
+  'el lector no debe bloquear los dígitos escritos en el descuento RD$ o %');
+assert.strictEqual(discount.isManualNumericEntry({ id: 'pos-qty-input', dataset: {} }), false,
+  'la protección del lector debe seguir activa en la cantidad del carrito');
+assert.strictEqual(discount.isManualNumericEntry({ dataset: { posPrice: 'on' } }), true,
+  'la edición manual del precio debe seguir protegida');
+element('pos-search');
+const typeRapidDigits = (field, digits) => {
+  const scan = { buf: '', lastTs: 0 };
+  context.document.activeElement = field;
+  field.value = '';
+  for (const key of digits) {
+    let prevented = false;
+    discount.barcodeKeydown({ key, preventDefault() { prevented = true; } }, scan,
+      { abort() { throw new Error('el POS debe seguir montado'); } });
+    if (!prevented) field.value += key;
+  }
+  return field.value;
+};
+assert.strictEqual(typeRapidDigits({ id: 'pos-discount-input', tagName: 'INPUT', dataset: {} }, '125'), '125',
+  'teclear RD$125 rápidamente debe conservar los tres dígitos');
+assert.notStrictEqual(typeRapidDigits({ id: 'pos-qty-input', tagName: 'INPUT', dataset: {} }, '125'), '125',
+  'el lector debe seguir evitando que una ráfaga numérica se convierta en cantidad');
+context.document.activeElement = null;
+console.log('  ✓ el lector deja pasar teclas numéricas en descuento y precio');
 
 assert.strictEqual(discount.entryNumber('10,000.00'), 10000,
   'los importes agrupados deben convertirse completos, no en 10');

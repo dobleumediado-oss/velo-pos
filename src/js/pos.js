@@ -96,6 +96,54 @@ function posConduceCanAccess() {
   return CFG?.module_conduce === '1' && (user?.role === 'superadmin' || roles.includes(user?.role));
 }
 
+function _posIsManualNumericEntry(control) {
+  return control?.dataset?.posPrice === 'on' || control?.id === 'pos-discount-input';
+}
+
+function _posBarcodeKeydown(e, scan, barcodeAbort) {
+  if (!document.getElementById('pos-search')) {
+    barcodeAbort.abort();
+    return;
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+  // Los importes manuales no son códigos de barras, aun si se teclean rápido.
+  if (_posIsManualNumericEntry(document.activeElement)) {
+    scan.buf = '';
+    scan.lastTs = 0;
+    return;
+  }
+
+  const now = Date.now();
+  const gap = now - scan.lastTs;
+  scan.lastTs = now;
+
+  if (e.key === 'Enter') {
+    const isScan = scan.buf.length >= 3 && gap <= 30;
+    const code = scan.buf;
+    scan.buf = '';
+    if (isScan) {
+      e.preventDefault();
+      e.stopPropagation();
+      _posHandleScan(code);
+    }
+    return;
+  }
+
+  if (e.key.length !== 1) return;
+  if (gap > 30) scan.buf = '';
+  scan.buf += e.key;
+
+  // En campos ordinarios se bloquea la ráfaga del lector para que un código
+  // numérico no se convierta, por ejemplo, en una cantidad del carrito.
+  const el = document.activeElement;
+  if (el && el.id !== 'pos-search' &&
+      ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) &&
+      gap <= 30 && scan.buf.length >= 2) {
+    e.preventDefault();
+  }
+}
+
 async function renderPOS(el) {
   try {
     await chkCaja();
@@ -238,62 +286,9 @@ async function renderPOS(el) {
       const barcodeAbort = new AbortController();
       window._barcodeListenerAbort = barcodeAbort;
 
-      const SCAN_GAP_MS  = 30;   // teclas más rápidas que esto ⇒ lector, no humano
-      const SCAN_MIN_LEN = 3;    // largo mínimo para considerarlo un escaneo
-      let scanBuf = '';
-      let scanLastTs = 0;
-
-      document.addEventListener('keydown', (e) => {
-        if (!document.getElementById('pos-search')) {
-          // El POS ya no está montado — limpiar por si el abort no corrió.
-          barcodeAbort.abort();
-          return;
-        }
-        if (e.ctrlKey || e.metaKey || e.altKey) return;
-
-        // El precio final es un campo de edición manual. No conviertas sus
-        // dígitos + Enter en una lectura de código de barras cuando el cajero
-        // escribe rápido.
-        if (document.activeElement?.dataset?.posPrice === 'on') {
-          scanBuf = '';
-          scanLastTs = 0;
-          return;
-        }
-
-        const now = Date.now();
-        const gap = now - scanLastTs;
-        scanLastTs = now;
-
-        if (e.key === 'Enter') {
-          // Escaneo = ráfaga con largo suficiente y el Enter llegó pegado.
-          const isScan = scanBuf.length >= SCAN_MIN_LEN && gap <= SCAN_GAP_MS;
-          const code   = scanBuf;
-          scanBuf = '';
-          if (isScan) {
-            e.preventDefault();
-            e.stopPropagation();     // que NO llegue al campo enfocado ni a su Enter
-            _posHandleScan(code);
-          }
-          return;
-        }
-
-        if (e.key.length !== 1) return;
-
-        // Tecla lenta ⇒ arranca una secuencia nueva (tecleo humano).
-        if (gap > SCAN_GAP_MS) scanBuf = '';
-        scanBuf += e.key;
-
-        // En plena ráfaga sobre un campo que NO es el buscador (p.ej. la
-        // cantidad del carrito), bloquea el carácter: así el código escaneado
-        // no se escribe como cantidad. El 1er carácter puede filtrarse, pero
-        // el carrito se redibuja al agregar y queda consistente.
-        const el = document.activeElement;
-        if (el && el.id !== 'pos-search' &&
-            ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) &&
-            gap <= SCAN_GAP_MS && scanBuf.length >= 2) {
-          e.preventDefault();
-        }
-      }, { capture: true, signal: barcodeAbort.signal });
+      const scan = { buf: '', lastTs: 0 };
+      document.addEventListener('keydown', e => _posBarcodeKeydown(e, scan, barcodeAbort),
+        { capture: true, signal: barcodeAbort.signal });
     }, 0);
 
     renderPOSGrid();
@@ -1031,12 +1026,14 @@ function renderCart() {
           <option value="pct" ${(inv.discMode || 'pct') !== 'amt' ? 'selected' : ''}>%</option>
           <option value="amt" ${inv.discMode === 'amt' ? 'selected' : ''}>RD$</option>
         </select>
-        <input type="text" data-uppercase="off" pattern="[0-9.,]*" data-money="${inv.discMode === 'amt' ? 'on' : 'off'}"
+        <input type="text" data-uppercase="off" data-money="off" pattern="[0-9.,]*"
                value="${inv.discMode === 'amt' ? (inv.discAmtInput || 0) : (inv.disc || 0)}"
                id="pos-discount-input" inputmode="decimal" autocomplete="off"
                class="inp" style="width:72px;padding:4px 7px;font-size:12px;text-align:right"
                onfocus="this.select()"
-               oninput="posDiscConPin(this, this.value)"/>
+               ${inv.discMode === 'amt'
+                 ? 'onchange="posDiscConPin(this, this.value)"'
+                 : 'oninput="posDiscConPin(this, this.value)"'}/>
       </div>
       ${['factura', 'cotizacion'].includes(inv.itype) ? `
       <div style="border-top:1px solid var(--line2);padding-top:7px;margin-top:4px">
