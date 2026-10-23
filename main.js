@@ -4971,10 +4971,16 @@ ipcMain.handle('backup:pickExternalDirectory', async () => {
     if (!_canPickContinuityFilesHere()) {
       return { ok:false, error:'Crea la copia externa desde la PC Servidor; una terminal no puede seleccionar unidades conectadas a otra computadora.' };
     }
-    const selected = await dialog.showOpenDialog(mainWindow, {
+    const options = {
       title:'Seleccionar carpeta externa para el respaldo cifrado',
+      defaultPath: app.getPath('documents'),
       properties:['openDirectory','createDirectory'],
-    });
+    };
+    // En Windows el selector no debe bloquear la ventana principal si el shell
+    // tarda o no llega a mostrarlo; el usuario puede pegar la ruta en el modal.
+    const selected = process.platform === 'win32'
+      ? await dialog.showOpenDialog(options)
+      : await dialog.showOpenDialog(mainWindow, options);
     if (!selected.filePaths?.length) return { ok:false, error:'Cancelado' };
     return { ok:true, path:selected.filePaths[0] };
   } catch (e) { return { ok:false, error:e.message }; }

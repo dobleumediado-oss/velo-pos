@@ -1688,8 +1688,64 @@ async function hacerBackupManual() {
 }
 
 function abrirBackupCifrado() {
-  openModal(`<div class="modal-title">Respaldo externo cifrado</div><div class="modal-sub">Seleccionarás una carpeta externa. La clave no se guarda en VELO: consérvala en un lugar seguro.</div><div class="fg" style="margin-top:14px"><label class="lbl">Clave del respaldo *</label><input class="inp" id="continuity-pass" type="password" autocomplete="new-password" placeholder="Mínimo 10 caracteres"></div><div class="fg"><label class="lbl">Confirmar clave *</label><input class="inp" id="continuity-pass2" type="password" autocomplete="new-password"></div><div class="alrt a"><div class="alrt-dot a"></div><div class="alrt-sub">Sin esta clave el archivo no se puede recuperar. El sistema cifra con AES-256-GCM y verifica la copia antes de confirmarla.</div></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="continuity-create">Seleccionar carpeta y crear</button></div>`);
-  document.getElementById('continuity-create').onclick=async event=>{const passphrase=document.getElementById('continuity-pass').value;const confirmation=document.getElementById('continuity-pass2').value;if(passphrase.length<10)return toast('La clave debe tener al menos 10 caracteres','w');if(passphrase!==confirmation)return toast('Las claves no coinciden','w');event.currentTarget.disabled=true;const picked=await window.api.backup.pickExternalDirectory();if(!picked?.ok){event.currentTarget.disabled=false;return picked?.error==='Cancelado'?null:toast(picked?.error||'No se pudo seleccionar la carpeta','err');}const result=await window.api.backup.createEncrypted({requestUserId:_cfgUser().id,passphrase,destinationDir:picked.path});if(!result?.ok){event.currentTarget.disabled=false;return toast(result?.error||'No se pudo crear la copia','err');}closeModal();toast('✓ Respaldo cifrado creado y verificado','ok');};
+  openModal(`<div class="modal-title">Respaldo externo cifrado</div>
+    <div class="modal-sub">Guarda una copia cifrada de la base de este negocio fuera de la PC. Conserva la clave: VELO no la guarda.</div>
+    <div class="fg" style="margin-top:14px"><label class="lbl" for="continuity-pass">Clave del respaldo *</label><input class="inp" id="continuity-pass" type="password" autocomplete="new-password" placeholder="Mínimo 10 caracteres"></div>
+    <div class="fg"><label class="lbl" for="continuity-pass2">Confirmar clave *</label><input class="inp" id="continuity-pass2" type="password" autocomplete="new-password"></div>
+    <div class="fg"><label class="lbl" for="continuity-folder">Carpeta de destino *</label>
+      <div class="flex" style="gap:8px"><input class="inp" id="continuity-folder" type="text" autocomplete="off" placeholder="Ej.: E:\\Respaldos VELO" style="flex:1;min-width:0"><button class="btn btn-out" id="continuity-pick" type="button">Buscar carpeta</button></div>
+      <div class="alrt-sub">Si Windows no abre el selector, copia la ruta de la carpeta desde el Explorador y pégala aquí. La carpeta debe existir.</div></div>
+    <div class="alrt a"><div class="alrt-dot a"></div><div class="alrt-sub">Sin esta clave el archivo no se puede recuperar. El sistema cifra con AES-256-GCM y verifica la copia antes de confirmarla.</div></div>
+    <div class="alrt-sub" id="continuity-status" role="status" aria-live="polite"></div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="continuity-create" type="button">Crear copia</button></div>`);
+  const button = document.getElementById('continuity-create');
+  const picker = document.getElementById('continuity-pick');
+  const folder = document.getElementById('continuity-folder');
+  const status = document.getElementById('continuity-status');
+  picker.onclick = async () => {
+    if (picker.disabled) return;
+    picker.disabled = true;
+    status.textContent = 'Abriendo el selector de carpetas de Windows…';
+    try {
+      const picked = await window.api.backup.pickExternalDirectory();
+      if (picked?.ok) {
+        folder.value = picked.path;
+        status.textContent = 'Carpeta seleccionada. Ya puedes crear la copia.';
+      } else {
+        status.textContent = '';
+        if (picked?.error !== 'Cancelado') toast(picked?.error || 'No se pudo seleccionar la carpeta', 'err');
+      }
+    } catch (error) {
+      status.textContent = 'El selector no respondió. Puedes pegar la ruta de la carpeta arriba.';
+      toast(error?.message || 'No se pudo abrir el selector de carpetas', 'err');
+    } finally {
+      picker.disabled = false;
+    }
+  };
+  button.onclick = async () => {
+    if (button.disabled) return;
+    const passphrase = document.getElementById('continuity-pass').value;
+    const confirmation = document.getElementById('continuity-pass2').value;
+    const destinationDir = folder.value.trim();
+    if (passphrase.length < 10) return toast('La clave debe tener al menos 10 caracteres', 'w');
+    if (passphrase !== confirmation) return toast('Las claves no coinciden', 'w');
+    if (!destinationDir) return toast('Selecciona o escribe la carpeta de destino', 'w');
+    button.disabled = true;
+    button.textContent = 'Creando y verificando…';
+    status.textContent = 'Creando una captura consistente del negocio. No cierres VELO hasta terminar.';
+    try {
+      const result = await window.api.backup.createEncrypted({ requestUserId:_cfgUser().id, passphrase, destinationDir });
+      if (!result?.ok) throw new Error(result?.error || 'No se pudo crear la copia');
+      closeModal();
+      toast('✓ Respaldo cifrado creado y verificado', 'ok');
+    } catch (error) {
+      status.textContent = 'No se creó la copia. Revisa la carpeta y vuelve a intentarlo.';
+      toast(error?.message || 'No se pudo crear la copia', 'err');
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Crear copia';
+    }
+  };
 }
 
 function abrirVerificacionCifrada() {
