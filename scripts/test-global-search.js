@@ -11,6 +11,15 @@ const vm = require('vm');
 const { performance } = require('perf_hooks');
 const { searchNorm, digitsOf } = require('../lib/text-normalize');
 
+// La búsqueda de artículos comparte este helper con Inventario, Compras y POS.
+// Probar el código real del renderer para evitar que vuelva a exigir el orden
+// exacto de las palabras del nombre.
+const rendererSearch = vm.createContext({ window: {}, console });
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/js/data.js'), 'utf8'), rendererSearch);
+assert.equal(vm.runInContext("matchText('Filtro de aceite Toyota', 'Toyota filtro')", rendererSearch), true);
+assert.equal(vm.runInContext("matchText('Peña Núñez', 'nunez pena')", rendererSearch), true);
+assert.equal(vm.runInContext("matchText('Filtro de aceite Toyota', 'Toyota Honda')", rendererSearch), false);
+
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'velo-global-search-'));
 const DB = require('../database');
 DB.initDB(tempDir);
@@ -54,7 +63,7 @@ function seed() {
         `EQP-${number}`, index, number,
         '2026-09-15', '2026-09-15', '2026-09-15 12:00:00'
       );
-      insertItem.run(created.lastInsertRowid, `SKU-${index}`, `PRODUCTO ${index}`, 50, 118, 1, 118);
+      insertItem.run(created.lastInsertRowid, `SKU-${index}`, isTarget ? 'Filtro aceite Toyota' : `PRODUCTO ${index}`, 50, 118, 1, 118);
     }
   })();
 }
@@ -144,6 +153,8 @@ function createRendererHarness() {
       { query: TARGET_NAME, expected: TARGET_ID, reason: 'nombre con tilde y Ñ' },
       { query: 'Jose Pena', expected: TARGET_ID, reason: 'nombre equivalente sin tildes' },
       { query: 'pena', expected: TARGET_ID, reason: 'fragmento normalizado del nombre' },
+      { query: 'Nunez Jose', expected: TARGET_ID, reason: 'nombre del cliente en otro orden' },
+      { query: 'Toyota filtro', expected: TARGET_ID, reason: 'artículo en otro orden' },
     ];
     const measurements = [];
     for (const item of cases) {

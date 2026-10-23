@@ -115,12 +115,10 @@ function _cndRenderRows() {
   const q = (_cndSearch || '').toLowerCase().trim();
   let rows = window.__cndList || [];
   if (_cndFilterStatus) rows = rows.filter(c => c.status === _cndFilterStatus);
-  if (q) rows = rows.filter(c =>
-    (c.number || '').toLowerCase().includes(q) ||
-    (c.customer_name || '').toLowerCase().includes(q) ||
-    (c.customer_contact_name || '').toLowerCase().includes(q) ||
-    (c.customer_contact_role || '').toLowerCase().includes(q) ||
-    (c.customer_contact_phone || '').toLowerCase().includes(q));
+  if (q) rows = rows.filter(c => matchText([
+    c.number, c.customer_name, c.customer_contact_name,
+    c.customer_contact_role, c.customer_contact_phone,
+  ].join(' '), q));
 
   if (!rows.length) {
     tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--muted2);padding:22px">Sin conduces</td></tr>`;
@@ -687,8 +685,7 @@ function _cndProdSearch(q) {
   if (!dd) return;
   q = (q || '').toLowerCase().trim();
   if (!q) { dd.classList.remove('show'); dd.innerHTML = ''; return; }
-  const matches = (DB.products || []).filter(p =>
-    (p.name || '').toLowerCase().includes(q) || (p.code || '').toLowerCase().includes(q)).slice(0, 8);
+  const matches = (DB.products || []).filter(p => matchText(`${p.name || ''} ${p.code || ''}`, q)).slice(0, 8);
   dd.innerHTML = matches.map(p =>
     `<div class="cli-opt" onmousedown="_cndAddProduct(${p.id})">
        <div class="cli-opt-name">${_cndEsc(p.name)}</div>

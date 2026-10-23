@@ -88,7 +88,7 @@ function _pvMatchesSearch(order, query) {
     order.customer_contact_role, order.customer_contact_phone, order.created_by_name,
     order.paid_by_name, order.salesperson_name, order.items_summary, order.notes,
   ].filter(Boolean).join(' '));
-  if (term && text.includes(term)) return true;
+  if (term && matchText(text, term)) return true;
   return termDigits.length > 0 && [order.number, order.customer_rnc]
     .some(value => digitsOf(value).includes(termDigits));
 }

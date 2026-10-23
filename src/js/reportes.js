@@ -18,6 +18,96 @@ let repTab      = 'financiero'; // 'financiero' | 'abonos' | 'inventario' | 'com
 let repPriceMode = 'all';
 let repCustomerType = 'all';
 
+const _REP_SECTIONS = {
+  financiero: [
+    { id: 'segmentos', label: 'Segmentación comercial' },
+    { id: 'clientes', label: 'Clientes principales' },
+    { id: 'pagos', label: 'Por método de pago' },
+    { id: 'productos', label: 'Productos más vendidos' },
+    { id: 'precios', label: 'Cambios de costo / precio' },
+    { id: 'creditos', label: 'Cuentas por cobrar' },
+    { id: 'stock', label: 'Stock bajo' },
+    { id: 'grafica', label: 'Ventas diarias' },
+    { id: 'facturas', label: 'Facturas incluidas' },
+  ],
+  abonos: [
+    { id: 'metodos', label: 'Abonos por método' },
+    { id: 'meses', label: 'Mes por mes' },
+    { id: 'dias', label: 'Día por día' },
+    { id: 'detalle', label: 'Detalle de abonos' },
+  ],
+};
+
+function _repLayoutKey(tab) {
+  return `velo:reports-layout:v1:${CFG?.biz || 'business'}:${user?.id || 'user'}:${tab}`;
+}
+
+function _repLoadLayout(tab) {
+  const defaults = _REP_SECTIONS[tab].map(section => section.id);
+  try {
+    const saved = JSON.parse(localStorage.getItem(_repLayoutKey(tab)) || '[]');
+    if (!Array.isArray(saved)) return defaults;
+    const unique = [...new Set(saved.filter(id => defaults.includes(id)))];
+    return [...unique, ...defaults.filter(id => !unique.includes(id))];
+  } catch (_) { return defaults; }
+}
+
+function _repSection(node, id, wide = false) {
+  node.dataset.reportSection = id;
+  if (wide) node.style.gridColumn = '1 / -1';
+  return node;
+}
+
+function _repApplyLayout(grid, tab) {
+  _repLoadLayout(tab).forEach(id => {
+    const node = grid.querySelector(`[data-report-section="${id}"]`);
+    if (node) grid.appendChild(node);
+  });
+}
+
+function reportesConfigure(el) {
+  const exp = window.VeloExperience;
+  const tab = repTab;
+  if (!exp?.openDrawer || !_REP_SECTIONS[tab]) return;
+  let layout = _repLoadLayout(tab);
+  const renderRows = body => {
+    const list = body.querySelector('[data-rep-layout-list]');
+    list.innerHTML = layout.map((id, index) => {
+      const label = _REP_SECTIONS[tab].find(section => section.id === id)?.label || id;
+      return `<div class="dash-config-row" data-report-id="${id}">
+        <strong>${label}</strong>
+        <div><button data-move="up" ${index === 0 ? 'disabled' : ''} aria-label="Subir ${label}">↑</button><button data-move="down" ${index === layout.length - 1 ? 'disabled' : ''} aria-label="Bajar ${label}">↓</button></div>
+      </div>`;
+    }).join('');
+  };
+  const body = exp.openDrawer({ id: 'reports-config', title: 'Organizar reportes',
+    subtitle: 'El orden se guarda para tu usuario', width: '500px', content: `
+      <div class="dash-config-intro">Cambia el orden de las tarjetas. Los importes, filtros e informes no cambian.</div>
+      <div class="dash-config-list" data-rep-layout-list></div>
+      <div class="dash-config-actions"><button class="btn btn-out" data-reset>Restablecer</button><button class="btn btn-green" data-save>Guardar orden</button></div>` });
+  renderRows(body);
+  body.addEventListener('click', async event => {
+    const row = event.target.closest('[data-report-id]');
+    const move = event.target.closest('[data-move]')?.dataset.move;
+    if (row && move) {
+      const index = layout.indexOf(row.dataset.reportId);
+      const next = index + (move === 'up' ? -1 : 1);
+      if (next >= 0 && next < layout.length) [layout[index], layout[next]] = [layout[next], layout[index]];
+      renderRows(body);
+    }
+    if (event.target.closest('[data-reset]')) {
+      layout = _REP_SECTIONS[tab].map(section => section.id);
+      renderRows(body);
+    }
+    if (event.target.closest('[data-save]')) {
+      try { localStorage.setItem(_repLayoutKey(tab), JSON.stringify(layout)); }
+      catch (_) { toast('No se pudo guardar el orden en este equipo', 'err'); return; }
+      exp.closeDrawer();
+      await renderReportes(el);
+    }
+  });
+}
+
 function exportReporteActualPDF() {
   if (repTab === 'inventario') {
     return exportInventarioValorizadoPDF(DB.products.filter(product => product.active !== 0));
@@ -52,6 +142,11 @@ async function renderReportes(el) {
       h('div', { class: 'sec-sub' }, 'Análisis financiero del negocio')
     ),
     h('div', { class: 'flex', style: { gap: '8px' } },
+      _REP_SECTIONS[repTab] ? h('button', {
+        class: 'btn btn-out btn-sm',
+        onclick: () => reportesConfigure(el),
+        html: '⚙ Organizar'
+      }) : null,
       h('button', {
         class: 'btn btn-out btn-sm',
         onclick: () => guardarDocumentoExcel(exportReporteActualPDF, `Reporte-${repTab}`, 'Reportes'),
@@ -312,11 +407,9 @@ function renderReporteContenido(el, d) {
     d.filters?.priceMode !== 'all' ? priceLabels[d.filters?.priceMode] : '',
     d.filters?.customerType !== 'all' ? customerLabels[d.filters?.customerType] : '',
   ].filter(Boolean).join(' · ') || 'Todas las ventas';
-  const segmentGrid = h('div', {
-    class: 'gg2',
-    style: { gap: '16px', alignItems: 'start', marginBottom: '16px' }
-  });
-  const segmentCard = h('div', { class: 'card' });
+  const grid = h('div', { class: 'gg2', style: { gap: '16px', alignItems: 'start' } });
+  el.appendChild(grid);
+  const segmentCard = _repSection(h('div', { class: 'card' }), 'segmentos');
   segmentCard.innerHTML = `
     <div class="fxb mb8">
       <div>
@@ -337,9 +430,9 @@ function renderReporteContenido(el, d) {
         <div class="ts">${row.count} facturas · promedio ${fmt(row.average_ticket)}</div>
       </div>`).join('')}
     </div>`;
-  segmentGrid.appendChild(segmentCard);
+  grid.appendChild(segmentCard);
 
-  const customerCard = h('div', { class: 'card' });
+  const customerCard = _repSection(h('div', { class: 'card' }), 'clientes');
   customerCard.innerHTML = `
     <div class="fxb mb8">
       <div class="card-title">Clientes principales</div>
@@ -351,14 +444,12 @@ function renderReporteContenido(el, d) {
       </span>
       <strong>${fmt(row.total)}</strong>
     </div>`).join('') || '<div class="ts" style="padding:12px 0">Sin clientes en este período.</div>'}`;
-  segmentGrid.appendChild(customerCard);
-  el.appendChild(segmentGrid);
+  grid.appendChild(customerCard);
 
-  // ── Grid de reportes ─────────────────────────
-  const grid = h('div', { class: 'gg2', style: { gap: '16px', alignItems: 'start' } });
+  // ── Tarjetas de reportes ─────────────────────
 
   // ── Ventas por método ────────────────────────
-  const payCard = h('div', { class: 'card' });
+  const payCard = _repSection(h('div', { class: 'card' }), 'pagos');
   payCard.appendChild(h('div', { class: 'card-title mb8' }, 'Por Método de Pago'));
 
   const payColors = {
@@ -398,7 +489,7 @@ function renderReporteContenido(el, d) {
   grid.appendChild(payCard);
 
   // ── Productos más vendidos ───────────────────
-  const prodCard = h('div', { class: 'card' });
+  const prodCard = _repSection(h('div', { class: 'card' }), 'productos');
   prodCard.appendChild(h('div', { class: 'fxb mb8' },
     h('div', { class: 'card-title' }, 'Productos Más Vendidos'),
     h('span', { style: { fontSize: '10px', color: 'var(--muted2)' } }, 'Con ganancia real')
@@ -451,7 +542,7 @@ function renderReporteContenido(el, d) {
   grid.appendChild(prodCard);
 
   // ── Cambios de costo / precio ───────────────
-  const priceCard = h('div', { class: 'card' });
+  const priceCard = _repSection(h('div', { class: 'card' }), 'precios');
   priceCard.appendChild(h('div', { class: 'fxb mb8' },
     h('div', { class: 'card-title' }, 'Cambios de Costo / Precio'),
     h('span', { style: { fontSize: '10px', color: 'var(--muted2)' } },
@@ -548,7 +639,7 @@ function renderReporteContenido(el, d) {
   const alertMap      = {};
   alerts.forEach(a => { alertMap[a.client.id] = a; });
 
-  const creditCard = h('div', { class: 'card' });
+  const creditCard = _repSection(h('div', { class: 'card' }), 'creditos');
   creditCard.appendChild(h('div', { class: 'fxb mb8' },
     h('div', { class: 'card-title' }, 'Cuentas por Cobrar'),
     h('div', { class: 'flex', style: { gap: '6px' } },
@@ -617,7 +708,7 @@ function renderReporteContenido(el, d) {
   // ── Stock bajo ───────────────────────────────
   const lowStock  = DB.products.filter(p => p.stock <= (p.stock_min || 5));
   const outStock  = lowStock.filter(p => p.stock === 0);
-  const stockCard = h('div', { class: 'card' });
+  const stockCard = _repSection(h('div', { class: 'card' }), 'stock');
   stockCard.appendChild(h('div', { class: 'fxb mb8' },
     h('div', null,
       h('div', { class: 'card-title' }, `Stock Bajo (${lowStock.length})`),
@@ -665,11 +756,10 @@ function renderReporteContenido(el, d) {
     });
   }
   grid.appendChild(stockCard);
-  el.appendChild(grid);
 
   // ── Gráfica de ventas diarias ────────────────
   if (dailySales.length > 0) {
-    const chartCard = h('div', { class: 'card', style: { marginTop: '16px' } });
+    const chartCard = _repSection(h('div', { class: 'card' }), 'grafica', true);
     chartCard.appendChild(h('div', { class: 'fxb mb8' },
       h('div', null,
         h('div', { class: 'card-title' }, 'Ventas Diarias'),
@@ -729,11 +819,11 @@ function renderReporteContenido(el, d) {
     });
 
     chartCard.appendChild(barChart);
-    el.appendChild(chartCard);
+    grid.appendChild(chartCard);
   }
 
   const detailRows = d.salesDetail || [];
-  const detailCard = h('div', { class: 'card', style: { marginTop: '16px' } });
+  const detailCard = _repSection(h('div', { class: 'card' }), 'facturas', true);
   detailCard.innerHTML = `
     <div class="fxb mb8">
       <div>
@@ -754,7 +844,8 @@ function renderReporteContenido(el, d) {
         </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;padding:18px;color:var(--muted2)">Sin facturas</td></tr>'}</tbody>
       </table>
     </div>`;
-  el.appendChild(detailCard);
+  grid.appendChild(detailCard);
+  _repApplyLayout(grid, 'financiero');
 }
 
 function renderAbonosContenido(el, d) {
@@ -791,7 +882,7 @@ function renderAbonosContenido(el, d) {
 
   const grid = h('div', { class: 'gg2', style: { gap: '16px', alignItems: 'start' } });
 
-  const methodCard = h('div', { class: 'card' });
+  const methodCard = _repSection(h('div', { class: 'card' }), 'metodos');
   methodCard.appendChild(h('div', { class: 'card-title mb8' }, 'Abonos por método'));
   if (!byMethod.length) {
     methodCard.appendChild(h('div', { style: 'font-size:12px;color:var(--muted2);padding:12px 0' }, 'Sin abonos en este período'));
@@ -814,7 +905,7 @@ function renderAbonosContenido(el, d) {
   }
   grid.appendChild(methodCard);
 
-  const monthCard = h('div', { class: 'card' });
+  const monthCard = _repSection(h('div', { class: 'card' }), 'meses');
   monthCard.appendChild(h('div', { class: 'card-title mb8' }, 'Mes por mes'));
   if (!byMonth.length) {
     monthCard.appendChild(h('div', { style: 'font-size:12px;color:var(--muted2);padding:12px 0' }, 'Sin meses con abonos'));
@@ -851,7 +942,7 @@ function renderAbonosContenido(el, d) {
   grid.appendChild(monthCard);
   el.appendChild(grid);
 
-  const dayCard = h('div', { class: 'card', style: { marginTop: '16px' } });
+  const dayCard = _repSection(h('div', { class: 'card' }), 'dias', true);
   dayCard.appendChild(h('div', { class: 'fxb mb8' },
     h('div', null,
       h('div', { class: 'card-title' }, 'Día por día'),
@@ -882,9 +973,9 @@ function renderAbonosContenido(el, d) {
       ));
     });
   }
-  el.appendChild(dayCard);
+  grid.appendChild(dayCard);
 
-  const tableCard = h('div', { class: 'card', style: { marginTop: '16px' } });
+  const tableCard = _repSection(h('div', { class: 'card' }), 'detalle', true);
   tableCard.appendChild(h('div', { class: 'fxb mb8' },
     h('div', null,
       h('div', { class: 'card-title' }, 'Detalle de abonos'),
@@ -927,7 +1018,8 @@ function renderAbonosContenido(el, d) {
       <tbody>${rowsHtml}</tbody>
     </table>`
   }));
-  el.appendChild(tableCard);
+  grid.appendChild(tableCard);
+  _repApplyLayout(grid, 'abonos');
 }
 
 function exportAbonosPDF() {

@@ -1,6 +1,6 @@
 {
   "name": "velo-pos",
-  "version": "1.55.2",
+  "version": "1.56.0",
   "description": "Sistema POS desktop profesional para comercios, repuestos, sucursales y operaciones empresariales",
   "main": "main.js",
   "scripts": {
@@ -39,6 +39,11 @@
     "test:financial": "node scripts/run-electron-node.js scripts/test-financial-core.js",
     "test:external-expenses": "node scripts/run-electron-node.js scripts/test-external-commission-expense.js",
     "test:business": "node scripts/run-electron-node.js scripts/test-multi-business-detached-db.js",
+    "test:manual-backup": "node scripts/run-electron-node.js scripts/test-manual-backup.js",
+    "test:desktop-business-import": "node scripts/run-electron-node.js scripts/test-desktop-business-import.js",
+    "test:cloud-migration-package": "node scripts/run-electron-node.js scripts/test-cloud-migration-package.js",
+    "test:consignment-physical": "node scripts/run-electron-node.js scripts/test-consignment-physical.js",
+    "test:continuity-picker": "node scripts/test-continuity-picker-ui.js",
     "test:url": "node scripts/test-url-safe.js",
     "test:input-normalization": "node scripts/test-input-normalization.js",
     "test:user-permissions": "node scripts/run-electron-node.js scripts/test-user-operational-permissions.js",
@@ -69,7 +74,7 @@
     "test:service-orders": "node scripts/run-electron-node.js scripts/test-service-orders.js",
     "test:tech-premium": "node scripts/run-electron-node.js scripts/test-tech-premium-operations.js",
     "test:tech-lifecycle": "node scripts/run-electron-node.js scripts/test-tech-device-lifecycle.js",
-    "test:tech-readiness": "npm run release:check && npm run test:sqlite-runtime && npm run test:suite-invariants && npm run test:printing && npm run test:pdf-compatibility && npm run test:global-search && npm run test:walk-in-credit && npm run test:sale-cancellation-payments && npm run test:sale-offers && npm run test:ncf && npm run test:product-units && npm run test:inventory-count && npm run test:inventory-count-ui && npm run test:service-orders && npm run test:service-portal && npm run test:trade-in-warranty && npm run test:suite-license && npm run test:server-service && npm run test:tech-premium && npm run test:tech-lifecycle",
+    "test:tech-readiness": "npm run release:check && npm run test:sqlite-runtime && npm run test:suite-invariants && npm run test:printing && npm run test:pdf-compatibility && npm run test:global-search && npm run test:walk-in-credit && npm run test:sale-cancellation-payments && npm run test:sale-offers && npm run test:ncf && npm run test:product-units && npm run test:inventory-count && npm run test:inventory-count-ui && npm run test:manual-backup && npm run test:desktop-business-import && npm run test:cloud-migration-package && npm run test:consignment-physical && npm run test:continuity-picker && npm run test:cash-ui && npm run test:cash-policy && npm run test:experience && npm run test:service-orders && npm run test:service-portal && npm run test:trade-in-warranty && npm run test:suite-license && npm run test:server-service && npm run test:tech-premium && npm run test:tech-lifecycle",
     "test:service-portal": "node scripts/run-electron-node.js scripts/test-service-customer-portal.js",
     "test:trade-in-warranty": "node scripts/run-electron-node.js scripts/test-trade-in-warranty.js",
     "test:suite-license": "node scripts/test-suite-license-products.js && node scripts/test-provider-license-manager.js",

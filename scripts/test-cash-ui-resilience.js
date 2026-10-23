@@ -59,6 +59,36 @@ vm.runInContext(source, context, { filename: 'caja.js' });
   assert.ok(!closeHandler.includes('await imprimirReporteDia('));
   console.log('  ✓ cerrar caja no abre ni imprime el reporte automáticamente');
 
+  let closeWarning = '';
+  let modalOpened = false;
+  context.cajaSession = { id: 21, open_amount: 1000, status: 'open' };
+  context.DB = { caja: [] };
+  context.toast = message => { closeWarning = message; };
+  context.openModal = () => { modalOpened = true; };
+  context.window.api.cash.getSessionSales = async () => [];
+  context.window.api.cash.getSessionPayments = async () => ({ ok: true, data: [] });
+  context.window.api.cash.getSessionCashSummary = async () => null;
+  await context.openCierreCajaModal();
+  assert.match(closeWarning, /No se pudo calcular el efectivo esperado/);
+  assert.strictEqual(modalOpened, false);
+  console.log('  ✓ impide cerrar si el resumen real no está disponible, evitando un sobrante falso');
+
+  let printedReport = null;
+  context.CFG = { module_gastos: '0' };
+  context.today = () => '2026-10-23';
+  context.nowt = () => '12:00';
+  context.printCierreCaja = report => { printedReport = report; };
+  context.window.api.cash.getSessionReport = async () => ({
+    session: { id: 21 }, sales: [], totals: {}, summary: { expected: 1000 },
+  });
+  context.cajaSession = { id: 21, open_amount: 1000, close_amount: 0, status: 'closed' };
+  await context.imprimirReporteDia();
+  assert.strictEqual(printedReport.diff, -1000);
+  context.cajaSession.status = 'open';
+  await context.imprimirReporteDia();
+  assert.strictEqual(printedReport.diff, 0);
+  console.log('  ✓ el reporte muestra faltante con cierre en cero y omite la diferencia en vista previa');
+
   assert.ok(appSource.includes("className: 'other-open'") && appSource.includes('Otra caja abierta'));
   assert.ok(source.includes('Cajas abiertas en otras terminales') && source.includes('ALL IN ONE permanecerá protegido'));
   assert.ok(dataSource.includes('window.api.cash.getSessions().catch(() => null)'));

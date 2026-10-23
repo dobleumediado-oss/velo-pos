@@ -917,6 +917,27 @@ function renderLogin() {
     root.innerHTML = '';
     const wrap = h('div', { class: 'login-wrap', style: { width:'100%', height:'100%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:'20px' } },
 
+      // Acceso breve a Cloud sin competir visualmente con el inicio de sesión.
+      h('aside', { class: 'login-cloud-promo', 'aria-label': 'Conoce VELO Cloud' },
+        h('div', { class: 'login-cloud-badge' },
+          h('img', { class: 'login-cloud-logo', src: 'assets/velo-cloud-icon.svg', alt: '', 'aria-hidden': 'true' }),
+          'VELO CLOUD',
+          h('span', { class: 'login-cloud-badge-new' }, 'VERSIÓN WEB')
+        ),
+        h('h2', { class: 'login-cloud-heading' }, 'Tu negocio, ', h('span', null, 'donde estés.')),
+        h('p', { class: 'login-cloud-description' },
+          'Accede desde tu computadora o celular.'
+        ),
+        h('button', {
+          class: 'login-cloud-cta', type: 'button',
+          onclick: async () => {
+            const host = window._vertical?.id === 'tech' ? 'tech.velosuite.cloud' : 'pos.velosuite.cloud';
+            const result = await window.api.shell.openExternal(`https://${host}/registro`);
+            if (!result?.ok) toast('No se pudo abrir VELO Cloud', 'err');
+          }
+        }, 'Conocer versión web', h('span', { 'aria-hidden': 'true' }, '↗'))
+      ),
+
       // ── Reloj fuera de la card ──────────────
       h('div', { class: 'login-clock-outer' },
         h('div', { class: 'login-clock-time', id: 'login-clock-time' }, '00:00:00'),

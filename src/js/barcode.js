@@ -474,10 +474,7 @@ function _bcRenderProductList(filter = '') {
 
   const prods = DB.products.filter(p => {
     if (!filter) return true;
-    const q = filter.toLowerCase();
-    return p.name.toLowerCase().includes(q) ||
-           (p.code || '').toLowerCase().includes(q) ||
-           (p.barcode || '').toLowerCase().includes(q);
+    return matchText(`${p.name || ''} ${p.code || ''} ${p.barcode || ''}`, filter);
   });
 
   list.innerHTML = '';

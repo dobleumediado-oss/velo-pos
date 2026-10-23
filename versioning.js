@@ -2578,6 +2578,11 @@ const MIGRATIONS = [
     description: 'Conteo físico masivo en borrador con confirmación por producto e IMEI',
     run(db) { require('./lib/inventory-count').ensureInventoryCountSchema(db); },
   },
+  {
+    version: '1.55.0-consignment-custody',
+    description: 'Custodia física de artículos consignados, separada de inventario y ventas',
+    run(db) { require('./lib/consignment-physical').ensureSchema(db); },
+  },
 ];
 
 // ══════════════════════════════════════════════
@@ -2861,10 +2866,29 @@ function cleanOldBackups(backupDir, keep = 30) {
 // ══════════════════════════════════════════════
 // BACKUP MANUAL (llamado desde IPC)
 // ══════════════════════════════════════════════
-function createManualBackup(dataDir, destPath) {
-  const dbPath = path.join(dataDir, 'velo.db');
-  fs.copyFileSync(dbPath, destPath);
-  return destPath;
+async function createManualBackup(db, destPath) {
+  if (!db || typeof db.backup !== 'function') {
+    throw new Error('Conexión de base de datos no disponible para crear la copia');
+  }
+  const tempPath = path.join(path.dirname(destPath),
+    `.${path.basename(destPath)}.${process.pid}.${Date.now()}.tmp`);
+  try {
+    // La API de SQLite incluye las transacciones confirmadas que aún estén en WAL.
+    await db.backup(tempPath);
+    const Database = require('better-sqlite3');
+    const check = new Database(tempPath, { readonly: true, fileMustExist: true });
+    try {
+      if (check.pragma('quick_check', { simple: true }) !== 'ok') {
+        throw new Error('La copia no superó la comprobación de integridad');
+      }
+    } finally {
+      check.close();
+    }
+    fs.renameSync(tempPath, destPath);
+    return destPath;
+  } finally {
+    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+  }
 }
 
 // ══════════════════════════════════════════════
@@ -2872,33 +2896,51 @@ function createManualBackup(dataDir, destPath) {
 // ── IMPORTANTE: cierra la DB antes de copiar ──
 // El caller (main.js) debe reiniciar la app después de llamar esto.
 // ══════════════════════════════════════════════
+function validateSqliteBackup(sourcePath) {
+  if (!fs.existsSync(sourcePath)) throw new Error('Archivo de backup no encontrado');
+  const Database = require('better-sqlite3');
+  let candidate;
+  try {
+    candidate = new Database(sourcePath, { readonly: true, fileMustExist: true });
+    if (candidate.pragma('integrity_check', { simple: true }) !== 'ok') {
+      throw new Error('La copia tiene errores de integridad');
+    }
+  } catch (error) {
+    throw new Error(`La copia no es una base SQLite íntegra: ${error.message}`);
+  } finally {
+    candidate?.close();
+  }
+  return true;
+}
+
 function restoreBackup(dataDir, sourcePath) {
   const dbPath      = path.join(dataDir, 'velo.db');
   const safetyPath  = path.join(dataDir, `velo_before_restore_${Date.now()}.db`);
+  const stagingPath = path.join(dataDir, `.velo_restore_${process.pid}_${Date.now()}.tmp`);
 
-  // Verificar que el archivo fuente existe y parece una DB SQLite
-  if (!fs.existsSync(sourcePath)) {
-    throw new Error(`Archivo de backup no encontrado: ${sourcePath}`);
+  validateSqliteBackup(sourcePath);
+  if (path.resolve(sourcePath) === path.resolve(dbPath)) {
+    throw new Error('Selecciona una copia distinta de la base activa');
   }
-  const header = Buffer.alloc(16);
-  const fd     = fs.openSync(sourcePath, 'r');
-  fs.readSync(fd, header, 0, 16, 0);
-  fs.closeSync(fd);
-  if (!header.toString('ascii', 0, 16).startsWith('SQLite format 3')) {
-    throw new Error('El archivo seleccionado no es una base de datos SQLite válida');
+  let oldMoved = false;
+  try {
+    // Preparar y comprobar el reemplazo antes de mover la base anterior.
+    fs.copyFileSync(sourcePath, stagingPath, fs.constants.COPYFILE_EXCL);
+    validateSqliteBackup(stagingPath);
+    if (fs.existsSync(dbPath)) {
+      fs.renameSync(dbPath, safetyPath);
+      oldMoved = true;
+    }
+    try {
+      fs.renameSync(stagingPath, dbPath);
+    } catch (error) {
+      if (oldMoved) fs.renameSync(safetyPath, dbPath);
+      throw error;
+    }
+    return { ok: true, backupCreated: oldMoved ? safetyPath : null };
+  } finally {
+    if (fs.existsSync(stagingPath)) fs.unlinkSync(stagingPath);
   }
-
-  // Backup de seguridad del estado actual
-  if (fs.existsSync(dbPath)) {
-    fs.copyFileSync(dbPath, safetyPath);
-  }
-
-  // Copiar el backup sobre la DB activa
-  // NOTA: la conexión SQLite debe estar cerrada antes de llamar esto.
-  // main.js cierra la DB en el handler backup:restore antes de invocar esta función.
-  fs.copyFileSync(sourcePath, dbPath);
-
-  return { ok: true, backupCreated: safetyPath };
 }
 
 // ══════════════════════════════════════════════
@@ -2991,6 +3033,7 @@ module.exports = {
   seedAccountingCatalog,
   createManualBackup,
   createAutoBackup,
+  validateSqliteBackup,
   restoreBackup,
   getVersionInfo,
 };

@@ -24,10 +24,13 @@ expect('https://api.whatsapp.com/send?phone=1809', true);
 expect('https://www.google.com/maps/dir/?api=1&destination=18.48,-69.93', true);
 expect('https://www.waze.com/ul?ll=18.48,-69.93&navigate=yes', true);
 expect('https://velo-servidor.tail123.ts.net/r/principal/token', true);
+expect('https://pos.velosuite.cloud/registro', true);
+expect('https://tech.velosuite.cloud/registro', true);
 // Bloqueadas
 expect('http://wa.me/123', false);                 // http, no https
 expect('https://evil.com', false);                 // host no permitido
 expect('https://wa.me.evil.com', false);           // sufijo engañoso
+expect('https://pos.velosuite.cloud.evil.com/registro', false);
 expect('javascript:alert(1)', false);              // esquema peligroso
 expect('file:///etc/passwd', false);               // acceso a archivos
 expect('', false);

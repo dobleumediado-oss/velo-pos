@@ -86,6 +86,12 @@ try {
   `).get(cashSessionId, expenseId);
   ok(Number(cashMovement?.amount) === 1250,
     'la comisión pagada en efectivo descuenta exactamente el monto del cuadre de caja');
+  const fundAfterPayment = DB.cashRepo.getSessionCashSummary(cashSessionId);
+  ok(fundAfterPayment.openAmount === 5000 &&
+    fundAfterPayment.pettyExpenseCash === 1250 &&
+    fundAfterPayment.openingFundRemaining === 3750 &&
+    fundAfterPayment.expected === 3750,
+  'el fondo restante y el efectivo esperado restan el gasto de RD$1,250');
 
   console.log('\n== Compatibilidad · pago a proveedor existente ==');
   const supplierId = DB.suppliersRepo.create({ name: 'Proveedor QA', rnc: '101000001' });
@@ -114,6 +120,24 @@ try {
   const summary = DB.expensesRepo.getSummary({ from: '2026-08-25', to: '2026-08-25' });
   ok(Number(summary.from_cash) === 1250,
     'el resumen separa el efectivo de caja de los pagos por banco');
+  const fundAfterBankPayment = DB.cashRepo.getSessionCashSummary(cashSessionId);
+  ok(fundAfterBankPayment.pettyExpenseCash === 1250 &&
+    fundAfterBankPayment.openingFundRemaining === 3750,
+  'el pago por banco no reduce el fondo físico de apertura');
+
+  const closing = DB.cashRepo.close({
+    sessionId: cashSessionId,
+    closeAmount: 3750,
+    closeBills: {},
+    expected: 5000, // Un cliente antiguo podría enviar el fondo sin descontar el gasto.
+    notes: 'Arqueo de prueba',
+    userId: admin.id,
+    cajero: admin.name,
+  });
+  const closed = db.prepare('SELECT expected,difference FROM cash_sessions WHERE id=?').get(cashSessionId);
+  ok(closing.expected === 3750 && closing.diff === 0 &&
+    closed.expected === 3750 && closed.difference === 0,
+  'el cierre recalcula el efectivo desde los movimientos y no declara sobrante por el gasto');
 
   const expenseUi = fs.readFileSync(path.join(__dirname, '../src/js/gastos.js'), 'utf8');
   const printUi = fs.readFileSync(path.join(__dirname, '../src/js/print.js'), 'utf8');

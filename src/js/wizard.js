@@ -86,11 +86,7 @@ function renderAuditTable(logs) {
 
   const filtered = logs.filter(l => {
     const mEntity = !entity || l.entity === entity;
-    const mQ = !q ||
-      (l.action     || '').toLowerCase().includes(q) ||
-      (l.user_name  || '').toLowerCase().includes(q) ||
-      (l.detail     || '').toLowerCase().includes(q) ||
-      (l.entity     || '').toLowerCase().includes(q);
+    const mQ = !q || matchText([l.action, l.user_name, l.detail, l.entity].join(' '), q);
     return mEntity && mQ;
   });
 

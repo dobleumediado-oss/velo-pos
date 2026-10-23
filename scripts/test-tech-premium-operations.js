@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { createEncryptedBackup, verifyEncryptedBackup } = require('../lib/continuity-backup');
+const { restoreCompleteBackupToEmptyDirectory } = require('../lib/cloud-migration-package');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'velo-tech-premium-'));
 const externalDir = fs.mkdtempSync(path.join(os.tmpdir(), 'velo-tech-external-'));
@@ -31,7 +32,12 @@ const DB = require('../database');
   DB.serviceOrdersRepo.saveAppointment({id:appointmentId,service_order_id:order.id,customer_id:1,customer_name:'Cliente QA',customer_phone:'8095550101',reason:'Diagnóstico',starts_at:'2099-08-20T09:00',technician_id:technicianId},admin);
   assert.strictEqual(db.prepare("SELECT COUNT(*) n FROM service_message_queue WHERE appointment_id=? AND status='pending'").get(appointmentId).n,2);
 
-  const evidence = DB.serviceOrdersRepo.addEvidenceMetadata(order.id,{evidence_type:'recepcion',storage_path:'service-evidence/1/test.jpg',mime_type:'image/jpeg',sha256:'a'.repeat(64),original_name:'entrada.jpg'},admin);
+  const evidencePath = path.join(tempDir, 'service-evidence', '1', 'test.jpg');
+  fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
+  const evidenceBytes = Buffer.from('evidencia ficticia de prueba');
+  fs.writeFileSync(evidencePath, evidenceBytes);
+  const evidenceHash = require('crypto').createHash('sha256').update(evidenceBytes).digest('hex');
+  const evidence = DB.serviceOrdersRepo.addEvidenceMetadata(order.id,{evidence_type:'recepcion',storage_path:'service-evidence/1/test.jpg',mime_type:'image/jpeg',sha256:evidenceHash,original_name:'entrada.jpg'},admin);
   assert.strictEqual(evidence.evidence_type,'recepcion');
 
   const timer = DB.serviceOrdersRepo.startTimer(order.id,technicianId,'Diagnóstico',admin);
@@ -44,13 +50,32 @@ const DB = require('../database');
   assert.strictEqual(workpaper.ir17_workpaper.isr_retenido,1000);
   assert.match(workpaper.disclaimer,/DGII/);
 
-  const encrypted = await createEncryptedBackup({db,destinationDir:externalDir,passphrase:'Prueba-segura-2026',businessId:'qa',businessName:'QA Tech'});
+  const encrypted = await createEncryptedBackup({db,dataDir:tempDir,businessDataDir:tempDir,
+    destinationDir:externalDir,passphrase:'Prueba-segura-2026',businessId:'principal',
+    businessName:'QA Tech',vertical:'TECH',appVersion:'prueba'});
   assert.ok(fs.existsSync(encrypted.path));
-  const verified = verifyEncryptedBackup({filePath:encrypted.path,passphrase:'Prueba-segura-2026'});
+  const verified = await verifyEncryptedBackup({filePath:encrypted.path,passphrase:'Prueba-segura-2026'});
   assert.strictEqual(verified.integrity,'ok');
+  assert.strictEqual(verified.evidenceFiles,1);
+  const recoveredDir = path.join(externalDir, 'recuperado');
+  await restoreCompleteBackupToEmptyDirectory({filePath:encrypted.path,
+    passphrase:'Prueba-segura-2026',destinationDir:recoveredDir});
+  const recoveredDb = new (require('better-sqlite3'))(path.join(recoveredDir,'velo.db'),{readonly:true});
+  try {
+    for (const table of ['audit_logs','service_order_evidence','accounting_entries','ncf_sequences','settings','service_orders']) {
+      assert.deepStrictEqual(recoveredDb.prepare(`SELECT * FROM ${table}`).all(),db.prepare(`SELECT * FROM ${table}`).all(),
+        `${table} debe quedar exactamente igual al recuperar`);
+    }
+    assert.deepStrictEqual(fs.readFileSync(path.join(recoveredDir,'service-evidence','1','test.jpg')),evidenceBytes);
+  } finally { recoveredDb.close(); }
   let wrongKeyRejected=false;
-  try { verifyEncryptedBackup({filePath:encrypted.path,passphrase:'Clave-incorrecta-2026'}); } catch { wrongKeyRejected=true; }
+  try { await verifyEncryptedBackup({filePath:encrypted.path,passphrase:'Clave-incorrecta-2026'}); } catch { wrongKeyRejected=true; }
   assert.ok(wrongKeyRejected,'una clave incorrecta debe rechazarse');
+  const previousFormat = await createEncryptedBackup({db,destinationDir:externalDir,
+    passphrase:'Formato-anterior-2026',businessId:'principal',businessName:'Anterior',legacyFormat:true});
+  const oldVerified = await verifyEncryptedBackup({filePath:previousFormat.path,
+    passphrase:'Formato-anterior-2026'});
+  assert.strictEqual(oldVerified.integrity,'ok','las copias cifradas anteriores siguen siendo verificables');
 
   console.log('✓ TECH premium: catálogo, agenda, evidencia, tiempo, fiscalidad y continuidad verificados');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(()=>{

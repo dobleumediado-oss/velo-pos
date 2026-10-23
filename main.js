@@ -62,6 +62,8 @@ const { roleRequiresOpenCash } = require('./src/js/cash-close-policy');
 const { checkPublicPortalAccess } = require('./lib/portal-public-check');
 const { buildWhatsAppUrls } = require('./lib/whatsapp-url');
 const { createEncryptedBackup, verifyEncryptedBackup } = require('./lib/continuity-backup');
+const { createMigrationPackage, restoreCompleteBackupToEmptyDirectory } = require('./lib/cloud-migration-package');
+const { importCompleteBackupAsBusiness } = require('./lib/desktop-business-import');
 const {
   buildPdfOptions,
   explicitSheetPage,
@@ -73,6 +75,7 @@ const {
 const { createExcelReportBuffer } = require('./src/main/excel-report');
 const { canManageInventory, canManageCustomers, modulePermission } = require('./lib/user-operational-permissions');
 const inventoryCount = require('./lib/inventory-count');
+const consignmentPhysical = require('./lib/consignment-physical');
 const {
   EQUIPARTS_FILES,
   loadEquipartsCsvSet,
@@ -232,7 +235,7 @@ const {
 
 const {
   APP_VERSION, initVersioning, seedAccountingCatalog,
-  createManualBackup, createAutoBackup, restoreBackup, getVersionInfo
+  createManualBackup, createAutoBackup, validateSqliteBackup, restoreBackup, getVersionInfo
 } = require('./versioning');
 
 // El logger es opcional: si por cualquier razón el módulo no está disponible
@@ -1663,6 +1666,9 @@ ipcMain.handle('products:getModels', async () => {
 ipcMain.handle('products:create', async (_, { data, requestUserId }) => {
   try {
     const reqUser = _inventoryAuthorizedUser(requestUserId);
+    if (require('./src/verticals').activeVerticalId() === 'auto_parts' && data.condition === 'consignacion') {
+      throw new Error('Registra artículos consignados en la pestaña Consignados para control físico');
+    }
     const id = productsRepo.create(data);
     audit(requestUserId, reqUser.name, 'producto_creado', 'products', id, data.name);
     return { ok: true, id };
@@ -1675,6 +1681,9 @@ ipcMain.handle('products:update', async (_, { id, data, requestUserId, source, r
   try {
     const reqUser = _inventoryAuthorizedUser(requestUserId);
     const before = productsRepo.getById(id);
+    if (require('./src/verticals').activeVerticalId() === 'auto_parts' && data.condition === 'consignacion' && before?.condition !== 'consignacion') {
+      throw new Error('Registra artículos consignados en la pestaña Consignados para control físico');
+    }
     const updateResult = productsRepo.update(id, data, {
       userId: requestUserId,
       source: source || 'manual',
@@ -1772,6 +1781,53 @@ ipcMain.handle('inventoryCount:apply', async (_, { countId, reason, requestUserI
     return { ok: true, data: inventoryCount.applyCount(db, {
       countId, reason, userId: requestUserId, userName: reqUser.name, audit, accountingRepo,
     }) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+function _consignmentUser(requestUserId, write = false) {
+  if (require('./src/verticals').activeVerticalId() !== 'auto_parts') {
+    throw new Error('Este registro físico solo está disponible en VELO POS');
+  }
+  return write ? _inventoryAuthorizedUser(requestUserId) : _moduleAuthorizedUser(requestUserId, 'inventario');
+}
+
+ipcMain.handle('consignmentPhysical:list', async (_, { requestUserId } = {}) => {
+  try {
+    _consignmentUser(requestUserId);
+    return { ok: true, data: consignmentPhysical.list(db) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('consignmentPhysical:movements', async (_, { lotId, requestUserId } = {}) => {
+  try {
+    _consignmentUser(requestUserId);
+    return { ok: true, data: consignmentPhysical.movements(db, lotId) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('consignmentPhysical:create', async (_, data = {}) => {
+  try {
+    const reqUser = _consignmentUser(data.requestUserId, true);
+    const id = db.transaction(() => {
+      const createdId = consignmentPhysical.create(db, data, reqUser.id);
+      audit(reqUser.id, reqUser.name, 'consignado_recibido', 'consignment_lots', createdId,
+        `${data.itemName || ''} · ${data.qty || ''} unidades`);
+      return createdId;
+    })();
+    return { ok: true, id };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('consignmentPhysical:move', async (_, data = {}) => {
+  try {
+    const reqUser = _consignmentUser(data.requestUserId, true);
+    const result = db.transaction(() => {
+      const moved = consignmentPhysical.move(db, data, reqUser.id);
+      audit(reqUser.id, reqUser.name, data.kind === 'devolucion' ? 'consignado_devuelto' : 'consignado_recibido',
+        'consignment_lots', data.lotId, `${data.qty} unidades · ${data.reason || ''}`);
+      return moved;
+    })();
+    return { ok: true, data: result };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
@@ -2048,7 +2104,10 @@ ipcMain.handle('serviceOrders:addEvidence', async (_, data = {}) => {
     const order = serviceOrdersRepo.getById(data.id);
     if (!order) throw new Error('Orden de servicio no encontrada');
     const extension = { 'image/jpeg':'jpg', 'image/png':'png', 'image/webp':'webp' }[match[1]];
-    const folder = path.join(DATA_DIR, 'service-evidence', String(order.id));
+    // Las órdenes de negocios distintos pueden compartir el mismo ID local.
+    // Las evidencias nuevas se guardan en una carpeta exclusiva por negocio;
+    // las rutas antiguas quedan intactas y siguen leyéndose desde la base.
+    const folder = path.join(DATA_DIR, 'service-evidence', currentBusinessId() || 'principal', String(order.id));
     fs.mkdirSync(folder, { recursive:true });
     const fileName = `${Date.now()}-${crypto.randomUUID()}.${extension}`;
     const finalPath = path.join(folder, fileName);
@@ -4883,7 +4942,7 @@ ipcMain.handle('backup:create', async (_, { requestUserId }) => {
 
     if (!filePath) return { ok: false, error: 'Cancelado' };
 
-    createManualBackup(currentDataDir(), filePath);
+    await createManualBackup(db, filePath);
 
     const reqUser = authRepo.findById(requestUserId);
     audit(requestUserId, reqUser?.name || '', 'backup_creado', 'backup', null,
@@ -4896,6 +4955,7 @@ ipcMain.handle('backup:create', async (_, { requestUserId }) => {
 });
 
 ipcMain.handle('backup:restore', async (_, { requestUserId, fileName } = {}) => {
+  let databaseClosed = false;
   try {
     const reqUser = authRepo.findById(requestUserId);
     if (!_hasActionPermission(reqUser, 'restore_backup', ['admin', 'superadmin'])) {
@@ -4920,6 +4980,7 @@ ipcMain.handle('backup:restore', async (_, { requestUserId, fileName } = {}) => 
       filePath = filePaths[0];
     }
 
+    validateSqliteBackup(filePath);
     const biz = currentBusinessLabel();
     // Registrar auditoría ANTES de cerrar la DB
     audit(requestUserId, reqUser.name, 'backup_restaurado', 'backup', null,
@@ -4927,7 +4988,7 @@ ipcMain.handle('backup:restore', async (_, { requestUserId, fileName } = {}) => 
 
     // Cerrar la conexión SQLite antes de copiar el archivo (crítico en Windows)
     const dbInst = require('./database').getDB();
-    if (dbInst) dbInst.close();
+    if (dbInst) { dbInst.close(); databaseClosed = true; }
 
     const result = restoreBackup(currentDataDir(), filePath);
 
@@ -4945,6 +5006,16 @@ ipcMain.handle('backup:restore', async (_, { requestUserId, fileName } = {}) => 
 
     return { ok: true, message: 'Reiniciando...' };
   } catch (e) {
+    if (databaseClosed) {
+      await dialog.showMessageBox(mainWindow, {
+        type: 'error', title: 'No se pudo restaurar',
+        message: e.message,
+        detail: 'La copia actual se conservó. VELO se reiniciará para reabrir la base.',
+        buttons: ['Reiniciar'],
+      });
+      app.relaunch();
+      app.exit(0);
+    }
     return { ok: false, error: e.message };
   }
 });
@@ -4993,12 +5064,29 @@ ipcMain.handle('backup:pickEncryptedFile', async () => {
     }
     const selected = await dialog.showOpenDialog(mainWindow, {
       title:'Seleccionar respaldo cifrado',
-      filters:[{name:'Respaldo cifrado VELO',extensions:['veloenc']}],
+      filters:[{name:'Respaldo cifrado VELO',extensions:['velobackup','veloenc']}],
       properties:['openFile'],
     });
     if (!selected.filePaths?.length) return { ok:false, error:'Cancelado' };
     return { ok:true, path:selected.filePaths[0] };
   } catch (e) { return { ok:false, error:e.message }; }
+});
+
+const cloudExportsInProgress = new WeakSet();
+ipcMain.handle('backup:prepareCloud', async (_, { requestUserId, passphrase, destinationDir } = {}) => {
+  const sourceDb = db;
+  let started = false;
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede preparar la migración');
+    if (cloudExportsInProgress.has(sourceDb)) throw new Error('Ya se está preparando una copia de este negocio');
+    cloudExportsInProgress.add(sourceDb); started = true;
+    const biz = currentBusinessLabel();
+    const result = await createMigrationPackage({ db: sourceDb, dataDir: DATA_DIR, destinationDir, passphrase,
+      businessId: biz.id, vertical: require('./src/verticals').activeVerticalId() === 'tech' ? 'TECH' : 'POS', appVersion: app.getVersion() });
+    return { ok: true, data: result };
+  } catch (e) { return { ok: false, error: e.message }; }
+  finally { if (started) cloudExportsInProgress.delete(sourceDb); }
 });
 
 ipcMain.handle('backup:createEncrypted', async (_, { requestUserId, passphrase, destinationDir } = {}) => {
@@ -5007,8 +5095,10 @@ ipcMain.handle('backup:createEncrypted', async (_, { requestUserId, passphrase, 
     if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede crear respaldos externos');
     if (!path.isAbsolute(String(destinationDir || ''))) throw new Error('Selecciona una carpeta externa válida desde la PC Servidor');
     const biz = currentBusinessLabel();
-    const result = await createEncryptedBackup({ db, destinationDir, passphrase,
-      businessId:biz.id, businessName:biz.name });
+    const result = await createEncryptedBackup({ db, dataDir:DATA_DIR, businessDataDir:currentDataDir(),
+      destinationDir, passphrase, businessId:biz.id, businessName:biz.name,
+      vertical:require('./src/verticals').activeVerticalId() === 'tech' ? 'TECH' : 'POS',
+      appVersion:app.getVersion() });
     db.prepare(`INSERT INTO continuity_events(event_type,status,destination,checksum,detail) VALUES('encrypted_backup','verified',?,?,?)`)
       .run(result.path, result.checksum, `Snapshot consistente · ${result.bytes} bytes`);
     settingsRepo.set('continuity_external_backup_path', destinationDir);
@@ -5025,7 +5115,7 @@ ipcMain.handle('backup:verifyEncrypted', async (_, { requestUserId, passphrase, 
     const reqUser = authRepo.findById(requestUserId);
     if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede verificar respaldos');
     if (!path.isAbsolute(String(filePath || ''))) throw new Error('Selecciona un respaldo válido desde la PC Servidor');
-    const result = verifyEncryptedBackup({ filePath, passphrase });
+    const result = await verifyEncryptedBackup({ filePath, passphrase });
     const now = new Date().toISOString();
     db.prepare(`INSERT INTO continuity_events(event_type,status,destination,checksum,detail) VALUES('restore_test','verified',?,?,?)`)
       .run(filePath, result.checksum, 'Descifrado, integrity_check y foreign_key_check aprobados');
@@ -5036,6 +5126,41 @@ ipcMain.handle('backup:verifyEncrypted', async (_, { requestUserId, passphrase, 
     try { db.prepare(`INSERT INTO continuity_events(event_type,status,detail) VALUES('restore_test','failed',?)`).run(String(e.message)); } catch {}
     return { ok:false, error:e.message };
   }
+});
+
+ipcMain.handle('backup:recoverComplete', async (_, { requestUserId, passphrase, filePath, destinationDir } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin','superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede recuperar respaldos');
+    if (!_canPickContinuityFilesHere() || !path.isAbsolute(String(filePath || '')) ||
+        !path.isAbsolute(String(destinationDir || ''))) throw new Error('Selecciona el archivo y la carpeta desde la PC Servidor');
+    const recoveryDir = path.join(destinationDir, `velo-recuperado-${crypto.randomUUID()}`);
+    const result = await restoreCompleteBackupToEmptyDirectory({ filePath, passphrase, destinationDir: recoveryDir });
+    audit(reqUser.id, reqUser.name, 'backup_recuperado_en_carpeta', 'backup', null,
+      `Negocio: ${result.businessId} | Carpeta: ${recoveryDir}`);
+    return { ok:true, data:result };
+  } catch (e) { return { ok:false, error:e.message }; }
+});
+
+ipcMain.handle('backup:importComplete', async (_, { requestUserId, passphrase, filePath } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || reqUser.role !== 'superadmin') throw new Error('Solo superadmin puede incorporar un negocio recuperado');
+    if (!_canPickContinuityFilesHere() || !path.isAbsolute(String(filePath || ''))) {
+      throw new Error('Selecciona la copia desde la PC Servidor');
+    }
+    const result = await importCompleteBackupAsBusiness({ filePath, passphrase,
+      rootDataDir: DATA_DIR,
+      vertical: require('./src/verticals').activeVerticalId() === 'tech' ? 'TECH' : 'POS',
+      appVersion: app.getVersion() });
+    try {
+      audit(reqUser.id, reqUser.name, 'negocio_importado_desde_copia', 'businesses', result.id,
+        `Negocio: ${result.name} | Captura: ${result.capturedAt}`);
+    } catch (error) {
+      logError('backup', 'Negocio incorporado, pero no se pudo registrar en la auditoría activa: ' + error.message);
+    }
+    return { ok: true, data: result };
+  } catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('backup:getContinuityStatus', async (_, { requestUserId } = {}) => {

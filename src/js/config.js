@@ -1004,8 +1004,8 @@ async function renderConfiguracion(el) {
   backupCard.appendChild(h('div', { class: 'alrt b', style: 'margin-bottom:12px' },
     h('div', { class: 'alrt-dot b' }),
     h('div', null,
-      h('div', { class: 'alrt-title' }, 'Backup automático activo'),
-      h('div', { class: 'alrt-sub' }, 'Se crea automáticamente cada vez que inicia la app.')
+      h('div', { class: 'alrt-title' }, 'Backup automático de la base activo'),
+      h('div', { class: 'alrt-sub' }, 'Se crea al iniciar la app para el negocio seleccionado. Para conservar también las evidencias fuera de esta PC, usa «Crear copia externa».')
     )
   ));
   backupCard.appendChild(h('div', { class: 'flex', style: 'gap:8px;margin-bottom:12px' },
@@ -1016,13 +1016,22 @@ async function renderConfiguracion(el) {
     h('div', { class: 'alrt-dot' }),
     h('div', null,
       h('div', { class: 'alrt-title' }, 'Continuidad externa cifrada'),
-      h('div', { class: 'alrt-sub' }, 'Crea una copia consistente protegida por clave y permite probar su restauración sin reemplazar los datos activos.')
+      h('div', { class: 'alrt-sub' }, 'Guarda en un archivo cifrado la base completa del negocio seleccionado y sus evidencias de servicio. Puedes ensayar su recuperación sin reemplazar los datos activos.')
     )
   ));
   backupCard.appendChild(h('div', { class: 'flex', style: 'gap:8px;margin-bottom:12px' },
     h('button', { class: 'btn btn-out btn-fw', onclick: abrirBackupCifrado, html: '🔐 Crear copia externa' }),
     h('button', { class: 'btn btn-out btn-fw', onclick: abrirVerificacionCifrada, html: '✓ Probar una copia' })
   ));
+  backupCard.appendChild(h('button', { class: 'btn btn-out btn-fw', style: 'margin-bottom:12px',
+    onclick: abrirRecuperacionCompleta, html: '↺ Recuperar copia en carpeta nueva' }));
+  if (_cfgUser()?.role === 'superadmin') {
+    backupCard.appendChild(h('button', { class: 'btn btn-out btn-fw', style: 'margin-bottom:12px',
+      onclick: abrirImportacionCompleta, html: '＋ Incorporar copia como negocio nuevo' }));
+  }
+  backupCard.appendChild(h('div', { class: 'alrt-sub', style: 'margin-bottom:8px' },
+    'Preparación para Cloud: guarda una copia cifrada del negocio seleccionado y sus evidencias de servicio. La importación y la activación en Cloud todavía no están disponibles.'));
+  backupCard.appendChild(h('button', { class: 'btn btn-out', style: 'margin-bottom:12px', onclick: abrirPreparacionCloud }, 'Preparar migración a Cloud'));
   if (info.backups?.length) {
     const bList = h('div');
     bList.appendChild(h('div', { style: 'font-size:11px;font-weight:700;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em' }, 'Backups disponibles'));
@@ -1687,10 +1696,40 @@ async function hacerBackupManual() {
   }
 }
 
+function abrirPreparacionCloud() {
+  openModal(`<div class="modal-title">Preparar migración a Cloud</div>
+    <div class="modal-sub">Puedes seguir trabajando en Desktop. Se copiará la base completa del negocio seleccionado, incluyendo historial, saldos y numeración, junto con las evidencias de servicio disponibles.</div>
+    <div class="alrt-sub" style="margin:12px 0">Este archivo es una copia inicial: las operaciones posteriores necesitarán una sincronización final. Todavía no importa ni activa el negocio en Cloud. Si tienes varios negocios, prepara cada uno por separado.</div>
+    <div class="fg"><label class="lbl">Clave para proteger el archivo</label><input class="inp" id="cloud-export-pass" type="password" autocomplete="new-password" maxlength="1024" placeholder="Mínimo 12 caracteres"></div>
+    <div class="fg"><label class="lbl">Confirmar clave</label><input class="inp" id="cloud-export-confirm" type="password" autocomplete="new-password" maxlength="1024"></div>
+    <div class="alrt-sub">Conserva la clave: VELO no la guarda y será necesaria para abrir el archivo.</div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button><button class="btn btn-dark" id="cloud-export-create">Seleccionar carpeta y preparar</button></div>`);
+  const button = document.getElementById('cloud-export-create');
+  const password = document.getElementById('cloud-export-pass');
+  const confirmation = document.getElementById('cloud-export-confirm');
+  button.onclick = async () => {
+    const passphrase = password.value;
+    if (passphrase.length < 12) return toast('Usa una clave de al menos 12 caracteres', 'w');
+    if (passphrase !== confirmation.value) return toast('Las claves no coinciden', 'w');
+    button.disabled = true;
+    try {
+      const picked = await window.api.backup.pickExternalDirectory();
+      if (!picked?.ok) { if (picked?.error !== 'Cancelado') toast(picked?.error || 'No se pudo seleccionar la carpeta', 'err'); return; }
+      button.textContent = 'Preparando y verificando…';
+      const result = await window.api.backup.prepareCloud({ requestUserId: _cfgUser().id, passphrase, destinationDir: picked.path });
+      if (!result?.ok) throw new Error(result?.error || 'No se pudo preparar la copia');
+      password.value = ''; confirmation.value = '';
+      if (button.isConnected) closeModal();
+      toast('Copia cifrada creada y verificada en la carpeta seleccionada. Cloud aún no está activado.', 'ok');
+    } catch (error) { toast(error.message || 'No se pudo preparar la copia', 'err'); }
+    finally { button.disabled = false; button.textContent = 'Seleccionar carpeta y preparar'; }
+  };
+}
+
 function abrirBackupCifrado() {
   openModal(`<div class="modal-title">Respaldo externo cifrado</div>
-    <div class="modal-sub">Guarda una copia cifrada de la base de este negocio fuera de la PC. Conserva la clave: VELO no la guarda.</div>
-    <div class="fg" style="margin-top:14px"><label class="lbl" for="continuity-pass">Clave del respaldo *</label><input class="inp" id="continuity-pass" type="password" autocomplete="new-password" placeholder="Mínimo 10 caracteres"></div>
+    <div class="modal-sub">Se guardará un archivo por negocio con su historial y las evidencias de servicio. Conserva la clave: VELO no la guarda.</div>
+    <div class="fg" style="margin-top:14px"><label class="lbl" for="continuity-pass">Clave del respaldo *</label><input class="inp" id="continuity-pass" type="password" autocomplete="new-password" placeholder="Mínimo 12 caracteres"></div>
     <div class="fg"><label class="lbl" for="continuity-pass2">Confirmar clave *</label><input class="inp" id="continuity-pass2" type="password" autocomplete="new-password"></div>
     <div class="fg"><label class="lbl" for="continuity-folder">Carpeta de destino *</label>
       <div class="flex" style="gap:8px"><input class="inp" id="continuity-folder" type="text" autocomplete="off" placeholder="Ej.: E:\\Respaldos VELO" style="flex:1;min-width:0"><button class="btn btn-out" id="continuity-pick" type="button">Buscar carpeta</button></div>
@@ -1727,7 +1766,7 @@ function abrirBackupCifrado() {
     const passphrase = document.getElementById('continuity-pass').value;
     const confirmation = document.getElementById('continuity-pass2').value;
     const destinationDir = folder.value.trim();
-    if (passphrase.length < 10) return toast('La clave debe tener al menos 10 caracteres', 'w');
+    if (passphrase.length < 12) return toast('La clave debe tener al menos 12 caracteres', 'w');
     if (passphrase !== confirmation) return toast('Las claves no coinciden', 'w');
     if (!destinationDir) return toast('Selecciona o escribe la carpeta de destino', 'w');
     button.disabled = true;
@@ -1737,7 +1776,8 @@ function abrirBackupCifrado() {
       const result = await window.api.backup.createEncrypted({ requestUserId:_cfgUser().id, passphrase, destinationDir });
       if (!result?.ok) throw new Error(result?.error || 'No se pudo crear la copia');
       closeModal();
-      toast('✓ Respaldo cifrado creado y verificado', 'ok');
+      toast('✓ Respaldo completo cifrado y verificado', 'ok');
+      if (result.data?.path) window.api.shell.showItemInFolder(result.data.path).catch(() => {});
     } catch (error) {
       status.textContent = 'No se creó la copia. Revisa la carpeta y vuelve a intentarlo.';
       toast(error?.message || 'No se pudo crear la copia', 'err');
@@ -1749,8 +1789,53 @@ function abrirBackupCifrado() {
 }
 
 function abrirVerificacionCifrada() {
-  openModal(`<div class="modal-title">Probar respaldo cifrado</div><div class="modal-sub">La prueba descifra una copia temporal, valida la base completa y la elimina. Los datos activos no se modifican.</div><div class="fg" style="margin-top:14px"><label class="lbl">Clave del respaldo *</label><input class="inp" id="continuity-verify-pass" type="password" autocomplete="current-password"></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="continuity-verify">Seleccionar archivo y probar</button></div>`);
+  openModal(`<div class="modal-title">Probar respaldo cifrado</div><div class="modal-sub">La prueba recupera los datos en una carpeta temporal, comprueba su integridad y después los elimina. Las copias nuevas incluyen las evidencias de servicio; las antiguas contienen solo la base. Los datos activos no se modifican.</div><div class="fg" style="margin-top:14px"><label class="lbl">Clave del respaldo *</label><input class="inp" id="continuity-verify-pass" type="password" autocomplete="current-password"></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="continuity-verify">Seleccionar archivo y probar</button></div>`);
   document.getElementById('continuity-verify').onclick=async event=>{const passphrase=document.getElementById('continuity-verify-pass').value;if(!passphrase)return toast('Escribe la clave del respaldo','w');event.currentTarget.disabled=true;const picked=await window.api.backup.pickEncryptedFile();if(!picked?.ok){event.currentTarget.disabled=false;return picked?.error==='Cancelado'?null:toast(picked?.error||'No se pudo seleccionar el archivo','err');}const result=await window.api.backup.verifyEncrypted({requestUserId:_cfgUser().id,passphrase,filePath:picked.path});if(!result?.ok){event.currentTarget.disabled=false;return toast(result?.error||'La copia no superó la prueba','err');}closeModal();toast('✓ Copia íntegra y restaurable','ok');};
+}
+
+function abrirRecuperacionCompleta() {
+  openModal(`<div class="modal-title">Recuperar un negocio</div><div class="modal-sub">Selecciona una copia completa nueva (.velobackup). VELO la descifrará y comprobará en una carpeta nueva, sin reemplazar el negocio abierto. Las copias antiguas .veloenc solo contienen la base y se verifican con «Probar una copia».</div><div class="fg" style="margin-top:14px"><label class="lbl">Clave de la copia *</label><input class="inp" id="recovery-pass" type="password" autocomplete="current-password"></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="recovery-create">Elegir copia y carpeta</button></div>`);
+  const button = document.getElementById('recovery-create');
+  button.onclick = async () => {
+    const passphrase = document.getElementById('recovery-pass').value;
+    if (!passphrase) return toast('Escribe la clave de la copia', 'w');
+    button.disabled = true;
+    try {
+      const source = await window.api.backup.pickEncryptedFile();
+      if (!source?.ok) { if (source?.error !== 'Cancelado') throw new Error(source?.error || 'No se pudo elegir la copia'); return; }
+      const destination = await window.api.backup.pickExternalDirectory();
+      if (!destination?.ok) { if (destination?.error !== 'Cancelado') throw new Error(destination?.error || 'No se pudo elegir la carpeta'); return; }
+      button.textContent = 'Recuperando y verificando…';
+      const result = await window.api.backup.recoverComplete({ requestUserId:_cfgUser().id,
+        passphrase, filePath:source.path, destinationDir:destination.path });
+      if (!result?.ok) throw new Error(result?.error || 'No se pudo recuperar la copia');
+      closeModal();
+      toast('✓ Negocio recuperado en carpeta nueva; los datos activos siguen intactos', 'ok');
+      await window.api.shell.showItemInFolder(result.data.destinationDir);
+    } catch (error) { toast(error.message || 'No se pudo recuperar la copia', 'err'); }
+    finally { button.disabled = false; button.textContent = 'Elegir copia y carpeta'; }
+  };
+}
+
+function abrirImportacionCompleta() {
+  openModal(`<div class="modal-title">Incorporar negocio desde copia</div><div class="modal-sub">Selecciona un archivo .velobackup de esta misma edición de VELO. Se agregará como negocio nuevo en esta instalación; los negocios existentes no se reemplazan. Necesitarás la clave de la copia y las credenciales del negocio importado para entrar.</div><div class="fg" style="margin-top:14px"><label class="lbl">Clave de la copia *</label><input class="inp" id="import-pass" type="password" autocomplete="current-password"></div><div class="alrt a"><div class="alrt-dot a"></div><div class="alrt-sub">Las impresoras, conexiones y licencia se configuran en esta PC. Si la copia es de una versión más reciente, actualiza VELO antes de importarla.</div></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="import-business">Elegir copia e incorporar</button></div>`);
+  const button = document.getElementById('import-business');
+  button.onclick = async () => {
+    const passphrase = document.getElementById('import-pass').value;
+    if (!passphrase) return toast('Escribe la clave de la copia', 'w');
+    button.disabled = true;
+    try {
+      const source = await window.api.backup.pickEncryptedFile();
+      if (!source?.ok) { if (source?.error !== 'Cancelado') throw new Error(source?.error || 'No se pudo elegir la copia'); return; }
+      button.textContent = 'Incorporando y verificando…';
+      const result = await window.api.backup.importComplete({ requestUserId: _cfgUser().id,
+        passphrase, filePath: source.path });
+      if (!result?.ok) throw new Error(result?.error || 'No se pudo incorporar la copia');
+      closeModal();
+      toast(`✓ ${result.data.name} incorporado. Selecciónalo en el inicio de sesión.`, 'ok');
+    } catch (error) { toast(error.message || 'No se pudo incorporar la copia', 'err'); }
+    finally { button.disabled = false; button.textContent = 'Elegir copia e incorporar'; }
+  };
 }
 
 async function restaurarBackup() {

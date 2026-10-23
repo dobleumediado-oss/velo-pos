@@ -381,6 +381,36 @@ select.inp{cursor:pointer}
     radial-gradient(circle 2px at 25% 45%, rgba(124,58,237,.25) 0%, transparent 100%);
   pointer-events:none;
 }
+/* VELO Cloud se muestra a la izquierda sin desplazar el acceso diario. */
+.login-cloud-promo{
+  --cloud-accent:#a78bfa;
+  position:absolute;z-index:2;
+  top:28px;left:28px;
+  width:252px;padding:16px;border-radius:16px;
+  color:#fff;
+  background:linear-gradient(145deg,rgba(35,17,92,.86),rgba(18,19,36,.92));
+  border:1px solid rgba(167,139,250,.22);
+  box-shadow:0 14px 38px rgba(0,0,0,.2),inset 0 1px 0 rgba(255,255,255,.08);
+  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+}
+.login-cloud-promo::before{
+  content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  background:radial-gradient(circle at 100% 0,rgba(167,139,250,.16),transparent 47%);
+}
+.login-cloud-promo>*{position:relative}
+.login-cloud-badge{display:flex;align-items:center;gap:6px;font-size:9px;font-weight:800;letter-spacing:.12em;color:#e9ddff}
+.login-cloud-logo{width:19px;height:19px;flex:none;border-radius:5px;box-shadow:0 3px 8px rgba(0,0,0,.25)}
+.login-cloud-badge-new{margin-left:auto;padding:4px 6px;border:1px solid rgba(167,139,250,.3);border-radius:99px;font-size:7px;letter-spacing:.06em;color:#e9ddff}
+.login-cloud-heading{margin:12px 0 6px;font-size:20px;font-weight:800;line-height:1.12;letter-spacing:-.04em;color:#fff}
+.login-cloud-heading span{color:var(--cloud-accent)}
+.login-cloud-description{margin:0;color:rgba(255,255,255,.62);font-size:11px;line-height:1.45}
+.login-cloud-cta{width:100%;min-height:35px;margin-top:12px;padding:7px 10px;border:1px solid rgba(167,139,250,.34);border-radius:8px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;background:rgba(167,139,250,.13);color:#eee6ff;font:inherit;font-size:11px;font-weight:800;transition:background .18s,border-color .18s}
+.login-cloud-cta:hover{background:rgba(167,139,250,.23);border-color:rgba(167,139,250,.6)}
+.login-cloud-cta:focus-visible{outline:3px solid #fff;outline-offset:3px}
+.login-cloud-cta span{font-size:15px;line-height:1}
+@media(max-width:1120px){.login-cloud-promo{top:20px;left:20px;width:218px;padding:13px}.login-cloud-heading{font-size:18px}.login-cloud-description{font-size:10px}}
+@media(max-width:990px){.login-cloud-promo{display:none}}
+@media(prefers-reduced-motion:reduce){.login-cloud-cta{transition:none}}
 /* Reloj flotante sobre la card */
 .login-clock-outer{text-align:center;position:relative;z-index:1}
 .login-clock-time{

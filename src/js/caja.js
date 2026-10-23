@@ -468,6 +468,28 @@ function renderCaja(el) {
     });
     el.appendChild(statGrid);
 
+    const fundCard = h('div', { class: 'card mb20' });
+    fundCard.innerHTML = `<div class="fxb mb8"><div><div class="card-title">Fondo de apertura</div>
+      <div class="ts">Gastos pagados en efectivo desde esta caja. Las ventas se reflejan aparte en el efectivo esperado de cierre.</div></div>
+      <button class="btn btn-out btn-sm" type="button" data-fund-refresh>Actualizar</button></div>
+      <div class="metrics" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">
+        <div class="metric"><div class="met-label">Fondo inicial</div><div class="met-val" data-fund-opening>…</div></div>
+        <div class="metric"><div class="met-label">Gastos desde caja</div><div class="met-val" data-fund-expenses>…</div></div>
+        <div class="metric"><div class="met-label">Fondo restante</div><div class="met-val" data-fund-remaining>…</div></div>
+      </div>`;
+    el.appendChild(fundCard);
+    const refreshFund = async () => {
+      const result = await window.api.cash.getSessionCashSummary({ sessionId: sesId }).catch(() => null);
+      if (!fundCard.isConnected || Number(cajaSession?.id) !== Number(sesId)) return;
+      for (const [selector, value] of [
+        ['[data-fund-opening]', result?.openAmount],
+        ['[data-fund-expenses]', result?.pettyExpenseCash],
+        ['[data-fund-remaining]', result?.openingFundRemaining],
+      ]) fundCard.querySelector(selector).textContent = Number.isFinite(value) ? fmt(value) : 'No disponible';
+    };
+    fundCard.querySelector('[data-fund-refresh]').addEventListener('click', refreshFund);
+    void refreshFund();
+
     // Ventas de sesión
     const sesCard = h('div', { class: 'card mb20' });
     sesCard.appendChild(
@@ -1229,8 +1251,8 @@ async function openCierreCajaModal() {
   // ── Efectivo esperado: fuente real = cash_movements (backend) ──
   // Captura ventas efectivo, la porción efectivo de ventas mixtas, abonos
   // efectivo de la sesión, devoluciones, gastos y anulaciones — todo con
-  // su signo correcto. Si el backend no responde (versión vieja o error),
-  // se usa el cálculo local como respaldo para no quedar peor que antes.
+  // su signo correcto. Sin este resumen no se puede cerrar con seguridad:
+  // el cálculo local no conoce los gastos y podría mostrar un sobrante falso.
   let expected;
   let usandoFuenteReal = false;
   let efectivoReal = null;   // movimiento neto según cash_movements
@@ -1247,14 +1269,11 @@ async function openCierreCajaModal() {
       ) || 0;
     }
   } catch (e) {
-    console.warn('[cierre] getSessionCashSummary falló, usando cálculo local:', e);
+    console.error('[cierre] No se pudo consultar el cuadre de caja:', e);
   }
   if (!usandoFuenteReal) {
-    // Respaldo: fondo + ventas efectivo + abonos efectivo - devoluciones efectivo
-    expected = (cajaSession.open_amount || cajaSession.open || 0)
-      + tdEfec
-      + tdAbonos
-      - tdDevEfec;
+    toast('No se pudo calcular el efectivo esperado. Actualiza Caja e inténtalo de nuevo.', 'err');
+    return;
   }
 
   // Para el desglose visual usamos el movimiento neto. Un abono anulado en la
@@ -1448,7 +1467,9 @@ async function imprimirReporteDia() {
   const openAmt  = ses.open_amount || ses.open || 0;
   const expected = Number(report.summary?.expected ?? openAmt);
   const counted  = ses.close_amount || ses.close || 0;
-  const diff     = counted > 0 ? Math.round((counted - expected) * 100) / 100 : 0;
+  // Una caja cerrada con RD$0 contado también puede tener un faltante real.
+  // Solo la vista previa de una sesión abierta omite la diferencia.
+  const diff     = ses.status === 'closed' ? Math.round((counted - expected) * 100) / 100 : 0;
 
   // ── Cargar gastos del día si el módulo está activo ──────────────────────────
   let gastosDelDia  = [];

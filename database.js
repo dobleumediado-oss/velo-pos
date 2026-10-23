@@ -5213,10 +5213,20 @@ const cashRepo = {
 
     const openAmount = session.open_amount || 0;
     const expected   = round2((openAmount + efectivoNeto));
+    // El fondo de apertura se muestra por separado del efectivo esperado de
+    // cierre: ventas y abonos no alteran cuánto fondo inicial se gastó.
+    const pettyExpenseCash = round2(Number(db.prepare(`
+      SELECT COALESCE(SUM(amount),0) AS total FROM expense_payments
+      WHERE cash_session_id=? AND cash_movement_id IS NOT NULL
+        AND lower(payment_source)='caja' AND lower(payment_method)='efectivo'
+        AND COALESCE(status,'pagado')='pagado'
+    `).get(sessionId)?.total || 0));
 
     return {
       sessionId,
       openAmount,
+      pettyExpenseCash,
+      openingFundRemaining: round2(openAmount - pettyExpenseCash),
       efectivoNeto: round2(efectivoNeto),
       expected,
       // Alias para terminales que todavía consulten el nombre anterior.
@@ -7679,6 +7689,11 @@ const salesRepo = {
     const like = `%${term.toLowerCase()}%`;
     const likeNorm = `%${qNorm}%`;
     const likeNoHash = `%${termNoHash.toLowerCase()}%`;
+    const searchWords = qNorm.split(/\s+/).filter(Boolean);
+    const wordLikes = searchWords.map(word => `%${word}%`);
+    const reorderedNameSql = wordLikes.length > 1
+      ? `OR (${wordLikes.map(() => 'VELO_SEARCH_NORM(s.customer_name) LIKE ?').join(' AND ')})`
+      : '';
     const isDirectDocumentLookup = /^\d+$/.test(termNoHash) || /^[be]\d{10,12}$/i.test(term);
 
     // Primero se resuelven ids candidatos. La implementación anterior unía
@@ -7703,6 +7718,7 @@ const salesRepo = {
         OR VELO_SEARCH_NORM(sp.name) LIKE ?
         OR lower(sp.code) LIKE ?
         OR lower(c.phone) LIKE ?
+        ${reorderedNameSql}
         OR EXISTS (
           SELECT 1 FROM payments p
           WHERE COALESCE(p.status,'active')='active'
@@ -7723,7 +7739,7 @@ const salesRepo = {
       Number.isFinite(idNum) ? idNum : -1,
       Number.isFinite(facNum) ? facNum : -1,
       likeNoHash, likeNoHash, like, likeNorm, like, likeNorm, likeNorm, like,
-      likeNorm, likeNorm, like, like, likeNoHash
+      likeNorm, likeNorm, like, like, ...(reorderedNameSql ? wordLikes : []), likeNoHash
     );
 
     let itemIds;
@@ -7736,13 +7752,16 @@ const salesRepo = {
         ORDER BY si.sale_id DESC LIMIT 300
       `).all(...matchedProductIds);
     } else if (!isDirectDocumentLookup) {
+      const reorderedItemSql = wordLikes.length > 1
+        ? `OR (${wordLikes.map(() => 'VELO_SEARCH_NORM(si.product_name) LIKE ?').join(' AND ')})`
+        : '';
       itemIds = db.prepare(`
         SELECT DISTINCT si.sale_id AS id
         FROM sale_items si JOIN sales s ON s.id=si.sale_id
         WHERE s.status!='cancelled'
-          AND (VELO_SEARCH_NORM(si.product_name) LIKE ? OR lower(si.product_code) LIKE ?)
+          AND (VELO_SEARCH_NORM(si.product_name) LIKE ? OR lower(si.product_code) LIKE ? ${reorderedItemSql})
         ORDER BY si.sale_id DESC LIMIT 180
-      `).all(likeNorm, like);
+      `).all(likeNorm, like, ...(reorderedItemSql ? wordLikes : []));
     } else {
       // Un número de factura o NCF inequívoco no necesita recorrer artículos.
       itemIds = [];
@@ -7780,7 +7799,7 @@ const salesRepo = {
       GROUP BY s.id ORDER BY s.id DESC
     `).all(...candidateIds);
 
-    const matchText   = (hay) => !qNorm || _searchNorm(hay).includes(qNorm);
+    const matchText   = (hay) => !qNorm || searchWords.every(word => _searchNorm(hay).includes(word));
     const matchDigits = (hay) => !!qDigits && _digitsOf(hay).includes(qDigits);
     const filtered = rows.filter(s =>
       String(s.id) === term || String(s.id).includes(term) ||

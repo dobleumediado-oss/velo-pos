@@ -582,12 +582,12 @@ function modalNuevoEnvio(parentEl, vehiculos) {
       const all = (DB?.customers || []).filter(c => c.active !== 0);
       const matches = [];
       all.forEach(c => {
-        if (!q || _custNorm(c.name).includes(q) || _custNorm(c.trade_name).includes(q) ||
+        if (!q || matchText(`${c.name || ''} ${c.trade_name || ''}`, q) ||
             String(c.phone || '').includes(raw) || String(c.rnc || '').includes(raw)) {
           matches.push({ customer:c, contact:null });
         }
         if (q) (c.contacts || []).filter(contact => contact.active !== 0 && contact.can_receive !== 0).forEach(contact => {
-          if (_custNorm(`${contact.name} ${contact.role} ${contact.email}`).includes(q) ||
+          if (matchText(`${contact.name} ${contact.role} ${contact.email}`, q) ||
               String(contact.phone || '').includes(raw) || String(contact.document || '').includes(raw)) {
             matches.push({ customer:c, contact });
           }

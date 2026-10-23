@@ -44,7 +44,8 @@ function rpcTimeoutFor(channel) {
   // Una base grande puede tardar varios minutos en crear el snapshot,
   // cifrarlo o ejecutar integrity_check. No reportar SERVER_OFFLINE mientras
   // el Servidor continúa trabajando y podría completar el archivo.
-  if (channel === 'backup:createEncrypted' || channel === 'backup:verifyEncrypted') return 10 * 60 * 1000;
+  if (channel === 'backup:createEncrypted' || channel === 'backup:verifyEncrypted' ||
+      channel === 'backup:recoverComplete' || channel === 'backup:prepareCloud') return 10 * 60 * 1000;
   // El conteo completo revisa todos los artículos e IMEI antes de aplicar una
   // única transacción; en catálogos grandes puede superar los 8 s generales.
   if (channel === 'inventoryCount:start' || channel === 'inventoryCount:refresh' ||

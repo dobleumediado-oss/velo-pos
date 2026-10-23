@@ -2843,7 +2843,7 @@ function filtrarHistorialCliente(customerId, q) {
     const codigo = (it.product_code || prod?.code || '').toLowerCase().normalize('NFC');
     const modelo = (prod?.model || '').toLowerCase().normalize('NFC');
 
-    if (nombre.includes(qn) || codigo.includes(qn) || modelo.includes(qn)) {
+    if (matchText(`${nombre} ${codigo} ${modelo}`, qn)) {
       const fecha = (it.created_at || '').split('T')[0].split(' ')[0];
       matches.push({
         saleId:   it.sale_id,
@@ -3096,7 +3096,7 @@ async function walkInPromote(c) {
     const r = await window.api.customers.promoteWalkIn({id:c.id,requestUserId:user.id});
     if (!r?.ok) throw new Error(r?.error || 'No se pudo registrar el cliente');
     await reloadCustomers();
-    renderClientes(document.getElementById('page'));
+    veloRepaint(() => renderClientes(document.getElementById('page')));
     openClienteModal(r.customer);
   } catch(e) { toast(e.message,'err'); }
 }

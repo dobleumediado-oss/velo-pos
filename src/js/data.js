@@ -910,10 +910,14 @@ const searchNorm = (s) => {
 // "809-555-1234" → "8095551234". Devuelve '' si no hay dígitos.
 const digitsOf = (s) => String(s == null ? '' : s).replace(/\D/g, '');
 
-// ¿El texto `hay` (haystack) contiene la búsqueda `q` ya normalizada?
-// Acepta q crudo y lo normaliza. Vacío → no filtra (true).
-const matchText = (hay, qNorm) =>
-  !qNorm || searchNorm(hay).includes(qNorm);
+// Todas las palabras deben aparecer, sin obligar al usuario a escribirlas en
+// el mismo orden del nombre. Una sola palabra conserva la coincidencia parcial.
+const matchText = (hay, qNorm) => {
+  const query = searchNorm(qNorm);
+  if (!query) return true;
+  const value = searchNorm(hay);
+  return query.split(/\s+/).every(word => value.includes(word));
+};
 
 // ¿Coincide por dígitos? GUARDA anti-falso-positivo: si la búsqueda no
 // tiene dígitos, devuelve false (no aporta match) en vez de includes('')

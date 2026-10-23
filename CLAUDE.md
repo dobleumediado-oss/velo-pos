@@ -3,10 +3,10 @@
 Punto de entrada para trabajar en este proyecto. Este archivo es el **hub central**: resume lo esencial y enlaza a la documentación extendida en [`docs/`](docs/). Consulta el tema específico antes de tocar ese módulo.
 
 ## Qué es
-Aplicación **Electron v29** de punto de venta (POS) **offline** para micro-negocios de República Dominicana (tiendas de auto repuestos, etc.). Versión actual: `1.30.0` (ver `package.json`).
+Aplicación de punto de venta (POS) **offline** para micro-negocios de República Dominicana (tiendas de auto repuestos, etc.). La versión y el runtime actuales se consultan en `package.json`.
 
 ## Stack y arquitectura
-- **Electron v29** — `contextIsolation: true`, `nodeIntegration: false`.
+- **Electron** — versión en `package.json`; `contextIsolation: true`, `nodeIntegration: false`.
 - **better-sqlite3** — SQLite síncrono, modo WAL, foreign keys ON.
 - **Patrón IPC**: el proceso main maneja toda la BD vía `ipcMain.handle()`; el renderer llama vía `contextBridge` → `window.api`. Nunca acceder a la BD desde el renderer directamente.
 - **preload.js** — puente seguro; solo se exponen las llamadas IPC de la whitelist.
@@ -42,6 +42,8 @@ Cada tema tiene su archivo dedicado en [`docs/`](docs/). Todos enlazan de vuelta
 - **[Clientes empresa y representantes](docs/clientes-empresas.md)** — cuentas personales/empresariales, contactos operativos, crédito consolidado y snapshots documentales.
 - **[Velo POS Server Service](docs/server-service.md)** — instalación permanente sin nube, migración segura, dos instaladores y operación por Tailscale.
 - **[Multi-terminal](docs/multi-terminal-sync.md)** — gateway, workers por negocio, autorización por caja y sincronización en tiempo real.
+- **[Continuidad por negocio](docs/continuidad-negocio.md)** — copia completa cifrada, verificación e incorporación a otra instalación Desktop.
+- **[Preparación de migración a Cloud](docs/cloud-migration-preparation.md)** — alcance del archivo exportado y pasos aún pendientes para activar un negocio en Cloud.
 - **[Apertura, cierre y cuadre de Caja](docs/cash-operations.md)** — reglas de VELO POS y VELO TECH por terminal, horario, protección de salida y roadmap.
 - **[Rendimiento y latencia](docs/velo-performance-roadmap.md)** — presupuesto de experiencia, rondas medidas y lo que queda: N+1, refresco dirigido, repintado y memoria.
 - **[Mejoras pendientes](docs/mejoras-pendientes.md)** — las tres mejoras de la lista de doce que faltan (anular con abonos, buscador global, regalo en el carrito): decisiones tomadas, código a tocar y preguntas abiertas.

@@ -12,7 +12,7 @@ let invSearch = '';
 let invCat    = '';
 let invModel  = '';
 let invSort   = 'name';
-let invTab    = 'todos'; // todos | bajo | sin_stock | por_modelo | historial | conteo
+let invTab    = 'todos'; // todos | bajo | sin_stock | por_modelo | historial | conteo | consignados
 let invPage   = 1;
 let invPageSize = 80;
 // Producto recién guardado: la tabla salta a su página y lo resalta unos
@@ -34,9 +34,13 @@ let invProductReloadToken = 0;
 let invCountState = null;
 let invCountSearch = '';
 let invCountPage = 1;
+let invCountView = 'pendientes';
+let invCountSort = 'nombre';
 let invCountLoadToken = 0;
 const invCountEdits = new Map();
 let invCountContextKey = '';
+let invConsignmentSearch = '';
+let invConsignmentLoadToken = 0;
 
 const invEsc = s => String(s ?? '')
   .replace(/&/g, '&amp;')
@@ -196,6 +200,7 @@ function renderInventario(el) {
   if (invCountContextKey !== contextKey) {
     invCountContextKey = contextKey;
     invCountState = null; invCountEdits.clear(); invCountSearch = ''; invCountPage = 1;
+    invCountView = 'pendientes'; invCountSort = 'nombre';
     if (invTab === 'conteo') invTab = 'todos';
   }
   el.innerHTML = '';
@@ -303,6 +308,7 @@ function renderInventario(el) {
           { k: 'por_modelo', l: 'Por Modelo' },
           { k: 'historial',  l: `Historial (${changedProducts.length})` },
           { k: 'conteo',     l: 'Conteo físico' },
+          ...(window._vertical?.id === 'auto_parts' ? [{ k: 'consignados', l: 'Consignados' }] : []),
         ].map(t => h('button', {
           class: `tab ${invTab === t.k ? 'on' : ''}`,
           'data-tab': t.k,
@@ -313,6 +319,7 @@ function renderInventario(el) {
             }
             if (t.k === 'conteo' && invTab !== 'conteo') {
               invCountState = null; invCountEdits.clear(); invCountPage = 1;
+              invCountView = 'pendientes'; invCountSort = 'nombre';
             }
             invTab = t.k;
             invPage = 1;
@@ -383,7 +390,12 @@ function renderInvTable() {
   if (!wrap) return;
   wrap.innerHTML = '';
   const productFilters = document.getElementById('inv-product-filters');
-  if (productFilters) productFilters.style.display = (invTab === 'historial' || invTab === 'conteo') ? 'none' : 'flex';
+  if (productFilters) productFilters.style.display = (invTab === 'historial' || invTab === 'conteo' || invTab === 'consignados') ? 'none' : 'flex';
+
+  if (invTab === 'consignados') {
+    renderInvConsignment(wrap);
+    return;
+  }
 
   if (invTab === 'conteo') {
     renderInvCount(wrap);
@@ -597,6 +609,118 @@ async function invCountCall(method, data) {
   }
 }
 
+async function renderInvConsignment(wrap) {
+  const token = ++invConsignmentLoadToken;
+  wrap.innerHTML = '<div class="card" style="padding:24px">Cargando artículos bajo custodia…</div>';
+  let result;
+  try { result = await window.api.consignmentPhysical.list({ requestUserId: user.id }); }
+  catch (error) { result = { ok: false, error: error.message }; }
+  if (token !== invConsignmentLoadToken || invTab !== 'consignados' || !wrap.isConnected) return;
+  if (!result?.ok) {
+    wrap.innerHTML = `<div class="card" style="padding:24px;color:var(--red)">${invEsc(result?.error || 'No se pudo cargar el registro')}</div>`;
+    return;
+  }
+  const rows = result.data || [];
+  const draw = () => {
+    const query = searchNorm(invConsignmentSearch);
+    const visible = rows.filter(row => !query ||
+      [row.owner_name, row.item_name, row.reference, row.location].some(value => searchNorm(value).includes(query)));
+    wrap.innerHTML = `<div class="card" style="padding:20px">
+      <div style="display:flex;justify-content:space-between;align-items:start;gap:16px;flex-wrap:wrap">
+        <div><h3 style="margin:0 0 6px">Artículos consignados bajo custodia</h3>
+          <p class="ts" style="max-width:720px;line-height:1.5;margin:0">Control físico separado del inventario propio. Este registro no permite vender, facturar ni liquidar; esas operaciones requieren definir antes el tratamiento fiscal.</p></div>
+        <button class="btn btn-dark" id="consignment-create">${svg('plus')} Recibir artículo</button>
+      </div>
+      <div class="inp-ic" style="max-width:440px;margin:18px 0 12px"><div class="ic">${svg('search')}</div><input class="inp" id="consignment-search" placeholder="Buscar dueño, artículo, referencia o ubicación" value="${invEsc(invConsignmentSearch)}"></div>
+      <div class="ts" style="margin-bottom:10px">${visible.length} registro(s) · ${visible.reduce((sum, row) => sum + Number(row.on_hand || 0), 0)} unidades bajo custodia</div>
+      <div style="display:grid;gap:10px">${visible.map(row => `<div class="card" style="padding:14px">
+        <div style="display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;align-items:center">
+          <div><div class="tb">${invEsc(row.item_name)} ${row.reference ? `<span class="ts">· ${invEsc(row.reference)}</span>` : ''}</div>
+            <div class="ts">Dueño: ${invEsc(row.owner_name)}${row.owner_phone ? ` · ${invEsc(row.owner_phone)}` : ''}${row.location ? ` · Ubicación: ${invEsc(row.location)}` : ''}</div>
+            ${row.notes ? `<div class="ts">${invEsc(row.notes)}</div>` : ''}</div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><strong>${Number(row.on_hand)} disponibles</strong>
+            <button class="btn btn-out btn-sm" data-consignment-action="entrada" data-lot="${row.id}">Recibir más</button>
+            <button class="btn btn-out btn-sm" data-consignment-action="devolucion" data-lot="${row.id}" ${Number(row.on_hand) === 0 ? 'disabled' : ''}>Devolver</button>
+            <button class="btn btn-out btn-sm" data-consignment-action="historial" data-lot="${row.id}">Historial</button></div>
+        </div></div>`).join('') || '<p class="ts">Todavía no hay artículos registrados con esta búsqueda.</p>'}</div>
+    </div>`;
+    wrap.querySelector('#consignment-create')?.addEventListener('click', openInvConsignmentCreate);
+    const search = wrap.querySelector('#consignment-search');
+    search?.addEventListener('input', e => {
+      const start = e.target.selectionStart;
+      invConsignmentSearch = e.target.value;
+      draw();
+      const next = wrap.querySelector('#consignment-search');
+      next?.focus(); next?.setSelectionRange(start, start);
+    });
+    wrap.querySelectorAll('[data-consignment-action]').forEach(button => button.addEventListener('click', () => {
+      const row = rows.find(item => Number(item.id) === Number(button.dataset.lot));
+      if (!row) return;
+      if (button.dataset.consignmentAction === 'historial') openInvConsignmentHistory(row);
+      else openInvConsignmentMove(row, button.dataset.consignmentAction);
+    }));
+  };
+  draw();
+}
+
+function openInvConsignmentCreate() {
+  openModal(`<div class="modal-title">Recibir artículo consignado</div>
+    <div class="modal-sub">Solo custodia física. No se añadirá al inventario vendible ni a la caja.</div>
+    <div class="g2"><div class="fg"><label class="lbl">Dueño del artículo *</label><input class="inp" id="con-owner" maxlength="160"></div>
+      <div class="fg"><label class="lbl">Teléfono del dueño</label><input class="inp" id="con-phone" maxlength="50"></div></div>
+    <div class="g2"><div class="fg"><label class="lbl">Artículo *</label><input class="inp" id="con-item" maxlength="160"></div>
+      <div class="fg"><label class="lbl">Referencia o código</label><input class="inp" id="con-ref" maxlength="100"></div></div>
+    <div class="g2"><div class="fg"><label class="lbl">Cantidad recibida *</label><input class="inp" id="con-qty" type="number" min="1" step="1" value="1"></div>
+      <div class="fg"><label class="lbl">Ubicación física</label><input class="inp" id="con-location" maxlength="100"></div></div>
+    <div class="fg"><label class="lbl">Notas de recepción</label><textarea class="inp" id="con-notes" maxlength="500" rows="2"></textarea></div>
+    <div class="modal-foot"><button class="btn btn-out" id="con-cancel">Cancelar</button><button class="btn btn-dark" id="con-save">Registrar recepción</button></div>`);
+  document.getElementById('con-cancel')?.addEventListener('click', closeModal);
+  document.getElementById('con-save')?.addEventListener('click', async e => {
+    const value = id => document.getElementById(id)?.value?.trim() || '';
+    e.currentTarget.disabled = true;
+    let result;
+    try { result = await window.api.consignmentPhysical.create({ requestUserId: user.id,
+      ownerName: value('con-owner'), ownerPhone: value('con-phone'), itemName: value('con-item'),
+      reference: value('con-ref'), qty: value('con-qty'), location: value('con-location'), notes: value('con-notes') }); }
+    catch (error) { result = { ok: false, error: error.message }; }
+    if (!result?.ok) { e.currentTarget.disabled = false; toast(result?.error || 'No se pudo registrar', 'err'); return; }
+    closeModal(); renderInvTable(); toast('Recepción registrada en custodia física');
+  });
+}
+
+function openInvConsignmentMove(row, kind) {
+  const returning = kind === 'devolucion';
+  openModal(`<div class="modal-title">${returning ? 'Devolver al dueño' : 'Recibir más unidades'}</div>
+    <div class="modal-sub">${invEsc(row.item_name)} · ${invEsc(row.owner_name)} · ${Number(row.on_hand)} disponibles</div>
+    <div class="fg"><label class="lbl">Cantidad *</label><input class="inp" id="con-move-qty" type="number" min="1" step="1" ${returning ? `max="${Number(row.on_hand)}"` : ''} value="1"></div>
+    <div class="fg"><label class="lbl">Motivo o referencia *</label><textarea class="inp" id="con-move-reason" maxlength="500" rows="2" placeholder="Ej.: devolución acordada con el dueño"></textarea></div>
+    <div class="modal-foot"><button class="btn btn-out" id="con-move-cancel">Cancelar</button><button class="btn btn-dark" id="con-move-save">Confirmar ${returning ? 'devolución' : 'recepción'}</button></div>`);
+  document.getElementById('con-move-cancel')?.addEventListener('click', closeModal);
+  document.getElementById('con-move-save')?.addEventListener('click', async e => {
+    e.currentTarget.disabled = true;
+    let result;
+    try { result = await window.api.consignmentPhysical.move({ requestUserId: user.id, lotId: row.id, kind,
+      qty: document.getElementById('con-move-qty')?.value,
+      reason: document.getElementById('con-move-reason')?.value }); }
+    catch (error) { result = { ok: false, error: error.message }; }
+    if (!result?.ok) { e.currentTarget.disabled = false; toast(result?.error || 'No se pudo registrar', 'err'); return; }
+    closeModal(); renderInvTable(); toast(returning ? 'Devolución registrada' : 'Recepción registrada');
+  });
+}
+
+async function openInvConsignmentHistory(row) {
+  let result;
+  try { result = await window.api.consignmentPhysical.movements({ requestUserId: user.id, lotId: row.id }); }
+  catch (error) { result = { ok: false, error: error.message }; }
+  if (!result?.ok) { toast(result?.error || 'No se pudo cargar el historial', 'err'); return; }
+  openModal(`<div class="modal-title">Movimientos de custodia</div><div class="modal-sub">${invEsc(row.item_name)} · ${invEsc(row.owner_name)}</div>
+    <div style="display:grid;gap:8px;max-height:55vh;overflow:auto">${result.data.map(item => `<div class="card" style="padding:12px">
+      <strong>${item.kind === 'entrada' ? 'Recibidas' : 'Devueltas'}: ${Number(item.qty)}</strong>
+      <div class="ts">${invEsc(item.created_at)} · ${invEsc(item.reason)}</div></div>`).join('')}</div>
+    <div class="modal-foot"><button class="btn btn-out" id="con-history-close">Cerrar</button></div>`);
+  document.getElementById('con-history-close')?.addEventListener('click', closeModal);
+}
+
 async function renderInvCount(wrap) {
   if (invCountState === null) {
     const token = ++invCountLoadToken;
@@ -610,6 +734,18 @@ async function renderInvCount(wrap) {
     invCountState = result.data || { session: null, lines: [] };
   }
   paintInvCount(wrap);
+}
+
+function invCountHasDifference(line) {
+  if (!line.confirmed) return false;
+  if (line.unit_id) return Number(line.present) !== (line.snapshot_missing ? 0 : 1) ||
+    (!!line.present && Number(line.counted_cost) !== Number(line.snapshot_cost));
+  return Number(line.counted_qty) !== Number(line.snapshot_qty) ||
+    Number(line.counted_cost) !== Number(line.snapshot_cost);
+}
+
+function invCountCurrentQty(line) {
+  return line.unit_id ? (line.snapshot_missing ? 0 : 1) : Number(line.snapshot_qty) || 0;
 }
 
 function paintInvCount(wrap = document.getElementById('inv-table-wrap')) {
@@ -627,6 +763,7 @@ function paintInvCount(wrap = document.getElementById('inv-table-wrap')) {
       const result = await invCountCall('start', { requestUserId: user.id });
       if (!result.ok) { e.currentTarget.disabled = false; toast(result.error || 'No se pudo iniciar', 'err'); return; }
       invCountState = result.data; invCountPage = 1; invCountEdits.clear();
+      invCountView = 'pendientes';
       paintInvCount(wrap);
     });
     return;
@@ -634,17 +771,22 @@ function paintInvCount(wrap = document.getElementById('inv-table-wrap')) {
 
   const lines = invCountState.lines || [];
   const confirmed = lines.filter(line => line.confirmed).length;
-  const changed = lines.filter(line => line.confirmed && (
-    line.unit_id
-      ? Number(line.present) !== (line.snapshot_missing ? 0 : 1) ||
-        (line.present && Number(line.counted_cost) !== Number(line.snapshot_cost))
-      : Number(line.counted_qty) !== Number(line.snapshot_qty) ||
-        Number(line.counted_cost) !== Number(line.snapshot_cost)
-  )).length;
+  const changed = lines.filter(invCountHasDifference).length;
+  const matched = confirmed - changed;
+  const pending = lines.length - confirmed;
   const query = searchNorm(invCountSearch);
-  const filtered = lines.filter(line => !query || [
-    line.product_code, line.product_name, line.imei, line.serial,
-  ].some(value => matchText(value || '', query)));
+  const filtered = lines.filter(line => {
+    if (invCountView === 'pendientes' && line.confirmed) return false;
+    if (invCountView === 'confirmados' && (!line.confirmed || invCountHasDifference(line))) return false;
+    if (invCountView === 'modificados' && !invCountHasDifference(line)) return false;
+    return !query || [line.product_code, line.product_name, line.imei, line.serial]
+      .some(value => matchText(value || '', query));
+  }).sort((a, b) => {
+    if (invCountSort === 'cantidad_menor') return invCountCurrentQty(a) - invCountCurrentQty(b) || Number(a.id) - Number(b.id);
+    if (invCountSort === 'cantidad_mayor') return invCountCurrentQty(b) - invCountCurrentQty(a) || Number(a.id) - Number(b.id);
+    if (invCountSort === 'codigo') return String(a.product_code || '').localeCompare(String(b.product_code || ''), 'es', { numeric: true }) || Number(a.id) - Number(b.id);
+    return String(a.product_name || '').localeCompare(String(b.product_name || ''), 'es', { numeric: true }) || Number(a.id) - Number(b.id);
+  });
   const pageSize = 50;
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
   invCountPage = Math.min(Math.max(1, invCountPage), pages);
@@ -666,8 +808,19 @@ function paintInvCount(wrap = document.getElementById('inv-table-wrap')) {
     </div>
   </div>
   <div class="card">
+    <div class="tabs" id="inv-count-views" style="padding:12px 16px 0;display:flex;gap:6px;flex-wrap:wrap">
+      <button class="tab ${invCountView === 'pendientes' ? 'on' : ''}" data-count-view="pendientes">Pendientes (${pending})</button>
+      <button class="tab ${invCountView === 'confirmados' ? 'on' : ''}" data-count-view="confirmados">Confirmados (${matched})</button>
+      <button class="tab ${invCountView === 'modificados' ? 'on' : ''}" data-count-view="modificados">Modificados (${changed})</button>
+    </div>
     <div style="padding:14px 16px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <input class="inp" id="inv-count-search" style="flex:1;min-width:230px" placeholder="${countHasImei ? 'Buscar producto, código o IMEI…' : 'Buscar producto o código…'}" value="${invEsc(invCountSearch)}">
+      <select class="inp" id="inv-count-sort" aria-label="Ordenar conteo" style="width:auto;min-width:175px">
+        <option value="nombre" ${invCountSort === 'nombre' ? 'selected' : ''}>Nombre A–Z</option>
+        <option value="codigo" ${invCountSort === 'codigo' ? 'selected' : ''}>Código</option>
+        <option value="cantidad_menor" ${invCountSort === 'cantidad_menor' ? 'selected' : ''}>Menor existencia</option>
+        <option value="cantidad_mayor" ${invCountSort === 'cantidad_mayor' ? 'selected' : ''}>Mayor existencia</option>
+      </select>
       <span style="font-size:12px;color:var(--muted)">${filtered.length} fila(s) · Página ${invCountPage} de ${pages}</span>
       <button class="btn btn-out btn-sm" id="inv-count-prev" ${invCountPage <= 1 ? 'disabled' : ''}>Anterior</button>
       <button class="btn btn-out btn-sm" id="inv-count-next" ${invCountPage >= pages ? 'disabled' : ''}>Siguiente</button>
@@ -692,7 +845,7 @@ function paintInvCount(wrap = document.getElementById('inv-table-wrap')) {
           : `<input class="inp" type="number" min="0" max="100000000" step="1" data-count-field="qty" value="${invEsc(qty)}" style="width:110px">`}</td>
         <td>${emptySerial ? '—' : `<input class="inp" type="number" min="0" max="1000000000" step="0.01" data-count-field="cost" value="${invEsc(cost)}" ${unit && !present ? 'disabled' : ''} style="width:120px">`}</td>
         <td>RD$${Number.isFinite(value) ? value.toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}</td>
-        <td>${edit ? '<span class="badge a">Sin confirmar</span>' : line.confirmed ? '<span class="badge g">Confirmado</span>' : '<span class="badge n">Pendiente</span>'}</td>
+        <td>${edit ? '<span class="badge a">Sin confirmar</span>' : invCountHasDifference(line) ? '<span class="badge a">Modificado</span>' : line.confirmed ? '<span class="badge g">Confirmado</span>' : '<span class="badge n">Pendiente</span>'}</td>
         <td><button class="btn btn-out btn-sm" data-count-action="confirm">${line.confirmed ? 'Actualizar' : 'Confirmar'}</button></td>
       </tr>`;
     }).join('')}</tbody></table></div>
@@ -704,6 +857,13 @@ function paintInvCount(wrap = document.getElementById('inv-table-wrap')) {
     paintInvCount(wrap);
     const input = wrap.querySelector('#inv-count-search');
     input?.focus(); input?.setSelectionRange(position, position);
+  });
+  wrap.querySelectorAll('[data-count-view]').forEach(button => button.addEventListener('click', () => {
+    if (invCountEdits.size) { toast('Confirma las filas editadas antes de cambiar de vista', 'w'); return; }
+    invCountView = button.dataset.countView; invCountPage = 1; paintInvCount(wrap);
+  }));
+  wrap.querySelector('#inv-count-sort')?.addEventListener('change', e => {
+    invCountSort = e.target.value; invCountPage = 1; paintInvCount(wrap);
   });
   wrap.querySelector('#inv-count-prev')?.addEventListener('click', () => { invCountPage--; paintInvCount(wrap); });
   wrap.querySelector('#inv-count-next')?.addEventListener('click', () => { invCountPage++; paintInvCount(wrap); });
@@ -1752,7 +1912,8 @@ function openProductoModal(p = null) {
           <option value="nuevo"         ${isEdit && p.condition==='nuevo'         ? 'selected' : ''}>Nuevo</option>
           <option value="usado"         ${isEdit && p.condition==='usado'         ? 'selected' : ''}>Usado</option>
           <option value="reacondicionado" ${isEdit && p.condition==='reacondicionado' ? 'selected' : ''}>Reacondicionado</option>
-          <option value="consignacion"  ${isEdit && p.condition==='consignacion'  ? 'selected' : ''}>Consignación</option>
+          ${window._vertical?.id !== 'auto_parts' || (isEdit && p.condition === 'consignacion')
+            ? `<option value="consignacion" ${isEdit && p.condition==='consignacion' ? 'selected' : ''}>${window._vertical?.id === 'auto_parts' ? 'Consignación (registro anterior)' : 'Consignación'}</option>` : ''}
           <option value="especial"      ${isEdit && p.condition==='especial'      ? 'selected' : ''}>Especial / Único</option>
         </select>
       </div>

@@ -66,7 +66,7 @@ function _venNorm(value) {
 
 function _venMatches(...values) {
   const q = _venNorm(_venQuery);
-  return !q || values.some(v => _venNorm(v).includes(q));
+  return !q || q.split(/\s+/).every(word => values.some(v => _venNorm(v).includes(word)));
 }
 
 function _venEmpty(icon, title, text, actionLabel = '', action = '') {

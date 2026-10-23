@@ -59,6 +59,7 @@ app.whenReady().then(async () => {
           counted_qty: 0, counted_cost: 0, present: 1, confirmed: 0 },
       ] };
       paintInvCount();
+      const pendingDefault = document.querySelector('[data-count-view="pendientes"]').classList.contains('on');
       const rows = document.querySelectorAll('[data-count-line]');
       const zeroVisible = rows[0].querySelector('[data-count-field="qty"]').value === '0';
       const emptyVisible = rows[2].textContent.includes('sin equipos en stock');
@@ -75,11 +76,20 @@ app.whenReady().then(async () => {
       await new Promise(resolve => setTimeout(resolve, 0));
       document.querySelector('[data-count-line="3"] [data-count-action="confirm"]').click();
       await new Promise(resolve => setTimeout(resolve, 0));
+      const pendingEmpty = document.querySelectorAll('[data-count-line]').length === 0;
+      document.querySelector('[data-count-view="modificados"]').click();
+      const modifiedIds = [...document.querySelectorAll('[data-count-line]')].map(row => Number(row.dataset.countLine));
+      document.querySelector('#inv-count-sort').value = 'cantidad_mayor';
+      document.querySelector('#inv-count-sort').dispatchEvent(new Event('change', { bubbles: true }));
+      const sortedModifiedIds = [...document.querySelectorAll('[data-count-line]')].map(row => Number(row.dataset.countLine));
+      document.querySelector('[data-count-view="confirmados"]').click();
+      const matchedIds = [...document.querySelectorAll('[data-count-line]')].map(row => Number(row.dataset.countLine));
       return { zeroVisible, emptyVisible, blockedDirty, missingCostLocked,
         count: window.__confirmCalls.length,
         firstQty: window.__confirmCalls[0]?.qty,
         firstCost: window.__confirmCalls[0]?.cost,
         secondPresent: window.__confirmCalls[1]?.present,
+        pendingDefault, pendingEmpty, modifiedIds, sortedModifiedIds, matchedIds,
         applyEnabled: !document.getElementById('inv-count-apply').disabled,
       };
     })()`);
@@ -91,6 +101,11 @@ app.whenReady().then(async () => {
     assert.equal(result.firstQty, '4');
     assert.equal(result.firstCost, '120');
     assert.equal(result.secondPresent, false, 'el IMEI se puede marcar faltante');
+    assert.equal(result.pendingDefault, true, 'pendientes es la vista inicial');
+    assert.equal(result.pendingEmpty, true, 'cada fila confirmada sale de pendientes');
+    assert.deepEqual(result.modifiedIds, [1, 2], 'las diferencias confirmadas aparecen en modificados');
+    assert.deepEqual(result.sortedModifiedIds, [2, 1], 'se puede ordenar por existencia');
+    assert.deepEqual(result.matchedIds, [3], 'confirmados separa las filas que cuadran');
     assert.equal(result.applyEnabled, true, 'aplicar se habilita cuando todo está confirmado');
     if (process.env.VELO_COUNT_PREVIEW_PATH) {
       await new Promise(resolve => setTimeout(resolve, 250));

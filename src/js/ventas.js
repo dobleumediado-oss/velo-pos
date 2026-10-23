@@ -2549,20 +2549,36 @@ async function reimprimirVenta(saleId) {
   const sale = await window.api.sales.getById({ id: saleId });
   if (!sale) { toast('Venta no encontrada', 'err'); return; }
   const adjustedCopy = ventasHasAdjustedCopy(sale);
-
-  confirmModal(
-    `¿Reimprimir ${adjustedCopy ? 'la factura ajustada' : documentTypeLabel(sale).toLowerCase()} <strong>${ventasHistoryReference(sale)}</strong>?
-     <br><span style="font-size:11px;color:var(--muted)">
-       ${adjustedCopy
-         ? 'Se imprimirán los productos, cantidades y total vigentes en una sola copia consolidada. No sustituye los comprobantes fiscales relacionados.'
-         : 'Quedará registrado en el log de auditoría como reimpresión.'}
-     </span>`,
-    () => {
-      printReceipt(ventasPrintPayload(sale), true);
-    },
-    adjustedCopy ? 'Imprimir ajustada' : 'Reimprimir',
-    'btn-dark'
-  );
+  const originalTemplate = sale.print_template_id || '';
+  const available = typeof PLANTILLAS !== 'undefined' ? PLANTILLAS : [];
+  openModal(`<div class="modal-title">Reimprimir ${adjustedCopy ? 'factura ajustada' : documentTypeLabel(sale).toLowerCase()}</div>
+    <div class="modal-sub">${ventasEsc(ventasHistoryReference(sale))} · Esta elección afecta solo esta copia; el documento original no cambia.</div>
+    <div class="fg" style="margin-top:16px"><label class="lbl" for="ventas-reprint-template">Formato de impresión</label>
+      <select class="inp" id="ventas-reprint-template">
+        <option value="">${originalTemplate ? `Formato original · ${ventasEsc(available.find(p => p.id === originalTemplate)?.nombre || originalTemplate)}` : 'Formato configurado actualmente'}</option>
+        ${available.map(p => `<option value="${ventasEsc(p.id)}">${ventasEsc(p.nombre)} · ${ventasEsc(p.tipo)}</option>`).join('')}
+      </select></div>
+    <p class="ts" style="margin:12px 0">${adjustedCopy
+      ? 'La copia mostrará los productos, cantidades y total vigentes; no sustituye los comprobantes fiscales relacionados.'
+      : 'La reimpresión quedará registrada en auditoría.'}</p>
+    <div class="modal-foot"><button class="btn btn-out" id="ventas-reprint-cancel">Cancelar</button>
+      <button class="btn btn-dark" id="ventas-reprint-confirm">${adjustedCopy ? 'Imprimir ajustada' : 'Continuar a impresión'}</button></div>`);
+  document.getElementById('ventas-reprint-cancel')?.addEventListener('click', closeModal);
+  document.getElementById('ventas-reprint-confirm')?.addEventListener('click', () => {
+    const selectedTemplate = document.getElementById('ventas-reprint-template')?.value || '';
+    const payload = ventasPrintPayload(sale);
+    if (selectedTemplate) {
+      payload.print_template_id = selectedTemplate;
+      if (selectedTemplate !== originalTemplate) {
+        // Una plantilla distinta debe resolver su impresora y papel desde la
+        // configuración actual, sin arrastrar la POS-80 de la venta original.
+        payload.print_printer_name = '';
+        payload.print_profile_id = '';
+      }
+    }
+    closeModal();
+    printReceipt(payload, true);
+  });
 }
 
 function ventasPrintPayload(sale) {

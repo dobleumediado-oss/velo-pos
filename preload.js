@@ -56,6 +56,13 @@ const api = {
     apply:       (data) => ipcRenderer.invoke('inventoryCount:apply', data),
   },
 
+  consignmentPhysical: {
+    list:       (data) => ipcRenderer.invoke('consignmentPhysical:list', data),
+    movements:  (data) => ipcRenderer.invoke('consignmentPhysical:movements', data),
+    create:     (data) => ipcRenderer.invoke('consignmentPhysical:create', data),
+    move:       (data) => ipcRenderer.invoke('consignmentPhysical:move', data),
+  },
+
   // ── Inventario serializado (VELO TECH POS) ────────────────
   productUnits: {
     listForProduct: (data) => ipcRenderer.invoke('productUnits:listForProduct', data),
@@ -308,7 +315,10 @@ const api = {
     pickExternalDirectory:()=> ipcRenderer.invoke('backup:pickExternalDirectory'),
     pickEncryptedFile:()    => ipcRenderer.invoke('backup:pickEncryptedFile'),
     createEncrypted: (data)  => ipcRenderer.invoke('backup:createEncrypted', data),
+    prepareCloud: (data)     => ipcRenderer.invoke('backup:prepareCloud', data),
     verifyEncrypted: (data)  => ipcRenderer.invoke('backup:verifyEncrypted', data),
+    recoverComplete: (data)  => ipcRenderer.invoke('backup:recoverComplete', data),
+    importComplete: (data)   => ipcRenderer.invoke('backup:importComplete', data),
     getContinuityStatus:(data)=> ipcRenderer.invoke('backup:getContinuityStatus', data),
   },
 

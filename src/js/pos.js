@@ -2174,7 +2174,7 @@ function pvCustomerMatches(customer, query) {
     customer.name, customer.trade_name, customer.rnc, customer.phone, customer.email, customer.billing_email,
     ...(customer.phones || []).map(p => p.phone),
   ].filter(Boolean).join(' '));
-  if (term && searchable.includes(term)) return true;
+  if (term && matchText(searchable, term)) return true;
   return termDigits.length > 0 && [customer.rnc, customer.phone, ...(customer.phones || []).map(p => p.phone)]
     .some(value => digitsOf(value).includes(termDigits));
 }
@@ -2183,7 +2183,7 @@ function pvContactMatches(contact, query) {
   const term = searchNorm(query);
   const termDigits = digitsOf(query);
   const searchable = searchNorm([contact?.name, contact?.role, contact?.email].filter(Boolean).join(' '));
-  if (term && searchable.includes(term)) return true;
+  if (term && matchText(searchable, term)) return true;
   return termDigits.length > 0 && [contact?.document, contact?.phone]
     .some(value => digitsOf(value).includes(termDigits));
 }
