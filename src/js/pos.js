@@ -1862,6 +1862,7 @@ function posLoadResaleCart(payload = {}) {
   inv.sourceConduceId = sourceConduceId;
   inv.sourceConduceNumber = String(payload.sourceConduceNumber || '');
   inv.ncfType = String(payload.ncfType || '');
+  inv.ncfTypeChosen = true;
   inv.salespersonId = Number(payload.salespersonId) || null;
   inv.saleDate = /^\d{4}-\d{2}-\d{2}$/.test(String(payload.saleDate || ''))
     ? String(payload.saleDate) : new Date().toISOString().slice(0, 10);
@@ -3144,7 +3145,7 @@ function openCobroModal(inv) {
       </div>
       <div class="fg" id="cbr-ncf-wrap" style="margin-bottom:0">
         <label class="lbl">Tipo de comprobante fiscal</label>
-        <select class="inp" id="cbr-ncf-type" onchange="cbrDocHint()">
+        <select class="inp" id="cbr-ncf-type" onchange="cbrNcfTypeChanged(this.value)">
           ${inv.reuseNcfType
             ? `<option value="${posEscHtml(inv.reuseNcfType)}" selected>${posEscHtml(NCF_TYPE_LABELS[inv.reuseNcfType] || inv.reuseNcfType)} · ${posEscHtml(inv.reuseNcf)}</option>`
             : `<option value="" ${inv.ncfType ? '' : 'selected'}>Sin comprobante</option>`}
@@ -3152,7 +3153,7 @@ function openCobroModal(inv) {
       </div>
     </div>
     <div style="font-size:10.5px;color:var(--muted2);margin-top:5px">
-      Fecha usada en historial y reportes · por defecto <strong>SIN comprobante</strong> (elige B01/B02 solo si piden factura fiscal).
+      Fecha usada en historial y reportes · puedes cambiar el comprobante antes de confirmar la venta.
     </div>` : `
     <div class="fg">
       <label class="lbl">Fecha del documento</label>
@@ -3474,8 +3475,8 @@ function openCobroModal(inv) {
       const avail = new Set();
       const proximo = {};
       (seqs?.data || []).forEach(s => {
-        if (s.active && s.current < s.to_num) avail.add(s.type);
-        if (s.active && s.next_issue_ncf && !proximo[s.type]) proximo[s.type] = s.next_issue_ncf;
+        if (posNcfSequenceAvailable(s)) avail.add(s.type);
+        if (posNcfSequenceAvailable(s) && s.next_issue_ncf && !proximo[s.type]) proximo[s.type] = s.next_issue_ncf;
       });
       window._ncfAvail = avail;
       window._ncfProximo = proximo;
@@ -4120,8 +4121,23 @@ const NCF_TYPE_LABELS = {
   B16: 'B16 · Exportaciones',
 };
 
-// Rellena el selector "Tipo de comprobante" con los tipos que tienen secuencia
-// activa disponible. "Sin comprobante" es siempre la opción por defecto.
+function posNcfSequenceAvailable(sequence) {
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  return !!sequence?.active && Number(sequence.remaining) > 0 &&
+    (!sequence.expiry_date || String(sequence.expiry_date).slice(0, 10) >= today);
+}
+
+function cbrNcfTypeChanged(value) {
+  const inv = currentInv();
+  if (inv) { inv.ncfType = value; inv.ncfTypeChosen = true; }
+  const sel = document.getElementById('cbr-ncf-type');
+  if (sel) { sel.dataset.userSelected = '1'; delete sel.dataset.invalidSelection; }
+  cbrDocHint();
+}
+
+// La preferencia del negocio solo inicia una venta nueva. La elección manual,
+// incluso "Sin comprobante", prevalece durante todo el cobro.
 function cbrPopulateNcfTypes(availSet) {
   const sel = document.getElementById('cbr-ncf-type');
   if (!sel) return;
@@ -4134,13 +4150,18 @@ function cbrPopulateNcfTypes(availSet) {
     sel.disabled = true;
     return;
   }
-  const prev = sel.value || currentInv()?.ncfType || '';
+  const inv = currentInv();
+  const prev = sel.dataset.userSelected === '1' ? sel.value
+    : inv?.ncfTypeChosen ? (inv.ncfType || '')
+      : (inv?.ncfType || DB.settings?.default_ncf_type || '');
   const opts = ['<option value="">Sin comprobante</option>'];
   ['B01', 'B02', 'B14', 'B15', 'B16'].forEach(t => {
     if (avail.has(t)) opts.push(`<option value="${t}">${NCF_TYPE_LABELS[t]}</option>`);
   });
   sel.innerHTML = opts.join('');
-  // Conserva la elección previa si sigue siendo válida; por defecto, sin comprobante.
+  if (prev && !avail.has(prev) && inv?.ncfTypeChosen) sel.dataset.invalidSelection = prev;
+  else delete sel.dataset.invalidSelection;
+  // Si la preferencia perdió su secuencia, falla de forma segura a sin NCF.
   sel.value = (prev && avail.has(prev)) ? prev : '';
 }
 
@@ -4169,7 +4190,7 @@ function cbrDocHint() {
     }
   }
 
-  // Línea 2 — comprobante fiscal ELEGIDO por el cajero (por defecto, ninguno).
+  // Línea 2 — comprobante fiscal mostrado al cajero, modificable antes de emitir.
   let compLine = '';
   if (inv.itype === 'factura' && CFG.fiscalEnabled) {
     const sel  = document.getElementById('cbr-ncf-type');
@@ -4177,7 +4198,13 @@ function cbrDocHint() {
     if (inv.reuseNcf) {
       compLine = `Comprobante a emitir: ${NCF_TYPE_LABELS[inv.reuseNcfType] || inv.reuseNcfType} · ${inv.reuseNcf} (el mismo de la factura anulada)`;
     } else if (!tipo) {
-      compLine = 'Sin comprobante fiscal';
+      const invalid = sel?.dataset.invalidSelection || '';
+      const preferred = DB.settings?.default_ncf_type || '';
+      compLine = invalid
+        ? `⚠ ${NCF_TYPE_LABELS[invalid] || invalid} dejó de estar disponible. Elige otro tipo o selecciona Sin comprobante.`
+        : preferred && !inv.ncfTypeChosen && window._ncfAvail instanceof Set && !window._ncfAvail.has(preferred)
+        ? `⚠ ${NCF_TYPE_LABELS[preferred] || preferred} no está disponible. Elige otro tipo o confirma sin comprobante fiscal.`
+        : 'Sin comprobante fiscal';
     } else {
       const label = NCF_TYPE_LABELS[tipo] || tipo;
       if (window._ncfAvail instanceof Set && !window._ncfAvail.has(tipo)) {
@@ -4290,6 +4317,15 @@ async function posConfirmSaleWithRecovery(inv, saleData, requestUserId) {
 async function finalizarVenta() {
   const inv       = currentInv();
   const isQuote   = inv.itype === 'cotizacion';
+  if (!isQuote && CFG.fiscalEnabled && !inv.reuseNcfType &&
+      DB.settings?.default_ncf_type && !inv.ncfTypeChosen && window._ncfAvail === null) {
+    toast('Espera a que se carguen los comprobantes antes de cobrar', 'err');
+    return;
+  }
+  if (!isQuote && document.getElementById('cbr-ncf-type')?.dataset.invalidSelection) {
+    toast('El comprobante elegido ya no está disponible. Selecciona otro tipo o Sin comprobante.', 'err');
+    return;
+  }
   let pmeth       = isQuote
     ? 'cotizacion'
     : (document.getElementById('cbr-pmeth')?.value || 'efectivo');
@@ -4306,7 +4342,7 @@ async function finalizarVenta() {
   const cliPhone = document.getElementById('cbr-phone')?.value?.trim() || '';
   const cliPhoneType = document.getElementById('cbr-phone-type')?.value || 'telefono';
   const saleDate = document.getElementById('cbr-sale-date')?.value || new Date().toISOString().slice(0,10);
-  // Tipo de comprobante fiscal elegido en el cobro (por defecto vacío = sin comprobante).
+  // La elección visible en el cobro prevalece sobre la preferencia del negocio.
   const ncfType = isQuote ? '' : (inv.reuseNcfType || document.getElementById('cbr-ncf-type')?.value || '');
   const checkoutPrintRoute = typeof _getCategoryConfig === 'function'
     ? _getCategoryConfig(isQuote ? 'cotizacion' : 'ticket')

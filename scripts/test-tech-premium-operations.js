@@ -50,16 +50,22 @@ const DB = require('../database');
   assert.strictEqual(workpaper.ir17_workpaper.isr_retenido,1000);
   assert.match(workpaper.disclaimer,/DGII/);
 
-  const encrypted = await createEncryptedBackup({db,dataDir:tempDir,businessDataDir:tempDir,
-    destinationDir:externalDir,passphrase:'Prueba-segura-2026',businessId:'principal',
-    businessName:'QA Tech',vertical:'TECH',appVersion:'prueba'});
+  const systemTempDir = os.tmpdir;
+  os.tmpdir = () => path.join(tempDir, 'temporal-no-disponible');
+  let encrypted, verified;
+  const recoveredDir = path.join(externalDir, 'recuperado');
+  try {
+    encrypted = await createEncryptedBackup({db,dataDir:tempDir,businessDataDir:tempDir,
+      destinationDir:externalDir,passphrase:'Prueba-segura-2026',businessId:'principal',
+      businessName:'QA Tech',vertical:'TECH',appVersion:'prueba'});
+    verified = await verifyEncryptedBackup({filePath:encrypted.path,
+      passphrase:'Prueba-segura-2026',workDir:tempDir});
+    await restoreCompleteBackupToEmptyDirectory({filePath:encrypted.path,
+      passphrase:'Prueba-segura-2026',destinationDir:recoveredDir,workDir:tempDir});
+  } finally { os.tmpdir = systemTempDir; }
   assert.ok(fs.existsSync(encrypted.path));
-  const verified = await verifyEncryptedBackup({filePath:encrypted.path,passphrase:'Prueba-segura-2026'});
   assert.strictEqual(verified.integrity,'ok');
   assert.strictEqual(verified.evidenceFiles,1);
-  const recoveredDir = path.join(externalDir, 'recuperado');
-  await restoreCompleteBackupToEmptyDirectory({filePath:encrypted.path,
-    passphrase:'Prueba-segura-2026',destinationDir:recoveredDir});
   const recoveredDb = new (require('better-sqlite3'))(path.join(recoveredDir,'velo.db'),{readonly:true});
   try {
     for (const table of ['audit_logs','service_order_evidence','accounting_entries','ncf_sequences','settings','service_orders']) {

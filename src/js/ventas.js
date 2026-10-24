@@ -1489,7 +1489,7 @@ async function convertirCotizacionAVenta(s) {
       })),
     pay:      'efectivo',
     discount: sale.discount_pct || 0,
-    ncfType:  '',
+    ncfType:  DB.settings?.default_ncf_type || '',
   };
   window._convEstado = estado;
   window._convSale   = sale;
@@ -1599,11 +1599,11 @@ async function convertirCotizacionAVenta(s) {
     <div class="fg" style="margin-bottom:10px">
       <label class="lbl">Tipo de comprobante fiscal</label>
       <select class="inp" id="conv-ncf-type"
-              onchange="if(window._convEstado)window._convEstado.ncfType=this.value">
+              onchange="if(window._convEstado)window._convEstado.ncfType=this.value;this.dataset.userSelected='1'">
         <option value="">Sin comprobante</option>
       </select>
       <div style="font-size:10px;color:var(--muted2);margin-top:4px">
-        Por defecto sin comprobante. Elige B01/B02 solo si el cliente pide factura con valor fiscal.
+        Se inicia con el comprobante predeterminado del negocio, si está disponible. Puedes cambiarlo antes de cobrar.
       </div>
     </div>` : ''}
 
@@ -1652,7 +1652,8 @@ function convPopulateNcfTypes(selected) {
       if (avail.has(t)) opts.push(`<option value="${t}">${CONV_NCF_LABELS[t]}</option>`);
     });
     sel.innerHTML = opts.join('');
-    sel.value = (selected && avail.has(selected)) ? selected : '';
+    const requested = sel.dataset.userSelected === '1' ? sel.value : selected;
+    sel.value = (requested && avail.has(requested)) ? requested : '';
     if (window._convEstado) window._convEstado.ncfType = sel.value;
   };
   if (window._convNcfAvail instanceof Set) { fill(window._convNcfAvail); return; }
@@ -1660,7 +1661,7 @@ function convPopulateNcfTypes(selected) {
   if (window.api?.ncf?.getSequences) {
     window.api.ncf.getSequences().then(seqs => {
       const avail = new Set();
-      (seqs?.data || []).forEach(s => { if (s.active && s.current < s.to_num) avail.add(s.type); });
+      (seqs?.data || []).forEach(s => { if (posNcfSequenceAvailable(s)) avail.add(s.type); });
       window._convNcfAvail = avail;
       fill(avail);
     }).catch(() => {});

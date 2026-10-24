@@ -12,7 +12,7 @@ let invSearch = '';
 let invCat    = '';
 let invModel  = '';
 let invSort   = 'name';
-let invTab    = 'todos'; // todos | bajo | sin_stock | por_modelo | historial | conteo | consignados
+let invTab    = 'todos'; // todos | bajo | sin_stock | por_modelo | historial | consignados
 let invPage   = 1;
 let invPageSize = 80;
 // Producto recién guardado: la tabla salta a su página y lo resalta unos
@@ -39,6 +39,7 @@ let invCountSort = 'nombre';
 let invCountLoadToken = 0;
 const invCountEdits = new Map();
 let invCountContextKey = '';
+let invCountOverlay = null;
 let invConsignmentSearch = '';
 let invConsignmentLoadToken = 0;
 
@@ -202,6 +203,7 @@ function renderInventario(el) {
     invCountState = null; invCountEdits.clear(); invCountSearch = ''; invCountPage = 1;
     invCountView = 'pendientes'; invCountSort = 'nombre';
     if (invTab === 'conteo') invTab = 'todos';
+    invCountOverlay?.remove(); invCountOverlay = null;
   }
   el.innerHTML = '';
 
@@ -244,17 +246,8 @@ function renderInventario(el) {
       }),
       h('button', {
         class: 'btn btn-out btn-sm',
-        onclick: () => {
-          if (invTab === 'conteo') return;
-          if (invCountEdits.size) {
-            toast('Confirma las filas editadas antes de abrir otro conteo', 'w');
-            return;
-          }
-          invTab = 'conteo'; invCountState = null; invCountEdits.clear();
-          const page = document.getElementById('page');
-          if (page) renderInventario(page);
-        },
-        html: `${svg('check')} Conteo masivo`
+        onclick: openInvCountWindow,
+        html: `${svg('check')} Conteo físico`
       }),
       h('button', {
         class: 'btn btn-out btn-sm',
@@ -307,20 +300,11 @@ function renderInventario(el) {
           { k: 'sin_stock',  l: `Sin stock (${outStock.length})` },
           { k: 'por_modelo', l: 'Por Modelo' },
           { k: 'historial',  l: `Historial (${changedProducts.length})` },
-          { k: 'conteo',     l: 'Conteo físico' },
           ...(window._vertical?.id === 'auto_parts' ? [{ k: 'consignados', l: 'Consignados' }] : []),
         ].map(t => h('button', {
           class: `tab ${invTab === t.k ? 'on' : ''}`,
           'data-tab': t.k,
           onclick: () => {
-            if (invTab === 'conteo' && invCountEdits.size && t.k !== 'conteo') {
-              toast('Confirma o descarta las filas editadas antes de salir del conteo', 'w');
-              return;
-            }
-            if (t.k === 'conteo' && invTab !== 'conteo') {
-              invCountState = null; invCountEdits.clear(); invCountPage = 1;
-              invCountView = 'pendientes'; invCountSort = 'nombre';
-            }
             invTab = t.k;
             invPage = 1;
             // Mover el resaltado 'on' al tab activo sin redibujar todo
@@ -390,7 +374,7 @@ function renderInvTable() {
   if (!wrap) return;
   wrap.innerHTML = '';
   const productFilters = document.getElementById('inv-product-filters');
-  if (productFilters) productFilters.style.display = (invTab === 'historial' || invTab === 'conteo' || invTab === 'consignados') ? 'none' : 'flex';
+  if (productFilters) productFilters.style.display = (invTab === 'historial' || invTab === 'consignados') ? 'none' : 'flex';
 
   if (invTab === 'consignados') {
     renderInvConsignment(wrap);
@@ -721,12 +705,59 @@ async function openInvConsignmentHistory(row) {
   document.getElementById('con-history-close')?.addEventListener('click', closeModal);
 }
 
+function closeInvCountWindow(force = false) {
+  if (!force && invCountEdits.size) {
+    toast('Confirma las filas editadas antes de cerrar el conteo', 'w');
+    return false;
+  }
+  ++invCountLoadToken;
+  invCountOverlay?.remove();
+  invCountOverlay = null;
+  return true;
+}
+
+function openInvCountWindow() {
+  if (invCountOverlay?.isConnected) {
+    invCountOverlay.querySelector('#inv-count-search, #inv-count-start, #inv-count-close')?.focus();
+    return;
+  }
+  const page = document.getElementById('page');
+  if (!page) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'ov inv-count-overlay';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-labelledby', 'inv-count-title');
+  overlay.innerHTML = `<div class="inv-count-dialog">
+    <header class="inv-count-window-head">
+      <div><span class="inv-count-eyebrow">INVENTARIO</span><h2 id="inv-count-title">Conteo físico</h2>
+        <p>Confirma las cantidades y los costos; aplica todos los cambios al terminar.</p></div>
+      <button type="button" class="btn btn-out btn-sm" id="inv-count-close" aria-label="Cerrar conteo físico">Cerrar</button>
+    </header>
+    <div class="inv-count-window-body" id="inv-count-content"></div>
+  </div>`;
+  page.appendChild(overlay);
+  invCountOverlay = overlay;
+  overlay.querySelector('#inv-count-close')?.addEventListener('click', () => closeInvCountWindow());
+  overlay.addEventListener('click', event => {
+    if (event.target === overlay) closeInvCountWindow();
+  });
+  overlay.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      closeInvCountWindow();
+    }
+  });
+  overlay.querySelector('#inv-count-close')?.focus();
+  renderInvCount(overlay.querySelector('#inv-count-content'));
+}
+
 async function renderInvCount(wrap) {
   if (invCountState === null) {
     const token = ++invCountLoadToken;
     wrap.innerHTML = '<div class="card" style="padding:24px">Cargando conteo físico…</div>';
     const result = await invCountCall('getDraft', { requestUserId: user.id });
-    if (token !== invCountLoadToken || invTab !== 'conteo') return;
+    if (token !== invCountLoadToken || !wrap.isConnected || (invTab !== 'conteo' && !invCountOverlay?.contains(wrap))) return;
     if (!result.ok) {
       wrap.innerHTML = `<div class="card" style="padding:24px;color:var(--red)">${invEsc(result.error || 'No se pudo cargar el conteo')}</div>`;
       return;
@@ -748,8 +779,8 @@ function invCountCurrentQty(line) {
   return line.unit_id ? (line.snapshot_missing ? 0 : 1) : Number(line.snapshot_qty) || 0;
 }
 
-function paintInvCount(wrap = document.getElementById('inv-table-wrap')) {
-  if (!wrap || invTab !== 'conteo') return;
+function paintInvCount(wrap = invCountOverlay?.querySelector('#inv-count-content') || document.getElementById('inv-table-wrap')) {
+  if (!wrap || (invTab !== 'conteo' && !invCountOverlay?.contains(wrap))) return;
   const countHasImei = !!window._vertical?.serialized;
   const session = invCountState?.session;
   if (!session) {
@@ -962,6 +993,7 @@ function openInvCountApplyModal() {
     if (!result.ok) { button.disabled = false; toast(result.error || 'No se pudo aplicar el conteo', 'err'); return; }
     closeModal();
     invCountState = null; invCountEdits.clear(); invTab = 'todos';
+    closeInvCountWindow(true);
     try { await reloadProducts(); }
     catch (error) { toast('Conteo aplicado. Recarga Inventario para ver las cifras nuevas', 'w'); }
     const page = document.getElementById('page');

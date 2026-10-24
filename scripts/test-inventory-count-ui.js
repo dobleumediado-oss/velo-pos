@@ -14,7 +14,7 @@ app.whenReady().then(async () => {
     webPreferences: { contextIsolation: false, nodeIntegration: false },
   });
   try {
-    await win.loadURL('data:text/html;charset=utf-8,<html><body><div id="inv-table-wrap"></div></body></html>');
+    await win.loadURL('data:text/html;charset=utf-8,<html><body><div id="page"><div id="inv-table-wrap"></div></div></body></html>');
     await win.webContents.insertCSS(fs.readFileSync(path.join(__dirname, '..', 'src/css/styles.css'), 'utf8'));
     await win.webContents.executeJavaScript(`
       window.user = { id: 1 };
@@ -107,6 +107,21 @@ app.whenReady().then(async () => {
     assert.deepEqual(result.sortedModifiedIds, [2, 1], 'se puede ordenar por existencia');
     assert.deepEqual(result.matchedIds, [3], 'confirmados separa las filas que cuadran');
     assert.equal(result.applyEnabled, true, 'aplicar se habilita cuando todo está confirmado');
+    const windowResult = await win.webContents.executeJavaScript(`(() => {
+      invTab = 'todos'; invCountState = { session: null, lines: [] }; invCountEdits.clear();
+      openInvCountWindow();
+      const separate = !!document.querySelector('#page > .inv-count-overlay #inv-count-content') &&
+        !!document.querySelector('#inv-table-wrap');
+      invCountEdits.set(99, { qty: '1', cost: '10', present: true });
+      document.getElementById('inv-count-close').click();
+      const protectedEdits = !!document.querySelector('.inv-count-overlay');
+      invCountEdits.clear();
+      document.getElementById('inv-count-close').click();
+      return { separate, protectedEdits, closed: !document.querySelector('.inv-count-overlay') };
+    })()`);
+    assert.equal(windowResult.separate, true, 'el conteo se abre en una ventana separada del inventario');
+    assert.equal(windowResult.protectedEdits, true, 'la ventana protege cambios sin confirmar');
+    assert.equal(windowResult.closed, true, 'la ventana se puede cerrar sin perder filas confirmadas');
     if (process.env.VELO_COUNT_PREVIEW_PATH) {
       await new Promise(resolve => setTimeout(resolve, 250));
       const screenshot = await win.webContents.capturePage();

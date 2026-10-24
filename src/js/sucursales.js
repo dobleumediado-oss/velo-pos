@@ -13,6 +13,24 @@ const _sDate = d => d ? new Date(d+'T00:00:00').toLocaleDateString('es-DO',{day:
 const _sEsc  = v => String(v == null ? '' : v)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+const _sNcfTypes = {
+  B01: 'B01 · Crédito Fiscal', B02: 'B02 · Consumo',
+  B14: 'B14 · Régimen Especial', B15: 'B15 · Gubernamental', B16: 'B16 · Exportaciones',
+};
+function _sNcfAvailable(sequence) {
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  return !!sequence?.active && Number(sequence.remaining) > 0 &&
+    (!sequence.expiry_date || String(sequence.expiry_date).slice(0, 10) >= today);
+}
+function _sNcfUnavailableReason(sequence) {
+  if (!sequence?.active) return 'Retirada';
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  if (sequence.expiry_date && String(sequence.expiry_date).slice(0, 10) < today) return `Vencida el ${_sDate(String(sequence.expiry_date).slice(0, 10))}`;
+  if (Number(sequence.remaining) <= 0) return 'Agotada';
+  return '';
+}
 
 // La base conserva únicamente el correlativo como entero. En pantalla siempre
 // mostramos el NCF completo para que 856 nunca se confunda con un comprobante
@@ -156,10 +174,11 @@ async function renderNCFAvanzado(el) {
     return;
   }
 
-  const [seqRes, alertRes, docSeqRes] = await Promise.all([
+  const [seqRes, alertRes, docSeqRes, settings] = await Promise.all([
     window.api.ncf.getSequences(),
     window.api.ncf.getAlerts(),
     window.api.documents.getSequences({ requestUserId: user.id }),
+    window.api.settings.getAll(),
   ]);
 
   const secuencias = seqRes?.data || [];
@@ -190,6 +209,7 @@ async function renderNCFAvanzado(el) {
     <div style="display:flex;gap:8px;align-items:center">
       <span class="ts">Los reportes 607/608 están en Reportes → Comprobantes fiscales</span>
       <button class="btn btn-ghost btn-sm" id="btn-validar-rnc">🔍 Validar RNC</button>
+      <button class="btn btn-out btn-sm" id="btn-default-ncf">Elegir predeterminado</button>
       <button class="btn btn-dark btn-sm" id="btn-nueva-seq">+ Nueva secuencia</button>
     </div>`;
   el.appendChild(hdr);
@@ -240,7 +260,7 @@ async function renderNCFAvanzado(el) {
                 <div style="background:var(--line2);border-radius:4px;height:6px;width:80px">
                   <div style="background:${color};border-radius:4px;height:6px;width:${pct}%"></div>
                 </div>
-                <span style="font-size:10px;color:${color}">${s.active ? `${pct}% usado` : 'Retirada'}</span>
+                <span style="font-size:10px;color:${_sNcfUnavailableReason(s) ? '#b45309' : color}">${_sEsc(_sNcfUnavailableReason(s) || `${pct}% usado`)}</span>
               </td>
               <td style="padding:8px;text-align:right"><button class="btn btn-ghost btn-sm" onclick="administrarSecuenciaNcf(${Number(s.id)})">Administrar</button></td>
             </tr>`;
@@ -254,6 +274,14 @@ async function renderNCFAvanzado(el) {
     explanation.textContent = 'Los NCF se muestran completos. “Próximo” prioriza correlativos saltados, confirmados como disponibles y vigentes; después continúa desde el último correlativo consumido.';
     el.appendChild(explanation);
   }
+
+  const defaultType = String(settings?.default_ncf_type || '');
+  const defaultAvailable = secuencias.some(s => s.type === defaultType && _sNcfAvailable(s));
+  const defaultCard = document.createElement('div');
+  defaultCard.style.cssText = 'margin-top:16px;padding:12px 14px;border:1px solid var(--line2);border-radius:10px;background:var(--bg2);font-size:12px';
+  defaultCard.innerHTML = `<strong>Al cobrar, iniciar con: ${_sEsc(_sNcfTypes[defaultType] || 'Sin comprobante')}</strong>
+    <div style="color:var(--muted2);font-size:11px;margin-top:3px">El cajero puede elegir otro tipo antes de confirmar. No cambia facturas ya emitidas.${defaultType && !defaultAvailable ? ' Esta secuencia no está disponible; las ventas iniciarán sin comprobante hasta que vuelva a estarlo.' : ''}</div>`;
+  el.appendChild(defaultCard);
 
   const isHistorica = activeInvoiceKind === 'factura_historica';
   const seqDefaults = isHistorica
@@ -310,10 +338,12 @@ async function renderNCFAvanzado(el) {
     el.addEventListener('click', (ev) => {
       const nueva   = ev.target.closest('#btn-nueva-seq');
       const validar = ev.target.closest('#btn-validar-rnc');
+      const predeterminado = ev.target.closest('#btn-default-ncf');
       const repNcf  = ev.target.closest('#btn-rep-ncf');
       const saveCash = ev.target.closest('#btn-save-cash-seq');
       if (nueva)   { ev.preventDefault(); modalNuevaSecuencia(el); }
       if (validar) { ev.preventDefault(); modalValidarRNC(); }
+      if (predeterminado) { ev.preventDefault(); modalNCFPredeterminado(el); }
       if (repNcf)  { ev.preventDefault(); modalReporteNCF(); }
       if (saveCash) {
         ev.preventDefault();
@@ -321,6 +351,39 @@ async function renderNCFAvanzado(el) {
       }
     });
   }
+}
+
+async function modalNCFPredeterminado(el) {
+  const user = _sUser();
+  if (!['admin', 'superadmin'].includes(user?.role)) return;
+  const [seqRes, settings] = await Promise.all([
+    window.api.ncf.getSequences(), window.api.settings.getAll(),
+  ]);
+  if (!seqRes?.ok || !settings) return _sToast('No se pudo cargar la configuración fiscal');
+  const sequences = seqRes.data || [];
+  const available = new Set(sequences.filter(_sNcfAvailable).map(s => s.type));
+  const current = String(settings.default_ncf_type || '');
+  const options = [`<option value="" ${!available.has(current) ? 'selected' : ''}>Sin comprobante</option>`];
+  Object.entries(_sNcfTypes).forEach(([type, label]) => {
+    const configured = sequences.filter(s => s.type === type);
+    if (!configured.length) return;
+    const usable = available.has(type);
+    const reason = usable ? '' : _sNcfUnavailableReason(configured[0]) || 'Sin secuencia disponible';
+    options.push(`<option value="${type}" ${usable && current === type ? 'selected' : ''} ${usable ? '' : 'disabled'}>${_sEsc(label)}${reason ? ` — ${_sEsc(reason)}` : ''}</option>`);
+  });
+  const html = `<div class="fg"><label class="lbl" for="ncf-default-type">Comprobante inicial para ventas nuevas</label>
+    <select class="inp" id="ncf-default-type">${options.join('')}</select></div>
+    ${current && !available.has(current) ? '<div class="alrt a" style="margin-bottom:12px">El predeterminado anterior no tiene secuencia disponible. Selecciona otro tipo o «Sin comprobante».</div>' : ''}
+    <div style="font-size:11px;color:var(--muted2);line-height:1.5">Solo se puede elegir un tipo con secuencia activa, vigente y con números disponibles. En cada cobro se podrá cambiar el tipo antes de emitir la factura.</div>`;
+  _sModal('Comprobante predeterminado', html, async (overlay) => {
+    const value = overlay.querySelector('#ncf-default-type')?.value ?? '';
+    if (value && !available.has(value)) throw new Error('Esta secuencia ya no está disponible');
+    const res = await window.api.settings.set({ key: 'default_ncf_type', value, requestUserId: user.id });
+    if (!res?.ok) throw new Error(res?.error || 'No se pudo guardar el comprobante predeterminado');
+    if (typeof DB !== 'undefined') DB.settings.default_ncf_type = value;
+    _sToast('✓ Comprobante predeterminado guardado');
+    await renderNCFAvanzado(el);
+  }, 'Guardar predeterminado');
 }
 
 window.administrarSecuenciaNcf = async (id) => {

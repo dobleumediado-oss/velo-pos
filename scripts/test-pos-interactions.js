@@ -13,7 +13,7 @@ const element = id => {
   if (!elements.has(id)) {
     const classes = new Set();
     elements.set(id, {
-      id, textContent: '', innerHTML: '', value: '', disabled: false, style: {},
+      id, textContent: '', innerHTML: '', value: '', disabled: false, style: {}, dataset: {},
       focus() {}, select() {},
       classList: {
         add(...names) { names.forEach(name => classes.add(name)); },
@@ -185,10 +185,40 @@ this.__posDiscount={
 this.__posCustomers={pvCustomerMatches,pvCustomerOptions,pvFilterCustomers,pvSelectCustomer,posSelectCustomer,_setPosPmode,cbrCaptureCustomerDraft,cbrOpenTradeIn,posTicketTitle,posConduceCanAccess};
 this.__posTransfer={posLoadResaleCart,posSetType,posLimpiar,posCreateConduceFromCart,posQuoteActionLabel};`,
 context, { filename: 'pos.js' });
+vm.runInContext('this.__posNcf={populate:cbrPopulateNcfTypes,changed:cbrNcfTypeChanged,available:posNcfSequenceAvailable}', context);
 const discount = context.__posDiscount;
 const customers = context.__posCustomers;
 const transfer = context.__posTransfer;
 context.toast = () => {};
+
+state.resetInvoices();
+state.setSettings({ default_ncf_type: 'B02' });
+const ncfSelect = element('cbr-ncf-type');
+const availableNcf = vm.runInContext("new Set(['B01','B02'])", context);
+context.__posNcf.populate(availableNcf);
+assert.strictEqual(ncfSelect.value, 'B02', 'una venta nueva debe iniciar con el comprobante configurado');
+ncfSelect.value = '';
+context.__posNcf.changed('');
+context.__posNcf.populate(availableNcf);
+assert.strictEqual(ncfSelect.value, '', 'elegir Sin comprobante debe prevalecer sobre el predeterminado');
+ncfSelect.value = 'B01';
+context.__posNcf.changed('B01');
+context.__posNcf.populate(availableNcf);
+assert.strictEqual(ncfSelect.value, 'B01', 'el cajero debe poder cambiar a otro tipo disponible');
+context.__posNcf.populate(vm.runInContext("new Set(['B02'])", context));
+assert.strictEqual(ncfSelect.dataset.invalidSelection, 'B01',
+  'si se agota el tipo elegido manualmente, el cobro debe exigir una nueva elección');
+context.__posNcf.changed('');
+assert.strictEqual(ncfSelect.dataset.invalidSelection, undefined,
+  'elegir explícitamente Sin comprobante resuelve la selección vencida');
+state.resetInvoices();
+ncfSelect.dataset = {};
+context.__posNcf.populate(vm.runInContext("new Set(['B01'])", context));
+assert.strictEqual(ncfSelect.value, '', 'si el predeterminado se agotó, no debe sustituirse por otro NCF');
+assert.strictEqual(context.__posNcf.available({ active: 1, remaining: 1, expiry_date: '2020-01-01' }), false,
+  'una secuencia vencida no puede ofrecerse como predeterminada');
+elements.delete('cbr-ncf-type');
+console.log('  ✓ comprobante predeterminado, cambio manual y secuencia no disponible');
 
 assert.strictEqual(discount.isManualNumericEntry({ id: 'pos-discount-input', dataset: {} }), true,
   'el lector no debe bloquear los dígitos escritos en el descuento RD$ o %');

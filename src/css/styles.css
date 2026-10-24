@@ -238,6 +238,15 @@ select.inp{cursor:pointer}
 .modal-lg{width:680px}
 .modal-xl{width:780px}
 .modal-xxl{width:960px}
+.inv-count-overlay{padding:24px;z-index:195}
+.inv-count-dialog{display:flex;flex-direction:column;width:min(1500px,100%);height:min(940px,calc(100vh - 48px));min-height:0;background:var(--bg);border:1px solid var(--line);border-radius:18px;box-shadow:var(--sh-lg);overflow:hidden}
+.inv-count-window-head{flex:none;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 22px;background:var(--surface);border-bottom:1px solid var(--line)}
+.inv-count-window-head h2{font-size:20px;margin:3px 0 2px;color:var(--ink)}
+.inv-count-window-head p{font-size:12px;color:var(--muted);margin:0}
+.inv-count-eyebrow{font-size:10px;font-weight:800;letter-spacing:.1em;color:var(--blue)}
+.inv-count-window-body{flex:1;min-height:0;overflow:auto;padding:20px}
+.inv-count-window-body>.card:last-child{margin-bottom:0}
+@media(max-width:700px){.inv-count-overlay{padding:8px}.inv-count-dialog{height:calc(100vh - 16px)}.inv-count-window-head{padding:14px}.inv-count-window-body{padding:12px}}
 /* Cobro del POS: densidad compacta sin ocultar información. Reduce padding del
    modal y separación entre grupos de campos para que quepa más sin scroll. */
 .modal.pos-cobro{padding:19px}
