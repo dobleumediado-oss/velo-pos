@@ -36,14 +36,25 @@ jobs:
         run: npm test
       - name: Construir instaladores piloto sin publicar
         if: github.event_name == 'workflow_dispatch' && inputs.buildPilot
-        run: npm run build:win
-        env:
-          GH_TOKEN: ''
+        shell: pwsh
+        run: |
+          npm run prepare:server-service
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx electron-builder --config build/electron-builder-terminal.js --win --publish never
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx electron-builder --config build/electron-builder-tech.js --win --publish never
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx electron-builder --config build/electron-builder-server.js --win --publish never
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx electron-builder --config build/electron-builder-tech-server.js --win --publish never
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Registrar sumas SHA-256
         if: github.event_name == 'workflow_dispatch' && inputs.buildPilot
         shell: pwsh
         run: |
-          Get-ChildItem -Path dist -Filter '*Setup-*.exe' -Recurse |
+          $installers = @(Get-ChildItem -Path dist -Filter '*Setup-*.exe' -Recurse)
+          if ($installers.Count -ne 4) { throw "Se esperaban cuatro instaladores; hay $($installers.Count)" }
+          $installers |
             Sort-Object FullName |
             ForEach-Object { "$( (Get-FileHash $_.FullName -Algorithm SHA256).Hash )  $( $_.Name )" } |
             Set-Content -Path dist/pilot-checksums.txt
