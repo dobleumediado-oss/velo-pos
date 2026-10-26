@@ -42,6 +42,7 @@ Cada tema tiene su archivo dedicado en [`docs/`](docs/). Todos enlazan de vuelta
 - **[Clientes empresa y representantes](docs/clientes-empresas.md)** — cuentas personales/empresariales, contactos operativos, crédito consolidado y snapshots documentales.
 - **[Velo POS Server Service](docs/server-service.md)** — instalación permanente sin nube, migración segura, dos instaladores y operación por Tailscale.
 - **[Multi-terminal](docs/multi-terminal-sync.md)** — gateway, workers por negocio, autorización por caja y sincronización en tiempo real.
+- **[Traslado de terminales](docs/terminal-server-handoff.md)** — corte por negocios, perfil cifrado, prueba piloto y cambio de Server por LAN/Tailscale.
 - **[Continuidad por negocio](docs/continuidad-negocio.md)** — copia completa cifrada, verificación e incorporación a otra instalación Desktop.
 - **[Preparación de migración a Cloud](docs/cloud-migration-preparation.md)** — alcance del archivo exportado y pasos aún pendientes para activar un negocio en Cloud.
 - **[Apertura, cierre y cuadre de Caja](docs/cash-operations.md)** — reglas de VELO POS y VELO TECH por terminal, horario, protección de salida y roadmap.

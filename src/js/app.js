@@ -698,10 +698,13 @@ function renderLogin() {
   }
 
   function businessLoginControl() {
-    if (CFG.module_multi_negocio !== '1') return null;
+    // Una copia incorporada puede existir aunque el negocio principal aún no
+    // tenga activo el módulo. Mostrar el selector cuando haya más negocios.
+    const multiEnabled = CFG.module_multi_negocio === '1';
     const isClientMode = CFG.connectionMode === 'client';
 
     if (!loginBiz.loaded && !loginBiz.loading) loadLoginBusinesses();
+    if (!multiEnabled && (!loginBiz.loaded || !loginBiz.businesses.length)) return null;
 
     if (loginBiz.loading) {
       return h('div', { class: 'fg', style: { marginTop: '14px', marginBottom: '4px' } },

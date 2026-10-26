@@ -15,6 +15,17 @@ const {
 
 const MAX_BODY = 12 * 1024 * 1024;
 
+function allowedWhileHandoffLocked(channel) {
+  if (channel.startsWith('serverAdmin:') || channel.startsWith('service:')) return true;
+  if (channel.startsWith('auth:')) return true;
+  if (channel === 'backup:createEncrypted' || channel === 'backup:verifyEncrypted' ||
+      channel === 'backup:getList' || channel === 'backup:getContinuityStatus') return true;
+  if (channel === 'version:getInfo' || channel === 'connection:localGuardHash') return true;
+  // La consola puede seguir consultando para crear y verificar las copias;
+  // cualquier canal de escritura desconocido queda bloqueado por defecto.
+  return /^[A-Za-z][A-Za-z0-9]*:(?:get|list|search|find|status|preview|report|stats|check)[A-Z][A-Za-z0-9]*$/.test(channel);
+}
+
 function _json(res, status, body) {
   const data = Buffer.from(JSON.stringify(body));
   res.writeHead(status, {
@@ -193,6 +204,19 @@ function startServerService({
   const manager = createWorkerManager({ rootDataDir, launchWorker, onLog });
   const log = (level, message, extra) => {
     try { onLog(level, message, extra); } catch {}
+  };
+  let inFlight = 0;
+  let handoffLockPending = false;
+  const trackResponse = res => {
+    inFlight++;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      inFlight--;
+    };
+    res.once('finish', release);
+    res.once('close', release);
   };
 
   const authorize = (auth, businessId, { requireBusiness = true } = {}) => {
@@ -409,12 +433,77 @@ function startServerService({
         workers: manager.list(),
       }));
     }
+    if (parsed.channel === 'service:handoff') {
+      const config = loadServiceConfig(rootDataDir);
+      const target = config.handoffTarget;
+      return _json(res, 200, conn.makeResponse(true,
+        target?.active && config.handoffLockedAt &&
+          (target.rollout === 'all' || target.pilotTerminalId === parsed.auth.terminalId)
+          ? { sourceServiceId: config.serviceId, targetServiceId: target.serviceId,
+              addresses: target.addresses, port: target.port,
+              businessMap: target.businessMap }
+          : null));
+    }
+    if (parsed.channel === 'service:handoffPlan') {
+      const config = loadServiceConfig(rootDataDir);
+      const source = config.handoffSource;
+      return _json(res, 200, conn.makeResponse(true,
+        source ? { sourceServiceId: source.serviceId,
+          lockedAt: source.lockedAt, targetServiceId: config.serviceId,
+          businessMap: source.businessMap, terminalCount: source.terminalCount,
+          arrivedTerminalIds:Object.keys(source.arrivals || {}) } : null));
+    }
+    if (parsed.channel === 'service:handoffArrived') {
+      const config = loadServiceConfig(rootDataDir);
+      const source = config.handoffSource;
+      const terminalId = String(parsed.auth.terminalId || '');
+      if (!source || !Array.isArray(source.terminalIds) ||
+          !source.terminalIds.includes(terminalId)) {
+        return _json(res, 200, conn.makeResponse(true, { tracked:false }));
+      }
+      if (!isTerminalAllowedForBusiness(config, terminalId, requestedBusinessId) ||
+          !Object.values(source.businessMap || {}).includes(requestedBusinessId)) {
+        return _json(res, 403, conn.makeResponse(false, null, conn.RPC_ERRORS.FORBIDDEN));
+      }
+      if (!source.arrivals?.[terminalId]) {
+        saveServiceConfig(rootDataDir, { ...config, handoffSource:{ ...source,
+          arrivals:{ ...(source.arrivals || {}), [terminalId]:new Date().toISOString() } } });
+      }
+      return _json(res, 200, conn.makeResponse(true, { tracked:true }));
+    }
     if (serviceChannel) {
       return _json(res, 404, conn.makeResponse(false, null, conn.RPC_ERRORS.UNKNOWN_CHANNEL));
     }
 
+    if (handoffLockPending && parsed.channel !== 'serverAdmin:lockForHandoff') {
+      return _json(res, 423, conn.makeResponse(false, null, 'SERVER_EN_TRASLADO'));
+    }
+    if (parsed.channel === 'serverAdmin:lockForHandoff') {
+      if (handoffLockPending) return _json(res, 409, conn.makeResponse(false, null, 'TRASLADO_EN_PREPARACION'));
+      handoffLockPending = true;
+      const deadline = Date.now() + 30000;
+      while (inFlight > 0 && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      if (inFlight > 0) {
+        handoffLockPending = false;
+        return _json(res, 409, conn.makeResponse(false, null, 'OPERACIONES_EN_CURSO'));
+      }
+      res.once('finish', () => { handoffLockPending = false; });
+      res.once('close', () => { handoffLockPending = false; });
+    }
+
+    const handoffConfig = loadServiceConfig(rootDataDir);
+    if (handoffConfig.handoffLockedAt && !allowedWhileHandoffLocked(String(parsed.channel || ''))) {
+      return _json(res, 423, conn.makeResponse(false, null, 'SERVER_EN_TRASLADO'));
+    }
+
     const worker = manager.get(serverAdminChannel ? 'principal' : requestedBusinessId);
-    if (!worker) return _json(res, 503, conn.makeResponse(false, null, 'BUSINESS_UNAVAILABLE'));
+    if (!worker) {
+      handoffLockPending = false;
+      return _json(res, 503, conn.makeResponse(false, null, 'BUSINESS_UNAVAILABLE'));
+    }
+    if (parsed.channel !== 'serverAdmin:lockForHandoff') trackResponse(res);
     return proxyRpc(worker, body, res, rpcTimeoutFor(parsed.channel));
   });
 
@@ -436,6 +525,9 @@ function startServerService({
     if (req.method === 'GET' && req.url === '/health') {
       return _json(res, 200, { ok:true, service:'velo-service-portal', workers:manager.list().length });
     }
+    if (handoffLockPending || loadServiceConfig(rootDataDir).handoffLockedAt) {
+      return _json(res, 423, { ok:false, error:'SERVER_EN_TRASLADO' });
+    }
     if (!['GET','POST'].includes(req.method || '')) return _json(res, 405, { ok:false, error:'METHOD_NOT_ALLOWED' });
     if (Number(req.headers['content-length'] || 0) > 16 * 1024) {
       return _json(res, 413, { ok:false, error:'PAYLOAD_TOO_LARGE' });
@@ -444,6 +536,7 @@ function startServerService({
     if (!match) return _json(res, 404, { ok:false, error:'NOT_FOUND' });
     const worker = manager.get(match[1]);
     if (!worker) return _json(res, 404, { ok:false, error:'NOT_FOUND' });
+    trackResponse(res);
     return proxyPublicPortal(worker, req, res);
   });
   const listenPublicPort = publicPort === 0 ? 0 : (Number(publicPort) || config.portalPort || 8787);

@@ -77,6 +77,13 @@ function normalizeConfig(raw = {}, legacy = {}) {
     primaryBusinessName: String(raw.primaryBusinessName || legacy.biz_name || 'Negocio Principal'),
     workerPortStart: Math.min(62000, Math.max(12000, Number(raw.workerPortStart) || 18440)),
     localBootstrapComplete: raw.localBootstrapComplete === true,
+    // Un traslado bloquea escrituras en la fuente antes de tomar las copias
+    // finales. El destino registra el origen recibido sin activarlo todavía.
+    handoffLockedAt: String(raw.handoffLockedAt || ''),
+    handoffSource: raw.handoffSource && typeof raw.handoffSource === 'object'
+      ? raw.handoffSource : null,
+    handoffTarget: raw.handoffTarget && typeof raw.handoffTarget === 'object'
+      ? raw.handoffTarget : null,
     updatedAt: String(raw.updatedAt || new Date().toISOString()),
   };
 }

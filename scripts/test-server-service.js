@@ -68,12 +68,16 @@ function launchFakeWorker({ business, port }) {
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
       const parsed = JSON.parse(body || '{}');
-      const data = Buffer.from(JSON.stringify({
-        ok: true,
-        data: { businessId: business.id, channel: parsed.channel },
-      }));
-      res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': data.length });
-      res.end(data);
+      const reply = () => {
+        const data = Buffer.from(JSON.stringify({
+          ok: true,
+          data: { businessId: business.id, channel: parsed.channel },
+        }));
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': data.length });
+        res.end(data);
+      };
+      if (parsed.channel === 'test:slowMutation') setTimeout(reply, 180);
+      else reply();
     });
   });
   server.listen(port, '127.0.0.1');
@@ -181,6 +185,72 @@ function launchFakeWorker({ business, port }) {
   });
   // La llamada sí viene de loopback en esta prueba y se enruta siempre al principal.
   assert.strictEqual(remoteAdmin.data.data.businessId, 'principal');
+
+  const slow = request(port, '/rpc', {
+    body:{ v:1, channel:'test:slowMutation', args:{}, auth },
+  });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  const lockStarted = Date.now();
+  const lock = request(port, '/rpc', {
+    body:{ v:1, channel:'serverAdmin:lockForHandoff', args:{}, auth },
+  });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  const duringLock = await request(port, '/rpc', {
+    body:{ v:1, channel:'sales:create', args:{}, auth },
+  });
+  assert.strictEqual(duringLock.status, 423, 'no entran ventas mientras el bloqueo espera una operación previa');
+  await slow;
+  await lock;
+  assert.ok(Date.now() - lockStarted >= 100, 'el bloqueo espera la operación previa');
+
+  // El traslado no debe permitir ventas en el Server anterior mientras se
+  // toman las copias finales. Consultas y respaldo siguen disponibles.
+  const beforeHandoff = await request(port, '/rpc', {
+    body: { v: 1, channel: 'service:handoff', args: {}, auth },
+  });
+  assert.strictEqual(beforeHandoff.data.data, null);
+  saveServiceConfig(tmp, { ...loadServiceConfig(tmp), handoffLockedAt:new Date().toISOString() });
+  const blockedSale = await request(port, '/rpc', {
+    body: { v: 1, channel: 'sales:create', args: {}, auth },
+  });
+  assert.strictEqual(blockedSale.status, 423);
+  assert.strictEqual(blockedSale.data.error, 'SERVER_EN_TRASLADO');
+  const blockedPortal = await request(publicPort, '/r/principal/token.public');
+  assert.strictEqual(blockedPortal.status, 423, 'el portal público no puede escribir durante la copia final');
+  const allowedRead = await request(port, '/rpc', {
+    body: { v: 1, channel: 'products:getAll', args: {}, auth },
+  });
+  assert.strictEqual(allowedRead.status, 200);
+  const allowedBackup = await request(port, '/rpc', {
+    body: { v: 1, channel: 'backup:createEncrypted', args: {}, auth },
+  });
+  assert.strictEqual(allowedBackup.status, 200);
+  saveServiceConfig(tmp, { ...loadServiceConfig(tmp), handoffTarget:{
+    serviceId:'new-service', addresses:['100.82.10.4','192.168.1.20'], port:8443,
+    businessMap:{ principal:'biz_recuperado' }, active:true,
+    rollout:'pilot', pilotTerminalId:terminalId,
+  } });
+  saveServiceConfig(tmp, { ...loadServiceConfig(tmp),
+    allowlist:[...loadServiceConfig(tmp).allowlist, 'terminal_other_12345678'] });
+  const otherTerminal = await request(port, '/rpc', {
+    body:{ v:1, channel:'service:handoff', args:{},
+      auth:{ ...auth, terminalId:'terminal_other_12345678' } },
+  });
+  assert.strictEqual(otherTerminal.data.data, null, 'el aviso piloto no alcanza otra terminal');
+  const directive = await request(port, '/rpc', {
+    body: { v: 1, channel: 'service:handoff', args: {}, auth },
+  });
+  assert.strictEqual(directive.data.data.businessMap.principal, 'biz_recuperado');
+
+  saveServiceConfig(tmp, { ...loadServiceConfig(tmp), handoffLockedAt:'',
+    handoffSource:{ serviceId:'old-service', lockedAt:new Date().toISOString(),
+      businessMap:{ old_biz:'principal' }, terminalCount:1,
+      terminalIds:[terminalId], arrivals:{} } });
+  const arrived = await request(port, '/rpc', {
+    body: { v: 1, channel:'service:handoffArrived', args:{}, auth },
+  });
+  assert.strictEqual(arrived.data.data.tracked, true);
+  assert.ok(loadServiceConfig(tmp).handoffSource.arrivals[terminalId]);
 
   await service.close();
 

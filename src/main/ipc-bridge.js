@@ -45,7 +45,8 @@ function rpcTimeoutFor(channel) {
   // cifrarlo o ejecutar integrity_check. No reportar SERVER_OFFLINE mientras
   // el Servidor continúa trabajando y podría completar el archivo.
   if (channel === 'backup:createEncrypted' || channel === 'backup:verifyEncrypted' ||
-      channel === 'backup:recoverComplete' || channel === 'backup:prepareCloud') return 10 * 60 * 1000;
+      channel === 'backup:recoverComplete' || channel === 'backup:importComplete' ||
+      channel === 'backup:prepareCloud') return 10 * 60 * 1000;
   // El conteo completo revisa todos los artículos e IMEI antes de aplicar una
   // única transacción; en catálogos grandes puede superar los 8 s generales.
   if (channel === 'inventoryCount:start' || channel === 'inventoryCount:refresh' ||
@@ -65,6 +66,13 @@ function rpcTimeoutFor(channel) {
 function configureBridge({ mode, client } = {}) {
   if (typeof mode === 'function')   _ctx.mode = mode;
   if (typeof client === 'function') _ctx.client = client;
+}
+function _rpcErrorMessage(res) {
+  if (res?.offline) return 'SERVER_OFFLINE';
+  if (res?.error === 'SERVER_EN_TRASLADO') {
+    return 'El Server está en traslado. No se pueden guardar cambios por ahora.';
+  }
+  return res?.error || 'RPC_ERROR';
 }
 
 // ── Hook de mutación (Fase C — push tiempo real) ──────────────────────────────
@@ -88,7 +96,7 @@ async function routeCall(channel, arg) {
     const cfg = _ctx.client() || {};
     const res = await rpcCall({ ...cfg, channel, args: arg, timeoutMs: rpcTimeoutFor(channel) });
     if (res && res.ok === true) return res.data;
-    const err = new Error(res && res.offline ? 'SERVER_OFFLINE' : ((res && res.error) || 'RPC_ERROR'));
+    const err = new Error(_rpcErrorMessage(res));
     err.offline = !!(res && res.offline);
     err.rpc = res && res.error;
     throw err;
@@ -149,7 +157,7 @@ function installIpcInterceptor(ipcMainRef, { localOnly } = {}) {
         const cfg = _ctx.client() || {};
         const res = await rpcCall({ ...cfg, channel, args: arg, timeoutMs: rpcTimeoutFor(channel) });
         if (res && res.ok === true) return res.data;
-        const err = new Error(res && res.offline ? 'SERVER_OFFLINE' : ((res && res.error) || 'RPC_ERROR'));
+        const err = new Error(_rpcErrorMessage(res));
         err.offline = !!(res && res.offline);
         err.rpc = res && res.error;
         throw err;

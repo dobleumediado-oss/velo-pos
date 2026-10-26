@@ -2165,7 +2165,48 @@ async function renderConexionCard(container) {
         <input class="inp no-uppercase" id="conn-add-name" data-uppercase="off" autocomplete="off"
           placeholder="Nombre" style="flex:1;font-size:11px"/>
         <button class="btn btn-green btn-sm" onclick="agregarTerminalAllow()">Añadir</button>
-      </div>`;
+      </div>
+      ${res.serviceMode ? `
+      <div style="border-top:1px solid var(--line);margin-top:18px;padding-top:16px">
+        <div style="font-weight:700;font-size:13px;margin-bottom:5px">Trasladar terminales a otro Server</div>
+        <div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:10px">
+          Para mover todos los negocios: bloquea operaciones en el Server anterior,
+          crea e incorpora una copia final de cada negocio y luego traslada las terminales.
+          Las terminales probarán la IP LAN o Tailscale del nuevo Server antes de cambiar.
+        </div>
+        ${res.handoffLockedAt ? `<div class="alrt a" style="margin-bottom:8px"><div class="alrt-dot a"></div><div>
+          <div class="alrt-title">Este Server está bloqueado para el traslado</div>
+          <div class="alrt-sub">Desde ${_esc(res.handoffLockedAt)}. Crea ahora las copias finales de todos los negocios.</div>
+        </div></div>` : ''}
+        ${res.handoffSource ? `<div class="alrt b" style="margin-bottom:8px"><div class="alrt-dot b"></div><div>
+          <div class="alrt-title">Perfil recibido del Server anterior</div>
+          <div class="alrt-sub">${_esc(Object.keys(res.handoffSource.arrivals || {}).length)} de ${_esc(res.handoffSource.terminalCount)} terminales conectadas · ${_esc(Object.keys(res.handoffSource.businessMap || {}).length)} negocios. Mantén este Server encendido.</div>
+        </div></div>` : ''}
+        ${res.handoffTarget ? `<div class="alrt ${res.handoffTarget.active?'g':'b'}" style="margin-bottom:8px"><div class="alrt-dot ${res.handoffTarget.active?'g':'b'}"></div><div>
+          <div class="alrt-title">${res.handoffTarget.rollout === 'all' ? 'Cambio general activo' : res.handoffTarget.active ? 'Prueba piloto activa' : 'Destino preparado'}</div>
+          <div class="alrt-sub">${_esc((res.handoffTarget.addresses || []).join(' · '))}</div>
+        </div></div>` : ''}
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px">
+          ${res.handoffSource ? `<button class="btn btn-out btn-sm" onclick="_connReRender()">Actualizar llegadas</button>` : ''}
+          ${!res.handoffLockedAt ? `<button class="btn btn-out btn-sm" onclick="bloquearServerTraslado()">1. Bloquear Server anterior</button>` :
+            `<button class="btn btn-out btn-sm" onclick="exportarPerfilTerminales()">2. Exportar perfil cifrado</button>`}
+          ${!res.handoffSource ? `<button class="btn btn-out btn-sm" onclick="importarPerfilTerminales()">3. Recibir perfil en Server nuevo</button>` : ''}
+          ${res.handoffLockedAt && !res.handoffTarget?.active ? `<button class="btn btn-ghost btn-sm" onclick="cancelarBloqueoTraslado()">Cancelar bloqueo</button>` : ''}
+        </div>
+        ${res.handoffLockedAt ? `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:end">
+          <div style="flex:2;min-width:160px"><label class="lbl">IP LAN y Tailscale del nuevo Server</label>
+            <input class="inp no-uppercase" data-uppercase="off" id="handoff-hosts" placeholder="192.168.1.20, 100.101.102.103"
+              value="${_esc((res.handoffTarget?.addresses || []).join(', '))}"></div>
+          <div style="width:92px"><label class="lbl">Puerto</label><input class="inp" id="handoff-port" value="${_esc(res.handoffTarget?.port || res.serverPort || '8443')}"></div>
+          <button class="btn btn-out btn-sm" onclick="prepararTrasladoTerminales()">4. Validar destino</button>
+          ${res.handoffTarget && !res.handoffTarget.active ? `<select class="inp" id="handoff-pilot" style="width:180px">
+            <option value="">Terminal piloto…</option>
+            ${(res.allowlist || []).filter(t => t.name !== 'Consola del servidor').map(t =>
+              `<option value="${_esc(t.terminalId)}">${_esc(t.name || t.terminalId.slice(0,8))}</option>`).join('')}
+            </select><button class="btn btn-green btn-sm" onclick="activarTrasladoTerminales(false)">5. Probar una terminal</button>` : ''}
+          ${res.handoffTarget?.rollout === 'pilot' ? `<button class="btn btn-green btn-sm" onclick="activarTrasladoTerminales(true)">6. Cambiar todas</button>` : ''}
+        </div>` : ''}
+      </div>` : ''}`;
   } else { // client
     body = `
       <div style="font-size:12px;margin-bottom:8px">Conéctate al servidor con los datos que te dio la PC principal:</div>
@@ -2208,6 +2249,83 @@ async function renderConexionCard(container) {
 function _connReRender() {
   const c = document.getElementById('conn-card-container');
   if (c) renderConexionCard(c);
+}
+
+async function bloquearServerTraslado() {
+  if (!confirm('Se bloquearán las ventas y cambios mientras creas las copias finales de todos los negocios. ¿Continuar?')) return;
+  const res = await window.api.connection.handoffLock({ requestUserId:_cfgUser()?.id });
+  if (!res?.ok) return toast(res?.error || 'No se pudo bloquear el Server', 'err');
+  toast('Server bloqueado. Crea una copia final de cada negocio.'); _connReRender();
+}
+async function cancelarBloqueoTraslado() {
+  if (!confirm('¿Cancelar el bloqueo antes de activar el traslado? Las copias tomadas ya no servirán para un nuevo intento.')) return;
+  const res = await window.api.connection.handoffUnlock({ requestUserId:_cfgUser()?.id });
+  if (!res?.ok) return toast(res?.error || 'No se pudo cancelar', 'err');
+  toast('Bloqueo cancelado'); _connReRender();
+}
+function exportarPerfilTerminales() {
+  openModal(`<div class="modal-title">Exportar perfil de terminales</div>
+    <div class="modal-sub">Guarda este archivo cifrado junto a las copias finales. Lo abrirás en el Server nuevo. La clave no se guarda en VELO.</div>
+    <div class="fg"><label class="lbl">Clave de traslado (mínimo 12 caracteres)</label>
+      <input class="inp" type="password" id="handoff-export-key" autocomplete="new-password"></div>
+    <div class="fg"><label class="lbl">Confirmar clave</label>
+      <input class="inp" type="password" id="handoff-export-confirm" autocomplete="new-password"></div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-dark" id="handoff-export-go">Guardar perfil</button></div>`);
+  document.getElementById('handoff-export-go').onclick = async () => {
+    const passphrase = document.getElementById('handoff-export-key').value;
+    if (passphrase.length < 12 || passphrase !== document.getElementById('handoff-export-confirm').value) {
+      return toast('La clave debe tener 12 caracteres o más y coincidir', 'w');
+    }
+    const res = await window.api.connection.handoffExport({ requestUserId:_cfgUser()?.id, passphrase });
+    if (res?.canceled) return;
+    if (!res?.ok) return toast(res?.error || 'No se pudo guardar el perfil', 'err');
+    closeModal(); toast(`Perfil cifrado guardado: ${res.terminalCount} terminales`);
+  };
+}
+function importarPerfilTerminales() {
+  openModal(`<div class="modal-title">Recibir terminales en este Server</div>
+    <div class="modal-sub">Incorpora primero la copia final de cada negocio. VELO verificará que todas provengan del Server anterior y que se crearon después del bloqueo.</div>
+    <div class="fg"><label class="lbl">Clave del perfil de terminales</label>
+      <input class="inp" type="password" id="handoff-import-key" autocomplete="current-password"></div>
+    <div id="handoff-preview" style="font-size:12px;margin-top:10px"></div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-dark" id="handoff-import-go">Elegir perfil y verificar</button></div>`);
+  document.getElementById('handoff-import-go').onclick = async () => {
+    const passphrase = document.getElementById('handoff-import-key').value;
+    const res = await window.api.connection.handoffImportPreview({ requestUserId:_cfgUser()?.id, passphrase });
+    if (res?.canceled) return;
+    if (!res?.ok) return toast(res?.error || 'No se pudo validar el perfil', 'err');
+    const out = document.getElementById('handoff-preview');
+    out.textContent = `${res.data.businessCount} negocios y ${res.data.terminalCount} terminales listos para recibir.`;
+    const button = document.getElementById('handoff-import-go');
+    button.textContent = 'Confirmar recepción';
+    button.onclick = async () => {
+      const applied = await window.api.connection.handoffImportApply({ requestUserId:_cfgUser()?.id, token:res.token });
+      if (!applied?.ok) return toast(applied?.error || 'No se pudo recibir el perfil', 'err');
+      closeModal(); toast('Terminales autorizadas en el Server nuevo'); _connReRender();
+    };
+  };
+}
+async function prepararTrasladoTerminales() {
+  const addresses = (document.getElementById('handoff-hosts')?.value || '').split(',').map(x => x.trim()).filter(Boolean);
+  const port = Number(document.getElementById('handoff-port')?.value || 8443);
+  const res = await window.api.connection.handoffPrepare({ requestUserId:_cfgUser()?.id, addresses, port });
+  if (!res?.ok) return toast(res?.error || 'El destino no pasó la validación', 'err');
+  toast(`${res.data.businessCount} negocios validados en el Server nuevo`); _connReRender();
+}
+async function activarTrasladoTerminales(rolloutAll) {
+  const pilotTerminalId = document.getElementById('handoff-pilot')?.value || '';
+  if (!rolloutAll && !pilotTerminalId) return toast('Elige la terminal piloto', 'w');
+  const message = rolloutAll
+    ? 'La terminal piloto debe figurar conectada en el Server nuevo. Las demás se conectarán automáticamente tras probar su acceso. ¿Activar el cambio general?'
+    : 'El Server anterior seguirá bloqueado. Solo la terminal piloto intentará conectarse al nuevo Server. ¿Iniciar la prueba?';
+  if (!confirm(message)) return;
+  const res = await window.api.connection.handoffActivate({ requestUserId:_cfgUser()?.id,
+    pilotTerminalId, rolloutAll:!!rolloutAll });
+  if (!res?.ok) return toast(res?.error || 'No se pudo activar el traslado', 'err');
+  toast(rolloutAll ? 'Cambio general activo. Verifica todas las terminales en el Server nuevo.'
+    : 'Prueba piloto activa. Revisa la llegada en el Server nuevo.'); _connReRender();
 }
 
 async function cambiarModoConexion(mode) {

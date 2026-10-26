@@ -19,6 +19,10 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
     'auth:login',
     'connection:getInfo', 'connection:generateKey', 'connection:test', 'connection:setAllowedTerminal',
     'connection:setTerminalBusinesses',
+    'connection:handoffLock', 'connection:handoffUnlock',
+    'connection:handoffExport', 'connection:handoffImportPreview',
+    'connection:handoffImportApply', 'connection:handoffPrepare',
+    'connection:handoffActivate',
     'connection:clientPreflight', 'connection:setMode',
     'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke',
     // Herramienta privada: aun en desarrollo siempre opera en esta Mac y nunca
@@ -1199,6 +1203,84 @@ ipcMain.handle('connection:getInfo', async (_, { requestUserId } = {}) => {
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
+let _pendingTerminalHandoff = null;
+async function _handoffServerCall(channel, requestUserId, extra = {}) {
+  if (!_connRequireSA(requestUserId)) return { ok:false, error:'Solo el superadmin' };
+  if (!_installedServiceDataDir()) return { ok:false, error:'Disponible en VELO Server instalado' };
+  return require('./src/main/ipc-bridge').forwardToServer(channel, { requestUserId, ...extra });
+}
+
+ipcMain.handle('connection:handoffLock', async (_, { requestUserId } = {}) =>
+  _handoffServerCall('serverAdmin:lockForHandoff', requestUserId));
+ipcMain.handle('connection:handoffUnlock', async (_, { requestUserId } = {}) =>
+  _handoffServerCall('serverAdmin:cancelHandoffLock', requestUserId));
+
+ipcMain.handle('connection:handoffExport', async (_, { requestUserId, passphrase } = {}) => {
+  try {
+    const info = await _handoffServerCall('serverAdmin:getInfo', requestUserId);
+    if (!info?.ok) return info;
+    if (!info.handoffLockedAt) return { ok:false, error:'Bloquea primero el Server anterior' };
+    const source = {
+      serviceId:info.serviceId, vertical:info.vertical, lockedAt:info.handoffLockedAt,
+      accessKey:info.accessKey, businesses:info.businesses,
+      terminals:info.allowlist,
+    };
+    const contents = require('./src/main/terminal-handoff').sealProfile(source, passphrase);
+    const picked = await dialog.showSaveDialog(mainWindow, {
+      title:'Guardar perfil cifrado de terminales',
+      defaultPath:'terminales-velo.veloterminales',
+      filters:[{ name:'Perfil de terminales VELO', extensions:['veloterminales'] }],
+    });
+    if (picked.canceled || !picked.filePath) return { ok:false, canceled:true };
+    fs.writeFileSync(picked.filePath, contents, { mode:0o600, flag:'wx' });
+    return { ok:true, businessCount:source.businesses.length,
+      terminalCount:source.terminals.filter(t => t.name !== 'Consola del servidor').length };
+  } catch (error) { return { ok:false, error:error.message }; }
+});
+
+ipcMain.handle('connection:handoffImportPreview', async (_, { requestUserId, passphrase } = {}) => {
+  try {
+    if (!_connRequireSA(requestUserId) || !_installedServiceDataDir()) {
+      return { ok:false, error:'Solo el superadmin del Server instalado' };
+    }
+    const picked = await dialog.showOpenDialog(mainWindow, {
+      title:'Seleccionar perfil de terminales del Server anterior',
+      properties:['openFile'], filters:[{ name:'Perfil de terminales VELO', extensions:['veloterminales'] }],
+    });
+    if (picked.canceled || !picked.filePaths?.[0]) return { ok:false, canceled:true };
+    const file = fs.readFileSync(picked.filePaths[0]);
+    if (file.length > 2 * 1024 * 1024) return { ok:false, error:'El perfil de terminales excede el tamaño permitido' };
+    const source = require('./src/main/terminal-handoff').openProfile(file, passphrase);
+    const preview = await _handoffServerCall('serverAdmin:previewTerminalReception', requestUserId, { source });
+    if (!preview?.ok) return preview;
+    const token = crypto.randomUUID();
+    _pendingTerminalHandoff = { token, source, expiresAt:Date.now() + 10 * 60 * 1000 };
+    return { ok:true, token, data:preview.data };
+  } catch (error) { return { ok:false, error:error.message }; }
+});
+
+ipcMain.handle('connection:handoffImportApply', async (_, { requestUserId, token } = {}) => {
+  try {
+    const pending = _pendingTerminalHandoff;
+    _pendingTerminalHandoff = null;
+    if (!pending || pending.token !== token || pending.expiresAt < Date.now()) {
+      return { ok:false, error:'La vista previa venció; selecciona el perfil otra vez' };
+    }
+    const applied = await _handoffServerCall('serverAdmin:applyTerminalReception', requestUserId,
+      { source:pending.source });
+    if (applied?.ok) {
+      settingsRepo.set('connection_access_key', pending.source.accessKey);
+      setupMultiTerminal();
+    }
+    return applied;
+  } catch (error) { return { ok:false, error:error.message }; }
+});
+
+ipcMain.handle('connection:handoffPrepare', async (_, { requestUserId, addresses, port } = {}) =>
+  _handoffServerCall('serverAdmin:prepareHandoffTarget', requestUserId, { addresses, port }));
+ipcMain.handle('connection:handoffActivate', async (_, { requestUserId, pilotTerminalId, rolloutAll } = {}) =>
+  _handoffServerCall('serverAdmin:activateHandoffTarget', requestUserId, { pilotTerminalId, rolloutAll }));
+
 ipcMain.handle('connection:generateKey', async (_, { requestUserId } = {}) => {
   try {
     if (!_connRequireSA(requestUserId)) return { ok: false, error: 'Solo el superadmin' };
@@ -1295,6 +1377,12 @@ ipcMain.handle('connection:clientPreflight', async () => {
     //    panel dev del servidor; cada conexión exitosa la trae (solo el hash) para
     //    poder validarla después SIN servidor. Nunca bloquea el preflight.
     if (authorized) {
+      // El Server nuevo cuenta la llegada real solo cuando la terminal ya
+      // abrió su sesión con el negocio recuperado.
+      try {
+        await rpcCall({ host, port, accessKey, terminalId, businessId,
+          channel:'service:handoffArrived', args:{}, timeoutMs:4000 });
+      } catch {}
       try {
         const g = await rpcCall({ host, port, accessKey, terminalId, businessId, channel: 'connection:localGuardHash', args: {}, timeoutMs: 4000 });
         if (g && g.ok === true && g.data && typeof g.data.hash === 'string') {
@@ -1419,6 +1507,11 @@ ipcMain.handle('serverAdmin:getInfo', async (_, { requestUserId } = {}) => {
       ok: true,
       mode: 'server',
       serviceMode: true,
+      serviceId: cfg.serviceId,
+      vertical: require('./src/verticals').activeVerticalId() === 'tech' ? 'TECH' : 'POS',
+      handoffLockedAt: cfg.handoffLockedAt || '',
+      handoffSource: cfg.handoffSource || null,
+      handoffTarget: cfg.handoffTarget || null,
       serverIp: '127.0.0.1',
       serverPort: String(cfg.port || 8443),
       accessKey: cfg.accessKey,
@@ -1515,6 +1608,204 @@ ipcMain.handle('serverAdmin:setTerminalBusinesses', async (_, {
     audit(requestUserId, user.name, 'service_terminal_negocios', 'settings', null, `${id}: ${clean.join(',') || 'todos'}`);
     return { ok: true, businesses: clean };
   } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// El traslado se prepara solo desde la consola física de cada Server. El
+// gateway no acepta canales serverAdmin desde LAN ni Tailscale.
+ipcMain.handle('serverAdmin:lockForHandoff', async (_, { requestUserId } = {}) => {
+  try {
+    if (!RUNTIME.worker || RUNTIME.businessId !== 'principal') return { ok:false, error:'Servicio no disponible' };
+    const user = _connRequireSA(requestUserId);
+    if (!user) return { ok:false, error:'Solo el superadmin' };
+    const serviceConfig = require('./src/main/service-config');
+    const current = serviceConfig.loadServiceConfig(DATA_DIR);
+    if (current.handoffTarget?.active) return { ok:false, error:'El traslado ya está activo' };
+    if (current.handoffLockedAt) return { ok:true, lockedAt:current.handoffLockedAt, alreadyLocked:true };
+    const lockedAt = new Date().toISOString();
+    serviceConfig.saveServiceConfig(DATA_DIR, { ...current, handoffLockedAt:lockedAt });
+    audit(requestUserId, user.name, 'servidor_bloqueado_por_traslado', 'settings', null, lockedAt);
+    return { ok:true, lockedAt };
+  } catch (error) { return { ok:false, error:error.message }; }
+});
+
+ipcMain.handle('serverAdmin:cancelHandoffLock', async (_, { requestUserId } = {}) => {
+  try {
+    if (!RUNTIME.worker || RUNTIME.businessId !== 'principal') return { ok:false, error:'Servicio no disponible' };
+    const user = _connRequireSA(requestUserId);
+    if (!user) return { ok:false, error:'Solo el superadmin' };
+    const serviceConfig = require('./src/main/service-config');
+    const current = serviceConfig.loadServiceConfig(DATA_DIR);
+    if (current.handoffTarget?.active) return { ok:false, error:'Ya hay terminales trasladándose; requiere conciliación antes de volver a abrir' };
+    serviceConfig.saveServiceConfig(DATA_DIR, { ...current, handoffLockedAt:'' });
+    audit(requestUserId, user.name, 'bloqueo_traslado_cancelado', 'settings', null, '');
+    return { ok:true };
+  } catch (error) { return { ok:false, error:error.message }; }
+});
+
+ipcMain.handle('serverAdmin:previewTerminalReception', async (_, { requestUserId, source } = {}) => {
+  try {
+    if (!RUNTIME.worker || RUNTIME.businessId !== 'principal') return { ok:false, error:'Servicio no disponible' };
+    if (!_connRequireSA(requestUserId)) return { ok:false, error:'Solo el superadmin' };
+    const serviceConfig = require('./src/main/service-config');
+    const current = serviceConfig.loadServiceConfig(DATA_DIR);
+    if (current.handoffSource) return { ok:false, error:'Esta instalación ya recibió un perfil de terminales' };
+    const vertical = require('./src/verticals').activeVerticalId() === 'tech' ? 'TECH' : 'POS';
+    const plan = require('./src/main/terminal-handoff').planTerminalReception({
+      source, targetConfig:{ ...current, vertical },
+      targetBusinesses:require('./src/main/server-service').listServiceBusinesses(DATA_DIR, current),
+      lockedAt:source?.lockedAt,
+    });
+    return { ok:true, data:{ businessMap:plan.businessMap,
+      terminalCount:plan.terminalCount, businessCount:plan.businessCount,
+      targetServiceId:current.serviceId } };
+  } catch (error) { return { ok:false, error:error.message }; }
+});
+
+ipcMain.handle('serverAdmin:applyTerminalReception', async (_, { requestUserId, source } = {}) => {
+  try {
+    if (!RUNTIME.worker || RUNTIME.businessId !== 'principal') return { ok:false, error:'Servicio no disponible' };
+    const user = _connRequireSA(requestUserId);
+    if (!user) return { ok:false, error:'Solo el superadmin' };
+    const serviceConfig = require('./src/main/service-config');
+    const current = serviceConfig.loadServiceConfig(DATA_DIR);
+    if (current.handoffSource) return { ok:false, error:'Esta instalación ya recibió un perfil de terminales' };
+    const vertical = require('./src/verticals').activeVerticalId() === 'tech' ? 'TECH' : 'POS';
+    const plan = require('./src/main/terminal-handoff').planTerminalReception({
+      source, targetConfig:{ ...current, vertical },
+      targetBusinesses:require('./src/main/server-service').listServiceBusinesses(DATA_DIR, current),
+      lockedAt:source?.lockedAt,
+    });
+    serviceConfig.saveServiceConfig(DATA_DIR, { ...plan.nextConfig,
+      handoffSource:{ serviceId:source.serviceId, lockedAt:source.lockedAt,
+        businessMap:plan.businessMap, terminalCount:plan.terminalCount,
+        terminalIds:source.terminals.filter(t => t.name !== 'Consola del servidor').map(t => t.terminalId),
+        arrivals:{},
+        preparedAt:new Date().toISOString() },
+    });
+    audit(requestUserId, user.name, 'terminales_recibidas_para_traslado', 'settings', null,
+      `${plan.terminalCount} terminales · ${plan.businessCount} negocios`);
+    return { ok:true, data:{ businessMap:plan.businessMap,
+      terminalCount:plan.terminalCount, businessCount:plan.businessCount,
+      targetServiceId:current.serviceId } };
+  } catch (error) { return { ok:false, error:error.message }; }
+});
+
+async function _probeHandoffDestination(source, addresses, port) {
+  const { rpcCall } = require('./src/main/net-client');
+  const terminals = source.allowlist.filter(t => t.name !== 'Consola del servidor');
+  const probe = terminals[0];
+  if (!probe) throw new Error('No hay terminales autorizadas para validar el Server nuevo');
+  let lastError = 'El Server nuevo no respondió';
+  for (const host of addresses) {
+    const request = { host, port, accessKey:source.accessKey,
+      terminalId:probe.terminalId, businessId:'principal', timeoutMs:3500 };
+    const plan = await rpcCall({ ...request, channel:'service:handoffPlan', args:{} });
+    if (!plan?.ok || !plan.data) { lastError = plan?.error || lastError; continue; }
+    if (plan.data.sourceServiceId !== source.serviceId ||
+        plan.data.lockedAt !== source.handoffLockedAt ||
+        plan.data.targetServiceId === source.serviceId) {
+      throw new Error('El perfil del Server nuevo no corresponde a este traslado');
+    }
+    const sourceIds = source.businesses.filter(item => item.active !== false).map(item => item.id);
+    const map = plan.data.businessMap || {};
+    if (sourceIds.length !== Object.keys(map).length || sourceIds.some(id => !map[id])) {
+      throw new Error('Falta recuperar algún negocio en el Server nuevo');
+    }
+    for (const oldId of sourceIds) {
+      const terminal = terminals.find(t => !t.businesses?.length || t.businesses.includes(oldId));
+      if (!terminal) throw new Error(`Ninguna terminal está asignada al negocio ${oldId}`);
+      const check = await rpcCall({ ...request, terminalId:terminal.terminalId,
+        businessId:map[oldId], channel:'version:getInfo', args:{} });
+      if (!check?.ok || !require('./src/main/terminal-handoff').versionAtLeast(
+        check.data?.appVersion, APP_VERSION)) {
+        throw new Error(`El negocio ${oldId} no está listo o el Server nuevo necesita actualización`);
+      }
+    }
+    return { host, serviceId:plan.data.targetServiceId, businessMap:map,
+      arrivedTerminalIds:Array.isArray(plan.data.arrivedTerminalIds) ? plan.data.arrivedTerminalIds : [] };
+  }
+  throw new Error(`No se pudo validar el Server nuevo: ${lastError}`);
+}
+
+ipcMain.handle('serverAdmin:prepareHandoffTarget', async (_, { requestUserId, addresses, port } = {}) => {
+  try {
+    if (!RUNTIME.worker || RUNTIME.businessId !== 'principal') return { ok:false, error:'Servicio no disponible' };
+    const user = _connRequireSA(requestUserId);
+    if (!user) return { ok:false, error:'Solo el superadmin' };
+    const serviceConfig = require('./src/main/service-config');
+    const current = serviceConfig.loadServiceConfig(DATA_DIR);
+    if (!current.handoffLockedAt) return { ok:false, error:'Bloquea primero el Server anterior' };
+    if (current.handoffTarget?.active) return { ok:false, error:'El traslado ya está activo' };
+    const hosts = require('./src/main/terminal-handoff').normalizeAddresses(addresses);
+    const selectedPort = Number(port || 8443);
+    if (!Number.isInteger(selectedPort) || selectedPort < 1024 || selectedPort > 65535) {
+      return { ok:false, error:'Puerto del Server nuevo no válido' };
+    }
+    const source = {
+      serviceId:current.serviceId, accessKey:current.accessKey,
+      handoffLockedAt:current.handoffLockedAt,
+      businesses:require('./src/main/server-service').listServiceBusinesses(DATA_DIR, current),
+      allowlist:current.allowlist.map(id => ({ terminalId:id,
+        name:current.terminalNames?.[id] || '', businesses:current.terminalBusinesses?.[id] || [] })),
+    };
+    const checked = await _probeHandoffDestination(source, hosts, selectedPort);
+    const target = { serviceId:checked.serviceId, addresses:hosts,
+      port:selectedPort, businessMap:checked.businessMap, active:false,
+      preparedAt:new Date().toISOString() };
+    serviceConfig.saveServiceConfig(DATA_DIR, { ...current, handoffTarget:target });
+    audit(requestUserId, user.name, 'traslado_terminales_preparado', 'settings', null,
+      `${Object.keys(target.businessMap).length} negocios`);
+    return { ok:true, data:{ serviceId:target.serviceId,
+      addresses:hosts, businessCount:Object.keys(target.businessMap).length } };
+  } catch (error) { return { ok:false, error:error.message }; }
+});
+
+ipcMain.handle('serverAdmin:activateHandoffTarget', async (_, { requestUserId, pilotTerminalId, rolloutAll } = {}) => {
+  try {
+    if (!RUNTIME.worker || RUNTIME.businessId !== 'principal') return { ok:false, error:'Servicio no disponible' };
+    const user = _connRequireSA(requestUserId);
+    if (!user) return { ok:false, error:'Solo el superadmin' };
+    const serviceConfig = require('./src/main/service-config');
+    const current = serviceConfig.loadServiceConfig(DATA_DIR);
+    const target = current.handoffTarget;
+    if (!current.handoffLockedAt || !target || target.rollout === 'all') {
+      return { ok:false, error:'No hay un traslado pendiente' };
+    }
+    const source = { serviceId:current.serviceId, accessKey:current.accessKey,
+      handoffLockedAt:current.handoffLockedAt,
+      businesses:require('./src/main/server-service').listServiceBusinesses(DATA_DIR, current),
+      allowlist:current.allowlist.map(id => ({ terminalId:id,
+        name:current.terminalNames?.[id] || '', businesses:current.terminalBusinesses?.[id] || [] })) };
+    const checked = await _probeHandoffDestination(source, target.addresses, target.port);
+    if (checked.serviceId !== target.serviceId ||
+        JSON.stringify(checked.businessMap) !== JSON.stringify(target.businessMap)) {
+      return { ok:false, error:'El Server nuevo cambió desde la validación; prepara otra vez' };
+    }
+    let rollout;
+    let selectedPilot = target.pilotTerminalId || '';
+    if (rolloutAll) {
+      if (!target.active || !selectedPilot ||
+          !checked.arrivedTerminalIds.includes(selectedPilot)) {
+        return { ok:false, error:'La terminal piloto todavía no figura conectada al Server nuevo' };
+      }
+      rollout = 'all';
+    } else {
+      const id = String(pilotTerminalId || '').trim();
+      if (target.active || !source.allowlist.some(t =>
+        t.terminalId === id && t.name !== 'Consola del servidor')) {
+        return { ok:false, error:'Elige una terminal piloto autorizada' };
+      }
+      selectedPilot = id;
+      rollout = 'pilot';
+    }
+    serviceConfig.saveServiceConfig(DATA_DIR, { ...current,
+      handoffTarget:{ ...target, active:true, rollout, pilotTerminalId:selectedPilot,
+        activatedAt:target.activatedAt || new Date().toISOString() } });
+    audit(requestUserId, user.name,
+      rolloutAll ? 'traslado_terminales_general' : 'traslado_terminal_piloto',
+      'settings', null, rolloutAll ? `${Object.keys(target.businessMap).length} negocios` : selectedPilot);
+    return { ok:true, rollout };
+  } catch (error) { return { ok:false, error:error.message }; }
 });
 
 // ── Usuarios ──────────────────────────────────
@@ -8807,6 +9098,47 @@ let _rpcServer = null;
 let _syncStream = null;
 let _serverService = null;
 let _publicPortalServer = null;
+let _handoffPoll = null;
+let _handoffChecking = false;
+async function _checkTerminalHandoff() {
+  if (_handoffChecking || _installedServiceDataDir() ||
+      (settingsRepo.get('connection_mode') || 'local') !== 'client') return false;
+  _handoffChecking = true;
+  try {
+    const { rpcCall } = require('./src/main/net-client');
+    const host = settingsRepo.get('connection_server_ip') || '';
+    const port = Number(settingsRepo.get('connection_server_port')) || 8443;
+    const accessKey = settingsRepo.get('connection_access_key') || '';
+    const terminalId = settingsRepo.get('terminal_id') || '';
+    const businessId = settingsRepo.get('connection_business_id') || 'principal';
+    if (!host || !terminalId || !accessKey) return false;
+    const base = { host, port, accessKey, terminalId, businessId, timeoutMs:3500 };
+    const directive = await rpcCall({ ...base, channel:'service:handoff', args:{} });
+    if (!directive?.ok || !directive.data) return false;
+    const plan = directive.data;
+    const mappedId = plan.businessMap?.[businessId];
+    if (!mappedId || !plan.targetServiceId || !Array.isArray(plan.addresses) ||
+        !Number.isInteger(plan.port)) return false;
+    const destination = await require('./src/main/terminal-handoff').probeTerminalDestination(
+      plan, businessId, base, rpcCall, APP_VERSION);
+    if (destination) {
+      // Los tres datos cambian en una sola transacción. Un corte eléctrico no
+      // puede dejar la IP vieja con el ID de negocio nuevo.
+      require('./database').getDB().transaction(() => {
+        settingsRepo.set('connection_business_id', destination.businessId);
+        settingsRepo.set('connection_server_port', String(destination.port));
+        settingsRepo.set('connection_server_ip', destination.host);
+      })();
+      setupMultiTerminal();
+      try { mainWindow?.webContents.reload(); } catch {}
+      return true;
+    }
+    return false;
+  } catch (error) {
+    try { logWarn('multiterminal', 'No se pudo probar el Server nuevo', { error:error.message }); } catch {}
+    return false;
+  } finally { _handoffChecking = false; }
+}
 function setupMultiTerminal() {
   const bridge = require('./src/main/ipc-bridge');
   const conn   = require('./src/main/connection');
@@ -8825,6 +9157,12 @@ function setupMultiTerminal() {
   });
 
   const mode = getMode();
+  if (_handoffPoll) { clearInterval(_handoffPoll); _handoffPoll = null; }
+  if (mode === 'client' && !_installedServiceDataDir()) {
+    _handoffPoll = setInterval(() => { _checkTerminalHandoff().catch(() => {}); }, 15000);
+    _handoffPoll.unref?.();
+    setTimeout(() => { _checkTerminalHandoff().catch(() => {}); }, 1000).unref?.();
+  }
   if (mode === 'server') {
     const { startRpcServer } = require('./src/main/net-server');
     // Canales que el servidor NUNCA sirve a clientes remotos (propios de la máquina).
