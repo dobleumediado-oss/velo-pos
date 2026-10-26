@@ -5,6 +5,12 @@ on:
     branches:
       - 'codex/desktop-parity-*'
   workflow_dispatch:
+    inputs:
+      buildPilot:
+        description: 'Crear instaladores privados de prueba sin publicar release'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -28,3 +34,26 @@ jobs:
         run: npm run test:tech-readiness
       - name: Batería completa
         run: npm test
+      - name: Construir instaladores piloto sin publicar
+        if: github.event_name == 'workflow_dispatch' && inputs.buildPilot
+        run: npm run build:win
+        env:
+          GH_TOKEN: ''
+      - name: Registrar sumas SHA-256
+        if: github.event_name == 'workflow_dispatch' && inputs.buildPilot
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path dist -Filter '*Setup-*.exe' -Recurse |
+            Sort-Object FullName |
+            ForEach-Object { "$( (Get-FileHash $_.FullName -Algorithm SHA256).Hash )  $( $_.Name )" } |
+            Set-Content -Path dist/pilot-checksums.txt
+      - name: Guardar instaladores piloto
+        if: github.event_name == 'workflow_dispatch' && inputs.buildPilot
+        uses: actions/upload-artifact@v4
+        with:
+          name: piloto-traslado-server-${{ github.sha }}
+          path: |
+            dist/**/*Setup-*.exe
+            dist/pilot-checksums.txt
+          if-no-files-found: error
+          retention-days: 7
