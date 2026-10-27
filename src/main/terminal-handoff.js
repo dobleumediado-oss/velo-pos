@@ -142,6 +142,16 @@ function mapRecoveredBusinesses(sourceBusinesses, targetBusinesses, lockedAt) {
   return mapped;
 }
 
+function markHandoffCopies(businesses, handoffSource) {
+  const businessMap = handoffSource?.businessMap || {};
+  return (Array.isArray(businesses) ? businesses : []).map(item => {
+    const sourceId = String(item?.origin_business_id || '');
+    if (!sourceId || !Object.prototype.hasOwnProperty.call(businessMap, sourceId)) return item;
+    return { ...item, handoffCopyStatus:
+      String(businessMap[sourceId]) === String(item.id) ? 'final' : 'preliminary' };
+  });
+}
+
 function planTerminalReception({ source, targetConfig, targetBusinesses, lockedAt }) {
   if (!source || !targetConfig || source.vertical !== targetConfig.vertical) {
     throw new Error('Los dos Servers deben ser de la misma edición POS o TECH');
@@ -196,4 +206,5 @@ function planTerminalReception({ source, targetConfig, targetBusinesses, lockedA
 }
 
 module.exports = { sealProfile, openProfile, privateIpv4, normalizeAddresses,
-  versionAtLeast, probeTerminalDestination, mapRecoveredBusinesses, planTerminalReception };
+  versionAtLeast, probeTerminalDestination, mapRecoveredBusinesses, markHandoffCopies,
+  planTerminalReception };

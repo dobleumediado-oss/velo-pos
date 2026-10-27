@@ -8353,7 +8353,10 @@ ipcMain.handle('business:getAll', async () => {
         data: (Array.isArray(rows) ? rows : []).filter(item => item.id !== 'principal'),
       };
     }
-    return { ok: true, data: loadBusinesses() };
+    const businesses = loadBusinesses();
+    if (!_installedServiceDataDir()) return { ok: true, data: businesses };
+    const config = require('./src/main/service-config').loadServiceConfig(DATA_DIR);
+    return { ok: true, data: require('./src/main/terminal-handoff').markHandoffCopies(businesses, config.handoffSource) };
   }
   catch(e) { return { ok: false, error: e.message }; }
 });

@@ -4,7 +4,7 @@
 const assert = require('assert');
 const {
   sealProfile, openProfile, normalizeAddresses, mapRecoveredBusinesses, planTerminalReception,
-  versionAtLeast, probeTerminalDestination,
+  versionAtLeast, probeTerminalDestination, markHandoffCopies,
 } = require('../src/main/terminal-handoff');
 
 const lockedAt = '2026-10-26T15:00:00.000Z';
@@ -48,6 +48,13 @@ assert.throws(() => normalizeAddresses(['localhost']), /privada/);
 assert.deepStrictEqual(mapRecoveredBusinesses(source.businesses, targetBusinesses, lockedAt), {
   principal: 'biz_centro_new', biz_norte: 'biz_norte_new',
 });
+const labeledBusinesses = markHandoffCopies(targetBusinesses, {
+  businessMap: { principal:'biz_centro_new', biz_norte:'biz_norte_new' },
+});
+assert.strictEqual(labeledBusinesses.find(item => item.id === 'biz_older').handoffCopyStatus, 'preliminary');
+assert.strictEqual(labeledBusinesses.find(item => item.id === 'biz_centro_new').handoffCopyStatus, 'final');
+assert.strictEqual(labeledBusinesses.find(item => item.id === 'principal').handoffCopyStatus, undefined);
+assert.strictEqual(targetBusinesses.find(item => item.id === 'biz_older').handoffCopyStatus, undefined);
 const plan = planTerminalReception({ source, targetConfig, targetBusinesses, lockedAt });
 assert.strictEqual(plan.terminalCount, 2);
 assert.strictEqual(plan.businessCount, 2);

@@ -6,6 +6,7 @@ const http = require('http');
 const businessCtx = require('./business-context');
 const conn = require('./connection');
 const { rpcTimeoutFor } = require('./ipc-bridge');
+const { markHandoffCopies } = require('./terminal-handoff');
 const {
   loadServiceConfig,
   saveServiceConfig,
@@ -85,7 +86,7 @@ function listServiceBusinesses(rootDataDir, config = {}) {
     active: true,
     principal: true,
   };
-  const additional = businessCtx.loadBusinesses(rootDataDir)
+  const additional = markHandoffCopies(businessCtx.loadBusinesses(rootDataDir), config.handoffSource)
     .filter(item => item.active !== false)
     .map(item => ({
       ...item,

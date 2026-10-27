@@ -1833,6 +1833,7 @@ function abrirImportacionCompleta() {
       if (!result?.ok) throw new Error(result?.error || 'No se pudo incorporar la copia');
       closeModal();
       toast(`✓ ${result.data.name} incorporado. Selecciónalo en el inicio de sesión.`, 'ok');
+      _connReRender();
     } catch (error) { toast(error.message || 'No se pudo incorporar la copia', 'err'); }
     finally { button.disabled = false; button.textContent = 'Elegir copia e incorporar'; }
   };
@@ -2090,6 +2091,83 @@ async function eliminarLogo(slot = '') {
 // Ver docs/multi-terminal-sync.md. Cambiar el modo requiere reiniciar la app
 // (el servidor/cliente se configura en el arranque).
 // ══════════════════════════════════════════════
+let _handoffRoleView = '';
+
+function elegirVistaTraslado(role) {
+  if (!['source', 'target'].includes(role)) return;
+  _handoffRoleView = role;
+  _connReRender();
+}
+
+function _renderHandoffPanel(res) {
+  const role = res.handoffSource ? 'target' : res.handoffLockedAt ? 'source' : _handoffRoleView;
+  const businesses = (res.businesses || []).filter(item => item.active !== false);
+  const terminals = (res.allowlist || []).filter(item =>
+    item.terminalId !== res.terminalId && item.name !== 'Consola del servidor');
+  const copies = businesses.filter(item => item.origin_business_id);
+  const copyRows = copies.map(item => {
+    const label = item.handoffCopyStatus === 'final' ? 'Copia final para el traslado'
+      : item.handoffCopyStatus === 'preliminary' ? 'Copia preliminar; no usar para ventas'
+      : res.handoffSource ? 'No pertenece a este traslado'
+        : 'Pendiente de validar con el perfil del Server anterior';
+    return `<div class="tr" style="font-size:11px;gap:8px"><span>${_esc(item.name || item.id)}</span>
+      <span style="color:var(--muted2)">${_esc(label)}</span></div>`;
+  }).join('') || '<div style="font-size:11px;color:var(--muted2)">Todavía no hay copias incorporadas.</div>';
+  const sourcePanel = `
+    <div class="alrt b" style="margin-bottom:9px"><div class="alrt-dot b"></div><div>
+      <div class="alrt-title">Server anterior · enviar terminales</div>
+      <div class="alrt-sub">${businesses.length} negocio(s) activo(s) · ${terminals.length} terminal(es) autorizada(s).
+        Comprueba que esta es la PC que usan hoy las terminales. Al preparar el destino se validarán identidad, acceso, versión y negocios; cada terminal probará la dirección LAN o Tailscale que pueda alcanzar.</div>
+    </div></div>
+    ${res.handoffLockedAt ? `<div class="alrt a" style="margin-bottom:9px"><div class="alrt-dot a"></div><div>
+      <div class="alrt-title">Operaciones bloqueadas desde ${_esc(res.handoffLockedAt)}</div>
+      <div class="alrt-sub">Crea ahora una copia externa final de cada negocio activo e incorpórala en el Server nuevo.</div>
+    </div></div>` : ''}
+    ${res.handoffTarget ? `<div class="alrt ${res.handoffTarget.active ? 'g' : 'b'}" style="margin-bottom:9px"><div class="alrt-dot ${res.handoffTarget.active ? 'g' : 'b'}"></div><div>
+      <div class="alrt-title">${res.handoffTarget.rollout === 'all' ? 'Cambio general activo' : res.handoffTarget.active ? 'Prueba piloto activa' : 'Destino validado'}</div>
+      <div class="alrt-sub">${_esc((res.handoffTarget.addresses || []).join(' · '))}</div>
+    </div></div>` : ''}
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px">
+      ${!res.handoffLockedAt ? `<button class="btn btn-out btn-sm" onclick="bloquearServerTraslado()" ${!terminals.length ? 'disabled title="No hay terminales para trasladar"' : ''}>Bloquear operaciones y crear copias finales</button>`
+        : `<button class="btn btn-out btn-sm" onclick="exportarPerfilTerminales()">Guardar perfil cifrado de terminales</button>`}
+      ${res.handoffLockedAt && !res.handoffTarget?.active ? `<button class="btn btn-ghost btn-sm" onclick="cancelarBloqueoTraslado()">Cancelar bloqueo</button>` : ''}
+    </div>
+    ${res.handoffLockedAt ? `<div style="font-size:11px;color:var(--muted2);margin-bottom:7px">Después de recibir el perfil y las copias en el nuevo Server, valida el destino aquí una sola vez.</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:end">
+        <div style="flex:2;min-width:160px"><label class="lbl">IP LAN y Tailscale del nuevo Server</label>
+          <input class="inp no-uppercase" data-uppercase="off" id="handoff-hosts" placeholder="192.168.1.20, 100.101.102.103"
+            value="${_esc((res.handoffTarget?.addresses || []).join(', '))}"></div>
+        <div style="width:92px"><label class="lbl">Puerto</label><input class="inp" id="handoff-port" value="${_esc(res.handoffTarget?.port || res.serverPort || '8443')}"></div>
+        <button class="btn btn-out btn-sm" onclick="prepararTrasladoTerminales()">Validar destino</button>
+        ${res.handoffTarget && !res.handoffTarget.active ? `<select class="inp" id="handoff-pilot" style="width:180px">
+          <option value="">Terminal piloto…</option>
+          ${terminals.map(item => `<option value="${_esc(item.terminalId)}">${_esc(item.name || item.terminalId.slice(0, 8))}</option>`).join('')}
+          </select><button class="btn btn-green btn-sm" onclick="activarTrasladoTerminales(false)">Probar una terminal</button>` : ''}
+        ${res.handoffTarget?.rollout === 'pilot' ? `<button class="btn btn-green btn-sm" onclick="activarTrasladoTerminales(true)">Cambiar todas</button>` : ''}
+      </div>` : ''}`;
+  const targetPanel = `
+    <div class="alrt b" style="margin-bottom:9px"><div class="alrt-dot b"></div><div>
+      <div class="alrt-title">Server nuevo · recibir negocios y terminales</div>
+      <div class="alrt-sub">Incorpora una copia final por negocio después de bloquear el Server anterior. La copia que incorporaste antes sirve para revisión y seguirá identificada como preliminar.</div>
+    </div></div>
+    <div style="font-weight:700;font-size:11px;margin-bottom:4px">Copias incorporadas</div>${copyRows}
+    ${res.handoffSource ? `<div class="alrt g" style="margin:9px 0"><div class="alrt-dot g"></div><div>
+      <div class="alrt-title">Perfil recibido · ${_esc(Object.keys(res.handoffSource.arrivals || {}).length)} de ${_esc(res.handoffSource.terminalCount)} terminales conectadas</div>
+      <div class="alrt-sub">${_esc(Object.keys(res.handoffSource.businessMap || {}).length)} negocio(s) final(es) asociados. Mantén este Server encendido.</div>
+    </div></div><button class="btn btn-out btn-sm" onclick="_connReRender()">Actualizar llegadas</button>`
+      : `<button class="btn btn-out btn-sm" style="margin-top:9px" onclick="importarPerfilTerminales()">Recibir perfil cifrado del Server anterior</button>`}`;
+  return `<div style="border-top:1px solid var(--line);margin-top:18px;padding-top:16px">
+    <div style="font-weight:700;font-size:13px;margin-bottom:4px">Trasladar terminales a otro Server</div>
+    <div style="font-size:11px;color:var(--muted2);margin-bottom:9px">Preparar → Copiar → Vincular → Trasladar</div>
+    ${!res.handoffLockedAt && !res.handoffSource ? `<div style="display:flex;gap:6px;margin-bottom:9px">
+      <button class="btn ${role === 'source' ? 'btn-dark' : 'btn-out'} btn-sm" onclick="elegirVistaTraslado('source')">Este es el Server anterior</button>
+      <button class="btn ${role === 'target' ? 'btn-dark' : 'btn-out'} btn-sm" onclick="elegirVistaTraslado('target')">Este es el Server nuevo</button>
+    </div>` : ''}
+    ${role === 'source' ? sourcePanel : role === 'target' ? targetPanel
+      : '<div style="font-size:11px;color:var(--muted2)">Elige el papel de esta PC para ver solo los pasos que corresponden aquí.</div>'}
+  </div>`;
+}
+
 async function renderConexionCard(container) {
   if (!container) return;
   const res = await window.api.connection.getInfo({ requestUserId: _cfgUser()?.id }).catch(() => null);
@@ -2166,47 +2244,7 @@ async function renderConexionCard(container) {
           placeholder="Nombre" style="flex:1;font-size:11px"/>
         <button class="btn btn-green btn-sm" onclick="agregarTerminalAllow()">Añadir</button>
       </div>
-      ${res.serviceMode ? `
-      <div style="border-top:1px solid var(--line);margin-top:18px;padding-top:16px">
-        <div style="font-weight:700;font-size:13px;margin-bottom:5px">Trasladar terminales a otro Server</div>
-        <div style="font-size:11px;color:var(--muted2);line-height:1.5;margin-bottom:10px">
-          Para mover todos los negocios: bloquea operaciones en el Server anterior,
-          crea e incorpora una copia final de cada negocio y luego traslada las terminales.
-          Las terminales probarán la IP LAN o Tailscale del nuevo Server antes de cambiar.
-        </div>
-        ${res.handoffLockedAt ? `<div class="alrt a" style="margin-bottom:8px"><div class="alrt-dot a"></div><div>
-          <div class="alrt-title">Este Server está bloqueado para el traslado</div>
-          <div class="alrt-sub">Desde ${_esc(res.handoffLockedAt)}. Crea ahora las copias finales de todos los negocios.</div>
-        </div></div>` : ''}
-        ${res.handoffSource ? `<div class="alrt b" style="margin-bottom:8px"><div class="alrt-dot b"></div><div>
-          <div class="alrt-title">Perfil recibido del Server anterior</div>
-          <div class="alrt-sub">${_esc(Object.keys(res.handoffSource.arrivals || {}).length)} de ${_esc(res.handoffSource.terminalCount)} terminales conectadas · ${_esc(Object.keys(res.handoffSource.businessMap || {}).length)} negocios. Mantén este Server encendido.</div>
-        </div></div>` : ''}
-        ${res.handoffTarget ? `<div class="alrt ${res.handoffTarget.active?'g':'b'}" style="margin-bottom:8px"><div class="alrt-dot ${res.handoffTarget.active?'g':'b'}"></div><div>
-          <div class="alrt-title">${res.handoffTarget.rollout === 'all' ? 'Cambio general activo' : res.handoffTarget.active ? 'Prueba piloto activa' : 'Destino preparado'}</div>
-          <div class="alrt-sub">${_esc((res.handoffTarget.addresses || []).join(' · '))}</div>
-        </div></div>` : ''}
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px">
-          ${res.handoffSource ? `<button class="btn btn-out btn-sm" onclick="_connReRender()">Actualizar llegadas</button>` : ''}
-          ${!res.handoffLockedAt ? `<button class="btn btn-out btn-sm" onclick="bloquearServerTraslado()">1. Bloquear Server anterior</button>` :
-            `<button class="btn btn-out btn-sm" onclick="exportarPerfilTerminales()">2. Exportar perfil cifrado</button>`}
-          ${!res.handoffSource ? `<button class="btn btn-out btn-sm" onclick="importarPerfilTerminales()">3. Recibir perfil en Server nuevo</button>` : ''}
-          ${res.handoffLockedAt && !res.handoffTarget?.active ? `<button class="btn btn-ghost btn-sm" onclick="cancelarBloqueoTraslado()">Cancelar bloqueo</button>` : ''}
-        </div>
-        ${res.handoffLockedAt ? `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:end">
-          <div style="flex:2;min-width:160px"><label class="lbl">IP LAN y Tailscale del nuevo Server</label>
-            <input class="inp no-uppercase" data-uppercase="off" id="handoff-hosts" placeholder="192.168.1.20, 100.101.102.103"
-              value="${_esc((res.handoffTarget?.addresses || []).join(', '))}"></div>
-          <div style="width:92px"><label class="lbl">Puerto</label><input class="inp" id="handoff-port" value="${_esc(res.handoffTarget?.port || res.serverPort || '8443')}"></div>
-          <button class="btn btn-out btn-sm" onclick="prepararTrasladoTerminales()">4. Validar destino</button>
-          ${res.handoffTarget && !res.handoffTarget.active ? `<select class="inp" id="handoff-pilot" style="width:180px">
-            <option value="">Terminal piloto…</option>
-            ${(res.allowlist || []).filter(t => t.name !== 'Consola del servidor').map(t =>
-              `<option value="${_esc(t.terminalId)}">${_esc(t.name || t.terminalId.slice(0,8))}</option>`).join('')}
-            </select><button class="btn btn-green btn-sm" onclick="activarTrasladoTerminales(false)">5. Probar una terminal</button>` : ''}
-          ${res.handoffTarget?.rollout === 'pilot' ? `<button class="btn btn-green btn-sm" onclick="activarTrasladoTerminales(true)">6. Cambiar todas</button>` : ''}
-        </div>` : ''}
-      </div>` : ''}`;
+      ${res.serviceMode ? _renderHandoffPanel(res) : ''}`;
   } else { // client
     body = `
       <div style="font-size:12px;margin-bottom:8px">Conéctate al servidor con los datos que te dio la PC principal:</div>

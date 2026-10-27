@@ -16,6 +16,14 @@ encendido hasta comprobar que todas recibieron el destino nuevo.
 
 ## Secuencia de corte
 
+En **Configuración → Modo de Conexión → Trasladar terminales a otro Server**,
+elige si la PC es el Server anterior o el nuevo. La pantalla muestra solo las
+acciones de ese equipo y organiza el trabajo en **Preparar → Copiar → Vincular →
+Trasladar**. El Server anterior resume los negocios y terminales; la validación
+del destino comprueba identidad, autorización, negocios y versión después de
+recibir las copias y el perfil. Cada terminal prueba las direcciones LAN o
+Tailscale disponibles antes de cambiar su conexión.
+
 1. Instalar y probar el Server nuevo en LAN y Tailscale, sin llevar terminales.
 2. Mostrar los negocios y terminales del Server anterior, incluyendo qué negocio
    usa cada terminal. El operador comprueba que todos los negocios a migrar
@@ -25,6 +33,9 @@ encendido hasta comprobar que todas recibieron el destino nuevo.
 4. Crear una copia externa final de **cada** negocio, incorporarla en el Server
    nuevo y verificar documentos, NCF, caja, inventario y auditoría. Cada negocio
    recuperado debe mostrar la fecha de captura posterior al inicio del bloqueo.
+   Si ya se incorporó una copia para revisión, permanece separada: al recibir
+   el perfil, VELO la señala como preliminar y señala cuál es la copia final.
+   No operar ventas sobre la preliminar.
 5. Exportar desde el Server anterior el perfil cifrado de terminales y recibirlo
    en el nuevo con la clave de traslado. En el destino se relaciona cada ID de
    negocio anterior con exactamente uno recuperado; no se conceden permisos a

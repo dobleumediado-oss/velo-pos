@@ -736,7 +736,9 @@ function renderLogin() {
     options.forEach((b) => {
       const op = document.createElement('option');
       op.value = b.id || '';
-      op.textContent = b.name || b.id || 'Negocio';
+      const copyNote = b.handoffCopyStatus === 'final' ? ' · Copia final del traslado'
+        : b.handoffCopyStatus === 'preliminary' ? ' · Copia preliminar; no usar para ventas' : '';
+      op.textContent = (b.name || b.id || 'Negocio') + copyNote;
       if ((b.id || '') === activeId) op.selected = true;
       select.appendChild(op);
     });

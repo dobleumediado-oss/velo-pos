@@ -80,7 +80,7 @@
     "test:suite-license": "node scripts/test-suite-license-products.js && node scripts/test-provider-license-manager.js",
     "test:serialized-sale": "node scripts/run-electron-node.js scripts/test-serialized-sale.js",
     "test:server-service": "node scripts/test-server-service.js",
-    "test:terminal-handoff": "node scripts/test-terminal-handoff.js",
+    "test:terminal-handoff": "node scripts/test-terminal-handoff.js && node scripts/test-terminal-handoff-ui.js",
     "test:experience": "node scripts/test-experience-system.js",
     "test:excel": "node scripts/test-excel-report.js",
     "test:excel-ui": "electron --no-sandbox scripts/test-excel-ui.js",
