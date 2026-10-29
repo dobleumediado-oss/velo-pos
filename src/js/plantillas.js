@@ -450,10 +450,22 @@ function _customerPhoneLabel(sale) {
 // Factor de tamaño del logo en las facturas de hoja (config: logo_size).
 // pequeno 0.6 · mediano 1 (por defecto) · grande 1.4.
 function _logoScale(cfg) {
+  const custom=Number(cfg?.invoice_logo_scale_pct);
+  if (Number.isFinite(custom) && custom >= 50 && custom <= 150) return custom / 100;
   const s = String(cfg?.logo_size || 'mediano').toLowerCase();
   if (s === 'pequeno' || s === 'pequeño' || s === 'small') return 0.6;
   if (s === 'grande' || s === 'large') return 1.4;
   return 1;
+}
+function _invoiceName(cfg, opts) {
+  return cfg?.invoice_header_mode === 'logo' && opts?.logo && (cfg?.biz_logo || cfg?.biz_logo_2)
+    ? '' : _esc(cfg?.biz_name || 'Mi Negocio');
+}
+function _invoiceLogoEnabled(cfg, opts) {
+  return !!opts?.logo && cfg?.invoice_header_mode !== 'name';
+}
+function _thermalFont(cfg) {
+  return {consolas:"Consolas,'Courier New',monospace",courier:"'Courier New',Courier,monospace",lucida:"'Lucida Console','Courier New',monospace"}[cfg?.thermal_font_family] || "'Courier New',Courier,monospace";
 }
 
 // Factor global del tamaño de letra en las facturas de hoja (config: factura_font_size).
@@ -808,15 +820,15 @@ function _termicaHeader(cfg, opts, widthMm) {
   const sep  = '─'.repeat(cols);
   const lines = [];
 
-  if (opts.logo) {
+  if (_invoiceLogoEnabled(cfg, opts)) {
     const logoHdr = buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, {
       unit: 'mm', maxW: widthMm - 4, maxH: 14, align: 'center', marginBottom: 4,
-      filter: 'grayscale(100%) contrast(150%)',
+      filter: 'grayscale(100%) contrast(150%)', scale:_logoScale(cfg),
     });
     if (logoHdr) lines.push(logoHdr);
   }
 
-  lines.push(`<div style="text-align:center;font-weight:700;font-size:${widthMm<=52?'11px':'13px'}">${_esc(cfg.biz_name||'Mi Negocio')}</div>`);
+  if (_invoiceName(cfg,opts)) lines.push(`<div style="text-align:center;font-weight:700;font-size:${widthMm<=52?'11px':'13px'}">${_invoiceName(cfg,opts)}</div>`);
   if (opts.rnc && cfg.biz_rnc) lines.push(`<div style="text-align:center">RNC: ${_esc(cfg.biz_rnc)}</div>`);
   if (cfg.biz_addr) lines.push(`<div style="text-align:center">${_esc(cfg.biz_addr)}</div>`);
   if (cfg.biz_phone) lines.push(`<div style="text-align:center">Tel: ${_esc(cfg.biz_phone)}</div>`);
@@ -877,7 +889,7 @@ function renderTermica(sale, cfg, opts, widthMm = 76) {
   @page { size: ${widthMm}mm auto; margin: ${mt} ${mr} ${mb} ${ml}; }
   * { margin:0; padding:0; box-sizing:border-box; }
   body { width:${_thermalBodyWidth(widthMm, ml, mr)}; max-width:100%; margin:0 auto;
-         font-family:'Courier New',monospace;
+         font-family:${_thermalFont(cfg)};
          font-size:${fs}; line-height:${lh}; color:#000; }
   img { display:block; margin:0 auto; }
   /* Las líneas de guiones medían más que el ticket y se salían por la derecha. */
@@ -962,7 +974,7 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
   @page { size: ${widthMm}mm auto; margin: ${_mt2} ${_mr2} ${_mb2} ${_ml2}; }
   * { margin:0; padding:0; box-sizing:border-box; }
   body { width:${_thermalBodyWidth(widthMm, _ml2, _mr2)}; max-width:100%; margin:0 auto;
-         font-family:'Courier New',monospace;
+         font-family:${_thermalFont(cfg)};
          font-size:${_fs2}; line-height:${_lh2}; color:#000; }
   .title { text-align:center; font-size:15px; font-weight:900;
            letter-spacing:2px; margin:4px 0; }
@@ -974,8 +986,8 @@ function renderTermicaModerna(sale, cfg, opts, widthMm = 76) {
   .center { text-align:center; }
   img { display:block; margin:0 auto; }
 </style></head><body>
-  ${opts.logo ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'mm', maxW:widthMm-4, maxH:14, align:'center', marginBottom:4, filter:'grayscale(100%) contrast(150%)' }) : ''}
-  <div class="title">${_esc(cfg.biz_name||'Mi Negocio')}</div>
+  ${_invoiceLogoEnabled(cfg,opts) ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'mm', maxW:widthMm-4, maxH:14, align:'center', marginBottom:4, filter:'grayscale(100%) contrast(150%)', scale:_logoScale(cfg) }) : ''}
+  ${_invoiceName(cfg,opts) ? `<div class="title">${_invoiceName(cfg,opts)}</div>` : ''}
   ${opts.rnc && cfg.biz_rnc ? `<div class="center" style="font-size:10px">RNC: ${_esc(cfg.biz_rnc)}</div>` : ''}
   ${cfg.biz_addr ? `<div class="center" style="font-size:10px">${_esc(cfg.biz_addr)} · Tel: ${_esc(cfg.biz_phone||'')}</div>` : ''}
   <hr class="sep-d"/>
@@ -1034,10 +1046,10 @@ function renderTermicaMinimal(sale, cfg, opts, widthMm = 76) {
   @page { size: ${widthMm}mm auto; margin: 1mm 2mm 3mm 2mm; }
   * { margin:0; padding:0; box-sizing:border-box; }
   body { width:${_thermalBodyWidth(widthMm, '2mm', '2mm')}; max-width:100%; margin:0 auto;
-         font-family:'Courier New',monospace;
+         font-family:${_thermalFont(cfg)};
          font-size:10.5px; line-height:1.4; color:#000; }
 </style></head><body>
-  <div style="text-align:center;font-size:12px;font-weight:700;margin-bottom:2px">${_esc(cfg.biz_name||'Mi Negocio')}</div>
+  <div style="text-align:center;font-size:12px;font-weight:700;margin-bottom:2px">${_invoiceName(cfg,opts)}</div>
   ${_isExpensePayment(sale) ? `<div style="text-align:center;font-weight:700">${_docLabel(sale)}</div>` : ''}
   ${sale.adjusted_copy ? `<div style="text-align:center;font-weight:700">${_docLabel(sale)}</div>` : ''}
   <div style="text-align:center;font-size:9px;margin-bottom:4px">${sale.date} ${sale.time} · ${facturaLabel(sale)}</div>
@@ -1409,8 +1421,8 @@ function renderCartaRecibo(sale, cfg, opts) {
 </style></head><body>
   <div class="hdr">
     <div class="hdr-l">
-      ${opts.logo ? `<div class="logos">${buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:150, maxH:56, align:'left', marginBottom:0, scale:_logoScale(cfg) })}</div>` : ''}
-      <div class="biz-name">${_esc(cfg.biz_name || 'Mi Negocio')}</div>
+      ${_invoiceLogoEnabled(cfg,opts) ? `<div class="logos">${buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:150, maxH:56, align:'left', marginBottom:0, scale:_logoScale(cfg) })}</div>` : ''}
+      ${_invoiceName(cfg,opts) ? `<div class="biz-name">${_invoiceName(cfg,opts)}</div>` : ''}
       ${opts.rnc && cfg.biz_rnc ? `<div class="biz-line">RNC: ${_esc(cfg.biz_rnc)}</div>` : ''}
       ${cfg.biz_addr ? `<div class="biz-line">${_esc(cfg.biz_addr)}</div>` : ''}
       ${bizContact.length ? `<div class="biz-contact">${bizContact.map(c => `<span>${c}</span>`).join('')}</div>` : ''}
@@ -1567,8 +1579,8 @@ function renderCartaFormal(sale, cfg, opts) {
 </style></head><body>
   <div class="header-bar">
     <div>
-      ${opts.logo ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:160, maxH:45, align:'left', marginBottom:4, filter:'brightness(10)', br:true, scale:_logoScale(cfg) }) : ''}
-      <div class="biz-name">${_esc(cfg.biz_name||'Mi Negocio')}</div>
+      ${_invoiceLogoEnabled(cfg,opts) ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:160, maxH:45, align:'left', marginBottom:4, filter:'brightness(10)', br:true, scale:_logoScale(cfg) }) : ''}
+      ${_invoiceName(cfg,opts) ? `<div class="biz-name">${_invoiceName(cfg,opts)}</div>` : ''}
       <div style="font-size:11px;opacity:.8">
         ${opts.rnc && cfg.biz_rnc ? `RNC: ${_esc(cfg.biz_rnc)} · ` : ''}${_esc(cfg.biz_addr||'')} · ${_esc(cfg.biz_phone||'')}
       </div>
@@ -1726,8 +1738,8 @@ function renderCartaNCF(sale, cfg, opts) {
   ${_adjustedCopyNotice(sale)}
   <div class="header">
     <div>
-      ${opts.logo ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:180, maxH:50, align:'left', marginBottom:4, filter:'grayscale(100%) contrast(150%)', br:true, scale:_logoScale(cfg) }) : ''}
-      <strong style="font-size:14px">${_esc(cfg.biz_name||'Mi Negocio')}</strong><br/>
+      ${_invoiceLogoEnabled(cfg,opts) ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:180, maxH:50, align:'left', marginBottom:4, filter:'grayscale(100%) contrast(150%)', br:true, scale:_logoScale(cfg) }) : ''}
+      ${_invoiceName(cfg,opts) ? `<strong style="font-size:14px">${_invoiceName(cfg,opts)}</strong><br/>` : ''}
       RNC: <strong>${_esc(cfg.biz_rnc||'---')}</strong><br/>
       ${_esc(cfg.biz_addr||'')}<br/>Tel: ${_esc(cfg.biz_phone||'')}
     </div>
@@ -1816,8 +1828,8 @@ function renderMediaCarta(sale, cfg, opts) {
 </style></head><body>
   <div class="header">
     <div>
-      ${opts.logo ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:140, maxH:35, align:'left', marginBottom:3, filter:'grayscale(100%) contrast(150%)', br:true, scale:_logoScale(cfg) }) : ''}
-      <strong style="font-size:12px">${_esc(cfg.biz_name||'Mi Negocio')}</strong><br/>
+      ${_invoiceLogoEnabled(cfg,opts) ? buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:140, maxH:35, align:'left', marginBottom:3, filter:'grayscale(100%) contrast(150%)', br:true, scale:_logoScale(cfg) }) : ''}
+      ${_invoiceName(cfg,opts) ? `<strong style="font-size:12px">${_invoiceName(cfg,opts)}</strong><br/>` : ''}
       ${opts.rnc && cfg.biz_rnc ? `RNC: ${_esc(cfg.biz_rnc)}<br/>` : ''}
       ${_esc(cfg.biz_addr||'')} · Tel: ${_esc(cfg.biz_phone||'')}
     </div>

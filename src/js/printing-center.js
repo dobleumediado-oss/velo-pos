@@ -6,6 +6,8 @@
 let _pcState = null;
 let _pcActiveTab = 'devices';
 let _pcTemplateDiagnostics = new Map();
+let _pcAppearanceTemplateId = '';
+let _pcAppearanceStyleDraft = null;
 
 function pcEsc(value) {
   return String(value == null ? '' : value)
@@ -568,6 +570,9 @@ function pcDiagnosticBusiness(settings) {
     receipt_msg: settings.receipt_msg || 'Gracias por su compra',
     print_item_code: settings.print_item_code || '1',
     logo_size: settings.logo_size || 'mediano',
+    invoice_logo_scale_pct: settings.invoice_logo_scale_pct || '',
+    invoice_header_mode: settings.invoice_header_mode || 'both',
+    thermal_font_family: settings.thermal_font_family || 'courier',
     factura_font_size: settings.factura_font_size || 'mediano',
     factura_font_weight: settings.factura_font_weight || 'normal',
     factura_autoajuste: settings.factura_autoajuste ?? '1',
@@ -610,27 +615,56 @@ function renderInvoiceAppearanceCards(container, { settings, onSaved } = {}) {
       emptyMsg: 'Se mostrará junto al principal en los documentos.',
     }));
 
-    // Tamaño del logo en las facturas de hoja (A4/Carta).
-    const curLogoSize = s.logo_size || 'mediano';
+    // El deslizador actualiza la muestra al moverlo y guarda al soltarlo.
+    const legacyScale = {pequeno:60,mediano:100,grande:140}[s.logo_size] || 100;
+    const curLogoSize = Number(s.invoice_logo_scale_pct) || legacyScale;
     const logoSizeCard = h('div', { class: 'card', style: 'margin-top:16px' });
     logoSizeCard.innerHTML = `
       <div class="card-title mb8">Tamaño del logo en factura</div>
-      <div style="font-size:11px;color:var(--muted2);margin-bottom:10px">Aplica a las facturas de hoja (A4/Carta). No cambia los tickets térmicos.</div>
-      <select class="inp" id="cfg-logo-size">
-        <option value="pequeno" ${curLogoSize==='pequeno'?'selected':''}>Pequeño</option>
-        <option value="mediano" ${curLogoSize==='mediano'?'selected':''}>Mediano (por defecto)</option>
-        <option value="grande" ${curLogoSize==='grande'?'selected':''}>Grande</option>
-      </select>`;
+      <div style="font-size:11px;color:var(--muted2);margin-bottom:10px">Aplica a facturas de hoja y tickets térmicos.</div>
+      <div class="flex" style="gap:10px"><input id="cfg-logo-size" type="range" min="50" max="150" step="5" value="${curLogoSize}" style="flex:1"><strong id="cfg-logo-size-value">${curLogoSize}%</strong></div>`;
     container.appendChild(logoSizeCard);
-    logoSizeCard.querySelector('#cfg-logo-size')?.addEventListener('change', async (e) => {
+    logoSizeCard.querySelector('#cfg-logo-size')?.addEventListener('input', e => {
+      s.invoice_logo_scale_pct = e.target.value;
+      logoSizeCard.querySelector('#cfg-logo-size-value').textContent = `${e.target.value}%`;
+      if (!pcAnimateLogoPreview(Number(e.target.value) / 100)) refresh();
+    });
+    logoSizeCard.querySelector('#cfg-logo-size')?.addEventListener('change', async e => {
       const value = e.target.value;
-      const res = await window.api.settings.set({ key: 'logo_size', value, requestUserId: user?.id });
+      const res = await window.api.settings.set({ key:'invoice_logo_scale_pct', value, requestUserId:user?.id });
       if (!res?.ok) { toast(res?.error || 'No se pudo guardar', 'err'); return; }
-      s.logo_size = value;
-      if (DB?.settings) DB.settings.logo_size = value;
+      if (DB?.settings) DB.settings.invoice_logo_scale_pct = value;
       refresh();
       toast('✓ Tamaño del logo actualizado');
     });
+
+    const headerCard=h('div',{class:'card',style:'margin-top:16px'});
+    headerCard.innerHTML=`<div class="card-title mb8">Cabecera de la factura</div>
+      <select class="inp" id="cfg-invoice-header"><option value="both">Logo y nombre comercial</option><option value="logo">Solo logo (si existe)</option><option value="name">Solo nombre comercial</option></select>
+      <div class="ts" style="margin-top:6px">Sin logo, siempre se muestra el nombre comercial.</div>`;
+    container.appendChild(headerCard);
+    headerCard.querySelector('#cfg-invoice-header').value=s.invoice_header_mode||'both';
+    headerCard.querySelector('#cfg-invoice-header').onchange=async e=>{
+      const value=e.target.value;
+      const res=await window.api.settings.set({key:'invoice_header_mode',value,requestUserId:user?.id});
+      if(!res?.ok)return toast(res?.error||'No se pudo guardar','err');
+      s.invoice_header_mode=value;if(DB?.settings)DB.settings.invoice_header_mode=value;
+      refresh();toast('✓ Cabecera actualizada');
+    };
+
+    const thermalFontCard=h('div',{class:'card',style:'margin-top:16px'});
+    thermalFontCard.innerHTML=`<div class="card-title mb8">Letra de tickets térmicos</div>
+      <select class="inp" id="cfg-thermal-font"><option value="courier">Clásica monoespaciada</option><option value="consolas">Consolas</option><option value="lucida">Lucida Console</option></select>
+      <div class="ts" style="margin-top:6px">Usa la vista previa térmica para comparar antes de imprimir.</div>`;
+    container.appendChild(thermalFontCard);
+    thermalFontCard.querySelector('#cfg-thermal-font').value=s.thermal_font_family||'courier';
+    thermalFontCard.querySelector('#cfg-thermal-font').onchange=async e=>{
+      const value=e.target.value;
+      const res=await window.api.settings.set({key:'thermal_font_family',value,requestUserId:user?.id});
+      if(!res?.ok)return toast(res?.error||'No se pudo guardar','err');
+      s.thermal_font_family=value;if(DB?.settings)DB.settings.thermal_font_family=value;
+      refresh();toast('✓ Letra térmica actualizada');
+    };
 
     // Tamaño de letra en las facturas de hoja (A4/Carta).
     const curFontSize = s.factura_font_size || 'mediano';
@@ -818,17 +852,71 @@ function pcRenderAppearance() {
   const left = document.createElement('div');
   left.style.cssText = 'display:flex;flex-direction:column;gap:16px';
   const right = document.createElement('div');
+  const appearanceTemplates=(typeof PLANTILLAS!=='undefined'?PLANTILLAS:[]).filter(t=>t.tipo==='carta'||/mm$/.test(t.tipo));
+  if(!appearanceTemplates.some(t=>t.id===_pcAppearanceTemplateId))_pcAppearanceTemplateId=appearanceTemplates.some(t=>t.id===settings.print_template)
+    ? settings.print_template : appearanceTemplates[0]?.id||'';
   right.innerHTML = `<div class="card" style="position:sticky;top:12px">
-    <div class="card-title mb8">Vista previa · Factura A4 Moderna</div>
-    <div style="font-size:11px;color:var(--muted2);margin-bottom:8px">Ejemplo con datos de prueba. Se actualiza al guardar cada cambio.</div>
+    <div class="card-title mb8">Vista previa de factura</div>
+    <select class="inp" id="pc-appearance-template" style="margin-bottom:8px">${appearanceTemplates.map(t=>`<option value="${pcEsc(t.id)}">${pcEsc(t.nombre)}</option>`).join('')}</select>
+    <div style="font-size:11px;color:var(--muted2);margin-bottom:8px">Ejemplo con datos de prueba. Los cambios aparecen al instante.</div>
     <iframe id="pc-appearance-preview" style="width:100%;height:520px;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
   </div>`;
   grid.appendChild(left);
   grid.appendChild(right);
   root.appendChild(grid);
+  right.querySelector('#pc-appearance-template').value=_pcAppearanceTemplateId;
+  right.querySelector('#pc-appearance-template').onchange=e=>{_pcAppearanceTemplateId=e.target.value;_pcAppearanceStyleDraft=null;pcRenderAppearance();};
 
   renderInvoiceAppearanceCards(left, { settings, onSaved: pcRenderAppearancePreview });
+  const selectedTemplate=getPlantilla(_pcAppearanceTemplateId);
+  if(selectedTemplate){
+    const key=`template_opts_${selectedTemplate.id}`;
+    const saved=pcParseConfig(settings[key]);
+    const thermal=selectedTemplate.tipo!=='carta';
+    const defaults=thermal
+      ? {fontSize:'11.5px',marginTop:'2mm',marginBottom:'4mm',marginLeft:'2mm',marginRight:'2mm'}
+      : {fontSize:'11pt',marginTop:'15mm',marginBottom:'15mm',marginLeft:'20mm',marginRight:'20mm'};
+    _pcAppearanceStyleDraft={...defaults,...saved};
+    const card=document.createElement('div');card.className='card';
+    card.innerHTML=`<div class="card-title mb8">Letra y márgenes · ${pcEsc(selectedTemplate.nombre)}</div>
+      <div class="g2"><div class="fg"><label class="lbl">Tamaño de letra</label><select class="inp" data-style="fontSize">${(thermal?['9px','9.5px','10px','10.5px','11px','11.5px','12px','12.5px','13px']:['8pt','9pt','10pt','11pt','12pt','13pt']).map(size=>`<option value="${size}">${size}</option>`).join('')}</select></div>
+      ${[['marginTop','Margen superior'],['marginBottom','Margen inferior'],['marginLeft','Margen izquierdo'],['marginRight','Margen derecho']].map(([field,label])=>`<div class="fg"><label class="lbl">${label}</label><input class="inp" data-style="${field}" value="${pcEsc(_pcAppearanceStyleDraft[field])}"></div>`).join('')}</div>
+      <div class="ts">Escribe medidas en mm; la vista previa cambia mientras editas.</div>
+      <button class="btn btn-dark" id="pc-style-save" style="margin-top:10px">Guardar letra y márgenes</button>`;
+    left.appendChild(card);
+    card.querySelector('[data-style="fontSize"]').value=_pcAppearanceStyleDraft.fontSize;
+    card.querySelectorAll('[data-style]').forEach(input=>input.oninput=()=>{_pcAppearanceStyleDraft[input.dataset.style]=input.value;pcRenderAppearancePreview();});
+    card.querySelector('#pc-style-save').onclick=async()=>{
+      const valid=Object.entries(_pcAppearanceStyleDraft).every(([field,value])=>field==='fontSize'
+        ? (thermal?['9px','9.5px','10px','10.5px','11px','11.5px','12px','12.5px','13px']:['8pt','9pt','10pt','11pt','12pt','13pt']).includes(value)
+        : !field.startsWith('margin')||(/^\d+(?:\.\d{1,2})?mm$/.test(value)&&Number.parseFloat(value)<=30));
+      if(!valid)return toast('Revisa tamaño de letra y márgenes (0 a 30 mm)','w');
+      const value=JSON.stringify(_pcAppearanceStyleDraft);
+      const result=await window.api.settings.set({key,value,requestUserId:user?.id});
+      if(!result?.ok)return toast(result?.error||'No se pudo guardar','err');
+      settings[key]=value;if(DB?.settings)DB.settings[key]=value;
+      toast('✓ Letra y márgenes actualizados','ok');
+    };
+  }
   pcRenderAppearancePreview();
+}
+
+function pcAnimateLogoPreview(scale) {
+  const images = document.getElementById('pc-appearance-preview')?.contentDocument?.querySelectorAll('[data-invoice-logo-scale]');
+  if (!images?.length || !Number.isFinite(scale) || scale <= 0) return false;
+  images.forEach(image => {
+    const initialScale = Number(image.dataset.invoiceLogoScale) || 1;
+    for (const property of ['maxWidth', 'maxHeight']) {
+      const raw = image.style[property];
+      const match = /^(\d+(?:\.\d+)?)(px|mm)$/.exec(raw);
+      if (!match) continue;
+      const baseKey = property === 'maxWidth' ? 'baseWidth' : 'baseHeight';
+      if (!image.dataset[baseKey]) image.dataset[baseKey] = String(Number(match[1]) / initialScale);
+      image.style.transition = 'max-width 180ms ease, max-height 180ms ease';
+      image.style[property] = `${Math.round(Number(image.dataset[baseKey]) * scale * 10) / 10}${match[2]}`;
+    }
+  });
+  return true;
 }
 
 // Renderiza la factura A4 de muestra con los settings actuales en el iframe.
@@ -836,8 +924,8 @@ function pcRenderAppearancePreview() {
   const frame = document.getElementById('pc-appearance-preview');
   if (!frame || !_pcState || typeof getPlantilla !== 'function') return;
   try {
-    const tpl = getPlantilla('carta_recibo');
-    frame.srcdoc = tpl.render(pcDiagnosticSample(), pcDiagnosticBusiness(_pcState.settings), { ...tpl.opciones });
+    const tpl = getPlantilla(_pcAppearanceTemplateId || 'carta_recibo');
+    frame.srcdoc = tpl.render(pcDiagnosticSample(), pcDiagnosticBusiness(_pcState.settings), { ...tpl.opciones, _estilos:_pcAppearanceStyleDraft||pcParseConfig(_pcState.settings[`template_opts_${tpl.id}`]) });
   } catch (_e) { /* la vista previa no es crítica */ }
 }
 

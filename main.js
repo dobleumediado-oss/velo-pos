@@ -1004,6 +1004,28 @@ ipcMain.handle('settings:set', async (_, { key, value, requestUserId }) => {
   if (key === 'default_ncf_type' && !['', 'B01', 'B02', 'B14', 'B15', 'B16'].includes(String(value))) {
     return { ok: false, error: 'El tipo de comprobante predeterminado no es válido' };
   }
+  if (key === 'service_fault_catalog') {
+    try {
+      const catalog = JSON.parse(String(value || '[]'));
+      if (!Array.isArray(catalog) || catalog.length > 80 || catalog.some(item =>
+        !item || typeof item.name !== 'string' || !item.name.trim() || item.name.length > 120 ||
+        !Number.isFinite(item.price) || item.price < 0 || item.price > 10000000)) {
+        return { ok:false, error:'El catálogo de fallas contiene datos inválidos' };
+      }
+      value = JSON.stringify(catalog.map(item => ({ name:item.name.trim(), price:Math.round(item.price * 100) / 100 })));
+    } catch {
+      return { ok:false, error:'El catálogo de fallas no tiene un formato válido' };
+    }
+  }
+  if (key === 'invoice_header_mode' && !['both','logo','name'].includes(String(value))) {
+    return { ok:false, error:'El encabezado de la factura no es válido' };
+  }
+  if (key === 'thermal_font_family' && !['courier','consolas','lucida'].includes(String(value))) {
+    return { ok:false, error:'La fuente del ticket no es válida' };
+  }
+  if (key === 'invoice_logo_scale_pct' && (!Number.isInteger(Number(value)) || Number(value)<50 || Number(value)>150)) {
+    return { ok:false, error:'El tamaño del logo debe estar entre 50% y 150%' };
+  }
   if (key === 'pos_discount_auth_limit_pct') {
     const parsed = Number(value);
     if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {

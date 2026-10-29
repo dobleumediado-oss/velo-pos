@@ -89,7 +89,7 @@ function buildLogoHeader(logo1, logo2, opts = {}) {
   const auto  = align === 'center' ? 'margin-left:auto;margin-right:auto;' : '';
 
   const imgs = list.map(src =>
-    `<img src="${src}" style="max-height:${maxHs};max-width:${perW};width:auto;height:auto;object-fit:contain;${filt}"/>`
+    `<img src="${src}" data-invoice-logo-scale="${scale}" style="max-height:${maxHs};max-width:${perW};width:auto;height:auto;object-fit:contain;${filt}"/>`
   ).join('');
 
   const html = `<div style="display:flex;align-items:center;justify-content:${just};` +
@@ -539,6 +539,9 @@ function printReceipt(sale, isReprint = false) {
       biz_logo:    DB?.settings?.biz_logo    || CFG?.biz_logo || '',
       biz_logo_2:  DB?.settings?.biz_logo_2  || CFG?.biz_logo_2 || '',
       logo_size:   DB?.settings?.logo_size   || 'mediano',
+      invoice_logo_scale_pct: DB?.settings?.invoice_logo_scale_pct || '',
+      invoice_header_mode: DB?.settings?.invoice_header_mode || 'both',
+      thermal_font_family: DB?.settings?.thermal_font_family || 'courier',
       factura_font_size: DB?.settings?.factura_font_size || 'mediano',
       factura_font_weight: DB?.settings?.factura_font_weight || 'normal',
       factura_autoajuste: DB?.settings?.factura_autoajuste ?? '1',
@@ -1336,16 +1339,18 @@ function _sendToPrinter(lines, jobType = '', referenceId = null, isReprint = fal
 
   const logoB64  = DB?.settings?.biz_logo   || CFG?.biz_logo   || '';
   const logoB64b = DB?.settings?.biz_logo_2 || CFG?.biz_logo_2 || '';
+  const headerMode = DB?.settings?.invoice_header_mode || 'both';
+  const logoScale = Math.min(150, Math.max(50, Number(DB?.settings?.invoice_logo_scale_pct) || 100)) / 100;
 
-  const logoInner = buildLogoHeader(logoB64, logoB64b, {
-    unit: 'px', maxW: 160, maxH: 60, align: 'center', split: true,
+  const logoInner = headerMode === 'name' ? '' : buildLogoHeader(logoB64, logoB64b, {
+    unit: 'px', maxW: Math.round(160 * logoScale), maxH: Math.round(60 * logoScale), align: 'center', split: true,
     filter: 'grayscale(100%) contrast(150%)',
   });
   const logoHtml = logoInner
     ? `<div style="margin-bottom:6px">${logoInner}</div>`
     : '';
 
-  const content = lines
+  const content = (jobType === 'ticket' && headerMode === 'logo' && logoInner ? lines.slice(1) : lines)
     .map(l => `<div class="ln">${_escHtml(l)}</div>`)
     .join('');
 
@@ -1382,7 +1387,7 @@ function _sendToPrinter(lines, jobType = '', referenceId = null, isReprint = fal
     ? `@page { size: ${paperWidth}mm auto; margin: 2mm ${sideMargin}mm 4mm ${sideMargin}mm; }`
     : '@page { size: letter; margin: 15mm 15mm 15mm 15mm; }';
   const bodyCSS = isThermal
-    ? `width: ${printableWidth}mm; max-width: ${printableWidth}mm; font-family: 'Courier New', Courier, monospace; font-size: 11.5px; line-height: 1.4;`
+    ? `width: ${printableWidth}mm; max-width: ${printableWidth}mm; font-family: ${typeof _thermalFont === 'function' ? _thermalFont(DB?.settings) : "'Courier New',Courier,monospace"}; font-size: 11.5px; line-height: 1.4;`
     : 'width: 100%; max-width: 180mm; font-family: Arial, sans-serif; font-size: 12px; line-height: 1.5;';
   const mediaCSS = isThermal
     ? `html { width: ${paperWidth}mm; } body { width: ${printableWidth}mm; }`
@@ -2193,6 +2198,9 @@ function testPrint() {
       biz_logo:    DB?.settings?.biz_logo    || '',
       biz_logo_2:  DB?.settings?.biz_logo_2  || '',
       logo_size:   DB?.settings?.logo_size   || 'mediano',
+      invoice_logo_scale_pct: DB?.settings?.invoice_logo_scale_pct || '',
+      invoice_header_mode: DB?.settings?.invoice_header_mode || 'both',
+      thermal_font_family: DB?.settings?.thermal_font_family || 'courier',
       factura_font_size: DB?.settings?.factura_font_size || 'mediano',
       factura_font_weight: DB?.settings?.factura_font_weight || 'normal',
       factura_autoajuste: DB?.settings?.factura_autoajuste ?? '1',

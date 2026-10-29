@@ -254,6 +254,11 @@ function renderInventario(el) {
         onclick: openMoverCategoriaModal,
         html: `${svg('edit')} Mover Categoría`
       }),
+      ...(window._vertical?.serialized ? [h('button', {
+        class: 'btn btn-out btn-sm',
+        onclick: () => openProductoModal(null, { accessory: true }),
+        html: `${svg('plus')} Accesorio o insumo`
+      })] : []),
       h('button', {
         class: 'btn btn-dark',
         onclick: () => openProductoModal(),
@@ -1879,32 +1884,58 @@ async function confirmarEntrada() {
 // ══════════════════════════════════════════════
 // MODAL PRODUCTO (crear / editar)
 // ══════════════════════════════════════════════
-function openProductoModal(p = null) {
+function openProductoModal(p = null, options = {}) {
+  const appendModels = values => {
+    const dl = document.getElementById('pf-model-list');
+    if (!dl) return;
+    const existing = new Set([...dl.options].map(option => option.value.toLocaleLowerCase('es')));
+    values.filter(Boolean).forEach(value => {
+      const model = String(value).trim();
+      if (!model || existing.has(model.toLocaleLowerCase('es'))) return;
+      dl.appendChild(new Option(model, model));
+      existing.add(model.toLocaleLowerCase('es'));
+    });
+  };
   // Precargar modelos para autocompletado (async, no bloquea render)
   if (window.api?.products?.getModels) {
     window.api.products.getModels().then(res => {
-      const dl = document.getElementById('pf-model-list');
-      if (dl && res?.models) {
-        dl.innerHTML = res.models.map(m => `<option value="${m}">`).join('');
+      if (res?.models) appendModels(res.models);
+    }).catch(() => {});
+  }
+  if (window._vertical?.serialized && window.api?.serviceOrders?.techCatalog) {
+    window.api.serviceOrders.techCatalog({requestUserId:user?.id}).then(res => {
+      if (!res?.ok) return;
+      const models = res.data?.models || [];
+      appendModels(models.map(item => item.model));
+      const brands = document.getElementById('pf-brand-list');
+      if (brands) {
+        const existing = new Set([...brands.options].map(option => option.value.toLocaleLowerCase('es')));
+        models.map(item => String(item.brand || '').trim()).filter(Boolean).forEach(brand => {
+          if (existing.has(brand.toLocaleLowerCase('es'))) return;
+          brands.appendChild(new Option(brand, brand));existing.add(brand.toLocaleLowerCase('es'));
+        });
       }
     }).catch(() => {});
   }
 
   const isEdit   = !!p?.id;
   const stockMin = p?.stock_min || 5;
-  const isSerialized = !!(window._vertical?.serialized && (isEdit ? p.serialized : true));
+  const isSerialized = !!(window._vertical?.serialized && (isEdit ? p.serialized : !options.accessory));
+  const techProduct = !!window._vertical?.serialized;
+  const knownBrands = [...new Set([...(techProduct?['Apple','Samsung','Xiaomi','Motorola','Huawei','OPPO']:[]),...(DB.products || []).map(item => String(item.brand || '').trim()).filter(Boolean)])].sort((a, b) => a.localeCompare(b, 'es'));
 
   const catOpts = CATS.map(c =>
     `<option value="${c}" ${isEdit && p.category === c ? 'selected' : ''}>${c}</option>`
   ).join('');
 
   openModal(`
-    <div class="modal-title">${isEdit ? vterm('edit_product', 'Editar Producto') : vterm('new_product', 'Nuevo Producto')}</div>
+    <div class="modal-title">${isEdit ? vterm('edit_product', 'Editar Producto') : options.accessory ? 'Nuevo accesorio o insumo' : vterm('new_product', 'Nuevo Producto')}</div>
     <div class="modal-sub">${isEdit ? p.name : vterm('register_in_inventory', 'Registrar en inventario')}</div>
+    ${options.accessory ? '<div class="alrt b" style="margin-top:12px"><div class="alrt-dot b"></div><div class="alrt-sub">Covers, protectores, láminas personalizadas, cables, cintas y otros insumos se controlan por cantidad.</div></div>' : ''}
 
     <div class="g2">
       <div class="fg">
-        <label class="lbl">Nombre *</label>
+        <label class="lbl">Nombre ${techProduct ? '(opcional si indicas marca y modelo)' : '*'}</label>
         <input class="inp" id="pf-name" type="text" placeholder="${vterm('product_name_example', 'Filtro de aceite Toyota')}"
                value="${isEdit ? p.name : ''}"
                oninput="pfAutoCode(this.value)"/>
@@ -1963,8 +1994,9 @@ function openProductoModal(p = null) {
     <div class="g3">
       <div class="fg">
         <label class="lbl">Marca</label>
-        <input class="inp" id="pf-brand" type="text" placeholder="${vterm('brand_example', 'Denso, NGK...')}"
+        <input class="inp" id="pf-brand" type="text" list="pf-brand-list" placeholder="${vterm('brand_example', 'Denso, NGK...')}"
                value="${isEdit ? (p.brand || '') : ''}"/>
+        <datalist id="pf-brand-list">${knownBrands.map(brand => `<option value="${brand.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}">`).join('')}</datalist>
       </div>
       <div class="fg">
         <label class="lbl">Modelo <span style="font-weight:400;color:var(--muted2);font-size:11px">${vterm('model_hint', '(compatible)')}</span></label>
@@ -2034,7 +2066,7 @@ function openProductoModal(p = null) {
       <div id="pf-price-change-preview" style="font-size:11px;color:var(--muted);margin-top:-4px;margin-bottom:10px"></div>
 
     <hr style="margin:12px 0;border:none;border-top:1px solid var(--line)"/>
-    ${window._vertical?.serialized ? `<label style="display:flex;align-items:center;gap:9px;padding:10px 12px;background:var(--surface2);border:1px solid var(--line);border-radius:8px;margin-bottom:10px;cursor:pointer">
+    ${window._vertical?.serialized && !options.accessory ? `<label style="display:flex;align-items:center;gap:9px;padding:10px 12px;background:var(--surface2);border:1px solid var(--line);border-radius:8px;margin-bottom:10px;cursor:pointer">
       <input type="checkbox" id="pf-serialized" ${isSerialized ? 'checked' : ''} onchange="pfSerializedToggle()" style="width:16px;height:16px">
       <span><strong>Controlar cada unidad por IMEI/serial</strong><br><small style="color:var(--muted2)">Actívalo para celulares y equipos; déjalo apagado para accesorios y repuestos.</small></span>
     </label>
@@ -2208,10 +2240,12 @@ async function pfConditionChange() {
 }
 
 async function guardarProducto(id) {
-  const name      = document.getElementById('pf-name')?.value?.trim();
-  const code      = document.getElementById('pf-code')?.value?.trim();
+  let name        = document.getElementById('pf-name')?.value?.trim();
   const brand     = document.getElementById('pf-brand')?.value?.trim()     || '';
   const model     = document.getElementById('pf-model')?.value?.trim()     || '';
+  if (!name && window._vertical?.serialized) name = [brand, model].filter(Boolean).join(' ');
+  if (name && !document.getElementById('pf-code')?.value?.trim()) pfAutoCode(name);
+  const code      = document.getElementById('pf-code')?.value?.trim();
   const category  = document.getElementById('pf-cat')?.value               || '';
   const unit      = document.getElementById('pf-unit')?.value              || 'und';
   const desc      = document.getElementById('pf-desc')?.value?.trim()      || '';
