@@ -89,7 +89,7 @@ function buildLogoHeader(logo1, logo2, opts = {}) {
   const auto  = align === 'center' ? 'margin-left:auto;margin-right:auto;' : '';
 
   const imgs = list.map(src =>
-    `<img src="${src}" data-invoice-logo-scale="${scale}" style="max-height:${maxHs};max-width:${perW};width:auto;height:auto;object-fit:contain;${filt}"/>`
+    `<img src="${src}" data-invoice-logo-scale="${scale}" style="max-height:${maxHs};max-width:100%;width:${perW};height:auto;object-fit:contain;${filt}"/>`
   ).join('');
 
   const html = `<div style="display:flex;align-items:center;justify-content:${just};` +
@@ -1387,7 +1387,7 @@ function _sendToPrinter(lines, jobType = '', referenceId = null, isReprint = fal
     ? `@page { size: ${paperWidth}mm auto; margin: 2mm ${sideMargin}mm 4mm ${sideMargin}mm; }`
     : '@page { size: letter; margin: 15mm 15mm 15mm 15mm; }';
   const bodyCSS = isThermal
-    ? `width: ${printableWidth}mm; max-width: ${printableWidth}mm; font-family: ${typeof _thermalFont === 'function' ? _thermalFont(DB?.settings) : "'Courier New',Courier,monospace"}; font-size: 11.5px; line-height: 1.4;`
+    ? `width: ${printableWidth}mm; max-width: ${printableWidth}mm; font-family: ${typeof _thermalFont === 'function' ? _thermalFont(DB?.settings) : "Menlo,Consolas,'Lucida Console',monospace"}; font-size: 11.5px; line-height: 1.4;`
     : 'width: 100%; max-width: 180mm; font-family: Arial, sans-serif; font-size: 12px; line-height: 1.5;';
   const mediaCSS = isThermal
     ? `html { width: ${paperWidth}mm; } body { width: ${printableWidth}mm; }`

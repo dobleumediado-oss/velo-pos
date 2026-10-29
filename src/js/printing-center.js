@@ -572,7 +572,7 @@ function pcDiagnosticBusiness(settings) {
     logo_size: settings.logo_size || 'mediano',
     invoice_logo_scale_pct: settings.invoice_logo_scale_pct || '',
     invoice_header_mode: settings.invoice_header_mode || 'both',
-    thermal_font_family: settings.thermal_font_family || 'courier',
+    thermal_font_family: settings.thermal_font_family || 'compacta',
     factura_font_size: settings.factura_font_size || 'mediano',
     factura_font_weight: settings.factura_font_weight || 'normal',
     factura_autoajuste: settings.factura_autoajuste ?? '1',
@@ -654,10 +654,10 @@ function renderInvoiceAppearanceCards(container, { settings, onSaved } = {}) {
 
     const thermalFontCard=h('div',{class:'card',style:'margin-top:16px'});
     thermalFontCard.innerHTML=`<div class="card-title mb8">Letra de tickets térmicos</div>
-      <select class="inp" id="cfg-thermal-font"><option value="courier">Clásica monoespaciada</option><option value="consolas">Consolas</option><option value="lucida">Lucida Console</option></select>
+      <select class="inp" id="cfg-thermal-font"><option value="compacta">Compacta (recomendada)</option><option value="courier">Clásica monoespaciada</option><option value="consolas">Consolas</option><option value="lucida">Lucida Console</option></select>
       <div class="ts" style="margin-top:6px">Usa la vista previa térmica para comparar antes de imprimir.</div>`;
     container.appendChild(thermalFontCard);
-    thermalFontCard.querySelector('#cfg-thermal-font').value=s.thermal_font_family||'courier';
+    thermalFontCard.querySelector('#cfg-thermal-font').value=s.thermal_font_family||'compacta';
     thermalFontCard.querySelector('#cfg-thermal-font').onchange=async e=>{
       const value=e.target.value;
       const res=await window.api.settings.set({key:'thermal_font_family',value,requestUserId:user?.id});
@@ -906,13 +906,13 @@ function pcAnimateLogoPreview(scale) {
   if (!images?.length || !Number.isFinite(scale) || scale <= 0) return false;
   images.forEach(image => {
     const initialScale = Number(image.dataset.invoiceLogoScale) || 1;
-    for (const property of ['maxWidth', 'maxHeight']) {
+    for (const property of ['width', 'maxHeight']) {
       const raw = image.style[property];
       const match = /^(\d+(?:\.\d+)?)(px|mm)$/.exec(raw);
       if (!match) continue;
-      const baseKey = property === 'maxWidth' ? 'baseWidth' : 'baseHeight';
+      const baseKey = property === 'width' ? 'baseWidth' : 'baseHeight';
       if (!image.dataset[baseKey]) image.dataset[baseKey] = String(Number(match[1]) / initialScale);
-      image.style.transition = 'max-width 180ms ease, max-height 180ms ease';
+      image.style.transition = 'width 180ms ease, max-height 180ms ease';
       image.style[property] = `${Math.round(Number(image.dataset[baseKey]) * scale * 10) / 10}${match[2]}`;
     }
   });

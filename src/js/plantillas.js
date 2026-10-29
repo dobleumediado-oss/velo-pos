@@ -465,7 +465,7 @@ function _invoiceLogoEnabled(cfg, opts) {
   return !!opts?.logo && cfg?.invoice_header_mode !== 'name';
 }
 function _thermalFont(cfg) {
-  return {consolas:"Consolas,'Courier New',monospace",courier:"'Courier New',Courier,monospace",lucida:"'Lucida Console','Courier New',monospace"}[cfg?.thermal_font_family] || "'Courier New',Courier,monospace";
+  return {compacta:"Menlo,Consolas,'Lucida Console',monospace",consolas:"Consolas,'Courier New',monospace",courier:"'Courier New',Courier,monospace",lucida:"'Lucida Console','Courier New',monospace"}[cfg?.thermal_font_family] || "Menlo,Consolas,'Lucida Console',monospace";
 }
 
 // Factor global del tamaño de letra en las facturas de hoja (config: factura_font_size).
