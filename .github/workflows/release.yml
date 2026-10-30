@@ -67,12 +67,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: npm run release:win:tech-server
 
-      # Transición: los programas anteriores a 1.59.2 todavía buscan
+      # Transición: los programas anteriores a 1.60.0 todavía buscan
       # actualizaciones en velo-pos. Se copia ahí el mismo release, con los
       # instaladores antes que los .yml para que ningún cliente vea un canal que
       # apunte a un instalador aún no subido. Quitar este paso cuando todos los
-      # clientes hayan pasado por 1.59.2 y velo-pos vaya a hacerse privado.
-      - name: Copiar el release a velo-pos (clientes anteriores a 1.59.2)
+      # clientes hayan pasado por 1.60.0 y velo-pos vaya a hacerse privado.
+      - name: Copiar el release a velo-pos (clientes anteriores a 1.60.0)
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
