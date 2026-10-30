@@ -30,7 +30,15 @@ const { createMigrationPackage, verifyMigrationPackage, restoreCompleteBackupToE
     db.prepare('INSERT INTO service_order_evidence VALUES(?,?)').run('service-evidence/example.txt', checksum);
     const args = { db, dataDir: root, destinationDir, passphrase: 'Clave-ficticia-2026', businessId: 'prueba', vertical: 'TECH', appVersion: 'test' };
     await assert.rejects(createMigrationPackage({ ...args, passphrase: 'corta' }));
-    const result = await createMigrationPackage(args);
+    // En algunas PC Windows os.tmpdir() apunta a C:\\WINDOWS\\TEMP, sin permiso
+    // para el usuario. La copia debe usar la carpeta de datos de VELO.
+    const systemTempDir = os.tmpdir;
+    os.tmpdir = () => path.join(root, 'temporal-no-disponible');
+    let result;
+    try {
+      result = await createMigrationPackage(args);
+      await verifyMigrationPackage({ filePath: result.path, passphrase: args.passphrase, workDir: root });
+    } finally { os.tmpdir = systemTempDir; }
     assert.equal(result.cloudActivated, false); assert.equal(result.evidenceFiles, 1);
     const verified = await verifyMigrationPackage({ filePath: result.path, passphrase: args.passphrase });
     assert.equal(verified.manifest.tables.length, 4);
@@ -88,8 +96,12 @@ const { createMigrationPackage, verifyMigrationPackage, restoreCompleteBackupToE
     const complete = await createMigrationPackage({ ...args, businessId: 'biz_prueba',
       businessDataDir, purpose: 'desktop-complete-backup' });
     const recoveryDir = path.join(root, 'recuperado');
-    const recovery = await restoreCompleteBackupToEmptyDirectory({ filePath: complete.path,
-      passphrase: args.passphrase, destinationDir: recoveryDir });
+    os.tmpdir = () => path.join(root, 'temporal-no-disponible');
+    let recovery;
+    try {
+      recovery = await restoreCompleteBackupToEmptyDirectory({ filePath: complete.path,
+        passphrase: args.passphrase, destinationDir: recoveryDir, workDir: root });
+    } finally { os.tmpdir = systemTempDir; }
     assert.equal(recovery.businessId, 'biz_prueba');
     assert.deepEqual(fs.readFileSync(path.join(recoveryDir, 'service-evidence', 'example.txt')), evidence);
     const recovered = new Database(path.join(recoveryDir, 'negocios', 'biz_prueba', 'velo.db'), { readonly: true });

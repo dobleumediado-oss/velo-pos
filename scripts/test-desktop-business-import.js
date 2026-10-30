@@ -42,7 +42,15 @@ const businessCtx = require('../src/main/business-context');
     assert.equal(fs.readFileSync(original, 'utf8'), 'Base activa que debe permanecer igual');
     assert.equal(businessCtx.loadBusinesses(targetDir).length, 0);
 
-    const imported = await importCompleteBackupAsBusiness(input);
+    // En algunas PC Windows os.tmpdir() apunta a C:\WINDOWS\TEMP, sin permiso
+    // para el usuario. La incorporación debe trabajar en la carpeta de VELO.
+    const systemTempDir = os.tmpdir;
+    os.tmpdir = () => path.join(root, 'temporal-no-disponible');
+    let imported;
+    try {
+      imported = await importCompleteBackupAsBusiness(input);
+    } finally { os.tmpdir = systemTempDir; }
+    assert.equal(fs.existsSync(path.join(root, 'temporal-no-disponible')), false);
     assert.match(imported.id, /^biz_/);
     assert.equal(imported.evidenceFiles, 1);
     assert.equal(businessCtx.loadBusinesses(targetDir)[0].name, 'Negocio de prueba');
