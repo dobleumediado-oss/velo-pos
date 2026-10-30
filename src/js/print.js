@@ -1585,7 +1585,7 @@ function _openPrintPreview(html, opts = {}) {
   if (!html) { toast('No hay contenido para mostrar', 'err'); return; }
   if (typeof openModal !== 'function') {
     if (opts.mode === 'pdf') _guardarPDF(html, opts.suggestedName);
-    else _dispatchPrintWindow(html, opts.jobType, opts.referenceId, opts.isReprint);
+    else _dispatchPrintWindow(html, opts.jobType, opts.referenceId, opts.isReprint, opts.printOptions || {});
     return;
   }
 
@@ -1606,6 +1606,13 @@ function _openPrintPreview(html, opts = {}) {
   openModal(`
     <div class="modal-title">${_escHtml(_printPreviewLabel(job.jobType, job.mode))}</div>
     <div class="modal-sub">Revisa el documento antes de imprimir o guardar.</div>
+    <div class="fg"><label class="lbl" for="_print_preview_printer">Impresora para esta impresión</label>
+      <select class="inp" id="_print_preview_printer" onchange="_printPreviewSelectPrinter(this.value)">
+        <option value="__route__">Usar la ruta configurada</option>
+        <option value="">Elegir en el diálogo del sistema</option>
+      </select>
+      <div class="muted">Esta selección no cambia las impresoras guardadas del negocio.</div>
+    </div>
     <div style="border:1px solid var(--line);border-radius:10px;background:#fff;overflow:hidden">
       <iframe id="_print_preview_frame"
         title="Vista previa de impresión"
@@ -1624,6 +1631,38 @@ function _openPrintPreview(html, opts = {}) {
 
   const frame = document.getElementById('_print_preview_frame');
   if (frame) frame.srcdoc = _htmlForPreview(html);
+  _printPreviewLoadPrinters(job);
+}
+
+async function _printPreviewLoadPrinters(job) {
+  try {
+    const printers = await window.api?.print?.getPrinters?.();
+    if (window._printPreviewJob !== job) return;
+    const select = document.getElementById('_print_preview_printer');
+    if (!select || !Array.isArray(printers)) return;
+    select.innerHTML += printers.filter(p => p?.name).map(p =>
+      `<option value="${_escHtml(p.name).replace(/"/g, '&quot;')}">${_escHtml(p.name)}</option>`).join('');
+    const selected = job.printOptions.printerName;
+    if (Object.prototype.hasOwnProperty.call(job.printOptions, 'printerName')) {
+      if (selected && !printers.some(p => p.name === selected)) {
+        select.innerHTML += `<option value="${_escHtml(selected).replace(/"/g, '&quot;')}">${_escHtml(selected)} (no disponible)</option>`;
+      }
+      select.value = selected || '';
+    }
+  } catch { /* El diálogo del sistema sigue disponible si falla la consulta. */ }
+}
+
+function _printPreviewSelectPrinter(value) {
+  const job = window._printPreviewJob;
+  if (!job) return;
+  if (value === '__route__') {
+    delete job.printOptions.printerName;
+    delete job.printOptions.profileId;
+  } else {
+    job.printOptions.printerName = value;
+    // Una selección puntual no hereda el perfil de otra impresora.
+    job.printOptions.profileId = '';
+  }
 }
 
 function _printPreviewClose() {
@@ -1691,7 +1730,7 @@ async function _printPreviewPrint() {
   if (typeof closeModal === 'function') closeModal();
   window._printPreviewBypass = true;
   try {
-    if (job.source === 'html') _dispatchPrintHTML(job.html, job.jobType || 'reporte');
+    if (job.source === 'html') _dispatchPrintHTML(job.html, job.jobType || 'reporte', job.printOptions || {});
     else _openPrintWindow(job.html, job.jobType, job.referenceId, job.isReprint, job.printOptions || {});
   } finally {
     window._printPreviewBypass = false;
@@ -1793,7 +1832,7 @@ function _dispatchPrintWindow(html, jobType = '', referenceId = null, isReprint 
   // Multi-terminal: terminal cliente SIN impresora física → ofrecer imprimir en
   // el servidor (mostrador) o aquí eligiendo impresora. En local/servidor o con
   // impresora configurada, no aplica (flujo normal).
-  if (_shouldOfferServerPrint(jobType)) {
+  if (!Object.prototype.hasOwnProperty.call(printOptions, 'printerName') && _shouldOfferServerPrint(jobType)) {
     _offerPrintTarget(html, jobType, referenceId);
     return;
   }
@@ -1801,10 +1840,14 @@ function _dispatchPrintWindow(html, jobType = '', referenceId = null, isReprint 
   const category = _categoryForJobType(jobType);
   const catCfg    = _getCategoryConfig(category);
 
-  const printerName = printOptions.printerName || catCfg.printer
-    || (catCfg.bindingConfigured ? '' : _getSavedPrinter());
-  const selectedProfileId = printOptions.profileId || catCfg.profileId || '';
-  const profile = selectedProfileId && typeof resolvePrinterProfile === 'function'
+  let printerName = Object.prototype.hasOwnProperty.call(printOptions, 'printerName')
+    ? printOptions.printerName : (catCfg.printer || (catCfg.bindingConfigured ? '' : _getSavedPrinter()));
+  const selectedProfileId = Object.prototype.hasOwnProperty.call(printOptions, 'profileId')
+    ? printOptions.profileId : (catCfg.profileId || '');
+  const manualPrinter = Object.prototype.hasOwnProperty.call(printOptions, 'printerName');
+  const profile = manualPrinter && !selectedProfileId && typeof resolvePrinterProfile === 'function'
+    ? resolvePrinterProfile(printerName, 'ticket', { printer_profile: '', printer_type: '' })
+    : selectedProfileId && typeof resolvePrinterProfile === 'function'
     ? resolvePrinterProfile(printerName, 'ticket', {
         ...(DB?.settings || {}),
         printer_profile: selectedProfileId,
@@ -1825,7 +1868,14 @@ function _dispatchPrintWindow(html, jobType = '', referenceId = null, isReprint 
   // una factura de hoja a una térmica (o al revés) al elegir salida en el POS.
   if (printOptions.templateId && typeof getPlantilla === 'function') {
     const _tpl = getPlantilla(printOptions.templateId);
-    if (_tpl) printerType = _tpl.tipo === 'carta' ? 'carta' : 'thermal';
+    if (_tpl) {
+      const wantsSheet = _tpl.tipo === 'carta';
+      if (printerName && wantsSheet !== (printerType === 'carta')) {
+        printerName = '';
+        toast('Selecciona en el diálogo una impresora compatible con el papel elegido.', 'w');
+      }
+      printerType = wantsSheet ? 'carta' : 'thermal';
+    }
   }
 
   // Térmica: aplicar la densidad configurada (glifos más gruesos/oscuros) para
@@ -2019,17 +2069,19 @@ function printHTML(html, category = 'reporte') {
   _dispatchPrintHTML(html, resolvedCategory);
 }
 
-function _dispatchPrintHTML(html, category = 'reporte') {
+function _dispatchPrintHTML(html, category = 'reporte', printOptions = {}) {
   category = _categoryForJobType(category);
   // Multi-terminal: reportes también respetan la elección de destino (cliente sin
   // impresora → servidor / aquí).
-  if (_shouldOfferServerPrint(category)) { _offerPrintTarget(html, category, null); return; }
+  if (!Object.prototype.hasOwnProperty.call(printOptions, 'printerName') && _shouldOfferServerPrint(category)) { _offerPrintTarget(html, category, null); return; }
   const catCfg = _getCategoryConfig(category);
 
   if (window.api?.print?.html) {
     _printDispatch({
       html,
-      printerName: catCfg.printer || (catCfg.bindingConfigured ? '' : _getSavedPrinter()) || undefined,
+      printerName: Object.prototype.hasOwnProperty.call(printOptions, 'printerName')
+        ? (printOptions.printerName || undefined)
+        : (catCfg.printer || (catCfg.bindingConfigured ? '' : _getSavedPrinter()) || undefined),
       printerWidth: category === 'servicio_etiqueta' ? '62mm' : undefined,
       printerHeight: category === 'servicio_etiqueta' ? '40mm' : undefined,
       jobType: category,

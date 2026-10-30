@@ -223,15 +223,16 @@ async function cajaFetchSessionSales(sessionId) {
 function cajaLoadSessionSales(sessionId, el) {
   if (!sessionId || _cajaSessionSales.loading ||
       Number(_cajaSessionSales.sessionId) === Number(sessionId)) return;
-  _cajaSessionSales = { sessionId:Number(sessionId), rows:[], loading:true };
+  const requestState = { sessionId:Number(sessionId), rows:[], loading:true };
+  _cajaSessionSales = requestState;
   cajaFetchSessionSales(sessionId).then(rows => {
-    if (Number(_cajaSessionSales.sessionId) !== Number(sessionId)) return;
+    if (_cajaSessionSales !== requestState) return;
     _cajaSessionSales.rows = rows;
     _cajaSessionSales.loading = false;
     if (document.body.contains(el) && typeof page !== 'undefined' && page === 'caja') {
       veloRepaint(() => renderCaja(el));
     }
-  }).catch(() => { _cajaSessionSales.loading = false; });
+  }).catch(() => { if (_cajaSessionSales === requestState) { _cajaSessionSales.loading = false; _cajaSessionSales.sessionId = null; } });
 }
 
 let _cajaSessionPayments = { sessionId:null, rows:[], loading:false };
@@ -245,15 +246,16 @@ async function cajaFetchSessionPayments(sessionId) {
 function cajaLoadSessionPayments(sessionId, el) {
   if (!sessionId || _cajaSessionPayments.loading ||
       Number(_cajaSessionPayments.sessionId) === Number(sessionId)) return;
-  _cajaSessionPayments = { sessionId:Number(sessionId), rows:[], loading:true };
+  const requestState = { sessionId:Number(sessionId), rows:[], loading:true };
+  _cajaSessionPayments = requestState;
   cajaFetchSessionPayments(sessionId).then(rows => {
-    if (Number(_cajaSessionPayments.sessionId) !== Number(sessionId)) return;
+    if (_cajaSessionPayments !== requestState) return;
     _cajaSessionPayments.rows = rows;
     _cajaSessionPayments.loading = false;
     if (document.body.contains(el) && typeof page !== 'undefined' && page === 'caja') {
       veloRepaint(() => renderCaja(el));
     }
-  }).catch(() => { _cajaSessionPayments.loading = false; });
+  }).catch(() => { if (_cajaSessionPayments === requestState) { _cajaSessionPayments.loading = false; _cajaSessionPayments.sessionId = null; } });
 }
 
 function cajaPaymentsForSession(sessionId) {
@@ -1333,6 +1335,7 @@ async function openCierreCajaModal() {
       <span class="bill-total-lbl">Total contado</span>
       <span id="close-total" class="bill-total-val" style="color:var(--ink)">RD$ 0.00</span>
     </div>
+    <label class="mt14"><input type="checkbox" id="close-count-confirmed"/> Confirmo que conté el efectivo físico, incluso si es cero.</label>
     <div id="close-diff" style="text-align:right;font-size:13px;font-weight:700;margin-top:3px"></div>
 
     <div class="fg mt14">
@@ -1353,11 +1356,16 @@ async function openCierreCajaModal() {
 
   const cgrid = document.getElementById('close-bill-grid');
   if (cgrid) cgrid.addEventListener('input', (ev) => {
-    if (ev.target.classList.contains('bill-inp2')) calcCloseTotal(expected);
+    if (ev.target.classList.contains('bill-inp2')) {
+      const confirmed = document.getElementById('close-count-confirmed');
+      if (confirmed) confirmed.checked = false;
+      calcCloseTotal(expected);
+    }
   });
   document.getElementById('btn-cancelar-cierre')?.addEventListener('click', () => closeModal());
   document.getElementById('btn-preview-reporte')?.addEventListener('click', () => imprimirReporteDia());
   document.getElementById('btn-confirmar-cierre')?.addEventListener('click', () => confirmarCierre(expected));
+  document.getElementById('close-count-confirmed')?.addEventListener('change', () => calcCloseTotal(expected));
   calcCloseTotal(expected);
 }
 
@@ -1375,6 +1383,12 @@ function calcCloseTotal(expected) {
   const totEl  = document.getElementById('close-total');
   const diffEl = document.getElementById('close-diff');
 
+  const counted = document.getElementById('close-count-confirmed')?.checked === true;
+  if (!counted) {
+    if (totEl) { totEl.textContent = fmt(total); totEl.style.color = 'var(--ink)'; }
+    if (diffEl) diffEl.textContent = 'Pendiente de confirmar el conteo físico';
+    return;
+  }
   if (totEl) {
     totEl.textContent = fmt(total);
     totEl.style.color = diff === 0 ? 'var(--green)' : diff > 0 ? 'var(--blue)' : 'var(--red)';
@@ -1388,6 +1402,10 @@ function calcCloseTotal(expected) {
 
 async function confirmarCierre(expected) {
   if (!cajaSession) return;
+  if (document.getElementById('close-count-confirmed')?.checked !== true) {
+    toast('Confirma el conteo del efectivo físico antes de cerrar la caja.', 'w');
+    return;
+  }
   const btn = document.getElementById('btn-confirmar-cierre');
   if (btn?.disabled) return; // evita doble clic
   if (btn) btn.disabled = true;

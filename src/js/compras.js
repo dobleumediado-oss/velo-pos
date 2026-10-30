@@ -192,6 +192,7 @@ async function verOrden(id) {
     ${po.notes ? `<div style="font-size:12px;color:var(--muted2);margin-top:8px">Nota: ${po.notes}</div>` : ''}
 
     <div class="modal-foot">
+      <button class="btn btn-out" onclick="imprimirOrdenCompra(${po.id})">Imprimir / PDF para proveedor</button>
       ${po.status !== 'cancelado' && po.status !== 'recibido'
         ? `<button class="btn btn-out" onclick="cancelarOrden(${po.id})">Cancelar OC</button>`
         : ''}
@@ -958,3 +959,22 @@ function techPrivatePurchaseDocument(row){
 async function verCompraParticular(id){const res=await window.api.techPrivatePurchases.getById({id,requestUserId:user?.id});if(!res?.ok||!res.data)return toast(res?.error||'Compra no encontrada','err');const row=res.data;openModal(`<div class="modal-title">${techPurchaseEsc(row.number)}</div><div class="modal-sub">Contrato y entrada de inventario vinculados · unidad #${row.product_unit_id}</div><div class="g2" style="margin-top:14px"><div class="card" style="padding:12px"><div class="tb">Vendedor</div><div>${techPurchaseEsc(row.seller_name)}</div><div class="ts">${techPurchaseEsc(row.seller_document)} · ${techPurchaseEsc(row.seller_phone)}</div></div><div class="card" style="padding:12px"><div class="tb">Equipo</div><div>${techPurchaseEsc(row.product_name)}</div><div class="ts">${techPurchaseEsc(row.imei||row.serial)} · ${techPurchaseEsc(row.unit_status)}</div></div></div><div class="alrt b"><div class="alrt-dot b"></div><div class="alrt-sub">El contrato utiliza una hoja A4 completa con datos, condiciones y espacios amplios para las firmas de ambas partes.</div></div><div class="modal-foot"><button class="btn btn-out" onclick="veloRepaint(() => renderCompras(document.getElementById('page')))">Atrás</button><button class="btn btn-dark" id="tpp-print">${svg('printer')} Imprimir contrato A4</button></div>`);document.getElementById('tpp-print').onclick=()=>printHTML(techPrivatePurchaseDocument(row),'reporte');}
 
 async function abrirConfigCompraParticular(){const res=await window.api.techPrivatePurchases.getConfig({requestUserId:user?.id});if(!res?.ok)return toast(res?.error,'err');openModal(`<div class="modal-title">Términos de compra y garantía del taller</div><div class="modal-sub">Los contratos nuevos guardan una copia inmutable de estos términos. Los anteriores no cambian.</div><div class="fg" style="margin-top:14px"><label class="lbl">Términos predeterminados para compra a particulares</label><textarea class="inp" id="tpp-terms" rows="10">${techPurchaseEsc(res.data.terms)}</textarea></div><div class="fg"><label class="lbl">Garantía predeterminada del servicio técnico (días)</label><input class="inp" id="tpp-warranty-default" type="number" min="0" max="3650" value="${Number(res.data.default_warranty_days)||30}"></div><div class="alrt a"><div class="alrt-dot a"></div><div class="alrt-sub">Estos términos son una base operativa y no sustituyen la revisión de un abogado según las políticas del negocio y la legislación aplicable.</div></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="tpp-config-save">Guardar</button></div>`,'modal-lg');document.getElementById('tpp-config-save').onclick=async()=>{const saved=await window.api.techPrivatePurchases.saveConfig({requestUserId:user?.id,terms:document.getElementById('tpp-terms').value,default_warranty_days:Number(document.getElementById('tpp-warranty-default').value)||0});if(!saved?.ok)return toast(saved?.error||'No se pudo guardar','err');toast('✓ Términos actualizados para contratos futuros','ok');closeModal();};}
+
+// Documento comercial de la orden guardada; no registra recepción ni movimientos.
+async function imprimirOrdenCompra(id) {
+  const result = await window.api.purchases.getById({ id });
+  if (!result?.ok || !result.data) { toast('No se pudo cargar la orden', 'err'); return; }
+  const po = result.data;
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const number = `OC-${String(po.id).padStart(4, '0')}`;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+    @page{size:A4;margin:15mm}body{font:12px Arial;color:#111}h1{font-size:24px}table{width:100%;border-collapse:collapse;margin-top:24px}th,td{padding:9px;border-bottom:1px solid #ddd;text-align:left}.num{text-align:right}.total{text-align:right;font-size:18px;margin:24px 0}.notes{white-space:pre-wrap}
+    </style></head><body><h1>Orden de compra ${esc(number)}</h1>
+    <p>${esc(DB.settings?.biz_name || CFG.biz || 'VELO POS')}</p>
+    <p><strong>Proveedor:</strong> ${esc(po.supplier_name || po.supplier_name_join || 'Sin proveedor')}</p>
+    <p>Fecha: ${esc(fdate(String(po.created_at || '').slice(0,10)))}</p>
+    <table><thead><tr><th>Código</th><th>Descripción</th><th class="num">Cantidad</th><th class="num">Costo unitario</th><th class="num">Importe</th></tr></thead><tbody>${(po.items || []).map(i => `<tr><td>${esc(i.product_code)}</td><td>${esc(i.product_name)}</td><td class="num">${esc(i.qty_ordered)}</td><td class="num">${esc(fmt(i.unit_cost))}</td><td class="num">${esc(fmt(i.subtotal))}</td></tr>`).join('')}</tbody></table>
+    <div class="total">Total solicitado: ${esc(fmt((po.items || []).reduce((total, item) => total + Number(item.unit_cost || 0) * Number(item.qty_ordered || 0), 0)))}</div><p class="notes">${esc(po.notes || '')}</p>
+    <p>Solicitud de compra al proveedor. Este documento no acredita recepción de mercancía ni pago.</p></body></html>`;
+  printHTML(html, 'reporte');
+}

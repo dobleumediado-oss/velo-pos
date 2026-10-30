@@ -132,7 +132,7 @@ function mapRecoveredBusinesses(sourceBusinesses, targetBusinesses, lockedAt) {
     if (candidates.length !== 1) {
       throw new Error(candidates.length
         ? `Hay varias copias finales de «${business.name}». Deja una sola para el traslado.`
-        : `Falta incorporar una copia final de «${business.name}», creada después del bloqueo.`);
+        : `Falta incorporar una copia final de «${business.name}», creada después del bloqueo. ${target.some(item => String(item?.origin_business_id || '') === business.id) ? 'La copia incorporada es anterior al bloqueo o no permite comprobar su fecha.' : 'No se encontró una copia final de este negocio.'} Crea una copia externa nueva en el Server anterior bloqueado e incorpórala aquí.`);
     }
     mapped[business.id] = String(candidates[0].id);
   }

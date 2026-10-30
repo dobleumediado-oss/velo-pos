@@ -36,6 +36,20 @@ vm.createContext(context);
 vm.runInContext(source, context, { filename: 'caja.js' });
 
 (async () => {
+  // Una consulta vieja no puede sobrescribir el refresco de la misma sesión.
+  const resolvers = [];
+  context.window.api.cash.getSessionSales = () => new Promise(resolve => resolvers.push(resolve));
+  context.document = { body: { contains: () => false } };
+  context.cajaLoadSessionSales(21, {});
+  context.cajaInvalidateSessionSales();
+  context.cajaLoadSessionSales(21, {});
+  resolvers[1]([{ id: 200, cash_session_id: 21 }]);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  resolvers[0]([{ id: 100, cash_session_id: 21 }]);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(context.cajaSalesForSession(21)[0].id, 200);
+  console.log('  ✓ un refresco de caja descarta respuestas anteriores de la misma sesión');
+
   const opened = await context.cajaOpenWithRecovery({
     openAmount: 500, openBills: {}, requestUserId: 9, terminalId: 'TEST',
   });
@@ -72,6 +86,17 @@ vm.runInContext(source, context, { filename: 'caja.js' });
   assert.match(closeWarning, /No se pudo calcular el efectivo esperado/);
   assert.strictEqual(modalOpened, false);
   console.log('  ✓ impide cerrar si el resumen real no está disponible, evitando un sobrante falso');
+
+  context.DENS = [2000, 1000, 500, 200, 100, 50, 25, 10, 5, 1];
+  const nodes = { 'close-count-confirmed': { checked:false }, 'close-total': {style:{}}, 'close-diff': {} };
+  context.document = { getElementById: id => nodes[id] || { value: '0' } };
+  context.fmt = value => String(value);
+  context.calcCloseTotal(46800);
+  assert.match(nodes['close-diff'].textContent, /Pendiente/);
+  nodes['close-count-confirmed'].checked = true;
+  context.calcCloseTotal(46800);
+  assert.match(nodes['close-diff'].innerHTML, /Faltante/);
+  console.log('  ✓ distingue conteo pendiente de un cero confirmado');
 
   let printedReport = null;
   context.CFG = { module_gastos: '0' };

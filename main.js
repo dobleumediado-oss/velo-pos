@@ -4625,12 +4625,12 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, printerHeigh
   // causa conocida de impresión en blanco en Electron/Chromium: el documento de
   // impresión no siempre recibe el frame renderizado. Un archivo local se imprime
   // de forma fiable en todas las plataformas.
-  const os = require('os');
-  const tmpFile = path.join(os.tmpdir(), `velo_print_${Date.now()}_${Math.random().toString(36).slice(2)}.html`);
+  const printTempDir = path.join(app.getPath('userData'), 'print-temp');
+  const tmpFile = path.join(printTempDir, `velo_print_${Date.now()}_${Math.random().toString(36).slice(2)}.html`);
   const cleanupTmp = () => { try { fs.unlinkSync(tmpFile); } catch {} };
-  fs.writeFileSync(tmpFile, html, 'utf8');
-
   try {
+    fs.mkdirSync(printTempDir, { recursive: true });
+    fs.writeFileSync(tmpFile, html, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
     await new Promise((resolve, reject) => {
       const loadTimeout = setTimeout(() => reject(new Error('Tiempo agotado cargando el documento de impresión')), 12000);
       printWin.webContents.once('did-finish-load', () => { clearTimeout(loadTimeout); resolve(); });
@@ -4854,9 +4854,10 @@ ipcMain.handle('print:onServer', async (_, {
 ipcMain.handle('print:toPDF', async (_, { html, suggestedName, open, temporary } = {}) => {
   try {
     if (!html || !String(html).trim()) return { ok: false, error: 'Sin contenido para el PDF' };
-    const os = require('os');
-    cleanupStaleGeneratedFiles(os.tmpdir(), /^velo_pdf_[\w.-]+\.html$/i);
-    const tmpFile = path.join(os.tmpdir(), `velo_pdf_${Date.now()}_${Math.random().toString(36).slice(2)}.html`);
+    const printTempDir = path.join(app.getPath('userData'), 'print-temp');
+    fs.mkdirSync(printTempDir, { recursive: true });
+    cleanupStaleGeneratedFiles(printTempDir, /^velo_pdf_[\w.-]+\.html$/i);
+    const tmpFile = path.join(printTempDir, `velo_pdf_${Date.now()}_${Math.random().toString(36).slice(2)}.html`);
     fs.writeFileSync(tmpFile, html, 'utf8');
     const win = new BrowserWindow({ show: false, paintWhenInitiallyHidden: true, width: 816, height: 1056,
       backgroundColor: '#ffffff',

@@ -903,6 +903,7 @@ function modalReporteNCF() {
             <option value="607">607 — Comprobantes emitidos</option>
             <option value="608">608 — Comprobantes anulados</option>
           </select></div>
+        <div class="fg" style="margin:0"><label class="lbl">Tipo de comprobante</label><select class="inp" id="rep-ncf-type"><option value="">Todos</option>${Object.entries(TIPO_LBL).map(([value,label]) => `<option value="${esc(value)}">${esc(value)} — ${esc(label)}</option>`).join('')}</select></div>
         <div class="fg" style="margin:0"><label class="lbl">Desde</label><input class="inp" type="date" id="rep-from" value="${first}"></div>
         <div class="fg" style="margin:0"><label class="lbl">Hasta</label><input class="inp" type="date" id="rep-to" value="${last}"></div>
         <div class="fg" style="margin:0;min-width:150px"><label class="lbl">Papel</label>
@@ -929,6 +930,12 @@ function modalReporteNCF() {
   const excelBtn = overlay.querySelector('#rep-excel');
   overlay.querySelector('#rep-paper').onchange = (e) => savePref('velo.rep607.paper', e.target.value);
   overlay.querySelector('#rep-layout').onchange = (e) => savePref('velo.rep607.layout', e.target.value);
+  ['rep-ncf-type', 'rep-tipo', 'rep-from', 'rep-to'].forEach(id => {
+    overlay.querySelector('#' + id).addEventListener('change', () => {
+      buildPrintable = null; printBtn.disabled = true; excelBtn.disabled = true;
+      overlay.querySelector('#rep-body').textContent = 'Pulsa Generar para aplicar los filtros seleccionados.';
+    });
+  });
   printBtn.onclick = () => { if (buildPrintable && typeof printHTML==='function') printHTML(buildPrintable(), 'reporte'); };
   excelBtn.onclick = () => {
     if (buildPrintable) _exportHTMLToExcel(buildPrintable(), {
@@ -955,7 +962,8 @@ function modalReporteNCF() {
     // Orden de impresión: cronológico (lo emitido primero arriba) y, dentro del
     // mismo día, por NCF. Así la secuencia de cada tipo se lee de corrido.
     const reportDay = (r) => String((is608 ? (r.voided_at || r.issued_at) : r.issued_at) || '').split('T')[0].split(' ')[0];
-    const rows = (res.data || []).slice().sort((a, b) =>
+    const selectedNcfType = overlay.querySelector('#rep-ncf-type').value;
+    const rows = (res.data || []).filter(row => !selectedNcfType || String(row.type || '').toUpperCase() === selectedNcfType).sort((a, b) =>
       reportDay(a).localeCompare(reportDay(b)) || String(a.ncf || '').localeCompare(String(b.ncf || '')) ||
       Number(a.sale_id || 0) - Number(b.sale_id || 0));
     const invalidRows = rows.filter(row => row.ncf_valid === false);

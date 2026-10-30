@@ -1885,7 +1885,7 @@ function routeTo(p) {
     case 'vendedores':   renderVendedores(el);     break;
     case 'comisiones':    renderComisiones(el);     break;
     case 'nomina':       renderNomina(el);         break;
-    case 'caja':         renderCaja(el);           break;
+    case 'caja':         cajaInvalidateSessionSales(); renderCaja(el); break;
     case 'reportes':     renderReportes(el);       break;
     case 'auditoria':
       if (user?.role !== 'superadmin') { renderDash(el); break; }

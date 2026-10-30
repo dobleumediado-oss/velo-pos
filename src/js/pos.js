@@ -1862,7 +1862,7 @@ function posLoadResaleCart(payload = {}) {
   inv.sourceConduceId = sourceConduceId;
   inv.sourceConduceNumber = String(payload.sourceConduceNumber || '');
   inv.ncfType = String(payload.ncfType || '');
-  inv.ncfTypeChosen = true;
+  inv.ncfTypeChosen = Object.prototype.hasOwnProperty.call(payload, 'ncfType');
   inv.salespersonId = Number(payload.salespersonId) || null;
   inv.saleDate = /^\d{4}-\d{2}-\d{2}$/.test(String(payload.saleDate || ''))
     ? String(payload.saleDate) : new Date().toISOString().slice(0, 10);
@@ -1871,20 +1871,27 @@ function posLoadResaleCart(payload = {}) {
   inv.priceChangeApprovedBy = null;
 
   if (payload.customer?.id) {
-    inv.cliId = payload.customer.id;
-    inv.cliName = payload.customer.name || '';
-    inv.cliCedula = payload.customer.rnc || '';
-    inv.cliPhone = payload.customer.phone || '';
-    inv.cliPhoneType = payload.customer.phoneType || 'telefono';
-    inv.cliContactId = Number(payload.customer.contactId) || null;
-    inv.cliContactName = payload.customer.contactName || '';
-    inv.cliContactRole = payload.customer.contactRole || '';
-    inv.cliContactPhone = payload.customer.contactPhone || '';
-    inv.cliBranchId = Number(payload.customer.branchId) || null;
-    inv.cliBranchName = payload.customer.branchName || '';
-    inv.cliBranchCode = payload.customer.branchCode || '';
-    inv.cliBranchAddress = payload.customer.branchAddress || '';
-    inv.cliBranchPhone = payload.customer.branchPhone || '';
+    const currentCustomer = Number(payload.customer.id) !== 1
+      ? (DB.customers || []).find(row => Number(row.id) === Number(payload.customer.id) && row.active !== 0) : null;
+    const primaryPhone = currentCustomer?.phones?.find(row => row.is_primary) || currentCustomer?.phones?.[0];
+    const customerData = currentCustomer && !editingDocument && !reuseNcfOfSaleId
+      ? { ...payload.customer, name: currentCustomer.name, rnc: currentCustomer.rnc,
+          phone: primaryPhone?.phone || currentCustomer.phone || '', phoneType: primaryPhone?.phone_type || 'telefono' }
+      : payload.customer;
+    inv.cliId = customerData.id;
+    inv.cliName = customerData.name || '';
+    inv.cliCedula = customerData.rnc || '';
+    inv.cliPhone = customerData.phone || '';
+    inv.cliPhoneType = customerData.phoneType || 'telefono';
+    inv.cliContactId = Number(customerData.contactId) || null;
+    inv.cliContactName = customerData.contactName || '';
+    inv.cliContactRole = customerData.contactRole || '';
+    inv.cliContactPhone = customerData.contactPhone || '';
+    inv.cliBranchId = Number(customerData.branchId) || null;
+    inv.cliBranchName = customerData.branchName || '';
+    inv.cliBranchCode = customerData.branchCode || '';
+    inv.cliBranchAddress = customerData.branchAddress || '';
+    inv.cliBranchPhone = customerData.branchPhone || '';
   }
 
   renderInvTabs();
