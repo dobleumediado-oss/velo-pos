@@ -192,7 +192,8 @@ async function verOrden(id) {
     ${po.notes ? `<div style="font-size:12px;color:var(--muted2);margin-top:8px">Nota: ${po.notes}</div>` : ''}
 
     <div class="modal-foot">
-      <button class="btn btn-out" onclick="imprimirOrdenCompra(${po.id})">Imprimir / PDF para proveedor</button>
+      <button class="btn btn-out" onclick="imprimirOrdenCompra(${po.id}, 'carta')">${svg('printer')} Orden Carta / PDF</button>
+      <button class="btn btn-out" onclick="imprimirOrdenCompra(${po.id}, 'termica')">${svg('printer')} Orden térmica</button>
       ${po.status !== 'cancelado' && po.status !== 'recibido'
         ? `<button class="btn btn-out" onclick="cancelarOrden(${po.id})">Cancelar OC</button>`
         : ''}
@@ -960,21 +961,236 @@ async function verCompraParticular(id){const res=await window.api.techPrivatePur
 
 async function abrirConfigCompraParticular(){const res=await window.api.techPrivatePurchases.getConfig({requestUserId:user?.id});if(!res?.ok)return toast(res?.error,'err');openModal(`<div class="modal-title">Términos de compra y garantía del taller</div><div class="modal-sub">Los contratos nuevos guardan una copia inmutable de estos términos. Los anteriores no cambian.</div><div class="fg" style="margin-top:14px"><label class="lbl">Términos predeterminados para compra a particulares</label><textarea class="inp" id="tpp-terms" rows="10">${techPurchaseEsc(res.data.terms)}</textarea></div><div class="fg"><label class="lbl">Garantía predeterminada del servicio técnico (días)</label><input class="inp" id="tpp-warranty-default" type="number" min="0" max="3650" value="${Number(res.data.default_warranty_days)||30}"></div><div class="alrt a"><div class="alrt-dot a"></div><div class="alrt-sub">Estos términos son una base operativa y no sustituyen la revisión de un abogado según las políticas del negocio y la legislación aplicable.</div></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="tpp-config-save">Guardar</button></div>`,'modal-lg');document.getElementById('tpp-config-save').onclick=async()=>{const saved=await window.api.techPrivatePurchases.saveConfig({requestUserId:user?.id,terms:document.getElementById('tpp-terms').value,default_warranty_days:Number(document.getElementById('tpp-warranty-default').value)||0});if(!saved?.ok)return toast(saved?.error||'No se pudo guardar','err');toast('✓ Términos actualizados para contratos futuros','ok');closeModal();};}
 
-// Documento comercial de la orden guardada; no registra recepción ni movimientos.
-async function imprimirOrdenCompra(id) {
-  const result = await window.api.purchases.getById({ id });
-  if (!result?.ok || !result.data) { toast('No se pudo cargar la orden', 'err'); return; }
+// ── Orden de compra para el proveedor ─────────────────────────────────────
+// Documento comercial de la orden guardada: hoja Carta con membrete o ticket
+// térmico. Solo muestra lo solicitado; no registra recepción, pagos ni
+// impuestos, y por eso no lleva subtotales, cargos ni descuentos.
+const OC_STATUS_LBL = { pendiente:'Pendiente', parcial:'Recibida parcial', recibido:'Recibida', cancelado:'Cancelada' };
+
+function _ocEsc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function _ocCargar(id) {
+  const [result, suppliers] = await Promise.all([
+    window.api.purchases.getById({ id }),
+    window.api.suppliers.getAll().catch(() => null),
+  ]);
+  if (!result?.ok || !result.data) return null;
   const po = result.data;
-  const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const number = `OC-${String(po.id).padStart(4, '0')}`;
-  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
-    @page{size:A4;margin:15mm}body{font:12px Arial;color:#111}h1{font-size:24px}table{width:100%;border-collapse:collapse;margin-top:24px}th,td{padding:9px;border-bottom:1px solid #ddd;text-align:left}.num{text-align:right}.total{text-align:right;font-size:18px;margin:24px 0}.notes{white-space:pre-wrap}
-    </style></head><body><h1>Orden de compra ${esc(number)}</h1>
-    <p>${esc(DB.settings?.biz_name || CFG.biz || 'VELO POS')}</p>
-    <p><strong>Proveedor:</strong> ${esc(po.supplier_name || po.supplier_name_join || 'Sin proveedor')}</p>
-    <p>Fecha: ${esc(fdate(String(po.created_at || '').slice(0,10)))}</p>
-    <table><thead><tr><th>Código</th><th>Descripción</th><th class="num">Cantidad</th><th class="num">Costo unitario</th><th class="num">Importe</th></tr></thead><tbody>${(po.items || []).map(i => `<tr><td>${esc(i.product_code)}</td><td>${esc(i.product_name)}</td><td class="num">${esc(i.qty_ordered)}</td><td class="num">${esc(fmt(i.unit_cost))}</td><td class="num">${esc(fmt(i.subtotal))}</td></tr>`).join('')}</tbody></table>
-    <div class="total">Total solicitado: ${esc(fmt((po.items || []).reduce((total, item) => total + Number(item.unit_cost || 0) * Number(item.qty_ordered || 0), 0)))}</div><p class="notes">${esc(po.notes || '')}</p>
-    <p>Solicitud de compra al proveedor. Este documento no acredita recepción de mercancía ni pago.</p></body></html>`;
-  printHTML(html, 'reporte');
+  const supplier = (suppliers?.ok ? suppliers.data || [] : [])
+    .find(s => po.supplier_id && Number(s.id) === Number(po.supplier_id)) || {};
+  const items = (po.items || []).map(item => {
+    const qty = Number(item.qty_ordered || 0);
+    const cost = Number(item.unit_cost || 0);
+    return { code: item.product_code || '', name: item.product_name || '', qty, cost, total: qty * cost };
+  });
+  const s = DB.settings || {};
+  return {
+    po, items,
+    number: `OC-${String(po.id).padStart(4, '0')}`,
+    date: fdate(String(po.created_at || '').slice(0, 10)),
+    status: OC_STATUS_LBL[po.status] || po.status || '',
+    total: items.reduce((sum, item) => sum + item.total, 0),
+    units: items.reduce((sum, item) => sum + item.qty, 0),
+    supplier: {
+      name: supplier.name || po.supplier_name || 'Sin proveedor',
+      rnc: supplier.rnc || '', contact: supplier.contact || '', phone: supplier.phone || '',
+      email: supplier.email || '', address: supplier.address || '',
+    },
+    buyer: {
+      name: s.biz_name || CFG.biz || 'Mi Negocio', rnc: s.biz_rnc || '', address: s.biz_addr || '',
+      phone: s.biz_phone || '', email: s.biz_email || '', web: s.biz_web || '',
+      logo1: s.biz_logo || '', logo2: s.biz_logo_2 || '',
+    },
+  };
+}
+
+function _ocBuyerLines(b) {
+  return [
+    b.rnc ? `RNC ${b.rnc}` : '',
+    b.address,
+    [b.phone ? `Tel. ${b.phone}` : '', b.email, b.web].filter(Boolean).join(' · '),
+  ].filter(Boolean);
+}
+
+function _ocDocumentoCarta(d) {
+  const e = _ocEsc;
+  const navy = '#134a73';
+  const logo = typeof buildLogoHeader === 'function'
+    ? buildLogoHeader(d.buyer.logo1, d.buyer.logo2, { unit:'px', maxW:230, maxH:72, align:'left',
+        scale: typeof _logoScale === 'function' ? _logoScale(DB.settings) : 1 })
+    : '';
+  const field = (label, value) => value ? `<div><span class="k">${label}</span> ${e(value)}</div>` : '';
+  const rows = d.items.map(item => `<tr>
+      <td>${e(item.code)}</td><td>${e(item.name)}</td>
+      <td class="num">${e(item.qty)}</td><td class="num">${e(fmt(item.cost))}</td><td class="num">${e(fmt(item.total))}</td>
+    </tr>`).join('');
+  const filler = '<tr><td></td><td></td><td></td><td></td><td></td></tr>'.repeat(Math.max(0, 15 - d.items.length));
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${e(d.number)}</title><style>
+    @page{size:letter;margin:12mm}
+    *{box-sizing:border-box}
+    body{margin:0;font:11.5px/1.4 Arial,Helvetica,sans-serif;color:#1d2733;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .top{display:flex;justify-content:space-between;align-items:flex-start;gap:24px}
+    .brand img{object-position:left center}
+    .brand .name{font-size:22px;font-weight:700;color:#111;margin-top:6px}
+    .title{font-size:30px;font-weight:700;color:${navy};text-align:right;line-height:1.1}
+    .meta{margin:10px 0 0 auto;border-collapse:collapse}
+    .meta td{padding:3px 12px 3px 16px;font-size:12px;white-space:nowrap}
+    .meta td.v{border:1px solid #9fb3c4;text-align:right;padding:3px 9px;min-width:130px;font-weight:700}
+    .bar{background:${navy};color:#fff;font-weight:700;padding:4px 10px;font-size:12px}
+    .vendor{margin-top:18px}
+    .vendor .grid{display:grid;grid-template-columns:1fr 1fr;gap:3px 28px;padding:8px 10px;border:1px solid #c9d5df;border-top:0}
+    .vendor .full{grid-column:1 / -1}
+    .k{color:#5b6b7a}
+    .vendor .nm{grid-column:1 / -1;font-size:13.5px;font-weight:700;color:#111}
+    table.info,table.items{width:100%;border-collapse:collapse;margin-top:14px}
+    th{background:${navy};color:#fff;text-align:left;padding:4px 8px;font-size:12px;border-right:1px solid #fff}
+    th:last-child{border-right:0}
+    .info td{border:1px solid #c9d5df;padding:5px 8px}
+    .items thead{display:table-header-group}
+    .items tr{page-break-inside:avoid}
+    .items td{padding:4px 8px;height:22px;border-left:1px solid #c9d5df;border-right:1px solid #c9d5df}
+    .items tbody tr:nth-child(even) td{background:#edf2f6}
+    .items tbody tr:last-child td{border-bottom:1px solid #c9d5df}
+    .num{text-align:right;white-space:nowrap}
+    th.num{text-align:center}
+    .bottom{display:flex;gap:18px;margin-top:14px;align-items:flex-start;page-break-inside:avoid}
+    .notes{flex:1;border:1px solid #c9d5df}
+    .notes .body{min-height:84px;padding:8px 10px;white-space:pre-wrap}
+    .total{width:240px;border:1px solid #c9d5df}
+    .total .amt{font-size:20px;font-weight:700;text-align:right;padding:10px}
+    .foot{margin-top:26px;border-top:2px solid ${navy};padding-top:8px;text-align:center;color:#3b4855;page-break-inside:avoid}
+    .foot .n{font-weight:700;font-size:13px;color:#111;margin-bottom:2px}
+  </style></head><body>
+    <div class="top">
+      <div class="brand">${logo}<div class="name">${e(d.buyer.name)}</div></div>
+      <div>
+        <div class="title">Orden de Compra</div>
+        <table class="meta">
+          <tr><td>Fecha</td><td class="v">${e(d.date)}</td></tr>
+          <tr><td>No. de orden</td><td class="v">${e(d.number)}</td></tr>
+          <tr><td>Estado</td><td class="v">${e(d.status)}</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="vendor">
+      <div class="bar">Proveedor</div>
+      <div class="grid">
+        <div class="nm">${e(d.supplier.name)}</div>
+        ${field('RNC:', d.supplier.rnc)}${field('Contacto:', d.supplier.contact)}
+        ${field('Teléfono:', d.supplier.phone)}${field('Correo:', d.supplier.email)}
+        ${d.supplier.address ? `<div class="full"><span class="k">Dirección:</span> ${e(d.supplier.address)}</div>` : ''}
+      </div>
+    </div>
+
+    <table class="info">
+      <tr><th>Solicitado por</th><th>Líneas</th><th>Unidades solicitadas</th><th>Moneda</th></tr>
+      <tr><td>${e(d.po.cajero || '—')}</td><td>${e(d.items.length)}</td><td>${e(d.units)}</td><td>Pesos dominicanos (DOP)</td></tr>
+    </table>
+
+    <table class="items">
+      <thead><tr><th style="width:15%">Código</th><th>Producto / descripción</th><th class="num" style="width:9%">Cant.</th><th class="num" style="width:16%">Costo unit.</th><th class="num" style="width:17%">Total</th></tr></thead>
+      <tbody>${rows}${filler}</tbody>
+    </table>
+
+    <div class="bottom">
+      <div class="notes"><div class="bar">Notas e instrucciones</div><div class="body">${e(d.po.notes || '')}</div></div>
+      <div class="total"><div class="bar">Total de la orden</div><div class="amt">${e(fmt(d.total))}</div></div>
+    </div>
+
+    <div class="foot">
+      <div class="n">${e(d.buyer.name)}</div>
+      ${_ocBuyerLines(d.buyer).map(line => `<div>${e(line)}</div>`).join('')}
+    </div>
+  </body></html>`;
+}
+
+// Ancho del rollo: el de la ruta de Compras si es térmica; si no, el de la
+// impresora de ventas, que es la térmica habitual del negocio.
+function _ocPerfilTermico() {
+  const fromRoute = category => typeof _getTicketPrinterProfile === 'function'
+    ? _getTicketPrinterProfile(_getCategoryConfig(category).printer || undefined) : null;
+  const profile = [fromRoute('compras'), fromRoute('ticket')].find(p => p && p.kind !== 'sheet');
+  const paperMm = Number(profile?.widthMm) || 80;
+  return { paperMm, bodyMm: Number(profile?.printableWidthMm) || Math.max(44, paperMm - 8) };
+}
+
+function _ocDocumentoTermico(d, { paperMm, bodyMm }) {
+  const e = _ocEsc;
+  const small = paperMm <= 58;
+  const logo = typeof buildLogoHeader === 'function'
+    ? buildLogoHeader(d.buyer.logo1, d.buyer.logo2, { unit:'mm', maxW:bodyMm - 6, maxH:16, align:'center',
+        filter:'grayscale(100%) contrast(150%)' })
+    : '';
+  const font = typeof _thermalFont === 'function' ? _thermalFont(DB.settings) : "'Courier New',monospace";
+  const line = (label, value) => value ? `<div class="row"><span>${label}</span><span class="r">${e(value)}</span></div>` : '';
+  const items = d.items.map(item => `<div class="it">
+      <div class="n">${e(item.name)}</div>
+      <div class="row"><span>${item.code ? `${e(item.code)} · ` : ''}${e(item.qty)} x ${e(fmt(item.cost))}</span><span class="r b">${e(fmt(item.total))}</span></div>
+    </div>`).join('');
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${e(d.number)}</title><style>
+    @page{size:${paperMm}mm auto;margin:0}
+    *{box-sizing:border-box}
+    body{margin:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .t{width:${bodyMm}mm;margin:0 auto;padding:3mm 0 6mm;font-family:${font};font-size:${small ? '10px' : '11px'};line-height:1.35;color:#000}
+    .biz{text-align:center;font-weight:700;font-size:${small ? '12px' : '13.5px'};margin-top:1.5mm}
+    .band{background:#000;color:#fff;text-align:center;font-weight:700;letter-spacing:1.6px;padding:1.6mm 0;margin:3mm 0 2mm;font-size:${small ? '11px' : '12.5px'}}
+    .row{display:flex;justify-content:space-between;gap:2mm}
+    .row>span:first-child{white-space:nowrap}
+    .r{text-align:right;min-width:0;overflow-wrap:anywhere}
+    .it .row{flex-wrap:wrap;column-gap:2mm}
+    .it .row>span:first-child{white-space:normal}
+    .it .row .r{margin-left:auto}
+    .b{font-weight:700}
+    .sec{margin-top:2.5mm;border-top:1px dashed #000;padding-top:1.8mm}
+    .h{font-weight:700;letter-spacing:1px;margin-bottom:.6mm}
+    .sup{font-weight:700;font-size:${small ? '11px' : '12px'}}
+    .it{padding:1.2mm 0;border-bottom:1px dotted #000}
+    .it:last-child{border-bottom:0}
+    .it .n{font-weight:700}
+    .tot{display:flex;justify-content:space-between;align-items:baseline;font-weight:700;font-size:${small ? '13px' : '15px'};border-top:2px solid #000;border-bottom:2px solid #000;padding:1.8mm 0;margin-top:2mm}
+    .notes{white-space:pre-wrap}
+    .foot{margin-top:4mm;border-top:1px dashed #000;padding-top:2mm;text-align:center}
+  </style></head><body><div class="t">
+    ${logo}
+    <div class="biz">${e(d.buyer.name)}</div>
+    <div class="band">ORDEN DE COMPRA</div>
+    ${line('No. de orden', d.number)}${line('Fecha', d.date)}${line('Estado', d.status)}${line('Solicitado por', d.po.cajero)}
+
+    <div class="sec">
+      <div class="h">PROVEEDOR</div>
+      <div class="sup">${e(d.supplier.name)}</div>
+      ${line('RNC', d.supplier.rnc)}${line('Contacto', d.supplier.contact)}${line('Teléfono', d.supplier.phone)}${line('Correo', d.supplier.email)}
+      ${d.supplier.address ? `<div>${e(d.supplier.address)}</div>` : ''}
+    </div>
+
+    <div class="sec">
+      <div class="h">ARTÍCULOS SOLICITADOS</div>
+      ${items}
+    </div>
+
+    <div class="tot"><span>TOTAL</span><span>${e(fmt(d.total))}</span></div>
+    ${line('Líneas', String(d.items.length))}${line('Unidades', String(d.units))}
+
+    ${d.po.notes ? `<div class="sec"><div class="h">NOTAS</div><div class="notes">${e(d.po.notes)}</div></div>` : ''}
+
+    <div class="foot">
+      <div class="b">${e(d.buyer.name)}</div>
+      ${[d.buyer.rnc ? `RNC ${d.buyer.rnc}` : '', d.buyer.address, d.buyer.phone ? `Tel. ${d.buyer.phone}` : '', d.buyer.email, d.buyer.web]
+        .filter(Boolean).map(text => `<div>${e(text)}</div>`).join('')}
+    </div>
+  </div></body></html>`;
+}
+
+async function imprimirOrdenCompra(id, formato = 'carta') {
+  const data = await _ocCargar(id);
+  if (!data) { toast('No se pudo cargar la orden', 'err'); return; }
+  if (formato !== 'termica') { printHTML(_ocDocumentoCarta(data), 'compras'); return; }
+  const roll = _ocPerfilTermico();
+  // La plantilla fija el papel: si la ruta de Compras tiene una impresora de
+  // hoja, la vista previa pide elegir una térmica en vez de imprimir mal.
+  const templateId = roll.paperMm <= 58 ? 'termica_58_basica' : roll.paperMm <= 72 ? 'termica_72_clasica' : 'termica_80_moderna';
+  _openPrintWindow(_ocDocumentoTermico(data, roll), 'compras', null, false, { templateId });
 }
