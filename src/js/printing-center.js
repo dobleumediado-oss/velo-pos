@@ -672,15 +672,17 @@ function renderInvoiceAppearanceCards(container, { settings, onSaved } = {}) {
       <div class="g2">
         <div class="fg"><label class="lbl">Facturas y tickets</label><select class="inp" data-q="print_engine"><option value="directo">Directo · resolución de la impresora</option><option value="pdf">PDF con Acrobat · máxima nitidez</option></select></div>
         <div class="fg"><label class="lbl">Resolución del rollo térmico</label><select class="inp" data-q="printer_dpi"><option value="203">203 DPI (8 puntos/mm)</option><option value="300">300 DPI (12 puntos/mm)</option></select></div>
+        <div class="fg"><label class="lbl">Al terminar el ticket</label><select class="inp" data-q="thermal_cut_mode"><option value="driver">Lo hace el driver</option><option value="auto">Automático (térmicas)</option><option value="bridge">Avanzar y cortar siempre</option><option value="none">No cortar</option></select></div>
+        <div class="fg"><label class="lbl">Avance antes del corte (líneas)</label><input class="inp" type="number" min="0" max="15" data-q="thermal_feed_lines"></div>
         <div class="fg"><label class="lbl">Etiquetas</label><select class="inp" data-q="barcode_print_mode"><option value="auto">Automático · Zebra en ZPL nativo</option><option value="zpl">Siempre ZPL nativo</option><option value="html">Imagen (método anterior)</option></select></div>
         <div class="fg"><label class="lbl">Resolución de la etiquetadora</label><select class="inp" data-q="barcode_printer_dpi"><option value="203">203 DPI · LP 2824 Plus</option><option value="300">300 DPI</option></select></div>
         <div class="fg"><label class="lbl">Oscuridad Zebra (0–30)</label><input class="inp" type="number" min="0" max="30" data-q="barcode_zebra_darkness"></div>
         <div class="fg"><label class="lbl">Velocidad Zebra (2–6 pulg/s)</label><input class="inp" type="number" min="2" max="6" data-q="barcode_zebra_speed"></div>
       </div>
       <div class="ts" id="cfg-acrobat-state" style="margin-top:6px">Comprobando Acrobat…</div>
-      <div class="ts" style="margin-top:4px">En térmica el texto sale en negro puro y el logo en blanco y negro. Para la Zebra LP 2824 Plus con etiquetas de 52 × 28 mm: ZPL nativo, 203 DPI, oscuridad 20–25 y velocidad 3.</div>`;
+      <div class="ts" style="margin-top:4px">En térmica el texto sale en negro puro y el logo en blanco y negro. Si el ticket queda dentro de la impresora o no se corta, usa «Avanzar y cortar siempre». Para la Zebra LP 2824 Plus con etiquetas de 52 × 28 mm: ZPL nativo, 203 DPI, oscuridad 20–25 y velocidad 3.</div>`;
     container.appendChild(qualityCard);
-    const qualityDefaults={print_engine:'directo',printer_dpi:'203',barcode_print_mode:'auto',barcode_printer_dpi:'203',barcode_zebra_darkness:'20',barcode_zebra_speed:'3'};
+    const qualityDefaults={print_engine:'directo',printer_dpi:'203',thermal_cut_mode:'driver',thermal_feed_lines:'4',barcode_print_mode:'auto',barcode_printer_dpi:'203',barcode_zebra_darkness:'20',barcode_zebra_speed:'3'};
     qualityCard.querySelectorAll('[data-q]').forEach(control=>{
       const key=control.dataset.q;control.value=String(s[key]||DB?.settings?.[key]||qualityDefaults[key]);
       control.onchange=async()=>{

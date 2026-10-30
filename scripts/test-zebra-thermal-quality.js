@@ -27,3 +27,8 @@ const page = engines.pdfPageFor('80mm', 600);
 assert.ok(Math.abs(page.width - 80 / 25.4) < 1e-9);
 assert.ok(engines.BLACK_WHITE_SCRIPT.includes('color:#000!important'));
 console.log('  ✓ Zebra reconocida, papel del PDF en pulgadas y limpieza a negro puro');
+
+assert.deepEqual([...engines.escposFeedCut(4)], [0x1b, 0x64, 4, 0x1d, 0x56, 0x42, 0x00]);
+assert.equal(engines.profileFromCapabilities('POS-80C', 'USB001',
+  '<psf:ScoredProperty name="psk:MediaSizeWidth"><psf:Value xsi:type="xsd:integer">80000</psf:Value></psf:ScoredProperty>').escpos, true);
+console.log('  ✓ avance y corte ESC/POS y detección de térmica de rollo');

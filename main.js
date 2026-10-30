@@ -4610,6 +4610,18 @@ async function _assertPrinterQueueAvailable(webContents, printerName) {
  * - Si se pasa printerName, la preselecciona en el diálogo
  * - Registra el trabajo en print_jobs para auditoría y reimpresión
  */
+// «Al terminar el ticket» (Centro de impresión → Calidad de impresión): en
+// térmicas ESC/POS, avanza el papel hasta la cuchilla y corta. Por defecto lo
+// hace el driver, como hasta ahora; mismo comportamiento que VELO Bridge.
+async function _thermalFeedCut(printerName, isThermal) {
+  const mode = settingsRepo.get('thermal_cut_mode') || 'driver';
+  if (!isThermal || !printerName || mode === 'driver' || mode === 'none' || printEngines.isZebra(printerName)) return;
+  if (mode === 'auto' && !/pos[- ]?\d{2}|\b(?:58|72|80) ?mm\b|xprinter|epson tm|\btm-?[tm]\d|bixolon|3nstar|rongta|gprinter|thermal|termica|receipt/i.test(printerName)) return;
+  const lines = Math.max(0, Math.min(15, Number(settingsRepo.get('thermal_feed_lines') ?? 4)));
+  await printEngines.printRaw({ printerName, data: printEngines.escposFeedCut(lines), userData: app.getPath('userData') })
+    .catch(error => logWarn('print', 'No se pudo enviar el avance y corte', { printer: printerName, error: error.message }));
+}
+
 async function _attemptPrintHTML({ html, printerName, printerWidth, printerHeight, pageHint, copies = 1 }) {
   // isSizedMedia: rollos/etiquetas con tamaño explícito, incluso si se abre el
   // diálogo del sistema porque aún no hay una impresora seleccionada.
@@ -4719,6 +4731,7 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, printerHeigh
       const pdf = await printWin.webContents.printToPDF({ pageSize, printBackground: true, landscape: !!printOptions.landscape,
         margins: isThermal ? { top: 0, bottom: 0, left: 0, right: 0 } : { marginType: 'default' } });
       await printEngines.printPdfBuffer({ pdf, printerName, copies: printOptions.copies, userData: app.getPath('userData') });
+      await _thermalFeedCut(printerName, isThermal);
       logInfo('print', `Enviado a Acrobat`, { printer: printerName });
       return;
     }
@@ -4728,6 +4741,7 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, printerHeigh
         else reject(new Error(errType || 'Impresión cancelada o fallida'));
       });
     });
+    await _thermalFeedCut(printerName, isThermal);
     logInfo('print', `Enviado a impresora`, { printer: printerName || 'dialogo' });
   } finally {
     try { printWin.destroy(); } catch {}
