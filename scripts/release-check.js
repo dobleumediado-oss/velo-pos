@@ -70,6 +70,14 @@ for (const [rel, appId, productName, channel, artifactName] of editionExpectatio
   seenArtifacts.add(artifactName);
 }
 
+// Los programas instalados buscan actualizaciones donde indica main.js. Si ese
+// repositorio no es el mismo donde se publica, los clientes dejan de actualizar.
+const feed = fs.readFileSync(path.join(root, 'main.js'), 'utf8')
+  .match(/autoUpdater\.setFeedURL\(\{[^}]*owner:\s*'([^']+)'[^}]*repo:\s*'([^']+)'/);
+if (!feed || feed[1] !== pkg.build.publish?.owner || feed[2] !== pkg.build.publish?.repo) {
+  throw new Error('main.js busca actualizaciones en un repositorio distinto al de publicación');
+}
+
 const filesToCheck = [
   'main.js', 'preload.js', 'database.js', 'versioning.js', 'license.js',
   ...(fs.existsSync(path.join(root, 'src/main'))

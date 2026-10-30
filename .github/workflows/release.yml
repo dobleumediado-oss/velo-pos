@@ -36,11 +36,16 @@ jobs:
       # existe, cada invocación de electron-builder (Terminal, TECH y servidores) crea su
       # propio release para el mismo tag → assets partidos en dos (o 422
       # already_exists). Pre-creándolo, las cuatro ediciones suben al MISMO release.
-      - name: Pre-crear release (evita release partido / 422)
-        shell: bash   # en pwsh (Windows) el `|| echo` no resetea el exit code y el paso falla
+      # Se publica en velo-pos-releases, el repositorio público de descargas.
+      # Si el token no tiene permiso allí, el paso falla antes de compilar.
+      - name: Pre-crear release en velo-pos-releases
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-        run: gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes "Velo POS ${{ github.ref_name }}" --verify-tag || echo "El release ya existe, continuo"
+        run: |
+          gh release view "${{ github.ref_name }}" --repo dobleumediado-oss/velo-pos-releases >/dev/null 2>&1 \
+            || gh release create "${{ github.ref_name }}" --repo dobleumediado-oss/velo-pos-releases \
+                 --target main --title "${{ github.ref_name }}" --notes "Velo POS ${{ github.ref_name }}"
 
       - name: Compilar y publicar Terminal Windows
         env:
@@ -61,3 +66,26 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: npm run release:win:tech-server
+
+      # Transición: los programas anteriores a 1.59.2 todavía buscan
+      # actualizaciones en velo-pos. Se copia ahí el mismo release, con los
+      # instaladores antes que los .yml para que ningún cliente vea un canal que
+      # apunte a un instalador aún no subido. Quitar este paso cuando todos los
+      # clientes hayan pasado por 1.59.2 y velo-pos vaya a hacerse privado.
+      - name: Copiar el release a velo-pos (clientes anteriores a 1.59.2)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ github.ref_name }}"
+          mkdir -p espejo
+          gh release download "$tag" --repo dobleumediado-oss/velo-pos-releases --dir espejo --clobber
+          ls espejo/*.exe espejo/*.yml >/dev/null
+          if gh release view "$tag" --repo dobleumediado-oss/velo-pos >/dev/null 2>&1; then
+            gh release upload "$tag" espejo/*.exe espejo/*.blockmap --repo dobleumediado-oss/velo-pos --clobber
+            gh release upload "$tag" espejo/*.yml --repo dobleumediado-oss/velo-pos --clobber
+          else
+            gh release create "$tag" espejo/*.exe espejo/*.blockmap espejo/*.yml --repo dobleumediado-oss/velo-pos \
+              --verify-tag --title "$tag" --notes "Velo POS $tag"
+          fi

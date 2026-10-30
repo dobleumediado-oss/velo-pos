@@ -266,12 +266,13 @@ const { autoUpdater } = require('electron-updater');
 autoUpdater.autoDownload         = false; // preguntar antes de descargar
 autoUpdater.autoInstallOnAppQuit = true;  // instalar al cerrar
 
-// Configurar para repo público en GitHub Releases
-// Los releases son públicos aunque el repo sea privado
+// Las actualizaciones se descargan de un repositorio público que solo contiene
+// instaladores. El código vive aparte para poder hacerlo privado: en GitHub,
+// los releases de un repositorio privado tampoco son públicos.
 autoUpdater.setFeedURL({
   provider:    'github',
   owner:       'dobleumediado-oss',
-  repo:        'velo-pos',
+  repo:        'velo-pos-releases',
   releaseType: 'release',
 });
 if (app.isPackaged && fs.existsSync(path.join(process.resourcesPath, 'server-edition.json'))) {

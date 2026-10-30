@@ -18,6 +18,17 @@ Empujar un tag git `v*` es un **deploy a producción a negocios cliente reales**
 9. WinSW se descarga desde su release oficial durante el build y se valida por SHA-256.
 10. El pipeline completo compila y publica los cuatro instaladores en un único release.
 
+## Dónde se publica (desde 1.59.2)
+- Los instaladores y los `.yml` se publican en **`dobleumediado-oss/velo-pos-releases`**,
+  un repositorio público que solo contiene descargas. `main.js` (`setFeedURL`) y
+  `package.json` (`build.publish`) apuntan ahí; `release:check` falla si no coinciden.
+- **Transición:** las versiones anteriores a 1.59.2 todavía buscan en `velo-pos`. El
+  último paso del workflow copia el mismo release ahí (instaladores primero, `.yml`
+  al final). Cuando todos los clientes hayan pasado por 1.59.2 se quita ese paso y
+  `velo-pos` puede hacerse privado. Hacerlo privado antes deja sin actualizaciones a
+  quien siga en una versión vieja: GitHub no expone los releases de un repo privado.
+- El token `GH_TOKEN` del workflow necesita permiso de escritura en ambos repositorios.
+
 ## Riesgo
 Es difícil de revertir: una vez que un cliente auto-actualiza, hacer rollback significa enviar una *nueva* versión mayor, no borrar la mala — algunos clientes ya la habrán jalado. No hay staging/canary; tag push = release inmediato a producción para todos.
 
