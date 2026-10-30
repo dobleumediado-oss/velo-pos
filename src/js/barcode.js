@@ -1491,12 +1491,40 @@ async function _bcPrint() {
     toast('Los productos seleccionados ya no están disponibles', 'err');
     return;
   }
+  const total = items.reduce((s, i) => s + i.qty, 0);
+  // Zebra: etiquetas en ZPL nativo, nítidas como en Zebra Designer (Centro de
+  // impresión → Calidad de impresión). «Imagen» mantiene el método anterior.
+  const zplMode = DB.settings?.barcode_print_mode || 'auto';
+  if (window.api?.print?.zpl && typeof zplProductLabels === 'function'
+      && (zplMode === 'zpl' || (zplMode === 'auto' && isZebraPrinter(_bcState.selPrinter)))) {
+    if (!_bcState.printers.some(printer => printer.name === _bcState.selPrinter)) {
+      toast('La impresora de etiquetas guardada ya no está instalada. Selecciona otra.', 'err');
+      return;
+    }
+    const d = _bcEffectiveDesign();
+    const zpl = zplProductLabels(items.map(({ product, qty }) => ({
+      name: product.name, brand: product.brand, code: product.code,
+      barcode: product.barcode || product.code || String(product.id || '').padStart(8, '0'),
+      price: fmt(product.price), quantity: qty,
+    })), {
+      widthMm: Number(d.labelW) || 50, heightMm: Number(d.labelH) || 25,
+      dpi: Number(DB.settings?.barcode_printer_dpi) || 203,
+      showName: d.showName !== false, showBrand: !!d.showBrand, showCode: !!d.showCode,
+      showPrice: !!d.showPrice, showBarcode: d.showBarcode !== false, customText: d.customText || '',
+    });
+    const result = await window.api.print.zpl({ zpl, printerName: _bcState.selPrinter, userConfirmed: true });
+    if (result?.ok) {
+      toast(`✓ ${total} etiqueta(s) enviadas a la Zebra (nativo)`, 'ok');
+      window.api.audit?.log?.({ action: 'barcode_print', entity: 'products', entityId: null,
+        detail: `${total} etiquetas ZPL (${items.length} productos)`, userId: user?.id }).catch(() => {});
+    } else toast('Error al imprimir: ' + (result?.error || 'desconocido'), 'err');
+    return;
+  }
   if (!window.JsBarcode && !(await _loadJsBarcode())) {
     toast('No se pudo generar el código de barras. No se enviaron etiquetas en blanco.', 'err');
     return;
   }
 
-  const total = items.reduce((s, i) => s + i.qty, 0);
   const html  = _bcBuildLabelsHTML(items);
   const renderedCodes = (html.match(/<svg\b/g) || []).length;
   if (!html || !html.includes('class="vp-label"') || renderedCodes < total) {

@@ -666,6 +666,33 @@ function renderInvoiceAppearanceCards(container, { settings, onSaved } = {}) {
       refresh();toast('✓ Letra térmica actualizada');
     };
 
+    // Calidad de impresión: mismas opciones que el menú de VELO Bridge.
+    const qualityCard=h('div',{class:'card',style:'margin-top:16px'});
+    qualityCard.innerHTML=`<div class="card-title mb8">Calidad de impresión</div>
+      <div class="g2">
+        <div class="fg"><label class="lbl">Facturas y tickets</label><select class="inp" data-q="print_engine"><option value="directo">Directo · resolución de la impresora</option><option value="pdf">PDF con Acrobat · máxima nitidez</option></select></div>
+        <div class="fg"><label class="lbl">Resolución del rollo térmico</label><select class="inp" data-q="printer_dpi"><option value="203">203 DPI (8 puntos/mm)</option><option value="300">300 DPI (12 puntos/mm)</option></select></div>
+        <div class="fg"><label class="lbl">Etiquetas</label><select class="inp" data-q="barcode_print_mode"><option value="auto">Automático · Zebra en ZPL nativo</option><option value="zpl">Siempre ZPL nativo</option><option value="html">Imagen (método anterior)</option></select></div>
+        <div class="fg"><label class="lbl">Resolución de la etiquetadora</label><select class="inp" data-q="barcode_printer_dpi"><option value="203">203 DPI · LP 2824 Plus</option><option value="300">300 DPI</option></select></div>
+        <div class="fg"><label class="lbl">Oscuridad Zebra (0–30)</label><input class="inp" type="number" min="0" max="30" data-q="barcode_zebra_darkness"></div>
+        <div class="fg"><label class="lbl">Velocidad Zebra (2–6 pulg/s)</label><input class="inp" type="number" min="2" max="6" data-q="barcode_zebra_speed"></div>
+      </div>
+      <div class="ts" id="cfg-acrobat-state" style="margin-top:6px">Comprobando Acrobat…</div>
+      <div class="ts" style="margin-top:4px">En térmica el texto sale en negro puro y el logo en blanco y negro. Para la Zebra LP 2824 Plus con etiquetas de 52 × 28 mm: ZPL nativo, 203 DPI, oscuridad 20–25 y velocidad 3.</div>`;
+    container.appendChild(qualityCard);
+    const qualityDefaults={print_engine:'directo',printer_dpi:'203',barcode_print_mode:'auto',barcode_printer_dpi:'203',barcode_zebra_darkness:'20',barcode_zebra_speed:'3'};
+    qualityCard.querySelectorAll('[data-q]').forEach(control=>{
+      const key=control.dataset.q;control.value=String(s[key]||DB?.settings?.[key]||qualityDefaults[key]);
+      control.onchange=async()=>{
+        let value=control.value;
+        if(control.type==='number'){const n=Math.round(Number(value));const min=Number(control.min),max=Number(control.max);if(!Number.isFinite(n)||n<min||n>max)return toast(`Usa un valor entre ${min} y ${max}`,'w');value=String(n);}
+        const res=await window.api.settings.set({key,value,requestUserId:user?.id});
+        if(!res?.ok)return toast(res?.error||'No se pudo guardar','err');
+        s[key]=value;if(DB?.settings)DB.settings[key]=value;toast('✓ Calidad de impresión actualizada');
+      };
+    });
+    window.api.print?.acrobat?.().then(r=>{const el=qualityCard.querySelector('#cfg-acrobat-state');if(el)el.textContent=r?.installed?'Acrobat detectado: «PDF con Acrobat» disponible.':'Acrobat no está instalado: se usará la impresión directa aunque elijas PDF.';}).catch(()=>{});
+
     // Tamaño de letra en las facturas de hoja (A4/Carta).
     const curFontSize = s.factura_font_size || 'mediano';
     const fontSizeCard = h('div', { class: 'card', style: 'margin-top:16px' });

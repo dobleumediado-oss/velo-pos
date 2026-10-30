@@ -41,7 +41,7 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
     'business:getAll', 'business:getActive', 'business:selectForLogin', 'business:switch',
     // Impresión = operación de dispositivo: cada terminal imprime en SU impresora.
     // (print:onServer NO va aquí: es la opción explícita de imprimir en el servidor.)
-    'print:html', 'print:toPDF', 'excel:saveReport', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
+    'print:html', 'print:zpl', 'print:acrobat', 'print:toPDF', 'excel:saveReport', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
     'shell:openExternal', 'shell:openWhatsApp', 'shell:showItemInFolder',
     // Los selectores de archivo/carpeta pertenecen a la PC que muestra la
     // ventana. La creación/verificación se mantiene mode-aware para operar
@@ -62,6 +62,7 @@ const bcrypt = require('bcryptjs');
 const { sqliteIdent } = require('./lib/sql-safe');
 const { normalizeFinAcct: _normalizeFinAcct, normalizeFinMov: _normalizeFinMov } = require('./lib/normalize-financial');
 const { isAllowedExternalUrl, diagnosePortalBaseUrl } = require('./lib/url-safe');
+const printEngines = require('./lib/print-engines');
 const { roleRequiresOpenCash } = require('./src/js/cash-close-policy');
 const { checkPublicPortalAccess } = require('./lib/portal-public-check');
 const { buildWhatsAppUrls } = require('./lib/whatsapp-url');
@@ -4649,6 +4650,8 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, printerHeigh
       );
     } catch {}
     await new Promise(r => setTimeout(r, isThermal ? 250 : 500));
+    // Térmica: negro puro y logos en blanco y negro (la impresora no tiene grises).
+    if (isThermal) await printWin.webContents.executeJavaScript(printEngines.BLACK_WHITE_SCRIPT).catch(() => {});
     // Segunda barrera, ejecutada en el proceso principal inmediatamente antes
     // de imprimir. Evita que una selección que desapareció después de abrir el
     // modal termine en una cola equivocada o en un fallo silencioso.
@@ -4700,9 +4703,25 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, printerHeigh
     };
     if (!isThermal && pageHint !== 'half-letter' && sheetPage?.landscape) printOptions.landscape = true;
     if (printerName) printOptions.deviceName = printerName;
+    // Resolución real del rollo: sin ella Windows reescala la imagen y empasta la letra.
+    if (isThermal) {
+      const dpi = [203, 300].includes(Number(settingsRepo.get('printer_dpi'))) ? Number(settingsRepo.get('printer_dpi')) : 203;
+      printOptions.dpi = { horizontal: dpi, vertical: dpi };
+    }
 
     logInfo('print', `Imprimiendo`, { printer: printerName || '(dialogo)', thermal: isThermal, paperWidth, height: isThermal ? thermalHeight : (sheetPage ? `${sheetPage.pageSize}${sheetPage.landscape ? ' horizontal' : ''}` : 'letter') });
 
+    // «PDF con Acrobat» (Centro de impresión): PDF del tamaño exacto del papel
+    // impreso por Acrobat, como hacen otros sistemas. Solo con impresora elegida.
+    if (printerName && settingsRepo.get('print_engine') === 'pdf' && await printEngines.findAcrobat()) {
+      const pageSize = typeof printOptions.pageSize === 'string' ? printOptions.pageSize
+        : { width: printOptions.pageSize.width / 25400, height: printOptions.pageSize.height / 25400 };
+      const pdf = await printWin.webContents.printToPDF({ pageSize, printBackground: true, landscape: !!printOptions.landscape,
+        margins: isThermal ? { top: 0, bottom: 0, left: 0, right: 0 } : { marginType: 'default' } });
+      await printEngines.printPdfBuffer({ pdf, printerName, copies: printOptions.copies, userData: app.getPath('userData') });
+      logInfo('print', `Enviado a Acrobat`, { printer: printerName });
+      return;
+    }
     await new Promise((resolve, reject) => {
       printWin.webContents.print(printOptions, (success, errType) => {
         if (success) resolve();
@@ -4715,6 +4734,29 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, printerHeigh
     cleanupTmp();
   }
 }
+
+// Etiquetas Zebra en ZPL nativo (como Zebra Designer). Mismo motor que VELO
+// Bridge (lib/print-engines.js es copia de cloud/apps/bridge/engines.cjs).
+ipcMain.handle('print:zpl', async (_, { zpl, printerName, userConfirmed = false } = {}) => {
+  try {
+    if (userConfirmed !== true) throw new Error('La impresión requiere confirmación explícita');
+    if (!printEngines.validZpl(zpl)) throw new Error('Las etiquetas no tienen un formato ZPL válido');
+    const requested = String(printerName || '').trim();
+    if (!requested) throw new Error('Selecciona la impresora de etiquetas');
+    const settings = {
+      darkness: Number(settingsRepo.get('barcode_zebra_darkness') || 20),
+      speed: Number(settingsRepo.get('barcode_zebra_speed') || 3),
+      dpi: Number(settingsRepo.get('barcode_printer_dpi') || 203),
+    };
+    await printEngines.printRaw({ printerName: requested, data: printEngines.zplWithSettings(zpl, settings), userData: app.getPath('userData') });
+    logInfo('print', 'Etiquetas ZPL enviadas', { printer: requested });
+    return { ok: true };
+  } catch (e) {
+    logError('print', 'Etiquetas ZPL', e);
+    return { ok: false, error: e.message };
+  }
+});
+ipcMain.handle('print:acrobat', async () => ({ ok: true, installed: Boolean(await printEngines.findAcrobat()) }));
 
 // La validación documental NO es local-only: en una terminal cliente debe
 // ejecutarse en el worker del negocio, dueño de la base central.
@@ -9208,7 +9250,7 @@ function setupMultiTerminal() {
       'business:getAll', 'business:getActive', 'business:selectForLogin', 'business:switch',
       'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke',
       'update:check', 'update:download', 'update:install',
-      'print:html', 'print:toPDF', 'excel:saveReport', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
+      'print:html', 'print:zpl', 'print:acrobat', 'print:toPDF', 'excel:saveReport', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
       'backup:pickExternalDirectory', 'backup:pickEncryptedFile',
     ]);
     const serviceSecurity = () => {

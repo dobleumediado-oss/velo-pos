@@ -54,7 +54,7 @@
     "test:walk-in-credit": "node scripts/run-electron-node.js scripts/test-walk-in-credit.js",
     "test:customer-companies": "node scripts/run-electron-node.js scripts/test-customer-companies.js",
     "test:client-account": "node scripts/test-client-account-adjustments.js",
-    "test:printing": "node scripts/test-printer-profiles.js && node scripts/test-print-preview-routing.js && node scripts/test-purchase-order-document.js && node scripts/run-electron-node.js scripts/test-print-reference-routing.js",
+    "test:printing": "node scripts/test-printer-profiles.js && node scripts/test-print-preview-routing.js && node scripts/test-purchase-order-document.js && node scripts/test-zebra-thermal-quality.js && node scripts/run-electron-node.js scripts/test-print-reference-routing.js",
     "test:pdf-compatibility": "electron --no-sandbox scripts/test-pdf-compatibility.js",
     "test:pending-invoices": "node scripts/run-electron-node.js scripts/test-pending-invoices.js",
     "test:global-search": "node scripts/run-electron-node.js scripts/test-global-search.js",

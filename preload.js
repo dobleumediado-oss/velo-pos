@@ -295,6 +295,8 @@ const api = {
   // ── Impresión ─────────────────────────────
   print: {
     html:         (data)      => ipcRenderer.invoke('print:html', data),
+    zpl:          (data)      => ipcRenderer.invoke('print:zpl', data),
+    acrobat:      ()          => ipcRenderer.invoke('print:acrobat'),
     onServer:     (data)      => ipcRenderer.invoke('print:onServer', data),
     toPDF:        (data)      => ipcRenderer.invoke('print:toPDF', data),
     getPrinters:  ()          => ipcRenderer.invoke('print:getPrinters'),
