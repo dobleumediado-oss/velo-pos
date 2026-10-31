@@ -111,7 +111,18 @@ function initDB(customDataDir) {
 // antiguas o llamadas IPC directas también llegan al backend. Estos triggers
 // normalizan únicamente campos descriptivos (nunca email, contraseña, URL,
 // estados ni identificadores fiscales sensibles a formato).
-function ensureUppercasePersistence() {
+// Configuración del sistema → «Escritura en MAYÚSCULAS» (text_uppercase, por
+// defecto activada). Apagada, solo los identificadores siguen en mayúsculas;
+// lo ya guardado no se toca (su forma original ya no existe).
+const UPPERCASE_IDENTIFIERS = { products: ['code', 'barcode'], customer_branches: ['code'], vehicles: ['plate'] };
+function uppercaseSettingEnabled() {
+  try {
+    if (!tableExists('settings')) return true;
+    const row = db.prepare("SELECT value FROM settings WHERE key='text_uppercase'").get();
+    return String(row?.value ?? '1') !== '0';
+  } catch { return true; }
+}
+function ensureUppercasePersistence(enabled = uppercaseSettingEnabled()) {
   const targets = {
     customers: ['name', 'trade_name', 'address', 'notes'],
     customer_contacts: ['name', 'role'],
@@ -140,8 +151,12 @@ function ensureUppercasePersistence() {
   Object.entries(targets).forEach(([table, requestedColumns]) => {
     if (!tableExists(table)) return;
     const available = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name));
-    const columns = requestedColumns.filter(column => available.has(column));
-    if (!columns.length) return;
+    const wanted = enabled ? requestedColumns : (UPPERCASE_IDENTIFIERS[table] || []);
+    const columns = wanted.filter(column => available.has(column));
+    if (!columns.length) {
+      db.exec(`DROP TRIGGER IF EXISTS trg_${table}_uppercase_insert; DROP TRIGGER IF EXISTS trg_${table}_uppercase_update;`);
+      return;
+    }
     const assignment = columns
       .map(column => `"${column}"=VELO_UPPER(NEW."${column}")`)
       .join(',');

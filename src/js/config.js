@@ -66,6 +66,24 @@ async function renderConfiguracion(el) {
         <button class="btn btn-dark" onclick="routeTo('impresion')">${svg('print')} Abrir centro</button>
       </div>`;
     colLeft.appendChild(printCenterCard);
+
+    // Configuración del sistema · cómo se guarda el texto escrito.
+    const upperOn = String(settings?.text_uppercase ?? '1') !== '0';
+    const caseCard = h('div', { class: 'card' });
+    caseCard.innerHTML = `
+      <div class="fxb" style="align-items:flex-start;gap:14px">
+        <div>
+          <div class="card-title">Escritura en MAYÚSCULAS</div>
+          <div style="font-size:11px;color:var(--muted2);margin-top:4px;line-height:1.5">
+            Activada: nombres, direcciones, descripciones y notas se guardan en mayúsculas, como hasta ahora.<br>
+            Desactivada: se guarda tal como se escribe. Los códigos y códigos de barras siempre van en mayúsculas.<br>
+            Lo ya guardado en mayúsculas no cambia. Si la vuelves a activar, lo escrito en minúsculas pasa a mayúsculas.
+          </div>
+        </div>
+        <label style="display:flex;gap:8px;align-items:center;font-weight:700;white-space:nowrap;cursor:pointer">
+          <input type="checkbox" id="cfg-text-uppercase" ${upperOn ? 'checked' : ''} onchange="cfgSetTextUppercase(this)"> Activada</label>
+      </div>`;
+    colLeft.appendChild(caseCard);
   }
 
   // ══════════════════════════════════════════════
@@ -2591,4 +2609,14 @@ async function togglePreventaModule(activo) {
   if (typeof preventaConfigureMonitor === 'function') preventaConfigureMonitor();
   if (!activo && typeof page !== 'undefined' && page === 'preventa' && typeof routeTo === 'function') routeTo('dash');
   toast(activo ? '✓ Preventa y Despacho activado' : '✗ Preventa y Despacho desactivado', 'ok');
+}
+
+// Configuración del sistema: escritura en MAYÚSCULAS (se guarda al instante y
+// el servidor aplica la regla a la base sin reiniciar).
+async function cfgSetTextUppercase(input) {
+  const value = input.checked ? '1' : '0';
+  const res = await window.api.settings.set({ key: 'text_uppercase', value, requestUserId: user?.id }).catch(e => ({ ok: false, error: e.message }));
+  if (!res?.ok) { input.checked = !input.checked; toast(res?.error || 'No se pudo guardar', 'err'); return; }
+  if (DB?.settings) DB.settings.text_uppercase = value;
+  toast(input.checked ? 'Se guardará todo en MAYÚSCULAS.' : 'Se guardará tal como se escribe.');
 }

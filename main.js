@@ -1003,6 +1003,9 @@ ipcMain.handle('settings:set', async (_, { key, value, requestUserId }) => {
   if (key === 'cash_close_required_after_hours' && !['0', '1'].includes(String(value))) {
     return { ok: false, error: 'La política de cierre de caja debe estar activada o desactivada' };
   }
+  if (key === 'text_uppercase' && !['0', '1'].includes(String(value))) {
+    return { ok: false, error: 'La escritura en mayúsculas debe estar activada o desactivada' };
+  }
   if (key === 'default_ncf_type' && !['', 'B01', 'B02', 'B14', 'B15', 'B16'].includes(String(value))) {
     return { ok: false, error: 'El tipo de comprobante predeterminado no es válido' };
   }
@@ -1106,6 +1109,11 @@ ipcMain.handle('settings:set', async (_, { key, value, requestUserId }) => {
   }
 
   settingsRepo.set(key, value);
+  // Aplica la escritura en mayúsculas al momento, sin reiniciar.
+  if (key === 'text_uppercase') {
+    try { ensureUppercasePersistence(String(value) !== '0'); }
+    catch (e) { logWarn('settings', 'no se pudo aplicar la escritura en mayúsculas: ' + e.message); }
+  }
   return { ok: true };
 });
 

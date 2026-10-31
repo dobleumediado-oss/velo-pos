@@ -1946,7 +1946,7 @@ function openProductoModal(p = null, options = {}) {
             — se genera automáticamente o escribe uno
           </span>
         </label>
-        <input class="inp" id="pf-code" type="text" placeholder="${vterm('code_example', 'FLT-001')}"
+        <input class="inp" id="pf-code" type="text" data-uppercase="always" placeholder="${vterm('code_example', 'FLT-001')}"
                value="${isEdit ? p.code : ''}"/>
       </div>
       <div class="fg">
@@ -1958,7 +1958,7 @@ function openProductoModal(p = null, options = {}) {
         </label>
         <div style="display:flex;gap:6px;align-items:stretch">
           <div style="position:relative;flex:1">
-            <input class="inp" id="pf-barcode" type="text"
+            <input class="inp" id="pf-barcode" type="text" data-uppercase="always"
                    placeholder="Se genera numérico al guardar"
                    value="${isEdit ? (p.barcode||'') : ''}"
                    style="padding-left:32px;width:100%"/>

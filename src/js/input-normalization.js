@@ -222,6 +222,14 @@
     try { control.select(); } catch {}
   }
 
+  // Configuración del sistema → «Escritura en MAYÚSCULAS» (text_uppercase).
+  // Apagada, se respeta lo que se escribe; los campos marcados
+  // data-uppercase="always" (códigos) siguen en mayúsculas: son identificadores.
+  function uppercaseEnabled() {
+    const store = typeof DB !== 'undefined' ? DB : globalScope.DB;
+    return String(store?.settings?.text_uppercase ?? '1') !== '0';
+  }
+
   function shouldUppercaseEntryControl(control) {
     if (!control || !control.tagName) return false;
     const tag = String(control.tagName).toUpperCase();
@@ -231,6 +239,7 @@
     ).toLowerCase();
     if (['off', 'false', 'no', 'preserve'].includes(mode)) return false;
     if (control.classList?.contains('no-uppercase')) return false;
+    if (mode !== 'always' && !uppercaseEnabled()) return false;
     if (tag === 'INPUT' && PRESERVE_TYPES.has(String(control.type || 'text').toLowerCase())) {
       return false;
     }
@@ -341,6 +350,7 @@
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       shouldUppercaseEntryControl,
+      uppercaseEnabled,
       uppercaseEntryValue,
       normalizeUppercaseEntry,
       shouldFormatMoneyControl,
