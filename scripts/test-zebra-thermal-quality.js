@@ -27,6 +27,13 @@ const page = engines.pdfPageFor('80mm', 600);
 assert.ok(Math.abs(page.width - 80 / 25.4) < 1e-9);
 assert.ok(engines.BLACK_WHITE_SCRIPT.includes('color:#000!important'));
 console.log('  ✓ Zebra reconocida, papel del PDF en pulgadas y limpieza a negro puro');
+assert.equal(engines.zebraLanguage('ZDesigner LP 2824'), 'epl');
+assert.equal(engines.zebraLanguage('ZDesigner LP 2824 Plus (ZPL)'), 'zpl');
+const epl = engines.zplToEpl(zpl, { darkness: 20, speed: 3 }).toString('latin1');
+assert.ok(epl.startsWith('\nN\nI8,1,001\nq416\nQ224,24') && epl.includes('B') && epl.trimEnd().endsWith('P3') && !epl.includes('^'));
+const desktopMain = require('node:fs').readFileSync(require('node:path').join(__dirname, '../main.js'), 'utf8');
+assert.ok(desktopMain.includes("printEngines.zplToEpl(zpl, settings)") && desktopMain.includes("barcode_zebra_language"));
+console.log('  ✓ Zebra LP 2824 original: etiqueta traducida a EPL2');
 
 // Mismo plano que VELO Web: vista previa SVG = ZPL; Exhibir una por equipo.
 const labels = require('../src/js/zpl-labels');

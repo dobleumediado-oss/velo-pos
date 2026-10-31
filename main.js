@@ -4764,8 +4764,11 @@ ipcMain.handle('print:zpl', async (_, { zpl, printerName, userConfirmed = false 
       speed: Number(settingsRepo.get('barcode_zebra_speed') || 3),
       dpi: Number(settingsRepo.get('barcode_printer_dpi') || 203),
     };
-    await printEngines.printRaw({ printerName: requested, data: printEngines.zplWithSettings(zpl, settings), userData: app.getPath('userData') });
-    logInfo('print', 'Etiquetas ZPL enviadas', { printer: requested });
+    // Zebra EPL (LP 2824 original y similares): la misma etiqueta traducida a EPL2 (igual que VELO Bridge).
+    const language = printEngines.zebraLanguage(requested, '', settingsRepo.get('barcode_zebra_language') || 'auto');
+    const data = language === 'epl' ? printEngines.zplToEpl(zpl, settings) : printEngines.zplWithSettings(zpl, settings);
+    await printEngines.printRaw({ printerName: requested, data, userData: app.getPath('userData') });
+    logInfo('print', `Etiquetas ${language.toUpperCase()} enviadas`, { printer: requested });
     return { ok: true };
   } catch (e) {
     logError('print', 'Etiquetas ZPL', e);
