@@ -60,4 +60,33 @@ function isZebraPrinter(name) {
   return /zebra|zdesigner|\blp ?28\d\d|\btlp ?28\d\d|\bgk42\d|\bgx42\d|\bzd\d{3}|\bgc420/i.test(String(name || ''));
 }
 
-if (typeof module !== 'undefined') module.exports = { zplProductLabels, isZebraPrinter };
+// Etiqueta del equipo en servicio técnico (mismos datos que la etiqueta HTML
+// de la orden): número grande, cliente, teléfono, equipo, IMEI/serial,
+// contraseña si se escribió y, tras una línea, la falla en hasta dos líneas.
+// Las letras se reducen solas si la etiqueta es pequeña (52 × 28 mm cabe).
+function zplServiceLabel(label, size) {
+  const dpmm = Number(size.dpi) === 300 ? 12 : 8;
+  const w = Math.round(Math.max(20, Math.min(110, size.widthMm)) * dpmm);
+  const h = Math.round(Math.max(10, Math.min(300, size.heightMm)) * dpmm);
+  const margin = Math.round(1.5 * dpmm);
+  const inner = w - margin * 2;
+  const rows = [
+    `Cliente: ${label.customerName}`, `Tel: ${label.customerPhone || '-'}`, `Equipo: ${label.deviceDescription}`,
+    `IMEI/Serial: ${label.identifier || '-'}`, ...(label.password ? [`Contraseña: ${label.password}`] : []),
+  ];
+  // Alto disponible repartido: número (1,6 líneas), filas, línea y falla (2 líneas).
+  const units = 1.6 + rows.length + 2;
+  const gap = Math.max(2, Math.round(0.35 * dpmm));
+  const line = Math.max(14, Math.min(Math.round(3.2 * dpmm), Math.floor((h - margin * 2 - gap * (rows.length + 3)) / units)));
+  const big = Math.round(line * 1.6);
+  let y = margin;
+  let body = `^FO${margin},${y}^A0N,${big},${big}^FB${inner},1,0,L,0^FH_^FD${fieldText(label.number, 30)}^FS`;
+  y += big + gap;
+  for (const row of rows) { body += `^FO${margin},${y}^A0N,${line},${line}^FB${inner},1,0,L,0^FH_^FD${fieldText(row, 48)}^FS`; y += line + gap; }
+  body += `^FO${margin},${y}^GB${inner},2,2^FS`;
+  y += 2 + gap;
+  body += `^FO${margin},${y}^A0N,${line},${line}^FB${inner},2,0,L,0^FH_^FDFalla: ${fieldText(label.problem, 90)}^FS`;
+  return `^XA^CI28^PW${w}^LL${h}^LS0${body}^PQ1,0,1,Y^XZ`;
+}
+
+if (typeof module !== 'undefined') module.exports = { zplProductLabels, zplServiceLabel, isZebraPrinter };
