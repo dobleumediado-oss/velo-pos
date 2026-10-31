@@ -64,3 +64,24 @@ No se hizo QA interactivo en vivo (sin impresora real en el entorno de dev, sin 
   fijos cortaba un total de seis cifras.
 - `test:financial` (bloque K2) protege el centrado, el recorte de las
   separadoras, el hueco de la firma y el recuadro de totales.
+
+## Ronda «vista previa = impresión» (después de v1.61.0, sin publicar)
+
+- **Vista previa exacta** (`print:previewPdf`, `_printPreviewShowPdf`): en
+  hojas Carta/A4 la vista previa muestra el PDF que genera el mismo HTML
+  (mismo motor, papel y márgenes) con el número de hojas. Rollos térmicos: vista
+  HTML. La ventana principal habilita solo el visor de PDF (`plugins: true`).
+- **Factura Carta Compacta**: la letra de «Letra y márgenes» es el máximo (sin
+  elegir: 10 pt; multiplicada por «Tamaño de letra en factura»); baja sola hasta
+  7.8 pt para caber en una hoja, midiendo al ancho imprimible y con 12 mm de
+  holgura (la paginación del PDF difiere hasta ~30 px de la pantalla). Columnas
+  al ancho de su contenido; la descripción baja de línea, nunca «…».
+  `test:pdf-compatibility` casos 08/09 (3 y 35 artículos a 13 pt, márgenes 15/20).
+- **Paridad con VELO Bridge**: «Térmica nítida · ESC/POS» (`print_engine =
+  escpos`, cae a Windows si falla), tipo de rollo de la Zebra
+  (`barcode_zebra_tracking`, ajuste de cada PC), «Ficha de la impresora»
+  (`print:printerProfile`: tipo, papel, zona que no imprime, cortador, Zebra).
+- Pendiente en Desktop: rollos guardados (Bridge 0.6.1 ya los tiene), el
+  asistente de calibración con medición de Bridge 0.6.0, y pasar oscuridad /
+  velocidad / lenguaje de la Zebra y el motor térmico a ajustes por PC (hoy son
+  del negocio; moverlos exige migrar el valor a cada terminal).
