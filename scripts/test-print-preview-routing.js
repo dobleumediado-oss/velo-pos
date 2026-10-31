@@ -29,3 +29,13 @@ assert.equal(context.window._printPreviewJob.printOptions.templateId,'a4');
 context._printPreviewSelectPrinter('__route__');
 assert.equal(Object.hasOwn(context.window._printPreviewJob.printOptions,'printerName'),false);
 console.log('✓ La vista previa conserva impresora, documento y selección del diálogo sin heredar la térmica');
+
+// Vista previa = impresión: en hojas se muestra el PDF real del mismo HTML.
+const printSource = fs.readFileSync(require('path').join(__dirname, '../src/js/print.js'), 'utf8');
+const mainSource = fs.readFileSync(require('path').join(__dirname, '../main.js'), 'utf8');
+const preloadSource = fs.readFileSync(require('path').join(__dirname, '../preload.js'), 'utf8');
+assert.ok(printSource.includes('_printPreviewShowPdf(job)') && printSource.includes("previewPdf?.({ html"), 'la vista previa pide el PDF real');
+assert.ok(mainSource.includes("ipcMain.handle('print:previewPdf'") && mainSource.includes("layout.profile !== 'css-fixed'"), 'solo hojas: los rollos siguen en HTML');
+assert.ok(/plugins:\s*true/.test(mainSource), 'la ventana principal habilita el visor de PDF');
+assert.ok(preloadSource.includes("previewPdf:") && preloadSource.includes("'print:previewPdf'"), 'el puente expone print.previewPdf');
+console.log('✓ Vista previa exacta: hojas con el PDF que se imprime; rollos con la vista HTML');

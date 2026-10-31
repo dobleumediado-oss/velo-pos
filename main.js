@@ -542,6 +542,9 @@ function createWindow() {
       zoomFactor:         1.0,
       webSecurity:        true,
       allowRunningInsecureContent: false,
+      // Solo habilita el visor de PDF de Chromium: la vista previa muestra el
+      // PDF real que se imprime (print:previewPdf). Electron no carga otros plugins.
+      plugins:            true,
       preload: path.join(__dirname, 'preload.js'),
       // Señal creada exclusivamente por el proceso principal. El preload no
       // debe inferir app.isPackaged: Electron no expone process.defaultApp de
@@ -4923,6 +4926,42 @@ ipcMain.handle('print:onServer', async (_, {
 
 // Guardar un documento como PDF (mismo HTML que se imprime) con diálogo "Guardar como".
 // Universal: sirve para factura, cotización, conduce, abono, reportes, etc.
+// Vista previa exacta de hojas (Carta/A4): el mismo HTML se convierte en el
+// PDF que sale impreso y la vista previa muestra ese PDF, hoja por hoja. Los
+// rollos térmicos no tienen hojas: siguen con la vista HTML.
+ipcMain.handle('print:previewPdf', async (_, { html } = {}) => {
+  if (!html || !String(html).trim()) return { ok: false, error: 'Sin contenido' };
+  const printTempDir = path.join(app.getPath('userData'), 'print-temp');
+  fs.mkdirSync(printTempDir, { recursive: true });
+  cleanupStaleGeneratedFiles(printTempDir, /^velo_preview_[\w.-]+\.(?:html|pdf)$/i);
+  const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const tmpHtml = path.join(printTempDir, `velo_preview_${id}.html`);
+  const tmpPdf = path.join(printTempDir, `velo_preview_${id}.pdf`);
+  fs.writeFileSync(tmpHtml, html, 'utf8');
+  const win = new BrowserWindow({ show: false, paintWhenInitiallyHidden: true, width: 816, height: 1056, backgroundColor: '#ffffff',
+    webPreferences: { nodeIntegration: false, contextIsolation: true } });
+  try {
+    await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('Tiempo agotado preparando la vista previa')), 12000);
+      win.webContents.once('did-finish-load', () => { clearTimeout(t); resolve(); });
+      win.webContents.once('did-fail-load', (_e, _c, e) => { clearTimeout(t); reject(new Error(e || 'No se pudo cargar')); });
+      win.loadFile(tmpHtml);
+    });
+    const renderInfo = await waitForPdfDocument(win.webContents);
+    const layout = buildPdfOptions(html, renderInfo);
+    if (layout.profile !== 'css-fixed') return { ok: false, reason: 'roll' };
+    const pdfBuf = await win.webContents.printToPDF(layout.options);
+    const validation = validatePdfBuffer(pdfBuf);
+    fs.writeFileSync(tmpPdf, pdfBuf);
+    return { ok: true, url: require('url').pathToFileURL(tmpPdf).href, pages: validation.pageCount };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  } finally {
+    if (!win.isDestroyed()) win.destroy();
+    try { fs.unlinkSync(tmpHtml); } catch {}
+  }
+});
+
 ipcMain.handle('print:toPDF', async (_, { html, suggestedName, open, temporary } = {}) => {
   try {
     if (!html || !String(html).trim()) return { ok: false, error: 'Sin contenido para el PDF' };

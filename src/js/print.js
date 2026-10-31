@@ -1613,6 +1613,7 @@ function _openPrintPreview(html, opts = {}) {
       </select>
       <div class="muted">Esta selección no cambia las impresoras guardadas del negocio.</div>
     </div>
+    <div id="_print_preview_note" class="muted" style="margin:0 0 6px">Preparando la vista exacta…</div>
     <div style="border:1px solid var(--line);border-radius:10px;background:#fff;overflow:hidden">
       <iframe id="_print_preview_frame"
         title="Vista previa de impresión"
@@ -1632,6 +1633,28 @@ function _openPrintPreview(html, opts = {}) {
   const frame = document.getElementById('_print_preview_frame');
   if (frame) frame.srcdoc = _htmlForPreview(html);
   _printPreviewLoadPrinters(job);
+  _printPreviewShowPdf(job);
+}
+
+// Vista previa = impresión: en hojas se muestra el PDF real que genera el mismo
+// HTML (mismo motor, tamaño de papel y márgenes). Mientras se prepara, o si el
+// documento es un rollo térmico, queda la vista HTML.
+async function _printPreviewShowPdf(job) {
+  const note = document.getElementById('_print_preview_note');
+  try {
+    const res = await window.api?.print?.previewPdf?.({ html: _ensureUtf8HTML(job.html) });
+    if (window._printPreviewJob !== job) return;
+    const frame = document.getElementById('_print_preview_frame');
+    if (res?.ok && frame) {
+      frame.removeAttribute('srcdoc');
+      frame.src = `${res.url}#toolbar=0&navpanes=0&view=FitH`;
+      if (note) note.textContent = `Vista exacta: así sale impreso · ${res.pages} hoja${res.pages === 1 ? '' : 's'}.`;
+    } else if (note) {
+      note.textContent = res?.reason === 'roll' ? 'Ticket de rollo: así sale impreso.' : 'Vista aproximada del documento.';
+    }
+  } catch {
+    if (note && window._printPreviewJob === job) note.textContent = 'Vista aproximada del documento.';
+  }
 }
 
 async function _printPreviewLoadPrinters(job) {
