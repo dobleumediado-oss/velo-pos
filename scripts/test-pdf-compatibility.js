@@ -147,6 +147,17 @@ function buildCases() {
       expected: { profile: 'css-fixed', minPages: 1 },
     },
     {
+      name: '06-factura-carta-compacta-35.pdf',
+      html: getPlantilla('carta_compacta').render(sampleSale('factura', 35, 4706), cfg, opts),
+      expected: { profile: 'css-fixed', minPages: 1, maxPages: 1 },
+    },
+    {
+      name: '07-factura-carta-compacta-credito-35.pdf',
+      html: getPlantilla('carta_compacta').render({ ...sampleSale('factura', 35, 4707), payment_method: 'credito', paid_amount: 0, payment_amount: 0 },
+        { ...cfg, bank_accounts: [{ id: 1, bank_name: 'Banreservas', account_subtype: 'corriente', account_number: '960-123456-7', name: 'VELO POS QA' }, { id: 2, bank_name: 'Banco Popular', account_subtype: 'ahorros', account_number: '812-345678-9', name: 'VELO POS QA' }] }, opts),
+      expected: { profile: 'css-fixed', minPages: 1, maxPages: 1 },
+    },
+    {
       name: '05-reporte-largo-multipagina.pdf',
       html: getPlantilla('carta_recibo').render(report, cfg, opts),
       expected: { profile: 'css-fixed', minPages: 2 },
@@ -173,6 +184,8 @@ async function renderCase(win, testCase) {
   const validation = validatePdfBuffer(buffer);
   assert.ok(validation.pageCount >= testCase.expected.minPages,
     `${testCase.name}: se esperaban al menos ${testCase.expected.minPages} páginas`);
+  if (testCase.expected.maxPages) assert.ok(validation.pageCount <= testCase.expected.maxPages,
+    `${testCase.name}: debía caber en ${testCase.expected.maxPages} hoja(s) y salió en ${validation.pageCount}`);
   const saved = writePdfFile(path.join(outputDir, testCase.name), buffer);
   return { testCase, layout, renderInfo, saved };
 }

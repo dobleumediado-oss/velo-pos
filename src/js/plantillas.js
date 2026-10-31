@@ -131,6 +131,18 @@ const PLANTILLAS = [
     render: (sale, cfg, opts) => _scaleFonts(_injectBranding(_boostWeights(renderCartaRecibo(sale, cfg, opts), _weightDelta(cfg)), cfg, sale, 'a4'), _fontScale(cfg)),
   },
   {
+    id:        'carta_compacta',
+    nombre:    'Factura Carta Compacta',
+    tipo:      'carta',
+    icono:     '📄',
+    desc:      'Toda la información de la Moderna, con menos adorno: un artículo por línea y hasta 35 artículos en una sola hoja Carta. Contado, crédito con cuentas bancarias y QR de demostración en su propio espacio.',
+    opciones: {
+      logo: true, rnc: true, ncf: true, mensaje: true,
+      cedula: true, codigoBarra: false,
+    },
+    render: (sale, cfg, opts) => _scaleFonts(_injectBranding(_boostWeights(renderCartaCompacta(sale, cfg, opts), _weightDelta(cfg)), cfg, sale, 'a4'), _fontScale(cfg)),
+  },
+  {
     id:        'carta_formal',
     nombre:    'Factura Formal',
     tipo:      'carta',
@@ -712,7 +724,8 @@ function _injectBranding(html, cfg, sale, variant, widthMm) {
     } else {
       branding = renderInvoiceBranding(cfg, sale, variant, widthMm);
     }
-    const block = `${renderCreditSignatures(sale, variant)}${branding}`;
+    // Una plantilla que ya trae sus firmas de crédito (Carta Compacta) no recibe otras.
+    const block = `${out.includes('data-credit-signatures') ? '' : renderCreditSignatures(sale, variant)}${branding}`;
     if (!block) return out;
     const bodyEnd = out.lastIndexOf('</body>');
     if (bodyEnd === -1) return out + block;
@@ -1499,6 +1512,228 @@ function renderCartaRecibo(sale, cfg, opts) {
         }
 
         // Total de páginas final (ya con el posible auto-ajuste aplicado).
+        var total = Math.max(1, Math.ceil(document.body.scrollHeight / usable));
+        document.querySelectorAll('.a4-tot').forEach(function (e) { e.textContent = String(total); });
+      } catch (e) {}
+    })();
+  </script>
+</body></html>`;
+}
+
+// Plantilla 4b — Factura Carta Compacta
+// La información de la Moderna con menos adorno: cabecera en una franja, una
+// línea por artículo (el nombre largo se acorta con «…») y pie en tres columnas
+// (notas/pago o cuentas · QR de demostración · totales). Caben 35 artículos en
+// una hoja Carta, también a crédito. Medido con Electron: 259 de 264 mm.
+function renderCartaCompacta(sale, cfg, opts) {
+  const _e = opts._estilos || {};
+  const mt = _e.marginTop || '8mm', mb = _e.marginBottom || '7mm', ml = _e.marginLeft || '10mm', mr = _e.marginRight || '10mm';
+  const _autofit = String(cfg?.factura_autoajuste ?? '1') !== '0';
+  const _autofitMin = Math.min(0.95, Math.max(0.6, Number(cfg?.factura_autoajuste_min) || 0.85));
+
+  const isFactura = sale.type === 'factura';
+  const isCotizacion = sale.type === 'cotizacion';
+  const isDevolucion = sale.type === 'devolucion';
+  const isAbono = sale.type === 'abono';
+  const isConduce = sale.type === 'conduce';
+  const isReporte = sale.type === 'reporte';
+  const isExpensePayment = _isExpensePayment(sale);
+  const showMoney = !isConduce && !isReporte;
+  const twoCols = isAbono || isExpensePayment;
+
+  const ncf = _getNcf(sale);
+  const method = (sale.payment_method || 'efectivo').toLowerCase();
+  const credit = isFactura && method === 'credito';
+  const paymentLabel = _pagoDetalleLabel(sale);
+  const showTax = _showItbis(sale);
+  const taxPct = Number(sale.tax_pct != null ? sale.tax_pct : 18);
+  const displaySubtotal = _displaySubtotal(sale);
+  const displayTax = _displayTaxAmt(sale);
+  const displayDiscount = _displayDiscount(sale);
+  const displayTotal = _displayTotal(sale);
+  const paidAmount = _paidAmount(sale);
+  const balanceAfter = _balanceAfterPayment(sale);
+  const receiptNo = _receiptNumber(sale);
+  const statusLabel = _paymentStatusLabel(sale);
+  const paidReceipt = isFactura && statusLabel === 'Pagada' && !sale.adjusted_copy;
+  const docWord = paidReceipt ? 'RECIBO DE PAGO' : _a4DocTitle(sale);
+  const docNum = facturaLabel(sale).replace(/^#/, '');
+  const showCode = _showCode(cfg) && !twoCols;
+  const currency = String(sale.display_currency || 'DOP').toUpperCase();
+
+  // ── Artículos: una línea cada uno ──
+  const items = sale.items || [];
+  const rows = items.map((i, idx) => {
+    const qty = Number(i.qty || 1);
+    const unitFinal = _lineFinalUnit(i, sale);
+    const lineTax = showTax ? _lineTax(i, sale) : 0;
+    const importe = showTax ? _lineImporte(i, sale) : (qty * unitFinal);
+    const name = _esc(_lineName(i));
+    if (twoCols) return `<tr><td class="c">${idx + 1}</td><td title="${name}">${name}</td><td class="r"><b>${_n2(importe)}</b></td></tr>`;
+    return `<tr><td class="c">${idx + 1}</td>${showCode ? `<td class="mono">${_esc(i.product_code || i.code || i.sku || '—')}</td>` : ''}<td title="${name}">${name}</td><td class="r">${qty.toLocaleString('es-DO', { maximumFractionDigits: 3 })}</td>${showMoney ? `<td class="r">${_n2(unitFinal)}</td>${showTax ? `<td class="r">${_n2(lineTax)}</td>` : ''}<td class="r"><b>${_n2(importe)}</b></td>` : ''}</tr>`;
+  }).join('');
+  const totalUnits = items.filter(i => !i._is_charge).reduce((a, i) => a + (Number(i.qty) || 0), 0);
+  const unitsText = Number.isInteger(totalUnits) ? String(totalUnits) : _n2(totalUnits);
+
+  // ── Cliente ──
+  const cliLine1 = [];
+  if (opts.cedula && sale.customer_rnc) cliLine1.push(`${_docKind(sale.customer_rnc).label} ${_esc(sale.customer_rnc)}`);
+  if (sale.customer_phone) cliLine1.push(_customerPhoneLabel(sale));
+  if (sale.customer_email) cliLine1.push(_esc(sale.customer_email));
+  const cliLines = [cliLine1.join(' · ')];
+  if (sale.customer_address) cliLines.push(_esc(sale.customer_address));
+  if (sale.customer_contact_name) cliLines.push(`Solicitado por: ${_esc(sale.customer_contact_name)}${sale.customer_contact_role ? ` · ${_esc(sale.customer_contact_role)}` : ''}`);
+  if (sale.customer_branch_name) cliLines.push(`Entregar en: ${_esc(sale.customer_branch_name)}${sale.customer_branch_address ? ` · ${_esc(sale.customer_branch_address)}` : ''}`);
+
+  // ── Condición ──
+  const condLines = [];
+  if (showMoney && !isCotizacion) {
+    condLines.push(credit && sale.due_date ? `Vence: <b>${_fechaCorta(sale.due_date)}</b> · Moneda: ${currency}` : `Pago: ${_esc(paymentLabel)} · Moneda: ${currency}`);
+    if (method === 'tarjeta' && sale.payment_reference) condLines.push(`Autorización: ${_esc(sale.payment_reference)}`);
+    if (method === 'transferencia' && sale.payment_reference) condLines.push(`Referencia: ${_esc(sale.payment_reference)}`);
+    condLines.push(`Estado: ${_esc(credit && balanceAfter > 0.004 ? 'Pendiente de pago' : statusLabel)}`);
+  } else if (isCotizacion) {
+    condLines.push(`Moneda: ${currency}`);
+    if (sale.due_date) condLines.push(`Válida hasta: ${_fechaCorta(sale.due_date)}`);
+  }
+  if (isAbono && (sale.original_sale_id || sale.applied_invoice)) condLines.push(`Factura aplicada: ${_esc(sale.applied_invoice || facturaLabelOriginal(sale))}`);
+  if (isDevolucion && sale.original_sale_id) condLines.push(`Factura original: ${_esc(facturaLabelOriginal(sale))}`);
+  const condTitle = isCotizacion ? 'Cotización' : !showMoney ? (isConduce ? 'Conduce' : 'Reporte') : credit ? 'Crédito' : _tipoFacturacion(sale);
+  const seller = sale.salesperson_name || sale.cajero || '';
+
+  // ── Dólares (pago o equivalente) ──
+  const usdLines = [];
+  if (showMoney && String(sale.payment_currency || '').toUpperCase() === 'USD' && Number(sale.account_amount) > 0) {
+    usdLines.push(`Pago recibido: US$${Number(sale.account_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · Tasa RD$${Number(sale.exchange_rate || 0).toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} por US$1`);
+  }
+  if (showMoney && String(sale.display_currency || '').toUpperCase() === 'USD' && Number(sale.display_exchange_rate) > 0) {
+    usdLines.push(`Equivalente: US$${Number(sale.display_amount || (displayTotal / Number(sale.display_exchange_rate))).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · Total fiscal RD$${_n2(displayTotal)}`);
+  }
+
+  // ── Cuentas bancarias: todas en crédito; la que recibió el pago en transferencia ──
+  const bankAccounts = Array.isArray(cfg.bank_accounts) ? cfg.bank_accounts : [];
+  const cfgBank = [cfg.biz_bank_name && `<b>${_esc(cfg.biz_bank_name)}</b>`, cfg.biz_bank_account && `Cuenta ${_esc(cfg.biz_bank_account)}`, cfg.biz_bank_holder && _esc(cfg.biz_bank_holder), cfg.biz_bank_iban && `IBAN ${_esc(cfg.biz_bank_iban)}`].filter(Boolean).join(' · ');
+  const accountLine = acc => [acc.bank_name && `<b>${_esc(acc.bank_name)}</b>`, acc.account_number && `${({ ahorros: 'Cta. Ahorros', corriente: 'Cta. Corriente' })[acc.account_subtype] || 'Cuenta'} ${_esc(acc.account_number)}`, acc.currency && acc.currency !== 'DOP' && _esc(acc.currency), acc.name && _esc(acc.name)].filter(Boolean).join(' · ');
+  let accounts = [];
+  if (showMoney && credit) accounts = bankAccounts.map(accountLine).filter(Boolean);
+  else if (showMoney && _esPagoBancario(method)) {
+    const own = sale.financial_account_id ? bankAccounts.find(a => Number(a.id) === Number(sale.financial_account_id)) : null;
+    if (own) accounts = [accountLine(own)];
+  }
+  if (showMoney && !accounts.length && cfgBank && (credit || _esPagoBancario(method))) accounts = [cfgBank];
+
+  // ── Pie: notas · pago o cuentas ──
+  const notes = (sale.adjusted_copy ? '' : sale.notes) || cfg.invoice_notes || '';
+  const payLine = showMoney && !isCotizacion && !credit && !twoCols && paidAmount > 0
+    ? `${_esc(paymentLabel)} · Recibido RD$ ${_n2(paidAmount)}${paidAmount - displayTotal > 0.004 ? ` · Devuelta RD$ ${_n2(paidAmount - displayTotal)}` : ''}` : '';
+  const footLeft = [
+    notes ? `<h4>Notas</h4><p>${_esc(notes)}</p>` : '',
+    accounts.length ? `<h4>${credit ? `Cuentas para transferencias · indique ${_esc(docNum)}` : 'Cuenta de pago'}</h4>${accounts.map(a => `<p>${a}</p>`).join('')}` : '',
+    payLine ? `<h4>Pago</h4><p>${payLine}</p>` : '',
+    usdLines.length ? `<h4>Dólares</h4>${usdLines.map(l => `<p>${l}</p>`).join('')}` : '',
+    sale.transaction_number ? `<p class="muted">Transacción: ${_esc(sale.transaction_number)}</p>` : '',
+    isCotizacion ? '<p class="muted">Esta cotización no tiene valor fiscal.</p>' : '',
+  ].join('');
+
+  // ── Totales ──
+  const tr = (label, value, cls = '') => `<div class="${cls}"><span>${label}</span><span>${value}</span></div>`;
+  let totals = '';
+  if (isExpensePayment) {
+    totals = tr('Total del gasto', _n2(sale.expense_total || displayTotal), 'sub') + tr('Balance anterior', _n2(sale.balance_before || 0), 'sub') + tr('MONTO PAGADO', _n2(paidAmount), 'grand') + tr('Balance pendiente', _n2(balanceAfter), 'sub');
+  } else if (isAbono) {
+    totals = tr('Monto distribuido', _n2(displaySubtotal), 'sub') + tr('ABONO RD$', _n2(displayTotal), 'grand') + tr('Monto recibido', _n2(paidAmount), 'sub') + tr('Balance después del abono', _n2(balanceAfter), 'due');
+  } else if (showMoney) {
+    const tradeIn = Number(sale.trade_in_amount || 0), prepaid = Number(sale.prepaid_amount || 0), charges = Number(sale.additional_charges_total || 0);
+    totals = tr(showTax ? 'Subtotal sin ITBIS' : 'Subtotal', _n2(displaySubtotal), 'sub')
+      + (displayDiscount > 0 ? tr('Descuento', `-${_n2(displayDiscount)}`, 'sub') : '')
+      + (showTax ? tr(`ITBIS ${taxPct} %`, _n2(displayTax), 'sub') : '')
+      + (charges > 0 ? tr('Cargos adicionales', _n2(charges), 'sub') : '')
+      + tr('TOTAL RD$', _n2(displayTotal), 'grand')
+      + (tradeIn > 0 ? tr(`Parte de pago${sale.trade_in_imei ? ` · ${_esc(sale.trade_in_imei)}` : ''}`, `-${_n2(tradeIn)}`, 'sub') : '')
+      + (prepaid > 0 ? tr('Anticipo aplicado', `-${_n2(prepaid)}`, 'sub') : '')
+      + (credit ? (paidAmount > 0.004 ? tr('Abonado', _n2(paidAmount), 'sub') : '') + tr('BALANCE PENDIENTE', _n2(balanceAfter), 'due')
+        : !isCotizacion && (tradeIn > 0 || prepaid > 0 || balanceAfter > 0.004) ? tr('Su pago', _n2(paidAmount), 'sub') + tr('Balance pendiente', _n2(balanceAfter), 'sub') : '');
+  }
+
+  // ── Firmas (las de crédito marcadas para no duplicarlas) ──
+  const sign = (left, right, credMark = false) => `<div class="sign"${credMark ? ' data-credit-signatures="1"' : ''}><div>${left}</div><div>${right}</div></div>`;
+  const signs = credit
+    ? sign(`Firma del cliente · reconozco esta deuda${sale.due_date ? `, pagadera el ${_fechaCorta(sale.due_date)}` : ''}<br><b>${_esc(sale.customer_name || 'Consumidor Final')}</b>`, `Entregado por<br><b>${_esc(sale.cajero || '—')}</b>`, true)
+    : isConduce ? sign('Entregado por', 'Recibido por (nombre, cédula y firma)')
+    : isFactura ? sign('Recibido por (nombre, cédula y firma)', 'Entregado por') : '';
+  const footMsg = (opts.mensaje && cfg.receipt_msg && !isCotizacion) ? _esc(cfg.receipt_msg) : '';
+  const bizLine = [opts.rnc && cfg.biz_rnc ? `RNC ${_esc(cfg.biz_rnc)}` : '', cfg.biz_addr ? _esc(cfg.biz_addr) : '', cfg.biz_phone ? `Tel. ${_esc(cfg.biz_phone)}` : '', cfg.biz_email ? _esc(cfg.biz_email) : '', cfg.biz_web ? _esc(cfg.biz_web) : ''].filter(Boolean).join(' · ');
+  const docFacts = [
+    _showNcf(sale, opts) ? ['NCF', `${_esc(ncf)}${_modNcfSuffix(sale)}`] : null,
+    _showNcf(sale, opts) && sale.ncf_expiry ? ['Vence NCF', _fechaCorta(sale.ncf_expiry)] : null,
+    ['Fecha', `${_fechaCorta(sale.date)}${sale.time ? ` · ${_esc(sale.time)}` : ''}`],
+    receiptNo ? ['Recibo', _esc(receiptNo)] : null,
+  ].filter(Boolean);
+  const head = twoCols ? '<th class="c">#</th><th>' + (isExpensePayment ? 'Concepto del gasto' : 'Factura / concepto') + '</th><th class="r">' + (isExpensePayment ? 'Monto pagado' : 'Monto aplicado') + '</th>'
+    : `<th class="c">#</th>${showCode ? '<th>Código</th>' : ''}<th>Descripción</th><th class="r">Cant.</th>${showMoney ? `<th class="r">Precio</th>${showTax ? '<th class="r">ITBIS</th>' : ''}<th class="r">Importe</th>` : ''}`;
+  const cols = twoCols ? '<col style="width:7mm"><col><col style="width:32mm">'
+    : `<col style="width:7mm">${showCode ? '<col style="width:21mm">' : ''}<col><col style="width:14mm">${showMoney ? `<col style="width:22mm">${showTax ? '<col style="width:20mm">' : ''}<col style="width:25mm">` : ''}`;
+  const colCount = twoCols ? 3 : 3 + (showCode ? 1 : 0) + (showMoney ? (showTax ? 3 : 2) : 0);
+
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
+<style>
+  @page { size: letter; margin: ${mt} ${mr} ${mb} ${ml}; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html,body { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  body { font:7.8pt/1.22 'Helvetica Neue',Arial,sans-serif; color:#111; }
+  .top { display:grid; grid-template-columns:1fr auto; gap:6mm; align-items:start; padding-bottom:2.5mm; border-bottom:1.2pt solid #111; }
+  .biz { display:flex; gap:3mm; align-items:center; min-width:0; }
+  .biz h1 { font-size:13pt; letter-spacing:.2pt; } .biz p { color:#333; font-size:7.6pt; }
+  .doc { text-align:right; } .doc .t { font-size:10.5pt; font-weight:800; letter-spacing:.3pt; } .doc .n { font-size:10pt; font-weight:700; }
+  .doc dl { display:grid; grid-template-columns:auto auto; justify-content:end; gap:0 3mm; margin-top:1mm; font-size:7.6pt; } .doc dt { color:#555; } .doc dd { font-weight:700; }
+  .info { display:grid; grid-template-columns:1.25fr 1fr 1fr; margin:1.8mm 0; border:.6pt solid #bbb; border-radius:1.2mm; }
+  .info > div { padding:1.4mm 2.2mm; min-width:0; } .info > div + div { border-left:.6pt solid #ddd; }
+  .info h4,.notes h4 { font-size:6.4pt; letter-spacing:.5pt; color:#666; text-transform:uppercase; margin-bottom:.4mm; }
+  .info b { font-size:8.4pt; } .info p { font-size:7.4pt; color:#333; }
+  table { width:100%; border-collapse:collapse; table-layout:fixed; }
+  thead { display:table-header-group; }
+  thead th { font-size:6.6pt; letter-spacing:.4pt; text-transform:uppercase; color:#444; text-align:left; padding:1.1mm 1.2mm; border-bottom:.9pt solid #111; background:#f1f3f5; }
+  tbody td { padding:.62mm 1.2mm; border-bottom:.4pt solid #e3e6ea; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:7.6pt; }
+  tbody tr { break-inside:avoid; } tbody tr:nth-child(even) td { background:#fafbfc; }
+  .r { text-align:right; } .c { text-align:center; } .mono { font-family:'SF Mono',Menlo,Consolas,monospace; font-size:7.2pt; color:#444; }
+  .meta { display:flex; justify-content:space-between; font-size:7pt; color:#555; padding:1mm 1.2mm 0; }
+  .foot { display:flex; gap:3mm; margin-top:2mm; align-items:flex-end; break-inside:avoid; page-break-inside:avoid; }
+  .notes { flex:1 1 0; min-width:0; font-size:7.2pt; color:#333; align-self:flex-start; }
+  .brand { flex:0 0 48mm; min-width:0; align-self:flex-end; } .brand:empty { display:none; } .brand > div { max-width:100% !important; } .notes p + h4 { margin-top:1.3mm; } .notes .muted { color:#666; margin-top:1mm; }
+  .tot { flex:0 0 64mm; border:.6pt solid #bbb; border-radius:1.2mm; padding:1.2mm 2.4mm; align-self:flex-start; }
+  .tot div { display:flex; justify-content:space-between; gap:2mm; padding:.45mm 0; font-size:8pt; }
+  .tot .sub { color:#444; font-size:7.4pt; }
+  .tot .grand { border-top:1pt solid #111; margin-top:.8mm; padding-top:1.2mm; font-size:11.5pt; font-weight:800; }
+  .tot .due { border-top:.6pt dashed #888; margin-top:.6mm; padding-top:.8mm; font-size:9pt; font-weight:800; }
+  .sign { display:grid; grid-template-columns:1fr 1fr; gap:14mm; margin-top:5mm; font-size:7pt; color:#444; text-align:center; break-inside:avoid; }
+  .sign div { border-top:.6pt solid #333; padding-top:.8mm; }
+  .msg { margin-top:2mm; text-align:center; font-size:7.2pt; color:#333; }
+  img { max-width:100%; height:auto; }
+</style></head><body>
+  <header class="top">
+    <div class="biz">${_invoiceLogoEnabled(cfg, opts) ? `<div>${buildLogoHeader(cfg.biz_logo, cfg.biz_logo_2, { unit:'px', maxW:110, maxH:42, align:'left', marginBottom:0, scale:_logoScale(cfg) })}</div>` : ''}<div>${_invoiceName(cfg, opts) ? `<h1>${_invoiceName(cfg, opts)}</h1>` : ''}${bizLine ? `<p>${bizLine}</p>` : ''}</div></div>
+    <div class="doc"><div class="t">${docWord}</div>${!isReporte ? `<div class="n">${_esc(docNum)}</div>` : ''}<dl>${docFacts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl></div>
+  </header>
+  ${_adjustedCopyNotice(sale)}
+  ${!isReporte ? `<section class="info">
+    <div><h4>${_partyLabel(sale, true)}</h4><b>${_esc(sale.customer_name || 'Consumidor Final')}</b>${cliLines.filter(Boolean).map(l => `<p>${l}</p>`).join('')}</div>
+    <div><h4>Condición</h4><b>${_esc(condTitle)}${credit && sale.credit_days ? ` · ${Number(sale.credit_days)} días` : ''}</b>${condLines.map(l => `<p>${l}</p>`).join('')}</div>
+    <div><h4>Atendido por</h4><b>${_esc(seller || '—')}</b>${sale.cajero && sale.salesperson_name && sale.cajero !== sale.salesperson_name ? `<p>Cajero: ${_esc(sale.cajero)}</p>` : ''}<p>${items.length} línea${items.length === 1 ? '' : 's'} · ${unitsText} unidades</p></div>
+  </section>` : ''}
+  <table><colgroup>${cols}</colgroup><thead><tr>${head}</tr></thead>
+    <tbody>${rows || `<tr><td colspan="${colCount}" style="color:#999">Sin artículos</td></tr>`}</tbody></table>
+  <div class="meta"><span>${showMoney && showTax ? 'Precios con ITBIS incluido · ' : ''}Página <span class="a4-cur">1</span> de <span class="a4-tot">1</span></span><span>${items.length} artículo${items.length === 1 ? '' : 's'} · ${unitsText} unidades</span></div>
+  ${showMoney || footLeft ? `<section class="foot"><div class="notes">${footLeft}</div>${showMoney ? '<div class="brand"><!--velo-branding-slot--></div>' : ''}${totals ? `<div class="tot">${totals}</div>` : ''}</section>` : ''}
+  ${signs}
+  ${footMsg ? `<p class="msg">${footMsg}</p>` : ''}
+  <script>
+    (function () {
+      try {
+        var usable = 96 * 11 - ((${parseFloat(mt) || 8} + ${parseFloat(mb) || 7}) / 25.4) * 96;
+        if (${_autofit ? 'true' : 'false'}) {
+          var raw = document.body.scrollHeight, pages = raw / usable, target = Math.floor(pages + 1e-3);
+          if (target >= 1 && pages > target) { var scale = (target * usable) / raw; if (scale >= ${_autofitMin} && scale < 1) document.body.style.zoom = scale; }
+        }
         var total = Math.max(1, Math.ceil(document.body.scrollHeight / usable));
         document.querySelectorAll('.a4-tot').forEach(function (e) { e.textContent = String(total); });
       } catch (e) {}
