@@ -4763,6 +4763,8 @@ ipcMain.handle('print:zpl', async (_, { zpl, printerName, userConfirmed = false 
       darkness: Number(settingsRepo.get('barcode_zebra_darkness') || 20),
       speed: Number(settingsRepo.get('barcode_zebra_speed') || 3),
       dpi: Number(settingsRepo.get('barcode_printer_dpi') || 203),
+      // Ancho real del cabezal (LP 2824: 56 mm): una etiqueta más ancha se encoge para no salirse.
+      maxWidthMm: printEngines.zebraProfile(requested).maxWidthMm,
     };
     // Zebra EPL (LP 2824 original y similares): la misma etiqueta traducida a EPL2 (igual que VELO Bridge).
     const language = printEngines.zebraLanguage(requested, '', settingsRepo.get('barcode_zebra_language') || 'auto');
