@@ -112,6 +112,8 @@ function setNamedPaper(html, paperName) {
   );
 }
 
+const compactStyles = { fontSize: '13pt', marginTop: '15mm', marginBottom: '15mm', marginLeft: '20mm', marginRight: '20mm' };
+
 function buildCases() {
   const receipt80 = sampleSale('abono', 8, 4701);
   receipt80.items = [
@@ -157,6 +159,18 @@ function buildCases() {
         { ...cfg, bank_accounts: [{ id: 1, bank_name: 'Banreservas', account_subtype: 'corriente', account_number: '960-123456-7', name: 'VELO POS QA' }, { id: 2, bank_name: 'Banco Popular', account_subtype: 'ahorros', account_number: '812-345678-9', name: 'VELO POS QA' }] }, opts),
       expected: { profile: 'css-fixed', minPages: 1, maxPages: 1 },
     },
+    // «Letra y márgenes» 13 pt, márgenes 15/20 mm (caso real): la letra elegida
+    // es el máximo; con pocos artículos sale grande y con 35 baja sola.
+    {
+      name: '08-factura-carta-compacta-3-letra-13.pdf',
+      html: getPlantilla('carta_compacta').render(sampleSale('factura', 3, 4708), cfg, { ...opts, _estilos: compactStyles }),
+      expected: { profile: 'css-fixed', minPages: 1, maxPages: 1, fontPt: [11, 13], noClip: true },
+    },
+    {
+      name: '09-factura-carta-compacta-35-letra-13.pdf',
+      html: getPlantilla('carta_compacta').render(sampleSale('factura', 35, 4709), cfg, { ...opts, _estilos: compactStyles }),
+      expected: { profile: 'css-fixed', minPages: 1, maxPages: 2, fontPt: [7.8, 9], noClip: true },
+    },
     {
       name: '05-reporte-largo-multipagina.pdf',
       html: getPlantilla('carta_recibo').render(report, cfg, opts),
@@ -179,6 +193,16 @@ async function renderCase(win, testCase) {
   if (testCase.expected.widthInches) {
     assert.ok(Math.abs(layout.options.pageSize.width - testCase.expected.widthInches) < 0.01,
       `${testCase.name}: ancho térmico incorrecto`);
+  }
+  if (testCase.expected.fontPt) {
+    const fontPt = Number(await win.webContents.executeJavaScript("document.documentElement.getAttribute('data-font-pt')"));
+    const [min, max] = testCase.expected.fontPt;
+    assert.ok(fontPt >= min && fontPt <= max, `${testCase.name}: letra ${fontPt} pt fuera de ${min}–${max}`);
+    testCase.fontPt = fontPt;
+  }
+  if (testCase.expected.noClip) {
+    const clipped = await win.webContents.executeJavaScript("[...document.querySelectorAll('td.r, td.mono')].filter(td => td.scrollWidth > td.clientWidth + 1).map(td => td.textContent).slice(0, 5)");
+    assert.deepStrictEqual(clipped, [], `${testCase.name}: montos o códigos cortados`);
   }
   const buffer = await win.webContents.printToPDF(layout.options);
   const validation = validatePdfBuffer(buffer);
@@ -219,6 +243,7 @@ async function run() {
     const firstBox = result.saved.mediaBoxes[0];
     console.log(JSON.stringify({
       file: result.testCase.name,
+      fontPt: result.testCase.fontPt,
       profile: result.layout.profile,
       cssSize: result.layout.cssSize,
       pages: result.saved.pageCount,

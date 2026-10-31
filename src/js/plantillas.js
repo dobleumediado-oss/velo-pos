@@ -1522,7 +1522,7 @@ function renderCartaRecibo(sale, cfg, opts) {
 
 // Plantilla 4b — Factura Carta Compacta
 // La información de la Moderna con menos adorno: cabecera en una franja, una
-// línea por artículo (el nombre largo se acorta con «…») y pie en tres columnas
+// línea por artículo (un nombre largo baja de línea, nunca se oculta) y pie en tres columnas
 // (notas/pago o cuentas · QR de demostración · totales). Caben 35 artículos en
 // una hoja Carta, también a crédito. Medido con Electron: 259 de 264 mm.
 function renderCartaCompacta(sale, cfg, opts) {
@@ -1563,14 +1563,18 @@ function renderCartaCompacta(sale, cfg, opts) {
 
   // ── Artículos: una línea cada uno ──
   const items = sale.items || [];
+  // Largo (en caracteres) de lo más ancho de cada columna: con letra grande
+  // las columnas crecen lo justo y ningún monto se corta con «…».
+  const len = { code: 4, qty: 4, price: 6, tax: 6, importe: 7 };
+  const grow = (key, text) => { len[key] = Math.max(len[key], String(text).length); return text; };
   const rows = items.map((i, idx) => {
     const qty = Number(i.qty || 1);
     const unitFinal = _lineFinalUnit(i, sale);
     const lineTax = showTax ? _lineTax(i, sale) : 0;
     const importe = showTax ? _lineImporte(i, sale) : (qty * unitFinal);
     const name = _esc(_lineName(i));
-    if (twoCols) return `<tr><td class="c">${idx + 1}</td><td title="${name}">${name}</td><td class="r"><b>${_n2(importe)}</b></td></tr>`;
-    return `<tr><td class="c">${idx + 1}</td>${showCode ? `<td class="mono">${_esc(i.product_code || i.code || i.sku || '—')}</td>` : ''}<td title="${name}">${name}</td><td class="r">${qty.toLocaleString('es-DO', { maximumFractionDigits: 3 })}</td>${showMoney ? `<td class="r">${_n2(unitFinal)}</td>${showTax ? `<td class="r">${_n2(lineTax)}</td>` : ''}<td class="r"><b>${_n2(importe)}</b></td>` : ''}</tr>`;
+    if (twoCols) return `<tr><td class="c">${idx + 1}</td><td class="d">${name}</td><td class="r"><b>${grow('importe', _n2(importe))}</b></td></tr>`;
+    return `<tr><td class="c">${idx + 1}</td>${showCode ? `<td class="mono">${_esc(grow('code', i.product_code || i.code || i.sku || '—'))}</td>` : ''}<td class="d">${name}</td><td class="r">${grow('qty', qty.toLocaleString('es-DO', { maximumFractionDigits: 3 }))}</td>${showMoney ? `<td class="r">${grow('price', _n2(unitFinal))}</td>${showTax ? `<td class="r">${grow('tax', _n2(lineTax))}</td>` : ''}<td class="r"><b>${grow('importe', _n2(importe))}</b></td>` : ''}</tr>`;
   }).join('');
   const totalUnits = items.filter(i => !i._is_charge).reduce((a, i) => a + (Number(i.qty) || 0), 0);
   const unitsText = Number.isInteger(totalUnits) ? String(totalUnits) : _n2(totalUnits);
@@ -1671,8 +1675,22 @@ function renderCartaCompacta(sale, cfg, opts) {
   ].filter(Boolean);
   const head = twoCols ? '<th class="c">#</th><th>' + (isExpensePayment ? 'Concepto del gasto' : 'Factura / concepto') + '</th><th class="r">' + (isExpensePayment ? 'Monto pagado' : 'Monto aplicado') + '</th>'
     : `<th class="c">#</th>${showCode ? '<th>Código</th>' : ''}<th>Descripción</th><th class="r">Cant.</th>${showMoney ? `<th class="r">Precio</th>${showTax ? '<th class="r">ITBIS</th>' : ''}<th class="r">Importe</th>` : ''}`;
-  const cols = twoCols ? '<col style="width:7mm"><col><col style="width:32mm">'
-    : `<col style="width:7mm">${showCode ? '<col style="width:21mm">' : ''}<col><col style="width:14mm">${showMoney ? `<col style="width:22mm">${showTax ? '<col style="width:20mm">' : ''}<col style="width:25mm">` : ''}`;
+  // Letra: la de «Letra y márgenes» es el tamaño máximo (sin elegir: 10 pt).
+  // Con pocos artículos sale a ese tamaño; con muchos baja sola hasta 7.8 pt,
+  // el tamaño con el que caben 35 artículos en una hoja Carta.
+  const fsRaw = String(_e.fontSize || '');
+  const fsPt = /px$/i.test(fsRaw) ? parseFloat(fsRaw) * 0.75 : parseFloat(fsRaw);
+  const fontMax = Math.min(13, Math.max(7.8, Number.isFinite(fsPt) ? fsPt : 10));
+  const pageW = 215.9 - (parseFloat(ml) || 10) - (parseFloat(mr) || 10);
+  const digitMm = k => 7.6 * k * 0.3528 * 0.58; // ancho de un dígito Helvetica a 7.6 pt × k
+  const colMm = (chars, k, min) => Math.max(min, chars * digitMm(k) + 3);
+  const colsAt = k => twoCols ? [7, null, colMm(len.importe, k, 32)]
+    : [7, ...(showCode ? [colMm(len.code * 1.2, k, 18)] : []), null, colMm(len.qty, k, 12), ...(showMoney ? [colMm(len.price, k, 18), ...(showTax ? [colMm(len.tax, k, 16)] : []), colMm(len.importe, k, 21)] : [])];
+  const fixedAt = k => colsAt(k).reduce((sum, w) => sum + (w || 0), 0);
+  let kMax = fontMax / 7.8;
+  while (kMax > 1 && pageW - fixedAt(kMax) < 60) kMax = Math.round((kMax - 0.02) * 100) / 100; // la descripción conserva 60 mm
+  kMax = Math.max(1, kMax);
+  const cols = colsAt(kMax).map(w => w ? `<col style="width:${w.toFixed(1)}mm">` : '<col>').join('');
   const colCount = twoCols ? 3 : 3 + (showCode ? 1 : 0) + (showMoney ? (showTax ? 3 : 2) : 0);
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
@@ -1680,34 +1698,39 @@ function renderCartaCompacta(sale, cfg, opts) {
   @page { size: letter; margin: ${mt} ${mr} ${mb} ${ml}; }
   * { box-sizing:border-box; margin:0; padding:0; }
   html,body { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-  body { font:7.8pt/1.22 'Helvetica Neue',Arial,sans-serif; color:#111; }
+  :root { --k:${kMax}; --hk:${(1 + (kMax - 1) * 0.5).toFixed(3)}; }
+  /* En pantalla se mide al ancho imprimible real de la hoja, como sale en papel. */
+  @media screen { body { width:${pageW.toFixed(1)}mm; } }
+  body { font:calc(7.8pt * var(--k))/1.22 'Helvetica Neue',Arial,sans-serif; color:#111; }
   .top { display:grid; grid-template-columns:1fr auto; gap:6mm; align-items:start; padding-bottom:2.5mm; border-bottom:1.2pt solid #111; }
   .biz { display:flex; gap:3mm; align-items:center; min-width:0; }
-  .biz h1 { font-size:13pt; letter-spacing:.2pt; } .biz p { color:#333; font-size:7.6pt; }
-  .doc { text-align:right; } .doc .t { font-size:10.5pt; font-weight:800; letter-spacing:.3pt; } .doc .n { font-size:10pt; font-weight:700; }
-  .doc dl { display:grid; grid-template-columns:auto auto; justify-content:end; gap:0 3mm; margin-top:1mm; font-size:7.6pt; } .doc dt { color:#555; } .doc dd { font-weight:700; }
+  .biz h1 { font-size:calc(13pt * var(--hk)); letter-spacing:.2pt; } .biz p { color:#333; font-size:calc(7.6pt * var(--k)); }
+  .doc { text-align:right; } .doc .t { font-size:calc(10.5pt * var(--hk)); font-weight:800; letter-spacing:.3pt; } .doc .n { font-size:calc(10pt * var(--hk)); font-weight:700; }
+  .doc dl { display:grid; grid-template-columns:auto auto; justify-content:end; gap:0 3mm; margin-top:1mm; font-size:calc(7.6pt * var(--k)); } .doc dt { color:#555; } .doc dd { font-weight:700; }
   .info { display:grid; grid-template-columns:1.25fr 1fr 1fr; margin:1.8mm 0; border:.6pt solid #bbb; border-radius:1.2mm; }
   .info > div { padding:1.4mm 2.2mm; min-width:0; } .info > div + div { border-left:.6pt solid #ddd; }
-  .info h4,.notes h4 { font-size:6.4pt; letter-spacing:.5pt; color:#666; text-transform:uppercase; margin-bottom:.4mm; }
-  .info b { font-size:8.4pt; } .info p { font-size:7.4pt; color:#333; }
+  .info h4,.notes h4 { font-size:calc(6.4pt * var(--k)); letter-spacing:.5pt; color:#666; text-transform:uppercase; margin-bottom:.4mm; }
+  .info b { font-size:calc(8.4pt * var(--k)); } .info p { font-size:calc(7.4pt * var(--k)); color:#333; }
   table { width:100%; border-collapse:collapse; table-layout:fixed; }
   thead { display:table-header-group; }
-  thead th { font-size:6.6pt; letter-spacing:.4pt; text-transform:uppercase; color:#444; text-align:left; padding:1.1mm 1.2mm; border-bottom:.9pt solid #111; background:#f1f3f5; }
-  tbody td { padding:.62mm 1.2mm; border-bottom:.4pt solid #e3e6ea; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:7.6pt; }
+  thead th { font-size:calc(6.6pt * var(--k)); letter-spacing:.4pt; text-transform:uppercase; color:#444; text-align:left; padding:1.1mm 1.2mm; border-bottom:.9pt solid #111; background:#f1f3f5; }
+  tbody td { padding:.62mm 1.2mm; border-bottom:.4pt solid #e3e6ea; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:calc(7.6pt * var(--k)); }
+  /* La descripción completa baja de línea: nunca se oculta con «…». */
+  tbody td.d { white-space:normal; overflow:visible; text-overflow:clip; overflow-wrap:anywhere; }
   tbody tr { break-inside:avoid; } tbody tr:nth-child(even) td { background:#fafbfc; }
-  .r { text-align:right; } .c { text-align:center; } .mono { font-family:'SF Mono',Menlo,Consolas,monospace; font-size:7.2pt; color:#444; }
-  .meta { display:flex; justify-content:space-between; font-size:7pt; color:#555; padding:1mm 1.2mm 0; }
+  .r { text-align:right; } .c { text-align:center; } .mono { font-family:'SF Mono',Menlo,Consolas,monospace; font-size:calc(7.2pt * var(--k)); color:#444; }
+  .meta { display:flex; justify-content:space-between; font-size:calc(7pt * var(--k)); color:#555; padding:1mm 1.2mm 0; }
   .foot { display:flex; gap:3mm; margin-top:2mm; align-items:flex-end; break-inside:avoid; page-break-inside:avoid; }
-  .notes { flex:1 1 0; min-width:0; font-size:7.2pt; color:#333; align-self:flex-start; }
+  .notes { flex:1 1 0; min-width:0; font-size:calc(7.2pt * var(--k)); color:#333; align-self:flex-start; }
   .brand { flex:0 0 48mm; min-width:0; align-self:flex-end; } .brand:empty { display:none; } .brand > div { max-width:100% !important; } .notes p + h4 { margin-top:1.3mm; } .notes .muted { color:#666; margin-top:1mm; }
-  .tot { flex:0 0 64mm; border:.6pt solid #bbb; border-radius:1.2mm; padding:1.2mm 2.4mm; align-self:flex-start; }
-  .tot div { display:flex; justify-content:space-between; gap:2mm; padding:.45mm 0; font-size:8pt; }
-  .tot .sub { color:#444; font-size:7.4pt; }
-  .tot .grand { border-top:1pt solid #111; margin-top:.8mm; padding-top:1.2mm; font-size:11.5pt; font-weight:800; }
-  .tot .due { border-top:.6pt dashed #888; margin-top:.6mm; padding-top:.8mm; font-size:9pt; font-weight:800; }
-  .sign { display:grid; grid-template-columns:1fr 1fr; gap:14mm; margin-top:5mm; font-size:7pt; color:#444; text-align:center; break-inside:avoid; }
+  .tot { flex:0 0 calc(64mm * var(--hk)); border:.6pt solid #bbb; border-radius:1.2mm; padding:1.2mm 2.4mm; align-self:flex-start; }
+  .tot div { display:flex; justify-content:space-between; gap:2mm; padding:.45mm 0; white-space:nowrap; font-size:calc(8pt * var(--k)); }
+  .tot .sub { color:#444; font-size:calc(7.4pt * var(--k)); }
+  .tot .grand { border-top:1pt solid #111; margin-top:.8mm; padding-top:1.2mm; font-size:calc(11.5pt * var(--k)); font-weight:800; }
+  .tot .due { border-top:.6pt dashed #888; margin-top:.6mm; padding-top:.8mm; font-size:calc(9pt * var(--k)); font-weight:800; }
+  .sign { display:grid; grid-template-columns:1fr 1fr; gap:14mm; margin-top:5mm; font-size:calc(7pt * var(--k)); color:#444; text-align:center; break-inside:avoid; }
   .sign div { border-top:.6pt solid #333; padding-top:.8mm; }
-  .msg { margin-top:2mm; text-align:center; font-size:7.2pt; color:#333; }
+  .msg { margin-top:2mm; text-align:center; font-size:calc(7.2pt * var(--k)); color:#333; }
   img { max-width:100%; height:auto; }
 </style></head><body>
   <header class="top">
@@ -1730,6 +1753,18 @@ function renderCartaCompacta(sale, cfg, opts) {
     (function () {
       try {
         var usable = 96 * 11 - ((${parseFloat(mt) || 8} + ${parseFloat(mb) || 7}) / 25.4) * 96;
+        var root = document.documentElement, kMax = ${kMax};
+        var setK = function (k) { root.style.setProperty('--k', String(k)); root.style.setProperty('--hk', String(1 + (k - 1) * 0.5)); };
+        // 12 mm de holgura: la paginación del PDF difiere hasta ~30 px de la
+        // altura medida en pantalla (medido con 35 artículos entre 7.8 y 8.5 pt).
+        var fits = function () { return document.body.scrollHeight <= usable - 45; };
+        // Si a la letra elegida no cabe en una hoja, busca la más grande que sí
+        // cabe (nunca menos de 7.8 pt); si ni así cabe, quedan varias hojas.
+        if (kMax > 1 && !fits()) {
+          setK(1);
+          if (fits()) { var lo = 1, hi = kMax; for (var step = 0; step < 12; step++) { var mid = (lo + hi) / 2; setK(mid); if (fits()) lo = mid; else hi = mid; } setK(lo); }
+        }
+        root.setAttribute('data-font-pt', (7.8 * parseFloat(getComputedStyle(root).getPropertyValue('--k') || '1')).toFixed(1));
         if (${_autofit ? 'true' : 'false'}) {
           var raw = document.body.scrollHeight, pages = raw / usable, target = Math.floor(pages + 1e-3);
           if (target >= 1 && pages > target) { var scale = (target * usable) / raw; if (scale >= ${_autofitMin} && scale < 1) document.body.style.zoom = scale; }
