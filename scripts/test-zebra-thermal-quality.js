@@ -62,6 +62,16 @@ const mainSource = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
 assert.ok(mainSource.includes("!isThermal && settingsRepo.get('print_engine') === 'pdf'"), 'Acrobat solo para hojas: en rollos centra el ticket y deja espacio arriba');
 console.log('  ✓ Exhibir por equipo, vista previa = ZPL, recibo con precio y fecha de entrega, térmicas sin Acrobat');
 
+// VELO POS no tiene inventario por IMEI: Exhibir no ofrece ni imprime capacidad, batería ni IMEI.
+assert.deepEqual(labels.labelFieldsFor('exhibir', undefined, false), ['name', 'brand', 'model', 'price']);
+assert.deepEqual(labels.labelFieldsFor('exhibir', { exhibir: ['name', 'capacity', 'battery', 'imei', 'price'] }, false), ['name', 'price']);
+assert.ok(!labels.labelFieldsAvailable(false).some(([field]) => ['capacity', 'battery', 'imei'].includes(field)));
+assert.equal(labels.labelFieldsAvailable(true).length, labels.LABEL_FIELDS.length);
+assert.equal(labels.labelFieldSource('barcode', false), 'Código de barras del producto');
+const barcodeUi = fs.readFileSync(path.join(__dirname, '../src/js/barcode.js'), 'utf8');
+assert.ok(barcodeUi.includes("window._vertical?.serialized === true") && !barcodeUi.includes('LABEL_FIELDS.map('), 'el diseñador de etiquetas usa los campos de su vertical');
+console.log('  ✓ VELO POS: Exhibir sin capacidad, batería ni IMEI (solo VELO TECH POS)');
+
 assert.deepEqual([...engines.escposFeedCut(4)], [0x1b, 0x64, 4, 0x1d, 0x56, 0x42, 0x00]);
 assert.equal(engines.profileFromCapabilities('POS-80C', 'USB001',
   '<psf:ScoredProperty name="psk:MediaSizeWidth"><psf:Value xsi:type="xsd:integer">80000</psf:Value></psf:ScoredProperty>').escpos, true);

@@ -226,17 +226,29 @@ const DEFAULT_LABEL_FIELDS = {
     exhibir: ['name', 'brand', 'model', 'capacity', 'battery', 'price'],
     custom: ['name', 'barcode', 'code', 'price'],
 };
+// Capacidad, batería e IMEI salen de cada equipo registrado con IMEI: solo
+// existen donde hay inventario por IMEI (VELO TECH POS). En VELO POS no se
+// muestran ni se imprimen, aunque un diseño guardado los traiga.
+const SERIALIZED_LABEL_FIELDS = ['capacity', 'battery', 'imei'];
+const DEFAULT_EXHIBIR_PLAIN = ['name', 'brand', 'model', 'price'];
+function labelFieldsAvailable(serialized = true) {
+    return serialized ? LABEL_FIELDS : LABEL_FIELDS.filter(([field]) => !SERIALIZED_LABEL_FIELDS.includes(field));
+}
+function labelFieldSource(field, serialized = true) {
+    return !serialized && field === 'barcode' ? 'Código de barras del producto' : LABEL_FIELD_SOURCES[field];
+}
 const FIXED_FIELDS = { internal: ['name', 'barcode', 'code', 'price'], provider: ['name', 'barcode', 'code'] };
 const normalizeLabelKind = (value) => {
     const kind = String(value || '').toLowerCase();
     return kind === 'provider' || kind === 'proveedor' ? 'provider' : kind === 'exhibir' ? 'exhibir' : kind === 'custom' || kind === 'personalizado' ? 'custom' : 'internal';
 };
-function labelFieldsFor(kind, chosen) {
+function labelFieldsFor(kind, chosen, serialized = true) {
     if (kind === 'internal' || kind === 'provider')
         return FIXED_FIELDS[kind];
-    const valid = new Set(LABEL_FIELDS.map(([field]) => field));
-    const list = Array.isArray(chosen?.[kind]) ? chosen[kind].filter((field) => valid.has(field)) : DEFAULT_LABEL_FIELDS[kind];
-    return list.length ? list : DEFAULT_LABEL_FIELDS[kind];
+    const valid = new Set(labelFieldsAvailable(serialized).map(([field]) => field));
+    const fallback = !serialized && kind === 'exhibir' ? DEFAULT_EXHIBIR_PLAIN : DEFAULT_LABEL_FIELDS[kind];
+    const list = Array.isArray(chosen?.[kind]) ? chosen[kind].filter((field) => valid.has(field)) : fallback.filter(field => valid.has(field));
+    return list.length ? list : fallback;
 }
 function labelDesignFor(input) {
     const has = (field) => input.fields.includes(field);
@@ -267,7 +279,7 @@ function isZebraPrinter(name) {
   return /zebra|zdesigner|\blp ?28\d\d|\btlp ?28\d\d|\bgk42\d|\bgx42\d|\bzd\d{3}|\bgc420/i.test(String(name || ''));
 }
 
-const api = { labelLayout, serviceLabelLayout, zplFromLayout, zplProductLabels, zplServiceLabel, code128BBars, labelPreviewSvg, labelPreviewDataUrl, LABEL_FIELDS, LABEL_FIELD_SOURCES, DEFAULT_LABEL_FIELDS, normalizeLabelKind, labelFieldsFor, labelDesignFor, labelLogoBox, labelItemsFor, isZebraPrinter };
+const api = { labelLayout, serviceLabelLayout, zplFromLayout, zplProductLabels, zplServiceLabel, code128BBars, labelPreviewSvg, labelPreviewDataUrl, LABEL_FIELDS, LABEL_FIELD_SOURCES, DEFAULT_LABEL_FIELDS, SERIALIZED_LABEL_FIELDS, labelFieldsAvailable, labelFieldSource, normalizeLabelKind, labelFieldsFor, labelDesignFor, labelLogoBox, labelItemsFor, isZebraPrinter };
 if (typeof module !== 'undefined' && module.exports) module.exports = api;
 else Object.assign(root, api);
 })(typeof window !== 'undefined' ? window : globalThis);

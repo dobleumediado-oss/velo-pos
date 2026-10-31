@@ -340,7 +340,7 @@ async function renderBarcode(el, options = {}) {
       <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">
         <input type="radio" name="bc-ltype" value="exhibir" ${_lt === 'exhibir' ? 'checked' : ''}
                onchange="bcSetLabelType(this.value)" style="margin-top:2px"/>
-        <span><b>Exhibir</b><br><span style="color:var(--muted2);font-size:11px">Vitrina: marca, modelo, capacidad, batería y precio; una por equipo</span></span>
+        <span><b>Exhibir</b><br><span style="color:var(--muted2);font-size:11px">${_bcSerialized() ? 'Vitrina: marca, modelo, capacidad, batería y precio; una por equipo' : 'Vitrina: nombre, marca, modelo y precio'}</span></span>
       </label>
       <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">
         <input type="radio" name="bc-ltype" value="personalizado" ${_lt === 'personalizado' ? 'checked' : ''}
@@ -648,22 +648,27 @@ async function _bcSaveSetting(key, value) {
   if (DB?.settings) DB.settings[key] = value;
   return window.api.settings.set({ key, value, requestUserId: user?.id }).catch(() => ({ ok: false }));
 }
+// Capacidad, batería e IMEI solo existen con inventario por IMEI (VELO TECH POS).
+function _bcSerialized() {
+  return window._vertical?.serialized === true;
+}
 function _bcExhibirFields() {
-  return typeof labelFieldsFor === 'function' ? labelFieldsFor('exhibir', { exhibir: _bcState.exhibirFields }) : [];
+  return typeof labelFieldsFor === 'function' ? labelFieldsFor('exhibir', { exhibir: _bcState.exhibirFields }, _bcSerialized()) : [];
 }
 function _bcRenderLabelExtras() {
   const fieldsBox = document.getElementById('bc-exhibir-fields');
   if (fieldsBox) {
     const chosen = _bcExhibirFields();
-    fieldsBox.innerHTML = _bcState.labelType === 'exhibir' && typeof LABEL_FIELDS !== 'undefined' ? `
+    const serialized = _bcSerialized();
+    fieldsBox.innerHTML = _bcState.labelType === 'exhibir' && typeof labelFieldsAvailable === 'function' ? `
       <div style="margin-top:10px;border:1px solid var(--line);border-radius:8px;padding:8px 10px">
         <div style="font-size:10px;font-weight:800;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Qué lleva la etiqueta</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 10px;font-size:12px">
-          ${LABEL_FIELDS.map(([id, title]) => `<label style="display:flex;gap:6px;align-items:flex-start;cursor:pointer">
+          ${labelFieldsAvailable(serialized).map(([id, title]) => `<label style="display:flex;gap:6px;align-items:flex-start;cursor:pointer">
             <input type="checkbox" style="margin-top:2px" ${chosen.includes(id) ? 'checked' : ''} onchange="bcToggleExhibirField('${id}', this.checked)"/>
-            <span><b style="font-weight:600">${_bcEsc(title)}</b><br><span style="font-size:10.5px;color:var(--muted2)">${_bcEsc(LABEL_FIELD_SOURCES[id] || '')}</span></span></label>`).join('')}
+            <span><b style="font-weight:600">${_bcEsc(title)}</b><br><span style="font-size:10.5px;color:var(--muted2)">${_bcEsc(labelFieldSource(id, serialized))}</span></span></label>`).join('')}
         </div>
-        <div style="margin-top:6px;font-size:10.5px;color:var(--muted2)">Capacidad y batería salen de cada equipo registrado con IMEI (compra o recepción). Si un equipo no las tiene, esa línea no sale.</div>
+        ${serialized ? '<div style="margin-top:6px;font-size:10.5px;color:var(--muted2)">Capacidad y batería salen de cada equipo registrado con IMEI (compra o recepción). Si un equipo no las tiene, esa línea no sale.</div>' : ''}
       </div>` : '';
   }
   const logoBox = document.getElementById('bc-logo-box');
@@ -688,7 +693,7 @@ function _bcRenderLabelExtras() {
 }
 async function bcToggleExhibirField(field, on) {
   const current = _bcExhibirFields();
-  const order = LABEL_FIELDS.map(([id]) => id);
+  const order = labelFieldsAvailable(_bcSerialized()).map(([id]) => id);
   _bcState.exhibirFields = order.filter(id => id === field ? on : current.includes(id));
   await _bcSaveSetting('barcode_exhibir_fields', JSON.stringify(_bcState.exhibirFields));
 }
@@ -1510,7 +1515,7 @@ async function _bcLabelPlan(items) {
   const kind = normalizeLabelKind(_bcState.labelType);
   let fields = kind === 'custom'
     ? [d.showName !== false && 'name', d.showBrand && 'brand', d.showBarcode !== false && 'barcode', d.showCode && 'code', d.showPrice && 'price'].filter(Boolean)
-    : labelFieldsFor(kind, { exhibir: _bcState.exhibirFields });
+    : labelFieldsFor(kind, { exhibir: _bcState.exhibirFields }, _bcSerialized());
   // Interno y Proveedor conservan la marca si el diseñador la activó.
   if ((kind === 'internal' || kind === 'provider') && d.showBrand) fields = ['name', 'brand', ...fields.filter(field => field !== 'name')];
   const size = { widthMm: Number(d.labelW) || 50, heightMm: Number(d.labelH) || 25, dpi: Number(DB.settings?.barcode_printer_dpi) || _bcState.printerDpi || 203 };
@@ -1520,7 +1525,7 @@ async function _bcLabelPlan(items) {
   const design = { ...labelDesignFor({ kind, fields, ...size, logo, showLogo: _bcState.labelShowLogo }), customText: kind === 'exhibir' ? '' : (d.customText || '') };
   // Exhibir: una etiqueta por equipo en existencia, con su capacidad y batería.
   const units = [];
-  if (kind === 'exhibir' && window.api?.productUnits?.listForProduct) {
+  if (kind === 'exhibir' && _bcSerialized() && window.api?.productUnits?.listForProduct) {
     for (const { product } of items.filter(item => Number(item.product.serialized))) {
       const res = await window.api.productUnits.listForProduct({ productId: product.id, status: 'en_stock' }).catch(() => null);
       for (const unit of (res?.ok ? res.data : [])) {
