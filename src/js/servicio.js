@@ -233,7 +233,7 @@ async function svcOpenNew() {
     const savedSignature=await window.api.serviceOrders.addEvidence({id:res.data.id,requestUserId:user?.id,evidence_type:'firma_cliente',note:'Firma en recepción',original_name:`firma-recepcion-${res.data.number}.png`,data_url:signature.toDataURL('image/png')});
     if(!savedSignature?.ok)toast('La recepción se creó, pero revisa la firma en Evidencias','w');
     svcPrintPasswords.set(res.data.id,document.getElementById('svc-print-password').value.trim());
-    closeModal();toast(`✓ ${res.data.number} recibida · imprime la constancia y etiqueta`,'ok');await svcLoad();svcOpen(res.data.id);
+    closeModal();toast(`✓ ${res.data.number} recibida · imprime el recibo y la etiqueta`,'ok');await svcLoad();svcOpen(res.data.id);
   };
 }
 
@@ -271,8 +271,9 @@ function svcRenderDetail(order) {
     <div class="tw" style="max-height:220px"><table><thead><tr><th>Tipo</th><th>Descripción</th><th>Cant.</th><th>Precio</th><th>Total</th><th>Garantía</th><th>Inventario</th><th></th></tr></thead><tbody id="svc-items-body">${itemRows()}</tbody></table></div>
     <div class="card" style="padding:10px;margin-top:10px;display:flex;justify-content:space-between;align-items:center"><div><div class="tb">Anticipos recibidos: ${fmt(order.deposit_total||0)}</div><div class="ts">Pendiente por aplicar: ${fmt(order.deposit_active||0)} · Restante estimado: ${fmt(Math.max(0,items.reduce((s,i)=>s+Number(i.qty)*Number(i.unit_price),0)-Number(order.deposit_active||0)))}</div></div>${SVC_ACTIVE.has(order.workflow_status)?'<button class="btn btn-out btn-sm" id="svc-deposit">+ Registrar anticipo</button>':''}</div>
     ${order.workflow_status==='listo'?`<div class="alrt a" style="margin-top:9px"><div class="alrt-dot a"></div><div style="flex:1"><div class="alrt-title">Pendiente de retiro${order.abandoned_at?' · marcado no reclamado':''}</div><div class="alrt-sub">Avisos: ${Number(order.pickup_notice_count)||0} · gracia: ${Number(order.storage_grace_days)||0} días · almacenamiento acumulado: ${fmt(order.storage_fee_accrued||0)}</div></div><button class="btn btn-out btn-sm" id="svc-pickup-notice">Registrar aviso</button>${['admin','superadmin'].includes(user?.role)?'<button class="btn btn-out btn-sm" id="svc-abandoned">No reclamado</button>':''}</div>`:''}
-    <div class="fg" style="margin-top:10px"><label class="lbl">Contraseña para constancia y etiqueta</label><input class="inp" id="svc-detail-print-password" type="text" autocomplete="off" data-uppercase="off" value="${svcEsc(svcPrintPasswords.get(order.id)||'')}" placeholder="Escríbela si deseas que aparezca en las dos impresiones"><div class="ts">Solo permanece durante esta sesión; al volver a abrir VELO deberás escribirla otra vez.</div></div>
-    <div style="display:flex;justify-content:space-between;align-items:center;margin:10px 0"><div><button class="btn btn-out btn-sm" id="svc-print">${svg('printer')} Constancia de recepción</button> <button class="btn btn-out btn-sm" id="svc-label">${svg('printer')} Etiqueta del equipo</button> ${order.sale_id?`<button class="btn btn-out btn-sm" id="svc-invoice">${svg('printer')} Reimprimir factura</button>`:''} <button class="btn btn-out btn-sm" id="svc-evidence">📷 Evidencias (${(order.evidence||[]).length})</button> <button class="btn btn-out btn-sm" id="svc-timer">⏱ ${order.time_entries?.some(entry=>entry.status==='running')?'Detener tiempo':'Iniciar tiempo'}</button> <button class="btn btn-out btn-sm" id="svc-portal">${svg('link')} Portal / QR</button> <button class="btn btn-out btn-sm" id="svc-whatsapp">WhatsApp</button></div><div class="tb">Total: <span id="svc-total">${fmt(items.reduce((s,i)=>s+Number(i.qty)*Number(i.unit_price),0))}</span></div></div>
+    <div class="fg" style="margin-top:10px"><label class="lbl">Contraseña para recibo y etiqueta</label><input class="inp" id="svc-detail-print-password" type="text" autocomplete="off" data-uppercase="off" value="${svcEsc(svcPrintPasswords.get(order.id)||'')}" placeholder="Escríbela si deseas que aparezca en las dos impresiones"><div class="ts">Solo permanece durante esta sesión; al volver a abrir VELO deberás escribirla otra vez.</div></div>
+    <div class="fg" style="margin-top:8px"><label class="lbl">Precio del trabajo (RD$)</label><input class="inp" id="svc-receipt-labor" type="number" min="0" step="0.01" value="${svcLaborTotal(items)||''}" ${editable&&svcLaborLines(items).length<=1?'':'disabled'} placeholder="Opcional; se guarda como la mano de obra y se cobra en Caja"><div class="ts">${!editable?'La orden ya no admite cambios de precio.':svcLaborLines(items).length>1?'Tiene varias líneas de mano de obra; ajústalas en el presupuesto.':'Se guarda en la orden al imprimir el recibo; en Caja se cobra una sola vez.'}</div></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:10px 0"><div><button class="btn btn-out btn-sm" id="svc-print">${svg('printer')} Recibo de servicio técnico</button> <button class="btn btn-out btn-sm" id="svc-label">${svg('printer')} Etiqueta del equipo</button> ${order.sale_id?`<button class="btn btn-out btn-sm" id="svc-invoice">${svg('printer')} Reimprimir factura</button>`:''} <button class="btn btn-out btn-sm" id="svc-evidence">📷 Evidencias (${(order.evidence||[]).length})</button> <button class="btn btn-out btn-sm" id="svc-timer">⏱ ${order.time_entries?.some(entry=>entry.status==='running')?'Detener tiempo':'Iniciar tiempo'}</button> <button class="btn btn-out btn-sm" id="svc-portal">${svg('link')} Portal / QR</button> <button class="btn btn-out btn-sm" id="svc-whatsapp">WhatsApp</button></div><div class="tb">Total: <span id="svc-total">${fmt(items.reduce((s,i)=>s+Number(i.qty)*Number(i.unit_price),0))}</span></div></div>
     ${(order.procurement||[]).length?`<div class="alrt b" style="margin:8px 0"><div class="alrt-dot b"></div><div class="alrt-sub">Abastecimiento: ${order.procurement.map(request=>`${svcEsc(request.description)} · ${svcEsc(request.status)}${request.purchase_order_id?` · OC-${String(request.purchase_order_id).padStart(4,'0')}`:''}`).join('<br>')}</div></div>`:''}
     <details style="margin-top:10px"><summary class="tb" style="cursor:pointer">Historial y versiones</summary><div style="margin-top:10px">${svcTimeline(order.events)}</div>${order.estimates?.length?`<div class="ts" style="margin-top:10px">Presupuestos: ${order.estimates.map(e=>`v${e.version} ${e.status} (${fmt(e.amount)})`).join(' · ')}</div>`:''}</details>
     <div class="modal-foot" style="justify-content:space-between"><div>${SVC_ACTIVE.has(order.workflow_status)?`<button class="btn btn-ghost" id="svc-cancel" style="color:var(--red)">Cancelar orden</button>`:''}</div><div class="flex" style="gap:8px"><button class="btn btn-out" onclick="closeModal()">Cerrar</button>${editable?'<button class="btn btn-out" id="svc-save">Guardar</button>':''}${svcActionButton(order,next)}</div></div>`, 'modal-xl');
@@ -296,7 +297,23 @@ function svcRenderDetail(order) {
   document.getElementById('svc-warranty-return')?.addEventListener('click',()=>svcWarrantyReturn(order));
   document.getElementById('svc-cancel')?.addEventListener('click',async()=>{const reason=await askText('Indica el motivo. Las piezas reservadas serán liberadas.',{title:'Cancelar orden'});if(!reason)return;const res=await window.api.serviceOrders.cancel({id:order.id,reason,requestUserId:user?.id});if(!res?.ok)return toast(res?.error,'err');toast('Orden cancelada','ok');closeModal();await svcLoad();});
   document.getElementById('svc-detail-print-password').oninput=event=>svcPrintPasswords.set(order.id,event.target.value);
-  document.getElementById('svc-print').onclick=()=>svcPrintDocument(order);
+  // Recibo: el precio escrito queda como la única mano de obra de la orden
+  // (misma regla que VELO Web) y se imprime ya guardado.
+  document.getElementById('svc-print').onclick=async()=>{
+    const price=Math.round(Math.max(0,Number(document.getElementById('svc-receipt-labor')?.value)||0)*100)/100;
+    if(editable&&price>0&&price!==svcLaborTotal(items)){
+      const labor=svcLaborLines(items);
+      if(labor.length>1)return toast('La orden tiene varias líneas de mano de obra; ajusta el precio en el presupuesto','w');
+      if(labor[0])Object.assign(labor[0],{qty:1,unit_price:price});
+      else items.push({kind:'mano_obra',description:'Reparación y servicio técnico',qty:1,unit_price:price,warranty_days:0,taxable:1,tax_pct:Number(CFG.itbis)||18});
+      rerender();
+      const saved=await save();
+      if(!saved)return;
+      await svcLoad();
+      return svcPrintDocument(saved);
+    }
+    return svcPrintDocument(order);
+  };
   document.getElementById('svc-label').onclick=()=>svcPrintLabel(order);
   document.getElementById('svc-invoice')?.addEventListener('click',async()=>{
     const sale=await window.api.sales.getById({id:order.sale_id});
@@ -459,7 +476,7 @@ function svcDocumentHtml(order,access={}) {
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     @page{size:A4 portrait;margin:12mm}body{font-family:Arial;color:#172033;margin:0;font-size:11px;line-height:1.35;min-height:273mm}h1{font-size:21px;margin:0}h3{margin:12px 0 6px}.muted{color:#667085}.head{display:flex;justify-content:space-between;border-bottom:2px solid #2368d8;padding-bottom:10px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}.box{border:1px solid #d9dee8;border-radius:7px;padding:9px;break-inside:avoid}.box-title{font-weight:700;margin-bottom:6px}.check-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px}.check-grid.three{grid-template-columns:repeat(3,1fr)}.check-row{display:flex;align-items:flex-start;gap:5px;min-height:15px}.check-box{width:11px;height:11px;line-height:10px;border:1px solid #667085;border-radius:2px;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:900;flex:0 0 11px;margin-top:1px}.check-box.on{border-color:#172033;color:#172033}.observation{margin-top:6px;padding-top:5px;border-top:1px solid #e5e7eb}table{width:100%;border-collapse:collapse}th,td{padding:6px;border-bottom:1px solid #ddd;text-align:left}.sign{display:grid;grid-template-columns:1fr 1fr;gap:50px;margin-top:48px}.line{border-top:1px solid #222;text-align:center;padding-top:5px}.portal{display:flex;gap:14px;align-items:center;margin-top:12px;padding:9px;border:1px solid #d9dee8;border-radius:7px;word-break:break-all}@media print{.box,.portal,.sign{break-inside:avoid}}
   </style></head><body>
-    <div class="head"><div><h1>${svcEsc(biz)}</h1><div class="muted">Constancia de recepción de servicio técnico</div><strong>NO VÁLIDO COMO FACTURA</strong></div><div><strong>${svcEsc(order.number)}</strong><br>${svcEsc(String(order.created_at||'').slice(0,16))}</div></div>
+    <div class="head"><div><h1>${svcEsc(biz)}</h1><div style="font-weight:800;letter-spacing:.04em">RECIBO DE SERVICIO TÉCNICO</div><strong>NO VÁLIDO COMO FACTURA</strong></div><div><strong>${svcEsc(order.number)}</strong><br>${svcEsc(String(order.created_at||'').slice(0,16))}</div></div>
     <div class="grid">
       <div class="box"><strong>Cliente${order.customer_is_occasional?' · solo esta operación':''}</strong><br>${svcEsc(order.customer_name)}<br>Documento: ${svcEsc(order.customer_document||'—')} · Tel.: ${svcEsc(order.customer_phone||'—')}<br>${svcEsc(order.customer_address||'')}${order.customer_email?` · ${svcEsc(order.customer_email)}`:''}</div>
       <div class="box"><strong>Equipo</strong><br>${svcEsc(order.device_desc)} · ${svcEsc([order.brand,order.model].filter(Boolean).join(' '))}<br>IMEI / Serial: ${svcEsc(order.imei||order.serial||'—')}${order.imei2?` · IMEI 2: ${svcEsc(order.imei2)}`:''}<br>Batería: ${order.battery_health==null?'No medida':`${Number(order.battery_health)}%`}${order.battery_capacity_mah?` · ${Number(order.battery_capacity_mah)} mAh`:''}${printPassword?`<br><strong>Contraseña: ${svcEsc(printPassword)}</strong>`:''}</div>
@@ -483,7 +500,24 @@ function svcDocumentHtml(order,access={}) {
 }
 async function svcPrintDocument(order){const res=await window.api.serviceOrders.getPublicAccess({id:order.id,requestUserId:user?.id}),access=res?.ok?res.data:{};const signatures=(order.evidence||[]).filter(item=>item.evidence_type==='firma_cliente');for(const evidence of signatures){const image=await window.api.serviceOrders.getEvidenceData({id:order.id,evidence_id:evidence.id,requestUserId:user?.id});if(!image?.ok)continue;if(String(evidence.note||'').toLowerCase().includes('entrega'))access.pickupSignature=image.data_url;else if(!access.intakeSignature)access.intakeSignature=image.data_url;}printHTML(svcDocumentHtml(order,access),'reporte');}
 
+function svcLaborLines(items){return (items||[]).filter(item=>item.kind==='mano_obra');}
+function svcLaborTotal(items){return Math.round(svcLaborLines(items).reduce((sum,item)=>sum+Number(item.qty||0)*Number(item.unit_price||0),0)*100)/100;}
+// Zebra asignada como etiquetadora: la etiqueta del equipo va en ZPL nativo con
+// el mismo plano que VELO Web (src/js/zpl-labels.js) y el tamaño calibrado.
+function svcZebraLabelTarget(){
+  const name=DB?.settings?.barcode_printer||'';const mode=DB?.settings?.barcode_print_mode||'auto';
+  if(!name||!window.api?.print?.zpl||typeof serviceLabelLayout!=='function'||!(mode==='zpl'||(mode==='auto'&&isZebraPrinter(name))))return null;
+  const calibrations=typeof _bcParseCalibrations==='function'?_bcParseCalibrations(DB.settings.barcode_calibrations):{};
+  const calibration=calibrations[typeof _bcCalibrationKey==='function'?_bcCalibrationKey(name):String(name).toLowerCase()]||{};
+  return {name,widthMm:Number(calibration.labelWidthMm)||52,heightMm:Number(calibration.labelHeightMm)||28,dpi:Number(DB.settings.barcode_printer_dpi)||203};
+}
 async function svcPrintLabel(order){
+  const zebra=svcZebraLabelTarget();
+  if(zebra){
+    const label={number:order.number,customerName:order.customer_name,customerPhone:order.customer_phone||'',deviceDescription:[order.device_desc,order.brand,order.model].filter(Boolean).join(' '),identifier:order.imei||order.serial||'',password:svcPrintPasswords.get(order.id)||'',problem:order.problem||''};
+    const result=await window.api.print.zpl({zpl:zplFromLayout(serviceLabelLayout(label,zebra)),printerName:zebra.name,userConfirmed:true});
+    return result?.ok?toast(`✓ Etiqueta enviada a ${zebra.name} (Zebra nativo)`,'ok'):toast('Error al imprimir: '+(result?.error||'desconocido'),'err');
+  }
   const res=await window.api.serviceOrders.getPublicAccess({id:order.id,requestUserId:user?.id});
   const access=res?.ok?res.data:{},qr=svcQrSvg(access.url||''),printPassword=svcPrintPasswords.get(order.id)||'';
   const html=`<!doctype html><html><head><meta charset="utf-8"><style>@page{size:62mm 40mm;margin:2mm}body{font-family:Arial;margin:0;color:#111;font-size:8pt}.label{width:58mm;height:36mm;overflow:hidden;border:1px solid #111;padding:2mm;box-sizing:border-box}.top{display:flex;justify-content:space-between;gap:2mm}.qr svg{width:18mm!important;height:18mm!important}.no{font-size:13pt;font-weight:900}.strong{font-weight:800}.problem{border-top:1px solid #aaa;margin-top:1mm;padding-top:1mm;line-height:1.15}</style></head><body><div class="label"><div class="top"><div><div class="no">${svcEsc(order.number)}</div><div class="strong">${svcEsc(order.customer_name)}</div><div>Tel.: ${svcEsc(order.customer_phone||'—')}</div><div>${svcEsc([order.device_desc,order.brand,order.model].filter(Boolean).join(' · '))}</div><div>${svcEsc(order.imei||order.serial||'SIN ID')}</div>${printPassword?`<div><strong>Contraseña: ${svcEsc(printPassword)}</strong></div>`:''}</div><div class="qr">${qr}</div></div><div class="problem"><span class="strong">FALLA:</span> ${svcEsc(order.problem)}</div></div></body></html>`;

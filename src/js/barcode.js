@@ -18,6 +18,9 @@ let _bcState = {
   mediaMode: 'gap',
   calibrations: {},
   detection: null,
+  labelLogo: '',          // logo propio de etiquetas (PNG reducido)
+  labelShowLogo: false,
+  exhibirFields: null,    // campos del tipo Exhibir
 };
 
 function _bcCalibrationKey(printerName) {
@@ -234,6 +237,9 @@ async function renderBarcode(el, options = {}) {
     });
   }
   _bcState.labelType  = settings?.barcode_label_type || 'interno';
+  _bcState.labelLogo = settings?.barcode_label_logo || '';
+  _bcState.labelShowLogo = settings?.barcode_label_show_logo === '1' && !!_bcState.labelLogo;
+  try { _bcState.exhibirFields = JSON.parse(settings?.barcode_exhibir_fields || 'null'); } catch { _bcState.exhibirFields = null; }
   _bcState.profileId = settings?.barcode_printer_profile ||
     (settings?.barcode_paper_72mm === '1' ? 'label_generic' : '');
   _bcState.mediaWidthMm = Number(settings?.barcode_media_width_mm) ||
@@ -332,12 +338,20 @@ async function renderBarcode(el, options = {}) {
         <span><b>Proveedor</b><br><span style="color:var(--muted2);font-size:11px">Nombre, código y código de barras (sin precio)</span></span>
       </label>
       <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">
+        <input type="radio" name="bc-ltype" value="exhibir" ${_lt === 'exhibir' ? 'checked' : ''}
+               onchange="bcSetLabelType(this.value)" style="margin-top:2px"/>
+        <span><b>Exhibir</b><br><span style="color:var(--muted2);font-size:11px">Vitrina: marca, modelo, capacidad, batería y precio; una por equipo</span></span>
+      </label>
+      <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">
         <input type="radio" name="bc-ltype" value="personalizado" ${_lt === 'personalizado' ? 'checked' : ''}
                onchange="bcSetLabelType(this.value)" style="margin-top:2px"/>
         <span><b>Personalizado</b><br><span style="color:var(--muted2);font-size:11px">Según el diseño configurado en el panel</span></span>
       </label>
-    </div>`;
+    </div>
+    <div id="bc-exhibir-fields"></div>
+    <div id="bc-logo-box"></div>`;
   rightCol.appendChild(typeCard);
+  setTimeout(_bcRenderLabelExtras, 0);
 
   // Card impresora
   const prCard = h('div', { class: 'card' });
@@ -623,9 +637,80 @@ async function bcSavePrinter(name) {
 // ── Tipo de etiqueta y papel térmico ──────────
 async function bcSetLabelType(v) {
   _bcState.labelType = v;
+  _bcRenderLabelExtras();
   await window.api.settings.set({
     key: 'barcode_label_type', value: v, requestUserId: user?.id
   }).catch(() => {});
+}
+
+// ── Exhibir y logo (mismas reglas que VELO Web: src/js/zpl-labels.js) ──
+async function _bcSaveSetting(key, value) {
+  if (DB?.settings) DB.settings[key] = value;
+  return window.api.settings.set({ key, value, requestUserId: user?.id }).catch(() => ({ ok: false }));
+}
+function _bcExhibirFields() {
+  return typeof labelFieldsFor === 'function' ? labelFieldsFor('exhibir', { exhibir: _bcState.exhibirFields }) : [];
+}
+function _bcRenderLabelExtras() {
+  const fieldsBox = document.getElementById('bc-exhibir-fields');
+  if (fieldsBox) {
+    const chosen = _bcExhibirFields();
+    fieldsBox.innerHTML = _bcState.labelType === 'exhibir' && typeof LABEL_FIELDS !== 'undefined' ? `
+      <div style="margin-top:10px;border:1px solid var(--line);border-radius:8px;padding:8px 10px">
+        <div style="font-size:10px;font-weight:800;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Qué lleva la etiqueta</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 10px;font-size:12px">
+          ${LABEL_FIELDS.map(([id, title]) => `<label style="display:flex;gap:6px;align-items:center;cursor:pointer">
+            <input type="checkbox" ${chosen.includes(id) ? 'checked' : ''} onchange="bcToggleExhibirField('${id}', this.checked)"/> ${_bcEsc(title)}</label>`).join('')}
+        </div>
+      </div>` : '';
+  }
+  const logoBox = document.getElementById('bc-logo-box');
+  if (logoBox) {
+    const logo = _bcState.labelLogo;
+    logoBox.innerHTML = `
+      <div style="display:flex;gap:10px;align-items:flex-start;margin-top:10px;border:1px solid var(--line);border-radius:8px;padding:8px 10px">
+        ${logo ? `<img src="${logo}" alt="Logo de etiquetas" style="width:70px;height:42px;object-fit:contain;border:1px dashed var(--line);border-radius:6px;background:#fff">`
+          : '<div style="width:70px;height:42px;display:grid;place-items:center;border:1px dashed var(--line);border-radius:6px;font-size:10px;color:var(--muted2)">Sin logo</div>'}
+        <div style="display:grid;gap:5px;font-size:12px">
+          <label style="display:flex;gap:6px;align-items:center;font-weight:700;cursor:pointer">
+            <input type="checkbox" ${_bcState.labelShowLogo ? 'checked' : ''} ${logo ? '' : 'disabled'} onchange="bcSetLabelLogoShow(this.checked)"/> Mostrar logo en la etiqueta</label>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-out btn-sm" onclick="document.getElementById('bc-logo-file').click()">${logo ? 'Cambiar logo' : 'Cargar logo'}</button>
+            ${logo ? '<button class="btn btn-out btn-sm" onclick="bcRemoveLabelLogo()">Quitar</button>' : ''}
+          </div>
+          <span style="font-size:10.5px;color:var(--muted2)">Se imprime en blanco y negro puro; un logo oscuro sobre fondo blanco sale mejor.</span>
+        </div>
+        <input type="file" id="bc-logo-file" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden onchange="bcUploadLabelLogo(this)"/>
+      </div>`;
+  }
+}
+async function bcToggleExhibirField(field, on) {
+  const current = _bcExhibirFields();
+  const order = LABEL_FIELDS.map(([id]) => id);
+  _bcState.exhibirFields = order.filter(id => id === field ? on : current.includes(id));
+  await _bcSaveSetting('barcode_exhibir_fields', JSON.stringify(_bcState.exhibirFields));
+}
+async function bcUploadLabelLogo(input) {
+  const file = input.files?.[0]; input.value = '';
+  if (!file) return;
+  try {
+    _bcState.labelLogo = await prepareLabelLogo(file);
+    _bcState.labelShowLogo = true;
+    await _bcSaveSetting('barcode_label_logo', _bcState.labelLogo);
+    await _bcSaveSetting('barcode_label_show_logo', '1');
+    _bcRenderLabelExtras();
+    toast('✓ Logo de etiquetas guardado', 'ok');
+  } catch (e) { toast(e.message || 'No se pudo cargar el logo', 'err'); }
+}
+async function bcSetLabelLogoShow(on) {
+  _bcState.labelShowLogo = !!on && !!_bcState.labelLogo;
+  await _bcSaveSetting('barcode_label_show_logo', _bcState.labelShowLogo ? '1' : '0');
+}
+async function bcRemoveLabelLogo() {
+  _bcState.labelLogo = ''; _bcState.labelShowLogo = false;
+  await _bcSaveSetting('barcode_label_logo', '');
+  await _bcSaveSetting('barcode_label_show_logo', '0');
+  _bcRenderLabelExtras();
 }
 async function bcSetPrinterProfile(id) {
   _bcState.profileId = id || '';
@@ -1314,6 +1399,7 @@ function _bcBuildLabelsHTML(items, options = {}) {
   if (!d) return '';
 
   const profile = options.profile || _bcPrinterProfile();
+  const markup = options.markup || (p => _bcBuildLabelMarkup(p, d, profile));
   const layout = typeof calculateLabelLayout === 'function'
     ? calculateLabelLayout(d, profile)
     : { labelW: d.labelW || 50, labelH: d.labelH || 25, gapMm: d.gapMm || 2,
@@ -1371,7 +1457,7 @@ function _bcBuildLabelsHTML(items, options = {}) {
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
     ${styles}
     </head><body>
-    ${rows.map(row => `<div class="vp-label-row">${row.map(p => _bcBuildLabelMarkup(p, d, profile)).join('\n')}</div>`).join('\n')}
+    ${rows.map(row => `<div class="vp-label-row">${row.map(markup).join('\n')}</div>`).join('\n')}
     ${preview ? `<div class="no-print" style="font:11px Arial,sans-serif;color:#5f6b7a;text-align:center;padding:2px 8px 12px">
       Línea punteada exterior: medio de ${layout.mediaWidthMm} mm · línea interior: etiqueta de ${lw}×${lh} mm
     </div>` : ''}
@@ -1391,6 +1477,7 @@ function _bcOpenPreview() {
     // Si nada seleccionado, preview con el primer producto
     const sample = DB.products[0];
     if (!sample) { toast('No hay productos en inventario', 'w'); return; }
+    if (_bcUsesLabelPlan()) { _bcShowPlanPreview([{ product: sample, qty: 1 }], 'Vista previa — producto de muestra'); return; }
     const html = _bcBuildLabelsHTML([{ product: sample, qty: 1 }], { preview: true });
     _bcShowPreviewModal(html, 'Vista previa — producto de muestra');
     return;
@@ -1400,8 +1487,91 @@ function _bcOpenPreview() {
     qty: _bcState.selected[id] || 1
   })).filter(i => i.product);
 
+  if (_bcUsesLabelPlan()) { _bcShowPlanPreview(items, 'Vista previa'); return; }
   const html = _bcBuildLabelsHTML(items, { preview: true });
   _bcShowPreviewModal(html, 'Vista previa');
+}
+
+// ── Plano único de la etiqueta (igual que VELO Web) ──
+// Con Zebra, la vista previa y el ZPL salen del mismo plano. Sin Zebra, Exhibir
+// y el logo se imprimen como esa misma imagen.
+function _bcZebraActive() {
+  const mode = DB.settings?.barcode_print_mode || 'auto';
+  return !!(window.api?.print?.zpl && typeof zplProductLabels === 'function'
+    && (mode === 'zpl' || (mode === 'auto' && isZebraPrinter(_bcState.selPrinter))));
+}
+function _bcUsesLabelPlan() {
+  return typeof labelLayout === 'function' && (_bcZebraActive() || _bcState.labelType === 'exhibir' || _bcState.labelShowLogo);
+}
+async function _bcLabelPlan(items) {
+  const d = _bcEffectiveDesign();
+  const kind = normalizeLabelKind(_bcState.labelType);
+  let fields = kind === 'custom'
+    ? [d.showName !== false && 'name', d.showBrand && 'brand', d.showBarcode !== false && 'barcode', d.showCode && 'code', d.showPrice && 'price'].filter(Boolean)
+    : labelFieldsFor(kind, { exhibir: _bcState.exhibirFields });
+  // Interno y Proveedor conservan la marca si el diseñador la activó.
+  if ((kind === 'internal' || kind === 'provider') && d.showBrand) fields = ['name', 'brand', ...fields.filter(field => field !== 'name')];
+  const size = { widthMm: Number(d.labelW) || 50, heightMm: Number(d.labelH) || 25, dpi: Number(DB.settings?.barcode_printer_dpi) || _bcState.printerDpi || 203 };
+  const box = labelLogoBox(size);
+  const logo = _bcState.labelShowLogo && _bcState.labelLogo && typeof labelLogoBitmap === 'function'
+    ? await labelLogoBitmap(_bcState.labelLogo, box.maxWidth, box.maxHeight).catch(() => null) : null;
+  const design = { ...labelDesignFor({ kind, fields, ...size, logo, showLogo: _bcState.labelShowLogo }), customText: kind === 'exhibir' ? '' : (d.customText || '') };
+  // Exhibir: una etiqueta por equipo en existencia, con su capacidad y batería.
+  const units = [];
+  if (kind === 'exhibir' && window.api?.productUnits?.listForProduct) {
+    for (const { product } of items.filter(item => Number(item.product.serialized))) {
+      const res = await window.api.productUnits.listForProduct({ productId: product.id, status: 'en_stock' }).catch(() => null);
+      for (const unit of (res?.ok ? res.data : [])) {
+        if (Number(unit.inventory_missing)) continue;
+        units.push({ id: String(unit.id), productId: String(product.id), imei: unit.imei, serial: unit.serial, capacity: unit.capacity || '', batteryHealth: unit.battery_health ?? null });
+      }
+    }
+  }
+  const qty = Object.fromEntries(items.map(item => [String(item.product.id), Math.max(1, Number(item.qty) || 1)]));
+  const labels = labelItemsFor(kind, items.map(({ product: p }) => ({
+    id: String(p.id), sku: p.code || '', name: p.name, price: fmt(p.price),
+    barcode: p.barcode || p.code || String(p.id || '').padStart(8, '0'),
+    brand: p.brand || '', model: p.model || '', serialized: !!Number(p.serialized),
+  })), units, 1).map(item => ({ ...item, quantity: qty[item.productId] || 1 }));
+  return { kind, design, size, labels };
+}
+async function _bcShowPlanPreview(items, title) {
+  let plan;
+  try { plan = await _bcLabelPlan(items); }
+  catch (e) { toast('No se pudo preparar la vista previa: ' + e.message, 'err'); return; }
+  _bcState.plan = plan;
+  _bcState.planExcluded = new Set();
+  const scale = Math.min(7, 330 / plan.size.widthMm);
+  const zebra = _bcZebraActive();
+  const total = plan.labels.reduce((sum, label) => sum + (label.quantity || 1), 0);
+  openModal(`
+    <div class="modal-title">${_bcEsc(title)}</div>
+    <div class="modal-sub">${total} etiqueta(s) · ${plan.size.widthMm} × ${plan.size.heightMm} mm · ${plan.size.dpi} DPI ·
+      ${zebra ? 'así sale en la Zebra: mismo tamaño, posiciones y letra' : 'se imprime esta misma imagen'}</div>
+    <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:14px;background:var(--bg2,#f2f5f8);border-radius:12px;padding:16px;max-height:52vh;overflow:auto">
+      ${plan.labels.map(label => `
+        <figure style="display:grid;justify-items:center;gap:8px;margin:0;border:1px solid var(--line);border-radius:10px;background:#fff;padding:10px">
+          <img src="${labelPreviewDataUrl(labelLayout({ ...label, quantity: 1 }, plan.design))}" alt="Etiqueta" style="width:${(plan.size.widthMm * scale).toFixed(0)}px;max-width:100%;height:auto;border:1px dashed #98a2b3;border-radius:5px">
+          <figcaption style="display:flex;gap:8px;align-items:center;font-size:11px;color:var(--muted2);max-width:330px">
+            ${plan.labels.length > 1 ? `<label style="display:flex;gap:5px;align-items:center;font-weight:700;white-space:nowrap"><input type="checkbox" checked onchange="_bcPlanToggle('${label.key}', this.checked)"/> Imprimir</label>` : ''}
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_bcEsc(label.imei ? `${label.name} · ${label.imei}` : label.name)}${(label.quantity || 1) > 1 ? ` · ${label.quantity} copias` : ''}</span>
+          </figcaption>
+        </figure>`).join('')}
+    </div>
+    <div class="modal-foot" style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;position:sticky;bottom:0;background:var(--card,#fff);padding-top:10px">
+      <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
+      <button class="btn btn-green" onclick="_bcPrintPlanFromPreview()">${svg('print')} ${zebra ? 'Imprimir en la Zebra' : 'Imprimir ahora'}</button>
+    </div>
+  `, 'modal-xl');
+}
+function _bcPlanToggle(key, on) {
+  if (!_bcState.planExcluded) _bcState.planExcluded = new Set();
+  if (on) _bcState.planExcluded.delete(key); else _bcState.planExcluded.add(key);
+}
+function _bcPrintPlanFromPreview() {
+  const keys = (_bcState.plan?.labels || []).map(label => label.key).filter(key => !_bcState.planExcluded?.has(key));
+  closeModal();
+  _bcPrint(keys);
 }
 
 function _bcShowPreviewModal(html, title) {
@@ -1472,7 +1642,7 @@ function _bcShowPreviewModal(html, title) {
 // ══════════════════════════════════════════════
 // IMPRESIÓN
 // ══════════════════════════════════════════════
-async function _bcPrint() {
+async function _bcPrint(keys) {
   if (!_bcState.selPrinter) {
     toast('Selecciona la impresora de etiquetas. Velo no usará la impresora de facturas.', 'w');
     document.getElementById('bc-printer-sel')?.focus();
@@ -1492,32 +1662,52 @@ async function _bcPrint() {
     return;
   }
   const total = items.reduce((s, i) => s + i.qty, 0);
-  // Zebra: etiquetas en ZPL nativo, nítidas como en Zebra Designer (Centro de
-  // impresión → Calidad de impresión). «Imagen» mantiene el método anterior.
-  const zplMode = DB.settings?.barcode_print_mode || 'auto';
-  if (window.api?.print?.zpl && typeof zplProductLabels === 'function'
-      && (zplMode === 'zpl' || (zplMode === 'auto' && isZebraPrinter(_bcState.selPrinter)))) {
+  // Plano único: Zebra en ZPL nativo (nítido como Zebra Designer); sin Zebra,
+  // Exhibir y el logo se imprimen como la misma imagen de la vista previa.
+  if (_bcUsesLabelPlan()) {
     if (!_bcState.printers.some(printer => printer.name === _bcState.selPrinter)) {
       toast('La impresora de etiquetas guardada ya no está instalada. Selecciona otra.', 'err');
       return;
     }
+    let plan;
+    try { plan = Array.isArray(keys) && _bcState.plan ? _bcState.plan : await _bcLabelPlan(items); }
+    catch (e) { toast('No se pudieron preparar las etiquetas: ' + e.message, 'err'); return; }
+    const chosen = plan.labels.filter(label => !Array.isArray(keys) || keys.includes(label.key));
+    if (!chosen.length) { toast('No hay etiquetas marcadas para imprimir', 'w'); return; }
+    const count = chosen.reduce((sum, label) => sum + (label.quantity || 1), 0);
+    if (_bcZebraActive()) {
+      const zpl = chosen.map(label => zplFromLayout(labelLayout(label, plan.design))).join('\n');
+      const result = await window.api.print.zpl({ zpl, printerName: _bcState.selPrinter, userConfirmed: true });
+      if (result?.ok) {
+        toast(`✓ ${count} etiqueta(s) enviadas a la Zebra (nativo)`, 'ok');
+        window.api.audit?.log?.({ action: 'barcode_print', entity: 'products', entityId: null,
+          detail: `${count} etiquetas ZPL (${chosen.length} diseños)`, userId: user?.id }).catch(() => {});
+      } else toast('Error al imprimir: ' + (result?.error || 'desconocido'), 'err');
+      return;
+    }
     const d = _bcEffectiveDesign();
-    const zpl = zplProductLabels(items.map(({ product, qty }) => ({
-      name: product.name, brand: product.brand, code: product.code,
-      barcode: product.barcode || product.code || String(product.id || '').padStart(8, '0'),
-      price: fmt(product.price), quantity: qty,
-    })), {
-      widthMm: Number(d.labelW) || 50, heightMm: Number(d.labelH) || 25,
-      dpi: Number(DB.settings?.barcode_printer_dpi) || 203,
-      showName: d.showName !== false, showBrand: !!d.showBrand, showCode: !!d.showCode,
-      showPrice: !!d.showPrice, showBarcode: d.showBarcode !== false, customText: d.customText || '',
+    const profile = _bcPrinterProfile();
+    const layout = typeof calculateLabelLayout === 'function'
+      ? calculateLabelLayout(d, profile)
+      : { labelW: d.labelW || 50, labelH: d.labelH || 25, mediaWidthMm: profile.widthMm || d.labelW || 50, rowHeightMm: (d.labelH || 25) + (d.gapMm || 2) };
+    if (layout.fitsMedia === false) {
+      toast(`La etiqueta de ${layout.labelW} mm no cabe en los ${layout.availableWidthMm.toFixed(1)} mm útiles del medio. Corrige el diseño o el margen.`, 'err');
+      return;
+    }
+    const html = _bcBuildLabelsHTML(chosen.map(label => ({ product: label, qty: label.quantity || 1 })), {
+      design: d, profile,
+      markup: label => `<div class="vp-label" style="width:${layout.labelW}mm;height:${layout.labelH}mm;overflow:hidden;transform:translate(${Number(d.offsetXmm) || 0}mm, ${Number(d.offsetYmm) || 0}mm);page-break-inside:avoid">
+        <img src="${labelPreviewDataUrl(labelLayout({ ...label, quantity: 1 }, plan.design))}" alt="" style="display:block;width:100%;height:100%"></div>`,
     });
-    const result = await window.api.print.zpl({ zpl, printerName: _bcState.selPrinter, userConfirmed: true });
-    if (result?.ok) {
-      toast(`✓ ${total} etiqueta(s) enviadas a la Zebra (nativo)`, 'ok');
-      window.api.audit?.log?.({ action: 'barcode_print', entity: 'products', entityId: null,
-        detail: `${total} etiquetas ZPL (${items.length} productos)`, userId: user?.id }).catch(() => {});
-    } else toast('Error al imprimir: ' + (result?.error || 'desconocido'), 'err');
+    try {
+      const result = await printLabelBatch({
+        html, printerName: _bcState.selPrinter, widthMm: layout.mediaWidthMm,
+        heightMm: _bcState.mediaMode === 'continuous' ? null : layout.rowHeightMm,
+        userId: user?.id, referenceId: Math.floor(Date.now() / 1000),
+      });
+      if (result?.ok !== false) toast(`✓ ${count} etiqueta(s) enviadas a imprimir`, 'ok');
+      else toast('Error al imprimir: ' + (result?.error || 'desconocido'), 'err');
+    } catch (e) { toast('Error de impresión: ' + e.message, 'err'); }
     return;
   }
   if (!window.JsBarcode && !(await _loadJsBarcode())) {
