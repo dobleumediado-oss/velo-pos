@@ -215,6 +215,13 @@ function labelPreviewSvg(layout) {
 }
 const labelPreviewDataUrl = (layout) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(labelPreviewSvg(layout))}`;
 const LABEL_FIELDS = [['name', 'Nombre'], ['brand', 'Marca'], ['model', 'Modelo'], ['capacity', 'Capacidad'], ['battery', 'Batería'], ['imei', 'IMEI / serie'], ['barcode', 'Código de barras'], ['code', 'Código interno'], ['price', 'Precio']];
+// De dónde sale cada dato de la etiqueta.
+const LABEL_FIELD_SOURCES = {
+    name: 'Nombre del producto', brand: 'Marca del producto', model: 'Modelo del producto',
+    capacity: 'De cada equipo registrado con IMEI', battery: 'Salud de batería de cada equipo con IMEI',
+    imei: 'IMEI o serie de cada equipo', barcode: 'Código de barras del producto (en Exhibir, el IMEI)',
+    code: 'Código interno (SKU) del producto', price: 'Precio de venta del producto',
+};
 const DEFAULT_LABEL_FIELDS = {
     exhibir: ['name', 'brand', 'model', 'capacity', 'battery', 'price'],
     custom: ['name', 'barcode', 'code', 'price'],
@@ -260,7 +267,7 @@ function isZebraPrinter(name) {
   return /zebra|zdesigner|\blp ?28\d\d|\btlp ?28\d\d|\bgk42\d|\bgx42\d|\bzd\d{3}|\bgc420/i.test(String(name || ''));
 }
 
-const api = { labelLayout, serviceLabelLayout, zplFromLayout, zplProductLabels, zplServiceLabel, code128BBars, labelPreviewSvg, labelPreviewDataUrl, LABEL_FIELDS, DEFAULT_LABEL_FIELDS, normalizeLabelKind, labelFieldsFor, labelDesignFor, labelLogoBox, labelItemsFor, isZebraPrinter };
+const api = { labelLayout, serviceLabelLayout, zplFromLayout, zplProductLabels, zplServiceLabel, code128BBars, labelPreviewSvg, labelPreviewDataUrl, LABEL_FIELDS, LABEL_FIELD_SOURCES, DEFAULT_LABEL_FIELDS, normalizeLabelKind, labelFieldsFor, labelDesignFor, labelLogoBox, labelItemsFor, isZebraPrinter };
 if (typeof module !== 'undefined' && module.exports) module.exports = api;
 else Object.assign(root, api);
 })(typeof window !== 'undefined' ? window : globalThis);

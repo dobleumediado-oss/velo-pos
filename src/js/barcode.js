@@ -659,9 +659,11 @@ function _bcRenderLabelExtras() {
       <div style="margin-top:10px;border:1px solid var(--line);border-radius:8px;padding:8px 10px">
         <div style="font-size:10px;font-weight:800;color:var(--muted2);text-transform:uppercase;margin-bottom:6px">Qué lleva la etiqueta</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 10px;font-size:12px">
-          ${LABEL_FIELDS.map(([id, title]) => `<label style="display:flex;gap:6px;align-items:center;cursor:pointer">
-            <input type="checkbox" ${chosen.includes(id) ? 'checked' : ''} onchange="bcToggleExhibirField('${id}', this.checked)"/> ${_bcEsc(title)}</label>`).join('')}
+          ${LABEL_FIELDS.map(([id, title]) => `<label style="display:flex;gap:6px;align-items:flex-start;cursor:pointer">
+            <input type="checkbox" style="margin-top:2px" ${chosen.includes(id) ? 'checked' : ''} onchange="bcToggleExhibirField('${id}', this.checked)"/>
+            <span><b style="font-weight:600">${_bcEsc(title)}</b><br><span style="font-size:10.5px;color:var(--muted2)">${_bcEsc(LABEL_FIELD_SOURCES[id] || '')}</span></span></label>`).join('')}
         </div>
+        <div style="margin-top:6px;font-size:10.5px;color:var(--muted2)">Capacidad y batería salen de cada equipo registrado con IMEI (compra o recepción). Si un equipo no las tiene, esa línea no sale.</div>
       </div>` : '';
   }
   const logoBox = document.getElementById('bc-logo-box');
