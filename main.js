@@ -4725,7 +4725,9 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, printerHeigh
 
     // «PDF con Acrobat» (Centro de impresión): PDF del tamaño exacto del papel
     // impreso por Acrobat, como hacen otros sistemas. Solo con impresora elegida.
-    if (printerName && settingsRepo.get('print_engine') === 'pdf' && await printEngines.findAcrobat()) {
+    // Solo hojas: en rollos térmicos Acrobat centra el ticket en la hoja del
+    // driver y deja espacio arriba (mismo criterio que VELO Bridge).
+    if (printerName && !isThermal && settingsRepo.get('print_engine') === 'pdf' && await printEngines.findAcrobat()) {
       const pageSize = typeof printOptions.pageSize === 'string' ? printOptions.pageSize
         : { width: printOptions.pageSize.width / 25400, height: printOptions.pageSize.height / 25400 };
       const pdf = await printWin.webContents.printToPDF({ pageSize, printBackground: true, landscape: !!printOptions.landscape,

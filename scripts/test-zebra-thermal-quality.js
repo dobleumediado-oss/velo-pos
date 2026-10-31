@@ -50,7 +50,10 @@ const html = fs.readFileSync(path.join(__dirname, '../src/index.html'), 'utf8');
 assert.ok(html.indexOf('js/zpl-labels.js') < html.indexOf('js/label-logo.js') && html.indexOf('js/label-logo.js') < html.indexOf('js/barcode.js'));
 const servicio = fs.readFileSync(path.join(__dirname, '../src/js/servicio.js'), 'utf8');
 assert.ok(servicio.includes('RECIBO DE SERVICIO TÉCNICO') && servicio.includes('svc-receipt-labor') && servicio.includes('serviceLabelLayout('));
-console.log('  ✓ Exhibir por equipo, vista previa = ZPL, logo cargado antes de etiquetas y recibo de servicio técnico');
+assert.ok(servicio.includes('svc-delivery-mode') && servicio.includes('Entrega estimada') && servicio.includes('function svcDeliveryDate'));
+const mainSource = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
+assert.ok(mainSource.includes("!isThermal && settingsRepo.get('print_engine') === 'pdf'"), 'Acrobat solo para hojas: en rollos centra el ticket y deja espacio arriba');
+console.log('  ✓ Exhibir por equipo, vista previa = ZPL, recibo con precio y fecha de entrega, térmicas sin Acrobat');
 
 assert.deepEqual([...engines.escposFeedCut(4)], [0x1b, 0x64, 4, 0x1d, 0x56, 0x42, 0x00]);
 assert.equal(engines.profileFromCapabilities('POS-80C', 'USB001',

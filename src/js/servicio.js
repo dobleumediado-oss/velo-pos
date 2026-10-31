@@ -273,6 +273,7 @@ function svcRenderDetail(order) {
     ${order.workflow_status==='listo'?`<div class="alrt a" style="margin-top:9px"><div class="alrt-dot a"></div><div style="flex:1"><div class="alrt-title">Pendiente de retiro${order.abandoned_at?' · marcado no reclamado':''}</div><div class="alrt-sub">Avisos: ${Number(order.pickup_notice_count)||0} · gracia: ${Number(order.storage_grace_days)||0} días · almacenamiento acumulado: ${fmt(order.storage_fee_accrued||0)}</div></div><button class="btn btn-out btn-sm" id="svc-pickup-notice">Registrar aviso</button>${['admin','superadmin'].includes(user?.role)?'<button class="btn btn-out btn-sm" id="svc-abandoned">No reclamado</button>':''}</div>`:''}
     <div class="fg" style="margin-top:10px"><label class="lbl">Contraseña para recibo y etiqueta</label><input class="inp" id="svc-detail-print-password" type="text" autocomplete="off" data-uppercase="off" value="${svcEsc(svcPrintPasswords.get(order.id)||'')}" placeholder="Escríbela si deseas que aparezca en las dos impresiones"><div class="ts">Solo permanece durante esta sesión; al volver a abrir VELO deberás escribirla otra vez.</div></div>
     <div class="fg" style="margin-top:8px"><label class="lbl">Precio del trabajo (RD$)</label><input class="inp" id="svc-receipt-labor" type="number" min="0" step="0.01" value="${svcLaborTotal(items)||''}" ${editable&&svcLaborLines(items).length<=1?'':'disabled'} placeholder="Opcional; se guarda como la mano de obra y se cobra en Caja"><div class="ts">${!editable?'La orden ya no admite cambios de precio.':svcLaborLines(items).length>1?'Tiene varias líneas de mano de obra; ajústalas en el presupuesto.':'Se guarda en la orden al imprimir el recibo; en Caja se cobra una sola vez.'}</div></div>
+    <div class="fg" style="margin-top:8px"><label class="lbl">Fecha de entrega</label><div style="display:flex;gap:6px"><select class="inp" id="svc-delivery-mode" ${editable?'':'disabled'}>${SVC_DELIVERY_MODES.map(([value,label])=>`<option value="${value}" ${(order.promised_at?'date':'none')===value?'selected':''}>${label}</option>`).join('')}</select><input class="inp" id="svc-delivery-amount" type="number" min="1" max="999" value="1" style="width:90px;display:none" ${editable?'':'disabled'}><input class="inp" id="svc-delivery-date" type="datetime-local" value="${svcEsc(svcLocalInput(order.promised_at))}" style="${order.promised_at?'':'display:none'}" ${editable?'':'disabled'}></div><div class="ts" id="svc-delivery-preview" style="color:var(--blue,#1d4ed8);font-weight:700">${svcEsc(svcFormatDelivery(order.promised_at))}</div></div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin:10px 0"><div><button class="btn btn-out btn-sm" id="svc-print">${svg('printer')} Recibo de servicio técnico</button> <button class="btn btn-out btn-sm" id="svc-label">${svg('printer')} Etiqueta del equipo</button> ${order.sale_id?`<button class="btn btn-out btn-sm" id="svc-invoice">${svg('printer')} Reimprimir factura</button>`:''} <button class="btn btn-out btn-sm" id="svc-evidence">📷 Evidencias (${(order.evidence||[]).length})</button> <button class="btn btn-out btn-sm" id="svc-timer">⏱ ${order.time_entries?.some(entry=>entry.status==='running')?'Detener tiempo':'Iniciar tiempo'}</button> <button class="btn btn-out btn-sm" id="svc-portal">${svg('link')} Portal / QR</button> <button class="btn btn-out btn-sm" id="svc-whatsapp">WhatsApp</button></div><div class="tb">Total: <span id="svc-total">${fmt(items.reduce((s,i)=>s+Number(i.qty)*Number(i.unit_price),0))}</span></div></div>
     ${(order.procurement||[]).length?`<div class="alrt b" style="margin:8px 0"><div class="alrt-dot b"></div><div class="alrt-sub">Abastecimiento: ${order.procurement.map(request=>`${svcEsc(request.description)} · ${svcEsc(request.status)}${request.purchase_order_id?` · OC-${String(request.purchase_order_id).padStart(4,'0')}`:''}`).join('<br>')}</div></div>`:''}
     <details style="margin-top:10px"><summary class="tb" style="cursor:pointer">Historial y versiones</summary><div style="margin-top:10px">${svcTimeline(order.events)}</div>${order.estimates?.length?`<div class="ts" style="margin-top:10px">Presupuestos: ${order.estimates.map(e=>`v${e.version} ${e.status} (${fmt(e.amount)})`).join(' · ')}</div>`:''}</details>
@@ -285,7 +286,7 @@ function svcRenderDetail(order) {
     document.getElementById('svc-add-labor').onclick=()=>{const description=document.getElementById('svc-labor-desc').value.trim();if(!description)return toast('Describe la mano de obra','w');items.push({kind:'mano_obra',description,qty:Math.max(1,Number(document.getElementById('svc-labor-qty').value)||1),unit_price:Math.max(0,Number(document.getElementById('svc-labor-price').value)||0),warranty_days:Math.max(0,Number(document.getElementById('svc-labor-warranty').value)||0),taxable:1,tax_pct:Number(CFG.itbis)||18});rerender();};
   }
   rerender();
-  const save=async()=>{if(!editable)return order;const res=await window.api.serviceOrders.update({id:order.id,requestUserId:user?.id,data:{diagnosis:document.getElementById('svc-diagnosis').value.trim(),notes:document.getElementById('svc-detail-notes').value.trim(),service_technician_id:Number(document.getElementById('svc-technician').value)||null,items}});if(!res?.ok){toast(res?.error||'No se pudo guardar','err');return null;}order=res.data;return order;};
+  const save=async()=>{if(!editable)return order;const promised=svcDeliveryFromForm(order);const res=await window.api.serviceOrders.update({id:order.id,requestUserId:user?.id,data:{diagnosis:document.getElementById('svc-diagnosis').value.trim(),notes:document.getElementById('svc-detail-notes').value.trim(),service_technician_id:Number(document.getElementById('svc-technician').value)||null,items,...(promised?{promised_at:svcLocalInput(promised)}:{})}});if(!res?.ok){toast(res?.error||'No se pudo guardar','err');return null;}order=res.data;return order;};
   document.getElementById('svc-save')?.addEventListener('click',async()=>{const saved=await save();if(saved){toast('✓ Orden guardada','ok');svcRenderDetail(saved);await svcLoad();}});
   document.getElementById('svc-next')?.addEventListener('click',async()=>{const saved=await save();if(!saved)return;const res=await window.api.serviceOrders.advance({id:order.id,status:next,requestUserId:user?.id});if(!res?.ok)return toast(res?.error||'No se pudo avanzar','err');toast(`✓ ${SVC_LABEL[res.data.workflow_status]}`,'ok');await svcLoad();svcRenderDetail(res.data);});
   document.getElementById('svc-approve')?.addEventListener('click',()=>svcOpenDecision(order,true));
@@ -297,16 +298,24 @@ function svcRenderDetail(order) {
   document.getElementById('svc-warranty-return')?.addEventListener('click',()=>svcWarrantyReturn(order));
   document.getElementById('svc-cancel')?.addEventListener('click',async()=>{const reason=await askText('Indica el motivo. Las piezas reservadas serán liberadas.',{title:'Cancelar orden'});if(!reason)return;const res=await window.api.serviceOrders.cancel({id:order.id,reason,requestUserId:user?.id});if(!res?.ok)return toast(res?.error,'err');toast('Orden cancelada','ok');closeModal();await svcLoad();});
   document.getElementById('svc-detail-print-password').oninput=event=>svcPrintPasswords.set(order.id,event.target.value);
+  const refreshDelivery=()=>{const mode=document.getElementById('svc-delivery-mode').value;document.getElementById('svc-delivery-amount').style.display=['hours','days','weeks'].includes(mode)?'':'none';const dateInput=document.getElementById('svc-delivery-date');dateInput.style.display=mode==='date'?'':'none';if(mode==='date'&&!dateInput.value)dateInput.value=svcLocalInput(new Date(Date.now()+86400000));document.getElementById('svc-delivery-preview').textContent=mode==='none'?'':(svcFormatDelivery(svcDeliveryFromForm(order))||'Elige la fecha');};
+  ['svc-delivery-mode','svc-delivery-amount','svc-delivery-date'].forEach(id=>document.getElementById(id)?.addEventListener('input',refreshDelivery));
+  document.getElementById('svc-delivery-mode')?.addEventListener('change',refreshDelivery);
   // Recibo: el precio escrito queda como la única mano de obra de la orden
   // (misma regla que VELO Web) y se imprime ya guardado.
   document.getElementById('svc-print').onclick=async()=>{
     const price=Math.round(Math.max(0,Number(document.getElementById('svc-receipt-labor')?.value)||0)*100)/100;
-    if(editable&&price>0&&price!==svcLaborTotal(items)){
-      const labor=svcLaborLines(items);
-      if(labor.length>1)return toast('La orden tiene varias líneas de mano de obra; ajusta el precio en el presupuesto','w');
-      if(labor[0])Object.assign(labor[0],{qty:1,unit_price:price});
-      else items.push({kind:'mano_obra',description:'Reparación y servicio técnico',qty:1,unit_price:price,warranty_days:0,taxable:1,tax_pct:Number(CFG.itbis)||18});
-      rerender();
+    const priceChanged=price>0&&price!==svcLaborTotal(items);
+    const promised=svcDeliveryFromForm(order);
+    const deliveryChanged=Boolean(promised)&&svcLocalInput(promised)!==svcLocalInput(order.promised_at);
+    if(editable&&(priceChanged||deliveryChanged)){
+      if(priceChanged){
+        const labor=svcLaborLines(items);
+        if(labor.length>1)return toast('La orden tiene varias líneas de mano de obra; ajusta el precio en el presupuesto','w');
+        if(labor[0])Object.assign(labor[0],{qty:1,unit_price:price});
+        else items.push({kind:'mano_obra',description:'Reparación y servicio técnico',qty:1,unit_price:price,warranty_days:0,taxable:1,tax_pct:Number(CFG.itbis)||18});
+        rerender();
+      }
       const saved=await save();
       if(!saved)return;
       await svcLoad();
@@ -476,7 +485,7 @@ function svcDocumentHtml(order,access={}) {
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     @page{size:A4 portrait;margin:12mm}body{font-family:Arial;color:#172033;margin:0;font-size:11px;line-height:1.35;min-height:273mm}h1{font-size:21px;margin:0}h3{margin:12px 0 6px}.muted{color:#667085}.head{display:flex;justify-content:space-between;border-bottom:2px solid #2368d8;padding-bottom:10px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}.box{border:1px solid #d9dee8;border-radius:7px;padding:9px;break-inside:avoid}.box-title{font-weight:700;margin-bottom:6px}.check-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px}.check-grid.three{grid-template-columns:repeat(3,1fr)}.check-row{display:flex;align-items:flex-start;gap:5px;min-height:15px}.check-box{width:11px;height:11px;line-height:10px;border:1px solid #667085;border-radius:2px;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:900;flex:0 0 11px;margin-top:1px}.check-box.on{border-color:#172033;color:#172033}.observation{margin-top:6px;padding-top:5px;border-top:1px solid #e5e7eb}table{width:100%;border-collapse:collapse}th,td{padding:6px;border-bottom:1px solid #ddd;text-align:left}.sign{display:grid;grid-template-columns:1fr 1fr;gap:50px;margin-top:48px}.line{border-top:1px solid #222;text-align:center;padding-top:5px}.portal{display:flex;gap:14px;align-items:center;margin-top:12px;padding:9px;border:1px solid #d9dee8;border-radius:7px;word-break:break-all}@media print{.box,.portal,.sign{break-inside:avoid}}
   </style></head><body>
-    <div class="head"><div><h1>${svcEsc(biz)}</h1><div style="font-weight:800;letter-spacing:.04em">RECIBO DE SERVICIO TÉCNICO</div><strong>NO VÁLIDO COMO FACTURA</strong></div><div><strong>${svcEsc(order.number)}</strong><br>${svcEsc(String(order.created_at||'').slice(0,16))}</div></div>
+    <div class="head"><div><h1>${svcEsc(biz)}</h1><div style="font-weight:800;letter-spacing:.04em">RECIBO DE SERVICIO TÉCNICO</div><strong>NO VÁLIDO COMO FACTURA</strong></div><div><strong>${svcEsc(order.number)}</strong><br>${svcEsc(String(order.created_at||'').slice(0,16))}${order.promised_at?`<br><strong>Entrega estimada: ${svcEsc(svcFormatDelivery(order.promised_at))}</strong>`:''}</div></div>
     <div class="grid">
       <div class="box"><strong>Cliente${order.customer_is_occasional?' · solo esta operación':''}</strong><br>${svcEsc(order.customer_name)}<br>Documento: ${svcEsc(order.customer_document||'—')} · Tel.: ${svcEsc(order.customer_phone||'—')}<br>${svcEsc(order.customer_address||'')}${order.customer_email?` · ${svcEsc(order.customer_email)}`:''}</div>
       <div class="box"><strong>Equipo</strong><br>${svcEsc(order.device_desc)} · ${svcEsc([order.brand,order.model].filter(Boolean).join(' '))}<br>IMEI / Serial: ${svcEsc(order.imei||order.serial||'—')}${order.imei2?` · IMEI 2: ${svcEsc(order.imei2)}`:''}<br>Batería: ${order.battery_health==null?'No medida':`${Number(order.battery_health)}%`}${order.battery_capacity_mah?` · ${Number(order.battery_capacity_mah)} mAh`:''}${printPassword?`<br><strong>Contraseña: ${svcEsc(printPassword)}</strong>`:''}</div>
@@ -500,6 +509,23 @@ function svcDocumentHtml(order,access={}) {
 }
 async function svcPrintDocument(order){const res=await window.api.serviceOrders.getPublicAccess({id:order.id,requestUserId:user?.id}),access=res?.ok?res.data:{};const signatures=(order.evidence||[]).filter(item=>item.evidence_type==='firma_cliente');for(const evidence of signatures){const image=await window.api.serviceOrders.getEvidenceData({id:order.id,evidence_id:evidence.id,requestUserId:user?.id});if(!image?.ok)continue;if(String(evidence.note||'').toLowerCase().includes('entrega'))access.pickupSignature=image.data_url;else if(!access.intakeSignature)access.intakeSignature=image.data_url;}printHTML(svcDocumentHtml(order,access),'reporte');}
 
+// Fecha de entrega: en horas, días o semanas desde la recepción, o una fecha
+// exacta (misma regla que VELO Web, apps/web/src/lib/service-delivery.ts).
+const SVC_DELIVERY_MODES=[['none','Sin fecha'],['hours','En horas'],['days','En días'],['weeks','En semanas'],['date','Fecha y hora']];
+function svcDeliveryDate(base,mode,amount,custom){
+  if(mode==='none')return null;
+  if(mode==='date'){const date=custom?new Date(custom):null;return date&&Number.isFinite(date.getTime())?date:null;}
+  const count=Math.max(1,Math.min(999,Math.round(Number(amount)||0)));const date=new Date(base.getTime());
+  if(mode==='hours')date.setHours(date.getHours()+count);else date.setDate(date.getDate()+count*(mode==='weeks'?7:1));
+  return date;
+}
+function svcDeliveryFromForm(order){
+  const mode=document.getElementById('svc-delivery-mode')?.value||'none';
+  const base=new Date(String(order.created_at||'').replace(' ','T'));
+  return svcDeliveryDate(Number.isFinite(base.getTime())?base:new Date(),mode,document.getElementById('svc-delivery-amount')?.value,document.getElementById('svc-delivery-date')?.value);
+}
+function svcLocalInput(value){if(!value)return '';const date=new Date(typeof value==='string'?value.replace(' ','T'):value);if(!Number.isFinite(date.getTime()))return '';const pad=number=>String(number).padStart(2,'0');return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;}
+function svcFormatDelivery(value){if(!value)return '';const date=new Date(typeof value==='string'?value.replace(' ','T'):value);return Number.isFinite(date.getTime())?date.toLocaleString('es-DO',{weekday:'short',day:'2-digit',month:'2-digit',year:'numeric',hour:'numeric',minute:'2-digit'}):'';}
 function svcLaborLines(items){return (items||[]).filter(item=>item.kind==='mano_obra');}
 function svcLaborTotal(items){return Math.round(svcLaborLines(items).reduce((sum,item)=>sum+Number(item.qty||0)*Number(item.unit_price||0),0)*100)/100;}
 // Zebra asignada como etiquetadora: la etiqueta del equipo va en ZPL nativo con

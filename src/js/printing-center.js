@@ -670,7 +670,7 @@ function renderInvoiceAppearanceCards(container, { settings, onSaved } = {}) {
     const qualityCard=h('div',{class:'card',style:'margin-top:16px'});
     qualityCard.innerHTML=`<div class="card-title mb8">Calidad de impresión</div>
       <div class="g2">
-        <div class="fg"><label class="lbl">Facturas y tickets</label><select class="inp" data-q="print_engine"><option value="directo">Directo · resolución de la impresora</option><option value="pdf">PDF con Acrobat · máxima nitidez</option></select></div>
+        <div class="fg"><label class="lbl">Facturas y tickets</label><select class="inp" data-q="print_engine"><option value="directo">Directo · resolución de la impresora</option><option value="pdf">PDF con Acrobat · solo hojas Carta/A4</option></select></div>
         <div class="fg"><label class="lbl">Resolución del rollo térmico</label><select class="inp" data-q="printer_dpi"><option value="203">203 DPI (8 puntos/mm)</option><option value="300">300 DPI (12 puntos/mm)</option></select></div>
         <div class="fg"><label class="lbl">Al terminar el ticket</label><select class="inp" data-q="thermal_cut_mode"><option value="driver">Lo hace el driver</option><option value="auto">Automático (térmicas)</option><option value="bridge">Avanzar y cortar siempre</option><option value="none">No cortar</option></select></div>
         <div class="fg"><label class="lbl">Avance antes del corte (líneas)</label><input class="inp" type="number" min="0" max="15" data-q="thermal_feed_lines"></div>
