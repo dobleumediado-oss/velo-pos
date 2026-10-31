@@ -300,6 +300,7 @@ const api = {
     onServer:     (data)      => ipcRenderer.invoke('print:onServer', data),
     toPDF:        (data)      => ipcRenderer.invoke('print:toPDF', data),
     previewPdf:   (data)      => ipcRenderer.invoke('print:previewPdf', data),
+    printerProfile: (data)    => ipcRenderer.invoke('print:printerProfile', data),
     getPrinters:  ()          => ipcRenderer.invoke('print:getPrinters'),
     savePrinter:  (data)      => ipcRenderer.invoke('print:savePrinter', data),
     saveConfig:   (data)      => ipcRenderer.invoke('print:saveConfig', data),

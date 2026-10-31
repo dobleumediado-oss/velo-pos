@@ -76,3 +76,12 @@ assert.deepEqual([...engines.escposFeedCut(4)], [0x1b, 0x64, 4, 0x1d, 0x56, 0x42
 assert.equal(engines.profileFromCapabilities('POS-80C', 'USB001',
   '<psf:ScoredProperty name="psk:MediaSizeWidth"><psf:Value xsi:type="xsd:integer">80000</psf:Value></psf:ScoredProperty>').escpos, true);
 console.log('  ✓ avance y corte ESC/POS y detección de térmica de rollo');
+
+// Paridad con VELO Bridge: área imprimible del driver, ESC/POS nítido, tipo de rollo por PC.
+assert.deepEqual(engines.profileFromCapabilities('HP LaserJet', 'USB001', '', { width: 816, height: 1056 }, '', { x: 16, y: 16, w: 784, h: 1024 }).hardMarginsMm, { left: 4.2, top: 4.2, right: 4.3, bottom: 4.3 });
+assert.equal(engines.profileFromCapabilities('HP LaserJet', 'USB001', '', null, '', { x: 16, y: 16, w: 784, h: 1024 }).hardMarginsMm, null);
+const mainParity = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
+assert.ok(mainParity.includes("settingsRepo.get('print_engine') === 'escpos'") && mainParity.includes('printEngines.printEscpos('), 'Desktop imprime tickets en ESC/POS como Bridge');
+assert.ok(mainParity.includes("settingsRepo.get('barcode_zebra_tracking')") && mainParity.includes("ipcMain.handle('print:printerProfile'"), 'tipo de rollo y ficha de impresora');
+assert.ok(require('../src/main/business-context').isDeviceSettingKey('barcode_zebra_tracking'), 'el rollo puesto es de cada PC');
+console.log('  ✓ paridad con Bridge: zona imprimible del driver, ESC/POS nítido y tipo de rollo por PC');

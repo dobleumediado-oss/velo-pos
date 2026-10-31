@@ -4734,6 +4734,22 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, printerHeigh
 
     logInfo('print', `Imprimiendo`, { printer: printerName || '(dialogo)', thermal: isThermal, paperWidth, height: isThermal ? thermalHeight : (sheetPage ? `${sheetPage.pageSize}${sheetPage.landscape ? ' horizontal' : ''}` : 'letter') });
 
+    // «Térmica nítida · ESC/POS» (Centro de impresión, igual que VELO Bridge): el
+    // ticket como imagen 1-bit al ancho del cabezal, sin reescalar en Windows.
+    // Si la impresora rechaza el envío directo, sale por Windows como antes.
+    if (printerName && isThermal && !printEngines.isZebra(printerName) && settingsRepo.get('print_engine') === 'escpos') {
+      try {
+        const cutMode = settingsRepo.get('thermal_cut_mode') || 'driver';
+        await printEngines.printEscpos({ html, printerName, copies: printOptions.copies, media: String(printerWidth),
+          settings: { dpi: printOptions.dpi?.horizontal || 203, feedLines: Number(settingsRepo.get('thermal_feed_lines') ?? 4) },
+          userData: app.getPath('userData'), cut: cutMode !== 'none' });
+        logInfo('print', 'Ticket enviado en ESC/POS', { printer: printerName });
+        return;
+      } catch (error) {
+        logWarn('print', 'ESC/POS no disponible; se imprime por Windows', { printer: printerName, error: error.message });
+      }
+    }
+
     // «PDF con Acrobat» (Centro de impresión): PDF del tamaño exacto del papel
     // impreso por Acrobat, como hacen otros sistemas. Solo con impresora elegida.
     // Solo hojas: en rollos térmicos Acrobat centra el ticket en la hoja del
@@ -4774,6 +4790,8 @@ ipcMain.handle('print:zpl', async (_, { zpl, printerName, userConfirmed = false 
       darkness: Number(settingsRepo.get('barcode_zebra_darkness') || 20),
       speed: Number(settingsRepo.get('barcode_zebra_speed') || 3),
       dpi: Number(settingsRepo.get('barcode_printer_dpi') || 203),
+      // Tipo de rollo: espacio entre etiquetas, marca negra o continuo (como VELO Bridge).
+      mediaTracking: ['gap', 'mark', 'continuous'].includes(settingsRepo.get('barcode_zebra_tracking')) ? settingsRepo.get('barcode_zebra_tracking') : undefined,
       // Ancho real del cabezal (LP 2824: 56 mm): una etiqueta más ancha se encoge para no salirse.
       maxWidthMm: printEngines.zebraProfile(requested).maxWidthMm,
     };
@@ -4789,6 +4807,22 @@ ipcMain.handle('print:zpl', async (_, { zpl, printerName, userConfirmed = false 
   }
 });
 ipcMain.handle('print:acrobat', async () => ({ ok: true, installed: Boolean(await printEngines.findAcrobat()) }));
+
+// Ficha de la impresora: lo que su driver de Windows informa (tipo, papel,
+// área imprimible real, cortador, tipo de rollo) y, si es Zebra, modelo,
+// lenguaje y ancho de cabezal. Mismo código que VELO Bridge; se guarda 10 min.
+const _printerFichaCache = new Map();
+ipcMain.handle('print:printerProfile', async (_, { printerName } = {}) => {
+  const name = String(printerName || '').trim();
+  if (!name) return { ok: false, error: 'Elige una impresora' };
+  const cached = _printerFichaCache.get(name);
+  if (cached && Date.now() - cached.at < 600_000) return { ok: true, data: cached.data };
+  const probe = await printEngines.probePrinter(name, app.getPath('userData')).catch(() => null);
+  const zebra = printEngines.isZebra(name, probe?.driver || '');
+  const data = { name, platform: process.platform, probe, zebra, zebraProfile: zebra ? printEngines.zebraProfile(name, probe?.driver || '', probe, settingsRepo.get('barcode_zebra_language') || 'auto') : null };
+  _printerFichaCache.set(name, { at: Date.now(), data });
+  return { ok: true, data };
+});
 
 // La validación documental NO es local-only: en una terminal cliente debe
 // ejecutarse en el worker del negocio, dueño de la base central.

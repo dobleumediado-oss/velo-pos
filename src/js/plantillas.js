@@ -1680,7 +1680,8 @@ function renderCartaCompacta(sale, cfg, opts) {
   // el tamaño con el que caben 35 artículos en una hoja Carta.
   const fsRaw = String(_e.fontSize || '');
   const fsPt = /px$/i.test(fsRaw) ? parseFloat(fsRaw) * 0.75 : parseFloat(fsRaw);
-  const fontMax = Math.min(13, Math.max(7.8, Number.isFinite(fsPt) ? fsPt : 10));
+  // También respeta «Tamaño de letra en factura» (factor general de las hojas).
+  const fontMax = Math.min(13, Math.max(7.8, (Number.isFinite(fsPt) ? fsPt : 10) * _fontScale(cfg)));
   const pageW = 215.9 - (parseFloat(ml) || 10) - (parseFloat(mr) || 10);
   const digitMm = k => 7.6 * k * 0.3528 * 0.58; // ancho de un dígito Helvetica a 7.6 pt × k
   const colMm = (chars, k, min) => Math.max(min, chars * digitMm(k) + 3);

@@ -22,6 +22,8 @@ const DEVICE_SETTING_KEYS = new Set([
   'barcode_printer_dpi',
   'barcode_media_mode',
   'barcode_calibrations',
+  // El rollo puesto es de cada PC: una puede tener etiquetas con espacio y otra continuas.
+  'barcode_zebra_tracking',
 ]);
 
 function isValidBusinessId(bizId) {

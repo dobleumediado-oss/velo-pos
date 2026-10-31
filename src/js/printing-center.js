@@ -670,11 +670,11 @@ function renderInvoiceAppearanceCards(container, { settings, onSaved } = {}) {
     const qualityCard=h('div',{class:'card',style:'margin-top:16px'});
     qualityCard.innerHTML=`<div class="card-title mb8">Calidad de impresión</div>
       <div class="g2">
-        <div class="fg"><label class="lbl">Facturas y tickets</label><select class="inp" data-q="print_engine"><option value="directo">Directo · resolución de la impresora</option><option value="pdf">PDF con Acrobat · solo hojas Carta/A4</option></select></div>
+        <div class="fg"><label class="lbl">Facturas y tickets</label><select class="inp" data-q="print_engine"><option value="directo">Directo · resolución de la impresora</option><option value="escpos">Térmica nítida · ESC/POS (como VELO Bridge)</option><option value="pdf">PDF con Acrobat · solo hojas Carta/A4</option></select></div>
         <div class="fg"><label class="lbl">Resolución del rollo térmico</label><select class="inp" data-q="printer_dpi"><option value="203">203 DPI (8 puntos/mm)</option><option value="300">300 DPI (12 puntos/mm)</option></select></div>
         <div class="fg"><label class="lbl">Al terminar el ticket</label><select class="inp" data-q="thermal_cut_mode"><option value="driver">Lo hace el driver</option><option value="auto">Automático (térmicas)</option><option value="bridge">Avanzar y cortar siempre</option><option value="none">No cortar</option></select></div>
         <div class="fg"><label class="lbl">Avance antes del corte (líneas)</label><input class="inp" type="number" min="0" max="15" data-q="thermal_feed_lines"></div>
-        <div class="fg"><label class="lbl">Etiquetas</label><select class="inp" data-q="barcode_print_mode"><option value="auto">Automático · Zebra en ZPL nativo</option><option value="zpl">Siempre ZPL nativo</option><option value="html">Imagen (método anterior)</option></select></div><div class="fg"><label class="lbl">Lenguaje de la Zebra</label><select class="inp" data-q="barcode_zebra_language"><option value="auto">Automático según el modelo</option><option value="zpl">ZPL · LP 2824 Plus, GK420, ZD…</option><option value="epl">EPL2 · LP 2824 / TLP 2844 originales</option></select></div>
+        <div class="fg"><label class="lbl">Etiquetas</label><select class="inp" data-q="barcode_print_mode"><option value="auto">Automático · Zebra en ZPL nativo</option><option value="zpl">Siempre ZPL nativo</option><option value="html">Imagen (método anterior)</option></select></div><div class="fg"><label class="lbl">Lenguaje de la Zebra</label><select class="inp" data-q="barcode_zebra_language"><option value="auto">Automático según el modelo</option><option value="zpl">ZPL · LP 2824 Plus, GK420, ZD…</option><option value="epl">EPL2 · LP 2824 / TLP 2844 originales</option></select></div><div class="fg"><label class="lbl">Tipo de rollo de etiquetas</label><select class="inp" data-q="barcode_zebra_tracking"><option value="gap">Con espacio entre etiquetas</option><option value="mark">Con marca negra al reverso</option><option value="continuous">Papel continuo</option></select></div>
         <div class="fg"><label class="lbl">Resolución de la etiquetadora</label><select class="inp" data-q="barcode_printer_dpi"><option value="203">203 DPI · LP 2824 Plus</option><option value="300">300 DPI</option></select></div>
         <div class="fg"><label class="lbl">Oscuridad Zebra (0–30)</label><input class="inp" type="number" min="0" max="30" data-q="barcode_zebra_darkness"></div>
         <div class="fg"><label class="lbl">Velocidad Zebra (2–6 pulg/s)</label><input class="inp" type="number" min="2" max="6" data-q="barcode_zebra_speed"></div>
@@ -682,7 +682,36 @@ function renderInvoiceAppearanceCards(container, { settings, onSaved } = {}) {
       <div class="ts" id="cfg-acrobat-state" style="margin-top:6px">Comprobando Acrobat…</div>
       <div class="ts" style="margin-top:4px">En térmica el texto sale en negro puro y el logo en blanco y negro. Si el ticket queda dentro de la impresora o no se corta, usa «Avanzar y cortar siempre». Para la Zebra LP 2824 Plus con etiquetas de 52 × 28 mm: ZPL nativo, 203 DPI, oscuridad 20–25 y velocidad 3.</div>`;
     container.appendChild(qualityCard);
-    const qualityDefaults={print_engine:'directo',printer_dpi:'203',thermal_cut_mode:'driver',thermal_feed_lines:'4',barcode_print_mode:'auto',barcode_printer_dpi:'203',barcode_zebra_darkness:'20',barcode_zebra_speed:'3',barcode_zebra_language:'auto'};
+
+    // Ficha de la impresora: lo que su driver de Windows informa (mismo código que VELO Bridge).
+    const fichaCard=h('div',{class:'card',style:'margin-top:16px'});
+    fichaCard.innerHTML=`<div class="card-title mb8">Ficha de la impresora</div>
+      <div class="ts" style="margin-bottom:8px">Lee del driver de Windows el tipo, el papel, el área que de verdad imprime y, si es Zebra, el modelo, lenguaje y ancho del cabezal.</div>
+      <div class="flex" style="gap:8px;align-items:center"><select class="inp" id="pc-ficha-printer" style="flex:1"><option value="">Elegir impresora…</option></select><button class="btn btn-out" id="pc-ficha-read">Leer driver</button></div>
+      <div id="pc-ficha-out" class="ts" style="margin-top:10px"></div>`;
+    container.appendChild(fichaCard);
+    (async()=>{try{const list=await window.api?.print?.getPrinters?.();const select=fichaCard.querySelector('#pc-ficha-printer');(list||[]).filter(p=>p?.name).forEach(p=>{const o=document.createElement('option');o.value=p.name;o.textContent=p.name;select.appendChild(o);});}catch{}})();
+    fichaCard.querySelector('#pc-ficha-read').onclick=async()=>{
+      const name=fichaCard.querySelector('#pc-ficha-printer').value;const out=fichaCard.querySelector('#pc-ficha-out');
+      if(!name)return toast('Elige una impresora','w');
+      out.textContent='Leyendo el driver…';
+      const res=await window.api?.print?.printerProfile?.({printerName:name}).catch(e=>({ok:false,error:e.message}));
+      if(!res?.ok){out.textContent=res?.error||'No se pudo leer la impresora';return;}
+      const d=res.data,p=d.probe,z=d.zebraProfile,esc=v=>String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+      const rows=[];
+      if(!p)rows.push(['Driver',d.platform==='win32'?'Windows no respondió; se usan los ajustes manuales.':'Disponible solo en Windows.']);
+      else{
+        rows.push(['Driver',`${p.driver||'—'} · puerto ${p.port||'—'}`]);
+        rows.push(['Tipo',d.zebra?'Etiquetadora Zebra':p.escpos?`Térmica de rollo ${p.rollWidthMm} mm${p.cutter?' con cortador':''} · admite ESC/POS nítido`:p.sheet?'Hojas Carta/A4':'Otro']);
+        if(p.defaultMedia)rows.push(['Papel en el driver',`${p.defaultMedia.widthMm} × ${p.defaultMedia.heightMm} mm`]);
+        if(p.hardMarginsMm){const m=p.hardMarginsMm;rows.push(['Zona que no imprime',`arriba ${m.top} · abajo ${m.bottom} · izquierda ${m.left} · derecha ${m.right} mm (los márgenes de la plantilla deben ser iguales o mayores)`]);}
+        if(p.driverMedia?.tracking)rows.push(['Tipo de rollo',{gap:'Con espacio entre etiquetas',mark:'Con marca negra',continuous:'Papel continuo'}[p.driverMedia.tracking]]);
+        if(p.driverMedia?.method)rows.push(['Método',p.driverMedia.method==='transfer'?'Con cinta (ribbon)':'Térmica directa']);
+      }
+      if(z)rows.push(['Zebra',`${z.model} · ${z.language.toUpperCase()} · ${z.dpi} DPI · cabezal de ${z.maxWidthMm} mm · recomendado oscuridad ${z.recommended.darkness}, velocidad ${z.recommended.speed}`]);
+      out.innerHTML=`<table style="width:100%;border-collapse:collapse">${rows.map(([k,v])=>`<tr><td style="padding:4px 8px 4px 0;color:var(--muted2);white-space:nowrap;vertical-align:top">${esc(k)}</td><td style="padding:4px 0">${esc(v)}</td></tr>`).join('')}</table>`;
+    };
+    const qualityDefaults={print_engine:'directo',printer_dpi:'203',thermal_cut_mode:'driver',thermal_feed_lines:'4',barcode_print_mode:'auto',barcode_printer_dpi:'203',barcode_zebra_darkness:'20',barcode_zebra_speed:'3',barcode_zebra_language:'auto',barcode_zebra_tracking:'gap'};
     qualityCard.querySelectorAll('[data-q]').forEach(control=>{
       const key=control.dataset.q;control.value=String(s[key]||DB?.settings?.[key]||qualityDefaults[key]);
       control.onchange=async()=>{
