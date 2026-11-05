@@ -1613,6 +1613,7 @@ function migrateCustomerCompanies() {
     ['customer_branch_phone', "TEXT DEFAULT ''"],
     ['operation_id', "TEXT DEFAULT ''"],
     ['operation_fingerprint', "TEXT DEFAULT ''"],
+    ['tax_disabled', 'INTEGER NOT NULL DEFAULT 0'],
   ];
   for (const [col, def] of customerCols) {
     try { db.prepare(`ALTER TABLE customers ADD COLUMN ${col} ${def}`).run(); }
@@ -2867,6 +2868,7 @@ function seedIfEmpty() {
     ['biz_addr',       ''],
     ['biz_phone',      ''],
     ['tax_pct',        '18'],
+    ['pos_invoice_tax_toggle', '0'],
     ['fiscal_enabled', '0'],   // 0 = sin RNC/NCF/ITBIS · solo superadmin lo activa
     ['currency',       'RD$'],
     ['printer',        ''],
@@ -3427,12 +3429,18 @@ const productsRepo = {
       ${accountingJoin}
       WHERE p.active=1
       ORDER BY p.name
-    `).all();
+    `).all().map(product => ({
+      ...product,
+      // Un consumidor que lea stock también debe ver las unidades físicas.
+      stock: Number(product.serialized) === 1 ? Number(product.effective_stock) || 0 : product.stock,
+    }));
   },
   getById(id) {
     return db.prepare('SELECT * FROM products WHERE id=?').get(id);
   },
   create(p) {
+    return db.transaction(() => {
+    if (p.first_unit && !p.serialized) throw new Error('El primer equipo requiere control por IMEI/serial');
     // Verificar si ya existe un producto con el mismo nombre (case-insensitive) y código
     // para evitar duplicados al importar varias veces
     if (p.name) {
@@ -3446,19 +3454,24 @@ const productsRepo = {
           "SELECT id FROM products WHERE active=1 AND LOWER(TRIM(name))=LOWER(TRIM(?))"
         ).get(p.name);
       }
-      if (existing) return existing.id; // retornar el id existente sin duplicar
+      if (existing) {
+        if (p.first_unit) throw new Error('El modelo ya existe. Abre Equipos para registrar su IMEI o serial');
+        return existing.id;
+      }
     }
     // Sin código de barras propio → usar el código del artículo como barcode.
     // Así toda etiqueta impresa es escaneable en el POS sin configurar nada.
     const barcode = String(p.barcode || '').trim() || String(p.code || '').trim();
     const r = db.prepare(`
-      INSERT INTO products(code,barcode,name,brand,category,description,model,cost,price,wholesale,taxable,tax_pct,stock,stock_min,unit,condition)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO products(code,barcode,name,brand,category,description,model,cost,price,wholesale,taxable,tax_pct,stock,stock_min,unit,condition,serialized)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(p.code,barcode,p.name,p.brand||'',p.category||'',p.description||'',
            p.model||'',p.cost,p.price,p.wholesale||p.price,
            normalizeTaxable(p.taxable, 1), normalizeTaxPct(p.tax_pct, 18),
-           p.stock||0,p.stock_min||5,p.unit||'und', p.condition||'nuevo');
+           p.serialized ? 0 : (p.stock||0),p.stock_min||5,p.unit||'und', p.condition||'nuevo', p.serialized ? 1 : 0);
+    if (p.first_unit) productUnitsRepo.create({ ...p.first_unit, product_id:r.lastInsertRowid, status:'en_stock' });
     return r.lastInsertRowid;
+    })();
   },
   update(id, p, opts = {}) {
     return db.transaction(() => {
@@ -5368,6 +5381,8 @@ function saleOperationFingerprint({ customer, items, payment, type }) {
       } : null,
     },
   };
+  // Mantener las huellas previas cuando no se usa la nueva opción.
+  if (payment?.taxDisabled === true) canonical.payment.taxDisabled = true;
   if (payment?.walkInCredit) canonical.walkInCredit = {
     enabled: true, dueDate: String(payment.walkInDueDate || ''),
     phone: String(customer?.phone || '').trim(),
@@ -5824,6 +5839,11 @@ const salesRepo = {
         throw new Error('Tipo de documento de venta no soportado');
       }
       payment = { ...(payment || {}) };
+      const taxDisabled = type === 'factura' && payment.taxDisabled === true;
+      if (payment.taxDisabled === true && (type !== 'factura' ||
+          db.prepare("SELECT value FROM settings WHERE key='pos_invoice_tax_toggle'").get()?.value !== '1')) {
+        throw new Error('Activa en Configuración la opción de apagar el ITBIS por factura');
+      }
       const walkInCredit = require('./lib/walk-in-credit').validateWalkInCredit(customer, payment, type);
       // Una cotización es un documento comercial: no cobra, no crea CxC, no
       // utiliza una cuenta financiera y no depende del estado de la caja.
@@ -6033,7 +6053,7 @@ const salesRepo = {
       // Solo la factura mueve inventario. "Crédito" es una forma de pago de la
       // factura, nunca una razón para convertir una cotización en movimiento.
       const afectaStock = type === 'factura';
-      const headerTaxPct = type === 'factura' ? configuredTaxPct() : 0;
+      const headerTaxPct = type === 'factura' && !taxDisabled ? configuredTaxPct() : 0;
       const saleItems = [];
       const requestedByProduct = new Map();
       for (const item of items) {
@@ -6117,7 +6137,7 @@ const salesRepo = {
           stockValidated.add(productId);
         }
         const unitPrice = round2(Number.parseFloat(item.unit_price) || 0);
-        const taxable = type === 'factura'
+        const taxable = type === 'factura' && !taxDisabled
           ? normalizeTaxable(item.taxable ?? prod.taxable, 1)
           : 0;
         const itemTaxPct = taxable
@@ -6197,7 +6217,7 @@ const salesRepo = {
       // el que se suma al total, y cuando el negocio los tiene gravados ese
       // importe ya incluye el ITBIS, igual que el precio de un artículo. Así el
       // desglose vuelve a cumplir subtotal + ITBIS = total.
-      const chargesTaxable = type === 'factura' && configuredChargesTaxable();
+      const chargesTaxable = type === 'factura' && !taxDisabled && configuredChargesTaxable();
       const chargeTaxPct = chargesTaxable ? configuredTaxPct() : 0;
       let chargesNet = 0;
       let chargesTax = 0;
@@ -6532,7 +6552,7 @@ const salesRepo = {
           customer_contact_id,customer_contact_name,customer_contact_document,
           customer_contact_role,customer_contact_phone,customer_contact_email,
           customer_branch_id,customer_branch_name,customer_branch_code,customer_branch_address,customer_branch_phone,
-          type,status,subtotal,discount_pct,discount_amt,tax_pct,tax_amt,total,
+          type,status,subtotal,discount_pct,discount_amt,tax_pct,tax_amt,total,tax_disabled,
           payment_method,price_mode,cajero,user_id,salesperson_id,financial_account_id,
           payment_currency,exchange_rate,account_amount,card_brand,card_last4,
           additional_charges_total,display_currency,display_exchange_rate,display_amount,
@@ -6545,7 +6565,7 @@ const salesRepo = {
           @customer_contact_id,@customer_contact_name,@customer_contact_document,
           @customer_contact_role,@customer_contact_phone,@customer_contact_email,
           @customer_branch_id,@customer_branch_name,@customer_branch_code,@customer_branch_address,@customer_branch_phone,
-          @type,'completed',@subtotal,@discount_pct,@discount_amt,@tax_pct,@tax_amt,@total,
+          @type,'completed',@subtotal,@discount_pct,@discount_amt,@tax_pct,@tax_amt,@total,@tax_disabled,
           @payment_method,@price_mode,@cajero,@user_id,@salesperson_id,@financial_account_id,
           @payment_currency,@exchange_rate,@account_amount,@card_brand,@card_last4,
           @additional_charges_total,@display_currency,@display_exchange_rate,@display_amount,
@@ -6576,7 +6596,7 @@ const salesRepo = {
         customer_branch_code: selectedBranch?.code || '',
         customer_branch_address: selectedBranch?.address || '',
         customer_branch_phone: selectedBranch?.phone || '',
-        type, subtotal, discount_pct: discPct, discount_amt: discAmt, tax_pct: taxPct,
+        type, subtotal, discount_pct: discPct, discount_amt: discAmt, tax_pct: taxPct, tax_disabled: taxDisabled ? 1 : 0,
         tax_amt: taxAmt, total, payment_method: method,
         price_mode: payment.priceMode || 'retail', cajero: user.name || '', user_id: user.id,
         salesperson_id: salespersonId, financial_account_id: finAcctId,
@@ -14197,7 +14217,10 @@ const productUnitsRepo = {
       if (this.findByImei(identifier)) throw new Error(`El IMEI o serial ${identifier} ya está registrado`);
       return { ...unit, product_id:Number(productId), imei:imei || null, serial:serial || null };
     });
-    return db.transaction(rows => rows.map(unit => this.create(unit)))(clean);
+    return db.transaction(rows => {
+      this.setSerialized(productId, true);
+      return rows.map(unit => this.create(unit));
+    })(clean);
   },
   // Unidades de un producto (opcionalmente filtradas por estado).
   listForProduct(productId, status = null) {

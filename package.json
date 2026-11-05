@@ -1,6 +1,6 @@
 {
   "name": "velo-pos",
-  "version": "1.62.0",
+  "version": "1.62.1",
   "description": "Sistema POS desktop profesional para comercios, repuestos, sucursales y operaciones empresariales",
   "main": "main.js",
   "scripts": {
@@ -69,13 +69,14 @@
     "test:sale-offers": "node scripts/run-electron-node.js scripts/test-sale-offers.js",
     "test:additional-charges": "node scripts/run-electron-node.js scripts/test-additional-charges.js",
     "test:crm": "node scripts/run-electron-node.js scripts/test-crm-cerebro.js",
+    "test:imei-consistency": "node scripts/run-electron-node.js scripts/test-imei-consistency.js",
     "test:product-units": "node scripts/run-electron-node.js scripts/test-product-units.js",
     "test:inventory-count": "node scripts/run-electron-node.js scripts/test-inventory-count.js",
     "test:inventory-count-ui": "electron --no-sandbox scripts/test-inventory-count-ui.js",
     "test:service-orders": "node scripts/run-electron-node.js scripts/test-service-orders.js",
     "test:tech-premium": "node scripts/run-electron-node.js scripts/test-tech-premium-operations.js",
     "test:tech-lifecycle": "node scripts/run-electron-node.js scripts/test-tech-device-lifecycle.js",
-    "test:tech-readiness": "npm run release:check && npm run test:sqlite-runtime && npm run test:suite-invariants && npm run test:printing && npm run test:pdf-compatibility && npm run test:global-search && npm run test:walk-in-credit && npm run test:sale-cancellation-payments && npm run test:sale-offers && npm run test:ncf && npm run test:product-units && npm run test:inventory-count && npm run test:inventory-count-ui && npm run test:manual-backup && npm run test:desktop-business-import && npm run test:cloud-migration-package && npm run test:consignment-physical && npm run test:continuity-picker && npm run test:cash-ui && npm run test:cash-policy && npm run test:experience && npm run test:service-orders && npm run test:service-portal && npm run test:trade-in-warranty && npm run test:suite-license && npm run test:server-service && npm run test:terminal-handoff && npm run test:tech-premium && npm run test:tech-lifecycle",
+    "test:tech-readiness": "npm run release:check && npm run test:sqlite-runtime && npm run test:suite-invariants && npm run test:printing && npm run test:pdf-compatibility && npm run test:global-search && npm run test:walk-in-credit && npm run test:sale-cancellation-payments && npm run test:sale-offers && npm run test:ncf && npm run test:product-units && npm run test:imei-consistency && npm run test:pos && npm run test:additional-charges && npm run test:checkout && npm run test:inventory-count && npm run test:inventory-count-ui && npm run test:manual-backup && npm run test:desktop-business-import && npm run test:cloud-migration-package && npm run test:consignment-physical && npm run test:continuity-picker && npm run test:cash-ui && npm run test:cash-policy && npm run test:experience && npm run test:service-orders && npm run test:service-portal && npm run test:trade-in-warranty && npm run test:suite-license && npm run test:server-service && npm run test:terminal-handoff && npm run test:tech-premium && npm run test:tech-lifecycle",
     "test:service-portal": "node scripts/run-electron-node.js scripts/test-service-customer-portal.js",
     "test:trade-in-warranty": "node scripts/run-electron-node.js scripts/test-trade-in-warranty.js",
     "test:suite-license": "node scripts/test-suite-license-products.js && node scripts/test-provider-license-manager.js",

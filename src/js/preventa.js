@@ -379,7 +379,7 @@ async function preventaCobrar(id) {
   const tabId = target.id;
   invoices[activeInvoice] = {
     ...newInvObj(tabId), checkoutOrderId: order.id, checkoutOrderNumber: order.number,
-    checkoutLocked: true,
+    checkoutLocked: true, taxDisabled: Number(order.tax_disabled) === 1,
     cart: (order.items || []).map(item => ({
       pid: item.product_id, product_id: item.product_id, code: item.product_code,
       product_code: item.product_code, name: item.product_name, product_name: item.product_name,

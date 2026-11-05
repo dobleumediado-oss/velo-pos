@@ -61,6 +61,7 @@ vm.runInContext(`${dataSource}\nthis.__posState={
   setActive(v){activeInvoice=v},
   setUser(v){user=v},
   setTax(v){CFG.itbis=v},
+  setInvoiceTaxConfig(v){CFG.invoiceTaxToggleEnabled=v;CFG.charges_taxable=v},
   setSettings(v){DB.settings=v||{}},
   setCustomers(v){DB.customers=v},
   setProducts(v){DB.products=v},
@@ -173,13 +174,15 @@ assert.match(posSource,
 assert.match(posSource, /\? 'onchange="posDiscConPin\(this, this\.value\)"'/,
   'el descuento fijo se confirma al terminar de escribir, antes de pedir autorización');
 vm.runInContext(`${posSource}\nlet __renderCartCalls=0;
+this.__renderTaxCart=renderCart;
 renderCart=()=>{__renderCartCalls++};
 this.__posDiscount={
-  posDiscConPin,calcTotals,posSetQty,posCommitQty,posSaveCharge,
+  posToggleInvoiceTax,posDiscConPin,calcTotals,posSetQty,posCommitQty,posSaveCharge,
   posCommitPriceOnChange,posCommitPriceOnEnter,
   isManualNumericEntry:_posIsManualNumericEntry,
   barcodeKeydown:_posBarcodeKeydown,
   entryNumber:_posEntryNumber,cbrCalcInitial,cbrToggleBillingType,cbrConvertCoveredCreditToCash,
+  resetRenderCalls:()=>{__renderCartCalls=0},
   renderCalls:()=>__renderCartCalls
 };
 this.__posCustomers={pvCustomerMatches,pvCustomerOptions,pvFilterCustomers,pvSelectCustomer,posSelectCustomer,_setPosPmode,cbrCaptureCustomerDraft,cbrOpenTradeIn,posTicketTitle,posConduceCanAccess};
@@ -187,6 +190,49 @@ this.__posTransfer={posLoadResaleCart,posSetType,posLimpiar,posCreateConduceFrom
 context, { filename: 'pos.js' });
 vm.runInContext('this.__posNcf={populate:cbrPopulateNcfTypes,changed:cbrNcfTypeChanged,available:posNcfSequenceAvailable}', context);
 const discount = context.__posDiscount;
+// Mezcla de gravados y exentos: el interruptor conserva los importes originales.
+state.resetInvoices();
+state.setInvoiceTaxConfig(true);
+const taxInvoice = state.currentInv();
+taxInvoice.cart.push({ name:'Gravado', price:1180, qty:1, taxable:1, tax_pct:18 });
+taxInvoice.cart.push({ name:'Exento', price:200, qty:1, taxable:0, tax_pct:0 });
+taxInvoice.charges.push({ description:'Instalación', amount:118 });
+taxInvoice.disc = 10;
+const normalTaxTotals = discount.calcTotals(taxInvoice);
+assert.strictEqual(normalTaxTotals.itbis, 180);
+discount.posToggleInvoiceTax();
+assert.strictEqual(discount.calcTotals(taxInvoice).itbis, 0);
+assert.strictEqual(discount.calcTotals(taxInvoice).subtotal, normalTaxTotals.total);
+assert.strictEqual(discount.calcTotals(taxInvoice).total, normalTaxTotals.total);
+assert.strictEqual(taxInvoice.cart[0].taxable, 1, 'el artículo conserva su tratamiento original');
+assert.strictEqual(taxInvoice.cart[0].price, 1180);
+state.addInvoice();
+assert.strictEqual(state.currentInv().taxDisabled, false, 'una nueva factura empieza normal');
+state.setActive(0);
+assert.strictEqual(state.currentInv().taxDisabled, true, 'el ajuste es independiente por pestaña');
+assert.strictEqual(state.persistWorkspace(), true);
+state.resetInvoices();
+state.resetRecoveryAttempt();
+assert.strictEqual(state.restoreWorkspace(), 1);
+assert.strictEqual(state.currentInv().taxDisabled, true, 'recuperar conserva la elección por factura');
+discount.posToggleInvoiceTax();
+assert.strictEqual(discount.calcTotals(state.currentInv()).itbis, normalTaxTotals.itbis,
+  'encender restaura el impuesto original sin gravar el exento');
+state.setInvoiceTaxConfig(false);
+discount.posToggleInvoiceTax();
+assert.strictEqual(state.currentInv().taxDisabled, false, 'sin la casilla no se puede apagar');
+state.setInvoiceTaxConfig(true);
+discount.posToggleInvoiceTax();
+state.currentInv().saleSubmitting = true;
+discount.posToggleInvoiceTax();
+assert.strictEqual(state.currentInv().taxDisabled, true, 'no cambia mientras se confirma el cobro');
+state.currentInv().saleSubmitting = false;
+context.__posTransfer.posSetType('cotizacion');
+assert.strictEqual(state.currentInv().taxDisabled, false, 'cambiar de documento limpia la excepción');
+state.setInvoiceTaxConfig(false);
+state.resetInvoices();
+discount.resetRenderCalls();
+console.log('  ✓ ITBIS por factura conserva precios, exentos, cargos, recuperación y pestañas independientes');
 const customers = context.__posCustomers;
 const transfer = context.__posTransfer;
 context.toast = () => {};
@@ -862,5 +908,25 @@ console.log('  ✓ búsqueda operativa encuentra orden, cliente, documento y art
     'el cajero puede consultarlo: es el número que saldrá impreso en su propia factura');
   console.log('  ✓ el cobro anticipa el comprobante y el número de factura que se emitirán');
 }
+
+state.resetInvoices();
+state.setInvoiceTaxConfig(true);
+state.setUser({id:77,role:'admin'});
+state.currentInv().cart.push({name:'Artículo gravado',price:1180,qty:1,taxable:1,tax_pct:18});
+const taxCartWrap = element('cart-wrap');
+context.__renderTaxCart();
+assert(taxCartWrap.innerHTML.includes('ITBIS encendido · Solo esta factura'));
+assert(taxCartWrap.innerHTML.includes('aria-checked="true"'));
+discount.posToggleInvoiceTax();
+context.__renderTaxCart();
+assert(taxCartWrap.innerHTML.includes('aria-checked="false"'));
+assert(taxCartWrap.innerHTML.includes('ITBIS apagado · Solo esta factura'));
+assert(taxCartWrap.innerHTML.includes('id="pos-itbis-value">RD$0.00'));
+assert(taxCartWrap.innerHTML.includes('id="pos-total-value">RD$1,180.00'), taxCartWrap.innerHTML.match(/id="pos-total-value"[^<]*|id="pos-subtotal-value"[^<]*/g)?.join(' '));
+assert(!taxCartWrap.innerHTML.includes('>ITBIS incl.</span>'), 'no anuncia impuesto incluido en líneas apagadas');
+state.setInvoiceTaxConfig(false);
+context.__renderTaxCart();
+assert(!taxCartWrap.innerHTML.includes('id="pos-invoice-tax-btn"'), 'oculta el botón sin la casilla activa');
+console.log('  ✓ el carrito muestra encendido/apagado, ITBIS cero y el mismo total');
 
 console.log('\nInteracciones del POS verificadas correctamente.');

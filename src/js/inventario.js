@@ -52,7 +52,8 @@ const invEsc = s => String(s ?? '')
 // Los artículos fungibles usan products.stock/cost. En equipos serializados la
 // existencia y el valor reales salen de las unidades físicas por IMEI/serial.
 function invProductStock(product) {
-  return Math.max(0, Number(product?.effective_stock ?? product?.stock) || 0);
+  const value = Number(product?.serialized) === 1 ? product?.effective_stock : (product?.effective_stock ?? product?.stock);
+  return Math.max(0, Number(value) || 0);
 }
 
 function invProductCost(product) {
@@ -2073,8 +2074,8 @@ function openProductoModal(p = null, options = {}) {
     <div id="pf-serial-fields" style="display:${isSerialized ? 'block' : 'none'}">
       <div style="font-weight:700;font-size:12px;margin-bottom:6px">Equipos (IMEI)</div>
       <div style="font-size:11px;color:var(--muted2);margin-bottom:10px">El stock se lleva por equipos. Registra el primero aquí; agrega más luego con el botón “Equipos”.</div>
-      ${isEdit ? '' : `<div class="g3">
-        <div class="fg"><label class="lbl">IMEI / Serial del primer equipo</label><input class="inp" id="pf-imei" type="text" placeholder="356000000000000" data-uppercase="off" autocomplete="off"/></div>
+      ${isEdit ? '' : `<label class="fg" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="pf-model-only"> Solo crear el modelo, sin equipos por ahora</label><div class="g3">
+        <div class="fg"><label class="lbl">IMEI / Serial del primer equipo *</label><input class="inp" id="pf-imei" type="text" placeholder="356000000000000" data-uppercase="off" autocomplete="off"/></div>
         <div class="fg"><label class="lbl">Capacidad</label><input class="inp" id="pf-capacity" type="text" placeholder="128GB" data-uppercase="off"/></div>
         <div class="fg"><label class="lbl">Color</label><input class="inp" id="pf-color-eq" type="text" placeholder="Negro" data-uppercase="off"/></div>
       </div><div class="g3"><div class="fg"><label class="lbl">Condición batería (%)</label><input class="inp" id="pf-battery-health" type="number" min="0" max="100" placeholder="86"></div><div class="fg"><label class="lbl">Capacidad batería (mAh)</label><input class="inp" id="pf-battery-mah" type="number" min="0" max="100000" placeholder="3279"></div><div class="fg"><label class="lbl">Descripción para factura</label><input class="inp" id="pf-sale-description" placeholder="Estado del equipo usado"></div></div>`}
@@ -2277,6 +2278,19 @@ async function guardarProducto(id) {
     ...(window._vertical?.serialized ? { serialized: serialized ? 1 : 0 } : {}),
   };
 
+  if (!id && serialized && !document.getElementById('pf-model-only')?.checked) {
+    const imei = document.getElementById('pf-imei')?.value?.trim();
+    if (!imei) { toast('Escribe el IMEI o serial del equipo, o marca solo crear el modelo', 'err'); return; }
+    data.first_unit = {
+      imei, condition, unit_cost:cost,
+      capacity:document.getElementById('pf-capacity')?.value?.trim() || '',
+      color:document.getElementById('pf-color-eq')?.value?.trim() || '',
+      battery_health:document.getElementById('pf-battery-health')?.value || null,
+      battery_capacity_mah:document.getElementById('pf-battery-mah')?.value || null,
+      sale_description:document.getElementById('pf-sale-description')?.value?.trim() || '',
+    };
+  }
+
   let result;
   if (id) {
     result = await window.api.products.update({ id, data, requestUserId: user.id });
@@ -2286,42 +2300,12 @@ async function guardarProducto(id) {
 
   if (!result.ok) { toast(result.error || 'Error al guardar', 'err'); return; }
 
-  // TECH (serializado): al CREAR, el producto se marca serializado y —si se
-  // capturó un IMEI— se registra el primer equipo. Solo corre en el vertical
-  // tech; en VELO POS este bloque no existe (no hay window._vertical.serialized).
-  let unitWarning = '';
-  if (!id && serialized && result.id) {
-    try {
-      const serializedResult = await window.api.productUnits.setSerialized({ productId: result.id, on: true, requestUserId: user.id });
-      if (!serializedResult?.ok) throw new Error(serializedResult?.error || 'No se pudo activar el inventario por IMEI');
-      const imei = document.getElementById('pf-imei')?.value?.trim();
-      if (imei) {
-        const unitResult = await window.api.productUnits.create({
-          productId: result.id,
-          units: [{
-            imei, condition,
-            unit_cost: cost,
-            capacity: document.getElementById('pf-capacity')?.value?.trim() || '',
-            color:    document.getElementById('pf-color-eq')?.value?.trim() || '',
-            battery_health: document.getElementById('pf-battery-health')?.value || null,
-            battery_capacity_mah: document.getElementById('pf-battery-mah')?.value || null,
-            sale_description: document.getElementById('pf-sale-description')?.value?.trim() || '',
-          }],
-          requestUserId: user.id,
-        });
-        if (!unitResult?.ok) throw new Error(unitResult?.error || 'No se pudo registrar el primer equipo');
-      }
-    } catch (e) { unitWarning = e.message || 'No se pudo registrar el primer equipo'; }
-  }
-
+  // Modelo y primer equipo se guardaron juntos en el proceso principal.
   closeModal();
-  toast(unitWarning
-    ? `Producto creado, pero revisa Equipos: ${unitWarning}`
-    : (id ? '✓ Producto actualizado' : '✓ Producto registrado'),
-    unitWarning ? 'w' : 'ok');
+  toast(id ? '✓ Producto actualizado' : (data.first_unit ? '✓ Equipo ingresado y disponible para vender' : '✓ Producto registrado'), 'ok');
   applyInventoryMutation({
     productId: id || result.id,
-    patch: { ...data, id: id || result.id, ...(window._vertical?.serialized ? { serialized: serialized ? 1 : 0 } : {}) },
+    patch: { ...data, ...(result.product || {}), id: id || result.id, ...(window._vertical?.serialized ? { serialized: serialized ? 1 : 0 } : {}) },
     invalidateHistory: !!result.historyId,
     focus: true,
   });

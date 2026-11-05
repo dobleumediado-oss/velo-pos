@@ -71,6 +71,22 @@ los rangos autorizados en `ncf_sequences`.
 - Eliminar una cotización la retira inmediatamente de la operación y conserva
   solo su correlativo y el evento de auditoría.
 
+## ITBIS por factura
+
+En Configuración, junto al porcentaje de ITBIS, **Permitir apagar el ITBIS por
+factura** habilita el botón del carrito. La casilla empieza desactivada.
+Al apagar el botón, toda esa factura queda con ITBIS en cero, incluidos los
+cargos adicionales. Los precios finales, descuentos y el total se conservan:
+un artículo de RD$1,180 sigue en RD$1,180. No se modifica el inventario.
+Al encenderlo se recupera el tratamiento original de cada línea, respetando
+los artículos exentos. Una nueva factura empieza con el cálculo normal.
+
+La elección se conserva al recuperar el carrito, guardar un borrador y enviar
+una orden a caja. En la venta se guarda `sales.tax_disabled` y el desglose de
+cada artículo y cargo; los documentos emitidos conservan sus importes aunque
+luego se desactive la casilla. El repositorio valida que la opción esté
+habilitada antes de admitir una nueva factura sin ITBIS por este mecanismo.
+
 ## Facturas reajustadas y crédito
 
 - Una factura corregida conserva en Ventas toda la trazabilidad: motivo,

@@ -67,6 +67,7 @@ function ensureCheckoutOrdersSchema(db) {
 
   // Snapshots de cuenta/representante para bases creadas antes de empresas.
   const companyCols = [
+    ['tax_disabled', 'INTEGER NOT NULL DEFAULT 0'],
     ['customer_type', "TEXT DEFAULT 'person'"],
     ['customer_trade_name', "TEXT DEFAULT ''"],
     ['customer_address', "TEXT DEFAULT ''"],
@@ -214,7 +215,11 @@ function createCheckoutOrdersRepo({ getDb, salesRepo, audit }) {
         };
       });
 
-      const totals = taxTotals(items, data.discountPct);
+      const taxDisabled = data.taxDisabled === true;
+      if (taxDisabled && db().prepare("SELECT value FROM settings WHERE key='pos_invoice_tax_toggle'").get()?.value !== '1') {
+        throw new Error('Activa en Configuración la opción de apagar el ITBIS por factura');
+      }
+      const totals = taxTotals(taxDisabled ? items.map(item => ({ ...item, taxable: 0, tax_pct: 0 })) : items, data.discountPct);
       const minutes = Math.max(5, Math.min(480, Number(data.reservationMinutes) || 30));
       const customerId = Number(data.customer?.id) || 1;
       const customer = db().prepare('SELECT * FROM customers WHERE id=? AND active=1').get(customerId);
@@ -242,7 +247,7 @@ function createCheckoutOrdersRepo({ getDb, salesRepo, audit }) {
           customer_contact_id,customer_contact_name,customer_contact_document,
           customer_contact_role,customer_contact_phone,customer_contact_email,
           customer_branch_id,customer_branch_name,customer_branch_code,customer_branch_address,customer_branch_phone,
-          discount_pct,discount_amt,subtotal,tax_amt,total,salesperson_id,discount_approved_by,
+          discount_pct,discount_amt,subtotal,tax_amt,total,tax_disabled,salesperson_id,discount_approved_by,
           price_approved_by,created_by,created_by_name,origin_terminal_id,notes,expires_at
         ) VALUES(
           'pending',@customer_id,@customer_name,@customer_rnc,@price_mode,
@@ -250,7 +255,7 @@ function createCheckoutOrdersRepo({ getDb, salesRepo, audit }) {
           @customer_contact_id,@customer_contact_name,@customer_contact_document,
           @customer_contact_role,@customer_contact_phone,@customer_contact_email,
           @customer_branch_id,@customer_branch_name,@customer_branch_code,@customer_branch_address,@customer_branch_phone,
-          @discount_pct,@discount_amt,@subtotal,@tax_amt,@total,@salesperson_id,@discount_approved_by,
+          @discount_pct,@discount_amt,@subtotal,@tax_amt,@total,@tax_disabled,@salesperson_id,@discount_approved_by,
           @price_approved_by,@created_by,@created_by_name,@origin_terminal_id,@notes,
           datetime('now','localtime',@expires_modifier)
         )
@@ -272,7 +277,7 @@ function createCheckoutOrdersRepo({ getDb, salesRepo, audit }) {
         customer_branch_code: custBranch?.code || '', customer_branch_address: custBranch?.address || '',
         customer_branch_phone: custBranch?.phone || '',
         discount_pct: totals.discountPct, discount_amt: totals.discountAmt,
-        subtotal: totals.subtotal, tax_amt: totals.taxAmt, total: totals.total,
+        subtotal: totals.subtotal, tax_amt: totals.taxAmt, total: totals.total, tax_disabled: taxDisabled ? 1 : 0,
         salesperson_id: Number(data.salespersonId) || null,
         discount_approved_by: Number(data.discountApprovedBy) || null,
         price_approved_by: Number(data.priceApprovedBy) || null,
@@ -383,6 +388,7 @@ function createCheckoutOrdersRepo({ getDb, salesRepo, audit }) {
         items,
         payment: {
           ...(payment || {}),
+          taxDisabled: payment?.taxDisabled ?? (Number(order.tax_disabled) === 1),
           disc: effectiveDiscount,
           priceMode: order.price_mode || 'retail',
           salespersonId: order.salesperson_id || null,

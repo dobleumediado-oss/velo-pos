@@ -924,7 +924,7 @@ function renderCart() {
                 onchange="posCommitPriceOnChange(${idx},this)"
                 onkeydown="posCommitPriceOnEnter(event,${idx},this)"
                 onclick="this.select()"/>`}
-              ${item.taxable === 0 ? '' : `<span style="font-size:10px;color:var(--blue);font-weight:700">ITBIS incl.</span>`}
+              ${item.taxable === 0 || posInvoiceTaxDisabled(inv) ? '' : `<span style="font-size:10px;color:var(--blue);font-weight:700">ITBIS incl.</span>`}
             </div>`}
             ${isGift ? `<div style="font-size:10px;color:var(--green);font-weight:700;margin-top:3px">Regalo incluido en la promoción · precio regular ${fmt(offerItem?.offer_original_amount || 0)}</div>` : ''}
             ${!isGift && Number(offerItem?.offer_absorbed_amount) > 0 ? `<div style="font-size:10px;color:var(--muted2);font-weight:700;margin-top:3px">Incluye el valor de la oferta: ${fmt(offerItem.offer_absorbed_amount)} · precio sin cambio</div>` : ''}
@@ -962,7 +962,7 @@ function renderCart() {
   // Los cargos adicionales se muestran como una línea más del carrito, igual
   // que un artículo, pero sin cantidad ni precio editable: no son inventario.
   if (['factura', 'cotizacion'].includes(inv.itype) && (inv.charges || []).length) {
-    const chargeCarriesTax = inv.itype === 'factura' && CFG.charges_taxable === true;
+    const chargeCarriesTax = inv.itype === 'factura' && !posInvoiceTaxDisabled(inv) && CFG.charges_taxable === true;
     (inv.charges || []).forEach((charge, idx) => {
       html += `
         <div class="cart-item cart-item-charge">
@@ -1040,6 +1040,14 @@ function renderCart() {
         <button class="btn btn-out btn-sm btn-fw" id="pos-add-charge-btn" type="button" onclick="openPosChargeModal()"
                 style="margin:3px 0 7px">${svg('plus')} Cargos adicionales</button>
       </div>` : ''}
+      ${inv.itype === 'factura' && CFG.invoiceTaxToggleEnabled ? `
+        <button class="btn btn-out btn-sm btn-fw" id="pos-invoice-tax-btn" type="button"
+                role="switch" aria-checked="${!posInvoiceTaxDisabled(inv)}" onclick="posToggleInvoiceTax()"
+                style="margin:3px 0 7px;${posInvoiceTaxDisabled(inv) ? 'color:var(--red);border-color:var(--red)' : ''}">
+          ITBIS ${posInvoiceTaxDisabled(inv) ? 'apagado' : 'encendido'} · Solo esta factura
+        </button>
+        ${posInvoiceTaxDisabled(inv) ? '<div style="font-size:10px;color:var(--muted2);margin-bottom:7px">ITBIS en cero. Los precios y el total se mantienen.</div>' : ''}
+      ` : ''}
       <div class="tr" id="pos-gross-row" style="${disc > 0 ? '' : 'display:none'}">
         <span>Subtotal (ITBIS incl.)</span><span id="pos-gross-value">${fmt(grossSubtotal)}</span>
       </div>
@@ -1047,8 +1055,8 @@ function renderCart() {
         <span>Descuento</span><span id="pos-discount-value">−${fmt(discAmt)}</span>
       </div>
       <div class="tr"><span>Subtotal sin ITBIS</span><span id="pos-subtotal-value">${fmt(subtotal)}</span></div>
-      ${inv.itype === 'factura' && itbis > 0
-        ? `<div class="tr"><span>ITBIS (${CFG.itbis}%)</span><span id="pos-itbis-value">${fmt(itbis)}</span></div>` : ''}
+      ${inv.itype === 'factura' && (itbis > 0 || posInvoiceTaxDisabled(inv))
+        ? `<div class="tr"><span>${posInvoiceTaxDisabled(inv) ? 'ITBIS apagado' : `ITBIS (${CFG.itbis}%)`}</span><span id="pos-itbis-value">${fmt(itbis)}</span></div>` : ''}
       <div class="tr grand"><span>TOTAL</span><span id="pos-total-value">${fmt(total)}</span></div>
       <div style="margin-top:7px">
         <button class="btn btn-ghost btn-sm btn-fw" type="button" onclick="posToggleUsd()">
@@ -1091,6 +1099,7 @@ function posLimpiar() {
   if (currentInv().checkoutOrderId) return posCloseCheckoutOrder();
   const inv = currentInv();
   inv.cart = [];
+  inv.taxDisabled = false;
   inv.replacesSaleId = null;
   inv.replacementDocumentNumber = '';
   inv.sourceQuoteId = null;
@@ -1156,7 +1165,7 @@ function openPosOfferModal() {
       <input type="checkbox" data-offer-index="${idx}" ${Number(item.offer_is_gift) === 1 ? 'checked' : ''}/>
       <span style="flex:1">
         <strong style="display:block;font-size:12px">${posEscHtml(item.name || item.product_name || '')}</strong>
-        <span style="font-size:10px;color:var(--muted)">${item.qty} × ${fmt(item.price)} · ${_posTaxable(item) ? `ITBIS ${_posTaxPct(item)}%` : 'Exento'}</span>
+        <span style="font-size:10px;color:var(--muted)">${item.qty} × ${fmt(item.price)} · ${posInvoiceTaxDisabled(inv) ? 'ITBIS apagado en esta factura' : (_posTaxable(item) ? `ITBIS ${_posTaxPct(item)}%` : 'Exento')}</span>
       </span>
       <strong>${fmt((Number(item.price) || 0) * (Number(item.qty) || 0))}</strong>
     </label>`).join('');
@@ -1233,6 +1242,7 @@ function posSetType(t) {
   }
   if (t !== 'factura') currentInv().cart.forEach(item => { item.offer_is_gift = 0; });
   currentInv().itype = t;
+  if (t !== 'factura') currentInv().taxDisabled = false;
   renderInvTabs();
   renderCart();
 }
@@ -1845,6 +1855,7 @@ function posLoadResaleCart(payload = {}) {
   inv.pmode = payload.priceMode === 'wholesale' ? 'wholesale' : 'retail';
   inv.pmeth = ['efectivo','tarjeta','transferencia','mixto','credito'].includes(payload.paymentMethod)
     ? payload.paymentMethod : 'efectivo';
+  inv.taxDisabled = payload.taxDisabled === true;
   inv.disc = Math.max(0, Math.min(100, Number(payload.discountPct) || 0));
   inv.discAmtInput = 0;
   inv.charges = Array.isArray(payload.charges)
@@ -2088,6 +2099,17 @@ function _posRound2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
 
+function posInvoiceTaxDisabled(inv) {
+  return inv?.itype === 'factura' && CFG.invoiceTaxToggleEnabled === true && inv.taxDisabled === true;
+}
+
+function posToggleInvoiceTax() {
+  const inv = currentInv();
+  if (!inv || inv.itype !== 'factura' || !CFG.invoiceTaxToggleEnabled || inv.saleSubmitting) return;
+  inv.taxDisabled = !posInvoiceTaxDisabled(inv);
+  renderCart();
+}
+
 function _posTaxPct(item) {
   const pct = parseFloat(item?.tax_pct ?? CFG.itbis ?? 18);
   return Number.isFinite(pct) ? Math.max(0, Math.min(100, pct)) : 18;
@@ -2137,7 +2159,7 @@ function calcTotals(inv) {
   let taxAcc = 0;
   effectiveItems.forEach(item => {
     const lineAfterDiscount = (Number(item.effective_line_total) || 0) * factor;
-    if (inv.itype !== 'factura' || !_posTaxable(item)) return;
+    if (inv.itype !== 'factura' || posInvoiceTaxDisabled(inv) || !_posTaxable(item)) return;
     const pct = _posTaxPct(item);
     if (pct <= 0) return;
     const net = lineAfterDiscount / (1 + (pct / 100));
@@ -2147,8 +2169,8 @@ function calcTotals(inv) {
   // Espejo exacto del motor del backend, incluido el orden de redondeo: el
   // carrito debe mostrar al centavo el desglose que se guardará. El cargo es
   // una línea más —neto al subtotal, ITBIS al impuesto— y el importe escrito es
-  // el que se suma. Si lleva ITBIS lo decide el negocio, nunca el cajero.
-  const chargesTaxable = inv.itype === 'factura' && CFG.charges_taxable === true;
+  // el que se suma. La excepción por factura también abarca estos cargos.
+  const chargesTaxable = inv.itype === 'factura' && !posInvoiceTaxDisabled(inv) && CFG.charges_taxable === true;
   const chargePct = chargesTaxable ? _posTaxPct({}) : 0;
   let chargesNet = 0;
   let chargesTax = 0;
@@ -2663,6 +2685,7 @@ async function posSubmitCheckoutOrder() {
     const res = await window.api.checkout.create({
       orderData: {
         customer, items, discountPct: inv.disc || 0, priceMode: inv.pmode || 'retail',
+        taxDisabled: posInvoiceTaxDisabled(inv),
         salespersonId, priceChangeAuthToken: inv.priceChangeAuthToken || null,
         discountAuthToken: inv.discAuthToken || null,
         notes: document.getElementById('pv-notes')?.value?.trim() || '',
@@ -3404,8 +3427,8 @@ function openCobroModal(inv) {
            <div class="tr"><span>Descuento (${Math.round(disc*100)/100}%)</span>
            <span id="cbr-summary-discount">−${fmt(discAmt)}</span></div>` : ''}
         <div class="tr"><span>Subtotal sin ITBIS</span><span id="cbr-summary-subtotal">${fmt(subtotal)}</span></div>
-      ${inv.itype === 'factura' && itbis > 0
-        ? `<div class="tr"><span>ITBIS (${CFG.itbis}%)</span><span id="cbr-summary-itbis">${fmt(itbis)}</span></div>` : ''}
+      ${inv.itype === 'factura' && (itbis > 0 || posInvoiceTaxDisabled(inv))
+        ? `<div class="tr"><span>${posInvoiceTaxDisabled(inv) ? 'ITBIS apagado' : `ITBIS (${CFG.itbis}%)`}</span><span id="cbr-summary-itbis">${fmt(itbis)}</span></div>` : ''}
       ${tradeInAmount > 0 ? `<div class="tr" style="color:var(--blue)"><span>Parte de pago: ${posEscHtml(inv.tradeIn?.productName || 'equipo usado')}</span><span>−${fmt(tradeInAmount)}</span></div>` : ''}
       <div class="tr grand"><span id="cbr-total-label">TOTAL</span><span id="cbr-summary-total">${fmt(total)}</span></div>
       ${Number(calcTotals(inv).chargesTotal) > 0
@@ -4653,6 +4676,7 @@ async function finalizarVenta() {
     items,
     payment: {
       method:         pmeth,
+      taxDisabled:    posInvoiceTaxDisabled(inv),
       walkInCredit: pmeth === 'credito' && walkInCredit,
       walkInDueDate: pmeth === 'credito' && walkInCredit ? walkInDueDate : '',
       disc:           inv.disc || 0,

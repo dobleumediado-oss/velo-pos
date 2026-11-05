@@ -163,6 +163,7 @@ let CFG = {
   addr:         '',
   phone:        '',
   itbis:        0,
+  invoiceTaxToggleEnabled: false,
   fiscalEnabled:           false,
   module_gastos:           '0',
   module_sucursales:       '0',
@@ -281,6 +282,7 @@ async function loadAppData() {
       // Regla del negocio, no del cajero: el carrito la usa para mostrar el
       // mismo desglose que se guardará en la factura.
       CFG.charges_taxable = settings.charges_taxable === '1';
+      CFG.invoiceTaxToggleEnabled = settings.pos_invoice_tax_toggle === '1';
       window._bcEnabled = settings.barcode_enabled === '1' || settings.barcode_enabled === true;
 
       // Carga GENÉRICA de módulos: copia a CFG CUALQUIER setting 'module_*'
@@ -623,7 +625,7 @@ async function chkCaja() {
 // ══════════════════════════════════════════════
 function newInvObj(id) {
   return {
-    id, cart: [], pmode: 'retail', itype: 'factura',
+    id, cart: [], pmode: 'retail', itype: 'factura', taxDisabled: false,
     pmeth: 'efectivo', cliId: 1, cliName: '', cliCedula: '',
     cliPhone: '', cliPhoneType: 'celular', cliPhoneId: null,
     cliContactId: null, cliContactName: '', cliContactRole: '', cliContactPhone: '',
@@ -740,6 +742,7 @@ function _posWorkspaceCleanInvoice(source, id) {
       description: String(charge?.description || '').slice(0, 120),
       amount: Math.max(0, Number(charge?.amount) || 0),
     })).filter(charge => charge.description && charge.amount > 0),
+    taxDisabled: raw.itype === 'factura' && raw.taxDisabled === true,
     saleOperationId: '',
     saleSubmitting: false,
     conduceSubmitting: false,

@@ -1,5 +1,17 @@
 # Historial de versiones
 
+## 1.62.1 — 2026-11-05
+
+- Configuración permite habilitar el botón de ITBIS por factura. Apagarlo deja
+  artículos y cargos con impuesto cero, conservando precios y total. Una nueva
+  factura inicia con el cálculo normal; borradores y despacho conservan la elección.
+- TECH guarda el modelo y su primer IMEI/serial en una transacción: un duplicado
+  no deja un modelo incompleto. Crear solo el modelo requiere una elección explícita.
+- La existencia de equipos serializados sale de los IMEI disponibles también en
+  el campo stock del catálogo. Un contador histórico no inventa equipos vendibles.
+- Registrar un lote activa el control por IMEI dentro de la misma transacción;
+  un lote rechazado no cambia el tratamiento del producto.
+
 ## 1.52.1 — 2026-09-23
 
 ### Anular una factura abierta desde la cuenta del cliente

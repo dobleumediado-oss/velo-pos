@@ -591,6 +591,18 @@ async function renderConfiguracion(el) {
         </div>
       </div>
       <label class="fg" style="display:flex;align-items:flex-start;gap:9px;cursor:pointer">
+        <input type="checkbox" id="cfg-invoice-tax-toggle" style="width:16px;height:16px;margin-top:2px"
+               ${settings.pos_invoice_tax_toggle === '1' ? 'checked' : ''}/>
+        <span>
+          <span class="lbl" style="display:block;margin-bottom:2px">Permitir apagar el ITBIS por factura</span>
+          <span style="font-size:10px;color:var(--muted2);display:block;line-height:1.5">
+            Muestra un botón en el carrito para dejar el ITBIS de una factura en cero, incluidos
+            los cargos adicionales. Conserva los precios y el total, sin cambiar el inventario.
+            Cada factura nueva comienza con el ITBIS normal.
+          </span>
+        </span>
+      </label>
+      <label class="fg" style="display:flex;align-items:flex-start;gap:9px;cursor:pointer">
         <input type="checkbox" id="cfg-charges-taxable" style="width:16px;height:16px;margin-top:2px"
                ${settings.charges_taxable === '1' ? 'checked' : ''}/>
         <span>
@@ -1464,6 +1476,13 @@ async function guardarConfiguracion() {
   if (rncEl) await window.api.settings.set({ key: 'biz_rnc', value: rncEl.value.trim(), requestUserId: uid });
   const taxEl = document.getElementById('cfg-tax');
   if (taxEl) await window.api.settings.set({ key: 'tax_pct', value: taxEl.value.trim(), requestUserId: uid });
+  const invoiceTaxEl = document.getElementById('cfg-invoice-tax-toggle');
+  if (invoiceTaxEl) {
+    const result = await window.api.settings.set({
+      key: 'pos_invoice_tax_toggle', value: invoiceTaxEl.checked ? '1' : '0', requestUserId: uid,
+    });
+    if (result && !result.ok) { toast(result.error || 'No se pudo guardar la opción de ITBIS', 'e'); return; }
+  }
   const chargesTaxEl = document.getElementById('cfg-charges-taxable');
   if (chargesTaxEl) {
     await window.api.settings.set({
@@ -1479,6 +1498,7 @@ async function guardarConfiguracion() {
   CFG.fiscalEnabled = s.fiscal_enabled === '1';
   CFG.itbis        = parseFloat(s.tax_pct) || 18;
   CFG.charges_taxable = s.charges_taxable === '1';
+  CFG.invoiceTaxToggleEnabled = s.pos_invoice_tax_toggle === '1';
   CFG.businessCloseTime = s.business_close_time || '';
   CFG.cashCloseRequiredAfterHours = s.cash_close_required_after_hours || '0';
   DB.settings = s;

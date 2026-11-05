@@ -41,7 +41,7 @@ try {
   const sessionId = DB.cashRepo.open({
     userId: admin.id, cajero: admin.name, openAmount: 0, openBills: {}, terminalId: 'CARGOS-QA',
   });
-  const sell = ({ charges = [], method = 'efectivo', type = 'factura', qty = 1 } = {}) =>
+  const sell = ({ charges = [], method = 'efectivo', type = 'factura', qty = 1, taxDisabled = false, disc = 0 } = {}) =>
     DB.salesRepo.getById(DB.salesRepo.create({
       customer: { id: customerId },
       items: [{
@@ -50,7 +50,7 @@ try {
       }],
       payment: {
         method: type === 'cotizacion' ? 'cotizacion' : method,
-        saleDate: '2026-09-19', ncfType: '', charges,
+        saleDate: '2026-09-19', ncfType: '', charges, taxDisabled, disc,
       },
       session: { id: sessionId }, user: admin, type,
     }).saleId);
@@ -252,6 +252,34 @@ try {
   const pos = fs.readFileSync(path.join(__dirname, '..', 'src', 'js', 'pos.js'), 'utf8');
   ok(pos.includes('function posTieneQueCobrar(') && !pos.includes('if (!inv || !inv.cart.length) return;'),
     'el botón Cobrar y la confirmación miran artículos y cargos');
+
+  console.log('\n== ITBIS apagado para una factura completa ==');
+  let blocked = false;
+  try { sell({ taxDisabled:true }); } catch (error) { blocked = /Configuración/.test(error.message); }
+  ok(blocked, 'el repositorio exige la casilla activa, aunque se omita la interfaz');
+  DB.settingsRepo.set('pos_invoice_tax_toggle', '1');
+  DB.settingsRepo.set('charges_taxable', '1');
+  const withoutTax = sell({ taxDisabled:true, disc:10, charges:[{ description:'Instalación', amount:118 }] });
+  ok(withoutTax.total === 224.2 && withoutTax.subtotal === 224.2 && withoutTax.tax_amt === 0,
+    'con descuento y cargo gravado conserva el total, todo como neto');
+  ok(withoutTax.tax_disabled === 1 && withoutTax.tax_pct === 0 &&
+    withoutTax.items.every(row => row.taxable === 0 && row.tax_pct === 0 && row.tax_amt === 0),
+    'guarda la elección y el ITBIS en cero tanto en cabecera como en artículos');
+  ok(withoutTax.charges.every(row => row.taxable === 0 && row.tax_pct === 0 && row.tax_amt === 0),
+    'los cargos adicionales tampoco dejan impuesto residual');
+  const exemptLines = entryLines(withoutTax.id);
+  ok(!exemptLines.some(row => row.code === '2102') &&
+    r2(exemptLines.reduce((sum,row) => sum + row.debit - row.credit,0)) === 0,
+    'el asiento cuadra sin registrar ITBIS por pagar');
+  const untouched = DB.productsRepo.getById(productId);
+  ok(untouched.taxable === 1 && untouched.tax_pct === 18 && untouched.price === 118,
+    'el producto del inventario conserva precio y tratamiento fiscal');
+  const nextTaxed = sell();
+  ok(nextTaxed.tax_amt === 18 && nextTaxed.total === 118 && nextTaxed.tax_disabled === 0,
+    'la siguiente factura vuelve a calcular su ITBIS normalmente');
+  DB.settingsRepo.set('pos_invoice_tax_toggle', '0');
+  ok(DB.salesRepo.getById(withoutTax.id).tax_amt === 0,
+    'desactivar la casilla no reinterpreta facturas ya emitidas');
 
   console.log(`\n== RESULTADO: ${passed} OK ==`);
 

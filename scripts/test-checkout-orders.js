@@ -115,6 +115,31 @@ ok(history[0]?.id === third.id, 'el historial muestra primero la actividad mas r
 const fourth = DB.checkoutOrdersRepo.create({ customer, items:[item2], createdBy:user.id, createdByName:user.name, terminalId:'despacho-2' });
 ok(fourth.status === 'pending', 'el inventario vencido vuelve a estar disponible');
 
+console.log('\n== ITBIS por factura al pasar de despacho a caja ==');
+DB.settingsRepo.set('pos_invoice_tax_toggle', '1');
+const exemptOrder = DB.checkoutOrdersRepo.create({
+  customer, items:[item(1)], taxDisabled:true,
+  createdBy:user.id, createdByName:user.name, terminalId:'despacho-1',
+});
+ok(exemptOrder.tax_disabled === 1 && exemptOrder.tax_amt === 0 && exemptOrder.total === 118,
+  'la orden conserva la elección sin modificar su precio');
+ok(exemptOrder.items[0].taxable === 1, 'la orden conserva el tratamiento original para poder reencender');
+const exemptPayment = DB.checkoutOrdersRepo.pay({
+  id:exemptOrder.id, payment:{method:'efectivo'}, session:null, user, terminalId:'caja-1',
+});
+const exemptInvoice = DB.salesRepo.getById(exemptPayment.saleId);
+ok(exemptInvoice.tax_amt === 0 && exemptInvoice.tax_disabled === 1 && exemptInvoice.total === 118,
+  'caja hereda la elección de despacho al emitir la factura');
+const reenabledOrder = DB.checkoutOrdersRepo.create({
+  customer, items:[item(1)], taxDisabled:true,
+  createdBy:user.id, createdByName:user.name, terminalId:'despacho-1',
+});
+const reenabledPayment = DB.checkoutOrdersRepo.pay({
+  id:reenabledOrder.id, payment:{method:'efectivo',taxDisabled:false}, session:null, user, terminalId:'caja-1',
+});
+ok(DB.salesRepo.getById(reenabledPayment.saleId).tax_amt === 18,
+  'caja puede reencender y recuperar el ITBIS original');
+
 db.close();
 try { fs.rmSync(tempDir, { recursive:true, force:true }); } catch {}
 

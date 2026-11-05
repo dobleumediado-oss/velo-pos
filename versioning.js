@@ -2583,6 +2583,17 @@ const MIGRATIONS = [
     description: 'Custodia física de artículos consignados, separada de inventario y ventas',
     run(db) { require('./lib/consignment-physical').ensureSchema(db); },
   },
+  {
+    version: '1.62.1-invoice-tax-toggle',
+    description: 'ITBIS opcional por factura, sin alterar precios ni inventario.',
+    run(db) {
+      if (!db.prepare('PRAGMA table_info(sales)').all().some(col => col.name === 'tax_disabled')) {
+        db.exec('ALTER TABLE sales ADD COLUMN tax_disabled INTEGER NOT NULL DEFAULT 0');
+      }
+      db.prepare("INSERT OR IGNORE INTO settings(key,value) VALUES('pos_invoice_tax_toggle','0')").run();
+      require('./src/main/checkout-orders-repo').ensureCheckoutOrdersSchema(db);
+    },
+  },
 ];
 
 // ══════════════════════════════════════════════

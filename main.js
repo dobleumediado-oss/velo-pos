@@ -1062,6 +1062,9 @@ ipcMain.handle('settings:set', async (_, { key, value, requestUserId }) => {
     }
     value = String(Math.round(parsed * 100) / 100);
   }
+  if (key === 'pos_invoice_tax_toggle' && !['0', '1'].includes(String(value))) {
+    return { ok: false, error: 'La opción de ITBIS por factura debe estar activada o desactivada' };
+  }
   if (key === 'charges_taxable' && !['0', '1'].includes(String(value))) {
     return { ok: false, error: 'La regla de ITBIS de los cargos adicionales debe estar activada o desactivada' };
   }
@@ -2000,7 +2003,7 @@ ipcMain.handle('products:create', async (_, { data, requestUserId }) => {
     }
     const id = productsRepo.create(data);
     audit(requestUserId, reqUser.name, 'producto_creado', 'products', id, data.name);
-    return { ok: true, id };
+    return { ok: true, id, product: productsRepo.getAll().find(row => Number(row.id) === Number(id)) };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -2044,7 +2047,7 @@ ipcMain.handle('products:update', async (_, { id, data, requestUserId, source, r
     if (historyId) {
       _acctHook(() => accountingRepo.generateInventoryRevaluationEntry({ historyId, userId: requestUserId }));
     }
-    return { ok: true, historyId };
+    return { ok: true, historyId, product: productsRepo.getAll().find(row => Number(row.id) === Number(id)) };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -2211,8 +2214,7 @@ ipcMain.handle('productUnits:create', async (_, { productId, units, requestUserI
     const reqUser = _inventoryAuthorizedUser(requestUserId);
     const prod = db.prepare('SELECT id,COALESCE(serialized,0) AS serialized FROM products WHERE id=?').get(productId);
     if (!prod) return { ok: false, error: 'Producto no encontrado' };
-    // Registrar equipos marca el producto como serializado automáticamente.
-    if (!prod.serialized) productUnitsRepo.setSerialized(productId, true);
+    // El alta del lote y la activación por IMEI se confirman juntas en el repositorio.
     const list = (Array.isArray(units) ? units : [units]).filter(Boolean);
     const created = productUnitsRepo.createMany(productId, list);
     audit(requestUserId, reqUser.name, 'equipos_registrados', 'products', productId, `${created.length} unidad(es)`);
