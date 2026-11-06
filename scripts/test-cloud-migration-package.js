@@ -90,6 +90,17 @@ const { createMigrationPackage, verifyMigrationPackage, restoreCompleteBackupToE
     assert.equal(posVerified.manifest.vertical, 'POS');
     assert.equal(posVerified.manifest.businessId, 'otro-negocio');
     assert.equal(posVerified.manifest.tables.find(t => t.name === 'sales').rows, 2);
+    // Copia final del corte a Cloud: lleva la hora del congelamiento, anterior a la copia.
+    await assert.rejects(createMigrationPackage({ ...args, vertical: 'POS', purpose: 'desktop-cutover-final' }), /congelamiento/);
+    await assert.rejects(createMigrationPackage({ ...args, vertical: 'POS', purpose: 'desktop-cutover-final', frozenAt: new Date(Date.now() + 3600000).toISOString() }), /después de congelar/);
+    const frozenAt = new Date().toISOString();
+    const finalCopy = await createMigrationPackage({ ...args, vertical: 'POS', purpose: 'desktop-cutover-final', frozenAt });
+    const finalVerified = await verifyMigrationPackage({ filePath: finalCopy.path, passphrase: args.passphrase });
+    assert.equal(finalVerified.manifest.purpose, 'desktop-cutover-final');
+    assert.equal(finalVerified.manifest.frozenAt, frozenAt);
+    assert.equal(finalVerified.manifest.scope, 'complete-database-and-service-evidence');
+    assert.ok(finalVerified.manifest.frozenAt <= finalVerified.manifest.capturedAt);
+    assert.equal(posVerified.manifest.frozenAt, undefined);
     const businessDataDir = path.join(root, 'negocios', 'biz_prueba');
     fs.mkdirSync(businessDataDir, { recursive: true });
     fs.writeFileSync(path.join(businessDataDir, 'meta.json'), JSON.stringify({ name: 'Negocio ficticio' }));
