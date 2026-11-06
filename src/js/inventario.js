@@ -1036,7 +1036,7 @@ window.abrirRegistroEquipos = async function (p) {
       : `<tr><td colspan="5" style="padding:10px;color:var(--muted2);text-align:center">Sin equipos registrados</td></tr>`;
     return `
       <div class="modal-title">Equipos — ${esc(p.name)}</div>
-      <div style="font-size:12px;color:var(--muted2);margin-bottom:10px">${inStock} en stock · ${units.length} registrado(s)</div>
+      <div style="font-size:12px;color:var(--muted2);margin-bottom:10px">${inStock} en stock · ${units.length} registrado(s)</div><button type="button" class="btn btn-dark" style="margin-bottom:14px" onclick="openDeviceEntry(${Number(p.id)})">Agregar unidad</button><details><summary>Recepción masiva por IMEI</summary>
       <div style="display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:8px;margin-bottom:8px">
         <input class="inp" id="eq-imei" placeholder="IMEI o serial *" data-uppercase="off" autocomplete="off">
         <select class="inp" id="eq-cond"><option value="nuevo">Nuevo</option><option value="usado">Usado</option><option value="reacondicionado">Reacondicionado</option></select>
@@ -1059,7 +1059,7 @@ window.abrirRegistroEquipos = async function (p) {
         <textarea class="inp" id="eq-bulk" rows="5" data-uppercase="off" placeholder="359123456789001&#10;359123456789019&#10;SERIAL-LAPTOP-003" style="resize:vertical;font-family:var(--mono)"></textarea>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px"><span class="ts" id="eq-bulk-count">0 equipos detectados</span><button class="btn btn-dark" id="eq-add-bulk">Registrar lote</button></div>
       </details>
-      <div style="max-height:260px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+      </details><div style="max-height:260px;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
         <thead><tr style="color:var(--muted2);font-size:10.5px"><th style="text-align:left;padding:6px">IMEI / SERIAL</th><th style="text-align:left;padding:6px">DETALLE</th><th style="text-align:right;padding:6px">COSTO</th><th style="text-align:left;padding:6px">GARANTÍA</th><th style="text-align:left;padding:6px">ESTADO</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
       <div style="display:flex;justify-content:flex-end;margin-top:12px"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>`;
@@ -1695,7 +1695,10 @@ async function openKardexModal(p) {
 // ══════════════════════════════════════════════
 // ENTRADA DE MERCANCÍA RÁPIDA
 // ══════════════════════════════════════════════
-function openEntradaMercanciaModal() {
+function openEntradaMercanciaModal(accessoriesOnly = false) {
+  if (window._vertical?.serialized && accessoriesOnly !== true) {
+    openModal(`<div class="modal-title">Entrada de inventario</div><div class="modal-sub">Elige qué vas a recibir.</div><div class="g2"><button class="btn btn-dark" onclick="openDeviceEntry()">Dispositivo con IMEI o serial</button><button class="btn btn-out" onclick="openEntradaMercanciaModal(true)">Accesorio o insumo por cantidad</button></div>`);return;
+  }
   const prodOpts = DB.products
     .filter(p => !p.serialized)
     .sort((a,b) => a.name.localeCompare(b.name))
@@ -1885,7 +1888,88 @@ async function confirmarEntrada() {
 // ══════════════════════════════════════════════
 // MODAL PRODUCTO (crear / editar)
 // ══════════════════════════════════════════════
+// Un mismo ingreso desde el catálogo, Entrada y Equipos; el costo pertenece a la unidad.
+let deviceEntryState = null;
+function openDeviceEntry(productId = null) {
+  const product = (DB.products || []).find(row => row.serialized && Number(row.id) === Number(productId));
+  deviceEntryState = { step:product ? 2 : 1, mode:(DB.products || []).some(row => row.serialized) ? 'existing' : 'new', productId:product?.id || null, brand:'', model:'', imei:'', cost:product ? String(product.cost || 0) : '', price:'', color:'', capacity:'', health:'', mah:'', description:'', wholesale:'', taxPercent:String(Number(CFG.itbis)||18), taxable:true, category:'', code:'', barcode:'', condition:product?.condition || 'nuevo', saving:false };
+  renderDeviceEntry();
+}
+function deviceEntryCapture() {
+  if (!deviceEntryState) return;
+  for (const key of ['brand','model','imei','cost','price','color','capacity','health','mah','description','condition','wholesale','taxPercent','category','code','barcode']) {
+    const input = document.getElementById('de-'+key);
+    if (input && !(key === 'price' && deviceEntryState.mode === 'existing')) deviceEntryState[key] = input.value;
+  }
+  const taxable = document.getElementById('de-taxable'); if (taxable) deviceEntryState.taxable=taxable.checked;
+  const name = document.getElementById('de-generated');
+  if (name) name.textContent = [deviceEntryState.brand.trim(),deviceEntryState.model.trim()].filter(Boolean).join(' · ') || 'Marca · Modelo';
+  deviceEntryMargin();
+}
+function deviceEntryMargin() {
+  const state = deviceEntryState;if (!state) return;
+  const product = DB.products.find(row => Number(row.id) === Number(state.productId));
+  const price = state.mode === 'existing' ? Number(product?.price || 0) : Number(state.price);
+  const cost = Number(state.cost), valid = state.cost.trim() !== '' && Number.isFinite(cost) && cost >= 0 && price > 0;
+  const gain = document.getElementById('de-gain'), margin = document.getElementById('de-margin');
+  if (gain) gain.textContent = valid ? fmt(price-cost) : '—';
+  if (margin) margin.textContent = valid ? ((price-cost)/price*100).toFixed(2)+'%' : '—';
+}
+function deviceEntrySelect(id) {
+  deviceEntryCapture();const p = DB.products.find(row => Number(row.id) === Number(id));
+  if (!p) return;deviceEntryState.productId=p.id;deviceEntryState.cost=String(p.cost || 0);deviceEntryState.condition=p.condition || 'nuevo';renderDeviceEntry();
+}
+function deviceEntryMode(mode) { deviceEntryCapture();if(mode==='new'&&deviceEntryState.mode!=='new')deviceEntryState.cost='';deviceEntryState.mode=mode;deviceEntryState.step=1;renderDeviceEntry(); }
+function deviceEntrySearch(value) {
+  const normalize = text => String(text).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('es');
+  document.querySelectorAll('[data-entry-model]').forEach(button => { button.hidden=!normalize(button.dataset.entryModel).includes(normalize(value)); });
+}
+function renderDeviceEntry() {
+  const s=deviceEntryState, esc=invEsc;
+  const product=DB.products.find(row => Number(row.id)===Number(s.productId));
+  const models=(DB.products || []).filter(row => row.serialized);
+  const field=(key,label,type='text',extra='')=>`<div class="fg"><label class="lbl" for="de-${key}">${label}</label><input class="inp" id="de-${key}" type="${type}" value="${esc(s[key] || '')}" oninput="deviceEntryCapture()" ${extra}></div>`;
+  const first=s.mode==='existing' ? `<div class="fg"><label class="lbl" for="de-search">Buscar modelo</label><input class="inp" id="de-search" type="search" placeholder="Marca, modelo o código…" oninput="deviceEntrySearch(this.value)"></div><div style="display:grid;gap:8px;max-height:280px;overflow:auto">${models.map(p=>`<button type="button" class="btn btn-out" style="justify-content:space-between;min-height:48px" data-entry-model="${esc(p.name+' '+p.code)}" onclick="deviceEntrySelect(${Number(p.id)})" aria-pressed="${Number(s.productId)===Number(p.id)}"><span>${esc(p.name)}</span><span>${Number(s.productId)===Number(p.id)?'Seleccionado':'Elegir'}</span></button>`).join('')}</div><button type="button" class="btn btn-ghost" onclick="deviceEntryMode('new')" style="margin-top:12px">+ Crear un modelo nuevo</button>` : `<div class="g2">${field('brand','Marca *')}${field('model','Modelo *')}</div><div style="padding:14px;background:var(--surface2);border-radius:10px"><div class="ts">Nombre en el catálogo</div><strong id="de-generated">${esc([s.brand.trim(),s.model.trim()].filter(Boolean).join(' · ') || 'Marca · Modelo')}</strong></div>`;
+  const catalogue=s.mode==='new'?`<details style="margin-top:16px"><summary>Opciones del catálogo</summary><div class="g2" style="margin-top:12px">${field('code','Código (opcional)')}${field('barcode','Código de barras (opcional)')}<div class="fg"><label class="lbl">Categoría</label><select class="inp" id="de-category" onchange="deviceEntryCapture()"><option value="">Sin categoría</option>${CATS.map(c=>`<option value="${esc(c)}" ${s.category===c?'selected':''}>${esc(c)}</option>`).join('')}</select></div></div></details>`:'';
+  const pricing=s.mode==='new'?`<details style="margin-top:16px"><summary>Más opciones de precio</summary><div class="g2" style="margin-top:12px">${field('wholesale','Precio mayorista (RD$)','number','min="0" step="0.01"')}<div class="fg"><label class="lbl"><input type="checkbox" id="de-taxable" ${s.taxable?'checked':''} onchange="deviceEntryCapture()"> Incluye ITBIS</label>${field('taxPercent','ITBIS (%)','number','min="0" max="100" step="0.01"')}</div></div></details>`:'';
+  const second=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><strong>${esc(s.mode==='existing'?product?.name || '':s.brand+' · '+s.model)}</strong><button type="button" class="btn btn-ghost" onclick="deviceEntryBack()">Cambiar modelo</button></div>${field('imei','IMEI o serial *','text','autocomplete="off" data-uppercase="off"')}<section style="padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--surface2);margin:16px 0"><h3 style="font-size:14px;margin:0 0 14px">Costo y ganancia</h3><div class="g2">${field('cost','Costo de esta unidad (RD$) *','number','min="0" step="0.01"')}<div class="fg"><label class="lbl" for="de-price">Precio de venta final (RD$) *</label><input class="inp" id="de-price" type="number" min="0.01" step="0.01" value="${esc(s.mode==='existing'?String(product?.price || 0):s.price)}" ${s.mode==='existing'?'readonly':''} oninput="deviceEntryCapture()"><small class="ts">${s.mode==='existing'?'Precio actual del modelo. Se cambia desde Editar.':'Precio del modelo nuevo.'}</small></div></div><div class="g2" style="border-top:1px solid var(--line);padding-top:12px"><div><div class="ts">Ganancia estimada</div><strong id="de-gain" style="font-size:20px"></strong></div><div><div class="ts">Margen sobre venta</div><strong id="de-margin" style="font-size:20px"></strong></div></div><div class="ts" style="margin-top:10px">Diferencia entre precio final y costo, antes de gastos.</div></section><details><summary style="cursor:pointer">Detalles del dispositivo</summary><div class="g2" style="margin-top:12px"><div class="fg"><label class="lbl" for="de-condition">Condición</label><select class="inp" id="de-condition" onchange="deviceEntryCapture()">${['nuevo','usado','reacondicionado','consignacion','especial'].map(v=>`<option value="${v}" ${s.condition===v?'selected':''}>${v[0].toUpperCase()+v.slice(1)}</option>`).join('')}</select></div>${field('capacity','Capacidad')}${field('color','Color')}${field('health','Condición de batería (%)','number','min="0" max="100"')}${field('mah','Capacidad de batería (mAh)','number','min="1" max="100000"')}</div><div class="fg"><label class="lbl" for="de-description">Descripción para factura</label><input class="inp" id="de-description" value="${esc(s.description)}" list="de-descriptions" oninput="deviceEntryCapture()"><datalist id="de-descriptions"></datalist></div></details>`;
+  openModal(`<div class="modal-title">Ingresar dispositivo</div><div class="modal-sub">${s.step===1?'Elige el modelo; luego registra su unidad.':'Registra el identificador y el costo de esta unidad.'}</div><div style="display:flex;gap:24px;margin:16px 0;padding-bottom:12px;border-bottom:1px solid var(--line)"><span style="font-weight:${s.step===1?700:400}">1. Modelo</span><span style="font-weight:${s.step===2?700:400}">2. Unidad y ganancia</span></div>${s.step===1?first+catalogue:second+pricing}<div class="modal-foot"><button class="btn btn-out" onclick="${s.step===1&&s.mode==='existing'?'closeModal()':'deviceEntryBack()'}">${s.step===1&&s.mode==='existing'?'Cancelar':'Atrás'}</button><button class="btn btn-dark" id="de-save" onclick="deviceEntryNext()">${s.step===1?'Continuar':'Registrar unidad'}</button></div>`,'modal-lg');
+  deviceEntryMargin();document.getElementById(s.step===2?'de-imei':s.mode==='existing'?'de-search':'de-brand')?.focus();
+  if(s.step===2&&window.api?.techDescriptions?.list) window.api.techDescriptions.list({requestUserId:user?.id}).then(result=>{const dl=document.getElementById('de-descriptions');if(dl&&deviceEntryState===s)dl.innerHTML=(result?.data || []).map(row=>`<option value="${esc(row.description)}">${esc(row.name)}</option>`).join('');}).catch(()=>{});
+}
+function deviceEntryBack() { deviceEntryCapture(); if(deviceEntryState.step===2)deviceEntryState.step=1;else if((DB.products || []).some(p=>p.serialized))deviceEntryState.mode='existing';else return closeModal();renderDeviceEntry(); }
+async function deviceEntryNext() {
+  const s=deviceEntryState;if(!s || s.saving)return;deviceEntryCapture();
+  const product=DB.products.find(row=>Number(row.id)===Number(s.productId));
+  if(s.step===1){
+    if(s.mode==='existing'&&!product){toast('Selecciona el modelo','err');return;}
+    if(s.mode==='new'&&(!s.brand.trim()||!s.model.trim())){toast('Completa la marca y el modelo','err');return;}
+    s.step=2;renderDeviceEntry();return;
+  }
+  const price=s.mode==='existing'?Number(product?.price || 0):Number(s.price),cost=Number(s.cost);
+  if(!s.imei.trim()){toast('Escribe el IMEI o serial','err');return;}
+  if(s.cost.trim()===''||!Number.isFinite(cost)||cost<0||!Number.isFinite(price)||price<=0){toast('Indica el costo y un precio mayor a cero','err');return;}
+  if((s.health!==''&&(!Number.isFinite(Number(s.health))||Number(s.health)<0||Number(s.health)>100))||(s.mah!==''&&(!Number.isFinite(Number(s.mah))||Number(s.mah)<1||Number(s.mah)>100000))){toast('Revisa los datos de batería','err');return;}
+  if(s.mode==='new'&&((s.wholesale!==''&&(!Number.isFinite(Number(s.wholesale))||Number(s.wholesale)<0))||(s.taxable&&(!Number.isFinite(Number(s.taxPercent))||Number(s.taxPercent)<0||Number(s.taxPercent)>100)))){toast('Revisa el precio mayorista y el ITBIS','err');return;}
+  const unit={imei:s.imei.trim(),condition:s.condition,unit_cost:cost,color:s.color.trim(),capacity:s.capacity.trim(),battery_health:s.health || null,battery_capacity_mah:s.mah || null,sale_description:s.description.trim()};
+  s.saving=true;const button=document.getElementById('de-save');if(button)button.disabled=true;
+  try{
+    let result;
+    if(s.mode==='existing') result=await window.api.productUnits.create({productId:product.id,units:[unit],requestUserId:user.id});
+    else{
+      const name=s.brand.trim()+' · '+s.model.trim();const base=name.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,40);let code=s.code.trim() || base,index=2;if(!s.code.trim())while(DB.products.some(p=>p.code===code))code=base+'-'+index++;
+      result=await window.api.products.create({requestUserId:user.id,data:{name,brand:s.brand.trim(),model:s.model.trim(),code,barcode:s.barcode.trim() || _pfNextNumericBarcode(),category:s.category,unit:'und',description:'',condition:s.condition,cost,price,wholesale:s.wholesale===''?price:Number(s.wholesale),taxable:s.taxable?1:0,tax_pct:s.taxable?Number(s.taxPercent):0,stock:0,stock_min:0,serialized:1,first_unit:unit}});
+    }
+    if(!result?.ok)throw Error(result?.error || 'No se pudo registrar la unidad');
+    closeModal();toast('✓ Dispositivo ingresado y disponible para vender','ok');
+    if(s.mode==='new')applyInventoryMutation({productId:result.id,patch:{...result.product,id:result.id},focus:true});
+    else {await reloadProducts();renderInvCurrentView();}
+  }catch(error){toast(error.message || 'No se pudo registrar la unidad','err');}
+  finally{s.saving=false;if(document.getElementById('de-save')===button&&button)button.disabled=false;}
+}
+
 function openProductoModal(p = null, options = {}) {
+  if (window._vertical?.serialized && !p?.id && !options.accessory) return openDeviceEntry(options.productId);
   const appendModels = values => {
     const dl = document.getElementById('pf-model-list');
     if (!dl) return;
