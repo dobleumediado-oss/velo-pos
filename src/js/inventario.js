@@ -1921,6 +1921,7 @@ function openProductoModal(p = null, options = {}) {
 
   const isEdit   = !!p?.id;
   const stockMin = p?.stock_min || 5;
+  const equipmentWizard = !!(window._vertical?.serialized && !isEdit && !options.accessory);
   const isSerialized = !!(window._vertical?.serialized && (isEdit ? p.serialized : !options.accessory));
   const techProduct = !!window._vertical?.serialized;
   const knownBrands = [...new Set([...(techProduct?['Apple','Samsung','Xiaomi','Motorola','Huawei','OPPO']:[]),...(DB.products || []).map(item => String(item.brand || '').trim()).filter(Boolean)])].sort((a, b) => a.localeCompare(b, 'es'));
@@ -1929,11 +1930,36 @@ function openProductoModal(p = null, options = {}) {
     `<option value="${c}" ${isEdit && p.category === c ? 'selected' : ''}>${c}</option>`
   ).join('');
 
+  const costField = `<div class="fg">
+          <label class="lbl">Costo (RD$) *</label>
+          <input class="inp" id="pf-cost" type="number" min="0" placeholder="0"
+                 value="${isEdit ? p.cost : ''}" data-original="${isEdit ? p.cost : ''}"
+                 oninput="pfCalcMargen()"/>
+        </div>`;
+  const conditionField = `<div class="fg">
+        <label class="lbl">Condición del producto</label>
+        <select class="inp" id="pf-condition" onchange="pfConditionChange()">
+          <option value="nuevo"         ${isEdit && p.condition==='nuevo'         ? 'selected' : ''}>Nuevo</option>
+          <option value="usado"         ${isEdit && p.condition==='usado'         ? 'selected' : ''}>Usado</option>
+          <option value="reacondicionado" ${isEdit && p.condition==='reacondicionado' ? 'selected' : ''}>Reacondicionado</option>
+          ${window._vertical?.id !== 'auto_parts' || (isEdit && p.condition === 'consignacion')
+            ? `<option value="consignacion" ${isEdit && p.condition==='consignacion' ? 'selected' : ''}>${window._vertical?.id === 'auto_parts' ? 'Consignación (registro anterior)' : 'Consignación'}</option>` : ''}
+          <option value="especial"      ${isEdit && p.condition==='especial'      ? 'selected' : ''}>Especial / Único</option>
+        </select>
+      </div>`;
   openModal(`
-    <div class="modal-title">${isEdit ? vterm('edit_product', 'Editar Producto') : options.accessory ? 'Nuevo accesorio o insumo' : vterm('new_product', 'Nuevo Producto')}</div>
+    <div class="modal-title">${equipmentWizard ? 'Ingresar equipo' : isEdit ? vterm('edit_product', 'Editar Producto') : options.accessory ? 'Nuevo accesorio o insumo' : vterm('new_product', 'Nuevo Producto')}</div>
     <div class="modal-sub">${isEdit ? p.name : vterm('register_in_inventory', 'Registrar en inventario')}</div>
     ${options.accessory ? '<div class="alrt b" style="margin-top:12px"><div class="alrt-dot b"></div><div class="alrt-sub">Covers, protectores, láminas personalizadas, cables, cintas y otros insumos se controlan por cantidad.</div></div>' : ''}
 
+    ${equipmentWizard ? `<div id="pf-entry-progress" style="font-size:12px;font-weight:700;margin:12px 0">Paso 1 de 2 · Equipo</div>
+      <div id="pf-equipment-step-1"><label class="lbl" for="pf-existing-model">Equipo</label>
+      <select class="inp" id="pf-existing-model" onchange="pfChooseExistingEquipment()" style="margin-bottom:12px">
+        ${(DB.products || []).some(row => row.serialized) ? '<option value="" disabled selected>Selecciona el equipo</option>' : ''}
+        <option value="new">Crear equipo nuevo</option>
+        ${(DB.products || []).filter(row => row.serialized).map(row => `<option value="${Number(row.id)}">${invEsc(row.name)} · ${invEsc(row.code)}</option>`).join('')}
+        <option value="accessory">Accesorio o repuesto por cantidad</option>
+      </select><div id="pf-new-model-fields" style="display:${(DB.products || []).some(row => row.serialized) ? 'none' : 'block'}">` : ''}
     <div class="g2">
       <div class="fg">
         <label class="lbl">Nombre ${techProduct ? '(opcional si indicas marca y modelo)' : '*'}</label>
@@ -1970,17 +1996,7 @@ function openProductoModal(p = null, options = {}) {
                   title="Generar un código de barras numérico (se lee mejor que el alfanumérico)">Generar</button>
         </div>
       </div>
-      <div class="fg">
-        <label class="lbl">Condición del producto</label>
-        <select class="inp" id="pf-condition" onchange="pfConditionChange()">
-          <option value="nuevo"         ${isEdit && p.condition==='nuevo'         ? 'selected' : ''}>Nuevo</option>
-          <option value="usado"         ${isEdit && p.condition==='usado'         ? 'selected' : ''}>Usado</option>
-          <option value="reacondicionado" ${isEdit && p.condition==='reacondicionado' ? 'selected' : ''}>Reacondicionado</option>
-          ${window._vertical?.id !== 'auto_parts' || (isEdit && p.condition === 'consignacion')
-            ? `<option value="consignacion" ${isEdit && p.condition==='consignacion' ? 'selected' : ''}>${window._vertical?.id === 'auto_parts' ? 'Consignación (registro anterior)' : 'Consignación'}</option>` : ''}
-          <option value="especial"      ${isEdit && p.condition==='especial'      ? 'selected' : ''}>Especial / Único</option>
-        </select>
-      </div>
+      ${equipmentWizard ? '' : conditionField}
     </div>
 
     <div id="pf-condition-alert" style="display:${isEdit && p.condition && p.condition !== 'nuevo' ? 'flex' : 'none'}"
@@ -2031,12 +2047,7 @@ function openProductoModal(p = null, options = {}) {
     <hr style="margin:12px 0;border:none;border-top:1px solid var(--line)"/>
       <div style="font-weight:700;font-size:12px;margin-bottom:10px">Precios</div>
       <div class="g3">
-        <div class="fg">
-          <label class="lbl">Costo (RD$) *</label>
-          <input class="inp" id="pf-cost" type="number" min="0" placeholder="0"
-                 value="${isEdit ? p.cost : ''}" data-original="${isEdit ? p.cost : ''}"
-                 oninput="pfCalcMargen()"/>
-        </div>
+        ${equipmentWizard ? '' : costField}
         <div class="fg">
           <label class="lbl">Precio Detalle Final *</label>
           <input class="inp" id="pf-price" type="number" min="0" placeholder="0"
@@ -2067,14 +2078,15 @@ function openProductoModal(p = null, options = {}) {
       <div id="pf-price-change-preview" style="font-size:11px;color:var(--muted);margin-top:-4px;margin-bottom:10px"></div>
 
     <hr style="margin:12px 0;border:none;border-top:1px solid var(--line)"/>
-    ${window._vertical?.serialized && !options.accessory ? `<label style="display:flex;align-items:center;gap:9px;padding:10px 12px;background:var(--surface2);border:1px solid var(--line);border-radius:8px;margin-bottom:10px;cursor:pointer">
+    ${equipmentWizard ? `</div></div><div id="pf-equipment-step-2" style="display:none">${conditionField}${costField}` : ''}
+    ${window._vertical?.serialized && !options.accessory ? `${equipmentWizard ? '<input type="checkbox" id="pf-serialized" checked hidden>' : `<label style="display:flex;align-items:center;gap:9px;padding:10px 12px;background:var(--surface2);border:1px solid var(--line);border-radius:8px;margin-bottom:10px;cursor:pointer">
       <input type="checkbox" id="pf-serialized" ${isSerialized ? 'checked' : ''} onchange="pfSerializedToggle()" style="width:16px;height:16px">
       <span><strong>Controlar cada unidad por IMEI/serial</strong><br><small style="color:var(--muted2)">Actívalo para celulares y equipos; déjalo apagado para accesorios y repuestos.</small></span>
-    </label>
+    </label>`}
     <div id="pf-serial-fields" style="display:${isSerialized ? 'block' : 'none'}">
       <div style="font-weight:700;font-size:12px;margin-bottom:6px">Equipos (IMEI)</div>
       <div style="font-size:11px;color:var(--muted2);margin-bottom:10px">El stock se lleva por equipos. Registra el primero aquí; agrega más luego con el botón “Equipos”.</div>
-      ${isEdit ? '' : `<label class="fg" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="pf-model-only"> Solo crear el modelo, sin equipos por ahora</label><div class="g3">
+      ${isEdit ? '' : `<div class="g3">
         <div class="fg"><label class="lbl">IMEI / Serial del primer equipo *</label><input class="inp" id="pf-imei" type="text" placeholder="356000000000000" data-uppercase="off" autocomplete="off"/></div>
         <div class="fg"><label class="lbl">Capacidad</label><input class="inp" id="pf-capacity" type="text" placeholder="128GB" data-uppercase="off"/></div>
         <div class="fg"><label class="lbl">Color</label><input class="inp" id="pf-color-eq" type="text" placeholder="Negro" data-uppercase="off"/></div>
@@ -2096,16 +2108,56 @@ function openProductoModal(p = null, options = {}) {
       </div>
     </div>
 
+    ${equipmentWizard ? '</div>' : ''}
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-dark" onclick="guardarProducto(${isEdit ? p.id : 'null'})">
+      ${equipmentWizard ? `<button class="btn btn-out" id="pf-entry-back" style="display:none" onclick="pfEquipmentStep(1)">Atrás</button>
+        <button class="btn btn-dark" id="pf-entry-next" onclick="pfNextEquipmentStep()">Siguiente: IMEI y datos</button>
+        <button class="btn btn-dark" id="pf-entry-save" style="display:none" onclick="guardarProducto(null)">Ingresar equipo</button>` : `      <button class="btn btn-dark" onclick="guardarProducto(${isEdit ? p.id : 'null'})">
         ${svg('check')} ${isEdit ? 'Guardar cambios' : 'Registrar producto'}
-      </button>
+      </button>`}
+
     </div>
   `, 'modal-lg');
 
     setTimeout(() => { pfToggleTax(); pfCalcMargen(); }, 0);
   }
+
+function pfChooseExistingEquipment() {
+  const fields = document.getElementById('pf-new-model-fields');
+  if (fields) fields.style.display = document.getElementById('pf-existing-model')?.value === 'new' ? 'block' : 'none';
+}
+
+function pfEquipmentStep(step) {
+  const first = document.getElementById('pf-equipment-step-1');
+  const second = document.getElementById('pf-equipment-step-2');
+  if (!first || !second) return;
+  first.style.display = step === 1 ? 'block' : 'none';
+  second.style.display = step === 2 ? 'block' : 'none';
+  document.getElementById('pf-entry-next').style.display = step === 1 ? '' : 'none';
+  document.getElementById('pf-entry-back').style.display = step === 2 ? '' : 'none';
+  document.getElementById('pf-entry-save').style.display = step === 2 ? '' : 'none';
+  document.getElementById('pf-entry-progress').textContent = step === 1 ? 'Paso 1 de 2 · Equipo' : 'Paso 2 de 2 · IMEI y datos';
+  document.getElementById(step === 1 ? 'pf-existing-model' : 'pf-imei')?.focus();
+}
+
+function pfNextEquipmentStep() {
+  const selected = document.getElementById('pf-existing-model')?.value || '';
+  if (!selected) { toast('Selecciona el equipo o elige crear uno nuevo', 'err'); return; }
+  if (selected === 'accessory') { openProductoModal(null, { accessory:true }); return; }
+  if (selected !== 'new') {
+    const product = DB.products.find(row => Number(row.id) === Number(selected));
+    if (product) window.abrirRegistroEquipos(product);
+    return;
+  }
+  const nameInput = document.getElementById('pf-name');
+  const name = nameInput?.value.trim() || [document.getElementById('pf-brand')?.value.trim(), document.getElementById('pf-model')?.value.trim()].filter(Boolean).join(' ');
+  if (!name) { toast('Escribe el nombre del equipo', 'err'); nameInput?.focus(); return; }
+  if (nameInput) nameInput.value = name;
+  if (!document.getElementById('pf-code')?.value.trim()) pfAutoCode(name);
+  if (!(Number(document.getElementById('pf-price')?.value) > 0)) { toast('Indica un precio de venta mayor a cero', 'err'); document.getElementById('pf-price')?.focus(); return; }
+  pfEquipmentStep(2);
+}
 
 function pfToggleTax() {
   const checked = !!document.getElementById('pf-taxable')?.checked;
@@ -2241,6 +2293,8 @@ async function pfConditionChange() {
 }
 
 async function guardarProducto(id) {
+  const firstStep = document.getElementById('pf-equipment-step-1');
+  if (!id && firstStep && firstStep.style.display !== 'none') { pfNextEquipmentStep(); return; }
   let name        = document.getElementById('pf-name')?.value?.trim();
   const brand     = document.getElementById('pf-brand')?.value?.trim()     || '';
   const model     = document.getElementById('pf-model')?.value?.trim()     || '';
@@ -2278,9 +2332,9 @@ async function guardarProducto(id) {
     ...(window._vertical?.serialized ? { serialized: serialized ? 1 : 0 } : {}),
   };
 
-  if (!id && serialized && !document.getElementById('pf-model-only')?.checked) {
+  if (!id && serialized) {
     const imei = document.getElementById('pf-imei')?.value?.trim();
-    if (!imei) { toast('Escribe el IMEI o serial del equipo, o marca solo crear el modelo', 'err'); return; }
+    if (!imei) { toast('Escribe el IMEI o serial del equipo', 'err'); return; }
     data.first_unit = {
       imei, condition, unit_cost:cost,
       capacity:document.getElementById('pf-capacity')?.value?.trim() || '',
