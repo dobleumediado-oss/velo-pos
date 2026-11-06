@@ -13,6 +13,7 @@ const {
   parseRecoverableDuplicatedTypeNcf,
   repairLegacyNcfData,
   recoverMalformedNcfEvidence,
+  parseCanonicalLegacyNcf,
 } = require('../lib/ncf-sequences');
 
 let passed = 0;
@@ -32,6 +33,10 @@ ok(formatLegacyNcf('B01', 850) === 'B0100000850', 'genera B01 con exactamente 8 
 ok(canonicalizeLegacyNcf('B01100000855') === null, 'no reasigna un NCF B01 mal formado a otro comprobante');
 ok(canonicalizeLegacyNcf('B02200000403') === null, 'no reasigna un NCF B02 mal formado a otro comprobante');
 ok(canonicalizeLegacyNcf('B0100000849') === 'B0100000849', 'no altera un NCF correcto');
+ok(parseCanonicalLegacyNcf('B0300000012')?.type === 'B03' && parseCanonicalLegacyNcf('B0300000012')?.sequence === 12,
+  'reconoce el B03 (nota de débito) como NCF tradicional válido');
+ok(parseCanonicalLegacyNcf('B05000000012') === null && parseCanonicalLegacyNcf('B030000012') === null,
+  'sigue rechazando tipos no autorizados y correlativos que no tienen 8 dígitos');
 ok(parseRecoverableDuplicatedTypeNcf('B01100000844')?.canonicalNcf === 'B0100000844',
   'reconoce exactamente el dígito B01 duplicado por la versión defectuosa');
 ok(parseRecoverableDuplicatedTypeNcf('B141400000844')?.canonicalNcf === 'B1400000844',

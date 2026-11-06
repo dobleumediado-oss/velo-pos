@@ -932,6 +932,13 @@ ok(dnNote.correction_kind === 'debit_note' && dnNote.original_sale_id === dnRoot
   'la nota de débito es un documento propio NDB vinculado a la factura');
 ok(/^B03\d{8}$/.test(dnNote.ncf) && dnLog.type === 'B03' && dnLog.modifies_ncf === dnRoot.ncf,
   'lleva un B03 que referencia el NCF de la factura original (607)');
+// El B03 es un NCF válido: el 607 no se bloquea por él y el Panel NCF lo cuenta como emitido.
+const dn607 = DB.ncfRepo.getLog({ status: 'emitido', type: 'B03' }).find(row => row.ncf === dnNote.ncf);
+ok(dn607 && dn607.ncf_valid === true && dn607.ncf_issue === '',
+  'en el 607 el B03 aparece válido y no bloquea el reporte');
+const b03Sequence = db.prepare("SELECT id FROM ncf_sequences WHERE type='B03' ORDER BY id LIMIT 1").get();
+ok(DB.ncfRepo.getSequenceUsage(b03Sequence.id).issuedCount === 1,
+  'el uso de la secuencia B03 cuenta la nota de débito emitida');
 ok(db.prepare("SELECT current FROM document_sequences WHERE kind='factura_contado'").get()?.current === invoiceSeqBefore,
   'no consume la numeración comercial de facturas');
 ok(dnNote.total === 590 && dnNote.tax_amt === 90 && dnNote.payment_method === 'credito',

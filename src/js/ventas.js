@@ -59,7 +59,7 @@ function ventasEsc(v) {
 }
 
 function ventasIsTraditionalNcf(value) {
-  return /^B(?:01|02|04|14|15|16|17)\d{8}$/.test(String(value || '').trim().toUpperCase());
+  return /^B(?:01|02|03|04|14|15|16|17)\d{8}$/.test(String(value || '').trim().toUpperCase());
 }
 
 function ventasLooksLikeMalformedTraditionalNcf(value) {
