@@ -4876,8 +4876,9 @@ ipcMain.handle('print:html', async (_, {
       await _attemptPrintHTML({ html, printerName, printerWidth, printerHeight, pageHint, copies });
     }
 
-    // Registrar trabajo exitoso en print_jobs
-    if (jobType && referenceId) {
+    // Registrar trabajo exitoso en print_jobs (en modo consulta del corte no se
+    // escribe: reimprimir sigue funcionando y no debe mostrarse como fallo).
+    if (jobType && referenceId && !require('./lib/cloud-cutover-freeze').isFrozen()) {
       const dbInst = require('./database').getDB();
       dbInst.prepare(`
         INSERT INTO print_jobs(type, reference_id, status, printer, user_id)
@@ -5553,6 +5554,59 @@ ipcMain.handle('backup:prepareCloud', async (_, { requestUserId, passphrase, des
   finally { if (started) cloudExportsInProgress.delete(sourceDb); }
 });
 
+// ── Corte final a VELO Cloud (modo consulta) ──────────────────────────────
+// Decisión del dueño (7 nov 2026): con la caja cuadrada y cerrada, se congela el
+// negocio en todas sus terminales y se saca la copia final que Cloud activa.
+// Corren donde vive la base (local o el Servidor); las terminales los reenvían.
+ipcMain.handle('cloudCutover:getStatus', async () => ({ ok: true, data: require('./lib/cloud-cutover-freeze').status() }));
+
+ipcMain.handle('cloudCutover:freezeAndExport', async (_, { requestUserId, passphrase, destinationDir, confirm } = {}) => {
+  const freezer = require('./lib/cloud-cutover-freeze');
+  const sourceDb = db;
+  let started = false;
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede hacer el corte a Cloud');
+    if (cloudExportsInProgress.has(sourceDb)) throw new Error('Ya se está preparando una copia de este negocio');
+    cloudExportsInProgress.add(sourceDb); started = true;
+    let frozenAt = freezer.status().frozenAt;
+    if (!frozenAt) {
+      if (confirm !== 'CONGELAR') throw new Error('Escribe CONGELAR para confirmar el corte');
+      // La caja se cuadra y se cierra antes: Cloud empieza con caja nueva.
+      const open = sourceDb.prepare("SELECT COUNT(*) AS n FROM cash_sessions WHERE status='open'").get().n;
+      if (open) throw new Error(`Hay ${open === 1 ? 'una caja abierta' : `${open} cajas abiertas`}: cuádrala y ciérrala antes del corte`);
+      if (sourceDb.pragma('quick_check', { simple: true }) !== 'ok') throw new Error('La base necesita revisión de integridad antes del corte');
+      frozenAt = freezer.freeze(sourceDb, currentDataDir(), {
+        frozenBy: { id: reqUser.id, name: reqUser.name }, businessId: currentBusinessLabel().id,
+        beforeFreeze: at => audit(reqUser.id, reqUser.name, 'corte_cloud_congelado', 'cloud_cutover', null, `Congelado para el corte a VELO Cloud · ${at}`),
+      });
+      logInfo('cloud-cutover', 'Negocio congelado para el corte', { frozenAt, userId: reqUser.id, dataDir: currentDataDir() });
+    }
+    // Ya congelado: se puede volver a sacar la copia final (misma hora de congelamiento).
+    const biz = currentBusinessLabel();
+    const result = await createMigrationPackage({ db: sourceDb, dataDir: DATA_DIR, destinationDir, passphrase,
+      businessId: biz.id, vertical: require('./src/verticals').activeVerticalId() === 'tech' ? 'TECH' : 'POS', appVersion: app.getVersion(),
+      purpose: 'desktop-cutover-final', frozenAt });
+    return { ok: true, data: { ...result, frozenAt } };
+  } catch (e) { return { ok: false, error: e.message, frozen: freezer.isFrozen() }; }
+  finally { if (started) cloudExportsInProgress.delete(sourceDb); }
+});
+
+ipcMain.handle('cloudCutover:unfreeze', async (_, { requestUserId, confirm, reason } = {}) => {
+  const freezer = require('./lib/cloud-cutover-freeze');
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || reqUser.role !== 'superadmin') throw new Error('Solo el superadmin puede descongelar el negocio');
+    if (confirm !== 'DESCONGELAR') throw new Error('Escribe DESCONGELAR para confirmar');
+    const why = String(reason || '').trim();
+    if (why.length < 10) throw new Error('Explica por qué se descongela (mínimo 10 caracteres)');
+    const result = freezer.unfreeze(db, currentDataDir(), { unfrozenBy: { id: reqUser.id, name: reqUser.name }, reason: why });
+    audit(reqUser.id, reqUser.name, 'corte_cloud_descongelado', 'cloud_cutover', null, `Congelado ${result.frozenAt} · descongelado ${result.unfrozenAt} · ${why}`.slice(0, 1000));
+    logWarn('cloud-cutover', 'Negocio descongelado', { ...result, userId: reqUser.id, dataDir: currentDataDir() });
+    return { ok: true, data: result };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
 ipcMain.handle('backup:createEncrypted', async (_, { requestUserId, passphrase, destinationDir } = {}) => {
   try {
     const reqUser = authRepo.findById(requestUserId);
@@ -5563,9 +5617,12 @@ ipcMain.handle('backup:createEncrypted', async (_, { requestUserId, passphrase, 
       destinationDir, passphrase, businessId:biz.id, businessName:biz.name,
       vertical:require('./src/verticals').activeVerticalId() === 'tech' ? 'TECH' : 'POS',
       appVersion:app.getVersion() });
+    // Modo consulta del corte: la copia se crea igual; solo no se registra en la base.
+    if (!require('./lib/cloud-cutover-freeze').isFrozen()) {
     db.prepare(`INSERT INTO continuity_events(event_type,status,destination,checksum,detail) VALUES('encrypted_backup','verified',?,?,?)`)
       .run(result.path, result.checksum, `Snapshot consistente · ${result.bytes} bytes`);
     settingsRepo.set('continuity_external_backup_path', destinationDir);
+    }
     audit(reqUser.id, reqUser.name, 'backup_externo_cifrado', 'continuity_events', null, result.path);
     return { ok:true, data:result };
   } catch (e) {
@@ -5581,9 +5638,11 @@ ipcMain.handle('backup:verifyEncrypted', async (_, { requestUserId, passphrase, 
     if (!path.isAbsolute(String(filePath || ''))) throw new Error('Selecciona un respaldo válido desde la PC Servidor');
     const result = await verifyEncryptedBackup({ filePath, passphrase, workDir: DATA_DIR });
     const now = new Date().toISOString();
+    if (!require('./lib/cloud-cutover-freeze').isFrozen()) {
     db.prepare(`INSERT INTO continuity_events(event_type,status,destination,checksum,detail) VALUES('restore_test','verified',?,?,?)`)
       .run(filePath, result.checksum, 'Descifrado, integrity_check y foreign_key_check aprobados');
     settingsRepo.set('continuity_last_restore_test', now);
+    }
     audit(reqUser.id, reqUser.name, 'backup_externo_verificado', 'continuity_events', null, filePath);
     return { ok:true, data:{...result,verified_at:now} };
   } catch (e) {
@@ -8483,6 +8542,8 @@ function setActiveBusiness(bizId) {
 }
 
 function prepareBusinessDb(bizDir, name) {
+  // Un negocio congelado para el corte a Cloud abre en modo consulta: no se le escribe nada.
+  if (require('./lib/cloud-cutover-freeze').isFrozenDir(bizDir)) return;
   const { initDetachedDB } = require('./database');
   let deviceSettings = {};
   try {
@@ -9518,6 +9579,8 @@ function _scheduleAutoBackups() {
 function _scheduleServiceMessaging() {
   const processDue = async () => {
     try {
+      // Modo consulta del corte: los mensajes los envía VELO Cloud.
+      if (require('./lib/cloud-cutover-freeze').isFrozen()) return;
       if (String(settingsRepo.get('service_messaging_mode') || 'assisted') !== 'whatsapp_cloud') return;
       if (!fs.existsSync(_whatsAppTokenPath())) return;
       const row = db.prepare(`SELECT * FROM service_message_queue WHERE status IN ('pending','failed')
@@ -9648,6 +9711,18 @@ app.whenReady().then(async () => {
     // Aislado en try propio para que jamás impida el arranque del POS.
     try { setupMultiTerminal(); }
     catch (e) { logError('multiterminal', 'Setup falló: ' + e.message); }
+    // Corte a Cloud: un negocio congelado abre en modo consulta (después del
+    // arranque, que solo hace mantenimiento idempotente de la base).
+    try {
+      const frozen = require('./lib/cloud-cutover-freeze').applyIfMarked(db, currentDataDir());
+      if (frozen) logInfo('cloud-cutover', 'Negocio en modo consulta (corte a Cloud)', { frozenAt: frozen.frozenAt, dataDir: currentDataDir() });
+    } catch (e) {
+      // Nunca abrir con escritura un negocio que no se pudo confirmar.
+      logError('cloud-cutover', 'No se pudo aplicar el modo consulta: ' + e.message);
+      dialog.showErrorBox('Modo consulta', 'No se pudo abrir el negocio en modo consulta: ' + e.message);
+      app.quit();
+      return;
+    }
   } catch (e) {
     logError('DB', 'Error al inicializar: ' + e.message);
     console.error('[DB] Error al inicializar:', e);

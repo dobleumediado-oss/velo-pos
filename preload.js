@@ -326,6 +326,13 @@ const api = {
     getContinuityStatus:(data)=> ipcRenderer.invoke('backup:getContinuityStatus', data),
   },
 
+  // ── Corte final a VELO Cloud (modo consulta) ──
+  cloudCutover: {
+    getStatus:       ()       => ipcRenderer.invoke('cloudCutover:getStatus'),
+    freezeAndExport: (data)   => ipcRenderer.invoke('cloudCutover:freezeAndExport', data),
+    unfreeze:        (data)   => ipcRenderer.invoke('cloudCutover:unfreeze', data),
+  },
+
   // ── Version ───────────────────────────────
   version: {
     getInfo:       ()        => ipcRenderer.invoke('version:getInfo'),

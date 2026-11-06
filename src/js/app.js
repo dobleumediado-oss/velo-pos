@@ -1171,11 +1171,14 @@ function renderApp() {
   shell.appendChild(sb);
   shell.appendChild(main);
   main.appendChild(topbar);
+  // Corte a Cloud: aviso permanente mientras el negocio esté en modo consulta.
+  main.appendChild(h('div', { class: 'cutover-banner', id: 'cutover-banner', role: 'status', hidden: true }));
   main.appendChild(pageEl);
   root.appendChild(shell);
 
   buildSidebar();
   buildTopbar();
+  _refreshCutoverBanner();
   routeTo(page);
   // Mantiene el indicador de Preventa ligado a la cola real incluso en modo
   // local (sin eventos SSE) y permite retirar reservas vencidas del badge.
@@ -1341,6 +1344,22 @@ function buildSidebar() {
     )
   );
   sb.appendChild(foot);
+}
+
+// ── Modo consulta del corte a Cloud ───────────
+// El estado lo da la PC donde vive la base (local o el Servidor). Si no
+// responde, no se inventa nada: el aviso solo aparece con el estado confirmado.
+async function _refreshCutoverBanner() {
+  let status = null;
+  try { status = (await window.api.cloudCutover?.getStatus())?.data || null; } catch { status = null; }
+  window.VeloCutover = status;
+  const el = document.getElementById('cutover-banner');
+  if (!el) return status;
+  el.hidden = !status?.frozen;
+  el.textContent = status?.frozen
+    ? `Modo consulta: este negocio ya opera en VELO Cloud. Desktop no guarda cambios desde el ${new Date(status.frozenAt).toLocaleString('es-DO')}`
+    : '';
+  return status;
 }
 
 // ══════════════════════════════════════════════

@@ -10,6 +10,17 @@
 //   Ver docs/multi-terminal-sync.md
 // ══════════════════════════════════════════════
 const { rpcCall } = require('./net-client');
+const cutover = require('../../lib/cloud-cutover-freeze');
+
+// Corte a Cloud: un negocio congelado responde siempre el mismo mensaje claro,
+// tanto al operador de esta PC como a una terminal servida por red.
+async function _withCutoverMessage(run) {
+  try { return cutover.friendlyResult(await run()); }
+  catch (error) {
+    if (cutover.isFrozenFailure(error)) { const friendly = new Error(cutover.FROZEN_MESSAGE); friendly.code = cutover.FROZEN_CODE; throw friendly; }
+    throw error;
+  }
+}
 const { AsyncLocalStorage } = require('async_hooks');
 
 // Contexto por-petición: cuando el servidor despacha una petición de un cliente,
@@ -103,7 +114,7 @@ async function routeCall(channel, arg) {
   }
   const fn = _handlers.get(channel);
   if (!fn) throw new Error('UNKNOWN_CHANNEL:' + channel);
-  return await fn(arg);
+  return await _withCutoverMessage(() => fn(arg));
 }
 
 // Registra un handler. `fn` recibe SOLO el argumento (sin el event de IPC).
@@ -132,7 +143,7 @@ function dispatch(channel, args, ctx) {
     terminalId: ctx && ctx.terminalId,
     businessId: ctx && ctx.businessId,
   }, () =>
-    Promise.resolve(fn(normArgs)).then((r) => { _notifyMutation(channel); return r; })
+    _withCutoverMessage(() => fn(normArgs)).then((r) => { _notifyMutation(channel); return r; })
   );
 }
 
@@ -162,7 +173,7 @@ function installIpcInterceptor(ipcMainRef, { localOnly } = {}) {
         err.rpc = res && res.error;
         throw err;
       }
-      const out = await fn(event, arg);
+      const out = await _withCutoverMessage(() => fn(event, arg));
       _notifyMutation(channel); // server/local: avisa a otras terminales si el canal muta datos compartidos
       return out;
     });

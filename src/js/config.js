@@ -1062,6 +1062,17 @@ async function renderConfiguracion(el) {
   backupCard.appendChild(h('div', { class: 'alrt-sub', style: 'margin-bottom:8px' },
     'Preparación para Cloud: guarda una copia cifrada del negocio seleccionado y sus evidencias de servicio. La importación y la activación en Cloud todavía no están disponibles.'));
   backupCard.appendChild(h('button', { class: 'btn btn-out', style: 'margin-bottom:12px', onclick: abrirPreparacionCloud }, 'Preparar migración a Cloud'));
+  // Corte final a Cloud: congela el negocio en todas sus terminales y saca la copia que Cloud activa.
+  const cutover = window.VeloCutover;
+  if (cutover?.frozen) {
+    backupCard.appendChild(h('div', { class: 'alrt a', style: 'margin-bottom:10px' }, h('div', { class: 'alrt-dot a' }), h('div', null,
+      h('div', { class: 'alrt-title' }, 'Negocio en modo consulta'),
+      h('div', { class: 'alrt-sub' }, `Desktop ya no guarda cambios en ninguna terminal. Congelado para el corte a VELO Cloud el ${new Date(cutover.frozenAt).toLocaleString('es-DO')}`))));
+    backupCard.appendChild(h('button', { class: 'btn btn-out', style: 'margin-bottom:12px;margin-right:8px', onclick: abrirCorteCloud }, 'Sacar otra vez la copia final'));
+    if (_cfgUser()?.role === 'superadmin') backupCard.appendChild(h('button', { class: 'btn btn-out', style: 'margin-bottom:12px', onclick: abrirDescongelarCorte }, 'Descongelar negocio'));
+  } else if (cutover) {
+    backupCard.appendChild(h('button', { class: 'btn btn-dark', style: 'margin-bottom:12px;margin-left:8px', onclick: abrirCorteCloud }, 'Corte final a Cloud'));
+  }
   if (info.backups?.length) {
     const bList = h('div');
     bList.appendChild(h('div', { style: 'font-size:11px;font-weight:700;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em' }, 'Backups disponibles'));
@@ -1761,6 +1772,71 @@ function abrirPreparacionCloud() {
       toast('Copia cifrada creada y verificada en la carpeta seleccionada. Cloud aún no está activado.', 'ok');
     } catch (error) { toast(error.message || 'No se pudo preparar la copia', 'err'); }
     finally { button.disabled = false; button.textContent = 'Seleccionar carpeta y preparar'; }
+  };
+}
+
+function abrirCorteCloud() {
+  const frozen = !!window.VeloCutover?.frozen;
+  openModal(`<div class="modal-title">${frozen ? 'Sacar otra vez la copia final' : 'Corte final a Cloud'}</div>
+    <div class="modal-sub">${frozen
+      ? 'El negocio ya está congelado. Se sacará otra copia final con la misma hora de congelamiento.'
+      : 'Desde este momento Desktop queda en modo consulta en <strong>todas sus terminales</strong>: no se podrán hacer ventas, cobros, gastos ni cambios. Luego se saca la copia final que VELO Cloud activa.'}</div>
+    ${frozen ? '' : `<div class="alrt a" style="margin:12px 0"><div class="alrt-dot a"></div><div class="alrt-sub">Antes: cuadra y cierra la caja, y avisa a las terminales. Haz el corte solo cuando VELO Cloud esté listo para recibir la copia. Si Cloud no llega a activarse, el superadmin puede descongelar Desktop.</div></div>
+    <div class="fg"><label class="lbl" for="cutover-confirm">Escribe CONGELAR para confirmar</label><input class="inp" id="cutover-confirm" type="text" autocomplete="off" maxlength="20"></div>`}
+    <div class="fg"><label class="lbl" for="cutover-pass">Clave para proteger el archivo</label><input class="inp" id="cutover-pass" type="password" autocomplete="new-password" maxlength="1024" placeholder="Mínimo 12 caracteres"></div>
+    <div class="fg"><label class="lbl" for="cutover-pass2">Confirmar clave</label><input class="inp" id="cutover-pass2" type="password" autocomplete="new-password" maxlength="1024"></div>
+    <div class="alrt-sub">Conserva la clave: VELO no la guarda y Cloud la pedirá para activar la copia.</div>
+    <div class="alrt-sub" id="cutover-status" role="status" aria-live="polite"></div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="cutover-run" type="button">${frozen ? 'Seleccionar carpeta y sacar copia' : 'Congelar y sacar copia final'}</button></div>`);
+  const button = document.getElementById('cutover-run');
+  const status = document.getElementById('cutover-status');
+  button.onclick = async () => {
+    const passphrase = document.getElementById('cutover-pass').value;
+    const confirm = frozen ? '' : document.getElementById('cutover-confirm').value.trim();
+    if (!frozen && confirm !== 'CONGELAR') return toast('Escribe CONGELAR para confirmar', 'w');
+    if (passphrase.length < 12) return toast('Usa una clave de al menos 12 caracteres', 'w');
+    if (passphrase !== document.getElementById('cutover-pass2').value) return toast('Las claves no coinciden', 'w');
+    button.disabled = true;
+    try {
+      const picked = await window.api.backup.pickExternalDirectory();
+      if (!picked?.ok) { if (picked?.error !== 'Cancelado') toast(picked?.error || 'No se pudo seleccionar la carpeta', 'err'); return; }
+      status.textContent = frozen ? 'Sacando y verificando la copia final…' : 'Congelando el negocio y sacando la copia final…';
+      const result = await window.api.cloudCutover.freezeAndExport({ requestUserId: _cfgUser().id, passphrase, destinationDir: picked.path, confirm });
+      await _refreshCutoverBanner();
+      if (!result?.ok) {
+        // Si ya quedó congelado, la copia se puede volver a sacar desde aquí mismo.
+        toast(result?.error || 'No se pudo sacar la copia final', 'err');
+        if (result?.frozen) veloRepaint(() => renderConfiguracion(document.getElementById('page')));
+        return;
+      }
+      if (button.isConnected) closeModal();
+      toast('Copia final creada y verificada. Desktop queda en modo consulta.', 'ok');
+      veloRepaint(() => renderConfiguracion(document.getElementById('page')));
+    } catch (error) { toast(error.message || 'No se pudo sacar la copia final', 'err'); }
+    finally { button.disabled = false; status.textContent = ''; }
+  };
+}
+
+function abrirDescongelarCorte() {
+  openModal(`<div class="modal-title">Descongelar negocio</div>
+    <div class="modal-sub">Desktop volverá a guardar cambios en todas sus terminales.</div>
+    <div class="alrt r" style="margin:12px 0"><div class="alrt-dot r"></div><div class="alrt-sub">Hazlo <strong>solo si VELO Cloud no llegó a activarse o se deshizo el corte</strong>. Si Cloud ya está operando, descongelar haría que dos sistemas emitan facturas y NCF.</div></div>
+    <div class="fg"><label class="lbl" for="unfreeze-reason">Motivo *</label><input class="inp" id="unfreeze-reason" type="text" autocomplete="off" maxlength="300" placeholder="Ej.: el corte se deshizo en Cloud"></div>
+    <div class="fg"><label class="lbl" for="unfreeze-confirm">Escribe DESCONGELAR para confirmar</label><input class="inp" id="unfreeze-confirm" type="text" autocomplete="off" maxlength="20"></div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" id="unfreeze-run" type="button">Descongelar</button></div>`);
+  const button = document.getElementById('unfreeze-run');
+  button.onclick = async () => {
+    button.disabled = true;
+    try {
+      const result = await window.api.cloudCutover.unfreeze({ requestUserId: _cfgUser().id,
+        confirm: document.getElementById('unfreeze-confirm').value.trim(), reason: document.getElementById('unfreeze-reason').value });
+      if (!result?.ok) { toast(result?.error || 'No se pudo descongelar', 'err'); return; }
+      await _refreshCutoverBanner();
+      closeModal();
+      toast('Negocio descongelado. Desktop vuelve a guardar cambios.', 'ok');
+      veloRepaint(() => renderConfiguracion(document.getElementById('page')));
+    } catch (error) { toast(error.message || 'No se pudo descongelar', 'err'); }
+    finally { button.disabled = false; }
   };
 }
 

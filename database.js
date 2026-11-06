@@ -2985,6 +2985,9 @@ function _deriveSuperAdminPass() {
 // HELPERS
 // ══════════════════════════════════════════════
 function audit(userId, userName, action, entity = '', entityId = null, detail = '') {
+  // Modo consulta del corte a Cloud: la base ya no admite escrituras. Entrar,
+  // salir y consultar siguen funcionando; lo demás falla con su mensaje claro.
+  if (require('./lib/cloud-cutover-freeze').isFrozen()) return { changes: 0, lastInsertRowid: null };
   const result = db.prepare(`
     INSERT INTO audit_logs(user_id,user_name,action,entity,entity_id,detail)
     VALUES(?,?,?,?,?,?)
