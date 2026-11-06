@@ -1,0 +1,4717 @@
+{
+  "version": 1,
+  "reviewedAt": "2026-11-06",
+  "kinds": [
+    {
+      "id": "phone",
+      "label": "Celulares"
+    },
+    {
+      "id": "console",
+      "label": "Consolas de videojuegos"
+    },
+    {
+      "id": "laptop",
+      "label": "Portátiles"
+    },
+    {
+      "id": "desktop",
+      "label": "Computadoras de escritorio"
+    },
+    {
+      "id": "headphones",
+      "label": "Audífonos"
+    },
+    {
+      "id": "tablet",
+      "label": "Tabletas"
+    },
+    {
+      "id": "watch",
+      "label": "Relojes inteligentes"
+    },
+    {
+      "id": "tv",
+      "label": "Televisores"
+    },
+    {
+      "id": "printer",
+      "label": "Impresoras"
+    },
+    {
+      "id": "other",
+      "label": "Otros equipos"
+    }
+  ],
+  "sources": [
+    "https://support.apple.com/en-us/108044",
+    "https://www.samsung.com/us/smartphones/all-smartphones/",
+    "https://www.mi.com/global/product-list/phone/redmi/",
+    "https://www.nintendo.com/us/gaming-systems/",
+    "https://www.playstation.com/en-us/ps5/",
+    "https://www.apple.com/airpods/compare/",
+    "https://www.delltechnologies.com/asset/en-us/products/laptops-and-2-in-1s/briefs-summaries/unified-dell-ai-pc-portfolio-brochure.pdf"
+  ],
+  "entries": [
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 5s"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 6"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 6 Plus"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 6s"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 6s Plus"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone SE (2016)"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 7"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 7 Plus"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 8"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 8 Plus"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone X"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone XR"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone XS"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone XS Max"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 11"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 11 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 11 Pro Max"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone SE (2020)"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 12 mini"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 12"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 12 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 12 Pro Max"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 13 mini"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 13"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 13 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 13 Pro Max"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone SE (2022)"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 14"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 14 Plus"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 14 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 14 Pro Max"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 15"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 15 Plus"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 15 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 15 Pro Max"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 16"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 16 Plus"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 16 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 16 Pro Max"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 16e"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 17"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 17 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 17 Pro Max"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone Air"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 18 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone 18 Pro Max"
+    },
+    {
+      "kind": "phone",
+      "brand": "Apple",
+      "model": "iPhone Duo"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S8"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S9"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S10"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S10+"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S20"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S20 FE"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S21"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S21 FE"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S21 Ultra"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S22"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S22+"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S22 Ultra"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S23"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S23 FE"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S23 Ultra"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S24"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S24+"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S24 Ultra"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S24 FE"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S25"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S25+"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy S25 Ultra"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A03"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A04"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A05"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A05s"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A06"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A12"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A13"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A14"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A15"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A16"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A22"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A23"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A24"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A25"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A26"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A32"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A33"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A34"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A35"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A36"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A51"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A52"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A53"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A54"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A55"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy A56"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy Note9"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy Note10"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy Note10+"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy Note20"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy Note20 Ultra"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy Z Flip3"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy Z Flip4"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy Z Flip5"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy Z Flip6"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy Z Fold3"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy Z Fold4"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy Z Fold5"
+    },
+    {
+      "kind": "phone",
+      "brand": "Samsung",
+      "model": "Galaxy Z Fold6"
+    },
+    {
+      "kind": "phone",
+      "brand": "Xiaomi",
+      "model": "Mi 9"
+    },
+    {
+      "kind": "phone",
+      "brand": "Xiaomi",
+      "model": "Mi 10"
+    },
+    {
+      "kind": "phone",
+      "brand": "Xiaomi",
+      "model": "Mi 11"
+    },
+    {
+      "kind": "phone",
+      "brand": "Xiaomi",
+      "model": "Xiaomi 11T"
+    },
+    {
+      "kind": "phone",
+      "brand": "Xiaomi",
+      "model": "Xiaomi 11T Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Xiaomi",
+      "model": "Xiaomi 12"
+    },
+    {
+      "kind": "phone",
+      "brand": "Xiaomi",
+      "model": "Xiaomi 12 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Xiaomi",
+      "model": "Xiaomi 12T"
+    },
+    {
+      "kind": "phone",
+      "brand": "Xiaomi",
+      "model": "Xiaomi 13"
+    },
+    {
+      "kind": "phone",
+      "brand": "Xiaomi",
+      "model": "Xiaomi 13 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Xiaomi",
+      "model": "Xiaomi 13T"
+    },
+    {
+      "kind": "phone",
+      "brand": "Xiaomi",
+      "model": "Xiaomi 13T Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Xiaomi",
+      "model": "Xiaomi 14"
+    },
+    {
+      "kind": "phone",
+      "brand": "Xiaomi",
+      "model": "Xiaomi 14 Ultra"
+    },
+    {
+      "kind": "phone",
+      "brand": "Xiaomi",
+      "model": "Xiaomi 14T"
+    },
+    {
+      "kind": "phone",
+      "brand": "Xiaomi",
+      "model": "Xiaomi 14T Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Xiaomi",
+      "model": "Xiaomi 15"
+    },
+    {
+      "kind": "phone",
+      "brand": "Xiaomi",
+      "model": "Xiaomi 15 Ultra"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi 9A"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi 9C"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi 10"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi 10C"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi 12"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi 12C"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi 13"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi 13C"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi 14C"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi Note 9"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi Note 10"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi Note 10 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi Note 11"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi Note 11 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi Note 12"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi Note 12 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi Note 12 Pro+ 5G"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi Note 13"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi Note 13 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi Note 13 Pro+ 5G"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi Note 14"
+    },
+    {
+      "kind": "phone",
+      "brand": "Redmi",
+      "model": "Redmi Note 14 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "POCO",
+      "model": "Pocophone F1"
+    },
+    {
+      "kind": "phone",
+      "brand": "POCO",
+      "model": "POCO F3"
+    },
+    {
+      "kind": "phone",
+      "brand": "POCO",
+      "model": "POCO F4"
+    },
+    {
+      "kind": "phone",
+      "brand": "POCO",
+      "model": "POCO F5"
+    },
+    {
+      "kind": "phone",
+      "brand": "POCO",
+      "model": "POCO F5 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "POCO",
+      "model": "POCO F6"
+    },
+    {
+      "kind": "phone",
+      "brand": "POCO",
+      "model": "POCO F6 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "POCO",
+      "model": "POCO X3 NFC"
+    },
+    {
+      "kind": "phone",
+      "brand": "POCO",
+      "model": "POCO X3 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "POCO",
+      "model": "POCO X4 Pro 5G"
+    },
+    {
+      "kind": "phone",
+      "brand": "POCO",
+      "model": "POCO X5"
+    },
+    {
+      "kind": "phone",
+      "brand": "POCO",
+      "model": "POCO X5 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "POCO",
+      "model": "POCO X6"
+    },
+    {
+      "kind": "phone",
+      "brand": "POCO",
+      "model": "POCO X6 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "POCO",
+      "model": "POCO M3"
+    },
+    {
+      "kind": "phone",
+      "brand": "POCO",
+      "model": "POCO M4 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "POCO",
+      "model": "POCO M5"
+    },
+    {
+      "kind": "phone",
+      "brand": "POCO",
+      "model": "POCO M6 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "POCO",
+      "model": "POCO C65"
+    },
+    {
+      "kind": "phone",
+      "brand": "Motorola",
+      "model": "moto g power"
+    },
+    {
+      "kind": "phone",
+      "brand": "Motorola",
+      "model": "moto g stylus"
+    },
+    {
+      "kind": "phone",
+      "brand": "Motorola",
+      "model": "moto g play"
+    },
+    {
+      "kind": "phone",
+      "brand": "Motorola",
+      "model": "moto g13"
+    },
+    {
+      "kind": "phone",
+      "brand": "Motorola",
+      "model": "moto g14"
+    },
+    {
+      "kind": "phone",
+      "brand": "Motorola",
+      "model": "moto g24"
+    },
+    {
+      "kind": "phone",
+      "brand": "Motorola",
+      "model": "moto g54"
+    },
+    {
+      "kind": "phone",
+      "brand": "Motorola",
+      "model": "moto g84"
+    },
+    {
+      "kind": "phone",
+      "brand": "Motorola",
+      "model": "motorola edge 40"
+    },
+    {
+      "kind": "phone",
+      "brand": "Motorola",
+      "model": "motorola edge 50 pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Motorola",
+      "model": "motorola razr 40"
+    },
+    {
+      "kind": "phone",
+      "brand": "Motorola",
+      "model": "motorola razr 50"
+    },
+    {
+      "kind": "phone",
+      "brand": "Google",
+      "model": "Pixel 4"
+    },
+    {
+      "kind": "phone",
+      "brand": "Google",
+      "model": "Pixel 4a"
+    },
+    {
+      "kind": "phone",
+      "brand": "Google",
+      "model": "Pixel 5"
+    },
+    {
+      "kind": "phone",
+      "brand": "Google",
+      "model": "Pixel 5a"
+    },
+    {
+      "kind": "phone",
+      "brand": "Google",
+      "model": "Pixel 6"
+    },
+    {
+      "kind": "phone",
+      "brand": "Google",
+      "model": "Pixel 6 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Google",
+      "model": "Pixel 6a"
+    },
+    {
+      "kind": "phone",
+      "brand": "Google",
+      "model": "Pixel 7"
+    },
+    {
+      "kind": "phone",
+      "brand": "Google",
+      "model": "Pixel 7 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Google",
+      "model": "Pixel 7a"
+    },
+    {
+      "kind": "phone",
+      "brand": "Google",
+      "model": "Pixel 8"
+    },
+    {
+      "kind": "phone",
+      "brand": "Google",
+      "model": "Pixel 8 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Google",
+      "model": "Pixel 8a"
+    },
+    {
+      "kind": "phone",
+      "brand": "Google",
+      "model": "Pixel 9"
+    },
+    {
+      "kind": "phone",
+      "brand": "Google",
+      "model": "Pixel 9 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Google",
+      "model": "Pixel 9 Pro XL"
+    },
+    {
+      "kind": "phone",
+      "brand": "Google",
+      "model": "Pixel 9 Pro Fold"
+    },
+    {
+      "kind": "phone",
+      "brand": "Huawei",
+      "model": "P20"
+    },
+    {
+      "kind": "phone",
+      "brand": "Huawei",
+      "model": "P20 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Huawei",
+      "model": "P30"
+    },
+    {
+      "kind": "phone",
+      "brand": "Huawei",
+      "model": "P30 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Huawei",
+      "model": "P40"
+    },
+    {
+      "kind": "phone",
+      "brand": "Huawei",
+      "model": "P40 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Huawei",
+      "model": "P50 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Huawei",
+      "model": "P60 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Huawei",
+      "model": "Mate 20"
+    },
+    {
+      "kind": "phone",
+      "brand": "Huawei",
+      "model": "Mate 20 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Huawei",
+      "model": "Mate 30 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Huawei",
+      "model": "Mate 40 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Huawei",
+      "model": "nova 9"
+    },
+    {
+      "kind": "phone",
+      "brand": "Huawei",
+      "model": "nova 10"
+    },
+    {
+      "kind": "phone",
+      "brand": "Huawei",
+      "model": "Y9 Prime 2019"
+    },
+    {
+      "kind": "phone",
+      "brand": "Honor",
+      "model": "HONOR 50"
+    },
+    {
+      "kind": "phone",
+      "brand": "Honor",
+      "model": "HONOR 70"
+    },
+    {
+      "kind": "phone",
+      "brand": "Honor",
+      "model": "HONOR 90"
+    },
+    {
+      "kind": "phone",
+      "brand": "Honor",
+      "model": "HONOR 200"
+    },
+    {
+      "kind": "phone",
+      "brand": "Honor",
+      "model": "HONOR X6"
+    },
+    {
+      "kind": "phone",
+      "brand": "Honor",
+      "model": "HONOR X7"
+    },
+    {
+      "kind": "phone",
+      "brand": "Honor",
+      "model": "HONOR X8"
+    },
+    {
+      "kind": "phone",
+      "brand": "Honor",
+      "model": "HONOR X9"
+    },
+    {
+      "kind": "phone",
+      "brand": "Honor",
+      "model": "Magic5 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Honor",
+      "model": "Magic6 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Honor",
+      "model": "Magic V2"
+    },
+    {
+      "kind": "phone",
+      "brand": "OPPO",
+      "model": "A16"
+    },
+    {
+      "kind": "phone",
+      "brand": "OPPO",
+      "model": "A17"
+    },
+    {
+      "kind": "phone",
+      "brand": "OPPO",
+      "model": "A18"
+    },
+    {
+      "kind": "phone",
+      "brand": "OPPO",
+      "model": "A38"
+    },
+    {
+      "kind": "phone",
+      "brand": "OPPO",
+      "model": "A54"
+    },
+    {
+      "kind": "phone",
+      "brand": "OPPO",
+      "model": "A57"
+    },
+    {
+      "kind": "phone",
+      "brand": "OPPO",
+      "model": "A58"
+    },
+    {
+      "kind": "phone",
+      "brand": "OPPO",
+      "model": "A78"
+    },
+    {
+      "kind": "phone",
+      "brand": "OPPO",
+      "model": "Reno8"
+    },
+    {
+      "kind": "phone",
+      "brand": "OPPO",
+      "model": "Reno10"
+    },
+    {
+      "kind": "phone",
+      "brand": "OPPO",
+      "model": "Reno11"
+    },
+    {
+      "kind": "phone",
+      "brand": "OPPO",
+      "model": "Find X5 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "OPPO",
+      "model": "Find X7 Ultra"
+    },
+    {
+      "kind": "phone",
+      "brand": "vivo",
+      "model": "Y02"
+    },
+    {
+      "kind": "phone",
+      "brand": "vivo",
+      "model": "Y16"
+    },
+    {
+      "kind": "phone",
+      "brand": "vivo",
+      "model": "Y17s"
+    },
+    {
+      "kind": "phone",
+      "brand": "vivo",
+      "model": "Y21"
+    },
+    {
+      "kind": "phone",
+      "brand": "vivo",
+      "model": "Y22"
+    },
+    {
+      "kind": "phone",
+      "brand": "vivo",
+      "model": "Y27"
+    },
+    {
+      "kind": "phone",
+      "brand": "vivo",
+      "model": "Y36"
+    },
+    {
+      "kind": "phone",
+      "brand": "vivo",
+      "model": "V27"
+    },
+    {
+      "kind": "phone",
+      "brand": "vivo",
+      "model": "V29"
+    },
+    {
+      "kind": "phone",
+      "brand": "vivo",
+      "model": "V30"
+    },
+    {
+      "kind": "phone",
+      "brand": "vivo",
+      "model": "X90 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "vivo",
+      "model": "X100 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "realme",
+      "model": "C11"
+    },
+    {
+      "kind": "phone",
+      "brand": "realme",
+      "model": "C21Y"
+    },
+    {
+      "kind": "phone",
+      "brand": "realme",
+      "model": "C30"
+    },
+    {
+      "kind": "phone",
+      "brand": "realme",
+      "model": "C33"
+    },
+    {
+      "kind": "phone",
+      "brand": "realme",
+      "model": "C35"
+    },
+    {
+      "kind": "phone",
+      "brand": "realme",
+      "model": "C53"
+    },
+    {
+      "kind": "phone",
+      "brand": "realme",
+      "model": "C55"
+    },
+    {
+      "kind": "phone",
+      "brand": "realme",
+      "model": "C67"
+    },
+    {
+      "kind": "phone",
+      "brand": "realme",
+      "model": "realme 10"
+    },
+    {
+      "kind": "phone",
+      "brand": "realme",
+      "model": "realme 11 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "realme",
+      "model": "realme 12 Pro+"
+    },
+    {
+      "kind": "phone",
+      "brand": "realme",
+      "model": "GT Neo 3"
+    },
+    {
+      "kind": "phone",
+      "brand": "realme",
+      "model": "GT 6"
+    },
+    {
+      "kind": "phone",
+      "brand": "OnePlus",
+      "model": "OnePlus 8"
+    },
+    {
+      "kind": "phone",
+      "brand": "OnePlus",
+      "model": "OnePlus 8 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "OnePlus",
+      "model": "OnePlus 9"
+    },
+    {
+      "kind": "phone",
+      "brand": "OnePlus",
+      "model": "OnePlus 9 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "OnePlus",
+      "model": "OnePlus 10 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "OnePlus",
+      "model": "OnePlus 11"
+    },
+    {
+      "kind": "phone",
+      "brand": "OnePlus",
+      "model": "OnePlus 12"
+    },
+    {
+      "kind": "phone",
+      "brand": "OnePlus",
+      "model": "OnePlus 12R"
+    },
+    {
+      "kind": "phone",
+      "brand": "OnePlus",
+      "model": "Nord N10 5G"
+    },
+    {
+      "kind": "phone",
+      "brand": "OnePlus",
+      "model": "Nord N20 5G"
+    },
+    {
+      "kind": "phone",
+      "brand": "OnePlus",
+      "model": "Nord N30 5G"
+    },
+    {
+      "kind": "phone",
+      "brand": "OnePlus",
+      "model": "Open"
+    },
+    {
+      "kind": "phone",
+      "brand": "Tecno",
+      "model": "SPARK 10"
+    },
+    {
+      "kind": "phone",
+      "brand": "Tecno",
+      "model": "SPARK 10 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Tecno",
+      "model": "SPARK 20"
+    },
+    {
+      "kind": "phone",
+      "brand": "Tecno",
+      "model": "SPARK 20 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Tecno",
+      "model": "SPARK Go 2024"
+    },
+    {
+      "kind": "phone",
+      "brand": "Tecno",
+      "model": "CAMON 20"
+    },
+    {
+      "kind": "phone",
+      "brand": "Tecno",
+      "model": "CAMON 30"
+    },
+    {
+      "kind": "phone",
+      "brand": "Tecno",
+      "model": "POVA 5"
+    },
+    {
+      "kind": "phone",
+      "brand": "Tecno",
+      "model": "PHANTOM V Fold"
+    },
+    {
+      "kind": "phone",
+      "brand": "Infinix",
+      "model": "HOT 30"
+    },
+    {
+      "kind": "phone",
+      "brand": "Infinix",
+      "model": "HOT 40"
+    },
+    {
+      "kind": "phone",
+      "brand": "Infinix",
+      "model": "HOT 40 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Infinix",
+      "model": "SMART 7"
+    },
+    {
+      "kind": "phone",
+      "brand": "Infinix",
+      "model": "SMART 8"
+    },
+    {
+      "kind": "phone",
+      "brand": "Infinix",
+      "model": "NOTE 30"
+    },
+    {
+      "kind": "phone",
+      "brand": "Infinix",
+      "model": "NOTE 40"
+    },
+    {
+      "kind": "phone",
+      "brand": "Infinix",
+      "model": "ZERO 30 5G"
+    },
+    {
+      "kind": "phone",
+      "brand": "itel",
+      "model": "A49"
+    },
+    {
+      "kind": "phone",
+      "brand": "itel",
+      "model": "A60"
+    },
+    {
+      "kind": "phone",
+      "brand": "itel",
+      "model": "A70"
+    },
+    {
+      "kind": "phone",
+      "brand": "itel",
+      "model": "P40"
+    },
+    {
+      "kind": "phone",
+      "brand": "itel",
+      "model": "P55"
+    },
+    {
+      "kind": "phone",
+      "brand": "itel",
+      "model": "S23"
+    },
+    {
+      "kind": "phone",
+      "brand": "Nokia",
+      "model": "Nokia 2.4"
+    },
+    {
+      "kind": "phone",
+      "brand": "Nokia",
+      "model": "Nokia 3.4"
+    },
+    {
+      "kind": "phone",
+      "brand": "Nokia",
+      "model": "Nokia 5.4"
+    },
+    {
+      "kind": "phone",
+      "brand": "Nokia",
+      "model": "Nokia G10"
+    },
+    {
+      "kind": "phone",
+      "brand": "Nokia",
+      "model": "Nokia G20"
+    },
+    {
+      "kind": "phone",
+      "brand": "Nokia",
+      "model": "Nokia G21"
+    },
+    {
+      "kind": "phone",
+      "brand": "Nokia",
+      "model": "Nokia C21"
+    },
+    {
+      "kind": "phone",
+      "brand": "Nokia",
+      "model": "Nokia C32"
+    },
+    {
+      "kind": "phone",
+      "brand": "Nokia",
+      "model": "Nokia 3310"
+    },
+    {
+      "kind": "phone",
+      "brand": "TCL",
+      "model": "TCL 10L"
+    },
+    {
+      "kind": "phone",
+      "brand": "TCL",
+      "model": "TCL 20 SE"
+    },
+    {
+      "kind": "phone",
+      "brand": "TCL",
+      "model": "TCL 30 SE"
+    },
+    {
+      "kind": "phone",
+      "brand": "TCL",
+      "model": "TCL 40 SE"
+    },
+    {
+      "kind": "phone",
+      "brand": "TCL",
+      "model": "TCL 50 SE"
+    },
+    {
+      "kind": "phone",
+      "brand": "TCL",
+      "model": "TCL 50 XL 5G"
+    },
+    {
+      "kind": "phone",
+      "brand": "ZTE",
+      "model": "Blade A31"
+    },
+    {
+      "kind": "phone",
+      "brand": "ZTE",
+      "model": "Blade A51"
+    },
+    {
+      "kind": "phone",
+      "brand": "ZTE",
+      "model": "Blade A52"
+    },
+    {
+      "kind": "phone",
+      "brand": "ZTE",
+      "model": "Blade A54"
+    },
+    {
+      "kind": "phone",
+      "brand": "ZTE",
+      "model": "Blade V40"
+    },
+    {
+      "kind": "phone",
+      "brand": "ZTE",
+      "model": "Axon 40 Ultra"
+    },
+    {
+      "kind": "phone",
+      "brand": "BLU",
+      "model": "G51"
+    },
+    {
+      "kind": "phone",
+      "brand": "BLU",
+      "model": "G61"
+    },
+    {
+      "kind": "phone",
+      "brand": "BLU",
+      "model": "G91"
+    },
+    {
+      "kind": "phone",
+      "brand": "BLU",
+      "model": "G91 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "BLU",
+      "model": "G91 Max"
+    },
+    {
+      "kind": "phone",
+      "brand": "BLU",
+      "model": "G93"
+    },
+    {
+      "kind": "phone",
+      "brand": "BLU",
+      "model": "Studio X10"
+    },
+    {
+      "kind": "phone",
+      "brand": "LG",
+      "model": "K40"
+    },
+    {
+      "kind": "phone",
+      "brand": "LG",
+      "model": "K50"
+    },
+    {
+      "kind": "phone",
+      "brand": "LG",
+      "model": "K51"
+    },
+    {
+      "kind": "phone",
+      "brand": "LG",
+      "model": "K61"
+    },
+    {
+      "kind": "phone",
+      "brand": "LG",
+      "model": "Stylo 5"
+    },
+    {
+      "kind": "phone",
+      "brand": "LG",
+      "model": "Stylo 6"
+    },
+    {
+      "kind": "phone",
+      "brand": "LG",
+      "model": "G7 ThinQ"
+    },
+    {
+      "kind": "phone",
+      "brand": "LG",
+      "model": "G8 ThinQ"
+    },
+    {
+      "kind": "phone",
+      "brand": "LG",
+      "model": "V50 ThinQ"
+    },
+    {
+      "kind": "phone",
+      "brand": "LG",
+      "model": "V60 ThinQ"
+    },
+    {
+      "kind": "phone",
+      "brand": "LG",
+      "model": "Velvet"
+    },
+    {
+      "kind": "phone",
+      "brand": "Sony",
+      "model": "Xperia 1"
+    },
+    {
+      "kind": "phone",
+      "brand": "Sony",
+      "model": "Xperia 1 II"
+    },
+    {
+      "kind": "phone",
+      "brand": "Sony",
+      "model": "Xperia 1 III"
+    },
+    {
+      "kind": "phone",
+      "brand": "Sony",
+      "model": "Xperia 1 IV"
+    },
+    {
+      "kind": "phone",
+      "brand": "Sony",
+      "model": "Xperia 1 V"
+    },
+    {
+      "kind": "phone",
+      "brand": "Sony",
+      "model": "Xperia 5 III"
+    },
+    {
+      "kind": "phone",
+      "brand": "Sony",
+      "model": "Xperia 10 V"
+    },
+    {
+      "kind": "phone",
+      "brand": "ASUS",
+      "model": "Zenfone 8"
+    },
+    {
+      "kind": "phone",
+      "brand": "ASUS",
+      "model": "Zenfone 9"
+    },
+    {
+      "kind": "phone",
+      "brand": "ASUS",
+      "model": "Zenfone 10"
+    },
+    {
+      "kind": "phone",
+      "brand": "ASUS",
+      "model": "ROG Phone 5"
+    },
+    {
+      "kind": "phone",
+      "brand": "ASUS",
+      "model": "ROG Phone 6"
+    },
+    {
+      "kind": "phone",
+      "brand": "ASUS",
+      "model": "ROG Phone 7"
+    },
+    {
+      "kind": "phone",
+      "brand": "ASUS",
+      "model": "ROG Phone 8"
+    },
+    {
+      "kind": "phone",
+      "brand": "Nothing",
+      "model": "Phone (1)"
+    },
+    {
+      "kind": "phone",
+      "brand": "Nothing",
+      "model": "Phone (2)"
+    },
+    {
+      "kind": "phone",
+      "brand": "Nothing",
+      "model": "Phone (2a)"
+    },
+    {
+      "kind": "phone",
+      "brand": "Nothing",
+      "model": "Phone (3a)"
+    },
+    {
+      "kind": "phone",
+      "brand": "HTC",
+      "model": "One M8"
+    },
+    {
+      "kind": "phone",
+      "brand": "HTC",
+      "model": "One M9"
+    },
+    {
+      "kind": "phone",
+      "brand": "HTC",
+      "model": "HTC 10"
+    },
+    {
+      "kind": "phone",
+      "brand": "HTC",
+      "model": "U11"
+    },
+    {
+      "kind": "phone",
+      "brand": "HTC",
+      "model": "U12+"
+    },
+    {
+      "kind": "phone",
+      "brand": "HTC",
+      "model": "Desire 20 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "BlackBerry",
+      "model": "KEYone"
+    },
+    {
+      "kind": "phone",
+      "brand": "BlackBerry",
+      "model": "KEY2"
+    },
+    {
+      "kind": "phone",
+      "brand": "BlackBerry",
+      "model": "Classic"
+    },
+    {
+      "kind": "phone",
+      "brand": "BlackBerry",
+      "model": "Passport"
+    },
+    {
+      "kind": "phone",
+      "brand": "BlackBerry",
+      "model": "Priv"
+    },
+    {
+      "kind": "phone",
+      "brand": "Alcatel",
+      "model": "1"
+    },
+    {
+      "kind": "phone",
+      "brand": "Alcatel",
+      "model": "1B"
+    },
+    {
+      "kind": "phone",
+      "brand": "Alcatel",
+      "model": "1S"
+    },
+    {
+      "kind": "phone",
+      "brand": "Alcatel",
+      "model": "3L"
+    },
+    {
+      "kind": "phone",
+      "brand": "Alcatel",
+      "model": "3X"
+    },
+    {
+      "kind": "phone",
+      "brand": "Alcatel",
+      "model": "5V"
+    },
+    {
+      "kind": "phone",
+      "brand": "Nubia",
+      "model": "Z50"
+    },
+    {
+      "kind": "phone",
+      "brand": "Nubia",
+      "model": "Z60 Ultra"
+    },
+    {
+      "kind": "phone",
+      "brand": "Nubia",
+      "model": "REDMAGIC 8 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Nubia",
+      "model": "REDMAGIC 9 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "Fairphone",
+      "model": "Fairphone 3"
+    },
+    {
+      "kind": "phone",
+      "brand": "Fairphone",
+      "model": "Fairphone 4"
+    },
+    {
+      "kind": "phone",
+      "brand": "Fairphone",
+      "model": "Fairphone 5"
+    },
+    {
+      "kind": "phone",
+      "brand": "Ulefone",
+      "model": "Armor 8"
+    },
+    {
+      "kind": "phone",
+      "brand": "Ulefone",
+      "model": "Armor 9"
+    },
+    {
+      "kind": "phone",
+      "brand": "Ulefone",
+      "model": "Armor 12"
+    },
+    {
+      "kind": "phone",
+      "brand": "Ulefone",
+      "model": "Armor 21"
+    },
+    {
+      "kind": "phone",
+      "brand": "DOOGEE",
+      "model": "S61"
+    },
+    {
+      "kind": "phone",
+      "brand": "DOOGEE",
+      "model": "S98"
+    },
+    {
+      "kind": "phone",
+      "brand": "DOOGEE",
+      "model": "V20"
+    },
+    {
+      "kind": "phone",
+      "brand": "DOOGEE",
+      "model": "V30"
+    },
+    {
+      "kind": "phone",
+      "brand": "OUKITEL",
+      "model": "WP19"
+    },
+    {
+      "kind": "phone",
+      "brand": "OUKITEL",
+      "model": "WP21"
+    },
+    {
+      "kind": "phone",
+      "brand": "OUKITEL",
+      "model": "WP30 Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "OUKITEL",
+      "model": "C35"
+    },
+    {
+      "kind": "phone",
+      "brand": "UMIDIGI",
+      "model": "A11"
+    },
+    {
+      "kind": "phone",
+      "brand": "UMIDIGI",
+      "model": "A13"
+    },
+    {
+      "kind": "phone",
+      "brand": "UMIDIGI",
+      "model": "A15"
+    },
+    {
+      "kind": "phone",
+      "brand": "UMIDIGI",
+      "model": "BISON"
+    },
+    {
+      "kind": "phone",
+      "brand": "UMIDIGI",
+      "model": "BISON GT2"
+    },
+    {
+      "kind": "phone",
+      "brand": "CUBOT",
+      "model": "KingKong 7"
+    },
+    {
+      "kind": "phone",
+      "brand": "CUBOT",
+      "model": "KingKong 9"
+    },
+    {
+      "kind": "phone",
+      "brand": "CUBOT",
+      "model": "P80"
+    },
+    {
+      "kind": "phone",
+      "brand": "HMD",
+      "model": "Pulse"
+    },
+    {
+      "kind": "phone",
+      "brand": "HMD",
+      "model": "Pulse+"
+    },
+    {
+      "kind": "phone",
+      "brand": "HMD",
+      "model": "Pulse Pro"
+    },
+    {
+      "kind": "phone",
+      "brand": "HMD",
+      "model": "Skyline"
+    },
+    {
+      "kind": "phone",
+      "brand": "Meizu",
+      "model": "Meizu 18"
+    },
+    {
+      "kind": "phone",
+      "brand": "Meizu",
+      "model": "Meizu 20"
+    },
+    {
+      "kind": "phone",
+      "brand": "Meizu",
+      "model": "Meizu 21"
+    },
+    {
+      "kind": "phone",
+      "brand": "Sharp",
+      "model": "AQUOS R6"
+    },
+    {
+      "kind": "phone",
+      "brand": "Sharp",
+      "model": "AQUOS R7"
+    },
+    {
+      "kind": "phone",
+      "brand": "Sharp",
+      "model": "AQUOS sense7"
+    },
+    {
+      "kind": "phone",
+      "brand": "Maxwest",
+      "model": "Astro 55R"
+    },
+    {
+      "kind": "phone",
+      "brand": "Maxwest",
+      "model": "Astro 6"
+    },
+    {
+      "kind": "phone",
+      "brand": "NUU",
+      "model": "A15"
+    },
+    {
+      "kind": "phone",
+      "brand": "NUU",
+      "model": "A25"
+    },
+    {
+      "kind": "phone",
+      "brand": "NUU",
+      "model": "B20"
+    },
+    {
+      "kind": "console",
+      "brand": "Sony",
+      "model": "PlayStation"
+    },
+    {
+      "kind": "console",
+      "brand": "Sony",
+      "model": "PlayStation 2"
+    },
+    {
+      "kind": "console",
+      "brand": "Sony",
+      "model": "PlayStation 2 Slim"
+    },
+    {
+      "kind": "console",
+      "brand": "Sony",
+      "model": "PlayStation 3"
+    },
+    {
+      "kind": "console",
+      "brand": "Sony",
+      "model": "PlayStation 3 Slim"
+    },
+    {
+      "kind": "console",
+      "brand": "Sony",
+      "model": "PlayStation 3 Super Slim"
+    },
+    {
+      "kind": "console",
+      "brand": "Sony",
+      "model": "PlayStation 4"
+    },
+    {
+      "kind": "console",
+      "brand": "Sony",
+      "model": "PlayStation 4 Slim"
+    },
+    {
+      "kind": "console",
+      "brand": "Sony",
+      "model": "PlayStation 4 Pro"
+    },
+    {
+      "kind": "console",
+      "brand": "Sony",
+      "model": "PlayStation 5"
+    },
+    {
+      "kind": "console",
+      "brand": "Sony",
+      "model": "PlayStation 5 Digital Edition"
+    },
+    {
+      "kind": "console",
+      "brand": "Sony",
+      "model": "PlayStation 5 Slim"
+    },
+    {
+      "kind": "console",
+      "brand": "Sony",
+      "model": "PlayStation 5 Pro"
+    },
+    {
+      "kind": "console",
+      "brand": "Sony",
+      "model": "PSP"
+    },
+    {
+      "kind": "console",
+      "brand": "Sony",
+      "model": "PS Vita"
+    },
+    {
+      "kind": "console",
+      "brand": "Sony",
+      "model": "PlayStation Portal"
+    },
+    {
+      "kind": "console",
+      "brand": "Microsoft",
+      "model": "Xbox"
+    },
+    {
+      "kind": "console",
+      "brand": "Microsoft",
+      "model": "Xbox 360"
+    },
+    {
+      "kind": "console",
+      "brand": "Microsoft",
+      "model": "Xbox 360 S"
+    },
+    {
+      "kind": "console",
+      "brand": "Microsoft",
+      "model": "Xbox 360 E"
+    },
+    {
+      "kind": "console",
+      "brand": "Microsoft",
+      "model": "Xbox One"
+    },
+    {
+      "kind": "console",
+      "brand": "Microsoft",
+      "model": "Xbox One S"
+    },
+    {
+      "kind": "console",
+      "brand": "Microsoft",
+      "model": "Xbox One X"
+    },
+    {
+      "kind": "console",
+      "brand": "Microsoft",
+      "model": "Xbox Series S"
+    },
+    {
+      "kind": "console",
+      "brand": "Microsoft",
+      "model": "Xbox Series X"
+    },
+    {
+      "kind": "console",
+      "brand": "Nintendo",
+      "model": "NES"
+    },
+    {
+      "kind": "console",
+      "brand": "Nintendo",
+      "model": "Super Nintendo"
+    },
+    {
+      "kind": "console",
+      "brand": "Nintendo",
+      "model": "Nintendo 64"
+    },
+    {
+      "kind": "console",
+      "brand": "Nintendo",
+      "model": "GameCube"
+    },
+    {
+      "kind": "console",
+      "brand": "Nintendo",
+      "model": "Wii"
+    },
+    {
+      "kind": "console",
+      "brand": "Nintendo",
+      "model": "Wii U"
+    },
+    {
+      "kind": "console",
+      "brand": "Nintendo",
+      "model": "Nintendo Switch"
+    },
+    {
+      "kind": "console",
+      "brand": "Nintendo",
+      "model": "Nintendo Switch Lite"
+    },
+    {
+      "kind": "console",
+      "brand": "Nintendo",
+      "model": "Nintendo Switch OLED"
+    },
+    {
+      "kind": "console",
+      "brand": "Nintendo",
+      "model": "Nintendo Switch 2"
+    },
+    {
+      "kind": "console",
+      "brand": "Nintendo",
+      "model": "Game Boy"
+    },
+    {
+      "kind": "console",
+      "brand": "Nintendo",
+      "model": "Game Boy Color"
+    },
+    {
+      "kind": "console",
+      "brand": "Nintendo",
+      "model": "Game Boy Advance"
+    },
+    {
+      "kind": "console",
+      "brand": "Nintendo",
+      "model": "Nintendo DS"
+    },
+    {
+      "kind": "console",
+      "brand": "Nintendo",
+      "model": "Nintendo DSi"
+    },
+    {
+      "kind": "console",
+      "brand": "Nintendo",
+      "model": "Nintendo 3DS"
+    },
+    {
+      "kind": "console",
+      "brand": "Nintendo",
+      "model": "Nintendo 2DS"
+    },
+    {
+      "kind": "console",
+      "brand": "Nintendo",
+      "model": "New Nintendo 3DS XL"
+    },
+    {
+      "kind": "console",
+      "brand": "Valve",
+      "model": "Steam Deck"
+    },
+    {
+      "kind": "console",
+      "brand": "Valve",
+      "model": "Steam Deck OLED"
+    },
+    {
+      "kind": "console",
+      "brand": "ASUS",
+      "model": "ROG Ally"
+    },
+    {
+      "kind": "console",
+      "brand": "ASUS",
+      "model": "ROG Ally X"
+    },
+    {
+      "kind": "console",
+      "brand": "Lenovo",
+      "model": "Legion Go"
+    },
+    {
+      "kind": "console",
+      "brand": "MSI",
+      "model": "Claw A1M"
+    },
+    {
+      "kind": "console",
+      "brand": "Sega",
+      "model": "Master System"
+    },
+    {
+      "kind": "console",
+      "brand": "Sega",
+      "model": "Genesis"
+    },
+    {
+      "kind": "console",
+      "brand": "Sega",
+      "model": "Mega Drive"
+    },
+    {
+      "kind": "console",
+      "brand": "Sega",
+      "model": "Saturn"
+    },
+    {
+      "kind": "console",
+      "brand": "Sega",
+      "model": "Dreamcast"
+    },
+    {
+      "kind": "console",
+      "brand": "Sega",
+      "model": "Game Gear"
+    },
+    {
+      "kind": "console",
+      "brand": "Atari",
+      "model": "Atari 2600"
+    },
+    {
+      "kind": "console",
+      "brand": "Atari",
+      "model": "Atari 7800"
+    },
+    {
+      "kind": "console",
+      "brand": "Atari",
+      "model": "Atari VCS"
+    },
+    {
+      "kind": "console",
+      "brand": "Anbernic",
+      "model": "RG35XX"
+    },
+    {
+      "kind": "console",
+      "brand": "Anbernic",
+      "model": "RG353V"
+    },
+    {
+      "kind": "console",
+      "brand": "Anbernic",
+      "model": "RG405M"
+    },
+    {
+      "kind": "console",
+      "brand": "Anbernic",
+      "model": "RG556"
+    },
+    {
+      "kind": "console",
+      "brand": "Retroid",
+      "model": "Pocket 3+"
+    },
+    {
+      "kind": "console",
+      "brand": "Retroid",
+      "model": "Pocket 4 Pro"
+    },
+    {
+      "kind": "console",
+      "brand": "Retroid",
+      "model": "Pocket 5"
+    },
+    {
+      "kind": "console",
+      "brand": "Miyoo",
+      "model": "Mini"
+    },
+    {
+      "kind": "console",
+      "brand": "Miyoo",
+      "model": "Mini Plus"
+    },
+    {
+      "kind": "console",
+      "brand": "AYANEO",
+      "model": "AYANEO 2"
+    },
+    {
+      "kind": "console",
+      "brand": "AYANEO",
+      "model": "AYANEO Geek"
+    },
+    {
+      "kind": "console",
+      "brand": "AYANEO",
+      "model": "AYANEO Air"
+    },
+    {
+      "kind": "console",
+      "brand": "SNK",
+      "model": "Neo Geo"
+    },
+    {
+      "kind": "console",
+      "brand": "SNK",
+      "model": "Neo Geo Mini"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Apple",
+      "model": "MacBook Air 13 M1"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Apple",
+      "model": "MacBook Air 13 M2"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Apple",
+      "model": "MacBook Air 15 M2"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Apple",
+      "model": "MacBook Air 13 M3"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Apple",
+      "model": "MacBook Air 15 M3"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Apple",
+      "model": "MacBook Air 13 M4"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Apple",
+      "model": "MacBook Air 15 M4"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Apple",
+      "model": "MacBook Pro 13 M1"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Apple",
+      "model": "MacBook Pro 14 M1 Pro"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Apple",
+      "model": "MacBook Pro 16 M1 Pro"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Apple",
+      "model": "MacBook Pro 14 M2 Pro"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Apple",
+      "model": "MacBook Pro 16 M2 Pro"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Apple",
+      "model": "MacBook Pro 14 M3"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Apple",
+      "model": "MacBook Pro 16 M3 Pro"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Apple",
+      "model": "MacBook Pro 14 M4"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Apple",
+      "model": "MacBook Pro 16 M4 Pro"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Dell",
+      "model": "Inspiron 14"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Dell",
+      "model": "Inspiron 15"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Dell",
+      "model": "Inspiron 16"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Dell",
+      "model": "Latitude 5420"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Dell",
+      "model": "Latitude 5430"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Dell",
+      "model": "Latitude 5440"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Dell",
+      "model": "Latitude 7420"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Dell",
+      "model": "XPS 13"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Dell",
+      "model": "XPS 15"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Dell",
+      "model": "XPS 16"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Dell",
+      "model": "Vostro 3510"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Dell",
+      "model": "Precision 5570"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Dell",
+      "model": "Dell 14"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Dell",
+      "model": "Dell 16"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Dell",
+      "model": "Dell Pro 14"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Dell",
+      "model": "Dell Pro 16"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Dell",
+      "model": "Dell Pro Max 14"
+    },
+    {
+      "kind": "laptop",
+      "brand": "HP",
+      "model": "Pavilion 14"
+    },
+    {
+      "kind": "laptop",
+      "brand": "HP",
+      "model": "Pavilion 15"
+    },
+    {
+      "kind": "laptop",
+      "brand": "HP",
+      "model": "Pavilion x360"
+    },
+    {
+      "kind": "laptop",
+      "brand": "HP",
+      "model": "Envy x360"
+    },
+    {
+      "kind": "laptop",
+      "brand": "HP",
+      "model": "Spectre x360"
+    },
+    {
+      "kind": "laptop",
+      "brand": "HP",
+      "model": "Victus 15"
+    },
+    {
+      "kind": "laptop",
+      "brand": "HP",
+      "model": "Victus 16"
+    },
+    {
+      "kind": "laptop",
+      "brand": "HP",
+      "model": "OMEN 16"
+    },
+    {
+      "kind": "laptop",
+      "brand": "HP",
+      "model": "EliteBook 840"
+    },
+    {
+      "kind": "laptop",
+      "brand": "HP",
+      "model": "ProBook 440"
+    },
+    {
+      "kind": "laptop",
+      "brand": "HP",
+      "model": "ProBook 450"
+    },
+    {
+      "kind": "laptop",
+      "brand": "HP",
+      "model": "Dragonfly G4"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Lenovo",
+      "model": "IdeaPad 1"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Lenovo",
+      "model": "IdeaPad 3"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Lenovo",
+      "model": "IdeaPad 5"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Lenovo",
+      "model": "ThinkPad T14"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Lenovo",
+      "model": "ThinkPad T14s"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Lenovo",
+      "model": "ThinkPad X1 Carbon"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Lenovo",
+      "model": "ThinkPad E14"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Lenovo",
+      "model": "ThinkPad E15"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Lenovo",
+      "model": "ThinkBook 14"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Lenovo",
+      "model": "ThinkBook 16"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Lenovo",
+      "model": "Yoga 7"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Lenovo",
+      "model": "Yoga 9i"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Lenovo",
+      "model": "Legion 5"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Lenovo",
+      "model": "Legion Pro 7"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Lenovo",
+      "model": "LOQ 15"
+    },
+    {
+      "kind": "laptop",
+      "brand": "ASUS",
+      "model": "VivoBook 15"
+    },
+    {
+      "kind": "laptop",
+      "brand": "ASUS",
+      "model": "VivoBook 16"
+    },
+    {
+      "kind": "laptop",
+      "brand": "ASUS",
+      "model": "Zenbook 14"
+    },
+    {
+      "kind": "laptop",
+      "brand": "ASUS",
+      "model": "Zenbook Pro Duo"
+    },
+    {
+      "kind": "laptop",
+      "brand": "ASUS",
+      "model": "ROG Strix G16"
+    },
+    {
+      "kind": "laptop",
+      "brand": "ASUS",
+      "model": "ROG Zephyrus G14"
+    },
+    {
+      "kind": "laptop",
+      "brand": "ASUS",
+      "model": "ROG Zephyrus G16"
+    },
+    {
+      "kind": "laptop",
+      "brand": "ASUS",
+      "model": "TUF Gaming A15"
+    },
+    {
+      "kind": "laptop",
+      "brand": "ASUS",
+      "model": "TUF Gaming F15"
+    },
+    {
+      "kind": "laptop",
+      "brand": "ASUS",
+      "model": "ExpertBook B1"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Acer",
+      "model": "Aspire 3"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Acer",
+      "model": "Aspire 5"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Acer",
+      "model": "Swift 3"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Acer",
+      "model": "Swift Go 14"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Acer",
+      "model": "Nitro 5"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Acer",
+      "model": "Nitro V 15"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Acer",
+      "model": "Predator Helios 16"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Acer",
+      "model": "Predator Triton 14"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Acer",
+      "model": "TravelMate P2"
+    },
+    {
+      "kind": "laptop",
+      "brand": "MSI",
+      "model": "Modern 14"
+    },
+    {
+      "kind": "laptop",
+      "brand": "MSI",
+      "model": "Modern 15"
+    },
+    {
+      "kind": "laptop",
+      "brand": "MSI",
+      "model": "Prestige 14"
+    },
+    {
+      "kind": "laptop",
+      "brand": "MSI",
+      "model": "Katana 15"
+    },
+    {
+      "kind": "laptop",
+      "brand": "MSI",
+      "model": "Cyborg 15"
+    },
+    {
+      "kind": "laptop",
+      "brand": "MSI",
+      "model": "Thin GF63"
+    },
+    {
+      "kind": "laptop",
+      "brand": "MSI",
+      "model": "Stealth 16"
+    },
+    {
+      "kind": "laptop",
+      "brand": "MSI",
+      "model": "Titan 18 HX"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Microsoft",
+      "model": "Surface Laptop 4"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Microsoft",
+      "model": "Surface Laptop 5"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Microsoft",
+      "model": "Surface Laptop 6"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Microsoft",
+      "model": "Surface Laptop 7"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Microsoft",
+      "model": "Surface Laptop Go 3"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Microsoft",
+      "model": "Surface Book 3"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Microsoft",
+      "model": "Surface Pro 9"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Microsoft",
+      "model": "Surface Pro 10"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Microsoft",
+      "model": "Surface Pro 11"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Samsung",
+      "model": "Galaxy Book2"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Samsung",
+      "model": "Galaxy Book3"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Samsung",
+      "model": "Galaxy Book3 Pro"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Samsung",
+      "model": "Galaxy Book4"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Samsung",
+      "model": "Galaxy Book4 Pro"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Samsung",
+      "model": "Galaxy Book4 Ultra"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Huawei",
+      "model": "MateBook D14"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Huawei",
+      "model": "MateBook D15"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Huawei",
+      "model": "MateBook 14"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Huawei",
+      "model": "MateBook X Pro"
+    },
+    {
+      "kind": "laptop",
+      "brand": "LG",
+      "model": "gram 14"
+    },
+    {
+      "kind": "laptop",
+      "brand": "LG",
+      "model": "gram 16"
+    },
+    {
+      "kind": "laptop",
+      "brand": "LG",
+      "model": "gram 17"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Razer",
+      "model": "Blade 14"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Razer",
+      "model": "Blade 15"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Razer",
+      "model": "Blade 16"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Razer",
+      "model": "Blade 18"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Alienware",
+      "model": "m15 R7"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Alienware",
+      "model": "m16 R2"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Alienware",
+      "model": "m18 R2"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Alienware",
+      "model": "x14 R2"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Alienware",
+      "model": "x16 R2"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Gigabyte",
+      "model": "G5"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Gigabyte",
+      "model": "G6"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Gigabyte",
+      "model": "AERO 16"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Gigabyte",
+      "model": "AORUS 15"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Framework",
+      "model": "Laptop 13"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Framework",
+      "model": "Laptop 16"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Acer",
+      "model": "Chromebook 311"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Acer",
+      "model": "Chromebook Spin 713"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Toshiba",
+      "model": "Satellite C55"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Toshiba",
+      "model": "Satellite L50"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Toshiba",
+      "model": "Tecra A50"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Dynabook",
+      "model": "Satellite Pro C40"
+    },
+    {
+      "kind": "laptop",
+      "brand": "Dynabook",
+      "model": "Tecra A40"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Apple",
+      "model": "iMac 21.5"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Apple",
+      "model": "iMac 24 M1"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Apple",
+      "model": "iMac 24 M3"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Apple",
+      "model": "iMac 24 M4"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Apple",
+      "model": "Mac mini M1"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Apple",
+      "model": "Mac mini M2"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Apple",
+      "model": "Mac mini M4"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Apple",
+      "model": "Mac Studio M1 Max"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Apple",
+      "model": "Mac Studio M2 Max"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Apple",
+      "model": "Mac Pro"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Dell",
+      "model": "OptiPlex 3050"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Dell",
+      "model": "OptiPlex 3060"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Dell",
+      "model": "OptiPlex 3070"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Dell",
+      "model": "OptiPlex 3080"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Dell",
+      "model": "OptiPlex 5090"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Dell",
+      "model": "OptiPlex 7010"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Dell",
+      "model": "OptiPlex 7020"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Dell",
+      "model": "Precision 3660"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Dell",
+      "model": "Inspiron 3020"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Dell",
+      "model": "XPS 8960"
+    },
+    {
+      "kind": "desktop",
+      "brand": "HP",
+      "model": "ProDesk 400"
+    },
+    {
+      "kind": "desktop",
+      "brand": "HP",
+      "model": "ProDesk 600"
+    },
+    {
+      "kind": "desktop",
+      "brand": "HP",
+      "model": "EliteDesk 800"
+    },
+    {
+      "kind": "desktop",
+      "brand": "HP",
+      "model": "Elite Mini 800"
+    },
+    {
+      "kind": "desktop",
+      "brand": "HP",
+      "model": "Pro Mini 400"
+    },
+    {
+      "kind": "desktop",
+      "brand": "HP",
+      "model": "Pavilion Desktop"
+    },
+    {
+      "kind": "desktop",
+      "brand": "HP",
+      "model": "OMEN 25L"
+    },
+    {
+      "kind": "desktop",
+      "brand": "HP",
+      "model": "OMEN 40L"
+    },
+    {
+      "kind": "desktop",
+      "brand": "HP",
+      "model": "Z2 Tower"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Lenovo",
+      "model": "ThinkCentre M70"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Lenovo",
+      "model": "ThinkCentre M80"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Lenovo",
+      "model": "ThinkCentre M90"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Lenovo",
+      "model": "IdeaCentre 3"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Lenovo",
+      "model": "IdeaCentre 5"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Lenovo",
+      "model": "Legion T5"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Lenovo",
+      "model": "ThinkStation P3"
+    },
+    {
+      "kind": "desktop",
+      "brand": "ASUS",
+      "model": "ExpertCenter D5"
+    },
+    {
+      "kind": "desktop",
+      "brand": "ASUS",
+      "model": "ROG G22CH"
+    },
+    {
+      "kind": "desktop",
+      "brand": "ASUS",
+      "model": "Mini PC PN64"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Acer",
+      "model": "Aspire TC"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Acer",
+      "model": "Veriton X"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Acer",
+      "model": "Predator Orion 3000"
+    },
+    {
+      "kind": "desktop",
+      "brand": "MSI",
+      "model": "PRO DP21"
+    },
+    {
+      "kind": "desktop",
+      "brand": "MSI",
+      "model": "Trident 3"
+    },
+    {
+      "kind": "desktop",
+      "brand": "MSI",
+      "model": "MAG Infinite S3"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Alienware",
+      "model": "Aurora R13"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Alienware",
+      "model": "Aurora R15"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Alienware",
+      "model": "Aurora R16"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Intel",
+      "model": "NUC 11"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Intel",
+      "model": "NUC 12"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Intel",
+      "model": "NUC 13"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Beelink",
+      "model": "SER5"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Beelink",
+      "model": "SER6"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Beelink",
+      "model": "SER7"
+    },
+    {
+      "kind": "desktop",
+      "brand": "Beelink",
+      "model": "Mini S12"
+    },
+    {
+      "kind": "desktop",
+      "brand": "MINISFORUM",
+      "model": "UM350"
+    },
+    {
+      "kind": "desktop",
+      "brand": "MINISFORUM",
+      "model": "UM560"
+    },
+    {
+      "kind": "desktop",
+      "brand": "MINISFORUM",
+      "model": "UM790 Pro"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Apple",
+      "model": "AirPods (1.ª generación)"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Apple",
+      "model": "AirPods (2.ª generación)"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Apple",
+      "model": "AirPods (3.ª generación)"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Apple",
+      "model": "AirPods 4"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Apple",
+      "model": "AirPods 4 con cancelación activa de ruido"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Apple",
+      "model": "AirPods 5"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Apple",
+      "model": "AirPods 5 con estuche de carga inalámbrica"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Apple",
+      "model": "AirPods Pro"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Apple",
+      "model": "AirPods Pro 2"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Apple",
+      "model": "AirPods Pro 3"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Apple",
+      "model": "AirPods Max"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Apple",
+      "model": "AirPods Max 2"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Apple",
+      "model": "EarPods USB-C"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Apple",
+      "model": "EarPods Lightning"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Samsung",
+      "model": "Galaxy Buds"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Samsung",
+      "model": "Galaxy Buds+"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Samsung",
+      "model": "Galaxy Buds Live"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Samsung",
+      "model": "Galaxy Buds Pro"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Samsung",
+      "model": "Galaxy Buds2"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Samsung",
+      "model": "Galaxy Buds2 Pro"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Samsung",
+      "model": "Galaxy Buds FE"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Samsung",
+      "model": "Galaxy Buds3"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Samsung",
+      "model": "Galaxy Buds3 Pro"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sony",
+      "model": "WH-1000XM3"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sony",
+      "model": "WH-1000XM4"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sony",
+      "model": "WH-1000XM5"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sony",
+      "model": "WF-1000XM3"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sony",
+      "model": "WF-1000XM4"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sony",
+      "model": "WF-1000XM5"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sony",
+      "model": "WH-CH520"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sony",
+      "model": "WH-CH720N"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sony",
+      "model": "WF-C500"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sony",
+      "model": "WF-C700N"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sony",
+      "model": "LinkBuds S"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sony",
+      "model": "PULSE 3D"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sony",
+      "model": "PULSE Elite"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sony",
+      "model": "PULSE Explore"
+    },
+    {
+      "kind": "headphones",
+      "brand": "JBL",
+      "model": "Tune 510BT"
+    },
+    {
+      "kind": "headphones",
+      "brand": "JBL",
+      "model": "Tune 520BT"
+    },
+    {
+      "kind": "headphones",
+      "brand": "JBL",
+      "model": "Tune 660NC"
+    },
+    {
+      "kind": "headphones",
+      "brand": "JBL",
+      "model": "Tune 720BT"
+    },
+    {
+      "kind": "headphones",
+      "brand": "JBL",
+      "model": "Tune 770NC"
+    },
+    {
+      "kind": "headphones",
+      "brand": "JBL",
+      "model": "Wave Buds"
+    },
+    {
+      "kind": "headphones",
+      "brand": "JBL",
+      "model": "Wave Beam"
+    },
+    {
+      "kind": "headphones",
+      "brand": "JBL",
+      "model": "Live Pro 2"
+    },
+    {
+      "kind": "headphones",
+      "brand": "JBL",
+      "model": "Tour Pro 2"
+    },
+    {
+      "kind": "headphones",
+      "brand": "JBL",
+      "model": "Quantum 100"
+    },
+    {
+      "kind": "headphones",
+      "brand": "JBL",
+      "model": "Quantum 400"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Bose",
+      "model": "QuietComfort 35 II"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Bose",
+      "model": "QuietComfort 45"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Bose",
+      "model": "QuietComfort Ultra Headphones"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Bose",
+      "model": "QuietComfort Earbuds II"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Bose",
+      "model": "QuietComfort Ultra Earbuds"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Bose",
+      "model": "Headphones 700"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Beats",
+      "model": "Solo3 Wireless"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Beats",
+      "model": "Solo4"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Beats",
+      "model": "Studio3 Wireless"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Beats",
+      "model": "Studio Pro"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Beats",
+      "model": "Studio Buds"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Beats",
+      "model": "Studio Buds+"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Beats",
+      "model": "Fit Pro"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Beats",
+      "model": "Powerbeats Pro"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sennheiser",
+      "model": "HD 206"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sennheiser",
+      "model": "HD 560S"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sennheiser",
+      "model": "HD 599"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sennheiser",
+      "model": "HD 600"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sennheiser",
+      "model": "HD 650"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sennheiser",
+      "model": "Momentum 4 Wireless"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Sennheiser",
+      "model": "Momentum True Wireless 4"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Anker Soundcore",
+      "model": "Life Q20"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Anker Soundcore",
+      "model": "Life Q30"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Anker Soundcore",
+      "model": "Space Q45"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Anker Soundcore",
+      "model": "Space One"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Anker Soundcore",
+      "model": "Liberty 4"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Anker Soundcore",
+      "model": "Liberty 4 NC"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Anker Soundcore",
+      "model": "P20i"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Anker Soundcore",
+      "model": "A20i"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Skullcandy",
+      "model": "Dime"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Skullcandy",
+      "model": "Dime 3"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Skullcandy",
+      "model": "Indy Evo"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Skullcandy",
+      "model": "Sesh Evo"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Skullcandy",
+      "model": "Crusher Evo"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Skullcandy",
+      "model": "Crusher ANC 2"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Logitech",
+      "model": "H390"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Logitech",
+      "model": "H540"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Logitech",
+      "model": "G335"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Logitech",
+      "model": "G435"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Logitech",
+      "model": "G535"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Logitech",
+      "model": "G733"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Logitech",
+      "model": "PRO X"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Razer",
+      "model": "Kraken X"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Razer",
+      "model": "Kraken V3"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Razer",
+      "model": "BlackShark V2"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Razer",
+      "model": "BlackShark V2 X"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Razer",
+      "model": "Barracuda X"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Razer",
+      "model": "Hammerhead True Wireless"
+    },
+    {
+      "kind": "headphones",
+      "brand": "HyperX",
+      "model": "Cloud II"
+    },
+    {
+      "kind": "headphones",
+      "brand": "HyperX",
+      "model": "Cloud III"
+    },
+    {
+      "kind": "headphones",
+      "brand": "HyperX",
+      "model": "Cloud Alpha"
+    },
+    {
+      "kind": "headphones",
+      "brand": "HyperX",
+      "model": "Cloud Stinger"
+    },
+    {
+      "kind": "headphones",
+      "brand": "HyperX",
+      "model": "Cloud Stinger 2"
+    },
+    {
+      "kind": "headphones",
+      "brand": "SteelSeries",
+      "model": "Arctis 1"
+    },
+    {
+      "kind": "headphones",
+      "brand": "SteelSeries",
+      "model": "Arctis 7"
+    },
+    {
+      "kind": "headphones",
+      "brand": "SteelSeries",
+      "model": "Arctis Nova 1"
+    },
+    {
+      "kind": "headphones",
+      "brand": "SteelSeries",
+      "model": "Arctis Nova 7"
+    },
+    {
+      "kind": "headphones",
+      "brand": "SteelSeries",
+      "model": "Arctis Nova Pro"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Xiaomi",
+      "model": "Mi True Wireless Earbuds Basic 2"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Xiaomi",
+      "model": "Redmi Buds 3"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Xiaomi",
+      "model": "Redmi Buds 4"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Xiaomi",
+      "model": "Redmi Buds 4 Pro"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Xiaomi",
+      "model": "Redmi Buds 5"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Xiaomi",
+      "model": "Redmi Buds 5 Pro"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Huawei",
+      "model": "FreeBuds 4i"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Huawei",
+      "model": "FreeBuds 5i"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Huawei",
+      "model": "FreeBuds 6i"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Huawei",
+      "model": "FreeBuds Pro 2"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Huawei",
+      "model": "FreeBuds Pro 3"
+    },
+    {
+      "kind": "headphones",
+      "brand": "QCY",
+      "model": "T13"
+    },
+    {
+      "kind": "headphones",
+      "brand": "QCY",
+      "model": "T13 ANC"
+    },
+    {
+      "kind": "headphones",
+      "brand": "QCY",
+      "model": "T17"
+    },
+    {
+      "kind": "headphones",
+      "brand": "QCY",
+      "model": "HT05"
+    },
+    {
+      "kind": "headphones",
+      "brand": "QCY",
+      "model": "H3"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Jabra",
+      "model": "Elite 3"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Jabra",
+      "model": "Elite 4"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Jabra",
+      "model": "Elite 7 Pro"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Jabra",
+      "model": "Elite 8 Active"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Jabra",
+      "model": "Elite 10"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Jabra",
+      "model": "Evolve2 65"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Marshall",
+      "model": "Major IV"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Marshall",
+      "model": "Major V"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Marshall",
+      "model": "Monitor II ANC"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Marshall",
+      "model": "Minor III"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Audio-Technica",
+      "model": "ATH-M20x"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Audio-Technica",
+      "model": "ATH-M40x"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Audio-Technica",
+      "model": "ATH-M50x"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Audio-Technica",
+      "model": "ATH-M50xBT2"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Shure",
+      "model": "SE215"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Shure",
+      "model": "SE425"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Shure",
+      "model": "AONIC 50"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Baseus",
+      "model": "Bowie WM02"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Baseus",
+      "model": "Bowie MA10"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Haylou",
+      "model": "GT1"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Haylou",
+      "model": "GT7"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Haylou",
+      "model": "X1"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Haylou",
+      "model": "S35 ANC"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Edifier",
+      "model": "W820NB"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Edifier",
+      "model": "W240TN"
+    },
+    {
+      "kind": "headphones",
+      "brand": "Edifier",
+      "model": "TWS1 Pro"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Apple",
+      "model": "iPad (9.ª generación)"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Apple",
+      "model": "iPad (10.ª generación)"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Apple",
+      "model": "iPad mini 6"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Apple",
+      "model": "iPad mini (A17 Pro)"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Apple",
+      "model": "iPad Air M1"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Apple",
+      "model": "iPad Air M2"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Apple",
+      "model": "iPad Pro M1"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Apple",
+      "model": "iPad Pro M2"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Apple",
+      "model": "iPad Pro M4"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Samsung",
+      "model": "Galaxy Tab A7"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Samsung",
+      "model": "Galaxy Tab A8"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Samsung",
+      "model": "Galaxy Tab A9"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Samsung",
+      "model": "Galaxy Tab A9+"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Samsung",
+      "model": "Galaxy Tab S6 Lite"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Samsung",
+      "model": "Galaxy Tab S7"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Samsung",
+      "model": "Galaxy Tab S8"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Samsung",
+      "model": "Galaxy Tab S9"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Samsung",
+      "model": "Galaxy Tab S9 FE"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Samsung",
+      "model": "Galaxy Tab S10+"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Lenovo",
+      "model": "Tab M9"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Lenovo",
+      "model": "Tab M10"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Lenovo",
+      "model": "Tab M11"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Lenovo",
+      "model": "Tab P11"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Lenovo",
+      "model": "Tab P12"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Xiaomi",
+      "model": "Pad 5"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Xiaomi",
+      "model": "Pad 6"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Xiaomi",
+      "model": "Pad 6S Pro"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Xiaomi",
+      "model": "Redmi Pad"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Xiaomi",
+      "model": "Redmi Pad SE"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Amazon",
+      "model": "Fire 7"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Amazon",
+      "model": "Fire HD 8"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Amazon",
+      "model": "Fire HD 10"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Amazon",
+      "model": "Fire Max 11"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Huawei",
+      "model": "MatePad 11"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Huawei",
+      "model": "MatePad SE"
+    },
+    {
+      "kind": "tablet",
+      "brand": "Huawei",
+      "model": "MatePad Pro"
+    },
+    {
+      "kind": "watch",
+      "brand": "Apple",
+      "model": "Watch SE"
+    },
+    {
+      "kind": "watch",
+      "brand": "Apple",
+      "model": "Watch Series 7"
+    },
+    {
+      "kind": "watch",
+      "brand": "Apple",
+      "model": "Watch Series 8"
+    },
+    {
+      "kind": "watch",
+      "brand": "Apple",
+      "model": "Watch Series 9"
+    },
+    {
+      "kind": "watch",
+      "brand": "Apple",
+      "model": "Watch Series 10"
+    },
+    {
+      "kind": "watch",
+      "brand": "Apple",
+      "model": "Watch Ultra"
+    },
+    {
+      "kind": "watch",
+      "brand": "Apple",
+      "model": "Watch Ultra 2"
+    },
+    {
+      "kind": "watch",
+      "brand": "Samsung",
+      "model": "Galaxy Watch4"
+    },
+    {
+      "kind": "watch",
+      "brand": "Samsung",
+      "model": "Galaxy Watch5"
+    },
+    {
+      "kind": "watch",
+      "brand": "Samsung",
+      "model": "Galaxy Watch6"
+    },
+    {
+      "kind": "watch",
+      "brand": "Samsung",
+      "model": "Galaxy Watch7"
+    },
+    {
+      "kind": "watch",
+      "brand": "Samsung",
+      "model": "Galaxy Watch Ultra"
+    },
+    {
+      "kind": "watch",
+      "brand": "Huawei",
+      "model": "Watch GT 3"
+    },
+    {
+      "kind": "watch",
+      "brand": "Huawei",
+      "model": "Watch GT 4"
+    },
+    {
+      "kind": "watch",
+      "brand": "Huawei",
+      "model": "Watch Fit 2"
+    },
+    {
+      "kind": "watch",
+      "brand": "Huawei",
+      "model": "Watch Fit 3"
+    },
+    {
+      "kind": "watch",
+      "brand": "Xiaomi",
+      "model": "Smart Band 8"
+    },
+    {
+      "kind": "watch",
+      "brand": "Xiaomi",
+      "model": "Smart Band 9"
+    },
+    {
+      "kind": "watch",
+      "brand": "Xiaomi",
+      "model": "Watch S3"
+    },
+    {
+      "kind": "watch",
+      "brand": "Xiaomi",
+      "model": "Redmi Watch 4"
+    },
+    {
+      "kind": "watch",
+      "brand": "Garmin",
+      "model": "Forerunner 55"
+    },
+    {
+      "kind": "watch",
+      "brand": "Garmin",
+      "model": "Forerunner 255"
+    },
+    {
+      "kind": "watch",
+      "brand": "Garmin",
+      "model": "Forerunner 265"
+    },
+    {
+      "kind": "watch",
+      "brand": "Garmin",
+      "model": "Venu 3"
+    },
+    {
+      "kind": "watch",
+      "brand": "Garmin",
+      "model": "Fenix 7"
+    },
+    {
+      "kind": "watch",
+      "brand": "Amazfit",
+      "model": "GTS 4"
+    },
+    {
+      "kind": "watch",
+      "brand": "Amazfit",
+      "model": "GTR 4"
+    },
+    {
+      "kind": "watch",
+      "brand": "Amazfit",
+      "model": "Bip 5"
+    },
+    {
+      "kind": "watch",
+      "brand": "Amazfit",
+      "model": "T-Rex 2"
+    },
+    {
+      "kind": "tv",
+      "brand": "Samsung",
+      "model": "Crystal UHD"
+    },
+    {
+      "kind": "tv",
+      "brand": "Samsung",
+      "model": "QLED"
+    },
+    {
+      "kind": "tv",
+      "brand": "Samsung",
+      "model": "Neo QLED"
+    },
+    {
+      "kind": "tv",
+      "brand": "Samsung",
+      "model": "The Frame"
+    },
+    {
+      "kind": "tv",
+      "brand": "LG",
+      "model": "OLED C2"
+    },
+    {
+      "kind": "tv",
+      "brand": "LG",
+      "model": "OLED C3"
+    },
+    {
+      "kind": "tv",
+      "brand": "LG",
+      "model": "OLED C4"
+    },
+    {
+      "kind": "tv",
+      "brand": "LG",
+      "model": "OLED G3"
+    },
+    {
+      "kind": "tv",
+      "brand": "LG",
+      "model": "OLED G4"
+    },
+    {
+      "kind": "tv",
+      "brand": "Sony",
+      "model": "BRAVIA X80K"
+    },
+    {
+      "kind": "tv",
+      "brand": "Sony",
+      "model": "BRAVIA X90L"
+    },
+    {
+      "kind": "tv",
+      "brand": "Sony",
+      "model": "BRAVIA A80L"
+    },
+    {
+      "kind": "tv",
+      "brand": "TCL",
+      "model": "Series 4"
+    },
+    {
+      "kind": "tv",
+      "brand": "TCL",
+      "model": "Series 5"
+    },
+    {
+      "kind": "tv",
+      "brand": "TCL",
+      "model": "Series 6"
+    },
+    {
+      "kind": "tv",
+      "brand": "TCL",
+      "model": "C645"
+    },
+    {
+      "kind": "tv",
+      "brand": "TCL",
+      "model": "C745"
+    },
+    {
+      "kind": "tv",
+      "brand": "Hisense",
+      "model": "U6K"
+    },
+    {
+      "kind": "tv",
+      "brand": "Hisense",
+      "model": "U7K"
+    },
+    {
+      "kind": "tv",
+      "brand": "Hisense",
+      "model": "U8K"
+    },
+    {
+      "kind": "tv",
+      "brand": "Xiaomi",
+      "model": "TV A Pro"
+    },
+    {
+      "kind": "tv",
+      "brand": "Xiaomi",
+      "model": "TV P1"
+    },
+    {
+      "kind": "tv",
+      "brand": "Philips",
+      "model": "Ambilight"
+    },
+    {
+      "kind": "tv",
+      "brand": "Philips",
+      "model": "The One"
+    },
+    {
+      "kind": "printer",
+      "brand": "HP",
+      "model": "DeskJet 2700"
+    },
+    {
+      "kind": "printer",
+      "brand": "HP",
+      "model": "DeskJet 4100"
+    },
+    {
+      "kind": "printer",
+      "brand": "HP",
+      "model": "Smart Tank 580"
+    },
+    {
+      "kind": "printer",
+      "brand": "HP",
+      "model": "Smart Tank 750"
+    },
+    {
+      "kind": "printer",
+      "brand": "HP",
+      "model": "LaserJet Pro M404"
+    },
+    {
+      "kind": "printer",
+      "brand": "Epson",
+      "model": "EcoTank L3150"
+    },
+    {
+      "kind": "printer",
+      "brand": "Epson",
+      "model": "EcoTank L3250"
+    },
+    {
+      "kind": "printer",
+      "brand": "Epson",
+      "model": "EcoTank L3260"
+    },
+    {
+      "kind": "printer",
+      "brand": "Epson",
+      "model": "EcoTank L4260"
+    },
+    {
+      "kind": "printer",
+      "brand": "Epson",
+      "model": "EcoTank L5590"
+    },
+    {
+      "kind": "printer",
+      "brand": "Canon",
+      "model": "PIXMA G3110"
+    },
+    {
+      "kind": "printer",
+      "brand": "Canon",
+      "model": "PIXMA G3160"
+    },
+    {
+      "kind": "printer",
+      "brand": "Canon",
+      "model": "PIXMA G6010"
+    },
+    {
+      "kind": "printer",
+      "brand": "Canon",
+      "model": "imageCLASS MF3010"
+    },
+    {
+      "kind": "printer",
+      "brand": "Brother",
+      "model": "DCP-T420W"
+    },
+    {
+      "kind": "printer",
+      "brand": "Brother",
+      "model": "DCP-T520W"
+    },
+    {
+      "kind": "printer",
+      "brand": "Brother",
+      "model": "MFC-L2710DW"
+    },
+    {
+      "kind": "printer",
+      "brand": "Brother",
+      "model": "HL-L2350DW"
+    },
+    {
+      "kind": "printer",
+      "brand": "Zebra",
+      "model": "GK420d"
+    },
+    {
+      "kind": "printer",
+      "brand": "Zebra",
+      "model": "ZD220"
+    },
+    {
+      "kind": "printer",
+      "brand": "Zebra",
+      "model": "ZD230"
+    },
+    {
+      "kind": "printer",
+      "brand": "Zebra",
+      "model": "ZD421"
+    },
+    {
+      "kind": "printer",
+      "brand": "Zebra",
+      "model": "LP 2824"
+    }
+  ]
+}

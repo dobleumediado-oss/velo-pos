@@ -1686,3 +1686,15 @@ tbody tr:hover td{background:#f7faf8}.tb{font-weight:700}.ts{font-size:10px}.tm{
   width:12px;pointer-events:none;background:linear-gradient(to left,rgba(15,23,42,.13),transparent);opacity:0;
   animation:veloStickyActionsEdge linear both;animation-timeline:scroll(nearest inline)}
 @keyframes veloStickyActionsEdge{from{opacity:1}to{opacity:0}}
+
+/* Ritmo compartido de navegación y diálogo; conservar respuesta inmediata de caja. */
+@keyframes veloDesktopEnter { from { opacity:.3; transform:translateY(7px); } to { opacity:1; transform:none; } }
+@keyframes veloDesktopBackdrop { from { opacity:0; } to { opacity:1; } }
+.fi { animation:veloDesktopEnter .22s cubic-bezier(.2,.8,.2,1); }
+#modal-ov { animation:veloDesktopBackdrop .16s ease-out; }
+#modal-ov>.modal { animation:veloDesktopEnter .24s cubic-bezier(.2,.8,.2,1); }
+.btn,.nav-item,.tab { transition:background-color .13s,color .13s,box-shadow .13s,transform .13s cubic-bezier(.2,.8,.2,1); }
+@media(hover:hover) { .btn:not(:disabled):hover { transform:translateY(-1px); } }
+@media(pointer:coarse) { .btn:not(:disabled):active,.tab:active { transform:scale(.975); } }
+@media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms!important;animation-delay:0ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important; } }
+@media print { *,*::before,*::after { animation:none!important;transition:none!important; } }

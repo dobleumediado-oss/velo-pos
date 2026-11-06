@@ -17,12 +17,14 @@ app.whenReady().then(async()=>{
       window.closeModal=()=>{window.modalClosed=true};window.__calls=[];window.__unitCalls=[];reloadProducts=async()=>{};renderInvCurrentView=()=>{};
       window.api={productUnits:{listForProduct:async()=>({ok:true,data:[]}),create:async input=>{window.__unitCalls.push(input);return {ok:true,created:1}}},techDescriptions:{list:async()=>({ok:true,data:[{name:'Usado',description:'Descripción guardada'}]})},products:{create:async input=>{window.__calls.push(input);return window.__reject?{ok:false,error:'IMEI duplicado'}:{ok:true,id:9,product:{id:9,serialized:1,stock:1,effective_stock:1}}}}};true;
     `);
+    await win.webContents.executeJavaScript(fs.readFileSync(path.join(__dirname,'../src/js/device-reference.js'),'utf8')+';true;');
     await win.webContents.executeJavaScript(fs.readFileSync(path.join(__dirname,'../src/js/inventario.js'),'utf8')+'\n;true;');
     const result=await win.webContents.executeJavaScript(`(async()=>{
       window.__patch=null;applyInventoryMutation=input=>{window.__patch=input};
       openProductoModal();
       const firstOnly=!!document.getElementById('de-brand')&&!document.getElementById('de-imei')&&!document.getElementById('pf-name');
       document.getElementById('de-brand').value='Apple';document.getElementById('de-model').value='Equipo de prueba';
+      deviceEntryCapture();const catalog=!!document.querySelector('#de-models option[value="iPhone 16 Pro Max"]');
       await deviceEntryNext();const nextOnly=__calls.length===0&&!!document.getElementById('de-imei');
       document.getElementById('de-price').value='1180';document.getElementById('de-cost').value='500';deviceEntryCapture();
       const margin=document.getElementById('de-margin').textContent==='57.63%'&&document.getElementById('de-gain').textContent==='RD$680.00';
@@ -38,7 +40,7 @@ app.whenReady().then(async()=>{
       const existing=__unitCalls.length===1&&__unitCalls[0].productId===33&&__calls.length===2;
       openEntradaMercanciaModal({type:'click'});const entryChoice=document.body.textContent.includes('Dispositivo con IMEI o serial')&&document.body.textContent.includes('Accesorio o insumo por cantidad');
       await abrirRegistroEquipos(DB.products[0]);const manager=[...document.querySelectorAll('button')].some(button=>button.textContent==='Agregar unidad'&&button.getAttribute('onclick')==='openDeviceEntry(33)');
-      openDeviceEntry(33);return {firstOnly,nextOnly,margin,missingBlocked,retained,duplicateKept,atomic,existing,preselected,entryChoice,manager};
+      openDeviceEntry(33);return {catalog,firstOnly,nextOnly,margin,missingBlocked,retained,duplicateKept,atomic,existing,preselected,entryChoice,manager};
     })()`);
     assert(Object.values(result).every(Boolean),JSON.stringify(result));
     await win.webContents.executeJavaScript('window.scrollTo(0,0);document.activeElement?.blur();true;');
