@@ -56,6 +56,31 @@ Código: `lib/cloud-cutover-freeze.js`, canales `cloudCutover:*` en `main.js`,
 `abrirCorteCloud` / `abrirDescongelarCorte` en `src/js/config.js`, aviso en
 `src/js/app.js`. Prueba: `npm run test:cloud-cutover`.
 
+## Datos de prueba de VELO TECH en un negocio VELO POS
+
+VELO POS no maneja equipos con IMEI. Si una base de VELO POS trae un artículo de
+prueba con IMEI, sus equipos y ventas con equipo, VELO Cloud no la convierte (datos
+de la otra edición). Anular esas ventas no basta: sus líneas siguen apuntando a los
+equipos. Decisión del dueño (7 de noviembre de 2026): herramienta en Desktop.
+
+En Configuración → Backups aparece el aviso **Datos de prueba de VELO TECH** con lo
+que hay y lo que falta. **Retirar datos de prueba** (solo superadmin, solo VELO POS):
+1. Exige que toda venta con equipo ya esté **anulada por el flujo normal** (caja,
+   existencia y comprobantes se revierten como siempre; el equipo vuelve a existencia).
+2. Se niega si hay taller, recepciones de usados, compras de equipos, técnicos o
+   modelos: esos datos de TECH se resuelven aparte.
+3. Pide escribir `RETIRAR` y guarda antes un respaldo verificado
+   (`backups/velo_pre_retiro_datos_tech_<fecha>.db`).
+4. En una transacción: desengancha los equipos de las líneas anuladas, retira los
+   equipos y deja el artículo sin IMEI e inactivo. Ventas anuladas, caja e
+   historial se conservan. Queda en la auditoría (`retiro_datos_prueba_tech`).
+
+Verificado con una copia de la base real: tras anular las 2 ventas y retirar, VELO
+Cloud no detecta datos de la otra edición y los 20 pasos y el ensayo final pasan
+(25.175 registros). Código: `lib/tech-test-data.js`, canales
+`cloudCutover:techTestDataStatus` / `cloudCutover:retireTechTestData`. Prueba:
+`npm run test:tech-test-data`.
+
 ## Alcance pendiente
 
 **Preparar migración a Cloud** saca una copia inicial para ensayar; el corte

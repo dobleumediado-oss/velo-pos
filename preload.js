@@ -331,6 +331,8 @@ const api = {
     getStatus:       ()       => ipcRenderer.invoke('cloudCutover:getStatus'),
     freezeAndExport: (data)   => ipcRenderer.invoke('cloudCutover:freezeAndExport', data),
     unfreeze:        (data)   => ipcRenderer.invoke('cloudCutover:unfreeze', data),
+    techTestDataStatus: (data) => ipcRenderer.invoke('cloudCutover:techTestDataStatus', data),
+    retireTechTestData: (data) => ipcRenderer.invoke('cloudCutover:retireTechTestData', data),
   },
 
   // ── Version ───────────────────────────────

@@ -5592,6 +5592,40 @@ ipcMain.handle('cloudCutover:freezeAndExport', async (_, { requestUserId, passph
   finally { if (started) cloudExportsInProgress.delete(sourceDb); }
 });
 
+// Datos de prueba de VELO TECH en un negocio VELO POS (decisión del dueño, 7 nov 2026):
+// bloquean el paso a Cloud y Desktop no los podía quitar. Solo superadmin, con las ventas
+// con equipo ya anuladas, respaldo previo, una transacción y auditoría.
+ipcMain.handle('cloudCutover:techTestDataStatus', async (_, { requestUserId } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) throw new Error('Solo administración');
+    if (require('./src/verticals').activeVerticalId() === 'tech') return { ok: true, data: { present: false, edition: 'TECH' } };
+    return { ok: true, data: require('./lib/tech-test-data').techTestDataStatus(db) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('cloudCutover:retireTechTestData', async (_, { requestUserId, confirm } = {}) => {
+  try {
+    const reqUser = authRepo.findById(requestUserId);
+    if (!reqUser || reqUser.role !== 'superadmin') throw new Error('Solo el superadmin puede retirar los datos de prueba');
+    if (require('./src/verticals').activeVerticalId() === 'tech') throw new Error('En VELO TECH los equipos con IMEI son datos reales');
+    if (confirm !== 'RETIRAR') throw new Error('Escribe RETIRAR para confirmar');
+    const tool = require('./lib/tech-test-data');
+    const before = tool.techTestDataStatus(db);
+    if (!before.canRetire) throw new Error(before.present ? before.blockers.join('. ') : 'No hay datos de prueba de VELO TECH');
+    // Sin copia recuperable no se toca nada.
+    const backupDir = path.join(currentDataDir(), 'backups');
+    if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+    const backup = path.join(backupDir, `velo_pre_retiro_datos_tech_${new Date().toISOString().replace(/[:.]/g, '-')}.db`);
+    await createManualBackup(db, backup);
+    const result = tool.retireTechTestData(db);
+    audit(reqUser.id, reqUser.name, 'retiro_datos_prueba_tech', 'products', null,
+      `Equipos ${result.units} · líneas ${result.lines} · artículos ${result.articles} · respaldo ${path.basename(backup)}`);
+    logInfo('tech-test-data', 'Datos de prueba de VELO TECH retirados', { ...result, backup: path.basename(backup), userId: reqUser.id });
+    return { ok: true, data: { ...result, backup: path.basename(backup) } };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
 ipcMain.handle('cloudCutover:unfreeze', async (_, { requestUserId, confirm, reason } = {}) => {
   const freezer = require('./lib/cloud-cutover-freeze');
   try {

@@ -1073,6 +1073,10 @@ async function renderConfiguracion(el) {
   } else if (cutover) {
     backupCard.appendChild(h('button', { class: 'btn btn-dark', style: 'margin-bottom:12px;margin-left:8px', onclick: abrirCorteCloud }, 'Corte final a Cloud'));
   }
+  // Datos de prueba de VELO TECH (artículo con IMEI) que impiden pasar a Cloud.
+  const techTest = h('div', { id: 'tech-test-data' });
+  backupCard.appendChild(techTest);
+  void renderDatosPruebaTech(techTest);
   if (info.backups?.length) {
     const bList = h('div');
     bList.appendChild(h('div', { style: 'font-size:11px;font-weight:700;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em' }, 'Backups disponibles'));
@@ -1814,6 +1818,41 @@ function abrirCorteCloud() {
       veloRepaint(() => renderConfiguracion(document.getElementById('page')));
     } catch (error) { toast(error.message || 'No se pudo sacar la copia final', 'err'); }
     finally { button.disabled = false; status.textContent = ''; }
+  };
+}
+
+async function renderDatosPruebaTech(el) {
+  let status = null;
+  try { status = (await window.api.cloudCutover?.techTestDataStatus({ requestUserId: _cfgUser().id }))?.data || null; } catch { status = null; }
+  // La tarjeta puede no estar aún en la página: se dibuja igual y aparece al insertarse.
+  if (!status?.present) return;
+  const parts = [`${status.serializedProducts} ${status.serializedProducts === 1 ? 'artículo' : 'artículos'} con IMEI`, `${status.units} ${status.units === 1 ? 'equipo' : 'equipos'}`, `${status.unitLines} ${status.unitLines === 1 ? 'línea de venta' : 'líneas de venta'} con equipo`];
+  el.appendChild(h('div', { class: 'alrt a', style: 'margin-bottom:10px' }, h('div', { class: 'alrt-dot a' }), h('div', null,
+    h('div', { class: 'alrt-title' }, 'Datos de prueba de VELO TECH'),
+    h('div', { class: 'alrt-sub' }, `Este negocio es VELO POS pero tiene ${parts.join(', ')}. VELO Cloud no convierte el negocio mientras estén.`),
+    ...status.blockers.map(text => h('div', { class: 'alrt-sub', style: 'margin-top:4px' }, '• ' + text)))));
+  if (_cfgUser()?.role === 'superadmin') {
+    el.appendChild(h('button', { class: 'btn btn-out', style: 'margin-bottom:12px', disabled: status.canRetire ? null : 'disabled', onclick: () => abrirRetiroDatosTech(status) }, 'Retirar datos de prueba'));
+  }
+}
+
+function abrirRetiroDatosTech(status) {
+  openModal(`<div class="modal-title">Retirar datos de prueba de VELO TECH</div>
+    <div class="modal-sub">Se retiran ${status.units} ${status.units === 1 ? 'equipo' : 'equipos'} con IMEI, se desenganchan de ${status.unitLines} ${status.unitLines === 1 ? 'línea' : 'líneas'} de ventas ya anuladas y ${status.serializedProducts === 1 ? 'el artículo queda' : 'los artículos quedan'} sin IMEI e ${status.serializedProducts === 1 ? 'inactivo' : 'inactivos'}. Las ventas anuladas, la caja y el historial se conservan.</div>
+    <div class="alrt a" style="margin:12px 0"><div class="alrt-dot a"></div><div class="alrt-sub">Antes se guarda un respaldo en la carpeta de backups. Úsalo solo si esos equipos eran de prueba: VELO POS no maneja equipos con IMEI.</div></div>
+    <div class="fg"><label class="lbl" for="tech-retire-confirm">Escribe RETIRAR para confirmar</label><input class="inp" id="tech-retire-confirm" type="text" autocomplete="off" maxlength="20"></div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" id="tech-retire-run" type="button">Retirar datos de prueba</button></div>`);
+  const button = document.getElementById('tech-retire-run');
+  button.onclick = async () => {
+    button.disabled = true;
+    try {
+      const result = await window.api.cloudCutover.retireTechTestData({ requestUserId: _cfgUser().id, confirm: document.getElementById('tech-retire-confirm').value.trim() });
+      if (!result?.ok) { toast(result?.error || 'No se pudieron retirar los datos', 'err'); return; }
+      closeModal();
+      toast(`Datos de prueba retirados (${result.data.units} equipos). Respaldo: ${result.data.backup}`, 'ok');
+      veloRepaint(() => renderConfiguracion(document.getElementById('page')));
+    } catch (error) { toast(error.message || 'No se pudieron retirar los datos', 'err'); }
+    finally { button.disabled = false; }
   };
 }
 

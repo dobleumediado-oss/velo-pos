@@ -43,6 +43,7 @@
     "test:desktop-business-import": "node scripts/run-electron-node.js scripts/test-desktop-business-import.js",
     "test:cloud-migration-package": "node scripts/run-electron-node.js scripts/test-cloud-migration-package.js",
     "test:cloud-cutover": "node scripts/run-electron-node.js scripts/test-cloud-cutover-freeze.js",
+    "test:tech-test-data": "node scripts/run-electron-node.js scripts/test-tech-test-data.js",
     "test:consignment-physical": "node scripts/run-electron-node.js scripts/test-consignment-physical.js",
     "test:continuity-picker": "node scripts/test-continuity-picker-ui.js",
     "test:url": "node scripts/test-url-safe.js",
