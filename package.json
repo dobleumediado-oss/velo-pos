@@ -1,6 +1,6 @@
 {
   "name": "velo-pos",
-  "version": "1.62.3",
+  "version": "1.63.0",
   "description": "Sistema POS desktop profesional para comercios, repuestos, sucursales y operaciones empresariales",
   "main": "main.js",
   "scripts": {
@@ -96,7 +96,7 @@
     "test:system-doctor": "node scripts/run-electron-node.js scripts/test-system-doctor-financial.js",
     "test:ncf": "node scripts/run-electron-node.js scripts/test-ncf-sequences.js",
     "test:data-loader": "node scripts/test-data-loader-resilience.js",
-    "test": "npm run test:url && npm run test:input-normalization && npm run test:text-case && npm run test:user-permissions && npm run test:login && npm run test:pos && npm run test:pos-policy && npm run test:data-loader && npm run test:checkout && npm run test:customer-companies && npm run test:client-account && npm run test:business && npm run test:import && npm run test:all-in-one && npm run test:all-in-one-integration && npm run test:financial && npm run test:external-expenses && npm run test:payment-ui && npm run test:cash-ui && npm run test:cash-policy && npm run test:cash-income && npm run test:printing && npm run test:excel && npm run test:excel-ui && npm run test:pdf-compatibility && npm run test:pending-invoices && npm run test:sqlite-runtime && npm run test:salespeople && npm run test:payroll-documents && npm run test:documents && npm run test:sales-workflow && npm run test:sale-corrections && npm run test:additional-charges && npm run test:sales-history-performance && npm run test:system-doctor && npm run test:ncf && npm run test:server-service && npm run test:experience && npm run test:product-units && npm run test:serialized-sale && npm run test:service-orders && npm run test:service-portal && npm run test:trade-in-warranty && npm run test:suite-license && npm run test:tech-lifecycle"
+    "test": "npm run test:url && npm run test:input-normalization && npm run test:text-case && npm run test:user-permissions && npm run test:login && npm run test:pos && npm run test:pos-policy && npm run test:data-loader && npm run test:checkout && npm run test:customer-companies && npm run test:client-account && npm run test:business && npm run test:import && npm run test:all-in-one && npm run test:all-in-one-integration && npm run test:financial && npm run test:external-expenses && npm run test:payment-ui && npm run test:cash-ui && npm run test:cash-policy && npm run test:cash-income && npm run test:printing && npm run test:excel && npm run test:excel-ui && npm run test:pdf-compatibility && npm run test:pending-invoices && npm run test:sqlite-runtime && npm run test:salespeople && npm run test:payroll-documents && npm run test:documents && npm run test:sales-workflow && npm run test:sale-corrections && npm run test:additional-charges && npm run test:sales-history-performance && npm run test:system-doctor && npm run test:ncf && npm run test:server-service && npm run test:experience && npm run test:product-units && npm run test:serialized-sale && npm run test:service-orders && npm run test:service-portal && npm run test:trade-in-warranty && npm run test:suite-license && npm run test:tech-lifecycle && npm run test:cloud-migration-package && npm run test:cloud-cutover && npm run test:tech-test-data"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
