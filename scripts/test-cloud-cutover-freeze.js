@@ -112,6 +112,17 @@ const { createMigrationPackage, verifyMigrationPackage } = require(path.join(roo
     assert.equal(counts().customers, before.customers + 1);
     assert.equal(counts().audits, before.audits + 1);
     assert.throws(() => freezer.unfreeze(db, temp, {}), /no está congelado/);
+    assert.throws(() => freezer.updateCloud(temp, { state: 'activated' }), /no está congelado/);
+
+    // «Pasar a VELO Cloud»: la marca guarda cómo va el corte; el estado nunca expone la clave.
+    freezer.freeze(db, temp, { frozenBy: { id: user.id, name: user.name }, cloud: { state: 'sending', tenantId: 't1', tenantName: 'Empresa', passphrase: 'secreta-de-la-copia' } });
+    freezer.updateCloud(temp, { state: 'converting', migrationId: 'm1' });
+    assert.deepEqual(freezer.status().cloud, { state: 'converting', tenantName: 'Empresa', activatedAt: null });
+    assert.ok(!JSON.stringify(freezer.status()).includes('secreta-de-la-copia'));
+    assert.deepEqual(freezer.readMarker(temp).cloud, { state: 'converting', tenantId: 't1', tenantName: 'Empresa', passphrase: 'secreta-de-la-copia', migrationId: 'm1' });
+    db.close(); open();
+    assert.equal(freezer.applyIfMarked(db, temp).cloud.state, 'converting', 'sobrevive al reinicio');
+    freezer.unfreeze(db, temp, { unfrozenBy: { id: user.id, name: user.name }, reason: 'Prueba del estado de Cloud' });
     db.close(); open();
     assert.equal(freezer.applyIfMarked(db, temp), null);
     console.log('✓ Modo consulta del corte: escrituras bloqueadas con mensaje claro (local y red), consultas, reinicio, marca dañada, copia final y descongelar verificados');

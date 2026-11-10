@@ -1356,9 +1356,11 @@ async function _refreshCutoverBanner() {
   const el = document.getElementById('cutover-banner');
   if (!el) return status;
   el.hidden = !status?.frozen;
-  el.textContent = status?.frozen
-    ? `Modo consulta: este negocio ya opera en VELO Cloud. Desktop no guarda cambios desde el ${new Date(status.frozenAt).toLocaleString('es-DO')}`
-    : '';
+  const cloudState = status?.cloud?.state;
+  el.textContent = !status?.frozen ? ''
+    : ['sending', 'converting', 'activating'].includes(cloudState) ? 'Pasando el negocio a VELO Cloud: Desktop no guarda cambios mientras tanto.'
+    : cloudState === 'verify' ? 'Corte a VELO Cloud por comprobar: Desktop no guarda cambios hasta confirmarlo (Configuración → Backups → Pasar a VELO Cloud).'
+    : `Modo consulta: este negocio ya opera en VELO Cloud. Desktop no guarda cambios desde el ${new Date(status.frozenAt).toLocaleString('es-DO')}`;
   return status;
 }
 

@@ -23,6 +23,9 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
     'connection:handoffExport', 'connection:handoffImportPreview',
     'connection:handoffImportApply', 'connection:handoffPrepare',
     'connection:handoffActivate',
+    // Pasar a VELO Cloud: la sesión de Cloud y el congelamiento son de esta PC.
+    'cloudDirect:status', 'cloudDirect:login', 'cloudDirect:logout', 'cloudDirect:progress',
+    'cloudDirect:prepareRehearsal', 'cloudDirect:runRehearsal', 'cloudDirect:cutover', 'cloudDirect:verify',
     'connection:clientPreflight', 'connection:setMode',
     'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke',
     // Herramienta privada: aun en desarrollo siempre opera en esta Mac y nunca
@@ -5640,6 +5643,49 @@ ipcMain.handle('cloudCutover:unfreeze', async (_, { requestUserId, confirm, reas
     return { ok: true, data: result };
   } catch (e) { return { ok: false, error: e.message }; }
 });
+
+// ── Pasar a VELO Cloud (sin archivos) ─────────────────────────────────────
+// Decisión del dueño (10 nov 2026): Desktop entra a Cloud con la cuenta del negocio,
+// ensaya con el negocio trabajando y luego hace el corte. El flujo vive en
+// lib/cloud-direct-flow.js; aquí solo se valida quién lo pide y se exponen los canales.
+const cloudDirectFlow = require('./lib/cloud-direct-flow').createFlow({
+  getDb: () => db,
+  dataDir: () => currentDataDir(),
+  vertical: () => require('./src/verticals').activeVerticalId() === 'tech' ? 'TECH' : 'POS',
+  businessId: () => currentBusinessLabel().id,
+  apiUrl: () => process.env.VELO_CLOUD_API_URL || require('./lib/cloud-direct').DEFAULT_API_URL,
+  // Copia cifrada en una carpeta temporal propia; se borra al enviarla.
+  makePackage: async ({ purpose, frozenAt, passphrase }) => {
+    const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'velo-cloud-direct-'));
+    try {
+      const result = await createMigrationPackage({ db, dataDir: DATA_DIR, destinationDir: dir, passphrase, businessId: currentBusinessLabel().id,
+        vertical: require('./src/verticals').activeVerticalId() === 'tech' ? 'TECH' : 'POS', appVersion: app.getVersion(), purpose, ...(frozenAt ? { frozenAt } : {}) });
+      return fs.readFileSync(result.path);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  },
+  audit: (actor, action, detail) => audit(actor?.id ?? null, actor?.name || 'VELO', action, 'cloud_cutover', null, detail),
+  log: (level, message, data) => (level === 'warn' ? logWarn : logInfo)('cloud-direct', message, data),
+});
+function cloudDirectAdmin(requestUserId) {
+  const reqUser = authRepo.findById(requestUserId);
+  if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede pasar el negocio a VELO Cloud');
+  // Una terminal trabaja contra la base del Servidor: el paso a Cloud se hace allá.
+  if (!_canPickContinuityFilesHere()) throw new Error('Pasa el negocio a VELO Cloud desde la PC Servidor');
+  return reqUser;
+}
+const cloudDirectHandle = (channel, run) => ipcMain.handle(channel, async (_, args = {}) => {
+  try { const reqUser = cloudDirectAdmin(args.requestUserId); return { ok: true, data: await run(reqUser, args) }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+cloudDirectHandle('cloudDirect:status', () => cloudDirectFlow.status());
+cloudDirectHandle('cloudDirect:login', (_, { email, password, tenantId }) => cloudDirectFlow.login({ email, password, tenantId }));
+cloudDirectHandle('cloudDirect:logout', () => cloudDirectFlow.logout());
+ipcMain.handle('cloudDirect:progress', async () => ({ ok: true, data: cloudDirectFlow.progress() }));
+cloudDirectHandle('cloudDirect:prepareRehearsal', () => cloudDirectFlow.prepareRehearsal());
+cloudDirectHandle('cloudDirect:runRehearsal', (reqUser, { mapping }) => cloudDirectFlow.runRehearsal(mapping, reqUser));
+// El corte devuelve su resultado aunque no se complete (descongelado o por comprobar).
+cloudDirectHandle('cloudDirect:cutover', (reqUser, { confirm }) => cloudDirectFlow.cutover(reqUser, confirm));
+cloudDirectHandle('cloudDirect:verify', () => cloudDirectFlow.verify());
 
 ipcMain.handle('backup:createEncrypted', async (_, { requestUserId, passphrase, destinationDir } = {}) => {
   try {

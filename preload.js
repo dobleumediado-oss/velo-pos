@@ -327,6 +327,16 @@ const api = {
   },
 
   // ── Corte final a VELO Cloud (modo consulta) ──
+  cloudDirect: {
+    status:           (data) => ipcRenderer.invoke('cloudDirect:status', data),
+    login:            (data) => ipcRenderer.invoke('cloudDirect:login', data),
+    logout:           (data) => ipcRenderer.invoke('cloudDirect:logout', data),
+    progress:         ()     => ipcRenderer.invoke('cloudDirect:progress'),
+    prepareRehearsal: (data) => ipcRenderer.invoke('cloudDirect:prepareRehearsal', data),
+    runRehearsal:     (data) => ipcRenderer.invoke('cloudDirect:runRehearsal', data),
+    cutover:          (data) => ipcRenderer.invoke('cloudDirect:cutover', data),
+    verify:           (data) => ipcRenderer.invoke('cloudDirect:verify', data),
+  },
   cloudCutover: {
     getStatus:       ()       => ipcRenderer.invoke('cloudCutover:getStatus'),
     freezeAndExport: (data)   => ipcRenderer.invoke('cloudCutover:freezeAndExport', data),

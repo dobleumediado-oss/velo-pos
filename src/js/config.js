@@ -1061,6 +1061,8 @@ async function renderConfiguracion(el) {
   }
   backupCard.appendChild(h('div', { class: 'alrt-sub', style: 'margin-bottom:8px' },
     'Preparación para Cloud: guarda una copia cifrada del negocio seleccionado y sus evidencias de servicio, para ensayar la migración en VELO Cloud (Configuración → Migración desde Desktop) mientras el negocio sigue trabajando aquí. El día del corte se usa «Corte final a Cloud».'));
+  // Camino principal (10 nov 2026): sin archivos, con ensayo y descongelamiento automático.
+  if (window.api.cloudDirect && !window.VeloCutover?.frozen || window.VeloCutover?.cloud) backupCard.appendChild(h('button', { class: 'btn btn-dark', style: 'margin-bottom:12px;margin-right:8px', onclick: abrirPasarACloud }, 'Pasar a VELO Cloud'));
   backupCard.appendChild(h('button', { class: 'btn btn-out', style: 'margin-bottom:12px', onclick: abrirPreparacionCloud }, 'Preparar migración a Cloud'));
   // Corte final a Cloud: congela el negocio en todas sus terminales y saca la copia que Cloud activa.
   const cutover = window.VeloCutover;
@@ -1071,7 +1073,7 @@ async function renderConfiguracion(el) {
     backupCard.appendChild(h('button', { class: 'btn btn-out', style: 'margin-bottom:12px;margin-right:8px', onclick: abrirCorteCloud }, 'Sacar otra vez la copia final'));
     if (_cfgUser()?.role === 'superadmin') backupCard.appendChild(h('button', { class: 'btn btn-out', style: 'margin-bottom:12px', onclick: abrirDescongelarCorte }, 'Descongelar negocio'));
   } else if (cutover) {
-    backupCard.appendChild(h('button', { class: 'btn btn-dark', style: 'margin-bottom:12px;margin-left:8px', onclick: abrirCorteCloud }, 'Corte final a Cloud'));
+    backupCard.appendChild(h('button', { class: 'btn btn-out', style: 'margin-bottom:12px;margin-left:8px', onclick: abrirCorteCloud }, 'Corte final a Cloud (con archivo)'));
   }
   // Datos de prueba de VELO TECH (artículo con IMEI) que impiden pasar a Cloud.
   const techTest = h('div', { id: 'tech-test-data' });
@@ -1818,6 +1820,252 @@ function abrirCorteCloud() {
       veloRepaint(() => renderConfiguracion(document.getElementById('page')));
     } catch (error) { toast(error.message || 'No se pudo sacar la copia final', 'err'); }
     finally { button.disabled = false; status.textContent = ''; }
+  };
+}
+
+// ── Pasar a VELO Cloud (sin archivos) ─────────────────────────────────────
+// Desktop entra a Cloud con la cuenta de la empresa, ensaya con el negocio
+// trabajando y luego hace el corte. Si Cloud no confirma la activación, Desktop se
+// descongela solo; si no se puede saber, queda en consulta hasta comprobarlo.
+const _cdEsc = value => String(value ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+let _cdPoll = null, _cdRead = null;
+const _cdApi = (name, extra) => window.api.cloudDirect[name]({ requestUserId: _cfgUser().id, ...(extra || {}) });
+const _cdBody = () => document.getElementById('cd-body');
+const _cdStopPoll = () => { if (_cdPoll) { clearInterval(_cdPoll); _cdPoll = null; } };
+const _cdBox = (tone, title, sub = '') => `<div class="alrt ${tone}" style="margin:10px 0"><div class="alrt-dot ${tone}"></div><div><div class="alrt-title">${title}</div>${sub ? `<div class="alrt-sub">${sub}</div>` : ''}</div></div>`;
+const _cdFoot = buttons => `<div class="modal-foot">${buttons}</div>`;
+
+function abrirPasarACloud() {
+  _cdStopPoll(); _cdRead = null;
+  openModal(`<div class="modal-title">Pasar a VELO Cloud</div>
+    <div class="modal-sub">Desktop envía el negocio a tu empresa de VELO Cloud: primero un ensayo con el negocio trabajando y luego el corte. No hay archivos ni claves que llevar a mano.</div>
+    <div id="cd-body" role="region" aria-live="polite"><div class="alrt-sub">Consultando…</div></div>`);
+  void _cdRender();
+}
+
+async function _cdRender() {
+  const body = _cdBody(); if (!body) return _cdStopPoll();
+  let res; try { res = await _cdApi('status'); } catch (error) { res = { ok: false, error: error.message }; }
+  if (!res?.ok) { body.innerHTML = _cdBox('r', _cdEsc(res?.error || 'No se pudo consultar')) + _cdFoot('<button class="btn btn-out" onclick="closeModal()">Cerrar</button>'); return; }
+  const st = res.data;
+  if (st.job && !st.job.finishedAt) return _cdProgress(st.job.kind === 'cutover' ? 'El corte' : 'El ensayo');
+  const frozen = st.checks.frozen;
+  if (frozen.frozen) {
+    if (st.marker === 'activated') { body.innerHTML = _cdBox('g', 'Este negocio ya opera en VELO Cloud', 'Desktop queda en modo consulta para siempre: ventas, cobros y documentos se hacen en VELO Cloud.') + _cdFoot('<button class="btn btn-dark" onclick="closeModal()">Cerrar</button>'); return; }
+    if (['verify', 'sending', 'converting', 'activating'].includes(st.marker)) return _cdVerifyView(st);
+    body.innerHTML = _cdBox('a', 'El negocio está congelado por un corte manual', 'Ese corte se sigue desde «Corte final a Cloud». Si Cloud no llegó a activarse, el superadmin puede descongelar.') + _cdFoot('<button class="btn btn-out" onclick="closeModal()">Cerrar</button>');
+    return;
+  }
+  if (!st.signedIn) return _cdLoginView(st);
+  const items = st.checks.items;
+  const reh = st.saved.rehearsal;
+  const rehText = !reh ? 'Todavía no se ha ensayado.'
+    : reh.ok ? `Ensayo superado el ${new Date(reh.at).toLocaleString('es-DO')} (${reh.seconds} s).`
+    : `El último ensayo se detuvo en «${_cdEsc(reh.step)}»: ${reh.issueCount} por resolver.`;
+  const canCut = !!(reh?.ok && reh.tenantId === st.tenant.id && st.checks.cutoverReady);
+  body.innerHTML = `<div class="alrt-sub" style="margin:6px 0 10px">Empresa de VELO Cloud: <strong>${_cdEsc(st.tenant.name)}</strong> · ${_cdEsc(st.tenant.user)} <button class="btn btn-ghost btn-sm" id="cd-logout" type="button">Cambiar cuenta</button></div>
+    <div class="lbl" style="margin-top:6px">1. Revisión</div>
+    ${items.length ? items.map((item, index) => `<div class="alrt ${item.blocking ? 'r' : 'a'}" style="margin:6px 0"><div class="alrt-dot ${item.blocking ? 'r' : 'a'}"></div><div style="flex:1"><div class="alrt-sub">${_cdEsc(item.text)}${item.detail ? `<br>${_cdEsc(item.detail)}` : ''}</div>${_cdResolveButton(item, index)}</div></div>`).join('')
+      : _cdBox('g', 'Todo listo para el corte', 'Sin ventas de prueba, datos de VELO TECH, conteos en borrador ni cajas abiertas.')}
+    <div class="lbl" style="margin-top:12px">2. Ensayo (el negocio sigue trabajando)</div>
+    <div class="alrt-sub" style="margin:4px 0 8px">${rehText} El ensayo envía una copia, Cloud la convierte y revierte todo: no cambia nada ni en Desktop ni en Cloud.</div>
+    <div class="lbl" style="margin-top:12px">3. Corte</div>
+    <div class="alrt-sub" style="margin:4px 0">Con la caja cerrada y el ensayo superado. Desktop queda congelado unos 10 minutos mientras Cloud convierte; si Cloud no lo activa, Desktop se descongela solo.</div>
+    ${_cdFoot(`<button class="btn btn-out" onclick="closeModal()">Cerrar</button>
+      <button class="btn btn-out" id="cd-rehearse" type="button" ${st.checks.rehearsalReady ? '' : 'disabled'}>Ensayar ahora</button>
+      <button class="btn btn-dark" id="cd-cutover" type="button" ${canCut ? '' : 'disabled'}>Hacer el corte</button>`)}`;
+  document.getElementById('cd-logout').onclick = async () => { await _cdApi('logout'); void _cdRender(); };
+  document.getElementById('cd-rehearse').onclick = () => void _cdRehearse();
+  document.getElementById('cd-cutover').onclick = () => _cdCutoverConfirm(st);
+  items.forEach((item, index) => { const button = document.getElementById(`cd-fix-${index}`); if (button) button.onclick = () => void _cdResolve(item, button); });
+}
+
+function _cdResolveButton(item, index) {
+  if (item.action === 'retireTech' && _cfgUser()?.role !== 'superadmin') return '<div class="alrt-sub" style="margin-top:4px">Lo resuelve el superadmin desde aquí mismo.</div>';
+  const labels = { voidTestSales: `Anular ${item.sales?.length === 1 ? 'la venta' : 'las ventas'} de prueba`, retireTech: 'Retirar datos de prueba', cancelDraft: 'Descartar el conteo' };
+  if (!labels[item.action]) return '';
+  const confirmWord = item.action === 'retireTech' ? `<input class="inp" id="cd-fix-word-${index}" placeholder="Escribe RETIRAR" autocomplete="off" maxlength="20" style="max-width:180px;margin:6px 6px 0 0">` : '';
+  return `<div style="margin-top:6px">${confirmWord}<button class="btn btn-out btn-sm" id="cd-fix-${index}" type="button">${labels[item.action]}</button></div>`;
+}
+
+async function _cdResolve(item, button) {
+  button.disabled = true;
+  try {
+    if (item.action === 'voidTestSales') {
+      for (const sale of item.sales) {
+        const out = await window.api.sales.cancel({ id: sale.id, reason: 'Venta de prueba de VELO TECH antes del paso a VELO Cloud', requestUserId: _cfgUser().id, operationId: `cancel:${sale.id}:${globalThis.crypto?.randomUUID ? crypto.randomUUID() : Date.now()}` });
+        if (!out?.ok) throw new Error(`${sale.number}: ${out?.error || 'no se pudo anular'}`);
+      }
+      toast('Ventas de prueba anuladas', 'ok');
+    } else if (item.action === 'retireTech') {
+      const word = document.getElementById(button.id.replace('cd-fix-', 'cd-fix-word-'))?.value.trim();
+      const out = await window.api.cloudCutover.retireTechTestData({ requestUserId: _cfgUser().id, confirm: word });
+      if (!out?.ok) throw new Error(out?.error || 'No se pudieron retirar los datos');
+      toast(`Datos de prueba retirados. Respaldo: ${out.data.backup}`, 'ok');
+    } else if (item.action === 'cancelDraft') {
+      const out = await window.api.inventoryCount.cancel({ countId: item.countId, requestUserId: _cfgUser().id });
+      if (!out?.ok) throw new Error(out?.error || 'No se pudo descartar el conteo');
+      toast('Conteo en borrador descartado', 'ok');
+    }
+  } catch (error) { toast(error.message, 'err'); }
+  void _cdRender();
+}
+
+function _cdLoginView(st, tenants = null, remembered = {}, note = '') {
+  const body = _cdBody(); if (!body) return;
+  // Solo en pruebas: deja claro a qué VELO Cloud se conecta (producción no muestra nada).
+  const testing = st.apiUrl && st.apiUrl !== 'https://api.velosuite.cloud' ? _cdBox('a', 'VELO Cloud de prueba', `Conectando a ${_cdEsc(st.apiUrl)}, no al VELO Cloud real.`) : '';
+  body.innerHTML = `${note}${testing}${st.saved.tenantName ? `<div class="alrt-sub" style="margin:6px 0">La última vez: <strong>${_cdEsc(st.saved.tenantName)}</strong>.</div>` : ''}
+    <div class="alrt-sub" style="margin:6px 0 10px">Entra con la cuenta de administración de la empresa en VELO Cloud. Desktop no guarda la contraseña.</div>
+    <div class="fg"><label class="lbl" for="cd-email">Correo de VELO Cloud</label><input class="inp" id="cd-email" type="email" autocomplete="username" value="${_cdEsc(remembered.email || '')}"></div>
+    <div class="fg"><label class="lbl" for="cd-pass">Contraseña</label><input class="inp" id="cd-pass" type="password" autocomplete="current-password"></div>
+    ${tenants ? `<div class="fg"><label class="lbl" for="cd-tenant">Empresa</label><select class="inp" id="cd-tenant">${tenants.map(t => `<option value="${_cdEsc(t.id)}">${_cdEsc(t.name)}</option>`).join('')}</select></div>` : ''}
+    <div class="alrt-sub" id="cd-login-status" role="status"></div>
+    ${_cdFoot('<button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="cd-login" type="button">Entrar</button>')}`;
+  const run = async () => {
+    const button = document.getElementById('cd-login'), status = document.getElementById('cd-login-status');
+    const email = document.getElementById('cd-email').value.trim(), password = document.getElementById('cd-pass').value;
+    if (!email || !password) return toast('Escribe el correo y la contraseña', 'w');
+    button.disabled = true; status.textContent = 'Entrando a VELO Cloud…';
+    const out = await _cdApi('login', { email, password, tenantId: document.getElementById('cd-tenant')?.value || undefined });
+    if (!out?.ok) { button.disabled = false; status.textContent = ''; return toast(out?.error || 'No se pudo entrar', 'err'); }
+    if (out.data.requiresTenant) return _cdLoginView(st, out.data.tenants, { email }, note);
+    void _cdRender();
+  };
+  document.getElementById('cd-login').onclick = run;
+  document.getElementById('cd-pass').onkeydown = event => { if (event.key === 'Enter') void run(); };
+}
+
+const _cdStepLabels = { customerConversion: 'Clientes y representantes', catalogConversion: 'Catálogo', operationsConversion: 'Usuarios, sucursal y cajas', expenseCategoryConversion: 'Categorías de gastos', technicianConversion: 'Técnicos', salespersonConversion: 'Colaboradores', financialAccountConversion: 'Cuentas financieras', purchaseConversion: 'Compras', invoiceConversion: 'Facturas y numeración', returnConversion: 'Devoluciones', paymentConversion: 'Abonos', quoteConversion: 'Cotizaciones', checkoutConversion: 'Preventas', cashConversion: 'Movimientos de caja', inventoryConversion: 'Existencias y kardex', expenseConversion: 'Gastos', incomeReceiptConversion: 'Recibos de ingreso', financialMovementConversion: 'Bancos', payrollConversion: 'Nóminas', deliveryNoteConversion: 'Conduces' };
+function _cdStepsHtml(steps = {}) {
+  const color = { ok: '#067647', run: '#b54708', bad: '#b42318' };
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:4px;margin:8px 0">${Object.keys(_cdStepLabels).map(key => {
+    const item = steps[key];
+    return `<div style="font-size:11px;border:1px solid var(--line,#e4e7ec);border-left:3px solid ${item ? color[item.state] : '#d0d5dd'};border-radius:6px;padding:4px 8px"><strong>${_cdStepLabels[key]}</strong><br><span style="color:${item ? color[item.state] : '#667085'}">${_cdEsc(item?.text || 'En espera')}</span></div>`;
+  }).join('')}</div>`;
+}
+
+// Mientras corre (ensayo o corte), se muestra el avance; al terminar se vuelve a la vista que toque.
+function _cdProgress(title, onDone) {
+  const body = _cdBody(); if (!body) return;
+  body.innerHTML = `<div class="alrt-title" style="margin:8px 0">${_cdEsc(title)} en curso</div><div class="alrt-sub" id="cd-phase">…</div><div id="cd-steps">${_cdStepsHtml()}</div>
+    <div class="alrt-sub">Puedes cerrar esta ventana: sigue en segundo plano y aquí verás cómo terminó.</div>${_cdFoot('<button class="btn btn-out" onclick="closeModal()">Cerrar</button>')}`;
+  _cdStopPoll();
+  _cdPoll = setInterval(async () => {
+    if (!_cdBody()) return _cdStopPoll();
+    const job = (await _cdApi('progress'))?.data;
+    if (!job) return;
+    const phase = document.getElementById('cd-phase'), steps = document.getElementById('cd-steps');
+    if (phase) phase.textContent = job.phase || '';
+    if (steps) steps.innerHTML = _cdStepsHtml(job.steps);
+    if (job.finishedAt) { _cdStopPoll(); if (onDone) onDone(job.result); else void _cdRender(); }
+  }, 1500);
+}
+
+async function _cdRehearse() {
+  _cdProgress('El ensayo', () => {});
+  const out = await _cdApi('prepareRehearsal');
+  _cdStopPoll();
+  if (!out?.ok) { toast(out?.error || 'No se pudo preparar el ensayo', 'err'); return void _cdRender(); }
+  _cdRead = out.data;
+  _cdMappingView();
+}
+
+// Correspondencias: lo elegido en un ensayo anterior viene marcado; si hay una sola opción, se elige sola.
+function _cdMappingView() {
+  const body = _cdBody(); if (!body || !_cdRead) return;
+  const { sources, mapping } = _cdRead;
+  const branch = id => sources.cloud.branches.find(item => item.id === id);
+  const option = (value, text, selected) => `<option value="${_cdEsc(value)}" ${selected ? 'selected' : ''}>${_cdEsc(text)}</option>`;
+  const registers = () => (branch(document.getElementById('cd-branch')?.value || mapping.branchId)?.cashRegisters || []);
+  const members = sources.cloud.members;
+  body.innerHTML = `<div class="alrt-sub" style="margin:6px 0 10px">A qué corresponde en VELO Cloud cada cosa de Desktop. Se recuerda para el corte. Si falta un usuario, créalo en VELO Cloud (Usuarios y roles; sin acceso para quien ya no trabaja) y vuelve a ensayar.</div>
+    <div class="fg"><label class="lbl" for="cd-branch">Sucursal</label><select class="inp" id="cd-branch">${option('', 'Elige…', !mapping.branchId)}${sources.cloud.branches.map(item => option(item.id, item.name, item.id === mapping.branchId)).join('')}</select></div>
+    <div class="fg"><label class="lbl" for="cd-warehouse">Almacén</label><select class="inp" id="cd-warehouse">${option('', 'Elige…', !mapping.warehouseId)}${(branch(mapping.branchId)?.warehouses || []).map(item => option(item.id, item.name, item.id === mapping.warehouseId)).join('')}</select></div>
+    ${sources.desktop.users.map(user => `<div class="fg"><label class="lbl" for="cd-user-${_cdEsc(user.id)}">Usuario de Desktop «${_cdEsc(user.name || user.username)}» (${_cdEsc(user.role)}${user.active ? '' : ', inactivo'})</label><select class="inp" id="cd-user-${_cdEsc(user.id)}" data-user="${_cdEsc(user.id)}">${option('', 'Elige…', !mapping.users[user.id])}${members.map(m => option(m.userId, `${m.name} · ${m.email}${m.active ? '' : ' (sin acceso)'}`, m.userId === mapping.users[user.id])).join('')}</select></div>`).join('')}
+    ${sources.desktop.terminals.map((terminal, index) => `<div class="fg"><label class="lbl" for="cd-term-${index}">Caja de la terminal ${index + 1} (${terminal.sessions} ${terminal.sessions === 1 ? 'sesión' : 'sesiones'})</label><select class="inp" id="cd-term-${index}" data-terminal="${_cdEsc(terminal.terminalId)}">${option('', 'Elige…', !mapping.terminals[terminal.terminalId])}${registers().map(item => option(item.id, item.name, item.id === mapping.terminals[terminal.terminalId])).join('')}</select></div>`).join('')}
+    ${sources.desktop.sessionsWithoutTerminal.length ? `<div class="fg"><label class="lbl" for="cd-loose">Caja de las ${sources.desktop.sessionsWithoutTerminal.length} sesiones sin terminal</label><select class="inp" id="cd-loose">${option('', 'Elige…', !mapping.looseRegister)}${registers().map(item => option(item.id, item.name, item.id === mapping.looseRegister)).join('')}</select></div>` : ''}
+    ${_cdFoot('<button class="btn btn-out" id="cd-map-back" type="button">Volver</button><button class="btn btn-dark" id="cd-map-run" type="button">Ensayar los 20 pasos</button>')}`;
+  document.getElementById('cd-branch').onchange = () => { mapping.branchId = document.getElementById('cd-branch').value; mapping.warehouseId = ''; mapping.terminals = {}; mapping.looseRegister = ''; _cdMappingView(); };
+  document.getElementById('cd-map-back').onclick = () => { _cdRead = null; void _cdRender(); };
+  document.getElementById('cd-map-run').onclick = async () => {
+    const chosen = { branchId: document.getElementById('cd-branch').value, warehouseId: document.getElementById('cd-warehouse').value, users: {}, terminals: {}, looseRegister: document.getElementById('cd-loose')?.value || '' };
+    body.querySelectorAll('[data-user]').forEach(select => { if (select.value) chosen.users[select.dataset.user] = select.value; });
+    body.querySelectorAll('[data-terminal]').forEach(select => { if (select.value) chosen.terminals[select.dataset.terminal] = select.value; });
+    const used = Object.values(chosen.users);
+    if (new Set(used).size !== used.length) return toast('Cada usuario de Desktop necesita un usuario de VELO Cloud distinto', 'w');
+    _cdProgress('El ensayo', result => _cdRehearsalDone(result));
+    const out = await _cdApi('runRehearsal', { mapping: chosen });
+    if (!out?.ok && !_cdPoll) { toast(out?.error || 'No se pudo ensayar', 'err'); void _cdRender(); }
+    else if (!out?.ok) { _cdStopPoll(); toast(out?.error || 'No se pudo ensayar', 'err'); _cdMappingView(); }
+  };
+}
+
+function _cdRehearsalDone(result) {
+  const body = _cdBody(); if (!body) return;
+  _cdRead = null;
+  body.innerHTML = (result?.ok
+    ? _cdBox('g', 'Ensayo superado', `Los 20 pasos pasaron en ${result.seconds} s y se revirtieron. Ya se puede hacer el corte (con la caja cerrada).`)
+    : _cdBox('r', `El ensayo se detuvo en «${_cdEsc(result?.label || result?.error || '')}»`, `${result?.issueCount ?? ''} por resolver en Desktop. ${(result?.issues || []).slice(0, 8).map(issue => `${_cdEsc(issue.code)} ${_cdEsc(issue.table)}${issue.sourceId ? ' #' + _cdEsc(issue.sourceId) : ''}`).join(' · ')}`))
+    + _cdFoot('<button class="btn btn-dark" id="cd-back" type="button">Continuar</button>');
+  document.getElementById('cd-back').onclick = () => void _cdRender();
+}
+
+function _cdCutoverConfirm(st) {
+  const body = _cdBody(); if (!body) return;
+  body.innerHTML = `${_cdBox('a', `El corte pasa este negocio a «${_cdEsc(st.tenant.name)}»`, 'Desktop se congela en todas sus terminales mientras VELO Cloud convierte la copia final (unos 10 minutos). Si VELO Cloud la activa, desde ese momento se factura en Cloud y Desktop queda solo para consultar. Si no la activa, Desktop se descongela solo y sigue como antes.')}
+    <div class="alrt-sub" style="margin:6px 0">Antes: caja cuadrada y cerrada, y las terminales avisadas. No cierres Desktop mientras dura.</div>
+    <div class="fg"><label class="lbl" for="cd-confirm">Escribe CORTE para confirmar</label><input class="inp" id="cd-confirm" autocomplete="off" maxlength="10"></div>
+    ${_cdFoot('<button class="btn btn-out" id="cd-cancel" type="button">Volver</button><button class="btn btn-dark" id="cd-go" type="button">Hacer el corte</button>')}`;
+  document.getElementById('cd-cancel').onclick = () => void _cdRender();
+  document.getElementById('cd-go').onclick = async () => {
+    if (document.getElementById('cd-confirm').value.trim() !== 'CORTE') return toast('Escribe CORTE para confirmar', 'w');
+    _cdProgress('El corte', result => _cdCutoverDone(result));
+    const out = await _cdApi('cutover', { confirm: 'CORTE' });
+    await _refreshCutoverBanner();
+    if (!out?.ok && !out?.data) { _cdStopPoll(); toast(out?.error || 'No se pudo hacer el corte', 'err'); void _cdRender(); }
+  };
+}
+
+function _cdCutoverDone(result) {
+  const body = _cdBody(); if (!body) return;
+  void _refreshCutoverBanner();
+  if (result?.outcome === 'activated') {
+    const total = Object.values(result.imported || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+    body.innerHTML = _cdBox('g', `Listo: este negocio ya factura en VELO Cloud (${_cdEsc(result.tenant)})`, `${total ? `${total.toLocaleString('es-DO')} registros pasaron a Cloud. ` : ''}${_cdEsc(result.note || '')} Desktop queda en modo consulta.`)
+      + (result.passphrase ? `<div class="fg"><label class="lbl">Clave de la copia (solo para deshacer el corte en VELO Cloud mientras no tenga movimientos propios)</label><input class="inp" readonly value="${_cdEsc(result.passphrase)}" onclick="this.select()"></div><div class="alrt-sub">Guárdala en un lugar seguro: también queda guardada en esta PC junto al corte.</div>` : '')
+      + _cdFoot('<button class="btn btn-dark" onclick="closeModal()">Cerrar</button>');
+    return;
+  }
+  if (result?.outcome === 'unfrozen') {
+    body.innerHTML = _cdBox('a', 'El corte no se completó y Desktop ya se descongeló', `${_cdEsc(result.error || '')}${(result.issues || []).length ? ' · ' + result.issues.slice(0, 8).map(issue => `${_cdEsc(issue.code)} ${_cdEsc(issue.table)}`).join(' · ') : ''}. El negocio sigue trabajando en Desktop como antes; VELO Cloud no cambió.`)
+      + _cdFoot('<button class="btn btn-dark" id="cd-back" type="button">Continuar</button>');
+    document.getElementById('cd-back').onclick = () => void _cdRender();
+    return;
+  }
+  void _cdRender();
+}
+
+// No se supo cómo terminó: Desktop sigue en consulta hasta que VELO Cloud lo confirme.
+function _cdVerifyView(st) {
+  const body = _cdBody(); if (!body) return;
+  if (!st.signedIn) {
+    return _cdLoginView(st, null, {}, _cdBox('a', 'El corte quedó por comprobar', 'Desktop sigue en modo consulta hasta saber si VELO Cloud activó la copia. Entra con la cuenta de la empresa para comprobarlo.'));
+  }
+  body.innerHTML = _cdBox('a', 'El corte quedó por comprobar', 'Se perdió la respuesta de VELO Cloud. Desktop sigue en modo consulta hasta saber si la copia se activó: si no se activó, se descongela solo.')
+    + '<div class="alrt-sub" id="cd-verify-status" role="status"></div>'
+    + _cdFoot('<button class="btn btn-out" onclick="closeModal()">Cerrar</button><button class="btn btn-dark" id="cd-verify" type="button">Volver a comprobar</button>');
+  document.getElementById('cd-verify').onclick = async () => {
+    const status = document.getElementById('cd-verify-status');
+    status.textContent = 'Consultando VELO Cloud…';
+    const out = await _cdApi('verify');
+    await _refreshCutoverBanner();
+    if (!out?.ok) { status.textContent = ''; return toast(out?.error || 'No se pudo comprobar', 'err'); }
+    const outcome = out.data.outcome;
+    if (outcome === 'wait') { status.textContent = `VELO Cloud puede estar terminando la activación. Vuelve a comprobar en ${Math.ceil(out.data.waitSeconds / 60)} min.`; return; }
+    if (outcome === 'unknown') { status.textContent = 'VELO Cloud todavía no responde. Revisa la conexión y vuelve a comprobar.'; return; }
+    toast(outcome === 'activated' ? 'VELO Cloud confirma la activación: el negocio ya opera en Cloud' : 'El corte no quedó activo en VELO Cloud: Desktop se descongeló', outcome === 'activated' ? 'ok' : 'w');
+    void _cdRender();
   };
 }
 
