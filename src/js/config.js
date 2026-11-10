@@ -1060,7 +1060,7 @@ async function renderConfiguracion(el) {
       onclick: abrirImportacionCompleta, html: '＋ Incorporar copia como negocio nuevo' }));
   }
   backupCard.appendChild(h('div', { class: 'alrt-sub', style: 'margin-bottom:8px' },
-    'Preparación para Cloud: guarda una copia cifrada del negocio seleccionado y sus evidencias de servicio. La importación y la activación en Cloud todavía no están disponibles.'));
+    'Preparación para Cloud: guarda una copia cifrada del negocio seleccionado y sus evidencias de servicio, para ensayar la migración en VELO Cloud (Configuración → Migración desde Desktop) mientras el negocio sigue trabajando aquí. El día del corte se usa «Corte final a Cloud».'));
   backupCard.appendChild(h('button', { class: 'btn btn-out', style: 'margin-bottom:12px', onclick: abrirPreparacionCloud }, 'Preparar migración a Cloud'));
   // Corte final a Cloud: congela el negocio en todas sus terminales y saca la copia que Cloud activa.
   const cutover = window.VeloCutover;
