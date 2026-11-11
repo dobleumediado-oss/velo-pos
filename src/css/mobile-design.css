@@ -30,16 +30,16 @@
     --mobile-bg: var(--bg);
   }
 
-  /* El menú móvil se usa en las dos pantallas de esta entrega. */
-  .shell:has(#page:is(.module-dash, .module-pos)) > .sidebar {
+  /* El menú móvil se usa en los módulos adaptados. */
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes)) > .sidebar {
     display: none;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos)) > .main {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes)) > .main {
     background: var(--mobile-bg);
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos)) .topbar {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes)) .topbar {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
     gap: 4px 8px;
@@ -49,42 +49,42 @@
     backdrop-filter: none;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos)) :is(.tb-left, .tb-right) {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes)) :is(.tb-left, .tb-right) {
     min-width: 0;
     margin: 0;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos)) .tb-toggle {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes)) .tb-toggle {
     display: none;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos)) :is(#tb-center, .tb-right) {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes)) :is(#tb-center, .tb-right) {
     justify-content: flex-start !important;
     overflow-x: auto;
     padding: 2px 2px 4px;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos)) #tb-center {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes)) #tb-center {
     grid-column: 1 / -1;
     grid-row: 2;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos)) :is(#tb-center, .tb-right) > * {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes)) :is(#tb-center, .tb-right) > * {
     flex-shrink: 0;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos)) .tb-right button {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes)) .tb-right button {
     min-height: 44px;
     min-width: 44px;
   }
 
-  #page:is(.module-dash, .module-pos) {
+  #page:is(.module-dash, .module-pos, .module-inventario, .module-clientes) {
     padding: 12px 12px var(--mobile-bottom);
     scroll-padding: 12px 0 var(--mobile-bottom);
     background: var(--mobile-bg);
   }
 
-  #page:is(.module-dash, .module-pos) ~ .mobile-nav {
+  #page:is(.module-dash, .module-pos, .module-inventario, .module-clientes) ~ .mobile-nav {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     align-items: center;
@@ -211,7 +211,7 @@
     color: var(--ink);
   }
 
-  #page:is(.module-dash, .module-pos) :is(.btn, .tab) {
+  #page:is(.module-dash, .module-pos, .module-inventario, .module-clientes) :is(.btn, .tab) {
     min-height: 44px;
     border-radius: 999px;
   }
@@ -412,7 +412,328 @@
     font-weight: 750;
   }
 
+  #page:is(.module-inventario, .module-clientes) .mobile-module-heading {
+    gap: 10px;
+    margin-bottom: 14px;
+    padding: 14px;
+    border: 0;
+    border-radius: 22px;
+    background: var(--surface);
+    box-shadow: var(--mobile-shadow);
+  }
+
+  #page:is(.module-inventario, .module-clientes) .mobile-module-heading::after,
+  #page:is(.module-inventario, .module-clientes) .mobile-module-heading > div:first-child::before {
+    content: none;
+  }
+
+  #page:is(.module-inventario, .module-clientes) .mobile-module-heading .sec-title { color: var(--ink) !important; }
+  #page:is(.module-inventario, .module-clientes) .mobile-module-heading .sec-sub { color: var(--muted) !important; }
+
+  #page:is(.module-inventario, .module-clientes) .mobile-module-heading .btn-out {
+    border-color: var(--line);
+    background: var(--surface);
+    color: var(--ink);
+  }
+
+  #page:is(.module-inventario, .module-clientes) .mobile-module-actions {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  #page:is(.module-inventario, .module-clientes) :is(.btn, .tab, .inp) {
+    min-height: 44px;
+    border-radius: 999px;
+  }
+
+  #page:is(.module-inventario, .module-clientes) :is(.btn-dark, .tab.on) {
+    border-color: transparent;
+    background: var(--mobile-accent);
+    color: var(--mobile-accent-text);
+  }
+
+  #page:is(.module-inventario, .module-clientes) .tabs {
+    flex-wrap: wrap;
+    width: 100%;
+    border-radius: 22px;
+    background: var(--surface);
+  }
+
+  #page:is(.module-inventario, .module-clientes) .mobile-module-filters {
+    max-width: 100%;
+    border-radius: 20px;
+    background: var(--surface);
+  }
+
+  #page:is(.module-inventario, .module-clientes) .mobile-module-filters > .inp-ic {
+    flex: 1 0 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+  }
+
+  #page:is(.module-inventario, .module-clientes) .mobile-module-filters > select {
+    flex: 1 1 140px;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  #page:is(.module-inventario, .module-clientes) .mobile-summary-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 0;
+    overflow: hidden;
+    border-radius: 24px;
+    background: var(--mobile-deep);
+    box-shadow: var(--mobile-shadow);
+  }
+
+  .mobile-summary-metrics .metric {
+    min-width: 0;
+    border: 0;
+    border-radius: 0;
+    background: var(--mobile-deep);
+    box-shadow: none;
+    overflow-wrap: anywhere;
+  }
+
+  .mobile-summary-metrics .metric:hover { transform: none; }
+  .mobile-summary-metrics .metric::after { content: none; }
+  .mobile-summary-metrics .met-top { display: none; }
+
+  .ui-dark .mobile-summary-metrics :is(.mobile-summary-featured, .mobile-summary-bar) {
+    background: var(--mobile-deep) !important;
+  }
+
+  .mobile-summary-metrics :is(.mobile-summary-featured, .mobile-summary-bar) :is(.met-val, .met-label) {
+    color: #fff;
+  }
+
+  .mobile-summary-metrics .mobile-summary-featured {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    padding: 18px 18px 8px;
+    border-radius: 24px 24px 0 0;
+  }
+
+  .mobile-summary-metrics .mobile-summary-featured .met-val {
+    margin-top: 2px;
+    font-size: clamp(22px, 6.5vw, 32px);
+  }
+
+  .mobile-summary-metrics .mobile-summary-bar {
+    grid-row: 2;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-content: start;
+    align-items: baseline;
+    column-gap: 8px;
+    padding: 6px 18px 16px;
+  }
+
+  .mobile-summary-metrics .mobile-summary-bar .met-val { font-size: 15px; }
+
+  .mobile-summary-metrics .mobile-summary-bar::after {
+    content: "";
+    position: static;
+    grid-column: 1 / -1;
+    width: 100%;
+    height: 5px;
+    margin-top: 6px;
+    border-radius: 999px;
+    background: linear-gradient(var(--mobile-accent), var(--mobile-accent)) left / var(--mobile-bar-size, 0%) 100% no-repeat,
+                rgb(255 255 255 / 20%);
+    opacity: 1;
+  }
+
+  .mobile-summary-metrics .mobile-summary-total {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 9px 18px;
+    background: var(--surface);
+  }
+
+  #page:is(.module-inventario, .module-clientes) .card {
+    min-width: 0;
+    max-width: 100%;
+    border-radius: 20px !important;
+  }
+
+  #page:is(.module-inventario, .module-clientes) .mobile-list-card {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .mobile-list-card > .tw {
+    width: 100%;
+    margin: 0;
+    overflow: visible;
+  }
+
+  .mobile-list-card .mobile-card-table {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .mobile-card-table > thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    clip-path: inset(50%);
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  /* Conserva el orden por columna que habilita la tabla en escritorio. */
+  .mobile-card-table.ux-smart-table > thead {
+    display: block;
+    position: static;
+    width: 100%;
+    height: auto;
+    clip-path: none;
+    margin-bottom: 8px;
+    overflow-x: auto;
+  }
+
+  .mobile-card-table.ux-smart-table > thead > tr {
+    display: flex;
+    gap: 6px;
+    padding: 3px;
+  }
+
+  .mobile-card-table .ux-sortable {
+    display: flex;
+    flex: 0 0 auto;
+    position: relative;
+    align-items: center;
+    min-height: 44px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--muted);
+  }
+
+  .mobile-card-table .ux-sortable:focus-visible {
+    outline: 2px solid var(--mobile-chart);
+    outline-offset: -2px;
+  }
+
+  .mobile-card-table.ux-smart-table > thead th:last-child:empty {
+    position: absolute;
+    clip-path: inset(50%);
+  }
+
+  .mobile-card-table > tbody { display: grid; gap: 10px; }
+
+  .mobile-card-table > tbody > tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 12px;
+    min-width: 0;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    background: var(--surface);
+    box-shadow: var(--mobile-shadow);
+  }
+
+  .mobile-card-table > tbody > tr.inv-row-focus { outline: 2px solid var(--mobile-chart); outline-offset: -2px; }
+
+  .mobile-card-table > tbody > tr > td {
+    display: block;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .mobile-card-table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 2px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 650;
+  }
+
+  .mobile-card-table td.mobile-card-title { grid-column: 1 / -1; grid-row: 1; }
+  .mobile-card-table .mobile-card-title .tb { font-size: 15px; }
+  .mobile-card-table :is(.tb, .ts, .badge) { white-space: normal; }
+
+  .mobile-card-table > tbody > tr > td.mobile-card-actions {
+    grid-column: 1 / -1;
+    position: static;
+    z-index: auto;
+    padding-top: 7px;
+    border-top: 1px solid var(--line);
+  }
+
+  .mobile-card-table > tbody > tr > td.mobile-card-actions::before { content: none; }
+  .mobile-card-actions :is(.flex, .cli-row-actions) { flex-wrap: wrap; }
+  .mobile-card-actions .btn { min-width: 44px; }
+  .mobile-card-table :is(th, td)[hidden] { display: none; }
+  .mobile-list-card .inv-pager { padding-inline: 0 !important; border: 0 !important; }
+  .mobile-list-card .ux-table-bar button { min-height: 44px; }
+  .module-clientes .cli-walkin-controls { flex-wrap: wrap; }
+  .module-clientes .cli-walkin-controls > .ts { flex-basis: 100%; }
+  .module-clientes .cli-walkin-table { border-radius: 18px; background: var(--surface); }
+
+  #page:is(.module-inventario, .module-clientes) .empty > div > svg {
+    display: block;
+    width: 32px;
+    height: 32px;
+    margin: 0 auto;
+    fill: none;
+    stroke: var(--muted2);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+  }
+
   body:has(#modal-ov) :is(.mobile-nav, .pos-mobile-cart-jump) { visibility: hidden; }
+  body:has(#page:is(.module-inventario, .module-clientes)) .toast {
+    bottom: var(--mobile-bottom);
+    right: 12px;
+    max-width: calc(100% - 24px);
+    pointer-events: none;
+  }
+
+  body:has(#page:is(.module-inventario, .module-clientes)):has(#modal-ov) .toast {
+    top: max(12px, env(safe-area-inset-top, 0px));
+    bottom: auto;
+  }
+
+  body:has(#page:is(.module-inventario, .module-clientes)) #modal-ov:has(> :is(.inv-mobile-modal, .cli-mobile-modal)) {
+    align-items: flex-end;
+  }
+
+  body:has(#page:is(.module-inventario, .module-clientes)) #modal-ov > :is(.inv-mobile-modal, .cli-mobile-modal) {
+    --modal-pad: 16px;
+    width: 100%;
+    max-width: none;
+    max-height: calc(100dvh - 12px - env(safe-area-inset-top, 0px)) !important;
+    padding: var(--modal-pad);
+    border-radius: 24px 24px 0 0;
+    overscroll-behavior: contain;
+  }
+
+  body:has(#page:is(.module-inventario, .module-clientes)) #modal-ov > :is(.inv-mobile-modal, .cli-mobile-modal) :is(.g2, .g3, .g4) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body:has(#page:is(.module-inventario, .module-clientes)) #modal-ov > :is(.inv-mobile-modal, .cli-mobile-modal) :is(.btn, .inp) {
+    min-height: 44px;
+  }
+
+  body:has(#page:is(.module-inventario, .module-clientes)) #modal-ov > :is(.inv-mobile-modal, .cli-mobile-modal) .modal-foot {
+    padding-bottom: calc(var(--modal-pad) + env(safe-area-inset-bottom, 0px));
+  }
   #modal-ov:has(> .pos-cobro) { align-items: flex-end; }
   #modal-ov > .pos-cobro {
     --modal-pad: 14px;
