@@ -394,7 +394,7 @@ function renderPOSGrid() {
   if (!prods.length) {
     grid.innerHTML = `
       <div style="grid-column:1/-1;text-align:center;padding:44px;color:var(--muted2)">
-        <div style="margin-bottom:8px">${svg('search')}</div>
+        <div class="pos-empty-icon" aria-hidden="true" style="margin-bottom:8px">${svg('search')}</div>
         <div style="font-weight:600">Sin resultados</div>
       </div>`;
     return;
