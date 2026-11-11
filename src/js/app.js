@@ -1386,15 +1386,21 @@ function buildMobileNav(items) {
         S('logout'), h('span', null, 'Cerrar sesión'))
     )
   );
-  const dashboard = allowed.find(item => item.key === 'dash');
-  const pos = allowed.find(item => item.key === 'pos');
-  nav.replaceChildren(...[
-    dashboard && routeButton(dashboard, 'Inicio'),
-    pos && routeButton(pos, 'Vender'),
+  const shortcuts = [
+    ['dash', 'Inicio'],
+    ['inventario', 'Inventario'],
+    ['pos', 'Vender'],
+    ['clientes', 'Clientes'],
+  ].map(([key, label]) => {
+    const item = allowed.find(item => item.key === key);
+    return item && routeButton(item, label);
+  }).filter(Boolean);
+
+  nav.replaceChildren(...shortcuts,
     h('button', { type: 'button', popovertarget: 'mobile-module-menu', class: 'mobile-menu-trigger' },
       S('menu'), h('span', null, 'Más')),
     menu
-  ].filter(Boolean));
+  );
 }
 
 // ══════════════════════════════════════════════
