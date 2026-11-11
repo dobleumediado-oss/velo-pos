@@ -31,15 +31,15 @@
   }
 
   /* El menú móvil se usa en los módulos adaptados. */
-  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes)) > .sidebar {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja)) > .sidebar {
     display: none;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes)) > .main {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja)) > .main {
     background: var(--mobile-bg);
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes)) .topbar {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja)) .topbar {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
     gap: 4px 8px;
@@ -49,42 +49,42 @@
     backdrop-filter: none;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes)) :is(.tb-left, .tb-right) {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja)) :is(.tb-left, .tb-right) {
     min-width: 0;
     margin: 0;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes)) .tb-toggle {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja)) .tb-toggle {
     display: none;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes)) :is(#tb-center, .tb-right) {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja)) :is(#tb-center, .tb-right) {
     justify-content: flex-start !important;
     overflow-x: auto;
     padding: 2px 2px 4px;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes)) #tb-center {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja)) #tb-center {
     grid-column: 1 / -1;
     grid-row: 2;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes)) :is(#tb-center, .tb-right) > * {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja)) :is(#tb-center, .tb-right) > * {
     flex-shrink: 0;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes)) .tb-right button {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja)) .tb-right button {
     min-height: 44px;
     min-width: 44px;
   }
 
-  #page:is(.module-dash, .module-pos, .module-inventario, .module-clientes) {
+  #page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja) {
     padding: 12px 12px var(--mobile-bottom);
     scroll-padding: 12px 0 var(--mobile-bottom);
     background: var(--mobile-bg);
   }
 
-  #page:is(.module-dash, .module-pos, .module-inventario, .module-clientes) ~ .mobile-nav {
+  #page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja) ~ .mobile-nav {
     display: grid;
     grid-auto-columns: minmax(0, 1fr);
     grid-auto-flow: column;
@@ -239,7 +239,7 @@
     color: var(--ink);
   }
 
-  #page:is(.module-dash, .module-pos, .module-inventario, .module-clientes) :is(.btn, .tab) {
+  #page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja) :is(.btn, .tab) {
     min-height: 44px;
     border-radius: 999px;
   }
@@ -440,7 +440,7 @@
     font-weight: 750;
   }
 
-  #page:is(.module-inventario, .module-clientes) .mobile-module-heading {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja) .mobile-module-heading {
     gap: 10px;
     margin-bottom: 14px;
     padding: 14px;
@@ -450,62 +450,137 @@
     box-shadow: var(--mobile-shadow);
   }
 
-  #page:is(.module-inventario, .module-clientes) .mobile-module-heading::after,
-  #page:is(.module-inventario, .module-clientes) .mobile-module-heading > div:first-child::before {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja) .mobile-module-heading::after,
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja) .mobile-module-heading > div:first-child::before {
     content: none;
   }
 
-  #page:is(.module-inventario, .module-clientes) .mobile-module-heading .sec-title { color: var(--ink) !important; }
-  #page:is(.module-inventario, .module-clientes) .mobile-module-heading .sec-sub { color: var(--muted) !important; }
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja) .mobile-module-heading .sec-title { color: var(--ink) !important; }
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja) .mobile-module-heading .sec-sub { color: var(--muted) !important; }
 
-  #page:is(.module-inventario, .module-clientes) .mobile-module-heading .btn-out {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja) .mobile-module-heading .btn-out {
     border-color: var(--line);
     background: var(--surface);
     color: var(--ink);
   }
 
-  #page:is(.module-inventario, .module-clientes) .mobile-module-actions {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja) .mobile-module-actions {
     flex-wrap: wrap;
     width: 100%;
   }
 
-  #page:is(.module-inventario, .module-clientes) :is(.btn, .tab, .inp) {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja) :is(.btn, .tab, .inp) {
     min-height: 44px;
     border-radius: 999px;
   }
 
-  #page:is(.module-inventario, .module-clientes) :is(.btn-dark, .tab.on) {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja) :is(.btn-dark, .tab.on) {
     border-color: transparent;
     background: var(--mobile-accent);
     color: var(--mobile-accent-text);
   }
 
-  #page:is(.module-inventario, .module-clientes) .tabs {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja) .tabs {
     flex-wrap: wrap;
     width: 100%;
     border-radius: 22px;
     background: var(--surface);
   }
 
-  #page:is(.module-inventario, .module-clientes) .mobile-module-filters {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja) .mobile-module-filters {
     max-width: 100%;
     border-radius: 20px;
     background: var(--surface);
   }
 
-  #page:is(.module-inventario, .module-clientes) .mobile-module-filters > .inp-ic {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja) .mobile-module-filters > .inp-ic {
     flex: 1 0 100% !important;
     min-width: 0 !important;
     max-width: none !important;
   }
 
-  #page:is(.module-inventario, .module-clientes) .mobile-module-filters > select {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja) .mobile-module-filters > select {
     flex: 1 1 140px;
     min-width: 0;
     max-width: 100%;
   }
 
-  #page:is(.module-inventario, .module-clientes) .mobile-summary-metrics {
+  .module-ventas .ventas-mobile-dates {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    flex: 1 0 100%;
+    min-width: 0;
+  }
+
+  .module-ventas .ventas-mobile-dates > .inp {
+    width: 100% !important;
+    min-width: 0;
+  }
+
+  .module-ventas .ventas-mobile-pager > .flex { flex-wrap: wrap; }
+  .module-ventas .mobile-card-title > .tm { font-weight: 750; }
+
+  body:has(#page.module-ventas #ventas-resale-cart) {
+    --ventas-resale-height: min(40dvh, 210px);
+  }
+
+  #page.module-ventas:has(#ventas-resale-cart) {
+    padding-bottom: calc(var(--mobile-bottom) + var(--ventas-resale-height) + 12px);
+    scroll-padding-bottom: calc(var(--mobile-bottom) + var(--ventas-resale-height) + 12px);
+  }
+
+  .module-ventas #ventas-resale-cart {
+    display: flex;
+    flex-direction: column;
+    inset: auto 12px var(--mobile-bottom) !important;
+    width: auto !important;
+    height: var(--ventas-resale-height);
+    border-radius: 20px !important;
+  }
+
+  .module-ventas #ventas-resale-cart > :is(:first-child, :last-child) { flex-shrink: 0; }
+  .module-ventas #ventas-resale-cart > :nth-child(2) { min-height: 0; flex: 1; }
+  .module-ventas #ventas-resale-cart > :last-child { flex-wrap: wrap; }
+  .module-ventas #ventas-resale-cart .btn { white-space: normal; }
+
+  body:has(#page.module-ventas #ventas-resale-cart) #modal-ov {
+    bottom: calc(var(--ventas-resale-height) + 12px + env(safe-area-inset-bottom, 0px));
+  }
+
+  body:has(#page.module-ventas #ventas-resale-cart) #modal-ov > .modal {
+    max-height: calc(100% - 12px - env(safe-area-inset-top, 0px)) !important;
+  }
+
+  body:has(#modal-ov) .module-ventas #ventas-resale-cart {
+    bottom: calc(8px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  .module-caja .caja-mobile-list-heading {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .module-caja .caja-mobile-history-filters {
+    grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr)) !important;
+  }
+
+  .module-caja .caja-mobile-history-filters :is(.fg, .inp) { min-width: 0; }
+
+  #page.module-caja .caja-mobile-closed {
+    background: var(--mobile-deep);
+  }
+
+  #page.module-caja .caja-mobile-closed :is(.sec-title, .sec-sub) {
+    color: #fff !important;
+  }
+
+  #page.module-caja .caja-mobile-open-button {
+    width: 100%;
+    background: var(--mobile-accent);
+    color: var(--mobile-accent-text);
+  }
+
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja) .mobile-summary-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
     gap: 0;
     overflow: hidden;
@@ -559,6 +634,11 @@
 
   .mobile-summary-metrics .mobile-summary-bar .met-val { font-size: 15px; }
 
+  #page:is(.module-ventas, .module-caja) .mobile-summary-bar {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 4px;
+  }
+
   .mobile-summary-metrics .mobile-summary-bar::after {
     content: "";
     position: static;
@@ -583,13 +663,13 @@
     background: var(--surface);
   }
 
-  #page:is(.module-inventario, .module-clientes) .card {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja) .card {
     min-width: 0;
     max-width: 100%;
     border-radius: 20px !important;
   }
 
-  #page:is(.module-inventario, .module-clientes) .mobile-list-card {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja) .mobile-list-card {
     padding: 0;
     border: 0;
     background: transparent;
@@ -713,7 +793,7 @@
   .module-clientes .cli-walkin-controls > .ts { flex-basis: 100%; }
   .module-clientes .cli-walkin-table { border-radius: 18px; background: var(--surface); }
 
-  #page:is(.module-inventario, .module-clientes) .empty > div > svg {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja) .empty > div > svg {
     display: block;
     width: 32px;
     height: 32px;
@@ -725,23 +805,23 @@
   }
 
   body:has(#modal-ov) :is(.mobile-nav, .pos-mobile-cart-jump) { visibility: hidden; }
-  body:has(#page:is(.module-inventario, .module-clientes)) .toast {
+  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja)) .toast {
     bottom: var(--mobile-bottom);
     right: 12px;
     max-width: calc(100% - 24px);
     pointer-events: none;
   }
 
-  body:has(#page:is(.module-inventario, .module-clientes)):has(#modal-ov) .toast {
+  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja)):has(#modal-ov) .toast {
     top: max(12px, env(safe-area-inset-top, 0px));
     bottom: auto;
   }
 
-  body:has(#page:is(.module-inventario, .module-clientes)) #modal-ov:has(> :is(.inv-mobile-modal, .cli-mobile-modal)) {
+  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja)) #modal-ov:has(> :is(.inv-mobile-modal, .cli-mobile-modal, .ventas-mobile-modal, .caja-mobile-modal)) {
     align-items: flex-end;
   }
 
-  body:has(#page:is(.module-inventario, .module-clientes)) #modal-ov > :is(.inv-mobile-modal, .cli-mobile-modal) {
+  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja)) #modal-ov > :is(.inv-mobile-modal, .cli-mobile-modal, .ventas-mobile-modal, .caja-mobile-modal) {
     --modal-pad: 16px;
     width: 100%;
     max-width: none;
@@ -751,16 +831,58 @@
     overscroll-behavior: contain;
   }
 
-  body:has(#page:is(.module-inventario, .module-clientes)) #modal-ov > :is(.inv-mobile-modal, .cli-mobile-modal) :is(.g2, .g3, .g4) {
+  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja)) #modal-ov > :is(.inv-mobile-modal, .cli-mobile-modal, .ventas-mobile-modal, .caja-mobile-modal) :is(.g2, .g3, .g4) {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  body:has(#page:is(.module-inventario, .module-clientes)) #modal-ov > :is(.inv-mobile-modal, .cli-mobile-modal) :is(.btn, .inp) {
+  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja)) #modal-ov > :is(.inv-mobile-modal, .cli-mobile-modal, .ventas-mobile-modal, .caja-mobile-modal) :is(.btn, .inp) {
     min-height: 44px;
   }
 
-  body:has(#page:is(.module-inventario, .module-clientes)) #modal-ov > :is(.inv-mobile-modal, .cli-mobile-modal) .modal-foot {
+  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja)) #modal-ov > :is(.inv-mobile-modal, .cli-mobile-modal, .ventas-mobile-modal, .caja-mobile-modal) .modal-foot {
     padding-bottom: calc(var(--modal-pad) + env(safe-area-inset-bottom, 0px));
+  }
+
+  body:has(#page:is(.module-ventas, .module-caja)) #modal-ov > :is(.ventas-mobile-modal, .caja-mobile-modal) .modal-foot {
+    bottom: calc(-1 * var(--modal-pad));
+  }
+
+  body:has(#page:is(.module-ventas, .module-caja)) #modal-ov > .ventas-mobile-modal.sale-detail-modal {
+    width: 100% !important;
+    height: calc(100dvh - 12px);
+  }
+
+  body:has(#page:is(.module-ventas, .module-caja)) .ventas-mobile-modal :is(.sale-detail-head, .sale-detail-body) {
+    padding-inline: 14px;
+    overflow-wrap: anywhere;
+  }
+
+  body:has(#page:is(.module-ventas, .module-caja)) #modal-ov > .ventas-mobile-modal :is(.sale-detail-actions, .vpc-foot) {
+    position: relative;
+    bottom: auto;
+    max-height: min(36dvh, 150px);
+    overflow-y: auto;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  body:has(#page:is(.module-ventas, .module-caja)) #modal-ov > :is(.ventas-mobile-modal, .caja-mobile-modal) .btn {
+    border-radius: 999px;
+  }
+
+  body:has(#page:is(.module-ventas, .module-caja)) .ventas-mobile-modal #vpc-product-search { min-width: 0; }
+
+  body:has(#page:is(.module-ventas, .module-caja)) .ventas-mobile-modal #vpc-added-items > div:has(> div .inp) {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) auto !important;
+  }
+
+  body:has(#page:is(.module-ventas, .module-caja)) .ventas-mobile-modal #vpc-added-items > div:has(> div .inp) > div:first-child {
+    grid-column: 1 / -1;
+  }
+
+  #modal-ov > .caja-mobile-modal .gg2 { grid-template-columns: minmax(0, 1fr); }
+
+  #modal-ov > .caja-mobile-modal .bill-inp2 {
+    min-height: 44px;
   }
   #modal-ov:has(> .pos-cobro) { align-items: flex-end; }
   #modal-ov > .pos-cobro {
