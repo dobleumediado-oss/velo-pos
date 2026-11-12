@@ -4,7 +4,7 @@ const fs = require('fs');
 const vm = require('vm');
 const calls = [];
 const context = { console, setTimeout, clearTimeout, DB: {settings:{}}, user:{id:1}, CFG:{connectionMode:'client'},
-  window:{addEventListener:()=>{},api:{print:{html:()=>{}}}}, document:{addEventListener:()=>{}}, toast:()=>{} };
+  window:{addEventListener:()=>{},api:{print:{html:()=>{}}}}, document:{addEventListener:()=>{},getElementById:()=>null}, toast:()=>{} };
 vm.createContext(context);
 vm.runInContext(fs.readFileSync('src/js/print.js','utf8'), context);
 context._getCategoryConfig = () => ({printer:'POS-80',profileId:'ticket_80'});
@@ -34,11 +34,11 @@ console.log('✓ La vista previa conserva impresora, documento y selección del 
 const printSource = fs.readFileSync(require('path').join(__dirname, '../src/js/print.js'), 'utf8');
 const mainSource = fs.readFileSync(require('path').join(__dirname, '../main.js'), 'utf8');
 const preloadSource = fs.readFileSync(require('path').join(__dirname, '../preload.js'), 'utf8');
-assert.ok(printSource.includes('_printPreviewShowPdf(job)') && printSource.includes("previewPdf?.({ html"), 'la vista previa pide el PDF real');
-assert.ok(mainSource.includes("ipcMain.handle('print:previewPdf'") && mainSource.includes("layout.profile !== 'css-fixed'"), 'solo hojas: los rollos siguen en HTML');
+assert.ok(printSource.includes('_printPreviewShowPdf(job)') && printSource.includes("previewPdf?.({"), 'la vista previa pide el PDF real');
+assert.ok(mainSource.includes("ipcMain.handle('print:previewPdf'") && mainSource.includes("layout.profile === 'thermal-roll'"), 'solo hojas: los rollos siguen en HTML');
 assert.ok(/plugins:\s*true/.test(mainSource), 'la ventana principal habilita el visor de PDF');
 assert.ok(preloadSource.includes("previewPdf:") && preloadSource.includes("'print:previewPdf'"), 'el puente expone print.previewPdf');
-console.log('✓ Vista previa exacta: hojas con el PDF que se imprime; rollos con la vista HTML');
+console.log('✓ El display usa PDF para hojas y HTML para rollos');
 
 const localPrintChannels = mainSource.slice(mainSource.indexOf('localOnly: new Set(['), mainSource.indexOf('const desktopEcf'));
 assert.ok(localPrintChannels.includes("'print:previewPdf'") && localPrintChannels.includes("'print:printerProfile'"),
@@ -59,6 +59,47 @@ assert.equal(vm.runInContext("printerAcceptsReportSheets('Zebra GK420')", center
 assert.equal(vm.runInContext("printerAcceptsReportSheets('Láser Oficina')", centerContext), true);
 console.log('✓ El Centro conserva una impresora no disponible y usa la misma ruta que el despacho');
 
+
+async function testPreviewRerender() {
+  const requests = [];
+  const frame = { style: {}, removeAttribute(name) { delete this[name]; } };
+  const note = {};
+  context.document.getElementById = id => id === '_print_preview_frame' ? frame : note;
+  context.window.api.print.previewPdf = args => new Promise(resolve => requests.push({ args, resolve }));
+  context.resolvePrinterProfile = name => ({ kind: name === 'Epson' ? 'sheet' : 'continuous', widthMm: 58 });
+  context.getPlantilla = () => null;
+  context.window._printPreviewJob = {
+    html: '<body>Factura electrónica</body>', jobType: 'ticket', source: 'document',
+    printOptions: { defaultSheet: true, printerName: '', profileId: '' },
+  };
+  const initial = context._printPreviewShowPdf(context.window._printPreviewJob);
+  assert.equal(requests[0].args.printerWidth, undefined, 'factura electrónica sin rollo abre en Carta');
+  const roll = context._printPreviewSelectPrinter('POS-58');
+  assert.equal(requests[1].args.printerWidth, 58000);
+  assert.equal(frame.style.maxWidth, '58mm');
+  const sheet = context._printPreviewSelectPrinter('Epson');
+  assert.equal(requests[2].args.printerWidth, undefined);
+  requests[2].resolve({ ok: true, url: 'file:///actual.pdf', pages: 1 });
+  await sheet;
+  requests[0].resolve({ ok: true, url: 'file:///anterior.pdf', pages: 3 });
+  requests[1].resolve({ ok: false, reason: 'roll' });
+  await Promise.all([initial, roll]);
+  assert.match(frame.src, /actual\.pdf/);
+  assert.match(note.textContent, /1 hoja · Epson/);
+
+  context.window._printPreviewJob = {
+    html: '<body>Reporte</body>', jobType: 'reporte', source: 'html', printOptions: {},
+  };
+  const pending = context._printPreviewShowPdf(context.window._printPreviewJob);
+  assert.match(requests[3].args.html, /Se asigna al confirmar/);
+  const confirmed = context._injectPrintedDocumentNumber(context.window._printPreviewJob.html, 'REP-000003');
+  const slotStyle = html => html.match(/data-velo-document-number="[^"]*"\s+style="([^"]+)"/)[1];
+  assert.equal(slotStyle(requests[3].args.html), slotStyle(confirmed), 'el folio reserva las mismas dimensiones');
+  assert.doesNotMatch(confirmed, /Se asigna al confirmar/);
+  requests[3].resolve({ ok: true, url: 'file:///reporte.pdf', pages: 2 });
+  await pending;
+  console.log('✓ El display recalcula el papel, ignora respuestas anteriores y reserva el espacio del folio');
+}
 
 async function testReportConfirmation() {
   context.document.getElementById = () => null;
@@ -137,7 +178,7 @@ async function testFiscalReportState() {
   console.log('✓ El 608 ignora respuestas anteriores y conserva los mismos totales en pantalla e impresión');
 }
 
-Promise.resolve().then(testReportConfirmation).then(testFiscalReportState).catch(error => {
+Promise.resolve().then(testPreviewRerender).then(testReportConfirmation).then(testFiscalReportState).catch(error => {
   console.error(error);
   process.exitCode = 1;
 });

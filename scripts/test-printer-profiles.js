@@ -62,10 +62,22 @@ test('la impresión física usa el papel que el documento pide explícitamente',
   assert.deepStrictEqual(explicitSheetPage('<meta name="velo-page-size" content="A4 landscape">'), { pageSize: 'A4', landscape: true });
   assert.deepStrictEqual(explicitSheetPage('<meta name="velo-page-size" content="letter portrait">'), { pageSize: 'Letter', landscape: false });
   assert.deepStrictEqual(explicitSheetPage('<meta name="velo-page-size" content="letter landscape">'), { pageSize: 'Letter', landscape: true });
-  // Sin la etiqueta, nada cambia: Compras y Servicio declaran A4 en CSS y
-  // siguen saliendo en Carta como hasta ahora.
-  assert.strictEqual(explicitSheetPage('<style>@page{size:A4 portrait}</style>'), null);
+  assert.deepStrictEqual(explicitSheetPage('<style>@page{size:A4 portrait}</style>'), { pageSize: 'A4', landscape: false });
+  assert.deepStrictEqual(explicitSheetPage('<style>@page{size:A4 landscape}</style>'), { pageSize: 'A4', landscape: true });
+  assert.strictEqual(explicitSheetPage('<p>Hoja sin papel declarado</p>'), null);
   assert.strictEqual(explicitSheetPage('<meta name="velo-page-size" content="80mm auto">'), null);
+});
+
+test('el PDF sin CSS usa Carta o el rollo resuelto por el display', () => {
+  const html = '<p>Factura electrónica</p>';
+  const sheet = buildPdfOptions(html);
+  assert.equal(sheet.profile, 'sheet-default');
+  assert.equal(sheet.options.pageSize, 'Letter');
+  const roll = buildPdfOptions(html, { bodyHeightPx: 500 }, { printerWidth: 58000 });
+  assert.equal(roll.profile, 'thermal-roll');
+  assert.equal(roll.options.pageSize.width, 2.2835);
+  const half = buildPdfOptions(html, {}, { pageHint: 'half-letter' });
+  assert.deepEqual(half.options.pageSize, { width: 5.5, height: 4.25 });
 });
 
 test('PDF térmico largo pagina sin crear hojas gigantes', () => {

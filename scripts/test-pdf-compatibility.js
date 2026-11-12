@@ -285,6 +285,14 @@ async function run() {
   try {
     for (const testCase of buildCases()) results.push(await renderCase(win, testCase));
     results.push(await fiscalCopiesCase(win));
+    const defaultSheet = await renderCase(win, {
+      name: '11-factura-hoja-sin-css.pdf',
+      html: '<!doctype html><html><head><meta charset="utf-8"></head><body><h1>Factura electrónica</h1><p>Comprobante de prueba</p></body></html>',
+      expected: { profile: 'sheet-default', minPages: 1, maxPages: 1 },
+    });
+    assert.equal(defaultSheet.saved.mediaBoxes[0].widthPoints, 612);
+    assert.equal(defaultSheet.saved.mediaBoxes[0].heightPoints, 792);
+    results.push(defaultSheet);
   } finally {
     if (!win.isDestroyed()) win.destroy();
   }

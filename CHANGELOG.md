@@ -2,6 +2,9 @@
 
 ## Sin publicar
 
+- El display distingue hojas y rollos, se actualiza al cambiar de impresora
+  y reserva el espacio del folio del reporte antes de confirmar.
+
 - El 607 y el 608 usan la fecha fiscal de República Dominicana y descartan
   consultas de filtros anteriores. El total anulado del 608 coincide con su
   vista impresa.

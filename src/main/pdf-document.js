@@ -73,9 +73,12 @@ function _hasFixedCssPageSize(cssSize) {
   return tokens.length >= 1 && tokens.length <= 2 && tokens.every(token => cssLengthToInches(token) != null);
 }
 
-function buildPdfOptions(html, renderInfo = {}) {
+function buildPdfOptions(html, renderInfo = {}, { printerWidth, pageHint } = {}) {
   const cssSize = extractCssPageSize(html);
-  const rollWidthInches = _thermalRollWidth(cssSize);
+  const widthMicrons = Number(printerWidth);
+  const selectedRoll = Number.isFinite(widthMicrons) && widthMicrons >= 20000 && widthMicrons <= 200000
+    ? widthMicrons / 25400 : null;
+  const rollWidthInches = selectedRoll || _thermalRollWidth(cssSize);
   const base = {
     printBackground: true,
     displayHeaderFooter: false,
@@ -123,8 +126,10 @@ function buildPdfOptions(html, renderInfo = {}) {
     };
   }
 
+  const sheet = explicitSheetPage(html);
+  const pageSize = pageHint === 'half-letter' ? { width: 5.5, height: 4.25 } : (sheet?.pageSize || 'Letter');
   return {
-    options: { ...base, pageSize: 'Letter' },
+    options: { ...base, pageSize, landscape: pageHint !== 'half-letter' && Boolean(sheet?.landscape) },
     profile: 'sheet-default',
     cssSize,
     paginated: true,
@@ -290,12 +295,11 @@ function cleanupStaleGeneratedFiles(directory, matcher, maxAgeMs = 24 * 60 * 60 
   return removed;
 }
 
-// Papel que un documento pide EXPLÍCITAMENTE para la impresión física, con
-// <meta name="velo-page-size" content="a4 landscape">. Solo los documentos que
-// lo declaran cambian de papel u orientación; el resto sigue en Carta vertical.
+// Papel de hoja que declara el documento, para el PDF y el controlador.
+// Si no hay una etiqueta de papel, también se reconoce el tamaño CSS.
 function explicitSheetPage(html) {
   const content = String(html || '').match(/<meta\s+name=["']velo-page-size["']\s+content=["']([^"']+)["']/i)?.[1] || '';
-  const value = content.trim().toLowerCase();
+  const value = content.trim().toLowerCase() || extractCssPageSize(html);
   if (!value) return null;
   const pageSize = /\ba4\b/.test(value) ? 'A4' : /\blegal\b/.test(value) ? 'Legal' : /\bletter\b/.test(value) ? 'Letter' : null;
   if (!pageSize) return null;

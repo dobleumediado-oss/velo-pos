@@ -4984,11 +4984,12 @@ ipcMain.handle('print:onServer', async (_, {
 
 // Guardar un documento como PDF (mismo HTML que se imprime) con diálogo "Guardar como".
 // Universal: sirve para factura, cotización, conduce, abono, reportes, etc.
-// Vista previa exacta de hojas (Carta/A4): el mismo HTML se convierte en el
-// PDF que sale impreso y la vista previa muestra ese PDF, hoja por hoja. Los
-// rollos térmicos no tienen hojas: siguen con la vista HTML.
-ipcMain.handle('print:previewPdf', async (_, { html } = {}) => {
+// La vista previa de hojas usa el papel del documento. Los trabajos de rollo
+// conservan la vista HTML al ancho que resolvió el servicio de impresión.
+ipcMain.handle('print:previewPdf', async (_, { html, printerWidth, pageHint } = {}) => {
   if (!html || !String(html).trim()) return { ok: false, error: 'Sin contenido' };
+  const layout = buildPdfOptions(html, {}, { printerWidth, pageHint });
+  if (layout.profile === 'thermal-roll') return { ok: false, reason: 'roll' };
   const printTempDir = path.join(app.getPath('userData'), 'print-temp');
   fs.mkdirSync(printTempDir, { recursive: true });
   cleanupStaleGeneratedFiles(printTempDir, /^velo_preview_[\w.-]+\.(?:html|pdf)$/i);
@@ -5005,9 +5006,7 @@ ipcMain.handle('print:previewPdf', async (_, { html } = {}) => {
       win.webContents.once('did-fail-load', (_e, _c, e) => { clearTimeout(t); reject(new Error(e || 'No se pudo cargar')); });
       win.loadFile(tmpHtml);
     });
-    const renderInfo = await waitForPdfDocument(win.webContents);
-    const layout = buildPdfOptions(html, renderInfo);
-    if (layout.profile !== 'css-fixed') return { ok: false, reason: 'roll' };
+    await waitForPdfDocument(win.webContents);
     const pdfBuf = await win.webContents.printToPDF(layout.options);
     const validation = validatePdfBuffer(pdfBuf);
     fs.writeFileSync(tmpPdf, pdfBuf);
@@ -5020,7 +5019,7 @@ ipcMain.handle('print:previewPdf', async (_, { html } = {}) => {
   }
 });
 
-ipcMain.handle('print:toPDF', async (_, { html, suggestedName, open, temporary } = {}) => {
+ipcMain.handle('print:toPDF', async (_, { html, suggestedName, open, temporary, printerWidth, pageHint } = {}) => {
   try {
     if (!html || !String(html).trim()) return { ok: false, error: 'Sin contenido para el PDF' };
     const printTempDir = path.join(app.getPath('userData'), 'print-temp');
@@ -5028,7 +5027,9 @@ ipcMain.handle('print:toPDF', async (_, { html, suggestedName, open, temporary }
     cleanupStaleGeneratedFiles(printTempDir, /^velo_pdf_[\w.-]+\.html$/i);
     const tmpFile = path.join(printTempDir, `velo_pdf_${Date.now()}_${Math.random().toString(36).slice(2)}.html`);
     fs.writeFileSync(tmpFile, html, 'utf8');
-    const win = new BrowserWindow({ show: false, paintWhenInitiallyHidden: true, width: 816, height: 1056,
+    const paper = buildPdfOptions(html, {}, { printerWidth, pageHint });
+    const renderWidth = paper.widthInches ? Math.round(paper.widthInches * 96) : 816;
+    const win = new BrowserWindow({ show: false, paintWhenInitiallyHidden: true, width: renderWidth, height: 1056,
       backgroundColor: '#ffffff',
       webPreferences: { nodeIntegration: false, contextIsolation: true } });
 
@@ -5063,7 +5064,7 @@ ipcMain.handle('print:toPDF', async (_, { html, suggestedName, open, temporary }
       if (visualInfo.sampled > 0 && visualInfo.nonWhite < 3) {
         throw new Error('La vista del PDF quedó en blanco. Intenta guardar de nuevo.');
       }
-      const pdfLayout = buildPdfOptions(html, renderInfo);
+      const pdfLayout = buildPdfOptions(html, renderInfo, { printerWidth, pageHint });
       pdfBuf = await win.webContents.printToPDF(pdfLayout.options);
       const validation = validatePdfBuffer(pdfBuf);
       logInfo('pdf', 'Documento PDF generado', {

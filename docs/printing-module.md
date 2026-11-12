@@ -67,10 +67,10 @@ No se hizo QA interactivo en vivo (sin impresora real en el entorno de dev, sin 
 
 ## Ronda «vista previa = impresión» (después de v1.61.0, sin publicar)
 
-- **Vista previa exacta** (`print:previewPdf`, `_printPreviewShowPdf`): en
-  hojas Carta/A4 la vista previa muestra el PDF que genera el mismo HTML
-  (mismo motor, papel y márgenes) con el número de hojas. Rollos térmicos: vista
-  HTML. La ventana principal habilita solo el visor de PDF (`plugins: true`).
+- **Vista previa paginada** (`print:previewPdf`, `_printPreviewShowPdf`): en
+  hojas Carta/A4 el display muestra el PDF del documento y su número de hojas.
+  En rollos térmicos muestra HTML. La ventana principal habilita el visor de
+  PDF (`plugins: true`).
 - **Factura Carta Compacta**: la letra de «Letra y márgenes» es el máximo (sin
   elegir: 10 pt; multiplicada por «Tamaño de letra en factura»); baja sola hasta
   7.8 pt para caber en una hoja, midiendo al ancho imprimible y con 12 mm de
@@ -104,3 +104,13 @@ No se hizo QA interactivo en vivo (sin impresora real en el entorno de dev, sin 
   canal compatible.
 - El PDF del lote se prepara antes de abrir el display. Imprimir o guardar
   confirma una acción a la vez y reserva un solo folio de reporte.
+
+## Display de impresión
+
+- El display genera un PDF para documentos de hoja, incluida Carta cuando el
+  HTML no declara un tamaño. En rollo muestra el HTML con el ancho resuelto
+  para la impresora. La vista PDF muestra la paginación del documento.
+- Cambiar el destino vuelve a preparar la vista con el papel del trabajo.
+  Se descartan las respuestas de una selección anterior.
+- Los reportes reservan en la vista el espacio del folio. El número se
+  asigna al confirmar y ocupa el mismo espacio en la salida final.
