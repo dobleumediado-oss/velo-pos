@@ -331,6 +331,7 @@ const api = {
     status:           (data) => ipcRenderer.invoke('cloudDirect:status', data),
     login:            (data) => ipcRenderer.invoke('cloudDirect:login', data),
     logout:           (data) => ipcRenderer.invoke('cloudDirect:logout', data),
+    access:           (data) => ipcRenderer.invoke('cloudDirect:access', data),
     progress:         ()     => ipcRenderer.invoke('cloudDirect:progress'),
     prepareRehearsal: (data) => ipcRenderer.invoke('cloudDirect:prepareRehearsal', data),
     runRehearsal:     (data) => ipcRenderer.invoke('cloudDirect:runRehearsal', data),

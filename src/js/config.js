@@ -1857,6 +1857,7 @@ async function _cdRender() {
     return;
   }
   if (!st.signedIn) return _cdLoginView(st);
+  if (!st.access?.enabled) return _cdAccessView(st);
   const items = st.checks.items;
   const reh = st.saved.rehearsal;
   const rehText = !reh ? 'Todavía no se ha ensayado.'
@@ -1878,6 +1879,41 @@ async function _cdRender() {
   document.getElementById('cd-rehearse').onclick = () => void _cdRehearse();
   document.getElementById('cd-cutover').onclick = () => _cdCutoverConfirm(st);
   items.forEach((item, index) => { const button = document.getElementById(`cd-fix-${index}`); if (button) button.onclick = () => void _cdResolve(item, button); });
+}
+
+function _cdAccessView(st) {
+  const body = _cdBody(); if (!body) return;
+  const pending = !!st.access?.requestedAt;
+  const canRequest = st.access?.canRequest && !pending;
+  const detail = pending ? 'VELO recibió tu solicitud. Cuando la aprueben, podrás iniciar el ensayo.'
+    : canRequest ? 'Envía una solicitud a VELO para habilitar el ensayo de esta empresa.'
+    : 'Pide a VELO que habilite el ensayo para esta empresa.';
+  body.innerHTML = `<div class="alrt-sub">Empresa de VELO Cloud: <strong>${_cdEsc(st.tenant.name)}</strong></div>
+    ${_cdBox('a', pending ? 'Solicitud pendiente' : 'Migración pendiente de habilitación', detail)}
+    <div class="alrt-sub" id="cd-access-status" role="status"></div>
+    ${_cdFoot(`<button class="btn btn-out" onclick="closeModal()">Cerrar</button>
+      <button class="btn btn-ghost" id="cd-access-logout" type="button">Cambiar cuenta</button>
+      <button class="btn btn-out" id="cd-access-refresh" type="button">Consultar estado</button>
+      ${canRequest ? '<button class="btn btn-dark" id="cd-access-request" type="button">Solicitar habilitación</button>' : ''}`)}`;
+  const refresh = document.getElementById('cd-access-refresh');
+  const request = document.getElementById('cd-access-request');
+  const logout = document.getElementById('cd-access-logout');
+  const status = document.getElementById('cd-access-status');
+  async function act(name, data) {
+    for (const button of [refresh, request, logout]) if (button) button.disabled = true;
+    status.textContent = 'Consultando a VELO Cloud…';
+    try {
+      const out = await _cdApi(name, data);
+      if (!out?.ok) throw new Error(out?.error || 'No se pudo consultar a VELO Cloud');
+      if (_cdBody() === body) void _cdRender();
+    } catch (error) {
+      status.textContent = error.message;
+      for (const button of [refresh, request, logout]) if (button) button.disabled = false;
+    }
+  }
+  refresh.onclick = () => void act('access');
+  if (request) request.onclick = () => void act('access', { request: true });
+  logout.onclick = () => void act('logout');
 }
 
 function _cdResolveButton(item, index) {

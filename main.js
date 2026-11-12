@@ -24,7 +24,7 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
     'connection:handoffImportApply', 'connection:handoffPrepare',
     'connection:handoffActivate',
     // Pasar a VELO Cloud: la sesión de Cloud y el congelamiento son de esta PC.
-    'cloudDirect:status', 'cloudDirect:login', 'cloudDirect:logout', 'cloudDirect:progress',
+    'cloudDirect:status', 'cloudDirect:login', 'cloudDirect:logout', 'cloudDirect:progress', 'cloudDirect:access',
     'cloudDirect:prepareRehearsal', 'cloudDirect:runRehearsal', 'cloudDirect:cutover', 'cloudDirect:verify',
     'connection:clientPreflight', 'connection:setMode',
     'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke',
@@ -5699,6 +5699,7 @@ const cloudDirectHandle = (channel, run) => ipcMain.handle(channel, async (_, ar
 cloudDirectHandle('cloudDirect:status', () => cloudDirectFlow.status());
 cloudDirectHandle('cloudDirect:login', (_, { email, password, tenantId }) => cloudDirectFlow.login({ email, password, tenantId }));
 cloudDirectHandle('cloudDirect:logout', () => cloudDirectFlow.logout());
+cloudDirectHandle('cloudDirect:access', (_, { request }) => cloudDirectFlow.refreshAccess(request === true));
 ipcMain.handle('cloudDirect:progress', async () => ({ ok: true, data: cloudDirectFlow.progress() }));
 cloudDirectHandle('cloudDirect:prepareRehearsal', () => cloudDirectFlow.prepareRehearsal());
 cloudDirectHandle('cloudDirect:runRehearsal', (reqUser, { mapping }) => cloudDirectFlow.runRehearsal(mapping, reqUser));

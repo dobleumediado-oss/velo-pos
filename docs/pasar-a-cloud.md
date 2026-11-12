@@ -17,8 +17,9 @@ Cloud» y «Corte final a Cloud (con archivo)».
 
 1. **Entrar a VELO Cloud** con la cuenta de administración de la empresa (correo y
    contraseña; si la cuenta tiene varias empresas, se elige). Desktop no guarda la
-   contraseña; la sesión vive en memoria. La empresa tiene que estar habilitada en
-   Cloud (`DESKTOP_MIGRATION_TENANTS`).
+   contraseña y mantiene la sesión en memoria. Si el acceso está cerrado, pulsa
+   **Solicitar habilitación**. VELO lo aprueba en **Control Center → Empresas**.
+   Pulsa **Consultar estado** para continuar cuando habiliten el ensayo.
 2. **Revisión**: ventas de prueba con equipo sin anular, datos de prueba de VELO TECH
    (lo retira el superadmin), conteo en borrador y cajas abiertas. Cada cosa tiene su
    botón para resolverla ahí mismo. La caja abierta solo impide el corte.
