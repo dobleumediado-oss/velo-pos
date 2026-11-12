@@ -1,6 +1,6 @@
 # Historial de versiones
 
-## Sin publicar
+## 1.65.1
 
 - El display distingue hojas y rollos, se actualiza al cambiar de impresora
   y reserva el espacio del folio del reporte antes de confirmar.
