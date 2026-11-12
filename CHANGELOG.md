@@ -1,5 +1,10 @@
 # Historial de versiones
 
+## 1.65.2
+
+- Desde «Pasar a VELO Cloud» puedes solicitar la habilitación de la migración
+  y consultar si el Control Center ya la aprobó.
+
 ## 1.65.1
 
 - El display distingue hojas y rollos, se actualiza al cambiar de impresora
