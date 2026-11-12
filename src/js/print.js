@@ -172,16 +172,16 @@ function _categoryForJobType(jobType) {
   return _JOB_TYPE_CATEGORY[jobType] || jobType || 'reporte';
 }
 
-function _getPrintConfig() {
+function _getPrintConfig(settings = DB?.settings) {
   try {
-    return JSON.parse(DB?.settings?.print_route_config || DB?.settings?.print_config || '{}');
+    return JSON.parse(settings?.print_route_config || settings?.print_config || '{}');
   } catch { return {}; }
 }
 
-function _getPrinterBindings() {
+function _getPrinterBindings(settings = DB?.settings) {
   let saved = {};
-  try { saved = JSON.parse(DB?.settings?.printer_channel_bindings || '{}') || {}; } catch {}
-  const fallback = DB?.settings?.printer || '';
+  try { saved = JSON.parse(settings?.printer_channel_bindings || '{}') || {}; } catch {}
+  const fallback = settings?.printer || '';
   const value = (channel, legacy) => Object.prototype.hasOwnProperty.call(saved, channel)
     ? String(saved[channel] || '').trim() : String(legacy || '').trim();
   return {
@@ -190,27 +190,25 @@ function _getPrinterBindings() {
     caja: value('caja', fallback),
     oficina: value('oficina', fallback),
     almacen: value('almacen', fallback),
-    etiquetas: value('etiquetas', DB?.settings?.barcode_printer || ''),
+    etiquetas: value('etiquetas', settings?.barcode_printer || ''),
   };
 }
 
-function _getPrinterChannelProfiles() {
+function _getPrinterChannelProfiles(settings = DB?.settings) {
   let saved = {};
-  try { saved = JSON.parse(DB?.settings?.printer_channel_profiles || '{}') || {}; } catch {}
+  try { saved = JSON.parse(settings?.printer_channel_profiles || '{}') || {}; } catch {}
   return saved && typeof saved === 'object' ? saved : {};
 }
 
-function _getCategoryConfig(category) {
-  const all = _getPrintConfig();
+function _getCategoryConfig(category, settings = DB?.settings, all = _getPrintConfig(settings)) {
   const cat = all[category] || {};
-  const definition = PRINT_CATEGORIES[category] || {};
   const channel = PRINT_CHANNELS[cat.channel] ? cat.channel : (_DEFAULT_PRINT_CHANNEL[category] || 'oficina');
-  const bindings = _getPrinterBindings();
-  const profiles = _getPrinterChannelProfiles();
+  const bindings = _getPrinterBindings(settings);
+  const profiles = _getPrinterChannelProfiles(settings);
   const hasExplicitProfile = Object.prototype.hasOwnProperty.call(profiles, channel);
   let hasExplicitBinding = false;
   try {
-    const rawBindings = JSON.parse(DB?.settings?.printer_channel_bindings || '{}') || {};
+    const rawBindings = JSON.parse(settings?.printer_channel_bindings || '{}') || {};
     hasExplicitBinding = Object.prototype.hasOwnProperty.call(rawBindings, channel);
   } catch {}
   return {
@@ -222,7 +220,7 @@ function _getCategoryConfig(category) {
     printer:   String(hasExplicitBinding ? bindings[channel] : (cat.printer || bindings[channel] || '')).trim(),
     template:  (cat.template || '').trim(),
     options:   cat.options && typeof cat.options === 'object' && !Array.isArray(cat.options) ? cat.options : {},
-    profileId: String(cat.profileId || profiles[channel] || '').trim(),
+    profileId: String((hasExplicitProfile ? profiles[channel] : cat.profileId) || '').trim(),
     copies:    Math.max(1, Math.min(9, parseInt(cat.copies, 10) || 1)),
     preview: true,
     autoPrint: false,
@@ -1526,11 +1524,11 @@ function guardarDocumentoPDF(buildAndPrintFn, suggestedName) {
   try {
     const result = (typeof buildAndPrintFn === 'function') ? buildAndPrintFn() : buildAndPrintFn;
     if (result && typeof result.then === 'function') {
-      result.then(finishWithHTML).catch(e => {
-        if (window._pdfSaveRequest === request) window._pdfSaveRequest = null;
-        toast(e?.message || 'No se pudo preparar el PDF', 'err');
-      });
-      return;
+      if (window._pdfSaveRequest !== request) return result;
+      window._pdfSaveRequest = null;
+      return result.then(html => {
+        if (typeof html === 'string' && html.trim()) printHTML(html, 'documento', { mode: 'pdf', suggestedName: request.name });
+      }).catch(error => toast(error?.message || 'No se pudo preparar el PDF', 'err'));
     }
     finishWithHTML(result);
   } catch (e) {
@@ -1689,7 +1687,7 @@ function _openPrintPreview(html, opts = {}) {
         title="Vista previa de impresión"
         style="width:100%;height:min(68vh,720px);border:0;background:#fff;display:block"></iframe>
     </div>
-    <div class="modal-foot" style="flex-wrap:wrap">
+    <div id="_print_preview_actions" class="modal-foot" style="flex-wrap:wrap">
       <button class="btn btn-out" onclick="_printPreviewClose()">Cerrar</button>
       ${job.mode === 'pdf'
         ? `<button class="btn btn-out" onclick="_printPreviewPrint()">${svg('print')} Imprimir</button>`
@@ -1733,7 +1731,9 @@ async function _printPreviewLoadPrinters(job) {
     if (window._printPreviewJob !== job) return;
     const select = document.getElementById('_print_preview_printer');
     if (!select || !Array.isArray(printers)) return;
-    select.innerHTML += printers.filter(p => p?.name).map(p =>
+    const isReport = _categoryForJobType(job.jobType) === 'reporte';
+    select.innerHTML += printers.filter(p => p?.name && (!isReport ||
+      typeof printerAcceptsReportSheets !== 'function' || printerAcceptsReportSheets(p, '', DB?.settings))).map(p =>
       `<option value="${_escHtml(p.name).replace(/"/g, '&quot;')}">${_escHtml(p.name)}</option>`).join('');
     const selected = job.printOptions.printerName;
     if (Object.prototype.hasOwnProperty.call(job.printOptions, 'printerName')) {
@@ -1784,56 +1784,61 @@ function _injectPrintedDocumentNumber(html, number) {
 async function _ensurePrintDocumentNumber(job) {
   if (!job || !_printNeedsReportNumber(job) || job.documentNumber) return job;
   if (!window.api?.documents?.issue) return job;
-  const sourceId = `print:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  job.numberSourceId ||= `print:${Date.now()}:${Math.random().toString(36).slice(2)}`;
   const result = await window.api.documents.issue({
     kind: 'reporte',
     sourceType: 'print_job',
-    sourceId,
+    sourceId: job.numberSourceId,
   });
   if (!result?.ok || !result.data?.formatted_number) {
     throw new Error(result?.error || 'No se pudo asignar el número del reporte');
   }
   job.documentNumber = result.data.formatted_number;
+  if (job.referenceId == null) job.referenceId = result.data.sequence_number;
   job.html = _injectPrintedDocumentNumber(job.html, job.documentNumber);
   job.suggestedName = `${job.suggestedName || 'Reporte'}-${job.documentNumber}`;
   return job;
 }
 
-async function _printPreviewSavePDF() {
+async function _printPreviewConfirm(mode) {
   const job = window._printPreviewJob;
-  if (!job) return;
+  if (!job || job.confirming) return;
+  job.confirming = true;
+  const actions = document.getElementById('_print_preview_actions');
+  actions?.querySelectorAll('button').forEach(button => { button.disabled = true; });
   try {
     await _ensurePrintDocumentNumber(job);
-    await _guardarPDF(job.html, job.suggestedName);
-  } catch (e) {
-    toast(e?.message || 'No se pudo numerar el reporte', 'err');
+    if (window._printPreviewJob !== job) return;
+    if (mode === 'pdf') {
+      await _guardarPDF(job.html, job.suggestedName);
+      return;
+    }
+
+    window._printPreviewJob = null;
+    if (typeof closeModal === 'function') closeModal();
+    window._printPreviewBypass = true;
+    try {
+      if (job.source === 'html') {
+        _dispatchPrintHTML(job.html, job.jobType || 'reporte', { ...job.printOptions, referenceId: job.referenceId });
+      } else {
+        _openPrintWindow(job.html, job.jobType, job.referenceId, job.isReprint, job.printOptions || {});
+      }
+    } finally {
+      window._printPreviewBypass = false;
+    }
+    const after = window._printAfter;
+    window._printAfter = null;
+    if (typeof after === 'function') setTimeout(after, 250);
+  } catch (error) {
+    toast(error?.message || 'No se pudo preparar el documento', 'err');
+  } finally {
+    job.confirming = false;
+    actions?.querySelectorAll('button').forEach(button => { button.disabled = false; });
   }
 }
 
-async function _printPreviewPrint() {
-  const job = window._printPreviewJob;
-  if (!job) return;
-  try {
-    await _ensurePrintDocumentNumber(job);
-  } catch (e) {
-    toast(e?.message || 'No se pudo numerar el reporte', 'err');
-    return;
-  }
-  window._printPreviewJob = null;
-  if (typeof closeModal === 'function') closeModal();
-  window._printPreviewBypass = true;
-  try {
-    if (job.source === 'html') _dispatchPrintHTML(job.html, job.jobType || 'reporte', job.printOptions || {});
-    else _openPrintWindow(job.html, job.jobType, job.referenceId, job.isReprint, job.printOptions || {});
-  } finally {
-    window._printPreviewBypass = false;
-  }
-  // Encadenar la siguiente impresión (ej. el conduce DESPUÉS de la factura),
-  // ya con el modal de la factura cerrado, para que no se pisen.
-  const after = window._printAfter;
-  window._printAfter = null;
-  if (typeof after === 'function') setTimeout(after, 250);
-}
+function _printPreviewSavePDF() { return _printPreviewConfirm('pdf'); }
+function _printPreviewPrint() { return _printPreviewConfirm('print'); }
 
 // ── Multi-terminal: elección de destino de impresión ─────────────────────────
 // Solo aplica a una terminal CLIENTE sin impresora local. En local/servidor o con
@@ -1993,7 +1998,7 @@ function _dispatchPrintWindow(html, jobType = '', referenceId = null, isReprint 
         userId: user?.id || null,
         copies: Math.max(1, parseInt(printOptions.copies || catCfg.copies, 10) || 1),
       }).then(result => {
-        if (!result?.ok && !result?.duplicate) {
+        if (!result?.ok && !result?.duplicate && !result?.cancelled) {
           if (result?.error && result.error !== 'Impresión cancelada o fallida') {
             toast(`Error de impresión: ${result.error}`, 'err');
           }
@@ -2023,7 +2028,7 @@ function _dispatchPrintWindow(html, jobType = '', referenceId = null, isReprint 
           userId: user?.id || null,
           copies: Math.max(1, parseInt(printOptions.copies || catCfg.copies, 10) || 1),
         }).then(result => {
-          if (!result?.ok && !result?.duplicate) _openPrintWindowFallback(html);
+          if (!result?.ok && !result?.duplicate && !result?.cancelled) _openPrintWindowFallback(html);
         }).catch(() => _openPrintWindowFallback(html));
         return;
       }
@@ -2047,7 +2052,7 @@ function _dispatchPrintWindow(html, jobType = '', referenceId = null, isReprint 
       userId: user?.id || null,
       copies: Math.max(1, parseInt(printOptions.copies || catCfg.copies, 10) || 1),
     }).then(result => {
-      if (!result?.ok && !result?.duplicate) {
+      if (!result?.ok && !result?.duplicate && !result?.cancelled) {
         if (result?.error && result.error !== 'Impresión cancelada o fallida') {
           toast(`Error de impresión: ${result.error}`, 'err');
         }
@@ -2131,8 +2136,16 @@ function _printViaIframe(html) {
 // ══════════════════════════════════════════════
 // printHTML — Para reportes A4 (se mantiene igual)
 // ══════════════════════════════════════════════
-function printHTML(html, category = 'reporte') {
+function printHTML(html, category = 'reporte', options = {}) {
   html = _ensureUtf8HTML(html);
+  if (options.mode) {
+    return _openPrintPreview(html, {
+      jobType: category,
+      mode: options.mode,
+      suggestedName: options.suggestedName,
+      source: 'html',
+    });
+  }
   if (window._excelSaveRequest && typeof _excelConsumeHTML === 'function') {
     const request = window._excelSaveRequest;
     _excelConsumeHTML(html, request);
@@ -2166,24 +2179,29 @@ function _dispatchPrintHTML(html, category = 'reporte', printOptions = {}) {
   category = _categoryForJobType(category);
   // Multi-terminal: reportes también respetan la elección de destino (cliente sin
   // impresora → servidor / aquí).
-  if (!Object.prototype.hasOwnProperty.call(printOptions, 'printerName') && _shouldOfferServerPrint(category)) { _offerPrintTarget(html, category, null); return; }
+  if (!Object.prototype.hasOwnProperty.call(printOptions, 'printerName') && _shouldOfferServerPrint(category)) { _offerPrintTarget(html, category, printOptions.referenceId ?? null); return; }
   const catCfg = _getCategoryConfig(category);
 
+  const manual = Object.hasOwn(printOptions, 'printerName');
+  let printerName = manual ? printOptions.printerName : (catCfg.printer || (catCfg.bindingConfigured ? '' : _getSavedPrinter()));
+  if (category === 'reporte' && printerName && typeof printerAcceptsReportSheets === 'function' &&
+      !printerAcceptsReportSheets(printerName, manual ? '' : catCfg.profileId, DB?.settings)) {
+    toast('El reporte requiere una impresora de hojas. Elige una en el diálogo.', 'w');
+    printerName = '';
+  }
   if (window.api?.print?.html) {
     _printDispatch({
       html,
-      printerName: Object.prototype.hasOwnProperty.call(printOptions, 'printerName')
-        ? (printOptions.printerName || undefined)
-        : (catCfg.printer || (catCfg.bindingConfigured ? '' : _getSavedPrinter()) || undefined),
+      printerName: printerName || undefined,
       printerWidth: category === 'servicio_etiqueta' ? '62mm' : undefined,
       printerHeight: category === 'servicio_etiqueta' ? '40mm' : undefined,
       jobType: category,
-      referenceId: null,
+      referenceId: printOptions.referenceId ?? null,
       userId: user?.id,
       copies: catCfg.copies || 1,
     })
       .then(result => {
-        if (!result?.ok && !result?.duplicate) _openPrintWindowFallback(html);
+        if (!result?.ok && !result?.duplicate && !result?.cancelled) _openPrintWindowFallback(html);
       })
       .catch(() => _openPrintWindowFallback(html));
     return;

@@ -44,7 +44,7 @@ require('./src/main/ipc-bridge').installIpcInterceptor(ipcMain, {
     'business:getAll', 'business:getActive', 'business:selectForLogin', 'business:switch',
     // Impresión = operación de dispositivo: cada terminal imprime en SU impresora.
     // (print:onServer NO va aquí: es la opción explícita de imprimir en el servidor.)
-    'print:html', 'print:zpl', 'print:acrobat', 'print:toPDF', 'excel:saveReport', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
+    'print:html', 'print:zpl', 'print:acrobat', 'print:previewPdf', 'print:printerProfile', 'print:toPDF', 'excel:saveReport', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
     'shell:openExternal', 'shell:openWhatsApp', 'shell:showItemInFolder',
     // Los selectores de archivo/carpeta pertenecen a la PC que muestra la
     // ventana. La creación/verificación se mantiene mode-aware para operar
@@ -4776,7 +4776,11 @@ async function _attemptPrintHTML({ html, printerName, printerWidth, printerHeigh
     await new Promise((resolve, reject) => {
       printWin.webContents.print(printOptions, (success, errType) => {
         if (success) resolve();
-        else reject(new Error(errType || 'Impresión cancelada o fallida'));
+        else {
+          const error = new Error(errType || 'Impresión cancelada o fallida');
+          if (/cancel/i.test(errType || '')) error.code = 'PRINT_CANCELLED';
+          reject(error);
+        }
       });
     });
     await _thermalFeedCut(printerName, isThermal);
@@ -4878,7 +4882,7 @@ ipcMain.handle('print:html', async (_, {
       // o temporalmente no disponible), no una cancelación explícita del usuario.
       // En modo diálogo (carta) un fallo suele ser el usuario cancelando — no reintentar.
       const wasThermalAttempt = !!(printerName && printerWidth);
-      if (!wasThermalAttempt || firstErr?.code === 'PRINTER_UNAVAILABLE') throw firstErr;
+      if (!wasThermalAttempt || ['PRINTER_UNAVAILABLE', 'PRINT_CANCELLED'].includes(firstErr?.code)) throw firstErr;
       await new Promise(r => setTimeout(r, 1200));
       await _attemptPrintHTML({ html, printerName, printerWidth, printerHeight, pageHint, copies });
     }
@@ -4896,6 +4900,7 @@ ipcMain.handle('print:html', async (_, {
     return { ok: true };
 
   } catch (e) {
+    if (e.code === 'PRINT_CANCELLED') return { ok: false, cancelled: true };
     // Registrar fallo en print_jobs
     if (jobType && referenceId) {
       try {
@@ -4934,8 +4939,10 @@ ipcMain.handle('print:onServer', async (_, {
     try { bindings = JSON.parse(settingsRepo.get('printer_channel_bindings') || '{}') || {}; } catch {}
     try { profiles = JSON.parse(settingsRepo.get('printer_channel_profiles') || '{}') || {}; } catch {}
     const safeChannel = ['ventas','pagos','caja','oficina','almacen'].includes(channel) ? channel : 'ventas';
-    const printerName  = bindings[safeChannel] || settingsRepo.get('printer') || undefined;
-    const profileId    = profiles[safeChannel] || settingsRepo.get('printer_profile') || '';
+    const printerName = Object.hasOwn(bindings, safeChannel)
+      ? bindings[safeChannel] || undefined : settingsRepo.get('printer') || undefined;
+    const profileId = Object.hasOwn(profiles, safeChannel)
+      ? profiles[safeChannel] || '' : settingsRepo.get('printer_profile') || '';
     let ptype = settingsRepo.get('printer_type') || '';
     let resolvedWidth = 0;
     try {
@@ -4949,7 +4956,14 @@ ipcMain.handle('print:onServer', async (_, {
       resolvedWidth = Number(resolved?.widthMm) || 0;
     } catch {}
     const savedWidth = resolvedWidth || Number(settingsRepo.get('printer_width_mm')) || 0;
-    const printerWidth = ptype === 'carta' ? undefined
+    if (jobType === 'reporte') {
+      if (!printerName) throw new Error('El servidor no tiene una impresora asignada para reportes.');
+      const { printerAcceptsReportSheets } = require('./src/js/printer-profiles');
+      if (!printerAcceptsReportSheets(printerName, profileId, { barcode_printer: settingsRepo.get('barcode_printer') })) {
+        throw new Error('El canal del servidor requiere una impresora de hojas para imprimir el reporte.');
+      }
+    }
+    const printerWidth = jobType === 'reporte' || ptype === 'carta' ? undefined
       : savedWidth ? Math.round(savedWidth * 1000)
       : ptype === '58mm' ? 58000 : ptype === '72mm' ? 72000
       : ptype === '108mm' ? 108000 : ptype === '80mm' ? 80000 : undefined;
@@ -8091,6 +8105,15 @@ ipcMain.handle('ncf:getLog', async (_, { from, to, status, type, requestUserId }
     return { ok:true, data: ncfRepo.getLog({ from, to, status, type }) };
   } catch(e) { return { ok:false, error:e.message }; }
 });
+ipcMain.handle('ncf:getPrintableSales', async (_, { from, to, requestUserId } = {}) => {
+  try {
+    _moduleAuthorizedUser(requestUserId, 'reportes');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) {
+      throw new Error('Selecciona un período válido para las copias.');
+    }
+    return { ok: true, data: ncfRepo.getLog({ from, to, status: 'emitido', copies: true }) };
+  } catch (error) { return { ok: false, error: error.message }; }
+});
 ipcMain.handle('ncf:getVoided', async (_, { from, to, requestUserId } = {}) => {
   try {
     _moduleAuthorizedUser(requestUserId, 'reportes');
@@ -9440,7 +9463,7 @@ function setupMultiTerminal() {
       'business:getAll', 'business:getActive', 'business:selectForLogin', 'business:switch',
       'license:getStatus', 'license:activate', 'license:getMachineId', 'license:revoke',
       'update:check', 'update:download', 'update:install',
-      'print:html', 'print:zpl', 'print:acrobat', 'print:toPDF', 'excel:saveReport', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
+      'print:html', 'print:zpl', 'print:acrobat', 'print:previewPdf', 'print:printerProfile', 'print:toPDF', 'excel:saveReport', 'print:getPrinters', 'print:savePrinter', 'print:saveConfig', 'print:getJobs',
       'backup:pickExternalDirectory', 'backup:pickEncryptedFile',
     ]);
     const serviceSecurity = () => {

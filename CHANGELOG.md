@@ -1,5 +1,15 @@
 # Historial de versiones
 
+## Sin publicar
+
+- El 607 y el 608 usan la fecha fiscal de República Dominicana y descartan
+  consultas de filtros anteriores. El total anulado del 608 coincide con su
+  vista impresa.
+- Las copias en lote verifican el comprobante fiscal y conservan los estilos
+  y el autoajuste de cada factura.
+- La vista previa confirma cada trabajo una vez. En cada terminal se conserva
+  la impresora asignada y se genera localmente la vista previa PDF.
+
 ## 1.65.0
 
 - Velo POS Desktop permite reservar y enviar comprobantes E31 y E32 por MSeller.

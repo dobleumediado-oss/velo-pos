@@ -214,6 +214,54 @@ async function renderCase(win, testCase) {
   return { testCase, layout, renderInfo, saved };
 }
 
+async function fiscalCopiesCase(win) {
+  const source = fs.readFileSync(path.join(__dirname, '../src/js/reportes.js'), 'utf8');
+  const batch = source.slice(source.indexOf('function _repEstilosCopia('), source.indexOf('async function _repGenerarCopias('));
+  const regular = sampleSale('factura', 20, 91);
+  const regularHtml = renderCartaCompacta(regular, { ...cfg, factura_autoajuste: '1' }, {
+    ...opts, _estilos: { fontSize: '13pt' },
+  });
+  const electronicHtml = '<!doctype html><html><head><style>body{font-size:11px} .top{color:rgb(12,34,56)}</style></head><body><div class="top">e-CF de prueba</div></body></html>';
+  const ids = [
+    { id: 91, ncf: regular.ncf, fiscalDate: '2026-11-30' },
+    { id: 92, ncf: 'E320000000092', fiscalDate: '2026-11-30' },
+  ];
+  await win.loadURL('about:blank');
+  const html = await win.webContents.executeJavaScript(`
+    (async () => {
+      const ids = ${JSON.stringify(ids)};
+      window.api = { sales: { getById: async ({ id }) => ({
+        ...ids.find(row => row.id === id), status: 'completed', ecf_environment: id === 92 ? 'production' : null,
+      }) } };
+      const ventasPrintPayload = (sale, { original }) => {
+        if (!original) throw new Error('El lote debe imprimir la factura original');
+        return sale;
+      };
+      const printReceipt = () => ${JSON.stringify(regularHtml)};
+      const _printEcfRepresentation = () => ${JSON.stringify(electronicHtml)};
+      ${batch}
+      return _repCopiasHTML(ids, 'carta_compacta');
+    })()
+  `);
+  const testCase = {
+    name: '10-lote-comprobantes.pdf',
+    html,
+    expected: { profile: 'css-fixed', minPages: 2, maxPages: 2 },
+  };
+  const rendered = await renderCase(win, testCase);
+  const styles = await win.webContents.executeJavaScript(`
+    [...document.querySelectorAll('.velo-copia')].map(copy => ({
+      font: copy.getAttribute('data-font-pt'),
+      color: getComputedStyle(copy.querySelector('.top')).color,
+    }))
+  `);
+  assert.ok(Number(styles[0].font) >= 7.8, 'el autoajuste se ejecuta dentro de la factura Carta Compacta');
+  assert.equal(styles[1].font, null, 'el autoajuste no cambia otras facturas');
+  assert.equal(styles[1].color, 'rgb(12, 34, 56)', 'la segunda factura conserva sus estilos');
+  assert.notEqual(styles[0].color, styles[1].color, 'la segunda factura no altera la primera');
+  return rendered;
+}
+
 async function run() {
   fs.mkdirSync(outputDir, { recursive: true });
 
@@ -236,6 +284,7 @@ async function run() {
   const results = [];
   try {
     for (const testCase of buildCases()) results.push(await renderCase(win, testCase));
+    results.push(await fiscalCopiesCase(win));
   } finally {
     if (!win.isDestroyed()) win.destroy();
   }

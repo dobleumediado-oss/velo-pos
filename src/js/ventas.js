@@ -2523,12 +2523,12 @@ async function reimprimirVenta(saleId) {
   });
 }
 
-function ventasPrintPayload(sale) {
+function ventasPrintPayload(sale, { original = false } = {}) {
   const fecha = sale.original_sale_date || (sale.created_at || '').split('T')[0];
   const hora  = sale.created_at
     ? new Date(sale.created_at).toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' }) : '';
   const _custPdf = (DB.customers || []).find(c => c.id === sale.customer_id);
-  const adjustedCopy = ventasHasAdjustedCopy(sale);
+  const adjustedCopy = !original && ventasHasAdjustedCopy(sale);
   const printItems = adjustedCopy ? sale.adjusted_items : (sale.items || []);
   const relatedDocuments = adjustedCopy
     ? (sale.adjustment_documents || []).map(document => facturaLabel(document)).filter(Boolean)

@@ -549,6 +549,7 @@ const api = {
     validateRnc:     (d) => ipcRenderer.invoke('ncf:validateRnc', d),
     getLog:          (d) => ipcRenderer.invoke('ncf:getLog', d),
     getVoided:       (d) => ipcRenderer.invoke('ncf:getVoided', d),
+    getPrintableSales: (d) => ipcRenderer.invoke('ncf:getPrintableSales', d),
   },
 
   // ── Gastos y cuentas por pagar ───────────

@@ -62,27 +62,6 @@ function pcPrinterConnection(printers, name) {
   };
 }
 
-function pcGetBindings(settings, printConfig) {
-  const saved = pcParseConfig(settings?.printer_channel_bindings);
-  const bindings = {};
-  Object.keys(PRINT_CHANNELS).forEach(channel => {
-    const hasSaved = Object.prototype.hasOwnProperty.call(saved, channel);
-    bindings[channel] = String(hasSaved
-      ? (saved[channel] || '')
-      : (channel === 'etiquetas' ? settings?.barcode_printer : settings?.printer) || '').trim();
-  });
-  // Migración silenciosa: una ruta antigua con nombre físico alimenta el canal
-  // local solo cuando todavía no existe una asignación explícita.
-  Object.entries(printConfig || {}).forEach(([category, config]) => {
-    const channel = PRINT_CHANNELS[config?.channel]
-      ? config.channel : (_DEFAULT_PRINT_CHANNEL[category] || 'oficina');
-    if (!Object.prototype.hasOwnProperty.call(saved, channel) && !bindings[channel] && config?.printer) {
-      bindings[channel] = String(config.printer).trim();
-    }
-  });
-  return bindings;
-}
-
 function pcGetProfiles(settings) {
   const saved = pcParseConfig(settings?.printer_channel_profiles);
   return Object.fromEntries(Object.keys(PRINT_CHANNELS).map(channel => [
@@ -111,7 +90,10 @@ function pcProfileOptions(current, isLabel) {
 }
 
 function pcPrinterOptions(current, printers, emptyLabel = 'Sin asignar') {
-  return `<option value="">${pcEsc(emptyLabel)}</option>
+  const unavailable = current && !pcConnected(printers, current)
+    ? `<option value="${pcEsc(current)}" selected>${pcEsc(current)} · No disponible</option>`
+    : '';
+  return `<option value="">${pcEsc(emptyLabel)}</option>${unavailable}
     ${(printers || []).map(printer => `<option value="${pcEsc(printer.name)}" ${printer.name === current ? 'selected' : ''}>
       ${pcEsc(printer.displayName || printer.name)}${printer.isDefault ? ' · predeterminada del sistema' : ''}
     </option>`).join('')}`;
@@ -142,7 +124,9 @@ function pcTemplatesForCategory(category) {
   const definition = PRINT_CATEGORIES[category] || {};
   const all = (typeof PLANTILLAS !== 'undefined' ? PLANTILLAS : [])
     .filter(template => template && template.tipo !== 'etiqueta');
-  return definition.media === 'sheet' ? all.filter(template => template.tipo === 'carta') : all;
+  return definition.media === 'sheet'
+    ? all.filter(template => template.tipo === 'carta' && (category !== 'reporte' || template.id !== 'media_carta'))
+    : all;
 }
 
 function pcTemplateOptions(category, current) {
@@ -222,7 +206,7 @@ async function renderPrintingCenter(el) {
   const documentPrinters = pcDocumentPrinters(printers, settings);
   const labelPrinters = pcLabelPrinters(printers, settings);
   const printConfig = pcParseConfig(settings.print_route_config || settings.print_config);
-  const bindings = pcGetBindings(settings, printConfig);
+  const bindings = _getPrinterBindings(settings);
   const profiles = pcGetProfiles(settings);
   _pcState = { root, settings, printers, documentPrinters, labelPrinters, jobs, printConfig, bindings, profiles };
 
@@ -385,21 +369,30 @@ function pcRenderDevices() {
     </div>`;
 }
 
+function pcRouteStatus(category, route, printers, settings) {
+  const { printer, profileId } = route;
+  const connection = pcPrinterConnection(printers, printer);
+  const incompatible = category === 'reporte' && printer && typeof printerAcceptsReportSheets === 'function' &&
+    !printerAcceptsReportSheets(connection.printer || printer, profileId, settings);
+  const ready = connection.ready && !incompatible;
+  const label = incompatible ? 'Papel incompatible: abrirá el diálogo'
+    : printer ? `${ready ? '✓' : '⚠'} ${printer}` : 'Sin impresora: abrirá el diálogo';
+  return { ready, label };
+}
+
 function pcRenderRoutes() {
-  const { root, printConfig, bindings, documentPrinters } = _pcState;
+  const { root, printConfig, documentPrinters } = _pcState;
   const rows = Object.entries(PRINT_CATEGORIES).map(([category, definition]) => {
     const config = printConfig[category] || {};
-    const channel = PRINT_CHANNELS[config.channel]
-      ? config.channel : (_DEFAULT_PRINT_CHANNEL[category] || 'oficina');
-    const assigned = bindings[channel] || '';
-    const available = pcConnected(documentPrinters, assigned);
+    const route = _getCategoryConfig(category, _pcState.settings, printConfig);
+    const { channel } = route;
+    const status = pcRouteStatus(category, route, documentPrinters, _pcState.settings);
     const copies = Math.max(1, Math.min(9, parseInt(config.copies, 10) || 1));
     return `<tr data-category="${category}">
-      <td><strong>${pcEsc(definition.label)}</strong><div class="pc-route-status ${available ? 'ok' : ''}">
-        ${assigned ? `${available ? '✓' : '⚠'} ${pcEsc(assigned)}` : 'Sin impresora: abrirá el diálogo'}
-      </div></td>
+      <td><strong>${pcEsc(definition.label)}</strong><div class="pc-route-status ${status.ready ? 'ok' : ''}">${pcEsc(status.label)}</div></td>
       <td><select class="inp pc-route-channel" onchange="pcRouteChannelChanged(this)">${pcChannelOptions(channel)}</select></td>
       <td><select class="inp pc-route-template">${pcTemplateOptions(category, config.template || '')}</select>
+        ${category === 'reporte' ? '<div class="ts">Copias de facturas</div>' : ''}
         ${category === 'nomina' ? `<button class="btn btn-out btn-sm" style="margin-top:6px" onclick="pcOpenPayrollReceiptSettings()">${svg('edit')} Personalizar recibo</button>` : ''}
         ${category === 'ingreso' ? `<button class="btn btn-out btn-sm" style="margin-top:6px" onclick="pcOpenIncomeReceiptSettings()">${svg('edit')} Personalizar recibo</button>` : ''}</td>
       <td style="width:80px"><input class="inp pc-route-copies" type="number" min="1" max="9" value="${copies}"/></td>
@@ -533,11 +526,16 @@ async function pcSaveIncomeReceiptSettings() {
 function pcRouteChannelChanged(select) {
   const row = select.closest('tr');
   const status = row?.querySelector('.pc-route-status');
-  const printer = _pcState?.bindings?.[select.value] || '';
-  const available = pcConnected(_pcState?.documentPrinters, printer);
+  if (!row || !_pcState) return;
+  const category = row.dataset.category;
+  const existing = _pcState.printConfig[category] || {};
+  const current = _getCategoryConfig(category, _pcState.settings, _pcState.printConfig);
+  const route = select.value === current.channel ? existing : { channel: select.value };
+  const config = _getCategoryConfig(category, _pcState.settings, { [category]: route });
+  const next = pcRouteStatus(category, config, _pcState.documentPrinters, _pcState.settings);
   if (status) {
-    status.className = `pc-route-status ${available ? 'ok' : ''}`;
-    status.textContent = printer ? `${available ? '✓' : '⚠'} ${printer}` : 'Sin impresora: abrirá el diálogo';
+    status.className = `pc-route-status ${next.ready ? 'ok' : ''}`;
+    status.textContent = next.label;
   }
 }
 
@@ -1162,14 +1160,20 @@ function pcOpenLabelDesigner() {
 }
 
 async function pcSaveBindings() {
-  const bindings = {};
-  const profiles = {};
+  const bindings = pcParseConfig(_pcState.settings.printer_channel_bindings);
+  const profiles = pcParseConfig(_pcState.settings.printer_channel_profiles);
+  const initialBindings = _getPrinterBindings(_pcState.settings);
+  const initialProfiles = pcGetProfiles(_pcState.settings);
   _pcState.root.querySelectorAll('.pc-binding[data-channel]').forEach(select => {
-    bindings[select.dataset.channel] = select.value || '';
+    const channel = select.dataset.channel;
+    if (select.value !== initialBindings[channel]) bindings[channel] = select.value;
   });
   _pcState.root.querySelectorAll('.pc-binding-profile[data-channel]').forEach(select => {
-    profiles[select.dataset.channel] = select.value || '';
+    const channel = select.dataset.channel;
+    if (select.value !== initialProfiles[channel]) profiles[channel] = select.value;
   });
+  const current = { ...initialBindings, ...bindings };
+  const currentProfiles = { ...initialProfiles, ...profiles };
   const values = [
     window.api.settings.set({
       key: 'printer_channel_bindings',
@@ -1183,38 +1187,38 @@ async function pcSaveBindings() {
     }),
     window.api.settings.set({
       key: 'barcode_printer',
-      value: bindings.etiquetas || '',
+      value: current.etiquetas || '',
       requestUserId: user?.id,
     }),
     window.api.settings.set({
       key: 'barcode_printer_profile',
-      value: profiles.etiquetas || '',
+      value: currentProfiles.etiquetas || '',
       requestUserId: user?.id,
     }),
     window.api.settings.set({
       key: 'printer_profile',
-      value: profiles.ventas || '',
+      value: currentProfiles.ventas || '',
       requestUserId: user?.id,
     }),
   ];
   // Compatibilidad con módulos antiguos: la impresora general sigue al canal de ventas.
-  values.push(window.api.print.savePrinter({ printerName: bindings.ventas || '', requestUserId: user?.id }));
+  values.push(window.api.print.savePrinter({ printerName: current.ventas || '', requestUserId: user?.id }));
   const results = await Promise.all(values);
   const failed = results.find(result => !result?.ok);
   if (failed) return toast(failed.error || 'No se pudieron guardar las asignaciones', 'err');
   const raw = JSON.stringify(bindings);
   const profileRaw = JSON.stringify(profiles);
-  _pcState.bindings = bindings;
-  _pcState.profiles = profiles;
+  _pcState.bindings = current;
+  _pcState.profiles = currentProfiles;
   _pcState.settings.printer_channel_bindings = raw;
   _pcState.settings.printer_channel_profiles = profileRaw;
   Object.assign(DB.settings, {
     printer_channel_bindings: raw,
     printer_channel_profiles: profileRaw,
-    printer: bindings.ventas || '',
-    barcode_printer: bindings.etiquetas || '',
-    printer_profile: profiles.ventas || '',
-    barcode_printer_profile: profiles.etiquetas || '',
+    printer: current.ventas || '',
+    barcode_printer: current.etiquetas || '',
+    printer_profile: currentProfiles.ventas || '',
+    barcode_printer_profile: currentProfiles.etiquetas || '',
   });
   toast('✓ Canales guardados para esta terminal');
   pcRefresh();
@@ -1239,8 +1243,13 @@ async function pcSaveRoutes() {
   const next = {};
   _pcState.root.querySelectorAll('#pc-route-rows tr[data-category]').forEach(row => {
     const existing = _pcState.printConfig[row.dataset.category] || {};
-    next[row.dataset.category] = {
-      channel: row.querySelector('.pc-route-channel')?.value || _DEFAULT_PRINT_CHANNEL[row.dataset.category] || 'oficina',
+    const category = row.dataset.category;
+    const previous = _getCategoryConfig(category, _pcState.settings, _pcState.printConfig);
+    const channel = row.querySelector('.pc-route-channel')?.value || _DEFAULT_PRINT_CHANNEL[category] || 'oficina';
+    next[category] = {
+      channel,
+      ...(channel === previous.channel && existing.printer
+        ? { printer: existing.printer, profileId: existing.profileId || '' } : {}),
       template: row.querySelector('.pc-route-template')?.value || '',
       copies: Math.max(1, Math.min(9, parseInt(row.querySelector('.pc-route-copies')?.value, 10) || 1)),
       autoPrint: false,

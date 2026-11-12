@@ -85,3 +85,22 @@ No se hizo QA interactivo en vivo (sin impresora real en el entorno de dev, sin 
   asistente de calibración con medición de Bridge 0.6.0, y pasar oscuridad /
   velocidad / lenguaje de la Zebra y el motor térmico a ajustes por PC (hoy son
   del negocio; moverlos exige migrar el valor a cada terminal).
+
+## Reportes de comprobantes y copias
+
+- El 607 y el 608 filtran por el día dominicano de emisión o anulación. El
+  historial se consulta sin cambiar los registros guardados. Si el usuario
+  cambia los filtros mientras carga el reporte, se descarta la respuesta anterior.
+- El lote de copias usa el período fiscal. Incluye las facturas vigentes con
+  NCF tradicional válido y los E31/E32 aceptados en producción. Usa el
+  documento original para las copias y conserva el timbre electrónico.
+- Cada copia del lote empieza en una hoja Carta nueva. Los formatos y el
+  autoajuste se aplican dentro de cada factura. Una factura larga puede ocupar
+  varias hojas.
+- La vista previa PDF y la ficha del driver se generan en la terminal donde se
+  abren. El Centro conserva las impresoras asignadas que estén temporalmente
+  fuera de línea. Los reportes con destino de rollo o etiquetas abren el diálogo
+  local para elegir una impresora de hojas. El destino en servidor requiere un
+  canal compatible.
+- El PDF del lote se prepara antes de abrir el display. Imprimir o guardar
+  confirma una acción a la vez y reserva un solo folio de reporte.

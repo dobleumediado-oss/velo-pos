@@ -361,13 +361,16 @@ ok(batchOn10.length === 1 && Number(batchOn10[0].id) === Number(saleResult.saleI
 // Bases anteriores a ncf_log conservan comprobantes válidos solo en sales.
 // El PDF ya los encontraba; el modal 607 también debe hacerlo, sin migrar ni
 // reescribir documentos fiscales históricos al consultar.
-appDb.prepare('DELETE FROM ncf_log WHERE sale_id=?').run(saleResult.saleId);
+const legacyId = appDb.prepare(`
+  INSERT INTO sales(type,status,ncf,tax_amt,total,created_at,sale_date,fiscal_issued_at)
+  VALUES('factura','completed','B0100009998',18,118,'2026-09-10 09:00:00','2026-10-01','2026-09-10 09:00:00')
+`).run().lastInsertRowid;
 const legacyIssuedOn10 = DB.ncfRepo.getLog({
   from:'2026-09-10', to:'2026-09-10', status:'emitido',
-});
-ok(legacyIssuedOn10.length === 1 && Number(legacyIssuedOn10[0].sale_id) === Number(saleResult.saleId),
-  'el 607 incluye facturas históricas cuyo NCF existe en sales aunque falte en ncf_log');
-ok(Math.round(Number(legacyIssuedOn10[0].tax_amt) * 100) === 1800,
+}).find(row => row.sale_id === legacyId);
+ok(Boolean(legacyIssuedOn10),
+  'el 607 usa la fecha fiscal de facturas históricas sin ncf_log aunque se cambie la fecha operativa');
+ok(Math.round(Number(legacyIssuedOn10?.tax_amt) * 100) === 1800,
   'el comprobante histórico conserva su ITBIS en el modal 607');
 
 appDb.prepare(`UPDATE ncf_log
@@ -378,6 +381,18 @@ ok(voidedOn15.length === 1 && Number(voidedOn15[0].sale_id) === Number(gapSale.s
   'el 608 filtra por la fecha real de anulación');
 ok(voidedOnIssueDate.length === 0,
   'el 608 no confunde la fecha de emisión con la fecha de anulación');
+
+appDb.prepare("UPDATE ncf_log SET issued_at='2026-12-01 01:30:00' WHERE sale_id=?").run(saleResult.saleId);
+const copiesAtMonthEnd = DB.ncfRepo.getLog({
+  from: '2026-11-30', to: '2026-11-30', status: 'emitido', copies: true,
+});
+ok(copiesAtMonthEnd.some(row => row.id === saleResult.saleId && row.fiscalDate === '2026-11-30'),
+  'una emisión nocturna en República Dominicana se copia en el mes fiscal local');
+ok(!DB.ncfRepo.getLog({ from:'2026-12-01', to:'2026-12-01', status:'emitido' })
+  .some(row => row.sale_id === saleResult.saleId), 'el 607 no desplaza una emisión UTC al mes siguiente');
+appDb.prepare("UPDATE ncf_log SET voided_at='2026-12-01 01:30:00' WHERE sale_id=?").run(gapSale.saleId);
+ok(DB.ncfRepo.getVoided({ from:'2026-11-30', to:'2026-11-30' }).some(row => row.sale_id === gapSale.saleId),
+  'el 608 incluye una anulación nocturna en el día local');
 
 console.log('\n== Estado de cobro en el 607 ==');
 const payerId = DB.customersRepo.create({ name: 'CLIENTE COBROS', rnc: '101010101', credit_days: 30 });

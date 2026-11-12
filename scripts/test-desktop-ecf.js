@@ -127,6 +127,9 @@ async function test() {
   assert.equal((await call('getStatus', production.saleId)).status, 'Aceptado Condicional');
   assert.equal(salesRepo.getById(production.saleId).fiscal_issued_at, todayStr());
   assert.equal(ncfRepo.getLog({ status: 'emitido' }).length, 0);
+  assert.deepEqual(ncfRepo.getLog({ status: 'emitido', copies: true }), [{
+    id: production.saleId, ncf: production.ncf, fiscalDate: todayStr(),
+  }]);
   assert.throws(() => desktopEcf.providerResult({ ncf: e32.ncf }, e31.ncf), /mismo e-NCF/);
   assert.throws(() => desktopEcf.providerResult({ ncf: e31.ncf, rnc: '101000003' }, e31.ncf, '101000002'), /otro emisor/);
   console.log('✓ E31/E32: reserva transaccional, descuentos, límites, envío único, consulta, rechazo y aislamiento fiscal de TesteCF.');

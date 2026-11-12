@@ -919,7 +919,8 @@ function modalReporteNCF() {
       </div>
     </div>`;
   document.body.appendChild(overlay);
-  const close = () => overlay.remove();
+  let generation = 0;
+  const close = () => { generation += 1; overlay.remove(); };
   overlay.querySelector('#rep-close').onclick = close;
   overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
 
@@ -932,6 +933,7 @@ function modalReporteNCF() {
   overlay.querySelector('#rep-layout').onchange = (e) => savePref('velo.rep607.layout', e.target.value);
   ['rep-ncf-type', 'rep-tipo', 'rep-from', 'rep-to'].forEach(id => {
     overlay.querySelector('#' + id).addEventListener('change', () => {
+      generation += 1;
       buildPrintable = null; printBtn.disabled = true; excelBtn.disabled = true;
       overlay.querySelector('#rep-body').textContent = 'Pulsa Generar para aplicar los filtros seleccionados.';
     });
@@ -945,7 +947,9 @@ function modalReporteNCF() {
   };
 
   overlay.querySelector('#rep-gen').onclick = async () => {
+    const request = ++generation;
     const tipo = overlay.querySelector('#rep-tipo').value;
+    const selectedNcfType = overlay.querySelector('#rep-ncf-type').value;
     const from = overlay.querySelector('#rep-from').value;
     const to   = overlay.querySelector('#rep-to').value;
     const body = overlay.querySelector('#rep-body');
@@ -953,16 +957,25 @@ function modalReporteNCF() {
     body.innerHTML = '<div style="text-align:center;color:var(--muted2);padding:24px">Cargando…</div>';
     printBtn.disabled = true; excelBtn.disabled = true; buildPrintable = null;
 
+    if (!from || !to || from > to) {
+      body.textContent = 'Selecciona un período válido.';
+      return;
+    }
     const requestUserId = user?.id;
-    const res = is608
-      ? await window.api.ncf.getVoided({ from, to, requestUserId })
-      : await window.api.ncf.getLog({ from, to, status: 'emitido', requestUserId });
+    let res;
+    try {
+      res = is608
+        ? await window.api.ncf.getVoided({ from, to, requestUserId })
+        : await window.api.ncf.getLog({ from, to, status: 'emitido', requestUserId });
+    } catch (error) {
+      res = { ok: false, error: error?.message || 'No se pudo consultar el reporte' };
+    }
+    if (request !== generation) return;
     if (!res?.ok) { body.innerHTML = `<div style="color:#ef4444;padding:16px">${esc(res?.error||'Error al generar')}</div>`; return; }
 
     // Orden de impresión: cronológico (lo emitido primero arriba) y, dentro del
     // mismo día, por NCF. Así la secuencia de cada tipo se lee de corrido.
     const reportDay = (r) => String((is608 ? (r.voided_at || r.issued_at) : r.issued_at) || '').split('T')[0].split(' ')[0];
-    const selectedNcfType = overlay.querySelector('#rep-ncf-type').value;
     const rows = (res.data || []).filter(row => !selectedNcfType || String(row.type || '').toUpperCase() === selectedNcfType).sort((a, b) =>
       reportDay(a).localeCompare(reportDay(b)) || String(a.ncf || '').localeCompare(String(b.ncf || '')) ||
       Number(a.sale_id || 0) - Number(b.sale_id || 0));
@@ -978,6 +991,7 @@ function modalReporteNCF() {
     const salesTotal = sum(sales, amount), salesTax = sum(sales, tax);
     const creditTotal = sum(credits, amount), creditTax = sum(credits, tax);
     const netTotal = salesTotal - creditTotal, netTax = salesTax - creditTax;
+    const voidedTotal = salesTotal + creditTotal, voidedTax = salesTax + creditTax;
     const pendingTotal = sum(rows, r => Number(r.pending_amount || 0));
     const title = is608 ? '608 — Comprobantes Anulados' : '607 — Comprobantes Emitidos';
     const STATE_ORDER = ['PAGADA','PARCIAL','PENDIENTE','DEVUELTA','APLICADA','ANULADA','SIN DOCUMENTO'];
@@ -1020,7 +1034,9 @@ function modalReporteNCF() {
       </div>` : ''}
       <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;font-size:12px">
         <div><strong>${rows.length}</strong> comprobante(s) · del más antiguo al más reciente</div>
-        <div>ITBIS neto: <strong>${fmt(netTax)}</strong> · Total neto: <strong>${fmt(netTotal)}</strong>${is608 ? '' : ` · Pendiente de cobro: <strong>${fmt(pendingTotal)}</strong>`}</div>
+        <div>${is608
+          ? `ITBIS anulado: <strong>${fmt(voidedTax)}</strong> · Total anulado: <strong>${fmt(voidedTotal)}</strong>`
+          : `ITBIS neto: <strong>${fmt(netTax)}</strong> · Total neto: <strong>${fmt(netTotal)}</strong> · Pendiente de cobro: <strong>${fmt(pendingTotal)}</strong>`}</div>
       </div>
       ${is608 ? '' : `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${byState.map(g =>
         `<span class="badge ${SCREEN_BADGE[g.label] || 'n'}" style="font-size:10.5px">${esc(g.label)} · ${g.count}${g.pending > 0 ? ` · ${fmt(g.pending)} pendiente` : ''}</span>`).join('')}</div>`}
@@ -1050,15 +1066,15 @@ function modalReporteNCF() {
     const lead = is608 ? 7 : 7;
     const tail = is608 ? '' : '<td></td><td></td>';
     const footRows = is608
-      ? `<tr class="net"><td colspan="${lead}">TOTAL ANULADO (${rows.length})</td><td class="r">${fmt(salesTax + creditTax)}</td><td class="r">${fmt(salesTotal + creditTotal)}</td></tr>`
+      ? `<tr class="net"><td colspan="${lead}">TOTAL ANULADO (${rows.length})</td><td class="r">${fmt(voidedTax)}</td><td class="r">${fmt(voidedTotal)}</td></tr>`
       : `<tr><td colspan="${lead}">Facturas y notas de débito (${sales.length})</td><td class="r">${fmt(salesTax)}</td><td class="r">${fmt(salesTotal)}</td><td class="r">${fmt(pendingTotal)}</td><td></td></tr>
          ${credits.length ? `<tr><td colspan="${lead}">Menos notas de crédito B04 (${credits.length})</td><td class="r">−${fmt(creditTax)}</td><td class="r">−${fmt(creditTotal)}</td>${tail}</tr>` : ''}
          <tr class="net"><td colspan="${lead}">TOTAL NETO DEL PERÍODO</td><td class="r">${fmt(netTax)}</td><td class="r">${fmt(netTotal)}</td><td class="r">${fmt(pendingTotal)}</td><td></td></tr>`;
     const metric = (label, value, note) => `<div class="met"><div class="met-l">${label}</div><div class="met-v">${value}</div><div class="met-s">${note}</div></div>`;
     const metrics = is608
       ? metric('Comprobantes anulados', rows.length, `${byType.length} tipo(s) de comprobante`)
-        + metric('ITBIS anulado', fmt(salesTax + creditTax), 'Impuesto de los comprobantes anulados')
-        + metric('Monto anulado', fmt(salesTotal + creditTotal), `Del ${ddmm(from)} al ${ddmm(to)}`)
+        + metric('ITBIS anulado', fmt(voidedTax), 'Impuesto de los comprobantes anulados')
+        + metric('Monto anulado', fmt(voidedTotal), `Del ${ddmm(from)} al ${ddmm(to)}`)
       : metric('Comprobantes', rows.length, `${sales.length} factura(s)${credits.length ? ` · ${credits.length} nota(s) de crédito` : ''}`)
         + metric('ITBIS neto', fmt(netTax), credits.length ? `Facturado ${fmt(salesTax)} − NC ${fmt(creditTax)}` : 'ITBIS facturado')
         + metric('Total neto', fmt(netTotal), credits.length ? `Facturado ${fmt(salesTotal)} − NC ${fmt(creditTotal)}` : 'Total facturado')

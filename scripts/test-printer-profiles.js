@@ -410,8 +410,10 @@ test('el Centro de impresión centraliza rutas y mantiene etiquetas separadas', 
   assert.ok(businessContextSource.includes("'printer_channel_bindings'"));
   assert.ok(businessContextSource.includes("'printer_channel_profiles'"));
   const mainSource = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
-  assert.ok(mainSource.includes("bindings[safeChannel] || settingsRepo.get('printer')"));
-  assert.ok(mainSource.includes("profiles[safeChannel] || settingsRepo.get('printer_profile')"));
+  assert.ok(mainSource.includes("Object.hasOwn(bindings, safeChannel)"),
+    "el servidor respeta una asignación explícita al diálogo");
+  assert.ok(mainSource.includes("Object.hasOwn(profiles, safeChannel)"),
+    "el servidor conserva la detección automática explícita del canal");
   assert.ok(appSource.includes("case 'impresion':"));
 });
 
@@ -467,7 +469,7 @@ test('monitorea impresoras y vuelve a validarlas inmediatamente antes del envío
   assert.ok(barcodeSource.includes('function _bcHandlePrinterSnapshot'));
   assert.ok(centerSource.includes('function pcDetectNow'));
   assert.ok(mainSource.includes('async function _assertPrinterQueueAvailable'));
-  assert.ok(mainSource.includes("firstErr?.code === 'PRINTER_UNAVAILABLE'"));
+  assert.ok(mainSource.includes("['PRINTER_UNAVAILABLE', 'PRINT_CANCELLED'].includes(firstErr?.code)"));
 });
 
 test('el recibo de ingreso cambia de formato con la plantilla elegida', () => {

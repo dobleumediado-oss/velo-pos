@@ -1645,70 +1645,86 @@ function _repMesActual() {
 // a la contable, así que no se ofrecen aquí.
 function _repPlantillasDeHoja() {
   const todas = (typeof PLANTILLAS !== 'undefined' && Array.isArray(PLANTILLAS)) ? PLANTILLAS : [];
-  return todas.filter(p => p.tipo === 'carta');
+  return todas.filter(p => p.tipo === 'carta' && p.id !== 'media_carta');
 }
 
 function _repPlantillaPorDefecto() {
   const hojas = _repPlantillasDeHoja();
-  const configurada = DB?.settings?.print_template || '';
+  const configurada = _getCategoryConfig('reporte').template || DB?.settings?.print_template || '';
   if (hojas.some(p => p.id === configurada)) return configurada;
   return hojas.length ? hojas[0].id : 'carta_recibo';
 }
 
-// Facturas con comprobante fiscal del período, en páginas para no pedir miles
-// de filas de una vez.
 async function _repFacturasConComprobante(desde, hasta) {
-  const encontradas = [];
-  const pageSize = 500;
-  for (let offset = 0; offset < 20000; offset += pageSize) {
-    const pagina = await window.api.sales.getAll({
-      range: 'custom', dateFrom: desde, dateTo: hasta,
-      view: 'sales', limit: pageSize, offset,
-    }) || [];
-    encontradas.push(...pagina.filter(venta => String(venta.ncf || '').trim()));
-    if (pagina.length < pageSize) break;
-  }
-  return encontradas.sort((a, b) =>
-    String(a.sale_date || '').localeCompare(String(b.sale_date || '')) || Number(a.id || 0) - Number(b.id || 0));
+  const result = await window.api.ncf.getPrintableSales({ from: desde, to: hasta, requestUserId: user?.id });
+  if (!result?.ok) throw new Error(result?.error || 'No se pudieron consultar las facturas del período');
+  return result.data.slice().reverse();
 }
 
-// Un solo documento con todas las facturas, una por página. Se reutiliza la
-// misma plantilla con que se imprime una factura suelta: la copia que recibe
-// la contable es idéntica a la que recibió el cliente.
+// Las reglas de cada formato se aplican solo a sus facturas. La hoja común
+// conserva los márgenes de la plantilla de Carta elegida para el lote.
+function _repEstilosCopia(css, selector) {
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync(css);
+  const scopeRule = rule => {
+    if (rule.type === CSSRule.PAGE_RULE) return '';
+    if (rule.type === CSSRule.STYLE_RULE) {
+      const scoped = rule.selectorText.replace(
+        /(^|[\s,>+~])(?:html|body|:root)(?=$|[\s,>+~.#:\[])/gi, '$1:scope'
+      ).replace(/:scope\s+:scope/g, ':scope');
+      return `${scoped}{${rule.style.cssText}}`;
+    }
+    if (rule.cssRules) {
+      return `${rule.cssText.slice(0, rule.cssText.indexOf('{'))}{${Array.from(rule.cssRules, scopeRule).join('')}}`;
+    }
+    return rule.cssText;
+  };
+  return `@scope (${selector}){${Array.from(sheet.cssRules, scopeRule).join('')}}`;
+}
+
 async function _repCopiasHTML(ventas, templateId, onProgress) {
-  let cabeza = '';
+  const styles = new Map();
   const cuerpos = [];
-  for (let i = 0; i < ventas.length; i += 1) {
-    const completa = await window.api.sales.getById({ id: ventas[i].id });
-    if (!completa) continue;
+  let pagina = '';
+  for (const [index, venta] of ventas.entries()) {
+    const completa = await window.api.sales.getById({ id: venta.id });
+    if (!completa || completa.ncf !== venta.ncf || !['completed', 'returned'].includes(completa.status)) {
+      throw new Error(`La factura ${venta.ncf} cambió. Genera el lote nuevamente.`);
+    }
     const payload = {
-      ...(typeof ventasPrintPayload === 'function' ? ventasPrintPayload(completa) : completa),
+      ...ventasPrintPayload(completa, { original: true }),
+      date: venta.fiscalDate,
       print_template_id: templateId,
       print_html_only: true,
     };
-    const html = printReceipt(payload, true);
-    if (typeof html !== 'string' || !html.trim()) continue;
-    if (!cabeza) cabeza = (html.match(/<head[^>]*>([\s\S]*?)<\/head>/i) || ['', ''])[1];
-    // El script de autoajuste mide UNA factura; en el lote mediría el documento
-    // entero y encogería todo, así que se retira de cada copia.
-    const cuerpo = (html.match(/<body[^>]*>([\s\S]*?)<\/body>/i) || ['', ''])[1]
-      .replace(/<script[\s\S]*?<\/script>/gi, '');
-    cuerpos.push(`<div class="velo-copia">${cuerpo}</div>`);
-    if (typeof onProgress === 'function') onProgress(i + 1, ventas.length);
+    const html = completa.ecf_environment ? _printEcfRepresentation(payload) : printReceipt(payload, true);
+    if (typeof html !== 'string' || !html.trim()) {
+      throw new Error(`La factura ${venta.ncf} no tiene una copia fiscal lista para imprimir.`);
+    }
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const css = Array.from(doc.head.querySelectorAll('style'), style => style.textContent).join('\n');
+    if (!pagina) pagina = css.match(/@page\s*\{[^}]*\}/i)?.[0] || '';
+    if (!styles.has(css)) styles.set(css, styles.size);
+    cuerpos.push(`<section class="velo-copia" data-copy-style="${styles.get(css)}">${doc.body.innerHTML}</section>`);
+    onProgress?.(index + 1, ventas.length);
   }
-  if (!cuerpos.length) return '';
-  return `<!DOCTYPE html><html><head>${cabeza}
-<style>
-  .velo-copia { break-after: page; page-break-after: always; }
-  .velo-copia:last-child { break-after: auto; page-break-after: auto; }
-</style></head><body>${cuerpos.join('')}</body></html>`;
+  const css = Array.from(styles, ([rules, id]) => _repEstilosCopia(rules, `[data-copy-style="${id}"]`)).join('\n');
+  return `<!doctype html><html lang="es"><head><meta charset="UTF-8">
+  <meta name="velo-page-size" content="letter portrait"><style>
+    ${pagina || '@page { size: letter; margin: 10mm; }'}
+    body { margin:0; }
+    .velo-copia { break-after: page; }
+    .velo-copia:last-child { break-after: auto; }
+    ${css}
+  </style></head><body>${cuerpos.join('')}</body></html>`;
 }
 
 async function _repGenerarCopias(modo) {
   const desde = document.getElementById('rep-cmp-from')?.value || '';
   const hasta = document.getElementById('rep-cmp-to')?.value || '';
-  const templateId = document.getElementById('rep-cmp-tpl')?.value || _repPlantillaPorDefecto();
-  if (!desde || !hasta) { toast('Elige el desde y el hasta', 'w'); return; }
+  const selected = document.getElementById('rep-cmp-tpl')?.value;
+  const templateId = _repPlantillasDeHoja().some(template => template.id === selected) ? selected : _repPlantillaPorDefecto();
+  if (!desde || !hasta || desde > hasta) { toast('Selecciona un período válido', 'w'); return; }
   const estado = document.getElementById('rep-cmp-estado');
   const botones = [...document.querySelectorAll('[data-rep-cmp-btn]')];
   botones.forEach(b => { b.disabled = true; b.style.opacity = '.6'; });
@@ -1721,17 +1737,21 @@ async function _repGenerarCopias(modo) {
       toast('No hay facturas con comprobante en ese período', 'w');
       return;
     }
-    const armar = async () => _repCopiasHTML(ventas, templateId, (hechas, total) => {
+    const html = await _repCopiasHTML(ventas, templateId, (hechas, total) => {
       if (estado) estado.textContent = `Preparando copia ${hechas} de ${total}…`;
     });
-    if (modo === 'imprimir') {
-      const html = await armar();
-      if (!html) { toast('No se pudo preparar el documento', 'err'); return; }
-      printHTML(html, 'reporte');
-    } else {
-      guardarDocumentoPDF(armar, `Facturas-con-comprobante-${desde}_a_${hasta}`);
+    const selectedRange = () => document.getElementById('rep-cmp-from')?.value === desde &&
+      document.getElementById('rep-cmp-to')?.value === hasta &&
+      document.getElementById('rep-cmp-tpl')?.value === selected;
+    if (!estado?.isConnected || !selectedRange()) {
+      if (estado) estado.textContent = 'El período o la plantilla cambió. Genera las copias nuevamente.';
+      return;
     }
-    if (estado) estado.textContent = `${ventas.length} factura(s) con comprobante · una por página.`;
+    printHTML(html, 'reporte', {
+      mode: modo === 'pdf' ? 'pdf' : 'print',
+      suggestedName: `Facturas-con-comprobante-${desde}_a_${hasta}`,
+    });
+    estado.textContent = `${ventas.length} factura(s) con comprobante · cada copia comienza en una hoja nueva.`;
   } catch (error) {
     console.error('[reportes:copias]', error);
     if (estado) estado.textContent = 'No se pudieron preparar las copias.';
@@ -1758,7 +1778,7 @@ function _renderReporteComprobantes(el) {
     <div class="card-title">Copias de facturas con comprobante</div>
     <div class="ts" style="margin:4px 0 12px">
       Un solo PDF con todas las facturas del período que llevan comprobante fiscal,
-      una por página, con la misma plantilla con que se imprimen.
+      con una hoja nueva al inicio de cada factura.
     </div>
     <div class="flex" style="gap:10px;align-items:flex-end;flex-wrap:wrap">
       <div class="fg" style="margin:0"><label class="lbl">Desde</label>

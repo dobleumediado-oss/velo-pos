@@ -1491,6 +1491,8 @@ function renderCartaRecibo(sale, cfg, opts) {
         var dpi = 96;
         var pageH = dpi * 11;                       // Carta = 11in
         var margTop = ${parseFloat(_mtc) || 12}, margBot = ${parseFloat(_mbc) || 10};
+        var copy = document.currentScript?.closest('.velo-copia');
+        var page = copy || document.body;
         var usable = pageH - ((margTop + margBot) / 25.4) * dpi;
         if (!(usable > 0)) usable = pageH;
 
@@ -1500,20 +1502,20 @@ function renderCartaRecibo(sale, cfg, opts) {
         var autofit = ${_autofit ? 'true' : 'false'};
         var floorScale = ${_autofitMin};
         if (autofit) {
-          var raw = document.body.scrollHeight;
+          var raw = page.scrollHeight;
           var pages = raw / usable;
           var target = Math.floor(pages + 1e-3);    // páginas completas que caben
           if (target >= 1 && pages > target) {
             var scale = (target * usable) / raw;
             if (scale >= floorScale && scale < 1) {
-              document.body.style.zoom = scale;       // 'zoom' refluye (no recorta)
+              page.style.zoom = scale;       // 'zoom' refluye (no recorta)
             }
           }
         }
 
         // Total de páginas final (ya con el posible auto-ajuste aplicado).
-        var total = Math.max(1, Math.ceil(document.body.scrollHeight / usable));
-        document.querySelectorAll('.a4-tot').forEach(function (e) { e.textContent = String(total); });
+        var total = Math.max(1, Math.ceil(page.scrollHeight / usable));
+        (copy || document).querySelectorAll('.a4-tot').forEach(function (e) { e.textContent = String(total); });
       } catch (e) {}
     })();
   </script>
@@ -1753,12 +1755,14 @@ function renderCartaCompacta(sale, cfg, opts) {
   <script>
     (function () {
       try {
+        var copy = document.currentScript?.closest('.velo-copia');
+        var page = copy || document.body;
         var usable = 96 * 11 - ((${parseFloat(mt) || 8} + ${parseFloat(mb) || 7}) / 25.4) * 96;
-        var root = document.documentElement, kMax = ${kMax};
+        var root = copy || document.documentElement, kMax = ${kMax};
         var setK = function (k) { root.style.setProperty('--k', String(k)); root.style.setProperty('--hk', String(1 + (k - 1) * 0.5)); };
         // 12 mm de holgura: la paginación del PDF difiere hasta ~30 px de la
         // altura medida en pantalla (medido con 35 artículos entre 7.8 y 8.5 pt).
-        var fits = function () { return document.body.scrollHeight <= usable - 45; };
+        var fits = function () { return page.scrollHeight <= usable - 45; };
         // Si a la letra elegida no cabe en una hoja, busca la más grande que sí
         // cabe (nunca menos de 7.8 pt); si ni así cabe, quedan varias hojas.
         if (kMax > 1 && !fits()) {
@@ -1767,11 +1771,11 @@ function renderCartaCompacta(sale, cfg, opts) {
         }
         root.setAttribute('data-font-pt', (7.8 * parseFloat(getComputedStyle(root).getPropertyValue('--k') || '1')).toFixed(1));
         if (${_autofit ? 'true' : 'false'}) {
-          var raw = document.body.scrollHeight, pages = raw / usable, target = Math.floor(pages + 1e-3);
-          if (target >= 1 && pages > target) { var scale = (target * usable) / raw; if (scale >= ${_autofitMin} && scale < 1) document.body.style.zoom = scale; }
+          var raw = page.scrollHeight, pages = raw / usable, target = Math.floor(pages + 1e-3);
+          if (target >= 1 && pages > target) { var scale = (target * usable) / raw; if (scale >= ${_autofitMin} && scale < 1) page.style.zoom = scale; }
         }
-        var total = Math.max(1, Math.ceil(document.body.scrollHeight / usable));
-        document.querySelectorAll('.a4-tot').forEach(function (e) { e.textContent = String(total); });
+        var total = Math.max(1, Math.ceil(page.scrollHeight / usable));
+        (copy || document).querySelectorAll('.a4-tot').forEach(function (e) { e.textContent = String(total); });
       } catch (e) {}
     })();
   </script>

@@ -137,6 +137,20 @@ function detectLabelPrinter(printerInfo, explicitSettings) {
   };
 }
 
+// Un controlador genérico puede ser una impresora de hojas. Solo se
+// descarta si hay un perfil explícito o señales claras de rollo/etiquetas.
+function printerAcceptsReportSheets(printer, profileId = '', settings = {}) {
+  const info = typeof printer === 'string' ? { name: printer } : printer || {};
+  if (!info.name) return true;
+  if (info.name === settings.barcode_printer ||
+      ['high', 'medium'].includes(detectLabelPrinter(info, settings).confidence)) return false;
+  const profile = PRINTER_PROFILES[profileId];
+  if (profile) return profile.kind === 'sheet';
+  const identity = [info.name, info.displayName, info.description, getPrinterRuntimeState(info).model]
+    .filter(Boolean).join(' ');
+  return !/\b(?:pos[- _]?\d{2}|(?:58|72|80|108)\s*mm|epson\s+tm|xprinter|bixolon|gprinter|3nstar|rongta|thermal|térmica|termica)\b/i.test(identity);
+}
+
 function classifyLabelPrinters(printers, explicitSettings) {
   return (Array.isArray(printers) ? printers : []).map(printer => ({
     ...printer,
@@ -396,7 +410,7 @@ function buildLabelRenderModel(product, design, profile) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    PRINTER_PROFILES, inferPrinterProfileId, detectLabelPrinter, classifyLabelPrinters,
+    PRINTER_PROFILES, inferPrinterProfileId, detectLabelPrinter, classifyLabelPrinters, printerAcceptsReportSheets,
     chooseLabelPrinter, getPrinterRuntimeState, normalizePrinterSnapshot,
     diffPrinterSnapshots, resolvePrinterProfile,
     buildLabelCalibrationHTML, printerProfileLegacyType, calculateLabelLayout,

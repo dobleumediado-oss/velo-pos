@@ -11089,40 +11089,68 @@ const ncfRepo = {
   // en sales. Ese NCF sigue siendo fiscalmente relevante: el reporte no puede
   // quedar vacío solo porque todavía no exista su fila auxiliar en ncf_log.
   // El UNION lo presenta sin modificar ni "reparar" silenciosamente la base.
-  getLog({ from, to, status, type } = {}) {
+  getLog({ from, to, status, type, copies = false } = {}) {
     const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-    const reportDate = status === 'anulado' ? 'COALESCE(voided_at,issued_at)' : 'issued_at';
-    const returnTotal = `COALESCE((SELECT SUM(ABS(r.total)) FROM sales r
+    const reportDate = status === 'anulado' ? 'voided_at' : 'issued_at';
+    const returnTotal = copies ? '0' : `COALESCE((SELECT SUM(ABS(r.total)) FROM sales r
              WHERE r.type='devolucion' AND r.original_sale_id=s.id AND r.status!='cancelled'),0)`;
+    // El registro nativo usa UTC; los valores de solo fecha y los reconstruidos
+    // a partir de la fecha fiscal local ya representan el día dominicano.
+    const localIssue = `CASE
+      WHEN length(trim(l.issued_at))=10 THEN l.issued_at
+      WHEN l.issued_at=s.fiscal_issued_at AND NOT COALESCE(
+        abs(strftime('%s',l.issued_at)-strftime('%s',s.created_at)-14400)<=5,0
+      ) THEN l.issued_at
+      ELSE COALESCE(datetime(l.issued_at,'-4 hours'),l.issued_at)
+    END`;
+    const localVoid = value => `CASE WHEN length(trim(${value}))=10 THEN ${value}
+      ELSE COALESCE(datetime(${value},'-4 hours'),${value}) END`;
     let q = `WITH comprobantes AS (
-      SELECT l.id,l.ncf,l.type,l.sale_id,l.customer_rnc,l.issued_at,
-             l.modifies_ncf,COALESCE(l.status,'emitido') AS status,l.voided_at,
+      SELECT l.id,l.ncf,l.type,l.sale_id,l.customer_rnc,${localIssue} AS issued_at,
+             l.modifies_ncf,COALESCE(l.status,'emitido') AS status,${localVoid('COALESCE(l.voided_at,s.cancelled_at)')} AS voided_at,
              s.total,s.customer_name,COALESCE(s.tax_amt,0) AS tax_amt,
              s.type AS sale_type,s.status AS sale_status,s.payment_method,s.customer_id,
              ${returnTotal} AS return_total
         FROM ncf_log l
         LEFT JOIN sales s ON s.id=l.sale_id
+       WHERE UPPER(TRIM(l.ncf)) NOT GLOB 'E[0-9][0-9]*'
       UNION ALL
       SELECT NULL AS id,s.ncf,UPPER(SUBSTR(TRIM(s.ncf),1,3)) AS type,s.id AS sale_id,
-             s.customer_rnc,COALESCE(NULLIF(s.sale_date,''),date(s.created_at)) AS issued_at,
+             s.customer_rnc,COALESCE(NULLIF(s.fiscal_issued_at,''),NULLIF(s.original_sale_date,''),date(s.created_at)) AS issued_at,
              NULL AS modifies_ncf,
              CASE WHEN s.status='cancelled' THEN 'anulado' ELSE 'emitido' END AS status,
-             s.cancelled_at,s.total,s.customer_name,COALESCE(s.tax_amt,0) AS tax_amt,
+             ${localVoid('s.cancelled_at')},s.total,s.customer_name,COALESCE(s.tax_amt,0) AS tax_amt,
              s.type AS sale_type,s.status AS sale_status,s.payment_method,s.customer_id,
              ${returnTotal} AS return_total
         FROM sales s
        WHERE TRIM(COALESCE(s.ncf,''))<>''
          AND NOT EXISTS (SELECT 1 FROM ncf_log l WHERE l.sale_id=s.id)
          AND NOT EXISTS (SELECT 1 FROM ecf_documents e WHERE e.sale_id=s.id)
+         AND UPPER(TRIM(s.ncf)) NOT GLOB 'E[0-9][0-9]*'
+       ${copies ? `UNION ALL
+        SELECT NULL,e.encf,substr(e.encf,1,3),s.id,s.customer_rnc,s.fiscal_issued_at,
+               NULL,'emitido',NULL,s.total,s.customer_name,COALESCE(s.tax_amt,0),
+               s.type,s.status,s.payment_method,s.customer_id,0
+        FROM ecf_documents e
+        JOIN ecf_sequences seq ON seq.id=e.sequence_id
+        JOIN sales s ON s.id=e.sale_id
+        WHERE seq.environment='production' AND e.status IN ('Aceptado','Aceptado Condicional')
+          AND s.ncf=e.encf AND s.fiscal_issued_at IS NOT NULL` : ''}
     ) SELECT * FROM comprobantes WHERE 1=1`;
+    if (copies) q += " AND sale_type='factura' AND sale_status IN ('completed','returned')";
     const p = [];
     if (from && DATE_RE.test(from)) { q += ` AND date(${reportDate}) >= ?`; p.push(from); }
     if (to   && DATE_RE.test(to))   { q += ` AND date(${reportDate}) <= ?`; p.push(to); }
     if (status)                     { q += ` AND status = ?`; p.push(status); }
     if (type)                       { q += ` AND type = ?`; p.push(type); }
     q += ` ORDER BY ${reportDate} DESC, sale_id DESC, id DESC`;
+    const rows = db.prepare(q).all(...p);
+    if (copies) return rows.filter(row => {
+      const legacy = parseCanonicalLegacyNcf(row.ncf);
+      return (legacy && legacy.type === row.type) || desktopEcf.numberPattern.test(row.ncf);
+    }).map(row => ({ id: row.sale_id, ncf: row.ncf, fiscalDate: String(row.issued_at).slice(0, 10) }));
     const paymentState = ncfPaymentStateResolver();
-    return db.prepare(q).all(...p).map(row => {
+    return rows.map(row => {
       const parsed = parseCanonicalLegacyNcf(row.ncf);
       return {
         ...row,

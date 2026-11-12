@@ -298,16 +298,15 @@ let accesoArnes = null;
     sucursales.includes('reportDay(a).localeCompare(reportDay(b))'),
     'el 607 muestra el estado de cobro y se imprime en orden cronológico');
 
-  assert(reportes.includes('function _repFacturasConComprobante(') &&
-    reportes.includes("pagina.filter(venta => String(venta.ncf || '').trim())") &&
-    reportes.includes("range: 'custom', dateFrom: desde, dateTo: hasta"),
-    'las copias toman las facturas con comprobante del período elegido');
+  assert(reportes.includes('window.api.ncf.getPrintableSales({ from: desde, to: hasta') &&
+    main.includes("status: 'emitido', copies: true"),
+    'las copias se consultan por el período fiscal desde el registro de comprobantes');
   assert(reportes.includes('print_html_only: true') && print.includes('if (sale.print_html_only) return html;'),
     'el lote reutiliza la misma plantilla de impresión sin abrir una ventana por factura');
-  assert(/\.replace\(\/<script\[\\s\\S\]\*\?<\\\/script>\/gi, ''\)/.test(reportes),
-    'cada copia entra sin su script de autoajuste, que mediría el lote entero');
-  assert(reportes.includes('.velo-copia { break-after: page; page-break-after: always; }'),
-    'cada factura del lote sale en su propia página');
+  assert(reportes.includes('data-copy-style') && reportes.includes("cssRules, scopeRule"),
+    'el lote conserva y aísla los estilos de cada copia');
+  assert(reportes.includes('.velo-copia { break-after: page; }'),
+    'cada factura del lote comienza en una hoja nueva');
   assert(reportes.includes('function _repPlantillasDeHoja(') && reportes.includes("p.tipo === 'carta'"),
     'solo se ofrecen plantillas de hoja: una térmica no sirve para archivar');
 }
