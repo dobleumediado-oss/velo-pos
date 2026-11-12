@@ -12,7 +12,7 @@ async function renderCompras(el) {
   el.innerHTML = '';
 
   // Header
-  el.appendChild(h('div', { class: 'sec-hdr' },
+  el.appendChild(h('div', { class: 'sec-hdr mobile-module-heading' },
     h('div', null,
       h('div', { class: 'sec-title' }, 'Compras'),
       h('div', { class: 'sec-sub' }, 'Órdenes de compra y proveedores')
@@ -83,25 +83,30 @@ async function renderOrdenes(el) {
   const received = orders.filter(o => o.status === 'recibido').length;
   const totalAmt = orders.reduce((s, o) => s + (o.total || 0), 0);
 
-  const stats = h('div', { class: 'metrics',
+  const stats = h('div', { class: 'metrics mobile-summary-metrics compras-summary-ordenes',
     style: { gridTemplateColumns: 'repeat(4,1fr)', marginBottom: '18px' } });
   [
-    { icon: 'clock',   color: 'a', label: 'Pendientes',     val: pending },
-    { icon: 'alert',   color: 'b', label: 'Parciales',      val: partial },
-    { icon: 'check',   color: 'g', label: 'Recibidas',      val: received },
-    { icon: 'dollar',  color: 'p', label: 'Total comprado', val: fmt(totalAmt) },
-  ].forEach(({ icon, color, label, val }) => {
-    stats.appendChild(
-      h('div', { class: 'metric' },
-        h('div', { class: 'met-top' },
-          h('div', { class: `met-icon ${color}`, html: svg(icon) })
-        ),
-        h('div', { class: 'met-label' }, label),
-        h('div', { class: 'met-val' }, String(val))
-      )
+    { icon: 'clock',  color: 'a', label: 'Pendientes',     val: pending,       place: 'bar' },
+    { icon: 'alert',  color: 'b', label: 'Parciales',      val: partial,       place: 'bar' },
+    { icon: 'check',  color: 'g', label: 'Recibidas',      val: received,      place: 'bar' },
+    { icon: 'dollar', color: 'p', label: 'Total comprado', val: fmt(totalAmt), place: 'featured' },
+  ].forEach(({ icon, color, label, val, place }) => {
+    const metric = h('div', { class: `metric mobile-summary-${place}` },
+      h('div', { class: 'met-top' },
+        h('div', { class: `met-icon ${color}`, html: svg(icon) })
+      ),
+      h('div', { class: 'met-label' }, label),
+      h('div', { class: 'met-val' }, String(val))
     );
+    if (place === 'bar') {
+      metric.style.setProperty('--mobile-bar-size', `${val / Math.max(1, orders.length) * 100}%`);
+    }
+    stats.appendChild(metric);
   });
   el.appendChild(stats);
+  el.appendChild(h('p', { class: 'ts compras-mobile-summary-scope' },
+    'Resumen de las órdenes mostradas. El total incluye las canceladas.'
+  ));
 
   if (!orders.length) {
     el.appendChild(h('div', { class: 'empty-state' },
@@ -113,35 +118,40 @@ async function renderOrdenes(el) {
   }
 
   // Tabla de órdenes
-  const card = h('div', { class: 'card' });
-  const tbl  = h('table', { class: 'tbl' });
+  const card = h('div', { class: 'card mobile-list-card' });
+  const tbl  = h('table', { class: 'tbl mobile-card-table', role: 'table' });
   tbl.innerHTML = `
-    <thead>
-      <tr>
-        <th>#OC</th><th>Proveedor</th><th>Fecha</th>
-        <th>Items</th><th>Total</th><th>Estado</th><th></th>
+    <thead role="rowgroup">
+      <tr role="row">
+        <th scope="col">#OC</th><th scope="col">Proveedor</th><th scope="col">Fecha</th>
+        <th scope="col">Items</th><th scope="col">Total</th><th scope="col">Estado</th><th scope="col" aria-label="Acciones"></th>
       </tr>
     </thead>`;
-  const tbody = h('tbody');
+  const tbody = h('tbody', { role: 'rowgroup' });
   orders.forEach(o => {
     const statusColor = {
       pendiente: 'a', recibido: 'g', parcial: 'b', cancelado: 'r'
     }[o.status] || 'a';
-    const tr = h('tr', { style: { cursor: 'pointer' }, onclick: () => verOrden(o.id) });
+    const tr = h('tr', { role: 'row', style: { cursor: 'pointer' }, onclick: () => verOrden(o.id) });
     tr.innerHTML = `
-      <td><b>OC-${String(o.id).padStart(4,'0')}</b></td>
-      <td>${o.supplier_name || o.supplier_name_join || 'Sin proveedor'}</td>
-      <td>${fdate((o.created_at||'').slice(0,10))}</td>
-      <td>${o.items_count || '—'}</td>
-      <td><b>${fmt(o.total)}</b></td>
-      <td><span class="badge ${statusColor}">${o.status}</span></td>
-      <td>
+      <td role="cell" class="mobile-card-title"><b>OC-${String(o.id).padStart(4,'0')}</b></td>
+      <td role="cell" data-label="Proveedor">${o.supplier_name || o.supplier_name_join || 'Sin proveedor'}</td>
+      <td role="cell" data-label="Fecha">${fdate((o.created_at||'').slice(0,10))}</td>
+      <td role="cell" data-label="Items">${o.items_count || '—'}</td>
+      <td role="cell" data-label="Total"><b>${fmt(o.total)}</b></td>
+      <td role="cell" data-label="Estado"><span class="badge ${statusColor}">${o.status}</span></td>
+      <td role="cell" class="mobile-card-actions">
         ${o.status === 'pendiente' || o.status === 'parcial'
           ? `<button class="btn btn-sm btn-out" onclick="event.stopPropagation();recibirOrden(${o.id})">
                ${svg('download')} Recibir
              </button>`
           : ''}
       </td>`;
+    tr.lastElementChild.prepend(h('button', {
+      class: 'btn btn-out btn-sm compras-mobile-order-view',
+      type: 'button',
+      onclick: event => { event.stopPropagation(); verOrden(o.id); },
+    }, 'Ver'));
     tbody.appendChild(tr);
   });
   tbl.appendChild(tbody);
@@ -160,15 +170,15 @@ async function verOrden(id) {
   const totalExtra = (po.freight_cost || 0) + (po.customs_cost || 0)
     + (po.transport_cost || 0) + (po.other_cost || 0);
   const itemsHtml = (po.items || []).map(i => `
-    <tr>
-      <td>${i.product_code || '—'}</td>
-      <td>${i.product_name}</td>
-      <td>${fmt(i.unit_cost)}</td>
-      <td>${i.landed_unit_cost ? fmt(i.landed_unit_cost) : '—'}</td>
-      <td>${i.allocated_extra_cost ? fmt(i.allocated_extra_cost) : '—'}</td>
-      <td>${i.qty_ordered}</td>
-      <td>${i.qty_received}</td>
-      <td>${fmt(i.subtotal)}</td>
+    <tr role="row">
+      <td role="cell" data-label="Código">${i.product_code || '—'}</td>
+      <td role="cell" class="mobile-card-title">${i.product_name}</td>
+      <td role="cell" data-label="Costo base">${fmt(i.unit_cost)}</td>
+      <td role="cell" data-label="Costo real">${i.landed_unit_cost ? fmt(i.landed_unit_cost) : '—'}</td>
+      <td role="cell" data-label="Gastos">${i.allocated_extra_cost ? fmt(i.allocated_extra_cost) : '—'}</td>
+      <td role="cell" data-label="Ordenado">${i.qty_ordered}</td>
+      <td role="cell" data-label="Recibido">${i.qty_received}</td>
+      <td role="cell" data-label="Subtotal">${fmt(i.subtotal)}</td>
     </tr>`).join('');
 
   openModal(`
@@ -180,9 +190,9 @@ async function verOrden(id) {
       <span class="badge ${statusColor}" style="font-size:13px">${po.status}</span>
     </div>
 
-    <table class="tbl" style="margin-bottom:12px">
-      <thead><tr><th>Código</th><th>Producto</th><th>Costo base</th><th>Costo real</th><th>Gastos</th><th>Ordenado</th><th>Recibido</th><th>Subtotal</th></tr></thead>
-      <tbody>${itemsHtml}</tbody>
+    <table class="tbl mobile-card-table" role="table" style="margin-bottom:12px">
+      <thead role="rowgroup"><tr role="row"><th scope="col">Código</th><th scope="col">Producto</th><th scope="col">Costo base</th><th scope="col">Costo real</th><th scope="col">Gastos</th><th scope="col">Ordenado</th><th scope="col">Recibido</th><th scope="col">Subtotal</th></tr></thead>
+      <tbody role="rowgroup">${itemsHtml}</tbody>
     </table>
 
     ${totalExtra > 0 ? `
@@ -201,7 +211,7 @@ async function verOrden(id) {
         ? `<button class="btn btn-dark" onclick="closeModal();recibirOrden(${po.id})">${svg('download')} Recibir mercancía</button>`
         : `<button class="btn btn-out" onclick="closeModal()">Cerrar</button>`}
     </div>
-  `, 'modal-xxl mtw');
+  `, 'modal-xxl mtw compras-mobile-modal');
 }
 
 // ── Nueva orden de compra ─────────────────────
@@ -233,7 +243,7 @@ async function abrirNuevaOrden() {
 
     <div class="fg" style="margin-bottom:12px">
       <label class="lbl">Agregar producto</label>
-      <div style="display:flex;gap:8px">
+      <div class="compras-mobile-add-product" style="display:flex;gap:8px">
         <input class="inp" id="po-prod-search" type="text"
                placeholder="Buscar por nombre o código..."
                oninput="buscarProductoPO(this.value)"
@@ -258,7 +268,7 @@ async function abrirNuevaOrden() {
         ${svg('check')} Crear orden
       </button>
     </div>
-  `, 'modal-xl');
+  `, 'modal-xl compras-mobile-modal');
 
   renderPOItemsList();
 }
@@ -363,16 +373,16 @@ function renderPOItemsList() {
 
   const total = newPOItems.reduce((s, i) => s + i.subtotal, 0);
   el.innerHTML = `
-    <table class="tbl">
-      <thead><tr><th>Producto</th><th>Costo</th><th>Cant.</th><th>Subtotal</th><th></th></tr></thead>
-      <tbody>
+    <table class="tbl mobile-card-table" role="table">
+      <thead role="rowgroup"><tr role="row"><th scope="col">Producto</th><th scope="col">Costo</th><th scope="col">Cant.</th><th scope="col">Subtotal</th><th scope="col" aria-label="Acciones"></th></tr></thead>
+      <tbody role="rowgroup">
         ${newPOItems.map((i, idx) => `
-          <tr>
-            <td>${i.product_name}<br><span style="font-size:11px;color:var(--muted2)">${i.product_code}</span></td>
-            <td>${fmt(i.unit_cost)}</td>
-            <td>${i.qty_ordered}</td>
-            <td>${fmt(i.subtotal)}</td>
-            <td><button class="btn btn-sm" style="color:var(--red)"
+          <tr role="row">
+            <td role="cell" class="mobile-card-title">${i.product_name}<br><span style="font-size:11px;color:var(--muted2)">${i.product_code}</span></td>
+            <td role="cell" data-label="Costo">${fmt(i.unit_cost)}</td>
+            <td role="cell" data-label="Cant.">${i.qty_ordered}</td>
+            <td role="cell" data-label="Subtotal">${fmt(i.subtotal)}</td>
+            <td role="cell" class="mobile-card-actions"><button class="btn btn-sm" style="color:var(--red)"
                 onclick="quitarItemPO(${idx})">✕</button></td>
           </tr>`).join('')}
       </tbody>
@@ -425,8 +435,8 @@ async function recibirOrden(id) {
       const serialized = Number(product?.serialized) === 1;
       const remaining = i.qty_ordered - i.qty_received;
       return `
-      <tr>
-        <td>${i.product_name}<br>
+      <tr role="row">
+        <td role="cell" class="mobile-card-title">${i.product_name}<br>
             <span style="font-size:11px;color:var(--muted2)">${i.product_code}</span>
             ${serialized ? `
               <div class="alrt b" style="margin-top:8px;padding:8px;display:block">
@@ -440,9 +450,9 @@ async function recibirOrden(id) {
                 </div>
               </div>` : ''}
         </td>
-        <td style="text-align:center">${i.qty_ordered}</td>
-        <td style="text-align:center">${i.qty_received}</td>
-        <td style="text-align:center">
+        <td role="cell" data-label="Ordenado" style="text-align:center">${i.qty_ordered}</td>
+        <td role="cell" data-label="Ya recibido" style="text-align:center">${i.qty_received}</td>
+        <td role="cell" data-label="Recibir ahora" style="text-align:center">
           <input class="inp recv-qty" type="number" min="0"
                  max="${remaining}"
                  value="${serialized ? 0 : remaining}"
@@ -451,7 +461,7 @@ async function recibirOrden(id) {
                  ${serialized ? 'readonly title="La cantidad se calcula con los IMEI/seriales ingresados"' : ''}
                  style="width:70px;text-align:center"/>
         </td>
-        <td style="text-align:center;font-size:11px;color:var(--muted2)" id="cost-preview-${i.id}">
+        <td role="cell" data-label="Costo real estimado" style="text-align:center;font-size:11px;color:var(--muted2)" id="cost-preview-${i.id}">
           ${(() => {
             const prod      = DB.products.find(p => p.id === i.product_id);
             const stockAct  = prod ? Number(prod.effective_stock ?? prod.stock) : 0;
@@ -474,7 +484,7 @@ async function recibirOrden(id) {
     <div class="modal-title">Recibir mercancía</div>
     <div class="modal-sub">OC-${String(id).padStart(4,'0')} · ${po.supplier_name || 'Sin proveedor'}</div>
 
-    <div style="display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px;margin:12px 0">
+    <div class="compras-mobile-receipt-costs" style="display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px;margin:12px 0">
       <div class="fg">
         <label class="lbl">Flete</label>
         <input class="inp recv-extra-cost" id="recv-freight" type="number" min="0" step="0.01" value="0"
@@ -498,11 +508,11 @@ async function recibirOrden(id) {
     </div>
     <div id="recv-cost-summary" class="alrt b" style="margin-bottom:12px"></div>
 
-    <table class="tbl" style="margin:12px 0">
-      <thead>
-        <tr><th>Producto</th><th>Ordenado</th><th>Ya recibido</th><th>Recibir ahora</th><th>Costo real estimado</th></tr>
+    <table class="tbl mobile-card-table" role="table" style="margin:12px 0">
+      <thead role="rowgroup">
+        <tr role="row"><th scope="col">Producto</th><th scope="col">Ordenado</th><th scope="col">Ya recibido</th><th scope="col">Recibir ahora</th><th scope="col">Costo real estimado</th></tr>
       </thead>
-      <tbody>${itemsHtml}</tbody>
+      <tbody role="rowgroup">${itemsHtml}</tbody>
     </table>
 
     <div class="alrt b" style="margin-bottom:12px">
@@ -516,7 +526,7 @@ async function recibirOrden(id) {
         ${svg('check')} Confirmar recepción
       </button>
     </div>
-  `, 'modal-xl');
+  `, 'modal-xl compras-mobile-modal');
   actualizarCostosRecepcion();
 }
 
@@ -688,21 +698,21 @@ async function renderProveedores(el) {
     return;
   }
 
-  const card = h('div', { class: 'card' });
-  const tbl  = h('table', { class: 'tbl' });
+  const card = h('div', { class: 'card mobile-list-card' });
+  const tbl  = h('table', { class: 'tbl mobile-card-table', role: 'table' });
   tbl.innerHTML = `
-    <thead>
-      <tr><th>Nombre</th><th>Contacto</th><th>Teléfono</th><th>RNC</th><th></th></tr>
+    <thead role="rowgroup">
+      <tr role="row"><th scope="col">Nombre</th><th scope="col">Contacto</th><th scope="col">Teléfono</th><th scope="col">RNC</th><th scope="col" aria-label="Acciones"></th></tr>
     </thead>`;
-  const tbody = h('tbody');
+  const tbody = h('tbody', { role: 'rowgroup' });
   suppliers.forEach(s => {
-    const tr = h('tr');
+    const tr = h('tr', { role: 'row' });
     tr.innerHTML = `
-      <td><b>${s.name}</b>${s.email ? `<br><span style="font-size:11px;color:var(--muted2)">${s.email}</span>` : ''}</td>
-      <td>${s.contact || '—'}</td>
-      <td>${s.phone || '—'}</td>
-      <td>${s.rnc || '—'}</td>
-      <td style="text-align:right">
+      <td role="cell" class="mobile-card-title"><b>${s.name}</b>${s.email ? `<br><span style="font-size:11px;color:var(--muted2)">${s.email}</span>` : ''}</td>
+      <td role="cell" data-label="Contacto">${s.contact || '—'}</td>
+      <td role="cell" data-label="Teléfono">${s.phone || '—'}</td>
+      <td role="cell" data-label="RNC">${s.rnc || '—'}</td>
+      <td role="cell" class="mobile-card-actions" style="text-align:right">
         <button class="btn btn-sm btn-out" onclick="abrirFormProveedor(${s.id})">
           ${svg('edit')} Editar
         </button>
@@ -766,7 +776,7 @@ async function abrirFormProveedor(id) {
         ${svg('check')} Guardar
       </button>
     </div>
-  `);
+  `, 'compras-mobile-modal');
 }
 
 async function guardarProveedor(id) {
@@ -815,12 +825,47 @@ async function renderComprasParticulares(el){
   if(!res?.ok){el.appendChild(h('div',{class:'alrt r'},res?.error||'No se pudieron cargar las compras'));return;}
   const rows=res.data||[];
   const total=rows.filter(row=>row.status==='completada').reduce((sum,row)=>sum+Number(row.amount||0),0);
-  const summary=h('div',{class:'metrics',style:{gridTemplateColumns:'repeat(3,1fr)',marginBottom:'18px'}});
-  summary.innerHTML=`<div class="metric"><div class="met-label">Equipos adquiridos</div><div class="met-val">${rows.length}</div></div><div class="metric"><div class="met-label">En inventario</div><div class="met-val">${rows.filter(row=>row.unit_status==='en_stock').length}</div></div><div class="metric"><div class="met-label">Valor comprado</div><div class="met-val">${fmt(total)}</div></div>`;
+  const inStock=rows.filter(row=>row.unit_status==='en_stock').length;
+  const summary=h('div',{
+    class:'metrics mobile-summary-metrics compras-summary-particulares',
+    style:{gridTemplateColumns:'repeat(3,1fr)',marginBottom:'18px'}
+  });
+  summary.innerHTML=`
+    <div class="metric mobile-summary-total">
+      <div class="met-label">Equipos adquiridos</div><div class="met-val">${rows.length}</div>
+    </div>
+    <div class="metric mobile-summary-bar" style="--mobile-bar-size:${inStock / Math.max(1, rows.length) * 100}%">
+      <div class="met-label">En inventario</div><div class="met-val">${inStock}</div>
+    </div>
+    <div class="metric mobile-summary-featured">
+      <div class="met-label">Valor comprado</div><div class="met-val">${fmt(total)}</div>
+    </div>`;
   el.appendChild(summary);
+  el.appendChild(h('p', { class: 'ts compras-mobile-summary-scope' },
+    'Resumen de las compras mostradas.'
+  ));
   if(['admin','superadmin'].includes(user?.role))el.appendChild(h('div',{class:'flex',style:{justifyContent:'flex-end',marginBottom:'10px'}},h('button',{class:'btn btn-out btn-sm',onclick:abrirConfigCompraParticular},'Términos y garantía')));
   if(!rows.length){el.appendChild(h('div',{class:'empty-state'},h('div',{style:{fontSize:'32px'}},'📱'),h('div',{class:'empty-title'},'Sin equipos comprados a particulares'),h('div',{class:'empty-sub'},'Registra la identidad, procedencia, estado, pago y firmas en una sola operación.')));return;}
-  const card=h('div',{class:'card'});card.innerHTML=`<div class="tw"><table><thead><tr><th>Documento</th><th>Vendedor</th><th>Equipo / IMEI</th><th>Compra</th><th>Inventario</th><th></th></tr></thead><tbody>${rows.map(row=>`<tr><td><b>${techPurchaseEsc(row.number)}</b><div class="ts">${fdate(String(row.created_at||'').slice(0,10))}</div></td><td>${techPurchaseEsc(row.seller_name)}<div class="ts">${techPurchaseEsc(row.seller_document)}</div></td><td>${techPurchaseEsc(row.product_name)}<div class="ts">${techPurchaseEsc(row.imei||row.serial)}</div></td><td><b>${fmt(row.amount)}</b><div class="ts">${techPurchaseEsc(row.payment_method)}</div></td><td><span class="badge ${row.unit_status==='en_stock'?'g':'n'}">${techPurchaseEsc(row.unit_status)}</span></td><td><button class="btn btn-ghost btn-sm" data-private-purchase="${row.id}">${svg('eye')} Abrir</button></td></tr>`).join('')}</tbody></table></div>`;
+  const card=h('div',{class:'card mobile-list-card'});
+  card.innerHTML=`
+    <div class="tw">
+      <table class="mobile-card-table" role="table">
+        <thead role="rowgroup"><tr role="row">
+          <th scope="col">Documento</th><th scope="col">Vendedor</th><th scope="col">Equipo / IMEI</th>
+          <th scope="col">Compra</th><th scope="col">Inventario</th><th scope="col" aria-label="Acciones"></th>
+        </tr></thead>
+        <tbody role="rowgroup">${rows.map(row=>`
+          <tr role="row">
+            <td role="cell" class="mobile-card-title"><b>${techPurchaseEsc(row.number)}</b><div class="ts">${fdate(String(row.created_at||'').slice(0,10))}</div></td>
+            <td role="cell" data-label="Vendedor">${techPurchaseEsc(row.seller_name)}<div class="ts">${techPurchaseEsc(row.seller_document)}</div></td>
+            <td role="cell" data-label="Equipo / IMEI">${techPurchaseEsc(row.product_name)}<div class="ts">${techPurchaseEsc(row.imei||row.serial)}</div></td>
+            <td role="cell" data-label="Compra"><b>${fmt(row.amount)}</b><div class="ts">${techPurchaseEsc(row.payment_method)}</div></td>
+            <td role="cell" data-label="Inventario"><span class="badge ${row.unit_status==='en_stock'?'g':'n'}">${techPurchaseEsc(row.unit_status)}</span></td>
+            <td role="cell" class="mobile-card-actions"><button class="btn btn-ghost btn-sm" data-private-purchase="${row.id}">${svg('eye')} Abrir</button></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
   card.querySelectorAll('[data-private-purchase]').forEach(button=>button.onclick=()=>verCompraParticular(Number(button.dataset.privatePurchase)));
   el.appendChild(card);
 }
@@ -831,7 +876,7 @@ async function abrirCompraParticular(){
   const products=(DB.products||[]).filter(product=>product.active!==0&&product.serialized);
   if(!products.length)return toast('Primero registra el modelo como producto controlado por IMEI/serial','w');
   const descriptions=configRes.data.descriptions||[],accounts=(accountsRes?.data||[]).filter(account=>account.active&&account.type==='banco');
-  openModal(`<div class="modal-title">Compra de equipo usado a una persona</div><div class="modal-sub">La operación crea el equipo en inventario y conserva las declaraciones y términos firmados.</div><div class="tb" style="margin:14px 0 8px">1. Identidad del vendedor</div><div class="g3"><div class="fg"><label class="lbl">Nombre completo *</label><input class="inp" id="tpp-name"></div><div class="fg"><label class="lbl">Cédula / pasaporte *</label><input class="inp" id="tpp-document" data-uppercase="off"></div><div class="fg"><label class="lbl">Teléfono *</label><input class="inp" id="tpp-phone" data-uppercase="off"></div></div><div class="g2"><div class="fg"><label class="lbl">Dirección *</label><input class="inp" id="tpp-address"></div><div class="fg"><label class="lbl">Correo</label><input class="inp no-uppercase" id="tpp-email" data-uppercase="off" type="email"></div></div><div class="tb" style="margin:12px 0 8px">2. Equipo y evaluación</div><div class="g2"><div class="fg"><label class="lbl">Producto / modelo *</label><select class="inp" id="tpp-product">${products.map(product=>`<option value="${product.id}">${techPurchaseEsc(product.name)} · ${techPurchaseEsc(product.code)}</option>`).join('')}</select></div><div class="fg"><label class="lbl">Nombre del equipo</label><input class="inp" id="tpp-device" placeholder="IPHONE 13 128GB"></div></div><div class="g3"><div class="fg"><label class="lbl">IMEI *</label><input class="inp" id="tpp-imei" data-uppercase="off"></div><div class="fg"><label class="lbl">Serial</label><input class="inp" id="tpp-serial" data-uppercase="off"></div><div class="fg"><label class="lbl">Color</label><input class="inp" id="tpp-color"></div></div><div class="g3"><div class="fg"><label class="lbl">Capacidad</label><input class="inp" id="tpp-capacity" placeholder="128GB"></div><div class="fg"><label class="lbl">Condición batería (%)</label><input class="inp" id="tpp-health" type="number" min="0" max="100"></div><div class="fg"><label class="lbl">Capacidad batería (mAh)</label><input class="inp" id="tpp-mah" type="number" min="0" max="100000"></div></div><div class="fg"><label class="lbl">Condición física y pruebas *</label><textarea class="inp" id="tpp-condition" rows="2" placeholder="PANTALLA, CARCASA, CÁMARAS, CARGA, BLOQUEOS, HUMEDAD..."></textarea></div><div class="fg"><label class="lbl">Descripción que saldrá en la factura al venderlo</label><input class="inp" id="tpp-description" list="tpp-description-list"><datalist id="tpp-description-list">${descriptions.map(row=>`<option value="${techPurchaseEsc(row.description)}">${techPurchaseEsc(row.name)}</option>`).join('')}</datalist></div><div class="tb" style="margin:12px 0 8px">3. Pago y firmas</div><div class="g3"><div class="fg"><label class="lbl">Precio de compra *</label><input class="inp" id="tpp-amount" type="number" min="0.01" step="0.01"></div><div class="fg"><label class="lbl">Forma de pago</label><select class="inp" id="tpp-method"><option value="efectivo">Efectivo desde caja</option><option value="transferencia">Transferencia</option><option value="cheque">Cheque</option></select></div><div class="fg" id="tpp-account-wrap" style="display:none"><label class="lbl">Cuenta bancaria</label><select class="inp" id="tpp-account"><option value="">Seleccionar…</option>${accounts.map(account=>`<option value="${account.id}">${techPurchaseEsc(account.name)} · ${techPurchaseEsc(account.currency)}</option>`).join('')}</select></div></div><div class="fg"><label class="lbl">Referencia del pago</label><input class="inp" id="tpp-reference"></div><div class="g2"><div class="fg"><label class="lbl">Nombre que firma como vendedor *</label><input class="inp" id="tpp-seller-sign"></div><div class="fg"><label class="lbl">Encargado del negocio que firma *</label><input class="inp" id="tpp-business-sign" value="${techPurchaseEsc(user?.name||'')}"></div></div><label style="display:flex;gap:8px;margin:8px 0"><input type="checkbox" id="tpp-owner"> El vendedor declara que es propietario legítimo del equipo.</label><label style="display:flex;gap:8px;margin:8px 0"><input type="checkbox" id="tpp-origin"> El vendedor declara que el equipo tiene procedencia lícita y no está reportado, bloqueado, financiado ni reclamado por terceros.</label><details style="margin-top:10px"><summary class="tb">Ver términos que quedarán congelados en este contrato</summary><div class="ts" style="white-space:pre-wrap;padding:10px">${techPurchaseEsc(configRes.data.terms)}</div></details><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="tpp-save">Registrar compra y equipo</button></div>`,'modal-xl');
+  openModal(`<div class="modal-title">Compra de equipo usado a una persona</div><div class="modal-sub">La operación crea el equipo en inventario y conserva las declaraciones y términos firmados.</div><div class="tb" style="margin:14px 0 8px">1. Identidad del vendedor</div><div class="g3"><div class="fg"><label class="lbl">Nombre completo *</label><input class="inp" id="tpp-name"></div><div class="fg"><label class="lbl">Cédula / pasaporte *</label><input class="inp" id="tpp-document" data-uppercase="off"></div><div class="fg"><label class="lbl">Teléfono *</label><input class="inp" id="tpp-phone" data-uppercase="off"></div></div><div class="g2"><div class="fg"><label class="lbl">Dirección *</label><input class="inp" id="tpp-address"></div><div class="fg"><label class="lbl">Correo</label><input class="inp no-uppercase" id="tpp-email" data-uppercase="off" type="email"></div></div><div class="tb" style="margin:12px 0 8px">2. Equipo y evaluación</div><div class="g2"><div class="fg"><label class="lbl">Producto / modelo *</label><select class="inp" id="tpp-product">${products.map(product=>`<option value="${product.id}">${techPurchaseEsc(product.name)} · ${techPurchaseEsc(product.code)}</option>`).join('')}</select></div><div class="fg"><label class="lbl">Nombre del equipo</label><input class="inp" id="tpp-device" placeholder="IPHONE 13 128GB"></div></div><div class="g3"><div class="fg"><label class="lbl">IMEI *</label><input class="inp" id="tpp-imei" data-uppercase="off"></div><div class="fg"><label class="lbl">Serial</label><input class="inp" id="tpp-serial" data-uppercase="off"></div><div class="fg"><label class="lbl">Color</label><input class="inp" id="tpp-color"></div></div><div class="g3"><div class="fg"><label class="lbl">Capacidad</label><input class="inp" id="tpp-capacity" placeholder="128GB"></div><div class="fg"><label class="lbl">Condición batería (%)</label><input class="inp" id="tpp-health" type="number" min="0" max="100"></div><div class="fg"><label class="lbl">Capacidad batería (mAh)</label><input class="inp" id="tpp-mah" type="number" min="0" max="100000"></div></div><div class="fg"><label class="lbl">Condición física y pruebas *</label><textarea class="inp" id="tpp-condition" rows="2" placeholder="PANTALLA, CARCASA, CÁMARAS, CARGA, BLOQUEOS, HUMEDAD..."></textarea></div><div class="fg"><label class="lbl">Descripción que saldrá en la factura al venderlo</label><input class="inp" id="tpp-description" list="tpp-description-list"><datalist id="tpp-description-list">${descriptions.map(row=>`<option value="${techPurchaseEsc(row.description)}">${techPurchaseEsc(row.name)}</option>`).join('')}</datalist></div><div class="tb" style="margin:12px 0 8px">3. Pago y firmas</div><div class="g3"><div class="fg"><label class="lbl">Precio de compra *</label><input class="inp" id="tpp-amount" type="number" min="0.01" step="0.01"></div><div class="fg"><label class="lbl">Forma de pago</label><select class="inp" id="tpp-method"><option value="efectivo">Efectivo desde caja</option><option value="transferencia">Transferencia</option><option value="cheque">Cheque</option></select></div><div class="fg" id="tpp-account-wrap" style="display:none"><label class="lbl">Cuenta bancaria</label><select class="inp" id="tpp-account"><option value="">Seleccionar…</option>${accounts.map(account=>`<option value="${account.id}">${techPurchaseEsc(account.name)} · ${techPurchaseEsc(account.currency)}</option>`).join('')}</select></div></div><div class="fg"><label class="lbl">Referencia del pago</label><input class="inp" id="tpp-reference"></div><div class="g2"><div class="fg"><label class="lbl">Nombre que firma como vendedor *</label><input class="inp" id="tpp-seller-sign"></div><div class="fg"><label class="lbl">Encargado del negocio que firma *</label><input class="inp" id="tpp-business-sign" value="${techPurchaseEsc(user?.name||'')}"></div></div><label style="display:flex;gap:8px;margin:8px 0"><input type="checkbox" id="tpp-owner"> El vendedor declara que es propietario legítimo del equipo.</label><label style="display:flex;gap:8px;margin:8px 0"><input type="checkbox" id="tpp-origin"> El vendedor declara que el equipo tiene procedencia lícita y no está reportado, bloqueado, financiado ni reclamado por terceros.</label><details style="margin-top:10px"><summary class="tb">Ver términos que quedarán congelados en este contrato</summary><div class="ts" style="white-space:pre-wrap;padding:10px">${techPurchaseEsc(configRes.data.terms)}</div></details><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="tpp-save">Registrar compra y equipo</button></div>`,'modal-xl compras-mobile-modal');
   document.getElementById('tpp-method').onchange=event=>document.getElementById('tpp-account-wrap').style.display=event.target.value==='efectivo'?'none':'block';
   const descriptionField=document.getElementById('tpp-description')?.closest('.fg');
   descriptionField?.insertAdjacentHTML('beforebegin',`<div class="fg"><label class="lbl">Accesorios entregados</label><div style="display:flex;gap:14px;flex-wrap:wrap;padding:9px;border:1px solid var(--line);border-radius:8px"><label><input type="checkbox" class="tpp-accessory" value="CARGADOR"> Cargador</label><label><input type="checkbox" class="tpp-accessory" value="CABLE"> Cable</label><label><input type="checkbox" class="tpp-accessory" value="CAJA"> Caja</label><label><input type="checkbox" class="tpp-accessory" value="FUNDA"> Funda</label><input class="inp" id="tpp-accessory-other" placeholder="OTRO ACCESORIO" style="min-width:180px;flex:1"></div></div>`);
@@ -957,9 +1002,9 @@ function techPrivatePurchaseDocument(row){
   </main></body></html>`;
 }
 
-async function verCompraParticular(id){const res=await window.api.techPrivatePurchases.getById({id,requestUserId:user?.id});if(!res?.ok||!res.data)return toast(res?.error||'Compra no encontrada','err');const row=res.data;openModal(`<div class="modal-title">${techPurchaseEsc(row.number)}</div><div class="modal-sub">Contrato y entrada de inventario vinculados · unidad #${row.product_unit_id}</div><div class="g2" style="margin-top:14px"><div class="card" style="padding:12px"><div class="tb">Vendedor</div><div>${techPurchaseEsc(row.seller_name)}</div><div class="ts">${techPurchaseEsc(row.seller_document)} · ${techPurchaseEsc(row.seller_phone)}</div></div><div class="card" style="padding:12px"><div class="tb">Equipo</div><div>${techPurchaseEsc(row.product_name)}</div><div class="ts">${techPurchaseEsc(row.imei||row.serial)} · ${techPurchaseEsc(row.unit_status)}</div></div></div><div class="alrt b"><div class="alrt-dot b"></div><div class="alrt-sub">El contrato utiliza una hoja A4 completa con datos, condiciones y espacios amplios para las firmas de ambas partes.</div></div><div class="modal-foot"><button class="btn btn-out" onclick="veloRepaint(() => renderCompras(document.getElementById('page')))">Atrás</button><button class="btn btn-dark" id="tpp-print">${svg('print')} Imprimir contrato A4</button></div>`);document.getElementById('tpp-print').onclick=()=>printHTML(techPrivatePurchaseDocument(row),'reporte');}
+async function verCompraParticular(id){const res=await window.api.techPrivatePurchases.getById({id,requestUserId:user?.id});if(!res?.ok||!res.data)return toast(res?.error||'Compra no encontrada','err');const row=res.data;openModal(`<div class="modal-title">${techPurchaseEsc(row.number)}</div><div class="modal-sub">Contrato y entrada de inventario vinculados · unidad #${row.product_unit_id}</div><div class="g2" style="margin-top:14px"><div class="card" style="padding:12px"><div class="tb">Vendedor</div><div>${techPurchaseEsc(row.seller_name)}</div><div class="ts">${techPurchaseEsc(row.seller_document)} · ${techPurchaseEsc(row.seller_phone)}</div></div><div class="card" style="padding:12px"><div class="tb">Equipo</div><div>${techPurchaseEsc(row.product_name)}</div><div class="ts">${techPurchaseEsc(row.imei||row.serial)} · ${techPurchaseEsc(row.unit_status)}</div></div></div><div class="alrt b"><div class="alrt-dot b"></div><div class="alrt-sub">El contrato utiliza una hoja A4 completa con datos, condiciones y espacios amplios para las firmas de ambas partes.</div></div><div class="modal-foot"><button class="btn btn-out" onclick="veloRepaint(() => renderCompras(document.getElementById('page')))">Atrás</button><button class="btn btn-dark" id="tpp-print">${svg('print')} Imprimir contrato A4</button></div>`,'compras-mobile-modal');document.getElementById('tpp-print').onclick=()=>printHTML(techPrivatePurchaseDocument(row),'reporte');}
 
-async function abrirConfigCompraParticular(){const res=await window.api.techPrivatePurchases.getConfig({requestUserId:user?.id});if(!res?.ok)return toast(res?.error,'err');openModal(`<div class="modal-title">Términos de compra y garantía del taller</div><div class="modal-sub">Los contratos nuevos guardan una copia inmutable de estos términos. Los anteriores no cambian.</div><div class="fg" style="margin-top:14px"><label class="lbl">Términos predeterminados para compra a particulares</label><textarea class="inp" id="tpp-terms" rows="10">${techPurchaseEsc(res.data.terms)}</textarea></div><div class="fg"><label class="lbl">Garantía predeterminada del servicio técnico (días)</label><input class="inp" id="tpp-warranty-default" type="number" min="0" max="3650" value="${Number(res.data.default_warranty_days)||30}"></div><div class="alrt a"><div class="alrt-dot a"></div><div class="alrt-sub">Estos términos son una base operativa y no sustituyen la revisión de un abogado según las políticas del negocio y la legislación aplicable.</div></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="tpp-config-save">Guardar</button></div>`,'modal-lg');document.getElementById('tpp-config-save').onclick=async()=>{const saved=await window.api.techPrivatePurchases.saveConfig({requestUserId:user?.id,terms:document.getElementById('tpp-terms').value,default_warranty_days:Number(document.getElementById('tpp-warranty-default').value)||0});if(!saved?.ok)return toast(saved?.error||'No se pudo guardar','err');toast('✓ Términos actualizados para contratos futuros','ok');closeModal();};}
+async function abrirConfigCompraParticular(){const res=await window.api.techPrivatePurchases.getConfig({requestUserId:user?.id});if(!res?.ok)return toast(res?.error,'err');openModal(`<div class="modal-title">Términos de compra y garantía del taller</div><div class="modal-sub">Los contratos nuevos guardan una copia inmutable de estos términos. Los anteriores no cambian.</div><div class="fg" style="margin-top:14px"><label class="lbl">Términos predeterminados para compra a particulares</label><textarea class="inp" id="tpp-terms" rows="10">${techPurchaseEsc(res.data.terms)}</textarea></div><div class="fg"><label class="lbl">Garantía predeterminada del servicio técnico (días)</label><input class="inp" id="tpp-warranty-default" type="number" min="0" max="3650" value="${Number(res.data.default_warranty_days)||30}"></div><div class="alrt a"><div class="alrt-dot a"></div><div class="alrt-sub">Estos términos son una base operativa y no sustituyen la revisión de un abogado según las políticas del negocio y la legislación aplicable.</div></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="tpp-config-save">Guardar</button></div>`,'modal-lg compras-mobile-modal');document.getElementById('tpp-config-save').onclick=async()=>{const saved=await window.api.techPrivatePurchases.saveConfig({requestUserId:user?.id,terms:document.getElementById('tpp-terms').value,default_warranty_days:Number(document.getElementById('tpp-warranty-default').value)||0});if(!saved?.ok)return toast(saved?.error||'No se pudo guardar','err');toast('✓ Términos actualizados para contratos futuros','ok');closeModal();};}
 
 // ── Orden de compra para el proveedor ─────────────────────────────────────
 // Documento comercial de la orden guardada: hoja Carta con membrete o ticket

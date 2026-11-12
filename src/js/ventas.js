@@ -4395,11 +4395,38 @@ async function renderDevoluciones(el) {
   if (page !== 'devoluciones' || !el.isConnected) return;
   el.innerHTML = '';
 
-  el.appendChild(h('div', { class: 'sec-hdr' },
+  el.appendChild(h('div', { class: 'sec-hdr mobile-module-heading' },
     h('div', null,
       h('div', { class: 'sec-title' }, 'Devoluciones y notas de crédito'),
       h('div', { class: 'sec-sub' }, 'Devuelve productos o consulta ajustes monetarios emitidos')
     )
+  ));
+
+  const totalCreditos = Number(devCount) || 0;
+  const ajustes = devs.filter(d => d.correction_kind === 'monetary_credit').length;
+  const tipos = [
+    { label: 'Devoluciones de productos', count: devs.length - ajustes },
+    { label: 'Ajustes monetarios', count: ajustes },
+  ];
+  el.appendChild(h('div', { class: 'mobile-summary-metrics devoluciones-mobile-summary' },
+    h('div', { class: 'metric mobile-summary-featured' },
+      h('div', { class: 'met-label' }, 'Historial de créditos'),
+      h('div', { class: 'met-val' }, totalCreditos)
+    ),
+    tipos.map(({ label, count }) => {
+      const metric = h('div', { class: 'metric mobile-summary-bar' },
+        h('div', { class: 'met-label' }, label),
+        h('div', { class: 'met-val' }, count)
+      );
+      metric.style.setProperty('--mobile-bar-size', (count / (devs.length || 1) * 100) + '%');
+      return metric;
+    }),
+    totalCreditos > devs.length
+      ? h('div', { class: 'metric mobile-summary-total' },
+          h('div', { class: 'met-label' }, 'Registros mostrados'),
+          h('div', { class: 'met-val' }, devs.length + ' de ' + totalCreditos)
+        )
+      : null
   ));
 
   const searchCard = h('div', { class: 'card mb20' });
@@ -4408,11 +4435,12 @@ async function renderDevoluciones(el) {
       'Buscar factura para devolver productos')
   );
 
-  const searchRow = h('div', { class: 'flex', style: { gap: '8px' } },
+  const searchRow = h('div', { class: 'flex devoluciones-mobile-search', style: { gap: '8px' } },
     h('div', { class: 'inp-ic', style: { flex: 1 } },
       h('div', { class: 'ic', html: svg('search') }),
       h('input', {
         class: 'inp', type: 'text', id: 'dev-search-inp',
+        'aria-label': 'Buscar factura para devolver productos',
         placeholder: 'Buscar por # factura (ej: 3), nombre o cédula del cliente...',
         onkeydown: e => { if (e.key === 'Enter') buscarFacturaDevolucion(); }
       })
@@ -4441,40 +4469,44 @@ async function renderDevoluciones(el) {
   }
 
   // Historial devoluciones
-  const histCard = h('div', { class: 'card' });
-  histCard.appendChild(h('div', { class: 'fxb mb8' },
+  const histCard = h('div', { class: 'card mobile-list-card' });
+  histCard.appendChild(h('div', { class: 'fxb mb8 devoluciones-desktop-heading' },
         h('div', { class: 'card-title' }, `Historial de créditos (${Number(devCount) || 0})`)
   ));
 
   if (!devs.length) {
     histCard.appendChild(h('div', { class: 'empty', style: { padding: '24px' } },
-      h('div', { html: svg('return'), style: { color: 'var(--muted2)' } }),
+      h('div', { html: svg('return'), 'aria-hidden': 'true', style: { color: 'var(--muted2)' } }),
       h('p', null, 'Sin devoluciones ni notas de crédito registradas')
     ));
   } else {
     const tw  = h('div', { class: 'tw' });
-    const tbl = h('table', null,
-      h('thead', null,
-        h('tr', null,
-          ...['#','Fecha','Cliente','Factura Orig.','Total',''].map(t => h('th', null, t))
+    const tbl = h('table', { class: 'mobile-card-table', role: 'table' },
+      h('thead', { role: 'rowgroup' },
+        h('tr', { role: 'row' },
+          ...['#','Fecha','Cliente','Factura Orig.','Total',''].map(t =>
+            h('th', { role: 'columnheader', scope: 'col', 'aria-label': t || 'Acciones' }, t)
+          )
         )
       )
     );
-    const tbody = h('tbody', null);
+    const tbody = h('tbody', { role: 'rowgroup' });
     devs.forEach(d => {
       const fecha = (d.sale_date || d.date || '').split('T')[0].split(' ')[0];
-      tbody.appendChild(h('tr', { style: { background: 'var(--red-bg)' } },
-        h('td', { class: 'tm' }, facturaLabel(d)),
-        h('td', { class: 'ts' }, fdate(fecha)),
-        h('td', null,
+      tbody.appendChild(h('tr', { role: 'row', style: { background: 'var(--red-bg)' } },
+        h('td', { class: 'tm mobile-card-title', role: 'cell' }, facturaLabel(d)),
+        h('td', { class: 'ts', role: 'cell', 'data-label': 'Fecha' }, fdate(fecha)),
+        h('td', { role: 'cell', 'data-label': 'Cliente' },
           h('div', { class: 'tb' }, d.customer_name || d.clientName || '—'),
           h('div', { class: 'ts' },
             d.correction_kind === 'monetary_credit' ? 'Ajuste monetario' : 'Devolución de productos')
         ),
-        h('td', { class: 'tm' }, d.original_sale_id ? facturaLabelOriginal(d) : '—'),
-        h('td', null, h('span', { style: { fontWeight: 700, color: 'var(--red)' } },
-          `-${fmt(d.total)}`)),
-        h('td', null,
+        h('td', { class: 'tm', role: 'cell', 'data-label': 'Factura original' },
+          d.original_sale_id ? facturaLabelOriginal(d) : '—'),
+        h('td', { role: 'cell', 'data-label': 'Total' },
+          h('span', { style: { fontWeight: 700, color: 'var(--red)' } },
+            `-${fmt(d.total)}`)),
+        h('td', { class: 'mobile-card-actions', role: 'cell' },
           h('button', {
             class: 'btn btn-ghost btn-sm',
             onclick: () => openDetalleVentaModal(d),
@@ -4541,7 +4573,7 @@ async function buscarFacturaDevolucion() {
     const fecha = (s.sale_date || '').split('T')[0].split(' ')[0];
 
     const card = h('div', { class: 'card', style: { marginBottom: '8px' } });
-    card.appendChild(h('div', { class: 'fxb', style: { marginBottom: '8px' } },
+    card.appendChild(h('div', { class: 'fxb devoluciones-mobile-result-heading', style: { marginBottom: '8px' } },
       h('div', null,
         h('span', { style: { fontWeight: 700 } }, `Factura ${facturaLabel(s)}`),
         h('span', { class: 'ts', style: { marginLeft: '10px' } },
