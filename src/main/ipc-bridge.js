@@ -51,6 +51,7 @@ function rpcTimeoutFor(channel) {
   // Incluye backup consistente y una transacción fiscal auditada. En una base
   // grande puede superar el timeout interactivo normal sin que el servidor se
   // haya desconectado.
+  if (['ecf:emit', 'ecf:getStatus', 'ecf:testConnection'].includes(channel)) return 40000;
   if (channel === 'ncf:recoverMalformedDocuments') return 2 * 60 * 1000;
   // Una base grande puede tardar varios minutos en crear el snapshot,
   // cifrarlo o ejecutar integrity_check. No reportar SERVER_OFFLINE mientras

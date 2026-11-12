@@ -12,6 +12,7 @@ const bcrypt   = require('bcryptjs');
 const { app }  = require('electron');
 const { todayStr, nowStr, addDaysStr } = require('./lib/dates');
 const { searchNorm: _searchNorm, digitsOf: _digitsOf } = require('./lib/text-normalize');
+const desktopEcf = require('./lib/desktop-ecf');
 const { round2 } = require('./lib/money');
 const { calculate: calculateOfferAllocation } = require('./src/js/offer-allocation');
 const { getPendingInvoices } = require('./lib/pending-invoices');
@@ -1451,6 +1452,27 @@ function createTables() {
       pdf_url      TEXT,
       xml_firmado  TEXT,
       emitido_at   TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS ecf_sequences (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      environment TEXT NOT NULL CHECK(environment IN ('test','production')),
+      type TEXT NOT NULL CHECK(type IN ('E31','E32')),
+      issuer_rnc TEXT NOT NULL,
+      first_ncf TEXT NOT NULL,
+      last_ncf TEXT NOT NULL,
+      next_number INTEGER NOT NULL,
+      expiry_date TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS ecf_documents (
+      sale_id INTEGER PRIMARY KEY REFERENCES sales(id),
+      sequence_id INTEGER NOT NULL REFERENCES ecf_sequences(id),
+      encf TEXT NOT NULL UNIQUE,
+      payload TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'Reservado',
+      qr_url TEXT NOT NULL DEFAULT '',
+      security_code TEXT NOT NULL DEFAULT '',
+      signed_date TEXT NOT NULL DEFAULT ''
     );
 
     CREATE INDEX IF NOT EXISTS idx_ecf_log_sale ON ecf_log(sale_id);
@@ -6722,7 +6744,16 @@ const salesRepo = {
       const ncfType = debitNote
         ? (String(debitNoteOriginal.ncf || '').trim() ? 'B03' : '')
         : (/^B(01|02|04|14|15|16|17)$/.test(requestedNcfType) ? requestedNcfType : '');
-      if (reuseNcfOriginal) {
+      if (type === 'factura' && desktopEcf.TYPES.has(requestedNcfType)) {
+        if (debitNote || reuseNcfOriginal) throw new Error('El e-CF requiere una factura nueva.');
+        const localDate = saleRow.created_at.slice(0, 10);
+        if (saleRow.sale_date !== localDate) throw new Error('La emisión electrónica requiere la fecha del día.');
+        const creditCustomer = method === 'credito'
+          ? db.prepare('SELECT credit_due,credit_days FROM customers WHERE id=?').get(customer.id) : null;
+        const dueDate = walkInCredit ? payment.walkInDueDate : creditCustomer?.credit_due >= localDate
+          ? creditCustomer.credit_due : addDaysStr(localDate, creditCustomer?.credit_days || 30);
+        ncf = ecfRepo.reserve({ type: requestedNcfType, saleId, sale: saleRow, items: saleItems, charges, dueDate });
+      } else if (reuseNcfOriginal) {
         // El comprobante vuelve a estar vigente con su fecha fiscal original: sale
         // del 608 y en el 607 queda en su mes, ahora con el monto corregido. La
         // factura anulada deja de tenerlo para que nunca haya dos documentos con él.
@@ -7086,8 +7117,13 @@ const salesRepo = {
   },
 
   getById(id) {
-    const sale  = db.prepare(`SELECT s.*,sp.name salesperson_name,sp.code salesperson_code
-      FROM sales s LEFT JOIN salespeople sp ON sp.id=s.salesperson_id WHERE s.id=?`).get(id);
+    const sale = db.prepare(`SELECT s.*,sp.name salesperson_name,sp.code salesperson_code,
+        e.security_code AS ecf_security_code,e.signed_date AS ecf_signed_date,
+        q.environment AS ecf_environment,
+        CASE WHEN e.status IN ('Aceptado','Aceptado Condicional') THEN e.payload END AS ecf_print_payload
+      FROM sales s LEFT JOIN salespeople sp ON sp.id=s.salesperson_id
+      LEFT JOIN ecf_documents e ON e.sale_id=s.id
+      LEFT JOIN ecf_sequences q ON q.id=e.sequence_id WHERE s.id=?`).get(id);
     if (!sale) return null;
     sale.items  = db.prepare(`
       SELECT si.*,
@@ -7946,6 +7982,9 @@ const salesRepo = {
     }
     const sale = db.prepare('SELECT * FROM sales WHERE id=?').get(id);
     if (!sale) throw new Error('Venta no encontrada');
+    if (db.prepare('SELECT 1 FROM ecf_documents WHERE sale_id=?').get(id)) {
+      throw new Error('Gestiona la anulación del comprobante electrónico con el proveedor fiscal.');
+    }
     if (sale.status === 'cancelled') throw new Error('Venta ya está cancelada');
     if (sale.status === 'returned')  throw new Error('No se puede anular una venta con devolución procesada');
     // SEGURIDAD: solo facturas y ventas de crédito pueden anularse
@@ -8954,6 +8993,9 @@ const returnsRepo = {
       const original = db.prepare('SELECT * FROM sales WHERE id=?').get(originalSaleId);
       if (!original) throw new Error('Venta original no encontrada');
       if (original.status === 'cancelled') throw new Error('La venta ya está anulada');
+      if (db.prepare('SELECT 1 FROM ecf_documents WHERE sale_id=?').get(originalSaleId)) {
+        throw new Error('Gestiona la nota de crédito electrónica con el proveedor fiscal.');
+      }
       // Blindaje: solo se devuelven facturas/ventas a crédito (las que descontaron
       // stock). Las cotizaciones nunca movieron inventario ni dinero.
       if (original.type === 'cotizacion') {
@@ -10710,6 +10752,84 @@ function ncfPaymentStateResolver() {
   };
 }
 
+function ecfIssuerRnc() {
+  return String(settingsRepo.get('biz_rnc') || settingsRepo.get('rnc') || '').replace(/\D/g, '');
+}
+
+const ecfRepo = {
+  available() {
+    const environment = settingsRepo.get('ecf_environment') || 'test';
+    if (settingsRepo.get('fiscal_enabled') !== '1' || settingsRepo.get('ecf_enabled') !== '1') return [];
+    return db.prepare(`
+      SELECT DISTINCT type FROM ecf_sequences WHERE environment=? AND issuer_rnc=?
+        AND expiry_date>=date('now','localtime') AND next_number<=CAST(substr(last_ncf,4) AS INTEGER)
+      ORDER BY type
+    `).all(environment, ecfIssuerRnc()).map(row => row.type);
+  },
+
+  ranges(environment) {
+    return db.prepare('SELECT * FROM ecf_sequences WHERE environment=? ORDER BY type,first_ncf').all(environment);
+  },
+
+  addRange(input) {
+    const range = desktopEcf.rangeInput(input);
+    const issuer = ecfIssuerRnc();
+    if (!/^\d{9}$/.test(issuer)) throw new Error('Configura el RNC del emisor antes de registrar un rango.');
+    return db.transaction(() => {
+      if (!db.prepare("SELECT 1 WHERE ?>=date('now','localtime')").get(range.expiry)) {
+        throw new Error('El rango de e-NCF está vencido.');
+      }
+      const exists = db.prepare(`
+        SELECT 1 FROM ecf_sequences WHERE type=? AND first_ncf<=? AND last_ncf>=?
+      `).get(range.type, range.to, range.from);
+      if (exists) throw new Error('El rango de e-NCF se solapa con otro ya registrado.');
+      return db.prepare(`
+        INSERT INTO ecf_sequences(environment,type,issuer_rnc,first_ncf,last_ncf,next_number,expiry_date)
+        VALUES(?,?,?,?,?,?,?)
+      `).run(range.environment, range.type, issuer, range.from, range.to, Number(range.from.slice(3)), range.expiry).lastInsertRowid;
+    }).immediate();
+  },
+
+  reserve({ type, saleId, sale, items, charges, dueDate }) {
+    if (!db.inTransaction) throw new Error('El e-NCF se reserva al guardar la factura.');
+    if (!this.available().includes(type)) throw new Error('El e-CF no está activo o no tiene un rango vigente disponible.');
+    const environment = settingsRepo.get('ecf_environment') || 'test';
+    const ranges = db.prepare(`
+      SELECT * FROM ecf_sequences WHERE environment=? AND type=? AND issuer_rnc=?
+        AND expiry_date>=date('now','localtime') AND next_number<=CAST(substr(last_ncf,4) AS INTEGER)
+      ORDER BY expiry_date,first_ncf
+    `).all(environment, type, ecfIssuerRnc());
+    const occupied = db.prepare(`
+      SELECT 1 FROM sales WHERE UPPER(TRIM(ncf))=?
+      UNION ALL SELECT 1 FROM ncf_log WHERE UPPER(TRIM(ncf))=?
+      UNION ALL SELECT 1 FROM ecf_log WHERE UPPER(TRIM(encf))=?
+      LIMIT 1
+    `);
+    for (const range of ranges) {
+      const last = Number(range.last_ncf.slice(3));
+      for (let sequence = range.next_number; sequence <= last; sequence++) {
+        const ncf = type + String(sequence).padStart(10, '0');
+        if (occupied.get(ncf, ncf, ncf)) continue;
+        const payload = desktopEcf.buildDocument({
+          ncf, expiry: range.expiry_date, date: sale.sale_date, dueDate, sale, items, charges,
+          issuer: {
+            rnc: range.issuer_rnc,
+            name: settingsRepo.get('biz_name') || settingsRepo.get('biz'),
+            address: settingsRepo.get('biz_addr') || settingsRepo.get('addr'),
+            incomeType: settingsRepo.get('ecf_income_type'),
+          },
+        });
+        db.prepare('UPDATE ecf_sequences SET next_number=? WHERE id=?').run(sequence + 1, range.id);
+        db.prepare('INSERT INTO ecf_documents(sale_id,sequence_id,encf,payload) VALUES(?,?,?,?)')
+          .run(saleId, range.id, ncf, JSON.stringify(payload));
+        db.prepare("UPDATE sales SET ncf=?,ecf_status='Reservado' WHERE id=?").run(ncf, saleId);
+        return ncf;
+      }
+    }
+    throw new Error('No quedan e-NCF disponibles para este tipo de comprobante.');
+  },
+};
+
 const ncfRepo = {
   getSequences() {
     ensureNcfAvailableNumbersTable();
@@ -10993,6 +11113,7 @@ const ncfRepo = {
         FROM sales s
        WHERE TRIM(COALESCE(s.ncf,''))<>''
          AND NOT EXISTS (SELECT 1 FROM ncf_log l WHERE l.sale_id=s.id)
+         AND NOT EXISTS (SELECT 1 FROM ecf_documents e WHERE e.sale_id=s.id)
     ) SELECT * FROM comprobantes WHERE 1=1`;
     const p = [];
     if (from && DATE_RE.test(from)) { q += ` AND date(${reportDate}) >= ?`; p.push(from); }
@@ -15535,6 +15656,7 @@ module.exports = {
   maintenanceRepo,
   deliveriesRepo,
   ncfRepo,
+  ecfRepo,
   financialAccountsRepo,
   bankReconRepo,
   fixedAssetsRepo,

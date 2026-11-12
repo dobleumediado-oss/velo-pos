@@ -2871,94 +2871,94 @@ let auditFilter = '';
 // ══════════════════════════════════════════════════════════════════════════════
 
 async function renderECFConfig(container) {
-  // El handler exige rol admin/superadmin identificado por requestUserId; sin él
-  // devuelve {ok:false} y la sección se mostraría siempre "Sin configurar".
-  let cfgRes = null;
-  try { cfgRes = await window.api.ecf?.getConfig({ requestUserId: _cfgUser()?.id }); }
-  catch (e) { console.warn('e-CF getConfig falló:', e?.message || e); }
-  const cfg    = cfgRes?.ok ? cfgRes.data : {};
-
+  const requestUserId = _cfgUser()?.id;
+  const cfgRes = await window.api.ecf.getConfig({ requestUserId }).catch(() => null);
+  if (!cfgRes?.ok) return;
+  const cfg = cfgRes.data;
+  const environmentLabel = cfg.environment === 'production' ? 'Producción' : 'Prueba (TesteCF)';
   container.innerHTML = `
-    <div style="background:var(--bg2);border-radius:12px;padding:18px;border:1px solid var(--line2);margin-top:16px">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
-        <span style="font-size:20px">📄</span>
-        <div>
-          <div style="font-weight:600;font-size:14px">Facturación Electrónica (e-CF)</div>
-          <div style="font-size:11px;color:var(--muted2)">Comprobantes Fiscales Electrónicos — DGII · MSeller ECF</div>
-        </div>
-        <span style="margin-left:auto;font-size:10px;padding:3px 10px;border-radius:100px;
-          background:${cfg.apiKey ? 'rgba(0,192,122,.1)' : 'rgba(239,68,68,.1)'};
-          color:${cfg.apiKey ? 'var(--green,#00c07a)' : 'var(--red,#ef4444)'}">
-          ${cfg.apiKey ? '● Configurado' : '● Sin configurar'}
-        </span>
+    <div class="card" style="margin-top:16px">
+      <div class="card-title">Facturación Electrónica (e-CF)</div>
+      <div class="fg"><label class="lbl" for="ecf-email">Correo de la cuenta MSeller</label>
+        <input class="inp" id="ecf-email" type="email" autocomplete="username"></div>
+      <div class="fg"><label class="lbl" for="ecf-pass">Contraseña MSeller</label>
+        <input class="inp" id="ecf-pass" type="password" autocomplete="new-password"
+          placeholder="${cfg.hasPassword ? 'Guardada. Escribe solo para cambiarla.' : ''}"></div>
+      <div class="fg"><label class="lbl" for="ecf-apikey">API Key de MSeller</label>
+        <input class="inp no-uppercase" id="ecf-apikey" type="password" autocomplete="off" data-uppercase="off"
+          placeholder="${cfg.hasApiKey ? 'Guardada. Escribe solo para cambiarla.' : ''}"></div>
+      <div class="fg"><label class="lbl" for="ecf-env">Ambiente</label>
+        <select class="inp" id="ecf-env">
+          <option value="test">Prueba (TesteCF)</option>
+          <option value="production">Producción</option>
+        </select>
       </div>
-
-      <div style="display:grid;gap:10px">
-        <div class="fg">
-          <label class="lbl">Correo de cuenta MSeller</label>
-          <input class="inp" id="ecf-email" type="email"
-            value="${cfg.email || ''}"
-            placeholder="tu@correo.com">
-        </div>
-        <div class="fg">
-          <label class="lbl">Contraseña MSeller ${cfg.hasPassword ? '(guardada ●●●)' : ''}</label>
-          <input class="inp" id="ecf-pass" type="password"
-            placeholder="${cfg.hasPassword ? 'Dejar vacío para mantener la actual' : 'Contraseña de tu cuenta MSeller'}">
-        </div>
-        <div class="fg">
-          <label class="lbl">API Key</label>
-          <input class="inp no-uppercase" id="ecf-apikey" type="text" data-uppercase="off"
-            value="${cfg.apiKey || ''}"
-            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
-          <div style="font-size:10px;color:var(--muted2);margin-top:3px">
-            Obtén tu API Key en: ecf.mseller.app → Configuración → API Keys
-          </div>
-        </div>
-        <div class="fg">
-          <label class="lbl">Ambiente</label>
-          <select class="inp" id="ecf-env">
-            <option value="test"       ${(cfg.environment||'test')==='test'       ? 'selected' : ''}>🧪 Prueba (TesteCF)</option>
-            <option value="production" ${cfg.environment==='production' ? 'selected' : ''}>🚀 Producción</option>
-          </select>
-        </div>
+      <div class="fg"><label class="lbl" for="ecf-income">Tipo de ingresos</label>
+        <select class="inp" id="ecf-income">
+          <option value="01">01 · Ingresos por operaciones</option>
+          <option value="02">02 · Ingresos financieros</option>
+          <option value="03">03 · Ingresos extraordinarios</option>
+          <option value="04">04 · Ingresos por arrendamientos</option>
+          <option value="05">05 · Ingresos por venta de activo depreciable</option>
+          <option value="06">06 · Otros ingresos</option>
+        </select>
       </div>
-
-      <div style="display:flex;gap:8px;margin-top:14px">
+      <label><input type="checkbox" id="ecf-enabled" ${cfg.enabled ? 'checked' : ''}> Habilitar cobro con E31 y E32</label>
+      <div style="display:flex;gap:8px;margin:10px 0">
         <button class="btn btn-dark btn-sm" id="btn-save-ecf">Guardar configuración</button>
-        <button class="btn btn-ghost btn-sm" id="btn-test-ecf">Probar conexión</button>
+        <button class="btn btn-out btn-sm" id="btn-test-ecf">Probar conexión guardada</button>
       </div>
-      <div id="ecf-status-msg" style="font-size:12px;margin-top:8px;min-height:16px"></div>
+      <div class="card-title">Secuencias e-NCF · ${environmentLabel}</div>
+      <ul id="ecf-ranges"></ul>
+      <div class="fg"><label class="lbl" for="ecf-from">Primer e-NCF disponible</label>
+        <input class="inp" id="ecf-from" maxlength="13"></div>
+      <div class="fg"><label class="lbl" for="ecf-to">Último e-NCF autorizado</label>
+        <input class="inp" id="ecf-to" maxlength="13"></div>
+      <div class="fg"><label class="lbl" for="ecf-expiry">Vencimiento autorizado</label>
+        <input class="inp" id="ecf-expiry" type="date"></div>
+      <button class="btn btn-out btn-sm" id="btn-ecf-range">Registrar rango</button>
+      <div id="ecf-status-msg" class="ts" role="status"></div>
     </div>`;
-
-  // Guardar
-  container.querySelector('#btn-save-ecf')?.addEventListener('click', async () => {
-    const email  = container.querySelector('#ecf-email')?.value.trim();
-    const pass   = container.querySelector('#ecf-pass')?.value;
-    const apiKey = container.querySelector('#ecf-apikey')?.value.trim();
-    const env    = container.querySelector('#ecf-env')?.value;
-    const msg    = container.querySelector('#ecf-status-msg');
-    if (!email || !apiKey) { msg.style.color='var(--red,#ef4444)'; msg.textContent = '⚠ Correo y API Key son obligatorios'; return; }
-    const res = await window.api.ecf.saveConfig({ email, password: pass || undefined, apiKey, environment: env, requestUserId: _cfgUser()?.id });
-    if (res.ok) { msg.style.color='var(--green,#00c07a)'; msg.textContent = '✓ Configuración guardada'; }
-    else { msg.style.color='var(--red,#ef4444)'; msg.textContent = `⚠ ${res.error}`; }
+  const field = id => container.querySelector('#' + id);
+  field('ecf-email').value = cfg.email;
+  field('ecf-env').value = cfg.environment;
+  field('ecf-income').value = cfg.incomeType;
+  const ranges = cfg.ranges.length ? cfg.ranges : [null];
+  ranges.forEach(range => {
+    const item = document.createElement('li');
+    item.textContent = range
+      ? `${range.first_ncf} a ${range.last_ncf} · RNC ${range.issuer_rnc} · Vence ${range.expiry_date} · ${Math.max(0, Number(range.last_ncf.slice(3)) - range.next_number + 1)} disponibles`
+      : 'No hay secuencias registradas.';
+    field('ecf-ranges').appendChild(item);
   });
-
-  // Probar conexión
-  container.querySelector('#btn-test-ecf')?.addEventListener('click', async () => {
-    const msg = container.querySelector('#ecf-status-msg');
-    msg.style.color = 'var(--muted2)';
-    msg.textContent = '⏳ Probando conexión con MSeller...';
+  const showResult = async (button, action, message, refresh = false) => {
+    button.disabled = true;
+    field('ecf-status-msg').textContent = 'Procesando…';
     try {
-      const logRes = await window.api.ecf.getLog({ limit: 1, requestUserId: _cfgUser()?.id });
-      if (logRes.ok) {
-        msg.style.color = 'var(--green,#00c07a)';
-        msg.textContent = '✓ Conexión exitosa con MSeller ECF';
-      } else throw new Error(logRes.error);
-    } catch(e) {
-      msg.style.color = 'var(--red,#ef4444)';
-      msg.textContent = `⚠ Error: ${e.message}`;
+      const result = await action();
+      if (result.ok && refresh) await renderECFConfig(container);
+      field('ecf-status-msg').textContent = result.ok ? message : result.error;
+    } catch {
+      field('ecf-status-msg').textContent = 'No se pudo completar la operación.';
+    } finally { button.disabled = false; }
+  };
+  field('btn-save-ecf').onclick = event => showResult(event.currentTarget, () => window.api.ecf.saveConfig({
+    requestUserId, email: field('ecf-email').value.trim(), password: field('ecf-pass').value,
+    apiKey: field('ecf-apikey').value.trim(), environment: field('ecf-env').value,
+    enabled: field('ecf-enabled').checked, incomeType: field('ecf-income').value,
+  }), 'Configuración guardada.', true);
+  field('btn-test-ecf').onclick = event => showResult(event.currentTarget,
+    () => window.api.ecf.testConnection({ requestUserId }), 'MSeller aceptó la conexión.');
+  field('btn-ecf-range').onclick = event => {
+    if (field('ecf-env').value !== cfg.environment) {
+      field('ecf-status-msg').textContent = 'Guarda el ambiente antes de registrar el rango.';
+      return;
     }
-  });
+    return showResult(event.currentTarget, () => window.api.ecf.addRange({
+      requestUserId, from: field('ecf-from').value, to: field('ecf-to').value,
+      expiry: field('ecf-expiry').value, environment: cfg.environment,
+    }), 'Rango guardado.', true);
+  };
 }
 
 // Encender o apagar Preventa y Despacho desde Configuración. Escribe la misma

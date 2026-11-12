@@ -16,6 +16,8 @@
 // La caja (cash:*) NO va aquí: la sesión de caja es POR terminal, no se comparte.
 const CHANNEL_SCOPES = {
   // Venta: baja stock, puede afectar el balance del cliente (crédito) y el historial.
+  'ecf:emit':            ['sales'],
+  'ecf:getStatus':       ['sales'],
   'sales:create':        ['sales', 'products', 'customers'],
   'sales:cancel':        ['sales', 'products', 'customers', 'checkout_orders'],
   'sales:return':        ['sales', 'products', 'customers'],

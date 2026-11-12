@@ -3501,8 +3501,11 @@ function openCobroModal(inv) {
   window._ncfProximo = {};
   window._proximaFactura = '';
   if (inv.itype === 'factura' && CFG.fiscalEnabled && window.api?.ncf?.getSequences) {
-    window.api.ncf.getSequences().then(seqs => {
-      const avail = new Set();
+    Promise.all([
+      window.api.ncf.getSequences(),
+      Promise.resolve(window.api.ecf?.available?.()).catch(() => null),
+    ]).then(([seqs, electronic]) => {
+      const avail = new Set(electronic?.data || []);
       const proximo = {};
       (seqs?.data || []).forEach(s => {
         if (posNcfSequenceAvailable(s)) avail.add(s.type);
@@ -4149,6 +4152,8 @@ const NCF_TYPE_LABELS = {
   B14: 'B14 · Régimen Especial',
   B15: 'B15 · Gubernamental',
   B16: 'B16 · Exportaciones',
+  E31: 'E31 · Crédito fiscal electrónico',
+  E32: 'E32 · Consumo electrónico',
 };
 
 function posNcfSequenceAvailable(sequence) {
@@ -4185,7 +4190,7 @@ function cbrPopulateNcfTypes(availSet) {
     : inv?.ncfTypeChosen ? (inv.ncfType || '')
       : (inv?.ncfType || DB.settings?.default_ncf_type || '');
   const opts = ['<option value="">Sin comprobante</option>'];
-  ['B01', 'B02', 'B14', 'B15', 'B16'].forEach(t => {
+  ['B01', 'B02', 'B14', 'B15', 'B16', 'E31', 'E32'].forEach(t => {
     if (avail.has(t)) opts.push(`<option value="${t}">${NCF_TYPE_LABELS[t]}</option>`);
   });
   sel.innerHTML = opts.join('');
@@ -4241,7 +4246,11 @@ function cbrDocHint() {
         compLine = `${label}: ⚠ sin secuencia ${tipo} registrada → saldrá SIN NCF`;
       } else {
         const numero = (window._ncfProximo || {})[tipo] || '';
-        compLine = `Comprobante a emitir: ${label}${numero ? ` · ${numero}` : ''}`;
+        if (tipo.startsWith('E')) {
+          compLine = `${label} · Se reserva al cobrar y se envía desde Ventas`;
+        } else {
+          compLine = `Comprobante a emitir: ${label}${numero ? ` · ${numero}` : ''}`;
+        }
       }
     }
   }
@@ -4752,6 +4761,7 @@ async function finalizarVenta() {
     // Venta exitosa
     closeModal();
     const savedDocumentLabel = result.documentNumberFmt || `#${result.saleId}`;
+    if (/^E(?:31|32)/.test(result.ncf || '')) toast('e-NCF reservado. Envía el comprobante desde Ventas.', 'w');
     toast(inv.reuseNcfOfSaleId && result.ncf
       ? `✓ ${savedDocumentLabel} registrada con el NCF ${result.ncf} de ${inv.reuseNcfNumber || 'la factura anulada'}${Number(result.favorApplication?.applied) > 0 ? ` · ${fmt(result.favorApplication.applied)} a favor aplicados` : ''}`
       : result.substitution
@@ -4847,7 +4857,7 @@ async function finalizarVenta() {
       total:     result.total,
       pay:       pmeth,
       cajero:    user.name,
-      ncf:       result.ncf || '',
+      ncf:       /^E(?:31|32)/.test(result.ncf || '') ? '' : (result.ncf || ''),
       tax_pct:   result.taxPct ?? CFG.itbis,
       financial_account_id: result.financialAccountId || finAcctId,
       payment_currency: result.paymentCurrency || 'DOP',

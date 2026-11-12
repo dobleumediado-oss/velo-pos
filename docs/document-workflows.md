@@ -149,3 +149,50 @@ WhatsApp Business Cloud API y sus credenciales.
 - No construir números con `sale.id`, `payment.id` o `padStart()` en módulos de UI.
 - No incluir `cotizacion` en consultas financieras o de rentabilidad.
 - Toda impresión de reportes debe pasar por `printHTML()` o `_openPrintWindow()`.
+
+## Facturación electrónica E31 y E32 en Desktop
+
+Velo reserva el e-NCF al confirmar el cobro y guarda el documento fiscal que se
+enviará a MSeller. Si el rango está vencido o agotado, o los importes del
+comprobante no cuadran, la operación de cobro se revierte.
+
+### Activación por negocio
+
+1. Para el piloto, abre una base desechable con artículos y compradores de
+   prueba. En MSeller prepara la cuenta, su certificado digital y una API Key
+   de `TesteCF`. En producción se requieren la autorización de emisor
+   electrónico de la DGII y las secuencias autorizadas para el mismo RNC.
+2. Con los comprobantes fiscales activos, un administrador abre **Configuración
+   → Facturación Electrónica (e-CF)**. Completa los datos del emisor en
+   Configuración del negocio y guarda la cuenta, el ambiente y el tipo de
+   ingresos. **Probar conexión guardada** verifica la conexión y la clave API.
+3. Registra los e-NCF inicial y final y el vencimiento del rango. Usa el primer
+   número que esté disponible. Si más de un sistema emite para el mismo RNC,
+   asigna rangos sin solapamiento entre sistemas.
+4. Activa **Habilitar cobro con E31 y E32**. Selecciona el comprobante al
+   cobrar. En **Ventas**, abre la factura y pulsa **Enviar e-CF**. Tras el
+   envío, **Consultar e-CF** recupera el estado del mismo número.
+5. Cuando el documento se acepte, abre la vista previa de impresión y verifica
+   el QR, el código de seguridad y la fecha de firma. Las copias del ambiente
+   de prueba llevan el aviso de que carecen de valor fiscal. Si falta el
+   timbre, consulta el PDF del proveedor.
+
+### Envío pendiente y reversa
+
+- **Por confirmar** indica que Velo inició un envío y aún desconoce el
+  resultado. Consulta el mismo e-NCF en Velo y, si sigue sin aparecer,
+  concílialo con MSeller. Velo conserva la reserva durante la conciliación.
+  Si MSeller rechaza las credenciales con HTTP 401 o 403, corrígelas y vuelve
+  a enviar el mismo e-NCF.
+- Para una nota de crédito o débito electrónica, un rechazo o una anulación,
+  concilia el documento en MSeller antes de continuar con esa operación.
+- Para pausar, desmarca **Habilitar cobro con E31 y E32**. Conserva la base y
+  el historial de secuencias. Antes de volver a una versión anterior, concilia
+  todos los documentos electrónicos pendientes y resguarda la base actual.
+- Los E31/E32 de este flujo quedan fuera del reporte local 607/608. La
+  aceptación en producción registra la fecha fiscal y conserva el resultado
+  electrónico en el historial.
+
+[Requisitos de la DGII](https://dgii.gov.do/cicloContribuyente/facturacion/comprobantesFiscalesElectronicosE-CF/Paginas/documentacionSobreE-CF.aspx)
+· [Formato y validación de MSeller](https://docs.ecf.mseller.app/docs/integration/documents)
+· [Representación impresa](https://docs.ecf.mseller.app/docs/integration/representacion-impresa)

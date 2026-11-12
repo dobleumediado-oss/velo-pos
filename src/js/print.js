@@ -513,8 +513,70 @@ function _printChargesAsLines(sale) {
   };
 }
 
+function _printEcfRepresentation(sale) {
+  if (sale.adjusted_copy || !['Aceptado', 'Aceptado Condicional'].includes(sale.ecf_status)) return '';
+  const url = String(sale.ecf_qr || '');
+  const code = String(sale.ecf_security_code || '');
+  if (!/^https:\/\/(ecf|fc)\.dgii\.gov\.do\//i.test(url) ||
+      !/^[A-Za-z0-9+/]{6}$/.test(code) || !sale.ecf_signed_date || typeof qrcode !== 'function') return '';
+  let ecf;
+  let qr;
+  try {
+    ecf = JSON.parse(sale.ecf_print_payload).ECF;
+    if (ecf.Encabezado.IdDoc.eNCF !== sale.ncf) return '';
+    qr = qrcode(0, 'M');
+    qr.addData(url);
+    qr.make();
+  } catch { return ''; }
+  const { IdDoc, Emisor, Comprador, Totales } = ecf.Encabezado;
+  const items = ecf.DetallesItems.Item;
+  const title = IdDoc.TipoeCF === 31 ? 'Factura de Crédito Fiscal Electrónica' : 'Factura de Consumo Electrónica';
+  const esc = _escHtml;
+  const rows = items.map(row => `<tr><td>${esc(row.NombreItem)}</td><td>${esc(row.CantidadItem)}</td>
+    <td>${fmt(row.PrecioUnitarioItem)}</td><td>${fmt(row.DescuentoMonto || 0)}</td>
+    <td>${fmt(row.MontoItem)}</td></tr>`).join('');
+  return `<!doctype html><html lang="es"><head><meta charset="UTF-8"><title>${esc(title)}</title>
+    <style>
+      body{font:11px Arial,sans-serif;margin:4mm;color:#111}
+      h1{font-size:14px;margin:.5em 0} p{margin:.3em 0}
+      table{width:100%;border-collapse:collapse;margin:8px 0} th,td{padding:3px;border-bottom:1px solid #ddd;text-align:right}
+      th:first-child,td:first-child{text-align:left;overflow-wrap:anywhere}
+      footer{text-align:center;margin-top:10px;break-inside:avoid} tr{break-inside:avoid}
+    </style></head><body>
+    ${sale.ecf_environment === 'test' ? '<p><strong>PRUEBA · SIN VALOR FISCAL</strong></p>' : ''}
+    <h1>${esc(title)}</h1>
+    <p><strong>${esc(Emisor.RazonSocialEmisor)}</strong> · RNC ${esc(Emisor.RNCEmisor)}</p>
+    <p>${esc(Emisor.DireccionEmisor)}</p>
+    <p>e-NCF <strong>${esc(IdDoc.eNCF)}</strong> · Emitido el ${esc(Emisor.FechaEmision)}</p>
+    ${IdDoc.FechaVencimientoSecuencia ? `<p>Vencimiento de la secuencia ${esc(IdDoc.FechaVencimientoSecuencia)}</p>` : ''}
+    <p>Pago ${IdDoc.TipoPago === 2 ? `a crédito · Vence ${esc(IdDoc.FechaLimitePago)}` : 'al contado'}</p>
+    ${Comprador ? `<p>${esc(Comprador.RazonSocialComprador)} · Documento ${esc(Comprador.RNCComprador)}</p>` : ''}
+    <table><thead><tr><th>Artículo</th><th>Cant.</th><th>Precio</th><th>Desc.</th><th>Importe</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    <p>Base gravada ${fmt(Totales.MontoGravadoTotal || 0)} · Exenta ${fmt(Totales.MontoExento || 0)}</p>
+    <p>ITBIS ${fmt(Totales.TotalITBIS || 0)} · <strong>Total ${fmt(Totales.MontoTotal)}</strong></p>
+    <footer>${qr.createSvgTag({ cellSize: 2, margin: 4, alt: 'Verificar e-CF en la DGII' })}
+      <p>Código de seguridad ${esc(code)}</p><p>Fecha de firma digital ${esc(sale.ecf_signed_date)}</p>
+    </footer></body></html>`;
+}
+
 function printReceipt(sale, isReprint = false) {
   if (!sale) return;
+  const electronic = Boolean(sale.ecf_environment);
+  if (electronic) {
+    const html = _printEcfRepresentation(sale);
+    if (html) {
+      if (!sale.print_html_only) _openPrintWindow(html, 'ticket', sale.id, isReprint, {
+        printerName: sale.print_printer_name || '',
+        profileId: sale.print_profile_id || '',
+        templateId: sale.print_template_id || '',
+        copies: sale.print_copies || 1,
+        preview: sale.print_preview,
+      });
+      return html;
+    }
+    sale = { ...sale, ncf: '' };
+  }
   sale = _printChargesAsLines(sale);
 
   // ── Usar sistema de plantillas si está configurado ──
@@ -524,8 +586,12 @@ function printReceipt(sale, isReprint = false) {
       ? 'abono'
       : 'ticket';
   const routeConfig = _getCategoryConfig(_categoryForJobType(jobType));
-  const templateId = sale.print_template_id || routeConfig.template || DB?.settings?.print_template;
-  const plantilla  = templateId ? getPlantilla(templateId) : null;
+  let templateId = sale.print_template_id || routeConfig.template || DB?.settings?.print_template;
+  let plantilla = templateId ? getPlantilla(templateId) : null;
+  if (electronic && !plantilla) {
+    templateId = 'termica_80_clasica';
+    plantilla = getPlantilla(templateId);
+  }
 
   if (plantilla) {
     // Usar plantilla seleccionada
@@ -713,6 +779,10 @@ function printReceipt(sale, isReprint = false) {
     }
     // Copias en lote (Reportes → Comprobantes): quien llama arma un solo
     // documento con muchas facturas, así que aquí solo se devuelve el HTML.
+    if (electronic) {
+      const notice = `<p style="text-align:center;font:11px Arial">Copia interna · e-CF ${_escHtml(sale.ecf_status || 'pendiente')} · Sin valor fiscal</p>`;
+      html = html.includes('</body>') ? html.replace('</body>', notice + '</body>') : html + notice;
+    }
     if (sale.print_html_only) return html;
     _openPrintWindow(html, jobType, sale.id, isReprint, {
       printerName: sale.print_printer_name || '',

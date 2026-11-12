@@ -866,7 +866,8 @@ function renderVentasTable() {
     const ncfTradicional = ventasIsTraditionalNcf(s.ncf);
     const ncfTradicionalMalformado = ventasLooksLikeMalformedTraditionalNcf(s.ncf);
     const ncfElectronico = ventasIsElectronicNcf(s.ncf) || s.ecf_status === 'Aceptado';
-    const ecfOk     = s.ecf_status === 'Aceptado';
+    const ecfAction = ventasEcfAction(s);
+    const ecfOk = ['Aceptado', 'Aceptado Condicional'].includes(s.ecf_status);
     const adjusted = Number(s.has_product_correction) === 1 || Number(s.has_active_return) === 1 ||
       s.correction_kind === 'product_addition';
     const isSupplement = s.correction_kind === 'product_addition' && s.original_sale_id;
@@ -998,11 +999,11 @@ function renderVentasTable() {
               html: svg('print')
             }),
             // Nunca convertir un NCF tradicional existente en un segundo e-CF.
-            ncfElectronico && !ecfOk
+            ecfAction
               ? h('button', {
                   class: 'btn btn-sm',
                   style: { background: '#0066cc', color: '#fff', border: 'none' },
-                  title: `Enviar e-CF para factura ${s.ncf}`,
+                  title: ecfAction,
                   onclick: () => enviarEcf(s.id),
                   html: `<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" style="flex-shrink:0"><path d="M22 2L11 13"/><path d="M22 2L15 22 11 13 2 9l20-7z"/></svg> e-CF`
                 })
@@ -1381,91 +1382,37 @@ async function confirmarAnulacionAbono(paymentId) {
   }
 }
 
-// ── Enviar e-CF ───────────────────────────────
-async function enviarEcf(saleId) {
-  const sale = DB.sales.find(s => s.id === saleId);
-  if (!sale) { toast('Venta no encontrada', 'err'); return; }
-  if (!sale.ncf) { toast('Esta venta no tiene NCF asignado', 'w'); return; }
-  if (String(sale.ncf).trim().toUpperCase().startsWith('B')) {
-    toast('Esta venta ya tiene un NCF tradicional. No se puede emitir además un e-CF para la misma operación.', 'w');
-    return;
-  }
-  if (sale.ecf_status === 'Aceptado') { toast('Ya tiene e-CF emitido', 'w'); return; }
-
-  confirmModal(
-    `¿Enviar e-CF para la factura <strong>${facturaLabel(sale)}</strong>?
-     <br><span style="font-size:11px;color:var(--muted)">
-       NCF: <strong>${sale.ncf}</strong> · Total: <strong>${fmt(sale.total)}</strong>
-       <br>Se enviará a la DGII vía MSeller ECF.
-     </span>`,
-    async () => {
-      // Mostrar estado de carga en el modal
-      const modalBody = document.querySelector('.modal-body, .modal');
-      if (modalBody) {
-        modalBody.innerHTML = `
-          <div style="text-align:center;padding:32px">
-            <div style="font-size:13px;color:var(--muted);margin-bottom:8px">Enviando e-CF a DGII...</div>
-            <div style="font-size:11px;color:var(--muted2)">NCF: ${sale.ncf}</div>
-          </div>`;
-      }
-
-      const result = await window.api.ecf.emit({ saleId, requestUserId: user.id });
-
-      if (!result.ok) {
-        closeModal();
-        toast(result.error || 'Error al enviar e-CF', 'err');
-        return;
-      }
-
-      closeModal();
-
-      // Recargar para reflejar el nuevo ecf_status
-      await reloadSales({ ...ventasRangeFilters(), view: 'sales' });
-      renderVentasTable();
-
-      // Toast de éxito con QR si está disponible
-      toast(`✓ e-CF enviado — ${result.encf || sale.ncf}`);
-
-      // Si hay QR, ofrecer verlo
-      if (result.qr || result.pdf) {
-        setTimeout(() => openEcfResultModal(result, sale), 300);
-      }
-    },
-    'Enviar e-CF',
-    'btn-primary'
-  );
+// ── Facturación electrónica ─────────────────
+function ventasEcfAction(sale) {
+  if (!/^E(?:31|32)\d{10}$/.test(sale.ncf || '')) return '';
+  if (sale.ecf_status === 'Reservado') return 'Enviar e-CF';
+  return ['Por confirmar', 'Enviado', 'En Cola', 'Enviado a la DGII', 'En Proceso', 'Error', 'No encontrado']
+    .includes(sale.ecf_status) ? 'Consultar e-CF' : '';
 }
 
-function openEcfResultModal(result, sale) {
-  const qrHtml = result.qr
-    ? `<div style="text-align:center;margin:16px 0">
-         <img src="${result.qr}" alt="QR e-CF"
-              style="width:160px;height:160px;border:1px solid var(--border);border-radius:8px"/>
-         <div class="ts" style="margin-top:6px">Código QR del comprobante</div>
-       </div>`
-    : '';
-
-  const pdfBtn = result.pdf
-    ? `<a href="${result.pdf}" target="_blank" class="btn btn-out" style="text-decoration:none">
-         ${svg('pdf')} Ver PDF
-       </a>`
-    : '';
-
-  openModal(`
-    <div class="modal-title" style="color:var(--green)">✓ e-CF Emitido</div>
-    <div class="modal-sub">Comprobante fiscal electrónico aceptado por la DGII</div>
-    <div class="card" style="background:var(--surface2);margin:14px 0">
-      <div class="tr"><span>e-NCF</span><span style="font-family:monospace;font-weight:700">${result.encf || sale.ncf}</span></div>
-      <div class="tr"><span>Factura</span><span>${facturaLabel(sale)}</span></div>
-      <div class="tr"><span>Cliente</span><span>${sale.customer_name || 'Consumidor Final'}</span></div>
-      <div class="tr grand"><span>Total</span><span>${fmt(sale.total)}</span></div>
-    </div>
-    ${qrHtml}
-    <div class="modal-foot">
-      <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
-      ${pdfBtn}
-    </div>
-  `);
+async function enviarEcf(saleId) {
+  const sale = await window.api.sales.getById({ id: saleId });
+  const action = sale && ventasEcfAction(sale);
+  if (!action) { toast('Este e-CF no tiene acciones pendientes.', 'w'); return; }
+  const sending = sale.ecf_status === 'Reservado';
+  const run = async () => {
+    try {
+      const result = await window.api.ecf[sending ? 'emit' : 'getStatus']({ saleId, requestUserId: user.id });
+      if (result.ok) toast(`${sale.ncf} · ${result.status}`);
+      else toast(result.error || 'Error al consultar el comprobante', 'err');
+    } catch {
+      toast('No se confirmó la operación. Abre la factura para consultar el e-CF.', 'w');
+    } finally {
+      await reloadSales({ ...ventasRangeFilters(), view: 'sales' });
+      renderVentasTable();
+    }
+  };
+  if (sending) {
+    const environment = sale.ecf_environment === 'test' ? 'Prueba MSeller' : 'Producción DGII';
+    confirmModal(`¿Enviar ${ventasEsc(sale.ncf)} por ${environment}?`, run, action, 'btn-primary');
+  } else {
+    await run();
+  }
 }
 
 // ── Detalle de venta ──────────────────────────
@@ -1940,8 +1887,8 @@ async function openDetalleVentaModal(s, options = {}) {
   const tieneNcf = !!(detail.ncf);
   const ncfTradicional = ventasIsTraditionalNcf(detail.ncf);
   const ncfTradicionalMalformado = ventasLooksLikeMalformedTraditionalNcf(detail.ncf);
-  const ncfElectronico = ventasIsElectronicNcf(detail.ncf) || detail.ecf_status === 'Aceptado';
-  const ecfOk    = detail.ecf_status === 'Aceptado';
+  const ecfOk = ['Aceptado', 'Aceptado Condicional'].includes(detail.ecf_status);
+  const ecfAction = ventasEcfAction(detail);
   const isSupplement = detail.correction_kind === 'product_addition' && detail.original_sale_id;
   const hasOperationAdjustments = !isSupplement && (
     Number(detail.adjustment_addition_total || 0) > 0.005 ||
@@ -1986,19 +1933,9 @@ async function openDetalleVentaModal(s, options = {}) {
             ? `<div style="font-size:10px;color:var(--red);margin-top:2px">Formato inválido · corrígelo desde Configuración → Comprobantes Fiscales</div>`
             : ncfTradicional
               ? `<div style="font-size:10px;color:var(--muted2);margin-top:2px">NCF tradicional emitido</div>`
-              : ecfOk
-            ? `<div style="font-size:10px;color:var(--green);margin-top:2px">✓ Aceptado por DGII</div>`
-            : `<div style="font-size:10px;color:var(--muted2);margin-top:2px">Pendiente de envío</div>`}
+              : `<div class="ts">${detail.ecf_environment === 'test' ? 'Prueba MSeller · ' : ''}${ventasEsc(detail.ecf_status || 'Estado sin registrar')}</div>`}
         </div>
-        ${ncfElectronico && !ecfOk
-          ? `<button class="btn btn-sm" style="background:#0066cc;color:#fff;border:none"
-               onclick="closeModal();enviarEcf(${s.id})">
-               <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 2L11 13"/><path d="M22 2L15 22 11 13 2 9l20-7z"/></svg>
-               Enviar e-CF
-             </button>`
-          : `${detail.ecf_qr
-              ? `<img src="${detail.ecf_qr}" style="width:56px;height:56px;border-radius:4px" title="QR e-CF"/>`
-              : ''}`}
+        ${ecfAction ? `<button class="btn btn-dark btn-sm" id="venta-detalle-ecf">${ecfAction}</button>` : ''}
       </div>
     </div>` : '';
 
@@ -2173,6 +2110,10 @@ async function openDetalleVentaModal(s, options = {}) {
         : ''}
     </div>
   `, 'modal-xxl mtw sale-detail-modal');
+  document.getElementById('venta-detalle-ecf')?.addEventListener('click', () => {
+    closeModal();
+    enviarEcf(s.id);
+  });
 
   setTimeout(() => {
     const modal = document.getElementById('modal-ov');
@@ -2647,6 +2588,12 @@ function ventasPrintPayload(sale) {
     // La explicación de correcciones y los documentos relacionados quedan en
     // el historial interno; no se imprimen como observaciones al cliente.
     notes: adjustedCopy ? '' : (sale.notes || ''),
+    ecf_environment: sale.ecf_environment,
+    ecf_status: sale.ecf_status,
+    ecf_qr: sale.ecf_qr,
+    ecf_security_code: sale.ecf_security_code,
+    ecf_signed_date: sale.ecf_signed_date,
+    ecf_print_payload: sale.ecf_print_payload,
     cajero: sale.cajero, ncf: sale.ncf || '', tax_pct: sale.tax_pct, modifies_ncf: sale.modifies_ncf || '',
     salesperson_id: sale.salesperson_id || null,
     salesperson_name: sale.salesperson_name || '',

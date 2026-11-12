@@ -57,7 +57,11 @@ function ensureSaleCorrectionsSchema(db) {
   _addColumn(db, 'inventory_movements', 'operational_sale_date', 'TEXT');
   _addColumn(db, 'inventory_movements', 'correction_id', 'INTEGER');
 
-  db.exec(`
+  const hasEcfDocuments = _tableExists(db, 'ecf_documents');
+  const fiscalTrigger = db.prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='trg_sales_fiscal_when_ncf_issued'").get();
+  const replaceFiscalTrigger = hasEcfDocuments && fiscalTrigger && !fiscalTrigger.sql.includes('ecf_documents');
+  db.transaction(() => db.exec(`
+    ${replaceFiscalTrigger ? 'DROP TRIGGER trg_sales_fiscal_when_ncf_issued;' : ''}
     CREATE TABLE IF NOT EXISTS sale_corrections (
       id                 INTEGER PRIMARY KEY AUTOINCREMENT,
       sale_id            INTEGER NOT NULL REFERENCES sales(id),
@@ -170,6 +174,7 @@ function ensureSaleCorrectionsSchema(db) {
     WHEN TRIM(COALESCE(OLD.ncf,''))=''
       AND TRIM(COALESCE(NEW.ncf,''))<>''
       AND NEW.fiscal_issued_at IS NULL
+      ${hasEcfDocuments ? 'AND NOT EXISTS (SELECT 1 FROM ecf_documents e WHERE e.sale_id=NEW.id)' : ''}
     BEGIN
       UPDATE sales
       SET fiscal_issued_at=datetime('now','localtime')
@@ -234,7 +239,7 @@ function ensureSaleCorrectionsSchema(db) {
     BEGIN
       SELECT RAISE(ABORT, 'Los documentos de una corrección son inmutables');
     END;
-  `);
+  `))();
 
   const now = db.prepare("SELECT datetime('now','localtime') value").get().value;
   db.prepare(`
@@ -247,6 +252,9 @@ function ensureSaleCorrectionsSchema(db) {
        OR updated_at IS NULL
   `).run(now);
 
+  const managedEcf = hasEcfDocuments
+    ? 'AND NOT EXISTS (SELECT 1 FROM ecf_documents e WHERE e.sale_id=sales.id)'
+    : '';
   if (_tableExists(db, 'ncf_log')) {
     db.prepare(`
       UPDATE sales
@@ -255,7 +263,7 @@ function ensureSaleCorrectionsSchema(db) {
          WHERE nl.sale_id=sales.id ORDER BY nl.id LIMIT 1),
         created_at
       )
-      WHERE TRIM(COALESCE(ncf,''))<>'' AND fiscal_issued_at IS NULL
+      WHERE TRIM(COALESCE(ncf,''))<>'' AND fiscal_issued_at IS NULL ${managedEcf}
     `).run();
   }
   if (_tableExists(db, 'ecf_log')) {
@@ -268,7 +276,7 @@ function ensureSaleCorrectionsSchema(db) {
         created_at
       )
       WHERE EXISTS(SELECT 1 FROM ecf_log el WHERE el.sale_id=sales.id)
-        AND fiscal_issued_at IS NULL
+        AND fiscal_issued_at IS NULL ${managedEcf}
     `).run();
   }
   if (_tableExists(db, 'inventory_movements')) {
@@ -489,6 +497,13 @@ function createSaleCorrectionsRepo({
   }
 
   function ecfState(saleId) {
+    if (_tableExists(db(), 'ecf_documents')) {
+      const managed = db().prepare(`
+        SELECT e.status AS estado,s.fiscal_issued_at AS emitido_at,e.encf
+        FROM ecf_documents e JOIN sales s ON s.id=e.sale_id WHERE e.sale_id=?
+      `).get(saleId);
+      if (managed) return managed;
+    }
     if (!_tableExists(db(), 'ecf_log')) return null;
     return db().prepare(`
       SELECT estado,emitido_at,encf

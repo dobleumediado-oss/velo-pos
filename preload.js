@@ -586,6 +586,9 @@ const api = {
 
   // ── Facturación Electrónica e-CF (MSeller) ────────────────────
   ecf: {
+    available:  () => ipcRenderer.invoke('ecf:available'),
+    addRange:   (d) => ipcRenderer.invoke('ecf:addRange', d),
+    testConnection: (d) => ipcRenderer.invoke('ecf:testConnection', d),
     emit:       (d) => ipcRenderer.invoke('ecf:emit',       d),
     getStatus:  (d) => ipcRenderer.invoke('ecf:getStatus',  d),
     saveConfig: (d) => ipcRenderer.invoke('ecf:saveConfig', d),
