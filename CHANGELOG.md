@@ -1,5 +1,13 @@
 # Historial de versiones
 
+## 1.65.0
+
+- Velo POS Desktop permite reservar y enviar comprobantes E31 y E32 por MSeller.
+- En Ventas se puede consultar el estado del e-NCF. La copia del comprobante
+  aceptado incluye el QR, el código de seguridad y la fecha de firma.
+- La emisión se habilita desde Configuración por negocio, con sus credenciales y
+  rangos autorizados. El ambiente de prueba marca sus impresiones sin valor fiscal.
+
 ## 1.62.1 — 2026-11-05
 
 - Configuración permite habilitar el botón de ITBIS por factura. Apagarlo deja
