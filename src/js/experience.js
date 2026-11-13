@@ -279,7 +279,7 @@
         </div><b>${item.status === 'ok' ? 'Correcto' : item.status === 'warn' ? 'Revisar' : 'Crítico'}</b>
       </article>`).join('')}</div>
       <div class="ux-health-actions">
-        <button class="btn btn-out" data-health-backup>${svg('save')} Crear respaldo ahora</button>
+        <button class="btn btn-out" data-health-backup>${svg('download')} Crear respaldo ahora</button>
         ${currentUser()?.role === 'superadmin' ? `<button class="btn btn-out" data-health-permissions>${svg('lock')} Permisos operativos</button>` : ''}
       </div>`;
       body.querySelector('[data-health-refresh]')?.addEventListener('click', openSystemHealth);

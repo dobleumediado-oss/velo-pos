@@ -1166,7 +1166,7 @@ function renderVentasAbonos(resWrap, tableWrap) {
               class:'btn btn-ghost btn-sm',
               style:{color:'var(--red)'},
               onclick:()=>openAnularAbonoModal(p),
-              html:`${svg('x')} Anular`
+              html:`${svg('xmark')} Anular`
             })
           : null
       )));
@@ -1238,7 +1238,7 @@ function openAnularAbonoModal(paymentOrId) {
       <button class="btn btn-red" id="ventas-confirm-payment-void"
         onclick="confirmarAnulacionAbono(${Number(p.id)})"
         ${requiresCash && !cajaOpen ? 'disabled' : ''}>
-        ${svg('x')} Confirmar anulación
+        ${svg('xmark')} Confirmar anulación
       </button>
     </div>
   `);

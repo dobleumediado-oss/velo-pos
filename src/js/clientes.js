@@ -1888,7 +1888,7 @@ function openAbonoDetalleModal(paymentOrId) {
       <button class="btn btn-out" onclick="guardarAbonoPDF(${p.id})">${svg('pdf')} Guardar PDF</button>
       ${!cancelled ? `<button class="btn btn-green" onclick="abonoWhatsApp(${p.id})">WhatsApp</button>` : ''}
       ${canCancel ? `<button class="btn btn-red" onclick="closeModal();setTimeout(()=>openAnularAbonoModal(${p.id}),80)">
-        ${svg('x')} Anular abono
+        ${svg('xmark')} Anular abono
       </button>` : ''}
     </div>
   `);

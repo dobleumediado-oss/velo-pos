@@ -1064,7 +1064,7 @@ function openWhatsAppModal(msg, defPhone = '', clientName = 'cliente', options =
         Al abrir WhatsApp también mostraremos el archivo en su carpeta. Arrástralo al chat o usa el clip para adjuntarlo.
       </div>
       <button class="btn btn-out btn-sm" style="margin-top:8px" onclick="_waShowAttachment()">
-        ${typeof svg === 'function' ? svg('folder') : ''} Mostrar PDF
+        ${typeof svg === 'function' ? svg('pdf') : ''} Mostrar PDF
       </button>
     </div>` : ''}
 
