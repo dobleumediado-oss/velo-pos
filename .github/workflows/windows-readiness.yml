@@ -1,9 +1,19 @@
 name: Validación Windows de VELO Desktop
 
+# Cada push a una rama de trabajo se prueba en Windows antes de pensar en publicar.
+# Los tags v* no entran aquí: los publica release.yml. Ver docs/sandbox.md.
 on:
   push:
     branches:
-      - 'codex/desktop-parity-*'
+      - 'codex/**'
+      - 'claude/**'
+      - 'fix/**'
+      - 'feat/**'
+      - 'release/**'
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+  pull_request:
   workflow_dispatch:
     inputs:
       buildPilot:
@@ -14,6 +24,11 @@ on:
 
 permissions:
   contents: read
+
+# Un push nuevo a la misma rama cancela la validación anterior que siga corriendo.
+concurrency:
+  group: windows-readiness-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
 
 jobs:
   validate-windows:

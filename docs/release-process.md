@@ -33,4 +33,8 @@ Empujar un tag git `v*` es un **deploy a producción a negocios cliente reales**
 Es difícil de revertir: una vez que un cliente auto-actualiza, hacer rollback significa enviar una *nueva* versión mayor, no borrar la mala — algunos clientes ya la habrán jalado. No hay staging/canary; tag push = release inmediato a producción para todos.
 
 ## Qué hacer antes de taggear
+Comprobar que el commit a publicar tiene en verde la **Validación Windows** de este repo
+y el **Sandbox VELO** de Cloud (ver [Sandbox](sandbox.md)). Sin las dos en verde no se
+propone el tag.
+
 Confirmar **siempre** explícitamente con el usuario antes de empujar un tag, aun si ya pidieron "commit + tag + release" de corrido — confirmar el número de versión (semver: minor para features nuevos user-facing, patch para solo fixes) y si están OK enviando sin un pase de QA en vivo/manual. Ver [Impresión](printing-module.md) para un ejemplo donde el usuario eligió explícitamente enviar sin pruebas de impresora en vivo.

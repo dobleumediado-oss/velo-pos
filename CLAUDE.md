@@ -51,6 +51,7 @@ Cada tema tiene su archivo dedicado en [`docs/`](docs/). Todos enlazan de vuelta
 - **[Matriz VELO POS / VELO TECH POS](docs/pos-tech-matriz.md)** — qué módulo pertenece a cada producto, quién lo decide (`window._vertical` / `useSerializedVertical`) y la regla: lo de TECH se enciende por capacidad, nunca se muestra en VELO POS.
 - **[Mejoras pendientes](docs/mejoras-pendientes.md)** — las tres mejoras de la lista de doce que faltan (anular con abonos, buscador global, regalo en el carrito): decisiones tomadas, código a tocar y preguntas abiertas.
 - **[Proceso de Release](docs/release-process.md)** — ⚠️ empujar un tag `v*` = deploy en vivo a clientes reales vía electron-updater. **Confirmar siempre con el usuario antes de tag.**
+- **[Sandbox](docs/sandbox.md)** — pruebas automáticas en GitHub antes de publicar: Windows en cada rama de trabajo y el sandbox de Cloud con el cliente real de Desktop.
 
 ## Antes de trabajar
 - **Reglas duras para cualquier agente** (Codex incluido): [`AGENTS.md`](AGENTS.md) — no empujar tags `v*`, no `git add -A` (hay cambios ajenos sin commitear), no escribir en `data/velo.db`.
