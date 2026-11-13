@@ -1,5 +1,20 @@
 # Historial de versiones
 
+## 1.65.4
+
+- En Caja, el administrador puede hacer un «Recibo de egreso» al pagar un gasto
+  con el efectivo de la caja. Queda registrado en Gastos, baja lo esperado en el
+  cuadre y se imprime para firmar. Desde Caja también se reimprime, se anula y
+  se consulta el historial de egresos por fechas.
+- Todo pago de un gasto, desde Caja o desde Gastos, se imprime como Recibo de
+  egreso: en carta, carta compacta o rollo de 80 mm, según se elija en el
+  Centro de impresión. El formato anterior sigue disponible.
+- Al anular un gasto pagado una parte en efectivo y otra por banco, a la caja
+  vuelve solo el efectivo. El número del recibo queda anulado.
+- Varios botones vuelven a mostrar su ícono: Anular en Ventas, Clientes y Caja;
+  imprimir en Compras y Servicio técnico; Mostrar PDF; Crear respaldo;
+  Portal / QR y Continuar.
+
 ## 1.65.3
 
 - En computadoras con Windows, «Corte final a Cloud» ya puede congelar Desktop.
