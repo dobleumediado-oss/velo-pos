@@ -1,5 +1,11 @@
 # Historial de versiones
 
+## 1.65.3
+
+- En computadoras con Windows, «Corte final a Cloud» ya puede congelar Desktop.
+  Antes se detenía con un error de permisos al guardar la marca del corte, sin
+  perder datos.
+
 ## 1.65.2
 
 - Desde «Pasar a VELO Cloud» puedes solicitar la habilitación de la migración
