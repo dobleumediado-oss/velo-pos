@@ -111,6 +111,37 @@ try {
     .some(row => Number(row.expense_id) === Number(cancelId) && row.status === 'anulado'),
   'y queda en el historial como anulado');
 
+  const cancelledDoc = db.prepare(`SELECT status FROM document_issues
+    WHERE kind='pago_gasto_externo' AND source_type='expense_payment'
+      AND source_id IN (SELECT CAST(id AS TEXT) FROM expense_payments WHERE expense_id=?)`).all(cancelId);
+  ok(cancelledDoc.length === 1 && cancelledDoc[0].status === 'cancelled',
+    'el número RGE del egreso anulado queda anulado en la auditoría de documentos');
+
+  console.log('\n== Anular un gasto con pagos mixtos ==');
+  const mixedId = createExpense({ description:'Pago mixto', amount:500, total:500 });
+  pay(mixedId, 200);
+  pay(mixedId, 300, { payment_method:'transferencia', payment_source:'banco', cash_session_id:null });
+  const beforeMixed = DB.cashRepo.getSessionCashSummary(sessionId).expected;
+  DB.expensesRepo.cancel(mixedId, admin.id, admin.name, 'Prueba de pagos mixtos', { returnCashSessionId:sessionId, requireCashReturn:true });
+  ok(DB.cashRepo.getSessionCashSummary(sessionId).expected === beforeMixed + 200,
+    'a la caja vuelve solo lo que salió de la caja, no lo pagado por banco');
+  const mixedReturn = db.prepare("SELECT amount,method FROM cash_movements WHERE reference_id=? AND type='entrada' ORDER BY id DESC LIMIT 1").get(mixedId);
+  ok(mixedReturn && Number(mixedReturn.amount) === 200 && mixedReturn.method === 'efectivo',
+    'la devolución se registra en efectivo por el monto de caja');
+
+  const bankOnlyId = createExpense({ description:'Solo banco', amount:250, total:250, payment_method:'transferencia', payment_source:'banco' });
+  pay(bankOnlyId, 250, { payment_method:'transferencia', payment_source:'banco', cash_session_id:null });
+  const beforeBank = DB.cashRepo.getSessionCashSummary(sessionId).expected;
+  DB.expensesRepo.cancel(bankOnlyId, admin.id, admin.name, 'Prueba solo banco', { returnCashSessionId:sessionId, requireCashReturn:true });
+  ok(DB.cashRepo.getSessionCashSummary(sessionId).expected === beforeBank, 'anular un gasto pagado solo por banco no toca la caja');
+
+  const legacyId = createExpense({ description:'Gasto de versión vieja', amount:80, total:80 });
+  db.prepare("UPDATE expenses SET paid_amount=80,status='pagado',cash_session_id=? WHERE id=?").run(sessionId, legacyId);
+  const beforeLegacy = DB.cashRepo.getSessionCashSummary(sessionId).expected;
+  DB.expensesRepo.cancel(legacyId, admin.id, admin.name, 'Prueba de compatibilidad', { returnCashSessionId:sessionId, requireCashReturn:true });
+  ok(DB.cashRepo.getSessionCashSummary(sessionId).expected === beforeLegacy + 80,
+    'un gasto viejo sin filas de pago conserva la regla anterior');
+
   console.log('\n== Diseño del recibo ==');
   const cajaSource = fs.readFileSync(path.join(__dirname, '../src/js/caja.js'), 'utf8');
   const from = cajaSource.indexOf('const _CAJA_EXPENSE_TEMPLATES');
@@ -192,6 +223,7 @@ try {
     preload.includes("searchReceipts:   (d) => ipcRenderer.invoke('expenses:searchReceipts', d)"),
   'el historial exige administrador y su canal está en la lista blanca');
   ok(printSource.includes("`${rawCreated.replace(' ', 'T')}Z`"), 'el recibo convierte la hora UTC guardada a la fecha local');
+  ok(!cajaSource.includes("svg('x')"), 'los botones de anular de Caja usan un ícono que existe');
   ok(cajaSource.includes('Recibo de egreso') && cajaSource.includes('function cajaCanIssueExpenseReceipt') &&
     cajaSource.includes("CFG.module_gastos === '1'"), 'Caja muestra el botón solo con Gastos activo y administrador');
 } finally {

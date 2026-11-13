@@ -10302,25 +10302,36 @@ const expensesRepo = {
       if (e.status === 'anulado') throw new Error('Ya está anulado');
       if (!reason?.trim()) throw new Error('El motivo de anulación es obligatorio');
 
-      // Contramovimiento en caja si afectó caja
-      if (e.cash_session_id && e.paid_amount > 0) {
-        const session = db.prepare("SELECT * FROM cash_sessions WHERE id=?").get(e.cash_session_id);
+      // Contramovimiento en caja solo por lo que realmente salió de una caja.
+      // Un gasto con pagos mixtos (caja y banco) antes devolvía a la caja
+      // también lo pagado por banco. Los gastos de versiones viejas sin filas
+      // de pago conservan la regla anterior (todo lo pagado).
+      const payments = db.prepare(`SELECT amount,cash_session_id,cash_movement_id FROM expense_payments
+        WHERE expense_id=? AND status='pagado' ORDER BY id`).all(expenseId);
+      const cashPayments = payments.filter(p => p.cash_movement_id != null && p.cash_session_id != null);
+      const cashPaid = payments.length
+        ? round2(cashPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0))
+        : round2(Number(e.paid_amount || 0));
+      const cashSessionId = cashPayments.length
+        ? cashPayments[cashPayments.length - 1].cash_session_id : e.cash_session_id;
+      if (cashSessionId && cashPaid > 0) {
+        const session = db.prepare("SELECT * FROM cash_sessions WHERE id=?").get(cashSessionId);
         let targetId = null;
         let description = `Anulación gasto: ${e.description}`;
         if (session?.status === 'open') {
-          targetId = e.cash_session_id;
+          targetId = cashSessionId;
         } else if (returnCashSessionId &&
             db.prepare("SELECT 1 FROM cash_sessions WHERE id=? AND status='open'").get(returnCashSessionId)) {
           targetId = returnCashSessionId;
-          description = `Devolución por anulación (pagado en caja #${e.cash_session_id}, ya cerrada): ${e.description}`;
+          description = `Devolución por anulación (pagado en caja #${cashSessionId}, ya cerrada): ${e.description}`;
         } else if (requireCashReturn) {
-          throw new Error(`Este pago de RD$${Number(e.paid_amount).toLocaleString('es-DO', { minimumFractionDigits: 2 })} salió de una caja que ya se cerró. Abre la caja para registrar la devolución del dinero.`);
+          throw new Error(`Este pago de RD$${Number(cashPaid).toLocaleString('es-DO', { minimumFractionDigits: 2 })} salió de una caja que ya se cerró. Abre la caja para registrar la devolución del dinero.`);
         }
         if (targetId) {
           db.prepare(`INSERT INTO cash_movements(cash_session_id,type,amount,method,reference_id,description,user_id)
-            VALUES(?,?,?,?,?,?,?)`).run(targetId, 'entrada', e.paid_amount, e.payment_method,
+            VALUES(?,?,?,?,?,?,?)`).run(targetId, 'entrada', cashPaid, payments.length ? 'efectivo' : e.payment_method,
             expenseId, description, userId);
-          db.prepare('UPDATE cash_sessions SET expected=expected+? WHERE id=?').run(e.paid_amount, targetId);
+          db.prepare('UPDATE cash_sessions SET expected=expected+? WHERE id=?').run(cashPaid, targetId);
         }
       }
       // Anular pagos activos
@@ -10328,7 +10339,7 @@ const expensesRepo = {
         .run(reason, userId, expenseId);
       db.prepare(`
         UPDATE document_issues SET status='cancelled'
-        WHERE kind='pago_proveedor' AND source_type='expense_payment'
+        WHERE kind IN ('pago_proveedor','pago_gasto_externo') AND source_type='expense_payment'
           AND source_id IN (
             SELECT CAST(id AS TEXT) FROM expense_payments WHERE expense_id=?
           )
