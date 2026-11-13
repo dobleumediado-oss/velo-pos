@@ -57,3 +57,4 @@ Cada tema tiene su archivo dedicado en [`docs/`](docs/). Todos enlazan de vuelta
 - **Reglas duras para cualquier agente** (Codex incluido): [`AGENTS.md`](AGENTS.md) — no empujar tags `v*`, no `git add -A` (hay cambios ajenos sin commitear), no escribir en `data/velo.db`.
 - La documentación son observaciones puntuales; **verifica citas file:line contra el código actual** antes de afirmarlas como hecho.
 - Antes de empujar un tag de release, lee el [Proceso de Release](docs/release-process.md) y confirma con el usuario.
+- **Sandbox en verde antes de publicar:** ni tag `v*` ni *Deploy* de Cloud sin la Validación Windows y el Sandbox VELO en verde para ese commit ([Sandbox](docs/sandbox.md)).

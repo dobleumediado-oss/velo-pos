@@ -12,7 +12,7 @@ facturación con NCF, ITBIS 18%, caja, inventario, contabilidad. Lo usan negocio
 reales todos los días. Un error aquí no es un test rojo: es una factura mal
 emitida o una caja descuadrada.
 
-## Cuatro reglas que no se rompen
+## Cinco reglas que no se rompen
 
 1. **Nunca empujes un tag `v*`.** `git push origin vX.Y.Z` dispara el workflow
    que publica los cuatro instaladores y `electron-updater` los baja solo a las
@@ -34,6 +34,11 @@ emitida o una caja descuadrada.
 4. **Verifica antes de afirmar.** Las citas `archivo:línea` de la documentación
    son observaciones de un momento dado; compruébalas contra el código actual
    antes de darlas por hechas. Si algo no lo probaste, dilo.
+5. **Sandbox en verde antes de publicar.** No propongas un tag `v*` ni un
+   *Deploy* de Cloud sin que el commit a publicar tenga en verde la
+   **Validación Windows** de este repo y el **Sandbox VELO** de Cloud. Si
+   alguna está en rojo o no corrió, dilo y no sigas. Ver
+   [Sandbox](docs/sandbox.md).
 
 ## Arquitectura mínima
 - **IPC obligatorio**: la base de datos se toca solo en el proceso main
