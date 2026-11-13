@@ -124,6 +124,7 @@ const PRINT_CATEGORIES = {
   pago:         { label: 'Pagos y abonos',             autoPrintDefault: false, previewDefault: true,  media: 'any'   },
   nomina:       { label: 'Recibos de nómina',          autoPrintDefault: false, previewDefault: true,  media: 'any'   },
   ingreso:      { label: 'Recibos de ingreso',         autoPrintDefault: false, previewDefault: true,  media: 'any'   },
+  egreso:       { label: 'Recibos de egreso',          autoPrintDefault: false, previewDefault: true,  media: 'any'   },
   conduce:      { label: 'Conduces y entregas',        autoPrintDefault: false, previewDefault: true,  media: 'any'   },
   caja:         { label: 'Caja, arqueos y cierres',    autoPrintDefault: false, previewDefault: true,  media: 'sheet' },
   inventario:   { label: 'Inventario y etiquetas de anaquel', autoPrintDefault: false, previewDefault: true, media: 'sheet' },
@@ -149,6 +150,8 @@ const _DEFAULT_PRINT_CHANNEL = {
   pago: 'pagos',
   nomina: 'oficina',
   ingreso: 'caja',
+  // Los recibos de egreso salían por la impresora de ventas; se conserva.
+  egreso: 'ventas',
   caja: 'caja',
   conduce: 'almacen',
   inventario: 'almacen',
@@ -166,6 +169,7 @@ const _JOB_TYPE_CATEGORY = {
   abono: 'pago', pago_proveedor: 'pago', pago_gasto_externo: 'pago',
   recibo_nomina: 'nomina',
   recibo_ingreso: 'ingreso',
+  recibo_egreso: 'egreso',
   cierre: 'caja',
 };
 function _categoryForJobType(jobType) {
@@ -1247,8 +1251,11 @@ function printAbono({ payment, customer, cajero, isReprint = false }) {
 }
 
 // ══════════════════════════════════════════════
-// RECIBO DE PAGO DE GASTO 80MM
+// RECIBO DE EGRESO (PAGO DE GASTO)
 // ══════════════════════════════════════════════
+// Todo pago de gasto se imprime como Recibo de egreso (diseño en caja.js). El
+// formato anterior, con la plantilla de Facturas y ventas, sigue disponible
+// eligiendo «Formato anterior» en el Centro de impresión.
 function printPagoProveedor({ payment, expense, cajero, isReprint = false }) {
   if (!payment || !expense) return;
 
@@ -1273,6 +1280,37 @@ function printPagoProveedor({ payment, expense, cajero, isReprint = false }) {
   const partyDocument = isExternal ? beneficiaryDocument : String(expense.supplier_rnc || '');
   const ticketRoute = _getCategoryConfig('ticket');
   const amount = Number(payment.amount || 0);
+  const paymentMethod = payment.method || payment.payment_method || expense.payment_method || 'efectivo';
+
+  if (typeof cajaExpenseReceiptTemplate === 'function' && typeof printExpenseReceipt === 'function'
+      && cajaExpenseReceiptTemplate() !== 'egreso_ticket_pos') {
+    // created_at llega en UTC (ISO de quien imprime o datetime('now') de
+    // SQLite): el recibo de egreso muestra el día local del negocio.
+    const rawCreated = String(payment.created_at || '').trim();
+    const stamp = rawCreated
+      ? new Date(/[zZ]$|[+-]\d\d:?\d\d$/.test(rawCreated) ? rawCreated : `${rawCreated.replace(' ', 'T')}Z`)
+      : new Date();
+    const local = Number.isNaN(stamp.getTime()) ? new Date() : stamp;
+    const pad = value => String(value).padStart(2, '0');
+    return printExpenseReceipt({
+      document_number_fmt: paymentNumber,
+      created_at: `${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())} ${pad(local.getHours())}:${pad(local.getMinutes())}`,
+      paid_to_name: partyName === 'N/A' ? '' : partyName,
+      paid_to_document: partyDocument,
+      paid_to_phone: isExternal ? beneficiaryPhone : String(expense.supplier_phone || ''),
+      method: paymentMethod,
+      category_name: expense.category_name || '',
+      concept: expense.description || 'Pago de gasto',
+      reference: payment.reference || '',
+      invoice_number: expense.invoice_number || '',
+      amount,
+      expense_total: Number(expense.total || amount),
+      balance_after: Number(payment.balance_after || 0),
+      notes: payment.notes || expense.notes || '',
+      user_name: cajero || '',
+      is_reprint: !!isReprint,
+    });
+  }
 
   return printReceipt({
     id: payment.id,
@@ -1307,7 +1345,7 @@ function printPagoProveedor({ payment, expense, cajero, isReprint = false }) {
     balance_before: Number(payment.balance_before || 0),
     balance_after: Number(payment.balance_after || 0),
     balance_after_payment: Number(payment.balance_after || 0),
-    payment_method: payment.method || payment.payment_method || expense.payment_method || 'efectivo',
+    payment_method: paymentMethod,
     payment_reference: payment.reference || '',
     transaction_number: paymentNumber,
     notes: [expense.invoice_number ? `Factura del proveedor: ${expense.invoice_number}` : '', payment.notes || '']

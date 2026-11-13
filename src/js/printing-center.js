@@ -121,6 +121,14 @@ function pcTemplatesForCategory(category) {
       { id: 'ingreso_termica_80', nombre: 'Recibo de ingreso térmico · 80 mm' },
     ];
   }
+  if (category === 'egreso') {
+    return [
+      { id: 'egreso_carta_profesional', nombre: 'Recibo de egreso · Carta' },
+      { id: 'egreso_carta_compacta', nombre: 'Recibo de egreso compacto · Carta' },
+      { id: 'egreso_termica_80', nombre: 'Recibo de egreso térmico · 80 mm' },
+      { id: 'egreso_ticket_pos', nombre: 'Formato anterior · plantilla de Facturas y ventas' },
+    ];
+  }
   const definition = PRINT_CATEGORIES[category] || {};
   const all = (typeof PLANTILLAS !== 'undefined' ? PLANTILLAS : [])
     .filter(template => template && template.tipo !== 'etiqueta');
@@ -131,7 +139,8 @@ function pcTemplatesForCategory(category) {
 
 function pcTemplateOptions(category, current) {
   const emptyLabel = category === 'nomina' ? 'Nómina profesional · Carta (predeterminada)'
-    : category === 'ingreso' ? 'Recibo de ingreso · Carta (predeterminada)' : 'Usar plantilla general';
+    : category === 'ingreso' ? 'Recibo de ingreso · Carta (predeterminada)'
+    : category === 'egreso' ? 'Automática · mismo papel que Facturas y ventas' : 'Usar plantilla general';
   return `<option value="">${emptyLabel}</option>
     ${pcTemplatesForCategory(category).map(template =>
       `<option value="${pcEsc(template.id)}" ${template.id === current ? 'selected' : ''}>${pcEsc(template.nombre)}</option>`
@@ -394,7 +403,8 @@ function pcRenderRoutes() {
       <td><select class="inp pc-route-template">${pcTemplateOptions(category, config.template || '')}</select>
         ${category === 'reporte' ? '<div class="ts">Copias de facturas</div>' : ''}
         ${category === 'nomina' ? `<button class="btn btn-out btn-sm" style="margin-top:6px" onclick="pcOpenPayrollReceiptSettings()">${svg('edit')} Personalizar recibo</button>` : ''}
-        ${category === 'ingreso' ? `<button class="btn btn-out btn-sm" style="margin-top:6px" onclick="pcOpenIncomeReceiptSettings()">${svg('edit')} Personalizar recibo</button>` : ''}</td>
+        ${category === 'ingreso' ? `<button class="btn btn-out btn-sm" style="margin-top:6px" onclick="pcOpenIncomeReceiptSettings()">${svg('edit')} Personalizar recibo</button>` : ''}
+        ${category === 'egreso' ? `<button class="btn btn-out btn-sm" style="margin-top:6px" onclick="pcOpenExpenseReceiptSettings()">${svg('edit')} Personalizar recibo</button>` : ''}</td>
       <td style="width:80px"><input class="inp pc-route-copies" type="number" min="1" max="9" value="${copies}"/></td>
       <td style="text-align:center"><span class="badge g">Vista previa</span></td>
     </tr>`;
@@ -518,6 +528,61 @@ async function pcSaveIncomeReceiptSettings() {
   const settings = pcReadIncomeReceiptSettings();
   _pcState.printConfig.ingreso = { ...(_pcState.printConfig.ingreso || {}), ...settings };
   const select = _pcState.root?.querySelector('tr[data-category="ingreso"] .pc-route-template');
+  if (select) select.value = settings.template;
+  closeModal();
+  await pcSaveRoutes();
+}
+
+function pcExpenseReceiptOptions(source = _pcState?.printConfig?.egreso?.options) {
+  const options = source && typeof source === 'object' ? source : {};
+  return {
+    showLogo: options.showLogo !== false,
+    showBusinessDetails: options.showBusinessDetails !== false,
+    showNotes: options.showNotes !== false,
+    showSignatures: options.showSignatures !== false,
+  };
+}
+
+function pcOpenExpenseReceiptSettings() {
+  const config = _pcState?.printConfig?.egreso || {};
+  const rowTemplate = _pcState?.root?.querySelector('tr[data-category="egreso"] .pc-route-template')?.value;
+  const template = rowTemplate ?? config.template ?? '';
+  const options = pcExpenseReceiptOptions(config.options);
+  openModal(`<div class="modal-title">Plantilla del recibo de egreso</div>
+    <div class="modal-sub">Estos cambios afectan el comprobante del dinero entregado al pagar un gasto, desde Caja o desde Gastos.</div>
+    <div class="fg"><label class="lbl">Formato</label><select class="inp" id="pc-expense-template">${pcTemplateOptions('egreso', template)}</select></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px">
+      <label class="inp" style="display:flex;align-items:center;gap:9px;cursor:pointer"><input id="pc-expense-logo" type="checkbox" ${options.showLogo ? 'checked' : ''}/> Mostrar logo</label>
+      <label class="inp" style="display:flex;align-items:center;gap:9px;cursor:pointer"><input id="pc-expense-business" type="checkbox" ${options.showBusinessDetails ? 'checked' : ''}/> Datos del negocio</label>
+      <label class="inp" style="display:flex;align-items:center;gap:9px;cursor:pointer"><input id="pc-expense-notes" type="checkbox" ${options.showNotes ? 'checked' : ''}/> Notas del recibo</label>
+      <label class="inp" style="display:flex;align-items:center;gap:9px;cursor:pointer"><input id="pc-expense-signatures" type="checkbox" ${options.showSignatures ? 'checked' : ''}/> Líneas de firma</label>
+    </div>
+    <div class="alrt a" style="margin-top:13px"><div><div class="alrt-title">Vista previa segura</div><div class="alrt-sub">Usa datos de ejemplo y nunca registra ni imprime un egreso real.</div></div></div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-out" onclick="pcPreviewExpenseReceipt()">${svg('check')} Vista previa</button><button class="btn btn-dark" onclick="pcSaveExpenseReceiptSettings()">${svg('check')} Guardar plantilla</button></div>`, 'modal-lg');
+}
+
+function pcReadExpenseReceiptSettings() {
+  return {
+    template: document.getElementById('pc-expense-template')?.value || '',
+    options: {
+      showLogo: !!document.getElementById('pc-expense-logo')?.checked,
+      showBusinessDetails: !!document.getElementById('pc-expense-business')?.checked,
+      showNotes: !!document.getElementById('pc-expense-notes')?.checked,
+      showSignatures: !!document.getElementById('pc-expense-signatures')?.checked,
+    },
+  };
+}
+
+function pcPreviewExpenseReceipt() {
+  const settings = pcReadExpenseReceiptSettings();
+  if (typeof cajaPreviewExpenseReceipt !== 'function') return toast('La vista previa del recibo de egreso no está disponible', 'err');
+  cajaPreviewExpenseReceipt(settings);
+}
+
+async function pcSaveExpenseReceiptSettings() {
+  const settings = pcReadExpenseReceiptSettings();
+  _pcState.printConfig.egreso = { ...(_pcState.printConfig.egreso || {}), ...settings };
+  const select = _pcState.root?.querySelector('tr[data-category="egreso"] .pc-route-template');
   if (select) select.value = settings.template;
   closeModal();
   await pcSaveRoutes();
@@ -1256,6 +1321,7 @@ async function pcSaveRoutes() {
       preview: true,
       ...(row.dataset.category === 'nomina' ? { options: pcPayrollReceiptOptions(existing.options) } : {}),
       ...(row.dataset.category === 'ingreso' ? { options: pcIncomeReceiptOptions(existing.options) } : {}),
+      ...(row.dataset.category === 'egreso' ? { options: pcExpenseReceiptOptions(existing.options) } : {}),
     };
   });
   const result = await window.api.print.saveConfig({ config: next, requestUserId: user?.id });

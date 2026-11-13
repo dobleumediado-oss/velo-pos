@@ -29,6 +29,19 @@ Cuando está activa:
 
 La protección de la X/Alt+F4 usa un protocolo entre renderer y proceso principal: el renderer conoce usuario, horario y terminal; el proceso principal conserva la autoridad final para mostrar la confirmación y cerrar.
 
+## Recibo de egreso
+
+El espejo del **Recibo de ingreso**: constancia firmable del dinero que sale de la caja para pagar un gasto.
+
+- **Dónde:** botón **«Recibo de egreso»** en la cabecera de Caja y tarjeta **«Recibos de egreso»** en la sesión abierta, con reimpresión. Solo aparece con el módulo **Gastos** activo y para **Administrador** o **Superadmin** (decisión del dueño, 13 nov 2026).
+- **Qué registra:** un gasto pagado en el acto con el efectivo de la caja abierta de esta terminal (`expenses:create` con `from_cash_register`). No hay tabla nueva: queda en Gastos, en reportes y en Contabilidad como cualquier gasto, y baja lo esperado en el cuadre por el mismo movimiento de salida que ya usaba Gastos.
+- **Protección en el proceso principal:** si la caja de la terminal ya no es la que mostraba la pantalla, si el método no es efectivo o si el usuario no es administrador, no se registra nada. Nunca cae a caja chica ni a banco.
+- **Numeración:** conserva las secuencias existentes, `RGE` (persona identificada) y `PPR` (proveedor). Solo cambia el formato impreso.
+- **Impresión:** todo pago de gasto, desde Caja o desde Gastos, imprime el **Recibo de egreso** (`buildExpenseReceiptHTML` en `src/js/caja.js`). En el Centro de impresión tiene su fila propia con carta, carta compacta, térmica de 80 mm y «Formato anterior». Sin plantilla elegida sigue el papel de Facturas y ventas: carta → carta, 72/80 mm → térmica de 80 mm, 58 mm → formato anterior (el diseño nuevo no cabe en ese rollo). Sale por el canal de ventas, igual que antes.
+- **Anular desde Caja:** botón en la tarjeta de la sesión, con motivo obligatorio. Solo aparece cuando el recibo es todo el gasto y salió de esta sesión, porque anular un gasto revierte todos sus pagos; si no, la fila dice «Desde Gastos». Usa `expenses:cancel`: el dinero vuelve a la caja y se reversan los asientos.
+- **Historial de recibos de egreso:** debajo del de ingresos, por fechas, búsqueda y anulados (`expenses:searchReceipts`, solo administrador). Incluye todos los pagos de gastos, de caja o de banco. Las fechas se muestran en hora local (`expense_payments.created_at` está en UTC).
+- **Pruebas:** `npm run test:cash-expense`.
+
 ## Lista de regresión obligatoria
 
 - Administrador sin caja no puede facturar.

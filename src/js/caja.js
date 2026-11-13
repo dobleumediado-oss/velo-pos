@@ -32,6 +32,14 @@ function cajaTerminalId() {
 }
 
 let _cajaIncomeState = { sessionId:null, rows:[], loading:false };
+// Recibos de egreso de la sesión: pagos de gastos hechos con el efectivo de
+// esta caja, se registren desde Caja o desde Gastos.
+let _cajaExpenseState = { sessionId:null, rows:[], loading:false };
+let _cajaExpenseHistory = {
+  loaded:false, loading:false, rows:[], truncated:false,
+  totals:{ active:0, cancelled:0 },
+  filters:{ from:'', to:'', query:'', includeCancelled:true },
+};
 function _cajaEsc(value) {
   return String(value == null ? '' : value).replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
@@ -292,6 +300,31 @@ function cajaLoadIncomeReceipts(sessionId, el) {
   }).catch(() => { _cajaIncomeState.loading = false; });
 }
 
+function cajaLoadExpenseReceipts(sessionId, el) {
+  if (!sessionId || !cajaCanIssueExpenseReceipt()) return;
+  if (_cajaExpenseState.loading || Number(_cajaExpenseState.sessionId) === Number(sessionId)) return;
+  _cajaExpenseState = { sessionId:Number(sessionId), rows:[], loading:true };
+  window.api.expenses.getCashReceipts({ sessionId, requestUserId:_cajaUser()?.id }).then(result => {
+    if (Number(_cajaExpenseState.sessionId) !== Number(sessionId)) return;
+    _cajaExpenseState.rows = result?.ok ? (result.data || []) : [];
+    _cajaExpenseState.loading = false;
+    if (document.body.contains(el) && typeof page !== 'undefined' && page === 'caja') renderCaja(el);
+  }).catch(() => { _cajaExpenseState.loading = false; });
+}
+
+// Gastos llama esto al pagar o anular, para que Caja vuelva a consultar.
+function cajaExpenseReceiptsInvalidate() {
+  _cajaExpenseState = { sessionId:null, rows:[], loading:false };
+  _cajaExpenseHistory.loaded = false;
+}
+
+// El recibo de egreso registra un gasto pagado: requiere el módulo Gastos y,
+// por decisión del negocio, solo lo hace el administrador.
+function cajaCanIssueExpenseReceipt() {
+  return typeof CFG !== 'undefined' && CFG.module_gastos === '1'
+    && ['admin','superadmin'].includes(_cajaUser()?.role);
+}
+
 async function cajaOpenWithRecovery(payload) {
   try {
     return await cajaAwaitAction(window.api.cash.open(payload));
@@ -332,6 +365,7 @@ function renderCaja(el) {
   );
   if (cajaOpen && cajaSession?.id) {
     cajaLoadIncomeReceipts(cajaSession.id, el);
+    cajaLoadExpenseReceipts(cajaSession.id, el);
     cajaLoadSessionSales(cajaSession.id, el);
     cajaLoadSessionPayments(cajaSession.id, el);
   }
@@ -365,6 +399,11 @@ function renderCaja(el) {
             onclick: openIncomeReceiptModal,
             html: `${svg('plus')} Recibo de ingreso`
           }),
+          cajaCanIssueExpenseReceipt() ? h('button', {
+            class: 'btn btn-out',
+            onclick: openExpenseReceiptModal,
+            html: `${svg('dollar')} Recibo de egreso`
+          }) : null,
           h('button', {
             class: 'btn btn-red',
             onclick: openCierreCajaModal,
@@ -585,6 +624,36 @@ function renderCaja(el) {
     }
     el.appendChild(incomeCard);
 
+    if (cajaCanIssueExpenseReceipt()) {
+      const tdExpenseReceipts = Number(_cajaExpenseState.sessionId) === Number(sesId) ? _cajaExpenseState.rows : [];
+      const expenseCard = h('div', { class:'card mb20' });
+      expenseCard.appendChild(h('div',{class:'fxb mb8'},
+        h('div',null,h('div',{class:'card-title'},`Recibos de egreso (${tdExpenseReceipts.length})`),
+          h('div',{class:'ts'},'Gastos pagados con el efectivo de esta caja')),
+        h('button',{class:'btn btn-out btn-sm',onclick:openExpenseReceiptModal,html:`${svg('dollar')} Nuevo egreso`})));
+      if (_cajaExpenseState.loading) {
+        expenseCard.appendChild(h('div',{class:'empty',style:{padding:'18px'}},h('p',null,'Cargando egresos…')));
+      } else if (!tdExpenseReceipts.length) {
+        expenseCard.appendChild(h('div',{class:'empty',style:{padding:'18px'}},h('p',null,'Sin recibos de egreso en esta sesión')));
+      } else {
+        const rows = tdExpenseReceipts.map(r => h('tr',null,
+          h('td',{class:'tm'},r.document_number_fmt || `EGR-${r.id}`),
+          h('td',null,h('div',{class:'tb'},r.beneficiary_name || r.supplier_name || '—'),
+            h('div',{class:'ts'},r.category_name || 'Sin categoría')),
+          h('td',null,r.description || ''),
+          h('td',{style:{fontWeight:800,color:'var(--red)'}},`−${fmt(r.amount)}`),
+          h('td',null,h('div',{class:'flex',style:{gap:'3px'}},
+            h('button',{class:'btn btn-ghost btn-sm',title:'Reimprimir',
+              onclick:()=>cajaReprintExpenseReceipt(r),html:svg('print')}),
+            cajaExpenseCancellableHere(r, sesId)
+              ? h('button',{class:'btn btn-ghost btn-sm',title:'Anular',onclick:()=>openCancelExpenseReceiptModal(r),html:svg('xmark')})
+              : h('span',{class:'ts',title:'Este pago es parte de un gasto con otros pagos: anúlalo desde Gastos'},'Desde Gastos')))));
+        expenseCard.appendChild(h('div',{class:'tw'},h('table',null,
+          h('thead',null,h('tr',null,...['Recibo','Pagado a','Concepto','Monto',''].map(x=>h('th',null,x)))),h('tbody',null,...rows))));
+      }
+      el.appendChild(expenseCard);
+    }
+
     // Devoluciones de esta sesión (visibilidad para el cajero) ─────────
     if (tdDevs.length) {
       const devCard = h('div', { class: 'card mb20' });
@@ -617,6 +686,13 @@ function renderCaja(el) {
   el.appendChild(cajaIncomeHistoryCard());
   if (!_cajaIncomeHistory.loaded) cajaSearchIncomeHistory();
   else cajaRenderIncomeHistoryBody();
+
+  // ── Historial de recibos de egreso ────────────
+  if (cajaCanIssueExpenseReceipt()) {
+    el.appendChild(cajaExpenseHistoryCard());
+    if (!_cajaExpenseHistory.loaded) cajaSearchExpenseHistory();
+    else cajaRenderExpenseHistoryBody();
+  }
 
   // ── Historial ─────────────────────────────────
   const histCard = h('div', { class: 'card' });
@@ -906,6 +982,389 @@ function cajaPreviewIncomeReceipt(settings = null) {
     return;
   }
   printHTML(html, 'recibo_ingreso');
+}
+
+// ══════════════════════════════════════════════
+// RECIBO DE EGRESO
+// ══════════════════════════════════════════════
+// Constancia del dinero que sale para pagar un gasto. Es el espejo del recibo
+// de ingreso y lo usan Caja y Gastos (printPagoProveedor en print.js).
+const _CAJA_EXPENSE_TEMPLATES = ['egreso_carta_profesional','egreso_carta_compacta','egreso_termica_80','egreso_ticket_pos'];
+
+// Sin plantilla elegida se respeta el papel que ya usaba el negocio para estos
+// recibos (la plantilla de Facturas y ventas): carta sigue en carta, 72/80 mm
+// pasa a la térmica de 80 mm y 58 mm conserva el formato anterior, que sí
+// cabe en ese rollo.
+function cajaExpenseReceiptTemplate(override = null) {
+  const route = typeof _getCategoryConfig === 'function' ? _getCategoryConfig('egreso') : {};
+  const chosen = (override && override.template) || route.template || '';
+  if (_CAJA_EXPENSE_TEMPLATES.includes(chosen)) return chosen;
+  const ticket = (typeof _getCategoryConfig === 'function' ? _getCategoryConfig('ticket').template : '')
+    || (typeof DB !== 'undefined' && DB?.settings?.print_template) || 'termica_80_clasica';
+  if (String(ticket).startsWith('carta')) return 'egreso_carta_profesional';
+  if (String(ticket).startsWith('termica_58')) return 'egreso_ticket_pos';
+  return 'egreso_termica_80';
+}
+
+function _cajaExpenseReceiptSettings(override = null) {
+  const route = typeof _getCategoryConfig === 'function' ? _getCategoryConfig('egreso') : {};
+  const selected = override || {};
+  const options = { ...(route.options || {}), ...(selected.options || {}) };
+  return {
+    template: cajaExpenseReceiptTemplate(override),
+    showLogo: options.showLogo !== false,
+    showBusinessDetails: options.showBusinessDetails !== false,
+    showNotes: options.showNotes !== false,
+    showSignatures: options.showSignatures !== false,
+  };
+}
+
+function _cajaExpenseMethod(value) {
+  return ({ efectivo:'Efectivo', transferencia:'Transferencia', tarjeta:'Tarjeta', cheque:'Cheque' })[value] || (value || 'Efectivo');
+}
+
+function buildExpenseReceiptHTML(receipt, override = null) {
+  const settings = _cajaExpenseReceiptSettings(override);
+  const thermal = settings.template === 'egreso_termica_80';
+  const compact = settings.template === 'egreso_carta_compacta';
+  const accent = '#b42318';
+  const logo = settings.showLogo && typeof buildLogoHeader === 'function'
+    ? buildLogoHeader(CFG.biz_logo, CFG.biz_logo_2, {
+        unit: 'px', maxH: thermal ? 40 : 62, maxW: thermal ? 150 : 190, align: 'left',
+      })
+    : '';
+  const date = String(receipt.created_at || today()).slice(0, 10);
+  const pageRule = thermal ? 'size:80mm auto;margin:4mm'
+    : compact ? 'size:letter;margin:10mm' : 'size:letter;margin:16mm';
+  const bodySize = thermal ? '10px' : compact ? '11px' : '12px';
+  const pageMin = thermal ? '0' : compact ? '120mm' : '240mm';
+  const amount = Number(receipt.amount || 0);
+  const expenseTotal = Number(receipt.expense_total || amount);
+  const balanceAfter = Number(receipt.balance_after || 0);
+  // Un pago parcial lo dice en el recibo: quien firma sabe que queda saldo.
+  const partialBlock = balanceAfter > 0.009
+    ? `<div class="fx">Total del gasto ${fmt(expenseTotal)} · Saldo pendiente ${fmt(balanceAfter)}</div>` : '';
+  const businessBlock = settings.showBusinessDetails
+    ? `<h1>${_cajaEsc(CFG.biz || 'VELO POS')}</h1><div class="muted">${_cajaEsc([CFG.rnc && `RNC ${CFG.rnc}`, CFG.phone, CFG.addr].filter(Boolean).join(' · '))}</div>`
+    : '';
+  const notesBlock = settings.showNotes && receipt.notes
+    ? `<div class="note"><strong>Notas</strong><br>${_cajaEsc(receipt.notes)}</div>` : '';
+  const signaturesBlock = settings.showSignatures
+    ? `<div class="signatures"><div class="sign">Entregado por<br><span class="muted">${_cajaEsc(receipt.user_name || '')}</span></div><div class="sign">Recibido por<br><span class="muted">${_cajaEsc(receipt.paid_to_name || '')}${receipt.paid_to_document ? ` · ${_cajaEsc(receipt.paid_to_document)}` : ''}</span></div></div>`
+    : '';
+  const reference = [receipt.reference, receipt.invoice_number && `Factura ${receipt.invoice_number}`].filter(Boolean).join(' · ');
+  const style = `@page{${pageRule}}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#172033;margin:0;font-size:${bodySize};${thermal ? 'width:72mm;' : ''}}`
+    + `.page{min-height:${pageMin};position:relative}`
+    + `.head{display:flex;justify-content:space-between;gap:${thermal ? '8px' : '24px'};border-bottom:${thermal ? '2px' : '3px'} solid ${accent};padding-bottom:${thermal ? '7px' : '13px'}}`
+    + `.brand h1{font-size:${thermal ? '14px' : '20px'};margin:5px 0}.brand img{max-width:${thermal ? '42mm' : '190px'} !important;max-height:${thermal ? '16mm' : '62px'} !important}`
+    + `.muted{color:#64748b}.doc{text-align:right}.doc strong{display:block;color:${accent};font-size:${thermal ? '11px' : '18px'}}.doc em{display:block;font-style:normal;color:#64748b;font-size:${thermal ? '8px' : '10px'};margin-top:3px}`
+    + `.title{text-align:center;font-size:${thermal ? '12px' : compact ? '17px' : '19px'};margin:${thermal ? '12px 0 10px' : compact ? '18px 0 14px' : '28px 0 20px'}}`
+    + `.grid{display:grid;grid-template-columns:${thermal ? '1fr' : '1fr 1fr'};gap:${thermal ? '5px' : '10px 28px'};background:#f8fafc;border:1px solid #e2e8f0;border-radius:9px;padding:${thermal ? '8px' : '15px'}}`
+    + `.amount{margin:${thermal ? '12px 0' : '22px 0'};padding:${thermal ? '10px' : '18px'};border:2px solid ${accent};border-radius:10px;text-align:center}`
+    + `.amount span{display:block;color:#64748b;text-transform:uppercase;font-size:${thermal ? '9px' : '10px'}}.amount strong{display:block;font-size:${thermal ? '18px' : '28px'};color:${accent};margin-top:5px}`
+    + `.amount .fx{margin-top:5px;color:#334155;font-size:${thermal ? '9px' : '11px'}}`
+    + `.concept{padding:${thermal ? '9px' : '14px'};border-left:4px solid ${accent};background:#f8fafc;white-space:pre-wrap}`
+    + `.note{margin-top:${thermal ? '9px' : '14px'};padding:${thermal ? '9px' : '12px'};border:1px solid #e2e8f0;white-space:pre-wrap}`
+    + `.signatures{display:grid;grid-template-columns:${thermal ? '1fr' : '1fr 1fr'};gap:${thermal ? '26px' : '70px'};margin-top:${thermal ? '34px' : compact ? '45px' : '75px'}}`
+    + `.sign{border-top:1px solid #334155;text-align:center;padding-top:7px}`
+    + `.foot{${thermal ? 'margin-top:16px' : 'position:absolute;bottom:0;left:0;right:0'};border-top:1px solid #cbd5e1;padding-top:8px;color:#64748b;font-size:${thermal ? '8px' : '10px'};display:flex;justify-content:space-between;gap:8px${thermal ? ';flex-direction:column' : ''}}`;
+  return `<!doctype html><html><head><meta charset="UTF-8"><title>${_cajaEsc(receipt.document_number_fmt || 'Recibo de egreso')}</title><style>${style}</style></head><body><section class="page">`
+    + `<header class="head"><div class="brand">${logo}${businessBlock}</div><div class="doc"><strong>RECIBO DE EGRESO</strong><span>${_cajaEsc(receipt.document_number_fmt || '')}</span>${receipt.is_reprint ? '<em>Reimpresión</em>' : ''}</div></header>`
+    + `<h2 class="title">Constancia de dinero entregado</h2>`
+    + `<div class="grid"><div><span class="muted">Pagado a</span><br><strong>${_cajaEsc(receipt.paid_to_name || '—')}</strong></div>`
+    + `<div><span class="muted">Cédula / RNC</span><br><strong>${_cajaEsc(receipt.paid_to_document || '—')}</strong></div>`
+    + `<div><span class="muted">Fecha</span><br><strong>${_cajaEsc(typeof fdate === 'function' ? fdate(date) : date)}</strong></div>`
+    + `<div><span class="muted">Método</span><br><strong>${_cajaEsc(_cajaExpenseMethod(receipt.method))}</strong></div>`
+    + `<div><span class="muted">Categoría</span><br><strong>${_cajaEsc(receipt.category_name || 'Sin categoría')}</strong></div>`
+    + `<div><span class="muted">Referencia</span><br><strong>${_cajaEsc(reference || '—')}</strong></div></div>`
+    + `<div class="amount"><span>Monto pagado</span><strong>${fmt(amount)}</strong>${partialBlock}</div>`
+    + `<div class="concept"><strong>Concepto</strong><br>${_cajaEsc(receipt.concept || '')}</div>${notesBlock}${signaturesBlock}`
+    + `<footer class="foot"><span>${_cajaEsc(CFG.biz || '')}</span><span>Documento interno · No sustituye comprobante fiscal</span></footer>`
+    + `</section></body></html>`;
+}
+
+function printExpenseReceipt(receipt, override = null) {
+  if (!receipt) return;
+  printHTML(buildExpenseReceiptHTML(receipt, override), 'recibo_egreso');
+}
+
+// Vista previa del Centro de impresión: datos de ejemplo, nunca un egreso real.
+function cajaPreviewExpenseReceipt(settings = null) {
+  const sample = {
+    document_number_fmt: 'RGE-000123',
+    paid_to_name: 'PERSONA O EMPRESA DE EJEMPLO',
+    paid_to_document: '001-0000000-1',
+    created_at: today(),
+    method: 'efectivo',
+    category_name: 'Categoría de ejemplo',
+    reference: 'REF-EJEMPLO',
+    amount: 2500,
+    expense_total: 2500,
+    balance_after: 0,
+    concept: 'Ejemplo de dinero entregado para pagar un gasto.',
+    notes: 'Nota editable al registrar el egreso.',
+    user_name: _cajaUser()?.name || 'Administrador',
+  };
+  // «Formato anterior» depende de la plantilla de ventas; la vista previa
+  // muestra el diseño de egreso en carta para no confundir.
+  const effective = settings && settings.template === 'egreso_ticket_pos'
+    ? { ...settings, template: 'egreso_carta_profesional' } : settings;
+  const html = buildExpenseReceiptHTML(sample, effective);
+  if (typeof _openPrintPreview === 'function') {
+    _openPrintPreview(html, {
+      jobType: 'recibo_egreso', mode: 'print', source: 'html',
+      suggestedName: 'Recibo-egreso-ejemplo',
+    });
+    return;
+  }
+  printHTML(html, 'recibo_egreso');
+}
+
+function _cajaExpenseCategoryOptions(categories) {
+  const active = categories.filter(c => Number(c.active ?? 1) !== 0);
+  const parents = active.filter(c => !c.parent_id);
+  const groups = parents.map(p => {
+    const subs = active.filter(c => Number(c.parent_id) === Number(p.id));
+    if (!subs.length) return `<option value="${p.id}">${_cajaEsc(p.name)}</option>`;
+    return `<optgroup label="${_cajaEsc(p.name)}">${subs.map(c => `<option value="${c.id}">${_cajaEsc(c.name)}</option>`).join('')}</optgroup>`;
+  }).join('');
+  return `<option value="">— Sin categoría —</option>${groups}`;
+}
+
+async function openExpenseReceiptModal() {
+  if (!cajaOpen || !cajaSession?.id) { toast('Abre la caja antes de registrar un egreso','w'); return; }
+  if (!cajaCanIssueExpenseReceipt()) { toast('Solo el administrador puede hacer recibos de egreso','w'); return; }
+  let categories = [];
+  try {
+    const result = await window.api.expenses.getCategories();
+    categories = result?.ok ? (result.data || []) : [];
+  } catch {}
+  openModal(`<div class="modal-title">Nuevo recibo de egreso</div><div class="modal-sub">Registra un pago hecho con el efectivo de esta caja. Queda también en Gastos.</div>
+    <div class="g2"><div class="fg"><label class="lbl">Pagado a *</label><input class="inp" id="cash-expense-payee" maxlength="120" placeholder="Nombre de quien recibe el dinero"/></div>
+      <div class="fg"><label class="lbl">Cédula / RNC *</label><input class="inp" id="cash-expense-document" maxlength="40" placeholder="Documento de quien recibe"/></div></div>
+    <div class="g2"><div class="fg"><label class="lbl">Teléfono</label><input class="inp" id="cash-expense-phone" maxlength="40" placeholder="Opcional"/></div>
+      <div class="fg"><label class="lbl">Categoría</label><select class="inp" id="cash-expense-category">${_cajaExpenseCategoryOptions(categories)}</select></div></div>
+    <div class="fg"><label class="lbl">Concepto *</label><input class="inp" id="cash-expense-concept" maxlength="200" placeholder="Motivo por el que sale el dinero"/></div>
+    <div class="g2"><div class="fg"><label class="lbl">Monto (RD$) *</label><input class="inp" id="cash-expense-amount" type="number" min="0.01" step="0.01"/></div>
+      <div class="fg"><label class="lbl">Método</label><input class="inp" value="Efectivo de esta caja" disabled/></div></div>
+    <div class="fg"><label class="lbl">Notas para el recibo</label><textarea class="inp" id="cash-expense-notes" rows="3" placeholder="Opcional"></textarea></div>
+    <div class="ven-callout">El dinero sale del efectivo de esta caja y baja lo esperado en el cuadre. El pago queda registrado en Gastos.</div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" id="cash-expense-save" onclick="confirmExpenseReceipt()">${svg('check')} Registrar e imprimir</button></div>`, 'modal-lg');
+}
+
+async function confirmExpenseReceipt() {
+  const actor = _cajaUser();
+  const button = document.getElementById('cash-expense-save');
+  const value = id => String(document.getElementById(id)?.value || '').trim();
+  const payee = value('cash-expense-payee');
+  const documentId = value('cash-expense-document');
+  const concept = value('cash-expense-concept');
+  const amount = Math.round((Number(value('cash-expense-amount')) || 0) * 100) / 100;
+  if (!payee) return toast('Indica a quién se le entrega el dinero','w');
+  if (!documentId) return toast('Indica la cédula o RNC de quien recibe','w');
+  if (!concept) return toast('Indica el concepto del egreso','w');
+  if (!(amount > 0)) return toast('El monto debe ser mayor a cero','w');
+  if (button) button.disabled = true;
+  const notes = value('cash-expense-notes');
+  try {
+    const result = await window.api.expenses.create({
+      data: {
+        type: 'gasto',
+        description: concept,
+        category_id: value('cash-expense-category') || null,
+        supplier_id: null,
+        beneficiary_name: payee,
+        beneficiary_document: documentId,
+        beneficiary_phone: value('cash-expense-phone'),
+        amount,
+        tax_amount: 0,
+        total: amount,
+        payment_method: 'efectivo',
+        payment_source: 'caja',
+        pay_now: true,
+        from_cash_register: true,
+        cash_session_id: cajaSession?.id,
+        issue_date: today(),
+        notes: notes || null,
+      },
+      requestUserId: actor?.id,
+    });
+    if (!result?.ok) { toast(result?.error || 'No se pudo registrar el egreso','err'); if (button) button.disabled = false; return; }
+    closeModal();
+    cajaExpenseReceiptsInvalidate();
+    cajaInvalidateSessionSales();
+    if (!result.paid) {
+      toast(`El gasto quedó registrado pero no se pudo pagar desde la caja${result.payWarning ? `: ${result.payWarning}` : ''}. Revísalo en Gastos.`,'err');
+    } else {
+      toast(`✓ Egreso registrado · ${result.documentNumberFmt || ''}`);
+      try {
+        const expense = await window.api.expenses.getById({ id: result.id });
+        if (expense?.ok && expense.data) {
+          printPagoProveedor({
+            payment: {
+              id: result.paymentId,
+              document_kind: result.documentKind,
+              document_number: result.documentNumber,
+              document_number_fmt: result.documentNumberFmt,
+              amount,
+              method: 'efectivo',
+              balance_before: amount,
+              balance_after: 0,
+              created_at: new Date().toISOString(),
+            },
+            expense: expense.data,
+            cajero: actor?.name || '',
+          });
+        }
+      } catch (error) {
+        toast('El egreso quedó registrado, pero no se pudo imprimir. Reimprímelo desde la lista.','w');
+      }
+    }
+    veloRepaint(() => renderCaja(document.getElementById('page')));
+  } catch (e) {
+    toast(e?.message || 'No se pudo registrar el egreso','err');
+    if (button) button.disabled = false;
+  }
+}
+
+// Anular desde Caja solo cuando el recibo es todo el gasto y salió de esta
+// sesión: anular un gasto revierte todos sus pagos y devuelve el dinero a la
+// caja donde se pagó. Lo demás se anula desde Gastos, donde se ve completo.
+function cajaExpenseCancellableHere(row, sessionId) {
+  return Number(row.active_payments) === 1
+    && Math.abs(Number(row.expense_total || 0) - Number(row.amount || 0)) < 0.01
+    && Number(row.expense_cash_session_id) === Number(sessionId);
+}
+
+function openCancelExpenseReceiptModal(row) {
+  if (!cajaCanIssueExpenseReceipt()) return toast('Solo el administrador puede anular recibos de egreso','w');
+  openModal(`<div class="modal-title">Anular recibo de egreso</div>
+    <div class="modal-sub">${_cajaEsc(row.document_number_fmt || '')} · ${_cajaEsc(row.beneficiary_name || row.supplier_name || '')} · ${fmt(row.amount)}</div>
+    <div class="alrt a" style="margin:12px 0"><div><div class="alrt-title">El dinero vuelve a esta caja</div>
+      <div class="alrt-sub">Se anula también el gasto en Gastos y su registro contable. Esta acción no se puede deshacer.</div></div></div>
+    <div class="fg"><label class="lbl">Motivo de la anulación *</label><input class="inp" id="cash-expense-cancel-reason" maxlength="200" placeholder="Por qué se anula este egreso"/></div>
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" id="cash-expense-cancel-save" onclick="confirmCancelExpenseReceipt(${Number(row.expense_id)})">${svg('xmark')} Anular egreso</button></div>`);
+}
+
+async function confirmCancelExpenseReceipt(expenseId) {
+  const reason = String(document.getElementById('cash-expense-cancel-reason')?.value || '').trim();
+  if (!reason) return toast('Indica el motivo de la anulación','w');
+  const button = document.getElementById('cash-expense-cancel-save');
+  if (button) button.disabled = true;
+  try {
+    const result = await window.api.expenses.cancel({ expenseId, reason, requestUserId:_cajaUser()?.id });
+    if (!result?.ok) { toast(result?.error || 'No se pudo anular el egreso','err'); if (button) button.disabled = false; return; }
+    closeModal();
+    cajaExpenseReceiptsInvalidate();
+    cajaInvalidateSessionSales();
+    toast('✓ Egreso anulado · el dinero volvió a la caja');
+    veloRepaint(() => renderCaja(document.getElementById('page')));
+  } catch (e) {
+    toast(e?.message || 'No se pudo anular el egreso','err');
+    if (button) button.disabled = false;
+  }
+}
+
+// Historial de recibos de egreso: todas las sesiones y cuentas, por fechas.
+function cajaExpenseHistoryCard() {
+  if (!_cajaExpenseHistory.filters.from) {
+    Object.assign(_cajaExpenseHistory.filters, _cajaDefaultHistoryRange());
+  }
+  const f = _cajaExpenseHistory.filters;
+  const card = h('div', { class:'card mb20', id:'caja-expense-history' });
+  card.innerHTML = `
+    <div class="fxb mb8">
+      <div><div class="card-title">Historial de recibos de egreso</div>
+        <div class="ts">Todos los pagos de gastos, desde Caja o desde Gastos. Desde aquí se consulta y se reimprime.</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:13px;margin-bottom:10px">
+      <div class="fg"><label class="lbl">Desde</label><input class="inp" id="caja-expense-from" type="date" value="${_cajaEsc(f.from)}"/></div>
+      <div class="fg"><label class="lbl">Hasta</label><input class="inp" id="caja-expense-to" type="date" value="${_cajaEsc(f.to)}"/></div>
+      <div class="fg"><label class="lbl">Buscar</label><input class="inp" id="caja-expense-query" placeholder="Recibo, persona, concepto o referencia" value="${_cajaEsc(f.query)}"/></div>
+      <div class="fg"><label class="lbl">&nbsp;</label>
+        <button class="btn btn-dark" style="width:100%" onclick="cajaSearchExpenseHistory()">${svg('search')} Buscar</button></div>
+    </div>
+    <label class="ts" style="display:flex;align-items:center;gap:7px;cursor:pointer;margin-bottom:10px">
+      <input id="caja-expense-cancelled" type="checkbox" ${f.includeCancelled ? 'checked' : ''} onchange="cajaSearchExpenseHistory()"/>
+      Incluir recibos anulados
+    </label>
+    <div id="caja-expense-history-body"></div>`;
+  return card;
+}
+
+function cajaRenderExpenseHistoryBody() {
+  const body = document.getElementById('caja-expense-history-body');
+  if (!body) return;
+  const state = _cajaExpenseHistory;
+  if (state.loading) {
+    body.innerHTML = `<div class="empty" style="padding:18px"><p>Cargando historial…</p></div>`;
+    return;
+  }
+  if (!state.rows.length) {
+    body.innerHTML = `<div class="empty" style="padding:18px"><p>Sin recibos de egreso en el período seleccionado</p></div>`;
+    return;
+  }
+  const rows = state.rows.map(r => {
+    const cancelled = r.status !== 'pagado';
+    const date = String(r.created_local || '').slice(0, 10);
+    return `<tr${cancelled ? ' style="opacity:.62"' : ''}>
+      <td class="tm">${_cajaEsc(r.document_number_fmt || `EGR-${r.id}`)}</td>
+      <td class="ts">${_cajaEsc(typeof fdate === 'function' ? fdate(date) : date)}</td>
+      <td><div class="tb">${_cajaEsc(r.beneficiary_name || r.supplier_name || '—')}</div><div class="ts">${_cajaEsc(r.category_name || 'Sin categoría')}</div></td>
+      <td>${_cajaEsc(r.description || '')}</td>
+      <td><span class="badge ${r.payment_method === 'efectivo' ? 'g' : 'b'}">${_cajaEsc(_cajaExpenseMethod(r.payment_method))}</span></td>
+      <td style="font-weight:800;color:${cancelled ? 'var(--muted)' : 'var(--red)'}">${fmt(r.amount)}</td>
+      <td><span class="badge ${cancelled ? 'r' : 'g'}">${cancelled ? 'Anulado' : 'Vigente'}</span></td>
+      <td>${cancelled ? '' : `<button class="btn btn-ghost btn-sm" title="Reimprimir" onclick="cajaReprintExpenseHistory(${Number(r.id)})">${svg('print')}</button>`}</td>
+    </tr>`;
+  }).join('');
+  body.innerHTML = `<div class="tw"><table>
+      <thead><tr>${['Recibo','Fecha','Pagado a','Concepto','Método','Monto','Estado',''].map(t => `<th>${t}</th>`).join('')}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <div class="ts" style="margin-top:9px;display:flex;gap:16px;flex-wrap:wrap">
+      <span>Vigentes: <strong style="color:var(--red)">${fmt(state.totals.active || 0)}</strong></span>
+      ${state.totals.cancelled ? `<span>Anulados: <strong>${fmt(state.totals.cancelled)}</strong></span>` : ''}
+      <span>${state.rows.length} recibo${state.rows.length === 1 ? '' : 's'}</span>
+      ${state.truncated ? '<span style="color:var(--red)">Se muestran los más recientes: acota el período para ver el resto.</span>' : ''}
+    </div>`;
+}
+
+async function cajaSearchExpenseHistory() {
+  const state = _cajaExpenseHistory;
+  state.filters = {
+    from: document.getElementById('caja-expense-from')?.value || state.filters.from,
+    to: document.getElementById('caja-expense-to')?.value || state.filters.to,
+    query: document.getElementById('caja-expense-query')?.value || '',
+    includeCancelled: document.getElementById('caja-expense-cancelled')
+      ? !!document.getElementById('caja-expense-cancelled').checked : state.filters.includeCancelled,
+  };
+  state.loading = true;
+  state.loaded = true;
+  cajaRenderExpenseHistoryBody();
+  try {
+    const result = await window.api.expenses.searchReceipts({ ...state.filters, requestUserId:_cajaUser()?.id });
+    if (!result?.ok) throw new Error(result?.error || 'No se pudo cargar el historial');
+    state.rows = result.data?.rows || [];
+    state.truncated = !!result.data?.truncated;
+    state.totals = result.data?.totals || { active:0, cancelled:0 };
+  } catch (error) {
+    state.rows = []; state.truncated = false; state.totals = { active:0, cancelled:0 };
+    toast(error?.message || 'No se pudo cargar el historial','err');
+  }
+  state.loading = false;
+  cajaRenderExpenseHistoryBody();
+}
+
+async function cajaReprintExpenseHistory(paymentId) {
+  const row = _cajaExpenseHistory.rows.find(item => Number(item.id) === Number(paymentId));
+  if (!row) return toast('Recibo no encontrado','err');
+  await cajaReprintExpenseReceipt(row);
+}
+
+async function cajaReprintExpenseReceipt(row) {
+  if (typeof window.imprimirPagoGasto !== 'function') return toast('La impresión de gastos no está disponible','err');
+  await window.imprimirPagoGasto(row.expense_id, row.id);
 }
 
 // Modificar un recibo conserva su número: se corrige el mismo documento y solo

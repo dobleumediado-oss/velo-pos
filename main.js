@@ -5196,11 +5196,11 @@ ipcMain.handle('print:saveConfig', async (_, { config, requestUserId }) => {
       return { ok: false, error: 'Solo administradores pueden modificar la configuración de impresión' };
     }
     const allowedCategories = new Set([
-      'ticket', 'cotizacion', 'pago', 'nomina', 'ingreso', 'conduce', 'caja',
+      'ticket', 'cotizacion', 'pago', 'nomina', 'ingreso', 'egreso', 'conduce', 'caja',
       'inventario', 'compras', 'contabilidad', 'bancos', 'reporte',
     ]);
     const allowedChannels = new Set(['ventas', 'pagos', 'caja', 'oficina', 'almacen']);
-    // Los recibos de nómina e ingreso guardan además qué bloques se imprimen.
+    // Los recibos de nómina, ingreso y egreso guardan además qué bloques se imprimen.
     // Solo se aceptan interruptores conocidos y siempre como booleanos.
     const RECEIPT_OPTION_KEYS = ['showLogo', 'showBusinessDetails', 'showNotes', 'showSignatures'];
     const safeReceiptOptions = (value) => {
@@ -8248,6 +8248,26 @@ ipcMain.handle('expenses:getById', async (_, { id }) => {
   try { return { ok:true, data: expensesRepo.getById(id) }; }
   catch(e) { return { ok:false, error:e.message }; }
 });
+// Recibos de egreso de una sesión de caja: pagos de gastos con su efectivo.
+ipcMain.handle('expenses:getCashReceipts', async (_, { sessionId, requestUserId } = {}) => {
+  try {
+    const u = authRepo.findById(requestUserId);
+    if (!u || !['admin', 'superadmin'].includes(u.role)) {
+      return { ok:false, error:'Solo el administrador puede ver los recibos de egreso' };
+    }
+    return { ok:true, data: expensesRepo.getCashPaymentsBySession(sessionId) };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+// Historial de recibos de egreso por fechas (todas las sesiones y cuentas).
+ipcMain.handle('expenses:searchReceipts', async (_, options = {}) => {
+  try {
+    const u = authRepo.findById(options.requestUserId);
+    if (!u || !['admin', 'superadmin'].includes(u.role)) {
+      return { ok:false, error:'Solo el administrador puede ver los recibos de egreso' };
+    }
+    return { ok:true, data: expensesRepo.searchPaymentReceipts(options) };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
 ipcMain.handle('expenses:getSummary', async (_, filters) => {
   try { return { ok:true, data: expensesRepo.getSummary(filters||{}) }; }
   catch(e) { return { ok:false, error:e.message }; }
@@ -8276,6 +8296,22 @@ ipcMain.handle('expenses:create', async (_, { data, requestUserId }) => {
     const _method = data.payment_method || 'efectivo';
     // "Pagar ahora": paga el total al registrar. No aplica a crédito (crédito = CxP).
     const wantPayNow = data.pay_now === true && _method !== 'credito';
+
+    // Recibo de egreso hecho desde Caja: sale del efectivo de la caja abierta en
+    // esta terminal o no se registra. Nunca cae a caja chica ni a banco.
+    if (data.from_cash_register === true) {
+      if (!['admin', 'superadmin'].includes(u.role)) {
+        return { ok:false, error:'Solo el administrador puede hacer recibos de egreso' };
+      }
+      const session = cashRepo.getOpen(_reqTerminalId());
+      if (!session || Number(session.id) !== Number(data.cash_session_id)) {
+        return { ok:false, error:'La caja de esta terminal ya no está abierta. Actualiza la pantalla de Caja.' };
+      }
+      if (_method !== 'efectivo' || !wantPayNow) {
+        return { ok:false, error:'El recibo de egreso de Caja se paga en efectivo al momento' };
+      }
+    }
+    delete data.from_cash_register;
 
     if (u.role === 'cajero') {
       // Cajero solo puede registrar desde caja abierta

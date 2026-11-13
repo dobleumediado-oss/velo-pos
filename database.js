@@ -10092,6 +10092,68 @@ const expensesRepo = {
     return e;
   },
 
+  // Pagos vigentes que salieron del efectivo de una sesión de caja: son los
+  // recibos de egreso que Caja lista y reimprime.
+  getCashPaymentsBySession(sessionId) {
+    const id = Number(sessionId);
+    if (!(id > 0)) return [];
+    // expense_*: Caja solo ofrece anular cuando este pago es todo el gasto;
+    // anular un gasto revierte todos sus pagos, no solo uno.
+    return db.prepare(`SELECT ep.id, ep.expense_id, ep.amount, ep.payment_method, ep.document_number_fmt,
+        ep.beneficiary_name, ep.created_at, e.description, ec.name AS category_name, s.name AS supplier_name,
+        e.total AS expense_total, e.cash_session_id AS expense_cash_session_id,
+        (SELECT COUNT(*) FROM expense_payments x WHERE x.expense_id = ep.expense_id AND x.status = 'pagado') AS active_payments
+      FROM expense_payments ep
+      JOIN expenses e ON e.id = ep.expense_id
+      LEFT JOIN expense_categories ec ON ec.id = e.category_id
+      LEFT JOIN suppliers s ON s.id = e.supplier_id
+      WHERE ep.cash_session_id = ? AND ep.status = 'pagado' AND ep.cash_movement_id IS NOT NULL
+      ORDER BY ep.id DESC`).all(id);
+  },
+
+  // Historial de recibos de egreso: todos los pagos de gastos, de cualquier
+  // sesión o cuenta. created_at se guarda en UTC; las fechas se filtran y
+  // muestran en hora local para que coincidan con el día del negocio.
+  searchPaymentReceipts(options = {}) {
+    const dateOf = value => (/^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) ? String(value) : '');
+    const from = dateOf(options.from);
+    const to = dateOf(options.to);
+    const term = String(options.query || '').trim().slice(0, 80);
+    const includeCancelled = options.includeCancelled !== false;
+    const limit = Math.max(1, Math.min(1000, parseInt(options.limit, 10) || 300));
+    const clauses = [];
+    const params = [];
+    if (from) { clauses.push("date(ep.created_at,'localtime')>=?"); params.push(from); }
+    if (to) { clauses.push("date(ep.created_at,'localtime')<=?"); params.push(to); }
+    if (!includeCancelled) clauses.push("ep.status='pagado'");
+    if (term) {
+      clauses.push(`(ep.document_number_fmt LIKE ? OR ep.beneficiary_name LIKE ? OR ep.beneficiary_document LIKE ?
+        OR s.name LIKE ? OR e.description LIKE ? OR ep.reference LIKE ?)`);
+      const like = `%${term}%`;
+      params.push(like, like, like, like, like, like);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const rows = db.prepare(`
+      SELECT ep.id, ep.expense_id, ep.amount, ep.payment_method, ep.payment_source, ep.status,
+             ep.document_number_fmt, ep.beneficiary_name, ep.reference,
+             datetime(ep.created_at,'localtime') AS created_local,
+             e.description, ec.name AS category_name, s.name AS supplier_name
+      FROM expense_payments ep
+      JOIN expenses e ON e.id = ep.expense_id
+      LEFT JOIN expense_categories ec ON ec.id = e.category_id
+      LEFT JOIN suppliers s ON s.id = e.supplier_id
+      ${where}
+      ORDER BY ep.created_at DESC, ep.id DESC
+      LIMIT ?
+    `).all(...params, limit + 1);
+    const totals = rows.slice(0, limit).reduce((acc, row) => {
+      if (row.status === 'pagado') acc.active = round2(acc.active + Number(row.amount || 0));
+      else acc.cancelled = round2(acc.cancelled + Number(row.amount || 0));
+      return acc;
+    }, { active: 0, cancelled: 0 });
+    return { rows: rows.slice(0, limit), truncated: rows.length > limit, totals };
+  },
+
   getSummary({ from, to, month } = {}) {
     const where = [`e.type='gasto'`, `e.status NOT IN ${EXPENSE_NON_ACTIVE_STATUS_SQL}`];
     const params = [];

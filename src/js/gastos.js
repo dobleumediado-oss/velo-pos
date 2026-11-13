@@ -851,6 +851,7 @@ function modalNuevoGasto(parentEl, user) {
       requestUserId: user.id,
     });
     if (!res.ok) throw new Error(res.error);
+    if (typeof cajaExpenseReceiptsInvalidate === 'function') cajaExpenseReceiptsInvalidate();
     toast(res.paid
       ? '✓ Gasto registrado y pagado'
       : `✓ Gasto registrado${res.status==='pendiente_aprobacion'?' — pendiente de aprobación':' — como cuenta por pagar'}${res.payWarning ? ' (no se pudo pagar: '+res.payWarning+')' : ''}`,
@@ -925,6 +926,7 @@ function modalRetiro(parentEl, user) {
       requestUserId: user.id,
     });
     if (!res.ok) throw new Error(res.error);
+    if (typeof cajaExpenseReceiptsInvalidate === 'function') cajaExpenseReceiptsInvalidate();
     toast('✓ Retiro/traslado registrado');
     renderGastos(parentEl.closest('#main-content') || parentEl);
   }, 'Registrar retiro');
@@ -1155,6 +1157,7 @@ window.pagarGasto = (id, saldo) => {
       requestUserId: user.id,
     });
     if (!res.ok) throw new Error(res.error);
+    if (typeof cajaExpenseReceiptsInvalidate === 'function') cajaExpenseReceiptsInvalidate();
     toast('✓ Pago registrado correctamente');
 
     // Imprimir recibo de pago a proveedor (no bloquea el flujo si falla)
@@ -1227,6 +1230,7 @@ window.anularGasto = (id) => {
       if (!reason) throw new Error('El motivo de anulación es obligatorio');
       const res = await window.api.expenses.cancel({ expenseId: id, reason, requestUserId: user.id });
       if (!res.ok) throw new Error(res.error);
+      if (typeof cajaExpenseReceiptsInvalidate === 'function') cajaExpenseReceiptsInvalidate();
       toast('✓ Gasto anulado — contramovimiento generado');
       const el = document.getElementById('main-content');
       if (el) renderGastos(el);
