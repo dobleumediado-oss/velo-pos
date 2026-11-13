@@ -125,7 +125,7 @@ function cajaRenderIncomeHistoryBody() {
         <button class="btn btn-ghost btn-sm" title="Ver detalle" onclick="cajaOpenIncomeHistoryDetail(${Number(r.id)})">${svg('eye')}</button>
         <button class="btn btn-ghost btn-sm" title="Reimprimir" onclick="cajaReprintIncomeReceipt(${Number(r.id)})">${svg('print')}</button>
         ${isAdmin && !cancelled ? `<button class="btn btn-ghost btn-sm" title="Modificar" onclick="cajaEditIncomeFromHistory(${Number(r.id)})">${svg('edit')}</button>` : ''}
-        ${isAdmin && !cancelled ? `<button class="btn btn-ghost btn-sm" title="Anular" onclick="cajaCancelIncomeFromHistory(${Number(r.id)})">${svg('x')}</button>` : ''}
+        ${isAdmin && !cancelled ? `<button class="btn btn-ghost btn-sm" title="Anular" onclick="cajaCancelIncomeFromHistory(${Number(r.id)})">${svg('xmark')}</button>` : ''}
       </div></td>
     </tr>`;
   }).join('');
@@ -617,7 +617,7 @@ function renderCaja(el) {
         h('td',null,h('div',{class:'flex',style:{gap:'3px'}},
           h('button',{class:'btn btn-ghost btn-sm',onclick:()=>printIncomeReceipt(r),html:svg('print')}),
           ['admin','superadmin'].includes(_cajaUser()?.role) ? h('button',{class:'btn btn-ghost btn-sm',title:'Modificar',onclick:()=>openEditIncomeReceiptModal(r),html:svg('edit')}) : null,
-          ['admin','superadmin'].includes(_cajaUser()?.role) ? h('button',{class:'btn btn-ghost btn-sm',title:'Anular',onclick:()=>openCancelIncomeReceiptModal(r),html:svg('x')}) : null
+          ['admin','superadmin'].includes(_cajaUser()?.role) ? h('button',{class:'btn btn-ghost btn-sm',title:'Anular',onclick:()=>openCancelIncomeReceiptModal(r),html:svg('xmark')}) : null
         ))));
       incomeCard.appendChild(h('div',{class:'tw'},h('table',null,
         h('thead',null,h('tr',null,...['Recibo','Recibido de','Concepto','Método','Monto',''].map(x=>h('th',null,x)))),h('tbody',null,...rows))));
@@ -1451,7 +1451,7 @@ function cajaEditIncomeFromHistory(id) {
 }
 
 function openCancelIncomeReceiptModal(receipt) {
-  openModal(`<div class="modal-title">Anular ${_cajaEsc(receipt.document_number_fmt)}</div><div class="modal-sub">El ingreso desaparecerá de la vista operativa y se revertirá su impacto financiero.</div><div class="alrt r" style="margin:14px 0"><div><div class="alrt-title">Monto a revertir: ${fmt(receipt.amount)}</div><div class="alrt-sub">Esta acción queda registrada en auditoría.</div></div></div><div class="fg"><label class="lbl">Motivo *</label><textarea class="inp" id="cash-income-cancel-reason" rows="3"></textarea></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" onclick="confirmCancelIncomeReceipt(${Number(receipt.id)})">${svg('x')} Anular ingreso</button></div>`);
+  openModal(`<div class="modal-title">Anular ${_cajaEsc(receipt.document_number_fmt)}</div><div class="modal-sub">El ingreso desaparecerá de la vista operativa y se revertirá su impacto financiero.</div><div class="alrt r" style="margin:14px 0"><div><div class="alrt-title">Monto a revertir: ${fmt(receipt.amount)}</div><div class="alrt-sub">Esta acción queda registrada en auditoría.</div></div></div><div class="fg"><label class="lbl">Motivo *</label><textarea class="inp" id="cash-income-cancel-reason" rows="3"></textarea></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" onclick="confirmCancelIncomeReceipt(${Number(receipt.id)})">${svg('xmark')} Anular ingreso</button></div>`);
 }
 
 async function confirmCancelIncomeReceipt(id) {
