@@ -1,5 +1,17 @@
 # Historial de versiones
 
+## 1.66.0
+
+- Velo POS y Velo Tech POS se acomodan a pantallas pequeñas. Cuando la ventana
+  es estrecha, como la de un teléfono o una tableta en vertical, cada módulo
+  muestra una barra inferior con Inicio, Inventario, Vender, Clientes y Más;
+  las listas se ven como tarjetas y los botones son más grandes para tocarlos
+  con el dedo. En una pantalla normal todo se ve igual que antes.
+- En Velo Tech POS, el administrador ya puede entrar a Servicio técnico. Antes
+  el menú lo mostraba, pero al tocarlo volvía al inicio.
+- En Conduces, la ventana de Reportes ya no muestra un espacio en blanco grande
+  encima del reporte.
+
 ## 1.65.4
 
 - En Caja, el administrador puede hacer un «Recibo de egreso» al pagar un gasto
