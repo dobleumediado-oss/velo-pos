@@ -1,5 +1,13 @@
 # Historial de versiones
 
+## 1.66.1
+
+- En pantallas pequeñas con tema claro, los títulos de Gastos, Sucursales,
+  Vehículos y Envíos vuelven a verse; antes salían blancos sobre fondo blanco.
+- En el Punto de Venta en pantalla pequeña, los botones de las facturas abiertas
+  y el de agregar factura son más grandes para tocarlos con el dedo, y «Ver
+  carrito» muestra un ícono de lista en lugar del de impresora.
+
 ## 1.66.0
 
 - Velo POS y Velo Tech POS se acomodan a pantallas pequeñas. Cuando la ventana
