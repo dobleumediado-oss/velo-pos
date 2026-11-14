@@ -1829,6 +1829,8 @@ function abrirCorteCloud() {
 // descongela solo; si no se puede saber, queda en consulta hasta comprobarlo.
 const _cdEsc = value => String(value ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 let _cdPoll = null, _cdRead = null;
+// Un aviso del ensayo/corte tal como lo manda VELO Cloud: código, tabla, número y campo (si lo trae).
+const _cdIssue = issue => `${_cdEsc(issue?.code)} ${_cdEsc(issue?.table)}${issue?.sourceId ? ' #' + _cdEsc(issue.sourceId) : ''}${issue?.field ? ' (campo ' + _cdEsc(issue.field) + ')' : ''}`;
 const _cdApi = (name, extra) => window.api.cloudDirect[name]({ requestUserId: _cfgUser().id, ...(extra || {}) });
 const _cdBody = () => document.getElementById('cd-body');
 const _cdStopPoll = () => { if (_cdPoll) { clearInterval(_cdPoll); _cdPoll = null; } };
@@ -2042,7 +2044,7 @@ function _cdRehearsalDone(result) {
   _cdRead = null;
   body.innerHTML = (result?.ok
     ? _cdBox('g', 'Ensayo superado', `Los 20 pasos pasaron en ${result.seconds} s y se revirtieron. Ya se puede hacer el corte (con la caja cerrada).`)
-    : _cdBox('r', `El ensayo se detuvo en «${_cdEsc(result?.label || result?.error || '')}»`, `${result?.issueCount ?? ''} por resolver en Desktop. ${(result?.issues || []).slice(0, 8).map(issue => `${_cdEsc(issue.code)} ${_cdEsc(issue.table)}${issue.sourceId ? ' #' + _cdEsc(issue.sourceId) : ''}`).join(' · ')}`))
+    : _cdBox('r', `El ensayo se detuvo en «${_cdEsc(result?.label || result?.error || '')}»`, `${result?.issueCount ?? ''} por resolver en Desktop. ${(result?.issues || []).slice(0, 8).map(_cdIssue).join(' · ')}`))
     + _cdFoot('<button class="btn btn-dark" id="cd-back" type="button">Continuar</button>');
   document.getElementById('cd-back').onclick = () => void _cdRender();
 }
@@ -2074,7 +2076,7 @@ function _cdCutoverDone(result) {
     return;
   }
   if (result?.outcome === 'unfrozen') {
-    body.innerHTML = _cdBox('a', 'El corte no se completó y Desktop ya se descongeló', `${_cdEsc(result.error || '')}${(result.issues || []).length ? ' · ' + result.issues.slice(0, 8).map(issue => `${_cdEsc(issue.code)} ${_cdEsc(issue.table)}`).join(' · ') : ''}. El negocio sigue trabajando en Desktop como antes; VELO Cloud no cambió.`)
+    body.innerHTML = _cdBox('a', 'El corte no se completó y Desktop ya se descongeló', `${_cdEsc(result.error || '')}${(result.issues || []).length ? ' · ' + result.issues.slice(0, 8).map(_cdIssue).join(' · ') : ''}. El negocio sigue trabajando en Desktop como antes; VELO Cloud no cambió.`)
       + _cdFoot('<button class="btn btn-dark" id="cd-back" type="button">Continuar</button>');
     document.getElementById('cd-back').onclick = () => void _cdRender();
     return;

@@ -27,7 +27,9 @@ Cloud» y «Corte final a Cloud (con archivo)».
    eligen sucursal, almacén, un usuario de Cloud por cada usuario de Desktop y la caja
    de cada terminal (una sola opción se elige sola; las unidades toman los decimales
    mínimos). Se ensayan los 20 pasos y se revierten. Lo elegido se guarda en
-   `cloud-direct.json` (carpeta del negocio) para el corte.
+   `cloud-direct.json` (carpeta del negocio) para el corte. Si un paso se detiene, Desktop
+   muestra los primeros 8 avisos de Cloud con código, tabla, número y campo
+   (`_cdIssue` en `src/js/config.js`); el corte fallido usa el mismo formato.
 4. **Corte** (escribir CORTE; exige ensayo superado con esa empresa, caja cerrada e
    integridad): congela Desktop, saca la copia final, la envía, convierte los 20 pasos,
    guarda el historial y activa. Unos 10 minutos en producción.
