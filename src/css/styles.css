@@ -262,6 +262,8 @@ select.inp{cursor:pointer}
 .mtw .tw{border:1px solid var(--line2);border-radius:12px}
 .mtw tbody td .inp{font-size:11px}
 .modal-title{font-weight:800;font-size:16px;color:var(--ink);margin-bottom:3px}
+/* Ícono dentro del título de una ventana (p. ej. Reportes de Conduce): sin tamaño, un SVG ocupa todo el ancho. */
+.modal-title > svg{width:17px;height:17px;vertical-align:-3px;margin-right:6px;stroke:currentColor;fill:none;stroke-width:2}
 .modal-sub{font-size:12px;color:var(--muted);margin-bottom:20px}
 .modal-foot{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;margin-top:20px;padding-top:16px;border-top:1px solid var(--line)}
 
