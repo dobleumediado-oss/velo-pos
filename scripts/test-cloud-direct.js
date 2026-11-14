@@ -49,6 +49,25 @@ assert.deepEqual(cd.stepBody('financialMovementConversion', 'clave', built), { p
 assert.deepEqual(cd.stepBody('catalogConversion', 'clave', built), { passphrase: 'clave', sourceLocalUtcOffsetMinutes: -240, unitDecimals: { UND: 0, KG: 2 } });
 assert.deepEqual(cd.stepBody('operationsConversion', 'clave', built), { passphrase: 'clave', options: built.options });
 
+// Revisión del corte: lo que Cloud no convierte bloquea; «conversión pendiente» no (es un paso
+// sin ensayar); la misma revisión se reconoce por sus tablas aunque crezcan los conteos.
+const coverage = {
+  configuration: [{ table: 'settings', rows: 40, label: 'Datos del negocio', code: 'DESTINATION_CONFIGURATION_REVIEW' }],
+  historyOnly: [{ table: 'audit_log', rows: 1609, label: 'Auditoría de Desktop', code: 'APPROVED_HISTORY_ONLY' }, { table: 'accounting_accounts', rows: 66, label: 'Catálogo de cuentas', code: 'APPROVED_HISTORY_ONLY' }],
+  blockers: [{ table: 'sales', rows: 10, label: 'Ventas', code: 'CONVERSION_PENDING' }],
+};
+const scope = cd.reviewScope(coverage);
+assert.deepEqual(scope.blockers, []);
+assert.deepEqual(scope.historyOnly.map(item => [item.table, item.rows]), [['audit_log', 1609], ['accounting_accounts', 66]]);
+assert.equal(cd.reviewScope({ ...coverage, blockers: [{ table: 'sale_corrections', rows: 1, label: 'Correcciones de facturas', code: 'OPERATIONAL_CONVERTER_REQUIRED' }] }).blockers[0].code, 'OPERATIONAL_CONVERTER_REQUIRED');
+assert.equal(cd.reviewScope(null), null, 'un Cloud sin cobertura no se toma como revisión vacía');
+assert.equal(cd.reviewScope({}), null);
+const grown = cd.reviewScope({ ...coverage, historyOnly: [...coverage.historyOnly].reverse().map(item => ({ ...item, rows: item.rows + 25 })) });
+assert.equal(cd.sameReview(scope, grown), true, 'más filas o distinto orden: misma revisión');
+assert.equal(cd.sameReview(scope, cd.reviewScope({ ...coverage, historyOnly: [...coverage.historyOnly, { table: 'vehicles', rows: 1, label: 'Vehículos' }] })), false, 'una tabla nueva en historial exige otro ensayo');
+assert.equal(cd.sameReview(scope, cd.reviewScope({ ...coverage, configuration: [] })), false);
+assert.equal(cd.sameReview(scope, null), false);
+
 async function checkAccessFlow() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'velo-cloud-access-'));
   let access = { enabled: false, requestedAt: null }, legacy = false;

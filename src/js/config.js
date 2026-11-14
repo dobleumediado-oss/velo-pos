@@ -1830,7 +1830,11 @@ function abrirCorteCloud() {
 const _cdEsc = value => String(value ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 let _cdPoll = null, _cdRead = null;
 // Un aviso del ensayo/corte tal como lo manda VELO Cloud: código, tabla, número y campo (si lo trae).
-const _cdIssue = issue => `${_cdEsc(issue?.code)} ${_cdEsc(issue?.table)}${issue?.sourceId ? ' #' + _cdEsc(issue.sourceId) : ''}${issue?.field ? ' (campo ' + _cdEsc(issue.field) + ')' : ''}`;
+const _cdIssue = issue => issue?.label ? `${_cdEsc(issue.label)}${issue.rows ? ` (${Number(issue.rows).toLocaleString('es-DO')})` : ''}`
+  : `${_cdEsc(issue?.code)} ${_cdEsc(issue?.table)}${issue?.sourceId ? ' #' + _cdEsc(issue.sourceId) : ''}${issue?.field ? ' (campo ' + _cdEsc(issue.field) + ')' : ''}`;
+// Lo que el dueño acepta al escribir CORTE: la configuración será la de VELO Cloud y esto queda solo como historial.
+const _cdReviewHtml = review => !review ? '' : `<div class="alrt-sub" style="margin:6px 0"><strong>La configuración será la de VELO Cloud:</strong> ${review.configuration.length ? review.configuration.map(_cdIssue).join(' · ') : 'nada que revisar'}.</div>
+  <div class="alrt-sub" style="margin:6px 0"><strong>Quedará solo como historial</strong> (se consulta en VELO Cloud, no se opera): ${review.historyOnly.length ? review.historyOnly.map(_cdIssue).join(' · ') : 'nada'}.</div>`;
 const _cdApi = (name, extra) => window.api.cloudDirect[name]({ requestUserId: _cfgUser().id, ...(extra || {}) });
 const _cdBody = () => document.getElementById('cd-body');
 const _cdStopPoll = () => { if (_cdPoll) { clearInterval(_cdPoll); _cdPoll = null; } };
@@ -1863,9 +1867,10 @@ async function _cdRender() {
   const items = st.checks.items;
   const reh = st.saved.rehearsal;
   const rehText = !reh ? 'Todavía no se ha ensayado.'
+    : reh.ok && !reh.review ? 'Repite el ensayo: ahora muestra la configuración y lo que quedará como historial, que el corte necesita.'
     : reh.ok ? `Ensayo superado el ${new Date(reh.at).toLocaleString('es-DO')} (${reh.seconds} s).`
     : `El último ensayo se detuvo en «${_cdEsc(reh.step)}»: ${reh.issueCount} por resolver.`;
-  const canCut = !!(reh?.ok && reh.tenantId === st.tenant.id && st.checks.cutoverReady);
+  const canCut = !!(reh?.ok && reh.review && reh.tenantId === st.tenant.id && st.checks.cutoverReady);
   body.innerHTML = `<div class="alrt-sub" style="margin:6px 0 10px">Empresa de VELO Cloud: <strong>${_cdEsc(st.tenant.name)}</strong> · ${_cdEsc(st.tenant.user)} <button class="btn btn-ghost btn-sm" id="cd-logout" type="button">Cambiar cuenta</button></div>
     <div class="lbl" style="margin-top:6px">1. Revisión</div>
     ${items.length ? items.map((item, index) => `<div class="alrt ${item.blocking ? 'r' : 'a'}" style="margin:6px 0"><div class="alrt-dot ${item.blocking ? 'r' : 'a'}"></div><div style="flex:1"><div class="alrt-sub">${_cdEsc(item.text)}${item.detail ? `<br>${_cdEsc(item.detail)}` : ''}</div>${_cdResolveButton(item, index)}</div></div>`).join('')
@@ -2043,7 +2048,7 @@ function _cdRehearsalDone(result) {
   const body = _cdBody(); if (!body) return;
   _cdRead = null;
   body.innerHTML = (result?.ok
-    ? _cdBox('g', 'Ensayo superado', `Los 20 pasos pasaron en ${result.seconds} s y se revirtieron. Ya se puede hacer el corte (con la caja cerrada).`)
+    ? _cdBox('g', 'Ensayo superado', `Los 20 pasos pasaron en ${result.seconds} s y se revirtieron. Ya se puede hacer el corte (con la caja cerrada).`) + _cdReviewHtml(result.review)
     : _cdBox('r', `El ensayo se detuvo en «${_cdEsc(result?.label || result?.error || '')}»`, `${result?.issueCount ?? ''} por resolver en Desktop. ${(result?.issues || []).slice(0, 8).map(_cdIssue).join(' · ')}`))
     + _cdFoot('<button class="btn btn-dark" id="cd-back" type="button">Continuar</button>');
   document.getElementById('cd-back').onclick = () => void _cdRender();
@@ -2053,6 +2058,8 @@ function _cdCutoverConfirm(st) {
   const body = _cdBody(); if (!body) return;
   body.innerHTML = `${_cdBox('a', `El corte pasa este negocio a «${_cdEsc(st.tenant.name)}»`, 'Desktop se congela en todas sus terminales mientras VELO Cloud convierte la copia final (unos 10 minutos). Si VELO Cloud la activa, desde ese momento se factura en Cloud y Desktop queda solo para consultar. Si no la activa, Desktop se descongela solo y sigue como antes.')}
     <div class="alrt-sub" style="margin:6px 0">Antes: caja cuadrada y cerrada, y las terminales avisadas. No cierres Desktop mientras dura.</div>
+    ${_cdReviewHtml(st.saved.rehearsal?.review)}
+    <div class="alrt-sub" style="margin:6px 0">Al escribir CORTE aceptas esa configuración y ese historial. Si la copia final trae otra cosa, el corte se detiene y Desktop se descongela solo.</div>
     <div class="fg"><label class="lbl" for="cd-confirm">Escribe CORTE para confirmar</label><input class="inp" id="cd-confirm" autocomplete="off" maxlength="10"></div>
     ${_cdFoot('<button class="btn btn-out" id="cd-cancel" type="button">Volver</button><button class="btn btn-dark" id="cd-go" type="button">Hacer el corte</button>')}`;
   document.getElementById('cd-cancel').onclick = () => void _cdRender();

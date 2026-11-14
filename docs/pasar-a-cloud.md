@@ -30,9 +30,20 @@ Cloud» y «Corte final a Cloud (con archivo)».
    `cloud-direct.json` (carpeta del negocio) para el corte. Si un paso se detiene, Desktop
    muestra los primeros 8 avisos de Cloud con código, tabla, número y campo
    (`_cdIssue` en `src/js/config.js`); el corte fallido usa el mismo formato.
-4. **Corte** (escribir CORTE; exige ensayo superado con esa empresa, caja cerrada e
-   integridad): congela Desktop, saca la copia final, la envía, convierte los 20 pasos,
-   guarda el historial y activa. Unos 10 minutos en producción.
+   Al pasar los 20 pasos, Desktop lee la **cobertura** de la copia en Cloud (la misma
+   que muestra la página «Migración desde Desktop»): si hay datos que Cloud todavía no
+   convierte (por ejemplo correcciones de facturas), el ensayo se detiene y los nombra.
+   Si no, muestra la **revisión**: lo que tomará la configuración de VELO Cloud y lo que
+   quedará solo como historial, y la guarda con el ensayo.
+4. **Corte** (escribir CORTE; exige ensayo superado con esa empresa y con su revisión,
+   caja cerrada e integridad). La pantalla de confirmación repite la revisión: escribir
+   CORTE es aceptarla (decisión del dueño, 14 nov 2026). Congela Desktop, saca la copia
+   final, la envía, convierte los 20 pasos, guarda el historial, compara la revisión de
+   la copia final con la aceptada (mismas tablas; los conteos pueden crecer), la confirma
+   en Cloud (`configuration-review`, auditoría `corte_cloud_revision`) y activa. Si la
+   copia final trae otra revisión o datos sin convertir, se detiene y Desktop se
+   descongela solo. Unos 10 minutos en producción. Un ensayo hecho con una versión
+   anterior, sin revisión, no habilita el corte: hay que repetirlo.
 
 La clave de cada copia la genera Desktop (aleatoria) y nunca se escribe a mano. La del
 corte queda en la marca del corte (`cloud-cutover.json`) y se muestra al terminar: sirve
