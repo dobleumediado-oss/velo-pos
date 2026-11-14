@@ -50,7 +50,7 @@ function _cndRenderList(el, list) {
   el.innerHTML = '';
 
   // Header
-  el.appendChild(h('div', { class: 'sec-hdr' },
+  el.appendChild(h('div', { class: 'sec-hdr mobile-module-heading' },
     h('div', null,
       h('div', { class: 'sec-title' }, 'Conduces / Notas de Entrega'),
       h('div', { class: 'sec-sub' }, `${list.length} conduce${list.length !== 1 ? 's' : ''} · documento no fiscal`)
@@ -96,7 +96,7 @@ function _cndRenderList(el, list) {
   const card = h('div', { class: 'card' });
   card.innerHTML = `
     <div class="tw">
-      <table>
+      <table class="mobile-card-table mobile-card-auto">
         <thead><tr>
           <th>Número</th><th>Cliente</th><th>Fecha</th><th>Origen</th>
           <th>Líneas</th><th>Estado</th><th></th>
@@ -215,7 +215,7 @@ async function _cndOpenDetail(id) {
     </div>
 
     <div class="tw sale-detail-items-scroll" style="margin-bottom:12px">
-      <table>
+      <table class="mobile-card-table mobile-card-auto">
         <thead><tr><th>SKU</th><th>Descripción</th><th>Solic.</th><th>Entreg.</th><th>Pend.</th><th>Unid.</th></tr></thead>
         <tbody>${itemsRows}</tbody>
       </table>
@@ -223,7 +223,7 @@ async function _cndOpenDetail(id) {
     ${facturadas ? `<div style="font-size:11px;color:var(--muted2);margin-bottom:8px">Enlaces a factura: ${facturadas}</div>` : ''}
     </div>
     <div class="modal-foot sale-detail-actions" id="cnd-detail-actions"></div>
-  `, 'modal-lg sale-detail-modal conduce-detail-modal');
+  `, 'modal-lg sale-detail-modal conduce-detail-modal finanzas-mobile-modal');
 
   _cndRenderActions(dn);
 }
@@ -286,7 +286,7 @@ function _cndDispatch(id) {
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-green" onclick="_cndDoDispatch(${id})">${svg('truck')} Despachar</button>
     </div>
-  `);
+  `, 'finanzas-mobile-modal');
 }
 async function _cndDoDispatch(id) {
   const data = {
@@ -307,7 +307,7 @@ function _cndDeliver(id) {
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-dark" onclick="_cndDoDeliver(${id})">${svg('check')} Confirmar</button>
     </div>
-  `);
+  `, 'finanzas-mobile-modal');
 }
 async function _cndDoDeliver(id) {
   const data = {
@@ -327,7 +327,7 @@ function _cndCancel(id) {
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-red" onclick="_cndDoCancel(${id})">${svg('xmark')} Anular</button>
     </div>
-  `);
+  `, 'finanzas-mobile-modal');
 }
 async function _cndDoCancel(id) {
   const reason = document.getElementById('cnd-cancel-reason')?.value?.trim() || '';
@@ -365,7 +365,7 @@ async function _cndInvoice(id) {
     <div class="modal-title">Convertir ${_cndEsc(dn.number)} en venta</div>
     <div class="modal-sub">Los artículos, el cliente y los cargos pendientes se cargarán en Punto de Venta. El conduce no cambia hasta que confirmes la factura.</div>
     <div class="tw" style="max-height:34vh;overflow:auto;margin:10px 0">
-      <table>
+      <table class="mobile-card-table mobile-card-auto">
         <thead><tr><th>Descripción</th><th>Disponible</th><th>A facturar</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -380,7 +380,7 @@ async function _cndInvoice(id) {
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-green" onclick="_cndDoInvoice(${id})">${svg('receipt')} Abrir en Punto de Venta</button>
     </div>
-  `, 'modal-lg');
+  `, 'modal-lg finanzas-mobile-modal');
 }
 async function _cndDoInvoice(id) {
   const lines = [...document.querySelectorAll('[data-item]')]
@@ -585,7 +585,7 @@ function _cndOpenForm(id = null) {
         <div id="cnd-prod-dd" class="cli-dropdown"></div>
       </div>
       <div class="tw" style="max-height:26vh;overflow:auto;margin-bottom:8px">
-        <table><thead><tr><th>Descripción</th><th style="width:90px">Cant.</th><th></th></tr></thead>
+        <table class="mobile-card-table mobile-card-auto"><thead><tr><th>Descripción</th><th style="width:90px">Cant.</th><th></th></tr></thead>
           <tbody id="cnd-items-body"></tbody></table>
       </div>
 
@@ -604,7 +604,7 @@ function _cndOpenForm(id = null) {
         <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
         <button class="btn btn-green" onclick="_cndSave(${dn ? dn.id : 'null'})">${svg('check')} ${dn ? 'Guardar cambios' : 'Guardar borrador'}</button>
       </div>
-    `, 'modal-lg');
+    `, 'modal-lg finanzas-mobile-modal');
     _cndRenderFormItems();
     _cndRenderFormCharges();
   };
@@ -793,7 +793,7 @@ async function _cndReports() {
   if (!r) { toast('No se pudieron cargar los reportes', 'err'); return; }
 
   const miniTable = (rows, cols) => rows.length
-    ? `<div class="tw" style="max-height:150px;overflow:auto"><table><thead><tr>${cols.map(c => `<th>${c.h}</th>`).join('')}</tr></thead>
+    ? `<div class="tw" style="max-height:150px;overflow:auto"><table class="mobile-card-table mobile-card-auto"><thead><tr>${cols.map(c => `<th>${c.h}</th>`).join('')}</tr></thead>
         <tbody>${rows.map(row => `<tr>${cols.map(c => `<td style="${c.style || ''}">${c.f(row)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`
     : `<div style="color:var(--muted2);font-size:12px;padding:8px">Sin registros</div>`;
 
@@ -836,7 +836,7 @@ async function _cndReports() {
         ${svg('download')} Excel
       </button>
     </div>
-  `, 'modal-lg');
+  `, 'modal-lg finanzas-mobile-modal');
 }
 
 // ── Impresión / Guardar PDF (usa el servicio central print.js) ──

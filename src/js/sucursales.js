@@ -59,7 +59,7 @@ async function renderSucursales(el) {
   el.innerHTML = '';
 
   const hdr = document.createElement('div');
-  hdr.className = 'sec-hdr';
+  hdr.className = 'sec-hdr mobile-module-heading';
   hdr.innerHTML = `
     <div>
       <h2 style="font-size:18px;font-weight:600;margin:0;color:var(--ink)">Sucursales</h2>
@@ -223,7 +223,7 @@ async function renderNCFAvanzado(el) {
     const wrap = document.createElement('div');
     wrap.style.cssText = 'overflow-x:auto';
     wrap.innerHTML = `
-      <table class="velo-sticky-actions" style="width:100%;border-collapse:collapse;font-size:12px">
+      <table class="velo-sticky-actions mobile-card-table mobile-card-auto" style="width:100%;border-collapse:collapse;font-size:12px">
         <thead>
           <tr style="border-bottom:1px solid var(--line2);color:var(--muted2)">
             <th style="padding:8px;text-align:left">Tipo</th>

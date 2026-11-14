@@ -459,7 +459,7 @@ async function renderVehiculos(el) {
     </span>`;
   // Header
   const hdr = document.createElement('div');
-  hdr.className = 'sec-hdr';
+  hdr.className = 'sec-hdr mobile-module-heading';
   hdr.innerHTML = `
     <div>
       <h2 style="font-size:18px;font-weight:600;margin:0;color:var(--ink)">Vehículos y Mantenimiento</h2>
@@ -918,7 +918,7 @@ window.verMantenimiento = async (vehicleId, vehicleName) => {
   const tipos     = typesRes?.data || [];
 
   const histHtml = historial.length ? `
-    <table style="width:100%;border-collapse:collapse;font-size:12px">
+    <table class="mobile-card-table mobile-card-auto" style="width:100%;border-collapse:collapse;font-size:12px">
       <thead><tr style="border-bottom:1px solid var(--line2);color:var(--muted2)">
         <th style="padding:6px;text-align:left">Fecha</th>
         <th style="padding:6px;text-align:left">Tipo</th>

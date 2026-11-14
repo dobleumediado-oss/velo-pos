@@ -24,7 +24,7 @@ async function renderContabilidad(el) {
   const wrap = h('div', { class: 'module-workspace' });
   el.appendChild(wrap);
 
-  wrap.appendChild(h('div', { class: 'sec-hdr' },
+  wrap.appendChild(h('div', { class: 'sec-hdr mobile-module-heading' },
     h('div', null,
       h('div', { class: 'sec-title' }, 'Centro Contable'),
       h('div', { class: 'sec-sub' }, 'Estados financieros, libros, obligaciones y control fiscal en un solo lugar')
@@ -187,7 +187,7 @@ async function _contRenderCuentas(el) {
   const res    = await window.api.accounting.getAccounts();
   const cuentas = res?.data || [];
 
-  const hdr = h('div', { class: 'sec-hdr', style: { marginBottom: '14px' } },
+  const hdr = h('div', { class: 'sec-hdr mobile-module-heading', style: { marginBottom: '14px' } },
     h('div', null),
     h('div', { style: { display: 'flex', gap: '8px' } },
       h('button', { class: 'print-btn', onclick: () => _printCatalogo(cuentas) }, '🖨 Imprimir'),
@@ -279,7 +279,7 @@ function _openCuentaModal(acct = null, allAccts = []) {
         </div>
       </div>
     </div>
-  `);
+  `, 'finanzas-mobile-modal');
 }
 
 window._saveCuenta = async function(id) {
@@ -369,7 +369,7 @@ async function _reloadAsientos() {
     return;
   }
 
-  const tbl = h('table', { class: 'ledger-tbl', style: { width: '100%' } },
+  const tbl = h('table', { class: 'ledger-tbl mobile-card-table mobile-card-auto', style: { width: '100%' } },
     h('thead', null, h('tr', null,
       h('th', null, 'Número'),
       h('th', null, 'Fecha'),
@@ -408,16 +408,16 @@ async function _openVerAsiento(id) {
 
   const linesHtml = (entry.lines || []).map(l => `
     <tr>
-      <td>${l.account_code || ''}</td>
-      <td>${l.account_name || ''}</td>
-      <td style="text-align:right;color:#ef4444">${l.debit > 0 ? fmt(l.debit) : '—'}</td>
-      <td style="text-align:right;color:#10b981">${l.credit > 0 ? fmt(l.credit) : '—'}</td>
-      <td>${l.description || ''}</td>
+      <td data-label="Código">${l.account_code || ''}</td>
+      <td class="mobile-card-title">${l.account_name || ''}</td>
+      <td style="text-align:right;color:#ef4444" data-label="Debe">${l.debit > 0 ? fmt(l.debit) : '—'}</td>
+      <td style="text-align:right;color:#10b981" data-label="Haber">${l.credit > 0 ? fmt(l.credit) : '—'}</td>
+      <td data-label="Detalle">${l.description || ''}</td>
     </tr>
   `).join('');
 
   openModal(`
-    <div style="padding:24px;min-width:560px">
+    <div class="cont-mobile-asiento" style="padding:24px;min-width:560px">
       <div class="modal-title">Asiento ${entry.number}</div>
       <div style="display:flex;gap:20px;font-size:12px;color:var(--muted2);margin:10px 0 16px">
         <span>Fecha: <strong style="color:var(--ink)">${entry.date}</strong></span>
@@ -425,7 +425,7 @@ async function _openVerAsiento(id) {
         <span>Estado: <span class="entry-status entry-status-${entry.status}">${entry.status}</span></span>
       </div>
       <div style="font-size:13px;font-weight:500;margin-bottom:10px">${entry.concept || ''}</div>
-      <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <table class="mobile-card-table" style="width:100%;border-collapse:collapse;font-size:12px">
         <thead><tr style="background:var(--surface2)">
           <th style="padding:7px 10px;text-align:left;font-size:11px">Código</th>
           <th style="padding:7px 10px;text-align:left;font-size:11px">Cuenta</th>
@@ -436,18 +436,18 @@ async function _openVerAsiento(id) {
         <tbody>${linesHtml}</tbody>
         <tfoot><tr style="background:var(--surface2);font-weight:700">
           <td colspan="2" style="padding:8px 10px">TOTALES</td>
-          <td style="padding:8px 10px;text-align:right">${fmt(entry.total_debit)}</td>
-          <td style="padding:8px 10px;text-align:right">${fmt(entry.total_credit)}</td>
+          <td style="padding:8px 10px;text-align:right" data-label="Debe">${fmt(entry.total_debit)}</td>
+          <td style="padding:8px 10px;text-align:right" data-label="Haber">${fmt(entry.total_credit)}</td>
           <td></td>
         </tr></tfoot>
       </table>
-      <div style="display:flex;gap:8px;margin-top:14px">
+      <div class="cont-mobile-actions" style="display:flex;gap:8px;margin-top:14px">
         <button class="print-btn" onclick="_printAsiento(${id})">🖨 Imprimir</button>
         ${entry.status === 'confirmado' ? `<button class="btn-ghost" style="color:#ef4444" onclick="_deleteAsiento(${id},'${_esc(entry.source_module || 'manual')}')">Eliminar asiento</button>` : ''}
         <button class="btn-ghost" onclick="closeModal()">Cerrar</button>
       </div>
     </div>
-  `, 'modal-xl');
+  `, 'modal-xl finanzas-mobile-modal');
 }
 
 window._printAsiento = async function(id) {
@@ -561,7 +561,7 @@ async function _openNuevoAsientoModal() {
         </div>
       </div>
     </div>
-  `, 'lg');
+  `, 'lg finanzas-mobile-modal');
 
   // Agregar 2 líneas por defecto
   window._entryLineOptsHtml = optionsHtml;
@@ -711,7 +711,7 @@ async function _reloadMayor() {
     return;
   }
 
-  const tbl = h('table', { class: 'ledger-tbl', style: { width: '100%' } },
+  const tbl = h('table', { class: 'ledger-tbl mobile-card-table mobile-card-auto', style: { width: '100%' } },
     h('thead', null, h('tr', null,
       h('th', null, 'Fecha'),
       h('th', null, 'Asiento'),
@@ -803,7 +803,7 @@ async function _loadTrialBalance(el, asOf) {
   }
 
   let totalD = 0, totalC = 0;
-  const tbl = h('table', { class: 'trial-tbl', style: { width: '100%' } },
+  const tbl = h('table', { class: 'trial-tbl mobile-card-table mobile-card-auto', style: { width: '100%' } },
     h('thead', null, h('tr', null,
       h('th', null, 'Código'),
       h('th', null, 'Cuenta'),
@@ -1196,7 +1196,7 @@ async function _contRenderCxC(el) {
 
   const total = withCredit.reduce((s, c) => s + (c.balance || 0), 0);
 
-  const tbl = h('table', { class: 'ledger-tbl', style: { width: '100%' } },
+  const tbl = h('table', { class: 'ledger-tbl mobile-card-table mobile-card-auto', style: { width: '100%' } },
     h('thead', null, h('tr', null,
       h('th', null, 'Cliente'),
       h('th', null, 'Teléfono'),
@@ -1272,7 +1272,7 @@ async function _contRenderCxP(el) {
     ));
   } else {
     const total = payable.reduce((s, e) => s + (e.amount || 0), 0);
-    const tbl = h('table', { class: 'ledger-tbl', style: { width: '100%' } },
+    const tbl = h('table', { class: 'ledger-tbl mobile-card-table mobile-card-auto', style: { width: '100%' } },
       h('thead', null, h('tr', null,
         h('th', null, 'Gasto'),
         h('th', null, 'Proveedor'),
@@ -1358,7 +1358,7 @@ async function _contRenderActivos(el) {
     return;
   }
 
-  const tbl = h('table', { class: 'ledger-tbl', style: { width: '100%' } },
+  const tbl = h('table', { class: 'ledger-tbl mobile-card-table mobile-card-auto', style: { width: '100%' } },
     h('thead', null, h('tr', null,
       h('th', null, 'Activo'), h('th', null, 'Adquirido'),
       h('th', { class: 'num' }, 'Costo'), h('th', { class: 'num' }, 'Dep./mes'),
@@ -1414,7 +1414,7 @@ function _openActivoModal() {
       <button class="btn-ghost" onclick="closeModal()">Cancelar</button>
       <button class="btn" id="fa-save">Guardar</button>
     </div>
-  `);
+  `, 'finanzas-mobile-modal');
   document.getElementById('fa-save').onclick = async () => {
     const data = {
       name: document.getElementById('fa-name').value.trim(),
@@ -1450,7 +1450,7 @@ function _openDepreciarModal() {
       <button class="btn-ghost" onclick="closeModal()">Cancelar</button>
       <button class="btn" id="dep-run">Depreciar</button>
     </div>
-  `);
+  `, 'finanzas-mobile-modal');
   document.getElementById('dep-run').onclick = async () => {
     const period = document.getElementById('dep-period').value.trim();
     if (!/^\d{4}-\d{2}$/.test(period)) { toast('Formato inválido (YYYY-MM)', 'e'); return; }
@@ -1498,7 +1498,7 @@ async function _contRenderCuadres(el) {
     ? 'Configuración inicial pendiente. Velo detectó saldos operativos existentes de clientes, inventario y proveedores. Crea una sola vez el asiento de apertura para incorporarlos al mayor sin modificar las facturas, productos ni datos importados.'
     : 'Compara el saldo contable (cuenta control del mayor) con el auxiliar operativo. Una diferencia posterior a la apertura sí indica una operación sin asiento o un ajuste por revisar.'));
 
-  const tbl = h('table', { class: 'ledger-tbl', style: { width: '100%' } },
+  const tbl = h('table', { class: 'ledger-tbl mobile-card-table mobile-card-auto', style: { width: '100%' } },
     h('thead', null, h('tr', null,
       h('th', null, 'Cuenta control'),
       h('th', { class: 'num' }, 'Contable (mayor)'),
@@ -1576,7 +1576,7 @@ async function _contRender606(el) {
     return;
   }
 
-  const tbl = h('table', { class: 'ledger-tbl', style: { width: '100%' } },
+  const tbl = h('table', { class: 'ledger-tbl mobile-card-table mobile-card-auto', style: { width: '100%' } },
     h('thead', null, h('tr', null,
       h('th', null, 'Fecha'), h('th', null, 'RNC'), h('th', null, 'NCF'),
       h('th', null, 'Proveedor'), h('th', null, 'Concepto'),
@@ -1660,13 +1660,13 @@ async function _contRenderFiscalAdvanced(el) {
       h('div',{class:'alrt b'},h('div',{class:'alrt-dot b'}),h('div',null,h('div',{class:'alrt-title'},'Ventas y 607'),h('div',{class:'alrt-sub'},`${d.sales_book.length} facturas · Base ${fmt(sales.base||0)} · ITBIS ${fmt(sales.itbis||0)} · Movimiento 2102 ${fmt(control.itbis_por_pagar_movement||0)}`))),
       h('div',{class:'alrt b'},h('div',{class:'alrt-dot b'}),h('div',null,h('div',{class:'alrt-title'},'Compras y 606'),h('div',{class:'alrt-sub'},`${d.purchase_book.length} documentos · Base ${fmt(purchases.base||0)} · ITBIS ${fmt(purchases.itbis||0)} · Movimiento 1106 ${fmt(control.itbis_acreditable_movement||0)}`))))));
   const issueRows=[...(d.reconciliation.invalid_ncf||[]).map(x=>({type:'NCF inválido',ref:`Venta #${x.sale_id}`,detail:x.ncf})),...(d.reconciliation.orphan_ncf||[]).map(x=>({type:'NCF huérfano',ref:`Registro #${x.id}`,detail:x.ncf})),...(d.reconciliation.payment_differences||[]).map(x=>({type:'Cobro no cuadra',ref:`Venta #${x.sale_id}`,detail:fmt(x.difference)}))];
-  el.appendChild(h('div',{class:'card',style:'padding:12px;margin-top:12px'},h('div',{class:'card-title'},'Excepciones para revisar'),issueRows.length?h('div',{class:'tw',style:'margin-top:8px'},h('table',{class:'ledger-tbl'},h('thead',null,h('tr',null,h('th',null,'Tipo'),h('th',null,'Referencia'),h('th',null,'Detalle'))),h('tbody',null,...issueRows.map(x=>h('tr',null,h('td',null,x.type),h('td',null,x.ref),h('td',null,x.detail)))))):h('div',{class:'ts',style:'margin-top:8px'},'No se detectaron excepciones automáticas en este período.')));
-  const salesTable=h('table',{class:'ledger-tbl',style:{width:'100%'}},h('thead',null,h('tr',null,h('th',null,'Fecha'),h('th',null,'NCF'),h('th',null,'Cliente'),h('th',{class:'num'},'Base'),h('th',{class:'num'},'ITBIS'),h('th',{class:'num'},'Total'),h('th',null,'Forma'))),h('tbody',null,...d.sales_book.map(row=>h('tr',null,h('td',null,row.document_date),h('td',null,row.ncf||'Sin comprobante'),h('td',null,row.customer_name),h('td',{class:'num'},fmt(Number(row.subtotal||0)-Number(row.discount_amt||0))),h('td',{class:'num'},fmt(row.tax_amt||0)),h('td',{class:'num'},fmt(row.total||0)),h('td',null,row.payment_method)))));
+  el.appendChild(h('div',{class:'card',style:'padding:12px;margin-top:12px'},h('div',{class:'card-title'},'Excepciones para revisar'),issueRows.length?h('div',{class:'tw',style:'margin-top:8px'},h('table',{class:'ledger-tbl mobile-card-table mobile-card-auto'},h('thead',null,h('tr',null,h('th',null,'Tipo'),h('th',null,'Referencia'),h('th',null,'Detalle'))),h('tbody',null,...issueRows.map(x=>h('tr',null,h('td',null,x.type),h('td',null,x.ref),h('td',null,x.detail)))))):h('div',{class:'ts',style:'margin-top:8px'},'No se detectaron excepciones automáticas en este período.')));
+  const salesTable=h('table',{class:'ledger-tbl mobile-card-table mobile-card-auto',style:{width:'100%'}},h('thead',null,h('tr',null,h('th',null,'Fecha'),h('th',null,'NCF'),h('th',null,'Cliente'),h('th',{class:'num'},'Base'),h('th',{class:'num'},'ITBIS'),h('th',{class:'num'},'Total'),h('th',null,'Forma'))),h('tbody',null,...d.sales_book.map(row=>h('tr',null,h('td',null,row.document_date),h('td',null,row.ncf||'Sin comprobante'),h('td',null,row.customer_name),h('td',{class:'num'},fmt(Number(row.subtotal||0)-Number(row.discount_amt||0))),h('td',{class:'num'},fmt(row.tax_amt||0)),h('td',{class:'num'},fmt(row.total||0)),h('td',null,row.payment_method)))));
   el.appendChild(h('div',{class:'card',style:'padding:12px;margin-top:12px'},h('div',{class:'fxb'},h('div',{class:'card-title'},`Libro formal de ventas (${d.sales_book.length})`),h('span',{class:'ts'},'Base interna para 607')),h('div',{class:'tw',style:'max-height:340px;margin-top:8px'},salesTable)));
 }
 
 function _openFiscalWithholding(el,from,to){
-  openModal(`<div class="modal-title">Registrar retención fiscal</div><div class="modal-sub">Registra el soporte recibido o emitido; no sustituye el comprobante ni la presentación ante DGII.</div><div class="g2" style="margin-top:14px"><div class="fg"><label class="lbl">Dirección</label><select class="inp" id="fw-direction"><option value="made">Retenida por el negocio a un tercero</option><option value="received">Retenida al negocio por un tercero</option></select></div><div class="fg"><label class="lbl">Impuesto</label><select class="inp" id="fw-kind"><option value="isr">ISR</option><option value="itbis">ITBIS</option><option value="retribucion_complementaria">Retribución complementaria</option><option value="other">Otra</option></select></div></div><div class="g2"><div class="fg"><label class="lbl">Tercero</label><input class="inp" id="fw-party"></div><div class="fg"><label class="lbl">RNC / Cédula</label><input class="inp" id="fw-rnc"></div></div><div class="g2"><div class="fg"><label class="lbl">NCF / soporte</label><input class="inp" id="fw-ncf"></div><div class="fg"><label class="lbl">Fecha *</label><input class="inp" id="fw-date" type="date" value="${to}"></div></div><div class="g3"><div class="fg"><label class="lbl">Base</label><input class="inp" id="fw-base" type="number" min="0" step="0.01"></div><div class="fg"><label class="lbl">Tasa %</label><input class="inp" id="fw-rate" type="number" min="0" step="0.01"></div><div class="fg"><label class="lbl">Monto retenido *</label><input class="inp" id="fw-amount" type="number" min="0" step="0.01"></div></div><div class="fg"><label class="lbl">Notas</label><input class="inp" id="fw-notes"></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="fw-save">Guardar soporte</button></div>`);
+  openModal(`<div class="modal-title">Registrar retención fiscal</div><div class="modal-sub">Registra el soporte recibido o emitido; no sustituye el comprobante ni la presentación ante DGII.</div><div class="g2" style="margin-top:14px"><div class="fg"><label class="lbl">Dirección</label><select class="inp" id="fw-direction"><option value="made">Retenida por el negocio a un tercero</option><option value="received">Retenida al negocio por un tercero</option></select></div><div class="fg"><label class="lbl">Impuesto</label><select class="inp" id="fw-kind"><option value="isr">ISR</option><option value="itbis">ITBIS</option><option value="retribucion_complementaria">Retribución complementaria</option><option value="other">Otra</option></select></div></div><div class="g2"><div class="fg"><label class="lbl">Tercero</label><input class="inp" id="fw-party"></div><div class="fg"><label class="lbl">RNC / Cédula</label><input class="inp" id="fw-rnc"></div></div><div class="g2"><div class="fg"><label class="lbl">NCF / soporte</label><input class="inp" id="fw-ncf"></div><div class="fg"><label class="lbl">Fecha *</label><input class="inp" id="fw-date" type="date" value="${to}"></div></div><div class="g3"><div class="fg"><label class="lbl">Base</label><input class="inp" id="fw-base" type="number" min="0" step="0.01"></div><div class="fg"><label class="lbl">Tasa %</label><input class="inp" id="fw-rate" type="number" min="0" step="0.01"></div><div class="fg"><label class="lbl">Monto retenido *</label><input class="inp" id="fw-amount" type="number" min="0" step="0.01"></div></div><div class="fg"><label class="lbl">Notas</label><input class="inp" id="fw-notes"></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="fw-save">Guardar soporte</button></div>`, 'finanzas-mobile-modal');
   document.getElementById('fw-save').onclick=async()=>{const data={direction:document.getElementById('fw-direction').value,tax_kind:document.getElementById('fw-kind').value,party_name:document.getElementById('fw-party').value,party_rnc:document.getElementById('fw-rnc').value,ncf:document.getElementById('fw-ncf').value,document_date:document.getElementById('fw-date').value,base_amount:Number(document.getElementById('fw-base').value)||0,rate:Number(document.getElementById('fw-rate').value)||0,amount:Number(document.getElementById('fw-amount').value)||0,notes:document.getElementById('fw-notes').value};const res=await window.api.accounting.saveFiscalWithholding({requestUserId:user.id,data,range:{from,to}});if(!res?.ok)return toast(res?.error||'No se pudo guardar','e');closeModal();toast('Retención registrada','s');el.innerHTML='';_contRenderFiscalAdvanced(el);};
 }
 
@@ -1696,7 +1696,7 @@ async function _contRenderPeriodos(el) {
     return;
   }
 
-  const tbl = h('table', { class: 'ledger-tbl', style: { width: '100%' } },
+  const tbl = h('table', { class: 'ledger-tbl mobile-card-table mobile-card-auto', style: { width: '100%' } },
     h('thead', null, h('tr', null,
       h('th', null, 'Período'),
       h('th', null, 'Desde'),
@@ -1752,7 +1752,7 @@ function _openCerrarPeriodoModal(el) {
       <button class="btn-ghost" onclick="closeModal()">Cancelar</button>
       <button class="btn" id="per-save">🔒 Cerrar período</button>
     </div>
-  `);
+  `, 'finanzas-mobile-modal');
   document.getElementById('per-save').onclick = async () => {
     const name     = document.getElementById('per-name').value.trim();
     const dateFrom = document.getElementById('per-from').value;
