@@ -1847,6 +1847,9 @@ function routeTo(p) {
       const permit  = keys.some(k => (CFG[k + '_roles'] || 'admin').includes('admin'));
       if (active && permit) allowedAdmin.push(route);
     });
+    // VELO TECH: el menú del administrador muestra Servicio técnico cuando el
+    // producto tiene órdenes de servicio; la ruta debe permitir lo mismo.
+    if (window._vertical?.modules?.service_orders) allowedAdmin.push('servicio');
     if (!allowedAdmin.includes(p)) { page = 'dash'; }
   }
 
