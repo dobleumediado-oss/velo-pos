@@ -1411,6 +1411,14 @@
   .ncf-report-controls :is(.inp, .btn) { min-height: 44px; width: 100%; }
   .ncf-report-controls > .btn { flex: 1 1 100px; }
 
+  /* Caja (1.65.4): recibos e historial de egresos en tarjetas. */
+  #page.module-caja .mobile-card-auto { display: block; width: 100%; min-width: 0; }
+  #page.module-caja .mobile-card-auto > tbody > tr > td { padding: 0 !important; text-align: left !important; }
+  #page.module-caja .mobile-card-auto > tbody > tr > td:first-child { grid-column: 1 / -1; font-weight: 750; }
+  #page.module-caja .mobile-card-auto > tbody > tr > td[colspan] { grid-column: 1 / -1; text-align: center !important; }
+  #page.module-caja .mobile-card-auto td[data-label]::before { font-family: var(--font); }
+  #page.module-caja .tw:has(> .mobile-card-auto) { overflow: visible; }
+
   .gastos-mobile-sheet { border-radius: 24px 24px 0 0 !important; max-height: calc(100dvh - 12px) !important; align-self: flex-end; }
   .gastos-mobile-sheet :is(.btn, .inp, button, select, input:not([type="checkbox"]):not([type="radio"])) { min-height: 44px; }
   .gastos-mobile-sheet .g2 { grid-template-columns: minmax(0, 1fr); }

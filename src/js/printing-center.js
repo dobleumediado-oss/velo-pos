@@ -558,7 +558,7 @@ function pcOpenExpenseReceiptSettings() {
       <label class="inp" style="display:flex;align-items:center;gap:9px;cursor:pointer"><input id="pc-expense-signatures" type="checkbox" ${options.showSignatures ? 'checked' : ''}/> Líneas de firma</label>
     </div>
     <div class="alrt a" style="margin-top:13px"><div><div class="alrt-title">Vista previa segura</div><div class="alrt-sub">Usa datos de ejemplo y nunca registra ni imprime un egreso real.</div></div></div>
-    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-out" onclick="pcPreviewExpenseReceipt()">${svg('check')} Vista previa</button><button class="btn btn-dark" onclick="pcSaveExpenseReceiptSettings()">${svg('check')} Guardar plantilla</button></div>`, 'modal-lg');
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-out" onclick="pcPreviewExpenseReceipt()">${svg('check')} Vista previa</button><button class="btn btn-dark" onclick="pcSaveExpenseReceiptSettings()">${svg('check')} Guardar plantilla</button></div>`, 'modal-lg ajustes-mobile-modal');
 }
 
 function pcReadExpenseReceiptSettings() {

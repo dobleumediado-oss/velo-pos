@@ -660,7 +660,7 @@ function renderCaja(el) {
             cajaExpenseCancellableHere(r, sesId)
               ? h('button',{class:'btn btn-ghost btn-sm',title:'Anular',onclick:()=>openCancelExpenseReceiptModal(r),html:svg('xmark')})
               : h('span',{class:'ts',title:'Este pago es parte de un gasto con otros pagos: anúlalo desde Gastos'},'Desde Gastos')))));
-        expenseCard.appendChild(h('div',{class:'tw'},h('table',null,
+        expenseCard.appendChild(h('div',{class:'tw'},h('table',{class:'mobile-card-table mobile-card-auto'},
           h('thead',null,h('tr',null,...['Recibo','Pagado a','Concepto','Monto',''].map(x=>h('th',null,x)))),h('tbody',null,...rows))));
       }
       el.appendChild(expenseCard);
@@ -1157,7 +1157,7 @@ async function openExpenseReceiptModal() {
       <div class="fg"><label class="lbl">Método</label><input class="inp" value="Efectivo de esta caja" disabled/></div></div>
     <div class="fg"><label class="lbl">Notas para el recibo</label><textarea class="inp" id="cash-expense-notes" rows="3" placeholder="Opcional"></textarea></div>
     <div class="ven-callout">El dinero sale del efectivo de esta caja y baja lo esperado en el cuadre. El pago queda registrado en Gastos.</div>
-    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" id="cash-expense-save" onclick="confirmExpenseReceipt()">${svg('check')} Registrar e imprimir</button></div>`, 'modal-lg');
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" id="cash-expense-save" onclick="confirmExpenseReceipt()">${svg('check')} Registrar e imprimir</button></div>`, 'modal-lg caja-mobile-modal');
 }
 
 async function confirmExpenseReceipt() {
@@ -1251,7 +1251,7 @@ function openCancelExpenseReceiptModal(row) {
     <div class="alrt a" style="margin:12px 0"><div><div class="alrt-title">El dinero vuelve a esta caja</div>
       <div class="alrt-sub">Se anula también el gasto en Gastos y su registro contable. Esta acción no se puede deshacer.</div></div></div>
     <div class="fg"><label class="lbl">Motivo de la anulación *</label><input class="inp" id="cash-expense-cancel-reason" maxlength="200" placeholder="Por qué se anula este egreso"/></div>
-    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" id="cash-expense-cancel-save" onclick="confirmCancelExpenseReceipt(${Number(row.expense_id)})">${svg('xmark')} Anular egreso</button></div>`);
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" id="cash-expense-cancel-save" onclick="confirmCancelExpenseReceipt(${Number(row.expense_id)})">${svg('xmark')} Anular egreso</button></div>`, 'caja-mobile-modal');
 }
 
 async function confirmCancelExpenseReceipt(expenseId) {
@@ -1326,7 +1326,7 @@ function cajaRenderExpenseHistoryBody() {
       <td>${cancelled ? '' : `<button class="btn btn-ghost btn-sm" title="Reimprimir" onclick="cajaReprintExpenseHistory(${Number(r.id)})">${svg('print')}</button>`}</td>
     </tr>`;
   }).join('');
-  body.innerHTML = `<div class="tw"><table>
+  body.innerHTML = `<div class="tw"><table class="mobile-card-table mobile-card-auto">
       <thead><tr>${['Recibo','Fecha','Pagado a','Concepto','Método','Monto','Estado',''].map(t => `<th>${t}</th>`).join('')}</tr></thead>
       <tbody>${rows}</tbody>
     </table></div>

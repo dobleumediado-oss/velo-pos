@@ -1569,7 +1569,7 @@ async function _bcShowPlanPreview(items, title) {
       <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
       <button class="btn btn-green" onclick="_bcPrintPlanFromPreview()">${svg('print')} ${zebra ? 'Imprimir en la Zebra' : 'Imprimir ahora'}</button>
     </div>
-  `, 'modal-xl');
+  `, 'modal-xl ajustes-mobile-modal');
 }
 function _bcPlanToggle(key, on) {
   if (!_bcState.planExcluded) _bcState.planExcluded = new Set();

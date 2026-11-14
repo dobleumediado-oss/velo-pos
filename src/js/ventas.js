@@ -2515,7 +2515,7 @@ async function reimprimirVenta(saleId) {
       ? 'La copia mostrará los productos, cantidades y total vigentes; no sustituye los comprobantes fiscales relacionados.'
       : 'La reimpresión quedará registrada en auditoría.'}</p>
     <div class="modal-foot"><button class="btn btn-out" id="ventas-reprint-cancel">Cancelar</button>
-      <button class="btn btn-dark" id="ventas-reprint-confirm">${adjustedCopy ? 'Imprimir ajustada' : 'Continuar a impresión'}</button></div>`);
+      <button class="btn btn-dark" id="ventas-reprint-confirm">${adjustedCopy ? 'Imprimir ajustada' : 'Continuar a impresión'}</button></div>`, 'ventas-mobile-modal');
   document.getElementById('ventas-reprint-cancel')?.addEventListener('click', closeModal);
   document.getElementById('ventas-reprint-confirm')?.addEventListener('click', () => {
     const selectedTemplate = document.getElementById('ventas-reprint-template')?.value || '';
