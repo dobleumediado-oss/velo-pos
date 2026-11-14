@@ -32,7 +32,7 @@ async function renderSuperAdmin(el) {
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c]));
 
-  el.appendChild(h('div', { class: 'sec-hdr' },
+  el.appendChild(h('div', { class: 'sec-hdr mobile-module-heading' },
     h('div', null,
       h('div', { class: 'sec-title' }, '⚡ Panel de Desarrollador'),
       h('div', { class: 'sec-sub' }, 'Acceso exclusivo — no visible para clientes')
@@ -998,7 +998,7 @@ async function saOpenLicenseManager() {
     </div>
     <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--line)">
       <div class="card-title mb8">Historial local</div>
-      <div class="tw" style="max-height:260px;overflow:auto"><table>
+      <div class="tw" style="max-height:260px;overflow:auto"><table class="mobile-card-table mobile-card-auto">
         <thead><tr><th>Cliente / máquina</th><th>Producto</th><th>Vence</th><th>Estado</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>
@@ -1006,7 +1006,7 @@ async function saOpenLicenseManager() {
         “Anular registro” solo organiza tu historial local. No desactiva a distancia una licencia offline que el cliente ya recibió.
       </div>
     </div>
-  `, 'modal-xxl ux-modal-structured');
+  `, 'modal-xxl ux-modal-structured ajustes-mobile-modal');
 
   const duration = document.getElementById('provider-duration');
   const expiryWrap = document.getElementById('provider-expiry-wrap');
@@ -1098,7 +1098,7 @@ function saResetearDatos() {
         Resetear todo
       </button>
     </div>
-  `);
+  `, 'ajustes-mobile-modal');
 }
 
 async function saConfirmarReset() {
@@ -1164,7 +1164,7 @@ async function saVerLogs() {
     <div class="modal-title">Últimos Errores del Sistema</div>
     <div class="modal-sub">Registro de auditoría — últimas 50 entradas de error</div>
     <div class="tw" style="max-height:400px;overflow-y:auto">
-      <table>
+      <table class="mobile-card-table mobile-card-auto">
         <thead><tr>
           <th>Fecha</th><th>Usuario</th><th>Acción</th><th>Detalle</th>
         </tr></thead>
@@ -1174,7 +1174,7 @@ async function saVerLogs() {
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
     </div>
-  `, 'modal-lg');
+  `, 'modal-lg ajustes-mobile-modal');
 }
 
 function saRevocarLicencia() {

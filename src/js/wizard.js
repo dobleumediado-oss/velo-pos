@@ -7,7 +7,7 @@
 async function renderAuditoria(el) {
   el.innerHTML = '';
 
-  el.appendChild(h('div', { class: 'sec-hdr' },
+  el.appendChild(h('div', { class: 'sec-hdr mobile-module-heading' },
     h('div', null,
       h('div', { class: 'sec-title' }, 'Auditoría del Sistema'),
       h('div', { class: 'sec-sub' }, 'Registro de todas las acciones realizadas')
@@ -230,7 +230,7 @@ function openCambioPasswordModal(obligatorio = false) {
         ${svg('check')} Cambiar contraseña
       </button>
     </div>
-  `);
+  `, 'ajustes-mobile-modal');
 }
 
 function cpCheckStrength() {
@@ -319,7 +319,7 @@ function renderCambioContrasenaObligatorio() {
         ${svg('lock')} Guardar y continuar
       </button>
     </div>
-  `, 'modal-lg');
+  `, 'modal-lg ajustes-mobile-modal');
 
   // No dejar cerrar este modal con Esc ni click afuera
   setTimeout(() => {
@@ -427,7 +427,7 @@ function wizardStepNegocio() {
         Continuar ${svg('arrow')}
       </button>
     </div>
-  `, 'modal-lg');
+  `, 'modal-lg ajustes-mobile-modal');
 }
 
 async function wizardGuardarNegocio() {
@@ -508,7 +508,7 @@ function wizardStepContrasena() {
         Continuar ${svg('arrow')}
       </button>
     </div>
-  `, 'modal-lg');
+  `, 'modal-lg ajustes-mobile-modal');
 }
 
 async function wizardGuardarPassword() {
@@ -591,7 +591,7 @@ function wizardStepListo() {
         ${svg('check')} Empezar a usar el sistema
       </button>
     </div>
-  `, 'modal-lg');
+  `, 'modal-lg ajustes-mobile-modal');
 }
 
 // ══════════════════════════════════════════════

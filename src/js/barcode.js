@@ -263,7 +263,7 @@ async function renderBarcode(el, options = {}) {
 
   // ── Header ──────────────────────────────────
   el.appendChild(h('div', {
-    class: embedded ? 'card' : 'sec-hdr',
+    class: embedded ? 'card' : 'sec-hdr mobile-module-heading',
     style: embedded ? 'margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:12px' : ''
   },
     h('div', null,
@@ -294,7 +294,7 @@ async function renderBarcode(el, options = {}) {
   ));
 
   // ── Layout principal ─────────────────────────
-  const grid = h('div', { style: 'display:grid;grid-template-columns:1fr 340px;gap:16px;align-items:start' });
+  const grid = h('div', { class: 'mobile-stack-grid', style: 'display:grid;grid-template-columns:1fr 340px;gap:16px;align-items:start' });
 
   // Columna izquierda: selección de productos
   const leftCol = h('div', { style: 'display:flex;flex-direction:column;gap:16px' });
@@ -999,7 +999,7 @@ function _bcOpenCalibrationWizard() {
     <div class="modal-title">Detectar y calibrar impresora de etiquetas</div>
     <div class="modal-sub">Una prueba corta guarda las medidas y la posición únicamente para esta impresora.</div>
 
-    <div style="display:grid;grid-template-columns:minmax(0,1.15fr) minmax(280px,.85fr);gap:14px;margin-top:14px">
+    <div class="mobile-stack-grid" style="display:grid;grid-template-columns:minmax(0,1.15fr) minmax(280px,.85fr);gap:14px;margin-top:14px">
       <div style="display:flex;flex-direction:column;gap:12px">
         <div style="border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--surface2)">
           <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
@@ -1127,7 +1127,7 @@ function _bcOpenCalibrationWizard() {
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-green" onclick="_bcCalSave()">${svg('check')} Guardar calibración</button>
     </div>
-  `, 'modal-xl');
+  `, 'modal-xl ajustes-mobile-modal');
   _bcCalRender();
 }
 
@@ -1614,7 +1614,7 @@ function _bcShowPreviewModal(html, title) {
         ${svg('print')} Imprimir ahora
       </button>
     </div>
-  `, 'modal-xl');
+  `, 'modal-xl ajustes-mobile-modal');
   const iframe = document.getElementById('bc-preview-iframe');
   if (iframe) {
     iframe.addEventListener('load', () => {

@@ -32,7 +32,7 @@ async function renderConfiguracion(el) {
   const isAdmin     = ['admin', 'superadmin'].includes(user?.role);
 
   // ── Header ──────────────────────────────────
-  root.appendChild(h('div', { class: 'sec-hdr' },
+  root.appendChild(h('div', { class: 'sec-hdr mobile-module-heading' },
     h('div', null,
       h('div', { class: 'sec-title' }, 'Configuración'),
       h('div', { class: 'sec-sub' }, `Velo POS v${info.appVersion || window._appVersion || '1.5.5'}`)
@@ -47,7 +47,7 @@ async function renderConfiguracion(el) {
   // ── Columnas ─────────────────────────────────
   const colLeft  = h('div', { style: 'display:flex;flex-direction:column;gap:16px;min-width:0' });
   const colRight = h('div', { style: 'display:flex;flex-direction:column;gap:16px;width:400px;flex-shrink:0' });
-  const grid     = h('div', { style: 'display:grid;grid-template-columns:1fr 400px;gap:20px;align-items:start' });
+  const grid     = h('div', { class: 'mobile-stack-grid', style: 'display:grid;grid-template-columns:1fr 400px;gap:20px;align-items:start' });
 
   // ══════════════════════
   // COLUMNA IZQUIERDA
@@ -932,7 +932,7 @@ async function renderConfiguracion(el) {
         No les asignes una impresora <strong>térmica (80/58&nbsp;mm)</strong> o saldrán mal
         formateados — usa una impresora de hojas (láser/inkjet) para esas categorías.
       </div>
-      <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <table class="mobile-card-table mobile-card-auto" style="width:100%;border-collapse:collapse;font-size:12px">
         <thead><tr style="text-align:left;font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:.04em">
           <th style="padding:4px 6px">Módulo</th><th style="padding:4px 6px">Impresora</th>
           <th style="padding:4px 6px;text-align:center">Vista previa</th>
@@ -1694,7 +1694,7 @@ function openEditarUsuarioModal(u) {
     <div class="modal-foot">
       <button class="btn btn-out" id="eu-cancel">Cancelar</button>
       <button class="btn btn-green" id="eu-save">${svg('check')} Guardar</button>
-    </div>`);
+    </div>`, 'ajustes-mobile-modal');
   // Eventos propios: el botón con argumento no lo reconoce la lista blanca de
   // _bindModalSafeActions, así que lo enganchamos aquí directamente.
   document.getElementById('eu-cancel')?.addEventListener('click', () => closeModal());
@@ -2173,7 +2173,7 @@ function abrirBackupCifrado() {
       <div class="alrt-sub">Si Windows no abre el selector, copia la ruta de la carpeta desde el Explorador y pégala aquí. La carpeta debe existir.</div></div>
     <div class="alrt a"><div class="alrt-dot a"></div><div class="alrt-sub">Sin esta clave el archivo no se puede recuperar. El sistema cifra con AES-256-GCM y verifica la copia antes de confirmarla.</div></div>
     <div class="alrt-sub" id="continuity-status" role="status" aria-live="polite"></div>
-    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="continuity-create" type="button">Crear copia</button></div>`);
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="continuity-create" type="button">Crear copia</button></div>`, 'ajustes-mobile-modal');
   const button = document.getElementById('continuity-create');
   const picker = document.getElementById('continuity-pick');
   const folder = document.getElementById('continuity-folder');
@@ -2226,7 +2226,7 @@ function abrirBackupCifrado() {
 }
 
 function abrirVerificacionCifrada() {
-  openModal(`<div class="modal-title">Probar respaldo cifrado</div><div class="modal-sub">La prueba recupera los datos en una carpeta temporal, comprueba su integridad y después los elimina. Las copias nuevas incluyen las evidencias de servicio; las antiguas contienen solo la base. Los datos activos no se modifican.</div><div class="fg" style="margin-top:14px"><label class="lbl">Clave del respaldo *</label><input class="inp" id="continuity-verify-pass" type="password" autocomplete="current-password"></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="continuity-verify">Seleccionar archivo y probar</button></div>`);
+  openModal(`<div class="modal-title">Probar respaldo cifrado</div><div class="modal-sub">La prueba recupera los datos en una carpeta temporal, comprueba su integridad y después los elimina. Las copias nuevas incluyen las evidencias de servicio; las antiguas contienen solo la base. Los datos activos no se modifican.</div><div class="fg" style="margin-top:14px"><label class="lbl">Clave del respaldo *</label><input class="inp" id="continuity-verify-pass" type="password" autocomplete="current-password"></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="continuity-verify">Seleccionar archivo y probar</button></div>`, 'ajustes-mobile-modal');
   document.getElementById('continuity-verify').onclick=async event=>{const passphrase=document.getElementById('continuity-verify-pass').value;if(!passphrase)return toast('Escribe la clave del respaldo','w');event.currentTarget.disabled=true;const picked=await window.api.backup.pickEncryptedFile();if(!picked?.ok){event.currentTarget.disabled=false;return picked?.error==='Cancelado'?null:toast(picked?.error||'No se pudo seleccionar el archivo','err');}const result=await window.api.backup.verifyEncrypted({requestUserId:_cfgUser().id,passphrase,filePath:picked.path});if(!result?.ok){event.currentTarget.disabled=false;return toast(result?.error||'La copia no superó la prueba','err');}closeModal();toast('✓ Copia íntegra y restaurable','ok');};
 }
 
@@ -2324,7 +2324,7 @@ function openNuevoCajeroModal() {
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-green" onclick="crearCajero()">${svg('check')} Crear usuario</button>
-    </div>`);
+    </div>`, 'ajustes-mobile-modal');
 }
 
 async function crearCajero() {
@@ -2382,7 +2382,7 @@ function openNuevaCategoriaModal() {
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-green" onclick="crearCategoria()">${svg('check')} Crear</button>
-    </div>`);
+    </div>`, 'ajustes-mobile-modal');
   setTimeout(() => document.getElementById('cat-name')?.focus(), 100);
 }
 
