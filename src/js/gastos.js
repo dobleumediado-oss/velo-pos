@@ -90,7 +90,7 @@ async function renderGastos(el) {
 
   // ── Header ────────────────────────────────
   const header = document.createElement('div');
-  header.className = 'sec-hdr';
+  header.className = 'sec-hdr mobile-module-heading';
   header.innerHTML = `
     <div>
       <h2 style="font-size:18px;font-weight:600;margin:0;color:var(--ink)">Gastos y Cuentas por Pagar</h2>
@@ -290,7 +290,7 @@ async function renderListaGastos(el, user) {
 
       wrap.innerHTML = `
         <div style="overflow-x:auto">
-          <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <table style="width:100%;border-collapse:collapse;font-size:12px" class="mobile-card-table">
             <thead>
               <tr style="border-bottom:1px solid var(--line2);color:var(--muted2);text-align:left">
                 <th style="padding:8px">Fecha</th>
@@ -307,15 +307,15 @@ async function renderListaGastos(el, user) {
             <tbody>
               ${data.map(e => `
                 <tr style="border-bottom:0.5px solid var(--line2)" data-eid="${e.id}">
-                  <td style="padding:8px;color:var(--muted2)">${_gFmtDate(e.issue_date)}</td>
-                  <td style="padding:8px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.description}</td>
-                  <td style="padding:8px;color:var(--muted2)">${e.category_name||'—'}</td>
-                  <td style="padding:8px;color:var(--muted2)">${e.beneficiary_name||e.supplier_name||'—'}</td>
-                  <td style="padding:8px;text-align:right;font-weight:600">${_gFmt(e.total)}</td>
-                  <td style="padding:8px;text-align:right;color:var(--green,#00c07a)">${_gFmt(e.paid_amount)}</td>
-                  <td style="padding:8px;text-align:right;color:${e.total-e.paid_amount>0?'var(--amber,#f59e0b)':'var(--muted2)'}">${_gFmt(e.total-e.paid_amount)}</td>
-                  <td style="padding:8px">${badge(e.status)}</td>
-                  <td style="padding:8px">
+                  <td style="padding:8px;color:var(--muted2)" data-label="Fecha">${_gFmtDate(e.issue_date)}</td>
+                  <td style="padding:8px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" class="mobile-card-title">${e.description}</td>
+                  <td style="padding:8px;color:var(--muted2)" data-label="Categoría">${e.category_name||'—'}</td>
+                  <td style="padding:8px;color:var(--muted2)" data-label="Proveedor / beneficiario">${e.beneficiary_name||e.supplier_name||'—'}</td>
+                  <td style="padding:8px;text-align:right;font-weight:600" data-label="Total">${_gFmt(e.total)}</td>
+                  <td style="padding:8px;text-align:right;color:var(--green,#00c07a)" data-label="Pagado">${_gFmt(e.paid_amount)}</td>
+                  <td style="padding:8px;text-align:right;color:${e.total-e.paid_amount>0?'var(--amber,#f59e0b)':'var(--muted2)'}" data-label="Saldo">${_gFmt(e.total-e.paid_amount)}</td>
+                  <td style="padding:8px" data-label="Estado">${badge(e.status)}</td>
+                  <td style="padding:8px" data-label="Acciones">
                     <div style="display:flex;gap:4px">
                       <button class="btn btn-ghost btn-sm" onclick="verDetalleGasto(${e.id})" title="Ver detalle">${svg('eye')}</button>
                       ${['admin','superadmin'].includes(user.role) && e.status==='pendiente_aprobacion' ? `
@@ -370,7 +370,7 @@ async function renderPorPagar(el, user) {
       ${!data.length ? `<div style="text-align:center;padding:40px;color:var(--muted2)">
         ${_gSvg('check', 24)}<div style="margin-top:8px;font-size:13px">Sin cuentas pendientes</div></div>` : `
       <div style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <table style="width:100%;border-collapse:collapse;font-size:12px" class="mobile-card-table">
           <thead>
             <tr style="border-bottom:1px solid var(--line2);color:var(--muted2)">
               <th style="padding:8px;text-align:left">Proveedor</th>
@@ -386,14 +386,14 @@ async function renderPorPagar(el, user) {
           <tbody>
             ${data.map(e => `
               <tr style="border-bottom:0.5px solid var(--line2);${e.overdue?'background:#fef2f220':''}">
-                <td style="padding:8px">${e.supplier_name||'—'}</td>
-                <td style="padding:8px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.description}</td>
-                <td style="padding:8px;color:var(--muted2)">${_gFmtDate(e.due_date)}</td>
-                <td style="padding:8px">${daysLabel(e.days_remaining)}</td>
-                <td style="padding:8px;text-align:right;font-weight:600">${_gFmt(e.total)}</td>
-                <td style="padding:8px;text-align:right;color:var(--amber,#f59e0b);font-weight:600">${_gFmt(e.total-e.paid_amount)}</td>
-                <td style="padding:8px">${badge(e.status)}</td>
-                <td style="padding:8px">
+                <td style="padding:8px" class="mobile-card-title">${e.supplier_name||'—'}</td>
+                <td style="padding:8px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" data-label="Descripción">${e.description}</td>
+                <td style="padding:8px;color:var(--muted2)" data-label="Vencimiento">${_gFmtDate(e.due_date)}</td>
+                <td style="padding:8px" data-label="Días">${daysLabel(e.days_remaining)}</td>
+                <td style="padding:8px;text-align:right;font-weight:600" data-label="Total">${_gFmt(e.total)}</td>
+                <td style="padding:8px;text-align:right;color:var(--amber,#f59e0b);font-weight:600" data-label="Saldo">${_gFmt(e.total-e.paid_amount)}</td>
+                <td style="padding:8px" data-label="Estado">${badge(e.status)}</td>
+                <td style="padding:8px" data-label="Acción">
                   <button class="btn btn-ghost btn-sm" style="color:var(--blue)" onclick="pagarGasto(${e.id},${e.total-e.paid_amount})">${svg('dollar')} Pagar</button>
                 </td>
               </tr>`).join('')}
@@ -422,7 +422,7 @@ async function renderRecurrentes(el, user) {
       ${!data.length ? `<div style="text-align:center;padding:40px;color:var(--muted2)">
         ${_gSvg('clock', 24)}<div style="margin-top:8px;font-size:13px">Sin gastos recurrentes configurados</div></div>` : `
       <div style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <table style="width:100%;border-collapse:collapse;font-size:12px" class="mobile-card-table">
           <thead>
             <tr style="border-bottom:1px solid var(--line2);color:var(--muted2)">
               <th style="padding:8px;text-align:left">Nombre</th>
@@ -437,13 +437,13 @@ async function renderRecurrentes(el, user) {
           <tbody>
             ${data.map(r => `
               <tr style="border-bottom:0.5px solid var(--line2)">
-                <td style="padding:8px;font-weight:500">${r.name}</td>
-                <td style="padding:8px;color:var(--muted2)">${r.supplier_name||'—'}</td>
-                <td style="padding:8px;color:var(--muted2)">${r.frequency}</td>
-                <td style="padding:8px;color:var(--muted2)">${_gFmtDate(r.next_date)}</td>
-                <td style="padding:8px;text-align:right;font-weight:600">${_gFmt(r.amount)}</td>
-                <td style="padding:8px"><span style="font-size:10px;padding:2px 8px;border-radius:100px;background:${r.active?'var(--green,#00c07a)':'var(--muted2)'}22;color:${r.active?'var(--green,#00c07a)':'var(--muted2)'};font-weight:600">${r.active?'Activo':'Inactivo'}</span></td>
-                <td style="padding:8px">
+                <td style="padding:8px;font-weight:500" class="mobile-card-title">${r.name}</td>
+                <td style="padding:8px;color:var(--muted2)" data-label="Proveedor">${r.supplier_name||'—'}</td>
+                <td style="padding:8px;color:var(--muted2)" data-label="Frecuencia">${r.frequency}</td>
+                <td style="padding:8px;color:var(--muted2)" data-label="Próxima fecha">${_gFmtDate(r.next_date)}</td>
+                <td style="padding:8px;text-align:right;font-weight:600" data-label="Monto">${_gFmt(r.amount)}</td>
+                <td style="padding:8px" data-label="Estado"><span style="font-size:10px;padding:2px 8px;border-radius:100px;background:${r.active?'var(--green,#00c07a)':'var(--muted2)'}22;color:${r.active?'var(--green,#00c07a)':'var(--muted2)'};font-weight:600">${r.active?'Activo':'Inactivo'}</span></td>
+                <td style="padding:8px" data-label="Acción">
                   <button class="btn btn-ghost btn-sm" onclick="toggleRecurrente(${r.id},${r.active?0:1})">${r.active?'Pausar':'Activar'}</button>
                 </td>
               </tr>`).join('')}
@@ -617,7 +617,7 @@ async function renderPresupuestos(el, user) {
       ${!data.length ? `<div style="text-align:center;padding:40px;color:var(--muted2)">
         ${_gSvg('dollar', 24)}<div style="margin-top:8px;font-size:13px">Sin presupuestos configurados para este mes</div></div>` : `
       <div style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <table style="width:100%;border-collapse:collapse;font-size:12px" class="mobile-card-table">
           <thead>
             <tr style="border-bottom:1px solid var(--line2);color:var(--muted2)">
               <th style="padding:8px;text-align:left">Categoría</th>
@@ -632,11 +632,11 @@ async function renderPresupuestos(el, user) {
               const pct = b.amount > 0 ? Math.min(100, (b.spent / b.amount) * 100) : 0;
               const color = pct >= 100 ? 'var(--red,#ef4444)' : pct >= 80 ? 'var(--amber,#f59e0b)' : 'var(--green,#00c07a)';
               return `<tr style="border-bottom:0.5px solid var(--line2)">
-                <td style="padding:8px">${b.category_name||'Sin categoría'}</td>
-                <td style="padding:8px;text-align:right">${_gFmt(b.amount)}</td>
-                <td style="padding:8px;text-align:right;color:${color}">${_gFmt(b.spent)}</td>
-                <td style="padding:8px;text-align:right;font-weight:600">${_gFmt(Math.max(0, b.amount - b.spent))}</td>
-                <td style="padding:8px">
+                <td style="padding:8px" class="mobile-card-title">${b.category_name||'Sin categoría'}</td>
+                <td style="padding:8px;text-align:right" data-label="Presupuesto">${_gFmt(b.amount)}</td>
+                <td style="padding:8px;text-align:right;color:${color}" data-label="Gastado">${_gFmt(b.spent)}</td>
+                <td style="padding:8px;text-align:right;font-weight:600" data-label="Disponible">${_gFmt(Math.max(0, b.amount - b.spent))}</td>
+                <td style="padding:8px" data-label="Estado">
                   <div style="background:var(--line2);border-radius:4px;height:6px;width:100px">
                     <div style="background:${color};border-radius:4px;height:6px;width:${pct}%"></div>
                   </div>
@@ -691,7 +691,7 @@ function abrirModal(titulo, contenidoHTML, onConfirm, confirmLabel='Guardar') {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:#0008;z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
   overlay.innerHTML = `
-    <div style="background:var(--bg);border-radius:14px;width:100%;max-width:520px;max-height:90vh;overflow-y:auto;box-shadow:0 8px 40px #0004">
+    <div class="gastos-mobile-sheet" style="background:var(--bg);border-radius:14px;width:100%;max-width:520px;max-height:90vh;overflow-y:auto;box-shadow:0 8px 40px #0004">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line2)">
         <div style="font-size:15px;font-weight:600">${titulo}</div>
         <button id="modal-close" style="background:none;border:none;cursor:pointer;color:var(--muted2);font-size:18px">✕</button>

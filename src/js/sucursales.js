@@ -59,7 +59,7 @@ async function renderSucursales(el) {
   el.innerHTML = '';
 
   const hdr = document.createElement('div');
-  hdr.className = 'sec-hdr';
+  hdr.className = 'sec-hdr mobile-module-heading';
   hdr.innerHTML = `
     <div>
       <h2 style="font-size:18px;font-weight:600;margin:0;color:var(--ink)">Sucursales</h2>
@@ -223,7 +223,7 @@ async function renderNCFAvanzado(el) {
     const wrap = document.createElement('div');
     wrap.style.cssText = 'overflow-x:auto';
     wrap.innerHTML = `
-      <table class="velo-sticky-actions" style="width:100%;border-collapse:collapse;font-size:12px">
+      <table class="velo-sticky-actions mobile-card-table mobile-card-auto" style="width:100%;border-collapse:collapse;font-size:12px">
         <thead>
           <tr style="border-bottom:1px solid var(--line2);color:var(--muted2)">
             <th style="padding:8px;text-align:left">Tipo</th>
@@ -892,12 +892,12 @@ function modalReporteNCF() {
   // se abre encima del reporte y, al cerrarla, el reporte sigue donde estaba.
   overlay.style.cssText = 'position:fixed;inset:0;background:#0008;z-index:190;display:flex;align-items:center;justify-content:center;padding:16px';
   overlay.innerHTML = `
-    <div style="background:var(--bg);border-radius:14px;width:100%;max-width:1080px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 8px 40px #0004">
+    <div class="ncf-report-sheet" style="background:var(--bg);border-radius:14px;width:100%;max-width:1080px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 8px 40px #0004">
       <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line2)">
         <div style="font-size:15px;font-weight:600">📄 Reportes de comprobantes · 607 / 608</div>
         <button id="rep-close" style="background:none;border:none;cursor:pointer;color:var(--muted2);font-size:18px">✕</button>
       </div>
-      <div style="padding:14px 20px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;border-bottom:1px solid var(--line2)">
+      <div class="ncf-report-controls" style="padding:14px 20px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;border-bottom:1px solid var(--line2)">
         <div class="fg" style="margin:0;min-width:210px"><label class="lbl">Reporte</label>
           <select class="inp" id="rep-tipo">
             <option value="607">607 — Comprobantes emitidos</option>

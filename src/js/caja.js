@@ -80,7 +80,7 @@ function cajaIncomeHistoryCard() {
       <div><div class="card-title">Historial de recibos de ingreso</div>
         <div class="ts">Todas las sesiones, abiertas y cerradas. Desde aquí se consulta y se reimprime.</div></div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:13px;margin-bottom:10px">
+    <div class="caja-mobile-history-filters" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:13px;margin-bottom:10px">
       <div class="fg"><label class="lbl">Desde</label><input class="inp" id="caja-income-from" type="date" value="${_cajaEsc(f.from)}"/></div>
       <div class="fg"><label class="lbl">Hasta</label><input class="inp" id="caja-income-to" type="date" value="${_cajaEsc(f.to)}"/></div>
       <div class="fg"><label class="lbl">Buscar</label><input class="inp" id="caja-income-query" placeholder="Recibo, persona, concepto o referencia" value="${_cajaEsc(f.query)}"/></div>
@@ -91,7 +91,7 @@ function cajaIncomeHistoryCard() {
       <input id="caja-income-cancelled" type="checkbox" ${f.includeCancelled ? 'checked' : ''} onchange="cajaSearchIncomeHistory()"/>
       Incluir recibos anulados
     </label>
-    <div id="caja-income-history-body"></div>`;
+    <div id="caja-income-history-body" class="mobile-list-card"></div>`;
   return card;
 }
 
@@ -110,18 +110,18 @@ function cajaRenderIncomeHistoryBody() {
   const isAdmin = ['admin','superadmin'].includes(_cajaUser()?.role);
   const rows = state.rows.map(r => {
     const cancelled = r.status === 'cancelled';
-    return `<tr${cancelled ? ' style="opacity:.62"' : ''}>
-      <td class="tm">${_cajaEsc(r.document_number_fmt || `RIN-${r.id}`)}</td>
-      <td class="ts">${_cajaEsc(typeof fdate === 'function' ? fdate(String(r.created_at || '').slice(0,10)) : String(r.created_at || '').slice(0,10))}</td>
-      <td><div class="tb">${_cajaEsc(r.payer_name)}</div><div class="ts">${_cajaEsc(_cajaIncomeType(r.income_type))}</div></td>
-      <td>${_cajaEsc(r.concept)}</td>
-      <td><span class="badge ${r.method === 'efectivo' ? 'g' : 'b'}">${_cajaEsc(r.method)}</span></td>
-      <td style="font-weight:800;color:${cancelled ? 'var(--muted)' : 'var(--green)'}">${cancelled ? '−' : ''}${fmt(r.amount)}
+    return `<tr role="row"${cancelled ? ' style="opacity:.62"' : ''}>
+      <td role="cell" class="tm mobile-card-title">${_cajaEsc(r.document_number_fmt || `RIN-${r.id}`)}</td>
+      <td role="cell" class="ts" data-label="Fecha">${_cajaEsc(typeof fdate === 'function' ? fdate(String(r.created_at || '').slice(0,10)) : String(r.created_at || '').slice(0,10))}</td>
+      <td role="cell" data-label="Recibido de"><div class="tb">${_cajaEsc(r.payer_name)}</div><div class="ts">${_cajaEsc(_cajaIncomeType(r.income_type))}</div></td>
+      <td role="cell" data-label="Concepto">${_cajaEsc(r.concept)}</td>
+      <td role="cell" data-label="Método"><span class="badge ${r.method === 'efectivo' ? 'g' : 'b'}">${_cajaEsc(r.method)}</span></td>
+      <td role="cell" data-label="Monto" style="font-weight:800;color:${cancelled ? 'var(--muted)' : 'var(--green)'}">${cancelled ? '−' : ''}${fmt(r.amount)}
         ${String(r.payment_currency || 'DOP').toUpperCase() === 'USD'
           ? `<div class="ts" style="font-weight:600">${_cajaUsd(r.currency_amount || 0)} · Tasa ${Number(r.exchange_rate || 0).toFixed(2)}</div>`
           : ''}</td>
-      <td><span class="badge ${cancelled ? 'r' : 'g'}">${cancelled ? 'Anulado' : 'Vigente'}</span></td>
-      <td><div class="flex" style="gap:3px">
+      <td role="cell" data-label="Estado"><span class="badge ${cancelled ? 'r' : 'g'}">${cancelled ? 'Anulado' : 'Vigente'}</span></td>
+      <td role="cell" class="mobile-card-actions"><div class="flex" style="gap:3px">
         <button class="btn btn-ghost btn-sm" title="Ver detalle" onclick="cajaOpenIncomeHistoryDetail(${Number(r.id)})">${svg('eye')}</button>
         <button class="btn btn-ghost btn-sm" title="Reimprimir" onclick="cajaReprintIncomeReceipt(${Number(r.id)})">${svg('print')}</button>
         ${isAdmin && !cancelled ? `<button class="btn btn-ghost btn-sm" title="Modificar" onclick="cajaEditIncomeFromHistory(${Number(r.id)})">${svg('edit')}</button>` : ''}
@@ -129,9 +129,10 @@ function cajaRenderIncomeHistoryBody() {
       </div></td>
     </tr>`;
   }).join('');
-  body.innerHTML = `<div class="tw"><table>
-      <thead><tr>${['Recibo','Fecha','Recibido de','Concepto','Método','Monto','Estado',''].map(t => `<th>${t}</th>`).join('')}</tr></thead>
-      <tbody>${rows}</tbody>
+  body.innerHTML = `<div class="tw"><table class="mobile-card-table" role="table">
+      <thead role="rowgroup"><tr role="row">${['Recibo','Fecha','Recibido de','Concepto','Método','Monto','Estado',''].map(t =>
+        `<th scope="col"${t ? '' : ' aria-label="Acciones"'}>${t}</th>`).join('')}</tr></thead>
+      <tbody role="rowgroup">${rows}</tbody>
     </table></div>
     <div class="ts" style="margin-top:9px;display:flex;gap:16px;flex-wrap:wrap">
       <span>Vigentes: <strong style="color:var(--green)">${fmt(state.totals.active || 0)}</strong></span>
@@ -213,7 +214,7 @@ function cajaOpenIncomeHistoryDetail(id) {
     <div class="fg" style="margin-top:12px"><label class="lbl">Concepto</label><div class="tb">${_cajaEsc(r.concept)}</div></div>
     ${r.notes ? `<div class="fg"><label class="lbl">Notas</label><div class="ts">${_cajaEsc(r.notes)}</div></div>` : ''}
     <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button>
-      <button class="btn btn-dark" onclick="cajaReprintIncomeReceipt(${Number(r.id)})">${svg('print')} Reimprimir</button></div>`, 'modal-lg');
+      <button class="btn btn-dark" onclick="cajaReprintIncomeReceipt(${Number(r.id)})">${svg('print')} Reimprimir</button></div>`, 'modal-lg caja-mobile-modal');
 }
 
 // Caja leía las ventas de su sesión desde DB.sales, la misma colección que
@@ -358,6 +359,12 @@ async function cajaCloseWithRecovery(payload) {
   }
 }
 
+function cajaTableHeader(labels) {
+  return h('thead', { role: 'rowgroup' },
+    h('tr', { role: 'row' }, labels.map(label =>
+      h('th', { scope: 'col', 'aria-label': label ? null : 'Acciones' }, label))));
+}
+
 function renderCaja(el) {
   el.innerHTML = '';
   const otherOpenSessions = (DB.caja || []).filter(session =>
@@ -371,7 +378,7 @@ function renderCaja(el) {
   }
 
   // ── Header ───────────────────────────────────
-  el.appendChild(h('div', { class: 'sec-hdr' },
+  el.appendChild(h('div', { class: `sec-hdr mobile-module-heading${cajaOpen ? '' : ' caja-mobile-closed'}` },
     h('div', null,
       h('div', { class: 'sec-title' }, 'Caja'),
       h('div', { class: 'sec-sub' },
@@ -383,7 +390,7 @@ function renderCaja(el) {
       )
     ),
     cajaOpen
-      ? h('div', { class: 'flex', style: { gap: '8px' } },
+      ? h('div', { class: 'flex mobile-module-actions', style: { gap: '8px' } },
           h('button', {
             class: 'btn btn-out',
             onclick: () => imprimirReporteDia(),
@@ -411,15 +418,15 @@ function renderCaja(el) {
           })
         )
       : h('button', {
-          class: 'btn btn-green',
+          class: 'btn btn-green caja-mobile-open-button',
           onclick: openAperturaCajaModal,
           html: `${svg('unlock')} Abrir Caja`
       })
   ));
 
   if (otherOpenSessions.length) {
-    const otherCard = h('div', { class: 'card', style: { borderColor: 'var(--amber-line)', marginBottom: '14px' } });
-    otherCard.appendChild(h('div', { class: 'fxb mb8' },
+    const otherCard = h('div', { class: 'card mobile-list-card', style: { borderColor: 'var(--amber-line)', marginBottom: '14px' } });
+    otherCard.appendChild(h('div', { class: 'fxb mb8 caja-mobile-list-heading' },
       h('div', null,
         h('div', { class: 'card-title' }, 'Cajas abiertas en otras terminales'),
         h('div', { class: 'ts' }, 'La barra superior muestra por separado el estado de esta terminal.')
@@ -442,21 +449,18 @@ function renderCaja(el) {
       )
     ));
     const otherWrap = h('div', { class: 'tw' });
-    const otherTable = h('table', null,
-      h('thead', null, h('tr', null,
-        ...['Cajero', 'Apertura', 'Terminal', 'Estado'].map(label => h('th', null, label))
-      ))
-    );
-    const otherBody = h('tbody');
+    const otherTable = h('table', { class: 'mobile-card-table', role: 'table' },
+      cajaTableHeader(['Cajero', 'Apertura', 'Terminal', 'Estado']));
+    const otherBody = h('tbody', { role: 'rowgroup' });
     otherOpenSessions.forEach(raw => {
       const session = _normCaja(raw);
       const terminalLabel = raw.terminal_name
         || (raw.terminal_id ? `Terminal ${String(raw.terminal_id).slice(0, 8)}` : 'Terminal anterior');
-      otherBody.appendChild(h('tr', null,
-        h('td', null, h('div', { class: 'tb' }, session.cajero || 'Sin identificar')),
-        h('td', { class: 'ts' }, `${fdate(session.od)} ${session.ot || ''}`.trim()),
-        h('td', null, terminalLabel),
-        h('td', null, h('span', { class: 'badge a' }, 'Abierta'))
+      otherBody.appendChild(h('tr', { role: 'row' },
+        h('td', { role: 'cell', class: 'mobile-card-title' }, h('div', { class: 'tb' }, session.cajero || 'Sin identificar')),
+        h('td', { role: 'cell', class: 'ts', 'data-label': 'Apertura' }, `${fdate(session.od)} ${session.ot || ''}`.trim()),
+        h('td', { role: 'cell', 'data-label': 'Terminal' }, terminalLabel),
+        h('td', { role: 'cell', 'data-label': 'Estado' }, h('span', { class: 'badge a' }, 'Abierta'))
       ));
     });
     otherTable.appendChild(otherBody);
@@ -492,20 +496,25 @@ function renderCaja(el) {
       .reduce((a, s) => a + Number(s.balance_after_payment ?? s.total ?? 0), 0);
     const tdNet  = tdRev - tdDev;
 
-    const statGrid = h('div', { class: 'metrics', style: { gridTemplateColumns: 'repeat(4,1fr)' } });
+    // Las barras comparan los cobros entre sí. También incluyen abonos e ingresos.
+    const receivedByCardAndTransfer = tdCard + tdTrans;
+    const largestReceived = Math.max(Math.abs(tdEfec), Math.abs(receivedByCardAndTransfer)) || 1;
+    const statGrid = h('div', { class: 'metrics mobile-summary-metrics', style: { gridTemplateColumns: 'repeat(4,1fr)' } });
     [
-      { icon: 'dollar', color: 'g', label: 'Total Vendido',    val: fmt(tdRev) },
-      { icon: 'cash',   color: 'b', label: 'Efectivo recibido', val: fmt(tdEfec) },
-      { icon: 'card',   color: 'p', label: 'Tarjeta/Trans. recibidas', val: fmt(tdCard + tdTrans) },
-      { icon: 'users',  color: 'a', label: 'Crédito pendiente', val: fmt(tdCred) },
+      { place: 'featured', icon: 'dollar', color: 'g', label: 'Total Vendido', val: tdRev },
+      { place: 'bar', icon: 'cash', color: 'b', label: 'Efectivo recibido', val: tdEfec },
+      { place: 'bar', icon: 'card', color: 'p', label: 'Tarjeta/Trans. recibidas', val: receivedByCardAndTransfer },
+      { place: 'total', icon: 'users', color: 'a', label: 'Crédito pendiente', val: tdCred },
     ].forEach(m => {
-      statGrid.appendChild(
-        h('div', { class: 'metric' },
-          h('div', { class: 'met-top' }, h('div', { class: `met-icon ${m.color}`, html: svg(m.icon) })),
-          h('div', { class: 'met-label' }, m.label),
-          h('div', { class: 'met-val' }, m.val)
-        )
+      const metric = h('div', { class: `metric mobile-summary-${m.place}` },
+        h('div', { class: 'met-top' }, h('div', { class: `met-icon ${m.color}`, html: svg(m.icon) })),
+        h('div', { class: 'met-label' }, m.label),
+        h('div', { class: 'met-val' }, fmt(m.val))
       );
+      if (m.place === 'bar') {
+        metric.style.setProperty('--mobile-bar-size', `${100 * Math.abs(m.val) / largestReceived}%`);
+      }
+      statGrid.appendChild(metric);
     });
     el.appendChild(statGrid);
 
@@ -532,9 +541,9 @@ function renderCaja(el) {
     void refreshFund();
 
     // Ventas de sesión
-    const sesCard = h('div', { class: 'card mb20' });
+    const sesCard = h('div', { class: 'card mb20 mobile-list-card' });
     sesCard.appendChild(
-      h('div', { class: 'fxb mb8' },
+      h('div', { class: 'fxb mb8 caja-mobile-list-heading' },
         h('div', { class: 'card-title' }, `Ventas de esta sesión (${tdS.length})`),
         h('button', { class: 'btn btn-ghost btn-sm', onclick: () => routeTo('ventas'), html: `${svg('list')} Ver historial` })
       )
@@ -544,24 +553,23 @@ function renderCaja(el) {
       sesCard.appendChild(h('div', { class: 'empty', style: { padding: '20px' } }, h('p', null, 'Sin ventas en esta sesión')));
     } else {
       const tw = h('div', { class: 'tw' });
-      const tbl = h('table', null,
-        h('thead', null, h('tr', null, ...['#','Cliente','Artículos','Método','Total',''].map(t => h('th', null, t))))
-      );
-      const tbody = h('tbody', null);
+      const tbl = h('table', { class: 'mobile-card-table', role: 'table' },
+        cajaTableHeader(['#','Cliente','Artículos','Método','Total','']));
+      const tbody = h('tbody', { role: 'rowgroup' });
       [...tdS].reverse().slice(0, 10).forEach(s => {
-        tbody.appendChild(h('tr', null,
-          h('td', { class: 'tm' }, facturaLabel(s)),
-          h('td', null, h('div', { class: 'tb' }, s.customer_name || s.clientName || 'Consumidor Final')),
-          h('td', null, `${Number(s.item_qty_total || 0)} art.`),
-          h('td', null,
+        tbody.appendChild(h('tr', { role: 'row' },
+          h('td', { role: 'cell', class: 'tm mobile-card-title' }, facturaLabel(s)),
+          h('td', { role: 'cell', 'data-label': 'Cliente' }, h('div', { class: 'tb' }, s.customer_name || s.clientName || 'Consumidor Final')),
+          h('td', { role: 'cell', 'data-label': 'Artículos' }, `${Number(s.item_qty_total || 0)} art.`),
+          h('td', { role: 'cell', 'data-label': 'Método' },
             h('span', { class: `badge ${(s.payment_method||s.pay)==='efectivo'?'g':(s.payment_method||s.pay)==='tarjeta'?'b':(s.payment_method||s.pay)==='transferencia'?'p':'a'}` }, s.payment_method||s.pay),
             (s.payment_method||s.pay)==='credito'
               ? h('div',{class:'ts'},`Pagado ${fmt(s.payment_amount||0)} · Pendiente ${fmt(s.balance_after_payment??s.total)}`)
               : null),
-          h('td', { style: { fontWeight: 700 } }, fmt(s.total)),
-          h('td', null,h('div',{class:'flex',style:{gap:'3px'}},
-            h('button',{class:'btn btn-ghost btn-sm',onclick:()=>openDetalleVentaModal(s),html:svg('eye')}),
-            h('button',{class:'btn btn-ghost btn-sm',onclick:()=>reimprimirVenta(s.id),html:svg('print')})))
+          h('td', { role: 'cell', 'data-label': 'Total', style: { fontWeight: 700 } }, fmt(s.total)),
+          h('td', { role: 'cell', class: 'mobile-card-actions' },h('div',{class:'flex',style:{gap:'3px'}},
+            h('button',{class:'btn btn-ghost btn-sm','aria-label':'Ver venta',onclick:()=>openDetalleVentaModal(s),html:svg('eye')}),
+            h('button',{class:'btn btn-ghost btn-sm','aria-label':'Reimprimir venta',onclick:()=>reimprimirVenta(s.id),html:svg('print')})))
         ));
       });
       tbl.appendChild(tbody);
@@ -573,33 +581,35 @@ function renderCaja(el) {
     // Abonos vigentes de esta sesión, incluidos pagos iniciales de facturas a
     // crédito. Los anulados permanecen auditables desde «Ver historial», pero
     // no deben ocupar la vista operativa de Caja.
-    const payCard = h('div', { class: 'card mb20' });
-    payCard.appendChild(h('div',{class:'fxb mb8'},
+    const payCard = h('div', { class: 'card mb20 mobile-list-card' });
+    payCard.appendChild(h('div',{class:'fxb mb8 caja-mobile-list-heading'},
       h('div',{class:'card-title'},`Abonos y pagos iniciales (${tdPayments.length})`),
       h('button',{class:'btn btn-ghost btn-sm',onclick:()=>{ window._ventasTabInicial='abonos'; routeTo('ventas'); },html:`${svg('list')} Ver historial`})));
     if (!tdPayments.length) {
       payCard.appendChild(h('div',{class:'empty',style:{padding:'18px'}},h('p',null,'Sin abonos en esta sesión')));
     } else {
       const rows = [...tdPayments].reverse().map(p => {
-        return h('tr',null,
-        h('td',{class:'tm'},reciboLabel(p)),
-        h('td',null,h('div',{class:'tb'},p.customer_name||DB.customers.find(c=>Number(c.id)===Number(p.customer_id))?.name||'Cliente')),
-        h('td',{class:'tm'},paymentInvoiceSummary(p)),
-        h('td',null,h('span',{class:`badge ${(p.method||'')==='efectivo'?'g':'b'}`},p.method||'efectivo')),
-        h('td',null,h('span',{class:'badge g'},'Vigente')),
-        h('td',{style:{fontWeight:800,color:'var(--green)'}},fmt(p.amount)),
-        h('td',null,h('div',{class:'flex',style:{gap:'3px'}},
-          h('button',{class:'btn btn-ghost btn-sm',onclick:()=>openAbonoDetalleModal(p),html:svg('eye')}),
-          h('button',{class:'btn btn-ghost btn-sm',onclick:()=>reimprimirAbono(p.id),html:svg('print')}))));
+        return h('tr', { role: 'row' },
+          h('td', { role: 'cell', class: 'tm mobile-card-title' }, reciboLabel(p)),
+          h('td', { role: 'cell', 'data-label': 'Cliente' },
+            h('div', { class: 'tb' }, p.customer_name || DB.customers.find(c => Number(c.id) === Number(p.customer_id))?.name || 'Cliente')),
+          h('td', { role: 'cell', class: 'tm', 'data-label': 'Factura' }, paymentInvoiceSummary(p)),
+          h('td', { role: 'cell', 'data-label': 'Método' },
+            h('span', { class: `badge ${(p.method || '') === 'efectivo' ? 'g' : 'b'}` }, p.method || 'efectivo')),
+          h('td', { role: 'cell', 'data-label': 'Estado' }, h('span', { class: 'badge g' }, 'Vigente')),
+          h('td', { role: 'cell', 'data-label': 'Monto', style: { fontWeight: 800, color: 'var(--green)' } }, fmt(p.amount)),
+          h('td', { role: 'cell', class: 'mobile-card-actions' }, h('div', { class: 'flex', style: { gap: '3px' } },
+            h('button', { class: 'btn btn-ghost btn-sm', 'aria-label': 'Ver abono', onclick: () => openAbonoDetalleModal(p), html: svg('eye') }),
+            h('button', { class: 'btn btn-ghost btn-sm', 'aria-label': 'Reimprimir abono', onclick: () => reimprimirAbono(p.id), html: svg('print') }))));
       });
-      payCard.appendChild(h('div',{class:'tw'},h('table',null,
-        h('thead',null,h('tr',null,...['Recibo','Cliente','Factura','Método','Estado','Monto',''].map(x=>h('th',null,x)))),
-        h('tbody',null,...rows))));
+      payCard.appendChild(h('div', { class: 'tw' }, h('table', { class: 'mobile-card-table', role: 'table' },
+        cajaTableHeader(['Recibo','Cliente','Factura','Método','Estado','Monto','']),
+        h('tbody', { role: 'rowgroup' }, ...rows))));
     }
     el.appendChild(payCard);
 
-    const incomeCard = h('div', { class:'card mb20' });
-    incomeCard.appendChild(h('div',{class:'fxb mb8'},
+    const incomeCard = h('div', { class:'card mb20 mobile-list-card' });
+    incomeCard.appendChild(h('div',{class:'fxb mb8 caja-mobile-list-heading'},
       h('div',null,h('div',{class:'card-title'},`Recibos de ingreso (${tdIncomeReceipts.length})`),
         h('div',{class:'ts'},'Entradas de dinero no asociadas a ventas ni abonos')),
       h('button',{class:'btn btn-green btn-sm',onclick:openIncomeReceiptModal,html:`${svg('plus')} Nuevo ingreso`})));
@@ -608,19 +618,21 @@ function renderCaja(el) {
     } else if (!tdIncomeReceipts.length) {
       incomeCard.appendChild(h('div',{class:'empty',style:{padding:'18px'}},h('p',null,'Sin recibos de ingreso en esta sesión')));
     } else {
-      const rows = tdIncomeReceipts.map(r => h('tr',null,
-        h('td',{class:'tm'},r.document_number_fmt || `RIN-${r.id}`),
-        h('td',null,h('div',{class:'tb'},r.payer_name),h('div',{class:'ts'},_cajaIncomeType(r.income_type))),
-        h('td',null,r.concept),
-        h('td',null,h('span',{class:`badge ${r.method==='efectivo'?'g':'b'}`},r.method)),
-        h('td',{style:{fontWeight:800,color:'var(--green)'}},fmt(r.amount)),
-        h('td',null,h('div',{class:'flex',style:{gap:'3px'}},
-          h('button',{class:'btn btn-ghost btn-sm',onclick:()=>printIncomeReceipt(r),html:svg('print')}),
+      const rows = tdIncomeReceipts.map(r => h('tr', { role: 'row' },
+        h('td', { role: 'cell', class: 'tm mobile-card-title' }, r.document_number_fmt || `RIN-${r.id}`),
+        h('td', { role: 'cell', 'data-label': 'Recibido de' },
+          h('div', { class: 'tb' }, r.payer_name), h('div', { class: 'ts' }, _cajaIncomeType(r.income_type))),
+        h('td', { role: 'cell', 'data-label': 'Concepto' }, r.concept),
+        h('td', { role: 'cell', 'data-label': 'Método' }, h('span', { class: `badge ${r.method === 'efectivo' ? 'g' : 'b'}` }, r.method)),
+        h('td', { role: 'cell', 'data-label': 'Monto', style: { fontWeight: 800, color: 'var(--green)' } }, fmt(r.amount)),
+        h('td', { role: 'cell', class: 'mobile-card-actions' },h('div',{class:'flex',style:{gap:'3px'}},
+          h('button',{class:'btn btn-ghost btn-sm','aria-label':'Reimprimir ingreso',onclick:()=>printIncomeReceipt(r),html:svg('print')}),
           ['admin','superadmin'].includes(_cajaUser()?.role) ? h('button',{class:'btn btn-ghost btn-sm',title:'Modificar',onclick:()=>openEditIncomeReceiptModal(r),html:svg('edit')}) : null,
           ['admin','superadmin'].includes(_cajaUser()?.role) ? h('button',{class:'btn btn-ghost btn-sm',title:'Anular',onclick:()=>openCancelIncomeReceiptModal(r),html:svg('xmark')}) : null
         ))));
-      incomeCard.appendChild(h('div',{class:'tw'},h('table',null,
-        h('thead',null,h('tr',null,...['Recibo','Recibido de','Concepto','Método','Monto',''].map(x=>h('th',null,x)))),h('tbody',null,...rows))));
+      incomeCard.appendChild(h('div', { class: 'tw' }, h('table', { class: 'mobile-card-table', role: 'table' },
+        cajaTableHeader(['Recibo','Recibido de','Concepto','Método','Monto','']),
+        h('tbody', { role: 'rowgroup' }, ...rows))));
     }
     el.appendChild(incomeCard);
 
@@ -648,7 +660,7 @@ function renderCaja(el) {
             cajaExpenseCancellableHere(r, sesId)
               ? h('button',{class:'btn btn-ghost btn-sm',title:'Anular',onclick:()=>openCancelExpenseReceiptModal(r),html:svg('xmark')})
               : h('span',{class:'ts',title:'Este pago es parte de un gasto con otros pagos: anúlalo desde Gastos'},'Desde Gastos')))));
-        expenseCard.appendChild(h('div',{class:'tw'},h('table',null,
+        expenseCard.appendChild(h('div',{class:'tw'},h('table',{class:'mobile-card-table mobile-card-auto'},
           h('thead',null,h('tr',null,...['Recibo','Pagado a','Concepto','Monto',''].map(x=>h('th',null,x)))),h('tbody',null,...rows))));
       }
       el.appendChild(expenseCard);
@@ -656,23 +668,22 @@ function renderCaja(el) {
 
     // Devoluciones de esta sesión (visibilidad para el cajero) ─────────
     if (tdDevs.length) {
-      const devCard = h('div', { class: 'card mb20' });
+      const devCard = h('div', { class: 'card mb20 mobile-list-card' });
       devCard.appendChild(
-        h('div', { class: 'fxb mb8' },
+        h('div', { class: 'fxb mb8 caja-mobile-list-heading' },
           h('div', { class: 'card-title' }, `Devoluciones de esta sesión (${tdDevs.length})`)
         )
       );
       const dtw = h('div', { class: 'tw' });
-      const dtbl = h('table', null,
-        h('thead', null, h('tr', null, ...['#','Cliente','Factura orig.','Total'].map(t => h('th', null, t))))
-      );
-      const dtbody = h('tbody', null);
+      const dtbl = h('table', { class: 'mobile-card-table', role: 'table' },
+        cajaTableHeader(['#','Cliente','Factura orig.','Total']));
+      const dtbody = h('tbody', { role: 'rowgroup' });
       [...tdDevs].reverse().forEach(s => {
-        dtbody.appendChild(h('tr', null,
-          h('td', { class: 'tm' }, facturaLabel(s)),
-          h('td', null, h('div', { class: 'tb' }, s.customer_name || s.clientName || 'Consumidor Final')),
-          h('td', { class: 'tm' }, s.original_sale_id ? facturaLabelOriginal(s) : '—'),
-          h('td', { style: { fontWeight: 700, color: 'var(--red)' } }, `−${fmt(s.total)}`)
+        dtbody.appendChild(h('tr', { role: 'row' },
+          h('td', { role: 'cell', class: 'tm mobile-card-title' }, facturaLabel(s)),
+          h('td', { role: 'cell', 'data-label': 'Cliente' }, h('div', { class: 'tb' }, s.customer_name || s.clientName || 'Consumidor Final')),
+          h('td', { role: 'cell', class: 'tm', 'data-label': 'Factura original' }, s.original_sale_id ? facturaLabelOriginal(s) : '—'),
+          h('td', { role: 'cell', 'data-label': 'Total', style: { fontWeight: 700, color: 'var(--red)' } }, `−${fmt(s.total)}`)
         ));
       });
       dtbl.appendChild(dtbody);
@@ -695,8 +706,8 @@ function renderCaja(el) {
   }
 
   // ── Historial ─────────────────────────────────
-  const histCard = h('div', { class: 'card' });
-  histCard.appendChild(h('div', { class: 'fxb mb8' },
+  const histCard = h('div', { class: 'card mobile-list-card' });
+  histCard.appendChild(h('div', { class: 'fxb mb8 caja-mobile-list-heading' },
     h('div', { class: 'card-title' }, 'Historial de Sesiones'),
     h('span', { class: 'badge n' }, `${DB.caja.filter(c => c.status === 'closed').length} sesiones`)
   ));
@@ -706,28 +717,25 @@ function renderCaja(el) {
     histCard.appendChild(h('div', { class: 'empty', style: { padding: '20px' } }, h('p', null, 'Sin sesiones cerradas')));
   } else {
     const tw  = h('div', { class: 'tw' });
-    const tbl = h('table', null,
-      h('thead', null, h('tr', null,
-        ...['Cajero','Apertura','Cierre','Fondo','Ventas','Diferencia',''].map(t => h('th', null, t))
-      ))
-    );
-    const tbody = h('tbody', null);
+    const tbl = h('table', { class: 'mobile-card-table', role: 'table' },
+      cajaTableHeader(['Cajero','Apertura','Cierre','Fondo','Ventas','Diferencia','']));
+    const tbody = h('tbody', { role: 'rowgroup' });
     closed.forEach(raw => {
       const s    = _normCaja(raw);
       const diff = s.diff || 0;
-      tbody.appendChild(h('tr', null,
-        h('td', null, h('div', { class: 'tb' }, s.cajero)),
-        h('td', { class: 'ts' }, `${fdate(s.od)} ${s.ot}`),
-        h('td', { class: 'ts' }, `${fdate(s.cd)} ${s.ct}`),
-        h('td', null, fmt(s.open)),
-        h('td', { style: { fontWeight: 600 } }, fmt(s.total || 0)),
-        h('td', null, h('span', { class: `badge ${diff===0?'g':diff>0?'b':'r'}` },
+      tbody.appendChild(h('tr', { role: 'row' },
+        h('td', { role: 'cell', class: 'mobile-card-title' }, h('div', { class: 'tb' }, s.cajero)),
+        h('td', { role: 'cell', class: 'ts', 'data-label': 'Apertura' }, `${fdate(s.od)} ${s.ot}`),
+        h('td', { role: 'cell', class: 'ts', 'data-label': 'Cierre' }, `${fdate(s.cd)} ${s.ct}`),
+        h('td', { role: 'cell', 'data-label': 'Fondo' }, fmt(s.open)),
+        h('td', { role: 'cell', 'data-label': 'Ventas', style: { fontWeight: 600 } }, fmt(s.total || 0)),
+        h('td', { role: 'cell', 'data-label': 'Diferencia' }, h('span', { class: `badge ${diff===0?'g':diff>0?'b':'r'}` },
           diff === 0 ? 'Cuadrado' : diff > 0 ? `+${fmt(diff)}` : fmt(diff)
         )),
-        h('td', null,
+        h('td', { role: 'cell', class: 'mobile-card-actions' },
           h('div', { class: 'flex', style: { gap: '4px' } },
             h('button', { class: 'btn btn-ghost btn-sm', onclick: () => openResumenModal(s), html: `${svg('eye')} Ver` }),
-            h('button', { class: 'btn btn-ghost btn-sm', onclick: () => printResumen(s.id), html: svg('print') })
+            h('button', { class: 'btn btn-ghost btn-sm', 'aria-label': 'Imprimir resumen', onclick: () => printResumen(s.id), html: svg('print') })
           )
         )
       ));
@@ -762,7 +770,7 @@ async function openIncomeReceiptModal() {
     <div class="fg"><label class="lbl">Referencia</label><input class="inp" id="cash-income-reference" placeholder="Transferencia, cheque o referencia interna"/></div>
     <div class="fg"><label class="lbl">Notas para el recibo</label><textarea class="inp" id="cash-income-notes" rows="3" placeholder="Opcional"></textarea></div>
     <div class="ven-callout">El efectivo aumenta el cuadre de esta caja. Transferencias, tarjetas y cheques aumentan la cuenta financiera seleccionada.</div>
-    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-green" id="cash-income-save" onclick="confirmIncomeReceipt()">${svg('check')} Registrar e imprimir</button></div>`, 'modal-lg');
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-green" id="cash-income-save" onclick="confirmIncomeReceipt()">${svg('check')} Registrar e imprimir</button></div>`, 'modal-lg caja-mobile-modal');
 }
 
 // La tasa se propone desde la del día que ya muestra la barra superior y queda
@@ -1149,7 +1157,7 @@ async function openExpenseReceiptModal() {
       <div class="fg"><label class="lbl">Método</label><input class="inp" value="Efectivo de esta caja" disabled/></div></div>
     <div class="fg"><label class="lbl">Notas para el recibo</label><textarea class="inp" id="cash-expense-notes" rows="3" placeholder="Opcional"></textarea></div>
     <div class="ven-callout">El dinero sale del efectivo de esta caja y baja lo esperado en el cuadre. El pago queda registrado en Gastos.</div>
-    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" id="cash-expense-save" onclick="confirmExpenseReceipt()">${svg('check')} Registrar e imprimir</button></div>`, 'modal-lg');
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" id="cash-expense-save" onclick="confirmExpenseReceipt()">${svg('check')} Registrar e imprimir</button></div>`, 'modal-lg caja-mobile-modal');
 }
 
 async function confirmExpenseReceipt() {
@@ -1243,7 +1251,7 @@ function openCancelExpenseReceiptModal(row) {
     <div class="alrt a" style="margin:12px 0"><div><div class="alrt-title">El dinero vuelve a esta caja</div>
       <div class="alrt-sub">Se anula también el gasto en Gastos y su registro contable. Esta acción no se puede deshacer.</div></div></div>
     <div class="fg"><label class="lbl">Motivo de la anulación *</label><input class="inp" id="cash-expense-cancel-reason" maxlength="200" placeholder="Por qué se anula este egreso"/></div>
-    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" id="cash-expense-cancel-save" onclick="confirmCancelExpenseReceipt(${Number(row.expense_id)})">${svg('xmark')} Anular egreso</button></div>`);
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" id="cash-expense-cancel-save" onclick="confirmCancelExpenseReceipt(${Number(row.expense_id)})">${svg('xmark')} Anular egreso</button></div>`, 'caja-mobile-modal');
 }
 
 async function confirmCancelExpenseReceipt(expenseId) {
@@ -1318,7 +1326,7 @@ function cajaRenderExpenseHistoryBody() {
       <td>${cancelled ? '' : `<button class="btn btn-ghost btn-sm" title="Reimprimir" onclick="cajaReprintExpenseHistory(${Number(r.id)})">${svg('print')}</button>`}</td>
     </tr>`;
   }).join('');
-  body.innerHTML = `<div class="tw"><table>
+  body.innerHTML = `<div class="tw"><table class="mobile-card-table mobile-card-auto">
       <thead><tr>${['Recibo','Fecha','Pagado a','Concepto','Método','Monto','Estado',''].map(t => `<th>${t}</th>`).join('')}</tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
@@ -1404,7 +1412,7 @@ async function openEditIncomeReceiptModal(receipt) {
     <div class="fg"><label class="lbl">Motivo de la modificación *</label><input class="inp" id="cash-income-edit-reason" placeholder="Por qué se corrige este recibo"/></div>
     <div class="ven-callout">Si cambia el monto o el método, la diferencia entra o sale por la caja abierta y la cuenta afectada. El asiento contable se regenera.</div>
     <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-green" id="cash-income-edit-save" onclick="confirmEditIncomeReceipt(${Number(receipt.id)})">${svg('check')} Guardar cambios</button></div>`, 'modal-lg');
+      <button class="btn btn-green" id="cash-income-edit-save" onclick="confirmEditIncomeReceipt(${Number(receipt.id)})">${svg('check')} Guardar cambios</button></div>`, 'modal-lg caja-mobile-modal');
   cajaIncomeRecalcEquivalent('cash-income-edit');
 }
 
@@ -1451,7 +1459,7 @@ function cajaEditIncomeFromHistory(id) {
 }
 
 function openCancelIncomeReceiptModal(receipt) {
-  openModal(`<div class="modal-title">Anular ${_cajaEsc(receipt.document_number_fmt)}</div><div class="modal-sub">El ingreso desaparecerá de la vista operativa y se revertirá su impacto financiero.</div><div class="alrt r" style="margin:14px 0"><div><div class="alrt-title">Monto a revertir: ${fmt(receipt.amount)}</div><div class="alrt-sub">Esta acción queda registrada en auditoría.</div></div></div><div class="fg"><label class="lbl">Motivo *</label><textarea class="inp" id="cash-income-cancel-reason" rows="3"></textarea></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" onclick="confirmCancelIncomeReceipt(${Number(receipt.id)})">${svg('xmark')} Anular ingreso</button></div>`);
+  openModal(`<div class="modal-title">Anular ${_cajaEsc(receipt.document_number_fmt)}</div><div class="modal-sub">El ingreso desaparecerá de la vista operativa y se revertirá su impacto financiero.</div><div class="alrt r" style="margin:14px 0"><div><div class="alrt-title">Monto a revertir: ${fmt(receipt.amount)}</div><div class="alrt-sub">Esta acción queda registrada en auditoría.</div></div></div><div class="fg"><label class="lbl">Motivo *</label><textarea class="inp" id="cash-income-cancel-reason" rows="3"></textarea></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" onclick="confirmCancelIncomeReceipt(${Number(receipt.id)})">${svg('xmark')} Anular ingreso</button></div>`, 'caja-mobile-modal');
 }
 
 async function confirmCancelIncomeReceipt(id) {
@@ -1498,7 +1506,7 @@ function openAperturaCajaModal() {
           ${svg('lock')} Cerrar sesión anterior y continuar
         </button>
       </div>
-    `);
+    `, 'caja-mobile-modal');
     return;
   }
 
@@ -1524,7 +1532,7 @@ function openAperturaCajaModal() {
         ${svg('unlock')} Abrir Caja
       </button>
     </div>
-  `, 'modal-caja');
+  `, 'modal-caja caja-mobile-modal');
 
   // Eventos propios (no dependen de la lista blanca de _bindModalSafeActions
   // ni de oninput inline). Delegación en la grilla para los subtotales.
@@ -1811,7 +1819,7 @@ async function openCierreCajaModal() {
         ${svg('lock')} Confirmar Cierre
       </button>
     </div>
-  `, 'modal-caja modal-lg');
+  `, 'modal-caja modal-lg caja-mobile-modal');
 
   const cgrid = document.getElementById('close-bill-grid');
   if (cgrid) cgrid.addEventListener('input', (ev) => {
@@ -2071,7 +2079,7 @@ async function openResumenModal(raw) {
         ${svg('download')} Excel
       </button>
     </div>
-  `, 'modal-lg');
+  `, 'modal-lg caja-mobile-modal');
 }
 
 // ══════════════════════════════════════════════

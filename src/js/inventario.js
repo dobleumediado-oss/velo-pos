@@ -215,12 +215,12 @@ function renderInventario(el) {
   const totalVal = prods.reduce((a, p) => a + invProductValue(p), 0);
 
   // ── Header ──────────────────────────────────
-  el.appendChild(h('div', { class: 'sec-hdr' },
+  el.appendChild(h('div', { class: 'sec-hdr mobile-module-heading' },
     h('div', null,
       h('div', { class: 'sec-title' }, 'Inventario'),
       h('div', { class: 'sec-sub', id: 'inv-header-stats' }, invHeaderStatsText())
     ),
-    h('div', { class: 'flex', style: { gap: '8px' } },
+    h('div', { class: 'flex mobile-module-actions', style: { gap: '8px' } },
       ...((window._vertical && window._vertical.serialized) ? [h('button', {
         class: 'btn btn-out btn-sm',
         onclick: openBuscarImeiModal,
@@ -269,30 +269,32 @@ function renderInventario(el) {
   ));
 
   // ── Métricas ─────────────────────────────────
-  const metWrap = h('div', { class: 'metrics',
+  const metWrap = h('div', { class: 'metrics mobile-summary-metrics',
     style: { gridTemplateColumns: 'repeat(4,1fr)', marginBottom: '18px' } });
   [
-    { icon: 'box',    color: 'b', label: 'Productos',        val: prods.length },
-    { icon: 'dollar', color: 'g', label: 'Valor Inventario', val: fmt(totalVal) },
-    { icon: 'alert',  color: 'a', label: 'Stock Bajo',       val: lowStock.length },
-    { icon: 'trash',  color: 'r', label: 'Sin Stock',        val: outStock.length },
+    { place: 'total', icon: 'box', color: 'b', label: 'Productos', val: prods.length },
+    { place: 'featured', icon: 'dollar', color: 'g', label: 'Valor Inventario', val: fmt(totalVal) },
+    { place: 'bar', icon: 'alert', color: 'a', label: 'Stock Bajo', val: lowStock.length },
+    { place: 'bar', icon: 'trash', color: 'r', label: 'Sin Stock', val: outStock.length },
   ].forEach(m => {
-    metWrap.appendChild(
-      h('div', { class: 'metric',
-        style: m.color === 'r' && outStock.length > 0 ? { cursor:'pointer' } : {},
-        onclick: m.color === 'r' && outStock.length > 0
-          ? () => { invTab = 'sin_stock'; renderInvTable(); }
-          : m.color === 'a' && lowStock.length > 0
-          ? () => { invTab = 'bajo';      renderInvTable(); }
-          : null
-      },
-        h('div', { class: 'met-top' },
-          h('div', { class: `met-icon ${m.color}`, html: svg(m.icon) })
-        ),
-        h('div', { class: 'met-label' }, m.label),
-        h('div', { class: 'met-val' }, String(m.val))
-      )
+    const metric = h('div', { class: `metric mobile-summary-${m.place}`,
+      style: m.color === 'r' && outStock.length > 0 ? { cursor:'pointer' } : {},
+      onclick: m.color === 'r' && outStock.length > 0
+        ? () => { invTab = 'sin_stock'; renderInvTable(); }
+        : m.color === 'a' && lowStock.length > 0
+        ? () => { invTab = 'bajo'; renderInvTable(); }
+        : null
+    },
+      h('div', { class: 'met-top' },
+        h('div', { class: `met-icon ${m.color}`, html: svg(m.icon) })
+      ),
+      h('div', { class: 'met-label' }, m.label),
+      h('div', { class: 'met-val' }, String(m.val))
     );
+    if (m.place === 'bar') {
+      metric.style.setProperty('--mobile-bar-size', `${100 * m.val / Math.max(1, prods.length)}%`);
+    }
+    metWrap.appendChild(metric);
   });
   el.appendChild(metWrap);
 
@@ -325,7 +327,7 @@ function renderInventario(el) {
   );
 
   el.appendChild(
-    h('div', { id: 'inv-product-filters', class: 'flex', style: { marginBottom: '14px', gap: '8px', flexWrap: 'wrap' } },
+    h('div', { id: 'inv-product-filters', class: 'flex mobile-module-filters', style: { marginBottom: '14px', gap: '8px', flexWrap: 'wrap' } },
       h('div', { class: 'inp-ic', style: { flex: 1, minWidth: '200px' } },
         h('div', { class: 'ic', html: svg('search') }),
         h('input', {
@@ -412,7 +414,7 @@ function renderInvTable() {
 
   if (!prods.length) {
     wrap.appendChild(h('div', { class: 'empty' },
-      h('div', { html: svg('box'), style: { color: 'var(--muted2)' } }),
+      h('div', { html: svg('box'), 'aria-hidden': 'true', style: { color: 'var(--muted2)' } }),
       h('p', null, invSearch ? 'Sin resultados' : 'Sin productos en esta vista'),
       h('span', null, invSearch ? 'Prueba otro término' : '')
     ));
@@ -459,31 +461,31 @@ function renderInvTable() {
          </div>`
       : `<span style="font-size:11px;color:var(--muted2)">—</span>`;
     const focused = invFocusProductId && Number(p.id) === Number(invFocusProductId);
-    return `<tr data-idx="${idx}"${focused ? ' class="inv-row-focus"' : ''}>
-      <td class="tm" style="font-size:11px">${esc(p.code)}</td>
-      <td>
+    return `<tr role="row" data-idx="${idx}"${focused ? ' class="inv-row-focus"' : ''}>
+      <td role="cell" data-label="Código" class="tm" style="font-size:11px">${esc(p.code)}</td>
+      <td role="cell" class="mobile-card-title">
         <div class="tb">${esc(p.name)}</div>
         <div class="ts">${esc(p.brand||'—')}</div>
       </td>
-      <td>
+      <td role="cell" data-label="Modelo">
         ${p.model ? `<span class="badge n" style="background:var(--blue-bg,#eff6ff);color:var(--blue)">${esc(p.model)}</span>` : '<span style="color:var(--muted2);font-size:11px">—</span>'}
       </td>
-      <td>
+      <td role="cell" data-label="Categoría">
         <span class="badge n">${esc(p.category||'—')}</span>${condBadge}
       </td>
-      <td>
+      <td role="cell" data-label="Stock">
         <div style="font-weight:700;font-size:14px;color:${stockColor}">${stock}</div>
         <div style="font-size:10px;color:var(--muted2)">${esc(p.unit||'und')}</div>
       </td>
-      <td style="color:var(--muted);font-size:12px">${stockMin}</td>
-      <td>
+      <td role="cell" data-label="Mín" style="color:var(--muted);font-size:12px">${stockMin}</td>
+      <td role="cell" data-label="Precio">
         <div style="font-weight:700;font-size:13px">${fmt(p.price)}</div>
         <div style="font-size:10px;color:var(--muted2)">${margin}% margen</div>
       </td>
-      <td style="font-size:12px;color:var(--muted)">${fmt(p.wholesale)}</td>
-      <td style="font-size:12px;color:var(--muted)">${fmt(cost)}</td>
-      <td>${changeCell}</td>
-      <td>
+      <td role="cell" data-label="Mayorista" style="font-size:12px;color:var(--muted)">${fmt(p.wholesale)}</td>
+      <td role="cell" data-label="Costo" style="font-size:12px;color:var(--muted)">${fmt(cost)}</td>
+      <td role="cell" data-label="Último cambio">${changeCell}</td>
+      <td role="cell" class="mobile-card-actions">
         <div class="flex" style="gap:3px">
           <button class="btn btn-ghost btn-sm" title="Ver kardex" data-action="kardex" data-idx="${idx}">${svg('chart')}</button>
           <button class="btn btn-ghost btn-sm" title="Editar producto" data-action="edit" data-idx="${idx}">${svg('edit')}</button>
@@ -522,7 +524,7 @@ function renderInvTable() {
     <button class="btn btn-out btn-sm" data-page-action="last" ${invPage >= totalPages ? 'disabled' : ''} title="Última página">»</button>`;
 
   const card = document.createElement('div');
-  card.className = 'card';
+  card.className = 'card mobile-list-card';
   card.innerHTML = `
     <div class="inv-pager" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid var(--line)">
       <div style="font-size:12px;color:var(--muted)">
@@ -534,13 +536,13 @@ function renderInvTable() {
       </div>
     </div>
     <div class="tw">
-      <table class="velo-sticky-actions">
-        <thead><tr>
-          <th>Código</th><th>Producto</th><th>Modelo</th><th>Categoría</th>
-          <th>Stock</th><th>Mín</th><th>Precio</th>
-          <th>Mayorista</th><th>Costo</th><th>Último cambio</th><th></th>
+      <table class="velo-sticky-actions mobile-card-table" role="table">
+        <thead role="rowgroup"><tr role="row">
+          <th scope="col">Código</th><th scope="col">Producto</th><th scope="col">Modelo</th><th scope="col">Categoría</th>
+          <th scope="col">Stock</th><th scope="col">Mín</th><th scope="col">Precio</th>
+          <th scope="col">Mayorista</th><th scope="col">Costo</th><th scope="col">Último cambio</th><th scope="col" aria-label="Acciones"></th>
         </tr></thead>
-        <tbody>${pageRows}</tbody>
+        <tbody role="rowgroup">${pageRows}</tbody>
       </table>
     </div>
     <div class="inv-pager" style="display:flex;align-items:center;justify-content:${showAll ? 'flex-end' : 'space-between'};gap:10px;flex-wrap:wrap;padding:12px 16px;border-top:1px solid var(--line)">
@@ -663,7 +665,7 @@ function openInvConsignmentCreate() {
     <div class="g2"><div class="fg"><label class="lbl">Cantidad recibida *</label><input class="inp" id="con-qty" type="number" min="1" step="1" value="1"></div>
       <div class="fg"><label class="lbl">Ubicación física</label><input class="inp" id="con-location" maxlength="100"></div></div>
     <div class="fg"><label class="lbl">Notas de recepción</label><textarea class="inp" id="con-notes" maxlength="500" rows="2"></textarea></div>
-    <div class="modal-foot"><button class="btn btn-out" id="con-cancel">Cancelar</button><button class="btn btn-dark" id="con-save">Registrar recepción</button></div>`);
+    <div class="modal-foot"><button class="btn btn-out" id="con-cancel">Cancelar</button><button class="btn btn-dark" id="con-save">Registrar recepción</button></div>`, 'inv-mobile-modal');
   document.getElementById('con-cancel')?.addEventListener('click', closeModal);
   document.getElementById('con-save')?.addEventListener('click', async e => {
     const value = id => document.getElementById(id)?.value?.trim() || '';
@@ -684,7 +686,7 @@ function openInvConsignmentMove(row, kind) {
     <div class="modal-sub">${invEsc(row.item_name)} · ${invEsc(row.owner_name)} · ${Number(row.on_hand)} disponibles</div>
     <div class="fg"><label class="lbl">Cantidad *</label><input class="inp" id="con-move-qty" type="number" min="1" step="1" ${returning ? `max="${Number(row.on_hand)}"` : ''} value="1"></div>
     <div class="fg"><label class="lbl">Motivo o referencia *</label><textarea class="inp" id="con-move-reason" maxlength="500" rows="2" placeholder="Ej.: devolución acordada con el dueño"></textarea></div>
-    <div class="modal-foot"><button class="btn btn-out" id="con-move-cancel">Cancelar</button><button class="btn btn-dark" id="con-move-save">Confirmar ${returning ? 'devolución' : 'recepción'}</button></div>`);
+    <div class="modal-foot"><button class="btn btn-out" id="con-move-cancel">Cancelar</button><button class="btn btn-dark" id="con-move-save">Confirmar ${returning ? 'devolución' : 'recepción'}</button></div>`, 'inv-mobile-modal');
   document.getElementById('con-move-cancel')?.addEventListener('click', closeModal);
   document.getElementById('con-move-save')?.addEventListener('click', async e => {
     e.currentTarget.disabled = true;
@@ -707,7 +709,7 @@ async function openInvConsignmentHistory(row) {
     <div style="display:grid;gap:8px;max-height:55vh;overflow:auto">${result.data.map(item => `<div class="card" style="padding:12px">
       <strong>${item.kind === 'entrada' ? 'Recibidas' : 'Devueltas'}: ${Number(item.qty)}</strong>
       <div class="ts">${invEsc(item.created_at)} · ${invEsc(item.reason)}</div></div>`).join('')}</div>
-    <div class="modal-foot"><button class="btn btn-out" id="con-history-close">Cerrar</button></div>`);
+    <div class="modal-foot"><button class="btn btn-out" id="con-history-close">Cerrar</button></div>`, 'inv-mobile-modal');
   document.getElementById('con-history-close')?.addEventListener('click', closeModal);
 }
 
@@ -989,7 +991,7 @@ function openInvCountApplyModal() {
     <div class="fg"><label class="lbl">Motivo del conteo *</label>
       <textarea class="inp" id="inv-count-reason" rows="3" maxlength="500" placeholder="Ej.: Inventario físico de cierre de mes"></textarea></div>
     <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-dark" id="inv-count-final-confirm">Aplicar todo</button></div>`);
+      <button class="btn btn-dark" id="inv-count-final-confirm">Aplicar todo</button></div>`, 'inv-mobile-modal');
   document.getElementById('inv-count-final-confirm')?.addEventListener('click', async e => {
     const button = e.currentTarget;
     if (button.disabled) return;
@@ -1092,7 +1094,7 @@ window.abrirRegistroEquipos = async function (p) {
         toast(`✓ ${res.created} equipo${res.created === 1 ? '' : 's'} registrado${res.created === 1 ? '' : 's'}`, 's');
         await reloadProducts();
         renderInvCurrentView();
-        const refreshed=await fetchUnits();openModal(render(refreshed));
+        const refreshed=await fetchUnits();openModal(render(refreshed), 'inv-mobile-modal');
         wire(refreshed);
       } catch (e) { toast(e.message || 'Error al registrar', 'e'); button.disabled = false; }
     };
@@ -1116,7 +1118,7 @@ window.abrirRegistroEquipos = async function (p) {
         const res = await window.api.productUnits.updateWarranty({ unitId:Number(btn.dataset.warrantyUnit), warrantyUntil:value.trim(), requestUserId:user?.id });
         if (!res?.ok) { toast(res?.error || 'No se pudo actualizar la garantía', 'err'); return; }
         toast('✓ Garantía actualizada', 'ok');
-        const refreshed=await fetchUnits();openModal(render(refreshed)); wire(refreshed);
+        const refreshed=await fetchUnits();openModal(render(refreshed), 'inv-mobile-modal'); wire(refreshed);
       };
     });
     window.api.techDescriptions?.list({requestUserId:user?.id}).then(res=>{
@@ -1127,12 +1129,12 @@ window.abrirRegistroEquipos = async function (p) {
       btn.onclick=()=>{
         const unit=units.find(row=>Number(row.id)===Number(btn.dataset.detailUnit));
         if(!unit)return;
-        openModal(`<div class="modal-title">Datos comerciales del equipo</div><div class="modal-sub">${esc(unit.imei||unit.serial||'#'+unit.id)}</div><div class="g2"><div class="fg"><label class="lbl">Color</label><input class="inp" id="eqd-color" value="${esc(unit.color||'')}"></div><div class="fg"><label class="lbl">Capacidad</label><input class="inp" id="eqd-capacity" value="${esc(unit.capacity||'')}"></div></div><div class="g2"><div class="fg"><label class="lbl">Condición batería (%)</label><input class="inp" id="eqd-health" type="number" min="0" max="100" value="${unit.battery_health??''}"></div><div class="fg"><label class="lbl">Capacidad batería (mAh)</label><input class="inp" id="eqd-mah" type="number" min="0" max="100000" value="${unit.battery_capacity_mah??''}"></div></div><div class="fg"><label class="lbl">Descripción para la factura</label><textarea class="inp" id="eqd-description" rows="3">${esc(unit.sale_description||'')}</textarea></div><div class="fg"><label class="lbl">Notas internas</label><textarea class="inp" id="eqd-notes" rows="2">${esc(unit.notes||'')}</textarea></div><div class="modal-foot"><button class="btn btn-out" onclick="abrirRegistroEquipos(DB.products.find(p=>Number(p.id)===${Number(p.id)}))">Atrás</button><button class="btn btn-dark" id="eqd-save">Guardar</button></div>`);
+        openModal(`<div class="modal-title">Datos comerciales del equipo</div><div class="modal-sub">${esc(unit.imei||unit.serial||'#'+unit.id)}</div><div class="g2"><div class="fg"><label class="lbl">Color</label><input class="inp" id="eqd-color" value="${esc(unit.color||'')}"></div><div class="fg"><label class="lbl">Capacidad</label><input class="inp" id="eqd-capacity" value="${esc(unit.capacity||'')}"></div></div><div class="g2"><div class="fg"><label class="lbl">Condición batería (%)</label><input class="inp" id="eqd-health" type="number" min="0" max="100" value="${unit.battery_health??''}"></div><div class="fg"><label class="lbl">Capacidad batería (mAh)</label><input class="inp" id="eqd-mah" type="number" min="0" max="100000" value="${unit.battery_capacity_mah??''}"></div></div><div class="fg"><label class="lbl">Descripción para la factura</label><textarea class="inp" id="eqd-description" rows="3">${esc(unit.sale_description||'')}</textarea></div><div class="fg"><label class="lbl">Notas internas</label><textarea class="inp" id="eqd-notes" rows="2">${esc(unit.notes||'')}</textarea></div><div class="modal-foot"><button class="btn btn-out" onclick="abrirRegistroEquipos(DB.products.find(p=>Number(p.id)===${Number(p.id)}))">Atrás</button><button class="btn btn-dark" id="eqd-save">Guardar</button></div>`, 'inv-mobile-modal');
         document.getElementById('eqd-save').onclick=async()=>{const saved=await window.api.productUnits.updateDetails({unitId:unit.id,requestUserId:user?.id,data:{color:document.getElementById('eqd-color').value,capacity:document.getElementById('eqd-capacity').value,battery_health:document.getElementById('eqd-health').value,battery_capacity_mah:document.getElementById('eqd-mah').value,sale_description:document.getElementById('eqd-description').value,notes:document.getElementById('eqd-notes').value}});if(!saved?.ok)return toast(saved?.error||'No se pudo guardar','err');toast('✓ Equipo actualizado','ok');abrirRegistroEquipos(p);};
       };
     });
   };
-  const initialUnits=await fetchUnits();openModal(render(initialUnits));
+  const initialUnits=await fetchUnits();openModal(render(initialUnits), 'inv-mobile-modal');
   wire(initialUnits);
 };
 
@@ -1141,7 +1143,7 @@ window.openTechDescriptionTemplates = async function () {
   const res=await window.api.techDescriptions.list({requestUserId:user?.id});
   if(!res?.ok)return toast(res?.error||'No se pudieron cargar las descripciones','err');
   const rows=res.data||[];
-  openModal(`<div class="modal-title">Descripciones guardadas</div><div class="modal-sub">Úsalas en equipos usados. La descripción elegida se imprime en la factura cuando se venda esa unidad.</div><div style="display:grid;gap:7px;margin:14px 0;max-height:240px;overflow:auto">${rows.map(row=>`<div class="card" style="padding:10px;display:flex;justify-content:space-between;gap:12px"><div><div class="tb">${esc(row.name)}</div><div class="ts">${esc(row.description)}</div></div><button class="btn btn-ghost btn-sm" data-desc-delete="${row.id}" style="color:var(--red)">${svg('trash')}</button></div>`).join('')||'<div class="ts">Todavía no hay descripciones guardadas.</div>'}</div><div class="fg"><label class="lbl">Nombre corto *</label><input class="inp" id="desc-name" placeholder="IPHONE USADO GRADO A"></div><div class="fg"><label class="lbl">Descripción que verá el cliente *</label><textarea class="inp" id="desc-text" rows="3" placeholder="EQUIPO USADO PROBADO, DESBLOQUEADO Y EN BUEN ESTADO..."></textarea></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button><button class="btn btn-dark" id="desc-save">Guardar descripción</button></div>`);
+  openModal(`<div class="modal-title">Descripciones guardadas</div><div class="modal-sub">Úsalas en equipos usados. La descripción elegida se imprime en la factura cuando se venda esa unidad.</div><div style="display:grid;gap:7px;margin:14px 0;max-height:240px;overflow:auto">${rows.map(row=>`<div class="card" style="padding:10px;display:flex;justify-content:space-between;gap:12px"><div><div class="tb">${esc(row.name)}</div><div class="ts">${esc(row.description)}</div></div><button class="btn btn-ghost btn-sm" data-desc-delete="${row.id}" style="color:var(--red)">${svg('trash')}</button></div>`).join('')||'<div class="ts">Todavía no hay descripciones guardadas.</div>'}</div><div class="fg"><label class="lbl">Nombre corto *</label><input class="inp" id="desc-name" placeholder="IPHONE USADO GRADO A"></div><div class="fg"><label class="lbl">Descripción que verá el cliente *</label><textarea class="inp" id="desc-text" rows="3" placeholder="EQUIPO USADO PROBADO, DESBLOQUEADO Y EN BUEN ESTADO..."></textarea></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button><button class="btn btn-dark" id="desc-save">Guardar descripción</button></div>`, 'inv-mobile-modal');
   document.getElementById('desc-save').onclick=async()=>{const saved=await window.api.techDescriptions.save({requestUserId:user?.id,data:{name:document.getElementById('desc-name').value.trim(),description:document.getElementById('desc-text').value.trim()}});if(!saved?.ok)return toast(saved?.error||'No se pudo guardar','err');toast('✓ Descripción guardada','ok');openTechDescriptionTemplates();};
   document.querySelectorAll('[data-desc-delete]').forEach(button=>button.onclick=async()=>{const removed=await window.api.techDescriptions.delete({requestUserId:user?.id,id:Number(button.dataset.descDelete)});if(!removed?.ok)return toast(removed?.error||'No se pudo eliminar','err');openTechDescriptionTemplates();});
 };
@@ -1160,7 +1162,7 @@ window.openBuscarImeiModal = function () {
     </div>
     <div id="imei-search-result"></div>
     <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
-  `);
+  `, 'inv-mobile-modal');
 
   const run = async () => {
     const key = document.getElementById('imei-search-value')?.value?.trim();
@@ -1689,7 +1691,7 @@ async function openKardexModal(p) {
         ${svg('pkg')} Ajustar stock
       </button>`}
     </div>
-  `, 'modal-xxl mtw');
+  `, 'modal-xxl mtw inv-mobile-modal');
 }
 
 // ══════════════════════════════════════════════
@@ -1697,7 +1699,7 @@ async function openKardexModal(p) {
 // ══════════════════════════════════════════════
 function openEntradaMercanciaModal(accessoriesOnly = false) {
   if (window._vertical?.serialized && accessoriesOnly !== true) {
-    openModal(`<div class="modal-title">Entrada de inventario</div><div class="modal-sub">Elige qué vas a recibir.</div><div class="g2"><button class="btn btn-dark" onclick="openDeviceEntry()">Dispositivo con IMEI o serial</button><button class="btn btn-out" onclick="openEntradaMercanciaModal(true)">Accesorio o insumo por cantidad</button></div>`);return;
+    openModal(`<div class="modal-title">Entrada de inventario</div><div class="modal-sub">Elige qué vas a recibir.</div><div class="g2"><button class="btn btn-dark" onclick="openDeviceEntry()">Dispositivo con IMEI o serial</button><button class="btn btn-out" onclick="openEntradaMercanciaModal(true)">Accesorio o insumo por cantidad</button></div>`, 'inv-mobile-modal');return;
   }
   const prodOpts = DB.products
     .filter(p => !p.serialized)
@@ -1756,7 +1758,7 @@ function openEntradaMercanciaModal(accessoriesOnly = false) {
         ${svg('download')} Registrar Entrada
       </button>
     </div>
-  `, 'modal-lg');
+  `, 'modal-lg inv-mobile-modal');
 }
 
 function emUpdateInfo() {
@@ -1943,7 +1945,7 @@ function renderDeviceEntry() {
   const catalogue=s.mode==='new'?`<details style="margin-top:16px"><summary>Opciones del catálogo</summary><div class="g2" style="margin-top:12px">${field('code','Código (opcional)')}${field('barcode','Código de barras (opcional)')}<div class="fg"><label class="lbl">Categoría</label><select class="inp" id="de-category" onchange="deviceEntryCapture()"><option value="">Sin categoría</option>${CATS.map(c=>`<option value="${esc(c)}" ${s.category===c?'selected':''}>${esc(c)}</option>`).join('')}</select></div></div></details>`:'';
   const pricing=s.mode==='new'?`<details style="margin-top:16px"><summary>Más opciones de precio</summary><div class="g2" style="margin-top:12px">${field('wholesale','Precio mayorista (RD$)','number','min="0" step="0.01"')}<div class="fg"><label class="lbl"><input type="checkbox" id="de-taxable" ${s.taxable?'checked':''} onchange="deviceEntryCapture()"> Incluye ITBIS</label>${field('taxPercent','ITBIS (%)','number','min="0" max="100" step="0.01"')}</div></div></details>`:'';
   const second=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><strong>${esc(s.mode==='existing'?product?.name || '':s.brand+' · '+s.model)}</strong><button type="button" class="btn btn-ghost" onclick="deviceEntryBack()">Cambiar modelo</button></div>${field('imei','IMEI o serial *','text','autocomplete="off" data-uppercase="off"')}<section style="padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--surface2);margin:16px 0"><h3 style="font-size:14px;margin:0 0 14px">Costo y ganancia</h3><div class="g2">${field('cost','Costo de esta unidad (RD$) *','number','min="0" step="0.01"')}<div class="fg"><label class="lbl" for="de-price">Precio de venta final (RD$) *</label><input class="inp" id="de-price" type="number" min="0.01" step="0.01" value="${esc(s.mode==='existing'?String(product?.price || 0):s.price)}" ${s.mode==='existing'?'readonly':''} oninput="deviceEntryCapture()"><small class="ts">${s.mode==='existing'?'Precio actual del modelo. Se cambia desde Editar.':'Precio del modelo nuevo.'}</small></div></div><div class="g2" style="border-top:1px solid var(--line);padding-top:12px"><div><div class="ts">Ganancia estimada</div><strong id="de-gain" style="font-size:20px"></strong></div><div><div class="ts">Margen sobre venta</div><strong id="de-margin" style="font-size:20px"></strong></div></div><div class="ts" style="margin-top:10px">Diferencia entre precio final y costo, antes de gastos.</div></section><details><summary style="cursor:pointer">Detalles del dispositivo</summary><div class="g2" style="margin-top:12px"><div class="fg"><label class="lbl" for="de-condition">Condición</label><select class="inp" id="de-condition" onchange="deviceEntryCapture()">${['nuevo','usado','reacondicionado','consignacion','especial'].map(v=>`<option value="${v}" ${s.condition===v?'selected':''}>${v[0].toUpperCase()+v.slice(1)}</option>`).join('')}</select></div>${field('capacity','Capacidad')}${field('color','Color')}${field('health','Condición de batería (%)','number','min="0" max="100"')}${field('mah','Capacidad de batería (mAh)','number','min="1" max="100000"')}</div><div class="fg"><label class="lbl" for="de-description">Descripción para factura</label><input class="inp" id="de-description" value="${esc(s.description)}" list="de-descriptions" oninput="deviceEntryCapture()"><datalist id="de-descriptions"></datalist></div></details>`;
-  openModal(`<div class="modal-title">Ingresar dispositivo</div><div class="modal-sub">${s.step===1?'Elige el modelo; luego registra su unidad.':'Registra el identificador y el costo de esta unidad.'}</div><div style="display:flex;gap:24px;margin:16px 0;padding-bottom:12px;border-bottom:1px solid var(--line)"><span style="font-weight:${s.step===1?700:400}">1. Modelo</span><span style="font-weight:${s.step===2?700:400}">2. Unidad y ganancia</span></div>${s.step===1?first+catalogue:second+pricing}<div class="modal-foot"><button class="btn btn-out" onclick="${s.step===1&&s.mode==='existing'?'closeModal()':'deviceEntryBack()'}">${s.step===1&&s.mode==='existing'?'Cancelar':'Atrás'}</button><button class="btn btn-dark" id="de-save" onclick="deviceEntryNext()">${s.step===1?'Continuar':'Registrar unidad'}</button></div>`,'modal-lg', { replace:true });
+  openModal(`<div class="modal-title">Ingresar dispositivo</div><div class="modal-sub">${s.step===1?'Elige el modelo; luego registra su unidad.':'Registra el identificador y el costo de esta unidad.'}</div><div style="display:flex;gap:24px;margin:16px 0;padding-bottom:12px;border-bottom:1px solid var(--line)"><span style="font-weight:${s.step===1?700:400}">1. Modelo</span><span style="font-weight:${s.step===2?700:400}">2. Unidad y ganancia</span></div>${s.step===1?first+catalogue:second+pricing}<div class="modal-foot"><button class="btn btn-out" onclick="${s.step===1&&s.mode==='existing'?'closeModal()':'deviceEntryBack()'}">${s.step===1&&s.mode==='existing'?'Cancelar':'Atrás'}</button><button class="btn btn-dark" id="de-save" onclick="deviceEntryNext()">${s.step===1?'Continuar':'Registrar unidad'}</button></div>`,'modal-lg inv-mobile-modal', { replace:true });
   deviceEntrySuggestions();deviceEntryMargin();document.getElementById(s.step===2?'de-imei':s.mode==='existing'?'de-search':'de-brand')?.focus();
   if(s.step===2&&window.api?.techDescriptions?.list) window.api.techDescriptions.list({requestUserId:user?.id}).then(result=>{const dl=document.getElementById('de-descriptions');if(dl&&deviceEntryState===s)dl.innerHTML=(result?.data || []).map(row=>`<option value="${esc(row.description)}">${esc(row.name)}</option>`).join('');}).catch(()=>{});
 }
@@ -2212,7 +2214,7 @@ function openProductoModal(p = null, options = {}) {
       </button>`}
 
     </div>
-  `, 'modal-lg');
+  `, 'modal-lg inv-mobile-modal');
 
     setTimeout(() => { pfToggleTax(); pfCalcMargen(); }, 0);
   }
@@ -2504,7 +2506,7 @@ function openAjusteModal(p) {
         ${svg('check')} Aplicar Ajuste
       </button>
     </div>
-  `);
+  `, 'inv-mobile-modal');
   adjType = 'add';
 }
 
@@ -2623,7 +2625,7 @@ function openMoverCategoriaModal() {
         ✓ Aplicar cambio
       </button>
     </div>
-  `, 'modal-xl');
+  `, 'modal-xl inv-mobile-modal');
 
   // Renderizar filas después de que el DOM exista
   setTimeout(() => moverFiltrarTabla(), 10);

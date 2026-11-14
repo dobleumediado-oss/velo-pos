@@ -217,19 +217,20 @@ function _pvRenderWorkspace() {
   const pending = _preventaRows.filter(row => row.status === 'pending');
   const paid = _preventaRows.filter(row => row.status === 'paid');
   const historyCount = _preventaRows.filter(row => ['dispatched','cancelled','expired'].includes(row.status)).length;
-  _pvSetPendingCount(pending.length + paid.length);
+  const activeCount = pending.length + paid.length;
+  _pvSetPendingCount(activeCount);
 
   const metrics = document.getElementById('pv-metrics');
   if (metrics) metrics.innerHTML = `
-    <button type="button" onclick="preventaSetView('cashier')"><span>Esperando cobro</span><strong>${pending.length}</strong><small>${fmt(pending.reduce((sum,row)=>sum+Number(row.total||0),0))}</small></button>
-    <button type="button" onclick="preventaSetView('dispatch')"><span>Listas para entregar</span><strong>${paid.length}</strong><small>${paid.length ? 'Requieren confirmación' : 'Sin entregas pendientes'}</small></button>
-    <div><span>Flujo activo</span><strong>${pending.length + paid.length}</strong><small>Órdenes en proceso</small></div>`;
+    <button class="mobile-summary-bar" type="button" onclick="preventaSetView('cashier')" style="--mobile-bar-size:${pending.length / (activeCount || 1) * 100}%"><span>Esperando cobro</span><strong>${pending.length}</strong><small>${fmt(pending.reduce((sum,row)=>sum+Number(row.total||0),0))}</small></button>
+    <button class="mobile-summary-bar" type="button" onclick="preventaSetView('dispatch')" style="--mobile-bar-size:${paid.length / (activeCount || 1) * 100}%"><span>Listas para entregar</span><strong>${paid.length}</strong><small>${paid.length ? 'Requieren confirmación' : 'Sin entregas pendientes'}</small></button>
+    <div class="mobile-summary-featured"><span>Flujo activo</span><strong>${activeCount}</strong><small>Órdenes en proceso</small></div>`;
 
   const tabs = document.getElementById('pv-tabs');
   if (tabs) {
     const defs = [
       ['cashier', 'Caja', pending.length], ['dispatch', 'Entrega', paid.length],
-      ['all', 'Todo activo', pending.length + paid.length], ['history', 'Historial', historyCount],
+      ['all', 'Todo activo', activeCount], ['history', 'Historial', historyCount],
     ];
     tabs.innerHTML = defs.map(([key,label,count]) => `
       <button class="pv-view-tab ${_preventaView === key ? 'on' : ''}" onclick="preventaSetView('${key}')">
@@ -269,7 +270,7 @@ async function renderPreventa(el) {
         </div>
         <button class="btn btn-green" onclick="routeTo('pos')">${svg('plus')} Preparar orden</button>
       </div>
-      <div class="pv-metrics" id="pv-metrics"></div>
+      <div class="pv-metrics mobile-summary-metrics" id="pv-metrics"></div>
       <div class="pv-workbar">
         <div class="pv-view-tabs" id="pv-tabs"></div>
         <div class="inp-ic pv-search"><div class="ic">${svg('search')}</div>
@@ -345,8 +346,15 @@ async function preventaVerDetalle(id) {
       ${order.salesperson_name ? `<div class="tr"><span>Vendedor</span><span>${_pvEsc(order.salesperson_name)}</span></div>` : ''}
       ${order.notes ? `<div class="tr"><span>Nota</span><span>${_pvEsc(order.notes)}</span></div>` : ''}
     </div>
-    <div class="tw"><table><thead><tr><th>Código</th><th>Artículo</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">Importe</th></tr></thead>
-      <tbody>${(order.items || []).map(item => `<tr><td>${_pvEsc(item.product_code || '—')}</td><td>${_pvEsc(item.product_name)}</td><td class="num">${item.qty}</td><td class="num">${fmt(item.unit_price)}</td><td class="num">${fmt(Number(item.unit_price) * Number(item.qty))}</td></tr>`).join('')}</tbody>
+    <div class="tw mobile-list-card"><table class="mobile-card-table" role="table">
+      <thead role="rowgroup"><tr role="row"><th scope="col">Código</th><th scope="col">Artículo</th><th class="num" scope="col">Cant.</th><th class="num" scope="col">Precio</th><th class="num" scope="col">Importe</th></tr></thead>
+      <tbody role="rowgroup">${(order.items || []).map(item => `<tr role="row">
+        <td role="cell" data-label="Código">${_pvEsc(item.product_code || '—')}</td>
+        <td role="cell" class="mobile-card-title">${_pvEsc(item.product_name)}</td>
+        <td role="cell" class="num" data-label="Cant.">${item.qty}</td>
+        <td role="cell" class="num" data-label="Precio">${fmt(item.unit_price)}</td>
+        <td role="cell" class="num" data-label="Importe">${fmt(Number(item.unit_price) * Number(item.qty))}</td>
+      </tr>`).join('')}</tbody>
     </table></div>
     <div class="card" style="background:var(--surface2);margin-top:12px">
       ${Number(order.discount_amt) > 0 ? `<div class="tr"><span>Descuento</span><span>−${fmt(order.discount_amt)}</span></div>` : ''}
@@ -355,7 +363,7 @@ async function preventaVerDetalle(id) {
       <div class="tr grand"><span>TOTAL</span><span>${fmt(order.total)}</span></div>
     </div>
     <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
-  `, 'modal-lg');
+  `, 'modal-lg preventa-mobile-modal');
 }
 
 async function preventaCobrar(id) {

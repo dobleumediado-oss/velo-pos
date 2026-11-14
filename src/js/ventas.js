@@ -496,12 +496,12 @@ function renderVentas(el) {
     delete window._ventasTabInicial;
   }
 
-  el.appendChild(h('div', { class: 'sec-hdr' },
+  el.appendChild(h('div', { class: 'sec-hdr mobile-module-heading' },
     h('div', null,
       h('div', { class: 'sec-title' }, 'Historial de Ventas'),
       h('div', { class: 'sec-sub' }, 'Todas las transacciones registradas')
     ),
-    h('div', { class: 'flex', style: { gap: '8px' } },
+    h('div', { class: 'flex mobile-module-actions', style: { gap: '8px' } },
       h('button', {
         class: 'btn btn-out btn-sm',
         onclick: () => guardarDocumentoExcel(exportVentasPDF, 'Historial-de-Ventas', 'Historial de ventas'),
@@ -533,7 +533,7 @@ function renderVentas(el) {
 
   // ── Filtros ───────────────────────────────────
   el.appendChild(
-    h('div', { class: 'flex', style: { marginBottom: '14px', gap: '8px', flexWrap: 'wrap' } },
+    h('div', { class: 'flex mobile-module-filters', style: { marginBottom: '14px', gap: '8px', flexWrap: 'wrap' } },
       h('div', { class: 'inp-ic', style: { flex: 1, minWidth: '200px' } },
         h('div', { class: 'ic', html: svg('search') }),
         h('input', {
@@ -579,7 +579,7 @@ function renderVentas(el) {
       })(),
       // Rango libre: ambos extremos incluidos y cualquiera puede quedar vacío.
       ...(ventasRange === 'custom' ? [
-        h('div', { class: 'flex', style: { gap: '6px', alignItems: 'center' } },
+        h('div', { class: 'flex ventas-mobile-dates', style: { gap: '6px', alignItems: 'center' } },
           h('span', { class: 'ts' }, 'Desde'),
           h('input', {
             class: 'inp', id: 'ventas-date-from', type: 'date', style: { width: '148px' },
@@ -705,6 +705,29 @@ function ventasHasAdjustedCopy(sale) {
     );
 }
 
+function ventasSummaryMetrics(items) {
+  const grid = h('div', { class: 'metrics mobile-summary-metrics',
+    style: { gridTemplateColumns: 'repeat(4,1fr)', marginBottom: '16px' } });
+  // Compara los indicadores de las barras entre sí, con sus valores visibles.
+  const scale = Math.max(...items
+    .filter(item => item.place === 'bar')
+    .map(item => Math.abs(item.value))) || 1;
+  items.forEach(item => {
+    const metric = h('div', { class: `metric mobile-summary-${item.place}` },
+      h('div', { class: 'met-top' },
+        h('div', { class: `met-icon ${item.color}`, html: svg(item.icon) })
+      ),
+      h('div', { class: 'met-label' }, item.label),
+      h('div', { class: 'met-val' }, item.money ? fmt(item.value) : String(item.value))
+    );
+    if (item.place === 'bar') {
+      metric.style.setProperty('--mobile-bar-size', `${Math.abs(item.value) / scale * 100}%`);
+    }
+    grid.appendChild(metric);
+  });
+  return grid;
+}
+
 function renderVentasTable() {
   const resWrap   = document.getElementById('ventas-resumen');
   const tableWrap = document.getElementById('ventas-table-wrap');
@@ -779,57 +802,47 @@ function renderVentasTable() {
     resWrap.innerHTML = '';
     const total = sales.reduce((a, s) => a + ventasEffectiveTotal(s), 0);
 
-    const resGrid = h('div', { class: 'metrics',
-      style: { gridTemplateColumns: 'repeat(4,1fr)', marginBottom: '16px' } });
-
     const metItems = esCotizTab ? [
-      { icon: 'list',   color: 'p', label: 'Cotizaciones',   val: sales.length },
-      { icon: 'dollar', color: 'g', label: 'Valor Total',    val: fmt(total) },
-      { icon: 'clock',  color: 'a', label: 'Pendientes hoy', val: sales.filter(s => (s.sale_date||'').slice(0,10) === today()).length },
-      { icon: 'check',  color: 'b', label: 'Convertibles',   val: sales.filter(s => s.status !== 'cancelled').length },
+      { place: 'total', icon: 'list', color: 'p', label: 'Cotizaciones', value: sales.length },
+      { place: 'featured', icon: 'dollar', color: 'g', label: 'Valor Total', value: total, money: true },
+      { place: 'bar', icon: 'clock', color: 'a', label: 'Pendientes hoy',
+        value: sales.filter(s => (s.sale_date||'').slice(0,10) === today()).length },
+      { place: 'bar', icon: 'check', color: 'b', label: 'Convertibles',
+        value: sales.filter(s => s.status !== 'cancelled').length },
     ] : [
-      { icon: 'list',  color: 'b', label: 'Documentos', val: ventasTotal },
-      { icon: 'dollar',color: 'g', label: 'Total neto de esta página', val: fmt(total) },
-      { icon: 'cash',  color: 'g', label: 'Efectivo neto', val: fmt(sales.filter(s => (s.payment_method||s.pay) === 'efectivo').reduce((a,s)=>a+ventasEffectiveTotal(s),0)) },
-      { icon: 'card',  color: 'p', label: 'Tarj/Trans neto', val: fmt(sales.filter(s => ['tarjeta','transferencia'].includes(s.payment_method||s.pay||'')).reduce((a,s)=>a+ventasEffectiveTotal(s),0)) },
+      { place: 'total', icon: 'list', color: 'b', label: 'Documentos', value: ventasTotal },
+      { place: 'featured', icon: 'dollar', color: 'g', label: 'Total neto de esta página', value: total, money: true },
+      { place: 'bar', icon: 'cash', color: 'g', label: 'Efectivo neto', money: true,
+        value: sales.filter(s => (s.payment_method||s.pay) === 'efectivo').reduce((a,s)=>a+ventasEffectiveTotal(s),0) },
+      { place: 'bar', icon: 'card', color: 'p', label: 'Tarj/Trans neto', money: true,
+        value: sales.filter(s => ['tarjeta','transferencia'].includes(s.payment_method||s.pay||'')).reduce((a,s)=>a+ventasEffectiveTotal(s),0) },
     ];
 
-    metItems.forEach(m => {
-      resGrid.appendChild(
-        h('div', { class: 'metric' },
-          h('div', { class: 'met-top' },
-            h('div', { class: `met-icon ${m.color}`, html: svg(m.icon) })
-          ),
-          h('div', { class: 'met-label' }, m.label),
-          h('div', { class: 'met-val' }, String(m.val))
-        )
-      );
-    });
-    resWrap.appendChild(resGrid);
+    resWrap.appendChild(ventasSummaryMetrics(metItems));
   }
 
   tableWrap.innerHTML = '';
 
   if (!sales.length) {
     tableWrap.appendChild(h('div', { class: 'empty' },
-      h('div', { html: svg('list'), style: { color: 'var(--muted2)' } }),
+      h('div', { 'aria-hidden': 'true', html: svg('list'), style: { color: 'var(--muted2)' } }),
       h('p', null, esCotizTab ? 'Sin cotizaciones en este período' : 'Sin ventas en este período')
     ));
     return;
   }
 
-  const card  = h('div', { class: 'card' });
+  const card  = h('div', { class: 'card mobile-list-card' });
   const tw    = h('div', { class: 'tw' });
-  const tbl   = h('table', null,
-    h('thead', null,
-      h('tr', null,
+  const tbl   = h('table', { class: 'mobile-card-table', role: 'table' },
+    h('thead', { role: 'rowgroup' },
+      h('tr', { role: 'row' },
         ...['Documento','Fecha','Cliente','Método','ITBIS','Total','Estado',''].map(t =>
-          h('th', null, t)
+          h('th', { scope: 'col', 'aria-label': t ? null : 'Acciones' }, t)
         )
       )
     )
   );
-  const tbody = h('tbody', null);
+  const tbody = h('tbody', { role: 'rowgroup' });
 
   // Mantener preparada la agrupación de cada factura con sus respaldos de
   // aumento. La vista normal solo recibe la raíz; auditoría conserva la familia.
@@ -896,8 +909,8 @@ function renderVentasTable() {
       : null;
 
     tbody.appendChild(
-      h('tr', { class: isSupplement ? 'sale-supplement-row' : adjusted ? 'sale-operation-row' : '' },
-        h('td', null,
+      h('tr', { role: 'row', class: isSupplement ? 'sale-supplement-row' : adjusted ? 'sale-operation-row' : '' },
+        h('td', { role: 'cell', class: 'mobile-card-title' },
           h('span', { class: 'tm', style: { fontSize: '12px' } }, ventasHistoryReference(s)),
           h('div', { class: 'sale-document-identity' },
             s.import_source
@@ -920,11 +933,11 @@ function renderVentasTable() {
             : null,
           ecfBadge
         ),
-        h('td', null,
+        h('td', { role: 'cell', 'data-label': 'Fecha' },
           h('div', { style: { fontSize: '12px', fontWeight: 500 } }, fdate(fecha)),
           h('div', { class: 'ts' }, hora)
         ),
-        h('td', null,
+        h('td', { role: 'cell', 'data-label': 'Cliente' },
           h('div', { class: 'tb' }, cliName),
           h('div', { class: 'ts' }, s.cajero || ''),
           s.salesperson_name
@@ -954,7 +967,7 @@ function renderVentasTable() {
             return wrap;
           })()
         ),
-        h('td', null,
+        h('td', { role: 'cell', 'data-label': 'Método' },
           h('span', { class: `badge ${
             method === 'efectivo'      ? 'g' :
             method === 'tarjeta'       ? 'b' :
@@ -966,10 +979,10 @@ function renderVentasTable() {
                 `Pagado ${fmt(s.payment_amount || 0)} · Pendiente ${fmt(s.balance_after_payment ?? operationTotal)}`)
             : null
         ),
-        h('td', { style: { fontSize: '12px', color: 'var(--muted)' } },
+        h('td', { role: 'cell', 'data-label': 'ITBIS', style: { fontSize: '12px', color: 'var(--muted)' } },
           taxAmt > 0 ? fmt(taxAmt) : '—'
         ),
-        h('td', null,
+        h('td', { role: 'cell', 'data-label': 'Total' },
           h('span', { style: { fontWeight: 700, fontSize: '14px' } }, fmt(operationTotal)),
           !isSupplement && adjusted
             ? h('div', { class: 'ts' },
@@ -980,13 +993,13 @@ function renderVentasTable() {
               ? h('div', { class: 'ts' }, `Documento relacionado · ${fmt(effectiveTotal)}`)
               : null
         ),
-        h('td', null, (() => {
+        h('td', { role: 'cell', 'data-label': 'Estado' }, (() => {
           const estado = ventasEstadoPago(s, operationTotal);
           return estado
             ? h('span', { class: `badge ${estado.pagada ? 'g' : 'a'}`, style: { fontSize: '10px' } }, estado.label)
             : h('span', { class: 'ts' }, '—');
         })()),
-        h('td', null,
+        h('td', { role: 'cell', class: 'mobile-card-actions' },
           h('div', { class: 'flex', style: { gap: '3px' } },
             h('button', {
               class: 'btn btn-ghost btn-sm',
@@ -1059,7 +1072,7 @@ function renderVentasTable() {
     const first = ((ventasPage - 1) * VENTAS_PAGE_SIZE) + 1;
     const last = Math.min(ventasTotal, ventasPage * VENTAS_PAGE_SIZE);
     tableWrap.appendChild(h('div', {
-      class: 'fxb',
+      class: 'fxb ventas-mobile-pager',
       style: { marginTop:'12px', gap:'10px', flexWrap:'wrap' },
     },
       h('div', { class:'ts' }, `Mostrando ${first}–${last} de ${ventasTotal} documentos`),
@@ -1126,16 +1139,12 @@ function renderVentasAbonos(resWrap, tableWrap) {
     .reduce((sum, p) => sum + Number(p.amount || 0), 0);
   if (resWrap) {
     resWrap.innerHTML = '';
-    const metrics = h('div', { class: 'metrics', style: { gridTemplateColumns:'repeat(4,1fr)',marginBottom:'16px' } });
-    [
-      { icon:'list',color:'b',label:'Abonos vigentes',val:activePayments.length },
-      { icon:'dollar',color:'g',label:'Total recibido',val:fmt(total) },
-      { icon:'cash',color:'g',label:'En efectivo',val:fmt(cash) },
-      { icon:'card',color:'p',label:'Otros métodos',val:fmt(total-cash) },
-    ].forEach(m => metrics.appendChild(h('div',{class:'metric'},
-      h('div',{class:'met-top'},h('div',{class:`met-icon ${m.color}`,html:svg(m.icon)})),
-      h('div',{class:'met-label'},m.label),h('div',{class:'met-val'},String(m.val)))));
-    resWrap.appendChild(metrics);
+    resWrap.appendChild(ventasSummaryMetrics([
+      { place: 'total', icon: 'list', color: 'b', label: 'Abonos vigentes', value: activePayments.length },
+      { place: 'featured', icon: 'dollar', color: 'g', label: 'Total recibido', value: total, money: true },
+      { place: 'bar', icon: 'cash', color: 'g', label: 'En efectivo', value: cash, money: true },
+      { place: 'bar', icon: 'card', color: 'p', label: 'Otros métodos', value: total-cash, money: true },
+    ]));
   }
   tableWrap.innerHTML = '';
   if (!payments.length) {
@@ -1150,15 +1159,15 @@ function renderVentasAbonos(resWrap, tableWrap) {
       window.VeloExperience?.can?.('cancel_payment', 'admin,superadmin')
       ?? ['admin','superadmin'].includes(user?.role)
     );
-    return h('tr',{style:cancelled?{opacity:'.72',background:'var(--surface2)'}:null},
-      h('td',{class:'tm'},reciboLabel(p)),
-      h('td',null,fdate(String(p.created_at||'').slice(0,10))),
-      h('td',null,h('div',{class:'tb'},p.customer_name||'Cliente'),h('div',{class:'ts'},p.customer_rnc||'')),
-      h('td',{class:'tm'},invoice),
-      h('td',null,h('span',{class:`badge ${(p.method||'')==='efectivo'?'g':'b'}`},p.method||'efectivo')),
-      h('td',null,h('span',{class:`badge ${cancelled?'r':'g'}`},cancelled?'Anulado':'Vigente')),
-      h('td',{style:{fontWeight:800,color:cancelled?'var(--muted2)':'var(--green)',textDecoration:cancelled?'line-through':'none'}},fmt(p.amount)),
-      h('td',null,h('div',{class:'flex',style:{gap:'3px'}},
+    return h('tr',{role:'row',style:cancelled?{opacity:'.72',background:'var(--surface2)'}:null},
+      h('td',{role:'cell',class:'tm mobile-card-title'},reciboLabel(p)),
+      h('td',{role:'cell','data-label':'Fecha'},fdate(String(p.created_at||'').slice(0,10))),
+      h('td',{role:'cell','data-label':'Cliente'},h('div',{class:'tb'},p.customer_name||'Cliente'),h('div',{class:'ts'},p.customer_rnc||'')),
+      h('td',{role:'cell','data-label':'Factura',class:'tm'},invoice),
+      h('td',{role:'cell','data-label':'Método'},h('span',{class:`badge ${(p.method||'')==='efectivo'?'g':'b'}`},p.method||'efectivo')),
+      h('td',{role:'cell','data-label':'Estado'},h('span',{class:`badge ${cancelled?'r':'g'}`},cancelled?'Anulado':'Vigente')),
+      h('td',{role:'cell','data-label':'Monto',style:{fontWeight:800,color:cancelled?'var(--muted2)':'var(--green)',textDecoration:cancelled?'line-through':'none'}},fmt(p.amount)),
+      h('td',{role:'cell',class:'mobile-card-actions'},h('div',{class:'flex',style:{gap:'3px'}},
         h('button',{class:'btn btn-ghost btn-sm',onclick:()=>openAbonoDetalleModal(p),html:`${svg('eye')} Ver`}),
         h('button',{class:'btn btn-ghost btn-sm',onclick:()=>reimprimirAbono(p.id),title:cancelled?'Reimprimir comprobante anulado':'Reimprimir',html:svg('print')}),
         canCancel
@@ -1171,10 +1180,12 @@ function renderVentasAbonos(resWrap, tableWrap) {
           : null
       )));
   });
-  const table = h('table',null,
-    h('thead',null,h('tr',null,...['Recibo','Fecha','Cliente','Factura','Método','Estado','Monto',''].map(x=>h('th',null,x)))),
-    h('tbody',null,...rows));
-  tableWrap.appendChild(h('div',{class:'card'},h('div',{class:'tw'},table)));
+  const table = h('table',{class:'mobile-card-table',role:'table'},
+    h('thead',{role:'rowgroup'},h('tr',{role:'row'},
+      ...['Recibo','Fecha','Cliente','Factura','Método','Estado','Monto',''].map(x =>
+        h('th',{scope:'col','aria-label':x ? null : 'Acciones'},x)))),
+    h('tbody',{role:'rowgroup'},...rows));
+  tableWrap.appendChild(h('div',{class:'card mobile-list-card'},h('div',{class:'tw'},table)));
 }
 
 function openAnularAbonoModal(paymentOrId) {
@@ -1241,7 +1252,7 @@ function openAnularAbonoModal(paymentOrId) {
         ${svg('xmark')} Confirmar anulación
       </button>
     </div>
-  `);
+  `, 'ventas-mobile-modal');
   setTimeout(() => document.getElementById('ventas-void-payment-reason')?.focus(), 60);
 }
 
@@ -1576,7 +1587,7 @@ async function convertirCotizacionAVenta(s) {
         ✓ Confirmar venta
       </button>
     </div>
-  `, 'modal-lg');
+  `, 'modal-lg ventas-mobile-modal');
 
   if (CFG.fiscalEnabled) convPopulateNcfTypes(estado.ncfType);
 }
@@ -2109,7 +2120,7 @@ async function openDetalleVentaModal(s, options = {}) {
            </button>`
         : ''}
     </div>
-  `, 'modal-xxl mtw sale-detail-modal');
+  `, 'modal-xxl mtw sale-detail-modal ventas-mobile-modal');
   document.getElementById('venta-detalle-ecf')?.addEventListener('click', () => {
     closeModal();
     enviarEcf(s.id);
@@ -2325,7 +2336,7 @@ async function openAnulacionModal(ref) {
           ${svg('return')} Anular y registrar con el mismo NCF
         </button>` : ''}
     </div>
-  `);
+  `, 'ventas-mobile-modal');
 }
 
 async function confirmarAnulacion(saleId, registerAgain = false, reissueWithNcf = false) {
@@ -2504,7 +2515,7 @@ async function reimprimirVenta(saleId) {
       ? 'La copia mostrará los productos, cantidades y total vigentes; no sustituye los comprobantes fiscales relacionados.'
       : 'La reimpresión quedará registrada en auditoría.'}</p>
     <div class="modal-foot"><button class="btn btn-out" id="ventas-reprint-cancel">Cancelar</button>
-      <button class="btn btn-dark" id="ventas-reprint-confirm">${adjustedCopy ? 'Imprimir ajustada' : 'Continuar a impresión'}</button></div>`);
+      <button class="btn btn-dark" id="ventas-reprint-confirm">${adjustedCopy ? 'Imprimir ajustada' : 'Continuar a impresión'}</button></div>`, 'ventas-mobile-modal');
   document.getElementById('ventas-reprint-cancel')?.addEventListener('click', closeModal);
   document.getElementById('ventas-reprint-confirm')?.addEventListener('click', () => {
     const selectedTemplate = document.getElementById('ventas-reprint-template')?.value || '';
@@ -2747,7 +2758,7 @@ async function openFacturaCorreccion(saleId) {
       })}
     </div>
     <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
-  `, 'modal-xl');
+  `, 'modal-xl ventas-mobile-modal');
 }
 
 const VENTAS_METHOD_LABELS = { efectivo: 'Efectivo', tarjeta: 'Tarjeta', transferencia: 'Transferencia' };
@@ -2770,7 +2781,7 @@ async function openVentaPaymentMethodChange(saleId) {
         <div class="alrt-sub">${model.reasons.map(row => ventasEsc(row.message)).join('<br/>')}</div>
       </div></div>
       <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
-    `);
+    `, 'ventas-mobile-modal');
     return;
   }
   window._ventaPaymentMethodChange = {
@@ -2815,7 +2826,7 @@ async function openVentaPaymentMethodChange(saleId) {
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-dark" onclick="ventasConfirmPaymentMethodChange()">${svg('check')} Cambiar método</button>
     </div>
-  `);
+  `, 'ventas-mobile-modal');
   ventasPaymentMethodToggle();
 }
 
@@ -2894,7 +2905,7 @@ async function openVentaReuseNcf(saleId) {
         <div class="alrt-sub">${model.reasons.map(ventasEsc).join('<br/>')}</div>
       </div></div>
       <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
-    `);
+    `, 'ventas-mobile-modal');
     return;
   }
   window._ventaReuseNcf = { model };
@@ -2920,7 +2931,7 @@ async function openVentaReuseNcf(saleId) {
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-dark" onclick="ventasStartReuseNcf()">${svg('return')} Abrir en el POS</button>
     </div>
-  `);
+  `, 'ventas-mobile-modal');
 }
 
 function ventasStartReuseNcf() {
@@ -3004,7 +3015,7 @@ async function openVentaReplacement(saleId) {
         <div class="alrt-sub">${model.reasons.map(row => ventasEsc(row.message)).join('<br/>')}</div>
       </div></div>
       <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
-    `);
+    `, 'ventas-mobile-modal');
     return;
   }
   window._ventaReplacement = { model };
@@ -3028,7 +3039,7 @@ async function openVentaReplacement(saleId) {
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-dark" onclick="ventasStartReplacement()">${svg('edit')} Abrir en el POS</button>
     </div>
-  `);
+  `, 'ventas-mobile-modal');
 }
 
 function ventasStartReplacement() {
@@ -3140,7 +3151,7 @@ async function openVentaDebitNote(saleId) {
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-dark" onclick="ventasConfirmDebitNote()">${svg('check')} Emitir nota de débito</button>
     </div>
-  `);
+  `, 'ventas-mobile-modal');
   ventasDebitNoteToggle();
 }
 
@@ -3259,7 +3270,7 @@ async function openVentaMonetaryCredit(saleId) {
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-dark" onclick="ventasConfirmMonetaryCredit()">${svg('check')} Revisar y emitir</button>
     </div>
-  `, 'modal-lg');
+  `, 'modal-lg ventas-mobile-modal');
 }
 
 function ventasConfirmMonetaryCredit() {
@@ -3657,7 +3668,7 @@ async function openVentaProductCorrection(saleId) {
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-dark" id="vpc-save" disabled onclick="ventasConfirmProductCorrection()">${svg('check')} Revisar y aplicar</button>
     </div>
-  `, 'modal-xxl vpc-modal');
+  `, 'modal-xxl vpc-modal ventas-mobile-modal');
   ventasRenderAddedCorrectionItems();
   ventasProductCorrectionIntentChanged();
 }
@@ -3786,7 +3797,7 @@ function ventasOpenProductCorrectionResult(result, originalSaleId) {
       <button class="btn btn-out" onclick="ventasOpenOriginalAfterCorrection(${originalSaleId})">${svg('eye')} Ver factura ajustada</button>
       <button class="btn btn-dark" onclick="closeModal()">Terminar</button>
     </div>
-  `, 'modal-lg');
+  `, 'modal-lg ventas-mobile-modal');
   if (Number(result.overpayment || 0) > 0.005) {
     toast(`⚠ Excedente a favor del cliente: ${fmt(result.overpayment)}`, 'w');
   }
@@ -3812,7 +3823,7 @@ function ventasOpenSimpleCorrectionResult(saleId, message) {
       <button class="btn btn-out" onclick="ventasOpenOriginalAfterCorrection(${saleId})">${svg('eye')} Ver factura</button>
       <button class="btn btn-dark" onclick="closeModal()">Terminar</button>
     </div>
-  `, 'modal-lg');
+  `, 'modal-lg ventas-mobile-modal');
 }
 
 async function openVentaCancellationFromCorrection(saleId) {
@@ -3865,7 +3876,7 @@ async function openVentaDateModal(saleId) {
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-dark" id="venta-date-save" onclick="guardarVentaDate(${saleId})">${svg('check')} Confirmar cambio</button>
     </div>
-  `, 'modal-lg');
+  `, 'modal-lg ventas-mobile-modal');
 }
 
 function ventasRenderDateImpact(ctx) {
@@ -3972,7 +3983,7 @@ async function openVentaAdminModal(saleId) {
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-dark" onclick="guardarVentaAdmin(${saleId})">${svg('check')} Guardar con auditoría</button>
     </div>
-  `, 'modal-lg');
+  `, 'modal-lg ventas-mobile-modal');
 }
 
 async function guardarVentaAdmin(saleId) {
@@ -4118,7 +4129,7 @@ async function openVentaCorrectionsHistory(saleId) {
       <button class="btn btn-out" onclick="closeModal()">Cerrar</button>
       <button class="btn btn-dark" onclick="imprimirVentaResumenActualizado(${sale.id})">${svg('print')} Imprimir resumen actualizado</button>
     </div>
-  `, 'modal-lg');
+  `, 'modal-lg ventas-mobile-modal');
 }
 
 async function imprimirVentaResumenActualizado(saleId) {
@@ -4384,11 +4395,38 @@ async function renderDevoluciones(el) {
   if (page !== 'devoluciones' || !el.isConnected) return;
   el.innerHTML = '';
 
-  el.appendChild(h('div', { class: 'sec-hdr' },
+  el.appendChild(h('div', { class: 'sec-hdr mobile-module-heading' },
     h('div', null,
       h('div', { class: 'sec-title' }, 'Devoluciones y notas de crédito'),
       h('div', { class: 'sec-sub' }, 'Devuelve productos o consulta ajustes monetarios emitidos')
     )
+  ));
+
+  const totalCreditos = Number(devCount) || 0;
+  const ajustes = devs.filter(d => d.correction_kind === 'monetary_credit').length;
+  const tipos = [
+    { label: 'Devoluciones de productos', count: devs.length - ajustes },
+    { label: 'Ajustes monetarios', count: ajustes },
+  ];
+  el.appendChild(h('div', { class: 'mobile-summary-metrics devoluciones-mobile-summary' },
+    h('div', { class: 'metric mobile-summary-featured' },
+      h('div', { class: 'met-label' }, 'Historial de créditos'),
+      h('div', { class: 'met-val' }, totalCreditos)
+    ),
+    tipos.map(({ label, count }) => {
+      const metric = h('div', { class: 'metric mobile-summary-bar' },
+        h('div', { class: 'met-label' }, label),
+        h('div', { class: 'met-val' }, count)
+      );
+      metric.style.setProperty('--mobile-bar-size', (count / (devs.length || 1) * 100) + '%');
+      return metric;
+    }),
+    totalCreditos > devs.length
+      ? h('div', { class: 'metric mobile-summary-total' },
+          h('div', { class: 'met-label' }, 'Registros mostrados'),
+          h('div', { class: 'met-val' }, devs.length + ' de ' + totalCreditos)
+        )
+      : null
   ));
 
   const searchCard = h('div', { class: 'card mb20' });
@@ -4397,11 +4435,12 @@ async function renderDevoluciones(el) {
       'Buscar factura para devolver productos')
   );
 
-  const searchRow = h('div', { class: 'flex', style: { gap: '8px' } },
+  const searchRow = h('div', { class: 'flex devoluciones-mobile-search', style: { gap: '8px' } },
     h('div', { class: 'inp-ic', style: { flex: 1 } },
       h('div', { class: 'ic', html: svg('search') }),
       h('input', {
         class: 'inp', type: 'text', id: 'dev-search-inp',
+        'aria-label': 'Buscar factura para devolver productos',
         placeholder: 'Buscar por # factura (ej: 3), nombre o cédula del cliente...',
         onkeydown: e => { if (e.key === 'Enter') buscarFacturaDevolucion(); }
       })
@@ -4430,40 +4469,44 @@ async function renderDevoluciones(el) {
   }
 
   // Historial devoluciones
-  const histCard = h('div', { class: 'card' });
-  histCard.appendChild(h('div', { class: 'fxb mb8' },
+  const histCard = h('div', { class: 'card mobile-list-card' });
+  histCard.appendChild(h('div', { class: 'fxb mb8 devoluciones-desktop-heading' },
         h('div', { class: 'card-title' }, `Historial de créditos (${Number(devCount) || 0})`)
   ));
 
   if (!devs.length) {
     histCard.appendChild(h('div', { class: 'empty', style: { padding: '24px' } },
-      h('div', { html: svg('return'), style: { color: 'var(--muted2)' } }),
+      h('div', { html: svg('return'), 'aria-hidden': 'true', style: { color: 'var(--muted2)' } }),
       h('p', null, 'Sin devoluciones ni notas de crédito registradas')
     ));
   } else {
     const tw  = h('div', { class: 'tw' });
-    const tbl = h('table', null,
-      h('thead', null,
-        h('tr', null,
-          ...['#','Fecha','Cliente','Factura Orig.','Total',''].map(t => h('th', null, t))
+    const tbl = h('table', { class: 'mobile-card-table', role: 'table' },
+      h('thead', { role: 'rowgroup' },
+        h('tr', { role: 'row' },
+          ...['#','Fecha','Cliente','Factura Orig.','Total',''].map(t =>
+            h('th', { role: 'columnheader', scope: 'col', 'aria-label': t || 'Acciones' }, t)
+          )
         )
       )
     );
-    const tbody = h('tbody', null);
+    const tbody = h('tbody', { role: 'rowgroup' });
     devs.forEach(d => {
       const fecha = (d.sale_date || d.date || '').split('T')[0].split(' ')[0];
-      tbody.appendChild(h('tr', { style: { background: 'var(--red-bg)' } },
-        h('td', { class: 'tm' }, facturaLabel(d)),
-        h('td', { class: 'ts' }, fdate(fecha)),
-        h('td', null,
+      tbody.appendChild(h('tr', { role: 'row', style: { background: 'var(--red-bg)' } },
+        h('td', { class: 'tm mobile-card-title', role: 'cell' }, facturaLabel(d)),
+        h('td', { class: 'ts', role: 'cell', 'data-label': 'Fecha' }, fdate(fecha)),
+        h('td', { role: 'cell', 'data-label': 'Cliente' },
           h('div', { class: 'tb' }, d.customer_name || d.clientName || '—'),
           h('div', { class: 'ts' },
             d.correction_kind === 'monetary_credit' ? 'Ajuste monetario' : 'Devolución de productos')
         ),
-        h('td', { class: 'tm' }, d.original_sale_id ? facturaLabelOriginal(d) : '—'),
-        h('td', null, h('span', { style: { fontWeight: 700, color: 'var(--red)' } },
-          `-${fmt(d.total)}`)),
-        h('td', null,
+        h('td', { class: 'tm', role: 'cell', 'data-label': 'Factura original' },
+          d.original_sale_id ? facturaLabelOriginal(d) : '—'),
+        h('td', { role: 'cell', 'data-label': 'Total' },
+          h('span', { style: { fontWeight: 700, color: 'var(--red)' } },
+            `-${fmt(d.total)}`)),
+        h('td', { class: 'mobile-card-actions', role: 'cell' },
           h('button', {
             class: 'btn btn-ghost btn-sm',
             onclick: () => openDetalleVentaModal(d),
@@ -4530,7 +4573,7 @@ async function buscarFacturaDevolucion() {
     const fecha = (s.sale_date || '').split('T')[0].split(' ')[0];
 
     const card = h('div', { class: 'card', style: { marginBottom: '8px' } });
-    card.appendChild(h('div', { class: 'fxb', style: { marginBottom: '8px' } },
+    card.appendChild(h('div', { class: 'fxb devoluciones-mobile-result-heading', style: { marginBottom: '8px' } },
       h('div', null,
         h('span', { style: { fontWeight: 700 } }, `Factura ${facturaLabel(s)}`),
         h('span', { class: 'ts', style: { marginLeft: '10px' } },

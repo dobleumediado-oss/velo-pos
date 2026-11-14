@@ -252,9 +252,10 @@ let accesoArnes = null;
   assert(styles.includes('.velo-sticky-actions > tbody > tr > td:last-child{position:sticky;right:0}') &&
     styles.includes('animation-timeline:scroll(nearest inline)'),
     'la columna de acciones queda fija y su sombra depende del desplazamiento real');
-  assert(inventario.includes('<table class="velo-sticky-actions">'),
+  // La tabla puede sumar otras clases (p. ej. mobile-card-table del diseño móvil).
+  assert(/<table class="velo-sticky-actions(?: [^"]*)?"/.test(inventario),
     'la tabla de Inventario usa la columna de acciones fija');
-  assert(sucursales.includes('<table class="velo-sticky-actions"'),
+  assert(/<table class="velo-sticky-actions(?: [^"]*)?"/.test(sucursales),
     'la tabla de secuencias NCF usa la columna de acciones fija');
   const rowActions = clientes.indexOf("h('div', { class: 'cli-row-actions' }");
   const deleteButton = clientes.indexOf('confirmEliminarCliente(c)', rowActions);

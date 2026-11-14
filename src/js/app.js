@@ -1174,6 +1174,7 @@ function renderApp() {
   // Corte a Cloud: aviso permanente mientras el negocio esté en modo consulta.
   main.appendChild(h('div', { class: 'cutover-banner', id: 'cutover-banner', role: 'status', hidden: true }));
   main.appendChild(pageEl);
+  main.appendChild(h('nav', { id: 'mobile-nav', class: 'mobile-nav', 'aria-label': 'Navegación principal' }));
   root.appendChild(shell);
 
   buildSidebar();
@@ -1305,6 +1306,7 @@ function buildSidebar() {
   ];
 
   const items = ['admin','superadmin'].includes(user?.role) ? adminNavItems : cajeroNavItems;
+  buildMobileNav(items);
 
   items.forEach(it => {
     if (it.sep) {
@@ -1362,6 +1364,43 @@ async function _refreshCutoverBanner() {
     : cloudState === 'verify' ? 'Corte a VELO Cloud por comprobar: Desktop no guarda cambios hasta confirmarlo (Configuración → Backups → Pasar a VELO Cloud).'
     : `Modo consulta: este negocio ya opera en VELO Cloud. Desktop no guarda cambios desde el ${new Date(status.frozenAt).toLocaleString('es-DO')}`;
   return status;
+}
+
+function buildMobileNav(items) {
+  const nav = document.getElementById('mobile-nav');
+  if (!nav) return;
+  const allowed = items.filter(item => item.key && !item.hidden);
+  const routeButton = (item, label) => h('button', {
+    type: 'button',
+    'data-mobile-route': item.key,
+    'aria-current': page === item.key ? 'page' : null,
+    onclick: () => routeTo(item.key)
+  }, S(item.icon), h('span', null, label),
+    item.badge ? h('span', { class: 'nav-badge' }, item.badge) : null);
+
+  const menu = h('div', { id: 'mobile-module-menu', popover: 'auto', class: 'mobile-module-menu' },
+    h('h2', null, 'Menú'),
+    h('div', { class: 'mobile-module-links' },
+      allowed.map(item => routeButton(item, item.label)),
+      h('button', { type: 'button', onclick: () => { menu.hidePopover(); doLogout(); } },
+        S('logout'), h('span', null, 'Cerrar sesión'))
+    )
+  );
+  const shortcuts = [
+    ['dash', 'Inicio'],
+    ['inventario', 'Inventario'],
+    ['pos', 'Vender'],
+    ['clientes', 'Clientes'],
+  ].map(([key, label]) => {
+    const item = allowed.find(item => item.key === key);
+    return item && routeButton(item, label);
+  }).filter(Boolean);
+
+  nav.replaceChildren(...shortcuts,
+    h('button', { type: 'button', popovertarget: 'mobile-module-menu', class: 'mobile-menu-trigger' },
+      S('menu'), h('span', null, 'Más')),
+    menu
+  );
 }
 
 // ══════════════════════════════════════════════
@@ -1862,6 +1901,12 @@ function routeTo(p) {
   document.querySelectorAll('.nav-item').forEach(ni => {
     ni.classList.remove('on');
     if (ni.dataset.key === page) ni.classList.add('on');
+  });
+  const mobileNav = document.getElementById('mobile-nav');
+  mobileNav?.querySelector('#mobile-module-menu:popover-open')?.hidePopover();
+  mobileNav?.querySelectorAll('[data-mobile-route]').forEach(button => {
+    if (button.dataset.mobileRoute === page) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
   });
   buildTopbar();
 

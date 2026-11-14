@@ -56,7 +56,7 @@ function renderClientes(el) {
 
   // ── Header ──────────────────────────────────
   const isAdmin = ['admin','superadmin'].includes(user?.role);
-  el.appendChild(h('div', { class: 'sec-hdr' },
+  el.appendChild(h('div', { class: 'sec-hdr mobile-module-heading' },
     h('div', null,
       h('div', { class: 'sec-title' }, 'Clientes'),
       h('div', { class: 'sec-sub' },
@@ -65,7 +65,7 @@ function renderClientes(el) {
         `${alerts.length} alerta${alerts.length !== 1 ? 's' : ''}`
       )
     ),
-    h('div', { class: 'flex', style: { gap: '8px' } },
+    h('div', { class: 'flex mobile-module-actions', style: { gap: '8px' } },
       h('button', {
         class: 'btn btn-out',
         onclick: () => exportarTablasExcel(document.getElementById('page'), 'Clientes', 'Directorio de clientes'),
@@ -89,29 +89,31 @@ function renderClientes(el) {
   ));
 
   // ── Métricas rápidas ────────────────────────
-  const metWrap = h('div', { class: 'metrics',
+  const metWrap = h('div', { class: 'metrics mobile-summary-metrics',
     style: { gridTemplateColumns: 'repeat(4,1fr)', marginBottom: '16px' } });
   [
-    { icon: 'users',  color: 'b', label: 'Clientes',      val: clientes.length },
-    { icon: 'dollar', color: 'r', label: 'Por cobrar a habituales', val: fmt(totalDeuda) },
-    { icon: 'alert',  color: 'a', label: 'Por vencer',    val: alerts.filter(a=>a.status==='soon').length },
-    { icon: 'lock',   color: 'r', label: 'Vencidos',      val: alerts.filter(a=>a.status==='overdue').length },
+    { place: 'total', icon: 'users', color: 'b', label: 'Clientes', val: clientes.length },
+    { place: 'featured', icon: 'dollar', color: 'r', label: 'Por cobrar a habituales', val: fmt(totalDeuda) },
+    { place: 'bar', icon: 'alert', color: 'a', label: 'Por vencer', val: alerts.filter(a => a.status === 'soon').length },
+    { place: 'bar', icon: 'lock', color: 'r', label: 'Vencidos', val: alerts.filter(a => a.status === 'overdue').length },
   ].forEach(m => {
-    metWrap.appendChild(
-      h('div', { class: 'metric' },
-        h('div', { class: 'met-top' },
-          h('div', { class: `met-icon ${m.color}`, html: svg(m.icon) })
-        ),
-        h('div', { class: 'met-label' }, m.label),
-        h('div', { class: 'met-val' }, String(m.val))
-      )
+    const metric = h('div', { class: `metric mobile-summary-${m.place}` },
+      h('div', { class: 'met-top' },
+        h('div', { class: `met-icon ${m.color}`, html: svg(m.icon) })
+      ),
+      h('div', { class: 'met-label' }, m.label),
+      h('div', { class: 'met-val' }, String(m.val))
     );
+    if (m.place === 'bar') {
+      metric.style.setProperty('--mobile-bar-size', `${100 * m.val / Math.max(1, alerts.length)}%`);
+    }
+    metWrap.appendChild(metric);
   });
   el.appendChild(metWrap);
 
   // ── Buscador y tabs ─────────────────────────
   el.appendChild(
-    h('div', { class: 'flex', style: { marginBottom: '14px', gap: '8px', flexWrap: 'wrap' } },
+    h('div', { class: 'flex mobile-module-filters', style: { marginBottom: '14px', gap: '8px', flexWrap: 'wrap' } },
       h('div', { class: 'inp-ic', style: { flex: 1, minWidth: '220px', maxWidth: '380px' } },
         h('div', { class: 'ic', html: svg('search') }),
         h('input', {
@@ -214,25 +216,25 @@ function renderCliTable() {
 
   if (!clients.length) {
     wrap.appendChild(h('div', { class: 'empty' },
-      h('div', { html: svg('users'), style: { color: 'var(--muted2)' } }),
+      h('div', { html: svg('users'), 'aria-hidden': 'true', style: { color: 'var(--muted2)' } }),
       h('p', null, cliSearch ? 'Sin resultados' : 'Sin clientes'),
       h('span', null, cliSearch ? 'Prueba otro término' : 'Agrega tu primer cliente')
     ));
     return;
   }
 
-  const card  = h('div', { class: 'card' });
+  const card  = h('div', { class: 'card mobile-list-card' });
   const tw    = h('div', { class: 'tw' });
-  const tbl   = h('table', null,
-    h('thead', null,
-      h('tr', null,
+  const tbl   = h('table', { class: 'mobile-card-table', role: 'table' },
+    h('thead', { role: 'rowgroup' },
+      h('tr', { role: 'row' },
         ...['Cliente','Teléfono','Límite / Disponible','Balance','Vencimiento','Estado',''].map(t =>
-          h('th', null, t)
+          h('th', { scope: 'col', 'aria-label': t ? null : 'Acciones' }, t)
         )
       )
     )
   );
-  const tbody = h('tbody', null);
+  const tbody = h('tbody', { role: 'rowgroup' });
 
   clients.forEach(c => {
     const alert       = alertMap[c.id];
@@ -272,8 +274,8 @@ function renderCliTable() {
       balance > 0 ? 'Con crédito' : 'Al día'
     );
 
-    const tr = h('tr', null,
-      h('td', null,
+    const tr = h('tr', { role: 'row' },
+      h('td', { role: 'cell', class: 'mobile-card-title' },
         h('div', { class: 'tb', style: { opacity: isBloqueado ? '0.6' : '1' } },
           c.name,
           c.customer_type === 'company'
@@ -287,10 +289,10 @@ function renderCliTable() {
             ? `${c.branches.length} sucursal${c.branches.length === 1 ? '' : 'es'}` : '',
         ].filter(Boolean).join(' · '))
       ),
-      h('td', { class: 'ts' }, (c.phones || []).length
+      h('td', { role: 'cell', class: 'ts', 'data-label': 'Teléfono' }, (c.phones || []).length
         ? c.phones.map(p => `${p.phone_type === 'celular' ? 'Cel.' : p.phone_type === 'flota' ? 'Flota' : 'Tel.'}: ${p.phone}`).join(' · ')
         : (c.phone || '—')),
-      h('td', null,
+      h('td', { role: 'cell', 'data-label': 'Límite de crédito' },
         h('div', { style: { fontSize: '12px', fontWeight: 600 } }, fmt(creditLimit)),
         creditLimit > 0
           ? h('div', { style: { fontSize: '10px',
@@ -298,7 +300,7 @@ function renderCliTable() {
               `Disponible: ${fmt(disponible)}`)
           : h('div', { class: 'ts' }, `${creditDays}d plazo`)
       ),
-      h('td', null,
+      h('td', { role: 'cell', 'data-label': 'Balance' },
         h('div', { style: { fontWeight: 700, fontSize: '13px',
           color: balance > 0 ? 'var(--red)' : 'var(--green)' } }, fmt(balance)),
         creditLimit > 0
@@ -311,14 +313,14 @@ function renderCliTable() {
             )
           : null
       ),
-      h('td', null, dueBadge ||
+      h('td', { role: 'cell', 'data-label': 'Vencimiento' }, dueBadge ||
         h('span', { style: { color: 'var(--muted2)', fontSize: '12px' } }, '—')),
-      h('td', null, estadoBadge),
+      h('td', { role: 'cell', 'data-label': 'Estado' }, estadoBadge),
       // Dos grupos: los botones de toda fila y, aparte, los de empresa. Cada
       // grupo no se parte, pero el de empresa puede bajar a otra línea; así una
       // empresa no ensancha la columna para todos los clientes (a 1366 px la
       // tabla se salía de la pantalla y ocultaba los botones).
-      h('td', null,
+      h('td', { role: 'cell', class: 'mobile-card-actions' },
         h('div', { class: 'cli-row-actions' },
           h('div', { class: 'flex', style: { gap: '4px' } },
             h('button', {
@@ -542,7 +544,7 @@ function openClienteModal(c = null) {
         ${svg('check')} ${isEdit ? 'Guardar cambios' : 'Registrar cliente'}
       </button>
     </div>
-  `);
+  `, 'cli-mobile-modal');
   // Inicializa el detector de tipo de documento (muestra RNC/Cédula al editar)
   setTimeout(() => { onCustomerTypeChange(customerType); onRncInput(); }, 30);
 }
@@ -794,7 +796,7 @@ function openRepresentantesModal(customerId) {
         </div>`).join('')}
     </div>` : `<div class="empty" style="padding:32px"><div>${svg('users')}</div><p>Sin representantes</p><span>Agrega las personas que compran o reciben en nombre de esta empresa.</span></div>`}
     <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
-  `, 'modal-lg');
+  `, 'modal-lg cli-mobile-modal');
   cargarActividadRepresentantes(company.id, contacts);
 }
 
@@ -879,7 +881,7 @@ function openRepresentanteForm(customerId, contactId = null) {
       <button class="btn btn-out" onclick="openRepresentantesModal(${company.id})">Volver</button>
       <button class="btn btn-dark" id="cr-save" onclick="guardarRepresentante(${company.id},${contact?.id || 'null'})">${svg('check')} Guardar</button>
     </div>
-  `);
+  `, 'cli-mobile-modal');
 }
 
 async function guardarRepresentante(customerId, contactId) {
@@ -957,7 +959,7 @@ function openSucursalesModal(customerId) {
         </div>`).join('')}
     </div>` : `<div class="empty" style="padding:32px"><div>${svg('map-pin')}</div><p>Sin sucursales</p><span>Agrega las ubicaciones de entrega de esta empresa (mismo RNC).</span></div>`}
     <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
-  `, 'modal-lg');
+  `, 'modal-lg cli-mobile-modal');
 }
 
 function openSucursalForm(customerId, branchId = null) {
@@ -988,7 +990,7 @@ function openSucursalForm(customerId, branchId = null) {
       <button class="btn btn-out" onclick="openSucursalesModal(${company.id})">Volver</button>
       <button class="btn btn-dark" id="cs-save" onclick="guardarSucursal(${company.id},${branch?.id || 'null'})">${svg('check')} Guardar</button>
     </div>
-  `);
+  `, 'cli-mobile-modal');
 }
 
 async function guardarSucursal(customerId, branchId) {
@@ -1411,7 +1413,7 @@ async function openAbonoModal(c, prefill = null) {
         ${svg('check')} Registrar Abono
       </button>
     </div>
-  `);
+  `, 'cli-mobile-modal');
   if (prefill) {
     const amountInput = document.getElementById('ab-amount');
     const methodInput = document.getElementById('ab-method');
@@ -1891,7 +1893,7 @@ function openAbonoDetalleModal(paymentOrId) {
         ${svg('xmark')} Anular abono
       </button>` : ''}
     </div>
-  `);
+  `, 'cli-mobile-modal');
 }
 
 function abonoWhatsApp(paymentId) {
@@ -2132,7 +2134,7 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
         <div style="height:150px;border-radius:9px;background:var(--surface2);border:1px solid var(--line)"></div>
       </div>
       <div class="modal-foot"><button class="btn btn-out" onclick="window._cliModalRequest=null;closeModal()">Cerrar</button></div>
-    `, 'modal-xl');
+    `, 'modal-xl cli-mobile-modal');
   }
 
   // Consulta ligera con caché breve: cambiar de pestaña no vuelve a recorrer el
@@ -2154,7 +2156,7 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
         <button class="btn btn-dark" onclick="openEstadoCuentaModal(DB.customers.find(x=>x.id===${c.id}),'${activeTab}')">Reintentar</button>
       </div>
       <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
-    `, 'modal-lg', { replace: true });
+    `, 'modal-lg cli-mobile-modal', { replace: true });
     return;
   }
   if (window._cliModalRequest !== requestToken || page !== 'clientes') return;
@@ -2471,7 +2473,7 @@ async function openEstadoCuentaModal(c, activeTab = 'cuenta') {
           ${svg('dollar')} Abonar
         </button>` : ''}
     </div>
-  `, 'modal-xl', { replace: true });
+  `, 'modal-xl cli-mobile-modal', { replace: true });
 
   // Si tab es facturas → cargar facturas pendientes async
   if (activeTab === 'facturas') {
@@ -3050,7 +3052,7 @@ async function renderWalkInPurchases(wrap) {
     const visible = rows.filter(c => (walkInShowHistory || Number(c.balance) > 0.005) &&
       (!q || matchText([c.name,c.phone,c.document_number_fmt,c.numero_factura_fmt].join(' '), q)));
     wrap.innerHTML = '';
-    wrap.appendChild(h('div', { class: 'flex', style: { gap:'12px', marginBottom:'14px' } },
+    wrap.appendChild(h('div', { class: 'flex cli-walkin-controls', style: { gap:'12px', marginBottom:'14px' } },
       h('div', { class:'ts' }, `${pending.length} compras pendientes · Por cobrar: ${fmt(pending.reduce((sum,c)=>sum+Number(c.balance),0))}`),
       h('button', { class:'btn btn-out', onclick:()=>{walkInShowHistory=!walkInShowHistory;renderCliTable();} },
         walkInShowHistory ? 'Ver solo pendientes' : 'Ver también historial'),
@@ -3071,7 +3073,7 @@ async function renderWalkInPurchases(wrap) {
           h('button',{class:'btn btn-out',onclick:()=>walkInPaymentHistory(c)},'Abonos'),
           ['admin','superadmin'].includes(user?.role) ? h('button',{class:'btn btn-out',onclick:()=>walkInPromote(c)},'Registrar como cliente') : null))));
     }
-    table.appendChild(body);wrap.appendChild(h('div',{style:{overflowX:'auto'}},table));
+    table.appendChild(body);wrap.appendChild(h('div', { class: 'cli-walkin-table', style: { overflowX: 'auto' } }, table));
   } catch(e) {
     if (request !== walkInRenderRequest || !wrap.isConnected || cliTab !== 'paso') return;
     wrap.textContent = e.message || 'No se pudieron consultar las compras de paso';
@@ -3087,7 +3089,7 @@ async function walkInPaymentHistory(c) {
       ${payments.map(p=>`<div class="flex" style="justify-content:space-between;margin:12px 0">
         <span>${cliEsc(reciboLabel(p))} · ${fmt(p.amount)} · ${cliEsc(p.method)}</span>
         <button class="btn btn-out" onclick="reimprimirAbono(${Number(p.id)})">Ver recibo</button></div>`).join('') || '<div class="ts">Sin abonos.</div>'}
-      <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>`);
+      <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>`, 'cli-mobile-modal');
   } catch(e) { toast(e.message || 'No se pudo consultar el historial','err'); }
 }
 async function walkInPromote(c) {

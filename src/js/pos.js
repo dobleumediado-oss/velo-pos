@@ -178,7 +178,7 @@ async function renderPOS(el) {
     // pos-cat ahora es flex column — la barra queda fija y solo el grid scrollea
     const left = h('div', { class: 'pos-cat' });
 
-    const topBar = h('div', { style: 'display:flex;gap:8px;margin-bottom:14px;flex-shrink:0' });
+    const topBar = h('div', { class: 'pos-catalog-toolbar', style: 'display:flex;gap:8px;margin-bottom:14px;flex-shrink:0' });
     topBar.innerHTML = `
       <div class="inp-ic" style="flex:1">
         <div class="ic">${svg('search')}</div>
@@ -194,6 +194,7 @@ async function renderPOS(el) {
     left.appendChild(topBar);
 
     const customerBar = h('div', {
+      class: 'pos-customer-toolbar',
       style: 'display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-shrink:0;position:relative'
     });
     customerBar.innerHTML = `
@@ -234,12 +235,12 @@ async function renderPOS(el) {
 
     const grid = h('div', { id: 'pos-grid', class: 'prod-grid' });
     // Envolver el grid en un contenedor que haga el scroll
-    const gridWrap = h('div', { style: 'flex:1;overflow-y:auto;min-height:0' });
+    const gridWrap = h('div', { class: 'pos-catalog-results', style: 'flex:1;overflow-y:auto;min-height:0' });
     gridWrap.appendChild(grid);
     left.appendChild(gridWrap);
 
     // ── Panel derecho ───────────────────────────
-    const right = h('div', { class: 'pos-side', id: 'pos-side' });
+    const right = h('div', { class: 'pos-side', id: 'pos-side', tabindex: '-1', role: 'region', 'aria-label': 'Carrito' });
     const tabsEl = h('div', { class: 'invoice-tabs', id: 'inv-tabs' });
     right.appendChild(tabsEl);
     const cartEl = h('div', { id: 'cart-wrap',
@@ -254,6 +255,15 @@ async function renderPOS(el) {
     wrap.appendChild(left);
     wrap.appendChild(cartResizer);
     wrap.appendChild(right);
+    wrap.appendChild(h('button', {
+      type: 'button',
+      class: 'pos-mobile-cart-jump',
+      'aria-controls': 'pos-side',
+      onclick: () => {
+        right.focus({ preventScroll: true });
+        right.scrollIntoView({ block: 'start', behavior: 'instant' });
+      }
+    }, S('receipt'), 'Ver carrito'));
     el.appendChild(wrap);
     _posSetupCartResize(wrap, right, cartResizer);
 
@@ -384,7 +394,7 @@ function renderPOSGrid() {
   if (!prods.length) {
     grid.innerHTML = `
       <div style="grid-column:1/-1;text-align:center;padding:44px;color:var(--muted2)">
-        <div style="margin-bottom:8px">${svg('search')}</div>
+        <div class="pos-empty-icon" aria-hidden="true" style="margin-bottom:8px">${svg('search')}</div>
         <div style="font-weight:600">Sin resultados</div>
       </div>`;
     return;

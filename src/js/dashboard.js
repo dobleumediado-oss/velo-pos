@@ -243,7 +243,7 @@ async function renderDash(el) {
   const greeting = new Date().getHours() < 12 ? 'Buenos días' :
                    new Date().getHours() < 19 ? 'Buenas tardes' : 'Buenas noches';
 
-  root.appendChild(h('div', { class: 'sec-hdr' },
+  root.appendChild(h('div', { class: 'sec-hdr dash-heading' },
     h('div', null,
       h('div', { class: 'sec-title' },
         `${greeting}, ${user?.name?.split(' ')[0]} 👋`),
@@ -414,7 +414,7 @@ async function renderDash(el) {
 
   // ── Selector de período ──────────────────────
   const dashPeriod = window._dashPeriod || 'today';
-  const periodBar  = h('div', { class: 'flex', style: { gap: '6px', marginBottom: '14px' } });
+  const periodBar  = h('div', { class: 'flex dash-periods', style: { gap: '6px', marginBottom: '14px' } });
   [
     { v: 'today', l: 'Hoy' },
     { v: '3days', l: '3 días' },
@@ -479,9 +479,10 @@ async function renderDash(el) {
     const d = new Date(); d.setDate(d.getDate() - i);
     trend7.push(dailyByDate[d.toISOString().split('T')[0]]?.total || 0);
   }
+  const trendMax = Math.max(1, ...trend7);
   [
     { icon: 'dollar', color: 'g', label: `Ventas (${periodLabel})`,
-      val: fmt(periodRev), badge: `${periodSales.length} transac.`, badgeType: 'nu', spark:_dashSparkline(trend7) },
+      val: fmt(periodRev), badge: `${periodSales.length} transac.`, badgeType: 'nu', spark:_dashSparkline(trend7), lead: true },
     { icon: 'trend',  color: 'g', label: `Ganancia (${periodLabel})`,
       val: fmt(periodProfit > 0 ? periodProfit : 0),
       badge: `${periodMargin}% margen`,
@@ -510,7 +511,7 @@ async function renderDash(el) {
       click: () => { window._ventasTabInicial = 'cotizaciones'; routeTo('ventas'); } },
   ].forEach(m => {
     const card = h('div', {
-      class: 'metric dash-metric-card',
+      class: `metric dash-metric-card${m.lead ? ' dash-metric-lead' : ''}`,
       style: m.click ? { cursor: 'pointer' } : {},
       ...(m.click ? { onclick: m.click } : {})
     },
@@ -520,6 +521,9 @@ async function renderDash(el) {
       h('div', { class: 'met-label' }, m.label),
       h('div', { class: 'met-val' }, m.val),
       m.spark ? h('div', { class:'dash-metric-spark', html:m.spark }) : null,
+      m.lead && trend7.some(total => total > 0) ? h('div', { class: 'dash-mobile-mini-bars', 'aria-hidden': 'true' },
+        trend7.map(total => h('span', { style: { height: `${Math.max(0, total) / trendMax * 100}%` } }))
+      ) : null,
       h('div', { class: 'met-foot' },
         h('span', { class: `met-badge ${m.badgeType}` }, m.badge)
       )
@@ -537,6 +541,7 @@ async function renderDash(el) {
   const monthLabel    = new Date().toLocaleString('es-DO', { month: 'long', year: 'numeric' });
 
   const resumenBar = h('div', {
+    class: 'dash-cash-flow',
     style: {
       background: 'var(--surface)', border: '1px solid var(--line)',
       borderRadius: 'var(--r-lg)', padding: '16px 20px',
@@ -549,7 +554,7 @@ async function renderDash(el) {
       routeTo('reportes');
     }
   },
-    h('div', { style: { display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:'4px' } },
+    h('div', { class: 'dash-cash-heading', style: { display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:'4px' } },
       h('span', { style: { fontSize:'12px', fontWeight:600, color:'var(--muted)', textTransform:'uppercase', letterSpacing:'.5px' } },
         `Ventas / Abonos a Facturas — ${monthLabel}`),
       h('span', { style: { fontSize:'18px', fontWeight:800, color:'var(--ink)', letterSpacing:'-.5px' } },
@@ -558,12 +563,13 @@ async function renderDash(el) {
     h('div', { style: { fontSize:'11px', color:'var(--muted2)', marginBottom:'10px' } },
       `Facturado: ${fmt(mRev)}`),
     // Barra segmentada: contado (purple) + abonos CxC (green) = cobradoMes
-    h('div', { style: { display:'flex', height:'10px', borderRadius:'99px', overflow:'hidden', gap:'2px', marginBottom:'12px', background:'var(--line)' } },
+    h('div', { class: 'dash-cash-track', style: { display:'flex', height:'10px', borderRadius:'99px', overflow:'hidden', gap:'2px', marginBottom:'12px', background:'var(--line)' } },
       h('div', { style: { width: `${mContadoPct}%`, background:'var(--purple)', borderRadius:'99px 0 0 99px', transition:'width .4s' } }),
       h('div', { style: { width: `${mAbonosPct}%`, background:'var(--green)',  borderRadius:'0 99px 99px 0', transition:'width .4s' } })
     ),
+    h('div', { class: 'dash-mobile-donut', 'aria-hidden': 'true' }),
     // Leyenda
-    h('div', { style: { display:'flex', gap:'20px' } },
+    h('div', { class: 'dash-cash-legend', style: { display:'flex', gap:'20px' } },
       h('div', { style: { display:'flex', alignItems:'center', gap:'6px' } },
         h('div', { style: { width:'10px', height:'10px', borderRadius:'3px', background:'var(--purple)', flexShrink:0 } }),
         h('span', { style: { fontSize:'11px', color:'var(--muted)' } }, 'Ventas al contado'),
@@ -576,6 +582,9 @@ async function renderDash(el) {
       )
     )
   );
+  const cashSplit = Math.max(0, Math.min(100, mContadoPct));
+  resumenBar.style.setProperty('--dash-cash-split', `${cashSplit}%`);
+  resumenBar.style.setProperty('--dash-cash-fill', `${Math.min(100, cashSplit + Math.max(0, mAbonosPct))}%`);
   root.appendChild(_dashWidget(resumenBar, 'cashflow'));
 
   // ── Cards de Gastos (si módulo activo) ───────────────────────────────────────
@@ -713,7 +722,7 @@ async function renderDash(el) {
 
   // Tabs de período de la gráfica
   const chartPeriod = window._chartPeriod || '7d';
-  const chartTabBar = h('div', { class: 'fxb mb8' },
+  const chartTabBar = h('div', { class: 'fxb mb8 dash-trend-heading' },
     h('div', null,
       h('div', { class: 'card-title' },
         chartPeriod === '7d' ? 'Ventas últimos 7 días' :
@@ -732,7 +741,7 @@ async function renderDash(el) {
   chartCard.appendChild(chartTabBar);
 
   // Canvas para Chart.js
-  const canvasWrap = h('div', { style: 'position:relative;height:200px' });
+  const canvasWrap = h('div', { class: 'dash-trend-canvas', style: 'position:relative;height:200px' });
   const canvas = document.createElement('canvas');
   canvas.id = 'dash-chart-' + Date.now();
   canvas.style.cssText = 'width:100%;height:200px';
@@ -1017,19 +1026,33 @@ async function _dashRenderChart(canvasId, labels, data, dates, period, detailEl,
 
   if (!window.Chart) {
     _dashRenderNativeChart(canvas, labels, data, dates, period, detailEl, allSales, meta);
+    const wrapper = canvas.parentElement;
+    let lastWidth = wrapper.clientWidth;
+    const resize = new ResizeObserver(() => {
+      if (!canvas.isConnected) {
+        resize.disconnect();
+      } else if (wrapper.clientWidth !== lastWidth) {
+        lastWidth = wrapper.clientWidth;
+        _dashRenderNativeChart(canvas, labels, data, dates, period, detailEl, allSales, meta);
+      }
+    });
+    resize.observe(wrapper);
     return;
   }
 
   const today_ = today();
+  const style = getComputedStyle(canvas);
+  const activeColor = style.getPropertyValue('--dash-chart-active').trim();
+  const otherColor = style.getPropertyValue('--dash-chart-other').trim();
   const bgColors = dates.map(d =>
     d === today_ || d === today_.slice(0,7)
-      ? 'rgba(22,163,74,0.85)'
-      : 'rgba(99,102,241,0.6)'
+      ? activeColor || 'rgba(22,163,74,0.85)'
+      : otherColor || 'rgba(99,102,241,0.6)'
   );
   const borderColors = dates.map(d =>
     d === today_ || d === today_.slice(0,7)
-      ? 'rgba(22,163,74,1)'
-      : 'rgba(99,102,241,1)'
+      ? activeColor || 'rgba(22,163,74,1)'
+      : otherColor || 'rgba(99,102,241,1)'
   );
 
   const maxVal = Math.max(...data, 1);
@@ -1126,7 +1149,11 @@ function _dashRenderNativeChart(canvas, labels, data, dates, period, detailEl, a
 
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
-  const width = Math.max(320, rect.width || canvas.parentElement?.clientWidth || 640);
+  const style = getComputedStyle(canvas);
+  const activeColor = style.getPropertyValue('--dash-chart-active').trim();
+  const otherColor = style.getPropertyValue('--dash-chart-other').trim();
+  const compact = Boolean(activeColor);
+  const width = Math.max(compact ? 1 : 320, canvas.parentElement?.clientWidth || rect.width || 640);
   const height = Math.max(180, rect.height || 200);
   canvas.width = Math.floor(width * dpr);
   canvas.height = Math.floor(height * dpr);
@@ -1158,8 +1185,10 @@ function _dashRenderNativeChart(canvas, labels, data, dates, period, detailEl, a
     ctx.fillText(value >= 1000 ? `${Math.round(value / 1000)}k` : String(Math.round(value)), 4, y);
   }
 
-  const gap = Math.max(5, Math.min(12, plotW / Math.max(labels.length, 1) * 0.25));
-  const barW = Math.max(5, (plotW - gap * (labels.length - 1)) / Math.max(labels.length, 1));
+  const count = Math.max(labels.length, 1);
+  const gap = Math.max(compact ? 1 : 5, Math.min(12, plotW / count * 0.25));
+  const barW = Math.max(compact ? 1 : 5, (plotW - gap * (labels.length - 1)) / count);
+  const labelEvery = compact ? Math.ceil(count / 8) : 1;
 
   labels.forEach((label, i) => {
     const value = data[i] || 0;
@@ -1167,14 +1196,14 @@ function _dashRenderNativeChart(canvas, labels, data, dates, period, detailEl, a
     const hgt = value > 0 ? Math.max(4, (value / maxVal) * plotH) : 2;
     const y = pad.top + plotH - hgt;
     const active = dates[i] === today_ || dates[i] === today_.slice(0, 7);
-    ctx.fillStyle = active ? 'rgba(22,163,74,0.85)' : 'rgba(99,102,241,0.65)';
+    ctx.fillStyle = active ? activeColor || 'rgba(22,163,74,0.85)' : otherColor || 'rgba(99,102,241,0.65)';
     const r = Math.min(5, barW / 2, hgt / 2);
     _dashRoundRect(ctx, x, y, barW, hgt, r);
     ctx.fill();
 
     ctx.fillStyle = active ? '#111827' : '#9ca3af';
     ctx.textAlign = 'center';
-    ctx.fillText(label, x + barW / 2, height - 13);
+    if (i % labelEvery === 0) ctx.fillText(label, x + barW / 2, height - 13);
     bars.push({ x, y, w: barW, h: hgt, index: i });
   });
 

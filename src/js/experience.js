@@ -40,6 +40,7 @@
     superadmin:{ label:'Panel Dev', icon:'code', group:'Sistema' },
   };
   let observer = null;
+  let modalObserver = null;
   let healthCache = null;
   let healthCacheAt = 0;
   let connectionState = { status: 'local', checkedAt: null };
@@ -815,6 +816,24 @@
     wrap.insertBefore(bar, table);
   }
 
+  // Diseño móvil: en las tablas marcadas como tarjetas, cada celda recibe el
+  // título de su columna (data-label) para que el CSS móvil lo muestre encima
+  // del valor. Solo agrega ese atributo; no cambia contenido ni orden.
+  function labelCardTables(root) {
+    root.querySelectorAll('table.mobile-card-table').forEach(table => {
+      const headers = [...(table.tHead?.rows[0]?.cells || [])].map(th => th.textContent.trim());
+      if (!headers.length) return;
+      [...table.tBodies].forEach(body => [...body.rows].forEach(row => {
+        if (row.cells.length !== headers.length) return;
+        [...row.cells].forEach((cell, index) => {
+          if (!headers[index] || cell.hasAttribute('data-label')) return;
+          if (cell.classList.contains('mobile-card-title') || cell.classList.contains('mobile-card-actions')) return;
+          cell.setAttribute('data-label', headers[index]);
+        });
+      }));
+    });
+  }
+
   function normalizedStatus(text) {
     const value = String(text || '').trim().toLowerCase();
     if (/anulad|cancelad|rechazad|vencid|error|fall/.test(value)) return 'danger';
@@ -855,6 +874,7 @@
   function enhancePage(root = document.getElementById('page')) {
     if (!root) return;
     root.querySelectorAll('.tw table').forEach(enhanceTable);
+    labelCardTables(root);
     enhanceStatuses(root);
     enhanceModals(document);
     enhanceEmptyStates(root);
@@ -872,6 +892,13 @@
     observer?.disconnect();
     observer = new MutationObserver(() => enhancePage(page));
     observer.observe(page, { childList:true, subtree:true });
+    // Las ventanas se agregan a body, fuera de #page: se rotulan al abrirse.
+    modalObserver?.disconnect();
+    modalObserver = new MutationObserver(() => {
+      const modal = document.getElementById('modal-ov');
+      if (modal) labelCardTables(modal);
+    });
+    modalObserver.observe(document.body, { childList:true });
     enhancePage(page);
     if (!window.__veloExperienceSyncBound && window.api?.sync?.onChanged) {
       window.__veloExperienceSyncBound = true;

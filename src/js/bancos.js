@@ -24,7 +24,7 @@ async function renderBancos(el) {
   const wrap = h('div', { class: 'module-workspace' });
   el.appendChild(wrap);
 
-  wrap.appendChild(h('div', { class: 'sec-hdr' },
+  wrap.appendChild(h('div', { class: 'sec-hdr mobile-module-heading' },
     h('div', null,
       h('div', { class: 'sec-title' }, 'Bancos y Cuentas'),
       h('div', { class: 'sec-sub' }, 'Saldos, movimientos, transferencias y conciliación financiera')
@@ -77,7 +77,7 @@ async function _renderBancosCtAs(el) {
   const cuentas = res?.data || [];
 
   // Header
-  const hdr = h('div', { class: 'sec-hdr', style: { marginBottom: '16px' } },
+  const hdr = h('div', { class: 'sec-hdr mobile-module-heading', style: { marginBottom: '16px' } },
     h('div', null),
     h('button', { class: 'btn', onclick: _openBancosCreateModal }, '+ Nueva cuenta')
   );
@@ -188,7 +188,7 @@ function _openBancosCreateModal(acct = null) {
         <button class="btn-ghost" onclick="closeModal()">Cancelar</button>
       </div>
     </div>
-  `);
+  `, 'finanzas-mobile-modal');
 }
 
 // Muestra/oculta campos según el tipo de cuenta:
@@ -283,7 +283,7 @@ function _openBancosDetailModal(c) {
         <button class="btn-ghost" onclick="closeModal()">Cerrar</button>
       </div>
     </div>
-  `);
+  `, 'finanzas-mobile-modal');
 }
 
 window._toggleBancosAcct = async function(id, active) {
@@ -333,7 +333,7 @@ async function _renderBancosMovList(el, accountId, currency = 'DOP') {
     return;
   }
 
-  const tbl = h('table', { class: 'ledger-tbl', style: { width: '100%' } },
+  const tbl = h('table', { class: 'ledger-tbl mobile-card-table mobile-card-auto', style: { width: '100%' } },
     h('thead', null, h('tr', null,
       h('th', null, 'Fecha'),
       h('th', null, 'Tipo'),
@@ -402,7 +402,7 @@ function _openMovModal(accountId, cuentas) {
         </div>
       </div>
     </div>
-  `);
+  `, 'finanzas-mobile-modal');
 }
 
 window._saveMov = async function(accountId) {
@@ -556,7 +556,7 @@ async function _renderBancosConcil(el) {
   if (!data.statementLines.length) {
     el.appendChild(h('div', { class: 'empty' }, h('p', null, 'Sin líneas importadas'), h('span', null, 'Usa "Importar extracto" para cargar el CSV del banco')));
   } else {
-    el.appendChild(h('div', { class: 'tw' }, h('table', { class: 'ledger-tbl', style: { width: '100%' } },
+    el.appendChild(h('div', { class: 'tw' }, h('table', { class: 'ledger-tbl mobile-card-table mobile-card-auto', style: { width: '100%' } },
       h('thead', null, h('tr', null,
         h('th', null, 'Fecha'), h('th', null, 'Descripción'), h('th', null, 'Ref'),
         h('th', { class: 'num' }, 'Monto'), h('th', null, 'Estado'), h('th', null, 'Movimiento'), h('th', null, '')
@@ -582,7 +582,7 @@ async function _renderBancosConcil(el) {
   if (!data.unmatchedMovements.length) {
     el.appendChild(h('div', { class: 'empty' }, h('p', null, 'Todos los movimientos están conciliados')));
   } else {
-    el.appendChild(h('div', { class: 'tw' }, h('table', { class: 'ledger-tbl', style: { width: '100%' } },
+    el.appendChild(h('div', { class: 'tw' }, h('table', { class: 'ledger-tbl mobile-card-table mobile-card-auto', style: { width: '100%' } },
       h('thead', null, h('tr', null, h('th', null, 'Fecha'), h('th', null, 'Tipo'), h('th', null, 'Descripción'), h('th', { class: 'num' }, 'Monto (con signo)'))),
       h('tbody', null, ...data.unmatchedMovements.map(m => h('tr', null,
         h('td', null, (m.created_at || '').slice(0, 10)),
@@ -639,7 +639,7 @@ async function _openManualMatchModal(line) {
       <button class="btn-ghost" onclick="closeModal()">Cancelar</button>
       <button class="btn" id="mm-save">Conciliar</button>
     </div>
-  `);
+  `, 'finanzas-mobile-modal');
   document.getElementById('mm-save').onclick = async () => {
     const movementId = parseInt(document.getElementById('mm-mov').value) || null;
     if (!movementId) { toast('Selecciona un movimiento', 'e'); return; }
@@ -701,7 +701,7 @@ async function _openImportExtractoModal(accountId) {
       <button class="btn-ghost" onclick="closeModal()">Cancelar</button>
       <button class="btn" id="ext-import" style="display:none">Importar</button>
     </div>
-  `);
+  `, 'finanzas-mobile-modal');
 
   let parsed = null;
   document.getElementById('ext-file').onchange = (e) => {
@@ -808,7 +808,7 @@ async function _renderBancosResumen(el) {
 
   // Tabla de cuentas
   el.appendChild(h('div', { style: { fontWeight: '600', fontSize: '13px', marginBottom: '10px' } }, 'Detalle por cuenta'));
-  const tbl = h('table', { class: 'ledger-tbl', style: { width: '100%' } },
+  const tbl = h('table', { class: 'ledger-tbl mobile-card-table mobile-card-auto', style: { width: '100%' } },
     h('thead', null, h('tr', null,
       h('th', null, 'Cuenta'),
       h('th', null, 'Tipo'),

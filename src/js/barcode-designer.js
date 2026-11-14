@@ -79,6 +79,7 @@ async function renderBarcodeDesigner(container, options = {}) {
 
   // Layout: controles izquierda, preview derecha
   const layout = document.createElement('div');
+  layout.className = 'mobile-stack-grid';
   layout.style.cssText = 'display:grid;grid-template-columns:1fr 340px;gap:16px;align-items:start';
 
   // ── Panel de controles ────────────────────────

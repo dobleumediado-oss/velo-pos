@@ -32,7 +32,7 @@ async function renderConfiguracion(el) {
   const isAdmin     = ['admin', 'superadmin'].includes(user?.role);
 
   // ── Header ──────────────────────────────────
-  root.appendChild(h('div', { class: 'sec-hdr' },
+  root.appendChild(h('div', { class: 'sec-hdr mobile-module-heading' },
     h('div', null,
       h('div', { class: 'sec-title' }, 'Configuración'),
       h('div', { class: 'sec-sub' }, `Velo POS v${info.appVersion || window._appVersion || '1.5.5'}`)
@@ -47,7 +47,7 @@ async function renderConfiguracion(el) {
   // ── Columnas ─────────────────────────────────
   const colLeft  = h('div', { style: 'display:flex;flex-direction:column;gap:16px;min-width:0' });
   const colRight = h('div', { style: 'display:flex;flex-direction:column;gap:16px;width:400px;flex-shrink:0' });
-  const grid     = h('div', { style: 'display:grid;grid-template-columns:1fr 400px;gap:20px;align-items:start' });
+  const grid     = h('div', { class: 'mobile-stack-grid', style: 'display:grid;grid-template-columns:1fr 400px;gap:20px;align-items:start' });
 
   // ══════════════════════
   // COLUMNA IZQUIERDA
@@ -932,7 +932,7 @@ async function renderConfiguracion(el) {
         No les asignes una impresora <strong>térmica (80/58&nbsp;mm)</strong> o saldrán mal
         formateados — usa una impresora de hojas (láser/inkjet) para esas categorías.
       </div>
-      <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <table class="mobile-card-table mobile-card-auto" style="width:100%;border-collapse:collapse;font-size:12px">
         <thead><tr style="text-align:left;font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:.04em">
           <th style="padding:4px 6px">Módulo</th><th style="padding:4px 6px">Impresora</th>
           <th style="padding:4px 6px;text-align:center">Vista previa</th>
@@ -1694,7 +1694,7 @@ function openEditarUsuarioModal(u) {
     <div class="modal-foot">
       <button class="btn btn-out" id="eu-cancel">Cancelar</button>
       <button class="btn btn-green" id="eu-save">${svg('check')} Guardar</button>
-    </div>`);
+    </div>`, 'ajustes-mobile-modal');
   // Eventos propios: el botón con argumento no lo reconoce la lista blanca de
   // _bindModalSafeActions, así que lo enganchamos aquí directamente.
   document.getElementById('eu-cancel')?.addEventListener('click', () => closeModal());
@@ -1758,7 +1758,7 @@ function abrirPreparacionCloud() {
     <div class="fg"><label class="lbl">Clave para proteger el archivo</label><input class="inp" id="cloud-export-pass" type="password" autocomplete="new-password" maxlength="1024" placeholder="Mínimo 12 caracteres"></div>
     <div class="fg"><label class="lbl">Confirmar clave</label><input class="inp" id="cloud-export-confirm" type="password" autocomplete="new-password" maxlength="1024"></div>
     <div class="alrt-sub">Conserva la clave: VELO no la guarda y será necesaria para abrir el archivo.</div>
-    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button><button class="btn btn-dark" id="cloud-export-create">Seleccionar carpeta y preparar</button></div>`);
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button><button class="btn btn-dark" id="cloud-export-create">Seleccionar carpeta y preparar</button></div>`, 'ajustes-mobile-modal');
   const button = document.getElementById('cloud-export-create');
   const password = document.getElementById('cloud-export-pass');
   const confirmation = document.getElementById('cloud-export-confirm');
@@ -1793,7 +1793,7 @@ function abrirCorteCloud() {
     <div class="fg"><label class="lbl" for="cutover-pass2">Confirmar clave</label><input class="inp" id="cutover-pass2" type="password" autocomplete="new-password" maxlength="1024"></div>
     <div class="alrt-sub">Conserva la clave: VELO no la guarda y Cloud la pedirá para activar la copia.</div>
     <div class="alrt-sub" id="cutover-status" role="status" aria-live="polite"></div>
-    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="cutover-run" type="button">${frozen ? 'Seleccionar carpeta y sacar copia' : 'Congelar y sacar copia final'}</button></div>`);
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="cutover-run" type="button">${frozen ? 'Seleccionar carpeta y sacar copia' : 'Congelar y sacar copia final'}</button></div>`, 'ajustes-mobile-modal');
   const button = document.getElementById('cutover-run');
   const status = document.getElementById('cutover-status');
   button.onclick = async () => {
@@ -1839,7 +1839,7 @@ function abrirPasarACloud() {
   _cdStopPoll(); _cdRead = null;
   openModal(`<div class="modal-title">Pasar a VELO Cloud</div>
     <div class="modal-sub">Desktop envía el negocio a tu empresa de VELO Cloud: primero un ensayo con el negocio trabajando y luego el corte. No hay archivos ni claves que llevar a mano.</div>
-    <div id="cd-body" role="region" aria-live="polite"><div class="alrt-sub">Consultando…</div></div>`);
+    <div id="cd-body" role="region" aria-live="polite"><div class="alrt-sub">Consultando…</div></div>`, 'ajustes-mobile-modal');
   void _cdRender();
 }
 
@@ -2125,7 +2125,7 @@ function abrirRetiroDatosTech(status) {
     <div class="modal-sub">Se retiran ${status.units} ${status.units === 1 ? 'equipo' : 'equipos'} con IMEI, se desenganchan de ${status.unitLines} ${status.unitLines === 1 ? 'línea' : 'líneas'} de ventas ya anuladas y ${status.serializedProducts === 1 ? 'el artículo queda' : 'los artículos quedan'} sin IMEI e ${status.serializedProducts === 1 ? 'inactivo' : 'inactivos'}. Las ventas anuladas, la caja y el historial se conservan.</div>
     <div class="alrt a" style="margin:12px 0"><div class="alrt-dot a"></div><div class="alrt-sub">Antes se guarda un respaldo en la carpeta de backups. Úsalo solo si esos equipos eran de prueba: VELO POS no maneja equipos con IMEI.</div></div>
     <div class="fg"><label class="lbl" for="tech-retire-confirm">Escribe RETIRAR para confirmar</label><input class="inp" id="tech-retire-confirm" type="text" autocomplete="off" maxlength="20"></div>
-    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" id="tech-retire-run" type="button">Retirar datos de prueba</button></div>`);
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" id="tech-retire-run" type="button">Retirar datos de prueba</button></div>`, 'ajustes-mobile-modal');
   const button = document.getElementById('tech-retire-run');
   button.onclick = async () => {
     button.disabled = true;
@@ -2146,7 +2146,7 @@ function abrirDescongelarCorte() {
     <div class="alrt r" style="margin:12px 0"><div class="alrt-dot r"></div><div class="alrt-sub">Hazlo <strong>solo si VELO Cloud no llegó a activarse o se deshizo el corte</strong>. Si Cloud ya está operando, descongelar haría que dos sistemas emitan facturas y NCF.</div></div>
     <div class="fg"><label class="lbl" for="unfreeze-reason">Motivo *</label><input class="inp" id="unfreeze-reason" type="text" autocomplete="off" maxlength="300" placeholder="Ej.: el corte se deshizo en Cloud"></div>
     <div class="fg"><label class="lbl" for="unfreeze-confirm">Escribe DESCONGELAR para confirmar</label><input class="inp" id="unfreeze-confirm" type="text" autocomplete="off" maxlength="20"></div>
-    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" id="unfreeze-run" type="button">Descongelar</button></div>`);
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-red" id="unfreeze-run" type="button">Descongelar</button></div>`, 'ajustes-mobile-modal');
   const button = document.getElementById('unfreeze-run');
   button.onclick = async () => {
     button.disabled = true;
@@ -2173,7 +2173,7 @@ function abrirBackupCifrado() {
       <div class="alrt-sub">Si Windows no abre el selector, copia la ruta de la carpeta desde el Explorador y pégala aquí. La carpeta debe existir.</div></div>
     <div class="alrt a"><div class="alrt-dot a"></div><div class="alrt-sub">Sin esta clave el archivo no se puede recuperar. El sistema cifra con AES-256-GCM y verifica la copia antes de confirmarla.</div></div>
     <div class="alrt-sub" id="continuity-status" role="status" aria-live="polite"></div>
-    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="continuity-create" type="button">Crear copia</button></div>`);
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="continuity-create" type="button">Crear copia</button></div>`, 'ajustes-mobile-modal');
   const button = document.getElementById('continuity-create');
   const picker = document.getElementById('continuity-pick');
   const folder = document.getElementById('continuity-folder');
@@ -2226,12 +2226,12 @@ function abrirBackupCifrado() {
 }
 
 function abrirVerificacionCifrada() {
-  openModal(`<div class="modal-title">Probar respaldo cifrado</div><div class="modal-sub">La prueba recupera los datos en una carpeta temporal, comprueba su integridad y después los elimina. Las copias nuevas incluyen las evidencias de servicio; las antiguas contienen solo la base. Los datos activos no se modifican.</div><div class="fg" style="margin-top:14px"><label class="lbl">Clave del respaldo *</label><input class="inp" id="continuity-verify-pass" type="password" autocomplete="current-password"></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="continuity-verify">Seleccionar archivo y probar</button></div>`);
+  openModal(`<div class="modal-title">Probar respaldo cifrado</div><div class="modal-sub">La prueba recupera los datos en una carpeta temporal, comprueba su integridad y después los elimina. Las copias nuevas incluyen las evidencias de servicio; las antiguas contienen solo la base. Los datos activos no se modifican.</div><div class="fg" style="margin-top:14px"><label class="lbl">Clave del respaldo *</label><input class="inp" id="continuity-verify-pass" type="password" autocomplete="current-password"></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="continuity-verify">Seleccionar archivo y probar</button></div>`, 'ajustes-mobile-modal');
   document.getElementById('continuity-verify').onclick=async event=>{const passphrase=document.getElementById('continuity-verify-pass').value;if(!passphrase)return toast('Escribe la clave del respaldo','w');event.currentTarget.disabled=true;const picked=await window.api.backup.pickEncryptedFile();if(!picked?.ok){event.currentTarget.disabled=false;return picked?.error==='Cancelado'?null:toast(picked?.error||'No se pudo seleccionar el archivo','err');}const result=await window.api.backup.verifyEncrypted({requestUserId:_cfgUser().id,passphrase,filePath:picked.path});if(!result?.ok){event.currentTarget.disabled=false;return toast(result?.error||'La copia no superó la prueba','err');}closeModal();toast('✓ Copia íntegra y restaurable','ok');};
 }
 
 function abrirRecuperacionCompleta() {
-  openModal(`<div class="modal-title">Recuperar un negocio</div><div class="modal-sub">Selecciona una copia completa nueva (.velobackup). VELO la descifrará y comprobará en una carpeta nueva, sin reemplazar el negocio abierto. Las copias antiguas .veloenc solo contienen la base y se verifican con «Probar una copia».</div><div class="fg" style="margin-top:14px"><label class="lbl">Clave de la copia *</label><input class="inp" id="recovery-pass" type="password" autocomplete="current-password"></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="recovery-create">Elegir copia y carpeta</button></div>`);
+  openModal(`<div class="modal-title">Recuperar un negocio</div><div class="modal-sub">Selecciona una copia completa nueva (.velobackup). VELO la descifrará y comprobará en una carpeta nueva, sin reemplazar el negocio abierto. Las copias antiguas .veloenc solo contienen la base y se verifican con «Probar una copia».</div><div class="fg" style="margin-top:14px"><label class="lbl">Clave de la copia *</label><input class="inp" id="recovery-pass" type="password" autocomplete="current-password"></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="recovery-create">Elegir copia y carpeta</button></div>`, 'ajustes-mobile-modal');
   const button = document.getElementById('recovery-create');
   button.onclick = async () => {
     const passphrase = document.getElementById('recovery-pass').value;
@@ -2255,7 +2255,7 @@ function abrirRecuperacionCompleta() {
 }
 
 function abrirImportacionCompleta() {
-  openModal(`<div class="modal-title">Incorporar negocio desde copia</div><div class="modal-sub">Selecciona un archivo .velobackup de esta misma edición de VELO. Se agregará como negocio nuevo en esta instalación; los negocios existentes no se reemplazan. Necesitarás la clave de la copia y las credenciales del negocio importado para entrar.</div><div class="fg" style="margin-top:14px"><label class="lbl">Clave de la copia *</label><input class="inp" id="import-pass" type="password" autocomplete="current-password"></div><div class="alrt a"><div class="alrt-dot a"></div><div class="alrt-sub">Las impresoras, conexiones y licencia se configuran en esta PC. Si la copia es de una versión más reciente, actualiza VELO antes de importarla.</div></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="import-business">Elegir copia e incorporar</button></div>`);
+  openModal(`<div class="modal-title">Incorporar negocio desde copia</div><div class="modal-sub">Selecciona un archivo .velobackup de esta misma edición de VELO. Se agregará como negocio nuevo en esta instalación; los negocios existentes no se reemplazan. Necesitarás la clave de la copia y las credenciales del negocio importado para entrar.</div><div class="fg" style="margin-top:14px"><label class="lbl">Clave de la copia *</label><input class="inp" id="import-pass" type="password" autocomplete="current-password"></div><div class="alrt a"><div class="alrt-dot a"></div><div class="alrt-sub">Las impresoras, conexiones y licencia se configuran en esta PC. Si la copia es de una versión más reciente, actualiza VELO antes de importarla.</div></div><div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-dark" id="import-business">Elegir copia e incorporar</button></div>`, 'ajustes-mobile-modal');
   const button = document.getElementById('import-business');
   button.onclick = async () => {
     const passphrase = document.getElementById('import-pass').value;
@@ -2324,7 +2324,7 @@ function openNuevoCajeroModal() {
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-green" onclick="crearCajero()">${svg('check')} Crear usuario</button>
-    </div>`);
+    </div>`, 'ajustes-mobile-modal');
 }
 
 async function crearCajero() {
@@ -2382,7 +2382,7 @@ function openNuevaCategoriaModal() {
     <div class="modal-foot">
       <button class="btn btn-out" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-green" onclick="crearCategoria()">${svg('check')} Crear</button>
-    </div>`);
+    </div>`, 'ajustes-mobile-modal');
   setTimeout(() => document.getElementById('cat-name')?.focus(), 100);
 }
 
@@ -2746,7 +2746,7 @@ function exportarPerfilTerminales() {
     <div class="fg"><label class="lbl">Confirmar clave</label>
       <input class="inp" type="password" id="handoff-export-confirm" autocomplete="new-password"></div>
     <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-dark" id="handoff-export-go">Guardar perfil</button></div>`);
+      <button class="btn btn-dark" id="handoff-export-go">Guardar perfil</button></div>`, 'ajustes-mobile-modal');
   document.getElementById('handoff-export-go').onclick = async () => {
     const passphrase = document.getElementById('handoff-export-key').value;
     if (passphrase.length < 12 || passphrase !== document.getElementById('handoff-export-confirm').value) {
@@ -2765,7 +2765,7 @@ function importarPerfilTerminales() {
       <input class="inp" type="password" id="handoff-import-key" autocomplete="current-password"></div>
     <div id="handoff-preview" style="font-size:12px;margin-top:10px"></div>
     <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-dark" id="handoff-import-go">Elegir perfil y verificar</button></div>`);
+      <button class="btn btn-dark" id="handoff-import-go">Elegir perfil y verificar</button></div>`, 'ajustes-mobile-modal');
   document.getElementById('handoff-import-go').onclick = async () => {
     const passphrase = document.getElementById('handoff-import-key').value;
     const res = await window.api.connection.handoffImportPreview({ requestUserId:_cfgUser()?.id, passphrase });

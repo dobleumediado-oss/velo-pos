@@ -136,12 +136,12 @@ async function renderReportes(el) {
   }
 
   // ── Header ──────────────────────────────────
-  el.appendChild(h('div', { class: 'sec-hdr' },
+  el.appendChild(h('div', { class: 'sec-hdr mobile-module-heading' },
     h('div', null,
       h('div', { class: 'sec-title' }, 'Reportes'),
       h('div', { class: 'sec-sub' }, 'Análisis financiero del negocio')
     ),
-    h('div', { class: 'flex', style: { gap: '8px' } },
+    h('div', { class: 'flex mobile-module-actions', style: { gap: '8px' } },
       _REP_SECTIONS[repTab] ? h('button', {
         class: 'btn btn-out btn-sm',
         onclick: () => reportesConfigure(el),
@@ -163,7 +163,7 @@ async function renderReportes(el) {
   ));
 
   // ── Pestañas principales ─────────────────────
-  const mainTabs = h('div', { class: 'flex', style: 'gap:8px;margin-bottom:16px' });
+  const mainTabs = h('div', { class: 'flex rep-mobile-tabs', style: 'gap:8px;margin-bottom:16px' });
   const mainDefs = [
     { v: 'financiero', l: 'Financiero' },
     { v: 'abonos',     l: 'Abonos CxC' },
@@ -202,7 +202,7 @@ async function renderReportes(el) {
   }
 
   // ── Selector de rango ────────────────────────
-  const rangeBar = h('div', { class: 'flex', style: { gap: '8px', marginBottom: '16px', flexWrap: 'wrap' } });
+  const rangeBar = h('div', { class: 'flex rep-mobile-range', style: { gap: '8px', marginBottom: '16px', flexWrap: 'wrap' } });
 
   const tabs = h('div', { class: 'tabs', style: { marginBottom: 0 } });
   [
@@ -227,7 +227,7 @@ async function renderReportes(el) {
   rangeBar.appendChild(tabs);
 
   // Inputs de rango personalizado
-  const customDiv = h('div', { id: 'rep-custom',
+  const customDiv = h('div', { id: 'rep-custom', class: 'rep-mobile-custom',
     style: { display: repRange === 'custom' ? 'flex' : 'none', gap: '8px', alignItems: 'center' } });
   customDiv.innerHTML = `
     <input class="inp" id="rep-from" type="date" value="${repDateFrom}"
@@ -244,7 +244,7 @@ async function renderReportes(el) {
 
   if (repTab === 'financiero') {
     const segmentBar = h('div', {
-      class: 'card',
+      class: 'card rep-mobile-segments',
       style: 'padding:11px 13px;margin-bottom:16px;display:flex;gap:12px;align-items:end;flex-wrap:wrap'
     });
     segmentBar.innerHTML = `
@@ -359,31 +359,33 @@ function renderReporteContenido(el, d) {
   const noCostData = totalCost === 0 && totalRev > 0;
 
   // ── Métricas principales ─────────────────────
-  const metWrap = h('div', { class: 'metrics',
+  const metWrap = h('div', { class: 'metrics mobile-summary-metrics rep-mobile-summary',
     style: { gridTemplateColumns: 'repeat(4,1fr)', marginBottom: '20px' } });
+  const revenueShare = value => totalRev > 0 ? Math.min(100, Math.max(0, value / totalRev * 100)) : 0;
   [
-    { icon: 'dollar',  color: 'g', label: 'Ingresos Totales',  val: fmt(totalRev),      sub: `${totalSales} facturas` },
+    { icon: 'dollar',  color: 'g', label: 'Ingresos Totales',  val: fmt(totalRev),      sub: `${totalSales} facturas`, place: 'featured' },
     { icon: 'trend',   color: 'b', label: 'Utilidad Bruta',
       val: noCostData ? '—' : fmt(grossProfit),
-      sub: noCostData ? 'Sin datos de costo' : `Margen: ${margin.toFixed(1)}%` },
-    { icon: 'receipt', color: 'p', label: 'ITBIS Generado',    val: fmt(totalTax),      sub: `Impuesto ${CFG?.itbis ?? 18}%` },
-    { icon: 'box',     color: 'a', label: 'Unidades Vendidas', val: String(totalUnits), sub: `${devolucion.count} devueltas` },
+      sub: noCostData ? 'Sin datos de costo' : `Margen: ${margin.toFixed(1)}%`,
+      place: 'bar', share: noCostData ? 0 : revenueShare(grossProfit) },
+    { icon: 'receipt', color: 'p', label: 'ITBIS Generado',    val: fmt(totalTax),      sub: `Impuesto ${CFG?.itbis ?? 18}%`, place: 'bar', share: revenueShare(totalTax) },
+    { icon: 'box',     color: 'a', label: 'Unidades Vendidas', val: String(totalUnits), sub: `${devolucion.count} devueltas`, place: 'total' },
   ].forEach(m => {
-    metWrap.appendChild(
-      h('div', { class: 'metric' },
+    const metric = h('div', { class: `metric mobile-summary-${m.place}` },
         h('div', { class: 'met-top' },
           h('div', { class: `met-icon ${m.color}`, html: svg(m.icon) })
         ),
         h('div', { class: 'met-label' }, m.label),
         h('div', { class: 'met-val' }, m.val),
-        h('div', { style: { fontSize: '10px', color: 'var(--muted2)', marginTop: '2px' } }, m.sub)
-      )
-    );
+        h('div', { class: 'rep-mobile-sub', style: { fontSize: '10px', color: 'var(--muted2)', marginTop: '2px' } }, m.sub)
+      );
+    if (m.place === 'bar') metric.style.setProperty('--mobile-bar-size', `${m.share}%`);
+    metWrap.appendChild(metric);
   });
   el.appendChild(metWrap);
 
   // ── Métricas secundarias ─────────────────────
-  const sec = h('div', { class: 'metrics',
+  const sec = h('div', { class: 'metrics rep-mobile-grid2',
     style: { gridTemplateColumns: 'repeat(4,1fr)', marginBottom: '20px' } });
   [
     { label: 'Costo de ventas',   val: noCostData ? '—' : fmt(totalCost),    color: 'var(--red)' },
@@ -554,6 +556,7 @@ function renderReporteContenido(el, d) {
       'Sin cambios en este período'));
   } else {
     priceCard.appendChild(h('div', {
+      class: 'rep-mobile-impact',
       style: {
         display: 'grid',
         gridTemplateColumns: 'repeat(3,minmax(0,1fr))',
@@ -832,15 +835,15 @@ function renderReporteContenido(el, d) {
       </div>
     </div>
     <div class="tw" style="max-height:420px;overflow:auto">
-      <table>
+      <table class="mobile-card-table">
         <thead><tr><th>Fecha</th><th>Documento</th><th>Cliente</th><th>Segmento</th><th>Método</th><th style="text-align:right">Total</th></tr></thead>
         <tbody>${detailRows.map(row => `<tr>
-          <td>${fdate(row.sale_date)}</td>
-          <td><strong>${_repEsc(facturaLabel(row))}</strong>${row.ncf ? `<div class="ts">${_repEsc(row.ncf)}</div>` : ''}</td>
-          <td>${_repEsc(row.customer_name || 'Consumidor Final')}</td>
-          <td><span class="badge n">${priceLabels[row.price_mode] || row.price_mode}</span> <span class="badge ${row.customer_type === 'company' ? 'p' : 'b'}">${customerLabels[row.customer_type] || row.customer_type}</span></td>
-          <td style="text-transform:capitalize">${_repEsc(row.payment_method || '')}</td>
-          <td style="text-align:right;font-weight:800">${fmt(row.total)}</td>
+          <td data-label="Fecha">${fdate(row.sale_date)}</td>
+          <td class="mobile-card-title"><strong>${_repEsc(facturaLabel(row))}</strong>${row.ncf ? `<div class="ts">${_repEsc(row.ncf)}</div>` : ''}</td>
+          <td data-label="Cliente">${_repEsc(row.customer_name || 'Consumidor Final')}</td>
+          <td data-label="Segmento"><span class="badge n">${priceLabels[row.price_mode] || row.price_mode}</span> <span class="badge ${row.customer_type === 'company' ? 'p' : 'b'}">${customerLabels[row.customer_type] || row.customer_type}</span></td>
+          <td data-label="Método" style="text-transform:capitalize">${_repEsc(row.payment_method || '')}</td>
+          <td data-label="Total" style="text-align:right;font-weight:800">${fmt(row.total)}</td>
         </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;padding:18px;color:var(--muted2)">Sin facturas</td></tr>'}</tbody>
       </table>
     </div>`;
@@ -863,20 +866,25 @@ function renderAbonosContenido(el, d) {
   }[repRange] || repRange;
 
   const metWrap = h('div', {
-    class: 'metrics',
+    class: 'metrics mobile-summary-metrics rep-mobile-summary',
     style: { gridTemplateColumns: 'repeat(4,1fr)', marginBottom: '20px' }
   });
+  // En móvil, las barras reparten entre sí lo histórico y lo operativo.
+  const originTotal = Math.max(0, Number(summary.importedTotal) || 0) + Math.max(0, Number(summary.currentTotal) || 0);
+  const originShare = value => originTotal > 0 ? Math.min(100, Math.max(0, (Number(value) || 0) / originTotal * 100)) : 0;
   [
-    { label: 'Abonos recibidos', val: fmt(summary.total || 0), sub: `${summary.count || 0} registros`, color: 'var(--green)' },
-    { label: 'Clientes con abono', val: String(summary.customers || 0), sub: rangeLabel, color: 'var(--blue)' },
-    { label: 'Importación histórica', val: fmt(summary.importedTotal || 0), sub: 'registrado sin tocar caja actual', color: 'var(--amber)' },
-    { label: 'Abonos operativos', val: fmt(summary.currentTotal || 0), sub: 'hechos desde el POS', color: 'var(--purple)' },
+    { label: 'Abonos recibidos', val: fmt(summary.total || 0), sub: `${summary.count || 0} registros`, color: 'var(--green)', place: 'featured' },
+    { label: 'Clientes con abono', val: String(summary.customers || 0), sub: rangeLabel, color: 'var(--blue)', place: 'total' },
+    { label: 'Importación histórica', val: fmt(summary.importedTotal || 0), sub: 'registrado sin tocar caja actual', color: 'var(--amber)', place: 'bar', share: originShare(summary.importedTotal) },
+    { label: 'Abonos operativos', val: fmt(summary.currentTotal || 0), sub: 'hechos desde el POS', color: 'var(--purple)', place: 'bar', share: originShare(summary.currentTotal) },
   ].forEach(m => {
-    metWrap.appendChild(h('div', { class: 'metric' },
+    const metric = h('div', { class: `metric mobile-summary-${m.place}` },
       h('div', { class: 'met-label' }, m.label),
-      h('div', { style: { fontSize: '20px', fontWeight: 800, color: m.color } }, m.val),
-      h('div', { style: { fontSize: '10px', color: 'var(--muted2)', marginTop: '2px' } }, m.sub)
-    ));
+      h('div', { class: 'rep-mobile-val', style: { fontSize: '20px', fontWeight: 800, color: m.color } }, m.val),
+      h('div', { class: 'rep-mobile-sub', style: { fontSize: '10px', color: 'var(--muted2)', marginTop: '2px' } }, m.sub)
+    );
+    if (m.place === 'bar') metric.style.setProperty('--mobile-bar-size', `${m.share}%`);
+    metWrap.appendChild(metric);
   });
   el.appendChild(metWrap);
 
@@ -993,25 +1001,25 @@ function renderAbonosContenido(el, d) {
       .join(' · ');
     const source = p.imported ? 'Histórico' : 'POS';
     return `<tr>
-      <td>${fdate(fecha)}</td>
-      <td>
+      <td data-label="Fecha">${fdate(fecha)}</td>
+      <td class="mobile-card-title">
         <div style="font-weight:700">${_repEsc(p.customer_name || 'Cliente eliminado')}</div>
         <div style="font-size:10px;color:var(--muted2)">${_repEsc(p.customer_rnc || '')}</div>
       </td>
-      <td>
+      <td data-label="Factura / Nota">
         <div>${factura}${p.sale_ncf ? ` <span style="font-size:10px;color:var(--muted2)">${_repEsc(p.sale_ncf)}</span>` : ''}</div>
         ${allocationDetail ? `<div style="font-size:10px;color:var(--blue)">${allocationDetail}</div>` : ''}
         <div style="font-size:10px;color:var(--muted2)">${_repEsc(p.note || 'Abono')}</div>
         ${p.sale_date ? `<div style="font-size:10px;color:var(--muted2)">Venta: ${_repEsc(p.sale_date)}${p.sale_fiscal_issued_at ? ` · Fiscal: ${_repEsc(String(p.sale_fiscal_issued_at).slice(0,10))}` : ''}</div>` : ''}
       </td>
-      <td><span class="badge g">${_repEsc(p.method || 'efectivo')}</span></td>
-      <td><span class="badge ${p.imported ? 'a' : 'b'}">${source}</span></td>
-      <td style="text-align:right;font-weight:800;color:var(--green)">${fmt(p.amount || 0)}</td>
+      <td data-label="Método"><span class="badge g">${_repEsc(p.method || 'efectivo')}</span></td>
+      <td data-label="Origen"><span class="badge ${p.imported ? 'a' : 'b'}">${source}</span></td>
+      <td data-label="Monto" style="text-align:right;font-weight:800;color:var(--green)">${fmt(p.amount || 0)}</td>
     </tr>`;
   }).join('') : `<tr><td colspan="6" style="text-align:center;color:var(--muted2);padding:18px">Sin abonos en este período</td></tr>`;
 
   tableCard.appendChild(h('div', { class: 'tw', style: { maxHeight: '420px', overflow: 'auto' },
-    html: `<table>
+    html: `<table class="mobile-card-table">
       <thead><tr>
         <th>Fecha</th><th>Cliente</th><th>Factura / Nota</th><th>Método</th><th>Origen</th><th style="text-align:right">Monto</th>
       </tr></thead>
@@ -1381,20 +1389,21 @@ async function _renderReporteInventario(el) {
   const latestCostImpact = changedProducts.reduce((a, p) => a + (Number(p.last_stock_value_delta) || 0), 0);
 
   // ── Métricas resumen ─────────────────────────
-  const metWrap = h('div', { class: 'metrics' });
+  const metWrap = h('div', { class: 'metrics mobile-summary-metrics rep-mobile-summary' });
+  const productShare = count => prods.length ? Math.min(100, count / prods.length * 100) : 0;
   [
     { icon: 'dollar', color: 'g', label: 'Valor total inventario',
-      val: fmt(total), badge: 'Al costo promedio' },
+      val: fmt(total), badge: 'Al costo promedio', place: 'featured' },
     { icon: 'box',    color: 'b', label: 'Unidades en stock',
-      val: units.toLocaleString('es-DO'), badge: `${prods.length} productos activos` },
+      val: units.toLocaleString('es-DO'), badge: `${prods.length} productos activos`, place: 'total' },
     { icon: 'alert',  color: 'r', label: 'Bajo stock mínimo',
       val: lowStock.length.toString(), badge: 'Requieren reorden',
-      badgeType: lowStock.length > 0 ? 'dn' : 'nu' },
+      badgeType: lowStock.length > 0 ? 'dn' : 'nu', place: 'bar', share: productShare(lowStock.length) },
     { icon: 'xmark',  color: 'a', label: 'Sin costo definido',
       val: noPrice.length.toString(), badge: 'No incluidos en valor',
-      badgeType: noPrice.length > 0 ? 'dn' : 'nu' },
+      badgeType: noPrice.length > 0 ? 'dn' : 'nu', place: 'bar', share: productShare(noPrice.length) },
   ].forEach(m => {
-    metWrap.appendChild(h('div', { class: 'metric' },
+    const metric = h('div', { class: `metric mobile-summary-${m.place}` },
       h('div', { class: 'met-top' },
         h('div', { class: `met-icon ${m.color}`, html: svg(m.icon) })
       ),
@@ -1403,7 +1412,9 @@ async function _renderReporteInventario(el) {
       h('div', { class: 'met-foot' },
         h('span', { class: `met-badge ${m.badgeType||'nu'}` }, m.badge)
       )
-    ));
+    );
+    if (m.place === 'bar') metric.style.setProperty('--mobile-bar-size', `${m.share}%`);
+    metWrap.appendChild(metric);
   });
   el.appendChild(metWrap);
 
@@ -1491,6 +1502,7 @@ async function _renderReporteInventario(el) {
 
     // Tabla scrollable
     const tbl = document.createElement('table');
+    tbl.className = 'mobile-card-table rep-mobile-inventory';
     tbl.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px';
     tbl.innerHTML = `
       <thead>
@@ -1520,19 +1532,19 @@ async function _renderReporteInventario(el) {
             <tr style="border-bottom:1px solid var(--line2);${isBajo?'background:var(--amber-bg)':''}"
                 onmouseover="this.style.background='var(--surface2)'"
                 onmouseout="this.style.background='${isBajo?'var(--amber-bg)':''}'">
-              <td style="padding:8px 6px;font-family:var(--mono);color:var(--muted)">${p.code||'—'}</td>
-              <td style="padding:8px 6px;font-weight:500">${p.name}</td>
-              <td style="padding:8px 6px;color:var(--muted)">${p.category||'—'}</td>
-              <td style="padding:8px 6px;text-align:right">${fmt(p.cost||0)}</td>
-              <td style="padding:8px 6px;text-align:right;color:${deltaColor}">
+              <td data-label="Código" style="padding:8px 6px;font-family:var(--mono);color:var(--muted)">${p.code||'—'}</td>
+              <td class="mobile-card-title" style="padding:8px 6px;font-weight:500">${p.name}</td>
+              <td data-label="Categoría" style="padding:8px 6px;color:var(--muted)">${p.category||'—'}</td>
+              <td data-label="Costo unit." style="padding:8px 6px;text-align:right">${fmt(p.cost||0)}</td>
+              <td data-label="Últ. variación" style="padding:8px 6px;text-align:right;color:${deltaColor}">
                 ${p.last_price_change_id
                   ? `<strong>${lastDelta > 0 ? '+' : ''}${fmt(lastDelta)}</strong><br><span style="font-size:10px;color:var(--muted2)">${lastDate}</span>`
                   : '<span style="color:var(--muted2)">—</span>'}
               </td>
-              <td style="padding:8px 6px;text-align:right;font-weight:700;color:${isZero?'var(--red)':isBajo?'var(--amber)':'var(--ink)'}">${p.stock||0}</td>
-              <td style="padding:8px 6px;text-align:right;color:var(--muted)">${p.stock_min||5}</td>
-              <td style="padding:8px 6px;text-align:right;font-weight:700;color:var(--green)">${fmt(val)}</td>
-              <td style="padding:8px 6px;text-align:center">
+              <td data-label="Stock" style="padding:8px 6px;text-align:right;font-weight:700;color:${isZero?'var(--red)':isBajo?'var(--amber)':'var(--ink)'}">${p.stock||0}</td>
+              <td data-label="Mín." style="padding:8px 6px;text-align:right;color:var(--muted)">${p.stock_min||5}</td>
+              <td data-label="Valor total" style="padding:8px 6px;text-align:right;font-weight:700;color:var(--green)">${fmt(val)}</td>
+              <td data-label="Estado" style="padding:8px 6px;text-align:center">
                 ${isZero ? '<span class="badge r">Sin stock</span>' :
                   isBajo ? '<span class="badge a">Bajo</span>' :
                   '<span class="badge g">OK</span>'}
@@ -1545,9 +1557,9 @@ async function _renderReporteInventario(el) {
           <td colspan="5" style="padding:10px 6px;text-align:right;color:var(--muted)">
             TOTAL (${rows.length} productos)
           </td>
-          <td style="padding:10px 6px;text-align:right">${rows.reduce((a,p)=>a+(p.stock||0),0)}</td>
+          <td data-label="Unidades" style="padding:10px 6px;text-align:right">${rows.reduce((a,p)=>a+(p.stock||0),0)}</td>
           <td></td>
-          <td style="padding:10px 6px;text-align:right;color:var(--green);font-size:14px">
+          <td data-label="Valor total" style="padding:10px 6px;text-align:right;color:var(--green);font-size:14px">
             ${fmt(rows.reduce((a,p)=>a+((p.stock||0)*(p.cost||0)),0))}
           </td>
           <td></td>
@@ -1780,7 +1792,7 @@ function _renderReporteComprobantes(el) {
       Un solo PDF con todas las facturas del período que llevan comprobante fiscal,
       con una hoja nueva al inicio de cada factura.
     </div>
-    <div class="flex" style="gap:10px;align-items:flex-end;flex-wrap:wrap">
+    <div class="flex rep-mobile-cmp-controls" style="gap:10px;align-items:flex-end;flex-wrap:wrap">
       <div class="fg" style="margin:0"><label class="lbl">Desde</label>
         <input class="inp" type="date" id="rep-cmp-from" value="${primero}"></div>
       <div class="fg" style="margin:0"><label class="lbl">Hasta</label>

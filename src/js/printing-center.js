@@ -163,7 +163,7 @@ function pcTabs(active = _pcActiveTab) {
 }
 
 function pcHeader(subtitle, actions = '') {
-  return `<div class="sec-hdr">
+  return `<div class="sec-hdr mobile-module-heading">
     <div><div class="sec-title">Centro de impresión</div><div class="sec-sub">${pcEsc(subtitle)}</div></div>
     <div class="flex" style="gap:8px">${actions}</div>
   </div>${pcTabs()}`;
@@ -372,7 +372,7 @@ function pcRenderDevices() {
       <div class="fxb"><div><div class="card-title">Actividad reciente</div>
         <div style="font-size:11px;color:var(--muted2)">Trazabilidad del spooler de impresión.</div></div>
         <button class="btn btn-out" onclick="testPrint()">${svg('print')} Prueba rápida</button></div>
-      ${jobRows ? `<div class="tbl-wrap" style="overflow-x:auto;margin-top:12px"><table class="tbl">
+      ${jobRows ? `<div class="tbl-wrap" style="overflow-x:auto;margin-top:12px"><table class="tbl mobile-card-table mobile-card-auto">
         <thead><tr><th>Tipo</th><th>Referencia</th><th>Impresora</th><th>Estado</th><th>Fecha</th></tr></thead>
         <tbody>${jobRows}</tbody></table></div>` : `<div class="empty-state">Aún no hay trabajos registrados.</div>`}
     </div>`;
@@ -415,7 +415,7 @@ function pcRenderRoutes() {
   ) + `<div class="card">
     <div class="alrt a" style="margin-bottom:13px"><div><div class="alrt-title">Rutas portables entre sucursales</div>
       <div class="alrt-sub">Aquí nunca se guardan nombres físicos de impresoras. Por eso la misma regla funciona en todas las computadoras.</div></div></div>
-    <div class="tbl-wrap" style="overflow-x:auto"><table class="tbl">
+    <div class="tbl-wrap" style="overflow-x:auto"><table class="tbl mobile-card-table mobile-card-auto">
       <thead><tr><th>Documento</th><th>Canal</th><th>Plantilla</th><th>Copias</th><th>Confirmación</th></tr></thead>
       <tbody id="pc-route-rows">${rows}</tbody>
     </table></div>
@@ -448,7 +448,7 @@ function pcOpenPayrollReceiptSettings() {
       <label class="inp" style="display:flex;align-items:center;gap:9px;cursor:pointer"><input id="pc-payroll-signatures" type="checkbox" ${options.showSignatures?'checked':''}/> Líneas de firma</label>
     </div>
     <div class="alrt a" style="margin-top:13px"><div><div class="alrt-title">Vista previa segura</div><div class="alrt-sub">Usa datos de ejemplo y nunca registra ni imprime un pago real.</div></div></div>
-    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-out" onclick="pcPreviewPayrollReceipt()">${svg('check')} Vista previa</button><button class="btn btn-dark" onclick="pcSavePayrollReceiptSettings()">${svg('check')} Guardar plantilla</button></div>`, 'modal-lg');
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-out" onclick="pcPreviewPayrollReceipt()">${svg('check')} Vista previa</button><button class="btn btn-dark" onclick="pcSavePayrollReceiptSettings()">${svg('check')} Guardar plantilla</button></div>`, 'modal-lg ajustes-mobile-modal');
 }
 
 function pcReadPayrollReceiptSettings() {
@@ -503,7 +503,7 @@ function pcOpenIncomeReceiptSettings() {
       <label class="inp" style="display:flex;align-items:center;gap:9px;cursor:pointer"><input id="pc-income-signatures" type="checkbox" ${options.showSignatures ? 'checked' : ''}/> Líneas de firma</label>
     </div>
     <div class="alrt a" style="margin-top:13px"><div><div class="alrt-title">Vista previa segura</div><div class="alrt-sub">Usa datos de ejemplo y nunca registra ni imprime un ingreso real.</div></div></div>
-    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-out" onclick="pcPreviewIncomeReceipt()">${svg('check')} Vista previa</button><button class="btn btn-dark" onclick="pcSaveIncomeReceiptSettings()">${svg('check')} Guardar plantilla</button></div>`, 'modal-lg');
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-out" onclick="pcPreviewIncomeReceipt()">${svg('check')} Vista previa</button><button class="btn btn-dark" onclick="pcSaveIncomeReceiptSettings()">${svg('check')} Guardar plantilla</button></div>`, 'modal-lg ajustes-mobile-modal');
 }
 
 function pcReadIncomeReceiptSettings() {
@@ -558,7 +558,7 @@ function pcOpenExpenseReceiptSettings() {
       <label class="inp" style="display:flex;align-items:center;gap:9px;cursor:pointer"><input id="pc-expense-signatures" type="checkbox" ${options.showSignatures ? 'checked' : ''}/> Líneas de firma</label>
     </div>
     <div class="alrt a" style="margin-top:13px"><div><div class="alrt-title">Vista previa segura</div><div class="alrt-sub">Usa datos de ejemplo y nunca registra ni imprime un egreso real.</div></div></div>
-    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-out" onclick="pcPreviewExpenseReceipt()">${svg('check')} Vista previa</button><button class="btn btn-dark" onclick="pcSaveExpenseReceiptSettings()">${svg('check')} Guardar plantilla</button></div>`, 'modal-lg');
+    <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cancelar</button><button class="btn btn-out" onclick="pcPreviewExpenseReceipt()">${svg('check')} Vista previa</button><button class="btn btn-dark" onclick="pcSaveExpenseReceiptSettings()">${svg('check')} Guardar plantilla</button></div>`, 'modal-lg ajustes-mobile-modal');
 }
 
 function pcReadExpenseReceiptSettings() {
@@ -969,6 +969,7 @@ function pcRenderAppearance() {
   root.innerHTML = pcHeader('Personaliza el logo, la letra y la firma promocional de tus facturas.');
 
   const grid = document.createElement('div');
+  grid.className = 'mobile-stack-grid';
   grid.style.cssText = 'display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,440px);gap:16px;align-items:start';
   const left = document.createElement('div');
   left.style.cssText = 'display:flex;flex-direction:column;gap:16px';
@@ -1217,7 +1218,7 @@ function pcOpenLabelDesigner() {
     <div class="modal-sub">Diseño, medidas, calibración y prueba física dentro del Centro de impresión.</div>
     <div id="pc-label-designer-host"></div>
     <div class="modal-foot"><button class="btn btn-out" onclick="closeModal()">Cerrar</button></div>
-  `, 'modal-xl');
+  `, 'modal-xl ajustes-mobile-modal');
   const host = document.getElementById('pc-label-designer-host');
   if (host && typeof renderBarcodeDesigner === 'function') {
     renderBarcodeDesigner(host, { embedded: true });
