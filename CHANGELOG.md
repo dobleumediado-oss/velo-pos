@@ -1,5 +1,15 @@
 # Historial de versiones
 
+## 1.66.2
+
+- En «Pasar a VELO Cloud», al terminar el ensayo Desktop muestra qué configuración
+  será la de VELO Cloud y qué información quedará solo como historial. Al escribir
+  CORTE se acepta esa revisión, y el corte la confirma en VELO Cloud. Antes el
+  corte de un negocio real se detenía al final y Desktop se descongelaba.
+- Si la copia trae datos que VELO Cloud todavía no convierte, el ensayo se detiene
+  y los nombra, en lugar de descubrirlo durante el corte.
+- Los avisos del ensayo y del corte muestran también el campo que hay que revisar.
+
 ## 1.66.1
 
 - En pantallas pequeñas con tema claro, los títulos de Gastos, Sucursales,
