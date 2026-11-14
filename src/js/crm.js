@@ -60,14 +60,14 @@ async function renderCRM(el) {
              color:${_crmTab === key ? 'var(--ink)' : 'var(--muted2)'};
              border-bottom:2px solid ${_crmTab === key ? 'var(--accent,#059669)' : 'transparent'}">${label}</button>`;
   el.innerHTML = `
-    <div class="page-head" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+    <div class="page-head crm-mobile-heading" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px">
       <div>
         <h1 style="margin:0;display:flex;align-items:center;gap:10px">🧠 CRM Cerebro</h1>
         <div style="font-size:12px;color:var(--muted2);margin-top:4px">Inteligencia offline sobre clientes e inventario</div>
       </div>
       <span style="font-size:11px;color:var(--green,#00c07a);border:1px solid var(--green,#00c07a);border-radius:999px;padding:4px 10px">100% offline</span>
     </div>
-    <div style="border-bottom:1px solid var(--line2,#eee);margin-bottom:18px">
+    <div class="crm-mobile-tabs" style="border-bottom:1px solid var(--line2,#eee);margin-bottom:18px">
       ${tabBtn('clientes', '👤 Clientes')}${tabBtn('inventario', '📦 Inventario')}${tabBtn('contactar', '📣 Contactar hoy')}${tabBtn('aprende', '🎓 Aprende')}
     </div>
     <div id="crm-tab-body"></div>`;
@@ -168,16 +168,16 @@ async function renderCRMClientes(body) {
 
 // ── Cliente 360° (F1) ──────────────────────────
 async function showCliente360(customerId) {
-  openModal(`<div style="padding:40px;text-align:center;color:var(--muted2)">Cargando panel 360°…</div>`, 'modal-lg');
+  openModal(`<div style="padding:40px;text-align:center;color:var(--muted2)">Cargando panel 360°…</div>`, 'modal-lg equipo-mobile-modal');
   let res;
   try {
     res = await window.api.crm.customer360({ customerId });
   } catch (e) {
-    openModal(`<div style="padding:24px;color:var(--red,#ef4444)">No se pudo cargar: ${e.message}</div>`);
+    openModal(`<div style="padding:24px;color:var(--red,#ef4444)">No se pudo cargar: ${e.message}</div>`, 'equipo-mobile-modal');
     return;
   }
   if (!res || !res.ok) {
-    openModal(`<div style="padding:24px;color:var(--red,#ef4444)">No se pudo cargar: ${res?.error || 'error'}</div>`);
+    openModal(`<div style="padding:24px;color:var(--red,#ef4444)">No se pudo cargar: ${res?.error || 'error'}</div>`, 'equipo-mobile-modal');
     return;
   }
   const d = res.data;
@@ -281,7 +281,7 @@ async function showCliente360(customerId) {
       </div>
     </div>`;
 
-  openModal(html, 'modal-lg');
+  openModal(html, 'modal-lg equipo-mobile-modal');
 }
 
 // ── Pestaña Inventario (F2) ────────────────────
@@ -430,16 +430,16 @@ const _crmCareLabel = t => ({ engrasar: 'Engrasar', rotar: 'Rotar existencias', 
 
 // ── Producto 360° (F2) ─────────────────────────
 async function showProducto360(productId) {
-  openModal(`<div style="padding:40px;text-align:center;color:var(--muted2)">Cargando ficha…</div>`, 'modal-lg');
+  openModal(`<div style="padding:40px;text-align:center;color:var(--muted2)">Cargando ficha…</div>`, 'modal-lg equipo-mobile-modal');
   let res;
   try {
     res = await window.api.crm.product360({ productId });
   } catch (e) {
-    openModal(`<div style="padding:24px;color:var(--red,#ef4444)">No se pudo cargar: ${e.message}</div>`);
+    openModal(`<div style="padding:24px;color:var(--red,#ef4444)">No se pudo cargar: ${e.message}</div>`, 'equipo-mobile-modal');
     return;
   }
   if (!res || !res.ok) {
-    openModal(`<div style="padding:24px;color:var(--red,#ef4444)">No se pudo cargar: ${res?.error || 'error'}</div>`);
+    openModal(`<div style="padding:24px;color:var(--red,#ef4444)">No se pudo cargar: ${res?.error || 'error'}</div>`, 'equipo-mobile-modal');
     return;
   }
   const d = res.data;
@@ -500,7 +500,7 @@ async function showProducto360(productId) {
         Costo ${_crmFmt(mt.cost)} · Precio ${_crmFmt(mt.price)} · Vendió ${sa.qty90} und en 90 días · ${sa.timesSold} ventas históricas
       </div>
     </div>`;
-  openModal(html, 'modal-lg');
+  openModal(html, 'modal-lg equipo-mobile-modal');
 }
 
 // ── F2b: salud física en la ficha de producto + plantillas ─────
@@ -545,7 +545,7 @@ async function showCategoryTemplates() {
   try { res = await window.api.crm.categoryTemplates(); } catch (e) { toast('No se pudo cargar', 'e'); return; }
   if (!res || !res.ok) { toast(res?.error || 'Error', 'e'); return; }
   window._crmCats = res.data;
-  if (!res.data.length) { openModal(`<div style="padding:24px;color:var(--muted2)">No hay categorías de productos aún.</div>`); return; }
+  if (!res.data.length) { openModal(`<div style="padding:24px;color:var(--muted2)">No hay categorías de productos aún.</div>`, 'equipo-mobile-modal'); return; }
   const options = res.data.map((c, i) => `<option value="${i}">${c.category} (${c.productCount})${c.template ? ' ✓' : ''}</option>`).join('');
   const careOpts = ['', 'engrasar', 'rotar', 'revisar_carga', 'otro'].map(v => `<option value="${v}">${v ? _crmCareLabel(v) : 'Ninguno'}</option>`).join('');
   const html = `
@@ -571,7 +571,7 @@ async function showCategoryTemplates() {
         <button class="btn btn-green" onclick="_crmSaveTemplate(true)">Guardar y aplicar a la categoría</button>
       </div>
     </div>`;
-  openModal(html, 'modal-lg');
+  openModal(html, 'modal-lg equipo-mobile-modal');
   _crmFillTemplate();
 }
 

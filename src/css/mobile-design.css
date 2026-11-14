@@ -34,15 +34,15 @@
   }
 
   /* El menú móvil se usa en los módulos adaptados. */
-  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes)) > .sidebar {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm)) > .sidebar {
     display: none;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes)) > .main {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm)) > .main {
     background: var(--mobile-bg);
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes)) .topbar {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm)) .topbar {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
     gap: 4px 8px;
@@ -52,42 +52,42 @@
     backdrop-filter: none;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes)) :is(.tb-left, .tb-right) {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm)) :is(.tb-left, .tb-right) {
     min-width: 0;
     margin: 0;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes)) .tb-toggle {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm)) .tb-toggle {
     display: none;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes)) :is(#tb-center, .tb-right) {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm)) :is(#tb-center, .tb-right) {
     justify-content: flex-start !important;
     overflow-x: auto;
     padding: 2px 2px 4px;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes)) #tb-center {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm)) #tb-center {
     grid-column: 1 / -1;
     grid-row: 2;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes)) :is(#tb-center, .tb-right) > * {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm)) :is(#tb-center, .tb-right) > * {
     flex-shrink: 0;
   }
 
-  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes)) .tb-right button {
+  .shell:has(#page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm)) .tb-right button {
     min-height: 44px;
     min-width: 44px;
   }
 
-  #page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes) {
+  #page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm) {
     padding: 12px 12px var(--mobile-bottom);
     scroll-padding: 12px 0 var(--mobile-bottom);
     background: var(--mobile-bg);
   }
 
-  #page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes) ~ .mobile-nav {
+  #page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm) ~ .mobile-nav {
     display: grid;
     grid-auto-columns: minmax(0, 1fr);
     grid-auto-flow: column;
@@ -242,7 +242,7 @@
     color: var(--ink);
   }
 
-  #page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes) :is(.btn, .tab) {
+  #page:is(.module-dash, .module-pos, .module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm) :is(.btn, .tab) {
     min-height: 44px;
     border-radius: 999px;
   }
@@ -443,7 +443,7 @@
     font-weight: 750;
   }
 
-  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes) .mobile-module-heading {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm) .mobile-module-heading {
     gap: 10px;
     margin-bottom: 14px;
     padding: 14px;
@@ -453,56 +453,56 @@
     box-shadow: var(--mobile-shadow);
   }
 
-  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes) .mobile-module-heading::after,
-  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes) .mobile-module-heading > div:first-child::before {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm) .mobile-module-heading::after,
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm) .mobile-module-heading > div:first-child::before {
     content: none;
   }
 
-  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes) .mobile-module-heading .sec-title { color: var(--ink) !important; }
-  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes) .mobile-module-heading .sec-sub { color: var(--muted) !important; }
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm) .mobile-module-heading .sec-title { color: var(--ink) !important; }
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm) .mobile-module-heading .sec-sub { color: var(--muted) !important; }
 
-  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes) .mobile-module-heading .btn-out {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm) .mobile-module-heading .btn-out {
     border-color: var(--line);
     background: var(--surface);
     color: var(--ink);
   }
 
-  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes) .mobile-module-actions {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm) .mobile-module-actions {
     flex-wrap: wrap;
     width: 100%;
   }
 
-  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes) :is(.btn, .tab, .inp) {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm) :is(.btn, .tab, .inp) {
     min-height: 44px;
     border-radius: 999px;
   }
 
-  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes) :is(.btn-dark, .tab.on) {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm) :is(.btn-dark, .tab.on) {
     border-color: transparent;
     background: var(--mobile-accent);
     color: var(--mobile-accent-text);
   }
 
-  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes) .tabs {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm) .tabs {
     flex-wrap: wrap;
     width: 100%;
     border-radius: 22px;
     background: var(--surface);
   }
 
-  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes) .mobile-module-filters {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm) .mobile-module-filters {
     max-width: 100%;
     border-radius: 20px;
     background: var(--surface);
   }
 
-  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes) .mobile-module-filters > .inp-ic {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm) .mobile-module-filters > .inp-ic {
     flex: 1 0 100% !important;
     min-width: 0 !important;
     max-width: none !important;
   }
 
-  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes) .mobile-module-filters > select {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm) .mobile-module-filters > select {
     flex: 1 1 140px;
     min-width: 0;
     max-width: 100%;
@@ -583,7 +583,7 @@
     color: var(--mobile-accent-text);
   }
 
-  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes) .mobile-summary-metrics {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm) .mobile-summary-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
     gap: 0;
     overflow: hidden;
@@ -666,13 +666,13 @@
     background: var(--surface);
   }
 
-  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes) .card {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm) .card {
     min-width: 0;
     max-width: 100%;
     border-radius: 20px !important;
   }
 
-  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes) .mobile-list-card {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm) .mobile-list-card {
     padding: 0;
     border: 0;
     background: transparent;
@@ -796,7 +796,7 @@
   .module-clientes .cli-walkin-controls > .ts { flex-basis: 100%; }
   .module-clientes .cli-walkin-table { border-radius: 18px; background: var(--surface); }
 
-  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes) .empty > div > svg {
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm) .empty > div > svg {
     display: block;
     width: 32px;
     height: 32px;
@@ -808,23 +808,23 @@
   }
 
   body:has(#modal-ov) :is(.mobile-nav, .pos-mobile-cart-jump) { visibility: hidden; }
-  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes)) .toast {
+  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm)) .toast {
     bottom: var(--mobile-bottom);
     right: 12px;
     max-width: calc(100% - 24px);
     pointer-events: none;
   }
 
-  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes)):has(#modal-ov) .toast {
+  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm)):has(#modal-ov) .toast {
     top: max(12px, env(safe-area-inset-top, 0px));
     bottom: auto;
   }
 
-  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes)) #modal-ov:has(> :is(.inv-mobile-modal, .cli-mobile-modal, .ventas-mobile-modal, .caja-mobile-modal, .preventa-mobile-modal, .compras-mobile-modal, .servicio-mobile-modal)) {
+  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm)) #modal-ov:has(> :is(.inv-mobile-modal, .cli-mobile-modal, .ventas-mobile-modal, .caja-mobile-modal, .preventa-mobile-modal, .compras-mobile-modal, .servicio-mobile-modal, .equipo-mobile-modal)) {
     align-items: flex-end;
   }
 
-  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes)) #modal-ov > :is(.inv-mobile-modal, .cli-mobile-modal, .ventas-mobile-modal, .caja-mobile-modal, .preventa-mobile-modal, .compras-mobile-modal, .servicio-mobile-modal) {
+  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm)) #modal-ov > :is(.inv-mobile-modal, .cli-mobile-modal, .ventas-mobile-modal, .caja-mobile-modal, .preventa-mobile-modal, .compras-mobile-modal, .servicio-mobile-modal, .equipo-mobile-modal) {
     --modal-pad: 16px;
     width: 100%;
     max-width: none;
@@ -834,15 +834,15 @@
     overscroll-behavior: contain;
   }
 
-  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes)) #modal-ov > :is(.inv-mobile-modal, .cli-mobile-modal, .ventas-mobile-modal, .caja-mobile-modal, .preventa-mobile-modal, .compras-mobile-modal, .servicio-mobile-modal) :is(.g2, .g3, .g4) {
+  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm)) #modal-ov > :is(.inv-mobile-modal, .cli-mobile-modal, .ventas-mobile-modal, .caja-mobile-modal, .preventa-mobile-modal, .compras-mobile-modal, .servicio-mobile-modal, .equipo-mobile-modal) :is(.g2, .g3, .g4) {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes)) #modal-ov > :is(.inv-mobile-modal, .cli-mobile-modal, .ventas-mobile-modal, .caja-mobile-modal, .preventa-mobile-modal, .compras-mobile-modal, .servicio-mobile-modal) :is(.btn, .inp) {
+  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm)) #modal-ov > :is(.inv-mobile-modal, .cli-mobile-modal, .ventas-mobile-modal, .caja-mobile-modal, .preventa-mobile-modal, .compras-mobile-modal, .servicio-mobile-modal, .equipo-mobile-modal) :is(.btn, .inp) {
     min-height: 44px;
   }
 
-  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes)) #modal-ov > :is(.inv-mobile-modal, .cli-mobile-modal, .ventas-mobile-modal, .caja-mobile-modal, .preventa-mobile-modal, .compras-mobile-modal, .servicio-mobile-modal) .modal-foot {
+  body:has(#page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm)) #modal-ov > :is(.inv-mobile-modal, .cli-mobile-modal, .ventas-mobile-modal, .caja-mobile-modal, .preventa-mobile-modal, .compras-mobile-modal, .servicio-mobile-modal, .equipo-mobile-modal) .modal-foot {
     padding-bottom: calc(var(--modal-pad) + env(safe-area-inset-bottom, 0px));
   }
 
@@ -1004,7 +1004,7 @@
 
   .module-compras .compras-summary-particulares .mobile-summary-bar { grid-column: 1 / -1; }
 
-  #modal-ov > :is(.compras-mobile-modal, .preventa-mobile-modal, .servicio-mobile-modal) .mobile-card-table {
+  #modal-ov > :is(.compras-mobile-modal, .preventa-mobile-modal, .servicio-mobile-modal, .equipo-mobile-modal) .mobile-card-table {
     display: block;
     width: 100%;
     min-width: 0;
@@ -1030,18 +1030,18 @@
 
   #modal-ov > .compras-mobile-modal .compras-mobile-receipt-costs .fg { min-width: 0; }
 
-  body:has(#page:is(.module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes)) #modal-ov > .modal:has(> .modal-foot > #cm-ok) {
+  body:has(#page:is(.module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm)) #modal-ov > .modal:has(> .modal-foot > #cm-ok) {
     --modal-pad: 16px;
     padding: var(--modal-pad);
     border-radius: 22px;
     overflow-wrap: anywhere;
   }
 
-  body:has(#page:is(.module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes)) #modal-ov > :is(.preventa-mobile-modal, .compras-mobile-modal, .servicio-mobile-modal, .modal:has(> .modal-foot > #cm-ok)) .modal-foot {
+  body:has(#page:is(.module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm)) #modal-ov > :is(.preventa-mobile-modal, .compras-mobile-modal, .servicio-mobile-modal, .equipo-mobile-modal, .modal:has(> .modal-foot > #cm-ok)) .modal-foot {
     bottom: calc(-1 * var(--modal-pad));
   }
 
-  body:has(#page:is(.module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes)) #modal-ov > :is(.preventa-mobile-modal, .compras-mobile-modal, .servicio-mobile-modal, .modal:has(> .modal-foot > #cm-ok)) .btn {
+  body:has(#page:is(.module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm)) #modal-ov > :is(.preventa-mobile-modal, .compras-mobile-modal, .servicio-mobile-modal, .equipo-mobile-modal, .modal:has(> .modal-foot > #cm-ok)) .btn {
     min-height: 44px;
     border-radius: 999px;
   }
@@ -1178,6 +1178,168 @@
   #page.module-reportes .rep-mobile-cmp-controls > .fg { min-width: 0 !important; }
   #page.module-reportes .rep-mobile-cmp-controls > :is(.fg:has(select), .btn) { grid-column: 1 / -1; }
   #page.module-reportes .rep-mobile-cmp-controls .inp { width: 100%; min-width: 0; }
+
+  /* Colaboradores, Comisiones, Nómina y CRM: mismas cifras, en tarjetas. */
+  #page:is(.module-vendedores, .module-comisiones, .module-nomina) :is(.ven-hero, .com-hero, .nom-hero) {
+    padding: 18px;
+    border-radius: 24px;
+  }
+
+  #page:is(.module-vendedores, .module-comisiones, .module-nomina) :is(.ven-actions, .com-actions, .nom-actions) {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  #page:is(.module-vendedores, .module-comisiones, .module-nomina) :is(.ven-actions, .com-actions, .nom-actions) > .btn { flex: 1 1 150px; }
+  #page.module-vendedores .ven-period { flex-wrap: wrap; }
+  #page.module-vendedores .ven-period input { flex: 1 1 130px; min-width: 0; min-height: 44px; }
+  #page.module-vendedores .ven-period button { flex: 1 0 100%; min-height: 44px; }
+
+  #page:is(.module-vendedores, .module-comisiones, .module-nomina) :is(.ven-nav-btn, .com-nav-btn, .nom-nav-btn) {
+    min-height: 44px;
+    border-radius: 999px;
+  }
+
+  #page:is(.module-vendedores, .module-comisiones, .module-nomina) :is(.ven-nav-btn, .com-nav-btn, .nom-nav-btn).on {
+    background: var(--mobile-accent);
+    color: var(--mobile-accent-text);
+  }
+
+  #page:is(.module-vendedores, .module-comisiones, .module-nomina) :is(.ven-metrics, .com-metrics, .nom-metrics) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  #page:is(.module-vendedores, .module-comisiones, .module-nomina) :is(.ven-metric, .com-metric, .nom-metric) {
+    min-width: 0;
+    border-radius: 20px;
+    box-shadow: var(--mobile-shadow);
+    overflow-wrap: anywhere;
+  }
+
+  #page:is(.module-vendedores, .module-comisiones, .module-nomina) :is(.ven-metric, .com-metric, .nom-metric):first-child {
+    grid-column: 1 / -1;
+    border-color: transparent;
+    background: var(--mobile-deep);
+    color: #fff;
+  }
+
+  #page:is(.module-vendedores, .module-comisiones, .module-nomina) :is(.ven-metric, .com-metric, .nom-metric):first-child :is(label, strong, span, .ven-metric-label, .ven-metric-value, .ven-metric-note) {
+    color: #fff;
+  }
+
+  #page:is(.module-vendedores, .module-comisiones, .module-nomina) :is(.ven-metric, .com-metric, .nom-metric):first-child :is(span, .ven-metric-note) { opacity: .8; }
+  #page:is(.module-vendedores, .module-comisiones, .module-nomina) :is(.ven-metric, .com-metric, .nom-metric):nth-child(even):last-child { grid-column: 1 / -1; }
+  #page.module-vendedores .ven-metric:first-child .ven-metric-chip { background: rgb(255 255 255 / 12%); color: #fff; opacity: 1; }
+  #page:is(.module-comisiones, .module-nomina) :is(.com-metric, .nom-metric):not(:first-child) { flex-direction: column; align-items: flex-start; gap: 8px; }
+
+  #page:is(.module-vendedores, .module-comisiones, .module-nomina) :is(.ven-panel, .ven-seller-card, .com-rule-card, .nom-person-card) {
+    min-width: 0;
+    border-radius: 22px;
+  }
+
+  #page:is(.module-vendedores, .module-comisiones, .module-nomina) :is(.ven-panel-head, .ven-toolbar, .ven-toolbar > .flex, .ven-seller-foot, .ven-seller-foot > .flex, .ven-summary-strip, .com-rule-foot, .nom-person-foot) {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  #page:is(.module-vendedores, .module-comisiones, .module-nomina) :is(.ven-search, .ven-filter) { flex: 1 1 100%; min-width: 0; min-height: 44px; }
+  #page:is(.module-vendedores, .module-comisiones, .module-nomina) :is(.ven-quick button, .ven-calendar-nav button, .ven-map-seller-actions button) { min-height: 44px; }
+  #page.module-vendedores .ven-seller-data { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* Agenda: en móvil solo los días con actividad (y hoy), uno debajo de otro. */
+  #page.module-vendedores .ven-calendar-week { display: none; }
+
+  #page.module-vendedores .ven-calendar-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    min-width: 0;
+    border: 0;
+  }
+
+  #page.module-vendedores .ven-calendar-day:not(.today):not(:has(.ven-calendar-event)) { display: none; }
+
+  #page.module-vendedores .ven-calendar-day {
+    min-height: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+  }
+
+  #page.module-vendedores .ven-calendar-event { min-height: 44px; padding: 6px 10px; }
+  #page.module-vendedores .ven-calendar-event :is(span, small) { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+  #page:is(.module-comisiones, .module-nomina) .ven-kanban { grid-template-columns: minmax(0, 1fr); overflow: visible; }
+  #page:is(.module-comisiones, .module-nomina) .ven-kanban-col { min-height: 0; }
+  #page:is(.module-comisiones, .module-nomina) .ven-kanban-foot button { min-height: 44px; padding-inline: 14px; }
+  #page:is(.module-vendedores, .module-comisiones, .module-nomina) .ux-table-bar button { min-height: 44px; }
+  #page.module-vendedores .ven-map-canvas { min-height: 320px; }
+
+  #page:is(.module-vendedores, .module-comisiones, .module-nomina) .mobile-card-table {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  #page:is(.module-vendedores, .module-comisiones, .module-nomina) .tw:has(> .mobile-card-table),
+  #modal-ov > .equipo-mobile-modal .tw:has(> .mobile-card-table) {
+    max-height: none !important;
+    overflow: visible;
+    border: 0;
+  }
+
+  :is(#page:is(.module-vendedores, .module-comisiones, .module-nomina), #modal-ov > .equipo-mobile-modal) .mobile-card-table > tbody > tr > td {
+    text-align: left !important;
+  }
+
+  :is(#page:is(.module-vendedores, .module-comisiones, .module-nomina), #modal-ov > .equipo-mobile-modal) .mobile-card-table > tbody > tr > td[colspan] {
+    grid-column: 1 / -1;
+    text-align: center !important;
+  }
+
+  :is(#page:is(.module-vendedores, .module-comisiones, .module-nomina), #modal-ov > .equipo-mobile-modal) .mobile-card-table td[data-label]::before { font-family: var(--font); }
+  #modal-ov > .equipo-mobile-modal .mobile-card-table > tbody > tr > td:empty { display: none; }
+  #modal-ov > .equipo-mobile-modal .mobile-card-table > tfoot { display: block; margin-top: 10px; }
+
+  #modal-ov > .equipo-mobile-modal .mobile-card-table > tfoot > tr {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 6px 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+  }
+
+  #modal-ov > .equipo-mobile-modal .mobile-card-table > tfoot td { display: block; padding: 0 !important; border: 0; }
+  #modal-ov > .equipo-mobile-modal .mobile-card-table > tfoot td:empty { display: none; }
+  #modal-ov > .equipo-mobile-modal :is(.ven-profile-hero, .nom-comp-preview, .ven-modal-section, .com-preview) { min-width: 0; overflow-wrap: anywhere; }
+  #modal-ov > .equipo-mobile-modal :is(.nom-detail-metrics, .com-detail-metrics, .ven-profile-metrics) { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  #modal-ov > .equipo-mobile-modal :is(.nom-detail-metrics, .com-detail-metrics, .ven-profile-metrics) > * { min-width: 0; overflow-wrap: anywhere; }
+  #modal-ov > .equipo-mobile-modal .modal-foot > :is(div, .flex) { flex-wrap: wrap; }
+
+  #page.module-crm .crm-mobile-heading {
+    padding: 14px;
+    border-radius: 22px;
+    background: var(--surface);
+    box-shadow: var(--mobile-shadow);
+  }
+
+  #page.module-crm .crm-mobile-tabs {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
+
+  #page.module-crm .crm-mobile-tabs > button {
+    flex: 0 0 auto;
+    min-height: 44px;
+    margin: 0 !important;
+    padding: 8px 14px !important;
+    border-radius: 999px;
+  }
+
+  #page.module-crm .card { min-width: 0; border-radius: 20px !important; overflow-wrap: anywhere; }
+  #page.module-crm :is(button, select, .inp) { min-height: 44px; }
 
   #modal-ov:has(> .pos-cobro) { align-items: flex-end; }
   #modal-ov > .pos-cobro {
