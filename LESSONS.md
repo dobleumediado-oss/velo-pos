@@ -44,3 +44,8 @@
 - En un banco de pruebas con API falsa, un fallo puede venir de los datos
   falsos. Antes de llamarlo bug, repite la misma prueba sobre la versión base;
   si falla igual, es del banco o es previo, no de tu cambio.
+- `test:tech-readiness` no es la batería completa. Las tandas móviles 2 y 7
+  rompían `test:experience` (busca el texto exacto
+  `<table class="velo-sticky-actions">`), y solo apareció al correr
+  `npm test` sobre la integración. Antes de dar por terminada una rama que
+  toca pantallas, corre también `npm test`.
