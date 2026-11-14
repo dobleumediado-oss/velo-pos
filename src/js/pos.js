@@ -263,7 +263,7 @@ async function renderPOS(el) {
         right.focus({ preventScroll: true });
         right.scrollIntoView({ block: 'start', behavior: 'instant' });
       }
-    }, S('receipt'), 'Ver carrito'));
+    }, S('list'), 'Ver carrito'));
     el.appendChild(wrap);
     _posSetupCartResize(wrap, right, cartResizer);
 

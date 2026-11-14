@@ -417,8 +417,9 @@
 
   .module-pos .pos-side:focus-visible { outline: 2px solid var(--mobile-chart); }
   .module-pos #cart-wrap { overflow: visible !important; }
-  .module-pos .invoice-tabs { min-height: 48px; border-radius: 22px 22px 0 0; }
-  .module-pos .invoice-tabs :is(.inv-tab, .inv-tab-add) { min-height: 34px; }
+  .module-pos .invoice-tabs { min-height: 56px; border-radius: 22px 22px 0 0; }
+  .module-pos .invoice-tabs :is(.inv-tab, .inv-tab-add) { min-height: 44px; }
+  .module-pos .invoice-tabs .inv-tab-add { min-width: 44px; }
   .module-pos :is(.cart-hdr, .cart-body, .cart-foot) { padding: 12px; }
   .module-pos .cart-foot { border-radius: 0 0 22px 22px; }
   .module-pos .cart-item { flex-wrap: wrap; }
@@ -458,8 +459,8 @@
     content: none;
   }
 
-  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm, .module-gastos, .module-bancos, .module-contabilidad, .module-sucursales, .module-vehiculos, .module-envios, .module-conduce, .module-auditoria, .module-configuracion, .module-impresion, .module-etiquetas, .module-superadmin) .mobile-module-heading .sec-title { color: var(--ink) !important; }
-  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm, .module-gastos, .module-bancos, .module-contabilidad, .module-sucursales, .module-vehiculos, .module-envios, .module-conduce, .module-auditoria, .module-configuracion, .module-impresion, .module-etiquetas, .module-superadmin) .mobile-module-heading .sec-sub { color: var(--muted) !important; }
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm, .module-gastos, .module-bancos, .module-contabilidad, .module-sucursales, .module-vehiculos, .module-envios, .module-conduce, .module-auditoria, .module-configuracion, .module-impresion, .module-etiquetas, .module-superadmin) .mobile-module-heading :is(.sec-title, h1, h2) { color: var(--ink) !important; }
+  #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm, .module-gastos, .module-bancos, .module-contabilidad, .module-sucursales, .module-vehiculos, .module-envios, .module-conduce, .module-auditoria, .module-configuracion, .module-impresion, .module-etiquetas, .module-superadmin) .mobile-module-heading :is(.sec-sub, h1 + p, h2 + p) { color: var(--muted) !important; }
 
   #page:is(.module-inventario, .module-clientes, .module-ventas, .module-caja, .module-preventa, .module-devoluciones, .module-compras, .module-servicio, .module-reportes, .module-vendedores, .module-comisiones, .module-nomina, .module-crm, .module-gastos, .module-bancos, .module-contabilidad, .module-sucursales, .module-vehiculos, .module-envios, .module-conduce, .module-auditoria, .module-configuracion, .module-impresion, .module-etiquetas, .module-superadmin) .mobile-module-heading .btn-out {
     border-color: var(--line);
