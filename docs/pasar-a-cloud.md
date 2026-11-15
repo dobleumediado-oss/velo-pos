@@ -13,6 +13,16 @@ PC Servidor o en una PC sola; una terminal se rechaza porque trabaja contra la b
 del Servidor). Los botones anteriores siguen como respaldo: «Preparar migración a
 Cloud» y «Corte final a Cloud (con archivo)».
 
+**PC Servidor (edición Servidor, desde 1.66.3).** La consola es solo una vista: el negocio,
+su base y el congelamiento viven en el servicio Velo POS Server. La consola pide cada paso al
+servicio por `serverAdmin:cloudDirect:*` (el gateway solo los acepta desde la misma PC y los
+manda al negocio principal) y el servicio corre el ensayo y el corte con **su** base; al
+congelar, quedan en consulta todas las terminales. `cloudDirectRoute` en
+`lib/cloud-direct-flow.js` decide: servicio → su base; consola con el servicio instalado →
+pedirlo al servicio; terminal de otra PC → rechazo; PC sola → su base. Antes (hasta 1.66.2)
+la consola usaba su base local, que en una PC Servidor es un resto viejo: el 15 nov 2026 el
+ensayo de un cliente mandó a Cloud datos de julio en vez de los del Servidor.
+
 ## Flujo
 
 1. **Entrar a VELO Cloud** con la cuenta de administración de la empresa (correo y

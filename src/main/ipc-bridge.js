@@ -53,6 +53,10 @@ function rpcTimeoutFor(channel) {
   // haya desconectado.
   if (['ecf:emit', 'ecf:getStatus', 'ecf:testConnection'].includes(channel)) return 40000;
   if (channel === 'ncf:recoverMalformedDocuments') return 2 * 60 * 1000;
+  // Pasar a VELO Cloud desde la consola del Servidor corre en el servicio: el ensayo
+  // envía la copia y convierte 20 pasos, y el corte además congela y activa (minutos).
+  if (/^serverAdmin:cloudDirect:(prepareRehearsal|runRehearsal|cutover)$/.test(channel)) return 45 * 60 * 1000;
+  if (channel.startsWith('serverAdmin:cloudDirect:')) return 90 * 1000;
   // Una base grande puede tardar varios minutos en crear el snapshot,
   // cifrarlo o ejecutar integrity_check. No reportar SERVER_OFFLINE mientras
   // el Servidor continúa trabajando y podría completar el archivo.

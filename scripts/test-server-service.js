@@ -185,6 +185,13 @@ function launchFakeWorker({ business, port }) {
   });
   // La llamada sí viene de loopback en esta prueba y se enruta siempre al principal.
   assert.strictEqual(remoteAdmin.data.data.businessId, 'principal');
+  // Pasar a VELO Cloud desde la consola corre en el servicio, con la base del principal,
+  // aunque la consola tenga otro negocio activo.
+  const cloudDirect = await request(port, '/rpc', {
+    body: { v: 1, channel: 'serverAdmin:cloudDirect:status', args: {}, auth: { ...auth, businessId: bizId } },
+  });
+  assert.strictEqual(cloudDirect.data.data.businessId, 'principal');
+  assert.strictEqual(require('../src/main/ipc-bridge').rpcTimeoutFor('serverAdmin:cloudDirect:cutover'), 45 * 60 * 1000);
 
   const slow = request(port, '/rpc', {
     body:{ v:1, channel:'test:slowMutation', args:{}, auth },

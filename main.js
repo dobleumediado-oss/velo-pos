@@ -5688,24 +5688,44 @@ const cloudDirectFlow = require('./lib/cloud-direct-flow').createFlow({
 function cloudDirectAdmin(requestUserId) {
   const reqUser = authRepo.findById(requestUserId);
   if (!reqUser || !['admin', 'superadmin'].includes(reqUser.role)) throw new Error('Solo administración puede pasar el negocio a VELO Cloud');
-  // Una terminal trabaja contra la base del Servidor: el paso a Cloud se hace allá.
-  if (!_canPickContinuityFilesHere()) throw new Error('Pasa el negocio a VELO Cloud desde la PC Servidor');
   return reqUser;
 }
-const cloudDirectHandle = (channel, run) => ipcMain.handle(channel, async (_, args = {}) => {
-  try { const reqUser = cloudDirectAdmin(args.requestUserId); return { ok: true, data: await run(reqUser, args) }; }
-  catch (e) { return { ok: false, error: e.message }; }
-});
-cloudDirectHandle('cloudDirect:status', () => cloudDirectFlow.status());
-cloudDirectHandle('cloudDirect:login', (_, { email, password, tenantId }) => cloudDirectFlow.login({ email, password, tenantId }));
-cloudDirectHandle('cloudDirect:logout', () => cloudDirectFlow.logout());
-cloudDirectHandle('cloudDirect:access', (_, { request }) => cloudDirectFlow.refreshAccess(request === true));
-ipcMain.handle('cloudDirect:progress', async () => ({ ok: true, data: cloudDirectFlow.progress() }));
-cloudDirectHandle('cloudDirect:prepareRehearsal', () => cloudDirectFlow.prepareRehearsal());
-cloudDirectHandle('cloudDirect:runRehearsal', (reqUser, { mapping }) => cloudDirectFlow.runRehearsal(mapping, reqUser));
-// El corte devuelve su resultado aunque no se complete (descongelado o por comprobar).
-cloudDirectHandle('cloudDirect:cutover', (reqUser, { confirm }) => cloudDirectFlow.cutover(reqUser, confirm));
-cloudDirectHandle('cloudDirect:verify', () => cloudDirectFlow.verify());
+const cloudDirectOps = {
+  status: () => cloudDirectFlow.status(),
+  login: (_, { email, password, tenantId }) => cloudDirectFlow.login({ email, password, tenantId }),
+  logout: () => cloudDirectFlow.logout(),
+  access: (_, { request }) => cloudDirectFlow.refreshAccess(request === true),
+  prepareRehearsal: () => cloudDirectFlow.prepareRehearsal(),
+  runRehearsal: (reqUser, { mapping }) => cloudDirectFlow.runRehearsal(mapping, reqUser),
+  // El corte devuelve su resultado aunque no se complete (descongelado o por comprobar).
+  cutover: (reqUser, { confirm }) => cloudDirectFlow.cutover(reqUser, confirm),
+  verify: () => cloudDirectFlow.verify(),
+};
+async function cloudDirectHere(name, args) {
+  if (name === 'progress') return { ok: true, data: cloudDirectFlow.progress() };
+  return { ok: true, data: await cloudDirectOps[name](cloudDirectAdmin(args.requestUserId), args) };
+}
+for (const name of [...Object.keys(cloudDirectOps), 'progress']) {
+  ipcMain.handle(`cloudDirect:${name}`, async (_, args = {}) => {
+    try {
+      const route = require('./lib/cloud-direct-flow').cloudDirectRoute({
+        serviceWorker: !!RUNTIME.worker, serviceInstalledHere: !!_installedServiceDataDir(), mode: require('./src/main/ipc-bridge').getMode(),
+      });
+      if (route === 'refuse') throw new Error('Pasa el negocio a VELO Cloud desde la PC Servidor');
+      // La consola del Servidor es una vista: el negocio, su base y el congelamiento son del servicio.
+      if (route === 'service') return await require('./src/main/ipc-bridge').forwardToServer(`serverAdmin:cloudDirect:${name}`, args);
+      return await cloudDirectHere(name, args);
+    } catch (e) { return { ok: false, error: e.offline ? 'El servicio Velo POS Server no responde; revisa que esté iniciado' : e.message }; }
+  });
+  // En el servicio: solo la consola de esta misma PC llega aquí (el gateway exige loopback
+  // para serverAdmin:*) y siempre al negocio principal.
+  ipcMain.handle(`serverAdmin:cloudDirect:${name}`, async (_, args = {}) => {
+    try {
+      if (!RUNTIME.worker || RUNTIME.businessId !== 'principal') return { ok: false, error: 'Servicio no disponible' };
+      return await cloudDirectHere(name, args);
+    } catch (e) { return { ok: false, error: e.message }; }
+  });
+}
 
 ipcMain.handle('backup:createEncrypted', async (_, { requestUserId, passphrase, destinationDir } = {}) => {
   try {

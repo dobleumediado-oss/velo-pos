@@ -8,7 +8,15 @@ const cd = require('../lib/cloud-direct');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createFlow } = require('../lib/cloud-direct-flow');
+const { createFlow, cloudDirectRoute } = require('../lib/cloud-direct-flow');
+
+// Dónde corre el paso a Cloud: el servicio con su base; la consola del Servidor se lo pide al
+// servicio (con su base local mandaba datos viejos, 15 nov 2026); una terminal de otra PC no.
+assert.equal(cloudDirectRoute({ serviceWorker: true, serviceInstalledHere: true, mode: 'server' }), 'local');
+assert.equal(cloudDirectRoute({ serviceWorker: false, serviceInstalledHere: true, mode: 'client' }), 'service');
+assert.equal(cloudDirectRoute({ serviceWorker: false, serviceInstalledHere: false, mode: 'client' }), 'refuse');
+assert.equal(cloudDirectRoute({ serviceWorker: false, serviceInstalledHere: false, mode: 'local' }), 'local');
+assert.equal(cloudDirectRoute({ serviceWorker: false, serviceInstalledHere: false, mode: 'server' }), 'local');
 
 // Los mismos pasos, en el mismo orden, que la pantalla web «Convertir pasos».
 assert.equal(cd.STEPS.length, 20);
