@@ -1,5 +1,12 @@
 # Historial de versiones
 
+## 1.66.3
+
+- En la PC Servidor, «Pasar a VELO Cloud» trabaja con la base del servicio Velo POS
+  Server, que es la del negocio. Antes la consola usaba su propia base local, que en
+  una PC Servidor puede estar atrasada, y el ensayo enviaba datos viejos. Al hacer el
+  corte desde el Servidor quedan en consulta todas las terminales.
+
 ## 1.66.2
 
 - En «Pasar a VELO Cloud», al terminar el ensayo Desktop muestra qué configuración
