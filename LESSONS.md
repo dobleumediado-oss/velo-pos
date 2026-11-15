@@ -49,3 +49,11 @@
   `<table class="velo-sticky-actions">`), y solo apareció al correr
   `npm test` sobre la integración. Antes de dar por terminada una rama que
   toca pantallas, corre también `npm test`.
+- Un ensayo superado no prueba el corte. El 14 nov 2026 «Pasar a VELO Cloud»
+  pasaba los 20 pasos y el corte habría fallado igual en Windows por tres
+  causas que el ensayo no toca: tablas de Desktop sin clasificar en Cloud
+  (e-CF), la revisión de configuración que Cloud exige antes de activar y la
+  conciliación de conteos de la activación. Antes de publicar un cambio del
+  paso a Cloud, corre el corte completo hasta «activado» contra el Sandbox
+  local con una copia de la base, y revisa en la página «Migración desde
+  Desktop» de Cloud los bloqueos de cobertura de la copia real del cliente.
