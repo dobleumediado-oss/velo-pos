@@ -89,3 +89,8 @@ aviso superior de Desktop lo refleja.
   avance en vivo, correspondencias de usuarios, corte con CORTE (79 registros), pantalla
   «Listo» con la clave, aviso de modo consulta y, al reabrir, «Este negocio ya opera en VELO
   Cloud». Con `VELO_CLOUD_API_URL` el asistente avisa que no es el Cloud real.
+- En la app real (14 nov 2026, Desktop 1.66.2 contra el Sandbox de Cloud local, copia de la
+  base, ventana 1366×689): ensayo detenido por datos que Cloud no convierte (corrección de
+  factura y gasto de colaborador), ensayo superado con la revisión en dos listas (sin
+  desplazamiento), confirmación con CORTE con la misma revisión, y corte desde la pantalla:
+  «Confirmando la configuración y el historial…» y «Listo» con 25,175 registros.

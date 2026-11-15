@@ -1833,8 +1833,13 @@ let _cdPoll = null, _cdRead = null;
 const _cdIssue = issue => issue?.label ? `${_cdEsc(issue.label)}${issue.rows ? ` (${Number(issue.rows).toLocaleString('es-DO')})` : ''}`
   : `${_cdEsc(issue?.code)} ${_cdEsc(issue?.table)}${issue?.sourceId ? ' #' + _cdEsc(issue.sourceId) : ''}${issue?.field ? ' (campo ' + _cdEsc(issue.field) + ')' : ''}`;
 // Lo que el dueño acepta al escribir CORTE: la configuración será la de VELO Cloud y esto queda solo como historial.
-const _cdReviewHtml = review => !review ? '' : `<div class="alrt-sub" style="margin:6px 0"><strong>La configuración será la de VELO Cloud:</strong> ${review.configuration.length ? review.configuration.map(_cdIssue).join(' · ') : 'nada que revisar'}.</div>
-  <div class="alrt-sub" style="margin:6px 0"><strong>Quedará solo como historial</strong> (se consulta en VELO Cloud, no se opera): ${review.historyOnly.length ? review.historyOnly.map(_cdIssue).join(' · ') : 'nada'}.</div>`;
+// Cloud describe cada tabla con su nombre y, tras «;», una nota interna: aquí va solo el nombre.
+const _cdShort = label => _cdEsc(String(label || '').split(';')[0].trim());
+const _cdList = items => `<ul class="alrt-sub" style="margin:2px 0 6px 18px;padding:0;columns:2;column-gap:20px">${items}</ul>`;
+const _cdReviewHtml = review => !review ? '' : `<div class="alrt-sub" style="margin:8px 0 2px"><strong>La configuración y los permisos serán los de VELO Cloud:</strong></div>
+  ${_cdList(review.configuration.length ? review.configuration.map(item => `<li>${_cdShort(item.label)}</li>`).join('') : '<li>Nada que revisar</li>')}
+  <div class="alrt-sub" style="margin:8px 0 2px"><strong>Quedará solo como historial</strong> (se consulta en VELO Cloud, no se opera):</div>
+  ${_cdList(review.historyOnly.length ? review.historyOnly.map(item => `<li>${_cdShort(item.label)} (${Number(item.rows || 0).toLocaleString('es-DO')})</li>`).join('') : '<li>Nada</li>')}`;
 const _cdApi = (name, extra) => window.api.cloudDirect[name]({ requestUserId: _cfgUser().id, ...(extra || {}) });
 const _cdBody = () => document.getElementById('cd-body');
 const _cdStopPoll = () => { if (_cdPoll) { clearInterval(_cdPoll); _cdPoll = null; } };
@@ -2049,7 +2054,9 @@ function _cdRehearsalDone(result) {
   _cdRead = null;
   body.innerHTML = (result?.ok
     ? _cdBox('g', 'Ensayo superado', `Los 20 pasos pasaron en ${result.seconds} s y se revirtieron. Ya se puede hacer el corte (con la caja cerrada).`) + _cdReviewHtml(result.review)
-    : _cdBox('r', `El ensayo se detuvo en «${_cdEsc(result?.label || result?.error || '')}»`, `${result?.issueCount ?? ''} por resolver en Desktop. ${(result?.issues || []).slice(0, 8).map(_cdIssue).join(' · ')}`))
+    : result?.coverage
+      ? _cdBox('r', `El ensayo se detuvo en «${_cdEsc(result.label)}»`, `${(result.issues || []).slice(0, 8).map(_cdIssue).join(' · ')}. Mientras estos datos existan no se puede hacer el corte, y no se borran desde Desktop: avísale a VELO.`)
+      : _cdBox('r', `El ensayo se detuvo en «${_cdEsc(result?.label || result?.error || '')}»`, `${result?.issueCount ?? ''} por resolver en Desktop. ${(result?.issues || []).slice(0, 8).map(_cdIssue).join(' · ')}`))
     + _cdFoot('<button class="btn btn-dark" id="cd-back" type="button">Continuar</button>');
   document.getElementById('cd-back').onclick = () => void _cdRender();
 }
