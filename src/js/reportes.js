@@ -153,6 +153,26 @@ function _repGuardarPDF() {
     .catch(error => toast(error?.message || 'No se pudo preparar el PDF', 'err'));
 }
 
+// Tipo de comprobante fiscal según el prefijo del NCF (mismas etiquetas que
+// el POS y Ventas). Una factura sin NCF se exporta como "Sin comprobante".
+const _REP_NCF_LABELS = {
+  B01: 'B01 · Crédito Fiscal',
+  B02: 'B02 · Consumo',
+  B03: 'B03 · Nota de Débito',
+  B04: 'B04 · Nota de Crédito',
+  B14: 'B14 · Régimen Especial',
+  B15: 'B15 · Gubernamental',
+  B16: 'B16 · Exportaciones',
+  E31: 'E31 · e-CF Crédito Fiscal',
+  E32: 'E32 · e-CF Consumo',
+};
+function _repNcfTypeLabel(ncf) {
+  const value = String(ncf || '').trim().toUpperCase();
+  if (!value) return 'Sin comprobante';
+  const prefix = value.slice(0, 3);
+  return _REP_NCF_LABELS[prefix] || prefix;
+}
+
 function _repEsc(v) {
   return String(v == null ? '' : v)
     .replace(/&/g, '&amp;')
@@ -1219,6 +1239,8 @@ function exportReportePDF(data = repData, { returnHtml = false } = {}) {
     <tr>
       <td>${fdate(row.sale_date)}</td>
       <td>${_repEsc(facturaLabel(row))}</td>
+      <td>${_repEsc(_repNcfTypeLabel(row.ncf))}</td>
+      <td>${_repEsc(String(row.ncf || '').trim())}</td>
       <td>${_repEsc(row.customer_name || 'Consumidor Final')}</td>
       <td>${row.price_mode === 'wholesale' ? 'Mayorista' : 'Detalle'}</td>
       <td>${row.customer_type === 'company' ? 'Empresa' : 'Persona'}</td>
@@ -1329,8 +1351,8 @@ function exportReportePDF(data = repData, { returnHtml = false } = {}) {
   <h3>Facturas del segmento</h3>
   ${invoiceNote ? `<p style="margin:0 0 8px;font-size:11px;color:#b45309">${_repEsc(invoiceNote)}</p>` : ''}
   <table>
-    <thead><tr><th>Fecha</th><th>Documento</th><th>Cliente</th><th>Precio</th><th>Cliente tipo</th><th>Método</th><th style="text-align:right">ITBIS</th><th style="text-align:right">Total</th></tr></thead>
-    <tbody>${invoiceRows || '<tr><td colspan="8" style="text-align:center;color:#9ca3af">Sin facturas</td></tr>'}</tbody>
+    <thead><tr><th>Fecha</th><th>Documento</th><th>Comprobante</th><th>NCF</th><th>Cliente</th><th>Precio</th><th>Cliente tipo</th><th>Método</th><th style="text-align:right">ITBIS</th><th style="text-align:right">Total</th></tr></thead>
+    <tbody>${invoiceRows || '<tr><td colspan="10" style="text-align:center;color:#9ca3af">Sin facturas</td></tr>'}</tbody>
   </table>
 
   <h3>Cambios de Costo / Precio</h3>

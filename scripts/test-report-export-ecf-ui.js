@@ -69,6 +69,7 @@ app.whenReady().then(async () => {
       const makeRows = count => Array.from({ length: count }, (_, i) => ({
         id: i + 1, sale_date: i < count - 1 ? '2026-01-10' : '2022-01-03', customer_name: 'Cliente ' + i,
         customer_type: 'person', price_mode: 'retail', payment_method: 'efectivo', total: 118, tax_amt: 18,
+        ncf: ['B0100000123', 'B0200004567', 'E310000000001', ''][i % 4],
       }));
       window.makeReport = (rows, total) => ({
         totalRev: 0, totalCost: 0, grossProfit: 0, margin: 0, totalTax: 0, totalDisc: 0,
@@ -105,6 +106,20 @@ app.whenReady().then(async () => {
     assert.strictEqual(excel.sheet.rows.length, 2266, 'el Excel lleva las 2,266 facturas del período');
     assert.strictEqual(excel.sheet.rows.at(-1).cells[0].value, '2022-01-03', 'el Excel llega hasta 2022');
     console.log('✓ Excel del reporte financiero con todas las facturas del período');
+
+    stage = 'excel-comprobante';
+    const headers = excel.sheet.columns.map(column => column.header);
+    assert.deepStrictEqual(headers.slice(0, 5), ['Fecha', 'Documento', 'Comprobante', 'NCF', 'Cliente'],
+      'el Excel trae el tipo de comprobante y el NCF junto al documento');
+    assert.deepStrictEqual(excel.sheet.rows.slice(0, 4).map(row => [row.cells[2].value, row.cells[3].value, row.cells[3].type]), [
+      ['B01 · Crédito Fiscal', 'B0100000123', 'text'],
+      ['B02 · Consumo', 'B0200004567', 'text'],
+      ['E31 · e-CF Crédito Fiscal', 'E310000000001', 'text'],
+      ['Sin comprobante', '', 'text'],
+    ], 'cada factura muestra con qué comprobante se emitió');
+    assert.strictEqual(excel.sheet.rows[0].cells[4].value, 'Cliente 0', 'el cliente sigue en su columna');
+    assert.strictEqual(excel.sheet.rows[0].cells[9].value, 118, 'el total sigue siendo número en la última columna');
+    console.log('✓ Excel con tipo de comprobante y NCF de cada factura');
 
     stage = 'pdf';
     await win.webContents.executeJavaScript(`window.summaryCalls = []; _repGuardarPDF();`);

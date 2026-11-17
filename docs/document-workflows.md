@@ -153,6 +153,8 @@ WhatsApp Business Cloud API y sus credenciales.
   **Excel** y **Guardar PDF** vuelven a consultar con `fullDetail: true` y los
   mismos filtros, y llevan todas las facturas del período (hasta 50,000). Si
   el documento no lleva todas, lo dice debajo de «Facturas del segmento».
+  Cada factura lleva el tipo de comprobante («B01 · Crédito Fiscal», «Sin
+  comprobante», etc., según el prefijo del NCF) y el NCF en columnas propias.
 
 ## Facturación electrónica E31 y E32 en Desktop
 
