@@ -2926,7 +2926,26 @@ async function renderECFConfig(container) {
   const requestUserId = _cfgUser()?.id;
   const cfgRes = await window.api.ecf.getConfig({ requestUserId }).catch(() => null);
   if (!cfgRes?.ok) return;
-  const cfg = cfgRes.data;
+  const cfg = cfgRes.data || {};
+  // Una terminal conectada a un Servidor con una versión anterior recibe la
+  // configuración vieja (sin secuencias ni tipo de ingresos). Antes la pantalla
+  // se caía a mitad de dibujarse y "Guardar" quedaba sin acción; además el
+  // guardado viejo borra la contraseña guardada si el campo va vacío. Por eso
+  // aquí se avisa y no se ofrece guardar hasta que el Servidor se actualice.
+  if (!Array.isArray(cfg.ranges) || !/^0[1-6]$/.test(String(cfg.incomeType || ''))) {
+    container.innerHTML = `
+      <div class="card" style="margin-top:16px">
+        <div class="card-title">Facturación Electrónica (e-CF)</div>
+        <div class="alrt a" role="alert" style="margin-top:8px">
+          <div class="alrt-dot a"></div>
+          <div>
+            <div class="alrt-title">El Servidor tiene una versión anterior de Velo POS</div>
+            <div class="ts">Esta terminal recibe la configuración del Servidor y esa versión todavía no maneja la facturación electrónica con E31 y E32. Actualiza el Servidor a la misma versión que esta terminal y vuelve a abrir Configuración. Para proteger las credenciales que ya estén guardadas, desde aquí no se puede guardar hasta entonces.</div>
+          </div>
+        </div>
+      </div>`;
+    return;
+  }
   const environmentLabel = cfg.environment === 'production' ? 'Producción' : 'Prueba (TesteCF)';
   container.innerHTML = `
     <div class="card" style="margin-top:16px">
@@ -2972,27 +2991,27 @@ async function renderECFConfig(container) {
       <div id="ecf-status-msg" class="ts" role="status"></div>
     </div>`;
   const field = id => container.querySelector('#' + id);
-  field('ecf-email').value = cfg.email;
-  field('ecf-env').value = cfg.environment;
+  field('ecf-email').value = cfg.email || '';
+  field('ecf-env').value = cfg.environment === 'production' ? 'production' : 'test';
   field('ecf-income').value = cfg.incomeType;
-  const ranges = cfg.ranges.length ? cfg.ranges : [null];
-  ranges.forEach(range => {
-    const item = document.createElement('li');
-    item.textContent = range
-      ? `${range.first_ncf} a ${range.last_ncf} · RNC ${range.issuer_rnc} · Vence ${range.expiry_date} · ${Math.max(0, Number(range.last_ncf.slice(3)) - range.next_number + 1)} disponibles`
-      : 'No hay secuencias registradas.';
-    field('ecf-ranges').appendChild(item);
-  });
+  // El resultado se muestra al pie de la tarjeta y también como aviso, porque
+  // al pie queda fuera de la vista y parecía que el botón no hacía nada.
   const showResult = async (button, action, message, refresh = false) => {
     button.disabled = true;
     field('ecf-status-msg').textContent = 'Procesando…';
+    let text = 'No se pudo completar la operación.';
+    let ok = false;
     try {
       const result = await action();
-      if (result.ok && refresh) await renderECFConfig(container);
-      field('ecf-status-msg').textContent = result.ok ? message : result.error;
+      ok = result?.ok === true;
+      text = ok ? message : (result?.error || text);
+      if (ok && refresh) await renderECFConfig(container);
     } catch {
-      field('ecf-status-msg').textContent = 'No se pudo completar la operación.';
+      ok = false;
     } finally { button.disabled = false; }
+    const status = field('ecf-status-msg');
+    if (status) status.textContent = text;
+    toast(text, ok ? 'ok' : 'err');
   };
   field('btn-save-ecf').onclick = event => showResult(event.currentTarget, () => window.api.ecf.saveConfig({
     requestUserId, email: field('ecf-email').value.trim(), password: field('ecf-pass').value,
@@ -3011,6 +3030,17 @@ async function renderECFConfig(container) {
       expiry: field('ecf-expiry').value, environment: cfg.environment,
     }), 'Rango guardado.', true);
   };
+  // La lista va después de conectar los botones: un rango con datos
+  // incompletos ya no puede dejar la pantalla sin "Guardar".
+  const ranges = cfg.ranges.length ? cfg.ranges : [null];
+  ranges.forEach(range => {
+    const item = document.createElement('li');
+    const lastNcf = String(range?.last_ncf || '');
+    item.textContent = range
+      ? `${range.first_ncf} a ${lastNcf} · RNC ${range.issuer_rnc} · Vence ${range.expiry_date} · ${Math.max(0, Number(lastNcf.slice(3)) - Number(range.next_number) + 1) || 0} disponibles`
+      : 'No hay secuencias registradas.';
+    field('ecf-ranges').appendChild(item);
+  });
 }
 
 // Encender o apagar Preventa y Despacho desde Configuración. Escribe la misma
