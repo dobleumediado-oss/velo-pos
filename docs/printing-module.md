@@ -94,6 +94,11 @@ No se hizo QA interactivo en vivo (sin impresora real en el entorno de dev, sin 
 - El lote de copias usa el período fiscal. Incluye las facturas vigentes con
   NCF tradicional válido y los E31/E32 aceptados en producción. Usa el
   documento original para las copias y conserva el timbre electrónico.
+- Un E31/E32 que todavía no está aceptado se imprime sin el e-NCF y con la
+  leyenda «Copia interna · e-CF … · Sin valor fiscal». Esto aplica igual al
+  ticket del cobro, al PDF por WhatsApp del POS y a la reimpresión desde
+  Ventas: el POS pasa al ticket el ambiente y el estado del e-CF de la venta
+  recién guardada.
 - Cada copia del lote empieza en una hoja Carta nueva. Los formatos y el
   autoajuste se aplican dentro de cada factura. Una factura larga puede ocupar
   varias hojas.

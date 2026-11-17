@@ -4868,6 +4868,10 @@ async function finalizarVenta() {
       pay:       pmeth,
       cajero:    user.name,
       ncf:       /^E(?:31|32)/.test(result.ncf || '') ? '' : (result.ncf || ''),
+      // Con e-NCF reservado, el ticket y el PDF salen como copia interna sin
+      // valor fiscal, igual que la reimpresión desde Ventas.
+      ecf_environment: savedSale?.ecf_environment || '',
+      ecf_status:      savedSale?.ecf_status || '',
       tax_pct:   result.taxPct ?? CFG.itbis,
       financial_account_id: result.financialAccountId || finAcctId,
       payment_currency: result.paymentCurrency || 'DOP',

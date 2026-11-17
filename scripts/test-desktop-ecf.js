@@ -56,6 +56,16 @@ async function test() {
   assert.equal(snapshot.Encabezado.Totales.TotalITBIS, 16.2);
   assert.equal(snapshot.Encabezado.Totales.MontoTotal, 106.2);
 
+  // El ticket del cobro sale de la venta recién guardada: debe llevar ambiente
+  // y estado del e-CF para imprimirse como copia interna sin valor fiscal.
+  const justSaved = salesRepo.getById(e32.saleId);
+  assert.equal(justSaved.ecf_environment, 'test');
+  assert.equal(justSaved.ecf_status, 'Reservado');
+  const posScript = fs.readFileSync(path.join(__dirname, '..', 'src/js/pos.js'), 'utf8');
+  const ticketData = posScript.slice(posScript.indexOf('const saleForPrint = {'), posScript.indexOf('_conduceForPrint = null'));
+  assert.match(ticketData, /ecf_environment:\s*savedSale\?\.ecf_environment/);
+  assert.match(ticketData, /ecf_status:\s*savedSale\?\.ecf_status/);
+
   const handlers = new Map();
   let posts = 0;
   let e32AuthRejected = false;
