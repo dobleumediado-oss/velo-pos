@@ -1,5 +1,16 @@
 # Historial de versiones
 
+## 1.66.4
+
+- Reportes → Financiero: el Excel y el PDF llevan todas las facturas del período
+  elegido. Antes salían solo las 1,000 más recientes (un período desde 2022
+  llegaba desde 2024), aunque los totales sí estaban completos. La pantalla sigue
+  mostrando las 1,000 más recientes para no ponerse lenta.
+- Configuración → Facturación Electrónica (e-CF): «Guardar configuración» ya no
+  queda sin acción y el resultado se muestra como aviso. En una terminal
+  conectada a un Servidor con una versión anterior a 1.65.0, la tarjeta avisa que
+  hay que actualizar el Servidor y no deja guardar, para no borrar credenciales.
+
 ## 1.66.3
 
 - En la PC Servidor, «Pasar a VELO Cloud» trabaja con la base del servicio Velo POS
