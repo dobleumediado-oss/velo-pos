@@ -1024,6 +1024,28 @@ ok(companyWholesaleReport.topCustomers.some(row => row.customer_id === companyId
 ok(near(companyWholesaleReport.abonos.total, 30),
   'atribuye al segmento solo los abonos aplicados a sus facturas');
 
+console.log('\n== F4. Excel/PDF del reporte llevan todas las facturas del período ==');
+// Regresión: la pantalla trae las 1,000 más recientes; el Excel y el PDF
+// pedían lo mismo y un período 2022→hoy llegaba recortado desde 2024.
+const insertOldSale = db.prepare(`INSERT INTO sales(customer_name,type,status,subtotal,total,cajero,user_id,sale_date,created_at)
+  VALUES(?,'factura','completed',100,118,'Prueba reporte',?,?,?)`);
+db.transaction(() => {
+  for (let i = 0; i < 1205; i++) {
+    const day = `2022-${String(1 + (i % 12)).padStart(2, '0')}-${String(1 + (i % 28)).padStart(2, '0')}`;
+    insertOldSale.run(`Cliente reporte ${i}`, userId, day, `${day} 10:00:00`);
+  }
+})();
+const screenReport = DB.reportsRepo.summary('custom', '2022-01-01', '2022-12-31', {});
+ok(screenReport.salesDetail.length === 1000 && screenReport.salesDetailTotal === 1205,
+  `la pantalla sigue limitada a 1,000 y conoce el total real (obtuvo ${screenReport.salesDetail.length} de ${screenReport.salesDetailTotal})`);
+const exportReport = DB.reportsRepo.summary('custom', '2022-01-01', '2022-12-31', { fullDetail: true });
+ok(exportReport.salesDetail.length === 1205,
+  `la exportación trae todas las facturas del período (obtuvo ${exportReport.salesDetail.length})`);
+ok(exportReport.salesDetail.some(row => row.sale_date === '2022-01-01'),
+  'la exportación incluye las facturas más antiguas del período');
+ok(DB.reportsRepo.summary('custom', '2022-01-01', '2022-12-31', { fullDetail: 'true' }).salesDetail.length === 1000,
+  'solo fullDetail === true quita el tope de pantalla');
+
 console.log('\n== G. Exclusión de "Importación histórica" ==');
 db.prepare(`INSERT INTO sales(customer_id,customer_name,type,status,subtotal,total,cajero,user_id,created_at)
             VALUES(?,?,'factura','completed',500,590,'Importación histórica',?,datetime('now','localtime'))`).run(custId, 'Hist', userId);

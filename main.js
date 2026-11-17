@@ -4412,13 +4412,13 @@ ipcMain.handle('sales:return', async (_, { originalSaleId, items, reason, reques
 
 // ── Reportes ──────────────────────────────────
 ipcMain.handle('reports:summary', async (_, {
-  range, dateFrom, dateTo, priceMode, customerType, requestUserId
+  range, dateFrom, dateTo, priceMode, customerType, fullDetail, requestUserId
 }) => {
   try {
     _moduleAuthorizedUser(requestUserId, 'reportes');
     return {
       ok: true,
-      data: reportsRepo.summary(range, dateFrom, dateTo, { priceMode, customerType }),
+      data: reportsRepo.summary(range, dateFrom, dateTo, { priceMode, customerType, fullDetail: fullDetail === true }),
     };
   } catch (e) {
     return { ok: false, error: e.message };

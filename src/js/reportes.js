@@ -14,6 +14,7 @@ let repRange   = 'month';
 let repDateFrom = '';
 let repDateTo   = '';
 let repData     = null;
+let repDataRequest = null; // filtros exactos con que se cargó repData (para exportar el detalle completo)
 let repTab      = 'financiero'; // 'financiero' | 'abonos' | 'inventario' | 'comprobantes'
 let repPriceMode = 'all';
 let repCustomerType = 'all';
@@ -112,7 +113,44 @@ function exportReporteActualPDF() {
   if (repTab === 'inventario') {
     return exportInventarioValorizadoPDF(DB.products.filter(product => product.active !== 0));
   }
-  return exportReportePDF();
+  if (repTab === 'abonos') return exportReportePDF();
+  return _repFinancialExportHTML();
+}
+
+// Excel y PDF del reporte financiero: la pantalla trae solo las 1,000 facturas
+// más recientes; el archivo vuelve a pedir el detalle completo con los mismos
+// filtros que produjeron lo que se ve. Devuelve el HTML (no imprime): lo
+// consumen guardarDocumentoExcel / guardarDocumentoPDF.
+async function _repFinancialExportHTML() {
+  if (!repData) { toast('Carga los datos primero', 'w'); return ''; }
+  let data = repData;
+  const shown = (repData.salesDetail || []).length;
+  const total = Number(repData.salesDetailTotal);
+  const complete = Number.isFinite(total) && total <= shown;
+  if (!complete && repDataRequest) {
+    const result = await window.api.reports.summary({ ...repDataRequest, fullDetail: true });
+    if (!result?.ok) throw new Error(result?.error || 'No se pudo cargar el detalle completo del reporte');
+    data = result.data;
+  }
+  // Si mientras se cargaba el detalle cambiaron a Abonos, exportReportePDF
+  // tomaría la ruta de abonos e imprimiría otra cosa: se cancela sin archivo.
+  if (repTab === 'abonos') return '';
+  return exportReportePDF(data, { returnHtml: true }) || '';
+}
+
+// Guardar PDF: inventario y abonos siguen su ruta de siempre; el financiero
+// espera el detalle completo y abre la vista PDF como trabajo de "reporte",
+// igual que antes (mismo papel y plantilla).
+function _repGuardarPDF() {
+  const name = `Reporte-${repTab}`;
+  if (repTab === 'inventario' || repTab === 'abonos') {
+    return (typeof guardarDocumentoPDF === 'function')
+      ? guardarDocumentoPDF(exportReporteActualPDF, name)
+      : exportReporteActualPDF();
+  }
+  return _repFinancialExportHTML()
+    .then(html => { if (html) printHTML(html, 'reporte', { mode: 'pdf', suggestedName: name }); })
+    .catch(error => toast(error?.message || 'No se pudo preparar el PDF', 'err'));
 }
 
 function _repEsc(v) {
@@ -154,9 +192,7 @@ async function renderReportes(el) {
       }),
       h('button', {
         class: 'btn btn-out btn-sm',
-        onclick: () => (typeof guardarDocumentoPDF === 'function')
-          ? guardarDocumentoPDF(exportReporteActualPDF, `Reporte-${repTab}`)
-          : exportReporteActualPDF(),
+        onclick: () => _repGuardarPDF(),
         html: `${svg('pdf')} Guardar PDF`
       })
     )
@@ -332,6 +368,7 @@ async function cargarYRenderizar(el) {
     if (!result.ok) { swap(errBox(result.error || 'Error al cargar')); return; }
 
     repData = result.data;
+    repDataRequest = repTab === 'abonos' ? null : payload;
     // Construir contenido nuevo en un contenedor temporal (fuera de pantalla)
     const tmp = h('div');
     if (repTab === 'abonos') renderAbonosContenido(tmp, repData);
@@ -1099,14 +1136,14 @@ function exportAbonosPDF() {
 // ══════════════════════════════════════════════
 // EXPORTAR PDF REPORTE COMPLETO
 // ══════════════════════════════════════════════
-function exportReportePDF() {
-  if (!repData) { toast('Carga los datos primero', 'w'); return; }
+function exportReportePDF(data = repData, { returnHtml = false } = {}) {
+  if (!data) { toast('Carga los datos primero', 'w'); return; }
   if (repTab === 'abonos') {
     exportAbonosPDF();
     return;
   }
 
-  const d = repData;
+  const d = data;
   const rangeLabel = {
     today: 'Hoy', week: 'Esta semana', month: 'Este mes',
     all: 'Histórico',
@@ -1167,6 +1204,17 @@ function exportReportePDF() {
       <td style="text-align:right">${fmt(row.average_ticket)}</td>
       <td style="text-align:right;font-weight:700">${fmt(row.total)}</td>
     </tr>`).join('');
+  // Nunca recortar en silencio: si el archivo no lleva todas las facturas del
+  // período, el documento lo dice.
+  const invoiceCount = (d.salesDetail || []).length;
+  const invoiceTotal = Number(d.salesDetailTotal);
+  const invoiceNote = Number.isFinite(invoiceTotal)
+    ? (invoiceTotal > invoiceCount
+      ? `Se muestran las ${invoiceCount.toLocaleString('en-US')} facturas más recientes de ${invoiceTotal.toLocaleString('en-US')} del período. Divide el período en partes más cortas para exportarlas todas.`
+      : '')
+    : (invoiceCount >= 1000
+      ? `Se muestran las ${invoiceCount.toLocaleString('en-US')} facturas más recientes del período. Para exportarlas todas, actualiza el Servidor a la versión más reciente de Velo POS.`
+      : '');
   const invoiceRows = (d.salesDetail || []).map(row => `
     <tr>
       <td>${fdate(row.sale_date)}</td>
@@ -1279,6 +1327,7 @@ function exportReportePDF() {
   </table>
 
   <h3>Facturas del segmento</h3>
+  ${invoiceNote ? `<p style="margin:0 0 8px;font-size:11px;color:#b45309">${_repEsc(invoiceNote)}</p>` : ''}
   <table>
     <thead><tr><th>Fecha</th><th>Documento</th><th>Cliente</th><th>Precio</th><th>Cliente tipo</th><th>Método</th><th style="text-align:right">ITBIS</th><th style="text-align:right">Total</th></tr></thead>
     <tbody>${invoiceRows || '<tr><td colspan="8" style="text-align:center;color:#9ca3af">Sin facturas</td></tr>'}</tbody>
@@ -1305,6 +1354,7 @@ function exportReportePDF() {
   </div>
 </body></html>`;
 
+  if (returnHtml) return html;
   printHTML(html);
 }
 

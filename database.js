@@ -8671,6 +8671,18 @@ const reportsRepo = {
       ORDER BY total DESC
       LIMIT 15
     `).all(...f.withoutAlias.params);
+    // La pantalla muestra las 1,000 más recientes para no ponerse lenta. El
+    // Excel y el PDF piden el detalle completo (fullDetail) para que el archivo
+    // cubra todo el período elegido; el tope de 50,000 queda por debajo del
+    // límite de filas del exportador a Excel. salesDetailTotal permite avisar
+    // en el documento si aun así no caben todas.
+    const detailLimit = filters.fullDetail === true ? 50000 : 1000;
+    const salesDetailTotal = db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM sales
+      WHERE status='completed' AND type='factura'
+        AND ${f.withoutAlias.sql}
+    `).get(...f.withoutAlias.params)?.count || 0;
     const salesDetail = db.prepare(`
       SELECT id,sale_date,customer_name,customer_rnc,customer_type,
              price_mode,payment_method,total,tax_amt,discount_amt,
@@ -8680,8 +8692,8 @@ const reportsRepo = {
       WHERE status='completed' AND type='factura'
         AND ${f.withoutAlias.sql}
       ORDER BY sale_date DESC,id DESC
-      LIMIT 1000
-    `).all(...f.withoutAlias.params);
+      LIMIT ?
+    `).all(...f.withoutAlias.params, detailLimit);
 
     const totalRev      = byMethod.reduce((a, m) => a + (m.total || 0), 0);
     const totalCost     = costData?.total_cost   || 0;
@@ -8724,7 +8736,7 @@ const reportsRepo = {
       abonos:       { count: abonosData?.count || 0, total: abonosData?.total || 0 },
       ventasContado, ventasCredito, cobradoMes,
       averageTicket: totalSales > 0 ? round2(totalRev / totalSales) : 0,
-      byPriceMode, byCustomerType, topCustomers, salesDetail,
+      byPriceMode, byCustomerType, topCustomers, salesDetail, salesDetailTotal,
       filters: { priceMode, customerType },
     };
   },
