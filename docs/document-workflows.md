@@ -149,6 +149,10 @@ WhatsApp Business Cloud API y sus credenciales.
 - No construir números con `sale.id`, `payment.id` o `padStart()` en módulos de UI.
 - No incluir `cotizacion` en consultas financieras o de rentabilidad.
 - Toda impresión de reportes debe pasar por `printHTML()` o `_openPrintWindow()`.
+- Reportes → Financiero muestra en pantalla las 1,000 facturas más recientes.
+  **Excel** y **Guardar PDF** vuelven a consultar con `fullDetail: true` y los
+  mismos filtros, y llevan todas las facturas del período (hasta 50,000). Si
+  el documento no lleva todas, lo dice debajo de «Facturas del segmento».
 
 ## Facturación electrónica E31 y E32 en Desktop
 
@@ -166,6 +170,11 @@ comprobante no cuadran, la operación de cobro se revierte.
    → Facturación Electrónica (e-CF)**. Completa los datos del emisor en
    Configuración del negocio y guarda la cuenta, el ambiente y el tipo de
    ingresos. **Probar conexión guardada** verifica la conexión y la clave API.
+   El resultado de cada botón aparece como aviso y al pie de la tarjeta. En una
+   terminal conectada a un Servidor, la configuración vive en el Servidor: si
+   este tiene una versión anterior a 1.65.0, la tarjeta lo avisa y no permite
+   guardar (el guardado viejo borraba la contraseña si el campo iba vacío).
+   Actualiza primero el Servidor.
 3. Registra los e-NCF inicial y final y el vencimiento del rango. Usa el primer
    número que esté disponible. Si más de un sistema emite para el mismo RNC,
    asigna rangos sin solapamiento entre sistemas.
