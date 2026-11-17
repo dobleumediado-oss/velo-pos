@@ -1,5 +1,12 @@
 # Historial de versiones
 
+## 1.66.5
+
+- Reportes → Financiero: en el Excel y el PDF, «Facturas del segmento» muestra
+  con qué comprobante se emitió cada factura. Dos columnas nuevas después de
+  Documento: el tipo (B01 · Crédito Fiscal, B02 · Consumo, E31, E32… o «Sin
+  comprobante»), para filtrar en Excel, y el NCF completo.
+
 ## 1.66.4
 
 - Reportes → Financiero: el Excel y el PDF llevan todas las facturas del período
