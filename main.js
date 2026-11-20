@@ -9676,6 +9676,42 @@ function _launchBusinessWorker({ business, port }) {
   });
 }
 
+// ── Reporte diario a VELO Control (Fase D) ───────────────────────────────────
+// Versión, modo, licencia y uso de e-CF del mes; nunca clientes ni montos. Si la
+// cuenta del cliente está al día, Cloud devuelve una licencia renovada corta que
+// se instala solo después de verificarla. Apagado: settings control_report_enabled='0'.
+function _scheduleControlReport() {
+  if ((!app.isPackaged && process.env.VELO_CONTROL_REPORT !== '1') || RUNTIME.headless) return;
+  const run = async () => {
+    try {
+      if (settingsRepo.get('control_report_enabled') === '0') return;
+      const status = getLicenseStatus(DATA_DIR, requiredLicenseProduct());
+      if (!status.licenseKey || !status.machineId) return;
+      const controlReport = require('./lib/control-report');
+      const configuredMode = settingsRepo.get('connection_mode') || 'local';
+      const report = controlReport.buildReport({
+        db, licenseKey: status.licenseKey, machineId: status.machineId, appVersion: app.getVersion(),
+        mode: ['local', 'server', 'client'].includes(configuredMode) ? configuredMode : 'local',
+        today: require('./lib/dates').todayStr(),
+      });
+      const apiUrl = process.env.VELO_CLOUD_API_URL || require('./lib/cloud-direct').DEFAULT_API_URL;
+      const result = await controlReport.sendReport({ apiUrl, report });
+      if (!result.ok || !result.license) return;
+      if (!controlReport.shouldInstall(status.expiry, result.license, require('./license').parseLicense)) return;
+      const activation = activateLicense(DATA_DIR, result.license, requiredLicenseProduct());
+      if (!activation.ok) { logWarn('control-report', 'VELO Control envió una licencia que no se pudo instalar: ' + activation.error); return; }
+      try { audit(null, 'VELO Control', 'licencia_renovada', 'license', null, `Licencia renovada hasta ${activation.expiry}`); } catch {}
+      logInfo('control-report', 'Licencia renovada por VELO Control', { expiry: activation.expiry });
+    } catch (e) {
+      logWarn('control-report', 'No se pudo reportar a VELO Control: ' + e.message);
+    }
+  };
+  const first = setTimeout(run, 2 * 60 * 1000);
+  const daily = setInterval(run, 24 * 60 * 60 * 1000);
+  if (first.unref) first.unref();
+  if (daily.unref) daily.unref();
+}
+
 function _scheduleAutoBackups() {
   const runAutoBackup = async () => {
     try {
@@ -9856,6 +9892,7 @@ app.whenReady().then(async () => {
     return;
   }
   createWindow();
+  _scheduleControlReport();
   // Verificar actualizaciones 8 segundos después del arranque,
   // cuando la ventana ya está completamente cargada y visible.
   setTimeout(() => setupAutoUpdater(), 8000);

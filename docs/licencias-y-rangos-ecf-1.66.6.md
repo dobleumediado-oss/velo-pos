@@ -51,3 +51,23 @@ Pendiente fuera de esta versión: la fecha de vencimiento depende del reloj del 
 «Pasar a VELO Cloud». Cloud aprueba la huella nueva en `73ad563`; **Cloud debe estar
 desplegado antes de publicar Desktop 1.66.6**, o los clientes con rangos e-CF no podrían
 pasar a Cloud.
+
+## Reporte diario a VELO Control y licencias renovables (Fase D)
+
+- `lib/control-report.js`: dos minutos después de abrir y luego cada 24 horas, el equipo
+  envía a `https://api.velosuite.cloud/v1/desktop/heartbeat` su licencia (como identidad),
+  la versión, el modo (equipo único, Servidor o Terminal), los e-CF aceptados del mes y sus
+  rangos activos. **Nunca clientes, montos ni facturas.** Una Terminal no envía uso de e-CF.
+  Solo en la app instalada (o con `VELO_CONTROL_REPORT=1`); se apaga con el ajuste
+  `control_report_enabled='0'`. Sin internet no pasa nada.
+- Si en VELO Control la instalación está unida a una cuenta de Cobros de Desktop, activa y
+  sin atraso, y la licencia vence en menos de 30 días, Cloud responde con una licencia de
+  35 días firmada con la **llave del servidor** (huella `BEB8F4186D827EE0`). Desktop la
+  verifica con `activateLicense` y solo la instala si vence después de la actual; nunca
+  reemplaza una perpetua. Queda en la auditoría (`licencia_renovada`).
+- `license.js` acepta de la llave del servidor solo licencias v3 que venzan a 45 días o
+  menos (`SERVER_LICENSE_TOO_LONG` si no). Si alguien comprometiera el servidor, no podría
+  sacar licencias largas ni perpetuas.
+- Probado de punta a punta con las llaves reales contra la API de Cloud en local.
+- Pendiente: el «Servidor» instalado como servicio sin ventana todavía no reporta (solo la
+  app con ventana).

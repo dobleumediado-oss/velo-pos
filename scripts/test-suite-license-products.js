@@ -244,4 +244,21 @@ test('una licencia legítima de la lista blanca no genera aviso', () => {
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-console.log(`\nLicencias por producto: ${passed}/18 pruebas correctas.`);
+// ── Llave de VELO Control (servidor): solo licencias cortas ───────────────────
+const serverKeys = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+const serverOptions = { publicKeyPem, serverPublicKeyPem: serverKeys.publicKey.export({ type: 'spki', format: 'pem' }) };
+const signServer = parts => { const payload = parts.join('|'); return `${payload}|${crypto.sign('SHA256', Buffer.from(payload), serverKeys.privateKey).toString('base64')}`; };
+const inDays = days => new Date(Date.now() + days * 86400000).toISOString().split('T')[0];
+
+test('VELO Control renueva con licencias de hasta 45 días y nunca perpetuas', () => {
+  const renewed = verifyLicense(parseLicense(signServer(['3', machineId, 'Cliente al día', inDays(35), 'velo_pos'])), machineId, 'velo_pos', serverOptions);
+  assert.strictEqual(renewed.valid, true);
+  assert.strictEqual(renewed.server, true);
+  assert.strictEqual(verifyLicense(parseLicense(signServer(['3', machineId, 'Larga', inDays(60), 'velo_pos'])), machineId, 'velo_pos', serverOptions).code, 'SERVER_LICENSE_TOO_LONG');
+  assert.strictEqual(verifyLicense(parseLicense(signServer(['3', machineId, 'Perpetua', 'PERPETUAL', 'velo_pos'])), machineId, 'velo_pos', serverOptions).code, 'SERVER_LICENSE_TOO_LONG');
+  assert.strictEqual(verifyLicense(parseLicense(signServer(['3', machineId, 'Otro producto', inDays(35), 'velo_pos'])), machineId, 'velo_tech_pos', serverOptions).code, 'PRODUCT_NOT_LICENSED');
+  assert.strictEqual(verifyLicense(parseLicense(signServer(['3', machineId, 'Vencida', inDays(-2), 'velo_pos'])), machineId, 'velo_pos', serverOptions).code, 'EXPIRED');
+  assert.strictEqual(verifyLicense(parseLicense(signServer(['3', 'B'.repeat(32), 'Otra máquina', inDays(35), 'velo_pos'])), machineId, 'velo_pos', serverOptions).code, 'WRONG_MACHINE');
+});
+
+console.log(`\nLicencias por producto: ${passed}/19 pruebas correctas.`);

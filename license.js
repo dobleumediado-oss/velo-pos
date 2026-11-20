@@ -50,6 +50,15 @@ const LEGACY_ALLOWED_SHA256 = Object.freeze(new Set([
   'ff2bc81e8decab62712f300a2bdfed60d3690b7130640f2275256ea5ca550739',
 ]));
 const LEGACY_NOTICE_DAYS = 30;
+
+// Llave de VELO Control (servidor). Renueva sola la licencia de los clientes al día,
+// pero solo puede firmar licencias cortas: Desktop rechaza las suyas que venzan a
+// más de 45 días. Así, aunque alguien comprometiera el servidor, no saca licencias largas.
+const SERVER_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE6soFdrOUxHe1YQZPMZTus6rE43Kc
+aR07zuSvd0ANam21fSlgelk1Yo/gkLLv8kKlmFxksDZLcA38fIS3vgKK+w==
+-----END PUBLIC KEY-----`;
+const SERVER_LICENSE_MAX_DAYS = 45;
 const LEGACY_NOTICE_FILE = '.legacy-license-notice';
 
 function getMachineId() {
@@ -140,7 +149,17 @@ function verifyLicense(license, machineId, requiredProduct = 'velo_pos', options
   }
   let legacy = false;
   let retired = false;
-  if (!verifySignature(license, options.publicKeyPem || PUBLIC_KEY_PEM)) {
+  let server = false;
+  if (verifySignature(license, options.publicKeyPem || PUBLIC_KEY_PEM)) {
+    // Firmada por el proveedor: sigue igual.
+  } else if (license.version === LICENSE_VERSION && verifySignature(license, options.serverPublicKeyPem || SERVER_PUBLIC_KEY_PEM)) {
+    // Si ya venció, lo dice la revisión de vencimiento de abajo.
+    const limit = new Date(Date.now() + SERVER_LICENSE_MAX_DAYS * 86400000).toISOString().split('T')[0];
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(license.expiry) || license.expiry > limit) {
+      return { valid: false, code: 'SERVER_LICENSE_TOO_LONG', reason: 'Licencia de VELO Control inválida', graceEligible: false };
+    }
+    server = true;
+  } else {
     // Firmada con la llave retirada: vale solo si el proveedor la emitió de verdad.
     if (!verifySignature(license, options.legacyPublicKeyPem || LEGACY_PUBLIC_KEY_PEM)) {
       return { valid: false, code: 'INVALID_SIGNATURE', reason: 'Licencia inválida o alterada', graceEligible: false };
@@ -183,14 +202,14 @@ function verifyLicense(license, machineId, requiredProduct = 'velo_pos', options
     if (retired) return retiredResult({ expiry: license.expiry, daysLeft, requiredProduct: product });
     return {
       valid: true, expiry: license.expiry, daysLeft, business: license.business,
-      products: license.products, requiredProduct: product, legacy,
+      products: license.products, requiredProduct: product, legacy, server,
     };
   }
 
   if (retired) return retiredResult({ expiry: 'Perpetua', requiredProduct: product });
   return {
     valid: true, expiry: 'Perpetua', business: license.business,
-    products: license.products, requiredProduct: product, legacy,
+    products: license.products, requiredProduct: product, legacy, server,
   };
 }
 
@@ -299,6 +318,8 @@ module.exports = {
   PUBLIC_KEY_PEM,
   LEGACY_PUBLIC_KEY_PEM,
   LEGACY_NOTICE_DAYS,
+  SERVER_PUBLIC_KEY_PEM,
+  SERVER_LICENSE_MAX_DAYS,
   LICENSE_VERSION,
   LICENSE_PRODUCTS,
   getMachineId,
