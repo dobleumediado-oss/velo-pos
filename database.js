@@ -10846,14 +10846,14 @@ const ecfRepo = {
     const environment = settingsRepo.get('ecf_environment') || 'test';
     if (settingsRepo.get('fiscal_enabled') !== '1' || settingsRepo.get('ecf_enabled') !== '1') return [];
     return db.prepare(`
-      SELECT DISTINCT type FROM ecf_sequences WHERE environment=? AND issuer_rnc=?
+      SELECT DISTINCT type FROM ecf_sequences WHERE environment=? AND issuer_rnc=? AND active=1
         AND expiry_date>=date('now','localtime') AND next_number<=CAST(substr(last_ncf,4) AS INTEGER)
       ORDER BY type
     `).all(environment, ecfIssuerRnc()).map(row => row.type);
   },
 
   ranges(environment) {
-    return db.prepare('SELECT * FROM ecf_sequences WHERE environment=? ORDER BY type,first_ncf').all(environment);
+    return db.prepare('SELECT * FROM ecf_sequences WHERE environment=? ORDER BY active DESC,type,first_ncf').all(environment);
   },
 
   addRange(input) {
@@ -10864,15 +10864,37 @@ const ecfRepo = {
       if (!db.prepare("SELECT 1 WHERE ?>=date('now','localtime')").get(range.expiry)) {
         throw new Error('El rango de e-NCF está vencido.');
       }
+      // Prueba (TesteCF) y Producción llevan rangos aparte: la DGII puede autorizar
+      // como real el mismo número que se usó en pruebas. Solo choca con un rango
+      // activo del mismo ambiente y RNC.
       const exists = db.prepare(`
-        SELECT 1 FROM ecf_sequences WHERE type=? AND first_ncf<=? AND last_ncf>=?
-      `).get(range.type, range.to, range.from);
-      if (exists) throw new Error('El rango de e-NCF se solapa con otro ya registrado.');
-      return db.prepare(`
+        SELECT 1 FROM ecf_sequences
+        WHERE environment=? AND issuer_rnc=? AND type=? AND active=1 AND first_ncf<=? AND last_ncf>=?
+      `).get(range.environment, issuer, range.type, range.to, range.from);
+      if (exists) throw new Error('El rango de e-NCF se solapa con otro rango activo de este ambiente.');
+      // Un número ya usado (por ejemplo en pruebas) no se repite: la reserva lo salta.
+      const usedInRange = db.prepare(`
+        SELECT COUNT(*) AS n FROM (
+          SELECT UPPER(TRIM(ncf)) AS v FROM sales WHERE UPPER(TRIM(ncf)) BETWEEN ? AND ? AND length(TRIM(ncf))=13
+          UNION SELECT UPPER(TRIM(ncf)) FROM ncf_log WHERE UPPER(TRIM(ncf)) BETWEEN ? AND ? AND length(TRIM(ncf))=13
+          UNION SELECT UPPER(TRIM(encf)) FROM ecf_log WHERE UPPER(TRIM(encf)) BETWEEN ? AND ? AND length(TRIM(encf))=13
+        )
+      `).get(range.from, range.to, range.from, range.to, range.from, range.to).n;
+      const id = db.prepare(`
         INSERT INTO ecf_sequences(environment,type,issuer_rnc,first_ncf,last_ncf,next_number,expiry_date)
         VALUES(?,?,?,?,?,?,?)
       `).run(range.environment, range.type, issuer, range.from, range.to, Number(range.from.slice(3)), range.expiry).lastInsertRowid;
+      return { id, usedInRange };
     }).immediate();
+  },
+
+  // Desactivar no borra: el rango deja de emitir y queda en el historial.
+  deactivateRange(id) {
+    const range = db.prepare('SELECT * FROM ecf_sequences WHERE id=?').get(Number(id));
+    if (!range) throw new Error('El rango de e-NCF no existe.');
+    if (!range.active) throw new Error('El rango ya está desactivado.');
+    db.prepare('UPDATE ecf_sequences SET active=0 WHERE id=?').run(range.id);
+    return { ...range, active: 0 };
   },
 
   reserve({ type, saleId, sale, items, charges, dueDate }) {
@@ -10880,7 +10902,7 @@ const ecfRepo = {
     if (!this.available().includes(type)) throw new Error('El e-CF no está activo o no tiene un rango vigente disponible.');
     const environment = settingsRepo.get('ecf_environment') || 'test';
     const ranges = db.prepare(`
-      SELECT * FROM ecf_sequences WHERE environment=? AND type=? AND issuer_rnc=?
+      SELECT * FROM ecf_sequences WHERE environment=? AND type=? AND issuer_rnc=? AND active=1
         AND expiry_date>=date('now','localtime') AND next_number<=CAST(substr(last_ncf,4) AS INTEGER)
       ORDER BY expiry_date,first_ncf
     `).all(environment, type, ecfIssuerRnc());

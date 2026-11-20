@@ -2594,6 +2594,17 @@ const MIGRATIONS = [
       require('./src/main/checkout-orders-repo').ensureCheckoutOrdersSchema(db);
     },
   },
+  {
+    version: '1.66.6-ecf-range-active',
+    description: 'Rangos e-NCF que se pueden desactivar sin borrarlos.',
+    run(db) {
+      // Aditiva: un rango desactivado deja de emitir y queda en el historial.
+      const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ecf_sequences'").get();
+      if (exists && !db.prepare('PRAGMA table_info(ecf_sequences)').all().some(col => col.name === 'active')) {
+        db.exec('ALTER TABLE ecf_sequences ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
+      }
+    },
+  },
 ];
 
 // ══════════════════════════════════════════════

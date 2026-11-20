@@ -121,6 +121,27 @@ async function test() {
 
   settingsRepo.set('ecf_environment', 'production');
   ecfRepo.addRange({ from: 'E320000001001', to: 'E320000001001', expiry, environment: 'production' });
+
+  // Producción admite el mismo rango que se probó en TesteCF; los números ya usados
+  // en pruebas no se repiten: la reserva los salta.
+  const usedInTest = db.prepare("SELECT ncf FROM sales WHERE ncf BETWEEN 'E310000000101' AND 'E310000000200'").all().map(row => row.ncf);
+  assert.ok(usedInTest.length >= 1);
+  const realRange = ecfRepo.addRange({ from: 'E310000000101', to: 'E310000000200', expiry, environment: 'production' });
+  assert.equal(realRange.usedInRange, usedInTest.length);
+  assert.throws(() => ecfRepo.addRange({ from: 'E310000000150', to: 'E310000000160', expiry, environment: 'production' }), /solapa/);
+  const realE31 = create('E31');
+  assert.match(realE31.ncf, /^E3100000001\d\d$/);
+  assert.ok(!usedInTest.includes(realE31.ncf));
+  assert.equal(db.prepare('SELECT environment FROM ecf_sequences s JOIN ecf_documents d ON d.sequence_id=s.id WHERE d.sale_id=?').get(realE31.saleId).environment, 'production');
+
+  // Desactivar no borra: deja de emitir y permite registrar el rango corregido.
+  ecfRepo.deactivateRange(realRange.id);
+  assert.equal(db.prepare('SELECT active FROM ecf_sequences WHERE id=?').get(realRange.id).active, 0);
+  assert.ok(!ecfRepo.available().includes('E31'));
+  assert.throws(() => ecfRepo.deactivateRange(realRange.id), /ya está desactivado/);
+  const corrected = ecfRepo.addRange({ from: 'E310000000150', to: 'E310000000300', expiry, environment: 'production' });
+  assert.ok(ecfRepo.available().includes('E31'));
+  assert.ok(corrected.id);
   const production = create('E32', { id: 1 });
   statuses.set(production.ncf, 'Aceptado Condicional');
   assert.equal((await call('emit', production.saleId)).status, 'Enviado');

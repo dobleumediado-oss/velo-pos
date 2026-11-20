@@ -9266,8 +9266,17 @@ ipcMain.handle('ecf:addRange', (_, { from, to, expiry, environment, requestUserI
   try {
     const user = ecfAdmin(requestUserId);
     if (environment !== ecfConfig().environment) throw new Error('El ambiente cambió. Recarga el panel de e-CF.');
-    const id = ecfRepo.addRange({ from, to, expiry, environment });
+    const { id, usedInRange } = ecfRepo.addRange({ from, to, expiry, environment });
     audit(user.id, user.name, 'ecf_rango_registrado', 'ecf_sequences', id, 'Rango electrónico registrado');
+    return { ok: true, data: { id, usedInRange } };
+  } catch (error) { return { ok: false, error: error.message }; }
+});
+
+ipcMain.handle('ecf:deactivateRange', (_, { id, requestUserId } = {}) => {
+  try {
+    const user = ecfAdmin(requestUserId);
+    const range = ecfRepo.deactivateRange(id);
+    audit(user.id, user.name, 'ecf_rango_desactivado', 'ecf_sequences', range.id, `Rango ${range.first_ncf} a ${range.last_ncf} desactivado`);
     return { ok: true };
   } catch (error) { return { ok: false, error: error.message }; }
 });

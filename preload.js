@@ -592,6 +592,7 @@ const api = {
   ecf: {
     available:  () => ipcRenderer.invoke('ecf:available'),
     addRange:   (d) => ipcRenderer.invoke('ecf:addRange', d),
+    deactivateRange: (d) => ipcRenderer.invoke('ecf:deactivateRange', d),
     testConnection: (d) => ipcRenderer.invoke('ecf:testConnection', d),
     emit:       (d) => ipcRenderer.invoke('ecf:emit',       d),
     getStatus:  (d) => ipcRenderer.invoke('ecf:getStatus',  d),

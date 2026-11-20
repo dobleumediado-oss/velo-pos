@@ -1115,6 +1115,7 @@ async function renderConfiguracion(el) {
       lic.development  ? 'Modo desarrollo — licencia no requerida' :
       lic.blocked      ? 'Sin licencia — bloqueado' :
       lic.inGrace      ? `Período de gracia — ${lic.graceDaysLeft}d restantes` :
+      lic.legacyNotice ? `Por renovar — ${lic.legacyDaysLeft}d restantes` :
       lic.warningSoon  ? `Vence en ${lic.daysLeft} días` :
       lic.licensed     ? `Activa${lic.expiry==='Perpetua'?' (Perpetua)':' — Vence: '+lic.expiry}` : 'Desconocido';
 
@@ -3004,7 +3005,7 @@ async function renderECFConfig(container) {
     try {
       const result = await action();
       ok = result?.ok === true;
-      text = ok ? message : (result?.error || text);
+      text = ok ? (typeof message === 'function' ? message() : message) : (result?.error || text);
       if (ok && refresh) await renderECFConfig(container);
     } catch {
       ok = false;
@@ -3025,10 +3026,17 @@ async function renderECFConfig(container) {
       field('ecf-status-msg').textContent = 'Guarda el ambiente antes de registrar el rango.';
       return;
     }
-    return showResult(event.currentTarget, () => window.api.ecf.addRange({
-      requestUserId, from: field('ecf-from').value, to: field('ecf-to').value,
-      expiry: field('ecf-expiry').value, environment: cfg.environment,
-    }), 'Rango guardado.', true);
+    let used = 0;
+    return showResult(event.currentTarget, async () => {
+      const result = await window.api.ecf.addRange({
+        requestUserId, from: field('ecf-from').value, to: field('ecf-to').value,
+        expiry: field('ecf-expiry').value, environment: cfg.environment,
+      });
+      used = Number(result?.data?.usedInRange || 0);
+      return result;
+    }, () => used
+      ? `Rango guardado. ${used} número${used === 1 ? '' : 's'} de este rango ya se usaron (por ejemplo en pruebas) y se saltarán.`
+      : 'Rango guardado.', true);
   };
   // La lista va después de conectar los botones: un rango con datos
   // incompletos ya no puede dejar la pantalla sin "Guardar".
@@ -3036,9 +3044,25 @@ async function renderECFConfig(container) {
   ranges.forEach(range => {
     const item = document.createElement('li');
     const lastNcf = String(range?.last_ncf || '');
-    item.textContent = range
-      ? `${range.first_ncf} a ${lastNcf} · RNC ${range.issuer_rnc} · Vence ${range.expiry_date} · ${Math.max(0, Number(lastNcf.slice(3)) - Number(range.next_number) + 1) || 0} disponibles`
+    const inactive = range && Number(range.active) === 0;
+    const text = document.createElement('span');
+    text.textContent = range
+      ? `${range.first_ncf} a ${lastNcf} · RNC ${range.issuer_rnc} · Vence ${range.expiry_date} · ${inactive ? 'Desactivado' : `${Math.max(0, Number(lastNcf.slice(3)) - Number(range.next_number) + 1) || 0} disponibles`}`
       : 'No hay secuencias registradas.';
+    if (inactive) item.style.opacity = '.6';
+    item.appendChild(text);
+    // Desactivar no borra el rango: deja de emitir y queda en el historial.
+    if (range && !inactive) {
+      const off = document.createElement('button');
+      off.className = 'btn btn-ghost btn-sm';
+      off.style.marginLeft = '8px';
+      off.textContent = 'Desactivar';
+      off.onclick = event => {
+        if (!confirm(`¿Desactivar el rango ${range.first_ncf} a ${lastNcf}? Deja de usarse para facturar y no se puede volver a activar.`)) return;
+        showResult(event.currentTarget, () => window.api.ecf.deactivateRange({ requestUserId, id: range.id }), 'Rango desactivado.', true);
+      };
+      item.appendChild(off);
+    }
     field('ecf-ranges').appendChild(item);
   });
 }

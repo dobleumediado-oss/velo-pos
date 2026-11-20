@@ -413,6 +413,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       renderLicenseGate(licResult.data);
       return;
     }
+    // Licencia firmada con la llave retirada y fuera de la lista: 30 días de aviso.
+    if (licResult?.ok && licResult.data?.legacyNotice) {
+      const notice = licResult.data.reason;
+      setTimeout(() => { if (typeof toast === 'function') toast(notice, 'w'); }, 2500);
+    }
   } catch { /* un fallo de lectura no debe inutilizar soporte/diagnóstico */ }
 
   // ── Multi-terminal: preflight de servidor en modo CLIENTE ──────────────────

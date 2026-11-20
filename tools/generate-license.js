@@ -5,8 +5,8 @@
 // NUNCA incluir en el instalador del cliente.
 // Ejecutar localmente: node tools/generate-license.js
 //
-// Requiere: VELO_PRIVATE_KEY_PATH en el entorno
-// o un archivo vendor-private.pem en esta carpeta.
+// Requiere: VELO_PRIVATE_KEY_PATH en el entorno o la llave en
+// ~/.velo-licencias/vendor-private.pem (nunca dentro del repositorio).
 // ══════════════════════════════════════════════
 
 const crypto = require('crypto');
@@ -15,6 +15,7 @@ const path   = require('path');
 const { PUBLIC_KEY_PEM } = require('../license');
 const {
   resolvePrivateKeyPath,
+  providerDir,
   normalizeRequest,
   createProviderLicense,
 } = require('./license-provider');
@@ -37,8 +38,9 @@ function generateKeyPair() {
     publicKeyEncoding:  { type: 'spki',  format: 'pem' },
     privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
   });
-  const privPath = path.join(__dirname, 'vendor-private.pem');
-  const pubPath  = path.join(__dirname, 'vendor-public.pem');
+  fs.mkdirSync(providerDir(), { recursive: true, mode: 0o700 });
+  const privPath = path.join(providerDir(), 'vendor-private.pem');
+  const pubPath  = path.join(providerDir(), 'vendor-public.pem');
   if (fs.existsSync(privPath) || fs.existsSync(pubPath)) {
     throw new Error('Ya existe una llave del proveedor. No se reemplazó ningún archivo');
   }

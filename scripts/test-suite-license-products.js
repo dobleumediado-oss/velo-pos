@@ -161,4 +161,87 @@ test('el bypass de desarrollo es explícito y nunca aplica al instalador', () =>
   assert.strictEqual(development.development, true);
 });
 
-console.log(`\nLicencias por producto: ${passed}/12 pruebas correctas.`);
+// ── Llave retirada el 20 nov 2026 ─────────────────────────────────────────────
+const retired = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+const retiredPublicPem = retired.publicKey.export({ type: 'spki', format: 'pem' });
+function signRetired(parts) {
+  const payload = parts.join('|');
+  return `${payload}|${crypto.sign('SHA256', Buffer.from(payload), retired.privateKey).toString('base64')}`;
+}
+const issuedLegacy = signRetired(['3', machineId, 'Cliente Legítimo', 'PERPETUAL', 'velo_pos']);
+const forgedLegacy = signRetired(['3', 'UNIVERSAL', 'Copia Falsa', 'PERPETUAL', 'velo_pos,velo_tech_pos']);
+const sha = value => crypto.createHash('sha256').update(value).digest('hex');
+const legacyOptions = { publicKeyPem, legacyPublicKeyPem: retiredPublicPem, legacyAllowlist: new Set([sha(issuedLegacy)]) };
+
+test('una licencia emitida con la llave retirada sigue valiendo si está en la lista blanca', () => {
+  const result = verifyLicense(parseLicense(issuedLegacy), machineId, 'velo_pos', legacyOptions);
+  assert.strictEqual(result.valid, true);
+  assert.strictEqual(result.legacy, true);
+  assert.strictEqual(verifyLicense(parseLicense(suiteKey), machineId, 'velo_pos', legacyOptions).legacy, false);
+});
+
+test('una licencia falsificada con la llave retirada no se puede activar', () => {
+  const result = verifyLicense(parseLicense(forgedLegacy), machineId, 'velo_pos', legacyOptions);
+  assert.strictEqual(result.valid, false);
+  assert.strictEqual(result.code, 'LEGACY_KEY_RETIRED');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'velo-license-legacy-'));
+  try {
+    const activation = activateLicense(dir, forgedLegacy, 'velo_pos', { ...legacyOptions, machineId });
+    assert.strictEqual(activation.ok, false);
+    assert.strictEqual(activation.code, 'LEGACY_KEY_RETIRED');
+    assert.strictEqual(fs.existsSync(path.join(dir, 'license.key')), false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('la llave pública por defecto ya no acepta firmas de otra llave', () => {
+  assert.strictEqual(verifyLicense(parseLicense(issuedLegacy), machineId, 'velo_pos').code, 'INVALID_SIGNATURE');
+});
+
+test('una licencia ya instalada fuera de la lista avisa 30 días y luego se bloquea', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'velo-license-notice-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'license.key'), forgedLegacy);
+    const start = new Date('2026-12-01T12:00:00Z');
+    const first = getLicenseStatus(dir, 'velo_pos', { ...legacyOptions, machineId, now: start });
+    assert.strictEqual(first.licensed, true);
+    assert.strictEqual(first.blocked, false);
+    assert.strictEqual(first.legacyNotice, true);
+    assert.strictEqual(first.legacyDaysLeft, 30);
+    assert.strictEqual(first.warningSoon, true);
+    assert.match(first.reason, /Licencia por renovar: quedan 30 días/);
+    const later = getLicenseStatus(dir, 'velo_pos', { ...legacyOptions, machineId, now: new Date('2026-12-21T12:00:00Z') });
+    assert.strictEqual(later.legacyDaysLeft, 10);
+    assert.strictEqual(later.licensed, true);
+    const expired = getLicenseStatus(dir, 'velo_pos', { ...legacyOptions, machineId, now: new Date('2026-12-31T13:00:00Z') });
+    assert.strictEqual(expired.licensed, false);
+    assert.strictEqual(expired.blocked, true);
+    assert.strictEqual(expired.code, 'LEGACY_KEY_RETIRED');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('el aviso de 30 días no habilita otro producto ni una licencia vencida', () => {
+  const posOnly = signRetired(['3', machineId, 'Copia Falsa', 'PERPETUAL', 'velo_pos']);
+  assert.strictEqual(verifyLicense(parseLicense(posOnly), machineId, 'velo_tech_pos', legacyOptions).code, 'PRODUCT_NOT_LICENSED');
+  const expired = signRetired(['3', machineId, 'Copia Falsa', '2020-01-01', 'velo_pos']);
+  assert.strictEqual(verifyLicense(parseLicense(expired), machineId, 'velo_pos', legacyOptions).code, 'EXPIRED');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'velo-license-product-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'license.key'), posOnly);
+    const status = getLicenseStatus(dir, 'velo_tech_pos', { ...legacyOptions, machineId });
+    assert.strictEqual(status.licensed, false);
+    assert.strictEqual(status.legacyNotice, false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('una licencia legítima de la lista blanca no genera aviso', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'velo-license-allowed-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'license.key'), issuedLegacy);
+    const status = getLicenseStatus(dir, 'velo_pos', { ...legacyOptions, machineId });
+    assert.strictEqual(status.licensed, true);
+    assert.strictEqual(status.legacyNotice, false);
+    assert.strictEqual(fs.existsSync(path.join(dir, '.legacy-license-notice')), false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+console.log(`\nLicencias por producto: ${passed}/18 pruebas correctas.`);

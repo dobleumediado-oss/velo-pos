@@ -5,19 +5,28 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const LICENSE_VERSION = '3';
 const ALLOWED_PRODUCTS = Object.freeze(['velo_pos', 'velo_tech_pos']);
 
+// Desde el 20 nov 2026 la llave y el historial viven fuera de todo repositorio
+// (la llave anterior quedó en el historial del repo público y se retiró).
+function providerDir() {
+  return path.join(os.homedir(), '.velo-licencias');
+}
+
 function resolvePrivateKeyPath() {
   return process.env.VELO_PRIVATE_KEY_PATH
     ? path.resolve(process.env.VELO_PRIVATE_KEY_PATH)
-    : path.join(__dirname, 'vendor-private.pem');
+    : path.join(providerDir(), 'vendor-private.pem');
 }
 
 function resolveHistoryPath() {
-  return path.join(__dirname, '.license-history.json');
+  return process.env.VELO_LICENSE_HISTORY_PATH
+    ? path.resolve(process.env.VELO_LICENSE_HISTORY_PATH)
+    : path.join(providerDir(), 'license-history.json');
 }
 
 function normalizeMachineId(value) {
@@ -194,6 +203,7 @@ function securePrivateKey(options = {}) {
 module.exports = {
   LICENSE_VERSION,
   ALLOWED_PRODUCTS,
+  providerDir,
   resolvePrivateKeyPath,
   resolveHistoryPath,
   normalizeRequest,
