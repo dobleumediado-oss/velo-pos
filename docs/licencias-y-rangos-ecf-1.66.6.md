@@ -71,3 +71,20 @@ pasar a Cloud.
 - Probado de punta a punta con las llaves reales contra la API de Cloud en local.
 - Pendiente: el «Servidor» instalado como servicio sin ventana todavía no reporta (solo la
   app con ventana).
+
+### Conectividad con VELO Control (F3, 22 nov 2026)
+
+- Desde la Fase F1 de Cobros, la licencia renovada dura **lo pagado más 3 días** (tope 35):
+  un equipo que no se conecta se queda sin renovar aunque el cliente esté al día.
+- Por eso el reporte ahora sale **al abrir** (a los 2 minutos), **una vez al día**, **al
+  despertar la PC** (si no hubo un reporte bueno en 20 horas) y, si falla, **se reintenta en
+  una hora** en vez de esperar al día siguiente (`nextDelayMs`, `shouldReportOnResume` en
+  `lib/control-report.js`).
+- **Configuración → «Licencia en línea»** (Administrador y Dev): última conexión de este
+  equipo, el motivo si falló (sin jerga) y el botón **«Conectar ahora»**, que reporta en el
+  momento e instala la renovada si llega. IPC `license:controlStatus` y
+  `license:controlConnect`.
+- La última conexión buena se guarda por equipo en `control-report.json`, junto a la
+  licencia (no en la base que las Terminales comparten con el Servidor).
+- En VELO Control, la pantalla «Desktop» marca «Sin reportar» (3 días o más) y «Vence
+  pronto» (menos de 7 días).

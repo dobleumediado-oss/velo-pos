@@ -1167,6 +1167,15 @@ async function renderConfiguracion(el) {
     colRight.appendChild(licCard);
   }
 
+  // ── Licencia en línea (admin y superadmin) ───
+  // El equipo se conecta solo una vez al día para renovar la licencia mientras el plan
+  // esté al día; aquí se ve la última conexión y se puede intentar en el momento.
+  if (isAdmin) {
+    const onlineCard = h('div', { class: 'card', id: 'lic-online-card', style: 'display:none' });
+    colRight.appendChild(onlineCard);
+    _renderLicenciaEnLinea(onlineCard);
+  }
+
   // ── Categorías (scroll interno) ──────────────
   const catCard = h('div', { class: 'card' });
   catCard.appendChild(h('div', { class: 'fxb mb8' },
@@ -2911,6 +2920,56 @@ async function activarLicencia() {
   } else {
     toast(result.error || 'Licencia inválida', 'err');
   }
+}
+
+// «hace 5 min», «hace 3 h», «hace 2 días».
+function _haceCuanto(iso) {
+  const ms = Date.now() - Date.parse(iso || '');
+  if (!Number.isFinite(ms)) return '';
+  const min = Math.max(0, Math.round(ms / 60000));
+  if (min < 1) return 'hace un momento';
+  if (min < 60) return `hace ${min} min`;
+  const horas = Math.round(min / 60);
+  if (horas < 24) return `hace ${horas} h`;
+  const dias = Math.round(horas / 24);
+  return `hace ${dias} día${dias === 1 ? '' : 's'}`;
+}
+
+async function _renderLicenciaEnLinea(card) {
+  const res = await window.api.license.controlStatus?.().catch(() => null);
+  const st = res?.ok ? res.data : null;
+  // En desarrollo (o si se apagó la conexión en este equipo) no se muestra.
+  if (!st || !st.available || !st.enabled || !card.isConnected) return;
+  const ultima = st.lastOkAt ? `${_haceCuanto(st.lastOkAt)} · ${new Date(st.lastOkAt).toLocaleString('es-DO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}` : 'Todavía no se ha conectado';
+  const viejo = !st.lastOkAt || Date.now() - Date.parse(st.lastOkAt) >= 3 * 86400000;
+  card.style.display = '';
+  card.innerHTML = `
+    <div class="fxb mb8">
+      <div class="card-title">Licencia en línea</div>
+      <span class="badge ${viejo ? 'a' : 'g'}" style="font-size:11px">${viejo ? 'Revisar' : 'Conectada'}</span>
+    </div>
+    <div class="tr" style="font-size:12px;margin-bottom:6px">
+      <span>Última conexión</span><span style="font-weight:600;color:${viejo ? 'var(--amber)' : 'inherit'}">${_esc(ultima)}</span>
+    </div>
+    ${st.lastError ? `<div style="font-size:11px;color:var(--amber);margin-bottom:6px">${_esc(st.lastError)}</div>` : ''}
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Este equipo se conecta solo una vez al día para renovar la licencia mientras su plan esté al día. Si no tuvo internet, se intenta de nuevo cada hora.</div>
+    <button class="btn btn-out btn-sm" id="lic-online-btn" onclick="conectarLicenciaAhora()" ${st.running ? 'disabled' : ''}>${st.running ? 'Conectando…' : 'Conectar ahora'}</button>`;
+}
+
+async function conectarLicenciaAhora() {
+  const btn = document.getElementById('lic-online-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Conectando…'; }
+  const res = await window.api.license.controlConnect().catch(() => null);
+  const r = res?.ok ? res.data : null;
+  if (r?.renewedUntil) {
+    toast(`✓ Licencia renovada hasta ${r.renewedUntil}`);
+    veloRepaint(() => renderConfiguracion(document.getElementById('page')));
+    return;
+  }
+  if (r?.ok) toast(r.error || '✓ Conectado. La licencia está al día.', r.error ? 'err' : undefined);
+  else toast(r?.error || 'No se pudo conectar. Revisa el internet y prueba de nuevo.', 'err');
+  const card = document.getElementById('lic-online-card');
+  if (card) _renderLicenciaEnLinea(card);
 }
 
 // ══════════════════════════════════════════════

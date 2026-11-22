@@ -358,6 +358,9 @@ const api = {
     activate:    (data)      => ipcRenderer.invoke('license:activate', data),
     getMachineId:()          => ipcRenderer.invoke('license:getMachineId'),
     revoke:      (data)      => ipcRenderer.invoke('license:revoke', data),
+    // Conexión con VELO Control: estado y «Conectar ahora» (renueva la licencia si está al día).
+    controlStatus:  ()       => ipcRenderer.invoke('license:controlStatus'),
+    controlConnect: ()       => ipcRenderer.invoke('license:controlConnect'),
   },
 
   // ── Terminal / conexión (multi-terminal) ──

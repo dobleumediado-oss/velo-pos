@@ -68,7 +68,20 @@ async function test() {
   assert.equal(shouldInstall('Perpetua', renewed, parseLicense), false);
   assert.equal(shouldInstall(undefined, renewed, parseLicense), true);
   assert.equal(shouldInstall('2026-12-31', 'basura', parseLicense), false);
-  console.log('✓ Reporte a VELO Control: uso de e-CF sin datos de clientes, terminales sin base, envío sin red y licencia renovada solo si mejora.');
+  // Conectividad: al día siguiente si salió bien, en una hora si falló; al despertar
+  // solo si no hubo un reporte bueno en 20 horas; mensajes sin jerga.
+  const { nextDelayMs, shouldReportOnResume, failureText, REPORT_EVERY_MS, RETRY_AFTER_MS } = require('../lib/control-report');
+  assert.equal(nextDelayMs({ ok: true }), REPORT_EVERY_MS);
+  assert.equal(nextDelayMs({ ok: false, offline: true }), RETRY_AFTER_MS);
+  assert.equal(RETRY_AFTER_MS, 60 * 60 * 1000);
+  const now = Date.parse('2026-11-22T12:00:00Z');
+  assert.equal(shouldReportOnResume(null, now), true);
+  assert.equal(shouldReportOnResume('2026-11-22T00:00:00Z', now), false);
+  assert.equal(shouldReportOnResume('2026-11-21T15:00:00Z', now), true);
+  assert.match(failureText({ ok: false, offline: true }), /internet/);
+  assert.match(failureText({ ok: false, status: 403 }), /proveedor/);
+  assert.doesNotMatch([failureText({ offline: true }), failureText({ status: 403 }), failureText({ status: 429 }), failureText({ status: 500 })].join(' '), /VELO Control|Cloud|heartbeat|HTTP/i);
+  console.log('✓ Reporte a VELO Control: uso de e-CF sin datos de clientes, terminales sin base, envío sin red, licencia renovada solo si mejora y reintento en una hora.');
 }
 
 test().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => {

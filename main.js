@@ -9676,18 +9676,45 @@ function _launchBusinessWorker({ business, port }) {
   });
 }
 
-// ── Reporte diario a VELO Control (Fase D) ───────────────────────────────────
+// ── Reporte diario a VELO Control (Fase D, conectividad F3) ──────────────────
 // Versión, modo, licencia y uso de e-CF del mes; nunca clientes ni montos. Si la
 // cuenta del cliente está al día, Cloud devuelve una licencia renovada corta que
-// se instala solo después de verificarla. Apagado: settings control_report_enabled='0'.
-function _scheduleControlReport() {
-  if ((!app.isPackaged && process.env.VELO_CONTROL_REPORT !== '1') || RUNTIME.headless) return;
-  const run = async () => {
+// se instala solo después de verificarla. Reporta al abrir, una vez al día, al
+// despertar la PC y cuando el usuario pulsa «Conectar ahora»; si falla, reintenta
+// en una hora. Apagado: settings control_report_enabled='0'.
+const _controlReport = { running: null, timer: null, lastAttemptAt: null, lastError: null };
+// La última conexión buena es de este equipo (junto a su licencia), no de la base que
+// comparten las terminales con el Servidor.
+function _controlReportStatePath() { return path.join(DATA_DIR, 'control-report.json'); }
+function _controlReportLastOk() {
+  try { return JSON.parse(fs.readFileSync(_controlReportStatePath(), 'utf8')).lastOkAt || null; } catch { return null; }
+}
+function _saveControlReportLastOk(iso) {
+  try { fs.writeFileSync(_controlReportStatePath(), JSON.stringify({ lastOkAt: iso }), { mode: 0o600 }); }
+  catch (e) { logWarn('control-report', 'No se pudo guardar la última conexión: ' + e.message); }
+}
+function _controlReportAvailable() {
+  return !((!app.isPackaged && process.env.VELO_CONTROL_REPORT !== '1') || RUNTIME.headless);
+}
+function _controlReportStatus() {
+  return {
+    available: _controlReportAvailable(),
+    enabled: settingsRepo.get('control_report_enabled') !== '0',
+    running: !!_controlReport.running,
+    lastOkAt: _controlReportLastOk(),
+    lastAttemptAt: _controlReport.lastAttemptAt,
+    lastError: _controlReport.lastError,
+  };
+}
+function _runControlReport() {
+  if (_controlReport.running) return _controlReport.running;
+  _controlReport.running = (async () => {
+    const controlReport = require('./lib/control-report');
     try {
-      if (settingsRepo.get('control_report_enabled') === '0') return;
+      if (!_controlReportAvailable()) return { ok: false, skipped: true, error: 'Disponible solo en la versión instalada.' };
+      if (settingsRepo.get('control_report_enabled') === '0') return { ok: false, skipped: true, error: 'La conexión está apagada en este equipo.' };
       const status = getLicenseStatus(DATA_DIR, requiredLicenseProduct());
-      if (!status.licenseKey || !status.machineId) return;
-      const controlReport = require('./lib/control-report');
+      if (!status.licenseKey || !status.machineId) return { ok: false, skipped: true, error: 'Este equipo no tiene licencia activa.' };
       const configuredMode = settingsRepo.get('connection_mode') || 'local';
       const report = controlReport.buildReport({
         db, licenseKey: status.licenseKey, machineId: status.machineId, appVersion: app.getVersion(),
@@ -9695,22 +9722,66 @@ function _scheduleControlReport() {
         today: require('./lib/dates').todayStr(),
       });
       const apiUrl = process.env.VELO_CLOUD_API_URL || require('./lib/cloud-direct').DEFAULT_API_URL;
+      _controlReport.lastAttemptAt = new Date().toISOString();
       const result = await controlReport.sendReport({ apiUrl, report });
-      if (!result.ok || !result.license) return;
-      if (!controlReport.shouldInstall(status.expiry, result.license, require('./license').parseLicense)) return;
+      if (!result.ok) {
+        _controlReport.lastError = controlReport.failureText(result);
+        logWarn('control-report', 'No se pudo reportar a VELO Control', { status: result.status || null, offline: !!result.offline });
+        return { ok: false, error: _controlReport.lastError };
+      }
+      _controlReport.lastError = null;
+      _saveControlReportLastOk(new Date().toISOString());
+      if (!result.license || !controlReport.shouldInstall(status.expiry, result.license, require('./license').parseLicense)) return { ok: true };
       const activation = activateLicense(DATA_DIR, result.license, requiredLicenseProduct());
-      if (!activation.ok) { logWarn('control-report', 'VELO Control envió una licencia que no se pudo instalar: ' + activation.error); return; }
+      if (!activation.ok) {
+        logWarn('control-report', 'VELO Control envió una licencia que no se pudo instalar: ' + activation.error);
+        return { ok: true, error: 'La licencia renovada no se pudo instalar. Contacta a tu proveedor.' };
+      }
       try { audit(null, 'VELO Control', 'licencia_renovada', 'license', null, `Licencia renovada hasta ${activation.expiry}`); } catch {}
       logInfo('control-report', 'Licencia renovada por VELO Control', { expiry: activation.expiry });
+      return { ok: true, renewedUntil: activation.expiry };
     } catch (e) {
+      _controlReport.lastError = 'No se pudo conectar.';
       logWarn('control-report', 'No se pudo reportar a VELO Control: ' + e.message);
+      return { ok: false, error: _controlReport.lastError };
     }
-  };
-  const first = setTimeout(run, 2 * 60 * 1000);
-  const daily = setInterval(run, 24 * 60 * 60 * 1000);
-  if (first.unref) first.unref();
-  if (daily.unref) daily.unref();
+  })().finally(() => { _controlReport.running = null; });
+  return _controlReport.running;
 }
+function _scheduleControlReport(delayMs) {
+  if (!_controlReportAvailable()) return;
+  if (_controlReport.timer) clearTimeout(_controlReport.timer);
+  _controlReport.timer = setTimeout(async () => {
+    const result = await _runControlReport();
+    // Si se apagó o no hay licencia, se vuelve a mirar al día siguiente.
+    _scheduleControlReport(require('./lib/control-report').nextDelayMs(result.skipped ? { ok: true } : result));
+  }, delayMs);
+  if (_controlReport.timer.unref) _controlReport.timer.unref();
+}
+function _startControlReport() {
+  if (!_controlReportAvailable()) return;
+  _scheduleControlReport(2 * 60 * 1000);
+  try {
+    require('electron').powerMonitor.on('resume', () => {
+      if (!require('./lib/control-report').shouldReportOnResume(_controlReportLastOk())) return;
+      // Un minuto para que vuelva la red después de despertar.
+      _scheduleControlReport(60 * 1000);
+    });
+  } catch (e) { logWarn('control-report', 'No se pudo escuchar el despertar de la PC: ' + e.message); }
+}
+
+ipcMain.handle('license:controlStatus', async () => {
+  try { return { ok: true, data: _controlReportStatus() }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('license:controlConnect', async () => {
+  try {
+    const result = await _runControlReport();
+    // Un intento a mano reinicia el calendario: al día siguiente si salió bien, en una hora si no.
+    if (!result.skipped) _scheduleControlReport(require('./lib/control-report').nextDelayMs(result));
+    return { ok: true, data: { ...result, status: _controlReportStatus() } };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
 
 function _scheduleAutoBackups() {
   const runAutoBackup = async () => {
@@ -9892,7 +9963,7 @@ app.whenReady().then(async () => {
     return;
   }
   createWindow();
-  _scheduleControlReport();
+  _startControlReport();
   // Verificar actualizaciones 8 segundos después del arranque,
   // cuando la ventana ya está completamente cargada y visible.
   setTimeout(() => setupAutoUpdater(), 8000);
