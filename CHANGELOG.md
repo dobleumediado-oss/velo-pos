@@ -1,5 +1,23 @@
 # Historial de versiones
 
+## 1.66.6
+
+- Licencias: Desktop verifica con una llave de licencias nueva. Las licencias que ya
+  se entregaron siguen valiendo; una que no fue emitida por el proveedor recibe 30
+  días de aviso y luego se bloquea.
+- La licencia se renueva sola mientras el plan del negocio esté al día. Una vez al
+  día el equipo envía su versión, su modo y cuántas facturas electrónicas emitió en
+  el mes; nunca clientes, montos ni facturas.
+- Configuración → «Licencia en línea» (Administrador): muestra la última conexión de
+  este equipo y tiene el botón «Conectar ahora». Si no hubo internet, el equipo lo
+  intenta de nuevo cada hora, al abrir el programa y al despertar la PC.
+- Facturación electrónica (e-CF): el rango real de la DGII se puede registrar aunque
+  cruce el que se usó en las pruebas (TesteCF); los números ya usados se saltan y la
+  pantalla dice cuántos. Un rango se puede desactivar sin borrarlo.
+- Al cobrar con E31 o E32 y el e-CF todavía pendiente, el ticket y el PDF por
+  WhatsApp salen con la leyenda «Copia interna · Sin valor fiscal», igual que la
+  reimpresión desde Ventas.
+
 ## 1.66.5
 
 - Reportes → Financiero: en el Excel y el PDF, «Facturas del segmento» muestra
